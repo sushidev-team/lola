@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { onDestroy, onMount } from "svelte";
   import { store } from "$lib/store.svelte";
   import { statusLabel } from "$lib/theme";
@@ -718,7 +719,7 @@
     >
       <span class="min-w-0 flex-1 py-2">{notice}</span>
       <TouchButton icon aria-label="Dismiss" class="text-warn!" onclick={() => (notice = "")}
-        >×</TouchButton
+        ><Icon name="x" size={14} /></TouchButton
       >
     </div>
   {/if}
@@ -900,7 +901,7 @@
                that draws its own state glyph to step aside, because the spinner
                takes that slot and two marks fight over one. -->
           {#if !devBusy}
-            <span class={devActive ? "text-good" : "text-faint"} aria-hidden="true">●</span>
+            <span class={devActive ? "text-good" : "text-faint"} aria-hidden="true"><Icon name="circle-dot" size={14} /></span>
           {/if}
           {devActive ? "Stop the dev commands" : "Run the dev commands here"}
         </TouchButton>

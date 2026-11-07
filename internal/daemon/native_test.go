@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -1242,4 +1243,20 @@ func TestTickFlipRecordsStrippedSubset(t *testing.T) {
 
 func (f *fakeNative) OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool) (session.Session, error) {
 	return session.Session{ID: id, Project: p.Name, Worktree: dir, Location: location, Agent: kind, Agentless: !useAgent, Kind: session.KindLocal, Source: "native", TmuxName: id}, nil
+}
+
+func TestAdoptPreservesSharedTasksAndReportedPlan(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	prev := nativeSess("FE-1", "working")
+	prev.Tasks = []protocol.SessionTask{{ID: "work", Kind: "task", Text: "Implement", State: "doing", Author: "user"}, {ID: "criterion", ParentID: "work", Kind: "requirement", Text: "Keep focus", State: "todo", Author: "agent"}}
+	prev.Board.Phase = board.PhaseTesting
+	d.sessions.Upsert(prev)
+	d.native = &fakeNative{adopted: []session.Session{{ID: prev.ID, Source: "native", Project: "p1", Status: "working"}}}
+	d.adoptNativeSessions(context.Background())
+	// Load the saved snapshot as another daemon would, not just the in-memory copy.
+	loaded := session.NewStore(filepath.Join(d.home, "state"))
+	got, ok := loaded.Get(prev.ID)
+	if !ok || !reflect.DeepEqual(got.Tasks, prev.Tasks) || !reflect.DeepEqual(got.Board, prev.Board) {
+		t.Fatalf("adoption lost tasks/plan: %+v", got)
+	}
 }

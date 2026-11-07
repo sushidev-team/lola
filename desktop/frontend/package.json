@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.3.0",
+    "@lucide/svelte": "1.70.0",
     "@wailsio/runtime": "latest",
     "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-fit": "^0.10.0",

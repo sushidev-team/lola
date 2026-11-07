@@ -1122,7 +1122,7 @@ describe("SettingsForm", () => {
     });
 
     it("reverts on any close path, not just the cancel button", async () => {
-      // Escape, the backdrop and the ✕ close the overlay too, so the revert
+      // Escape, the backdrop and the close the overlay too, so the revert
       // hangs off the lifecycle — none of them can strand a preview.
       const { unmount } = render(SettingsForm);
       await screen.findByDisplayValue("60s");
@@ -1280,7 +1280,7 @@ describe("SettingsForm", () => {
 
     it("reports where the key lives without ever showing it", async () => {
       await openLinearTab();
-      expect(await screen.findByText("✓ Key configured")).toBeInTheDocument();
+      expect(await screen.findByText("Key configured")).toBeInTheDocument();
       expect(
         screen.getByText(/macOS Keychain \(lola-linear\)/),
       ).toBeInTheDocument();
@@ -1297,7 +1297,7 @@ describe("SettingsForm", () => {
       });
       await openLinearTab();
       expect(
-        await screen.findByText("✗ Key configured but unreadable"),
+        await screen.findByText("Key configured but unreadable"),
       ).toBeInTheDocument();
     });
 
@@ -1310,7 +1310,7 @@ describe("SettingsForm", () => {
       });
       await openLinearTab();
       expect(
-        await screen.findByText("▲ No key configured"),
+        await screen.findByText("No key configured"),
       ).toBeInTheDocument();
     });
 

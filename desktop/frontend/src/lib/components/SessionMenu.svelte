@@ -5,14 +5,10 @@
   // Cockpit.svelte — and closes itself if the session vanished mid-open.
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { store, type SessionInfo } from "$lib/store.svelte";
-  import { devToggleTitle } from "$lib/devtoggle";
   import { nav } from "$lib/nav.svelte";
-  import { terms, DIFF } from "$lib/terms.svelte";
   import { bestOf } from "$lib/bestof.svelte";
   import { ssh } from "$lib/ssh.svelte";
-  import { deriveBrief, isEnded, urgentConn } from "$lib/ssh";
-  import { hasChip } from "$lib/board";
-  import { conversationOffered, hasReport } from "$lib/sessionview";
+  import { isEnded, urgentConn } from "$lib/ssh";
   import MenuItem from "./MenuItem.svelte";
 
   const req = $derived(sessionMenu.request);
@@ -46,26 +42,6 @@
     if (s) action(s);
   }
 
-  // Everything here opens the session first: the Glance has no tabs, no composer and no panel, so
-  // acting on the selection would change something nobody can see.
-  function addShell(s: SessionInfo) {
-    nav.openSession(s.id);
-    terms.newShell(s.id, s.worktree);
-  }
-
-  function openView(s: SessionInfo, tab: string) {
-    nav.openSession(s.id);
-    terms.select(s.id, tab);
-  }
-
-  // Report lives on the story line, which only a conversation has. Offered only when there is one
-  // to open, or the click would land on nothing.
-  const reportable = $derived.by(() => {
-    if (!session || !conversationOffered(session)) return false;
-    return hasReport(hasChip(session.board), deriveBrief(ssh.view(session.id).items, Date.now()));
-  });
-  // The ⋯ of the open session, which is also where the preference behind opening one lives.
-  const openHere = $derived(!!session && nav.focusedTerm === session.id);
 </script>
 
 {#if req && session}
@@ -85,72 +61,21 @@
        a gutter on all four sides or the hover fill runs into the border. -->
   <div
     bind:this={el}
-    class="fixed z-50 min-w-[12rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
+    class="fixed z-50 max-h-[calc(100vh-8px)] min-w-[12rem] overflow-y-auto rounded-lg border border-edge bg-panel p-1 shadow-xl"
     style="left:{req.x}px;top:{req.y}px"
     role="menu"
   >
     <div class="label truncate px-2 pt-1 pb-1.5 text-faint">
       {session.issue || session.id.slice(0, 8)}
     </div>
-    <MenuItem onclick={() => run(s => nav.openOverlay("rename-session",s.id))}>Rename session…</MenuItem>
-    {#if session.location !== "ssh"}
-      <MenuItem icon="⌁" onclick={() => run((s) => { nav.openSession(s.id); ssh.connectHost(s.id); })}>Connect to host…</MenuItem>
-    {/if}
-    {#if sshConn}
-      <MenuItem icon="⌁" onclick={() => run((s) => ssh.open(s.id, { conn: sshConn?.id }))}>Open {sshConn.host}</MenuItem>
-      {#if sshLive}
-        <MenuItem onclick={() => run((s) => ssh.wheelKey(s))}>{sshConn.wheel === "human" ? "Hand back…" : "Take the wheel"}</MenuItem>
-        <MenuItem onclick={() => run((s) => { if (sshConn) ssh.askClose(s.id, sshConn); })}>Close connection…</MenuItem>
-      {/if}
-      {#if session.location === "ssh"}
-        <MenuItem onclick={() => run(() => ssh.newSession(sshConn?.host ?? ""))}>New SSH session on this host</MenuItem>
-      {/if}
-      <div class="my-1 h-px bg-edge/60"></div>
-    {/if}
-    <MenuItem
-      icon="+"
-      disabled={!session.worktree}
-      title={session.worktree ? "open a shell in the worktree" : "session has no worktree"}
-      onclick={() => run((s) => addShell(s))}>Add shell</MenuItem
-    >
-    {#if session.devActive}
-      {#each session.devUrls ?? [] as url (url)}
-        <MenuItem icon="↗" title="Open {url}" onclick={() => run(() => store.openURL(url))}>{url}</MenuItem>
-      {/each}
-    {/if}
-    {#if session.location !== "ssh"}
-    <MenuItem
-      icon="±"
-      disabled={!session.worktree}
-      title={session.worktree ? "review the changes and send line comments to the agent" : "session has no worktree"}
-      onclick={() => run((s) => ssh.openChanges(s))}>Review diff</MenuItem
-    >
-    <MenuItem
-      icon="↺"
-      disabled={!session.worktree || !!session.location}
-      title={session.worktree ? "per-turn snapshots — restore a bad turn or fork from one" : "session has no worktree"}
-      onclick={() => run((s) => ssh.openChanges(s, -1))}>Checkpoints</MenuItem
-    >
-    {/if}
+    <MenuItem icon="✎" onclick={() => run(s => nav.openOverlay("rename-session", s.id))}>Rename session…</MenuItem>
     {#if session.worktree}
-      <MenuItem title={session.worktree} onclick={() => run((s) => store.openFolder(s.worktree))}>Open in Finder</MenuItem>
+      <MenuItem icon="◆" title={session.worktree} onclick={() => run(s => store.openFolder(s.worktree))}>Open in Finder</MenuItem>
     {/if}
-    {#if reportable}
-      <MenuItem title="The agent's own account of where it is. Its claim, not lola's." onclick={() => run((s) => ssh.showReport(s))}>Report</MenuItem>
-    {/if}
-    {#if session.devCommands?.length}
-      <!-- The project's dev processes run in ONE session at a time, so this is a
-           toggle, not an "open": switching it on here takes them off whoever had
-           them. The label says where they are, not what the click does — "Active"
-           with a filled dot IS the state. -->
-      <MenuItem
-        icon={session.devActive ? "●" : "○"}
-        variant={session.devActive ? "accent" : "default"}
-        title={devToggleTitle(session)}
-        onclick={() => run((s) => store.dev(s.id, !s.devActive))}
-      >
-        {session.devActive ? "Active — stop dev" : "Make active"}
-      </MenuItem>
+    {#if sshConn && sshLive}
+      <div class="my-1 h-px bg-edge/60"></div>
+      <MenuItem icon="⌁" onclick={() => run(s => ssh.wheelKey(s))}>{sshConn.wheel === "human" ? "Hand back…" : "Take the wheel"}</MenuItem>
+      <MenuItem onclick={() => run(s => { if (sshConn) ssh.askClose(s.id, sshConn); })}>Close connection…</MenuItem>
     {/if}
     {#if session.status === "merge_conflict"}
       <!-- The same action the status pill offers on hover, for anyone who reaches
@@ -176,31 +101,16 @@
         Compare attempts ({session.bestOf.attempt}/{session.bestOf.of})
       </MenuItem>
     {/if}
-    {#if session.location !== "ssh"}
-      <MenuItem icon="◈" title="force a QA review pass now" onclick={() => run((s) => store.review(s.id))}>
-        Trigger review
-      </MenuItem>
-      <MenuItem icon="◇" onclick={() => run((s) => store.coderabbit(s.id))}>CodeRabbit</MenuItem>
-    {/if}
-    {#if session.prNumber > 0}
-      <MenuItem icon="⑂" trailing="↗" onclick={() => run((s) => store.openURL(s.prUrl))}>Open PR</MenuItem>
-    {/if}
     {#if canRevive}
       <MenuItem variant="accent" icon="↻" onclick={() => run((s) => store.revive(s.id))} title={session.location ? "Reopen this directory; stopped agents start a new conversation" : "Resume the session"}>{session.location ? "Reopen session" : "Revive"}</MenuItem>
     {/if}
-    {#if session.status !== "shell"}
+    {#if session.status !== "shell" && otherAgents.length}
       <div class="my-1 h-px bg-edge/60"></div>
       {#each otherAgents as kind (kind)}
         <MenuItem icon="⇄" onclick={() => run((s) => store.askSwitchAgent(s.id, kind))}>
           Switch to {kind}
         </MenuItem>
       {/each}
-    {/if}
-    {#if openHere}
-      <div class="my-1 h-px bg-edge/60"></div>
-      <div class="label px-2 pt-1 pb-1 text-faint">Open sessions in</div>
-      <MenuItem icon={terms.globalView === "conversation" ? "✓" : ""} aria-current={terms.globalView === "conversation" ? "true" : undefined} onclick={() => run(() => terms.setGlobalView("conversation"))}>Conversation</MenuItem>
-      <MenuItem icon={terms.globalView === "terminal" ? "✓" : ""} aria-current={terms.globalView === "terminal" ? "true" : undefined} onclick={() => run(() => terms.setGlobalView("terminal"))}>Terminal</MenuItem>
     {/if}
     <div class="my-1 h-px bg-edge/60"></div>
     <!-- Routes through the shared confirm dialog, same as the 'x' shortcut. -->

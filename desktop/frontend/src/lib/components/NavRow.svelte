@@ -1,4 +1,5 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import type { Snippet } from "svelte";
 
   // The single definition of sidebar row density, so the triage rows and the
@@ -74,7 +75,7 @@
     {onkeydown}
   >
     <span class="flex w-3.5 shrink-0 items-center justify-center text-sm {glyphCls}" aria-hidden="true">
-      {#if icon}{@render icon()}{:else}{glyph}{/if}
+      {#if icon}{@render icon()}{:else}<GlyphIcon {glyph} />{/if}
     </span>
     <span class="truncate" class:font-medium={active} class:text-faint={dim && !active}>{#if labelContent}{@render labelContent()}{:else}{label}{/if}</span>
     {#if count !== undefined}

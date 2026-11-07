@@ -17,6 +17,7 @@ vi.mock("../LiveTerminal.svelte", async () => ({ default: (await import("../ssh/
 const { default: EndedView } = await import("./EndedView.svelte");
 const { default: SessionBar } = await import("./SessionBar.svelte");
 const { default: SessionEmbed } = await import("../SessionEmbed.svelte");
+const { default: SidebarSessionTools } = await import("../SidebarSessionTools.svelte");
 const { default: SidebarRoster } = await import("../SidebarRoster.svelte");
 const { store } = await import("$lib/store.svelte");
 const { talk } = await import("$lib/talk.svelte");
@@ -29,6 +30,9 @@ let SID = "";
 beforeEach(async () => {
   cleanup();
   SID = `end${++n}`;
+  nav.triage = "";
+  nav.sidebarQuery = "";
+  nav.scoped = false;
   store.alive = true;
   store.sessions = [];
   talkSvc.Ended.mockReset().mockResolvedValue({ sessions: [record(SID)] });
@@ -101,14 +105,16 @@ describe("the ended trigger", () => {
   });
 });
 
-describe("the Ended group", () => {
-  it("is collapsed, counts, and a row opens the story", async () => {
+describe("the Ended tab", () => {
+  it("counts ended sessions and opens their history from its tab", async () => {
     store.projects = [] as never;
     render(SidebarRoster);
-    const toggle = await screen.findByRole("button", { name: /Ended\s+1/ });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    render(SidebarSessionTools);
+    const toggle = await screen.findByRole("tab", { name: /Ended\s+1/ });
+    expect(toggle).toHaveAttribute("aria-selected", "false");
     expect(document.querySelector(`[data-roster-ended="${SID}"]`)).toBeNull();
     await fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-selected", "true");
     const row = document.querySelector(`[data-roster-ended="${SID}"]`) as HTMLElement;
     expect(row).toHaveTextContent("PR #412 merged");
     await fireEvent.click(row);
@@ -121,6 +127,8 @@ describe("the Ended group", () => {
     store.projects = [{ name: "", label: "" }] as never;
     render(SidebarRoster);
     await waitFor(() => expect(talkSvc.Ended).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: /Ended/ })).toBeNull();
+    nav.setTriage("Ended");
+    flushSync();
+    expect(document.querySelector(`[data-roster-ended="${SID}"]`)).toBeNull();
   });
 });

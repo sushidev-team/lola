@@ -28,6 +28,7 @@
 </script>
 
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
   import SectionHeader from "@mobile/lib/components/SectionHeader.svelte";
   import TouchButton from "@mobile/lib/components/TouchButton.svelte";
@@ -243,18 +244,7 @@
              already carries the state for a screen reader, so this is the
              sighted half of the same fact and is hidden from the tree. -->
         {#if active}
-          <svg
-            viewBox="0 0 24 24"
-            class="size-5 shrink-0 text-accent"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M4 12.5 9.5 18 20 7" />
-          </svg>
+          <Icon name="check" size={20} class="text-accent" />
         {/if}
       </button>
     {/each}

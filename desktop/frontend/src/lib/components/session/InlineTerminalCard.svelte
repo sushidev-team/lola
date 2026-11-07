@@ -21,7 +21,7 @@
   aria-label="{agent} terminal controls"
   data-inline-terminal
   hidden={!name}
-  class="min-h-0 max-h-[inherit] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-panel border border-accent/50 bg-panel {name ? 'grid' : 'hidden'}"
+  class="h-full min-h-0 max-h-full grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-panel border border-accent/50 bg-panel {name ? 'grid' : 'hidden'}"
   onkeydown={(event) => event.stopPropagation()}
 >
   <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-edge px-3 py-1">
@@ -30,5 +30,5 @@
     <span class="text-sm text-ink-2">Ctrl-Q to conversation</span>
     <Button size="xs" onclick={onExpand}>Expand terminal</Button>
   </div>
-  <TerminalCell {name} autofocus={false} {focusRequest} {onLeave} style="height: min(560px, 56cqh); min-height: 0; padding: 8px 10px;" />
+  <TerminalCell {name} autofocus={false} {focusRequest} {onLeave} style="height: 100%; max-height: 100%; min-height: 0; padding: 8px 10px;" />
 </section>

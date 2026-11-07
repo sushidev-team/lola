@@ -38,6 +38,13 @@ import * as protocol$0 from "../internal/protocol/models.js";
 import * as $models from "./models.js";
 
 /**
+ * AddressPRFeedback asks the coding agent to validate, fix, and resolve feedback.
+ */
+export function AddressPRFeedback(session: string, $number: number): $CancellablePromise<protocol$0.AgentSayData> {
+    return $Call.ByID(566829218, session, $number);
+}
+
+/**
  * Alive reports whether the daemon socket accepts a connection right now.
  */
 export function Alive(): $CancellablePromise<boolean> {
@@ -382,6 +389,13 @@ export function OpenURL(url: string): $CancellablePromise<void> {
 }
 
 /**
+ * PRReadiness reads current GitHub facts and unresolved review conversations.
+ */
+export function PRReadiness(session: string, $number: number): $CancellablePromise<protocol$0.PRReadinessData> {
+    return $Call.ByID(2994349465, session, $number);
+}
+
+/**
  * PRs lists a project's open pull requests (short-TTL cache; refresh bypasses it).
  */
 export function PRs(project: string, refresh: boolean): $CancellablePromise<protocol$0.PrsData> {
@@ -492,6 +506,13 @@ export function Revive(session: string): $CancellablePromise<protocol$0.ReviveDa
  */
 export function SendFeedback(args: protocol$0.FeedbackArgs): $CancellablePromise<protocol$0.FeedbackData> {
     return $Call.ByID(2310802896, args);
+}
+
+/**
+ * SessionTask updates the shared task board. User additions also enter the conversation.
+ */
+export function SessionTask(session: string, argv: string[] | null): $CancellablePromise<protocol$0.SessionTask[] | null> {
+    return $Call.ByID(577629738, session, argv);
 }
 
 /**

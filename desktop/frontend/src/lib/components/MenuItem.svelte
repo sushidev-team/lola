@@ -14,6 +14,7 @@
 </script>
 
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import type { Snippet } from "svelte";
   import type { HTMLButtonAttributes } from "svelte/elements";
 
@@ -41,7 +42,7 @@
     variant
   ]}"
 >
-  <span class="w-3.5 shrink-0 text-center text-sm text-faint" aria-hidden="true">{icon}</span>
+  <span class="w-3.5 shrink-0 text-center text-sm text-faint" aria-hidden="true"><GlyphIcon glyph={icon} /></span>
   <span class="min-w-0 flex-1 truncate">{@render children()}</span>
-  {#if trailing}<span class="shrink-0 text-sm text-faint" aria-hidden="true">{trailing}</span>{/if}
+  {#if trailing}<span class="shrink-0 text-sm text-faint" aria-hidden="true"><GlyphIcon glyph={trailing} /></span>{/if}
 </button>

@@ -226,6 +226,41 @@ describe("Timeline rail", () => {
     expect(container.querySelector('[data-row="t2"]')).not.toBeNull();
   });
 
+  it("minimap navigation scrolls to a folded activity group without opening its commands", async () => {
+    const view = setup([], [text("note", "Inspecting files", 1), tool("t1", "read", "a.go", {}, 2), tool("t2", "read", "b.go", {}, 3), text("answer", "Done", 4)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const expanded = [...feed.view(SID).expanded];
+    const group = container.querySelector('[data-work]')!;
+    const scroll = vi.spyOn(group, 'scrollIntoView');
+    view.jump = { block: 'item:t2', n: 1, expand: false };
+    await settle();
+    await settle();
+    expect(scroll).toHaveBeenCalledWith({ block: 'center', behavior: 'instant' });
+    expect(container.querySelector('[data-work-fold]')).toHaveAttribute('aria-expanded', 'false');
+    expect(container.querySelector('[data-row="t2"]')).toBeNull();
+    expect([...feed.view(SID).expanded]).toEqual(expanded);
+    expect(view.cursor).not.toBe('t2');
+  });
+
+  it("minimap navigation lands on a folded turn without expanding it", async () => {
+    const items: unknown[] = [], rows: unknown[] = [];
+    for (let i = 0; i < 14; i++) {
+      items.push(human(`h${i}`, `ask ${i}`, i * 10 + 1), system(`s${i}`, 'checkpoint', 'Done', i * 10 + 3, { seq: i + 1 }));
+      rows.push(text(`x${i}`, `answer ${i}`, i * 10 + 2));
+    }
+    const view = setup(items, rows);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const fold = container.querySelector('[data-turn-fold]')!;
+    const scroll = vi.spyOn(fold, 'scrollIntoView');
+    view.jump = { block: 'item:x0', n: 1, expand: false };
+    await settle(); await settle();
+    expect(scroll).toHaveBeenCalled();
+    expect(fold).toHaveAttribute('aria-expanded', 'false');
+    expect(container.querySelector('[data-row="x0"]')).toBeNull();
+  });
+
   it("a settled turn keeps the answer visible and reveals its activity on demand", async () => {
     const long = "word ".repeat(70);
     setup([human("h1", "ask", 1), system("s1", "checkpoint", "Done", 9, { seq: 1 })], [text("x1", "looking", 2), tool("t1", "read", "a.go", {}, 3), text("x2", long, 4)]);

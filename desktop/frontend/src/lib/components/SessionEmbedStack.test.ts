@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 
 const OpenURL = vi.fn().mockResolvedValue(undefined);
+const PRReadiness = vi.fn().mockResolvedValue({ number: 9, url: 'https://github.com/acme/api/pull/9', state: 'OPEN', checks: 'fail', threads: [] });
 vi.mock("@bindings/desktop", () => ({
   DaemonService: {
     Diff: vi.fn().mockResolvedValue({ session: "s1", base: "origin/main", mergeBase: "abc", files: [] }),
     OpenURL: (...a: unknown[]) => OpenURL(...a),
+    PRReadiness: (...a: unknown[]) => PRReadiness(...a),
     Alive: vi.fn().mockResolvedValue(false),
     Sessions: vi.fn(),
     Projects: vi.fn(),
@@ -16,15 +18,12 @@ vi.mock("@bindings/desktop", () => ({
 }));
 
 const { default: SessionBar } = await import("./session/SessionBar.svelte");
+const { default: BeforeMerge } = await import("./session/BeforeMerge.svelte");
 const { store } = await import("$lib/store.svelte");
 
-// SUSHI-628: a sandboxed session says so, and a STACK session shows one row
-// per app — its PR (clickable), or whether it has changes yet — instead of a
-// single "Open PR" that would reach only one repository. Both moved out of the
-// band when the header went: the sandbox to the title's hover card, the apps to
-// the delivery chip's popover.
+// Sandbox details live on the title's hover card; stack PRs live in Before merge.
 describe("SessionBar sandbox + stack apps", () => {
-  it("names the sandbox on hover and lists one row per app in the chip's popover", async () => {
+  it("names the sandbox on hover and opens the focused app's PR from Before merge", async () => {
     store.sessions = [
       {
         id: "s1",
@@ -50,16 +49,13 @@ describe("SessionBar sandbox + stack apps", () => {
     expect(await screen.findByText("docker")).toBeInTheDocument();
     await fireEvent.pointerLeave(document.querySelector("[data-session-bar] [tabindex='0']")!);
 
-    await fireEvent.click(screen.getByRole("button", { name: "Delivery" }));
+    expect(screen.queryByRole("button", { name: "Delivery" })).toBeNull();
+    render(BeforeMerge, { session: store.sessions[0] });
+    await waitFor(() => expect(PRReadiness).toHaveBeenCalledWith('s1~api', 9));
     expect(screen.queryByRole("menuitem", { name: /Open PR/ })).toBeNull();
-    const strip = screen.getByRole("list", { name: "Apps" });
-    const items = within(strip).getAllByRole("listitem");
-    expect(items.map((li) => li.textContent?.replace(/\s+/g, " ").trim())).toEqual([
-      expect.stringMatching(/^Web · changes, no PR :4100, :4101$/),
-      expect.stringMatching(/^api · #9/),
-      expect.stringMatching(/^docs · untouched$/),
-    ]);
-    await fireEvent.click(within(items[1]).getByRole("button", { name: /#9/ }));
+    expect(screen.getByRole("region", { name: "Before merge" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /#9/ })).toHaveLength(1);
+    await fireEvent.click(screen.getByRole("button", { name: /#9/ }));
     expect(OpenURL).toHaveBeenCalledWith("https://github.com/acme/api/pull/9");
   });
 });

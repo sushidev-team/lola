@@ -1,4 +1,6 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { triaged } from "$lib/filters";
@@ -91,12 +93,12 @@
 >
   {#if !nav.sidebarOpen}
     <!-- Placed AFTER the traffic-light padding, never inside it. -->
-    <Button icon title="show sidebar (b)" aria-label="Show sidebar" onclick={() => nav.toggleSidebar()}>»</Button>
+    <Button icon title="show sidebar (b)" aria-label="Show sidebar" onclick={() => nav.toggleSidebar()}><Icon name="chevrons-right" size={14} /></Button>
   {/if}
 
   {#if waiting > 0}
     <Button size="xs" class="num shrink-0 text-orange!" title="{waiting} waiting on you (⌘J)" aria-label="{waiting} waiting on you" onclick={() => ssh.nextWaiting()} data-waiting-badge>
-      <span aria-hidden="true">◉</span>{waiting}
+      <span aria-hidden="true"><Icon name="circle-alert" size={14} /></span>{waiting}
     </Button>
   {/if}
 
@@ -112,9 +114,7 @@
       aria-label="Back to sessions"
       onclick={() => nav.goCockpit(nav.scoped ? nav.project : "")}
     >
-      <svg class="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="m9.5 4-4 4 4 4" />
-      </svg>
+      <Icon name="chevron-left" class="size-3.5" />
     </Button>
   {/if}
 
@@ -122,9 +122,7 @@
   <nav class="flex min-w-0 items-center gap-2 text-sm font-normal" aria-label="Breadcrumb">
     {#each crumbs as c, i (c.text + i)}
       {#if i > 0}
-        <svg class="h-3 w-2 shrink-0 text-faint" viewBox="0 0 8 12" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">
-          <path d="m5.5 2-3 8" />
-        </svg>
+        <Icon name="slash" class="h-3 w-2 shrink-0 text-faint" size={14} />
       {/if}
       {#if c.onclick}
         <button class="min-w-0 truncate rounded py-1 text-faint hover:text-ink" onclick={c.onclick}>{c.text}</button>
@@ -170,7 +168,7 @@
         title="{daemonHealth} · open doctor (d)"
         onclick={() => nav.openOverlay("doctor")}
       >
-        <span aria-hidden="true">{store.alive ? "▲" : "○"}</span>
+        <span aria-hidden="true"><GlyphIcon glyph={store.alive ? "▲" : "○"} /></span>
         <span>{store.alive ? "Degraded" : "Daemon down"}</span>
       </Button>
     {/if}

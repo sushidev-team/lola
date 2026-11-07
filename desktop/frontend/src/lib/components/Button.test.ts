@@ -21,10 +21,10 @@ describe("Button loading", () => {
   it("draws a spinner ahead of the label", () => {
     render(ButtonHarness, { loading: true });
     const spinner = screen.getByRole("button", { name: /Active/ }).firstElementChild;
-    expect(spinner?.className).toContain("animate-spin");
+    expect(spinner?.getAttribute("class")).toContain("animate-spin");
     // It slows under reduced motion rather than freezing: a still spinner reads
     // as a hung app, which is the opposite of the message.
-    expect(spinner?.className).toContain("motion-reduce:animate-[spin_1.8s_linear_infinite]");
+    expect(spinner?.getAttribute("class")).toContain("motion-reduce:animate-[spin_1.8s_linear_infinite]");
   });
 
   it("is an ordinary enabled button when it is not loading", () => {

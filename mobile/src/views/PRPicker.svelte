@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import TimeAgo from "$lib/components/TimeAgo.svelte";
   import { onMount } from "svelte";
   import type { PrRow, PrsData } from "@bindings/internal/protocol";
@@ -248,7 +249,7 @@
     >
       <span class="min-w-0 flex-1 py-2">{refusal}</span>
       <TouchButton icon aria-label="Dismiss" class="text-warn!" onclick={() => (refusal = "")}>
-        <span aria-hidden="true">×</span>
+        <span aria-hidden="true"><Icon name="x" size={14} /></span>
       </TouchButton>
     </div>
   {/if}

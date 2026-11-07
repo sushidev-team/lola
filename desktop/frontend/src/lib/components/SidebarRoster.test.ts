@@ -120,4 +120,76 @@ describe("SidebarRoster", () => {
     expect(document.querySelector('[data-roster-pr]')).toHaveTextContent('#84');
   });
 
+  it("avoids repeating an orphaned session's identifier and status", () => {
+    store.sessions = [row('orphan', { title: 'NOR-389', issue: 'NOR-389', agentState: 'orphaned' })];
+    render(SidebarRoster);
+    expect(screen.getAllByText('NOR-389')).toHaveLength(1);
+    expect(document.querySelector('[data-roster-meta]')).toBeNull();
+    expect(screen.getByRole('img', { name: 'Orphaned' }).querySelector('svg')).not.toBeNull();
+    expect(document.querySelector('[data-roster-line]')).toHaveTextContent('Orphaned');
+  });
+
+  it("uses a review icon for a resting reviewer without repeating the review label", () => {
+    store.sessions = [row('review', { issue: 'CE-79', delivery: 'review_pending' })];
+    render(SidebarRoster);
+    expect(screen.getByRole('img', { name: 'Awaiting review' })).toBeInTheDocument();
+    expect(document.querySelector('[data-roster-meta]')).toHaveTextContent('CE-79');
+    expect(document.querySelector('[data-roster-meta]')).not.toHaveTextContent('Awaiting review');
+  });
+  it("keeps working and needs-you icons when a PR is also awaiting review", () => {
+    store.sessions = [row('working', { delivery: 'review_pending', agentState: 'working' }), row('waiting', { delivery: 'review_pending', agentState: 'waiting_input' })];
+    render(SidebarRoster);
+    expect(screen.getByRole('img', { name: 'Working' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Needs you' })).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Awaiting review' })).toBeNull();
+  });
+
+  it("collapses routine review notifications into a two-line row", () => {
+    store.sessions = [row('review', { issue: 'CE-79', delivery: 'review_pending', lastNotification: 'Claude is waiting for your input' })];
+    render(SidebarRoster);
+    const rowEl = document.querySelector('[data-roster-row="review"]')!;
+    expect(rowEl.closest('.sidebar-session-item')).toHaveClass('compact');
+    expect(rowEl.querySelector('[data-roster-line]')).toBeNull();
+    expect(screen.getByRole('img', { name: 'Awaiting review' })).toBeInTheDocument();
+  });
+
+  it("keeps exit details inline with the issue", () => {
+    store.sessions = [row('exited', { issue: 'NOR-507', agentState: 'exited' })];
+    render(SidebarRoster);
+    expect(document.querySelector('[data-roster-meta] [data-roster-line]')).toHaveTextContent('Exited');
+    expect(document.querySelector('.sidebar-session-activity')).toBeNull();
+  });
+
+  it("marks only the session with Dev active and clears the mark when stopped", async () => {
+    store.sessions = [row('dev', { devActive: true }), row('other')];
+    render(SidebarRoster);
+    expect(screen.getAllByRole('img', { name: 'Dev active' })).toHaveLength(1);
+    expect(document.querySelector('[data-roster-row="dev"]')!.closest('.sidebar-session-item')).toHaveClass('dev-active');
+    store.sessions = [row('dev', { devActive: false }), row('other')];
+    await new Promise(resolve => setTimeout(resolve));
+    expect(screen.queryByRole('img', { name: 'Dev active' })).toBeNull();
+  });
+
+  it("does not render empty SSH or Temporary sections", () => {
+    store.sessions = [row('one')];
+    render(SidebarRoster);
+    expect(screen.queryByRole('heading', { name: /SSH|Temporary/ })).toBeNull();
+  });
+
+  it("folds project groups without changing the active session; search reopens them", async () => {
+    store.sessions = [row('first', { title: 'First task' }), row('second', { project: 'web', title: 'Second task' })];
+    nav.openSession('first');
+    render(SidebarRoster);
+    const heading = screen.getByRole('button', { name: /lola 1/i });
+    await fireEvent.click(heading);
+    expect(heading).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelector('[data-roster-row="first"]')).not.toBeVisible();
+    expect(document.querySelector('[data-roster-row="second"]')).toBeVisible();
+    expect(nav.focusedTerm).toBe('first');
+    nav.sidebarQuery = 'First';
+    await new Promise(resolve => setTimeout(resolve));
+    expect(heading).toHaveAttribute('aria-expanded', 'true');
+    expect(document.querySelector('[data-roster-row="first"]')).toBeVisible();
+  });
+
 });

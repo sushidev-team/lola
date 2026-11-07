@@ -214,9 +214,9 @@
         return true;
       case "c":
         // The CONFIGURED review provider (any pass kind — an agent or cli one),
-        // not coderabbit specifically — same as the menu's "Trigger Review" and
+        // not coderabbit specifically — same as the overview's "Trigger review" and
         // ⌘⇧R. Forcing the coderabbit-watch pass is still reachable from the
-        // session context menu, which is where a provider-specific action belongs.
+        // command palette as "Poll CodeRabbit reviews".
         if (sel && sel.location !== "ssh") store.review(sel.id);
         return true;
       case "D":

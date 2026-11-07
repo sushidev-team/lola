@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { onMount } from "svelte";
   import { nav } from "$lib/nav.svelte";
   import { updates } from "$lib/update.svelte";
@@ -51,10 +52,10 @@
   {#if updates.checking && !updates.info}
     <div class="text-sm text-faint">checking for updates…</div>
   {:else if updates.error && !updates.info}
-    <div class="text-bad">✗ {updates.error}</div>
+    <div class="text-bad"><Icon name="x" size={14} /> {updates.error}</div>
   {:else if !updates.available}
     <div class="flex flex-col gap-2 py-4 text-center">
-      <span class="text-good">✓ you're up to date</span>
+      <span class="text-good"><Icon name="check" size={14} /> you're up to date</span>
       <span class="num text-sm text-faint">running v{updates.info?.currentVersion || updates.version}</span>
     </div>
   {:else if !updates.installable}
@@ -118,11 +119,11 @@
           </div>
         </div>
       {:else if updates.dmgPath}
-        <div class="text-good">✓ downloaded — ready to install</div>
+        <div class="text-good"><Icon name="check" size={14} /> downloaded — ready to install</div>
       {/if}
 
       {#if updates.error}
-        <div class="text-bad">✗ {updates.error}</div>
+        <div class="text-bad"><Icon name="x" size={14} /> {updates.error}</div>
       {/if}
     </div>
   {/if}

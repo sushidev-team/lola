@@ -204,6 +204,7 @@ type Daemon struct {
 	// over scm.Client.ListOpenPRs. Overridable in tests. A gh failure is an
 	// error (never conflated with "no open PRs").
 	listOpenPRs func(ctx context.Context, repo string) ([]scm.OpenPR, error)
+	prReadiness func(ctx context.Context, repo string, number int) (scm.PRReadiness, error)
 
 	// prsCache memoizes cmd=prs results per repo behind a short TTL and a
 	// per-repo lock, so rapid picker opens / two clients don't each exec gh.
@@ -618,6 +619,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	scmc := &scm.Client{}
 	d.prForBranch = scmc.PRForBranch
 	d.listOpenPRs = scmc.ListOpenPRs
+	d.prReadiness = scmc.Readiness
 	d.prsCache = newPRCache()
 	d.failingChecks = scmc.FailingChecks
 	d.requiredChecks = scmc.RequiredChecks
@@ -1310,6 +1312,9 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				prev := *cur
 				s.Name = prev.Name
 				s.Location = prev.Location
+				// A tmux scan cannot recover the shared tasks or reported plan.
+				s.Tasks = prev.Tasks
+				s.Board = prev.Board
 				// The persisted record is authoritative for the launch discriminator
 				// (Kind/Agentless) — Adopt only re-derives it from the ID shape as a
 				// store-loss backstop. Carry it forward. An agent-less session

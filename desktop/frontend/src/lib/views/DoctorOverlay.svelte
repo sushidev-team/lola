@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import { onMount } from "svelte";
   import { nav } from "$lib/nav.svelte";
   import Modal from "$lib/components/Modal.svelte";
@@ -77,7 +79,7 @@
 
 <Modal title="doctor" onClose={() => nav.closeOverlay()}>
   {#if error}
-    <div class="selectable text-bad">✗ doctor failed: {error}</div>
+    <div class="selectable text-bad"><Icon name="x" size={14} /> doctor failed: {error}</div>
   {:else if !report}
     <div class="text-faint">running checks…</div>
   {:else if (report.results?.length ?? 0) === 0}
@@ -89,7 +91,7 @@
       {#each report.results ?? [] as r (r.name)}
         {@const g = glyph(r)}
         <div class="flex items-start gap-2 rounded px-1 py-1.5 hover:bg-sel/40">
-          <span class="w-4 shrink-0 text-center {g.cls}">{g.char}</span>
+          <span class="w-4 shrink-0 text-center {g.cls}"><GlyphIcon glyph={g.char} /></span>
           <div class="min-w-0 flex-1">
             <span class="font-medium text-ink">{r.name}</span>
             {#if r.detail}<span class="ml-2 text-sm text-faint">{r.detail}</span>{/if}
@@ -105,7 +107,7 @@
          would make every other row look inert by comparison. -->
     <div class="mt-4 border-t border-edge pt-3">
       <div class="flex items-start gap-2">
-        <span class="w-4 shrink-0 text-center {cli.found ? 'text-good' : 'text-bad'}">{cli.found ? "✓" : "✗"}</span>
+        <span class="w-4 shrink-0 text-center {cli.found ? 'text-good' : 'text-bad'}"><GlyphIcon glyph={cli.found ? "✓" : "✗"} /></span>
         <div class="min-w-0 flex-1">
           <span class="font-medium text-ink">lola CLI</span>
           {#if cli.found}
@@ -117,7 +119,7 @@
                    the cause of "the app has a feature the daemon never heard
                    of", so it is stated rather than left to be debugged. -->
               <span class="mt-1 block text-sm text-warn">
-                ▲ This CLI ({cli.version}) differs from the copy bundled with the app ({cli.bundledVersion}). Set
+                <Icon name="triangle-alert" size={14} /> This CLI ({cli.version}) differs from the copy bundled with the app ({cli.bundledVersion}). Set
                 <span class="font-mono text-sm">LOLA_BIN</span> to pin one.
               </span>
             {/if}
@@ -147,10 +149,10 @@
       {#if running && report}
         <span class="text-faint">re-running checks…</span>
       {:else if report}
-        <span class={report.ok ? "text-good" : "text-bad"}>{report.ok ? "✓" : "✗"}</span>
+        <span class={report.ok ? "text-good" : "text-bad"}><GlyphIcon glyph={report.ok ? "✓" : "✗"} /></span>
         <span class="selectable text-faint">{report.summary}</span>
       {:else if error}
-        <span class="text-bad">✗</span><span class="text-faint">check run failed</span>
+        <span class="text-bad"><Icon name="x" size={14} /></span><span class="text-faint">check run failed</span>
       {:else}
         <span class="text-faint">running checks…</span>
       {/if}

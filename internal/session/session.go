@@ -16,6 +16,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/gitguard"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -270,6 +271,9 @@ type Session struct {
 	// read, so sessionsData is its one reader. Nothing in the control loop
 	// (axes, slots, reactions, write-back, send-keys gates) may consult it.
 	Board board.Board `json:"board,omitzero"`
+
+	// Tasks are durable shared requirements, independent of the agent report.
+	Tasks []protocol.SessionTask `json:"tasks,omitempty"`
 
 	// RemovedLabels are the match-label UUIDs the post-spawn label flip
 	// actually stripped from this issue (the trigger labels it carried at

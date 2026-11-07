@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import TimeAgo from "$lib/components/TimeAgo.svelte";
   import StatusChip from "./StatusChip.svelte";
   import MetaPill from "./MetaPill.svelte";
@@ -226,7 +227,7 @@
                project, and the compact row prints it here too. A mark rather
                than a word: the card has no room for "dev" and the dot is the
                same one the terminal's own toggle wears. -->
-          <span class="shrink-0 text-good" aria-label="running this project's dev commands">●</span>
+          <span class="shrink-0 text-good" aria-label="running this project's dev commands"><Icon name="circle-dot" size={14} /></span>
         {/if}
       </div>
       <span class="flex-1"></span>

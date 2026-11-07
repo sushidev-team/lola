@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { onMount, onDestroy, tick } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
@@ -875,13 +876,13 @@
             {#if !keyStatus}
               <span class="text-faint">Checking…</span>
             {:else if keyStatus.resolvable}
-              <span class="text-good">✓ Key configured</span>
+              <span class="text-good"><Icon name="check" size={14} /> Key configured</span>
               <span class="mt-1 block text-sm text-faint">Read from {keyStatus.source}.</span>
             {:else if keyStatus.configured}
-              <span class="text-bad">✗ Key configured but unreadable</span>
+              <span class="text-bad"><Icon name="x" size={14} /> Key configured but unreadable</span>
               <span class="mt-1 block text-sm text-faint">{keyStatus.source} — {keyStatus.detail}</span>
             {:else}
-              <span class="text-warn">▲ No key configured</span>
+              <span class="text-warn"><Icon name="triangle-alert" size={14} /> No key configured</span>
               <span class="mt-1 block text-sm text-faint">Every poll will fail until one is set.</span>
             {/if}
           </div>
@@ -1515,7 +1516,7 @@
   {#if saveErr}
     <div role="alert" class="mb-3 flex max-h-32 items-start gap-2 overflow-auto rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
-      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}>✕</Button>
+      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}><Icon name="x" size={14} /></Button>
     </div>
   {/if}
 

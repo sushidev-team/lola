@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import {
     BAR_ROW_PRIMARY,
     BAR_ROW_SECONDARY,
@@ -252,7 +254,7 @@
         expanded = !expanded;
       }}
     >
-      {expanded ? "▾" : "▴"}
+      <GlyphIcon glyph={expanded ? "▾" : "▴"} />
     </button>
   </div>
 </div>
@@ -273,7 +275,7 @@
              bg-gradient-to-r from-crust via-crust/80 to-transparent text-sm text-faint"
       aria-hidden="true"
     >
-      ‹
+      <Icon name="chevron-left" size={14} />
     </div>
   {/if}
   {#if e.right}
@@ -283,7 +285,7 @@
              {inset ? 'right-13' : 'right-2'}"
       aria-hidden="true"
     >
-      ›
+      <Icon name="chevron-right" size={14} />
     </div>
   {/if}
 {/snippet}

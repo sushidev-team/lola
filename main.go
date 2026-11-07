@@ -25,6 +25,7 @@ import (
 	"github.com/sushidev-team/lola/internal/review"
 	"github.com/sushidev-team/lola/internal/reviewagent"
 	"github.com/sushidev-team/lola/internal/reviewrun"
+	"github.com/sushidev-team/lola/internal/taskboard"
 	"github.com/sushidev-team/lola/internal/tui"
 )
 
@@ -479,7 +480,14 @@ func reportCmd() *cobra.Command {
 				fmt.Fprintln(c.OutOrStdout(), board.Usage)
 				return nil
 			}
-			err := hook.Report(args)
+			if len(args) == 2 && args[0] == "task" && (args[1] == "help" || args[1] == "--help") {
+				fmt.Fprintln(c.OutOrStdout(), taskboard.Briefing("lola"))
+				return nil
+			}
+			data, err := hook.ReportData(args)
+			if err == nil && len(args) > 0 && args[0] == "task" && len(data) > 0 {
+				fmt.Fprintln(c.OutOrStdout(), string(data))
+			}
 			switch {
 			case err == nil:
 				return nil

@@ -91,6 +91,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(d.sessionsData())
 	case "projects":
 		return dataResponse(d.projectsData(ctx))
+	case "prReadiness", "addressPRFeedback":
+		return d.handlePRReadiness(ctx, req)
 	case "prs":
 		data, err := d.handlePrs(ctx, req.Args)
 		if err != nil {
@@ -192,6 +194,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(data)
 	case "hookEvent":
 		return d.handleHookEvent(req)
+	case "sessionTask":
+		return d.handleSessionTask(ctx, req, "user")
 	case "agentReport":
 		return d.handleAgentReport(req)
 	case protocol.CmdSSHAgentHosts, protocol.CmdSSHAgentRequest, protocol.CmdSSHAgentRun, protocol.CmdSSHAgentPoll, protocol.CmdSSHAgentCancel, protocol.CmdSSHAgentPost,
@@ -874,6 +878,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		}
 		// The agent's own report — display-only, like the overlay above.
 		si.Board = boardInfo(s.Board, auditClaims(s), now)
+		si.Tasks = s.Tasks
 		for _, o := range s.Overlaps {
 			si.Overlaps = append(si.Overlaps, protocol.SessionOverlap{
 				Session: o.Session, Issue: o.Issue, Files: slices.Clone(o.Files), More: o.More,

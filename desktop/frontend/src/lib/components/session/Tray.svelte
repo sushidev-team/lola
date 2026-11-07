@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // The one home for "needs you", above the composer. One card at a time, oldest first, and the
   // order never changes because something new arrived.
   //
@@ -147,8 +148,8 @@
   {#if counted > 1}
     <span class="flex items-center gap-0.5 text-sm text-faint" data-tray-pager>
       <span class="num whitespace-nowrap">{position} of {counted}</span>
-      <Button size="xs" icon class="h-5! w-5!" aria-label="Older card" onclick={() => step(-1)}>‹</Button>
-      <Button size="xs" icon class="h-5! w-5!" aria-label="Newer card" onclick={() => step(1)}>›</Button>
+      <Button size="xs" icon class="h-5! w-5!" aria-label="Older card" onclick={() => step(-1)}><Icon name="chevron-left" size={14} /></Button>
+      <Button size="xs" icon class="h-5! w-5!" aria-label="Newer card" onclick={() => step(1)}><Icon name="chevron-right" size={14} /></Button>
     </span>
   {/if}
 {/snippet}
@@ -159,7 +160,7 @@
   <div class="cv-dock-rail" aria-hidden="true"><div class="cv-rail-line"></div></div>
   <div class="grid min-h-0 grid-rows-[minmax(0,1fr)] {card || promptNote || session?.devClash ? 'pt-2' : ''}" {@attach widthOf((w) => (width = w))} data-tray>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_no_static_element_interactions -->
-  <div bind:this={root} tabindex="-1" class="grid min-h-0 gap-2 outline-none {inlineName ? 'max-h-[65cqh]' : narrow ? 'max-h-[60cqh]' : 'max-h-[45cqh]'}" onkeydown={onKey}>
+  <div bind:this={root} tabindex="-1" class="grid min-h-0 gap-2 outline-none {inlineName ? 'h-full max-h-full' : narrow ? 'max-h-[60cqh]' : 'max-h-[45cqh]'}" onkeydown={onKey}>
     <InlineTerminalCard name={inlineName} {agent} {pager} focusRequest={terminalFocus} onLeave={leaveControls} onExpand={expandControls} />
     {#if card && !inlineName}
       {#key card.id}

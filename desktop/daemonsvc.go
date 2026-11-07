@@ -504,3 +504,27 @@ func waitDaemon(wantAlive bool, timeout time.Duration) error {
 	}
 	return errors.New("timed out waiting for daemon to stop")
 }
+
+// SessionTask updates the shared task board. User additions also enter the conversation.
+func (s *DaemonService) SessionTask(session string, argv []string) ([]protocol.SessionTask, error) {
+	args, _ := json.Marshal(protocol.ReportArgs{Argv: argv})
+	var tasks []protocol.SessionTask
+	err := call(protocol.Request{Cmd: "sessionTask", Session: session, Args: args}, longTimeout, &tasks)
+	return tasks, err
+}
+
+// PRReadiness reads current GitHub facts and unresolved review conversations.
+func (s *DaemonService) PRReadiness(session string, number int) (protocol.PRReadinessData, error) {
+	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number})
+	var d protocol.PRReadinessData
+	err := call(protocol.Request{Cmd: "prReadiness", Session: session, Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// AddressPRFeedback asks the coding agent to validate, fix, and resolve feedback.
+func (s *DaemonService) AddressPRFeedback(session string, number int) (protocol.AgentSayData, error) {
+	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number})
+	var d protocol.AgentSayData
+	err := call(protocol.Request{Cmd: "addressPRFeedback", Session: session, Args: args}, longTimeout, &d)
+	return d, err
+}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // The agent's prose: headlines, lists, tables, callouts and folds. It renders from parsed
   // data and has no {@html}, because this text is written by something that reads untrusted
   // remote output. Links and block references come from SSHText, as everywhere else.
@@ -70,9 +71,7 @@
 {#snippet inline(line: string)}{@render spans(inlineSpans(line))}{/snippet}
 
 {#snippet claim(tone: "ok" | "warn" | "bad")}
-  <svg viewBox="0 0 24 24" class="size-3.5 translate-y-0.5 {claimMark[tone]}" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label={toneWord[tone]}>
-    {#if tone === "ok"}<path d="m5 12.5 4.5 4.5L19 7.5" />{:else if tone === "bad"}<path d="M7 7l10 10M17 7 7 17" />{:else}<path d="M12 5v9M12 19v.01" />{/if}
-  </svg>
+  <Icon name={tone === 'ok' ? 'check' : tone === 'bad' ? 'x' : 'circle-alert'} class="size-3.5 translate-y-0.5 {claimMark[tone]}" role="img" aria-label={toneWord[tone]} />
 {/snippet}
 
 {#snippet sublist(items: string[])}
@@ -150,9 +149,7 @@
 {/snippet}
 
 {#snippet mark(tone: "ok" | "warn" | "bad")}
-  <svg viewBox="0 0 24 24" class="size-3.5 translate-y-0.5 {toneMark[tone]}" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label={toneWord[tone]}>
-    {#if tone === "ok"}<path d="m5 12.5 4.5 4.5L19 7.5" />{:else if tone === "bad"}<path d="M7 7l10 10M17 7 7 17" />{:else}<path d="M12 5v9M12 19v.01" />{/if}
-  </svg>
+  <Icon name={tone === 'ok' ? 'check' : tone === 'bad' ? 'x' : 'circle-alert'} class="size-3.5 translate-y-0.5 {toneMark[tone]}" role="img" aria-label={toneWord[tone]} />
 {/snippet}
 
 {#snippet render(list: RichBlock[])}

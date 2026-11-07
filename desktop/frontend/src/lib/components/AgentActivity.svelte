@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import LivePulse from "./LivePulse.svelte";
   import type { SessionInfo } from "$lib/store.svelte";
 
@@ -45,7 +46,7 @@
   <div class="flex min-w-0 items-center gap-1.5 text-sm">
     {#if pulse}<LivePulse agentState={session.agentState} />{/if}
     {#if blocked}
-      <span class="truncate text-orange" title="the agent reports it is blocked">⏸ {blocked}</span>
+      <span class="truncate text-orange" title="the agent reports it is blocked"><Icon name="pause" size={14} /> {blocked}</span>
     {:else if text}
       <!-- The interpreter's headline reads as a live-progress note, not a
            warning, so it carries the pulse dot's `info` blue. Orange is spoken

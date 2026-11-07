@@ -408,6 +408,31 @@ describe("SidebarProjects", () => {
     expect(nori.querySelector("[data-stack-members='nori']")!.textContent).toContain("web");
   });
 
+  it("shows stack members using their stack's polling status, not their inactive own poll", async () => {
+    store.projects = stackProjects();
+    const polls = (enabled: boolean, lastError = '') => ({ polls: [
+      { name: 'nori', enabled, lastError },
+      { name: 'web', enabled: false, lastError: 'old standalone error' },
+    ] }) as NonNullable<typeof store.status>;
+    store.status = polls(true);
+    render(SidebarProjects);
+    const row = screen.getByRole('button', {name:'web'}).parentElement!;
+    expect(row).toHaveAttribute('title', 'Part of nori · stack polling enabled');
+    expect(row.querySelector('.text-good svg')).toHaveClass('lucide-circle-dot');
+    store.status = polls(false);
+    await tick();
+    expect(row).toHaveAttribute('title', 'Part of nori · stack polling paused');
+    expect(row.querySelector('.text-good')).toBeNull();
+    store.status = polls(true, 'Cannot reach Linear');
+    await tick();
+    expect(row).toHaveAttribute('title', 'Part of nori · poll error: Cannot reach Linear');
+    expect(row.querySelector('.text-bad svg')).toHaveClass('lucide-circle-dot');
+    store.status = null;
+    await tick();
+    expect(row).toHaveAttribute('title', 'Part of nori · polling status unavailable');
+    expect(row.querySelector('.text-good')).toBeNull();
+  });
+
   it("asks before adding a project to the stack its row is dropped on", async () => {
     store.projects = stackProjects();
     store.groups = [];

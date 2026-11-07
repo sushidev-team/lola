@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import { deliveryChipWord, deliveryGlyph, deliveryText } from "$lib/theme";
   import Button from "./Button.svelte";
   import type { SessionInfo } from "$lib/store.svelte";
@@ -95,18 +97,18 @@
     {/if}
     {#if chip}
       <span class={deliveryText(delivery)}>
-        <span aria-hidden="true">{deliveryGlyph(delivery)}</span>
+        <span aria-hidden="true"><GlyphIcon glyph={deliveryGlyph(delivery)} /></span>
         {chip}
       </span>
     {:else}
       {#if !checksImplied}
-        {#if session.checks === "pass"}<span class="text-good" title="checks pass">✓</span>
-        {:else if session.checks === "fail"}<span class="text-bad" title="checks failed">✕ci</span>
-        {:else if session.checks === "pending"}<span class="text-warn" title="checks running">⧗</span>{/if}
+        {#if session.checks === "pass"}<span class="text-good" title="checks pass"><Icon name="check" size={14} /></span>
+        {:else if session.checks === "fail"}<span class="text-bad" title="checks failed"><Icon name="x" size={14} />ci</span>
+        {:else if session.checks === "pending"}<span class="text-warn" title="checks running"><Icon name="clock" size={14} /></span>{/if}
       {/if}
       {#if !reviewImplied}
-        {#if session.review === "APPROVED"}<span class="text-good" title="approved">✓rev</span>
-        {:else if session.review === "CHANGES_REQUESTED"}<span class="text-bad" title="changes requested">✕rev</span>{/if}
+        {#if session.review === "APPROVED"}<span class="text-good" title="approved"><Icon name="check" size={14} />rev</span>
+        {:else if session.review === "CHANGES_REQUESTED"}<span class="text-bad" title="changes requested"><Icon name="x" size={14} />rev</span>{/if}
       {/if}
     {/if}
   </span>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // A host is a scope inside a session, never a place you go. All is the default, because an
   // agent's conversation is one story: a host filters it and names where a Run goes. Picking a
   // production target must stay a human act, so under All with several live hosts the bar acts
@@ -110,7 +111,7 @@
             </Button>
             {#if on}
               <!-- Clears the filter. Nothing about the host changes: taking its record away is in ⋯, behind a question. -->
-              <Button variant="bare" size="xs" icon class="h-5! w-4! text-faint opacity-70 group-hover:opacity-100 hover:text-ink focus-visible:opacity-100" title="Back to All" aria-label="Back to All" onclick={() => setScope("")}>×</Button>
+              <Button variant="bare" size="xs" icon class="h-5! w-4! text-faint opacity-70 group-hover:opacity-100 hover:text-ink focus-visible:opacity-100" title="Back to All" aria-label="Back to All" onclick={() => setScope("")}><Icon name="x" size={14} /></Button>
             {/if}
           </span>
         {/each}
@@ -143,7 +144,7 @@
       >
     {/if}
     {#if target}
-      <Button icon size="xs" aria-label="More host actions" aria-haspopup="menu" aria-expanded={pop?.kind === "more"} onclick={(e) => openPop("more", e)}>⋯</Button>
+      <Button icon size="xs" aria-label="More host actions" aria-haspopup="menu" aria-expanded={pop?.kind === "more"} onclick={(e) => openPop("more", e)}><Icon name="ellipsis" size={14} /></Button>
     {/if}
   </div>
 </div>

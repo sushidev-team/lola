@@ -118,6 +118,7 @@
 </script>
 
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { store } from "$lib/store.svelte";
   import type { TicketsData, TicketRow } from "@bindings/internal/protocol";
   import { nav } from "@mobile/lib/nav.svelte";
@@ -422,7 +423,7 @@
     >
       <span class="min-w-0 flex-1 py-2">{refusal}</span>
       <TouchButton icon aria-label="Dismiss" class="text-bad!" onclick={() => (refusal = "")}>
-        ×
+        <Icon name="x" size={14} />
       </TouchButton>
     </div>
   {/if}

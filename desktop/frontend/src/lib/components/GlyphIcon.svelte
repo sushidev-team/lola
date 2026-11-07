@@ -1,0 +1,67 @@
+<script lang="ts">
+  // Adapts the legacy text vocabulary (also used by the terminal client) at the
+  // GUI boundary. The daemon and shared status classifiers keep their wire values.
+  import Icon from './Icon.svelte';
+  import type { IconName } from '$lib/icons';
+  let { glyph = '', size = 14 }: { glyph?: string; size?: number } = $props();
+  const names: Record<string, IconName> = {
+  "✓": "check",
+  "✔": "check",
+  "✗": "x",
+  "✕": "x",
+  "×": "x",
+  "✖": "x",
+  "⚠": "triangle-alert",
+  "▲": "triangle-alert",
+  "◉": "circle-alert",
+  "◐": "loader-circle",
+  "○": "circle",
+  "●": "circle-dot",
+  "•": "circle-dot",
+  "↗": "external-link",
+  "↖": "arrow-up-left",
+  "↻": "refresh-cw",
+  "↺": "rotate-ccw",
+  "⟳": "refresh-cw",
+  "⇄": "arrow-right-left",
+  "★": "star",
+  "◈": "shield-check",
+  "◇": "git-pull-request",
+  "⑂": "git-pull-request",
+  "⌁": "server",
+  "±": "git-compare-arrows",
+  "■": "square",
+  "✎": "pencil",
+  "◆": "folder",
+  "▸": "play",
+  "▹": "play",
+  "▶": "play",
+  "▷": "play",
+  "⏸": "pause",
+  "▾": "chevron-down",
+  "▴": "chevron-up",
+  "⌕": "search",
+  "⚙": "settings",
+  "+": "plus",
+  "−": "minus",
+  "‹": "chevron-left",
+  "›": "chevron-right",
+  "«": "chevrons-left",
+  "»": "chevrons-right",
+  "→": "arrow-right",
+  "←": "arrow-left",
+  "↑": "arrow-up",
+  "↓": "arrow-down",
+  "↵": "send",
+  "⏎": "send",
+  "⧗": "clock",
+  "…": "ellipsis",
+  "⋯": "ellipsis",
+  "?": "circle-help",
+  "·": "circle",
+  "—": "minus",
+  "$": "terminal"
+};
+  const mark = $derived(Object.keys(names).find(mark => glyph === mark || (glyph.startsWith(mark) && /[\sA-Za-z]/.test(glyph.slice(mark.length, mark.length + 1)))));
+</script>
+{#if mark}<Icon name={names[mark]} {size} />{glyph.slice(mark.length)}{:else}{glyph}{/if}

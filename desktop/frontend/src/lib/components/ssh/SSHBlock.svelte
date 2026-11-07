@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // A block: one command, as a plate at three depths. A plate means lola witnessed this, so every
   // word in it is a fact the daemon recorded: the command, the exit code, the time. The agent's
   // `why` is a claim and sits above the plate on the ground, unboxed, and is gone from Facts.
@@ -133,7 +134,7 @@
             {:else}
               <Button size="xs" onclick={() => ssh.askAbout(sessionId, block.id)}>Ask {agent}</Button>
             {/if}
-            <Button size="xs" icon aria-expanded={true} aria-label="Collapse {block.id}" onclick={toggle}><span class="rotate-90" aria-hidden="true">›</span></Button>
+            <Button size="xs" icon aria-expanded={true} aria-label="Collapse {block.id}" onclick={toggle}><span class="rotate-90" aria-hidden="true"><Icon name="chevron-right" size={14} /></span></Button>
           {/snippet}
         </SSHOutput>
         {#if v.detail}<p class="font-sans text-ink-2">{v.detail}</p>{/if}

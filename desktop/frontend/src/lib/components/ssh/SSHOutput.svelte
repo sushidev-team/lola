@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import SyntaxText from "../SyntaxText.svelte";
   import type { Snippet } from "svelte";
   // Raw output, the bottom of the dig. Streams stay separate on purpose: lola has no
@@ -215,7 +216,7 @@
     <span class="flex shrink-0 cursor-default items-center gap-0.5 font-sans" onclick={(e) => e.stopPropagation()} data-output-actions>
       {#if full}<Button size="xs" selected={wrap} onclick={() => (wrap = !wrap)}>Wrap</Button>{/if}
       <Button size="xs" icon selected={finding} aria-label="Find in output" title="Find in output" onclick={() => (finding ? (finding = false, query = "") : openFind())}>
-        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /></svg>
+        <Icon name="search" class="h-3.5 w-3.5" />
       </Button>
       <Button
         size="xs"
@@ -224,9 +225,7 @@
         title={full ? "Leave full view (esc)" : "Fill the stream column"}
         onclick={() => (view.outputMax = full ? "" : block.id)}
       >
-        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          {#if full}<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />{:else}<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />{/if}
-        </svg>
+        <Icon name={full ? 'minimize-2' : 'maximize-2'} class="h-3.5 w-3.5" />
       </Button>
       {#if tail}{@render tail()}{/if}
     </span>
@@ -320,11 +319,11 @@
   <div class="absolute right-1.5 bottom-1.5 z-10 flex items-center gap-0.5 rounded bg-canvas/90" data-output-corner>
     {#if info}
       <Button size="xs" icon selected={showInfo} aria-expanded={showInfo} aria-label="About this command" title="About this command" onclick={() => (showInfo = !showInfo)}>
-        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5" /><path d="M12 8v.01" /></svg>
+        <Icon name="info" class="h-3.5 w-3.5" />
       </Button>
     {/if}
     <Button size="xs" icon aria-label="Copy output" title="Copy output" onclick={copy}>
-      <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
+      <Icon name="copy" class="h-3.5 w-3.5" />
     </Button>
   </div>
   {#if info && showInfo}

@@ -595,17 +595,7 @@ describe("what a person must be able to see", () => {
     expect(document.querySelector('[data-card="auth"]')?.textContent).toMatch(/Gives up in \d+:\d\d/);
   });
 
-  it("every dev address has a link, not only the first", async () => {
-    await mount([plain(A, { devActive: true, devUrls: ["http://127.0.0.1:8000", "http://127.0.0.1:5173"] })]);
-    nav.select(A);
-    await open(A);
-    await fireEvent.click(document.querySelector('[aria-label="Session actions"], [data-session-menu]') as HTMLElement);
-    flushSync();
-    await settle();
-    const items = [...document.querySelectorAll('[role="menuitem"]')].map((e) => e.textContent ?? "");
-    expect(items.some((t) => t.includes("127.0.0.1:8000"))).toBe(true);
-    expect(items.some((t) => t.includes("127.0.0.1:5173"))).toBe(true);
-  });
+
 
   it("a draft outlives the session it was written for", async () => {
     await mount([plain(A)]);
@@ -781,14 +771,10 @@ describe("keys that belong to what is on show", () => {
     expect(terms.activeTab(A)).toBe(SSH);
   });
 
-  it("the menu's Review diff refuses a session with no Changes", async () => {
+  it("opening Changes refuses a session with no Changes", async () => {
     await mount([plain(A, { goalId: "g1" })]);
     nav.select(A);
-    sessionMenu.open(A, new MouseEvent("contextmenu"));
-    flushSync();
-    await settle();
-    const item = [...document.querySelectorAll('[role="menuitem"]')].find((e) => e.textContent?.includes("Review diff")) as HTMLElement;
-    await fireEvent.click(item);
+    ssh.openChanges(store.sessionById(A)!);
     await settle();
     expect(terms.activeTab(A)).not.toBe(DIFF);
   });

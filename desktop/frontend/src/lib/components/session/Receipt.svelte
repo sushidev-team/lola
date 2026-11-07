@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // The end of a turn, in lola's words: a fact, so it may carry numbers. With no checkpoint there
   // is no number and nothing to restore. The actions wait on hover or focus, on the same line, so
   // a story of a hundred turns does not read as a hundred sets of buttons. The newest turn shows
@@ -37,7 +38,7 @@
 <div class="cv-receipt" data-receipt={stopped ? "stopped" : "done"}>
   <div class="cv-receipt-summary group min-h-6 text-sm text-faint">
     <span class="cv-completion" use:tooltip={title}>
-      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">{#if stopped}<path d="M5 4v8M11 4v8" />{:else}<path d="m3 8 3 3 7-7" />{/if}</svg>{status}
+      <Icon name={stopped ? 'pause' : 'check'} size={14} />{status}
     </span>
     <span class="cv-receipt-meta num">{#each metadata as item}<span>{item}</span>{/each}</span>
     {#if canDiff}

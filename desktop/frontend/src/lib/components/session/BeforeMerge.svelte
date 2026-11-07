@@ -1,0 +1,202 @@
+<script lang="ts">
+  import { DaemonService } from '@bindings/desktop';
+  import type { PRReadinessData } from '@bindings/internal/protocol';
+  import type { SessionInfo } from '$lib/store.svelte';
+  import { store } from '$lib/store.svelte';
+  import { appLabel } from '$lib/stackapps';
+  import { tooltip } from '$lib/tooltip';
+  import Icon from '../Icon.svelte';
+  import type { IconName } from '$lib/icons';
+  import Button from '../Button.svelte';
+  import Tabs from '../Tabs.svelte';
+  import { untrack } from 'svelte';
+  import { slide } from 'svelte/transition';
+
+  let { session }: { session: SessionInfo } = $props();
+  const prs = $derived(session.stack
+    ? (session.apps ?? []).filter(a => a.number).map(a => ({ id: `${session.id}~${a.name}`, number: a.number!, label: appLabel(a), url: a.url ?? '' }))
+    : session.prNumber ? [{ id: session.id, number: session.prNumber, label: 'Pull request', url: session.prUrl ?? '' }] : []);
+  let chosen = $state('');
+  const selected = $derived(prs.find(p => p.id === chosen) ?? prs.find(p => p.id === `${session.id}~${session.focusApp}`) ?? prs[0]);
+  const identity = $derived(selected ? `${selected.id}:${selected.number}` : '');
+  let loadedFor = $state('');
+  let data = $state<PRReadinessData | null>(null);
+  let loading = $state(false);
+  let error = $state('');
+  let notice = $state('');
+  let sending = $state(false);
+  let accepted = $state(false);
+  let expandedReviewers = $state<string[]>([]);
+  let collapsedReviewers = $state<string[]>([]);
+  let generation = 0;
+  const current = $derived(loadedFor === identity ? data : null);
+  const threads = $derived(current?.threads ?? []);
+  const reviewerGroups = $derived.by(() => {
+    const groups = new Map<string, typeof threads>();
+    for (const thread of threads) {
+      const author = thread.author || 'Unknown reviewer';
+      groups.set(author, [...(groups.get(author) ?? []), thread]);
+    }
+    return Array.from(groups, ([author, items]) => ({ author, items }));
+  });
+  const terminal = $derived(current?.state === 'MERGED' || current?.state === 'CLOSED');
+  type Signal = { label: string; value: string; icon: IconName; tone: string };
+  const signals = $derived.by((): Signal[] => {
+    if (!current) return [];
+    return [
+      { label: 'CI', value: ({pass:'Passed',fail:'Failed',pending:'Running',none:'No checks'}[current.checks] ?? 'Unknown'), icon: current.checks === 'pass' ? 'check' : current.checks === 'fail' ? 'x' : current.checks === 'pending' ? 'loader-circle' : 'circle', tone: tone(current.checks) },
+      { label: 'Review', value: ({APPROVED:'Approved',CHANGES_REQUESTED:'Changes requested',REVIEW_REQUIRED:'Required'}[current.review] ?? 'No review'), icon: current.review === 'APPROVED' ? 'check' : current.review === 'CHANGES_REQUESTED' ? 'circle-alert' : 'shield-check', tone: current.review === 'APPROVED' ? 'good' : current.review === 'CHANGES_REQUESTED' ? 'bad' : 'faint' },
+      { label: 'Branch', value: current.mergeable === 'CONFLICTING' ? 'Conflicts' : current.mergeState === 'BEHIND' ? 'Behind base' : current.mergeable === 'MERGEABLE' ? 'No conflicts' : 'Checking', icon: current.mergeable === 'CONFLICTING' ? 'git-compare-arrows' : current.mergeable === 'MERGEABLE' ? 'check' : 'circle', tone: current.mergeable === 'CONFLICTING' ? 'bad' : current.mergeState === 'BEHIND' ? 'warn' : current.mergeable === 'MERGEABLE' ? 'good' : 'faint' },
+      { label: 'Comments', value: threads.length ? `${threads.length} unresolved` : 'All resolved', icon: threads.length ? 'message-square-text' : 'check', tone: threads.length ? 'warn' : 'good' },
+    ];
+  });
+  const next = $derived.by(() => {
+    if (!current || terminal) return '';
+    if (current.draft) return 'Draft · mark ready on GitHub when ready for review.';
+    if (current.mergeable === 'CONFLICTING') return 'Resolve branch conflicts before merging.';
+    if (current.checks === 'fail') return 'Fix failing CI checks.';
+    if (threads.length) return 'Validate and address the open feedback.';
+    if (current.review === 'CHANGES_REQUESTED') return 'Address the requested changes and ask for another review.';
+    if (current.checks === 'pending') return '';
+    if (current.mergeState === 'BEHIND') return 'Update the branch with the latest base.';
+    if (current.review === 'REVIEW_REQUIRED') return 'Request the required review.';
+    if (current.mergeState === 'BLOCKED') return 'GitHub has additional merge requirements.';
+    if (current.mergeState === 'CLEAN') return 'No blockers reported · final review on GitHub.';
+    return 'Confirm remaining merge requirements on GitHub.';
+  });
+  function tone(value: string) { return value === 'pass' ? 'good' : value === 'fail' ? 'bad' : value === 'pending' ? 'info' : 'faint'; }
+  function open(url: string) {
+    try { const u = new URL(url); if (u.protocol === 'https:' && u.hostname === 'github.com') store.openURL(u.href); } catch { /* invalid API URL: don't navigate */ }
+  }
+  async function refresh() {
+    if (!selected) return;
+    const target = selected, key = identity, version = ++generation;
+    loading = true;
+    try {
+      const result = await DaemonService.PRReadiness(target.id, target.number);
+      if (version !== generation || key !== identity) return;
+      data = result; loadedFor = key; error = '';
+    } catch (e) { if (version === generation && key === identity) error = String(e); }
+    finally { if (version === generation) loading = false; }
+  }
+  $effect(() => {
+    const key = identity;
+    if (!key) return;
+    expandedReviewers = []; collapsedReviewers = []; notice = ''; error = ''; data = null; loadedFor = ''; accepted = false;
+    untrack(() => void refresh());
+    const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 60000);
+    return () => { clearInterval(timer); generation++; };
+  });
+  async function address() {
+    if (!selected || sending) return;
+    const target = selected, key = identity;
+    sending = true; notice = '';
+    try {
+      await DaemonService.AddressPRFeedback(target.id, target.number);
+      if (key === identity) accepted = true;
+    } catch (e) { if (key === identity) notice = String(e); }
+    finally { sending = false; }
+  }
+  function disclose(node: Element) {
+    return slide(node, { duration: typeof node.animate !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 160 });
+  }
+</script>
+
+{#if selected}
+<section data-before-merge aria-label="Before merge">
+  <header>
+    <h3 class="cv-overview-heading">{terminal ? 'Pull request' : 'Before merge'}</h3>
+    <button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request #{selected.number}"><Icon name="git-pull-request" size={13} />#{selected.number}<Icon name="external-link" size={11} /></button>
+    <button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>
+  </header>
+  {#if prs.length > 1}<Tabs tabs={prs.map(p => ({ id:p.id, label:p.label }))} active={selected.id} onSelect={id => chosen = id} />{/if}
+  {#if error}<p class="error text-warn" role="status">{current ? 'Status may be outdated. ' : ''}Could not refresh GitHub. <button type="button" onclick={refresh} title={error}>Retry</button></p>{/if}
+  {#if !current && !error}<p class="muted" role="status">Loading PR status…</p>
+  {:else if terminal}<p class="terminal"><Icon name={current?.state === 'MERGED' ? 'check' : 'circle-minus'} size={15} /><span>{current?.state === 'MERGED' ? 'Merged' : 'Closed without merging'}</span></p>
+  {:else if current}
+    <div class="signals" aria-label="Merge checks">
+      {#each signals as signal}<div class="signal" use:tooltip={`${signal.label}: ${signal.value}`}><Icon name={signal.icon} size={15} class={`text-${signal.tone} ${signal.icon === 'loader-circle' ? 'merge-spinner' : ''}`} /><span class="signal-label">{signal.label}</span><span class="signal-value text-{signal.tone}">{signal.value}</span></div>{/each}
+    </div>
+    {#if next && next !== 'Validate and address the open feedback.'}<p class="next">{next}</p>{/if}
+    {#if threads.length}
+      <div class="reviewers">
+        {#each reviewerGroups as group (group.author)}
+          <section class="reviewer-group" aria-label={`Feedback from ${group.author}`}>
+            <h4 class="reviewer-heading"><button type="button" class="reviewer-toggle" aria-expanded={!collapsedReviewers.includes(group.author)} onclick={() => collapsedReviewers = collapsedReviewers.includes(group.author) ? collapsedReviewers.filter(author => author !== group.author) : [...collapsedReviewers, group.author]}><Icon name={collapsedReviewers.includes(group.author) ? 'chevron-right' : 'chevron-down'} size={13} /><span class="reviewer-name">{group.author}</span><span class="count" aria-label={`${group.items.length} unresolved threads`}>{group.items.length}</span></button></h4>
+            {#if !collapsedReviewers.includes(group.author)}
+            <div transition:disclose>
+            <ul class="threads">
+              {#each (expandedReviewers.includes(group.author) ? group.items : group.items.slice(0, 3)) as thread (thread.id)}
+                <li><button type="button" onclick={() => open(thread.url || current!.url)} aria-label={`Open review thread: ${thread.preview || thread.path}`}>
+                  <span class="preview">{thread.preview || 'Open conversation on GitHub'}</span>
+                  <span class="thread-context"><span class="path" use:tooltip={thread.path}>{thread.path.split('/').pop()}{thread.line ? `:${thread.line}` : ''}</span>{#if thread.outdated}<span class="outdated">Outdated</span>{/if}<Icon name="external-link" size={10} class="thread-link" /></span>
+                </button></li>
+              {/each}
+            </ul>
+            {#if group.items.length > 3}
+              <button type="button" class="more" aria-expanded={expandedReviewers.includes(group.author)} onclick={() => expandedReviewers = expandedReviewers.includes(group.author) ? expandedReviewers.filter(author => author !== group.author) : [...expandedReviewers, group.author]}>{expandedReviewers.includes(group.author) ? 'Show fewer' : `Show ${group.items.length - 3} more`}</button>
+            {/if}
+            </div>
+            {/if}
+          </section>
+        {/each}
+      </div>
+      {#if session.location !== 'ssh'}
+        <div class="feedback-action"><Button variant="secondary" size="xs" disabled={sending || accepted || !!error} onclick={address} title="Ask the agent to validate findings, fix valid issues, and resolve addressed threads after verification"><Icon name="shield-check" size={13} />{sending ? 'Sending…' : accepted ? 'Requested' : 'Ask agent to address'}</Button></div>
+      {/if}
+    {:else if current.review !== 'APPROVED' && session.location !== 'ssh'}
+      <div class="review-action"><Button variant="secondary" size="xs" onclick={() => store.review(selected.id)}><Icon name="shield-check" size={13} />Request agent review</Button></div>
+    {/if}
+    {#if session.mergeQueue}<p class="muted">Merge queue · position {session.mergeQueue.position}</p>{/if}
+    {#if session.overlaps?.length}<p class="overlaps"><Icon name="layers" size={12} /><span>Overlaps · {session.overlaps.map(o => o.issue || o.session).join(', ')}</span></p>{/if}
+  {/if}
+  {#if notice}<p class="notice" role="status">{notice}</p>{/if}
+</section>
+{/if}
+
+<style>
+  [data-before-merge] { container-type:inline-size; }
+  header { display:flex;align-items:center;gap:8px;margin-bottom:12px; }
+  header h3 { margin-right:auto; }
+  .pr-link,.refresh { display:inline-flex;align-items:center;gap:4px;color:var(--color-faint);font-size:12px; }
+  .pr-link:hover,.refresh:hover,.more:hover { color:var(--color-accent); }
+  .refresh { padding:3px; } .refresh:disabled { opacity:.4; }
+  button:focus-visible { outline:2px solid var(--color-accent);outline-offset:3px;border-radius:3px; }
+  .signals { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:10px 0;border-top:1px solid var(--color-edge);border-bottom:1px solid var(--color-edge); }
+  .signal { min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .signal :global(.merge-spinner) { animation:merge-spin 1.4s linear infinite; }
+  }
+  @keyframes merge-spin { to { transform:rotate(360deg); } }
+  .signal-label { white-space:nowrap;font-size:11px;color:var(--color-ink-2); }
+  .signal-value { font-size:10px;line-height:14px;overflow-wrap:normal; }
+  @container (max-width: 330px) {
+    .signals { grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px; }
+    .signal { display:grid;grid-template-columns:16px minmax(0,1fr);gap:3px 6px;align-items:center; }
+    .signal-value { grid-column:2; }
+  }
+  .next { margin:10px 0;font-size:12px;line-height:18px;color:var(--color-ink-2); }
+  .reviewers { display:grid;gap:16px;margin-top:14px; }
+  .reviewer-heading { color:var(--color-ink-2);font-size:11px;line-height:16px;font-weight:500; }
+  .reviewer-toggle { display:flex;align-items:center;gap:7px;width:100%;padding:3px 0;text-align:left; }
+  .reviewer-toggle:hover { color:var(--color-accent); }
+  .reviewer-toggle[aria-expanded="true"] { margin-bottom:3px; }
+  .reviewer-name { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+  .count { color:var(--color-faint);font-size:10px;font-weight:400;font-variant-numeric:tabular-nums; }
+  .threads { margin-left:6px;padding-left:13px;border-left:1px solid var(--color-edge); }
+  .threads li + li { margin-top:4px; }
+  .threads button { display:block;width:100%;text-align:left;padding:6px 0;border-radius:3px; }
+  .threads button:hover .preview { color:var(--color-accent); }
+  .threads button:hover :global(.thread-link),.threads button:focus-visible :global(.thread-link) { opacity:1; }
+  .thread-context { display:flex;align-items:center;gap:6px;font-size:10px;line-height:15px;color:var(--color-faint);margin-top:4px; }
+  .path { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+  .outdated { flex-shrink:0;font-size:9px; }
+  :global(.thread-link) { flex-shrink:0;opacity:0; }
+  .preview { display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere;font-size:12px;line-height:18px; }
+  .more { display:block;font-size:11px;color:var(--color-faint);margin:5px 0 0 20px;padding:3px 0; }
+  .feedback-action { margin-top:14px;padding-top:12px;border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
+  .review-action { margin-top:12px; }
+  .overlaps { display:flex;align-items:center;gap:6px;margin-top:12px;font-size:10px;line-height:16px;color:var(--color-faint); }
+  .muted,.notice,.error { font-size:11px;line-height:17px;margin-top:8px; } .muted,.notice { color:var(--color-faint); }
+  .error button { text-decoration:underline; } .terminal { display:flex;align-items:center;gap:7px;color:var(--color-faint);font-size:12px; }
+</style>

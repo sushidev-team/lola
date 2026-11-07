@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { onMount, onDestroy, tick, type Snippet } from "svelte";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { store } from "$lib/store.svelte";
@@ -1203,7 +1204,7 @@
   {#if saveErr}
     <div role="alert" class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
-      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}>✕</Button>
+      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}><Icon name="x" size={14} /></Button>
     </div>
   {/if}
 

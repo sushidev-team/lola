@@ -49,6 +49,6 @@
   {#if !axes}
     <span class="h-[40%] w-[40%] rounded-full bg-faint/70" aria-hidden="true"></span>
   {:else}
-    <StateGlyph glyph={glyph.glyph} cls={glyph.cls} mono={glyph.mono} />
+    <StateGlyph label={glyph.label} glyph={glyph.glyph} cls={glyph.cls} mono={glyph.mono} />
   {/if}
 </span>

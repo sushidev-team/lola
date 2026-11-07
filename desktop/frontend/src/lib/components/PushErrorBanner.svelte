@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { store } from "$lib/store.svelte";
   import Button from "./Button.svelte";
 
@@ -21,7 +22,7 @@
     class="flex shrink-0 items-center gap-3 border-b border-warn/40 bg-warn/10 px-4 py-2 text-ink"
     role="alert"
   >
-    <span class="shrink-0 text-warn">⚠</span>
+    <span class="shrink-0 text-warn"><Icon name="triangle-alert" size={14} /></span>
     <span class="min-w-0 flex-1">
       {#if stale}
         The daemon is out of date — restart it to pick up the latest build.
@@ -33,6 +34,6 @@
     {#if stale}
       <Button variant="secondary" onclick={() => store.restartDaemon()}>Restart</Button>
     {/if}
-    <Button icon title="dismiss" aria-label="dismiss" onclick={() => store.dismissPushError()}>✕</Button>
+    <Button icon title="dismiss" aria-label="dismiss" onclick={() => store.dismissPushError()}><Icon name="x" size={14} /></Button>
   </div>
 {/if}

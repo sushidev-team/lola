@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { store, type ProjectInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
@@ -50,7 +51,7 @@
             <Button onclick={() => void openShell(project!.name)} disabled={!project.path}>Open shell here</Button>
             <Button variant="primary" onclick={() => nav.newSession(project!.name)} disabled={!project.path}>New session…</Button>
             <details class="relative">
-              <summary class="cursor-pointer list-none rounded px-3 py-1.5 hover:bg-sel" aria-label="Project actions">⋯</summary>
+              <summary class="cursor-pointer list-none rounded px-3 py-1.5 hover:bg-sel" aria-label="Project actions"><Icon name="ellipsis" size={14} /></summary>
               <div class="absolute right-0 z-20 grid w-56 rounded-lg border border-edge bg-panel p-1 shadow-xl">
                 {#each projectActions(project).filter(a => !["open","new","shell","ticket","pr"].includes(a.id)) as a (a.id)}
                   <button class="rounded px-3 py-2 text-left text-sm hover:bg-sel disabled:opacity-40" disabled={!a.enabled} onclick={a.run}>{a.label}</button>

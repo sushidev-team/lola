@@ -128,10 +128,10 @@ describe("ChangesView", () => {
     await fireEvent.click(row);
     await waitFor(() => expect(svc.CheckpointDiff).toHaveBeenCalledWith(SID, 2));
     expect(terms.activeTab(SID)).toBe(CHECKPOINTS);
-    await screen.findByLabelText(/turn\.go/);
+    await screen.findByRole("button", { name: "turn.go, Modified" });
     await fireEvent.click(screen.getByRole("button", { name: /All vs base/ }));
     expect(terms.activeTab(SID)).toBe(DIFF);
-    await screen.findByLabelText(/base\.go/);
+    await screen.findByRole("button", { name: "base.go, Modified" });
   });
 
   it("the column stays when a turn changed nothing, so another can be picked", async () => {

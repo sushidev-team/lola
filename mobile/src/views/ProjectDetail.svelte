@@ -1,4 +1,6 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { store, type ProjectInfo, type SessionInfo } from "$lib/store.svelte";
   import Select from "$lib/components/Select.svelte";
   import SectionHeader from "@mobile/lib/components/SectionHeader.svelte";
@@ -372,7 +374,7 @@
             icon
             aria-label="Dismiss"
             class={notice.tone === "warn" ? "text-warn!" : "text-good!"}
-            onclick={() => (notice = null)}>×</TouchButton
+            onclick={() => (notice = null)}><Icon name="x" size={14} /></TouchButton
           >
         </div>
       {/if}
@@ -408,12 +410,12 @@
           class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-edge-soft pt-3 text-sm"
         >
           {#if pollingOn}
-            <span class="text-good">● Polling</span>
+            <span class="text-good"><Icon name="circle-dot" size={14} /> Polling</span>
           {:else}
-            <span class="text-faint">○ Not polling</span>
+            <span class="text-faint"><Icon name="circle" size={14} /> Not polling</span>
           {/if}
           <span class={project.agentOk ? "text-good" : "text-bad"}>
-            {project.agentOk ? "✓ Agent ready" : "✗ Agent not ready"}
+            <GlyphIcon glyph={project.agentOk ? "✓ Agent ready" : "✗ Agent not ready"} />
           </span>
           <!-- An em-dash rather than a number when the daemon is down: these
                counts come from its session snapshot, and a stale "2 live" from a

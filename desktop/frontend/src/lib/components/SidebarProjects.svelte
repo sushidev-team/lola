@@ -1,4 +1,6 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { projectActions } from "$lib/projectActions";
   import { matchesSearch, searchMatch } from "$lib/search";
   import SearchHighlight from "./SearchHighlight.svelte";
@@ -58,13 +60,15 @@
 
   // Stacks use a drawn layers icon below, sharing the repository dots' poll
   // colours. Folders carry a disclosure chevron and poll nothing.
-  function pollDot(p: ProjectInfo): { glyph: string; cls: string; faint: boolean } {
+  function pollDot(p: ProjectInfo, stack: string): { glyph: string; cls: string; faint: boolean; hint: string } {
     const [on, off] = ["●", "○"];
-    const ps = (store.status?.polls ?? []).find((x) => x.name === p.name);
-    if (!ps) return { glyph: "·", cls: "text-faint", faint: true };
-    if (ps.lastError) return { glyph: on, cls: "text-bad", faint: false };
-    if (ps.enabled) return { glyph: on, cls: "text-good", faint: false };
-    return { glyph: off, cls: "text-faint", faint: true };
+    // A member's own poll is intentionally off: its stack dispatches work.
+    const ps = (store.status?.polls ?? []).find((x) => x.name === (stack || p.name));
+    const prefix = stack ? `Part of ${nameOf(stack)} · ` : '';
+    if (!ps) return { glyph: "·", cls: "text-faint", faint: true, hint: `${prefix}polling status unavailable` };
+    if (ps.lastError) return { glyph: on, cls: "text-bad", faint: false, hint: `${prefix}poll error: ${ps.lastError}` };
+    if (ps.enabled) return { glyph: on, cls: "text-good", faint: false, hint: `${prefix}stack polling enabled` };
+    return { glyph: off, cls: "text-faint", faint: true, hint: `${prefix}stack polling paused` };
   }
 
   const nameOf = (name: string) => {
@@ -502,7 +506,8 @@
 {/snippet}
 
 {#snippet projectRow(p: ProjectInfo, group: string, index: number)}
-  {@const d = pollDot(p)}
+  {@const stack = memberOf(store.projects, p.name)}
+  {@const d = pollDot(p, stack)}
   {@const match = searchMatch(query, displayName(p), p.repo, p.path)}
   {@const active = nav.scoped && nav.project === p.name}
   <!-- Mirrors nav.toggleProjectScope's own condition: a row is drawn active
@@ -515,7 +520,7 @@
     glyphCls={d.cls}
     dim={d.faint}
     {active}
-    title={p.lastError
+    title={stack ? d.hint : p.lastError
       ? `poll error: ${p.lastError}`
       : clears
         ? "clear the project filter"
@@ -531,21 +536,9 @@
     {#snippet labelContent()}<SearchHighlight text={displayName(p)} indices={match?.[0]} />{/snippet}
     {#snippet icon()}
       {#if isStack(p)}
-        <svg
-          viewBox="0 0 16 16"
-          class="size-3.5"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="m8 1.75 6.5 3.25L8 8.25 1.5 5 8 1.75Z" />
-          <path d="m1.5 8 6.5 3.25L14.5 8M1.5 11l6.5 3.25L14.5 11" />
-        </svg>
+        <Icon name="layers" class="size-3.5" />
       {:else}
-        {d.glyph}
+        <GlyphIcon glyph={d.glyph} />
       {/if}
     {/snippet}
     {#snippet badges()}
@@ -561,13 +554,13 @@
           ><span aria-hidden="true">{p.needsYou}!</span><span class="sr-only">{p.needsYou} need you</span></span
         >{/if}
       {#if p.ciRed > 0}<span class="num text-sm text-bad" title="{p.ciRed} failing CI"
-          ><span aria-hidden="true">{p.ciRed}✕</span><span class="sr-only">{p.ciRed} failing CI</span></span
+          ><span aria-hidden="true">{p.ciRed}<Icon name="x" size={14} /></span><span class="sr-only">{p.ciRed} failing CI</span></span
         >{/if}
     {/snippet}
     {#snippet actions()}
       <!-- data-drag-ignore: these are controls, not drag handles. -->
       <span class="flex items-center" data-drag-ignore>
-        <Button size="xs" icon aria-label="{displayName(p)} actions" onclick={(e) => openRowMenu(e, p.name)}>⋯</Button>
+        <Button size="xs" icon aria-label="{displayName(p)} actions" onclick={(e) => openRowMenu(e, p.name)}><Icon name="ellipsis" size={14} /></Button>
         <Button
           size="xs"
           icon
@@ -575,26 +568,14 @@
           aria-label="{displayName(p)} settings"
           onclick={() => nav.openOverlay("project", p.name)}
         >
-          <svg
-            viewBox="0 0 24 24"
-            class="h-3.5 w-3.5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.9"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
+          <Icon name="settings" class="h-3.5 w-3.5" />
         </Button>
         <Button
           size="xs"
           icon
           title="open project hub"
           aria-label="{displayName(p)} hub"
-          onclick={() => nav.goDetail(p.name)}>›</Button
+          onclick={() => nav.goDetail(p.name)}><Icon name="chevron-right" size={14} /></Button
         >
       </span>
     {/snippet}
@@ -618,7 +599,7 @@
       title="add a project, a group or a stack"
       aria-label="Add"
       aria-haspopup="menu"
-      onclick={openAddMenu}>+</Button
+      onclick={openAddMenu}><Icon name="plus" size={14} /></Button
     >
   </div>
 
@@ -627,7 +608,7 @@
       <input bind:this={searchInput} class="w-full rounded border border-edge bg-panel py-1.5 pr-8 pl-2 text-sm outline-none focus:border-accent" placeholder="Search projects…" aria-label="Search projects" bind:value={query} />
       {#if query}
         <Button icon size="xs" class="absolute top-1/2 right-1 -translate-y-1/2" aria-label="Clear project search" title="Clear search" onclick={() => { query = ""; searchInput.focus(); }}>
-          <svg class="size-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+          <Icon name="x" class="size-3" />
         </Button>
       {/if}
     </div>

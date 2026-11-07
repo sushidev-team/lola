@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // The terminal you drive in, always yours in both wheel positions. The agent's own pane is
   // not here: it is the session's Agent tab. The tmux session of the ssh tab is mounted ONLY
   // here, because one tmux session with two xterm clients would fight over its size. No `isolate` or `z-0` around the terminal: that blanks the WebGL
@@ -66,7 +67,7 @@
     {#if hint}
       <div class="flex items-center gap-2 border-b border-edge/60 px-3 py-1 text-sm text-faint">
         <span class="min-w-0 flex-1">{conn.termTracked ? `Your long-running shell. Commands here appear in the timeline, visible only to you. A line starting with a space stays out.` : `Your own shell. Lola cannot read this one, so its commands stay out of the timeline.`}</span>
-        <Button size="xs" icon aria-label="Dismiss" onclick={() => view.dismissedHints.add(hintKey)}>×</Button>
+        <Button size="xs" icon aria-label="Dismiss" onclick={() => view.dismissedHints.add(hintKey)}><Icon name="x" size={14} /></Button>
       </div>
     {/if}
   </div>

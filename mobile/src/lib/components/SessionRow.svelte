@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import TimeAgo from "$lib/components/TimeAgo.svelte";
   import LivePulse from "$lib/components/LivePulse.svelte";
   import PrBadge from "$lib/components/PrBadge.svelte";
@@ -184,7 +185,7 @@
          only thing here that can be long. -->
     <span class="min-w-0 truncate">{projectLabel}</span>
     {#if s.devActive}
-      <span class="shrink-0 text-good" aria-label="running this project's dev commands">●</span>
+      <span class="shrink-0 text-good" aria-label="running this project's dev commands"><Icon name="circle-dot" size={14} /></span>
     {/if}
     <!-- The design puts a `flex-1` spacer here and the age hard against the
          right edge, which is why there is no "·" before it: the gap IS the

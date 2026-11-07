@@ -91,11 +91,12 @@
   // `motion-reduce` slows it rather than stopping it — an animation is the whole
   // message here, and a frozen spinner says "hung".
   const SPINNER =
-    "size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-current border-t-transparent " +
+    "size-3.5 shrink-0 animate-spin " +
     "motion-reduce:animate-[spin_1.8s_linear_infinite]";
 </script>
 
 <script lang="ts">
+  import Icon from "./Icon.svelte";
   import type { Snippet } from "svelte";
   import type { HTMLButtonAttributes } from "svelte/elements";
 
@@ -156,6 +157,6 @@
   aria-busy={loading ? true : undefined}
   class={cls}
 >
-  {#if loading}<span class={SPINNER}></span>{/if}
+  {#if loading}<Icon name="loader-circle" size={14} class={SPINNER} />{/if}
   {@render children()}
 </button>

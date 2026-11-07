@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // One panel's card: the tab strip and, while no widget may run yet, the gate. The strip IS
   // the chrome that labels the page below as the agent's: a magenta hairline, an underline on
   // the tab on show and `by <agent>`. Magenta is a label here, never the most saturated thing on
@@ -160,7 +161,7 @@
             {:else if unseen(tab)}<span class="mr-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-magenta" aria-label="New" data-dock-unseen></span>{/if}
             <button type="button" role="tab" aria-selected={on} tabindex={on ? 0 : -1} class="min-w-0 flex-1 cursor-default truncate py-1 text-left outline-none focus-visible:underline" title={titleOf(tab)} aria-label={titleOf(tab)} onclick={() => onselect(tab)} onkeydown={(e) => onkey(e, tab, i)}>{tabLabel?.(tab) ?? titleOf(tab)}</button>
             <span class="flex w-6 shrink-0 justify-center" onpointerdown={(e) => e.stopPropagation()} role="presentation">
-              <Button variant="bare" size="xs" icon class="h-5! w-5! {on ? '' : 'opacity-0'} transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100" aria-label="Close {titleOf(tab)}" title="Close" onclick={() => onclose(tab)}>×</Button>
+              <Button variant="bare" size="xs" icon class="h-5! w-5! {on ? '' : 'opacity-0'} transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100" aria-label="Close {titleOf(tab)}" title="Close" onclick={() => onclose(tab)}><Icon name="x" size={14} /></Button>
             </span>
           </div>
         {/each}
@@ -170,7 +171,7 @@
         <!-- Only where there is room for it. The magenta chrome and the tooltip still say who
              wrote this, and the page cannot draw over either. -->
         {#if !systemActive}<span class="hidden whitespace-nowrap text-magenta @min-[360px]:inline">by {agent}</span>{/if}
-        {#if onhide}<Button size="xs" icon class="h-5! w-5!" aria-label="Hide widgets" title="Hide" onclick={onhide}>›</Button>{/if}
+        {#if onhide}<Button size="xs" icon class="h-5! w-5!" aria-label="Hide widgets" title="Hide" onclick={onhide}><Icon name="chevron-right" size={14} /></Button>{/if}
       </div>
     </div>
     <div class="grid min-h-0 min-w-0 place-items-center p-3">

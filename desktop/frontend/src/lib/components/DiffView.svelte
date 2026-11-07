@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Select from "./Select.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   // The diff tab (SUSHI-618): what this session changed against its base branch,
   // read line by line, with comments a human queues on lines and sends back to
   // the coding agent as one message.
@@ -49,7 +51,8 @@
     compact = false,
     rail,
     turnBar,
-  }: { sessionId: string; turn?: number; compact?: boolean; rail?: Snippet; turnBar?: Snippet } = $props();
+    comparison,
+  }: { sessionId: string; turn?: number; compact?: boolean; rail?: Snippet; turnBar?: Snippet; comparison?: Snippet } = $props();
   const session = $derived(store.sessionById(sessionId));
 
   // --- data ------------------------------------------------------------------
@@ -139,6 +142,17 @@
     }
   }
   let mode = $state<"unified" | "split">(readMode());
+  let width = $state(0);
+  const narrow = $derived(width > 0 && width < 560);
+  const layout = $derived(narrow ? "unified" : mode);
+  let wrap = $state(untrack(() => !compact));
+  function measureWidth(node: HTMLElement) {
+    width = node.clientWidth;
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => { width = entry.contentRect.width; });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
   function setMode(m: "unified" | "split") {
     mode = m;
     try {
@@ -305,15 +319,12 @@
 </script>
 
 {#snippet fileIcon()}
-  <svg class="size-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M9.5 1.75H4a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-8.5Z" />
-    <path d="M9 1.75v4h4M5.5 8.5h5M5.5 11h3" />
-  </svg>
+  <Icon name="file-text" class="size-3.5 shrink-0" />
 {/snippet}
 
 {#snippet code(r: Row, path: string)}
   {@const lang = langOf(path)}
-  <span class="whitespace-pre-wrap break-all"
+  <span class="code-text"
     >{#each tokenize(r.text, lang) as t, i (i)}<span class={TOK[t.kind]}>{t.text}</span>{/each}</span
   >
 {/snippet}
@@ -328,7 +339,7 @@
         <div class="whitespace-pre-wrap text-ink">{d.body}</div>
       </div>
       <Button size="xs" variant="danger" icon aria-label="remove comment" onclick={() => feedback.remove(sessionId, d.key)}
-        >×</Button
+        ><Icon name="x" size={14} /></Button
       >
     </div>
   {/each}
@@ -357,10 +368,12 @@
   {/if}
 {/snippet}
 
-<div class="diff-view grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-panel" class:diff-compact={compact} data-testid="diff-view">
+<div use:measureWidth class="diff-view grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-panel" class:diff-compact={compact} class:wrap-lines={wrap} data-testid="diff-view">
   <!-- Toolbar: what the diff is against, its size, and the view toggles. -->
   <div class="diff-toolbar grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-edge/60 px-4 py-2.5">
-    <div class="min-w-0 truncate text-sm text-faint">
+    <div class="diff-context min-w-0 truncate text-sm text-faint" title={data ? `Against ${data.base}${data.mergeBase ? ` · ${data.mergeBase}` : ''}` : undefined}>
+      {#if compact && comparison}{@render comparison()}{/if}
+      <span class:compact-base={compact}>
       {#if data}
         {#if turn}<span class="num mr-2 font-medium text-ink">#{turn}</span>{/if}
         against <span class="font-mono text-ink-2">{data.base}</span>
@@ -371,26 +384,27 @@
       {:else if loading}
         loading diff…
       {/if}
+      </span>
     </div>
     <div class="flex min-w-0 items-center gap-1 text-sm">
       {#if turn && !compact}{@render turnBar?.()}{/if}
       <div class="flex shrink-0 gap-0.5 rounded-md border border-edge/60 bg-canvas p-0.5" role="group" aria-label="Diff layout">
-        <Button size="xs" selected={mode === "unified"} class={mode === "unified" ? "bg-sel! text-ink!" : ""} onclick={() => setMode("unified")}>Unified</Button>
-        <Button size="xs" selected={mode === "split"} class={mode === "split" ? "bg-sel! text-ink!" : ""} onclick={() => setMode("split")}>Split</Button>
+        <Button size="xs" selected={layout === "unified"} class={layout === "unified" ? "bg-sel! text-ink!" : ""} onclick={() => setMode("unified")}>Unified</Button>
+        <Button size="xs" disabled={narrow} title={narrow ? "Widen the panel to use split view" : "Side-by-side diff"} selected={layout === "split"} class={layout === "split" ? "bg-sel! text-ink!" : ""} onclick={() => setMode("split")}>Split</Button>
       </div>
+      <Button size="xs" selected={wrap} aria-pressed={wrap} aria-label="Wrap lines" title="Wrap long code lines" onclick={() => wrap = !wrap}>Wrap</Button>
       <Button size="xs" icon {loading} aria-label="Refresh" title="Refresh diff" onclick={load}>
         {#if !loading}
-          <svg class="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M13 6a5.25 5.25 0 1 0 .15 3.5M13 2.5V6H9.5" />
-          </svg>
+          <Icon name="refresh-cw" class="size-3.5" />
         {/if}
       </Button>
     </div>
     {#if turn && compact}<div class="col-span-2 flex items-center gap-2">{@render turnBar?.()}</div>{/if}
+    {#if compact && data?.truncated}<span class="col-span-2 text-xs text-warn">Truncated — too large to show in full</span>{/if}
     {#if compact && files.length}
-      <select class="diff-file-picker col-span-2 min-w-0 w-full rounded border border-edge bg-canvas px-2 py-1 text-sm text-ink" aria-label="Changed file" value={activeFile} onchange={(event) => jump(event.currentTarget.value)}>
-        {#each orderedFiles as file (file.path)}<option value={file.path}>{file.path} (+{file.additions} −{file.deletions})</option>{/each}
-      </select>
+      <Select class="diff-file-picker col-span-2 min-w-0 w-full" aria-label="Changed file" title={activeFile} value={activeFile} onchange={(event) => jump(event.currentTarget.value)}>
+        {#each orderedFiles as file (file.path)}<option value={file.path}>{file.path.slice(file.path.lastIndexOf('/') + 1)} · {file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''} (+{file.additions} −{file.deletions})</option>{/each}
+      </Select>
     {/if}
   </div>
 
@@ -427,8 +441,8 @@
           {:else}
             <button type="button" data-nav-key={n.key} class="folder-row nav-row" class:root-folder={n.depth === 0} class:contains-active={activeNavKey === n.key} style="--depth: {n.depth}"
               aria-expanded={!collapsed.has(n.key)} onclick={() => toggleFolder(n.key)} title={activeNavKey === n.key ? `${n.key.slice(4)} — contains current file` : n.key.slice(4)}>
-              <svg class="folder-chevron size-3" class:closed={collapsed.has(n.key)} viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
-              <svg class="size-3.5 text-faint" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4a1 1 0 0 1 1-1h3l1.5 1.5h6.5a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z" /></svg>
+              <Icon name="chevron-down" class="folder-chevron size-3 {collapsed.has(n.key) ? 'closed' : ''}" />
+              <Icon name="folder" class="size-3.5 text-faint" />
               <span class="truncate">{n.name}</span>
             </button>
           {/if}
@@ -454,7 +468,7 @@
               <span class="flex min-w-0 items-center gap-2.5" title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}>
                 <span class={statusColor(f)}>{@render fileIcon()}</span>
                 <span class="truncate text-ink">
-                {#if f.oldPath}<span class="text-faint">{f.oldPath} → </span>{/if}<span class="text-faint">{f.path.slice(0, f.path.lastIndexOf("/") + 1)}</span><span class="font-medium">{f.path.slice(f.path.lastIndexOf("/") + 1)}</span>
+                {#if f.oldPath}<span class="text-faint">{f.oldPath} → </span>{/if}<span class="file-directory text-faint">{f.path.slice(0, f.path.lastIndexOf("/") + 1)}</span><span class="font-medium">{f.path.slice(f.path.lastIndexOf("/") + 1)}</span>
                 {#if f.untracked}<span class="text-sm text-faint"> · untracked</span>{/if}
                 </span>
               </span>
@@ -466,26 +480,30 @@
               <div class="px-3 py-2 font-sans text-faint">binary file — not shown</div>
             {:else if f.tooLarge}
               <div class="px-3 py-2 font-sans text-faint">diff too large to show</div>
-            {:else if mode === "unified"}
+            {:else}
+              <div class="diff-code" tabindex="0" role="region" aria-label={`Code changes in ${f.path}`}>
+              <div class="diff-lines">
+              {#if layout === "unified"}
               {#each rows as r, i (i)}
                 {@const a = anchorOf(r)}
                 {@const selected = inSelection(sel, f.path, r)}
                 <!-- The row is the click target; a11y via the gutter button. -->
-                <div class="diff-row grid grid-cols-[3rem_3rem_1.5rem_minmax(0,1fr)] {rowBg(r, selected)}">
+                <div class="diff-row unified-row grid grid-cols-[3rem_3rem_1.5rem_minmax(0,1fr)] {rowBg(r, selected)}">
                   {#if a}
                     <button
                       type="button"
                       class="line-gutter col-span-2 grid grid-cols-2 pr-2 text-right select-none hover:text-ink"
                       title={lineTitle}
+                      aria-label={`${r.kind === 'del' ? 'Removed line' : 'Line'} ${r.newLine || r.oldLine}${turn ? '' : ', add comment'}`}
                       onclick={(e) => pick(f.path, r, e)}
                     >
-                      <span>{r.oldLine || ""}</span><span>{r.newLine || ""}</span>
+                      <span class="old-number">{r.oldLine || ""}</span><span class="new-number">{r.newLine || ""}</span>
                     </button>
                     <span class="line-marker text-center select-none">{marker(r)}</span>
                     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                     <div class="cursor-pointer pr-3" onclick={(e) => pick(f.path, r, e)}>{@render code(r, f.path)}</div>
                   {:else}
-                    <span class="col-span-4 px-3 whitespace-pre-wrap">{r.text}</span>
+                    <span class="hunk-label col-span-4 px-3" title={r.text}>{r.text}</span>
                   {/if}
                 </div>
                 {@render extras(f.path, r)}
@@ -525,6 +543,9 @@
                   {#if sr.right}{@render extras(f.path, sr.right)}{/if}
                 {/if}
               {/each}
+              {/if}
+              </div>
+              </div>
             {/if}
           </section>
         {/each}
@@ -535,7 +556,7 @@
   <!-- A free note beside the line comments. Sending is the footer strip's: it says how many are
        drafted, and it is where every view keeps what you can do now. A turn takes no comments. -->
   {#if !turn}
-    <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-edge/60 px-4 py-1.5">
+    <div class="diff-feedback grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-edge/60 px-4 py-1.5">
       <textarea
         value={note}
         rows="1"
@@ -570,10 +591,35 @@
   .diff-compact .diff-body { grid-template-columns: minmax(0, 1fr); }
   .diff-compact .diff-nav { display: none; }
   .diff-compact .diff-toolbar { padding: 8px; gap: 8px; }
+  .diff-context:has(:global(.diff-comparison)) .compact-base { display: none; }
+  .diff-toolbar :global(.lola-field) { min-height: 28px; padding-block: 3px; font-size: 12px; }
+  .diff-compact .file-heading { padding: 7px 10px; gap: 8px; font-size: 12px; }
+  .diff-compact .file-directory { display: none; }
+  .diff-compact .diff-feedback { padding-inline: 8px; gap: 6px; }
+  .diff-code { overflow-x: auto; }
+  .diff-code:focus-visible { outline-offset: -2px; }
+  .diff-lines { width: max-content; min-width: 100%; }
+  .code-text { white-space: pre; tab-size: 4; }
+  .wrap-lines .diff-lines { width: 100%; }
+  .wrap-lines .code-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .hunk-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @container session-diff (max-width: 559px) {
+    .diff-toolbar { gap: 6px; padding: 8px; }
+    .diff-scroller { font-size: 12px; }
+    .diff-row { min-height: 20px; line-height: 20px; }
+    .unified-row { grid-template-columns: 2.5rem 1rem minmax(0, 1fr); }
+    .unified-row .line-gutter { grid-column: span 1; grid-template-columns: 1fr; padding-right: 4px; }
+    .unified-row .old-number { display: none; }
+    .unified-row.diff-del .old-number { display: block; }
+    .unified-row.diff-del .new-number { display: none; }
+    .hunk-label { grid-column: 1 / -1; font-size: 11px; }
+    .diff-hunk, .diff-meta { padding-block: 2px; }
+    .file-directory { display: none; }
+  }
   @container session-diff (min-width: 720px) {
     .diff-compact .diff-body { grid-template-columns: clamp(11rem, 26%, 16rem) minmax(0, 1fr); }
     .diff-compact .diff-nav { display: grid; }
-    .diff-compact .diff-toolbar > select { display: none; }
+    .diff-compact .diff-toolbar > :global(.diff-file-picker) { display: none; }
   }
   .diff-body { grid-template-columns: clamp(13rem, 24%, 21rem) minmax(0, 1fr); }
   .diff-nav, .nav-heading { background: var(--color-canvas); }

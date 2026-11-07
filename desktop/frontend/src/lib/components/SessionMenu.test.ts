@@ -8,8 +8,6 @@ import type { ProjectInfo } from "@bindings/internal/protocol";
 import { nav } from "$lib/nav.svelte";
 import { sessionMenu } from "$lib/sessionmenu.svelte";
 import { confirm } from "$lib/confirm.svelte";
-import { terms, AGENT, CHECKPOINTS, SSH } from "$lib/terms.svelte";
-import { ssh } from "$lib/ssh.svelte";
 import { flushSync } from "svelte";
 
 vi.mock("@xterm/xterm", () => ({
@@ -97,71 +95,16 @@ describe("SessionMenu", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("offers add shell and trigger review for a live session", () => {
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    expect(screen.getByRole("menu")).toBeInTheDocument();
-    // By ROLE + accessible name, not by text: a <MenuItem> wraps its label in a
-    // span beside an aria-hidden glyph, so getByText would hand back the span
-    // and `toBeEnabled` would assert on the wrong node.
-    expect(screen.getByRole("menuitem", { name: "Add shell" })).toBeEnabled();
-    expect(screen.getByRole("menuitem", { name: "Connect to host…" })).toBeEnabled();
-    expect(screen.getByRole("menuitem", { name: "Trigger review" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "CodeRabbit" })).toBeInTheDocument();
-    // No PR observed and not dead: the conditional items stay hidden.
-    expect(screen.queryByRole("menuitem", { name: "Open PR" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: "Revive" })).not.toBeInTheDocument();
-  });
 
-  it("disables add shell when the session has no worktree", () => {
-    store.sessions = [fakeSession({ worktree: "" })];
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    expect(screen.getByRole("menuitem", { name: "Add shell" })).toBeDisabled();
-  });
 
-  // From Overview an action on the selection would change a Glance nobody can act in, and the turns
-  // now live in Changes.
-  it("Checkpoints opens the session on Changes, on its turns", async () => {
-    nav.focusedTerm = "";
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+  it("keeps the menu focused on session management even when other features are available", () => {
+    store.sessions = [fakeSession({ agent: 'claude', prNumber: 7, prUrl: 'https://example.test/pr/7', devActive: true, devCommands: ['npm run dev'], devUrls: ['http://localhost:3000'], board: { phase: 'done' } as never })];
+    nav.focusedTerm = 'acme-eng-1';
+    sessionMenu.request = { id: 'acme-eng-1', x: 10, y: 10 };
     render(SessionMenu);
-    await fireEvent.click(screen.getByRole("menuitem", { name: "Checkpoints" }));
-    expect(nav.focusedTerm).toBe("acme-eng-1");
-    expect(terms.activeTab("acme-eng-1")).toBe(CHECKPOINTS);
-    nav.focusedTerm = "";
-  });
-
-  it("offers Report only with one to open, and lands on the conversation with it open", async () => {
-    render(SessionMenu);
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    flushSync();
-    expect(screen.queryByRole("menuitem", { name: "Report" })).toBeNull();
-    sessionMenu.close();
-    store.sessions = [{ ...store.sessions[0], board: { phase: "testing", updatedAt: "2026-01-01T00:00:00Z" } }] as never;
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    flushSync();
-    terms.select("acme-eng-1", AGENT);
-    await fireEvent.click(screen.getByRole("menuitem", { name: "Report" }));
-    expect(terms.activeTab("acme-eng-1")).toBe(SSH);
-    expect(ssh.view("acme-eng-1").reportOpen).toBe(true);
-    ssh.view("acme-eng-1").reportOpen = false;
-    nav.focusedTerm = "";
-  });
-
-  it("the open session's ⋯ sets where sessions open, and a row's right-click does not", async () => {
-    nav.focusedTerm = "";
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    const r = render(SessionMenu);
-    expect(screen.queryByText("Open sessions in")).toBeNull();
-    r.unmount();
-    nav.focusedTerm = "acme-eng-1";
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    await fireEvent.click(screen.getByRole("menuitem", { name: "Terminal" }));
-    expect(terms.globalView).toBe("terminal");
-    terms.setGlobalView("conversation");
-    nav.focusedTerm = "";
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent?.trim())).toEqual([
+      'Rename session…', 'Open in Finder', 'Switch to codex', 'Switch to opencode', 'Kill…',
+    ]);
   });
 
   it("Open in Finder opens the session's folder", async () => {
@@ -173,40 +116,12 @@ describe("SessionMenu", () => {
     open.mockRestore();
   });
 
-  it("Review diff opens the session rather than a Glance nobody can act in", async () => {
-    nav.focusedTerm = "";
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    await fireEvent.click(screen.getByRole("menuitem", { name: "Review diff" }));
-    expect(nav.focusedTerm).toBe("acme-eng-1");
-    nav.focusedTerm = "";
-  });
-
-  it("shows open PR and revive only when the session state warrants them", () => {
+  it("offers revive for ended sessions while PR access stays outside the menu", () => {
     store.sessions = [fakeSession({ prNumber: 7, prUrl: "https://x/pr/7", status: "dead" })];
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
-    expect(screen.getByRole("menuitem", { name: "Open PR" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Open PR" })).toBeNull();
     expect(screen.getByRole("menuitem", { name: "Revive" })).toBeInTheDocument();
-  });
-
-  it("omits the dev toggle for a project with no dev_commands", () => {
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    expect(screen.queryByRole("menuitem", { name: /dev/i })).not.toBeInTheDocument();
-  });
-
-  it("offers 'Make active' when the project has dev_commands, and reads back the running state", () => {
-    store.sessions = [fakeSession({ devCommands: ["composer dev"], devActive: false })];
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    expect(screen.getByRole("menuitem", { name: "Make active" })).toBeInTheDocument();
-
-    cleanup();
-    store.sessions = [fakeSession({ devCommands: ["composer dev"], devActive: true })];
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    expect(screen.getByRole("menuitem", { name: "Active — stop dev" })).toBeInTheDocument();
   });
 
   it("offers 'Resolve conflicts' only for a conflicting session, naming the branch", () => {

@@ -44,6 +44,7 @@ import (
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/state"
+	"github.com/sushidev-team/lola/internal/taskboard"
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
@@ -1184,6 +1185,7 @@ func (n *Native) withReportBriefing(prompt []byte) []byte {
 	b.WriteString(bin + " report blocked \"need the staging API key\"   # then: " + bin + " report unblocked\n")
 	b.WriteString(bin + " report note \"waiting on the migration to finish\"\n")
 	b.WriteString("```\n\n")
+	b.WriteString(taskboard.Briefing(bin) + "\n")
 	b.WriteString("Report on meaningful changes only — a new plan, a finished item, a phase change, a check result, a blocker. Not every step. `" + bin + " report --help` lists every verb. Being blocked on a decision only a human can make is worth reporting even mid-turn.\n")
 	// The claim audit (internal/claimaudit) reads the transcript for the run
 	// behind a `check … pass`; saying so up front is what makes an honest agent

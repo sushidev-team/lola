@@ -1,4 +1,6 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import type { FootState } from "./RailFoot.svelte";
   // One field, and the key decides where it goes: ↩ speaks to the agent and ⌘↩ runs on a host.
   // Tapping ⌘ twice swaps them for a stretch of typing commands. The worst mistake is a sentence
@@ -692,7 +694,7 @@
                 </span>
               {:else if item.error}
                 <span class="grid size-12 place-items-center rounded-md border border-warn bg-canvas text-warn" role="img" aria-label="Image {t.n} failed to attach" title={item.error}>
-                  <svg class="size-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 3 2 17h16L10 3ZM10 7v5M10 14v1" /></svg>
+                  <Icon name="triangle-alert" class="size-5" />
                 </span>
               {:else if item.kind === "image" && item.thumb}
                 <img src={item.thumb} alt="Attachment {t.n}" class="size-12 rounded-md border border-edge object-cover" />
@@ -709,7 +711,7 @@
                 class="absolute -top-1.5 -left-1.5 hidden size-[18px] place-items-center rounded-full border border-edge bg-panel text-xs text-faint group-hover:grid group-focus-within:grid hover:text-ink focus-visible:grid"
                 aria-label="Remove attachment {t.n}"
                 onclick={() => removeAttachment(t.n)}
-              >×</button>
+              ><Icon name="x" size={14} /></button>
             </li>
           {/if}
         {/each}
@@ -762,11 +764,11 @@
          is always there and only coloured in Run, so holding ⌘ cannot move the box. -->
     <div class="cv-composer-actions grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-t {running ? runRule : 'border-transparent'}" data-composer-actions data-footer-state={footer.state}>
       <div class="flex min-w-0 items-center gap-1.5 text-sm" data-footer-left>
-        {#if footer.glyph}<span class="w-3.5 shrink-0 {footer.glyphCls} {footer.pulse ? 'ssh-pulse motion-reduce:animate-none' : ''}" aria-hidden="true" data-footer-glyph>{footer.glyph}</span>{/if}
+        {#if footer.glyph}<span class="w-3.5 shrink-0 {footer.glyphCls} {footer.pulse ? 'ssh-pulse motion-reduce:animate-none' : ''}" aria-hidden="true" data-footer-glyph><GlyphIcon glyph={footer.glyph} /></span>{/if}
         <span class="selectable min-w-0 truncate {footer.textCls} {footer.mono ? 'font-mono' : ''}" data-run-prompt={footer.mono ? "" : undefined} data-footer-text title={composerNow === "unproven" ? talkData?.caps?.why : undefined}>{footer.text}{#if clock}{" "}<span class="num inline-block min-w-[6ch]">{clock}</span>{/if}</span>
         {#each footer.left as act (act)}
           {#if act === "stop"}
-            <Button variant="danger" size="xs" class="h-5!" title={stopNote} onclick={stop} data-footer-stop><span aria-hidden="true">■</span> Stop <span class="text-faint">⌘.</span></Button>
+            <Button variant="danger" size="xs" class="h-5!" title={stopNote} onclick={stop} data-footer-stop><span aria-hidden="true"><Icon name="square" size={14} /></span> Stop <span class="text-faint">⌘.</span></Button>
           {:else if act === "terminal"}
             <!-- `pointer-events` and opacity: the way out must keep working while the daemon is down. -->
             <Button size="xs" class="pointer-events-auto! h-5! opacity-100!" onclick={() => ssh.showAgentTerminal(sessionId)}>Terminal <span class="text-faint">⌘\</span></Button>
@@ -791,7 +793,7 @@
       <Button variant={footer.primary.variant} size="md" class="cv-composer-send justify-center!" loading={busy || !!view.sending} disabled={footer.primary.disabled || (busy && footer.primary.act !== "revive") || (attachmentsBlocked && ["send", "queue", "stopSend"].includes(footer.primary.act))} title={footer.primary.act === "run" ? route.note : `${footer.primary.label} ${footer.primary.keys ?? ''}`} onclick={() => onPrimary(footer.primary)} data-footer-primary={footer.primary.act}>
         {#if footer.primary.act === 'send' || footer.primary.act === 'queue'}
           <span class="sr-only">{footer.primary.label}</span>
-          <svg viewBox="0 0 20 20" class="size-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 15V5m-5 5 5-5 5 5" /></svg>
+          <Icon name="arrow-up" class="size-4" />
         {:else}{@render keys(footer.primary)}{/if}
       </Button>
     </div>

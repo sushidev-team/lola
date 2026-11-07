@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import type { Snippet } from "svelte";
   import { slide } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
@@ -33,17 +34,11 @@
 <div class="cv-activity cv-call-group" class:cv-call-group-open={open} class:cv-call-group-animated={animated} data-work={id}>
   <div class="cv-call-group-head">
     <button type="button" class="cv-activity-toggle" aria-label="{open ? 'Hide' : 'Show'} activity: {counts.map(c => `${c.n} ${c.label}`).join(', ')}{failed ? `, ${failed} failed` : ''}" aria-expanded={open} aria-controls={contentId} onclick={toggle} data-work-fold>
-      <svg class="cv-activity-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8 9-5 9 5-9 5zM3 12l9 5 9-5M3 16l9 5 9-5" /></svg>
+      <Icon name="layers" class="cv-activity-icon" />
       <span class="cv-activity-counts">
         {#each counts as count (count.kind)}
           <span class="cv-activity-chip" data-category={count.kind}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              {#if count.kind === "run"}<path d="m3 4 4 4-4 4M9 12h4" />
-              {:else if count.kind === "edit"}<path d="m3 10 7-7 3 3-7 7-4 1zM8 5l3 3" />
-              {:else if count.kind === "read"}<circle cx="7" cy="7" r="4"/><path d="m10 10 4 4" />
-              {:else if count.kind === "note"}<path d="M2 3h12v8H7l-4 3v-3H2zM5 6h6M5 8h4" />
-              {:else}<path d="m6 3-4 5 4 5M10 3l4 5-4 5" />{/if}
-            </svg>
+            <Icon name={count.kind === 'run' ? 'terminal' : count.kind === 'edit' ? 'pencil' : count.kind === 'read' ? 'search' : count.kind === 'note' ? 'message-square-text' : 'code'}  />
             <strong>{count.n}</strong> {count.n === 1 ? count.label.slice(0, -1) : count.label}
           </span>
         {/each}

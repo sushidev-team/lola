@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { nav } from "$lib/nav.svelte";
   import { reflowGridRows } from "$lib/reflow";
   import LolaLogo from "./LolaLogo.svelte";
@@ -11,7 +12,6 @@
   import SidebarVersion from "./SidebarVersion.svelte";
   import SidebarActivity from "./SidebarActivity.svelte";
   import SidebarRoster from "./SidebarRoster.svelte";
-  import SidebarWaiting from "./SidebarWaiting.svelte";
   import Tabs from "./Tabs.svelte";
 
   const TABS = [
@@ -50,7 +50,7 @@
       class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
       title="hide sidebar (b)"
       aria-label="Hide sidebar"
-      onclick={() => nav.toggleSidebar()}>«</Button
+      onclick={() => nav.toggleSidebar()}><Icon name="chevrons-left" size={14} /></Button
     >
   </div>
 
@@ -58,10 +58,9 @@
        and its folders. Projects is the old body, unmoved: folders and drag are untouched. -->
   <div class="grid min-h-0 min-w-0" style="grid-template-rows:auto minmax(0,1fr) auto auto">
     <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => nav.setSidebarTab(t === "projects" ? "projects" : "sessions")} />
-    <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'sessions' ? '' : 'hidden'}" style="grid-template-rows:auto minmax(0,1fr) auto" data-sidebar-sessions>
+    <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'sessions' ? '' : 'hidden'}" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
       <SidebarSessionTools />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
-      <SidebarWaiting />
     </div>
     <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'projects' ? '' : 'hidden'}" style="grid-template-rows:minmax(0,1fr) auto">
       <div class="min-h-0 overflow-auto"><SidebarProjects /></div>

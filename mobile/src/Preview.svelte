@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // A LOOK-AT-IT HARNESS, and nothing else.
   //
   // It exists because the redesign's acceptance criterion is visual and the unit
@@ -230,7 +231,7 @@
           </span>
         </div>
         <div class="flex items-center gap-1.5">
-          <MetaPill tone="good">✓ CI pass</MetaPill>
+          <MetaPill tone="good"><Icon name="check" size={14} /> CI pass</MetaPill>
           <MetaPill tone="grey" ground="grey">Permission prompt</MetaPill>
           <span class="flex-1"></span>
           <span class="num text-sm font-medium text-faint">2m ago</span>

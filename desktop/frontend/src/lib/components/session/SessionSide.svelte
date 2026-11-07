@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // The agent's standing account beside its story: plan, progress, checks, findings, notes and its
   // widgets. It exists only once the agent has used one of them, so a session that never did keeps
   // a plain conversation. Everything here is a claim, which is why the heading says whose it is.
@@ -12,10 +13,12 @@
   import { feed } from "$lib/feed.svelte";
   import { changes } from "$lib/changes.svelte";
   import { changesOffered } from "$lib/sessionview";
-  import { sessionActivity, activityDuration, activityStatus } from "$lib/sessionactivity";
-  import UsageMark from "../UsageMark.svelte";
-  import { toMillis } from "$lib/time";
+  import { sessionActivity, activityDuration } from "$lib/sessionactivity";
   import Button from "../Button.svelte";
+  import BeforeMerge from "./BeforeMerge.svelte";
+  import OverviewChecks from "./OverviewChecks.svelte";
+  import SessionDev from "./SessionDev.svelte";
+  import SessionTasks from "./SessionTasks.svelte";
   import BoardPanel from "../BoardPanel.svelte";
 
   let { sessionId }: { sessionId: string } = $props();
@@ -29,9 +32,13 @@
   const tests = $derived(activity.filter(e => e.kind === 'tests'));
   const recent = $derived(activity.slice(-5).reverse());
   const diff = $derived(changes.of(sessionId));
+  const hasProgressReport = $derived(boardHasContent(board ? { ...board, checks: [], mismatches: [] } : board));
   const plan = $derived(side.plan?.element);
   const steps = $derived(plan?.steps ?? []);
   const done = $derived(steps.filter((s) => s.state === "done").length);
+  const planComplete = $derived(steps.length > 0 && done === steps.length);
+  let planExpanded = $state(false);
+  $effect(() => { if (!planComplete) planExpanded = false; });
   function jumpTo(id: string) {
     view.filter = "everything";
     view.cursor = id;
@@ -53,37 +60,29 @@
 <aside class="cv-session-side grid min-h-0 content-start gap-5 overflow-y-auto px-4 pt-2 pb-4 text-sm" aria-label="Session overview" data-session-side>
 
 
-  {#if session?.usage || session?.firstSeen}
-    <section data-side-session>
-      {@render heading("Session")}
-      <dl class="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-3 gap-y-2">
-        {#if session?.usage}
-          <dt class="text-faint">Tokens</dt>
-          <dd class="min-w-0 text-right"><UsageMark usage={session.usage} /></dd>
-        {/if}
-        {#if session?.firstSeen && Number.isFinite(toMillis(session.firstSeen as unknown as string))}
-          <dt class="text-faint">Started</dt>
-          <dd class="min-w-0 break-words text-right text-ink-2">{new Date(toMillis(session.firstSeen as unknown as string)).toLocaleString()}</dd>
-        {/if}
-      </dl>
-    </section>
-  {/if}
-
   {#if side.brief.summary}
     <p class="selectable copy text-prose text-ink {side.brief.summary.stale ? 'opacity-60' : ''}" data-side-summary>{side.brief.summary.title}</p>
   {/if}
 
-  {#if session && boardHasContent(board)}<BoardPanel {session} embedded />{/if}
+  <SessionTasks {sessionId} />
 
-  {#if !boardHasContent(board) && !plan}
+  {#if session}<SessionDev {session} />{/if}
+
+  {#if session && hasProgressReport}<BoardPanel {session} embedded showChecks={false} compactWhenDone />{/if}
+
+  {#if !hasProgressReport && !plan && !session?.tasks?.length}
     <section data-side-progress-empty>
       {@render heading("Task progress")}
       <p class="text-faint">No plan reported yet.</p>
     </section>
   {/if}
 
-  {#if plan}
+  {#if plan && !hasProgressReport}
     <section data-side-plan>
+      {#if planComplete}
+        <button type="button" class="flex w-full items-center gap-2 text-left" aria-expanded={planExpanded} onclick={() => planExpanded = !planExpanded}><Icon name="circle-check" size={16} class="text-good" /><span class="font-medium">Plan complete</span><span class="num text-xs text-faint">{done}/{steps.length}</span><Icon name={planExpanded ? "chevron-down" : "chevron-right"} size={14} class="ml-auto text-faint" /></button>
+      {/if}
+      {#if !planComplete || planExpanded}
       {@render heading(plan.title || "Plan", steps.length ? `${done}/${steps.length}` : "")}
       {#if steps.length}
         <div class="mb-3 h-1.5 overflow-hidden rounded-full bg-edge/60" role="progressbar" aria-label="Reported plan" aria-valuemin="0" aria-valuemax={steps.length} aria-valuenow={done}>
@@ -99,10 +98,14 @@
           </li>
         {/each}
       </ol>
+      {/if}
     </section>
   {/if}
 
-  <section data-side-changes>
+  <section data-side-changes class:cv-clickable-changes={session && changesOffered(session)}>
+    {#if session && changesOffered(session)}
+      <button type="button" class="cv-changes-card-target" aria-label="View changes" onclick={() => session && ssh.openChanges(session)}></button>
+    {/if}
     {@render heading("Changes", diff ? `${diff.files} ${diff.files === 1 ? 'file' : 'files'}` : '')}
     {#if diff}
       <div class="cv-diff-overview">
@@ -113,28 +116,13 @@
       </div>
     {:else}<p class="text-faint">Changes haven't been loaded.</p>{/if}
     {#if session && changesOffered(session)}
-      <button type="button" class="cv-overview-link" onclick={() => session && ssh.openChanges(session)}>View changes <span aria-hidden="true">↗</span></button>
+      <span class="cv-overview-link" aria-hidden="true">View changes <Icon name="arrow-right" size={14} /></span>
     {/if}
   </section>
 
-  <section data-side-tests>
-    {@render heading("Tests", tests.length ? `${tests.length} command ${tests.length === 1 ? 'run' : 'runs'}` : '')}
-    {#if tests.length}
-      <div class="mb-3 flex flex-wrap gap-x-3 gap-y-1 num">
-        <span class="text-good">{tests.filter(t => t.status === 'ok').length} completed</span>
-        <span class={tests.some(t => t.status === 'error') ? 'text-bad' : 'text-faint'}>{tests.filter(t => t.status === 'error').length} failed</span>
-      </div>
-      <ul class="cv-overview-events">
-        {#each tests.slice(-3).reverse() as t (t.id)}
-          <li><button type="button" onclick={() => jumpTo(t.id)} use:tooltip={{ text: t.label, heading: 'Test command', meta: activityStatus(t.status), tone: 'tests' }}>
-            <span class="min-w-0 truncate">{t.label.replace(/^Ran /, '')}</span>
-            <span class="text-xs {t.status === 'error' ? 'text-bad' : t.status === 'ok' ? 'text-good' : 'text-ink-2'}">{activityStatus(t.status)}</span>
-          </button></li>
-        {/each}
-      </ul>
-      <p class="cv-overview-caption">Agent-reported commands · loaded history</p>
-    {:else}<p class="text-faint">No test commands in loaded history.</p>{/if}
-  </section>
+  {#if session}<BeforeMerge {session} />{/if}
+
+  <OverviewChecks {session} {tests} onJump={jumpTo} />
 
   <section data-side-activity>
     {@render heading("Recent activity")}

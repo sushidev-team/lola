@@ -77,11 +77,11 @@ describe("conversationOffered", () => {
 });
 
 describe("stripCells", () => {
-  it("puts views first and machines after, in strip order, with no cell for an ended host", () => {
+  it("puts views first and machines after, in strip order, with no cell for an ended host or dev server", () => {
     const s = { ...claude, worktree: "/w", ssh: { connections: [conn, { ...conn, id: "c2", state: "closed" }], lastSeq: 1 } } as never;
     const { views, machines } = stripCells(s, ["a-shell-1", "a-review", "a-dev-1"]);
     expect(views.map((c) => c.key)).toEqual(["conversation", "terminal", "changes"]);
-    expect(machines.map((c) => c.kind)).toEqual(["host", "shell", "review", "dev"]);
+    expect(machines.map((c) => c.kind)).toEqual(["host", "shell", "review"]);
   });
   it("gives a goal and a direct session no Changes, and hides an agentless strip with one terminal", () => {
     expect(stripCells({ ...claude, worktree: "/w", goalId: "g" }, []).views.map((c) => c.key)).toEqual(["conversation", "terminal"]);

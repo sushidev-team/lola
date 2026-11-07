@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // Best-of-N compare view (SUSHI-623): every attempt of one group side by side —
   // agent/model, the agent pill, the PR and its CI, the review findings recorded
   // for the CURRENT PR, the diff size and the tokens spent — and the one action
@@ -81,9 +82,9 @@
           {@const suggested = !picked && a.session === d.suggested}
           <tr class="border-t border-edge/30" class:bg-sel={a.winner} class:opacity-50={!!picked && !a.winner}>
             <td class="num px-2 py-2 text-faint">
-              {#if a.winner}<span class="text-good" title="kept">✓</span>{:else if suggested}<span
+              {#if a.winner}<span class="text-good" title="kept"><Icon name="check" size={14} /></span>{:else if suggested}<span
                   class="text-warn"
-                  title="suggested — CI, then review findings, then diff size">★</span
+                  title="suggested — CI, then review findings, then diff size"><Icon name="star" size={14} /></span
                 >{/if}{a.attempt}
             </td>
             <td class="truncate px-2 py-2" title={a.session}>
@@ -153,7 +154,7 @@
       {:else if picked}
         Kept {picked}. The other attempts were closed and torn down.
       {:else if d.suggested}
-        ★ is a suggestion (CI, then review findings, then diff size). Keeping an attempt marks its PR ready, closes
+        <Icon name="star" size={14} /> is a suggestion (CI, then review findings, then diff size). Keeping an attempt marks its PR ready, closes
         the others' PRs and removes their worktrees — one with uncommitted changes is kept.
       {:else}
         No attempt has an open PR yet. Each one opens a draft PR when it is done.

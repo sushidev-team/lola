@@ -1,4 +1,5 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import TimeAgo from "$lib/components/TimeAgo.svelte";
   import MetaPill from "./MetaPill.svelte";
   import AiGlyph from "@mobile/lib/icons/AiGlyph.svelte";
@@ -205,7 +206,7 @@
              strand it at the left of the second one. -->
         <div class="flex flex-wrap items-center gap-1.5">
           {#each facts as f (f.text)}
-            <MetaPill tone={f.tone} ground={f.ground}>{f.text}</MetaPill>
+            <MetaPill tone={f.tone} ground={f.ground}><GlyphIcon glyph={f.text} /></MetaPill>
           {/each}
           {#if stamp}
             <!-- `num` for the same reason every age in this app carries it: the

@@ -855,6 +855,23 @@ export interface OpenTicketArgs {
 }
 
 /**
+ * PRReadiness contains facts, not a promise that GitHub will permit a merge.
+ */
+export interface PRReadinessData {
+    "repo": string;
+    "number": number;
+    "url": string;
+    "state": string;
+    "draft": boolean;
+    "mergeable": string;
+    "mergeState": string;
+    "review": string;
+    "checks": string;
+    "head": string;
+    "threads": ReviewThread[] | null;
+}
+
+/**
  * PaneChoice is one enumerated option the agent offered at its prompt. Key is
  * what the human sends to select it (a menu number/letter); Label is the
  * human-readable option text.
@@ -1147,6 +1164,20 @@ export interface ReviewData {
     "skipped"?: string;
     "findings"?: string;
     "message"?: string;
+}
+
+/**
+ * ReviewThread is an unresolved, resolvable GitHub review conversation, not an
+ * issue comment (which has no resolved state). Preview is plain text only.
+ */
+export interface ReviewThread {
+    "id": string;
+    "path": string;
+    "line": number;
+    "outdated": boolean;
+    "author": string;
+    "preview": string;
+    "url": string;
 }
 
 /**
@@ -2363,6 +2394,7 @@ export interface SessionInfo {
      * Board.UpdatedAt ages (agents forget to report).
      */
     "board"?: BoardInfo | null;
+    "tasks"?: SessionTask[] | null;
 
     /**
      * FeedbackPending is true while a human's diff-viewer feedback
@@ -2425,6 +2457,27 @@ export interface SessionOverlap {
     "issue"?: string;
     "files": string[] | null;
     "more"?: number;
+}
+
+/**
+ * SessionTask is shared session scope, separate from the agent's replaceable plan.
+ * State is a claim, never a lifecycle or dispatch input.
+ */
+export interface SessionTask {
+    "id": string;
+    "parentId"?: string;
+
+    /**
+     * "global" applies across the session; empty + no parent awaits organization.
+     */
+    "scope"?: string;
+    "kind": string;
+    "text": string;
+    "state": string;
+    "author": string;
+    "updatedAt": string;
+    "notification"?: string;
+    "sendError"?: string;
 }
 
 /**

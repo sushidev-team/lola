@@ -267,7 +267,7 @@ class SessionView {
   streamFocus = $state(0);
   findFocus = $state(0);
   /** A block a dig should scroll to. */
-  jump = $state<{ block: string; n: number } | null>(null);
+  jump = $state<{ block: string; n: number; expand?: boolean } | null>(null);
   /** The item the stream's keyboard stands on. */
   cursor = $state("");
   /** The block an evidence plate is pointing at: its row lights up. */

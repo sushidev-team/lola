@@ -1,7 +1,8 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // The strip under the top bar. Three groups, and only the middle one can move or scroll:
   //
-  //   Conversation  Terminal  Changes     $ prod-api  zsh  review  dev: x  +            Widgets 2 •
+  //   Conversation  Terminal  Changes     $ prod-api  zsh  review  +            Widgets 2 •
   //   └ fixed, never moves ───────────┘   └ mono, machine things, past a fade ┘         └ fixed ┘
   //
   // `+` sits right after the tabs it adds to, and keeps its place when they scroll past the fade.
@@ -36,10 +37,11 @@
   const view = $derived(ssh.view(id));
   const shells = $derived(terms.shellsFor(id));
   const cells = $derived(stripCells(session, shells));
-  const current = $derived(changesInSide && ssh.currentCell(session) === 'changes' ? 'conversation' : ssh.currentCell(session));
+  const selected = $derived(ssh.currentCell(session));
+  const current = $derived(terms.isDevTab(selected) ? "terminal" : changesInSide && selected === "changes" ? "conversation" : selected);
   const views = $derived(cells.views.filter(c => !changesInSide || c.kind !== 'changes'));
   const all = $derived([...views, ...cells.machines]);
-  // In the order terms sorts them, which is what a drag's index means.
+  // Visible terminals retain their order; drag indices must account for hidden dev tabs.
   const terminals = $derived(cells.machines.filter((c): c is Extract<StripCell, { name: string }> => c.kind !== "host"));
   const draftCount = $derived(feedback.count(id));
   const stat = $derived(changes.of(id));
@@ -117,9 +119,9 @@
     // A swap is locked for the length of the animation: the rects report mid-flight positions,
     // and re-reading them straight away would swap the pair straight back, forever.
     if (swapLock) return;
-    const to = tabIndexAt(e.clientX, shells.length);
+    const to = tabIndexAt(e.clientX, terminals.length);
     if (to === dragFrom) return;
-    terms.moveTab(id, dragFrom, to);
+    terms.moveTab(id, shells.indexOf(terminals[dragFrom].name), shells.indexOf(terminals[to].name));
     dragFrom = to;
     dragging = to;
     swapLock = true;
@@ -244,9 +246,9 @@
           onkeydown={(e) => cellKey(e, c)}
         >
           {viewLabel(c)}
-          {#if c.kind === "conversation" && waitsElsewhere}<span class="text-orange" aria-label="A card is waiting">◉</span>{/if}
+          {#if c.kind === "conversation" && waitsElsewhere}<span class="text-orange" aria-label="A card is waiting"><Icon name="circle-alert" size={14} /></span>{/if}
           {#if c.kind === "changes" && stat && !narrow && stat.add + stat.del > 0}<span class="num text-sm font-normal text-faint" data-changes-stat>+{stat.add} −{stat.del}</span>{/if}
-          {#if c.kind === "changes" && draftCount > 0}<span class="num text-sm font-normal text-faint"><span aria-hidden="true">•</span> {draftCount}</span>{/if}
+          {#if c.kind === "changes" && draftCount > 0}<span class="num text-sm font-normal text-faint"><span aria-hidden="true"><Icon name="circle-dot" size={14} /></span> {draftCount}</span>{/if}
           {@render underline(on)}
         </button>
       {/each}
@@ -255,7 +257,7 @@
     {#if narrow}
       <div class="flex items-stretch">
         {#if cells.machines.length}
-          <Button size="xs" class="my-auto font-mono!" aria-haspopup="menu" aria-expanded={!!foldAt} aria-label="{cells.machines.length} more terminals" onclick={(e) => (foldAt = under(e))}>⋯ <span class="num">{cells.machines.length}</span></Button>
+          <Button size="xs" class="my-auto font-mono!" aria-haspopup="menu" aria-expanded={!!foldAt} aria-label="{cells.machines.length} more terminals" onclick={(e) => (foldAt = under(e))}><Icon name="ellipsis" size={14} /> <span class="num">{cells.machines.length}</span></Button>
         {/if}
       </div>
     {:else}
@@ -314,7 +316,7 @@
                 class="h-4! w-4! opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100"
                 title={terms.isReviewTab(sh) ? "close the review pane" : terms.isDevTab(sh) ? "stop this session's dev processes" : "close shell"}
                 aria-label={terms.isReviewTab(sh) ? "close review" : terms.isDevTab(sh) ? "stop dev" : "close shell"}
-                onclick={() => terms.closeShell(id, sh)}>×</Button
+                onclick={() => terms.closeShell(id, sh)}><Icon name="x" size={14} /></Button
               >
               {@render underline(on)}
             </div>
@@ -324,16 +326,16 @@
   </div>
 
   <div class="-ml-4 flex items-center">
-    <Button icon size="xs" aria-label="Add a terminal or a host" aria-haspopup="menu" aria-expanded={!!addAt} title="New shell, connect to a host" onclick={(e) => (addAt = under(e))}>+</Button>
+    <Button icon size="xs" aria-label="Add a terminal or a host" aria-haspopup="menu" aria-expanded={!!addAt} title="New shell, connect to a host" onclick={(e) => (addAt = under(e))}><Icon name="plus" size={14} /></Button>
   </div>
   <div aria-hidden="true"></div>
   <div class="flex items-center gap-2">
     {#if changesInSide}<button bind:this={panelButton} type="button" class="grid size-7 place-items-center rounded-sm text-faint hover:bg-sel hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" aria-label="Panels" title="Show or hide panels" aria-haspopup="menu" aria-expanded={!!panelAt} onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); panelAt = panelAt ? null : { x: Math.max(4, r.right - 224), y: r.bottom + 4 }; }}>
-      <svg class="size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h10" /></svg>
+      <Icon name="menu" class="size-4" />
     </button>{/if}
     {#if widgets > 0 && !changesInSide}
       <Button size="xs" class="num" title="Show or hide widgets (w)" data-dock-opener aria-label="Widgets {widgets}" onclick={() => ssh.dockKey(session)}>
-        Widgets {widgets}{#if widgetDot}<span class="text-magenta" aria-label="A new widget">•</span>{/if}
+        Widgets {widgets}{#if widgetDot}<span class="text-magenta" aria-label="A new widget"><Icon name="circle-dot" size={14} /></span>{/if}
       </Button>
     {/if}
   </div>

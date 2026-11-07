@@ -51,6 +51,21 @@ describe("DiffView", () => {
     expect(screen.getByRole("navigation", { name: "changed files" })).toHaveTextContent("foo.go");
   });
 
+  it("keeps sidebar code unwrapped until requested and retains old-side comment anchors", async () => {
+    localStorage.setItem("lola.diff.mode", "unified");
+    const { container } = render(DiffView, { sessionId: "s1", compact: true });
+    await screen.findByText("origin/main");
+    expect(screen.getByRole("combobox", { name: "Changed file" })).toHaveDisplayValue("foo.go · internal/foo (+1 −1)");
+    const wrap = screen.getByRole("button", { name: "Wrap lines" });
+    expect(wrap).toHaveAttribute("aria-pressed", "false");
+    await fireEvent.click(wrap);
+    expect(container.querySelector('.diff-view')).toHaveClass('wrap-lines');
+    await fireEvent.click(screen.getByRole("button", { name: "Removed line 2, add comment" }));
+    await fireEvent.input(await screen.findByPlaceholderText("What should the agent change here?"), { target: { value: "Keep the previous value" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Add comment" }));
+    expect(feedback.draftsFor("s1")[0]).toMatchObject({ side: "old", line: 2 });
+  });
+
   it("renders both diff layouts in sidebar order, independent of folder folding", async () => {
     // Git's path order puts FrontChat.tsx before its sibling directories.
     const paths = [

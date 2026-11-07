@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // One row of the story, by what it is. Voice comes from container and type: a plate means lola
   // witnessed it, a card means you can act on it, and everything else sits on the ground, with only
   // a neutral mark on the turn's rail beside it. Only a store message gets the you fill, because only
@@ -91,7 +92,7 @@
        step below its lead, and a beat short enough to be one line carries its role's colour alone. -->
   {#if role === "narration"}
     <aside class="cv-progress-note" aria-label="Agent commentary">
-      <svg class="cv-note-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3.5h12v9H9l-4 3v-3H4zM7 7h6M7 9.5h4" /></svg>
+      <Icon name="message-square-text" class="cv-note-icon" />
       <div class="min-w-0 selectable text-prose text-ink-2" data-voice="agent" data-role="narration"><SSHRich {sessionId} text={row.text} quiet conversation /></div>
     </aside>
   {:else}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { store } from "$lib/store.svelte";
   import type { SessionInfo } from "@bindings/internal/protocol";
   import Button from "./Button.svelte";
@@ -25,7 +26,7 @@
 
 {#if clash}
   <div class="flex shrink-0 items-center gap-3 border-edge bg-panel px-3 py-2 text-ink {tray ? 'rounded-[10px] border' : 'border-b'}" role="alert" data-card={tray ? "dev-clash" : undefined}>
-    <span class="shrink-0 text-faint" aria-hidden="true">⚠</span>
+    <span class="shrink-0 text-faint" aria-hidden="true"><Icon name="triangle-alert" size={14} /></span>
     <span class="min-w-0 flex-1">
       {#if clash.command}<span class="font-mono text-sm">{clash.command}</span> stopped —{:else}A dev process stopped
         —{/if}

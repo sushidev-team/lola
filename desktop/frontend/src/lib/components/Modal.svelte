@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import type { Snippet } from "svelte";
   import { onMount, onDestroy } from "svelte";
   import Button from "./Button.svelte";
@@ -114,7 +115,7 @@
            level that must out-rank everything inside the dialog. -->
       <h2 class="text-lg text-ink">{title}</h2>
       {#if titleHelp}<span class="ml-2 inline-flex"><HelpText label={title} detail={titleHelp} /></span>{/if}
-      <Button icon class="ml-auto" onclick={onClose} aria-label="close">✕</Button>
+      <Button icon class="ml-auto" onclick={onClose} aria-label="close"><Icon name="x" size={14} /></Button>
     </header>
     <div class="min-h-0 flex-1 {bodyClass}">
       {@render children()}

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/svelte";
+import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import Checkbox from "./Checkbox.svelte";
 import SelectHarness from "./SelectHarness.test.svelte";
 
@@ -80,5 +80,38 @@ describe("no view ships a native control", () => {
       .filter(([, src]) => pattern.test(src))
       .map(([path]) => path);
     expect(offenders).toEqual([]);
+  });
+});
+
+
+describe('styled select popup', () => {
+  beforeEach(cleanup);
+  it('opens a themed listbox outside clipping ancestors and commits with the keyboard', async () => {
+    const { container } = render(SelectHarness, { value: 'b' });
+    const field = screen.getByRole('combobox', { name: 'Flavor' });
+    await fireEvent.keyDown(field, { key: 'ArrowDown' });
+    const menu = screen.getByRole('listbox');
+    expect(menu.parentElement).toBe(document.body);
+    expect(container).not.toContainElement(menu);
+    await fireEvent.keyDown(field, { key: 'Home' });
+    await fireEvent.keyDown(field, { key: 'Enter' });
+    expect(field).toHaveValue('a');
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+  it('supports pointer selection, cancellation, type-ahead, and outside dismissal', async () => {
+    render(SelectHarness, { value: 'b' });
+    const field = screen.getByRole('combobox', { name: 'Flavor' });
+    await fireEvent.click(field);
+    await fireEvent.click(screen.getByRole('option', { name: 'Alpha' }));
+    expect(field).toHaveValue('a');
+    await fireEvent.keyDown(field, { key: 'b' });
+    expect(field).toHaveValue('b');
+    await fireEvent.click(field);
+    await fireEvent.keyDown(field, { key: 'Home' });
+    await fireEvent.keyDown(field, { key: 'Escape' });
+    expect(field).toHaveValue('b');
+    await fireEvent.click(field);
+    await fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('listbox')).toBeNull();
   });
 });

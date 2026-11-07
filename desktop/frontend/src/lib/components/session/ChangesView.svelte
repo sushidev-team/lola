@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Select from "../Select.svelte";
   // What the session did to the code: the left column names everything against the base and each
   // turn, and the right is the diff of whichever is selected. One place, so a turn is never a
   // separate pane to find your way back from.
@@ -33,9 +34,16 @@
   });
 </script>
 
-<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]" data-testid="changes-view">
-  <div>{#if compact && checkpointed && st.list.length}<select class="m-2 max-w-[calc(100%-16px)] rounded border border-edge bg-canvas px-2 py-1 text-sm text-ink" aria-label="Compare changes" value={turn} onchange={(event) => selectedTurn = Number(event.currentTarget.value)}><option value={0}>All changes vs base</option>{#each [...st.list].reverse() as checkpoint (checkpoint.seq)}<option value={checkpoint.seq}>#{checkpoint.seq} · {checkpoint.label}</option>{/each}</select>{/if}</div>
+<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]" data-testid="changes-view">
   <DiffView {sessionId} {compact} turn={current?.seq ?? 0}>
+    {#snippet comparison()}
+      {#if compact && checkpointed && st.list.length}
+        <Select class="diff-comparison min-w-0" aria-label="Compare changes" value={turn} onchange={(event) => selectedTurn = Number(event.currentTarget.value)}>
+          <option value={0}>All changes</option>
+          {#each [...st.list].reverse() as checkpoint (checkpoint.seq)}<option value={checkpoint.seq}>#{checkpoint.seq} · {checkpoint.label}</option>{/each}
+        </Select>
+      {/if}
+    {/snippet}
     {#snippet rail()}
       {#if checkpointed && !compact}<TurnRail {sessionId} turn={current?.seq ?? 0} />{/if}
     {/snippet}

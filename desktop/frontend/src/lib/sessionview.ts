@@ -121,7 +121,9 @@ export function stripCells(s: Shape, shells: string[], forAll: boolean = CONVERS
     if (!isEnded(t.conn)) machines.push({ key: `host:${t.conn.id}`, kind: "host", conn: t.conn, label: t.label });
   }
   for (const name of shells) {
-    machines.push({ key: name, kind: name.endsWith("-review") ? "review" : /-dev-\d+$/.test(name) ? "dev" : "shell", name });
+    // Dev controls live in the overview, not in the view strip or its keyboard ring.
+    if (/-dev-\d+$/.test(name)) continue;
+    machines.push({ key: name, kind: name.endsWith("-review") ? "review" : "shell", name });
   }
   return { views, machines };
 }

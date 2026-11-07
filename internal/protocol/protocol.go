@@ -562,7 +562,8 @@ type SessionInfo struct {
 	// it has reported nothing. A CLAIM, not a fact: render it as the agent's
 	// own words, beside — never instead of — the axes above, and fade it as
 	// Board.UpdatedAt ages (agents forget to report).
-	Board *BoardInfo `json:"board,omitempty"`
+	Board *BoardInfo    `json:"board,omitempty"`
+	Tasks []SessionTask `json:"tasks,omitempty"`
 
 	// FeedbackPending is true while a human's diff-viewer feedback
 	// (cmd=feedback) is queued for this session's agent, waiting for the pane to

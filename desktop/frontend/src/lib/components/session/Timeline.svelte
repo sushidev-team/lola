@@ -18,7 +18,7 @@
   import { feed, FEED_SCAN_POLL_MS } from "$lib/feed.svelte";
   import { agentName, dockCards, matchesFilter } from "$lib/ssh";
   import { agoPhrase } from "$lib/time";
-  import { buildStory, catchUp, findInStory, isFolded, lastLifeIndex, locate, turnAsk, type StoryRow } from "$lib/turns";
+  import { buildStory, catchUp, findInStory, isFolded, lastLifeIndex, locate, turnParts, turnAsk, type StoryRow } from "$lib/turns";
   import Button from "../Button.svelte";
   import Chevron from "../Chevron.svelte";
   import TimelineTurn from "./TimelineTurn.svelte";
@@ -371,7 +371,7 @@
     const j = view.jump;
     if (!j || j.n === view.seen.jump) return;
     view.seen.jump = j.n;
-    untrack(() => void landOn(j.block));
+    untrack(() => void landOn(j.block, j.expand !== false));
   });
 
   /** Makes a row reachable: its earlier life, its folded turn, its plate fold or its run line. */
@@ -387,7 +387,9 @@
     return at.row;
   }
 
-  async function landOn(target: string) {
+  let landing = 0;
+  async function landOn(target: string, expand = true) {
+    const request = ++landing;
     const isItem = target.startsWith("item:");
     let id = isItem ? target.slice(5) : target;
     const item = view.items.find((i) => (isItem ? i.id === id : i.block?.id === id));
@@ -396,11 +398,36 @@
       if (!matchesFilter(item, view.filter)) view.filter = "everything";
     }
     await tick();
+    if (request !== landing) return;
+    if (!expand) {
+      const at = locate(story, id);
+      if (!at) return;
+      const turn = story.turns[at.turn];
+      pinnedTurns = new Set([turn.id]);
+      if (back == null) back = scroller?.scrollTop ?? null;
+      stuck = false;
+      await tick();
+      if (request !== landing) return;
+      // Land on the nearest visible container, leaving every disclosure untouched.
+      const turnEl = scroller?.querySelector(`[data-turn="${safeId(turn.id)}"]`);
+      const work = turnParts(turn.rows, 0, !(alive && at.turn === story.turns.length - 1))
+        .find(p => p.kind === 'work' && p.rows.some(row => row.id === at.row.id));
+      const el = at.turn < firstShown ? scroller?.querySelector('[data-earlier-life]')
+        : turnEl?.querySelector('[data-turn-fold]')
+          ?? turnEl?.querySelector(rowSelector(id))
+          ?? turnEl?.querySelector(rowSelector(at.row.id))
+          ?? (work?.kind === 'work' ? turnEl?.querySelector(`[data-work="${safeId(work.id)}"]`) : null)
+          ?? turnEl;
+      el?.scrollIntoView?.({ block: 'center', behavior: 'instant' });
+      if (scroller) lastTop = scroller.scrollTop;
+      return;
+    }
     if (!reveal(id)) return;
     if (back == null) back = scroller?.scrollTop ?? null;
     stuck = false;
     view.cursor = id; // Open work groups and answer sections before locating the target.
     await tick();
+    if (request !== landing) return;
     const el = scroller?.querySelector(rowSelector(id));
     // A block lands at the top, because the first thing a dig shows is the exact command.
     el?.scrollIntoView?.({ block: item?.block ? "start" : "center" });

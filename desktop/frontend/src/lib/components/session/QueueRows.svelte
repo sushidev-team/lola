@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // What lola holds for the agent, directly above the composer. Unboxed, so it never reads as a
   // second composer. Delivered means it shows up in the story, so a row leaving here says as much
   // as anything could: lola cannot know a message was read.
@@ -45,7 +46,7 @@
         <span class="text-faint">{i === 0 ? (held ? "Held" : "Queued") : ""}</span>
         <span class="selectable truncate text-ink-2" title={it.human?.text}>{youAttachments(it.human?.text ?? "").text}</span>
         <Button size="xs" class="h-5!" disabled={!free || sending} title={free ? "Back to the field" : "The field has text in it"} onclick={() => edit(it.id, it.human?.text ?? "")}>Edit</Button>
-        <Button size="xs" icon class="h-5! w-5!" disabled={sending} aria-label="Recall this message" title="Recall this message" onclick={() => ssh.recall(sessionId, it.id)}>×</Button>
+        <Button size="xs" icon class="h-5! w-5!" disabled={sending} aria-label="Recall this message" title="Recall this message" onclick={() => ssh.recall(sessionId, it.id)}><Icon name="x" size={14} /></Button>
       </div>
     {/each}
     <div class="flex min-w-0 items-center gap-2 pl-16">

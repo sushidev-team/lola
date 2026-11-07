@@ -1,64 +1,149 @@
-<script lang="ts" module>
-  // The app's ONE <select>, for the same reason <Checkbox> exists: the native
-  // menulist is drawn by AppKit, so its chevron (a stepper on older macOS, a
-  // Liquid Glass caret on 26), its inner padding and its focus ring change with
-  // the machine rather than with this repo. `appearance-none` drops the widget
-  // and the field becomes an ordinary bordered box identical to the text inputs
-  // beside it; the caret below is ours.
-  //
-  // What stays native ON PURPOSE: the popup that opens on click. It is an AppKit
-  // menu rendered outside the web view — unreachable from CSS, and re-creating
-  // it in the DOM would mean re-creating keyboard navigation, type-ahead and
-  // screen-reader semantics. `color-scheme` (app.css, written per flavor by
-  // theme-runtime) is the one lever over it, and it is enough: the popup follows
-  // light/dark correctly.
-  //
-  // Every class is a LITERAL, same rule as <Button>: Tailwind scans source text.
-
-  // Mirrors the forms' `inputCls` — minus `px-2`, because the caret owns the
-  // right inset. Keep the two in step; a select that does not match the text
-  // field one row above it is the thing this component is for.
-  const FIELD =
-    "peer w-full appearance-none rounded border border-edge bg-canvas py-1.5 pr-7 pl-2 text-ink outline-none " +
-    "enabled:cursor-pointer focus:border-accent disabled:cursor-not-allowed";
-
-  const CARET = "pointer-events-none absolute top-1/2 right-2 size-3 -translate-y-1/2 text-faint";
-
-  // Grid, not a bare inline wrapper: the fade for a disabled control belongs on
-  // the whole thing (see <Checkbox>), and the field must still fill the row —
-  // WKWebView does not stretch a flex child inside a flex column (see app.css).
-  const WRAP = "relative block w-full has-[:disabled]:opacity-40";
-</script>
-
 <script lang="ts">
-  import type { Snippet } from "svelte";
-  import type { HTMLSelectAttributes } from "svelte/elements";
+  import { tick } from 'svelte';
+  import type { Snippet } from 'svelte';
+  import type { HTMLSelectAttributes } from 'svelte/elements';
+  import Icon from './Icon.svelte';
 
-  let {
-    /** The <option> list. Passed as children so call sites keep writing plain
-     *  markup — this component owns chrome, never the data. */
-    children,
-    /** Extra classes for the WRAPPER, so a row-level fade dims the caret too. */
-    class: klass = "",
-    value = $bindable(),
-    ...rest
-  }: { children: Snippet; class?: string; value?: any } & HTMLSelectAttributes = $props();
+  // Keep the native field for labels, form submission, validation, bindings and
+  // existing change handlers. Only its OS popup is replaced by our listbox.
+  let { children, class: klass = '', value = $bindable(), ...rest }:
+    { children: Snippet; class?: string; value?: any } & HTMLSelectAttributes = $props();
+  const uid = $props.id();
+  let field = $state<HTMLSelectElement>();
+  let menu = $state<HTMLDivElement>();
+  let open = $state(false);
+  let options = $state<{ index: number; label: string; disabled: boolean; hidden: boolean; group: string }[]>([]);
+  let active = $state(-1);
+  let selected = $state(-1);
+  let position = $state({ left: 0, top: 0, width: 0, height: 280 });
+  let search = '';
+  let searchedAt = 0;
+
+  function sync() {
+    if (!field) return;
+    options = Array.from(field.options, (option, index) => {
+      const group = option.parentElement instanceof HTMLOptGroupElement ? option.parentElement : null;
+      return { index, label: option.label, disabled: option.disabled || !!group?.disabled, hidden: option.hidden, group: group?.label ?? '' };
+    });
+    selected = field.selectedIndex;
+  }
+  $effect(() => {
+    const node = field;
+    if (!node) return;
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(node, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['value', 'label', 'disabled', 'hidden', 'selected'] });
+    return () => observer.disconnect();
+  });
+  $effect(() => { value; if (field) void tick().then(sync); });
+  $effect(() => {
+    // Expose one option list at a time, retaining native closed-field semantics.
+    for (const option of Array.from(field?.options ?? [])) {
+      if (open) option.setAttribute('aria-hidden', 'true');
+      else option.removeAttribute('aria-hidden');
+    }
+  });
+  $effect(() => { if (rest.disabled) open = false; });
+
+  function place() {
+    if (!field) return;
+    const rect = field.getBoundingClientRect();
+    const width = Math.min(Math.max(rect.width, 160), window.innerWidth - 16);
+    const below = window.innerHeight - rect.bottom - 8;
+    const above = rect.top - 8;
+    const desired = Math.min(288, options.filter(o => !o.hidden).length * 32 + 10);
+    const up = below < desired && above > below;
+    const height = Math.max(40, Math.min(desired, up ? above : below));
+    position = { left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)), top: up ? rect.top - height - 4 : rect.bottom + 4, width, height };
+  }
+  async function reveal() {
+    await tick();
+    menu?.querySelector<HTMLElement>(`[data-option-index="${active}"]`)?.scrollIntoView?.({ block: 'nearest' });
+  }
+  function show() {
+    if (!field || field.matches(':disabled')) return;
+    sync(); search = '';
+    active = options.find(o => o.index === field?.selectedIndex && !o.disabled && !o.hidden)?.index ?? options.find(o => !o.disabled && !o.hidden)?.index ?? -1;
+    place(); open = true; void reveal();
+  }
+  function choose(index: number) {
+    const option = field?.options[index];
+    if (!field || !option || options[index]?.disabled || option.hidden) return;
+    field.selectedIndex = index;
+    value = '__value' in option ? option.__value : option.value;
+    selected = index; open = false;
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    field.focus();
+  }
+  function move(direction: number, edge?: 'first' | 'last') {
+    const enabled = options.filter(o => !o.disabled && !o.hidden);
+    if (!enabled.length) return;
+    const at = enabled.findIndex(o => o.index === active);
+    active = enabled[edge === 'first' ? 0 : edge === 'last' ? enabled.length - 1 : (at + direction + enabled.length) % enabled.length].index;
+    void reveal();
+  }
+  function key(event: KeyboardEvent & { currentTarget: HTMLSelectElement }) {
+    rest.onkeydown?.(event);
+    if (event.defaultPrevented) return;
+    if (event.key === 'Tab') { if (open) choose(active); return; }
+    if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); open = false; return; }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(event.key)) {
+      event.preventDefault(); event.stopPropagation();
+      if (!open) { show(); if (event.key === 'Home' || event.key === 'End') move(0, event.key === 'Home' ? 'first' : 'last'); return; }
+      if (event.key === 'Enter' || event.key === ' ') choose(active);
+      else move(event.key === 'ArrowUp' ? -1 : 1, event.key === 'Home' ? 'first' : event.key === 'End' ? 'last' : undefined);
+      return;
+    }
+    if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      event.preventDefault(); event.stopPropagation();
+      sync();
+      const now = Date.now(); search = now - searchedAt > 700 ? event.key : search + event.key; searchedAt = now;
+      const term = search.toLocaleLowerCase();
+      const repeated = [...term].every(c => c === term[0]);
+      const start = open ? active : selected;
+      const ordered = [...options.slice(start + 1), ...options.slice(0, start + 1)];
+      const match = ordered.find(o => !o.disabled && !o.hidden && o.label.toLocaleLowerCase().startsWith(repeated ? term[0] : term));
+      if (match) { if (open) { active = match.index; void reveal(); } else choose(match.index); }
+    }
+  }
+  function portal(node: HTMLDivElement) {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
+  $effect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => { if (!field?.contains(event.target as Node) && !menu?.contains(event.target as Node)) open = false; };
+    const scroll = (event: Event) => { if (!menu?.contains(event.target as Node)) open = false; };
+    document.addEventListener('pointerdown', outside, true);
+    window.addEventListener('scroll', scroll, true);
+    window.addEventListener('resize', place);
+    return () => { document.removeEventListener('pointerdown', outside, true); window.removeEventListener('scroll', scroll, true); window.removeEventListener('resize', place); };
+  });
 </script>
 
-<span class="{WRAP} {klass}">
-  <select {...rest} bind:value class={FIELD}>
+<span class="lola-select {klass}">
+  <select {...rest} bind:this={field} bind:value class="lola-field appearance-none w-full pr-8" aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? `${uid}-list` : undefined} aria-activedescendant={open && active >= 0 ? `${uid}-${active}` : undefined}
+    onmousedown={(event) => { if (event.button === 0) { event.preventDefault(); field?.focus(); } rest.onmousedown?.(event); }}
+    onclick={(event) => { event.preventDefault(); if (open) open = false; else show(); rest.onclick?.(event); }}
+    onkeydown={key} onblur={(event) => { open = false; rest.onblur?.(event); }}>
     {@render children()}
   </select>
-  <svg
-    class={CARET}
-    viewBox="0 0 12 12"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="1.6"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M2.5 4.5 6 8 9.5 4.5" />
-  </svg>
+  <Icon name="chevron-down" class="lola-select-caret pointer-events-none" size={14} />
 </span>
+
+{#if open}
+  <div use:portal bind:this={menu} id={`${uid}-list`} role="listbox" aria-label={rest['aria-label'] || field?.labels?.[0]?.textContent?.trim() || 'Options'} class="lola-select-menu" style={`left:${position.left}px;top:${position.top}px;width:${position.width}px;max-height:${position.height}px`}>
+    {#each options as option, i (option.index)}
+      {#if !option.hidden}
+        {#if option.group && (i === 0 || options[i - 1].group !== option.group)}<div class="lola-select-group">{option.group}</div>{/if}
+        <button type="button" tabindex="-1" role="option" id={`${uid}-${option.index}`} aria-selected={selected === option.index} aria-disabled={option.disabled} data-option-index={option.index} class="lola-select-option" class:highlighted={active === option.index}
+          onpointermove={() => { if (!option.disabled) active = option.index; }}
+          onmousedown={(event) => event.preventDefault()} onclick={() => choose(option.index)}>
+          <span class="lola-select-check">{#if selected === option.index}<Icon name="check" size={14} />{/if}</span>
+          <span>{option.label}</span>
+        </button>
+      {/if}
+    {/each}
+  </div>
+{/if}

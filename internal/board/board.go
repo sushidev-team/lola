@@ -196,7 +196,16 @@ const Usage = `lola report <verb> [args]
   note <text...>                one-line status note ("note clear" removes it)
   check <name> <pass|fail|running> [summary...]   a check you ran locally
   check clear [name]
-  clear                         reset the whole board`
+  clear                         reset the agent report (keeps shared tasks)
+
+Shared tasks and requirements (also editable by the human):
+  task help                    organization and completion rules
+  task list
+  task add <id> <task|requirement> [--task <task-id>|--global] <text>
+  task attach <requirement-id> <task-id|--global|none>
+  task state <id> <todo|doing|done>
+  task edit <id> <text>          edit your own item
+  task remove <id>              remove your own item`
 
 // Apply applies one report (argv as typed after `lola report`) to a copy of b
 // and returns the new board. It never mutates b. now stamps UpdatedAt (and

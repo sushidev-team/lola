@@ -22,3 +22,15 @@ it("opens named sessions directly", async () => {
  await fireEvent.keyDown(screen.getByRole("combobox"),{key:"Enter"});
  expect(nav.selectedId).toBe("a"); expect(nav.focusedTerm).toBe("a"); expect(nav.overlay).toBeNull();
 });
+
+it("keeps the provider-specific CodeRabbit action in command search", async () => {
+ store.sessions=[{id:'a', title:'Investigate checkout', project:'hlmw9', prNumber:7} as SessionInfo];
+ nav.focusedTerm='a';
+ const poll=vi.spyOn(store,'coderabbit').mockResolvedValue(undefined);
+ render(CommandPalette);
+ await fireEvent.input(screen.getByRole('combobox'),{target:{value:'CodeRabbit'}});
+ expect(screen.getByRole('option', { name: /Poll CodeRabbit reviews/ })).toBeInTheDocument();
+ await fireEvent.keyDown(screen.getByRole('combobox'),{key:'Enter'});
+ expect(poll).toHaveBeenCalledWith('a');
+ expect(nav.overlay).toBeNull();
+});

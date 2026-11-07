@@ -155,8 +155,8 @@ describe("ProjectDetail facts", () => {
     expect(screen.getByText("sushidev-team/nori")).toBeTruthy();
     expect(screen.getByText("codex")).toBeTruthy();
     expect(screen.getByText("develop")).toBeTruthy();
-    expect(screen.getByText("● Polling")).toBeTruthy();
-    expect(screen.getByText("✓ Agent ready")).toBeTruthy();
+    expect(screen.getByText("Polling")).toBeTruthy();
+    expect(screen.getByText("Agent ready")).toBeTruthy();
     expect(screen.getByText("2 live")).toBeTruthy();
     expect(screen.getByText("1 need you")).toBeTruthy();
     expect(screen.getByText("3 ci-red")).toBeTruthy();
@@ -181,7 +181,7 @@ describe("ProjectDetail facts", () => {
     store.projects = [p({ agentOk: false, agentErr: "claude not found on PATH" })];
     render(ProjectDetail);
 
-    expect(screen.getByText("✗ Agent not ready")).toBeTruthy();
+    expect(screen.getByText("Agent not ready")).toBeTruthy();
     expect(screen.getByText(/claude not found on PATH/)).toBeTruthy();
     // The desktop prints the same sentence and leaves its rows enabled; this
     // screen means it, because a sentence arguing against its own buttons is

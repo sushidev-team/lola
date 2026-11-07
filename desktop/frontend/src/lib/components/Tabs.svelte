@@ -9,7 +9,7 @@
     vertical = false,
     quiet = false,
   }: {
-    tabs: { id: string; label: string; group?: string }[];
+    tabs: { id: string; label: string; count?: number; group?: string }[];
     vertical?: boolean;
     /** Chrome that must stay under the content: ink, not accent, and no margin of its own. */
     quiet?: boolean;
@@ -52,7 +52,7 @@
         ? (vertical ? 'bg-sel font-medium text-accent-ink' : quiet ? 'border-ink text-ink' : 'border-accent font-medium text-accent-ink')
         : 'border-transparent text-faint hover:text-ink'}"
       onclick={() => onSelect(t.id)}
-      onkeydown={(e) => onKey(e, i)}>{t.label}</button
+      onkeydown={(e) => onKey(e, i)}>{t.label}{#if t.count !== undefined}<span class="num ml-1.5 font-normal text-faint">{t.count}</span>{/if}</button
     >
   {/each}
 </div>

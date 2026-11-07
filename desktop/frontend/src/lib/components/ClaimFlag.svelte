@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import type { SessionInfo } from "$lib/store.svelte";
   import { hasMismatch } from "$lib/board";
 
@@ -16,6 +17,6 @@
   <span
     class="inline-flex items-center gap-1 text-sm whitespace-nowrap text-warn"
     title={`lola could not confirm the agent's claim:\n${b.mismatches!.join("\n")}`}
-    ><span aria-hidden="true">⚠</span> Unverified claim</span
+    ><span aria-hidden="true"><Icon name="triangle-alert" size={14} /></span> Unverified claim</span
   >
 {/if}

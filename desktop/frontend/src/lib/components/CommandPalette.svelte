@@ -19,6 +19,7 @@
       { id: "temporary", label: "New temporary shell", detail: "Action · default directory", run: () => { void openShell(); } },
       { id: "ssh", label: "New SSH session…", detail: "Action · an agent and a terminal on a host", run: () => ssh.newSession() },
       ...(current && current.location !== "ssh" ? [{ id: "ssh-connect", label: "Connect this session to a host…", detail: `Action · ${current.title || current.id.slice(0, 8)}`, run: () => { nav.openSession(current.id); ssh.connectHost(current.id); } }] : []),
+      ...(current && current.location !== "ssh" && current.prNumber > 0 ? [{ id: "coderabbit-poll", label: "Poll CodeRabbit reviews", detail: `Action · ${current.issue || current.title || current.id}`, run: () => { void store.coderabbit(current.id); } }] : []),
       ...ssh.hosts.map((h) => ({ id: `ssh:${h.name}`, label: `SSH to ${h.label || h.name}`, detail: `Action · ${h.tier}`, run: () => ssh.newSession(h.name) })),
       { id: "activity", label: "View all activity", detail: "Action", run: () => nav.openOverlay("activity") },
       { id: "settings", label: "Settings", detail: "Action", run: () => nav.openOverlay("settings") },

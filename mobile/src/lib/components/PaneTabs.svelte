@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { onDestroy, untrack } from "svelte";
   import PaneMenuSheet from "./PaneMenuSheet.svelte";
   import TouchButton from "./TouchButton.svelte";
@@ -771,7 +772,7 @@
                  bg-gradient-to-r from-panel via-panel/80 to-transparent text-sm text-faint"
           aria-hidden="true"
         >
-          ‹
+          <Icon name="chevron-left" size={14} />
         </div>
       {/if}
       {#if edges.right}
@@ -780,7 +781,7 @@
                  bg-gradient-to-l from-panel via-panel/80 to-transparent text-sm text-faint"
           aria-hidden="true"
         >
-          ›
+          <Icon name="chevron-right" size={14} />
         </div>
       {/if}
     {/if}

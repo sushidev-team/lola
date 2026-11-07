@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // A session's token usage: the count, a 4-bar size glyph ranking it against
   // the user's own finished sessions (lib/usage.ts), and a flame while it burns
   // tokens faster than past sessions ever did. The glyph and flame are SVG in
@@ -29,11 +30,6 @@
     {/each}
   </svg>
   {#if usage.burning}
-    <svg class="shrink-0 text-orange" width="10" height="12" viewBox="0 0 10 12" aria-label="burning fast" role="img">
-      <path
-        fill="currentColor"
-        d="M5 0c.4 2-1.6 3.2-2.8 4.9C1.4 6 1 7 1 8a4 4 0 0 0 8 0c0-1.6-.8-2.7-1.6-3.6-.1 1-.6 1.7-1.3 2C6.6 4.6 6.4 2 5 0Z"
-      />
-    </svg>
+    <Icon name="flame" class="shrink-0 text-orange" aria-label="burning fast" role="img" size={14} aria-hidden={false} />
   {/if}
 </HoverCard>

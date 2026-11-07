@@ -305,10 +305,8 @@ textarea {
    Unlayered, so a `text-*`/`bg-*` utility on the same element still wins for the
    properties it sets — these touch only the widget, never the box.
 
-   What is deliberately LEFT native: the <select> popup menu (an AppKit menu
-   outside the web view — see Select.svelte) and the textarea resize grabber.
-   Re-drawing either means re-implementing keyboard and a11y behaviour we would
-   get wrong, and neither carries the form's visual weight.
+   Select.svelte retains native form semantics but draws its popup in the app.
+   Textarea resize grabbers remain native.
 ---------------------------------------------------------------------------- */
 input[type="number"] {
   appearance: textfield;
@@ -1349,12 +1347,12 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .sidebar-session-age { padding-right: 20px; font-size: 11px; line-height: 17px; }
 .sidebar-session-age:empty { display: none; }
 .sidebar-session-title:has(+ .sidebar-session-age:not(:empty)) { padding-right: 0; }
-.sidebar-session-item.has-pr .sidebar-session-activity { padding-right: 76px; }
+.sidebar-session-item.has-pr .sidebar-session-activity { padding-right: 60px; }
 .sidebar-session-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .sidebar-session-menu { position: absolute; top: 5px; right: 5px; opacity: 0; }
 .sidebar-session-item:hover .sidebar-session-menu, .sidebar-session-item:focus-within .sidebar-session-menu { opacity: 1; }
-.sidebar-session-pr { position: absolute; right: 8px; bottom: 5px; max-width: 76px; }
-.sidebar-pr-link, .sidebar-pr-label { display: inline-flex; max-width: 100%; height: 22px !important; align-items: center; gap: 4px; padding: 0 5px !important; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 4px; background: color-mix(in srgb, currentColor 7%, transparent); color: inherit !important; font-size: 11px !important; line-height: 18px; }
+.sidebar-session-pr { position: absolute; right: 8px; bottom: 5px; max-width: 60px; }
+.sidebar-pr-link, .sidebar-pr-label { display: inline-flex; max-width: 100%; height: 18px !important; align-items: center; gap: 3px; padding: 0 3px !important; border: 0; border-radius: 3px; background: transparent; color: inherit !important; font-size: 11px !important; line-height: 18px; }
 .sidebar-pr-link:hover { background: color-mix(in srgb, currentColor 15%, transparent); }
 .sidebar-pr-link .num, .sidebar-pr-label { overflow: hidden; text-overflow: ellipsis; }
 .sidebar-pr-link:focus-visible, .sidebar-session-menu:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
@@ -1362,3 +1360,68 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
   .sidebar-session-tools { padding-inline: 10px; }
   .sidebar-session-row { column-gap: 5px; }
 }
+
+.cv-activity-track, .cv-activity-band { touch-action: none; user-select: none; cursor: ew-resize; }
+.cv-activity-scrubbing, .cv-activity-scrubbing .cv-activity-band { cursor: ew-resize; }
+
+.sidebar-status-icon { --state-badge-size: 14px; }
+.sidebar-state-mark { display: grid; width: 16px; height: 21px; place-items: center; }
+.sidebar-session-item.compact .sidebar-session-row { min-height: 54px; grid-template-rows: 21px 18px; }
+.sidebar-session-item.dormant:not(.selected) .sidebar-session-title { font-weight: 500; }
+.sidebar-session-item.dormant:not(.selected) .sidebar-session-title > .text-ink { color: var(--color-ink-2); }
+
+.sidebar-session-item.compact.has-pr .sidebar-session-meta { padding-right: 60px; }
+
+.sidebar-pr-link .lola-icon { width: 12px; height: 12px; }
+
+.sidebar-dev-indicator { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--color-good); }
+.sidebar-session-item.dev-active .sidebar-session-menu { right: 15px; }
+.sidebar-session-item.dev-active .sidebar-session-title { padding-right: 30px; }
+
+.sidebar-group-toggle { display: flex; width: 100%; min-width: 0; justify-content: flex-start; gap: 5px; padding: 0 !important; color: var(--color-ink-2) !important; font-size: 12px !important; font-weight: 600; }
+.sidebar-group-toggle:hover { color: var(--color-ink) !important; }
+.sidebar-group-toggle .sidebar-project-count { margin-left: 1px; }
+
+/* The whole Changes summary is one keyboard-accessible target. */
+.cv-clickable-changes { position: relative; transition: border-color 120ms, background 120ms; }
+.cv-session-side > .cv-clickable-changes:hover { border-color: var(--color-accent); }
+.cv-changes-card-target { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: inherit; cursor: pointer; z-index: 1; }
+.cv-changes-card-target:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* Shared form chrome: quiet surfaces, normal-weight text, one focus treatment.
+   Borderless composers/search boxes keep their containing surface. */
+.lola-field, :is(input, textarea).border, input.sidebar-search {
+  border: 1px solid color-mix(in srgb, var(--color-edge) 85%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-canvas) 78%, var(--color-panel));
+  color: var(--color-ink);
+  font-weight: 400;
+  letter-spacing: normal;
+  caret-color: var(--color-accent);
+  transition: border-color 120ms, box-shadow 120ms, background 120ms;
+}
+.lola-field { min-height: 32px; padding: 6px 30px 6px 10px; font-size: 13px; line-height: 18px; cursor: pointer; }
+:is(input, textarea).border { padding: 7px 10px; }
+:is(input, textarea)::placeholder { color: var(--color-placeholder); font-weight: 400; letter-spacing: normal; opacity: .85; }
+.lola-field:enabled:hover, :is(input, textarea).border:enabled:hover, input.sidebar-search:hover { border-color: color-mix(in srgb, var(--color-ink-2) 45%, var(--color-edge)); }
+.lola-field:focus, :is(input, textarea).border:focus, input.sidebar-search:focus {
+  outline: none !important;
+  border-color: color-mix(in srgb, var(--color-accent) 65%, var(--color-edge));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.lola-field:disabled, :is(input, textarea).border:disabled { opacity: .45; cursor: not-allowed; }
+.lola-select { position: relative; display: block; min-width: 0; width: 100%; }
+.lola-select-caret { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); color: var(--color-faint); }
+.lola-select-menu { position: fixed; z-index: 10000; overflow-y: auto; overscroll-behavior: contain; padding: 4px; border: 1px solid var(--color-edge); border-radius: 8px; background: var(--color-panel); color: var(--color-ink); box-shadow: 0 8px 28px #0005, 0 2px 6px #0003; font: 400 13px/18px var(--font-sans); letter-spacing: normal; }
+.lola-select-option { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 6px 8px; width: 100%; border-radius: 4px; text-align: left; overflow-wrap: anywhere; }
+.lola-select-option.highlighted { background: var(--color-sel); }
+.lola-select-option[aria-selected="true"] { color: var(--color-accent); }
+.lola-select-option[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.lola-select-check { display: grid; place-items: center; width: 14px; flex-shrink: 0; }
+.lola-select-group { padding: 8px 8px 4px; color: var(--color-faint); font-size: 12px; }
+
+/* A live inline terminal gets the remaining grid space, not an intrinsic height
+   that can push its last rows underneath the composer when Tasks expands. */
+.ssh-col:has([data-inline-terminal]:not([hidden])) { grid-template-rows: auto minmax(40px, .65fr) minmax(0, 1fr) auto; }
+.ssh-col:has([data-inline-terminal]:not([hidden])) .cv-bands { max-height: 38cqh; overflow-y: auto; }
+.cv-tray-row, .cv-tray-row > .cv-dock, .cv-tray-row [data-tray] { min-height: 0; }

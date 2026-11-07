@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -14,8 +15,8 @@ import (
 
 // Agent self-reports (`lola report …` → cmd=agentReport).
 //
-// The board is DISPLAY ONLY: this handler writes Session.Board and nothing
-// else, and sessionsData (boardInfo below) is its one reader. A report touches
+// Reports are DISPLAY ONLY: this handler writes Session.Board, or Session.Tasks
+// for the shared-task verbs. Neither can drive lifecycle. A report touches
 // no axis, no freshness stamp, no AtPrompt gate and no guard — it is the agent's
 // claim about itself, and its context (PR diff, CI logs, issue text) is
 // attacker-influenceable. It is not even activity evidence: hooks and the pane
@@ -71,6 +72,11 @@ func (d *Daemon) handleAgentReport(req protocol.Request) protocol.Response {
 		if err := json.Unmarshal(req.Args, &a); err != nil {
 			return protocol.Response{OK: false, Error: "agentReport: bad args: " + err.Error()}
 		}
+	}
+	if len(a.Argv) > 0 && a.Argv[0] == "task" {
+		a.Argv = a.Argv[1:]
+		req.Args, _ = json.Marshal(a)
+		return d.handleSessionTask(context.Background(), req, "agent")
 	}
 	if req.Session == "" {
 		return protocol.Response{OK: false, Error: "agentReport: no session ($LOLA_SESSION unset)"}

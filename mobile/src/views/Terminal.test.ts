@@ -596,7 +596,7 @@ describe("Terminal context card", () => {
     store.sessions = [session({ checks: "pass", devActive: true })];
     render(Terminal, { props: { onback: () => {} } });
 
-    expect(await screen.findByText("✓ CI pass")).toBeInTheDocument();
+    expect(await screen.findByText("CI pass")).toBeInTheDocument();
     expect(screen.getByText("dev running")).toBeInTheDocument();
   });
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // A session that left the list, still readable for as long as the store keeps it. A merge is the
   // best moment of a session's life and the cleanup follows it within a minute, so without this
   // the story would vanish exactly when someone comes to read how it went.
@@ -47,7 +48,7 @@
         {/if}
         <p>This session has ended. Its worktree is gone.</p>
         {#if ended?.prUrl}
-          <Button variant="secondary" size="xs" onclick={() => store.openURL(ended.prUrl ?? "")}>Open PR <span aria-hidden="true">↗</span></Button>
+          <Button variant="secondary" size="xs" onclick={() => store.openURL(ended.prUrl ?? "")}>Open PR <span aria-hidden="true"><Icon name="external-link" size={14} /></span></Button>
         {/if}
       </div>
     </div>

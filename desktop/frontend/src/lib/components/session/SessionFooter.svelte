@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   // The strip under every view that is not the conversation. Its left end is where the composer's
   // state sits in the conversation, and that shared position is what makes the agent axis
   // findable: bottom left, in every view. It always exists in those views and has a fixed height,
@@ -52,13 +53,13 @@
 <footer class="grid h-7 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-t border-edge/60 bg-canvas px-3 text-sm" data-session-footer>
   <div class="flex min-w-0 items-center gap-2">
     {#if !store.alive}
-      <span class="text-faint" aria-hidden="true">○</span>
+      <span class="text-faint" aria-hidden="true"><Icon name="circle" size={14} /></span>
       <span class="truncate text-ink-2" data-daemon-down>Daemon down. This terminal still works.</span>
     {:else if glyph}
-      <span class="grid w-4 shrink-0 {working ? 'ssh-pulse motion-reduce:animate-none' : ''}"><StateGlyph glyph={glyph.glyph} cls={glyph.cls} mono={glyph.mono} /></span>
+      <span class="grid w-4 shrink-0 {working ? 'ssh-pulse motion-reduce:animate-none' : ''}"><StateGlyph label={glyph.label} glyph={glyph.glyph} cls={glyph.cls} mono={glyph.mono} /></span>
       <span class="whitespace-nowrap {glyph.glyph === '◉' ? 'text-orange' : 'text-ink-2'}">{stateWord}{#if clock}{" "}<span class="num">{clock}</span>{/if}</span>
       {#if canStop}
-        <Button variant="danger" size="xs" class="h-5!" title="Stop this turn. The session stays open." onclick={stop}><span aria-hidden="true">■</span> Stop <span class="text-faint">⌘.</span></Button>
+        <Button variant="danger" size="xs" class="h-5!" title="Stop this turn. The session stays open." onclick={stop}><span aria-hidden="true"><Icon name="square" size={14} /></span> Stop <span class="text-faint">⌘.</span></Button>
       {/if}
       {#if gone && canRevive}
         <Button size="xs" class="h-5!" onclick={() => store.revive(sessionId)}>{session?.location ? "Reopen" : "Revive"}</Button>
