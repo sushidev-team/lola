@@ -109,19 +109,21 @@
     draft = value;
     try { localStorage.setItem(draftKey, JSON.stringify({text:value,subject})); } catch { /* draft remains in memory */ }
   }
-  function queueComment(section: string, text: string, screenIndex?: number, previousText?: string): boolean {
-    if (!current || !text.trim()) return false;
+  function commentContext(section: string, screenIndex?: number): string {
+    if (!current) return "";
     const screen = screenIndex === undefined ? undefined : current.screens?.[screenIndex];
     const images = screen ? `Page: ${screen.url || 'unspecified'}; viewport: ${screen.viewport || 'unspecified'}\nScreenshots: before ${screen.before || 'unavailable'}, after ${screen.after}\n` : '';
-    const context = `Review package ${current.id}\nRepository: ${current.repo || 'unspecified'}${current.pr ? ` PR #${current.pr}` : ''}\nBase: ${current.base}\nHead: ${current.head}\nSection: ${section}\n${images}`;
+    return `Review package ${current.id}\nRepository: ${current.repo || 'unspecified'}${current.pr ? ` PR #${current.pr}` : ''}\nBase: ${current.base}\nHead: ${current.head}\nSection: ${section}\n${images}`;
+  }
+  function queueComment(section: string, text: string, screenIndex?: number, previousText?: string): boolean {
+    if (!current || !text.trim()) return false;
+    const context = commentContext(section, screenIndex);
     const previous = previousText ? context + previousText.trim() : '';
     // Replace only this annotation's exact pending entry. Once sent (or manually
     // changed in the batch), retain that history and add the latest text instead.
     const combined = previous && notes.includes(previous)
       ? notes.replace(previous, () => context + text.trim())
       : [notes, context + text.trim()].filter(Boolean).join('\n\n');
-    // The existing feedback renderer caps a general note at 4000 runes.
-    if ([...combined].length > 4000) { notice = 'This batch is full. Send it before adding another comment.'; return false; }
     feedback.setNote(sessionId, combined);
     notice = 'Comment added to review feedback.';
     return true;
@@ -132,6 +134,12 @@
   }
   function addScreenComment(index: number, text: string, previous?: string): boolean {
     return queueComment(`Screen ${index+1}: ${current?.screens?.[index]?.title}`, text, index, previous);
+  }
+  function deleteScreenComment(index: number, text: string) {
+    const context = commentContext(`Screen ${index+1}: ${current?.screens?.[index]?.title}`, index);
+    if (!context) return;
+    // Only remove the exact pending entry, never other comments or sent history.
+    feedback.setNote(sessionId, notes.replace(context + text.trim(), '').trim());
   }
   async function send() {
     const sent = await feedback.send(sessionId);
@@ -162,7 +170,7 @@
         <div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><p class="px-4 py-2 text-xs text-faint">Live checkout changes. These may differ from the retained review revision.</p><DiffView {sessionId} /></div>
       {:else if tab === 'visuals' && current?.screens?.length}
         <div class="review-visuals">
-          {#key current.id}<ReviewCanvas pkg={current} {freshness} bind:index={canvasScreen} canComment={!!session} onComment={addScreenComment} onReviewFeedback={() => panelOpen = true} />{/key}
+          {#key current.id}<ReviewCanvas pkg={current} {freshness} bind:index={canvasScreen} canComment={!!session} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
         </div>
       {:else}
         <div class="review-material">
@@ -206,7 +214,7 @@
         {#if !session}<p class="text-sm text-faint">This session has ended. Its review material is retained; sending feedback and live checkout actions are unavailable.</p>{/if}
         {#if count}
           <p class="mt-4 text-sm text-ink-2">{feedback.draftsFor(sessionId).length} code comments{notes ? ' · Material feedback included' : ''}</p>
-          {#if notes}<details class="mt-2"><summary class="cursor-pointer text-sm text-ink-2">Inspect feedback draft</summary><textarea aria-label="Feedback draft" class="review-input mt-2" rows="8" maxlength="4000" value={notes} oninput={e => feedback.setNote(sessionId,e.currentTarget.value)}></textarea></details>{/if}
+          {#if notes}<details class="mt-2"><summary class="cursor-pointer text-sm text-ink-2">Inspect feedback draft</summary><textarea aria-label="Feedback draft" class="review-input mt-2" rows="8" value={notes} oninput={e => feedback.setNote(sessionId,e.currentTarget.value)}></textarea></details>{/if}
           <Button size="sm" variant="primary" class="mt-3" loading={feedback.isSending(sessionId)} disabled={!session} onclick={send}>Send feedback to agent</Button>
         {:else}<p class="mt-3 text-sm text-faint">Pin a comment on a screenshot, mark an area, or comment on the write-up. Review your batch here before sending.</p>{/if}
         {#if notice}<p role="status" class="mt-3 text-sm text-ink-2">{notice}</p>{/if}

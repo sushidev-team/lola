@@ -6,7 +6,7 @@
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Select from '../Select.svelte';
-  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onReviewFeedback }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onReviewFeedback?: () => void } = $props();
+  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void } = $props();
   let infoOpen = $state(true);
   const screens = $derived(pkg.screens ?? []);
   const screen = $derived(screens[index] ?? screens[0]);
@@ -60,7 +60,8 @@
   let marks = $state<ReviewMark[]>([]);
   let active = $state(-1);
   let message = $state('');
-  let batchFull = $state(false);
+  let saveFailed = $state(false);
+  let confirmClose = $state(false);
   let start: {x:number;y:number} | undefined;
   let dragging = $state<ReviewMark>();
   const key = $derived(`lola.review.canvas.${pkg.session}.${pkg.id}.${index}`);
@@ -89,20 +90,37 @@
     return () => { observer.disconnect(); scroller.removeEventListener('scroll', position); };
   });
   function openComment(i: number) {
-    active = i; mode = marks[i].side.toLowerCase(); tool = 'view'; message = ''; batchFull = false;
+    active = i; mode = marks[i].side.toLowerCase(); tool = 'view'; message = ''; saveFailed = false; confirmClose = false;
     void tick().then(() => document.getElementById('canvas-comment')?.focus({preventScroll:true}));
   }
   function closeComment(restoreFocus = true) {
-    const i = active; active = -1;
+    const i = active; active = -1; confirmClose = false;
     if (restoreFocus) void tick().then(() => imageStage?.querySelector<HTMLButtonElement>(`[data-mark="${i}"]`)?.focus({preventScroll:true}));
+  }
+  function requestClose(restoreFocus = true): boolean {
+    if (selected && selected.text.trim() !== (selected.savedText ?? '')) {
+      confirmClose = true;
+      return false;
+    }
+    closeComment(restoreFocus);
+    return true;
+  }
+  function deleteComment() {
+    if (selected?.savedFeedback) onDeleteComment?.(index, selected.savedFeedback);
+    marks = marks.filter((_,i) => i !== active);
+    save(); closeComment(false);
+  }
+  function discardChanges() {
+    if (selected?.savedText) marks = marks.map((m,i) => i === active ? {...m,text:m.savedText!} : m);
+    else marks = marks.filter((_,i) => i !== active);
+    save(); closeComment(false);
   }
   $effect(() => {
     if (!editing || !editor) return;
     const popup = editor;
     function clickAway(event: MouseEvent) {
       if (popup.contains(event.target as Node)) return;
-      if (saveComment()) closeComment(false);
-      else { event.preventDefault(); event.stopImmediatePropagation(); }
+      if (!requestClose(false)) { event.preventDefault(); event.stopImmediatePropagation(); }
     }
     document.addEventListener('click', clickAway, true);
     return () => document.removeEventListener('click', clickAway, true);
@@ -154,7 +172,7 @@
     dragging = {x:Math.min(start.x,p.x),y:Math.min(start.y,p.y),w:Math.abs(start.x-p.x),h:Math.abs(start.y-p.y),side,text:''};
   }
   function up() { if (dragging) place(dragging); dragging = undefined; start = undefined; }
-  function update(text: string) { batchFull = false; marks = marks.map((m,i) => i === active ? {...m,text} : m); save(); }
+  function update(text: string) { saveFailed = false; marks = marks.map((m,i) => i === active ? {...m,text} : m); save(); }
   function saveComment(): boolean {
     if (!selected?.text.trim() || selected.text.trim() === selected.savedText) return true;
     const text = selected.text.trim();
@@ -162,10 +180,10 @@
     const content = `Annotation ${id} (latest comment)\n${markLocation(selected)}\n${text}`;
     if (onComment(index, content, selected.savedFeedback)) {
       marks = marks.map((m,i) => i === active ? {...m,id,savedText:text,savedFeedback:content} : m); save();
-      batchFull = false; message = 'Added to feedback.';
+      saveFailed = false; message = 'Added to feedback.';
       return true;
     }
-    batchFull = true;
+    saveFailed = true;
     return false;
   }
   function add() { if (saveComment()) closeComment(); }
@@ -241,23 +259,24 @@
   </div>
   {#if editing && selected}
     <div class="annotation-editor" bind:this={editor} role="dialog" aria-label={`Comment ${active+1} · ${selected.side}`} tabindex="-1" style:left={`${editorPosition.left}px`} style:top={`${editorPosition.top}px`}
-      onkeydown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeComment(); } }}>
+      onkeydown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); requestClose(); } }}>
       <div class="editor-heading">
         <label for="canvas-comment">Comment {active+1}<span class="editor-side">{selected.side}</span></label>
         <div class="editor-controls">
-          {#if !selected.savedText}<Button icon size="xs" variant="danger" aria-label="Discard comment" title="Discard comment" onclick={() => { marks = marks.filter((_,i) => i !== active); active = -1; save(); }}><Icon name="trash-2" size={14} /></Button>{/if}
-          <Button icon size="xs" aria-label="Close comment" title="Close · keep draft" onclick={() => closeComment()}><Icon name="x" size={14} /></Button>
+          <Button icon size="xs" variant="danger" aria-label="Delete comment" title="Delete comment" onclick={deleteComment}><Icon name="trash-2" size={14} /></Button>
+          <Button icon size="xs" aria-label="Close comment" title="Close comment" onclick={() => requestClose()}><Icon name="x" size={14} /></Button>
         </div>
       </div>
       <textarea id="canvas-comment" aria-label="Screenshot comment" rows="3" maxlength="2000" placeholder="What should change?" value={selected.text} oninput={e => update(e.currentTarget.value)}></textarea>
+      {#if confirmClose}<p class="save-question">Save changes?</p>{/if}
       <div class="editor-actions">
-        {#if batchFull}<span class="batch-full" role="status"><Icon name="circle-alert" size={13} />Feedback full</span>{/if}
-        {#if batchFull && onReviewFeedback}
-          <Button variant="primary" size="sm" onclick={() => { closeComment(false); onReviewFeedback?.(); }}><Icon name="message-square-text" size={14} />Review feedback<Icon name="arrow-right" size={13} /></Button>
-        {:else}
-          <Button variant="primary" size="sm" disabled={!selected.text.trim()} title="Save to feedback" onclick={add}><Icon name="check" size={14} />{selected.text.trim() === selected.savedText ? 'Done' : 'Save'}</Button>
+        {#if confirmClose}
+          <Button size="xs" onclick={() => confirmClose = false}>Keep editing</Button>
+          <Button size="xs" variant="danger" onclick={discardChanges}>Discard</Button>
         {/if}
+        <Button variant="primary" size="sm" disabled={!selected.text.trim()} title="Save to feedback" onclick={add}><Icon name="check" size={14} />{selected.text.trim() === selected.savedText ? 'Done' : 'Save'}</Button>
       </div>
+      {#if saveFailed}<p class="hint" role="status">Couldn’t save. Your draft is kept—try again.</p>{/if}
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
@@ -313,8 +332,8 @@
   .editor-heading label { display:flex; align-items:center; gap:8px; margin:0; }
   .editor-side { color:var(--color-faint); font-size:11px; }
   .editor-controls { display:flex; align-items:center; gap:2px; }
+  .save-question { margin:0 0 8px; font-size:12px; color:var(--color-ink); }
   .editor-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:8px; }
-  .batch-full { display:flex; align-items:center; gap:5px; margin-right:auto; color:var(--color-warn); font-size:11px; }
   @keyframes comment-open { from { opacity:.6; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
   @media(prefers-reduced-motion:reduce) { .annotation-editor { animation:none; } }
   .canvas-notice { position:absolute; bottom:12px; left:12px; max-width:calc(100% - 24px); padding:8px 12px; font-size:12px; color:var(--color-ink-2); border:1px solid var(--color-edge); border-radius:6px; background:var(--color-panel); pointer-events:none; }

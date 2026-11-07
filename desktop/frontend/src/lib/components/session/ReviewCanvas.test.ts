@@ -24,18 +24,15 @@ it('compares with a keyboard range, switches views, and handles screens with no 
   expect(screen.getByText('Before capture unavailable')).toBeInTheDocument();
 });
 
-it('keeps region drafts across screen changes, and queues coordinates with the comment',async()=>{
+it('keeps region drafts across reopening, and queues coordinates with the comment',async()=>{
   const onComment=vi.fn().mockReturnValue(false);
-  render(ReviewCanvas,{pkg,onComment});
+  const mounted=render(ReviewCanvas,{pkg,onComment});
   await screen.findByAltText('Settings — After');
   await fireEvent.click(screen.getByRole('button',{name:'Mark area'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Align this area'}});
-  await fireEvent.keyDown(screen.getByRole('dialog'),{key:'Escape'});
-  await fireEvent.click(screen.getByRole('button',{name:'Next'}));
-  await screen.findByAltText('Phone — After');
-  expect(screen.queryByRole('textbox')).toBeNull();
-  await fireEvent.click(screen.getByRole('button',{name:'Previous'}));
+  mounted.unmount();
+  render(ReviewCanvas,{pkg,onComment});
   await screen.findByAltText('Settings — After');
   await fireEvent.click(screen.getByRole('button',{name:'Next comment'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Align this area');
@@ -112,13 +109,18 @@ it('edits on the image with the info rail hidden, and closes without losing the 
   expect(dialog.closest('.info-rail')).toBeNull();
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Keep this draft at the pin'}});
   await fireEvent.keyDown(dialog,{key:'Escape'});
+  expect(screen.getByText('Save changes?')).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole('button',{name:'Keep editing'}));
+  expect(screen.queryByText('Save changes?')).toBeNull();
+  expect(screen.getByRole('textbox')).toHaveValue('Keep this draft at the pin');
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(screen.getByRole('button',{name:'Comment 1'})).toHaveFocus();
   await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
-  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Keep this draft at the pin');
+  expect(screen.getByRole('textbox')).toHaveValue('Keep this draft at the pin');
 });
 
-it('saves changed text on click-away, closes unchanged comments without resaving, and keeps failed saves open',async()=>{
+it('asks before saving on click-away, closes unchanged comments, and keeps failed saves open',async()=>{
   const onComment=vi.fn().mockReturnValue(false);
   render(ReviewCanvas,{pkg,onComment});
   await screen.findByAltText('Settings — After');
@@ -130,8 +132,12 @@ it('saves changed text on click-away, closes unchanged comments without resaving
   await fireEvent.click(screen.getByAltText('Settings — After'));
   expect(screen.getByRole('dialog')).toBeInTheDocument();
   expect(screen.getByRole('textbox')).toHaveValue('Save when I leave');
+  expect(onComment).not.toHaveBeenCalled();
+  expect(screen.getByText('Save changes?')).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
   onComment.mockReturnValue(true);
-  await fireEvent.click(screen.getByAltText('Settings — After'));
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(onComment).toHaveBeenCalledTimes(2);
   await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
@@ -139,4 +145,31 @@ it('saves changed text on click-away, closes unchanged comments without resaving
   await fireEvent.click(screen.getByAltText('Settings — After'));
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(onComment).toHaveBeenCalledTimes(2);
+});
+
+
+it('discards unsaved edits while retaining the saved annotation and pending feedback',async()=>{
+  const onComment=vi.fn().mockReturnValue(true);
+  render(ReviewCanvas,{pkg,onComment});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Original'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
+  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Unwanted edit'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Close comment'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Discard'}));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
+  expect(screen.getByRole('textbox')).toHaveValue('Original');
+  expect(onComment).toHaveBeenCalledTimes(1);
+  await fireEvent.click(screen.getByRole('button',{name:'Close comment'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'New draft'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Close comment'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Discard'}));
+  expect(screen.queryByRole('button',{name:'Comment 2'})).toBeNull();
+  expect(screen.getByRole('button',{name:'Comment 1'})).toBeInTheDocument();
 });

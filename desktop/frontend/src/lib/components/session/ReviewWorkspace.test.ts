@@ -214,24 +214,51 @@ it('keeps retained material readable after the session is removed without offeri
 });
 
 
-it('opens a full feedback batch from the editor without losing or sending the new draft',async()=>{
+it('saves and sends material beyond the old shared 4000-character limit',async()=>{
   feedback.setNote(id,'x'.repeat(3900));
+  render(ReviewWorkspace,{sessionId:id});await openScreens();
+  await screen.findByAltText('Settings — After');
+  for (const text of ['First screenshot comment','Second screenshot comment','Third screenshot comment']) {
+    await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+    await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+    await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:text}});
+    await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+    expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
+    expect(feedback.noteFor(id)).toContain(text);
+  }
+  const note=feedback.noteFor(id);
+  expect(note.length).toBeGreaterThan(4000);
+  expect(send).not.toHaveBeenCalled();
+  await fireEvent.click(screen.getByRole('button',{name:/Checks & feedback/}));
+  send.mockRejectedValueOnce(new Error('Queue unavailable'));
+  await fireEvent.click(screen.getByRole('button',{name:'Send feedback to agent'}));
+  await screen.findByText(/Feedback was not accepted/);
+  expect(feedback.noteFor(id)).toBe(note);
+  send.mockResolvedValue({delivered:false,queued:true} as never);
+  await fireEvent.click(screen.getByRole('button',{name:'Send feedback to agent'}));
+  await screen.findByText(/Feedback accepted/);
+  expect(send).toHaveBeenLastCalledWith(expect.objectContaining({note}));
+  expect(feedback.noteFor(id)).toBe('');
+});
+
+it('deletes saved and unsaved annotations without removing other pending feedback',async()=>{
+  feedback.setNote(id,'Keep other feedback');
   render(ReviewWorkspace,{sessionId:id});await openScreens();
   await screen.findByAltText('Settings — After');
   await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
-  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Keep this draft'}});
+  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Remove this annotation'}});
   await fireEvent.click(screen.getByRole('button',{name:'Save'}));
-  expect(screen.getByText('Feedback full')).toBeInTheDocument();
-  await fireEvent.click(screen.getByRole('button',{name:'Review feedback'}));
-  expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
-  expect(screen.getByRole('button',{name:'Send feedback to agent'})).toBeInTheDocument();
-  expect(feedback.noteFor(id)).toBe('x'.repeat(3900));
-  expect(send).not.toHaveBeenCalled();
   await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
-  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Keep this draft');
-  feedback.setNote(id,'');
-  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
-  expect(feedback.noteFor(id)).toContain('Keep this draft');
-  expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
+  await fireEvent.click(screen.getByRole('button',{name:'Delete comment'}));
+  expect(screen.queryByRole('dialog',{name:'Comment 1 · After'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Comment 1'})).toBeNull();
+  expect(feedback.noteFor(id)).toBe('Keep other feedback');
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Unfinished'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Delete comment'}));
+  expect(screen.queryByRole('button',{name:'Comment 1'})).toBeNull();
+  expect(feedback.noteFor(id)).toBe('Keep other feedback');
+  expect(send).not.toHaveBeenCalled();
 });

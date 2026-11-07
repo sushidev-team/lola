@@ -72,3 +72,23 @@ Validation: 23 focused canvas/workspace tests passed; Svelte check reported no
 errors or warnings. Headless WebKit checked 1440, 700, and 420px widths, editor
 bounds, ring-free fields, opening feedback, and reopening the retained draft.
 [Compact full-batch state](compact-comment.png) uses an isolated screenshot fixture.
+
+
+### Save confirmation and comment deletion
+
+Supersedes the full-batch editor state above. Closing or clicking away from a
+changed annotation now offers Save, Discard, and Keep editing. Unchanged comments
+close immediately. Every annotation has a delete icon, including saved comments;
+deleting removes its exact pending entry without affecting other comments or
+attempting to retract feedback already sent.
+
+Material comments no longer share the 4,000-character save limit. The daemon
+preserves the full review note and rejects rendered batches over the existing
+64 KiB bound instead of silently truncating notes. A rejected send retains the
+local draft. Rebuild/install and restart the daemon before sending longer notes:
+an older daemon still clips notes at 4,000 characters.
+
+Validation: 25 focused UI tests, Svelte check, daemon feedback tests, and make
+build passed. Headless WebKit exercised confirmation, saving, reopening, and
+deleting at 1440, 700, and 420px widths with no page errors.
+[Confirmation state](comment-confirmation.png) uses an isolated screenshot fixture.

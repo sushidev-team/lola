@@ -268,3 +268,36 @@ func TestFeedbackClaimsThePromptBeforeTyping(t *testing.T) {
 		t.Error("the idle gate must already be closed while the send is in flight")
 	}
 }
+
+func TestFeedbackPreservesLongReviewNotes(t *testing.T) {
+	d := newTestDaemon(t, conflictConfig(), &linear.Fake{}, &fakeNative{})
+	id := feedbackSess(t, d, "FE-long-review", "claude")
+	d.sessions.Update(id, func(cur *session.Session) bool { cur.AtPrompt = false; return true })
+	note := strings.Repeat("Screenshot comment with revision context.\n", 200) + "Final comment: keep this too."
+	if _, err := d.handleFeedback(context.Background(), protocol.FeedbackArgs{Session: id, Note: note}); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := d.sessions.Get(id)
+	if !strings.Contains(saved.PendingFeedback, indent(note, "  ")) {
+		t.Fatal("review note was truncated")
+	}
+}
+
+func TestFeedbackRejectsOversizeReviewWithoutChangingPending(t *testing.T) {
+	d := newTestDaemon(t, conflictConfig(), &linear.Fake{}, &fakeNative{})
+	id := feedbackSess(t, d, "FE-oversize-review", "claude")
+	d.sessions.Update(id, func(cur *session.Session) bool {
+		cur.AtPrompt = false
+		cur.PendingFeedback = "Existing feedback"
+		return true
+	})
+	for _, note := range []string{strings.Repeat("界", feedbackMaxPending/3+1), strings.Repeat("x\n", feedbackMaxPending/3)} {
+		if _, err := d.handleFeedback(context.Background(), protocol.FeedbackArgs{Session: id, Note: note}); err == nil {
+			t.Fatal("oversize rendered feedback must be rejected")
+		}
+		saved, _ := d.sessions.Get(id)
+		if saved.PendingFeedback != "Existing feedback" {
+			t.Fatal("rejected send changed pending feedback")
+		}
+	}
+}

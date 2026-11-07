@@ -338,13 +338,19 @@ func renderFeedback(a protocol.FeedbackArgs) (string, error) {
 		}
 		blocks = append(blocks, b)
 	}
-	if note := clipRunes(strings.TrimSpace(a.Note), feedbackMaxBodyRunes); note != "" {
+	// A review note contains multiple screenshot comments and revision context.
+	// Bound the complete batch below; never silently truncate a human review.
+	if note := strings.TrimSpace(a.Note); note != "" {
 		blocks = append(blocks, "- General note:\n"+indent(note, "  "))
 	}
 	if len(blocks) == 0 {
 		return "", errors.New("feedback is empty — add a comment or a note")
 	}
-	return strings.Join(blocks, "\n\n"), nil
+	block := strings.Join(blocks, "\n\n")
+	if len(block) > feedbackMaxPending {
+		return "", errors.New("feedback exceeds 64 KiB — shorten the draft or send it in parts")
+	}
+	return block, nil
 }
 
 func renderFeedbackComment(c protocol.FeedbackComment) (string, error) {
