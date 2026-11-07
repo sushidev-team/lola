@@ -24,6 +24,13 @@ the session checkout (the selected member checkout for stacks), not the manifest
 The daemon retains copies; no GitHub comments are posted. Repeating identical
 content returns the original receipt. Failures exit nonzero; success prints JSON.
 
+Collect evidence during implementation and testing. Reuse existing captures and
+recorded results if they still describe the reviewed revision; refresh only
+missing or stale evidence. Keep the manifest with the captures (e.g. .lola/review/).
+Use a short title and body sections: Summary (one sentence), Changes (up to three
+short bullets), Verification (commands/results), Risks (unresolved items only).
+Put extended technical notes under Details. Do not repeat screenshot captions.
+
 Example manifest:
 {"version":1,"title":"Settings layout","body":"## Changes\nDescribe changes, checks and limitations.",
  "base":"<full baseline commit hash>","head":"<full reviewed commit hash>",

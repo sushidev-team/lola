@@ -33,3 +33,17 @@ Validation logs for this implementation run are in `/private/tmp/`:
 - `lola-review-baseline-test.log`: that same test fails on committed `0346cb6`.
 
 The temporary preview server used no live daemon and was stopped after capture.
+
+## Interactive canvas refinement
+
+- [Overview tab](overview-tab.png)
+- [Canvas and comparison divider](canvas.png)
+- [Area annotation and inline draft](canvas-annotations.png)
+- [Narrow canvas](canvas-narrow.png)
+
+These use the same retained Nori pilot images with mocked daemon responses.
+Headless Chromium exercised keyboard comparison, pointer area selection,
+feedback batching and narrow layout at 1440 × 1000 and 700 × 900, with no
+page errors or document/dialog overflow. The native WKWebView was not exercised
+in this refinement. Component tests cover queuing/retry, draft persistence,
+screen/stack isolation, comparison modes and unsupported image URLs.

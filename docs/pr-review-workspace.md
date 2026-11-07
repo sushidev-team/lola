@@ -131,8 +131,7 @@ record separately any native WKWebView verification still outstanding.
 - A new publication does not replace the revision currently being inspected.
   Material comments retain package, base/head, section and screenshot identities.
   Drafts survive navigation; failed sends retain the batch.
-- Revision-specific independent verification, screenshot-region annotations,
-  browser capture and a changes-since-review comparison remain follow-up work.
+- Revision-specific independent verification, browser capture and a changes-since-review comparison remain follow-up work.
 - Current code diffs explicitly represent the live checkout, not a frozen package
   diff. Existing local-check provenance and merge policy are unchanged.
 - Initial storage limits: 64 KiB manifest; four screenshot pairs; PNG/JPEG only;
@@ -188,3 +187,32 @@ GitHub. In the desktop, select **Review PR** from Changes or PR status. Ended
 sessions offer **Review material** without live checkout or send actions.
 
 See [fixture captures and validation](evaluation/pr-review-workspace/README.md).
+
+## Interactive review refinement
+
+The workspace now separates **Overview**, **Screenshots**, and **Code changes**.
+Checks and the feedback batch live in a collapsible panel. Overview groups the
+original Markdown into named disclosures without discarding technical details;
+new agent instructions request a one-sentence Summary, up to three Changes,
+Verification, Risks, and optional Details.
+
+Screenshots use a full-height canvas with a collapsible screen/context rail,
+compact previous/next controls, slider/split/before/after comparison, and fit/zoom.
+The divider can be dragged from anywhere on the image and keyboard-operable. Pin and rectangle
+annotations are relative to the original displayed image, independent of zoom.
+Drafts persist locally by session/package/screen. Adding an annotation places its
+text, side, normalized location, screenshot IDs, page/viewport and base/head in
+the existing feedback batch; only the explicit Send action submits that batch.
+The canvas is a review of retained PNG/JPEG evidence, not a live browser or
+component-to-source mapper. Different capture dimensions are fitted to the same
+comparison frame and may not align.
+
+Agent launch instructions now tell agents to preserve baseline captures before
+editing and accumulate review evidence while implementing and testing, ideally
+with a manifest in `.lola/review/`. Publish after a meaningful verification pass
+using those existing artifacts. Recreate only missing/stale evidence, never
+relabel an old capture as a new revision. The empty-state request uses the same
+reuse and concise-writing instructions for existing sessions. This is an explicit
+agent workflow, not automatic discovery of arbitrary files or proof that an
+agent followed the instruction. New launch instructions require an updated
+daemon; existing sessions can use **Ask agent to prepare review**.
