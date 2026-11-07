@@ -274,3 +274,12 @@ it('routes screenshot shortcuts from review chrome and stops routing when anothe
   await fireEvent.keyDown(screen.getByRole('tab',{name:'Overview'}),{key:'c'});
   expect(screen.queryByRole('button',{name:'Add pin'})).toBeNull();
 });
+
+
+it('opens the selected overview thumbnail directly in the screenshot canvas',async()=>{
+  read.mockResolvedValue({packages:[pkg({screens:[{title:'Desktop',after:'desktop'},{title:'Phone',after:'phone'}]})]});
+  render(ReviewWorkspace,{sessionId:id});
+  await fireEvent.click(await screen.findByRole('button',{name:'Review screenshot: Phone'}));
+  expect(await screen.findByAltText('Phone — After')).toBeInTheDocument();
+  expect(screen.getByRole('tab',{name:'Screenshots'})).toHaveAttribute('aria-selected','true');
+});

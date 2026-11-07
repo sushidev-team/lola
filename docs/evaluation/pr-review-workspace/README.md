@@ -119,3 +119,32 @@ Escape → Delete → ?, including the reference at 420px width; no page errors.
 Command-delete follow-up: both Backspace and forward Delete remove the selected
 annotation from inside its editor. Unrelated fields, IME composition, and key
 repeat are excluded. All 34 focused UI tests and Svelte check passed.
+
+
+### Full-width review overview
+
+The overview now uses the available width: a short summary and screenshot
+previews sit beside an evidence-based confidence panel, followed by compact
+feature rows, verification, and risks. Expanded rows preserve the source
+Markdown. Legacy long-form packages are split into items without generating
+new factual claims; summary snippets come from the supplied summary or first
+change. Thumbnails open the matching screenshot in the canvas.
+
+Review confidence is coverage of five equally weighted observed signals:
+matching revision, passing CI, approved PR review, no merge conflicts, and no
+unresolved review threads. Each earns 20 points. Missing or failing signals earn
+none; an unknown or mismatched revision is unscored. The panel explains that
+this is not a probability of correctness. Agent-reported checks, screenshots,
+and risk claims are displayed separately and do not increase the score.
+
+Validation: 40 focused tests cover parsing, exact-revision scoring, missing and
+failed signals, preservation of source detail, thumbnail failures/navigation,
+and existing canvas/feedback interactions. Svelte check and production build
+passed. WebKit checked 1440, 700, and 420px layouts, expansion, and navigating to
+the selected screenshot; no page errors or horizontal overflow.
+
+- [Desktop overview](overview-redesign-wide.png)
+- [Narrow overview](overview-redesign-narrow.png)
+
+Captures use an isolated fixture and retained Nori evaluation images; the PR
+facts in this fixture are illustrative, not observations of a live PR.

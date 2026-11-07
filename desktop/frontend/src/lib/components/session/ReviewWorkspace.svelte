@@ -14,7 +14,7 @@
   import Select from '../Select.svelte';
   import Tabs from '../Tabs.svelte';
   import DiffView from '../DiffView.svelte';
-  import ReviewWriteup from './ReviewWriteup.svelte';
+  import ReviewOverview from './ReviewOverview.svelte';
   import BeforeMerge from './BeforeMerge.svelte';
   import OverviewChecks from './OverviewChecks.svelte';
   import ReviewCanvas from './ReviewCanvas.svelte';
@@ -50,7 +50,7 @@
   const f = $derived(feed.view(sessionId));
   const view = $derived(ssh.view(sessionId));
   const tests = $derived(sessionActivity({feed:f.items,items:view.items,scope:view.scope,alive:false}).filter(e => e.kind === 'tests'));
-  const freshness = $derived(!current || !facts ? 'unknown' : current.head !== facts.head || current.repo !== facts.repo || (current.pr > 0 && current.pr !== facts.number) ? 'stale' : 'current');
+  const freshness = $derived(!current?.head || !facts?.head ? 'unknown' : current.head !== facts.head || current.repo !== facts.repo || (current.pr > 0 && current.pr !== facts.number) ? 'stale' : 'current');
   const requests = new SvelteMap<string, { state: 'sending' | 'accepted' | 'error'; message: string }>();
   const request = $derived(requests.get(target));
   const canRequest = $derived(!!session && !session.goalId && !['dead', 'exited', 'shell', 'orphaned'].includes(session.agentState ?? ''));
@@ -178,17 +178,8 @@
           {#if error}<p role="alert" class="mb-5 text-warn">Could not load review material. {error} Try Refresh review; an older daemon may need restarting.</p>{/if}
           {#if current}
             {#if current.id !== packages[0]?.id}<p class="mb-5 text-sm text-info">A newer review package is available. <Button size="xs" onclick={() => selected = packages[0].id}>View latest package</Button></p>{/if}
-            <header class="package-heading">
-              <h1 class="text-lg font-semibold text-ink">{current.title}</h1>
-              <div class="package-meta">
-                <span role="status" class={freshness === 'stale' ? 'text-warn' : 'text-ink-2'}>{freshness === 'stale' ? 'Outdated material' : freshness === 'current' ? 'Matches current PR' : 'Freshness unknown'}</span>
-                <span>Agent-provided · {new Date(current.createdAt).toLocaleString()}</span>
-                <details><summary>Revision details</summary><p class="mt-2">{current.base.slice(0,12)} → {current.head.slice(0,12)}</p><p class="mt-1">{freshness === 'stale' ? 'The PR differs from this package.' : freshness === 'current' ? 'Package head matches the current PR. Captures and claims are agent-provided.' : 'The current PR head could not be confirmed.'}</p></details>
-              </div>
-            </header>
-            <ReviewWriteup {sessionId} body={current.body} />
+            <ReviewOverview pkg={current} {facts} {sessionId} {freshness} onScreen={index => { canvasScreen = index; tab = 'visuals'; }} onChecks={() => panelOpen = true} />
             {#if session}<details class="writeup-comment"><summary>Comment on write-up</summary>{#if subject !== 'Write-up' && draft}<p class="mt-2">Restored draft: {subject}</p>{/if}<textarea aria-label="Review comment" class="review-input mt-2" rows="3" maxlength="3000" value={draft} oninput={e => editDraft(e.currentTarget.value)} placeholder="What needs changing or explaining?"></textarea><Button variant="secondary" class="mt-2" disabled={!draft.trim()} onclick={addComment}>Add to feedback</Button></details>{/if}
-            {#if current.screens?.length}<Button variant="primary" class="mt-5" onclick={() => tab = 'visuals'}>Explore {current.screens.length} {current.screens.length === 1 ? 'screen' : 'screens'}</Button>{/if}
           {:else if loading}<p role="status" class="text-faint">Loading review material…</p>
           {:else if !error}
             <div class="empty-review">
@@ -231,13 +222,11 @@
   .review-tabs :global([role=tablist]) { margin-bottom:0; border-bottom:0; }
   .review-tabs { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-right:16px; border-bottom:1px solid var(--color-edge); }
   .review-visuals { min-height:0; overflow:hidden; }
-  .review-material { max-width:1000px; width:100%; margin-inline:auto; }
+  .review-material { width:100%; min-width:0; }
   .review-main { display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; }
   .review-material { overflow:auto; padding:28px 32px 64px; }
-  .package-heading { margin-bottom:20px; }
-  .package-meta { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 16px; margin-top:8px; font-size:12px; color:var(--color-faint); }
-  .package-meta summary,.writeup-comment summary { cursor:pointer; }
-  .writeup-comment { padding:12px 0; color:var(--color-ink-2); font-size:13px; }
+  .writeup-comment summary { cursor:pointer; }
+  .writeup-comment { margin-top:28px; border-top:1px solid var(--color-edge); padding:16px 0; color:var(--color-ink-2); font-size:13px; }
   .review-toolbar > div:last-child { max-width:100%; }
   .review-toolbar :global(.lola-select) { width:auto; max-width:350px; }
   .review-toolbar :global(select) { max-width:350px; }
