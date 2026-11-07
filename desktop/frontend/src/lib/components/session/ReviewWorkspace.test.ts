@@ -83,7 +83,7 @@ it('shows retained material, missing baseline, and truthful revision freshness',
   await screen.findByRole('heading',{name:'A clearer settings screen'});
   expect(screen.getByText(/Package head matches/)).toBeInTheDocument();
   await openScreens();
-  expect(screen.getByText('Before capture unavailable')).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'Before'})).toBeDisabled();
   expect(await screen.findByAltText('Settings — After')).toBeInTheDocument();
   await fireEvent.change(screen.getByLabelText('Screenshot zoom'),{target:{value:'150'}});
   expect(screen.getByLabelText('Screenshot zoom')).toHaveValue('150');
