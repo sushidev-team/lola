@@ -29,19 +29,19 @@
 
 {#if multi}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
-  <section data-card="question_multi" tabindex="-1" aria-label="{agent} has a question" class="ssh-fade-in grid gap-2 rounded-[10px] border border-orange bg-panel px-3 py-2 outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-orange" onkeydown={onKey}>
-    <div class="flex min-w-0 items-center gap-2">
-      <h3 class="min-w-0 truncate font-medium text-orange">{agent} has a question</h3>
+  <section data-card="question_multi" tabindex="-1" aria-label="{agent} has a question" class="ssh-fade-in grid min-h-0 max-h-[inherit] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[10px] border border-edge bg-panel outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-orange" onkeydown={onKey}>
+    <div class="flex min-w-0 items-center gap-2 border-b border-edge px-3 py-2.5">
+      <h3 class="min-w-0 font-medium text-orange">{agent} has a question</h3>
       {#if pager}<span class="ml-auto">{@render pager()}</span>{/if}
     </div>
-    <div class="min-h-0 overflow-y-auto" data-card-body>
+    <div class="min-h-0 overflow-y-auto overscroll-contain px-4 py-3" data-card-body>
       {#each prompt.lines ?? [] as line, i (i)}
         <p class="selectable text-prose [overflow-wrap:anywhere] whitespace-pre-wrap text-ink" data-prompt-line>{line || " "}</p>
       {/each}
-      <p class="text-sm text-faint">It takes several choices, and lola only presses one key.</p>
+      <p class="mt-2 text-sm text-ink-2">Select multiple answers in the terminal.</p>
     </div>
-    <div class="flex justify-end">
-      <Button variant="secondary" size="sm" onclick={() => ssh.showAgentTerminal(sessionId)}>Answer in terminal <span class="text-faint">⌘\</span></Button>
+    <div class="flex justify-end border-t border-edge px-3 py-2">
+      <Button variant="secondary" size="sm" onclick={() => ssh.showAgentTerminal(sessionId)}>Answer in terminal <span class="text-ink-2">⌘\</span></Button>
     </div>
   </section>
 {:else}

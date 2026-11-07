@@ -35,7 +35,7 @@
 </script>
 
 <div class="contents" data-action-zone>
-  <div class="cv-tray-row cv-sb grid min-h-0 grid-rows-[minmax(0,1fr)]"><Tray {sessionId} /></div>
+  <div class="cv-tray-row cv-sb grid min-h-0 grid-rows-[minmax(0,1fr)]"><Tray {sessionId} {covered} /></div>
   <div class="cv-desk-row cv-sb">
   <div class="cv-band cv-dock">
   <div class="cv-desk grid max-h-[70cqh] min-w-0 gap-2 overflow-y-auto py-3">

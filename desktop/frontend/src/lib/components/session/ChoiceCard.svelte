@@ -46,9 +46,9 @@
 
   const view = $derived(ssh.view(sessionId));
   const choices = $derived(prompt.choices ?? []);
-  // Narrow keeps Yes and No in view and folds the qualified ones. A question has no Yes or No, and a
-  // card showing nothing but `More` would hide the whole question's answers, so it stays as it is.
-  const folds = $derived(narrow && choices.some((c) => isPlainChoice(c.label)));
+  // Only permission prompts fold qualified answers on narrow panes. Questions keep every answer
+  // equally visible, even when some happen to be labelled Yes or No.
+  const folds = $derived(!reading && narrow && choices.some((c) => isPlainChoice(c.label)));
   const plain = $derived(folds ? choices.filter((c) => isPlainChoice(c.label)) : choices);
   const more = $derived(folds ? choices.filter((c) => !isPlainChoice(c.label)) : []);
   let moreOpen = $state(false);
@@ -76,7 +76,7 @@
   let readEnd = $state(false);
   function checkRead() {
     if (!body || !bodyEnd) return;
-    if (bodyEnd.getBoundingClientRect().top <= body.getBoundingClientRect().bottom) readEnd = true;
+    if (bodyEnd.getBoundingClientRect().top <= body.getBoundingClientRect().bottom + 1) readEnd = true;
   }
   $effect(() => {
     drawn;
@@ -155,7 +155,7 @@
 </script>
 
 {#snippet row(c: { key: string; label: string; detail?: string })}
-  {@const primary = isPrimaryChoice(c.label)}
+  {@const primary = !reading && isPrimaryChoice(c.label)}
   {@const side = note(c.label)}
   {@const sent = pressedKey === c.key}
   {@const sends = toTerminal(c.label)}
@@ -164,16 +164,24 @@
     size="sm"
     block={!primary}
     disabled={!live}
-    class="h-auto! min-h-7 justify-start! px-2! py-1 text-left whitespace-normal! {primary ? 'w-fit! min-w-[88px]' : 'text-ink!'} {sent ? 'opacity-100!' : ''}"
+    class="h-auto! justify-start! text-left whitespace-normal! {reading ? 'question-choice grid! min-h-11 grid-cols-[24px_minmax(0,1fr)] items-start! gap-x-3! rounded-none! px-3! py-3! disabled:opacity-100! focus-visible:-outline-offset-2' : 'min-h-7 px-2! py-1'} {primary ? 'w-fit! min-w-[88px]' : 'text-ink!'} {sent ? 'opacity-100!' : ''}"
     onclick={() => press(c.key, c.label)}
     data-choice={c.key}
     data-primary={primary ? "" : undefined}
   >
-    <kbd class="num inline-flex size-4.5 shrink-0 items-center justify-center rounded border font-mono text-sm leading-none transition-transform duration-100 motion-reduce:transition-none {primary ? 'border-accent-ink/45' : 'border-edge text-faint'} {sent ? 'translate-y-px bg-sel' : ''}" aria-hidden="true">{c.key}</kbd>
-    <span class="min-w-0 [overflow-wrap:anywhere]">{sent ? "Sent" : c.label}</span>
-    {#if c.detail && !sent}<span class="ml-2 min-w-0 text-sm font-normal text-faint [overflow-wrap:anywhere]" data-choice-detail>{c.detail}</span>{/if}
+    <kbd class="num inline-flex shrink-0 items-center justify-center rounded border font-mono text-sm leading-none transition-transform duration-100 motion-reduce:transition-none {reading ? 'size-6 bg-canvas text-ink-2' : 'size-4.5'} {primary ? 'border-accent-ink/45' : 'border-edge text-ink-2'} {sent ? 'translate-y-px bg-sel' : ''}" aria-hidden="true">{c.key}</kbd>
+    {#if reading}
+      <span class="grid min-w-0 gap-1 self-center [overflow-wrap:anywhere]">
+        <span class="font-medium">{sent ? "Sent" : c.label}</span>
+        {#if c.detail && !sent}<span class="max-w-[75ch] text-sm leading-relaxed font-normal text-ink-2" data-choice-detail>{c.detail}</span>{/if}
+        {#if sends}<span class="text-sm font-normal text-ink-2">Opens in terminal <span aria-hidden="true">⌘\</span></span>{/if}
+      </span>
+    {:else}
+      <span class="min-w-0 [overflow-wrap:anywhere]">{sent ? "Sent" : c.label}</span>
+    {/if}
+    {#if !reading && c.detail && !sent}<span class="ml-2 min-w-0 text-sm font-normal text-faint [overflow-wrap:anywhere]" data-choice-detail>{c.detail}</span>{/if}
     {#if side && !narrow && !sent}<span class="ml-2 shrink-0 text-sm font-normal text-faint">{side}</span>{/if}
-    {#if sends}<span class="ml-2 shrink-0 text-sm font-normal text-faint">Terminal <span aria-hidden="true">⌘\</span></span>{/if}
+    {#if !reading && sends}<span class="ml-2 shrink-0 text-sm font-normal text-faint">Terminal <span aria-hidden="true">⌘\</span></span>{/if}
   </Button>
 {/snippet}
 
@@ -181,26 +189,42 @@
 <section
   data-card={prompt.kind}
   data-prompt-hash={prompt.hash}
-  tabindex="-1"
+  tabindex={reading ? 0 : -1}
   aria-label={title}
-  class="ssh-fade-in grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[10px] border border-orange bg-panel outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-orange"
+  class="ssh-fade-in grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[10px] border {reading ? 'max-h-[inherit] border-edge' : 'border-orange'} bg-panel outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-orange"
   onkeydown={onKey}
 >
-  <div class="flex min-w-0 items-center gap-2 px-3 pt-2">
-    <h3 class="min-w-0 truncate font-medium text-orange">{title}</h3>
+  <div class="flex min-w-0 items-center gap-2 px-3 {reading ? 'border-b border-edge py-2.5' : 'pt-2'}">
+    <h3 class="min-w-0 font-medium text-orange {reading ? '' : 'truncate'}">{title}</h3>
     <span class="ml-auto flex shrink-0 items-center gap-1">
       {#if pager}{@render pager()}{/if}
-      <Button size="xs" class="h-5!" onclick={openTerminal}>Terminal <span class="text-faint">⌘\</span></Button>
+      <Button size="xs" class={reading ? 'text-ink-2!' : 'h-5!'} onclick={openTerminal}>Terminal <span class="text-ink-2">⌘\</span></Button>
     </span>
   </div>
 
-  <div bind:this={body} class="min-h-0 overflow-y-auto px-3 pt-2 pb-1.5" onscroll={checkRead} data-card-body>
-    {#each prompt.lines ?? [] as line, i (i)}
-      <p class="selectable [overflow-wrap:anywhere] whitespace-pre-wrap {reading ? 'text-prose text-ink' : `font-mono text-sm ${isFrameLine(line) ? 'text-faint' : i === firstFact ? 'text-ink' : 'text-ink-2'}`}" data-prompt-line>{line || " "}</p>
-    {/each}
-    <span bind:this={bodyEnd} aria-hidden="true"></span>
+  <div bind:this={body} class="min-h-0 overflow-y-auto overscroll-contain {reading ? 'px-1 py-1' : 'px-3 pt-2 pb-1.5'}" onscroll={checkRead} data-card-body>
+    <div class={reading ? 'px-3 py-3' : ''}>
+      {#each prompt.lines ?? [] as line, i (i)}
+        <p class="selectable [overflow-wrap:anywhere] whitespace-pre-wrap {reading ? 'text-prose text-ink' : `font-mono text-sm ${isFrameLine(line) ? 'text-faint' : i === firstFact ? 'text-ink' : 'text-ink-2'}`}" data-prompt-line>{line || " "}</p>
+      {/each}
+    </div>
+    <!-- A block sentinel adds no phantom line below a short question. -->
+    <span bind:this={bodyEnd} class="block h-0" aria-hidden="true"></span>
+    {#if reading}
+      <div class="question-choices grid" data-card-actions>
+        {#each choices as c (c.key)}{@render row(c)}{/each}
+      </div>
+    {/if}
   </div>
 
+  {#if reading}
+    <div class="border-t border-edge px-4 py-2 text-sm text-ink-2" role="status">
+      {#if refusal}<p class="text-orange" data-card-refusal>{refusal}</p>
+      {:else if !readEnd}<p data-read-hint>Scroll through the question to enable answers.</p>
+      {:else if pressed}<p>Answer sent. Waiting for a response…</p>
+      {:else}<p>Choose an option or press its number.</p>{/if}
+    </div>
+  {:else}
   <!-- Pinned. The decision is never below the fold. -->
   <div class="grid gap-0 px-1 pb-1.5 {readEnd ? '' : 'border-t border-edge/60 pt-1'}" data-card-actions>
     {#if !readEnd}<p class="px-2 text-sm text-faint" data-read-hint>Scroll to the end to answer.</p>{/if}
@@ -219,4 +243,11 @@
       {#each choices as c (c.key)}{@render row(c)}{/each}
     {/if}
   </div>
+  {/if}
 </section>
+
+<style>
+  .question-choices :global(.question-choice + .question-choice) {
+    border-top: 1px solid var(--color-edge);
+  }
+</style>

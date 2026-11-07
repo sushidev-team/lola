@@ -12,7 +12,7 @@ package daemon
 // gate, and lola-authored text only. What it does NOT share with the reaction
 // engine is the one-shot LastReactedStatus guard as an ENTRY condition — a human
 // clicking the button is the intent, so a second click re-sends. It still STAMPS
-// the guard, so the automatic reaction cannot pile a second rebase prompt on top
+// the guard, so the automatic reaction cannot pile a second conflict prompt on top
 // of the merge this just asked for.
 
 import (
@@ -202,9 +202,9 @@ func (d *Daemon) typeAtRestingPrompt(ctx context.Context, s session.Session, msg
 // resolveConflictMessage is the instruction typed into the agent. It is lola's
 // OWN text — the only outside values in it are the configured default branch,
 // the session's Linear identifier and its PR number — and it deliberately does
-// not reuse [reactions].merge_conflict.message: that template says "rebase onto
-// the base branch", while the button a human pressed promises a MERGE of the
-// project's default branch, and the two must not disagree about what was asked.
+// not reuse the customizable [reactions].merge_conflict.message: the button a
+// human pressed promises a MERGE of the project's default branch, regardless
+// of what the automatic reaction has been configured to ask for.
 // Sanitized like every other send, so a branch name carrying control bytes can
 // never steer the pane's line editor.
 func resolveConflictMessage(s session.Session, base string) string {

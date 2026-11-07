@@ -12,6 +12,7 @@
   import { store } from "$lib/store.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { talk } from "$lib/talk.svelte";
+  import { nav } from "$lib/nav.svelte";
   import { agentName } from "$lib/ssh";
   import { tierOneCount, trayAnnouncement, trayCards } from "$lib/composer";
   import { widthOf } from "./measure";
@@ -25,12 +26,21 @@
   import ModalCard from "./ModalCard.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";
+  import InlineTerminalCard from "./InlineTerminalCard.svelte";
 
-  let { sessionId }: { sessionId: string } = $props();
+  let { sessionId, covered = false }: { sessionId: string; covered?: boolean } = $props();
 
   const view = $derived(ssh.view(sessionId));
   const session = $derived(store.sessionById(sessionId));
   const agent = $derived(agentName(session?.agent));
+  const canControl = $derived(!covered && nav.view === "cockpit" && store.alive && !!session?.tmuxName);
+  let terminalFocus = $state(0);
+  function leaveControls() {
+    view.composerFocus++;
+  }
+  function expandControls() {
+    ssh.showAgentTerminal(sessionId);
+  }
   const cards = $derived(
     trayCards({
       connections: view.connections,
@@ -44,6 +54,9 @@
   // ‹ › stands on a card until it goes. A card that went leaves the tray on the oldest.
   const at = $derived(Math.max(cards.findIndex((c) => c.id === view.trayCard), 0));
   const card = $derived(cards[at]);
+  // A modal is the actual terminal, immediately. Keep its mount outside the hash-keyed
+  // cards so redraws do not reconnect it; detach as soon as it is answered or hidden.
+  const inlineName = $derived(canControl && card?.kind === "modal" ? session?.tmuxName ?? "" : "");
   const counted = $derived(card?.tier === 1 ? first : cards.length - first);
   const position = $derived(card?.tier === 1 ? at + 1 : at - first + 1);
 
@@ -78,6 +91,13 @@
     const present = !!card;
     const answers = { talk: talk.answerCount(sessionId), timeline: view.fetches };
     if (n === view.seen.dock || !root) return;
+    if (inlineName) {
+      clearTimeout(giveUp);
+      waitingFor = null;
+      view.seen.dock = n;
+      untrack(() => terminalFocus++);
+      return;
+    }
     if (present) {
       clearTimeout(giveUp);
       waitingFor = null;
@@ -139,8 +159,9 @@
   <div class="cv-dock-rail" aria-hidden="true"><div class="cv-rail-line"></div></div>
   <div class="grid min-h-0 grid-rows-[minmax(0,1fr)] {card || promptNote || session?.devClash ? 'pt-2' : ''}" {@attach widthOf((w) => (width = w))} data-tray>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_no_static_element_interactions -->
-  <div bind:this={root} tabindex="-1" class="grid min-h-0 gap-2 outline-none {narrow ? 'max-h-[60cqh]' : 'max-h-[45cqh]'}" onkeydown={onKey}>
-    {#if card}
+  <div bind:this={root} tabindex="-1" class="grid min-h-0 gap-2 outline-none {inlineName ? 'max-h-[65cqh]' : narrow ? 'max-h-[60cqh]' : 'max-h-[45cqh]'}" onkeydown={onKey}>
+    <InlineTerminalCard name={inlineName} {agent} {pager} focusRequest={terminalFocus} onLeave={leaveControls} onExpand={expandControls} />
+    {#if card && !inlineName}
       {#key card.id}
         {#if card.kind === "approval"}
           <SSHApproval {sessionId} conn={card.conn} block={card.block} {pager} />
@@ -168,7 +189,7 @@
           </section>
         {/if}
       {/key}
-    {:else if session?.devClash}
+    {:else if session?.devClash && !inlineName}
       <DevClashBanner {session} tray />
     {/if}
     {#if promptNote}<p class="text-sm text-faint" role="status" data-prompt-note>{promptNote}</p>{/if}

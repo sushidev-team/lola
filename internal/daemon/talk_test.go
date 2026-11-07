@@ -586,6 +586,33 @@ func talkWaitConn(t *testing.T, d *Daemon) {
 	}
 }
 
+func TestQueueReleaseDeliversWhileWorking(t *testing.T) {
+	d, f := talkFakeDaemon(t)
+	talkSession(d, "s1", state.AgentWorking)
+	f.show(talkDraft)
+	queued := say(t, d, "s1", "send this now")
+	if queued.Delivered {
+		t.Fatal("an occupied composer must retain the message")
+	}
+	f.show(talkWorking)
+	out, err := d.handleAgentQueueRelease(context.Background(), protocol.AgentQueueReleaseArgs{Session: "s1"})
+	if err != nil || !out.Delivered || out.Item != queued.Item || out.Why != "" {
+		t.Fatalf("release while working: %+v %v", out, err)
+	}
+	if got := f.sent(); len(got) != 1 || got[0] != "send this now" {
+		t.Fatalf("typed %q", got)
+	}
+	if f.escCount() != 0 {
+		t.Fatal("sending a queued message must not interrupt the agent")
+	}
+	if _, err := d.handleAgentQueueRelease(context.Background(), protocol.AgentQueueReleaseArgs{Session: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sent()) != 1 {
+		t.Fatal("releasing an empty queue must not send the message again")
+	}
+}
+
 func TestQueueReleaseAttemptsHeadBatch(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)

@@ -19,8 +19,10 @@ const (
 	// DefaultChangesRequestedMessage relays reviewer feedback back into the
 	// session and asks for a re-review.
 	DefaultChangesRequestedMessage = "Changes were requested on your PR ({{.PR}}) for {{.Issue}}. Reviewer feedback:\n\n{{.Detail}}\n\nAddress each point, push, then re-request review."
-	// DefaultMergeConflictMessage asks the agent to rebase and resolve.
-	DefaultMergeConflictMessage = "Your PR ({{.PR}}) for {{.Issue}} has merge conflicts. Rebase onto the base branch, resolve the conflicts, and push."
+	// Merge the base into the published PR branch so recovery needs an ordinary
+	// push: rebasing rewrites published commits and requires force-push approval.
+	DefaultMergeConflictMessage = "Your PR ({{.PR}}) for {{.Issue}} has merge conflicts. Fetch the PR's base branch and merge it into this branch. Resolve the conflicts, preserving the intent of both sides, run the project's checks, commit the merge, and push normally. Do not rebase or force-push. If a conflict is ambiguous, stop and explain it."
+	legacyMergeConflictMessage  = "Your PR ({{.PR}}) for {{.Issue}} has merge conflicts. Rebase onto the base branch, resolve the conflicts, and push."
 )
 
 // DefaultCIRetries is the default number of automatic ci_failed recovery
@@ -200,6 +202,12 @@ func resolveReactions(frc *fileReactionsConfig) ReactionsConfig {
 	d.CIFailed = frc.CIFailed.resolve(d.CIFailed)
 	d.ChangesRequested = frc.ChangesRequested.resolve(d.ChangesRequested)
 	d.MergeConflict = frc.MergeConflict.resolve(d.MergeConflict)
+	// Save materializes default messages, so changing the fallback alone would
+	// leave existing installations asking for a rebase forever. Upgrade only
+	// the exact former default; keep custom messages and the Auto choice.
+	if d.MergeConflict.Message == legacyMergeConflictMessage {
+		d.MergeConflict.Message = DefaultMergeConflictMessage
+	}
 	d.ApprovedAndGreen = frc.ApprovedAndGreen.resolve(d.ApprovedAndGreen)
 	d.Merged = frc.Merged.resolve(d.Merged)
 	d.AgentFallback = frc.AgentFallback.resolve(d.AgentFallback)

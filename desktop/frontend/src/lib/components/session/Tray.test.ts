@@ -1,11 +1,94 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import { conn, freshSession, permission, setTalk, ssh } from "./talk.testkit";
+import { conn, freshSession, permission, setTalk, ssh, talkSvc, terms, AGENT } from "./talk.testkit";
+import { nav } from "$lib/nav.svelte";
 import Tray from "./Tray.svelte";
+
+vi.mock("../LiveTerminal.svelte", async () => ({ default: (await import("../ssh/TerminalStub.test.svelte")).default }));
 
 afterEach(() => {
   cleanup();
+  nav.view = "cockpit";
   vi.clearAllMocks();
+});
+
+describe("inline terminal controls", () => {
+  const modal = (hash = "clipped-command") => ({
+    kind: "modal", hash,
+    lines: ["command tail", "Do you want to proceed?", "❯ 1. Yes", "  2. No"],
+  });
+
+  async function mount() {
+    const id = freshSession({ tmuxName: "lola-agent-pane" });
+    const rendered = render(Tray, { sessionId: id });
+    await setTalk(id, { composer: "modal", prompt: modal() });
+    return { id, ...rendered };
+  }
+
+  it("shows the real terminal immediately without choosing an answer", async () => {
+    await mount();
+    expect(screen.queryByRole("button", { name: "Control here" })).toBeNull();
+    expect(screen.getByTestId("terminal").getAttribute("data-name")).toBe("lola-agent-pane");
+    expect(talkSvc.Choose).not.toHaveBeenCalled();
+    expect(talkSvc.Say).not.toHaveBeenCalled();
+  });
+
+  it("keeps the same terminal through redraws and detaches when answered", async () => {
+    const { id } = await mount();
+    const terminal = screen.getByTestId("terminal");
+    await setTalk(id, { composer: "modal", prompt: modal("resized-command") });
+    expect(screen.getByTestId("terminal")).toBe(terminal);
+    await setTalk(id, { composer: "working", prompt: null });
+    expect(screen.queryByTestId("terminal")).toBeNull();
+  });
+
+  it("leaves Escape to the terminal", async () => {
+    const { id } = await mount();
+    const focus = ssh.view(id).composerFocus;
+    await fireEvent.keyDown(screen.getByTestId("terminal"), { key: "Escape" });
+    expect(ssh.view(id).composerFocus).toBe(focus);
+    expect(screen.queryByTestId("terminal")).not.toBeNull();
+  });
+
+  it("detaches when covered and shows the pending dialog on return", async () => {
+    const { id, rerender } = await mount();
+    await rerender({ sessionId: id, covered: true });
+    expect(screen.queryByTestId("terminal")).toBeNull();
+    await rerender({ sessionId: id, covered: false });
+    expect(screen.queryByTestId("terminal")).not.toBeNull();
+  });
+
+  it("detaches when navigation hides the cockpit", async () => {
+    await mount();
+    nav.view = "home";
+    await waitFor(() => expect(screen.queryByTestId("terminal")).toBeNull());
+    nav.view = "cockpit";
+    await waitFor(() => expect(screen.queryByTestId("terminal")).not.toBeNull());
+  });
+
+  it("opens the Terminal tab and releases the covered inline attachment", async () => {
+    const { id, rerender } = await mount();
+    const select = vi.spyOn(terms, "select");
+    await fireEvent.click(screen.getByRole("button", { name: "Expand terminal" }));
+    expect(select).toHaveBeenCalledWith(id, AGENT);
+    await rerender({ sessionId: id, covered: true });
+    expect(screen.queryByTestId("terminal")).toBeNull();
+    select.mockRestore();
+  });
+
+  it("keeps the ordinary permission card for a fully readable dialog", async () => {
+    const { id } = await mount();
+    await setTalk(id, { composer: "prompt", prompt: permission() });
+    expect(screen.queryByTestId("terminal")).toBeNull();
+    expect(document.querySelector('[data-card="permission"]')).not.toBeNull();
+  });
+
+  it("does not attach behind a covered conversation", async () => {
+    const id = freshSession({ tmuxName: "lola-agent-pane" });
+    render(Tray, { sessionId: id, covered: true });
+    await setTalk(id, { composer: "modal", prompt: modal() });
+    expect(screen.queryByTestId("terminal")).toBeNull();
+  });
 });
 
 const approval = (id: string, c: string, at: string) => ({ id, at, block: { id, conn: c, status: "pending_approval", command: `cmd ${id}`, createdAt: at } }) as never;

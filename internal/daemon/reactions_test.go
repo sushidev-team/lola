@@ -739,9 +739,9 @@ func TestReactChangesRequestedSendsOnce(t *testing.T) {
 	}
 }
 
-// --- merge_conflict → rebase message sent once --------------------------------
+// --- merge_conflict → merge message sent once ---------------------------------
 
-func TestReactMergeConflictSendsRebaseOnce(t *testing.T) {
+func TestReactMergeConflictSendsMergeOnce(t *testing.T) {
 	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	seams := &fakeReactSeams{}
 	seams.install(d)
@@ -753,8 +753,9 @@ func TestReactMergeConflictSendsRebaseOnce(t *testing.T) {
 
 	d.react(context.Background(), s)
 	calls := seams.sendCalls()
-	if len(calls) != 1 || !strings.Contains(strings.ToLower(calls[0].text), "rebase") {
-		t.Fatalf("want one rebase send-keys, got %+v", calls)
+	if len(calls) != 1 || !strings.Contains(calls[0].text, "merge it into this branch") ||
+		!strings.Contains(calls[0].text, "push normally") {
+		t.Fatalf("want one merge-and-push send-keys, got %+v", calls)
 	}
 	got, _ := d.sessions.Get(s.ID)
 	if got.LastReactedStatus != "merge_conflict" {

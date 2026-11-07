@@ -1,7 +1,7 @@
 <script lang="ts">
   // One tool call from the agent's own log: a claim, including its "ok". That is why it has no
-  // box, no tick, no green and never the word "exit". Those belong to a plate, which lola
-  // witnessed. A failure nothing has answered is the one colour here, and it opens its preview with
+  // success tick and never the word "exit". Those belong to a plate, which lola
+  // witnessed. Surface accents identify activity, not verified success. An unanswered failure opens its preview with
   // nothing expanded. At rest in a turn it is a dig line, and inside an opened line a child row.
   //
   // Hand-rolled buttons on purpose, like the other card-shaped rows: the row IS the control, and
@@ -93,7 +93,7 @@
   <span class="grid place-items-center self-center text-faint group-hover:text-ink">{#if canOpen}<Chevron {open} />{/if}</span>
 {/snippet}
 
-<div data-tool={tool.category} data-status={row.status}>
+<div data-tool={tool.category} data-status={row.status} data-tool-layout={running ? "live" : nested ? "columns" : "summary"}>
   {#if running}
     {#if canOpen}
       <button type="button" class="group -mx-2 grid h-6 w-[calc(100%+16px)] grid-cols-[minmax(0,1fr)_auto_16px] items-center gap-x-2 rounded-sm px-2 text-left enabled:hover:bg-sel/30 focus-visible:-outline-offset-1" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }} aria-expanded={open} onclick={press}>

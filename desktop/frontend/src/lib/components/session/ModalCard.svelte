@@ -1,7 +1,7 @@
 <script lang="ts">
   // A screen in the agent's pane that only takes keys. It has no field, ever: typed prose is
   // swallowed by the widget and the Enter answers the dialog, which is the opposite of a composer.
-  // All lola can do is show a little of it and send a person to the real thing.
+  // Fallback when the live terminal is unavailable; it never guesses approval keys.
   import type { AgentPrompt } from "@bindings/internal/protocol";
   import type { Snippet } from "svelte";
   import { store } from "$lib/store.svelte";

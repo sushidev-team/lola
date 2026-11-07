@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The one place a session's own terminal is mounted, and always rendered, with `name`
+  // The shared mount for a session's terminal, in its tab or inline controls, with `name`
   // possibly empty. It holds the only {#if name}{#key name}, because an {#if} that mounts a
   // LiveTerminal in a parent's template froze that parent's template effect in the production
   // WKWebView (CockpitLayout records it), and in the session view Enter and Esc flip such a
