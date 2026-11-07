@@ -141,24 +141,34 @@ describe("Timeline voices", () => {
 });
 
 describe("Timeline expansion", () => {
-  it("keeps the latest completed command visible until the next action arrives", async () => {
+  it("keeps presented commands in place when they finish and the next action arrives", async () => {
     const calls = [tool("a", "run", "first", {}, 1), tool("b", "run", "second", {}, 2), tool("c", "run", "third", {}, 3), tool("d", "run", "fourth", { status: "running" }, 4)];
     setup([], calls, { agentState: "working" });
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
     expect(container.querySelector('[data-run] .cv-stack-count')?.textContent).toBe("3");
     expect(container.querySelector('[data-row="d"] [data-status="running"]')).not.toBeNull();
+    const current = container.querySelector('[data-row="d"]');
+    const preview = current?.querySelector('[data-preview]');
+    expect(preview).toHaveTextContent('Waiting for output');
+    expect(current?.querySelector('[data-running]')).not.toBeNull();
     feed.view(SID).items = [...calls.slice(0, 3), tool("d", "run", "fourth", { status: "ok" }, 4)] as never;
     await settle();
     expect(container.querySelector('[data-run] .cv-stack-count')?.textContent).toBe("3");
     expect(container.querySelector('[data-row="d"] [data-status="ok"]')).not.toBeNull();
+    expect(container.querySelector('[data-row="d"]')).toBe(current);
+    expect(current?.querySelector('[data-preview]')).toBe(preview);
+    expect(current?.querySelector('[data-running]')).toBeNull();
     feed.view(SID).items = [...feed.view(SID).items, tool("e", "run", "fifth", { status: "running" }, 5)] as never;
     await settle();
     expect(container.querySelectorAll('[data-run]')).toHaveLength(1);
-    expect(container.querySelector('[data-run] .cv-stack-count')?.textContent).toBe("4");
+    expect(container.querySelector('[data-run] .cv-stack-count')?.textContent).toBe("3");
+    expect(container.querySelector('[data-row="d"] [data-status="ok"]')).not.toBeNull();
     expect(container.querySelector('[data-row="e"] [data-status="running"]')).not.toBeNull();
+    expect(container.querySelector('[data-row="d"]')).toBe(current);
+    expect(current?.querySelector('[data-preview]')).toBe(preview);
     await fireEvent.click(container.querySelector('[data-run] .cv-call-group-toggle')!);
-    expect(container.querySelectorAll('[data-run] [data-tool]')).toHaveLength(4);
+    expect(container.querySelectorAll('[data-run] [data-tool]')).toHaveLength(3);
   });
 
   it("expansion survives refetch", async () => {
@@ -284,7 +294,7 @@ describe("Timeline rail", () => {
     expect(container.querySelector('[data-rail-mark="receipt"]')).not.toBeNull();
   });
 
-  it("an earlier answer becomes expandable narration when a later answer arrives", async () => {
+  it("an earlier message stays visible when a later answer arrives", async () => {
     setup([human("h1", "ask", 1), system("s1", "checkpoint", "Done", 9, { seq: 1 })], [text("x1", "short beat", 2)]);
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
@@ -294,10 +304,6 @@ describe("Timeline rail", () => {
     const fv = feed.view(SID);
     fv.items = [...fv.items, tool("t1", "read", "a.go", {}, 3) as never, text("x2", "later", 4) as never];
     await settle();
-    const activity = container.querySelector("[data-work-fold]")!;
-    expect(activity.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector('[data-row="x1"]')).toBeNull();
-    await fireEvent.click(activity);
     expect(container.querySelector('[data-row="x1"]')).not.toBeNull();
     const after = container.querySelector('[data-row="x1"] [data-voice=agent]')?.className ?? "";
     expect(after).toContain("text-prose");
@@ -510,7 +516,7 @@ describe("Timeline rail", () => {
     const [first, second] = container.querySelectorAll("[data-status=error]");
     expect(first.textContent).toContain("failed");
     expect(first.querySelector(".text-bad")).toBeNull();
-    expect(first.querySelector("[data-preview]")).toBeNull();
+    expect(first.querySelector("[data-preview]")).toHaveTextContent("boom");
     expect(second.querySelector(".text-bad")).not.toBeNull();
     expect(second.querySelector("[data-preview]")).not.toBeNull();
     expect(container.querySelectorAll('[data-rail-mark="tick-bad"]')).toHaveLength(1);
@@ -611,7 +617,7 @@ describe("Timeline rail", () => {
 });
 
 describe("Timeline scrolling", () => {
-  it("opening a response section brings its heading to the top and stops following the tail", async () => {
+  it("opening a response section keeps its heading in place and stops following the tail", async () => {
     setup([human("h1", "ask", 1), system("end", "checkpoint", "Done", 4)], [text("a1", "Done.\n\n## Checks\n\nAll passed.", 3)]);
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
@@ -622,7 +628,7 @@ describe("Timeline scrolling", () => {
     vi.spyOn(summary, 'getBoundingClientRect').mockReturnValue({ top: 320 } as DOMRect);
     await fireEvent.click(summary);
     await settle();
-    expect(scroller.scrollTop).toBe(1776);
+    expect(scroller.scrollTop).toBe(1600);
     expect(summary.parentElement).toHaveAttribute('open');
     // Closing is local; it must not scroll back to this header.
     scroller.scrollTop = 1200;
@@ -899,18 +905,32 @@ describe("Timeline's own states", () => {
 
 
 describe('current activity and send receipts', () => {
-  it('opens a highlighted edit and compacts it after the next action', async () => {
+  it('keeps an edit excerpt compact and preserves deliberately expanded output through new activity', async () => {
     const edit = tool('edit-now', 'edit', 'src/Board.tsx', { hasOutput: true, preview: '@@ -1 +1 @@\n-const old = true;\n+const next = false;' }, 1);
     setup([], [edit], { agentState: 'working' });
     svc.FeedOutput.mockResolvedValue({ text: "@@ -1 +1 @@\n-const old = true;\n+const next = false;" });
     const { container } = render(Timeline, { sessionId: SID });
-    await waitFor(() => expect(container.querySelector('[data-change-preview] [data-syntax="kw"]')).not.toBeNull());
-    expect(container.querySelector('[data-diff="add"]')).not.toBeNull();
+    await settle();
+    const editRow = container.querySelector('[data-row="edit-now"]')!;
+    expect(editRow.querySelector('[data-preview]')).toHaveTextContent('const next = false');
+    expect(editRow.querySelector('[data-tool-expansion]')).toBeNull();
+    expect(svc.FeedOutput).not.toHaveBeenCalled();
+    await fireEvent.click(editRow.querySelector('button')!);
+    await waitFor(() => expect(editRow.querySelector('[data-diff="add"]')).not.toBeNull());
     feed.view(SID).items = [edit, tool('commit-now', 'run', 'cd /repo; git commit -m "fix board"', {}, 2)] as never;
     await settle();
-    expect(container.querySelector('[data-change-preview]')).toBeNull();
+    expect(container.querySelector('[data-row="edit-now"]')).toBe(editRow);
+    expect(editRow.querySelector('[data-tool-expansion]')).not.toBeNull();
     expect(container.textContent).toContain('Committed');
-    expect(container.textContent).toContain('fix board');
+    // A later message and the end of the turn also cannot hide the opened output.
+    feed.view(SID).items = [...feed.view(SID).items, text('done', 'The change is ready.', 3)] as never;
+    store.sessions = [{ ...store.sessions[0], agentState: 'idle' }] as never;
+    await settle();
+    expect(container.querySelector('[data-row="edit-now"]')).toBe(editRow);
+    expect(editRow.querySelector('[data-tool-expansion]')).not.toBeNull();
+    await fireEvent.click(editRow.querySelector('button')!);
+    expect(editRow.querySelector('[data-tool-expansion]')).toBeNull();
+    expect(editRow.querySelector('[data-preview]')).not.toBeNull();
   });
 
   it('shows a local sending receipt and replaces it with the daemon item without duplication', async () => {

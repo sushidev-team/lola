@@ -19,8 +19,8 @@
   //
   // Which row of the footer applies is decided in composer.ts, and what a line starting with `/`
   // or `!` means in slash.ts. This file only draws the answer and carries it out.
-  import { tick } from "svelte";
-  import { attachmentTone, attachmentToken, expandPastes, fieldSegments, foldsPaste, isImagePath, textSize, tokenAtCaret, tokensIn, type Attachment } from "$lib/composerpaste";
+  import { tick, untrack } from "svelte";
+  import { atomicRange, attachmentTone, attachmentToken, expandPastes, fieldSegments, foldsPaste, isImagePath, padAttachments, textSize, tokenAtCaret, tokenStep, tokensIn, type Attachment } from "$lib/composerpaste";
   import { TalkService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
   import { ssh, sshClock } from "$lib/ssh.svelte";
@@ -120,7 +120,7 @@
   const pasted = $derived(runsByDefault ? [] : tokensIn(text, view.pastes));
   // The last long paste, for as long as nothing has touched the field since: the same text pasted
   // again straight after shows it as plain text.
-  let lastPaste: { text: string; n: number; field: string } | null = null;
+  let lastPaste: { text: string; n: number; field: string; expanded: string; caret: number } | null = null;
 
   // A textarea cannot style part of its text, so with a reference in it the field's text is drawn
   // by a layer behind it, cut the same way, and the textarea keeps the caret and the selection. Only
@@ -129,17 +129,70 @@
   // A digit is centred by trimming its box to the digit, because line metrics differ between WebKits:
   // the packaged app drew it a pixel low where the test browser did not.
   let mirror = $state<HTMLElement | null>(null);
+  let composing = false;
   const segments = $derived(pasted.length ? fieldSegments(text, view.pastes) : []);
   function syncMirror() {
-    if (mirror && field) mirror.scrollTop = field.scrollTop;
+    if (!mirror || !field) return;
+    // Match the textarea's content box, including space taken by its scrollbar.
+    mirror.style.width = `${field.clientWidth}px`;
+    mirror.style.height = `${field.clientHeight}px`;
+    mirror.scrollTop = field.scrollTop;
+    mirror.scrollLeft = field.scrollLeft;
+  }
+  function observeField(node: HTMLTextAreaElement) {
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(syncMirror);
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
   }
   $effect(() => {
-    text;
+    // Upgrade old references when restoring a draft; ordinary typing never inserts separators.
+    const value = text;
+    if (!runsByDefault && !composing) untrack(() => {
+      const current = field?.value === value;
+      const next = padAttachments(value, current ? field!.selectionStart : value.length, current ? field!.selectionEnd : value.length, view.pastes);
+      if (next.text !== value) {
+        const direction = field?.selectionDirection;
+        setText(next.text);
+        if (current) void tick().then(() => field?.setSelectionRange(next.start, next.end, direction));
+      }
+    });
     void tick().then(syncMirror);
   });
 
   function placeCaret(at: number) {
     void tick().then(() => field?.setSelectionRange(at, at));
+  }
+  function selectWholeTokens() {
+    if (runsByDefault || composing || !field) return;
+    const { start, end } = atomicRange(field.value, field.selectionStart, field.selectionEnd, view.pastes);
+    if (start !== field.selectionStart || end !== field.selectionEnd) field.setSelectionRange(start, end, field.selectionDirection);
+  }
+  function moveAcrossToken(e: KeyboardEvent): boolean {
+    if (runsByDefault || !field || e.altKey || e.metaKey || e.ctrlKey || !['ArrowLeft', 'ArrowRight'].includes(e.key)) return false;
+    if (!e.shiftKey && field.selectionStart !== field.selectionEnd) return false;
+    const backwards = field.selectionDirection === 'backward';
+    const anchor = backwards ? field.selectionEnd : field.selectionStart;
+    const focus = backwards ? field.selectionStart : field.selectionEnd;
+    const edge = tokenStep(field.value, focus, e.key === 'ArrowRight', view.pastes);
+    if (edge === null) return false;
+    e.preventDefault();
+    field.setSelectionRange(e.shiftKey ? Math.min(anchor, edge) : edge, e.shiftKey ? Math.max(anchor, edge) : edge, e.shiftKey && edge < anchor ? 'backward' : 'forward');
+    return true;
+  }
+  function inputText(el: HTMLTextAreaElement) {
+    setText(el.value);
+    walked = -1;
+    picked = 0;
+    note = '';
+  }
+  function beforeInput(e: InputEvent) {
+    if (runsByDefault || e.isComposing) return;
+    selectWholeTokens();
+    // Covers native deletion (including accessibility input), in addition to physical keys.
+    if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteContentForward') {
+      deleteToken(e, e.inputType === 'deleteContentForward');
+    }
   }
   // Reserve the reference at the caret immediately, before any asynchronous preparation.
   function attach(item: Attachment, clip: string) {
@@ -149,11 +202,11 @@
     const n = ++view.pasteSeq;
     view.pastes.set(n, item);
     const made = attachmentToken(n);
-    const from = el.selectionStart ?? el.value.length;
-    const next = el.value.slice(0, from) + made + el.value.slice(el.selectionEnd ?? from);
+    const { start: from, end: to } = atomicRange(el.value, el.selectionStart, el.selectionEnd, view.pastes);
+    const next = el.value.slice(0, from) + made + el.value.slice(to);
     setText(next);
     placeCaret(from + made.length);
-    lastPaste = clip ? { text: clip, n, field: next } : null;
+    lastPaste = clip ? { text: clip, n, field: next, expanded: el.value.slice(0, from) + clip + el.value.slice(to), caret: from + clip.length } : null;
     return n;
   }
   // Removing the tile removes its reference, and the other way round, so neither can be left alone.
@@ -210,8 +263,8 @@
       if (t) {
         e.preventDefault();
         view.pastes.delete(again.n);
-        setText(el.value.slice(0, t.from) + clip + el.value.slice(t.to));
-        placeCaret(t.from + clip.length);
+        setText(again.expanded);
+        placeCaret(again.caret);
         return;
       }
     }
@@ -225,11 +278,11 @@
     attach({ kind: "text", value: clip }, clip);
   }
   /** Backspace or Delete against a token takes the whole of it, since half of one means nothing. */
-  function deleteToken(e: KeyboardEvent): boolean {
-    if (running || (e.key !== "Backspace" && e.key !== "Delete") || !field) return false;
+  function deleteToken(e: Event, forward: boolean): boolean {
+    if (runsByDefault || !field) return false;
     if (field.selectionStart !== field.selectionEnd) return false;
     const caret = field.selectionStart ?? 0;
-    const t = tokenAtCaret(field.value, caret, e.key === "Delete", view.pastes);
+    const t = tokenAtCaret(field.value, caret, forward, view.pastes);
     if (!t) return false;
     e.preventDefault();
     view.pastes.delete(t.n);
@@ -513,7 +566,9 @@
 
   function onKey(e: KeyboardEvent) {
     if (e.isComposing) return;
-    if (deleteToken(e)) return;
+    if (moveAcrossToken(e)) return;
+    selectWholeTokens();
+    if ((e.key === 'Backspace' || e.key === 'Delete') && deleteToken(e, e.key === 'Delete')) return;
     // As in Claude Code and Codex. On a Mac this chord is otherwise a page down in a text field.
     if (e.key === "v" && e.ctrlKey && !e.metaKey && !e.altKey && !running) {
       e.preventDefault();
@@ -583,6 +638,7 @@
     holdTimer = setTimeout(() => (held = true), HOLD_MS);
   }
   function onKeyUp(e: KeyboardEvent) {
+    if (!e.isComposing) selectWholeTokens();
     if (e.key !== "Meta") return;
     release();
     if (!conn) return;
@@ -717,30 +773,30 @@
         {/each}
       </ul>
     {/if}
-    <div class="cv-composer-field flex items-start" data-composer-field>
+    <div class="cv-composer-field flex items-start" style:--composer-font={running ? 'var(--font-mono)' : 'var(--font-sans)'} data-composer-field>
       {#if running}<span class="text-prose pr-1.5 font-mono text-ink-2" aria-hidden="true">$</span>{/if}
-      <div class="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)]">
+      <div class="relative min-w-0 flex-1">
         {#if segments.length}
-          <div bind:this={mirror} class="text-prose pointer-events-none max-h-[min(160px,30cqh)] min-w-0 overflow-hidden break-words whitespace-pre-wrap text-ink" style="grid-area:1/1" aria-hidden="true" data-field-mirror>
+          <div bind:this={mirror} class="composer-text pointer-events-none absolute inset-0 overflow-hidden text-ink" aria-hidden="true" data-field-mirror>
             {#each segments as seg, i (i)}{#if seg.n}{@const tone = attachmentTone(seg.n)}<span class="relative"><span class="text-transparent">{seg.text}</span><span class="absolute top-1/2 left-1/2 grid size-[15px] -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full text-[10px] font-semibold leading-none {tone.tint} {tone.text}" data-field-ref={seg.n}><span class="block [text-box:trim-both_cap_alphabetic]">{seg.n}</span></span></span>{:else}{seg.text}{/if}{/each}{"\u200b"}
           </div>
         {/if}
         <textarea
           bind:this={field}
+          use:observeField
           value={text}
           rows="1"
           spellcheck={!running}
-          style="grid-area:1/1"
           onscroll={syncMirror}
-          class="text-prose max-h-[min(160px,30cqh)] min-w-0 resize-none overflow-y-auto bg-transparent {segments.length ? 'text-transparent' : 'text-ink'} outline-none placeholder:text-placeholder focus-visible:outline-none! {running ? 'font-mono' : 'caret-accent'}"
+          class="composer-text relative block max-h-[min(160px,30cqh)] w-full min-w-0 resize-none overflow-y-auto bg-transparent {segments.length ? 'text-transparent' : 'text-ink'} caret-accent outline-none placeholder:text-placeholder focus-visible:outline-none!"
           {placeholder}
           aria-label={placeholder}
-          oninput={(e) => {
-            setText(e.currentTarget.value);
-            walked = -1;
-            picked = 0;
-            note = "";
-          }}
+          oninput={(e) => inputText(e.currentTarget)}
+          onbeforeinput={beforeInput}
+          oncompositionstart={() => composing = true}
+          oncompositionend={(e) => { composing = false; inputText(e.currentTarget); }}
+          onselect={selectWholeTokens}
+          onpointerup={selectWholeTokens}
           onpaste={onPaste}
           onkeydown={onKey}
           onkeyup={onKeyUp}
@@ -808,3 +864,27 @@
     {/each}
   </div>
 {/if}
+
+<style>
+  /* One text layout for both surfaces. WebKit's native textarea defaults must not
+     move its caret independently of the text and attachment decorations below it. */
+  .composer-text {
+    box-sizing: border-box;
+    margin: 0;
+    border: 0;
+    padding: 0;
+    font-family: var(--composer-font);
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 21px;
+    letter-spacing: normal;
+    font-kerning: none;
+    font-variant-ligatures: none;
+    text-indent: 0;
+    text-transform: none;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: normal;
+    tab-size: 4;
+  }
+</style>

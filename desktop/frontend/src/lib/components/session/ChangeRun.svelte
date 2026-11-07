@@ -8,6 +8,7 @@
   import Button from "../Button.svelte";
   import Chevron from "../Chevron.svelte";
   import ToolOutput from "./ToolOutput.svelte";
+  import ToolPreview from "./ToolPreview.svelte";
 
   let { sessionId, row, active = false, readonly = false }: {
     sessionId: string; row: RunRowData; active?: boolean; readonly?: boolean;
@@ -16,16 +17,15 @@
   const session = $derived(store.sessionById(sessionId));
   const paths = $derived([...new Set(row.items.map(item => item.target))]);
   let selected = $state("");
-  let dismissed = $state(false);
   const path = $derived(paths.includes(selected) ? selected : row.items.at(-1)?.target || "");
   const items = $derived(row.items.filter(item => item.target === path));
   const running = $derived(row.items.some(item => item.status === "running"));
-  const open = $derived(!readonly && (f.expanded.has(row.id) || !dismissed && (active || row.failed > 0 && !row.settled)));
+  const open = $derived(!readonly && f.expanded.has(row.id));
   const id = $props.id();
 
   function toggle() {
-    if (open) { dismissed = true; f.expanded.delete(row.id); }
-    else { dismissed = false; f.expanded.add(row.id); }
+    if (open) f.expanded.delete(row.id);
+    else f.expanded.add(row.id);
   }
   $effect(() => {
     if (open) for (const item of items) if (item.tool.hasOutput) void f.output(item.id);
@@ -40,6 +40,7 @@
     {#if row.failed}<span class="text-bad">{row.failed} failed</span>{/if}
     {#if row.added || row.removed}<span class="num whitespace-nowrap text-faint" title="Lines added and removed across these edits">+{row.added} −{row.removed}</span>{/if}
   </button>
+  {#if !open}<ToolPreview text={row.items.at(-1)?.tool.preview || path} {running} />{/if}
   {#if open}
     <div {id} class="cv-change-body">
       <div class="cv-change-files" aria-label="Changed files">

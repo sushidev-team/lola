@@ -900,7 +900,7 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .cv-progress-note [data-voice="agent"][data-role="narration"],
 .cv-progress-note [data-rich-lead] { color: color-mix(in srgb, var(--cv-comment) 25%, var(--color-ink)); }
 .cv-progress-note [data-rich-lead] { font-weight: 400; }
-[data-conversation] :is([data-tool], [data-run]:not([data-change-run])) > :is(button, div.grid) {
+[data-conversation] [data-run]:not([data-change-run]) > :is(button, div.grid) {
   width: 100%;
   margin-inline: 0;
   height: auto;
@@ -912,15 +912,43 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
   grid-template-columns: 76px minmax(0, 1fr) 110px 16px;
   align-items: center;
 }
-[data-conversation] :is([data-tool], [data-run]:not([data-change-run])) > button:hover { background: var(--color-sel); }
-[data-conversation] :is([data-tool], [data-run]:not([data-change-run])) > :is(button, div.grid) > span:first-child { color: var(--color-ink-2); font-size: 11px; }
-[data-conversation] :is([data-tool], [data-run]:not([data-change-run])) > :is(button, div.grid) > span:nth-child(3) { justify-content: flex-end; font-size: 11px; }
-[data-conversation] :is([data-tool], [data-run]:not([data-change-run])) > :is(button, div.grid) > span:nth-child(3) > span:last-child { min-width: 44px; text-align: right; }
+[data-conversation] [data-run]:not([data-change-run]) > button:hover { background: var(--color-sel); }
+[data-conversation] [data-run]:not([data-change-run]) > :is(button, div.grid) > span:first-child { color: var(--color-ink-2); font-size: 11px; }
+[data-conversation] [data-run]:not([data-change-run]) > :is(button, div.grid) > span:nth-child(3) { justify-content: flex-end; font-size: 11px; }
+[data-conversation] [data-run]:not([data-change-run]) > :is(button, div.grid) > span:nth-child(3) > span:last-child { min-width: 44px; text-align: right; }
 @container (max-width: 600px) {
-  [data-conversation] :is([data-tool], [data-run]:not([data-change-run])) > :is(button, div.grid) { grid-template-columns: 68px minmax(0, 1fr) auto 14px; gap: 6px; }
+  [data-conversation] [data-run]:not([data-change-run]) > :is(button, div.grid) { grid-template-columns: 68px minmax(0, 1fr) auto 14px; gap: 6px; }
 }
-[data-conversation] [data-tool][data-tool-layout="summary"] > :is(button, div.grid) { grid-template-columns: minmax(0, 1fr) auto; }
 [data-conversation] [data-tool-expansion] { padding-left: 0; padding-top: 2px; }
+
+/* Live tool rows keep the same tracks and preview height when their status changes. */
+[data-conversation] [data-tool] > .cv-tool-summary,
+.cv-tool-summary {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  font-size: 12px;
+  line-height: 20px;
+}
+.cv-tool-summary:hover:enabled { background: color-mix(in srgb, var(--color-sel) 45%, transparent); }
+.cv-tool-summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.cv-tool-verb { display: flex; align-items: center; gap: 6px; color: var(--color-ink-2); }
+.cv-tool-meta { min-width: 72px; justify-content: flex-end; }
+.cv-tool-indicator { flex: 0 0 6px; height: 6px; border-radius: 50%; background: var(--color-faint); }
+.cv-tool-indicator[data-running] { background: var(--color-accent); animation: cv-tool-pulse 1.8s ease-in-out infinite; }
+.cv-tool-preview { height: 40px; margin: 2px 0 8px 20px; overflow: hidden; color: var(--color-ink-2); font-size: 12px; line-height: 20px; }
+.cv-tool-preview > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
+@keyframes cv-tool-pulse { 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .cv-tool-indicator[data-running] { animation: none; } }
 
 .cv-tool-output {
   box-sizing: border-box;
@@ -1137,7 +1165,7 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
   background: var(--color-panel);
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--cv-agent-accent) 12%, transparent), 0 4px 24px color-mix(in srgb, var(--cv-agent-accent) var(--cv-glow), transparent);
 }
-.cv-result [data-role="answer"] > [data-rich] > p:first-child {
+.cv-result [data-role="answer"] > [data-rich] > p:first-child:not(:last-child) {
   margin: -16px -20px 14px;
   padding: 14px 20px;
   max-width: none;
@@ -1175,7 +1203,6 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 [data-run] .cv-stack-count { min-width: 1.5ch; padding: 0; font-weight: 500; }
 [data-run] .cv-call-preview { max-width: none; flex: 1; }
 [data-run] .cv-stack-sheet { border-color: color-mix(in srgb, var(--color-edge) 65%, transparent); background: transparent; }
-[data-conversation] [data-tool][data-status="running"] > :is(button, div.grid) { padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--color-accent) 55%, var(--cv-hairline)); border-radius: 8px; background: color-mix(in srgb, var(--color-accent) 7%, var(--color-panel)); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-accent) 16%, transparent), 0 3px 18px color-mix(in srgb, var(--color-accent) var(--cv-glow), transparent); }
 .cv-result [data-role="answer"] { padding: 0; }
 .cv-result .cv-response { overflow: visible; }
 .cv-result [data-rich-lead] { font-size: 13px; line-height: 21px; color: var(--color-ink); }
@@ -1230,7 +1257,7 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
   .cv-activity-counts { gap: 6px 10px; }
   .cv-activity-log { padding-left: 12px; }
   .cv-result { padding: 14px; }
-  .cv-result [data-role="answer"] > [data-rich] > p:first-child { margin: -14px -14px 10px; padding: 10px 14px; }
+  .cv-result [data-role="answer"] > [data-rich] > p:first-child:not(:last-child) { margin: -14px -14px 10px; padding: 10px 14px; }
   .cv-result [data-role="answer"] .cv-ledger { grid-template-columns: minmax(0, 1fr); }
   .cv-result [data-role="answer"] .cv-ledger dt { padding-bottom: 0; border-top: 0; }
   .cv-result [data-role="answer"] .cv-ledger dd { padding-top: 4px; border-top: 0; }
@@ -1239,7 +1266,6 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
   .cv-composer-field { padding-inline: 12px; }
   .cv-composer-actions { padding-left: 12px; column-gap: 6px; }
 }
-[data-conversation] [data-tool][data-status="running"] > :is(button, div.grid) { grid-template-columns: minmax(0, 1fr) auto 16px; }
 
 .cv-session-side { padding-top: 16px; }
 .cv-session-side > section { padding: 12px; border-radius: 6px; background: color-mix(in srgb, var(--color-panel) 55%, var(--color-canvas)); }
@@ -1304,19 +1330,6 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .cv-tooltip-heading { margin-bottom: 7px; color: var(--activity-color, var(--color-accent-ink)); font-size: 12px; font-weight: 600; }
 .cv-tooltip-card .cv-tooltip-body { font-size: 13px; line-height: 20px; color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .cv-tooltip-meta { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--color-edge); color: var(--color-ink-2); font-size: 12px; line-height: 18px; }
-
-/* Details inside an opened activity group are quiet rows, not a stack of cards. */
-[data-conversation] [data-tool][data-tool-layout="columns"] > :is(button, div.grid) {
-  min-height: 28px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  box-shadow: none;
-  grid-template-columns: 52px minmax(0, 1fr) auto 14px;
-  gap: 8px;
-}
-[data-conversation] [data-tool][data-tool-layout="columns"] > button:hover { background: color-mix(in srgb, var(--color-sel) 45%, transparent); }
 
 /* One resizable navigation rail; the selected session owns the full workspace. */
 .sidebar { container-type: inline-size; container-name: sidebar; }

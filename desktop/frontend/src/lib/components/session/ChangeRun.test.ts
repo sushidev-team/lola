@@ -10,10 +10,13 @@ const edit = (id: string, path: string, n: number) => tool(id, 'edit', path, { p
 const group = (items: ReturnType<typeof tool>[]) => collapseWork(items as never, true)[0] as RunRowData;
 
 describe('inline changes', () => {
-  it('keeps one explorer as files arrive, allows selection, and compacts after activity moves on', async () => {
+  it('opens changes on request and keeps the selected file open as activity moves on', async () => {
     const first = edit('one', 'src/one.ts', 1);
     const second = edit('two', 'src/two.ts', 2);
     const { container, rerender } = render(ChangeRun, { sessionId: 'change-preview', row: group([first]), active: true });
+    expect(container.querySelector('[data-change-preview]')).toBeNull();
+    expect(container.querySelector('[data-preview]')).toHaveTextContent('const next = 2;');
+    await fireEvent.click(screen.getByRole('button', { name: /Changes · 1 file/ }));
     expect(container.querySelector('[data-diff="add"]')).toHaveTextContent('const next = 2;');
     await rerender({ sessionId: 'change-preview', row: group([first, second]), active: true });
     expect(screen.getByRole('button', { name: /Changes · 2 files/ })).toHaveAttribute('aria-expanded', 'true');
@@ -21,9 +24,10 @@ describe('inline changes', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'src/one.ts Edited' }));
     expect(container.querySelector('[data-diff="add"]')).toHaveTextContent('const next = 2;');
     await rerender({ sessionId: 'change-preview', row: group([first, second]), active: false });
-    expect(container.querySelector('[data-change-preview]')).toBeNull();
-    await fireEvent.click(screen.getByRole('button', { name: /Changes · 2 files/ }));
     expect(container.querySelector('[data-change-preview]')).not.toBeNull();
+    expect(container.querySelector('[data-diff="add"]')).toHaveTextContent('const next = 2;');
+    await fireEvent.click(screen.getByRole('button', { name: /Changes · 2 files/ }));
+    expect(container.querySelector('[data-change-preview]')).toBeNull();
   });
 
   it('shows unnumbered PHP source as a short highlighted excerpt with full output on demand', async () => {

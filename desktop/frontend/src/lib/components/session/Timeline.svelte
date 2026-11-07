@@ -46,7 +46,7 @@
   const talkState = $derived(talk.state(sessionId));
   // A parked agent can still answer a call. A resting or dead one never will, so it reads no result.
   const alive = $derived(["working", "starting", "waiting_input"].includes(session?.agentState ?? ""));
-  const story = $derived(buildStory({ feed: f.items, items: view.items, filter: view.filter, scope: view.scope, alive, opened: view.openedFolds }));
+  const story = $derived(buildStory({ feed: f.items, items: view.items, filter: view.filter, scope: view.scope, alive, opened: view.openedFolds, standing: f.standing }));
 
   // --- the feed --------------------------------------------------------------
   const feedSeq = $derived(talkState?.feedSeq);
@@ -78,7 +78,7 @@
   let pinnedTurns = $state<Set<string>>(new Set());
 
   function folded(id: string, index: number): boolean {
-    return !audit && isFolded(index, story.turns.length, f.expanded, id);
+    return !audit && !f.standing.has(`turn-${id}`) && isFolded(index, story.turns.length, f.expanded, id);
   }
 
   // --- the rows the keyboard walks ----------------------------------------------
@@ -148,13 +148,13 @@
   const headLabel = $derived(headSource?.kind === "origin" && headSource.source === "lola" ? "Lola instruction" : headSource?.kind === "moment" ? "Session event" : headSource?.kind === "origin" ? "Background context" : "Your request");
   const headAsk = $derived(headTurn ? turnAsk(story.turns.find((t) => t.id === headTurn) ?? { rows: [] }) : "");
   let anchor: { row: Element; top: number } | null = null;
-  // Keep a disclosure's heading in view throughout its opening animation. A
-  // wheel, pointer or key gesture hands scrolling straight back to the reader.
+  // Opening details holds the control where it was, rather than snapping it to the top.
   let opening: HTMLElement | null = null;
+  let openingTop = 0;
   function releaseOpening() { opening = null; }
   function scrollOpening() {
     if (!opening?.isConnected || !scroller) return;
-    const top = scroller.getBoundingClientRect().top + 44;
+    const top = openingTop;
     scroller.scrollTop += opening.getBoundingClientRect().top - top;
     lastTop = scroller.scrollTop;
     notAtTail = !atBottom();
@@ -171,6 +171,7 @@
       : control.getAttribute('aria-expanded') === 'false';
     if (!expands) return;
     opening = control;
+    openingTop = control.getBoundingClientRect().top;
     stuck = false;
     anchor = null;
     void tick().then(scrollOpening);
@@ -410,7 +411,7 @@
       if (request !== landing) return;
       // Land on the nearest visible container, leaving every disclosure untouched.
       const turnEl = scroller?.querySelector(`[data-turn="${safeId(turn.id)}"]`);
-      const work = turnParts(turn.rows, 0, !(alive && at.turn === story.turns.length - 1))
+      const work = turnParts(turn.rows, 0, !(alive && at.turn === story.turns.length - 1), f.standing)
         .find(p => p.kind === 'work' && p.rows.some(row => row.id === at.row.id));
       const el = at.turn < firstShown ? scroller?.querySelector('[data-earlier-life]')
         : turnEl?.querySelector('[data-turn-fold]')
@@ -552,6 +553,7 @@
         else if (cur?.kind === "tool" || cur?.kind === "run") f.expanded.add(cur.id);
         else return;
         opening = scroller?.querySelector<HTMLElement>(rowSelector(cur!.id)) ?? null;
+        openingTop = opening?.getBoundingClientRect().top ?? 0;
         stuck = false;
         void tick().then(scrollOpening);
         break;

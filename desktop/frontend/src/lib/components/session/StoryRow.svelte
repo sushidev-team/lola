@@ -79,7 +79,7 @@
 {/snippet}
 
 {#if row.kind === "tool"}
-  <ToolRow {active} {sessionId} {row} {chars} {readonly} nested />
+  <ToolRow {active} {sessionId} {row} {chars} {readonly} {nested} />
 {:else if row.kind === "run"}
   {#if row.category === "edit"}
     <ChangeRun {sessionId} {row} {active} {readonly} />

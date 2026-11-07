@@ -117,6 +117,8 @@ export type StoryInput = {
   alive?: boolean;
   /** Plate folds a human opened. */
   opened?: ReadonlySet<string>;
+  /** Already-presented rows must not disappear into an automatic group. */
+  standing?: ReadonlySet<string>;
 };
 
 /** Over this many tool rows between prose, a stretch collapses by category. */
@@ -273,7 +275,7 @@ function groupQuiet(category: string, members: ToolRowData[]): (ToolRowData | Ru
  * the stretch the agent is still in, where a failure may be what happens next, so there the last
  * failure also keeps its row and its preview. Anything still unresolved always has a row.
  */
-export function collapseWork(tools: readonly AgentFeedItem[], alive: boolean, tail = false, current = ""): (ToolRowData | RunRowData)[] {
+export function collapseWork(tools: readonly AgentFeedItem[], alive: boolean, tail = false, current = "", standing?: ReadonlySet<string>): (ToolRowData | RunRowData)[] {
   const rows = tools.filter((i) => i.tool && !isLolaCall(i.tool)).map((i) => toolRow(i, alive));
   const out: (ToolRowData | RunRowData)[] = [];
   let chunk: ToolRowData[] = [];
@@ -283,6 +285,11 @@ export function collapseWork(tools: readonly AgentFeedItem[], alive: boolean, ta
     chunk = [];
   };
   for (const row of rows) {
+    if (standing?.has(row.id) || row.id === current || row.status === "running") {
+      flush();
+      out.push(row);
+      continue;
+    }
     const previous = chunk.at(-1);
     if (previous && ((previous.tool.category === "edit") !== (row.tool.category === "edit") ||
       row.tool.category === "edit" && row.at - previous.at > 30_000)) flush();
@@ -477,7 +484,7 @@ export function buildStory(input: StoryInput): Story {
 
   const flushTools = (tail = false) => {
     if (!tools.length) return;
-    for (const r of collapseWork(tools, alive, tail, alive && input.feed.at(-1)?.tool ? input.feed.at(-1)!.id : "")) pushRow(r);
+    for (const r of collapseWork(tools, alive, tail, alive && input.feed.at(-1)?.tool ? input.feed.at(-1)!.id : "", input.standing)) pushRow(r);
     tools = [];
   };
 
@@ -812,7 +819,7 @@ export function workSegments(rows: readonly StoryRow[]): WorkSegment[] {
  * Only the last `keepBeats` narration beats stay up. Older ones fold with their work, and this is
  * the only way prose folds. Prose with no work beside it stays, since a fold would name nothing.
  */
-export function turnParts(rows: readonly StoryRow[], keepBeats = KEEP_BEATS, settled = false): TurnPart[] {
+export function turnParts(rows: readonly StoryRow[], keepBeats = KEEP_BEATS, settled = false, standing?: ReadonlySet<string>): TurnPart[] {
   const beats: number[] = [];
   rows.forEach((r, i) => {
     if (r.kind === "prose") beats.push(i);
@@ -841,7 +848,7 @@ export function turnParts(rows: readonly StoryRow[], keepBeats = KEEP_BEATS, set
     // An active call or unanswered failure must remain visible even in a completed turn.
     const needsAttention = row.kind === "tool" && (row.status === "running" || (i >= last && !row.settled && LOUD.has(row.status))) ||
       row.kind === "run" && (row.items.some(item => item.status === "running") || row.failed > 0 && i >= last && !row.settled);
-    const folds = !needsAttention && (((i < last || settled) && (row.kind === "tool" || row.kind === "run")) || (i < last && row.kind === "prose" && i < standsFrom));
+    const folds = !standing?.has(row.id) && !needsAttention && (((i < last || settled) && (row.kind === "tool" || row.kind === "run")) || (i < last && row.kind === "prose" && i < standsFrom));
     if (folds) {
       run.push(row);
       return;

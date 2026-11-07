@@ -3,11 +3,12 @@
   import type { RunRowData } from "$lib/turns";
   import { formatMs } from "$lib/ssh";
   import { tooltip } from "$lib/tooltip";
-  import { slide, fly } from "svelte/transition";
+  import { slide } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import Chevron from "../Chevron.svelte";
   import SyntaxText from "../SyntaxText.svelte";
   import ToolRow from "./ToolRow.svelte";
+  import ToolPreview from "./ToolPreview.svelte";
 
   let { sessionId, row, chars = 72, readonly = false, nested = false }: {
     sessionId: string; row: RunRowData; chars?: number; readonly?: boolean; nested?: boolean;
@@ -19,18 +20,6 @@
   const hint = $derived(`${row.items.length} separate ${label}\n${row.items.slice(0, 3).map(item => item.target).join('\n')}${row.items.length > 3 ? '\n…' : ''}`);
   const id = $props.id();
   let animated = $state(false);
-  let head = $state<HTMLElement | null>(null);
-  let previousCount: number | undefined;
-  $effect(() => {
-    const count = row.items.length;
-    if (previousCount !== undefined && count > previousCount && head && motionEnabled(head)) {
-      // A quiet, one-shot settling motion acknowledges the new member without looping.
-      head.animate([{ transform: 'translateY(0)' }, { transform: 'translateY(3px)', offset: 0.35 }, { transform: 'translateY(0)' }], {
-        duration: 320, easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-      });
-    }
-    previousCount = count;
-  });
   function toggle() { animated = true; if (open) f.expanded.delete(row.id); else f.expanded.add(row.id); }
   function motionEnabled(node: HTMLElement) {
     return !!node.animate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -45,16 +34,14 @@
       css: (t: number, u: number) => `opacity: ${t * t}; transform: translateY(${-6 * u}px);`,
     };
   }
-  function countIn(node: HTMLElement) { return fly(node, { y: 6, duration: motionEnabled(node) ? 220 : 0, easing: cubicOut }); }
-  function countOut(node: HTMLElement) { return fly(node, { y: -6, duration: motionEnabled(node) ? 160 : 0, easing: cubicOut }); }
 
 </script>
 
 <div data-run={row.category} class="cv-call-group" class:cv-call-group-open={open} class:cv-call-group-animated={animated}>
-  <div class="cv-call-group-head" bind:this={head}>
+  <div class="cv-call-group-head">
     <button class="cv-call-group-toggle" type="button" disabled={readonly} aria-expanded={open} aria-controls={id} onclick={toggle} use:tooltip={{ text: hint, language: row.category === "run" ? "sh" : "text" }}>
       <Chevron {open} />
-      <span class="cv-call-group-label"><span class="cv-stack-count">{#key row.items.length}<span in:countIn out:countOut>{row.items.length}</span>{/key}</span> {label}</span>
+      <span class="cv-call-group-label"><span class="cv-stack-count">{row.items.length}</span> {label}</span>
       <span class="cv-call-group-preview">
         {#each previews as preview, i}
           {#if i}<span class="cv-call-group-separator" aria-hidden="true">·</span>{/if}
@@ -66,6 +53,7 @@
     <span class="cv-stack-sheet cv-stack-sheet-first" aria-hidden="true"></span>
     <span class="cv-stack-sheet cv-stack-sheet-second" aria-hidden="true"></span>
   </div>
+  {#if !open && !nested}<ToolPreview text={row.items.at(-1)?.tool.preview || row.items.at(-1)?.target || ""} />{/if}
   {#if open}
     <div {id} class="cv-call-group-items" transition:reveal>
       {#each row.items as item (item.id)}

@@ -27,7 +27,8 @@ export const PASTE_MIN_BYTES = 800;
 export const PASTE_MIN_LINES = 5;
 
 const JOIN = "⁠";
-const TOKEN_RE = /⁠\((\d+)\)⁠/g;
+// Accept older drafts too. Padding belongs inside the atomic reference, not in the user's prose.
+const TOKEN_RE = /⁠\u00a0?\((\d+)\)\u00a0?⁠/g;
 const IMAGE_PATH_RE = /^(?:~?\/)[^\n]+\.(?:png|jpe?g|gif|webp)$/i;
 
 export function foldsPaste(text: string): boolean {
@@ -40,7 +41,7 @@ export function isImagePath(text: string): boolean {
 }
 
 export function attachmentToken(n: number): string {
-  return `${JOIN}(${n})${JOIN}`;
+  return `${JOIN}\u00a0(${n})\u00a0${JOIN}`;
 }
 
 /**
@@ -81,7 +82,20 @@ export function textSize(text: string): string {
 /** The message as it goes. A reference nothing is kept for keeps its visible words. */
 export function expandPastes(text: string, pastes: Pastes): string {
   if (!text.includes(JOIN)) return text;
-  return text.replace(TOKEN_RE, (_, n) => pastes.get(Number(n))?.value ?? `(${n})`);
+  let out = '', at = 0, previousAttachment = false;
+  const append = (part: string, separate: boolean) => {
+    if (separate && out && part && !/\s$/.test(out) && !/^\s/.test(part)) out += ' ';
+    out += part;
+  };
+  for (const match of text.matchAll(TOKEN_RE)) {
+    append(text.slice(at, match.index), previousAttachment);
+    const item = pastes.get(Number(match[1]));
+    append(item?.value ?? `(${match[1]})`, !!item || previousAttachment);
+    previousAttachment = !!item;
+    at = match.index + match[0].length;
+  }
+  append(text.slice(at), previousAttachment);
+  return out;
 }
 
 /** The references in this text that stand for something, in order. */
@@ -97,6 +111,39 @@ export function tokensIn(text: string, pastes: Pastes): { n: number; from: numbe
 /** The range one press of Backspace or Delete removes, when the caret sits against a reference. */
 export function tokenAtCaret(text: string, caret: number, forward: boolean, pastes: Pastes): { n: number; from: number; to: number } | null {
   return tokensIn(text, pastes).find((t) => (forward ? t.from === caret : t.to === caret)) ?? null;
+}
+
+/** A reference is one editing unit, including its invisible delimiters. */
+export function tokenStep(text: string, caret: number, forward: boolean, pastes: Pastes): number | null {
+  const token = tokensIn(text, pastes).find(t => forward ? t.from <= caret && caret < t.to : t.from < caret && caret <= t.to);
+  return token ? forward ? token.to : token.from : null;
+}
+
+/** Mouse, vertical navigation and native selection must not leave a half-reference selected. */
+export function atomicRange(text: string, start: number, end: number, pastes: Pastes): { start: number; end: number } {
+  for (const token of tokensIn(text, pastes)) {
+    if (start === end && start > token.from && start < token.to) {
+      const edge = start - token.from < token.to - start ? token.from : token.to;
+      return { start: edge, end: edge };
+    }
+    if (start > token.from && start < token.to) start = token.from;
+    if (end > token.from && end < token.to) end = token.to;
+  }
+  return { start, end };
+}
+
+/** Give existing drafts the same chip padding without inserting spaces into their surrounding text. */
+export function padAttachments(text: string, start: number, end: number, pastes: Pastes): { text: string; start: number; end: number } {
+  ({ start, end } = atomicRange(text, start, end, pastes));
+  for (const token of tokensIn(text, pastes).reverse()) {
+    const padded = attachmentToken(token.n);
+    const delta = padded.length - (token.to - token.from);
+    if (!delta) continue;
+    text = text.slice(0, token.from) + padded + text.slice(token.to);
+    if (start >= token.to) start += delta;
+    if (end >= token.to) end += delta;
+  }
+  return { text, start, end };
 }
 
 /** One piece of a sent message as the story draws it: words, or the number of an image it shows. */

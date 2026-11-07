@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { attachmentTone, attachmentToken, expandPastes, fieldSegments, foldsPaste, isImagePath, textSize, tokenAtCaret, tokensIn, youAttachments, type Pastes } from "./composerpaste";
+import { atomicRange, attachmentTone, attachmentToken, expandPastes, fieldSegments, foldsPaste, isImagePath, padAttachments, textSize, tokenAtCaret, tokenStep, tokensIn, youAttachments, type Attachment, type Pastes } from "./composerpaste";
 
 const text = (value: string) => ({ kind: "text", value }) as const;
 
@@ -14,8 +14,8 @@ describe("attachments", () => {
     expect(textSize("x".repeat(2048))).toBe("2 KB");
     expect(textSize("abc")).toBe("3 chars");
   });
-  it("draws as a plain number", () => {
-    expect(attachmentToken(3).replace(/⁠/g, "")).toBe("(3)");
+  it("reserves horizontal padding inside the atomic number", () => {
+    expect(attachmentToken(3).replace(/⁠/g, "")).toBe("\u00a0(3)\u00a0");
   });
   it("fills in a reference, and a typed (1) is the person's own words", () => {
     const pastes: Pastes = new Map([[1, text("THE LOG")]]);
@@ -44,6 +44,36 @@ describe("attachments", () => {
     expect(isImagePath("/Users/me/CleanShot 2026-11-06 at 09.11.17.png\n")).toBe(true);
     expect(isImagePath("see /a/b.png please")).toBe(false);
     expect(isImagePath("/a/b.txt")).toBe(false);
+  });
+  it("moves across an entire chip in either direction, including multi-digit counts", () => {
+    const pastes: Pastes = new Map([[12, text('log')]]);
+    const value = `a ${attachmentToken(12)} z`;
+    const [chip] = tokensIn(value, pastes);
+    expect(tokenStep(value, chip.from, true, pastes)).toBe(chip.to);
+    expect(tokenStep(value, chip.to, false, pastes)).toBe(chip.from);
+    expect(tokenStep(value, 0, true, pastes)).toBeNull();
+    expect(tokenStep('(12)', 0, true, pastes)).toBeNull();
+    expect(atomicRange(value, chip.from + 1, chip.to - 1, pastes)).toEqual({ start: chip.from, end: chip.to });
+    expect(atomicRange(value, chip.from + 1, chip.from + 1, pastes)).toEqual({ start: chip.from, end: chip.from });
+  });
+  it("keeps padding inside chips and separates their expanded contents only when sending", () => {
+    const pastes: Pastes = new Map<number, Attachment>([[1, text('log')], [2, { kind: 'image', value: '/image.png' }]]);
+    const one = attachmentToken(1), two = attachmentToken(2);
+    const value = `a${one}${two}z`;
+    expect(padAttachments(value, value.length, value.length, pastes)).toEqual({ text: value, start: value.length, end: value.length });
+    expect(expandPastes(value, pastes)).toBe('a log /image.png z');
+    expect(expandPastes(one, pastes)).toBe('log');
+    expect(expandPastes(`\n${one}\n`, pastes)).toBe('\nlog\n');
+    for (const unchanged of [one, `${one}\n${two}`, `\n${one}\n`, `a ${one}\t z`, '(1)text']) {
+      expect(padAttachments(unchanged, 0, 0, pastes).text).toBe(unchanged);
+    }
+  });
+  it("pads legacy drafts without moving the cursor from the text before a chip", () => {
+    const pastes: Pastes = new Map([[1, text('log')]]);
+    const legacy = '\u2060(1)\u2060';
+    expect(padAttachments(`word${legacy}`, 4, 4, pastes)).toEqual({ text: `word${attachmentToken(1)}`, start: 4, end: 4 });
+    expect(padAttachments(legacy, legacy.length, legacy.length, pastes)).toEqual({ text: attachmentToken(1), start: attachmentToken(1).length, end: attachmentToken(1).length });
+    expect(expandPastes(legacy, pastes)).toBe('log');
   });
   it("cuts the field at its references, and leaves a typed (1) in the words", () => {
     const pastes: Pastes = new Map([[1, text("x")]]);

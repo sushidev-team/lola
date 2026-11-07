@@ -424,6 +424,97 @@ describe("reaching a card", () => {
 describe("attachments in the field", () => {
   const paste = (text: string) => fireEvent.paste(field(), { clipboardData: { getData: () => text } });
 
+  it.each(['text', 'image'] as const)("treats a %s chip as one cursor and selection step", async (kind) => {
+    const id = freshSession();
+    const view = ssh.view(id);
+    view.pastes.set(12, { kind, value: kind === 'text' ? 'long log' : '/image.png' });
+    const chip = attachmentToken(12);
+    view.agentDraft = `a ${chip} z`;
+    shown(id);
+    await setTalk(id);
+    const start = 2, end = start + chip.length;
+    field().setSelectionRange(start, start);
+    await fireEvent.keyDown(field(), { key: 'ArrowRight' });
+    expect(field().selectionStart).toBe(end);
+    await fireEvent.keyDown(field(), { key: 'ArrowLeft', shiftKey: true });
+    expect([field().selectionStart, field().selectionEnd, field().selectionDirection]).toEqual([start, end, 'backward']);
+    await fireEvent.keyDown(field(), { key: 'ArrowRight', shiftKey: true });
+    expect([field().selectionStart, field().selectionEnd]).toEqual([end, end]);
+    await fireEvent.keyDown(field(), { key: 'ArrowLeft' });
+    expect(field().selectionStart).toBe(start);
+    await fireEvent.keyDown(field(), { key: 'ArrowRight', shiftKey: true });
+    expect([field().selectionStart, field().selectionEnd]).toEqual([start, end]);
+    // Clicking inside the painted number cannot put an insertion point inside its token.
+    field().setSelectionRange(start + 1, start + 1);
+    await fireEvent.select(field());
+    expect(field().selectionStart).toBe(start);
+    field().setSelectionRange(start + 1, end - 1);
+    await fireEvent.select(field());
+    expect([field().selectionStart, field().selectionEnd]).toEqual([start, end]);
+    field().setSelectionRange(end, end);
+    await fireEvent.keyDown(field(), { key: 'Backspace' });
+    expect(field().value).toBe('a  z');
+    expect(view.pastes.has(12)).toBe(false);
+  });
+
+  it("pads a chip inserted between characters and keeps a repeated paste literal", async () => {
+    const id = freshSession();
+    shown(id);
+    await setTalk(id);
+    await type('beforeafter');
+    field().setSelectionRange(6, 6);
+    const log = 'line\n'.repeat(10);
+    await paste(log);
+    expect(field().value).toBe(`before${attachmentToken(1)}after`);
+    await paste(log);
+    expect(field().value).toBe(`before${log}after`);
+  });
+
+  it("preserves text typed next to a padded chip, including composition and line breaks", async () => {
+    const id = freshSession();
+    const view = ssh.view(id);
+    view.pastes.set(1, { kind: 'text', value: 'log' });
+    const chip = attachmentToken(1);
+    view.agentDraft = chip;
+    shown(id);
+    await setTalk(id);
+    await fireEvent.input(field(), { target: { value: `${chip}x` }, inputType: 'insertText' });
+    expect(field().value).toBe(`${chip}x`);
+    expect(field().selectionStart).toBe(chip.length + 1);
+    await fireEvent.input(field(), { target: { value: `${chip}x` }, inputType: 'deleteContentBackward' });
+    expect(field().value).toBe(`${chip}x`);
+    await fireEvent.input(field(), { target: { value: `${chip}日本` }, inputType: 'insertCompositionText', isComposing: true });
+    expect(field().value).toBe(`${chip}日本`);
+    await fireEvent.compositionEnd(field());
+    expect(field().value).toBe(`${chip}日本`);
+    await fireEvent.input(field(), { target: { value: `\n${chip}\n` }, inputType: 'insertLineBreak' });
+    expect(field().value).toBe(`\n${chip}\n`);
+  });
+
+  it.each(['text', 'image'] as const)("does not insert spaces between letters typed before a %s chip", async (kind) => {
+    const id = freshSession();
+    const view = ssh.view(id);
+    view.pastes.set(1, { kind, value: kind === 'image' ? '/image.png' : 'log' });
+    view.agentDraft = '\u2060(1)\u2060'; // A draft from before chips had padding.
+    shown(id);
+    await setTalk(id);
+    const chip = attachmentToken(1);
+    expect(field().value).toBe(chip);
+    field().setSelectionRange(chip.length, chip.length);
+    await fireEvent.keyDown(field(), { key: 'ArrowLeft' });
+    for (const letter of 'asdasd') {
+      const at = field().selectionStart;
+      field().value = field().value.slice(0, at) + letter + field().value.slice(field().selectionEnd);
+      field().setSelectionRange(at + 1, at + 1);
+      await fireEvent.input(field(), { inputType: 'insertText', data: letter });
+      expect(field().selectionStart).toBe(at + 1);
+    }
+    expect(field().value).toBe(`asdasd${chip}`);
+    expect(view.agentDraft).toBe(`asdasd${chip}`);
+    await fireEvent.keyDown(field(), { key: 'ArrowRight' });
+    expect(field().selectionStart).toBe(6 + chip.length);
+  });
+
   it("a long paste becomes a numbered tile and a tinted number, and goes as its text", async () => {
     const id = freshSession();
     shown(id);

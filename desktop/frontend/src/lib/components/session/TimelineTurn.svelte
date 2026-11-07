@@ -14,9 +14,7 @@
   import StoryRow from "./StoryRow.svelte";
   import CatchUp from "./CatchUp.svelte";
   import ActivityLog from "./ActivityLog.svelte";
-  import { flip } from "svelte/animate";
-  import { slide } from "svelte/transition";
-  import { cubicOut } from "svelte/easing";
+  import { untrack } from "svelte";
 
 
   let {
@@ -78,19 +76,19 @@
   });
 
   const mounted = $derived(near || pinned);
-  // Keyed parts ease into their new positions when a completed call joins a stack.
-  // No motion on the initial mount, off-screen history, or under reduced motion.
-  function motionDuration(node: HTMLElement) {
-    return near && !!node.animate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 260 : 0;
-  }
-  function regroup(node: HTMLElement) {
-    return slide(node, { duration: motionDuration(node), easing: cubicOut });
-  }
-  function reposition(node: HTMLElement, rects: { from: DOMRect; to: DOMRect }) {
-    return flip(node, rects, { duration: motionDuration(node), easing: cubicOut });
-  }
   const answerId = $derived(answerRowId(turn, live));
-  const parts = $derived(turnParts(turn.rows, 0, !live));
+  const parts = $derived(turnParts(turn.rows, 0, !live, f.standing));
+  // History may arrive folded; once a row is presented, later events cannot hide it.
+  // Keep this on the feed so virtualization and session navigation preserve the decision.
+  $effect(() => {
+    if (!mounted || folded) return;
+    const shown = parts;
+    const id = turn.id;
+    untrack(() => {
+      f.standing.add(`turn-${id}`);
+      for (const part of shown) if (part.kind === "row") f.standing.add(part.row.id);
+    });
+  });
   // buildStory ends a turn at every message, so a person's row can only ever open one. Their words
   // leave the agent's column and sit on their own side, and everything else stays in order.
   const person = $derived.by(() => {
@@ -196,7 +194,7 @@
           <span class="sr-only" data-agent-speaker>{agentName(session?.agent)} response</span>
         {/if}
         {#each agentParts as part, i (part.kind === "row" ? part.row.id : part.id)}
-          <div class="cv-turn-part" animate:reposition transition:regroup>
+          <div class="cv-turn-part">
           {#if part.kind === "row" && part.row === opener}
             <!-- System origin precedes the agent identity. -->
           {:else if part.kind === "row"}

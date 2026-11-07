@@ -78,15 +78,16 @@ describe("grouping tool calls", () => {
     expect(rows.filter(row => row.kind === 'run' && row.category === 'edit')).toHaveLength(5);
   });
 
-  it("keeps an edit group's identity as files arrive and splits after a pause", () => {
+  it("keeps presented edits and running edits separate from historical groups", () => {
     const first = tool('edit', 'a.ts');
     const second = { ...tool('edit', 'b.ts', { status: 'running' }), at: new Date(Date.parse(first.at) + 2000).toISOString() };
-    const late = { ...tool('edit', 'c.ts'), at: new Date(Date.parse(second.at) + 31000).toISOString() };
     const one = collapseWork([first], true, true, first.id);
-    const two = collapseWork([first, second], true, true, second.id);
-    expect(two).toHaveLength(1);
+    const two = collapseWork([first, second], true, true, second.id, new Set([first.id]));
+    expect(two.map(row => row.kind)).toEqual(['tool', 'tool']);
     expect(two[0].id).toBe(one[0].id);
-    expect(collapseWork([first, second, late], true)).toHaveLength(2);
+    const done = { ...second, tool: { ...second.tool, status: 'ok' } };
+    const late = { ...tool('edit', 'c.ts'), at: new Date(Date.parse(second.at) + 31000).toISOString() };
+    expect(collapseWork([first, done, late], true)).toHaveLength(2);
   });
 
   it("a long stretch names its failures first and counts them, and an unresolved call keeps its row", () => {

@@ -37,6 +37,8 @@ export class SessionFeed {
   loadingOlder = $state(false);
   /** Tool rows, run lines and folded turns a person opened, by stable id. */
   expanded = new SvelteSet<string>();
+  /** Rows already presented on their own stay there as new activity arrives. */
+  standing = new SvelteSet<string>();
   outputs = new SvelteMap<string, FeedOutput>();
   threads = new SvelteMap<string, FeedThread>();
 
