@@ -6,8 +6,19 @@
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Select from '../Select.svelte';
-  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void } = $props();
+  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment, onToggleFeedback }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void; onToggleFeedback?: () => void } = $props();
   let infoOpen = $state(true);
+  let shortcutsOpen = $state(false);
+  let root = $state<HTMLElement>();
+  let lastComment = $state(-1);
+  const saveKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘↵' : 'Ctrl+Enter';
+  const shortcuts = [
+    ['C', 'Comment pin'], ['R', 'Rectangle'], ['V / Esc', 'Cancel drawing'],
+    ['← / →', 'Previous / next screenshot'], ['N / Shift+N', 'Next / previous comment'],
+    ['1 / 2', 'Slider / side by side'], ['3 / 4', 'Before / after'],
+    ['+ / − / 0', 'Zoom in / out / fit'], ['I', 'Screen details'], ['B', 'Checks & feedback'],
+    [saveKeys, 'Save comment'], ['Esc', 'Close comment'], ['Delete', 'Delete focused comment'], ['?', 'Keyboard shortcuts'],
+  ];
   const screens = $derived(pkg.screens ?? []);
   const screen = $derived(screens[index] ?? screens[0]);
   const modeKey = 'lola.review.comparisonMode';
@@ -90,7 +101,7 @@
     return () => { observer.disconnect(); scroller.removeEventListener('scroll', position); };
   });
   function openComment(i: number) {
-    active = i; mode = marks[i].side.toLowerCase(); tool = 'view'; message = ''; saveFailed = false; confirmClose = false;
+    active = i; lastComment = i; mode = marks[i].side.toLowerCase(); tool = 'view'; message = ''; saveFailed = false; confirmClose = false;
     void tick().then(() => document.getElementById('canvas-comment')?.focus({preventScroll:true}));
   }
   function closeComment(restoreFocus = true) {
@@ -105,15 +116,19 @@
     closeComment(restoreFocus);
     return true;
   }
-  function deleteComment() {
-    if (selected?.savedFeedback) onDeleteComment?.(index, selected.savedFeedback);
-    marks = marks.filter((_,i) => i !== active);
-    save(); closeComment(false);
+  function focusCanvas() { void tick().then(() => root?.focus({preventScroll:true})); }
+  function deleteComment(comment = active) {
+    const mark = marks[comment];
+    if (!mark) return;
+    if (mark.savedFeedback) onDeleteComment?.(index, mark.savedFeedback);
+    marks = marks.filter((_,i) => i !== comment);
+    lastComment = comment - 1;
+    save(); closeComment(false); focusCanvas();
   }
   function discardChanges() {
     if (selected?.savedText) marks = marks.map((m,i) => i === active ? {...m,text:m.savedText!} : m);
     else marks = marks.filter((_,i) => i !== active);
-    save(); closeComment(false);
+    save(); closeComment(false); focusCanvas();
   }
   $effect(() => {
     if (!editing || !editor) return;
@@ -144,7 +159,7 @@
     return () => { live = false; };
   });
   $effect(() => {
-    const storage = key; marks = []; active = -1; message = '';
+    const storage = key; marks = []; active = -1; lastComment = -1; message = '';
     try {
       const saved = JSON.parse(localStorage.getItem(storage) ?? '[]');
       if (Array.isArray(saved)) marks = saved.filter(m => ['Before','After'].includes(m.side) && typeof m.text === 'string' && ['x','y','w','h'].every(k => Number.isFinite(m[k]) && m[k] >= 0 && m[k] <= 1)).slice(0,30);
@@ -187,29 +202,100 @@
     return false;
   }
   function add() { if (saveComment()) closeComment(); }
+
+  function nextComment(direction = 1) {
+    if (marks.length) openComment(lastComment < 0 ? (direction > 0 ? 0 : marks.length-1) : (lastComment + direction + marks.length) % marks.length);
+  }
+  function armTool(value: 'pin' | 'area') {
+    selectTool(tool === value ? 'view' : value);
+    if (tool !== 'view') void tick().then(() => root?.querySelector<HTMLButtonElement>('.annotation-surface')?.focus({preventScroll:true}));
+  }
+  function cancelTool() { tool = 'view'; dragging = undefined; start = undefined; focusCanvas(); }
+  // Called by the canvas and the review modal, so shortcuts also work when a
+  // tab/header control has focus. Consumed events never reach app-level keys.
+  export function handleKey(e: KeyboardEvent) {
+    if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.repeat) return;
+    const target = e.target instanceof Element ? e.target : null;
+    const inEditor = !!target && !!editor?.contains(target);
+    const typing = !!target?.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');
+    const consume = () => { e.preventDefault(); e.stopPropagation(); };
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === 'Enter' && editing && inEditor) {
+      consume(); if (selected?.text.trim()) add(); return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'Escape') {
+      if (shortcutsOpen) { consume(); shortcutsOpen = false; focusCanvas(); }
+      else if (editing) { consume(); requestClose(); }
+      else if (tool !== 'view') { consume(); cancelTool(); }
+      return;
+    }
+    if (typing) return;
+    const focusedMark = target?.closest<HTMLElement>('[data-mark]');
+    if (['Delete','Backspace'].includes(e.key) && canComment && (focusedMark || (editing && inEditor))) {
+      consume(); deleteComment(focusedMark ? Number(focusedMark.dataset.mark) : active); return;
+    }
+    if (e.key === '?') { consume(); shortcutsOpen = !shortcutsOpen; return; }
+    const key = e.key.toLowerCase();
+    if (!['c','r','v','i','b','n','arrowleft','arrowright','1','2','3','4','+','=','-','0'].includes(key)) return;
+    // Never bypass the unsaved-changes prompt by switching tools or images.
+    consume();
+    if (editing && !requestClose(false)) return;
+    switch (key) {
+      case 'c': if (canComment && after && !error) armTool('pin'); break;
+      case 'r': if (canComment && after && !error) armTool('area'); break;
+      case 'v': cancelTool(); break;
+      case 'i': infoOpen = !infoOpen; break;
+      case 'b': onToggleFeedback?.(); break;
+      case 'n': if (canComment) nextComment(e.shiftKey ? -1 : 1); break;
+      case 'arrowleft': index = Math.max(0,index-1); focusCanvas(); break;
+      case 'arrowright': index = Math.min(screens.length-1,index+1); focusCanvas(); break;
+      case '1': case '2': case '3': case '4': {
+        const mode = ['slider','split','before','after'][Number(key)-1];
+        if (screen.before || mode === 'after') chooseMode(mode);
+        break;
+      }
+      case '+': case '=': zoom = Math.min(200,zoom+50); break;
+      case '-': zoom = Math.max(100,zoom-50); break;
+      case '0': zoom = 100; break;
+    }
+  }
 </script>
 
 {#if screen}
-<section class="canvas" aria-label="Screenshot review canvas">
+<!-- Route keys bubbling from canvas controls; this region isn't an extra tab stop. -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<section class="canvas" aria-label="Screenshot review canvas" bind:this={root} tabindex="-1" onkeydown={handleKey}
+  onpointerdown={e => {
+    const target = e.target as Element;
+    if (!editing && target.closest('.viewport') && !target.closest('button,input,textarea,select,a,[tabindex]:not([tabindex="-1"])')) {
+      e.preventDefault(); root?.focus({preventScroll:true});
+    }
+  }}>
   <div class="tools">
     <div class="tool-group">
-      <Button icon size="sm" selected={infoOpen} aria-label="Screen details" title="Screen details" aria-expanded={infoOpen} onclick={() => infoOpen = !infoOpen}><Icon name="panels-top-left" size={15} /></Button>
+      <Button icon size="sm" selected={infoOpen} aria-label="Screen details" title="Screen details · I" aria-keyshortcuts="i" aria-expanded={infoOpen} onclick={() => infoOpen = !infoOpen}><Icon name="panels-top-left" size={15} /></Button>
       <span class="toolbar-separator"></span>
-      <Button icon size="sm" aria-label="Previous" title="Previous screen" disabled={index === 0} onclick={() => index--}><Icon name="chevron-left" size={15} /></Button>
+      <Button icon size="sm" aria-label="Previous" title="Previous screen · ←" aria-keyshortcuts="ArrowLeft" disabled={index === 0} onclick={() => index--}><Icon name="chevron-left" size={15} /></Button>
       <span class="screen-count">{index+1} / {screens.length}</span>
-      <Button icon size="sm" aria-label="Next" title="Next screen" disabled={index >= screens.length-1} onclick={() => index++}><Icon name="chevron-right" size={15} /></Button>
+      <Button icon size="sm" aria-label="Next" title="Next screen · →" aria-keyshortcuts="ArrowRight" disabled={index >= screens.length-1} onclick={() => index++}><Icon name="chevron-right" size={15} /></Button>
     </div>
     <div class="tool-group comparison" aria-label="Comparison mode">
-      {#each [{id:'slider',label:'Slider'},{id:'split',label:'Side by side'},{id:'before',label:'Before'},{id:'after',label:'After'}] as item}
-        <Button size="sm" selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => chooseMode(item.id)}>{item.label}</Button>
+      {#each [{id:'slider',label:'Slider'},{id:'split',label:'Side by side'},{id:'before',label:'Before'},{id:'after',label:'After'}] as item,i}
+        <Button size="sm" title={`${item.label} · ${i+1}`} aria-keyshortcuts={String(i+1)} selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => chooseMode(item.id)}>{item.label}</Button>
       {/each}
     </div>
     <div class="tool-group">
-      {#if marks.length && canComment}<Button size="sm" aria-label="Next comment" title="Open next comment" onclick={() => openComment((active+1)%marks.length)}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
-      {#if canComment}<Button icon size="sm" selected={tool === 'pin'} disabled={!after} aria-label="Add pin" title="Add pin" onclick={() => selectTool(tool === 'pin' ? 'view' : 'pin')}><Icon name="message-square-text" size={15} /></Button><Button icon size="sm" selected={tool === 'area'} disabled={!after} aria-label="Mark area" title="Mark area" onclick={() => selectTool(tool === 'area' ? 'view' : 'area')}><Icon name="square" size={15} /></Button>{/if}
+      {#if marks.length && canComment}<Button size="sm" aria-label="Next comment" title="Next comment · N / Previous · Shift+N" aria-keyshortcuts="n Shift+n" onclick={() => nextComment()}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
+      {#if canComment}<Button icon size="sm" selected={tool === 'pin'} disabled={!after} aria-label="Add pin" title="Comment pin · C" aria-keyshortcuts="c" onclick={() => armTool('pin')}><Icon name="message-square-text" size={15} /></Button><Button icon size="sm" selected={tool === 'area'} disabled={!after} aria-label="Mark area" title="Mark area · R" aria-keyshortcuts="r" onclick={() => armTool('area')}><Icon name="square" size={15} /></Button>{/if}
       <span class="toolbar-separator"></span>
-      <Select aria-label="Screenshot zoom" value={String(zoom)} onchange={e => zoom = Number(e.currentTarget.value)}><option value="100">Fit</option><option value="150">150%</option><option value="200">200%</option></Select>
+      <Select title="Zoom · + / − / 0 to fit" aria-keyshortcuts="+ - 0" aria-label="Screenshot zoom" value={String(zoom)} onchange={e => zoom = Number(e.currentTarget.value)}><option value="100">Fit</option><option value="150">150%</option><option value="200">200%</option></Select>
+      <Button icon size="sm" aria-label="Screenshot shortcuts" title="Keyboard shortcuts · ?" aria-keyshortcuts="?" aria-expanded={shortcutsOpen} selected={shortcutsOpen} onclick={() => shortcutsOpen = !shortcutsOpen}><Icon name="circle-help" size={15} /></Button>
     </div>
+    {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
+      <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
+      <dl>{#each shortcuts as [keys,action]}<div><dt>{action}</dt><dd><kbd>{keys}</kbd></dd></div>{/each}</dl>
+      <p>While typing, only Save and Escape apply. Delete works outside text fields.</p>
+    </aside>{/if}
   </div>
   <div class="canvas-body" class:info-open={infoOpen}>
   {#if infoOpen}<aside class="info-rail" aria-label="Screen details">
@@ -246,7 +332,7 @@
               <button type="button" class="annotation-surface" aria-label={`Place comment on ${side} screenshot`}
                 onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={() => { start = undefined; dragging = undefined; }}
                 onclick={e => { if (e.detail === 0) place({x:.5,y:.5,w:tool === 'area' ? .2 : 0,h:tool === 'area' ? .2 : 0,side,text:''}); }}
-                onkeydown={e => { if (e.key === 'Escape') { e.stopPropagation(); tool = 'view'; dragging = undefined; start = undefined; } }}></button>
+                ></button>
             {/if}
             {#if single}
               {#each marks as mark,i}{#if mark.side === side}<button class="pin" class:chosen={active === i} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} data-mark={i} aria-label={`Comment ${i+1}`} aria-expanded={active === i && editing} onclick={e => { e.stopPropagation(); openComment(i); }}>{i+1}</button>{#if mark.w || mark.h}<button type="button" class="region region-hit" aria-label={`Open area comment ${i+1}`} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} style:width={`${mark.w*100}%`} style:height={`${mark.h*100}%`} onclick={() => openComment(i)}></button>{/if}{/if}{/each}
@@ -259,12 +345,12 @@
   </div>
   {#if editing && selected}
     <div class="annotation-editor" bind:this={editor} role="dialog" aria-label={`Comment ${active+1} · ${selected.side}`} tabindex="-1" style:left={`${editorPosition.left}px`} style:top={`${editorPosition.top}px`}
-      onkeydown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); requestClose(); } }}>
+      onkeydown={handleKey}>
       <div class="editor-heading">
         <label for="canvas-comment">Comment {active+1}<span class="editor-side">{selected.side}</span></label>
         <div class="editor-controls">
-          <Button icon size="xs" variant="danger" aria-label="Delete comment" title="Delete comment" onclick={deleteComment}><Icon name="trash-2" size={14} /></Button>
-          <Button icon size="xs" aria-label="Close comment" title="Close comment" onclick={() => requestClose()}><Icon name="x" size={14} /></Button>
+          <Button icon size="xs" variant="danger" aria-label="Delete comment" title="Delete comment · Delete outside text" aria-keyshortcuts="Delete Backspace" onclick={() => deleteComment()}><Icon name="trash-2" size={14} /></Button>
+          <Button icon size="xs" aria-label="Close comment" title="Close comment · Esc" aria-keyshortcuts="Escape" onclick={() => requestClose()}><Icon name="x" size={14} /></Button>
         </div>
       </div>
       <textarea id="canvas-comment" aria-label="Screenshot comment" rows="3" maxlength="2000" placeholder="What should change?" value={selected.text} oninput={e => update(e.currentTarget.value)}></textarea>
@@ -274,7 +360,7 @@
           <Button size="xs" onclick={() => confirmClose = false}>Keep editing</Button>
           <Button size="xs" variant="danger" onclick={discardChanges}>Discard</Button>
         {/if}
-        <Button variant="primary" size="sm" disabled={!selected.text.trim()} title="Save to feedback" onclick={add}><Icon name="check" size={14} />{selected.text.trim() === selected.savedText ? 'Done' : 'Save'}</Button>
+        <Button variant="primary" size="sm" disabled={!selected.text.trim()} title={`Save comment · ${saveKeys}`} aria-keyshortcuts="Meta+Enter Control+Enter" onclick={add}><Icon name="check" size={14} />{selected.text.trim() === selected.savedText ? 'Done' : 'Save'}</Button>
       </div>
       {#if saveFailed}<p class="hint" role="status">Couldn’t save. Your draft is kept—try again.</p>{/if}
       {#if message}<p class="hint" role="status">{message}</p>{/if}
@@ -288,7 +374,14 @@
 
 <style>
   .canvas { min-width:0; height:100%; display:grid; grid-template-rows:auto minmax(0,1fr); }
-  .tools { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
+  .canvas:focus { outline:none; }
+  .tools { position:relative; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
+  .shortcut-help { position:absolute; z-index:6; top:calc(100% + 6px); right:8px; width:min(340px,calc(100% - 16px)); max-height:70vh; overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; font-size:12px; }
+  .shortcut-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  .shortcut-help dl div { display:flex; justify-content:space-between; gap:16px; padding:4px 0; }
+  .shortcut-help dt { color:var(--color-ink-2); }
+  .shortcut-help kbd { font:inherit; color:var(--color-ink); white-space:nowrap; }
+  .shortcut-help p { margin-top:10px; color:var(--color-ink-2); font-size:11px; }
   .tool-group { display:flex; align-items:center; gap:3px; }
   .comparison { padding:2px; border-radius:6px; background:var(--color-canvas); }
   .toolbar-separator { height:18px; width:1px; background:var(--color-edge); margin:0 5px; }

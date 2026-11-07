@@ -173,3 +173,110 @@ it('discards unsaved edits while retaining the saved annotation and pending feed
   expect(screen.queryByRole('button',{name:'Comment 2'})).toBeNull();
   expect(screen.getByRole('button',{name:'Comment 1'})).toBeInTheDocument();
 });
+
+
+it('arms comment tools with C and R, focuses placement, and cancels with V or Escape',async()=>{
+  render(ReviewCanvas,{pkg,onComment:()=>true});await screen.findByAltText('Settings — After');
+  const canvas=screen.getByRole('region',{name:'Screenshot review canvas'});
+  await fireEvent.keyDown(canvas,{key:'c'});
+  expect(screen.getByRole('button',{name:'Add pin'})).toHaveAttribute('aria-pressed','true');
+  expect(screen.getByRole('button',{name:'Place comment on After screenshot'})).toHaveFocus();
+  await fireEvent.keyDown(document.activeElement!,{key:'r'});
+  expect(screen.getByRole('button',{name:'Mark area'})).toHaveAttribute('aria-pressed','true');
+  await fireEvent.keyDown(document.activeElement!,{key:'Escape'});
+  expect(screen.queryByRole('button',{name:'Place comment on After screenshot'})).toBeNull();
+  await fireEvent.keyDown(canvas,{key:'r'});
+  await fireEvent.keyDown(document.activeElement!,{key:'v'});
+  expect(screen.queryByRole('button',{name:'Place comment on After screenshot'})).toBeNull();
+});
+
+it.each(['metaKey','ctrlKey'])('saves with %s+Enter, preserving normal typing and failed drafts',async modifier=>{
+  const onComment=vi.fn().mockReturnValue(false);
+  render(ReviewCanvas,{pkg,onComment});await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  const field=screen.getByRole('textbox');
+  await fireEvent.keyDown(field,{key:'Enter',[modifier]:true});
+  expect(onComment).not.toHaveBeenCalled();
+  await fireEvent.input(field,{target:{value:'Keep every line'}});
+  for (const key of ['c','r','n','i','b','1','4','ArrowLeft','ArrowRight','Delete','Backspace','Enter','?']) {
+    expect(await fireEvent.keyDown(field,{key})).toBe(true);
+  }
+  expect(field).toHaveValue('Keep every line');
+  expect(onComment).not.toHaveBeenCalled();
+  await fireEvent.keyDown(field,{key:'Enter',[modifier]:true,isComposing:true});
+  await fireEvent.keyDown(field,{key:'Enter',[modifier]:true,repeat:true});
+  expect(onComment).not.toHaveBeenCalled();
+  await fireEvent.keyDown(field,{key:'Enter',[modifier]:true});
+  expect(onComment).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('textbox')).toHaveValue('Keep every line');
+  onComment.mockReturnValue(true);
+  await fireEvent.keyDown(field,{key:'Enter',[modifier]:true});
+  expect(onComment).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole('textbox')).toBeNull();
+});
+
+it('navigates images and comparison modes, zooms, and exposes shortcut help without stealing slider keys',async()=>{
+  const toggle=vi.fn();
+  render(ReviewCanvas,{pkg,onComment:()=>true,onToggleFeedback:toggle});await screen.findByAltText('Settings — After');
+  const canvas=screen.getByRole('region',{name:'Screenshot review canvas'});
+  const slider=screen.getByRole('slider');
+  await fireEvent.keyDown(slider,{key:'ArrowRight'});
+  expect(slider).toHaveAttribute('aria-valuenow','55');
+  expect(screen.getByAltText('Settings — After')).toBeInTheDocument();
+  for (const [key,label] of [['2','Side by side'],['3','Before'],['4','After'],['1','Slider']]) {
+    await fireEvent.keyDown(canvas,{key});
+    expect(screen.getByRole('button',{name:label})).toHaveAttribute('aria-pressed','true');
+  }
+  for (const [key,value] of [['+','150'],['=','200'],['-','150'],['0','100']]) {
+    await fireEvent.keyDown(canvas,{key});expect(screen.getByLabelText('Screenshot zoom')).toHaveValue(value);
+  }
+  await fireEvent.keyDown(canvas,{key:'i'});
+  expect(screen.queryByRole('complementary',{name:'Screen details'})).toBeNull();
+  await fireEvent.keyDown(canvas,{key:'b'});expect(toggle).toHaveBeenCalledOnce();
+  await fireEvent.keyDown(canvas,{key:'?'});
+  expect(screen.getByRole('complementary',{name:'Screenshot shortcuts'})).toBeInTheDocument();
+  await fireEvent.keyDown(canvas,{key:'Escape'});
+  expect(screen.queryByRole('complementary',{name:'Screenshot shortcuts'})).toBeNull();
+  await fireEvent.keyDown(canvas,{key:'ArrowRight'});await screen.findByAltText('Phone — After');
+  await fireEvent.keyDown(canvas,{key:'1'});
+  expect(screen.getByRole('button',{name:'After'})).toHaveAttribute('aria-pressed','true');
+  await fireEvent.keyDown(canvas,{key:'ArrowRight'});expect(screen.getByAltText('Phone — After')).toBeInTheDocument();
+  await fireEvent.keyDown(canvas,{key:'ArrowLeft'});await screen.findByAltText('Settings — After');
+});
+
+it('ignores platform chords and composition, and prevents shortcuts from losing unsaved edits',async()=>{
+  const onComment=vi.fn().mockReturnValue(true);
+  render(ReviewCanvas,{pkg,onComment});await screen.findByAltText('Settings — After');
+  const canvas=screen.getByRole('region',{name:'Screenshot review canvas'});
+  for(const event of [{key:'c',metaKey:true},{key:'r',ctrlKey:true},{key:'c',altKey:true},{key:'c',isComposing:true},{key:'c',repeat:true}]) {
+    expect(await fireEvent.keyDown(canvas,event)).toBe(true);
+  }
+  expect(screen.queryByRole('button',{name:'Place comment on After screenshot'})).toBeNull();
+  await fireEvent.keyDown(canvas,{key:'c'});
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Unsaved'}});
+  await fireEvent.keyDown(screen.getByRole('button',{name:'Close comment'}),{key:'ArrowRight'});
+  expect(screen.getByText('Save changes?')).toBeInTheDocument();
+  expect(screen.getByAltText('Settings — After')).toBeInTheDocument();
+  expect(onComment).not.toHaveBeenCalled();
+});
+
+it('cycles saved comments and deletes a focused pin without intercepting text deletion',async()=>{
+  const remove=vi.fn();render(ReviewCanvas,{pkg,onComment:()=>true,onDeleteComment:remove});await screen.findByAltText('Settings — After');
+  const canvas=screen.getByRole('region',{name:'Screenshot review canvas'});
+  for (const text of ['First','Second']) {
+    await fireEvent.keyDown(canvas,{key:'c'});
+    await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+    await fireEvent.input(screen.getByRole('textbox'),{target:{value:text}});
+    await fireEvent.keyDown(screen.getByRole('textbox'),{key:'Enter',metaKey:true});
+  }
+  await fireEvent.keyDown(canvas,{key:'n'});expect(screen.getByRole('textbox')).toHaveValue('First');
+  await fireEvent.keyDown(screen.getByRole('textbox'),{key:'Escape'});
+  await fireEvent.keyDown(canvas,{key:'N',shiftKey:true});expect(screen.getByRole('textbox')).toHaveValue('Second');
+  await fireEvent.keyDown(screen.getByRole('textbox'),{key:'Delete'});expect(remove).not.toHaveBeenCalled();
+  await fireEvent.keyDown(screen.getByRole('textbox'),{key:'Escape'});
+  await fireEvent.keyDown(screen.getByRole('button',{name:'Comment 2'}),{key:'Delete'});
+  expect(remove).toHaveBeenCalledWith(0,expect.stringContaining('Second'));
+  expect(screen.queryByRole('button',{name:'Comment 2'})).toBeNull();
+});

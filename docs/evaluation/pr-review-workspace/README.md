@@ -92,3 +92,24 @@ Validation: 25 focused UI tests, Svelte check, daemon feedback tests, and make
 build passed. Headless WebKit exercised confirmation, saving, reopening, and
 deleting at 1440, 700, and 420px widths with no page errors.
 [Confirmation state](comment-confirmation.png) uses an isolated screenshot fixture.
+
+
+### Screenshot keyboard shortcuts
+
+- C: comment pin; R: rectangle; V or Escape: cancel drawing.
+- Command+Enter (Control+Enter on other platforms): save the open comment.
+- Left/Right: previous/next screenshot; N/Shift+N: next/previous annotation.
+- 1–4: slider, side by side, before, after; +/−: zoom; 0: fit.
+- I: screen details; B: checks and feedback; ?: shortcut reference.
+- Delete/Backspace: delete a focused annotation outside text fields.
+
+Shortcuts operate only while the screenshot canvas is mounted. Field editing,
+platform chords, IME composition, native selects, and comparison-slider arrows
+retain their normal behavior. Navigation cannot bypass unsaved-change prompts.
+Tool closure and annotation deletion return focus to the canvas so the next
+shortcut still works. Controls expose shortcut hints and aria-keyshortcuts.
+
+Validation: 32 focused component tests and Svelte check pass. A headless WebKit
+keyboard flow covered C → Enter → typing → Command+Enter → R → Escape → N →
+Escape → Delete → ?, including the reference at 420px width; no page errors.
+[Shortcut reference](screenshot-shortcuts.png) uses an isolated screenshot fixture.

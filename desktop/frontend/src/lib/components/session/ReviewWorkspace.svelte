@@ -38,6 +38,7 @@
   let tab = $state('material');
   let panelOpen = $state(false);
   let canvasScreen = $state(0);
+  let canvas = $state<ReviewCanvas>();
   const packageIdentity = $derived(current?.id);
   $effect(() => { packageIdentity; canvasScreen = 0; });
   let subject = $state('Write-up');
@@ -152,7 +153,7 @@
   }
 </script>
 
-<Modal title="PR review" fullscreen onClose={() => nav.closeOverlay()} bodyClass="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+<Modal title="PR review" onkey={e => { if (tab === 'visuals') canvas?.handleKey(e); }} fullscreen onClose={() => nav.closeOverlay()} bodyClass="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
   <div class="review-toolbar">
     <div class="min-w-0">
       <p class="truncate font-medium text-ink">{session?.title || session?.issue || sessionId}</p>
@@ -165,12 +166,12 @@
   </div>
   <div class="review-layout" class:panel-open={panelOpen}>
     <div class="review-main">
-      <div class="review-tabs"><Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : [])]} active={tab} onSelect={id => tab = id} /><Button size="sm" selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button></div>
+      <div class="review-tabs"><Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : [])]} active={tab} onSelect={id => tab = id} /><Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button></div>
       {#if tab === 'code' && session}
         <div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><p class="px-4 py-2 text-xs text-faint">Live checkout changes. These may differ from the retained review revision.</p><DiffView {sessionId} /></div>
       {:else if tab === 'visuals' && current?.screens?.length}
         <div class="review-visuals">
-          {#key current.id}<ReviewCanvas pkg={current} {freshness} bind:index={canvasScreen} canComment={!!session} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
+          {#key current.id}<ReviewCanvas bind:this={canvas} onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} canComment={!!session} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
         </div>
       {:else}
         <div class="review-material">

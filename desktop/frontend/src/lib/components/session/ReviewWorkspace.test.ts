@@ -262,3 +262,15 @@ it('deletes saved and unsaved annotations without removing other pending feedbac
   expect(feedback.noteFor(id)).toBe('Keep other feedback');
   expect(send).not.toHaveBeenCalled();
 });
+
+
+it('routes screenshot shortcuts from review chrome and stops routing when another tab is selected',async()=>{
+  render(ReviewWorkspace,{sessionId:id});await openScreens();await screen.findByAltText('Settings — After');
+  const tab=screen.getByRole('tab',{name:'Screenshots'});
+  await fireEvent.keyDown(tab,{key:'b'});expect(screen.getByRole('complementary',{name:'Review actions'})).toBeInTheDocument();
+  await fireEvent.keyDown(tab,{key:'c'});expect(screen.getByRole('button',{name:'Add pin'})).toHaveAttribute('aria-pressed','true');
+  await fireEvent.keyDown(screen.getByRole('button',{name:'Place comment on After screenshot'}),{key:'Escape'});
+  await fireEvent.click(screen.getByRole('tab',{name:'Overview'}));
+  await fireEvent.keyDown(screen.getByRole('tab',{name:'Overview'}),{key:'c'});
+  expect(screen.queryByRole('button',{name:'Add pin'})).toBeNull();
+});
