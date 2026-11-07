@@ -31,6 +31,7 @@ it('keeps region drafts across screen changes, and queues coordinates with the c
   await fireEvent.click(screen.getByRole('button',{name:'Mark area'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Align this area'}});
+  await fireEvent.keyDown(screen.getByRole('dialog'),{key:'Escape'});
   await fireEvent.click(screen.getByRole('button',{name:'Next'}));
   await screen.findByAltText('Phone — After');
   expect(screen.queryByRole('textbox')).toBeNull();
@@ -43,8 +44,10 @@ it('keeps region drafts across screen changes, and queues coordinates with the c
   expect(screen.getByRole('textbox')).toHaveValue('Align this area');
   onComment.mockReturnValue(true);
   await fireEvent.click(screen.getByRole('button',{name:'Add comment to feedback'}));
+  expect(screen.queryByRole('textbox')).toBeNull();
+  await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
   expect(screen.getByRole('textbox')).toHaveValue('Align this area');
-  expect(screen.getByRole('button',{name:'Saved to feedback'})).toBeDisabled();
+  expect(screen.getByRole('button',{name:'Done'})).toBeEnabled();
   expect(screen.getByRole('button',{name:'Comment 1'})).toBeInTheDocument();
 });
 
@@ -113,4 +116,27 @@ it('edits on the image with the info rail hidden, and closes without losing the 
   expect(screen.getByRole('button',{name:'Comment 1'})).toHaveFocus();
   await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Keep this draft at the pin');
+});
+
+it('saves changed text on click-away, closes unchanged comments without resaving, and keeps failed saves open',async()=>{
+  const onComment=vi.fn().mockReturnValue(false);
+  render(ReviewCanvas,{pkg,onComment});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Save when I leave'}});
+  await fireEvent.click(screen.getByRole('textbox',{name:'Screenshot comment'}));
+  expect(onComment).not.toHaveBeenCalled();
+  await fireEvent.click(screen.getByAltText('Settings — After'));
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(screen.getByRole('textbox')).toHaveValue('Save when I leave');
+  onComment.mockReturnValue(true);
+  await fireEvent.click(screen.getByAltText('Settings — After'));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(onComment).toHaveBeenCalledTimes(2);
+  await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
+  expect(screen.getByRole('textbox')).toHaveValue('Save when I leave');
+  await fireEvent.click(screen.getByAltText('Settings — After'));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(onComment).toHaveBeenCalledTimes(2);
 });

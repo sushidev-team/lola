@@ -130,8 +130,7 @@ it('retains saved annotations across reopening and updates their pending feedbac
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Original annotation'}});
   await fireEvent.click(screen.getByRole('button',{name:'Add comment to feedback'}));
-  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Original annotation');
-  expect(screen.getByRole('button',{name:'Saved to feedback'})).toBeDisabled();
+  expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
   expect(screen.getByRole('button',{name:'Comment 1'})).toBeInTheDocument();
   mounted.unmount();render(ReviewWorkspace,{sessionId:id});await openScreens();
   await fireEvent.click(await screen.findByRole('button',{name:'Next comment'}));
@@ -146,6 +145,7 @@ it('retains saved annotations across reopening and updates their pending feedbac
   await fireEvent.click(screen.getByRole('button',{name:'Send feedback to agent'}));
   await screen.findByText(/Feedback accepted/);
   expect(feedback.noteFor(id)).toBe('');
+  await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Updated annotation');
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Follow-up after sending'}});
   await fireEvent.click(screen.getByRole('button',{name:'Update feedback'}));

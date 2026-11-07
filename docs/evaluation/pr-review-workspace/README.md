@@ -53,7 +53,9 @@ area on the image. Headless Chromium and WebKit exercised typing and adding
 feedback; WebKit also verified containment after zooming, scrolling and narrowing
 the canvas. Focused text fields use a border change without an outline/shadow
 ring. The later clarification exposed a save bug: annotations were removed once
-added to feedback. Saving now retains the editor, pin/area and text; reopening
-restores them, and editing replaces the pending entry rather than duplicating it.
-Twenty-one component tests and Svelte checks pass, including saving, reopening,
-updating before send, and following up after send.
+added to feedback. Saving retains the pin/area and text; reopening restores them, and editing
+replaces the pending entry rather than duplicating it. The editor closes after
+a successful save or click-away. Click-away saves changed text only; unchanged
+comments close without resubmission, and failed saves keep the editor open.
+Twenty-two component tests and Svelte checks pass, including saving, reopening,
+click-away, updating before send, and following up after send.

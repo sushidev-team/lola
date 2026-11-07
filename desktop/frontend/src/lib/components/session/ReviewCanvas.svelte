@@ -91,10 +91,21 @@
     active = i; mode = marks[i].side.toLowerCase(); tool = 'view'; message = '';
     void tick().then(() => document.getElementById('canvas-comment')?.focus({preventScroll:true}));
   }
-  function closeComment() {
+  function closeComment(restoreFocus = true) {
     const i = active; active = -1;
-    void tick().then(() => imageStage?.querySelector<HTMLButtonElement>(`[data-mark="${i}"]`)?.focus({preventScroll:true}));
+    if (restoreFocus) void tick().then(() => imageStage?.querySelector<HTMLButtonElement>(`[data-mark="${i}"]`)?.focus({preventScroll:true}));
   }
+  $effect(() => {
+    if (!editing || !editor) return;
+    const popup = editor;
+    function clickAway(event: MouseEvent) {
+      if (popup.contains(event.target as Node)) return;
+      if (saveComment()) closeComment(false);
+      else { event.preventDefault(); event.stopImmediatePropagation(); }
+    }
+    document.addEventListener('click', clickAway, true);
+    return () => document.removeEventListener('click', clickAway, true);
+  });
 
   $effect(() => {
     const sid = pkg.session, pid = pkg.id, s = screen;
@@ -143,16 +154,20 @@
   }
   function up() { if (dragging) place(dragging); dragging = undefined; start = undefined; }
   function update(text: string) { marks = marks.map((m,i) => i === active ? {...m,text} : m); save(); }
-  function add() {
-    if (!selected?.text.trim() || selected.text.trim() === selected.savedText) return;
+  function saveComment(): boolean {
+    if (!selected?.text.trim() || selected.text.trim() === selected.savedText) return true;
     const text = selected.text.trim();
     const id = selected.id || crypto.randomUUID();
     const content = `Annotation ${id} (latest comment)\n${markLocation(selected)}\n${text}`;
     if (onComment(index, content, selected.savedFeedback)) {
       marks = marks.map((m,i) => i === active ? {...m,id,savedText:text,savedFeedback:content} : m); save();
       message = 'Saved on this screenshot and added to feedback.';
-    } else message = 'The feedback batch is full. Send it, then add this comment.';
+      return true;
+    }
+    message = 'The feedback batch is full. Close this editor to send existing feedback, then retry.';
+    return false;
   }
+  function add() { if (saveComment()) closeComment(); }
 </script>
 
 {#if screen}
@@ -226,9 +241,9 @@
   {#if editing && selected}
     <div class="annotation-editor" bind:this={editor} role="dialog" aria-label={`Comment ${active+1} · ${selected.side}`} tabindex="-1" style:left={`${editorPosition.left}px`} style:top={`${editorPosition.top}px`}
       onkeydown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeComment(); } }}>
-      <div class="editor-heading"><label for="canvas-comment">Comment {active+1} · {selected.side}</label><Button icon size="xs" aria-label="Close comment" title="Close without discarding" onclick={closeComment}><Icon name="x" size={14} /></Button></div>
+      <div class="editor-heading"><label for="canvas-comment">Comment {active+1} · {selected.side}</label><Button icon size="xs" aria-label="Close comment" title="Close without discarding" onclick={() => closeComment()}><Icon name="x" size={14} /></Button></div>
       <textarea id="canvas-comment" aria-label="Screenshot comment" rows="3" maxlength="2000" placeholder="What should change here?" value={selected.text} oninput={e => update(e.currentTarget.value)}></textarea>
-      <div class="editor-actions"><Button variant="primary" disabled={!selected.text.trim() || selected.text.trim() === selected.savedText} onclick={add}>{selected.text.trim() === selected.savedText ? 'Saved to feedback' : selected.savedText ? 'Update feedback' : 'Add comment to feedback'}</Button>{#if !selected.savedText}<Button size="sm" aria-label="Discard comment" title="Discard comment" onclick={() => { marks = marks.filter((_,i) => i !== active); active = -1; save(); }}>Discard</Button>{/if}</div>
+      <div class="editor-actions"><Button variant="primary" disabled={!selected.text.trim()} onclick={add}>{selected.text.trim() === selected.savedText ? 'Done' : selected.savedText ? 'Update feedback' : 'Add comment to feedback'}</Button>{#if !selected.savedText}<Button size="sm" aria-label="Discard comment" title="Discard comment" onclick={() => { marks = marks.filter((_,i) => i !== active); active = -1; save(); }}>Discard</Button>{/if}</div>
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
