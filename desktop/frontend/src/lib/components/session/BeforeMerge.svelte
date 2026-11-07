@@ -30,7 +30,18 @@
   let accepted = $state(false);
   let merging = $state(false);
   let mergeRequested = $state(false);
-  let chosenMethod = $state('');
+  const mergeMethodKey = 'lola.mergeMethod';
+  function readMergeMethod(): string {
+    try {
+      const value = localStorage.getItem(mergeMethodKey);
+      return value === 'squash' || value === 'merge' || value === 'rebase' ? value : '';
+    } catch { return ''; }
+  }
+  let chosenMethod = $state(readMergeMethod());
+  function chooseMergeMethod(value: string) {
+    chosenMethod = value;
+    try { localStorage.setItem(mergeMethodKey, value); } catch { /* best effort */ }
+  }
   let viewGeneration = 0;
   let expandedReviewers = $state<string[]>([]);
   let collapsedReviewers = $state<string[]>([]);
@@ -93,7 +104,7 @@
   $effect(() => {
     const key = identity;
     if (!key) return;
-    expandedReviewers = []; collapsedReviewers = []; notice = ''; error = ''; data = null; loadedFor = ''; accepted = false; mergeRequested = false; chosenMethod = '';
+    expandedReviewers = []; collapsedReviewers = []; notice = ''; error = ''; data = null; loadedFor = ''; accepted = false; mergeRequested = false;
     untrack(() => void refresh());
     const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 60000);
     return () => { clearInterval(timer); generation++; viewGeneration++; };
@@ -195,7 +206,7 @@
         <div class="merge-split" class:ready={readyToMerge}>
           <span use:tooltip={mergeHint}><Button class="rounded-r-none!" variant={readyToMerge ? 'primary' : 'secondary'} size="xs" icon={!readyToMerge && !merging && !mergeRequested} disabled={!canMerge} loading={merging} onclick={askMerge} aria-label={merging ? 'Merging…' : mergeRequested ? 'Merge requested' : readyToMerge ? mergeLabel : 'Merge pull request'}>{#if !merging}<Icon name="git-merge" size={13} />{/if}{#if merging}Merging…{:else if mergeRequested}Merge requested{:else if readyToMerge}{mergeLabel}{/if}</Button></span>
           <span class="merge-method" use:tooltip={'Choose merge method'}>
-            <Select aria-label="Merge method" minMenuWidth={220} value={mergeMethod} disabled={!canMerge} onchange={(event) => chosenMethod = event.currentTarget.value}>
+            <Select aria-label="Merge method" minMenuWidth={220} value={mergeMethod} disabled={!canMerge} onchange={(event) => chooseMergeMethod(event.currentTarget.value)}>
               <option value="squash">Squash and merge</option>
               <option value="merge">Create merge commit</option>
               <option value="rebase">Rebase and merge</option>

@@ -11,7 +11,7 @@ const merge = vi.mocked(DaemonService.MergePR);
 const thread = (id: string) => ({ id, path:'src/app.ts', line:12, outdated:false, author:'reviewer', preview:`Finding ${id}`, url:`https://github.com/acme/app/pull/42#discussion_${id}` });
 const facts = (over = {}) => ({ repo:'acme/app', number:42, url:'https://github.com/acme/app/pull/42', state:'OPEN', draft:false, mergeable:'MERGEABLE', mergeState:'CLEAN', review:'APPROVED', checks:'pass', head:'abc', threads:[], mergeMethod:'squash', mergeBlocked:'', ...over });
 function mount(over = {}) { freshSession({prNumber:42,prUrl:'https://github.com/acme/app/pull/42',...over});return render(BeforeMerge,{session:store.sessions[0]}); }
-beforeEach(() => {read.mockReset(); address.mockReset(); merge.mockReset(); read.mockResolvedValue(facts());});
+beforeEach(() => {localStorage.removeItem('lola.mergeMethod'); read.mockReset(); address.mockReset(); merge.mockReset(); read.mockResolvedValue(facts());});
 afterEach(() => { cleanup(); confirm.cancel(); vi.restoreAllMocks(); });
 
 it('merges a ready PR directly using the exact displayed head', async () => {
@@ -197,6 +197,35 @@ it('selects a merge method without merging and keeps it across status refreshes'
   expect(merge).toHaveBeenCalledExactlyOnceWith(store.sessions[0].id,42,'acme/app','abc','merge',false);
 });
 
+it('remembers the chosen method across PRs and remounts before any merge', async () => {
+  mount({stack:true,focusApp:'web',apps:[{name:'web',label:'Website',number:42},{name:'api',label:'API',number:9}]});
+  const picker = await screen.findByRole('combobox',{name:'Merge method'});
+  await waitFor(()=>expect(picker).toBeEnabled());
+  await fireEvent.click(picker);
+  await fireEvent.click(screen.getByRole('option',{name:'Create merge commit'}));
+  await fireEvent.click(screen.getByRole('tab',{name:'API'}));
+  await waitFor(()=>expect(read).toHaveBeenLastCalledWith(`${store.sessions[0].id}~api`,9));
+  await waitFor(()=>expect(picker).toBeEnabled());
+  expect(picker).toHaveValue('merge');
+  expect(merge).not.toHaveBeenCalled();
+  cleanup();
+  mount({prNumber:43});
+  const restored = await screen.findByRole('combobox',{name:'Merge method'});
+  await waitFor(()=>expect(restored).toBeEnabled());
+  expect(restored).toHaveValue('merge');
+  await fireEvent.click(screen.getByRole('button',{name:'Merge pull request'}));
+  expect(merge).toHaveBeenCalledExactlyOnceWith(store.sessions[0].id,43,'acme/app','abc','merge',false);
+});
+
+it('falls back to the daemon default for an invalid saved method', async () => {
+  localStorage.setItem('lola.mergeMethod','invalid');
+  read.mockResolvedValue(facts({mergeMethod:'rebase'}));
+  mount();
+  const picker = await screen.findByRole('combobox',{name:'Merge method'});
+  await waitFor(()=>expect(picker).toBeEnabled());
+  expect(picker).toHaveValue('rebase');
+});
+
 it('supports keyboard selection and uses the selected method in unready confirmation', async () => {
   read.mockResolvedValue(facts({mergeBlocked:'CI is running.'}));
   mount();
@@ -215,7 +244,7 @@ it('supports keyboard selection and uses the selected method in unready confirma
   await waitFor(()=>expect(merge).toHaveBeenCalledExactlyOnceWith(store.sessions[0].id,42,'acme/app','abc','rebase',true));
 });
 
-it('returns to the workspace default on another PR', async () => {
+it('keeps the chosen rebase method on another PR', async () => {
   mount({stack:true,focusApp:'web',apps:[{name:'web',label:'Website',number:42},{name:'api',label:'API',number:9}]});
   const picker = await screen.findByRole('combobox',{name:'Merge method'});
   await waitFor(()=>expect(picker).toBeEnabled());
@@ -225,6 +254,6 @@ it('returns to the workspace default on another PR', async () => {
   await fireEvent.click(screen.getByRole('tab',{name:'API'}));
   const nextPicker=await screen.findByRole('combobox',{name:'Merge method'});
   await waitFor(()=>expect(nextPicker).toBeEnabled());
-  expect(nextPicker).toHaveValue('squash');
+  expect(nextPicker).toHaveValue('rebase');
   expect(merge).not.toHaveBeenCalled();
 });
