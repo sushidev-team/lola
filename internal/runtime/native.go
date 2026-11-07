@@ -1285,9 +1285,8 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 			}
 			continue
 		}
-		if p.InStack() {
-			continue // a member's worktrees live inside its stack's sessions
-		}
+		// A member can still have standalone worktrees from before it joined
+		// a stack. Scan its old root too; stack worktrees live elsewhere.
 		dirs, err := n.WT.List(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: adopt: project %s: %w", p.Name, err)

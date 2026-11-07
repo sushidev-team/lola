@@ -398,6 +398,24 @@ func (n *Native) adoptStack(p config.Project, live map[string]bool) []session.Se
 			continue
 		}
 		dir := filepath.Join(root, id)
+		apps := discoverApps(members, dir)
+		if !live[id] && len(apps) == 0 {
+			// Cleanup can leave only tooling metadata behind. That is not a
+			// recoverable session. Keep unknown files and unreadable folders
+			// visible, and never hide a live agent on this evidence alone.
+			if contents, err := os.ReadDir(dir); err == nil {
+				onlyMetadata := true
+				for _, entry := range contents {
+					if !slices.Contains(stackOwnFiles, entry.Name()) {
+						onlyMetadata = false
+						break
+					}
+				}
+				if onlyMetadata {
+					continue
+				}
+			}
+		}
 		a := state.AgentDead
 		if live[id] {
 			a = state.AgentWorking
@@ -410,7 +428,7 @@ func (n *Native) adoptStack(p config.Project, live map[string]bool) []session.Se
 			Worktree: dir,
 			TmuxName: id,
 			Stack:    true,
-			Apps:     discoverApps(members, dir),
+			Apps:     apps,
 		}, a))
 	}
 	return out

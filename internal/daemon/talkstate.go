@@ -239,6 +239,12 @@ func (d *Daemon) recordEndedAs(s session.Session, reason string) {
 		info.Slug = filepath.Base(usage.SlugDir("/", wt)) // the name, wherever the root is
 	}
 	err = store.Update(func(st *sshstore.State) error {
+		// Cleaning a rediscovered leftover must not replace its original
+		// title, merged PR, transcript or end time with a bare recovery record.
+		// An actual new launch clears Ended in recordSessionEvent.
+		if st.Ended != nil {
+			return nil
+		}
 		st.Ended = info
 		st.AddEvent(protocol.SSHSystemEvent{Kind: protocol.SSHEventSessionEnded, Text: info.Reason}, now)
 		store.Prune(st)
