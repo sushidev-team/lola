@@ -21,7 +21,7 @@ it('compares with a keyboard range, switches views, and handles screens with no 
   await fireEvent.click(screen.getByRole('button',{name:'Next'}));
   await screen.findByAltText('Phone — After');
   expect(screen.getByRole('button',{name:'Slider'})).toBeDisabled();
-  expect(screen.getByText('Before capture unavailable')).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'Before'})).toBeDisabled();
 });
 
 it('keeps region drafts across reopening, and queues coordinates with the comment',async()=>{

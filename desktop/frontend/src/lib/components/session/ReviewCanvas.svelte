@@ -306,16 +306,11 @@
     <nav class="screen-list" aria-label="Review screens">
       {#each screens as s,i}<button type="button" class="screen-link" class:active={index === i} aria-current={index === i ? 'true' : undefined} onclick={() => index = i}><Icon name="image" size={14} /><span>{s.title}</span></button>{/each}
     </nav>
-    <div class="screen-info">
-      <p class="source-status" class:outdated={freshness === 'stale'} role="status">{freshness === 'stale' ? 'Outdated material' : freshness === 'unknown' ? 'Revision unconfirmed' : 'Agent-provided'} · {pkg.head?.slice(0,8)}</p>
-      <h2 class="sr-only">{screen.title}</h2>
+    <h2 class="sr-only">{screen.title}</h2>
+    {#if screen.caption || freshness === 'stale'}<div class="screen-info">
+      {#if freshness === 'stale'}<p class="outdated" role="status"><Icon name="circle-alert" size={13} />Outdated screenshots</p>{/if}
       {#if screen.caption}<p>{screen.caption}</p>{/if}
-      {#if screen.viewport}<p class="capture-detail"><Icon name="monitor" size={13} />{screen.viewport}</p>{/if}
-      {#if screen.url}<p class="capture-url selectable">{screen.url}</p>{/if}
-      {#if !screen.before}<p class="hint">Before capture unavailable</p>{/if}
-      {#if mode === 'slider'}<p class="hint">Drag anywhere on the image to compare. Images fit the same frame; different viewport sizes may not align.</p>{/if}
-      {#if tool !== 'view'}<p class="hint" role="status">{tool === 'pin' ? 'Click to place a pin' : 'Drag to mark an area'} on {side}. Keyboard: tab to the image and press Enter.</p>{/if}
-    </div>
+    </div>{/if}
   </aside>{/if}
   <div class="canvas-area" bind:this={canvasArea}>
   <div class="viewport" bind:this={viewport}>
@@ -401,10 +396,7 @@
   .screen-link:hover { background:var(--color-sel); color:var(--color-ink); }
   .screen-link.active { background:var(--color-accent-fill); color:var(--color-accent-ink); }
   .screen-info { border-top:1px solid var(--color-edge); padding-top:16px; font-size:12px; line-height:1.6; color:var(--color-ink-2); }
-  .source-status { margin-bottom:12px; color:var(--color-faint); }
-  .source-status.outdated { color:var(--color-warn); }
-  .capture-detail { display:flex; align-items:center; gap:6px; margin-top:16px; color:var(--color-faint); }
-  .capture-url { overflow-wrap:anywhere; margin-top:6px; color:var(--color-faint); }
+  .outdated { display:flex; align-items:center; gap:6px; margin-bottom:12px; color:var(--color-warn); }
   .canvas-area { position:relative; min-width:0; min-height:0; }
   .viewport { height:100%; min-width:0; min-height:0; overflow:auto; background:var(--color-canvas); padding:16px; display:flex; }
   .zoom-frame { margin:auto; flex-shrink:0; }
