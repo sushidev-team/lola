@@ -229,7 +229,6 @@
   .review-toolbar :global(select) { max-width:350px; }
   .review-aside { display:grid; align-content:start; gap:28px; min-width:0; overflow:auto; padding:24px 20px; border-left:1px solid var(--color-edge); background:var(--color-canvas); }
   .review-input { width:100%; resize:vertical; padding:10px; border:1px solid var(--color-edge); border-radius:6px; background:var(--color-panel); color:var(--color-ink); font-size:13px; line-height:20px; }
-  .review-input:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
   .empty-review { max-width:48ch; padding-top:24px; }
   @media(max-width:1000px) { .review-material { padding:24px 20px; } }
   @media(max-width:740px) { .review-layout { display:block; overflow:auto; } .review-main { display:grid; min-height:0; } .review-visuals { height:calc(100dvh - 210px); min-height:500px; } .review-tabs { flex-wrap:wrap; padding-right:8px; gap:4px; } .review-material { overflow:visible; } .review-code { height:70vh; } .review-aside { overflow:visible; border-left:0; border-top:1px solid var(--color-edge); } .review-toolbar { padding:12px 16px; } }

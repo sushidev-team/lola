@@ -1420,7 +1420,14 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .lola-field:focus, :is(input, textarea).border:focus, input.sidebar-search:focus {
   outline: none !important;
   border-color: color-mix(in srgb, var(--color-accent) 65%, var(--color-edge));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 12%, transparent);
+  box-shadow: none;
+}
+/* Fields indicate focus through their existing edge, without an outer ring.
+   Override component outlines too so custom editors share the same treatment. */
+:is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea, select, [contenteditable="true"]):focus {
+  outline: none !important;
+  box-shadow: none !important;
+  border-color: color-mix(in srgb, var(--color-accent) 65%, var(--color-edge));
 }
 .lola-field:disabled, :is(input, textarea).border:disabled { opacity: .45; cursor: not-allowed; }
 .lola-select { position: relative; display: block; min-width: 0; width: 100%; }

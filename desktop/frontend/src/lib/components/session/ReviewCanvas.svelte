@@ -10,13 +10,28 @@
   let infoOpen = $state(true);
   const screens = $derived(pkg.screens ?? []);
   const screen = $derived(screens[index] ?? screens[0]);
+  const modeKey = 'lola.review.comparisonMode';
+  let preferredMode = 'slider';
+  try {
+    const saved = localStorage.getItem(modeKey);
+    if (saved && ['slider', 'split', 'before', 'after'].includes(saved)) preferredMode = saved;
+  } catch { /* storage unavailable — keep the default */ }
   let mode = $state('slider');
+  function chooseMode(value: string) {
+    preferredMode = value; mode = value; tool = 'view';
+    // Temporary switches for annotations or missing baselines aren't preferences.
+    try { localStorage.setItem(modeKey, value); } catch { /* remember for this review */ }
+  }
   let tool = $state<'view' | 'pin' | 'area'>('view');
   let zoom = $state(100);
   let split = $state(50);
   let before = $state(''), after = $state(''), error = $state('');
   let retry = $state(0);
   let viewport = $state<HTMLDivElement>();
+  let canvasArea = $state<HTMLDivElement>();
+  let imageStage = $state<HTMLDivElement>();
+  let editor = $state<HTMLDivElement>();
+  let editorPosition = $state({left:12, top:12});
   let available = $state({width:1000,height:600});
   let dimensions = $state({before:{width:1440,height:900},after:{width:1440,height:900}});
   const fitWidth = $derived.by(() => {
@@ -51,12 +66,42 @@
   const single = $derived(mode === 'before' || mode === 'after');
   const side = $derived(mode === 'before' ? 'Before' : 'After');
   const selected = $derived(marks[active]);
+  const editing = $derived(canComment && single && selected?.side === side && tool === 'view');
+  $effect(() => {
+    const mark = selected, frame = canvasArea, stage = imageStage, popup = editor, scroller = viewport;
+    if (!editing || !mark || !frame || !stage || !popup || !scroller) return;
+    function position() {
+      const bounds = frame!.getBoundingClientRect(), image = stage!.getBoundingClientRect();
+      const x = image.left - bounds.left + mark!.x * image.width;
+      const y = image.top - bounds.top + mark!.y * image.height;
+      const width = popup!.offsetWidth, height = popup!.offsetHeight;
+      const left = x + 20 + width <= bounds.width - 12 ? x + 20 : x - width - 20;
+      editorPosition = {
+        left: Math.max(12, Math.min(left, bounds.width - width - 12)),
+        top: Math.max(12, Math.min(y + 16, bounds.height - height - 12)),
+      };
+    }
+    const observer = new ResizeObserver(position);
+    observer.observe(frame); observer.observe(stage); observer.observe(popup);
+    scroller.addEventListener('scroll', position, {passive:true});
+    position();
+    return () => { observer.disconnect(); scroller.removeEventListener('scroll', position); };
+  });
+  function openComment(i: number) {
+    active = i; mode = marks[i].side.toLowerCase(); tool = 'view'; message = '';
+    void tick().then(() => document.getElementById('canvas-comment')?.focus({preventScroll:true}));
+  }
+  function closeComment() {
+    const i = active; active = -1;
+    void tick().then(() => imageStage?.querySelector<HTMLButtonElement>(`[data-mark="${i}"]`)?.focus({preventScroll:true}));
+  }
+
   $effect(() => {
     const sid = pkg.session, pid = pkg.id, s = screen;
     retry;
     let live = true;
     before = ''; after = ''; error = ''; active = -1; tool = 'view'; zoom = 100; start = undefined; dragging = undefined;
-    mode = s?.before ? 'slider' : 'after';
+    mode = s?.before ? preferredMode : 'after';
     async function load(id: string) {
       const r = await DaemonService.ReviewPackageImage(sid, pid, id);
       if (!/^data:image\/(png|jpeg);base64,/.test(r.dataURL)) throw new Error('Unsupported screenshot');
@@ -76,11 +121,10 @@
     } catch { /* local drafts are optional */ }
   });
   function save() { try { localStorage.setItem(key, JSON.stringify(marks)); } catch { message = 'Draft storage unavailable. Keep this review open until you send your feedback.'; } }
-  function selectTool(value: typeof tool) { tool = value; if (value !== 'view' && !single) mode = 'after'; }
+  function selectTool(value: typeof tool) { message = ''; tool = value; if (value !== 'view' && !single) mode = 'after'; }
   function place(mark: ReviewMark) {
     if (!canComment || marks.length >= 30) { message = 'Finish an existing comment before adding more.'; return; }
-    marks = [...marks, mark]; active = marks.length - 1; save(); tool = 'view';
-    void tick().then(() => document.getElementById('canvas-comment')?.focus());
+    marks = [...marks, mark]; save(); openComment(marks.length - 1);
   }
   function point(e: PointerEvent) {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -120,11 +164,12 @@
     </div>
     <div class="tool-group comparison" aria-label="Comparison mode">
       {#each [{id:'slider',label:'Slider'},{id:'split',label:'Side by side'},{id:'before',label:'Before'},{id:'after',label:'After'}] as item}
-        <Button size="sm" selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => { mode = item.id; tool = 'view'; }}>{item.label}</Button>
+        <Button size="sm" selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => chooseMode(item.id)}>{item.label}</Button>
       {/each}
     </div>
     <div class="tool-group">
-      {#if canComment}<Button icon size="sm" selected={tool === 'pin'} disabled={!after} aria-label="Add pin" title="Add pin" onclick={() => { infoOpen = true; selectTool(tool === 'pin' ? 'view' : 'pin'); }}><Icon name="message-square-text" size={15} /></Button><Button icon size="sm" selected={tool === 'area'} disabled={!after} aria-label="Mark area" title="Mark area" onclick={() => { infoOpen = true; selectTool(tool === 'area' ? 'view' : 'area'); }}><Icon name="square" size={15} /></Button>{/if}
+      {#if marks.length && canComment}<Button size="sm" aria-label="Next draft comment" title="Open next draft comment" onclick={() => openComment((active+1)%marks.length)}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
+      {#if canComment}<Button icon size="sm" selected={tool === 'pin'} disabled={!after} aria-label="Add pin" title="Add pin" onclick={() => selectTool(tool === 'pin' ? 'view' : 'pin')}><Icon name="message-square-text" size={15} /></Button><Button icon size="sm" selected={tool === 'area'} disabled={!after} aria-label="Mark area" title="Mark area" onclick={() => selectTool(tool === 'area' ? 'view' : 'area')}><Icon name="square" size={15} /></Button>{/if}
       <span class="toolbar-separator"></span>
       <Select aria-label="Screenshot zoom" value={String(zoom)} onchange={e => zoom = Number(e.currentTarget.value)}><option value="100">Fit</option><option value="150">150%</option><option value="200">200%</option></Select>
     </div>
@@ -144,16 +189,8 @@
       {#if mode === 'slider'}<p class="hint">Drag anywhere on the image to compare. Images fit the same frame; different viewport sizes may not align.</p>{/if}
       {#if tool !== 'view'}<p class="hint" role="status">{tool === 'pin' ? 'Click to place a pin' : 'Drag to mark an area'} on {side}. Keyboard: tab to the image and press Enter.</p>{/if}
     </div>
-  {#if marks.length}<div class="flex flex-wrap gap-2 py-2" aria-label="Screenshot comments">{#each marks as mark,i}<Button selected={active === i} onclick={() => { active = i; mode = mark.side.toLowerCase(); }}>Comment {i+1} · {mark.side}</Button>{/each}</div>{/if}
-  {#if selected && canComment}
-    <div class="annotation-editor">
-      <label for="canvas-comment">Comment {active+1} · {selected.side}</label>
-      <textarea id="canvas-comment" aria-label="Screenshot comment" rows="3" maxlength="2000" placeholder="What should change here?" value={selected.text} oninput={e => update(e.currentTarget.value)}></textarea>
-      <div class="flex flex-wrap gap-2"><Button variant="primary" disabled={!selected.text.trim()} onclick={add}>Add comment to feedback</Button><Button onclick={() => { marks = marks.filter((_,i) => i !== active); active = -1; save(); }}>Discard comment</Button></div>
-    </div>
-  {/if}
-  {#if message}<p class="hint" role="status">{message}</p>{/if}
   </aside>{/if}
+  <div class="canvas-area" bind:this={canvasArea}>
   <div class="viewport" bind:this={viewport}>
     {#if error}<p role="alert" class="p-4 text-warn">Could not load screenshot. <Button onclick={() => retry++}>Retry image</Button></p>
     {:else if !after || (mode !== 'after' && !before)}<p role="status" class="p-4 text-faint">Loading screenshots…</p>
@@ -162,7 +199,7 @@
         {#if mode === 'split'}
           <div class="split-view"><figure><figcaption>Before</figcaption><img src={before} onload={e => decoded(e, 'before')} alt={`${screen.title} — Before`} onerror={() => error = 'Image could not be decoded'} /></figure><figure><figcaption>After</figcaption><img src={after} onload={e => decoded(e, 'after')} alt={`${screen.title} — After`} onerror={() => error = 'Image could not be decoded'} /></figure></div>
         {:else}
-          <div class="image-stage">
+          <div class="image-stage" bind:this={imageStage}>
             <img src={mode === 'before' ? before : after} onload={e => decoded(e, mode === 'before' ? 'before' : 'after')} alt={`${screen.title} — ${side}`} draggable="false" onerror={() => error = 'Image could not be decoded'} />
             {#if mode === 'slider'}<img class="baseline" style:clip-path={`inset(0 ${100-split}% 0 0)`} src={before} onload={e => decoded(e, 'before')} alt={`${screen.title} — Before`} draggable="false" onerror={() => error = 'Image could not be decoded'} /><div class="divider" style:left={`${split}%`}></div><div class="comparison-drag" role="slider" tabindex="0" aria-label="Before and after comparison" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(split)} aria-valuetext={`${Math.round(split)}% before`}
               onpointerdown={e => { if (e.button !== 0) return; sliding = true; e.currentTarget.setPointerCapture(e.pointerId); e.currentTarget.focus({preventScroll:true}); slideAt(e); e.preventDefault(); }}
@@ -175,13 +212,23 @@
                 onkeydown={e => { if (e.key === 'Escape') { e.stopPropagation(); tool = 'view'; dragging = undefined; start = undefined; } }}></button>
             {/if}
             {#if single}
-              {#each marks as mark,i}{#if mark.side === side}<button class="pin" class:chosen={active === i} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} aria-label={`Comment ${i+1}`} onclick={e => { e.stopPropagation(); active = i; }}>{i+1}</button>{#if mark.w || mark.h}<div class="region" style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} style:width={`${mark.w*100}%`} style:height={`${mark.h*100}%`}></div>{/if}{/if}{/each}
+              {#each marks as mark,i}{#if mark.side === side}<button class="pin" class:chosen={active === i} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} data-mark={i} aria-label={`Comment ${i+1}`} aria-expanded={active === i && editing} onclick={e => { e.stopPropagation(); openComment(i); }}>{i+1}</button>{#if mark.w || mark.h}<button type="button" class="region region-hit" aria-label={`Open area comment ${i+1}`} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} style:width={`${mark.w*100}%`} style:height={`${mark.h*100}%`} onclick={() => openComment(i)}></button>{/if}{/if}{/each}
               {#if dragging}<div class="region" style:left={`${dragging.x*100}%`} style:top={`${dragging.y*100}%`} style:width={`${dragging.w*100}%`} style:height={`${dragging.h*100}%`}></div>{/if}
             {/if}
           </div>
         {/if}
       </div>
     {/if}
+  </div>
+  {#if editing && selected}
+    <div class="annotation-editor" bind:this={editor} role="dialog" aria-label={`Comment ${active+1} · ${selected.side}`} tabindex="-1" style:left={`${editorPosition.left}px`} style:top={`${editorPosition.top}px`}
+      onkeydown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeComment(); } }}>
+      <div class="editor-heading"><label for="canvas-comment">Comment {active+1} · {selected.side}</label><Button icon size="xs" aria-label="Close comment" title="Close without discarding" onclick={closeComment}><Icon name="x" size={14} /></Button></div>
+      <textarea id="canvas-comment" aria-label="Screenshot comment" rows="3" maxlength="2000" placeholder="What should change here?" value={selected.text} oninput={e => update(e.currentTarget.value)}></textarea>
+      <div class="editor-actions"><Button variant="primary" disabled={!selected.text.trim()} onclick={add}>Add comment to feedback</Button><Button size="sm" aria-label="Discard comment" title="Discard comment" onclick={() => { marks = marks.filter((_,i) => i !== active); active = -1; save(); }}>Discard</Button></div>
+      {#if message}<p class="hint" role="status">{message}</p>{/if}
+    </div>
+  {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
   </div>
   </div>
 
@@ -210,10 +257,11 @@
   .source-status.outdated { color:var(--color-warn); }
   .capture-detail { display:flex; align-items:center; gap:6px; margin-top:16px; color:var(--color-faint); }
   .capture-url { overflow-wrap:anywhere; margin-top:6px; color:var(--color-faint); }
-  .viewport { min-width:0; min-height:0; overflow:auto; background:var(--color-canvas); padding:16px; display:flex; }
+  .canvas-area { position:relative; min-width:0; min-height:0; }
+  .viewport { height:100%; min-width:0; min-height:0; overflow:auto; background:var(--color-canvas); padding:16px; display:flex; }
   .zoom-frame { margin:auto; flex-shrink:0; }
   .image-stage { position:relative; width:100%; }
-  .annotation-surface { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; touch-action:none; border:0; background:transparent; }
+  .annotation-surface { position:absolute; z-index:3; inset:0; width:100%; height:100%; cursor:crosshair; touch-action:none; border:0; background:transparent; }
   img { display:block; width:100%; height:auto; user-select:none; }
   .baseline { position:absolute; inset:0; height:100%; object-fit:contain; background:var(--color-canvas); pointer-events:none; }
   .comparison-drag { position:absolute; inset:0; cursor:ew-resize; touch-action:none; }
@@ -227,10 +275,15 @@
   .pin { position:absolute; z-index:2; width:26px; height:26px; transform:translate(-50%,-50%); border-radius:50%; background:var(--color-accent-fill); color:var(--color-accent-ink); border:2px solid var(--color-accent); cursor:pointer; font-size:12px; }
   .pin.chosen { outline:2px solid var(--color-ink); outline-offset:2px; }
   .region { position:absolute; border:2px solid var(--color-accent); background:color-mix(in srgb,var(--color-accent) 12%,transparent); pointer-events:none; }
-  .annotation-editor { padding:12px 0; border-top:1px solid var(--color-edge); }
+  .region-hit { pointer-events:auto; cursor:pointer; }
+  .annotation-editor { position:absolute; z-index:5; width:min(300px,calc(100% - 24px)); max-height:calc(100% - 24px); overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; }
+  .editor-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+  .editor-heading label { margin:0; }
+  .editor-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .canvas-notice { position:absolute; bottom:12px; left:12px; max-width:calc(100% - 24px); padding:8px 12px; font-size:12px; color:var(--color-ink-2); border:1px solid var(--color-edge); border-radius:6px; background:var(--color-panel); pointer-events:none; }
   label { display:block; font-size:12px; color:var(--color-ink-2); margin-bottom:8px; }
   textarea { display:block; width:100%; padding:10px; margin-bottom:10px; background:var(--color-canvas); border:1px solid var(--color-edge); border-radius:6px; color:var(--color-ink); resize:vertical; font-size:13px; }
-  .screen-link:focus-visible,textarea:focus-visible,.annotation-surface:focus-visible,.comparison-drag:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
+  .screen-link:focus-visible,.annotation-surface:focus-visible,.comparison-drag:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
   @media(max-width:900px) { .canvas-body.info-open { grid-template-columns:190px minmax(0,1fr); } .tools { gap:6px; padding:6px; flex-wrap:wrap; } .comparison { order:3; flex:1; justify-content:center; } .viewport { padding:16px; } }
   @media(max-width:560px) { .canvas-body { position:relative; } .canvas-body.info-open { grid-template-columns:minmax(0,1fr); } .info-rail { position:absolute; top:0; bottom:0; left:0; width:210px; background:var(--color-panel); z-index:4; box-shadow:4px 6px 16px #0003; } }
 </style>

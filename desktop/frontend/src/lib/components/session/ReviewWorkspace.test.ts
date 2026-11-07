@@ -119,7 +119,7 @@ it('keeps unfinished material comments across closing and reopening',async()=>{
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Still reviewing this'}});
   mounted.unmount();render(ReviewWorkspace,{sessionId:id});await openScreens();
-  await fireEvent.click(await screen.findByRole('button',{name:'Comment 1 · After'}));
+  await fireEvent.click(await screen.findByRole('button',{name:'Next draft comment'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Still reviewing this');
 });
 

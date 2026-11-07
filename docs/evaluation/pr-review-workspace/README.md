@@ -47,3 +47,10 @@ feedback batching and narrow layout at 1440 × 1000 and 700 × 900, with no
 page errors or document/dialog overflow. The native WKWebView was not exercised
 in this refinement. Component tests cover queuing/retry, draft persistence,
 screen/stack isolation, comparison modes and unsupported image URLs.
+
+The [floating comment editor](floating-comment.png) now sits beside its pin or
+area on the image. Headless Chromium and WebKit exercised typing and adding
+feedback; WebKit also verified containment after zooming, scrolling and narrowing
+the canvas. Focused text fields use a border change without an outline/shadow
+ring. Twenty component tests and Svelte checks pass. The reported native input
+failure has not been reproduced in these isolated browser checks.

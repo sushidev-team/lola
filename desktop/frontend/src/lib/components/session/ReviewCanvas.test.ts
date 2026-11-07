@@ -36,7 +36,7 @@ it('keeps region drafts across screen changes, and queues coordinates with the c
   expect(screen.queryByRole('textbox')).toBeNull();
   await fireEvent.click(screen.getByRole('button',{name:'Previous'}));
   await screen.findByAltText('Settings — After');
-  await fireEvent.click(screen.getByRole('button',{name:'Comment 1 · After'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Next draft comment'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Align this area');
   await fireEvent.click(screen.getByRole('button',{name:'Add comment to feedback'}));
   expect(onComment).toHaveBeenLastCalledWith(0,'After screenshot, area from top-left: x=50%, y=50%, width=20%, height=20%\nAlign this area');
@@ -44,6 +44,24 @@ it('keeps region drafts across screen changes, and queues coordinates with the c
   onComment.mockReturnValue(true);
   await fireEvent.click(screen.getByRole('button',{name:'Add comment to feedback'}));
   expect(screen.queryByRole('textbox')).toBeNull();
+});
+
+it('remembers the chosen comparison mode without saving temporary annotation or missing-baseline views',async()=>{
+  const mounted=render(ReviewCanvas,{pkg,onComment:()=>true});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Side by side'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Next'}));
+  await screen.findByAltText('Phone — After');
+  expect(screen.getByRole('button',{name:'After'})).toHaveAttribute('aria-pressed','true');
+  await fireEvent.click(screen.getByRole('button',{name:'Previous'}));
+  await screen.findByAltText('Settings — Before');
+  expect(screen.getByRole('button',{name:'Side by side'})).toHaveAttribute('aria-pressed','true');
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  expect(screen.getByRole('button',{name:'After'})).toHaveAttribute('aria-pressed','true');
+  mounted.unmount();
+  render(ReviewCanvas,{pkg,onComment:()=>true});
+  await screen.findByAltText('Settings — Before');
+  expect(screen.getByRole('button',{name:'Side by side'})).toHaveAttribute('aria-pressed','true');
 });
 
 it('rejects remote image sources and retries loading',async()=>{
@@ -74,4 +92,23 @@ it('moves the divider from any point on the image, including a drag starting awa
   await fireEvent(surface,new MouseEvent('pointerup',{bubbles:true}));
   await fireEvent(surface,new MouseEvent('pointermove',{bubbles:true,clientX:200,clientY:80}));
   expect(surface).toHaveAttribute('aria-valuenow','80');
+});
+
+
+it('edits on the image with the info rail hidden, and closes without losing the draft',async()=>{
+  render(ReviewCanvas,{pkg,onComment:()=>true});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Screen details'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  expect(screen.queryByRole('complementary',{name:'Screen details'})).toBeNull();
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  const dialog=screen.getByRole('dialog',{name:'Comment 1 · After'});
+  expect(dialog.closest('.canvas-area')).not.toBeNull();
+  expect(dialog.closest('.info-rail')).toBeNull();
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Keep this draft at the pin'}});
+  await fireEvent.keyDown(dialog,{key:'Escape'});
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByRole('button',{name:'Comment 1'})).toHaveFocus();
+  await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
+  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Keep this draft at the pin');
 });
