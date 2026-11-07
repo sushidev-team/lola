@@ -22,6 +22,7 @@ import (
 	"github.com/sushidev-team/lola/internal/sshelement"
 	"github.com/sushidev-team/lola/internal/sshstore"
 	"github.com/sushidev-team/lola/internal/state"
+	"github.com/sushidev-team/lola/internal/taskboard"
 )
 
 const (
@@ -379,6 +380,9 @@ func (d *Daemon) handleAgentSay(ctx context.Context, a protocol.AgentSayArgs) (p
 	queued := text
 	if onHost != "" && !command {
 		queued = "[lola] Said while looking at " + onHost + ":\n" + text
+	}
+	if len(s.Tasks) > 0 && !command && !strings.Contains(queued, taskboard.ConversationHint) {
+		queued += "\n\n" + taskboard.ConversationHint
 	}
 	now := d.ssh.now()
 	var item string

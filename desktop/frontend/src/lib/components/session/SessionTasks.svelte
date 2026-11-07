@@ -4,6 +4,7 @@
   import { cubicOut } from 'svelte/easing';
   import { DaemonService } from '@bindings/desktop';
   import { store } from '$lib/store.svelte';
+  import { ssh } from '$lib/ssh.svelte';
   import { isAgentless } from '$lib/sessionview';
   import type { SessionTask } from '@bindings/internal/protocol';
   import Button from '../Button.svelte';
@@ -28,7 +29,14 @@
   let showDone = $state(false);
   let expandedTasks = $state<Set<string>>(new Set());
   function toggleTask(id: string) { const next = new Set(expandedTasks); if (next.has(id)) next.delete(id); else next.add(id); expandedTasks = next; }
-  function stateLabel(state: string) { return state === 'doing' ? 'In progress' : state === 'done' ? 'Done' : 'To do'; }
+  function stateLabel(state: string) { return state === 'checking' ? 'Needs your check' : state === 'doing' ? 'In progress' : state === 'done' ? 'Done' : 'To do'; }
+  function feedback(item: SessionTask) {
+    const view = ssh.view(sessionId);
+    const context = `Feedback on ${item.kind} [${item.id}] (${item.text}):\n`;
+    if (!view.agentDraft.startsWith(context)) view.agentDraft = context + view.agentDraft;
+    view.runDefault = false;
+    view.composerFocus++;
+  }
   let tab = $state('tasks');
   let globalRequirement = $state(false);
   let expandedRequirements = $state<Set<string>>(new Set());
@@ -91,7 +99,7 @@
 
   let menu = $state<{ id: string; kind: 'state' | 'parent' | 'actions'; anchor: HTMLButtonElement; left: number; top: number; width: number; height: number } | null>(null);
   let menuElement = $state<HTMLDivElement>();
-  const statuses = [{id: 'todo', label: 'To do'}, {id: 'doing', label: 'In progress'}, {id: 'done', label: 'Done'}];
+  const statuses = [{id: 'todo', label: 'To do'}, {id: 'doing', label: 'In progress'}, {id: 'checking', label: 'Needs your check'}, {id: 'done', label: 'Done'}];
   const menuItem = $derived(all.find(t => t.id === menu?.id));
   const menuOptions = $derived(menu?.kind === 'actions' ? [{id: 'edit', label: `Edit ${menuItem?.kind ?? 'task'}`}, {id: 'remove', label: `Remove ${menuItem?.kind ?? 'task'}`}] : menu?.kind === 'state' ? statuses : [{id: '--global', label: 'Global requirement'}, {id: 'none', label: 'Let the agent organize'}, ...tasks.map(t => ({id: t.id, label: t.text}))]);
   const menuValue = $derived(menu?.kind === 'state' ? menuItem?.state : menuItem ? menuItem.scope === 'global' ? '--global' : menuItem.parentId || 'none' : globalRequirement ? '--global' : parent || 'none');
@@ -100,7 +108,7 @@
     if (menu?.anchor === anchor) { closeMenu(); return; }
     const r = anchor.getBoundingClientRect();
     const width = Math.min(kind === 'parent' ? 300 : 170, window.innerWidth - 16);
-    const height = Math.min(260, (kind === 'actions' ? 2 : kind === 'state' ? 3 : tasks.length + 2) * 34 + 10, window.innerHeight - 16);
+    const height = Math.min(260, (kind === 'actions' ? 2 : kind === 'state' ? statuses.length : tasks.length + 2) * 34 + 10, window.innerHeight - 16);
     const below = window.innerHeight - r.bottom - 8;
     menu = { id, kind, anchor, width, height, left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)), top: Math.max(8, below >= height ? r.bottom + 4 : r.top - height - 4) };
     await tick(); menuElement?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
@@ -151,18 +159,35 @@
   <button type="button" class="status-trigger" aria-label={`Status of ${item.text}: ${stateLabel(item.state)}`} aria-haspopup="menu" aria-expanded={menu?.id === item.id && menu?.kind === 'state'} disabled={pending || !store.alive} onclick={(event) => openMenu(event, item.id, 'state')}><TaskStateIcon state={item.state} /></button>
 {/snippet}
 
+{#snippet checkActions(item: SessionTask)}
+  {#if item.state === 'checking'}
+    {@const unmet = item.kind === 'task' && requirements.some(r => r.parentId === item.id && r.state !== 'done')}
+    <div class="check-actions">
+      <span>Needs your check</span>
+      <button type="button" class="check-confirm" aria-label={`Confirm checked: ${item.text}`} title={unmet ? 'Check the remaining requirements first' : 'Confirm checked'} disabled={pending || !store.alive || unmet} onclick={() => void mutate(['state', item.id, 'done'])}><Icon name="check" size={14} /></button>
+      <button type="button" aria-label={`Give feedback: ${item.text}`} title="Give feedback in the composer" onclick={() => feedback(item)}><Icon name="message-square-text" size={14} /></button>
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet itemFeedback(item: SessionTask)}
+  {#if item.feedback}<p class="item-feedback"><span>Latest feedback</span>{item.feedback}</p>{/if}
+{/snippet}
+
 {#snippet criteria(items: SessionTask[])}
   <ul class="task-requirements">
     {#each items as item (item.id)}
       {@const open = expandedRequirements.has(item.id)}
-      <li class="requirement-item">
+      <li class="requirement-item" class:needs-check={item.state === 'checking'}>
         <div class="requirement-row">
           {@render statusButton(item)}
-          <button type="button" class="requirement-title" class:full-title={open} class:done={item.state === 'done'} aria-expanded={open} onclick={() => toggleRequirement(item.id)}>{item.text}</button>
+          <button type="button" class="requirement-title" class:full-title={open || item.state === 'checking'} class:done={item.state === 'done'} aria-expanded={open} onclick={() => toggleRequirement(item.id)}>{item.text}</button>
           {#if !item.parentId}<span class="requirement-scope">{item.scope === 'global' ? 'Global' : 'Unassigned'}</span>{/if}
           {@render itemMenu(item)}
         </div>
+        {@render checkActions(item)}
         {#if open}
+          {@render itemFeedback(item)}
           <div transition:disclose class="requirement-tools">
             <button type="button" class="text-action" aria-label={`Organize ${item.text}`} aria-haspopup="menu" aria-expanded={menu?.id === item.id && menu?.kind === 'parent'} disabled={pending || !store.alive} onclick={(event) => openMenu(event, item.id, 'parent')}>{item.parentId ? 'Move requirement' : item.scope === 'global' ? 'Change scope' : 'Attach to task'}<Icon name="chevron-down" size={11} /></button>
           </div>
@@ -175,21 +200,25 @@
 
 {#snippet taskRow(task: SessionTask)}
   {@const attached = requirements.filter(r => r.parentId === task.id)}
+  {@const checks = attached.filter(r => r.state === 'checking').length}
   {@const open = expandedTasks.has(task.id)}
-  <li class="task-item" data-task-id={task.id}>
+  <li class="task-item" class:needs-check={task.state === 'checking'} data-task-id={task.id}>
     <div class="task-row">
       {@render statusButton(task)}
       <button type="button" class="task-expand" aria-expanded={open} aria-controls={`task-${sessionId}-${task.id}`} onclick={() => toggleTask(task.id)}>
-        <span class="task-title" class:full-title={open}>{task.text}</span>
+        <span class="task-title" class:full-title={open || task.state === 'checking'}>{task.text}</span>
         {#if attached.length}<span class="requirement-count num" title={`${attached.filter(r => r.state === 'done').length} of ${attached.length} requirements met`}>{attached.filter(r => r.state === 'done').length}/{attached.length}</span>{/if}
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} class="text-faint" />
       </button>
       {@render itemMenu(task)}
     </div>
+    {@render checkActions(task)}
+    {#if checks && !open}<button type="button" class="pending-checks" onclick={() => toggleTask(task.id)}><Icon name="circle-help" size={13} />{checks} {checks === 1 ? 'requirement needs' : 'requirements need'} your check<Icon name="chevron-down" size={12} /></button>{/if}
     {@render delivery(task)}
     {@render removal(task)}
     {#if open}
       <div transition:disclose class="task-detail" id={`task-${sessionId}-${task.id}`}>
+        {@render itemFeedback(task)}
         {#if attached.length}{@render criteria(attached)}{/if}
         <div class="task-tools"><button type="button" class="add-criterion" disabled={pending || !store.alive} onclick={() => add(task.id)}><Icon name="plus" size={12} /> Add requirement</button></div>
       </div>
@@ -238,6 +267,15 @@
 
 <style>
   .session-tasks { min-width: 0; }
+  .needs-check { margin-block: 3px; padding: 3px 5px; border-radius: 5px; background: color-mix(in srgb, var(--color-warn) 8%, transparent); }
+  .check-actions { display: flex; align-items: center; gap: 5px; margin: 0 0 4px 27px; color: var(--color-warn); font-size: 11px; }
+  .check-actions span { flex: 1; min-width: 0; }
+  .check-actions button { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 4px; color: var(--color-ink-2); }
+  .check-actions .check-confirm { color: var(--color-good); }
+  .pending-checks { display: flex; align-items: center; gap: 5px; margin-left: 27px; min-height: 28px; color: var(--color-warn); font-size: 11px; text-align: left; }
+  .check-actions button:hover:not(:disabled) { background: var(--color-sel); }
+  .item-feedback { margin: 4px 0 6px 27px; font-size: 12px; line-height: 18px; color: var(--color-ink-2); overflow-wrap: anywhere; }
+  .item-feedback span { display: block; font-size: 11px; color: var(--color-faint); }
   .task-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .task-tabs { display: flex; min-width: 0; gap: 14px; }
   .task-tabs button { display: flex; align-items: center; gap: 5px; padding: 4px 0 8px; border-bottom: 2px solid transparent; color: var(--color-faint); font-size: 13px; }

@@ -11,6 +11,7 @@ type SessionTask struct {
 	Kind         string    `json:"kind"`
 	Text         string    `json:"text"`
 	State        string    `json:"state"`
+	Feedback     string    `json:"feedback,omitempty"` // Latest user feedback; the conversation keeps the full history.
 	Author       string    `json:"author"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 	Notification string    `json:"notification,omitempty"`

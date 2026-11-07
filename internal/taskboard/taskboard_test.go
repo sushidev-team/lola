@@ -120,3 +120,38 @@ func TestGlobalRequirementsAreExplicitAndCanBeReorganized(t *testing.T) {
 		t.Fatalf("global again: %+v %v", items, err)
 	}
 }
+
+func TestManualChecksAndFeedback(t *testing.T) {
+	now := time.Now()
+	items := []protocol.SessionTask{
+		{ID: "work", Kind: "task", State: "doing"},
+		{ID: "browser", Kind: "requirement", ParentID: "work", Text: "Check the shortcut in the browser", State: "todo", Author: "user"},
+	}
+	next, _, err := Apply(items, []string{"state", "browser", "checking"}, "agent", now)
+	if err != nil || next[1].State != "checking" || items[1].State != "todo" {
+		t.Fatalf("checking: %+v %v", next, err)
+	}
+	if _, _, err := Apply(next, []string{"state", "work", "done"}, "agent", now); err == nil {
+		t.Fatal("completed task before human check")
+	}
+	next, _, err = Apply(next, []string{"feedback", "browser", "Shortcut still scrolls\nthe page"}, "agent", now)
+	if err != nil || next[1].Feedback != "Shortcut still scrolls the page" || next[1].State != "todo" || next[1].Text != items[1].Text || next[1].Author != "user" {
+		t.Fatalf("feedback changed scope: %+v %v", next, err)
+	}
+	for _, args := range [][]string{{"feedback", "missing", "problem"}, {"feedback", "browser", ""}, {"feedback", "browser", strings.Repeat("x", MaxText+1)}} {
+		if _, _, err := Apply(next, args, "agent", now); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	next, _, _ = Apply(next, []string{"state", "browser", "checking"}, "agent", now)
+	next, _, _ = Apply(next, []string{"state", "browser", "done"}, "user", now)
+	next, _, err = Apply(next, []string{"state", "work", "done"}, "agent", now)
+	if err != nil || next[0].State != "done" {
+		t.Fatalf("confirmation: %+v %v", next, err)
+	}
+	// Repeated feedback after another check is a new failure, not a no-op.
+	next, _, err = Apply(next, []string{"feedback", "browser", "Shortcut still scrolls the page"}, "agent", now)
+	if err != nil || next[0].State != "todo" || next[1].State != "todo" {
+		t.Fatalf("reopen: %+v %v", next, err)
+	}
+}

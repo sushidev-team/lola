@@ -19,7 +19,7 @@ const MaxText = 500
 
 var validID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$`)
 
-const Usage = `task list | task add <id> <task|requirement> [--task <task-id>|--global] <text> | task state <id> <todo|doing|done> | task edit <id> <text> | task attach <requirement-id> <task-id|--global|none> | task remove <id>`
+const Usage = `task list | task add <id> <task|requirement> [--task <task-id>|--global] <text> | task state <id> <todo|doing|checking|done> | task feedback <id> <text> | task edit <id> <text> | task attach <requirement-id> <task-id|--global|none> | task remove <id>`
 
 // Apply returns a new slice and the changed ID. Repeating an identical add is
 // idempotent, so retrying a lost reply cannot duplicate a requirement or send.
@@ -90,13 +90,32 @@ func Apply(tasks []protocol.SessionTask, argv []string, author string, now time.
 		if idx < 0 {
 			return fail("unknown ID")
 		}
-		if len(argv) != 3 || (argv[2] != "todo" && argv[2] != "doing" && argv[2] != "done") {
+		if len(argv) != 3 || (argv[2] != "todo" && argv[2] != "doing" && argv[2] != "checking" && argv[2] != "done") {
 			return fail("invalid state")
 		}
 		if argv[2] == "done" && tasks[idx].Kind == "task" && slices.ContainsFunc(tasks, func(t protocol.SessionTask) bool { return t.ParentID == id && t.State != "done" }) {
 			return fail("complete the task's requirements before marking it done")
 		}
+		if next[idx].State == argv[2] {
+			return tasks, "", nil
+		}
 		next[idx].State = argv[2]
+		next[idx].UpdatedAt = now
+	case "feedback":
+		if idx < 0 {
+			return fail("unknown ID")
+		}
+		value, err := text(argv[2:])
+		if err != nil {
+			return fail(err.Error())
+		}
+		// Reports attach feedback already received through the conversation; they
+		// never send it back to the agent or overwrite the agreed scope.
+		if next[idx].Feedback == value && next[idx].State == "todo" {
+			return tasks, "", nil
+		}
+		next[idx].Feedback = value
+		next[idx].State = "todo"
 		next[idx].UpdatedAt = now
 	case "edit":
 		if idx < 0 {

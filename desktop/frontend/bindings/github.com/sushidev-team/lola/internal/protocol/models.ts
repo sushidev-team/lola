@@ -2476,6 +2476,11 @@ export interface SessionTask {
     "kind": string;
     "text": string;
     "state": string;
+
+    /**
+     * Latest user feedback; the conversation keeps the full history.
+     */
+    "feedback"?: string;
     "author": string;
     "updatedAt": string;
     "notification"?: string;

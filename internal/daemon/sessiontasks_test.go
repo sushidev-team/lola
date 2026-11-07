@@ -87,3 +87,48 @@ func TestSharedTaskFailedSendPreservesCard(t *testing.T) {
 		t.Fatal("agent retry accepted")
 	}
 }
+
+func TestUserTaskCheckNotifiesAndComposerFeedbackRoutes(t *testing.T) {
+	d, f := talkFakeDaemon(t)
+	s := talkSession(d, "check", state.AgentIdle)
+	s.Tasks = []protocol.SessionTask{{ID: "browser", Kind: "task", Text: "Check shortcut", State: "checking", Author: "agent"}}
+	d.sessions.Upsert(s)
+	req := taskReq(t, "check", "state", "browser", "done")
+	if r := d.handle(context.Background(), req); !r.OK {
+		t.Fatal(r.Error)
+	}
+	if sent := f.sent(); len(sent) != 1 || !strings.Contains(sent[0], "User set status: done") {
+		t.Fatalf("confirmation not delivered: %v", sent)
+	}
+	if r := d.handle(context.Background(), req); !r.OK {
+		t.Fatal(r.Error)
+	}
+	if len(f.sent()) != 1 {
+		t.Fatal("confirmation retry sent twice")
+	}
+	// Free-form messages retain the user's exact words while the agent receives routing instructions.
+	out := say(t, d, "check", "Actually, the shortcut still scrolls")
+	if got := talkHuman(t, d, "check", out.Item).Text; got != "Actually, the shortcut still scrolls" {
+		t.Fatalf("user text changed: %s", got)
+	}
+	if sent := f.sent(); len(sent) != 2 || !strings.Contains(sent[1], taskboard.ConversationHint) {
+		t.Fatalf("routing missing: %v", sent)
+	}
+	if r := d.handle(context.Background(), reportReq(t, "check", "task", "feedback", "browser", "Shortcut still scrolls")); !r.OK {
+		t.Fatal(r.Error)
+	}
+	if len(f.sent()) != 2 {
+		t.Fatal("feedback report echoed to agent")
+	}
+	s, _ = d.sessions.Get("check")
+	dir := t.TempDir()
+	persisted := session.NewStore(dir)
+	persisted.Upsert(s)
+	if err := persisted.Save(); err != nil {
+		t.Fatal(err)
+	}
+	restored, ok := session.NewStore(dir).Get("check")
+	if !ok || restored.Tasks[0].Feedback != "Shortcut still scrolls" || restored.Tasks[0].State != "todo" {
+		t.Fatalf("feedback not persisted: %+v", restored.Tasks)
+	}
+}

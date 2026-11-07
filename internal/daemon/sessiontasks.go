@@ -64,7 +64,7 @@ func (d *Daemon) handleSessionTask(ctx context.Context, req protocol.Request, au
 			return false
 		}
 		s.Tasks = next
-		if author == "user" && id != "" && (a.Argv[0] == "add" || a.Argv[0] == "edit") {
+		if author == "user" && id != "" && (a.Argv[0] == "add" || a.Argv[0] == "edit" || a.Argv[0] == "state") {
 			i := slices.IndexFunc(next, func(t protocol.SessionTask) bool { return t.ID == id })
 			s.Tasks[i].Notification = "sending"
 			s.Tasks[i].SendError = ""
@@ -83,7 +83,7 @@ func (d *Daemon) handleSessionTask(ctx context.Context, req protocol.Request, au
 		return protocol.Response{Error: "task: could not save: " + err.Error()}
 	}
 	if notify != nil {
-		message := fmt.Sprintf("Session %s [%s]: %s", notify.Kind, notify.ID, notify.Text)
+		message := fmt.Sprintf("Session %s [%s]: %s\nUser set status: %s.", notify.Kind, notify.ID, notify.Text, notify.State)
 		if notify.ParentID != "" {
 			message += "\nRequirement belongs to task [" + notify.ParentID + "]."
 		} else if notify.Scope == "global" {

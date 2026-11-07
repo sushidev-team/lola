@@ -1,8 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { freshSession, store } from './talk.testkit';
+import { freshSession, setTalk, ssh, store, talkSvc } from './talk.testkit';
 import { DaemonService } from '@bindings/desktop';
 import SessionTasks from './SessionTasks.svelte';
+import Composer from './Composer.svelte';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const task = (id: string, state = 'todo', author = 'agent') => ({ id, state, author, text: `Requirement ${id}`, kind: 'task', updatedAt: new Date().toISOString() });
@@ -86,7 +87,7 @@ it('uses a keyboard-accessible three-state picker with fractional icons', async 
   const first = await screen.findByRole('menuitemradio', { name: 'To do' });
   await waitFor(() => expect(first).toHaveFocus());
   const options = screen.getAllByRole('menuitemradio');
-  expect(options.map(o => o.querySelector('[data-task-state]')?.getAttribute('data-task-state'))).toEqual(['todo', 'doing', 'done']);
+  expect(options.map(o => o.querySelector('[data-task-state]')?.getAttribute('data-task-state'))).toEqual(['todo', 'doing', 'checking', 'done']);
   await fireEvent.keyDown(first, { key: 'ArrowDown' });
   expect(screen.getByRole('menuitemradio', { name: 'In progress' })).toHaveFocus();
   await fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
@@ -142,4 +143,53 @@ it('keeps task and requirement actions on their own rows with explicit menu labe
   await fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove requirement' }));
   expect(screen.getByText('Remove requirement?')).toBeInTheDocument();
   expect(screen.queryByText('Remove task? Requirements will be kept.')).toBeNull();
+});
+
+it('shows human checks with a direct confirmation and preserves delivery failures', async () => {
+  const id = freshSession({ tasks: [task('browser', 'checking')] });
+  vi.spyOn(store, 'refresh').mockResolvedValue(undefined);
+  const request = vi.mocked(DaemonService.SessionTask).mockRejectedValueOnce(new Error('Offline'));
+  render(SessionTasks, { sessionId: id });
+  expect(screen.getByText('Needs your check')).toBeInTheDocument();
+  const confirm = screen.getByRole('button', { name: 'Confirm checked: Requirement browser' });
+  await fireEvent.click(confirm);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Offline');
+  expect(confirm).toBeInTheDocument();
+  request.mockResolvedValueOnce([{ ...task('browser', 'done'), notification: 'failed' }] as never);
+  await fireEvent.click(confirm);
+  expect(request).toHaveBeenLastCalledWith(id, ['state', 'browser', 'done']);
+  await waitFor(() => expect(screen.queryByText('Needs your check')).toBeNull());
+  await fireEvent.click(screen.getByRole('button', { name: /Completed/ }));
+  expect(screen.getByText('Saved · message not sent')).toBeInTheDocument();
+});
+
+it('keeps child checks actionable and prevents confirming a parent with unmet requirements', async () => {
+  const id = freshSession({ tasks: [task('work', 'checking'), { ...task('browser', 'checking'), kind: 'requirement', parentId: 'work', feedback: 'Still scrolls the page' }] });
+  render(SessionTasks, { sessionId: id });
+  expect(screen.getByRole('button', { name: 'Confirm checked: Requirement work' })).toBeDisabled();
+  await fireEvent.click(screen.getByRole('button', { name: '1 requirement needs your check' }));
+  expect(screen.getByRole('button', { name: 'Confirm checked: Requirement browser' })).toBeEnabled();
+  await fireEvent.click(screen.getByRole('button', { name: 'Requirement browser' }));
+  expect(screen.getByText('Still scrolls the page')).toBeInTheDocument();
+});
+
+it('opens task feedback in the real composer, keeps the draft, and sends it through the normal queue', async () => {
+  const id = freshSession({ tasks: [task('browser', 'checking')] });
+  const view = ssh.view(id);
+  view.agentDraft = 'It still scrolls the page';
+  view.runDefault = true;
+  render(SessionTasks, { sessionId: id });
+  render(Composer, { sessionId: id });
+  await setTalk(id);
+  await fireEvent.click(screen.getByRole('button', { name: 'Give feedback: Requirement browser' }));
+  const message = 'Feedback on task [browser] (Requirement browser):\nIt still scrolls the page';
+  const field = screen.getByRole('textbox');
+  expect(field).toHaveValue(message);
+  expect(view.runDefault).toBe(false);
+  await waitFor(() => expect(field).toHaveFocus());
+  await fireEvent.click(screen.getByRole('button', { name: 'Give feedback: Requirement browser' }));
+  expect(field).toHaveValue(message);
+  await fireEvent.keyDown(field, { key: 'Enter' });
+  await waitFor(() => expect(talkSvc.Say).toHaveBeenCalledWith({ session: id, text: message, conn: undefined, stopFirst: undefined }));
+  await waitFor(() => expect(view.agentDraft).toBe(''));
 });
