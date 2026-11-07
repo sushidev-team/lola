@@ -99,7 +99,7 @@ it('batches revision and screenshot context, preserves failed sends, then clears
   await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Move the save button closer.'}});
-  await fireEvent.click(screen.getByRole('button',{name:'Add comment to feedback'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
   const note=feedback.noteFor(id);
   expect(note).toContain(`Review package ${pkg().id}`);expect(note).toContain(`Head: ${head}`);expect(note).toContain('Section: Screen 1: Settings');
   await fireEvent.click(screen.getByRole('button',{name:/Checks & feedback/}));
@@ -129,14 +129,14 @@ it('retains saved annotations across reopening and updates their pending feedbac
   await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Original annotation'}});
-  await fireEvent.click(screen.getByRole('button',{name:'Add comment to feedback'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
   expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
   expect(screen.getByRole('button',{name:'Comment 1'})).toBeInTheDocument();
   mounted.unmount();render(ReviewWorkspace,{sessionId:id});await openScreens();
   await fireEvent.click(await screen.findByRole('button',{name:'Next comment'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Original annotation');
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Updated annotation'}});
-  await fireEvent.click(screen.getByRole('button',{name:'Update feedback'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
   expect(feedback.noteFor(id)).toContain('Updated annotation');
   expect(feedback.noteFor(id)).not.toContain('Original annotation');
   expect(feedback.noteFor(id).match(/Annotation /g)).toHaveLength(1);
@@ -148,7 +148,7 @@ it('retains saved annotations across reopening and updates their pending feedbac
   await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Updated annotation');
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Follow-up after sending'}});
-  await fireEvent.click(screen.getByRole('button',{name:'Update feedback'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
   expect(feedback.noteFor(id)).toContain('Follow-up after sending');
   expect(feedback.noteFor(id).match(/Annotation /g)).toHaveLength(1);
 });
@@ -211,4 +211,27 @@ it('keeps retained material readable after the session is removed without offeri
   expect(screen.queryByRole('button',{name:'Add to feedback'})).toBeNull();
   await fireEvent.click(screen.getByRole('button',{name:/Checks & feedback/}));
   expect(screen.getByText(/This session has ended/)).toBeInTheDocument();
+});
+
+
+it('opens a full feedback batch from the editor without losing or sending the new draft',async()=>{
+  feedback.setNote(id,'x'.repeat(3900));
+  render(ReviewWorkspace,{sessionId:id});await openScreens();
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Keep this draft'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  expect(screen.getByText('Feedback full')).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole('button',{name:'Review feedback'}));
+  expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
+  expect(screen.getByRole('button',{name:'Send feedback to agent'})).toBeInTheDocument();
+  expect(feedback.noteFor(id)).toBe('x'.repeat(3900));
+  expect(send).not.toHaveBeenCalled();
+  await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
+  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Keep this draft');
+  feedback.setNote(id,'');
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  expect(feedback.noteFor(id)).toContain('Keep this draft');
+  expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
 });

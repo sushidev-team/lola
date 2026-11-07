@@ -59,3 +59,16 @@ a successful save or click-away. Click-away saves changed text only; unchanged
 comments close without resubmission, and failed saves keep the editor open.
 Twenty-two component tests and Svelte checks pass, including saving, reopening,
 click-away, updating before send, and following up after send.
+
+
+### Compact annotation editor
+
+The floating editor uses a short Save action, icon controls for discard/close,
+and a 150ms opening transition (disabled for reduced motion). A full batch shows
+an inline status and a Review feedback action that opens the pending batch while
+retaining the annotation draft. It does not send feedback automatically.
+
+Validation: 23 focused canvas/workspace tests passed; Svelte check reported no
+errors or warnings. Headless WebKit checked 1440, 700, and 420px widths, editor
+bounds, ring-free fields, opening feedback, and reopening the retained draft.
+[Compact full-batch state](compact-comment.png) uses an isolated screenshot fixture.

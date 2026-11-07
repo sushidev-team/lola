@@ -1,3 +1,4 @@
+import Trash2 from '@lucide/svelte/icons/trash-2';
 import CircleMinus from '@lucide/svelte/icons/circle-minus';
 import LogOut from '@lucide/svelte/icons/log-out';
 import ArrowUpLeft from '@lucide/svelte/icons/arrow-up-left';
@@ -85,6 +86,7 @@ export const icons = {
   'arrow-up': ArrowUp,
   'ban': Ban,
   'check': Check,
+  'trash-2': Trash2,
   'chevron-down': ChevronDown,
   'chevron-left': ChevronLeft,
   'chevron-right': ChevronRight,

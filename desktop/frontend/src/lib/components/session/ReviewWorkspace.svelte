@@ -162,7 +162,7 @@
         <div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><p class="px-4 py-2 text-xs text-faint">Live checkout changes. These may differ from the retained review revision.</p><DiffView {sessionId} /></div>
       {:else if tab === 'visuals' && current?.screens?.length}
         <div class="review-visuals">
-          {#key current.id}<ReviewCanvas pkg={current} {freshness} bind:index={canvasScreen} canComment={!!session} onComment={addScreenComment} />{/key}
+          {#key current.id}<ReviewCanvas pkg={current} {freshness} bind:index={canvasScreen} canComment={!!session} onComment={addScreenComment} onReviewFeedback={() => panelOpen = true} />{/key}
         </div>
       {:else}
         <div class="review-material">
