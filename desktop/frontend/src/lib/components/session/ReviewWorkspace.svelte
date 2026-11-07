@@ -109,12 +109,17 @@
     draft = value;
     try { localStorage.setItem(draftKey, JSON.stringify({text:value,subject})); } catch { /* draft remains in memory */ }
   }
-  function queueComment(section: string, text: string, screenIndex?: number): boolean {
+  function queueComment(section: string, text: string, screenIndex?: number, previousText?: string): boolean {
     if (!current || !text.trim()) return false;
     const screen = screenIndex === undefined ? undefined : current.screens?.[screenIndex];
     const images = screen ? `Page: ${screen.url || 'unspecified'}; viewport: ${screen.viewport || 'unspecified'}\nScreenshots: before ${screen.before || 'unavailable'}, after ${screen.after}\n` : '';
     const context = `Review package ${current.id}\nRepository: ${current.repo || 'unspecified'}${current.pr ? ` PR #${current.pr}` : ''}\nBase: ${current.base}\nHead: ${current.head}\nSection: ${section}\n${images}`;
-    const combined = [notes, context + text.trim()].filter(Boolean).join('\n\n');
+    const previous = previousText ? context + previousText.trim() : '';
+    // Replace only this annotation's exact pending entry. Once sent (or manually
+    // changed in the batch), retain that history and add the latest text instead.
+    const combined = previous && notes.includes(previous)
+      ? notes.replace(previous, () => context + text.trim())
+      : [notes, context + text.trim()].filter(Boolean).join('\n\n');
     // The existing feedback renderer caps a general note at 4000 runes.
     if ([...combined].length > 4000) { notice = 'This batch is full. Send it before adding another comment.'; return false; }
     feedback.setNote(sessionId, combined);
@@ -125,8 +130,8 @@
     const index = current?.screens?.findIndex((s,i) => subject === `Screen ${i+1}: ${s.title}`);
     if (queueComment(subject, draft, index !== undefined && index >= 0 ? index : undefined)) { subject = 'Write-up'; editDraft(''); }
   }
-  function addScreenComment(index: number, text: string): boolean {
-    return queueComment(`Screen ${index+1}: ${current?.screens?.[index]?.title}`, text, index);
+  function addScreenComment(index: number, text: string, previous?: string): boolean {
+    return queueComment(`Screen ${index+1}: ${current?.screens?.[index]?.title}`, text, index, previous);
   }
   async function send() {
     const sent = await feedback.send(sessionId);

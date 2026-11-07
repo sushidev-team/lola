@@ -52,5 +52,8 @@ The [floating comment editor](floating-comment.png) now sits beside its pin or
 area on the image. Headless Chromium and WebKit exercised typing and adding
 feedback; WebKit also verified containment after zooming, scrolling and narrowing
 the canvas. Focused text fields use a border change without an outline/shadow
-ring. Twenty component tests and Svelte checks pass. The reported native input
-failure has not been reproduced in these isolated browser checks.
+ring. The later clarification exposed a save bug: annotations were removed once
+added to feedback. Saving now retains the editor, pin/area and text; reopening
+restores them, and editing replaces the pending entry rather than duplicating it.
+Twenty-one component tests and Svelte checks pass, including saving, reopening,
+updating before send, and following up after send.

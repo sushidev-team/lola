@@ -36,14 +36,16 @@ it('keeps region drafts across screen changes, and queues coordinates with the c
   expect(screen.queryByRole('textbox')).toBeNull();
   await fireEvent.click(screen.getByRole('button',{name:'Previous'}));
   await screen.findByAltText('Settings — After');
-  await fireEvent.click(screen.getByRole('button',{name:'Next draft comment'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Next comment'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Align this area');
   await fireEvent.click(screen.getByRole('button',{name:'Add comment to feedback'}));
-  expect(onComment).toHaveBeenLastCalledWith(0,'After screenshot, area from top-left: x=50%, y=50%, width=20%, height=20%\nAlign this area');
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, area from top-left: x=50%, y=50%, width=20%, height=20%\nAlign this area'),undefined);
   expect(screen.getByRole('textbox')).toHaveValue('Align this area');
   onComment.mockReturnValue(true);
   await fireEvent.click(screen.getByRole('button',{name:'Add comment to feedback'}));
-  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(screen.getByRole('textbox')).toHaveValue('Align this area');
+  expect(screen.getByRole('button',{name:'Saved to feedback'})).toBeDisabled();
+  expect(screen.getByRole('button',{name:'Comment 1'})).toBeInTheDocument();
 });
 
 it('remembers the chosen comparison mode without saving temporary annotation or missing-baseline views',async()=>{

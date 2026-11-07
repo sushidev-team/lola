@@ -6,7 +6,7 @@
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Select from '../Select.svelte';
-  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string) => boolean } = $props();
+  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean } = $props();
   let infoOpen = $state(true);
   const screens = $derived(pkg.screens ?? []);
   const screen = $derived(screens[index] ?? screens[0]);
@@ -123,7 +123,7 @@
   function save() { try { localStorage.setItem(key, JSON.stringify(marks)); } catch { message = 'Draft storage unavailable. Keep this review open until you send your feedback.'; } }
   function selectTool(value: typeof tool) { message = ''; tool = value; if (value !== 'view' && !single) mode = 'after'; }
   function place(mark: ReviewMark) {
-    if (!canComment || marks.length >= 30) { message = 'Finish an existing comment before adding more.'; return; }
+    if (!canComment || marks.length >= 30) { message = 'This screen has reached its 30-annotation limit.'; return; }
     marks = [...marks, mark]; save(); openComment(marks.length - 1);
   }
   function point(e: PointerEvent) {
@@ -144,10 +144,13 @@
   function up() { if (dragging) place(dragging); dragging = undefined; start = undefined; }
   function update(text: string) { marks = marks.map((m,i) => i === active ? {...m,text} : m); save(); }
   function add() {
-    if (!selected?.text.trim()) return;
-    if (onComment(index, `${markLocation(selected)}\n${selected.text.trim()}`)) {
-      marks = marks.filter((_,i) => i !== active); active = -1; save();
-      message = 'Comment added to the feedback batch.';
+    if (!selected?.text.trim() || selected.text.trim() === selected.savedText) return;
+    const text = selected.text.trim();
+    const id = selected.id || crypto.randomUUID();
+    const content = `Annotation ${id} (latest comment)\n${markLocation(selected)}\n${text}`;
+    if (onComment(index, content, selected.savedFeedback)) {
+      marks = marks.map((m,i) => i === active ? {...m,id,savedText:text,savedFeedback:content} : m); save();
+      message = 'Saved on this screenshot and added to feedback.';
     } else message = 'The feedback batch is full. Send it, then add this comment.';
   }
 </script>
@@ -168,7 +171,7 @@
       {/each}
     </div>
     <div class="tool-group">
-      {#if marks.length && canComment}<Button size="sm" aria-label="Next draft comment" title="Open next draft comment" onclick={() => openComment((active+1)%marks.length)}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
+      {#if marks.length && canComment}<Button size="sm" aria-label="Next comment" title="Open next comment" onclick={() => openComment((active+1)%marks.length)}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
       {#if canComment}<Button icon size="sm" selected={tool === 'pin'} disabled={!after} aria-label="Add pin" title="Add pin" onclick={() => selectTool(tool === 'pin' ? 'view' : 'pin')}><Icon name="message-square-text" size={15} /></Button><Button icon size="sm" selected={tool === 'area'} disabled={!after} aria-label="Mark area" title="Mark area" onclick={() => selectTool(tool === 'area' ? 'view' : 'area')}><Icon name="square" size={15} /></Button>{/if}
       <span class="toolbar-separator"></span>
       <Select aria-label="Screenshot zoom" value={String(zoom)} onchange={e => zoom = Number(e.currentTarget.value)}><option value="100">Fit</option><option value="150">150%</option><option value="200">200%</option></Select>
@@ -225,7 +228,7 @@
       onkeydown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeComment(); } }}>
       <div class="editor-heading"><label for="canvas-comment">Comment {active+1} · {selected.side}</label><Button icon size="xs" aria-label="Close comment" title="Close without discarding" onclick={closeComment}><Icon name="x" size={14} /></Button></div>
       <textarea id="canvas-comment" aria-label="Screenshot comment" rows="3" maxlength="2000" placeholder="What should change here?" value={selected.text} oninput={e => update(e.currentTarget.value)}></textarea>
-      <div class="editor-actions"><Button variant="primary" disabled={!selected.text.trim()} onclick={add}>Add comment to feedback</Button><Button size="sm" aria-label="Discard comment" title="Discard comment" onclick={() => { marks = marks.filter((_,i) => i !== active); active = -1; save(); }}>Discard</Button></div>
+      <div class="editor-actions"><Button variant="primary" disabled={!selected.text.trim() || selected.text.trim() === selected.savedText} onclick={add}>{selected.text.trim() === selected.savedText ? 'Saved to feedback' : selected.savedText ? 'Update feedback' : 'Add comment to feedback'}</Button>{#if !selected.savedText}<Button size="sm" aria-label="Discard comment" title="Discard comment" onclick={() => { marks = marks.filter((_,i) => i !== active); active = -1; save(); }}>Discard</Button>{/if}</div>
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}

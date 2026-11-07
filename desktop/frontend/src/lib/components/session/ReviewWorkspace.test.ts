@@ -119,8 +119,38 @@ it('keeps unfinished material comments across closing and reopening',async()=>{
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Still reviewing this'}});
   mounted.unmount();render(ReviewWorkspace,{sessionId:id});await openScreens();
-  await fireEvent.click(await screen.findByRole('button',{name:'Next draft comment'}));
+  await fireEvent.click(await screen.findByRole('button',{name:'Next comment'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Still reviewing this');
+});
+
+it('retains saved annotations across reopening and updates their pending feedback instead of duplicating it',async()=>{
+  const mounted=render(ReviewWorkspace,{sessionId:id});await openScreens();
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Original annotation'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Add comment to feedback'}));
+  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Original annotation');
+  expect(screen.getByRole('button',{name:'Saved to feedback'})).toBeDisabled();
+  expect(screen.getByRole('button',{name:'Comment 1'})).toBeInTheDocument();
+  mounted.unmount();render(ReviewWorkspace,{sessionId:id});await openScreens();
+  await fireEvent.click(await screen.findByRole('button',{name:'Next comment'}));
+  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Original annotation');
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Updated annotation'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Update feedback'}));
+  expect(feedback.noteFor(id)).toContain('Updated annotation');
+  expect(feedback.noteFor(id)).not.toContain('Original annotation');
+  expect(feedback.noteFor(id).match(/Annotation /g)).toHaveLength(1);
+  await fireEvent.click(screen.getByRole('button',{name:/Checks & feedback/}));
+  send.mockResolvedValue({delivered:false,queued:true} as never);
+  await fireEvent.click(screen.getByRole('button',{name:'Send feedback to agent'}));
+  await screen.findByText(/Feedback accepted/);
+  expect(feedback.noteFor(id)).toBe('');
+  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Updated annotation');
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Follow-up after sending'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Update feedback'}));
+  expect(feedback.noteFor(id)).toContain('Follow-up after sending');
+  expect(feedback.noteFor(id).match(/Annotation /g)).toHaveLength(1);
 });
 
 it('keeps the inspected revision when a newer package arrives',async()=>{

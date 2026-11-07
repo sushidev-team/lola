@@ -17,7 +17,7 @@ export function reviewSections(body: string): { title: string; body: string }[] 
   flush(); return sections;
 }
 
-export type ReviewMark = { x: number; y: number; w: number; h: number; side: 'Before' | 'After'; text: string };
+export type ReviewMark = { x: number; y: number; w: number; h: number; side: 'Before' | 'After'; text: string; id?: string; savedText?: string; savedFeedback?: string };
 export function markLocation(mark: ReviewMark): string {
   const pct = (n: number) => `${Math.round(n * 1000) / 10}%`;
   return `${mark.side} screenshot, ${mark.w || mark.h ? 'area' : 'point'} from top-left: x=${pct(mark.x)}, y=${pct(mark.y)}${mark.w || mark.h ? `, width=${pct(mark.w)}, height=${pct(mark.h)}` : ''}`;
