@@ -58,12 +58,6 @@
 {/snippet}
 
 <aside class="cv-session-side grid min-h-0 content-start gap-5 overflow-y-auto px-4 pt-2 pb-4 text-sm" aria-label="Session overview" data-session-side>
-
-
-  {#if side.brief.summary}
-    <p class="selectable copy text-prose text-ink {side.brief.summary.stale ? 'opacity-60' : ''}" data-side-summary>{side.brief.summary.title}</p>
-  {/if}
-
   <SessionTasks {sessionId} />
 
   {#if session}<SessionDev {session} />{/if}
