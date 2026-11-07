@@ -278,7 +278,13 @@ func (s *DaemonService) RenameSession(id, name string) error {
 func (s *DaemonService) OpenManual(a protocol.OpenManualArgs) (protocol.OpenData, error) {
 	args, _ := json.Marshal(a)
 	var d protocol.OpenData
-	err := call(protocol.Request{Cmd: "openManual", Args: args}, longTimeout, &d)
+	cmd := "openManual"
+	if a.Existing {
+		// A daemon predating branch reuse must reject this request, not ignore
+		// the new field and create an owned branch from the wrong base.
+		cmd = "openExisting"
+	}
+	err := call(protocol.Request{Cmd: cmd, Args: args}, longTimeout, &d)
 	return d, err
 }
 

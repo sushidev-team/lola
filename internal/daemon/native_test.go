@@ -53,6 +53,7 @@ type fakeNative struct {
 	prAgentErr     error // returned from OpenPRAgent
 	manualAgents   []nativeAgentCall
 	manualAgentErr error // returned from OpenManualAgent
+	existingCalls  []nativeExistingCall
 	forks          []runtime.ForkSpec
 	forkErr        error           // returned from ForkAgent
 	takenBranches  map[string]bool // SlotTaken answers true for these branches
@@ -69,6 +70,24 @@ type nativeOpenCall struct{ project, id, ref, branch string }
 type nativeOpenManualCall struct{ project, id, branch, base string }
 
 type nativeAgentCall struct{ project, id, branch, base, prompt string }
+
+type nativeExistingCall struct {
+	project, id, branch, prompt, agentKind string
+	useAgent                               bool
+}
+
+func (f *fakeNative) OpenExisting(ctx context.Context, p config.Project, id, branch, prompt, agentKind string, useAgent bool) (session.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.existingCalls = append(f.existingCalls, nativeExistingCall{p.Name, id, branch, prompt, agentKind, useAgent})
+	s := session.Session{ID: id, Source: "native", Kind: session.KindPR, Project: p.Name, Branch: branch, Agentless: !useAgent, Agent: agentKind}
+	if useAgent {
+		s.SetAgentState(state.AgentStarting, "", time.Now())
+	} else {
+		s.SetAgentState(state.AgentShell, "", time.Now())
+	}
+	return s, nil
+}
 
 type nativeKillCall struct {
 	id             string

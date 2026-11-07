@@ -64,6 +64,7 @@ type NativeAPI interface {
 	SpawnWith(ctx context.Context, p config.Project, issue linear.Issue, o runtime.SpawnOpts) (session.Session, error)
 	Open(ctx context.Context, p config.Project, sessionID, ref, branch string) (session.Session, error)
 	OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error)
+	OpenExisting(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string, useAgent bool) (session.Session, error)
 	OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool) (session.Session, error)
 	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error)
 	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error)

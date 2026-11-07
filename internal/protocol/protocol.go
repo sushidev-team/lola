@@ -780,6 +780,8 @@ type PrRow struct {
 // (off Base, empty → the project's default branch) in a fresh worktree. With
 // Agent set it launches the coding agent (seeded with Prompt); otherwise a plain
 // shell. The reply is the shared OpenData.
+// Existing (cmd=openExisting) instead works directly on Branch without owning
+// it, ignoring Base. A distinct command keeps older daemons from creating it.
 type OpenManualArgs struct {
 	Name     string `json:"name,omitempty"`
 	Location string `json:"location,omitempty"` // worktree (default), main, temporary
@@ -787,8 +789,9 @@ type OpenManualArgs struct {
 	Project  string `json:"project"`
 	Branch   string `json:"branch"`
 	Base     string `json:"base,omitempty"`
-	Agent    bool   `json:"agent,omitempty"`  // launch the coding agent instead of a shell
-	Prompt   string `json:"prompt,omitempty"` // seed prompt when Agent is set
+	Existing bool   `json:"existing,omitempty"` // use Branch directly; Base is ignored and the branch is never deleted
+	Agent    bool   `json:"agent,omitempty"`    // launch the coding agent instead of a shell
+	Prompt   string `json:"prompt,omitempty"`   // seed prompt when Agent is set
 	// AgentKind optionally overrides WHICH coding agent runs (claude|codex|
 	// opencode) instead of the project's configured default. "" = configured.
 	AgentKind string `json:"agentKind,omitempty"`

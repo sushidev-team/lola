@@ -26,9 +26,16 @@
   let nameEl = $state<HTMLInputElement>();
   let name = $state("");
   let branch = $state("");
+  let branchChoice = $state(":new");
+  let existingBranch = $state("");
   let branchEdited = $state(false);
   let prefix = $state(DEFAULT_BRANCH_PREFIX);
   let base = $state("");
+  let customBase = $state("");
+  let branches = $state<string[]>([]);
+  let branchesLoading = $state(false);
+  let branchesUnavailable = $state(false);
+  const CUSTOM_BASE = ":custom"; // ':' cannot occur in a Git branch name.
   let path = $state("");
   let agentKind = $state("");
   let busy = $state(false);
@@ -36,10 +43,13 @@
   let error = $state("");
 
   const selected = $derived(store.projectByName(project));
+  const projectPath = $derived(selected?.path || "");
   const temporary = $derived(location === "temporary");
   const asksPrompt = $derived(!temporary && useAgent);
   const agent = $derived(agentName(agentKind || selected?.agent));
-  const canStart = $derived(temporary ? true : !!selected && (location !== "worktree" || !!branch.trim()));
+  const createBranch = $derived(branchChoice === ":new");
+  const chosenBranch = $derived(createBranch ? branch.trim() : branchChoice === ":existing" ? existingBranch.trim() : branchChoice);
+  const canStart = $derived(temporary ? true : !!selected && (location !== "worktree" || (!!chosenBranch && (!createBranch || base !== CUSTOM_BASE || !!customBase.trim()))));
   const field = "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent";
 
   function close() { if (!busy && !picking) nav.closeOverlay(); }
@@ -55,6 +65,7 @@
   // back to as well.
   $effect(() => {
     const p = project;
+    prefix = DEFAULT_BRANCH_PREFIX;
     if (!p) return;
     void (async () => {
       try {
@@ -65,6 +76,29 @@
         /* keep the default */
       }
     })();
+  });
+
+  // Reset choices when the project changes. Cleanup also drops a late answer
+  // after switching away and back to the same project or closing the form.
+  $effect(() => {
+    const p = project;
+    const checkout = projectPath;
+    branchChoice = ":new"; existingBranch = "";
+    base = ""; customBase = ""; branches = []; branchesUnavailable = false;
+    branchesLoading = !!checkout;
+    let current = true;
+    if (p && checkout) {
+      void ConfigService.InspectPath(checkout).then(info => {
+        if (!current) return;
+        branches = info.branches ?? [];
+        branchesUnavailable = !branches.length;
+      }).catch(() => {
+        if (current) branchesUnavailable = true;
+      }).finally(() => {
+        if (current) branchesLoading = false;
+      });
+    }
+    return () => { current = false; };
   });
 
   function grow() {
@@ -108,8 +142,9 @@
       project: temporary ? "" : project,
       name: name.trim(),
       location,
-      branch: location === "worktree" ? branch.trim() : "",
-      base: location === "worktree" ? base.trim() || undefined : undefined,
+      branch: location === "worktree" ? chosenBranch : "",
+      existing: location === "worktree" && !createBranch || undefined,
+      base: location === "worktree" && createBranch ? (base === CUSTOM_BASE ? customBase : base).trim() || undefined : undefined,
       agent: !temporary && useAgent,
       agentKind: !temporary && useAgent ? agentKind || undefined : undefined,
       prompt: text || undefined,
@@ -158,6 +193,26 @@
         </div>
       </div>
     {:else}
+      {#if location === "worktree"}
+        <label class="grid gap-1.5 text-sm">Branch
+          <Select bind:value={branchChoice} disabled={busy || branchesLoading}>
+            <option value=":new">Create new branch…</option>
+            {#each branches as b (b)}<option value={b}>{b}</option>{/each}
+            <option value=":existing">Other existing branch…</option>
+          </Select>
+        </label>
+        {#if branchesLoading}<p class="text-sm text-faint" role="status">Loading branches…</p>{/if}
+        {#if branchesUnavailable}<p class="text-sm text-faint" role="status">Could not list branches. Create a new branch or choose Other existing branch to enter a name.</p>{/if}
+        {#if branchChoice === ":existing"}
+          <label class="grid gap-1.5 text-sm">Existing branch<input class={field} bind:value={existingBranch} required placeholder="Branch name" disabled={busy} /></label>
+        {/if}
+        {#if createBranch}
+          <label class="grid gap-1.5 text-sm">New branch<input class={field} bind:value={branch} oninput={() => (branchEdited = true)} required placeholder="fix/checkout" disabled={busy} /></label>
+          {#if asksPrompt}<p class="text-sm text-faint">Named from your prompt. Edit it to choose your own name.</p>{/if}
+        {:else}
+          <p class="text-sm text-faint">Works directly on this branch in a separate worktree. The branch is kept when the session is removed.</p>
+        {/if}
+      {/if}
       <Disclosure label="Options" hint={useAgent ? "agent, location, branch, name" : "location, branch, name"} class="-ml-2">
         <div class="grid gap-4 pt-3 pl-2">
           <div class="grid grid-cols-2 gap-3">
@@ -175,12 +230,20 @@
               </Select>
             </label>
           </div>
-          {#if location === "worktree"}
-            <div class="grid grid-cols-2 gap-3">
-              <label class="grid gap-1.5 text-sm">New branch<input class={field} bind:value={branch} oninput={() => (branchEdited = true)} required placeholder="fix/checkout" disabled={busy} /></label>
-              <label class="grid gap-1.5 text-sm">Base branch<input class={field} bind:value={base} placeholder={selected?.defaultBranch || "Project default"} disabled={busy} /></label>
+          {#if location === "worktree" && createBranch}
+            <div class="grid gap-3">
+              <label class="grid gap-1.5 text-sm">Base branch
+                <Select bind:value={base} disabled={busy || branchesLoading}>
+                  <option value="">{branchesLoading ? "Loading branches…" : selected?.defaultBranch ? `${selected.defaultBranch} (project default)` : "Project default"}</option>
+                  {#each branches.filter(b => b !== selected?.defaultBranch) as b (b)}<option value={b}>{b}</option>{/each}
+                  <option value={CUSTOM_BASE}>Other branch…</option>
+                </Select>
+              </label>
+              {#if base === CUSTOM_BASE}
+                <label class="grid gap-1.5 text-sm">Other base branch<input class={field} bind:value={customBase} required placeholder="Branch name" disabled={busy} /></label>
+              {/if}
             </div>
-          {:else}
+          {:else if location !== "worktree"}
             <div class="text-sm text-faint"><p class="break-all font-mono">{selected?.path}</p><p class="mt-1">Uses the current branch and shares files with other sessions in this checkout.</p></div>
           {/if}
           <label class="grid gap-1.5 text-sm">Name

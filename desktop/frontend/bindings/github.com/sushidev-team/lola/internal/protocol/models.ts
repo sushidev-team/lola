@@ -788,6 +788,8 @@ export interface OpenData {
  * (off Base, empty → the project's default branch) in a fresh worktree. With
  * Agent set it launches the coding agent (seeded with Prompt); otherwise a plain
  * shell. The reply is the shared OpenData.
+ * Existing (cmd=openExisting) instead works directly on Branch without owning
+ * it, ignoring Base. A distinct command keeps older daemons from creating it.
  */
 export interface OpenManualArgs {
     "name"?: string;
@@ -804,6 +806,11 @@ export interface OpenManualArgs {
     "project": string;
     "branch": string;
     "base"?: string;
+
+    /**
+     * use Branch directly; Base is ignored and the branch is never deleted
+     */
+    "existing"?: boolean;
 
     /**
      * launch the coding agent instead of a shell

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -10,6 +11,29 @@ import (
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 )
+
+func TestHandleOpenExisting(t *testing.T) {
+	for _, useAgent := range []bool{false, true} {
+		nat := &fakeNative{}
+		d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+		args, _ := json.Marshal(protocol.OpenManualArgs{Project: "p1", Branch: "feature", Base: "ignored", Agent: useAgent, AgentKind: "codex", Prompt: "Fix login", Name: "Login"})
+		response := d.handle(context.Background(), protocol.Request{Cmd: "openExisting", Args: args})
+		if !response.OK {
+			t.Fatal(response.Error)
+		}
+		if len(nat.existingCalls) != 1 || len(nat.openManuals) != 0 || len(nat.manualAgents) != 0 {
+			t.Fatalf("wrong runtime path: %+v", nat.existingCalls)
+		}
+		got := nat.existingCalls[0]
+		if got.branch != "feature" || got.prompt != "Fix login" || got.agentKind != "codex" || got.useAgent != useAgent {
+			t.Fatalf("lost selection: %+v", got)
+		}
+		s, ok := d.sessions.Get(runtime.ManualSessionID("p1", "feature"))
+		if !ok || s.OwnsBranch() || s.Name != "Login" || s.HasAgent() != useAgent {
+			t.Fatalf("wrong session: %+v", s)
+		}
+	}
+}
 
 func TestHandleOpenManualCreatesShell(t *testing.T) {
 	nat := &fakeNative{}

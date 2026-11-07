@@ -627,11 +627,18 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open manual %s: %w", sessionID, err)
 	}
+	return n.finishShellLaunch(ctx, p, sessionID, dir, branch, session.KindManual)
+}
+
+func (n *Native) finishShellLaunch(ctx context.Context, p config.Project, sessionID, dir, branch string, sessionKind session.Kind) (session.Session, error) {
 	p = n.sessionProject(p, EnvVars{Session: sessionID, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
-		// lola OWNS this new branch — pass it so a rollback removes it too.
+		delBranch := ""
+		if sessionKind == session.KindManual {
+			delBranch = branch
+		}
 		n.releasePorts(sessionID)
-		if rmErr := n.WT.Remove(ctx, p, dir, branch, false); rmErr != nil {
+		if rmErr := n.WT.Remove(ctx, p, dir, delBranch, false); rmErr != nil {
 			return session.Session{}, fmt.Errorf("runtime: open manual %s: %s: %w (rollback failed: %v; worktree kept at %s)", sessionID, step, cause, rmErr, dir)
 		}
 		return session.Session{}, fmt.Errorf("runtime: open manual %s: %s: %w (worktree rolled back)", sessionID, step, cause)
@@ -663,8 +670,8 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 	return withAgentState(session.Session{
 		ID:        sessionID,
 		Source:    "native",
-		Kind:      session.KindManual, // lola-owned new branch: owns + deletes it on teardown
-		Agentless: true,               // plain shell, no coding agent
+		Kind:      sessionKind,
+		Agentless: true, // plain shell, no coding agent
 		Project:   p.Name,
 		Title:     "manual: " + branch,
 		Branch:    branch,

@@ -101,8 +101,13 @@ func newFixture(t *testing.T, gitCases, tmuxCases string) *fixture {
 	}
 
 	addCase := `*"worktree add"*)
-  mkdir -p "$7"
-  printf 'gitdir: %s\n' "` + gitDir + `" > "$7/.git"
+  case "$5" in
+    -b) workdir="$7" ;;
+    --track) workdir="$8" ;;
+    *) workdir="$5" ;;
+  esac
+  mkdir -p "$workdir"
+  printf 'gitdir: %s\n' "` + gitDir + `" > "$workdir/.git"
   exit 0
   ;;
 *"rev-parse --verify --quiet refs/heads/"*)

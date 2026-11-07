@@ -239,10 +239,13 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return protocol.Response{OK: true}
-	case "openManual":
+	case "openManual", "openExisting":
 		var a protocol.OpenManualArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {
 			return protocol.Response{OK: false, Error: "openManual: bad args: " + err.Error()}
+		}
+		if req.Cmd == "openExisting" {
+			a.Existing = true
 		}
 		data, err := d.handleOpenManual(ctx, a)
 		if err != nil {
