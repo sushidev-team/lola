@@ -34,12 +34,12 @@
       <div class="intro-meta"><span class:stale={freshness !== 'current'} role="status"><Icon name={freshness === 'current' ? 'git-pull-request' : 'circle-alert'} size={14}/>{freshness === 'current' ? 'Matches current PR' : freshness === 'stale' ? 'Outdated material' : 'Freshness unknown'}</span></div>
       {#if screens.length}<Button variant="secondary" onclick={() => onScreen(0)}><Icon name="image" size={15}/>Explore {screens.length} {screens.length === 1 ? 'screen' : 'screens'}<Icon name="arrow-right" size={14}/></Button>{/if}
     </header>
-      <section aria-label="Changes in this review">
-        <div class="section-title"><h2><Icon name="layers" size={17}/>What changed</h2><span>{overview.changes.length}</span></div>
+      <section class="review-panel features" aria-label="Changes in this review">
+        <div class="section-title"><h2><Icon name="layers" size={17}/>What changed</h2><span class="section-count">{overview.changes.length}</span></div>
         {@render entries(overview.changes.slice(0,4),'No feature breakdown provided.')}
         {#if overview.changes.length > 4}<details class="additional"><summary>{overview.changes.length-4} more {overview.changes.length === 5 ? 'change' : 'changes'}</summary>{@render entries(overview.changes.slice(4),'')}</details>{/if}
       </section>
-      {#if screens.length}<section class="visual-review" aria-label="Screenshot previews">
+      {#if screens.length}<section class="review-panel visual-review" aria-label="Screenshot previews">
         <div class="section-title"><h2><Icon name="image" size={17}/>See the changes</h2><Button size="xs" onclick={() => onScreen(0)}>View all<Icon name="arrow-right" size={14}/></Button></div>
         <div class="screenshot-grid">{#each screens.slice(0,4) as screen,i}<button class="screen-preview" onclick={() => onScreen(i)} aria-label={`Review screenshot: ${screen.title}`}>
           <ReviewThumbnail {pkg} artifact={screen.after} label={`Preview: ${screen.title}`}/>
@@ -60,7 +60,7 @@
       </section>
       {#if checks}<div class="checks">{@render checks()}</div>{/if}
     </div>
-      <section class="risks" aria-label="Reported risks">
+      <section class="review-panel risks" aria-label="Reported risks">
         <div class="section-title"><h2><Icon name="circle-alert" size={17}/>Risks &amp; follow-up</h2><span title="Ordered by likelihood × impact. Unrated risks precede lower-rated risks.">Agent assessment</span></div>
         {#if overview.risks.length}
           <div class="risk-columns" aria-hidden="true"><span>Risk</span><span>Likelihood</span><span>Impact</span></div>
@@ -72,12 +72,12 @@
         {#if unrated && onAssessRisks}<Button size="xs" variant="secondary" loading={assessment?.state === 'sending'} disabled={assessment?.state === 'accepted'} onclick={onAssessRisks}><Icon name="sparkles" size={13}/>{assessment?.state === 'accepted' ? 'Assessment requested' : assessment?.state === 'error' ? 'Retry assessment' : 'Ask agent to assess risks'}</Button>{/if}
         {#if assessment?.message}<p class="assessment-message" role={assessment.state === 'error' ? 'alert' : 'status'}>{assessment.message}</p>{/if}
       </section>
-      {#if feedback}<div class="feedback">{@render feedback()}</div>{/if}
+      {#if feedback}<div class="review-panel feedback">{@render feedback()}</div>{/if}
   </div>
 </div>
 
 <style>
-  .overview { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(360px,1fr); gap:48px; align-items:start; min-width:0; }
+  .overview { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(360px,1fr); gap:24px; align-items:start; min-width:0; }
   .review-intro { min-width:0; padding:8px 0; }
   h1 { margin:0 0 16px; max-width:30ch; font-size:28px; line-height:1.25; font-weight:600; color:var(--color-ink); text-wrap:balance; overflow-wrap:anywhere; }
   .summary-copy { max-width:60ch; color:var(--color-ink-2); font-size:15px; line-height:1.6; margin-bottom:20px; }
@@ -85,6 +85,7 @@
   .intro-meta > span:first-child { display:flex; align-items:center; gap:6px; }
   .stale { color:var(--color-warn); }
   h2 { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; color:var(--color-ink); }
+  .review-panel { min-width:0; padding:20px; border:1px solid var(--color-edge); border-radius:9px; background:var(--color-canvas); box-shadow:inset 0 1px 0 color-mix(in srgb,var(--color-ink) 3%,transparent); }
   .readiness { min-width:0; background:var(--color-canvas); border:1px solid var(--color-edge); border-radius:8px; padding:20px; }
   .confidence { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px 16px; }
   .confidence-label { display:grid; align-content:center; gap:6px; }
@@ -98,45 +99,48 @@
   .score-explanation dl { margin:12px 0 8px; } .score-explanation dl > div { display:flex; justify-content:space-between; gap:12px; margin:6px 0; }
   .score-explanation p { max-width:65ch; line-height:1.6; }
   .checks { margin-top:20px; }
-  .section-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+  .section-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
   .section-title > span { color:var(--color-ink-2); font-size:11px; }
-  .change-column,.decision-column { min-width:0; display:grid; gap:32px; }
+  .section-title .section-count { display:inline-flex; align-items:center; justify-content:center; min-width:24px; height:24px; padding:0 7px; border-radius:6px; background:var(--color-accent-fill); color:var(--color-accent-ink); font-variant-numeric:tabular-nums; }
+  .section-title h2 :global(svg) { color:var(--color-ink-2); }
+  .change-column,.decision-column { min-width:0; display:grid; gap:20px; }
   summary { cursor:pointer; }
   summary:focus-visible,.screen-preview:focus-visible { outline:2px solid var(--color-accent); outline-offset:3px; }
   .entries { border-top:1px solid var(--color-edge); }
-  .entry { border-bottom:1px solid var(--color-edge); }
-  .entry > summary { display:flex; align-items:center; gap:10px; list-style:none; padding:16px 0; font-size:13px; line-height:1.5; color:var(--color-ink); }
+  .entry { border-bottom:1px solid color-mix(in srgb,var(--color-edge) 65%,transparent); }
+  .entries > .entry:last-child { border-bottom:0; }
+  .entry > summary { display:flex; align-items:center; gap:10px; list-style:none; padding:14px 8px; border-radius:4px; font-size:13px; line-height:1.5; color:var(--color-ink); }
   .entry > summary::-webkit-details-marker { display:none; }
   .entry > summary :global(svg) { flex-shrink:0; color:var(--color-ink-2); transition:transform 150ms ease-out; }
   .entry[open] > summary :global(svg) { transform:rotate(90deg); }
-  .entry > summary:hover { color:var(--color-accent); }
-  .entry-detail { padding:0 0 18px 24px; max-width:75ch; font-size:13px; overflow-wrap:anywhere; }
+  .entry > summary:hover { color:var(--color-accent); background:color-mix(in srgb,var(--color-sel) 35%,transparent); }
+  .entry[open] > summary { color:var(--color-accent-ink); }
+  .entry-detail { padding:4px 8px 18px 32px; max-width:75ch; font-size:13px; overflow-wrap:anywhere; }
   .entry-detail :global(pre) { max-width:100%; overflow:auto; }
   .empty-copy { color:var(--color-ink-2); padding:8px 0 16px; font-size:12px; }
   .additional { margin-top:12px; font-size:12px; color:var(--color-ink-2); }
   .additional > summary { margin-bottom:12px; }
-  .source-details { margin-top:0; } .source-copy { font-size:11px; line-height:1.6; margin:12px 0; }
+  .source-details { margin:0 8px; } .source-copy { font-size:11px; line-height:1.6; margin:12px 0; }
   .screenshot-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
-  .screen-preview { text-align:left; min-width:0; border:1px solid var(--color-edge); border-radius:6px; overflow:hidden; background:var(--color-canvas); cursor:pointer; transition:border-color 150ms; }
-  .screen-preview:hover { border-color:var(--color-accent); }
-  .preview-caption { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px; font-size:12px; color:var(--color-ink); }
+  .screen-preview { text-align:left; min-width:0; border:1px solid transparent; border-radius:6px; overflow:hidden; background:transparent; cursor:pointer; transition:border-color 150ms; }
+  .screen-preview:hover { border-color:var(--color-edge); background:var(--color-panel); }
+  .preview-caption { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 8px 4px; font-size:12px; color:var(--color-ink); }
   .preview-caption > span { overflow-wrap:anywhere; } .preview-caption :global(svg) { flex-shrink:0; }
-  .risk-columns,.risk-entry > summary { display:grid; grid-template-columns:minmax(0,1fr) 84px 84px; gap:12px; }
-  .risk-columns { font-size:10px; color:var(--color-ink-2); padding:0 0 8px; border-bottom:1px solid var(--color-edge); }
+  .risk-columns,.risk-entry > summary { display:grid; grid-template-columns:minmax(0,1fr) 92px 92px; gap:12px; }
+  .risk-columns { font-size:10px; color:var(--color-ink-2); padding:0 8px 8px; border-bottom:1px solid var(--color-edge); }
   .risk-title { display:flex; gap:8px; align-items:center; overflow-wrap:anywhere; }
   .risk-entry.priority .risk-title { color:var(--color-warn); }
-  .risk-level { display:flex; gap:6px; align-items:center; font-size:11px; text-transform:capitalize; color:var(--color-ink-2); white-space:nowrap; }
+  .risk-level { display:inline-flex; padding:4px 6px; border-radius:4px; background:var(--color-panel); gap:6px; align-items:center; font-size:11px; text-transform:capitalize; color:var(--color-ink-2); white-space:nowrap; }
   .level-bars { display:flex; gap:2px; align-items:end; height:12px; }
   .level-bars i { width:3px; height:5px; border-radius:1px; background:var(--color-edge); }
   .level-bars i:nth-child(2) { height:8px; } .level-bars i:nth-child(3) { height:11px; }
   .level-bars i.filled { background:currentColor; }
-  [data-level=high] { color:var(--color-warn); } [data-level=medium] { color:var(--color-ink); }
+  [data-level=high] { color:var(--color-warn); background:color-mix(in srgb,var(--color-warn) 10%,var(--color-canvas)); } [data-level=medium] { color:var(--color-ink); }
   .risks > :global(button) { margin-top:16px; }
   .assessment-message { color:var(--color-ink-2); font-size:12px; line-height:1.5; margin-top:12px; }
-  .feedback { border-top:1px solid var(--color-edge); padding-top:24px; }
   @media(min-width:1700px) { .screenshot-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
   @media(max-width:1100px) { .overview { gap:28px; grid-template-columns:minmax(0,1fr) minmax(340px,1fr); } h1 { font-size:24px; } }
   @media(max-width:800px) { .overview { grid-template-columns:minmax(0,1fr); gap:28px; } .review-intro { padding-top:0; } }
-  @media(max-width:440px) { .risk-columns,.risk-entry > summary { grid-template-columns:minmax(0,1fr) 70px 70px; gap:8px; } .risk-level { gap:4px; font-size:10px; } .readiness { padding:16px; } .screenshot-grid { gap:12px; } }
+  @media(max-width:440px) { .risk-columns,.risk-entry > summary { grid-template-columns:minmax(0,1fr) 76px 76px; gap:8px; } .risk-level { gap:4px; font-size:10px; } .readiness,.review-panel { padding:16px; } .screenshot-grid { gap:12px; } }
   @media(prefers-reduced-motion:reduce) { .entry > summary :global(svg),.screen-preview { transition:none; } }
 </style>

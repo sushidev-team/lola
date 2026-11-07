@@ -173,3 +173,11 @@ source expansion, screenshot navigation, and absence of the background splitter.
 No page errors or horizontal document/dialog overflow. Native WKWebView was not
 exercised. Sixty-four focused frontend tests, Svelte check, production build and
 Go runtime tests passed. Impeccable's layout scan reported no findings.
+
+
+Panel styling follow-up: Changes, screenshots, risks and feedback now share the
+readiness panel's bordered surface, inset spacing and rounded corners. Feature
+counts and risk levels have compact badges; expanded rows show their active
+state. Updated captures above were checked in WebKit at 1440, 700 and 420px with
+no browser errors or horizontal overflow. All 22 overview/workspace component
+tests and Svelte check passed. This is a frontend-only styling change.
