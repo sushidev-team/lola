@@ -13,11 +13,14 @@
   import { openShell, newSessionHere } from "$lib/projectActions";
   import { onMount } from "svelte";
   import { Events } from "@wailsio/runtime";
-  import { store, scopedSessions, type SessionInfo } from "$lib/store.svelte";
+  import { store, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
   import { terms, AGENT, DIFF, CHECKPOINTS } from "$lib/terms.svelte";
-  import { triaged } from "$lib/filters";
+  import { visibleRoster } from "$lib/roster";
+  import { sidebarWidth, sidebarLimit } from "$lib/sidebarwidth";
+  let windowWidth = $state(1280);
+  const sideWidth = $derived(sidebarWidth(nav.sidebarWidth, windowWidth));
   import { isChord } from "$lib/keys";
   import { displayFor } from "$lib/theme";
   import { reflowGridRows } from "$lib/reflow";
@@ -131,7 +134,7 @@
   // sidebar applies — otherwise arrow-key movement walks a different list than
   // the one on screen.
   function cockpitRows(): SessionInfo[] {
-    return triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage);
+    return visibleRoster(store.rosterSessions, store.projects.map(p => p.name), n => store.displayNameFor(n), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project });
   }
 
   function moveSel(delta: number) {
@@ -139,7 +142,7 @@
     if (rows.length === 0) return;
     let i = rows.findIndex((r) => r.id === nav.selectedId);
     i = i < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, i + delta));
-    nav.select(rows[i].id);
+    nav.openSession(rows[i].id);
   }
 
   // Next or previous row parked on a human, wrapping. It selects and stays in Overview, which is
@@ -157,7 +160,7 @@
     for (let n = 1; n <= len; n++) {
       const r = rows[(((start + dir * n) % len) + len) % len];
       if (displayFor(r.agentState) === "needs_you" || sshNeedsHuman(r)) {
-        nav.select(r.id);
+        nav.openSession(r.id);
         return;
       }
     }
@@ -177,16 +180,13 @@
         moveSel(-1);
         return true;
       case "g":
-        if (rows[0]) nav.select(rows[0].id);
+        if (rows[0]) nav.openSession(rows[0].id);
         return true;
       case "G":
-        if (rows.length) nav.select(rows[rows.length - 1].id);
+        if (rows.length) nav.openSession(rows[rows.length - 1].id);
         return true;
       case "Enter":
         if (sel) nav.openSession(sel.id);
-        return true;
-      case "V":
-        nav.cycleLens();
         return true;
       case "n":
         jumpNeedsInput(1);
@@ -307,7 +307,7 @@
   // composer and the timeline each give up focus first, on their own press.
   function escapeLadder(s: SessionInfo | undefined): boolean {
     if (!s) {
-      nav.closeSession();
+      nav.focusSessions();
       return true;
     }
     const tab = terms.activeTab(s.id);
@@ -319,7 +319,7 @@
       ssh.leaveTerminal(s);
       return true;
     }
-    nav.closeSession();
+    nav.focusSessions();
     return true;
   }
 
@@ -394,11 +394,23 @@
       return;
     }
 
+    // Session navigation belongs to the sidebar; the conversation keeps its own row keys.
+    const inSidebar = !!(e.target as HTMLElement)?.closest?.('[data-sidebar-sessions]');
+    if (inSidebar && nav.view === 'cockpit') {
+      if (e.key === 'Escape') {
+        if (nav.sidebarQuery) nav.sidebarQuery = '';
+        else if (nav.triage) nav.setTriage('');
+        else if (nav.scoped) nav.goCockpit('');
+        e.preventDefault();
+        return;
+      } else if (cockpitKey(e)) { e.preventDefault(); return; }
+    }
+
     // Two depths, two key maps. Inside a session `typing()` above is the only guard, so a terminal
     // holding the keyboard keeps every key and this never sees them. Falling through to the globals
     // and cockpitKey instead would make `j` move the list behind the session, Enter close it, and
     // `x` ask to kill.
-    if (nav.focusedTerm && nav.view === "cockpit") {
+    if (!inSidebar && nav.focusedTerm && nav.view === "cockpit") {
       if (sessionKey(e)) e.preventDefault();
       return;
     }
@@ -446,7 +458,7 @@
   }
 </script>
 
-<svelte:window on:keydown={onKey} />
+<svelte:window on:keydown={onKey} bind:innerWidth={windowWidth} />
 
 {#if store.configChecked && !store.hasConfig}
   <div class="h-full bg-canvas text-ink">
@@ -459,12 +471,12 @@
      going to 0px — never an {#if}, which would remount the sidebar. -->
 <div
   class="grid h-full bg-canvas text-ink"
-  style="grid-template-columns:{nav.sidebarOpen ? '248px' : '0px'} minmax(0,1fr)"
+  style="grid-template-columns:{nav.sidebarOpen ? `${sideWidth}px` : '0px'} minmax(0,1fr)"
 >
   <!-- Full height, ALWAYS MOUNTED. Collapse is the grid track going to 0px plus
        overflow-hidden + inert inside — never an {#if}. A new mount boundary in
        this template is what froze the template effect before. -->
-  <Sidebar />
+  <Sidebar width={sideWidth} maxWidth={sidebarLimit(windowWidth)} />
 
   <div class="grid min-h-0 min-w-0" style="grid-template-rows:44px auto minmax(0,1fr)" {@attach reflowGridRows}>
     <MainTopBar />

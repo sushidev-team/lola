@@ -3,7 +3,9 @@
   import { reflowGridRows } from "$lib/reflow";
   import LolaLogo from "./LolaLogo.svelte";
   import Button from "./Button.svelte";
-  import SidebarTriage from "./SidebarTriage.svelte";
+  import SidebarSessionTools from "./SidebarSessionTools.svelte";
+  import SidebarResize from "./SidebarResize.svelte";
+  let { width = 320, maxWidth = 480 }: { width?: number; maxWidth?: number } = $props();
   import SidebarProjects from "./SidebarProjects.svelte";
   import SidebarStatus from "./SidebarStatus.svelte";
   import SidebarVersion from "./SidebarVersion.svelte";
@@ -29,7 +31,7 @@
 </script>
 
 <aside
-  class="group/side grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] overflow-hidden border-r border-edge bg-canvas"
+  class="sidebar group/side relative grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] overflow-hidden border-r border-edge bg-canvas"
   style="grid-template-rows:44px minmax(0,1fr) 44px"
   aria-label="Sidebar"
   inert={!nav.sidebarOpen}
@@ -56,12 +58,13 @@
        and its folders. Projects is the old body, unmoved: folders and drag are untouched. -->
   <div class="grid min-h-0 min-w-0" style="grid-template-rows:auto minmax(0,1fr) auto auto">
     <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => nav.setSidebarTab(t === "projects" ? "projects" : "sessions")} />
-    <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'sessions' ? '' : 'hidden'}" style="grid-template-rows:minmax(0,1fr) auto">
+    <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'sessions' ? '' : 'hidden'}" style="grid-template-rows:auto minmax(0,1fr) auto" data-sidebar-sessions>
+      <SidebarSessionTools />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
       <SidebarWaiting />
     </div>
     <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'projects' ? '' : 'hidden'}" style="grid-template-rows:minmax(0,1fr) auto">
-      <div class="min-h-0 overflow-auto"><SidebarTriage /><SidebarProjects /></div>
+      <div class="min-h-0 overflow-auto"><SidebarProjects /></div>
       <SidebarActivity />
     </div>
     <SidebarVersion />
@@ -69,4 +72,5 @@
 
   <!-- 3. Utility row -->
   <SidebarStatus />
+  <SidebarResize {width} {maxWidth} />
 </aside>

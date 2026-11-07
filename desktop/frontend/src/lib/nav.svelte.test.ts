@@ -3,27 +3,13 @@ import { nav } from "./nav.svelte";
 
 // nav is a singleton; reset the pieces these tests touch so order can't matter.
 beforeEach(() => {
-  nav.lens = "list";
   nav.focusedTerm = "";
-  nav.returnLens = "";
   nav.overlay = null;
   nav.triage = "";
   nav.sidebarOpen = true;
   nav.scoped = false;
   nav.project = "";
   nav.view = "cockpit";
-});
-
-describe("nav.cycleLens", () => {
-  it("cycles list → kanban → grid → list (the V shortcut)", () => {
-    expect(nav.lens).toBe("list");
-    nav.cycleLens();
-    expect(nav.lens).toBe("kanban");
-    nav.cycleLens();
-    expect(nav.lens).toBe("grid");
-    nav.cycleLens();
-    expect(nav.lens).toBe("list");
-  });
 });
 
 describe("nav help overlay", () => {
@@ -42,14 +28,13 @@ describe("nav.openSession", () => {
     expect(nav.focusedTerm).toBe("s1");
     expect(nav.selectedId).toBe("s1");
   });
-  it("openSession leaves the grid and owes a return", () => {
-    nav.setLens("grid");
+  it("returning focus to the sidebar keeps the session open", () => {
     nav.openSession("s1");
-    expect(nav.lens).toBe("list");
-    expect(nav.returnLens).toBe("grid");
-    nav.closeSession();
-    expect(nav.focusedTerm).toBe("");
-    expect(nav.lens).toBe("grid");
+    nav.sidebarOpen = false;
+    nav.focusSessions();
+    expect(nav.focusedTerm).toBe("s1");
+    expect(nav.sidebarOpen).toBe(true);
+    expect(nav.sidebarTab).toBe("sessions");
   });
   it("leaves the project scope alone and returns to the cockpit", () => {
     nav.goCockpit("web");
@@ -58,89 +43,6 @@ describe("nav.openSession", () => {
     expect(nav.view).toBe("cockpit");
     expect(nav.scoped).toBe(true);
     expect(nav.project).toBe("web");
-  });
-});
-
-describe("nav.toggleFocusTerm", () => {
-  it("toggles a session's fullscreen terminal on and off", () => {
-    nav.toggleFocusTerm("s1");
-    expect(nav.focusedTerm).toBe("s1");
-    nav.toggleFocusTerm("s1");
-    expect(nav.focusedTerm).toBe("");
-  });
-
-  // The grid lens renders no detail panel, so focusing from it must leave the
-  // grid — otherwise focusedTerm is set with no terminal mounted to own the
-  // keyboard, and the global handler's early return wedges every shortcut.
-  it("leaves the grid lens when focusing a terminal", () => {
-    nav.setLens("grid");
-    nav.toggleFocusTerm("s1");
-    expect(nav.lens).toBe("list");
-    expect(nav.focusedTerm).toBe("s1");
-  });
-
-  // …and closing it puts the grid back. Minimizing used to drop the user in the
-  // list lens they never picked, with the wall of terminals they had been reading
-  // gone — the click that opened one terminal silently changed the whole view.
-  it("returns to the grid when the terminal it opened is closed", () => {
-    nav.setLens("grid");
-    nav.toggleFocusTerm("s1");
-    expect(nav.returnLens).toBe("grid");
-    nav.toggleFocusTerm("s1");
-    expect(nav.focusedTerm).toBe("");
-    expect(nav.lens).toBe("grid");
-    expect(nav.returnLens).toBe("");
-  });
-
-  it("owes nothing when the terminal was opened from the list itself", () => {
-    nav.setLens("list");
-    nav.toggleFocusTerm("s1");
-    nav.toggleFocusTerm("s1");
-    expect(nav.lens).toBe("list");
-    expect(nav.returnLens).toBe("");
-  });
-
-  // A lens chosen by hand while a terminal is up outranks the pending return.
-  it("drops the pending return when a lens is picked by hand", () => {
-    nav.setLens("grid");
-    nav.toggleFocusTerm("s1");
-    nav.setLens("kanban");
-    expect(nav.returnLens).toBe("");
-    nav.toggleFocusTerm("s1");
-    expect(nav.lens).toBe("kanban");
-  });
-
-  it("drops the pending return when navigating away", () => {
-    nav.setLens("grid");
-    nav.toggleFocusTerm("s1");
-    nav.goHome();
-    expect(nav.focusedTerm).toBe("");
-    expect(nav.returnLens).toBe("");
-  });
-});
-
-describe("nav.setLens", () => {
-  it("clears a focused terminal when switching INTO the grid", () => {
-    nav.setLens("list");
-    nav.toggleFocusTerm("s1");
-    expect(nav.focusedTerm).toBe("s1");
-    nav.setLens("grid");
-    expect(nav.focusedTerm).toBe("");
-  });
-
-  it("leaves a focused terminal alone for the other lenses", () => {
-    nav.setLens("list");
-    nav.toggleFocusTerm("s1");
-    nav.setLens("kanban");
-    expect(nav.focusedTerm).toBe("s1");
-  });
-
-  it("cycleLens routes through setLens, so grid still clears the focus", () => {
-    nav.setLens("kanban");
-    nav.focusedTerm = "s1";
-    nav.cycleLens(); // kanban → grid
-    expect(nav.lens).toBe("grid");
-    expect(nav.focusedTerm).toBe("");
   });
 });
 

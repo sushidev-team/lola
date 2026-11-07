@@ -10,7 +10,6 @@ export function openSession(id: string, project = "") {
   if (!session) talk.forgetEnded(id);
   nav.setTriage("");
   nav.goCockpit(session?.project || project);
-  nav.setLens("list");
   nav.openSession(id);
 }
 

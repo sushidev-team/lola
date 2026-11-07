@@ -11,20 +11,20 @@
 
   const groups: { title: string; keys: [string, string][] }[] = [
     {
-      title: "Overview",
+      title: "Sessions sidebar",
       keys: [
         ["j / k · ↑ ↓", "move selection"],
         ["g / G", "first / last"],
         ["Enter", "open session"],
+        ["← / →", "resize the focused sidebar divider"],
         ["Esc", "clear filter / unscope"],
-        ["V", "cycle lens · list / board / terminals"],
         ["n / N", "next / prev row waiting on you"],
       ],
     },
     {
       title: "In a session",
       keys: [
-        ["Esc", "back one step, then to Overview"],
+        ["Esc", "back one step, then focus the sidebar"],
         ["Ctrl-Q", "leave a terminal that has the keyboard"],
         ["n / N", "next / prev session waiting on you"],
         ["t", "move into the timeline"],
@@ -115,7 +115,7 @@
   </div>
 
   <p class="copy mt-6 border-t border-edge/60 pt-4 text-sm text-faint">
-    A double-click (or <span class="text-ink">Enter</span>) opens a session. Inside a terminal every key
+    A click (or <span class="text-ink">Enter</span> on a sidebar row) opens a session. Inside a terminal every key
     — <span class="text-ink">Esc</span> included — goes to the agent, so
     <span class="text-ink">Ctrl-Q</span> is the way back out.
     <span class="text-ink">?</span> reveals this list from anywhere a field does not have the keyboard. The

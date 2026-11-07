@@ -75,7 +75,7 @@
     nav.setTriage("");
     nav.goCockpit("");
     terms.select(id, SSH);
-    if (nav.focusedTerm !== id) nav.toggleFocusTerm(id);
+    if (nav.focusedTerm !== id) nav.openSession(id);
     ssh.open(id, { conn });
     if (conn) void ssh.view(id).fetch();
   }

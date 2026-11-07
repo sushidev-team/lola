@@ -1,8 +1,8 @@
 <script lang="ts">
   // The open session, under the top bar: the strip, then one grid cell that holds whichever view is
   // on show, then the footer strip. Always mounted, with `sessionId` possibly empty, because this
-  // component's template must never flip a branch with a terminal inside it. Enter and Esc change
-  // sessionId every time, so TerminalCell and Workspace are always rendered and each holds its own
+  // component's template must never flip a branch with a terminal inside it. Session changes update
+  // sessionId, while TerminalCell and Workspace stay rendered and each holds its own
   // {#if}{#key} (see both, and CockpitLayout.svelte for what the freeze was).
   //
   // Takes the session ID (a plain nav value) and resolves the session from the store HERE rather
@@ -30,15 +30,11 @@
   import Workspace from "./session/Workspace.svelte";
   import ViewStrip from "./session/ViewStrip.svelte";
   import SessionFooter from "./session/SessionFooter.svelte";
-  import SessionBar from "./session/SessionBar.svelte";
   import { widthOf } from "./session/measure";
 
   let { sessionId = "" }: { sessionId?: string } = $props();
   const session = $derived(sessionId ? store.sessionById(sessionId) : undefined);
-  // Open fills <main>, and otherwise this is the band under the list: the same view, shorter. The
-  // two differ in three things. The band draws its own title row, since the top bar names the list;
-  // the row's button expands where the open one goes back; and the band takes the keyboard only
-  // when someone clicks into it, or j and k would type into whichever session they walk past.
+  // The workspace stays mounted when focus returns to the sidebar.
   const open = $derived(!!sessionId && nav.focusedTerm === sessionId);
   const id = $derived(session?.id ?? "");
 
@@ -171,7 +167,7 @@
   $effect(() => {
     const sid = id;
     const here = onConversation;
-    if (!sid || !here || !open) return;
+    if (!sid || !here || !open || nav.sidebarBrowsing) return;
     untrack(() => {
       const v = ssh.view(sid);
       if (v.holdArrival) v.holdArrival = false;
@@ -180,7 +176,7 @@
   });
   // Enter on a band showing its terminal: nothing mounts, so the keyboard has to be asked for.
   $effect(() => {
-    if (open && terminalName) untrack(() => terms.focusTerminal(id));
+    if (open && terminalName && !nav.sidebarBrowsing) untrack(() => terms.focusTerminal(id));
   });
   // A request made on a session already on its conversation has no arrival to hold back. Left
   // set, it would swallow the next real one, and a person's first words would fire bare keys. So
@@ -198,9 +194,7 @@
 <div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_auto_minmax(0,1fr)_auto] bg-canvas" {@attach widthOf(w => width = w)} data-session-view>
   <!-- Each wrapper always renders, or auto-placement would shift the body out of its row. -->
   <div class="min-w-0">
-    {#if session && !open}
-      <div class="flex h-11 min-w-0 items-center px-3" data-band-bar><SessionBar sessionId={session.id} band /></div>
-    {/if}
+
   </div>
   <div class="min-w-0">
     {#if !offered && session && strip}<ViewStrip {session} changesInSide={rightChanges} />{/if}
@@ -224,7 +218,7 @@
 
       <TerminalCell
         name={terminalName}
-        autofocus={open}
+        autofocus={open && !nav.sidebarBrowsing}
         style={mainStyle}
         focusRequest={id ? terms.terminalFocusAsks(id) : 0}
         onExit={session && (activeIsShell || session.location === "temporary") ? () => terminalExited(id, terminalName, session.location === "temporary", activeIsShell) : undefined}
@@ -247,7 +241,7 @@
       {/if}
 
       {#if !sessionId}
-        <div class="grid min-h-0 place-items-center text-sm text-faint" style="grid-area:1/1">Select a session. Enter gives it the whole window.</div>
+        <div class="grid min-h-0 place-items-center text-sm text-faint" style="grid-area:1/1">Select a session from the sidebar.</div>
       {/if}
 
       {#if endedRecord}

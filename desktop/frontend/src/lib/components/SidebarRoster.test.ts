@@ -22,6 +22,9 @@ beforeEach(() => {
   store.projects = [{ name: "lola" }, { name: "web" }] as never;
   nav.focusedTerm = "";
   nav.selectedId = "";
+  nav.sidebarQuery = "";
+  nav.triage = "";
+  nav.scoped = false;
 });
 
 describe("SidebarRoster", () => {
@@ -64,4 +67,26 @@ describe("SidebarRoster", () => {
     expect(screen.getByText("kept")).toBeInTheDocument();
     (store as unknown as { retained: unknown[] }).retained = [];
   });
+  it("shows issue, delivery and current activity separately", () => {
+    store.sessions = [row("a", { issue: "LOLA-42", prNumber: 84, delivery: "review_pending", headline: "Finished sidebar layout" })];
+    render(SidebarRoster);
+    expect(document.querySelector('[data-roster-meta]')).toHaveTextContent('LOLA-42');
+    expect(document.querySelector('[data-roster-meta]')).toHaveTextContent('#84');
+    expect(document.querySelector('[data-roster-line]')).toHaveTextContent('Finished sidebar layout');
+  });
+  it("filters by multiple search words without changing the active session", async () => {
+    store.sessions = [row("a", { issue: "LOLA-42", prNumber: 84 }), row("b")];
+    nav.openSession('b');
+    nav.sidebarQuery = 'LOLA-42 #84';
+    render(SidebarRoster);
+    expect(order()).toEqual(['a']);
+    expect(nav.focusedTerm).toBe('b');
+  });
+  it("Needs you includes idle failed checks but excludes agents already fixing them", () => {
+    store.sessions = [row('idle', { delivery: 'ci_failed' }), row('fixing', { delivery: 'ci_failed', agentState: 'working' }), row('review', { delivery: 'review_pending' })];
+    nav.triage = 'Needs You';
+    render(SidebarRoster);
+    expect(order()).toEqual(['idle']);
+  });
+
 });

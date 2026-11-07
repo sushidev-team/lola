@@ -95,6 +95,9 @@ let n = 0;
 let A = "";
 let B = "";
 async function mount(sessions: unknown[]) {
+  store.alive = true;
+  h.handlers.get("daemon:sessions")?.({ data: { sessions: [] } });
+  store.sessions = [];
   render(App);
   await tick();
   store.alive = true;
@@ -131,13 +134,13 @@ beforeEach(() => {
   B = `logic-b${n}`;
   nav.closeOverlay();
   nav.view = "cockpit";
-  nav.lens = "list";
   nav.focusedTerm = "";
-  nav.returnLens = "";
   nav.selectedId = "";
   nav.scoped = false;
   nav.project = "";
   nav.triage = "";
+  nav.sidebarQuery = "";
+  nav.sidebarBrowsing = false;
   confirm.cancel();
   sessionMenu.close();
   h.state.impl = null;
@@ -356,7 +359,7 @@ describe("arrival", () => {
     chord("ssh-talk");
     await settle();
     expect(ssh.view(A).holdArrival).toBe(false);
-    nav.closeSession();
+    nav.focusSessions();
     flushSync();
     await settle();
     await open(A);
@@ -437,11 +440,11 @@ describe("a log nothing can read", () => {
     await settle();
     expect(terms.activeTab(A)).toBe(SSH);
     // Closing keeps it on show in the band, so nothing flips until someone has gone elsewhere.
-    nav.closeSession();
+    nav.focusSessions();
     flushSync();
     await settle();
     expect(terms.activeTab(A)).toBe(SSH);
-    nav.selectedId = B;
+    nav.openSession(B);
     flushSync();
     await wait(150);
     await settle();
@@ -456,7 +459,7 @@ describe("a log nothing can read", () => {
     await wait(10);
     await settle();
     expect(JSON.parse(localStorage.getItem("lola.feed.bad") ?? "{}")).toEqual({ claude: true });
-    nav.closeSession();
+    nav.focusSessions();
     flushSync();
     await settle();
     h.state.impl = () => new Promise(() => {}); // the first answer has not come back yet
@@ -472,7 +475,7 @@ describe("a log nothing can read", () => {
     await settle();
     expect(terms.activeTab(A)).toBe(AGENT);
     expect(localStorage.getItem("lola.feed.bad")).toBe("{}");
-    nav.closeSession();
+    nav.focusSessions();
     flushSync();
     await settle();
     await open(B);
@@ -486,7 +489,7 @@ describe("a log nothing can read", () => {
     terms.select(A, SSH);
     await wait(10);
     await settle();
-    nav.closeSession();
+    nav.focusSessions();
     flushSync();
     await settle();
     await open(A);
@@ -703,20 +706,19 @@ describe("keys that belong to what is on show", () => {
     expect(terms.activeTab(A)).not.toBe(DIFF);
   });
 
-  it("`f` from Overview opens Changes even when Changes is where it was left", async () => {
+  it("`f` from the sidebar toggles Changes on the active session", async () => {
     await mount([plain(A)]);
     await open(A);
     terms.toggleDiff(A);
     flushSync();
-    nav.closeSession();
+    nav.focusSessions();
     flushSync();
     await settle();
     nav.select(A);
-    (document.activeElement as HTMLElement)?.blur();
-    await press("f");
+    await fireEvent.keyDown(document.querySelector(`[data-roster-row="${A}"]`)!, { key: "f", bubbles: true });
     await settle();
     expect(nav.focusedTerm).toBe(A);
-    expect(terms.activeTab(A)).toBe(DIFF);
+    expect(terms.activeTab(A)).toBe(SSH);
   });
 
   it("⌘. never stops a session nobody is looking at", async () => {
@@ -803,7 +805,7 @@ it('keeps docked panels beside the terminal and resizes its main area', async ()
     await settle();
     expect(terminalName()).toBe(A);
     expect(screen.getByRole('tab', { name: 'Conversation' }).closest('[data-dock-main]')).not.toBeNull();
-    const terminal = document.querySelector('[data-terminal-cell]') as HTMLElement;
+    const terminal = document.querySelector('[data-testid="terminal"]')!.closest('[data-terminal-cell]') as HTMLElement;
     const before = parseFloat(terminal.style.width);
     expect(before).toBeGreaterThan(420);
     expect(before).toBeLessThan(1400);

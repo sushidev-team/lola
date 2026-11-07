@@ -47,6 +47,7 @@ let A = "";
 let B = "";
 
 async function mount(sessions: unknown[]) {
+  store.sessions = [];
   render(App);
   await tick();
   store.alive = true;
@@ -68,13 +69,13 @@ beforeEach(() => {
   B = `b${n}`;
   nav.closeOverlay();
   nav.view = "cockpit";
-  nav.lens = "list";
   nav.focusedTerm = "";
-  nav.returnLens = "";
   nav.selectedId = "";
   nav.scoped = false;
   nav.project = "";
   nav.triage = "";
+  nav.sidebarQuery = "";
+  nav.sidebarBrowsing = false;
   confirm.cancel();
   stop.mockReset().mockResolvedValue({ stopped: true });
 });
@@ -126,7 +127,7 @@ describe("in a session", () => {
     expect(document.activeElement).not.toBe(field);
     expect(nav.focusedTerm).toBe(A);
     await press("Escape");
-    expect(nav.focusedTerm).toBe("");
+    expect(nav.focusedTerm).toBe(A);
   });
   it("Esc from Changes goes back to the view it came from, and then out", async () => {
     await mount([plain(A)]);
@@ -143,7 +144,7 @@ describe("in a session", () => {
     expect(terms.activeTab(A)).toBe(SSH);
     expect(nav.focusedTerm).toBe(A);
     await press("Escape");
-    expect(nav.focusedTerm).toBe("");
+    expect(nav.focusedTerm).toBe(A);
   });
   it("leaves a terminal's Esc alone: it belongs to the agent", async () => {
     await mount([plain(A)]);
@@ -185,7 +186,7 @@ describe("the chords", () => {
     await mount([plain(A)]);
     nav.select(A);
     chord("next");
-    expect(nav.focusedTerm).toBe("");
+    expect(nav.focusedTerm).toBe(A);
     expect(store.flash?.text).toBe("Nothing is waiting on you.");
   });
   it("⌘. targets the open session when the selection differs", async () => {
@@ -237,7 +238,7 @@ describe("the chords", () => {
     chord("ssh-terminal");
     expect(terms.activeTab(A)).toBe(AGENT);
     chord("ssh-terminal");
-    expect(nav.focusedTerm).toBe("");
+    expect(nav.focusedTerm).toBe(A);
   });
   it("⌘\\ from Changes goes where its footer says: the conversation", async () => {
     await mount([plain(A)]);
@@ -276,53 +277,55 @@ describe("the chords", () => {
   });
 });
 
-describe("in Overview", () => {
-  it("i in Overview bumps no focus counter", async () => {
-    await mount([plain(A, { ssh: { connections: [conn], lastSeq: 0 } })]);
-    nav.select(A);
-    terms.select(A, SSH);
-    const v = ssh.view(A);
-    const before = [v.composerFocus, v.streamFocus, v.findFocus, v.filter];
-    for (const k of ["i", "t", "F", "/"]) await press(k);
-    expect([v.composerFocus, v.streamFocus, v.findFocus, v.filter]).toEqual(before);
-    expect(nav.focusedTerm).toBe("");
-  });
-  it("s in Overview opens the session", async () => {
+describe("in the sessions sidebar", () => {
+  const sidebarRow = (id: string) => document.querySelector(`[data-roster-row="${id}"]`) as HTMLElement;
+  it("opens the first session automatically without rendering the old views", async () => {
     await mount([plain(A)]);
-    nav.select(A);
-    const shell = vi.spyOn(terms, "newShell").mockImplementation(() => {});
-    await press("s");
     expect(nav.focusedTerm).toBe(A);
-    expect(shell).toHaveBeenCalledWith(A, "/w");
-    shell.mockRestore();
+    expect(document.querySelector('[data-session-list]')).toBeNull();
+    expect(document.querySelector('[aria-label="List lens"]')).toBeNull();
   });
-  it("f and h open the session too, and < does nothing", async () => {
-    await mount([plain(A)]);
-    nav.select(A);
-    await press("<");
-    expect(nav.focusedTerm).toBe("");
-    await press("f");
-    expect(nav.focusedTerm).toBe(A);
-    expect(terms.activeTab(A)).toBe(DIFF);
-    nav.closeSession();
-    terms.select(A, AGENT);
-    await press("h");
-    expect(nav.focusedTerm).toBe(A);
-  });
-  it("n selects the next row waiting and stays in Overview", async () => {
-    await mount([plain(A), plain(B, { agentState: "waiting_input", status: "needs_input" })]);
-    nav.select(A);
-    flushSync();
-    await press("n");
-    expect(nav.selectedId).toBe(B);
-    expect(nav.focusedTerm).toBe("");
-  });
-  it("Enter opens and j moves", async () => {
+  it("arrow keys open sessions in sidebar order and retain keyboard focus", async () => {
     await mount([plain(A), plain(B)]);
-    nav.select(A);
-    await press("j");
-    expect(nav.selectedId).toBe(B);
-    await press("Enter");
+    const first = sidebarRow(A);
+    first.focus();
+    await press('ArrowDown', first);
     expect(nav.focusedTerm).toBe(B);
+    await tick();
+    expect(document.activeElement).toBe(sidebarRow(B));
+  });
+  it("leaves modifier chords alone in the sidebar", async () => {
+    await mount([plain(A), plain(B)]);
+    nav.openSession(B, true);
+    flushSync();
+    for (const key of ['k', 'g', 'ArrowUp']) {
+      await fireEvent.keyDown(sidebarRow(B), { key, metaKey: true, bubbles: true });
+      expect(nav.focusedTerm).toBe(B);
+    }
+  });
+  it("keeps global Help and sidebar shortcuts available on a row", async () => {
+    await mount([plain(A)]);
+    await press('?', sidebarRow(A));
+    expect(nav.overlay).toBe('help');
+    nav.closeOverlay();
+    const before = nav.sidebarOpen;
+    await press('b', sidebarRow(A));
+    expect(nav.sidebarOpen).toBe(!before);
+    nav.sidebarOpen = true;
+  });
+  it("filtering the sidebar does not replace the open session", async () => {
+    await mount([plain(A), plain(B)]);
+    nav.sidebarQuery = B;
+    flushSync();
+    expect(sidebarRow(A)).toBeNull();
+    expect(sidebarRow(B)).not.toBeNull();
+    expect(nav.focusedTerm).toBe(A);
+  });
+  it("s from a sidebar row opens a shell for that session", async () => {
+    await mount([plain(A)]);
+    const shell = vi.spyOn(terms, 'newShell').mockImplementation(() => {});
+    await press('s', sidebarRow(A));
+    expect(shell).toHaveBeenCalledWith(A, '/w');
+    shell.mockRestore();
   });
 });

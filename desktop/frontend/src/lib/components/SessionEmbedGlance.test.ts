@@ -28,32 +28,29 @@ beforeEach(() => {
   store.alive = true;
   store.connected = true;
   store.sessions = [{ id: "s1", title: "one", tmuxName: "s1", worktree: "/w", agentState: "working", status: "working", project: "p", issue: "E-1" }] as never;
-  nav.lens = "list";
   nav.view = "cockpit";
   nav.focusedTerm = "";
   nav.selectedId = "s1";
 });
 
-describe("two depths", () => {
-  it("draws the session in the band with its own title row", () => {
+describe("full-height session workspace", () => {
+  it("does not render a duplicate session list or title band", () => {
+    nav.openSession("s1");
     render(SessionsColumn);
-    expect(document.querySelector("[data-band-bar]")).toHaveTextContent("one");
+    expect(document.querySelector("[data-band-bar]")).toBeNull();
+    expect(document.querySelector("[data-session-list]")).toBeNull();
   });
-  it("Enter does not remount the embed", () => {
+  it("sidebar focus does not remount the session or terminal", () => {
+    nav.openSession("s1");
     terms.select("s1", AGENT);
     render(SessionsColumn);
     const embed = document.querySelector("[data-session-view]");
-    expect(embed?.closest("[data-session-embed]")).not.toHaveAttribute("data-open");
-    nav.openSession("s1");
-    flushSync();
-    expect(document.querySelector("[data-session-view]")).toBe(embed);
-    expect(embed?.closest("[data-session-embed]")).toHaveAttribute("data-open");
     const term = screen.getByTestId("terminal");
-    expect(term.dataset.name).toBe("s1");
-    nav.closeSession();
+    nav.focusSessions();
+    nav.sidebarOpen = false;
+    nav.setSidebarWidth(440);
     flushSync();
     expect(document.querySelector("[data-session-view]")).toBe(embed);
-    // The same view, shorter: the terminal stays attached and gives up nothing.
     expect(screen.getByTestId("terminal")).toBe(term);
   });
   it("attaches nothing while Home covers the cockpit", () => {

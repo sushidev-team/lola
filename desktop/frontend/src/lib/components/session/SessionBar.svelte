@@ -25,7 +25,7 @@
   import HoverCard from "../HoverCard.svelte";
   import PrBadge from "../PrBadge.svelte";
 
-  let { sessionId, band = false }: { sessionId: string; band?: boolean } = $props();
+  let { sessionId }: { sessionId: string } = $props();
 
   const session = $derived(store.sessionById(sessionId));
   // A session that left the list has only its record, and nothing here can act on it.
@@ -84,20 +84,7 @@
   }
 </script>
 
-<div class="grid h-full min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2" {@attach widthOf((w) => (width = w))} data-session-bar>
-  {#if band}
-    <Button icon size="xs" class="-ml-1.5" title="Give this session the whole window (↩)" aria-label="Expand session" onclick={() => nav.openSession(sessionId)} data-band-expand>
-      <svg class="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M8 13V3M4 7l4-4 4 4" />
-      </svg>
-    </Button>
-  {:else}
-    <Button icon size="xs" class="-ml-1.5" title="Back to Overview (Esc)" aria-label="Back to Overview" onclick={() => nav.closeSession()}>
-      <svg class="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M13 8H3m4-4-4 4 4 4" />
-      </svg>
-    </Button>
-  {/if}
+<div class="grid h-full min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-2" {@attach widthOf((w) => (width = w))} data-session-bar>
 
   <div class="flex min-w-0 items-center gap-3">
     <HoverCard class="flex min-w-0 items-baseline gap-2 outline-none">

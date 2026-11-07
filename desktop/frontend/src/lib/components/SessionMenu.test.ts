@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import SessionMenu from "./SessionMenu.svelte";
-import SessionsTable from "./SessionsTable.svelte";
+import SidebarRoster from "./SidebarRoster.svelte";
 import SessionBar from "./session/SessionBar.svelte";
 import { store, type SessionInfo } from "$lib/store.svelte";
 import type { ProjectInfo } from "@bindings/internal/protocol";
@@ -86,6 +86,8 @@ describe("SessionMenu", () => {
     nav.scoped = false;
     nav.project = "";
     nav.selectedId = "";
+    nav.sidebarQuery = "";
+    nav.triage = "";
     sessionMenu.close();
     confirm.cancel();
   });
@@ -287,12 +289,14 @@ describe("session surfaces open the menu", () => {
     nav.scoped = false;
     nav.project = "";
     nav.selectedId = "";
+    nav.sidebarQuery = "";
+    nav.triage = "";
     sessionMenu.close();
   });
 
-  it("right-clicking a table row selects the session and opens the menu at the pointer", async () => {
-    render(SessionsTable);
-    const row = screen.getByText("ENG-1").closest("tr")!;
+  it("right-clicking a sidebar row selects the session and opens the menu at the pointer", async () => {
+    render(SidebarRoster);
+    const row = screen.getByText("ENG-1").closest("[data-roster-row]")!;
     await fireEvent.contextMenu(row, { clientX: 42, clientY: 24 });
     expect(nav.selectedId).toBe("acme-eng-1");
     expect(sessionMenu.request).toEqual({ id: "acme-eng-1", x: 42, y: 24 });
@@ -310,6 +314,8 @@ describe("SessionBar hover card", () => {
     nav.scoped = false;
     nav.project = "";
     nav.selectedId = "";
+    nav.sidebarQuery = "";
+    nav.triage = "";
   });
 
   async function hover() {

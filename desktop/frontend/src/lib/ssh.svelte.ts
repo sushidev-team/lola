@@ -728,7 +728,7 @@ class SSHStore {
   /** Ctrl-Q and ⌘\ from a terminal. Where the terminal was reached from is not the question. */
   leaveTerminal(s: SessionInfo) {
     if (!conversationOffered(s)) {
-      nav.closeSession();
+      nav.focusSessions();
       return;
     }
     const v = this.view(s.id);

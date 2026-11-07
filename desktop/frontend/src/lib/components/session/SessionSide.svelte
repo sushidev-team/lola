@@ -13,6 +13,8 @@
   import { changes } from "$lib/changes.svelte";
   import { changesOffered } from "$lib/sessionview";
   import { sessionActivity, activityDuration, activityStatus } from "$lib/sessionactivity";
+  import UsageMark from "../UsageMark.svelte";
+  import { toMillis } from "$lib/time";
   import Button from "../Button.svelte";
   import BoardPanel from "../BoardPanel.svelte";
 
@@ -50,6 +52,22 @@
 
 <aside class="cv-session-side grid min-h-0 content-start gap-5 overflow-y-auto px-4 pt-2 pb-4 text-sm" aria-label="Session overview" data-session-side>
 
+
+  {#if session?.usage || session?.firstSeen}
+    <section data-side-session>
+      {@render heading("Session")}
+      <dl class="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-3 gap-y-2">
+        {#if session?.usage}
+          <dt class="text-faint">Tokens</dt>
+          <dd class="min-w-0 text-right"><UsageMark usage={session.usage} /></dd>
+        {/if}
+        {#if session?.firstSeen && Number.isFinite(toMillis(session.firstSeen as unknown as string))}
+          <dt class="text-faint">Started</dt>
+          <dd class="min-w-0 break-words text-right text-ink-2">{new Date(toMillis(session.firstSeen as unknown as string)).toLocaleString()}</dd>
+        {/if}
+      </dl>
+    </section>
+  {/if}
 
   {#if side.brief.summary}
     <p class="selectable copy text-prose text-ink {side.brief.summary.stale ? 'opacity-60' : ''}" data-side-summary>{side.brief.summary.title}</p>

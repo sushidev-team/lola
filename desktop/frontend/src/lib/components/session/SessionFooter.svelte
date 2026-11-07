@@ -85,7 +85,7 @@
       {:else if offered}
         <Button size="xs" class="h-5!" onclick={() => session && ssh.leaveTerminal(session)}>Conversation <span class="text-faint">⌘\</span></Button>
       {:else}
-        <Button size="xs" class="h-5!" onclick={() => nav.closeSession()}>Overview <span class="text-faint">⌃Q</span></Button>
+        <Button size="xs" class="h-5!" onclick={() => nav.focusSessions()}>Sessions <span class="text-faint">⌃Q</span></Button>
       {/if}
     {/if}
   </div>

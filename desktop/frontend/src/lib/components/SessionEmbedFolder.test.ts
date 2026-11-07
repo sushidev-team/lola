@@ -56,6 +56,7 @@ it("shows failures from opening the directory", async () => {
 it("offers Connect from the strip's +, on every kind of session that can have a host", async () => {
   for (const extra of [{}, { location: "ssh" }]) {
     store.sessions = [{ id: "s1", worktree: "/code/x", ...extra }] as never;
+    terms.select("s1", SSH);
     render(SessionEmbed, { sessionId: "s1" });
     await fireEvent.click(screen.getByRole("button", { name: "Add a terminal or a host" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "Connect to host…" }));

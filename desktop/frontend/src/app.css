@@ -1319,3 +1319,25 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
   gap: 8px;
 }
 [data-conversation] [data-tool][data-tool-layout="columns"] > button:hover { background: color-mix(in srgb, var(--color-sel) 45%, transparent); }
+
+/* One resizable navigation rail; the selected session owns the full workspace. */
+.sidebar { container-type: inline-size; container-name: sidebar; }
+.sidebar-resize { position: absolute; z-index: 50; top: 44px; bottom: 44px; right: 0; width: 7px; cursor: col-resize; touch-action: none; user-select: none; }
+.sidebar-resize::after { content: ''; position: absolute; inset: 0 0 0 auto; width: 2px; background: transparent; }
+.sidebar-resize:hover::after, .sidebar-resize.resizing::after, .sidebar-resize:focus-visible::after { background: var(--color-accent); }
+.sidebar-resize:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.sidebar-session-tools { min-width: 0; padding: 12px 16px 8px; border-bottom: 1px solid color-mix(in srgb, var(--color-edge) 45%, transparent); }
+.sidebar-search { width: 100%; min-width: 0; height: 30px; padding: 4px 26px 4px 9px; border: 1px solid var(--color-edge); border-radius: 5px; background: var(--color-panel); color: var(--color-ink); font-size: 12px; }
+.sidebar-search::placeholder { color: var(--color-placeholder); }
+.sidebar-search:focus-visible { outline: 1px solid var(--color-accent); }
+.sidebar-search-clear { position: absolute; right: 4px; top: 3px; width: 24px; height: 24px; color: var(--color-ink-2); }
+.sidebar-filter { padding: 3px 7px; border-radius: 4px; font-size: 12px; color: var(--color-ink-2); }
+.sidebar-filter .num { margin-left: 4px; color: var(--color-faint); }
+.sidebar-filter[aria-pressed="true"] { color: var(--color-accent-ink); background: var(--color-accent-fill); }
+.sidebar-filter:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.sidebar-session-row { display: grid; width: 100%; min-width: 0; min-height: 70px; grid-template-columns: 16px minmax(0,1fr) auto; grid-template-rows: 20px 18px 17px; align-content: center; align-items: baseline; column-gap: 7px; padding: 7px 8px; border-radius: 6px; text-align: left; }
+.sidebar-session-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+@container sidebar (max-width: 275px) {
+  .sidebar-session-tools { padding-inline: 10px; }
+  .sidebar-session-row { column-gap: 5px; }
+}

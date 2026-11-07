@@ -1,6 +1,6 @@
 ---
 name: Lola desktop
-description: Compact operational desktop UI with optional Midnight colors
+description: Persistent session workspace with resizable sidebar and optional Midnight colors
 colors:
   mocha-canvas: "#181825"
   mocha-panel: "#1e1e2e"
@@ -33,12 +33,24 @@ typography:
 rounded:
   panel: "10px"
   overview: "9px"
+  session-row: "6px"
+  session-search: "5px"
 components:
   overview-card:
     backgroundColor: "color-mix(in srgb, var(--color-panel) 80%, var(--color-canvas))"
     textColor: "var(--color-ink)"
     rounded: "{rounded.overview}"
     padding: "15px"
+  session-navigation-row:
+    textColor: "var(--color-ink)"
+    rounded: "{rounded.session-row}"
+    padding: "7px 8px"
+  session-search:
+    backgroundColor: "var(--color-panel)"
+    textColor: "var(--color-ink)"
+    rounded: "{rounded.session-search}"
+    height: "30px"
+    padding: "4px 26px 4px 9px"
 ---
 
 # Design System: Lola desktop
@@ -47,9 +59,9 @@ components:
 
 Lola uses a compact operational interface: quiet layered surfaces, readable conversation text, and semantic color for state and navigation. This is a scoped source record of the existing desktop system and the optional Midnight extension, not a replacement visual identity.
 
-Sources: `desktop/frontend/src/app.css`, `desktop/frontend/src/lib/catppuccin.ts`, `desktop/frontend/src/lib/components/Button.svelte`, `desktop/frontend/src/lib/tooltip.ts`, and the session activity and overview components. Theme integration also lives in `internal/tui/catppuccin.go`, `internal/config/ui.go`, and `desktop/main.go`.
+Sources: `desktop/frontend/src/app.css`, `desktop/frontend/src/lib/catppuccin.ts`, `desktop/frontend/src/lib/components/Button.svelte`, `desktop/frontend/src/lib/tooltip.ts`, and the session activity and overview components. Workspace navigation is defined in `App.svelte`, `Sidebar.svelte`, `SidebarRoster.svelte`, `SidebarSessionTools.svelte`, `SidebarResize.svelte`, `SessionsColumn.svelte`, `lib/roster.ts`, `lib/sidebarwidth.ts` and `lib/nav.svelte.ts`. Theme integration also lives in `internal/tui/catppuccin.go`, `internal/config/ui.go`, and `desktop/main.go`.
 
-No root PRODUCT.md or earlier DESIGN.md was available. This record is based on implementation. The user confirmed the single-row layout from a screenshot, but that capture predates the tooltip stacking fix; final visual review still requires recapture because browser preview was unavailable. This record does not certify rendered layout or contrast.
+No root PRODUCT.md or earlier DESIGN.md was available at the initial extraction. This record is based on implementation. The earlier user-confirmed activity-strip screenshot predates the tooltip fixes and sidebar workspace redesign. No current visual capture or approval is available; this record does not certify rendered layout or contrast.
 
 ## Colors
 
@@ -75,6 +87,10 @@ Use the system sans stack for the desktop interface, the configured monospace st
 
 ## Layout
 
+The desktop uses one full-height session workspace with persistent sidebar navigation. List, Kanban and terminal-grid lenses are removed from the desktop. Sidebar collapse changes the layout track without unmounting it; switching auxiliary views preserves the mounted session workspace beneath the view. Sessions and Projects tabs retain their own mounted content.
+
+The sidebar preference defaults to 320px and is stored locally in the webview, bounded to 240–480px. Available window width further limits the rendered sidebar to preserve 560px for the workspace, so a narrow window can render below the preferred minimum. Drag the separator to resize; arrow keys change width by 10px, Shift increases the step to 40px, Home/End select bounds, and double-click restores the default. Hover, drag and keyboard focus expose the cyan resize edge. At a sidebar container width of 275px or less, controls reduce horizontal padding and rows reduce column gaps.
+
 Conversation and session overview remain separate working areas. Overview sections use compact stacked cards with 12px gaps. A zero-minimum-width grid column (`minmax(0, 1fr)`) and constrained descendants keep long labels within the overview width. Nested tool rows retain compact, borderless rows with a 28px minimum height and their own columns. The activity strip is navigation within the conversation, with no independent header, filter or playback controls. Its narrower container treatment reduces horizontal padding at 520px.
 
 ## Elevation & Depth
@@ -90,6 +106,14 @@ Panels use gently rounded corners; overview cards use their own compact radius. 
 ### Buttons
 
 Reuse `Button.svelte`: ghost, accent, secondary, primary, danger, danger-solid and bare variants share density and disabled behavior. Primary actions use a tinted accent background and readable accent text. Selected controls reuse the same tint; disabled controls do not acquire hover treatment.
+
+### Sidebar session navigation
+
+Search and the All / Needs you filters sit above the grouped roster; an active project scope can be cleared separately. Live-session search matches all entered words across title, issue, branch, session identifier, project label and PR number. Groups retain configured project order and stable session ordering rather than reordering on status changes.
+
+Each live row has a 70px minimum height and three lines: title, delivery metadata, and current activity. The agent-state indicator remains separate from the issue/PR/delivery line. Selected rows use the selected-surface fill; hover uses a quieter tint and keyboard focus adds a cyan outline. Truncated text remains available through the shared delayed tooltip.
+
+Ended sessions start collapsed, expanding when explicitly opened, when one is selected, or when searching. Selecting a row opens its session without toggling it closed. Arrow keys or j/k move through the visible roster; Home/End or g/G reach its ends. Escape follows the existing overlay and editor dismissal order, then returns focus to the sidebar rather than closing the workspace. In sidebar search, Escape clears the query.
 
 ### Activity navigation
 
