@@ -8,14 +8,15 @@
 
   // Status badges share a circular silhouette. Shape and fill distinguish states
   // even without colour; the parent owns the accessible status label.
-  const state = $derived(glyph === 'review' ? 'review'
+  const state = $derived(glyph === 'done' ? 'done'
+    : glyph === 'review' ? 'review'
     : glyph === '◉' ? 'attention'
     : glyph === '◐' ? 'working'
     : glyph === '●' ? 'finished'
     : glyph === '✕' ? (label === 'Orphaned' ? 'orphaned' : 'exited')
     : glyph === '$' ? 'shell' : 'resting');
   const names: Record<string, IconName> = {
-    review: 'circle', attention: 'circle-alert', working: 'circle',
+    done: 'circle', review: 'circle', attention: 'circle-alert', working: 'circle',
     finished: 'circle-check', orphaned: 'circle-help', exited: 'circle-minus',
     shell: 'square-terminal', resting: 'circle',
   };
@@ -34,6 +35,8 @@
   [data-state-badge='attention'] { color: var(--color-orange); }
   [data-state-badge='review'] { color: var(--color-magenta); }
   [data-state-badge='review']::after { content: ''; position: absolute; inset: 24%; border-radius: 50%; background: conic-gradient(currentColor 0 270deg, transparent 270deg); }
+  [data-state-badge='done'] { color: var(--color-good); }
+  [data-state-badge='done']::after { content: ''; position: absolute; inset: 24%; border-radius: 50%; background: currentColor; }
   [data-state-badge='finished'] { color: var(--color-accent); }
   :is([data-state-badge='attention'], [data-state-badge='finished']) :global(circle) { fill: currentColor; }
   :is([data-state-badge='attention'], [data-state-badge='finished']) :global(path),

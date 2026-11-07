@@ -117,7 +117,7 @@
           {@const line = rosterActivity(s, now, !!talk.state(s.id)?.queueHeld || lastTurnStopped(views.get(s.id)?.items))}
           {@const stage = stageFor(s.delivery, s.reacting)}
           {@const atReview = s.delivery === 'review_pending' && (glyph.label === 'Resting' || glyph.label === 'Finished a turn')}
-          {@const mark = atReview ? { glyph: 'review', label: 'Awaiting review', cls: 'text-magenta' } : glyph}
+          {@const mark = s.delivery === 'merged' ? { glyph: 'done', label: 'Merged', cls: 'text-good' } : atReview ? { glyph: 'review', label: 'Awaiting review', cls: 'text-magenta' } : glyph}
           {@const metadataStage = atReview ? null : stage}
           {@const title = s.title || s.branch || s.issue || (s.status === 'shell' ? 'Shell' : 'Session')}
           {@const issue = s.issue && s.issue !== title ? s.issue : ''}
@@ -184,6 +184,7 @@
   {#if filteredEnded.length}
     <section aria-label="Ended">
         {#each filteredEnded as e (e.id)}
+          {@const merged = (e.prNumber ?? 0) > 0 && e.reason === `PR #${e.prNumber} merged`}
           <button
             type="button"
             class="grid h-11 w-full grid-cols-[16px_minmax(0,1fr)] grid-rows-[18px_16px] content-center items-baseline gap-x-1.5 rounded-md px-2 text-left transition-colors {open === e.id ? 'bg-sel' : 'hover:bg-sel/50'}"
@@ -193,7 +194,7 @@
             data-roster-ended={e.id}
             onclick={() => nav.openSession(e.id)}
           >
-            <span class="self-center text-faint"><StateGlyph class="sidebar-status-icon" glyph="✕" /></span>
+            <span class="self-center" role="img" aria-label={merged ? 'Merged' : 'Session closed'}><StateGlyph class="sidebar-status-icon" glyph={merged ? 'done' : '✕'} /></span>
             <span class="min-w-0 truncate text-ink-2">{e.title || e.issue || e.id}</span>
             <span class="col-start-2 min-w-0 truncate text-sm text-faint">{endedLine(e, now)}</span>
           </button>
