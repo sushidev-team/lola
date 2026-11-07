@@ -148,3 +148,28 @@ the selected screenshot; no page errors or horizontal overflow.
 
 Captures use an isolated fixture and retained Nori evaluation images; the PR
 facts in this fixture are illustrative, not observations of a live PR.
+
+
+### Unified overview and prioritized risks
+
+Supersedes the overview layout above: summary, compact features and screenshots
+flow down one column; confidence, PR status/actions, risk assessment and feedback
+flow down the other. Verification prose is removed. Existing live local checks
+are expandable in the readiness area. The background sidebar splitter is removed
+while the review (or another overlay) is open, including during an active drag.
+
+Risk rows show explicit likelihood and impact separately. Estimates are
+agent-provided, never guessed from keywords. Unrated items stay Not rated and
+can request a fresh assessment without sending unsent feedback. Original detail
+remains expandable. New publication instructions ask for short behavior labels,
+likelihood/impact estimates and their rationale, reusing existing evidence.
+
+- [Unified desktop overview](overview-unified-wide.png)
+- [Unified narrow overview](overview-unified-narrow.png)
+
+The isolated fixture uses retained Nori handoff-preflight images; risk ratings
+and PR facts are illustrative. Headless WebKit checked 1440, 700 and 420px widths,
+source expansion, screenshot navigation, and absence of the background splitter.
+No page errors or horizontal document/dialog overflow. Native WKWebView was not
+exercised. Sixty-four focused frontend tests, Svelte check, production build and
+Go runtime tests passed. Impeccable's layout scan reported no findings.

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { PRReadinessData } from '@bindings/internal/protocol';
-import { reviewConfidence, reviewOverview, reviewItems, plainReviewText } from './reviewoverview';
+import { reviewConfidence, reviewOverview, reviewItems, plainReviewText, compactReviewLabel } from './reviewoverview';
 const pkg = {head:'abc',repo:'acme/app',pr:42};
 const facts = {head:'abc',repo:'acme/app',number:42,checks:'pass',review:'APPROVED',mergeable:'MERGEABLE',threads:[]} as unknown as PRReadinessData;
 
@@ -41,4 +41,21 @@ it('preserves long summaries, nested bullets and fenced examples behind compact 
   expect(items).toHaveLength(2);
   expect(items[0].body).toContain('- Not a feature');
   expect(reviewItems('x'.repeat(400))[0].title.length).toBeLessThanOrEqual(140);
+});
+
+it('uses short author labels and preserves legacy detail behind outcome summaries',()=>{
+  expect(compactReviewLabel('- **Keep existing account access** — Migration 2026_11_07_200000 backfills data.')).toBe('Keep existing account access');
+  const body='The migration 2026_11_07_200000_mark_existing_users_as_verified backfills email_verified_at from created_at, so existing accounts keep access.';
+  expect(compactReviewLabel(body)).toBe('Existing accounts keep access');
+  expect(compactReviewLabel("The whole workspace route group now uses `['auth','verified']`.")).toBe('Workspace route group');
+  expect(compactReviewLabel('Registration now lands on a new step at `/email/verify`.')).toBe('Registration lands on new step');
+  expect(reviewOverview({title:'Update',body:'## Changes\n- '+body}).changes[0].body).toContain('2026_11_07');
+});
+it('orders explicit risk estimates without inferring ratings from alarming prose',()=>{
+  const result=reviewOverview({title:'Review',body:'## Risks\n- **Minor styling** — Likelihood: low; Impact: low. Basis: cosmetic only.\n- **Unassessed security issue** — Catastrophic critical failure is possible.\n- **Mail delivery** — Likelihood: medium; Impact: high. Outcome: users cannot sign in.\n- **Deployment lockout** — Likelihood: high; Impact: high.'});
+  expect(result.risks.map(r=>r.title)).toEqual(['Deployment lockout','Mail delivery','Unassessed security issue','Minor styling']);
+  expect(result.risks[2]).toMatchObject({likelihood:'unknown',impact:'unknown'});
+  expect(result.risks[1].body).toContain('users cannot sign in');
+  expect(reviewOverview({title:'Review',body:'## Risks\nNo known risks.'})).toMatchObject({riskReportProvided:true,risks:[]});
+  expect(reviewOverview({title:'Review',body:''}).riskReportProvided).toBe(false);
 });

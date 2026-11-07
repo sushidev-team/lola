@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/svelte';
 import SidebarResize from './SidebarResize.svelte';
 import { nav } from '$lib/nav.svelte';
-afterEach(cleanup);
+afterEach(() => { cleanup(); nav.closeOverlay(); });
 it('resizes with the keyboard, persists the preference and resets on double click', async () => {
   nav.sidebarOpen = true;
   render(SidebarResize, { width: 320, maxWidth: 480 });
@@ -34,4 +34,26 @@ it('drags the divider within the available width and stops after release', async
   await pointer('pointerup', 600);
   await pointer('pointermove', 260);
   expect(nav.sidebarWidth).toBe(400);
+});
+
+it('removes the splitter and cancels a drag while an overlay is open',async()=>{
+  nav.sidebarOpen=true; nav.setSidebarWidth(320);
+  render(SidebarResize,{width:320,maxWidth:480});
+  const handle=screen.getByRole('separator',{name:'Resize sidebar'});
+  handle.setPointerCapture=()=>{};
+  const event=new Event('pointerdown',{bubbles:true});
+  Object.assign(event,{button:0,pointerId:1,clientX:320});
+  await fireEvent(handle,event);
+  nav.openOverlay('pr-review');
+  await import('svelte').then(s=>s.tick());
+  expect(screen.queryByRole('separator')).toBeNull();
+  await fireEvent.keyDown(handle,{key:'End'});
+  expect(nav.sidebarWidth).toBe(320);
+  nav.closeOverlay();
+  await import('svelte').then(s=>s.tick());
+  const restored=screen.getByRole('separator',{name:'Resize sidebar'});
+  const move=new Event('pointermove',{bubbles:true});
+  Object.assign(move,{pointerId:1,clientX:450});
+  await fireEvent(restored,move);
+  expect(nav.sidebarWidth).toBe(320);
 });

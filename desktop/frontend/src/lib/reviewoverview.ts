@@ -31,20 +31,60 @@ export function reviewItems(body: string): OverviewItem[] {
   flush();
   return chunks.map(body => ({title:shortLine(body),body}));
 }
+/** Prefer the author's short label. For legacy prose, retain a short source
+ * clause; identifiers and code paths belong in the expansion, not the label. */
+export function compactReviewLabel(body: string): string {
+  const clean = body.replace(/^\s*(?:[-+*]|\d+[.)])\s+/, '');
+  const explicit = clean.match(/^\*\*(.+?)\*\*/)?.[1];
+  let label = explicit || plainReviewText(clean.replace(/`[^`]*`/g, '')).replace(/\b(?:Likelihood|Probability|Impact|Severity)\s*:\s*(?:low|medium|high|unknown|critical)[.;|]?/gi, '').trim();
+  if (!explicit) {
+    const outcome = label.match(/\bso (?:that )?(.+?)(?:[.!?]|$)/i)?.[1];
+    label = outcome || label.replace(/\([^)]*\)/g, '').split(/\s[—–]\s|:\s|,\s|\.\s|\s(?:before|after|while|including|because|and)\s/i)[0];
+    label = label.replace(/`[^`]*`/g, '').replace(/\b\w*\d{4}[_\w.-]*\b/g, '').replace(/(?:\/?[\w{}.-]+){2,}\/[\w/{}.-]+/g, '')
+      .replace(/\b(?:the|a|an|their|now|whole|must)\b/gi, '').replace(/\s+/g, ' ').trim();
+  }
+  const words = label.replace(/[.;:—–]+$/, '').trim().split(/\s+/).filter(Boolean);
+  let short = words.slice(0,6).join(' ');
+  while (short.length > 54 && short.includes(' ')) short = short.slice(0,short.lastIndexOf(' '));
+  if (short.length > 54) short = 'Implementation update';
+  short = short.replace(/\s+(?:at|on|to|with|from|for|in|uses)$/i, '');
+  return (short || 'Review item').replace(/^./, c => c.toUpperCase());
+}
+export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
+export type ReviewRisk = OverviewItem & { likelihood: RiskLevel; impact: RiskLevel; priority: number };
+export const riskWeight: Record<RiskLevel,number> = {unknown:0,low:1,medium:2,high:3};
+export function reviewRisk(item: OverviewItem): ReviewRisk {
+  const text = plainReviewText(item.body);
+  const likelihood = (text.match(/\b(?:likelihood|probability)\s*:\s*(low|medium|high|unknown)\b/i)?.[1]?.toLowerCase() || 'unknown') as RiskLevel;
+  const impact = (text.match(/\b(?:impact|severity)\s*:\s*(low|medium|high|unknown)\b/i)?.[1]?.toLowerCase() || 'unknown') as RiskLevel;
+  // Unknowns need review before low-rated risks; they are never presented as low.
+  const priority = likelihood === 'unknown' || impact === 'unknown' ? 5 : riskWeight[likelihood] * riskWeight[impact];
+  return {...item,title:compactReviewLabel(item.body),likelihood,impact,priority};
+}
 export function reviewOverview(pkg: Pick<ReviewPackage,'title'|'body'>) {
-  const changes: OverviewItem[] = [], verification: OverviewItem[] = [], risks: OverviewItem[] = [], details: OverviewItem[] = [];
+  const changes: OverviewItem[] = [], verification: OverviewItem[] = [], risks: ReviewRisk[] = [], details: OverviewItem[] = [];
+  let riskReportProvided = false;
   let summary = '';
   for (const section of reviewSections(pkg.body)) {
     if (/^(summary|overview|tl;?dr)$/i.test(section.title)) {
       if (!summary) summary = shortLine(section.body,220);
       if (plainReviewText(section.body) !== summary) details.push({title:section.title,body:section.body});
-    } else if (/chang|feature|implement|what.*done/i.test(section.title)) changes.push(...reviewItems(section.body));
-    else if (/risk|unresolved|remaining|limitation|caveat/i.test(section.title)) risks.push(...reviewItems(section.body));
+    } else if (/chang|feature|implement|what.*done/i.test(section.title)) {
+      for (const item of reviewItems(section.body)) {
+        if (/^[\w.-]+ (?:is|was|remains) unchanged\b/i.test(plainReviewText(item.body))) details.push({title:'Unchanged scope',body:item.body});
+        else changes.push({...item,title:compactReviewLabel(item.body)});
+      }
+    }
+    else if (/risk|unresolved|remaining|limitation|caveat/i.test(section.title)) {
+      riskReportProvided = true;
+      risks.push(...reviewItems(section.body).filter(item => !/^(?:none|no (?:known |remaining |unresolved )?risks(?: reported)?)[.!]?$/i.test(plainReviewText(item.body))).map(reviewRisk));
+    }
     else if (/verif|test|validation/i.test(section.title)) verification.push(...reviewItems(section.body));
     else details.push({title:section.title,body:section.body});
   }
   const title = pkg.title.replace(/^[a-z]+(?:\([^)]*\))?!?:\s*/i, '').replace(/^./, c => c.toUpperCase());
-  return {title, summary:summary || changes[0]?.title || title, changes, verification, risks, details};
+  risks.sort((a,b) => b.priority - a.priority || riskWeight[b.impact] - riskWeight[a.impact]);
+  return {title, summary:summary || shortLine(changes[0]?.body || title,160), changes, verification, risks, details, riskReportProvided};
 }
 export type ConfidenceSignal = { label: string; value: string; confirmed: boolean; failed?: boolean };
 /** Equal-weight coverage of five observable review signals, NOT a probability of

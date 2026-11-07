@@ -8,20 +8,22 @@ const facts={head:'abc',repo:'acme/app',number:42,checks:'pass',review:'',mergea
 beforeEach(()=>{vi.mocked(DaemonService.ReviewPackageImage).mockResolvedValue({dataURL:'data:image/png;base64,aGVsbG8='});});
 afterEach(cleanup);
 it('shows an evidence score, compact rows, and actionable screenshot previews',async()=>{
-  const onScreen=vi.fn(),onChecks=vi.fn();
-  render(ReviewOverview,{pkg,facts,sessionId:'s',freshness:'current',onScreen,onChecks});
+  const onScreen=vi.fn(),onAssessRisks=vi.fn();
+  render(ReviewOverview,{pkg,facts,sessionId:'s',freshness:'current',onScreen,onAssessRisks});
   expect(screen.getByRole('heading',{name:'Verify email'})).toBeInTheDocument();
   expect(screen.getByText('Confirm your email before entering.')).toBeInTheDocument();
   expect(screen.getByRole('img',{name:'Evidence coverage: 80 out of 100'})).toBeInTheDocument();
-  expect(screen.getByText('Add an email verification step.',{selector:'summary span'}).closest('details')).not.toHaveAttribute('open');
+  expect(screen.getByText('Add email verification step',{selector:'summary span'}).closest('details')).not.toHaveAttribute('open');
   await fireEvent.click(screen.getByRole('button',{name:'Review screenshot: Phone'}));
   expect(onScreen).toHaveBeenCalledWith(1);
-  await fireEvent.click(screen.getByRole('button',{name:'Inspect checks'}));
-  expect(onChecks).toHaveBeenCalledOnce();
+  expect(screen.queryByRole('heading',{name:'Verification'})).toBeNull();
+  expect(screen.getAllByText('Not rated')).toHaveLength(2);
+  await fireEvent.click(screen.getByRole('button',{name:'Ask agent to assess risks'}));
+  expect(onAssessRisks).toHaveBeenCalledOnce();
 });
 it('does not score a stale revision and keeps previews actionable if images fail',async()=>{
   vi.mocked(DaemonService.ReviewPackageImage).mockRejectedValue(new Error('Missing image'));
-  render(ReviewOverview,{pkg,facts:{...facts as object,head:'different'} as never,sessionId:'s',freshness:'stale',onScreen:()=>{},onChecks:()=>{}});
+  render(ReviewOverview,{pkg,facts:{...facts as object,head:'different'} as never,sessionId:'s',freshness:'stale',onScreen:()=>{},onAssessRisks:()=>{}});
   expect(screen.getByText('Outdated material')).toBeInTheDocument();
   expect(screen.getByRole('img',{name:'Confidence not scored: revision unconfirmed'})).toBeInTheDocument();
   await screen.findAllByText('Open screenshot');
