@@ -71,7 +71,7 @@ describe("SidebarRoster", () => {
     store.sessions = [row("a", { issue: "LOLA-42", prNumber: 84, delivery: "review_pending", headline: "Finished sidebar layout" })];
     render(SidebarRoster);
     expect(document.querySelector('[data-roster-meta]')).toHaveTextContent('LOLA-42');
-    expect(document.querySelector('[data-roster-meta]')).toHaveTextContent('#84');
+    expect(document.querySelector('[data-roster-pr]')).toHaveTextContent('#84');
     expect(document.querySelector('[data-roster-line]')).toHaveTextContent('Finished sidebar layout');
   });
   it("filters by multiple search words without changing the active session", async () => {
@@ -87,6 +87,37 @@ describe("SidebarRoster", () => {
     nav.triage = 'Needs You';
     render(SidebarRoster);
     expect(order()).toEqual(['idle']);
+  });
+
+  it("opens a PR directly without switching sessions", async () => {
+    store.sessions = [row('a', { prNumber: 84, prUrl: 'https://github.com/example/repo/pull/84' }), row('b')];
+    nav.openSession('b');
+    const openURL = vi.spyOn(store, 'openURL').mockResolvedValue(undefined);
+    render(SidebarRoster);
+    const chip = screen.getByRole('button', { name: 'Open pull request #84' });
+    expect(chip.closest('[data-roster-row]')).toBeNull();
+    await fireEvent.click(chip);
+    expect(openURL).toHaveBeenCalledWith('https://github.com/example/repo/pull/84');
+    expect(nav.focusedTerm).toBe('b');
+    openURL.mockRestore();
+  });
+  it("offers a session menu without opening that session, with a keyboard anchor", async () => {
+    const { sessionMenu } = await import('$lib/sessionmenu.svelte');
+    store.sessions = [row('a'), row('b')];
+    nav.openSession('b');
+    render(SidebarRoster);
+    const menu = screen.getByRole('button', { name: 'Actions for a' });
+    vi.spyOn(menu, 'getBoundingClientRect').mockReturnValue({ right: 300, bottom: 120 } as DOMRect);
+    await fireEvent.click(menu, { detail: 0 });
+    expect(sessionMenu.request).toEqual({ id: 'a', x: 300, y: 120 });
+    expect(nav.focusedTerm).toBe('b');
+    sessionMenu.close();
+  });
+  it("leaves a PR without a URL as a noninteractive label", () => {
+    store.sessions = [row('a', { prNumber: 84 })];
+    render(SidebarRoster);
+    expect(screen.queryByRole('button', { name: 'Open pull request #84' })).toBeNull();
+    expect(document.querySelector('[data-roster-pr]')).toHaveTextContent('#84');
   });
 
 });

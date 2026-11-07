@@ -44,7 +44,7 @@ components:
   session-navigation-row:
     textColor: "var(--color-ink)"
     rounded: "{rounded.session-row}"
-    padding: "7px 8px"
+    padding: "7px 10px"
   session-search:
     backgroundColor: "var(--color-panel)"
     textColor: "var(--color-ink)"
@@ -111,7 +111,7 @@ Reuse `Button.svelte`: ghost, accent, secondary, primary, danger, danger-solid a
 
 Search and the All / Needs you filters sit above the grouped roster; an active project scope can be cleared separately. Live-session search matches all entered words across title, issue, branch, session identifier, project label and PR number. Groups retain configured project order and stable session ordering rather than reordering on status changes.
 
-Each live row has a 70px minimum height and three lines: title, delivery metadata, and current activity. The agent-state indicator remains separate from the issue/PR/delivery line. Selected rows use the selected-surface fill; hover uses a quieter tint and keyboard focus adds a cyan outline. Truncated text remains available through the shared delayed tooltip.
+Each live row has a 70px minimum height and three lines: title, delivery metadata, and current activity. The agent-state indicator remains separate from the issue/PR/delivery line. Titles use a semibold 13px role above 11px delivery metadata and 12px activity text. Project headings use sentence case and 18px separation between groups. Selected rows use the selected-surface fill with a fine cyan-tinted inset outline; hover uses a quieter tint and keyboard focus adds a cyan outline. A PR chip opens the pull request directly when its URL is known; a separate ellipsis exposes the existing session menu on hover or keyboard focus. Both actions are siblings of the session-selection button, so neither changes the active workspace. Truncated text remains available through the shared delayed tooltip.
 
 Ended sessions start collapsed, expanding when explicitly opened, when one is selected, or when searching. Selecting a row opens its session without toggling it closed. Arrow keys or j/k move through the visible roster; Home/End or g/G reach its ends. Escape follows the existing overlay and editor dismissal order, then returns focus to the sidebar rather than closing the workspace. In sidebar search, Escape clears the query.
 

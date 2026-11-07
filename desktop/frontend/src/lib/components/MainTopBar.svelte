@@ -141,6 +141,7 @@
   <span class="ml-auto flex shrink-0 items-center gap-2">
     {#if !inSession}
     <Button size="xs" onclick={() => nav.openOverlay("commands")} title="Search projects, sessions, and actions (⌘K)">Search <span class="text-faint">⌘K</span></Button>
+    {/if}
     {#if spend}
       <HoverCard class="num inline-flex items-center text-sm whitespace-nowrap outline-none {spendCls}">
         {#snippet card()}<SpendCard usage={spend} />{/snippet}
@@ -152,7 +153,6 @@
           {headerLabel(spend)}
         {/if}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}
       </HoverCard>
-    {/if}
     {/if}
     <!-- Daemon alarm, ONLY while the sidebar is collapsed. <SidebarStatus> is the
          permanent home for liveness, but it lives inside the collapsible <aside>,

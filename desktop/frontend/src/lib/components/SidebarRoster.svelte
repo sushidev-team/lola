@@ -97,13 +97,13 @@
   const LINE_CLS = { orange: "text-orange", bad: "text-bad", faint: "text-faint" };
 </script>
 
-<nav bind:this={root} class="grid min-w-0 gap-3 px-2 py-2" aria-label="Sessions">
+<nav bind:this={root} class="sidebar-roster" aria-label="Sessions">
   {#each groups as g (g.key)}
     {@const showEmpty = !nav.sidebarQuery && !nav.triage && !nav.scoped && (g.kind === "temporary" || (g.kind === "ssh" && hasHosts))}
     {#if g.rows.length || showEmpty}
       <section aria-label={g.label}>
-        <div class="flex h-6 items-center justify-between px-2">
-          <h2 class="label min-w-0 truncate text-faint">{g.label} <span class="num">{g.rows.length || ''}</span></h2>
+        <div class="sidebar-project-heading">
+          <h2 class="min-w-0 truncate">{g.label} <span class="num sidebar-project-count">{g.rows.length || ''}</span></h2>
           {#if g.kind === "temporary"}
             <Button size="xs" icon class="h-5! w-5!" aria-label="New temporary shell" title="New temporary shell (⌘⇧N)" onclick={() => void openShell()}>+</Button>
           {:else if g.kind === "ssh"}
@@ -115,9 +115,10 @@
           {@const line = rosterActivity(s, now, !!talk.state(s.id)?.queueHeld || lastTurnStopped(views.get(s.id)?.items))}
           {@const stage = stageFor(s.delivery, s.reacting)}
           {@const waited = glyph.glyph === "◉" ? fluidAgo(s.agentStateSince as unknown as string, now).text : ""}
+          <div class="sidebar-session-item" class:selected={open === s.id} class:has-pr={!!s.prNumber}>
           <button
             type="button"
-            class="sidebar-session-row {open === s.id ? 'bg-sel' : 'hover:bg-sel/50'}"
+            class="sidebar-session-row"
             aria-current={open === s.id ? "true" : undefined}
             use:tooltip={{ text: [s.title || s.issue || s.id, glyph.label, stage?.label, line.text].filter(Boolean).join("\n") }}
             onkeydown={navigate}
@@ -126,18 +127,39 @@
             oncontextmenu={(e) => { nav.select(s.id); sessionMenu.open(s.id, e); }}
           >
             <span class="row-span-3 self-start pt-0.5" aria-label={glyph.label}><StateGlyph glyph={glyph.glyph} cls={glyph.cls} mono={glyph.mono} /></span>
-            <span class="flex min-w-0 items-baseline gap-1.5">
+            <span class="sidebar-session-title flex min-w-0 items-baseline gap-1.5">
               <span class="min-w-0 truncate text-ink">{s.title || s.branch || s.issue || (s.status === "shell" ? "Shell" : "Session")}</span>
               {#if views.get(s.id)?.hasDraft}<span class="shrink-0 text-faint" aria-label="Has a draft" data-draft-mark>✎</span>{/if}
             </span>
-            <span class="num text-sm text-faint">{waited}</span>
-            <span class="col-start-2 col-end-4 flex min-w-0 items-baseline gap-1.5 text-sm" data-roster-meta>
+            <span class="sidebar-session-age num text-faint">{waited}</span>
+            <span class="sidebar-session-meta col-start-2 col-end-4 flex min-w-0 items-baseline gap-1.5" data-roster-meta>
               {#if s.issue}<span class="shrink-0 text-ink-2">{s.issue}</span>{/if}
-              {#if s.prNumber}<span class="shrink-0 text-faint">{s.issue ? '· ' : ''}#{s.prNumber}</span>{/if}
-              {#if stage}<span class="min-w-0 truncate {STAGE_TEXT[stage.tone]}">{s.issue || s.prNumber ? '· ' : ''}{stage.label}</span>{:else}<span class="truncate text-faint">{s.location === 'ssh' ? 'SSH' : s.location === 'temporary' ? 'Temporary shell' : s.branch || glyph.label}</span>{/if}
+              {#if stage}<span class="min-w-0 truncate {STAGE_TEXT[stage.tone]}">{s.issue ? '· ' : ''}{stage.label}</span>{:else}<span class="truncate text-faint">{s.location === 'ssh' ? 'SSH' : s.location === 'temporary' ? 'Temporary shell' : s.branch || glyph.label}</span>{/if}
             </span>
-            <span class="col-start-2 col-end-4 min-w-0 truncate text-sm {line.tone === 'faint' && open === s.id ? 'text-ink-2' : LINE_CLS[line.tone]}" data-roster-line>{line.text}</span>
+            <span class="sidebar-session-activity col-start-2 col-end-4 min-w-0 truncate {line.tone === 'faint' && open === s.id ? 'text-ink-2' : LINE_CLS[line.tone]}" data-roster-line>{line.text}</span>
           </button>
+          <Button icon size="xs" class="sidebar-session-menu" aria-label="Actions for {s.title || s.issue || s.id}" aria-haspopup="menu" aria-expanded={sessionMenu.request?.id === s.id}
+            title="Session actions" onclick={e => {
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              nav.select(s.id);
+              sessionMenu.open(s.id, e);
+              if (e.detail === 0) sessionMenu.request = { id: s.id, x: rect.right, y: rect.bottom };
+            }}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="13" cy="8" r="1"/></svg>
+          </Button>
+          {#if s.prNumber}
+            <div class="sidebar-session-pr {stage ? STAGE_TEXT[stage.tone] : 'text-faint'}" data-roster-pr>
+              {#if s.prUrl}
+                <Button variant="bare" size="xs" class="sidebar-pr-link" aria-label="Open pull request #{s.prNumber}"
+                  title="Open pull request #{s.prNumber}{stage ? ` · ${stage.label}` : ''}"
+                  onclick={() => store.openURL(s.prUrl)}>
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="4" cy="3" r="1.7"/><circle cx="4" cy="13" r="1.7"/><circle cx="12" cy="13" r="1.7"/><path d="M4 5v6M12 11V6a3 3 0 0 0-3-3H8m1-2L7 3l2 2"/></svg>
+                  <span class="num">#{s.prNumber}</span>
+                </Button>
+              {:else}<span class="sidebar-pr-label num">#{s.prNumber}</span>{/if}
+            </div>
+          {/if}
+          </div>
         {/each}
       </section>
     {/if}
