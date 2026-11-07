@@ -14,20 +14,26 @@ type ReviewThread struct {
 
 // PRReadiness contains facts, not a promise that GitHub will permit a merge.
 type PRReadinessData struct {
-	Repo       string         `json:"repo"`
-	Number     int            `json:"number"`
-	URL        string         `json:"url"`
-	State      string         `json:"state"`
-	Draft      bool           `json:"draft"`
-	Mergeable  string         `json:"mergeable"`
-	MergeState string         `json:"mergeState"`
-	Review     string         `json:"review"`
-	Checks     string         `json:"checks"`
-	Head       string         `json:"head"`
-	Threads    []ReviewThread `json:"threads"`
+	Repo         string         `json:"repo"`
+	Number       int            `json:"number"`
+	URL          string         `json:"url"`
+	State        string         `json:"state"`
+	Draft        bool           `json:"draft"`
+	Mergeable    string         `json:"mergeable"`
+	MergeState   string         `json:"mergeState"`
+	Review       string         `json:"review"`
+	Checks       string         `json:"checks"`
+	Head         string         `json:"head"`
+	Threads      []ReviewThread `json:"threads"`
+	MergeMethod  string         `json:"mergeMethod"`
+	MergeBlocked string         `json:"mergeBlocked"`
 }
 
 // Number pins actions to the PR the user saw.
 type PRReadinessArgs struct {
-	Number int `json:"number"`
+	Number         int    `json:"number"`
+	Repo           string `json:"repo,omitempty"`
+	Head           string `json:"head,omitempty"`
+	Method         string `json:"method,omitempty"`
+	ConfirmUnready bool   `json:"confirmUnready,omitempty"`
 }

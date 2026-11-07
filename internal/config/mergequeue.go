@@ -8,7 +8,7 @@ import "fmt"
 // agent to merge it in, through the same send-keys gate every other prompt
 // uses) and re-awaits CI before it lands. See internal/daemon/mergequeue.go.
 //
-// It is the ONE place lola ever merges a PR, so it is OFF by default and an
+// Autonomous merging is OFF by default and an
 // absent table means exactly the old behavior: approved + green notifies and
 // parks for a human.
 

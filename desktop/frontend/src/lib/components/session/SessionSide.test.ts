@@ -63,7 +63,7 @@ it('unifies reported checks and command evidence without an empty duplicate', as
   expect(container.querySelector('[data-side-tests]')).toBeNull();
   expect(screen.queryByText(/No test commands/)).toBeNull();
   expect(screen.queryByText('Local checks', { selector: 'span' })).toBeNull();
-  expect(screen.getByRole('region', { name: 'Before merge' })).toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'PR status' })).toBeInTheDocument();
 
 });
 

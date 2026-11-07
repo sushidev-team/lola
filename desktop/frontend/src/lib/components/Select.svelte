@@ -6,8 +6,8 @@
 
   // Keep the native field for labels, form submission, validation, bindings and
   // existing change handlers. Only its OS popup is replaced by our listbox.
-  let { children, class: klass = '', value = $bindable(), ...rest }:
-    { children: Snippet; class?: string; value?: any } & HTMLSelectAttributes = $props();
+  let { children, class: klass = '', value = $bindable(), minMenuWidth = 160, ...rest }:
+    { children: Snippet; class?: string; value?: any; minMenuWidth?: number } & HTMLSelectAttributes = $props();
   const uid = $props.id();
   let field = $state<HTMLSelectElement>();
   let menu = $state<HTMLDivElement>();
@@ -48,7 +48,7 @@
   function place() {
     if (!field) return;
     const rect = field.getBoundingClientRect();
-    const width = Math.min(Math.max(rect.width, 160), window.innerWidth - 16);
+    const width = Math.min(Math.max(rect.width, minMenuWidth), window.innerWidth - 16);
     const below = window.innerHeight - rect.bottom - 8;
     const above = rect.top - 8;
     const desired = Math.min(288, options.filter(o => !o.hidden).length * 32 + 10);

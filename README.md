@@ -913,6 +913,17 @@ priority to `[]` to route it nowhere.
 
 ### `[merge_queue]` (optional, off by default)
 
+The desktop's **PR status** panel also offers a manual merge action, even when
+the queue is disabled. Its split-button dropdown chooses squash, merge commit,
+or rebase for the current PR without changing the workspace default. It starts
+with `method` below (squash by default), rechecks
+GitHub and pins the merge to the displayed head commit. Ready PRs merge on
+click. Otherwise, an icon-only action asks for confirmation before attempting
+the merge. GitHub branch protections and Lola's
+required specialist reviews still apply. Goal-managed PRs use their goal's
+delivery workflow. A manual merge can proceed without reviews or CI when
+GitHub reports the PR clean; `allow_no_checks` only controls the automatic queue.
+
 lola's local merge queue. When enabled, approved + green PRs of lola's own
 sessions are merged **one at a time per repository**, oldest PR first. Each
 observe cycle only the head of each repository's queue is acted on:

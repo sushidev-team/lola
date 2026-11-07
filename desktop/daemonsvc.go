@@ -528,3 +528,9 @@ func (s *DaemonService) AddressPRFeedback(session string, number int) (protocol.
 	err := call(protocol.Request{Cmd: "addressPRFeedback", Session: session, Args: args}, longTimeout, &d)
 	return d, err
 }
+
+// MergePR rechecks GitHub and merges only the PR head the user confirmed.
+func (s *DaemonService) MergePR(session string, number int, repo, head, method string, confirmUnready bool) error {
+	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number, Repo: repo, Head: head, Method: method, ConfirmUnready: confirmUnready})
+	return call(protocol.Request{Cmd: "mergePR", Session: session, Args: args}, longTimeout, nil)
+}

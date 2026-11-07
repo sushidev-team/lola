@@ -3,12 +3,14 @@
   import type { PRReadinessData } from '@bindings/internal/protocol';
   import type { SessionInfo } from '$lib/store.svelte';
   import { store } from '$lib/store.svelte';
+  import { confirm } from '$lib/confirm.svelte';
   import { appLabel } from '$lib/stackapps';
   import { tooltip } from '$lib/tooltip';
   import Icon from '../Icon.svelte';
   import type { IconName } from '$lib/icons';
   import Button from '../Button.svelte';
   import Tabs from '../Tabs.svelte';
+  import Select from '../Select.svelte';
   import { untrack } from 'svelte';
   import { slide } from 'svelte/transition';
 
@@ -26,6 +28,10 @@
   let notice = $state('');
   let sending = $state(false);
   let accepted = $state(false);
+  let merging = $state(false);
+  let mergeRequested = $state(false);
+  let chosenMethod = $state('');
+  let viewGeneration = 0;
   let expandedReviewers = $state<string[]>([]);
   let collapsedReviewers = $state<string[]>([]);
   let generation = 0;
@@ -40,6 +46,11 @@
     return Array.from(groups, ([author, items]) => ({ author, items }));
   });
   const terminal = $derived(current?.state === 'MERGED' || current?.state === 'CLOSED');
+  const mergeMethod = $derived(current?.mergeMethod ? chosenMethod || current.mergeMethod : '');
+  const mergeLabel = $derived(({squash:'Squash and merge',merge:'Merge pull request',rebase:'Rebase and merge'} as Record<string,string>)[mergeMethod]);
+  const readyToMerge = $derived(!!mergeLabel && current?.mergeBlocked === '');
+  const canMerge = $derived(!!current && !!mergeLabel && !!current.head && current.state === 'OPEN' && !error && !loading && !merging && !mergeRequested);
+  const mergeHint = $derived(!mergeLabel ? 'Restart the daemon to enable merging.' : error ? 'Refresh GitHub status before merging.' : current?.mergeBlocked ? `Merge pull request… ${current.mergeBlocked}` : mergeLabel);
   type Signal = { label: string; value: string; icon: IconName; tone: string };
   const signals = $derived.by((): Signal[] => {
     if (!current) return [];
@@ -61,7 +72,7 @@
     if (current.mergeState === 'BEHIND') return 'Update the branch with the latest base.';
     if (current.review === 'REVIEW_REQUIRED') return 'Request the required review.';
     if (current.mergeState === 'BLOCKED') return 'GitHub has additional merge requirements.';
-    if (current.mergeState === 'CLEAN') return 'No blockers reported · final review on GitHub.';
+    if (current.mergeState === 'CLEAN') return current.mergeBlocked || 'No blockers reported.';
     return 'Confirm remaining merge requirements on GitHub.';
   });
   function tone(value: string) { return value === 'pass' ? 'good' : value === 'fail' ? 'bad' : value === 'pending' ? 'info' : 'faint'; }
@@ -82,10 +93,10 @@
   $effect(() => {
     const key = identity;
     if (!key) return;
-    expandedReviewers = []; collapsedReviewers = []; notice = ''; error = ''; data = null; loadedFor = ''; accepted = false;
+    expandedReviewers = []; collapsedReviewers = []; notice = ''; error = ''; data = null; loadedFor = ''; accepted = false; mergeRequested = false; chosenMethod = '';
     untrack(() => void refresh());
     const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 60000);
-    return () => { clearInterval(timer); generation++; };
+    return () => { clearInterval(timer); generation++; viewGeneration++; };
   });
   async function address() {
     if (!selected || sending) return;
@@ -97,15 +108,49 @@
     } catch (e) { if (key === identity) notice = String(e); }
     finally { sending = false; }
   }
+  function askMerge() {
+    if (!selected || !current || !canMerge) return;
+    const target = selected, key = identity, view = viewGeneration;
+    const { repo, head } = current;
+    const method = mergeMethod;
+    if (readyToMerge) {
+      void merge(target, key, view, repo, head, method, false);
+      return;
+    }
+    confirm.ask({
+      title: `Merge PR #${target.number} anyway?`,
+      body: current.mergeBlocked,
+      detail: `${mergeLabel} ${repo}#${target.number}? GitHub will still enforce branch protections.`,
+      confirmLabel: mergeLabel,
+      onConfirm: () => {
+        if (view !== viewGeneration || key !== identity || !canMerge || current?.head !== head || current?.repo !== repo || mergeMethod !== method) return;
+        void merge(target, key, view, repo, head, method, true);
+      },
+    });
+  }
+  async function merge(target: {id:string;number:number}, key: string, view: number, repo: string, head: string, method: string, confirmUnready: boolean) {
+    merging = true; notice = '';
+    try {
+      await DaemonService.MergePR(target.id, target.number, repo, head, method, confirmUnready);
+      if (view !== viewGeneration || key !== identity) return;
+      mergeRequested = true;
+      notice = 'Merge requested. GitHub status will update shortly.';
+    } catch (e) {
+      if (view === viewGeneration && key === identity) notice = `Could not merge: ${String(e)}`;
+    } finally {
+      if (view === viewGeneration && key === identity) await refresh();
+      merging = false;
+    }
+  }
   function disclose(node: Element) {
     return slide(node, { duration: typeof node.animate !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 160 });
   }
 </script>
 
 {#if selected}
-<section data-before-merge aria-label="Before merge">
+<section data-before-merge aria-label="PR status">
   <header>
-    <h3 class="cv-overview-heading">{terminal ? 'Pull request' : 'Before merge'}</h3>
+    <h3 class="cv-overview-heading">PR status</h3>
     <button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request #{selected.number}"><Icon name="git-pull-request" size={13} />#{selected.number}<Icon name="external-link" size={11} /></button>
     <button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>
   </header>
@@ -144,13 +189,27 @@
       {#if session.location !== 'ssh'}
         <div class="feedback-action"><Button variant="secondary" size="xs" disabled={sending || accepted || !!error} onclick={address} title="Ask the agent to validate findings, fix valid issues, and resolve addressed threads after verification"><Icon name="shield-check" size={13} />{sending ? 'Sending…' : accepted ? 'Requested' : 'Ask agent to address'}</Button></div>
       {/if}
-    {:else if current.review !== 'APPROVED' && session.location !== 'ssh'}
-      <div class="review-action"><Button variant="secondary" size="xs" onclick={() => store.review(selected.id)}><Icon name="shield-check" size={13} />Request agent review</Button></div>
+    {/if}
+    {#if session.location !== 'ssh'}
+      <div class="pr-actions">
+        <div class="merge-split" class:ready={readyToMerge}>
+          <span use:tooltip={mergeHint}><Button class="rounded-r-none!" variant={readyToMerge ? 'primary' : 'secondary'} size="xs" icon={!readyToMerge && !merging && !mergeRequested} disabled={!canMerge} loading={merging} onclick={askMerge} aria-label={merging ? 'Merging…' : mergeRequested ? 'Merge requested' : readyToMerge ? mergeLabel : 'Merge pull request'}>{#if !merging}<Icon name="git-merge" size={13} />{/if}{#if merging}Merging…{:else if mergeRequested}Merge requested{:else if readyToMerge}{mergeLabel}{/if}</Button></span>
+          <span class="merge-method" use:tooltip={'Choose merge method'}>
+            <Select aria-label="Merge method" minMenuWidth={220} value={mergeMethod} disabled={!canMerge} onchange={(event) => chosenMethod = event.currentTarget.value}>
+              <option value="squash">Squash and merge</option>
+              <option value="merge">Create merge commit</option>
+              <option value="rebase">Rebase and merge</option>
+            </Select>
+          </span>
+        </div>
+        {#if !threads.length && current.review !== 'APPROVED'}<Button variant="secondary" size="xs" onclick={() => store.review(selected.id)}><Icon name="shield-check" size={13} />Request agent review</Button>{/if}
+      </div>
+      {#if !mergeLabel}<p class="muted">Restart the daemon to enable merging.</p>{/if}
     {/if}
     {#if session.mergeQueue}<p class="muted">Merge queue · position {session.mergeQueue.position}</p>{/if}
     {#if session.overlaps?.length}<p class="overlaps"><Icon name="layers" size={12} /><span>Overlaps · {session.overlaps.map(o => o.issue || o.session).join(', ')}</span></p>{/if}
   {/if}
-  {#if notice}<p class="notice" role="status">{notice}</p>{/if}
+  {#if notice && !(terminal && mergeRequested)}<p class="notice" role="status">{notice}</p>{/if}
 </section>
 {/if}
 
@@ -195,7 +254,14 @@
   .preview { display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere;font-size:12px;line-height:18px; }
   .more { display:block;font-size:11px;color:var(--color-faint);margin:5px 0 0 20px;padding:3px 0; }
   .feedback-action { margin-top:14px;padding-top:12px;border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
-  .review-action { margin-top:12px; }
+  .pr-actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:12px; }
+  .merge-split { display:inline-flex;align-items:stretch; }
+  .merge-method { display:block;width:24px;flex-shrink:0; }
+  .merge-method :global(.lola-field) { min-height:24px;height:24px;padding:0;border-radius:0 6px 6px 0;color:transparent; }
+  .merge-method :global(.lola-select-caret) { right:5px;color:var(--color-ink); }
+  .merge-split.ready .merge-method :global(.lola-field) { background:var(--color-accent-fill);border-color:transparent;border-left-color:var(--color-edge); }
+  .merge-split.ready .merge-method :global(.lola-field:enabled:hover) { background:var(--color-accent-fill-hover); }
+  .merge-split.ready .merge-method :global(.lola-select-caret) { color:var(--color-accent-ink); }
   .overlaps { display:flex;align-items:center;gap:6px;margin-top:12px;font-size:10px;line-height:16px;color:var(--color-faint); }
   .muted,.notice,.error { font-size:11px;line-height:17px;margin-top:8px; } .muted,.notice { color:var(--color-faint); }
   .error button { text-decoration:underline; } .terminal { display:flex;align-items:center;gap:7px;color:var(--color-faint);font-size:12px; }

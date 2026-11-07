@@ -346,6 +346,13 @@ export function KnowledgeVersion(scope: knowledge$0.Scope, id: string, version: 
 }
 
 /**
+ * MergePR rechecks GitHub and merges only the PR head the user confirmed.
+ */
+export function MergePR(session: string, $number: number, repo: string, head: string, method: string, confirmUnready: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3629649329, session, $number, repo, head, method, confirmUnready);
+}
+
+/**
  * Open checks out a branch or PR of a project into a throwaway shell worktree.
  */
 export function Open(project: string, ref: string): $CancellablePromise<protocol$0.OpenData> {

@@ -37,6 +37,7 @@ import Folder from '@lucide/svelte/icons/folder';
 import GitBranch from '@lucide/svelte/icons/git-branch';
 import GitCompareArrows from '@lucide/svelte/icons/git-compare-arrows';
 import GitPullRequest from '@lucide/svelte/icons/git-pull-request';
+import GitMerge from '@lucide/svelte/icons/git-merge';
 import Image from '@lucide/svelte/icons/image';
 import Info from '@lucide/svelte/icons/info';
 import Layers from '@lucide/svelte/icons/layers';
@@ -111,6 +112,7 @@ export const icons = {
   'git-branch': GitBranch,
   'git-compare-arrows': GitCompareArrows,
   'git-pull-request': GitPullRequest,
+  'git-merge': GitMerge,
   'image': Image,
   'info': Info,
   'layers': Layers,

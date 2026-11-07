@@ -869,6 +869,8 @@ export interface PRReadinessData {
     "checks": string;
     "head": string;
     "threads": ReviewThread[] | null;
+    "mergeMethod": string;
+    "mergeBlocked": string;
 }
 
 /**

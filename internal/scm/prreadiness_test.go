@@ -10,7 +10,7 @@ import (
 )
 
 func readinessFixture(head, cursor string, more bool, nodes string) string {
-	return `{"data":{"repository":{"pullRequest":{"number":42,"url":"https://github.com/acme/app/pull/42","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","headRefOid":"` + head + `","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]},"reviewThreads":{"pageInfo":{"hasNextPage":` + map[bool]string{true: "true", false: "false"}[more] + `,"endCursor":"` + cursor + `"},"nodes":` + nodes + `}}}}}`
+	return `{"data":{"repository":{"pullRequest":{"number":42,"url":"https://github.com/acme/app/pull/42","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","baseRefOid":"base","headRefOid":"` + head + `","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]},"reviewThreads":{"pageInfo":{"hasNextPage":` + map[bool]string{true: "true", false: "false"}[more] + `,"endCursor":"` + cursor + `"},"nodes":` + nodes + `}}}}}`
 }
 func TestReadinessPaginatesAndKeepsOutdatedUnresolved(t *testing.T) {
 	dir := t.TempDir()
@@ -30,7 +30,7 @@ func TestReadinessPaginatesAndKeepsOutdatedUnresolved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Threads) != 2 || got.Threads[0].Preview != "Fix this please" || !got.Threads[1].Outdated || got.Checks != "pass" || got.Review != "APPROVED" {
+	if len(got.Threads) != 2 || got.Threads[0].Preview != "Fix this please" || !got.Threads[1].Outdated || got.Checks != "pass" || got.Review != "APPROVED" || got.Base != "base" {
 		t.Fatalf("%+v", got)
 	}
 	requests, _ := os.ReadFile(filepath.Join(dir, "requests"))

@@ -138,7 +138,7 @@
             <span class="sidebar-state-mark row-span-3 self-start" role="img" aria-label={mark.label}><StateGlyph class="sidebar-status-icon" glyph={mark.glyph} label={mark.label} cls={mark.cls} /></span>
             <span class="sidebar-session-title flex min-w-0 items-baseline gap-1.5">
               <span class="min-w-0 truncate text-ink">{title}</span>
-              {#if views.get(s.id)?.hasDraft}<span class="shrink-0 text-faint" aria-label="Has a draft" data-draft-mark><Icon name="pencil" size={14} /></span>{/if}
+              {#if views.get(s.id)?.hasDraft}<span class="shrink-0 text-faint" aria-label="Has a draft" data-draft-mark><Icon name="pencil" size={11} /></span>{/if}
             </span>
             <span class="sidebar-session-age num text-faint">{waited}</span>
             {#if hasMeta}
