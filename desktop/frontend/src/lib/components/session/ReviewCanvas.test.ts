@@ -280,3 +280,27 @@ it('cycles saved comments and deletes a focused pin without intercepting text de
   expect(remove).toHaveBeenCalledWith(0,expect.stringContaining('Second'));
   expect(screen.queryByRole('button',{name:'Comment 2'})).toBeNull();
 });
+
+
+it.each(['Backspace','Delete'])('deletes the selected comment with Command+%s while editing, leaving other fields alone',async key=>{
+  const remove=vi.fn();render(ReviewCanvas,{pkg,onComment:()=>true,onDeleteComment:remove});
+  await screen.findByAltText('Settings — After');
+  const canvas=screen.getByRole('region',{name:'Screenshot review canvas'});
+  expect(await fireEvent.keyDown(canvas,{key,metaKey:true})).toBe(true);
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Selected comment'}});
+  await fireEvent.keyDown(screen.getByRole('textbox'),{key:'Enter',metaKey:true});
+  await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
+  const field=screen.getByRole('textbox');
+  const unrelated=document.createElement('textarea');canvas.append(unrelated);
+  expect(await fireEvent.keyDown(unrelated,{key,metaKey:true})).toBe(true);
+  unrelated.remove();
+  await fireEvent.keyDown(field,{key,metaKey:true,repeat:true});
+  await fireEvent.keyDown(field,{key,metaKey:true,isComposing:true});
+  expect(remove).not.toHaveBeenCalled();
+  expect(await fireEvent.keyDown(field,{key,metaKey:true})).toBe(false);
+  expect(remove).toHaveBeenCalledWith(0,expect.stringContaining('Selected comment'));
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(screen.queryByRole('button',{name:'Comment 1'})).toBeNull();
+});

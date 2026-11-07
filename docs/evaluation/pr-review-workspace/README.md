@@ -101,7 +101,8 @@ deleting at 1440, 700, and 420px widths with no page errors.
 - Left/Right: previous/next screenshot; N/Shift+N: next/previous annotation.
 - 1–4: slider, side by side, before, after; +/−: zoom; 0: fit.
 - I: screen details; B: checks and feedback; ?: shortcut reference.
-- Delete/Backspace: delete a focused annotation outside text fields.
+- Command+Backspace / Command+Delete: delete the selected comment, including from its editor.
+- Plain Delete/Backspace: delete a focused annotation outside text fields.
 
 Shortcuts operate only while the screenshot canvas is mounted. Field editing,
 platform chords, IME composition, native selects, and comparison-slider arrows
@@ -113,3 +114,8 @@ Validation: 32 focused component tests and Svelte check pass. A headless WebKit
 keyboard flow covered C → Enter → typing → Command+Enter → R → Escape → N →
 Escape → Delete → ?, including the reference at 420px width; no page errors.
 [Shortcut reference](screenshot-shortcuts.png) uses an isolated screenshot fixture.
+
+
+Command-delete follow-up: both Backspace and forward Delete remove the selected
+annotation from inside its editor. Unrelated fields, IME composition, and key
+repeat are excluded. All 34 focused UI tests and Svelte check passed.

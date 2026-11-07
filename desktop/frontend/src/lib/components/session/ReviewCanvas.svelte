@@ -17,7 +17,7 @@
     ['← / →', 'Previous / next screenshot'], ['N / Shift+N', 'Next / previous comment'],
     ['1 / 2', 'Slider / side by side'], ['3 / 4', 'Before / after'],
     ['+ / − / 0', 'Zoom in / out / fit'], ['I', 'Screen details'], ['B', 'Checks & feedback'],
-    [saveKeys, 'Save comment'], ['Esc', 'Close comment'], ['Delete', 'Delete focused comment'], ['?', 'Keyboard shortcuts'],
+    [saveKeys, 'Save comment'], ['Esc', 'Close comment'], ['⌘⌫ / ⌘Delete', 'Delete selected comment'], ['Delete', 'Delete focused comment'], ['?', 'Keyboard shortcuts'],
   ];
   const screens = $derived(pkg.screens ?? []);
   const screen = $derived(screens[index] ?? screens[0]);
@@ -218,9 +218,14 @@
     const target = e.target instanceof Element ? e.target : null;
     const inEditor = !!target && !!editor?.contains(target);
     const typing = !!target?.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]');
+    const focusedMark = target?.closest<HTMLElement>('[data-mark]');
     const consume = () => { e.preventDefault(); e.stopPropagation(); };
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === 'Enter' && editing && inEditor) {
       consume(); if (selected?.text.trim()) add(); return;
+    }
+    if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && ['Backspace','Delete'].includes(e.key) && canComment
+      && (focusedMark || (editing && (inEditor || !typing)))) {
+      consume(); deleteComment(focusedMark ? Number(focusedMark.dataset.mark) : active); return;
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === 'Escape') {
@@ -230,7 +235,6 @@
       return;
     }
     if (typing) return;
-    const focusedMark = target?.closest<HTMLElement>('[data-mark]');
     if (['Delete','Backspace'].includes(e.key) && canComment && (focusedMark || (editing && inEditor))) {
       consume(); deleteComment(focusedMark ? Number(focusedMark.dataset.mark) : active); return;
     }
@@ -294,7 +298,7 @@
     {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
       <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
       <dl>{#each shortcuts as [keys,action]}<div><dt>{action}</dt><dd><kbd>{keys}</kbd></dd></div>{/each}</dl>
-      <p>While typing, only Save and Escape apply. Delete works outside text fields.</p>
+      <p>In a comment, {saveKeys} saves and ⌘Delete removes it. Plain Delete only removes comments outside text fields.</p>
     </aside>{/if}
   </div>
   <div class="canvas-body" class:info-open={infoOpen}>
@@ -349,7 +353,7 @@
       <div class="editor-heading">
         <label for="canvas-comment">Comment {active+1}<span class="editor-side">{selected.side}</span></label>
         <div class="editor-controls">
-          <Button icon size="xs" variant="danger" aria-label="Delete comment" title="Delete comment · Delete outside text" aria-keyshortcuts="Delete Backspace" onclick={() => deleteComment()}><Icon name="trash-2" size={14} /></Button>
+          <Button icon size="xs" variant="danger" aria-label="Delete comment" title="Delete comment · ⌘Backspace / ⌘Delete" aria-keyshortcuts="Meta+Backspace Meta+Delete Delete Backspace" onclick={() => deleteComment()}><Icon name="trash-2" size={14} /></Button>
           <Button icon size="xs" aria-label="Close comment" title="Close comment · Esc" aria-keyshortcuts="Escape" onclick={() => requestClose()}><Icon name="x" size={14} /></Button>
         </div>
       </div>
