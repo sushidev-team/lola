@@ -34,6 +34,7 @@ const DefaultUITheme = "catppuccin-mocha"
 // keeping its own copy that could drift and start writing configs the daemon
 // rejects.
 var UIThemes = []string{
+	"lola-midnight",
 	"catppuccin-latte",
 	"catppuccin-frappe",
 	"catppuccin-macchiato",

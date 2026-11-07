@@ -1,0 +1,210 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-07T13:33:03.129213+00:00",
+  "title": "Design System: Lola desktop",
+  "extensions": {
+    "colorMeta": {
+      "mocha-canvas": {
+        "role": "neutral",
+        "displayName": "Mocha Canvas",
+        "tonalRamp": [
+          "oklch(15.00% 0.02542 284.06)",
+          "oklch(26.43% 0.02542 284.06)",
+          "oklch(37.86% 0.02542 284.06)",
+          "oklch(49.29% 0.02542 284.06)",
+          "oklch(60.71% 0.02542 284.06)",
+          "oklch(72.14% 0.02542 284.06)",
+          "oklch(83.57% 0.02542 284.06)",
+          "oklch(95.00% 0.02542 284.06)"
+        ]
+      },
+      "mocha-panel": {
+        "role": "neutral",
+        "displayName": "Mocha Panel",
+        "tonalRamp": [
+          "oklch(15.00% 0.03036 283.91)",
+          "oklch(26.43% 0.03036 283.91)",
+          "oklch(37.86% 0.03036 283.91)",
+          "oklch(49.29% 0.03036 283.91)",
+          "oklch(60.71% 0.03036 283.91)",
+          "oklch(72.14% 0.03036 283.91)",
+          "oklch(83.57% 0.03036 283.91)",
+          "oklch(95.00% 0.03036 283.91)"
+        ]
+      },
+      "mocha-ink": {
+        "role": "neutral",
+        "displayName": "Mocha Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.04255 272.28)",
+          "oklch(26.43% 0.04255 272.28)",
+          "oklch(37.86% 0.04255 272.28)",
+          "oklch(49.29% 0.04255 272.28)",
+          "oklch(60.71% 0.04255 272.28)",
+          "oklch(72.14% 0.04255 272.28)",
+          "oklch(83.57% 0.04255 272.28)",
+          "oklch(95.00% 0.04255 272.28)"
+        ]
+      },
+      "mocha-accent": {
+        "role": "primary",
+        "displayName": "Mocha Accent",
+        "tonalRamp": [
+          "oklch(15.00% 0.08334 210.25)",
+          "oklch(26.43% 0.08334 210.25)",
+          "oklch(37.86% 0.08334 210.25)",
+          "oklch(49.29% 0.08334 210.25)",
+          "oklch(60.71% 0.08334 210.25)",
+          "oklch(72.14% 0.08334 210.25)",
+          "oklch(83.57% 0.08334 210.25)",
+          "oklch(95.00% 0.08334 210.25)"
+        ]
+      },
+      "midnight-canvas": {
+        "role": "neutral",
+        "displayName": "Midnight Canvas",
+        "tonalRamp": [
+          "oklch(15.00% 0.02876 271.45)",
+          "oklch(26.43% 0.02876 271.45)",
+          "oklch(37.86% 0.02876 271.45)",
+          "oklch(49.29% 0.02876 271.45)",
+          "oklch(60.71% 0.02876 271.45)",
+          "oklch(72.14% 0.02876 271.45)",
+          "oklch(83.57% 0.02876 271.45)",
+          "oklch(95.00% 0.02876 271.45)"
+        ]
+      },
+      "midnight-panel": {
+        "role": "neutral",
+        "displayName": "Midnight Panel",
+        "tonalRamp": [
+          "oklch(15.00% 0.03523 273.83)",
+          "oklch(26.43% 0.03523 273.83)",
+          "oklch(37.86% 0.03523 273.83)",
+          "oklch(49.29% 0.03523 273.83)",
+          "oklch(60.71% 0.03523 273.83)",
+          "oklch(72.14% 0.03523 273.83)",
+          "oklch(83.57% 0.03523 273.83)",
+          "oklch(95.00% 0.03523 273.83)"
+        ]
+      },
+      "midnight-ink": {
+        "role": "neutral",
+        "displayName": "Midnight Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.01649 274.81)",
+          "oklch(26.43% 0.01649 274.81)",
+          "oklch(37.86% 0.01649 274.81)",
+          "oklch(49.29% 0.01649 274.81)",
+          "oklch(60.71% 0.01649 274.81)",
+          "oklch(72.14% 0.01649 274.81)",
+          "oklch(83.57% 0.01649 274.81)",
+          "oklch(95.00% 0.01649 274.81)"
+        ]
+      },
+      "midnight-cyan": {
+        "role": "primary",
+        "displayName": "Midnight Cyan",
+        "tonalRamp": [
+          "oklch(15.00% 0.09111 207.07)",
+          "oklch(26.43% 0.09111 207.07)",
+          "oklch(37.86% 0.09111 207.07)",
+          "oklch(49.29% 0.09111 207.07)",
+          "oklch(60.71% 0.09111 207.07)",
+          "oklch(72.14% 0.09111 207.07)",
+          "oklch(83.57% 0.09111 207.07)",
+          "oklch(95.00% 0.09111 207.07)"
+        ]
+      },
+      "midnight-violet": {
+        "role": "secondary",
+        "displayName": "Midnight Violet",
+        "tonalRamp": [
+          "oklch(15.00% 0.17552 301.61)",
+          "oklch(26.43% 0.17552 301.61)",
+          "oklch(37.86% 0.17552 301.61)",
+          "oklch(49.29% 0.17552 301.61)",
+          "oklch(60.71% 0.17552 301.61)",
+          "oklch(72.14% 0.17552 301.61)",
+          "oklch(83.57% 0.17552 301.61)",
+          "oklch(95.00% 0.17552 301.61)"
+        ]
+      }
+    },
+    "motion": [
+      {
+        "name": "activity-state",
+        "value": "background .12s, box-shadow .12s",
+        "purpose": "Activity hover and selection; disabled under reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "activity-container",
+        "value": "520px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "description": "Shared Button.svelte variant, small size.",
+      "html": "<button type=\"button\" class=\"ds-button\">Primary</button>",
+      "css": ".ds-button { display:inline-flex; align-items:center; justify-content:center; height:28px; padding:0 8px; border:0; border-radius:6px; font:13px/18px var(--font-sans); cursor:pointer; } .ds-button:focus-visible { outline:2px solid var(--color-accent); outline-offset:3px; } .ds-button:disabled { opacity:.4; cursor:not-allowed; } .ds-button { background:var(--color-accent-fill); color:var(--color-accent-ink); font-weight:500; } .ds-button:enabled:hover { background:var(--color-accent-fill-hover); }"
+    },
+    {
+      "name": "Ghost button",
+      "kind": "button",
+      "description": "Shared Button.svelte variant, small size.",
+      "html": "<button type=\"button\" class=\"ds-button\">Ghost</button>",
+      "css": ".ds-button { display:inline-flex; align-items:center; justify-content:center; height:28px; padding:0 8px; border:0; border-radius:6px; font:13px/18px var(--font-sans); cursor:pointer; } .ds-button:focus-visible { outline:2px solid var(--color-accent); outline-offset:3px; } .ds-button:disabled { opacity:.4; cursor:not-allowed; } .ds-button { background:transparent; color:var(--color-faint); } .ds-button:enabled:hover { background:var(--color-sel); color:var(--color-ink); }"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "description": "Shared Button.svelte variant, small size.",
+      "html": "<button type=\"button\" class=\"ds-button\">Secondary</button>",
+      "css": ".ds-button { display:inline-flex; align-items:center; justify-content:center; height:28px; padding:0 8px; border:0; border-radius:6px; font:13px/18px var(--font-sans); cursor:pointer; } .ds-button:focus-visible { outline:2px solid var(--color-accent); outline-offset:3px; } .ds-button:disabled { opacity:.4; cursor:not-allowed; } .ds-button { background:transparent; border:1px solid var(--color-edge); color:var(--color-ink); } .ds-button:enabled:hover { background:var(--color-sel); border-color:var(--color-accent); }"
+    },
+    {
+      "name": "Overview card",
+      "kind": "card",
+      "refersTo": "overview-card",
+      "description": "A compact section of the session overview.",
+      "html": "<section class=\"ds-card\"><h3>Changes</h3><p>Changes haven\u2019t been loaded.</p></section>",
+      "css": ".ds-card { padding:15px; border:1px solid color-mix(in srgb,var(--color-edge) 65%,transparent); border-radius:9px; background:color-mix(in srgb,var(--color-panel) 80%,var(--color-canvas)); color:var(--color-ink); font:12px/16px var(--font-sans); box-shadow:inset 0 1px 0 color-mix(in srgb,var(--color-ink) 3%,transparent); } .ds-card h3 { margin:0 0 8px; font-size:13px; line-height:20px; font-weight:600; } .ds-card p { margin:0; color:var(--color-faint); }"
+    },
+    {
+      "name": "Recent activity navigation",
+      "kind": "nav",
+      "description": "A conversation-jump row in the overview; the preview is a static specimen.",
+      "html": "<nav aria-label=\"Recent activity\"><button type=\"button\" class=\"ds-event\"><span class=\"ds-dot\" aria-hidden=\"true\"></span><span>Ran checks</span><span class=\"ds-time\">12s</span></button></nav>",
+      "css": ".ds-event { min-width:0; max-width:100%; display:flex; align-items:center; width:100%; gap:8px; padding:5px 0; text-align:left; background:transparent; border:0; color:var(--color-ink); font:12px/16px var(--font-sans); } .ds-event:hover { color:var(--color-accent-ink); } .ds-event:focus-visible { outline:2px solid var(--color-accent); outline-offset:3px; } .ds-dot { flex:0 0 7px; height:7px; border-radius:50%; background:var(--color-good); } .ds-time { margin-left:auto; color:var(--color-faint); }"
+    }
+  ],
+  "narrative": {
+    "overview": "Lola uses a compact operational interface: quiet layered surfaces, readable conversation text, and semantic color for state and navigation. This is a scoped source record of the existing desktop system and the optional Midnight extension, not a replacement visual identity.",
+    "rules": [
+      {
+        "name": "The Theme Choice Rule",
+        "body": "Add palettes through the shared theme mapping; preserve the default and saved preferences.",
+        "section": "colors"
+      },
+      {
+        "name": "The Evidence Label Rule",
+        "body": "Distinguish observed diff totals from agent-reported commands and plans, and retain honest unloaded states.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do reuse semantic color tokens and shared controls across palettes.",
+      "Do keep conversation reading text distinct from compact metadata.",
+      "Do retain keyboard navigation and visible focus on activity entries."
+    ],
+    "donts": [
+      "Don't present command-run completion as a count of passing test cases.",
+      "Don't treat this source record as final visual approval."
+    ]
+  }
+}

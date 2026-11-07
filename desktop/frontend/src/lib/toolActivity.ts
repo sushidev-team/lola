@@ -2,7 +2,7 @@ import type { AgentFeedTool } from '@bindings/internal/protocol';
 import { langOf } from './diff';
 
 // A display-only lexer: quotes keep shell operators inside arguments. Never evaluates text.
-function commands(text: string): string[][] {
+export function commands(text: string): string[][] {
   const out: string[][] = [];
   let words: string[] = [], word = '', quote = '', escaped = false;
   const flushWord = () => { if (word) words.push(word); word = ''; };

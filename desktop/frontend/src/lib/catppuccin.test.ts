@@ -41,10 +41,11 @@ const NAMED_KEYS = [
 ] as const;
 
 describe("FLAVORS", () => {
-  it("carries exactly the four ids the Go side validates", () => {
+  it("carries exactly the ids the Go side validates", () => {
     // These strings must match config.UIThemes (internal/config/ui.go); a drift
     // here writes a config.toml the daemon rejects.
     expect(THEME_IDS).toEqual([
+      "lola-midnight",
       "catppuccin-mocha",
       "catppuccin-macchiato",
       "catppuccin-frappe",

@@ -9,6 +9,7 @@
   import { talk } from "$lib/talk.svelte";
   import StoryLine from "./StoryLine.svelte";
   import FeedNotice from "./FeedNotice.svelte";
+  import ActivityMap from "./ActivityMap.svelte";
   import Timeline from "./Timeline.svelte";
   import SSHOutput from "../ssh/SSHOutput.svelte";
 
@@ -33,6 +34,7 @@
     {/if}
     <!-- A daemon that is down answers nothing, and that says nothing about the log. -->
     {#if store.alive}<FeedNotice {sessionId} health={health} />{/if}
+    <ActivityMap {sessionId} />
     {#if !side}<StoryLine {sessionId} {onside} />{/if}
   </div>
   <Timeline {sessionId} />

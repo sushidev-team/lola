@@ -109,7 +109,39 @@ var latte = flavor{
 
 // themeIDs is the same order and spelling as config.UIThemes. flavors keys each
 // by its own id.
+var midnight = flavor{
+	id: "lola-midnight", label: "Midnight", dark: true,
+	rosewater: "#f5ddd8",
+	flamingo:  "#f3b9b4",
+	pink:      "#efa0e2",
+	mauve:     "#b986ff",
+	red:       "#ff738f",
+	maroon:    "#f991aa",
+	peach:     "#ffa45c",
+	yellow:    "#efcf7b",
+	green:     "#8ce477",
+	teal:      "#79dccc",
+	sky:       "#7fddea",
+	sapphire:  "#67bfe8",
+	blue:      "#82abff",
+	lavender:  "#b2baff",
+	text:      "#e6e9f5",
+	subtext1:  "#c7cde3",
+	subtext0:  "#adb7d1",
+	overlay2:  "#a1abc5",
+	overlay1:  "#929db9",
+	overlay0:  "#707b96",
+	surface2:  "#48516b",
+	surface1:  "#333c55",
+	surface0:  "#252c43",
+	base:      "#191d2f",
+	mantle:    "#121624",
+	crust:     "#0c0f1a",
+	faintKey:  "overlay1",
+}
+
 var themeIDs = []string{
+	"lola-midnight",
 	"catppuccin-mocha",
 	"catppuccin-macchiato",
 	"catppuccin-frappe",
@@ -117,6 +149,7 @@ var themeIDs = []string{
 }
 
 var flavors = map[string]flavor{
+	midnight.id:  midnight,
 	mocha.id:     mocha,
 	macchiato.id: macchiato,
 	frappe.id:    frappe,

@@ -223,7 +223,7 @@ describe("ChangesView", () => {
   it("feeds the strip's figure from the diff it already loaded", async () => {
     terms.select(SID, DIFF);
     render(ChangesView, { sessionId: SID });
-    await waitFor(() => expect(changes.of(SID)).toEqual({ add: 42, del: 1 }));
+    await waitFor(() => expect(changes.of(SID)).toEqual({ add: 42, del: 1, files: 1 }));
     expect(svc.Diff).toHaveBeenCalledTimes(1);
   });
 });

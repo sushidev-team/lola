@@ -169,8 +169,8 @@
               >
                 <span class="mt-[1px]"><BoardMarker {kind} {live} /></span>
                 <div class="min-w-0 flex-1">
-                  <div class="flex items-baseline gap-2">
-                    <span class="truncate font-medium text-ink">{c.name}</span>
+                  <div class="flex min-w-0 flex-wrap items-baseline gap-2">
+                    <span class="min-w-0 truncate font-medium text-ink">{c.name}</span>
                     <span
                       class="ml-auto shrink-0 text-sm {kind === 'pass'
                         ? 'text-good'

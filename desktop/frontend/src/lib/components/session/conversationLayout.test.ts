@@ -23,7 +23,7 @@ describe("the Conversation's layout", () => {
     expect(css).not.toContain(".ssh-col [data-footer-text]");
   });
   it("uses compact reading and metadata sizes", () => {
-    expect(/\[data-conversation\] \{[^}]*--text-prose: 13px/.test(css)).toBe(true);
+    expect(/\[data-conversation\] \{[^}]*--text-prose: 14px/.test(css)).toBe(true);
     expect(/\[data-conversation\] \{[^}]*--text-sm: 12px/.test(css)).toBe(true);
   });
 });

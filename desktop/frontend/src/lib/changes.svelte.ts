@@ -8,7 +8,7 @@ import { SvelteMap } from "svelte/reactivity";
 import { DaemonService } from "@bindings/desktop";
 import type { DiffData } from "@bindings/internal/protocol";
 
-export type ChangeStat = { add: number; del: number };
+export type ChangeStat = { add: number; del: number; files: number };
 
 class Changes {
   private stats = new SvelteMap<string, ChangeStat>();
@@ -40,7 +40,7 @@ class Changes {
       add += f.additions;
       del += f.deletions;
     }
-    this.stats.set(id, { add, del });
+    this.stats.set(id, { add, del, files: d.files?.length ?? 0 });
   }
 
   /** A failed read keeps the last figure: a stale count is better than one that blinks. */

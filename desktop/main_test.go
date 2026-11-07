@@ -20,6 +20,7 @@ var wantCanvasHex = map[string]string{
 	"catppuccin-frappe":    "#292c3c",
 	"catppuccin-macchiato": "#1e2030",
 	"catppuccin-mocha":     "#181825",
+	"lola-midnight":        "#121624",
 }
 
 const catppuccinTS = "frontend/src/lib/catppuccin.ts"
@@ -39,7 +40,7 @@ func flavorMantles(t *testing.T) map[string]string {
 	if err != nil {
 		t.Fatalf("read %s: %v", catppuccinTS, err)
 	}
-	pair := regexp.MustCompile(`id:\s*"(catppuccin-[a-z]+)"[\s\S]*?\n\s*mantle:\s*"(#[0-9a-f]{6})"`)
+	pair := regexp.MustCompile(`id:\s*"((?:catppuccin|lola)-[a-z]+)"[\s\S]*?\n\s*mantle:\s*"(#[0-9a-f]{6})"`)
 	out := map[string]string{}
 	for _, m := range pair.FindAllStringSubmatch(string(src), -1) {
 		if prev, dup := out[m[1]]; dup {

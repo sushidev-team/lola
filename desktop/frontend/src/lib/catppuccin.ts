@@ -14,6 +14,7 @@
 // one are the same strings, and [ui].theme is validated against the Go copy.
 
 export type ThemeId =
+  | "lola-midnight"
   | "catppuccin-mocha"
   | "catppuccin-macchiato"
   | "catppuccin-frappe"
@@ -21,6 +22,7 @@ export type ThemeId =
 
 /** Same order and spelling as config.UIThemes (internal/config/ui.go). */
 export const THEME_IDS: ThemeId[] = [
+  "lola-midnight",
   "catppuccin-mocha",
   "catppuccin-macchiato",
   "catppuccin-frappe",
@@ -264,7 +266,42 @@ const latte: Flavor = {
   faintKey: "overlay2",
 };
 
+// A cooler, higher-contrast Lola palette; existing saved themes retain their colors.
+const midnight: Flavor = {
+  ...mocha,
+  id: "lola-midnight", label: "Midnight",
+  rosewater: "#f5ddd8",
+  flamingo: "#f3b9b4",
+  pink: "#efa0e2",
+  mauve: "#b986ff",
+  red: "#ff738f",
+  maroon: "#f991aa",
+  peach: "#ffa45c",
+  yellow: "#efcf7b",
+  green: "#8ce477",
+  teal: "#79dccc",
+  sky: "#7fddea",
+  sapphire: "#67bfe8",
+  blue: "#82abff",
+  lavender: "#b2baff",
+  text: "#e6e9f5",
+  subtext1: "#c7cde3",
+  subtext0: "#adb7d1",
+  overlay2: "#a1abc5",
+  overlay1: "#929db9",
+  overlay0: "#707b96",
+  surface2: "#48516b",
+  surface1: "#333c55",
+  surface0: "#252c43",
+  base: "#191d2f",
+  mantle: "#121624",
+  crust: "#0c0f1a",
+  ansi16: ['#333c55', '#ff738f', '#8ce477', '#efcf7b', '#82abff', '#b986ff', '#7fddea', '#c7cde3', '#707b96', '#ff91a6', '#a4ee94', '#f4dc9d', '#a1beff', '#caa4ff', '#a1e7f0', '#e6e9f5'],
+  cursor: '#7fddea', cursorText: '#121624', selectionBg: '#333c55', selectionFg: '#e6e9f5',
+};
+
 export const FLAVORS: Readonly<Record<ThemeId, Flavor>> = Object.freeze({
+  "lola-midnight": Object.freeze(midnight),
   "catppuccin-mocha": Object.freeze(mocha),
   "catppuccin-macchiato": Object.freeze(macchiato),
   "catppuccin-frappe": Object.freeze(frappe),

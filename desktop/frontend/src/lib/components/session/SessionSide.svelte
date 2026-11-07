@@ -8,6 +8,11 @@
   import { hypothesisView, severityView, stepView } from "$lib/ssh";
   import { inScope } from "$lib/turns";
   import { boardHasContent, deriveSide } from "$lib/sessionside";
+  import { tooltip } from "$lib/tooltip";
+  import { feed } from "$lib/feed.svelte";
+  import { changes } from "$lib/changes.svelte";
+  import { changesOffered } from "$lib/sessionview";
+  import { sessionActivity, activityDuration, activityStatus } from "$lib/sessionactivity";
   import Button from "../Button.svelte";
   import BoardPanel from "../BoardPanel.svelte";
 
@@ -17,10 +22,16 @@
   const session = $derived(store.sessionById(sessionId));
   const board = $derived(session?.board);
   const side = $derived(deriveSide(inScope(view.items, view.scope), board, sshClock.now));
+  const f = $derived(feed.view(sessionId));
+  const activity = $derived(sessionActivity({ feed: f.items, items: view.items, scope: view.scope, alive: ['working', 'starting', 'waiting_input'].includes(session?.agentState ?? '') }));
+  const tests = $derived(activity.filter(e => e.kind === 'tests'));
+  const recent = $derived(activity.slice(-5).reverse());
+  const diff = $derived(changes.of(sessionId));
   const plan = $derived(side.plan?.element);
   const steps = $derived(plan?.steps ?? []);
   const done = $derived(steps.filter((s) => s.state === "done").length);
   function jumpTo(id: string) {
+    view.filter = "everything";
     view.cursor = id;
     view.jump = { block: `item:${id}`, n: (view.jump?.n ?? 0) + 1 };
   }
@@ -32,7 +43,7 @@
 
 {#snippet heading(text: string, aside: string = "")}
   <div class="mb-2 flex items-baseline gap-2">
-    <span class="label text-faint">{text}</span>
+    <h3 class="cv-overview-heading">{text}</h3>
     {#if aside}<span class="num ml-auto text-sm text-faint">{aside}</span>{/if}
   </div>
 {/snippet}
@@ -72,6 +83,55 @@
       </ol>
     </section>
   {/if}
+
+  <section data-side-changes>
+    {@render heading("Changes", diff ? `${diff.files} ${diff.files === 1 ? 'file' : 'files'}` : '')}
+    {#if diff}
+      <div class="cv-diff-overview">
+        <div class="cv-diff-meter" aria-hidden="true">
+          <span style={`flex:${diff.add}`} class="bg-good"></span><span style={`flex:${diff.del}`} class="bg-bad"></span>
+        </div>
+        <span class="num text-good">+{diff.add}</span><span class="num text-bad">−{diff.del}</span>
+      </div>
+    {:else}<p class="text-faint">Changes haven't been loaded.</p>{/if}
+    {#if session && changesOffered(session)}
+      <button type="button" class="cv-overview-link" onclick={() => session && ssh.openChanges(session)}>View changes <span aria-hidden="true">↗</span></button>
+    {/if}
+  </section>
+
+  <section data-side-tests>
+    {@render heading("Tests", tests.length ? `${tests.length} command ${tests.length === 1 ? 'run' : 'runs'}` : '')}
+    {#if tests.length}
+      <div class="mb-3 flex flex-wrap gap-x-3 gap-y-1 num">
+        <span class="text-good">{tests.filter(t => t.status === 'ok').length} completed</span>
+        <span class={tests.some(t => t.status === 'error') ? 'text-bad' : 'text-faint'}>{tests.filter(t => t.status === 'error').length} failed</span>
+      </div>
+      <ul class="cv-overview-events">
+        {#each tests.slice(-3).reverse() as t (t.id)}
+          <li><button type="button" onclick={() => jumpTo(t.id)} use:tooltip={{ text: t.label, heading: 'Test command', meta: activityStatus(t.status), tone: 'tests' }}>
+            <span class="min-w-0 truncate">{t.label.replace(/^Ran /, '')}</span>
+            <span class="text-xs {t.status === 'error' ? 'text-bad' : t.status === 'ok' ? 'text-good' : 'text-ink-2'}">{activityStatus(t.status)}</span>
+          </button></li>
+        {/each}
+      </ul>
+      <p class="cv-overview-caption">Agent-reported commands · loaded history</p>
+    {:else}<p class="text-faint">No test commands in loaded history.</p>{/if}
+  </section>
+
+  <section data-side-activity>
+    {@render heading("Recent activity")}
+    {#if recent.length}
+      <ul class="cv-overview-events">
+        {#each recent as e (e.id)}
+          <li><button type="button" onclick={() => jumpTo(e.id)} use:tooltip={{ text: e.label, heading: 'Recent activity', meta: activityDuration(e.durationMs), tone: e.kind }}>
+            <span class="cv-activity-dot" data-activity-kind={e.kind} aria-hidden="true"></span>
+            <span class="min-w-0 truncate">{e.label}</span>
+            <span class="num text-faint">{activityDuration(e.durationMs)}</span>
+          </button></li>
+        {/each}
+      </ul>
+    {:else}<p class="text-faint">Activity appears as the agent works.</p>{/if}
+  </section>
 
   {#if side.findings.length}
     <section data-side-findings>
