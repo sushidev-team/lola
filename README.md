@@ -133,6 +133,7 @@ protocol-version mismatch.
 | `lola setup` | Connect Linear (key → Keychain), optionally choose general defaults, and write `config.toml`. Projects are added afterward with **n** in the TUI or **Add project** in the app. Re-running setup preserves existing projects. |
 | `lola doctor` | Print an aligned health report (tmux/git/claude/gh/lola on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. The `lola cli` row is a WARNING, not a critical failure — the daemon running the check is itself lola, and the desktop app falls back to its bundled copy, so a miss costs only the shell. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
+| `lola review-package publish <manifest.json> [--app member]` | From a Lola agent session, retain a Markdown write-up and before/after screenshots for the desktop's full-screen **Review PR** workspace. Packages carry base/head revisions and survive worktree cleanup. No GitHub posting or merge authorization. See [PR review workspace](docs/pr-review-workspace.md). |
 | `lola stop` | Graceful shutdown: finish in-flight tick, close socket, exit 0 |
 | `lola status` | Table per polling project (keyed by project name): enabled, last run, last spawn, running, last error — plus `runtimeOk` / `linearOk` health flags |
 | `lola enable <name>` / `lola disable <name>` | Live pause/resume of one polling project's poll, keyed by project name (no restart) |

@@ -45,6 +45,8 @@
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { overlayClose } from "$lib/overlayClose";
   import Setup from "$lib/views/Setup.svelte";
+  import ReviewWorkspace from "$lib/components/session/ReviewWorkspace.svelte";
+  import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
 
   // The target of every session action: the session you are looking at, and the selection only
   // when none is open. The selection can differ from the open session (ssh.open, a fork), and ⌘.
@@ -520,7 +522,9 @@
      message must cost the layout nothing. -->
 <Toast />
 
-{#if nav.overlay === "newsession"}
+{#if nav.overlay === "pr-review"}
+  <ReviewWorkspace sessionId={reviewWorkspace.session} />
+{:else if nav.overlay === "newsession"}
   <NewSession />
 {:else if nav.overlay === "sshsession"}
   <NewSSHSession />

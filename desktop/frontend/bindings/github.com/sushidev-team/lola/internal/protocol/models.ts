@@ -1151,6 +1151,14 @@ export interface RestoreCheckpointData {
     "message"?: string;
 }
 
+export interface ReviewArtifact {
+    "id": string;
+    "mime": string;
+    "bytes": number;
+    "width": number;
+    "height": number;
+}
+
 /**
  * ReviewData is Response.Data for cmd=review (PLAN P9): the outcome of a forced
  * QA review pass, flattened to render-ready fields for the CLI. Message is the
@@ -1166,6 +1174,42 @@ export interface ReviewData {
     "skipped"?: string;
     "findings"?: string;
     "message"?: string;
+}
+
+export interface ReviewImageData {
+    "dataURL": string;
+}
+
+/**
+ * ReviewPackage is a wire projection of retained material. All content is agent-provided.
+ * Keep protocol independent of filesystem/storage packages.
+ */
+export interface ReviewPackage {
+    "version": number;
+    "title": string;
+    "body": string;
+    "base": string;
+    "head": string;
+    "screens": ReviewScreen[] | null;
+    "id": string;
+    "session": string;
+    "repo": string;
+    "pr": number;
+    "createdAt": string;
+    "artifacts": ReviewArtifact[] | null;
+}
+
+export interface ReviewPackagesData {
+    "packages": ReviewPackage[] | null;
+}
+
+export interface ReviewScreen {
+    "title": string;
+    "caption"?: string;
+    "before"?: string;
+    "after": string;
+    "url"?: string;
+    "viewport"?: string;
 }
 
 /**

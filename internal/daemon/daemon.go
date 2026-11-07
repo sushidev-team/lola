@@ -165,7 +165,8 @@ type Daemon struct {
 	hookWarned map[string]bool
 
 	// reports rate-limits `lola report` per session (see report.go).
-	reports reportLimiter
+	reports         reportLimiter
+	reviewPackageMu sync.Mutex // serializes immutable publication and retained-size limits
 	// ssh is agent-assisted ssh's state and seams (ssh.go). Never nil.
 	ssh *sshState
 

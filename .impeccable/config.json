@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "desktop/frontend/src/lib/components/session/ReviewScreenshot.svelte"
+        ],
+        "createdAt": "2026-11-07T21:09:50.564Z",
+        "reason": "Agent verified: img renders only after a validated nonempty PNG/JPEG data URL resolves; loading and failure branches render text instead."
+      }
+    ]
+  }
+}

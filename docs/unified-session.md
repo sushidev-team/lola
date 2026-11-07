@@ -1320,3 +1320,22 @@ remain separate when a file is edited repeatedly; their line counts are activity
 not a synthetic net diff. Source reads show ten highlighted lines with full output on
 request. Queued messages offer Send now with immediate loading feedback; a refused
 attempt keeps the messages and displays the daemon's reason.
+
+### Retained PR review workspace
+
+Changes and PR status offer **Review PR**, a full-screen inspection surface over
+the existing mounted session. It retains the familiar diff, local checks and
+Before merge controls, and adds agent-published Markdown and captioned screenshot
+pairs. **Review material** in an ended session opens the retained packages without
+offering live checkout actions. Stack packages remain associated with their member.
+
+Material is an agent claim. The package records the submitted base/head and the
+captured bytes; matching the observed PR head does not independently verify what
+the image depicts. Failed PR reads show unknown freshness. Older package heads
+show outdated material. Refreshing never switches the package under a reviewer;
+new material has an explicit action to open it.
+
+Write-up and screen comments join the existing per-session diff-feedback draft,
+including the package and revision identities. Sending uses the existing safe
+feedback queue. No local review action posts a GitHub comment implicitly.
+The full contract and current limits are in `docs/pr-review-workspace.md`.

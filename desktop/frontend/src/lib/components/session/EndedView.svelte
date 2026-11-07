@@ -14,6 +14,7 @@
   import { store } from "$lib/store.svelte";
   import TimelineSlot from "./TimelineSlot.svelte";
   import Button from "../Button.svelte";
+  import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
 
   let { sessionId, style = "" }: { sessionId: string; style?: string } = $props();
 
@@ -47,6 +48,7 @@
           </div>
         {/if}
         <p>This session has ended. Its worktree is gone.</p>
+        <Button variant="secondary" size="xs" onclick={() => reviewWorkspace.open(sessionId)}>Review material</Button>
         {#if ended?.prUrl}
           <Button variant="secondary" size="xs" onclick={() => store.openURL(ended.prUrl ?? "")}>Open PR <span aria-hidden="true"><Icon name="external-link" size={14} /></span></Button>
         {/if}

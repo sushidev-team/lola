@@ -1186,6 +1186,7 @@ func (n *Native) withReportBriefing(prompt []byte) []byte {
 	b.WriteString(bin + " report note \"waiting on the migration to finish\"\n")
 	b.WriteString("```\n\n")
 	b.WriteString(taskboard.Briefing(bin) + "\n")
+	b.WriteString("\n## PR review material\n\nBefore handing a PR to a human, publish a review package with `" + bin + " review-package publish <manifest.json>` (use `--app <member>` for stacks). Run `" + bin + " review-package publish --help` for the JSON schema and limits. Include a Markdown explanation of what changed and why, verification actually performed, manual test steps and limitations. For visual changes, add before/after PNG or JPEG screenshots from the actual baseline and reviewed revision, with screen names, captions and viewport. Paths are relative to the session checkout or selected stack member. Omit unavailable baseline images honestly. Publish a new package after fixes. This retains material in Lola; it does not post to GitHub or prove checks passed. Publication errors must be reported, not described as success.\n")
 	b.WriteString("Report on meaningful changes only — a new plan, a finished item, a phase change, a check result, a blocker. Not every step. `" + bin + " report --help` lists every verb. Being blocked on a decision only a human can make is worth reporting even mid-turn.\n")
 	// The claim audit (internal/claimaudit) reads the transcript for the run
 	// behind a `check … pass`; saying so up front is what makes an honest agent

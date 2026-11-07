@@ -14,6 +14,7 @@
     footer,
     onkey,
     portal = false,
+    fullscreen = false,
   }: {
     title: string;
     titleHelp?: string;
@@ -24,6 +25,7 @@
     footer?: Snippet;
     onkey?: (event: KeyboardEvent) => void;
     portal?: boolean;
+    fullscreen?: boolean;
   } = $props();
 
   function placeOverlay(node: HTMLElement) {
@@ -102,15 +104,15 @@
 >
   <div
     bind:this={dialog}
-    class="flex max-h-[84vh] w-full flex-col overflow-hidden rounded-xl border border-edge bg-panel shadow-2xl"
-    style="max-width:{width}"
+    class="w-full overflow-hidden border border-edge bg-panel shadow-2xl {fullscreen ? 'grid h-dvh max-h-dvh' : 'flex max-h-[84vh] flex-col rounded-xl'}"
+    style="max-width:{fullscreen ? '100vw' : width};{fullscreen ? `grid-template-rows:auto minmax(0,1fr)${footer ? ' auto' : ''}` : ''}"
     role="dialog"
     aria-modal="true"
     aria-label={title}
     tabindex="-1"
     onkeydown={onKeydown}
   >
-    <header class="flex items-center border-b border-edge/70 px-4 py-2.5">
+    <header class="flex items-center border-b border-edge/70 py-2.5 {fullscreen ? 'drag pl-[82px] pr-4' : 'px-4'}">
       <!-- text-lg carries its own 600 + tracking: a dialog title is the one
            level that must out-rank everything inside the dialog. -->
       <h2 class="text-lg text-ink">{title}</h2>

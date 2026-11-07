@@ -93,6 +93,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(d.projectsData(ctx))
 	case "prReadiness", "addressPRFeedback", "mergePR":
 		return d.handlePRReadiness(ctx, req)
+	case protocol.CmdReviewPublish, protocol.CmdReviewPackages, protocol.CmdReviewImage:
+		return d.handleReviewPackage(req)
 	case "prs":
 		data, err := d.handlePrs(ctx, req.Args)
 		if err != nil {

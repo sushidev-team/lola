@@ -13,6 +13,7 @@
   import DiffView from "../DiffView.svelte";
   import TurnRail from "./TurnRail.svelte";
   import Button from "../Button.svelte";
+  import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
 
   let { sessionId, compact = false }: { sessionId: string; compact?: boolean } = $props();
 
@@ -34,7 +35,8 @@
   });
 </script>
 
-<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]" data-testid="changes-view">
+<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]" data-testid="changes-view">
+  <div class="flex justify-end border-b border-edge px-3 py-1"><Button size="xs" onclick={() => reviewWorkspace.open(sessionId)}>Review PR</Button></div>
   <DiffView {sessionId} {compact} turn={current?.seq ?? 0}>
     {#snippet comparison()}
       {#if compact && checkpointed && st.list.length}

@@ -1,5 +1,7 @@
 <script lang="ts">
   import { DaemonService } from '@bindings/desktop';
+  import { reviewWorkspace } from '$lib/reviewworkspace.svelte';
+  import { nav } from '$lib/nav.svelte';
   import type { PRReadinessData } from '@bindings/internal/protocol';
   import type { SessionInfo } from '$lib/store.svelte';
   import { store } from '$lib/store.svelte';
@@ -162,6 +164,7 @@
 <section data-before-merge aria-label="PR status">
   <header>
     <h3 class="cv-overview-heading">PR status</h3>
+    {#if nav.overlay !== 'pr-review'}<Button size="xs" onclick={() => reviewWorkspace.open(session.id)}>Review PR</Button>{/if}
     <button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request #{selected.number}"><Icon name="git-pull-request" size={13} />#{selected.number}<Icon name="external-link" size={11} /></button>
     <button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>
   </header>

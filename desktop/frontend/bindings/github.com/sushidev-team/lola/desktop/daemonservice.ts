@@ -498,6 +498,14 @@ export function Review(session: string, provider: string): $CancellablePromise<p
     return $Call.ByID(4119390853, session, provider);
 }
 
+export function ReviewPackageImage(session: string, packageID: string, artifact: string): $CancellablePromise<protocol$0.ReviewImageData> {
+    return $Call.ByID(4205318208, session, packageID, artifact);
+}
+
+export function ReviewPackages(session: string): $CancellablePromise<protocol$0.ReviewPackagesData> {
+    return $Call.ByID(1320644344, session);
+}
+
 /**
  * Revive relaunches a dead-pane session on its surviving worktree.
  */

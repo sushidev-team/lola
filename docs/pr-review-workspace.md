@@ -49,8 +49,10 @@ follow-up work.
 
 Provide a small agent-facing CLI that accepts a structured manifest containing a
 Markdown write-up, base/head commit identities, and named screenshot pairs. The
-CLI sends content through the existing daemon transport, including the container
-hook bridge where supported. All three coding agents use the same contract.
+CLI sends the manifest through the existing daemon transport, including the
+authenticated container hook bridge. The daemon copies images from the known
+session checkout using relative paths, so image bytes do not enlarge the socket
+request limit. All three coding agents use the same contract.
 
 The daemon binds publication to the submitting session, validates bounded input,
 and stores an immutable package outside the disposable worktree. Record a package
@@ -120,6 +122,69 @@ record separately any native WKWebView verification still outstanding.
 
 ## Status
 
-- Plan committed before implementation.
-- Implementation and validation are pending; update this section with completed
-  slices and concrete remaining work.
+- Plan committed before implementation as `0346cb6`.
+- Implemented: immutable publication and retained image capture; agent CLI and
+  launch instructions; sandbox session-token authorization; desktop full-screen
+  Review from Changes and PR status; Markdown and screenshot pairs; image zoom;
+  package history and freshness; shared code/material feedback; retained review
+  access from ended sessions, including stack member packages.
+- A new publication does not replace the revision currently being inspected.
+  Material comments retain package, base/head, section and screenshot identities.
+  Drafts survive navigation; failed sends retain the batch.
+- Revision-specific independent verification, screenshot-region annotations,
+  browser capture and a changes-since-review comparison remain follow-up work.
+- Current code diffs explicitly represent the live checkout, not a frozen package
+  diff. Existing local-check provenance and merge policy are unchanged.
+- Initial storage limits: 64 KiB manifest; four screenshot pairs; PNG/JPEG only;
+  4 MiB and 20 megapixels per image; 20 packages or 128 MiB per session, shared by
+  its stack members. Reaching a limit refuses publication rather than deleting
+  earlier review evidence. A retention-management UI is not included yet.
+- Validation: build, vet, formatting, publication/storage/CLI regressions, 52
+  relevant frontend tests, Svelte checks (zero errors/warnings), production frontend
+  build, and isolated Chromium/WebKit fixtures. `make check` reaches one unrelated
+  failure, `TestSetupGeneralSettingsAreOptionalAndEditable`; the same assertion
+  fails on committed `0346cb6` without this implementation.
+- Native packaged WKWebView and a live coding-agent publication have not been
+  exercised. The running daemon has not been installed or restarted.
+
+## Using the first release
+
+Run inside a Lola agent session. Capture images under the checkout, then write a
+manifest such as:
+
+```json
+{
+  "version": 1,
+  "title": "Settings form spacing",
+  "body": "## What changed\nExplain the change and why.\n\n## Verification\nName checks actually run and any limitations.\n\n## Manual review\nDescribe the flow to inspect.",
+  "base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "screens": [
+    {
+      "title": "Settings",
+      "before": ".lola/review-before.png",
+      "after": ".lola/review-after.png",
+      "caption": "Explain the visible difference.",
+      "viewport": "1440 × 900",
+      "url": "http://localhost:3000/settings"
+    }
+  ]
+}
+```
+
+Replace the example hashes with full commit hashes for the captures. Paths are
+relative to the session checkout, not the manifest directory. Omit `before` when
+no baseline exists; use `"screens": []` for nonvisual work.
+
+```sh
+lola review-package publish manifest.json
+# Stack: image paths are relative to this member's checkout.
+lola review-package publish manifest.json --app web
+```
+
+Success prints a JSON receipt; failure exits nonzero. Identical content returns
+the original package. Publication retains material locally and never posts to
+GitHub. In the desktop, select **Review PR** from Changes or PR status. Ended
+sessions offer **Review material** without live checkout or send actions.
+
+See [fixture captures and validation](evaluation/pr-review-workspace/README.md).
