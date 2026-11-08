@@ -2,11 +2,12 @@
   // One tool call from the agent's own log: a claim, including its "ok". That is why it has no
   // success tick and never the word "exit". Those belong to a plate, which lola
   // witnessed. Surface accents identify activity, not verified success. A bounded excerpt stays
-  // visible on standalone rows; full output opens only at the reader's request.
+  // visible only on the current row; full output opens only at the reader's request.
   //
   // Hand-rolled buttons on purpose, like the other card-shaped rows: the row IS the control, and
   // a Button's padding and hover chip would break these rows' shared columns.
   import { tooltip } from "$lib/tooltip";
+  import { disclosureSlide } from "$lib/disclosureMotion";
   import { changes } from "$lib/changes.svelte";
   import { store } from "$lib/store.svelte";
   import { ssh, sshClock } from "$lib/ssh.svelte";
@@ -88,12 +89,12 @@
     <div class="cv-tool-summary" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }}>{@render cells()}</div>
   {/if}
 
-  {#if !open && (!nested || tool.preview && row.previewOpen && !row.settled)}
+  {#if !open && active}
     <ToolPreview text={tool.preview || (tool.detail !== row.target ? tool.detail : "") || ""} {running} />
   {/if}
 
   {#if open}
-    <div class="min-w-0 max-w-full pb-2 pl-4" data-tool-expansion>
+    <div class="min-w-0 max-w-full pb-2 pl-4" data-tool-expansion transition:disclosureSlide>
       {#if toChanges && session}<Button size="xs" onclick={() => { changes.want(sessionId, row.target); if (session) ssh.openChanges(session); }}>View changes</Button>{/if}
       {#if tool.subagent}
         {#if thread?.loading}

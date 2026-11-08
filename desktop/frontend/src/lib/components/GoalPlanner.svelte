@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import { tick, onDestroy } from "svelte";
   import { DaemonService } from "@bindings/desktop";
   import type { Record as Proposal, Summary, Request } from "@bindings/internal/goalplan";
@@ -161,9 +162,9 @@
               {#if proposal.edits?.length}
                 <h5 class="font-medium text-ink">Revision history</h5>
                 <ol class="space-y-2 text-faint">{#each proposal.edits as edit}<li class="selectable break-words">Revision {edit.revision} · {edit.at}<br />{edit.request.reason}</li>{/each}</ol>
-                {#if proposal.model_output}<details><summary class="cursor-pointer text-ink">Original model proposal</summary><div class="mt-3"><GoalPlanTasks output={proposal.model_output} labels={proposal.input.labels} /></div></details>{/if}
+                {#if proposal.model_output}<details><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Original model proposal</summary><div class="mt-3"><GoalPlanTasks output={proposal.model_output} labels={proposal.input.labels} /></div></details>{/if}
               {/if}
-              <details><summary class="cursor-pointer text-ink">Full proposal record</summary><pre class="selectable mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs text-faint">{JSON.stringify(proposal, null, 2)}</pre></details>
+              <details><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Full proposal record</summary><pre class="selectable mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs text-faint">{JSON.stringify(proposal, null, 2)}</pre></details>
             </div>
           </Disclosure>
           {#if acceptedID}

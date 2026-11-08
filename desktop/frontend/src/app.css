@@ -641,6 +641,13 @@ input[type="number"]::-webkit-inner-spin-button {
   overflow: hidden;
   background: color-mix(in srgb, var(--color-sel) 18%, var(--color-canvas));
 }
+/* Disclosure controls always use the shared drawn Chevron, never native triangles. */
+summary { list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::marker { content: ""; }
+summary > .disclosure-chevron { margin-right: 6px; vertical-align: -2px; color: var(--color-ink-2); }
+details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
+
 .cv-answer-section > summary, .cv-system-message > summary {
   display: flex;
   align-items: center;

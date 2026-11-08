@@ -53,9 +53,25 @@ it('uses short author labels and preserves legacy detail behind outcome summarie
 });
 it('orders explicit risk estimates without inferring ratings from alarming prose',()=>{
   const result=reviewOverview({title:'Review',body:'## Risks\n- **Minor styling** — Likelihood: low; Impact: low. Basis: cosmetic only.\n- **Unassessed security issue** — Catastrophic critical failure is possible.\n- **Mail delivery** — Likelihood: medium; Impact: high. Outcome: users cannot sign in.\n- **Deployment lockout** — Likelihood: high; Impact: high.'});
-  expect(result.risks.map(r=>r.title)).toEqual(['Deployment lockout','Mail delivery','Unassessed security issue','Minor styling']);
+  expect(result.risks.map(r=>r.title)).toEqual(['Deployment lockout','Users cannot sign in','Unassessed security issue','Minor styling']);
   expect(result.risks[2]).toMatchObject({likelihood:'unknown',impact:'unknown'});
   expect(result.risks[1].body).toContain('users cannot sign in');
   expect(reviewOverview({title:'Review',body:'## Risks\nNo known risks.'})).toMatchObject({riskReportProvided:true,risks:[]});
   expect(reviewOverview({title:'Review',body:''}).riskReportProvided).toBe(false);
+});
+
+it('reads new behavior from legacy after fields and uses consequences as risk headings',()=>{
+  const result=reviewOverview({title:'Email verification',body:'## Changes\n- **Require email confirmation before opening the workspace**\n  Before: New accounts entered immediately.\n  After: New accounts confirm their email first.\n  Details: Middleware protects the route group.\n## Risks\n- **Mail delivery**\n  Likelihood: unknown; Impact: high\n  Outcome: New users cannot finish registration.\n  Basis: Production email delivery has not been verified.\n- Existing accounts: Users could be locked out if backfill is skipped.'});
+  expect(result.changes[0]).toMatchObject({title:'Require email confirmation before opening the workspace',description:'New accounts confirm their email first.'});
+  expect(result.changes[0].body).toContain('Middleware');
+  expect(result.risks[0].title).toBe('New users cannot finish registration');
+  expect(result.risks[1].title).toBe('Users could be locked out if backfill is skipped');
+  const legacy=reviewOverview({title:'Legacy',body:'## Changes\n- Add email verification.'});
+  expect(legacy.changes[0]).toMatchObject({description:''});
+});
+
+it('extracts user-facing sub-features and a concise assessment step',()=>{
+  const result=reviewOverview({title:'Review',body:'## Changes\n- **Confirm email before entering**\n  New: Enter the workspace after confirming your address.\n  Includes:\n    - See which address received the link.\n    - Request another confirmation link.\n  Details: User implements MustVerifyEmail.\n## Risks\n- **New users cannot finish registration**\n  Likelihood: unknown; Impact: high\n  Outcome: Mail delivery failure blocks registration.\n  Assess: Send a confirmation email using production mail settings.\n  Basis: Only test mailers were exercised.'});
+  expect(result.changes[0]).toMatchObject({description:'Enter the workspace after confirming your address.',parts:['See which address received the link.','Request another confirmation link.']});
+  expect(result.risks[0]).toMatchObject({description:'Mail delivery failure blocks registration.',assess:'Send a confirmation email using production mail settings.'});
 });

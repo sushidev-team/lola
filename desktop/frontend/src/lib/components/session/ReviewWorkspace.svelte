@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import { DaemonService, TalkService } from '@bindings/desktop';
   import { SvelteMap } from 'svelte/reactivity';
   import type { ReviewPackage as Package, PRReadinessData } from '@bindings/internal/protocol';
@@ -61,7 +62,7 @@
     const key = assessRisks ? assessmentKey : target;
     if (!canRequest || requests.get(key)?.state === 'sending' || requests.get(key)?.state === 'accepted') return;
     const scope = lane ? ` for stack member ${JSON.stringify(lane.id)}${number ? ` (PR #${number})` : ''}` : number ? ` for PR #${number}` : ' for this session';
-    const text = `${assessRisks ? `Assess risks in review package ${current?.id}, retaining its screenshots and evidence. ` : ''}Prepare and publish review material in Lola${scope}: a concise write-up using ## Summary (one sentence), ## Changes (at most three bullets, each starting with a bold 3–6 word behavior summary; keep filenames and implementation detail out of the label), ## Verification (commands and results), and ## Risks (only unresolved items; each bullet starts with a bold 3–6 word label followed by Likelihood: low|medium|high|unknown; Impact: low|medium|high|unknown; Outcome: one short sentence; Basis: a brief rationale. Estimate likelihood and severity separately from evidence; use unknown when unsupported, never invent probabilities). Reuse screenshots and test results already collected during implementation and testing when they still describe the reviewed revision. Do not rerun checks or recreate captures solely to format this package. Capture or verify only missing or stale evidence. Put extended technical detail under ## Details. Include before/after screenshots for visual changes where available; explain any missing baseline. Use the actual PR base and head revisions. Run lola review-package publish --help for the manifest format, then publish the package${lane ? ` with --app ${JSON.stringify(lane.id)}` : ''}. This request is to document the current changes; do not modify application code or create a new PR.`;
+    const text = `${assessRisks ? `Assess risks in review package ${current?.id}, retaining its screenshots and evidence. ` : ''}Prepare and publish review material in Lola${scope}: a concise write-up using ## Summary (one sentence), ## Changes (at most three bullets, each starting with a bold 3–8 word user-visible outcome; under each bullet add an indented New: sentence of at most 16 words describing the new capability. Add an indented Includes: list with 2–4 nested bullets describing user-facing sub-features, not classes or files. Put technical detail under Details:; keep filenames out of labels), ## Verification (commands and results), and ## Risks (only unresolved items; each bullet starts with a bold concrete failure consequence, not a topic label (for example: New users cannot finish registration, not Mail delivery), followed by Likelihood: low|medium|high|unknown; Impact: low|medium|high|unknown; Outcome: one short plain-language sentence; Assess: one concrete next step to check the risk (not a claim it was performed); Basis: a brief rationale. Estimate likelihood and severity separately from evidence; use unknown when unsupported, never invent probabilities). Reuse screenshots and test results already collected during implementation and testing when they still describe the reviewed revision. Do not rerun checks or recreate captures solely to format this package. Capture or verify only missing or stale evidence. Put extended technical detail under ## Details. Include before/after screenshots for visual changes where available; explain any missing baseline. Use the actual PR base and head revisions. Run lola review-package publish --help for the manifest format, then publish the package${lane ? ` with --app ${JSON.stringify(lane.id)}` : ''}. This request is to document the current changes; do not modify application code or create a new PR.`;
     requests.set(key, { state: 'sending', message: '' });
     try {
       // Use the conversation's safe send path, independently of unsent review comments.
@@ -156,8 +157,8 @@
 </script>
 
 {#snippet checks()}
-  {#if reviewSession}<BeforeMerge session={reviewSession}/>{/if}
-  {#if session}<details class="local-checks"><summary>Local checks</summary><div class="mt-3"><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
+  {#if reviewSession}<BeforeMerge session={reviewSession} reviewLayout/>{/if}
+  {#if session}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
 {/snippet}
 {#snippet reviewFeedback()}
   <section aria-label="Review feedback" class="review-feedback">
@@ -169,7 +170,7 @@
     {:else if !session}<p class="text-sm text-faint">Session ended. Review material is retained; feedback is unavailable.</p>{/if}
     {#if count}
       {#if feedback.draftsFor(sessionId).length}<p class="text-sm text-ink-2">{feedback.draftsFor(sessionId).length} code comments</p>{/if}
-      {#if notes}<details><summary>Inspect feedback draft</summary><textarea aria-label="Feedback draft" class="review-input mt-2" rows="6" value={notes} oninput={e => feedback.setNote(sessionId,e.currentTarget.value)}></textarea></details>{/if}
+      {#if notes}<details><summary><Chevron class="disclosure-chevron" />Inspect feedback draft</summary><textarea aria-label="Feedback draft" class="review-input mt-2" rows="6" value={notes} oninput={e => feedback.setNote(sessionId,e.currentTarget.value)}></textarea></details>{/if}
       <div><Button size="sm" variant="primary" loading={feedback.isSending(sessionId)} disabled={!session} onclick={send}><Icon name="arrow-up" size={14}/>Send feedback to agent</Button></div>
     {/if}
     {#if notice}<p role="status" class="text-sm text-ink-2">{notice}</p>{/if}
@@ -183,7 +184,7 @@
     </div>
     <div class="flex min-w-0 flex-wrap items-center gap-2">
       {#if lanes.length}<Select aria-label="Review repository" value={lane?.id} onchange={e => app = e.currentTarget.value}>{#each lanes as a}<option value={a.id}>{a.label}</option>{/each}</Select>{/if}
-      {#if packages.length}<Select aria-label="Review version" value={current?.id} onchange={e => selected = e.currentTarget.value}>{#each packages as p,i}<option value={p.id}>{i === 0 ? 'Latest · ' : ''}{p.head.slice(0,8)} · {new Date(p.createdAt).toLocaleDateString()}</option>{/each}</Select>{/if}
+      {#if packages.length}<Select aria-label="Review version" value={current?.id} onchange={e => selected = e.currentTarget.value}>{#each packages as p,i}<option value={p.id} data-selected-label={i === 0 ? 'Latest' : undefined} data-description={`Commit ${p.head.slice(0,8)}`}>{i === 0 ? 'Latest · ' : ''}{new Date(p.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'})}</option>{/each}</Select>{/if}
       <Button size="sm" icon aria-label="Refresh review" title="Refresh review" loading={loading} onclick={refresh}><Icon name="refresh-cw" size={14} /></Button>
     </div>
   </div>
@@ -228,15 +229,23 @@
 </Modal>
 
 <style>
-  .review-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:14px 24px; border-bottom:1px solid var(--color-edge); }
+  summary { list-style:none; }
+  summary::-webkit-details-marker { display:none; }
+  summary::marker { content:""; }
+  summary > :global(.disclosure-chevron) { margin-right:6px; vertical-align:-2px; color:var(--color-ink-2); }
+  details[open] > summary > :global(.disclosure-chevron) { transform:rotate(90deg); }
+  .review-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:12px 28px; background:var(--color-canvas); }
   .review-layout { display:grid; grid-template-columns:minmax(0,1fr); min-height:0; }
   .review-layout.panel-open { grid-template-columns:minmax(0,1fr) 330px; }
-  .review-tabs :global([role=tablist]) { margin-bottom:0; border-bottom:0; }
-  .review-tabs { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-right:16px; border-bottom:1px solid var(--color-edge); }
+  .review-tabs :global([role=tablist]) { margin-bottom:0; border:0; gap:4px; }
+  .review-tabs :global([role=tab]) { margin:0; border:0; border-radius:7px; padding:7px 14px; font-size:12px; color:var(--color-ink-2); }
+  .review-tabs :global([role=tab][aria-selected=true]) { background:var(--color-accent-fill); color:var(--color-accent-ink); }
+  .review-tabs :global([role=tab]:hover) { color:var(--color-ink); }
+  .review-tabs { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 28px 12px; background:var(--color-canvas); border-bottom:1px solid color-mix(in srgb,var(--color-edge) 55%,transparent); }
   .review-visuals { min-height:0; overflow:hidden; }
   .review-material { width:100%; min-width:0; }
   .review-main { display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; }
-  .review-material { overflow:auto; padding:28px 32px 64px; }
+  .review-material { overflow:auto; padding:40px 40px 64px; background:var(--color-canvas); }
   .review-feedback { display:grid; gap:12px; }
   .feedback-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .feedback-heading h2 { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; }
@@ -247,7 +256,9 @@
   .review-toolbar :global(.lola-select) { width:auto; max-width:350px; }
   .review-toolbar :global(select) { max-width:350px; }
   .review-aside { display:grid; align-content:start; gap:28px; min-width:0; overflow:auto; padding:24px 20px; border-left:1px solid var(--color-edge); background:var(--color-canvas); }
-  .review-input { width:100%; resize:vertical; padding:10px; border:1px solid var(--color-edge); border-radius:6px; background:var(--color-panel); color:var(--color-ink); font-size:13px; line-height:20px; }
+  .review-input { width:100%; resize:vertical; padding:12px; border:1px solid color-mix(in srgb,var(--color-edge) 70%,transparent); border-radius:8px; background:var(--color-canvas); color:var(--color-ink); font-size:13px; line-height:20px; }
+  .review-input:focus { border-color:var(--color-accent); outline:none; }
+  .feedback-heading h2 :global(svg) { color:var(--color-info); }
   .empty-review { max-width:48ch; padding-top:24px; }
   @media(max-width:1000px) { .review-material { padding:24px 20px; } }
   @media(max-width:740px) { .review-layout { display:block; overflow:auto; } .review-main { display:grid; min-height:0; } .review-visuals { height:calc(100dvh - 210px); min-height:500px; } .review-tabs { flex-wrap:wrap; padding-right:8px; gap:4px; } .review-material { overflow:visible; } .review-code { height:70vh; } .review-aside { overflow:visible; border-left:0; border-top:1px solid var(--color-edge); } .review-toolbar { padding:12px 16px; } }

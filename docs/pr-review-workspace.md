@@ -198,11 +198,17 @@ changes and visual evidence on the left, readiness, risks and feedback on the
 right; narrow windows stack them. Verification prose is no longer an overview
 section. Local checks remain available on demand.
 
-Author Changes as up to three bullets with bold 3–6 word behavior labels;
-implementation details stay in the expansion. Legacy prose uses a short source
-clause or outcome, retaining the full original body. Risks use bold short labels
-and explicit `Likelihood: low|medium|high|unknown; Impact: low|medium|high|unknown`,
-followed by one-sentence Outcome and Basis. Only explicit ratings are displayed;
+Author Changes as up to three feature groups with bold 3–8 word outcome labels,
+an indented `New:` sentence describing the new capability, and `Includes:` with
+2–4 nested user-facing sub-feature bullets. The overview shows the new capability
+and expands into sub-features, without displaying implementation prose. Older
+`After:` fields supply the new-capability sentence without comparison labels.
+Risks use concrete failure-consequence headings and explicit
+`Likelihood: low|medium|high|unknown; Impact: low|medium|high|unknown`, followed by
+one-sentence `Outcome:`, `Assess:` (a proposed check, not a completed action), and
+`Basis:`. Expanded risks show only the outcome and assessment step. Source notes
+are retained in the stored package but not repeated in either feature or risk
+expansions. Only explicit ratings are displayed;
 legacy or unsupported ratings remain Not rated. Order uses likelihood × impact
 (low=1, medium=2, high=3), with unrated items below scores 6/9 and before scores
 1–4. This is an agent assessment, not independently measured probability.

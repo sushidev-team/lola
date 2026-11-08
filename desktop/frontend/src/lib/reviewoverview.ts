@@ -44,14 +44,46 @@ export function compactReviewLabel(body: string): string {
       .replace(/\b(?:the|a|an|their|now|whole|must)\b/gi, '').replace(/\s+/g, ' ').trim();
   }
   const words = label.replace(/[.;:—–]+$/, '').trim().split(/\s+/).filter(Boolean);
-  let short = words.slice(0,6).join(' ');
-  while (short.length > 54 && short.includes(' ')) short = short.slice(0,short.lastIndexOf(' '));
-  if (short.length > 54) short = 'Implementation update';
+  let short = words.slice(0,explicit ? 8 : 6).join(' ');
+  while (short.length > (explicit ? 80 : 54) && short.includes(' ')) short = short.slice(0,short.lastIndexOf(' '));
+  if (short.length > (explicit ? 80 : 54)) short = 'Implementation update';
   short = short.replace(/\s+(?:at|on|to|with|from|for|in|uses)$/i, '');
   return (short || 'Review item').replace(/^./, c => c.toUpperCase());
 }
+/** Explicit author fields support visual comparisons without inferring behavior. */
+function reviewField(body: string, field: string): string {
+  return plainReviewText(body).match(new RegExp(`\\b${field}:\\s*(.*?)(?=\\s+(?:Before|After|New|Includes|Details|Likelihood|Probability|Impact|Severity|Outcome|Basis|Assess):|$)`, 'i'))?.[1]?.trim() || '';
+}
+export type ReviewChange = OverviewItem & { description: string; parts: string[] };
+function featureParts(body: string): string[] {
+  const parts: string[] = [];
+  let includes = false;
+  for (const line of body.split('\n')) {
+    if (/^\s+(?:\*\*)?Includes:(?:\*\*)?\s*$/i.test(line)) { includes = true; continue; }
+    if (includes && /^\s+[\w ]+:/.test(line)) includes = false;
+    const part = includes && line.match(/^\s+[-*+]\s+(.+)/);
+    if (part) parts.push(shortLine(part[1],150));
+  }
+  return parts;
+}
+export function reviewChange(item: OverviewItem): ReviewChange {
+  return {...item,title:compactReviewLabel(item.body),description:shortLine(reviewField(item.body,'New') || reviewField(item.body,'After'),160),parts:featureParts(item.body)};
+}
+/** Consequences need enough room to remain meaningful; never truncate them to
+ * a topic noun or infer a failure from an unrelated category. */
+export function riskHeadline(body: string): string {
+  const explicit = body.replace(/^\s*(?:[-+*]|\d+[.)])\s+/, '').match(/^\*\*(.+?)\*\*/)?.[1];
+  const outcome = reviewField(body,'Outcome');
+  // Short legacy topic labels can defer to an explicit outcome. Preserve newly
+  // authored consequence headings instead of clipping their longer rationale.
+  const heading = explicit && (explicit.split(/\s+/).length > 3 || !outcome) ? explicit : outcome;
+  if (heading) return shortLine(heading,110).replace(/[.!]$/, '').replace(/^./, c => c.toUpperCase());
+  const text = plainReviewText(body).replace(/\b(?:Likelihood|Probability|Impact|Severity)\s*:\s*(?:low|medium|high|unknown)[.;|]?/gi,'');
+  const description = text.replace(/^[^:]{1,50}:\s*/, '');
+  return shortLine(description,110).replace(/[.!]$/, '');
+}
 export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
-export type ReviewRisk = OverviewItem & { likelihood: RiskLevel; impact: RiskLevel; priority: number };
+export type ReviewRisk = OverviewItem & { likelihood: RiskLevel; impact: RiskLevel; priority: number; description: string; assess: string };
 export const riskWeight: Record<RiskLevel,number> = {unknown:0,low:1,medium:2,high:3};
 export function reviewRisk(item: OverviewItem): ReviewRisk {
   const text = plainReviewText(item.body);
@@ -59,10 +91,10 @@ export function reviewRisk(item: OverviewItem): ReviewRisk {
   const impact = (text.match(/\b(?:impact|severity)\s*:\s*(low|medium|high|unknown)\b/i)?.[1]?.toLowerCase() || 'unknown') as RiskLevel;
   // Unknowns need review before low-rated risks; they are never presented as low.
   const priority = likelihood === 'unknown' || impact === 'unknown' ? 5 : riskWeight[likelihood] * riskWeight[impact];
-  return {...item,title:compactReviewLabel(item.body),likelihood,impact,priority};
+  return {...item,title:riskHeadline(item.body),likelihood,impact,priority,description:shortLine(reviewField(item.body,'Outcome'),220),assess:shortLine(reviewField(item.body,'Assess'),220)};
 }
 export function reviewOverview(pkg: Pick<ReviewPackage,'title'|'body'>) {
-  const changes: OverviewItem[] = [], verification: OverviewItem[] = [], risks: ReviewRisk[] = [], details: OverviewItem[] = [];
+  const changes: ReviewChange[] = [], verification: OverviewItem[] = [], risks: ReviewRisk[] = [], details: OverviewItem[] = [];
   let riskReportProvided = false;
   let summary = '';
   for (const section of reviewSections(pkg.body)) {
@@ -72,7 +104,7 @@ export function reviewOverview(pkg: Pick<ReviewPackage,'title'|'body'>) {
     } else if (/chang|feature|implement|what.*done/i.test(section.title)) {
       for (const item of reviewItems(section.body)) {
         if (/^[\w.-]+ (?:is|was|remains) unchanged\b/i.test(plainReviewText(item.body))) details.push({title:'Unchanged scope',body:item.body});
-        else changes.push({...item,title:compactReviewLabel(item.body)});
+        else changes.push(reviewChange(item));
       }
     }
     else if (/risk|unresolved|remaining|limitation|caveat/i.test(section.title)) {

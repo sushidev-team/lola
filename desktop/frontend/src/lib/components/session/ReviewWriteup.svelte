@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import { reviewSections } from '$lib/reviewmaterial';
   import SSHRich from '../ssh/SSHRich.svelte';
   let { sessionId, body }: { sessionId: string; body: string } = $props();
@@ -8,7 +9,7 @@
 <div class="writeup" aria-label="Agent review write-up">
   {#each sections as section}
     <details open={section.title.toLowerCase() === 'summary' && section.body.length < 500}>
-      <summary>{section.title}</summary>
+      <summary><Chevron class="disclosure-chevron" />{section.title}</summary>
       <div class="section-body selectable"><SSHRich {sessionId} text={section.body} /></div>
     </details>
   {/each}

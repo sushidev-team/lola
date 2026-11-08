@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import { onMount, onDestroy, tick, type Snippet } from "svelte";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
@@ -850,7 +851,7 @@
           {@render stackNote()}
         {/if}
         <details class="pt-1">
-          <summary class="cursor-pointer text-faint">Advanced identity</summary>
+          <summary class="cursor-pointer text-faint"><Chevron class="disclosure-chevron" />Advanced identity</summary>
           <div class="mt-3">
         {@render textRow(
           "ID",

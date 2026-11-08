@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import Button from "./Button.svelte";
   import Checkbox from "./Checkbox.svelte";
   import Select from "./Select.svelte";
@@ -53,7 +54,7 @@
     {#each profiles as p, i (p)}
       {@const specialty = specialties.find((s) => s.kind === p.kind)}
       <details open={p === added} class="border-b border-edge pb-3">
-        <summary class="cursor-pointer py-2 text-ink">
+        <summary class="cursor-pointer py-2 text-ink"><Chevron class="disclosure-chevron" />
           <span class="font-medium">{label(p.kind)}</span>
           <span class="ml-2 break-all text-sm text-faint">{p.id} · {providerLabel(p.provider)} · {p.enabled ? "Enabled" : "Disabled"}</span>
         </summary>

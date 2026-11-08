@@ -18,6 +18,7 @@ it('shows an evidence score, compact rows, and actionable screenshot previews',a
   expect(onScreen).toHaveBeenCalledWith(1);
   expect(screen.queryByRole('heading',{name:'Verification'})).toBeNull();
   expect(screen.getAllByText('Not rated')).toHaveLength(2);
+  for (const rating of screen.getAllByText('Not rated')) expect(rating).toBeVisible();
   await fireEvent.click(screen.getByRole('button',{name:'Ask agent to assess risks'}));
   expect(onAssessRisks).toHaveBeenCalledOnce();
 });
@@ -28,4 +29,24 @@ it('does not score a stale revision and keeps previews actionable if images fail
   expect(screen.getByRole('img',{name:'Confidence not scored: revision unconfirmed'})).toBeInTheDocument();
   await screen.findAllByText('Open screenshot');
   expect(screen.getByRole('button',{name:'Review screenshot: Phone'})).toBeEnabled();
+});
+
+it('shows feature descriptions with supporting details behind a disclosure',()=>{
+  render(ReviewOverview,{pkg:{...pkg as object,body:'## Changes\n- **Confirm email before entering**\n  Before: Immediate workspace access.\n  After: Confirm email first.\n## Risks\n- **Mail delivery** — Outcome: New users cannot finish registration. Likelihood: unknown; Impact: high.'} as never,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});
+  expect(screen.queryByText('Before',{exact:true})).toBeNull();
+  expect(screen.queryByText('After',{exact:true})).toBeNull();
+  expect(screen.getByText('Confirm email first.')).toBeVisible();
+  expect(screen.getByText('New users cannot finish registration',{selector:'.risk-title'})).toBeVisible();
+});
+
+it('expands sub-features and risk descriptions without showing raw implementation prose',async()=>{
+  render(ReviewOverview,{pkg:{...pkg as object,body:'## Changes\n- **Confirm email before entering**\n  New: Confirm your address to open the workspace.\n  Includes:\n    - Request another link.\n    - See the destination address.\n  Details: User implements MustVerifyEmail.\n## Risks\n- **Mail delivery**\n  Outcome: New users cannot finish registration.\n  Assess: Check production email delivery.\n  Likelihood: unknown; Impact: high'} as never,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});
+  const feature=screen.getByText('Confirm email before entering',{selector:'.feature-heading > span'}).closest('summary')!;
+  await fireEvent.click(feature);
+  expect(screen.getByText('Request another link.',{selector:'.feature-parts span'})).toBeInTheDocument();
+  expect(screen.queryByText('Source notes')).toBeNull();
+  expect(screen.queryByText(/MustVerifyEmail/)).toBeNull();
+  await fireEvent.click(screen.getByText('New users cannot finish registration',{selector:'.risk-title'}).closest('summary')!);
+  expect(screen.getByRole('heading',{name:'How to assess it'})).toBeInTheDocument();
+  expect(screen.getByText('Check production email delivery.',{selector:'.risk-detail p'})).toBeInTheDocument();
 });

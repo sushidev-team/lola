@@ -166,7 +166,8 @@ describe("Timeline expansion", () => {
     expect(container.querySelector('[data-row="d"] [data-status="ok"]')).not.toBeNull();
     expect(container.querySelector('[data-row="e"] [data-status="running"]')).not.toBeNull();
     expect(container.querySelector('[data-row="d"]')).toBe(current);
-    expect(current?.querySelector('[data-preview]')).toBe(preview);
+    expect(current?.querySelector('[data-preview]')).toBeNull();
+    expect(container.querySelector('[data-row="e"] [data-preview]')).toHaveTextContent('Waiting for output');
     await fireEvent.click(container.querySelector('[data-run] .cv-call-group-toggle')!);
     expect(container.querySelectorAll('[data-run] [data-tool]')).toHaveLength(3);
   });
@@ -516,9 +517,9 @@ describe("Timeline rail", () => {
     const [first, second] = container.querySelectorAll("[data-status=error]");
     expect(first.textContent).toContain("failed");
     expect(first.querySelector(".text-bad")).toBeNull();
-    expect(first.querySelector("[data-preview]")).toHaveTextContent("boom");
+    expect(first.querySelector("[data-preview]")).toBeNull();
     expect(second.querySelector(".text-bad")).not.toBeNull();
-    expect(second.querySelector("[data-preview]")).not.toBeNull();
+    expect(second.querySelector("[data-preview]")).toBeNull();
     expect(container.querySelectorAll('[data-rail-mark="tick-bad"]')).toHaveLength(1);
   });
 
@@ -930,7 +931,7 @@ describe('current activity and send receipts', () => {
     expect(editRow.querySelector('[data-tool-expansion]')).not.toBeNull();
     await fireEvent.click(editRow.querySelector('button')!);
     expect(editRow.querySelector('[data-tool-expansion]')).toBeNull();
-    expect(editRow.querySelector('[data-preview]')).not.toBeNull();
+    expect(editRow.querySelector('[data-preview]')).toBeNull();
   });
 
   it('shows a local sending receipt and replaces it with the daemon item without duplication', async () => {

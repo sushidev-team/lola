@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import GoalRollout from "./GoalRollout.svelte";
   import { tick, untrack } from "svelte";
   import { DaemonService } from "@bindings/desktop";
@@ -155,7 +156,7 @@
           <span class="num text-faint">Revision {current.revision}</span>
         </div>
         <details class="text-sm">
-          <summary class="cursor-pointer text-ink">Acceptance criteria</summary>
+          <summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Acceptance criteria</summary>
           <ul class="mt-2 list-disc space-y-1 pl-5 text-faint">{#each current.acceptance as criterion}<li class="selectable break-words">{criterion}</li>{/each}</ul>
           {#if current.nonGoals?.length}<p class="mt-3 text-ink">Outside this goal</p><ul class="mt-1 list-disc space-y-1 pl-5 text-faint">{#each current.nonGoals as nonGoal}<li class="selectable break-words">{nonGoal}</li>{/each}</ul>{/if}
         </details>
@@ -174,7 +175,7 @@
             {#each current.tasks as task, i (task.id)}
               <li class="py-2">
                 <details>
-                  <summary class="cursor-pointer text-sm"><span class="text-ink">{i + 1}. {task.title}</span> <span class="text-faint">— {task.state}{task.replacedBy?.length ? " · decomposed" : ""}</span></summary>
+                  <summary class="cursor-pointer text-sm"><Chevron class="disclosure-chevron" /><span class="text-ink">{i + 1}. {task.title}</span> <span class="text-faint">— {task.state}{task.replacedBy?.length ? " · decomposed" : ""}</span></summary>
                   <div class="mt-2 flex flex-col gap-2 pl-3 text-sm">
                     {#if task.apps?.length}<p class="text-faint">Repositories: {task.apps.join(", ")}</p>{/if}
                     {#if task.blockedBy?.length}<p class="text-faint">Depends on tasks {task.blockedBy.join(", ")}</p>{/if}

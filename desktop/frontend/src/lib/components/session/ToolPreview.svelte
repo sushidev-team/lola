@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
+  import { disclosureSlide } from "$lib/disclosureMotion";
 
   let { text = "", running = false }: { text?: string; running?: boolean } = $props();
   // Use the bounded transcript excerpt; opening details is still the only output fetch.
@@ -20,4 +21,4 @@
   onDestroy(() => clearTimeout(timer));
 </script>
 
-<div class="cv-tool-preview selectable font-mono" data-preview><span>{shown || (running ? "Waiting for output…" : "No output recorded.")}</span></div>
+<div class="cv-tool-preview selectable font-mono" data-preview transition:disclosureSlide|global><span>{shown || (running ? "Waiting for output…" : "No output recorded.")}</span></div>

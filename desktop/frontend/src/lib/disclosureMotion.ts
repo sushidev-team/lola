@@ -1,3 +1,12 @@
+import { slide } from 'svelte/transition';
+import { cubicOut } from 'svelte/easing';
+
+/** Reversible height reveal for conditional disclosure content. */
+export function disclosureSlide(node: HTMLElement) {
+  const reduce = !node.animate || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  return slide(node, { duration: reduce ? 0 : 200, easing: cubicOut });
+}
+
 /** Native keyboard semantics, with interruptible opening/closing and local accordion groups. */
 const controls = new WeakMap<HTMLDetailsElement, (open: boolean) => void>();
 export function disclosureMotion(node: HTMLDetailsElement, group = false) {

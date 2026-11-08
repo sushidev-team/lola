@@ -81,7 +81,7 @@ it('does not offer a review request for an ended session',async()=>{
 it('shows retained material, missing baseline, and truthful revision freshness',async()=>{
   render(ReviewWorkspace,{sessionId:id});
   await screen.findByRole('heading',{name:'A clearer settings screen'});
-  expect(screen.getByText('Matches current PR',{selector:'[role=status]'})).toBeInTheDocument();
+  expect(screen.queryByText('Matches current PR',{selector:'[role=status]'})).toBeNull();
   await openScreens();
   expect(screen.getByRole('button',{name:'Before'})).toBeDisabled();
   expect(await screen.findByAltText('Settings — After')).toBeInTheDocument();
@@ -307,4 +307,21 @@ it('requests explicit risk estimates without sending pending review feedback',as
   expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining(`Assess risks in review package ${pkg().id}`)});
   expect(feedback.noteFor(id)).toBe('Keep pending feedback');
   expect(send).not.toHaveBeenCalled();
+});
+
+it('distinguishes same-head publications by time with the commit as secondary text',async()=>{
+  read.mockResolvedValue({packages:[pkg({id:'new',createdAt:'2026-11-08T10:30:45Z'}),pkg({id:'old',createdAt:'2026-11-08T09:20:15Z'})]});
+  render(ReviewWorkspace,{sessionId:id});
+  const versions=await screen.findByLabelText('Review version');
+  expect(versions.parentElement?.querySelector('.select-value')).toHaveTextContent(/^Latest$/);
+  await fireEvent.click(versions);
+  const options=screen.getByRole('listbox',{name:'Review version'}).querySelectorAll('[role=option]');
+  expect(options).toHaveLength(2);
+  expect(options[0]).toHaveTextContent('30:45');
+  expect(options[1]).toHaveTextContent('20:15');
+  expect(options[0].querySelector('small')).toHaveTextContent('Commit bbbbbbbb');
+  await fireEvent.click(options[1]);
+  expect(versions).toHaveValue('old');
+  expect(versions.parentElement?.querySelector('.select-value')).toHaveTextContent('20:15');
+  expect(versions.parentElement?.querySelector('.select-value small')).toBeNull();
 });

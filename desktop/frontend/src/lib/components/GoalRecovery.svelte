@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import { onDestroy, tick } from "svelte";
   import { DaemonService } from "@bindings/desktop";
   import type { BriefContract, RecoveryView } from "@bindings/internal/goal";
@@ -92,8 +93,8 @@
             <h5 class="font-medium text-ink">{labels[action]}</h5>
             <p class="text-sm text-faint">{consequences[action]}</p>
             {#if action === "accept-brief" && data.pendingBrief}
-              <details class="text-sm" open><summary class="cursor-pointer text-ink">Exact Linear source</summary><p class="selectable mt-2 break-words text-ink">{data.pendingBrief.title}</p><pre class="selectable mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words text-faint">{data.pendingBrief.description}</pre><p class="selectable mt-1 break-all text-faint">Source {data.pendingBrief.id}</p></details>
-              <details class="text-sm"><summary class="cursor-pointer text-ink">Retained tasks and acceptance</summary>{#each data.goal.tasks ?? [] as task}<p class="mt-2 break-words text-ink">{task.title}</p><ul class="list-disc pl-5 text-faint">{#each task.acceptance ?? [] as criterion}<li class="selectable break-words">{criterion}</li>{/each}</ul>{/each}</details>
+              <details class="text-sm" open><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Exact Linear source</summary><p class="selectable mt-2 break-words text-ink">{data.pendingBrief.title}</p><pre class="selectable mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words text-faint">{data.pendingBrief.description}</pre><p class="selectable mt-1 break-all text-faint">Source {data.pendingBrief.id}</p></details>
+              <details class="text-sm"><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Retained tasks and acceptance</summary>{#each data.goal.tasks ?? [] as task}<p class="mt-2 break-words text-ink">{task.title}</p><ul class="list-disc pl-5 text-faint">{#each task.acceptance ?? [] as criterion}<li class="selectable break-words">{criterion}</li>{/each}</ul>{/each}</details>
             {/if}
             {#if action === "dismiss-progress" && data.latestProgress}<p class="selectable break-all text-sm text-faint">Update {data.latestProgress.id} · {progressState(data.latestProgress)}</p><pre class="selectable max-h-64 overflow-auto whitespace-pre-wrap break-words text-sm text-faint">{data.latestProgress.summary}</pre>{/if}
             {#if reviewed}
@@ -121,8 +122,8 @@
           {:else}
             <p class="text-sm text-faint">This snapshot is local. Reloading it does not contact Linear or start work. Each recovery action is reviewed separately.</p>
             <GoalBrief brief={data.brief} label="Current brief" />
-            {#if data.pendingBrief}<p class="text-sm text-warn">A changed Linear brief needs reconciliation.</p><details class="text-sm"><summary class="cursor-pointer text-ink">Pending Linear source</summary><p class="selectable mt-2 break-words text-ink">{data.pendingBrief.title}</p><pre class="selectable max-h-64 overflow-auto whitespace-pre-wrap break-words text-faint">{data.pendingBrief.description}</pre></details>{/if}
-            {#if data.latestBrief}<details class="text-sm"><summary class="cursor-pointer text-ink">Latest accepted brief decision</summary><p class="selectable my-2 break-words text-faint">{data.latestBrief.reason} · {data.latestBrief.acceptedAt}</p><div class="grid gap-4 sm:grid-cols-2"><GoalBrief brief={data.latestBrief.before} label="Previous brief" /><GoalBrief brief={data.latestBrief.after} label="Accepted clarification" /></div></details>{/if}
+            {#if data.pendingBrief}<p class="text-sm text-warn">A changed Linear brief needs reconciliation.</p><details class="text-sm"><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Pending Linear source</summary><p class="selectable mt-2 break-words text-ink">{data.pendingBrief.title}</p><pre class="selectable max-h-64 overflow-auto whitespace-pre-wrap break-words text-faint">{data.pendingBrief.description}</pre></details>{/if}
+            {#if data.latestBrief}<details class="text-sm"><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Latest accepted brief decision</summary><p class="selectable my-2 break-words text-faint">{data.latestBrief.reason} · {data.latestBrief.acceptedAt}</p><div class="grid gap-4 sm:grid-cols-2"><GoalBrief brief={data.latestBrief.before} label="Previous brief" /><GoalBrief brief={data.latestBrief.after} label="Accepted clarification" /></div></details>{/if}
             {#if data.latestProgress}<div class="space-y-2 border-t border-edge pt-3 text-sm"><h5 class="font-medium text-ink">Latest Linear progress update</h5><p class="text-faint">{progressState(data.latestProgress)}</p><p class="selectable break-all text-faint">{data.latestProgress.id}</p><pre class="selectable max-h-64 overflow-auto whitespace-pre-wrap break-words text-faint">{data.latestProgress.summary}</pre>{#if data.latestProgress.resolution}<p class="selectable break-words text-ink">Resolution: {data.latestProgress.resolution}</p>{/if}</div>{/if}
             {#if data.progressError}<p class="selectable break-words text-sm text-warn">{data.progressError}</p>{/if}
             {#if data.deliveryEvidenceUrl}<div class="text-sm"><h5 class="font-medium text-ink">Shared delivery evidence</h5><p class="selectable break-all text-faint">{data.deliveryEvidenceUrl}</p></div>{/if}

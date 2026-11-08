@@ -155,3 +155,32 @@ The task hierarchy is a durable agreement, separate from the agent's replaceable
 An inline terminal shares the remaining workspace height with conversation history so its prompt stays above the composer.
 
 Form fields share quiet borders, regular-weight labels, and a restrained accent focus ring. Select controls retain native form bindings and validation while presenting a themed, keyboard-accessible listbox instead of the operating-system popup.
+
+### Disclosure controls
+
+Use the shared `Chevron` component (or an existing drawn chevron icon) for every
+expandable summary. Never use browser-native disclosure triangles or text arrow
+glyphs. Native `details` semantics and keyboard behavior stay intact; the chevron
+rotates with open state. Action-menu summaries can retain their ellipsis icon.
+
+
+### PR review workspace
+
+The review overview uses a quiet canvas with a short behavior summary and a
+grouped What changed panel, followed by screenshot previews. Its 20px semibold
+heading and count badge sit above 15px feature titles and 13px muted descriptions.
+Descriptions remain visible; supporting sub-features expand. The first feature
+spans the panel, with supporting features in two columns when space permits.
+Source revision and score methodology stay in disclosures. The risk panel shares
+the feature panel’s heading, count badge and surface treatment. Likelihood and
+impact are always visible as aligned rating badges with miniature level bars;
+unknown values remain Not rated. Wide panels use comparison columns, while narrow
+panels place both labelled ratings below the risk title. Assessment prose expands
+on demand. Ratings remain explicitly agent-provided. A proportional decision
+column gives the risk comparison enough room beside the changes and screenshots. Violet identifies
+evidence coverage, cyan carries the merge action, and semantic green/amber retains
+its status meaning. The score describes evidence coverage, never correctness.
+Shared palette tokens preserve light and dark themes. At narrow widths, the review
+actions follow the summary, before changes and screenshots. Screenshot previews
+keep their full image visible and open the existing comparison canvas. The scoped
+BeforeMerge presentation leaves the ordinary session overview unchanged.

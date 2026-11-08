@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import { onDestroy, tick, untrack } from "svelte";
   import { DaemonService } from "@bindings/desktop";
   import type { Acceptance, CaptureRequest, Lesson } from "@bindings/internal/knowledge";
@@ -144,13 +145,13 @@
             {#if current.review_reason}<p class="text-sm text-warn">Needs review: {current.review_reason}</p>{/if}
             {#if current.evidence?.length}<ul class="list-disc space-y-1 pl-5 text-sm text-faint">{#each current.evidence as item}<li class="selectable break-words">{item}</li>{/each}</ul>{/if}
             <p class="text-sm text-faint">{current.code?.length ? `${current.code.length} committed code references watched for changes.` : "No committed code references tracked."}</p>
-            <details class="text-sm"><summary class="cursor-pointer text-ink">Full lesson and provenance</summary><pre class="selectable mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-faint">{JSON.stringify(current, null, 2)}</pre></details>
+            <details class="text-sm"><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Full lesson and provenance</summary><pre class="selectable mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-faint">{JSON.stringify(current, null, 2)}</pre></details>
             {#if current.policy}<p class="text-sm text-warn">Mandatory policy changes require normal code review and cannot be activated here.</p>{/if}
             <div class="flex flex-wrap gap-2"><Button disabled={busy || loading || current.policy || current.status === "superseded"} onclick={() => void openForm("accept", current)}>Review acceptance</Button><Button disabled={busy || loading || current.status === "superseded"} onclick={() => void openForm("dispute", current)}>Dispute lesson</Button></div>
           </article>
         {/if}
         {#if Object.keys(files).length}
-          <div class="space-y-2 border-t border-edge pt-3"><h4 class="font-medium text-ink">Reviewable export</h4><p class="text-sm text-faint">Accepted project lessons were rechecked. No repository files were written. Copy reviewed content into your branch for normal code review.</p>{#each Object.entries(files) as [name, content]}<details class="text-sm"><summary class="cursor-pointer break-all text-ink">{name}</summary><textarea class={field + " selectable"} aria-label={`Export ${name}`} rows="8" readonly value={content}></textarea></details>{/each}</div>
+          <div class="space-y-2 border-t border-edge pt-3"><h4 class="font-medium text-ink">Reviewable export</h4><p class="text-sm text-faint">Accepted project lessons were rechecked. No repository files were written. Copy reviewed content into your branch for normal code review.</p>{#each Object.entries(files) as [name, content]}<details class="text-sm"><summary class="cursor-pointer break-all text-ink"><Chevron class="disclosure-chevron" />{name}</summary><textarea class={field + " selectable"} aria-label={`Export ${name}`} rows="8" readonly value={content}></textarea></details>{/each}</div>
         {/if}
       {:else if reviewed}
         <div bind:this={reviewArea} tabindex="-1" role="group" aria-label="Review learning decision" class="space-y-3">
@@ -176,7 +177,7 @@
               <p class="selectable break-words text-sm text-faint">Supersedes: {reviewed.request.supersedes?.join(", ") || "No other lessons"}.</p>
             {/if}
           {/if}
-          <details class="text-sm"><summary class="cursor-pointer text-ink">Full decision record</summary><pre class="selectable mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-faint">{JSON.stringify(reviewed.request, null, 2)}</pre></details>
+          <details class="text-sm"><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Full decision record</summary><pre class="selectable mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-faint">{JSON.stringify(reviewed.request, null, 2)}</pre></details>
           {#if !uncertain}<label class="flex items-start gap-2 text-sm text-ink"><Checkbox bind:checked={acknowledged} disabled={busy} />I reviewed this lesson, scope, evidence and decision.</label>{/if}
           <div class="flex flex-wrap gap-2"><Button variant="primary" disabled={!acknowledged || busy || uncertain} onclick={() => void submit()}>Confirm learning decision</Button>{#if !uncertain}<Button disabled={busy} onclick={() => { reviewed = null; acknowledged = false; }}>Back to edit</Button>{:else}<Button disabled={busy} onclick={() => void closeForm()}>Close and refresh lessons</Button>{/if}</div>
         </div>

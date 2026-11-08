@@ -18,6 +18,7 @@
   import Select from "./Select.svelte";
   import Disclosure from "./Disclosure.svelte";
 
+  const promptId = $props.id();
   let project = $state(nav.overlayProject);
   let location = $state(nav.sessionLocation);
   let useAgent = $state(nav.sessionAgent);
@@ -105,7 +106,7 @@
     const el = promptEl;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight + 2, 8 * 22 + 14)}px`;
+    el.style.height = `${Math.min(el.scrollHeight + 2, 8 * 22 + 40)}px`;
   }
 
   // ↩ starts, ⇧↩ and ⌥↩ are a newline, same as the composer. Composition is an IME's Enter.
@@ -159,10 +160,13 @@
 <Modal title={temporary ? "New temporary session" : "New session"} titleHelp={temporary ? "A shell without project setup. It stays available when you leave the view or close the app." : ""} onClose={close} width="560px">
   <form class="grid gap-4" onsubmit={(e) => { e.preventDefault(); void create(); }}>
     {#if asksPrompt}
-      <label class="grid gap-2">
-        <span class="text-lg text-ink">What should {agent} do?</span>
-        <textarea bind:this={promptEl} bind:value={prompt} rows="3" class="{field} resize-none px-3! text-prose caret-accent focus:border-ink/35 focus-visible:outline-none!" disabled={busy} oninput={grow} onkeydown={promptKey}></textarea>
-      </label>
+      <div class="grid gap-2">
+        <label for={promptId} class="text-lg text-ink">What should {agent} do?</label>
+        <div class="relative">
+          <textarea id={promptId} aria-describedby={`${promptId}-hint`} bind:this={promptEl} bind:value={prompt} rows="3" class="{field} block resize-none px-3! pb-8! text-prose caret-accent focus:border-ink/35 focus-visible:outline-none!" disabled={busy} oninput={grow} onkeydown={promptKey}></textarea>
+          <span id={`${promptId}-hint`} class="pointer-events-none absolute right-3 bottom-2 select-none text-xs font-normal tracking-normal text-faint">⇧↩ for a new line</span>
+        </div>
+      </div>
     {/if}
 
     <div class="grid grid-cols-2 gap-3">
@@ -255,7 +259,6 @@
 
     {#if error}<p class="text-sm text-bad" role="alert">{error}</p>{/if}
     <div class="flex items-center justify-end gap-2">
-      {#if asksPrompt}<span class="mr-auto text-sm text-faint">⇧↩ for a new line</span>{/if}
       <Button onclick={close} disabled={busy || picking}>Cancel</Button>
       <Button variant="primary" type="submit" loading={busy} disabled={busy || picking || !canStart}>Start <span aria-hidden="true">↩</span></Button>
     </div>

@@ -16,7 +16,7 @@
   import { untrack } from 'svelte';
   import { slide } from 'svelte/transition';
 
-  let { session }: { session: SessionInfo } = $props();
+  let { session, reviewLayout = false }: { session: SessionInfo; reviewLayout?: boolean } = $props();
   const prs = $derived(session.stack
     ? (session.apps ?? []).filter(a => a.number).map(a => ({ id: `${session.id}~${a.name}`, number: a.number!, label: appLabel(a), url: a.url ?? '' }))
     : session.prNumber ? [{ id: session.id, number: session.prNumber, label: 'Pull request', url: session.prUrl ?? '' }] : []);
@@ -161,7 +161,7 @@
 </script>
 
 {#if selected}
-<section data-before-merge aria-label="PR status">
+<section data-before-merge class:review-layout={reviewLayout} aria-label="PR status">
   <header>
     <h3 class="cv-overview-heading">PR status</h3>
     {#if nav.overlay !== 'pr-review'}<Button size="xs" onclick={() => reviewWorkspace.open(session.id)}>Review PR</Button>{/if}
@@ -279,4 +279,22 @@
   .overlaps { display:flex;align-items:center;gap:6px;margin-top:12px;font-size:10px;line-height:16px;color:var(--color-faint); }
   .muted,.notice,.error { font-size:11px;line-height:17px;margin-top:8px; } .muted,.notice { color:var(--color-faint); }
   .error button { text-decoration:underline; } .terminal { display:flex;align-items:center;gap:7px;color:var(--color-faint);font-size:12px; }
+  .review-layout .signals { grid-template-columns:minmax(0,1fr); gap:14px; padding:6px 0 16px; border:0; }
+  .review-layout .signal { display:grid; grid-template-columns:18px minmax(0,1fr) auto; gap:8px; align-items:center; }
+  .review-layout .signal-label,.review-layout .signal-value { font-size:12px; line-height:18px; }
+  .review-layout .signal-value { grid-column:auto; text-align:right; }
+  .review-layout .next { margin:0 0 16px; font-size:12px; }
+  .review-layout .pr-actions { display:grid; gap:10px; }
+  .review-layout .merge-split { display:flex; }
+  .review-layout .merge-split > span:first-child { flex:1; min-width:0; }
+  .review-layout .pr-actions :global(button) { min-height:34px; width:100%; font-size:12px; }
+  .review-layout .merge-split.ready :global(button) { background:var(--color-accent); color:var(--color-on-accent); }
+  .review-layout .merge-split.ready :global(button:enabled:hover) { background:color-mix(in srgb,var(--color-accent) 85%,var(--color-ink)); }
+  .review-layout .merge-method { width:32px; }
+  .review-layout .merge-method :global(.lola-field) { height:34px; }
+  .review-layout .merge-split.ready .merge-method :global(.lola-field) { background:var(--color-accent); border-left-color:color-mix(in srgb,var(--color-on-accent) 20%,transparent); }
+  .review-layout .merge-split.ready .merge-method :global(.lola-field:enabled:hover) { background:color-mix(in srgb,var(--color-accent) 85%,var(--color-ink)); }
+  .review-layout .merge-split.ready .merge-method :global(.lola-select-caret) { color:var(--color-on-accent); }
+  .review-layout .merge-method :global(.lola-select-caret) { right:9px; }
+  .review-layout .overlaps { font-size:12px; }
 </style>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { feed } from "$lib/feed.svelte";
+  import { disclosureSlide } from "$lib/disclosureMotion";
   import { store } from "$lib/store.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { changes } from "$lib/changes.svelte";
@@ -40,9 +41,9 @@
     {#if row.failed}<span class="text-bad">{row.failed} failed</span>{/if}
     {#if row.added || row.removed}<span class="num whitespace-nowrap text-faint" title="Lines added and removed across these edits">+{row.added} −{row.removed}</span>{/if}
   </button>
-  {#if !open}<ToolPreview text={row.items.at(-1)?.tool.preview || path} {running} />{/if}
+  {#if !open && active}<ToolPreview text={row.items.at(-1)?.tool.preview || path} {running} />{/if}
   {#if open}
-    <div {id} class="cv-change-body">
+    <div {id} class="cv-change-body" transition:disclosureSlide>
       <div class="cv-change-files" aria-label="Changed files">
         {#each paths as file (file)}
           {@const edits = row.items.filter(item => item.target === file)}

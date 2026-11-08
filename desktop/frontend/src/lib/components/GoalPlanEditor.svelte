@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import { onDestroy, tick } from "svelte";
   import { DaemonService } from "@bindings/desktop";
   import type { Record as Proposal, ProposedTask, Output, EditRequest } from "@bindings/internal/goalplan";
@@ -74,7 +75,7 @@
     <p class="selectable break-all text-sm text-faint">Edit ID: {reviewed.edit_id}</p>
     <p class="selectable whitespace-pre-wrap break-words text-sm text-ink">Reason: {reviewed.reason}</p>
     <GoalPlanTasks output={reviewed.output} labels={proposal.input.labels} />
-    <details class="text-sm"><summary class="cursor-pointer text-ink">Compare with saved revision {proposal.revision}</summary><div class="mt-3">{#if proposal.output}<GoalPlanTasks output={proposal.output} labels={proposal.input.labels} />{/if}</div></details>
+    <details class="text-sm"><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Compare with saved revision {proposal.revision}</summary><div class="mt-3">{#if proposal.output}<GoalPlanTasks output={proposal.output} labels={proposal.input.labels} />{/if}</div></details>
     {#if busy}<p role="status" class="text-sm text-ink">Waiting for the saved proposal…</p>{/if}
     {#if uncertain}
       <p class="max-w-prose text-sm text-faint">Refresh returns to the current saved revision, including any confirmed edit. It does not resend this change. If it was not saved, you can edit that revision again.</p>
@@ -92,7 +93,7 @@
       <div class="divide-y divide-edge">
         {#each tasks as task, i (task.key)}
           <details open={i === 0} class="py-3">
-            <summary class="cursor-pointer break-words text-sm font-medium text-ink">Task {i + 1}: {task.title || "Untitled task"}</summary>
+            <summary class="cursor-pointer break-words text-sm font-medium text-ink"><Chevron class="disclosure-chevron" />Task {i + 1}: {task.title || "Untitled task"}</summary>
             <div class="mt-3 space-y-3">
               <div class="flex flex-wrap gap-2">
                 <Button size="sm" disabled={!moveTask(tasks, i, -1)} onclick={() => { tasks = moveTask(tasks, i, -1) ?? tasks; }}>Move earlier</Button>

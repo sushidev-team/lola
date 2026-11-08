@@ -12,7 +12,7 @@
   let field = $state<HTMLSelectElement>();
   let menu = $state<HTMLDivElement>();
   let open = $state(false);
-  let options = $state<{ index: number; label: string; disabled: boolean; hidden: boolean; group: string }[]>([]);
+  let options = $state<{ index: number; label: string; selectedLabel: string; description: string; disabled: boolean; hidden: boolean; group: string }[]>([]);
   let active = $state(-1);
   let selected = $state(-1);
   let position = $state({ left: 0, top: 0, width: 0, height: 280 });
@@ -23,7 +23,7 @@
     if (!field) return;
     options = Array.from(field.options, (option, index) => {
       const group = option.parentElement instanceof HTMLOptGroupElement ? option.parentElement : null;
-      return { index, label: option.label, disabled: option.disabled || !!group?.disabled, hidden: option.hidden, group: group?.label ?? '' };
+      return { index, label: option.label, selectedLabel: option.dataset.selectedLabel || option.label, description: option.dataset.description || '', disabled: option.disabled || !!group?.disabled, hidden: option.hidden, group: group?.label ?? '' };
     });
     selected = field.selectedIndex;
   }
@@ -32,7 +32,7 @@
     if (!node) return;
     sync();
     const observer = new MutationObserver(sync);
-    observer.observe(node, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['value', 'label', 'disabled', 'hidden', 'selected'] });
+    observer.observe(node, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['value', 'label', 'disabled', 'hidden', 'selected', 'data-description', 'data-selected-label'] });
     return () => observer.disconnect();
   });
   $effect(() => { value; if (field) void tick().then(sync); });
@@ -51,7 +51,7 @@
     const width = Math.min(Math.max(rect.width, minMenuWidth), window.innerWidth - 16);
     const below = window.innerHeight - rect.bottom - 8;
     const above = rect.top - 8;
-    const desired = Math.min(288, options.filter(o => !o.hidden).length * 32 + 10);
+    const desired = Math.min(288, options.filter(o => !o.hidden).reduce((height, option) => height + (option.description ? 52 : 32), 10));
     const up = below < desired && above > below;
     const height = Math.max(40, Math.min(desired, up ? above : below));
     position = { left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)), top: up ? rect.top - height - 4 : rect.bottom + 4, width, height };
@@ -122,13 +122,14 @@
   });
 </script>
 
-<span class="lola-select {klass}">
+<span class="lola-select {klass}" class:has-description={!!options[selected]?.description}>
   <select {...rest} bind:this={field} bind:value class="lola-field appearance-none w-full pr-8" aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? `${uid}-list` : undefined} aria-activedescendant={open && active >= 0 ? `${uid}-${active}` : undefined}
     onmousedown={(event) => { if (event.button === 0) { event.preventDefault(); field?.focus(); } rest.onmousedown?.(event); }}
     onclick={(event) => { event.preventDefault(); if (open) open = false; else show(); rest.onclick?.(event); }}
     onkeydown={key} onblur={(event) => { open = false; rest.onblur?.(event); }}>
     {@render children()}
   </select>
+  {#if options[selected]?.description}<span class="select-value" aria-hidden="true"><span>{options[selected].selectedLabel}</span></span>{/if}
   <Icon name="chevron-down" class="lola-select-caret pointer-events-none" size={14} />
 </span>
 
@@ -141,9 +142,17 @@
           onpointermove={() => { if (!option.disabled) active = option.index; }}
           onmousedown={(event) => event.preventDefault()} onclick={() => choose(option.index)}>
           <span class="lola-select-check">{#if selected === option.index}<Icon name="check" size={14} />{/if}</span>
-          <span>{option.label}</span>
+          <span class="option-copy"><span>{option.label}</span>{#if option.description}<small>{option.description}</small>{/if}</span>
         </button>
       {/if}
     {/each}
   </div>
 {/if}
+
+<style>
+  .has-description select { color:transparent; -webkit-text-fill-color:transparent; }
+  .select-value { position:absolute; inset:0 32px 0 12px; pointer-events:none; display:grid; align-content:center; gap:2px; font-size:13px; color:var(--color-ink); }
+  .select-value > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .option-copy small { display:block; font-size:11px; line-height:16px; color:var(--color-ink-2); }
+  .option-copy { display:grid; gap:3px; min-width:0; }
+</style>

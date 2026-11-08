@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import { onDestroy, tick } from "svelte";
   import { DaemonService } from "@bindings/desktop";
   import type { StartOptions, Authorization } from "@bindings/internal/goal";
@@ -102,7 +103,7 @@
       {#if !options || failed}<Button disabled={busy} onclick={() => void load()}>Reload settings</Button>{/if}
       {#if options}
         <p class="selectable whitespace-pre-wrap break-words text-sm text-ink">{options.goal.outcome}</p>
-        <details class="text-sm"><summary class="cursor-pointer text-ink">Goal and task acceptance</summary>
+        <details class="text-sm"><summary class="cursor-pointer text-ink"><Chevron class="disclosure-chevron" />Goal and task acceptance</summary>
           <ul class="mt-2 list-disc space-y-1 pl-5 text-faint">{#each options.goal.acceptance ?? [] as item}<li class="selectable break-words">{item}</li>{/each}</ul>
           {#if options.goal.nonGoals?.length}<p class="mt-2 text-ink">Outside this goal</p><ul class="list-disc pl-5 text-faint">{#each options.goal.nonGoals as item}<li class="break-words">{item}</li>{/each}</ul>{/if}
           {#each options.goal.tasks ?? [] as task}<p class="mt-2 text-ink">{task.title}</p><ul class="list-disc pl-5 text-faint">{#each task.acceptance ?? [] as item}<li class="selectable break-words">{item}</li>{/each}</ul>{/each}

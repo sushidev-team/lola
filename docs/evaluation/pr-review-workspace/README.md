@@ -181,3 +181,86 @@ counts and risk levels have compact badges; expanded rows show their active
 state. Updated captures above were checked in WebKit at 1440, 700 and 420px with
 no browser errors or horizontal overflow. All 22 overview/workspace component
 tests and Svelte check passed. This is a frontend-only styling change.
+
+
+### Feature groups and concise risk expansions
+
+Changes now show what is new, grouped into a lead feature and supporting
+features, with user-facing sub-features on expansion. No before/after text or
+source-note disclosure appears in these groups. Risks expand to just What could
+happen and How to assess it, without repeating headings, ratings or source prose.
+Legacy After fields remain readable as the new-capability sentence.
+
+The requested agent rewrote and published CE-159 / coachkit-app PR #112 material:
+package `9840d6d3267317fa52328f294823dba22d54df359cdaa15b418af8cf3e56dfbd`,
+head `947d78351123ccdc18254890cf9d2cd0ac03e989`. The preview uses this actual
+retained write-up and screenshots; readiness responses remain isolated fixtures.
+Risk ratings are the agent's estimates, not an independent verification here.
+
+- [Expanded features and risk](overview-features-wide.png)
+- [Narrow feature layout](overview-features-narrow.png)
+
+31 focused tests, Svelte check and production build passed. WebKit checked
+1440, 700 and 420px widths, source-free feature/risk expansions and screenshot
+navigation with no browser errors or horizontal overflow. Runtime spawn tests
+also passed for the updated publishing instructions.
+
+The version control stays one line at the standard 32px height and shows only
+Latest for the newest package. Publication date/time and the smaller commit ID
+remain in its menu. Native disclosure markers were replaced across the UI with
+shared drawn chevrons; a source guard prevents bare summary markers returning.
+Final validation: all 1,872 frontend tests, Svelte check, and production build
+passed. WebKit confirmed the compact trigger, chevrons, and responsive layout.
+
+
+### Simplified review styling
+
+- [Restyled overview](overview-restyled-wide.png)
+- [Narrow action-first layout](overview-restyled-narrow.png)
+- [Light theme](overview-restyled-light.png)
+
+The overview now uses compact expandable change rows, a quieter screenshot strip,
+and a distinct review/action column. Evidence coverage uses violet; the primary
+merge action uses cyan. Impact stays visible while likelihood and assessment
+instructions expand on demand. Small windows place review actions immediately
+after the summary. Screenshot images are contained without cropping.
+
+Captures use the retained CE-159 write-up and screenshots described above, with
+mocked PR readiness. They do not claim that the real PR passed checks or merged.
+WebKit verified disclosures, screenshot navigation and no horizontal overflow at
+1440, 1024, 700 and 420px. Sampled light-theme text/action contrast is at least
+4.5:1. Fifty focused frontend tests, Svelte check (zero errors/warnings), and the
+production frontend build passed. The design detector reported no findings.
+The packaged native app was not rebuilt or restarted for this styling pass.
+
+
+### Feature hierarchy refinement
+
+What changed restores the grouped lead/supporting feature layout and visible
+short descriptions. The panel heading is 20px/600, feature titles 15px/500, and
+descriptions 13px/400 with secondary ink. The count sits beside the heading;
+cyan icon tiles and consistent indentation organize the feature content.
+
+- [Updated desktop hierarchy](overview-hierarchy-wide.png)
+- [Updated narrow hierarchy](overview-hierarchy-narrow.png)
+
+WebKit verified computed typography and overflow at 1440, 1024, 700 and 420px.
+Four overview tests, Svelte checks and the production build passed. Fixture
+provenance and native-app limitations remain as described above.
+
+
+### Risk comparison refinement
+
+Restored visible likelihood and impact columns with compact level bars and
+explicit Not rated states. The panel now matches the stronger feature-section
+heading and count badge. A wider proportional decision column supports scanning;
+narrow panels keep both ratings below each title with their labels repeated.
+Descriptions and assessment steps remain expandable.
+
+- [Risk comparison on desktop](overview-risks-wide.png)
+- [Risk ratings in a narrow window](overview-risks-narrow.png)
+
+WebKit verified both ratings remain visible with rows collapsed, expansion works,
+and no horizontal overflow occurs at 1440, 1024, 700 or 420px. Dark and light
+palettes were inspected. Four overview tests, Svelte checks and production build
+passed. Captures retain the same real material and mocked PR-readiness provenance.

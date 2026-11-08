@@ -28,6 +28,7 @@ describe('inline changes', () => {
     expect(container.querySelector('[data-diff="add"]')).toHaveTextContent('const next = 2;');
     await fireEvent.click(screen.getByRole('button', { name: /Changes · 2 files/ }));
     expect(container.querySelector('[data-change-preview]')).toBeNull();
+    expect(container.querySelector('[data-preview]')).toBeNull();
   });
 
   it('shows unnumbered PHP source as a short highlighted excerpt with full output on demand', async () => {

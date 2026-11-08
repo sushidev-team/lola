@@ -1,7 +1,8 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
   import type { Snippet } from 'svelte';
   import type { ReviewPackage, PRReadinessData } from '@bindings/internal/protocol';
-  import { reviewOverview, reviewConfidence, riskWeight, type OverviewItem, type RiskLevel } from '$lib/reviewoverview';
+  import { reviewOverview, reviewConfidence, riskWeight, type OverviewItem, type ReviewChange, type RiskLevel } from '$lib/reviewoverview';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import SSHRich from '../ssh/SSHRich.svelte';
@@ -22,6 +23,17 @@
     <div class="entry-detail selectable"><SSHRich {sessionId} text={item.body}/></div>
   </details>{/each}</div>{:else}<p class="empty-copy">{empty}</p>{/if}
 {/snippet}
+{#snippet features(items: ReviewChange[])}
+  <div class="feature-grid">{#each items as item}<details class="feature-item">
+    <summary>
+      <span class="feature-heading"><span class="feature-icon"><Icon name="layers" size={17}/></span><span class="feature-name">{item.title}</span><Icon name="chevron-down" size={14}/></span>
+      {#if item.description}<span class="feature-description">{item.description}</span>{/if}
+    </summary>
+    <div class="feature-detail">
+      {#if item.parts.length}<ul class="feature-parts">{#each item.parts as part}<li><Icon name="minus" size={13}/><span>{part}</span></li>{/each}</ul>{/if}
+    </div>
+  </details>{/each}</div>
+{/snippet}
 {#snippet level(value: RiskLevel)}
   <span class="risk-level" data-level={value}><span class="level-bars" aria-hidden="true">{#each [1,2,3] as n}<i class:filled={n <= riskWeight[value]}></i>{/each}</span>{value === 'unknown' ? 'Not rated' : value}</span>
 {/snippet}
@@ -31,42 +43,44 @@
     <header class="review-intro">
       <h1>{overview.title}</h1>
       <p class="summary-copy">{overview.summary}</p>
-      <div class="intro-meta"><span class:stale={freshness !== 'current'} role="status"><Icon name={freshness === 'current' ? 'git-pull-request' : 'circle-alert'} size={14}/>{freshness === 'current' ? 'Matches current PR' : freshness === 'stale' ? 'Outdated material' : 'Freshness unknown'}</span></div>
-      {#if screens.length}<Button variant="secondary" onclick={() => onScreen(0)}><Icon name="image" size={15}/>Explore {screens.length} {screens.length === 1 ? 'screen' : 'screens'}<Icon name="arrow-right" size={14}/></Button>{/if}
+      {#if freshness !== 'current'}<div class="intro-meta"><span class="stale" role="status"><Icon name="circle-alert" size={14}/>{freshness === 'stale' ? 'Outdated material' : 'Freshness unknown'}</span></div>{/if}
     </header>
       <section class="review-panel features" aria-label="Changes in this review">
-        <div class="section-title"><h2><Icon name="layers" size={17}/>What changed</h2><span class="section-count">{overview.changes.length}</span></div>
-        {@render entries(overview.changes.slice(0,4),'No feature breakdown provided.')}
-        {#if overview.changes.length > 4}<details class="additional"><summary>{overview.changes.length-4} more {overview.changes.length === 5 ? 'change' : 'changes'}</summary>{@render entries(overview.changes.slice(4),'')}</details>{/if}
+        <div class="section-title"><h2>What changed<span class="section-count">{overview.changes.length}</span></h2></div>
+        {#if overview.changes.length}{@render features(overview.changes.slice(0,4))}{:else}<p class="empty-copy">No feature breakdown provided.</p>{/if}
+        {#if overview.changes.length > 4}<details class="additional"><summary><Chevron class="disclosure-chevron" />{overview.changes.length-4} more {overview.changes.length === 5 ? 'change' : 'changes'}</summary>{@render features(overview.changes.slice(4))}</details>{/if}
       </section>
       {#if screens.length}<section class="review-panel visual-review" aria-label="Screenshot previews">
-        <div class="section-title"><h2><Icon name="image" size={17}/>See the changes</h2><Button size="xs" onclick={() => onScreen(0)}>View all<Icon name="arrow-right" size={14}/></Button></div>
+        <div class="section-title"><h2>See the changes<span class="section-count">{screens.length}</span></h2><Button size="xs" onclick={() => onScreen(0)}>View all<Icon name="arrow-right" size={14}/></Button></div>
         <div class="screenshot-grid">{#each screens.slice(0,4) as screen,i}<button class="screen-preview" onclick={() => onScreen(i)} aria-label={`Review screenshot: ${screen.title}`}>
           <ReviewThumbnail {pkg} artifact={screen.after} label={`Preview: ${screen.title}`}/>
           <span class="preview-caption"><span>{screen.title}</span><Icon name="arrow-right" size={14}/></span>
         </button>{/each}</div>
       </section>{/if}
-      <details class="additional source-details"><summary>Source &amp; revision</summary><div class="source-copy"><code>{pkg.base.slice(0,12)} → {pkg.head.slice(0,12)}</code><p>Write-up, risk estimates, and screenshots are agent-provided.</p></div>{#if overview.details.length}{@render entries(overview.details,'')}{/if}</details>
+      <details class="additional source-details"><summary><Chevron class="disclosure-chevron" />Source &amp; revision</summary><div class="source-copy"><code>{pkg.base.slice(0,12)} → {pkg.head.slice(0,12)}</code><p>Write-up, risk estimates, and screenshots are agent-provided.</p></div>{#if overview.details.length}{@render entries(overview.details,'')}{/if}</details>
   </div>
   <div class="decision-column">
     <div class="readiness">
       <section class="confidence" aria-label="Review confidence">
-        <div class="confidence-label"><h2><Icon name="shield-check" size={17}/>Review confidence</h2><span>{confidence.score === null ? 'Revision unconfirmed' : `${confidence.confirmed} / 5 signals`}</span></div>
+        <div class="confidence-label"><h2><Icon name="shield-check" size={17}/>Evidence coverage</h2><span>{confidence.score === null ? 'Revision unconfirmed' : `${confidence.confirmed} / 5 signals`}</span></div>
         <strong class="score">{confidence.score ?? '—'}{#if confidence.score !== null}<small>/100</small>{/if}</strong>
         <div class="signal-chart" role="img" aria-label={confidence.score === null ? 'Confidence not scored: revision unconfirmed' : `Evidence coverage: ${confidence.score} out of 100`}>
           {#each confidence.signals as signal}<span class:confirmed={signal.confirmed} class:failed={signal.failed} title={`${signal.label}: ${signal.value}`}></span>{/each}
         </div>
-        <details class="score-explanation"><summary>Evidence behind this score</summary><dl>{#each confidence.signals as signal}<div><dt>{signal.label}</dt><dd>{signal.value}</dd></div>{/each}</dl><p>20 points per confirmed signal for this revision. Evidence coverage, not a probability of correct code. Agent claims do not increase it.</p></details>
+        <details class="score-explanation"><summary><Chevron class="disclosure-chevron" />Evidence behind this score</summary><dl>{#each confidence.signals as signal}<div><dt>{signal.label}</dt><dd>{signal.value}</dd></div>{/each}</dl><p>20 points per confirmed signal for this revision. Evidence coverage, not a probability of correct code. Agent claims do not increase it.</p></details>
       </section>
       {#if checks}<div class="checks">{@render checks()}</div>{/if}
     </div>
       <section class="review-panel risks" aria-label="Reported risks">
-        <div class="section-title"><h2><Icon name="circle-alert" size={17}/>Risks &amp; follow-up</h2><span title="Ordered by likelihood × impact. Unrated risks precede lower-rated risks.">Agent assessment</span></div>
+        <div class="section-title"><h2>Risks &amp; follow-up<span class="section-count">{overview.risks.length}</span></h2></div><p class="risk-attribution">Agent assessment</p>
         {#if overview.risks.length}
           <div class="risk-columns" aria-hidden="true"><span>Risk</span><span>Likelihood</span><span>Impact</span></div>
           {#each overview.risks as risk}<details class="entry risk-entry" class:priority={risk.priority >= 6}>
-            <summary><span class="risk-title"><Icon name="chevron-right" size={14}/>{risk.title}</span><span aria-label={`Likelihood: ${risk.likelihood}`}>{@render level(risk.likelihood)}</span><span aria-label={`Impact: ${risk.impact}`}>{@render level(risk.impact)}</span></summary>
-            <div class="entry-detail selectable"><SSHRich {sessionId} text={risk.body}/></div>
+            <summary><span class="risk-title"><Icon name="chevron-right" size={14}/>{risk.title}</span><span class="risk-rating" aria-label={`Likelihood: ${risk.likelihood}`}><span class="rating-label" aria-hidden="true">Likelihood</span>{@render level(risk.likelihood)}</span><span class="risk-rating" aria-label={`Impact: ${risk.impact}`}><span class="rating-label" aria-hidden="true">Impact</span>{@render level(risk.impact)}</span></summary>
+            <div class="risk-detail">
+              {#if risk.description}<div><h3>What could happen</h3><p>{risk.description}</p></div>{/if}
+              {#if risk.assess}<div><h3>How to assess it</h3><p>{risk.assess}</p></div>{/if}
+            </div>
           </details>{/each}
         {:else}<p class="empty-copy">{overview.riskReportProvided ? 'No unresolved risks reported.' : 'Risks have not been assessed.'}</p>{/if}
         {#if unrated && onAssessRisks}<Button size="xs" variant="secondary" loading={assessment?.state === 'sending'} disabled={assessment?.state === 'accepted'} onclick={onAssessRisks}><Icon name="sparkles" size={13}/>{assessment?.state === 'accepted' ? 'Assessment requested' : assessment?.state === 'error' ? 'Retry assessment' : 'Ask agent to assess risks'}</Button>{/if}
@@ -77,70 +91,115 @@
 </div>
 
 <style>
-  .overview { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(360px,1fr); gap:24px; align-items:start; min-width:0; }
-  .review-intro { min-width:0; padding:8px 0; }
-  h1 { margin:0 0 16px; max-width:30ch; font-size:28px; line-height:1.25; font-weight:600; color:var(--color-ink); text-wrap:balance; overflow-wrap:anywhere; }
-  .summary-copy { max-width:60ch; color:var(--color-ink-2); font-size:15px; line-height:1.6; margin-bottom:20px; }
-  .intro-meta { display:flex; align-items:center; flex-wrap:wrap; gap:16px; color:var(--color-ink-2); font-size:11px; margin-bottom:20px; }
-  .intro-meta > span:first-child { display:flex; align-items:center; gap:6px; }
-  .stale { color:var(--color-warn); }
-  h2 { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; color:var(--color-ink); }
-  .review-panel { min-width:0; padding:20px; border:1px solid var(--color-edge); border-radius:9px; background:var(--color-canvas); box-shadow:inset 0 1px 0 color-mix(in srgb,var(--color-ink) 3%,transparent); }
-  .readiness { min-width:0; background:var(--color-canvas); border:1px solid var(--color-edge); border-radius:8px; padding:20px; }
-  .confidence { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px 16px; }
-  .confidence-label { display:grid; align-content:center; gap:6px; }
-  .confidence-label > span { color:var(--color-ink-2); font-size:11px; }
-  .score { font-size:32px; line-height:1.2; font-weight:600; font-variant-numeric:tabular-nums; color:var(--color-ink); }
-  .score small { font-size:12px; font-weight:400; color:var(--color-ink-2); margin-left:4px; }
-  .signal-chart { display:flex; gap:4px; height:5px; grid-column:1/-1; }
-  .signal-chart span { flex:1; background:var(--color-edge); border-radius:2px; }
-  .signal-chart .confirmed { background:var(--color-good); } .signal-chart .failed { background:var(--color-warn); }
-  .score-explanation { grid-column:1/-1; font-size:11px; color:var(--color-ink-2); }
-  .score-explanation dl { margin:12px 0 8px; } .score-explanation dl > div { display:flex; justify-content:space-between; gap:12px; margin:6px 0; }
-  .score-explanation p { max-width:65ch; line-height:1.6; }
-  .checks { margin-top:20px; }
+  summary::marker { content:""; }
+  summary > :global(.disclosure-chevron) { margin-right:6px; vertical-align:-2px; color:var(--color-ink-2); }
+  details[open] > summary > :global(.disclosure-chevron) { transform:rotate(90deg); }
+  .overview { display:grid; grid-template-columns:minmax(0,1fr) minmax(370px,.7fr); gap:40px; align-items:start; max-width:1400px; margin:0 auto; min-width:0; }
+  .change-column,.decision-column { min-width:0; display:grid; gap:32px; }
+  .review-intro { min-width:0; padding:4px 0 0; }
+  h1 { margin:0 0 16px; max-width:32ch; font-size:30px; line-height:1.2; letter-spacing:-.025em; font-weight:600; color:var(--color-ink); text-wrap:balance; overflow-wrap:anywhere; }
+  .summary-copy { max-width:65ch; color:var(--color-ink-2); font-size:14px; line-height:1.65; margin:0; }
+  .intro-meta { margin-top:16px; font-size:12px; }
+  .stale { display:inline-flex; align-items:center; gap:6px; color:var(--color-warn); }
+  h2 { display:flex; align-items:center; gap:10px; font-size:14px; font-weight:600; color:var(--color-ink); }
+  .review-panel { min-width:0; }
   .section-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
-  .section-title > span { color:var(--color-ink-2); font-size:11px; }
-  .section-title .section-count { display:inline-flex; align-items:center; justify-content:center; min-width:24px; height:24px; padding:0 7px; border-radius:6px; background:var(--color-accent-fill); color:var(--color-accent-ink); font-variant-numeric:tabular-nums; }
-  .section-title h2 :global(svg) { color:var(--color-ink-2); }
-  .change-column,.decision-column { min-width:0; display:grid; gap:20px; }
-  summary { cursor:pointer; }
-  summary:focus-visible,.screen-preview:focus-visible { outline:2px solid var(--color-accent); outline-offset:3px; }
+  .section-count { font-size:12px; font-weight:400; font-variant-numeric:tabular-nums; color:var(--color-ink-2); }
+  .readiness { min-width:0; padding:24px; border:1px solid color-mix(in srgb,var(--color-accent) 22%,var(--color-edge)); border-radius:16px; background:var(--color-panel); }
+  .confidence { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; padding-bottom:20px; border-bottom:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
+  .confidence-label { display:grid; align-content:center; gap:6px; }
+  .confidence-label h2 { font-size:13px; }
+  .confidence-label h2 :global(svg) { color:var(--color-magenta); }
+  .confidence-label > span { color:var(--color-ink-2); font-size:12px; }
+  .score { align-self:center; font-size:24px; line-height:1.2; font-weight:500; font-variant-numeric:tabular-nums; color:var(--color-magenta); }
+  .score small { font-size:12px; font-weight:400; color:var(--color-ink-2); margin-left:3px; }
+  .signal-chart { display:flex; gap:5px; height:4px; grid-column:1/-1; }
+  .signal-chart span { flex:1; background:var(--color-edge); border-radius:4px; }
+  .signal-chart .confirmed { background:var(--color-magenta); } .signal-chart .failed { background:var(--color-warn); }
+  .score-explanation { grid-column:1/-1; font-size:12px; color:var(--color-ink-2); }
+  .score-explanation dl { margin:12px 0 8px; } .score-explanation dl > div { display:flex; justify-content:space-between; gap:12px; margin:8px 0; }
+  .score-explanation p { line-height:1.6; }
+  .checks { margin-top:20px; }
+  summary { cursor:pointer; list-style:none; }
+  summary::-webkit-details-marker { display:none; }
+  summary:focus-visible,.screen-preview:focus-visible { outline:2px solid var(--color-accent); outline-offset:4px; border-radius:4px; }
+  .features { container-type:inline-size; padding:24px; border-radius:16px; background:var(--color-panel); border:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
+  .features .section-title { margin-bottom:20px; }
+  .features h2 { font-size:20px; line-height:1.3; letter-spacing:-.015em; font-weight:600; gap:12px; }
+  .features .section-count { display:inline-flex; align-items:center; justify-content:center; min-width:25px; height:25px; padding:0 7px; border-radius:7px; background:var(--color-accent-fill); color:var(--color-accent-ink); font-size:12px; font-weight:500; letter-spacing:0; }
+  .feature-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:28px; }
+  .feature-item:first-child { grid-column:1/-1; }
+  .feature-item { min-width:0; border-top:1px solid color-mix(in srgb,var(--color-edge) 55%,transparent); }
+  .feature-item > summary { padding:20px 0; }
+  .feature-heading { display:flex; align-items:center; gap:12px; font-size:15px; line-height:1.45; font-weight:500; color:var(--color-ink); }
+  .feature-name { flex:1; overflow-wrap:anywhere; }
+  .feature-icon { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; flex-shrink:0; border-radius:9px; color:var(--color-accent-ink); background:color-mix(in srgb,var(--color-accent) 10%,transparent); }
+  .feature-heading > :global(svg) { color:var(--color-ink-2); transition:transform 160ms ease-out; }
+  .feature-item[open] .feature-heading > :global(svg) { transform:rotate(180deg); }
+  .feature-item > summary:hover .feature-heading { color:var(--color-accent-ink); }
+  .feature-description { display:block; color:var(--color-ink-2); font-size:13px; line-height:1.65; margin:8px 26px 0 44px; max-width:65ch; overflow-wrap:anywhere; }
+  .feature-detail { padding:0 26px 4px 44px; font-size:13px; overflow-wrap:anywhere; }
+  @container (max-width:560px) { .feature-grid { grid-template-columns:minmax(0,1fr); } }
+  .feature-parts { display:grid; gap:10px; padding:0; margin:0 0 16px; list-style:none; }
+  .feature-parts li { display:flex; gap:8px; align-items:baseline; line-height:1.5; color:var(--color-ink); }
+  .feature-parts li :global(svg) { flex-shrink:0; color:var(--color-accent); }
+  .feature-detail :global(pre),.risk-detail :global(pre),.entry-detail :global(pre) { max-width:100%; overflow:auto; }
   .entries { border-top:1px solid var(--color-edge); }
-  .entry { border-bottom:1px solid color-mix(in srgb,var(--color-edge) 65%,transparent); }
-  .entries > .entry:last-child { border-bottom:0; }
-  .entry > summary { display:flex; align-items:center; gap:10px; list-style:none; padding:14px 8px; border-radius:4px; font-size:13px; line-height:1.5; color:var(--color-ink); }
-  .entry > summary::-webkit-details-marker { display:none; }
-  .entry > summary :global(svg) { flex-shrink:0; color:var(--color-ink-2); transition:transform 150ms ease-out; }
+  .entry { border-bottom:1px solid color-mix(in srgb,var(--color-edge) 55%,transparent); }
+  .entry > summary { display:flex; align-items:center; gap:12px; padding:16px 0; font-size:13px; line-height:1.5; color:var(--color-ink); }
+  .entry > summary :global(svg) { flex-shrink:0; color:var(--color-ink-2); transition:transform 160ms ease-out; }
   .entry[open] > summary :global(svg) { transform:rotate(90deg); }
-  .entry > summary:hover { color:var(--color-accent); background:color-mix(in srgb,var(--color-sel) 35%,transparent); }
-  .entry[open] > summary { color:var(--color-accent-ink); }
-  .entry-detail { padding:4px 8px 18px 32px; max-width:75ch; font-size:13px; overflow-wrap:anywhere; }
-  .entry-detail :global(pre) { max-width:100%; overflow:auto; }
-  .empty-copy { color:var(--color-ink-2); padding:8px 0 16px; font-size:12px; }
+  .entry > summary:hover,.entry[open] > summary { color:var(--color-accent-ink); }
+  .entry-detail { padding:0 0 18px 26px; max-width:75ch; font-size:13px; overflow-wrap:anywhere; }
+  .empty-copy { color:var(--color-ink-2); padding:8px 0 16px; font-size:13px; }
   .additional { margin-top:12px; font-size:12px; color:var(--color-ink-2); }
   .additional > summary { margin-bottom:12px; }
-  .source-details { margin:0 8px; } .source-copy { font-size:11px; line-height:1.6; margin:12px 0; }
-  .screenshot-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
-  .screen-preview { text-align:left; min-width:0; border:1px solid transparent; border-radius:6px; overflow:hidden; background:transparent; cursor:pointer; transition:border-color 150ms; }
-  .screen-preview:hover { border-color:var(--color-edge); background:var(--color-panel); }
-  .preview-caption { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 8px 4px; font-size:12px; color:var(--color-ink); }
-  .preview-caption > span { overflow-wrap:anywhere; } .preview-caption :global(svg) { flex-shrink:0; }
-  .risk-columns,.risk-entry > summary { display:grid; grid-template-columns:minmax(0,1fr) 92px 92px; gap:12px; }
-  .risk-columns { font-size:10px; color:var(--color-ink-2); padding:0 8px 8px; border-bottom:1px solid var(--color-edge); }
-  .risk-title { display:flex; gap:8px; align-items:center; overflow-wrap:anywhere; }
-  .risk-entry.priority .risk-title { color:var(--color-warn); }
-  .risk-level { display:inline-flex; padding:4px 6px; border-radius:4px; background:var(--color-panel); gap:6px; align-items:center; font-size:11px; text-transform:capitalize; color:var(--color-ink-2); white-space:nowrap; }
-  .level-bars { display:flex; gap:2px; align-items:end; height:12px; }
-  .level-bars i { width:3px; height:5px; border-radius:1px; background:var(--color-edge); }
-  .level-bars i:nth-child(2) { height:8px; } .level-bars i:nth-child(3) { height:11px; }
+  .source-details { margin:0; } .source-copy { font-size:12px; line-height:1.6; margin:12px 0; }
+  .screenshot-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+  .screen-preview { align-self:start; text-align:left; min-width:0; border-radius:12px; cursor:pointer; background:transparent; }
+  .screen-preview :global(.thumbnail) { display:flex; border:1px solid color-mix(in srgb,var(--color-info) 20%,var(--color-edge)); border-radius:12px; padding:12px; background:color-mix(in srgb,var(--color-info) 9%,var(--color-panel)); transition:border-color 160ms ease-out,background 160ms ease-out; }
+  .screen-preview :global(.thumbnail img) { min-width:0; min-height:0; height:auto; object-fit:contain; }
+  .screen-preview:hover :global(.thumbnail) { border-color:var(--color-accent); background:color-mix(in srgb,var(--color-info) 15%,var(--color-panel)); }
+  .preview-caption { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 2px 0; font-size:12px; line-height:1.5; color:var(--color-ink-2); }
+  .preview-caption > span { overflow-wrap:anywhere; } .preview-caption :global(svg) { flex-shrink:0; color:var(--color-accent-ink); }
+  .screen-preview:hover .preview-caption { color:var(--color-ink); }
+  .risks { container-type:inline-size; padding:24px; border-radius:16px; background:var(--color-panel); border:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
+  .risks .section-title { margin-bottom:6px; }
+  .risks h2 { font-size:20px; line-height:1.3; font-weight:600; letter-spacing:-.015em; gap:12px; }
+  .risks .section-count { display:inline-flex; align-items:center; justify-content:center; min-width:25px; height:25px; padding:0 7px; border-radius:7px; background:var(--color-accent-fill); color:var(--color-accent-ink); font-size:12px; font-weight:500; letter-spacing:0; }
+  .risk-attribution { font-size:12px; color:var(--color-ink-2); margin-bottom:24px; }
+  .risk-columns,.risk-entry > summary { display:grid; grid-template-columns:minmax(0,1fr) 84px 84px; gap:14px; }
+  .risk-columns { padding:0 0 12px; font-size:12px; color:var(--color-ink-2); border-bottom:1px solid var(--color-edge); }
+  .risk-entry > summary { padding:18px 0; align-items:center; }
+  .risk-title { display:flex; gap:8px; align-items:baseline; overflow-wrap:anywhere; font-size:13px; line-height:1.55; }
+  .risk-title :global(svg) { position:relative; top:2px; }
+  .risk-rating { min-width:0; }
+  .rating-label { display:none; }
+  .risk-level { display:inline-flex; align-items:center; gap:6px; padding:5px 7px; border-radius:6px; font-size:12px; line-height:16px; text-transform:capitalize; white-space:nowrap; color:var(--color-ink-2); background:color-mix(in srgb,var(--color-ink) 5%,transparent); }
+  .level-bars { display:inline-flex; align-items:end; gap:2px; height:12px; }
+  .level-bars i { width:3px; height:4px; border-radius:1px; background:color-mix(in srgb,var(--color-ink-2) 22%,transparent); }
+  .level-bars i:nth-child(2) { height:8px; } .level-bars i:nth-child(3) { height:12px; }
   .level-bars i.filled { background:currentColor; }
-  [data-level=high] { color:var(--color-warn); background:color-mix(in srgb,var(--color-warn) 10%,var(--color-canvas)); } [data-level=medium] { color:var(--color-ink); }
+  [data-level=high] { color:var(--color-warn); background:color-mix(in srgb,var(--color-warn) 12%,transparent); }
+  [data-level=medium] { color:var(--color-ink); }
+  .risk-detail { display:grid; gap:16px; padding:0 0 20px 22px; }
+  .risk-detail h3 { font-size:12px; font-weight:500; color:var(--color-ink-2); margin:0 0 6px; }
+  @container (max-width:440px) {
+    .risk-columns { display:none; }
+    .risk-attribution { margin-bottom:16px; }
+    .risk-entry:first-of-type { border-top:1px solid var(--color-edge); }
+    .risk-entry > summary { grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; }
+    .risk-title { grid-column:1/-1; font-size:14px; }
+    .risk-rating { display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding-left:22px; }
+    .rating-label { display:block; font-size:12px; color:var(--color-ink-2); }
+  }
+  .risk-detail p { font-size:13px; line-height:1.6; color:var(--color-ink); max-width:65ch; overflow-wrap:anywhere; }
   .risks > :global(button) { margin-top:16px; }
   .assessment-message { color:var(--color-ink-2); font-size:12px; line-height:1.5; margin-top:12px; }
-  @media(min-width:1700px) { .screenshot-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
-  @media(max-width:1100px) { .overview { gap:28px; grid-template-columns:minmax(0,1fr) minmax(340px,1fr); } h1 { font-size:24px; } }
-  @media(max-width:800px) { .overview { grid-template-columns:minmax(0,1fr); gap:28px; } .review-intro { padding-top:0; } }
-  @media(max-width:440px) { .risk-columns,.risk-entry > summary { grid-template-columns:minmax(0,1fr) 76px 76px; gap:8px; } .risk-level { gap:4px; font-size:10px; } .readiness,.review-panel { padding:16px; } .screenshot-grid { gap:12px; } }
-  @media(prefers-reduced-motion:reduce) { .entry > summary :global(svg),.screen-preview { transition:none; } }
+  .feedback { padding:20px; border-radius:12px; background:color-mix(in srgb,var(--color-info) 6%,var(--color-panel)); }
+  @media(min-width:1200px) { .screenshot-grid { grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; } }
+  @media(max-width:1100px) { .overview { gap:32px; grid-template-columns:minmax(0,1fr) 330px; } h1 { font-size:26px; } .readiness { padding:20px; } }
+  @media(max-width:800px) { .overview { grid-template-columns:minmax(0,1fr); gap:32px; max-width:620px; } .change-column,.decision-column { display:contents; } .readiness { order:1; } .features { order:2; } .visual-review { order:3; } .risks { order:4; } .feedback { order:5; } .source-details { order:6; } }
+  @media(max-width:440px) { .risks { padding:20px 16px; } .features { padding:20px 16px; } .features h2 { font-size:20px; } .feature-description { margin-right:0; } h1 { font-size:24px; } .screenshot-grid { gap:16px 12px; } .screen-preview :global(.thumbnail) { padding:6px; border-radius:8px; } .preview-caption { font-size:12px; } .readiness { padding:18px; } }
+  @media(prefers-reduced-motion:reduce) { .entry > summary :global(svg),.screen-preview :global(.thumbnail),.feature-heading > :global(svg) { transition:none; } }
 </style>
