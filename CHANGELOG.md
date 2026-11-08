@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.2.20](https://github.com/sushidev-team/lola/compare/v0.2.19...v0.2.20) (2026-11-08)
+
+
+### Features
+
+* add agent-assisted SSH sessions ([17ff17b](https://github.com/sushidev-team/lola/commit/17ff17b1e5fa3f3840254e4a5b0dab64fb8f81b4))
+* add named sessions and project command navigation ([211603e](https://github.com/sushidev-team/lola/commit/211603e83df29f7271b48ea64883f9e6c93fef95))
+* add retained PR review packages and desktop workspace ([4414bd9](https://github.com/sushidev-team/lola/commit/4414bd9da091cea6acd4d27227d307b8d40c1afd))
+* add screenshot review keyboard shortcuts ([0eec459](https://github.com/sushidev-team/lola/commit/0eec4598337236d52b3be1fa9f7670fd79535951))
+* add session activity minimap and Midnight theme ([6d6edc2](https://github.com/sushidev-team/lola/commit/6d6edc2cc7839ec1cdfb5a496d269b5550251fae))
+* authorize autonomous goals from the TUI ([db24354](https://github.com/sushidev-team/lola/commit/db24354b048a6df110d0a21457dc7c5c3de108bb))
+* checkpoint self-improving workspaces and autonomous goals ([c830152](https://github.com/sushidev-team/lola/commit/c83015259944d8d0aacbaa6cb5588bd462f96561))
+* complete workspace goal controls and retain pilot evidence ([772dafc](https://github.com/sushidev-team/lola/commit/772dafce248316e2795978ce9d6f0673a26dbf17))
+* configure specialist review profiles in the TUI ([2f524fe](https://github.com/sushidev-team/lola/commit/2f524fea6e9649fcb066b9a4d355f956011e1a87))
+* consolidate session navigation in resizable sidebar ([f8db843](https://github.com/sushidev-team/lola/commit/f8db843c1509059ee9c8bd9119d66b06f2af2d41))
+* delete selected review comments with command backspace ([89fc7d8](https://github.com/sushidev-team/lola/commit/89fc7d8d681169fd5915d39b8f1bf2e70b6e5575))
+* **desktop:** add PR merge controls with method selection ([32323cb](https://github.com/sushidev-team/lola/commit/32323cbb51ec0f0c1b934f671a4bdb56a13891b1))
+* **desktop:** improve agent messaging and session activity ([a904b6f](https://github.com/sushidev-team/lola/commit/a904b6f8321324de6531caafc512c9dd6c50e694))
+* **desktop:** make the session view the one way to speak to agents ([27df1e5](https://github.com/sushidev-team/lola/commit/27df1e5396e562306c90ec2d9bf363bfe03fb413))
+* **desktop:** open session folders in Finder ([f75fbec](https://github.com/sushidev-team/lola/commit/f75fbecf6ccb8a170dfe23d246f982ab81072ad3))
+* **desktop:** refine agent conversation rendering and colors ([1f13bff](https://github.com/sushidev-team/lola/commit/1f13bff9da3d4f0271852cae89c9c43584bddd9a))
+* edit review comments directly on screenshots ([3925c79](https://github.com/sushidev-team/lola/commit/3925c79b03c9b4b507b01630614b0c484fb58866))
+* expose specialist reviews and goal authoring in desktop ([ed2770e](https://github.com/sushidev-team/lola/commit/ed2770e0ce17fa888bc969f27efbdb0bd13cb81e))
+* make PR review an interactive screenshot workspace ([c996ffd](https://github.com/sushidev-team/lola/commit/c996ffd7220092712f3fd1faf3008b14cb718659))
+* plan and publish reviewed goals from the TUI ([6c0135e](https://github.com/sushidev-team/lola/commit/6c0135ef3be2970fe48bdf124919ff980d1a47a1))
+* preserve specialist model and prompt provenance ([20f89dc](https://github.com/sushidev-team/lola/commit/20f89dc0e85c1a10a02273cda597499c3f8e1c6c))
+* promote verified review lessons against accepted code ([5261611](https://github.com/sushidev-team/lola/commit/5261611db100cd543ebc7636067898260edc3af4))
+* propose prevention work from recurring workspace lessons ([e777089](https://github.com/sushidev-team/lola/commit/e777089c8135f6bc95a7ce292e9e27950c1fdde3))
+* redesign PR overview around features and review evidence ([26640a7](https://github.com/sushidev-team/lola/commit/26640a7798c52e6f3a8181bf55fbf695c5899a5b))
+* refine conversation controls and conflict recovery ([4f47dca](https://github.com/sushidev-team/lola/commit/4f47dcacabe4cb55597b8ee3831fc8c7966efa97))
+* refine sidebar hierarchy and restore header quotas ([cd74172](https://github.com/sushidev-team/lola/commit/cd7417291ce66629b706dfc592e1dae7e77a9b6b))
+* revalidate workspace lessons against committed code ([eef8d84](https://github.com/sushidev-team/lola/commit/eef8d84949d4aefd66311251535a6066f8d6cf04))
+* **review:** refine PR workspace and disclosure hierarchy ([9ce3448](https://github.com/sushidev-team/lola/commit/9ce3448a4ee447d9655d65c1e247f48b2a109b70))
+* route specialist findings and record scoped worker disputes ([5532a74](https://github.com/sushidev-team/lola/commit/5532a740d75f063e42d7edd469aba1dd00552bdb))
+* **runtime:** pre-accept Claude Code workspace trust for lola worktrees ([4aeb4d0](https://github.com/sushidev-team/lola/commit/4aeb4d009caceefadf4e0c8c2bead084fcf6615e))
+* **sessions:** select existing branches or create a new one ([8ded0ab](https://github.com/sushidev-team/lola/commit/8ded0ab346afe5f3fd40afd8d9862e7608d9416c))
+* simplify onboarding and prevent Keychain startup hangs ([0179dff](https://github.com/sushidev-team/lola/commit/0179dff21bfb5db3eb942b2e721a0ecca57dee22))
+* stop a session's agent while keeping its worktree ([5531496](https://github.com/sushidev-team/lola/commit/55314967de50144d85efb0967fe2b5894b1c186c))
+* **tasks:** add manual checks and task feedback ([74b65d0](https://github.com/sushidev-team/lola/commit/74b65d0079789abb87c6a880ab8132a9170a7a64))
+* **ui:** refine Lola workspace and session review panels ([7386dd4](https://github.com/sushidev-team/lola/commit/7386dd42210cd57da0ec358e9dfc3cfb99c51513))
+* unify PR review overview and prioritize risks ([9e7ed8e](https://github.com/sushidev-team/lola/commit/9e7ed8ef84791aaed78c6a46e5ac67fe7da014d5))
+
+
+### Bug Fixes
+
+* **attention:** treat Claude Code's dim prompt suggestion as an empty composer ([c727c36](https://github.com/sushidev-team/lola/commit/c727c36bc5bedb19971d7825b773c703d20e3250))
+* better orchestration controls w/ session merge conflicts etc. ([a49e07f](https://github.com/sushidev-team/lola/commit/a49e07f5110a5b4320598c066ad6035df2578566))
+* confirm comment edits and preserve complete review feedback ([99232e6](https://github.com/sushidev-team/lola/commit/99232e698c29742bfa7ca7525059952d4ecc5be8))
+* correct temporary session creation and exit behavior ([d3b6d10](https://github.com/sushidev-team/lola/commit/d3b6d10c9276d3f02d53e2a51fe1ebe032bfd9c0))
+* **desktop:** check for updates on startup and periodically ([9b42b57](https://github.com/sushidev-team/lola/commit/9b42b57baf1eadd09fd0a61432ced2e0d69214b3))
+* **desktop:** distinguish merged sessions with a green done icon ([e17af7e](https://github.com/sushidev-team/lola/commit/e17af7e4d95e00fed5ce17e5acee61a25608af59))
+* **desktop:** remember chosen merge method ([9c4a3b7](https://github.com/sushidev-team/lola/commit/9c4a3b70656e107bab4948a0b9316f1d1bec7096))
+* **desktop:** remove standalone summary from overview ([12d0a6a](https://github.com/sushidev-team/lola/commit/12d0a6a27a6ab9e167a00ffee4063d176bc8cfe8))
+* **desktop:** stabilize conversation activity and attachment editing ([66119bf](https://github.com/sushidev-team/lola/commit/66119bfe5fe96ddefcc7f9aaa0ae707827168bb7))
+* **desktop:** stop leaking tmux attach clients across web-view reloads ([71306f0](https://github.com/sushidev-team/lola/commit/71306f09e1c30893e5f556a0e816fbc2faad8e8c))
+* **goals:** authorize bounded acceptance-check memory ([468bd03](https://github.com/sushidev-team/lola/commit/468bd0310d670f3dca87bd03fa3f3596f48ff752))
+* periodic updates ([1087386](https://github.com/sushidev-team/lola/commit/108738663de70c42d898b9030b2615f3b39e4818))
+* prevent stale session recovery after cleanup ([bbd2adc](https://github.com/sushidev-team/lola/commit/bbd2adcc9cff9b5372bc9f5bdad4432ef4596734))
+* retain screenshot annotations after saving feedback ([545a3ca](https://github.com/sushidev-team/lola/commit/545a3cac48f033e67e4cda7334c22d43f176001e))
+* save and dismiss screenshot comments on click-away ([d7add57](https://github.com/sushidev-team/lola/commit/d7add57ef917ce52b7c21673c5c15fafffaf110d))
+* simplify screenshot comment editor and feedback recovery ([2b70dd3](https://github.com/sushidev-team/lola/commit/2b70dd39b0d1944978324e37f7a6c6e096d2ff7b))
+
 ## [0.2.19](https://github.com/sushidev-team/lola/compare/v0.2.18...v0.2.19) (2026-10-20)
 
 
