@@ -5,11 +5,12 @@
   import { reviewOverview, reviewConfidence, riskWeight, type OverviewItem, type ReviewChange, type RiskLevel } from '$lib/reviewoverview';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
+  import Skeleton from '../Skeleton.svelte';
   import SSHRich from '../ssh/SSHRich.svelte';
   import ReviewThumbnail from './ReviewThumbnail.svelte';
-  let { pkg, facts, sessionId, freshness, onScreen, checks, feedback, onAssessRisks, assessment }: {
+  let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment }: {
     pkg:ReviewPackage; facts?:PRReadinessData; sessionId:string; freshness:'current'|'stale'|'unknown'; onScreen:(index:number)=>void;
-    checks?:Snippet; feedback?:Snippet; onAssessRisks?:()=>void; assessment?:{state:string;message:string};
+    checking?:boolean; checks?:Snippet; feedback?:Snippet; onAssessRisks?:()=>void; assessment?:{state:string;message:string};
   } = $props();
   const overview = $derived(reviewOverview(pkg));
   const confidence = $derived(reviewConfidence(pkg,facts));
@@ -62,12 +63,17 @@
   <div class="decision-column">
     <div class="readiness">
       <section class="confidence" aria-label="Review confidence">
-        <div class="confidence-label"><h2><Icon name="shield-check" size={17}/>Evidence coverage</h2><span>{confidence.score === null ? 'Revision unconfirmed' : `${confidence.confirmed} / 5 signals`}</span></div>
-        <strong class="score">{confidence.score ?? '—'}{#if confidence.score !== null}<small>/100</small>{/if}</strong>
+        <div class="confidence-label"><h2><Icon name="shield-check" size={17}/>Evidence coverage</h2><span>{#if checking}<span role="status" aria-label="Loading evidence coverage"><span class="sr-only">Loading evidence coverage…</span><Skeleton width="90px" height="18px"/></span>{:else}{confidence.score === null ? 'Not verified' : `${confidence.confirmed} / 5 signals`}{/if}</span></div>
+        {#if checking}<div class="score"><Skeleton width="64px" height="29px"/></div>{:else}<strong class="score">{confidence.score ?? '—'}{#if confidence.score !== null}<small>/100</small>{/if}</strong>{/if}
+        {#if checking}
+          <div class="signal-chart" aria-hidden="true">{#each [1,2,3,4,5] as signal}<Skeleton height="4px"/>{/each}</div>
+          <div class="score-explanation"><Skeleton width="65%" height="18px"/></div>
+        {:else}
         <div class="signal-chart" role="img" aria-label={confidence.score === null ? 'Confidence not scored: revision unconfirmed' : `Evidence coverage: ${confidence.score} out of 100`}>
           {#each confidence.signals as signal}<span class:confirmed={signal.confirmed} class:failed={signal.failed} title={`${signal.label}: ${signal.value}`}></span>{/each}
         </div>
         <details class="score-explanation"><summary><Chevron class="disclosure-chevron" />Evidence behind this score</summary><dl>{#each confidence.signals as signal}<div><dt>{signal.label}</dt><dd>{signal.value}</dd></div>{/each}</dl><p>20 points per confirmed signal for this revision. Evidence coverage, not a probability of correct code. Agent claims do not increase it.</p></details>
+        {/if}
       </section>
       {#if checks}<div class="checks">{@render checks()}</div>{/if}
     </div>

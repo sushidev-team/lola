@@ -3,6 +3,7 @@
   import { DaemonService, TalkService } from '@bindings/desktop';
   import { SvelteMap } from 'svelte/reactivity';
   import type { ReviewPackage as Package, PRReadinessData } from '@bindings/internal/protocol';
+  import { readPRReadiness } from '$lib/prreadiness';
   import { store } from '$lib/store.svelte';
   import { nav } from '$lib/nav.svelte';
   import { feedback } from '$lib/feedback.svelte';
@@ -19,6 +20,7 @@
   import BeforeMerge from './BeforeMerge.svelte';
   import OverviewChecks from './OverviewChecks.svelte';
   import ReviewCanvas from './ReviewCanvas.svelte';
+  import ReviewSkeleton from './ReviewSkeleton.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
   const session = $derived(store.sessionById(sessionId));
@@ -33,7 +35,9 @@
   let selected = $state('');
   const current = $derived(packages.find(p => p.id === selected) ?? packages[0]);
   let facts = $state<PRReadinessData>();
-  let loading = $state(false);
+  let loading = $state(true);
+  let materialLoading = $state(true);
+  let checking = $state(false);
   let error = $state('');
   let generation = 0;
   let tab = $state('material');
@@ -78,20 +82,22 @@
 
   async function refresh() {
     const version = ++generation, sid = target, pr = number;
-    loading = true; error = ''; facts = undefined;
-    const [material, status] = await Promise.allSettled([
-      DaemonService.ReviewPackages(sid),
-      pr ? DaemonService.PRReadiness(sid, pr) : Promise.resolve(undefined),
+    loading = true; materialLoading = true; checking = !!pr; error = ''; facts = undefined;
+    // Retained material is local; don't hold it behind a GitHub round trip.
+    await Promise.all([
+      DaemonService.ReviewPackages(sid).then(material => {
+        if (version !== generation) return;
+        packages = material.packages ?? [];
+        // A new publication must not replace the revision someone is reviewing.
+        if (!selected || !packages.some(p => p.id === selected)) selected = packages[0]?.id ?? '';
+      }, err => { if (version === generation) error = String(err); })
+        .finally(() => { if (version === generation) materialLoading = false; }),
+      (pr ? readPRReadiness(sid, pr) : Promise.resolve(undefined)).then(status => {
+        if (version === generation) facts = status;
+      }, () => { /* Unavailable GitHub facts remain unverified. */ })
+        .finally(() => { if (version === generation) checking = false; }),
     ]);
-    if (version !== generation) return;
-    if (material.status === 'fulfilled') {
-      packages = material.value.packages ?? [];
-      // A new publication must not replace the revision someone is reviewing.
-      if (!selected || !packages.some(p => p.id === selected)) selected = packages[0]?.id ?? '';
-    }
-    else error = String(material.reason);
-    if (status.status === 'fulfilled') facts = status.value;
-    loading = false;
+    if (version === generation) loading = false;
   }
   $effect(() => {
     target; number;
@@ -202,8 +208,8 @@
           {#if error}<p role="alert" class="mb-5 text-warn">Could not load review material. {error} Try Refresh review; an older daemon may need restarting.</p>{/if}
           {#if current}
             {#if current.id !== packages[0]?.id}<p class="mb-5 text-sm text-info">A newer review package is available. <Button size="xs" onclick={() => selected = packages[0].id}>View latest package</Button></p>{/if}
-            <ReviewOverview pkg={current} {facts} {sessionId} {freshness} onScreen={index => { canvasScreen = index; tab = 'visuals'; }} {checks} feedback={reviewFeedback} onAssessRisks={canRequest ? () => requestMaterial(true) : undefined} {assessment}/>
-          {:else if loading}<p role="status" class="text-faint">Loading review material…</p>
+            <ReviewOverview pkg={current} {facts} {sessionId} {freshness} {checking} onScreen={index => { canvasScreen = index; tab = 'visuals'; }} {checks} feedback={reviewFeedback} onAssessRisks={canRequest ? () => requestMaterial(true) : undefined} {assessment}/>
+          {:else if materialLoading}<ReviewSkeleton/>
           {:else if !error}
             <div class="empty-review">
               <h1 class="text-lg font-semibold text-ink">No review material yet</h1>

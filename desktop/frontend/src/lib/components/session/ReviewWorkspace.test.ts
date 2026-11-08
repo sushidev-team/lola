@@ -27,6 +27,45 @@ beforeEach(() => {
 afterEach(() => {cleanup();feedback.clear(id);nav.closeOverlay();vi.restoreAllMocks();vi.unstubAllGlobals();});
 async function openScreens() { await fireEvent.click(await screen.findByRole('tab',{name:'Screenshots'})); }
 
+it('shows material before GitHub completes and shares the pending status request with PR actions',async()=>{
+  let finish!:(value:ReturnType<typeof status>)=>void;
+  facts.mockImplementationOnce(()=>new Promise(resolve=>finish=resolve) as never);
+  render(ReviewWorkspace,{sessionId:id});
+  await screen.findByRole('heading',{name:'A clearer settings screen'});
+  expect(screen.queryByRole('status',{name:'Loading review'})).toBeNull();
+  expect(screen.getByRole('status',{name:'Loading evidence coverage'})).toBeInTheDocument();
+  expect(screen.getByRole('status',{name:'Loading PR status'})).toBeInTheDocument();
+  expect(screen.queryByText('Not verified',{exact:true})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Squash and merge'})).toBeNull();
+  expect(facts).toHaveBeenCalledTimes(1);
+  finish(status());
+  await screen.findByRole('img',{name:'Evidence coverage: 100 out of 100'});
+  expect(await screen.findByRole('button',{name:'Squash and merge'})).toBeEnabled();
+  expect(screen.queryByRole('status',{name:'Loading evidence coverage'})).toBeNull();
+  expect(screen.queryByRole('status',{name:'Loading PR status'})).toBeNull();
+});
+
+it('shows a skeleton while material loads without flashing the empty state',async()=>{
+  let finish!:(value:{packages:ReturnType<typeof pkg>[]})=>void;
+  read.mockImplementationOnce(()=>new Promise(resolve=>finish=resolve) as never);
+  render(ReviewWorkspace,{sessionId:id});
+  expect(await screen.findByRole('status',{name:'Loading review'})).toBeInTheDocument();
+  expect(screen.queryByText('No review material yet')).toBeNull();
+  finish({packages:[pkg()]});
+  await screen.findByRole('heading',{name:'A clearer settings screen'});
+  expect(screen.queryByRole('status',{name:'Loading review'})).toBeNull();
+});
+
+it('shows material errors without waiting for GitHub and removes the skeleton',async()=>{
+  let finish!:(value:ReturnType<typeof status>)=>void;
+  facts.mockImplementationOnce(()=>new Promise(resolve=>finish=resolve) as never);
+  read.mockRejectedValueOnce(new Error('Material unavailable'));
+  render(ReviewWorkspace,{sessionId:id});
+  expect(await screen.findByRole('alert')).toHaveTextContent('Material unavailable');
+  expect(screen.queryByRole('status',{name:'Loading review'})).toBeNull();
+  finish(status());
+});
+
 it('requests review material through the conversation without sending draft feedback or duplicating clicks',async()=>{
   read.mockResolvedValue({packages:[]});
   feedback.setNote(id,'Keep this unfinished comment');
@@ -290,7 +329,7 @@ it('incorporates checks and feedback into Overview without opening a side panel'
   render(ReviewWorkspace,{sessionId:id});
   await screen.findByRole('heading',{name:'A clearer settings screen'});
   expect(screen.queryByRole('complementary',{name:'Review actions'})).toBeNull();
-  expect(screen.getByRole('button',{name:'Squash and merge'})).toBeInTheDocument();
+  expect(await screen.findByRole('button',{name:'Squash and merge'})).toBeInTheDocument();
   expect(screen.getByRole('button',{name:'Send feedback to agent'})).toBeEnabled();
   await fireEvent.input(screen.getByRole('textbox',{name:'Review comment'}),{target:{value:'Check the error state'}});
   await fireEvent.click(screen.getByRole('button',{name:'Add to feedback'}));

@@ -264,3 +264,26 @@ WebKit verified both ratings remain visible with rows collapsed, expansion works
 and no horizontal overflow occurs at 1440, 1024, 700 or 420px. Dark and light
 palettes were inspected. Four overview tests, Svelte checks and production build
 passed. Captures retain the same real material and mocked PR-readiness provenance.
+
+### Progressive loading
+
+Review material now renders independently of GitHub readiness. A read-only sample
+from the local daemon returned material in 2ms and readiness in 813ms; the latter
+previously delayed both. Concurrent readiness reads from the overview and merge
+panel share one request, without caching completed responses.
+
+- [Desktop loading skeleton](loading-1440.png)
+- [Narrow loading skeleton](loading-420.png)
+
+WebKit checks with simulated 3s material and 6s readiness delays confirmed that
+material appears before status, only one readiness request runs, and neither
+viewport overflows. The 420px check also confirmed reduced motion disables the
+pulse. All 53 affected tests, Svelte checks and the production build passed.
+These are isolated browser fixtures, not packaged native WKWebView captures.
+
+The evidence score, signal bar, PR status values and actions also retain skeleton
+placeholders after material arrives while GitHub is pending:
+[desktop](status-loading-1440.png), [narrow](status-loading-420.png).
+WebKit confirmed animated placeholders at 1440px and static placeholders with
+reduced motion at 420px, with no overflow or browser errors. All 50 affected
+component tests, Svelte checks and the production build passed.

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DaemonService } from '@bindings/desktop';
+  import { readPRReadiness } from '$lib/prreadiness';
   import { reviewWorkspace } from '$lib/reviewworkspace.svelte';
   import { nav } from '$lib/nav.svelte';
   import type { PRReadinessData } from '@bindings/internal/protocol';
@@ -9,6 +10,7 @@
   import { appLabel } from '$lib/stackapps';
   import { tooltip } from '$lib/tooltip';
   import Icon from '../Icon.svelte';
+  import Skeleton from '../Skeleton.svelte';
   import type { IconName } from '$lib/icons';
   import Button from '../Button.svelte';
   import Tabs from '../Tabs.svelte';
@@ -97,7 +99,7 @@
     const target = selected, key = identity, version = ++generation;
     loading = true;
     try {
-      const result = await DaemonService.PRReadiness(target.id, target.number);
+      const result = await readPRReadiness(target.id, target.number);
       if (version !== generation || key !== identity) return;
       data = result; loadedFor = key; error = '';
     } catch (e) { if (version === generation && key === identity) error = String(e); }
@@ -170,7 +172,17 @@
   </header>
   {#if prs.length > 1}<Tabs tabs={prs.map(p => ({ id:p.id, label:p.label }))} active={selected.id} onSelect={id => chosen = id} />{/if}
   {#if error}<p class="error text-warn" role="status">{current ? 'Status may be outdated. ' : ''}Could not refresh GitHub. <button type="button" onclick={refresh} title={error}>Retry</button></p>{/if}
-  {#if !current && !error}<p class="muted" role="status">Loading PR status…</p>
+  {#if !current && !error}
+    <div role="status" aria-label="Loading PR status">
+      <span class="sr-only">Loading PR status…</span>
+      <div class="signals" aria-hidden="true">
+        {#each ['CI','Review','Branch','Comments'] as label}
+          <div class="signal"><Skeleton width="15px" height="15px"/><span class="signal-label">{label}</span><span class="signal-value"><Skeleton width="76px"/></span></div>
+        {/each}
+      </div>
+      <p class="next"><Skeleton width="52%" height="18px"/></p>
+      {#if session.location !== 'ssh'}<div class="pr-actions loading-actions"><Skeleton height={reviewLayout ? '34px' : '26px'}/><Skeleton height={reviewLayout ? '34px' : '26px'}/></div>{/if}
+    </div>
   {:else if terminal}<p class="terminal"><Icon name={current?.state === 'MERGED' ? 'check' : 'circle-minus'} size={15} /><span>{current?.state === 'MERGED' ? 'Merged' : 'Closed without merging'}</span></p>
   {:else if current}
     <div class="signals" aria-label="Merge checks">
@@ -268,6 +280,7 @@
   .preview { display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere;font-size:12px;line-height:18px; }
   .more { display:block;font-size:11px;color:var(--color-faint);margin:5px 0 0 20px;padding:3px 0; }
   .feedback-action { margin-top:14px;padding-top:12px;border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
+  .loading-actions > :global(.skeleton) { flex:1; }
   .pr-actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:12px; }
   .merge-split { display:inline-flex;align-items:stretch; }
   .merge-method { display:block;width:24px;flex-shrink:0; }
