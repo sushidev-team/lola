@@ -14,7 +14,7 @@
   const saveKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘↵' : 'Ctrl+Enter';
   const shortcuts = [
     ['C', 'Comment pin'], ['R', 'Rectangle'], ['V / Esc', 'Cancel drawing'],
-    ['← / →', 'Previous / next screenshot'], ['N / Shift+N', 'Next / previous comment'],
+    ['↑ / ↓', 'Previous / next screenshot'], ['← / →', 'Move comparison divider'], ['N / Shift+N', 'Next / previous comment'],
     ['1 / 2', 'Slider / side by side'], ['3 / 4', 'Before / after'],
     ['+ / − / 0', 'Zoom in / out / fit'], ['I', 'Screen details'], ['B', 'Checks & feedback'],
     [saveKeys, 'Save comment'], ['Esc', 'Close comment'], ['⌘⌫ / ⌘Delete', 'Delete selected comment'], ['Delete', 'Delete focused comment'], ['?', 'Keyboard shortcuts'],
@@ -35,10 +35,12 @@
   }
   let tool = $state<'view' | 'pin' | 'area'>('view');
   let zoom = $state(100);
+  const zoomLevels = [100, 150, 200, 300, 400];
   let split = $state(50);
   let before = $state(''), after = $state(''), error = $state('');
   let retry = $state(0);
   let viewport = $state<HTMLDivElement>();
+  let zoomFrame = $state<HTMLDivElement>();
   let canvasArea = $state<HTMLDivElement>();
   let imageStage = $state<HTMLDivElement>();
   let editor = $state<HTMLDivElement>();
@@ -56,6 +58,60 @@
     const observer = new ResizeObserver(() => { available = {width:node.clientWidth-32,height:node.clientHeight-32}; });
     observer.observe(node);
     return () => observer.disconnect();
+  });
+  let zoomRevision = 0;
+  async function setZoom(value: number, anchor?: {x:number;y:number}) {
+    const next = Math.max(100, Math.min(400, Math.round(value)));
+    if (!Number.isFinite(next) || next === zoom) return;
+    const scroller = viewport, frame = zoomFrame;
+    const bounds = scroller?.getBoundingClientRect(), image = frame?.getBoundingClientRect();
+    const point = anchor ?? (bounds && scroller ? {x:bounds.left + scroller.clientWidth / 2, y:bounds.top + scroller.clientHeight / 2} : undefined);
+    const position = point && image && image.width && image.height
+      ? {x:(point.x-image.left)/image.width, y:(point.y-image.top)/image.height} : undefined;
+    const revision = ++zoomRevision;
+    zoom = next;
+    await tick();
+    if (revision !== zoomRevision || !scroller || !frame || frame !== zoomFrame) return;
+    if (next === 100) { scroller.scrollLeft = 0; scroller.scrollTop = 0; }
+    else if (position && point) {
+      // Keep the same image coordinate under the pointer (or viewport center).
+      const resized = frame.getBoundingClientRect();
+      scroller.scrollLeft += resized.left + position.x * resized.width - point.x;
+      scroller.scrollTop += resized.top + position.y * resized.height - point.y;
+    }
+  }
+  function stepZoom(direction: number) {
+    void setZoom(direction > 0 ? zoomLevels.find(level => level > zoom) ?? 400 : [...zoomLevels].reverse().find(level => level < zoom) ?? 100);
+  }
+  $effect(() => {
+    const node = viewport;
+    if (!node) return;
+    function wheel(event: WheelEvent) {
+      if (!event.ctrlKey && !event.metaKey) return; // Ordinary scrolling pans the enlarged image.
+      event.preventDefault();
+      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? node!.clientHeight : 1);
+      void setZoom(zoom * Math.exp(-delta * .01), {x:event.clientX,y:event.clientY});
+    }
+    // WKWebView reports trackpad pinches as gesture events rather than Ctrl+wheel.
+    let gestureZoom = 100;
+    function gestureStart(event: Event) { event.preventDefault(); gestureZoom = zoom; }
+    function gestureChange(event: Event) {
+      event.preventDefault();
+      const gesture = event as Event & {scale:number;clientX:number;clientY:number};
+      const anchor = Number.isFinite(gesture.clientX) && Number.isFinite(gesture.clientY) ? {x:gesture.clientX,y:gesture.clientY} : undefined;
+      void setZoom(gestureZoom * gesture.scale, anchor);
+    }
+    function gestureEnd(event: Event) { event.preventDefault(); }
+    node.addEventListener('wheel', wheel, {passive:false});
+    node.addEventListener('gesturestart', gestureStart, {passive:false});
+    node.addEventListener('gesturechange', gestureChange, {passive:false});
+    node.addEventListener('gestureend', gestureEnd, {passive:false});
+    return () => {
+      node.removeEventListener('wheel', wheel);
+      node.removeEventListener('gesturestart', gestureStart);
+      node.removeEventListener('gesturechange', gestureChange);
+      node.removeEventListener('gestureend', gestureEnd);
+    };
   });
   let sliding = false;
   function slideAt(e: PointerEvent) {
@@ -135,6 +191,7 @@
     const popup = editor;
     function clickAway(event: MouseEvent) {
       if (popup.contains(event.target as Node)) return;
+      if (event.target instanceof Element && event.target.closest('.zoom-controls')) return;
       if (!requestClose(false)) { event.preventDefault(); event.stopImmediatePropagation(); }
     }
     document.addEventListener('click', clickAway, true);
@@ -240,7 +297,16 @@
     }
     if (e.key === '?') { consume(); shortcutsOpen = !shortcutsOpen; return; }
     const key = e.key.toLowerCase();
-    if (!['c','r','v','i','b','n','arrowleft','arrowright','1','2','3','4','+','=','-','0'].includes(key)) return;
+    if (['+','=','-','0'].includes(key)) {
+      consume();
+      if (key === '0') void setZoom(100); else stepZoom(key === '-' ? -1 : 1);
+      return;
+    }
+    if (['arrowleft','arrowright'].includes(key)) {
+      if (mode === 'slider') { consume(); split = Math.max(0,Math.min(100,split+(key === 'arrowleft' ? -5 : 5))); }
+      return;
+    }
+    if (!['c','r','v','i','b','n','arrowup','arrowdown','1','2','3','4'].includes(key)) return;
     // Never bypass the unsaved-changes prompt by switching tools or images.
     consume();
     if (editing && !requestClose(false)) return;
@@ -251,16 +317,13 @@
       case 'i': infoOpen = !infoOpen; break;
       case 'b': onToggleFeedback?.(); break;
       case 'n': if (canComment) nextComment(e.shiftKey ? -1 : 1); break;
-      case 'arrowleft': index = Math.max(0,index-1); focusCanvas(); break;
-      case 'arrowright': index = Math.min(screens.length-1,index+1); focusCanvas(); break;
+      case 'arrowup': index = Math.max(0,index-1); focusCanvas(); break;
+      case 'arrowdown': index = Math.min(screens.length-1,index+1); focusCanvas(); break;
       case '1': case '2': case '3': case '4': {
         const mode = ['slider','split','before','after'][Number(key)-1];
         if (screen.before || mode === 'after') chooseMode(mode);
         break;
       }
-      case '+': case '=': zoom = Math.min(200,zoom+50); break;
-      case '-': zoom = Math.max(100,zoom-50); break;
-      case '0': zoom = 100; break;
     }
   }
 </script>
@@ -279,9 +342,9 @@
     <div class="tool-group">
       <Button icon size="sm" selected={infoOpen} aria-label="Screen details" title="Screen details · I" aria-keyshortcuts="i" aria-expanded={infoOpen} onclick={() => infoOpen = !infoOpen}><Icon name="panels-top-left" size={15} /></Button>
       <span class="toolbar-separator"></span>
-      <Button icon size="sm" aria-label="Previous" title="Previous screen · ←" aria-keyshortcuts="ArrowLeft" disabled={index === 0} onclick={() => index--}><Icon name="chevron-left" size={15} /></Button>
+      <Button icon size="sm" aria-label="Previous" title="Previous screen · ↑" aria-keyshortcuts="ArrowUp" disabled={index === 0} onclick={() => index--}><Icon name="chevron-up" size={15} /></Button>
       <span class="screen-count">{index+1} / {screens.length}</span>
-      <Button icon size="sm" aria-label="Next" title="Next screen · →" aria-keyshortcuts="ArrowRight" disabled={index >= screens.length-1} onclick={() => index++}><Icon name="chevron-right" size={15} /></Button>
+      <Button icon size="sm" aria-label="Next" title="Next screen · ↓" aria-keyshortcuts="ArrowDown" disabled={index >= screens.length-1} onclick={() => index++}><Icon name="chevron-down" size={15} /></Button>
     </div>
     <div class="tool-group comparison" aria-label="Comparison mode">
       {#each [{id:'slider',label:'Slider'},{id:'split',label:'Side by side'},{id:'before',label:'Before'},{id:'after',label:'After'}] as item,i}
@@ -292,12 +355,20 @@
       {#if marks.length && canComment}<Button size="sm" aria-label="Next comment" title="Next comment · N / Previous · Shift+N" aria-keyshortcuts="n Shift+n" onclick={() => nextComment()}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
       {#if canComment}<Button icon size="sm" selected={tool === 'pin'} disabled={!after} aria-label="Add pin" title="Comment pin · C" aria-keyshortcuts="c" onclick={() => armTool('pin')}><Icon name="message-square-text" size={15} /></Button><Button icon size="sm" selected={tool === 'area'} disabled={!after} aria-label="Mark area" title="Mark area · R" aria-keyshortcuts="r" onclick={() => armTool('area')}><Icon name="square" size={15} /></Button>{/if}
       <span class="toolbar-separator"></span>
-      <Select title="Zoom · + / − / 0 to fit" aria-keyshortcuts="+ - 0" aria-label="Screenshot zoom" value={String(zoom)} onchange={e => zoom = Number(e.currentTarget.value)}><option value="100">Fit</option><option value="150">150%</option><option value="200">200%</option></Select>
+      <div class="tool-group zoom-controls" role="group" aria-label="Preview zoom">
+        <Button icon size="sm" aria-label="Zoom out" title="Zoom out · −" disabled={zoom <= 100} onclick={() => stepZoom(-1)}><Icon name="minus" size={15} /></Button>
+        <Select title="Zoom relative to Fit · + / − / 0 to fit · Pinch or Ctrl+scroll" aria-keyshortcuts="+ - 0" aria-label="Screenshot zoom" value={String(zoom)} onchange={e => void setZoom(Number(e.currentTarget.value))}>
+          {#each zoomLevels as level}<option value={String(level)}>{level === 100 ? 'Fit' : `${level}%`}</option>{/each}
+          {#if !zoomLevels.includes(zoom)}<option value={String(zoom)}>{zoom}%</option>{/if}
+        </Select>
+        <Button icon size="sm" aria-label="Zoom in" title="Zoom in · +" disabled={zoom >= 400} onclick={() => stepZoom(1)}><Icon name="plus" size={15} /></Button>
+      </div>
       <Button icon size="sm" aria-label="Screenshot shortcuts" title="Keyboard shortcuts · ?" aria-keyshortcuts="?" aria-expanded={shortcutsOpen} selected={shortcutsOpen} onclick={() => shortcutsOpen = !shortcutsOpen}><Icon name="circle-help" size={15} /></Button>
     </div>
     {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
       <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
       <dl>{#each shortcuts as [keys,action]}<div><dt>{action}</dt><dd><kbd>{keys}</kbd></dd></div>{/each}</dl>
+      <p>Pinch or Ctrl+scroll to zoom around the pointer. Scroll to pan. Zoom percentages are relative to Fit.</p>
       <p>In a comment, {saveKeys} saves and ⌘Delete removes it. Plain Delete only removes comments outside text fields.</p>
     </aside>{/if}
   </div>
@@ -320,7 +391,7 @@
     {#if error}<p role="alert" class="p-4 text-warn">Could not load screenshot. <Button onclick={() => retry++}>Retry image</Button></p>
     {:else if !after || (mode !== 'after' && !before)}<p role="status" class="p-4 text-faint">Loading screenshots…</p>
     {:else}
-      <div class="zoom-frame" style:width={`${fitWidth * zoom / 100}px`}>
+      <div class="zoom-frame" bind:this={zoomFrame} style:width={`${fitWidth * zoom / 100}px`}>
         {#if mode === 'split'}
           <div class="split-view"><figure><figcaption>Before</figcaption><img src={before} onload={e => decoded(e, 'before')} alt={`${screen.title} — Before`} onerror={() => error = 'Image could not be decoded'} /></figure><figure><figcaption>After</figcaption><img src={after} onload={e => decoded(e, 'after')} alt={`${screen.title} — After`} onerror={() => error = 'Image could not be decoded'} /></figure></div>
         {:else}
@@ -401,7 +472,7 @@
   .screen-info { border-top:1px solid var(--color-edge); padding-top:16px; font-size:12px; line-height:1.6; color:var(--color-ink-2); }
   .outdated { display:flex; align-items:center; gap:6px; margin-bottom:12px; color:var(--color-warn); }
   .canvas-area { position:relative; min-width:0; min-height:0; }
-  .viewport { height:100%; min-width:0; min-height:0; overflow:auto; background:var(--color-canvas); padding:16px; display:flex; }
+  .viewport { height:100%; min-width:0; min-height:0; overflow:auto; overflow-anchor:none; background:var(--color-canvas); padding:16px; display:flex; }
   .zoom-frame { margin:auto; flex-shrink:0; }
   .image-stage { position:relative; width:100%; }
   .annotation-surface { position:absolute; z-index:3; inset:0; width:100%; height:100%; cursor:crosshair; touch-action:none; border:0; background:transparent; }

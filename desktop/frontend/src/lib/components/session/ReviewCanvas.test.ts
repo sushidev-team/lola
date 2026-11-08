@@ -96,6 +96,101 @@ it('moves the divider from any point on the image, including a drag starting awa
   expect(surface).toHaveAttribute('aria-valuenow','80');
 });
 
+it('zooms around the pointer, keeps divider coordinates correct after scrolling, and resets to fit',async()=>{
+  render(ReviewCanvas,{pkg,onComment:()=>true});
+  const slider=await screen.findByRole('slider');
+  const stage=slider.parentElement!, frame=stage.parentElement!;
+  const viewport=frame.parentElement!;
+  const initialWidth=parseFloat(frame.style.width);
+  const rect=()=>({left:100-viewport.scrollLeft,top:50-viewport.scrollTop,width:parseFloat(frame.style.width),height:parseFloat(frame.style.width)*.625} as DOMRect);
+  vi.spyOn(frame,'getBoundingClientRect').mockImplementation(rect);
+  vi.spyOn(stage,'getBoundingClientRect').mockImplementation(rect);
+  const anchor={clientX:340,clientY:200};
+  expect(await fireEvent.wheel(viewport,{...anchor,deltaY:20,cancelable:true})).toBe(true);
+  expect(screen.getByLabelText('Screenshot zoom')).toHaveValue('100');
+  expect(await fireEvent.wheel(viewport,{...anchor,deltaY:-Math.log(2)*100,ctrlKey:true,cancelable:true})).toBe(false);
+  expect(screen.getByLabelText('Screenshot zoom')).toHaveValue('200');
+  expect(parseFloat(frame.style.width)).toBe(initialWidth*2);
+  expect(viewport.scrollLeft).toBeCloseTo(240);
+  expect(viewport.scrollTop).toBeCloseTo(150);
+  Object.defineProperty(slider,'setPointerCapture',{value:vi.fn()});
+  const imageBounds=rect();
+  await fireEvent(slider,new MouseEvent('pointerdown',{bubbles:true,button:0,clientX:imageBounds.left+imageBounds.width*.75}));
+  await fireEvent(slider,new MouseEvent('pointerup',{bubbles:true}));
+  expect(slider).toHaveAttribute('aria-valuenow','75');
+  expect(stage.querySelector('.divider')).toHaveStyle({left:'75%'});
+  expect(stage.querySelector('.baseline')).toHaveStyle({clipPath:'inset(0 25% 0 0)'});
+  await fireEvent.change(screen.getByLabelText('Screenshot zoom'),{target:{value:'400'}});
+  expect(screen.getByRole('button',{name:'Zoom in'})).toBeDisabled();
+  expect(slider).toHaveAttribute('aria-valuenow','75');
+  await fireEvent.keyDown(screen.getByRole('region',{name:'Screenshot review canvas'}),{key:'0'});
+  expect(parseFloat(frame.style.width)).toBe(initialWidth);
+  expect(viewport.scrollLeft).toBe(0);expect(viewport.scrollTop).toBe(0);
+  expect(screen.getByRole('button',{name:'Zoom out'})).toBeDisabled();
+});
+
+it('handles WebKit pinch gestures without intercepting ordinary scrolling',async()=>{
+  render(ReviewCanvas,{pkg,onComment:()=>true});
+  const viewport=(await screen.findByAltText('Settings — After')).closest('.viewport')!;
+  const gesture=async(type:string,scale=1)=>{
+    const event=new Event(type,{bubbles:true,cancelable:true});
+    Object.assign(event,{scale,clientX:300,clientY:200});
+    expect(await fireEvent(viewport,event)).toBe(false);
+  };
+  await gesture('gesturestart');await gesture('gesturechange',1.75);
+  expect(screen.getByLabelText('Screenshot zoom')).toHaveValue('175');
+  await gesture('gesturechange',2.5);await gesture('gestureend');
+  expect(screen.getByLabelText('Screenshot zoom')).toHaveValue('250');
+  await fireEvent.click(screen.getByRole('button',{name:'Zoom in'}));
+  expect(screen.getByLabelText('Screenshot zoom')).toHaveValue('300');
+  await fireEvent.click(screen.getByRole('button',{name:'Zoom out'}));
+  expect(screen.getByLabelText('Screenshot zoom')).toHaveValue('200');
+});
+
+it('keeps area comments anchored while zooming and scrolling, including an open draft',async()=>{
+  const resizeCallbacks:Array<()=>void>=[];
+  vi.stubGlobal('ResizeObserver',class {
+    constructor(callback:()=>void){resizeCallbacks.push(callback);}
+    observe(){} disconnect(){}
+  });
+  const onComment=vi.fn().mockReturnValue(true);
+  render(ReviewCanvas,{pkg,onComment});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.change(screen.getByLabelText('Screenshot zoom'),{target:{value:'200'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Mark area'}));
+  const surface=screen.getByRole('button',{name:'Place comment on After screenshot'});
+  const stage=surface.parentElement!, viewport=stage.closest<HTMLElement>('.viewport')!;
+  let bounds={left:-100,top:-50,width:800,height:600};
+  vi.spyOn(surface,'getBoundingClientRect').mockImplementation(()=>bounds as DOMRect);
+  vi.spyOn(stage,'getBoundingClientRect').mockImplementation(()=>bounds as DOMRect);
+  vi.spyOn(stage.closest('.canvas-area')!,'getBoundingClientRect').mockReturnValue({left:0,top:0,width:800,height:600} as DOMRect);
+  Object.defineProperty(surface,'setPointerCapture',{value:vi.fn()});
+  await fireEvent(surface,new MouseEvent('pointerdown',{bubbles:true,button:0,clientX:100,clientY:100}));
+  await fireEvent(surface,new MouseEvent('pointermove',{bubbles:true,clientX:300,clientY:250}));
+  await fireEvent(surface,new MouseEvent('pointerup',{bubbles:true}));
+  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Keep this position'}});
+  const pin=screen.getByRole('button',{name:'Comment 1'});
+  const region=screen.getByRole('button',{name:'Open area comment 1'});
+  expect(pin).toHaveStyle({left:'25%',top:'25%'});
+  expect(region).toHaveStyle({left:'25%',top:'25%',width:'25%',height:'25%'});
+  const dialog=screen.getByRole('dialog');
+  Object.defineProperties(dialog,{offsetWidth:{value:300},offsetHeight:{value:200}});
+  await fireEvent.click(screen.getByRole('button',{name:'Zoom in'}));
+  expect(screen.queryByText('Save changes?')).toBeNull();
+  expect(screen.getByRole('textbox')).toHaveValue('Keep this position');
+  bounds={left:-100,top:-50,width:1200,height:900};
+  resizeCallbacks.at(-1)!();
+  await fireEvent.scroll(viewport);
+  expect(dialog).toHaveStyle({left:'220px',top:'191px'});
+  bounds={...bounds,left:-200,top:-100};
+  await fireEvent.scroll(viewport);
+  expect(dialog).toHaveStyle({left:'120px',top:'141px'});
+  expect(pin).toHaveStyle({left:'25%',top:'25%'});
+  expect(region).toHaveStyle({width:'25%',height:'25%'});
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  expect(onComment).toHaveBeenCalledWith(0,expect.stringContaining('x=25%, y=25%, width=25%, height=25%\nKeep this position'),undefined);
+});
+
 
 it('edits on the image with the info rail hidden, and closes without losing the draft',async()=>{
   render(ReviewCanvas,{pkg,onComment:()=>true});
@@ -199,7 +294,7 @@ it.each(['metaKey','ctrlKey'])('saves with %s+Enter, preserving normal typing an
   await fireEvent.keyDown(field,{key:'Enter',[modifier]:true});
   expect(onComment).not.toHaveBeenCalled();
   await fireEvent.input(field,{target:{value:'Keep every line'}});
-  for (const key of ['c','r','n','i','b','1','4','ArrowLeft','ArrowRight','Delete','Backspace','Enter','?']) {
+  for (const key of ['c','r','n','i','b','1','4','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace','Enter','?']) {
     expect(await fireEvent.keyDown(field,{key})).toBe(true);
   }
   expect(field).toHaveValue('Keep every line');
@@ -238,11 +333,16 @@ it('navigates images and comparison modes, zooms, and exposes shortcut help with
   expect(screen.getByRole('complementary',{name:'Screenshot shortcuts'})).toBeInTheDocument();
   await fireEvent.keyDown(canvas,{key:'Escape'});
   expect(screen.queryByRole('complementary',{name:'Screenshot shortcuts'})).toBeNull();
-  await fireEvent.keyDown(canvas,{key:'ArrowRight'});await screen.findByAltText('Phone — After');
+  await fireEvent.keyDown(canvas,{key:'ArrowRight'});
+  expect(screen.getByRole('slider')).toHaveAttribute('aria-valuenow','60');
+  await fireEvent.keyDown(canvas,{key:'ArrowLeft'});
+  expect(screen.getByRole('slider')).toHaveAttribute('aria-valuenow','55');
+  await fireEvent.keyDown(canvas,{key:'ArrowDown'});await screen.findByAltText('Phone — After');
   await fireEvent.keyDown(canvas,{key:'1'});
   expect(screen.getByRole('button',{name:'After'})).toHaveAttribute('aria-pressed','true');
-  await fireEvent.keyDown(canvas,{key:'ArrowRight'});expect(screen.getByAltText('Phone — After')).toBeInTheDocument();
-  await fireEvent.keyDown(canvas,{key:'ArrowLeft'});await screen.findByAltText('Settings — After');
+  await fireEvent.keyDown(canvas,{key:'ArrowDown'});expect(screen.getByAltText('Phone — After')).toBeInTheDocument();
+  await fireEvent.keyDown(canvas,{key:'ArrowLeft'});expect(screen.getByAltText('Phone — After')).toBeInTheDocument();
+  await fireEvent.keyDown(canvas,{key:'ArrowUp'});await screen.findByAltText('Settings — After');
 });
 
 it('ignores platform chords and composition, and prevents shortcuts from losing unsaved edits',async()=>{
@@ -256,7 +356,7 @@ it('ignores platform chords and composition, and prevents shortcuts from losing 
   await fireEvent.keyDown(canvas,{key:'c'});
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Unsaved'}});
-  await fireEvent.keyDown(screen.getByRole('button',{name:'Close comment'}),{key:'ArrowRight'});
+  await fireEvent.keyDown(screen.getByRole('button',{name:'Close comment'}),{key:'ArrowDown'});
   expect(screen.getByText('Save changes?')).toBeInTheDocument();
   expect(screen.getByAltText('Settings — After')).toBeInTheDocument();
   expect(onComment).not.toHaveBeenCalled();
