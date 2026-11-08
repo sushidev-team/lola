@@ -31,3 +31,24 @@ func (s *DaemonService) ReviewPackageDiff(session, from, to string) (protocol.Di
 	err := call(protocol.Request{Cmd: protocol.CmdReviewDiff, Session: session, Args: args}, longTimeout, &data)
 	return data, err
 }
+
+func (s *DaemonService) ReviewPackageChecks(session, packageID string) (protocol.ReviewChecksData, error) {
+	args, _ := json.Marshal(protocol.ReviewVerifyArgs{Package: packageID})
+	var data protocol.ReviewChecksData
+	err := call(protocol.Request{Cmd: protocol.CmdReviewChecks, Session: session, Args: args}, shortTimeout, &data)
+	return data, err
+}
+
+func (s *DaemonService) ReviewPackageVerify(session string, request protocol.ReviewVerifyArgs) (protocol.ReviewCheck, error) {
+	args, _ := json.Marshal(request)
+	var data protocol.ReviewCheck
+	err := call(protocol.Request{Cmd: protocol.CmdReviewVerify, Session: session, Args: args}, shortTimeout, &data)
+	return data, err
+}
+
+func (s *DaemonService) ReviewPackageRecover(session, packageID, id string) (protocol.ReviewCheck, error) {
+	args, _ := json.Marshal(protocol.ReviewVerifyArgs{Package: packageID, ID: id})
+	var data protocol.ReviewCheck
+	err := call(protocol.Request{Cmd: protocol.CmdReviewRecover, Session: session, Args: args}, longTimeout, &data)
+	return data, err
+}

@@ -51,6 +51,11 @@ const remoteCmdPrefix = "remote."
 // normalizeRequest. Discarding a dirty worktree is the one gate teardown has,
 // so the FIELD is denied rather than the command.
 var deniedCommands = map[string]bool{
+	protocol.CmdReviewVerify:   true,
+	protocol.CmdReviewChecks:   true,
+	protocol.CmdReviewRecover:  true,
+	protocol.CmdReviewFeedback: true,
+	protocol.CmdReviewComplete: true,
 	protocol.CmdReviewPublish:  true,
 	protocol.CmdReviewPackages: true,
 	protocol.CmdReviewImage:    true,

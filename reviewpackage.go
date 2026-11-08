@@ -10,11 +10,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/reviewcapture"
 	"github.com/sushidev-team/lola/internal/reviewpack"
 )
 
 func reviewPackageCmd() *cobra.Command {
-	root := &cobra.Command{Use: "review-package", Short: "Publish retained PR review material for this session"}
+	root := &cobra.Command{Use: "review-package", Short: "Publish, capture, inspect and verify retained PR review material"}
 	var app string
 	publish := &cobra.Command{
 		Use: "publish <manifest.json>", Args: cobra.ExactArgs(1),
@@ -63,7 +64,11 @@ Capture the actual revisions; dirty-worktree screenshots are not commit proof.`,
 				return err
 			}
 			manifest, _ := json.Marshal(m)
-			resp, err := hook.SendAgent(protocol.CmdReviewPublish, protocol.ReviewPublishArgs{Manifest: manifest, App: app})
+			command := protocol.CmdReviewPublish
+			if c.Name() == "complete" {
+				command = protocol.CmdReviewComplete
+			}
+			resp, err := hook.SendAgent(command, protocol.ReviewPublishArgs{Manifest: manifest, App: app})
 			if err != nil {
 				return err
 			}
@@ -76,5 +81,30 @@ Capture the actual revisions; dirty-worktree screenshots are not commit proof.`,
 	}
 	publish.Flags().StringVar(&app, "app", "", "Stack member name (required for stacks)")
 	root.AddCommand(publish)
+	root.AddCommand(reviewAutomationCommands()...)
+	var capture reviewcapture.Options
+	captureCmd := &cobra.Command{Use: "capture <url>", Args: cobra.ExactArgs(1), Short: "Capture a page or element with local Playwright; print a manifest screen entry", RunE: func(c *cobra.Command, args []string) error {
+		capture.URL = args[0]
+		dir, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		screen, err := reviewcapture.Capture(c.Context(), dir, capture, nil)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(c.OutOrStdout()).Encode(screen)
+	}}
+	captureCmd.Flags().StringVar(&capture.Destination, "output", "", "New checkout-relative PNG path (never overwrites)")
+	_ = captureCmd.MarkFlagRequired("output")
+	captureCmd.Flags().StringVar(&capture.Title, "title", "Page capture", "Screen title")
+	captureCmd.Flags().StringVar(&capture.Selector, "selector", "", "Optional Playwright locator for one element")
+	captureCmd.Flags().StringVar(&capture.Channel, "channel", "", "Use installed chrome or msedge instead of Playwright Chromium")
+	captureCmd.Flags().IntVar(&capture.Width, "width", 1440, "Viewport width")
+	captureCmd.Flags().IntVar(&capture.Height, "height", 900, "Viewport height")
+	root.AddCommand(captureCmd)
+	complete := &cobra.Command{Use: "complete <manifest.json>", Args: cobra.ExactArgs(1), Short: "Publish final material and report completion (a claim, never approval)", RunE: publish.RunE}
+	complete.Flags().StringVar(&app, "app", "", "Stack member name (required for stacks)")
+	root.AddCommand(complete)
 	return root
 }

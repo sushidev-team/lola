@@ -41,6 +41,19 @@ func (m *Manager) LaunchDirectory(goal, attempt string) (string, error) {
 // The original checkout is only read. A staged directory becomes authoritative
 // only after the complete owner receipt and goal ref have been written.
 func (m *Manager) Initialize(ctx context.Context, goal, member, source, target string) (Repository, error) {
+	return m.initialize(ctx, goal, member, source, target, "")
+}
+
+// InitializeRevision imports an exact committed revision for independent review
+// verification. It never follows a moving branch or copies uncommitted files.
+func (m *Manager) InitializeRevision(ctx context.Context, goal, member, source, commit string) (Repository, error) {
+	if err := validSHA(commit); err != nil {
+		return Repository{}, err
+	}
+	return m.initialize(ctx, goal, member, source, commit, commit)
+}
+
+func (m *Manager) initialize(ctx context.Context, goal, member, source, target, revision string) (Repository, error) {
 	branch, err := GoalBranch(goal)
 	if err != nil {
 		return Repository{}, err
@@ -68,12 +81,19 @@ func (m *Manager) Initialize(ctx context.Context, goal, member, source, target s
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Repository{}, err
 	}
-	if _, err := m.git(ctx, source, "check-ref-format", "refs/heads/"+target); err != nil {
-		return Repository{}, err
+	ref := revision
+	if ref == "" {
+		if _, err := m.git(ctx, source, "check-ref-format", "refs/heads/"+target); err != nil {
+			return Repository{}, err
+		}
+		ref = "refs/heads/" + target
 	}
-	start, err := m.resolve(ctx, source, "refs/heads/"+target)
+	start, err := m.resolve(ctx, source, ref)
 	if err != nil {
 		return Repository{}, fmt.Errorf("read source target branch: %w", err)
+	}
+	if revision != "" && start != revision {
+		return Repository{}, errors.New("review revision must identify a commit, not a tag object")
 	}
 	parent := filepath.Dir(dir)
 	if err := os.MkdirAll(parent, 0o700); err != nil {

@@ -4,17 +4,43 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/reviewpack"
+	"github.com/sushidev-team/lola/internal/session"
 )
+
+func (d *Daemon) handleReviewPackageFeedback(ctx context.Context, req protocol.Request) protocol.Response {
+	var a protocol.ReviewFeedbackArgs
+	if err := json.Unmarshal(req.Args, &a); err != nil {
+		return protocol.Response{Error: err.Error()}
+	}
+	if strings.TrimSpace(a.Note) == "" || len(a.Note) > 48000 || len(a.Section) > 500 {
+		return protocol.Response{Error: "feedback requires a note up to 48000 bytes and section up to 500 bytes"}
+	}
+	p, err := reviewpack.Read(d.home, req.Session, a.Package)
+	if err != nil {
+		return protocol.Response{Error: err.Error()}
+	}
+	if p.Session != req.Session {
+		return protocol.Response{Error: "select the package's repository"}
+	}
+	note := fmt.Sprintf("Review package %s\nRepository: %s; PR #%d\nBase: %s\nHead: %s\nSection: %s\n\n%s", p.ID, p.Repo, p.PR, p.Base, p.Head, a.Section, a.Note)
+	data, err := d.handleFeedback(ctx, protocol.FeedbackArgs{Session: p.Session, Note: note})
+	if err != nil {
+		return protocol.Response{Error: err.Error()}
+	}
+	return dataResponse(data)
+}
 
 func (d *Daemon) handleReviewPackage(req protocol.Request) protocol.Response {
 	fail := func(err error) protocol.Response { return protocol.Response{Error: err.Error()} }
 	switch req.Cmd {
-	case protocol.CmdReviewPublish:
+	case protocol.CmdReviewPublish, protocol.CmdReviewComplete:
 		var args protocol.ReviewPublishArgs
 		if err := json.Unmarshal(req.Args, &args); err != nil {
 			return fail(err)
@@ -46,6 +72,24 @@ func (d *Daemon) handleReviewPackage(req protocol.Request) protocol.Response {
 		p, err := reviewpack.Publish(d.home, id, s.Worktree, s.Repo, pr, manifest)
 		if err != nil {
 			return fail(err)
+		}
+		// A stack shares its progress board across members. Completing one
+		// repository must not claim the whole multi-repository task is done.
+		if req.Cmd == protocol.CmdReviewComplete && s.Lane == "" {
+			_, ok := d.sessions.Update(id, func(current *session.Session) bool {
+				next, err := board.Apply(current.Board, []string{"phase", "done"}, time.Now())
+				if err != nil {
+					return false
+				}
+				current.Board = next
+				return true
+			})
+			if !ok {
+				return protocol.Response{Error: "material retained, but session ended before completion report"}
+			}
+			if err := d.sessions.Save(); err != nil {
+				return fail(fmt.Errorf("material retained; completion report persistence: %w", err))
+			}
 		}
 		return dataResponse(p)
 	case protocol.CmdReviewPackages:

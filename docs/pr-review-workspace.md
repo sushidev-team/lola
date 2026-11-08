@@ -140,20 +140,28 @@ record separately any native WKWebView verification still outstanding.
   CI receives credit only when its own commit matches. Missing revision fields
   from an older daemon remain unknown. Agent reports and transcript commands are
   explicitly unbound to package revisions and cannot supply independent evidence.
-- Independent local verification execution and optional browser-assisted capture
-  remain follow-up work. Cross-agent live conversation/completion validation and
-  broader automation API productization remain priorities, not completed features.
+- Independent local verification now runs an explicitly authorized command against
+  the retained head in a private checkout and offline, resource-limited container.
+  Receipts retain exact revisions, inputs, output and uncertain/interrupted states.
+  The desktop provides setup, frozen-input authorization, readback and recovery.
+- Optional local Playwright capture records URL, viewport and selected-element
+  context without overwriting evidence. Publishing, completion, inspection,
+  verification and contextual feedback have JSON CLI contracts.
+- Publication/completion and guarded feedback contracts are covered for Claude,
+  Codex and OpenCode. Live conversation validation remains outstanding: the rich
+  transcript feed stays Claude-only until real Codex/OpenCode captures validate
+  their readers and interaction gates. No unmeasured capability was enabled.
 - Current code diffs explicitly represent the live checkout, not a frozen package
   diff. Existing local-check provenance and merge policy are unchanged.
 - Initial storage limits: 64 KiB manifest; four screenshot pairs; PNG/JPEG only;
   4 MiB and 20 megapixels per image; 20 packages or 128 MiB per session, shared by
   its stack members. Reaching a limit refuses publication rather than deleting
   earlier review evidence. A retention-management UI is not included yet.
-- Validation: build, vet, formatting, publication/storage/CLI regressions, 52
-  relevant frontend tests, Svelte checks (zero errors/warnings), production frontend
-  build, and isolated Chromium/WebKit fixtures. `make check` reaches one unrelated
-  failure, `TestSetupGeneralSettingsAreOptionalAndEditable`; the same assertion
-  fails on committed `0346cb6` without this implementation.
+- Initial-release validation and its historical setup-test failure are recorded in
+  [the original evaluation](evaluation/pr-review-workspace/README.md). Current
+  extension passes build/vet and focused checks; the full suite still reports the
+  unchanged TUI setup assertion. Checks and captures are recorded in
+  [verification evidence](../.impeccable/review/review-verification/README.md).
 - Native packaged WKWebView and a live coding-agent publication have not been
   exercised. The running daemon has not been installed or restarted.
 
@@ -225,7 +233,8 @@ and revision identities. Sending remains an explicit action.
 The socket operations are `reviewPackageMark` (package ID and expected previous
 review ID) and `reviewPackageDiff` (two package IDs). Both stay on the local human
 transport; agent publication and the authenticated sandbox bridge cannot call them.
-No new browser or arbitrary command execution endpoint is introduced.
+Those operations do not execute commands. Independent verification has a separate,
+explicitly authorized local-human command described below; capture stays CLI-only.
 
 ## Interactive review refinement
 
@@ -275,3 +284,100 @@ reuse and concise-writing instructions for existing sessions. This is an explici
 agent workflow, not automatic discovery of arbitrary files or proof that an
 agent followed the instruction. New launch instructions require an updated
 daemon; existing sessions can use **Ask agent to prepare review**.
+
+
+## Independent revision checks
+
+In **Review PR → Independent verification**, set up a check with a command, locally
+available image pinned by SHA-256 digest, timeout and memory limit. **Review check**
+freezes those inputs; **Authorize and run** starts that exact request. The image
+must already contain its tools and dependencies: checks have no network access.
+
+The runner clones the selected package's exact committed head into a private
+workspace, excluding dirty working files. It reuses the goal runner's offline
+container boundary, resource limits and cleanup receipts without granting goal
+or merge authority. It does not mount host credentials or the Docker socket.
+The source checkout is not modified. Checks currently require the original host
+checkout; goal-managed and sandbox sessions retain their existing isolated
+verification workflows. Previously recorded results remain readable after cleanup.
+
+Each result carries package/base/head, check inputs, timestamps, exit outcome and
+up to 16 KiB of output. Stale or unknown package freshness remains visible; a
+passed result is not transferable to a newer head and does not raise the package's
+confidence score or authorize merge. There are at most two active review checks
+per daemon and 32 retained checks per package. Interrupted checks must be recovered
+before another check starts for that package; recovery settles only the named
+container and never silently reruns a command or labels interrupted work passed.
+
+The UI retains a request ID across uncertain writes and requires successful
+readback before unlocking another submission. Repeating an existing ID with the
+same inputs reads its receipt; changing inputs under that ID is rejected.
+
+## Optional browser capture
+
+From the checkout, with Node and local `playwright` or `playwright-core` available:
+
+```sh
+lola review-package capture http://localhost:3000/settings \
+  --output .lola/review/settings-after.png --title Settings \
+  --width 1440 --height 900 --selector 'main' --channel chrome
+```
+
+Omit `--selector` for the visible page viewport. Omit `--channel` to use an already
+installed Playwright Chromium; `chrome` and `msedge` select an installed browser.
+Nothing downloads a browser or dependency automatically. The bounded capture uses
+a fresh context without saved authentication, waits for loading/fonts, and returns
+a JSON screen entry for the manifest. A missing browser or selector fails clearly.
+Existing paths are never overwritten; capture output stays inside the checkout.
+
+The screen entry records the final URL, requested viewport and optional selector.
+The desktop shows that context and includes it in screenshot feedback. Capture is
+an explicit local CLI operation, not an embedded browser or daemon execution API.
+It proves neither the commit behind a running server nor a baseline: retain real
+before images before editing, and associate only accurate revisions in the manifest.
+
+## Automation and completion
+
+Agent sessions use the same publication and completion contract for Claude, Codex
+and OpenCode, including the authenticated sandbox bridge:
+
+```sh
+lola review-package publish .lola/review/manifest.json
+lola review-package complete .lola/review/manifest.json
+# Stack: retain completion material for this repository only.
+lola review-package complete .lola/review/web.json --app web
+```
+
+Completion retains the package first and then records the ordinary session's
+agent-reported phase as done. A stack member shares its session's progress board,
+so member completion retains its material without marking the whole task done.
+Completion is a claim; it never changes lifecycle axes, prompt gates, approval,
+verification or merge authority. Identical material returns the original package.
+
+Human automation uses the local socket and prints JSON receipts. Use the exact
+member session ID (`<session>~<member>`) for stack material:
+
+```sh
+lola review-package list SESSION
+lola review-package mark SESSION PACKAGE --previous PREVIOUS_PACKAGE
+lola review-package feedback SESSION PACKAGE --file feedback.md --section Settings
+lola review-package verify SESSION PACKAGE --request-id 0123456789abcdef0123456789abcdef \
+  --name tests --command 'npm run test:unit' \
+  --image 'sha256:REPLACE_WITH_LOCAL_IMAGE_DIGEST' --timeout 300 --memory 2048
+lola review-package checks SESSION PACKAGE
+lola review-package recover SESSION PACKAGE REQUEST_ID
+```
+
+Omit `--previous` for the first inspection. Generate a fresh 32-character lowercase
+hex request ID for each newly authorized check; reuse it only for an unchanged
+request whose response was uncertain. Commands make one request and do not retry
+writes automatically. Feedback is bound to retained repository/PR/base/head and
+section context and goes through the existing idle-gated queue. Feedback sends
+are not idempotent: do not blindly retry after a lost response. Agent bridge and
+remote peers cannot invoke these human operations.
+
+Acknowledgment controls beyond explicit inspection, schedules, and remote execution
+remain conditional future work under the plan's “as usage justifies” scope. This
+extension does not enable them or add a retention-management UI. Native packaged
+WKWebView and live cross-agent conversation remain validation gaps, separately
+from the tested CLI/daemon contracts.

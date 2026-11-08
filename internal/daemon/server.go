@@ -95,7 +95,11 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return d.handlePRReadiness(ctx, req)
 	case protocol.CmdReviewDiff:
 		return d.handleReviewDiff(ctx, req)
-	case protocol.CmdReviewPublish, protocol.CmdReviewPackages, protocol.CmdReviewImage, protocol.CmdReviewMark:
+	case protocol.CmdReviewFeedback:
+		return d.handleReviewPackageFeedback(ctx, req)
+	case protocol.CmdReviewVerify, protocol.CmdReviewChecks, protocol.CmdReviewRecover:
+		return d.handleReviewVerification(ctx, req)
+	case protocol.CmdReviewPublish, protocol.CmdReviewComplete, protocol.CmdReviewPackages, protocol.CmdReviewImage, protocol.CmdReviewMark:
 		return d.handleReviewPackage(req)
 	case "prs":
 		data, err := d.handlePrs(ctx, req.Args)

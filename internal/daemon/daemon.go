@@ -167,7 +167,9 @@ type Daemon struct {
 
 	// reports rate-limits `lola report` per session (see report.go).
 	reports         reportLimiter
-	reviewPackageMu sync.Mutex // serializes immutable publication and retained-size limits
+	reviewPackageMu sync.Mutex      // serializes immutable publication and retained-size limits
+	reviewJobs      map[string]bool // guarded by reviewPackageMu; retained receipts survive restart
+	reviewCheckRun  func(context.Context, string, []string) (string, error)
 	// ssh is agent-assisted ssh's state and seams (ssh.go). Never nil.
 	ssh *sshState
 

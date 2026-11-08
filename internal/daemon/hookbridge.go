@@ -29,7 +29,7 @@ import (
 // Loopback TCP is reachable by every local process, unlike the 0600 socket, so
 // the bridge is deliberately NARROW, and each rail is load-bearing:
 //
-//   - A closed list: hookEvent, agentReport, reviewPackagePublish, and the agent
+//   - A closed list: hookEvent, agentReport, reviewPackagePublish/Complete, and the agent
 //     side of `lola ssh`. Package reads and image retrieval remain human-only. Everything else
 //     (kill, answer, config, any human ssh command) is refused before it reaches
 //     handle.
@@ -50,7 +50,7 @@ const hookBridgeConnTimeout = 10 * time.Second
 // request|run|post` from a sandboxed agent. Never a human ssh command: approving,
 // taking the wheel and opening a connection are what the sandbox exists to keep
 // out of an agent's reach.
-var hookBridgeCmds = map[string]bool{"hookEvent": true, "agentReport": true, protocol.CmdReviewPublish: true}
+var hookBridgeCmds = map[string]bool{"hookEvent": true, "agentReport": true, protocol.CmdReviewPublish: true, protocol.CmdReviewComplete: true}
 
 func init() {
 	for _, cmd := range protocol.SSHAgentCommands {

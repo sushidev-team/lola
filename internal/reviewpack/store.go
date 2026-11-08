@@ -49,6 +49,7 @@ type Screen struct {
 	After    string `json:"after"`
 	URL      string `json:"url,omitempty"`
 	Viewport string `json:"viewport,omitempty"`
+	Selector string `json:"selector,omitempty"`
 }
 
 type Artifact struct {
@@ -100,7 +101,7 @@ func Validate(m Manifest) error {
 		return errors.New("at most four screenshot pairs per package")
 	}
 	for _, s := range m.Screens {
-		if strings.TrimSpace(s.Title) == "" || len(s.Title) > 200 || len(s.Caption) > 2000 || len(s.URL) > 2048 || len(s.Viewport) > 100 || s.After == "" {
+		if strings.TrimSpace(s.Title) == "" || len(s.Title) > 200 || len(s.Caption) > 2000 || len(s.URL) > 2048 || len(s.Viewport) > 100 || len(s.Selector) > 500 || s.After == "" {
 			return errors.New("each screen requires a title and after image; metadata must be bounded")
 		}
 		for _, path := range []string{s.Before, s.After} {

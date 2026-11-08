@@ -19,6 +19,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver',class {observe(){} disconnect(){}});
   localStorage.clear(); nav.openOverlay('pr-review');
   read.mockReset();image.mockReset();facts.mockReset();send.mockReset();
+  vi.mocked(DaemonService.ReviewPackageChecks).mockReset().mockResolvedValue({checks:[]});
   vi.mocked(DaemonService.ReviewPackageMark).mockReset();
   talkSvc.Say.mockReset();
   id=freshSession({prNumber:42,prUrl:'https://github.com/acme/app/pull/42'});

@@ -498,6 +498,10 @@ export function Review(session: string, provider: string): $CancellablePromise<p
     return $Call.ByID(4119390853, session, provider);
 }
 
+export function ReviewPackageChecks(session: string, packageID: string): $CancellablePromise<protocol$0.ReviewChecksData> {
+    return $Call.ByID(1924001306, session, packageID);
+}
+
 export function ReviewPackageDiff(session: string, $from: string, to: string): $CancellablePromise<protocol$0.DiffData> {
     return $Call.ByID(1055765448, session, $from, to);
 }
@@ -508,6 +512,14 @@ export function ReviewPackageImage(session: string, packageID: string, artifact:
 
 export function ReviewPackageMark(session: string, packageID: string, previous: string): $CancellablePromise<protocol$0.ReviewRecord> {
     return $Call.ByID(565500622, session, packageID, previous);
+}
+
+export function ReviewPackageRecover(session: string, packageID: string, id: string): $CancellablePromise<protocol$0.ReviewCheck> {
+    return $Call.ByID(1798667161, session, packageID, id);
+}
+
+export function ReviewPackageVerify(session: string, request: protocol$0.ReviewVerifyArgs): $CancellablePromise<protocol$0.ReviewCheck> {
+    return $Call.ByID(3958985510, session, request);
 }
 
 export function ReviewPackages(session: string): $CancellablePromise<protocol$0.ReviewPackagesData> {

@@ -24,6 +24,7 @@
   import ReviewCanvas from './ReviewCanvas.svelte';
   import ReviewChanges from './ReviewChanges.svelte';
   import ReviewSkeleton from './ReviewSkeleton.svelte';
+  import ReviewVerification from './ReviewVerification.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
   const session = $derived(store.sessionById(sessionId));
@@ -155,7 +156,7 @@
   function commentContext(section: string, screenIndex?: number): string {
     if (!current) return "";
     const screen = screenIndex === undefined ? undefined : current.screens?.[screenIndex];
-    const images = screen ? `Page: ${screen.url || 'unspecified'}; viewport: ${screen.viewport || 'unspecified'}\nScreenshots: before ${screen.before || 'unavailable'}, after ${screen.after}\n` : '';
+    const images = screen ? `Page: ${screen.url || 'unspecified'}; viewport: ${screen.viewport || 'unspecified'}${screen.selector ? `; element: ${screen.selector}` : ''}\nScreenshots: before ${screen.before || 'unavailable'}, after ${screen.after}\n` : '';
     return `Review package ${current.id}\nRepository: ${current.repo || 'unspecified'}${current.pr ? ` PR #${current.pr}` : ''}\nBase: ${current.base}\nHead: ${current.head}\nSection: ${section}\n${images}`;
   }
   function queueComment(section: string, text: string, screenIndex?: number, previousText?: string): boolean {
@@ -197,6 +198,7 @@
 
 {#snippet checks()}
   {#if reviewSession}<BeforeMerge session={reviewSession} reviewLayout/>{/if}
+  {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} canRun={!!session && !session.goalId && (!session.sandbox || session.sandbox === 'none')}/>{/key}{/if}
   {#if session}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><p class="mb-3 text-xs text-faint">Not verified for this version.</p><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
 {/snippet}
 {#snippet reviewFeedback()}
