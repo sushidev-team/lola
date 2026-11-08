@@ -29,6 +29,13 @@ recorded results if they still describe the reviewed revision; refresh only
 missing or stale evidence. Keep the manifest with the captures (e.g. .lola/review/).
 Use a short title and body sections: Summary (one sentence), Changes (up to three
 short bullets), Verification (commands/results), Risks (unresolved items only).
+Include an Agent confidence section with two separate lines:
+Score: N/100 (integer 0-100)
+Basis: a brief rationale naming verification and remaining uncertainty.
+Use 0-39 for substantial doubts, 40-69 for meaningful unverified behavior,
+70-89 for strong evidence with bounded uncertainty, and 90-100 only for thorough
+relevant verification with no known gaps. Pending human approval is not a penalty.
+This is self-assessment, not a measured probability.
 Put extended technical notes under Details. Do not repeat screenshot captions.
 
 Example manifest:

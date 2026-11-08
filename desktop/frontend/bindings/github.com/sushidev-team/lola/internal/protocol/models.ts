@@ -595,7 +595,9 @@ export interface DiffFile {
  * EndedSession is a session that left the list and whose story is still readable.
  */
 export interface EndedSession {
-    /** Directory retained when the session ended. */
+    /**
+     * directory retained when the session ended
+     */
     "keptWorktree"?: string;
     "id": string;
     "project"?: string;

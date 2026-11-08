@@ -34,7 +34,7 @@ it('shows material before GitHub completes and shares the pending status request
   render(ReviewWorkspace,{sessionId:id});
   await screen.findByRole('heading',{name:'A clearer settings screen'});
   expect(screen.queryByRole('status',{name:'Loading review'})).toBeNull();
-  expect(screen.getByRole('status',{name:'Loading evidence coverage'})).toBeInTheDocument();
+  expect(screen.getByRole('status',{name:'Loading confidence'})).toBeInTheDocument();
   expect(screen.getByRole('status',{name:'Loading PR status'})).toBeInTheDocument();
   expect(screen.queryByText('Not verified',{exact:true})).toBeNull();
   expect(screen.queryByRole('button',{name:'Squash and merge'})).toBeNull();
@@ -43,9 +43,9 @@ it('shows material before GitHub completes and shares the pending status request
   await fireEvent.click(screen.getByRole('button',{name:'Mark reviewed'}));
   await screen.findByRole('button',{name:'Reviewed'});
   finish(status());
-  await screen.findByRole('img',{name:'Evidence coverage: 100 out of 100'});
+  await screen.findByText('Awaiting self-assessment');
   expect(await screen.findByRole('button',{name:'Squash and merge'})).toBeEnabled();
-  expect(screen.queryByRole('status',{name:'Loading evidence coverage'})).toBeNull();
+  expect(screen.queryByRole('status',{name:'Loading confidence'})).toBeNull();
   expect(screen.queryByRole('status',{name:'Loading PR status'})).toBeNull();
 });
 
@@ -436,4 +436,18 @@ it('distinguishes same-head publications by time with the commit as secondary te
   expect(versions).toHaveValue('old');
   expect(versions.parentElement?.querySelector('.select-value')).toHaveTextContent('20:15');
   expect(versions.parentElement?.querySelector('.select-value small')).toBeNull();
+});
+
+it('requests a revision-bound self-assessment without sending draft review feedback',async()=>{
+  feedback.setNote(id,'Keep my unsent comments');
+  talkSvc.Say.mockResolvedValueOnce({item:'h',delivered:true});
+  render(ReviewWorkspace,{sessionId:id});
+  await fireEvent.click(await screen.findByRole('button',{name:'About confidence'}));
+  await fireEvent.click(await screen.findByRole('button',{name:'Ask agent for self-assessment'}));
+  expect(await screen.findByRole('button',{name:'Self-assessment requested'})).toBeDisabled();
+  expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining(`Add an explicit self-assessment to review package ${pkg().id}`)});
+  expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining('Score: N/100')});
+  expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining('Do not lower it solely because human approval is pending')});
+  expect(feedback.noteFor(id)).toBe('Keep my unsent comments');
+  expect(send).not.toHaveBeenCalled();
 });

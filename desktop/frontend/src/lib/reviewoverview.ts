@@ -118,25 +118,43 @@ export function reviewOverview(pkg: Pick<ReviewPackage,'title'|'body'>) {
   risks.sort((a,b) => b.priority - a.priority || riskWeight[b.impact] - riskWeight[a.impact]);
   return {title, summary:summary || shortLine(changes[0]?.body || title,160), changes, verification, risks, details, riskReportProvided};
 }
+/** Only an explicit, revision-bound self-assessment counts. Never infer a rating
+ * from positive prose, risk estimates, or the status interpreter's confidence. */
+export function agentConfidence(body: string): { score: number; basis: string } | null {
+  const sections = reviewSections(body).filter(s => /^Agent confidence$/i.test(s.title));
+  if (sections.length !== 1) return null;
+  const text = sections[0].body.replace(/\*\*/g, '').trim();
+  const match = text.match(/^Score:[ \t]*(\d{1,3})[ \t]*\/[ \t]*100[ \t]*\r?\n\s*Basis:[ \t]*(\S[^\r\n]*)$/);
+  if (!match || Number(match[1]) > 100) return null;
+  const basis = plainReviewText(match[2]);
+  return basis ? {score:Number(match[1]),basis} : null;
+}
 export type ConfidenceSignal = { label: string; value: string; confirmed: boolean; failed?: boolean };
-/** Equal-weight coverage of five observable review signals, NOT a probability of
- * correctness. Facts about another revision cannot score the selected package. */
-export function reviewConfidence(pkg: Pick<ReviewPackage,'head'|'base'|'repo'|'pr'>, facts?: PRReadinessData) {
+/** Blend observed outcomes (70%) and the author's self-assessment (30%). Unknown
+ * outcomes carry no weight; revision matching is a prerequisite, never credit.
+ * Approval is a workflow gate, not a confidence signal. Requested changes are
+ * negative evidence, so count them only while they remain outstanding. */
+export function reviewConfidence(pkg: Pick<ReviewPackage,'head'|'base'|'repo'|'pr'> & {body?:string}, facts?: PRReadinessData) {
   const current = !!pkg.head && !!facts?.head && !!facts.base && pkg.base === facts.base && pkg.head === facts.head && pkg.repo === facts.repo && (!pkg.pr || pkg.pr === facts.number);
+  const agent = agentConfidence(pkg.body ?? '');
   const signals: ConfidenceSignal[] = [
-    {label:'Revision',value:current ? 'Matches current PR' : facts ? 'Different revision' : 'Not confirmed',confirmed:current},
     {label:'CI checks',value:'Not confirmed',confirmed:false},
-    {label:'PR review',value:'Not confirmed',confirmed:false},
     {label:'Merge conflicts',value:'Not confirmed',confirmed:false},
     {label:'Review threads',value:'Not confirmed',confirmed:false},
   ];
   if (current && facts) {
     const pinnedChecks = facts.checksHead === pkg.head;
-    signals[1] = {label:'CI checks',value:pinnedChecks ? ({pass:'Passed',fail:'Failed',pending:'Running',none:'No checks'} as Record<string,string>)[facts.checks] || 'Unknown' : 'Revision unconfirmed',confirmed:pinnedChecks && facts.checks === 'pass',failed:pinnedChecks && facts.checks === 'fail'};
-    signals[2] = {label:'PR review',value:({APPROVED:'Approved',CHANGES_REQUESTED:'Changes requested',REVIEW_REQUIRED:'Review required'} as Record<string,string>)[facts.review] || 'No approval',confirmed:facts.review === 'APPROVED',failed:facts.review === 'CHANGES_REQUESTED'};
-    signals[3] = {label:'Merge conflicts',value:facts.mergeable === 'MERGEABLE' ? 'None detected' : facts.mergeable === 'CONFLICTING' ? 'Conflicts found' : 'Unknown',confirmed:facts.mergeable === 'MERGEABLE',failed:facts.mergeable === 'CONFLICTING'};
-    signals[4] = {label:'Review threads',value:facts.threads ? facts.threads.length ? `${facts.threads.length} unresolved` : 'All resolved' : 'Unknown',confirmed:Array.isArray(facts.threads) && facts.threads.length === 0,failed:!!facts.threads?.length};
+    signals[0] = {label:'CI checks',value:pinnedChecks ? ({pass:'Passed',fail:'Failed',pending:'Running',none:'No checks'} as Record<string,string>)[facts.checks] || 'Unknown' : 'Revision unconfirmed',confirmed:pinnedChecks && facts.checks === 'pass',failed:pinnedChecks && facts.checks === 'fail'};
+    signals[1] = {label:'Merge conflicts',value:facts.mergeable === 'MERGEABLE' ? 'None detected' : facts.mergeable === 'CONFLICTING' ? 'Conflicts found' : 'Unknown',confirmed:facts.mergeable === 'MERGEABLE',failed:facts.mergeable === 'CONFLICTING'};
+    signals[2] = {label:'Review threads',value:facts.threads ? facts.threads.length ? `${facts.threads.length} unresolved` : 'All resolved' : 'Unknown',confirmed:Array.isArray(facts.threads) && facts.threads.length === 0,failed:!!facts.threads?.length};
+    if (facts.review === 'CHANGES_REQUESTED') signals.push({label:'Review findings',value:'Changes requested',confirmed:false,failed:true});
   }
   const confirmed = signals.filter(s => s.confirmed).length;
-  return {signals,confirmed,score:current ? confirmed * 20 : null};
+  const failed = signals.filter(s => s.failed).length;
+  const observed = confirmed + failed;
+  const evidence = observed ? 100 * confirmed / observed : null;
+  const score = current && agent && evidence !== null ? Math.round(evidence * .7 + agent.score * .3) : null;
+  const pending = signals.length - observed;
+  const label = !current ? 'Not verified' : !agent ? 'Awaiting self-assessment' : !observed ? 'Awaiting observed results' : failed ? 'Issues found' : pending ? 'Provisional · evidence incomplete' : 'Evidence + self-assessment';
+  return {signals,current,agent,confirmed,failed,observed,pending,evidence,score,label};
 }

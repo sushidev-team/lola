@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import './talk.testkit';
 import { DaemonService } from '@bindings/desktop';
 import ReviewOverview from './ReviewOverview.svelte';
-const pkg={id:'p',session:'s',head:'abc',base:'def',repo:'acme/app',pr:42,title:'feat(auth): verify email',createdAt:'2026-11-07',body:'## Summary\nConfirm your email before entering.\n## Changes\n- Add an email verification step.\n- Preserve access for existing accounts.\n## Verification\n- Unit tests passed.\n## Risks\n- Mail delivery needs checking.',screens:[{title:'Registration',before:'before',after:'after'},{title:'Phone',after:'phone'}]} as never;
+const pkg={id:'p',session:'s',head:'abc',base:'def',repo:'acme/app',pr:42,title:'feat(auth): verify email',createdAt:'2026-11-07',body:'## Agent confidence\nScore: 80/100\nBasis: Tests passed; mail is unverified.\n## Summary\nConfirm your email before entering.\n## Changes\n- Add an email verification step.\n- Preserve access for existing accounts.\n## Verification\n- Unit tests passed.\n## Risks\n- Mail delivery needs checking.',screens:[{title:'Registration',before:'before',after:'after'},{title:'Phone',after:'phone'}]} as never;
 const facts={head:'abc',base:'def',checksHead:'abc',repo:'acme/app',number:42,checks:'pass',review:'',mergeable:'MERGEABLE',threads:[]} as never;
 beforeEach(()=>{vi.mocked(DaemonService.ReviewPackageImage).mockResolvedValue({dataURL:'data:image/png;base64,aGVsbG8='});});
 afterEach(cleanup);
@@ -12,7 +12,7 @@ it('shows an evidence score, compact rows, and actionable screenshot previews',a
   render(ReviewOverview,{pkg,facts,sessionId:'s',freshness:'current',onScreen,onAssessRisks});
   expect(screen.getByRole('heading',{name:'Verify email'})).toBeInTheDocument();
   expect(screen.getByText('Confirm your email before entering.')).toBeInTheDocument();
-  expect(screen.getByRole('img',{name:'Evidence coverage: 80 out of 100'})).toBeInTheDocument();
+  expect(screen.getByText('94',{exact:false,selector:'.score'})).toBeInTheDocument();
   expect(screen.getByText('Add email verification step',{selector:'summary span'}).closest('details')).not.toHaveAttribute('open');
   await fireEvent.click(screen.getByRole('button',{name:'Review screenshot: Phone'}));
   expect(onScreen).toHaveBeenCalledWith(1);
@@ -26,7 +26,7 @@ it('does not score a stale revision and keeps previews actionable if images fail
   vi.mocked(DaemonService.ReviewPackageImage).mockRejectedValue(new Error('Missing image'));
   render(ReviewOverview,{pkg,facts:{...facts as object,head:'different'} as never,sessionId:'s',freshness:'stale',onScreen:()=>{},onAssessRisks:()=>{}});
   expect(screen.getByText('Outdated material')).toBeInTheDocument();
-  expect(screen.getByRole('img',{name:'Confidence not scored: revision unconfirmed'})).toBeInTheDocument();
+  expect(screen.getByText('Not verified',{exact:true})).toBeInTheDocument();
   await screen.findAllByText('Open screenshot');
   expect(screen.getByRole('button',{name:'Review screenshot: Phone'})).toBeEnabled();
 });
@@ -49,4 +49,21 @@ it('expands sub-features and risk descriptions without showing raw implementatio
   await fireEvent.click(screen.getByText('New users cannot finish registration',{selector:'.risk-title'}).closest('summary')!);
   expect(screen.getByRole('heading',{name:'How to assess it'})).toBeInTheDocument();
   expect(screen.getByText('Check production email delivery.',{selector:'.risk-detail p'})).toBeInTheDocument();
+});
+
+it('keeps the breakdown behind the info button and supports keyboard and outside dismissal',async()=>{
+  render(ReviewOverview,{pkg,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});
+  const info=screen.getByRole('button',{name:'About confidence'});
+  expect(screen.queryByText('Observed results')).toBeNull();
+  expect(info).toHaveAttribute('aria-expanded','false');
+  await fireEvent.click(info);
+  expect(screen.getByRole('dialog',{name:'About confidence'})).toHaveFocus();
+  expect(screen.getByText('Observed results')).toBeVisible();
+  expect(screen.getByText('Tests passed; mail is unverified.')).toBeVisible();
+  await fireEvent.keyDown(screen.getByRole('dialog',{name:'About confidence'}),{key:'Escape'});
+  expect(screen.queryByRole('dialog',{name:'About confidence'})).toBeNull();
+  expect(info).toHaveFocus();
+  await fireEvent.click(info);
+  await fireEvent.pointerDown(document.body);
+  expect(screen.queryByRole('dialog',{name:'About confidence'})).toBeNull();
 });

@@ -1,22 +1,46 @@
 <script lang="ts">
   import Chevron from "$lib/components/Chevron.svelte";
-  import type { Snippet } from 'svelte';
+  import { tick, type Snippet } from 'svelte';
   import type { ReviewPackage, PRReadinessData } from '@bindings/internal/protocol';
+  import { tooltip } from '$lib/tooltip';
   import { reviewOverview, reviewConfidence, riskWeight, type OverviewItem, type ReviewChange, type RiskLevel } from '$lib/reviewoverview';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Skeleton from '../Skeleton.svelte';
   import SSHRich from '../ssh/SSHRich.svelte';
   import ReviewThumbnail from './ReviewThumbnail.svelte';
-  let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment }: {
+  let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment, onAssessConfidence, confidenceRequest }: {
     pkg:ReviewPackage; facts?:PRReadinessData; sessionId:string; freshness:'current'|'stale'|'unknown'; onScreen:(index:number)=>void;
     checking?:boolean; checks?:Snippet; feedback?:Snippet; onAssessRisks?:()=>void; assessment?:{state:string;message:string};
+    onAssessConfidence?:()=>void; confidenceRequest?:{state:string;message:string};
   } = $props();
+  const confidenceID = $props.id();
+  let confidenceOpen = $state(false);
+  let confidenceRoot: HTMLElement;
+  let confidencePanel = $state<HTMLDivElement>();
+  async function toggleConfidence() {
+    confidenceOpen = !confidenceOpen;
+    if (confidenceOpen) { await tick(); confidencePanel?.focus(); }
+  }
+  function closeConfidence(event: KeyboardEvent) {
+    if (confidenceOpen && event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation();
+      confidenceOpen = false;
+      confidenceRoot?.querySelector<HTMLButtonElement>('.confidence-info button')?.focus();
+    }
+  }
+  function dismissConfidence(event: PointerEvent) {
+    if (confidenceOpen && !confidenceRoot?.contains(event.target as Node)) confidenceOpen = false;
+  }
+  $effect(() => { pkg.id; confidenceOpen = false; });
   const overview = $derived(reviewOverview(pkg));
   const confidence = $derived(reviewConfidence(pkg,facts));
+  const confidenceAction = $derived(confidenceRequest?.state === 'sending' ? 'Requesting self-assessment' : confidenceRequest?.state === 'accepted' ? 'Self-assessment requested' : confidenceRequest?.state === 'error' ? 'Retry self-assessment' : 'Ask agent for self-assessment');
   const screens = $derived(pkg.screens ?? []);
   const unrated = $derived(!overview.riskReportProvided || overview.risks.some(r => r.likelihood === 'unknown' || r.impact === 'unknown'));
 </script>
+
+<svelte:window onkeydowncapture={closeConfidence} onpointerdowncapture={dismissConfidence} />
 
 {#snippet entries(items: OverviewItem[], empty: string)}
   {#if items.length}<div class="entries">{#each items as item}<details class="entry">
@@ -62,17 +86,43 @@
   </div>
   <div class="decision-column">
     <div class="readiness">
-      <section class="confidence" aria-label="Review confidence">
-        <div class="confidence-label"><h2><Icon name="shield-check" size={17}/>Evidence coverage</h2><span>{#if checking}<span role="status" aria-label="Loading evidence coverage"><span class="sr-only">Loading evidence coverage…</span><Skeleton width="90px" height="18px"/></span>{:else}{confidence.score === null ? 'Not verified' : `${confidence.confirmed} / 5 signals`}{/if}</span></div>
-        {#if checking}<div class="score"><Skeleton width="64px" height="29px"/></div>{:else}<strong class="score">{confidence.score ?? '—'}{#if confidence.score !== null}<small>/100</small>{/if}</strong>{/if}
+      <section class="confidence" aria-label="Review confidence" bind:this={confidenceRoot}>
+        <div class="confidence-label"><div class="confidence-heading"><h2><Icon name="shield-check" size={17}/>Confidence</h2><span class="confidence-info"><Button icon size="xs" aria-label="About confidence" aria-haspopup="dialog" aria-expanded={confidenceOpen} aria-controls={confidenceID} onclick={toggleConfidence}><Icon name="info" size={15}/></Button></span></div><span class:has-issues={!checking && confidence.failed > 0}>{#if checking}<span role="status" aria-label="Loading confidence"><span class="sr-only">Loading confidence…</span><Skeleton width="90px" height="18px"/></span>{:else}{confidence.label}{/if}</span></div>
+        {#if checking}<div class="score"><Skeleton width="100px" height="48px"/></div>
+        {:else if confidence.score !== null}<strong class="score">{confidence.score}<small>/100</small></strong>{/if}
+        {#if confidenceOpen}
+        <div id={confidenceID} class="confidence-popover" role="dialog" aria-label="About confidence" tabindex="-1" bind:this={confidencePanel}>
+        <div class="confidence-popover-heading"><h3>How confidence is calculated</h3><Button icon size="xs" aria-label="Close confidence details" onclick={() => { confidenceOpen = false; confidenceRoot.querySelector<HTMLButtonElement>('.confidence-info button')?.focus(); }}><Icon name="x" size={14}/></Button></div>
         {#if checking}
-          <div class="signal-chart" aria-hidden="true">{#each [1,2,3,4,5] as signal}<Skeleton height="4px"/>{/each}</div>
+          <div class="confidence-breakdown" aria-hidden="true"><Skeleton height="40px"/></div>
           <div class="score-explanation"><Skeleton width="65%" height="18px"/></div>
         {:else}
-        <div class="signal-chart" role="img" aria-label={confidence.score === null ? 'Confidence not scored: revision unconfirmed' : `Evidence coverage: ${confidence.score} out of 100`}>
-          {#each confidence.signals as signal}<span class:confirmed={signal.confirmed} class:failed={signal.failed} title={`${signal.label}: ${signal.value}`}></span>{/each}
+        <dl class="confidence-breakdown">
+          <div><dt>Observed results <small>70%</small></dt><dd>{#if confidence.evidence === null}Pending{:else}<span class="confidence-number">{Math.round(confidence.evidence)}/100</span>{/if}</dd></div>
+          <div><dt>Agent self-confidence <small>30%</small></dt><dd>
+            {#if confidence.agent}<span class="confidence-number">{confidence.agent.score}/100</span>{confidence.current ? '' : ' · unverified'}
+            {:else}
+              <span class="confidence-trigger" use:tooltip={onAssessConfidence ? confidenceAction : 'Resume the agent to request a self-assessment'}>
+                <Button icon size="xs" variant="ghost" class="text-magenta!" aria-label={confidenceAction} loading={confidenceRequest?.state === 'sending'} disabled={!onAssessConfidence || confidenceRequest?.state === 'accepted'} onclick={onAssessConfidence}>
+                  {#if confidenceRequest?.state !== 'sending'}<Icon name={confidenceRequest?.state === 'accepted' ? 'check' : confidenceRequest?.state === 'error' ? 'refresh-cw' : 'sparkles'} size={16}/>{/if}
+                </Button>
+              </span>
+            {/if}
+          </dd></div>
+        </dl>
+        {#if confidence.current && confidence.pending}<p class="confidence-note">{confidence.pending} {confidence.pending === 1 ? 'result is' : 'results are'} pending or unavailable; excluded from the score.</p>{/if}
+        {#if confidence.failed}<p class="confidence-note has-issues">{confidence.failed} {confidence.failed === 1 ? 'observed issue lowers' : 'observed issues lower'} confidence.</p>{/if}
+        {#if !confidence.agent && confidenceRequest?.message}<div class="confidence-request"><p class="assessment-message" role={confidenceRequest.state === 'error' ? 'alert' : 'status'}>{confidenceRequest.message}</p></div>{/if}
+        <div class="score-explanation">
+          {#if !confidence.current}<p>This review hasn’t been matched to the current PR. Live PR checks are shown below.</p>{/if}
+          {#if confidence.agent}<p><strong>Agent’s rationale:</strong> {confidence.agent.basis}</p>{:else}<p>The agent hasn’t provided a valid self-assessment for this package. A combined score needs both observed results and an explicit self-assessment.</p>{/if}
+          <dl>{#each confidence.signals as signal}<div><dt>{signal.label}</dt><dd>{signal.value}</dd></div>{/each}</dl>
+          <p>70% observed results + 30% agent self-confidence. Observed results are the share of known signals that pass, weighted equally. Failures, conflicts, unresolved threads, and requested changes lower that share. Pending or unavailable signals are excluded. Approval does not change confidence.</p>
+          <p>This is an assessment of the current revision, not a probability of correctness or permission to merge. The score is provisional while evidence is incomplete.</p>
+          {#if facts?.observedAt}<p>Observed on GitHub {new Date(facts.observedAt).toLocaleString()}. CI revision: {facts.checksHead?.slice(0,12) || 'unconfirmed'}.</p>{/if}
         </div>
-        <details class="score-explanation"><summary><Chevron class="disclosure-chevron" />Evidence behind this score</summary>{#if confidence.score === null}<p>This review hasn’t been matched to the current PR. Live PR checks are shown below.</p>{/if}<dl>{#each confidence.signals as signal}<div><dt>{signal.label}</dt><dd>{signal.value}</dd></div>{/each}</dl><p>20 points per confirmed signal for this revision. Evidence coverage, not a probability of correct code. Agent claims do not increase it.</p>{#if facts?.observedAt}<p>Observed on GitHub {new Date(facts.observedAt).toLocaleString()}. CI revision: {facts.checksHead?.slice(0,12) || 'unconfirmed'}.</p>{/if}</details>
+        {/if}
+        </div>
         {/if}
       </section>
       {#if checks}<div class="checks">{@render checks()}</div>{/if}
@@ -112,16 +162,28 @@
   .section-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
   .section-count { font-size:12px; font-weight:400; font-variant-numeric:tabular-nums; color:var(--color-ink-2); }
   .readiness { min-width:0; padding:24px; border:1px solid color-mix(in srgb,var(--color-accent) 22%,var(--color-edge)); border-radius:16px; background:var(--color-panel); }
-  .confidence { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; padding-bottom:20px; border-bottom:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
+  .confidence { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; padding-bottom:20px; border-bottom:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
   .confidence-label { display:grid; align-content:center; gap:6px; }
+  .confidence-heading { display:flex; align-items:center; gap:4px; }
   .confidence-label h2 { font-size:13px; }
+  .confidence-popover { position:absolute; top:calc(100% - 10px); right:0; z-index:30; width:min(480px,calc(100vw - 48px)); max-height:min(60vh,600px); overflow:auto; display:grid; gap:14px; padding:20px; border:1px solid var(--color-edge); border-radius:10px; background:var(--color-panel); color:var(--color-ink); box-shadow:0 12px 32px rgb(0 0 0 / .25); }
+  .confidence-popover-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .confidence-popover-heading h3 { margin:0; font-size:13px; font-weight:600; }
+  .confidence-popover:focus { outline:none; }
   .confidence-label h2 :global(svg) { color:var(--color-magenta); }
   .confidence-label > span { color:var(--color-ink-2); font-size:12px; }
-  .score { align-self:center; font-size:24px; line-height:1.2; font-weight:500; font-variant-numeric:tabular-nums; color:var(--color-magenta); }
-  .score small { font-size:12px; font-weight:400; color:var(--color-ink-2); margin-left:3px; }
-  .signal-chart { display:flex; gap:5px; height:4px; grid-column:1/-1; }
-  .signal-chart span { flex:1; background:var(--color-edge); border-radius:4px; }
-  .signal-chart .confirmed { background:var(--color-magenta); } .signal-chart .failed { background:var(--color-warn); }
+  .score,.confidence-number { font-family:var(--font-mono); font-variant-numeric:lining-nums tabular-nums slashed-zero; }
+  .score { align-self:center; white-space:nowrap; font-size:44px; line-height:1.1; letter-spacing:-.04em; font-weight:700; color:var(--color-magenta); }
+  .score small { font-size:14px; font-weight:400; letter-spacing:0; color:var(--color-ink-2); margin-left:6px; }
+  .confidence-trigger { align-self:center; display:inline-flex; }
+  .confidence-breakdown { grid-column:1/-1; margin:0; display:grid; gap:8px; font-size:12px; }
+  .confidence-breakdown > div { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .confidence-breakdown dt { color:var(--color-ink-2); }
+  .confidence-breakdown small { margin-left:4px; font-size:11px; }
+  .confidence-breakdown dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+  .confidence-note { grid-column:1/-1; margin:0; color:var(--color-ink-2); font-size:12px; line-height:1.5; }
+  .confidence-request { grid-column:1/-1; min-width:0; }
+  .confidence .has-issues { color:var(--color-warn); }
   .score-explanation { grid-column:1/-1; font-size:12px; color:var(--color-ink-2); }
   .score-explanation dl { margin:12px 0 8px; } .score-explanation dl > div { display:flex; justify-content:space-between; gap:12px; margin:8px 0; }
   .score-explanation p { line-height:1.6; }
@@ -133,19 +195,17 @@
   .features .section-title { margin-bottom:20px; }
   .features h2 { font-size:20px; line-height:1.3; letter-spacing:-.015em; font-weight:600; gap:12px; }
   .features .section-count { display:inline-flex; align-items:center; justify-content:center; min-width:25px; height:25px; padding:0 7px; border-radius:7px; background:var(--color-accent-fill); color:var(--color-accent-ink); font-size:12px; font-weight:500; letter-spacing:0; }
-  .feature-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:28px; }
-  .feature-item:first-child { grid-column:1/-1; }
+  .feature-grid { display:grid; grid-template-columns:minmax(0,1fr); }
   .feature-item { min-width:0; border-top:1px solid color-mix(in srgb,var(--color-edge) 55%,transparent); }
   .feature-item > summary { padding:20px 0; }
-  .feature-heading { display:flex; align-items:center; gap:12px; font-size:15px; line-height:1.45; font-weight:500; color:var(--color-ink); }
+  .feature-heading { position:relative; padding-left:44px; display:flex; align-items:center; gap:12px; font-size:15px; line-height:1.45; font-weight:500; color:var(--color-ink); }
   .feature-name { flex:1; overflow-wrap:anywhere; }
-  .feature-icon { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; flex-shrink:0; border-radius:9px; color:var(--color-accent-ink); background:color-mix(in srgb,var(--color-accent) 10%,transparent); }
+  .feature-icon { position:absolute; left:0; top:-5px; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; flex-shrink:0; border-radius:9px; color:var(--color-accent-ink); background:color-mix(in srgb,var(--color-accent) 10%,transparent); }
   .feature-heading > :global(svg) { color:var(--color-ink-2); transition:transform 160ms ease-out; }
   .feature-item[open] .feature-heading > :global(svg) { transform:rotate(180deg); }
   .feature-item > summary:hover .feature-heading { color:var(--color-accent-ink); }
-  .feature-description { display:block; color:var(--color-ink-2); font-size:13px; line-height:1.65; margin:8px 26px 0 44px; max-width:65ch; overflow-wrap:anywhere; }
+  .feature-description { display:block; color:var(--color-ink-2); font-size:13px; line-height:1.65; margin:4px 26px 0 44px; max-width:65ch; overflow-wrap:anywhere; }
   .feature-detail { padding:0 26px 4px 44px; font-size:13px; overflow-wrap:anywhere; }
-  @container (max-width:560px) { .feature-grid { grid-template-columns:minmax(0,1fr); } }
   .feature-parts { display:grid; gap:10px; padding:0; margin:0 0 16px; list-style:none; }
   .feature-parts li { display:flex; gap:8px; align-items:baseline; line-height:1.5; color:var(--color-ink); }
   .feature-parts li :global(svg) { flex-shrink:0; color:var(--color-accent); }

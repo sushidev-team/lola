@@ -212,8 +212,9 @@ rotates with open state. Action-menu summaries can retain their ellipsis icon.
 The review overview uses a quiet canvas with a short behavior summary and a
 grouped What changed panel, followed by screenshot previews. Its 20px semibold
 heading and count badge sit above 15px feature titles and 13px muted descriptions.
-Descriptions remain visible; supporting sub-features expand. The first feature
-spans the panel, with supporting features in two columns when space permits.
+Descriptions remain visible, 4px below their headings; icons align independently
+without increasing the heading row height. Supporting sub-features expand. Every feature spans
+the panel in one aligned column, regardless of the feature count or viewport width.
 Source revision and score methodology stay in disclosures. The risk panel shares
 the feature panel’s heading, count badge and surface treatment. Likelihood and
 impact are always visible as aligned rating badges with miniature level bars;
@@ -221,8 +222,17 @@ unknown values remain Not rated. Wide panels use comparison columns, while narro
 panels place both labelled ratings below the risk title. Assessment prose expands
 on demand. Ratings remain explicitly agent-provided. A proportional decision
 column gives the risk comparison enough room beside the changes and screenshots. Violet identifies
-evidence coverage, cyan carries the merge action, and semantic green/amber retains
-its status meaning. The score describes evidence coverage, never correctness.
+confidence, cyan carries the merge action, and semantic green/amber retains
+its status meaning. Confidence blends observed outcomes (70%) with the agent’s
+explicit self-assessment and rationale (30%), both tied to the reviewed revision.
+Confidence scores use the bundled JetBrains Mono with tabular, lining figures. The overall score uses bold 44px numerals with a quiet 14px
+denominator; numeric breakdowns share the face while labels remain sans serif.
+The overall score is prominent; an info button beside Confidence opens the
+breakdown, self-assessment trigger, rationale, and methodology in a popover. Pending or unavailable evidence is excluded and
+the score is marked provisional; missing self-assessment leaves it unscored with
+an action to request one. Approval is a separate workflow gate, while actual
+failures and requested changes lower confidence. This is a heuristic assessment,
+not a probability of correctness or permission to merge.
 Shared palette tokens preserve light and dark themes. At narrow widths, the review
 actions follow the summary, before changes and screenshots. Screenshot previews
 keep their full image visible and open the existing comparison canvas. The scoped

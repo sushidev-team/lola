@@ -1,31 +1,56 @@
 import { expect, it } from 'vitest';
 import type { PRReadinessData } from '@bindings/internal/protocol';
-import { reviewConfidence, reviewOverview, reviewItems, plainReviewText, compactReviewLabel } from './reviewoverview';
-const pkg = {head:'abc',base:'def',repo:'acme/app',pr:42};
+import { agentConfidence, reviewConfidence, reviewOverview, reviewItems, plainReviewText, compactReviewLabel } from './reviewoverview';
+const body = '## Agent confidence\nScore: 80/100\nBasis: Regression tests passed; production mail remains unverified.';
+const pkg = {head:'abc',base:'def',repo:'acme/app',pr:42,body};
 const facts = {head:'abc',base:'def',checksHead:'abc',repo:'acme/app',number:42,checks:'pass',review:'APPROVED',mergeable:'MERGEABLE',threads:[]} as unknown as PRReadinessData;
 
-it('invalidates changed bases and refuses CI credit without the exact checked commit',()=>{
-  expect(reviewConfidence(pkg,{...facts,base:'changed'}).score).toBeNull();
-  expect(reviewConfidence(pkg,{...facts,base:undefined}).score).toBeNull();
-  for (const checksHead of [undefined,'old']) {
-    const result=reviewConfidence(pkg,{...facts,checksHead});
-    expect(result.score).toBe(80);
-    expect(result.signals[1].value).toBe('Revision unconfirmed');
+it('blends known outcomes with explicit self-confidence without penalizing approval or running CI',()=>{
+  for (const review of ['', 'REVIEW_REQUIRED', 'APPROVED']) {
+    for (const checks of ['pass', 'pending', 'none']) {
+      expect(reviewConfidence(pkg,{...facts,review,checks}).score).toBe(94);
+    }
   }
+  expect(reviewConfidence({...pkg,body:body.replace('80/100','20/100')},facts).score).toBe(76);
+  expect(reviewConfidence(pkg,{...facts,checks:'pending'})).toMatchObject({pending:1,observed:2,label:'Provisional · evidence incomplete'});
 });
 
-it('scores only independently observed signals for the exact reviewed revision',()=>{
-  expect(reviewConfidence(pkg,facts).score).toBe(100);
-  expect(reviewConfidence(pkg,{...facts,review:'',checks:'none'}).score).toBe(60);
-  const failed=reviewConfidence(pkg,{...facts,checks:'fail',mergeable:'CONFLICTING'});
-  expect(failed.score).toBe(60);
-  expect(failed.signals.filter(s=>s.failed)).toHaveLength(2);
-  expect(reviewConfidence(pkg,{...facts,threads:null}).score).toBe(80);
-  expect(reviewConfidence(pkg).score).toBeNull();
-  for(const changed of [{head:'other'},{repo:'other/app'},{number:43},{head:''}]) {
+it('lowers confidence for observed problems even when the author is certain',()=>{
+  const certain = {...pkg,body:body.replace('80/100','100/100')};
+  for (const failure of [{checks:'fail'},{mergeable:'CONFLICTING'},{threads:[{}]}]) {
+    expect(reviewConfidence(certain,{...facts,...failure} as PRReadinessData)).toMatchObject({score:77,failed:1,label:'Issues found'});
+  }
+  expect(reviewConfidence(certain,{...facts,review:'CHANGES_REQUESTED'})).toMatchObject({score:83,failed:1});
+  expect(reviewConfidence(certain,{...facts,checks:'fail',mergeable:'CONFLICTING',threads:[{}],review:'CHANGES_REQUESTED'} as PRReadinessData).score).toBe(30);
+});
+
+it('requires matching revisions, observed results, and a self-assessment instead of inventing missing values',()=>{
+  for (const changed of [{base:'changed'},{base:undefined},{head:'other'},{repo:'other/app'},{number:43},{head:''}]) {
     const result=reviewConfidence(pkg,{...facts,...changed});
     expect(result.score).toBeNull();
     expect(result.signals.some(s=>s.confirmed)).toBe(false);
+  }
+  expect(reviewConfidence(pkg).score).toBeNull();
+  expect(reviewConfidence({...pkg,body:''},facts)).toMatchObject({score:null,label:'Awaiting self-assessment'});
+  expect(reviewConfidence(pkg,{...facts,checks:'pending',mergeable:'UNKNOWN',threads:null})).toMatchObject({score:null,label:'Awaiting observed results'});
+  for (const checksHead of [undefined,'old']) {
+    const result=reviewConfidence(pkg,{...facts,checks:'fail',checksHead});
+    expect(result).toMatchObject({score:94,pending:1,failed:0});
+    expect(result.signals[0].value).toBe('Revision unconfirmed');
+  }
+  expect(reviewConfidence(pkg,{...facts,threads:null})).toMatchObject({score:94,pending:1});
+});
+
+it('accepts only explicit bounded self-assessments with a rationale',()=>{
+  expect(agentConfidence(body)).toMatchObject({score:80,basis:'Regression tests passed; production mail remains unverified.'});
+  expect(agentConfidence(body.replace('80/100','0/100'))?.score).toBe(0);
+  expect(agentConfidence(body.replace('80/100','100/100'))?.score).toBe(100);
+  expect(agentConfidence(body.replace('Score:', '**Score:**').replace('Basis:', '**Basis:**'))?.score).toBe(80);
+  for (const invalid of ['101/100','-1/100','NaN/100','80%','0.8','80.5/100']) {
+    expect(agentConfidence(body.replace('80/100',invalid))).toBeNull();
+  }
+  for (const invalid of ['',body.replace('Agent confidence','Verification'),body.replace(/Basis:.*/,''),body+'\nScore: 90/100',body+'\n'+body,'## Agent confidence\n```\nScore: 90/100\nBasis: Example only.\n```']) {
+    expect(agentConfidence(invalid)).toBeNull();
   }
 });
 
