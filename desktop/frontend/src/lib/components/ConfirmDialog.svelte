@@ -11,19 +11,18 @@
   import Button from "./Button.svelte";
 
   const req = $derived(confirm.request);
+  const descriptionId = $props.id();
 </script>
 
 {#if req}
-  <Modal title={req.title} onClose={() => confirm.cancel()} width="420px">
-    <!-- `copy` is the only sanctioned line-height deviation: multi-line prose
-         gets 1.55 and a 62ch measure. -->
-    <p class="copy text-ink">{req.body}</p>
-    {#if req.detail}
-      <p class="mt-2 text-sm text-faint">{req.detail}</p>
-    {/if}
+  <Modal title={req.title} onClose={() => confirm.cancel()} width="480px" describedBy={descriptionId}>
+    <div id={descriptionId} class="confirmation-copy">
+      <p class="copy confirmation-body">{req.body}</p>
+      {#if req.detail}<p class="copy confirmation-detail">{req.detail}</p>{/if}
+    </div>
     {#snippet footer()}
-      <div class="flex justify-end gap-2">
-        <Button variant="secondary" size="md" onclick={() => confirm.cancel()}>Cancel</Button>
+      <div class="dialog-actions">
+        <Button class="cancel" size="md" onclick={() => confirm.cancel()}>Cancel</Button>
         {#if req.alternative}
           <Button variant="secondary" size="md" onclick={() => confirm.acceptAlternative()}>{req.alternative.label}</Button>
         {/if}
@@ -32,3 +31,9 @@
     {/snippet}
   </Modal>
 {/if}
+
+<style>
+  .confirmation-copy { min-width:0; overflow-wrap:anywhere; }
+  .confirmation-body { font-size:14px; color:var(--color-ink); }
+  .confirmation-detail { margin-top:10px; font-size:13px; color:var(--color-ink-2); }
+</style>

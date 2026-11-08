@@ -30,12 +30,45 @@ typography:
     fontSize: "18px"
     lineHeight: "24px"
     fontWeight: 600
+  dialog-title:
+    fontSize: "18px"
+    lineHeight: "28px"
+    fontWeight: 600
+    letterSpacing: "-0.02em"
+  dialog-body:
+    fontSize: "14px"
+    lineHeight: 1.55
+  dialog-detail:
+    fontSize: "13px"
+    lineHeight: 1.55
 rounded:
+  dialog: "16px"
+  dialog-action: "8px"
   panel: "10px"
   overview: "9px"
   session-row: "6px"
   session-search: "5px"
 components:
+  dialog-window:
+    backgroundColor: "var(--color-panel)"
+    textColor: "var(--color-ink)"
+    rounded: "{rounded.dialog}"
+  dialog-confirmation:
+    backgroundColor: "var(--color-panel)"
+    textColor: "var(--color-ink)"
+    rounded: "{rounded.dialog}"
+    width: "480px"
+  dialog-title:
+    typography: "{typography.dialog-title}"
+  dialog-confirmation-body:
+    typography: "{typography.dialog-body}"
+    textColor: "var(--color-ink)"
+  dialog-confirmation-detail:
+    typography: "{typography.dialog-detail}"
+    textColor: "var(--color-ink-2)"
+  dialog-action:
+    rounded: "{rounded.dialog-action}"
+    padding: "8px 12px"
   overview-card:
     backgroundColor: "color-mix(in srgb, var(--color-panel) 80%, var(--color-canvas))"
     textColor: "var(--color-ink)"
@@ -97,6 +130,8 @@ Conversation and session overview remain separate working areas. Overview sectio
 
 Tonal surface changes and thin borders carry most depth. Overview cards add a faint inset highlight. Activity hover and focus brighten the segment, while keyboard focus adds a cyan outline. Reduced-motion preferences disable the strip's color and shadow transitions.
 
+Windowed dialogs use a subdued semantic edge and two soft offset shadows, recorded in the sidecar. Their brief entrance is disabled under reduced motion.
+
 ## Shapes
 
 Panels use gently rounded corners; overview cards use their own compact radius. Buttons retain the shared component's small rounded shape and 24/28/32px height ladder. These are desktop density choices, not a mobile touch-target specification.
@@ -110,6 +145,14 @@ Use the official `@lucide/svelte` library through `Icon.svelte` in desktop and m
 ### Buttons
 
 Reuse `Button.svelte`: ghost, accent, secondary, primary, danger, danger-solid and bare variants share density and disabled behavior. Primary actions use a tinted accent background and readable accent text. Selected controls reuse the same tint; disabled controls do not acquire hover treatment.
+
+### Dialogs
+
+`Modal.svelte` gives every windowed dialog the same continuous panel surface, dialog radius and title role, with no header or footer dividers. The horizontal inset and header top inset are 24px, becoming 20px at viewport widths of 480px or less. Default bodies have 16px top and 24px bottom padding (14px top when narrow); explicit custom body layouts retain their padding with 16px separation below the header. Footers share the panel surface and bottom inset. The shell retains a 16px viewport margin; fullscreen treatment is unchanged.
+
+Shared `dialog-actions` rows place quiet Cancel left and the relevant primary, secondary or destructive actions right. Actions wrap, use a 36px minimum height, and become full-width stacked controls with a 40px minimum height at the narrow breakpoint. Standard footer buttons share the desktop sizing. Confirmations retain their width and copy roles, optional secondary alternative, solid destructive action and safe initial Close focus. Rename uses the same 480px width, a themed field with an accessible hint, and footer Cancel / Save name actions linked to the native form. New-session and SSH forms use the same action rows. Long labels wrap; focus trapping, restoration, guarded dismissal, native submission and error retention remain intact.
+
+The scoped dialog review covered confirmation, rename, new-session and form-dialog captures, including narrow and light-theme examples, in `.impeccable/review/dialogs/`; that evidence applies to these shared components only.
 
 ### Sidebar session navigation
 

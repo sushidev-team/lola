@@ -177,8 +177,8 @@
 
       {#if error}<p class="text-sm text-bad" role="alert">{error}</p>{/if}
 
-      <div class="flex items-center justify-between gap-2">
-        <Button size="md" onclick={close} disabled={busy}>Cancel</Button>
+      <div class="dialog-actions">
+        <Button class="cancel" size="md" onclick={close} disabled={busy}>Cancel</Button>
         <span class="flex items-center gap-2">
           {#if picked?.openIn}
             <Button

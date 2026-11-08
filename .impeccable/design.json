@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-07T13:57:47.601998+00:00",
+  "generatedAt": "2026-11-08T14:02:11.111660+00:00",
   "title": "Design System: Lola desktop",
   "extensions": {
     "colorMeta": {
@@ -136,6 +136,11 @@
         "name": "activity-state",
         "value": "background .12s, box-shadow .12s",
         "purpose": "Activity hover and selection; disabled under reduced motion."
+      },
+      {
+        "name": "dialog-enter",
+        "value": "160ms cubic-bezier(.16,1,.3,1)",
+        "purpose": "Enter from opacity .85 and translateY(6px) scale(.985); disabled under prefers-reduced-motion."
       }
     ],
     "breakpoints": [
@@ -146,6 +151,17 @@
       {
         "name": "sidebar-container",
         "value": "275px"
+      },
+      {
+        "name": "dialog-narrow",
+        "value": "480px"
+      }
+    ],
+    "shadows": [
+      {
+        "name": "dialog-window",
+        "value": "0 24px 64px -16px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .25)",
+        "purpose": "Soft offset elevation for windowed Modal shells."
       }
     ]
   },
@@ -208,6 +224,14 @@
       "description": "All and Needs you filters retain a compact selected tint.",
       "html": "<div aria-label=\"Session filters\"><button type=\"button\" class=\"ds-filter\" aria-pressed=\"true\">All <span>8</span></button><button type=\"button\" class=\"ds-filter\" aria-pressed=\"false\">Needs you <span>2</span></button></div>",
       "css": ".ds-filter { padding:3px 7px; border:0; border-radius:4px; background:transparent; color:var(--color-ink-2); font:12px var(--font-sans); } .ds-filter span { margin-left:4px; color:var(--color-faint); } .ds-filter[aria-pressed=\"true\"] { color:var(--color-accent-ink); background:var(--color-accent-fill); } .ds-filter:focus-visible { outline:2px solid var(--color-accent); outline-offset:1px; }"
+    },
+    {
+      "name": "Confirmation dialog",
+      "kind": "custom",
+      "refersTo": "dialog-confirmation",
+      "description": "Confirmation specimen of the continuous surface, title and action sizing shared by all windowed dialogs, including rename and session forms. Runtime Modal owns focus trapping and restoration; fullscreen treatment is unchanged.",
+      "html": "<section class=\"ds-confirm\" role=\"dialog\" aria-labelledby=\"ds-confirm-title\" aria-describedby=\"ds-confirm-body\"><header class=\"ds-confirm-header\"><h2 id=\"ds-confirm-title\">End session?</h2><button type=\"button\" class=\"ds-confirm-close\" aria-label=\"Close\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"m18 6-12 12M6 6l12 12\"/></svg></button></header><div class=\"ds-confirm-copy\" id=\"ds-confirm-body\"><p>End this session?</p><p class=\"ds-confirm-detail\">Review the session before continuing.</p></div><footer class=\"ds-confirm-actions\"><button type=\"button\" class=\"ds-confirm-cancel\">Cancel</button><button type=\"button\" class=\"ds-confirm-danger\">End session</button></footer></section>",
+      "css": ".ds-confirm { width:calc(100% - 32px); max-width:480px; overflow:hidden; border:1px solid color-mix(in srgb,var(--color-edge) 75%,transparent); border-radius:16px; background:var(--color-panel); color:var(--color-ink); font:13px/18px var(--font-sans); box-shadow:0 24px 64px -16px rgb(0 0 0 / .4),0 8px 24px -12px rgb(0 0 0 / .25); } .ds-confirm-header { display:flex; align-items:flex-start; gap:8px; padding:24px 24px 0; } .ds-confirm-header h2 { min-width:0; margin:0; font-size:18px; line-height:28px; font-weight:600; letter-spacing:-.02em; overflow-wrap:anywhere; } .ds-confirm button { display:inline-flex; align-items:center; justify-content:center; border:0; font:inherit; cursor:pointer; background:transparent; color:var(--color-ink-2); } .ds-confirm button:focus-visible { outline:2px solid var(--color-accent); outline-offset:3px; } .ds-confirm button:disabled { opacity:.4; cursor:not-allowed; } .ds-confirm button:enabled:hover { background:var(--color-sel); color:var(--color-ink); } .ds-confirm .ds-confirm-close { flex-shrink:0; width:28px; height:28px; padding:0; margin-left:auto; border-radius:6px; color:var(--color-faint); } .ds-confirm-copy { padding:16px 24px 24px; overflow-wrap:anywhere; } .ds-confirm-copy p { margin:0; font-size:14px; line-height:1.55; } .ds-confirm-copy .ds-confirm-detail { margin-top:10px; font-size:13px; color:var(--color-ink-2); } .ds-confirm-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:0 24px 24px; } .ds-confirm-actions button { min-height:36px; padding:8px 12px; border-radius:8px; white-space:normal; } .ds-confirm-cancel { margin-right:auto; } .ds-confirm-actions .ds-confirm-danger { background:var(--color-bad); color:var(--color-on-bad); font-weight:500; } .ds-confirm-actions .ds-confirm-danger:enabled:hover { background:var(--color-bad); color:var(--color-on-bad); opacity:.9; } @media(max-width:480px) { .ds-confirm-header { padding:20px 20px 0; } .ds-confirm-copy { padding:14px 20px 24px; } .ds-confirm-actions { display:grid; grid-template-columns:minmax(0,1fr); padding:0 20px 20px; } .ds-confirm-actions button { width:100%; min-height:40px; } .ds-confirm-cancel { margin:0; } }"
     }
   ],
   "narrative": {

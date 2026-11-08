@@ -169,7 +169,7 @@
       </div>
     {/if}
 
-    <div class="grid grid-cols-2 gap-3">
+    <div class="grid gap-3 {temporary ? '' : 'min-[480px]:grid-cols-2'}">
       <label class="grid gap-1.5 text-sm">Project
         <Select bind:value={project} disabled={busy} onchange={() => { location = project ? (location === "temporary" ? "worktree" : location) : "temporary"; if (project && !nav.sessionAgent && location === "temporary") useAgent = true; }}>
           <option value="">No project, temporary shell</option>
@@ -258,8 +258,8 @@
     {/if}
 
     {#if error}<p class="text-sm text-bad" role="alert">{error}</p>{/if}
-    <div class="flex items-center justify-end gap-2">
-      <Button onclick={close} disabled={busy || picking}>Cancel</Button>
+    <div class="dialog-actions">
+      <Button class="cancel" onclick={close} disabled={busy || picking}>Cancel</Button>
       <Button variant="primary" type="submit" loading={busy} disabled={busy || picking || !canStart}>Start <span aria-hidden="true">↩</span></Button>
     </div>
   </form>

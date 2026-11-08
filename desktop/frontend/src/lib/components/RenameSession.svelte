@@ -6,6 +6,7 @@
   import Modal from "./Modal.svelte";
   import Button from "./Button.svelte";
   const id = nav.overlayProject;
+  const formId = $props.id();
   let name = $state(store.sessionById(id)?.title || "");
   let nameInput: HTMLInputElement;
   let busy = $state(false);
@@ -20,11 +21,16 @@
     if (ok) nav.closeOverlay(); else error = store.flash?.text || "Could not rename session";
   }
 </script>
-<Modal title="Rename session" onClose={() => { if (!busy) nav.closeOverlay(); }} width="420px">
-  <form class="grid gap-3" onsubmit={(e) => { e.preventDefault(); void save(); }}>
-    <label class="grid gap-1.5">Name<input bind:this={nameInput} class="rounded border border-edge bg-canvas px-3 py-2" bind:value={name} maxlength="100" disabled={busy} /></label>
-    <p class="text-sm text-faint">A display name only. The branch and directory stay the same.</p>
+<Modal title="Rename session" onClose={() => { if (!busy) nav.closeOverlay(); }} width="480px">
+  <form id={formId} class="grid gap-3" onsubmit={(e) => { e.preventDefault(); void save(); }}>
+    <label class="grid gap-1.5">Name<input bind:this={nameInput} class="lola-field" aria-describedby={`${formId}-hint`} bind:value={name} maxlength="100" disabled={busy} /></label>
+    <p id={`${formId}-hint`} class="copy text-sm text-ink-2">A display name only. The branch and directory stay the same.</p>
     {#if error}<p role="alert" class="text-bad">{error}</p>{/if}
-    <Button type="submit" variant="primary" loading={busy}>Save name</Button>
   </form>
+  {#snippet footer()}
+    <div class="dialog-actions">
+      <Button class="cancel" size="md" onclick={close} disabled={busy}>Cancel</Button>
+      <Button type="submit" form={formId} variant="primary" size="md" loading={busy}>Save name</Button>
+    </div>
+  {/snippet}
 </Modal>
