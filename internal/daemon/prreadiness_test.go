@@ -26,7 +26,7 @@ func TestPRReadinessUsesExactLane(t *testing.T) {
 		if repo != "acme/app" || n != 8 {
 			t.Fatalf("wrong PR %s %d", repo, n)
 		}
-		return scm.PRReadiness{Number: n, State: "OPEN", Threads: []scm.ReviewThread{{ID: "t"}}}, nil
+		return scm.PRReadiness{Number: n, State: "OPEN", Base: "base", Head: "head", ChecksHead: "head", Threads: []scm.ReviewThread{{ID: "t"}}}, nil
 	}
 	for _, req := range []protocol.Request{feedbackReq("prReadiness", "s", 8), feedbackReq("prReadiness", "s~app", 7), feedbackReq("prReadiness", "missing", 8)} {
 		if r := d.handle(context.Background(), req); r.OK {
@@ -40,6 +40,9 @@ func TestPRReadinessUsesExactLane(t *testing.T) {
 	var got protocol.PRReadinessData
 	if err := json.Unmarshal(r.Data, &got); err != nil || got.Repo != "acme/app" || len(got.Threads) != 1 || calls != 1 {
 		t.Fatalf("%s calls=%d err=%v", r.Data, calls, err)
+	}
+	if got.Base != "base" || got.Head != "head" || got.ChecksHead != "head" || got.ObservedAt.IsZero() {
+		t.Fatalf("lost observed revision identity: %+v", got)
 	}
 }
 func TestPRReadinessAddressValidatesThenQueuesSafeWorkflow(t *testing.T) {

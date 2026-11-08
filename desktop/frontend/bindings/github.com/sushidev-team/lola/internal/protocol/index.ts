@@ -73,6 +73,7 @@ export type {
     ReviewImageData,
     ReviewPackage,
     ReviewPackagesData,
+    ReviewRecord,
     ReviewScreen,
     ReviewThread,
     ReviveData,

@@ -129,7 +129,7 @@ func withContextBriefing(prompt []byte, ctxDir string) []byte {
 		}
 		b.WriteString("\n")
 	} else {
-		b.WriteString("It is empty: no earlier session has worked on this yet.\n\n")
+		b.WriteString("It is empty: no shared notes are available. Earlier work may still exist in Linear or GitHub.\n\n")
 	}
 	b.WriteString("Keep `" + lolaDir + "/" + contextLink + "/notes.md` current as you work: decisions and why, dead ends, what is left, anything the next session would otherwise have to rediscover. Update it before you end a turn that changed your understanding. Never put secrets in it.\n")
 	return []byte(b.String())

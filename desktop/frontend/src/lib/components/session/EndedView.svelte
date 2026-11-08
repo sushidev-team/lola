@@ -47,7 +47,12 @@
             <Button variant="secondary" size="xs" onclick={() => void navigator.clipboard?.writeText(draft)}>Copy</Button>
           </div>
         {/if}
-        <p>This session has ended. Its worktree is gone.</p>
+        <div class="min-w-0">
+          <p>This session has ended.</p>
+          {#if ended?.keptWorktree}
+            <p class="mt-1 break-words">Its worktree was kept at <span class="selectable">{ended.keptWorktree}</span>.</p>
+          {/if}
+        </div>
         <Button variant="secondary" size="xs" onclick={() => reviewWorkspace.open(sessionId)}>Review material</Button>
         {#if ended?.prUrl}
           <Button variant="secondary" size="xs" onclick={() => store.openURL(ended.prUrl ?? "")}>Open PR <span aria-hidden="true"><Icon name="external-link" size={14} /></span></Button>

@@ -235,8 +235,16 @@ func (d *Daemon) recordEndedAs(s session.Session, reason string) {
 	if s.PR != nil {
 		info.PRNumber = s.PR.Number
 	}
+	for _, a := range s.Apps {
+		if a.PR != nil && a.PR.URL != "" && !slices.Contains(info.PRURLs, a.PR.URL) {
+			info.PRURLs = append(info.PRURLs, a.PR.URL)
+		}
+	}
 	if wt := sessionWorktree(d.home, s); wt != "" {
 		info.Slug = filepath.Base(usage.SlugDir("/", wt)) // the name, wherever the root is
+		if fi, err := os.Stat(wt); err == nil && fi.IsDir() {
+			info.KeptWorktree = wt
+		}
 	}
 	err = store.Update(func(st *sshstore.State) error {
 		// Cleaning a rediscovered leftover must not replace its original

@@ -45,9 +45,9 @@ listens on 7717. Worse, `make build` alone never reaches the running daemon —
 the TUI's `^r`, the desktop app's restart button and a hand-started `lola run`
 all resolve `lola` from `PATH`, normally `$GOPATH/bin/lola`. Use:
 
-    make daemon          # install the tagged build of committed HEAD, start nothing
+    make daemon          # install the tagged working-tree build, start nothing
     make daemon-dev      # the same build, then RUN it LAN-reachable (foreground)
-    make mobile-lan      # like daemon-dev, but built from the WORKING TREE
+    make mobile-lan      # same as daemon-dev
     make mobile-info     # host, port, key and SPKI pin of the RUNNING listener
 
 `daemon` builds and stops there, leaving a running daemon alone — which is only
@@ -56,21 +56,18 @@ started with, so the new binary is not live until something restarts it (^r in
 the TUI, the app's restart button, or `daemon-dev`). `daemon-dev` builds and
 runs, stopping whatever was running first.
 
-Both build `git archive HEAD`, so nothing half-finished beside them reaches the
-operator's daemon. `make mobile-lan` installs the WORKING TREE instead, which is
-what you want while iterating on your own uncommitted change.
+These targets include uncommitted changes from the current working tree. For an
+explicit committed-only install, use `contrib/lola-mobile-dev.sh --head --build-only`,
+then restart the daemon. The `--head` flag builds `git archive HEAD`.
 
 `make mobile-dev --lan` does not work and never did: `make` claims a leading
 `--` for its own options. The script's flags do combine, so
-`contrib/lola-mobile-dev.sh --lan --head` is what `make daemon` runs.
+`contrib/lola-mobile-dev.sh --build-only` is what `make daemon` runs.
 
-If the installed binary is ever replaced by an untagged one, rebuild from
-**committed HEAD** rather than the working tree, so you do not ship another
-agent's in-progress work into the operator's daemon:
+If the installed binary is ever replaced by an untagged one, `make daemon`
+restores the tagged working-tree build. To use committed code instead:
 
-    T=$(mktemp -d) && git archive HEAD | tar -x -C "$T" && cd "$T" && \
-      GOCACHE=<repo>/.gocache GOFLAGS='-mod=mod -buildvcs=false' \
-      go build -tags lola_insecure -o "$T/lola" .
+    ./contrib/lola-mobile-dev.sh --head --build-only
 
 **The phone can now FIND the daemon, and that is separate from trusting it.**
 With `[remote].advertise = true` — OFF by default, because `_lola._tcp` tells

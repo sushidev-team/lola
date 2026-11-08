@@ -3,11 +3,13 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/sv
 
 const Diff = vi.fn();
 const CheckpointDiff = vi.fn();
+const ReviewPackageDiff = vi.fn();
 const SendFeedback = vi.fn();
 vi.mock("@bindings/desktop", () => ({
   DaemonService: {
     Diff: (...a: unknown[]) => Diff(...a),
     CheckpointDiff: (...a: unknown[]) => CheckpointDiff(...a),
+    ReviewPackageDiff: (...a: unknown[]) => ReviewPackageDiff(...a),
     SendFeedback: (...a: unknown[]) => SendFeedback(...a),
     Alive: vi.fn().mockResolvedValue(false),
     Sessions: vi.fn(),
@@ -41,7 +43,22 @@ describe("DiffView", () => {
     cleanup();
     feedback.clear("s1");
     Diff.mockReset().mockResolvedValue(DATA);
+    ReviewPackageDiff.mockReset().mockResolvedValue(DATA);
     SendFeedback.mockReset().mockResolvedValue({ delivered: true, queued: false });
+  });
+
+  it('compares exact review packages without live feedback or modifying the checkout summary',async()=>{
+    localStorage.setItem('lola.diff.mode','unified');
+    feedback.add('s1',{path:'internal/foo/foo.go',side:'new',line:2,endLine:2,quote:'var x = 2',body:'Live draft'});
+    render(DiffView,{sessionId:'s1',reviewRange:{from:'reviewed',to:'selected'}});
+    await screen.findByText('origin/main');
+    expect(ReviewPackageDiff).toHaveBeenCalledWith('s1','reviewed','selected');
+    expect(Diff).not.toHaveBeenCalled();
+    expect(screen.queryByText('Live draft')).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    await fireEvent.click(screen.getByRole('button',{name:'Line 2'}));
+    expect(screen.queryByPlaceholderText('What should the agent change here?')).toBeNull();
+    expect(feedback.draftsFor('s1')).toHaveLength(1);
   });
 
   it("shows the files changed against the merge-base", async () => {

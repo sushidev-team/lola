@@ -1212,10 +1212,12 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 // hookToken mints a sandboxed session's hook-bridge token (hookbridge.go).
 func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any), ports *portlease.Registry, hookToken func(string) string, knowledgeBrief func(string, string, []byte) []byte) *runtime.Native {
 	return &runtime.Native{
-		Cfg:     cfg,
-		WT:      &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:    cfg.TmuxClient("tmux", home),
-		LolaBin: lolaBin,
+		SessionUsed:  func(id string) (bool, error) { return sessionPreviouslyUsed(home, id) },
+		PreviousWork: func(project, issue string) string { return previousIssueWork(home, project, issue) },
+		Cfg:          cfg,
+		WT:           &worktree.Manager{Root: filepath.Join(home, "worktrees")},
+		Tmux:         cfg.TmuxClient("tmux", home),
+		LolaBin:      lolaBin,
 		ResolveLolaBin: func() string {
 			return runtime.ResolveLolaBin(lolaBin, filepath.Join(home, "worktrees"), exec.LookPath, nil)
 		},

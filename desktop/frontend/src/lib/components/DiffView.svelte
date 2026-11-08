@@ -52,8 +52,10 @@
     rail,
     turnBar,
     comparison,
-  }: { sessionId: string; turn?: number; compact?: boolean; rail?: Snippet; turnBar?: Snippet; comparison?: Snippet } = $props();
+    reviewRange,
+  }: { sessionId: string; turn?: number; compact?: boolean; rail?: Snippet; turnBar?: Snippet; comparison?: Snippet; reviewRange?:{from:string;to:string} } = $props();
   const session = $derived(store.sessionById(sessionId));
+  const readOnly = $derived(!!turn || !!reviewRange);
 
   // --- data ------------------------------------------------------------------
 
@@ -77,10 +79,11 @@
     loading = true;
     try {
       const wanted = turn;
-      const d = wanted ? await DaemonService.CheckpointDiff(id, wanted) : await DaemonService.Diff(id);
+      const range = reviewRange;
+      const d = range ? await DaemonService.ReviewPackageDiff(id,range.from,range.to) : wanted ? await DaemonService.CheckpointDiff(id, wanted) : await DaemonService.Diff(id);
       if (my !== seq) return;
       data = d;
-      if (!wanted) changes.note(id, d);
+      if (!wanted && !range) changes.note(id, d);
       if (!d.files?.some((f) => f.path === activeFile)) activeFile = orderedFiles[0]?.path ?? "";
       error = "";
     } catch (err) {
@@ -94,6 +97,7 @@
   $effect(() => {
     id; // reload on selection change
     turn; // and on another turn
+    reviewRange;
     data = null;
     error = "";
     sel = null;
@@ -102,6 +106,7 @@
     // Untracked: load() runs synchronously up to its first await, and anything
     // it reads there would become a dependency of THIS effect.
     untrack(() => void load());
+    return () => { seq++; };
   });
 
   const files = $derived<DiffFile[]>(data?.files ?? []);
@@ -235,7 +240,7 @@
 
   function pick(path: string, r: Row, e: MouseEvent) {
     const a = anchorOf(r);
-    if (!a || turn) return;
+    if (!a || readOnly) return;
     sel = e.shiftKey ? extendSelection(sel, path, a.side, a.line) : { path, side: a.side, start: a.line, end: a.line };
   }
 
@@ -276,6 +281,7 @@
   }
 
   function draftsAfter(path: string, r: Row) {
+    if (readOnly) return [];
     const a = anchorOf(r);
     return a ? feedback.draftsAt(sessionId, path, a.side, a.line) : [];
   }
@@ -315,7 +321,7 @@
   const count = $derived(feedback.count(sessionId));
   const note = $derived(feedback.noteFor(sessionId));
   // In this view "add a comment" is the click on a line, which means nothing on a turn.
-  const lineTitle = $derived(turn ? undefined : "comment on this line (shift-click to select a range)");
+  const lineTitle = $derived(readOnly ? undefined : "comment on this line (shift-click to select a range)");
 </script>
 
 {#snippet fileIcon()}
@@ -494,7 +500,7 @@
                       type="button"
                       class="line-gutter col-span-2 grid grid-cols-2 pr-2 text-right select-none hover:text-ink"
                       title={lineTitle}
-                      aria-label={`${r.kind === 'del' ? 'Removed line' : 'Line'} ${r.newLine || r.oldLine}${turn ? '' : ', add comment'}`}
+                      aria-label={`${r.kind === 'del' ? 'Removed line' : 'Line'} ${r.newLine || r.oldLine}${readOnly ? '' : ', add comment'}`}
                       onclick={(e) => pick(f.path, r, e)}
                     >
                       <span class="old-number">{r.oldLine || ""}</span><span class="new-number">{r.newLine || ""}</span>
@@ -555,7 +561,7 @@
 
   <!-- A free note beside the line comments. Sending is the footer strip's: it says how many are
        drafted, and it is where every view keeps what you can do now. A turn takes no comments. -->
-  {#if !turn}
+  {#if !readOnly}
     <div class="diff-feedback grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-edge/60 px-4 py-1.5">
       <textarea
         value={note}

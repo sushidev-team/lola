@@ -9,6 +9,8 @@ const (
 	CmdReviewPublish  = "reviewPackagePublish" // agent-side, bound to Request.Session
 	CmdReviewPackages = "reviewPackages"       // human-side, retained metadata
 	CmdReviewImage    = "reviewPackageImage"   // human-side, retained image only
+	CmdReviewMark     = "reviewPackageMark"    // human inspection, never merge approval
+	CmdReviewDiff     = "reviewPackageDiff"    // exact retained heads, read-only
 )
 
 type ReviewPublishArgs struct {
@@ -17,7 +19,24 @@ type ReviewPublishArgs struct {
 }
 
 type ReviewPackagesData struct {
-	Packages []ReviewPackage `json:"packages"`
+	ReviewTracking bool                    `json:"reviewTracking,omitempty"`
+	Packages       []ReviewPackage         `json:"packages"`
+	Reviewed       map[string]ReviewRecord `json:"reviewed,omitempty"`
+}
+
+type ReviewRecord struct {
+	Package string    `json:"package"`
+	At      time.Time `json:"at"`
+}
+
+type ReviewMarkArgs struct {
+	Package  string `json:"package"`
+	Previous string `json:"previous"`
+}
+
+type ReviewDiffArgs struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // ReviewPackage is a wire projection of retained material. All content is agent-provided.

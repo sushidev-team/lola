@@ -41,6 +41,7 @@ func (d *Daemon) handlePRReadiness(ctx context.Context, req protocol.Request) pr
 	if req.Cmd == "prReadiness" {
 		out := protocol.PRReadinessData{Repo: s.Repo, Number: data.Number, URL: data.URL, State: data.State, Draft: data.Draft, Mergeable: data.Mergeable, MergeState: data.MergeState, Review: data.Review, Checks: data.Checks, Head: data.Head, Threads: []protocol.ReviewThread{}}
 		out.MergeMethod = method
+		out.Base, out.ChecksHead, out.ObservedAt = data.Base, data.ChecksHead, time.Now().UTC()
 		out.MergeBlocked = d.manualMergeBlocked(s, data)
 		for _, t := range data.Threads {
 			out.Threads = append(out.Threads, protocol.ReviewThread{ID: t.ID, Path: t.Path, Line: t.Line, Outdated: t.Outdated, Author: t.Author, Preview: t.Preview, URL: t.URL})

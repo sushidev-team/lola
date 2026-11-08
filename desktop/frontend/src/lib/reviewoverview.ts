@@ -121,8 +121,8 @@ export function reviewOverview(pkg: Pick<ReviewPackage,'title'|'body'>) {
 export type ConfidenceSignal = { label: string; value: string; confirmed: boolean; failed?: boolean };
 /** Equal-weight coverage of five observable review signals, NOT a probability of
  * correctness. Facts about another revision cannot score the selected package. */
-export function reviewConfidence(pkg: Pick<ReviewPackage,'head'|'repo'|'pr'>, facts?: PRReadinessData) {
-  const current = !!pkg.head && !!facts?.head && pkg.head === facts.head && pkg.repo === facts.repo && (!pkg.pr || pkg.pr === facts.number);
+export function reviewConfidence(pkg: Pick<ReviewPackage,'head'|'base'|'repo'|'pr'>, facts?: PRReadinessData) {
+  const current = !!pkg.head && !!facts?.head && !!facts.base && pkg.base === facts.base && pkg.head === facts.head && pkg.repo === facts.repo && (!pkg.pr || pkg.pr === facts.number);
   const signals: ConfidenceSignal[] = [
     {label:'Revision',value:current ? 'Matches current PR' : facts ? 'Different revision' : 'Not confirmed',confirmed:current},
     {label:'CI checks',value:'Not confirmed',confirmed:false},
@@ -131,7 +131,8 @@ export function reviewConfidence(pkg: Pick<ReviewPackage,'head'|'repo'|'pr'>, fa
     {label:'Review threads',value:'Not confirmed',confirmed:false},
   ];
   if (current && facts) {
-    signals[1] = {label:'CI checks',value:({pass:'Passed',fail:'Failed',pending:'Running',none:'No checks'} as Record<string,string>)[facts.checks] || 'Unknown',confirmed:facts.checks === 'pass',failed:facts.checks === 'fail'};
+    const pinnedChecks = facts.checksHead === pkg.head;
+    signals[1] = {label:'CI checks',value:pinnedChecks ? ({pass:'Passed',fail:'Failed',pending:'Running',none:'No checks'} as Record<string,string>)[facts.checks] || 'Unknown' : 'Revision unconfirmed',confirmed:pinnedChecks && facts.checks === 'pass',failed:pinnedChecks && facts.checks === 'fail'};
     signals[2] = {label:'PR review',value:({APPROVED:'Approved',CHANGES_REQUESTED:'Changes requested',REVIEW_REQUIRED:'Review required'} as Record<string,string>)[facts.review] || 'No approval',confirmed:facts.review === 'APPROVED',failed:facts.review === 'CHANGES_REQUESTED'};
     signals[3] = {label:'Merge conflicts',value:facts.mergeable === 'MERGEABLE' ? 'None detected' : facts.mergeable === 'CONFLICTING' ? 'Conflicts found' : 'Unknown',confirmed:facts.mergeable === 'MERGEABLE',failed:facts.mergeable === 'CONFLICTING'};
     signals[4] = {label:'Review threads',value:facts.threads ? facts.threads.length ? `${facts.threads.length} unresolved` : 'All resolved' : 'Unknown',confirmed:Array.isArray(facts.threads) && facts.threads.length === 0,failed:!!facts.threads?.length};

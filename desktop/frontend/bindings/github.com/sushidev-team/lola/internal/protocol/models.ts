@@ -595,6 +595,8 @@ export interface DiffFile {
  * EndedSession is a session that left the list and whose story is still readable.
  */
 export interface EndedSession {
+    /** Directory retained when the session ended. */
+    "keptWorktree"?: string;
     "id": string;
     "project"?: string;
     "title"?: string;
@@ -875,6 +877,9 @@ export interface PRReadinessData {
     "review": string;
     "checks": string;
     "head": string;
+    "base"?: string;
+    "checksHead"?: string;
+    "observedAt"?: string;
     "threads": ReviewThread[] | null;
     "mergeMethod": string;
     "mergeBlocked": string;
@@ -1207,7 +1212,14 @@ export interface ReviewPackage {
 }
 
 export interface ReviewPackagesData {
+    "reviewTracking"?: boolean;
     "packages": ReviewPackage[] | null;
+    "reviewed"?: { [_ in string]?: ReviewRecord } | null;
+}
+
+export interface ReviewRecord {
+    "package": string;
+    "at": string;
 }
 
 export interface ReviewScreen {

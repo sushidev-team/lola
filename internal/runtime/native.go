@@ -146,6 +146,10 @@ const openCodeDir = ".opencode"
 // Native spawns and manages Lola's own runner sessions (runtime = "native"):
 // one git worktree + one tmux session running Claude Code per Linear issue.
 type Native struct {
+	// SessionUsed recognizes pre-reservation session history, even after cleanup.
+	SessionUsed func(id string) (bool, error)
+	// PreviousWork supplies prior outcomes for a fresh issue launch (not a resume).
+	PreviousWork func(project, issue string) string
 	// SessionRecorded reports whether the session store holds a record of this id.
 	// Adoption asks it about names shaped like an ssh tab. Nil means no record.
 	SessionRecorded func(id string) bool
@@ -248,9 +252,8 @@ func slugify(label string) string {
 	return s
 }
 
-// maxSpawnAttempts bounds the retry-suffix search in freeSessionSlot; hitting
-// it means many kept-for-inspection leftovers piled up for one issue and a
-// human should clean them up.
+// maxSpawnAttempts bounds collision probes per launch, not the lifetime number
+// of attempts for an issue. Durable reservations advance the starting point.
 const maxSpawnAttempts = 20
 
 // adoptChromeTimeout bounds Adopt's whole status-bar reconciliation pass. It is
@@ -271,21 +274,34 @@ var attemptSuffixRe = regexp.MustCompile(`-r\d+$`)
 // Linear identifier.
 var bestOfSuffixRe = regexp.MustCompile(`-b\d+$`)
 
-// freeSessionSlot returns the first (session ID, branch) pair that does not
-// collide with leftovers of earlier attempts for the same issue: attempt 1 is
-// the deterministic (baseID, baseBranch) pair, retries append "-r<n>" to
-// both. Collisions checked: the worktree dir on disk (a dead session's
-// worktree is deliberately kept for inspection, and the reconcile pass
-// re-queues its issue — without the suffix that re-queue could never spawn)
-// and the branch in the project repo (it survives a manual `git worktree
-// remove`). A live tmux pane under the base name implies a session record the
-// reconciler still counts, so it never reaches Spawn and needs no check here.
+// freeSessionSlot reserves a fresh identity before creating anything. Reservations
+// survive cleanup and failed launches: reusing a branch can attach an old merged
+// PR, and reusing an ID overwrites the previous conversation.
 func (n *Native) freeSessionSlot(ctx context.Context, p config.Project, baseID, baseBranch string) (id, branch string, err error) {
-	for attempt := 1; attempt <= maxSpawnAttempts; attempt++ {
+	claims, first, err := n.attemptClaims(baseID)
+	if err != nil {
+		return "", "", err
+	}
+	for attempt := first; attempt < first+maxSpawnAttempts; attempt++ {
+		if err := os.Mkdir(filepath.Join(claims, strconv.Itoa(attempt)), 0o700); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				continue // another launch reserved it
+			}
+			return "", "", fmt.Errorf("reserve attempt: %w", err)
+		}
 		id, branch = baseID, baseBranch
 		if attempt > 1 {
 			suffix := "-r" + strconv.Itoa(attempt)
 			id, branch = baseID+suffix, baseBranch+suffix
+		}
+		if n.SessionUsed != nil {
+			used, err := n.SessionUsed(id)
+			if err != nil {
+				return "", "", err
+			}
+			if used {
+				continue
+			}
 		}
 		taken, err := n.SlotTaken(ctx, p, id, branch)
 		if err != nil {
@@ -295,7 +311,7 @@ func (n *Native) freeSessionSlot(ctx context.Context, p config.Project, baseID, 
 			return id, branch, nil
 		}
 	}
-	return "", "", fmt.Errorf("no free session slot after %d attempts — clean up old %s* worktrees and branches", maxSpawnAttempts, baseID)
+	return "", "", fmt.Errorf("no free session slot after %d collision checks for %s", maxSpawnAttempts, baseID)
 }
 
 // SlotTaken reports whether (id, branch) collides with something on disk: a
@@ -331,10 +347,10 @@ func (n *Native) resolveKind(project, override string) agent.Kind {
 //	running claude.
 //
 // The branch is issue.BranchName when Linear provides one, else
-// "lola/<identifier-lowercased>"; when a previous attempt's worktree or
-// branch still exists (kept for inspection), both the session ID and the
-// branch get a "-r<attempt>" suffix (see freeSessionSlot) so a re-queued
-// issue can always spawn again. On any step failure the already-created
+// "lola/<identifier-lowercased>"; later attempts append "-r<attempt>" to both
+// the session ID and branch even after previous worktrees and branches were
+// removed. Reservations outlive cleanup (see freeSessionSlot). On any step
+// failure the already-created
 // pieces are rolled back best-effort — the tmux session is killed if it came
 // up, the worktree is removed only when clean (force=false; a dirty worktree
 // is kept for inspection) — and the returned error says what was left behind.
@@ -362,6 +378,7 @@ type SpawnOpts struct {
 
 // SpawnWith is Spawn with explicit SpawnOpts.
 func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.Issue, o SpawnOpts) (session.Session, error) {
+	started := time.Now()
 	agentOverride := o.Agent
 	if issue.Identifier == "" {
 		return session.Session{}, errors.New("runtime: spawn: issue has no identifier")
@@ -430,7 +447,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	}
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
-	brief := promptMD(p, issue, branch)
+	brief := n.issuePrompt(p, issue, branch)
 	if bestOf {
 		brief = withBestOfBriefing(brief, o.Attempt, o.Of)
 	}
@@ -480,6 +497,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 
 	return withAgentState(session.Session{
 		ID:         id,
+		FirstSeen:  started,
 		Source:     "native",
 		Kind:       session.KindLinear,
 		Project:    p.Name,

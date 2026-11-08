@@ -64,9 +64,19 @@ describe("EndedView", () => {
   it("says what happened and offers the PR", async () => {
     const open = vi.spyOn(store, "openURL").mockResolvedValue();
     render(EndedView, { sessionId: SID });
-    expect(screen.getByText("This session has ended. Its worktree is gone.")).toBeInTheDocument();
+    expect(screen.getByText("This session has ended.")).toBeInTheDocument();
+    expect(screen.queryByText(/worktree is gone/)).toBeNull();
     await fireEvent.click(screen.getByRole("button", { name: /Open PR/ }));
     expect(open).toHaveBeenCalledWith("https://example.test/412");
+  });
+
+  it("shows the retained worktree without claiming it was removed", async () => {
+    talkSvc.Ended.mockResolvedValue({ sessions: [{ ...record(SID), keptWorktree: "/worktrees/eng-42" }] });
+    await talk.loadEnded();
+    render(EndedView, { sessionId: SID });
+    expect(screen.getByText("/worktrees/eng-42")).toBeInTheDocument();
+    expect(screen.getByText(/Its worktree was kept at/)).toBeInTheDocument();
+    expect(screen.queryByText(/worktree is gone/)).toBeNull();
   });
 
   it("the top bar says it ended and offers no actions", () => {

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeGh installs a shell script standing in for the gh binary (pattern:
@@ -65,7 +66,7 @@ func TestPRForBranchArgsAndParse(t *testing.T) {
 		t.Fatalf("PRForBranch: %v", err)
 	}
 	want := "pr list --repo acme/nori --head lola/NORI-12-1 --state all --limit 1 " +
-		"--json number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,baseRefName,baseRefOid"
+		"--json number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,baseRefName,baseRefOid,mergedAt,closedAt"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want %q", args, want)
 	}
@@ -101,6 +102,17 @@ func TestPRForBranchNoPR(t *testing.T) {
 	}
 	if pr != nil {
 		t.Errorf("PRForBranch = %+v, want nil for empty array", pr)
+	}
+}
+
+func TestPRForBranchCompletionTimes(t *testing.T) {
+	bin, _ := fakeGh(t, `[{"number":8,"state":"MERGED","mergedAt":"2026-11-07T12:00:00Z","closedAt":"2026-11-07T12:00:01Z"}]`, 0)
+	pr, err := (&Client{GhBin: bin}).PRForBranch(context.Background(), "acme/nori", "topic")
+	if err != nil || pr == nil {
+		t.Fatalf("PR: %+v, %v", pr, err)
+	}
+	if pr.MergedAt.Format(time.RFC3339) != "2026-11-07T12:00:00Z" || pr.ClosedAt.Format(time.RFC3339) != "2026-11-07T12:00:01Z" {
+		t.Fatalf("completion timestamps lost: %+v", pr)
 	}
 }
 

@@ -12,16 +12,17 @@ const image = vi.mocked(DaemonService.ReviewPackageImage);
 const facts = vi.mocked(DaemonService.PRReadiness);
 const send = vi.mocked(DaemonService.SendFeedback);
 const head = 'b'.repeat(40);
-const pkg = (over={}) => ({version:1,id:'c'.repeat(64),session:'s',repo:'acme/app',pr:42,title:'A clearer settings screen',body:'## Changes\nSpacing now follows the form rhythm.',base:'a'.repeat(40),head,createdAt:'2026-11-07T10:00:00Z',screens:[{title:'Settings',after:'d'.repeat(64),caption:'Aligned labels',viewport:'1440 × 900'}],artifacts:[],...over});
-const status = (over={}) => ({repo:'acme/app',number:42,url:'https://github.com/acme/app/pull/42',state:'OPEN',draft:false,mergeable:'MERGEABLE',mergeState:'CLEAN',review:'APPROVED',checks:'pass',head,threads:[],mergeMethod:'squash',mergeBlocked:'',...over});
+const pkg = (over={}) => ({version:1,id:'c'.repeat(64),session:id,repo:'acme/app',pr:42,title:'A clearer settings screen',body:'## Changes\nSpacing now follows the form rhythm.',base:'a'.repeat(40),head,createdAt:'2026-11-07T10:00:00Z',screens:[{title:'Settings',after:'d'.repeat(64),caption:'Aligned labels',viewport:'1440 × 900'}],artifacts:[],...over});
+const status = (over={}) => ({repo:'acme/app',number:42,url:'https://github.com/acme/app/pull/42',state:'OPEN',draft:false,mergeable:'MERGEABLE',mergeState:'CLEAN',review:'APPROVED',checks:'pass',head,base:'a'.repeat(40),checksHead:head,threads:[],mergeMethod:'squash',mergeBlocked:'',...over});
 let id:string;
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver',class {observe(){} disconnect(){}});
   localStorage.clear(); nav.openOverlay('pr-review');
   read.mockReset();image.mockReset();facts.mockReset();send.mockReset();
+  vi.mocked(DaemonService.ReviewPackageMark).mockReset();
   talkSvc.Say.mockReset();
-  read.mockResolvedValue({packages:[pkg()]});image.mockResolvedValue({dataURL:'data:image/png;base64,aGVsbG8='});facts.mockResolvedValue(status());
   id=freshSession({prNumber:42,prUrl:'https://github.com/acme/app/pull/42'});
+  read.mockResolvedValue({packages:[pkg()],reviewTracking:true});image.mockResolvedValue({dataURL:'data:image/png;base64,aGVsbG8='});facts.mockResolvedValue(status());
   vi.spyOn(store,'refresh').mockResolvedValue(undefined);
 });
 afterEach(() => {cleanup();feedback.clear(id);nav.closeOverlay();vi.restoreAllMocks();vi.unstubAllGlobals();});
@@ -38,6 +39,9 @@ it('shows material before GitHub completes and shares the pending status request
   expect(screen.queryByText('Not verified',{exact:true})).toBeNull();
   expect(screen.queryByRole('button',{name:'Squash and merge'})).toBeNull();
   expect(facts).toHaveBeenCalledTimes(1);
+  vi.mocked(DaemonService.ReviewPackageMark).mockResolvedValue({package:pkg().id,at:'2026-11-08T12:00:00Z'});
+  await fireEvent.click(screen.getByRole('button',{name:'Mark reviewed'}));
+  await screen.findByRole('button',{name:'Reviewed'});
   finish(status());
   await screen.findByRole('img',{name:'Evidence coverage: 100 out of 100'});
   expect(await screen.findByRole('button',{name:'Squash and merge'})).toBeEnabled();
@@ -64,6 +68,75 @@ it('shows material errors without waiting for GitHub and removes the skeleton',a
   expect(await screen.findByRole('alert')).toHaveTextContent('Material unavailable');
   expect(screen.queryByRole('status',{name:'Loading review'})).toBeNull();
   finish(status());
+});
+
+it('marks only the inspected package, retains the baseline on refresh, and compares updated material',async()=>{
+  const mark=vi.mocked(DaemonService.ReviewPackageMark);
+  const reviewed={package:pkg().id,at:'2026-11-08T12:00:00Z'};
+  mark.mockResolvedValue(reviewed);
+  render(ReviewWorkspace,{sessionId:id});
+  await fireEvent.click(await screen.findByRole('button',{name:'Mark reviewed'}));
+  expect(mark).toHaveBeenCalledWith(id,pkg().id,'');
+  expect(await screen.findByRole('button',{name:'Reviewed'})).toBeDisabled();
+  const next=pkg({id:'new-package',body:'## Changes\nCorrected spacing.\n## Risks\nNew risk.'});
+  read.mockResolvedValue({packages:[next,pkg()],reviewed:{[id]:reviewed},reviewTracking:true});
+  await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
+  await fireEvent.click(await screen.findByRole('button',{name:'View latest package'}));
+  await fireEvent.click(await screen.findByRole('button',{name:'See changes since review'}));
+  expect(await screen.findByRole('heading',{name:'Since your last review'})).toBeInTheDocument();
+  expect(screen.getByText('Same code revision; the published review material changed.')).toBeInTheDocument();
+  expect(screen.getByText('Corrected spacing.')).toBeInTheDocument();
+  expect(mark).toHaveBeenCalledTimes(1);expect(send).not.toHaveBeenCalled();
+});
+
+it('keeps the inspected package unreviewed when saving fails and supports retry',async()=>{
+  const mark=vi.mocked(DaemonService.ReviewPackageMark);
+  mark.mockRejectedValueOnce(new Error('disk full'));
+  render(ReviewWorkspace,{sessionId:id});
+  await fireEvent.click(await screen.findByRole('button',{name:'Mark reviewed'}));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not save your review');
+  mark.mockResolvedValueOnce({package:pkg().id,at:'2026-11-08T12:00:00Z'});
+  await fireEvent.click(screen.getByRole('button',{name:'Mark reviewed'}));
+  expect(await screen.findByRole('button',{name:'Reviewed'})).toBeDisabled();
+});
+
+it('does not offer review tracking on older daemons and anchors comments to the selected section',async()=>{
+  read.mockResolvedValue({packages:[pkg({body:'## Changes\nSpacing.\n## Risks\nSmall screens.'})]});
+  render(ReviewWorkspace,{sessionId:id});
+  await screen.findByRole('heading',{name:'A clearer settings screen'});
+  expect(screen.queryByRole('button',{name:'Mark reviewed'})).toBeNull();
+  await fireEvent.change(screen.getByLabelText('Comment section'),{target:{value:'Section 2: Risks'}});
+  await fireEvent.input(screen.getByRole('textbox',{name:'Review comment'}),{target:{value:'Check the small screen.'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Add to feedback'}));
+  expect(feedback.noteFor(id)).toContain('Section: Section 2: Risks');
+  expect(feedback.noteFor(id)).toContain(`Review package ${pkg().id}`);
+});
+
+it('does not carry a delayed review write into another session',async()=>{
+  let finish!:(value:{package:string;at:string})=>void;
+  vi.mocked(DaemonService.ReviewPackageMark).mockImplementationOnce(()=>new Promise(resolve=>finish=resolve) as never);
+  const mounted=render(ReviewWorkspace,{sessionId:id});
+  await fireEvent.click(await screen.findByRole('button',{name:'Mark reviewed'}));
+  await mounted.rerender({sessionId:'other'});
+  await waitFor(()=>expect(read).toHaveBeenLastCalledWith('other'));
+  finish({package:pkg().id,at:'2026-11-08T12:00:00Z'});
+  expect(await screen.findByRole('button',{name:'Mark reviewed'})).toBeEnabled();
+});
+
+it('keeps retained stack-member review baselines separate after session cleanup',async()=>{
+  store.sessions=[];
+  const web=pkg({session:`${id}~web`,id:'web-current'});
+  const old=pkg({session:`${id}~web`,id:'web-reviewed',body:'Older web write-up'});
+  const api=pkg({session:`${id}~api`,id:'api-current',repo:'acme/api',pr:43});
+  read.mockResolvedValue({packages:[web,api,old],reviewTracking:true,reviewed:{[web.session]:{package:old.id,at:'2026-11-08T12:00:00Z'}}});
+  vi.mocked(DaemonService.ReviewPackageMark).mockResolvedValue({package:web.id,at:'2026-11-08T13:00:00Z'});
+  render(ReviewWorkspace,{sessionId:id});
+  await screen.findByRole('tab',{name:'Since review'});
+  await fireEvent.change(screen.getByLabelText('Review version'),{target:{value:api.id}});
+  expect(screen.queryByRole('tab',{name:'Since review'})).toBeNull();
+  await fireEvent.change(screen.getByLabelText('Review version'),{target:{value:web.id}});
+  await fireEvent.click(screen.getByRole('button',{name:'Mark reviewed'}));
+  expect(DaemonService.ReviewPackageMark).toHaveBeenCalledWith(web.session,web.id,old.id);
 });
 
 it('requests review material through the conversation without sending draft feedback or duplicating clicks',async()=>{
@@ -207,7 +280,7 @@ it('does not call unknown freshness current, and allows retry on old daemon erro
   read.mockRejectedValueOnce(new Error('unknown cmd "reviewPackages"'));facts.mockRejectedValue(new Error('offline'));
   render(ReviewWorkspace,{sessionId:id});await screen.findByRole('alert');
   await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
-  await screen.findByText(/Freshness unknown/);
+  await screen.findByText('Not verified',{exact:true});
   expect(screen.queryByText(/Package head matches/)).toBeNull();
 });
 

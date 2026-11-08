@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
@@ -94,6 +95,7 @@ func (n *Native) stackBranchTaken(ctx context.Context, p config.Project, branch 
 // spawnStack is SpawnWith for a stack: the session folder, one worktree per
 // selected app, the agent in the folder.
 func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.Issue, o SpawnOpts) (session.Session, error) {
+	started := time.Now()
 	if o.Group != "" {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s: best-of is not supported for a stack", issue.Identifier)
 	}
@@ -133,7 +135,7 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 	}
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
-	brief := withStackBriefing(promptMD(p, issue, branch), n.Cfg.StackMembers(p.Name), created)
+	brief := withStackBriefing(n.issuePrompt(p, issue, branch), n.Cfg.StackMembers(p.Name), created)
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing(brief, ctxDir))), 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
@@ -165,6 +167,7 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 	}
 	return withAgentState(session.Session{
 		ID:         id,
+		FirstSeen:  started,
 		Source:     "native",
 		Kind:       session.KindLinear,
 		Project:    p.Name,

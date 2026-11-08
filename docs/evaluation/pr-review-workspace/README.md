@@ -233,6 +233,44 @@ WebKit verified disclosures, screenshot navigation and no horizontal overflow at
 production frontend build passed. The design detector reported no findings.
 The packaged native app was not rebuilt or restarted for this styling pass.
 
+## Revision evidence and re-review
+
+The follow-up adds retained human inspection records, section comments, a
+write-up/screenshot comparison against the last reviewed package, and a read-only
+diff between its exact head and the selected package's head. Stack members retain
+separate baselines even after the live stack has ended. Mark reviewed does not
+approve, merge, send feedback, or change session state.
+
+- [Desktop comparison](since-review-1440.png)
+- [700px comparison](since-review-700.png)
+- [420px comparison](since-review-420.png)
+- [Screenshot comparison](since-review-screenshots.png)
+
+These captures use existing Nori baseline/continuation images and explicitly
+mocked review packages, GitHub responses and code diffs. They demonstrate the
+review UI; they are not new captures of Nori or live PR verification.
+
+Headless WebKit exercised inspection, changed material, retained images and exact
+code comparison at 1440, 700 and 420px, without browser errors or horizontal
+document/dialog overflow. The comparison changes from two columns to one at
+narrow widths. No synthetic OS input was used.
+
+Validation: 1,882 frontend tests passed; after the final stack-retention changes,
+43 affected tests passed, including the additional ended-stack case. Svelte checks
+reported zero errors/warnings, and the production build passed. Go formatting,
+build, vet and focused storage/daemon/SCM/transport tests passed. `make check`
+passed the daemon suite and reached the previously documented unrelated
+`TestSetupGeneralSettingsAreOptionalAndEditable` failure in `internal/tui`.
+
+Logs: `/private/tmp/lola-review-followup-{check-unrestricted,build-vet,go,all-ui,final-ui,types,build}.log`.
+The Wails binding generator succeeded with warnings about its Go 1.26 parser
+running against the machine's Go 1.27 standard library.
+
+The daemon has not been installed/restarted, and the packaged native WKWebView
+and a live publication from each agent provider were not exercised. Independent
+local check execution and browser-assisted capture remain separate follow-ups;
+the current evidence binding covers observed GitHub revisions and CI commits.
+
 
 ### Feature hierarchy refinement
 

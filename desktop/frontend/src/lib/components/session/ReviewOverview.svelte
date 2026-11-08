@@ -44,7 +44,7 @@
     <header class="review-intro">
       <h1>{overview.title}</h1>
       <p class="summary-copy">{overview.summary}</p>
-      {#if freshness !== 'current'}<div class="intro-meta"><span class="stale" role="status"><Icon name="circle-alert" size={14}/>{freshness === 'stale' ? 'Outdated material' : 'Freshness unknown'}</span></div>{/if}
+      {#if freshness === 'stale'}<div class="intro-meta"><span class="stale" role="status"><Icon name="circle-alert" size={14}/>Outdated material</span></div>{/if}
     </header>
       <section class="review-panel features" aria-label="Changes in this review">
         <div class="section-title"><h2>What changed<span class="section-count">{overview.changes.length}</span></h2></div>
@@ -72,7 +72,7 @@
         <div class="signal-chart" role="img" aria-label={confidence.score === null ? 'Confidence not scored: revision unconfirmed' : `Evidence coverage: ${confidence.score} out of 100`}>
           {#each confidence.signals as signal}<span class:confirmed={signal.confirmed} class:failed={signal.failed} title={`${signal.label}: ${signal.value}`}></span>{/each}
         </div>
-        <details class="score-explanation"><summary><Chevron class="disclosure-chevron" />Evidence behind this score</summary><dl>{#each confidence.signals as signal}<div><dt>{signal.label}</dt><dd>{signal.value}</dd></div>{/each}</dl><p>20 points per confirmed signal for this revision. Evidence coverage, not a probability of correct code. Agent claims do not increase it.</p></details>
+        <details class="score-explanation"><summary><Chevron class="disclosure-chevron" />Evidence behind this score</summary>{#if confidence.score === null}<p>This review hasn’t been matched to the current PR. Live PR checks are shown below.</p>{/if}<dl>{#each confidence.signals as signal}<div><dt>{signal.label}</dt><dd>{signal.value}</dd></div>{/each}</dl><p>20 points per confirmed signal for this revision. Evidence coverage, not a probability of correct code. Agent claims do not increase it.</p>{#if facts?.observedAt}<p>Observed on GitHub {new Date(facts.observedAt).toLocaleString()}. CI revision: {facts.checksHead?.slice(0,12) || 'unconfirmed'}.</p>{/if}</details>
         {/if}
       </section>
       {#if checks}<div class="checks">{@render checks()}</div>{/if}

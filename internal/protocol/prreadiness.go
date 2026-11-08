@@ -1,5 +1,7 @@
 package protocol
 
+import "time"
+
 // ReviewThread is an unresolved, resolvable GitHub review conversation, not an
 // issue comment (which has no resolved state). Preview is plain text only.
 type ReviewThread struct {
@@ -24,6 +26,9 @@ type PRReadinessData struct {
 	Review       string         `json:"review"`
 	Checks       string         `json:"checks"`
 	Head         string         `json:"head"`
+	Base         string         `json:"base,omitempty"`
+	ChecksHead   string         `json:"checksHead,omitempty"`
+	ObservedAt   time.Time      `json:"observedAt,omitzero"`
 	Threads      []ReviewThread `json:"threads"`
 	MergeMethod  string         `json:"mergeMethod"`
 	MergeBlocked string         `json:"mergeBlocked"`

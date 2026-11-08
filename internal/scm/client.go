@@ -31,19 +31,22 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // PR is the observed state of one pull request. The JSON tags are for lola's
 // own persistence (internal/session snapshots), not for gh output — gh JSON
 // is decoded via the unexported prRow.
 type PR struct {
-	Number         int    `json:"number"`
-	URL            string `json:"url"`
-	State          string `json:"state"` // OPEN | CLOSED | MERGED
-	IsDraft        bool   `json:"is_draft"`
-	Mergeable      string `json:"mergeable"`       // MERGEABLE | CONFLICTING | UNKNOWN
-	ReviewDecision string `json:"review_decision"` // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
-	ChecksState    string `json:"checks_state"`    // pass | fail | pending | none
+	MergedAt       time.Time `json:"merged_at,omitempty"`
+	ClosedAt       time.Time `json:"closed_at,omitempty"`
+	Number         int       `json:"number"`
+	URL            string    `json:"url"`
+	State          string    `json:"state"` // OPEN | CLOSED | MERGED
+	IsDraft        bool      `json:"is_draft"`
+	Mergeable      string    `json:"mergeable"`       // MERGEABLE | CONFLICTING | UNKNOWN
+	ReviewDecision string    `json:"review_decision"` // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
+	ChecksState    string    `json:"checks_state"`    // pass | fail | pending | none
 	// HeadSHA / BaseRef pin WHICH commit the facts above describe and what the
 	// PR merges into. The merge queue needs both: it merges only the exact head
 	// it judged (`--match-head-commit`), and only into the default branch.
@@ -75,6 +78,8 @@ type Client struct {
 
 // prRow mirrors the gh JSON field names requested via --json.
 type prRow struct {
+	MergedAt          time.Time     `json:"mergedAt"`
+	ClosedAt          time.Time     `json:"closedAt"`
 	Number            int           `json:"number"`
 	URL               string        `json:"url"`
 	State             string        `json:"state"`
@@ -109,7 +114,7 @@ func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, err
 	}
 	out, err := exec.CommandContext(ctx, bin, "pr", "list",
 		"--repo", repo, "--head", branch, "--state", "all", "--limit", "1",
-		"--json", "number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,baseRefName,baseRefOid",
+		"--json", "number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,baseRefName,baseRefOid,mergedAt,closedAt",
 	).Output()
 	if err != nil {
 		var ee *exec.ExitError
@@ -128,6 +133,8 @@ func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, err
 	}
 	r := rows[0]
 	return &PR{
+		MergedAt:       r.MergedAt,
+		ClosedAt:       r.ClosedAt,
 		Number:         r.Number,
 		URL:            r.URL,
 		State:          r.State,

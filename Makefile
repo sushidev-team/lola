@@ -71,7 +71,8 @@ mobile-lan:
 mobile-info:
 	@contrib/lola-mobile-dev.sh --info
 
-# Install the daemon binary this machine runs, from COMMITTED HEAD. Builds and
+# Install the daemon binary this machine runs, from the CURRENT WORKING TREE.
+# Includes uncommitted changes. Builds and
 # stops there — nothing is started and a daemon already running is left alone.
 #
 # It exists because `make build` writes ./lola, which nothing ever executes: the
@@ -79,16 +80,14 @@ mobile-info:
 # resolve `lola` from PATH. So this installs where those look, with the
 # lola_insecure tag the phone listener only exists under.
 #
-# The SOURCE is what separates it from mobile-lan, which installs the WORKING
-# TREE — right when the change being tested is uncommitted, wrong when somebody
-# else's half-finished work is sitting beside it. This builds `git archive
-# HEAD`, so only committed code reaches the operator's daemon.
+# For a committed-only install, explicitly run:
+# contrib/lola-mobile-dev.sh --head --build-only
 #
 # Note that a running daemon keeps the inode it started with, so this build is
 # not live until it restarts: `make daemon-dev`, the TUI's ^r, or the app's
 # restart button.
 daemon:
-	@contrib/lola-mobile-dev.sh --head --build-only
+	@contrib/lola-mobile-dev.sh --build-only
 
 # The same build, then RUN it, LAN-reachable for a phone. The daemon logs to
 # this terminal and ^C stops it — the `-dev` suffix means the same thing here as
@@ -98,7 +97,7 @@ daemon:
 # started by the TUI or the app carries no LAN opt-in, so it is bound to
 # loopback and a phone cannot reach it however healthy it looks.
 daemon-dev:
-	@contrib/lola-mobile-dev.sh --lan --head
+	@contrib/lola-mobile-dev.sh --lan
 
 
 # Build the app and launch it on an iOS Simulator without opening Xcode. The

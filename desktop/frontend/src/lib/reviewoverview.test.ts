@@ -1,8 +1,18 @@
 import { expect, it } from 'vitest';
 import type { PRReadinessData } from '@bindings/internal/protocol';
 import { reviewConfidence, reviewOverview, reviewItems, plainReviewText, compactReviewLabel } from './reviewoverview';
-const pkg = {head:'abc',repo:'acme/app',pr:42};
-const facts = {head:'abc',repo:'acme/app',number:42,checks:'pass',review:'APPROVED',mergeable:'MERGEABLE',threads:[]} as unknown as PRReadinessData;
+const pkg = {head:'abc',base:'def',repo:'acme/app',pr:42};
+const facts = {head:'abc',base:'def',checksHead:'abc',repo:'acme/app',number:42,checks:'pass',review:'APPROVED',mergeable:'MERGEABLE',threads:[]} as unknown as PRReadinessData;
+
+it('invalidates changed bases and refuses CI credit without the exact checked commit',()=>{
+  expect(reviewConfidence(pkg,{...facts,base:'changed'}).score).toBeNull();
+  expect(reviewConfidence(pkg,{...facts,base:undefined}).score).toBeNull();
+  for (const checksHead of [undefined,'old']) {
+    const result=reviewConfidence(pkg,{...facts,checksHead});
+    expect(result.score).toBe(80);
+    expect(result.signals[1].value).toBe('Revision unconfirmed');
+  }
+});
 
 it('scores only independently observed signals for the exact reviewed revision',()=>{
   expect(reviewConfidence(pkg,facts).score).toBe(100);

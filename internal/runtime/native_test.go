@@ -27,6 +27,7 @@ import (
 // time.Now (via withAgentState) so a returned session can DeepEqual a literal
 // fixture; the axis VALUES themselves stay and are asserted.
 func stripAxisStamps(s session.Session) session.Session {
+	s.FirstSeen = time.Time{}
 	s.AgentStateSince = time.Time{}
 	s.DeliverySince = time.Time{}
 	s.StatusSince = time.Time{}

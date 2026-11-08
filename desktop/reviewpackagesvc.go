@@ -17,3 +17,17 @@ func (s *DaemonService) ReviewPackageImage(session, packageID, artifact string) 
 	err := call(protocol.Request{Cmd: protocol.CmdReviewImage, Session: session, Args: args}, shortTimeout, &data)
 	return data, err
 }
+
+func (s *DaemonService) ReviewPackageMark(session, packageID, previous string) (protocol.ReviewRecord, error) {
+	args, _ := json.Marshal(protocol.ReviewMarkArgs{Package: packageID, Previous: previous})
+	var data protocol.ReviewRecord
+	err := call(protocol.Request{Cmd: protocol.CmdReviewMark, Session: session, Args: args}, shortTimeout, &data)
+	return data, err
+}
+
+func (s *DaemonService) ReviewPackageDiff(session, from, to string) (protocol.DiffData, error) {
+	args, _ := json.Marshal(protocol.ReviewDiffArgs{From: from, To: to})
+	var data protocol.DiffData
+	err := call(protocol.Request{Cmd: protocol.CmdReviewDiff, Session: session, Args: args}, longTimeout, &data)
+	return data, err
+}

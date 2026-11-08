@@ -50,6 +50,7 @@ func (d *Daemon) observeApps(ctx context.Context, s session.Session) []appFact {
 			if err != nil {
 				d.logf("", "observe: PR check for %s app %s (branch %s in %s) failed: %v", s.ID, a.Name, a.Branch, a.Repo, err)
 			} else {
+				p = prForAttempt(s, p)
 				d.applyRequiredChecks(ctx, a.Repo, p)
 				f.known, f.pr, pr = true, p, p
 			}

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -53,10 +54,41 @@ func (d *Daemon) handleReviewPackage(req protocol.Request) protocol.Response {
 		if err != nil {
 			return fail(err)
 		}
+		// A retained stack root can contain several members after live session
+		// cleanup. Keep their inspection baselines separate in that view too.
+		reviewed := map[string]*reviewpack.Review{}
+		seen := map[string]bool{}
+		for _, p := range packages {
+			if seen[p.Session] {
+				continue
+			}
+			seen[p.Session] = true
+			r, err := reviewpack.Reviewed(d.home, p.Session)
+			if err != nil {
+				return fail(err)
+			}
+			if r != nil {
+				reviewed[p.Session] = r
+			}
+		}
 		// JSON projection keeps the protocol package independent of storage.
 		return dataResponse(struct {
-			Packages []reviewpack.Package `json:"packages"`
-		}{Packages: packages})
+			ReviewTracking bool                          `json:"reviewTracking"`
+			Packages       []reviewpack.Package          `json:"packages"`
+			Reviewed       map[string]*reviewpack.Review `json:"reviewed,omitempty"`
+		}{Packages: packages, Reviewed: reviewed, ReviewTracking: true})
+	case protocol.CmdReviewMark:
+		var args protocol.ReviewMarkArgs
+		if err := json.Unmarshal(req.Args, &args); err != nil {
+			return fail(err)
+		}
+		d.reviewPackageMu.Lock()
+		defer d.reviewPackageMu.Unlock()
+		reviewed, err := reviewpack.MarkReviewed(d.home, req.Session, args.Package, args.Previous)
+		if err != nil {
+			return fail(err)
+		}
+		return dataResponse(reviewed)
 	case protocol.CmdReviewImage:
 		var args protocol.ReviewImageArgs
 		if err := json.Unmarshal(req.Args, &args); err != nil {
@@ -69,4 +101,34 @@ func (d *Daemon) handleReviewPackage(req protocol.Request) protocol.Response {
 		return dataResponse(protocol.ReviewImageData{DataURL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)})
 	}
 	return protocol.Response{Error: "unknown review package command"}
+}
+
+func (d *Daemon) handleReviewDiff(ctx context.Context, req protocol.Request) protocol.Response {
+	fail := func(err error) protocol.Response { return protocol.Response{Error: err.Error()} }
+	var args protocol.ReviewDiffArgs
+	if err := json.Unmarshal(req.Args, &args); err != nil {
+		return fail(err)
+	}
+	from, err := reviewpack.Read(d.home, req.Session, args.From)
+	if err != nil {
+		return fail(err)
+	}
+	to, err := reviewpack.Read(d.home, req.Session, args.To)
+	if err != nil {
+		return fail(err)
+	}
+	if from.Session != req.Session || to.Session != req.Session || from.Repo != to.Repo || from.PR != to.PR {
+		return protocol.Response{Error: "review packages belong to different repositories or pull requests"}
+	}
+	s, ok := d.sessions.Get(req.Session)
+	if !ok || s.Worktree == "" || s.Repo != to.Repo || s.GoalManaged() || d.commitDiff == nil {
+		return protocol.Response{Error: "Commit comparison requires the original live checkout. Retained write-ups and screenshots remain available."}
+	}
+	cctx, cancel := context.WithTimeout(ctx, diffTimeout)
+	defer cancel()
+	res, err := d.commitDiff(cctx, s.Worktree, from.Head, to.Head)
+	if err != nil {
+		return fail(err)
+	}
+	return dataResponse(diffData(s.ID, from.Head, from.Head, res))
 }

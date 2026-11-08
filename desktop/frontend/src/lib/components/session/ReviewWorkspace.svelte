@@ -2,7 +2,9 @@
   import Chevron from "$lib/components/Chevron.svelte";
   import { DaemonService, TalkService } from '@bindings/desktop';
   import { SvelteMap } from 'svelte/reactivity';
-  import type { ReviewPackage as Package, PRReadinessData } from '@bindings/internal/protocol';
+  import type { ReviewPackage as Package, PRReadinessData, ReviewRecord } from '@bindings/internal/protocol';
+  import { reviewFreshness } from '$lib/reviewchanges';
+  import { reviewSections } from '$lib/reviewmaterial';
   import { readPRReadiness } from '$lib/prreadiness';
   import { store } from '$lib/store.svelte';
   import { nav } from '$lib/nav.svelte';
@@ -20,6 +22,7 @@
   import BeforeMerge from './BeforeMerge.svelte';
   import OverviewChecks from './OverviewChecks.svelte';
   import ReviewCanvas from './ReviewCanvas.svelte';
+  import ReviewChanges from './ReviewChanges.svelte';
   import ReviewSkeleton from './ReviewSkeleton.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
@@ -34,12 +37,22 @@
   let packages = $state<Package[]>([]);
   let selected = $state('');
   const current = $derived(packages.find(p => p.id === selected) ?? packages[0]);
+  let reviews = $state<Partial<Record<string,ReviewRecord>>>({});
+  const reviewScope = $derived(current?.session ?? target);
+  const reviewed = $derived(reviews[reviewScope]);
+  let reviewSupported = $state(false);
+  const previous = $derived(packages.find(p => p.id === reviewed?.package));
+  const comparable = $derived(previous && current && previous.id !== current.id && previous.session === current.session && previous.repo === current.repo && previous.pr === current.pr);
+  let marking = $state(false);
+  let markError = $state('');
+  let reviewCode = $state(false);
   let facts = $state<PRReadinessData>();
   let loading = $state(true);
   let materialLoading = $state(true);
   let checking = $state(false);
   let error = $state('');
   let generation = 0;
+  let reviewWrite = 0;
   let tab = $state('material');
   let panelOpen = $state(false);
   let canvasScreen = $state(0);
@@ -55,7 +68,8 @@
   const f = $derived(feed.view(sessionId));
   const view = $derived(ssh.view(sessionId));
   const tests = $derived(sessionActivity({feed:f.items,items:view.items,scope:view.scope,alive:false}).filter(e => e.kind === 'tests'));
-  const freshness = $derived(!current?.head || !facts?.head ? 'unknown' : current.head !== facts.head || current.repo !== facts.repo || (current.pr > 0 && current.pr !== facts.number) ? 'stale' : 'current');
+  const freshness = $derived(current ? reviewFreshness(current,facts) : 'unknown');
+  const sections = $derived(current ? reviewSections(current.body) : []);
   const requests = new SvelteMap<string, { state: 'sending' | 'accepted' | 'error'; message: string }>();
   const request = $derived(requests.get(target));
   const canRequest = $derived(!!session && !session.goalId && !['dead', 'exited', 'shell', 'orphaned'].includes(session.agentState ?? ''));
@@ -81,13 +95,15 @@
   }
 
   async function refresh() {
-    const version = ++generation, sid = target, pr = number;
+    const version = ++generation, sid = target, pr = number, write = reviewWrite;
     loading = true; materialLoading = true; checking = !!pr; error = ''; facts = undefined;
     // Retained material is local; don't hold it behind a GitHub round trip.
     await Promise.all([
       DaemonService.ReviewPackages(sid).then(material => {
         if (version !== generation) return;
         packages = material.packages ?? [];
+        if (write === reviewWrite) reviews = material.reviewed ?? {};
+        reviewSupported = material.reviewTracking === true;
         // A new publication must not replace the revision someone is reviewing.
         if (!selected || !packages.some(p => p.id === selected)) selected = packages[0]?.id ?? '';
       }, err => { if (version === generation) error = String(err); })
@@ -101,11 +117,26 @@
   }
   $effect(() => {
     target; number;
-    packages = []; selected = ''; notice = '';
+    packages = []; selected = ''; notice = ''; reviews = {}; markError = ''; reviewCode = false; reviewSupported = false;
     void refresh();
     const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 60000);
     return () => { generation++; clearInterval(timer); };
   });
+  async function markReviewed() {
+    if (!current || marking) return;
+    const sid = target, scope = reviewScope, packageID = current.id;
+    marking = true; markError = '';
+    try {
+      const result = await DaemonService.ReviewPackageMark(scope,packageID,reviewed?.package ?? '');
+      if (sid === target) {
+        // Older reads cannot undo this inspection; GitHub can still finish.
+        reviewWrite++; reviews = {...reviews,[scope]:result}; reviewCode = false;
+        if (tab === 'since') tab = 'material';
+      }
+    } catch (err) {
+      if (sid === target) markError = `Could not save your review. ${String(err)}`;
+    } finally { marking = false; }
+  }
   $effect(() => {
     const key = draftKey;
     subject = 'Write-up'; draft = '';
@@ -164,12 +195,13 @@
 
 {#snippet checks()}
   {#if reviewSession}<BeforeMerge session={reviewSession} reviewLayout/>{/if}
-  {#if session}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
+  {#if session}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><p class="mb-3 text-xs text-faint">Not verified for this version.</p><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
 {/snippet}
 {#snippet reviewFeedback()}
   <section aria-label="Review feedback" class="review-feedback">
     <div class="feedback-heading"><h2><Icon name="send" size={16}/>Feedback</h2>{#if count}<span>Ready to send</span>{/if}</div>
     {#if session && current}
+      <Select aria-label="Comment section" value={subject} onchange={e => { subject = e.currentTarget.value; editDraft(draft); }}><option value="Write-up">Whole write-up</option>{#each sections as section,i}<option value={`Section ${i+1}: ${section.title}`}>{section.title}</option>{/each}</Select>
       {#if subject !== 'Write-up' && draft}<p class="text-sm text-ink-2">Restored draft: {subject}</p>{/if}
       <textarea aria-label="Review comment" class="review-input" rows="2" maxlength="3000" value={draft} oninput={e => editDraft(e.currentTarget.value)} placeholder="What needs changing or explaining?"></textarea>
       {#if draft.trim()}<Button size="sm" variant="secondary" onclick={addComment}><Icon name="plus" size={14}/>Add to feedback</Button>{/if}
@@ -191,14 +223,19 @@
     <div class="flex min-w-0 flex-wrap items-center gap-2">
       {#if lanes.length}<Select aria-label="Review repository" value={lane?.id} onchange={e => app = e.currentTarget.value}>{#each lanes as a}<option value={a.id}>{a.label}</option>{/each}</Select>{/if}
       {#if packages.length}<Select aria-label="Review version" value={current?.id} onchange={e => selected = e.currentTarget.value}>{#each packages as p,i}<option value={p.id} data-selected-label={i === 0 ? 'Latest' : undefined} data-description={`Commit ${p.head.slice(0,8)}`}>{i === 0 ? 'Latest · ' : ''}{new Date(p.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'})}</option>{/each}</Select>{/if}
+      {#if current && reviewSupported}<Button size="sm" variant="secondary" loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button>{/if}
       <Button size="sm" icon aria-label="Refresh review" title="Refresh review" loading={loading} onclick={refresh}><Icon name="refresh-cw" size={14} /></Button>
     </div>
+    {#if markError}<p role="alert" class="w-full text-sm text-warn">{markError} Refresh review and retry.</p>{/if}
   </div>
   <div class="review-layout" class:panel-open={panelOpen && (tab !== 'material' || !current)}>
     <div class="review-main">
-      <div class="review-tabs"><Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : [])]} active={tab} onSelect={id => tab = id} />{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div>
+      <div class="review-tabs"><Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} />{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div>
       {#if tab === 'code' && session}
         <div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><p class="px-4 py-2 text-xs text-faint">Live checkout changes. These may differ from the retained review revision.</p><DiffView {sessionId} /></div>
+      {:else if tab === 'since' && comparable && previous && current}
+        {#if reviewCode && session}<div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><div class="px-4 py-2 text-xs text-faint"><Button size="xs" onclick={() => reviewCode = false}>Back to material comparison</Button><p>Exact published heads: {previous.head.slice(0,12)} to {current.head.slice(0,12)}. Uncommitted changes are excluded.</p></div><DiffView sessionId={target} reviewRange={{from:previous.id,to:current.id}}/></div>
+        {:else}<div class="review-material"><ReviewChanges before={previous} after={current} onCode={session ? () => reviewCode = true : undefined}/></div>{/if}
       {:else if tab === 'visuals' && current?.screens?.length}
         <div class="review-visuals">
           {#key current.id}<ReviewCanvas bind:this={canvas} onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} canComment={!!session} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
@@ -207,6 +244,7 @@
         <div class="review-material">
           {#if error}<p role="alert" class="mb-5 text-warn">Could not load review material. {error} Try Refresh review; an older daemon may need restarting.</p>{/if}
           {#if current}
+            {#if comparable}<p role="status" class="mb-5 text-sm text-info">This package differs from your last review. <Button size="xs" onclick={() => { tab = 'since'; reviewCode = false; }}>See changes since review</Button></p>{/if}
             {#if current.id !== packages[0]?.id}<p class="mb-5 text-sm text-info">A newer review package is available. <Button size="xs" onclick={() => selected = packages[0].id}>View latest package</Button></p>{/if}
             <ReviewOverview pkg={current} {facts} {sessionId} {freshness} {checking} onScreen={index => { canvasScreen = index; tab = 'visuals'; }} {checks} feedback={reviewFeedback} onAssessRisks={canRequest ? () => requestMaterial(true) : undefined} {assessment}/>
           {:else if materialLoading}<ReviewSkeleton/>

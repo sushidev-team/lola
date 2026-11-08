@@ -10,7 +10,7 @@ import (
 )
 
 func readinessFixture(head, cursor string, more bool, nodes string) string {
-	return `{"data":{"repository":{"pullRequest":{"number":42,"url":"https://github.com/acme/app/pull/42","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","baseRefOid":"base","headRefOid":"` + head + `","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]},"reviewThreads":{"pageInfo":{"hasNextPage":` + map[bool]string{true: "true", false: "false"}[more] + `,"endCursor":"` + cursor + `"},"nodes":` + nodes + `}}}}}`
+	return `{"data":{"repository":{"pullRequest":{"number":42,"url":"https://github.com/acme/app/pull/42","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","baseRefOid":"base","headRefOid":"` + head + `","commits":{"nodes":[{"commit":{"oid":"` + head + `","statusCheckRollup":{"state":"SUCCESS"}}}]},"reviewThreads":{"pageInfo":{"hasNextPage":` + map[bool]string{true: "true", false: "false"}[more] + `,"endCursor":"` + cursor + `"},"nodes":` + nodes + `}}}}}`
 }
 func TestReadinessPaginatesAndKeepsOutdatedUnresolved(t *testing.T) {
 	dir := t.TempDir()
@@ -90,5 +90,16 @@ func TestReadinessPreviewKeepsFindingWithoutRendererBoilerplate(t *testing.T) {
 	}
 	if got := reviewPreview("A normal human comment.\nPlease fix this."); got != "A normal human comment. Please fix this." {
 		t.Fatal(got)
+	}
+}
+
+func TestReadinessDoesNotPromoteChecksFromAnotherCommit(t *testing.T) {
+	for _, oid := range []string{"", "old-head"} {
+		body := strings.Replace(readinessFixture("head", "", false, `[]`), `"oid":"head"`, `"oid":"`+oid+`"`, 1)
+		bin, _ := fakeGh(t, body, 0)
+		got, err := (&Client{GhBin: bin}).Readiness(context.Background(), "acme/app", 42)
+		if err != nil || got.Checks != "unknown" || got.ChecksHead != "" {
+			t.Fatalf("unbound checks: %+v %v", got, err)
+		}
 	}
 }

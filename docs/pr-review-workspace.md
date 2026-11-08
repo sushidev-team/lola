@@ -43,7 +43,7 @@ The reviewer can collect comments and send them as a batch. Material comments mu
 carry the package identity, revision, and screenshot/section context. After a fix,
 show that new work needs review; retain the prior material and feedback context.
 Screenshot-region annotations and a dedicated changes-since-review comparison are
-follow-up work.
+implemented. Inspection is recorded separately from approval and merge authority.
 
 ## Publishing contract and storage
 
@@ -131,7 +131,18 @@ record separately any native WKWebView verification still outstanding.
 - A new publication does not replace the revision currently being inspected.
   Material comments retain package, base/head, section and screenshot identities.
   Drafts survive navigation; failed sends retain the batch.
-- Revision-specific independent verification, browser capture and a changes-since-review comparison remain follow-up work.
+- Re-review now records the inspected package per session/repository, retains that
+  baseline across publication and cleanup, and compares changed write-up sections,
+  screenshot pairs and exact published code heads. Section comments retain their
+  package and section position. Screenshot-region comments were already implemented.
+- GitHub evidence now carries the observed base, head, CI commit and observation
+  time. A changed base/head invalidates the selected package's evidence score;
+  CI receives credit only when its own commit matches. Missing revision fields
+  from an older daemon remain unknown. Agent reports and transcript commands are
+  explicitly unbound to package revisions and cannot supply independent evidence.
+- Independent local verification execution and optional browser-assisted capture
+  remain follow-up work. Cross-agent live conversation/completion validation and
+  broader automation API productization remain priorities, not completed features.
 - Current code diffs explicitly represent the live checkout, not a frozen package
   diff. Existing local-check provenance and merge policy are unchanged.
 - Initial storage limits: 64 KiB manifest; four screenshot pairs; PNG/JPEG only;
@@ -187,6 +198,34 @@ GitHub. In the desktop, select **Review PR** from Changes or PR status. Ended
 sessions offer **Review material** without live checkout or send actions.
 
 See [fixture captures and validation](evaluation/pr-review-workspace/README.md).
+
+## Reviewing a correction
+
+Use **Mark reviewed** to remember the package you inspected. This records an
+inspection only; it does not send feedback, approve a PR, run checks, or permit
+merging. The selected version remains stable when another package arrives.
+
+Choose the newer package, then **Since review** to compare its write-up sections
+and screenshots against your recorded review. New, removed, and updated sections
+remain visible. Identical screenshot bytes are not presented as a fresh capture.
+**Compare code revisions** uses the two retained head hashes, excluding live
+uncommitted changes. The original checkout and commits must still exist; retained
+material comparisons continue working after cleanup. A base change is called out
+separately because a head-to-head comparison alone is not the full PR diff.
+
+The review baseline is scoped to each stack member, including retained packages
+from ended stacks. Concurrent stale writes fail with a refresh instruction.
+Changing versions does not implicitly mark anything reviewed. The daemon stores
+the last inspection beside the immutable packages, separately from their content.
+
+For prose feedback, choose **Comment section** before adding the comment. The
+batch carries the section title and position together with the immutable package
+and revision identities. Sending remains an explicit action.
+
+The socket operations are `reviewPackageMark` (package ID and expected previous
+review ID) and `reviewPackageDiff` (two package IDs). Both stay on the local human
+transport; agent publication and the authenticated sandbox bridge cannot call them.
+No new browser or arbitrary command execution endpoint is introduced.
 
 ## Interactive review refinement
 

@@ -118,6 +118,7 @@ type SentBatch struct {
 // way back to that file, and neither is a path anything else handed over.
 type EndedInfo struct {
 	protocol.EndedSession
+	PRURLs   []string `json:"pr_urls,omitempty"` // all app PRs, for a later issue attempt's context
 	Segments []string `json:"segments,omitempty"`
 	Slug     string   `json:"slug,omitempty"` // the transcript directory's name
 }

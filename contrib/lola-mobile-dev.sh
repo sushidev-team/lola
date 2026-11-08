@@ -218,7 +218,7 @@ run this script without --head to install the working tree instead."; }
 	mv "$src/lola" "$gobin/lola" || { rm -rf "$src"; die "could not install into $gobin"; }
 	rm -rf "$src"
 else
-	printf 'installing the lola_insecure build...\n' >&2
+	printf 'installing the lola_insecure build from the current working tree (including uncommitted changes)...\n' >&2
 	GOCACHE=$root/.gocache GOFLAGS='-mod=mod -buildvcs=false' \
 		go install -tags lola_insecure "$root" || die "go install failed"
 fi
@@ -244,6 +244,7 @@ if [ -n "$build_only" ]; then
 		printf '  A daemon is still running on the OLD binary — a running process keeps\n' >&2
 		printf '  the inode it started with, so this build is not live until it restarts.\n' >&2
 	fi
+	printf '  Restart it with the app restart button or Ctrl-R in the TUI.\n' >&2
 	printf '  Start it with: make daemon-dev\n\n' >&2
 	exit 0
 fi

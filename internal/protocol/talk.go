@@ -216,15 +216,16 @@ type AgentQueueReleaseArgs struct {
 
 // EndedSession is a session that left the list and whose story is still readable.
 type EndedSession struct {
-	ID       string    `json:"id"`
-	Project  string    `json:"project,omitempty"`
-	Title    string    `json:"title,omitempty"`
-	Issue    string    `json:"issue,omitempty"`
-	Agent    string    `json:"agent,omitempty"`
-	EndedAt  time.Time `json:"endedAt,omitzero"`
-	Reason   string    `json:"reason,omitempty"` // lola's words: "PR #412 merged"
-	PRNumber int       `json:"prNumber,omitempty"`
-	PRURL    string    `json:"prUrl,omitempty"`
+	KeptWorktree string    `json:"keptWorktree,omitempty"` // directory retained when the session ended
+	ID           string    `json:"id"`
+	Project      string    `json:"project,omitempty"`
+	Title        string    `json:"title,omitempty"`
+	Issue        string    `json:"issue,omitempty"`
+	Agent        string    `json:"agent,omitempty"`
+	EndedAt      time.Time `json:"endedAt,omitzero"`
+	Reason       string    `json:"reason,omitempty"` // lola's words: "PR #412 merged"
+	PRNumber     int       `json:"prNumber,omitempty"`
+	PRURL        string    `json:"prUrl,omitempty"`
 }
 
 // EndedSessionsData lists them.

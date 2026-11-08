@@ -32,12 +32,13 @@ type PRReadiness struct {
 	Checks     string         `json:"checks"`
 	Head       string         `json:"head"`
 	Base       string         `json:"base"`
+	ChecksHead string         `json:"checksHead"`
 	Threads    []ReviewThread `json:"threads"`
 }
 
 var feedbackRepoRE = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 
-const readinessQuery = `query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){number url state isDraft mergeable mergeStateStatus reviewDecision headRefOid baseRefOid commits(last:1){nodes{commit{statusCheckRollup{state}}}} reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id isResolved isOutdated path line comments(first:1){nodes{bodyText url author{login}}}}}}}}`
+const readinessQuery = `query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){number url state isDraft mergeable mergeStateStatus reviewDecision headRefOid baseRefOid commits(last:1){nodes{commit{oid statusCheckRollup{state}}}} reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id isResolved isOutdated path line comments(first:1){nodes{bodyText url author{login}}}}}}}}`
 
 // Readiness paginates all review threads. Partial results and unknown PRs are
 // errors: neither may look like zero unresolved feedback. Every exec is bounded
@@ -65,7 +66,10 @@ func (c *Client) Readiness(ctx context.Context, repo string, number int) (PRRead
 						IsDraft                                                                         bool
 						Commits                                                                         struct {
 							Nodes []struct {
-								Commit struct{ StatusCheckRollup *struct{ State string } }
+								Commit struct {
+									OID               string
+									StatusCheckRollup *struct{ State string }
+								}
 							}
 						}
 						ReviewThreads struct {
@@ -98,7 +102,13 @@ func (c *Client) Readiness(ctx context.Context, repo string, number int) (PRRead
 		}
 		if page == 0 {
 			result = PRReadiness{Number: pr.Number, URL: pr.URL, State: pr.State, Draft: pr.IsDraft, Mergeable: pr.Mergeable, MergeState: pr.MergeStateStatus, Review: pr.ReviewDecision, Head: pr.HeadRefOid, Base: pr.BaseRefOid, Checks: "none", Threads: []ReviewThread{}}
-			if len(pr.Commits.Nodes) > 0 && pr.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
+			// Never associate a rollup with the PR head by position alone.
+			if len(pr.Commits.Nodes) != 1 || pr.Commits.Nodes[0].Commit.OID == "" || pr.Commits.Nodes[0].Commit.OID != pr.HeadRefOid {
+				result.Checks = "unknown"
+			} else {
+				result.ChecksHead = pr.Commits.Nodes[0].Commit.OID
+			}
+			if result.ChecksHead != "" && pr.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
 				switch pr.Commits.Nodes[0].Commit.StatusCheckRollup.State {
 				case "SUCCESS":
 					result.Checks = "pass"

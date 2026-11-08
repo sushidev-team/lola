@@ -54,6 +54,8 @@ var deniedCommands = map[string]bool{
 	protocol.CmdReviewPublish:  true,
 	protocol.CmdReviewPackages: true,
 	protocol.CmdReviewImage:    true,
+	protocol.CmdReviewMark:     true,
+	protocol.CmdReviewDiff:     true,
 	"stop":                     true,
 	"reload":                   true,
 	"renameProject":            true,
