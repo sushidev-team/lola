@@ -140,7 +140,7 @@ func TestSummarizePropagatesSeamErrors(t *testing.T) {
 func TestBuildArgs(t *testing.T) {
 	// No model: -p <instruction> --output-format text, context absent.
 	got := buildArgs("", "do the thing")
-	want := []string{"-p", "do the thing", "--output-format", "text"}
+	want := []string{"-p", "do the thing", "--output-format", "text", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--settings", `{"disableAllHooks":true}`}
 	if !equal(got, want) {
 		t.Fatalf("buildArgs() = %v, want %v", got, want)
 	}

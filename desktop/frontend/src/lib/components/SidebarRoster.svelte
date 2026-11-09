@@ -13,6 +13,7 @@
   import { tick, untrack } from "svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
   import { ssh, sshClock } from "$lib/ssh.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { endedLine, lastTurnStopped, rosterGroups, stateGlyph } from "$lib/sessionview";
@@ -164,7 +165,10 @@
           </Button>
           {#if s.prNumber}
             <div class="sidebar-session-pr {stage ? STAGE_TEXT[stage.tone] : 'text-faint'}" data-roster-pr>
-              {#if s.prUrl}
+              {#if atReview && !s.prStale}
+                <Button variant="primary" size="xs" class="sidebar-review-link" aria-label="Review PR #{s.prNumber}"
+                  title="Review PR #{s.prNumber}" onclick={() => reviewWorkspace.open(s.id)}>Review</Button>
+              {:else if s.prUrl}
                 <Button variant="bare" size="xs" class="sidebar-pr-link" aria-label="Open pull request #{s.prNumber}"
                   title="Open pull request #{s.prNumber}{stage ? ` · ${stage.label}` : ''}"
                   onclick={() => store.openURL(s.prUrl)}>

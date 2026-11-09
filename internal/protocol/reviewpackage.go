@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	CmdReviewCapture  = "reviewPackageCapture"  // explicit human browser capture; new immutable version
 	CmdReviewComplete = "reviewPackageComplete" // publish and report completion, never lifecycle authority
 	CmdReviewPublish  = "reviewPackagePublish"  // agent-side, bound to Request.Session
 	CmdReviewPackages = "reviewPackages"        // human-side, retained metadata
@@ -119,4 +120,17 @@ type ReviewImageArgs struct {
 
 type ReviewImageData struct {
 	DataURL string `json:"dataURL"`
+}
+
+// Screen is -1 to add a screen, otherwise the existing screen's index to update.
+// Paths and revision identities are resolved by the daemon, never the caller.
+type ReviewCaptureArgs struct {
+	Package  string `json:"package"`
+	Screen   int    `json:"screen"`
+	URL      string `json:"url"`
+	Title    string `json:"title"`
+	Selector string `json:"selector"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	Channel  string `json:"channel"`
 }

@@ -14,6 +14,32 @@ function mount(over = {}) { freshSession({prNumber:42,prUrl:'https://github.com/
 beforeEach(() => {localStorage.removeItem('lola.mergeMethod'); read.mockReset(); address.mockReset(); merge.mockReset(); read.mockResolvedValue(facts());});
 afterEach(() => { cleanup(); confirm.cancel(); vi.restoreAllMocks(); });
 
+it('shows a comment summary while preserving the original thread link and feedback action', async () => {
+  read.mockResolvedValue(facts({threads:[{...thread('a'),preview:'Supported by static analysis. Script executed: git diff abc',summary:'Preserve decimal points when parsing thresholds.'}]}));
+  const open = vi.spyOn(store,'openURL').mockResolvedValue(undefined);
+  mount();
+  await fireEvent.click(await screen.findByRole('button',{name:'Open review thread: Preserve decimal points when parsing thresholds.'}));
+  expect(open).toHaveBeenCalledWith('https://github.com/acme/app/pull/42#discussion_a');
+  expect(screen.queryByText(/Script executed/)).toBeNull();
+  expect(screen.getByText('app.ts:12')).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'Ask agent to address'})).toBeEnabled();
+});
+
+it('refreshes pending summaries without hiding the original preview', async () => {
+  vi.useFakeTimers();
+  try {
+    read.mockResolvedValueOnce(facts({threads:[thread('a')],summariesPending:true}));
+    read.mockResolvedValue(facts({threads:[{...thread('a'),summary:'Preserve decimals.'}]}));
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByText('Finding a')).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(screen.getByText('Preserve decimals.')).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally { vi.useRealTimers(); }
+});
+
 it('merges a ready PR directly using the exact displayed head', async () => {
   mount();
   expect(await screen.findByText('No blockers reported.')).toBeInTheDocument();

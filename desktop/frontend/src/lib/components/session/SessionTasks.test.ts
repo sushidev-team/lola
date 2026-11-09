@@ -150,7 +150,7 @@ it('shows human checks with a direct confirmation and preserves delivery failure
   vi.spyOn(store, 'refresh').mockResolvedValue(undefined);
   const request = vi.mocked(DaemonService.SessionTask).mockRejectedValueOnce(new Error('Offline'));
   render(SessionTasks, { sessionId: id });
-  expect(screen.getByText('Needs your check')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Status of Requirement browser: Needs your check' })).toBeInTheDocument();
   const confirm = screen.getByRole('button', { name: 'Confirm checked: Requirement browser' });
   await fireEvent.click(confirm);
   expect(await screen.findByRole('alert')).toHaveTextContent('Offline');
@@ -166,11 +166,22 @@ it('shows human checks with a direct confirmation and preserves delivery failure
 it('keeps child checks actionable and prevents confirming a parent with unmet requirements', async () => {
   const id = freshSession({ tasks: [task('work', 'checking'), { ...task('browser', 'checking'), kind: 'requirement', parentId: 'work', feedback: 'Still scrolls the page' }] });
   render(SessionTasks, { sessionId: id });
-  expect(screen.getByRole('button', { name: 'Confirm checked: Requirement work' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Confirm checked: Requirement work' })).toBeNull();
+  expect(screen.queryByText('Needs your check')).toBeNull();
   await fireEvent.click(screen.getByRole('button', { name: '1 requirement needs your check' }));
+  expect(screen.queryByText('Needs your check')).toBeNull();
   expect(screen.getByRole('button', { name: 'Confirm checked: Requirement browser' })).toBeEnabled();
   await fireEvent.click(screen.getByRole('button', { name: 'Requirement browser' }));
-  expect(screen.getByText('Still scrolls the page')).toBeInTheDocument();
+  expect(screen.getByText('Still scrolls the page').closest('details')).not.toHaveAttribute('open');
+  expect(screen.queryByText('Latest feedback')).toBeNull();
+  await fireEvent.click(screen.getByText('Still scrolls the page'));
+  expect(screen.getByText('Still scrolls the page').closest('details')).toHaveAttribute('open');
+  await fireEvent.click(screen.getByRole('button', { name: 'Task actions: Requirement work' }));
+  await fireEvent.click(await screen.findByRole('menuitem', { name: 'Give feedback' }));
+  expect(ssh.view(id).agentDraft).toBe('Feedback on task [work] (Requirement work):\n');
+  store.sessions = store.sessions.map(s => ({ ...s, tasks: [task('work', 'checking'), { ...task('browser', 'done'), kind: 'requirement', parentId: 'work' }] })) as never;
+  expect(await screen.findByRole('button', { name: 'Confirm checked: Requirement work' })).toBeEnabled();
+  expect(screen.queryByRole('button', { name: 'Confirm checked: Requirement browser' })).toBeNull();
 });
 
 it('opens task feedback in the real composer, keeps the draft, and sends it through the normal queue', async () => {

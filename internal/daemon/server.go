@@ -95,6 +95,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return d.handlePRReadiness(ctx, req)
 	case protocol.CmdReviewDiff:
 		return d.handleReviewDiff(ctx, req)
+	case protocol.CmdReviewCapture:
+		return d.handleReviewCapture(ctx, req)
 	case protocol.CmdReviewFeedback:
 		return d.handleReviewPackageFeedback(ctx, req)
 	case protocol.CmdReviewVerify, protocol.CmdReviewChecks, protocol.CmdReviewRecover:

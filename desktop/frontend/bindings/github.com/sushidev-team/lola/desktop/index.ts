@@ -29,6 +29,7 @@ export type {
     GroupDTO,
     ImageAttachment,
     InheritsDTO,
+    LinearIssueBrief,
     LinearKeyStatusDTO,
     LinearOption,
     LinearTeam,

@@ -118,7 +118,7 @@ it('places the editable task outline in Overview', () => {
   const id = freshSession({ tasks: [{ id: 'work', kind: 'task', text: 'Implement invitations', state: 'doing', author: 'user', updatedAt: new Date().toISOString() }] });
   render(SessionSide, { sessionId: id });
   const overview = screen.getByRole('complementary', { name: 'Session overview' });
-  expect(within(overview).getByText('Implement invitations')).toBeInTheDocument();
+  expect(within(screen.getByRole('region', { name: 'Session tasks' })).getByText('Implement invitations')).toBeInTheDocument();
   expect(within(overview).getByRole('button', { name: 'Add task' })).toBeInTheDocument();
   expect(screen.queryByText('No plan reported yet.')).toBeNull();
 });

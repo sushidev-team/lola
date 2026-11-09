@@ -64,4 +64,4 @@
 };
   const mark = $derived(Object.keys(names).find(mark => glyph === mark || (glyph.startsWith(mark) && /[\sA-Za-z]/.test(glyph.slice(mark.length, mark.length + 1)))));
 </script>
-{#if mark}<Icon name={names[mark]} {size} />{glyph.slice(mark.length)}{:else}{glyph}{/if}
+{#if mark}<Icon name={names[mark]} {size} class={mark === '◐' ? 'motion-safe:animate-spin' : ''} />{glyph.slice(mark.length)}{:else}{glyph}{/if}

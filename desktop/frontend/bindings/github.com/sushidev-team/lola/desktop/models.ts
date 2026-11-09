@@ -151,6 +151,14 @@ export interface InheritsDTO {
 }
 
 /**
+ * LinearIssueBrief is the source task context shown in a session's overview.
+ */
+export interface LinearIssueBrief {
+    "title": string;
+    "description": string;
+}
+
+/**
  * LinearKeyStatusDTO describes WHERE the Linear key lives and whether it can be
  * resolved right now — never the key. Source is a human-readable origin
  * ("macOS Keychain (lola-linear)" / "environment variable LINEAR_API_KEY"), so

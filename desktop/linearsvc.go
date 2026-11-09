@@ -41,6 +41,27 @@ type LinearTeam struct {
 	Name string `json:"name"`
 }
 
+// LinearIssueBrief is the source task context shown in a session's overview.
+type LinearIssueBrief struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+// IssueBrief reads the task itself, independently of the agent's progress report.
+func (s *LinearService) IssueBrief(identifier string) (LinearIssueBrief, error) {
+	c, err := linearClient()
+	if err != nil {
+		return LinearIssueBrief{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	issue, err := c.IssueDetail(ctx, identifier)
+	if err != nil {
+		return LinearIssueBrief{}, err
+	}
+	return LinearIssueBrief{Title: issue.Title, Description: issue.Description}, nil
+}
+
 type LinearTeamMeta struct {
 	Projects      []LinearOption `json:"projects"`
 	Cycles        []LinearOption `json:"cycles"`

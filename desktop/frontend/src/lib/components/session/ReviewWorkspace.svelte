@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import Chevron from "$lib/components/Chevron.svelte";
   import { DaemonService, TalkService } from '@bindings/desktop';
   import { SvelteMap } from 'svelte/reactivity';
@@ -25,6 +26,7 @@
   import ReviewChanges from './ReviewChanges.svelte';
   import ReviewSkeleton from './ReviewSkeleton.svelte';
   import ReviewVerification from './ReviewVerification.svelte';
+  import ReviewCapture from './ReviewCapture.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
   const session = $derived(store.sessionById(sessionId));
@@ -57,9 +59,12 @@
   let tab = $state('material');
   let panelOpen = $state(false);
   let canvasScreen = $state(0);
+  let captureOpen = $state(false);
+  let captureBusy = $state(false);
+  const captureHost = $derived(!!session && !session.goalId && session.location !== 'ssh' && (!session.sandbox || session.sandbox === 'none'));
   let canvas = $state<ReviewCanvas>();
   const packageIdentity = $derived(current?.id);
-  $effect(() => { packageIdentity; canvasScreen = 0; });
+  $effect(() => { packageIdentity; canvasScreen = 0; captureOpen = false; captureBusy = false; });
   let subject = $state('Write-up');
   let draft = $state('');
   let notice = $state('');
@@ -70,6 +75,7 @@
   const view = $derived(ssh.view(sessionId));
   const tests = $derived(sessionActivity({feed:f.items,items:view.items,scope:view.scope,alive:false}).filter(e => e.kind === 'tests'));
   const freshness = $derived(current ? reviewFreshness(current,facts) : 'unknown');
+  const captureReason = $derived(!current ? 'Prepare review material first' : !captureHost ? 'Capture requires a local host checkout' : freshness === 'stale' ? 'Prepare review material for the current revision first' : 'Capture a page or element into this review');
   const sections = $derived(current ? reviewSections(current.body) : []);
   const requests = new SvelteMap<string, { state: 'sending' | 'accepted' | 'error'; message: string }>();
   const request = $derived(requests.get(target));
@@ -125,6 +131,17 @@
     const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 60000);
     return () => { generation++; clearInterval(timer); };
   });
+  async function captured(result: Package, index: number) {
+    if (result.session !== current?.session) return;
+    generation++; loading = false; materialLoading = false; checking = false;
+    packages = [result,...packages.filter(p => p.id !== result.id)]; selected = result.id;
+    captureOpen = false; tab = 'visuals';
+    await tick(); canvasScreen = index;
+  }
+  async function closeCapture() {
+    captureOpen = false; await tick();
+    document.querySelector<HTMLButtonElement>('[data-review-capture]')?.focus();
+  }
   async function markReviewed() {
     if (!current || marking) return;
     const sid = target, scope = reviewScope, packageID = current.id;
@@ -233,8 +250,9 @@
     {#if markError}<p role="alert" class="w-full text-sm text-warn">{markError} Refresh review and retry.</p>{/if}
   </div>
   <div class="review-layout" class:panel-open={panelOpen && (tab !== 'material' || !current)}>
-    <div class="review-main">
-      <div class="review-tabs"><Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} />{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div>
+    <div class="review-main" class:capturing={captureOpen}>
+      <div class="review-tabs"><Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} /><div class="review-tab-actions"><Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div></div>
+      {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={tab === 'visuals' ? canvasScreen : -1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
       {#if tab === 'code' && session}
         <div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><p class="px-4 py-2 text-xs text-faint">Live checkout changes. These may differ from the retained review revision.</p><DiffView {sessionId} /></div>
       {:else if tab === 'since' && comparable && previous && current}
@@ -290,6 +308,8 @@
   .review-tabs :global([role=tab][aria-selected=true]) { background:var(--color-accent-fill); color:var(--color-accent-ink); }
   .review-tabs :global([role=tab]:hover) { color:var(--color-ink); }
   .review-tabs { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 28px 12px; background:var(--color-canvas); border-bottom:1px solid color-mix(in srgb,var(--color-edge) 55%,transparent); }
+  .review-tab-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  .review-main.capturing { grid-template-rows:auto auto minmax(0,1fr); }
   .review-visuals { min-height:0; overflow:hidden; }
   .review-material { width:100%; min-width:0; }
   .review-main { display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; }

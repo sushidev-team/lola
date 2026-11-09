@@ -498,6 +498,10 @@ export function Review(session: string, provider: string): $CancellablePromise<p
     return $Call.ByID(4119390853, session, provider);
 }
 
+export function ReviewPackageCapture(session: string, request: protocol$0.ReviewCaptureArgs): $CancellablePromise<protocol$0.ReviewPackage> {
+    return $Call.ByID(2871503043, session, request);
+}
+
 export function ReviewPackageChecks(session: string, packageID: string): $CancellablePromise<protocol$0.ReviewChecksData> {
     return $Call.ByID(1924001306, session, packageID);
 }

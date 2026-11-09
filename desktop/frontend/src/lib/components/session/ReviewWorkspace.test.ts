@@ -452,3 +452,19 @@ it('requests a revision-bound self-assessment without sending draft review feedb
   expect(feedback.noteFor(id)).toBe('Keep my unsent comments');
   expect(send).not.toHaveBeenCalled();
 });
+
+it('opens capture from review and selects the saved screenshot in its new version',async()=>{
+ const next=pkg({id:'e'.repeat(64),screens:[...pkg().screens,{title:'Captured page',after:'f'.repeat(64)}]});
+ vi.mocked(DaemonService.ReviewPackageCapture).mockResolvedValue(next);render(ReviewWorkspace,{sessionId:id});
+ const button=await screen.findByRole('button',{name:'Capture screenshot'});
+ await waitFor(()=>expect(button).toBeEnabled());await fireEvent.click(button);
+ await fireEvent.input(screen.getByLabelText('Page URL'),{target:{value:'http://localhost:3000'}});
+ await fireEvent.submit(screen.getByRole('button',{name:'Capture & save'}).closest('form')!);
+ await waitFor(()=>expect(screen.getByRole('tab',{name:'Screenshots'})).toHaveAttribute('aria-selected','true'));
+ expect(screen.getByRole('heading',{name:'Captured page'})).toBeInTheDocument();
+ expect(screen.queryByRole('region',{name:'Capture screenshot'})).toBeNull();
+});
+it('keeps capture unavailable for stale review material',async()=>{
+ facts.mockResolvedValue(status({head:'9'.repeat(40)}));render(ReviewWorkspace,{sessionId:id});
+ await screen.findByText('Older revision');expect(screen.getByRole('button',{name:'Capture screenshot'})).toBeDisabled();
+});

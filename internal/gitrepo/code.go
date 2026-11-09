@@ -110,3 +110,17 @@ func readCodeGit(ctx context.Context, dir string, args ...string) ([]byte, error
 	cmd.Env = append(cmd.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=", "GIT_TERMINAL_PROMPT=0")
 	return cmd.Output()
 }
+
+// Head reads only the checkout's current commit, without filters, hooks or fetches.
+func (r CodeReader) Head(ctx context.Context, dir string) (string, error) {
+	run := r.Run
+	if run == nil {
+		run = readCodeGit
+	}
+	body, err := run(ctx, dir, "rev-parse", "--verify", "HEAD^{commit}")
+	head := strings.TrimSpace(string(body))
+	if err != nil || !objectID.MatchString(head) {
+		return "", errors.New("checkout revision is unavailable")
+	}
+	return head, nil
+}

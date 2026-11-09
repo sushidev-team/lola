@@ -50,6 +50,7 @@
   let expandedReviewers = $state<string[]>([]);
   let collapsedReviewers = $state<string[]>([]);
   let generation = 0;
+  let summaryRefreshes = 0;
   const current = $derived(loadedFor === identity ? data : null);
   const threads = $derived(current?.threads ?? []);
   const reviewerGroups = $derived.by(() => {
@@ -61,6 +62,11 @@
     return Array.from(groups, ([author, items]) => ({ author, items }));
   });
   const terminal = $derived(current?.state === 'MERGED' || current?.state === 'CLOSED');
+  const reviewNext = $derived(!!current && !error && current.state === 'OPEN' && !current.draft
+    && (current.checks === 'pass' || current.checks === 'none') && current.mergeable === 'MERGEABLE'
+    && current.mergeState !== 'BEHIND' && !threads.length
+    && (current.review === '' || current.review === 'REVIEW_REQUIRED'));
+  const promoteReview = $derived(reviewNext && nav.overlay !== 'pr-review');
   const mergeMethod = $derived(current?.mergeMethod ? chosenMethod || current.mergeMethod : '');
   const mergeLabel = $derived(({squash:'Squash and merge',merge:'Merge pull request',rebase:'Rebase and merge'} as Record<string,string>)[mergeMethod]);
   const readyToMerge = $derived(!!mergeLabel && current?.mergeBlocked === '');
@@ -108,10 +114,17 @@
   $effect(() => {
     const key = identity;
     if (!key) return;
-    expandedReviewers = []; collapsedReviewers = []; notice = ''; error = ''; data = null; loadedFor = ''; accepted = false; mergeRequested = false;
+    expandedReviewers = []; collapsedReviewers = []; notice = ''; error = ''; data = null; loadedFor = ''; accepted = false; mergeRequested = false; summaryRefreshes = 0;
     untrack(() => void refresh());
     const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 60000);
     return () => { clearInterval(timer); generation++; viewGeneration++; };
+  });
+  $effect(() => {
+    if (!current?.summariesPending || loading || error || summaryRefreshes >= 10) return;
+    const timer = setTimeout(() => {
+      if (document.visibilityState !== 'hidden') { summaryRefreshes++; void refresh(); }
+    }, 3000);
+    return () => clearTimeout(timer);
   });
   async function address() {
     if (!selected || sending) return;
@@ -166,7 +179,7 @@
 <section data-before-merge class:review-layout={reviewLayout} aria-label="PR status">
   <header>
     <h3 class="cv-overview-heading">PR status</h3>
-    {#if nav.overlay !== 'pr-review'}<Button size="xs" onclick={() => reviewWorkspace.open(session.id)}>Review PR</Button>{/if}
+    {#if nav.overlay !== 'pr-review' && !promoteReview}<Button size="xs" onclick={() => reviewWorkspace.open(session.id)}>Review PR</Button>{/if}
     <button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request #{selected.number}"><Icon name="git-pull-request" size={13} />#{selected.number}<Icon name="external-link" size={11} /></button>
     <button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>
   </header>
@@ -198,8 +211,8 @@
             <div transition:disclose>
             <ul class="threads">
               {#each (expandedReviewers.includes(group.author) ? group.items : group.items.slice(0, 3)) as thread (thread.id)}
-                <li><button type="button" onclick={() => open(thread.url || current!.url)} aria-label={`Open review thread: ${thread.preview || thread.path}`}>
-                  <span class="preview">{thread.preview || 'Open conversation on GitHub'}</span>
+                <li><button type="button" onclick={() => open(thread.url || current!.url)} aria-label={`Open review thread: ${thread.summary || thread.preview || thread.path}`} title={thread.summary ? 'AI summary · open original comment on GitHub' : undefined}>
+                  <span class="preview">{thread.summary || thread.preview || 'Open conversation on GitHub'}</span>
                   <span class="thread-context"><span class="path" use:tooltip={thread.path}>{thread.path.split('/').pop()}{thread.line ? `:${thread.line}` : ''}</span>{#if thread.outdated}<span class="outdated">Outdated</span>{/if}<Icon name="external-link" size={10} class="thread-link" /></span>
                 </button></li>
               {/each}
@@ -216,10 +229,12 @@
         <div class="feedback-action"><Button variant="secondary" size="xs" disabled={sending || accepted || !!error} onclick={address} title="Ask the agent to validate findings, fix valid issues, and resolve addressed threads after verification"><Icon name="shield-check" size={13} />{sending ? 'Sending…' : accepted ? 'Requested' : 'Ask agent to address'}</Button></div>
       {/if}
     {/if}
-    {#if session.location !== 'ssh'}
+    {#if session.location !== 'ssh' || promoteReview}
       <div class="pr-actions">
-        <div class="merge-split" class:ready={readyToMerge}>
-          <span use:tooltip={mergeHint}><Button class="rounded-r-none!" variant={readyToMerge ? 'primary' : 'secondary'} size="xs" icon={!readyToMerge && !merging && !mergeRequested} disabled={!canMerge} loading={merging} onclick={askMerge} aria-label={merging ? 'Merging…' : mergeRequested ? 'Merge requested' : readyToMerge ? mergeLabel : 'Merge pull request'}>{#if !merging}<Icon name="git-merge" size={13} />{/if}{#if merging}Merging…{:else if mergeRequested}Merge requested{:else if readyToMerge}{mergeLabel}{/if}</Button></span>
+        {#if promoteReview}<Button variant="primary" size="sm" onclick={() => reviewWorkspace.open(session.id)}><Icon name="git-pull-request" size={15} />Review PR</Button>{/if}
+        {#if session.location !== 'ssh'}
+        <div class="merge-split" class:ready={readyToMerge && !promoteReview}>
+          <span use:tooltip={mergeHint}><Button class="rounded-r-none!" variant={readyToMerge && !promoteReview ? 'primary' : 'secondary'} size="xs" icon={!readyToMerge && !merging && !mergeRequested} disabled={!canMerge} loading={merging} onclick={askMerge} aria-label={merging ? 'Merging…' : mergeRequested ? 'Merge requested' : readyToMerge ? mergeLabel : 'Merge pull request'}>{#if !merging}<Icon name="git-merge" size={13} />{/if}{#if merging}Merging…{:else if mergeRequested}Merge requested{:else if readyToMerge}{mergeLabel}{/if}</Button></span>
           <span class="merge-method" use:tooltip={'Choose merge method'}>
             <Select aria-label="Merge method" minMenuWidth={220} value={mergeMethod} disabled={!canMerge} onchange={(event) => chooseMergeMethod(event.currentTarget.value)}>
               <option value="squash">Squash and merge</option>
@@ -229,8 +244,9 @@
           </span>
         </div>
         {#if !threads.length && current.review !== 'APPROVED'}<Button variant="secondary" size="xs" onclick={() => store.review(selected.id)}><Icon name="shield-check" size={13} />Request agent review</Button>{/if}
+        {/if}
       </div>
-      {#if !mergeLabel}<p class="muted">Restart the daemon to enable merging.</p>{/if}
+      {#if session.location !== 'ssh' && !mergeLabel}<p class="muted">Restart the daemon to enable merging.</p>{/if}
     {/if}
     {#if session.mergeQueue}<p class="muted">Merge queue · position {session.mergeQueue.position}</p>{/if}
     {#if session.overlaps?.length}<p class="overlaps"><Icon name="layers" size={12} /><span>Overlaps · {session.overlaps.map(o => o.issue || o.session).join(', ')}</span></p>{/if}
@@ -281,7 +297,7 @@
   .more { display:block;font-size:11px;color:var(--color-faint);margin:5px 0 0 20px;padding:3px 0; }
   .feedback-action { margin-top:14px;padding-top:12px;border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
   .loading-actions > :global(.skeleton) { flex:1; }
-  .pr-actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:12px; }
+  .pr-actions { display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px; }
   .merge-split { display:inline-flex;align-items:stretch; }
   .merge-method { display:block;width:24px;flex-shrink:0; }
   .merge-method :global(.lola-field) { min-height:24px;height:24px;padding:0;border-radius:0 6px 6px 0;color:transparent; }

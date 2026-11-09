@@ -71,11 +71,18 @@ func buildBrain(bc config.BrainConfig) *brain.Client {
 // enabling/disabling the brain (or changing model/timeout) takes effect live.
 func (d *Daemon) setBrainLocked(bc config.BrainConfig) {
 	d.brain = buildBrain(bc)
+	d.commentSummarize = nil
 	if d.brain == nil {
 		d.brainSummarize = nil
 		return
 	}
 	d.brainSummarize = d.brain.Summarize
+	comments := *d.brain
+	comments.Model = "haiku"
+	if comments.Timeout <= 0 || comments.Timeout > commentSummaryTimeout {
+		comments.Timeout = commentSummaryTimeout
+	}
+	d.commentSummarize = comments.Summarize
 }
 
 // brainTimeout is the wall-clock bound applied to a single summary call,

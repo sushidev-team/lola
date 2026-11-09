@@ -71,7 +71,7 @@ describe("SidebarRoster", () => {
     store.sessions = [row("a", { issue: "LOLA-42", prNumber: 84, delivery: "review_pending", headline: "Finished sidebar layout" })];
     render(SidebarRoster);
     expect(document.querySelector('[data-roster-meta]')).toHaveTextContent('LOLA-42');
-    expect(document.querySelector('[data-roster-pr]')).toHaveTextContent('#84');
+    expect(screen.getByRole('button', { name: 'Review PR #84' })).toHaveTextContent('Review');
     expect(document.querySelector('[data-roster-line]')).toHaveTextContent('Finished sidebar layout');
   });
   it("filters by multiple search words without changing the active session", async () => {

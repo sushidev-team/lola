@@ -52,3 +52,10 @@ func (s *DaemonService) ReviewPackageRecover(session, packageID, id string) (pro
 	err := call(protocol.Request{Cmd: protocol.CmdReviewRecover, Session: session, Args: args}, longTimeout, &data)
 	return data, err
 }
+
+func (s *DaemonService) ReviewPackageCapture(session string, request protocol.ReviewCaptureArgs) (protocol.ReviewPackage, error) {
+	args, _ := json.Marshal(request)
+	var data protocol.ReviewPackage
+	err := call(protocol.Request{Cmd: protocol.CmdReviewCapture, Session: session, Args: args}, longTimeout, &data)
+	return data, err
+}

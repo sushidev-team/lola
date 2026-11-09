@@ -81,6 +81,9 @@ func TestReadinessNoChecksAndPreviewBound(t *testing.T) {
 	if err != nil || got.Checks != "none" || len([]rune(got.Threads[0].Preview)) != 601 {
 		t.Fatalf("%+v %v", got, err)
 	}
+	if got.Threads[0].Body != strings.Repeat("世", 700) {
+		t.Fatal("summary source was truncated to the display preview")
+	}
 }
 
 func TestReadinessPreviewKeepsFindingWithoutRendererBoilerplate(t *testing.T) {

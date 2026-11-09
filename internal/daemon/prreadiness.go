@@ -46,6 +46,7 @@ func (d *Daemon) handlePRReadiness(ctx context.Context, req protocol.Request) pr
 		for _, t := range data.Threads {
 			out.Threads = append(out.Threads, protocol.ReviewThread{ID: t.ID, Path: t.Path, Line: t.Line, Outdated: t.Outdated, Author: t.Author, Preview: t.Preview, URL: t.URL})
 		}
+		d.summarizePRComments(ctx, s.Repo, args.Number, data.Threads, &out)
 		return dataResponse(out)
 	}
 	if req.Cmd == "mergePR" {

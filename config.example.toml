@@ -172,6 +172,10 @@ endpoint = "https://api.linear.app/graphql"
 # PR is approved+green (what it changes + risks to check). The summary rides the
 # notification and an optional Linear comment ONLY — it is NEVER fed back to the
 # worker agent, so an attacker-influenceable PR/log can't steer the control loop.
+# The desktop PR comments panel also uses Haiku when enabled, with background
+# summaries cached by comment content. These are display-only, keep the original
+# GitHub links, and fall back to previews on failure. Batches are capped at 30s
+# (or a shorter timeout_seconds); model below selects the other brain summaries.
 #
 # COST: each summary spends Anthropic tokens. It execs `claude` and uses your
 # existing claude auth (~/.claude) or ANTHROPIC_API_KEY in the daemon's env.

@@ -17,7 +17,9 @@ type ReviewThread struct {
 	Outdated bool   `json:"outdated"`
 	Author   string `json:"author"`
 	Preview  string `json:"preview"`
-	URL      string `json:"url"`
+	// Body retains the source before preview truncation, for display summaries.
+	Body string `json:"-"`
+	URL  string `json:"url"`
 }
 
 // PRReadiness contains facts, not a promise that GitHub will permit a merge.
@@ -132,6 +134,7 @@ func (c *Client) Readiness(ctx context.Context, repo string, number int) (PRRead
 				cm := t.Comments.Nodes[0]
 				thread.Author = cm.Author.Login
 				thread.URL = cm.URL
+				thread.Body = cm.BodyText
 				preview := []rune(reviewPreview(cm.BodyText))
 				if len(preview) > 600 {
 					preview = append(preview[:600], '…')

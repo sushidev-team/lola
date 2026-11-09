@@ -5,15 +5,16 @@
 //
 // Hard contract — read before wiring this anywhere:
 //
-//   - OPT-IN. Callers gate every use behind [brain].enabled (default false).
+//   - Caller-owned opt-in: notifications and PR comments use [brain].enabled;
+//     explicitly requested planning has its own entry point.
 //     This package has no global state and changes no behavior on its own; a
 //     disabled brain is simply never constructed.
 //   - READ-ONLY + BOUNDED. Each summary is exactly one `claude -p` invocation
 //     with a hard context.WithTimeout (default 120s), a size-capped context
 //     (~12KB) on STDIN, and a bounded stdout read (~8KB). No loops, no
 //     retries: on any error or timeout the caller falls back to its generic
-//     template. Callers must reuse their P3/P4 one-shot guards so a summary
-//     fires at most once per transition.
+//     template. Callers use one-shot guards or content caches so polling
+//     does not repeatedly summarize unchanged context.
 //   - UNTRUSTED OUTPUT. The context fed to claude is attacker-influenceable,
 //     so the returned string is untrusted text fit only for a notification or
 //     a Linear comment shown to a human. It must NEVER be fed back into the
@@ -154,7 +155,8 @@ var runClaude = func(ctx context.Context, bin, dir, model, instruction, stdin st
 // buildArgs assembles the claude argv. The instruction is the `-p` prompt;
 // the context is NEVER here (it goes on stdin). Output is forced to text.
 func buildArgs(model, instruction string) []string {
-	args := []string{"-p", instruction, "--output-format", "text"}
+	// Context is untrusted data; helpers must have no tools or MCP servers.
+	args := []string{"-p", instruction, "--output-format", "text", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--settings", `{"disableAllHooks":true}`}
 	if model != "" {
 		args = append(args, "--model", model)
 	}

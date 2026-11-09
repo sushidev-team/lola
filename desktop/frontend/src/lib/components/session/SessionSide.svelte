@@ -19,6 +19,7 @@
   import OverviewChecks from "./OverviewChecks.svelte";
   import SessionDev from "./SessionDev.svelte";
   import SessionTasks from "./SessionTasks.svelte";
+  import SessionBrief from "./SessionBrief.svelte";
   import BoardPanel from "../BoardPanel.svelte";
 
   let { sessionId }: { sessionId: string } = $props();
@@ -58,6 +59,7 @@
 {/snippet}
 
 <aside class="cv-session-side grid min-h-0 content-start gap-5 overflow-y-auto px-4 pt-2 pb-4 text-sm" aria-label="Session overview" data-session-side>
+  <SessionBrief {sessionId} />
   <SessionTasks {sessionId} />
 
   {#if session}<SessionDev {session} />{/if}

@@ -69,6 +69,7 @@ export type {
     ResolveConflictData,
     RestoreCheckpointData,
     ReviewArtifact,
+    ReviewCaptureArgs,
     ReviewCheck,
     ReviewChecksData,
     ReviewData,

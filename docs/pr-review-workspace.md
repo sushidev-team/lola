@@ -234,7 +234,8 @@ The socket operations are `reviewPackageMark` (package ID and expected previous
 review ID) and `reviewPackageDiff` (two package IDs). Both stay on the local human
 transport; agent publication and the authenticated sandbox bridge cannot call them.
 Those operations do not execute commands. Independent verification has a separate,
-explicitly authorized local-human command described below; capture stays CLI-only.
+explicitly authorized local-human command described below. Capture now also has a
+separate human-only desktop operation.
 
 ## Interactive review refinement
 
@@ -288,9 +289,10 @@ daemon; existing sessions can use **Ask agent to prepare review**.
 
 ## Independent revision checks
 
-In **Review PR → Independent verification**, set up a check with a command, locally
-available image pinned by SHA-256 digest, timeout and memory limit. **Review check**
-freezes those inputs; **Authorize and run** starts that exact request. The image
+In **Review PR → Independent verification**, set up a check with a command and
+locally available image pinned by SHA-256 digest. The check name, timeout and
+memory limit are grouped under **Options**; revision freshness sits in the header.
+**Review check** freezes those inputs; **Authorize and run** starts that exact request. The image
 must already contain its tools and dependencies: checks have no network access.
 
 The runner clones the selected package's exact committed head into a private
@@ -332,9 +334,32 @@ Existing paths are never overwritten; capture output stays inside the checkout.
 
 The screen entry records the final URL, requested viewport and optional selector.
 The desktop shows that context and includes it in screenshot feedback. Capture is
-an explicit local CLI operation, not an embedded browser or daemon execution API.
+an explicit local operation, available from the CLI and the desktop workflow below.
+It does not embed a browser in the review canvas.
 It proves neither the commit behind a running server nor a baseline: retain real
 before images before editing, and associate only accurate revisions in the manifest.
+
+## Capture from the desktop
+
+Choose **Capture** beside the Review PR tabs. Enter the running page URL and a
+screenshot title, then choose **New screenshot** or an existing screen to update.
+**Capture options** contains an optional element selector, viewport size and
+browser choice. **Capture & save** adds a new immutable package version and opens
+its saved screenshot. Earlier versions and baseline images remain available.
+The form retains its inputs if capture fails. The original checkout is not modified.
+
+The daemon uses Node and Playwright installed for the session checkout and the
+selected installed browser. Capture uses a fresh browser context without saved
+sign-in and does not install dependencies. It currently requires a local host
+session and a package matching the checkout's current commit and any known PR
+revision. Stale packages must be refreshed through the agent's publication flow
+first; a commit changing during capture refuses publication. At most two captures
+run concurrently, with one per session.
+
+Capture is a human-only local operation (`reviewPackageCapture`); remote peers
+and the agent hook bridge cannot invoke it. Its screenshot caption identifies
+live-page provenance: neither the server's revision nor uncommitted source is
+attested. If the response is lost, refresh review versions before retrying.
 
 ## Automation and completion
 

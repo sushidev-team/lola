@@ -983,6 +983,15 @@ before merging). **Opt-in and off by default**: omit the table (or leave
 `enabled = false`) and behavior is unchanged — lola uses its generic notify and
 comment templates.
 
+The desktop PR comments panel also uses **Haiku** while the brain is enabled
+to summarize each reviewer's concern and requested fix. Summaries load in the
+background, retain links to the original threads, and are cached by comment
+content for the daemon's lifetime (up to 256 entries). They never affect merge
+checks or messages sent to the coding agent. Missing Claude, invalid output,
+and timeouts leave the original preview visible; failures back off for ten
+minutes. Each batch is capped at 30 seconds (or a shorter `timeout_seconds`).
+This panel always uses Haiku; `model` selects the other brain summaries.
+
 | Key | Type | Description |
 | --- | --- | --- |
 | `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
@@ -991,8 +1000,8 @@ comment templates.
 | `summarize_escalation` | bool | Summarize why a stuck session is blocked. Defaults to `true` when `enabled`. |
 | `summarize_approved` | bool | Summarize an approved+green PR before a human merges. Defaults to `true` when `enabled`. |
 
-Setting `enabled = true` alone turns on both summaries with the default timeout;
-set either `summarize_*` to `false` to run only the other. The two summarizers
+Setting `enabled = true` alone turns on both notification summaries with the default timeout;
+set either `summarize_*` to `false` to run only the other notification summary. The two summarizers
 default to on only while `enabled`, and explicit `false`/`0` are honored, not
 treated as "unset".
 

@@ -42,11 +42,13 @@ import (
 	"github.com/sushidev-team/lola/internal/portproc"
 	"github.com/sushidev-team/lola/internal/quota"
 	"github.com/sushidev-team/lola/internal/remote"
+	"github.com/sushidev-team/lola/internal/reviewcapture"
 	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/sshstore"
 	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/statusagent"
@@ -166,10 +168,12 @@ type Daemon struct {
 	hookWarned map[string]bool
 
 	// reports rate-limits `lola report` per session (see report.go).
-	reports         reportLimiter
-	reviewPackageMu sync.Mutex      // serializes immutable publication and retained-size limits
-	reviewJobs      map[string]bool // guarded by reviewPackageMu; retained receipts survive restart
-	reviewCheckRun  func(context.Context, string, []string) (string, error)
+	reports          reportLimiter
+	reviewPackageMu  sync.Mutex      // serializes immutable publication and retained-size limits
+	reviewJobs       map[string]bool // guarded by reviewPackageMu; retained receipts survive restart
+	reviewCheckRun   func(context.Context, string, []string) (string, error)
+	reviewCaptureRun reviewcapture.Run // injected browser process for explicit human capture
+	reviewCapturing  map[string]bool   // guarded by reviewPackageMu; one capture per session
 	// ssh is agent-assisted ssh's state and seams (ssh.go). Never nil.
 	ssh *sshState
 
@@ -282,7 +286,10 @@ type Daemon struct {
 	// fed to claude and then shown to a human only — never to send-keys.
 	brain          *brain.Client
 	brainSummarize func(ctx context.Context, instruction, contextText string) (string, error)
-	paneTail       func(ctx context.Context, tmuxName string, lines int) (string, error)
+	// PR comment summaries use Haiku when the brain is enabled (display only).
+	commentSummarize func(ctx context.Context, instruction, contextText string) (string, error)
+	commentSummaries commentSummaryCache
+	paneTail         func(ctx context.Context, tmuxName string, lines int) (string, error)
 	// planSummarize overrides the `lola plan` planner's claude exec in tests;
 	// nil builds a bounded claude per call (see planSummarizer in plan.go).
 	planSummarize func(ctx context.Context, instruction, contextText string) (string, error)
@@ -1271,10 +1278,11 @@ func (d *Daemon) sessionRecorded(id string) bool {
 	return ok
 }
 
-// adoptNativeSessions is the restart-recovery scan (PLAN P2.15): every finding
-// from runtime.Adopt is upserted into the session store — live pairs as
+// adoptNativeSessions is the restart-recovery scan (PLAN P2.15): findings from
+// runtime.Adopt are upserted into the session store — live pairs as
 // "working", worktrees without a pane as "dead", panes without a worktree as
-// "orphaned" — and anomalies are reported to the log. Facts observation cannot
+// "orphaned" — except already-ended worktrees without a pane. Anomalies are
+// reported to the log. Facts observation cannot
 // recover (branch, repo, issue UUID, PR state) are preserved from a previously
 // persisted record. Adoption never kills sessions or removes worktrees; acting
 // on dead/orphaned candidates is the reconcile pass's decision.
@@ -1312,6 +1320,15 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 		// implementation (tests, future runtimes) may still hand back a bare
 		// legacy Status — give it axes before the merge below rerolls.
 		s.EnsureAxes()
+		// A kept worktree is not a new session. Respect the durable end record
+		// when no pane survived, including ghosts persisted by older daemons.
+		// Live panes and unknown leftovers still recover normally; a genuine
+		// new launch clears Ended through recordSessionEvent.
+		if s.AgentState == state.AgentDead && sshstore.ReadEnded(d.home, session.BaseID(s.ID)) != nil {
+			d.sessions.Delete(s.ID)
+			d.logf("", "adopt: %s remains ended (kept worktree, no tmux session)", s.ID)
+			continue
+		}
 		var adopted session.Session
 		d.sessions.Apply(s.ID, func(cur *session.Session, exists bool) bool {
 			if exists {

@@ -57,6 +57,12 @@ func (o Options) Validate() error {
 type Run func(context.Context, string, string, []byte) ([]byte, error)
 
 func Capture(ctx context.Context, workspace string, o Options, run Run) (reviewpack.Screen, error) {
+	return CaptureInto(ctx, workspace, workspace, o, run)
+}
+
+// CaptureInto resolves the browser from workspace but stores evidence under a
+// separate caller-owned root. Desktop capture never writes into an agent tree.
+func CaptureInto(ctx context.Context, workspace, outputRoot string, o Options, run Run) (reviewpack.Screen, error) {
 	if err := o.Validate(); err != nil {
 		return reviewpack.Screen{}, err
 	}
@@ -103,7 +109,7 @@ func Capture(ctx context.Context, workspace string, o Options, run Run) (reviewp
 	if err != nil || format != "png" || cfg.Width < 1 || cfg.Height < 1 || int64(cfg.Width)*int64(cfg.Height) > 20_000_000 {
 		return reviewpack.Screen{}, errors.New("capture is not a valid bounded PNG")
 	}
-	root, err := os.OpenRoot(workspace)
+	root, err := os.OpenRoot(outputRoot)
 	if err != nil {
 		return reviewpack.Screen{}, err
 	}

@@ -40,7 +40,7 @@
         <ul class="cv-overview-events">
           {#each (showOlder ? tests.slice() : tests.slice(-3)).reverse() as t (t.id)}
             <li><button type="button" onclick={() => onJump(t.id)} use:tooltip={{ text: t.label, heading: 'Test command', meta: activityStatus(t.status), tone: 'tests' }}>
-              <span class="min-w-0 truncate">{t.label.replace(/^Ran /, '')}</span>
+              <span class="check-command">{t.label.replace(/^Ran /, '')}</span>
               {#if t.status === 'ok'}<span class="check-completed text-good"><Icon name="check" size={16} /><span class="sr-only">Completed</span></span>
               {:else}<span class="text-xs {t.status === 'error' ? 'text-bad' : 'text-ink-2'}">{activityStatus(t.status)}</span>{/if}
             </button></li>
@@ -56,6 +56,11 @@
 
 
 <style>
+  section, [role="region"], .cv-overview-events, .cv-overview-events li { min-width:0; }
+  .cv-overview-events { grid-template-columns:minmax(0,1fr); }
+  .cv-overview-events button { align-items:flex-start; }
+  .check-command { flex:1; min-width:0; white-space:normal; overflow-wrap:anywhere; line-height:18px; }
+
   .older-checks { display: inline-flex; align-items: center; gap: 5px; margin-top: 6px; padding: 3px 0; font-size: 12px; color: var(--color-faint); }
   .older-checks:hover { color: var(--color-accent); }
   .older-checks:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; border-radius: 2px; }

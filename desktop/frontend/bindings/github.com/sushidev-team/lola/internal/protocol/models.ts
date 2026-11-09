@@ -887,6 +887,7 @@ export interface PRReadinessData {
     "checksHead"?: string;
     "observedAt"?: string;
     "threads": ReviewThread[] | null;
+    "summariesPending"?: boolean;
     "mergeMethod": string;
     "mergeBlocked": string;
 }
@@ -1177,6 +1178,21 @@ export interface ReviewArtifact {
     "height": number;
 }
 
+/**
+ * Screen is -1 to add a screen, otherwise the existing screen's index to update.
+ * Paths and revision identities are resolved by the daemon, never the caller.
+ */
+export interface ReviewCaptureArgs {
+    "package": string;
+    "screen": number;
+    "url": string;
+    "title": string;
+    "selector": string;
+    "width": number;
+    "height": number;
+    "channel": string;
+}
+
 export interface ReviewCheck {
     "id": string;
     "package": string;
@@ -1268,6 +1284,11 @@ export interface ReviewThread {
     "outdated": boolean;
     "author": string;
     "preview": string;
+
+    /**
+     * display only; original stays on GitHub
+     */
+    "summary"?: string;
     "url": string;
 }
 

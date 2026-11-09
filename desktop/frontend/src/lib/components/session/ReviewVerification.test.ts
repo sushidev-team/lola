@@ -10,9 +10,10 @@ const spec={id:'unit',command:'npm test',image:'sha256:'+'d'.repeat(64),timeout_
 beforeEach(()=>{localStorage.clear();read.mockReset().mockResolvedValue({checks:[]});run.mockReset();vi.mocked(DaemonService.ReviewPackageRecover).mockReset();});
 afterEach(cleanup);
 async function prepare(){
-  await screen.findByText('No independent check has run for this package.');
+  await screen.findByText('No checks yet.');
   await fireEvent.click(screen.getByRole('button',{name:'Set up check'}));
-  await waitFor(()=>expect(screen.getByLabelText('Check name')).toHaveFocus());
+  await waitFor(()=>expect(screen.getByLabelText('Command')).toHaveFocus());
+  await fireEvent.click(screen.getByText('Options'));
   await fireEvent.input(screen.getByLabelText('Check name'),{target:{value:spec.id}});
   await fireEvent.input(screen.getByLabelText('Command'),{target:{value:spec.command}});
   await fireEvent.input(screen.getByLabelText('Container image'),{target:{value:spec.image}});
@@ -30,8 +31,8 @@ it('requires review and explicit authorization for the exact package',async()=>{
 it('returns keyboard focus when editing and closing the check form',async()=>{
   render(ReviewVerification,{pkg,canRun:true});await prepare();
   await fireEvent.click(screen.getByRole('button',{name:'Edit check'}));
-  await waitFor(()=>expect(screen.getByLabelText('Check name')).toHaveFocus());
-  await fireEvent.click(screen.getByRole('button',{name:'Close'}));
+  await waitFor(()=>expect(screen.getByLabelText('Command')).toHaveFocus());
+  await fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
   await waitFor(()=>expect(screen.getByRole('button',{name:'Set up check'})).toHaveFocus());
 });
 it('locks an uncertain write through failed readback and recovers the original receipt',async()=>{
@@ -53,8 +54,8 @@ it('never carries old package results across selection changes and labels stale 
   let finish!:(data:unknown)=>void;read.mockImplementationOnce(()=>new Promise(resolve=>finish=resolve) as never);
   const view=render(ReviewVerification,{pkg,canRun:false,freshness:'stale'});
   await view.rerender({pkg:{...pkg,id:'e'.repeat(64)},canRun:false,freshness:'stale'});
-  await screen.findByText('No independent check has run for this package.');
+  await screen.findByText('No checks yet.');
   finish({checks:[{id:'old',spec,state:'pass',stopped:true}]});
   await waitFor(()=>expect(screen.queryByText('Passed')).toBeNull());
-  expect(screen.getByText('This package is stale. These results do not verify the current PR.')).toBeInTheDocument();expect(screen.queryByRole('button',{name:'Set up check'})).toBeNull();
+  expect(screen.getByText('Checks apply to this version, not the current PR.')).toBeInTheDocument();expect(screen.queryByRole('button',{name:'Set up check'})).toBeNull();
 });
