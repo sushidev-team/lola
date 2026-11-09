@@ -179,7 +179,7 @@
 <section data-before-merge class:review-layout={reviewLayout} aria-label="PR status">
   <header>
     <h3 class="cv-overview-heading">PR status</h3>
-    {#if nav.overlay !== 'pr-review' && !promoteReview}<Button size="xs" onclick={() => reviewWorkspace.open(session.id)}>Review PR</Button>{/if}
+    {#if nav.overlay !== 'pr-review'}<Button variant={promoteReview ? 'primary' : 'ghost'} size="xs" onclick={() => reviewWorkspace.open(session.id)}>{#if promoteReview}<Icon name="git-pull-request" size={13} />{/if}Review PR</Button>{/if}
     <button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request #{selected.number}"><Icon name="git-pull-request" size={13} />#{selected.number}<Icon name="external-link" size={11} /></button>
     <button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>
   </header>
@@ -229,10 +229,8 @@
         <div class="feedback-action"><Button variant="secondary" size="xs" disabled={sending || accepted || !!error} onclick={address} title="Ask the agent to validate findings, fix valid issues, and resolve addressed threads after verification"><Icon name="shield-check" size={13} />{sending ? 'Sending…' : accepted ? 'Requested' : 'Ask agent to address'}</Button></div>
       {/if}
     {/if}
-    {#if session.location !== 'ssh' || promoteReview}
+    {#if session.location !== 'ssh'}
       <div class="pr-actions">
-        {#if promoteReview}<Button variant="primary" size="sm" onclick={() => reviewWorkspace.open(session.id)}><Icon name="git-pull-request" size={15} />Review PR</Button>{/if}
-        {#if session.location !== 'ssh'}
         <div class="merge-split" class:ready={readyToMerge && !promoteReview}>
           <span use:tooltip={mergeHint}><Button class="rounded-r-none!" variant={readyToMerge && !promoteReview ? 'primary' : 'secondary'} size="xs" icon={!readyToMerge && !merging && !mergeRequested} disabled={!canMerge} loading={merging} onclick={askMerge} aria-label={merging ? 'Merging…' : mergeRequested ? 'Merge requested' : readyToMerge ? mergeLabel : 'Merge pull request'}>{#if !merging}<Icon name="git-merge" size={13} />{/if}{#if merging}Merging…{:else if mergeRequested}Merge requested{:else if readyToMerge}{mergeLabel}{/if}</Button></span>
           <span class="merge-method" use:tooltip={'Choose merge method'}>
@@ -244,9 +242,8 @@
           </span>
         </div>
         {#if !threads.length && current.review !== 'APPROVED'}<Button variant="secondary" size="xs" onclick={() => store.review(selected.id)}><Icon name="shield-check" size={13} />Request agent review</Button>{/if}
-        {/if}
       </div>
-      {#if session.location !== 'ssh' && !mergeLabel}<p class="muted">Restart the daemon to enable merging.</p>{/if}
+      {#if !mergeLabel}<p class="muted">Restart the daemon to enable merging.</p>{/if}
     {/if}
     {#if session.mergeQueue}<p class="muted">Merge queue · position {session.mergeQueue.position}</p>{/if}
     {#if session.overlaps?.length}<p class="overlaps"><Icon name="layers" size={12} /><span>Overlaps · {session.overlaps.map(o => o.issue || o.session).join(', ')}</span></p>{/if}
