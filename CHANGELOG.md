@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.0](https://github.com/sushidev-team/lola/compare/v0.2.20...v0.3.0) (2026-11-09)
+
+
+### Features
+
+* add system appearance and clarify task checks ([5eb5767](https://github.com/sushidev-team/lola/commit/5eb57679c43588dda0e28279a476e23031b9c941))
+* improve follow-up sessions and PR review workflow ([d50f5ce](https://github.com/sushidev-team/lola/commit/d50f5cee43686043982b7c92fe1c2c9a524f4a85))
+* improve review capture and session workflows ([a86c95f](https://github.com/sushidev-team/lola/commit/a86c95fd4984e13b5b87575aa796f2a5435129c4))
+* **review:** add anchored preview zoom and vertical screenshot navigation ([81e34dc](https://github.com/sushidev-team/lola/commit/81e34dc86b8690f1763fc8b696902d9b78d1332a))
+* **review:** add revision verification, browser capture and automation ([f8b233b](https://github.com/sushidev-team/lola/commit/f8b233b606799528bcbb0540d56c53e3860e050f))
+* **review:** combine confidence signals and refine result layout ([80fec70](https://github.com/sushidev-team/lola/commit/80fec70e83fb4efc164952103c288502988a249c))
+* **theme:** harmonize palettes and default to Midnight ([c80a45e](https://github.com/sushidev-team/lola/commit/c80a45ed4215d4769df12cf5500daf857ff0612c))
+
+
+### Bug Fixes
+
+* **desktop:** maximize window on title-bar double-click ([23da7c2](https://github.com/sushidev-team/lola/commit/23da7c259fe89490a8311dc3b824581bd92bab72))
+* **release:** bump minor version for pre-1.0 features ([7f5b6fa](https://github.com/sushidev-team/lola/commit/7f5b6fa7bf046bd824a8d2a6664f13a78b0bbd1c))
+
+
+### Performance Improvements
+
+* **review:** load material progressively with skeleton placeholders ([faf7f1f](https://github.com/sushidev-team/lola/commit/faf7f1f915aaebbf387dee83b30b4837bd3377b4))
+
 ## [0.2.20](https://github.com/sushidev-team/lola/compare/v0.2.19...v0.2.20) (2026-11-08)
 
 
