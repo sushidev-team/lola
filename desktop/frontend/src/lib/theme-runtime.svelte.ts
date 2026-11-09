@@ -6,7 +6,7 @@
 // touching this file. Tailwind v4 compiles `@theme` into custom properties on
 // :root and compiles every utility into a `var()` reference:
 //
-//     @layer theme { :root { --color-canvas: #181825; … } }
+//     @layer theme { :root { --color-canvas: #121624; … } }
 //     .bg-canvas { background-color: var(--color-canvas) }
 //
 // so redefining the property re-resolves every utility, every color-mix() in
@@ -197,7 +197,7 @@ export function applyFlavor(flavor: Flavor, root: HTMLElement = document.documen
     root.style.setProperty(name, value);
   }
   root.dataset.theme = flavor.id;
-  // app.css pins `color-scheme: dark` as the compiled default (mocha, the
+  // app.css pins `color-scheme: dark` as the compiled default (Midnight, the
   // default flavor, is dark) so a cold start before JS still renders right.
   // This inline write is what flips native form controls, `<select>` popups and
   // UA scrollbars for latte.
@@ -239,7 +239,7 @@ function cacheTheme(id: ThemeId): void {
  * and a desktop binary predating it must still paint rather than throw.
  *
  * Returns undefined for "the bridge could not answer", which is deliberately
- * NOT the same as "the bridge said mocha": an unanswerable bridge must leave
+ * NOT the same as "the bridge said Midnight": an unanswerable bridge must leave
  * the cached flavor standing and must not overwrite the cache with a default it
  * never actually read.
  */
@@ -286,7 +286,7 @@ class Appearance {
    * Boot in two steps, and the first one is synchronous on purpose.
    *
    * Step 1 paints the LAST FLAVOR THIS APP PAINTED, read from localStorage.
-   * That is what keeps a non-default flavor from flashing mocha on every
+   * That is what keeps a non-default flavor from flashing Midnight on every
    * launch: the tokens, `data-theme` and `color-scheme` are already right
    * before `mount()` runs, with no I/O of any kind.
    *

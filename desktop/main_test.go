@@ -16,7 +16,7 @@ import (
 // party to the Go map and the TypeScript table rather than a restatement of
 // either: a drive-by edit to one of them fails against this list.
 var wantCanvasHex = map[string]string{
-	"catppuccin-latte":     "#e6e9ef",
+	"catppuccin-latte":     "#edf0f7",
 	"catppuccin-frappe":    "#292c3c",
 	"catppuccin-macchiato": "#1e2030",
 	"catppuccin-mocha":     "#181825",

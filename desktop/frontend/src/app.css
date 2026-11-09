@@ -39,14 +39,14 @@
    name-for-name in src/lib/catppuccin.ts — read toTokens() there for why each
    token picked the Catppuccin color it did.
 
-   What is written below is the *compiled default*: Catppuccin Mocha, which is
+   What is written below is the *compiled default*: Lola Midnight, which is
    also config's DefaultUITheme. That matters — a cold start with no JS, or a
    frame before the bridge answers, already renders the right theme, so a user
    on the default never sees a flash. src/lib/theme-runtime.svelte.ts overrides
    these as inline properties on :root when a different flavor is configured;
    inline styles sit in no cascade layer and so outrank this @layer theme block
    unconditionally. catppuccin.test.ts asserts these literals still equal
-   toTokens(mocha), so the two cannot drift.
+   toTokens(midnight), so the two cannot drift.
 
    Tailwind v4 turns each --color-* into a utility (bg-canvas, text-accent-ink, …)
    that compiles to var(--color-*) — which is what makes the runtime override
@@ -86,49 +86,49 @@
    may spend only two of the three — which is why nothing here needs a 700.
 ---------------------------------------------------------------------------- */
 @theme {
-  --color-canvas: #181825; /* app background — Catppuccin `mantle` */
-  --color-panel: #1e1e2e; /* raised surface AND the terminal bg — `base` */
-  --color-edge: #45475a; /* panel border / rule — `surface1` */
-  --color-accent: #89dceb; /* cyan — DECORATIVE: fills, borders, focus — `sky` at 3:1 */
-  --color-accent-ink: #89dceb; /* accent as TEXT — measured, darkens on latte */
-  --color-accent-fill: #2f3f4d; /* primary-button chip — accent tinted into canvas */
-  --color-accent-fill-hover: #293a45; /* same tint, deeper backdrop — see catppuccin.ts */
-  --color-on-accent: #11111b; /* text ON the accent fill — measured, was `canvas` */
-  --color-ink: #cdd6f4; /* default foreground — `text` */
-  --color-ink-2: #a6adc8; /* middle ink tier — `subtext0`, walked to AA */
-  --color-faint: #7f849c; /* muted secondary text / labels — `overlay1` */
-  --color-placeholder: #7f849c; /* input placeholders — faint raised to AA on canvas */
-  --color-sel: #313244; /* selected-row band — `surface0` */
+  --color-canvas: #121624; /* app background — Catppuccin `mantle` */
+  --color-panel: #191d2f; /* raised surface AND the terminal bg — `base` */
+  --color-edge: #333c55; /* panel border / rule — `surface1` */
+  --color-accent: #7fddea; /* cyan — DECORATIVE: fills, borders, focus — `sky` at 3:1 */
+  --color-accent-ink: #7fddea; /* accent as TEXT — measured, darkens on latte */
+  --color-accent-fill: #283e4c; /* primary-button chip — accent tinted into canvas */
+  --color-accent-fill-hover: #233844; /* same tint, deeper backdrop — see catppuccin.ts */
+  --color-on-accent: #0c0f1a; /* text ON the accent fill — measured, was `canvas` */
+  --color-ink: #e6e9f5; /* default foreground — `text` */
+  --color-ink-2: #adb7d1; /* middle ink tier — `subtext0`, walked to AA */
+  --color-faint: #929db9; /* muted secondary text / labels — `overlay1` */
+  --color-placeholder: #929db9; /* input placeholders — faint raised to AA on canvas */
+  --color-sel: #252c43; /* selected-row band — `surface0` */
 
   /* The status colors. Each is its Catppuccin name walked to AA against canvas,
      panel and the selected-row band — the three surfaces theme.ts prints them
-     bare on. Mocha's six already clear it, so the literals below are the plain
+     bare on. Midnight's six already clear it, so the literals below are the plain
      names; latte's do not (green 2.92, yellow 2.29, peach 2.61 on a panel) and
      resolve darker at runtime. See toTokens in catppuccin.ts. */
-  --color-good: #a6e3a1; /* ok / approved / pass — `green` */
-  --color-bad: #f38ba8; /* error / failed — `red` */
-  --color-on-bad: #11111b; /* text ON that fill (the `dead` pill) — was a built-in white */
-  --color-warn: #f9e2af; /* pending / retry — `yellow` */
-  --color-info: #89b4fa; /* working blue — `blue` */
-  --color-orange: #fab387; /* needs-you hero — `peach` */
-  --color-magenta: #cba6f7; /* PR detail line — `mauve` */
-  --color-commentary: #94e2d5; /* agent narration — `teal` */
+  --color-good: #8ce477; /* ok / approved / pass — `green` */
+  --color-bad: #ff738f; /* error / failed — `red` */
+  --color-on-bad: #0c0f1a; /* text ON that fill (the `dead` pill) — was a built-in white */
+  --color-warn: #efcf7b; /* pending / retry — `yellow` */
+  --color-info: #82abff; /* working blue — `blue` */
+  --color-orange: #ffa45c; /* needs-you hero — `peach` */
+  --color-magenta: #b986ff; /* PR detail line — `mauve` */
+  --color-commentary: #79dccc; /* agent narration — `teal` */
 
   /* Status pills. Urgent + broken get a SOLID fill whose text is chosen by
      measured contrast against that fill (onFill), so the alarm stays legible in
      a light flavor too; active/parked get the accent tinted into `mantle` with
      a readable() label — NOT into `surface0`, which steps toward the accent in
      every flavor and collapsed latte's done pill to 1.75:1. */
-  --color-pill-urgent: #fab387;
-  --color-pill-urgent-fg: #11111b;
-  --color-pill-broken: #f38ba8;
-  --color-pill-broken-fg: #11111b;
-  --color-pill-work: #384461;
-  --color-pill-work-fg: #89b4fa;
-  --color-pill-done: #405148;
-  --color-pill-done-fg: #a6e3a1;
-  --color-pill-grey: #313244;
-  --color-pill-grey-fg: #a6adc8;
+  --color-pill-urgent: #ffa45c;
+  --color-pill-urgent-fg: #0c0f1a;
+  --color-pill-broken: #ff738f;
+  --color-pill-broken-fg: #0c0f1a;
+  --color-pill-work: #314061;
+  --color-pill-work-fg: #82abff;
+  --color-pill-done: #34503b;
+  --color-pill-done-fg: #8ce477;
+  --color-pill-grey: #252c43;
+  --color-pill-grey-fg: #adb7d1;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, monospace;

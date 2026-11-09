@@ -25,7 +25,7 @@ import (
 // DefaultUITheme is the theme lola-desktop paints when [ui].theme is unset. It
 // matches the palette the app's compiled stylesheet ships, so the default
 // install has nothing to re-paint at startup.
-const DefaultUITheme = "catppuccin-mocha"
+const DefaultUITheme = "lola-midnight"
 
 // UIThemes are the ONLY theme identifiers Validate accepts, mirroring the
 // PrioritySortKeys rule: a typo that silently rendered the default would be a

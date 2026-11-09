@@ -57,7 +57,7 @@ var version = "dev"
 // config.UIThemes; the same test pins the two sets equal.
 var canvasByTheme = map[string]application.RGBA{
 	"lola-midnight":        application.NewRGB(0x12, 0x16, 0x24),
-	"catppuccin-latte":     application.NewRGB(0xe6, 0xe9, 0xef),
+	"catppuccin-latte":     application.NewRGB(0xed, 0xf0, 0xf7),
 	"catppuccin-frappe":    application.NewRGB(0x29, 0x2c, 0x3c),
 	"catppuccin-macchiato": application.NewRGB(0x1e, 0x20, 0x30),
 	"catppuccin-mocha":     application.NewRGB(0x18, 0x18, 0x25),

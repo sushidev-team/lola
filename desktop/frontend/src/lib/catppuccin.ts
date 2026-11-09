@@ -1,4 +1,4 @@
-// The Catppuccin palettes and the mapping from Catppuccin's *named* colors onto
+// Lola-tuned Catppuccin palettes and the mapping from their named colors onto
 // lola's existing design-token names. Pure data + pure functions: no DOM, no
 // Svelte, no Wails bindings — so it unit-tests trivially and can be imported
 // from anywhere (the applier, the terminal, the snapshot renderer).
@@ -6,9 +6,9 @@
 // WHY named colors and not just the ANSI 16: the app chrome needs the surface
 // ramp (crust < mantle < base < surface0 < surface1 < surface2) and the muted
 // text ramp (overlay*/subtext*), and neither is recoverable from a 16-entry ANSI
-// table. The ANSI 16 is carried alongside, verbatim from Ghostty's own theme
-// files, so a pane in lola renders identically to the same pane in the user's
-// terminal.
+// table. ANSI colors share the chrome's semantic hues so terminals and pane
+// snapshots belong to the same palette. Saved Catppuccin ids stay compatible;
+// these are Lola adaptations rather than verbatim upstream palettes.
 //
 // Flavor ids match internal/config's UIThemes exactly — this list and the Go
 // one are the same strings, and [ui].theme is validated against the Go copy.
@@ -29,7 +29,7 @@ export const THEME_IDS: ThemeId[] = [
   "catppuccin-latte",
 ];
 
-export const DEFAULT_THEME_ID: ThemeId = "catppuccin-mocha";
+export const DEFAULT_THEME_ID: ThemeId = "lola-midnight";
 
 /** The 26 Catppuccin named colors, in the spec's own order. */
 export interface FlavorColors {
@@ -67,18 +67,11 @@ export interface Flavor extends FlavorColors {
   label: string;
   /** False for latte — drives `color-scheme` and every light/dark decision. */
   dark: boolean;
-  /**
-   * ANSI 0-15 exactly as Ghostty ships them. NOTE these are NOT all official
-   * named Catppuccin colors: Ghostty substitutes perceptually brightened
-   * variants at 9-14 (Mocha 9 = #f37799, not red #f38ba8). We take Ghostty's
-   * numbers deliberately — the goal is that a tmux pane in lola looks like the
-   * same pane in the user's Ghostty, not that it matches upstream Catppuccin's
-   * terminal port.
-   */
+  /** ANSI 0–15, tuned with the chrome; bright variants remain distinct. */
   ansi16: readonly string[];
-  /** Terminal cursor color (Ghostty `cursor-color`). */
+  /** Terminal cursor color. */
   cursor: string;
-  /** Text drawn under the block cursor (Ghostty `cursor-text`). */
+  /** Text drawn under the block cursor. */
   cursorText: string;
   selectionBg: string;
   selectionFg: string;
@@ -97,23 +90,23 @@ const mocha: Flavor = {
   dark: true,
   rosewater: "#f5e0dc",
   flamingo: "#f2cdcd",
-  pink: "#f5c2e7",
-  mauve: "#cba6f7",
-  red: "#f38ba8",
-  maroon: "#eba0ac",
-  peach: "#fab387",
-  yellow: "#f9e2af",
-  green: "#a6e3a1",
-  teal: "#94e2d5",
-  sky: "#89dceb",
-  sapphire: "#74c7ec",
-  blue: "#89b4fa",
-  lavender: "#b4befe",
-  text: "#cdd6f4",
-  subtext1: "#bac2de",
-  subtext0: "#a6adc8",
-  overlay2: "#9399b2",
-  overlay1: "#7f849c",
+  pink: "#efaee0",
+  mauve: "#c39af5",
+  red: "#f183a0",
+  maroon: "#ec94ac",
+  peach: "#f5ac78",
+  yellow: "#efd28f",
+  green: "#9bd991",
+  teal: "#87d9ca",
+  sky: "#83d6e8",
+  sapphire: "#75bee6",
+  blue: "#88aff5",
+  lavender: "#b6bafa",
+  text: "#e4e5f3",
+  subtext1: "#cbd0e5",
+  subtext0: "#b2b6cf",
+  overlay2: "#a1a6c0",
+  overlay1: "#9095af",
   overlay0: "#6c7086",
   surface2: "#585b70",
   surface1: "#45475a",
@@ -122,15 +115,15 @@ const mocha: Flavor = {
   mantle: "#181825",
   crust: "#11111b",
   ansi16: [
-    "#45475a", "#f38ba8", "#a6e3a1", "#f9e2af",
-    "#89b4fa", "#f5c2e7", "#94e2d5", "#a6adc8",
-    "#585b70", "#f37799", "#89d88b", "#ebd391",
-    "#74a8fc", "#f2aede", "#6bd7ca", "#bac2de",
+    "#45475a", "#f183a0", "#9bd991", "#efd28f",
+    "#88aff5", "#c39af5", "#87d9ca", "#cbd0e5",
+    "#6c7086", "#f49eb5", "#b1e1a9", "#f3dca8",
+    "#a2c1f7", "#d0b0f7", "#a1e1d6", "#e4e5f3",
   ],
-  cursor: "#f5e0dc",
-  cursorText: "#1e1e2e",
-  selectionBg: "#585b70",
-  selectionFg: "#cdd6f4",
+  cursor: "#83d6e8",
+  cursorText: "#11111b",
+  selectionBg: "#45475a",
+  selectionFg: "#e4e5f3",
   faintKey: "overlay1",
 };
 
@@ -140,23 +133,23 @@ const macchiato: Flavor = {
   dark: true,
   rosewater: "#f4dbd6",
   flamingo: "#f0c6c6",
-  pink: "#f5bde6",
-  mauve: "#c6a0f6",
-  red: "#ed8796",
-  maroon: "#ee99a0",
-  peach: "#f5a97f",
-  yellow: "#eed49f",
-  green: "#a6da95",
-  teal: "#8bd5ca",
-  sky: "#91d7e3",
-  sapphire: "#7dc4e4",
-  blue: "#8aadf4",
-  lavender: "#b7bdf8",
-  text: "#cad3f5",
-  subtext1: "#b8c0e0",
-  subtext0: "#a5adcb",
-  overlay2: "#939ab7",
-  overlay1: "#8087a2",
+  pink: "#efa8df",
+  mauve: "#bd96f4",
+  red: "#f08095",
+  maroon: "#f197aa",
+  peach: "#f4a373",
+  yellow: "#edcc86",
+  green: "#a0d88a",
+  teal: "#7fd5c5",
+  sky: "#85d7e5",
+  sapphire: "#71c2e5",
+  blue: "#84adfa",
+  lavender: "#b0bafa",
+  text: "#e3e8f7",
+  subtext1: "#cbd3eb",
+  subtext0: "#afb9d5",
+  overlay2: "#a3adca",
+  overlay1: "#959fbd",
   overlay0: "#6e738d",
   surface2: "#5b6078",
   surface1: "#494d64",
@@ -165,15 +158,15 @@ const macchiato: Flavor = {
   mantle: "#1e2030",
   crust: "#181926",
   ansi16: [
-    "#494d64", "#ed8796", "#a6da95", "#eed49f",
-    "#8aadf4", "#f5bde6", "#8bd5ca", "#a5adcb",
-    "#5b6078", "#ec7486", "#8ccf7f", "#e1c682",
-    "#78a1f6", "#f2a9dd", "#63cbc0", "#b8c0e0",
+    "#494d64", "#f08095", "#a0d88a", "#edcc86",
+    "#84adfa", "#bd96f4", "#7fd5c5", "#cbd3eb",
+    "#6e738d", "#f39cac", "#b5e1a4", "#f1d7a1",
+    "#9fbffb", "#ccadf6", "#9bded2", "#e3e8f7",
   ],
-  cursor: "#f4dbd6",
-  cursorText: "#24273a",
-  selectionBg: "#5b6078",
-  selectionFg: "#cad3f5",
+  cursor: "#85d7e5",
+  cursorText: "#181926",
+  selectionBg: "#494d64",
+  selectionFg: "#e3e8f7",
   faintKey: "overlay1",
 };
 
@@ -183,40 +176,40 @@ const frappe: Flavor = {
   dark: true,
   rosewater: "#f2d5cf",
   flamingo: "#eebebe",
-  pink: "#f4b8e4",
-  mauve: "#ca9ee6",
-  red: "#e78284",
-  maroon: "#ea999c",
-  peach: "#ef9f76",
-  yellow: "#e5c890",
-  green: "#a6d189",
-  teal: "#81c8be",
-  sky: "#99d1db",
-  sapphire: "#85c1dc",
-  blue: "#8caaee",
-  lavender: "#babbf1",
-  text: "#c6d0f5",
-  subtext1: "#b5bfe2",
-  subtext0: "#a5adce",
-  overlay2: "#949cbb",
-  overlay1: "#838ba7",
+  pink: "#edafe0",
+  mauve: "#c5a0ef",
+  red: "#ef919b",
+  maroon: "#eea0b0",
+  peach: "#f1ad82",
+  yellow: "#e9ce91",
+  green: "#a8d99a",
+  teal: "#8dd6ca",
+  sky: "#95d9e5",
+  sapphire: "#88c9e8",
+  blue: "#9abafa",
+  lavender: "#bfc5fb",
+  text: "#e6eaf7",
+  subtext1: "#d0d7ec",
+  subtext0: "#bcc5df",
+  overlay2: "#aeb9d2",
+  overlay1: "#a0abc7",
   overlay0: "#737994",
-  surface2: "#626880",
-  surface1: "#51576d",
-  surface0: "#414559",
+  surface2: "#5e6883",
+  surface1: "#4b526b",
+  surface0: "#3b4055",
   base: "#303446",
   mantle: "#292c3c",
   crust: "#232634",
   ansi16: [
-    "#51576d", "#e78284", "#a6d189", "#e5c890",
-    "#8caaee", "#f4b8e4", "#81c8be", "#a5adce",
-    "#626880", "#e67172", "#8ec772", "#d9ba73",
-    "#7b9ef0", "#f2a4db", "#5abfb5", "#b5bfe2",
+    "#4b526b", "#ef919b", "#a8d99a", "#e9ce91",
+    "#9abafa", "#c5a0ef", "#8dd6ca", "#d0d7ec",
+    "#737994", "#f3a9b1", "#bbe1b0", "#eed9a9",
+    "#b0c9fb", "#d2b5f3", "#a6dfd6", "#e6eaf7",
   ],
-  cursor: "#f2d5cf",
-  cursorText: "#303446",
-  selectionBg: "#626880",
-  selectionFg: "#c6d0f5",
+  cursor: "#95d9e5",
+  cursorText: "#232634",
+  selectionBg: "#4b526b",
+  selectionFg: "#e6eaf7",
   faintKey: "overlay1",
 };
 
@@ -224,49 +217,46 @@ const latte: Flavor = {
   id: "catppuccin-latte",
   label: "Latte",
   dark: false,
-  rosewater: "#dc8a78",
-  flamingo: "#dd7878",
-  pink: "#ea76cb",
-  mauve: "#8839ef",
-  red: "#d20f39",
-  maroon: "#e64553",
-  peach: "#fe640b",
-  yellow: "#df8e1d",
-  green: "#40a02b",
-  teal: "#179299",
-  sky: "#04a5e5",
-  sapphire: "#209fb5",
-  blue: "#1e66f5",
-  lavender: "#7287fd",
-  text: "#4c4f69",
-  subtext1: "#5c5f77",
-  subtext0: "#6c6f85",
-  overlay2: "#7c7f93",
-  overlay1: "#8c8fa1",
-  overlay0: "#9ca0b0",
-  surface2: "#acb0be",
-  surface1: "#bcc0cc",
-  surface0: "#ccd0da",
-  base: "#eff1f5",
-  mantle: "#e6e9ef",
-  crust: "#dce0e8",
-  // Latte inverts the index→name mapping at 0/7/8/15 by design (0 = subtext1,
-  // 7 = surface2, 8 = subtext0, 15 = surface1), which is why this table is
-  // stored per flavor instead of being derived from names.
+  rosewater: "#bf7064",
+  flamingo: "#cb6578",
+  pink: "#b747a0",
+  mauve: "#8554cd",
+  red: "#bd3158",
+  maroon: "#c8506a",
+  peach: "#bd551f",
+  yellow: "#a66b12",
+  green: "#177e4d",
+  teal: "#168477",
+  sky: "#008ca8",
+  sapphire: "#167fba",
+  blue: "#326bd6",
+  lavender: "#7264d4",
+  text: "#30374f",
+  subtext1: "#48546e",
+  subtext0: "#586580",
+  overlay2: "#66738e",
+  overlay1: "#7d89a2",
+  overlay0: "#94a0b8",
+  surface2: "#aebad0",
+  surface1: "#c9d1e2",
+  surface0: "#e0e5f0",
+  base: "#f7f8fc",
+  mantle: "#edf0f7",
+  crust: "#e2e7f0",
   ansi16: [
-    "#5c5f77", "#d20f39", "#40a02b", "#df8e1d",
-    "#1e66f5", "#ea76cb", "#179299", "#acb0be",
-    "#6c6f85", "#de293e", "#49af3d", "#eea02d",
-    "#456eff", "#fe85d8", "#2d9fa8", "#bcc0cc",
+    "#48546e", "#bd3158", "#177e4d", "#a66b12",
+    "#326bd6", "#8554cd", "#168477", "#48546e",
+    "#586580", "#a12a4b", "#146b41", "#8d5b0f",
+    "#2b5bb6", "#7147ae", "#137065", "#30374f",
   ],
-  cursor: "#dc8a78",
-  cursorText: "#eff1f5",
-  selectionBg: "#acb0be",
-  selectionFg: "#4c4f69",
+  cursor: "#008ca8",
+  cursorText: "#f7f8fc",
+  selectionBg: "#e0e5f0",
+  selectionFg: "#30374f",
   faintKey: "overlay2",
 };
 
-// A cooler, higher-contrast Lola palette; existing saved themes retain their colors.
+// The vivid navy reference palette and default; softer flavors retain their identity.
 const midnight: Flavor = {
   ...mocha,
   id: "lola-midnight", label: "Midnight",
@@ -359,30 +349,17 @@ export function contrast(a: string, b: string): number {
 export const AA = 4.5;
 
 /**
- * Text drawn on top of a fully saturated fill (the solid status pills, the
- * accent chip). Chosen by measured contrast against that specific fill rather
- * than hardcoded, which is what makes ONE rule correct in all four flavors: in
- * the dark flavors the near-black end is `crust`, but in latte crust (#dce0e8)
- * is the LIGHT end while `text` (#4c4f69) is dark — and even within latte the
- * right answer differs per fill (light on red, dark on peach).
- *
- * The ramp's own extremes are tried first, so a fill that the palette can label
- * is labelled in the palette and the dark flavors never move. Where it cannot,
- * the winner keeps walking PAST the end of the ramp toward the absolute end it
- * already points at. Two fills need that, both on latte: peach, whose best
- * on-palette label reaches 2.68:1 while backing `needs_input` — the single label
- * in the app that most has to be readable — and the accent chip, whose best
- * reaches 4.14:1 (measured against the 3:1 accent visible() resolves to,
- * #037cac, not against raw sky). Stopping at the first step that clears AA
- * means the label gives up exactly as much palette as the measurement demands
- * and no more.
+ * Label a solid fill with the most legible end of the palette. If none clears
+ * AA, walk toward whichever absolute endpoint has more contrast with the fill.
+ * A mid-luminance fill can favor a palette white that still cannot reach AA at
+ * pure white; selecting the endpoint independently avoids that dead end.
  */
 export function onFill(f: Flavor, fill: string): string {
   const best = [f.crust, f.base, f.text].reduce((a, c) =>
     contrast(c, fill) > contrast(a, fill) ? c : a,
   );
   if (contrast(best, fill) >= AA) return best;
-  const end = luminance(best) < luminance(fill) ? "#000000" : "#ffffff";
+  const end = contrast("#000000", fill) > contrast("#ffffff", fill) ? "#000000" : "#ffffff";
   // Integer steps, least deviation first — the same bit-reproducible walk
   // readable() uses in the opposite direction.
   for (let step = 1; step <= 20; step++) {

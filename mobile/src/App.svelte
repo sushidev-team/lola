@@ -329,8 +329,7 @@
   // on the daemon answering `GetTheme` after a cached first paint.
   //
   // The static values compiled into app.css cover the gap before this runs, so
-  // there is no flash — they are macchiato's, the flavor the design was drawn
-  // in, and a mocha default only differs by a few points of ground.
+  // there is no flash — they match the shared Midnight default.
   $effect(() => {
     applyMobileTokens(appearance.flavor);
   });

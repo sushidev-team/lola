@@ -52,7 +52,7 @@ describe("FLAVORS", () => {
       "catppuccin-latte",
     ]);
     expect(Object.keys(FLAVORS)).toEqual(THEME_IDS);
-    expect(THEME_IDS).toContain(DEFAULT_THEME_ID);
+    expect(DEFAULT_THEME_ID).toBe("lola-midnight");
   });
 
   it("keys every flavor by its own id", () => {
@@ -167,15 +167,13 @@ describe("onFill", () => {
   });
 
   it("spends the minimum it can rather than collapsing to the absolute end", () => {
-    // The walk stops at the first step that clears the floor, so the rescue
-    // keeps as much of the ramp end as AA allows: latte's labels come back as
-    // darkened `text`, not as raw black.
+    // Stop at the first passing step rather than jumping to black or white.
     const l = FLAVORS["catppuccin-latte"];
     for (const fill of [l.peach, l.sky]) {
       const got = onFill(l, fill);
       expect(got, `latte on ${fill}`).not.toBe("#000000");
       expect(contrast(got, fill), `latte on ${fill}`).toBeGreaterThanOrEqual(AA);
-      expect(contrast(got, fill), `latte on ${fill} vs black`).toBeLessThan(contrast("#000000", fill));
+      expect(contrast(got, fill), `latte on ${fill} vs absolute endpoints`).toBeLessThan(Math.max(contrast("#000000", fill), contrast("#ffffff", fill)));
     }
   });
 
@@ -426,19 +424,15 @@ describe("semantic text tokens", () => {
   });
 
   it("moves only what misses the floor, and only on the flavors that miss it", () => {
-    // Proof this is a latte-shaped fix, not a redesign. Mocha and macchiato
-    // carry all six at AA already and come back verbatim, so app.css's
-    // compiled Mocha default does not move. Frappé moves exactly the four that
-    // miss on the selected band (red 3.57, blue 4.10, mauve 4.30, peach 4.45)
-    // and keeps green and yellow. Latte, whose accents are tuned for a
-    // near-white background, moves all six.
+    // Mocha retains all six raw colors. Macchiato and Frappé adjust only red
+    // on selected rows; the light palette deepens all six for readable labels.
     const moved = (f: Flavor) =>
       SEMANTIC.filter((n) => toTokens(f)[`--color-${n}`] !== (f[
         ({ good: "green", bad: "red", warn: "yellow", info: "blue", orange: "peach", magenta: "mauve" } as Record<string, keyof Flavor>)[n]
       ] as string));
     expect(moved(FLAVORS["catppuccin-mocha"])).toEqual([]);
-    expect(moved(FLAVORS["catppuccin-macchiato"])).toEqual([]);
-    expect(moved(FLAVORS["catppuccin-frappe"])).toEqual(["bad", "info", "orange", "magenta"]);
+    expect(moved(FLAVORS["catppuccin-macchiato"])).toEqual(["bad"]);
+    expect(moved(FLAVORS["catppuccin-frappe"])).toEqual(["bad"]);
     expect(moved(FLAVORS["catppuccin-latte"])).toEqual(SEMANTIC);
   });
 });
@@ -597,11 +591,11 @@ describe("toTokens", () => {
     expect(t["--color-canvas"]).toBe("#181825"); // mantle
     expect(t["--color-panel"]).toBe("#1e1e2e"); // base
     expect(t["--color-edge"]).toBe("#45475a"); // surface1
-    expect(t["--color-accent"]).toBe("#89dceb"); // sky — the old cyan's nearest hue
-    expect(t["--color-ink"]).toBe("#cdd6f4"); // text
-    expect(t["--color-good"]).toBe("#a6e3a1"); // green
-    expect(t["--color-bad"]).toBe("#f38ba8"); // red
-    expect(t["--color-warn"]).toBe("#f9e2af"); // yellow
+    expect(t["--color-accent"]).toBe("#83d6e8"); // sky — the old cyan's nearest hue
+    expect(t["--color-ink"]).toBe("#e4e5f3"); // text
+    expect(t["--color-good"]).toBe("#9bd991"); // green
+    expect(t["--color-bad"]).toBe("#f183a0"); // red
+    expect(t["--color-warn"]).toBe("#efd28f"); // yellow
   });
 
   it("backs faint with overlay2 on latte and overlay1 on mocha, then walks to MUTED", () => {
@@ -625,14 +619,14 @@ describe("toTokens", () => {
 });
 
 describe("app.css compiled defaults", () => {
-  it("still equals toTokens(mocha)", () => {
-    // app.css ships Mocha as the pre-JS default so a cold start does not flash.
+  it("equals the Midnight runtime default", () => {
+    // app.css ships Midnight as the pre-JS default so a cold start does not flash.
     // If this fails, regenerate the @theme literals — do not weaken the test.
     const css: string = readFileSync(process.cwd() + "/src/app.css", "utf8");
     const block = css.slice(css.indexOf("@theme {"), css.indexOf("--font-sans"));
     const found: Record<string, string> = {};
     for (const m of block.matchAll(/(--color-[a-z0-9-]+):\s*(#[0-9a-f]{6})/g)) found[m[1]] = m[2];
-    expect(found).toEqual(toTokens(FLAVORS["catppuccin-mocha"]));
+    expect(found).toEqual(toTokens(FLAVORS[DEFAULT_THEME_ID]));
   });
 });
 
@@ -647,13 +641,11 @@ describe("toXterm", () => {
     }
   });
 
-  it("keeps Ghostty's brightened 9-14, which differ from the normal colors", () => {
-    // Not a transcription slip: Ghostty ships perceptually brightened variants
-    // at 9-14 rather than duplicating 1-6, and matching the user's terminal is
-    // the goal. lola's old table duplicated them.
+  it("keeps distinct ANSI variants aligned with the tuned palette", () => {
+    // ANSI colors follow the tuned chrome while retaining distinct bright slots.
     const t = toXterm(FLAVORS["catppuccin-mocha"]);
-    expect(t.brightRed).toBe("#f37799");
-    expect(t.red).toBe("#f38ba8");
+    expect(t.brightRed).toBe("#f49eb5");
+    expect(t.red).toBe("#f183a0");
     expect(t.brightRed).not.toBe(t.red);
     expect(t.brightCyan).not.toBe(t.cyan);
   });

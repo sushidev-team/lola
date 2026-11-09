@@ -1,11 +1,11 @@
 ---
 name: Lola desktop
-description: Persistent session workspace with resizable sidebar and optional Midnight colors
+description: Persistent session workspace with resizable sidebar and coordinated color themes
 colors:
   mocha-canvas: "#181825"
   mocha-panel: "#1e1e2e"
-  mocha-ink: "#cdd6f4"
-  mocha-accent: "#89dceb"
+  mocha-ink: "#e4e5f3"
+  mocha-accent: "#83d6e8"
   midnight-canvas: "#121624"
   midnight-panel: "#191d2f"
   midnight-ink: "#e6e9f5"
@@ -90,7 +90,7 @@ components:
 
 ## Overview
 
-Lola uses a compact operational interface: quiet layered surfaces, readable conversation text, and semantic color for state and navigation. This is a scoped source record of the existing desktop system and the optional Midnight extension, not a replacement visual identity.
+Lola uses a compact operational interface: quiet layered surfaces, readable conversation text, and semantic color for state and navigation. This is a scoped source record of the existing desktop system and its coordinated theme family, not a replacement visual identity.
 
 Sources: `desktop/frontend/src/app.css`, `desktop/frontend/src/lib/catppuccin.ts`, `desktop/frontend/src/lib/components/Button.svelte`, `desktop/frontend/src/lib/tooltip.ts`, and the session activity and overview components. Workspace navigation is defined in `App.svelte`, `Sidebar.svelte`, `SidebarRoster.svelte`, `SidebarSessionTools.svelte`, `SidebarResize.svelte`, `SessionsColumn.svelte`, `lib/roster.ts`, `lib/sidebarwidth.ts` and `lib/nav.svelte.ts`. Theme integration also lives in `internal/tui/catppuccin.go`, `internal/config/ui.go`, and `desktop/main.go`.
 
@@ -108,11 +108,11 @@ Violet distinguishes agent activity. Orange marks file activity, cyan commands, 
 
 ### Neutral
 
-The compiled default remains Catppuccin Mocha. Midnight (`lola-midnight`) is an optional navy palette with brighter reading ink, cyan and violet. Existing saved theme choices remain valid. Other Catppuccin palettes continue to resolve through the same runtime tokens.
+Midnight (`lola-midnight`) is the default navy palette with bright reading ink, cyan and violet. Mocha retains a softer violet ground, Macchiato a cooler slate ground, and Frappé a lighter slate ground with balanced accents. Latte pairs pale blue-white surfaces with deep colored ink. All five share text hierarchy and semantic roles across chrome, terminal colors and pane snapshots; the Catppuccin ids name Lola-tuned adaptations. Explicitly saved theme choices remain valid.
 
 For this installation, the user explicitly selected Midnight in place of the saved Macchiato preference. This is a saved local choice, not a change to the default for other installations.
 
-**The Theme Choice Rule.** Add palettes through the shared theme mapping; preserve the default and saved preferences.
+**The Theme Choice Rule.** Add palettes through the shared theme mapping; keep the compiled stylesheet, native window, config and TUI defaults aligned with Midnight, and preserve explicit saved preferences.
 
 ## Typography
 

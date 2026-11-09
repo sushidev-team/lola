@@ -50,7 +50,7 @@ describe("applyFlavor", () => {
   it("accepts a detached root, so it never has to touch the live document", () => {
     const el = document.createElement("div");
     applyFlavor(FLAVORS["catppuccin-latte"], el);
-    expect(el.style.getPropertyValue("--color-canvas")).toBe("#e6e9ef");
+    expect(el.style.getPropertyValue("--color-canvas")).toBe("#edf0f7");
     expect(el.dataset.theme).toBe("catppuccin-latte");
   });
 
@@ -146,7 +146,7 @@ describe("first-paint flavor cache", () => {
   // The flash this defends against: index.html is a static file (main.go serves
   // it with a plain AssetFileServerFS, no templating), so nothing can put the
   // configured flavor in the document ahead of JS. The config read is async over
-  // the Wails bridge, so without a cache every non-default flavor shows mocha
+  // the Wails bridge, so without a cache every non-default flavor shows Midnight
   // for the length of an IPC round-trip on every launch.
   beforeEach(() => {
     localStorage.clear();
@@ -170,7 +170,7 @@ describe("first-paint flavor cache", () => {
 
   it("keeps the cached paint when the bridge cannot answer", async () => {
     // No live Wails binding under test, so readTheme() resolves undefined —
-    // which must NOT be read as "config says mocha".
+    // which must NOT be read as "config says Midnight".
     localStorage.setItem("lola.theme", "catppuccin-frappe");
     await appearance.init();
     expect(appearance.id).toBe("catppuccin-frappe");

@@ -124,8 +124,8 @@
   /* -------------------------------------------------------------------------
      The seven colours the phone design names that the shared set does not.
 
-     These are STATIC FALLBACKS in the compiled sheet, and they are macchiato's
-     because that is the flavor the design was drawn in. The live values are
+     These are STATIC FALLBACKS in the compiled sheet, and they are Midnight's
+     to match the shared default before JS runs. The live values are
      written onto the root element at runtime by src/lib/mobiletokens.ts, which
      derives every one of them from the ACTIVE flavor — so `[ui].theme` repaints
      these along with the shared tokens and latte does not get a black tab bar.
@@ -136,20 +136,20 @@
   ------------------------------------------------------------------------- */
 
   /* The chrome ground: tab bar, accessory bar. One step below `canvas`. */
-  --color-crust: #11111b;
+  --color-crust: #0c0f1a;
 
   /* Prose, between `ink` and `faint` — Catppuccin `subtext1`. */
-  --color-subtext: #bac2de;
+  --color-subtext: #c7cde3;
 
   /* List hairlines and card borders: softer than `edge`, which reads as a
      panel border. */
-  --color-edge-soft: #2b2b3c;
+  --color-edge-soft: #20263b;
 
   /* The two soft status-chip grounds and their labels. */
-  --color-pill-urgent-soft: #4e3f42;
-  --color-pill-urgent-soft-fg: #fab387;
-  --color-pill-broken-soft: #4d3649;
-  --color-pill-broken-soft-fg: #f38ba8;
+  --color-pill-urgent-soft: #4c3b39;
+  --color-pill-urgent-soft-fg: #ffa45c;
+  --color-pill-broken-soft: #4c3044;
+  --color-pill-broken-soft-fg: #ff7a95;
 }
 
 /* ---------------------------------------------------------------------------

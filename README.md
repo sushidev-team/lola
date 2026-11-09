@@ -1515,7 +1515,7 @@ tab (which repaints on save). Both write the same key.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `theme` | string | `catppuccin-latte` \| `catppuccin-frappe` \| `catppuccin-macchiato` \| `catppuccin-mocha`. Empty or absent uses `catppuccin-mocha`. |
+| `theme` | string | `lola-midnight` \| `catppuccin-latte` \| `catppuccin-frappe` \| `catppuccin-macchiato` \| `catppuccin-mocha`. Empty or absent uses `lola-midnight`. |
 
 Unlike `[tmux]`, the theme **is** validated: an unrecognized name is rejected at
 load with an error listing the accepted values, rather than silently rendering

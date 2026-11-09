@@ -527,10 +527,10 @@ endpoint = "https://api.linear.app/graphql"
 #
 # Only the four values below are accepted — an unknown name is REJECTED at load
 # rather than silently falling back, so a typo tells you instead of quietly
-# rendering the default. Omit the key (or the table) to use "catppuccin-mocha".
+# rendering the default. Omit the key (or the table) to use "lola-midnight".
 # ---------------------------------------------------------------------------
 # [ui]
-# theme = "catppuccin-mocha"   # catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+# theme = "lola-midnight"   # lola-midnight | catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
 
 # ---------------------------------------------------------------------------
 # [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is
