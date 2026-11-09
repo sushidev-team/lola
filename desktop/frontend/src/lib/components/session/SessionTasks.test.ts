@@ -206,16 +206,25 @@ it('keeps child checks actionable and prevents confirming a parent with unmet re
   expect(screen.queryByText('Needs your check')).toBeNull();
   expect(screen.getByRole('button', { name: 'Confirm checked: Requirement browser' })).toBeEnabled();
   await fireEvent.click(screen.getByRole('button', { name: 'Requirement browser' }));
-  expect(screen.getByText('Still scrolls the page').closest('details')).not.toHaveAttribute('open');
-  expect(screen.queryByText('Latest feedback')).toBeNull();
-  await fireEvent.click(screen.getByText('Still scrolls the page'));
-  expect(screen.getByText('Still scrolls the page').closest('details')).toHaveAttribute('open');
+  expect(screen.getByText('Still scrolls the page')).toBeVisible();
+  expect(screen.getByText('Still scrolls the page').closest('summary')).toBeNull();
+  expect(screen.getByText('Feedback:')).toBeVisible();
   await fireEvent.click(screen.getByRole('button', { name: 'Task actions: Requirement work' }));
   await fireEvent.click(await screen.findByRole('menuitem', { name: 'Give feedback' }));
   expect(ssh.view(id).agentDraft).toBe('Feedback on task [work] (Requirement work):\n');
   store.sessions = store.sessions.map(s => ({ ...s, tasks: [task('work', 'checking'), { ...task('browser', 'done'), kind: 'requirement', parentId: 'work' }] })) as never;
   expect(await screen.findByRole('button', { name: 'Confirm checked: Requirement work' })).toBeEnabled();
   expect(screen.queryByRole('button', { name: 'Confirm checked: Requirement browser' })).toBeNull();
+});
+
+it('renders task feedback as a readable note without an empty disclosure', async () => {
+  const note = 'Check webhooks run on queued jobs, and batch them';
+  const id = freshSession({ tasks: [{ ...task('work'), feedback: note }] });
+  render(SessionTasks, { sessionId: id });
+  await fireEvent.click(screen.getByRole('button', { name: /^Requirement work/ }));
+  expect(screen.getByText(note)).toBeVisible();
+  expect(screen.getByText('Feedback:')).toBeVisible();
+  expect(screen.getByText(note).closest('summary, button')).toBeNull();
 });
 
 it('automatically reveals incoming checks while keeping other requirements folded', async () => {

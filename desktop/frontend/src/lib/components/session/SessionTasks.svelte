@@ -191,9 +191,7 @@
 
 {#snippet itemFeedback(item: SessionTask)}
   {#if item.feedback}
-    <details class="item-feedback">
-      <summary aria-label={`Latest feedback: ${item.feedback}`}><Icon name="chevron-right" size={12} /><span>{item.feedback}</span></summary>
-    </details>
+    <p class="item-feedback"><Icon name="message-square-text" size={12} /><span><span class="feedback-label">Feedback:</span> {item.feedback}</span></p>
   {/if}
 {/snippet}
 
@@ -326,15 +324,11 @@
   .pending-checks { margin: 4px 0 2px; color: var(--color-warn); font-size: 12px; line-height: 18px; }
   .unattached-checks { margin-bottom: 8px; }
   .check-actions button:hover:not(:disabled) { background: var(--color-sel); }
-  .item-feedback { margin: 0 0 2px 27px; min-width: 0; font-size: 12px; line-height: 18px; color: var(--color-ink-2); overflow-wrap: anywhere; }
+  .item-feedback { display: flex; align-items: flex-start; gap: 5px; margin: 0 0 2px 27px; padding-block: 4px; min-width: 0; font-size: 12px; line-height: 18px; color: var(--color-ink-2); overflow-wrap: anywhere; }
   .task-detail > .item-feedback { margin-left: 0; }
-  .item-feedback summary { display: flex; align-items: flex-start; gap: 5px; padding-block: 4px; cursor: pointer; list-style: none; }
-  .item-feedback summary :global(svg) { flex-shrink: 0; margin-top: 3px; }
-  .item-feedback summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .item-feedback[open] summary span { white-space: pre-wrap; }
-  .item-feedback summary::-webkit-details-marker { display: none; }
-  .item-feedback[open] summary :global(svg) { transform: rotate(90deg); }
-  .item-feedback summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .item-feedback :global(svg) { flex-shrink: 0; margin-top: 3px; }
+  .item-feedback > span { min-width: 0; white-space: pre-wrap; }
+  .feedback-label { color: var(--color-faint); }
   .task-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .task-tabs { display: flex; min-width: 0; gap: 14px; }
   .task-tabs button { display: flex; align-items: center; gap: 5px; padding: 4px 0 8px; border-bottom: 2px solid transparent; color: var(--color-faint); font-size: 13px; }
