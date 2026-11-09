@@ -23,8 +23,8 @@ type Cursor struct {
 //
 // Lines is what the question says, command included, and Choices is what can be pressed.
 // An option's row is in Choices only, so a card that draws both does not say it twice.
-// Hash covers every row of the block, options and focus marker included, so it pins
-// exactly what a human read. Everything here is pane text, which a process can print:
+// Hash covers every row of the block, options and focus marker included, except the
+// ticking time in Claude's permission expiry warning. Everything here is pane text, which a process can print:
 // it decides nothing and must never be persisted.
 type Prompt struct {
 	Kind    string
@@ -115,6 +115,9 @@ var (
 	submitRe = regexp.MustCompile(`^\s*(?:❯\s*)?Submit\s*$`)
 	// dashRowRe is the dashed divider around a command in a permission dialog.
 	dashRowRe = regexp.MustCompile(`^\s*╌+\s*$`)
+	// Only the clock in the known warning immediately before the permission question
+	// is volatile. Keep the rest of the warning (including wrapping) in the hash.
+	permissionCountdownRe = regexp.MustCompile(`(?m)^([ \t]*⚠ Claude Code will automatically block this request in )[0-9]+:[0-5][0-9](, to avoid holding[ \t\n]+up an unattended session[ \t\n]+Do you want to proceed\?[ \t\n]*)$`)
 )
 
 // ReadPrompt reads a question off one capture of the visible screen. It answers false for
@@ -232,6 +235,9 @@ func readOptions(rows []string) (Prompt, bool) {
 	case strings.Contains(footer, "Tab to amend"), askedPermission(p.Lines):
 		p.Kind = PromptPermission
 	}
+	if p.Kind == PromptPermission {
+		p.Hash = hashPermissionRows(rows[top+1:], first-top-1)
+	}
 	// A permission's second row is its label wrapping, so it stays one promise. A question's is the
 	// option's description, which a card draws apart from its name. Neither touches the hash, which
 	// is over the rows themselves.
@@ -313,6 +319,24 @@ func modalPrompt(rows []string) Prompt {
 func hashRows(rows []string) string {
 	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
 	return hex.EncodeToString(sum[:])
+}
+
+// hashPermissionRows leaves the displayed rows untouched. Only look after the
+// command's closing divider and before the choices: a countdown-shaped string
+// inside the command or an answer must still invalidate an old approval.
+func hashPermissionRows(rows []string, first int) string {
+	end := -1
+	for i, row := range rows[:first] {
+		if dashRowRe.MatchString(row) {
+			end = i
+		}
+	}
+	if end < 0 {
+		return hashRows(rows)
+	}
+	warning := strings.Join(rows[end+1:first], "\n")
+	warning = permissionCountdownRe.ReplaceAllString(warning, "${1}<countdown>${2}")
+	return hashRows([]string{strings.Join(rows[:end+1], "\n"), warning, strings.Join(rows[first:], "\n")})
 }
 
 func trimBlank(rows []string) []string {

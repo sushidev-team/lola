@@ -53,9 +53,9 @@
   const more = $derived(folds ? choices.filter((c) => !isPlainChoice(c.label)) : []);
   let moreOpen = $state(false);
 
-  // A string, because every poll replaces the prompt OBJECT and re-arming on that would make the
-  // buttons blink once a second.
-  const drawn = $derived(`${prompt.hash}\n${(prompt.lines ?? []).join("\n")}`);
+  // The daemon hashes the decision, excluding only the permission expiry clock.
+  // Its text updates in place without resetting the read/press gates on every tick.
+  const drawn = $derived(`${sessionId}\n${prompt.hash}`);
   let armed = $state(false);
   let pressed = $state(false);
   // Which row was pressed, so its keycap can say lola pressed it. That is all the word claims:

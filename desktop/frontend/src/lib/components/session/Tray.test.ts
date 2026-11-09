@@ -8,6 +8,7 @@ vi.mock("../LiveTerminal.svelte", async () => ({ default: (await import("../ssh/
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   nav.view = "cockpit";
   vi.clearAllMocks();
 });
@@ -94,6 +95,33 @@ describe("inline terminal controls", () => {
 const approval = (id: string, c: string, at: string) => ({ id, at, block: { id, conn: c, status: "pending_approval", command: `cmd ${id}`, createdAt: at } }) as never;
 
 describe("the tray", () => {
+  it("updates a permission countdown without remounting or disarming the card", async () => {
+    vi.useFakeTimers();
+    const id = freshSession();
+    render(Tray, { sessionId: id });
+    const prompt = (clock: string) => permission({
+      lines: [...permission().lines.slice(0, -1), `⚠ Claude Code will automatically block this request in ${clock}, to avoid holding`, "up an unattended session", "Do you want to proceed?"],
+    });
+    await setTalk(id, { composer: "prompt", prompt: prompt("0:41") });
+    await vi.advanceTimersByTimeAsync(410);
+    const card = document.querySelector('[data-card="permission"]') as HTMLElement;
+    const yes = card.querySelector('[data-choice="1"]') as HTMLButtonElement;
+    const body = card.querySelector('[data-card-body]') as HTMLElement;
+    yes.focus();
+    body.scrollTop = 80;
+    expect(yes.disabled).toBe(false);
+    for (const clock of ["0:40", "0:39"]) {
+      await setTalk(id, { composer: "prompt", prompt: prompt(clock) });
+      expect(document.querySelector('[data-card="permission"]')).toBe(card);
+      expect(card.textContent).toContain(clock);
+      expect(yes.disabled).toBe(false);
+      expect(document.activeElement).toBe(yes);
+      expect(body.scrollTop).toBe(80);
+    }
+    await fireEvent.click(yes);
+    expect(talkSvc.Choose).toHaveBeenCalledTimes(1);
+  });
+
   it("a card never takes focus by appearing", async () => {
     const id = freshSession();
     const other = document.body.appendChild(document.createElement("textarea"));
