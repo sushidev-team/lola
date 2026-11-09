@@ -43,7 +43,7 @@ func (d *Daemon) handleSessionTask(ctx context.Context, req protocol.Request, au
 				applyErr = fmt.Errorf("task: unknown ID")
 				return false
 			}
-			if s.Tasks[i].Notification == "accepted" {
+			if s.Tasks[i].Notification != "failed" && s.Tasks[i].Notification != "sending" {
 				return false
 			}
 			if s.Tasks[i].Notification == "sending" && time.Since(s.Tasks[i].UpdatedAt) < time.Minute {
@@ -64,7 +64,16 @@ func (d *Daemon) handleSessionTask(ctx context.Context, req protocol.Request, au
 			return false
 		}
 		s.Tasks = next
-		if author == "user" && id != "" && (a.Argv[0] == "add" || a.Argv[0] == "edit" || a.Argv[0] == "state") {
+		// Confirmations update the shared agreement without starting a turn or
+		// releasing a held conversation queue. The next message already asks the
+		// agent to read the board. Scope changes still need its attention now.
+		confirmed := a.Argv[0] == "state" && len(a.Argv) == 3 && a.Argv[2] == "done"
+		if author == "user" && id != "" && confirmed {
+			i := slices.IndexFunc(next, func(t protocol.SessionTask) bool { return t.ID == id })
+			s.Tasks[i].Notification = ""
+			s.Tasks[i].SendError = ""
+		}
+		if author == "user" && id != "" && !confirmed && (a.Argv[0] == "add" || a.Argv[0] == "edit" || a.Argv[0] == "state") {
 			i := slices.IndexFunc(next, func(t protocol.SessionTask) bool { return t.ID == id })
 			s.Tasks[i].Notification = "sending"
 			s.Tasks[i].SendError = ""
@@ -95,7 +104,7 @@ func (d *Daemon) handleSessionTask(ctx context.Context, req protocol.Request, au
 		_, err := d.handleAgentSay(ctx, protocol.AgentSayArgs{Session: req.Session, Text: message})
 		d.sessions.Update(req.Session, func(s *session.Session) bool {
 			i := slices.IndexFunc(s.Tasks, func(t protocol.SessionTask) bool { return t.ID == notify.ID })
-			if i < 0 || s.Tasks[i].Text != notify.Text {
+			if i < 0 || s.Tasks[i].Text != notify.Text || s.Tasks[i].State != notify.State || !s.Tasks[i].UpdatedAt.Equal(notify.UpdatedAt) {
 				return false
 			}
 			s.Tasks = slices.Clone(s.Tasks)

@@ -145,7 +145,7 @@ it('keeps task and requirement actions on their own rows with explicit menu labe
   expect(screen.queryByText('Remove task? Requirements will be kept.')).toBeNull();
 });
 
-it('shows human checks with a direct confirmation and preserves delivery failures', async () => {
+it('shows human checks with a direct confirmation and preserves save errors', async () => {
   const id = freshSession({ tasks: [task('browser', 'checking')] });
   vi.spyOn(store, 'refresh').mockResolvedValue(undefined);
   const request = vi.mocked(DaemonService.SessionTask).mockRejectedValueOnce(new Error('Offline'));
@@ -155,12 +155,46 @@ it('shows human checks with a direct confirmation and preserves delivery failure
   await fireEvent.click(confirm);
   expect(await screen.findByRole('alert')).toHaveTextContent('Offline');
   expect(confirm).toBeInTheDocument();
-  request.mockResolvedValueOnce([{ ...task('browser', 'done'), notification: 'failed' }] as never);
+  request.mockResolvedValueOnce([task('browser', 'done')] as never);
   await fireEvent.click(confirm);
   expect(request).toHaveBeenLastCalledWith(id, ['state', 'browser', 'done']);
   await waitFor(() => expect(screen.queryByText('Needs your check')).toBeNull());
   await fireEvent.click(screen.getByRole('button', { name: /Completed/ }));
-  expect(screen.getByText('Saved · message not sent')).toBeInTheDocument();
+  expect(screen.getByText('Requirement browser')).toBeInTheDocument();
+  expect(screen.queryByText('Saved · message not sent')).toBeNull();
+});
+
+it('shows criteria flat when the only task repeats the session issue', async () => {
+  const parent = { ...task('issue', 'doing'), text: 'Internal webhooks admin (CE-166)' };
+  const child = { ...task('fields', 'doing'), kind: 'requirement', parentId: parent.id };
+  const finished = { ...task('history', 'done'), kind: 'requirement', parentId: parent.id };
+  const id = freshSession({ issue: 'CE-166', title: 'Internal webhooks admin', tasks: [parent, finished, child] });
+  render(SessionTasks, { sessionId: id });
+  expect(screen.getByRole('tab', { name: 'Tasks 1/2' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: child.text })).toBeVisible();
+  expect(screen.getByRole('button', { name: child.text })).toHaveClass('full-title');
+  expect(screen.queryByText(finished.text)).toBeNull();
+  expect(screen.queryByRole('button', { name: new RegExp(`^Internal webhooks`) })).toBeNull();
+  expect(screen.getByText(parent.text).closest('details')).not.toHaveAttribute('open');
+  await fireEvent.click(screen.getByRole('button', { name: /Completed/ }));
+  expect(screen.getByRole('button', { name: finished.text })).toBeVisible();
+  await fireEvent.click(screen.getByText('Issue task details'));
+  expect(screen.getByRole('button', { name: `Task actions: ${parent.text}` })).toBeVisible();
+
+  store.sessions = store.sessions.map(s => ({ ...s, tasks: [{ ...parent, state: 'checking' }, finished, { ...child, state: 'done' }] })) as never;
+  expect(await screen.findByRole('button', { name: `Confirm checked: ${parent.text}` })).toBeVisible();
+  expect(screen.getByRole('tab', { name: 'Tasks 2/2' })).toBeInTheDocument();
+});
+
+it('preserves a meaningful single task group within an issue', async () => {
+  const parent = { ...task('delivery'), text: 'Implement webhook delivery retries' };
+  const child = { ...task('backoff'), kind: 'requirement', parentId: parent.id };
+  const id = freshSession({ issue: 'CE-166', title: 'Internal webhooks admin', tasks: [parent, child] });
+  render(SessionTasks, { sessionId: id });
+  expect(screen.getByRole('tab', { name: 'Tasks 0/1' })).toBeInTheDocument();
+  expect(screen.queryByText(child.text)).toBeNull();
+  await fireEvent.click(screen.getByRole('button', { name: /^Implement webhook delivery retries/ }));
+  expect(screen.getByRole('button', { name: child.text })).toBeVisible();
 });
 
 it('keeps child checks actionable and prevents confirming a parent with unmet requirements', async () => {

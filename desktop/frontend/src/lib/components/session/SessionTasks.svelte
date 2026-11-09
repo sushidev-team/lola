@@ -23,10 +23,20 @@
   const requirements = $derived(all.filter(t => t.kind === 'requirement'));
   const unattached = $derived(requirements.filter(t => !t.parentId));
   const unattachedChecks = $derived(unattached.filter(t => t.state === 'checking'));
-  const done = $derived(tasks.filter(t => t.state === 'done').length);
-  const complete = $derived(tasks.length > 0 && done === tasks.length && requirements.every(t => t.state === 'done'));
-  const active = $derived(tasks.filter(t => t.state !== 'done').sort((a, b) => Number(b.state === 'doing') - Number(a.state === 'doing')));
-  const finished = $derived(tasks.filter(t => t.state === 'done'));
+  // Older boards sometimes repeat the session's issue as their only task.
+  // Flatten that presentation only; IDs, scope and completion gates stay intact.
+  const issueTask = $derived(tasks.length === 1 && repeatsIssue(tasks[0].text) && requirements.some(r => r.parentId === tasks[0].id) ? tasks[0] : undefined);
+  const visibleItems = $derived(issueTask ? requirements.filter(r => r.parentId === issueTask.id) : tasks);
+  const done = $derived(visibleItems.filter(t => t.state === 'done').length);
+  const complete = $derived(visibleItems.length > 0 && done === visibleItems.length && requirements.every(t => t.state === 'done'));
+  const active = $derived(visibleItems.filter(t => t.state !== 'done').sort((a, b) => Number(b.state === 'doing') - Number(a.state === 'doing')));
+  const finished = $derived(visibleItems.filter(t => t.state === 'done'));
+  function repeatsIssue(text: string) {
+    if (!session?.issue || !session.title) return false;
+    const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase();
+    const { issue, title } = session;
+    return [title, issue, `${title} (${issue})`, `${issue}: ${title}`, `${issue} — ${title}`, `${issue} - ${title}`].some(candidate => normalize(candidate) === normalize(text));
+  }
   let showDone = $state(false);
   let expandedTasks = $state<Set<string>>(new Set());
   function toggleTask(id: string) { const next = new Set(expandedTasks); if (next.has(id)) next.delete(id); else next.add(id); expandedTasks = next; }
@@ -187,14 +197,14 @@
   {/if}
 {/snippet}
 
-{#snippet criteria(items: SessionTask[])}
+{#snippet criteria(items: SessionTask[], flat = false)}
   <ul class="task-requirements">
     {#each items as item (item.id)}
       {@const open = expandedRequirements.has(item.id)}
       <li class="requirement-item">
         <div class="requirement-row">
           {@render statusButton(item)}
-          <button type="button" class="requirement-title" class:full-title={open || item.state === 'checking'} class:done={item.state === 'done'} aria-expanded={open} onclick={() => toggleRequirement(item.id)}>{item.text}</button>
+          <button type="button" class="requirement-title" class:full-title={flat || open || item.state === 'checking'} class:done={item.state === 'done'} aria-expanded={open} onclick={() => toggleRequirement(item.id)}>{item.text}</button>
           {#if !item.parentId}<span class="requirement-scope">{item.scope === 'global' ? 'Global' : 'Unassigned'}</span>{/if}
           {@render itemMenu(item)}
         </div>
@@ -244,7 +254,7 @@
     <div class="task-toolbar">
       <div class="task-tabs" role="tablist" aria-label="Tasks and requirements">
         {#each [{id:'tasks',label:'Tasks'}, {id:'requirements',label:'Requirements'}] as t, i}
-          <button type="button" role="tab" id={`${sessionId}-${t.id}-tab`} aria-controls={`${sessionId}-task-panel`} aria-selected={tab === t.id} tabindex={tab === t.id ? 0 : -1} onclick={() => switchTab(t.id)} onkeydown={(event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1-i; switchTab(next ? 'requirements' : 'tasks'); (event.currentTarget.parentElement?.children[next] as HTMLButtonElement)?.focus(); } }}>{t.label}<span class="num">{t.id === 'tasks' ? tasks.length ? `${done}/${tasks.length}` : '' : unattached.length || ''}</span></button>
+          <button type="button" role="tab" id={`${sessionId}-${t.id}-tab`} aria-controls={`${sessionId}-task-panel`} aria-selected={tab === t.id} tabindex={tab === t.id ? 0 : -1} onclick={() => switchTab(t.id)} onkeydown={(event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1-i; switchTab(next ? 'requirements' : 'tasks'); (event.currentTarget.parentElement?.children[next] as HTMLButtonElement)?.focus(); } }}>{t.label}<span class="num">{t.id === 'tasks' ? visibleItems.length ? `${done}/${visibleItems.length}` : '' : unattached.length || ''}</span></button>
         {/each}
       </div>
       <Button size="xs" disabled={pending || !store.alive} onclick={() => add()} aria-label={tab === 'tasks' ? 'Add task' : 'Add requirement'}><Icon name="plus" size={13} /> Add</Button>
@@ -266,9 +276,27 @@
             {@render criteria(unattachedChecks)}
           </div>
         {/if}
-        {#if active.length}<ul class="task-list" aria-label="Active tasks">{#each active as task (task.id)}{@render taskRow(task)}{/each}</ul>
+        {#if active.length}{#if issueTask}{@render criteria(active, true)}{:else}<ul class="task-list" aria-label="Active tasks">{#each active as task (task.id)}{@render taskRow(task)}{/each}</ul>{/if}
         {:else if !tasks.length && !composing}<p class="task-hint">Add a task to get started.</p>{/if}
-        {#if finished.length}<button type="button" class="completed-toggle" aria-expanded={showDone} onclick={() => showDone = !showDone}><Icon name={showDone ? 'chevron-down' : 'chevron-right'} size={12} />Completed <span class="num">{finished.length}</span></button>{#if showDone}<div transition:disclose><ul class="task-list" aria-label="Completed tasks">{#each finished as task (task.id)}{@render taskRow(task)}{/each}</ul></div>{/if}{/if}
+        {#if finished.length}<button type="button" class="completed-toggle" aria-expanded={showDone} onclick={() => showDone = !showDone}><Icon name={showDone ? 'chevron-down' : 'chevron-right'} size={12} />Completed <span class="num">{finished.length}</span></button>{#if showDone}<div transition:disclose>{#if issueTask}{@render criteria(finished, true)}{:else}<ul class="task-list" aria-label="Completed tasks">{#each finished as task (task.id)}{@render taskRow(task)}{/each}</ul>{/if}</div>{/if}{/if}
+        {#if issueTask}
+          {#if issueTask.state === 'checking' && !hasUnmetRequirements(issueTask)}
+            <p class="pending-checks">Issue ready for your check</p>
+            {@render checkActions(issueTask)}
+          {/if}
+          {@render delivery(issueTask)}
+          <details class="issue-details">
+            <summary><Icon name="chevron-right" size={12} />Issue task details</summary>
+            <div class="task-row">
+              {@render statusButton(issueTask)}
+              <span class="issue-title">{issueTask.text}</span>
+              {@render itemMenu(issueTask)}
+            </div>
+            {@render itemFeedback(issueTask)}
+            {@render removal(issueTask)}
+            <button type="button" class="add-criterion" disabled={pending || !store.alive} onclick={() => add(issueTask.id)}><Icon name="plus" size={12} /> Add requirement</button>
+          </details>
+        {/if}
       {:else}
         {#if unattached.length}{@render criteria(unattached)}{:else if !composing}<p class="task-hint">Global and unassigned requirements appear here.</p>{/if}
       {/if}
@@ -286,6 +314,12 @@
 
 <style>
   .session-tasks { min-width: 0; }
+  .issue-details { margin-top: 8px; }
+  .issue-details summary { display: flex; align-items: center; gap: 6px; min-height: 28px; list-style: none; cursor: pointer; font-size: 12px; color: var(--color-faint); }
+  .issue-details summary::-webkit-details-marker { display: none; }
+  .issue-details[open] summary :global(svg) { transform: rotate(90deg); }
+  .issue-details summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .issue-title { flex: 1; min-width: 0; padding-block: 5px; overflow-wrap: anywhere; font-size: 12px; line-height: 20px; }
   .check-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0 0 6px 27px; }
   .check-actions button { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 6px; border-radius: 4px; font-size: 12px; color: var(--color-ink-2); }
   .check-actions .check-confirm { color: var(--color-good); }
