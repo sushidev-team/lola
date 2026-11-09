@@ -199,7 +199,7 @@ The Overview no longer repeats session identity and token totals. Token usage li
 
 The task hierarchy is a durable agreement, separate from the agent's replaceable plan. Agent-created requirements must name a task or explicitly use --global for a session-wide constraint. The agent reads current scope, reuses existing IDs, groups criteria under the outcome responsible for verifying them, and marks each criterion complete before completing its task. New or reopened criteria reopen a completed parent. Agents cannot rewrite user scope or remove a parent while leaving children unassigned. Launch instructions, user-item messages and `lola report task help` share one operating contract in `internal/taskboard/briefing.go`.
 
-An inline terminal shares the remaining workspace height with conversation history so its prompt stays above the composer.
+An inline terminal shares the remaining workspace height with conversation history so its prompt stays above the composer. The reply composer uses a neutral panel surface, 16px corners, a quiet offset shadow and a palette-derived border that becomes the accent on focus. The send button has a compact rounded-square shape, a neutral disabled state and an accent-filled ready state. Field and footer spacing stays shared with command mode; its existing environment colors and labels remain distinct.
 
 Form fields share quiet borders, regular-weight labels, and a restrained accent focus ring. Select controls retain native form bindings and validation while presenting a themed, keyboard-accessible listbox instead of the operating-system popup.
 

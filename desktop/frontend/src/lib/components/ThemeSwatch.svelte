@@ -22,13 +22,13 @@
 >
   <span class="flex min-w-0 items-center gap-1.5">
     <span class="min-w-0 font-medium {compact ? 'text-xs' : ''}" style="color:{f.text}">{f.label}</span>
-    {#if compact}
+    {#if compact || selected}
       <span class="ml-auto shrink-0" style="color:{f.sky};visibility:{selected ? 'visible' : 'hidden'}" aria-hidden="true">
         <Icon name="check" size={12} />
       </span>
     {:else}
-      <span class="label ml-auto" style="color:{selected ? f.sky : f.overlay1}">
-        {selected ? 'selected' : f.dark ? 'dark' : 'light'}
+      <span class="ml-auto shrink-0 text-[10px] leading-none font-medium tracking-[0.03em] uppercase" style="color:{f.overlay1}">
+        {f.dark ? 'dark' : 'light'}
       </span>
     {/if}
   </span>
