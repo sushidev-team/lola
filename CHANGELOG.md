@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/sushidev-team/lola/compare/v0.3.0...v0.4.0) (2026-11-09)
+
+
+### Features
+
+* **theme:** show compact palettes in system appearance pickers ([58079e9](https://github.com/sushidev-team/lola/commit/58079e9cb8a199a5073ebdffd11902e8d5c9eb0a))
+
+
+### Bug Fixes
+
+* loading icon animation jiggerish ([1640679](https://github.com/sushidev-team/lola/commit/1640679733fce2361d05e36b3f1134d831056de6))
+* **tasks:** render feedback as a note instead of an empty disclosure ([f69eae8](https://github.com/sushidev-team/lola/commit/f69eae87ab4d06941a42fc91afa0ec0c9e358407))
+* **tasks:** silence confirmations and flatten redundant issue groups ([2079024](https://github.com/sushidev-team/lola/commit/2079024ebf86c53ae678db080e07640b631a42ed))
+
 ## [0.3.0](https://github.com/sushidev-team/lola/compare/v0.2.20...v0.3.0) (2026-11-09)
 
 
