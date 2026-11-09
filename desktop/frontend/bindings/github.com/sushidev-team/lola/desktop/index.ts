@@ -21,6 +21,7 @@ export {
 };
 
 export type {
+    AppearanceDTO,
     CLIInfoDTO,
     CLIInstallDTO,
     ConnectCodeDTO,

@@ -1035,3 +1035,32 @@ func TestSaveProjectStackFields(t *testing.T) {
 		t.Fatal("saving a stack's form dropped its kind")
 	}
 }
+
+func TestSystemAppearancePersistsAndRejectsWrongTags(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	svc := &ConfigService{}
+	want := AppearanceDTO{Theme: "catppuccin-mocha", FollowSystem: true, LightTheme: "one-light", DarkTheme: "lola-midnight"}
+	if err := svc.SetAppearance(want); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.GetAppearance(); got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	before, _ := os.ReadFile(path)
+	invalid := want
+	invalid.LightTheme = "lola-midnight"
+	if err := svc.SetAppearance(invalid); err == nil {
+		t.Fatal("accepted dark palette in light slot")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Fatal("rejected appearance changed config")
+	}
+	if err := svc.SetTheme("gruvbox-light"); err != nil {
+		t.Fatal(err)
+	}
+	got := svc.GetAppearance()
+	if got.FollowSystem || got.Theme != "gruvbox-light" || got.LightTheme != want.LightTheme || got.DarkTheme != want.DarkTheme {
+		t.Fatalf("fixed switch lost pair: %+v", got)
+	}
+}

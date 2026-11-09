@@ -22,6 +22,7 @@
   const tasks = $derived(all.filter(t => t.kind === 'task'));
   const requirements = $derived(all.filter(t => t.kind === 'requirement'));
   const unattached = $derived(requirements.filter(t => !t.parentId));
+  const unattachedChecks = $derived(unattached.filter(t => t.state === 'checking'));
   const done = $derived(tasks.filter(t => t.state === 'done').length);
   const complete = $derived(tasks.length > 0 && done === tasks.length && requirements.every(t => t.state === 'done'));
   const active = $derived(tasks.filter(t => t.state !== 'done').sort((a, b) => Number(b.state === 'doing') - Number(a.state === 'doing')));
@@ -172,8 +173,8 @@
 {#snippet checkActions(item: SessionTask)}
   {#if item.state === 'checking' && !hasUnmetRequirements(item)}
     <div class="check-actions">
-      <button type="button" class="check-confirm" aria-label={`Confirm checked: ${item.text}`} title="Confirm checked" disabled={pending || !store.alive} onclick={() => void mutate(['state', item.id, 'done'])}><Icon name="check" size={14} /></button>
-      <button type="button" aria-label={`Give feedback: ${item.text}`} title="Give feedback in the composer" onclick={() => feedback(item)}><Icon name="message-square-text" size={14} /></button>
+      <button type="button" class="check-confirm" aria-label={`Confirm checked: ${item.text}`} disabled={pending || !store.alive} onclick={() => void mutate(['state', item.id, 'done'])}><Icon name="check" size={14} />Confirm checked</button>
+      <button type="button" aria-label={`Give feedback: ${item.text}`} title="Give feedback in the composer" onclick={() => feedback(item)}><Icon name="message-square-text" size={14} />Give feedback</button>
     </div>
   {/if}
 {/snippet}
@@ -193,11 +194,11 @@
       <li class="requirement-item">
         <div class="requirement-row">
           {@render statusButton(item)}
-          <button type="button" class="requirement-title" class:full-title={open} class:done={item.state === 'done'} aria-expanded={open} onclick={() => toggleRequirement(item.id)}>{item.text}</button>
+          <button type="button" class="requirement-title" class:full-title={open || item.state === 'checking'} class:done={item.state === 'done'} aria-expanded={open} onclick={() => toggleRequirement(item.id)}>{item.text}</button>
           {#if !item.parentId}<span class="requirement-scope">{item.scope === 'global' ? 'Global' : 'Unassigned'}</span>{/if}
-          {@render checkActions(item)}
           {@render itemMenu(item)}
         </div>
+        {@render checkActions(item)}
         {#if open}
           {@render itemFeedback(item)}
           <div transition:disclose class="requirement-tools">
@@ -212,27 +213,27 @@
 
 {#snippet taskRow(task: SessionTask)}
   {@const attached = requirements.filter(r => r.parentId === task.id)}
-  {@const checks = attached.filter(r => r.state === 'checking').length}
+  {@const checks = attached.filter(r => r.state === 'checking')}
   {@const open = expandedTasks.has(task.id)}
   <li class="task-item" data-task-id={task.id}>
     <div class="task-row">
       {@render statusButton(task)}
       <button type="button" class="task-expand" aria-expanded={open} aria-controls={`task-${sessionId}-${task.id}`} onclick={() => toggleTask(task.id)}>
-        <span class="task-title" class:full-title={open}>{task.text}</span>
+        <span class="task-title" class:full-title={open || task.state === 'checking' || checks.length > 0}>{task.text}</span>
         {#if attached.length}<span class="requirement-count num" title={`${attached.filter(r => r.state === 'done').length} of ${attached.length} requirements met`}>{attached.filter(r => r.state === 'done').length}/{attached.length}</span>{/if}
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} class="text-faint" />
       </button>
-      {@render checkActions(task)}
       {@render itemMenu(task)}
     </div>
-    {#if checks && !open}<button type="button" class="pending-checks" onclick={() => toggleTask(task.id)}><Icon name="circle-help" size={13} />{checks} {checks === 1 ? 'requirement needs' : 'requirements need'} your check<Icon name="chevron-down" size={12} /></button>{/if}
+    {@render checkActions(task)}
     {@render delivery(task)}
     {@render removal(task)}
-    {#if open}
+    {#if open || checks.length}
       <div transition:disclose class="task-detail" id={`task-${sessionId}-${task.id}`}>
-        {@render itemFeedback(task)}
-        {#if attached.length}{@render criteria(attached)}{/if}
-        <div class="task-tools"><button type="button" class="add-criterion" disabled={pending || !store.alive} onclick={() => add(task.id)}><Icon name="plus" size={12} /> Add requirement</button></div>
+        {#if open}{@render itemFeedback(task)}{/if}
+        {#if checks.length}<p class="pending-checks">{checks.length} {checks.length === 1 ? 'requirement needs' : 'requirements need'} your check</p>{/if}
+        {@render criteria(open ? attached : checks)}
+        {#if open}<div class="task-tools"><button type="button" class="add-criterion" disabled={pending || !store.alive} onclick={() => add(task.id)}><Icon name="plus" size={12} /> Add requirement</button></div>{/if}
       </div>
     {/if}
   </li>
@@ -259,6 +260,12 @@
       {#if error}<p role="alert" class="task-error">{error}</p>{/if}
       {#if !store.alive}<p class="task-hint">Reconnect to change tasks.</p>{/if}
       {#if tab === 'tasks'}
+        {#if unattachedChecks.length}
+          <div class="unattached-checks">
+            <p class="pending-checks">Requirements needing your check</p>
+            {@render criteria(unattachedChecks)}
+          </div>
+        {/if}
         {#if active.length}<ul class="task-list" aria-label="Active tasks">{#each active as task (task.id)}{@render taskRow(task)}{/each}</ul>
         {:else if !tasks.length && !composing}<p class="task-hint">Add a task to get started.</p>{/if}
         {#if finished.length}<button type="button" class="completed-toggle" aria-expanded={showDone} onclick={() => showDone = !showDone}><Icon name={showDone ? 'chevron-down' : 'chevron-right'} size={12} />Completed <span class="num">{finished.length}</span></button>{#if showDone}<div transition:disclose><ul class="task-list" aria-label="Completed tasks">{#each finished as task (task.id)}{@render taskRow(task)}{/each}</ul></div>{/if}{/if}
@@ -279,10 +286,11 @@
 
 <style>
   .session-tasks { min-width: 0; }
-  .check-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; padding-top: 1px; }
-  .check-actions button { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 4px; color: var(--color-ink-2); }
+  .check-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0 0 6px 27px; }
+  .check-actions button { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 6px; border-radius: 4px; font-size: 12px; color: var(--color-ink-2); }
   .check-actions .check-confirm { color: var(--color-good); }
-  .pending-checks { display: flex; align-items: center; gap: 5px; margin-left: 27px; min-height: 28px; color: var(--color-warn); font-size: 11px; text-align: left; }
+  .pending-checks { margin: 4px 0 2px; color: var(--color-warn); font-size: 12px; line-height: 18px; }
+  .unattached-checks { margin-bottom: 8px; }
   .check-actions button:hover:not(:disabled) { background: var(--color-sel); }
   .item-feedback { margin: 0 0 2px 27px; min-width: 0; font-size: 12px; line-height: 18px; color: var(--color-ink-2); overflow-wrap: anywhere; }
   .task-detail > .item-feedback { margin-left: 0; }

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import SystemThemePicker from "$lib/components/SystemThemePicker.svelte";
+  import type { AppearancePreference } from "$lib/appearance";
   import Icon from "$lib/components/Icon.svelte";
   import { onMount, onDestroy, tick } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
@@ -193,13 +195,14 @@
   // Escape, backdrop) puts the persisted flavor back.
   //
   // It is deliberately NOT a SettingsDTO field: [ui] is presentation, not a
-  // [defaults] key, and ConfigService.SetTheme is its sole writer. `save`
-  // therefore issues a second, single-key write alongside SaveSettings.
+  // [defaults] key. `save` persists the appearance preference through its own
+  // service method after SaveSettings succeeds.
 
   // The flavor that is actually in config.toml. `appearance.id` is the LIVE one,
   // which the preview moves around; this is the baseline it snaps back to.
-  let savedTheme: ThemeId = appearance.id;
-  let themeId = $state<ThemeId>(appearance.id);
+  let savedAppearance = appearance.snapshot();
+  let themePreference = $state<AppearancePreference>(appearance.snapshot());
+  const themeId = $derived(themePreference.theme);
 
   // Which ids to offer. MEMBERSHIP is the Go side's call — config.Validate
   // rejects anything outside config.UIThemes, so offering more would just build
@@ -236,16 +239,17 @@
    * out of from reaching config.toml or the boot cache.
    */
   function previewTheme(id: ThemeId) {
-    themeId = id;
-    appearance.id = id;
-    appearance.paint();
+    previewAppearance({ ...themePreference, theme: id, followSystem: false });
+  }
+
+  function previewAppearance(value: AppearancePreference) {
+    themePreference = value;
+    appearance.preview(value);
   }
 
   /** Undo an uncommitted preview. A no-op once save has moved the baseline. */
   function revertTheme() {
-    if (appearance.id === savedTheme) return;
-    appearance.id = savedTheme;
-    appearance.paint();
+    appearance.preview(savedAppearance);
   }
 
   function cancel() {
@@ -351,7 +355,7 @@
         matchLabels: cleanLines(dto.matchLabels),
         prioritySort: cleanLines(dto.prioritySort),
       });
-      // [ui].theme is a single-key write on its own path, not a DTO field.
+      // [ui] is written on its own path, not as a SettingsDTO field.
       // Sequenced AFTER the settings write so a payload the daemon rejects can
       // never leave a theme change behind on disk.
       //
@@ -360,9 +364,11 @@
       // first frame is written there. Calling the binding straight left the
       // cache on the OLD flavor, so the very next launch — the one right after
       // the user changed the theme — flashed the previous colours.
-      if (themeId !== savedTheme) {
-        await appearance.commit(themeId);
-        savedTheme = themeId; // the preview is now the persisted value
+      if (!deepEqual(themePreference, savedAppearance)) {
+        const onlyFixedTheme = !themePreference.followSystem && !savedAppearance.followSystem &&
+          themePreference.lightTheme === savedAppearance.lightTheme && themePreference.darkTheme === savedAppearance.darkTheme;
+        await appearance.commit(onlyFixedTheme ? themeId : $state.snapshot(themePreference));
+        savedAppearance = { ...themePreference };
       }
       store.setFlash("settings saved", "good");
       nav.closeOverlay();
@@ -1297,10 +1303,14 @@
               <Button size="xs" selected={terms.globalView === "terminal"} onclick={() => terms.setGlobalView("terminal")}>Terminal</Button>
             </div>
           </div>
+          <div class="mb-4">
+            <SystemThemePicker value={themePreference} {themeIds} onchange={previewAppearance} />
+          </div>
           <div class="copy mb-3 text-sm text-faint"><HelpText label="theme preview" summary="Preview a theme." detail="Preview a theme for the app and terminals. Save to keep it, or cancel to restore your current theme." /></div>
           <!-- Grid, not flex: WKWebView does not stretch a flex child inside a
                flex column, so a flex layout that fills correctly in Chrome
                collapses to content width in the packaged .app. -->
+          {#if !themePreference.followSystem}
           <div class="grid grid-cols-2 gap-2">
             {#each themeIds as id (id)}
               {@const f = FLAVORS[id]}
@@ -1332,6 +1342,7 @@
               </button>
             {/each}
           </div>
+          {/if}
         </section>
       {:else if tab === "review"}
         <div class="space-y-5">

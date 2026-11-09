@@ -108,7 +108,11 @@ Violet distinguishes agent activity. Orange marks file activity, cyan commands, 
 
 ### Neutral
 
-Midnight (`lola-midnight`) is the default navy palette with bright reading ink, cyan and violet. Mocha retains a softer violet ground, Macchiato a cooler slate ground, and Frappé a lighter slate ground with balanced accents. Latte pairs pale blue-white surfaces with deep colored ink. All five share text hierarchy and semantic roles across chrome, terminal colors and pane snapshots; the Catppuccin ids name Lola-tuned adaptations. Explicitly saved theme choices remain valid.
+Midnight (`lola-midnight`) is the default navy palette with bright reading ink, cyan and violet. Mocha retains a softer violet ground, Macchiato a cooler slate ground, and Frappé a lighter slate ground with balanced accents. Latte pairs pale blue-white surfaces with deep colored ink. All themes share text hierarchy and semantic roles across chrome, terminal colors and pane snapshots; the Catppuccin ids name Lola-tuned adaptations. Explicitly saved theme choices remain valid.
+
+Five additional light adaptations widen the range: [GitHub Light](https://github.com/primer/github-vscode-theme) uses neutral white surfaces and blue accents; [Solarized Light](https://ethanschoonover.com/solarized/) uses warm ivory and teal; [Rosé Pine Dawn](https://rosepinetheme.com/palette/) uses cream, rose and iris; [Gruvbox Light](https://github.com/morhetz/gruvbox) uses parchment and earthy accents; [One Light](https://github.com/atom/one-light-syntax) adds the most vibrant cobalt and magenta. These are Lola adaptations, with common contrast and semantic roles rather than exact upstream ports.
+
+System appearance is opt-in. Light/dark tags filter the two independent selectors; desktop and phone respond live to OS appearance, while the TUI uses its terminal's background report. Desktop previews and Cancel apply to the whole preference (mode plus both choices); Save persists it in `[ui]`. The phone stores its preference locally. Fixed choices remain available and Midnight remains the default.
 
 For this installation, the user explicitly selected Midnight in place of the saved Macchiato preference. This is a saved local choice, not a change to the default for other installations.
 

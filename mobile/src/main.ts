@@ -17,7 +17,7 @@ import { connection } from "@mobile/lib/connection.svelte";
 // asks the backend and repaints only if the two disagree.
 //
 // On mobile there is no backend to ask — the shim deliberately does not export
-// ConfigService.GetTheme, and theme-runtime feature-probes for it and degrades
+// ConfigService.GetAppearance/GetTheme, and the runtime feature-probes them and falls back
 // to the cache. So this resolves from localStorage alone, which is both correct
 // and the right product answer: the phone's flavor is the phone's, and no
 // remote command could read the Mac's `[ui].theme` anyway.

@@ -168,7 +168,7 @@ it('keeps child checks actionable and prevents confirming a parent with unmet re
   render(SessionTasks, { sessionId: id });
   expect(screen.queryByRole('button', { name: 'Confirm checked: Requirement work' })).toBeNull();
   expect(screen.queryByText('Needs your check')).toBeNull();
-  await fireEvent.click(screen.getByRole('button', { name: '1 requirement needs your check' }));
+  expect(screen.getByText('1 requirement needs your check')).toBeInTheDocument();
   expect(screen.queryByText('Needs your check')).toBeNull();
   expect(screen.getByRole('button', { name: 'Confirm checked: Requirement browser' })).toBeEnabled();
   await fireEvent.click(screen.getByRole('button', { name: 'Requirement browser' }));
@@ -182,6 +182,51 @@ it('keeps child checks actionable and prevents confirming a parent with unmet re
   store.sessions = store.sessions.map(s => ({ ...s, tasks: [task('work', 'checking'), { ...task('browser', 'done'), kind: 'requirement', parentId: 'work' }] })) as never;
   expect(await screen.findByRole('button', { name: 'Confirm checked: Requirement work' })).toBeEnabled();
   expect(screen.queryByRole('button', { name: 'Confirm checked: Requirement browser' })).toBeNull();
+});
+
+it('automatically reveals incoming checks while keeping other requirements folded', async () => {
+  const parent = task('work', 'doing');
+  const child = { ...task('browser'), kind: 'requirement', parentId: parent.id };
+  const other = { ...task('other', 'done'), kind: 'requirement', parentId: parent.id };
+  const id = freshSession({ tasks: [parent, child, other] });
+  render(SessionTasks, { sessionId: id });
+  expect(screen.queryByText(child.text)).toBeNull();
+  store.sessions = store.sessions.map(s => ({ ...s, tasks: [parent, { ...child, state: 'checking' }, other] })) as never;
+  expect(await screen.findByRole('button', { name: `Confirm checked: ${child.text}` })).toBeEnabled();
+  expect(screen.queryByText(other.text)).toBeNull();
+
+  const expand = screen.getByRole('button', { name: /^Requirement work/ });
+  await fireEvent.click(expand);
+  expect(screen.getByText(other.text)).toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: `Confirm checked: ${child.text}` })).toHaveLength(1);
+  await fireEvent.click(expand);
+  expect(screen.queryByText(other.text)).toBeNull();
+  expect(screen.getByRole('button', { name: `Confirm checked: ${child.text}` })).toBeEnabled();
+
+  vi.spyOn(store, 'refresh').mockResolvedValue(undefined);
+  const request = vi.mocked(DaemonService.SessionTask).mockResolvedValueOnce([parent, { ...child, state: 'done' }, other] as never);
+  await fireEvent.click(screen.getByRole('button', { name: `Confirm checked: ${child.text}` }));
+  expect(request).toHaveBeenLastCalledWith(id, ['state', child.id, 'done']);
+  await waitFor(() => expect(screen.queryByText(child.text)).toBeNull());
+  expect(screen.queryByText('1 requirement needs your check')).toBeNull();
+});
+
+it('surfaces global and unassigned checks on Tasks with feedback and offline guards', async () => {
+  const global = { ...task('global', 'checking'), kind: 'requirement', scope: 'global' };
+  const loose = { ...task('loose', 'checking'), kind: 'requirement' };
+  const id = freshSession({ tasks: [global, loose] });
+  render(SessionTasks, { sessionId: id });
+  expect(screen.getByRole('tab', { name: 'Tasks' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('button', { name: `Confirm checked: ${global.text}` })).toBeEnabled();
+  expect(screen.getByRole('button', { name: `Confirm checked: ${loose.text}` })).toBeEnabled();
+  await fireEvent.click(screen.getByRole('button', { name: `Give feedback: ${loose.text}` }));
+  expect(ssh.view(id).agentDraft).toBe('Feedback on requirement [loose] (Requirement loose):\n');
+
+  store.alive = false;
+  await waitFor(() => expect(screen.getByRole('button', { name: `Confirm checked: ${global.text}` })).toBeDisabled());
+  await fireEvent.click(screen.getByRole('tab', { name: /Requirements/ }));
+  expect(screen.getAllByRole('button', { name: `Confirm checked: ${global.text}` })).toHaveLength(1);
+  expect(screen.getByRole('button', { name: `Confirm checked: ${loose.text}` })).toBeDisabled();
 });
 
 it('opens task feedback in the real composer, keeps the draft, and sends it through the normal queue', async () => {

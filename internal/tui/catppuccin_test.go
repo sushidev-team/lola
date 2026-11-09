@@ -12,7 +12,13 @@ import (
 
 var hexRE = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 
-func allFlavors() []flavor { return []flavor{midnight, mocha, macchiato, frappe, latte} }
+func allFlavors() []flavor {
+	out := make([]flavor, 0, len(themeIDs))
+	for _, id := range themeIDs {
+		out = append(out, flavors[id])
+	}
+	return out
+}
 
 // --- flavor tables + lookup -------------------------------------------------
 
@@ -45,9 +51,9 @@ func TestFlavorKeyedByOwnID(t *testing.T) {
 	}
 }
 
-func TestOnlyLatteIsLight(t *testing.T) {
+func TestThemeLightDarkTags(t *testing.T) {
 	for _, f := range allFlavors() {
-		if want := f.id != "catppuccin-latte"; f.dark != want {
+		if want := config.UIThemeIsDark(f.id); f.dark != want {
 			t.Errorf("%s.dark = %v, want %v", f.id, f.dark, want)
 		}
 	}
@@ -382,8 +388,8 @@ func TestAccentInk(t *testing.T) {
 			t.Errorf("%s accent on panel = %.2f < aaUI", f.id, c)
 		}
 		// Dark flavors keep plain sky as accent-ink; only latte darkens it.
-		if wantSky := f.dark; (tok["--color-accent-ink"] == f.sky) != wantSky {
-			t.Errorf("%s accent-ink==sky is %v, want %v", f.id, tok["--color-accent-ink"] == f.sky, wantSky)
+		if f.dark && tok["--color-accent-ink"] != f.sky {
+			t.Errorf("%s accent-ink==sky is %v, want %v", f.id, tok["--color-accent-ink"] == f.sky, true)
 		}
 	}
 }

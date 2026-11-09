@@ -1,4 +1,4 @@
-// A Go port of the desktop app's catppuccin.ts: the four Catppuccin flavor
+// A Go port of the desktop app's catppuccin.ts: the coordinated flavor
 // tables plus the pure color math that turns a flavor into lola's semantic
 // design tokens. This is the SAME data and the SAME arithmetic the app runs, so
 // picking a flavor paints the TUI and the desktop app identically instead of
@@ -31,7 +31,7 @@ const defaultThemeID = "lola-midnight"
 type flavor struct {
 	id    string
 	label string
-	dark  bool // false only for latte — drives every light/dark decision
+	dark  bool // false for light palettes — drives every light/dark decision
 
 	rosewater, flamingo, pink, mauve, red, maroon, peach, yellow string
 	green, teal, sky, sapphire, blue, lavender                   string
@@ -140,20 +140,185 @@ var midnight = flavor{
 	faintKey:  "overlay1",
 }
 
+var githubLight = flavor{
+	id: "github-light", label: "GitHub Light", dark: false,
+	rosewater: "#bf7064",
+	flamingo:  "#d1577a",
+	pink:      "#bf3989",
+	mauve:     "#8250df",
+	red:       "#cf222e",
+	maroon:    "#a40e26",
+	peach:     "#bc4c00",
+	yellow:    "#9a6700",
+	green:     "#1a7f37",
+	teal:      "#1b7c83",
+	sky:       "#0969da",
+	sapphire:  "#0550ae",
+	blue:      "#0969da",
+	lavender:  "#6639ba",
+	text:      "#24292f",
+	subtext1:  "#424a53",
+	subtext0:  "#57606a",
+	overlay2:  "#68717c",
+	overlay1:  "#818b98",
+	overlay0:  "#9aa4b0",
+	surface2:  "#afb8c1",
+	surface1:  "#d0d7de",
+	surface0:  "#eaeef2",
+	base:      "#ffffff",
+	mantle:    "#f6f8fa",
+	crust:     "#eaeef2",
+	faintKey:  "overlay2",
+}
+
+var solarizedLight = flavor{
+	id: "solarized-light", label: "Solarized Light", dark: false,
+	rosewater: "#b77b64",
+	flamingo:  "#cb786a",
+	pink:      "#d33682",
+	mauve:     "#6c71c4",
+	red:       "#dc322f",
+	maroon:    "#c75a54",
+	peach:     "#cb4b16",
+	yellow:    "#b58900",
+	green:     "#718600",
+	teal:      "#2aa198",
+	sky:       "#268bd2",
+	sapphire:  "#2176a9",
+	blue:      "#268bd2",
+	lavender:  "#7778b4",
+	text:      "#3c5158",
+	subtext1:  "#52666d",
+	subtext0:  "#657b83",
+	overlay2:  "#70848a",
+	overlay1:  "#839496",
+	overlay0:  "#93a1a1",
+	surface2:  "#b5bcb4",
+	surface1:  "#d6d5c4",
+	surface0:  "#e5e1cf",
+	base:      "#fdf6e3",
+	mantle:    "#eee8d5",
+	crust:     "#e4ddc7",
+	faintKey:  "overlay2",
+}
+
+var rosePineDawn = flavor{
+	id: "rose-pine-dawn", label: "Rosé Pine Dawn", dark: false,
+	rosewater: "#b78280",
+	flamingo:  "#d1958b",
+	pink:      "#b4637a",
+	mauve:     "#907aa9",
+	red:       "#b4637a",
+	maroon:    "#c47585",
+	peach:     "#d7827e",
+	yellow:    "#a87319",
+	green:     "#56836b",
+	teal:      "#56949f",
+	sky:       "#286983",
+	sapphire:  "#437d91",
+	blue:      "#286983",
+	lavender:  "#8b78a0",
+	text:      "#4b485f",
+	subtext1:  "#615d76",
+	subtext0:  "#706b84",
+	overlay2:  "#79738c",
+	overlay1:  "#918b9f",
+	overlay0:  "#a69eaa",
+	surface2:  "#c8bdc4",
+	surface1:  "#dfcfd1",
+	surface0:  "#f2e6e2",
+	base:      "#fffaf3",
+	mantle:    "#faf4ed",
+	crust:     "#f2e9e1",
+	faintKey:  "overlay2",
+}
+
+var gruvboxLight = flavor{
+	id: "gruvbox-light", label: "Gruvbox Light", dark: false,
+	rosewater: "#b57654",
+	flamingo:  "#af6754",
+	pink:      "#b16286",
+	mauve:     "#8f3f71",
+	red:       "#9d0006",
+	maroon:    "#cc241d",
+	peach:     "#af3a03",
+	yellow:    "#b57614",
+	green:     "#79740e",
+	teal:      "#427b58",
+	sky:       "#076678",
+	sapphire:  "#458588",
+	blue:      "#076678",
+	lavender:  "#8f6a88",
+	text:      "#3c3836",
+	subtext1:  "#504945",
+	subtext0:  "#665c54",
+	overlay2:  "#75695e",
+	overlay1:  "#928374",
+	overlay0:  "#a89984",
+	surface2:  "#bdae93",
+	surface1:  "#d5c4a1",
+	surface0:  "#ebdbb2",
+	base:      "#fbf1c7",
+	mantle:    "#f2e5bc",
+	crust:     "#ebd9ac",
+	faintKey:  "overlay2",
+}
+
+var oneLight = flavor{
+	id: "one-light", label: "One Light", dark: false,
+	rosewater: "#ca7860",
+	flamingo:  "#e45649",
+	pink:      "#d52b93",
+	mauve:     "#a626a4",
+	red:       "#e02f44",
+	maroon:    "#c93569",
+	peach:     "#d75f00",
+	yellow:    "#b87500",
+	green:     "#268b3a",
+	teal:      "#008c86",
+	sky:       "#2864f0",
+	sapphire:  "#087bb5",
+	blue:      "#2864f0",
+	lavender:  "#7c42dc",
+	text:      "#282c34",
+	subtext1:  "#434a59",
+	subtext0:  "#586174",
+	overlay2:  "#687287",
+	overlay1:  "#818ba0",
+	overlay0:  "#9aa4b8",
+	surface2:  "#b5bfd4",
+	surface1:  "#d1d9eb",
+	surface0:  "#e5eafb",
+	base:      "#fafbff",
+	mantle:    "#f1f4fb",
+	crust:     "#e5eaf5",
+	faintKey:  "overlay2",
+}
+
 var themeIDs = []string{
 	"lola-midnight",
 	"catppuccin-mocha",
 	"catppuccin-macchiato",
 	"catppuccin-frappe",
 	"catppuccin-latte",
+	"github-light",
+	"solarized-light",
+	"rose-pine-dawn",
+	"gruvbox-light",
+	"one-light",
 }
 
 var flavors = map[string]flavor{
-	midnight.id:  midnight,
-	mocha.id:     mocha,
-	macchiato.id: macchiato,
-	frappe.id:    frappe,
-	latte.id:     latte,
+	midnight.id:       midnight,
+	mocha.id:          mocha,
+	macchiato.id:      macchiato,
+	frappe.id:         frappe,
+	latte.id:          latte,
+	githubLight.id:    githubLight,
+	solarizedLight.id: solarizedLight,
+	rosePineDawn.id:   rosePineDawn,
+	gruvboxLight.id:   gruvboxLight,
+	oneLight.id:       oneLight,
 }
 
 // flavorFor resolves an id to a flavor, falling back to the default for anything
@@ -355,7 +520,7 @@ const accentFill = 0.2
 // same table catppuccin.ts emits, with the SAME contrast walks, so the compiled
 // values match the app. theme.go renames these "--color-*" keys onto the TUI's
 // palette variables. The structural mapping (canvas→mantle, panel→base,
-// sel→surface0, edge→surface1) holds in all four flavors because latte preserves
+// sel→surface0, edge→surface1) holds in all flavors because latte preserves
 // the ordinal meaning of the surface ramp even though it inverts its luminance.
 func toTokens(f flavor) map[string]string {
 	surface := panelBg(f)

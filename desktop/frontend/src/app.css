@@ -1411,7 +1411,7 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 
 /* Shared form chrome: quiet surfaces, normal-weight text, one focus treatment.
    Borderless composers/search boxes keep their containing surface. */
-.lola-field, :is(input, textarea).border, input.sidebar-search {
+.lola-field, :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea).border, input.sidebar-search {
   border: 1px solid color-mix(in srgb, var(--color-edge) 85%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--color-canvas) 78%, var(--color-panel));
@@ -1422,10 +1422,10 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
   transition: border-color 120ms, box-shadow 120ms, background 120ms;
 }
 .lola-field { min-height: 32px; padding: 6px 30px 6px 10px; font-size: 13px; line-height: 18px; cursor: pointer; }
-:is(input, textarea).border { padding: 7px 10px; }
+:is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea).border { padding: 7px 10px; }
 :is(input, textarea)::placeholder { color: var(--color-placeholder); font-weight: 400; letter-spacing: normal; opacity: .85; }
-.lola-field:enabled:hover, :is(input, textarea).border:enabled:hover, input.sidebar-search:hover { border-color: color-mix(in srgb, var(--color-ink-2) 45%, var(--color-edge)); }
-.lola-field:focus, :is(input, textarea).border:focus, input.sidebar-search:focus {
+.lola-field:enabled:hover, :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea).border:enabled:hover, input.sidebar-search:hover { border-color: color-mix(in srgb, var(--color-ink-2) 45%, var(--color-edge)); }
+.lola-field:focus, :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea).border:focus, input.sidebar-search:focus {
   outline: none !important;
   border-color: color-mix(in srgb, var(--color-accent) 65%, var(--color-edge));
   box-shadow: none;
@@ -1437,7 +1437,7 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
   box-shadow: none !important;
   border-color: color-mix(in srgb, var(--color-accent) 65%, var(--color-edge));
 }
-.lola-field:disabled, :is(input, textarea).border:disabled { opacity: .45; cursor: not-allowed; }
+.lola-field:disabled, :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea).border:disabled { opacity: .45; cursor: not-allowed; }
 .lola-select { position: relative; display: block; min-width: 0; width: 100%; }
 .lola-select-caret { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); color: var(--color-faint); }
 .lola-select-menu { position: fixed; z-index: 10000; overflow-y: auto; overscroll-behavior: contain; padding: 4px; border: 1px solid var(--color-edge); border-radius: 8px; background: var(--color-panel); color: var(--color-ink); box-shadow: 0 8px 28px #0005, 0 2px 6px #0003; font: 400 13px/18px var(--font-sans); letter-spacing: normal; }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/svelte";
 import Settings from "./Settings.svelte";
 import { appearance, DEFAULT_THEME_ID, THEME_IDS } from "$lib/theme-runtime.svelte";
@@ -15,15 +15,24 @@ import { nav } from "@mobile/lib/nav.svelte";
 // asserting nothing tried to reach the daemon.
 
 beforeEach(() => {
+  const cache = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => cache.get(key) ?? null,
+    setItem: (key: string, value: string) => cache.set(key, value),
+    removeItem: (key: string) => cache.delete(key),
+    clear: () => cache.clear(),
+  });
   globalThis.localStorage?.clear();
   connection.host = "192.168.10.160";
   connection.port = 7717;
   connection.hasStoredKey = true;
   connection.nameEpoch++;
-  appearance.id = DEFAULT_THEME_ID;
+  appearance.preview({ theme: DEFAULT_THEME_ID, followSystem: false, lightTheme: "github-light", darkTheme: DEFAULT_THEME_ID });
   nav.screen = "sessions";
   nav.tab = "settings";
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("Settings — connection", () => {
   it("names the Mac it is attached to, and the address it reached it on", () => {
@@ -144,7 +153,7 @@ describe("Settings — appearance", () => {
       .getAllByRole("button")
       .filter((b) => b.getAttribute("aria-pressed") === "true");
     expect(pressed).toHaveLength(1);
-    expect(pressed[0].textContent).toContain("Mocha");
+    expect(pressed[0].textContent).toContain("Midnight");
   });
 
   it("applies a flavor and remembers it for the next launch", async () => {
@@ -156,6 +165,17 @@ describe("Settings — appearance", () => {
     // The same key `appearance.init()` reads synchronously on boot, which is
     // what keeps a chosen flavor from flashing the default on every launch.
     expect(globalThis.localStorage?.getItem("lola.theme")).toBe("catppuccin-latte");
+  });
+
+  it("stores the system pair only on this phone", async () => {
+    const commit = vi.spyOn(appearance, "commit");
+    render(Settings);
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Follow system appearance" }));
+    await fireEvent.change(screen.getByLabelText("Light theme"), { target: { value: "one-light" } });
+    expect(appearance.preference.followSystem).toBe(true);
+    expect(JSON.parse(localStorage.getItem("lola.appearance")!).lightTheme).toBe("one-light");
+    expect(commit).not.toHaveBeenCalled();
+    commit.mockRestore();
   });
 
   it("never asks the Mac to change its theme", async () => {

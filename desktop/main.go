@@ -61,6 +61,11 @@ var canvasByTheme = map[string]application.RGBA{
 	"catppuccin-frappe":    application.NewRGB(0x29, 0x2c, 0x3c),
 	"catppuccin-macchiato": application.NewRGB(0x1e, 0x20, 0x30),
 	"catppuccin-mocha":     application.NewRGB(0x18, 0x18, 0x25),
+	"github-light":         application.NewRGB(0xf6, 0xf8, 0xfa),
+	"solarized-light":      application.NewRGB(0xee, 0xe8, 0xd5),
+	"rose-pine-dawn":       application.NewRGB(0xfa, 0xf4, 0xed),
+	"gruvbox-light":        application.NewRGB(0xf2, 0xe5, 0xbc),
+	"one-light":            application.NewRGB(0xf1, 0xf4, 0xfb),
 }
 
 // canvasFor maps a [ui].theme id to its native-window background. An unknown or
@@ -76,13 +81,21 @@ func canvasFor(themeID string) application.RGBA {
 	return canvasByTheme[config.DefaultUITheme]
 }
 
-// windowCanvas resolves the NSWindow background from the CONFIGURED flavor at
-// startup, so the native chrome and the page agree in all four — a fixed literal
-// put a near-black rectangle behind Latte's near-white page. It reads the theme
-// through ConfigService.GetTheme, the same accessor the frontend calls, so there
-// is one resolution rule rather than a second copy of the "" → default fallback.
+func systemIsDark() bool {
+	if app := application.Get(); app != nil {
+		return app.Env.IsDarkMode()
+	}
+	return true
+}
+
+// windowCanvas resolves the configured fixed/system preference for native chrome.
+// The frontend also updates it when the OS changes or a theme is previewed.
 func windowCanvas() application.RGBA {
-	return canvasFor((&ConfigService{}).GetTheme())
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return canvasFor(config.DefaultUITheme)
+	}
+	return canvasFor(cfg.UIThemeFor(systemIsDark()))
 }
 
 // repaintWindowCanvas tracks a runtime flavor switch on the native window:

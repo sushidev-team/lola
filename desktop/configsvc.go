@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -541,14 +542,15 @@ func (s *ConfigService) GetTheme() string {
 // saveConfig path — Validate, then config.Save's atomic temp+rename, then a
 // best-effort daemon reload — so an unknown identifier is rejected here by the
 // same static check the daemon applies, and nothing writes the file directly.
-// An empty name clears the key, which drops the [ui] table and restores
-// config.DefaultUITheme.
+// An empty name clears the fixed theme and restores config.DefaultUITheme;
+// the system-mode choices remain available for later.
 func (s *ConfigService) SetTheme(name string) error {
 	cfg, path, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	cfg.UI.Theme = strings.TrimSpace(name)
+	cfg.UI.FollowSystem = false
 	if err := saveConfig(cfg, path); err != nil {
 		return err
 	}
@@ -558,6 +560,43 @@ func (s *ConfigService) SetTheme(name string) error {
 	// empty (cleared) theme repaints to the default flavor's canvas.
 	repaintWindowCanvas(cfg.UITheme())
 	return nil
+}
+
+// AppearanceDTO keeps a fixed choice alongside the two system-mode choices.
+type AppearanceDTO struct {
+	Theme        string `json:"theme"`
+	FollowSystem bool   `json:"followSystem"`
+	LightTheme   string `json:"lightTheme"`
+	DarkTheme    string `json:"darkTheme"`
+}
+
+func (s *ConfigService) GetAppearance() AppearanceDTO {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		cfg = &config.Config{}
+	}
+	return AppearanceDTO{cfg.UITheme(), cfg.UI.FollowSystem, cfg.UILightTheme(), cfg.UIDarkTheme()}
+}
+
+func (s *ConfigService) SetAppearance(a AppearanceDTO) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.UI = config.UIConfig{Theme: strings.TrimSpace(a.Theme), FollowSystem: a.FollowSystem,
+		LightTheme: strings.TrimSpace(a.LightTheme), DarkTheme: strings.TrimSpace(a.DarkTheme)}
+	if err := saveConfig(cfg, path); err != nil {
+		return err
+	}
+	repaintWindowCanvas(cfg.UIThemeFor(systemIsDark()))
+	return nil
+}
+
+// PreviewTheme updates native chrome only. It never persists an appearance.
+func (s *ConfigService) PreviewTheme(id string) {
+	if slices.Contains(config.UIThemes, id) {
+		repaintWindowCanvas(id)
+	}
 }
 
 // --- project editor ---------------------------------------------------------

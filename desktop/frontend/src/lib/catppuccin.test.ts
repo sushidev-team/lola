@@ -50,6 +50,11 @@ describe("FLAVORS", () => {
       "catppuccin-macchiato",
       "catppuccin-frappe",
       "catppuccin-latte",
+      "github-light",
+      "solarized-light",
+      "rose-pine-dawn",
+      "gruvbox-light",
+      "one-light",
     ]);
     expect(Object.keys(FLAVORS)).toEqual(THEME_IDS);
     expect(DEFAULT_THEME_ID).toBe("lola-midnight");
@@ -71,8 +76,8 @@ describe("FLAVORS", () => {
     }
   });
 
-  it("marks only latte as light", () => {
-    for (const f of flavors) expect(f.dark, f.id).toBe(f.id !== "catppuccin-latte");
+  it("tags all six light palettes for the appearance pickers", () => {
+    expect(flavors.filter(f => !f.dark).map(f => f.id)).toEqual(["catppuccin-latte", "github-light", "solarized-light", "rose-pine-dawn", "gruvbox-light", "one-light"]);
   });
 
   it("keeps the surface ramp ordered so the token mapping stays structural", () => {
@@ -353,8 +358,8 @@ describe("accent legibility", () => {
     // Proof the split is latte-shaped and not a redesign: readable() finds sky
     // already sufficient everywhere else, so mocha/macchiato/frappe render
     // exactly as before and app.css's compiled default does not move.
-    for (const f of flavors)
-      expect(toTokens(f)["--color-accent-ink"] === f.sky, f.id).toBe(f.dark);
+    for (const f of flavors.filter(f => f.dark))
+      expect(toTokens(f)["--color-accent-ink"], f.id).toBe(f.sky);
   });
 
   it("hovering a primary button gains contrast instead of losing it", () => {

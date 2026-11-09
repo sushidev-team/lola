@@ -14,8 +14,7 @@
 //              store flashes a rejection, and a resolve would report success
 //              for something that did not happen.
 //   ABSENT     deliberately not exported, because the shared code already
-//              feature-probes for it and degrades correctly. Only GetTheme and
-//              SetTheme are in this category; see ConfigService below.
+//              feature-probes for it and degrades correctly. Appearance methods are in this category; see ConfigService below.
 //
 // Every DTO type is re-exported from the real generated models, which are pure
 // `export interface` declarations and therefore erased at build time. A DTO is
@@ -657,16 +656,9 @@ export namespace ConfigService {
     return Promise.resolve(true);
   }
 
-  // GetTheme and SetTheme are ABSENT ON PURPOSE, not stubbed.
-  //
-  // `theme-runtime.svelte.ts` reaches them through a lazy import and FEATURE-
-  // PROBES both (`if (typeof svc.GetTheme !== "function") return undefined`),
-  // because they were added to the Go side after the module existed. Leaving
-  // them off is therefore a supported state that the shared code already
-  // handles correctly: the flavor comes from localStorage and the compiled
-  // default, and an attempt to save one throws "this build cannot save a
-  // theme". That is also the right product answer — the phone's theme is the
-  // phone's, and there is no remote command to read the Mac's `[ui].theme`.
+  // GetAppearance/SetAppearance, GetTheme/SetTheme and PreviewTheme are absent.
+  // The shared runtime feature-probes them and uses localStorage on the phone.
+  // Mobile Settings calls commitLocal so it never reads or writes Mac appearance.
 
   /** PLATFORM: `[ui].theme` lives in config.toml on the Mac. */
   export function Themes(): Promise<string[] | null> {

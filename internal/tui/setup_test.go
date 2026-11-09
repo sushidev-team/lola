@@ -131,7 +131,13 @@ func TestSetupGeneralSettingsAreOptionalAndEditable(t *testing.T) {
 	}
 	m.Update(keyMsg("right"))
 	m.Update(keyMsg("enter"))
-	m.Update(keyMsg("right"))
+	// Select a named theme without assuming it immediately follows the default.
+	for range config.UIThemes {
+		m.Update(keyMsg("right"))
+		if m.theme == "catppuccin-latte" {
+			break
+		}
+	}
 	if m.agent != "codex" || m.theme != "catppuccin-latte" {
 		t.Fatal("agent/theme choices did not change")
 	}

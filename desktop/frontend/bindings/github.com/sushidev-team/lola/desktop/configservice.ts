@@ -93,6 +93,10 @@ export function CreateStack(label: string): $CancellablePromise<string> {
     return $Call.ByID(1612967477, label);
 }
 
+export function GetAppearance(): $CancellablePromise<$models.AppearanceDTO> {
+    return $Call.ByID(306832519);
+}
+
 /**
  * GetProject returns the named project's full form state. An empty name is a
  * new project: it starts inheriting everything it can, so a first project picks
@@ -167,6 +171,13 @@ export function MigrateReview(): $CancellablePromise<void> {
  */
 export function PickFolder(start: string): $CancellablePromise<string> {
     return $Call.ByID(549249398, start);
+}
+
+/**
+ * PreviewTheme updates native chrome only. It never persists an appearance.
+ */
+export function PreviewTheme(id: string): $CancellablePromise<void> {
+    return $Call.ByID(3560145554, id);
 }
 
 /**
@@ -312,6 +323,10 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
     return $Call.ByID(298700571, dto);
 }
 
+export function SetAppearance(a: $models.AppearanceDTO): $CancellablePromise<void> {
+    return $Call.ByID(744639971, a);
+}
+
 /**
  * SetGroupCollapsed persists a folder's disclosure state. It lives in
  * config.toml rather than in the web view's storage so the app and a future TUI
@@ -371,8 +386,8 @@ export function SetProjectStack(project: string, stack: string): $CancellablePro
  * saveConfig path — Validate, then config.Save's atomic temp+rename, then a
  * best-effort daemon reload — so an unknown identifier is rejected here by the
  * same static check the daemon applies, and nothing writes the file directly.
- * An empty name clears the key, which drops the [ui] table and restores
- * config.DefaultUITheme.
+ * An empty name clears the fixed theme and restores config.DefaultUITheme;
+ * the system-mode choices remain available for later.
  */
 export function SetTheme(name: string): $CancellablePromise<void> {
     return $Call.ByID(1831643238, name);

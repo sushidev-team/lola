@@ -338,7 +338,10 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
 			// from this flavor (applyTheme) and so does the desktop app, so the
 			// setting was reachable only from the app until this tab existed.
-			{key: "ui_theme", tab: stAppearance, section: "[ui]", sectionNote: "palette shared with lola-desktop", label: "Theme", help: "Catppuccin flavor for the cockpit and every terminal. space/enter cycles; latte is the light one. Applies on save.", kind: sfEnum, options: config.UIThemes, text: cfg.UITheme()},
+			{key: "ui_theme", tab: stAppearance, section: "[ui]", sectionNote: "palette shared with lola-desktop", label: "Theme", help: "Fixed palette for the cockpit and terminals. space/enter cycles. Applies on save.", kind: sfEnum, options: config.UIThemes, text: cfg.UITheme()},
+			{key: "ui_follow_system", tab: stAppearance, label: "Follow system appearance", help: "The desktop follows OS appearance; the TUI follows the terminal background.", kind: sfBool, b: cfg.UI.FollowSystem},
+			{key: "ui_light_theme", tab: stAppearance, label: "Light theme", help: "Palette used for light appearance.", kind: sfEnum, options: themeChoices(false), text: cfg.UILightTheme()},
+			{key: "ui_dark_theme", tab: stAppearance, label: "Dark theme", help: "Palette used for dark appearance.", kind: sfEnum, options: themeChoices(true), text: cfg.UIDarkTheme()},
 
 			// Review — the pluggable provider catalog ([[review.provider]]) — is
 			// GENERATED, one indented subsection per KIND, from
@@ -1652,6 +1655,9 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Remote.DevForward = f.field("remote_dev_forward").b
 
 	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
+	c.UI.FollowSystem = f.field("ui_follow_system").b
+	c.UI.LightTheme = strings.TrimSpace(f.field("ui_light_theme").text)
+	c.UI.DarkTheme = strings.TrimSpace(f.field("ui_dark_theme").text)
 
 	// The review provider catalog replaces the two legacy tables. In catalog
 	// mode the legacy tables MUST stay zero (a non-empty pair alongside a catalog
@@ -2148,4 +2154,15 @@ func (m *rootModel) settingsFormModal() string {
 	}
 	modal := box(title, body, mw, mh, true)
 	return strings.Join(placeModal(m.backdropLines(), modal, W), "\n")
+}
+
+// themeChoices uses config's tags, so a light slot cannot offer a dark palette.
+func themeChoices(dark bool) []string {
+	var ids []string
+	for _, id := range config.UIThemes {
+		if config.UIThemeIsDark(id) == dark {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

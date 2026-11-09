@@ -46,21 +46,22 @@ const (
 )
 
 type rootModel struct {
-	cfgPath   string
-	cfg       *config.Config
-	view      int // viewCockpit | viewHome | viewDetail — the active top-level screen
-	tab       int // legacy tab index; superseded by the unified cockpit (focus)
-	focus     int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
-	home      homeModel
-	detail    detailModel
-	prpick    prPickerModel
-	knowledge knowledgeModel
-	goals     goalsModel
-	ticket    ticketPickerModel
-	list      listModel
-	sessions  sessionsModel
-	form      *formModel
-	settings  *settingsForm // global settings editor modal ('S'); nil otherwise
+	terminalLight bool // unknown terminals retain the dark fallback
+	cfgPath       string
+	cfg           *config.Config
+	view          int // viewCockpit | viewHome | viewDetail — the active top-level screen
+	tab           int // legacy tab index; superseded by the unified cockpit (focus)
+	focus         int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
+	home          homeModel
+	detail        detailModel
+	prpick        prPickerModel
+	knowledge     knowledgeModel
+	goals         goalsModel
+	ticket        ticketPickerModel
+	list          listModel
+	sessions      sessionsModel
+	form          *formModel
+	settings      *settingsForm // global settings editor modal ('S'); nil otherwise
 
 	// Per-session shell tabs, DISCOVERED from the tmux server ("<id>-shell-N"
 	// sessions) so they stay in sync with the desktop app, which attaches to the
@@ -242,9 +243,9 @@ func Run() error {
 		return err
 	}
 	// Paint the palette from [ui].theme before the first frame so the cockpit
-	// comes up in the resolved Catppuccin flavor (mocha by default), matching the
-	// desktop app rather than the historical navy seed.
-	applyTheme(cfg.UITheme())
+	// comes up in its saved theme (Midnight by default). System mode starts dark
+	// until the terminal reports its background.
+	applyTheme(cfg.UIThemeFor(true))
 	// The main screen is the cockpit — all sessions (unscoped) plus the poll/
 	// project rail, exactly as before the project-centric restructure. The
 	// project list (home) and the pickers are drill-ins reached from it (p).
@@ -333,7 +334,7 @@ func explainReloadRejection(msg string) string {
 // ---- tea.Model ----
 
 func (m *rootModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{fetchStatusCmd, fetchProjectsCmd, statusTick()}
+	cmds := []tea.Cmd{fetchStatusCmd, fetchProjectsCmd, statusTick(), tea.RequestBackgroundColor}
 	// Self-managed lifecycle: if no daemon is answering the socket, silently
 	// bring one up on open. A live (or launchd-managed) daemon is left alone.
 	if m.manageDaemon() {
@@ -345,6 +346,12 @@ func (m *rootModel) Init() tea.Cmd {
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.terminalLight = !v.IsDark()
+		if m.cfg != nil && m.cfg.UI.FollowSystem {
+			applyTheme(m.cfg.UIThemeFor(!m.terminalLight))
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
 		m.resizeEmbed()
@@ -393,6 +400,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusTick()
 		}
 		cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
+		if m.cfg != nil && m.cfg.UI.FollowSystem {
+			cmds = append(cmds, tea.RequestBackgroundColor)
+		}
 		if m.view == viewGoals {
 			cmds = append(cmds, m.refreshGoals())
 		}
@@ -630,7 +640,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// [ui].theme may have changed on the Appearance tab; repaint the palette
 			// (and every style derived from it) before the next frame instead of
 			// making the user restart the TUI. reloadConfig already re-read the file.
-			applyTheme(m.cfg.UITheme())
+			applyTheme(m.cfg.UIThemeFor(!m.terminalLight))
 			msg := "settings saved"
 			if note != "" {
 				msg += " — " + note
@@ -1153,7 +1163,7 @@ func (m *rootModel) reloadConfig() {
 		// Repaint the palette in case [ui].theme changed (e.g. the settings form
 		// saved a new flavor); reloadConfig is the shared reload path so this
 		// covers form saves and daemon-driven config rewrites without a restart.
-		applyTheme(cfg.UITheme())
+		applyTheme(cfg.UIThemeFor(!m.terminalLight))
 	}
 	if n := len(m.railProjectPtrs()); m.list.cursor >= n && m.list.cursor > 0 {
 		m.list.cursor = n - 1

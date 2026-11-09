@@ -75,6 +75,7 @@ const {
   ReviewKinds,
   Themes,
   SetTheme,
+  SetAppearance,
   WorkspaceLabels,
   TeamMeta,
   LinearKeyStatus,
@@ -93,6 +94,7 @@ const {
   ReviewKinds: vi.fn(),
   Themes: vi.fn(),
   SetTheme: vi.fn(),
+  SetAppearance: vi.fn(),
   WorkspaceLabels: vi.fn(),
   TeamMeta: vi.fn(),
   LinearKeyStatus: vi.fn(),
@@ -114,6 +116,7 @@ vi.mock("@bindings/desktop", () => ({
     ReviewKinds: () => ReviewKinds(),
     Themes: () => Themes(),
     SetTheme: (name: string) => SetTheme(name),
+    SetAppearance: (value: unknown) => SetAppearance(value),
     LinearKeyStatus: () => LinearKeyStatus(),
     SetLinearKey: (k: string) => SetLinearKey(k),
     ValidateLinearKey: (k: string) => ValidateLinearKey(k),
@@ -237,6 +240,7 @@ describe("SettingsForm", () => {
     );
     Themes.mockReset().mockResolvedValue([...THEME_IDS]);
     SetTheme.mockReset().mockResolvedValue(undefined);
+    SetAppearance.mockReset().mockResolvedValue(undefined);
     TeamMeta.mockReset();
     LinearKeyStatus.mockReset().mockResolvedValue({
       configured: true,
@@ -263,7 +267,7 @@ describe("SettingsForm", () => {
     confirm.cancel(); // the confirm store is a singleton — clear it between tests
     // `appearance` is a module singleton, so a preview would otherwise leak into
     // the next test. Reset it to the persisted-default state the app boots in.
-    appearance.id = DEFAULT_THEME_ID;
+    appearance.preview({ theme: DEFAULT_THEME_ID, followSystem: false, lightTheme: "github-light", darkTheme: DEFAULT_THEME_ID });
     appearance.paint();
   });
 
@@ -1013,15 +1017,15 @@ describe("SettingsForm", () => {
           screen.getByRole("button", { name: new RegExp(label) }),
         ).toBeInTheDocument();
       }
-      // Mocha is DEFAULT_THEME_ID, so it is the live flavor on boot.
-      expect(swatch(/Mocha/)).toHaveAttribute("aria-pressed", "true");
+      // Midnight is DEFAULT_THEME_ID, so it is the live flavor on boot.
+      expect(swatch(/Midnight/)).toHaveAttribute("aria-pressed", "true");
       expect(swatch(/Latte/)).toHaveAttribute("aria-pressed", "false");
       // Each option previews itself: latte's card is painted latte base, not the
       // app's current (mocha) surface, and carries a row of colour chips.
       // (jsdom normalises the hex we write into rgb() when parsing `style`.)
       expect((swatch(/Latte/) as HTMLElement).style.backgroundColor).toBe(
-        "rgb(239, 241, 245)",
-      ); // #eff1f5
+        "rgb(247, 248, 252)",
+      ); // #f7f8fc
       expect(
         swatch(/Latte/).querySelectorAll("span[style*='background']"),
       ).toHaveLength(9);
@@ -1035,11 +1039,35 @@ describe("SettingsForm", () => {
       expect(document.documentElement.dataset.theme).toBe("catppuccin-latte");
       expect(
         document.documentElement.style.getPropertyValue("--color-panel"),
-      ).toBe("#eff1f5");
+      ).toBe("#f7f8fc");
       expect(swatch(/Latte/)).toHaveAttribute("aria-pressed", "true");
       // The point of a preview: config.toml is untouched until save.
       expect(SetTheme).not.toHaveBeenCalled();
       expect(SaveSettings).not.toHaveBeenCalled();
+    });
+
+    it("saves system mode and its separately filtered light/dark choices", async () => {
+      await openAppearance();
+      await fireEvent.click(screen.getByRole("checkbox", { name: "Follow system appearance" }));
+      const light = screen.getByLabelText("Light theme") as HTMLSelectElement;
+      const dark = screen.getByLabelText("Dark theme") as HTMLSelectElement;
+      expect(Array.from(light.options, o => o.value)).not.toContain("lola-midnight");
+      expect(Array.from(dark.options, o => o.value)).not.toContain("one-light");
+      await fireEvent.change(light, { target: { value: "one-light" } });
+      await fireEvent.change(dark, { target: { value: "catppuccin-frappe" } });
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      await waitFor(() => expect(SetAppearance).toHaveBeenCalledWith({ theme: DEFAULT_THEME_ID, followSystem: true, lightTheme: "one-light", darkTheme: "catppuccin-frappe" }));
+      expect(SetTheme).not.toHaveBeenCalled();
+    });
+
+    it("cancel restores the saved system mode and pair", async () => {
+      appearance.preview({ theme: "catppuccin-mocha", followSystem: true, lightTheme: "one-light", darkTheme: "catppuccin-frappe" });
+      const saved = appearance.snapshot();
+      await openAppearance();
+      await fireEvent.change(screen.getByLabelText("Dark theme"), { target: { value: "lola-midnight" } });
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(appearance.snapshot()).toEqual(saved);
+      expect(SetAppearance).not.toHaveBeenCalled();
     });
 
     it("saves the previewed flavor through SetTheme, never as a settings field", async () => {
@@ -1051,7 +1079,7 @@ describe("SettingsForm", () => {
         expect(SetTheme).toHaveBeenCalledWith("catppuccin-frappe"),
       );
       expect(SaveSettings.mock.calls[0][0]).not.toHaveProperty("theme");
-      expect(setFlash).toHaveBeenCalledWith("settings saved", "good");
+      await waitFor(() => expect(setFlash).toHaveBeenCalledWith("settings saved", "good"));
       expect(closeOverlay).toHaveBeenCalledTimes(1);
     });
 

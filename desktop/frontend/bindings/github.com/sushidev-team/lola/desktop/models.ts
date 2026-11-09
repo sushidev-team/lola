@@ -6,6 +6,16 @@
 import * as reviewprofile$0 from "../internal/reviewprofile/models.js";
 
 /**
+ * AppearanceDTO keeps a fixed choice alongside the two system-mode choices.
+ */
+export interface AppearanceDTO {
+    "theme": string;
+    "followSystem": boolean;
+    "lightTheme": string;
+    "darkTheme": string;
+}
+
+/**
  * CLIInfoDTO describes the `lola` CLI this app would run, so the UI can say
  * which binary the daemon comes from instead of leaving it invisible. Bundled
  * reports whether this .app ships a copy at all (a `wails3 dev` build does not),

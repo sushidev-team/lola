@@ -1502,26 +1502,29 @@ opts in with `sandbox = "docker"`.
 
 ### `[ui]` (optional)
 
-**Appearance only** — nothing the daemon does reads this table, so omitting it
-is zero behavior change. One identifier drives the color of **both** surfaces:
-lola-desktop's app chrome, its embedded terminals and the ANSI palette its
-session grid renders pane snapshots with, *and* the TUI cockpit. The two derive
-their semantic colors from the same flavor with the same contrast math, so they
-match — and picking the light flavor (`catppuccin-latte`) lightens the TUI too.
-
-Set it from either surface: the app's **Appearance** settings tab (which
-previews a flavor as you move through the list) or the TUI's `S` → **Appearance**
-tab (which repaints on save). Both write the same key.
+**Appearance only** — this table controls the desktop chrome, embedded terminals,
+pane snapshots and TUI palette. Midnight remains the default. Choose a fixed
+theme or enable **Follow system appearance** and choose separate light and dark
+themes in **Settings → Appearance**. Desktop previews changes until Save;
+Cancel restores your saved choices.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `theme` | string | `lola-midnight` \| `catppuccin-latte` \| `catppuccin-frappe` \| `catppuccin-macchiato` \| `catppuccin-mocha`. Empty or absent uses `lola-midnight`. |
+| `theme` | string | Fixed theme, used when `follow_system` is false. Empty or absent uses `lola-midnight`. |
+| `follow_system` | bool | Follow the device's light/dark appearance. Default `false`. The TUI follows the terminal's reported background; terminals that cannot report it use dark. |
+| `light_theme` | string | Light palette to use in system mode. Empty or absent uses `github-light`. |
+| `dark_theme` | string | Dark palette to use in system mode. Empty or absent uses `lola-midnight`. |
 
-Unlike `[tmux]`, the theme **is** validated: an unrecognized name is rejected at
-load with an error listing the accepted values, rather than silently rendering
-the default — a typo you cannot see is worse than a startup error. A config
-that never sets `[ui]` never grows the table on save, so the default stays a
-default instead of being frozen into your file.
+Light themes: `catppuccin-latte`, `github-light`, `solarized-light`,
+`rose-pine-dawn`, `gruvbox-light`, and the vibrant `one-light`.
+Dark themes: `lola-midnight`, `catppuccin-frappe`, `catppuccin-macchiato`,
+`catppuccin-mocha`. System pickers show only themes with the matching light/dark
+tag, and switch live when the device appearance changes. The phone offers the
+same choices, saved locally on that phone independently of the desktop config.
+
+Unknown theme names and incorrectly tagged system choices are rejected on load.
+A config that never sets `[ui]` never grows the table on save, so the default
+stays a default instead of being frozen into your file.
 
 ### `[[ssh_host]]` (optional)
 

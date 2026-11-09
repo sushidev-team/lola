@@ -1,33 +1,5 @@
-<script lang="ts" module>
-  /**
-   * Where the flavor is remembered on this device.
-   *
-   * IT MIRRORS A PRIVATE CONSTANT — `THEME_CACHE_KEY` in
-   * desktop/frontend/src/lib/theme-runtime.svelte.ts — because that module does
-   * not export it and this project does not edit desktop/. The mirror is
-   * deliberate and its failure mode is stated here so nobody has to work it out
-   * from a symptom: if the desktop ever renames that key, this app forgets the
-   * chosen flavor on the next launch and comes up on the compiled default.
-   * Nothing breaks, no data is lost, and the picker still works — which is why
-   * a mirror is an acceptable price for not forking the runtime.
-   *
-   * WHY WRITE IT AT ALL, rather than calling `appearance.commit()`:
-   *
-   *   * `commit` writes `[ui].theme` in config.toml ON THE MAC. This app is
-   *     read-only about the daemon — PLAN.md's rule — and repainting the
-   *     desktop app and the TUI from a phone is exactly the kind of remote
-   *     write that rule exists to prevent.
-   *   * It could not work anyway: the shim leaves `ConfigService.SetTheme`
-   *     absent ON PURPOSE ("the phone's theme is the phone's"), so `commit`
-   *     throws before it ever reaches the cache.
-   *
-   * `appearance.init()` reads this same key synchronously on boot, which is what
-   * makes the choice survive a relaunch with no flash of the previous flavor.
-   */
-  const THEME_CACHE_KEY = "lola.theme";
-</script>
-
 <script lang="ts">
+  import SystemThemePicker from "$lib/components/SystemThemePicker.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
   import SectionHeader from "@mobile/lib/components/SectionHeader.svelte";
@@ -89,8 +61,8 @@
   /**
    * Apply a flavor: paint it now, remember it for the next launch.
    *
-   * Driving `appearance.id` + `paint()` is the same pair `appearance.init()`
-   * uses, and it is the whole update — Tailwind v4 compiles every utility to a
+   * `commitLocal` resolves the preference and paints it, as `init` does
+   * on startup. It is the whole update — Tailwind v4 compiles every utility to a
    * `var()` against a custom property on :root, so rewriting the properties
    * re-resolves the entire sheet with no component involved. App.svelte's
    * effect on `appearance.flavor` repaints the seven phone-only tokens (the tab
@@ -98,14 +70,7 @@
    * screens rather than a frame behind them.
    */
   function pick(id: ThemeId): void {
-    appearance.id = id;
-    appearance.paint();
-    try {
-      globalThis.localStorage?.setItem(THEME_CACHE_KEY, id);
-    } catch {
-      /* storage disabled or partitioned — a theme is not worth failing over,
-         and the flavor still applies for the life of this launch */
-    }
+    appearance.commitLocal({ ...appearance.snapshot(), theme: id, followSystem: false });
   }
 </script>
 
@@ -204,6 +169,10 @@
 
     <SectionHeader title="Appearance" />
 
+    <div class="px-5 pb-4">
+      <SystemThemePicker value={appearance.snapshot()} onchange={(value) => appearance.commitLocal(value)} />
+    </div>
+    {#if !appearance.preference.followSystem}
     <!-- THE LIST IS THE Go LIST. `THEME_IDS` matches internal/config's UIThemes
          exactly — same order, same spelling — so a flavor added there appears
          here with no edit, and one this app invented would be rejected by
@@ -248,6 +217,7 @@
         {/if}
       </button>
     {/each}
+    {/if}
 
     <p class="copy px-5 pt-3 text-sm text-faint">
       The flavor is stored on this phone. The Mac keeps its own in config.toml, and this app never

@@ -1496,6 +1496,9 @@ func TestSSHPanesLeaveTheTabOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(data.Panes) != 2 || data.Panes[0].Name != "s1" || data.Panes[1].Name != "s1-shell-1" {
+		t.Fatalf("panes = %+v, want the agent and shell only", data.Panes)
+	}
 	for _, p := range data.Panes {
 		if strings.Contains(p.Name, "-ssh-") {
 			t.Fatalf("listed: %+v", p)

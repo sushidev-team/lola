@@ -525,12 +525,19 @@ endpoint = "https://api.linear.app/graphql"
 # identifier, so the two surfaces match. Editable from either: the app's
 # Appearance settings tab, or the TUI's S -> Appearance tab.
 #
-# Only the four values below are accepted — an unknown name is REJECTED at load
+# Only the listed theme ids are accepted — an unknown name is REJECTED at load
 # rather than silently falling back, so a typo tells you instead of quietly
 # rendering the default. Omit the key (or the table) to use "lola-midnight".
 # ---------------------------------------------------------------------------
 # [ui]
-# theme = "lola-midnight"   # lola-midnight | catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+# theme = "lola-midnight"
+# follow_system = false    # desktop: OS appearance; TUI: terminal background
+# light_theme = "github-light"
+# dark_theme = "lola-midnight"
+# Light: catppuccin-latte | github-light | solarized-light | rose-pine-dawn | gruvbox-light | one-light
+# Dark: lola-midnight | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+# System mode switches live and remembers an independent choice for each side.
+# The phone stores its own appearance choices locally.
 
 # ---------------------------------------------------------------------------
 # [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is

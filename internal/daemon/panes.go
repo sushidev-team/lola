@@ -197,7 +197,11 @@ func (d *Daemon) handleShellCreate(ctx context.Context, sessionID string, cols, 
 // ended has no tmux running, and a tab strip asking about it should render
 // nothing rather than an error banner.
 func (d *Daemon) livePaneNames(ctx context.Context) ([]string, error) {
-	sessions, err := d.tmuxClient().ListSessions(ctx)
+	listSessions := d.listTmuxSessions
+	if listSessions == nil {
+		listSessions = d.tmuxClient().ListSessions
+	}
+	sessions, err := listSessions(ctx)
 	if err != nil {
 		return nil, err
 	}

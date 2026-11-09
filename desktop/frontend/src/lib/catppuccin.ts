@@ -1,4 +1,4 @@
-// Lola-tuned Catppuccin palettes and the mapping from their named colors onto
+// Lola-tuned editor palettes and the mapping from their named colors onto
 // lola's existing design-token names. Pure data + pure functions: no DOM, no
 // Svelte, no Wails bindings — so it unit-tests trivially and can be imported
 // from anywhere (the applier, the terminal, the snapshot renderer).
@@ -18,15 +18,25 @@ export type ThemeId =
   | "catppuccin-mocha"
   | "catppuccin-macchiato"
   | "catppuccin-frappe"
-  | "catppuccin-latte";
+  | "catppuccin-latte"
+  | "github-light"
+  | "solarized-light"
+  | "rose-pine-dawn"
+  | "gruvbox-light"
+  | "one-light";
 
-/** Same order and spelling as config.UIThemes (internal/config/ui.go). */
+/** Same membership as config.UIThemes (internal/config/ui.go). */
 export const THEME_IDS: ThemeId[] = [
   "lola-midnight",
   "catppuccin-mocha",
   "catppuccin-macchiato",
   "catppuccin-frappe",
   "catppuccin-latte",
+  "github-light",
+  "solarized-light",
+  "rose-pine-dawn",
+  "gruvbox-light",
+  "one-light",
 ];
 
 export const DEFAULT_THEME_ID: ThemeId = "lola-midnight";
@@ -65,7 +75,7 @@ export interface Flavor extends FlavorColors {
   id: ThemeId;
   /** Human label for the picker. */
   label: string;
-  /** False for latte — drives `color-scheme` and every light/dark decision. */
+  /** False for light palettes — drives `color-scheme` and every light/dark decision. */
   dark: boolean;
   /** ANSI 0–15, tuned with the chrome; bright variants remain distinct. */
   ansi16: readonly string[];
@@ -290,12 +300,214 @@ const midnight: Flavor = {
   cursor: '#7fddea', cursorText: '#121624', selectionBg: '#333c55', selectionFg: '#e6e9f5',
 };
 
+// Light adaptations: upstream hue families mapped to Lola surfaces and roles.
+// Sources and intentional adjustments are documented in DESIGN.md.
+const githubLight: Flavor = {
+  id: "github-light", label: "GitHub Light", dark: false,
+  rosewater: "#bf7064",
+  flamingo: "#d1577a",
+  pink: "#bf3989",
+  mauve: "#8250df",
+  red: "#cf222e",
+  maroon: "#a40e26",
+  peach: "#bc4c00",
+  yellow: "#9a6700",
+  green: "#1a7f37",
+  teal: "#1b7c83",
+  sky: "#0969da",
+  sapphire: "#0550ae",
+  blue: "#0969da",
+  lavender: "#6639ba",
+  text: "#24292f",
+  subtext1: "#424a53",
+  subtext0: "#57606a",
+  overlay2: "#68717c",
+  overlay1: "#818b98",
+  overlay0: "#9aa4b0",
+  surface2: "#afb8c1",
+  surface1: "#d0d7de",
+  surface0: "#eaeef2",
+  base: "#ffffff",
+  mantle: "#f6f8fa",
+  crust: "#eaeef2",
+  ansi16: [
+    "#424a53", "#cf222e", "#1a7f37", "#9a6700",
+    "#0969da", "#8250df", "#1b7c83", "#57606a",
+    "#68717c", "#b01d27", "#166c2f", "#835800",
+    "#0859b9", "#6f44be", "#17696f", "#24292f",
+  ],
+  cursor: "#0969da", cursorText: "#ffffff",
+  selectionBg: "#eaeef2", selectionFg: "#24292f",
+  faintKey: "overlay2",
+};
+
+const solarizedLight: Flavor = {
+  id: "solarized-light", label: "Solarized Light", dark: false,
+  rosewater: "#b77b64",
+  flamingo: "#cb786a",
+  pink: "#d33682",
+  mauve: "#6c71c4",
+  red: "#dc322f",
+  maroon: "#c75a54",
+  peach: "#cb4b16",
+  yellow: "#b58900",
+  green: "#718600",
+  teal: "#2aa198",
+  sky: "#268bd2",
+  sapphire: "#2176a9",
+  blue: "#268bd2",
+  lavender: "#7778b4",
+  text: "#3c5158",
+  subtext1: "#52666d",
+  subtext0: "#657b83",
+  overlay2: "#70848a",
+  overlay1: "#839496",
+  overlay0: "#93a1a1",
+  surface2: "#b5bcb4",
+  surface1: "#d6d5c4",
+  surface0: "#e5e1cf",
+  base: "#fdf6e3",
+  mantle: "#eee8d5",
+  crust: "#e4ddc7",
+  ansi16: [
+    "#52666d", "#dc322f", "#718600", "#b58900",
+    "#268bd2", "#6c71c4", "#2aa198", "#657b83",
+    "#70848a", "#bb2b28", "#607200", "#9a7400",
+    "#2076b3", "#5c60a7", "#248981", "#3c5158",
+  ],
+  cursor: "#268bd2", cursorText: "#fdf6e3",
+  selectionBg: "#e5e1cf", selectionFg: "#3c5158",
+  faintKey: "overlay2",
+};
+
+const rosePineDawn: Flavor = {
+  id: "rose-pine-dawn", label: "Rosé Pine Dawn", dark: false,
+  rosewater: "#b78280",
+  flamingo: "#d1958b",
+  pink: "#b4637a",
+  mauve: "#907aa9",
+  red: "#b4637a",
+  maroon: "#c47585",
+  peach: "#d7827e",
+  yellow: "#a87319",
+  green: "#56836b",
+  teal: "#56949f",
+  sky: "#286983",
+  sapphire: "#437d91",
+  blue: "#286983",
+  lavender: "#8b78a0",
+  text: "#4b485f",
+  subtext1: "#615d76",
+  subtext0: "#706b84",
+  overlay2: "#79738c",
+  overlay1: "#918b9f",
+  overlay0: "#a69eaa",
+  surface2: "#c8bdc4",
+  surface1: "#dfcfd1",
+  surface0: "#f2e6e2",
+  base: "#fffaf3",
+  mantle: "#faf4ed",
+  crust: "#f2e9e1",
+  ansi16: [
+    "#615d76", "#b4637a", "#56836b", "#a87319",
+    "#286983", "#907aa9", "#56949f", "#706b84",
+    "#79738c", "#995468", "#496f5b", "#8f6215",
+    "#22596f", "#7a6890", "#497e87", "#4b485f",
+  ],
+  cursor: "#286983", cursorText: "#fffaf3",
+  selectionBg: "#f2e6e2", selectionFg: "#4b485f",
+  faintKey: "overlay2",
+};
+
+const gruvboxLight: Flavor = {
+  id: "gruvbox-light", label: "Gruvbox Light", dark: false,
+  rosewater: "#b57654",
+  flamingo: "#af6754",
+  pink: "#b16286",
+  mauve: "#8f3f71",
+  red: "#9d0006",
+  maroon: "#cc241d",
+  peach: "#af3a03",
+  yellow: "#b57614",
+  green: "#79740e",
+  teal: "#427b58",
+  sky: "#076678",
+  sapphire: "#458588",
+  blue: "#076678",
+  lavender: "#8f6a88",
+  text: "#3c3836",
+  subtext1: "#504945",
+  subtext0: "#665c54",
+  overlay2: "#75695e",
+  overlay1: "#928374",
+  overlay0: "#a89984",
+  surface2: "#bdae93",
+  surface1: "#d5c4a1",
+  surface0: "#ebdbb2",
+  base: "#fbf1c7",
+  mantle: "#f2e5bc",
+  crust: "#ebd9ac",
+  ansi16: [
+    "#504945", "#9d0006", "#79740e", "#b57614",
+    "#076678", "#8f3f71", "#427b58", "#665c54",
+    "#75695e", "#850005", "#67630c", "#9a6411",
+    "#065766", "#7a3660", "#38694b", "#3c3836",
+  ],
+  cursor: "#076678", cursorText: "#fbf1c7",
+  selectionBg: "#ebdbb2", selectionFg: "#3c3836",
+  faintKey: "overlay2",
+};
+
+const oneLight: Flavor = {
+  id: "one-light", label: "One Light", dark: false,
+  rosewater: "#ca7860",
+  flamingo: "#e45649",
+  pink: "#d52b93",
+  mauve: "#a626a4",
+  red: "#e02f44",
+  maroon: "#c93569",
+  peach: "#d75f00",
+  yellow: "#b87500",
+  green: "#268b3a",
+  teal: "#008c86",
+  sky: "#2864f0",
+  sapphire: "#087bb5",
+  blue: "#2864f0",
+  lavender: "#7c42dc",
+  text: "#282c34",
+  subtext1: "#434a59",
+  subtext0: "#586174",
+  overlay2: "#687287",
+  overlay1: "#818ba0",
+  overlay0: "#9aa4b8",
+  surface2: "#b5bfd4",
+  surface1: "#d1d9eb",
+  surface0: "#e5eafb",
+  base: "#fafbff",
+  mantle: "#f1f4fb",
+  crust: "#e5eaf5",
+  ansi16: [
+    "#434a59", "#e02f44", "#268b3a", "#b87500",
+    "#2864f0", "#a626a4", "#008c86", "#586174",
+    "#687287", "#be283a", "#207631", "#9c6300",
+    "#2255cc", "#8d208b", "#007772", "#282c34",
+  ],
+  cursor: "#2864f0", cursorText: "#fafbff",
+  selectionBg: "#e5eafb", selectionFg: "#282c34",
+  faintKey: "overlay2",
+};
+
 export const FLAVORS: Readonly<Record<ThemeId, Flavor>> = Object.freeze({
   "lola-midnight": Object.freeze(midnight),
   "catppuccin-mocha": Object.freeze(mocha),
   "catppuccin-macchiato": Object.freeze(macchiato),
   "catppuccin-frappe": Object.freeze(frappe),
   "catppuccin-latte": Object.freeze(latte),
+  "github-light": Object.freeze(githubLight),
+  "solarized-light": Object.freeze(solarizedLight),
+  "rose-pine-dawn": Object.freeze(rosePineDawn),
+  "gruvbox-light": Object.freeze(gruvboxLight),
+  "one-light": Object.freeze(oneLight),
 });
 
 /** Resolve an id to a flavor, falling back to the default for anything unknown. */
@@ -484,7 +696,7 @@ export function muted(color: string, ...on: string[]): string {
  * therefore squeezes the accent and its backdrop together — latte's done pill
  * landed at 1.75:1. `mantle` is the surface Catppuccin's accents are designed
  * to be legible against, so it is the only substrate that behaves the same way
- * in all four flavors.
+ * in all flavors.
  */
 export const PILL_TINT = 0.28;
 
@@ -511,7 +723,7 @@ export const ACCENT_FILL = 0.2;
  * (canvas < panel < sel < edge) lines up 1:1 with Catppuccin's
  * (mantle < base < surface0 < surface1), and latte preserves the ordinal
  * meaning of those names even though it inverts their luminance. That is what
- * makes a single table correct for all four flavors.
+ * makes a single table correct for all flavors.
  *
  *   canvas  → mantle     app background, one step BELOW panels
  *   panel   → base       raised surface, and the terminal background — they
