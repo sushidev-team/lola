@@ -17,7 +17,7 @@ func TestAddStackFromFolder(t *testing.T) {
 		{Path: "/src/nori/api", Repo: "acme/api", DefaultBranch: "main"},
 		{Path: "/src/nori/web", Repo: "acme/ignored", DefaultBranch: "ignored"},
 		{Path: "/src/nori/mobile-app", Label: "Mobile App"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("AddStackFromFolder: %v", err)
 	}
@@ -75,12 +75,35 @@ func TestAddStackFromFolderIsAllOrNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := base()
 			before := len(c.Projects)
-			if _, err := c.AddStackFromFolder(tc.label, tc.apps); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := c.AddStackFromFolder(tc.label, tc.apps, nil); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
 			if len(c.Projects) != before || c.ProjectByName("nori") != nil || c.ProjectByName("a") != nil {
 				t.Fatalf("config changed on refusal: %+v", c.Projects)
 			}
 		})
+	}
+}
+
+// canon decides sameness: a project saved under a symlink and the same
+// checkout picked through its real path JOIN rather than being duplicated, and
+// two spellings of one checkout in a single request are refused as a repeat.
+func TestAddStackFromFolderComparesCanonicalPaths(t *testing.T) {
+	canon := func(p string) string { return strings.Replace(p, "/link/", "/real/", 1) }
+	c := &Config{Projects: []Project{{Name: "web", Path: "/link/web"}}}
+	if _, err := c.AddStackFromFolder("Nori", []StackApp{{Path: "/real/web"}}, canon); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Projects) != 2 || c.ProjectByName("web").Stack != "nori" {
+		t.Fatalf("projects = %+v", c.Projects)
+	}
+
+	c = &Config{Projects: []Project{{Name: "other", Kind: ProjectKindStack}, {Name: "web", Path: "/link/web", Stack: "other"}}}
+	if _, err := c.AddStackFromFolder("Nori", []StackApp{{Path: "/real/web"}}, canon); err == nil || !strings.Contains(err.Error(), "already a member") {
+		t.Fatalf("membership of another stack bypassed through a symlink: %v", err)
+	}
+	c = &Config{}
+	if _, err := c.AddStackFromFolder("Nori", []StackApp{{Path: "/real/web"}, {Path: "/link/web"}}, canon); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Fatalf("one checkout under two paths accepted: %v", err)
 	}
 }

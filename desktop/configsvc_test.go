@@ -1103,7 +1103,7 @@ func TestCreateStackFromFolder(t *testing.T) {
 	if st := cfg.ProjectByName(name); st == nil || !st.IsStack() {
 		t.Fatalf("stack = %+v", st)
 	}
-	if api := cfg.ProjectByName("api"); api == nil || api.Stack != name || api.Path != filepath.Join(parent, "api") || api.DefaultBranch != "main" {
+	if api := cfg.ProjectByName("api"); api == nil || api.Stack != name || api.Path != canonicalPath(filepath.Join(parent, "api")) || api.DefaultBranch != "main" {
 		t.Fatalf("api = %+v", api)
 	}
 	if ok := cfg.ProjectByName("okane"); ok.Stack != name {
@@ -1113,5 +1113,49 @@ func TestCreateStackFromFolder(t *testing.T) {
 	// The joined project now reads as blocked for a second stack.
 	if again := s.ScanStackFolder(parent); again.Apps[1].Blocked == "" {
 		t.Fatalf("member of a stack not blocked: %+v", again.Apps[1])
+	}
+}
+
+// A checkout reached through a symlink is the SAME project as its real path,
+// both ways round: the scan marks it configured (and blocked when it is in
+// another stack), and the create joins it instead of adding a duplicate.
+func TestCreateStackFromFolderResolvesSymlinks(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	real := filepath.Join(t.TempDir(), "web")
+	if out, err := exec.Command("git", "init", "-b", "main", real).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	parent := t.TempDir()
+	if err := os.Symlink(real, filepath.Join(parent, "web")); err != nil {
+		t.Fatal(err)
+	}
+	// Configured under the LINK, as a hand-written config might be.
+	link := filepath.Join(parent, "web")
+	path := writeTestConfig(t, "[defaults]\nglobal_cap = 4\n\n[[project]]\nname = \"web\"\npath = \""+link+"\"\n")
+	s := &ConfigService{}
+
+	scan := s.ScanStackFolder(parent)
+	if len(scan.Apps) != 1 || scan.Apps[0].Project != "web" {
+		t.Fatalf("symlinked checkout not matched to its project: %+v", scan.Apps)
+	}
+	name, err := s.CreateStackFromFolder("Nori", scan.Apps)
+	if err != nil {
+		t.Fatalf("CreateStackFromFolder: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(cfg.Projects); n != 2 {
+		t.Fatalf("projects = %d (%+v), want the stack plus the joined web", n, cfg.Projects)
+	}
+	if web := cfg.ProjectByName("web"); web.Stack != name || web.Path != link {
+		t.Fatalf("web = %+v", web)
+	}
+	// Now in a stack: a second stack from the same folder sees it blocked.
+	if again := s.ScanStackFolder(parent); again.Apps[0].Blocked == "" {
+		t.Fatalf("membership bypassed through the symlink: %+v", again.Apps[0])
 	}
 }

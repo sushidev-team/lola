@@ -49,7 +49,9 @@ func (i Inspector) Scan(ctx context.Context, dir string) []Info {
 		if !info.IsRepo || !sameDir(info.Root, child) {
 			continue
 		}
-		info.Root = child // keep the path the human sees, not a resolved symlink
+		// info.Root stays git's RESOLVED root — what InspectPath and the
+		// project forms save — so a symlinked app matches its configured
+		// project instead of being added a second time under another path.
 		out = append(out, info)
 	}
 	return out

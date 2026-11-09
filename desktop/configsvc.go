@@ -1065,10 +1065,7 @@ func (s *ConfigService) ScanStackFolder(path string) StackFolderDTO {
 			DefaultBranch: info.DefaultBranch,
 		}
 		if cfg != nil {
-			for _, p := range cfg.Projects {
-				if p.Path == "" || filepath.Clean(p.Path) != filepath.Clean(info.Root) {
-					continue
-				}
+			if p := cfg.ProjectAtPath(canonicalPath(info.Root), canonicalPath); p != nil {
 				app.Project, app.Label = p.Name, p.DisplayName()
 				switch {
 				case p.IsStack():
@@ -1076,12 +1073,22 @@ func (s *ConfigService) ScanStackFolder(path string) StackFolderDTO {
 				case p.InStack():
 					app.Blocked = "already in stack " + cfg.DisplayNameFor(p.Stack)
 				}
-				break
 			}
 		}
 		out.Apps = append(out.Apps, app)
 	}
 	return out
+}
+
+// canonicalPath is how two checkout paths are compared: symlinks resolved, so a
+// project saved under a link and the same checkout reached through its real
+// path (or the other way round) are one project. An unresolvable path (gone,
+// unreadable) falls back to its cleaned form.
+func canonicalPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 // CreateStackFromFolder creates a stack AND its members in one write (see
@@ -1096,7 +1103,7 @@ func (s *ConfigService) CreateStackFromFolder(label string, apps []StackFolderAp
 	for _, a := range apps {
 		in = append(in, config.StackApp{Path: a.Path, Label: a.Label, Repo: a.Repo, DefaultBranch: a.DefaultBranch})
 	}
-	name, err := cfg.AddStackFromFolder(label, in)
+	name, err := cfg.AddStackFromFolder(label, in, canonicalPath)
 	if err != nil {
 		return "", err
 	}

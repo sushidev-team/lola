@@ -16,6 +16,12 @@ func TestScanListsNestedCheckouts(t *testing.T) {
 		t.Skip("git not installed")
 	}
 	parent := t.TempDir()
+	// git reports the RESOLVED root (macOS: /var is /private/var), and Scan
+	// keeps it, so the expectations are resolved too.
+	resolved, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	initRepo := func(dir, remote string) {
 		t.Helper()
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -42,10 +48,10 @@ func TestScanListsNestedCheckouts(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("Scan = %+v, want api and web", got)
 	}
-	if got[0].Root != filepath.Join(parent, "api") || got[0].Repo != "acme/api" {
+	if got[0].Root != filepath.Join(resolved, "api") || got[0].Repo != "acme/api" {
 		t.Errorf("first = %+v", got[0])
 	}
-	if got[1].Root != filepath.Join(parent, "web") || got[1].Repo != "acme/web" {
+	if got[1].Root != filepath.Join(resolved, "web") || got[1].Repo != "acme/web" {
 		t.Errorf("second = %+v", got[1])
 	}
 
@@ -56,6 +62,16 @@ func TestScanListsNestedCheckouts(t *testing.T) {
 	}
 	if apps := Scan(context.Background(), filepath.Join(parent, "mono")); len(apps) != 0 {
 		t.Fatalf("monorepo subfolders offered as apps: %+v", apps)
+	}
+	// A checkout linked into the parent is listed under its real root.
+	real := t.TempDir()
+	initRepo(filepath.Join(real, "linked"), "git@github.com:acme/linked.git")
+	if err := os.Symlink(filepath.Join(real, "linked"), filepath.Join(parent, "zz-link")); err != nil {
+		t.Fatal(err)
+	}
+	realResolved, _ := filepath.EvalSymlinks(filepath.Join(real, "linked"))
+	if apps := Scan(context.Background(), parent); len(apps) != 4 || apps[3].Root != realResolved {
+		t.Fatalf("symlinked app = %+v, want root %s", apps, realResolved)
 	}
 	if apps := Scan(context.Background(), filepath.Join(parent, "missing")); apps != nil {
 		t.Fatalf("missing dir = %+v", apps)

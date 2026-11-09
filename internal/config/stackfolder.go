@@ -61,12 +61,19 @@ func (c *Config) AddStack(label string) (string, error) {
 // half-built stack (some members added, the rest refused) is worse than asking
 // again. Refused: no apps, an app with no absolute path, the same path twice,
 // and a path already configured as a stack or as a member of another stack.
-func (c *Config) AddStackFromFolder(label string, apps []StackApp) (string, error) {
+//
+// canon maps a path to the form two paths are compared in (the caller
+// resolves symlinks; config itself never touches the filesystem). nil compares
+// cleaned paths only.
+func (c *Config) AddStackFromFolder(label string, apps []StackApp, canon func(string) string) (string, error) {
 	if len(apps) == 0 {
 		return "", errors.New("choose at least one app for the stack")
 	}
 	saved := append([]Project(nil), c.Projects...)
-	name, err := c.addStackFromFolder(label, apps)
+	if canon == nil {
+		canon = filepath.Clean
+	}
+	name, err := c.addStackFromFolder(label, apps, canon)
 	if err != nil {
 		c.Projects = saved
 		return "", err
@@ -74,7 +81,7 @@ func (c *Config) AddStackFromFolder(label string, apps []StackApp) (string, erro
 	return name, nil
 }
 
-func (c *Config) addStackFromFolder(label string, apps []StackApp) (string, error) {
+func (c *Config) addStackFromFolder(label string, apps []StackApp, canon func(string) string) (string, error) {
 	name, err := c.AddStack(label)
 	if err != nil {
 		return "", err
@@ -86,12 +93,13 @@ func (c *Config) addStackFromFolder(label string, apps []StackApp) (string, erro
 			return "", fmt.Errorf("app path must be absolute, got %q", app.Path)
 		}
 		path = filepath.Clean(path)
-		if seen[path] {
+		key := canon(path)
+		if seen[key] {
 			return "", fmt.Errorf("%s is listed twice", path)
 		}
-		seen[path] = true
+		seen[key] = true
 
-		if p := c.projectAtPath(path); p != nil {
+		if p := c.ProjectAtPath(key, canon); p != nil {
 			switch {
 			case p.IsStack():
 				return "", fmt.Errorf("%s is a stack — stacks do not nest", p.DisplayName())
@@ -128,11 +136,15 @@ func (c *Config) addStackFromFolder(label string, apps []StackApp) (string, erro
 	return name, nil
 }
 
-// projectAtPath returns the configured project whose checkout is path, or nil.
-func (c *Config) projectAtPath(path string) *Project {
+// ProjectAtPath returns the configured project whose checkout is key, comparing
+// canon(p.Path) with key (see AddStackFromFolder for canon), or nil.
+func (c *Config) ProjectAtPath(key string, canon func(string) string) *Project {
+	if canon == nil {
+		canon = filepath.Clean
+	}
 	for i := range c.Projects {
 		p := &c.Projects[i]
-		if p.Path != "" && filepath.Clean(p.Path) == path {
+		if p.Path != "" && canon(p.Path) == key {
 			return p
 		}
 	}
