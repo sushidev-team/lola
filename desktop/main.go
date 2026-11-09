@@ -151,9 +151,8 @@ func main() {
 		MinHeight:        560,
 		BackgroundColour: windowCanvas(),
 		Mac: application.MacWindow{
-			// The whole top strip is draggable (the frontend paints a .drag band
-			// across it — the sidebar's brand row plus the main top bar).
-			InvisibleTitleBarHeight: 36,
+			// The frontend owns title-bar dragging and double-click maximise via
+			// --wails-draggable. An invisible native drag band consumes clicks.
 			// Opaque, not vibrancy: the TUI theme is deliberately one cohesive
 			// opaque canvas, so we match it rather than letting the desktop bleed
 			// through.

@@ -38,8 +38,8 @@
   {@attach reflowGridRows}
 >
   <!-- 1. Brand row + window drag band. The pl-[82px] clears the inset traffic
-       lights (InvisibleTitleBarHeight is 36; the lights sit at roughly x 13–73,
-       y 10–26). NOTHING may be placed left of that padding, ever. Every control
+       lights (roughly x 13–73, y 10–26). NOTHING may be placed left of that
+       padding, ever. Every control
        in this row is a real <button>, so app.css's `.no-drag, button, a, input…`
        rule opts it out of the drag region automatically — a clickable <div>
        here would be neither draggable nor reliably clickable. -->

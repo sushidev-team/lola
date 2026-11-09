@@ -229,7 +229,7 @@ body {
 /* The frameless title-bar drag strip (traffic lights are inset). Any element
    with .drag becomes a window-drag handle; interactive children opt out. */
 .drag {
-  -webkit-app-region: drag;
+  --wails-draggable: drag;
 }
 .no-drag,
 button,
@@ -237,7 +237,7 @@ a,
 input,
 textarea,
 select {
-  -webkit-app-region: no-drag;
+  --wails-draggable: no-drag;
 }
 
 /* Thin, theme-matched scrollbars everywhere. */

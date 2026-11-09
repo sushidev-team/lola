@@ -12,7 +12,7 @@
   import Modal from "$lib/components/Modal.svelte";
   import { openShell, newSessionHere } from "$lib/projectActions";
   import { onMount } from "svelte";
-  import { Events } from "@wailsio/runtime";
+  import { Events, Window } from "@wailsio/runtime";
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -52,6 +52,13 @@
   // when none is open. The selection can differ from the open session (ssh.open, a fork), and ⌘.
   // must never stop a session you are not looking at.
   const sel = $derived(store.sessionById(nav.focusedTerm || nav.selectedId));
+
+  function onTitleBarDoubleClick(event: MouseEvent) {
+    if (event.button !== 0 || !(event.target instanceof Element)) return;
+    // Use the same inherited property as Wails so controls and their icons opt out.
+    if (getComputedStyle(event.target).getPropertyValue("--wails-draggable").trim() !== "drag") return;
+    void Window.ToggleMaximise().catch((err) => store.setFlash(String(err), "warn"));
+  }
 
   onMount(() => {
     store.start();
@@ -460,7 +467,7 @@
   }
 </script>
 
-<svelte:window on:keydown={onKey} bind:innerWidth={windowWidth} />
+<svelte:window on:keydown={onKey} on:dblclick={onTitleBarDoubleClick} bind:innerWidth={windowWidth} />
 
 {#if store.configChecked && !store.hasConfig}
   <div class="h-full bg-canvas text-ink">
