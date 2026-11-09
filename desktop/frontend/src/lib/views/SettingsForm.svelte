@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ThemeSwatch from "$lib/components/ThemeSwatch.svelte";
   import SystemThemePicker from "$lib/components/SystemThemePicker.svelte";
   import type { AppearancePreference } from "$lib/appearance";
   import Icon from "$lib/components/Icon.svelte";
@@ -28,7 +29,7 @@
   import type { ReviewKindDTO } from "@bindings/desktop";
   import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, ConnectCodeDTO } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
-  import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
+  import { appearance, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
   import { terms } from "$lib/terms.svelte";
 
   // The bindings hand back a class instance, which $state does NOT deep-proxy —
@@ -1313,33 +1314,7 @@
           {#if !themePreference.followSystem}
           <div class="grid grid-cols-2 gap-2">
             {#each themeIds as id (id)}
-              {@const f = FLAVORS[id]}
-              {@const on = themeId === id}
-              <!-- Each option is drawn in its OWN colours, so the choice is
-                   legible before it is applied. Catppuccin guarantees the
-                   base/text pair's contrast, so this stays readable under
-                   whichever flavor is currently live. -->
-              <button
-                type="button"
-                aria-pressed={on}
-                class="grid gap-2 rounded-lg border p-2.5 text-left {on ? 'ring-2 ring-accent' : ''}"
-                style="background:{f.base};border-color:{on ? f.sky : f.surface1}"
-                onclick={() => previewTheme(id)}
-              >
-                <span class="flex items-baseline gap-2">
-                  <span class="font-medium" style="color:{f.text}">{f.label}</span>
-                  <span class="label ml-auto" style="color:{on ? f.sky : f.overlay1}">
-                    {on ? "selected" : f.dark ? "dark" : "light"}
-                  </span>
-                </span>
-                <!-- The surface ramp first, then the accents lola maps onto
-                     status — the parts of the palette the UI actually spends. -->
-                <span class="grid auto-cols-max grid-flow-col gap-1">
-                  {#each [f.surface0, f.surface2, f.subtext0, f.sky, f.green, f.yellow, f.peach, f.red, f.mauve] as c, i (i)}
-                    <span class="h-3 w-3 rounded-sm" style="background:{c}"></span>
-                  {/each}
-                </span>
-              </button>
+              <ThemeSwatch {id} selected={themeId === id} onclick={() => previewTheme(id)} />
             {/each}
           </div>
           {/if}

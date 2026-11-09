@@ -1049,12 +1049,12 @@ describe("SettingsForm", () => {
     it("saves system mode and its separately filtered light/dark choices", async () => {
       await openAppearance();
       await fireEvent.click(screen.getByRole("checkbox", { name: "Follow system appearance" }));
-      const light = screen.getByLabelText("Light theme") as HTMLSelectElement;
-      const dark = screen.getByLabelText("Dark theme") as HTMLSelectElement;
-      expect(Array.from(light.options, o => o.value)).not.toContain("lola-midnight");
-      expect(Array.from(dark.options, o => o.value)).not.toContain("one-light");
-      await fireEvent.change(light, { target: { value: "one-light" } });
-      await fireEvent.change(dark, { target: { value: "catppuccin-frappe" } });
+      const light = within(screen.getByRole("group", { name: "Light theme" }));
+      const dark = within(screen.getByRole("group", { name: "Dark theme" }));
+      expect(light.queryByRole("button", { name: "Midnight" })).toBeNull();
+      expect(dark.queryByRole("button", { name: "One Light" })).toBeNull();
+      await fireEvent.click(light.getByRole("button", { name: "One Light" }));
+      await fireEvent.click(dark.getByRole("button", { name: "Frappé" }));
       await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
       await waitFor(() => expect(SetAppearance).toHaveBeenCalledWith({ theme: DEFAULT_THEME_ID, followSystem: true, lightTheme: "one-light", darkTheme: "catppuccin-frappe" }));
       expect(SetTheme).not.toHaveBeenCalled();
@@ -1064,7 +1064,7 @@ describe("SettingsForm", () => {
       appearance.preview({ theme: "catppuccin-mocha", followSystem: true, lightTheme: "one-light", darkTheme: "catppuccin-frappe" });
       const saved = appearance.snapshot();
       await openAppearance();
-      await fireEvent.change(screen.getByLabelText("Dark theme"), { target: { value: "lola-midnight" } });
+      await fireEvent.click(within(screen.getByRole("group", { name: "Dark theme" })).getByRole("button", { name: "Midnight" }));
       await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
       expect(appearance.snapshot()).toEqual(saved);
       expect(SetAppearance).not.toHaveBeenCalled();

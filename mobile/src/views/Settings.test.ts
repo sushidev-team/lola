@@ -171,7 +171,7 @@ describe("Settings — appearance", () => {
     const commit = vi.spyOn(appearance, "commit");
     render(Settings);
     await fireEvent.click(screen.getByRole("checkbox", { name: "Follow system appearance" }));
-    await fireEvent.change(screen.getByLabelText("Light theme"), { target: { value: "one-light" } });
+    await fireEvent.click(screen.getByRole("button", { name: "One Light" }));
     expect(appearance.preference.followSystem).toBe(true);
     expect(JSON.parse(localStorage.getItem("lola.appearance")!).lightTheme).toBe("one-light");
     expect(commit).not.toHaveBeenCalled();
