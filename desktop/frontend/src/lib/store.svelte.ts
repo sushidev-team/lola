@@ -4,7 +4,7 @@
 // call `store.kill(id)` — they never touch the bindings directly.
 
 import { Events } from "@wailsio/runtime";
-import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO } from "@bindings/desktop";
+import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO, type StackFolderAppDTO } from "@bindings/desktop";
 import type {
   SessionInfo as ProtocolSessionInfo,
   ProjectInfo as ProtocolProjectInfo,
@@ -388,6 +388,17 @@ class Store {
   /** Creates an empty stack; resolves to its id (undefined on failure). */
   createStack(label: string) {
     return this.act(() => ConfigService.CreateStack(label), "stack created");
+  }
+  /**
+   * Creates a stack AND its members from a parent folder's checkouts in one
+   * write: a new project per app, or the project already configured at that
+   * path joining. Resolves to the stack's id (undefined on failure).
+   */
+  createStackFromFolder(label: string, apps: StackFolderAppDTO[]) {
+    return this.act(
+      () => ConfigService.CreateStackFromFolder(label, apps),
+      `stack created with ${apps.length} app${apps.length === 1 ? "" : "s"}`,
+    );
   }
   /**
    * Moves a project into a stack ("" = out of it). Unlike a folder this is NOT

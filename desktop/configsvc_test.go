@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1062,5 +1063,55 @@ func TestSystemAppearancePersistsAndRejectsWrongTags(t *testing.T) {
 	got := svc.GetAppearance()
 	if got.FollowSystem || got.Theme != "gruvbox-light" || got.LightTheme != want.LightTheme || got.DarkTheme != want.DarkTheme {
 		t.Fatalf("fixed switch lost pair: %+v", got)
+	}
+}
+
+// Creating a stack from a parent folder: the scan marks a checkout that is
+// already a project, and the create adds the rest as members and makes the
+// configured one join, in one write.
+func TestCreateStackFromFolder(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	parent := t.TempDir()
+	for _, app := range []string{"api", "okane"} {
+		dir := filepath.Join(parent, app)
+		if out, err := exec.Command("git", "init", "-b", "main", dir).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+	}
+	okanePath := filepath.Join(parent, "okane")
+	path := writeTestConfig(t, "[defaults]\nglobal_cap = 4\n\n[[project]]\nname = \"okane\"\npath = \""+okanePath+"\"\n")
+	s := &ConfigService{}
+
+	scan := s.ScanStackFolder(parent)
+	if len(scan.Apps) != 2 || scan.SuggestedLabel == "" {
+		t.Fatalf("scan = %+v", scan)
+	}
+	if scan.Apps[0].Project != "" || scan.Apps[1].Project != "okane" || scan.Apps[1].Blocked != "" {
+		t.Fatalf("apps = %+v", scan.Apps)
+	}
+
+	name, err := s.CreateStackFromFolder("Nori", scan.Apps)
+	if err != nil {
+		t.Fatalf("CreateStackFromFolder: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := cfg.ProjectByName(name); st == nil || !st.IsStack() {
+		t.Fatalf("stack = %+v", st)
+	}
+	if api := cfg.ProjectByName("api"); api == nil || api.Stack != name || api.Path != filepath.Join(parent, "api") || api.DefaultBranch != "main" {
+		t.Fatalf("api = %+v", api)
+	}
+	if ok := cfg.ProjectByName("okane"); ok.Stack != name {
+		t.Fatalf("okane did not join: %+v", ok)
+	}
+
+	// The joined project now reads as blocked for a second stack.
+	if again := s.ScanStackFolder(parent); again.Apps[1].Blocked == "" {
+		t.Fatalf("member of a stack not blocked: %+v", again.Apps[1])
 	}
 }

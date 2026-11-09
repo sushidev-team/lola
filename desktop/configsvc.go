@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -1013,26 +1014,92 @@ func (s *ConfigService) CreateStack(label string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	label = strings.TrimSpace(label)
-	name := config.Slug(label)
-	if name == "" {
-		return "", errors.New("stack name is required")
+	name, err := cfg.AddStack(label)
+	if err != nil {
+		return "", err
 	}
-	if cfg.ProjectByName(name) != nil {
-		return "", errors.New("a project named " + name + " already exists")
+	if err := saveConfig(cfg, path); err != nil {
+		return "", err
 	}
-	p := config.Project{Name: name, Kind: config.ProjectKindStack, CycleMode: "none", AssigneeMode: "anyone"}
-	if label != name {
-		p.Label = label
+	return name, nil
+}
+
+// StackFolderDTO is what a picked PARENT folder offers a new stack: a suggested
+// stack name and the checkouts nested directly inside it.
+type StackFolderDTO struct {
+	Path           string              `json:"path"`
+	SuggestedLabel string              `json:"suggestedLabel"`
+	Apps           []StackFolderAppDTO `json:"apps"`
+}
+
+// StackFolderAppDTO is one nested checkout. Project names the project already
+// configured at that path (it JOINS the stack rather than being duplicated);
+// Blocked says why it cannot be included at all (it is a stack, or a member of
+// another one), and the form shows it unchecked and disabled.
+type StackFolderAppDTO struct {
+	Path          string `json:"path"`
+	Label         string `json:"label"`
+	Repo          string `json:"repo"`
+	DefaultBranch string `json:"defaultBranch"`
+	Project       string `json:"project"`
+	Blocked       string `json:"blocked"`
+}
+
+// ScanStackFolder reads every checkout directly inside a parent folder with
+// LOCAL git (gitrepo.Scan), so creating a stack from it fills each member's
+// path, repo and default branch instead of making the user add them one by one.
+func (s *ConfigService) ScanStackFolder(path string) StackFolderDTO {
+	path = strings.TrimSpace(path)
+	out := StackFolderDTO{Path: path, SuggestedLabel: config.LabelFromPath(path), Apps: []StackFolderAppDTO{}}
+	if path == "" {
+		return out
 	}
-	// Inherit every [defaults] key a fresh project would (see GetProject):
-	// the new stack picks up the shared Linear setup.
-	p.Inherits = config.ProjectInherits{
-		Symlinks: true, PostCreate: true, Env: true,
-		MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-		BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cfg, _, _ := loadConfig() // nil config: nothing is marked as configured
+	for _, info := range gitrepo.Scan(ctx, path) {
+		app := StackFolderAppDTO{
+			Path:          info.Root,
+			Label:         config.LabelFromPath(info.Root),
+			Repo:          info.Repo,
+			DefaultBranch: info.DefaultBranch,
+		}
+		if cfg != nil {
+			for _, p := range cfg.Projects {
+				if p.Path == "" || filepath.Clean(p.Path) != filepath.Clean(info.Root) {
+					continue
+				}
+				app.Project, app.Label = p.Name, p.DisplayName()
+				switch {
+				case p.IsStack():
+					app.Blocked = "is a stack"
+				case p.InStack():
+					app.Blocked = "already in stack " + cfg.DisplayNameFor(p.Stack)
+				}
+				break
+			}
+		}
+		out.Apps = append(out.Apps, app)
 	}
-	cfg.Projects = append(cfg.Projects, p)
+	return out
+}
+
+// CreateStackFromFolder creates a stack AND its members in one write (see
+// config.AddStackFromFolder): a new project per app, or the existing one
+// joining. All-or-nothing, so a refusal leaves the config untouched.
+func (s *ConfigService) CreateStackFromFolder(label string, apps []StackFolderAppDTO) (string, error) {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	in := make([]config.StackApp, 0, len(apps))
+	for _, a := range apps {
+		in = append(in, config.StackApp{Path: a.Path, Label: a.Label, Repo: a.Repo, DefaultBranch: a.DefaultBranch})
+	}
+	name, err := cfg.AddStackFromFolder(label, in)
+	if err != nil {
+		return "", err
+	}
 	if err := saveConfig(cfg, path); err != nil {
 		return "", err
 	}

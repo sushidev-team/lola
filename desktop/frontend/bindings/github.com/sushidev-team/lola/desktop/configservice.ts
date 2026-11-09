@@ -93,6 +93,15 @@ export function CreateStack(label: string): $CancellablePromise<string> {
     return $Call.ByID(1612967477, label);
 }
 
+/**
+ * CreateStackFromFolder creates a stack AND its members in one write (see
+ * config.AddStackFromFolder): a new project per app, or the existing one
+ * joining. All-or-nothing, so a refusal leaves the config untouched.
+ */
+export function CreateStackFromFolder(label: string, apps: $models.StackFolderAppDTO[] | null): $CancellablePromise<string> {
+    return $Call.ByID(1223234397, label, apps);
+}
+
 export function GetAppearance(): $CancellablePromise<$models.AppearanceDTO> {
     return $Call.ByID(306832519);
 }
@@ -321,6 +330,15 @@ export function SaveSSHHost(original: string, d: $models.SSHHostDTO): $Cancellab
 
 export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void> {
     return $Call.ByID(298700571, dto);
+}
+
+/**
+ * ScanStackFolder reads every checkout directly inside a parent folder with
+ * LOCAL git (gitrepo.Scan), so creating a stack from it fills each member's
+ * path, repo and default branch instead of making the user add them one by one.
+ */
+export function ScanStackFolder(path: string): $CancellablePromise<$models.StackFolderDTO> {
+    return $Call.ByID(341923786, path);
 }
 
 export function SetAppearance(a: $models.AppearanceDTO): $CancellablePromise<void> {
