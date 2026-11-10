@@ -1413,6 +1413,12 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.WBPRDone = s.WBPRDone || prev.WBPRDone
 				s.WBMergedDone = s.WBMergedDone || prev.WBMergedDone
 				s.WBBlockedDone = s.WBBlockedDone || prev.WBBlockedDone
+				// The hub claim lives only in the record: without it a restart
+				// stops renewing the lease (the hub then re-offers the item to
+				// another device) and never reports the outcome.
+				if s.HubItem.ItemID == "" {
+					s.HubItem = prev.HubItem
+				}
 				s.PR = prev.PR
 				// Carry the whole DELIVERY axis: it is derived from persisted gh
 				// facts the tmux scan knows nothing about. With it, a dead pane

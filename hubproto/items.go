@@ -99,9 +99,11 @@ var (
 	// "zope.interface", rust "serde_json", nuget "Newtonsoft.Json".
 	packageRe = regexp.MustCompile(`^[A-Za-z0-9@][A-Za-z0-9@/._+:-]*$`)
 	versionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]*$`)
-	// ">= 1.0.0, < 1.2.3", "< 4.17.21", "^2.0 || ~3.1", "= 1.0.0-rc.1".
-	rangeRe  = regexp.MustCompile(`^[A-Za-z0-9 .,<>=!~^*|+_-]+$`)
-	branchRe = regexp.MustCompile(`^[A-Za-z0-9@._/+-]+$`)
+	// A range is TOKENS, never prose (see ValidRange): an operator, a version
+	// that starts with a digit (optionally "v"), or the two glued together.
+	rangeOpRe      = regexp.MustCompile(`^(<=|>=|==|!=|~>|~=|<|>|=|~|\^|\*)$`)
+	rangeVersionRe = regexp.MustCompile(`^[vV]?[0-9][A-Za-z0-9.+_*-]*$`)
+	branchRe       = regexp.MustCompile(`^[A-Za-z0-9@._/+-]+$`)
 )
 
 // ValidItemID reports whether s is an acceptable hub item id.
@@ -150,8 +152,7 @@ func (d DepAdvisory) Validate() error {
 	if err := validatePackage(d.Package); err != nil {
 		return err
 	}
-	if len(d.Vulnerable) == 0 || len(d.Vulnerable) > MaxRangeLen || !rangeRe.MatchString(d.Vulnerable) ||
-		strings.TrimSpace(d.Vulnerable) != d.Vulnerable {
+	if !ValidRange(d.Vulnerable) {
 		return invalid("vulnerable", "bad version range")
 	}
 	if d.Fixed != "" && (len(d.Fixed) > MaxVersionLen || !versionRe.MatchString(d.Fixed)) {
@@ -164,6 +165,44 @@ func (d DepAdvisory) Validate() error {
 		return invalid("severity", "unknown")
 	}
 	return nil
+}
+
+// ValidRange reports whether s is a version range made only of range tokens:
+// ">= 1.0.0, < 1.2.3", "< 4.17.21", "^2.0 || ~3.1", "= 1.0.0-rc.1", "*".
+// The range reaches an agent's briefing, so it must not be able to carry a
+// word: s is split on ",", "||" and spaces, and every token must be an
+// operator (< <= > >= = == != ~ ~> ~= ^ *), a version starting with a digit
+// (or "v" and a digit), or an operator glued to such a version. Anything
+// else — a letter-led word, a pipe, a URL — fails.
+func ValidRange(s string) bool {
+	if len(s) == 0 || len(s) > MaxRangeLen || strings.TrimSpace(s) != s {
+		return false
+	}
+	tokens := 0
+	for _, clause := range strings.Split(s, "||") {
+		for _, part := range strings.Split(clause, ",") {
+			for _, tok := range strings.Fields(part) {
+				if !validRangeToken(tok) {
+					return false
+				}
+				tokens++
+			}
+		}
+	}
+	return tokens > 0
+}
+
+func validRangeToken(tok string) bool {
+	if rangeOpRe.MatchString(tok) || rangeVersionRe.MatchString(tok) {
+		return true
+	}
+	// An operator glued to its version: the longest operator prefix first.
+	for _, op := range []string{"<=", ">=", "==", "!=", "~>", "~=", "<", ">", "=", "~", "^"} {
+		if rest, ok := strings.CutPrefix(tok, op); ok {
+			return rangeVersionRe.MatchString(rest)
+		}
+	}
+	return false
 }
 
 // validateAdvisory applies the design's advisory pattern, plus one rule the

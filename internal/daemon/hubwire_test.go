@@ -2,7 +2,10 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +15,7 @@ import (
 	"github.com/sushidev-team/lola/hubproto"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/hub"
+	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
@@ -152,6 +156,14 @@ func hubFixture(t *testing.T) (*Daemon, *fakeHub, *fakeNative) {
 		return fh, hub.Identity{URL: url, DeviceID: "dev", Org: "acme"}, nil
 	}
 	d.hub.collect = func(context.Context, []string) hub.Result { return hub.Result{} }
+	// GitHub confirms every offer as offered; a red bump PR's head is "aaa".
+	d.hub.verify = func(_ context.Context, it hubproto.Item) (hub.Verified, error) {
+		v := hub.Verified{Item: it}
+		if it.Kind == hubproto.KindRedBumpPR {
+			v.Head = "aaa"
+		}
+		return v, nil
+	}
 	return d, fh, nat
 }
 
@@ -518,5 +530,260 @@ func TestHubStatusCommand(t *testing.T) {
 	if !st.Enabled || !st.Joined || st.Org != "acme" || st.Device != "dev" || st.ClaimsToday != 1 ||
 		st.MaxClaimsPerDay != 4 || st.LastHeartbeat.IsZero() || len(st.Sessions) != 1 || st.Sessions[0].ItemID != "it1" {
 		t.Fatalf("status = %+v", st)
+	}
+}
+
+// ---- review fixes ----------------------------------------------------------
+
+func TestHubUnconfirmedOfferIsNotClaimed(t *testing.T) {
+	for _, it := range []hubproto.Item{advisoryItem("it1"), bumpItem("it2")} {
+		d, fh, nat := hubFixture(t)
+		d.hub.verify = func(context.Context, hubproto.Item) (hub.Verified, error) {
+			return hub.Verified{}, hub.ErrNotConfirmed
+		}
+		fh.offers = []hubproto.Item{it}
+		d.hubCycle(context.Background())
+		if got := fh.snapshot(); len(got.claims) != 0 || len(nat.prAgents)+len(nat.manualAgents) != 0 {
+			t.Fatalf("%s: claimed an offer GitHub did not confirm: %+v", it.Kind, got.claims)
+		}
+		if n := d.hubClaimsToday(time.Now()); n != 0 {
+			t.Errorf("%s: claims today = %d", it.Kind, n)
+		}
+	}
+}
+
+func TestHubRedBumpOnMainIsRefused(t *testing.T) {
+	d, fh, nat := hubFixture(t)
+	evil := bumpItem("it2")
+	evil.RedBumpPR.Branch = "main"
+	// GitHub says the PR's branch is the bot's, not main.
+	d.hub.verify = func(_ context.Context, it hubproto.Item) (hub.Verified, error) {
+		return hub.Verified{Item: bumpItem(it.ID), Head: "aaa"}, nil
+	}
+	fh.offers = []hubproto.Item{evil}
+	d.hubCycle(context.Background())
+	if len(fh.snapshot().claims) != 0 || len(nat.prAgents) != 0 {
+		t.Fatalf("a branch GitHub does not confirm was claimed: %+v", nat.prAgents)
+	}
+	// No head commit from GitHub refuses too.
+	d.hub.verify = func(_ context.Context, it hubproto.Item) (hub.Verified, error) {
+		return hub.Verified{Item: it}, nil
+	}
+	fh.offers = []hubproto.Item{bumpItem("it3")}
+	d.hubCycle(context.Background())
+	if len(fh.snapshot().claims) != 0 {
+		t.Fatal("claimed a red bump PR with no verified head")
+	}
+}
+
+func TestHubAdvisoryBriefedFromGitHubsAlert(t *testing.T) {
+	d, fh, nat := hubFixture(t)
+	offered := advisoryItem("it1")
+	offered.DepAdvisory.Fixed = "99.0.0"
+	d.hub.verify = func(_ context.Context, it hubproto.Item) (hub.Verified, error) {
+		return hub.Verified{Item: advisoryItem(it.ID)}, nil // GitHub: fixed in 4.17.21
+	}
+	fh.offers = []hubproto.Item{offered}
+	d.hubCycle(context.Background())
+	if len(nat.manualAgents) != 1 {
+		t.Fatalf("spawns = %+v", nat.manualAgents)
+	}
+	if p := nat.manualAgents[0].prompt; strings.Contains(p, "99.0.0") || !strings.Contains(p, "4.17.21") {
+		t.Errorf("briefing must carry GitHub's fixed version:\n%s", p)
+	}
+}
+
+func TestHubRedBumpStartHeadStampedAtClaim(t *testing.T) {
+	d, fh, _ := hubFixture(t)
+	fh.offers = []hubproto.Item{bumpItem("it2")}
+	d.hubCycle(context.Background())
+	ss := hubSessions(d)
+	if len(ss) != 1 || ss[0].HubItem.StartHead != "aaa" {
+		t.Fatalf("start head = %+v", ss)
+	}
+	// The first head lola ever sees is already the agent's push (the hub was
+	// unreachable meanwhile): it still counts as moved.
+	d.sessions.Update(ss[0].ID, func(s *session.Session) bool {
+		s.PR = &scm.PR{Number: 42, URL: "https://github.com/acme/widgets/pull/42", State: "OPEN", HeadSHA: "bbb"}
+		s.SetDelivery(state.DeliveryReviewPending, time.Now())
+		return true
+	})
+	d.hubOutcomeCycle(context.Background())
+	if n := len(fh.snapshot().completes); n != 1 {
+		t.Fatalf("completes = %d, want 1", n)
+	}
+}
+
+func TestHubRedBumpTeardownOutcomes(t *testing.T) {
+	cases := []struct {
+		name  string
+		head  string
+		del   state.DeliveryState
+		agent state.AgentState
+		want  hubproto.FailReason
+	}{
+		{"unmoved red, person stopped", "aaa", state.DeliveryCIFailed, state.AgentWorking, hubproto.FailRefused},
+		{"unmoved red, agent died", "aaa", state.DeliveryCIFailed, state.AgentDead, hubproto.FailAgent},
+		{"unmoved green", "aaa", state.DeliveryReviewPending, state.AgentWorking, hubproto.FailObsolete},
+		{"moved red", "bbb", state.DeliveryCIFailed, state.AgentWorking, hubproto.FailCI},
+	}
+	for _, c := range cases {
+		s := session.Session{ID: "x", Repo: "acme/widgets",
+			HubItem: session.HubWork{ItemID: "it2", Kind: string(hubproto.KindRedBumpPR), StartHead: "aaa"},
+			PR:      &scm.PR{Number: 42, URL: "https://github.com/acme/widgets/pull/42", State: "OPEN", HeadSHA: c.head}}
+		s.EnsureAxes()
+		s.SetAgentState(c.agent, "", time.Now())
+		s.SetDelivery(c.del, time.Now())
+		o, ok := hubOutcomeFor(s, true)
+		if !ok || o.Action != hubActFail || o.Reason != string(c.want) {
+			t.Errorf("%s: outcome = %+v, want fail:%s", c.name, o, c.want)
+		}
+	}
+	// No start head at all and still red: never not_reproducible.
+	s := session.Session{ID: "x", Repo: "acme/widgets",
+		HubItem: session.HubWork{ItemID: "it2", Kind: string(hubproto.KindRedBumpPR)},
+		PR:      &scm.PR{Number: 42, URL: "https://github.com/acme/widgets/pull/42", State: "OPEN", HeadSHA: "aaa"}}
+	s.EnsureAxes()
+	s.SetDelivery(state.DeliveryCIFailed, time.Now())
+	if o, _ := hubOutcomeFor(s, true); o.Reason == string(hubproto.FailObsolete) {
+		t.Errorf("unknown start head reported not_reproducible: %+v", o)
+	}
+}
+
+func TestHubAdoptionKeepsHubItem(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	prev := nativeSess("FE-1", "working")
+	work := session.HubWork{ItemID: "it1", Kind: "red_bump_pr", ClaimedAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
+		StartHead: "aaa", Reported: "complete", LeaseLost: true}
+	prev.HubItem = work
+	d.sessions.Upsert(prev)
+	d.native = &fakeNative{adopted: []session.Session{
+		{ID: prev.ID, Source: "native", Project: "p1", Issue: "FE-1", TmuxName: prev.ID, Status: "working"},
+	}}
+	d.adoptNativeSessions(context.Background())
+	got := findSession(t, d.sessions.Snapshot(), prev.ID)
+	if got.HubItem.ItemID != work.ItemID || got.HubItem.StartHead != "aaa" || got.HubItem.Reported != "complete" ||
+		!got.HubItem.LeaseLost || !got.HubItem.ClaimedAt.Equal(work.ClaimedAt) {
+		t.Fatalf("hub claim lost across adoption: %+v", got.HubItem)
+	}
+}
+
+func TestHubReclaimReportsAgainAndDropsStaleRelease(t *testing.T) {
+	d, fh, _ := hubFixture(t)
+	t0 := time.Now().Add(-time.Hour)
+	// An earlier claim of it1: its release still waits, and an even earlier
+	// claim of it1 already settled.
+	d.hubEnqueue(hubOutcome{ItemID: "it1", ClaimedAt: t0, Action: hubActRelease, Since: t0})
+	d.hub.mu.Lock()
+	d.hub.st.Settled = append(d.hub.st.Settled, hubOutcome{ItemID: "it1", ClaimedAt: t0.Add(-time.Hour)}.key())
+	d.hub.mu.Unlock()
+	fh.mu.Lock()
+	fh.outErr = &hub.APIError{Status: 503}
+	fh.offers = []hubproto.Item{advisoryItem("it1")}
+	fh.mu.Unlock()
+	d.hubCycle(context.Background()) // the release fails (503), then it1 is claimed again
+	fh.mu.Lock()
+	fh.outErr, fh.offers = nil, nil
+	relBefore := len(fh.releases)
+	fh.mu.Unlock()
+	d.hubOutcomeCycle(context.Background())
+	if got := fh.snapshot(); len(got.releases) != relBefore {
+		t.Fatalf("a stale release of an earlier claim was sent after the re-claim: %v", got.releases)
+	}
+	// The new claim's outcome is reported, not swallowed by the old settle.
+	id := hubSessions(d)[0].ID
+	d.sessions.Update(id, func(s *session.Session) bool {
+		s.PR = &scm.PR{Number: 7, URL: "https://github.com/acme/widgets/pull/7", State: "OPEN"}
+		s.SetDelivery(state.DeliveryCIPending, time.Now())
+		return true
+	})
+	d.hubOutcomeCycle(context.Background())
+	if n := len(fh.snapshot().completes); n != 1 {
+		t.Fatalf("completes = %d, want 1", n)
+	}
+}
+
+func TestHubStoppedItemIsNotReclaimed(t *testing.T) {
+	d, fh, _ := hubFixture(t)
+	fh.offers = []hubproto.Item{advisoryItem("it1")}
+	d.hubCycle(context.Background())
+	d.dropSession(hubSessions(d)[0]) // a person stopped it: fail:refused
+	d.hubCycle(context.Background()) // the hub re-offers it at once
+	if got := fh.snapshot(); len(got.claims) != 1 {
+		t.Fatalf("a stopped item was claimed again: %v", got.claims)
+	}
+	later := time.Now().Add(hubCooldown + time.Minute)
+	d.hub.now = func() time.Time { return later }
+	d.hubCycle(context.Background())
+	if got := fh.snapshot(); len(got.claims) != 2 {
+		t.Fatalf("after the cooldown the item is claimable again: %v", got.claims)
+	}
+}
+
+func TestHubUnsentOutcomeKeepsLeaseRenewed(t *testing.T) {
+	d, fh, _ := hubFixture(t)
+	fh.offers = []hubproto.Item{advisoryItem("it1")}
+	d.hubCycle(context.Background())
+	fh.mu.Lock()
+	fh.offers, fh.outErr = nil, &hub.APIError{Status: 502}
+	fh.mu.Unlock()
+	id := hubSessions(d)[0].ID
+	d.sessions.Update(id, func(s *session.Session) bool {
+		s.PR = &scm.PR{Number: 7, URL: "https://github.com/acme/widgets/pull/7", State: "OPEN"}
+		s.SetDelivery(state.DeliveryCIPending, time.Now())
+		return true
+	})
+	d.hubCycle(context.Background())
+	got := fh.snapshot()
+	if len(got.completes) != 1 {
+		t.Fatalf("completes = %d", len(got.completes))
+	}
+	if s, _ := d.sessions.Get(id); s.HubItem.Reported != "complete" {
+		t.Fatalf("guard = %q", s.HubItem.Reported)
+	}
+	d.hubCycle(context.Background())
+	if lv := fh.snapshot().beats[2].LiveLeases; !slices.Equal(lv, []string{"it1"}) {
+		t.Errorf("a lease with an unsent outcome must stay renewed, live = %v", lv)
+	}
+}
+
+func TestHubTerminalRetriesProxyThrottling(t *testing.T) {
+	for _, st := range []int{408, 429} {
+		if hubTerminal(&hub.APIError{Status: st}) {
+			t.Errorf("status %d without a code must be retried", st)
+		}
+	}
+	if !hubTerminal(&hub.APIError{Status: 409, Code: hubproto.CodeLeaseLost}) {
+		t.Error("409 lease_lost is final")
+	}
+}
+
+func TestHubPolicyVersionFromStoreAfterRestart(t *testing.T) {
+	d, _, _ := hubFixture(t)
+	pub, priv, err := hubproto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := hubproto.SignPolicy(priv, "k1", hubproto.Policy{Org: "acme", Version: 5, IssuedAt: time.Now().UTC().Truncate(time.Second),
+		Settings: hubproto.Settings{EscalateAfter: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(hub.StoredPolicy{Policy: p, VerifiedAt: time.Now()})
+	if err := os.MkdirAll(d.hubDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.hubDir(), hub.PolicyFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.cfg.Hub.TrustedPolicyKeys = map[string]string{"k1": hubproto.EncodePublicKey(pub)}
+	// A fetch was made recently (before the restart): none is due now.
+	d.hub.mu.Lock()
+	d.hub.loaded = true
+	d.hub.st.PolicyAt = time.Now()
+	d.hub.mu.Unlock()
+	d.hubCycle(context.Background())
+	if v := d.hubStatusData().PolicyVersion; v != 5 {
+		t.Errorf("policy version = %d, want the stored 5", v)
 	}
 }

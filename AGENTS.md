@@ -1064,6 +1064,15 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     and then exactly a Linear dispatch's gates in its order — `dispatchHold`,
     the health gate, `reserveSlots` — all BEFORE the claim. Nothing is claimed
     while the heartbeat fails or the config failed validation.
+  - An offer is the hub's CLAIM about a repo, so it is re-read from GitHub
+    before the claim (`hub.Collector.Verify`, fail closed): a `red_bump_pr`
+    must be OPEN, by the named bot, not cross-repository, on exactly the named
+    branch and still failing; a `dep_advisory` must match an open Dependabot
+    alert (advisory + package + ecosystem). The session — branch, briefing,
+    `StartHead` — is built from GitHub's answer. Without this a compromised hub
+    could have every member's agent push to `main` or install a version it
+    chose. An item ended here without completing is not re-claimed for
+    `hubCooldown`.
   - The hub never writes a prompt. The agent gets `hub.Briefing`, lola's
     template over fields `hubproto.Validate` checked, through the SAME launch
     paths a human uses: `OpenManualAgent` (new branch) for `dep_advisory`,
@@ -1073,11 +1082,16 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     (the item is released) — or a broken project claims it every cycle.
   - The hub never stops a session. A lost lease sets `HubItem.LeaseLost`, logs,
     and ends renewal and reporting; the agent keeps working.
-  - Outcomes are one-shot (`HubItem.Reported`, stamped before the request) and
-    ride a persisted outbox (`state/hub-daemon.json`) with a settled list, so a
-    crash or a down hub neither repeats nor loses one; teardown (`dropSession`)
-    only queues and nudges, it never waits on the network. A `red_bump_pr`
-    completes only once the PR head moved past the one first seen AND is green.
+  - Outcomes are one-shot PER CLAIM (item id + claim time): queued in a
+    persisted outbox (`state/hub-daemon.json`) FIRST, then `HubItem.Reported`
+    is stamped, with a settled list keyed the same way, so a crash or a down
+    hub neither repeats nor loses one; a re-claim drops whatever an older claim
+    left queued (a stale release would free the new lease). A lease whose
+    outcome is still unsent keeps being renewed. Teardown (`dropSession`) only
+    queues and nudges, it never waits on the network. A `red_bump_pr`
+    completes only once the PR head moved past the one GitHub showed at claim
+    AND is green; an unmoved, still-red one ends as refused / agent_gave_up,
+    never not_reproducible. `HubItem` survives adoption.
   - Only what the protocol names leaves the machine: repo slugs, validated
     findings, item ids, a PR URL and a delivery word — never a session id, path
     or pane text. The policy is verified against locally pinned keys and is

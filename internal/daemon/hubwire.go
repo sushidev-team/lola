@@ -23,9 +23,18 @@ package daemon
 //     broken project would claim and release the same item every cycle.
 //   - The hub never stops a session. A lost lease is logged and recorded on
 //     the session; the agent keeps working and lola stops reporting for it.
-//   - Outcomes are one-shot. The guard (HubWork.Reported) is stamped before
-//     the request and the request itself rides a persisted outbox, so a crash
-//     or an unreachable hub neither repeats nor loses one.
+//   - An offer is the hub's CLAIM about a repository. Before the claim the
+//     daemon re-reads it from GitHub (hub.Collector.Verify): a red bump PR
+//     must be open, by the named bot, from the same repository and on the
+//     named branch; an advisory must match an open Dependabot alert. The
+//     session is built from GitHub's answer, never the hub's fields.
+//   - Outcomes are one-shot, per CLAIM (item id + claim time): the outcome is
+//     persisted in the outbox FIRST, then the guard (HubWork.Reported) is
+//     stamped, so a crash neither loses one nor (the outbox dedups by claim)
+//     repeats it. A re-claim of the same item purges what an older claim left
+//     queued, so a stale release can never free the new lease.
+//   - An item this machine ended locally (a person stopped it, the agent gave
+//     up) is not claimed again for hubCooldown.
 //   - Shutdown-shielded and panic-guarded like the observer: the cycle runs on
 //     context.WithoutCancel, every request is bounded by the client's timeout,
 //     every gh call by the collector's, a spawn by nativeSpawnTimeout.
@@ -69,6 +78,10 @@ const (
 	hubStateFile = "hub-daemon.json"
 	// hubMaxOutbox bounds the outbox; the oldest entries go first.
 	hubMaxOutbox = 256
+	// hubCooldown is how long an item this machine ended without completing
+	// it stays unclaimable here, so a person who stopped a chore does not get
+	// it back on the next cycle.
+	hubCooldown = 24 * time.Hour
 )
 
 // Outcome actions in the outbox.
@@ -127,13 +140,22 @@ func newRealHubClient(url, dir string) (hubAPI, hub.Identity, error) {
 
 // hubOutcome is one queued report for the hub.
 type hubOutcome struct {
-	ItemID   string    `json:"item_id"`
-	Action   string    `json:"action"`
-	Reason   string    `json:"reason,omitempty"`
-	PRURL    string    `json:"pr_url,omitempty"`
-	Delivery string    `json:"delivery,omitempty"`
-	Since    time.Time `json:"since"`
-	Tries    int       `json:"tries,omitempty"`
+	ItemID string `json:"item_id"`
+	// ClaimedAt identifies the CLAIM the outcome belongs to: the hub may
+	// reopen an item and this daemon claim it again, and the second claim's
+	// outcome must not be mistaken for the first's.
+	ClaimedAt time.Time `json:"claimed_at,omitzero"`
+	Action    string    `json:"action"`
+	Reason    string    `json:"reason,omitempty"`
+	PRURL     string    `json:"pr_url,omitempty"`
+	Delivery  string    `json:"delivery,omitempty"`
+	Since     time.Time `json:"since"`
+	Tries     int       `json:"tries,omitempty"`
+}
+
+// key is the outcome's claim identity: one outcome per claim.
+func (o hubOutcome) key() string {
+	return fmt.Sprintf("%s@%d", o.ItemID, o.ClaimedAt.UnixNano())
 }
 
 // hubPersisted is hub-daemon.json.
@@ -147,10 +169,13 @@ type hubPersisted struct {
 	PolicyAt time.Time `json:"policy_at,omitzero"`
 	// Outbox holds outcomes not yet acknowledged by the hub.
 	Outbox []hubOutcome `json:"outbox,omitempty"`
-	// Settled are the item ids whose outcome left the outbox (sent, refused
-	// for good or expired), newest last: a second end signal for the same item
-	// must not report it again.
+	// Settled are the claim keys (hubOutcome.key) whose outcome left the
+	// outbox (sent, refused for good or expired), newest last: a second end
+	// signal for the same claim must not report it again.
 	Settled []string `json:"settled,omitempty"`
+	// Cooldown holds item ids this machine ended without completing, with
+	// when; hubTryClaim skips them for hubCooldown.
+	Cooldown map[string]time.Time `json:"cooldown,omitempty"`
 }
 
 // hubWire is the loop's state. Its own lock; never held while taking d.mu or
@@ -159,7 +184,9 @@ type hubWire struct {
 	// Seams (tests replace them).
 	newClient func(url, dir string) (hubAPI, hub.Identity, error)
 	collect   func(ctx context.Context, repos []string) hub.Result
-	now       func() time.Time
+	// verify re-reads an offer from GitHub before it is claimed.
+	verify func(ctx context.Context, it hubproto.Item) (hub.Verified, error)
+	now    func() time.Time
 
 	// full wakes the loop for a whole cycle (reload, join); outcomes wakes it
 	// for the outbox + outcome pass only (a delivery change, a teardown).
@@ -176,6 +203,9 @@ type hubWire struct {
 	lastErr  string
 	lastErrT time.Time
 	policyV  int
+	// policyRead: the stored policy was read once for status, so a restart
+	// shows its version before the next fetch is due.
+	policyRead bool
 }
 
 func newHubWire() *hubWire {
@@ -183,6 +213,7 @@ func newHubWire() *hubWire {
 	return &hubWire{
 		newClient: newRealHubClient,
 		collect:   col.Collect,
+		verify:    col.Verify,
 		now:       time.Now,
 		full:      make(chan struct{}, 1),
 		outcomes:  make(chan struct{}, 1),
@@ -298,12 +329,13 @@ func (d *Daemon) hubEnqueue(o hubOutcome) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	d.hubLoadLocked()
+	k := o.key()
 	for _, q := range w.st.Outbox {
-		if q.ItemID == o.ItemID {
-			return // one outcome per item
+		if q.key() == k {
+			return // one outcome per claim
 		}
 	}
-	if slices.Contains(w.st.Settled, o.ItemID) {
+	if slices.Contains(w.st.Settled, k) {
 		return
 	}
 	w.st.Outbox = append(w.st.Outbox, o)
@@ -313,6 +345,77 @@ func (d *Daemon) hubEnqueue(o hubOutcome) {
 	if err := d.hubSaveLocked(); err != nil {
 		d.logf("", "hub: persist outbox: %v", err)
 	}
+}
+
+// hubForgetClaims drops everything an OLDER claim of id left behind: a queued
+// outcome (a stale release sent now would free the new lease) and its settled
+// mark. Called right after a successful claim, before the spawn.
+func (d *Daemon) hubForgetClaims(id string, claimedAt time.Time) {
+	w := d.hub
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	d.hubLoadLocked()
+	keep := w.st.Outbox[:0:0]
+	for _, o := range w.st.Outbox {
+		if o.ItemID != id || o.ClaimedAt.Equal(claimedAt) {
+			keep = append(keep, o)
+		}
+	}
+	dropped := len(w.st.Outbox) - len(keep)
+	w.st.Outbox = keep
+	if dropped > 0 {
+		d.logf("", "hub: re-claimed item %s; dropped %d outcome(s) of an earlier claim", id, dropped)
+		if err := d.hubSaveLocked(); err != nil {
+			d.logf("", "hub: persist outbox: %v", err)
+		}
+	}
+}
+
+// hubCoolDown marks id as ended here without completion.
+func (d *Daemon) hubCoolDown(id string, now time.Time) {
+	w := d.hub
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	d.hubLoadLocked()
+	if w.st.Cooldown == nil {
+		w.st.Cooldown = map[string]time.Time{}
+	}
+	for k, at := range w.st.Cooldown {
+		if now.Sub(at) >= hubCooldown {
+			delete(w.st.Cooldown, k)
+		}
+	}
+	w.st.Cooldown[id] = now
+	if err := d.hubSaveLocked(); err != nil {
+		d.logf("", "hub: persist cooldown: %v", err)
+	}
+}
+
+// hubCoolingDown reports whether id ended here within hubCooldown.
+func (d *Daemon) hubCoolingDown(id string, now time.Time) bool {
+	w := d.hub
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	d.hubLoadLocked()
+	at, ok := w.st.Cooldown[id]
+	return ok && now.Sub(at) < hubCooldown
+}
+
+// hubUnsent lists the item ids with an unacknowledged complete/fail in the
+// outbox: their leases are still renewed, or a retried outcome would meet an
+// expired lease and be refused for good.
+func (d *Daemon) hubUnsent() []string {
+	w := d.hub
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	d.hubLoadLocked()
+	var ids []string
+	for _, o := range w.st.Outbox {
+		if o.Action != hubActRelease && !slices.Contains(ids, o.ItemID) {
+			ids = append(ids, o.ItemID)
+		}
+	}
+	return ids
 }
 
 func (d *Daemon) hubSetErr(stage string, err error) {
@@ -480,6 +583,11 @@ func (d *Daemon) hubHeartbeat(ctx context.Context, api hubAPI, snap hubSnapshot)
 			live = append(live, s.HubItem.ItemID)
 		}
 	}
+	for _, id := range d.hubUnsent() {
+		if !slices.Contains(live, id) && len(live) < hubproto.MaxLiveLeases {
+			live = append(live, id)
+		}
+	}
 	req := hubproto.HeartbeatRequest{FreeSlots: free, Agents: snap.agents, Repos: snap.repos, LiveLeases: live}
 	if req.Agents == nil {
 		req.Agents = []string{}
@@ -638,6 +746,9 @@ func (d *Daemon) hubTryClaim(ctx context.Context, api hubAPI, it hubproto.Item, 
 			return false, "already working it"
 		}
 	}
+	if d.hubCoolingDown(it.ID, now) {
+		return false, "ended here recently"
+	}
 
 	d.mu.Lock()
 	var p config.Project
@@ -683,6 +794,24 @@ func (d *Daemon) hubTryClaim(ctx context.Context, api hubAPI, it hubproto.Item, 
 	if err := health(agentBin); err != nil {
 		return false, "runtime unavailable: " + err.Error()
 	}
+	// The offer is the hub's claim; GitHub's answer is the fact. Everything
+	// from here on — branch, briefing, start head — comes from the verified
+	// item, and any doubt refuses the offer (nothing claimed).
+	if d.hub.verify == nil {
+		return false, "cannot verify the offer on GitHub"
+	}
+	v, err := d.hub.verify(ctx, it)
+	if err != nil {
+		return false, "not confirmed on GitHub: " + err.Error()
+	}
+	if v.Item.ID != it.ID || v.Item.Kind != it.Kind || hubproto.Validate(v.Item) != nil ||
+		(it.Kind == hubproto.KindRedBumpPR && v.Head == "") {
+		return false, "not confirmed on GitHub"
+	}
+	it = v.Item
+	if hubBranch(prefix, it) != branch {
+		return false, "not confirmed on GitHub: the branch differs"
+	}
 	brief, err := hub.Briefing(it)
 	if err != nil {
 		return false, hub.ReasonInvalidItem
@@ -705,6 +834,7 @@ func (d *Daemon) hubTryClaim(ctx context.Context, api hubAPI, it hubproto.Item, 
 		}
 		return false, "claim refused: " + err.Error()
 	}
+	d.hubForgetClaims(it.ID, now)
 
 	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
 	var sess session.Session
@@ -716,13 +846,13 @@ func (d *Daemon) hubTryClaim(ctx context.Context, api hubAPI, it hubproto.Item, 
 	cancel()
 	if err != nil {
 		d.logf("", "hub: spawn for item %s failed, releasing it: %v", it.ID, err)
-		d.hubEnqueue(hubOutcome{ItemID: it.ID, Action: hubActRelease, Since: now})
+		d.hubEnqueue(hubOutcome{ItemID: it.ID, ClaimedAt: now, Action: hubActRelease, Since: now})
 		d.hubOutcomes(ctx, api)
 		return false, ""
 	}
 	sess.Repo = p.Repo
 	sess.Title = "hub: " + hubTitle(it)
-	sess.HubItem = session.HubWork{ItemID: it.ID, Kind: string(it.Kind), ClaimedAt: now, LeaseExpires: lease.Expires}
+	sess.HubItem = session.HubWork{ItemID: it.ID, Kind: string(it.Kind), ClaimedAt: now, LeaseExpires: lease.Expires, StartHead: v.Head}
 	d.sessions.Upsert(sess)
 	d.recordSessionEvent("", sess)
 	if err := d.sessions.Save(); err != nil {
@@ -779,12 +909,15 @@ func hubGreen(d state.DeliveryState) bool {
 //   - red_bump_pr completes once the PR head moved past the one first seen and
 //     the delivery is green (or merged at all): the bot's PR existed before
 //     the agent did anything, so its mere presence proves nothing;
-//   - at teardown with no PR: agent_gave_up when the agent had ended,
-//     refused when a person stopped a live one (no attempt is counted);
-//     a red bump PR that never went green: ci_failed, or not_reproducible
-//     when the agent never moved its head.
+//   - at teardown, a red bump PR the agent pushed to that never went green:
+//     ci_failed; one that is green although the agent never moved its head:
+//     not_reproducible (the finding no longer holds);
+//   - otherwise at teardown: agent_gave_up when the agent had ended, refused
+//     when a person stopped a live one (no attempt is counted). An unmoved,
+//     still-red bump PR lands here too: closing it as not_reproducible would
+//     bury a real failure for good.
 func hubOutcomeFor(s session.Session, ended bool) (hubOutcome, bool) {
-	o := hubOutcome{ItemID: s.HubItem.ItemID}
+	o := hubOutcome{ItemID: s.HubItem.ItemID, ClaimedAt: s.HubItem.ClaimedAt}
 	url := hubPRURL(s)
 	s.EnsureAxes()
 	if url != "" {
@@ -807,11 +940,12 @@ func hubOutcomeFor(s session.Session, ended bool) (hubOutcome, bool) {
 		return o, false
 	}
 	o.Action = hubActFail
+	moved := url != "" && s.HubItem.StartHead != "" && s.PR.HeadSHA != "" && s.PR.HeadSHA != s.HubItem.StartHead
 	switch {
-	case url != "" && (s.HubItem.StartHead == "" || s.PR.HeadSHA == s.HubItem.StartHead):
-		o.Reason = string(hubproto.FailObsolete)
-	case url != "":
+	case moved:
 		o.Reason = string(hubproto.FailCI)
+	case url != "" && hubGreen(s.Delivery):
+		o.Reason = string(hubproto.FailObsolete)
 	case s.AgentState == state.AgentDead || s.AgentState == state.AgentExited:
 		o.Reason = string(hubproto.FailAgent)
 	default:
@@ -840,23 +974,32 @@ func (d *Daemon) hubOutcomes(ctx context.Context, api hubAPI) {
 				cur.HubItem.StartHead = cur.PR.HeadSHA
 				wrote = true
 			}
-			o, ok := hubOutcomeFor(*cur, false)
-			if ok {
-				// The one-shot guard, stamped before anything is sent.
-				cur.HubItem.Reported = o.Action
-				if o.Reason != "" {
-					cur.HubItem.Reported += ":" + o.Reason
-				}
+			if o, ok := hubOutcomeFor(*cur, false); ok {
 				o.Since = now
 				queued = &o
-				wrote = true
 			}
 			changed = changed || wrote
 			return wrote
 		})
-		if queued != nil {
-			d.hubEnqueue(*queued)
+		if queued == nil {
+			continue
 		}
+		// Persist the outcome FIRST, then stamp the one-shot guard: a crash
+		// in between re-derives the same outcome, which the outbox dedups by
+		// claim. The other order could persist a guard with no outcome.
+		o := *queued
+		d.hubEnqueue(o)
+		_, _ = d.sessions.Update(s.ID, func(cur *session.Session) bool {
+			if !cur.HubItem.Open() || cur.HubItem.ItemID != o.ItemID || !cur.HubItem.ClaimedAt.Equal(o.ClaimedAt) {
+				return false
+			}
+			cur.HubItem.Reported = o.Action
+			if o.Reason != "" {
+				cur.HubItem.Reported += ":" + o.Reason
+			}
+			changed = true
+			return true
+		})
 	}
 	if changed {
 		if err := d.sessions.Save(); err != nil {
@@ -876,6 +1019,9 @@ func (d *Daemon) hubSessionEnded(s session.Session) {
 	o, _ := hubOutcomeFor(s, true)
 	o.Since = d.hub.now()
 	d.hubEnqueue(o)
+	if o.Action != hubActComplete {
+		d.hubCoolDown(o.ItemID, o.Since)
+	}
 	d.logf("", "hub: session %s ended; reporting %s %s for item %s", s.ID, o.Action, o.Reason, o.ItemID)
 	d.hubNudgeOutcomes()
 }
@@ -888,6 +1034,11 @@ func hubTerminal(err error) bool {
 	var ae *hub.APIError
 	if !errors.As(err, &ae) {
 		return errors.Is(err, hub.ErrInvalidResponse)
+	}
+	// 408/429 are retried whatever the code: a proxy in front of the hub
+	// sends them with no hubproto code at all.
+	if ae.Status == 408 || ae.Status == 429 {
+		return false
 	}
 	return ae.Status >= 400 && ae.Status < 500 && ae.Code != hubproto.CodeRateLimited && ae.Code != hubproto.CodeSkew
 }
@@ -919,16 +1070,16 @@ func (d *Daemon) hubFlush(ctx context.Context, api hubAPI) {
 		}
 		switch {
 		case err == nil:
-			done[o.ItemID] = true
+			done[o.key()] = true
 			d.logf("", "hub: reported %s %s for item %s", o.Action, o.Reason, o.ItemID)
 		case hubTerminal(err):
-			done[o.ItemID] = true
+			done[o.key()] = true
 			d.logf("", "hub: %s for item %s refused, dropping it: %v", o.Action, o.ItemID, err)
 		case now.Sub(o.Since) > hubOutboxMaxAge:
-			done[o.ItemID] = true
+			done[o.key()] = true
 			d.logf("", "hub: %s for item %s unacknowledged for %s, dropping it: %v", o.Action, o.ItemID, hubOutboxMaxAge, err)
 		default:
-			tried[o.ItemID] = true
+			tried[o.key()] = true
 			d.hubSetErr(o.Action, err)
 		}
 	}
@@ -936,11 +1087,11 @@ func (d *Daemon) hubFlush(ctx context.Context, api hubAPI) {
 	defer w.mu.Unlock()
 	kept := w.st.Outbox[:0:0]
 	for _, o := range w.st.Outbox {
-		if done[o.ItemID] {
-			w.st.Settled = append(w.st.Settled, o.ItemID)
+		if done[o.key()] {
+			w.st.Settled = append(w.st.Settled, o.key())
 			continue
 		}
-		if tried[o.ItemID] {
+		if tried[o.key()] {
 			o.Tries++
 		}
 		kept = append(kept, o)
@@ -963,6 +1114,16 @@ func (d *Daemon) hubPolicy(ctx context.Context, api hubAPI, snap hubSnapshot, id
 	now := d.hub.now()
 	w := d.hub
 	w.mu.Lock()
+	if !w.policyRead {
+		// Status shows the stored, re-verified policy's version right after a
+		// restart, not 0 until the next fetch is due.
+		w.policyRead = true
+		if trusted, err := hub.TrustedKeys(snap.h); err == nil {
+			if sp, err := hub.LoadPolicy(d.hubDir(), trusted); err == nil {
+				w.policyV = sp.Policy.Version
+			}
+		}
+	}
 	d.hubLoadLocked()
 	due := now.Sub(w.st.PolicyAt) >= hubPolicyEvery
 	if due {

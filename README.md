@@ -155,7 +155,7 @@ protocol-version mismatch.
 | `lola bestof compare <issue\|group\|session> [--json]` | Every attempt of a best-of group side by side: agent/model, state, PR + CI, review findings, diff size, tokens — with a ★ suggestion (a hint, never acted on). |
 | `lola bestof pick <session>` | Keep one attempt: its draft PR is marked ready, every other attempt's PR is closed (branch kept) and its session torn down; a worktree with uncommitted changes is kept. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
-| `lola hub join <url> <token> [--name N]` | Enrol this machine with a team [lola hub](#hub-optional-off-by-default) using a one-time token: creates the device key (`~/.lola/state/hub-key`, 0600) if needed, enrols it, writes `~/.lola/state/hub.json` and sets `[hub].enabled` + `url`, then asks a running daemon to reload. Joining a different hub is refused until you leave. |
+| `lola hub join <url> [--token-file F] [--name N]` | Enrol this machine with a team [lola hub](#hub-optional-off-by-default) using a one-time token, read from stdin (prompted without echo on a terminal) or `--token-file` — never pass it as an argument, where `ps` and shell history see it (still accepted, with a warning): creates the device key (`~/.lola/state/hub-key`, 0600) if needed, enrols it, writes `~/.lola/state/hub.json` and sets `[hub].enabled` + `url`, then asks a running daemon to reload. Joining a different hub is refused until you leave. |
 | `lola hub status` | The local hub identity, whether the device key matches it, the verified team policy (display only) and, when the daemon has a hub loop, its state. |
 | `lola hub leave [--forget-key]` | Remove the hub identity and stored policy and set `[hub].enabled = false`. The device key is kept for a later re-join unless `--forget-key`. The hub is not told: an admin revokes the device there. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
@@ -1566,7 +1566,8 @@ advisory) and `red_bump_pr` (fix a Dependabot / Renovate PR whose checks fail) �
 deduplicated across the team, and routes the team's **signed** policy. The hub
 never executes anything and never writes a prompt: an item is a closed kind plus
 fields validated against strict patterns, and lola renders the agent's task from
-its own template. Set it up with `lola hub join <url> <token>`; the ed25519
+its own template, and every offer is re-read from GitHub before it is claimed.
+Set it up with `lola hub join <url>` (token on stdin); the ed25519
 device key lives in `~/.lola/state/hub-key` (0600) and never in this file, argv
 or a log line. Like `[remote]`, the table is not part of the `[defaults]`
 inheritance, and neither is `[[project]].hub_chores`.
