@@ -109,6 +109,19 @@ export interface ConnectCodeDTO {
     "problem": string;
 }
 
+/**
+ * DesktopContext is the small, display-only context shared with local time trackers.
+ * It describes the visible workspace, never agent activity or elapsed work time.
+ */
+export interface DesktopContext {
+    "view": string;
+    "sessionId"?: string;
+    "title"?: string;
+    "projectId"?: string;
+    "projectName"?: string;
+    "issueKey"?: string;
+}
+
 export interface DoctorReportDTO {
     "results": DoctorResultDTO[] | null;
     "summary": string;

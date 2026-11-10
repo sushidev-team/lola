@@ -132,6 +132,7 @@ func main() {
 		Name:        "Lola",
 		Description: "Native cockpit for the lola coding-agent orchestrator",
 		Services: []application.Service{
+			application.NewService(&ContextService{}),
 			application.NewService(daemon),
 			application.NewService(term),
 			application.NewService(&SSHService{}),

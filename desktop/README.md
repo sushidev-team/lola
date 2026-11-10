@@ -264,3 +264,32 @@ reactions, checkpoint restoration, or automatic agent switching. Run dev
 commands in their shell tabs. Sandboxed agents still require isolated worktrees.
 Activity is collapsed by default; expand it for a bounded feed, or choose
 **View all activity** for the larger view.
+
+### Local time-tracker context
+
+The native window title follows the displayed session, for example
+`ENG-123 · Fix login · Donso · Lola`. Sessions without a Linear ticket omit the
+key. Home, Settings and other non-session views use `Lola`; a PR review uses
+the reviewed session. Session renames update the title too.
+
+For trackers such as Donso, the desktop also atomically replaces
+`~/.lola/desktop-context.json` (`$LOLA_HOME/desktop-context.json` when set).
+This is a private, mode-0600 snapshot with no history, network listener, or
+extra visible UI. Example:
+
+```json
+{"version":1,"pid":12345,"updatedAt":"2026-11-10T12:00:00Z","view":"cockpit","sessionId":"donso-eng-123","title":"Fix login","projectId":"donso","projectName":"Donso","issueKey":"ENG-123"}
+```
+
+Only `version`, `pid`, `updatedAt` and `view` are always present. Session
+fields disappear when a non-session view covers the workspace, or the session
+cannot be resolved. `projectId` and `sessionId` are stable identities;
+`projectName` and `title` are display text. `issueKey` is optional.
+
+Read the file afresh on a foreground/window-title change, or poll it while
+Lola is foreground. **Match `pid` to the foreground Lola process** and apply
+the tracker's own idle detection before counting time. `updatedAt` records a
+context update, not a heartbeat or proof of human activity. The file is removed
+on normal app shutdown; after a crash, a stale record must be ignored unless
+its PID belongs to the current foreground Lola process. The snapshot describes
+the desktop only, not the TUI or background agents.
