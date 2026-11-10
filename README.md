@@ -1580,7 +1580,7 @@ inheritance, and neither is `[[project]].hub_chores`.
 | `accept_kinds` | string array | Chore kinds this machine claims: `dep_advisory`, `red_bump_pr`. Empty/absent = every kind lola knows. |
 | `max_claims_per_day` | int | Claims per local day, 0–100. Absent = `4`; `0` claims nothing. |
 | `require_sandbox` | bool | Refuse a chore for a project without `sandbox = "docker"`. Absent = `true`; opting out is a local, explicit decision. |
-| `trusted_policy_keys` | table of strings | `key_id = "<base64url ed25519 public key>"`: the admin keys that may sign team policy. The hub cannot add one, so it cannot forge or alter policy. In this phase a verified policy is stored (`~/.lola/state/hub-policy.json`) and shown by `lola hub status`, never applied. |
+| `trusted_policy_keys` | table of strings | `key_id = "<base64url ed25519 public key>"` (or the array of `"<key_id>:<public key>"` entries `lola-hub` prints): the admin keys that may sign team policy. The hub cannot add one, so it cannot forge or alter policy. In this phase a verified policy is stored (`~/.lola/state/hub-policy.json`) and shown by `lola hub status`, never applied. |
 | `poll_seconds` | int | Hub loop cadence, 60–86400. Absent = `300`. |
 
 Only keys you set are written back on save, so a default is never frozen into

@@ -569,6 +569,9 @@ endpoint = "https://api.linear.app/graphql"
 # # only VERIFIES and SHOWS the policy (`lola hub status`); it is not applied.
 # [hub.trusted_policy_keys]
 # admin-2026 = "base64url-public-key-43-chars"
+# # Instead of the table, the "<key_id>:<public key>" entries lola-hub prints
+# # may go under [hub] as an array (lola rewrites it as the table on save):
+# #   trusted_policy_keys = ["k0123456789abcdef:base64url-public-key-43-chars"]
 
 # ---------------------------------------------------------------------------
 # [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is

@@ -63,17 +63,72 @@ var hubDeviceNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]*$`)
 //   - RequireSandbox refuses a chore for a project without sandbox = "docker"
 //     (nil = true). Opting out is a local, explicit decision.
 //   - TrustedPolicyKeys pins the admin keys that may sign team policy:
-//     key_id → base64url ed25519 public key. The hub cannot add one.
+//     key_id → base64url ed25519 public key. The hub cannot add one. It is
+//     written as a [hub.trusted_policy_keys] table, and also READ from the
+//     array of "<key_id>:<public key>" strings lola-hub prints (TrustedKeyMap).
 //   - PollSeconds is the hub loop's cadence (0 = 300).
 type HubConfig struct {
-	Enabled           bool              `toml:"enabled,omitempty"`
-	URL               string            `toml:"url,omitempty"`
-	DeviceName        string            `toml:"device_name,omitempty"`
-	AcceptKinds       []string          `toml:"accept_kinds,omitempty"`
-	MaxClaimsPerDay   *int              `toml:"max_claims_per_day,omitempty"`
-	RequireSandbox    *bool             `toml:"require_sandbox,omitempty"`
-	TrustedPolicyKeys map[string]string `toml:"trusted_policy_keys,omitempty"`
-	PollSeconds       int               `toml:"poll_seconds,omitzero"`
+	Enabled           bool          `toml:"enabled,omitempty"`
+	URL               string        `toml:"url,omitempty"`
+	DeviceName        string        `toml:"device_name,omitempty"`
+	AcceptKinds       []string      `toml:"accept_kinds,omitempty"`
+	MaxClaimsPerDay   *int          `toml:"max_claims_per_day,omitempty"`
+	RequireSandbox    *bool         `toml:"require_sandbox,omitempty"`
+	TrustedPolicyKeys TrustedKeyMap `toml:"trusted_policy_keys,omitempty"`
+	PollSeconds       int           `toml:"poll_seconds,omitzero"`
+}
+
+// TrustedKeyMap is [hub].trusted_policy_keys: key_id → base64url public key.
+//
+// It decodes from BOTH shapes an operator will meet: the table lola writes
+//
+//	[hub.trusted_policy_keys]
+//	k0123456789abcdef = "<base64url>"
+//
+// and the array of hubproto.FormatTrustedKey entries that lola-hub's
+// `policy keygen` and `admin policy keys add` print:
+//
+//	trusted_policy_keys = ["k0123456789abcdef:<base64url>"]
+//
+// Without the custom decoder the TOML library dropped the array form WITHOUT
+// an error, so a pinned key silently pinned nothing and `lola hub status`
+// reported "no trusted policy keys configured" over a config that named one.
+// Any other shape is a parse error, never an empty map. Save always writes the
+// table form. Key and value validation stays in Validate.
+type TrustedKeyMap map[string]string
+
+// UnmarshalTOML implements toml.Unmarshaler.
+func (m *TrustedKeyMap) UnmarshalTOML(v any) error {
+	out := TrustedKeyMap{}
+	switch t := v.(type) {
+	case map[string]any:
+		for id, raw := range t {
+			s, ok := raw.(string)
+			if !ok {
+				return fmt.Errorf("hub.trusted_policy_keys.%s must be a string", id)
+			}
+			out[id] = s
+		}
+	case []any:
+		for i, raw := range t {
+			s, ok := raw.(string)
+			if !ok {
+				return fmt.Errorf("hub.trusted_policy_keys[%d] must be a \"<key_id>:<public key>\" string", i)
+			}
+			id, pub, ok := strings.Cut(strings.TrimSpace(s), ":")
+			if !ok || id == "" {
+				return fmt.Errorf("hub.trusted_policy_keys[%d] must be a \"<key_id>:<public key>\" string", i)
+			}
+			if _, dup := out[id]; dup {
+				return fmt.Errorf("hub.trusted_policy_keys: key id %q listed twice", id)
+			}
+			out[id] = pub
+		}
+	default:
+		return errors.New("hub.trusted_policy_keys must be a table (key_id = \"<public key>\") or an array of \"<key_id>:<public key>\" strings")
+	}
+	*m = out
+	return nil
 }
 
 // SandboxRequired reports the effective require_sandbox (default true).

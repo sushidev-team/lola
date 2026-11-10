@@ -166,6 +166,71 @@ k1 = "` + key + `"
 	}
 }
 
+// lola-hub prints a pinned key as hubproto.FormatTrustedKey entries in an
+// array. The TOML library silently dropped that shape into an empty map, so a
+// pinned key pinned nothing; it must load, and Save must rewrite it as the
+// table form.
+func TestHubTrustedKeysArrayForm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	key := testHubKey(t)
+	body := `
+[hub]
+enabled = true
+url = "http://127.0.0.1:8080"
+trusted_policy_keys = ["k1:` + key + `"]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Hub.TrustedPolicyKeys["k1"] != key {
+		t.Fatalf("array form not loaded: %+v", c.Hub.TrustedPolicyKeys)
+	}
+	if err := c.Validate(); err != nil && strings.Contains(err.Error(), "trusted_policy_keys") {
+		t.Errorf("Validate: %v", err)
+	}
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "[hub.trusted_policy_keys]") {
+		t.Errorf("Save must write the table form:\n%s", data)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Hub.TrustedPolicyKeys["k1"] != key {
+		t.Errorf("round trip lost the key: %+v", again.Hub.TrustedPolicyKeys)
+	}
+}
+
+func TestHubTrustedKeysRejectsOtherShapes(t *testing.T) {
+	for name, line := range map[string]string{
+		"no colon":     `trusted_policy_keys = ["k1"]`,
+		"empty id":     `trusted_policy_keys = [":abc"]`,
+		"not a string": `trusted_policy_keys = [1]`,
+		"duplicate":    `trusted_policy_keys = ["k1:a", "k1:b"]`,
+		"scalar":       `trusted_policy_keys = "k1:a"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte("[hub]\n"+line+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Errorf("%s: Load must fail", line)
+			}
+		})
+	}
+}
+
 func TestValidateHubURL(t *testing.T) {
 	ok := []string{
 		"https://hub.example.com", "https://hub.example.com/", "https://hub.example.com:8443",
