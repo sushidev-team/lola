@@ -23,6 +23,47 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe("Close Tab menu action", () => {
+  it("closes only the active shell and selects a remaining tab", async () => {
+    const id = newId();
+    const first = `${id}-shell-1`;
+    const second = `${id}-shell-2`;
+    seed(id, [first, second]);
+    terms.select(id, second);
+    const { TermService } = await import("@bindings/desktop");
+    vi.mocked(TermService.Shells).mockResolvedValueOnce([first]);
+
+    await terms.closeActiveTab(id);
+
+    expect(TermService.CloseShell).toHaveBeenCalledExactlyOnceWith(second);
+    expect(terms.activeTab(id)).toBe(first);
+  });
+
+  it("returns to the session after closing its last shell", async () => {
+    const id = newId();
+    const shell = `${id}-shell-1`;
+    seed(id, [shell]);
+    terms.select(id, shell);
+
+    await terms.closeActiveTab(id);
+
+    expect(terms.shellsFor(id)).toEqual([]);
+    expect(terms.activeTab(id)).toBe(AGENT);
+  });
+
+  it("leaves permanent views and their background shells running", async () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`]);
+    const { TermService } = await import("@bindings/desktop");
+    for (const tab of [AGENT, DIFF, SSH]) {
+      terms.select(id, tab);
+      await terms.closeActiveTab(id);
+    }
+    expect(TermService.CloseShell).not.toHaveBeenCalled();
+    expect(terms.shellsFor(id)).toEqual([`${id}-shell-1`]);
+  });
+});
+
 describe("review pane tabs", () => {
   it("recognises a review pane by its suffix", () => {
     expect(isReviewTab("lola-nori-app-nor-357-review")).toBe(true);

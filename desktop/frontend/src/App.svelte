@@ -82,6 +82,10 @@
   // open dialog.
   function sessionAction(action: string) {
     if (nav.overlay || confirm.request || sessionMenu.request) return;
+    if (action === "close-tab") {
+      if (nav.view === "cockpit" && nav.focusedTerm) void terms.closeActiveTab(nav.focusedTerm);
+      return;
+    }
     if (action === "commands") { nav.openOverlay("commands"); return; }
     if (action === "new-session") { newSessionHere(); return; }
     if (action === "temporary-shell") { void openShell(); return; }
