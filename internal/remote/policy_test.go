@@ -188,3 +188,18 @@ func TestAuthorizeFrameCarriesTheAuthenticatedPeer(t *testing.T) {
 		t.Error("the peer was not stamped from Options.Now")
 	}
 }
+
+func TestHubHumanCommandsAreDenied(t *testing.T) {
+	if len(protocol.HubHumanCommands) == 0 {
+		t.Fatal("no hub commands listed")
+	}
+	for _, cmd := range protocol.HubHumanCommands {
+		if !CommandDenied(cmd) {
+			t.Errorf("%s must be denied for every remote peer", cmd)
+		}
+	}
+	// This machine's own read-only hub state stays readable.
+	if CommandDenied(protocol.CmdHubStatus) {
+		t.Error("hubStatus is read-only and stays reachable")
+	}
+}

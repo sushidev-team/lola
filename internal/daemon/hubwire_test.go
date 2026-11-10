@@ -37,6 +37,25 @@ type fakeHub struct {
 	fails     []hubproto.FailReason
 	releases  []string
 	policies  int
+	board     hubproto.BoardResponse
+	boardErr  error
+	boards    int
+	org       hubproto.OrgView
+	orgs      int
+}
+
+func (f *fakeHub) Board(context.Context, hubproto.State, int) (hubproto.BoardResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.boards++
+	return f.board, f.boardErr
+}
+
+func (f *fakeHub) Org(context.Context) (hubproto.OrgView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.orgs++
+	return f.org, nil
 }
 
 func (f *fakeHub) Heartbeat(_ context.Context, hb hubproto.HeartbeatRequest) (hubproto.HeartbeatResponse, error) {

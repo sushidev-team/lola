@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -44,6 +45,23 @@ func hubCmd() *cobra.Command {
 			token, err := hubJoinToken(a, tokenFile, c.InOrStdin(), c.ErrOrStderr(), stdinTerminal)
 			if err != nil {
 				return err
+			}
+			// A running daemon enrolls itself (and reloads); a daemon that is
+			// down, or predates cmd=hubJoin, falls back to the local join.
+			if resp, ok := hubDaemon(protocol.CmdHubJoin, protocol.HubJoinArgs{URL: a[0], Token: token, Name: name}); ok {
+				if !resp.OK {
+					return errors.New(resp.Error)
+				}
+				var jd protocol.HubJoinData
+				if err := json.Unmarshal(resp.Data, &jd); err != nil {
+					return err
+				}
+				if jd.KeyCreated {
+					fmt.Fprintln(c.OutOrStdout(), "created a new device key")
+				}
+				fmt.Fprintf(c.OutOrStdout(), "joined org %s as %q (device %s)\n", jd.Org, jd.DeviceName, jd.DeviceID)
+				fmt.Fprintln(c.OutOrStdout(), "opt a project in with [[project]].hub_chores = true")
+				return nil
 			}
 			path, state, err := hubPaths()
 			if err != nil {
@@ -105,6 +123,13 @@ func hubCmd() *cobra.Command {
 		Short: "Remove the hub identity and disable the hub (keeps the device key unless --forget-key)",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
+			if resp, ok := hubDaemon(protocol.CmdHubLeave, protocol.HubLeaveArgs{ForgetKey: forget}); ok {
+				if !resp.OK {
+					return errors.New(resp.Error)
+				}
+				fmt.Fprintln(c.OutOrStdout(), "left the hub; an admin revokes the device on the hub side")
+				return nil
+			}
 			path, state, err := hubPaths()
 			if err != nil {
 				return err
@@ -119,8 +144,156 @@ func hubCmd() *cobra.Command {
 	}
 	leave.Flags().BoolVar(&forget, "forget-key", false, "also delete the device key")
 
-	cmd.AddCommand(join, status, leave)
+	cmd.AddCommand(join, status, leave, hubBoardCmd(), hubClaimCmd(), hubReleaseCmd(), hubSyncCmd())
 	return cmd
+}
+
+// hubSend is the socket seam (tests replace it).
+var hubSend = tui.RequestResponse
+
+// hubDaemon sends one hub command. ok=false means "no daemon to ask": it is
+// not running, or it predates the command — the caller falls back to the
+// local path. A daemon that refused answers ok=true with resp.OK=false.
+func hubDaemon(cmd string, args any) (*protocol.Response, bool) {
+	req := protocol.Request{Cmd: cmd}
+	if args != nil {
+		raw, err := json.Marshal(args)
+		if err != nil {
+			return nil, false
+		}
+		req.Args = raw
+	}
+	resp, err := hubSend(req)
+	if err != nil || resp == nil {
+		return nil, false
+	}
+	if !resp.OK && strings.Contains(resp.Error, "unknown cmd") {
+		return nil, false
+	}
+	return resp, true
+}
+
+// hubDaemonData is hubDaemon for a command with no local fallback: the
+// daemon must run, and its data is decoded into out.
+func hubDaemonData(cmd string, args, out any) error {
+	resp, ok := hubDaemon(cmd, args)
+	if !ok {
+		return errors.New("the daemon is not running, or predates this command: start or restart it (`lola run`)")
+	}
+	if !resp.OK {
+		return errors.New(resp.Error)
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(resp.Data, out)
+}
+
+func hubBoardCmd() *cobra.Command {
+	var state string
+	var limit int
+	var fresh, asJSON bool
+	cmd := &cobra.Command{
+		Use:   "board",
+		Short: "List the team's hub items and whether this machine could claim each",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			var b protocol.HubBoardData
+			if err := hubDaemonData(protocol.CmdHubBoard, protocol.HubBoardArgs{State: state, Limit: limit, Fresh: fresh}, &b); err != nil {
+				return err
+			}
+			if asJSON {
+				enc := json.NewEncoder(c.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(b)
+			}
+			fmt.Fprint(c.OutOrStdout(), renderHubBoard(b))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&state, "state", "", "only items in this state (open|claimed|done|failed|escalated)")
+	cmd.Flags().IntVar(&limit, "limit", 0, "at most this many items (default: the hub's, max 500)")
+	cmd.Flags().BoolVar(&fresh, "fresh", false, "skip the daemon's 20s cache")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the daemon's JSON")
+	return cmd
+}
+
+// renderHubBoard is the board as a terminal table.
+func renderHubBoard(b protocol.HubBoardData) string {
+	if len(b.Items) == 0 {
+		return "no items on the board\n"
+	}
+	var out strings.Builder
+	tw := tabwriter.NewWriter(&out, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tSTATE\tITEM\tREPO\tHERE")
+	for _, it := range b.Items {
+		here := it.Local.Reason
+		switch {
+		case it.Local.Session != "":
+			here = "session " + it.Local.Session
+		case it.Local.Claimable && it.Local.Project != "":
+			here = "claimable (" + it.Local.Project + ")"
+		case it.Local.Claimable:
+			here = "claimable (--project " + strings.Join(it.Local.Projects, "|") + ")"
+		}
+		state := it.State
+		if it.Outcome != nil {
+			state += " " + it.Outcome.PRURL
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", it.ID, state, it.Label, it.Repo, here)
+	}
+	tw.Flush()
+	return out.String()
+}
+
+func hubClaimCmd() *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use:   "claim <item-id>",
+		Short: "Claim one hub item now and start a session for it",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			var d protocol.HubClaimData
+			if err := hubDaemonData(protocol.CmdHubClaim, protocol.HubClaimArgs{ItemID: a[0], Project: project}, &d); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "claimed %s for %s: session %s\n", d.ItemID, d.Project, d.Session)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&project, "project", "", "the [[project]] to work it in, when several match its repo")
+	return cmd
+}
+
+func hubReleaseCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "release <item-id>",
+		Short: "Give a claimed hub item back (a session working it keeps running)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			var d protocol.HubReleaseData
+			if err := hubDaemonData(protocol.CmdHubRelease, protocol.HubReleaseArgs{ItemID: a[0]}, &d); err != nil {
+				return err
+			}
+			fmt.Fprintln(c.OutOrStdout(), d.Message)
+			return nil
+		},
+	}
+}
+
+func hubSyncCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sync",
+		Short: "Run one hub loop pass now",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			if err := hubDaemonData(protocol.CmdHubSync, nil, nil); err != nil {
+				return err
+			}
+			fmt.Fprintln(c.OutOrStdout(), "hub pass queued")
+			return nil
+		},
+	}
 }
 
 func hubPaths() (cfgPath, stateDir string, err error) {

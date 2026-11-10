@@ -89,6 +89,9 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(d.statusData(ctx))
 	case protocol.CmdHubStatus:
 		return dataResponse(d.hubStatusData())
+	case protocol.CmdHubJoin, protocol.CmdHubLeave, protocol.CmdHubBoard, protocol.CmdHubOrg,
+		protocol.CmdHubClaim, protocol.CmdHubRelease, protocol.CmdHubSync:
+		return d.handleHub(ctx, req)
 	case "sessions":
 		return dataResponse(d.sessionsData())
 	case "projects":
@@ -894,6 +897,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		// The agent's own report — display-only, like the overlay above.
 		si.Board = boardInfo(s.Board, auditClaims(s), now)
 		si.Tasks = s.Tasks
+		si.Hub = hubSessionHub(s)
 		for _, o := range s.Overlaps {
 			si.Overlaps = append(si.Overlaps, protocol.SessionOverlap{
 				Session: o.Session, Issue: o.Issue, Files: slices.Clone(o.Files), More: o.More,

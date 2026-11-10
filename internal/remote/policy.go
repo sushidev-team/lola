@@ -79,8 +79,13 @@ var deniedCommands = map[string]bool{
 // open) is the consent a shell on a production host rests on, and consent is not a
 // phone job for now. The agent side comes from an agent's own pane, for the same
 // reason as agentReport: a forged run or post would put words in its mouth.
+//
+// So is every human hub command (protocol.HubHumanCommands): joining, leaving,
+// claiming and releasing are a person at the machine, and the board and org
+// views carry the whole team's work and device names. hubStatus stays
+// reachable: it is this machine's own read-only state.
 func init() {
-	for _, list := range [][]string{protocol.SSHAgentCommands, protocol.SSHHumanCommands} {
+	for _, list := range [][]string{protocol.SSHAgentCommands, protocol.SSHHumanCommands, protocol.HubHumanCommands} {
 		for _, cmd := range list {
 			deniedCommands[cmd] = true
 		}

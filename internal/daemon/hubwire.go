@@ -48,6 +48,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -101,6 +102,9 @@ type hubAPI interface {
 	Complete(ctx context.Context, id string, req hubproto.CompleteRequest) error
 	Fail(ctx context.Context, id string, reason hubproto.FailReason) error
 	Release(ctx context.Context, id string) error
+	// Board and Org are the read-only org views (validated whole).
+	Board(ctx context.Context, state hubproto.State, limit int) (hubproto.BoardResponse, error)
+	Org(ctx context.Context) (hubproto.OrgView, error)
 	// FetchPolicy is hub.FetchPolicy bound to this client: verify against the
 	// trusted keys, refuse rollback, store. Display only.
 	FetchPolicy(ctx context.Context, h config.HubConfig, org, dir string, now time.Time) (hub.StoredPolicy, error)
@@ -187,25 +191,39 @@ type hubWire struct {
 	// verify re-reads an offer from GitHub before it is claimed.
 	verify func(ctx context.Context, it hubproto.Item) (hub.Verified, error)
 	now    func() time.Time
+	// enroll builds the client cmd=hubJoin enrolls with (nil = hub.NewClient).
+	enroll func(url string, key *hub.Key) (*hub.Client, error)
 
 	// full wakes the loop for a whole cycle (reload, join); outcomes wakes it
 	// for the outbox + outcome pass only (a delivery change, a teardown).
 	full     chan struct{}
 	outcomes chan struct{}
 
-	mu       sync.Mutex
-	loaded   bool
-	st       hubPersisted
-	joined   bool
-	device   string
-	org      string
-	lastBeat time.Time
-	lastErr  string
-	lastErrT time.Time
-	policyV  int
+	mu         sync.Mutex
+	loaded     bool
+	st         hubPersisted
+	joined     bool
+	device     string
+	deviceName string
+	org        string
+	lastBeat   time.Time
+	lastErr    string
+	lastErrT   time.Time
+	policyV    int
+	// policy is the stored, verified bundle (nil = none known).
+	policy *hub.StoredPolicy
 	// policyRead: the stored policy was read once for status, so a restart
 	// shows its version before the next fetch is due.
 	policyRead bool
+	// findings is the last findings report (nil = none since start).
+	findings *protocol.HubFindingsInfo
+	// claiming holds the item ids whose claim is in flight, so the loop and
+	// a person's click cannot both claim (and spawn) one item.
+	claiming map[string]bool
+	// board / org cache the read-only views for the UIs (hubcmds.go).
+	board   map[string]hubBoardCache
+	orgAt   time.Time
+	orgView *hubproto.OrgView
 }
 
 func newHubWire() *hubWire {
@@ -514,7 +532,7 @@ func (d *Daemon) hubConnect(h config.HubConfig) (hubAPI, hub.Identity, bool) {
 	w.mu.Lock()
 	w.joined = err == nil
 	if err == nil {
-		w.device, w.org = id.DeviceID, id.Org
+		w.device, w.org, w.deviceName = id.DeviceID, id.Org, id.DeviceName
 	}
 	w.mu.Unlock()
 	if err != nil {
@@ -701,6 +719,9 @@ func (d *Daemon) hubFindings(ctx context.Context, api hubAPI, snap hubSnapshot) 
 		accepted += r.Accepted
 		rejected += len(r.Rejected)
 	}
+	w.mu.Lock()
+	w.findings = &protocol.HubFindingsInfo{At: now, Repos: len(due), Reported: len(res.Items), Accepted: accepted, Rejected: rejected}
+	w.mu.Unlock()
 	if len(res.Items) > 0 {
 		d.logf("", "hub: reported %d finding(s) from %d repo(s): %d accepted, %d rejected", len(res.Items), len(due), accepted, rejected)
 	}
@@ -734,25 +755,68 @@ func hubBranch(prefix string, it hubproto.Item) string {
 }
 
 // hubTryClaim runs one offer through every gate and, only then, claims and
-// spawns it. ok=false with a reason means "skipped, nothing claimed".
+// spawns it. ok=false with a reason means "skipped, nothing claimed"; a
+// failed spawn (claimed, then released) is logged where it happens and
+// reports no reason.
 func (d *Daemon) hubTryClaim(ctx context.Context, api hubAPI, it hubproto.Item, snap hubSnapshot) (bool, string) {
+	_, err := d.hubClaimItem(ctx, api, it, snap, hubClaimReq{})
+	switch {
+	case err == nil:
+		return true, ""
+	case errors.Is(err, errHubSpawn):
+		return false, ""
+	}
+	return false, err.Error()
+}
+
+// hubClaimReq says who asks for a claim.
+type hubClaimReq struct {
+	// human: a person pressed Claim (cmd=hubClaim). The click is the opt-in
+	// (no hub_chores needed), it is intent (no concurrency cap, no daily
+	// count, no cooldown — like every human open, AGENTS.md), and the session
+	// still counts once it exists. require_sandbox, the kind filter,
+	// dispatchHold, the health gate and the GitHub re-read all still apply.
+	human bool
+	// project names the [[project]] when several work the item's repo.
+	project string
+}
+
+// errHubSpawn marks a claim whose spawn failed after the lease was taken (the
+// lease is released through the outbox).
+var errHubSpawn = errors.New("spawn failed")
+
+// hubClaimItem is THE claim path, shared by the loop and a person's click:
+// gates → GitHub re-read → reserve → count → Claim → spawn → Session.HubItem,
+// releasing the lease when the spawn fails. Every refusal before the claim
+// mutates nothing. It returns the new session's id.
+func (d *Daemon) hubClaimItem(ctx context.Context, api hubAPI, it hubproto.Item, snap hubSnapshot, req hubClaimReq) (string, error) {
 	now := d.hub.now()
 	if !hubproto.ValidItemID(it.ID) || hubproto.Validate(it) != nil {
-		return false, hub.ReasonInvalidItem
+		return "", errors.New(hub.ReasonInvalidItem)
 	}
+	if !d.hubBeginClaim(it.ID) {
+		return "", errors.New("a claim for it is already in flight")
+	}
+	defer d.hubEndClaim(it.ID)
 	// Already working this item (a restart, a hub that re-offers)?
 	for _, s := range d.sessions.Snapshot() {
 		if s.HubItem.ItemID == it.ID {
-			return false, "already working it"
+			return "", errors.New("already working it")
 		}
 	}
-	if d.hubCoolingDown(it.ID, now) {
-		return false, "ended here recently"
+	if !req.human && d.hubCoolingDown(it.ID, now) {
+		return "", errors.New("ended here recently")
 	}
 
 	d.mu.Lock()
+	var pp *config.Project
+	var pickErr error
+	if req.human {
+		pp, pickErr = hubPickProject(d.cfg, it, req.project)
+	} else {
+		pp = hub.ProjectFor(d.cfg, it)
+	}
 	var p config.Project
-	pp := hub.ProjectFor(d.cfg, it)
 	if pp != nil {
 		p = *pp
 		p.PostCreate = slices.Clone(p.PostCreate)
@@ -770,69 +834,86 @@ func (d *Daemon) hubTryClaim(ctx context.Context, api hubAPI, it hubproto.Item, 
 	nat := d.native
 	health := d.runtimeHealth
 	d.mu.Unlock()
+	if pickErr != nil {
+		return "", pickErr
+	}
 
 	var accProject *config.Project
 	if pp != nil {
 		accProject = &p
 	}
-	if ok, why := hub.Accept(it, accProject, snap.h, d.hubClaimsToday(now)); !ok {
-		return false, why
+	if req.human {
+		if ok, why := hub.AcceptIntent(it, accProject, snap.h); !ok {
+			return "", errors.New(why)
+		}
+	} else if ok, why := hub.Accept(it, accProject, snap.h, d.hubClaimsToday(now)); !ok {
+		return "", errors.New(why)
 	}
 	branch := hubBranch(prefix, it)
 	id := runtime.ManualSessionID(p.Name, branch)
 	if _, exists := d.sessions.Get(id); exists {
-		return false, "a session already works " + branch
+		return "", errors.New("a session already works " + branch)
 	}
 	// The same gates as a Linear dispatch, in the same order, all BEFORE the
 	// claim: hold, health, slots.
 	if msg := d.dispatchHold(ctx, p.Name, now); msg != "" {
-		return false, "dispatch held: " + msg
+		return "", errors.New("dispatch held: " + msg)
 	}
 	if nat == nil {
-		return false, "native runtime unavailable"
+		return "", errors.New("native runtime unavailable")
 	}
 	if err := health(agentBin); err != nil {
-		return false, "runtime unavailable: " + err.Error()
+		return "", errors.New("runtime unavailable: " + err.Error())
 	}
 	// The offer is the hub's claim; GitHub's answer is the fact. Everything
 	// from here on — branch, briefing, start head — comes from the verified
 	// item, and any doubt refuses the offer (nothing claimed).
 	if d.hub.verify == nil {
-		return false, "cannot verify the offer on GitHub"
+		return "", errors.New("cannot verify the offer on GitHub")
 	}
 	v, err := d.hub.verify(ctx, it)
 	if err != nil {
-		return false, "not confirmed on GitHub: " + err.Error()
+		return "", errors.New("not confirmed on GitHub: " + err.Error())
 	}
 	if v.Item.ID != it.ID || v.Item.Kind != it.Kind || hubproto.Validate(v.Item) != nil ||
 		(it.Kind == hubproto.KindRedBumpPR && v.Head == "") {
-		return false, "not confirmed on GitHub"
+		return "", errors.New("not confirmed on GitHub")
 	}
 	it = v.Item
 	if hubBranch(prefix, it) != branch {
-		return false, "not confirmed on GitHub: the branch differs"
+		return "", errors.New("not confirmed on GitHub: the branch differs")
 	}
 	brief, err := hub.Briefing(it)
 	if err != nil {
-		return false, hub.ReasonInvalidItem
+		return "", errors.New(hub.ReasonInvalidItem)
 	}
-	release, fits := d.reserveSlots(p.Name, 1, projectCap, snap.globalCap)
+	// A person's claim checks no cap (it is intent), but it still RESERVES
+	// so a loop tick spawning beside it counts it.
+	pCap, gCap := projectCap, snap.globalCap
+	if req.human {
+		pCap, gCap = noProjectCap, math.MaxInt
+	}
+	release, fits := d.reserveSlots(p.Name, 1, pCap, gCap)
 	if !fits {
-		return false, "capped"
+		return "", errors.New("capped")
 	}
 	defer release()
 
 	// Count first, then claim: a crash between the two over-counts (safe),
-	// never under-counts.
-	if err := d.hubCountClaim(now, 1); err != nil {
-		return false, "persist claim count: " + err.Error()
+	// never under-counts. A person's claim does not spend the daily cap.
+	if !req.human {
+		if err := d.hubCountClaim(now, 1); err != nil {
+			return "", errors.New("persist claim count: " + err.Error())
+		}
 	}
 	lease, err := api.Claim(ctx, it.ID)
 	if err != nil {
-		if rerr := d.hubCountClaim(now, -1); rerr != nil {
-			d.logf("", "hub: refund claim count: %v", rerr)
+		if !req.human {
+			if rerr := d.hubCountClaim(now, -1); rerr != nil {
+				d.logf("", "hub: refund claim count: %v", rerr)
+			}
 		}
-		return false, "claim refused: " + err.Error()
+		return "", errors.New("claim refused: " + err.Error())
 	}
 	d.hubForgetClaims(it.ID, now)
 
@@ -848,18 +929,80 @@ func (d *Daemon) hubTryClaim(ctx context.Context, api hubAPI, it hubproto.Item, 
 		d.logf("", "hub: spawn for item %s failed, releasing it: %v", it.ID, err)
 		d.hubEnqueue(hubOutcome{ItemID: it.ID, ClaimedAt: now, Action: hubActRelease, Since: now})
 		d.hubOutcomes(ctx, api)
-		return false, ""
+		return "", fmt.Errorf("%w: %v", errHubSpawn, err)
 	}
 	sess.Repo = p.Repo
 	sess.Title = "hub: " + hubTitle(it)
-	sess.HubItem = session.HubWork{ItemID: it.ID, Kind: string(it.Kind), ClaimedAt: now, LeaseExpires: lease.Expires, StartHead: v.Head}
+	sess.HubItem = session.HubWork{ItemID: it.ID, Kind: string(it.Kind), ClaimedAt: now, LeaseExpires: lease.Expires, StartHead: v.Head, Label: hubLabel(it)}
 	d.sessions.Upsert(sess)
 	d.recordSessionEvent("", sess)
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "hub: persist sessions after spawning %s: %v", id, err)
 	}
-	d.logf("", "hub: claimed item %s (%s) for %s, session %s", it.ID, it.Kind, p.Name, id)
-	return true, ""
+	who := "the hub loop"
+	if req.human {
+		who = "a person"
+	}
+	d.logf("", "hub: claimed item %s (%s) for %s, session %s (%s)", it.ID, it.Kind, p.Name, id, who)
+	return id, nil
+}
+
+// hubBeginClaim marks id's claim in flight; false when one already is.
+func (d *Daemon) hubBeginClaim(id string) bool {
+	w := d.hub
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.claiming[id] {
+		return false
+	}
+	if w.claiming == nil {
+		w.claiming = map[string]bool{}
+	}
+	w.claiming[id] = true
+	return true
+}
+
+func (d *Daemon) hubEndClaim(id string) {
+	d.hub.mu.Lock()
+	delete(d.hub.claiming, id)
+	d.hub.mu.Unlock()
+}
+
+// hubPickProject resolves a HUMAN claim's project: every non-stack project
+// working the item's repo is a candidate (opted in or not); several need a
+// name. The caller holds d.mu.
+func hubPickProject(cfg *config.Config, it hubproto.Item, name string) (*config.Project, error) {
+	cands := hub.ProjectsFor(cfg, it)
+	if name != "" {
+		for _, p := range cands {
+			if p.Name == name {
+				return p, nil
+			}
+		}
+		return nil, fmt.Errorf("project %q does not work %s", name, it.Repo())
+	}
+	switch len(cands) {
+	case 0:
+		return nil, fmt.Errorf("no local project works %s", it.Repo())
+	case 1:
+		return cands[0], nil
+	}
+	names := make([]string, len(cands))
+	for i, p := range cands {
+		names[i] = p.Name
+	}
+	return nil, fmt.Errorf("several projects work %s (%s): name one", it.Repo(), strings.Join(names, ", "))
+}
+
+// hubLabel is lola's own short name for an item, from validated fields only.
+func hubLabel(it hubproto.Item) string {
+	switch {
+	case it.Kind == hubproto.KindDepAdvisory && it.DepAdvisory != nil:
+		return it.DepAdvisory.Advisory + " · " + it.DepAdvisory.Package
+	case it.Kind == hubproto.KindRedBumpPR && it.RedBumpPR != nil:
+		return fmt.Sprintf("PR #%d · %s", it.RedBumpPR.PR, it.RedBumpPR.Package)
+	}
+	return string(it.Kind)
 }
 
 // hubTitle is a list-row title built from validated fields only.
@@ -1114,16 +1257,7 @@ func (d *Daemon) hubPolicy(ctx context.Context, api hubAPI, snap hubSnapshot, id
 	now := d.hub.now()
 	w := d.hub
 	w.mu.Lock()
-	if !w.policyRead {
-		// Status shows the stored, re-verified policy's version right after a
-		// restart, not 0 until the next fetch is due.
-		w.policyRead = true
-		if trusted, err := hub.TrustedKeys(snap.h); err == nil {
-			if sp, err := hub.LoadPolicy(d.hubDir(), trusted); err == nil {
-				w.policyV = sp.Policy.Version
-			}
-		}
-	}
+	d.hubReadPolicyLocked(snap.h)
 	d.hubLoadLocked()
 	due := now.Sub(w.st.PolicyAt) >= hubPolicyEvery
 	if due {
@@ -1141,6 +1275,7 @@ func (d *Daemon) hubPolicy(ctx context.Context, api hubAPI, snap hubSnapshot, id
 	case err == nil:
 		w.mu.Lock()
 		w.policyV = sp.Policy.Version
+		w.policy = &sp
 		w.mu.Unlock()
 	case hub.IsCode(err, hubproto.CodeNoPolicy):
 		// The org has not published one; nothing to show.
@@ -1149,26 +1284,64 @@ func (d *Daemon) hubPolicy(ctx context.Context, api hubAPI, snap hubSnapshot, id
 	}
 }
 
+// hubReadPolicyLocked reads the stored, re-verified policy once, so status
+// shows it right after a restart, not nothing until the next fetch is due.
+// The caller holds d.hub.mu.
+func (d *Daemon) hubReadPolicyLocked(h config.HubConfig) {
+	w := d.hub
+	if w.policyRead {
+		return
+	}
+	w.policyRead = true
+	if trusted, err := hub.TrustedKeys(h); err == nil {
+		if sp, err := hub.LoadPolicy(d.hubDir(), trusted); err == nil {
+			w.policyV = sp.Policy.Version
+			w.policy = &sp
+		}
+	}
+}
+
 // ---- status ----------------------------------------------------------------
 
-// hubStatusData answers cmd=hubStatus from memory and the store; it never
-// contacts the hub.
+// hubStatusData answers cmd=hubStatus from memory, the store and local files;
+// it never contacts the hub.
 func (d *Daemon) hubStatusData() protocol.HubStatusData {
 	d.mu.Lock()
 	h := d.cfg.Hub
+	h.TrustedPolicyKeys = maps.Clone(h.TrustedPolicyKeys)
 	d.mu.Unlock()
 	out := protocol.HubStatusData{Enabled: h.Enabled, URL: h.URL, MaxClaimsPerDay: h.ClaimsPerDay()}
-	now := time.Now()
 	if d.hub != nil {
-		now = d.hub.now()
+		now := d.hub.now()
 		out.ClaimsToday = d.hubClaimsToday(now)
 		w := d.hub
 		w.mu.Lock()
-		out.Joined, out.Device, out.Org = w.joined, w.device, w.org
+		d.hubReadPolicyLocked(h)
+		out.Joined, out.Device, out.Org, out.DeviceName = w.joined, w.device, w.org, w.deviceName
 		out.LastHeartbeat, out.LastError, out.LastErrorAt = w.lastBeat, w.lastErr, w.lastErrT
 		out.PendingOutcomes = len(w.st.Outbox)
 		out.PolicyVersion = w.policyV
+		if w.findings != nil {
+			f := *w.findings
+			out.LastFindings = &f
+		}
+		if sp := w.policy; sp != nil {
+			out.Policy = &protocol.HubPolicyInfo{
+				Version: sp.Policy.Version, KeyID: sp.Policy.KeyID, IssuedAt: sp.Policy.IssuedAt,
+				VerifiedAt: sp.VerifiedAt, Keys: sp.Policy.Settings.Keys(), Summary: hub.PolicySummary(sp.Policy),
+			}
+			if out.Policy.Keys == nil {
+				out.Policy.Keys = []string{}
+			}
+		}
 		w.mu.Unlock()
+	}
+	if !out.Joined {
+		// Before the loop's first connect (or with the hub off) the identity
+		// on disk still says who this machine is.
+		if id, err := hub.LoadIdentity(d.hubDir()); err == nil && strings.TrimSuffix(id.URL, "/") == strings.TrimSuffix(h.URL, "/") {
+			out.Joined, out.Device, out.Org, out.DeviceName = true, id.DeviceID, id.Org, id.DeviceName
+		}
 	}
 	for _, s := range d.sessions.Snapshot() {
 		if s.HubItem.ItemID == "" {
@@ -1177,8 +1350,29 @@ func (d *Daemon) hubStatusData() protocol.HubStatusData {
 		out.Sessions = append(out.Sessions, protocol.HubSessionInfo{
 			Session: s.ID, Project: s.Project, ItemID: s.HubItem.ItemID, Kind: s.HubItem.Kind,
 			ClaimedAt: s.HubItem.ClaimedAt, LeaseExpires: s.HubItem.LeaseExpires,
-			LeaseLost: s.HubItem.LeaseLost, Reported: s.HubItem.Reported,
+			LeaseLost: s.HubItem.LeaseLost, Released: s.HubItem.Released, Reported: s.HubItem.Reported,
+			Summary: hubSessionLabel(s),
 		})
 	}
 	return out
+}
+
+// hubSessionLabel is a hub session's item label; records from before Label
+// existed fall back to their title.
+func hubSessionLabel(s session.Session) string {
+	if s.HubItem.Label != "" {
+		return s.HubItem.Label
+	}
+	return strings.TrimPrefix(s.Title, "hub: ")
+}
+
+// hubSessionHub is SessionInfo.hub for s (nil for a non-hub session).
+func hubSessionHub(s session.Session) *protocol.HubSessionHub {
+	if s.HubItem.ItemID == "" {
+		return nil
+	}
+	return &protocol.HubSessionHub{
+		ItemID: s.HubItem.ItemID, Kind: s.HubItem.Kind, Label: hubSessionLabel(s),
+		LeaseLost: s.HubItem.LeaseLost, Released: s.HubItem.Released,
+	}
 }

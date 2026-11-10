@@ -1240,9 +1240,16 @@ type HubWork struct {
 	// once the outcome was queued for the hub. Stamped BEFORE the request, so a
 	// crash never reports twice.
 	Reported string `json:"reported,omitempty"`
+	// Label is lola's own short name for the item, built at claim time from
+	// validated fields ("GHSA-xxxx · lodash", "PR #12 · lodash").
+	Label string `json:"label,omitempty"`
+	// Released is set when a person gave the lease back (cmd=hubRelease)
+	// while the session lived on: the session keeps running, lola stops
+	// renewing and reporting for it, exactly as for a lost lease.
+	Released bool `json:"released,omitempty"`
 }
 
 // Open reports whether the claim still wants renewal and an outcome.
 func (h HubWork) Open() bool {
-	return h.ItemID != "" && !h.LeaseLost && h.Reported == ""
+	return h.ItemID != "" && !h.LeaseLost && !h.Released && h.Reported == ""
 }

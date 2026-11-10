@@ -443,6 +443,12 @@ func Logs(poll string, follow bool) error {
 	}
 }
 
+// RequestResponse sends one request and returns the daemon's whole Response.
+// The error is the TRANSPORT's only (no daemon, a broken socket); a daemon
+// that refused the request answers with OK=false. For callers that fall back
+// to a local path when the daemon is not running.
+func RequestResponse(req protocol.Request) (*protocol.Response, error) { return request(req) }
+
 // Request sends one request to the daemon and returns its Data payload, or the
 // daemon's error. For CLI subcommands that act on the reply themselves instead
 // of letting Send print it.

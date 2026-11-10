@@ -255,7 +255,7 @@ func (c *Client) Release(ctx context.Context, id string) error {
 // FetchPolicy (policy.go) is the verifying caller. A hub with no policy
 // answers 404 no_policy (IsCode(err, hubproto.CodeNoPolicy)).
 func (c *Client) Policy(ctx context.Context) (hubproto.Policy, error) {
-	raw, err := c.raw(ctx, http.MethodGet, hubproto.PathPolicy, nil)
+	raw, err := c.raw(ctx, http.MethodGet, hubproto.PathPolicy, nil, hubproto.MaxBody)
 	if err != nil {
 		return hubproto.Policy{}, err
 	}
@@ -265,7 +265,7 @@ func (c *Client) Policy(ctx context.Context) (hubproto.Policy, error) {
 // do sends one signed request and strictly decodes the 2xx body into out
 // (nil = the body is drained and ignored).
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
-	raw, err := c.raw(ctx, method, path, in)
+	raw, err := c.raw(ctx, method, path, in, hubproto.MaxBody)
 	if err != nil {
 		return err
 	}
@@ -278,7 +278,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	return nil
 }
 
-func (c *Client) raw(ctx context.Context, method, path string, in any) ([]byte, error) {
+// raw sends one signed request and returns the 2xx body, read up to limit
+// bytes (hubproto.MaxBody for every frame but the board views).
+func (c *Client) raw(ctx context.Context, method, path string, in any, limit int64) ([]byte, error) {
 	var body []byte
 	if in != nil {
 		var err error
@@ -328,11 +330,11 @@ func (c *Client) raw(ctx context.Context, method, path string, in any) ([]byte, 
 		return nil, fmt.Errorf("hub: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, hubproto.MaxBody+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("hub: read %s: %w", path, err)
 	}
-	if len(data) > hubproto.MaxBody {
+	if int64(len(data)) > limit {
 		return nil, hubproto.ErrTooLarge
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

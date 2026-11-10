@@ -217,7 +217,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   or a log) and identity (`hub.json`), the signed bounded HTTP client, the
   briefing templates per kind (`Briefing` — lola's own text from validated
   fields), the gh findings `Collector`, policy verification (display only),
-  the pure `Accept` gate, and `Join`/`Leave`/`LocalStatus` behind `lola hub`.
+  the pure `Accept` gate (and `AcceptIntent`, its human-claim twin), the
+  read-only `Board`/`Org` views (decoded at `hubproto.MaxViewBody`, validated
+  WHOLE), and `Join`/`Leave`/`LocalStatus` behind `lola hub`.
 - `internal/gitrepo` — reads a checkout with LOCAL git only (no network, no
   `gh`): `Detect` resolves the GitHub `owner/name` from its remotes (upstream,
   then origin), `Branches` the fork-from candidates, and `Inspect` gathers root
@@ -278,7 +280,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - `writeback.go` — P4 Linear state transitions + comments.
 - `hubwire.go` — the opt-in lola-hub loop (`[hub]`, `hub_chores`): heartbeat →
   findings → offers → claim → spawn → outcomes → policy, plus `cmd=hubStatus`.
-  See the hub invariant below.
+  `hubClaimItem` is THE claim path, for the loop and a person alike.
+  `hubcmds.go` — the HUMAN hub commands (`protocol.HubHumanCommands`: join,
+  leave, board, org, claim, release, sync) the desktop app and `lola hub`
+  send. See the hub invariant below.
 - `state.go` — the per-poll `seen` store and in-flight set.
 
 ## Non-obvious invariants (read before changing daemon code)
@@ -1095,8 +1100,32 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   - Only what the protocol names leaves the machine: repo slugs, validated
     findings, item ids, a PR URL and a delivery word — never a session id, path
     or pane text. The policy is verified against locally pinned keys and is
-    DISPLAY ONLY in this phase. `hubStatus` is a read; every hub write is a
-    local CLI edit + `reload`, which `internal/remote` denies.
+    DISPLAY ONLY in this phase. `hubStatus` is a read a phone may make.
+  - **A person's hub command is a human act, and only a human's.**
+    `protocol.HubHumanCommands` (join, leave, board, org, claim, release,
+    sync) are denied by `internal/remote` as a list (a phone gets none of
+    them, the board and org included: they carry the whole team's work and
+    device names) and named by no sandbox hook-bridge allowlist. Rules:
+    - `cmd=hubClaim` goes through `hubClaimItem`, the loop's path, with the
+      human rules of every human open: the click is the opt-in (no
+      `hub_chores`) and intent (no concurrency cap, no daily count, no
+      cooldown), it still RESERVES a slot so a tick beside it counts it, and
+      `require_sandbox`, the kind filter, `dispatchHold`, the health gate and
+      the GitHub re-read all hold — a click does not make an item safer to run
+      on the host. Several projects on the item's repo need `project`. A
+      per-item in-flight set keeps the loop and a click from claiming one item
+      twice.
+    - `cmd=hubRelease` never stops a session: it sets `HubItem.Released`,
+      which ends renewal and reporting exactly like a lost lease (`Open()`).
+      A hub that cannot be reached gets the release through the outbox; a hub
+      that refuses it changes nothing here.
+    - The board/org views are display data: cached (20s / 60s) so a polling UI
+      cannot flood the hub, refused whole on one bad row, and nothing on them
+      is acted on — a claim re-finds the item (offers, then the open board)
+      and re-reads it from GitHub.
+    - `cmd=hubJoin` carries the enroll token: never logged, echoed or
+      returned, scrubbed from an error that happens to contain it, and the
+      enrollment is shielded from a client hanging up mid-request.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the

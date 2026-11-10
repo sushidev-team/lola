@@ -169,7 +169,7 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	if res, ok := repairResult(cfg); ok {
 		add(res)
 	}
-	if res, ok := hubResult(cfg); ok {
+	if res, ok := hubResult(ctx, cfg); ok {
 		add(res)
 	}
 	for _, res := range fallbackResults(cfg) {
@@ -535,11 +535,35 @@ func firstErr(err error) string {
 	return firstLine([]byte(err.Error()))
 }
 
-// hubResult reports the local half of [hub] — identity and device key — only
-// while the hub is enabled. Never critical: the hub only offers chores, and a
-// daemon without it still dispatches Linear work. It never contacts the hub:
-// `lola hub status` shows the daemon's last heartbeat for reachability.
-func hubResult(cfg *config.Config) (Result, bool) {
+// hubProbeTimeout bounds the reachability probe.
+const hubProbeTimeout = 5 * time.Second
+
+// hubProbe is the reachability seam: one cheap, signed, READ-ONLY call to the
+// hub as this device (GET /v1/org, falling back to /v1/offers on a hub that
+// predates the board views). Tests replace it; nil skips the probe.
+var hubProbe = func(ctx context.Context, url, dir string) error {
+	key, err := hub.LoadKey(dir)
+	if err != nil {
+		return err
+	}
+	c, err := hub.NewClient(url, key)
+	if err != nil {
+		return err
+	}
+	c.Timeout = hubProbeTimeout
+	_, err = c.Org(ctx)
+	var ae *hub.APIError
+	if errors.As(err, &ae) && ae.Status == 404 {
+		_, _, err = c.Offers(ctx)
+	}
+	return err
+}
+
+// hubResult reports [hub] — identity, device key, and, once those are sound,
+// whether the hub answers a signed request — only while the hub is enabled.
+// Never critical: the hub only offers chores, and a daemon without it still
+// dispatches Linear work.
+func hubResult(ctx context.Context, cfg *config.Config) (Result, bool) {
 	if cfg == nil || !cfg.Hub.Enabled {
 		return Result{}, false
 	}
@@ -562,5 +586,12 @@ func hubResult(cfg *config.Config) (Result, bool) {
 	case strings.TrimSuffix(st.Identity.URL, "/") != strings.TrimSuffix(cfg.Hub.URL, "/"):
 		return Result{Name: checkHub, Detail: "joined " + st.Identity.URL + " but [hub].url names " + cfg.Hub.URL}, true
 	}
-	return Result{Name: checkHub, OK: true, Detail: fmt.Sprintf("joined org %s as device %s (%s)", st.Identity.Org, st.Identity.DeviceID, st.Identity.URL)}, true
+	detail := fmt.Sprintf("joined org %s as device %s (%s)", st.Identity.Org, st.Identity.DeviceID, st.Identity.URL)
+	if hubProbe != nil {
+		if err := hubProbe(ctx, cfg.Hub.URL, dir); err != nil {
+			return Result{Name: checkHub, Detail: detail + "; hub not reachable: " + firstErr(err)}, true
+		}
+		detail += ", reachable"
+	}
+	return Result{Name: checkHub, OK: true, Detail: detail}, true
 }

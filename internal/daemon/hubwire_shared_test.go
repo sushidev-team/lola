@@ -169,6 +169,12 @@ func (m *member) Release(_ context.Context, id string) error {
 	return nil
 }
 
+func (m *member) Board(context.Context, hubproto.State, int) (hubproto.BoardResponse, error) {
+	return hubproto.BoardResponse{}, nil
+}
+
+func (m *member) Org(context.Context) (hubproto.OrgView, error) { return hubproto.OrgView{}, nil }
+
 func (m *member) FetchPolicy(context.Context, config.HubConfig, string, string, time.Time) (hub.StoredPolicy, error) {
 	return hub.StoredPolicy{}, &hub.APIError{Status: 404, Code: hubproto.CodeNoPolicy}
 }

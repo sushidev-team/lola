@@ -565,6 +565,10 @@ type SessionInfo struct {
 	Board *BoardInfo    `json:"board,omitempty"`
 	Tasks []SessionTask `json:"tasks,omitempty"`
 
+	// Hub is set for a session working a lola-hub item (nil otherwise, so
+	// mobile/ and older clients see nothing new).
+	Hub *HubSessionHub `json:"hub,omitempty"`
+
 	// FeedbackPending is true while a human's diff-viewer feedback
 	// (cmd=feedback) is queued for this session's agent, waiting for the pane to
 	// be verifiably resting at its prompt.
