@@ -121,10 +121,10 @@ it("uses the native directory picker and keeps the path when cancelled", async (
   const pick = vi.spyOn(ConfigService,"PickFolder").mockResolvedValueOnce("/code/Scratch folder").mockResolvedValueOnce("");
   const open = vi.spyOn(store,"openManual").mockResolvedValue(undefined);
   render(NewSession);
-  await fireEvent.click(screen.getByRole("button",{name:"Choose folder…"}));
+  await fireEvent.click(screen.getByRole("button",{name:"Browse for session directory"}));
   expect(pick).toHaveBeenCalledWith("");
   expect(screen.getByLabelText("Directory")).toHaveValue("/code/Scratch folder");
-  await fireEvent.click(screen.getByRole("button",{name:"Choose folder…"}));
+  await fireEvent.click(screen.getByRole("button",{name:"Browse for session directory"}));
   expect(pick).toHaveBeenLastCalledWith("/code/Scratch folder");
   expect(screen.getByLabelText("Directory")).toHaveValue("/code/Scratch folder");
   await fireEvent.click(screen.getByRole("button",{name:"Start"}));

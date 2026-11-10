@@ -68,6 +68,7 @@ const fakeDto = {
 // the factories run.
 const {
   GetSettings,
+  PickFolder,
   SaveSettings,
   PrioritySortKeys,
   RemoteBinds,
@@ -87,6 +88,7 @@ const {
   closeOverlay,
 } = vi.hoisted(() => ({
   GetSettings: vi.fn(),
+  PickFolder: vi.fn(),
   SaveSettings: vi.fn(),
   PrioritySortKeys: vi.fn(),
   RemoteBinds: vi.fn(),
@@ -109,6 +111,7 @@ const {
 vi.mock("@bindings/desktop", () => ({
   ConfigService: {
     GetSettings: () => GetSettings(),
+    PickFolder: (start: string) => PickFolder(start),
     SaveSettings: (dto: unknown) => SaveSettings(dto),
     PrioritySortKeys: () => PrioritySortKeys(),
     RemoteBinds: () => RemoteBinds(),
@@ -225,6 +228,7 @@ describe("SettingsForm", () => {
   beforeEach(() => {
     cleanup();
     GetSettings.mockReset().mockResolvedValue({ ...fakeDto });
+    PickFolder.mockReset().mockResolvedValue("");
     SaveSettings.mockReset().mockResolvedValue(undefined);
     WorkspaceLabels.mockReset().mockResolvedValue(workspaceLabels);
     PrioritySortKeys.mockReset().mockResolvedValue(["priority", "createdAt"]);
@@ -269,6 +273,17 @@ describe("SettingsForm", () => {
     // the next test. Reset it to the persisted-default state the app boots in.
     appearance.preview({ theme: DEFAULT_THEME_ID, followSystem: false, lightTheme: "github-light", darkTheme: DEFAULT_THEME_ID });
     appearance.paint();
+  });
+
+  it("saves a temporary shell directory selected with Browse", async () => {
+    PickFolder.mockResolvedValue("/Users/me/Shell projects");
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("button", { name: "Browse for temporary shell directory" }));
+    await waitFor(() => expect(screen.getByLabelText("Temporary shell directory")).toHaveValue("/Users/me/Shell projects"));
+    expect(PickFolder).toHaveBeenCalledWith("");
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ temporaryDirectory: "/Users/me/Shell projects" });
   });
 
   it("saves the global PR comment automation default", async () => {
@@ -364,6 +379,7 @@ describe("SettingsForm", () => {
     // Every kind the BACKEND offers is addable — the list is not hardcoded here
     // or in the component, so a new review agent shows up on both sides at once.
     await waitFor(() => expect(ReviewKinds).toHaveBeenCalled());
+    await fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
     for (const k of reviewKinds) {
       expect(
         await screen.findByRole("button", { name: ({ "claude-session": "Claude", "codex-session": "Codex", "opencode-session": "OpenCode", "coderabbit-cli": "CodeRabbit CLI", "custom-cli": "Custom CLI", "coderabbit-watch": "CodeRabbit bot", "bot-watch": "Review bot" } as Record<string, string>)[k.kind] }),
@@ -797,9 +813,12 @@ describe("SettingsForm", () => {
     ] });
     render(SettingsForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    expect(screen.queryByRole("button", { name: "Backend" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /Specialist reviewers/ }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Backend" })).toBeEnabled());
     await fireEvent.click(screen.getByRole("button", { name: "Backend" }));
     const backend = within(screen.getByRole("group", { name: "backend settings" }));
+    expect(backend.getByLabelText("ID")).not.toBeVisible();
     expect(backend.getByLabelText("Provider")).toHaveValue("codex-session");
     expect(backend.getByLabelText("Enabled")).not.toBeChecked();
     await fireEvent.click(backend.getByLabelText("Enabled"));
@@ -824,6 +843,7 @@ describe("SettingsForm", () => {
     SaveSettings.mockRejectedValueOnce(new Error("specialist requires an enabled agent provider"));
     render(SettingsForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    await fireEvent.click(screen.getByRole("button", { name: /Specialist reviewers/ }));
     await fireEvent.click(screen.getByText("Backend", { selector: "summary span.font-medium" }));
     const group = within(screen.getByRole("group", { name: "api-review settings" }));
     expect(group.getByLabelText("Enabled")).toBeEnabled();
@@ -839,6 +859,7 @@ describe("SettingsForm", () => {
     GetSettings.mockResolvedValue({ ...fakeDto, reviewProviders: [{ provider: "codex-session", enabled: true, onPrOpen: false, sendToAgent: false, notify: false, githubInline: false, visible: false }], reviewProfiles: [{ id: "backend", kind: "backend", provider: "codex-session", version: "1", enabled: false, required: false, on_pr_open: false }], reviewSpecialties: [{ kind: "backend", label: "Backend", artifacts: [] }] });
     render(SettingsForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    await fireEvent.click(screen.getByRole("button", { name: /Specialist reviewers/ }));
     await fireEvent.click(screen.getByText("Backend", { selector: "summary span.font-medium" }));
     await fireEvent.click(screen.getByRole("button", { name: "Remove specialist backend" }));
     expect(screen.getByText(/No specialists configured/)).toBeInTheDocument();
@@ -862,6 +883,8 @@ describe("SettingsForm", () => {
     expect(card.queryByLabelText("Model")).not.toBeInTheDocument();
     await fireEvent.click(card.getByRole("checkbox", { name: "Disabled" }));
     expect(card.getByLabelText("Custom Model")).toHaveValue("private/model");
+    expect(card.queryByRole("checkbox", { name: "Commit status gate" })).not.toBeInTheDocument();
+    await fireEvent.click(card.getByRole("button", { name: /Publishing/ }));
     // A DTO without githubStatus (an older daemon build) renders it off.
     expect(card.getByRole("checkbox", { name: "Commit status gate" })).not.toBeChecked();
     const advanced = card.getByRole("button", { name: "Advanced settings" });
@@ -888,6 +911,7 @@ describe("SettingsForm", () => {
     render(SettingsForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
     const card = within(await screen.findByRole("region", { name: "Codex review" }));
+    await fireEvent.click(card.getByRole("button", { name: /Publishing/ }));
     await fireEvent.click(card.getByRole("checkbox", { name: "Commit status gate" }));
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
@@ -905,9 +929,12 @@ describe("SettingsForm", () => {
       render(SettingsForm);
       await screen.findByDisplayValue("60s");
       await fireEvent.click(screen.getByRole("tab", { name: "Review" }));
+      await fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
       await fireEvent.click(
         screen.getByRole("button", { name: "Claude" }),
       );
+      const card = within(screen.getByRole("region", { name: "Claude review" }));
+      await fireEvent.click(card.getByRole("button", { name: /Publishing/ }));
     }
 
     it("hides the shape toggle until the github transport is picked", async () => {
@@ -1308,19 +1335,40 @@ describe("SettingsForm", () => {
   // never gain a key and rotating one meant editing the Keychain by hand — while
   // a daemon without a key fails every poll.
   describe("Linear API key", () => {
-    async function openLinearTab() {
+    async function openLinearTab(edit = true) {
       render(SettingsForm);
       await screen.findByDisplayValue("60s");
       await fireEvent.click(screen.getByRole("tab", { name: "Linear" }));
+      await waitFor(() => expect(screen.queryByText("Checking…")).not.toBeInTheDocument());
+      if (!edit) return screen.getByRole("button", { name: "Replace key…" });
+      const replace = screen.queryByRole("button", { name: "Replace key…" });
+      if (replace) await fireEvent.click(replace);
       return screen.findByLabelText("Linear API key");
     }
 
-    it("reports where the key lives without ever showing it", async () => {
-      await openLinearTab();
+    it("shows the configured status and reveals replacement on request", async () => {
+      await openLinearTab(false);
       expect(await screen.findByText("Key configured")).toBeInTheDocument();
-      expect(
-        screen.getByText(/macOS Keychain \(lola-linear\)/),
-      ).toBeInTheDocument();
+      expect(screen.queryByLabelText("Linear API key")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Save key" })).not.toBeInTheDocument();
+      await fireEvent.click(screen.getByRole("button", { name: "Replace key…" }));
+      expect(await screen.findByLabelText("Linear API key")).toHaveFocus();
+    });
+
+    it("cancels replacement without writing and discards the draft", async () => {
+      const input = await openLinearTab();
+      await fireEvent.input(input, { target: { value: "lin_api_secret" } });
+      await fireEvent.click(screen.getByRole("button", { name: "Validate" }));
+      expect(await screen.findByText("Key is valid.")).toBeInTheDocument();
+      await fireEvent.click(screen.getByRole("button", { name: "Cancel replacement" }));
+
+      expect(SetLinearKey).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText("Linear API key")).not.toBeInTheDocument();
+      const replace = screen.getByRole("button", { name: "Replace key…" });
+      expect(replace).toHaveFocus();
+      await fireEvent.click(replace);
+      expect(await screen.findByLabelText("Linear API key")).toHaveValue("");
+      expect(screen.queryByText("Key is valid.")).not.toBeInTheDocument();
     });
 
     // The state the app exists to surface: a config naming a source that yields
@@ -1392,6 +1440,8 @@ describe("SettingsForm", () => {
       // The daemon reads the key on start and on reload; without this the key is
       // stored but the running daemon keeps failing every poll.
       await waitFor(() => expect(reload).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByLabelText("Linear API key")).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: "Replace key…" })).toHaveFocus());
     });
 
     // Leaving a stored key in a DOM input keeps a live secret on screen for as
@@ -1415,6 +1465,8 @@ describe("SettingsForm", () => {
       expect(
         await screen.findByText(/config.toml is not writable/),
       ).toBeInTheDocument();
+      expect(input).toHaveValue("lin_api_secret");
+      expect(screen.getByRole("button", { name: "Save key" })).toBeEnabled();
     });
 
     // Typing a key must not make the FORM dirty — it is not part of the DTO, and

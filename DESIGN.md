@@ -243,3 +243,34 @@ Shared palette tokens preserve light and dark themes. At narrow widths, the revi
 actions follow the summary, before changes and screenshots. Screenshot previews
 keep their full image visible and open the existing comparison canvas. The scoped
 BeforeMerge presentation leaves the ordinary session overview unchanged.
+
+### Settings hierarchy
+
+The settings dialog keeps Workspace, Connections and Automation as its navigation
+families. Page titles use 18px semibold text; named setting groups use the 15px
+section role. `SettingsGroup.svelte` separates related field sets with 24px spacing
+and a quiet divider, while fields within a group use 16px gaps. Labels use normal
+ink and supporting text uses the smaller faint role directly below its control.
+Numeric inputs are compact; paths and other text fields use the available column.
+Fields stack when the content column is narrower than 440px, independently of the
+window width. Navigation group names use compact uppercase semibold labels with
+slight tracking. Entries are indented beneath them and use brighter text; the
+selected entry retains its accent and background. Groups stay expanded so all
+settings destinations remain visible.
+
+General leads with agent sessions, followed by shells and polling. Project defaults
+follow worktree setup, issue pickup and PR follow-up. Automation separates enablement,
+model selection, triggers, limits and evidence. Phone access separates connection,
+network sharing and pairing; security explanations stay beside their controls.
+
+Review settings lead with providers and their core model, trigger and notification
+choices. Adding a provider and configuring specialists are explicit disclosures;
+the specialist summary shows its configured count. Publishing targets and commit
+status gates share a disclosure whose summary names active destinations and gates.
+Specialist IDs, rubric versions, evidence overrides and execution limits sit under
+Advanced settings. These disclosures preserve every configured value while closed.
+
+Local path fields pair editable text with a folder-icon Browse button that opens
+the native file or folder chooser. File selection shows hidden files for SSH keys.
+Remote directories and repository-relative filters remain text fields, since the
+local chooser cannot resolve their filesystem context.

@@ -780,8 +780,8 @@
                   oninput={(e) => { d.path = e.currentTarget.value; }}
                   onblur={() => void inspect(d.path, { fill: true })}
                 />
-                <Button size="sm" variant="secondary" onclick={pickFolder} disabled={picking}>
-                  {picking ? "Choosing…" : "Choose folder…"}
+                <Button size="sm" variant="secondary" class="h-auto! self-stretch" onclick={pickFolder} loading={picking} aria-label="Browse for project folder">
+                  <Icon name="folder" size={14} />Browse…
                 </Button>
               </span>
               <span class={hintCls}>

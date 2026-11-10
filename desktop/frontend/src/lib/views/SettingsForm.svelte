@@ -9,12 +9,14 @@
   import HelpText from "$lib/components/HelpText.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
   import Button from "$lib/components/Button.svelte";
+  import SettingsGroup from "$lib/components/SettingsGroup.svelte";
   import Chevron from "$lib/components/Chevron.svelte";
   import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
   import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT } from "$lib/settingsFields";
   import Checkbox from "$lib/components/Checkbox.svelte";
   import AgentModelFields from "$lib/components/AgentModelFields.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
+  import PathInput from "$lib/components/PathInput.svelte";
   import { POLL_INTERVALS, BRANCH_PREFIXES, BASE_FLAGS } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
   import ReviewProfiles from "$lib/components/ReviewProfiles.svelte";
@@ -316,8 +318,8 @@
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const formId = $props.id();
   let pollingOpen = $state(false);
-  const rowCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-baseline gap-3";
-  const rowTopCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-start gap-3";
+  const rowCls = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-baseline gap-x-6 gap-y-1.5";
+  const rowTopCls = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-start gap-x-6 gap-y-1.5";
   const hintCls = "mt-1 block text-sm text-faint";
 
 
@@ -514,9 +516,18 @@
   // without a key fails every poll, the exact silent failure this app is for.
   let keyStatus = $state<LinearKeyStatusDTO | null>(null);
   let keyInput = $state("");
+  let keyEditing = $state(false);
   let keyBusy = $state<"" | "validating" | "saving">("");
   let keyMsg = $state("");
   let keyMsgKind = $state<"good" | "bad">("good");
+
+  async function editKey(editing: boolean) {
+    keyInput = "";
+    keyMsg = "";
+    keyEditing = editing;
+    await tick();
+    document.getElementById(`${formId}-${editing ? "linear-key" : "replace-key"}`)?.focus();
+  }
 
   async function loadKeyStatus() {
     try {
@@ -559,6 +570,9 @@
       // The daemon reads the key at startup and on reload, so a key saved into a
       // running daemon means nothing until it re-reads config.
       await store.reload();
+      keyEditing = false;
+      await tick();
+      document.getElementById(`${formId}-replace-key`)?.focus();
     } catch (e) {
       keyMsg = String(e);
       keyMsgKind = "bad";
@@ -738,11 +752,7 @@
 </script>
 
 {#snippet head(label: string)}
-  <!-- text-lg, not `label`: a section head rendered as an 12px uppercase faint
-       micro-label is smaller AND quieter than the 13px rows it heads, which is
-       hierarchy upside down. This is the one place in the settings overlay that
-       must out-rank the content under it. `label` stays for per-field captions. -->
-  <h3 class="mb-2 text-lg text-ink">{label}</h3>
+  <h3 class="settings-heading">{label}</h3>
 {/snippet}
 
 {#snippet connectRow(caption: string, shown: string, value: string)}
@@ -832,17 +842,13 @@
 
     <!-- No size class: every field caption, control and option inherits the
          13px base. Only the faint explanations and micro-labels step down. -->
-    <div role="region" aria-label="Settings content" class="min-h-0 min-w-0 overflow-y-auto overscroll-contain p-4">
+    <div role="region" aria-label="Settings content" class="settings-content min-h-0 min-w-0 overflow-y-auto overscroll-contain p-6">
       {#if tab === "defaults"}
         <section>
           {@render head("General")}
-          <label class={rowCls}>
-            <span class="text-faint">Temporary shell directory</span>
-            <span><input class={inputCls} placeholder="~" bind:value={d.temporaryDirectory} aria-label="Temporary shell directory" />
-            <span class={hintCls}>Default folder for project-free shells. Leave empty to use your home directory.</span></span>
-          </label>
-          <div class="copy mb-4 text-sm text-faint"><HelpText label="session limits" summary="Workspace limit and project defaults." detail="Choose the coding agent and how many sessions can run at once. Projects can override their agent and limit." /></div>
-          <div class="space-y-2">
+          <SettingsGroup title="Agent sessions">
+            <AgentModelFields provider={d.agent || "claude"} providerLabel="Default agent" rowClass={rowCls}
+              onProviderChange={(value) => { d.agent = value; }} />
             <label class={rowCls}>
               <span class="text-faint">Total running agents</span>
               <span>
@@ -859,9 +865,15 @@
                 <span id={`${formId}-project-cap-help`} class={hintCls} aria-live="polite">{projectCapError || (d.concurrencyCap === 0 ? "Set a limit in each project." : "Default limit. Projects can override it.")}</span>
               </span>
             </label>
-            <AgentModelFields provider={d.agent || "claude"} providerLabel="Default agent" rowClass={rowCls}
-              onProviderChange={(value) => { d.agent = value; }} />
-            <div class="border-t border-edge pt-3">
+          </SettingsGroup>
+          <SettingsGroup title="Shells">
+            <div class={rowCls}>
+              <label for={`${formId}-temporary-directory`} class="text-faint">Temporary shell directory</label>
+              <div><PathInput id={`${formId}-temporary-directory`} label="Temporary shell directory" placeholder="~" bind:value={d.temporaryDirectory} />
+              <span class={hintCls}>Used for shells outside a project. Empty uses your home folder.</span></div>
+            </div>
+          </SettingsGroup>
+          <div class="mt-6 border-t border-edge pt-4">
               <Button aria-expanded={pollingOpen} aria-controls={`${formId}-polling-frequency`} onclick={() => { pollingOpen = !pollingOpen; }}>
                 <Chevron open={pollingOpen} />Polling frequency
               </Button>
@@ -871,87 +883,79 @@
                   <PresetInput label="Poll interval" value={d.pollInterval} options={POLL_INTERVALS} onChange={(v) => { d.pollInterval = v; }} />
                 </div>
               </div>
-            </div>
           </div>
         </section>
       {:else if tab === "linear"}
         <section>
           {@render head("Linear")}
-          <HelpText label="Linear key storage" summary="Stored in Keychain." detail="Lola uses this key to read Linear issues. The key stays in macOS Keychain; config stores only its source name." />
-
-          <div class="mb-4 rounded-lg border border-edge bg-canvas px-3 py-2.5">
-            {#if !keyStatus}
-              <span class="text-faint">Checking…</span>
-            {:else if keyStatus.resolvable}
-              <span class="text-good"><Icon name="check" size={14} /> Key configured</span>
-              <span class="mt-1 block text-sm text-faint">Read from {keyStatus.source}.</span>
-            {:else if keyStatus.configured}
-              <span class="text-bad"><Icon name="x" size={14} /> Key configured but unreadable</span>
-              <span class="mt-1 block text-sm text-faint">{keyStatus.source} — {keyStatus.detail}</span>
-            {:else}
-              <span class="text-warn"><Icon name="triangle-alert" size={14} /> No key configured</span>
-              <span class="mt-1 block text-sm text-faint">Every poll will fail until one is set.</span>
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              {#if !keyStatus}
+                <span class="text-faint">Checking…</span>
+              {:else if keyStatus.resolvable}
+                <span class="text-good"><Icon name="check" size={14} /> Key configured</span>
+              {:else if keyStatus.configured}
+                <span class="text-bad"><Icon name="x" size={14} /> Key configured but unreadable</span>
+                <span class="mt-1 block text-sm text-faint">{keyStatus.source} — {keyStatus.detail}</span>
+              {:else}
+                <span class="text-warn"><Icon name="triangle-alert" size={14} /> No key configured</span>
+                <span class="mt-1 block text-sm text-faint">Every poll will fail until one is set.</span>
+              {/if}
+            </div>
+            {#if keyStatus?.configured && !keyEditing}
+              <Button id={`${formId}-replace-key`} variant="secondary" onclick={() => editKey(true)}>Replace key…</Button>
             {/if}
           </div>
 
-          <div class="space-y-2">
-            <div class={rowTopCls}>
-              <span class="text-faint">{keyStatus?.configured ? "Replace key" : "API key"}</span>
-              <span>
-                <input
-                  class="{inputCls} font-mono"
-                  type="password"
-                  autocomplete="off"
-                  aria-label="Linear API key"
-                  placeholder="lin_api_…"
-                  bind:value={keyInput}
-                  oninput={() => (keyMsg = "")}
-                />
-                <HelpText label="creating a Linear key" summary="Personal API key." detail="In Linear, open Settings → Security &amp; access → API keys." />
-              </span>
-            </div>
-            <div class={rowCls}>
-              <span></span>
-              <span class="flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  disabled={!keyInput.trim() || keyBusy !== ""}
-                  loading={keyBusy === "validating"}
-                  onclick={validateKey}>Validate</Button
-                >
-                <Button
-                  variant="primary"
-                  disabled={!keyInput.trim() || keyBusy !== ""}
-                  loading={keyBusy === "saving"}
-                  onclick={saveKey}>Save key</Button
-                >
-              </span>
-            </div>
-            {#if keyMsg}
+          {#if !keyStatus?.configured || keyEditing}
+            <div class="space-y-2">
               <div class={rowTopCls}>
-                <span></span>
-                <p class="text-sm {keyMsgKind === 'good' ? 'text-good' : 'text-bad'}">{keyMsg}</p>
+                <label for={`${formId}-linear-key`} class="text-faint">{keyStatus?.configured ? "New API key" : "API key"}</label>
+                <span>
+                  <input
+                    id={`${formId}-linear-key`}
+                    class="{inputCls} font-mono"
+                    type="password"
+                    autocomplete="off"
+                    aria-label="Linear API key"
+                    aria-describedby={`${formId}-linear-key-help`}
+                    placeholder="lin_api_…"
+                    bind:value={keyInput}
+                    disabled={keyBusy !== ""}
+                    oninput={() => (keyMsg = "")}
+                  />
+                  <span id={`${formId}-linear-key-help`} class={hintCls}>Create a personal key in Linear → Settings → Security &amp; access → API keys.</span>
+                </span>
               </div>
-            {/if}
-          </div>
-
-          <!-- Saved on its own, not by the overlay's Save: the key is a secret and
-               must not ride along on an unrelated form commit (see saveKey). -->
-          <HelpText label="saving the Linear key" summary="Save key applies immediately." detail="The main Save button saves settings only. Use Save key to store or replace your Linear credential." />
+              <div class={rowCls}>
+                <span></span>
+                <span class="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    disabled={!keyInput.trim() || keyBusy !== ""}
+                    loading={keyBusy === "validating"}
+                    onclick={validateKey}>Validate</Button
+                  >
+                  <Button
+                    variant="primary"
+                    disabled={!keyInput.trim() || keyBusy !== ""}
+                    loading={keyBusy === "saving"}
+                    onclick={saveKey}>Save key</Button
+                  >
+                  {#if keyStatus?.configured}
+                    <Button disabled={keyBusy !== ""} onclick={() => editKey(false)}>Cancel replacement</Button>
+                  {/if}
+                </span>
+              </div>
+            </div>
+          {/if}
+          <p role="status" class="mt-2 text-sm {keyMsgKind === 'good' ? 'text-good' : 'text-bad'}">{keyMsg}</p>
         </section>
       {:else if tab === "project"}
         <section>
           {@render head("Project defaults")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="project defaults" summary="Defaults for all projects." detail="Shared settings for all projects. Override them in an individual project when needed.
-            Shared labels must be workspace labels so they work across teams." /></div>
-          <div class="space-y-2">
-            <h4 class="mb-3 text-ink">PR comments</h4>
-            <label class="flex items-center gap-2">
-              <Checkbox checked={!!d.autoPRComments} onchange={() => { d.autoPRComments = !d.autoPRComments; }} />
-              Automatically address and resolve PR comments
-            </label>
-            <p class="text-sm text-faint">When idle, the agent verifies new review comments, pushes fixes and resolves only addressed threads. Projects can override this default. Existing review-provider handoffs are configured separately.</p>
-            <h4 class="border-t border-edge pt-4 text-ink">Worktree setup</h4>
+          <p class="mb-6 text-sm text-faint">Shared defaults. Override them in individual projects.</p>
+          <SettingsGroup title="Worktree setup">
             <div class={rowCls}>
               <span class="text-faint">Branch prefix</span>
               <PresetInput label="Branch prefix" value={d.branchPrefix} options={BRANCH_PREFIXES} onChange={(v) => { d.branchPrefix = v; }} />
@@ -960,7 +964,8 @@
             {@render areaRow("Post-create", d.postCreate, (v) => { d.postCreate = v; }, "npm install", "one command per line")}
             {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value", "one KEY=value per line")}
 
-            <h4 class="border-t border-edge pt-4 text-ink">Issue pickup</h4>
+          </SettingsGroup>
+          <SettingsGroup title="Issue pickup">
             {#if wsLoading}
               <p role="status" class="text-sm text-faint">Loading workspace labels…</p>
             {:else if wsErr}
@@ -1042,16 +1047,25 @@
                 "one key per line — empty means priority, createdAt",
               )}
             {/if}
-          </div>
+          </SettingsGroup>
+          <SettingsGroup title="PR follow-up">
+            <label class="flex items-center gap-2">
+              <Checkbox checked={!!d.autoPRComments} onchange={() => { d.autoPRComments = !d.autoPRComments; }} />
+              Automatically address and resolve PR comments
+            </label>
+            <p class="text-sm text-faint">When idle, the agent verifies new review comments, pushes fixes and resolves only addressed threads. Projects can override this default. Existing review-provider handoffs are configured separately.</p>
+          </SettingsGroup>
         </section>
       {:else if tab === "notify"}
         <section>
           {@render head("Notifications")}
-          <div class="space-y-2">
+          <SettingsGroup title="Desktop">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.notifyDesktop} />
               <span>Desktop notifications</span>
             </label>
+          </SettingsGroup>
+          <SettingsGroup title="Slack">
             <label class={rowTopCls}>
               <span class="text-faint">Slack webhook env</span>
               <div>
@@ -1059,25 +1073,19 @@
                 <span class={hintCls}>Variable name, not URL.</span>
               </div>
             </label>
-          </div>
+          </SettingsGroup>
         </section>
       {:else if tab === "brain"}
         <section>
           {@render head("Summaries")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="summaries" summary="AI summaries · uses tokens." detail="Use Claude to summarize sessions that need attention or are approved. Summaries use additional tokens." /></div>
-          <div class="space-y-2">
+          <SettingsGroup title="Session summaries" description="Claude summaries use additional tokens.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.brainEnabled} />
               <span>Enabled</span>
             </label>
-            {#if d.brainEnabled}
-            <AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
-              onModelChange={(value) => { d.brainModel = value; }} />
-            <label class={rowCls}>
-              <span class="text-faint">Timeout (s)</span>
-              <input class={inputCls} type="number" min="0" bind:value={d.brainTimeout} />
-            </label>
-            <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
+          </SettingsGroup>
+          {#if d.brainEnabled}
+          <SettingsGroup title="When to summarize">
               <label class="flex cursor-pointer items-center gap-2">
                 <Checkbox bind:checked={d.brainSummarizeEscalation} />
                 <span>Summarize on escalation</span>
@@ -1086,20 +1094,28 @@
                 <Checkbox bind:checked={d.brainSummarizeApproved} />
                 <span>Summarize on approved</span>
               </label>
-            </div>
-            {/if}
-          </div>
+          </SettingsGroup>
+          <SettingsGroup title="Model and limits">
+            <AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
+              onModelChange={(value) => { d.brainModel = value; }} />
+            <label class={rowCls}>
+              <span class="text-faint">Timeout (s)</span>
+              <input class={inputCls} type="number" min="0" bind:value={d.brainTimeout} />
+            </label>
+          </SettingsGroup>
+          {/if}
         </section>
       {:else if tab === "interpreter"}
         <section>
           {@render head("Status interpretation")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="status interpretation" summary="AI status estimates · uses tokens." detail="Use the selected agent to add a status estimate and short headline to each session. This changes only the display and uses additional tokens." /></div>
-          <div class="space-y-2">
+          <SettingsGroup title="AI status estimates" description="Adds display-only estimates and headlines. Uses additional tokens.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.statusAgentEnabled} />
               <span>Enabled</span>
             </label>
-            {#if d.statusAgentEnabled}
+          </SettingsGroup>
+          {#if d.statusAgentEnabled}
+          <SettingsGroup title="Agent and model">
             <AgentModelFields provider={d.statusAgentAgent || "claude"} model={d.statusAgentModel ?? ""} rowClass={rowCls}
               onProviderChange={(value) => {
                 statusBinaries.set(d.statusAgentAgent || "claude", d.statusAgentBin);
@@ -1110,11 +1126,13 @@
             <Disclosure label="Executable override">
               <div class="mt-3 {rowCls}">
                 <span class="text-faint">Binary</span>
-                <PresetInput label="Binary" value={d.statusAgentBin}
+                <PresetInput label="Binary" value={d.statusAgentBin} pathKind="file"
                   options={[{ value: "", label: `Default (${d.statusAgentAgent || "claude"} on PATH)` }, { value: d.statusAgentAgent || "claude", label: d.statusAgentAgent || "claude" }]}
                   onChange={(v) => { d.statusAgentBin = v; }} placeholder={`/path/to/${d.statusAgentAgent || "claude"}`} />
               </div>
             </Disclosure>
+          </SettingsGroup>
+          <SettingsGroup title="Frequency and limits">
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.statusAgentTimeout} />
@@ -1127,6 +1145,8 @@
               <span class="text-faint">Max per cycle</span>
               <input class={inputCls} type="number" min="0" bind:value={d.statusAgentMaxPerCycle} />
             </label>
+          </SettingsGroup>
+          <SettingsGroup title="Evidence">
             <label class={rowCls}>
               <span class="text-faint">Min confidence</span>
               <input class={inputCls} type="number" min="0" max="1" step="0.05" bind:value={d.statusAgentMinConfidence} />
@@ -1135,16 +1155,15 @@
               <Checkbox bind:checked={d.statusAgentIncludeTranscript} />
               <span>Include transcript tail</span>
             </label>
-            {/if}
-          </div>
+          </SettingsGroup>
+          {/if}
         </section>
       {:else if tab === "sshhosts"}
         <SSHHostSettings onDirty={(v) => (sshHostDirty = v)} />
       {:else if tab === "remote"}
         <section>
           {@render head("Phone access")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="phone access" summary="Connect the mobile app." detail="Connect the Lola mobile app to this Mac. Paired phones can read sessions, watch terminals and send messages to your coding agents." /></div>
-          <div class="space-y-2">
+          <SettingsGroup title="Connection" description="Let the Lola mobile app access sessions on this Mac.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.remoteEnabled} />
               <span>Enabled</span>
@@ -1160,7 +1179,7 @@
                   <option value={BIND_LITERAL}>IP literal…</option>
                 </Select>
                 {#if !bindShowsLiteral && BIND_HELP[d.remoteBind]}
-                  <span class="text-xs text-faint">{BIND_HELP[d.remoteBind]}</span>
+                  <span class="text-sm text-faint">{BIND_HELP[d.remoteBind]}</span>
                 {/if}
               </span>
             </div>
@@ -1173,7 +1192,7 @@
                   placeholder="192.168.1.20"
                   bind:value={d.remoteBind} />
               </label>
-              <div class="copy text-xs text-faint"><HelpText label="bind address" summary="IP address, not hostname." detail="An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
+              <div class="copy text-sm text-faint"><HelpText label="bind address" summary="IP address, not hostname." detail="An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
                 network call, so the daemon rejects one." /></div>
             {/if}
             <label class={rowCls}>
@@ -1181,6 +1200,8 @@
               <input class={inputCls} type="number" min="0" max="65535" bind:value={d.remotePort} />
             </label>
 
+          </SettingsGroup>
+          <SettingsGroup title="Network sharing">
             <!-- The bind rail's one hole. Two keys have to agree — this AND a
                  non-loopback bind — so a config that merely says "lan" still
                  binds loopback. It is a config key rather than an environment
@@ -1219,11 +1240,10 @@
               </label>
               <div class="ml-6"><HelpText label="Publish dev servers of the active session" summary="Dev servers accessible on your network." detail="Shares the active session’s local dev servers on one private interface and a temporary port. Anyone on that network can reach them while the session is active." /></div>
             </div>
-          </div>
-          <div class="mt-4 border-t border-edge pt-4">
+          </SettingsGroup>
+          <SettingsGroup title="Pairing">
             <div class="flex items-center justify-between gap-3">
               <div>
-                <h4 class="text-ink">Connect a phone</h4>
                 <div class="copy text-sm text-faint"><HelpText label="connect code" summary="Scan with the mobile app." detail="The code contains the running listener’s address and credentials. Save connection settings before generating a code." /></div>
               </div>
               {#if connect || connectErr}
@@ -1293,7 +1313,7 @@
                 <HelpText label="shared-key access" summary="One key for all phones." detail="Individual phones cannot be revoked separately. Regenerate the key to disconnect them all." />
               {/if}
             {/if}
-          </div>
+          </SettingsGroup>
 
 
         </section>
@@ -1303,17 +1323,20 @@
           <!-- Applies at once and never joins the form's save: it is this viewer's own preference,
                in localStorage, and config.toml and the daemon never read it. A session you picked
                a view for keeps it. -->
-          <div class="mb-5 grid gap-1.5" data-open-sessions-in>
+          <SettingsGroup title="Session view">
+          <div class="grid gap-2" data-open-sessions-in>
             <span class="text-sm text-faint">Open sessions in</span>
             <div class="flex w-fit gap-0.5 rounded-md border border-edge/60 bg-canvas p-0.5" role="group" aria-label="Open sessions in">
               <Button size="xs" selected={terms.globalView === "conversation"} onclick={() => terms.setGlobalView("conversation")}>Conversation</Button>
               <Button size="xs" selected={terms.globalView === "terminal"} onclick={() => terms.setGlobalView("terminal")}>Terminal</Button>
             </div>
           </div>
-          <div class="mb-4">
+          </SettingsGroup>
+          <SettingsGroup title="Theme">
+          <div>
             <SystemThemePicker value={themePreference} {themeIds} onchange={previewAppearance} />
           </div>
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="theme preview" summary="Preview a theme." detail="Preview a theme for the app and terminals. Save to keep it, or cancel to restore your current theme." /></div>
+          <p class="text-sm text-faint">Save to keep the preview, or cancel to restore your theme.</p>
           <!-- Grid, not flex: WKWebView does not stretch a flex child inside a
                flex column, so a flex layout that fills correctly in Chrome
                collapses to content width in the packaged .app. -->
@@ -1324,20 +1347,15 @@
             {/each}
           </div>
           {/if}
+          </SettingsGroup>
         </section>
       {:else if tab === "review"}
+        {@render head("Review")}
         <div class="space-y-5">
-          <ReviewProfiles bind:profiles={d.reviewProfiles} specialties={d.reviewSpecialties ?? []} providers={d.reviewProviders ?? []} kinds={reviewKinds} />
-          <div class="border-t border-edge pt-4">
-            <h3 class="text-base font-medium text-ink">Review providers</h3>
-            <p class="mt-1 text-sm text-faint">Configure the agents and tools that run reviews. Provider passes and specialist passes have separate triggers.</p>
-          </div>
+          <h4 class="text-lg text-ink">Review providers</h4>
           {#if d.reviewLegacy}
             <div class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-ink">
-              <p>
-                This config still uses the legacy <code>[review]</code>/<code>[coderabbit]</code> tables. They are
-                <span class="text-faint">read-only</span> here — migrate them into the editable provider catalog to continue.
-              </p>
+              <p>Migrate the legacy review config to edit providers.</p>
               <Button variant="secondary" size="md" class="mt-2" onclick={migrateReview}>Migrate to providers</Button>
             </div>
           {/if}
@@ -1359,8 +1377,7 @@
             <section aria-label={`${providerName(p.provider)} review`} class="overflow-hidden rounded-lg border border-edge" class:opacity-60={d.reviewLegacy}>
               <header class="flex items-center gap-3 bg-canvas/40 px-4 py-3">
                 <div class="min-w-0 flex-1">
-                  <h3 class="text-base font-medium text-ink">{providerName(p.provider)}</h3>
-                  <span class="text-xs text-faint">{isWatch(p.provider) ? "PR comments" : isCLI(p.provider) ? "CLI review" : "Agent review"}</span>
+                  <h5 class="text-base font-medium text-ink">{providerName(p.provider)}</h5>
                 </div>
                 <label class="flex cursor-pointer items-center gap-2">
                   <Checkbox disabled={d.reviewLegacy} bind:checked={p.enabled} />
@@ -1400,10 +1417,7 @@
                   </div>
 
                   <div class="space-y-3 border-t border-edge pt-3">
-                    <div class="flex items-center justify-between gap-2">
-                      <h4 class="font-medium text-ink">Findings</h4>
-                      <HelpText label="review findings" summary="Always in Lola." detail="Every review appears in Lola. Choose whether to notify you, send findings to the coding agent, or publish them elsewhere." />
-                    </div>
+                    <h6 class="font-medium text-ink">After review</h6>
                     <div class="grid grid-cols-2 gap-x-4 gap-y-2">
                       <label class="flex cursor-pointer items-center gap-2">
                         <Checkbox disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
@@ -1413,28 +1427,37 @@
                         <Checkbox disabled={d.reviewLegacy} bind:checked={p.notify} />
                         <span>Notify me</span>
                       </label>
-                      {#each transportsFor(p.provider).filter((t) => t !== "lola") as t}
-                        <label class="flex cursor-pointer items-center gap-2">
-                          <Checkbox disabled={d.reviewLegacy} checked={(p.transports ?? []).includes(t)}
-                            onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
-                          <span>{t === "github" ? "GitHub" : "Linear"}</span>
-                        </label>
-                      {/each}
                     </div>
-                    {#if !isWatch(p.provider) && (p.transports ?? []).includes("github")}
-                      <label class="ml-6 flex cursor-pointer items-center gap-2 text-sm text-faint">
-                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
-                        <span>Inline PR threads</span>
-                      </label>
-                    {/if}
-                    {#if !isWatch(p.provider)}
-                      <label class="flex cursor-pointer items-center gap-2 text-sm"
-                        title={`Posts lola/review/${p.provider} on the PR head and re-reviews each new head; require it in a ruleset to block merges on blocking findings.`}>
-                        <Checkbox disabled={d.reviewLegacy} checked={p.githubStatus ?? false}
-                          onchange={(e) => (p.githubStatus = (e.currentTarget as HTMLInputElement).checked)} />
-                        <span>Commit status gate</span>
-                      </label>
-                    {/if}
+                    <Disclosure label="Publishing" hint={[
+                      ...(p.transports ?? []).filter((t: string) => t !== "lola").map((t: string) => t === "github" ? "GitHub" : "Linear"),
+                      ...(!isWatch(p.provider) && p.githubStatus ? ["Status gate"] : []),
+                    ].join(" · ")}>
+                      <div class="mt-3 space-y-3">
+                        <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                          {#each transportsFor(p.provider).filter((t) => t !== "lola") as t}
+                            <label class="flex cursor-pointer items-center gap-2">
+                              <Checkbox disabled={d.reviewLegacy} checked={(p.transports ?? []).includes(t)}
+                                onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
+                              <span>{t === "github" ? "GitHub" : "Linear"}</span>
+                            </label>
+                          {/each}
+                        </div>
+                        {#if !isWatch(p.provider) && (p.transports ?? []).includes("github")}
+                          <label class="ml-6 flex cursor-pointer items-center gap-2 text-sm text-faint">
+                            <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
+                            <span>Inline PR threads</span>
+                          </label>
+                        {/if}
+                        {#if !isWatch(p.provider)}
+                          <label class="flex cursor-pointer items-center gap-2 text-sm"
+                            title={`Posts lola/review/${p.provider} on the PR head and re-reviews each new head; require it in a ruleset to block merges on blocking findings.`}>
+                            <Checkbox disabled={d.reviewLegacy} checked={p.githubStatus ?? false}
+                              onchange={(e) => (p.githubStatus = (e.currentTarget as HTMLInputElement).checked)} />
+                            <span>Commit status gate</span>
+                          </label>
+                        {/if}
+                      </div>
+                    </Disclosure>
                   </div>
 
                   {#if !isWatch(p.provider)}
@@ -1463,7 +1486,7 @@
                                   onchange={(e) => toggleFallback(p, k, (e.currentTarget as HTMLInputElement).checked)} />
                                 <span>{providerName(k)}</span>
                                 {#if (p.fallback ?? []).includes(k)}
-                                  <span class="num text-xs text-faint">{p.fallback.indexOf(k) + 1}</span>
+                                  <span class="num text-sm text-faint">{p.fallback.indexOf(k) + 1}</span>
                                 {/if}
                               </label>
                             {/each}
@@ -1482,19 +1505,24 @@
           {#if !d.reviewLegacy && providers().length === 0}
             <div class="rounded border border-edge/60 px-3 py-3">
               <p class="text-ink">No review pass configured.</p>
-              <div class="copy mt-1 text-sm text-faint"><HelpText label="review providers" summary="Add a provider to enable reviews." detail="A provider runs a QA pass over each pull request and routes its findings back — to the worker agent, the PR, or
-                the Linear issue. Add one below to turn reviews on." /></div>
+
             </div>
           {/if}
 
           {#if !d.reviewLegacy && missingKinds().length}
-            <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
-              <span class="text-sm text-faint">Add provider:</span>
-              {#each missingKinds() as k}
-                <Button variant="secondary" class="whitespace-normal! text-left" title={kindLabel(k)} onclick={() => addProvider(k)}>{providerName(k)}</Button>
-              {/each}
-            </div>
+            <Disclosure label="Add provider">
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                {#each missingKinds() as k}
+                  <Button variant="secondary" class="whitespace-normal! text-left" title={kindLabel(k)} onclick={() => addProvider(k)}>{providerName(k)}</Button>
+                {/each}
+              </div>
+            </Disclosure>
           {/if}
+          <Disclosure label="Specialist reviewers" hint={d.reviewProfiles?.length ? `${d.reviewProfiles.length} configured` : "Optional"}>
+            <div class="mt-3">
+              <ReviewProfiles bind:profiles={d.reviewProfiles} specialties={d.reviewSpecialties ?? []} providers={d.reviewProviders ?? []} kinds={reviewKinds} />
+            </div>
+          </Disclosure>
         </div>
       {/if}
     </div>
@@ -1522,8 +1550,32 @@
 </Modal>
 
 <style>
-  @media (max-width: 760px) {
-    :global(.settings-field) { grid-template-columns: minmax(0, 1fr); gap: 0.375rem; }
+  .settings-content { container-type: inline-size; }
+  .settings-heading, .settings-content :global([data-ssh-settings] > h3) {
+    margin-bottom: 24px;
+    font-size: 18px;
+    line-height: 24px;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .settings-content :global(.settings-field > :first-child) { color: var(--color-ink); }
+  .settings-content :global(input[type="number"]) { width: 7.5rem; max-width: 100%; }
+  .settings-content :global(.settings-field > span) { min-width: 0; }
+  .settings-nav :global([role="tablist"] > .label) {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding-left: 8px;
+    padding-top: 24px;
+    padding-bottom: 4px;
+  }
+  .settings-nav :global([role="tablist"] > .label:first-child) { padding-top: 0; }
+  .settings-nav :global([role="tab"]) { padding-left: 20px; }
+  .settings-nav :global([role="tab"][aria-selected="false"]) { color: var(--color-ink-2); }
+  .settings-nav :global([role="tab"][aria-selected="false"]:hover) { color: var(--color-ink); }
+  @container (max-width: 440px) {
+    .settings-content :global(.settings-field) { grid-template-columns: minmax(0, 1fr); gap: 0.375rem; }
   }
   @media (max-width: 540px) {
     .settings-layout { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }

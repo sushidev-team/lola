@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitrepo"
@@ -961,34 +959,6 @@ func (s *ConfigService) InspectPath(path string) PathInfoDTO {
 	out.SuggestedLabel = config.LabelFromPath(out.Path)
 	out.SuggestedID = config.Slug(out.SuggestedLabel)
 	return out
-}
-
-// PickFolder opens the native directory chooser and returns the selected path,
-// or "" when the user cancels. start seeds the dialog's directory so re-picking
-// a project's folder does not begin at $HOME again.
-//
-// The dialog is the app's, not the form's: only the backend can put a real macOS
-// panel in front of the window, which is why this is a service method rather
-// than anything in the frontend.
-func (s *ConfigService) PickFolder(start string) (string, error) {
-	app := application.Get()
-	if app == nil {
-		return "", errors.New("no application window to attach a dialog to")
-	}
-	d := app.Dialog.OpenFile().
-		CanChooseDirectories(true).
-		CanChooseFiles(false).
-		CanCreateDirectories(true).
-		ResolvesAliases(true).
-		SetTitle("Choose the project's repository").
-		SetButtonText("Use this folder")
-	if s := strings.TrimSpace(start); s != "" {
-		d.SetDirectory(s)
-	}
-	if win := app.Window.Current(); win != nil {
-		d.AttachToWindow(win)
-	}
-	return d.PromptForSingleSelection()
 }
 
 func (s *ConfigService) RemoveProject(name string) error {

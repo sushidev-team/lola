@@ -15,6 +15,7 @@
   import { ConfigService } from "@bindings/desktop";
   import Modal from "./Modal.svelte";
   import Button from "./Button.svelte";
+  import Icon from "./Icon.svelte";
   import Select from "./Select.svelte";
   import Disclosure from "./Disclosure.svelte";
 
@@ -193,7 +194,7 @@
         <label for="temporary-session-directory">Directory</label>
         <div class="flex items-center gap-2">
           <input id="temporary-session-directory" class={field} bind:value={path} placeholder="Optional, uses the default from Settings" disabled={busy || picking} />
-          <Button variant="secondary" onclick={pickFolder} disabled={busy || picking}>{picking ? "Choosing…" : "Choose folder…"}</Button>
+          <Button variant="secondary" class="h-auto! self-stretch" onclick={pickFolder} disabled={busy} loading={picking} aria-label="Browse for session directory"><Icon name="folder" size={14} />Browse…</Button>
         </div>
       </div>
     {:else}
