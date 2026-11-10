@@ -400,6 +400,16 @@ export function SetProjectStack(project: string, stack: string): $CancellablePro
 }
 
 /**
+ * SetStackMemberLabels sets which issues each member of stack is checked out
+ * for (member name -> labels; empty = every issue), in one write. It touches
+ * ONLY Project.Labels, so a stack form saved beside it cannot clobber a
+ * member's own repository settings.
+ */
+export function SetStackMemberLabels(stack: string, labels: { [_ in string]?: string[] | null } | null): $CancellablePromise<void> {
+    return $Call.ByID(1387265910, stack, labels);
+}
+
+/**
  * SetTheme persists [ui].theme on its own. It writes through the shared
  * saveConfig path — Validate, then config.Save's atomic temp+rename, then a
  * best-effort daemon reload — so an unknown identifier is rejected here by the

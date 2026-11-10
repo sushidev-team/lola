@@ -101,28 +101,32 @@
   // A stack's members, live from the store (membership is changed in the
   // sidebar, not here).
   const stackMembersList = $derived(f && role === "stack" ? store.projects.filter((p) => p.stack === origName) : []);
-  /**
-   * Members whose labels the stack's own pickup would never let through: an
-   * issue reaches a stack only via its Match labels, so a member label missing
-   * there (or a match-ALL mode) means "checked out for X" can never fire for an
-   * issue labelled only X.
+  /*
+   * Member labels, edited on the stack's Members tab and saved with the stack
+   * (ConfigService.SetStackMemberLabels touches ONLY each member's labels).
+   * memberBase is what the member had when the form first saw it, so an
+   * untouched tab adds nothing to `dirty`.
    */
-  const unpickedMembers = $derived.by(() => {
-    if (!f || role !== "stack" || !f.matchLabels?.length) return [];
-    const opts = meta?.labels ?? [];
-    const match = new Set(labelIdsFor(f.matchLabels, opts));
-    return stackMembersList.filter((m) => {
-      const ls = labelIdsFor(m.labels ?? [], opts);
-      return ls.length > 0 && (f!.matchMode === "all" || ls.some((l) => !match.has(l)));
-    });
+  let memberLabels = $state<Record<string, string[]>>({});
+  let memberBase = $state<Record<string, string[]>>({});
+  let memberOpen = $state("");
+  $effect(() => {
+    for (const m of stackMembersList) {
+      if (m.name in memberBase) continue;
+      memberBase[m.name] = [...(m.labels ?? [])];
+      memberLabels[m.name] = [...(m.labels ?? [])];
+    }
   });
+  const memberChanged = $derived(
+    Object.keys(memberLabels).filter((n) => !deepEqual(cleanLines(memberLabels[n]), cleanLines(memberBase[n]))),
+  );
 
   // The DTO exactly as it was loaded, so a close can tell real edits from an
   // untouched form and only prompt to discard when something changed. Snapshotted
   // AFTER the normalization below so the comparison is against the same shape the
   // form mutates, not the raw backend DTO.
   let loaded = $state<ProjectFormDTO | null>(null);
-  const dirty = $derived.by(() => (f && loaded ? !deepEqual($state.snapshot(f), $state.snapshot(loaded)) : false));
+  const dirty = $derived.by(() => (f && loaded ? !deepEqual($state.snapshot(f), $state.snapshot(loaded)) : false) || memberChanged.length > 0);
 
   // Everything on this tab is DERIVED from the folder: one InspectPath pass
   // yields the GitHub remote, the branch worktrees fork from, the branch list
@@ -499,6 +503,9 @@
     };
     try {
       await ConfigService.SaveProject(dto);
+      if (role === "stack" && memberChanged.length) {
+        await ConfigService.SetStackMemberLabels(id, Object.fromEntries(memberChanged.map((n) => [n, cleanLines(memberLabels[n])])));
+      }
       store.setFlash(
         f.isNew ? `added ${displayName(dto)}` : `saved ${displayName(dto)}`,
         "good",
@@ -731,14 +738,6 @@
     </span>
     <Button size="sm" variant="secondary" onclick={openStack}>Open stack settings</Button>
   </div>
-{/snippet}
-
-{#snippet pickupHint()}
-  <p role="note" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
-    {unpickedMembers.map((m) => displayName(m)).join(", ")}
-    {unpickedMembers.length === 1 ? "has" : "have"} labels this stack's pickup does not match. An issue reaches the stack
-    only through Issue pickup → Match labels: add those labels there and match any label.
-  </p>
 {/snippet}
 
 <Modal {title} onClose={requestClose} width="660px">
@@ -987,28 +986,45 @@
     {:else if shownTab === "members"}
       <div class="space-y-4">
         <p class="text-faint">
-          The repositories this stack's sessions span. Add one by dragging its project onto this stack in the sidebar
-          (or “Add to stack…” on its row's context menu); drag it out to remove it. Each member decides under its own
-          Stack tab which issues it is checked out for.
+          The repositories this stack's sessions span. Issue pickup decides which issues start a session; each
+          member's labels then decide whether its repository is checked out for that issue. A member without labels
+          is checked out for every issue. Add a member by dragging its project onto this stack in the sidebar (or
+          “Add to stack…” on its row's context menu); drag it out to remove it.
         </p>
-        {#if unpickedMembers.length}
-          {@render pickupHint()}
-        {/if}
         {#if stackMembersList.length === 0}
           <p class="rounded border border-dashed border-edge px-3 py-4 text-center text-sm text-faint">No members yet.</p>
         {:else}
           <ul class="divide-y divide-edge rounded border border-edge" aria-label="Members">
             {#each stackMembersList as m (m.name)}
               {@const opts = meta?.labels ?? []}
-              <li class="flex items-baseline gap-3 px-3 py-2">
-                <span class="min-w-0 truncate text-ink">{displayName(m)}</span>
-                <span class="ml-auto min-w-0 truncate text-sm text-faint">
-                  {#if m.labels?.length}
-                    {labelIdsFor(m.labels, opts).map((id) => opts.find((o) => o.id === id)?.label ?? id).join(", ")}
-                  {:else}
-                    every issue
-                  {/if}
-                </span>
+              {@const sel = memberLabels[m.name] ?? m.labels ?? []}
+              <li class="px-3 py-2">
+                <div class="flex items-center gap-3">
+                  <span class="min-w-0 truncate text-ink">{displayName(m)}</span>
+                  <span class="ml-auto min-w-0 truncate text-sm text-faint">
+                    {#if sel.length}
+                      {labelIdsFor(sel, opts).map((lid) => opts.find((o) => o.id === lid)?.label ?? lid).join(", ")}
+                    {:else}
+                      every issue
+                    {/if}
+                  </span>
+                  <Button size="xs" selected={memberOpen === m.name} aria-expanded={memberOpen === m.name}
+                    aria-label="Labels for {displayName(m)}"
+                    onclick={() => (memberOpen = memberOpen === m.name ? "" : m.name)}>Labels</Button>
+                </div>
+                {#if memberOpen === m.name}
+                  <div class="mt-2">
+                    {#if meta?.labels}
+                      <CheckboxOptions label="Labels for {displayName(m)}" options={opts}
+                        selected={labelIdsFor(sel, opts)} onChange={(v) => { memberLabels[m.name] = v; }} />
+                    {:else}
+                      <textarea class="{inputCls} block resize-y font-mono" rows="2" spellcheck="false"
+                        aria-label="Labels for {displayName(m)}" placeholder={"apps/website\none label name or UUID per line"}
+                        value={linesToText(sel)} oninput={(e) => { memberLabels[m.name] = splitLines(e.currentTarget.value); }}></textarea>
+                    {/if}
+                    <span class={hintCls}>Checked out only for issues carrying one of these labels. None = every issue.</span>
+                  </div>
+                {/if}
               </li>
             {/each}
           </ul>
@@ -1167,7 +1183,6 @@
           )}
           {/if}
           <HelpText label="team labels" summary="Labels follow the team." detail="Changing the team clears this project’s label overrides. Inherited workspace labels stay unchanged." />
-          {#if unpickedMembers.length}{@render pickupHint()}{/if}
         {/snippet}
         {@render section("Labels and repeat pickup", labels)}
       </div>

@@ -107,3 +107,37 @@ func TestAddStackFromFolderComparesCanonicalPaths(t *testing.T) {
 		t.Fatalf("one checkout under two paths accepted: %v", err)
 	}
 }
+
+func TestSetMemberLabels(t *testing.T) {
+	c := &Config{Projects: []Project{
+		{Name: "donso", Kind: ProjectKindStack},
+		{Name: "app", Stack: "donso", Path: "/x/app"},
+		{Name: "web", Stack: "donso", Path: "/x/web", Labels: []string{"old"}},
+		{Name: "solo", Path: "/x/solo"},
+	}}
+	if err := c.SetMemberLabels("donso", map[string][]string{"app": {" apps/app ", "", "apps/app"}, "web": nil}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.ProjectByName("app").Labels; len(got) != 1 || got[0] != "apps/app" {
+		t.Fatalf("app labels = %q, want [apps/app] (trimmed, deduped, blanks dropped)", got)
+	}
+	if got := c.ProjectByName("web").Labels; got != nil {
+		t.Fatalf("web labels = %q, want nil (every issue)", got)
+	}
+
+	for _, tc := range []struct {
+		stack  string
+		labels map[string][]string
+	}{
+		{"nope", map[string][]string{"app": {"x"}}},
+		{"app", map[string][]string{"app": {"x"}}},
+		{"donso", map[string][]string{"app": {"x"}, "solo": {"y"}}},
+	} {
+		if err := c.SetMemberLabels(tc.stack, tc.labels); err == nil {
+			t.Fatalf("SetMemberLabels(%q, %v) = nil, want an error", tc.stack, tc.labels)
+		}
+	}
+	if got := c.ProjectByName("app").Labels; len(got) != 1 || got[0] != "apps/app" {
+		t.Fatalf("a refused call changed app's labels to %q", got)
+	}
+}

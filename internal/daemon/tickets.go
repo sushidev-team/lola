@@ -272,7 +272,7 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	if reason := d.goalHold(uuid, detail.Description, detail.IssueRelations); reason != "" {
 		return protocol.OpenData{}, errors.New(reason)
 	}
-	is := linear.Issue{ID: uuid, Identifier: identifier, Title: detail.Title, Description: detail.Description, BranchName: strings.TrimSpace(a.Branch), LabelIDs: detail.LabelIDs}
+	is := linear.Issue{ID: uuid, Identifier: identifier, Title: detail.Title, Description: detail.Description, BranchName: strings.TrimSpace(a.Branch), LabelIDs: detail.LabelIDs, LabelNames: detail.LabelNames, LabelGroups: detail.LabelGroups}
 
 	// Shield the dedup-mutating spawn from shutdown cancellation exactly like a
 	// tick (dispatch runs on context.WithoutCancel via safeTick/handlePollOnce):

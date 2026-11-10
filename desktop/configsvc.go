@@ -1148,6 +1148,21 @@ func (s *ConfigService) SetProjectStack(project, stack string) error {
 	return saveConfig(cfg, path)
 }
 
+// SetStackMemberLabels sets which issues each member of stack is checked out
+// for (member name -> labels; empty = every issue), in one write. It touches
+// ONLY Project.Labels, so a stack form saved beside it cannot clobber a
+// member's own repository settings.
+func (s *ConfigService) SetStackMemberLabels(stack string, labels map[string][]string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := cfg.SetMemberLabels(stack, labels); err != nil {
+		return err
+	}
+	return saveConfig(cfg, path)
+}
+
 // --- first-run setup --------------------------------------------------------
 
 // ConfigExists reports whether ~/.lola/config.toml is present, so the frontend

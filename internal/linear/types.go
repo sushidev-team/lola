@@ -87,6 +87,9 @@ type IssueDetail struct {
 	StateID, AssigneeID                          string
 	ParentID, MilestoneID, StateType, ArchivedAt string
 	LabelIDs                                     []string
+	// LabelNames and LabelGroups are parallel to LabelIDs, as on Issue: a
+	// stack member may name its labels by name or group/name.
+	LabelNames, LabelGroups []string
 	// Children counts ALL existing sub-issues, finished or not: applying a plan
 	// to an issue that already has some would duplicate the decomposition.
 	Children int
