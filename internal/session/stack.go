@@ -65,6 +65,7 @@ func BaseID(id string) string {
 // session keeps on itself (see the lane fields in Session for each one's
 // meaning).
 type App struct {
+	PRCommentGuards map[string]string `json:"pr_comment_guards,omitempty"`
 	// Name is the member project's name, which is also the folder name.
 	Name string `json:"name"`
 	// Repo is the member's GitHub owner/name ("" = no PR can be found).
@@ -137,6 +138,7 @@ func (s Session) LaneView(app string) (Session, bool) {
 	v.LastReactedStatus, v.CIRetries, v.Escalated, v.PendingReaction = a.LastReactedStatus, a.CIRetries, a.Escalated, a.PendingReaction
 	v.ReviewedPRs, v.ReviewWatermarks, v.PendingHandoffs = maps.Clone(a.ReviewedPRs), maps.Clone(a.ReviewWatermarks), maps.Clone(a.PendingHandoffs)
 	v.PostedGitHubPRs, v.InlineReviewPRs, v.ReviewTallies = maps.Clone(a.PostedGitHubPRs), maps.Clone(a.InlineReviewPRs), maps.Clone(a.ReviewTallies)
+	v.PRCommentGuards = maps.Clone(a.PRCommentGuards)
 	v.ReviewGates = maps.Clone(a.ReviewGates)
 	v.MergeQueueGuard, v.MergeQueuePos, v.MergeQueueStep = a.MergeQueueGuard, a.MergeQueuePos, a.MergeQueueStep
 	// The legacy single-provider scalars are not lane-scoped; a lane starts
@@ -178,6 +180,7 @@ func (s *Session) putLane(v Session, now time.Time) {
 	a.LastReactedStatus, a.CIRetries, a.Escalated, a.PendingReaction = v.LastReactedStatus, v.CIRetries, v.Escalated, v.PendingReaction
 	a.ReviewedPRs, a.ReviewWatermarks, a.PendingHandoffs = v.ReviewedPRs, v.ReviewWatermarks, v.PendingHandoffs
 	a.PostedGitHubPRs, a.InlineReviewPRs, a.ReviewTallies = v.PostedGitHubPRs, v.InlineReviewPRs, v.ReviewTallies
+	a.PRCommentGuards = maps.Clone(v.PRCommentGuards)
 	a.ReviewGates = maps.Clone(v.ReviewGates)
 	a.MergeQueueGuard, a.MergeQueuePos, a.MergeQueueStep = v.MergeQueueGuard, v.MergeQueuePos, v.MergeQueueStep
 
@@ -195,6 +198,7 @@ func (s *Session) putLane(v Session, now time.Time) {
 	s.ReviewedPR, s.LastCodeRabbitAt, s.PendingCodeRabbit, s.PendingReviewFindings = keep.ReviewedPR, keep.LastCodeRabbitAt, keep.PendingCodeRabbit, keep.PendingReviewFindings
 	s.ReviewedPRs, s.ReviewWatermarks, s.PendingHandoffs = keep.ReviewedPRs, keep.ReviewWatermarks, keep.PendingHandoffs
 	s.PostedGitHubPRs, s.InlineReviewPRs, s.ReviewTallies = keep.PostedGitHubPRs, keep.InlineReviewPRs, keep.ReviewTallies
+	s.PRCommentGuards = keep.PRCommentGuards
 	s.ReviewGates = keep.ReviewGates
 	s.MergeQueueGuard, s.MergeQueuePos, s.MergeQueueStep = keep.MergeQueueGuard, keep.MergeQueuePos, keep.MergeQueueStep
 	// The view's rollup was the lane's; the session's is re-derived below

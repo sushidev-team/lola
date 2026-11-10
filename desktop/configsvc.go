@@ -111,6 +111,7 @@ func reloadRejectionHint(msg string) string {
 // --- settings ([defaults]/[notify]/[brain]/[review]/[coderabbit]) -----------
 
 type SettingsDTO struct {
+	AutoPRComments     bool   `json:"autoPRComments"`
 	TemporaryDirectory string `json:"temporaryDirectory"`
 	GlobalCap          int    `json:"globalCap"`
 	ConcurrencyCap     int    `json:"concurrencyCap"`
@@ -410,6 +411,7 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		PostCreate:     cfg.Defaults.PostCreate,
 		Env:            envToLines(cfg.Defaults.Env),
 		MatchLabels:    cfg.Defaults.MatchLabels,
+		AutoPRComments: cfg.Defaults.AutoPRComments,
 		MatchMode:      cfg.Defaults.MatchMode,
 		OnSentSetLabel: cfg.Defaults.OnSentSetLabel,
 		BlockedLabelID: cfg.Defaults.BlockedLabelID,
@@ -491,6 +493,7 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Defaults.PostCreate = nonEmpty(dto.PostCreate)
 	cfg.Defaults.Env = env
 	cfg.Defaults.MatchLabels = nonEmpty(dto.MatchLabels)
+	cfg.Defaults.AutoPRComments = dto.AutoPRComments
 	cfg.Defaults.MatchMode = dto.MatchMode
 	cfg.Defaults.OnSentSetLabel = dto.OnSentSetLabel
 	cfg.Defaults.BlockedLabelID = dto.BlockedLabelID
@@ -605,6 +608,7 @@ func (s *ConfigService) PreviewTheme(id string) {
 // key to [defaults], so the form shows the resolved value as a ghost and the
 // key is not written into the project's own table.
 type InheritsDTO struct {
+	AutoPRComments bool `json:"autoPRComments"`
 	Symlinks       bool `json:"symlinks"`
 	PostCreate     bool `json:"postCreate"`
 	Env            bool `json:"env"`
@@ -627,6 +631,7 @@ type ProjectExecutionDTO struct {
 // values are the RESOLVED ones (see config.ResolveInheritance); Inherits says
 // which of them came from [defaults] rather than the project itself.
 type ProjectFormDTO struct {
+	AutoPRComments bool `json:"autoPRComments"`
 	// Nil from an older client preserves execution settings. Stack members
 	// cannot edit these owning-stack settings through their repository form.
 	Execution *ProjectExecutionDTO `json:"execution,omitempty"`
@@ -719,7 +724,7 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 			Inherits: config.ProjectInherits{
 				Symlinks: true, PostCreate: true, Env: true,
 				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-				BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+				BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
 			},
 		}
 		// Resolve against a scratch config so the new project's ghosts show the
@@ -774,6 +779,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 		CycleID:        p.CycleID,
 		StateIDs:       p.StateIDs,
 		MatchLabels:    p.MatchLabels,
+		AutoPRComments: p.AutoPRComments,
 		MatchMode:      p.MatchMode,
 		AssigneeMode:   p.AssigneeMode,
 		AssigneeUserID: p.AssigneeUserID,
@@ -796,6 +802,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 			PostCreate:     p.Inherits.PostCreate,
 			Env:            p.Inherits.Env,
 			MatchLabels:    p.Inherits.MatchLabels,
+			AutoPRComments: p.Inherits.AutoPRComments,
 			MatchMode:      p.Inherits.MatchMode,
 			OnSentSetLabel: p.Inherits.OnSentSetLabel,
 			BlockedLabelID: p.Inherits.BlockedLabelID,
@@ -873,6 +880,7 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.CycleID = dto.CycleID
 	p.StateIDs = nonEmpty(dto.StateIDs)
 	p.MatchLabels = nonEmpty(dto.MatchLabels)
+	p.AutoPRComments = dto.AutoPRComments
 	p.MatchMode = dto.MatchMode
 	p.AssigneeMode = dto.AssigneeMode
 	p.AssigneeUserID = dto.AssigneeUserID
@@ -896,6 +904,7 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		PostCreate:     dto.Inherits.PostCreate,
 		Env:            dto.Inherits.Env,
 		MatchLabels:    dto.Inherits.MatchLabels,
+		AutoPRComments: dto.Inherits.AutoPRComments,
 		MatchMode:      dto.Inherits.MatchMode,
 		OnSentSetLabel: dto.Inherits.OnSentSetLabel,
 		BlockedLabelID: dto.Inherits.BlockedLabelID,
@@ -1030,7 +1039,7 @@ func (s *ConfigService) CreateStack(label string) (string, error) {
 	p.Inherits = config.ProjectInherits{
 		Symlinks: true, PostCreate: true, Env: true,
 		MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-		BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+		BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
 	}
 	cfg.Projects = append(cfg.Projects, p)
 	if err := saveConfig(cfg, path); err != nil {

@@ -149,6 +149,7 @@ export interface ImageAttachment {
  * key is not written into the project's own table.
  */
 export interface InheritsDTO {
+    "autoPRComments": boolean;
     "symlinks": boolean;
     "postCreate": boolean;
     "env": boolean;
@@ -244,6 +245,8 @@ export interface ProjectExecutionDTO {
  * which of them came from [defaults] rather than the project itself.
  */
 export interface ProjectFormDTO {
+    "autoPRComments": boolean;
+
     /**
      * Nil from an older client preserves execution settings. Stack members
      * cannot edit these owning-stack settings through their repository form.
@@ -561,6 +564,7 @@ export interface SSHHostPreviewDTO {
 }
 
 export interface SettingsDTO {
+    "autoPRComments": boolean;
     "temporaryDirectory": string;
     "globalCap": number;
     "concurrencyCap": number;

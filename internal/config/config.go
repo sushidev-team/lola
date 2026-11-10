@@ -76,6 +76,7 @@ var PrioritySortKeys = []string{"priority", "createdAt"}
 // Consult this struct only to render the inherited-vs-overridden distinction or
 // to promote/revert an override.
 type ProjectInherits struct {
+	AutoPRComments bool
 	PostCreate     bool
 	Symlinks       bool
 	Env            bool
@@ -95,6 +96,8 @@ type ProjectInherits struct {
 // it polls Linear iff TeamID is set (and Enabled). Validation here is purely
 // static — path-exists / is-a-git-repo checks live in the runtime layer.
 type Project struct {
+	// AutoPRComments asks idle agents to address and resolve new PR review threads.
+	AutoPRComments bool `toml:"auto_pr_comments,omitempty"`
 	// --- Repository / worktree setup ---------------------------------------
 	// Name is the project's IDENTITY, not its display string: it is a path
 	// segment (~/.lola/worktrees/<name>/, ~/.lola/state/<name>.seen) and part of
@@ -306,6 +309,7 @@ func (p *Project) Polls() bool { return p.TeamID != "" && p.Stack == "" }
 // Defaults is the [defaults] table. PollInterval is a plain time.Duration in
 // memory; on disk it is a string like "60s" (see fileDefaults/Duration).
 type Defaults struct {
+	AutoPRComments     bool          `toml:"auto_pr_comments,omitempty"`
 	TemporaryDirectory string        `toml:"temporary_directory"`
 	PollInterval       time.Duration `toml:"-"`
 	ConcurrencyCap     int           `toml:"concurrency_cap"`
@@ -517,8 +521,9 @@ type fileConfig struct {
 // Inherits bitmap (a SET bit means "inherit this key from [defaults]"); see
 // projectFromFile / projectToFile for the translation.
 type fileProject struct {
-	Name  string `toml:"name"`
-	Label string `toml:"label,omitempty"`
+	AutoPRComments *bool  `toml:"auto_pr_comments,omitempty"`
+	Name           string `toml:"name"`
+	Label          string `toml:"label,omitempty"`
 	// Group is a PLAIN string, not a pointer: it is not inheritable, so absent
 	// and empty mean the same thing (this project sits at the top level).
 	Group         string             `toml:"group,omitempty"`
@@ -689,6 +694,7 @@ func projectFromFile(fp fileProject) Project {
 	dedupMode, hasDedupMode := deref(fp.DedupMode)
 	onSentSetLabel, hasOnSentSetLabel := deref(fp.OnSentSetLabel)
 	blockedLabelID, hasBlockedLabelID := deref(fp.BlockedLabelID)
+	autoPRComments, hasAutoPRComments := deref(fp.AutoPRComments)
 	review, hasReview := deref(fp.Review)
 	agentFallback, hasAgentFallback := deref(fp.AgentFallback)
 
@@ -731,6 +737,7 @@ func projectFromFile(fp fileProject) Project {
 		PrioritySort:      prioritySort,
 		DedupMode:         dedupMode,
 		OnSentSetLabel:    onSentSetLabel,
+		AutoPRComments:    autoPRComments,
 		Review:            review,
 
 		Inherits: ProjectInherits{
@@ -743,6 +750,7 @@ func projectFromFile(fp fileProject) Project {
 			BlockedLabelID: !hasBlockedLabelID,
 			DedupMode:      !hasDedupMode,
 			PrioritySort:   !hasPrioritySort,
+			AutoPRComments: !hasAutoPRComments,
 			Review:         !hasReview,
 			AgentFallback:  !hasAgentFallback,
 		},
@@ -805,6 +813,7 @@ func projectToFile(p Project) fileProject {
 		PrioritySort:      ptr(p.PrioritySort, set(o.PrioritySort)),
 		DedupMode:         ptr(p.DedupMode, set(o.DedupMode)),
 		OnSentSetLabel:    ptr(p.OnSentSetLabel, set(o.OnSentSetLabel)),
+		AutoPRComments:    ptr(p.AutoPRComments, set(o.AutoPRComments)),
 		Review:            ptr(p.Review, set(o.Review)),
 
 		OnSpawnStateID:   p.OnSpawnStateID,
@@ -820,6 +829,7 @@ func projectToFile(p Project) fileProject {
 }
 
 type fileDefaults struct {
+	AutoPRComments     bool     `toml:"auto_pr_comments,omitempty"`
 	TemporaryDirectory string   `toml:"temporary_directory,omitempty"`
 	PollInterval       Duration `toml:"poll_interval"`
 	ConcurrencyCap     int      `toml:"concurrency_cap"`
@@ -907,6 +917,7 @@ func (fc *fileConfig) config() *Config {
 			BlockedLabelID:     fc.Defaults.BlockedLabelID,
 			DedupMode:          fc.Defaults.DedupMode,
 			PrioritySort:       fc.Defaults.PrioritySort,
+			AutoPRComments:     fc.Defaults.AutoPRComments,
 			Review:             fc.Defaults.Review,
 		},
 		Linear:          fc.Linear,
@@ -970,6 +981,7 @@ func (c *Config) file() *fileConfig {
 			BlockedLabelID:     c.Defaults.BlockedLabelID,
 			DedupMode:          c.Defaults.DedupMode,
 			PrioritySort:       c.Defaults.PrioritySort,
+			AutoPRComments:     c.Defaults.AutoPRComments,
 			Review:             c.Defaults.Review,
 		},
 		Linear:      c.Linear,
@@ -1189,6 +1201,9 @@ func (c *Config) ResolveInheritance() {
 		}
 		if in.MatchLabels {
 			p.MatchLabels = slices.Clone(d.MatchLabels)
+		}
+		if in.AutoPRComments {
+			p.AutoPRComments = d.AutoPRComments
 		}
 		if in.Review {
 			p.Review = slices.Clone(d.Review)

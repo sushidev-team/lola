@@ -945,7 +945,13 @@
           <div class="copy mb-3 text-sm text-faint"><HelpText label="project defaults" summary="Defaults for all projects." detail="Shared settings for all projects. Override them in an individual project when needed.
             Shared labels must be workspace labels so they work across teams." /></div>
           <div class="space-y-2">
-            <h4 class="mb-3 text-ink">Worktree setup</h4>
+            <h4 class="mb-3 text-ink">PR comments</h4>
+            <label class="flex items-center gap-2">
+              <Checkbox checked={!!d.autoPRComments} onchange={() => { d.autoPRComments = !d.autoPRComments; }} />
+              Automatically address and resolve PR comments
+            </label>
+            <p class="text-sm text-faint">When idle, the agent verifies new review comments, pushes fixes and resolves only addressed threads. Projects can override this default. Existing review-provider handoffs are configured separately.</p>
+            <h4 class="border-t border-edge pt-4 text-ink">Worktree setup</h4>
             <div class={rowCls}>
               <span class="text-faint">Branch prefix</span>
               <PresetInput label="Branch prefix" value={d.branchPrefix} options={BRANCH_PREFIXES} onChange={(v) => { d.branchPrefix = v; }} />

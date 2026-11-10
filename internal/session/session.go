@@ -59,6 +59,10 @@ type DevForward struct {
 
 // Session is one observed agent session, regardless of who spawned it.
 type Session struct {
+	// PRCommentGuards records delivered thread revisions, so unresolved or disputed
+	// findings do not wake the agent repeatedly. Replaced, never mutated in place.
+	PRCommentGuards map[string]string `json:"pr_comment_guards,omitempty"`
+
 	Name      string `json:"name,omitempty"`
 	Location  string `json:"location,omitempty"` // main | temporary; empty for worktrees
 	ID        string `json:"id"`

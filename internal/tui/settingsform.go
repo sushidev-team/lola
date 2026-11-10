@@ -272,6 +272,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// key here is the value a [[project]] gets when it omits its own, so
 			// shared setup is written once (see config.ProjectInherits).
 			{key: "def_branch_prefix", tab: stProjectDefaults, section: "[defaults]", sectionNote: "inherited by every [[project]] that omits the key", label: "Branch prefix", help: "Prepended to a session's branch name (e.g. \"lola/\" → lola/eng-42). Empty resolves to \"lola/\".", kind: sfText, text: d.BranchPrefix},
+			{key: "def_auto_pr_comments", tab: stProjectDefaults, label: "Auto PR comments", help: "Automatically ask idle agents to verify PR review comments, push fixes, and resolve addressed threads. Projects can override. Off by default.", kind: sfBool, b: d.AutoPRComments},
 			{key: "def_symlinks", tab: stProjectDefaults, label: "Symlinks", help: "One relative path per line, linked from the main checkout into each worktree (e.g. .env). enter opens the list. Do NOT symlink vendor/ — it breaks PHP autoload; use post_create.", kind: sfList, lines: append([]string(nil), d.Symlinks...)},
 			{key: "def_post_create", tab: stProjectDefaults, label: "Post-create", help: "One command per line, run in a fresh worktree before the agent starts (e.g. composer install). enter opens the list.", kind: sfList, lines: append([]string(nil), d.PostCreate...)},
 			{key: "def_env", tab: stProjectDefaults, label: "Env (KEY=value)", help: "One KEY=value per line, exported into every session and its post_create commands. Keys must be shell identifiers. enter opens the list.", kind: sfEnv, lines: envLines(d.Env)},
@@ -1618,6 +1619,7 @@ func (f *settingsForm) save() settingsFormEvent {
 
 	// [defaults] project fallbacks — the counterpart of each inheritable
 	// [[project]] key (config.ProjectInherits).
+	c.Defaults.AutoPRComments = f.field("def_auto_pr_comments").b
 	c.Defaults.BranchPrefix = strings.TrimSpace(f.field("def_branch_prefix").text)
 	c.Defaults.Symlinks = trimDropEmpty(f.field("def_symlinks").lines)
 	c.Defaults.PostCreate = trimDropEmpty(f.field("def_post_create").lines)

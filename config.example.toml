@@ -8,6 +8,10 @@
 # names. The `lola` TUI resolves names to IDs for you when creating a poll.
 
 [defaults]
+# Automatically ask idle agents to verify new PR review threads, push fixes,
+# and resolve only addressed threads. Off by default; independent of provider
+# handoffs and reactions. Unchanged unresolved threads are not retried.
+# auto_pr_comments = false
 # Go duration string. Minimum is 30s (Linear rate limit); lower values are
 # clamped up, not rejected. Default when omitted: 60s.
 poll_interval = "60s"
@@ -631,6 +635,9 @@ endpoint = "https://api.linear.app/graphql"
 # Code in tmux inside it.
 # ---------------------------------------------------------------------------
 [[project]]
+# Omit to inherit [defaults].auto_pr_comments; true/false explicitly overrides.
+# For stack sessions, set this on the owning stack.
+# auto_pr_comments = false
 # name is the project's ID: a path segment (worktrees/<name>/,
 # state/<name>.seen) and the prefix of every session + tmux name
 # ("lola-nori-app-eng-42"). Keep it slug-shaped; changing it is a rename that

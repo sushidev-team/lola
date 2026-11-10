@@ -84,6 +84,7 @@ const (
 	fCommentOnBlocked
 	// Review tab: this project's per-project review-provider override.
 	fReview
+	fAutoPRComments
 	fSave
 )
 
@@ -135,7 +136,8 @@ var inheritable = map[fieldID]func(*config.ProjectInherits) *bool{
 	fBlockedLabel: func(i *config.ProjectInherits) *bool {
 		return &i.BlockedLabelID
 	},
-	fReview: func(i *config.ProjectInherits) *bool { return &i.Review },
+	fAutoPRComments: func(i *config.ProjectInherits) *bool { return &i.AutoPRComments },
+	fReview:         func(i *config.ProjectInherits) *bool { return &i.Review },
 }
 
 type pickOpt struct{ id, label string }
@@ -318,6 +320,8 @@ func (f *formModel) setInherit(fd fieldID, v bool) {
 		f.poll.OnSentSetLabel = d.OnSentSetLabel
 	case fBlockedLabel:
 		f.poll.BlockedLabelID = d.BlockedLabelID
+	case fAutoPRComments:
+		f.poll.AutoPRComments = d.AutoPRComments
 	case fReview:
 		f.poll.Review = slices.Clone(d.Review)
 	}
@@ -390,7 +394,7 @@ func newFormModelKind(cfg *config.Config, existing *config.Project, kind string)
 			Inherits: config.ProjectInherits{
 				Symlinks: true, PostCreate: true, Env: true,
 				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-				BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+				BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
 				Review: true,
 			},
 		}
@@ -425,6 +429,7 @@ func newFormModelKind(cfg *config.Config, existing *config.Project, kind string)
 		f.poll.DedupMode = orDefault(cfg.Defaults.DedupMode, config.DefaultDedupMode)
 		f.poll.OnSentSetLabel = cfg.Defaults.OnSentSetLabel
 		f.poll.BlockedLabelID = cfg.Defaults.BlockedLabelID
+		f.poll.AutoPRComments = cfg.Defaults.AutoPRComments
 		f.poll.Review = slices.Clone(cfg.Defaults.Review)
 	}
 	var cmd tea.Cmd
@@ -585,7 +590,7 @@ func (f *formModel) fields() []fieldID {
 			fs = append(fs, fCommentOnPR, fOnMergedState, fCommentOnMerged, fBlockedLabel, fCommentOnBlocked)
 		}
 	case tabReview:
-		fs = []fieldID{fReview}
+		fs = []fieldID{fAutoPRComments, fReview}
 	}
 	return append(fs, fSave)
 }
@@ -1013,6 +1018,9 @@ func (f *formModel) toggleBool(cur fieldID) {
 		}
 		f.loadErr = ""
 		f.poll.GoalMode = !f.poll.GoalMode
+	case fAutoPRComments:
+		f.override(cur)
+		f.poll.AutoPRComments = !f.poll.AutoPRComments
 	case fEnabled:
 		f.poll.Enabled = !f.poll.Enabled
 	case fPRRequiresChecks:
@@ -1037,7 +1045,7 @@ var metaFields = map[fieldID]bool{
 // boolFields are the toggles: enter flips them in place rather than opening a
 // picker.
 var boolFields = map[fieldID]bool{
-	fGoalMode: true, fEnabled: true,
+	fGoalMode: true, fEnabled: true, fAutoPRComments: true,
 	fPRRequiresChecks: true, fCommentOnSpawn: true, fCommentOnPR: true,
 	fCommentOnMerged: true, fCommentOnBlocked: true,
 }
@@ -1385,6 +1393,7 @@ func applyProject(dst *config.Project, src config.Project) {
 	dst.CommentOnMerged = src.CommentOnMerged
 	dst.CommentOnBlocked = src.CommentOnBlocked
 	dst.PRRequiresChecks = src.PRRequiresChecks
+	dst.AutoPRComments = src.AutoPRComments
 	dst.Review = src.Review
 	// Assign unconditionally: an empty src.Repo must be able to CLEAR an existing
 	// value, not silently leave the old one in place.
@@ -1841,6 +1850,8 @@ func fieldHelp(fd fieldID) string {
 		return "Label added when the agent is blocked and needs a human (CI retries exhausted). (none) = no label."
 	case fCommentOnBlocked:
 		return "enter toggles · also comment the block reason when the agent is blocked."
+	case fAutoPRComments:
+		return "Automatically verify PR comments, push fixes and resolve addressed threads when the agent is idle. ctrl+o restores the global default."
 	case fReview:
 		return "Which review providers run for this project's sessions. Empty inherits [defaults].review; override to none to disable review here. Pick from the enabled catalog."
 	case fSave:
@@ -1935,6 +1946,8 @@ func (f *formModel) label(fd fieldID) string {
 		return "On blocked → label"
 	case fCommentOnBlocked:
 		return "  comment on blocked"
+	case fAutoPRComments:
+		return "Auto PR comments"
 	case fReview:
 		return "Review providers"
 	case fSave:
@@ -2159,6 +2172,8 @@ func (f *formModel) display(fd fieldID) string {
 		return boolDisplay(f.poll.CommentOnMerged)
 	case fCommentOnBlocked:
 		return boolDisplay(f.poll.CommentOnBlocked)
+	case fAutoPRComments:
+		return boolDisplay(f.poll.AutoPRComments)
 	case fReview:
 		kinds := f.poll.ReviewKindStrings()
 		if len(kinds) == 0 {

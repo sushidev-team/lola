@@ -271,6 +271,15 @@ describe("SettingsForm", () => {
     appearance.paint();
   });
 
+  it("saves the global PR comment automation default", async () => {
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Project defaults" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Automatically address and resolve PR comments" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({autoPRComments: true});
+  });
+
   it("supports vertical keyboard navigation without dirtying settings", async () => {
     render(SettingsForm);
     const general = await screen.findByRole("tab", { name: "General" });

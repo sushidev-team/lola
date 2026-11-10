@@ -55,6 +55,7 @@ import { confirm } from "$lib/confirm.svelte";
 function sampleDto() {
   return {
     name: "acme",
+    autoPRComments: true,
     label: "",
     path: "/Users/me/code/acme",
     repo: "acme/acme",
@@ -91,6 +92,7 @@ function sampleDto() {
     prRequiresChecks: true,
 
     inherits: {
+      autoPRComments: true,
       symlinks: true,
       postCreate: false,
       env: false,
@@ -108,6 +110,7 @@ function sampleDto() {
 // [defaults] — what a "revert to inherit" must refill the control with.
 function settingsDto() {
   return {
+    autoPRComments: true,
     symlinks: ["inherited-link"],
     postCreate: ["make setup", "make build"],
     env: ["SHARED=1"],
@@ -175,6 +178,23 @@ describe("ProjectForm", () => {
     confirm.cancel(); // the confirm store is a singleton — clear it between tests
     nav.overlayProject = "acme";
     nav.overlayTab = "";
+  });
+
+  it("saves explicit PR comment automation off and restores inheritance", async () => {
+    render(ProjectForm);
+    const select = await screen.findByLabelText("Automatically address PR comments");
+    expect(select).toHaveValue("inherit");
+    await fireEvent.change(select, { target: { value: "off" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalled());
+    expect(saveProject.mock.calls[0][0]).toMatchObject({autoPRComments: false, inherits: {autoPRComments: false}});
+    cleanup();
+    getProject.mockResolvedValue({...sampleDto(), autoPRComments: false, inherits: {...sampleDto().inherits, autoPRComments: false}});
+    render(ProjectForm);
+    await fireEvent.change(await screen.findByLabelText("Automatically address PR comments"), { target: { value: "inherit" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(2));
+    expect(saveProject.mock.calls[1][0]).toMatchObject({autoPRComments: true, inherits: {autoPRComments: true}});
   });
 
   it("loads the whole project and opens on the Repo tab", async () => {
