@@ -132,7 +132,7 @@ export class SessionFeed {
     }
   }
 
-  /** The bounded output of one tool call, read once on the first open. */
+  /** The bounded output of one tool call, read once when current or first opened. */
   async output(item: string): Promise<void> {
     const had = this.outputs.get(item);
     if (had && (had.loading || !had.failed)) return;

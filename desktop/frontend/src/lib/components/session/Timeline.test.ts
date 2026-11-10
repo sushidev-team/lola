@@ -142,7 +142,7 @@ describe("Timeline voices", () => {
 
 describe("Timeline expansion", () => {
   it("keeps presented commands in place when they finish and the next action arrives", async () => {
-    const calls = [tool("a", "run", "first", {}, 1), tool("b", "run", "second", {}, 2), tool("c", "run", "third", {}, 3), tool("d", "run", "fourth", { status: "running" }, 4)];
+    const calls = [tool("a", "run", "first", {}, 1), tool("b", "run", "second", {}, 2), tool("c", "run", "third", { preview: "Old grouped output" }, 3), tool("d", "run", "fourth", { status: "running", preview: "Starting fourth" }, 4)];
     setup([], calls, { agentState: "working" });
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
@@ -150,16 +150,16 @@ describe("Timeline expansion", () => {
     expect(container.querySelector('[data-row="d"] [data-status="running"]')).not.toBeNull();
     const current = container.querySelector('[data-row="d"]');
     const preview = current?.querySelector('[data-preview]');
-    expect(preview).toHaveTextContent('Waiting for output');
+    expect(preview).toHaveTextContent('Starting fourth');
     expect(current?.querySelector('[data-running]')).not.toBeNull();
-    feed.view(SID).items = [...calls.slice(0, 3), tool("d", "run", "fourth", { status: "ok" }, 4)] as never;
+    feed.view(SID).items = [...calls.slice(0, 3), tool("d", "run", "fourth", { status: "ok", preview: "Fourth complete" }, 4)] as never;
     await settle();
     expect(container.querySelector('[data-run] .cv-stack-count')?.textContent).toBe("3");
     expect(container.querySelector('[data-row="d"] [data-status="ok"]')).not.toBeNull();
     expect(container.querySelector('[data-row="d"]')).toBe(current);
     expect(current?.querySelector('[data-preview]')).toBe(preview);
     expect(current?.querySelector('[data-running]')).toBeNull();
-    feed.view(SID).items = [...feed.view(SID).items, tool("e", "run", "fifth", { status: "running" }, 5)] as never;
+    feed.view(SID).items = [...feed.view(SID).items, tool("e", "run", "fifth", { status: "running", preview: "Starting fifth" }, 5)] as never;
     await settle();
     expect(container.querySelectorAll('[data-run]')).toHaveLength(1);
     expect(container.querySelector('[data-run] .cv-stack-count')?.textContent).toBe("3");
@@ -167,9 +167,16 @@ describe("Timeline expansion", () => {
     expect(container.querySelector('[data-row="e"] [data-status="running"]')).not.toBeNull();
     expect(container.querySelector('[data-row="d"]')).toBe(current);
     expect(current?.querySelector('[data-preview]')).toBeNull();
-    expect(container.querySelector('[data-row="e"] [data-preview]')).toHaveTextContent('Waiting for output');
+    expect(container.querySelectorAll('[data-preview]')).toHaveLength(1);
+    expect(svc.FeedOutput).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-row="e"] [data-preview]')).toHaveTextContent('Starting fifth');
     await fireEvent.click(container.querySelector('[data-run] .cv-call-group-toggle')!);
     expect(container.querySelectorAll('[data-run] [data-tool]')).toHaveLength(3);
+    expect(container.querySelectorAll('[data-preview]')).toHaveLength(1);
+    // An empty newest action must not leave an older excerpt standing in for it.
+    feed.view(SID).items = [...feed.view(SID).items, tool('f', 'read', 'image.png', {}, 6)] as never;
+    await settle();
+    expect(container.querySelectorAll('[data-preview]')).toHaveLength(0);
   });
 
   it("expansion survives refetch", async () => {
@@ -906,6 +913,36 @@ describe("Timeline's own states", () => {
 
 
 describe('current activity and send receipts', () => {
+  it('loads only the current tool output and expands its preview in place', async () => {
+    const older = tool('older-output', 'read', 'old.ts', { hasOutput: true, preview: 'Old excerpt' }, 1);
+    const current = tool('current-output', 'read', 'current.ts', { hasOutput: true, preview: 'Short excerpt…' }, 2);
+    setup([], [older, current], { agentState: 'working' });
+    svc.FeedOutput.mockResolvedValue({ text: Array.from({ length: 12 }, (_, i) => `Recorded line ${i + 1}`).join('\n') });
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    expect(svc.FeedOutput).toHaveBeenCalledExactlyOnceWith({ session: SID, item: 'current-output' });
+    const row = container.querySelector('[data-row="current-output"]')!;
+    const output = row.querySelector('[data-tool-output]');
+    expect(row.querySelectorAll('.cv-output-line')).toHaveLength(4);
+    expect(output).toHaveTextContent('Recorded line 1');
+    await fireEvent.click(row.querySelector('button')!);
+    expect(row.querySelector('[data-tool-output]')).toBe(output);
+    expect(row.querySelectorAll('.cv-output-line')).toHaveLength(12);
+    await fireEvent.click(row.querySelector('button')!);
+    expect(row.querySelector('[data-tool-output]')).toBe(output);
+    expect(row.querySelectorAll('.cv-output-line')).toHaveLength(4);
+    expect(svc.FeedOutput).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the excerpt usable when automatic output loading fails', async () => {
+    setup([], [tool('failed-output', 'read', 'a.ts', { hasOutput: true, preview: 'Recorded excerpt' }, 1)], { agentState: 'working' });
+    svc.FeedOutput.mockRejectedValue(new Error('Unavailable'));
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    expect(container.querySelector('[data-preview]')).toHaveTextContent('Recorded excerpt');
+    expect(svc.FeedOutput).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps an edit excerpt compact and preserves deliberately expanded output through new activity', async () => {
     const edit = tool('edit-now', 'edit', 'src/Board.tsx', { hasOutput: true, preview: '@@ -1 +1 @@\n-const old = true;\n+const next = false;' }, 1);
     setup([], [edit], { agentState: 'working' });
@@ -915,8 +952,10 @@ describe('current activity and send receipts', () => {
     const editRow = container.querySelector('[data-row="edit-now"]')!;
     expect(editRow.querySelector('[data-preview]')).toHaveTextContent('const next = false');
     expect(editRow.querySelector('[data-tool-expansion]')).toBeNull();
-    expect(svc.FeedOutput).not.toHaveBeenCalled();
+    expect(svc.FeedOutput).toHaveBeenCalledTimes(1);
+    const outputSurface = editRow.querySelector('[data-tool-output]');
     await fireEvent.click(editRow.querySelector('button')!);
+    expect(editRow.querySelector('[data-tool-output]')).toBe(outputSurface);
     await waitFor(() => expect(editRow.querySelector('[data-diff="add"]')).not.toBeNull());
     feed.view(SID).items = [edit, tool('commit-now', 'run', 'cd /repo; git commit -m "fix board"', {}, 2)] as never;
     await settle();

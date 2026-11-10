@@ -36,7 +36,7 @@ type Item = protocol.AgentFeedItem
 // Bounds on what one item may carry.
 const (
 	maxTextRunes    = 16 << 10
-	maxPreviewRunes = 240
+	maxPreviewRunes = 2048 // Context for inline previews before the current tool's full output is fetched.
 	maxSummaryRunes = 200
 	maxNoticeRunes  = 2 << 10
 	// maxOutputBytes bounds an expanded tool output. encoding/json may turn one byte

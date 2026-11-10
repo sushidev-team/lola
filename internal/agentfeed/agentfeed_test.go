@@ -11,11 +11,27 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
+
+func TestPreviewKeepsReadableContextAndStaysBounded(t *testing.T) {
+	var source strings.Builder
+	for i := 0; i < 8; i++ {
+		fmt.Fprintf(&source, "%d\t                    const value%d = \"readable context\";\n", 1150+i, i)
+	}
+	want := strings.TrimSpace(source.String())
+	if got := preview("\x1b[31m" + source.String() + "\x1b[0m"); got != want {
+		t.Fatalf("lost source context: %q", got)
+	}
+	got := preview(strings.Repeat("界", 10_000))
+	if !utf8.ValidString(got) || utf8.RuneCountInString(got) > maxPreviewRunes || !strings.HasSuffix(got, "…") {
+		t.Fatalf("preview must stay bounded, UTF-8 safe and visibly truncated: %q", got)
+	}
+}
 
 const (
 	segA = "aaaaaaaa-0000-4000-8000-000000000001.jsonl"

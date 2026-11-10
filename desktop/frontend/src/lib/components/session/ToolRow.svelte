@@ -2,10 +2,11 @@
   // One tool call from the agent's own log: a claim, including its "ok". That is why it has no
   // success tick and never the word "exit". Those belong to a plate, which lola
   // witnessed. Surface accents identify activity, not verified success. A bounded excerpt stays
-  // visible only on the current row; full output opens only at the reader's request.
+  // visible only on the current row; opening it expands the same output surface.
   //
   // Hand-rolled buttons on purpose, like the other card-shaped rows: the row IS the control, and
   // a Button's padding and hover chip would break these rows' shared columns.
+  import { untrack } from "svelte";
   import { tooltip } from "$lib/tooltip";
   import { disclosureSlide } from "$lib/disclosureMotion";
   import { changes } from "$lib/changes.svelte";
@@ -20,7 +21,6 @@
   import Button from "../Button.svelte";
   import Chevron from "../Chevron.svelte";
   import SyntaxText from "../SyntaxText.svelte";
-  import ToolOutput from "./ToolOutput.svelte";
   import ToolPreview from "./ToolPreview.svelte";
 
   let {
@@ -62,11 +62,16 @@
     else f.expanded.add(row.id);
   }
 
-  // Lazily, and only once: this reads the transcript back.
+  // Only the current completed tool and deliberately opened rows read their bounded output.
   $effect(() => {
-    if (!open) return;
-    if (tool.subagent) void f.thread(tool.subagent);
-    else if (tool.hasOutput) void f.output(row.id);
+    if (!open && !(active && !running)) return;
+    const id = row.id;
+    const subagent = tool.subagent;
+    const hasOutput = tool.hasOutput;
+    untrack(() => {
+      if (open && subagent) void f.thread(subagent);
+      else if (!subagent && hasOutput) void f.output(id);
+    });
   });
 </script>
 
@@ -80,7 +85,7 @@
   <span class="grid place-items-center text-faint group-hover:text-ink">{#if canOpen}<Chevron {open} />{/if}</span>
 {/snippet}
 
-<div data-tool={tool.category} data-status={row.status} data-tool-layout={nested ? "columns" : "summary"}>
+<div class="cv-tool-card" data-tool={tool.category} data-status={row.status} data-tool-layout={nested ? "columns" : "summary"}>
   {#if canOpen || toChanges}
     <button type="button" class="cv-tool-summary group" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }} aria-expanded={canOpen ? open : undefined} onclick={press}>
       {@render cells()}
@@ -89,30 +94,28 @@
     <div class="cv-tool-summary" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }}>{@render cells()}</div>
   {/if}
 
-  {#if !open && active}
-    <ToolPreview text={tool.preview || (tool.detail !== row.target ? tool.detail : "") || ""} {running} />
-  {/if}
-
-  {#if open}
-    <div class="min-w-0 max-w-full pb-2 pl-4" data-tool-expansion transition:disclosureSlide>
-      {#if toChanges && session}<Button size="xs" onclick={() => { changes.want(sessionId, row.target); if (session) ssh.openChanges(session); }}>View changes</Button>{/if}
+  {#if open || active}
+    <div class="cv-tool-content" data-tool-expansion={open ? "" : undefined}>
+      {#if open && toChanges && session}<Button size="xs" onclick={() => { changes.want(sessionId, row.target); if (session) ssh.openChanges(session); }}>View changes</Button>{/if}
       {#if tool.subagent}
-        {#if thread?.loading}
-          <p class="text-sm text-faint">Reading what this agent did</p>
-        {:else if thread?.failed}
-          <p class="text-sm text-faint">Could not read this agent's log.</p>
-        {:else}
-          {#each threadRows as r (r.id)}
-            <StoryRow {sessionId} row={r} {chars} {readonly} nested role="narration" />
-          {/each}
+        {#if open}
+          <div transition:disclosureSlide>
+            {#if thread?.loading}
+              <p class="text-sm text-faint">Reading what this agent did</p>
+            {:else if thread?.failed}
+              <p class="text-sm text-faint">Could not read this agent's log.</p>
+            {:else}
+              {#each threadRows as r (r.id)}
+                <StoryRow {sessionId} row={r} {chars} {readonly} nested role="narration" />
+              {/each}
+            {/if}
+          </div>
         {/if}
-      {:else if tool.hasOutput}
-        {#if output?.loading}
-          <p class="text-sm text-faint">Reading its output</p>
-        {:else if output?.failed}
-          <p class="text-sm text-faint">Could not read this output. The terminal may still show it.</p>
-        {:else}
-          <ToolOutput text={output?.text || tool.preview} command={tool.detail || row.target} sourcePath={tool.category === "read" || tool.category === "edit" ? row.target : ""} />
+      {:else}
+        <ToolPreview text={output?.text || tool.preview || ""} {running} expanded={open} command={tool.detail || row.target} sourcePath={tool.category === "read" || tool.category === "edit" ? row.target : ""} />
+        {#if open}
+          {#if output?.loading && !tool.preview}<p class="text-sm text-faint">Reading its output</p>{/if}
+          {#if output?.failed}<p class="text-sm text-faint">Could not read this output. The terminal may still show it.</p>{/if}
           {#if output?.truncated}
             <p class="flex items-center gap-2 text-sm text-faint">
               This is the first part.
@@ -120,8 +123,6 @@
             </p>
           {/if}
         {/if}
-      {:else if tool.preview}
-        <ToolOutput text={tool.preview} command={tool.detail || row.target} sourcePath={tool.category === "read" || tool.category === "edit" ? row.target : ""} />
       {/if}
     </div>
   {/if}
