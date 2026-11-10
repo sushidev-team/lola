@@ -326,8 +326,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   field comments — every `func(...)` field is a test injection point), worker
   goroutine management, reload diffing.
 - `dispatch.go` — one tick: health-gate → resolve key/cycle → query → drop
-  in-flight/dedup → sort by `priority_sort` → take `Budget(pollCap, globalCap,
-  liveCounted)` → per issue: **mark in-flight+seen FIRST, then spawn**, then
+  in-flight/dedup → sort by `priority_sort` → take `Budget(pollCap − projectLive,
+  globalCap, liveCounted)` → per issue: reserve the slots (`slots.go`), **mark
+  in-flight+seen FIRST, then spawn**, then
   (label mode, success only) re-read labels fresh and flip.
 - `observer.go` — read-only ~30s loop: ONE `tmux ls` per cycle (liveness +
   `#{session_activity}`, the sustain-only activity signal), gh PR facts onto
@@ -600,8 +601,8 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     the nudge parks a session on idle permanently, the old table would have let
     such a session hold no slot forever and dispatch would have spawned straight
     past the cap. See the `liveCounted` invariant below for the cap math.
-- **`liveCounted` comes from the session store snapshot**, never a local
-  counter, and `state.HoldsSlot(agentState, delivery)` is the ONE slot
+- **`liveCounted` comes from the session store snapshot plus the slot
+  ledger**, never a local counter, and `state.HoldsSlot(agentState, delivery)` is the ONE slot
   classification. The cap counts RUNNERS: a session holds a slot while its
   agent process is alive (anything but dead / exited / shell / orphaned) AND
   its PR is neither parked on a human (`review_pending`, `approved`) nor
@@ -613,6 +614,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   count) within a minute, and once that nudge stopped minting `needs_input` an
   idle pre-PR session would have held no slot forever and dispatch would have
   spawned straight past the cap.
+- **`concurrency_cap` bounds what a project RUNS; the ledger closes the race.**
+  The tick subtracts the project's own slot-holding sessions from its cap (a
+  stack's are under the stack's name), not only the global count — before
+  that, a project at its cap started `concurrency_cap` more every tick until
+  `global_cap` stopped it. Polls tick on separate goroutines and a spawn is
+  upserted only when it returns (minutes, with `post_create`), so every spawn
+  first takes `reserveSlots` (`internal/daemon/slots.go`), which checks both
+  caps against live sessions PLUS other spawns in flight under one lock, and
+  releases once the spawn returned. best-of and goal attempts reserve against
+  `global_cap` only (`noProjectCap`). Human opens (ticket, PR, manual, fork,
+  revive) check no cap on purpose — they are intent — but they do count.
 - **Dependencies hold dispatch; they never write.** `dependencyHold`
   (`dispatch.go`) skips an issue whose Linear "blocked by" relations
   (`Issue.BlockedBy`, fetched in the same `MatchingIssues` query) include one

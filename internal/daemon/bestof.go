@@ -237,7 +237,7 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 			}
 		}
 		if globalCap > 0 {
-			if live := NativeLiveCounted(snap); live+len(mix) > globalCap {
+			if live, _ := d.slotCounts(proj.Name); live+len(mix) > globalCap {
 				return fmt.Errorf("best-of needs %d slot(s) but only %d of global_cap=%d are free", len(mix), max(globalCap-live, 0), globalCap)
 			}
 		}
@@ -266,6 +266,16 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 		d.inflight.Remove(detail.ID)
 		return protocol.BestOfData{}, err
 	}
+	// Hold the group's slots until it is spawned, so a poll ticking meanwhile
+	// sees them taken (slots.go). global_cap only: best-of is a human's ask.
+	if globalCap > 0 {
+		release, ok := d.reserveSlots(proj.Name, len(mix), noProjectCap, globalCap)
+		if !ok {
+			d.inflight.Remove(detail.ID)
+			return protocol.BestOfData{}, fmt.Errorf("best-of needs %d slot(s) and global_cap=%d is full", len(mix), globalCap)
+		}
+		defer release()
+	}
 	if polls && proj.DedupMode != "state" {
 		seen, _ := d.seen.load(name)
 		if seen == nil {
@@ -278,7 +288,7 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 		}
 	}
 
-	is := linear.Issue{ID: detail.ID, Identifier: detail.Identifier, Title: detail.Title, LabelIDs: detail.LabelIDs}
+	is := linear.Issue{ID: detail.ID, Identifier: detail.Identifier, Title: detail.Title, LabelIDs: detail.LabelIDs, LabelNames: detail.LabelNames, LabelGroups: detail.LabelGroups}
 	pollName := ""
 	if polls {
 		pollName = name
