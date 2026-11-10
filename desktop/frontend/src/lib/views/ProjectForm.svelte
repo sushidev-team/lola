@@ -506,7 +506,13 @@
     try {
       await ConfigService.SaveProject(dto);
       if (role === "stack" && memberChanged.length) {
-        await ConfigService.SetStackMemberLabels(id, Object.fromEntries(memberChanged.map((n) => [n, cleanLines(memberLabels[n])])));
+        // A second write: name it, so a failure here does not read as if the
+        // stack's own settings were lost too (they are saved; Save retries both).
+        try {
+          await ConfigService.SetStackMemberLabels(id, Object.fromEntries(memberChanged.map((n) => [n, cleanLines(memberLabels[n])])));
+        } catch (e) {
+          throw new Error(`Stack settings were saved, but member labels were not: ${String(e)}`);
+        }
       }
       store.setFlash(
         f.isNew ? `added ${displayName(dto)}` : `saved ${displayName(dto)}`,
@@ -1235,7 +1241,8 @@
         {:else}
           <Button variant="danger" size="md" onclick={() => {
             // A stack asks which members to keep, in the shared confirm dialog.
-            if (role === "stack") { nav.closeOverlay(); askRemoveStack(origName); }
+            // The form closes only once the removal is confirmed; Cancel keeps it and its edits.
+            if (role === "stack") askRemoveStack(origName, () => nav.closeOverlay());
             else confirmRemove = true;
           }}>Remove</Button>
         {/if}

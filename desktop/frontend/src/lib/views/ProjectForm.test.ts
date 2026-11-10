@@ -449,6 +449,41 @@ describe("ProjectForm", () => {
     store.projects = [];
   });
 
+  it("says the stack was saved when only its member labels failed", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "", matchMode: "any", matchLabels: ["lab-default"] });
+    store.projects = [{ name: "api", stack: "nori", labels: [] }] as unknown as typeof store.projects;
+    setMemberLabels.mockRejectedValue(new Error("boom"));
+    render(ProjectForm);
+    await screen.findByText("stack: nori");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Labels for api" }));
+    const group = await screen.findByRole("group", { name: "Labels for api" });
+    await fireEvent.click(within(group).getByText("bug"));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/Stack settings were saved, but member labels were not: .*boom/)).toBeInTheDocument();
+    expect(saveProject).toHaveBeenCalled();
+    expect(nav.overlayProject).toBe("acme"); // still open
+    store.projects = [];
+  });
+
+  it("keeps the stack form open until its removal is confirmed", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "" });
+    nav.overlayProject = "nori";
+    const removeStack = vi.spyOn(store, "removeStack").mockResolvedValue(undefined as never);
+    render(ProjectForm);
+    await screen.findByText("stack: nori");
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(confirm.request?.title).toBe("Remove stack?");
+    expect(nav.overlayProject).toBe("nori");
+    confirm.cancel();
+    expect(nav.overlayProject).toBe("nori");
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    confirm.accept();
+    expect(nav.overlayProject).toBe("");
+    expect(removeStack).toHaveBeenCalledWith("nori", []);
+    removeStack.mockRestore();
+  });
+
   it("shows a MEMBER only its repository half and saves its labels", async () => {
     getProject.mockImplementation(async (name: string) =>
       name === "nori"

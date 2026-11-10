@@ -23,9 +23,10 @@ export function askRemoveProject(project: string) {
 /**
  * Removes a stack. Every member is listed with a checkbox: a checked member
  * stays in lola as a standalone project, an unchecked one is removed with the
- * stack. All are checked to start, so the default loses nothing.
+ * stack. All are checked to start, so the default loses nothing. onConfirmed
+ * runs only after the human confirmed (the project form closes itself there).
  */
-export function askRemoveStack(stack: string) {
+export function askRemoveStack(stack: string, onConfirmed?: () => void) {
   const members = store.projects.filter((p) => p.stack === stack);
   confirm.ask({
     title: "Remove stack?",
@@ -37,6 +38,9 @@ export function askRemoveStack(stack: string) {
     choices: members.length
       ? { label: "Keep in lola", items: members.map((m) => ({ id: m.name, label: displayName(m), checked: true })) }
       : undefined,
-    onConfirm: (keep) => void store.removeStack(stack, keep),
+    onConfirm: (keep) => {
+      onConfirmed?.();
+      void store.removeStack(stack, keep);
+    },
   });
 }
