@@ -46,15 +46,16 @@
     { id: "repo", label: "General" },
     { id: "execution", label: "Execution" },
     { id: "worktree", label: "Worktree setup" },
-    { id: "members", label: "Members" },
     { id: "stack", label: "Stack" },
     { id: "filter", label: "Issue pickup" },
     { id: "writeback", label: "Linear updates" },
+    // Last on a stack: its members' labels refine the pickup set up before it.
+    { id: "members", label: "Members" },
   ];
   type Role = "project" | "stack" | "member";
   const TABS_FOR: Record<Role, string[]> = {
     project: ["repo", "execution", "worktree", "filter", "writeback"],
-    stack: ["repo", "execution", "members", "filter", "writeback"],
+    stack: ["repo", "execution", "filter", "writeback", "members"],
     member: ["repo", "worktree", "stack"],
   };
 
