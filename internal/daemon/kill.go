@@ -161,6 +161,7 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force, keepWo
 // re-dispatch, then persists the store.
 func (d *Daemon) dropSession(s session.Session) {
 	d.recordEnded(s) // first, so a client that sees the row go can already read it
+	d.hubSessionEnded(s)
 	d.sessions.Delete(s.ID)
 	if s.IssueUUID != "" {
 		d.inflight.Remove(s.IssueUUID)

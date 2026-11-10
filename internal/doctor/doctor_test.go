@@ -644,3 +644,15 @@ func TestCodexAutoApprovalCapability(t *testing.T) {
 		})
 	}
 }
+
+func TestHubResult(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	if _, ok := hubResult(&config.Config{}); ok {
+		t.Fatal("a disabled hub must add no row")
+	}
+	cfg := &config.Config{Hub: config.HubConfig{Enabled: true, URL: "https://hub.example.com"}}
+	res, ok := hubResult(cfg)
+	if !ok || res.OK || res.Critical || !strings.Contains(res.Detail, "not joined") {
+		t.Fatalf("not joined: %+v", res)
+	}
+}

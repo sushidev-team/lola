@@ -18,7 +18,7 @@ import (
 // hubStatusCmd is the daemon socket command `lola hub status` asks for the
 // daemon's hub loop state. A daemon predating the hub loop answers
 // `unknown cmd`, which status tolerates.
-const hubStatusCmd = "hubStatus"
+const hubStatusCmd = protocol.CmdHubStatus
 
 // hubJoinTimeout bounds the whole enrollment round trip.
 const hubJoinTimeout = 60 * time.Second

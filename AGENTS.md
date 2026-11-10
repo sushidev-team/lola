@@ -206,6 +206,18 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   kill button, so a number is the whole safe surface to carry out of untrusted
   pane text. Fails closed on a wording it does not know or a message that names
   no port.
+- `hubproto/` — a NESTED, stdlib-only Go module
+  (`github.com/sushidev-team/lola/hubproto`, wired through `replace ./hubproto`)
+  holding the lola-hub WIRE CONTRACT: ed25519 request signing, the closed
+  work-item kinds (`dep_advisory`, `red_bump_pr`) with strict per-field
+  validation, the `/v1` frames and the signed policy bundle. The hub imports it
+  too, so a change is a protocol change; `make test`/`vet` run it separately.
+- `internal/hub` — the daemon-side hub CLIENT (imports `hubproto` + `config`
+  only): the device key (`~/.lola/state/hub-key`, 0600, never in config, argv
+  or a log) and identity (`hub.json`), the signed bounded HTTP client, the
+  briefing templates per kind (`Briefing` — lola's own text from validated
+  fields), the gh findings `Collector`, policy verification (display only),
+  the pure `Accept` gate, and `Join`/`Leave`/`LocalStatus` behind `lola hub`.
 - `internal/gitrepo` — reads a checkout with LOCAL git only (no network, no
   `gh`): `Detect` resolves the GitHub `owner/name` from its remotes (upstream,
   then origin), `Branches` the fork-from candidates, and `Inspect` gathers root
@@ -264,6 +276,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - `reconcile.go` — ~5m pass reverting orphaned issues (labeled-sent but no
   counted session and no open PR after `orphanTimeout`).
 - `writeback.go` — P4 Linear state transitions + comments.
+- `hubwire.go` — the opt-in lola-hub loop (`[hub]`, `hub_chores`): heartbeat →
+  findings → offers → claim → spawn → outcomes → policy, plus `cmd=hubStatus`.
+  See the hub invariant below.
 - `state.go` — the per-poll `seen` store and in-flight set.
 
 ## Non-obvious invariants (read before changing daemon code)
@@ -1041,6 +1056,33 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   - The release, like `unstampReviewed`, only clears a guard still pointing at
     THAT PR number, so it can never undo a stamp another writer just made for a
     newer PR.
+- **Hub work is a CLAIM and a candidate, never a command.**
+  (`internal/daemon/hubwire.go`, lola-hub's `DESIGN.md`.) A compromised hub must
+  not mean code execution here. Rules:
+  - An offer is a CANDIDATE: `hub.Accept` (valid item, opted-in non-stack
+    project, accepted kind, daily cap, sandbox unless `require_sandbox = false`)
+    and then exactly a Linear dispatch's gates in its order — `dispatchHold`,
+    the health gate, `reserveSlots` — all BEFORE the claim. Nothing is claimed
+    while the heartbeat fails or the config failed validation.
+  - The hub never writes a prompt. The agent gets `hub.Briefing`, lola's
+    template over fields `hubproto.Validate` checked, through the SAME launch
+    paths a human uses: `OpenManualAgent` (new branch) for `dep_advisory`,
+    `OpenPRAgent` (the bot's branch, never deleted) for `red_bump_pr`.
+  - The claim is the in-flight mark. The daily count is persisted before the
+    claim, refunded only when the claim is refused, KEPT when the spawn fails
+    (the item is released) — or a broken project claims it every cycle.
+  - The hub never stops a session. A lost lease sets `HubItem.LeaseLost`, logs,
+    and ends renewal and reporting; the agent keeps working.
+  - Outcomes are one-shot (`HubItem.Reported`, stamped before the request) and
+    ride a persisted outbox (`state/hub-daemon.json`) with a settled list, so a
+    crash or a down hub neither repeats nor loses one; teardown (`dropSession`)
+    only queues and nudges, it never waits on the network. A `red_bump_pr`
+    completes only once the PR head moved past the one first seen AND is green.
+  - Only what the protocol names leaves the machine: repo slugs, validated
+    findings, item ids, a PR URL and a delivery word — never a session id, path
+    or pane text. The policy is verified against locally pinned keys and is
+    DISPLAY ONLY in this phase. `hubStatus` is a read; every hub write is a
+    local CLI edit + `reload`, which `internal/remote` denies.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the

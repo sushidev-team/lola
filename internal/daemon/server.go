@@ -87,6 +87,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return protocol.Response{OK: true}
 	case "status":
 		return dataResponse(d.statusData(ctx))
+	case protocol.CmdHubStatus:
+		return dataResponse(d.hubStatusData())
 	case "sessions":
 		return dataResponse(d.sessionsData())
 	case "projects":
@@ -1040,6 +1042,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		d.syncHookBridge(bctx)
 	}
 	d.syncWorkers(ctx)
+	d.hubNudge() // a join or leave edits [hub] and reloads: act on it now
 	d.logf("", "config reloaded")
 	return nil
 }

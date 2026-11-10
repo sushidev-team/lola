@@ -300,6 +300,12 @@ type Session struct {
 	WBMergedDone  bool `json:"wb_merged_done,omitempty"`
 	WBBlockedDone bool `json:"wb_blocked_done,omitempty"`
 
+	// HubItem is set only on a session spawned for a lola-hub chore
+	// (internal/daemon/hubwire.go). It names the hub's item id, never anything
+	// the hub can use to reach this machine, and carries the one-shot outcome
+	// guard. The zero value means "not hub work".
+	HubItem HubWork `json:"hub_item,omitzero"`
+
 	// Reaction-state fields (PLAN P3): the persisted memory the reaction
 	// engine keeps per session so a reaction fires once per state transition
 	// (not on every 30s observer cycle) and gives up after a bounded number of
@@ -1206,4 +1212,33 @@ func (s Session) DisplayTitle() string {
 		return s.Name
 	}
 	return s.Title
+}
+
+// HubWork is a session's claim on a lola-hub work item. Every field is lola's
+// own record: the item id and kind come from an item that passed
+// hubproto.Validate before it was claimed.
+type HubWork struct {
+	// ItemID is the hub's item id ("" = not hub work).
+	ItemID string `json:"item_id,omitempty"`
+	// Kind is the hubproto kind (dep_advisory | red_bump_pr).
+	Kind string `json:"kind,omitempty"`
+	// ClaimedAt is when the claim succeeded.
+	ClaimedAt time.Time `json:"claimed_at,omitzero"`
+	// LeaseExpires is the hub's last word on the lease (claim or renewal).
+	LeaseExpires time.Time `json:"lease_expires,omitzero"`
+	// LeaseLost is set when a heartbeat reported the lease gone. The session
+	// keeps running; lola only stops renewing and reporting for it.
+	LeaseLost bool `json:"lease_lost,omitempty"`
+	// StartHead is the PR head first observed (red_bump_pr): the agent's work
+	// counts only once the head moved past it.
+	StartHead string `json:"start_head,omitempty"`
+	// Reported is the one-shot outcome guard: "complete" or "fail:<reason>"
+	// once the outcome was queued for the hub. Stamped BEFORE the request, so a
+	// crash never reports twice.
+	Reported string `json:"reported,omitempty"`
+}
+
+// Open reports whether the claim still wants renewal and an outcome.
+func (h HubWork) Open() bool {
+	return h.ItemID != "" && !h.LeaseLost && h.Reported == ""
 }

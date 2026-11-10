@@ -120,7 +120,10 @@ type Daemon struct {
 
 	inflight *inflightSet
 	// slots holds the cap slots of spawns still in flight (slots.go).
-	slots  slotLedger
+	slots slotLedger
+	// hub is the lola-hub loop's state and seams (hubwire.go). Off unless
+	// [hub].enabled and an identity exists.
+	hub    *hubWire
 	seen   *seenStore
 	status *statusTracker
 
@@ -699,6 +702,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	// engine free of nil checks. notify.New always returns a non-nil Notifier.
 	d.notifier = notify.New(notify.NotifyConfig{})
 	d.runtimeHealth = checkRuntimeHealth
+	d.hub = newHubWire()
 	return d
 }
 
@@ -924,6 +928,12 @@ func Run(ctx context.Context) error {
 	d.startTimeline()
 	d.wg.Add(1)
 	go d.goalLoop(ctx)
+
+	// The lola-hub loop (hubwire.go): idle unless [hub].enabled and joined.
+	// Its cycles are shutdown-shielded like the observer's (a claim must not be
+	// cut from its spawn); the loop itself stops on ctx.
+	d.wg.Add(1)
+	go d.hubLoop(ctx)
 
 	go d.serve(ctx, ln)
 

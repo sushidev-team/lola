@@ -465,6 +465,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		}
 		if known && prevDelivery != updated.Delivery {
 			d.noteDelivery(updated, prevDelivery)
+			if updated.HubItem.Open() {
+				d.hubNudgeOutcomes() // non-blocking: the hub loop reports it
+			}
 		}
 		if known {
 			d.noteCI(updated)
