@@ -519,7 +519,7 @@ func (d *Daemon) hubConnect(h config.HubConfig) (hubAPI, hub.Identity, bool) {
 	w.mu.Unlock()
 	if err != nil {
 		if errors.Is(err, hub.ErrNotJoined) {
-			d.hubSetErr("identity", errors.New("not joined: run `lola hub join <url> <token>`"))
+			d.hubSetErr("identity", errors.New("not joined: run `lola hub join <url>` with the token on stdin"))
 		} else {
 			d.hubSetErr("identity", err)
 		}

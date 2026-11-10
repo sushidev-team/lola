@@ -241,7 +241,7 @@ func (s Status) Render() string {
 	case s.IdentityErr != "":
 		fmt.Fprintf(&b, "joined:   unreadable identity: %s\n", s.IdentityErr)
 	default:
-		b.WriteString("joined:   no (run `lola hub join <url> <token>`)\n")
+		b.WriteString("joined:   no (run `lola hub join <url>` with the token on stdin)\n")
 	}
 	switch {
 	case s.KeyErr != "":

@@ -552,7 +552,7 @@ func hubResult(cfg *config.Config) (Result, bool) {
 	case st.IdentityErr != "":
 		return Result{Name: checkHub, Detail: "identity unreadable: " + st.IdentityErr}, true
 	case !st.Joined:
-		return Result{Name: checkHub, Detail: "enabled but not joined — run `lola hub join <url> <token>`"}, true
+		return Result{Name: checkHub, Detail: "enabled but not joined — run `lola hub join <url>` with the token on stdin"}, true
 	case st.KeyErr != "":
 		return Result{Name: checkHub, Detail: "device key unreadable: " + st.KeyErr}, true
 	case !st.KeyPresent:

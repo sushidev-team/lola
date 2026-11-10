@@ -545,7 +545,7 @@ endpoint = "https://api.linear.app/graphql"
 # Dependabot/Renovate PR whose checks fail) and routes the team's SIGNED policy.
 # It never executes anything: work items are validated, typed fields only, and
 # the agent's prompt is rendered from lola's own template. Set it up with
-# `lola hub join <url> <token>`, which writes enabled + url; `lola hub leave`
+# `lola hub join <url>` (the one-time token on stdin), which writes enabled + url; `lola hub leave`
 # turns it off. The device key lives in ~/.lola/state/hub-key (0600) — never
 # here. Not a [defaults] key, and neither is [[project]].hub_chores.
 # ---------------------------------------------------------------------------
