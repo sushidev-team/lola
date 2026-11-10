@@ -4,10 +4,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
 // when the hoisted vi.mock factories run.
-const { getProject, saveProject, removeProject, getSettings, inspectPath, pickFolder, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
+const { getProject, saveProject, setMemberLabels, removeProject, getSettings, inspectPath, pickFolder, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
   () => ({
     getProject: vi.fn(),
     saveProject: vi.fn(),
+    setMemberLabels: vi.fn(),
     renameProject: vi.fn(),
     removeProject: vi.fn(),
     getSettings: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("@bindings/desktop", () => ({
   ConfigService: {
     GetProject: (...a: unknown[]) => getProject(...a),
     SaveProject: (...a: unknown[]) => saveProject(...a),
+    SetStackMemberLabels: (...a: unknown[]) => setMemberLabels(...a),
     RemoveProject: (...a: unknown[]) => removeProject(...a),
     GetSettings: () => getSettings(),
     InspectPath: (...a: unknown[]) => inspectPath(...a),
@@ -164,6 +166,7 @@ describe("ProjectForm", () => {
     cleanup();
     getProject.mockReset().mockResolvedValue(sampleDto());
     saveProject.mockReset().mockResolvedValue(undefined);
+    setMemberLabels.mockReset().mockResolvedValue(undefined);
     renameProject.mockReset().mockResolvedValue({ from: "", to: "", blockers: [] });
     removeProject.mockReset().mockResolvedValue(undefined);
     getSettings.mockReset().mockResolvedValue(settingsDto());
@@ -438,12 +441,67 @@ describe("ProjectForm", () => {
     expect(within(list).getByText("every issue")).toBeInTheDocument();
     expect(within(list).queryByText("other")).not.toBeInTheDocument();
     expect(screen.getByText(/dragging its project onto this stack/)).toBeInTheDocument();
-    // web's "bug" is not in the stack's Match labels: an issue labelled only
-    // bug would never reach the stack, so the form says so.
-    await waitFor(() => expect(screen.getByRole("note")).toHaveTextContent(/web has labels this stack's pickup does not match/));
+    // A member label outside the stack's Match labels is the normal setup
+    // (pickup decides the issue, the label the app), so nothing warns.
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("tab", { name: "Linear updates" }));
     expect(screen.getByLabelText("PR requires checks")).toBeInTheDocument();
     store.projects = [];
+  });
+
+  it("edits each member's labels on the stack's Members tab and saves only the changed ones", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "", matchMode: "any", matchLabels: ["lab-default"] });
+    store.projects = [
+      { name: "web", stack: "nori", labels: ["lab-1"] },
+      { name: "api", stack: "nori", labels: [] },
+    ] as unknown as typeof store.projects;
+    render(ProjectForm);
+    await screen.findByText("stack: nori");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Labels for api" }));
+    const group = await screen.findByRole("group", { name: "Labels for api" });
+    await fireEvent.click(within(group).getByText("bug"));
+    const list = screen.getByRole("list", { name: "Members" });
+    expect(within(list).getAllByText("bug")).toHaveLength(3); // web's summary, api's summary, api's option
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(setMemberLabels).toHaveBeenCalledWith("nori", { api: ["lab-1"] }));
+    expect(saveProject).toHaveBeenCalled();
+    store.projects = [];
+  });
+
+  it("says the stack was saved when only its member labels failed", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "", matchMode: "any", matchLabels: ["lab-default"] });
+    store.projects = [{ name: "api", stack: "nori", labels: [] }] as unknown as typeof store.projects;
+    setMemberLabels.mockRejectedValue(new Error("boom"));
+    render(ProjectForm);
+    await screen.findByText("stack: nori");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Labels for api" }));
+    const group = await screen.findByRole("group", { name: "Labels for api" });
+    await fireEvent.click(within(group).getByText("bug"));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/Stack settings were saved, but member labels were not: .*boom/)).toBeInTheDocument();
+    expect(saveProject).toHaveBeenCalled();
+    expect(nav.overlayProject).toBe("acme"); // still open
+    store.projects = [];
+  });
+
+  it("keeps the stack form open until its removal is confirmed", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "" });
+    nav.overlayProject = "nori";
+    const removeStack = vi.spyOn(store, "removeStack").mockResolvedValue(undefined as never);
+    render(ProjectForm);
+    await screen.findByText("stack: nori");
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(confirm.request?.title).toBe("Remove stack?");
+    expect(nav.overlayProject).toBe("nori");
+    confirm.cancel();
+    expect(nav.overlayProject).toBe("nori");
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    confirm.accept();
+    expect(nav.overlayProject).toBe("");
+    expect(removeStack).toHaveBeenCalledWith("nori", []);
+    removeStack.mockRestore();
   });
 
   it("shows a MEMBER only its repository half and saves its labels", async () => {

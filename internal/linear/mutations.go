@@ -77,7 +77,7 @@ func (c *Client) IssueDetail(ctx context.Context, idOrIdentifier string) (IssueD
 	const q = `query($id:String!){ issue(id:$id){
 		id identifier title description
 		team{ id } project{ id } cycle{ id } state{ id } assignee{ id }
-		labels{ nodes{ id } }
+		labels{ nodes{ id name parent{ name } } }
 		children(first:50){ nodes{ id } } ` + relatedIssueFields + ` } }`
 	type idRef = *struct{ ID string }
 	var r struct {
@@ -87,8 +87,13 @@ func (c *Client) IssueDetail(ctx context.Context, idOrIdentifier string) (IssueD
 			Description                *string
 			Team, Project, Cycle       idRef
 			State, Assignee            idRef
-			Labels                     struct{ Nodes []struct{ ID string } }
-			Children                   struct{ Nodes []struct{ ID string } }
+			Labels                     struct {
+				Nodes []struct {
+					ID, Name string
+					Parent   *struct{ Name string }
+				}
+			}
+			Children struct{ Nodes []struct{ ID string } }
 		}
 	}
 	if err := c.do(ctx, q, map[string]any{"id": idOrIdentifier}, &r); err != nil {
@@ -113,6 +118,12 @@ func (c *Client) IssueDetail(ctx context.Context, idOrIdentifier string) (IssueD
 	}
 	for _, l := range is.Labels.Nodes {
 		out.LabelIDs = append(out.LabelIDs, l.ID)
+		out.LabelNames = append(out.LabelNames, l.Name)
+		group := ""
+		if l.Parent != nil {
+			group = l.Parent.Name
+		}
+		out.LabelGroups = append(out.LabelGroups, group)
 	}
 	return out, nil
 }

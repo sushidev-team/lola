@@ -692,6 +692,35 @@ export namespace ConfigService {
     return unsupported(`ConfigService.RemoveProject(${name})`, CONFIG_REASON);
   }
   /** PLATFORM. */
+  export function CreateStack(_label: string): Promise<string> {
+    return unsupported("ConfigService.CreateStack", CONFIG_REASON);
+  }
+  /** PLATFORM: scanning a folder needs the Mac's filesystem. */
+  export function ScanStackFolder(_path: string): Promise<M.StackFolderDTO> {
+    return unsupported("ConfigService.ScanStackFolder", CONFIG_REASON);
+  }
+  /** PLATFORM. */
+  export function CreateStackFromFolder(
+    _label: string,
+    _apps: M.StackFolderAppDTO[] | null,
+  ): Promise<string> {
+    return unsupported("ConfigService.CreateStackFromFolder", CONFIG_REASON);
+  }
+  /** PLATFORM. */
+  export function RemoveStack(
+    _stack: string,
+    _keep: string[] | null,
+  ): Promise<void> {
+    return unsupported("ConfigService.RemoveStack", CONFIG_REASON);
+  }
+  /** PLATFORM. */
+  export function SetProjectStack(
+    _project: string,
+    _stack: string,
+  ): Promise<void> {
+    return unsupported("ConfigService.SetProjectStack", CONFIG_REASON);
+  }
+  /** PLATFORM. */
   export function AddGroup(_label: string): Promise<string> {
     return unsupported("ConfigService.AddGroup", CONFIG_REASON);
   }
@@ -911,6 +940,8 @@ export type {
   SettingsDTO,
   SetupDTO,
   SetupResultDTO,
+  StackFolderAppDTO,
+  StackFolderDTO,
   UpdateInfoDTO,
   UpdateProgressDTO,
   UpdateSettingsDTO,

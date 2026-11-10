@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -1004,11 +1005,27 @@ func (s *ConfigService) RemoveProject(name string) error {
 	cfg.Projects = out
 	// Removing a STACK sets its members free rather than leaving them naming a
 	// stack that is gone (which Validate rejects): they get their own Linear
-	// and agent settings back, exactly as when dragged out one by one.
+	// and agent settings back, exactly as when dragged out one by one. Their
+	// labels go too — labels only apply to a member, and keeping them made
+	// Validate refuse the whole write.
 	for i := range cfg.Projects {
 		if cfg.Projects[i].Stack == name {
 			cfg.Projects[i].Stack = ""
+			cfg.Projects[i].Labels = nil
 		}
+	}
+	return saveConfig(cfg, path)
+}
+
+// RemoveStack removes a stack and every member not named in keep; the kept
+// ones stay configured as standalone projects (config.RemoveStack).
+func (s *ConfigService) RemoveStack(stack string, keep []string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := cfg.RemoveStack(stack, keep); err != nil {
+		return err
 	}
 	return saveConfig(cfg, path)
 }
@@ -1022,26 +1039,99 @@ func (s *ConfigService) CreateStack(label string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	label = strings.TrimSpace(label)
-	name := config.Slug(label)
-	if name == "" {
-		return "", errors.New("stack name is required")
+	name, err := cfg.AddStack(label)
+	if err != nil {
+		return "", err
 	}
-	if cfg.ProjectByName(name) != nil {
-		return "", errors.New("a project named " + name + " already exists")
+	if err := saveConfig(cfg, path); err != nil {
+		return "", err
 	}
-	p := config.Project{Name: name, Kind: config.ProjectKindStack, CycleMode: "none", AssigneeMode: "anyone"}
-	if label != name {
-		p.Label = label
+	return name, nil
+}
+
+// StackFolderDTO is what a picked PARENT folder offers a new stack: a suggested
+// stack name and the checkouts nested directly inside it.
+type StackFolderDTO struct {
+	Path           string              `json:"path"`
+	SuggestedLabel string              `json:"suggestedLabel"`
+	Apps           []StackFolderAppDTO `json:"apps"`
+}
+
+// StackFolderAppDTO is one nested checkout. Project names the project already
+// configured at that path (it JOINS the stack rather than being duplicated);
+// Blocked says why it cannot be included at all (it is a stack, or a member of
+// another one), and the form shows it unchecked and disabled.
+type StackFolderAppDTO struct {
+	Path          string `json:"path"`
+	Label         string `json:"label"`
+	Repo          string `json:"repo"`
+	DefaultBranch string `json:"defaultBranch"`
+	Project       string `json:"project"`
+	Blocked       string `json:"blocked"`
+}
+
+// ScanStackFolder reads every checkout directly inside a parent folder with
+// LOCAL git (gitrepo.Scan), so creating a stack from it fills each member's
+// path, repo and default branch instead of making the user add them one by one.
+func (s *ConfigService) ScanStackFolder(path string) StackFolderDTO {
+	path = strings.TrimSpace(path)
+	out := StackFolderDTO{Path: path, SuggestedLabel: config.LabelFromPath(path), Apps: []StackFolderAppDTO{}}
+	if path == "" {
+		return out
 	}
-	// Inherit every [defaults] key a fresh project would (see GetProject):
-	// the new stack picks up the shared Linear setup.
-	p.Inherits = config.ProjectInherits{
-		Symlinks: true, PostCreate: true, Env: true,
-		MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-		BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cfg, _, _ := loadConfig() // nil config: nothing is marked as configured
+	for _, info := range gitrepo.Scan(ctx, path) {
+		app := StackFolderAppDTO{
+			Path:          info.Root,
+			Label:         config.LabelFromPath(info.Root),
+			Repo:          info.Repo,
+			DefaultBranch: info.DefaultBranch,
+		}
+		if cfg != nil {
+			if p := cfg.ProjectAtPath(canonicalPath(info.Root), canonicalPath); p != nil {
+				app.Project, app.Label = p.Name, p.DisplayName()
+				switch {
+				case p.IsStack():
+					app.Blocked = "is a stack"
+				case p.InStack():
+					app.Blocked = "already in stack " + cfg.DisplayNameFor(p.Stack)
+				}
+			}
+		}
+		out.Apps = append(out.Apps, app)
 	}
-	cfg.Projects = append(cfg.Projects, p)
+	return out
+}
+
+// canonicalPath is how two checkout paths are compared: symlinks resolved, so a
+// project saved under a link and the same checkout reached through its real
+// path (or the other way round) are one project. An unresolvable path (gone,
+// unreadable) falls back to its cleaned form.
+func canonicalPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
+// CreateStackFromFolder creates a stack AND its members in one write (see
+// config.AddStackFromFolder): a new project per app, or the existing one
+// joining. All-or-nothing, so a refusal leaves the config untouched.
+func (s *ConfigService) CreateStackFromFolder(label string, apps []StackFolderAppDTO) (string, error) {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	in := make([]config.StackApp, 0, len(apps))
+	for _, a := range apps {
+		in = append(in, config.StackApp{Path: a.Path, Label: a.Label, Repo: a.Repo, DefaultBranch: a.DefaultBranch})
+	}
+	name, err := cfg.AddStackFromFolder(label, in, canonicalPath)
+	if err != nil {
+		return "", err
+	}
 	if err := saveConfig(cfg, path); err != nil {
 		return "", err
 	}
@@ -1080,6 +1170,26 @@ func (s *ConfigService) SetProjectStack(project, stack string) error {
 		return nil // no write for a no-op move
 	}
 	p.Stack = stack
+	if stack == "" {
+		// Labels only apply to a member (Validate refuses them elsewhere), so a
+		// member with labels could not leave its stack at all.
+		p.Labels = nil
+	}
+	return saveConfig(cfg, path)
+}
+
+// SetStackMemberLabels sets which issues each member of stack is checked out
+// for (member name -> labels; empty = every issue), in one write. It touches
+// ONLY Project.Labels, so a stack form saved beside it cannot clobber a
+// member's own repository settings.
+func (s *ConfigService) SetStackMemberLabels(stack string, labels map[string][]string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := cfg.SetMemberLabels(stack, labels); err != nil {
+		return err
+	}
 	return saveConfig(cfg, path)
 }
 

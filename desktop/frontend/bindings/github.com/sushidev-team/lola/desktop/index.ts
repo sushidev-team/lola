@@ -49,6 +49,8 @@ export type {
     SettingsDTO,
     SetupDTO,
     SetupResultDTO,
+    StackFolderAppDTO,
+    StackFolderDTO,
     UpdateInfoDTO,
     UpdateProgressDTO,
     UpdateSettingsDTO

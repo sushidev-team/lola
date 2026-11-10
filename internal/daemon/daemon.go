@@ -119,8 +119,10 @@ type Daemon struct {
 	tickMus  map[string]*sync.Mutex // per-poll tick mutual exclusion
 
 	inflight *inflightSet
-	seen     *seenStore
-	status   *statusTracker
+	// slots holds the cap slots of spawns still in flight (slots.go).
+	slots  slotLedger
+	seen   *seenStore
+	status *statusTracker
 
 	// Session observability (PLAN P1): the observer loop's snapshot store.
 	sessions         *session.Store

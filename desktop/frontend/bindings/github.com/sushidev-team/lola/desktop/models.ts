@@ -676,6 +676,31 @@ export interface SetupResultDTO {
     "message": string;
 }
 
+/**
+ * StackFolderAppDTO is one nested checkout. Project names the project already
+ * configured at that path (it JOINS the stack rather than being duplicated);
+ * Blocked says why it cannot be included at all (it is a stack, or a member of
+ * another one), and the form shows it unchecked and disabled.
+ */
+export interface StackFolderAppDTO {
+    "path": string;
+    "label": string;
+    "repo": string;
+    "defaultBranch": string;
+    "project": string;
+    "blocked": string;
+}
+
+/**
+ * StackFolderDTO is what a picked PARENT folder offers a new stack: a suggested
+ * stack name and the checkouts nested directly inside it.
+ */
+export interface StackFolderDTO {
+    "path": string;
+    "suggestedLabel": string;
+    "apps": StackFolderAppDTO[] | null;
+}
+
 export interface UpdateInfoDTO {
     "available": boolean;
     "currentVersion": string;

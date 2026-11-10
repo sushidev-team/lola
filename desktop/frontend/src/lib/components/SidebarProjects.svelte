@@ -30,7 +30,10 @@
   import SidebarGroupRow from "./SidebarGroupRow.svelte";
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
+  import { askRemoveProject, askRemoveStack } from "$lib/removeAsk";
   import Modal from "./Modal.svelte";
+  import Checkbox from "./Checkbox.svelte";
+  import { ConfigService, type StackFolderAppDTO } from "@bindings/desktop";
 
   // The project switcher, moved out of the old Rail panel onto the shared
   // NavRow. Reads the store directly (leaf component) — see Sidebar.svelte.
@@ -126,7 +129,16 @@
   });
 
   // --- group add / rename, stack add ------------------------------------------
-  let dialog = $state<{ mode: "add" | "rename" | "stack"; name: string; value: string } | null>(null);
+  type StackFolder = { path: string; apps: StackFolderAppDTO[]; include: boolean[] };
+  let dialog = $state<{
+    mode: "add" | "rename" | "stack";
+    name: string;
+    value: string;
+    /** stack mode: the picked parent folder and which of its apps to include. */
+    folder?: StackFolder;
+    /** stack mode: the name the folder suggested, replaced on a re-pick unless edited. */
+    suggested?: string;
+  } | null>(null);
 
   async function submitDialog() {
     const d = dialog;
@@ -137,12 +149,46 @@
     if (d.mode === "add") await store.addGroup(value);
     else if (d.mode === "rename") await store.renameGroup(d.name, value);
     else {
-      // A new stack is empty and has no Linear filter yet, so its form is the
-      // next thing anyone needs.
-      const name = await store.createStack(value);
+      // A stack from a parent folder brings its members along; otherwise it is
+      // empty. Either way it has no Linear filter yet, so its form is the next
+      // thing anyone needs.
+      const apps = d.folder ? d.folder.apps.filter((a, i) => d.folder!.include[i] && !a.blocked) : [];
+      const name = apps.length > 0 ? await store.createStackFromFolder(value, apps) : await store.createStack(value);
       if (name) nav.openOverlay("project", name);
     }
   }
+
+  // --- stack from a parent folder ---------------------------------------------
+  // Picking the folder that holds a stack's repositories lists the checkouts
+  // nested directly in it (local git only, ConfigService.ScanStackFolder), each
+  // with a checkbox. Every app is included by default except one the backend
+  // says cannot join (a member of another stack). The name is suggested from
+  // the folder only while the human has not typed one.
+  let picking = $state(false);
+
+  async function pickStackFolder() {
+    const d = dialog;
+    if (!d || d.mode !== "stack" || picking) return;
+    picking = true;
+    try {
+      const chosen = await ConfigService.PickFolder(d.folder?.path ?? "");
+      if (!chosen || dialog !== d) return;
+      const scan = await ConfigService.ScanStackFolder(chosen);
+      if (dialog !== d) return;
+      const apps = scan.apps ?? [];
+      d.folder = { path: scan.path, apps, include: apps.map((a) => !a.blocked) };
+      if (!d.value.trim() || d.value === d.suggested) d.value = scan.suggestedLabel;
+      d.suggested = scan.suggestedLabel;
+    } catch (err) {
+      store.setFlash(String(err), "bad");
+    } finally {
+      picking = false;
+    }
+  }
+
+  const folderCount = $derived(
+    dialog?.folder ? dialog.folder.apps.filter((a, i) => dialog!.folder!.include[i] && !a.blocked).length : 0,
+  );
 
   // --- stack membership --------------------------------------------------------
 
@@ -199,21 +245,6 @@
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   });
-
-  function askRemoveProject(name: string) {
-    const project = store.projectByName(name);
-    if (!project) return;
-    const stack = isStack(project);
-    confirm.ask({
-      title: stack ? "Remove stack?" : "Remove project?",
-      body: `Remove ${displayName(project)} from Lola?`,
-      detail: stack
-        ? "Its members remain configured as standalone projects. Repository files are kept."
-        : "Its configuration and polling are removed. Repository files are kept.",
-      confirmLabel: "Remove",
-      onConfirm: () => void store.removeProject(name),
-    });
-  }
 
   function askRemoveGroup(name: string, label: string) {
     confirm.ask({
@@ -809,7 +840,7 @@
         title={stacks.length === 0 ? "No stacks yet — add one with + → New stack" : undefined}
         onclick={() => rowMenu && (rowMenu = { ...rowMenu, picking: true })}>Add to stack…</MenuItem
       >
-    {:else}
+    {:else if rowMenu?.picking}
       {#each stacks as st (st.name)}
         <MenuItem
           icon="◆"
@@ -821,13 +852,25 @@
         >
       {/each}
     {/if}
-    {#if !rowMenu?.picking}
+    {#if !rowMenu?.picking && store.projectByName(menuName)}
       <div class="my-1 border-t border-edge"></div>
-      <MenuItem variant="danger" onclick={() => {
-        const name = menuName;
-        rowMenu = null;
-        askRemoveProject(name);
-      }}>Remove</MenuItem>
+      {#if isStack(store.projectByName(menuName)!)}
+        <MenuItem variant="danger"
+          onclick={() => {
+            const name = menuName;
+            rowMenu = null;
+            askRemoveStack(name);
+          }}>Remove stack…</MenuItem
+        >
+      {:else}
+        <MenuItem variant="danger"
+          onclick={() => {
+            const name = menuName;
+            rowMenu = null;
+            askRemoveProject(name);
+          }}>Remove project…</MenuItem
+        >
+      {/if}
     {/if}
   </div>
 {/if}
@@ -853,6 +896,45 @@
         }}
       />
     </label>
+    {#if dialog.mode === "stack"}
+      <div class="mt-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="label text-faint">Parent folder</span>
+          <Button size="sm" variant="secondary" loading={picking} onclick={() => void pickStackFolder()}>
+            {dialog.folder ? "Change…" : "Choose parent folder…"}
+          </Button>
+        </div>
+        {#if !dialog.folder}
+          <p class="mt-1 text-sm text-faint">
+            Optional. Pick the folder that holds the stack's repositories to add them as apps automatically.
+          </p>
+        {:else}
+          <p class="mt-1 truncate font-mono text-sm text-faint" title={dialog.folder.path}>{dialog.folder.path}</p>
+          {#if dialog.folder.apps.length === 0}
+            <p class="mt-2 text-sm text-warn">No git checkouts directly inside this folder. The stack is created empty.</p>
+          {:else}
+            <ul class="mt-2 max-h-56 overflow-auto rounded border border-edge" aria-label="Apps in folder">
+              {#each dialog.folder.apps as app, i (app.path)}
+                <li class="border-b border-edge last:border-b-0">
+                  <label class="flex items-center gap-2 px-2 py-1.5 {app.blocked ? '' : 'cursor-pointer'}" title={app.path}>
+                    <Checkbox
+                      bind:checked={dialog.folder.include[i]}
+                      disabled={!!app.blocked}
+                      aria-label="Include {app.label}"
+                    />
+                    <span class="min-w-0 flex-1 truncate text-ink {app.blocked ? 'opacity-55' : ''}">{app.label}</span>
+                    <span class="shrink-0 truncate text-sm text-faint">
+                      {#if app.blocked}{app.blocked}{:else if app.project}joins existing project{:else}{app.repo || "no GitHub remote"}{/if}
+                    </span>
+                  </label>
+                </li>
+              {/each}
+            </ul>
+            <p class="mt-1 text-sm text-faint">{folderCount} of {dialog.folder.apps.length} included</p>
+          {/if}
+        {/if}
+      </div>
+    {/if}
     {#snippet footer()}
       <div class="flex justify-end gap-2">
         <Button onclick={() => (dialog = null)}>Cancel</Button>
