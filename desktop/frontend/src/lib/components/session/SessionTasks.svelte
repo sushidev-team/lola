@@ -183,8 +183,8 @@
 {#snippet checkActions(item: SessionTask)}
   {#if item.state === 'checking' && !hasUnmetRequirements(item)}
     <div class="check-actions">
-      <button type="button" class="check-confirm" aria-label={`Confirm checked: ${item.text}`} disabled={pending || !store.alive} onclick={() => void mutate(['state', item.id, 'done'])}><Icon name="check" size={14} />Confirm checked</button>
-      <button type="button" aria-label={`Give feedback: ${item.text}`} title="Give feedback in the composer" onclick={() => feedback(item)}><Icon name="message-square-text" size={14} />Give feedback</button>
+      <button type="button" class="check-confirm" aria-label={`Confirm checked: ${item.text}`} title="Confirm checked" disabled={pending || !store.alive} onclick={() => void mutate(['state', item.id, 'done'])}><Icon name="check" size={14} /></button>
+      <button type="button" aria-label={`Give feedback: ${item.text}`} title="Give feedback in the composer" onclick={() => feedback(item)}><Icon name="message-square-text" size={14} /></button>
     </div>
   {/if}
 {/snippet}
@@ -204,9 +204,9 @@
           {@render statusButton(item)}
           <button type="button" class="requirement-title" class:full-title={flat || open || item.state === 'checking'} class:done={item.state === 'done'} aria-expanded={open} onclick={() => toggleRequirement(item.id)}>{item.text}</button>
           {#if !item.parentId}<span class="requirement-scope">{item.scope === 'global' ? 'Global' : 'Unassigned'}</span>{/if}
+          {@render checkActions(item)}
           {@render itemMenu(item)}
         </div>
-        {@render checkActions(item)}
         {#if open}
           {@render itemFeedback(item)}
           <div transition:disclose class="requirement-tools">
@@ -231,15 +231,14 @@
         {#if attached.length}<span class="requirement-count num" title={`${attached.filter(r => r.state === 'done').length} of ${attached.length} requirements met`}>{attached.filter(r => r.state === 'done').length}/{attached.length}</span>{/if}
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} class="text-faint" />
       </button>
+      {@render checkActions(task)}
       {@render itemMenu(task)}
     </div>
-    {@render checkActions(task)}
     {@render delivery(task)}
     {@render removal(task)}
     {#if open || checks.length}
       <div transition:disclose class="task-detail" id={`task-${sessionId}-${task.id}`}>
         {#if open}{@render itemFeedback(task)}{/if}
-        {#if checks.length}<p class="pending-checks">{checks.length} {checks.length === 1 ? 'requirement needs' : 'requirements need'} your check</p>{/if}
         {@render criteria(open ? attached : checks)}
         {#if open}<div class="task-tools"><button type="button" class="add-criterion" disabled={pending || !store.alive} onclick={() => add(task.id)}><Icon name="plus" size={12} /> Add requirement</button></div>{/if}
       </div>
@@ -279,8 +278,7 @@
         {#if finished.length}<button type="button" class="completed-toggle" aria-expanded={showDone} onclick={() => showDone = !showDone}><Icon name={showDone ? 'chevron-down' : 'chevron-right'} size={12} />Completed <span class="num">{finished.length}</span></button>{#if showDone}<div transition:disclose>{#if issueTask}{@render criteria(finished, true)}{:else}<ul class="task-list" aria-label="Completed tasks">{#each finished as task (task.id)}{@render taskRow(task)}{/each}</ul>{/if}</div>{/if}{/if}
         {#if issueTask}
           {#if issueTask.state === 'checking' && !hasUnmetRequirements(issueTask)}
-            <p class="pending-checks">Issue ready for your check</p>
-            {@render checkActions(issueTask)}
+            <div class="issue-check-row"><span class="pending-checks">Issue ready for your check</span>{@render checkActions(issueTask)}</div>
           {/if}
           {@render delivery(issueTask)}
           <details class="issue-details">
@@ -318,9 +316,10 @@
   .issue-details[open] summary :global(svg) { transform: rotate(90deg); }
   .issue-details summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
   .issue-title { flex: 1; min-width: 0; padding-block: 5px; overflow-wrap: anywhere; font-size: 12px; line-height: 20px; }
-  .check-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0 0 6px 27px; }
-  .check-actions button { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 6px; border-radius: 4px; font-size: 12px; color: var(--color-ink-2); }
+  .check-actions { display: flex; align-items: center; flex-shrink: 0; gap: 2px; }
+  .check-actions button { display: grid; place-items: center; width: 28px; height: 30px; border-radius: 4px; color: var(--color-ink-2); }
   .check-actions .check-confirm { color: var(--color-good); }
+  .issue-check-row { display: flex; align-items: center; justify-content: space-between; gap: 5px; }
   .pending-checks { margin: 4px 0 2px; color: var(--color-warn); font-size: 12px; line-height: 18px; }
   .unattached-checks { margin-bottom: 8px; }
   .check-actions button:hover:not(:disabled) { background: var(--color-sel); }
@@ -348,7 +347,7 @@
   .requirement-count, .requirement-scope { color: var(--color-faint); font-size: 11px; flex-shrink: 0; }
   .requirement-count { line-height: 20px; }
   .requirement-scope { line-height: 30px; }
-  .task-detail { margin: 0 0 6px 10px; padding: 0 0 2px 13px; border-left: 1px solid var(--color-edge); }
+  .task-detail { margin: 0 0 3px 10px; padding-left: 13px; border-left: 1px solid var(--color-edge); }
   .task-tools, .requirement-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .requirement-tools { margin-left: 27px; }
   .task-tools { margin-top: 2px; }

@@ -29,7 +29,7 @@ func newProjectInherits() ProjectInherits {
 	return ProjectInherits{
 		Symlinks: true, PostCreate: true, Env: true,
 		MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-		BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+		BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
 	}
 }
 

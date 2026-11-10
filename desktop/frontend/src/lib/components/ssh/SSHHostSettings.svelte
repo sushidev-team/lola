@@ -16,12 +16,13 @@
   import Checkbox from "../Checkbox.svelte";
   import Disclosure from "../Disclosure.svelte";
   import Select from "../Select.svelte";
+  import PathInput from "../PathInput.svelte";
   import SSHTierTag from "./SSHTierTag.svelte";
 
   let { onDirty = undefined }: { onDirty?: (dirty: boolean) => void } = $props();
 
   const inputCls = "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
-  const rowCls = "grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-baseline gap-3";
+  const rowCls = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-baseline gap-x-6 gap-y-1.5";
   const hintCls = "mt-1 block text-sm text-faint";
 
   const blank = (): SSHHostDTO => ({
@@ -308,13 +309,13 @@
             <span class={hintCls}>Leave blank to use your SSH settings.</span>
           </span>
         </label>
-        <label class={rowCls}>
+        <div class={rowCls}>
           <span class="text-faint">Identity file</span>
-          <span>
-            <input class="{inputCls} font-mono" aria-label="Identity file" bind:value={editing.identityFile} placeholder="~/.ssh/id_ed25519" onblur={resolve} />
+          <div>
+            <PathInput label="Identity file" kind="file" bind:value={editing.identityFile} placeholder="~/.ssh/id_ed25519" onblur={resolve} onPick={() => void resolve()} />
             <span class={hintCls}>Optional key-file path on this Mac. Leave blank to use your SSH keys or agent.</span>
-          </span>
-        </label>
+          </div>
+        </div>
       {/if}
       {#if editing.alias.trim()}
         <div class={rowCls}>

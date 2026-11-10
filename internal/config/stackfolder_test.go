@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestNewStacksInheritPRCommentAutomation(t *testing.T) {
+	c := &Config{Defaults: Defaults{AutoPRComments: true}}
+	if _, err := c.AddStack("Empty"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddStackFromFolder("Folder", []StackApp{{Path: "/src/web"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.ResolveInheritance()
+	for _, p := range c.Projects {
+		if !p.Inherits.AutoPRComments || !p.AutoPRComments {
+			t.Fatalf("%s did not inherit PR comment automation", p.Name)
+		}
+	}
+	c.Defaults.AutoPRComments = false
+	c.ResolveInheritance()
+	for _, p := range c.Projects {
+		if p.AutoPRComments {
+			t.Fatalf("%s froze the inherited value", p.Name)
+		}
+	}
+}
+
 // A stack built from a parent folder adds one member per new checkout (path,
 // repo and default branch filled, [defaults] inherited) and makes an already
 // configured checkout JOIN instead of duplicating it.

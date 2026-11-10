@@ -1,7 +1,8 @@
 <script lang="ts">
   import Select from "./Select.svelte";
+  import PathInput from "./PathInput.svelte";
   let {
-    label, value, options, onChange, disabled = false, placeholder = "", onFocus,
+    label, value, options, onChange, disabled = false, placeholder = "", onFocus, pathKind,
   }: {
     label: string;
     value: string;
@@ -10,6 +11,7 @@
     disabled?: boolean;
     placeholder?: string;
     onFocus?: () => void;
+    pathKind?: "file" | "folder";
   } = $props();
 
   // Opening Custom is presentation only. Keep the value until the user edits
@@ -32,8 +34,13 @@
     <option value="custom">Custom…</option>
   </Select>
   {#if showCustom}
+    {#if pathKind}
+    <PathInput label={`Custom ${label}`} kind={pathKind} {disabled} {placeholder} {value}
+      onChange={(next) => { custom = true; onChange(next); }} />
+    {:else}
     <input aria-label={`Custom ${label}`} {disabled} {placeholder} {value}
       class="w-full rounded border border-edge bg-canvas px-2 py-1.5 font-mono text-ink outline-none focus:border-accent placeholder:text-placeholder disabled:opacity-40"
       oninput={(e) => { custom = true; onChange(e.currentTarget.value); }} />
+    {/if}
   {/if}
 </div>

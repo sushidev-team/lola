@@ -21,7 +21,7 @@
   const providerLabel = (kind: string) => agents.find((a) => a.kind === kind)?.agent || kind;
   const available = (kind: string) => enabledAgents.some((a) => a.kind === kind);
   const field = "w-full min-w-0 rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
-  const row = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-baseline gap-3";
+  const row = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-baseline gap-x-6 gap-y-1.5";
 
   function add(kind: string) {
     if (!profiles) return;
@@ -34,8 +34,6 @@
 </script>
 
 <section aria-label="Specialist reviewers" class="space-y-3">
-  <h3 class="text-base font-medium text-ink">Specialist reviewers</h3>
-  <p class="text-sm text-faint">Choose what each reviewer checks. Several specialists can use the same agent provider and keep separate findings.</p>
   {#if profiles == null}
     <p class="text-sm text-warn">Rebuild the desktop app to configure specialist reviewers here.</p>
   {:else}
@@ -46,10 +44,10 @@
       {/each}
     </div>
     {#if profiles.length === 0}
-      <p class="text-sm text-faint">No specialists configured. Add Backend or UI/UX to start, then choose a provider and enable it.</p>
+      <p class="text-sm text-faint">No specialists configured.</p>
     {/if}
     {#if kinds.length && enabledAgents.length === 0}
-      <p class="text-sm text-warn">Enable Claude, Codex or OpenCode under Review providers below before enabling a specialist.</p>
+      <p class="text-sm text-warn">Enable an agent provider above to use specialists.</p>
     {/if}
     {#each profiles as p, i (p)}
       {@const specialty = specialties.find((s) => s.kind === p.kind)}
@@ -66,11 +64,7 @@
             </label>
             <Button variant="danger" aria-label={`Remove specialist ${p.id}`} onclick={() => { profiles = profiles?.filter((item) => item !== p); }}>Remove specialist</Button>
           </div>
-          {#if !available(p.provider)}<p class="text-sm text-warn">This provider is unavailable or disabled. Select an enabled agent provider, or keep this specialist disabled.</p>{/if}
-          <label class={row}>
-            <span class="text-faint">ID</span>
-            <input class={field} bind:value={p.id} placeholder="backend" />
-          </label>
+          {#if !available(p.provider)}<p class="text-sm text-warn">This provider is unavailable or disabled. Choose an enabled provider.</p>{/if}
           <label class={row}>
             <span class="text-faint">Provider</span>
             <Select bind:value={p.provider}>
@@ -78,28 +72,33 @@
               {#each agents as a (a.kind)}<option value={a.kind}>{a.agent}{available(a.kind) ? "" : " (disabled)"}</option>{/each}
             </Select>
           </label>
-          <p class="text-sm text-faint">Uses this provider’s configured model. Goal runs use the models and profiles in their accepted execution policy.</p>
+          <p class="text-sm text-faint">Uses the provider’s model.</p>
           <div class="flex flex-wrap gap-x-6 gap-y-2">
             <label class="flex items-center gap-2"><Checkbox bind:checked={p.on_pr_open} />On PR open</label>
             <label class="flex items-center gap-2"><Checkbox bind:checked={p.required} />Required for delivery</label>
           </div>
-          <p class="text-sm text-faint">On PR open runs a separate specialist pass for ordinary sessions. Required profiles hold delivery until current evidence passes. Autonomous goals select their specialists in the accepted policy.</p>
+          <p class="text-sm text-faint">Required reviews hold delivery until they pass. Goal runs use their accepted policy.</p>
           {#if specialty?.artifacts?.length}
             <p class="text-sm text-faint">Required evidence: {specialty.artifacts.join(", ")}. Missing evidence leaves the review incomplete.</p>
           {/if}
           <Disclosure label="Rubric and scope">
             <div class="mt-3 space-y-3">
               <p class="text-sm text-faint">{specialty?.rubric ?? "This specialty is not in the current catalog. Its configuration is preserved."}</p>
-              <label class={row}><span class="text-faint">Rubric version</span><input class={field} bind:value={p.version} /></label>
               <label class="block space-y-1"><span class="text-faint">Additional review instructions</span><textarea class={field} rows="4" value={p.rubric ?? ""} oninput={(e) => { p.rubric = e.currentTarget.value; }}></textarea></label>
               <label class="block space-y-1"><span class="text-faint">Project or stack IDs</span><textarea class={field} rows="2" value={linesToText(p.projects)} oninput={(e) => { p.projects = splitLines(e.currentTarget.value); }}></textarea></label>
-              <p class="text-sm text-faint">One configured ID per line. Blank applies to all projects and stacks.</p>
+              <p class="text-sm text-faint">One ID per line. Blank includes all projects.</p>
               <label class="block space-y-1"><span class="text-faint">Path prefixes</span><textarea class={field} rows="2" value={linesToText(p.paths)} oninput={(e) => { p.paths = splitLines(e.currentTarget.value); }}></textarea></label>
-              <p class="text-sm text-faint">One repository-relative file or directory per line, such as internal or src/components. Blank covers all changed paths.</p>
+              <p class="text-sm text-faint">One repository-relative path per line. Blank includes all paths.</p>
+            </div>
+          </Disclosure>
+          <Disclosure label="Advanced settings">
+            <div class="mt-3 space-y-3">
+              <label class={row}><span class="text-faint">ID</span><input class={field} bind:value={p.id} placeholder="backend" /></label>
+              <label class={row}><span class="text-faint">Rubric version</span><input class={field} bind:value={p.version} /></label>
               <label class="block space-y-1"><span class="text-faint">Additional evidence kinds</span><textarea class={field} rows="2" value={linesToText(p.artifacts)} oninput={(e) => { p.artifacts = splitLines(e.currentTarget.value); }}></textarea></label>
               <label class={row}><span class="text-faint">Timeout (seconds)</span><input class={field} type="number" min="0" max="900" bind:value={p.timeout_seconds} /></label>
               <label class={row}><span class="text-faint">Review attempt limit</span><input class={field} type="number" min="0" max="3" bind:value={p.max_rounds} /></label>
-              <p class="text-sm text-faint">Timeout 0 uses the provider limit. Attempt limit 0 uses 3; retries stay bounded.</p>
+              <p class="text-sm text-faint">0 uses the provider timeout and 3 attempts.</p>
             </div>
           </Disclosure>
         </div>

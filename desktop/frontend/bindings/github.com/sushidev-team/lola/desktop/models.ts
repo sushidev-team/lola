@@ -109,6 +109,19 @@ export interface ConnectCodeDTO {
     "problem": string;
 }
 
+/**
+ * DesktopContext is the small, display-only context shared with local time trackers.
+ * It describes the visible workspace, never agent activity or elapsed work time.
+ */
+export interface DesktopContext {
+    "view": string;
+    "sessionId"?: string;
+    "title"?: string;
+    "projectId"?: string;
+    "projectName"?: string;
+    "issueKey"?: string;
+}
+
 export interface DoctorReportDTO {
     "results": DoctorResultDTO[] | null;
     "summary": string;
@@ -149,6 +162,7 @@ export interface ImageAttachment {
  * key is not written into the project's own table.
  */
 export interface InheritsDTO {
+    "autoPRComments": boolean;
     "symlinks": boolean;
     "postCreate": boolean;
     "env": boolean;
@@ -244,6 +258,8 @@ export interface ProjectExecutionDTO {
  * which of them came from [defaults] rather than the project itself.
  */
 export interface ProjectFormDTO {
+    "autoPRComments": boolean;
+
     /**
      * Nil from an older client preserves execution settings. Stack members
      * cannot edit these owning-stack settings through their repository form.
@@ -561,6 +577,7 @@ export interface SSHHostPreviewDTO {
 }
 
 export interface SettingsDTO {
+    "autoPRComments": boolean;
     "temporaryDirectory": string;
     "globalCap": number;
     "concurrencyCap": number;

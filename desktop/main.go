@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -131,6 +132,7 @@ func main() {
 		Name:        "Lola",
 		Description: "Native cockpit for the lola coding-agent orchestrator",
 		Services: []application.Service{
+			application.NewService(&ContextService{}),
 			application.NewService(daemon),
 			application.NewService(term),
 			application.NewService(&SSHService{}),
@@ -305,13 +307,22 @@ func (z *zoomController) reset() { z.set(1.0) }
 //     refuses a duplicate accelerator loudly instead of two silent handlers.
 //
 // Every accelerator here is Cmd-based and none is a system or Edit-menu one
-// (⌘C/⌘V/⌘X/⌘A/⌘Z/⌘W/⌘Q, and ⌘⌫ which deletes to line start in a text field).
+// (⌘C/⌘V/⌘X/⌘A/⌘Z/⌘Q, and ⌘⌫ which deletes to line start in a text field).
+// File > Close Tab owns ⌘W; closing the last tab must never close Lola.
 // Cmd chords are also the one class tmux/zellij inside a pane never receive, so
 // these can't collide with a shell binding either.
 func installAppMenu(app *application.App, zoom *zoomController) {
 	menu := application.NewMenu()
 	menu.AddRole(application.AppMenu)
-	menu.AddRole(application.FileMenu)
+	file := menu.AddSubmenu("File")
+	// A CloseWindow role keeps AppKit's performClose: selector even if its Go
+	// callback is replaced. Use a plain item so ⌘W reaches the frontend.
+	file.Add("Close Tab").SetAccelerator("CmdOrCtrl+w").OnClick(func(*application.Context) {
+		app.Event.Emit(evtSessionAction, actionCloseTab)
+	})
+	if runtime.GOOS != "darwin" {
+		file.AddRole(application.Quit)
+	}
 	menu.AddRole(application.EditMenu)
 	menu.AddRole(application.ViewMenu)
 	newSessionMenu(app, menu.AddSubmenu("Session"))
@@ -521,6 +532,7 @@ const (
 	actionReview   = "review"
 	actionOpenPR   = "open-pr"
 	actionNewShell = "new-shell"
+	actionCloseTab = "close-tab"
 	actionKill     = "kill"
 	actionNext     = "next"
 	actionStop     = "stop"

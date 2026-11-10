@@ -49,6 +49,7 @@
         ["i · ⌘L", "composer. From a terminal, back to the conversation"],
         ["f · ⌘⇧D", "Changes, and back"],
         ["s · ⌘T", "new shell tab"],
+        ["⌘W", "close active shell, review, or dev tab"],
         ["D", "run dev here · one session per project"],
         ["x · ⌘⇧K", "kill session"],
         ["o · ⌘⇧O", "open PR in browser"],

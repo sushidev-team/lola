@@ -4,12 +4,21 @@ import { tool } from './story.testkit';
 import { collapseWork, type RunRowData } from '$lib/turns';
 import ChangeRun from './ChangeRun.svelte';
 import ToolOutput from './ToolOutput.svelte';
+import WorkRun from './WorkRun.svelte';
 
 afterEach(cleanup);
 const edit = (id: string, path: string, n: number) => tool(id, 'edit', path, { preview: `@@ -1 +1 @@\n-const old = ${n};\n+const next = ${n + 1};`, added: 1, removed: 1 }, n);
 const group = (items: ReturnType<typeof tool>[]) => collapseWork(items as never, true)[0] as RunRowData;
 
 describe('inline changes', () => {
+  it('removes an automatic edit preview when a newer action takes over', async () => {
+    const row = group([edit('preview-edit', 'src/one.ts', 1)]);
+    const { container, rerender } = render(ChangeRun, { sessionId: 'latest-edit', row, active: true });
+    expect(container.querySelector('[data-preview]')).not.toBeNull();
+    await rerender({ active: false });
+    expect(container.querySelector('[data-preview]')).toBeNull();
+  });
+
   it('opens changes on request and keeps the selected file open as activity moves on', async () => {
     const first = edit('one', 'src/one.ts', 1);
     const second = edit('two', 'src/two.ts', 2);
@@ -41,5 +50,16 @@ describe('inline changes', () => {
     expect(container.querySelectorAll('.cv-output-line')).toHaveLength(15);
     await fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
     expect(container.querySelectorAll('.cv-output-line')).toHaveLength(10);
+  });
+});
+
+describe('grouped tool previews', () => {
+  it.each(['read', 'run'])('only previews the current %s group', async (category) => {
+    const row = group([1, 2, 3].map(n => tool(`group-${n}`, category, `file-${n}.ts`, { preview: `Output ${n}` }, n)));
+    const { container, rerender } = render(WorkRun, { sessionId: `latest-${category}`, row, active: true });
+    expect(container.querySelectorAll('[data-preview]')).toHaveLength(1);
+    expect(container.querySelector('[data-preview]')).toHaveTextContent('Output 3');
+    await rerender({ active: false });
+    expect(container.querySelector('[data-preview]')).toBeNull();
   });
 });

@@ -90,9 +90,22 @@
   let addTrigger: HTMLElement | null = null;
 
   function openAddMenu(e: MouseEvent) {
+    rowMenu = null;
     addTrigger = e.currentTarget as HTMLElement;
     const r = addTrigger.getBoundingClientRect();
     addMenu = { x: Math.min(r.left, window.innerWidth - 180), y: r.bottom + 4 };
+  }
+
+  function openBackgroundMenu(e: MouseEvent) {
+    // Row menus own their events; text fields keep the native editing menu.
+    if (e.defaultPrevented || (e.target as HTMLElement).closest("input, textarea, [contenteditable], button, a")) return;
+    e.preventDefault();
+    rowMenu = null;
+    addTrigger = searchInput;
+    addMenu = {
+      x: Math.max(4, Math.min(e.clientX, window.innerWidth - 180)),
+      y: Math.max(4, Math.min(e.clientY, window.innerHeight - 120)),
+    };
   }
 
   function closeAddMenu(refocus = false) {
@@ -217,6 +230,7 @@
     const p = store.projectByName(name);
     if (!p) return;
     e.preventDefault();
+    closeAddMenu();
     rowMenu = { x: Math.min(e.clientX, window.innerWidth - 200), y: e.clientY, name, picking: false };
   }
 
@@ -635,7 +649,7 @@
   <li class="-my-px h-0.5 rounded-full bg-accent" aria-hidden="true"></li>
 {/snippet}
 
-<nav class="min-w-0 px-3 pt-3.5" aria-label="Projects">
+<nav class="min-h-full min-w-0 px-3 pt-3.5" aria-label="Projects" oncontextmenu={openBackgroundMenu}>
   <div class="flex items-center px-2 pb-1">
     <h2 class="label text-faint">Projects</h2>
     <Button
@@ -806,9 +820,9 @@
       {#each projectActions(store.projectByName(menuName)!) as action (action.id)}
         <MenuItem disabled={!action.enabled} onclick={() => { rowMenu=null; action.run(); }}>{action.label}</MenuItem>
       {/each}
-      <div class="my-1 border-t border-edge"></div>
     {/if}
     {#if menuStack}
+      <div class="my-1 border-t border-edge"></div>
       <MenuItem
         icon="↖"
         onclick={() => {
@@ -818,6 +832,7 @@
         }}>Remove from stack</MenuItem
       >
     {:else if !rowMenu?.picking && !isStack(store.projectByName(menuName)!)}
+      <div class="my-1 border-t border-edge"></div>
       <!-- A submenu in place: the stack list replaces the root items. -->
       <MenuItem
         icon="◆"
@@ -841,7 +856,7 @@
     {#if !rowMenu?.picking && store.projectByName(menuName)}
       <div class="my-1 border-t border-edge"></div>
       {#if isStack(store.projectByName(menuName)!)}
-        <MenuItem
+        <MenuItem variant="danger"
           onclick={() => {
             const name = menuName;
             rowMenu = null;
@@ -849,7 +864,7 @@
           }}>Remove stack…</MenuItem
         >
       {:else}
-        <MenuItem
+        <MenuItem variant="danger"
           onclick={() => {
             const name = menuName;
             rowMenu = null;

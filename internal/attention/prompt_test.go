@@ -217,6 +217,49 @@ func TestReadPromptRealPermission(t *testing.T) {
 	}
 }
 
+func TestReadPromptPermissionCountdown(t *testing.T) {
+	vis, c := capture(t, "fs-permission")
+	vis = stripANSI(vis)
+	for _, wrap := range []string{" ", "\n "} {
+		t.Run(fmt.Sprintf("wrap=%q", wrap), func(t *testing.T) {
+			warning := " ⚠ Claude Code will automatically block this request in 0:41, to avoid holding" + wrap + "up an unattended session\n\n"
+			pane := strings.Replace(vis, " Do you want to proceed?", warning+" Do you want to proceed?", 1)
+			p, ok := ReadPrompt(pane, c, agent.Claude)
+			if !ok || p.Kind != PromptPermission {
+				t.Fatalf("ReadPrompt = %+v, %v", p, ok)
+			}
+			for _, clock := range []string{"0:40", "0:09", "0:00", "10:00"} {
+				next, ok := ReadPrompt(strings.Replace(pane, "0:41", clock, 1), c, agent.Claude)
+				if !ok || next.Hash != p.Hash {
+					t.Errorf("countdown %s changed the prompt hash", clock)
+				}
+				if !strings.Contains(strings.Join(next.Lines, "\n"), clock) {
+					t.Errorf("countdown %s is no longer displayed verbatim", clock)
+				}
+			}
+			for name, changed := range map[string]string{
+				"command": strings.ReplaceAll(pane, "touch perm-m.txt", "rm -rf build/m"),
+				"choice":  strings.Replace(pane, "1. Yes", "1. Yes, always", 1),
+				"warning": strings.Replace(pane, "automatically block", "automatically allow", 1),
+				"removed": vis,
+				"focus":   strings.Replace(strings.Replace(pane, "❯", " ", 1), "   4.", " ❯ 4.", 1),
+			} {
+				next, _ := ReadPrompt(changed, c, agent.Claude)
+				if next.Hash == p.Hash {
+					t.Errorf("%s change did not invalidate the prompt", name)
+				}
+			}
+			// The same warning inside the command is still command text.
+			commandPane := strings.ReplaceAll(vis, " touch perm-m.txt", warning+" Do you want to proceed?")
+			before, _ := ReadPrompt(commandPane, c, agent.Claude)
+			after, _ := ReadPrompt(strings.ReplaceAll(commandPane, "0:41", "0:40"), c, agent.Claude)
+			if before.Hash == after.Hash {
+				t.Error("a countdown-shaped command change was ignored")
+			}
+		})
+	}
+}
+
 // The fullscreen and inline dialogs differ only around the block.
 func TestReadPromptBothLayouts(t *testing.T) {
 	for _, name := range []string{"perm-prompt", "perm-fs"} {

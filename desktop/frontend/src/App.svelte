@@ -47,6 +47,7 @@
   import Setup from "$lib/views/Setup.svelte";
   import ReviewWorkspace from "$lib/components/session/ReviewWorkspace.svelte";
   import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
+  import DesktopContext from "$lib/components/DesktopContext.svelte";
 
   // The target of every session action: the session you are looking at, and the selection only
   // when none is open. The selection can differ from the open session (ssh.open, a fork), and ⌘.
@@ -82,6 +83,10 @@
   // open dialog.
   function sessionAction(action: string) {
     if (nav.overlay || confirm.request || sessionMenu.request) return;
+    if (action === "close-tab") {
+      if (nav.view === "cockpit" && nav.focusedTerm) void terms.closeActiveTab(nav.focusedTerm);
+      return;
+    }
     if (action === "commands") { nav.openOverlay("commands"); return; }
     if (action === "new-session") { newSessionHere(); return; }
     if (action === "temporary-shell") { void openShell(); return; }
@@ -468,6 +473,7 @@
 </script>
 
 <svelte:window on:keydown={onKey} on:dblclick={onTitleBarDoubleClick} bind:innerWidth={windowWidth} />
+<DesktopContext />
 
 {#if store.configChecked && !store.hasConfig}
   <div class="h-full bg-canvas text-ink">

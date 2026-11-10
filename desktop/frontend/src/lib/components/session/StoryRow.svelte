@@ -84,7 +84,7 @@
   {#if row.category === "edit"}
     <ChangeRun {sessionId} {row} {active} {readonly} />
   {:else}
-    <WorkRun {sessionId} {row} {chars} {readonly} {nested} />
+    <WorkRun {active} {sessionId} {row} {chars} {readonly} {nested} />
   {/if}
 {:else if row.kind === "prose"}
   <span class="sr-only">{agent} says</span>

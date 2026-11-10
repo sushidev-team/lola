@@ -170,13 +170,15 @@ export function MigrateReview(): $CancellablePromise<void> {
 }
 
 /**
- * PickFolder opens the native directory chooser and returns the selected path,
- * or "" when the user cancels. start seeds the dialog's directory so re-picking
- * a project's folder does not begin at $HOME again.
- * 
- * The dialog is the app's, not the form's: only the backend can put a real macOS
- * panel in front of the window, which is why this is a service method rather
- * than anything in the frontend.
+ * PickFile opens the native file chooser. It returns a path, never file contents.
+ * Cancellation returns an empty path.
+ */
+export function PickFile(start: string): $CancellablePromise<string> {
+    return $Call.ByID(3851469632, start);
+}
+
+/**
+ * PickFolder opens the native folder chooser. Cancellation returns an empty path.
  */
 export function PickFolder(start: string): $CancellablePromise<string> {
     return $Call.ByID(549249398, start);

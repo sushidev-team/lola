@@ -202,7 +202,7 @@ it('keeps child checks actionable and prevents confirming a parent with unmet re
   render(SessionTasks, { sessionId: id });
   expect(screen.queryByRole('button', { name: 'Confirm checked: Requirement work' })).toBeNull();
   expect(screen.queryByText('Needs your check')).toBeNull();
-  expect(screen.getByText('1 requirement needs your check')).toBeInTheDocument();
+  expect(screen.queryByText('1 requirement needs your check')).toBeNull();
   expect(screen.queryByText('Needs your check')).toBeNull();
   expect(screen.getByRole('button', { name: 'Confirm checked: Requirement browser' })).toBeEnabled();
   await fireEvent.click(screen.getByRole('button', { name: 'Requirement browser' }));

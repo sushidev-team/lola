@@ -71,6 +71,7 @@
     "blockedLabelId",
     "dedupMode",
     "prioritySort",
+    "autoPRComments",
   ] as const;
   type InheritKey = (typeof INHERIT_KEYS)[number];
 
@@ -256,7 +257,7 @@
   /** Any edit of an inherited field promotes it to a project-level override. */
   // Drafts are presentation state, never persisted. Comparing with defaults
   // must not erase commands or environment variables the user just entered.
-  const overrideDrafts = new Map<InheritKey, string | string[] | null>();
+  const overrideDrafts = new Map<InheritKey, string | string[] | boolean | null>();
   function promote(k: InheritKey, restoreDraft = false) {
     if (!f || !f.inherits[k]) return;
     if (restoreDraft && overrideDrafts.has(k)) {
@@ -302,6 +303,9 @@
         break;
       case "dedupMode":
         f.dedupMode = d.dedupMode;
+        break;
+      case "autoPRComments":
+        f.autoPRComments = d.autoPRComments;
         break;
       case "prioritySort":
         break; // not surfaced by this form; the bit is passed through on save
@@ -776,8 +780,8 @@
                   oninput={(e) => { d.path = e.currentTarget.value; }}
                   onblur={() => void inspect(d.path, { fill: true })}
                 />
-                <Button size="sm" variant="secondary" onclick={pickFolder} disabled={picking}>
-                  {picking ? "Choosing…" : "Choose folder…"}
+                <Button size="sm" variant="secondary" class="h-auto! self-stretch" onclick={pickFolder} loading={picking} aria-label="Browse for project folder">
+                  <Icon name="folder" size={14} />Browse…
                 </Button>
               </span>
               <span class={hintCls}>
@@ -837,6 +841,21 @@
           {#if role !== "member"}
           <AgentModelFields provider={d.agent} providerLabel="Agent" defaultProvider={defaults?.agent ?? "claude"}
             rowClass={rowCls} labelClass={labelCls} onProviderChange={(value) => { d.agent = value; }} />
+          <div class={rowCls}>
+            <span class={labelCls}>PR comments</span>
+            <Select aria-label="Automatically address PR comments"
+              value={d.inherits.autoPRComments ? "inherit" : d.autoPRComments ? "on" : "off"}
+              onchange={(e) => {
+                const value = e.currentTarget.value;
+                if (value === "inherit") revert("autoPRComments");
+                else { promote("autoPRComments"); d.autoPRComments = value === "on"; }
+              }}>
+              <option value="inherit">Use global default ({defaults?.autoPRComments ? "on" : "off"})</option>
+              <option value="on">Automatically address and resolve</option>
+              <option value="off">Off</option>
+            </Select>
+          </div>
+          <p class="text-sm text-faint">When idle, the agent verifies new review comments, pushes fixes and resolves only addressed threads. Existing review-provider handoffs are configured separately.</p>
           {/if}
           {#if role === "stack"}
             <!-- A stack session is ONE branch name across every member's

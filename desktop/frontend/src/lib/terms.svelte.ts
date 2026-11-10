@@ -446,6 +446,14 @@ class Terms {
     }
   }
 
+  /** File > Close Tab uses the same teardown as the tab's ×. Permanent views
+   * have no close button, so they leave the session and app running. */
+  async closeActiveTab(id: string): Promise<void> {
+    const tab = this.activeTab(id);
+    if (tab === AGENT || isViewTab(tab)) return;
+    await this.closeShell(id, tab);
+  }
+
   // closeShell drops a shell tab and kills its tmux session (the "×"). Flip UI
   // state FIRST so the LiveTerminal unmounts (and detaches) before the kill, then
   // reconcile.

@@ -372,6 +372,11 @@ class Store {
 
   // --- project groups & arrangement -----------------------------------------
 
+  removeProject(name: string) {
+    const project = this.projectByName(name);
+    return this.act(() => ConfigService.RemoveProject(name), `removed ${project ? displayName(project) : name}`);
+  }
+
   addGroup(label: string) {
     return this.act(() => ConfigService.AddGroup(label), "group added");
   }
@@ -399,10 +404,6 @@ class Store {
       () => ConfigService.CreateStackFromFolder(label, apps),
       `stack created with ${apps.length} app${apps.length === 1 ? "" : "s"}`,
     );
-  }
-  /** Removes a project from lola's config (its checkout on disk is untouched). */
-  removeProject(name: string) {
-    return this.act(() => ConfigService.RemoveProject(name), "project removed");
   }
   /** Removes a stack and every member not in keep; kept members stand alone. */
   removeStack(stack: string, keep: string[]) {
