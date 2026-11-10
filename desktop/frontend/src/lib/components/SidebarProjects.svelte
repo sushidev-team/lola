@@ -820,9 +820,9 @@
       {#each projectActions(store.projectByName(menuName)!) as action (action.id)}
         <MenuItem disabled={!action.enabled} onclick={() => { rowMenu=null; action.run(); }}>{action.label}</MenuItem>
       {/each}
-      <div class="my-1 border-t border-edge"></div>
     {/if}
     {#if menuStack}
+      <div class="my-1 border-t border-edge"></div>
       <MenuItem
         icon="↖"
         onclick={() => {
@@ -832,6 +832,7 @@
         }}>Remove from stack</MenuItem
       >
     {:else if !rowMenu?.picking && !isStack(store.projectByName(menuName)!)}
+      <div class="my-1 border-t border-edge"></div>
       <!-- A submenu in place: the stack list replaces the root items. -->
       <MenuItem
         icon="◆"
