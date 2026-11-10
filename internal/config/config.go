@@ -182,6 +182,11 @@ type Project struct {
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
 	// GoalMode is explicit per project/stack availability, never execution authorization.
 	GoalMode bool `toml:"goal_mode,omitempty"`
+	// HubChores opts this project into the [hub] chore lane: hub work items
+	// whose repo matches Repo may be claimed for it (internal/hub.Accept).
+	// Default false, and deliberately NOT a [defaults] key: an inherited
+	// opt-in would enrol every project by accident.
+	HubChores bool `toml:"hub_chores,omitempty"`
 	// Kind is "" for an ordinary repository project or "stack" for a STACK:
 	// a project with no checkout of its own that owns the Linear side (filter,
 	// write-back, agent, sandbox, budget) for several member repositories. See
@@ -385,6 +390,8 @@ type Config struct {
 	Budget      BudgetConfig      `toml:"budget"`
 	Load        LoadConfig        `toml:"load"`
 	Sandbox     SandboxConfig     `toml:"sandbox"`
+	// Hub is the [hub] table: enrollment with a team lola hub (hub.go).
+	Hub HubConfig `toml:"hub"`
 	// SSHHosts is the [[ssh_host]] catalog: the only hosts an agent-assisted ssh
 	// session can reach (see ssh.go). Empty means the feature is off.
 	SSHHosts []SSHHost `toml:"ssh_host"`
@@ -504,6 +511,7 @@ type fileConfig struct {
 	Budget      *BudgetConfig          `toml:"budget,omitempty"`
 	Load        *LoadConfig            `toml:"load,omitempty"`
 	Sandbox     *SandboxConfig         `toml:"sandbox,omitempty"`
+	Hub         *HubConfig             `toml:"hub,omitempty"`
 	SSHHosts    []SSHHost              `toml:"ssh_host,omitempty"`
 }
 
@@ -543,10 +551,13 @@ type fileProject struct {
 	SandboxImage string   `toml:"sandbox_image,omitempty"`
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
 	// GoalMode is explicit per project/stack availability, never execution authorization.
-	GoalMode bool     `toml:"goal_mode,omitempty"`
-	Kind     string   `toml:"kind,omitempty"`
-	Stack    string   `toml:"stack,omitempty"`
-	Labels   []string `toml:"labels,omitempty"`
+	GoalMode bool `toml:"goal_mode,omitempty"`
+	// HubChores is PLAIN: not inheritable (an inherited opt-in would enrol
+	// every project by accident).
+	HubChores bool     `toml:"hub_chores,omitempty"`
+	Kind      string   `toml:"kind,omitempty"`
+	Stack     string   `toml:"stack,omitempty"`
+	Labels    []string `toml:"labels,omitempty"`
 
 	Enabled        bool      `toml:"enabled,omitempty"`
 	TeamID         string    `toml:"team_id,omitempty"`
@@ -714,6 +725,7 @@ func projectFromFile(fp fileProject) Project {
 		SandboxImage:      fp.SandboxImage,
 		SandboxPorts:      fp.SandboxPorts,
 		GoalMode:          fp.GoalMode,
+		HubChores:         fp.HubChores,
 		Kind:              fp.Kind,
 		Stack:             fp.Stack,
 		Labels:            fp.Labels,
@@ -788,6 +800,7 @@ func projectToFile(p Project) fileProject {
 		SandboxImage:      p.SandboxImage,
 		SandboxPorts:      p.SandboxPorts,
 		GoalMode:          p.GoalMode,
+		HubChores:         p.HubChores,
 		Kind:              p.Kind,
 		Stack:             p.Stack,
 		Labels:            p.Labels,
@@ -929,6 +942,7 @@ func (fc *fileConfig) config() *Config {
 		Budget:          tableOf(fc.Budget),
 		Load:            tableOf(fc.Load),
 		Sandbox:         tableOf(fc.Sandbox),
+		Hub:             tableOf(fc.Hub),
 		SSHHosts:        fc.SSHHosts,
 	}
 }
@@ -989,6 +1003,7 @@ func (c *Config) file() *fileConfig {
 		Budget:      nonZero(c.Budget),
 		Load:        nonZero(c.Load),
 		Sandbox:     sandboxTable(c.Sandbox),
+		Hub:         hubTable(c.Hub),
 		SSHHosts:    c.SSHHosts,
 	}
 }
