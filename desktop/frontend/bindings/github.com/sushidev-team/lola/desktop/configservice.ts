@@ -259,6 +259,14 @@ export function RemoveSSHHost(name: string): $CancellablePromise<void> {
 }
 
 /**
+ * RemoveStack removes a stack and every member not named in keep; the kept
+ * ones stay configured as standalone projects (config.RemoveStack).
+ */
+export function RemoveStack(stack: string, keep: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(3244679473, stack, keep);
+}
+
+/**
  * RenameGroup changes a group's DISPLAY label only. The id stays put on purpose:
  * it is what every [[project]].group references, and rewriting it would have to
  * rewrite those in the same breath for no gain — unlike a project id, a group id

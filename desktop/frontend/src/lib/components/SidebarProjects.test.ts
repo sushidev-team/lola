@@ -5,12 +5,14 @@ import { tick } from "svelte";
 // The bindings are the process boundary. Stubbing them keeps this about what
 // the sidebar OFFERS and what it asks the backend to persist — the arrangement
 // maths itself is pinned in sidebarlayout.test.ts, without a DOM.
-const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack, PickFolder, ScanStackFolder, CreateStackFromFolder } = vi.hoisted(() => ({
+const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack, PickFolder, ScanStackFolder, CreateStackFromFolder, RemoveProject, RemoveStack } = vi.hoisted(() => ({
   CreateStack: vi.fn(),
   PickFolder: vi.fn(),
   ScanStackFolder: vi.fn(),
   CreateStackFromFolder: vi.fn(),
   SetProjectStack: vi.fn(),
+  RemoveProject: vi.fn(),
+  RemoveStack: vi.fn(),
   AddGroup: vi.fn(),
   RemoveGroup: vi.fn(),
   RenameGroup: vi.fn(),
@@ -37,6 +39,8 @@ vi.mock("@bindings/desktop", () => ({
     ScanStackFolder: (...a: unknown[]) => ScanStackFolder(...a),
     CreateStackFromFolder: (...a: unknown[]) => CreateStackFromFolder(...a),
     SetProjectStack: (...a: unknown[]) => SetProjectStack(...a),
+    RemoveProject: (...a: unknown[]) => RemoveProject(...a),
+    RemoveStack: (...a: unknown[]) => RemoveStack(...a),
   },
   TermService: {},
 }));
@@ -535,6 +539,31 @@ describe("SidebarProjects", () => {
     expect(confirm.request?.body).toBe("Remove web from stack nori?");
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("web", "");
+  });
+
+  it("removes a member project from lola, not only from its stack", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "web" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove project…" }));
+    expect(confirm.request?.body).toBe("Remove web from lola?");
+    confirm.accept();
+    expect(RemoveProject).toHaveBeenCalledWith("web");
+  });
+
+  it("removes a stack, keeping only the members left checked", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "nori" }));
+    expect(screen.queryByRole("menuitem", { name: "Add to stack…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "lola" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove stack…" }));
+    const items = confirm.request?.choices?.items ?? [];
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every((i) => i.checked)).toBe(true);
+    items[0].checked = false;
+    confirm.accept();
+    expect(RemoveStack).toHaveBeenCalledWith("nori", items.slice(1).map((i) => i.id));
   });
 });
 

@@ -22,6 +22,7 @@
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
   import { labelIdsFor } from "$lib/labelpick";
+  import { askRemoveStack } from "$lib/removeAsk";
   import type {
     ProjectFormDTO,
     InheritsDTO,
@@ -1231,7 +1232,11 @@
           <Button variant="danger-solid" size="md" onclick={remove}>{role === "stack" ? "Remove stack" : "Remove project"}</Button>
           <Button size="md" onclick={() => (confirmRemove = false)}>Cancel</Button>
         {:else}
-          <Button variant="danger" size="md" onclick={() => (confirmRemove = true)}>Remove</Button>
+          <Button variant="danger" size="md" onclick={() => {
+            // A stack asks which members to keep, in the shared confirm dialog.
+            if (role === "stack") { nav.closeOverlay(); askRemoveStack(origName); }
+            else confirmRemove = true;
+          }}>Remove</Button>
         {/if}
       {/if}
       <Button size="md" class="ml-auto" onclick={requestClose}>Cancel</Button>

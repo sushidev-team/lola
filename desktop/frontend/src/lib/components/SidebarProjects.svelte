@@ -30,6 +30,7 @@
   import SidebarGroupRow from "./SidebarGroupRow.svelte";
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
+  import { askRemoveProject, askRemoveStack } from "$lib/removeAsk";
   import Modal from "./Modal.svelte";
   import Checkbox from "./Checkbox.svelte";
   import { ConfigService, type StackFolderAppDTO } from "@bindings/desktop";
@@ -825,7 +826,7 @@
         title={stacks.length === 0 ? "No stacks yet — add one with + → New stack" : undefined}
         onclick={() => rowMenu && (rowMenu = { ...rowMenu, picking: true })}>Add to stack…</MenuItem
       >
-    {:else}
+    {:else if rowMenu?.picking}
       {#each stacks as st (st.name)}
         <MenuItem
           icon="◆"
@@ -836,6 +837,26 @@
           }}>{displayName(st)}</MenuItem
         >
       {/each}
+    {/if}
+    {#if !rowMenu?.picking && store.projectByName(menuName)}
+      <div class="my-1 border-t border-edge"></div>
+      {#if isStack(store.projectByName(menuName)!)}
+        <MenuItem
+          onclick={() => {
+            const name = menuName;
+            rowMenu = null;
+            askRemoveStack(name);
+          }}>Remove stack…</MenuItem
+        >
+      {:else}
+        <MenuItem
+          onclick={() => {
+            const name = menuName;
+            rowMenu = null;
+            askRemoveProject(name);
+          }}>Remove project…</MenuItem
+        >
+      {/if}
     {/if}
   </div>
 {/if}

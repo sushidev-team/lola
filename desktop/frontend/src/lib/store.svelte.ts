@@ -400,6 +400,17 @@ class Store {
       `stack created with ${apps.length} app${apps.length === 1 ? "" : "s"}`,
     );
   }
+  /** Removes a project from lola's config (its checkout on disk is untouched). */
+  removeProject(name: string) {
+    return this.act(() => ConfigService.RemoveProject(name), "project removed");
+  }
+  /** Removes a stack and every member not in keep; kept members stand alone. */
+  removeStack(stack: string, keep: string[]) {
+    return this.act(
+      () => ConfigService.RemoveStack(stack, keep),
+      keep.length ? `stack removed, kept ${keep.length} project${keep.length === 1 ? "" : "s"}` : "stack removed",
+    );
+  }
   /**
    * Moves a project into a stack ("" = out of it). Unlike a folder this is NOT
    * display-only — a member stops polling and is checked out for the stack's

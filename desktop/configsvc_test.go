@@ -1159,3 +1159,63 @@ func TestCreateStackFromFolderResolvesSymlinks(t *testing.T) {
 		t.Fatalf("membership bypassed through the symlink: %+v", again.Apps[0])
 	}
 }
+
+// A member with labels must be able to leave its stack: labels only apply to
+// a member, and keeping them made Validate refuse the write.
+func TestLeavingAStackDropsMemberLabels(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetStackMemberLabels("nori", map[string][]string{"okane": {"apps/app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", ""); err != nil {
+		t.Fatalf("leave stack: %v", err)
+	}
+	cfg, _ := config.Load(path)
+	if p := cfg.ProjectByName("okane"); p.Stack != "" || len(p.Labels) != 0 {
+		t.Fatalf("okane = stack %q labels %q, want both empty", p.Stack, p.Labels)
+	}
+}
+
+func TestRemoveStackKeepsOnlyTheCheckedMembers(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load(path)
+	var names []string
+	for _, p := range cfg.Projects {
+		if !p.IsStack() {
+			names = append(names, p.Name)
+			if err := s.SetProjectStack(p.Name, "nori"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(names) < 2 {
+		t.Fatalf("fixture needs two projects, got %v", names)
+	}
+	if err := s.SetStackMemberLabels("nori", map[string][]string{names[0]: {"apps/app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveStack("nori", []string{"nope"}); err == nil {
+		t.Fatal("keeping a non-member must be refused")
+	}
+	if err := s.RemoveStack("nori", []string{names[0]}); err != nil {
+		t.Fatalf("RemoveStack: %v", err)
+	}
+	cfg, _ = config.Load(path)
+	if cfg.ProjectByName("nori") != nil || cfg.ProjectByName(names[1]) != nil {
+		t.Fatalf("stack and unchecked member must be gone: %+v", cfg.Projects)
+	}
+	if p := cfg.ProjectByName(names[0]); p == nil || p.Stack != "" || len(p.Labels) != 0 {
+		t.Fatalf("kept member = %+v, want standalone with no labels", p)
+	}
+}

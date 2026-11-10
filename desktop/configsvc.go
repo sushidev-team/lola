@@ -996,11 +996,27 @@ func (s *ConfigService) RemoveProject(name string) error {
 	cfg.Projects = out
 	// Removing a STACK sets its members free rather than leaving them naming a
 	// stack that is gone (which Validate rejects): they get their own Linear
-	// and agent settings back, exactly as when dragged out one by one.
+	// and agent settings back, exactly as when dragged out one by one. Their
+	// labels go too — labels only apply to a member, and keeping them made
+	// Validate refuse the whole write.
 	for i := range cfg.Projects {
 		if cfg.Projects[i].Stack == name {
 			cfg.Projects[i].Stack = ""
+			cfg.Projects[i].Labels = nil
 		}
+	}
+	return saveConfig(cfg, path)
+}
+
+// RemoveStack removes a stack and every member not named in keep; the kept
+// ones stay configured as standalone projects (config.RemoveStack).
+func (s *ConfigService) RemoveStack(stack string, keep []string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := cfg.RemoveStack(stack, keep); err != nil {
+		return err
 	}
 	return saveConfig(cfg, path)
 }
@@ -1145,6 +1161,11 @@ func (s *ConfigService) SetProjectStack(project, stack string) error {
 		return nil // no write for a no-op move
 	}
 	p.Stack = stack
+	if stack == "" {
+		// Labels only apply to a member (Validate refuses them elsewhere), so a
+		// member with labels could not leave its stack at all.
+		p.Labels = nil
+	}
 	return saveConfig(cfg, path)
 }
 
