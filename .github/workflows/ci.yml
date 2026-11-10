@@ -67,6 +67,14 @@ jobs:
       - name: test (race)
         run: go test -race -count=1 ${{ steps.pkgs.outputs.list }}
 
+      # hubproto is a nested module (the hub's wire contract), so `go list ./...`
+      # above does not include it.
+      - name: hubproto (vet + race)
+        working-directory: hubproto
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
       # The lola_insecure half of the M1 remote listener compiles ONLY under its
       # build tag, so nothing above touches it: the insecure authorizer, the
       # daemon wiring that starts a listener and their tests are all invisible

@@ -17,11 +17,15 @@ LINUX_ARCH ?= $(shell go env GOARCH)
 build-linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(LINUX_ARCH) go build -o dist/lola-linux-$(LINUX_ARCH) .
 
+# hubproto is a NESTED module (the hub's wire contract), so ./... skips it;
+# it is tested and vetted from its own directory.
 test:
 	go test ./...
+	cd hubproto && go test ./...
 
 vet:
 	go vet ./...
+	cd hubproto && go vet ./...
 
 # fmtcheck mirrors .github/workflows/ci.yml's gofmt step BYTE FOR BYTE. It lives
 # in `check` because CI ran it and `make check` did not, so a file could be
