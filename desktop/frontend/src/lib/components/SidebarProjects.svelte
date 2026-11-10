@@ -870,13 +870,13 @@
           </Button>
         </div>
         {#if !dialog.folder}
-          <p class="mt-1 text-xs text-faint">
+          <p class="mt-1 text-sm text-faint">
             Optional. Pick the folder that holds the stack's repositories to add them as apps automatically.
           </p>
         {:else}
-          <p class="mt-1 truncate font-mono text-xs text-faint" title={dialog.folder.path}>{dialog.folder.path}</p>
+          <p class="mt-1 truncate font-mono text-sm text-faint" title={dialog.folder.path}>{dialog.folder.path}</p>
           {#if dialog.folder.apps.length === 0}
-            <p class="mt-2 text-xs text-warn">No git checkouts directly inside this folder. The stack is created empty.</p>
+            <p class="mt-2 text-sm text-warn">No git checkouts directly inside this folder. The stack is created empty.</p>
           {:else}
             <ul class="mt-2 max-h-56 overflow-auto rounded border border-edge" aria-label="Apps in folder">
               {#each dialog.folder.apps as app, i (app.path)}
@@ -888,14 +888,14 @@
                       aria-label="Include {app.label}"
                     />
                     <span class="min-w-0 flex-1 truncate text-ink {app.blocked ? 'opacity-55' : ''}">{app.label}</span>
-                    <span class="shrink-0 truncate text-xs text-faint">
+                    <span class="shrink-0 truncate text-sm text-faint">
                       {#if app.blocked}{app.blocked}{:else if app.project}joins existing project{:else}{app.repo || "no GitHub remote"}{/if}
                     </span>
                   </label>
                 </li>
               {/each}
             </ul>
-            <p class="mt-1 text-xs text-faint">{folderCount} of {dialog.folder.apps.length} included</p>
+            <p class="mt-1 text-sm text-faint">{folderCount} of {dialog.folder.apps.length} included</p>
           {/if}
         {/if}
       </div>

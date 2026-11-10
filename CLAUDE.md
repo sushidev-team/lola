@@ -1914,6 +1914,12 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     app was all-lowercase, which read as prose rather than as controls. Tests
     assert these strings; `getByRole("menuitem", { name })`, not `getByText`,
     because a MenuItem wraps its label beside an aria-hidden glyph.
+- **`text-xs` is NOT Tailwind's small text in the app.** `app.css` redefines it
+  as the uppercase micro-label tier (12px, weight 600, 0.06em tracking), meant
+  only via the `label` utility. A hint, caption, path or count written with
+  `text-xs` renders bold and spaced out. Use `text-sm` (12px/400, the metadata
+  tier) for small reading text; the full scale is the comment at the top of
+  `desktop/frontend/src/app.css`.
 - **No form control in the app is drawn by the OS.** A bare
   `<input type="checkbox">` and a bare `<select>` are painted by AppKit, so their
   box, tick, caret and focus ring follow the user's macOS version rather than
