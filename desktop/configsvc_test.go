@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1062,5 +1063,159 @@ func TestSystemAppearancePersistsAndRejectsWrongTags(t *testing.T) {
 	got := svc.GetAppearance()
 	if got.FollowSystem || got.Theme != "gruvbox-light" || got.LightTheme != want.LightTheme || got.DarkTheme != want.DarkTheme {
 		t.Fatalf("fixed switch lost pair: %+v", got)
+	}
+}
+
+// Creating a stack from a parent folder: the scan marks a checkout that is
+// already a project, and the create adds the rest as members and makes the
+// configured one join, in one write.
+func TestCreateStackFromFolder(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	parent := t.TempDir()
+	for _, app := range []string{"api", "okane"} {
+		dir := filepath.Join(parent, app)
+		if out, err := exec.Command("git", "init", "-b", "main", dir).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+	}
+	okanePath := filepath.Join(parent, "okane")
+	path := writeTestConfig(t, "[defaults]\nglobal_cap = 4\n\n[[project]]\nname = \"okane\"\npath = \""+okanePath+"\"\n")
+	s := &ConfigService{}
+
+	scan := s.ScanStackFolder(parent)
+	if len(scan.Apps) != 2 || scan.SuggestedLabel == "" {
+		t.Fatalf("scan = %+v", scan)
+	}
+	if scan.Apps[0].Project != "" || scan.Apps[1].Project != "okane" || scan.Apps[1].Blocked != "" {
+		t.Fatalf("apps = %+v", scan.Apps)
+	}
+
+	name, err := s.CreateStackFromFolder("Nori", scan.Apps)
+	if err != nil {
+		t.Fatalf("CreateStackFromFolder: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := cfg.ProjectByName(name); st == nil || !st.IsStack() {
+		t.Fatalf("stack = %+v", st)
+	}
+	if api := cfg.ProjectByName("api"); api == nil || api.Stack != name || api.Path != canonicalPath(filepath.Join(parent, "api")) || api.DefaultBranch != "main" {
+		t.Fatalf("api = %+v", api)
+	}
+	if ok := cfg.ProjectByName("okane"); ok.Stack != name {
+		t.Fatalf("okane did not join: %+v", ok)
+	}
+
+	// The joined project now reads as blocked for a second stack.
+	if again := s.ScanStackFolder(parent); again.Apps[1].Blocked == "" {
+		t.Fatalf("member of a stack not blocked: %+v", again.Apps[1])
+	}
+}
+
+// A checkout reached through a symlink is the SAME project as its real path,
+// both ways round: the scan marks it configured (and blocked when it is in
+// another stack), and the create joins it instead of adding a duplicate.
+func TestCreateStackFromFolderResolvesSymlinks(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	real := filepath.Join(t.TempDir(), "web")
+	if out, err := exec.Command("git", "init", "-b", "main", real).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	parent := t.TempDir()
+	if err := os.Symlink(real, filepath.Join(parent, "web")); err != nil {
+		t.Fatal(err)
+	}
+	// Configured under the LINK, as a hand-written config might be.
+	link := filepath.Join(parent, "web")
+	path := writeTestConfig(t, "[defaults]\nglobal_cap = 4\n\n[[project]]\nname = \"web\"\npath = \""+link+"\"\n")
+	s := &ConfigService{}
+
+	scan := s.ScanStackFolder(parent)
+	if len(scan.Apps) != 1 || scan.Apps[0].Project != "web" {
+		t.Fatalf("symlinked checkout not matched to its project: %+v", scan.Apps)
+	}
+	name, err := s.CreateStackFromFolder("Nori", scan.Apps)
+	if err != nil {
+		t.Fatalf("CreateStackFromFolder: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(cfg.Projects); n != 2 {
+		t.Fatalf("projects = %d (%+v), want the stack plus the joined web", n, cfg.Projects)
+	}
+	if web := cfg.ProjectByName("web"); web.Stack != name || web.Path != link {
+		t.Fatalf("web = %+v", web)
+	}
+	// Now in a stack: a second stack from the same folder sees it blocked.
+	if again := s.ScanStackFolder(parent); again.Apps[0].Blocked == "" {
+		t.Fatalf("membership bypassed through the symlink: %+v", again.Apps[0])
+	}
+}
+
+// A member with labels must be able to leave its stack: labels only apply to
+// a member, and keeping them made Validate refuse the write.
+func TestLeavingAStackDropsMemberLabels(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetStackMemberLabels("nori", map[string][]string{"okane": {"apps/app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", ""); err != nil {
+		t.Fatalf("leave stack: %v", err)
+	}
+	cfg, _ := config.Load(path)
+	if p := cfg.ProjectByName("okane"); p.Stack != "" || len(p.Labels) != 0 {
+		t.Fatalf("okane = stack %q labels %q, want both empty", p.Stack, p.Labels)
+	}
+}
+
+func TestRemoveStackKeepsOnlyTheCheckedMembers(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load(path)
+	var names []string
+	for _, p := range cfg.Projects {
+		if !p.IsStack() {
+			names = append(names, p.Name)
+			if err := s.SetProjectStack(p.Name, "nori"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(names) < 2 {
+		t.Fatalf("fixture needs two projects, got %v", names)
+	}
+	if err := s.SetStackMemberLabels("nori", map[string][]string{names[0]: {"apps/app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveStack("nori", []string{"nope"}); err == nil {
+		t.Fatal("keeping a non-member must be refused")
+	}
+	if err := s.RemoveStack("nori", []string{names[0]}); err != nil {
+		t.Fatalf("RemoveStack: %v", err)
+	}
+	cfg, _ = config.Load(path)
+	if cfg.ProjectByName("nori") != nil || cfg.ProjectByName(names[1]) != nil {
+		t.Fatalf("stack and unchecked member must be gone: %+v", cfg.Projects)
+	}
+	if p := cfg.ProjectByName(names[0]); p == nil || p.Stack != "" || len(p.Labels) != 0 {
+		t.Fatalf("kept member = %+v, want standalone with no labels", p)
 	}
 }

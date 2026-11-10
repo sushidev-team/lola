@@ -71,7 +71,7 @@ describe("HostBar", () => {
     await fireEvent.click(screen.getByRole("menuitem", { name: "Remove host and its record…" }));
     expect(Trash).not.toHaveBeenCalled();
     expect(confirm.request?.body).toBe("Removes this host, its commands and their output. Your messages stay.");
-    confirm.request?.onConfirm();
+    confirm.accept();
     await vi.waitFor(() => expect(Trash).toHaveBeenCalledWith("p"));
   });
   it("acts on no host under All with several live, and on the one when there is one", async () => {

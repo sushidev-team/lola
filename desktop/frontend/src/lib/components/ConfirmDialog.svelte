@@ -9,6 +9,7 @@
   import { confirm } from "$lib/confirm.svelte";
   import Modal from "./Modal.svelte";
   import Button from "./Button.svelte";
+  import Checkbox from "./Checkbox.svelte";
 
   const req = $derived(confirm.request);
   const descriptionId = $props.id();
@@ -20,6 +21,18 @@
       <p class="copy confirmation-body">{req.body}</p>
       {#if req.detail}<p class="copy confirmation-detail">{req.detail}</p>{/if}
     </div>
+    {#if req.choices?.items.length}
+      <ul class="mt-3 max-h-56 overflow-auto rounded border border-edge" aria-label={req.choices.label}>
+        {#each req.choices.items as item (item.id)}
+          <li class="border-b border-edge last:border-b-0">
+            <label class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-ink">
+              <Checkbox bind:checked={item.checked} aria-label={`${req.choices.label}: ${item.label}`} />
+              <span class="min-w-0 truncate">{item.label}</span>
+            </label>
+          </li>
+        {/each}
+      </ul>
+    {/if}
     {#snippet footer()}
       <div class="dialog-actions">
         <Button class="cancel" size="md" onclick={() => confirm.cancel()}>Cancel</Button>

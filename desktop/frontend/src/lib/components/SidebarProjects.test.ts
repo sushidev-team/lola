@@ -5,9 +5,14 @@ import { tick } from "svelte";
 // The bindings are the process boundary. Stubbing them keeps this about what
 // the sidebar OFFERS and what it asks the backend to persist — the arrangement
 // maths itself is pinned in sidebarlayout.test.ts, without a DOM.
-const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack } = vi.hoisted(() => ({
+const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack, PickFolder, ScanStackFolder, CreateStackFromFolder, RemoveProject, RemoveStack } = vi.hoisted(() => ({
   CreateStack: vi.fn(),
+  PickFolder: vi.fn(),
+  ScanStackFolder: vi.fn(),
+  CreateStackFromFolder: vi.fn(),
   SetProjectStack: vi.fn(),
+  RemoveProject: vi.fn(),
+  RemoveStack: vi.fn(),
   AddGroup: vi.fn(),
   RemoveGroup: vi.fn(),
   RenameGroup: vi.fn(),
@@ -30,7 +35,12 @@ vi.mock("@bindings/desktop", () => ({
     SetGroupCollapsed: (...a: unknown[]) => SetGroupCollapsed(...a),
     SetProjectLayout: (...a: unknown[]) => SetProjectLayout(...a),
     CreateStack: (...a: unknown[]) => CreateStack(...a),
+    PickFolder: (...a: unknown[]) => PickFolder(...a),
+    ScanStackFolder: (...a: unknown[]) => ScanStackFolder(...a),
+    CreateStackFromFolder: (...a: unknown[]) => CreateStackFromFolder(...a),
     SetProjectStack: (...a: unknown[]) => SetProjectStack(...a),
+    RemoveProject: (...a: unknown[]) => RemoveProject(...a),
+    RemoveStack: (...a: unknown[]) => RemoveStack(...a),
   },
   TermService: {},
 }));
@@ -398,6 +408,41 @@ describe("SidebarProjects", () => {
     expect(nav.overlay).toBe("project");
   });
 
+  it("creates a stack from a parent folder with the apps left checked", async () => {
+    PickFolder.mockResolvedValue("/src/nori");
+    const apps = [
+      { path: "/src/nori/api", label: "Api", repo: "acme/api", defaultBranch: "main", project: "", blocked: "" },
+      { path: "/src/nori/web", label: "Web", repo: "acme/web", defaultBranch: "main", project: "web", blocked: "" },
+      { path: "/src/nori/old", label: "Old", repo: "", defaultBranch: "", project: "old", blocked: "already in stack Other" },
+      { path: "/src/nori/docs", label: "Docs", repo: "", defaultBranch: "main", project: "", blocked: "" },
+    ];
+    ScanStackFolder.mockResolvedValue({ path: "/src/nori", suggestedLabel: "Nori", apps });
+    CreateStackFromFolder.mockResolvedValue("nori");
+    render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "New stack" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Choose parent folder…" }));
+    await vi.waitFor(() => expect(screen.getByRole("list", { name: "Apps in folder" })).toBeInTheDocument());
+    const dialog = screen.getByRole("dialog");
+    // The name is suggested from the folder.
+    expect((within(dialog).getByRole("textbox") as HTMLInputElement).value).toBe("Nori");
+    expect(within(dialog).getByText("joins existing project")).toBeInTheDocument();
+    const old = within(dialog).getByRole("checkbox", { name: "Include Old" }) as HTMLInputElement;
+    expect(old.disabled).toBe(true);
+    expect(old.checked).toBe(false);
+    await fireEvent.click(within(dialog).getByRole("checkbox", { name: "Include Docs" }));
+    expect(within(dialog).getByText("2 of 4 included")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await tick();
+    await tick();
+    expect(CreateStack).not.toHaveBeenCalled();
+    expect(CreateStackFromFolder).toHaveBeenCalledTimes(1);
+    const [label, sent] = CreateStackFromFolder.mock.calls[0];
+    expect(label).toBe("Nori");
+    expect(sent.map((a: { path: string }) => a.path)).toEqual(["/src/nori/api", "/src/nori/web"]);
+    expect(nav.overlay).toBe("project");
+  });
+
   it("nests a stack's members under it, whatever their folder", () => {
     store.projects = stackProjects();
     const { container } = render(SidebarProjects);
@@ -494,6 +539,31 @@ describe("SidebarProjects", () => {
     expect(confirm.request?.body).toBe("Remove web from stack nori?");
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("web", "");
+  });
+
+  it("removes a member project from lola, not only from its stack", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "web" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove project…" }));
+    expect(confirm.request?.body).toBe("Remove web from lola?");
+    confirm.accept();
+    expect(RemoveProject).toHaveBeenCalledWith("web");
+  });
+
+  it("removes a stack, keeping only the members left checked", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "nori" }));
+    expect(screen.queryByRole("menuitem", { name: "Add to stack…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "lola" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove stack…" }));
+    const items = confirm.request?.choices?.items ?? [];
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every((i) => i.checked)).toBe(true);
+    items[0].checked = false;
+    confirm.accept();
+    expect(RemoveStack).toHaveBeenCalledWith("nori", items.slice(1).map((i) => i.id));
   });
 });
 

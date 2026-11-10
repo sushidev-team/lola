@@ -119,6 +119,66 @@ func SelectApps(members []Project, ids, names, groups []string) []Project {
 	return out
 }
 
+// SetMemberLabels replaces the labels of several members of stack in one
+// change — the stack form's Members tab, which edits every member at once.
+// Each key names a member; an empty list means "every issue". All-or-nothing:
+// an unknown stack, or a key that is not a member of it, changes nothing.
+func (c *Config) SetMemberLabels(stack string, labels map[string][]string) error {
+	if st := c.ProjectByName(stack); st == nil || !st.IsStack() {
+		return fmt.Errorf("no such stack: %s", stack)
+	}
+	for name := range labels {
+		if p := c.ProjectByName(name); p == nil || p.Stack != stack {
+			return fmt.Errorf("%s is not a member of stack %s", name, stack)
+		}
+	}
+	for name, ls := range labels {
+		var clean []string
+		seen := map[string]bool{}
+		for _, l := range ls {
+			if l = strings.TrimSpace(l); l != "" && !seen[l] {
+				seen[l] = true
+				clean = append(clean, l)
+			}
+		}
+		c.ProjectByName(name).Labels = clean
+	}
+	return nil
+}
+
+// RemoveStack removes a stack and its members in one change. A member named
+// in keep stays configured as a standalone project (its own Linear, agent and
+// write-back settings apply again, as when dragged out); every other member is
+// removed with the stack. All-or-nothing: an unknown stack, or a keep entry
+// that is not a member of it, changes nothing.
+func (c *Config) RemoveStack(stack string, keep []string) error {
+	if st := c.ProjectByName(stack); st == nil || !st.IsStack() {
+		return fmt.Errorf("no such stack: %s", stack)
+	}
+	kept := map[string]bool{}
+	for _, name := range keep {
+		if p := c.ProjectByName(name); p == nil || p.Stack != stack {
+			return fmt.Errorf("%s is not a member of stack %s", name, stack)
+		}
+		kept[name] = true
+	}
+	out := c.Projects[:0]
+	for _, p := range c.Projects {
+		switch {
+		case p.Name == stack:
+			continue
+		case p.Stack == stack && !kept[p.Name]:
+			continue
+		case p.Stack == stack:
+			p.Stack = ""
+			p.Labels = nil // labels only apply to a member (validateStacks)
+		}
+		out = append(out, p)
+	}
+	c.Projects = out
+	return nil
+}
+
 func at(s []string, i int) string {
 	if i < len(s) {
 		return s[i]

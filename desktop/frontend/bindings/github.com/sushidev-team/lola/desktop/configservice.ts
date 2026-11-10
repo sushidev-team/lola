@@ -93,6 +93,15 @@ export function CreateStack(label: string): $CancellablePromise<string> {
     return $Call.ByID(1612967477, label);
 }
 
+/**
+ * CreateStackFromFolder creates a stack AND its members in one write (see
+ * config.AddStackFromFolder): a new project per app, or the existing one
+ * joining. All-or-nothing, so a refusal leaves the config untouched.
+ */
+export function CreateStackFromFolder(label: string, apps: $models.StackFolderAppDTO[] | null): $CancellablePromise<string> {
+    return $Call.ByID(1223234397, label, apps);
+}
+
 export function GetAppearance(): $CancellablePromise<$models.AppearanceDTO> {
     return $Call.ByID(306832519);
 }
@@ -250,6 +259,14 @@ export function RemoveSSHHost(name: string): $CancellablePromise<void> {
 }
 
 /**
+ * RemoveStack removes a stack and every member not named in keep; the kept
+ * ones stay configured as standalone projects (config.RemoveStack).
+ */
+export function RemoveStack(stack: string, keep: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(3244679473, stack, keep);
+}
+
+/**
  * RenameGroup changes a group's DISPLAY label only. The id stays put on purpose:
  * it is what every [[project]].group references, and rewriting it would have to
  * rewrite those in the same breath for no gain — unlike a project id, a group id
@@ -323,6 +340,15 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
     return $Call.ByID(298700571, dto);
 }
 
+/**
+ * ScanStackFolder reads every checkout directly inside a parent folder with
+ * LOCAL git (gitrepo.Scan), so creating a stack from it fills each member's
+ * path, repo and default branch instead of making the user add them one by one.
+ */
+export function ScanStackFolder(path: string): $CancellablePromise<$models.StackFolderDTO> {
+    return $Call.ByID(341923786, path);
+}
+
 export function SetAppearance(a: $models.AppearanceDTO): $CancellablePromise<void> {
     return $Call.ByID(744639971, a);
 }
@@ -379,6 +405,16 @@ export function SetProjectLayout(dto: $models.ProjectLayoutDTO): $CancellablePro
  */
 export function SetProjectStack(project: string, stack: string): $CancellablePromise<void> {
     return $Call.ByID(2341952554, project, stack);
+}
+
+/**
+ * SetStackMemberLabels sets which issues each member of stack is checked out
+ * for (member name -> labels; empty = every issue), in one write. It touches
+ * ONLY Project.Labels, so a stack form saved beside it cannot clobber a
+ * member's own repository settings.
+ */
+export function SetStackMemberLabels(stack: string, labels: { [_ in string]?: string[] | null } | null): $CancellablePromise<void> {
+    return $Call.ByID(1387265910, stack, labels);
 }
 
 /**

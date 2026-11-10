@@ -227,8 +227,14 @@ func (d *Daemon) runGoal(ctx context.Context, id string) error {
 			return d.launchGoalAttempt(ctx, g, a.ID)
 		}
 	}
-	if globalCap > 0 && NativeLiveCounted(d.sessions.Snapshot()) >= globalCap {
-		return nil
+	// Hold the attempt's slot until it launched, so a poll ticking meanwhile
+	// sees it taken (slots.go).
+	if globalCap > 0 {
+		release, ok := d.reserveSlots(g.Project, 1, noProjectCap, globalCap)
+		if !ok {
+			return nil
+		}
+		defer release()
 	}
 	for _, task := range g.Tasks {
 		attemptID := goal.NewID()

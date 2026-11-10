@@ -35,8 +35,9 @@ const SeenTTL = time.Hour
 // post_create legitimately runs package installs.
 const nativeSpawnTimeout = 10 * time.Minute
 
-// Budget returns min(pollCap, globalCap−liveCounted) per the SPEC formula.
-// The result may be <= 0, which means capped out.
+// Budget returns min(pollCap, globalCap−liveCounted). The tick passes the
+// project's REMAINING cap (concurrency_cap minus its own live sessions) as
+// pollCap. The result may be <= 0, which means capped out.
 func Budget(pollCap, globalCap, liveCounted int) int {
 	b := globalCap - liveCounted
 	if pollCap < b {
@@ -51,8 +52,10 @@ func Budget(pollCap, globalCap, liveCounted int) int {
 // change from the pre-axis table, because the reaction engine is actively
 // re-prompting that agent to rebase). It is a tick's liveCounted:
 //
-//	budget = Budget(pollCap, globalCap, NativeLiveCounted(store))
-//	       = min(pollCap, globalCap − NativeLiveCounted(store))
+//	budget = Budget(pollCap − projectLive, globalCap, NativeLiveCounted(store))
+//	       = min(pollCap − projectLive, globalCap − NativeLiveCounted(store))
+//
+// (both counts also include spawns still in flight, see slotCounts).
 //
 // The record's axes are ensured first: a pre-axis snapshot record read straight
 // off disk carries only the collapsed status, and an unset agent axis would
@@ -478,14 +481,19 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	// 7. Deterministic order when capped.
 	SortIssues(candidates, p.PrioritySort)
 
-	// 8. Budget: min(pollCap, globalCap − liveCounted), where liveCounted is
-	// the number of slot-occupying native sessions in the store — the native
-	// store is the only session source.
-	liveCounted := NativeLiveCounted(d.sessions.Snapshot())
-	budget := Budget(pollCap, globalCap, liveCounted)
+	// 8. Budget: min(pollCap − projectLive, globalCap − liveCounted), where
+	// liveCounted is the number of slot-occupying native sessions in the store
+	// plus every spawn still in flight on any poll, and projectLive the same
+	// for THIS project. concurrency_cap bounds how many sessions the project
+	// RUNS, not how many one tick starts: subtracting only the global count
+	// let a project with cap 2 reach 6 sessions in three ticks. Each spawn
+	// below re-checks under the slot ledger (reserveSlots), because another
+	// poll may spawn while this one does.
+	liveCounted, projectLive := d.slotCounts(project.Name)
+	budget := Budget(pollCap-projectLive, globalCap, liveCounted)
 	if budget <= 0 && len(candidates) > 0 {
-		d.logf(name, "capped out: budget=%d (pollCap=%d globalCap=%d liveCounted=%d), %d candidate(s) waiting",
-			budget, pollCap, globalCap, liveCounted, len(candidates))
+		d.logf(name, "capped out: budget=%d (pollCap=%d projectLive=%d globalCap=%d liveCounted=%d), %d candidate(s) waiting",
+			budget, pollCap, projectLive, globalCap, liveCounted, len(candidates))
 	}
 
 	// 9. Dispatch per issue, up to budget.
@@ -532,6 +540,16 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			continue
 		}
 
+		// Reserve the slots before anything is mutated: the budget above is a
+		// snapshot, and another poll may have spawned since.
+		release, fits := d.reserveSlots(project.Name, cost, pollCap, globalCap)
+		if !fits {
+			capped++
+			m.Action, m.Reason = "skipped", "capped"
+			res.Matches = append(res.Matches, m)
+			continue
+		}
+
 		// (a) Mark in-flight AND persist seen FIRST — the crash guard against a
 		// double-spawn. dedup_mode=state writes NO seen entry: the post-spawn
 		// SetIssueState(OnSpawnStateID) moves the issue out of state_ids and IS
@@ -540,6 +558,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		// across a crash/restart in that window a state-mode issue is instead
 		// shielded by the live-native-session guard in the candidate loop above.
 		if err := d.claimOrdinaryIssue(is.ID, is.Identifier, is.Description, is.IssueRelations); err != nil {
+			release()
 			m.Action, m.Reason = "skipped", err.Error()
 			res.Matches = append(res.Matches, m)
 			continue
@@ -548,6 +567,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			seen[is.ID] = now
 			if err := d.seen.save(name, seen); err != nil {
 				// Without the on-disk guard a crash could double-spawn: skip.
+				release()
 				d.inflight.Remove(is.ID)
 				delete(seen, is.ID)
 				d.logf(name, "persist seen for %s failed, skipping spawn: %v", is.Identifier, err)
@@ -573,6 +593,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		// issue spawns one session per attempt; it fails only when NONE spawned.
 		spawnTarget := "project " + project.Name
 		spawnedSess, _, spawnErr := d.spawnIssue(ctx, nat, project, is, "", mix, pollRepo, name)
+		release() // spawnIssue upserted what it spawned: the store counts it now
 		var sess session.Session
 		if spawnErr == nil {
 			sess = spawnedSess[0]
