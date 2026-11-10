@@ -540,6 +540,37 @@ endpoint = "https://api.linear.app/graphql"
 # The phone stores its own appearance choices locally.
 
 # ---------------------------------------------------------------------------
+# [hub] — a team lola HUB (OPTIONAL, DEFAULT OFF). The hub hands out mechanical
+# chores (dep_advisory: upgrade a vulnerable dependency; red_bump_pr: fix a
+# Dependabot/Renovate PR whose checks fail) and routes the team's SIGNED policy.
+# It never executes anything: work items are validated, typed fields only, and
+# the agent's prompt is rendered from lola's own template. Set it up with
+# `lola hub join <url> <token>`, which writes enabled + url; `lola hub leave`
+# turns it off. The device key lives in ~/.lola/state/hub-key (0600) — never
+# here. Not a [defaults] key, and neither is [[project]].hub_chores.
+# ---------------------------------------------------------------------------
+# [hub]
+# enabled = false
+# # https, or plain http only on localhost / 127.0.0.1 (development). No path.
+# url = "https://hub.example.com"
+# # Name shown to the team (default: this machine's hostname).
+# device_name = "martins-mbp"
+# # Chore kinds to accept; empty/absent = every kind lola knows.
+# accept_kinds = ["dep_advisory", "red_bump_pr"]
+# # Claims per local day. Absent = 4; 0 = claim nothing.
+# max_claims_per_day = 4
+# # Refuse a chore for a project without sandbox = "docker". Absent = true;
+# # turning it off is a local, explicit decision.
+# require_sandbox = true
+# # Hub loop cadence in seconds (60..86400). Absent = 300.
+# poll_seconds = 300
+# # Admin keys that may sign the team policy: key_id = base64url ed25519
+# # public key. The hub cannot add one, so it cannot forge policy. Phase 1
+# # only VERIFIES and SHOWS the policy (`lola hub status`); it is not applied.
+# [hub.trusted_policy_keys]
+# admin-2026 = "base64url-public-key-43-chars"
+
+# ---------------------------------------------------------------------------
 # [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is
 # chosen for what enabling it GRANTS rather than for what it costs.
 #
@@ -705,6 +736,12 @@ dev_commands = [
 # sandbox = "docker"
 # sandbox_image = "ghcr.io/acme/agent-php:8.4"   # overrides [sandbox].image
 # sandbox_ports = ["8000", "5173:5173"]          # published on 127.0.0.1
+# Opt this project into the [hub] chore lane: hub work items (security
+# advisories, red dependency-bump PRs) whose repo matches `repo` above may be
+# claimed for it. Default false; NOT a [defaults] key, so no project is ever
+# enrolled by inheritance. With [hub].require_sandbox (the default) the
+# project must also set sandbox = "docker".
+# hub_chores = true
 # Files symlinked from the main checkout into each worktree.
 # CAVEAT: symlinking .env means every worktree talks to the SAME database
 # (and caches, queues, ...) as the main checkout — concurrent sessions can

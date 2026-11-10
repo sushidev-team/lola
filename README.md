@@ -155,6 +155,9 @@ protocol-version mismatch.
 | `lola bestof compare <issue\|group\|session> [--json]` | Every attempt of a best-of group side by side: agent/model, state, PR + CI, review findings, diff size, tokens — with a ★ suggestion (a hint, never acted on). |
 | `lola bestof pick <session>` | Keep one attempt: its draft PR is marked ready, every other attempt's PR is closed (branch kept) and its session torn down; a worktree with uncommitted changes is kept. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
+| `lola hub join <url> <token> [--name N]` | Enrol this machine with a team [lola hub](#hub-optional-off-by-default) using a one-time token: creates the device key (`~/.lola/state/hub-key`, 0600) if needed, enrols it, writes `~/.lola/state/hub.json` and sets `[hub].enabled` + `url`, then asks a running daemon to reload. Joining a different hub is refused until you leave. |
+| `lola hub status` | The local hub identity, whether the device key matches it, the verified team policy (display only) and, when the daemon has a hub loop, its state. |
+| `lola hub leave [--forget-key]` | Remove the hub identity and stored policy and set `[hub].enabled = false`. The device key is kept for a later re-join unless `--forget-key`. The hub is not told: an admin revokes the device there. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
 | `lola post <kind> …` | Agent-facing: publish an item to the session's conversation (`narration`, `widget`, …). Same command as `lola ssh post`, which stays valid. |
@@ -320,6 +323,7 @@ runtime layer, not on config load.
 | `sandbox` | `"none"` \| `"docker"` | Run this project's coding agents inside a container that can write only their worktree. Empty = `none` (on the host). See [The container sandbox](#the-container-sandbox). Not inheritable. |
 | `sandbox_image` | string | Image a sandboxed project runs, overriding `[sandbox].image`. Must carry `sh`, `git` and the coding agent on `PATH`. |
 | `sandbox_ports` | string array | Container ports published on `127.0.0.1`, as `"3000"` or `"<host>:<container>"`, so a dev server the agent starts in the container is reachable from the host. |
+| `hub_chores` | bool | Opt this project into the [`[hub]`](#hub-optional-off-by-default) chore lane: hub work items whose repo matches `repo` may be claimed for it. Default `false`; **not** inheritable from `[defaults]` (an inherited opt-in would enrol every project by accident). Needs `repo` set to `owner/name`; not offered for a stack. |
 | `kind` | `""` \| `"stack"` | `"stack"` makes this project a **stack**: no checkout of its own, it owns the Linear side (filter, write-back, agent, sandbox, budget) for its member projects. See [Stacks](#stacks-one-issue-several-repositories). |
 | `stack` | string | Makes this project a **member** (an *app*) of the named stack. It is no longer polled itself; its own Linear, agent and write-back keys are kept but ignored while it is a member. |
 | `labels` | string array | Member only: the issue labels that select this app — a session of the stack checks it out only for an issue carrying one of them (label UUID, name, or `group/name`; case-insensitive). Empty = every issue. |
@@ -1553,6 +1557,35 @@ real terminal. It is not `[remote]`, which means phone pairing.
 | `approval_timeout_seconds` | int | A command nobody answers expires, unrun. Default `1800`. |
 
 Both settings screens edit this table (app: Settings → SSH hosts, TUI: `S` → SSH hosts).
+
+### `[hub]` (optional, off by default)
+
+Enrols this daemon with a team **lola hub**: a coordinator that hands out
+mechanical chores — `dep_advisory` (upgrade a dependency with a security
+advisory) and `red_bump_pr` (fix a Dependabot / Renovate PR whose checks fail) —
+deduplicated across the team, and routes the team's **signed** policy. The hub
+never executes anything and never writes a prompt: an item is a closed kind plus
+fields validated against strict patterns, and lola renders the agent's task from
+its own template. Set it up with `lola hub join <url> <token>`; the ed25519
+device key lives in `~/.lola/state/hub-key` (0600) and never in this file, argv
+or a log line. Like `[remote]`, the table is not part of the `[defaults]`
+inheritance, and neither is `[[project]].hub_chores`.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Gates the hub loop. Default `false`; `lola hub join` sets it, `lola hub leave` clears it. |
+| `url` | string | The hub's base URL: `https`, or plain `http` only on `localhost` / `127.0.0.1` / `::1` for development. No path, query or credentials. |
+| `device_name` | string | Name shown to the team at enrollment (default: the hostname). |
+| `accept_kinds` | string array | Chore kinds this machine claims: `dep_advisory`, `red_bump_pr`. Empty/absent = every kind lola knows. |
+| `max_claims_per_day` | int | Claims per local day, 0–100. Absent = `4`; `0` claims nothing. |
+| `require_sandbox` | bool | Refuse a chore for a project without `sandbox = "docker"`. Absent = `true`; opting out is a local, explicit decision. |
+| `trusted_policy_keys` | table of strings | `key_id = "<base64url ed25519 public key>"`: the admin keys that may sign team policy. The hub cannot add one, so it cannot forge or alter policy. In this phase a verified policy is stored (`~/.lola/state/hub-policy.json`) and shown by `lola hub status`, never applied. |
+| `poll_seconds` | int | Hub loop cadence, 60–86400. Absent = `300`. |
+
+Only keys you set are written back on save, so a default is never frozen into
+the file. Findings come from GitHub through `gh` for the opted-in repos only
+(open Dependabot alerts and failing bot bump PRs), and only the validated fields
+reach the hub — never code, file names, paths or transcripts.
 
 ### `[remote]` (optional)
 
