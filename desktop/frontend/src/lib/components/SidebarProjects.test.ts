@@ -5,7 +5,8 @@ import { tick } from "svelte";
 // The bindings are the process boundary. Stubbing them keeps this about what
 // the sidebar OFFERS and what it asks the backend to persist — the arrangement
 // maths itself is pinned in sidebarlayout.test.ts, without a DOM.
-const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack } = vi.hoisted(() => ({
+const { AddGroup, RemoveGroup, RemoveProject, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack } = vi.hoisted(() => ({
+  RemoveProject: vi.fn(),
   CreateStack: vi.fn(),
   SetProjectStack: vi.fn(),
   AddGroup: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock("@bindings/desktop", () => ({
     ConfigExists: vi.fn(),
     AddGroup: (...a: unknown[]) => AddGroup(...a),
     RemoveGroup: (...a: unknown[]) => RemoveGroup(...a),
+    RemoveProject: (...a: unknown[]) => RemoveProject(...a),
     RenameGroup: (...a: unknown[]) => RenameGroup(...a),
     SetGroupCollapsed: (...a: unknown[]) => SetGroupCollapsed(...a),
     SetProjectLayout: (...a: unknown[]) => SetProjectLayout(...a),
@@ -71,6 +73,7 @@ describe("SidebarProjects", () => {
     vi.clearAllMocks();
     AddGroup.mockResolvedValue("clients");
     RemoveGroup.mockResolvedValue(undefined);
+    RemoveProject.mockResolvedValue(undefined);
     RenameGroup.mockResolvedValue(undefined);
     SetGroupCollapsed.mockResolvedValue(undefined);
     SetProjectLayout.mockResolvedValue(undefined);
@@ -101,6 +104,34 @@ describe("SidebarProjects", () => {
     await fireEvent.click(screen.getByRole("menuitem", { name: "New project" }));
     expect(nav.overlay).toBe("project");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("offers creation actions when right-clicking empty project space", async () => {
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("navigation", { name: "Projects" }), { clientX: 160, clientY: 600 });
+    expect(screen.getByRole("menuitem", { name: "New project" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "New group" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "New stack" })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "New project" }));
+    expect(nav.overlay).toBe("project");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("keeps project row menus and the search field's native context menu", async () => {
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByLabelText("Search projects"));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "lola" }));
+    expect(screen.getByRole("menuitem", { name: "Edit project" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "New project" })).not.toBeInTheDocument();
+  });
+
+  it("dismisses the background context menu with Escape", async () => {
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("navigation", { name: "Projects" }));
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Search projects")).toHaveFocus();
   });
 
   it("creates a group from the menu's dialog", async () => {
@@ -494,6 +525,56 @@ describe("SidebarProjects", () => {
     expect(confirm.request?.body).toBe("Remove web from stack nori?");
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("web", "");
+  });
+
+  it("confirms removal of the context-menu project by id and allows cancellation", async () => {
+    store.projects = [fakeProject({ name: "lola", label: "Lola App" }), fakeProject({ name: "other" })];
+    nav.project = "other";
+    render(SidebarProjects);
+    const openRemove = async () => {
+      await fireEvent.contextMenu(screen.getByRole("button", { name: "Lola App" }));
+      await fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
+    };
+    await openRemove();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(confirm.request?.title).toBe("Remove project?");
+    expect(confirm.request?.body).toBe("Remove Lola App from Lola?");
+    expect(RemoveProject).not.toHaveBeenCalled();
+    confirm.cancel();
+    expect(RemoveProject).not.toHaveBeenCalled();
+    await openRemove();
+    confirm.accept();
+    expect(RemoveProject).toHaveBeenCalledExactlyOnceWith("lola");
+  });
+
+  it("reports a failed project removal", async () => {
+    RemoveProject.mockRejectedValueOnce(new Error("Could not save config"));
+    const flash = vi.spyOn(store, "setFlash");
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "lola" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
+    confirm.accept();
+    await vi.waitFor(() => expect(flash).toHaveBeenCalledWith("Error: Could not save config", "bad"));
+    expect(store.projectByName("lola")).toBeDefined();
+    flash.mockRestore();
+  });
+
+  it("distinguishes removing a stack from removing a member's configuration", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "web" }));
+    expect(screen.getByRole("menuitem", { name: "Remove from stack" })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
+    expect(confirm.request?.title).toBe("Remove project?");
+    confirm.accept();
+    expect(RemoveProject).toHaveBeenCalledWith("web");
+    expect(SetProjectStack).not.toHaveBeenCalled();
+
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "nori" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
+    expect(confirm.request?.title).toBe("Remove stack?");
+    expect(confirm.request?.detail).toContain("members remain configured");
+    confirm.cancel();
   });
 });
 

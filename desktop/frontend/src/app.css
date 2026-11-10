@@ -1347,7 +1347,8 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 
 /* One resizable navigation rail; the selected session owns the full workspace. */
 .sidebar { container-type: inline-size; container-name: sidebar; }
-.sidebar-resize { position: absolute; z-index: 50; top: 44px; bottom: 44px; right: 0; width: 7px; cursor: col-resize; touch-action: none; user-select: none; }
+/* Splitters stay below menu backdrops (40) and menus (50), including their hit areas. */
+.sidebar-resize { position: absolute; z-index: 20; top: 44px; bottom: 44px; right: 0; width: 7px; cursor: col-resize; touch-action: none; user-select: none; }
 .sidebar-resize::after { content: ''; position: absolute; inset: 0 0 0 auto; width: 2px; background: transparent; }
 .sidebar-resize:hover::after, .sidebar-resize.resizing::after, .sidebar-resize:focus-visible::after { background: var(--color-accent); }
 .sidebar-resize:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }

@@ -87,9 +87,22 @@
   let addTrigger: HTMLElement | null = null;
 
   function openAddMenu(e: MouseEvent) {
+    rowMenu = null;
     addTrigger = e.currentTarget as HTMLElement;
     const r = addTrigger.getBoundingClientRect();
     addMenu = { x: Math.min(r.left, window.innerWidth - 180), y: r.bottom + 4 };
+  }
+
+  function openBackgroundMenu(e: MouseEvent) {
+    // Row menus own their events; text fields keep the native editing menu.
+    if (e.defaultPrevented || (e.target as HTMLElement).closest("input, textarea, [contenteditable], button, a")) return;
+    e.preventDefault();
+    rowMenu = null;
+    addTrigger = searchInput;
+    addMenu = {
+      x: Math.max(4, Math.min(e.clientX, window.innerWidth - 180)),
+      y: Math.max(4, Math.min(e.clientY, window.innerHeight - 120)),
+    };
   }
 
   function closeAddMenu(refocus = false) {
@@ -171,6 +184,7 @@
     const p = store.projectByName(name);
     if (!p) return;
     e.preventDefault();
+    closeAddMenu();
     rowMenu = { x: Math.min(e.clientX, window.innerWidth - 200), y: e.clientY, name, picking: false };
   }
 
@@ -185,6 +199,21 @@
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   });
+
+  function askRemoveProject(name: string) {
+    const project = store.projectByName(name);
+    if (!project) return;
+    const stack = isStack(project);
+    confirm.ask({
+      title: stack ? "Remove stack?" : "Remove project?",
+      body: `Remove ${displayName(project)} from Lola?`,
+      detail: stack
+        ? "Its members remain configured as standalone projects. Repository files are kept."
+        : "Its configuration and polling are removed. Repository files are kept.",
+      confirmLabel: "Remove",
+      onConfirm: () => void store.removeProject(name),
+    });
+  }
 
   function askRemoveGroup(name: string, label: string) {
     confirm.ask({
@@ -589,7 +618,7 @@
   <li class="-my-px h-0.5 rounded-full bg-accent" aria-hidden="true"></li>
 {/snippet}
 
-<nav class="min-w-0 px-3 pt-3.5" aria-label="Projects">
+<nav class="min-h-full min-w-0 px-3 pt-3.5" aria-label="Projects" oncontextmenu={openBackgroundMenu}>
   <div class="flex items-center px-2 pb-1">
     <h2 class="label text-faint">Projects</h2>
     <Button
@@ -791,6 +820,14 @@
           }}>{displayName(st)}</MenuItem
         >
       {/each}
+    {/if}
+    {#if !rowMenu?.picking}
+      <div class="my-1 border-t border-edge"></div>
+      <MenuItem variant="danger" onclick={() => {
+        const name = menuName;
+        rowMenu = null;
+        askRemoveProject(name);
+      }}>Remove</MenuItem>
     {/if}
   </div>
 {/if}

@@ -372,6 +372,11 @@ class Store {
 
   // --- project groups & arrangement -----------------------------------------
 
+  removeProject(name: string) {
+    const project = this.projectByName(name);
+    return this.act(() => ConfigService.RemoveProject(name), `removed ${project ? displayName(project) : name}`);
+  }
+
   addGroup(label: string) {
     return this.act(() => ConfigService.AddGroup(label), "group added");
   }
