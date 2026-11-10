@@ -30,21 +30,74 @@ type Policy struct {
 // every member. Unknown keys fail [DecodePolicy], so an executing key cannot
 // ride along unnoticed either.
 //
-// Pointer and omitempty fields mean "the team sets nothing here".
+// Semantics (Phase 2): every key PRESENT in a VERIFIED policy is LOCKED — it
+// overrides the member's local runtime config for as long as that policy is
+// held, and the UIs show it as set by the team (see [Settings.Keys]). A key
+// that is ABSENT leaves the local value untouched. There is no "suggested"
+// tier: a value the team only recommends does not belong in a policy.
+// Pointer and omitempty fields are how a key is absent, which means a zero
+// value or an empty list cannot be locked (it reads as "unset").
 type Settings struct {
-	// ReviewProviders: the review provider kinds the team enables. custom-cli
-	// is deliberately not settable — its meaning is a local shell command.
+	// ReviewProviders locks WHICH review provider kinds are enabled: exactly
+	// the listed kinds, every other kind disabled. Each listed kind runs with
+	// the member's own [[review.provider]] entry, or that kind's defaults when
+	// there is none; a kind the local config cannot run (a bot-watch with no
+	// author) stays off and is reported, never guessed. custom-cli is not
+	// settable — its meaning is a local shell command.
 	ReviewProviders []string `json:"review_providers,omitempty"`
-	// BudgetDailyWeightedTokens: daily spend cap in weighted tokens; 0 = unset.
+	// BudgetDailyWeightedTokens locks the daily spend budget, in weighted
+	// tokens; 0 = unset.
 	BudgetDailyWeightedTokens int64 `json:"budget_daily_weighted_tokens,omitempty"`
-	// MergeQueueEnabled: [merge_queue].enabled; nil = unset.
+	// MergeQueueEnabled locks [merge_queue].enabled; nil = unset.
 	MergeQueueEnabled *bool `json:"merge_queue_enabled,omitempty"`
-	// MaxConcurrencyHint: suggested global_cap; 0 = unset.
-	MaxConcurrencyHint int `json:"max_concurrency_hint,omitempty"`
-	// AcceptKinds: chore kinds members should accept.
+	// MaxConcurrency locks a CEILING on [defaults].global_cap: the effective
+	// cap is min(local, this). A ceiling and not a value because capacity is
+	// the member's machine: a team can hold dispatch down, never force a
+	// machine above what its owner configured. 0 = unset. The wire key keeps
+	// its Phase 1 name so bundles already signed still verify.
+	MaxConcurrency int `json:"max_concurrency_hint,omitempty"`
+	// AcceptKinds locks [hub].accept_kinds: the chore kinds this daemon may
+	// claim. Empty = unset (the local value applies).
 	AcceptKinds []Kind `json:"accept_kinds,omitempty"`
-	// EscalateAfter: failed attempts before an item escalates; 0 = unset.
+	// EscalateAfter is read by the HUB (failed attempts before an item
+	// escalates to Linear); a daemon has no local equivalent and only shows
+	// it. 0 = unset.
 	EscalateAfter int `json:"escalate_after,omitempty"`
+}
+
+// Settings keys, as they appear on the wire and in [Settings.Keys].
+const (
+	KeyReviewProviders = "review_providers"
+	KeyBudgetDaily     = "budget_daily_weighted_tokens"
+	KeyMergeQueue      = "merge_queue_enabled"
+	KeyMaxConcurrency  = "max_concurrency_hint"
+	KeyAcceptKinds     = "accept_kinds"
+	KeyEscalateAfter   = "escalate_after"
+)
+
+// Keys lists the keys PRESENT in s — the ones a verified policy locks — in
+// declaration order. An empty result means the policy locks nothing.
+func (s Settings) Keys() []string {
+	var out []string
+	if len(s.ReviewProviders) > 0 {
+		out = append(out, KeyReviewProviders)
+	}
+	if s.BudgetDailyWeightedTokens != 0 {
+		out = append(out, KeyBudgetDaily)
+	}
+	if s.MergeQueueEnabled != nil {
+		out = append(out, KeyMergeQueue)
+	}
+	if s.MaxConcurrency != 0 {
+		out = append(out, KeyMaxConcurrency)
+	}
+	if len(s.AcceptKinds) > 0 {
+		out = append(out, KeyAcceptKinds)
+	}
+	if s.EscalateAfter != 0 {
+		out = append(out, KeyEscalateAfter)
+	}
+	return out
 }
 
 // PolicyReviewProviders are the review provider kinds a policy may enable.
@@ -78,7 +131,7 @@ func (s Settings) Validate() error {
 	if s.BudgetDailyWeightedTokens < 0 || s.BudgetDailyWeightedTokens > MaxPolicyBudget {
 		return invalid("settings.budget_daily_weighted_tokens", "out of range")
 	}
-	if s.MaxConcurrencyHint < 0 || s.MaxConcurrencyHint > MaxPolicyConcurrency {
+	if s.MaxConcurrency < 0 || s.MaxConcurrency > MaxPolicyConcurrency {
 		return invalid("settings.max_concurrency_hint", "out of range")
 	}
 	seenK := map[Kind]bool{}

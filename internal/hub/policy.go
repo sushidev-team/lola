@@ -141,8 +141,8 @@ func PolicySummary(p hubproto.Policy) []string {
 	if s.MergeQueueEnabled != nil {
 		lines = append(lines, fmt.Sprintf("merge queue enabled: %v", *s.MergeQueueEnabled))
 	}
-	if s.MaxConcurrencyHint > 0 {
-		lines = append(lines, fmt.Sprintf("concurrency hint: %d", s.MaxConcurrencyHint))
+	if s.MaxConcurrency > 0 {
+		lines = append(lines, fmt.Sprintf("max concurrency: %d", s.MaxConcurrency))
 	}
 	if len(s.AcceptKinds) > 0 {
 		ks := make([]string, len(s.AcceptKinds))
