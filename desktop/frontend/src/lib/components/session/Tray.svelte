@@ -27,6 +27,7 @@
   import ModalCard from "./ModalCard.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";
+  import BackgroundCard from "./BackgroundCard.svelte";
   import InlineTerminalCard from "./InlineTerminalCard.svelte";
 
   let { sessionId, covered = false }: { sessionId: string; covered?: boolean } = $props();
@@ -170,6 +171,8 @@
           <SSHGoCard {sessionId} conn={card.conn} {pager} />
         {:else if card.kind === "permission"}
           <PermissionCard {sessionId} prompt={card.prompt} {narrow} {pager} />
+        {:else if card.kind === "background"}
+          <BackgroundCard {sessionId} prompt={card.prompt} disabled={!canControl} {pager} />
         {:else if card.kind === "question"}
           <QuestionCard {sessionId} prompt={card.prompt} {narrow} {pager} />
         {:else if card.kind === "modal"}

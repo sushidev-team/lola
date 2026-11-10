@@ -1543,7 +1543,7 @@ func TestTalkStateComposerWords(t *testing.T) {
 	}
 }
 
-func TestTalkStateWorkingSpendsNoCapture(t *testing.T) {
+func TestTalkStateWorkingReadsCommandActions(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
 	f.show(talkWorking)
@@ -1553,8 +1553,8 @@ func TestTalkStateWorkingSpendsNoCapture(t *testing.T) {
 	if err != nil || out.Composer != protocol.ComposerWorking {
 		t.Fatalf("%+v %v", out, err)
 	}
-	if captures != 0 {
-		t.Fatalf("a shown cursor on a working record needs no capture, got %d", captures)
+	if captures != 1 {
+		t.Fatalf("a working pane needs one capture for command actions, got %d", captures)
 	}
 }
 

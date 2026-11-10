@@ -55,12 +55,16 @@ func TestDaemonWiresPaneSeams(t *testing.T) {
 	if err := d.sendKey(ctx, "s1", "1"); err != nil {
 		t.Errorf("sendKey: %v", err)
 	}
+	if err := d.sendBackground(ctx, "s1"); err != nil {
+		t.Errorf("sendBackground: %v", err)
+	}
 	raw, _ := os.ReadFile(log)
 	calls := string(raw)
 	for _, want := range []string{
 		"display-message -p -t =s1: #{cursor_x} #{cursor_y} #{cursor_flag}",
 		"capture-pane -p -e -t =s1:\n", // no -S: the visible screen and nothing above it
 		"send-keys -t =s1: -l 1\n",
+		"send-keys -t =s1: C-b\n",
 	} {
 		if !strings.Contains(calls, want) {
 			t.Errorf("tmux never saw %q in:\n%s", want, calls)

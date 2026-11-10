@@ -299,6 +299,7 @@ export type TrayCard =
   | { kind: "auth"; id: string; tier: 1; at: number; conn: SSHConnInfo }
   | { kind: "prompt"; id: string; tier: 1; at: number; conn: SSHConnInfo; prompt: SSHPromptInfo }
   | { kind: "permission" | "question" | "modal"; id: string; tier: 1; at: number; prompt: AgentPrompt }
+  | { kind: "background"; id: string; tier: 2; at: number; prompt: AgentPrompt }
   | { kind: "element"; id: string; tier: 2; at: number; element: SSHElement };
 
 export type TrayInput = {
@@ -348,13 +349,17 @@ export function trayCards(i: TrayInput): TrayCard[] {
     }
     if (c.state === "failed") tier1.push({ kind: "failed", id: `failed-${c.id}`, tier: 1, at: when(c.closedAt as unknown as string), conn: c });
   }
-  if (i.agentPrompt) {
+  if (i.agentPrompt && i.agentPrompt.kind !== "background") {
     const p = i.agentPrompt;
     tier1.push({ kind: agentPromptKind(p), id: `agent-${p.hash}`, tier: 1, at: when(p.since as unknown as string), prompt: p });
   }
   tier1.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   const tier2: TrayCard[] = [];
+  if (i.agentPrompt?.kind === "background") {
+    const p = i.agentPrompt;
+    tier2.push({ kind: "background", id: `agent-${p.hash}`, tier: 2, at: when(p.since as unknown as string), prompt: p });
+  }
   for (const it of i.items) {
     const e = it.element;
     if (!e) continue;
@@ -373,6 +378,8 @@ export function trayAnnouncement(cards: readonly TrayCard[], agent: string): str
   const c = cards[0];
   if (!c) return "";
   switch (c.kind) {
+    case "background":
+      return `${agent} has a running command you can move to background.`;
     case "permission":
       return `${agent} is asking for permission.`;
     case "question":

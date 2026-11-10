@@ -242,3 +242,14 @@ func TestSendKeysLiteralAgainstRealTmux(t *testing.T) {
 	}
 	t.Errorf("the pane received %q, want %q", got, want.String())
 }
+
+func TestSendBackgroundBypassesPrefixWithoutEnter(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	if err := (&Client{Bin: bin}).SendBackground(context.Background(), "main"); err != nil {
+		t.Fatal(err)
+	}
+	want := "-L lola copy-mode -q -t =main:\n-L lola send-keys -t =main: C-b"
+	if got := loggedArgs(t, argsLog); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

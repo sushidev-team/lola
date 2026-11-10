@@ -131,7 +131,7 @@ const (
 // AgentPrompt is a read of the pane. Untrusted text, memory only: never written to
 // the session snapshot, the store or a log. Hash pins exactly what a human read.
 type AgentPrompt struct {
-	Kind    string        `json:"kind"` // permission | question | question_multi | modal
+	Kind    string        `json:"kind"` // permission | question | question_multi | modal | background
 	Hash    string        `json:"hash"`
 	Lines   []string      `json:"lines"`
 	Choices []AgentChoice `json:"choices,omitempty"`

@@ -1,8 +1,8 @@
 package daemon
 
 // talkState is what a mounted session view asks once a second. It has to be cheap, so it
-// reads as little as it can: the cursor first (one exec), and the pane only when the cursor
-// is hidden, the record says a human is needed, or the agent is not known to be working.
+// captures the visible pane and cursor for agents with cards, including while working:
+// foreground commands can offer a background action without hiding the cursor.
 
 import (
 	"context"
@@ -72,13 +72,9 @@ func (d *Daemon) talkPaneState(ctx context.Context, s session.Session, pressed b
 	k := agent.Parse(s.Agent)
 	caps := agent.Caps(k)
 	waiting := s.AgentState == state.AgentWaitingInput
-	if caps.Cursor && d.paneCursor != nil {
-		c, err := d.paneCursor(ctx, paneTarget(s))
-		if err == nil && c.Visible && s.AgentState == state.AgentWorking {
-			d.setTalkPrompt(s.ID, nil)
-			return protocol.ComposerWorking, nil
-		}
-	} else if s.AgentState == state.AgentWorking {
+	// A working Claude still needs a visible capture: long-running tools offer
+	// a background action while its composer cursor remains visible.
+	if !caps.Cards && s.AgentState == state.AgentWorking {
 		return protocol.ComposerWorking, nil
 	}
 	p, err := d.readTalkPane(ctx, s)
@@ -114,6 +110,9 @@ func (d *Daemon) talkPaneState(ctx context.Context, s session.Session, pressed b
 	}
 	wire := wirePrompt(*prompt)
 	d.setTalkPrompt(s.ID, &wire)
+	if prompt.Kind == attention.PromptBackground {
+		return protocol.ComposerWorking, d.talkPromptOf(s.ID)
+	}
 	if prompt.Kind == "modal" {
 		return protocol.ComposerModal, d.talkPromptOf(s.ID)
 	}

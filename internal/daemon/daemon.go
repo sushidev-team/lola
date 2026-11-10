@@ -236,6 +236,8 @@ type Daemon struct {
 	// sendKey presses one key with no Enter, for a human's choice on a card. Never
 	// reach for it from an automatic path: see agentChoose.
 	sendKey func(ctx context.Context, tmuxName, key string) error
+	// sendBackground sends Claude its foreground-task shortcut, after fresh pane proof.
+	sendBackground func(ctx context.Context, tmuxName string) error
 	// paneCursor and paneVisible are the two reads the cursor proof needs. Read the
 	// visible pane BEFORE the cursor. A nil seam (a test that injects only paneTail)
 	// makes the automation gate fall back to attention.EmptyComposer.
@@ -658,6 +660,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	}
 	d.sendEscape = func(ctx context.Context, tmuxName string) error {
 		return d.tmuxClient().SendEscape(ctx, tmuxName)
+	}
+	d.sendBackground = func(ctx context.Context, tmuxName string) error {
+		return d.tmuxClient().SendBackground(ctx, tmuxName)
 	}
 	d.sendKey = func(ctx context.Context, tmuxName, key string) error {
 		return d.tmuxClient().SendKey(ctx, tmuxName, key)

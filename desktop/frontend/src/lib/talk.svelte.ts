@@ -181,6 +181,24 @@ class TalkStore {
     return d;
   }
 
+  /** Shared across remounts so a slow background press cannot be sent twice. */
+  backgroundPending = $state<Record<string, boolean>>({});
+  backgroundErrors = $state<Record<string, string>>({});
+
+  async background(id: string, hash: string): Promise<void> {
+    if (this.backgroundPending[id]) return;
+    this.backgroundPending[id] = true;
+    this.backgroundErrors[id] = "";
+    try {
+      const d = await this.choose(id, hash, "background");
+      if (!d.sent) this.backgroundErrors[id] = d.why || "The command changed. Try again.";
+    } catch (err) {
+      this.backgroundErrors[id] = errText(err);
+    } finally {
+      this.backgroundPending[id] = false;
+    }
+  }
+
   say(a: AgentSayArgs): Promise<AgentSayData> {
     return TalkService.Say(a);
   }
