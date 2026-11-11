@@ -95,6 +95,13 @@ export function Say(a: protocol$0.AgentSayArgs): $CancellablePromise<protocol$0.
 }
 
 /**
+ * Setting sends a model setting only at a freshly verified empty, idle prompt.
+ */
+export function Setting(a: protocol$0.AgentSettingArgs): $CancellablePromise<protocol$0.AgentSettingData> {
+    return $Call.ByID(3597224793, a);
+}
+
+/**
  * State is the viewed session's live state, from a fresh look at its pane.
  */
 export function State(a: protocol$0.TalkStateArgs): $CancellablePromise<protocol$0.TalkStateData> {

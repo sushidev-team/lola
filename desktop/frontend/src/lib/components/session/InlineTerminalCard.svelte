@@ -5,12 +5,13 @@
   import TerminalCell from "./TerminalCell.svelte";
   import type { Snippet } from "svelte";
 
-  let { name = "", agent, focusRequest = 0, onLeave, onExpand, pager }: {
+  let { name = "", agent, focusRequest = 0, onLeave, onExpand, onClose, pager }: {
     name?: string;
     agent: string;
     focusRequest?: number;
     onLeave: () => void;
     onExpand: () => void;
+    onClose?: () => void;
     pager?: Snippet;
   } = $props();
 </script>
@@ -29,6 +30,7 @@
     {#if name && pager}{@render pager()}{/if}
     <span class="text-sm text-ink-2">Ctrl-Q to conversation</span>
     <Button size="xs" onclick={onExpand}>Expand terminal</Button>
+    {#if onClose}<Button size="xs" onclick={onClose}>Close controls</Button>{/if}
   </div>
   <TerminalCell {name} autofocus={false} {focusRequest} {onLeave} style="height: 100%; max-height: 100%; min-height: 0; padding: 8px 10px;" />
 </section>

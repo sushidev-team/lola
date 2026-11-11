@@ -77,7 +77,7 @@ var SSHHumanCommands = []string{
 	CmdSSHTerminal, CmdSSHTimeline, CmdSSHOutput, CmdSSHSay, CmdSSHAnswer, CmdSSHProposal,
 	CmdSSHRecall, CmdSSHResolve, CmdSSHWidgetStatus, CmdSSHPromptAnswer,
 	CmdAgentFeed, CmdAgentFeedOutput, CmdTalkState, CmdAgentSay, CmdAgentStop,
-	CmdAgentChoose, CmdAgentQueueRelease, CmdEndedSessions,
+	CmdAgentChoose, CmdAgentSetting, CmdAgentQueueRelease, CmdEndedSessions,
 }
 
 // Tiers. An empty or unknown tier reads as production: a host nobody classified

@@ -300,6 +300,7 @@ func talkSentence(why string, s session.Session) string {
 func talkCaps(s session.Session) protocol.TalkCaps {
 	c := agent.Caps(agent.Parse(s.Agent))
 	out := protocol.TalkCaps{Feed: c.Feed, Send: c.Send, Stop: c.Stop, Cards: c.Cards}
+	out.Settings = (s.Agent == "" || agent.Valid(s.Agent)) && !s.GoalManaged() && !s.IsAgentless() && sshAgentAlive(s)
 	switch {
 	case s.GoalManaged():
 		out.Send, out.Stop, out.Cards = false, false, false

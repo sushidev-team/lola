@@ -25,7 +25,7 @@ import (
 // command off the human list fails this test instead of quietly shrinking it.
 var talkCommands = []string{
 	protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdAgentSay,
-	protocol.CmdAgentStop, protocol.CmdAgentChoose, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions,
+	protocol.CmdAgentStop, protocol.CmdAgentChoose, protocol.CmdAgentSetting, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions,
 }
 
 // The cursor proof's fallback for tests is "a nil seam means EmptyComposer". That makes
