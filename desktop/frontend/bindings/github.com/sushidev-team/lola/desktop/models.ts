@@ -148,6 +148,23 @@ export interface GroupDTO {
 }
 
 /**
+ * HubKindDTO is one chore kind for the settings pickers.
+ */
+export interface HubKindDTO {
+    "id": string;
+    "label": string;
+}
+
+/**
+ * HubTrustedKeyDTO is one [hub.trusted_policy_keys] entry: an admin key that
+ * may sign team policy.
+ */
+export interface HubTrustedKeyDTO {
+    "keyId": string;
+    "publicKey": string;
+}
+
+/**
  * ImageAttachment is an image a person attached: the path the agent is given, and a thumbnail as a
  * data URL for the composer's tile, "" when one could not be made.
  */
@@ -330,6 +347,13 @@ export interface ProjectFormDTO {
      * inheritable key: a dev command belongs to one repository.
      */
     "devCommands": string[] | null;
+
+    /**
+     * HubChores opts the project into the team hub's chore lane
+     * ([[project]].hub_chores). Nil from an older client leaves it untouched.
+     * Validate refuses it on a stack or without an owner/name repo.
+     */
+    "hubChores": boolean | null;
 
     /**
      * PortRange ("4100-4999") and PortsPerSession lease each session its own
@@ -697,6 +721,25 @@ export interface SettingsDTO {
     "blockedLabelId": string;
     "dedupMode": string;
     "prioritySort": string[] | null;
+
+    /**
+     * [hub] — the team hub's local rules. url / enabled / device_name are not
+     * here: HubService.Join and Leave own them, so a settings save can never
+     * half-join or un-join a hub. Every field is NIL-PRESERVING (an older
+     * client that predates them leaves the table untouched): a plain bool would
+     * read "false" for an absent require_sandbox and silently turn the safe
+     * default off. The values are the EFFECTIVE ones (defaults applied).
+     */
+    "hubAcceptKinds": string[] | null;
+    "hubMaxClaimsPerDay": number | null;
+    "hubRequireSandbox": boolean | null;
+
+    /**
+     * effective cadence in seconds
+     */
+    "hubPollSeconds": number | null;
+    "hubApplyPolicy": boolean | null;
+    "hubTrustedKeys": HubTrustedKeyDTO[] | null;
 }
 
 export interface SetupDTO {

@@ -718,6 +718,241 @@ export interface GroupInfo {
 }
 
 /**
+ * HubAppliedKey is one locked key: the team's value and what the local
+ * config.toml says (both human-readable).
+ */
+export interface HubAppliedKey {
+    "key": string;
+    "value": string;
+    "local": string;
+}
+
+/**
+ * HubBoardArgs is Request.Args for cmd=hubBoard. State "" = every state
+ * (open | claimed | done | failed | escalated); Limit 0 = the hub's default
+ * (200), at most 500.
+ */
+export interface HubBoardArgs {
+    "state"?: string;
+    "limit"?: number;
+
+    /**
+     * Fresh skips the daemon's 20s cache (a refresh button).
+     */
+    "fresh"?: boolean;
+}
+
+/**
+ * HubBoardData answers cmd=hubBoard. Every row passed hubproto validation as
+ * part of the whole response; a hub that sent one bad row gets an error, not
+ * a partial board.
+ */
+export interface HubBoardData {
+    "fetchedAt": string;
+    "items": HubBoardItem[] | null;
+}
+
+/**
+ * HubBoardItem is one board row, flattened for the UIs. Label is lola's own
+ * short name ("GHSA-xxxx · lodash", "PR #12 · lodash").
+ */
+export interface HubBoardItem {
+    "id": string;
+
+    /**
+     * dep_advisory | red_bump_pr
+     */
+    "kind": string;
+    "repo": string;
+    "label": string;
+    "package": string;
+    "state": string;
+    "attempts": number;
+    "reporters": number;
+    "firstSeen": string;
+    "lastSeen": string;
+
+    /**
+     * dep_advisory fields.
+     */
+    "advisory"?: string;
+    "severity"?: string;
+    "ecosystem"?: string;
+    "vulnerable"?: string;
+    "fixed"?: string;
+
+    /**
+     * red_bump_pr fields.
+     */
+    "prNumber"?: number;
+    "branch"?: string;
+    "author"?: string;
+    "lease"?: HubLeaseInfo | null;
+    "outcome"?: HubOutcomeInfo | null;
+    "escalation"?: HubEscalationInfo | null;
+
+    /**
+     * Local is THIS machine's answer for the row.
+     */
+    "local": HubLocalInfo;
+}
+
+/**
+ * HubClaimArgs is Request.Args for cmd=hubClaim. Project names the
+ * [[project]] when several match the item's repo.
+ */
+export interface HubClaimArgs {
+    "itemId": string;
+    "project"?: string;
+}
+
+/**
+ * HubClaimData answers a successful cmd=hubClaim.
+ */
+export interface HubClaimData {
+    "session": string;
+    "project": string;
+    "itemId": string;
+}
+
+/**
+ * HubDeviceInfo is one member device. LastSeen zero = never heartbeat.
+ */
+export interface HubDeviceInfo {
+    "name": string;
+    "me": boolean;
+    "lastSeen"?: string;
+    "freeSlots": number;
+    "agents": string[] | null;
+    "active": boolean;
+}
+
+/**
+ * HubEscalationInfo is the Linear issue an escalated item became. URL is
+ * https://linear.app/... only.
+ */
+export interface HubEscalationInfo {
+    "pending": boolean;
+    "identifier"?: string;
+    "url"?: string;
+}
+
+/**
+ * HubFindingsInfo is the last findings report.
+ */
+export interface HubFindingsInfo {
+    "at": string;
+    "repos": number;
+    "reported": number;
+    "accepted": number;
+    "rejected": number;
+}
+
+/**
+ * HubJoinArgs is Request.Args for cmd=hubJoin. Name "" = the hostname.
+ */
+export interface HubJoinArgs {
+    "url": string;
+    "token": string;
+    "name"?: string;
+}
+
+/**
+ * HubJoinData answers cmd=hubJoin. It never carries the token.
+ */
+export interface HubJoinData {
+    "org": string;
+    "deviceId": string;
+    "deviceName": string;
+    "url": string;
+    "keyCreated"?: boolean;
+}
+
+/**
+ * HubLeaseInfo is who holds a claimed item.
+ */
+export interface HubLeaseInfo {
+    "mine": boolean;
+    "deviceName": string;
+    "expires": string;
+}
+
+/**
+ * HubLeaveData answers cmd=hubLeave.
+ */
+export interface HubLeaveData {
+    "left": boolean;
+    "keyDeleted"?: boolean;
+}
+
+/**
+ * HubLocalInfo is whether THIS machine could claim the row now. Claimable
+ * with an empty Project and several Projects means the claim must name one.
+ * Session is the local session already working the item.
+ */
+export interface HubLocalInfo {
+    "claimable": boolean;
+    "reason"?: string;
+    "project"?: string;
+    "projects"?: string[] | null;
+    "session"?: string;
+}
+
+/**
+ * HubOrgData answers cmd=hubOrg.
+ */
+export interface HubOrgData {
+    "fetchedAt": string;
+    "org": string;
+    "policyVersion": number;
+    "devices": HubDeviceInfo[] | null;
+}
+
+/**
+ * HubOutcomeInfo is the PR a device reported. PRURL is a github.com PR URL
+ * (hubproto.ParsePRURL); open it through cmd=openURL.
+ */
+export interface HubOutcomeInfo {
+    "prUrl": string;
+    "delivery": string;
+}
+
+/**
+ * HubPolicyInfo is the verified team policy. Keys lists the settings it
+ * carries (hubproto.Settings.Keys: every present key is locked). Applied is
+ * whether the daemon's LIVE config enforces them; AppliedKeys is what it
+ * enforced (team value beside the local one — a settings UI shows those keys
+ * as locked), and ApplyNote says why it is not applied ("[hub].apply_policy =
+ * false", "applies on the next reload", ...). escalate_after is read by the
+ * hub only, so it is in Keys but never in AppliedKeys.
+ */
+export interface HubPolicyInfo {
+    "version": number;
+    "keyId": string;
+    "issuedAt": string;
+    "verifiedAt"?: string;
+    "keys": string[] | null;
+    "summary"?: string[] | null;
+    "applied": boolean;
+    "appliedKeys"?: HubAppliedKey[] | null;
+    "applyNote"?: string;
+}
+
+/**
+ * HubReleaseData answers cmd=hubRelease. Session is the local session that
+ * held the lease: it is NOT stopped (SessionKept), only no longer reported
+ * to the hub. Queued: the hub could not be reached and the release waits in
+ * the outbox.
+ */
+export interface HubReleaseData {
+    "itemId": string;
+    "session"?: string;
+    "sessionKept"?: boolean;
+    "queued"?: boolean;
+    "message": string;
+}
+
+/**
  * HubSessionHub is SessionInfo.hub: what a hub session works on.
  */
 export interface HubSessionHub {
@@ -726,6 +961,93 @@ export interface HubSessionHub {
     "label"?: string;
     "leaseLost"?: boolean;
     "released"?: boolean;
+}
+
+/**
+ * HubSessionInfo is one local session working a hub item.
+ */
+export interface HubSessionInfo {
+    "session": string;
+    "project": string;
+    "itemId": string;
+    "kind": string;
+    "claimedAt"?: string;
+    "leaseExpires"?: string;
+    "leaseLost"?: boolean;
+    "released"?: boolean;
+    "reported"?: string;
+
+    /**
+     * Summary is lola's own label for the item ("GHSA-xxxx · lodash").
+     */
+    "summary"?: string;
+}
+
+/**
+ * HubStatusData is Response.Data for cmd=hubStatus.
+ */
+export interface HubStatusData {
+    /**
+     * Enabled mirrors [hub].enabled; Joined is whether an identity loaded.
+     */
+    "enabled": boolean;
+    "joined": boolean;
+    "url"?: string;
+    "device"?: string;
+
+    /**
+     * DeviceName is the name this device enrolled with.
+     */
+    "deviceName"?: string;
+    "org"?: string;
+
+    /**
+     * LastHeartbeat is the last SUCCESSFUL heartbeat; LastError the last
+     * failure of any stage, in lola's words plus the sanitized hub error.
+     */
+    "lastHeartbeat"?: string;
+    "lastError"?: string;
+    "lastErrorAt"?: string;
+
+    /**
+     * ClaimsToday counts claims on the local day against MaxClaimsPerDay.
+     */
+    "claimsToday": number;
+    "maxClaimsPerDay": number;
+
+    /**
+     * PendingOutcomes are outcomes (complete / fail / release) queued for a
+     * hub that has not acknowledged them yet.
+     */
+    "pendingOutcomes": number;
+
+    /**
+     * PolicyVersion is the last verified policy's version (0 = none). The
+     * policy is DISPLAY ONLY in this phase.
+     */
+    "policyVersion"?: number;
+
+    /**
+     * Policy is the stored, re-verified policy (nil = none).
+     */
+    "policy"?: HubPolicyInfo | null;
+
+    /**
+     * LastFindings is the last findings report (nil = none since start).
+     */
+    "lastFindings"?: HubFindingsInfo | null;
+
+    /**
+     * Sessions are the local sessions working a hub item.
+     */
+    "sessions"?: HubSessionInfo[] | null;
+}
+
+/**
+ * HubSyncData answers cmd=hubSync.
+ */
+export interface HubSyncData {
+    "queued": boolean;
 }
 
 /**

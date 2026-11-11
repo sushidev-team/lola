@@ -200,6 +200,31 @@ describe("ProjectForm", () => {
     expect(saveProject.mock.calls[1][0]).toMatchObject({autoPRComments: true, inherits: {autoPRComments: true}});
   });
 
+  it("opts a project into team chores and saves hub_chores", async () => {
+    render(ProjectForm);
+    const box = await screen.findByRole("checkbox", { name: "Team chores" });
+    expect(box).toBeEnabled();
+    expect(screen.getByText("Let the team hub hand this project security and dependency chores.")).toBeInTheDocument();
+    await fireEvent.click(box);
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalled());
+    expect(saveProject.mock.calls[0][0]).toMatchObject({ hubChores: true });
+  });
+
+  it("disables team chores with the reason when the project has no repo", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), repo: "" });
+    render(ProjectForm);
+    expect(await screen.findByRole("checkbox", { name: "Team chores" })).toBeDisabled();
+    expect(screen.getByText("Set the GitHub repository above to offer team chores.")).toBeInTheDocument();
+  });
+
+  it("disables team chores on a stack", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "" });
+    render(ProjectForm);
+    expect(await screen.findByRole("checkbox", { name: "Team chores" })).toBeDisabled();
+    expect(screen.getByText(/A stack has no repository of its own/)).toBeInTheDocument();
+  });
+
   it("loads the whole project and opens on the Repo tab", async () => {
     render(ProjectForm);
     expect(getProject).toHaveBeenCalledWith("acme");

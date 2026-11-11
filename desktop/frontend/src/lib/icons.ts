@@ -25,6 +25,7 @@ import CircleHelp from '@lucide/svelte/icons/circle-help';
 import CirclePause from '@lucide/svelte/icons/circle-pause';
 import CircleX from '@lucide/svelte/icons/circle-x';
 import Clock from '@lucide/svelte/icons/clock';
+import Lock from '@lucide/svelte/icons/lock';
 import Code from '@lucide/svelte/icons/code';
 import Copy from '@lucide/svelte/icons/copy';
 import Ellipsis from '@lucide/svelte/icons/ellipsis';
@@ -120,6 +121,7 @@ export const icons = {
   'layers': Layers,
   'list': List,
   'list-filter': ListFilter,
+  'lock': Lock,
   'loader-circle': LoaderCircle,
   'maximize-2': Maximize2,
   'menu': Menu,

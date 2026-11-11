@@ -83,6 +83,8 @@ const {
   SetLinearKey,
   ValidateLinearKey,
   ConnectCode,
+  TeamPolicy,
+  HubStatus,
   setFlash,
   reload,
   closeOverlay,
@@ -103,6 +105,8 @@ const {
   SetLinearKey: vi.fn(),
   ValidateLinearKey: vi.fn(),
   ConnectCode: vi.fn(),
+  TeamPolicy: vi.fn(),
+  HubStatus: vi.fn(),
   setFlash: vi.fn(),
   reload: vi.fn(),
   closeOverlay: vi.fn(),
@@ -124,6 +128,14 @@ vi.mock("@bindings/desktop", () => ({
     SetLinearKey: (k: string) => SetLinearKey(k),
     ValidateLinearKey: (k: string) => ValidateLinearKey(k),
     ConnectCode: () => ConnectCode(),
+    TeamPolicy: () => TeamPolicy(),
+  },
+  HubService: {
+    Status: () => HubStatus(),
+    DefaultDeviceName: () => Promise.resolve("studio-mac"),
+    Kinds: () => Promise.resolve([{ id: "dep_advisory", label: "Security advisories" }]),
+    Board: vi.fn(),
+    Org: vi.fn(),
   },
   LinearService: {
     WorkspaceLabels: () => WorkspaceLabels(),
@@ -265,6 +277,8 @@ describe("SettingsForm", () => {
       insecure: true,
       problem: "",
     });
+    TeamPolicy.mockReset().mockResolvedValue({ available: false, joined: false, org: "", version: 0, applied: false, note: "", keys: [], summary: [], locked: [] });
+    HubStatus.mockReset().mockResolvedValue({ enabled: false, joined: false, claimsToday: 0, maxClaimsPerDay: 4, pendingOutcomes: 0, sessions: [] });
     setFlash.mockReset();
     reload.mockReset().mockResolvedValue(undefined);
     closeOverlay.mockReset();
@@ -273,6 +287,33 @@ describe("SettingsForm", () => {
     // the next test. Reset it to the persisted-default state the app boots in.
     appearance.preview({ theme: DEFAULT_THEME_ID, followSystem: false, lightTheme: "github-light", darkTheme: DEFAULT_THEME_ID });
     appearance.paint();
+  });
+
+  it("locks the global cap the team policy sets, and leaves it editable otherwise", async () => {
+    TeamPolicy.mockResolvedValue({
+      available: true, joined: true, org: "acme", version: 4, applied: true, note: "", keys: ["max_concurrency_hint"], summary: [],
+      locked: [{ key: "max_concurrency_hint", label: "Global concurrency cap", value: "2", local: "5", configKey: "defaults.global_cap", field: "globalCap" }],
+    });
+    render(SettingsForm);
+    await screen.findByLabelText("Total running agents");
+    // The lock swaps the control in, so re-query rather than hold the first node.
+    await waitFor(() => expect(screen.getByLabelText("Total running agents")).toBeDisabled());
+    const cap = screen.getByLabelText("Total running agents");
+    expect(screen.getByText("Set by team policy v4")).toBeInTheDocument();
+    // The form still shows and saves the file's own value.
+    expect(cap).toHaveValue(5);
+    expect(screen.getByLabelText("Agents per project")).toBeEnabled();
+  });
+
+  it("opens the Team hub tab with the join form and saves the hub rules with the rest", async () => {
+    GetSettings.mockResolvedValue({ ...fakeDto, hubAcceptKinds: [], hubMaxClaimsPerDay: 4, hubRequireSandbox: true, hubPollSeconds: 300, hubApplyPolicy: true, hubTrustedKeys: [] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Team hub" }));
+    expect(await screen.findByLabelText("Hub URL")).toBeInTheDocument();
+    await fireEvent.input(screen.getByLabelText("Claims per day"), { target: { value: "2" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ hubMaxClaimsPerDay: 2, hubRequireSandbox: true });
   });
 
   it("saves a temporary shell directory selected with Browse", async () => {

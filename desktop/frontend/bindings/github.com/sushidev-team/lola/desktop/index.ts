@@ -5,6 +5,7 @@ import * as ConfigService from "./configservice.js";
 import * as ContextService from "./contextservice.js";
 import * as DaemonService from "./daemonservice.js";
 import * as DoctorService from "./doctorservice.js";
+import * as HubService from "./hubservice.js";
 import * as LinearService from "./linearservice.js";
 import * as SSHService from "./sshservice.js";
 import * as TalkService from "./talkservice.js";
@@ -15,6 +16,7 @@ export {
     ContextService,
     DaemonService,
     DoctorService,
+    HubService,
     LinearService,
     SSHService,
     TalkService,
@@ -31,6 +33,8 @@ export type {
     DoctorReportDTO,
     DoctorResultDTO,
     GroupDTO,
+    HubKindDTO,
+    HubTrustedKeyDTO,
     ImageAttachment,
     InheritsDTO,
     LinearIssueBrief,

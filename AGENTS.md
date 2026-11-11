@@ -1355,8 +1355,21 @@ for terminal streaming. Six bound Wails services: `DaemonService` (every
 protocol command + daemon start/stop/restart), `TermService` (capture-pane
 snapshots for the grid + a live `tmux attach` PTY for the focused terminal),
 `ConfigService` (read/write config.toml + first-run setup), `DoctorService`,
-`LinearService` (team metadata for the cascading pickers), `UpdateService`
-(GitHub-Releases self-update — see the update gotcha below). Note there is ONE
+`LinearService` (team metadata for the cascading pickers), `HubService` (the
+team hub: one socket round-trip per hub command, plus the local
+`DefaultDeviceName` and `Kinds`; read only through `lib/hub.svelte.ts`, which
+polls while a hub view or the Team hub settings tab is on screen and nowhere
+else), `UpdateService`
+(GitHub-Releases self-update — see the update gotcha below). The Team hub
+settings tab (`components/hub/HubSettings.svelte`) acts on JOIN and LEAVE at
+once through the daemon, which owns `[hub].url`/`enabled`/`device_name` — those
+are deliberately not `SettingsDTO` fields — while the local `[hub]` rules are
+ordinary nil-preserving `SettingsDTO` fields saved with the rest (a plain bool
+would read an absent `require_sandbox` as false). A control the applied team
+policy locks is wrapped in `components/TeamLock.svelte` (a disabled fieldset
+plus "Set by team policy vN"), keyed by `ConfigService.TeamPolicy`'s
+`locked[].field`; adding a form field for a policy key means setting `field` in
+`desktop/teampolicy.go` and wrapping the control. Note there is ONE
 project form, not a project form plus a poll form: a project IS the poll unit,
 so repository setup / filter / labels / write-back are TABS of a single overlay
 (same in the TUI — `internal/tui/form.go`, which absorbed the old

@@ -857,6 +857,24 @@
           </div>
           <p class="text-sm text-faint">When idle, the agent verifies new review comments, pushes fixes and resolves only addressed threads. Existing review-provider handoffs are configured separately.</p>
           {/if}
+          <!-- [[project]].hub_chores: the team hub's opt-in. Not inheritable (an
+               inherited opt-in would enrol every project by accident), and
+               refused by Validate on a stack or without an owner/name repo, so
+               the box is disabled with the reason instead of failing the save. -->
+          {@const choresBlocked = role === "stack"
+            ? "A stack has no repository of its own. Turn it on in the member projects."
+            : !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test((d.repo ?? "").trim())
+              ? "Set the GitHub repository above to offer team chores."
+              : ""}
+          <div class="grid gap-1.5">
+            <label class="flex items-center gap-2 text-ink">
+              <Checkbox checked={!!d.hubChores} disabled={!!choresBlocked && !d.hubChores}
+                onchange={() => { d.hubChores = !d.hubChores; }} />
+              Team chores
+            </label>
+            <p class="text-sm text-faint">Let the team hub hand this project security and dependency chores.</p>
+            {#if choresBlocked}<p class="text-sm {d.hubChores ? 'text-warn' : 'text-faint'}">{choresBlocked}{d.hubChores ? " Turn this off to save." : ""}</p>{/if}
+          </div>
           {#if role === "stack"}
             <!-- A stack session is ONE branch name across every member's
                  worktree, so the prefix is the stack's. -->

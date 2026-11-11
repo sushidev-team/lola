@@ -59,7 +59,7 @@ var policyKeyMeta = map[string]struct{ label, configKey, field string }{
 	hubproto.KeyBudgetDaily:     {"Daily token budget", "budget.daily_tokens", ""},
 	hubproto.KeyMergeQueue:      {"Merge queue", "merge_queue.enabled", ""},
 	hubproto.KeyMaxConcurrency:  {"Global concurrency cap", "defaults.global_cap", "globalCap"},
-	hubproto.KeyAcceptKinds:     {"Accepted chore kinds", "hub.accept_kinds", ""},
+	hubproto.KeyAcceptKinds:     {"Accepted chore kinds", "hub.accept_kinds", "hubAcceptKinds"},
 	hubproto.KeyEscalateAfter:   {"Escalate after failures", "", ""},
 }
 

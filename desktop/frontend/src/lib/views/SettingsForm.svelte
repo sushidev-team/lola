@@ -21,6 +21,8 @@
   import Select from "$lib/components/Select.svelte";
   import ReviewProfiles from "$lib/components/ReviewProfiles.svelte";
   import SSHHostSettings from "$lib/components/ssh/SSHHostSettings.svelte";
+  import HubSettings from "$lib/components/hub/HubSettings.svelte";
+  import TeamLock from "$lib/components/TeamLock.svelte";
   import QRCode from "$lib/components/QRCode.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -29,7 +31,7 @@
   import { deepEqual } from "$lib/deepEqual";
   import { ConfigService, LinearService } from "@bindings/desktop";
   import type { ReviewKindDTO } from "@bindings/desktop";
-  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, ConnectCodeDTO } from "@bindings/desktop/models";
+  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, ConnectCodeDTO, TeamPolicyDTO } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { appearance, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
   import { terms } from "$lib/terms.svelte";
@@ -72,6 +74,7 @@
     { id: "notify", label: "Notifications", group: "Connections" },
     { id: "sshhosts", label: "SSH hosts", group: "Connections" },
     { id: "remote", label: "Phone access", group: "Connections" },
+    { id: "hub", label: "Team hub", group: "Connections" },
     { id: "review", label: "Review", group: "Automation" },
     { id: "brain", label: "Summaries", group: "Automation" },
     { id: "interpreter", label: "Status interpretation", group: "Automation" },
@@ -314,6 +317,24 @@
 
   const statusBinaries = new Map<string, string>();
 
+  // --- team policy ----------------------------------------------------------
+  //
+  // Which settings the daemon's verified team policy LOCKS (ConfigService.
+  // TeamPolicy, one hubStatus round-trip). A locked control is drawn through
+  // <TeamLock>: disabled, with the team's value. The form still loads and saves
+  // config.toml as before; the overlay never reaches the file. A down or older
+  // daemon answers "nothing locked", and a failure here never blocks the form.
+  let teamPolicy = $state<TeamPolicyDTO | null>(null);
+  async function loadTeamPolicy() {
+    try {
+      teamPolicy = await ConfigService.TeamPolicy();
+    } catch {
+      teamPolicy = null;
+    }
+  }
+  const lockFor = (field: string) =>
+    teamPolicy?.applied ? (teamPolicy.locked ?? []).find((l) => l.field === field) ?? null : null;
+
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const formId = $props.id();
@@ -337,6 +358,7 @@
     }
     // Deep-linked straight to the tab that needs them.
     lazyLoadFor(tab);
+    void loadTeamPolicy();
   });
 
   async function save() {
@@ -852,8 +874,10 @@
             <label class={rowCls}>
               <span class="text-faint">Total running agents</span>
               <span>
-                <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
-                  aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
+                <TeamLock lock={lockFor("globalCap")} version={teamPolicy?.version ?? 0}>
+                  <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
+                    aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
+                </TeamLock>
                 <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}</span>
               </span>
             </label>
@@ -1158,6 +1182,11 @@
           </SettingsGroup>
           {/if}
         </section>
+      {:else if tab === "hub"}
+        <section>
+          {@render head("Team hub")}
+          <HubSettings values={d} policy={teamPolicy} onChange={(patch) => Object.assign(d, patch)} onIdentityChange={() => void loadTeamPolicy()} />
+        </section>
       {:else if tab === "sshhosts"}
         <SSHHostSettings onDirty={(v) => (sshHostDirty = v)} />
       {:else if tab === "remote"}
@@ -1373,6 +1402,8 @@
             </p>
           {/if}
 
+          <TeamLock lock={lockFor("reviewProviders")} version={teamPolicy?.version ?? 0}>
+          <div class="space-y-5">
           {#each reviewKinds.length ? providers() : [] as p (p.provider)}
             <section aria-label={`${providerName(p.provider)} review`} class="overflow-hidden rounded-lg border border-edge" class:opacity-60={d.reviewLegacy}>
               <header class="flex items-center gap-3 bg-canvas/40 px-4 py-3">
@@ -1518,6 +1549,8 @@
               </div>
             </Disclosure>
           {/if}
+          </div>
+          </TeamLock>
           <Disclosure label="Specialist reviewers" hint={d.reviewProfiles?.length ? `${d.reviewProfiles.length} configured` : "Optional"}>
             <div class="mt-3">
               <ReviewProfiles bind:profiles={d.reviewProfiles} specialties={d.reviewSpecialties ?? []} providers={d.reviewProviders ?? []} kinds={reviewKinds} />
