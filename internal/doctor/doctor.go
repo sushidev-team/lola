@@ -47,6 +47,7 @@ const (
 	checkMigration = "migration"
 	checkFallback  = "agent fallback"
 	checkHub       = "hub"
+	checkHubPolicy = "hub policy"
 	// checkStatusAgent is reported ONLY when the daemon's status interpreter
 	// has tripped its circuit breaker (statusagent.go) — there is no healthy
 	// row for it.
@@ -170,6 +171,9 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 		add(res)
 	}
 	if res, ok := hubResult(ctx, cfg); ok {
+		add(res)
+	}
+	if res, ok := hubPolicyResult(cfg); ok {
 		add(res)
 	}
 	for _, res := range fallbackResults(cfg) {
@@ -594,4 +598,40 @@ func hubResult(ctx context.Context, cfg *config.Config) (Result, bool) {
 		detail += ", reachable"
 	}
 	return Result{Name: checkHub, OK: true, Detail: detail}, true
+}
+
+// hubPolicyResult reports the team policy the daemon enforces: which keys it
+// locks, or why a verified policy is not applied, and every key the overlay
+// had to ignore (a review kind the local config cannot run). Never critical:
+// a policy that cannot apply leaves the local config in charge.
+func hubPolicyResult(cfg *config.Config) (Result, bool) {
+	if cfg == nil || !cfg.Hub.Enabled || len(cfg.Hub.TrustedPolicyKeys) == 0 {
+		return Result{}, false
+	}
+	dir, err := hub.StateDir()
+	if err != nil {
+		return Result{}, false
+	}
+	sp, apply, note := hub.ApplicablePolicy(cfg.Hub, dir)
+	switch {
+	case sp == nil && note == "":
+		return Result{}, false // no policy published or fetched yet
+	case sp == nil:
+		return Result{Name: checkHubPolicy, Detail: note}, true
+	case !apply:
+		return Result{Name: checkHubPolicy, OK: true, Detail: fmt.Sprintf("v%d not applied: %s", sp.Policy.Version, note)}, true
+	}
+	applied, notices := config.TeamPolicyPreview(cfg, sp.Policy.Settings)
+	keys := make([]string, len(applied))
+	for i, k := range applied {
+		keys[i] = k.Key
+	}
+	detail := fmt.Sprintf("v%d locks %d key(s)", sp.Policy.Version, len(keys))
+	if len(keys) > 0 {
+		detail += ": " + strings.Join(keys, ", ")
+	}
+	if len(notices) > 0 {
+		return Result{Name: checkHubPolicy, Detail: detail + "; " + strings.Join(notices, "; ")}, true
+	}
+	return Result{Name: checkHubPolicy, OK: true, Detail: detail}, true
 }

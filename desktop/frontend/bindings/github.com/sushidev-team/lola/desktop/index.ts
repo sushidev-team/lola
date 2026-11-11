@@ -38,6 +38,7 @@ export type {
     LinearOption,
     LinearTeam,
     LinearTeamMeta,
+    LockedSettingDTO,
     PathInfoDTO,
     ProjectExecutionDTO,
     ProjectFormDTO,
@@ -54,6 +55,7 @@ export type {
     SetupResultDTO,
     StackFolderAppDTO,
     StackFolderDTO,
+    TeamPolicyDTO,
     UpdateInfoDTO,
     UpdateProgressDTO,
     UpdateSettingsDTO

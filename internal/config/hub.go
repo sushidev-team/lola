@@ -67,6 +67,10 @@ var hubDeviceNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]*$`)
 //     written as a [hub.trusted_policy_keys] table, and also READ from the
 //     array of "<key_id>:<public key>" strings lola-hub prints (TrustedKeyMap).
 //   - PollSeconds is the hub loop's cadence (0 = 300).
+//   - ApplyPolicy enforces a VERIFIED team policy (nil = true): every key the
+//     policy carries is locked and overrides the runtime config (see
+//     ApplyTeamPolicy). Only meaningful with trusted_policy_keys; false keeps
+//     the policy display-only.
 type HubConfig struct {
 	Enabled           bool          `toml:"enabled,omitempty"`
 	URL               string        `toml:"url,omitempty"`
@@ -76,6 +80,7 @@ type HubConfig struct {
 	RequireSandbox    *bool         `toml:"require_sandbox,omitempty"`
 	TrustedPolicyKeys TrustedKeyMap `toml:"trusted_policy_keys,omitempty"`
 	PollSeconds       int           `toml:"poll_seconds,omitzero"`
+	ApplyPolicy       *bool         `toml:"apply_policy,omitempty"`
 }
 
 // TrustedKeyMap is [hub].trusted_policy_keys: key_id → base64url public key.
@@ -136,6 +141,11 @@ func (h HubConfig) SandboxRequired() bool {
 	return h.RequireSandbox == nil || *h.RequireSandbox
 }
 
+// PolicyApplies reports the effective apply_policy (default true).
+func (h HubConfig) PolicyApplies() bool {
+	return h.ApplyPolicy == nil || *h.ApplyPolicy
+}
+
 // ClaimsPerDay reports the effective max_claims_per_day (default 4).
 func (h HubConfig) ClaimsPerDay() int {
 	if h.MaxClaimsPerDay == nil {
@@ -176,7 +186,7 @@ func (h HubConfig) TrustedKeyEntries() []string {
 func (h HubConfig) isZero() bool {
 	return !h.Enabled && h.URL == "" && h.DeviceName == "" && len(h.AcceptKinds) == 0 &&
 		h.MaxClaimsPerDay == nil && h.RequireSandbox == nil && len(h.TrustedPolicyKeys) == 0 &&
-		h.PollSeconds == 0
+		h.PollSeconds == 0 && h.ApplyPolicy == nil
 }
 
 // hubTable is the Save mirror: nil (table omitted) when nothing is set. Only

@@ -222,16 +222,29 @@ type HubFindingsInfo struct {
 
 // HubPolicyInfo is the verified team policy. Keys lists the settings it
 // carries (hubproto.Settings.Keys: every present key is locked). Applied is
-// whether this daemon enforces them; until the policy layer lands it is
-// false and the policy is display-only.
+// whether the daemon's LIVE config enforces them; AppliedKeys is what it
+// enforced (team value beside the local one — a settings UI shows those keys
+// as locked), and ApplyNote says why it is not applied ("[hub].apply_policy =
+// false", "applies on the next reload", ...). escalate_after is read by the
+// hub only, so it is in Keys but never in AppliedKeys.
 type HubPolicyInfo struct {
-	Version    int       `json:"version"`
-	KeyID      string    `json:"keyId"`
-	IssuedAt   time.Time `json:"issuedAt"`
-	VerifiedAt time.Time `json:"verifiedAt,omitzero"`
-	Keys       []string  `json:"keys"`
-	Summary    []string  `json:"summary,omitempty"`
-	Applied    bool      `json:"applied"`
+	Version     int             `json:"version"`
+	KeyID       string          `json:"keyId"`
+	IssuedAt    time.Time       `json:"issuedAt"`
+	VerifiedAt  time.Time       `json:"verifiedAt,omitzero"`
+	Keys        []string        `json:"keys"`
+	Summary     []string        `json:"summary,omitempty"`
+	Applied     bool            `json:"applied"`
+	AppliedKeys []HubAppliedKey `json:"appliedKeys,omitempty"`
+	ApplyNote   string          `json:"applyNote,omitempty"`
+}
+
+// HubAppliedKey is one locked key: the team's value and what the local
+// config.toml says (both human-readable).
+type HubAppliedKey struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+	Local string `json:"local"`
 }
 
 // HubStatusData is Response.Data for cmd=hubStatus.

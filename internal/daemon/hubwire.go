@@ -9,7 +9,7 @@ package daemon
 //	  → list offers → per offer: hub.Accept → dispatchHold → health gate →
 //	    reserveSlots → count the claim → Claim → spawn → Session.HubItem
 //	  → outcomes (complete / fail / release), queued and retried
-//	  → policy (verified, stored, DISPLAY ONLY), at most once an hour
+//	  → policy (verified, stored; a new version reloads to apply it), every 5 min
 //
 // Rules this file keeps (AGENTS.md, "Hub work is a CLAIM and a candidate"):
 //
@@ -69,8 +69,10 @@ import (
 const (
 	// hubFindingsEvery rate-limits the gh findings scan per repo.
 	hubFindingsEvery = time.Hour
-	// hubPolicyEvery rate-limits the policy fetch.
-	hubPolicyEvery = time.Hour
+	// hubPolicyEvery rate-limits the policy fetch. Short, because a fetched
+	// policy is now APPLIED: an admin's change should reach members within
+	// minutes. cmd=hubSync fetches at once.
+	hubPolicyEvery = 5 * time.Minute
 	// hubOutboxMaxAge drops an outcome the hub has not acknowledged for this
 	// long: the lease has long expired and the hub reopened the item anyway.
 	hubOutboxMaxAge = 24 * time.Hour
@@ -215,6 +217,12 @@ type hubWire struct {
 	// policyRead: the stored policy was read once for status, so a restart
 	// shows its version before the next fetch is due.
 	policyRead bool
+	// policyReloadedV is the policy version a reload was last asked for, so
+	// one that cannot apply does not reload on every fetch (hubpolicy.go).
+	policyReloadedV int
+	// reload is the reload a newly stored policy triggers (nil = handleReload);
+	// a test seam.
+	reload func(context.Context) error
 	// findings is the last findings report (nil = none since start).
 	findings *protocol.HubFindingsInfo
 	// claiming holds the item ids whose claim is in flight, so the loop and
@@ -1248,7 +1256,7 @@ func (d *Daemon) hubFlush(ctx context.Context, api hubAPI) {
 	}
 }
 
-// ---- 5. policy (display only) ---------------------------------------------
+// ---- 5. policy (fetched here, applied by the reload it triggers) -----------
 
 func (d *Daemon) hubPolicy(ctx context.Context, api hubAPI, snap hubSnapshot, id hub.Identity) {
 	if len(snap.h.TrustedPolicyKeys) == 0 {
@@ -1277,6 +1285,7 @@ func (d *Daemon) hubPolicy(ctx context.Context, api hubAPI, snap hubSnapshot, id
 		w.policyV = sp.Policy.Version
 		w.policy = &sp
 		w.mu.Unlock()
+		d.hubPolicyReload(ctx, sp.Policy.Version)
 	case hub.IsCode(err, hubproto.CodeNoPolicy):
 		// The org has not published one; nothing to show.
 	default:
@@ -1335,6 +1344,11 @@ func (d *Daemon) hubStatusData() protocol.HubStatusData {
 			}
 		}
 		w.mu.Unlock()
+		if out.Policy != nil {
+			d.mu.Lock()
+			d.policyInfoLocked(out.Policy)
+			d.mu.Unlock()
+		}
 	}
 	if !out.Joined {
 		// Before the loop's first connect (or with the hub off) the identity

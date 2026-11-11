@@ -231,6 +231,38 @@ export interface LinearTeamMeta {
 }
 
 /**
+ * LockedSettingDTO is one key the team policy locks.
+ */
+export interface LockedSettingDTO {
+    /**
+     * Key is the hubproto wire key (hubproto.KeyBudgetDaily, ...).
+     */
+    "key": string;
+
+    /**
+     * Label is a Sentence-case name for the control.
+     */
+    "label": string;
+
+    /**
+     * Value is the team's value, Local what config.toml says (human text).
+     */
+    "value": string;
+    "local": string;
+
+    /**
+     * ConfigKey is the config.toml key the policy overrides.
+     */
+    "configKey": string;
+
+    /**
+     * Field is the SettingsDTO json field the key covers ("" when the settings
+     * form has no field for it yet).
+     */
+    "field": string;
+}
+
+/**
  * PathInfoDTO is everything the project form derives from one picked folder.
  * Path is the checkout ROOT when there is one (picking a subdirectory still
  * configures the repository), else the directory as given.
@@ -712,6 +744,45 @@ export interface StackFolderDTO {
     "path": string;
     "suggestedLabel": string;
     "apps": StackFolderAppDTO[] | null;
+}
+
+/**
+ * TeamPolicyDTO is ConfigService.TeamPolicy's answer.
+ */
+export interface TeamPolicyDTO {
+    /**
+     * Available: a daemon answered hubStatus.
+     */
+    "available": boolean;
+    "joined": boolean;
+    "org": string;
+
+    /**
+     * Version is the verified policy's version (0 = none).
+     */
+    "version": number;
+
+    /**
+     * Applied: the daemon's live config enforces Locked.
+     */
+    "applied": boolean;
+
+    /**
+     * Note says why a verified policy is not applied.
+     */
+    "note": string;
+
+    /**
+     * Keys are every key the policy carries (escalate_after included, which
+     * only the hub reads); Summary is the daemon's human rendering.
+     */
+    "keys": string[] | null;
+    "summary": string[] | null;
+
+    /**
+     * Locked is what the daemon enforces. Never null.
+     */
+    "locked": LockedSettingDTO[] | null;
 }
 
 export interface UpdateInfoDTO {

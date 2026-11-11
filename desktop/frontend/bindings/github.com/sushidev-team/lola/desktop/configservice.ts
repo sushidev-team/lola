@@ -442,6 +442,13 @@ export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupR
 }
 
 /**
+ * TeamPolicy reports which settings the team policy locks.
+ */
+export function TeamPolicy(): $CancellablePromise<$models.TeamPolicyDTO> {
+    return $Call.ByID(174716540);
+}
+
+/**
  * Themes returns the theme identifiers config.Validate accepts, so the settings
  * form enumerates them instead of carrying its own copy that could drift out of
  * sync and start writing configs the daemon rejects. Same precedent as

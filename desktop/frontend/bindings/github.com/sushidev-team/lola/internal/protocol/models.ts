@@ -718,6 +718,17 @@ export interface GroupInfo {
 }
 
 /**
+ * HubSessionHub is SessionInfo.hub: what a hub session works on.
+ */
+export interface HubSessionHub {
+    "itemId": string;
+    "kind": string;
+    "label"?: string;
+    "leaseLost"?: boolean;
+    "released"?: boolean;
+}
+
+/**
  * KillData is Response.Data for cmd=kill. Removed reports whether the worktree
  * was actually removed (false when the project is gone from config so there was
  * nothing safe to target, or on a dirty-refused kill — but a dirty refusal is
@@ -2513,6 +2524,12 @@ export interface SessionInfo {
      */
     "board"?: BoardInfo | null;
     "tasks"?: SessionTask[] | null;
+
+    /**
+     * Hub is set for a session working a lola-hub item (nil otherwise, so
+     * mobile/ and older clients see nothing new).
+     */
+    "hub"?: HubSessionHub | null;
 
     /**
      * FeedbackPending is true while a human's diff-viewer feedback

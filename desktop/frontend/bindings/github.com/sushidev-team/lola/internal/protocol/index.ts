@@ -45,6 +45,7 @@ export type {
     FeedbackComment,
     FeedbackData,
     GroupInfo,
+    HubSessionHub,
     KillData,
     LoadInfo,
     Match,

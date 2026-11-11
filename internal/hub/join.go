@@ -254,7 +254,7 @@ func (s Status) Render() string {
 		b.WriteString("key:      none\n")
 	}
 	if s.Policy != nil {
-		fmt.Fprintf(&b, "policy:   verified %s (display only)\n", s.Policy.VerifiedAt.Format(time.RFC3339))
+		fmt.Fprintf(&b, "policy:   verified %s (its keys are locked while [hub].apply_policy is on)\n", s.Policy.VerifiedAt.Format(time.RFC3339))
 		for _, l := range PolicySummary(s.Policy.Policy) {
 			fmt.Fprintf(&b, "          %s\n", l)
 		}

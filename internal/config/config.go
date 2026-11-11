@@ -419,6 +419,11 @@ type Config struct {
 	// project reference, or more than one poll for a project) from config() to
 	// Validate. Unexported: never serialized, nil in the common case.
 	migrateErrs []error
+
+	// teamPolicy marks a Config the team policy overlay was applied to
+	// (teampolicy.go). Save refuses such a Config, so a locked value can never
+	// be frozen into the file. Unexported: never serialized.
+	teamPolicy bool
 }
 
 // Notices returns the non-fatal repairs Load made to the on-disk config, in
@@ -1253,6 +1258,9 @@ func orString(v, fallback string) string {
 // that mutates [defaults] and saves does not keep stale resolved project
 // values, and save/load is an identity.
 func (c *Config) Save(path string) error {
+	if c.teamPolicy {
+		return ErrTeamPolicyOverlay
+	}
 	c.ResolveInheritance()
 
 	dir := filepath.Dir(path)

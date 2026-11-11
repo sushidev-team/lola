@@ -17,10 +17,10 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 )
 
-// The team policy is DISPLAY-ONLY in phase 1: the daemon verifies it against
-// the admin keys pinned in [hub].trusted_policy_keys, stores the verified
-// bundle and shows it in `lola hub status`. Nothing here applies it to config;
-// that is phase 2's third inheritance layer.
+// The team policy: the daemon verifies it against the admin keys pinned in
+// [hub].trusted_policy_keys and stores the verified bundle. ApplicablePolicy
+// decides whether it is ENFORCED; the overlay itself is config.ApplyTeamPolicy,
+// applied by the daemon to its in-memory config only (never to the file).
 
 var (
 	// ErrNoTrustedKeys: [hub].trusted_policy_keys is empty, so no policy can
@@ -155,4 +155,41 @@ func PolicySummary(p hubproto.Policy) []string {
 		lines = append(lines, fmt.Sprintf("escalate after: %d failures", s.EscalateAfter))
 	}
 	return lines
+}
+
+// ApplicablePolicy decides whether the stored policy in dir is ENFORCED for h
+// (Phase 2: every key it carries is locked, config.ApplyTeamPolicy). It
+// applies only when the hub is enabled, the policy re-verifies against the
+// CURRENT [hub].trusted_policy_keys, a joined identity exists for [hub].url
+// and names the policy's org, and [hub].apply_policy is not false. sp is the
+// verified policy (nil when none is stored or it no longer verifies); note
+// says why it does not apply ("" when it does, or when there is none). Every
+// unknown applies nothing.
+func ApplicablePolicy(h config.HubConfig, dir string) (sp *StoredPolicy, apply bool, note string) {
+	if !h.Enabled || len(h.TrustedPolicyKeys) == 0 {
+		return nil, false, ""
+	}
+	trusted, err := TrustedKeys(h)
+	if err != nil {
+		return nil, false, "trusted policy keys do not parse"
+	}
+	got, err := LoadPolicy(dir, trusted)
+	if errors.Is(err, ErrNoPolicy) {
+		return nil, false, ""
+	}
+	if err != nil {
+		return nil, false, "the stored policy no longer verifies"
+	}
+	id, err := LoadIdentity(dir)
+	switch {
+	case err != nil:
+		return &got, false, "not joined"
+	case strings.TrimSuffix(id.URL, "/") != strings.TrimSuffix(h.URL, "/"):
+		return &got, false, "joined identity is for another hub url"
+	case id.Org != got.Policy.Org:
+		return &got, false, "the policy belongs to another org"
+	case !h.PolicyApplies():
+		return &got, false, "[hub].apply_policy = false"
+	}
+	return &got, true, ""
 }

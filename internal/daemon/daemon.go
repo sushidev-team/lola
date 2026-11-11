@@ -99,12 +99,14 @@ type Daemon struct {
 	// (usage.go). Its own lock; never held while taking mu.
 	spend *spendState
 
-	mu       sync.Mutex
-	cfg      *config.Config
-	cfgErr   string     // non-empty = cfg failed validation; polls are held
-	lin      linear.API // nil until the Linear API key resolves
-	linOK    bool
-	viewerID string
+	mu     sync.Mutex
+	cfg    *config.Config
+	cfgErr string // non-empty = cfg failed validation; polls are held
+	// teamPolicy is what the team policy overlay enforced on cfg (hubpolicy.go).
+	teamPolicy teamPolicyState
+	lin        linear.API // nil until the Linear API key resolves
+	linOK      bool
+	viewerID   string
 	// teamIDs caches team UUID -> Team so the pickers can show a team's NAME
 	// without a Linear round trip per open. Display only; nothing keys by it.
 	teamIDs map[string]linear.Team
@@ -759,7 +761,15 @@ func Run(ctx context.Context) error {
 		logger.Printf("config load failed: %v", err)
 		return err
 	}
+	// Validate the FILE's config, then overlay the team policy (hubpolicy.go):
+	// the overlay is runtime-only and is never validated as if it were a file.
+	cfgInvalid := cfg.Validate()
+	teamPolicy := overlayTeamPolicy(cfg, filepath.Join(home, "state"))
 	d := newDaemon(cfg, nil, logger, home)
+	d.teamPolicy = teamPolicy
+	if teamPolicy.applied {
+		logger.Printf("hub: team policy v%d applied (%d locked key(s))", teamPolicy.version, len(teamPolicy.keys))
+	}
 	d.spend.claude = quota.NewClaudePoller(filepath.Join(home, "state", "quota-claude-api.json"), nil)
 
 	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner. The
@@ -829,7 +839,7 @@ func Run(ctx context.Context) error {
 	if reviewWarn != "" {
 		logger.Printf("%s", reviewWarn)
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := cfgInvalid; err != nil {
 		// Not fatal: the daemon stays up so status/reload can surface and
 		// fix it — but polls are HELD (never ticked). Reload rejects the
 		// same config, and running e.g. a label-mode poll whose flip labels

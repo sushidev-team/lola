@@ -91,6 +91,7 @@ func (d *Daemon) handleHub(ctx context.Context, req protocol.Request) protocol.R
 		}
 	case protocol.CmdHubSync:
 		d.hubDropCaches()
+		d.hubPolicyDue()
 		d.hubNudge()
 		data = protocol.HubSyncData{Queued: true}
 	default:
@@ -200,6 +201,16 @@ func (d *Daemon) hubResetIdentity() {
 	w.findings = nil
 	w.mu.Unlock()
 	d.hubDropCaches()
+}
+
+// hubPolicyDue makes the next cycle fetch the policy whatever its cadence
+// says (a person asked to sync).
+func (d *Daemon) hubPolicyDue() {
+	w := d.hub
+	w.mu.Lock()
+	d.hubLoadLocked()
+	w.st.PolicyAt = time.Time{}
+	w.mu.Unlock()
 }
 
 func (d *Daemon) hubDropCaches() {

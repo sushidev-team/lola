@@ -216,7 +216,7 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   only): the device key (`~/.lola/state/hub-key`, 0600, never in config, argv
   or a log) and identity (`hub.json`), the signed bounded HTTP client, the
   briefing templates per kind (`Briefing` — lola's own text from validated
-  fields), the gh findings `Collector`, policy verification (display only),
+  fields), the gh findings `Collector`, policy verification + `ApplicablePolicy` (whether the stored bundle is enforced),
   the pure `Accept` gate (and `AcceptIntent`, its human-claim twin), the
   read-only `Board`/`Org` views (decoded at `hubproto.MaxViewBody`, validated
   WHOLE), and `Join`/`Leave`/`LocalStatus` behind `lola hub`.
@@ -281,7 +281,8 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - `hubwire.go` — the opt-in lola-hub loop (`[hub]`, `hub_chores`): heartbeat →
   findings → offers → claim → spawn → outcomes → policy, plus `cmd=hubStatus`.
   `hubClaimItem` is THE claim path, for the loop and a person alike.
-  `hubcmds.go` — the HUMAN hub commands (`protocol.HubHumanCommands`: join,
+  `hubpolicy.go` — the team policy overlay (`overlayTeamPolicy`, see the
+  invariant). `hubcmds.go` — the HUMAN hub commands (`protocol.HubHumanCommands`: join,
   leave, board, org, claim, release, sync) the desktop app and `lola hub`
   send. See the hub invariant below.
 - `state.go` — the per-poll `seen` store and in-flight set.
@@ -1099,8 +1100,37 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     never not_reproducible. `HubItem` survives adoption.
   - Only what the protocol names leaves the machine: repo slugs, validated
     findings, item ids, a PR URL and a delivery word — never a session id, path
-    or pane text. The policy is verified against locally pinned keys and is
-    DISPLAY ONLY in this phase. `hubStatus` is a read a phone may make.
+    or pane text. `hubStatus` is a read a phone may make.
+  - **A verified team policy LOCKS every key it carries, in the daemon's
+    MEMORY only.** (`internal/config/teampolicy.go`, `internal/daemon/
+    hubpolicy.go`.) `overlayTeamPolicy` runs on every config the daemon puts
+    live — startup and each reload — AFTER `Validate` and after
+    `ResolveInheritance`, and calls `config.ApplyTeamPolicy` with the stored
+    bundle once `hub.ApplicablePolicy` says yes: hub enabled, the bundle
+    RE-VERIFIES against the current `trusted_policy_keys`, a joined identity
+    for `[hub].url` names its org, `[hub].apply_policy` is not false. Every
+    unknown applies nothing. Rules:
+    - The overlay is never a file. `ApplyTeamPolicy` marks the Config and
+      `Config.Save` refuses a marked one (`ErrTeamPolicyOverlay`), so a daemon
+      path that writes config.toml must re-`Load` the file and edit that
+      (`handleEnable` does, then mirrors the flag onto `d.cfg`). The TUI and
+      the app never apply it; they read and write the file.
+    - Each key maps to exactly its runtime field: `review_providers` →
+      exactly those kinds enabled in the catalog (own entry or kind defaults;
+      a kind that cannot run stays off with a notice; fallbacks to a disabled
+      kind dropped; legacy tables folded in memory), `budget_daily_weighted_
+      tokens` → `[budget].daily_tokens`, `merge_queue_enabled` →
+      `[merge_queue].enabled` (false locks it off), `max_concurrency_hint` →
+      a CEILING on `global_cap` (min, never a raise), `accept_kinds` →
+      `[hub].accept_kinds`. `escalate_after` is the hub's; it is shown, never
+      applied. Anything unmappable is a notice (`lola doctor`'s "hub policy"
+      row), never a guess. The `Inherits` bitmap is untouched.
+    - A newly fetched version takes effect through ONE reload
+      (`hubPolicyReload`, once per version). The fetch runs every 5 minutes
+      and on `cmd=hubSync`. `hubStatus.policy` carries `applied`,
+      `appliedKeys` (team value + local value) and `applyNote`; the app reads
+      them through `ConfigService.TeamPolicy` to show locked controls.
+    - No Settings key may ever execute anything (hubproto's closed set).
   - **A person's hub command is a human act, and only a human's.**
     `protocol.HubHumanCommands` (join, leave, board, org, claim, release,
     sync) are denied by `internal/remote` as a list (a phone gets none of
