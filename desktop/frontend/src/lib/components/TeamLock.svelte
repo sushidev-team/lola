@@ -14,26 +14,42 @@
   import type { Snippet } from "svelte";
   import Icon from "./Icon.svelte";
 
-  let { lock = null, version = 0, children }: {
+  let { lock = null, version = 0, disable = true, children }: {
     /** The locked key, or null when the policy does not carry it. */
     lock?: { key: string; label: string; value: string; local: string } | null;
     /** The applied policy's version. */
     version?: number;
+    /**
+     * Disable every control inside. False when the policy locks only part of
+     * the block (the review providers: which kinds are on, not their details);
+     * the caller then disables just the locked controls itself.
+     */
+    disable?: boolean;
     children: Snippet;
   } = $props();
   const id = $props.id();
 </script>
 
+{#snippet note()}
+  <p id={id} class="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm text-faint">
+    <Icon name="lock" size={12} />
+    <span>Set by team policy v{version}</span>
+    {#if lock?.value}<span class="min-w-0 break-words">· Team value: <span class="text-ink">{lock.value}</span></span>{/if}
+  </p>
+{/snippet}
+
 {#if lock}
   <div class="grid min-w-0 gap-1.5" data-team-lock={lock.key}>
-    <fieldset disabled aria-describedby={id} class="m-0 min-w-0 border-0 p-0 opacity-70">
+    {#if disable}
+      <fieldset disabled aria-describedby={id} class="m-0 min-w-0 border-0 p-0 opacity-70">
+        {@render children()}
+      </fieldset>
+      {@render note()}
+    {:else}
+      <!-- A partial lock: the note leads, so it is read before the controls. -->
+      {@render note()}
       {@render children()}
-    </fieldset>
-    <p id={id} class="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm text-faint">
-      <Icon name="lock" size={12} />
-      <span>Set by team policy v{version}</span>
-      {#if lock.value}<span class="min-w-0 break-words">· Team value: <span class="text-ink">{lock.value}</span></span>{/if}
-    </p>
+    {/if}
   </div>
 {:else}
   {@render children()}

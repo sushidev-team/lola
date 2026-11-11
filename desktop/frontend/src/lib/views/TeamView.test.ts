@@ -126,7 +126,9 @@ describe("TeamView", () => {
     expect(confirm.request?.body).toBe("Claim GHSA-aaaa and start a session in Web?");
     expect(Claim).not.toHaveBeenCalled();
     confirm.accept();
-    await waitFor(() => expect(Claim).toHaveBeenCalledWith({ itemId: "it_open", project: "" }));
+    // The row named its one project, so the claim names it too: the daemon
+    // would otherwise count every repo match and refuse.
+    await waitFor(() => expect(Claim).toHaveBeenCalledWith({ itemId: "it_open", project: "web" }));
     await waitFor(() => expect(flash).toHaveBeenCalledWith("Claimed GHSA-aaaa in Web"));
   });
 

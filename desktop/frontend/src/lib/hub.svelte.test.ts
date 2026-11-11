@@ -103,6 +103,43 @@ describe("HubStore", () => {
     expect(Claim).toHaveBeenCalledWith({ itemId: "it_1", project: "web" });
   });
 
+  it("drops a poll answer that lands after a newer fresh read", async () => {
+    const stale = { fetchedAt: "", items: [{ id: "it_1", state: "open" }] };
+    const fresh = { fetchedAt: "", items: [{ id: "it_1", state: "claimed" }] };
+    let finishOld: (v: unknown) => void = () => {};
+    Board.mockReturnValueOnce(new Promise((r) => (finishOld = r))).mockResolvedValueOnce(fresh);
+    const hub = new HubStore();
+    const release = hub.watch({ board: true }); // the poll read: still in flight
+    await vi.waitFor(() => expect(Board).toHaveBeenCalledTimes(1));
+    await hub.refresh({ fresh: true }); // the read after a claim
+    expect(hub.items[0].state).toBe("claimed");
+    finishOld(stale);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(hub.items[0].state).toBe("claimed");
+    release();
+  });
+
+  it("reads the board right after a join, not on the next poll", async () => {
+    vi.useFakeTimers();
+    Status.mockResolvedValue({ enabled: false, joined: false });
+    const hub = new HubStore();
+    const release = hub.watch({ board: true });
+    await vi.waitFor(() => expect(hub.loaded).toBe(true));
+    // The first read had no status yet, so it asked for the board; clear that.
+    await vi.advanceTimersByTimeAsync(0);
+    Board.mockClear();
+    Org.mockClear();
+    await hub.refresh({ fresh: true });
+    expect(Board).not.toHaveBeenCalled(); // still not joined: no board read
+    Join.mockResolvedValue({ org: "acme", deviceName: "mac" });
+    Status.mockResolvedValue({ ...joined });
+    expect((await hub.join("https://hub.example.com", "tok", "mac")).ok).toBe(true);
+    await vi.waitFor(() => expect(Board).toHaveBeenCalledTimes(1));
+    expect(Org).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(hub.board).not.toBeNull());
+    release();
+  });
+
   it("releases, leaves and syncs through their own calls", async () => {
     Release.mockResolvedValue({ itemId: "it_1", message: "released" });
     Leave.mockResolvedValue({ left: true });

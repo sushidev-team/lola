@@ -8,6 +8,22 @@
 
   export type TrustedKeyRow = { keyId: string; publicKey: string };
 
+  /** The inline error for "Claims per day" ("" = fine). A cleared field is NaN. */
+  export function hubClaimsError(v: number | undefined | null): string {
+    const n = v ?? 4;
+    return !Number.isInteger(n) || n < 0 || n > 100 ? "Enter a whole number from 0 to 100." : "";
+  }
+
+  /** The inline error for "Check every" ("" = fine). */
+  export function hubPollError(v: number | undefined | null): string {
+    const n = v ?? 300;
+    return !Number.isInteger(n) || n < 60 || n > 86400 ? "Enter seconds from 60 to 86400." : "";
+  }
+
+  /** The aria-labels of the two inputs, for the overlay's save gate to focus. */
+  export const CLAIMS_LABEL = "Claims per day";
+  export const POLL_LABEL = "Check every (seconds)";
+
   /** The inline error for one trusted-key row ("" = fine or blank). */
   export function trustedKeyError(row: TrustedKeyRow, rows: TrustedKeyRow[]): string {
     const id = row.keyId.trim();
@@ -173,9 +189,9 @@
   }
 
   const claims = $derived(values.hubMaxClaimsPerDay ?? 4);
-  const claimsError = $derived(!Number.isInteger(claims) || claims < 0 || claims > 100 ? "Enter a whole number from 0 to 100." : "");
+  const claimsError = $derived(hubClaimsError(values.hubMaxClaimsPerDay));
   const poll = $derived(values.hubPollSeconds ?? 300);
-  const pollError = $derived(!Number.isInteger(poll) || poll < 60 || poll > 86400 ? "Enter seconds from 60 to 86400." : "");
+  const pollError = $derived(hubPollError(values.hubPollSeconds));
   const sandbox = $derived(values.hubRequireSandbox ?? true);
   const applyPolicy = $derived(values.hubApplyPolicy ?? true);
 
@@ -331,7 +347,7 @@
     <label class={rowCls}>
       <span class="text-faint">Claims per day</span>
       <span>
-        <input class={inputCls} type="number" min="0" max="100" step="1" aria-label="Claims per day" value={claims}
+        <input class={inputCls} type="number" min="0" max="100" step="1" aria-label={CLAIMS_LABEL} value={claims}
           oninput={(e) => onChange({ hubMaxClaimsPerDay: e.currentTarget.valueAsNumber })} aria-invalid={!!claimsError} />
         <span class="mt-1 block text-sm {claimsError ? 'text-bad' : 'text-faint'}">{claimsError || "How many chores this Mac starts on its own each day. 0 pauses it."}</span>
       </span>
@@ -339,7 +355,7 @@
     <label class={rowCls}>
       <span class="text-faint">Check every</span>
       <span>
-        <input class={inputCls} type="number" min="60" max="86400" step="1" aria-label="Check every (seconds)" value={poll}
+        <input class={inputCls} type="number" min="60" max="86400" step="1" aria-label={POLL_LABEL} value={poll}
           oninput={(e) => onChange({ hubPollSeconds: e.currentTarget.valueAsNumber })} aria-invalid={!!pollError} />
         <span class="mt-1 block text-sm {pollError ? 'text-bad' : 'text-faint'}">{pollError || "Seconds between hub checks."}</span>
       </span>

@@ -58,9 +58,11 @@ var policyKeyMeta = map[string]struct{ label, configKey, field string }{
 	hubproto.KeyReviewProviders: {"Review providers", "review.provider[].enabled", "reviewProviders"},
 	hubproto.KeyBudgetDaily:     {"Daily token budget", "budget.daily_tokens", ""},
 	hubproto.KeyMergeQueue:      {"Merge queue", "merge_queue.enabled", ""},
-	hubproto.KeyMaxConcurrency:  {"Global concurrency cap", "defaults.global_cap", "globalCap"},
-	hubproto.KeyAcceptKinds:     {"Accepted chore kinds", "hub.accept_kinds", "hubAcceptKinds"},
-	hubproto.KeyEscalateAfter:   {"Escalate after failures", "", ""},
+	// A ceiling, not a lock: the daemon runs min(local, team), so the form keeps
+	// globalCap editable and shows the team value as a hint.
+	hubproto.KeyMaxConcurrency: {"Global concurrency cap", "defaults.global_cap", "globalCap"},
+	hubproto.KeyAcceptKinds:    {"Accepted chore kinds", "hub.accept_kinds", "hubAcceptKinds"},
+	hubproto.KeyEscalateAfter:  {"Escalate after failures", "", ""},
 }
 
 // hubStatusCall is the seam over the hubStatus round-trip.

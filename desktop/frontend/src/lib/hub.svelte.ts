@@ -70,6 +70,9 @@ export class HubStore {
   #boardWatchers = 0;
   #timer: ReturnType<typeof setInterval> | null = null;
   #refreshing: Promise<void> | null = null;
+  /** Each #read takes a number; an answer older than one already applied is dropped. */
+  #seq = 0;
+  #applied = 0;
 
   get joined(): boolean {
     return !!this.status?.joined;
@@ -130,12 +133,28 @@ export class HubStore {
   }
 
   async #read(fresh: boolean) {
-    const wantBoard = this.#boardWatchers > 0 && (this.status?.joined ?? true);
-    const [st, bd, og] = await Promise.allSettled([
-      HubService.Status(),
-      wantBoard ? HubService.Board({ state: this.boardState, limit: 0, fresh }) : Promise.resolve(null),
-      wantBoard ? HubService.Org() : Promise.resolve(null),
-    ]);
+    // A fresh read (after a claim) runs beside any poll already in flight. The
+    // older answer must not land after the newer one and put the pre-claim
+    // board back, so every read is numbered and a stale one is dropped whole.
+    const seq = ++this.#seq;
+    const boardWatched = () => this.#boardWatchers > 0;
+    const wantBoard = boardWatched() && (this.status?.joined ?? true);
+    const none = { status: "fulfilled", value: null } as const;
+    const readBoard = () =>
+      Promise.allSettled([HubService.Board({ state: this.boardState, limit: 0, fresh }), HubService.Org()]);
+    // Both go out together; allSettled never rejects.
+    const boardRead = wantBoard ? readBoard() : null;
+    const [st] = await Promise.allSettled([HubService.Status()]);
+    let [bd, og]: [PromiseSettledResult<HubBoardData | null>, PromiseSettledResult<HubOrgData | null>] = boardRead
+      ? await boardRead
+      : [none, none];
+    // The board was skipped on the OLD status (not joined) but this status says
+    // joined (a join just finished): read it now, not on the next poll.
+    if (!boardRead && boardWatched() && st.status === "fulfilled" && st.value?.joined) {
+      [bd, og] = await readBoard();
+    }
+    if (seq < this.#applied) return;
+    this.#applied = seq;
     this.loaded = true;
     if (st.status === "fulfilled") {
       this.status = st.value;

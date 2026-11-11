@@ -289,20 +289,45 @@ describe("SettingsForm", () => {
     appearance.paint();
   });
 
-  it("locks the global cap the team policy sets, and leaves it editable otherwise", async () => {
+  it("shows the team's concurrency ceiling as a hint and keeps the cap editable", async () => {
     TeamPolicy.mockResolvedValue({
       available: true, joined: true, org: "acme", version: 4, applied: true, note: "", keys: ["max_concurrency_hint"], summary: [],
       locked: [{ key: "max_concurrency_hint", label: "Global concurrency cap", value: "2", local: "5", configKey: "defaults.global_cap", field: "globalCap" }],
     });
     render(SettingsForm);
     await screen.findByLabelText("Total running agents");
-    // The lock swaps the control in, so re-query rather than hold the first node.
-    await waitFor(() => expect(screen.getByLabelText("Total running agents")).toBeDisabled());
+    // max_concurrency is min(local, team): a lower local value still counts.
+    expect(await screen.findByText(/Team ceiling 2 \(policy v4\)/)).toBeInTheDocument();
     const cap = screen.getByLabelText("Total running agents");
-    expect(screen.getByText("Set by team policy v4")).toBeInTheDocument();
-    // The form still shows and saves the file's own value.
+    expect(cap).toBeEnabled();
     expect(cap).toHaveValue(5);
-    expect(screen.getByLabelText("Agents per project")).toBeEnabled();
+    expect(screen.queryByText("Set by team policy v4")).not.toBeInTheDocument();
+  });
+
+  it("locks only the review providers' Enabled toggles under the team policy", async () => {
+    TeamPolicy.mockResolvedValue({
+      available: true, joined: true, org: "acme", version: 3, applied: true, note: "", keys: ["review_providers"], summary: [],
+      locked: [{ key: "review_providers", label: "Review providers", value: "bot-watch", local: "none", configKey: "review.provider[].enabled", field: "reviewProviders" }],
+    });
+    const provider = {
+      provider: "claude-session", enabled: false, onPrOpen: false, model: "", timeoutSeconds: 0, transports: ["lola"],
+      githubInline: false, notify: false, sendToAgent: false, visible: false, fallback: [],
+    };
+    GetSettings.mockResolvedValue({ ...fakeDto, reviewProviders: [provider] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    expect(await screen.findByText("Set by team policy v3")).toBeInTheDocument();
+    const card = within(await screen.findByRole("region", { name: "Claude review" }));
+    await waitFor(() => expect(card.getByRole("checkbox", { name: "Disabled" })).toBeDisabled());
+    // The details stay drawn and usable: they are the member's own settings.
+    const advanced = card.getByRole("button", { name: "Advanced settings" });
+    expect(advanced).toBeEnabled();
+    await fireEvent.click(advanced);
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    expect(card.getByLabelText("Timeout (s)")).toBeEnabled();
+    expect(card.getByRole("button", { name: /Publishing/ })).toBeEnabled();
+    // Adding the local entry is how a member fills a locked-on kind's author.
+    expect(screen.getByRole("button", { name: /Add provider/ })).toBeEnabled();
   });
 
   it("opens the Team hub tab with the join form and saves the hub rules with the rest", async () => {
@@ -314,6 +339,18 @@ describe("SettingsForm", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
     expect(SaveSettings.mock.calls[0][0]).toMatchObject({ hubMaxClaimsPerDay: 2, hubRequireSandbox: true });
+  });
+
+  it("blocks Save while a Team hub number field is cleared", async () => {
+    GetSettings.mockResolvedValue({ ...fakeDto, hubAcceptKinds: [], hubMaxClaimsPerDay: 4, hubRequireSandbox: true, hubPollSeconds: 300, hubApplyPolicy: true, hubTrustedKeys: [] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Team hub" }));
+    await fireEvent.input(await screen.findByLabelText("Check every (seconds)"), { target: { value: "" } });
+    expect(screen.getByText("Enter seconds from 60 to 86400.")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.getByLabelText("Check every (seconds)")).toHaveFocus());
+    expect(SaveSettings).not.toHaveBeenCalled();
   });
 
   it("saves a temporary shell directory selected with Browse", async () => {

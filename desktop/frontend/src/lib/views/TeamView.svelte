@@ -89,7 +89,7 @@
       body: `Claim ${itemTitle(it)} and start a session in ${where}?`,
       detail: "The team sees this Mac working it. A coding agent starts in a new worktree and opens a pull request.",
       confirmLabel: "Claim",
-      onConfirm: () => void claim(it, choices.length ? project : ""),
+      onConfirm: () => void claim(it, project),
     });
   }
 

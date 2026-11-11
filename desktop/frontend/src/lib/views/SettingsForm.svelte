@@ -21,7 +21,7 @@
   import Select from "$lib/components/Select.svelte";
   import ReviewProfiles from "$lib/components/ReviewProfiles.svelte";
   import SSHHostSettings from "$lib/components/ssh/SSHHostSettings.svelte";
-  import HubSettings from "$lib/components/hub/HubSettings.svelte";
+  import HubSettings, { CLAIMS_LABEL, POLL_LABEL, hubClaimsError, hubPollError } from "$lib/components/hub/HubSettings.svelte";
   import TeamLock from "$lib/components/TeamLock.svelte";
   import QRCode from "$lib/components/QRCode.svelte";
   import { store } from "$lib/store.svelte";
@@ -45,6 +45,11 @@
   let saving = $state(false);
   const globalCapError = $derived(dto && (!Number.isInteger(dto.globalCap) || dto.globalCap < 1) ? "Enter a whole number of at least 1." : "");
   const projectCapError = $derived(dto && (!Number.isInteger(dto.concurrencyCap) || dto.concurrencyCap < 0) ? "Enter a whole number of 0 or more." : "");
+  // The Team hub tab's number fields: a cleared one is NaN, which JSON sends as
+  // null and the daemon would skip, so the save reports success with the old
+  // value. The same gate as the caps blocks the save instead.
+  const hubClaimsErr = $derived(dto ? hubClaimsError(dto.hubMaxClaimsPerDay) : "");
+  const hubPollErr = $derived(dto ? hubPollError(dto.hubPollSeconds) : "");
   // A rejected SaveSettings used to surface only as a footer flash — behind this
   // backdrop, truncated, gone in 4s — so it read like a save that just didn't
   // close. Held here and shown inline instead; cleared on the next attempt.
@@ -334,6 +339,17 @@
   }
   const lockFor = (field: string) =>
     teamPolicy?.applied ? (teamPolicy.locked ?? []).find((l) => l.field === field) ?? null : null;
+  // max_concurrency is a CEILING, not a lock: the daemon runs min(local, team),
+  // so a lower local value still counts. The field stays editable; the team's
+  // value is a hint.
+  const capCeiling = $derived(lockFor("globalCap"));
+  // The review_providers lock sets only WHICH kinds are enabled; each kind still
+  // runs with its local command, author, model and publishing settings (a
+  // locked-on kind with no local entry runs on defaults, and a bot-watch with
+  // no author stays off). So only the Enabled toggles are locked: details stay
+  // editable and drawn for every provider, and Add provider stays, because
+  // adding the local entry is how a member fills a missing author or command.
+  const reviewLock = $derived(lockFor("reviewProviders"));
 
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
@@ -367,6 +383,12 @@
       tab = "defaults";
       await tick();
       document.getElementById(`${formId}-${globalCapError ? "global" : "project"}-cap`)?.focus();
+      return;
+    }
+    if (hubClaimsErr || hubPollErr) {
+      tab = "hub";
+      await tick();
+      document.querySelector<HTMLElement>(`input[aria-label="${hubClaimsErr ? CLAIMS_LABEL : POLL_LABEL}"]`)?.focus();
       return;
     }
     saving = true;
@@ -874,11 +896,9 @@
             <label class={rowCls}>
               <span class="text-faint">Total running agents</span>
               <span>
-                <TeamLock lock={lockFor("globalCap")} version={teamPolicy?.version ?? 0}>
-                  <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
-                    aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
-                </TeamLock>
-                <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}</span>
+                <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
+                  aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
+                <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}{#if !globalCapError && capCeiling}{" "}Team ceiling {capCeiling.value} (policy v{teamPolicy?.version ?? 0}).{/if}</span>
               </span>
             </label>
             <label class={rowCls}>
@@ -1402,7 +1422,7 @@
             </p>
           {/if}
 
-          <TeamLock lock={lockFor("reviewProviders")} version={teamPolicy?.version ?? 0}>
+          <TeamLock lock={reviewLock} version={teamPolicy?.version ?? 0} disable={false}>
           <div class="space-y-5">
           {#each reviewKinds.length ? providers() : [] as p (p.provider)}
             <section aria-label={`${providerName(p.provider)} review`} class="overflow-hidden rounded-lg border border-edge" class:opacity-60={d.reviewLegacy}>
@@ -1411,7 +1431,7 @@
                   <h5 class="text-base font-medium text-ink">{providerName(p.provider)}</h5>
                 </div>
                 <label class="flex cursor-pointer items-center gap-2">
-                  <Checkbox disabled={d.reviewLegacy} bind:checked={p.enabled} />
+                  <Checkbox disabled={d.reviewLegacy || !!reviewLock} bind:checked={p.enabled} />
                   <span>{p.enabled ? "Enabled" : "Disabled"}</span>
                 </label>
                 {#if !d.reviewLegacy}
@@ -1419,7 +1439,7 @@
                 {/if}
               </header>
 
-              {#if p.enabled || d.reviewLegacy}
+              {#if p.enabled || d.reviewLegacy || reviewLock}
                 <div class="space-y-4 p-4">
                   <div class="space-y-3">
                     {#if isCLI(p.provider)}
