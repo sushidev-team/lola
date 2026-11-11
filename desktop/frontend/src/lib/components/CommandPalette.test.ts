@@ -34,3 +34,20 @@ it("keeps the provider-specific CodeRabbit action in command search", async () =
  expect(poll).toHaveBeenCalledWith('a');
  expect(nav.overlay).toBeNull();
 });
+
+it("opens the Team view and syncs the hub from the palette", async () => {
+ const { hub } = await import("$lib/hub.svelte");
+ const sync = vi.spyOn(hub, "sync").mockResolvedValue({ ok: true, data: { queued: true } });
+ const flash = vi.spyOn(store, "setFlash");
+ render(CommandPalette);
+ await fireEvent.input(screen.getByRole("combobox"),{target:{value:"Team: Sync"}});
+ expect(screen.getByRole("option", { name: /Team: Sync now/ })).toBeInTheDocument();
+ await fireEvent.keyDown(screen.getByRole("combobox"),{key:"Enter"});
+ expect(sync).toHaveBeenCalled();
+ await vi.waitFor(() => expect(flash).toHaveBeenCalledWith("Team hub sync queued", "good"));
+ cleanup(); nav.openOverlay("commands");
+ render(CommandPalette);
+ await fireEvent.input(screen.getByRole("combobox"),{target:{value:"Team: Open"}});
+ await fireEvent.keyDown(screen.getByRole("combobox"),{key:"Enter"});
+ expect(nav.view).toBe("team"); expect(nav.overlay).toBeNull();
+});

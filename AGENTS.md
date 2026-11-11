@@ -1369,7 +1369,12 @@ would read an absent `require_sandbox` as false). A control the applied team
 policy locks is wrapped in `components/TeamLock.svelte` (a disabled fieldset
 plus "Set by team policy vN"), keyed by `ConfigService.TeamPolicy`'s
 `locked[].field`; adding a form field for a policy key means setting `field` in
-`desktop/teampolicy.go` and wrapping the control. Note there is ONE
+`desktop/teampolicy.go` and wrapping the control. The Team view
+(`views/TeamView.svelte`, nav view `team`, bare key `T`) splits the board with
+the pure helpers in `lib/hubboard.ts`; it never decides claimability itself
+(`local.claimable`/`reason` are the daemon's), and claim and release go
+through the confirm store. `components/HubChip.svelte` marks a session whose
+`SessionInfo.hub` is set. Note there is ONE
 project form, not a project form plus a poll form: a project IS the poll unit,
 so repository setup / filter / labels / write-back are TABS of a single overlay
 (same in the TUI — `internal/tui/form.go`, which absorbed the old

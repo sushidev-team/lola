@@ -88,6 +88,7 @@
         ["⌥→ / ⌥←", "file the focused project into a folder / out of it"],
         ["p", "projects"],
         ["S", "settings"],
+        ["T", "team chores"],
         ["d", "doctor"],
         ["?", "this help"],
       ],

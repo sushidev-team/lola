@@ -2,7 +2,7 @@ import { SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX } from "./sidebarwidth";
 // Navigation state: which top-level view is showing, the project scope, the
 // active modal overlay, and the active session in the full-height workspace.
 
-export type View = "cockpit" | "home" | "detail" | "prpicker" | "ticketpicker";
+export type View = "cockpit" | "home" | "detail" | "prpicker" | "ticketpicker" | "team";
 // There is no separate "poll" overlay any more: a project IS the poll unit, so
 // the project overlay covers repo setup, filter, labels and write-back in tabs.
 export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "update" | "help" | "bestof" | "newsession" | "commands" | "rename-session" | "activity" | "sshsession" | "sshconnect" | "pr-review";
@@ -168,6 +168,11 @@ class Nav {
   }
   goHome() {
     this.view = "home";
+    this.dropFocus();
+  }
+  /** The Team view: the team hub's chores and devices. */
+  goTeam() {
+    this.view = "team";
     this.dropFocus();
   }
   goDetail(name: string) {

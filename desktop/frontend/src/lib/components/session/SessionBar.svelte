@@ -1,4 +1,5 @@
 <script lang="ts">
+  import HubChip from "$lib/components/HubChip.svelte";
   import Icon from "$lib/components/Icon.svelte";
   // Session identity and actions live here. Delivery details and Dev controls
   // live in the overview; the title hover card keeps checkout and agent facts.
@@ -83,6 +84,7 @@
         <span class="min-w-0 truncate font-medium text-ink">{title}</span>
       {/if}
     </HoverCard>
+    {#if session?.hub}<HubChip hub={session.hub} class="max-w-[16rem]" />{/if}
     {#if ended}<span class="min-w-0 truncate text-sm text-faint" data-ended-tag>Ended{#if ended.reason}{" · "}{ended.reason}{/if}</span>{/if}
 
 

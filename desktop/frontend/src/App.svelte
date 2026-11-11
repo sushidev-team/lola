@@ -33,6 +33,7 @@
   import ProjectDetail from "$lib/views/ProjectDetail.svelte";
   import PRPicker from "$lib/views/PRPicker.svelte";
   import TicketPicker from "$lib/views/TicketPicker.svelte";
+  import TeamView from "$lib/views/TeamView.svelte";
   import DoctorOverlay from "$lib/views/DoctorOverlay.svelte";
   import SettingsForm from "$lib/views/SettingsForm.svelte";
   import ProjectForm from "$lib/views/ProjectForm.svelte";
@@ -454,6 +455,9 @@
       case "S":
         nav.openOverlay("settings");
         return;
+      case "T":
+        nav.goTeam();
+        return;
       case "b":
         nav.toggleSidebar();
         return;
@@ -524,6 +528,8 @@
             <PRPicker />
           {:else if nav.view === "ticketpicker"}
             <TicketPicker />
+          {:else if nav.view === "team"}
+            <TeamView />
           {/if}
         </div>
       {/if}
