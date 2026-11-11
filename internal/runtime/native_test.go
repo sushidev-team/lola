@@ -226,7 +226,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 		"-L lola new-session -d -s " + id + " -c " + dir +
 			" exec sh -c 'set -a; . ./.lola/env; set +a; exec /usr/local/bin/claude --settings .lola/settings.json" +
 			` '\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\'''`,
-		"-L lola set-option -t =" + id + " status off",
+		"-L lola set-option -t =" + id + ": status off",
 	}, "\n")
 	if gotTmux := loggedArgs(t, f.tmuxLog); gotTmux != wantTmux {
 		t.Errorf("tmux calls:\n%s\nwant:\n%s", gotTmux, wantTmux)
@@ -363,9 +363,9 @@ func TestSpawnAppliesConfiguredChrome(t *testing.T) {
 	tmuxCalls := loggedArgs(t, f.tmuxLog)
 	id := "lola-nori-eng-42"
 	for _, want := range []string{
-		"-L lola set-option -t =" + id + " status-left LOLA | ENG-42",
-		"-L lola set-option -t =" + id + " status-right custom | detach F12",
-		"-L lola set-option -t =" + id + " mouse on",
+		"-L lola set-option -t =" + id + ": status-left LOLA | ENG-42",
+		"-L lola set-option -t =" + id + ": status-right custom | detach F12",
+		"-L lola set-option -t =" + id + ": mouse on",
 		"-L lola bind-key -n F12 detach-client",
 	} {
 		if !strings.Contains(tmuxCalls, want) {
@@ -815,8 +815,8 @@ LOLA_EOF
 	// Only the LIVE ones: eng-2 is dead and eng-9 orphaned-but-live.
 	calls := loggedArgs(t, tmuxLog)
 	for _, want := range []string{
-		"-L lola set-option -t =lola-nori-eng-1 status off",
-		"-L lola set-option -t =lola-nori-eng-9 status off",
+		"-L lola set-option -t =lola-nori-eng-1: status off",
+		"-L lola set-option -t =lola-nori-eng-9: status off",
 	} {
 		if !strings.Contains(calls, want) {
 			t.Errorf("Adopt should re-apply chrome, missing %q:\n%s", want, calls)

@@ -1152,7 +1152,9 @@ type SessionChrome struct {
 // into the returned error so the caller can log it, but a styling failure must
 // not fail the spawn — the caller treats a non-nil return as advisory.
 func (c *Client) ConfigureSession(ctx context.Context, name string, opts SessionChrome) error {
-	target := "=" + name
+	// set-option's -t is a target-PANE on current tmux (3.7 answers a bare
+	// "=name" with "no such session"), so the session's pane: "=name:".
+	target := "=" + name + ":"
 	// "status off" is still SENT explicitly rather than simply skipped: sessions
 	// are adopted across daemon restarts and re-configured in place, so a session
 	// that was spawned while the bar was on has to be told to drop it.
