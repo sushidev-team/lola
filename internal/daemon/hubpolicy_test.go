@@ -236,3 +236,70 @@ func TestHubSyncMakesPolicyDue(t *testing.T) {
 		t.Errorf("policies after hubSync = %d, want 2", n)
 	}
 }
+
+// Leave removes the stored policy (the reload drops the overlay to v0); a
+// rejoin that fetches the SAME version must reload again, or the verified
+// policy is stored but never enforced.
+func TestTeamPolicyReloadsAfterLeaveAndRejoin(t *testing.T) {
+	f := newPolicyDaemon(t, hubproto.Settings{BudgetDailyWeightedTokens: 500}, 1, false, nil)
+	d := f.d
+	reloads := 0
+	d.hub.reload = func(ctx context.Context) error { reloads++; return d.handleReload(ctx) }
+	d.hubPolicyReload(context.Background(), 1)
+	if reloads != 1 || d.teamPolicy.version != 1 {
+		t.Fatalf("first apply: reloads %d, %+v", reloads, d.teamPolicy)
+	}
+
+	// Leave: the policy file goes, the identity is reset, the daemon reloads.
+	if err := os.Remove(filepath.Join(d.hubDir(), hub.PolicyFile)); err != nil {
+		t.Fatal(err)
+	}
+	d.hubResetIdentity()
+	if err := d.handleReload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if d.teamPolicy.version != 0 || d.cfg.Budget.DailyTokens != 1000 {
+		t.Fatalf("after leave: budget %d, %+v", d.cfg.Budget.DailyTokens, d.teamPolicy)
+	}
+
+	// Rejoin: the fetch stores v1 again and asks for its reload.
+	writeStoredPolicy(t, d.hubDir(), f.priv, f.keyID, 1, hubproto.Settings{BudgetDailyWeightedTokens: 500})
+	d.hubPolicyReload(context.Background(), 1)
+	if reloads != 2 || d.teamPolicy.version != 1 || d.cfg.Budget.DailyTokens != 500 {
+		t.Errorf("after rejoin: reloads %d budget %d, %+v", reloads, d.cfg.Budget.DailyTokens, d.teamPolicy)
+	}
+}
+
+// A reload that unpins the policy's key drops status's cached bundle: status
+// must not keep showing it as verified.
+func TestHubStatusPolicyReReadAfterKeysChange(t *testing.T) {
+	f := newPolicyDaemon(t, hubproto.Settings{BudgetDailyWeightedTokens: 500}, 1, false, nil)
+	d := f.d
+	if err := d.handleReload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := d.hubStatusData(); st.Policy == nil || st.Policy.Version != 1 || !st.Policy.Applied {
+		t.Fatalf("status policy = %+v", st.Policy)
+	}
+	fc, err := config.Load(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := hubproto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc.Hub.TrustedPolicyKeys = config.TrustedKeyMap{"kother": hubproto.EncodePublicKey(other)}
+	if err := fc.Save(f.path); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.handleReload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if d.teamPolicy.applied {
+		t.Fatalf("policy still applied: %+v", d.teamPolicy)
+	}
+	if st := d.hubStatusData(); st.Policy != nil || st.PolicyVersion != 0 {
+		t.Errorf("status still shows the unpinned policy: %+v (v%d)", st.Policy, st.PolicyVersion)
+	}
+}

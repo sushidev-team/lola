@@ -1049,6 +1049,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		d.syncHookBridge(bctx)
 	}
 	d.syncWorkers(ctx)
+	d.hubPolicyStale()
 	d.hubNudge() // a join or leave edits [hub] and reloads: act on it now
 	d.logf("", "config reloaded")
 	return nil

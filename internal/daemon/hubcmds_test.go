@@ -139,6 +139,28 @@ func TestHubClaimAmbiguousProject(t *testing.T) {
 	}
 }
 
+// A row the board offers as claimable in ONE project (its sibling on the same
+// repo is unsandboxed while the sandbox is required) claims into that project
+// with no project named, as the board promised.
+func TestHubClaimPicksTheOneAcceptingProject(t *testing.T) {
+	d, fh, _ := humanFixture(t)
+	second := d.cfg.Projects[0]
+	second.Name = "web2"
+	second.Sandbox = ""
+	d.cfg.Projects = append(d.cfg.Projects, second)
+	b, err := hubDo[protocol.HubBoardData](t, d, protocol.CmdHubBoard, protocol.HubBoardArgs{})
+	if err != nil || len(b.Items) != 1 || !b.Items[0].Local.Claimable || b.Items[0].Local.Project != "web" {
+		t.Fatalf("board = %+v, %v", b, err)
+	}
+	got, err := hubDo[protocol.HubClaimData](t, d, protocol.CmdHubClaim, protocol.HubClaimArgs{ItemID: "it1"})
+	if err != nil || got.Project != "web" {
+		t.Fatalf("claim = %+v, %v", got, err)
+	}
+	if c := fh.snapshot(); len(c.claims) != 1 {
+		t.Fatalf("claims = %v", c.claims)
+	}
+}
+
 func TestHubClaimHealthGateMutatesNothing(t *testing.T) {
 	d, fh, nat := humanFixture(t)
 	d.runtimeHealth = func(string) error { return errors.New("docker not found") }

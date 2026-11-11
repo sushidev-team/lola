@@ -820,7 +820,7 @@ func (d *Daemon) hubClaimItem(ctx context.Context, api hubAPI, it hubproto.Item,
 	var pp *config.Project
 	var pickErr error
 	if req.human {
-		pp, pickErr = hubPickProject(d.cfg, it, req.project)
+		pp, pickErr = hubPickProject(d.cfg, it, req.project, snap.h)
 	} else {
 		pp = hub.ProjectFor(d.cfg, it)
 	}
@@ -977,9 +977,10 @@ func (d *Daemon) hubEndClaim(id string) {
 }
 
 // hubPickProject resolves a HUMAN claim's project: every non-stack project
-// working the item's repo is a candidate (opted in or not); several need a
-// name. The caller holds d.mu.
-func hubPickProject(cfg *config.Config, it hubproto.Item, name string) (*config.Project, error) {
+// working the item's repo is a candidate (opted in or not); without a name,
+// the one candidate that accepts it is picked and several need a name. The
+// caller holds d.mu.
+func hubPickProject(cfg *config.Config, it hubproto.Item, name string, h config.HubConfig) (*config.Project, error) {
 	cands := hub.ProjectsFor(cfg, it)
 	if name != "" {
 		for _, p := range cands {
@@ -989,12 +990,28 @@ func hubPickProject(cfg *config.Config, it hubproto.Item, name string) (*config.
 		}
 		return nil, fmt.Errorf("project %q does not work %s", name, it.Repo())
 	}
-	switch len(cands) {
-	case 0:
+	if len(cands) == 0 {
 		return nil, fmt.Errorf("no local project works %s", it.Repo())
-	case 1:
-		return cands[0], nil
 	}
+	// Count only the projects that would accept it, the way the board's
+	// hubLocal does: a row offered as "claimable (X)" must claim into X when
+	// no project is named, not refuse because an unsandboxed sibling exists.
+	var ok []*config.Project
+	first := ""
+	for _, p := range cands {
+		if yes, why := hub.AcceptIntent(it, p, h); yes {
+			ok = append(ok, p)
+		} else if first == "" {
+			first = why
+		}
+	}
+	switch len(ok) {
+	case 0:
+		return nil, errors.New(first)
+	case 1:
+		return ok[0], nil
+	}
+	cands = ok
 	names := make([]string, len(cands))
 	for i, p := range cands {
 		names[i] = p.Name
@@ -1291,6 +1308,20 @@ func (d *Daemon) hubPolicy(ctx context.Context, api hubAPI, snap hubSnapshot, id
 	default:
 		d.hubSetErr("policy", err)
 	}
+}
+
+// hubPolicyStale drops status's cached policy after a reload: the reload may
+// have changed [hub].trusted_policy_keys, so the stored bundle is re-read and
+// re-verified against the current keys on the next status, never shown as
+// verified from a cache the keys no longer back.
+func (d *Daemon) hubPolicyStale() {
+	w := d.hub
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.policy, w.policyV, w.policyRead = nil, 0, false
+	w.mu.Unlock()
 }
 
 // hubReadPolicyLocked reads the stored, re-verified policy once, so status

@@ -198,6 +198,9 @@ func (d *Daemon) hubResetIdentity() {
 	w.joined, w.device, w.deviceName, w.org = false, "", "", ""
 	w.lastErr, w.lastErrT, w.lastBeat = "", time.Time{}, time.Time{}
 	w.policy, w.policyV, w.policyRead = nil, 0, false
+	// A leave removes the stored policy, so the reload drops the overlay to
+	// version 0; the rejoin's fetch of the same version must reload again.
+	w.policyReloadedV = 0
 	w.findings = nil
 	w.mu.Unlock()
 	d.hubDropCaches()
