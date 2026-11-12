@@ -4,6 +4,7 @@ import type { GitArea, GitDiff, GitSnapshot, GitAuthorIdentity, GitStash, GitBra
 /** Shared per-checkout state keeps operation locks and commit drafts across view mounts. */
 export class ProjectGitState {
   stashes = $state<GitStash[]>([]);
+  stashesState = $state<'loading' | 'ready' | 'unavailable'>('loading');
   authors = $state<Record<string, GitAuthorIdentity>>({});
   remoteAvatars = $state<Record<string, string>>({});
   identityLoading = $state<Record<string, boolean>>({});
@@ -22,14 +23,33 @@ export class ProjectGitState {
   amend = $state(false);
   amendHead = $state('');
   amendLoading = $state(false);
+  draftingMessage = $state(false);
+  draftError = $state('');
   private amendSequence = 0;
   get subject(): string { return this.message.split('\n', 1)[0]; }
   set subject(value: string) { this.message = value + (this.body ? `\n\n${this.body}` : ''); }
   get body(): string { return this.message.includes('\n') ? this.message.slice(this.message.indexOf('\n') + 1).replace(/^\n/, '') : ''; }
   set body(value: string) { this.message = this.subject + (value ? `\n\n${value}` : ''); }
   private loadSequence = 0;
+  private filesRevision = 0;
   private diffSequence = 0;
   constructor(readonly project: string, readonly worktree: string) {}
+
+  async draftCommitMessage(): Promise<boolean> {
+    if (this.draftingMessage || this.busy || !this.snapshot || this.snapshot.operation) return false;
+    const message = this.message, head = this.snapshot.head, revision = this.filesRevision, amend = this.amend;
+    this.draftingMessage = true; this.draftError = '';
+    try {
+      const draft = await ProjectGitService.DraftCommitMessage(this.project, this.worktree, message);
+      if (this.message !== message || this.snapshot?.head !== head || this.filesRevision !== revision || this.amend !== amend || this.busy) {
+        this.draftError = 'Your message or staged changes changed while drafting. Generate again to use the latest changes.';
+        return false;
+      }
+      this.message = draft;
+      return true;
+    } catch (error) { this.draftError = String(error); return false; }
+    finally { this.draftingMessage = false; }
+  }
 
   async setAmend(value: boolean) {
     this.amend = value;
@@ -50,7 +70,7 @@ export class ProjectGitState {
   }
 
   async load(ref = '', limit = 200) {
-    const sequence = ++this.loadSequence;
+    const sequence = ++this.loadSequence, filesRevision = this.filesRevision;
     this.identityLoading = {};
     this.remoteIdentityLoading = false;
     this.loading = true;
@@ -61,7 +81,9 @@ export class ProjectGitState {
       const result = await ProjectGitService.Snapshot(this.project, this.worktree, ref, limit);
       if (sequence === this.loadSequence) this.snapshot = {
         ...result, commits: (result.commits ?? []).map(c => ({ ...c, parents: c.parents ?? [], refs: c.refs ?? [] })),
-        remotes: result.remotes ?? [], refs: result.refs ?? [], worktrees: result.worktrees ?? [], files: result.files ?? [],
+        remotes: result.remotes ?? [], refs: result.refs ?? [], worktrees: result.worktrees ?? [],
+        // A history request started before staging must not put old index state back.
+        files: filesRevision === this.filesRevision ? result.files ?? [] : this.snapshot?.files ?? result.files ?? [],
       };
       if (sequence === this.loadSequence) { void this.loadIdentities(sequence, (result.commits ?? []).map(c => c.sha)); void this.loadStashes(sequence); }
     } catch (error) {
@@ -74,8 +96,8 @@ export class ProjectGitState {
   private async loadStashes(sequence: number) {
     try {
       const stashes = await ProjectGitService.Stashes(this.project, this.worktree);
-      if (sequence === this.loadSequence) this.stashes = stashes ?? [];
-    } catch { /* Stash metadata must not block history; action failures are surfaced separately. */ }
+      if (sequence === this.loadSequence) { this.stashes = stashes ?? []; this.stashesState = 'ready'; }
+    } catch { if (sequence === this.loadSequence) this.stashesState = 'unavailable'; }
   }
 
   async branchAction(request: GitBranchAction, ref = '', limit = 200): Promise<string | null> {
@@ -218,15 +240,64 @@ export class ProjectGitState {
     }
   }
 
+  async prepareDiscard() {
+    if (this.busy) return null;
+    this.busy = 'prepare-discard'; this.error = ''; this.notice = '';
+    try {
+      const plan = await ProjectGitService.PrepareDiscard(this.project, this.worktree);
+      return {...plan, tracked:plan.tracked ?? [], untracked:plan.untracked ?? []};
+    }
+    catch (error) { this.error = String(error); return null; }
+    finally { this.busy = ''; }
+  }
+
+  async discardUnstaged(token: string, ref = '', limit = 200): Promise<boolean> {
+    if (this.busy) return false;
+    this.busy = 'discard'; this.error = ''; this.notice = '';
+    let ok = false;
+    try {
+      await ProjectGitService.DiscardUnstaged(this.project, this.worktree, token);
+      this.notice = 'Unstaged changes discarded.'; ok = true;
+    } catch (error) { this.error = String(error); }
+    finally {
+      // A filesystem failure may follow a successful restore of other files.
+      const error = this.error;
+      await this.load(ref, limit);
+      if (error) this.error = error;
+      this.busy = '';
+    }
+    return ok;
+  }
+
+  private async changeIndex(action: 'stage' | 'unstage', paths: string[], ref: string, limit: number): Promise<boolean> {
+    if (this.busy) return false;
+    this.busy = action; this.error = ''; this.notice = '';
+    this.filesRevision++;
+    try {
+      const files = await ProjectGitService[action === 'stage' ? 'Stage' : 'Unstage'](this.project, this.worktree, paths);
+      this.filesRevision++;
+      if (this.snapshot && Array.isArray(files)) this.snapshot.files = files;
+      else await this.load(ref, limit);
+      this.notice = action === 'stage' ? 'Files staged.' : 'Files unstaged.';
+      return true;
+    } catch (error) {
+      // Git can partially update the index before failing (for example a filter).
+      // Reconcile failures, but don't put a full history reload on the fast path.
+      this.filesRevision++;
+      await this.load(ref, limit);
+      this.error = String(error);
+      return false;
+    } finally { this.busy = ''; }
+  }
+
   async act(action: 'stage' | 'unstage' | 'commit' | 'amend' | 'fetch' | 'pull' | 'push', paths: string[] = [], ref = '', limit = 200, expectedHead = ''): Promise<boolean> {
+    if (action === 'stage' || action === 'unstage') return this.changeIndex(action, paths, ref, limit);
     if (this.busy) return false;
     this.busy = action;
     this.error = '';
     this.notice = '';
     try {
       switch (action) {
-        case 'stage': await ProjectGitService.Stage(this.project, this.worktree, paths); break;
-        case 'unstage': await ProjectGitService.Unstage(this.project, this.worktree, paths); break;
         case 'commit': await ProjectGitService.Commit(this.project, this.worktree, this.message); this.message = ''; this.amend = false; this.amendHead = ''; break;
         case 'amend': await ProjectGitService.Amend(this.project, this.worktree, this.message, expectedHead); this.message = ''; this.amend = false; this.amendHead = ''; break;
         case 'fetch': await ProjectGitService.Fetch(this.project, this.worktree); break;

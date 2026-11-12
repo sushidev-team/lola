@@ -20,6 +20,7 @@ function snapshot(overrides: Partial<GitSnapshot> = {}): GitSnapshot {
 }
 beforeEach(() => {
   localStorage.removeItem("lola.git.columns");
+  localStorage.removeItem("lola.git.sidebar-widths");
   vi.stubGlobal('PointerEvent', class extends MouseEvent { pointerId = 1; isPrimary = true; });
   if (!document.elementFromPoint) document.elementFromPoint = () => null;
   project = `project-git-${++serial}`;
@@ -41,6 +42,26 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it('shows aligned loading placeholders without false empty states, then retains content during refresh',async()=>{
+    let resolve!:(value:ReturnType<typeof snapshot>)=>void;api.Snapshot.mockReturnValueOnce(new Promise(r=>resolve=r));
+    const {container}=render(ProjectGit,{project});await waitFor(()=>expect(container.querySelector('.history-skeleton')).not.toBeNull());
+    expect(screen.queryByText('No saved stashes')).toBeNull();expect(screen.queryByText('No unstaged changes.')).toBeNull();expect(screen.queryByText('Stage files to include in your commit.')).toBeNull();
+    expect(screen.getByRole('navigation',{name:'Repository navigation'})).toHaveAttribute('aria-busy','true');expect(screen.getByLabelText('Commit subject')).toBeDisabled();
+    resolve(snapshot());await screen.findByRole('button',{name:/Add project workspace,/});expect(container.querySelector('.history-skeleton')).toBeNull();expect(container.querySelector('.files-skeleton')).toBeNull();
+    let refresh!:(value:ReturnType<typeof snapshot>)=>void;api.Snapshot.mockReturnValueOnce(new Promise(r=>refresh=r));
+    await fireEvent.click(screen.getByRole('button',{name:'Refresh repository'}));
+    expect(container.querySelector('.history-skeleton')).toBeNull();expect(screen.getByRole('button',{name:/Add project workspace,/})).toBeInTheDocument();refresh(snapshot());
+  });
+  it('resizes both sidebars with the keyboard and remembers independent widths',async()=>{
+    await open();
+    const rail=screen.getByRole('separator',{name:'Resize repository sidebar'}),inspector=screen.getByRole('separator',{name:'Resize changes sidebar'});
+    const left=Number(rail.getAttribute('aria-valuenow')),right=Number(inspector.getAttribute('aria-valuenow'));
+    await fireEvent.keyDown(rail,{key:'ArrowRight'});await fireEvent.keyDown(inspector,{key:'ArrowLeft'});
+    expect(rail).toHaveAttribute('aria-valuenow',String(left+10));expect(inspector).toHaveAttribute('aria-valuenow',String(right+10));
+    expect(JSON.parse(localStorage.getItem('lola.git.sidebar-widths')!)).toEqual({rail:left+10,inspector:right+10});
+    await fireEvent.doubleClick(rail);expect(rail).toHaveAttribute('aria-valuenow','260');
+    await fireEvent.keyDown(inspector,{key:'Home'});expect(inspector).toHaveAttribute('aria-valuenow','240');
+  });
   it('connects the working node to HEAD and removes the connector during search',async()=>{
     await open();
     expect(document.querySelector('[data-commit="working"] .working-edge')).toBeInTheDocument();
@@ -363,7 +384,7 @@ describe('Project Git workspace', () => {
     await open();
     await fireEvent.click(screen.getByRole('button', {name:/Initial project,/}));
     expect(screen.queryByRole('region', {name:'Selected changes'})).toBeNull();
-    const changed = await screen.findByRole('button', {name:/src\/app.ts.*\+1/});
+    const changed = await screen.findByRole('button', {name:'src/app.ts'});
     await fireEvent.click(changed);
     expect(await screen.findByRole('region', {name:'Selected changes'})).toBeInTheDocument();
   });

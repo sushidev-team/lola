@@ -440,3 +440,32 @@ func TestLastCommitMessagePinsExpectedHeadAndPreservesBody(t *testing.T) {
 		t.Fatal("read stale HEAD message")
 	}
 }
+
+func TestIndexStatusRefreshReadsOnlyFiles(t *testing.T) {
+	dir := repo(t)
+	ctx := context.Background()
+	write(t, dir, "a", "base")
+	testGit(t, dir, "add", ".")
+	testGit(t, dir, "commit", "-m", "base")
+	write(t, dir, "a", "changed")
+	calls := []string{}
+	c := Client{run: func(ctx context.Context, dir, input string, args ...string) ([]byte, error) {
+		calls = append(calls, args[0])
+		return runGit(ctx, dir, input, args...)
+	}}
+	files, err := c.ChangeIndexAndStatus(ctx, dir, []string{"a"}, true)
+	if err != nil || len(files) != 1 || files[0].Index != "M" || files[0].Worktree != " " {
+		t.Fatalf("files=%+v err=%v", files, err)
+	}
+	if !reflect.DeepEqual(calls, []string{"status", "add", "status"}) {
+		t.Fatalf("unexpected reads: %v", calls)
+	}
+	calls = nil
+	files, err = c.ChangeIndexAndStatus(ctx, dir, []string{"a"}, false)
+	if err != nil || len(files) != 1 || files[0].Worktree != "M" || files[0].Index != " " {
+		t.Fatalf("files=%+v err=%v", files, err)
+	}
+	if !reflect.DeepEqual(calls, []string{"status", "rev-parse", "restore", "status"}) {
+		t.Fatalf("unexpected reads: %v", calls)
+	}
+}

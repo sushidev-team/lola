@@ -1756,9 +1756,17 @@ when the checkout has changed files. Its graph node connects to the actual HEAD,
 including when other branches have newer commits. File lists show a muted directory
 prefix that truncates before the filename. Right-click a changed file, or press
 Shift-F10, to view changes, stage/unstage the selection or copy paths.
+The Changes header centers the list/tree controls and provides a trash action for
+all unstaged changes. Its confirmation distinguishes restoring tracked files from
+deleting untracked files; staged changes and ignored files are kept. If files or
+the index change while confirming, Lola asks you to review and confirm again.
+Nested repositories, submodules and active conflict recovery are never discarded
+by this action.
 Press **⌘F** (Ctrl-F) to search loaded commits. The column controls at the top right of history
 show or hide columns; drag a column divider or focus it and use the arrow keys to
 resize. Column visibility and widths are remembered.
+Drag either sidebar's inner edge to resize it, or focus the divider and use the
+arrow keys. Widths are remembered; double-click a divider to reset it.
 
 Branch tips and checkout markers sit to the left of the graph. Matching colors
 connect the labels and graph lanes. A faint tint fades right to left inside only

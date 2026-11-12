@@ -44,6 +44,20 @@ export function selectCommits(selected: string[], sha: string, additive: boolean
   return [...selected.slice(-1), sha];
 }
 
+/** Match the tree's folder-first order in the flat list, at every path level. */
+export function folderFirstFiles<T extends { path: string }>(files: T[]): T[] {
+  return [...files].sort((a, b) => {
+    const left = a.path.split('/'), right = b.path.split('/');
+    for (let i = 0; i < Math.min(left.length, right.length); i++) {
+      const folders = Number(i < right.length - 1) - Number(i < left.length - 1);
+      if (folders) return folders;
+      const name = left[i].localeCompare(right[i]);
+      if (name) return name;
+    }
+    return 0;
+  });
+}
+
 export function stagedFiles(files: GitFile[]): GitFile[] {
   return files.filter(f => !f.untracked && f.index !== ' ' && f.index !== '?' && !!f.index);
 }

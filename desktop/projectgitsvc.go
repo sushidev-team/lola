@@ -22,8 +22,9 @@ import (
 // channel. Repository identity comes from config; a caller cannot supply an
 // arbitrary directory. Mutations are serialized so rapid clicks cannot race.
 type ProjectGitService struct {
-	mu         sync.Mutex
-	identities projectgit.PersistentIdentityClient
+	draftCommit func(context.Context, string, string) (string, error)
+	mu          sync.Mutex
+	identities  projectgit.PersistentIdentityClient
 }
 
 func projectGitWithin(path, root string) bool {
@@ -163,14 +164,33 @@ func (s *ProjectGitService) mutate(project, worktree string, fn func(context.Con
 	}
 	return nil
 }
-func (s *ProjectGitService) Stage(project, worktree string, paths []string) error {
-	return s.mutate(project, worktree, func(ctx context.Context, dir string) error {
-		return (projectgit.Client{}).ChangeIndex(ctx, dir, paths, true)
-	})
+func (s *ProjectGitService) Stage(project, worktree string, paths []string) ([]projectgit.File, error) {
+	return s.changeIndex(project, worktree, paths, true)
 }
-func (s *ProjectGitService) Unstage(project, worktree string, paths []string) error {
+func (s *ProjectGitService) Unstage(project, worktree string, paths []string) ([]projectgit.File, error) {
+	return s.changeIndex(project, worktree, paths, false)
+}
+func (s *ProjectGitService) changeIndex(project, worktree string, paths []string, stage bool) ([]projectgit.File, error) {
+	var files []projectgit.File
+	err := s.mutate(project, worktree, func(ctx context.Context, dir string) error {
+		var err error
+		files, err = (projectgit.Client{}).ChangeIndexAndStatus(ctx, dir, paths, stage)
+		return err
+	})
+	return files, err
+}
+func (s *ProjectGitService) PrepareDiscard(project, worktree string) (projectgit.DiscardPlan, error) {
+	result := projectgit.DiscardPlan{}
+	err := s.mutate(project, worktree, func(ctx context.Context, dir string) error {
+		var err error
+		result, err = (projectgit.Client{}).PrepareDiscard(ctx, dir)
+		return err
+	})
+	return result, err
+}
+func (s *ProjectGitService) DiscardUnstaged(project, worktree, token string) error {
 	return s.mutate(project, worktree, func(ctx context.Context, dir string) error {
-		return (projectgit.Client{}).ChangeIndex(ctx, dir, paths, false)
+		return (projectgit.Client{}).DiscardUnstaged(ctx, dir, token)
 	})
 }
 func (s *ProjectGitService) Commit(project, worktree, message string) error {

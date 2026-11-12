@@ -66,6 +66,15 @@ func TestProjectGitOnlyAllowsConfiguredRepositoryAndListedWorktrees(t *testing.T
 	if _, err = svc.LastCommitMessage("demo", wt, snap.Head); err == nil || !strings.Contains(err.Error(), "sandbox") {
 		t.Fatalf("sandbox message error=%v", err)
 	}
+	if _, err = svc.PrepareDiscard("demo", wt); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatalf("sandbox discard preview error=%v", err)
+	}
+	if err = svc.DiscardUnstaged("demo", wt, "token"); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatalf("sandbox discard error=%v", err)
+	}
+	if _, err = svc.DraftCommitMessage("demo", wt, ""); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatalf("sandbox AI draft error=%v", err)
+	}
 	snap, err = svc.Snapshot("demo", "", "", 200)
 	if err != nil {
 		t.Fatal(err)
@@ -312,5 +321,51 @@ func TestProjectGitCreateBranchAuthorizesRequestedWorktree(t *testing.T) {
 	}
 	if _, err = svc.CreateBranch("demo", wt, "feature/sandbox", sha, false); err == nil || !strings.Contains(err.Error(), "sandbox") {
 		t.Fatalf("sandbox error=%v", err)
+	}
+}
+
+func TestProjectGitDiscardUsesConfirmedAuthorizedCheckout(t *testing.T) {
+	root := projectGitRepo(t)
+	writeTestConfig(t, minimalConfig+fmt.Sprintf("\n[[project]]\nname = \"demo\"\npath = %q\n", root))
+	path := filepath.Join(root, "untracked")
+	if err := os.WriteFile(path, []byte("remove after confirmation"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	svc := &ProjectGitService{}
+	plan, err := svc.PrepareDiscard("demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.DiscardUnstaged("missing", "", plan.Token); err == nil {
+		t.Fatal("accepted unknown project")
+	}
+	if _, err = os.Stat(path); err != nil {
+		t.Fatal("preview or refused request removed file")
+	}
+	if err = svc.DiscardUnstaged("demo", "", plan.Token); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("file remains")
+	}
+}
+
+func TestProjectGitIndexActionsReturnFreshFiles(t *testing.T) {
+	root := projectGitRepo(t)
+	writeTestConfig(t, minimalConfig+fmt.Sprintf("\n[[project]]\nname = \"demo\"\npath = %q\n", root))
+	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	svc := &ProjectGitService{}
+	files, err := svc.Stage("demo", "", []string{"new.txt"})
+	if err != nil || len(files) != 1 || files[0].Index != "A" || files[0].Untracked {
+		t.Fatalf("staged=%+v err=%v", files, err)
+	}
+	files, err = svc.Unstage("demo", "", []string{"new.txt"})
+	if err != nil || len(files) != 1 || !files[0].Untracked {
+		t.Fatalf("unstaged=%+v err=%v", files, err)
+	}
+	if _, err = svc.Stage("missing", "", []string{"new.txt"}); err == nil {
+		t.Fatal("unknown project accepted")
 	}
 }

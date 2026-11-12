@@ -61,6 +61,18 @@ export function Diff(project: string, worktree: string, $from: string, to: strin
     return $Call.ByID(2191256993, project, worktree, $from, to, area, path);
 }
 
+export function DiscardUnstaged(project: string, worktree: string, token: string): $CancellablePromise<void> {
+    return $Call.ByID(1358071133, project, worktree, token);
+}
+
+/**
+ * DraftCommitMessage is an explicit human action. It prepares editable text;
+ * it never stages files, creates commits or holds the mutation lock during AI work.
+ */
+export function DraftCommitMessage(project: string, worktree: string, draft: string): $CancellablePromise<string> {
+    return $Call.ByID(3096709063, project, worktree, draft);
+}
+
 export function Fetch(project: string, worktree: string): $CancellablePromise<void> {
     return $Call.ByID(4144797822, project, worktree);
 }
@@ -76,6 +88,10 @@ export function LastCommitMessage(project: string, worktree: string, expectedHea
     return $Call.ByID(1052261042, project, worktree, expectedHead);
 }
 
+export function PrepareDiscard(project: string, worktree: string): $CancellablePromise<projectgit$0.DiscardPlan> {
+    return $Call.ByID(2827308293, project, worktree);
+}
+
 export function Pull(project: string, worktree: string): $CancellablePromise<void> {
     return $Call.ByID(3070499569, project, worktree);
 }
@@ -88,7 +104,7 @@ export function Snapshot(project: string, worktree: string, ref: string, limit: 
     return $Call.ByID(2633163990, project, worktree, ref, limit);
 }
 
-export function Stage(project: string, worktree: string, paths: string[] | null): $CancellablePromise<void> {
+export function Stage(project: string, worktree: string, paths: string[] | null): $CancellablePromise<projectgit$0.File[] | null> {
     return $Call.ByID(1854711220, project, worktree, paths);
 }
 
@@ -108,6 +124,6 @@ export function Stashes(project: string, worktree: string): $CancellablePromise<
     return $Call.ByID(3500878383, project, worktree);
 }
 
-export function Unstage(project: string, worktree: string, paths: string[] | null): $CancellablePromise<void> {
+export function Unstage(project: string, worktree: string, paths: string[] | null): $CancellablePromise<projectgit$0.File[] | null> {
     return $Call.ByID(576724177, project, worktree, paths);
 }

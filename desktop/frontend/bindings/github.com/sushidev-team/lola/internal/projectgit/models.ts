@@ -35,6 +35,16 @@ export interface Commit {
     "refs": string[] | null;
 }
 
+/**
+ * DiscardPlan pins the index and file contents reviewed in the confirmation.
+ * It is computed on demand, never as part of background repository polling.
+ */
+export interface DiscardPlan {
+    "token": string;
+    "tracked": string[] | null;
+    "untracked": string[] | null;
+}
+
 export interface File {
     "path": string;
     "oldPath": string;

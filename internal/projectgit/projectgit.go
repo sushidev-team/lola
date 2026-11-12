@@ -497,6 +497,16 @@ func (c Client) ChangeIndex(ctx context.Context, dir string, paths []string, sta
 	_, err = c.git(ctx, dir, "", append(args, selected...)...)
 	return err
 }
+
+// ChangeIndexAndStatus returns the authoritative file list without rereading
+// history, refs, worktrees or configuration after a file-only mutation.
+func (c Client) ChangeIndexAndStatus(ctx context.Context, dir string, paths []string, stage bool) ([]File, error) {
+	if err := c.ChangeIndex(ctx, dir, paths, stage); err != nil {
+		return nil, err
+	}
+	return c.status(ctx, dir)
+}
+
 func (c Client) Commit(ctx context.Context, dir, message string) error {
 	return c.commit(ctx, dir, message, "")
 }

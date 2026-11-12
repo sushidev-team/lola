@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick, untrack, onDestroy, type Snippet } from 'svelte';
   import Button from './Button.svelte';
+  import Skeleton from './Skeleton.svelte';
   import MenuItem from './MenuItem.svelte';
   import GitFilePath from './GitFilePath.svelte';
   import ProjectGitStaging from './ProjectGitStaging.svelte';
@@ -18,7 +19,7 @@
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
   import { projectGitState, type ProjectGitState } from '$lib/projectgit.svelte';
-  import { workingGraphConnection, commitGraph, graphColor, graphLabelColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
+  import { folderFirstFiles, workingGraphConnection, commitGraph, graphColor, graphLabelColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
   import { agoPhrase, exactTime } from '$lib/time';
 
   let { project, heading, actions, windowInset = false }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean } = $props();
@@ -64,6 +65,41 @@
     const move = (e: PointerEvent) => setColumnWidth(id, width + e.clientX - start);
     const finish = () => { target.removeEventListener('pointermove', move); target.removeEventListener('lostpointercapture', finish); };
     target.addEventListener('pointermove', move); target.addEventListener('lostpointercapture', finish);
+  }
+  type Sidebar = 'rail' | 'inspector';
+  const sidebarDefaults = {rail:260, inspector:320};
+  function readSidebarWidths() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('lola.git.sidebar-widths') || '{}');
+      return {rail:Number.isFinite(saved.rail) ? Math.max(180,Math.min(480,saved.rail)) : 260, inspector:Number.isFinite(saved.inspector) ? Math.max(240,Math.min(600,saved.inspector)) : 320};
+    } catch { return {...sidebarDefaults}; }
+  }
+  let sidebarWidths = $state(readSidebarWidths());
+  let workbenchWidth = $state(1200);
+  let resizingSidebar = $state<Sidebar | ''>('');
+  const availableWidth = $derived(workbenchWidth || 1200);
+  const railMax = $derived(Math.max(180,Math.min(480,availableWidth - 560)));
+  const railWidth = $derived(Math.min(sidebarWidths.rail,railMax));
+  const inspectorMax = $derived(Math.max(240,Math.min(600,availableWidth - (availableWidth > 950 ? railWidth : 0) - 320)));
+  const inspectorWidth = $derived(Math.min(sidebarWidths.inspector,inspectorMax));
+  function setSidebarWidth(side: Sidebar, width: number) {
+    sidebarWidths = {...sidebarWidths,[side]:Math.round(Math.max(side === 'rail' ? 180 : 240,Math.min(side === 'rail' ? railMax : inspectorMax,width)))};
+    try { localStorage.setItem('lola.git.sidebar-widths',JSON.stringify(sidebarWidths)); } catch { /* retain the current layout */ }
+  }
+  function resizeSidebar(event: PointerEvent, side: Sidebar) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const target = event.currentTarget as HTMLElement, start = event.clientX, width = side === 'rail' ? railWidth : inspectorWidth;
+    target.setPointerCapture(event.pointerId); resizingSidebar = side;
+    const move = (e: PointerEvent) => setSidebarWidth(side,width + (e.clientX - start) * (side === 'rail' ? 1 : -1));
+    const finish = () => { resizingSidebar = ''; target.removeEventListener('pointermove',move); target.removeEventListener('lostpointercapture',finish); };
+    target.addEventListener('pointermove',move); target.addEventListener('lostpointercapture',finish);
+  }
+  function sidebarKey(event: KeyboardEvent, side: Sidebar) {
+    if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const width = side === 'rail' ? railWidth : inspectorWidth;
+    setSidebarWidth(side,event.key === 'Home' ? (side === 'rail' ? 180 : 240) : event.key === 'End' ? (side === 'rail' ? railMax : inspectorMax) : width + (event.key === 'ArrowRight' ? 10 : -10) * (side === 'rail' ? 1 : -1));
   }
   async function openSearch() { searchOpen = true; columnMenu = false; await tick(); searchInput?.focus(); searchInput?.select(); }
   function closeSearch() { searchOpen = false; query = ''; }
@@ -230,6 +266,7 @@
   const git = $derived(projectGitState(project, worktree));
   const configuredPath = $derived(projectGitState(project, '').snapshot?.path ?? '');
   const data = $derived(git.snapshot);
+  const initialLoading = $derived(!data && !git.error);
   const workingCounts = $derived.by(() => {
     const counts = { added: 0, modified: 0, deleted: 0, conflicts: 0 };
     for (const file of data?.files ?? []) {
@@ -271,7 +308,7 @@
   const visible = $derived(search ? commits.filter(c => [c.subject, c.author, c.sha, ...(c.refs ?? [])].some(v => v.toLocaleLowerCase().includes(search))) : commits);
   const currentCommit = $derived(commits.find(c => c.sha === selected[selected.length - 1]));
   const containedBranches = $derived(currentCommit ? branchHistory.get(currentCommit.sha) ?? [] : []);
-  const files = $derived(git.diff?.files ?? []);
+  const files = $derived(folderFirstFiles(git.diff?.files ?? []));
   const file = $derived(files.find(f => f.path === activeFile) ?? files[0]);
   const totals = $derived(files.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
   const diffTitle = $derived(area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${selected[0].slice(0, 8)} → ${selected[1].slice(0, 8)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
@@ -349,6 +386,10 @@
 
 <svelte:window onkeydown={searchKey} onclick={(event) => { if (!(event.target instanceof Element) || !event.target.closest('.column-options')) columnMenu = false; }} />
 
+{#snippet loadingRailRows(count: number)}
+  <div class="rail-skeleton" aria-hidden="true">{#each Array(count) as _, index}<div class="rail-placeholder"><Skeleton width="12px" height="12px"/><Skeleton width={`${[65,80,52,72][index % 4]}%`} height="11px"/></div>{/each}</div>
+{/snippet}
+
 <div class="project-git" class:branch-dragging={!!draggedBranch} data-testid="project-git" bind:this={workspace}>
   <header class="git-toolbar drag" class:window-inset={windowInset} aria-label="Project toolbar">
     <div class="toolbar-heading">{#if heading}{@render heading()}{:else}<strong class="standalone-title">{project}</strong>{/if}</div>
@@ -377,19 +418,22 @@
   {#if data?.operation}<div class="operation-notice" role="status"><Icon name="git-merge" size={16}/><strong>{({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data.operation] ?? 'Git operation'} in progress</strong><span>{['merge','rebase','cherry-pick','revert'].includes(data.operation) ? (!data.files.length && ['cherry-pick','revert'].includes(data.operation) ? 'No changes remain for this commit. Skip it to continue.' : 'Resolve conflicts, stage the files, then continue.') : 'Finish or abort this operation in Git.'}</span>{#if ['merge','rebase','cherry-pick','revert'].includes(data.operation)}<Button size="xs" variant="secondary" disabled={!!git.busy || data.files.some(f => f.conflict)} onclick={() => gitActions.continueOperation()}>Continue</Button>{#if ['rebase','cherry-pick','revert'].includes(data.operation)}<Button size="xs" disabled={!!git.busy} onclick={() => gitActions.skipOperation()}>Skip commit…</Button>{/if}<Button size="xs" disabled={!!git.busy} onclick={() => gitActions.abortOperation()}>Abort…</Button>{/if}</div>{/if}
   {#if git.error}<div class="git-error" role="alert"><Icon name="circle-alert" size={16} /><span>{git.error}</span><Button size="xs" onclick={() => void git.load(ref, limit)}>Refresh</Button></div>{/if}
   </div>
-  <div class="git-workbench" class:rail-open={showRail}>
+  <div class="git-workbench" class:rail-open={showRail} class:resizing={!!resizingSidebar} bind:clientWidth={workbenchWidth} style={`--rail-width:${railWidth}px;--inspector-width:${inspectorWidth}px`}>
+    <Button variant="bare" class="sidebar-resize rail-resize" role="separator" aria-label="Resize repository sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={railMax} aria-valuenow={railWidth} title="Drag to resize · Double-click to reset" onpointerdown={(event) => resizeSidebar(event,'rail')} onkeydown={(event) => sidebarKey(event,'rail')} ondblclick={() => setSidebarWidth('rail',sidebarDefaults.rail)}><span class="sr-only">Resize repository sidebar</span></Button>
+    <Button variant="bare" class="sidebar-resize inspector-resize" role="separator" aria-label="Resize changes sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={inspectorMax} aria-valuenow={inspectorWidth} title="Drag to resize · Double-click to reset" onpointerdown={(event) => resizeSidebar(event,'inspector')} onkeydown={(event) => sidebarKey(event,'inspector')} ondblclick={() => setSidebarWidth('inspector',sidebarDefaults.inspector)}><span class="sr-only">Resize changes sidebar</span></Button>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <nav class="repo-rail" aria-label="Repository navigation" oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext}>
+    <nav class="repo-rail" aria-busy={initialLoading} aria-label="Repository navigation" oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext}>
       <details use:disclosureMotion class="repo-section" open>
-        <summary><Icon name="git-branch" size={16} /><span>Local</span><span class="section-count">{data?.refs?.filter(r => !r.remote).length ?? 0}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
+        <summary><Icon name="git-branch" size={16} /><span>Local</span><span class="section-count">{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data ? data?.refs?.filter(r => !r.remote).length ?? 0 : '—'}{/if}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
         <div class="section-content">
-        {@render branchNodes(localBranches, 'local', 0)}
+        {#if initialLoading}{@render loadingRailRows(5)}{:else}{@render branchNodes(localBranches, 'local', 0)}{/if}
         {#if data && !data.refs?.some(r => !r.remote)}<p class="rail-empty">No local branches yet</p>{/if}
         </div>
       </details>
       <details use:disclosureMotion class="repo-section" open>
-        <summary><Icon name="cloud" size={16} /><span>Remote</span><span class="section-count">{data?.refs?.filter(r => r.remote).length ?? 0}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
+        <summary><Icon name="cloud" size={16} /><span>Remote</span><span class="section-count">{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data ? data?.refs?.filter(r => r.remote).length ?? 0 : '—'}{/if}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
         <div class="section-content">
+        {#if initialLoading}{@render loadingRailRows(4)}{/if}
         {#each remoteGroups as remote (remote.name)}
           <details use:disclosureMotion class="remote-group" open>
             <summary title={remote.repo || remote.host || remote.name} oncontextmenu={(event) => gitActions.openRemote(remote, event)}>
@@ -406,8 +450,9 @@
         </div>
       </details>
       <details use:disclosureMotion class="repo-section" open>
-        <summary><Icon name="layers" size={16} /><span>Worktrees</span><span class="section-count">{data?.worktrees?.length ?? 0}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
+        <summary><Icon name="layers" size={16} /><span>Worktrees</span><span class="section-count">{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data ? data?.worktrees?.length ?? 0 : '—'}{/if}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
         <div class="section-content">
+        {#if initialLoading}{@render loadingRailRows(2)}{/if}
         {#each data?.worktrees ?? [] as tree, index (tree.path)}
           <Button block selected={tree.path === data?.path} disabled={tree.blocked || tree.prunable} class="rail-row worktree-row" aria-label={index === 0 ? `Main checkout ${tree.branch || 'Detached HEAD'}` : `${tree.branch || 'Detached HEAD'} ${tree.path}`} oncontextmenu={(event) => gitActions.openWorktree(tree, event)} title={tree.blocked ? `${tree.path} · managed sandbox; open its session to inspect` : tree.path} onclick={() => chooseWorktree(tree.path === configuredPath ? '' : tree.path)}>
             <Icon name={tree.blocked ? 'shield-check' : 'folder'} size={14} /><span class="tree-copy"><span>{index === 0 ? 'Main checkout' : tree.branch || 'Detached HEAD'}</span>{#if index === 0}<small>{tree.branch || 'Detached HEAD'}</small>{/if}</span>
@@ -416,10 +461,10 @@
         </div>
       </details>
       <details use:disclosureMotion class="repo-section" open>
-        <summary><Icon name="archive" size={16} /><span>Stashes</span><span class="section-count">{git.stashes.length}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
+        <summary><Icon name="archive" size={16} /><span>Stashes</span><span class="section-count">{#if initialLoading || (data && git.stashesState === 'loading')}<Skeleton width="16px" height="12px"/>{:else}{data && git.stashesState === 'ready' ? git.stashes.length : '—'}{/if}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
         <div class="section-content">
           {#each git.stashes as stash (stash.sha)}<Button block class="rail-row stash-row" title={stash.subject} onclick={(event) => gitActions.openStash(stash, event)} oncontextmenu={(event) => gitActions.openStash(stash, event)}><Icon name="archive" size={14} /><span class="truncate">{stash.subject}</span><small>{stash.selector.replace('stash@', '')}</small></Button>{/each}
-          {#if !git.stashes.length}<p class="rail-empty">No saved stashes</p>{/if}
+          {#if initialLoading || (data && git.stashesState === 'loading')}{@render loadingRailRows(1)}{:else if data && !git.stashes.length}<p class="rail-empty">{git.stashesState === 'ready' ? 'No saved stashes' : 'Stashes unavailable'}</p>{/if}
         </div>
       </details>
     </nav>
@@ -445,7 +490,16 @@
               {/each}
             </Button>
           {/if}
-          {#if git.loading && !data}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={20} /><p>Reading repository…</p></div>
+          {#if initialLoading}
+            <div class="history-skeleton" aria-hidden="true">
+              {#each Array(16) as _, index}<div class="history-placeholder">
+                {#each shownColumns as column}<span class="placeholder-cell">
+                  {#if column.id === 'refs'}{#if index % 4 === 0}<Skeleton width={`${index % 8 ? 62 : 82}%`} height="18px"/>{/if}
+                  {:else if column.id === 'graph'}<span class="placeholder-node" style={`margin-left:${GRAPH_NODE_X - 9}px`}><Skeleton width="18px" height="18px"/></span>
+                  {:else}<Skeleton width={`${column.id === 'subject' ? [76,56,88,65,48][index % 5] : column.id === 'author' ? [70,85,60][index % 3] : 65}%`} height="11px"/>{/if}
+                </span>{/each}
+              </div>{/each}
+            </div>
           {:else if !data && git.error}<div class="git-empty"><Icon name="circle-alert" size={24} /><p>Repository unavailable</p><span>Check the error above, then retry to load the repository.</span></div>
           {:else if !visible.length}<div class="git-empty"><Icon name="git-branch" size={24} /><p>{search ? 'No matching commits' : 'No commits yet'}</p><span>{search ? 'Try a message, author, branch, or commit hash.' : 'Stage your files and create the first commit.'}</span></div>
           {:else}
@@ -506,7 +560,7 @@
       {/if}
     </main>
 
-    <aside class="git-inspector" aria-label={selected.length ? 'Commit details' : 'Staging and commit'}>
+    <aside class="git-inspector" aria-busy={initialLoading} aria-label={selected.length ? 'Commit details' : 'Staging and commit'}>
       {#if selected.length}
         <div class="selection-details">
           <div class="inspector-heading"><h3>{area === 'working' ? 'Compare working changes' : selected.length === 2 ? 'Compare commits' : 'Commit'}</h3><code>{selected.at(-1)?.slice(0, 8)}</code></div>
@@ -520,7 +574,7 @@
           <div class="change-totals"><span>{files.length} changed {files.length === 1 ? 'file' : 'files'}</span><span class="text-good">+{totals.add}</span><span class="text-bad">−{totals.del}</span></div>
         </div>
         <div class="changed-file-list">
-          {#each files as f (f.path)}<Button block selected={file?.path === f.path} class="changed-file" title={f.path} aria-label={`${f.path}, +${f.additions} −${f.deletions}`} onclick={() => { activeFile = f.path; diffOpen = true; }}><span class={`file-status ${f.status === 'deleted' ? 'text-bad' : f.status === 'added' ? 'text-good' : 'text-orange'}`}>{({ added: 'A', deleted: 'D', renamed: 'R', modified: 'M' } as Record<string, string>)[f.status ?? ''] ?? 'M'}</span><GitFilePath path={f.path}/><span class="file-delta">+{f.additions} −{f.deletions}</span></Button>{/each}
+          {#each files as f (f.path)}<Button block selected={file?.path === f.path} class="changed-file" title={f.path} aria-label={f.path} onclick={() => { activeFile = f.path; diffOpen = true; }}><span class={`file-status ${f.status === 'deleted' ? 'text-bad' : f.status === 'added' ? 'text-good' : 'text-orange'}`}>{({ added: 'A', deleted: 'D', renamed: 'R', modified: 'M' } as Record<string, string>)[f.status ?? ''] ?? 'M'}</span><GitFilePath path={f.path}/></Button>{/each}
         </div>
         <div class="inspector-bottom"><Button block variant="secondary" disabled={!files.length || git.diffLoading} onclick={() => diffOpen = true}><Icon name="file-text" size={14} />View changes</Button><Button block onclick={working}><Icon name="circle-dot" size={14} />Back to working changes</Button></div>
       {:else}
@@ -537,7 +591,7 @@
     {@const request = newBranch}
     <ProjectGitNewBranch {...request} onClose={() => newBranch = null} onCreated={(createdPath, checkout) => { if (request.git !== git) return; newBranch = null; if (checkout) { chooseWorktree(createdPath === configuredPath ? '' : createdPath); working(); } }} />
   {/if}
-  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || 'Reading repository'}</span><span role="status">{git.busy ? `${({ 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy]}…` : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
+  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || ''}</span><span role="status">{initialLoading ? 'Loading repository…' : git.busy ? `${({ 'prepare-discard': 'Reviewing unstaged changes', discard: 'Discarding unstaged changes', 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy]}…` : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
 </div>
 
 <style>
@@ -559,9 +613,15 @@
   .operation-notice span { flex:1; color:var(--color-ink-2); }
   .git-error { display:flex; align-items:flex-start; gap:8px; padding:10px 14px; color:var(--color-bad); background:color-mix(in srgb,var(--color-bad) 5%,var(--color-panel)); font-size:12px; }
   .git-error span { flex:1; overflow-wrap:anywhere; white-space:pre-wrap; }
-  .git-workbench { grid-row:3; display:grid; grid-template-columns:clamp(220px,20%,280px) minmax(0,1fr) clamp(280px,24%,340px); min-width:0; min-height:0; overflow:hidden; }
+  .git-workbench { position:relative; grid-row:3; display:grid; grid-template-columns:var(--rail-width) minmax(0,1fr) var(--inspector-width); min-width:0; min-height:0; overflow:hidden; }
+  .git-workbench :global(.sidebar-resize) { position:absolute; top:0; bottom:0; z-index:4; width:8px; height:auto; padding:0; border-radius:0; cursor:col-resize; touch-action:none; background:transparent; }
+  .git-workbench :global(.rail-resize) { left:var(--rail-width); transform:translateX(-50%); }
+  .git-workbench :global(.inspector-resize) { right:var(--inspector-width); transform:translateX(50%); }
+  .git-workbench :global(.sidebar-resize:hover),.git-workbench :global(.sidebar-resize:focus-visible) { background:var(--color-accent-fill); box-shadow:inset 0 0 0 1px var(--color-accent); outline:none; }
+  .git-workbench.resizing { cursor:col-resize; user-select:none; }
+  .git-workbench.resizing :global(*) { cursor:col-resize; user-select:none; }
   .repo-rail { min-height:0; overflow:auto; border-right:1px solid var(--color-edge); background:var(--color-canvas); padding:0 0 8px; }
-  .repo-rail :global(.rail-row) { height:28px; gap:7px; font-size:13px; border-radius:0; text-align:left; font-weight:400; min-width:0; }
+  .repo-rail :global(.rail-row) { transition:none; height:28px; gap:7px; font-size:13px; border-radius:0; text-align:left; font-weight:400; min-width:0; }
   .repo-rail :global(.rail-row:not([aria-pressed="true"])) { color:var(--color-ink-2); }
   .repo-rail :global(.rail-row > svg) { flex-shrink:0; }
   .repo-rail :global(.branch-folder) { gap:6px; font-size:13px; }
@@ -582,6 +642,12 @@
   .repo-section > summary > :global(.git-disclosure-chevron) { color:var(--color-faint); }
   .section-count { margin-left:auto; min-width:21px; padding:1px 5px; border-radius:4px; background:var(--color-canvas); color:var(--color-ink-2); font-size:12px; font-weight:500; text-align:center; font-variant-numeric:tabular-nums; }
   .section-content { padding:4px 0 0; }
+  .rail-placeholder { display:flex; align-items:center; gap:9px; height:28px; padding:0 12px; }
+  .rail-placeholder > :global(.skeleton:first-child) { flex-shrink:0; }
+  .history-placeholder { height:34px; align-items:center; border-bottom:1px solid color-mix(in srgb,var(--color-edge) 20%,transparent); }
+  .placeholder-cell { display:flex; align-items:center; min-width:0; }
+  .placeholder-node { display:block; flex-shrink:0; border-radius:50%; overflow:hidden; }
+  .history-skeleton { mask-image:linear-gradient(to bottom,#000 65%,transparent); }
   .rail-empty { color:var(--color-faint); font-size:12px; line-height:1.6; padding:6px 10px; }
   .repo-rail :global(.worktree-row) { padding:3px 12px; height:28px; min-height:28px; align-items:center; }
   .repo-rail :global(.branch-drop-target),.branch-drop-target { outline:2px solid var(--color-accent); outline-offset:-2px; background:var(--color-accent-fill); }
@@ -616,15 +682,15 @@
   .working-stat.modified { color:var(--color-orange); }
   .working-stat.added { color:var(--color-good); }
   .working-stat.deleted { color:var(--color-bad); }
-  .working-open { display:flex; align-items:center; gap:4px; margin-left:auto; font-size:12px; color:var(--color-accent-ink); opacity:0; transition:opacity 120ms ease-out; }
+  .working-open { --cue-bg:color-mix(in srgb,var(--color-accent) 12%,var(--color-panel)); position:relative; z-index:1; display:flex; flex-shrink:0; align-items:center; gap:4px; margin-left:auto; padding:2px 6px; border-radius:4px; background:var(--cue-bg); box-shadow:0 0 6px 3px var(--cue-bg); font-size:12px; color:var(--color-accent-ink); opacity:0; transition:opacity 120ms ease-out; }
   :global(.working-row:hover) .working-open,:global(.working-row:focus-visible) .working-open { opacity:1; }
   @media (prefers-reduced-motion:reduce) { .working-open { transition:none; } }
   .working-count { font-size:12px; color:var(--color-faint); font-variant-numeric:tabular-nums; }
   .history-list { overflow:auto; min-height:0; min-width:0; }
-  .history-columns,.history-list :global(.commit-row) { display:grid; grid-template-columns:var(--columns); gap:10px; min-width:var(--table-width); width:100%; padding:0 12px 0 8px; }
+  .history-columns,.history-placeholder,.history-list :global(.commit-row) { display:grid; grid-template-columns:var(--columns); gap:10px; min-width:var(--table-width); width:100%; padding:0 12px 0 8px; }
   .history-columns { position:sticky; top:0; z-index:2; align-items:center; height:26px; color:var(--color-ink-2); font-size:12px; background:var(--color-canvas); border-bottom:1px solid var(--color-edge); }
   .column-heading > span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-  .history-list :global(.commit-row) { height:34px; border-radius:0; text-align:left; border-bottom:1px solid color-mix(in srgb,var(--color-edge) 35%,transparent); font-weight:400; --lane-tint:color-mix(in srgb,var(--lane-color) 7%,var(--color-panel)); background:transparent; }
+  .history-list :global(.commit-row) { transition:none; height:34px; border-radius:0; text-align:left; border-bottom:1px solid color-mix(in srgb,var(--color-edge) 35%,transparent); font-weight:400; --lane-tint:color-mix(in srgb,var(--lane-color) 7%,var(--color-panel)); background:transparent; }
   .history-list :global(.commit-row.lane-traced) { --lane-tint:color-mix(in srgb,var(--lane-color) 13%,var(--color-panel)); }
   .history-list :global(.commit-row:hover) { --lane-tint:color-mix(in srgb,var(--lane-color) 18%,var(--color-panel)); }
   .history-list :global(.commit-row:not(.working-row):not(.commit-selected):hover),.history-list :global(.commit-row:not(.working-row):not(.commit-selected):focus-visible) { background:linear-gradient(to right,transparent var(--details-offset),var(--color-sel) var(--details-offset)); }
@@ -651,7 +717,7 @@
   .checkout-marker small { font-size:11px; font-variant-numeric:tabular-nums; line-height:16px; }
   .commit-author { color:var(--color-faint); font-size:12px; min-width:0; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; }
   .commit-sha { color:var(--color-faint); font-family:var(--font-mono); font-size:12px; }
-  code,.working-count,.section-count,.rail-count,.commit-sha,.commit-time,.extra-refs,.checkout-marker small,.file-delta,.history-find > span,.commit-person small[title] { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+  code,.working-count,.section-count,.rail-count,.commit-sha,.commit-time,.extra-refs,.checkout-marker small,.history-find > span,.commit-person small[title] { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
   .repo-rail :global(.stash-row small) { font-family:var(--font-mono); }
   .change-totals > .text-good,.change-totals > .text-bad { font-family:var(--font-mono); }
   .commit-time { color:var(--color-faint); font-size:12px; min-width:0; text-align:right; }
@@ -703,7 +769,6 @@
   .change-totals > span:first-child { margin-right:auto; color:var(--color-ink-2); }
   .changed-file-list { padding:6px; overflow:auto; min-height:0; }
   .changed-file-list :global(.changed-file) { min-height:28px; height:auto; text-align:left; gap:7px; padding:5px 7px; }
-  .file-delta { font-size:12px; color:var(--color-faint); }
   .inspector-bottom { display:grid; gap:5px; padding:10px; border-top:1px solid var(--color-edge); }
   .compare-endpoints { display:flex; align-items:center; gap:10px; padding:12px 14px 0; }
   .compare-endpoints > span { display:flex; gap:6px; align-items:center; font-size:12px; }
@@ -715,8 +780,8 @@
   .repo-path { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:0; }
   .git-status > span:last-child { flex-shrink:0; }
   :global(.rail-toggle) { display:none; }
-  @container (max-width:1150px) { .git-workbench { grid-template-columns:220px minmax(0,1fr) 280px; } .git-action-label { display:none; } .toolbar-actions :global(button) { width:28px; padding:0; } .toolbar-actions :global(.push-action) { width:30px; padding:0; } }
+  @container (max-width:1150px) { .git-action-label { display:none; } .toolbar-actions :global(button) { width:28px; padding:0; } .toolbar-actions :global(.push-action) { width:30px; padding:0; } }
   @container (max-width:760px) { .git-toolbar { grid-template-columns:auto minmax(0,1fr) auto; } .toolbar-heading :global(.project-title) { display:none; } .toolbar-actions { gap:2px; } .toolbar-actions :global(.refresh-action) { display:none; } .operation-notice { flex-wrap:wrap; } }
-  @container (max-width:950px) { .git-workbench { grid-template-columns:minmax(0,1fr) 280px; position:relative; } .repo-rail { display:none; } .rail-open .repo-rail { display:block; position:absolute; inset:0 auto 0 0; width:280px; z-index:10; box-shadow:8px 0 20px #0002; } :global(.rail-toggle) { display:inline-flex; } }
-  @container (max-width:580px) { .git-workbench { grid-template-columns:minmax(0,1fr); overflow:auto; grid-template-rows:max-content max-content; align-content:start; } .history-stage { height:330px; min-height:330px; } .history-stage.with-diff { height:550px; min-height:550px; } .git-inspector { height:620px; border-left:0; border-top:1px solid var(--color-edge); min-height:0; grid-template-rows:auto auto auto; align-content:start; } .changed-file-list { overflow:visible; } .git-toolbar { gap:4px; padding-inline:8px; } .git-toolbar.window-inset { padding-left:82px; } .toolbar-divider { margin-inline:0; } .git-status > span:last-child { max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } }
+  @container (max-width:950px) { .git-workbench { grid-template-columns:minmax(0,1fr) var(--inspector-width); position:relative; } .repo-rail { display:none; } .git-workbench :global(.rail-resize) { display:none; } .rail-open .repo-rail { display:block; position:absolute; inset:0 auto 0 0; width:280px; z-index:10; box-shadow:8px 0 20px #0002; } :global(.rail-toggle) { display:inline-flex; } }
+  @container (max-width:580px) { .git-workbench :global(.sidebar-resize) { display:none; } .git-workbench { grid-template-columns:minmax(0,1fr); overflow:auto; grid-template-rows:max-content max-content; align-content:start; } .history-stage { height:330px; min-height:330px; } .history-stage.with-diff { height:550px; min-height:550px; } .git-inspector { height:620px; border-left:0; border-top:1px solid var(--color-edge); min-height:0; grid-template-rows:auto auto auto; align-content:start; } .changed-file-list { overflow:visible; } .git-toolbar { gap:4px; padding-inline:8px; } .git-toolbar.window-inset { padding-left:82px; } .toolbar-divider { margin-inline:0; } .git-status > span:last-child { max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } }
 </style>

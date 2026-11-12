@@ -7,6 +7,34 @@ const snapshot = (branch: string) => ({ path: '/repo', branch, head: 'a', upstre
 beforeEach(() => { Object.values(api).forEach(fn => fn.mockReset()); api.Stashes.mockResolvedValue([]); api.Snapshot.mockResolvedValue(snapshot('main')); api.CachedIdentities.mockResolvedValue({ authors: {}, remoteAvatars: {} }); api.Identities.mockResolvedValue({ authors: {} }); });
 
 describe('Project Git request and operation ownership', () => {
+  it('stages and unstages with authoritative file updates without reloading history or identities',async()=>{
+    const state=new ProjectGitState('lola','/tree');await state.load('refs/heads/main',400);
+    const commits=state.snapshot!.commits,refs=state.snapshot!.refs;
+    const staged=[{path:'a.ts',oldPath:'',index:'A',worktree:' ',untracked:false,conflict:false}];
+    api.Stage.mockResolvedValue(staged);api.Unstage.mockResolvedValue([{...staged[0],index:'?',worktree:'?',untracked:true}]);
+    api.Snapshot.mockClear();api.Stashes.mockClear();api.CachedIdentities.mockClear();api.Identities.mockClear();
+    expect(await state.act('stage',['a.ts'],'refs/heads/main',400)).toBe(true);
+    expect(state.snapshot!.files).toEqual(staged);expect(state.snapshot!.commits).toBe(commits);expect(state.snapshot!.refs).toBe(refs);
+    expect(await state.act('unstage',['a.ts'],'refs/heads/main',400)).toBe(true);expect(state.snapshot!.files[0].untracked).toBe(true);
+    expect(api.Snapshot).not.toHaveBeenCalled();expect(api.Stashes).not.toHaveBeenCalled();expect(api.CachedIdentities).not.toHaveBeenCalled();expect(api.Identities).not.toHaveBeenCalled();expect(state.busy).toBe('');
+  });
+  it('does not let an overlapping history refresh undo the returned index state',async()=>{
+    const state=new ProjectGitState('lola','');await state.load();
+    const old=deferred<ReturnType<typeof snapshot>>();api.Snapshot.mockReturnValueOnce(old.promise);
+    const loading=state.load();
+    const files=[{path:'a.ts',oldPath:'',index:'A',worktree:' ',untracked:false,conflict:false}];api.Stage.mockResolvedValue(files);
+    await state.act('stage',['a.ts']);old.resolve({...snapshot('new-branch'),files:[]});await loading;
+    expect(state.snapshot!.branch).toBe('new-branch');expect(state.snapshot!.files).toEqual(files);
+  });
+  it('keeps the index action locked until its status arrives and reconciles partial failures',async()=>{
+    const state=new ProjectGitState('lola','');await state.load();state.message='Preserve draft';
+    const pending=deferred<[]>();api.Stage.mockReturnValueOnce(pending.promise);
+    const operation=state.act('stage',['a']);expect(state.busy).toBe('stage');expect(await state.act('unstage',['a'])).toBe(false);
+    pending.resolve([]);await operation;
+    api.Stage.mockRejectedValueOnce(new Error('Clean filter failed'));api.Snapshot.mockClear();
+    expect(await state.act('stage',['a'],'refs/heads/main',400)).toBe(false);
+    expect(api.Snapshot).toHaveBeenCalledWith('lola','','refs/heads/main',400);expect(state.error).toContain('Clean filter failed');expect(state.message).toBe('Preserve draft');
+  });
   it('serializes worktree creation, preserves the view, and refreshes failed post-checkout facts', async () => {
     const state=new ProjectGitState('lola','/tree');
     const pending=deferred<{path:string}>();api.CreateWorktree.mockReturnValueOnce(pending.promise);

@@ -5,11 +5,12 @@
   import { disclosureSlide } from '$lib/disclosureMotion';
   import GitFilePath from './GitFilePath.svelte';
   import Button from './Button.svelte';
+  import Skeleton from './Skeleton.svelte';
   import Checkbox from './Checkbox.svelte';
   import Icon from './Icon.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import type { ProjectGitState } from '$lib/projectgit.svelte';
-  import { stagedFiles, unstagedFiles, type GitArea, type GitFile } from '$lib/projectgit';
+  import { folderFirstFiles, stagedFiles, unstagedFiles, type GitArea, type GitFile } from '$lib/projectgit';
 
   let { git, path = '', area = '', ref = '', limit = 200, oninspect, onact, oncommitted, oncontextfile }: {
     git: ProjectGitState; path?: string; area?: GitArea | ''; ref?: string; limit?: number;
@@ -22,11 +23,12 @@
   let mounted = true;
   onDestroy(() => { mounted = false; });
   const data = $derived(git.snapshot);
-  const staged = $derived(stagedFiles(data?.files ?? []));
-  const unstaged = $derived(unstagedFiles(data?.files ?? []));
+  const initialLoading = $derived(!data && !git.error);
+  const staged = $derived(folderFirstFiles(stagedFiles(data?.files ?? [])));
+  const unstaged = $derived(folderFirstFiles(unstagedFiles(data?.files ?? [])));
   const conflicts = $derived((data?.files ?? []).some(file => file.conflict));
   const amendStale = $derived(git.amend && !!data && git.amendHead !== data.head);
-  const canCommit = $derived(staged.length > 0 && !!git.subject.trim() && !conflicts && !git.busy && !data?.operation && !git.amendLoading && (!git.amend || (!!git.amendHead && !!data?.head && !amendStale)));
+  const canCommit = $derived(staged.length > 0 && !!git.subject.trim() && !conflicts && !git.busy && !git.draftingMessage && !data?.operation && !git.amendLoading && (!git.amend || (!!git.amendHead && !!data?.head && !amendStale)));
   const groups = $derived([{ title: 'Unstaged', entries: unstaged, staged: false }, { title: 'Staged', entries: staged, staged: true }]);
   let tree = $state(readTree());
   let collapsed = $state(new Set<string>());
@@ -109,6 +111,24 @@
   function toggle(key: string) { const next = new Set(collapsed); if (next.has(key)) next.delete(key); else next.add(key); collapsed = next; }
   function folders(entries: GitFile[], prefix: string) { return [...new Set(entries.map(file => file.path.slice(prefix.length)).filter(path => path.includes('/')).map(path => path.slice(0, path.indexOf('/'))))].sort((a,b) => a.localeCompare(b)); }
   function status(file: GitFile, staged: boolean) { return file.conflict ? '!' : file.untracked ? '+' : (staged ? file.index : file.worktree).trim() || 'M'; }
+  async function discardAll() {
+    if (git.busy || !unstaged.length || conflicts || data?.operation) return;
+    const state = git, historyRef = ref, count = limit, branch = data?.branch || 'detached HEAD';
+    const plan = await state.prepareDiscard();
+    if (!plan || !mounted || state !== git) return;
+    const total = plan.tracked.length + plan.untracked.length;
+    if (!total) { await state.load(historyRef, count); return; }
+    confirm.ask({
+      title: 'Discard all unstaged changes?',
+      body: `Discard changes in ${total} ${total === 1 ? 'file' : 'files'} on ${branch}?`,
+      detail: [plan.tracked.length ? `Restore ${plan.tracked.length} tracked ${plan.tracked.length === 1 ? 'file' : 'files'} to the staged version.` : '', plan.untracked.length ? `Permanently delete ${plan.untracked.length} untracked ${plan.untracked.length === 1 ? 'file' : 'files'}.` : '', 'Staged changes and ignored files are kept. This cannot be undone.'].filter(Boolean).join(' '),
+      confirmLabel: 'Discard changes',
+      onConfirm: () => {
+        if (!mounted || state !== git) return;
+        void state.discardUnstaged(plan.token, historyRef, count);
+      },
+    });
+  }
   async function commit(state: ProjectGitState, amend: boolean, head: string, branch: string, count: number) {
     const ok = await state.act(amend ? 'amend' : 'commit', [], branch, count, head);
     if (ok && state === git) oncommitted();
@@ -139,7 +159,7 @@
       <span class={`file-status ${entry.conflict ? 'text-bad' : entry.untracked ? 'text-good' : 'text-orange'}`}>{status(entry, staged)}</span>
       <GitFilePath path={entry.path} leafOnly={tree}/>
     </Button>
-    <Button size="xs" class={staged ? 'stage-action unstage-action' : 'stage-action'} disabled={!!git.busy} aria-label={targets.length > 1 ? `${staged ? 'Unstage' : 'Stage'} ${targets.length} selected files` : `${staged ? 'Unstage' : 'Stage'} ${entry.path}`} onclick={() => onact(staged ? 'unstage' : 'stage', targets)}><Icon name={staged ? 'minus' : 'plus'} size={13} />{staged ? 'Unstage' : 'Stage'} {targets.length > 1 ? `${targets.length} files` : 'file'}</Button>
+    <Button size="xs" class={staged ? 'stage-action unstage-action' : 'stage-action'} disabled={!!git.busy} aria-label={targets.length > 1 ? `${staged ? 'Unstage' : 'Stage'} ${targets.length} selected files` : `${staged ? 'Unstage' : 'Stage'} ${entry.path}`} onclick={() => onact(staged ? 'unstage' : 'stage', targets)}>{staged ? 'Unstage' : 'Stage'} {targets.length > 1 ? `${targets.length} files` : 'file'}</Button>
   </div>
 {/snippet}
 
@@ -156,22 +176,24 @@
 {/snippet}
 
 <div class="staging-panel">
-  <div class="inspector-heading"><h3>Changes <span>{data?.files?.length ?? 0}</span></h3><div class="view-switch" role="group" aria-label="Changed file layout"><Button size="xs" icon selected={!tree} aria-label="File list view" title="File list" onclick={() => setTree(false)}><Icon name="list" size={14} /></Button><Button size="xs" icon selected={tree} aria-label="File tree view" title="File tree" onclick={() => setTree(true)}><Icon name="folder" size={14} /></Button></div></div>
+  <div class="inspector-heading"><h3>Changes <span>{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data?.files.length ?? '—'}{/if}</span></h3><div class="view-switch" role="group" aria-label="Changed file layout"><Button size="xs" icon selected={!tree} aria-label="File list view" title="File list" onclick={() => setTree(false)}><Icon name="list" size={14} /></Button><Button size="xs" icon selected={tree} aria-label="File tree view" title="File tree" onclick={() => setTree(true)}><Icon name="folder" size={14} /></Button></div><Button size="xs" icon variant="danger" class="discard-all" aria-label="Discard all unstaged changes" title={data?.operation || conflicts ? 'Finish the current operation before discarding changes' : 'Discard all unstaged changes…'} disabled={!unstaged.length || !!git.busy || !!data?.operation || conflicts} loading={git.busy === 'prepare-discard' || git.busy === 'discard'} onclick={() => void discardAll()}><Icon name="trash-2" size={14} /></Button></div>
   <div class="staging-files">
     {#each groups as group (group.title)}
       <section class="stage-group" aria-label={`${group.title} files`}>
-        <div class="stage-heading"><h4>{group.title}<span>{group.entries.length}</span></h4><div class="stage-group-actions">{#if selectedPaths(group.staged).length}<Button size="xs" class={group.staged ? 'unstage-selected' : 'stage-selected'} disabled={!!git.busy} aria-label={`${group.staged ? 'Unstage' : 'Stage'} ${selectedPaths(group.staged).length} selected files`} onclick={() => onact(group.staged ? 'unstage' : 'stage', selectedPaths(group.staged))}>{group.staged ? 'Unstage' : 'Stage'} {selectedPaths(group.staged).length}</Button>{/if}<Button size="xs" class={group.staged ? 'unstage-all' : 'stage-all'} disabled={!group.entries.length || !!git.busy} onclick={() => onact(group.staged ? 'unstage' : 'stage', group.entries.map(file => file.path))}>{group.staged ? 'Unstage all' : 'Stage all'}</Button></div></div>
+        <div class="stage-heading"><h4>{group.title}<span>{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data ? group.entries.length : '—'}{/if}</span></h4><div class="stage-group-actions">{#if selectedPaths(group.staged).length}<Button size="xs" class={group.staged ? 'unstage-selected' : 'stage-selected'} disabled={!!git.busy} aria-label={`${group.staged ? 'Unstage' : 'Stage'} ${selectedPaths(group.staged).length} selected files`} onclick={() => onact(group.staged ? 'unstage' : 'stage', selectedPaths(group.staged))}>{group.staged ? 'Unstage' : 'Stage'} {selectedPaths(group.staged).length}</Button>{/if}<Button size="xs" class={group.staged ? 'unstage-all' : 'stage-all'} disabled={!group.entries.length || !!git.busy} onclick={() => onact(group.staged ? 'unstage' : 'stage', group.entries.map(file => file.path))}>{group.staged ? 'Unstage all' : 'Stage all'}</Button></div></div>
         <div class="stage-scroll">
+          {#if initialLoading}<div class="files-skeleton" aria-hidden="true">{#each Array(group.staged ? 3 : 7) as _, index}<div class="file-placeholder"><Skeleton width="12px" height="12px"/><Skeleton width={`${[85,66,76,58][index % 4]}%`} height="12px"/></div>{/each}</div>{/if}
           {#if tree}{@render fileTree(group.entries, group.staged)}{:else}{#each group.entries as entry (entry.path)}{@render fileRow(entry, group.staged, 0)}{/each}{/if}
-          {#if !group.entries.length}<p class="stage-empty">{group.staged ? 'Stage files to include in your commit.' : 'No unstaged changes.'}</p>{/if}
+          {#if data && !group.entries.length}<p class="stage-empty">{group.staged ? 'Stage files to include in your commit.' : 'No unstaged changes.'}</p>{/if}
         </div>
       </section>
     {/each}
   </div>
   <form class="commit-composer" onsubmit={submit}>
-    <label for={`${id}-subject`}>Commit message</label>
-    <input id={`${id}-subject`} aria-label="Commit subject" placeholder={git.amendLoading ? 'Loading last commit…' : 'Summary'} bind:value={git.subject} disabled={!!git.busy} maxlength="1000" />
-    <textarea aria-label="Commit body" placeholder="Description (optional)" rows="3" bind:value={git.body} disabled={!!git.busy} maxlength="19000"></textarea>
+    <div class="composer-heading"><label for={`${id}-subject`}>Commit message</label><Button size="xs" variant="accent" loading={git.draftingMessage} disabled={!data || !staged.length || conflicts || !!data.operation || !!git.busy || git.draftingMessage} title="Draft a message from staged changes using Claude Haiku" aria-label="Generate commit message with AI" onclick={() => void git.draftCommitMessage()}><Icon name="sparkles" size={13}/>{git.draftingMessage ? 'Drafting…' : 'AI draft'}</Button></div>
+    {#if git.draftError}<p class="draft-error" role="alert">{git.draftError}</p>{/if}
+    <input id={`${id}-subject`} aria-label="Commit subject" placeholder={git.amendLoading ? 'Loading last commit…' : 'Summary'} bind:value={git.subject} disabled={!!git.busy || !data} maxlength="1000" />
+    <textarea aria-label="Commit body" placeholder="Description (optional)" rows="3" bind:value={git.body} disabled={!!git.busy || !data} maxlength="19000"></textarea>
     <div class="commit-options"><label class="amend-option"><Checkbox checked={git.amend} onchange={(event) => void git.setAmend(event.currentTarget.checked)} disabled={!!git.busy || !!data?.operation || !data?.head} /><span>Amend last commit</span>{#if git.amend && git.amendHead}<code>{git.amendHead.slice(0, 8)}</code>{/if}</label><Button size="xs" icon class="signing-icon" aria-label={signingLabel} {...signingTooltip}><Icon name={data?.signing?.enabled ? 'shield-check' : 'info'} size={14} /></Button></div>
     {#if data?.operation}<p class="conflict-note">Resolve and stage conflicts, then use Continue above to finish the {data.operation}.</p>{/if}
     {#if amendStale}<p class="conflict-note" role="alert">HEAD changed since you selected Amend. Turn Amend off, review the last commit, then enable it again.</p>{/if}
@@ -182,12 +204,14 @@
 
 <style>
   .staging-panel { grid-row:1 / -1; display:grid; grid-template-rows:auto minmax(140px,1fr) auto; min-height:0; min-width:0; overflow:auto; }
-  .inspector-heading { display:flex; align-items:center; justify-content:space-between; min-height:36px; padding:4px 10px; border-bottom:1px solid var(--color-edge); }
+  .inspector-heading { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; min-height:36px; padding:4px 10px; border-bottom:1px solid var(--color-edge); }
   .inspector-heading h3 { display:flex; gap:8px; align-items:center; font-size:14px; font-weight:600; }
   .inspector-heading h3 span { font-size:12px; font-weight:400; color:var(--color-ink-2); }
   .inspector-heading h3 span,.stage-heading h4 span,.amend-option code { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
   .staging-panel :global(.file-folder > small) { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
   .view-switch { display:flex; gap:2px; }
+  .inspector-heading :global(.discard-all) { justify-self:end; color:var(--color-bad); border:1px solid var(--color-bad); background:color-mix(in srgb,var(--color-bad) 16%,var(--color-canvas)); }
+  .inspector-heading :global(.discard-all:enabled:hover) { background:color-mix(in srgb,var(--color-bad) 28%,var(--color-canvas)); }
   .staging-files { display:grid; grid-template-rows:minmax(60px,1fr) minmax(60px,1fr); min-height:0; }
   .stage-group { display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; }
   .stage-group + .stage-group { border-top:1px solid var(--color-edge); }
@@ -197,16 +221,15 @@
   .stage-scroll { overflow:auto; padding:0 5px 5px; min-height:0; }
   .stage-file { position:relative; display:flex; align-items:center; min-width:0; }
   .stage-group-actions { display:flex; gap:2px; align-items:center; }
-  .staging-panel :global(.stage-all),.staging-panel :global(.stage-selected) { color:var(--color-good); }
-  .stage-file :global(.stage-action) { position:absolute; right:0; top:2px; height:24px; opacity:0; pointer-events:none; border:1px solid var(--color-good); background:var(--color-canvas); color:var(--color-good); font-size:12px; font-weight:600; transition:opacity 120ms ease-out,background-color 120ms ease-out; }
+  .staging-panel :global(.stage-all),.staging-panel :global(.stage-selected),.staging-panel :global(.unstage-all),.staging-panel :global(.unstage-selected),.stage-file :global(.stage-action) { --stage-color:var(--color-good); color:white; border:1px solid var(--stage-color); background:color-mix(in srgb,var(--stage-color) 35%,#14171f); font-weight:600; transition:none; }
+  .staging-panel :global(.unstage-all),.staging-panel :global(.unstage-selected),.stage-file :global(.unstage-action) { --stage-color:var(--color-bad); }
+  .staging-panel :global(.stage-all:enabled:hover),.staging-panel :global(.stage-selected:enabled:hover),.staging-panel :global(.unstage-all:enabled:hover),.staging-panel :global(.unstage-selected:enabled:hover),.stage-file :global(.stage-action:enabled:hover) { color:white; background:color-mix(in srgb,var(--stage-color) 45%,#14171f); }
+  .stage-file :global(.stage-action) { position:absolute; right:0; top:2px; height:24px; opacity:0; pointer-events:none; font-size:12px; font-weight:600; transition:none; }
   .stage-file:hover :global(.stage-action),.stage-file:focus-within :global(.stage-action) { opacity:1; pointer-events:auto; }
-  .stage-file :global(.stage-action:hover:not(:disabled)) { background:color-mix(in srgb,var(--color-good) 14%,var(--color-canvas)); }
-  .stage-file :global(.unstage-action) { color:var(--color-ink-2); border-color:var(--color-edge); }
-  .stage-file :global(.unstage-action:hover:not(:disabled)) { background:var(--color-panel); }
   .commit-options { display:flex; align-items:center; gap:6px; }
   .commit-options .amend-option { flex:1; min-width:0; }
   .commit-options :global(.signing-icon) { margin-left:auto; color:var(--color-ink-2); }
-  .stage-file :global(.stage-file-main) { flex:1; height:28px; gap:7px; text-align:left; min-width:0; padding:3px 5px; font-weight:400; }
+  .stage-file :global(.stage-file-main) { transition:none; flex:1; height:28px; gap:7px; text-align:left; min-width:0; padding:3px 5px; font-weight:400; }
   .stage-file :global(.stage-file-main:not([aria-pressed="true"])) { color:var(--color-ink-2); }
   .file-status { width:12px; flex-shrink:0; text-align:center; font-family:var(--font-mono); font-size:12px; }
   :global(.file-folder) { height:28px; gap:5px; font-size:13px; font-weight:400; }
@@ -214,8 +237,12 @@
   .staging-panel :global(.file-folder > small) { margin-left:auto; font-size:12px; color:var(--color-ink-2); }
   :global(.folder-chevron) { transition:transform 160ms ease-out; }
   :global(.folder-chevron.collapsed) { transform:rotate(-90deg); }
+  .file-placeholder { display:flex; align-items:center; gap:7px; height:28px; padding:3px 5px; }
+  .file-placeholder > :global(.skeleton:first-child) { flex-shrink:0; }
   .stage-empty { padding:6px 6px 12px; font-size:13px; color:var(--color-ink-2); line-height:1.6; }
   .commit-composer { display:grid; gap:7px; padding:10px; border-top:1px solid var(--color-edge); }
+  .composer-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .draft-error { color:var(--color-bad); font-size:12px; line-height:1.5; }
   .commit-composer label { font-size:13px; font-weight:500; }
   .commit-composer input,.commit-composer textarea { min-width:0; width:100%; border:1px solid var(--color-edge); border-radius:5px; padding:7px 9px; background:var(--color-panel); color:var(--color-ink); font-size:13px; line-height:1.5; outline:none; }
   .commit-composer textarea { resize:vertical; min-height:64px; max-height:140px; }

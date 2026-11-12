@@ -6,6 +6,7 @@ export type {
     BranchRequest,
     BranchResult,
     Commit,
+    DiscardPlan,
     File,
     Identities,
     Ref,
