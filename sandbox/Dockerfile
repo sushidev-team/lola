@@ -48,13 +48,15 @@ FROM alpine:${ALPINE_VERSION}
 ARG LOLA_VERSION=dev
 ARG CLAUDE_VERSION=2.1.311
 LABEL org.opencontainers.image.title="lola-sandbox" \
-      org.opencontainers.image.description="Default container for lola's sandboxed coding agents: claude, git, gh, ripgrep" \
+      org.opencontainers.image.description="Default container for lola's sandboxed coding agents: claude, git, gh, ripgrep, node, npm" \
       org.opencontainers.image.source="https://github.com/sushidev-team/lola" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${LOLA_VERSION}" \
       dev.sushi.lola.claude-version="${CLAUDE_VERSION}"
-# libgcc + libstdc++: claude's musl build links them dynamically.
-RUN apk add --no-cache bash ca-certificates curl git github-cli libgcc libstdc++ openssh-client ripgrep \
+# libgcc + libstdc++: claude's musl build links them dynamically. nodejs + npm:
+# most projects need them to install, test and lint; a project with another
+# toolchain sets its own sandbox_image.
+RUN apk add --no-cache bash ca-certificates curl git github-cli libgcc libstdc++ nodejs npm openssh-client ripgrep \
  && adduser -D -u 1000 -h /home/lola -s /bin/bash lola
 COPY sandbox/gitconfig /etc/gitconfig
 COPY --from=claude /claude /usr/local/bin/claude
