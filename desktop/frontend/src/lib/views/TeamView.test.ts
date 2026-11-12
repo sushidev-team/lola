@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 
-const { Status, Board, Org, Claim, Release, Sync } = vi.hoisted(() => ({
+const { Status, Board, Org, Claim, Release, Sync, HubProjects } = vi.hoisted(() => ({
+  HubProjects: vi.fn(),
   Status: vi.fn(),
   Board: vi.fn(),
   Org: vi.fn(),
@@ -13,6 +14,7 @@ const { Status, Board, Org, Claim, Release, Sync } = vi.hoisted(() => ({
 vi.mock("@bindings/desktop", async (orig) => ({
   ...(await orig<object>()),
   HubService: { Status, Board, Org, Claim, Release, Sync, Join: vi.fn(), Leave: vi.fn(), DefaultDeviceName: vi.fn(), Kinds: vi.fn() },
+  ConfigService: { HubProjects: () => HubProjects() },
 }));
 
 import TeamView from "./TeamView.svelte";
@@ -47,6 +49,7 @@ beforeEach(() => {
   confirm.cancel();
   for (const f of [Status, Board, Org, Claim, Release, Sync]) f.mockReset();
   Status.mockResolvedValue({ ...joined });
+  HubProjects.mockReset().mockResolvedValue([{ name: "web", hubChores: true }]);
   Board.mockResolvedValue({ fetchedAt: "", items: [open1, openMany, blocked, mine, theirs, done, escalated] });
   Org.mockResolvedValue({ fetchedAt: "", org: "acme", policyVersion: 1, devices: [
     { name: "studio-mac", me: true, freeSlots: 2, agents: ["claude"], active: true },
@@ -170,5 +173,12 @@ describe("TeamView", () => {
     Status.mockResolvedValue({ ...joined, lastHeartbeat: new Date(Date.now() + 60_000).toISOString() });
     expect(await screen.findByRole("button", { name: "Synced" }, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.queryByText("Sync queued.")).not.toBeInTheDocument();
+  });
+
+  it("points to the project list when no project takes chores", async () => {
+    HubProjects.mockResolvedValue([{ name: "web", hubChores: false }]);
+    render(TeamView);
+    expect(await screen.findByText("No project on this Mac takes chores yet.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Choose projects" })).toBeInTheDocument();
   });
 });

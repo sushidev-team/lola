@@ -35,10 +35,16 @@
     severityLabel,
   } from "$lib/hubboard";
   import type { HubBoardItem } from "@bindings/internal/protocol";
+  import { ConfigService } from "@bindings/desktop";
 
   let release: (() => void) | null = null;
+  /** Projects that take chores on this Mac; null = not read (or unreadable). */
+  let choreProjects = $state<number | null>(null);
   onMount(() => {
     release = hub.watch({ board: true });
+    ConfigService.HubProjects()
+      .then((ps) => (choreProjects = (ps ?? []).filter((p) => p.hubChores).length))
+      .catch(() => (choreProjects = null));
   });
   onDestroy(() => release?.());
 
@@ -197,15 +203,19 @@
         <section class="mx-auto grid max-w-[520px] justify-items-center gap-3 py-12 text-center" data-team-empty>
           <span class="text-faint"><Icon name="users" size={28} /></span>
           <h2 class="text-base font-medium text-ink">Share chores with your team</h2>
-          <p class="text-sm text-faint">
-            A team hub collects security advisories and failing dependency bumps from every Mac on the team and hands
-            each one to a single device, so one agent fixes it and the rest of the team sees the pull request.
-          </p>
+          <p class="text-sm text-faint">One Mac fixes each security advisory and failing dependency bump. The team sees the pull request.</p>
           <Button variant="primary" size="md" onclick={openSettings}>Set up Team hub</Button>
         </section>
       {:else}
         {#if st?.lastError}
           <p role="alert" class="min-w-0 break-words text-sm text-bad">{st.lastError}{#if st.lastErrorAt} · <TimeAgo at={st.lastErrorAt} />{/if}</p>
+        {/if}
+        {#if choreProjects === 0}
+          <div class="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-edge px-3 py-2.5 text-sm" data-no-chore-projects>
+            <span class="text-faint"><Icon name="folder" size={16} /></span>
+            <span class="min-w-0 flex-1 text-ink">No project on this Mac takes chores yet.</span>
+            <Button size="sm" variant="secondary" onclick={openSettings}>Choose projects</Button>
+          </div>
         {/if}
         {#if hub.boardError}<div role="alert" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">{hub.boardError}</div>{/if}
 

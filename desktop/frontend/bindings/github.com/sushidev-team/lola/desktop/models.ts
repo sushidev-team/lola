@@ -156,6 +156,45 @@ export interface HubKindDTO {
 }
 
 /**
+ * HubProjectDTO is one project as the Team hub settings show it: which repo it
+ * offers the hub and whether it takes chores. Stacks are left out — a stack
+ * has no repository of its own; its member projects are listed instead.
+ */
+export interface HubProjectDTO {
+    "name": string;
+    "label": string;
+
+    /**
+     * Repo is the configured GitHub "owner/name" ("" = none).
+     */
+    "repo": string;
+
+    /**
+     * SuggestedRepo is what the checkout's remote says, offered when Repo is
+     * empty or differs. Read from local git only; "" when unknown.
+     */
+    "suggestedRepo": string;
+    "hubChores": boolean;
+    "sandboxed": boolean;
+
+    /**
+     * Stack is the stack this project is a member of ("" = standalone).
+     */
+    "stack": string;
+}
+
+/**
+ * HubProjectPatchDTO changes one project's hub-facing keys. A nil field is
+ * left as it is.
+ */
+export interface HubProjectPatchDTO {
+    "name": string;
+    "repo": string | null;
+    "hubChores": boolean | null;
+    "sandboxed": boolean | null;
+}
+
+/**
  * HubTrustedKeyDTO is one [hub.trusted_policy_keys] entry: an admin key that
  * may sign team policy.
  */

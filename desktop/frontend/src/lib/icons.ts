@@ -75,6 +75,7 @@ import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 import User from '@lucide/svelte/icons/user';
 import Users from '@lucide/svelte/icons/users';
 import Download from '@lucide/svelte/icons/download';
+import Package from '@lucide/svelte/icons/package';
 import X from '@lucide/svelte/icons/x';
 
 export const icons = {
@@ -154,6 +155,7 @@ export const icons = {
   'user': User,
   'users': Users,
   'download': Download,
+  'package': Package,
   'x': X,
 } as const;
 export type IconName = keyof typeof icons;

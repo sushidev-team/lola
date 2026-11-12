@@ -129,6 +129,8 @@ vi.mock("@bindings/desktop", () => ({
     ValidateLinearKey: (k: string) => ValidateLinearKey(k),
     ConnectCode: () => ConnectCode(),
     TeamPolicy: () => TeamPolicy(),
+    HubProjects: () => Promise.resolve([]),
+    SaveHubProject: () => Promise.resolve(),
   },
   HubService: {
     Status: () => HubStatus(),
@@ -330,18 +332,26 @@ describe("SettingsForm", () => {
     expect(screen.getByRole("button", { name: /Add provider/ })).toBeEnabled();
   });
 
-  it("opens the Team hub tab with the join form and saves the hub rules with the rest", async () => {
+  it("opens the Team hub tab with the join form before joining", async () => {
     GetSettings.mockResolvedValue({ ...fakeDto, hubAcceptKinds: [], hubMaxClaimsPerDay: 4, hubRequireSandbox: true, hubPollSeconds: 300, hubApplyPolicy: true, hubTrustedKeys: [] });
     render(SettingsForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Team hub" }));
     expect(await screen.findByLabelText("Hub URL")).toBeInTheDocument();
-    await fireEvent.input(screen.getByLabelText("Claims per day"), { target: { value: "2" } });
+  });
+
+  it("saves the hub rules with the rest once joined", async () => {
+    HubStatus.mockResolvedValue({ enabled: true, joined: true, org: "acme", claimsToday: 0, maxClaimsPerDay: 4, pendingOutcomes: 0, sessions: [] });
+    GetSettings.mockResolvedValue({ ...fakeDto, hubAcceptKinds: [], hubMaxClaimsPerDay: 4, hubRequireSandbox: true, hubPollSeconds: 300, hubApplyPolicy: true, hubTrustedKeys: [] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Team hub" }));
+    await fireEvent.input(await screen.findByLabelText("Claims per day"), { target: { value: "2" } });
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
     expect(SaveSettings.mock.calls[0][0]).toMatchObject({ hubMaxClaimsPerDay: 2, hubRequireSandbox: true });
   });
 
   it("blocks Save while a Team hub number field is cleared", async () => {
+    HubStatus.mockResolvedValue({ enabled: true, joined: true, org: "acme", claimsToday: 0, maxClaimsPerDay: 4, pendingOutcomes: 0, sessions: [] });
     GetSettings.mockResolvedValue({ ...fakeDto, hubAcceptKinds: [], hubMaxClaimsPerDay: 4, hubRequireSandbox: true, hubPollSeconds: 300, hubApplyPolicy: true, hubTrustedKeys: [] });
     render(SettingsForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Team hub" }));

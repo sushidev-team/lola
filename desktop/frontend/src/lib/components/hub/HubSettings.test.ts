@@ -12,6 +12,7 @@ const { Status, Join, Leave, Sync, DefaultDeviceName, Kinds } = vi.hoisted(() =>
 
 vi.mock("@bindings/desktop", () => ({
   HubService: { Status, Join, Leave, Sync, DefaultDeviceName, Kinds, Board: vi.fn(), Org: vi.fn() },
+  ConfigService: { HubProjects: () => Promise.resolve([]), SaveHubProject: () => Promise.resolve() },
 }));
 
 import Harness from "./HubSettingsHarness.test.svelte";
@@ -137,7 +138,7 @@ describe("HubSettings — joined", () => {
     expect(within(card).getByText("Connected")).toBeInTheDocument();
     expect(within(card).getByText("1 of 4")).toBeInTheDocument();
     const policy = screen.getByLabelText("Policy details");
-    expect(within(policy).getByText("v3")).toBeInTheDocument();
+    expect(within(policy).getByText("· v3")).toBeInTheDocument();
     expect(within(policy).getByText("kadmin1")).toBeInTheDocument();
     const row = within(policy).getByText("Global concurrency cap").closest("tr")!;
     expect(within(row).getByText("2")).toBeInTheDocument();
@@ -175,6 +176,8 @@ describe("HubSettings — joined", () => {
 });
 
 describe("HubSettings — local rules", () => {
+  beforeEach(() => Status.mockResolvedValue({ ...joinedStatus }));
+
   it("edits the [hub] keys and warns when the sandbox is off", async () => {
     const sink = mount();
     await fireEvent.click(await screen.findByLabelText("Security advisories", { exact: false }));
@@ -186,7 +189,7 @@ describe("HubSettings — local rules", () => {
     await fireEvent.input(screen.getByLabelText("Check every (seconds)"), { target: { value: "10" } });
     expect(screen.getByText("Enter seconds from 60 to 86400.")).toBeInTheDocument();
     expect(screen.queryByText(/run directly on this Mac/)).toBeNull();
-    await fireEvent.click(screen.getByRole("checkbox", { name: "Only work chores in sandboxed projects" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Sandboxed only" }));
     expect(sink.values.hubRequireSandbox).toBe(false);
     expect(screen.getByText(/run directly on this Mac/)).toBeInTheDocument();
     await fireEvent.click(screen.getByRole("checkbox", { name: "Apply the team policy" }));
@@ -211,6 +214,25 @@ describe("HubSettings — local rules", () => {
     const box = await screen.findByLabelText("Security advisories", { exact: false });
     await waitFor(() => expect(box).toBeDisabled());
     expect(screen.getByText("Set by team policy v3")).toBeInTheDocument();
+  });
+});
+
+describe("HubSettings — no policy", () => {
+  it("shows an empty state that adds the first key", async () => {
+    Status.mockResolvedValue({ ...joinedStatus, policy: null });
+    const sink = mount();
+    const empty = await screen.findByText("No team policy");
+    expect(screen.getByText("Add your admin’s key to verify one.")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Apply the team policy" })).toBeNull();
+    await fireEvent.click(within(empty.closest("[data-policy-empty]") as HTMLElement).getByRole("button", { name: "Add key" }));
+    expect(sink.values.hubTrustedKeys).toEqual([{ keyId: "", publicKey: "" }]);
+  });
+
+  it("shows only the join form before joining", async () => {
+    mount();
+    await screen.findByLabelText("Hub URL");
+    expect(screen.queryByText("Chores on this Mac")).toBeNull();
+    expect(screen.queryByText("Team policy")).toBeNull();
   });
 });
 

@@ -137,6 +137,13 @@ export function GetTheme(): $CancellablePromise<string> {
 }
 
 /**
+ * HubProjects lists the projects that can take team chores, in config order.
+ */
+export function HubProjects(): $CancellablePromise<$models.HubProjectDTO[] | null> {
+    return $Call.ByID(2192521832);
+}
+
+/**
  * InspectPath reads a checkout in ONE pass — GitHub "owner/name", the branch
  * worktrees should fork from, the branch list and a suggested label/id — so
  * picking a folder fills the Repo tab instead of making the user copy four
@@ -346,6 +353,15 @@ export function SandboxImageDefault(): $CancellablePromise<string> {
  */
 export function SandboxStatus(): $CancellablePromise<$models.SandboxStatusDTO> {
     return $Call.ByID(1302684536);
+}
+
+/**
+ * SaveHubProject writes a project's repo, chore opt-in and Docker sandbox
+ * in one config save. Turning chores on needs an owner/name repo — the same
+ * rule Validate enforces — and the error says so in the UI's words.
+ */
+export function SaveHubProject(patch: $models.HubProjectPatchDTO): $CancellablePromise<void> {
+    return $Call.ByID(2589761182, patch);
 }
 
 export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<void> {

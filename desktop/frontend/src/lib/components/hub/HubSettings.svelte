@@ -60,6 +60,8 @@
   import TeamLock from "$lib/components/TeamLock.svelte";
   import TimeAgo from "$lib/components/TimeAgo.svelte";
   import Icon from "$lib/components/Icon.svelte";
+  import HelpText from "$lib/components/HelpText.svelte";
+  import HubProjects from "./HubProjects.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { hub, connectionState } from "$lib/hub.svelte";
   import { HubService } from "@bindings/desktop";
@@ -81,7 +83,6 @@
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const rowCls = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-baseline gap-x-6 gap-y-1.5";
   const rowTopCls = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-start gap-x-6 gap-y-1.5";
-  const hintCls = "mt-1 block text-sm text-faint";
   const formId = $props.id();
 
   let release: (() => void) | null = null;
@@ -223,7 +224,7 @@
   {/if}
 
   {#if hub.loaded && !hub.outdated && !hub.statusError && !hub.joined}
-    <SettingsGroup title="Join a hub" description="Your team’s hub hands out security and dependency chores and shares the team policy.">
+    <SettingsGroup title="Join a hub" help="Your team’s hub hands out security and dependency chores and shares the team policy. Ask your hub admin for the URL and a one-time token.">
       <label class={rowCls}>
         <span class="text-faint">Hub URL</span>
         <span>
@@ -237,14 +238,12 @@
         <span>
           <input class="{inputCls} font-mono" type="password" aria-label="Enrollment token" autocomplete="off" spellcheck="false"
             placeholder="From your hub admin" bind:value={joinToken} oninput={() => (joinError = "")} />
-          <span class={hintCls}>Used once to enroll this Mac. It is not saved.</span>
         </span>
       </label>
       <label class={rowCls}>
         <span class="text-faint">Device name</span>
         <span>
           <input class={inputCls} type="text" aria-label="Device name" spellcheck="false" placeholder={joinPlaceholder || "This Mac’s name"} bind:value={joinName} />
-          <span class={hintCls}>How this Mac appears to your team. Empty uses the hostname.</span>
         </span>
       </label>
       <div class={rowCls}>
@@ -268,8 +267,6 @@
         <dl class="grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
           <dt class="text-faint">Device</dt><dd class="min-w-0 break-words text-ink">{st.deviceName || st.device || "—"}</dd>
           <dt class="text-faint">Hub URL</dt><dd class="min-w-0 break-all font-mono text-ink">{st.url || "—"}</dd>
-          <dt class="text-faint">Last heartbeat</dt>
-          <dd class="text-ink">{#if st.lastHeartbeat}<TimeAgo at={st.lastHeartbeat} />{:else}Not yet{/if}</dd>
           <dt class="text-faint">Claims today</dt><dd class="text-ink">{st.claimsToday} of {st.maxClaimsPerDay}</dd>
           {#if st.pendingOutcomes}<dt class="text-faint">Waiting to report</dt><dd class="text-ink">{st.pendingOutcomes}</dd>{/if}
         </dl>
@@ -286,17 +283,68 @@
       {#if leaveError}<p role="alert" class="text-sm text-bad">{leaveError}</p>{/if}
     </SettingsGroup>
 
-    <SettingsGroup title="Team policy" description="Settings your team’s admins sign. A locked setting uses the team’s value.">
+    <SettingsGroup title="Projects" help="A ticked project takes chores from the hub. A chore needs the project's GitHub repository and, while “Sandboxed only” is on, the Docker sandbox. Changes here save at once.">
+      <HubProjects requireSandbox={sandbox} />
+    </SettingsGroup>
+
+    <SettingsGroup title="Chores on this Mac" help="Limits for this Mac. They apply to every hub it joins.">
+      <div class={rowTopCls}>
+        <span class="flex items-center gap-1 text-faint">Accepted chores <HelpText label="Accepted chores" detail="None ticked accepts every kind." /></span>
+        <TeamLock lock={lockFor("hubAcceptKinds")} version={policy?.version ?? 0}>
+          <CheckboxOptions label="Accepted chores" options={kinds} selected={values.hubAcceptKinds ?? []}
+            onChange={(v) => onChange({ hubAcceptKinds: v })} />
+        </TeamLock>
+      </div>
+      <div class={rowCls}>
+        <span class="flex items-center gap-1 text-faint">Claims per day <HelpText label="Claims per day" detail="How many chores this Mac starts on its own each day. 0 pauses it; claiming by hand still works." /></span>
+        <span>
+          <input class="{inputCls} max-w-[8rem]" type="number" min="0" max="100" step="1" aria-label={CLAIMS_LABEL} value={claims}
+            oninput={(e) => onChange({ hubMaxClaimsPerDay: e.currentTarget.valueAsNumber })} aria-invalid={!!claimsError} />
+          {#if claimsError}<span class="mt-1 block text-sm text-bad">{claimsError}</span>{/if}
+        </span>
+      </div>
+      <div class={rowCls}>
+        <span class="flex items-center gap-1 text-faint">Check every <HelpText label="Check every" detail="How often the daemon asks the hub for news. Sync now asks at once." /></span>
+        <span>
+          <span class="flex items-center gap-2">
+            <input class="{inputCls} max-w-[8rem]" type="number" min="60" max="86400" step="1" aria-label={POLL_LABEL} value={poll}
+              oninput={(e) => onChange({ hubPollSeconds: e.currentTarget.valueAsNumber })} aria-invalid={!!pollError} />
+            <span class="text-sm text-faint">seconds</span>
+          </span>
+          {#if pollError}<span class="mt-1 block text-sm text-bad">{pollError}</span>{/if}
+        </span>
+      </div>
+      <div class="grid gap-1.5">
+        <span class="flex items-center gap-1">
+          <label class="flex cursor-pointer items-center gap-2">
+            <Checkbox checked={sandbox} onchange={() => onChange({ hubRequireSandbox: !sandbox })} />
+            <span>Sandboxed only</span>
+          </label>
+          <HelpText label="Sandboxed only" detail="A chore runs only in a project with the Docker sandbox. Chores come from your team’s hub, so this keeps their agents off your Mac." />
+        </span>
+        {#if !sandbox}
+          <p role="alert" class="flex items-start gap-1.5 text-sm text-warn">
+            <Icon name="triangle-alert" size={14} />
+            <span>Chore agents run directly on this Mac.</span>
+          </p>
+        {/if}
+      </div>
+    </SettingsGroup>
+
+    <SettingsGroup title="Team policy" help="Settings your team’s admins sign. A locked setting uses the team’s value. Only keys you trust below can sign it; the hub cannot add one.">
       {#if st.policy}
         {@const p = st.policy}
         <div class="grid min-w-0 gap-3 rounded-lg border border-edge p-4" aria-label="Policy details">
-          <dl class="grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
-            <dt class="text-faint">Version</dt><dd class="text-ink">v{p.version}</dd>
-            <dt class="text-faint">Signed by</dt><dd class="min-w-0 break-all font-mono text-ink">{p.keyId || "—"}</dd>
-            {#if p.issuedAt}<dt class="text-faint">Issued</dt><dd class="text-ink"><TimeAgo at={p.issuedAt} /></dd>{/if}
-            <dt class="text-faint">Status</dt>
-            <dd class="min-w-0 break-words {p.applied ? 'text-good' : 'text-warn'}">{p.applied ? "Applied" : `Not applied${p.applyNote ? `: ${p.applyNote}` : ""}`}</dd>
-          </dl>
+          <div class="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+            <span class="inline-flex items-center gap-1.5 {p.applied ? 'text-good' : 'text-warn'}">
+              <Icon name={p.applied ? "shield-check" : "circle-alert"} size={14} />
+              {p.applied ? "Applied" : "Not applied"}
+            </span>
+            <span class="text-faint">· v{p.version}</span>
+            {#if p.issuedAt}<span class="text-faint">· <TimeAgo at={p.issuedAt} /></span>{/if}
+            <span class="ml-auto truncate font-mono text-faint" title="Signed by">{p.keyId || ""}</span>
+          </div>
+          {#if !p.applied && p.applyNote}<p class="text-sm text-warn">{p.applyNote}</p>{/if}
           {#if policyRows.length}
             <table class="w-full border-collapse text-sm">
               <thead>
@@ -321,80 +369,45 @@
           {/if}
         </div>
       {:else}
-        <p class="text-sm text-faint">Your team has not published a policy yet, or this Mac has no trusted policy keys to verify one.</p>
+        <div class="grid justify-items-center gap-2 rounded-lg border border-dashed border-edge px-4 py-7 text-center" data-policy-empty>
+          <span class="text-faint"><Icon name="shield-check" size={22} /></span>
+          <p class="text-ink">No team policy</p>
+          <p class="text-sm text-faint">{keys.length ? "Your admins have not published one yet." : "Add your admin’s key to verify one."}</p>
+          {#if !keys.length}
+            <Button variant="secondary" size="sm" onclick={addKey}><Icon name="plus" size={14} />Add key</Button>
+          {/if}
+        </div>
+      {/if}
+      {#if st.policy}
+        <label class="flex cursor-pointer items-center gap-2">
+          <Checkbox checked={applyPolicy} onchange={() => onChange({ hubApplyPolicy: !applyPolicy })} />
+          <span>Apply the team policy</span>
+          <HelpText label="Apply the team policy" detail="Off shows the policy without enforcing it." />
+        </label>
+      {/if}
+      {#if keys.length || st.policy}
+        <div class="grid min-w-0 gap-2">
+          <span class="flex items-center gap-1 text-faint">Trusted keys
+            <HelpText label="Trusted keys" detail="Paste “key id:public key” as your hub admin prints it into the key id field to fill both." />
+          </span>
+          {#each keys as row, i (i)}
+            {@const err = trustedKeyError(row, keys)}
+            <div class="grid min-w-0 gap-1.5" data-trusted-key={i}>
+              <div class="grid min-w-0 grid-cols-[10rem_minmax(0,1fr)_auto] items-center gap-2">
+                <input class="{inputCls} font-mono" aria-label={`Key id ${i + 1}`} placeholder="Key id" spellcheck="false" value={row.keyId}
+                  oninput={(e) => setKey(i, { keyId: e.currentTarget.value })} aria-invalid={!!err} />
+                <input class="{inputCls} font-mono" aria-label={`Public key ${i + 1}`} placeholder="Public key" spellcheck="false" value={row.publicKey}
+                  oninput={(e) => setKey(i, { publicKey: e.currentTarget.value })} aria-invalid={!!err} />
+                <Button size="sm" icon onclick={() => removeKey(i)} aria-label={`Remove key ${i + 1}`}><Icon name="x" size={14} /></Button>
+              </div>
+              {#if err}<p class="text-sm text-bad">{err}</p>{/if}
+            </div>
+          {/each}
+          <div>
+            <Button size="sm" onclick={addKey} id={`${formId}-add-key`}><Icon name="plus" size={14} />Add key</Button>
+          </div>
+        </div>
       {/if}
     </SettingsGroup>
   {/if}
-
-  <SettingsGroup title="Chores on this Mac" description="Local limits. They apply to every hub this Mac joins.">
-    <div class={rowTopCls}>
-      <span class="text-faint">Accepted chores</span>
-      <span>
-        <TeamLock lock={lockFor("hubAcceptKinds")} version={policy?.version ?? 0}>
-          <CheckboxOptions label="Accepted chores" options={kinds} selected={values.hubAcceptKinds ?? []}
-            onChange={(v) => onChange({ hubAcceptKinds: v })} />
-        </TeamLock>
-        <span class={hintCls}>None ticked accepts every kind.</span>
-      </span>
-    </div>
-    <label class={rowCls}>
-      <span class="text-faint">Claims per day</span>
-      <span>
-        <input class={inputCls} type="number" min="0" max="100" step="1" aria-label={CLAIMS_LABEL} value={claims}
-          oninput={(e) => onChange({ hubMaxClaimsPerDay: e.currentTarget.valueAsNumber })} aria-invalid={!!claimsError} />
-        <span class="mt-1 block text-sm {claimsError ? 'text-bad' : 'text-faint'}">{claimsError || "How many chores this Mac starts on its own each day. 0 pauses it."}</span>
-      </span>
-    </label>
-    <label class={rowCls}>
-      <span class="text-faint">Check every</span>
-      <span>
-        <input class={inputCls} type="number" min="60" max="86400" step="1" aria-label={POLL_LABEL} value={poll}
-          oninput={(e) => onChange({ hubPollSeconds: e.currentTarget.valueAsNumber })} aria-invalid={!!pollError} />
-        <span class="mt-1 block text-sm {pollError ? 'text-bad' : 'text-faint'}">{pollError || "Seconds between hub checks."}</span>
-      </span>
-    </label>
-    <div class="grid gap-1.5">
-      <label class="flex cursor-pointer items-center gap-2">
-        <Checkbox checked={sandbox} onchange={() => onChange({ hubRequireSandbox: !sandbox })} />
-        <span>Only work chores in sandboxed projects</span>
-      </label>
-      {#if sandbox}
-        <p class="text-sm text-faint">A chore runs only in a project with the Docker sandbox.</p>
-      {:else}
-        <p role="alert" class="flex items-start gap-1.5 text-sm text-warn">
-          <Icon name="triangle-alert" size={14} />
-          <span>Chores come from your team’s hub. Without the sandbox, their agents run directly on this Mac.</span>
-        </p>
-      {/if}
-    </div>
-    <div class="grid gap-1.5">
-      <label class="flex cursor-pointer items-center gap-2">
-        <Checkbox checked={applyPolicy} onchange={() => onChange({ hubApplyPolicy: !applyPolicy })} />
-        <span>Apply the team policy</span>
-      </label>
-      <p class="text-sm text-faint">Off shows the policy without enforcing it.</p>
-    </div>
-  </SettingsGroup>
-
-  <SettingsGroup title="Trusted policy keys" description="Admin keys that may sign your team’s policy. The hub cannot add one.">
-    {#each keys as row, i (i)}
-      {@const err = trustedKeyError(row, keys)}
-      <div class="grid min-w-0 gap-1.5" data-trusted-key={i}>
-        <div class="grid min-w-0 grid-cols-[10rem_minmax(0,1fr)_auto] items-center gap-2">
-          <input class="{inputCls} font-mono" aria-label={`Key id ${i + 1}`} placeholder="Key id" spellcheck="false" value={row.keyId}
-            oninput={(e) => setKey(i, { keyId: e.currentTarget.value })} aria-invalid={!!err} />
-          <input class="{inputCls} font-mono" aria-label={`Public key ${i + 1}`} placeholder="Public key" spellcheck="false" value={row.publicKey}
-            oninput={(e) => setKey(i, { publicKey: e.currentTarget.value })} aria-invalid={!!err} />
-          <Button variant="danger" size="sm" onclick={() => removeKey(i)} aria-label={`Remove key ${i + 1}`}>Remove</Button>
-        </div>
-        {#if err}<p class="text-sm text-bad">{err}</p>{/if}
-      </div>
-    {:else}
-      <p class="text-sm text-faint">No trusted keys. Without one, a team policy is never applied.</p>
-    {/each}
-    <div>
-      <Button variant="secondary" size="md" onclick={addKey} id={`${formId}-add-key`}><Icon name="plus" size={14} />Add key</Button>
-    </div>
-    <p class="text-sm text-faint">Paste “key id:public key” as your hub admin prints it into the key id field to fill both.</p>
-  </SettingsGroup>
 </div>

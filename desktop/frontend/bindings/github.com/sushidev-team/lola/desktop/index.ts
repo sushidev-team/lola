@@ -36,6 +36,8 @@ export type {
     DoctorResultDTO,
     GroupDTO,
     HubKindDTO,
+    HubProjectDTO,
+    HubProjectPatchDTO,
     HubTrustedKeyDTO,
     ImageAttachment,
     InheritsDTO,
