@@ -239,6 +239,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			if d.observeGoalAgent(ctx, s, alive, tmuxActivity) {
 				touched = true
 			}
+			d.notifyUserReady(ctx, s.ID)
 			continue // goal controller alone owns verification, delivery and retries
 		}
 		// An agent-less shell (`lola open`, the manual-shell flow) has no coding
@@ -505,6 +506,8 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// per cycle since a send consumes AtPrompt).
 			d.flushReviewHandoffs(ctx, s.ID)
 			d.autoPRComments(ctx, s.ID)
+			// Notify only after automation has had its chance to resume work.
+			d.notifyUserReady(ctx, s.ID)
 			// Status interpreter, ambiguous-state sweep: a session whose
 			// deterministic story is thin (waiting on a human, unreadable pane,
 			// long-quiet "working") queues an interpretation — capped per cycle,

@@ -477,6 +477,9 @@ type Daemon struct {
 	reviewCh    chan reviewJob
 	reviewBusy  map[string]bool
 	reviewFails map[string]int
+	// reviewActive includes manual passes, which do not enter reviewBusy's queue.
+	// Counts allow concurrent manual requests without prematurely clearing activity.
+	reviewActive map[string]int // guarded by reviewMu, keyed by session/lane ID
 
 	// escSummaries carries a brain escalation summary from react's Urgent notify
 	// (reactCIFailed) to the P4 blocked Linear comment (writeBackEscalation) in
@@ -1441,7 +1444,9 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				if s.AgentState == state.AgentWaitingInput {
 					s.InputReason = prev.InputReason
 					s.LastNotification = prev.LastNotification
+					s.InputNotified = prev.InputNotified
 				}
+				s.ReadyNotified = prev.ReadyNotified
 				s.TranscriptPath = prev.TranscriptPath
 				s.TranscriptSegments = prev.TranscriptSegments
 				s.StopHoldUntil = prev.StopHoldUntil

@@ -458,6 +458,7 @@ func TestAdoptDropsNotificationWhenAgentResumed(t *testing.T) {
 	prior.SetAgentState(state.AgentWaitingInput, "", time.Now())
 	prior.LastNotification = "Claude is waiting for your input"
 	prior.InputReason = state.InputQuestion
+	prior.InputNotified = state.InputQuestion
 	d.sessions.Upsert(prior)
 
 	// The human answered before the restart; the pane scan sees a busy agent.
@@ -473,6 +474,9 @@ func TestAdoptDropsNotificationWhenAgentResumed(t *testing.T) {
 	if got.InputReason != "" {
 		t.Errorf("InputReason = %q, want dropped", got.InputReason)
 	}
+	if got.InputNotified != "" {
+		t.Error("answered question kept its notification guard")
+	}
 }
 
 // The mirror case: a session still parked on the prompt keeps its message, so
@@ -486,6 +490,8 @@ func TestAdoptKeepsNotificationWhileStillWaiting(t *testing.T) {
 	prior.SetAgentState(state.AgentWaitingInput, "", time.Now())
 	prior.LastNotification = "Claude needs your permission to run rm"
 	prior.InputReason = state.InputPermission
+	prior.InputNotified = state.InputPermission
+	prior.ReadyNotified = "acme/app#42@head"
 	d.sessions.Upsert(prior)
 
 	adopted := prior // still waiting_input
@@ -498,5 +504,8 @@ func TestAdoptKeepsNotificationWhileStillWaiting(t *testing.T) {
 	}
 	if got.InputReason != state.InputPermission {
 		t.Errorf("InputReason = %q, want preserved", got.InputReason)
+	}
+	if got.InputNotified != prior.InputNotified || got.ReadyNotified != prior.ReadyNotified {
+		t.Error("adoption lost persisted notification guards")
 	}
 }
