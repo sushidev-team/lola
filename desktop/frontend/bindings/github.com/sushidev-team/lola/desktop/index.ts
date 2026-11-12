@@ -65,6 +65,8 @@ export type {
     StackFolderAppDTO,
     StackFolderDTO,
     TeamPolicyDTO,
+    ToolchainDTO,
+    ToolchainInfoDTO,
     UpdateInfoDTO,
     UpdateProgressDTO,
     UpdateSettingsDTO

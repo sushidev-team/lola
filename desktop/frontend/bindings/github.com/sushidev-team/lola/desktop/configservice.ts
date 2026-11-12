@@ -109,6 +109,15 @@ export function CreateStackFromFolder(label: string, apps: $models.StackFolderAp
     return $Call.ByID(1223234397, label, apps);
 }
 
+/**
+ * DetectToolchains reads the checkout at path (the project form's folder) and
+ * reports the toolchains a sandboxed session of it would get with no
+ * sandbox_toolchains set. Read-only and bounded (internal/toolchain).
+ */
+export function DetectToolchains(path: string): $CancellablePromise<$models.ToolchainInfoDTO> {
+    return $Call.ByID(2194180648, path);
+}
+
 export function GetAppearance(): $CancellablePromise<$models.AppearanceDTO> {
     return $Call.ByID(306832519);
 }
@@ -348,14 +357,14 @@ export function SandboxImageDefault(): $CancellablePromise<string> {
 }
 
 /**
- * SandboxLoginNeeded reports whether a session of agentKind ("" = the
- * project's configured agent) started in project would run a sandboxed claude
- * with no login: it would print "Not logged in" and wait forever. The app asks
- * before such a start and offers the login. Only claude's login is lola's to
- * provide; other agents answer false. The daemon refuses the same start, so
- * this is the friendly half, not the guard.
+ * SandboxLoginNeeded names the agent ("claude", "codex", "opencode") that a
+ * session of agentKind ("" = the project's configured agent) started in
+ * project would run sandboxed with no login — it would only report "Not logged
+ * in" and wait. "" when nothing is missing. The app asks before such a start
+ * and offers the login. The daemon refuses the same start, so this is the
+ * friendly half, not the guard.
  */
-export function SandboxLoginNeeded(project: string, agentKind: string): $CancellablePromise<boolean> {
+export function SandboxLoginNeeded(project: string, agentKind: string): $CancellablePromise<string> {
     return $Call.ByID(3065258566, project, agentKind);
 }
 

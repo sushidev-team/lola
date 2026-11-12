@@ -135,7 +135,7 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool,
 		return session.Session{}, err
 	}
 	// The line below mounts the sandbox's linux lola, so it must exist first.
-	if err := n.prepareSandbox(ctx, s.Sandbox != "" && !s.IsAgentless()); err != nil {
+	if err := n.prepareSandbox(ctx, "", s.Sandbox != "" && !s.IsAgentless()); err != nil {
 		return session.Session{}, err
 	}
 	posix := "set -a; . " + shQuote(filepath.Join(artifacts, "env")) + " || exit; set +a; exec "

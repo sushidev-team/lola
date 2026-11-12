@@ -72,7 +72,7 @@ func sandboxLoginMissing(kind agent.Kind) string {
 // SandboxLoginMissingText is the stable part of sandboxLoginMissing.
 const SandboxLoginMissingText = "has no login yet. Log in under Settings → Sandbox."
 
-// maybeRelogin relaunches s when it is a sandboxed claude session started
+// maybeRelogin relaunches s when it is a sandboxed agent session started
 // without a login and one resolves now.
 func (d *Daemon) maybeRelogin(ctx context.Context, s session.Session) {
 	switch s.AgentState {
@@ -87,7 +87,7 @@ func (d *Daemon) maybeRelogin(ctx context.Context, s session.Session) {
 	nat := d.native
 	d.mu.Unlock()
 	r, ok := nat.(sandboxReloginAPI)
-	if !ok || !r.SandboxLoginMissing(s) || !r.SandboxLoginAvailable(agent.Claude) {
+	if !ok || !r.SandboxLoginMissing(s) || !r.SandboxLoginAvailable(agent.Parse(s.Agent)) {
 		return
 	}
 	if !d.relogin.due(s.ID, time.Now()) {
@@ -114,5 +114,5 @@ func (d *Daemon) maybeRelogin(ctx context.Context, s session.Session) {
 		return true
 	})
 	d.reactSave()
-	d.logf("", "relogin: %s relaunched with the Claude login that now exists", s.ID)
+	d.logf("", "relogin: %s relaunched with the %s login that now exists", s.ID, agent.Parse(s.Agent))
 }

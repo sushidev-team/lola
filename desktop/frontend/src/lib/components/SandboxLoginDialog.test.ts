@@ -25,13 +25,13 @@ describe("sandbox login gate", () => {
   });
 
   it("passes straight through when no login is missing", async () => {
-    needed.mockResolvedValue(false);
+    needed.mockResolvedValue("");
     expect(await sandboxLogin.ensure("web", "claude")).toBe(true);
     expect(sandboxLogin.request).toBeNull();
   });
 
   it("asks before the start and goes on once logged in", async () => {
-    needed.mockResolvedValue(true);
+    needed.mockResolvedValue("claude");
     render(SandboxLoginDialog);
     const ok = sandboxLogin.ensure("web");
     await vi.waitFor(() => expect(sandboxLogin.request).not.toBeNull());
@@ -42,8 +42,20 @@ describe("sandbox login gate", () => {
     expect(sandboxLogin.request).toBeNull();
   });
 
+  it("asks codex to log in on the Mac and checks again", async () => {
+    needed.mockResolvedValue("codex");
+    render(SandboxLoginDialog);
+    const ok = sandboxLogin.ensure("web", "codex");
+    expect(await screen.findByText("codex login")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Still no Codex login found.");
+    needed.mockResolvedValue("");
+    await fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await ok).toBe(true);
+  });
+
   it("starts nothing when cancelled", async () => {
-    needed.mockResolvedValue(true);
+    needed.mockResolvedValue("claude");
     render(SandboxLoginDialog);
     const ok = sandboxLogin.ensure("web");
     await fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));

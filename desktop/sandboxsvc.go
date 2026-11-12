@@ -43,6 +43,10 @@ type SandboxStatusDTO struct {
 	GitHubSource string   `json:"githubSource"`
 	UseAPIKey    bool     `json:"useApiKey"` // [sandbox].use_api_key
 	APIKeySet    bool     `json:"apiKeySet"` // ANTHROPIC_API_KEY exists (presence only)
+	// CodexLogin / OpenCodeLogin: the host has a login lola copies into
+	// sandboxed codex / opencode sessions (presence only).
+	CodexLogin    bool `json:"codexLogin"`
+	OpenCodeLogin bool `json:"openCodeLogin"`
 }
 
 // SandboxImageDefault is the image a project with no sandbox_image runs:
@@ -71,44 +75,66 @@ func (s *ConfigService) SandboxStatus() (SandboxStatusDTO, error) {
 		Docker: st.Docker, DockerOK: st.DockerOK, Missing: st.Missing,
 		TokenStored: stored, ClaudeSource: st.ClaudeSource, GitHubSource: st.GitHubSource,
 		UseAPIKey: st.UseAPIKey, APIKeySet: st.APIKeySet,
+		CodexLogin: hostLoggedIn(agent.Codex), OpenCodeLogin: hostLoggedIn(agent.OpenCode),
 	}, nil
 }
 
-// SandboxLoginNeeded reports whether a session of agentKind ("" = the
-// project's configured agent) started in project would run a sandboxed claude
-// with no login: it would print "Not logged in" and wait forever. The app asks
-// before such a start and offers the login. Only claude's login is lola's to
-// provide; other agents answer false. The daemon refuses the same start, so
-// this is the friendly half, not the guard.
-func (s *ConfigService) SandboxLoginNeeded(project, agentKind string) (bool, error) {
+// SandboxLoginNeeded names the agent ("claude", "codex", "opencode") that a
+// session of agentKind ("" = the project's configured agent) started in
+// project would run sandboxed with no login — it would only report "Not logged
+// in" and wait. "" when nothing is missing. The app asks before such a start
+// and offers the login. The daemon refuses the same start, so this is the
+// friendly half, not the guard.
+func (s *ConfigService) SandboxLoginNeeded(project, agentKind string) (string, error) {
 	cfg, _, err := loadConfig()
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	p := cfg.ProjectByName(project)
 	if p == nil || !p.Sandboxed() {
-		return false, nil
+		return "", nil
 	}
 	kind := agent.Parse(cfg.AgentForProject(project))
 	if agent.Valid(strings.TrimSpace(agentKind)) {
 		kind = agent.Parse(strings.TrimSpace(agentKind))
 	}
-	if kind != agent.Claude {
-		return false, nil
-	}
-	if slices.Contains(cfg.Sandbox.EffectivePassEnv(), "CLAUDE_CODE_OAUTH_TOKEN") {
-		if os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
-			return false, nil
+	passed := cfg.Sandbox.EffectivePassEnv()
+	has := func(name string) bool { return slices.Contains(passed, name) && os.Getenv(name) != "" }
+	switch kind {
+	case agent.Claude:
+		if slices.Contains(passed, "CLAUDE_CODE_OAUTH_TOKEN") {
+			if has("CLAUDE_CODE_OAUTH_TOKEN") {
+				return "", nil
+			}
+			if _, stored, _ := lookupSandboxToken(secrets.SandboxClaudeService); stored {
+				return "", nil
+			}
 		}
-		if _, stored, _ := lookupSandboxToken(secrets.SandboxClaudeService); stored {
-			return false, nil
+		if cfg.Sandbox.UseAPIKey && os.Getenv(config.SandboxAPIKeyEnv) != "" {
+			return "", nil
 		}
+	case agent.Codex:
+		if hostLoggedIn(agent.Codex) || has("OPENAI_API_KEY") || has("CODEX_API_KEY") {
+			return "", nil
+		}
+	case agent.OpenCode:
+		if hostLoggedIn(agent.OpenCode) {
+			return "", nil
+		}
+		for _, name := range passed {
+			if strings.HasSuffix(name, "_API_KEY") && has(name) {
+				return "", nil
+			}
+		}
+	default:
+		return "", nil
 	}
-	if cfg.Sandbox.UseAPIKey && os.Getenv(config.SandboxAPIKeyEnv) != "" {
-		return false, nil
-	}
-	return true, nil
+	return kind.String(), nil
 }
+
+// hostLoggedIn is agent.HostLoggedIn behind a seam (tests never read the
+// person's real logins).
+var hostLoggedIn = agent.HostLoggedIn
 
 // SetSandboxImage writes [sandbox].image. "" restores lola's default.
 func (s *ConfigService) SetSandboxImage(image string) error {

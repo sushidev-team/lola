@@ -207,6 +207,10 @@ type Native struct {
 	// RemoveContainer removes a sandboxed session's container (`docker rm -f`)
 	// on teardown. nil = exec the configured docker CLI. A test seam.
 	RemoveContainer func(ctx context.Context, name string) error
+	// Docker runs the docker CLI for the derived project images
+	// (sandboximage.go): stdin is the Dockerfile of a build. nil = exec it. A
+	// test seam.
+	Docker func(ctx context.Context, docker, stdin string, args ...string) ([]byte, error)
 	// SandboxLola provides the linux lola a sandboxed agent's hooks run when
 	// [sandbox].lola_bin is empty (sandboxlola.go). nil = only lola_bin.
 	SandboxLola *SandboxLola
@@ -397,7 +401,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	}
 	// Before any worktree exists: a sandbox that cannot start (no docker, no
 	// image) refuses the spawn outright rather than leaving a rollback behind.
-	if err := n.prepareSandbox(ctx, n.sandboxProject(p.Name) != nil); err != nil {
+	if err := n.prepareSandbox(ctx, p.Name, n.sandboxProject(p.Name) != nil); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s: %w", issue.Identifier, err)
 	}
 	if p.IsStack() {
@@ -770,7 +774,7 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 		return nil, rb("write env", err)
 	}
 	n.recordBaseline(ctx, dir, id)
-	if err := n.prepareSandbox(ctx, n.sandboxProject(p.Name) != nil); err != nil {
+	if err := n.prepareSandbox(ctx, p.Name, n.sandboxProject(p.Name) != nil); err != nil {
 		return nil, rb("prepare sandbox", err)
 	}
 	n.trustAgentDir(p.Name, id, dir, kind)
@@ -1696,11 +1700,11 @@ func (n *Native) revive(ctx context.Context, s session.Session, fresh bool) (ses
 		resume = false
 	}
 	if n.sandboxProject(s.Project) != nil {
-		if err := n.refreshSandboxCredentials(dir); err != nil {
+		if err := n.refreshSandboxCredentials(dir, kind); err != nil {
 			return session.Session{}, fmt.Errorf("runtime: revive %s: refresh credentials: %w", id, err)
 		}
 	}
-	if err := n.prepareSandbox(ctx, n.sandboxProject(s.Project) != nil); err != nil {
+	if err := n.prepareSandbox(ctx, s.Project, n.sandboxProject(s.Project) != nil); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
 	}
 	n.trustAgentDir(s.Project, id, dir, kind)

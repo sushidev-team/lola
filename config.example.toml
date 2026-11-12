@@ -749,6 +749,8 @@ dev_commands = [
 # sandbox = "docker"
 # sandbox_image = "ghcr.io/acme/agent-php:8.4"   # overrides [sandbox].image / lola's image
 # sandbox_ports = ["8000", "5173:5173"]          # published on 127.0.0.1
+# sandbox_toolchains = ["php@8.4", "node"]      # unset = detected from the checkout; ["none"] = nothing
+# sandbox_packages = ["ffmpeg"]                 # extra Debian packages
 # Opt this project into the [hub] chore lane: hub work items (security
 # advisories, red dependency-bump PRs) whose repo matches `repo` above may be
 # claimed for it. Default false; NOT a [defaults] key, so no project is ever

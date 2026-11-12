@@ -186,6 +186,13 @@
         <Icon name={loggedIn ? "check" : "triangle-alert"} size={14} />
         Claude login: {claudeLine}
       </li>
+      {#each [{ name: "Codex", ok: status.codexLogin, cmd: "codex login" }, { name: "OpenCode", ok: status.openCodeLogin, cmd: "opencode auth login" }] as a (a.name)}
+        <li class="flex items-center gap-1.5 {a.ok ? 'text-good' : 'text-faint'}">
+          <Icon name={a.ok ? "check" : "minus"} size={14} />
+          {a.ok ? `${a.name} login found on this Mac` : `No ${a.name} login`}
+          {#if !a.ok}<HelpText label={`${a.name} login`} detail={`Only needed for ${a.name} sessions. Run ${a.cmd} on this Mac; Lola copies the login into each new sandboxed session.`} />{/if}
+        </li>
+      {/each}
       <li class="flex items-center gap-1.5 {status.githubSource ? 'text-good' : 'text-warn'}">
         <Icon name={status.githubSource ? "check" : "triangle-alert"} size={14} />
         {status.githubSource ? `GitHub token from ${status.githubSource}` : "No GitHub token"}

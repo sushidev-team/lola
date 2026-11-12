@@ -22,7 +22,7 @@ func TestProjectExecutionSettingsRoundTrip(t *testing.T) {
 				dto.Path = ""
 			}
 			dto.TeamID, dto.ProjectID = "team", "project"
-			dto.Execution = &ProjectExecutionDTO{GoalMode: true, Sandbox: " docker ", Image: " toolchain:stable "}
+			dto.Execution = &ProjectExecutionDTO{GoalMode: true, Sandbox: " docker ", Image: " toolchain:stable ", Toolchains: []string{" php@8.4 ", ""}, Packages: []string{"ffmpeg"}}
 			if err := s.SaveProject(dto); err != nil {
 				t.Fatal(err)
 			}
@@ -30,7 +30,7 @@ func TestProjectExecutionSettingsRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := &ProjectExecutionDTO{GoalMode: true, Sandbox: "docker", Image: "toolchain:stable"}
+			want := &ProjectExecutionDTO{GoalMode: true, Sandbox: "docker", Image: "toolchain:stable", Toolchains: []string{"php@8.4"}, Packages: []string{"ffmpeg"}}
 			if !reflect.DeepEqual(got.Execution, want) {
 				t.Fatalf("execution = %+v", got.Execution)
 			}
@@ -93,7 +93,7 @@ func TestMemberCannotOverrideStackExecutionSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _ := s.GetProject("okane")
-	if *after.Execution != before {
+	if !reflect.DeepEqual(*after.Execution, before) {
 		t.Fatalf("member changed execution: %+v", after.Execution)
 	}
 }

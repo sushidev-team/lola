@@ -37,6 +37,8 @@ function sample(over: Record<string, unknown> = {}) {
     githubSource: "gh auth token",
     useApiKey: false,
     apiKeySet: true,
+    codexLogin: true,
+    openCodeLogin: false,
     ...over,
   };
 }
@@ -59,6 +61,8 @@ describe("SandboxSettings", () => {
     expect(await screen.findByText(/Docker running/)).toBeInTheDocument();
     expect(screen.getByText(/Image pulls on first use/)).toBeInTheDocument();
     expect(screen.getByText("Claude login: Not set")).toBeInTheDocument();
+    expect(screen.getByText("Codex login found on this Mac")).toBeInTheDocument();
+    expect(screen.getByText("No OpenCode login")).toBeInTheDocument();
     expect(screen.getByLabelText("Default image")).toHaveAttribute("placeholder", "ghcr.io/sushidev-team/lola-sandbox:1.2.3");
   });
 

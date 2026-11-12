@@ -183,6 +183,14 @@ type Project struct {
 	Sandbox      string   `toml:"sandbox,omitempty"`
 	SandboxImage string   `toml:"sandbox_image,omitempty"`
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
+	// SandboxToolchains names the language toolchains the project's
+	// container adds to lola's default image ("php", "node@22"; see
+	// internal/toolchain). Empty = detected from the repository; ["none"]
+	// adds nothing. SandboxPackages are extra Debian packages. Both are
+	// ignored when an image is named (sandbox_image / [sandbox].image): a
+	// custom image carries its own tools.
+	SandboxToolchains []string `toml:"sandbox_toolchains,omitempty"`
+	SandboxPackages   []string `toml:"sandbox_packages,omitempty"`
 	// GoalMode is explicit per project/stack availability, never execution authorization.
 	GoalMode bool `toml:"goal_mode,omitempty"`
 	// HubChores opts this project into the [hub] chore lane: hub work items
@@ -560,6 +568,14 @@ type fileProject struct {
 	Sandbox      string   `toml:"sandbox,omitempty"`
 	SandboxImage string   `toml:"sandbox_image,omitempty"`
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
+	// SandboxToolchains names the language toolchains the project's
+	// container adds to lola's default image ("php", "node@22"; see
+	// internal/toolchain). Empty = detected from the repository; ["none"]
+	// adds nothing. SandboxPackages are extra Debian packages. Both are
+	// ignored when an image is named (sandbox_image / [sandbox].image): a
+	// custom image carries its own tools.
+	SandboxToolchains []string `toml:"sandbox_toolchains,omitempty"`
+	SandboxPackages   []string `toml:"sandbox_packages,omitempty"`
 	// GoalMode is explicit per project/stack availability, never execution authorization.
 	GoalMode bool `toml:"goal_mode,omitempty"`
 	// HubChores is PLAIN: not inheritable (an inherited opt-in would enrol
@@ -735,6 +751,8 @@ func projectFromFile(fp fileProject) Project {
 		Sandbox:           fp.Sandbox,
 		SandboxImage:      fp.SandboxImage,
 		SandboxPorts:      fp.SandboxPorts,
+		SandboxToolchains: fp.SandboxToolchains,
+		SandboxPackages:   fp.SandboxPackages,
 		GoalMode:          fp.GoalMode,
 		HubChores:         fp.HubChores,
 		Kind:              fp.Kind,
@@ -812,6 +830,8 @@ func projectToFile(p Project) fileProject {
 		Sandbox:           p.Sandbox,
 		SandboxImage:      p.SandboxImage,
 		SandboxPorts:      p.SandboxPorts,
+		SandboxToolchains: p.SandboxToolchains,
+		SandboxPackages:   p.SandboxPackages,
 		GoalMode:          p.GoalMode,
 		HubChores:         p.HubChores,
 		Kind:              p.Kind,

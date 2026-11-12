@@ -253,10 +253,19 @@ const sandboxHooklessGuard = "echo 'lola: no linux lola is available for the san
 
 // prepareSandbox runs before a sandboxed launch: it makes sure the linux lola
 // for the hooks exists. A host launch passes through.
-func (n *Native) prepareSandbox(ctx context.Context, sandboxed bool) error {
+func (n *Native) prepareSandbox(ctx context.Context, project string, sandboxed bool) error {
 	if !sandboxed {
 		return nil
 	}
-	_, err := n.sandboxLolaBin(ctx)
-	return err
+	if _, err := n.sandboxLolaBin(ctx); err != nil {
+		return err
+	}
+	// The project's own image (its toolchains on top of the default one) is
+	// built here, before the launch line names it.
+	if p := n.sandboxProject(project); p != nil {
+		if _, err := n.projectImage(ctx, p); err != nil {
+			return err
+		}
+	}
+	return nil
 }

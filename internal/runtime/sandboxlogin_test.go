@@ -62,7 +62,7 @@ func TestReloginGivesALoginlessSandboxedSessionTheNewLogin(t *testing.T) {
 	}
 	// A second refresh appends nothing new.
 	before := string(env)
-	if err := f.n.refreshSandboxCredentials(s.Worktree); err != nil {
+	if err := f.n.refreshSandboxCredentials(s.Worktree, agent.Claude); err != nil {
 		t.Fatal(err)
 	}
 	if after, _ := os.ReadFile(filepath.Join(s.Worktree, ".lola", "env")); string(after) != before {
@@ -70,23 +70,50 @@ func TestReloginGivesALoginlessSandboxedSessionTheNewLogin(t *testing.T) {
 	}
 }
 
-func TestSandboxLoginMissingIgnoresOtherSessions(t *testing.T) {
+func TestSandboxLoginForCodexUsesTheHostLogin(t *testing.T) {
 	f := sandboxFixture(t)
 	f.n.SandboxCredential = func(string) (string, bool) { return "", false }
-	s, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
+	host := filepath.Join(t.TempDir(), "auth.json")
+	hostAuthFile = func(k agent.Kind) string {
+		if k == agent.Codex {
+			return host
+		}
+		return ""
+	}
+	t.Cleanup(func() { hostAuthFile = agent.HostAuthFile })
+
+	if f.n.SandboxLoginAvailable(agent.Codex) {
+		t.Fatal("codex logged in with no host login")
+	}
+	s, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "codex")
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := s
-	host.Sandbox = ""
-	codex := s
-	codex.Agent = "codex"
-	for name, c := range map[string]struct{ ok bool }{"host": {f.n.SandboxLoginMissing(host)}, "codex": {f.n.SandboxLoginMissing(codex)}} {
-		if c.ok {
-			t.Errorf("%s session reported as missing a Claude login", name)
-		}
+	if !f.n.SandboxLoginMissing(s) {
+		t.Fatal("codex session without a login not reported")
+	}
+	if err := os.WriteFile(host, []byte(`{"tokens":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	if !f.n.SandboxLoginAvailable(agent.Codex) {
-		t.Error("codex gated on a Claude login")
+		t.Fatal("host login not seen")
+	}
+	if err := f.n.refreshSandboxCredentials(s.Worktree, agent.Codex); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(s.Worktree, ".lola", "codex", "auth.json"))
+	if err != nil || string(got) != `{"tokens":"x"}` {
+		t.Fatalf("login not copied: %q %v", got, err)
+	}
+	if fi, _ := os.Stat(filepath.Join(s.Worktree, ".lola", "codex", "auth.json")); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("copied login mode %v", fi.Mode())
+	}
+	if f.n.SandboxLoginMissing(s) {
+		t.Fatal("still missing after the copy")
+	}
+	host2 := s
+	host2.Sandbox = ""
+	if f.n.SandboxLoginMissing(host2) {
+		t.Fatal("a host session reported")
 	}
 }

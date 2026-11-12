@@ -709,6 +709,10 @@ type ProjectExecutionDTO struct {
 	GoalMode bool   `json:"goalMode"`
 	Sandbox  string `json:"sandbox"`
 	Image    string `json:"image"`
+	// Toolchains is sandbox_toolchains (empty = detected from the
+	// repository); Packages is sandbox_packages.
+	Toolchains []string `json:"toolchains"`
+	Packages   []string `json:"packages"`
 }
 
 // ProjectFormDTO is the whole of one [[project]] — repository setup, Linear
@@ -843,7 +847,7 @@ func labelsDTO(in []string) []string {
 func projectDTO(p *config.Project) ProjectFormDTO {
 	hubChores := p.HubChores
 	return ProjectFormDTO{
-		Execution:       &ProjectExecutionDTO{GoalMode: p.GoalMode, Sandbox: p.Sandbox, Image: p.SandboxImage},
+		Execution:       &ProjectExecutionDTO{GoalMode: p.GoalMode, Sandbox: p.Sandbox, Image: p.SandboxImage, Toolchains: nonNil(p.SandboxToolchains), Packages: nonNil(p.SandboxPackages)},
 		Name:            p.Name,
 		Label:           p.Label,
 		Path:            p.Path,
@@ -966,6 +970,12 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		p.GoalMode = dto.Execution.GoalMode
 		p.Sandbox = strings.TrimSpace(dto.Execution.Sandbox)
 		p.SandboxImage = strings.TrimSpace(dto.Execution.Image)
+		if dto.Execution.Toolchains != nil { // absent (an older client) = untouched
+			p.SandboxToolchains = nonEmpty(trimAll(dto.Execution.Toolchains))
+		}
+		if dto.Execution.Packages != nil {
+			p.SandboxPackages = nonEmpty(trimAll(dto.Execution.Packages))
+		}
 	}
 	p.Enabled = dto.Enabled
 	p.TeamID = dto.TeamID

@@ -337,6 +337,13 @@ export interface ProjectExecutionDTO {
     "goalMode": boolean;
     "sandbox": string;
     "image": string;
+
+    /**
+     * Toolchains is sandbox_toolchains (empty = detected from the
+     * repository); Packages is sandbox_packages.
+     */
+    "toolchains": string[] | null;
+    "packages": string[] | null;
 }
 
 /**
@@ -706,6 +713,13 @@ export interface SandboxStatusDTO {
      * ANTHROPIC_API_KEY exists (presence only)
      */
     "apiKeySet": boolean;
+
+    /**
+     * CodexLogin / OpenCodeLogin: the host has a login lola copies into
+     * sandboxed codex / opencode sessions (presence only).
+     */
+    "codexLogin": boolean;
+    "openCodeLogin": boolean;
 }
 
 export interface SettingsDTO {
@@ -902,6 +916,29 @@ export interface TeamPolicyDTO {
      * Locked is what the daemon enforces. Never null.
      */
     "locked": LockedSettingDTO[] | null;
+}
+
+/**
+ * ToolchainDTO is one toolchain the project form shows.
+ */
+export interface ToolchainDTO {
+    "kind": string;
+    "version": string;
+}
+
+/**
+ * ToolchainInfoDTO is what the project form needs to offer toolchains: what
+ * the checkout's files ask for, and every toolchain lola can add.
+ */
+export interface ToolchainInfoDTO {
+    "detected": ToolchainDTO[] | null;
+
+    /**
+     * Extras are details detection adds on its own: PHP extensions and node
+     * package managers ("redis", "pnpm@9.15.0").
+     */
+    "extras": string[] | null;
+    "kinds": string[] | null;
 }
 
 export interface UpdateInfoDTO {

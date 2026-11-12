@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -90,7 +91,12 @@ func TestSandboxLoginNeeded(t *testing.T) {
 	}
 	stored := false
 	lookupSandboxToken = func(string) (string, bool, error) { return "", stored, nil }
-	ask := func(project, kind string) bool {
+	prevHost := hostLoggedIn
+	codexIn := false
+	hostLoggedIn = func(k agent.Kind) bool { return k == agent.Codex && codexIn }
+	t.Cleanup(func() { hostLoggedIn = prevHost })
+	t.Setenv("OPENAI_API_KEY", "")
+	ask := func(project, kind string) string {
 		t.Helper()
 		v, err := s.SandboxLoginNeeded(project, kind)
 		if err != nil {
@@ -98,14 +104,21 @@ func TestSandboxLoginNeeded(t *testing.T) {
 		}
 		return v
 	}
-	if !ask("web", "") {
+	if ask("web", "") != "claude" {
 		t.Fatal("sandboxed claude without a token not flagged")
 	}
-	if ask("api", "") || ask("web", "codex") || ask("nope", "") {
-		t.Fatal("flagged a host project, another agent, or an unknown project")
+	if ask("api", "") != "" || ask("nope", "") != "" {
+		t.Fatal("flagged a host project or an unknown project")
+	}
+	if ask("web", "codex") != "codex" {
+		t.Fatal("codex without a host login not flagged")
+	}
+	codexIn = true
+	if ask("web", "codex") != "" {
+		t.Fatal("codex flagged with a host login")
 	}
 	stored = true
-	if ask("web", "claude") {
+	if ask("web", "claude") != "" {
 		t.Fatal("flagged with a token in the keychain")
 	}
 }

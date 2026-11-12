@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	"github.com/sushidev-team/lola/internal/toolchain"
 )
 
 // The container SANDBOX ([[project]].sandbox = "docker" + the global [sandbox]
@@ -100,6 +102,13 @@ func (s SandboxConfig) EffectiveHookPort() int {
 
 // Sandboxed reports whether the project's agents run in a container.
 func (p *Project) Sandboxed() bool { return p.Sandbox == SandboxDocker }
+
+// UsesDefaultSandboxImage reports whether p runs lola's default image (no
+// sandbox_image, no [sandbox].image): only then does lola add the project's
+// toolchains on top of it.
+func (c *Config) UsesDefaultSandboxImage(p *Project) bool {
+	return (p == nil || p.SandboxImage == "") && c.Sandbox.Image == ""
+}
 
 // SandboxImageFor is the image a sandboxed project runs: its own
 // sandbox_image, else [sandbox].image, else lola's default image. Never "".
@@ -255,6 +264,9 @@ func (c *Config) validateSandbox() []error {
 			// linux lola the hooks need comes out of it (see SandboxConfig).
 		default:
 			errs = append(errs, fmt.Errorf("%s: sandbox must be one of none|docker (empty = none), got %q", id, p.Sandbox))
+		}
+		for _, err := range toolchain.Validate(p.SandboxToolchains, p.SandboxPackages) {
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
 		}
 		for _, spec := range p.SandboxPorts {
 			if _, _, ok := SandboxPortPair(spec); !ok {
