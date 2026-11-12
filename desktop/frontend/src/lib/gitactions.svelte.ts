@@ -180,6 +180,7 @@ export class GitActions {
       ...(this.callbacks.createBranch ? [{ label: 'New branch…', icon: 'git-branch' as const, disabled: this.blocked() || !git.snapshot?.head || !!git.snapshot?.operation, run: () => this.callbacks.createBranch?.(git.snapshot?.head ?? '', git.snapshot?.branch || 'Detached HEAD') }] : []),
       ...(current && this.callbacks.createWorktree ? [{label:'Create worktree…',icon:'folder' as const,disabled:this.mutationBlocked(),run:()=>this.callbacks.createWorktree?.(current)}] : []),
       ...this.recoveryItems(),
+      { label: 'Refresh repository', icon: 'refresh-cw', disabled: !!git.busy || git.loading, run: () => { const c = this.context(); void c.git.load(c.ref, c.limit); } },
       { label: 'Fetch all remotes', icon: 'refresh-cw', disabled: this.blocked(), run: () => { const c = this.context(); void c.git.act('fetch', [], c.ref, c.limit); } },
       ...(current ? [
         { label: 'Pull changes', icon: 'arrow-down' as const, disabled: this.mutationBlocked(current) || !this.upstream(current), run: () => this.action('pull', current) },

@@ -1,3 +1,4 @@
+import House from '@lucide/svelte/icons/house';
 import Archive from '@lucide/svelte/icons/archive';
 import ArchiveRestore from '@lucide/svelte/icons/archive-restore';
 import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -78,6 +79,7 @@ import User from '@lucide/svelte/icons/user';
 import X from '@lucide/svelte/icons/x';
 
 export const icons = {
+  house: House,
   'archive': Archive,
   'archive-restore': ArchiveRestore,
   'circle-minus': CircleMinus,

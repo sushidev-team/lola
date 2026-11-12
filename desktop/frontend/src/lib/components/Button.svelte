@@ -22,7 +22,7 @@
   export type ButtonSize = "xs" | "sm" | "md";
 
   const BASE =
-    "inline-flex shrink-0 items-center gap-1.5 rounded-md whitespace-nowrap transition-colors " +
+    "inline-flex shrink-0 items-center gap-1.5 rounded-md whitespace-nowrap cursor-pointer transition-colors " +
     "disabled:cursor-not-allowed disabled:opacity-40";
 
   // Heights are the sidebar's density ladder: 24 / 28 / 32px against 12–13px type.

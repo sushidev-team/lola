@@ -62,14 +62,14 @@
   // text was carrying the entire selected state on its own. The `text-ink` /
   // `text-faint` split is the one signal that survives both flavors.
   const rowCls = $derived(
-    "group/row flex h-7 w-full items-center rounded-md transition-colors " +
+    "sidebar-nav-row group/row flex h-7 w-full items-center rounded-md " +
       (active ? "bg-sel text-ink" : "text-faint hover:bg-sel/60 hover:text-ink"),
   );
 </script>
 
 <div class={rowCls} {title}>
   <button
-    class="flex h-full min-w-0 grow items-center gap-2 rounded-md px-2 text-left"
+    class="flex h-full min-w-0 grow cursor-pointer items-center gap-2 rounded-md px-2 text-left"
     aria-current={active ? "true" : undefined}
     {onclick}
     {onkeydown}
@@ -87,8 +87,12 @@
   {/if}
   {#if actions}
     <span
-      class="flex shrink-0 items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100"
+      class="flex shrink-0 items-center pr-2 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100"
       >{@render actions()}</span
     >
   {/if}
 </div>
+
+<style>
+  .sidebar-nav-row :global(button) { transition:none; }
+</style>

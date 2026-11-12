@@ -16,6 +16,7 @@ export class ProjectGitState {
   loading = $state(false);
   diffLoading = $state(false);
   busy = $state('');
+  fetchingRemote = $state('');
   error = $state('');
   diffError = $state('');
   notice = $state('');
@@ -102,7 +103,7 @@ export class ProjectGitState {
 
   async branchAction(request: GitBranchAction, ref = '', limit = 200): Promise<string | null> {
     if (this.busy) return null;
-    this.busy = request.action; this.error = ''; this.notice = '';
+    this.busy = request.action; this.fetchingRemote = request.action === 'fetch' ? request.source : ''; this.error = ''; this.notice = '';
     try {
       const result = await ProjectGitService.BranchAction(this.project, this.worktree, request);
       await this.load(ref, limit);
@@ -114,7 +115,7 @@ export class ProjectGitState {
       await this.load(ref, limit);
       this.error = String(error);
       return null;
-    } finally { this.busy = ''; }
+    } finally { this.busy = ''; this.fetchingRemote = ''; }
   }
 
   async createBranch(name: string, startSHA: string, checkout: boolean, ref = '', limit = 200): Promise<string | null> {

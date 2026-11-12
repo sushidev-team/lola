@@ -15,6 +15,7 @@
   import { nav } from '$lib/nav.svelte';
   import { disclosureMotion, disclosureSlide } from '$lib/disclosureMotion';
   import { gitColumns, readGitColumns, saveGitColumns, defaultGitColumns, type GitColumnID } from '$lib/gitcolumns';
+  import GitProviderIcon from './GitProviderIcon.svelte';
   import Icon from './Icon.svelte';
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
@@ -384,7 +385,7 @@
   {/each}
 {/snippet}
 
-<svelte:window onkeydown={searchKey} onclick={(event) => { if (!(event.target instanceof Element) || !event.target.closest('.column-options')) columnMenu = false; }} />
+<svelte:window onfocus={() => { if (data && !git.busy && !git.loading) void git.load(ref, limit); }} onkeydown={searchKey} onclick={(event) => { if (!(event.target instanceof Element) || !event.target.closest('.column-options')) columnMenu = false; }} />
 
 {#snippet loadingRailRows(count: number)}
   <div class="rail-skeleton" aria-hidden="true">{#each Array(count) as _, index}<div class="rail-placeholder"><Skeleton width="12px" height="12px"/><Skeleton width={`${[65,80,52,72][index % 4]}%`} height="11px"/></div>{/each}</div>
@@ -396,9 +397,8 @@
     <div class="toolbar-actions no-drag" role="group" aria-label="Repository actions">
       <Button icon size="xs" class="rail-toggle" selected={showRail} aria-label="Toggle repository navigation" title="Branches and worktrees" onclick={() => showRail = !showRail}><Icon name="list-filter" size={16} /></Button>
       <div class="toolbar-group">
-        <Button size="sm" aria-label="Fetch" disabled={!data || !!git.busy} loading={git.busy === 'fetch'} onclick={() => void act('fetch')} title="Fetch remote refs"><Icon name="refresh-cw" size={15} /><span class="git-action-label">Fetch</span></Button>
-        <Button size="sm" aria-label="Pull" disabled={!data?.upstream || !!git.busy || !!data?.operation} loading={git.busy === 'pull'} onclick={() => void act('pull')} title="Pull with fast-forward only"><Icon name="arrow-down" size={15} /><span class="git-action-label">Pull</span></Button>
-        <Button size="sm" variant="primary" class="push-action" aria-label="Push" disabled={!data?.head || !data?.branch || !!git.busy || !!data?.operation} loading={git.busy === 'push' || git.busy === 'publish'} onclick={() => gitActions.push()} title="Push current branch"><Icon name="arrow-up" size={16} /><span class="git-action-label">Push</span></Button>
+        <Button size="sm" class="pull-action" aria-label="Pull" disabled={!data?.upstream || !!git.busy || !!data?.operation} loading={git.busy === 'pull'} onclick={() => void act('pull')} title="Pull with fast-forward only"><span class="sync-arrow-window" aria-hidden="true"><Icon name="arrow-down" size={15} class="sync-arrow" /></span><span class="git-action-label">Pull</span></Button>
+        <Button size="sm" variant="primary" class="push-action" aria-label="Push" disabled={!data?.head || !data?.branch || !!git.busy || !!data?.operation} loading={git.busy === 'push' || git.busy === 'publish'} onclick={() => gitActions.push()} title="Push current branch"><span class="sync-arrow-window" aria-hidden="true"><Icon name="arrow-up" size={16} class="sync-arrow" /></span><span class="git-action-label">Push</span></Button>
       </div>
       <span class="toolbar-divider"></span>
       <div class="toolbar-group">
@@ -406,7 +406,6 @@
         <Button size="sm" aria-label="Stash changes" disabled={!data?.head || !data?.files.length || !!git.busy || !!data?.operation} loading={git.busy === 'stash'} onclick={() => gitActions.stash()} title="Stash staged, unstaged and untracked changes"><Icon name="archive" size={16} /><span class="git-action-label">Stash</span></Button>
         <Button size="sm" aria-label="Pop latest stash" disabled={!git.stashes.length || !!data?.files.length || !!git.busy || !!data?.operation} loading={git.busy === 'pop'} onclick={() => gitActions.pop()} title={data?.files.length ? 'Commit or stash current changes before popping a stash' : 'Pop latest stash'}><Icon name="archive-restore" size={16} /><span class="git-action-label">Pop</span></Button>
       </div>
-      <Button size="xs" icon class="refresh-action" loading={git.loading} disabled={!!git.busy} aria-label="Refresh repository" title="Refresh repository" onclick={() => void git.load(ref, limit)}><Icon name="refresh-cw" size={14} /></Button>
     </div>
     <div class="toolbar-project-actions">{#if actions}{@render actions()}{/if}</div>
   </header>
@@ -440,7 +439,8 @@
               <Icon name="chevron-down" class="git-disclosure-chevron" size={11} />
               {#if remote.owner}<GitAvatar src={git.remoteAvatars[remote.name]} name={remote.owner} size={20} loading={git.remoteIdentityLoading} />{:else}<Icon name="cloud" size={17} />{/if}
               <span class="remote-copy"><strong>{remote.name}</strong>{#if remote.owner}<small>{remote.owner}</small>{:else if remote.host}<small>{remote.host}</small>{/if}</span>
-              {#if remote.host === 'github.com'}<span class="remote-provider">GitHub</span>{/if}
+              <Button size="xs" icon class="remote-fetch" aria-label={`Fetch ${remote.name}`} title={`Fetch from ${remote.name}`} disabled={!!git.busy || git.loading} loading={git.busy === 'fetch' && git.fetchingRemote === remote.name} onclick={(event) => { event.preventDefault(); event.stopPropagation(); gitActions.fetch(remote.name); }}><Icon name="refresh-cw" size={14}/></Button>
+              {#if remote.host}<GitProviderIcon host={remote.host}/>{/if}
             </summary>
             {@render branchNodes(remote.tree, 'remote', 0)}
             {#if !remote.branches.length}<p class="rail-empty">Fetch to load branches</p>{/if}
@@ -455,7 +455,7 @@
         {#if initialLoading}{@render loadingRailRows(2)}{/if}
         {#each data?.worktrees ?? [] as tree, index (tree.path)}
           <Button block selected={tree.path === data?.path} disabled={tree.blocked || tree.prunable} class="rail-row worktree-row" aria-label={index === 0 ? `Main checkout ${tree.branch || 'Detached HEAD'}` : `${tree.branch || 'Detached HEAD'} ${tree.path}`} oncontextmenu={(event) => gitActions.openWorktree(tree, event)} title={tree.blocked ? `${tree.path} · managed sandbox; open its session to inspect` : tree.path} onclick={() => chooseWorktree(tree.path === configuredPath ? '' : tree.path)}>
-            <Icon name={tree.blocked ? 'shield-check' : 'folder'} size={14} /><span class="tree-copy"><span>{index === 0 ? 'Main checkout' : tree.branch || 'Detached HEAD'}</span>{#if index === 0}<small>{tree.branch || 'Detached HEAD'}</small>{/if}</span>
+            <Icon name={tree.blocked ? 'shield-check' : index === 0 ? 'house' : 'folder'} size={14} /><span class="tree-copy"><span>{tree.branch || 'Detached HEAD'}</span></span>
           </Button>
         {/each}
         </div>
@@ -605,8 +605,21 @@
   .standalone-title { flex:1; font-size:15px; }
   .toolbar-actions { display:flex; justify-content:center; gap:6px; padding:3px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-canvas); align-items:center; flex-shrink:0; }
   .toolbar-actions :global(button) { font-size:13px; height:28px; }
-  .toolbar-actions :global(.push-action) { padding-inline:12px; font-weight:600; }
-  .toolbar-actions :global(.refresh-action) { color:var(--color-faint); }
+  .toolbar-actions :global(.push-action) { padding-inline:12px; font-weight:600; transition:background-color 180ms cubic-bezier(.16,1,.3,1); }
+  .toolbar-actions :global(.push-action:enabled:hover) { background:color-mix(in srgb,var(--color-accent) 25%,var(--color-accent-fill)); }
+  .toolbar-actions :global(.push-action) { --arrow-travel:-20px; --arrow-duration:260ms; }
+  .toolbar-actions :global(.pull-action) { --arrow-travel:20px; }
+  .toolbar-actions :global(button:enabled:hover .sync-arrow) { animation:sync-arrow-travel var(--arrow-duration,440ms) cubic-bezier(.45,0,.55,1) 1; }
+  .sync-arrow-window { display:grid; place-items:center; width:16px; height:16px; flex-shrink:0; overflow:hidden; }
+  @keyframes sync-arrow-travel {
+    0%,100% { transform:translateY(0); }
+    49% { transform:translateY(var(--arrow-travel)); }
+    50% { transform:translateY(calc(-1 * var(--arrow-travel))); }
+  }
+  @media (prefers-reduced-motion:reduce) {
+    .toolbar-actions :global(.push-action) { transition:none; }
+    .toolbar-actions :global(button:enabled:hover .sync-arrow) { animation:none; }
+  }
   .toolbar-divider { width:1px; height:16px; background:var(--color-edge); margin:0 4px; }
   .git-notices { grid-row:2; min-width:0; }
   .operation-notice { display:flex; align-items:center; gap:8px; padding:7px 12px; color:var(--color-warn); background:var(--color-canvas); border-bottom:1px solid var(--color-edge); font-size:13px; }
@@ -633,8 +646,8 @@
   :global(.git-disclosure-chevron) { transition:transform 180ms ease-out; }
   @media (prefers-reduced-motion:reduce) { :global(.git-disclosure-chevron) { transition:none; } }
   details:not([open]) > summary :global(.git-disclosure-chevron) { transform:rotate(-90deg); }
-  .repo-section { margin-top:16px; }
-  .repo-section:first-of-type { margin-top:0; }
+  .repo-section { margin-top:0; }
+  .repo-section:not([open]) + .repo-section > summary { border-top:0; }
   .repo-section > summary { position:sticky; top:0; z-index:1; min-height:34px; gap:8px; padding:6px 12px; border-block:1px solid var(--color-edge); border-radius:0; background:var(--color-panel); color:var(--color-ink); font-size:13px; font-weight:600; }
   .repo-section > summary:hover { background:var(--color-sel); }
   .repo-section > summary:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
@@ -655,16 +668,14 @@
   .repo-rail :global(.stash-row small) { margin-left:auto; font-size:12px; color:var(--color-faint); }
   .branch-glyph { display:inline-flex; flex-shrink:0; }
   .remote-group { margin-top:4px; }
+  .remote-group :global(.remote-fetch) { flex-shrink:0; transition:none; }
   .remote-group summary { min-height:28px; height:28px; gap:7px; }
-  .remote-provider { font-size:11px; font-weight:400; color:var(--color-faint); }
   .remote-copy { display:flex; align-items:baseline; gap:7px; min-width:0; flex:1; }
   .remote-copy strong { font-size:13px; font-weight:500; }
   .remote-copy small { font-size:12px; font-weight:400; color:var(--color-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .tree-copy { display:flex; align-items:center; min-width:0; gap:8px; flex:1; }
   .tree-copy > span { min-width:0; }
-  .tree-copy small { margin-left:auto; max-width:40%; }
-  .tree-copy > span,.tree-copy small { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .tree-copy small { color:var(--color-faint); font-size:12px; }
+  .tree-copy > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .history-stage { display:grid; grid-template-rows:minmax(0,1fr); min-height:0; min-width:0; }
   .history-stage.with-diff { grid-template-rows:minmax(150px,0.9fr) minmax(180px,1.1fr); }
   .history { container:history / inline-size; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto; min-height:0; min-width:0; position:relative; }
@@ -781,7 +792,7 @@
   .git-status > span:last-child { flex-shrink:0; }
   :global(.rail-toggle) { display:none; }
   @container (max-width:1150px) { .git-action-label { display:none; } .toolbar-actions :global(button) { width:28px; padding:0; } .toolbar-actions :global(.push-action) { width:30px; padding:0; } }
-  @container (max-width:760px) { .git-toolbar { grid-template-columns:auto minmax(0,1fr) auto; } .toolbar-heading :global(.project-title) { display:none; } .toolbar-actions { gap:2px; } .toolbar-actions :global(.refresh-action) { display:none; } .operation-notice { flex-wrap:wrap; } }
+  @container (max-width:760px) { .git-toolbar { grid-template-columns:auto minmax(0,1fr) auto; } .toolbar-heading :global(.project-title) { display:none; } .toolbar-actions { gap:2px; } .operation-notice { flex-wrap:wrap; } }
   @container (max-width:950px) { .git-workbench { grid-template-columns:minmax(0,1fr) var(--inspector-width); position:relative; } .repo-rail { display:none; } .git-workbench :global(.rail-resize) { display:none; } .rail-open .repo-rail { display:block; position:absolute; inset:0 auto 0 0; width:280px; z-index:10; box-shadow:8px 0 20px #0002; } :global(.rail-toggle) { display:inline-flex; } }
   @container (max-width:580px) { .git-workbench :global(.sidebar-resize) { display:none; } .git-workbench { grid-template-columns:minmax(0,1fr); overflow:auto; grid-template-rows:max-content max-content; align-content:start; } .history-stage { height:330px; min-height:330px; } .history-stage.with-diff { height:550px; min-height:550px; } .git-inspector { height:620px; border-left:0; border-top:1px solid var(--color-edge); min-height:0; grid-template-rows:auto auto auto; align-content:start; } .changed-file-list { overflow:visible; } .git-toolbar { gap:4px; padding-inline:8px; } .git-toolbar.window-inset { padding-left:82px; } .toolbar-divider { margin-inline:0; } .git-status > span:last-child { max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } }
 </style>

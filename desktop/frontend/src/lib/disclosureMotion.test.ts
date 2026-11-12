@@ -18,10 +18,10 @@ it('toggles only the nearest disclosure when summaries are nested', () => {
   parentAction.destroy(); childAction.destroy();
 });
 
-it('skips animation for reduced motion and leaves summary links alone', () => {
+it('skips animation for reduced motion and leaves summary links and buttons alone', () => {
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
   const node = document.createElement('details');
-  node.innerHTML = '<summary>Worktrees <a href="#branch">Branch</a></summary><p>Content</p>';
+  node.innerHTML = '<summary>Worktrees <a href="#branch">Branch</a><button><span>Fetch</span></button></summary><p>Content</p>';
   document.body.append(node);
   const animate = vi.fn(); node.animate = animate;
   const action = disclosureMotion(node);
@@ -31,6 +31,10 @@ it('skips animation for reduced motion and leaves summary links alone', () => {
   const linkClick = new MouseEvent('click', { bubbles: true, cancelable: true });
   node.querySelector('a')!.dispatchEvent(linkClick);
   expect(linkClick.defaultPrevented).toBe(false);
+  expect(node.open).toBe(true);
+  const buttonClick = new MouseEvent('click', { bubbles: true, cancelable: true });
+  node.querySelector('button span')!.dispatchEvent(buttonClick);
+  expect(buttonClick.defaultPrevented).toBe(false);
   expect(node.open).toBe(true);
   action.destroy();
   vi.unstubAllGlobals();

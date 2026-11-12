@@ -33,6 +33,10 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function open() { render(ProjectGit, { project }); await screen.findByRole('button', { name: /Add project workspace,/ }); }
+async function refreshRepository() {
+  await fireEvent.contextMenu(screen.getByRole('navigation', {name:'Repository navigation'}));
+  await fireEvent.click(screen.getByRole('menuitem', {name:'Refresh repository'}));
+}
 async function pointerDrag(source: Element, target: Element, release = true) {
   vi.spyOn(document, 'elementFromPoint').mockReturnValue(target);
   await fireEvent.pointerDown(source, { button: 0, clientX: 10, clientY: 10 });
@@ -42,6 +46,36 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it('fetches only the chosen remote without collapsing its row or refreshing during the operation', async () => {
+    api.Snapshot.mockResolvedValue(snapshot({remotes:['origin','upstream'].map(name=>({name,host:'github.com',owner:'acme',repo:'acme/repo',avatarUrl:''}))}));
+    let finish!:(value:{path:string})=>void;
+    api.BranchAction.mockReturnValueOnce(new Promise(resolve=>finish=resolve));
+    await open();
+    const toolbar=screen.getByRole('group',{name:'Repository actions'});
+    expect(within(toolbar).queryByRole('button',{name:'Fetch'})).toBeNull();
+    expect(within(toolbar).queryByRole('button',{name:'Refresh repository'})).toBeNull();
+    const fetch=screen.getByRole('button',{name:'Fetch upstream'}),origin=screen.getByRole('button',{name:'Fetch origin'});
+    await fireEvent.click(fetch);
+    expect(fetch.closest('details')).toHaveAttribute('open');
+    expect(api.BranchAction).toHaveBeenCalledWith(project,'',{action:'fetch',source:'upstream',target:'',sourceSHA:'',targetSHA:''});
+    expect(fetch).toHaveAttribute('aria-busy','true');expect(origin).toBeDisabled();expect(origin).not.toHaveAttribute('aria-busy');
+    const calls=api.Snapshot.mock.calls.length;
+    await fireEvent.focus(window);expect(api.Snapshot).toHaveBeenCalledTimes(calls);
+    finish({path:'/repo'});await waitFor(()=>expect(fetch).toBeEnabled());
+    expect(origin).toBeEnabled();expect(api.Fetch).not.toHaveBeenCalled();
+  });
+  it('rereads local state on window focus without losing commit selection',async()=>{
+    await open();
+    const row=screen.getByRole('button',{name:/Add project workspace,/});await fireEvent.click(row);
+    const main=screen.getByRole('button',{name:'Main checkout main'});
+    expect(main).toHaveTextContent('main');expect(main).not.toHaveTextContent('Main checkout');expect(main.querySelector('.lucide-house')).not.toBeNull();
+    api.Snapshot.mockResolvedValue(snapshot({files:[]}));
+    await fireEvent.focus(window);
+    await waitFor(()=>expect(screen.queryByRole('button',{name:/Working changes,/})).toBeNull());
+    expect(screen.getByRole('button',{name:/Add project workspace,/})).toHaveAttribute('aria-pressed','true');
+    expect(api.Fetch).not.toHaveBeenCalled();
+  });
+
   it('shows aligned loading placeholders without false empty states, then retains content during refresh',async()=>{
     let resolve!:(value:ReturnType<typeof snapshot>)=>void;api.Snapshot.mockReturnValueOnce(new Promise(r=>resolve=r));
     const {container}=render(ProjectGit,{project});await waitFor(()=>expect(container.querySelector('.history-skeleton')).not.toBeNull());
@@ -49,7 +83,7 @@ describe('Project Git workspace', () => {
     expect(screen.getByRole('navigation',{name:'Repository navigation'})).toHaveAttribute('aria-busy','true');expect(screen.getByLabelText('Commit subject')).toBeDisabled();
     resolve(snapshot());await screen.findByRole('button',{name:/Add project workspace,/});expect(container.querySelector('.history-skeleton')).toBeNull();expect(container.querySelector('.files-skeleton')).toBeNull();
     let refresh!:(value:ReturnType<typeof snapshot>)=>void;api.Snapshot.mockReturnValueOnce(new Promise(r=>refresh=r));
-    await fireEvent.click(screen.getByRole('button',{name:'Refresh repository'}));
+    await refreshRepository();
     expect(container.querySelector('.history-skeleton')).toBeNull();expect(screen.getByRole('button',{name:/Add project workspace,/})).toBeInTheDocument();refresh(snapshot());
   });
   it('resizes both sidebars with the keyboard and remembers independent widths',async()=>{
@@ -196,7 +230,7 @@ describe('Project Git workspace', () => {
     expect(screen.queryByRole('button', { name: 'feature/api/login' })).toBeNull();
     expect(screen.getByRole('button', { name: 'origin/feature/api/login' })).toHaveTextContent('login');
     await fireEvent.click(remote);
-    await fireEvent.click(screen.getByRole('button', { name: 'Refresh repository' }));
+    await refreshRepository();
     await waitFor(() => expect(api.Snapshot).toHaveBeenCalledTimes(2));
     expect(screen.getByRole('button', { name: 'Remote branch folder origin/feature' })).toHaveAttribute('aria-expanded', 'false');
     await fireEvent.click(screen.getByRole('button', { name: 'Local branch folder feature' }));
@@ -221,7 +255,7 @@ describe('Project Git workspace', () => {
     expect(screen.getByRole('button', { name: 'Commit 1 file' })).toBeDisabled();
     expect(screen.getByText('Resolve conflicted files before committing.')).toBeInTheDocument();
     api.Snapshot.mockRejectedValue(new Error('Repository unavailable'));
-    await fireEvent.click(screen.getByRole('button', { name: 'Refresh repository' }));
+    await refreshRepository();
     expect(await screen.findByRole('alert')).toHaveTextContent('Repository unavailable');
   });
   it('places working changes in history and identifies the checked-out local branch', async () => {
@@ -241,7 +275,7 @@ describe('Project Git workspace', () => {
     await open();
     expect(screen.getByRole('button', { name: 'Working changes, 2 files' })).toBeInTheDocument();
     api.Snapshot.mockResolvedValue(snapshot({files: []}));
-    await fireEvent.click(screen.getByRole('button', { name: 'Refresh repository' }));
+    await refreshRepository();
     await waitFor(() => expect(screen.queryByRole('button', {name: /Working changes,/})).toBeNull());
     expect(screen.getByRole('button', {name: /Add project workspace,/})).toBeInTheDocument();
   });

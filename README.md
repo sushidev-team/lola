@@ -1728,6 +1728,14 @@ trees. Selection shows metadata and changed files; click a file or **View change
 to open a diff. The comparison identifies its direction and can be reversed. Diffs
 offer unified and side-by-side layouts.
 
+**AI draft** beside Commit message uses your installed, signed-in Claude Code
+with Haiku to suggest an editable subject and body from staged changes. It sends
+bounded staged patch excerpts, file names, recent commit subjects and the current
+draft; it does not include unstaged or untracked content or create a commit.
+If the index or your draft changes during generation, the result is discarded.
+Generation has a 30-second timeout; response time depends on CLI startup and the
+model service, so a one-second response is not guaranteed.
+
 **New branch** creates a local branch from the current HEAD or another selected
 local/remote tip, with an optional switch to it. **Create branch here** in a branch
 or commit context menu uses that exact commit. Existing branches are never reset;
