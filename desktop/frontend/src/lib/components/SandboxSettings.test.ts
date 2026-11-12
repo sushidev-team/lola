@@ -57,7 +57,7 @@ describe("SandboxSettings", () => {
   it("shows readiness and the default image as the placeholder", async () => {
     render(SandboxSettings);
     expect(await screen.findByText(/Docker running/)).toBeInTheDocument();
-    expect(screen.getByText(/Image not pulled yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Image pulls on first use/)).toBeInTheDocument();
     expect(screen.getByText("Claude login: Not set")).toBeInTheDocument();
     expect(screen.getByLabelText("Default image")).toHaveAttribute("placeholder", "ghcr.io/sushidev-team/lola-sandbox:1.2.3");
   });
@@ -80,14 +80,16 @@ describe("SandboxSettings", () => {
 
   it("stores the token write-only and clears the field", async () => {
     render(SandboxSettings);
-    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await fireEvent.click(await screen.findByRole("button", { name: "Paste a token instead" }));
+    const input = screen.getByLabelText("Token") as HTMLInputElement;
     expect(input.type).toBe("password");
     await fireEvent.input(input, { target: { value: "sk-ant-oat01-secret" } });
     status.mockResolvedValue(sample({ tokenStored: true }));
     await fireEvent.click(screen.getByRole("button", { name: "Save token" }));
     await waitFor(() => expect(setToken).toHaveBeenCalledWith("sk-ant-oat01-secret"));
-    await waitFor(() => expect(input.value).toBe(""));
     expect(await screen.findByText("Claude login: Token stored in the keychain")).toBeInTheDocument();
+    expect(screen.getByText("Logged in")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Token")).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain("sk-ant-oat01-secret");
   });
 
@@ -103,11 +105,29 @@ describe("SandboxSettings", () => {
     status.mockResolvedValue(sample({ tokenStored: true }));
     const ask = vi.spyOn(confirm, "ask");
     render(SandboxSettings);
-    await fireEvent.click(await screen.findByRole("button", { name: "Remove token…" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Remove token" }));
     expect(ask).toHaveBeenCalledTimes(1);
     expect(clearToken).not.toHaveBeenCalled();
     ask.mock.calls[0][0].onConfirm([]);
     await waitFor(() => expect(clearToken).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows a stored login as a card and replaces it on request", async () => {
+    status.mockResolvedValue(sample({ tokenStored: true }));
+    render(SandboxSettings);
+    expect(await screen.findByText("Token in the macOS keychain")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Log in with Claude" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Replace…" }));
+    expect(screen.getByRole("button", { name: "Log in with Claude" })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("Logged in")).toBeInTheDocument();
+  });
+
+  it("shows an environment login without a remove button", async () => {
+    status.mockResolvedValue(sample({ claudeSource: "CLAUDE_CODE_OAUTH_TOKEN" }));
+    render(SandboxSettings);
+    expect(await screen.findByText("From CLAUDE_CODE_OAUTH_TOKEN")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove token" })).not.toBeInTheDocument();
   });
 
   it("passes the API key only after a confirmed choice", async () => {

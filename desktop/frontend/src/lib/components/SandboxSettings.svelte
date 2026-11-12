@@ -30,6 +30,9 @@
   let tokenBusy = $state(false);
   let tokenMsg = $state("");
   let tokenMsgKind = $state<"good" | "bad">("good");
+  // The login form shows when no login exists, or while replacing one.
+  let replacing = $state(false);
+  let manual = $state(false);
   // The API-key switch mirrors status.useApiKey; it turns ON only through the
   // confirm dialog, so a click that is cancelled leaves it off.
   let apiOn = $state(false);
@@ -39,7 +42,6 @@
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const rowCls = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-baseline gap-x-6 gap-y-1.5";
-  const hintCls = "mt-1 block text-sm text-faint";
   const msgCls = { good: "text-good", bad: "text-bad" } as const;
 
   async function load() {
@@ -79,8 +81,7 @@
       await ConfigService.SetSandboxToken(token);
       // Never keep a live secret in the DOM longer than the save.
       token = "";
-      tokenMsg = "Token stored. New sandboxed sessions use it.";
-      tokenMsgKind = "good";
+      replacing = manual = false;
       await load();
     } catch (e) {
       tokenMsg = String(e);
@@ -146,6 +147,13 @@
     }
   }
 
+  function stored() {
+    tokenMsg = "";
+    replacing = manual = false;
+    void load();
+  }
+
+  const loggedIn = $derived(!!status && (status.tokenStored || !!status.claudeSource));
   const claudeLine = $derived.by(() => {
     if (!status) return "";
     if (status.useApiKey && status.apiKeySet) return "API key, billed per token";
@@ -162,56 +170,44 @@
     <p class="text-sm text-faint">Checking…</p>
   {:else}
     {@const missing = status.missing ?? []}
-    {@const claudeOk = status.tokenStored || !!status.claudeSource}
     <ul class="grid gap-1.5 text-sm" aria-label="Sandbox status">
       <li class="flex items-center gap-1.5 {status.dockerOk ? 'text-good' : 'text-bad'}">
         <Icon name={status.dockerOk ? "check" : "x"} size={14} />
         {status.dockerOk ? "Docker running" : "Docker not running"}
-        <HelpText label="Docker" detail={status.dockerOk
-          ? `Sandboxed sessions run through ${status.docker}.`
-          : `${status.docker} does not answer. Start Docker Desktop or OrbStack; sandboxed sessions cannot start until it runs.`} />
+        {#if !status.dockerOk}<HelpText label="Docker" detail={`${status.docker} does not answer. Start Docker Desktop or OrbStack.`} />{/if}
       </li>
       {#if status.dockerOk}
-        <li class="flex items-center gap-1.5 {missing.length > 0 ? 'text-ink' : 'text-good'}">
+        <li class="flex items-center gap-1.5 {missing.length > 0 ? 'text-faint' : 'text-good'}">
           <Icon name={missing.length > 0 ? "download" : "check"} size={14} />
-          {missing.length > 0 ? "Image not pulled yet" : "Image ready"}
-          <HelpText label="sandbox image" detail={missing.length > 0
-            ? `Lola pulls ${missing.join(", ")} automatically when the first sandboxed session starts. Nothing to do.`
-            : "The sandbox image is on this Mac."} />
+          {missing.length > 0 ? "Image pulls on first use" : "Image ready"}
         </li>
       {/if}
-      <li class="flex items-center gap-1.5 {claudeOk && !(status.useApiKey && status.apiKeySet) ? 'text-good' : 'text-warn'}">
-        <Icon name={claudeOk ? "check" : "triangle-alert"} size={14} />
+      <li class="flex items-center gap-1.5 {loggedIn && !(status.useApiKey && status.apiKeySet) ? 'text-good' : 'text-warn'}">
+        <Icon name={loggedIn ? "check" : "triangle-alert"} size={14} />
         Claude login: {claudeLine}
-        {#if !claudeOk}<HelpText label="Claude login" detail="Sandboxed agents cannot log in yet. Use Log in with Claude below." />{/if}
       </li>
       <li class="flex items-center gap-1.5 {status.githubSource ? 'text-good' : 'text-warn'}">
         <Icon name={status.githubSource ? "check" : "triangle-alert"} size={14} />
         {status.githubSource ? `GitHub token from ${status.githubSource}` : "No GitHub token"}
-        <HelpText label="GitHub token" detail={status.githubSource
-          ? "Sandboxed agents can push and open PRs as you."
-          : "Sandboxed agents cannot push. Run gh auth login on this Mac."} />
+        {#if !status.githubSource}<HelpText label="GitHub token" detail="Sandboxed agents cannot push. Run gh auth login on this Mac." />{/if}
       </li>
     </ul>
   {/if}
 </SettingsGroup>
 
-<SettingsGroup title="Image">
+<SettingsGroup title="Image" help="Empty uses Lola’s image. Any image with sh, git and the coding agent works; a project can set its own.">
   <div class={rowCls}>
     <label for={`${formId}-image`} class="text-faint">Default image</label>
-    <span>
-      <input
-        id={`${formId}-image`}
-        class="{inputCls} font-mono"
-        autocomplete="off"
-        spellcheck="false"
-        placeholder={status?.defaultImage ?? ""}
-        bind:value={image}
-        disabled={imageBusy}
-        oninput={() => (imageMsg = "")}
-      />
-      <span class={hintCls}>Empty uses Lola’s image. <HelpText label="custom image" detail="Any image with sh, git and the coding agent works; Lola mounts its own binary. A project can set its own image too." /></span>
-    </span>
+    <input
+      id={`${formId}-image`}
+      class="{inputCls} font-mono"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder={status?.defaultImage ?? ""}
+      bind:value={image}
+      disabled={imageBusy}
+      oninput={() => (imageMsg = "")}
+    />
   </div>
   <div class={rowCls}>
     <span></span>
@@ -222,51 +218,63 @@
   </div>
 </SettingsGroup>
 
-<SettingsGroup title="Claude login">
-  <div class={rowCls}>
-    <span class="text-faint">Login</span>
-    <SetupTokenRunner onStored={() => { tokenMsg = ""; void load(); }} />
-  </div>
-  <div class={rowCls}>
-    <label for={`${formId}-token`} class="text-faint">{status?.tokenStored ? "New token" : "Token"}</label>
-    <span>
-      <input
-        id={`${formId}-token`}
-        class="{inputCls} font-mono"
-        type="password"
-        autocomplete="off"
-        placeholder="sk-ant-oat01-…"
-        bind:value={token}
-        disabled={tokenBusy}
-        oninput={() => (tokenMsg = "")}
-      />
-      <span class={hintCls}>Or paste one from <code>claude setup-token</code>. <HelpText label="Claude token" detail="A container cannot read your keychain, so sandboxed agents log in with this token. Lola stores it in the macOS keychain and never shows it again." /></span>
-    </span>
-  </div>
-  <div class={rowCls}>
-    <span></span>
-    <span class="flex flex-wrap items-center gap-2">
-      <Button variant="secondary" disabled={!token.trim() || tokenBusy} loading={tokenBusy} onclick={saveToken}>Save token</Button>
-      {#if status?.tokenStored}
-        <Button disabled={tokenBusy} onclick={askClearToken}>Remove token…</Button>
+<SettingsGroup title="Claude login" help="A container cannot read your keychain, so sandboxed agents log in with a Claude token. Lola keeps it in the macOS keychain and never shows it again.">
+  {#if loggedIn && !replacing && status}
+    <div class="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-good/40 bg-good/5 px-3 py-2.5" data-claude-login="ok">
+      <span class="text-good"><Icon name="circle-check" size={18} /></span>
+      <span class="grid min-w-0 flex-1">
+        <span class="text-ink">Logged in</span>
+        <span class="truncate text-sm text-faint">{status.tokenStored ? "Token in the macOS keychain" : `From ${status.claudeSource}`}</span>
+      </span>
+      <Button size="sm" variant="secondary" disabled={tokenBusy} onclick={() => (replacing = true)}>Replace…</Button>
+      {#if status.tokenStored}
+        <Button size="sm" icon aria-label="Remove token" title="Remove token" disabled={tokenBusy} loading={tokenBusy} onclick={askClearToken}><Icon name="x" size={14} /></Button>
       {/if}
-      <span role="status" class="text-sm {msgCls[tokenMsgKind]}">{tokenMsg}</span>
-    </span>
-  </div>
-  <div class={rowCls}>
-    <span class="text-faint">API key</span>
-    <span class="grid gap-1">
-      <label class="flex items-center gap-2 text-sm text-ink">
-        <Checkbox bind:checked={apiOn} disabled={apiBusy || !status} onchange={toggleApiKey} />
-        Use ANTHROPIC_API_KEY instead
-        <HelpText label="API key" detail="Off by default. When on, sandboxed agents get ANTHROPIC_API_KEY from the daemon's environment and Claude Code uses it instead of your Claude plan, billed per token." />
-      </label>
-      {#if status?.useApiKey}
-        <span class="text-sm {status.apiKeySet ? 'text-warn' : 'text-faint'}">
-          {status.apiKeySet ? "Billed per token to the key's account." : "No ANTHROPIC_API_KEY found, so nothing is passed."}
+    </div>
+  {:else}
+    <div class="grid gap-3">
+      <span class="flex flex-wrap items-center gap-2">
+        <SetupTokenRunner onStored={stored} />
+      </span>
+      {#if !manual}
+        <span class="flex flex-wrap items-center gap-2">
+          <Button size="xs" onclick={() => (manual = true)}>Paste a token instead</Button>
+          {#if replacing}<Button size="xs" onclick={() => { replacing = manual = false; token = ""; }}>Cancel</Button>{/if}
+        </span>
+      {:else}
+        <span class="flex min-w-0 flex-wrap items-center gap-2">
+          <input
+            id={`${formId}-token`}
+            class="{inputCls} min-w-[16rem] flex-1 font-mono"
+            type="password"
+            autocomplete="off"
+            aria-label="Token"
+            placeholder="Token from claude setup-token"
+            bind:value={token}
+            disabled={tokenBusy}
+            oninput={() => (tokenMsg = "")}
+            onkeydown={(e) => { if (e.key === "Enter") void saveToken(); }}
+          />
+          <Button variant="secondary" disabled={!token.trim() || tokenBusy} loading={tokenBusy} onclick={saveToken}>Save token</Button>
+          <Button onclick={() => { manual = false; token = ""; if (replacing) replacing = false; }}>Cancel</Button>
         </span>
       {/if}
-      {#if apiErr}<span role="alert" class="text-sm text-bad">{apiErr}</span>{/if}
+    </div>
+  {/if}
+  {#if tokenMsg}<p role="status" class="text-sm {msgCls[tokenMsgKind]}">{tokenMsg}</p>{/if}
+  <div class="grid gap-1">
+    <span class="flex items-center gap-2 text-sm text-ink">
+      <label class="flex items-center gap-2">
+        <Checkbox bind:checked={apiOn} disabled={apiBusy || !status} onchange={toggleApiKey} />
+        Use ANTHROPIC_API_KEY instead
+      </label>
+      <HelpText label="API key" detail="Sandboxed agents get ANTHROPIC_API_KEY from the daemon's environment instead of your Claude plan, billed per token." />
     </span>
+    {#if status?.useApiKey}
+      <span class="text-sm {status.apiKeySet ? 'text-warn' : 'text-faint'}">
+        {status.apiKeySet ? "Billed per token to the key's account." : "No ANTHROPIC_API_KEY found, so nothing is passed."}
+      </span>
+    {/if}
+    {#if apiErr}<span role="alert" class="text-sm text-bad">{apiErr}</span>{/if}
   </div>
 </SettingsGroup>

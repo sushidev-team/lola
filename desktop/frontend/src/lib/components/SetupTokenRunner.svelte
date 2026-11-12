@@ -13,7 +13,6 @@
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { SandboxLoginService } from "@bindings/desktop";
   import Button from "$lib/components/Button.svelte";
-  import HelpText from "$lib/components/HelpText.svelte";
   import { store } from "$lib/store.svelte";
   import { TERM_FONT, appearance } from "$lib/theme-runtime.svelte";
 
@@ -157,7 +156,6 @@
   {#if phase === "idle" || phase === "stored"}
     <span class="flex flex-wrap items-center gap-2">
       <Button variant="primary" onclick={start}>Log in with Claude</Button>
-      <HelpText label="Log in with Claude" detail="Runs claude setup-token here. Finish the login in your browser; Lola stores the token in the macOS keychain and never shows it." />
       {#if phase === "stored"}<span role="status" class="text-sm text-good">Logged in. Token stored.</span>{/if}
     </span>
     {#if err}<p role="alert" class="text-sm text-bad">{err}</p>{/if}
