@@ -1567,22 +1567,17 @@ func (f *fakeSSHOpener) OpenSSH(_ context.Context, sp runtime.SSHOpenSpec) (sess
 }
 
 func TestSSHOpenIsTheGoAndHonoursTheProductionRule(t *testing.T) {
-	over := config.SSHHost{Alias: "prod-ok", AllowUnsandboxed: true}
+	over := config.SSHHost{Alias: "prod-ok", AllowUnsandboxed: true, Sandbox: config.SandboxNone}
 	r := newSSHRig(t, hostProd, over, hostDev)
 	op := &fakeSSHOpener{}
 	r.d.native = op
 	ctx := context.Background()
 
-	// Production with no sandbox and no override: refused, before anything starts.
+	// Production with no sandbox key: the container sandbox, which needs no
+	// configuration, so a UI can say so before anyone clicks.
 	hosts := r.d.handleSSHHosts()
-	if hosts.Hosts[0].DirectRefused == "" || hosts.Hosts[0].DirectSandbox != "" {
+	if hosts.Hosts[0].DirectRefused != "" || hosts.Hosts[0].DirectSandbox != config.SandboxDocker {
 		t.Fatalf("a UI cannot warn: %+v", hosts.Hosts[0])
-	}
-	if _, err := r.d.handleSSHOpen(ctx, protocol.SSHOpenArgs{Host: "prod-api"}); err == nil || !errors.Is(err, config.ErrSSHUnsandboxedProduction) {
-		t.Fatalf("%v", err)
-	}
-	if len(op.specs) != 0 {
-		t.Fatal("started anyway")
 	}
 
 	// The override: on the host, and the reply says what that means.
@@ -1621,10 +1616,8 @@ func TestSSHOpenIsTheGoAndHonoursTheProductionRule(t *testing.T) {
 }
 
 func TestSSHOpenSandboxesProductionWhenItCan(t *testing.T) {
-	r := newSSHRig(t, hostProd)
+	r := newSSHRig(t, hostProd) // no [sandbox] table: the default image serves
 	cfg := *r.d.cfg
-	cfg.Sandbox = config.SandboxConfig{Image: "img", LolaBin: "/l"}
-	r.d.cfg = &cfg
 	op := &fakeSSHOpener{}
 	r.d.native = op
 	data, err := r.d.handleSSHOpen(context.Background(), protocol.SSHOpenArgs{Host: "prod-api"})

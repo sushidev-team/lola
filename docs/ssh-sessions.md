@@ -86,19 +86,23 @@ command approval still applies.
 **Decision: it is made possible.** A direct session's agent can run in a container,
 and this is the default on production.
 
-`Config.SSHDirectSandbox(host)` decides, in one place:
+`Config.SSHDirectSandbox(host)` decides, in one place. The container sandbox needs
+no configuration (lola's default image carries the agent, and the hooks' Linux lola
+is taken out of it), so "is a sandbox available" is no longer a config question:
 
-| Host | `[sandbox]` configured | Result |
-|---|---|---|
-| `sandbox = "docker"` | yes | docker |
-| `sandbox = "docker"` | no | refused, names the missing keys |
-| `sandbox = "none"`, below production | any | host |
-| `sandbox = "none"`, production, `allow_unsandboxed` | any | host |
-| `sandbox = "none"`, production, no override | any | refused (also a validation error) |
-| empty, below production | any | host |
-| empty, production | yes | docker, even with `allow_unsandboxed` |
-| empty, production, `allow_unsandboxed` | no | host |
-| empty, production, no override | no | refused, names both ways out |
+| Host | Result |
+|---|---|
+| `sandbox = "docker"` | docker |
+| `sandbox = "none"`, below production | host |
+| `sandbox = "none"`, production, `allow_unsandboxed` | host |
+| `sandbox = "none"`, production, no override | refused (also a validation error) |
+| empty, below production | host |
+| empty, production | docker, even with `allow_unsandboxed` |
+
+A production host leaves the container only by saying `sandbox = "none"` AND
+`allow_unsandboxed = true`. Whether docker actually runs is a runtime question: the
+launch fails with the reason (docker missing, image pull failed), and never falls
+back to the host.
 
 `sshHosts` reports this as `DirectSandbox` / `DirectRefused`, so a UI can say so
 before anyone clicks.

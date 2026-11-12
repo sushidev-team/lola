@@ -254,7 +254,7 @@ func (f *settingsForm) sshSandboxHelp(serial int) string {
 	case err != nil:
 		return "Cannot start: " + err.Error()
 	case how == config.SandboxDocker:
-		return "Empty uses the tier's default. Resolves to: in a container, because [sandbox] is configured."
+		return "Empty uses the tier's default. Resolves to: in a container (lola's sandbox image unless [sandbox].image names one)."
 	}
 	return "Empty uses the tier's default. Resolves to: on this Mac, as you."
 }

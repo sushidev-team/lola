@@ -85,9 +85,11 @@ func TestSSHHostPreviewMatchesTheDaemonsRule(t *testing.T) {
 		refused   bool
 		line      string
 	}{
-		{"production with a sandbox", sandboxConfig, SSHHostDTO{Alias: "p"}, config.SandboxDocker, false, "because [sandbox] is configured"},
-		{"production without one", minimalConfig, SSHHostDTO{Alias: "p"}, "", true, "cannot start"},
-		{"production allowed", minimalConfig, SSHHostDTO{Alias: "p", AllowUnsandboxed: true}, config.SandboxNone, false, "allows unsandboxed"},
+		{"production with a sandbox", sandboxConfig, SSHHostDTO{Alias: "p"}, config.SandboxDocker, false, "default on production"},
+		{"production with zero config", minimalConfig, SSHHostDTO{Alias: "p"}, config.SandboxDocker, false, "default on production"},
+		{"production allowed still defaults to the container", minimalConfig, SSHHostDTO{Alias: "p", AllowUnsandboxed: true}, config.SandboxDocker, false, "default on production"},
+		{"production opted out", minimalConfig, SSHHostDTO{Alias: "p", AllowUnsandboxed: true, Sandbox: "none"}, config.SandboxNone, false, "this host asks for it"},
+		{"production none without override", minimalConfig, SSHHostDTO{Alias: "p", Sandbox: "none"}, "", true, "cannot start"},
 		{"below production", minimalConfig, SSHHostDTO{Alias: "d", Tier: "dev"}, config.SandboxNone, false, "default below production"},
 		{"explicit container", sandboxConfig, SSHHostDTO{Alias: "d", Tier: "dev", Sandbox: "docker"}, config.SandboxDocker, false, "this host asks for one"},
 		{"explicit none", minimalConfig, SSHHostDTO{Alias: "d", Tier: "dev", Sandbox: "none"}, config.SandboxNone, false, "this host asks for it"},

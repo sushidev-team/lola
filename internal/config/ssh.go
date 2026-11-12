@@ -235,24 +235,19 @@ func (h SSHHost) SSHAdmit(sandboxed bool) error {
 		ErrSSHUnsandboxedProduction, h.ID())
 }
 
-// sandboxReady reports whether [sandbox] can actually start a container.
-func (c *Config) sandboxReady() bool {
-	return c.Sandbox.Image != "" && c.Sandbox.LolaBin != ""
-}
-
 // SSHDirectSandbox decides how the agent of a direct session on h runs. A direct
 // session has no checkout, and it CAN be sandboxed: the runtime mounts only its
-// scratch folder (no repository, no $HOME). So a production host is sandboxed
-// whenever [sandbox] is configured, and when it is not, it is refused unless the
-// host explicitly accepted an unsandboxed agent.
+// scratch folder (no repository, no $HOME). The container sandbox needs no
+// configuration (lola's default image carries the agent and the linux lola), so
+// a production host is ALWAYS sandboxed unless the host itself says
+// sandbox = "none" and accepts the risk with allow_unsandboxed. Whether docker
+// actually runs on this machine is a runtime question: the spawn fails then, it
+// never falls back to the host.
 //
 // It returns SandboxDocker or SandboxNone, or an error for the human to read.
 func (c *Config) SSHDirectSandbox(h SSHHost) (string, error) {
 	switch h.Sandbox {
 	case SandboxDocker:
-		if !c.sandboxReady() {
-			return "", fmt.Errorf("%s sets sandbox = %q, which needs [sandbox].image and [sandbox].lola_bin", h.ID(), SandboxDocker)
-		}
 		return SandboxDocker, nil
 	case SandboxNone:
 		if err := h.SSHAdmit(false); err != nil {
@@ -263,15 +258,7 @@ func (c *Config) SSHDirectSandbox(h SSHHost) (string, error) {
 	if !h.IsProduction() {
 		return SandboxNone, nil
 	}
-	if c.sandboxReady() {
-		return SandboxDocker, nil
-	}
-	if h.AllowUnsandboxed {
-		return SandboxNone, nil
-	}
-	return "", fmt.Errorf("%w: %s is tier production and no sandbox is available. "+
-		"Set [sandbox].image and [sandbox].lola_bin so its agent can run in a container, or set allow_unsandboxed = true on this [[ssh_host]] to accept the risk",
-		ErrSSHUnsandboxedProduction, h.ID())
+	return SandboxDocker, nil
 }
 
 // AnySSHSandboxed reports whether a direct ssh session could start in a container,
@@ -360,9 +347,6 @@ func (c *Config) validateSSHHosts() []error {
 				errs = append(errs, fmt.Errorf("%s: sandbox = %q on a production host needs allow_unsandboxed = true", id, SandboxNone))
 			}
 		case SandboxDocker:
-			if !c.sandboxReady() {
-				errs = append(errs, fmt.Errorf("%s: sandbox = %q needs [sandbox].image and [sandbox].lola_bin", id, SandboxDocker))
-			}
 		default:
 			errs = append(errs, fmt.Errorf("%s: sandbox must be one of none|docker (empty = the tier's default), got %q", id, h.Sandbox))
 		}

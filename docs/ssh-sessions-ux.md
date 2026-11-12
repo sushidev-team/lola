@@ -1142,7 +1142,7 @@ Hosts an agent can ask to reach. Lola holds no address and no key: `alias` is re
 | Name | Text, derived from alias, editable | `Agents and the CLI use this. Letters, digits, dots, dashes.` |
 | Remote user | Text | `A restricted user is the real limit on what a command can do. Lola does not filter commands.` Empty, in `text-warn` on production: `Without a restricted user, commands run as whoever your ssh config connects as.` |
 | Tier | `Button` segmented: Production / Staging / Dev | Production: `Every command asks. No grants. Refuses agents that are not sandboxed.` Staging: `Every command asks, unless you open a grant, up to 30 minutes.` Dev: the same, 2 hours |
-| Direct session agent runs | `Select`: Tier default / Container / On this Mac | Reads what the choice resolves to right now, from `SSHDirectSandbox`, in a line beneath, e.g. `In a container, because [sandbox] is configured.` |
+| Direct session agent runs | `Select`: Tier default / Container / On this Mac | Reads what the choice resolves to right now, from `SSHDirectSandbox`, in a line beneath, e.g. `In a container, the default on production.` |
 | Allow unsandboxed agents | `Checkbox`, production only | `Lets an agent that runs as you work here. It could read your keys or talk to Lola directly, so the approval gate would stop accidents and well-behaved agents, not a determined one. Leave off unless you accept that for this host.` In `text-warn` when on |
 | Agent | `Select`: Default / Claude / Codex / OpenCode | |
 | Default directory | Text | `Absolute path on the host. Commands that name none run here.` |

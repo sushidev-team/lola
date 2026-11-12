@@ -84,8 +84,6 @@ func TestSandboxValidation(t *testing.T) {
 		want string
 	}{
 		{"unknown kind", func(c *Config) { c.Projects[0].Sandbox = "podman" }, "sandbox must be one of"},
-		{"no image", func(c *Config) { c.Sandbox.Image = "" }, "needs an image"},
-		{"no linux lola", func(c *Config) { c.Sandbox.LolaBin = "" }, "needs [sandbox].lola_bin"},
 		{"relative lola", func(c *Config) { c.Sandbox.LolaBin = "lola" }, "absolute path"},
 		{"bad port", func(c *Config) { c.Projects[0].SandboxPorts = []string{"0.0.0.0:80:80"} }, "sandbox_ports entry"},
 		{"port range", func(c *Config) { c.Projects[0].SandboxPorts = []string{"70000"} }, "sandbox_ports entry"},
@@ -119,5 +117,55 @@ func TestSandboxPortPair(t *testing.T) {
 		if _, _, ok := SandboxPortPair(bad); ok {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+func TestDefaultSandboxImageFollowsTheVersion(t *testing.T) {
+	for v, want := range map[string]string{
+		"1.2.3": "1.2.3", "v0.40.1": "0.40.1", "dev": "edge", "": "edge",
+		"1.2.3-rc1": "edge", "1.2.3-dirty": "edge", "garbage": "edge",
+	} {
+		if got := SandboxImageTag(v); got != want {
+			t.Errorf("SandboxImageTag(%q) = %q, want %q", v, got, want)
+		}
+	}
+	t.Cleanup(func() { SetLolaVersion("dev") })
+	SetLolaVersion("2.0.1")
+	if got := DefaultSandboxImage(); got != "ghcr.io/sushidev-team/lola-sandbox:2.0.1" {
+		t.Fatalf("release default = %q", got)
+	}
+	SetLolaVersion("dev")
+	if got := DefaultSandboxImage(); got != "ghcr.io/sushidev-team/lola-sandbox:edge" {
+		t.Fatalf("dev default = %q", got)
+	}
+}
+
+func TestSandboxImageForFallsBackToTheDefault(t *testing.T) {
+	c := &Config{}
+	p := &Project{Name: "web", Sandbox: SandboxDocker}
+	if got := c.SandboxImageFor(p); got != DefaultSandboxImage() {
+		t.Fatalf("zero config = %q", got)
+	}
+	c.Sandbox.Image = "acme/base:1"
+	if got := c.SandboxImageFor(p); got != "acme/base:1" {
+		t.Fatalf("[sandbox].image = %q", got)
+	}
+	p.SandboxImage = "acme/web:2"
+	if got := c.SandboxImageFor(p); got != "acme/web:2" {
+		t.Fatalf("project image = %q", got)
+	}
+	// A sandboxed project needs neither key any more.
+	z := &Config{Defaults: Defaults{GlobalCap: 1}, Projects: []Project{{Name: "web", Path: "/src/web", Sandbox: SandboxDocker}}}
+	if err := z.Validate(); err != nil {
+		t.Fatalf("zero-config sandbox rejected: %v", err)
+	}
+}
+
+func TestEffectivePassEnv(t *testing.T) {
+	if got := (SandboxConfig{}).EffectivePassEnv(); strings.Join(got, ",") != "CLAUDE_CODE_OAUTH_TOKEN,ANTHROPIC_API_KEY,GH_TOKEN" {
+		t.Fatalf("default = %v", got)
+	}
+	if got := (SandboxConfig{PassEnv: []string{"X"}}).EffectivePassEnv(); strings.Join(got, ",") != "X" {
+		t.Fatalf("explicit = %v", got)
 	}
 }

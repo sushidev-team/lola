@@ -158,11 +158,9 @@ func sshHostPreview(cfg *config.Config, h config.SSHHost) SSHHostPreviewDTO {
 	case sandbox == config.SandboxDocker && h.Sandbox == config.SandboxDocker:
 		p.DirectLine = "In a container, because this host asks for one."
 	case sandbox == config.SandboxDocker:
-		p.DirectLine = "In a container, because [sandbox] is configured."
+		p.DirectLine = "In a container, the default on production."
 	case h.Sandbox == config.SandboxNone:
 		p.DirectLine = "On this Mac, because this host asks for it."
-	case h.IsProduction():
-		p.DirectLine = "On this Mac, because [sandbox] is not configured and this host allows unsandboxed agents."
 	default:
 		p.DirectLine = "On this Mac, the default below production."
 	}
