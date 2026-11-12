@@ -76,6 +76,10 @@
       ],
     },
     {
+      title: "Project Git",
+      keys: [["⌘F / Ctrl-F", "search loaded commits"], ["⌘ / Ctrl + click", "compare two commits"], ["← / →", "resize a focused column divider"]],
+    },
+    {
       title: "Global",
       keys: [
         ["⌘K", "search projects, sessions, and actions"],

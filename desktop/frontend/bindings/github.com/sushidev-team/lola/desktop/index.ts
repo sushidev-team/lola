@@ -6,6 +6,7 @@ import * as ContextService from "./contextservice.js";
 import * as DaemonService from "./daemonservice.js";
 import * as DoctorService from "./doctorservice.js";
 import * as LinearService from "./linearservice.js";
+import * as ProjectGitService from "./projectgitservice.js";
 import * as SSHService from "./sshservice.js";
 import * as TalkService from "./talkservice.js";
 import * as TermService from "./termservice.js";
@@ -16,6 +17,7 @@ export {
     DaemonService,
     DoctorService,
     LinearService,
+    ProjectGitService,
     SSHService,
     TalkService,
     TermService,

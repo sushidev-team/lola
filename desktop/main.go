@@ -138,6 +138,7 @@ func main() {
 			application.NewService(&SSHService{}),
 			application.NewService(&TalkService{}),
 			application.NewService(&ConfigService{}),
+			application.NewService(&ProjectGitService{}),
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
 			application.NewService(updater),
@@ -356,6 +357,7 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	ask := func(action string) func(*application.Context) {
 		return func(*application.Context) { app.Event.Emit(evtSessionAction, action) }
 	}
+	menu.Add("Find in Project History…").SetAccelerator("CmdOrCtrl+f").OnClick(ask("find-project-history"))
 	menu.Add("Search Projects and Sessions…").SetAccelerator("CmdOrCtrl+k").OnClick(ask("commands"))
 	menu.Add("New Session…").SetAccelerator("CmdOrCtrl+n").OnClick(ask("new-session"))
 	menu.Add("New Temporary Shell").SetAccelerator("CmdOrCtrl+Shift+n").OnClick(ask("temporary-shell"))

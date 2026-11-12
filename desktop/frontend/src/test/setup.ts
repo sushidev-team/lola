@@ -5,6 +5,13 @@ import { afterAll } from "vitest";
 // fixing an outgoing row's position. jsdom has no animations to enumerate.
 if (!Element.prototype.getAnimations) Element.prototype.getAnimations = () => [];
 
+// jsdom has no layout observer; actual sidebar geometry is checked in WebKit.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
 // Node's experimental storage globals can mask jsdom's browser storage.
 // Use this test window's isolated storage, without requiring a Node CLI flag.
 const testWindow = (globalThis as unknown as { jsdom: { window: Window } }).jsdom.window;

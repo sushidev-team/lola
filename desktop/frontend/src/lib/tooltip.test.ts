@@ -1,6 +1,55 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { tooltip } from './tooltip';
-afterEach(() => { vi.useRealTimers(); document.body.replaceChildren(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); document.body.replaceChildren(); });
+it('limits pointer previews to one cell while preserving keyboard access on the row', () => {
+  vi.useFakeTimers();
+  const row = document.createElement('button'), cell = document.createElement('span');
+  cell.className = 'commit-copy'; row.append(cell); document.body.append(row);
+  const action = tooltip(row, {text: 'Commit details', hoverTarget: '.commit-copy', delay: 500});
+  row.dispatchEvent(new MouseEvent('mouseenter'));
+  vi.advanceTimersByTime(500);
+  expect(document.querySelector('[role=tooltip]')).toBeNull();
+  cell.dispatchEvent(new MouseEvent('mouseenter'));
+  vi.advanceTimersByTime(500);
+  expect(document.querySelector('[role=tooltip]')).not.toBeNull();
+  cell.dispatchEvent(new MouseEvent('mouseleave'));
+  vi.advanceTimersByTime(160);
+  expect(document.querySelector('[role=tooltip]')).toBeNull();
+  row.dispatchEvent(new FocusEvent('focusin'));
+  vi.advanceTimersByTime(500);
+  expect(document.querySelector('[role=tooltip]')).not.toBeNull();
+  action.destroy();
+});
+it('reveals after a quick re-entry instead of letting the old leave timer cancel it', () => {
+  vi.useFakeTimers();
+  const node = document.createElement('button'); document.body.append(node);
+  const action = tooltip(node, { text: 'Commit details', delay: 500 });
+  node.dispatchEvent(new MouseEvent('mouseenter'));
+  vi.advanceTimersByTime(100);
+  node.dispatchEvent(new MouseEvent('mouseleave'));
+  vi.advanceTimersByTime(50);
+  node.dispatchEvent(new MouseEvent('mouseenter'));
+  vi.advanceTimersByTime(499);
+  expect(document.querySelector('[role=tooltip]')).toBeNull();
+  vi.advanceTimersByTime(1);
+  expect(document.querySelector('[role=tooltip]')?.textContent).toBe('Commit details');
+  action.destroy();
+});
+it('honors a delayed preview and cancels it when the target is left', () => {
+  vi.useFakeTimers();
+  const node = document.createElement('button'); document.body.append(node);
+  const action = tooltip(node, { text: 'Commit details', heading: 'Fix the sidebar', delay: 500 });
+  node.dispatchEvent(new MouseEvent('mouseenter'));
+  vi.advanceTimersByTime(400);
+  expect(document.querySelector('[role=tooltip]')).toBeNull();
+  node.dispatchEvent(new MouseEvent('mouseleave'));
+  vi.advanceTimersByTime(600);
+  expect(document.querySelector('[role=tooltip]')).toBeNull();
+  node.dispatchEvent(new FocusEvent('focusin'));
+  vi.advanceTimersByTime(500);
+  expect(document.querySelector('.cv-tooltip-heading')?.textContent).toBe('Fix the sidebar');
+  action.destroy();
+});
 it('keeps long command previews intact and renders syntax as safe text', () => {
   vi.useFakeTimers();
   const node = document.createElement('button'); document.body.append(node);
@@ -64,4 +113,23 @@ it('replaces the previous tooltip immediately when moving rapidly between target
   expect(document.querySelectorAll('[role=tooltip]')).toHaveLength(1);
   expect(document.querySelector('[role=tooltip]')?.textContent).toBe('First');
   a.destroy(); b.destroy();
+});
+
+it('anchors pointer previews near the latest pointer position and keeps keyboard previews on the element', () => {
+  vi.useFakeTimers();
+  const node = document.createElement('button'); document.body.append(node);
+  vi.spyOn(node, 'getBoundingClientRect').mockReturnValue({left:100,top:100,bottom:130,width:900,height:30} as DOMRect);
+  const action = tooltip(node, {text:'Commit',anchor:'pointer',delay:500});
+  node.dispatchEvent(new MouseEvent('mouseenter', {clientX:500,clientY:300}));
+  node.dispatchEvent(new MouseEvent('mousemove', {clientX:600,clientY:400}));
+  vi.advanceTimersByTime(500);
+  let tip = document.querySelector<HTMLElement>('[role=tooltip]')!;
+  expect(tip.style.left).toBe('612px'); expect(tip.style.top).toBe('418px');
+  node.dispatchEvent(new MouseEvent('mousemove', {clientX:700,clientY:450}));
+  expect(tip.style.left).toBe('612px');
+  window.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape'}));
+  node.dispatchEvent(new FocusEvent('focusin')); vi.advanceTimersByTime(500);
+  tip = document.querySelector<HTMLElement>('[role=tooltip]')!;
+  expect(tip.style.left).toBe('112px');
+  action.destroy();
 });

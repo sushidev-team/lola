@@ -99,7 +99,7 @@ normal PATH. (The bundled `.app` inherits a minimal PATH from Finder; `main.go`'
 Regenerate the TS bindings after changing a Go service signature:
 
 ```sh
-cd desktop && wails3 generate bindings -ts -d frontend/bindings
+cd desktop && wails3 generate bindings -ts -i -d frontend/bindings
 ```
 
 ## Build

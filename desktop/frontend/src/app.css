@@ -1364,6 +1364,21 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .cv-tooltip-heading { margin-bottom: 7px; color: var(--activity-color, var(--color-accent-ink)); font-size: 12px; font-weight: 600; }
 .cv-tooltip-card .cv-tooltip-body { font-size: 13px; line-height: 20px; color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .cv-tooltip-meta { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--color-edge); color: var(--color-ink-2); font-size: 12px; line-height: 18px; }
+.cv-tooltip-commit { white-space: normal; width: 320px; max-width: calc(100vw - 24px); padding: 10px 12px; border-color: var(--color-edge); box-shadow: 0 8px 24px #0004; }
+.cv-tooltip-commit .cv-tooltip-heading { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0 0 8px; color: var(--color-ink); font-size: 13px; line-height: 18px; font-weight: 600; }
+.git-tip-icon { display: inline-flex; align-items: center; flex-shrink: 0; }
+.git-tip-author { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 18px; color: var(--color-ink-2); }
+.git-tip-author > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-tip-facts { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 3px; color: var(--color-ink-2); font-family: var(--font-mono); font-size: 11px; line-height: 17px; font-variant-numeric: tabular-nums; }
+.git-tip-sha { padding: 1px 5px; border-radius: 3px; background: var(--color-canvas); }
+.git-tip-branches { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--color-edge); }
+.git-tip-branch { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 1px 5px; border-radius: 4px; background: var(--color-canvas); color: var(--color-ink-2); font-size: 12px; line-height: 18px; }
+.git-tip-branch.current { background: var(--color-accent-fill); color: var(--color-accent-ink); }
+.git-tip-branch > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-tip-branch-label { width: 100%; color: var(--color-ink-2); font-size: 11px; line-height: 16px; }
+.git-tip-more { font-family: var(--font-mono); color: var(--color-ink-2); font-size: 11px; font-variant-numeric: tabular-nums; padding: 1px 3px; }
+.git-tip-checkout { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 11px; line-height: 17px; color: var(--color-ink-2); }
+
 
 /* One resizable navigation rail; the selected session owns the full workspace. */
 .sidebar { container-type: inline-size; container-name: sidebar; }
@@ -1386,6 +1401,8 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .sidebar-project-heading h2 { font-size: 12px; line-height: 18px; font-weight: 600; color: var(--color-ink-2); }
 .sidebar-project-count { margin-left: 6px; font-weight: 400; color: var(--color-faint); }
 .sidebar-session-item { position: relative; min-width: 0; margin-top: 2px; border-radius: 6px; }
+.sidebar-session-item button, .sidebar-group-toggle { transition: none; }
+.sidebar-session-item button:enabled, .sidebar-group-toggle:enabled { cursor: pointer; }
 .sidebar-session-item:hover { background: color-mix(in srgb, var(--color-sel) 45%, transparent); }
 .sidebar-session-item.selected { background: var(--color-sel); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 22%, transparent); }
 .sidebar-session-row { display: grid; width: 100%; min-width: 0; min-height: 70px; grid-template-columns: 16px minmax(0,1fr) auto; grid-template-rows: 21px 17px 18px; align-content: center; align-items: baseline; column-gap: 8px; padding: 7px 10px; border-radius: 6px; text-align: left; }

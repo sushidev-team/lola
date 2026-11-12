@@ -191,7 +191,7 @@
           {@const merged = (e.prNumber ?? 0) > 0 && e.reason === `PR #${e.prNumber} merged`}
           <button
             type="button"
-            class="grid h-11 w-full grid-cols-[16px_minmax(0,1fr)] grid-rows-[18px_16px] content-center items-baseline gap-x-1.5 rounded-md px-2 text-left transition-colors {open === e.id ? 'bg-sel' : 'hover:bg-sel/50'}"
+            class="grid h-11 w-full grid-cols-[16px_minmax(0,1fr)] grid-rows-[18px_16px] content-center items-baseline gap-x-1.5 rounded-md px-2 text-left cursor-pointer {open === e.id ? 'bg-sel' : 'hover:bg-sel/50'}"
             aria-current={open === e.id ? "true" : undefined}
             title={e.title || e.id}
             onkeydown={navigate}

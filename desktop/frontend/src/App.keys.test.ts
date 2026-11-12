@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, cleanup, fireEvent, waitFor, screen } from "@testing-library/svelte";
 import { flushSync, tick } from "svelte";
 
 // One Proxy per service: anything a test does not name answers null, as an old daemon's field would.
@@ -83,6 +83,37 @@ afterEach(() => {
   nav.closeOverlay();
   confirm.cancel();
   cleanup();
+});
+
+describe("project workspace toolbar", () => {
+  it("routes native Find to Git history only while that view is active", async () => {
+    await mount([]);
+    const initial = nav.gitSearchRequest;
+    chord("find-project-history");
+    expect(nav.gitSearchRequest).toBe(initial);
+    nav.goDetail("missing-project", "git");
+    chord("find-project-history");
+    expect(nav.gitSearchRequest).toBe(initial + 1);
+    nav.openOverlay("settings");
+    chord("find-project-history");
+    expect(nav.gitSearchRequest).toBe(initial + 1);
+    nav.closeOverlay();
+    nav.projectTab = "overview";
+  });
+  it("replaces the shared header and restores navigation for a missing project", async () => {
+    await mount([]);
+    store.projects = [{ name: "workspace", label: "Workspace", path: "/repo", agentOk: true }] as typeof store.projects;
+    nav.sidebarOpen = false;
+    nav.goDetail("workspace");
+    flushSync();
+    expect(screen.getByRole("banner", { name: "Project toolbar" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Back to sessions" })).toBeNull();
+    nav.goDetail("missing-project");
+    flushSync();
+    expect(screen.getByRole("button", { name: "Back to sessions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toBeInTheDocument();
+    nav.sidebarOpen = true;
+  });
 });
 
 describe("in a session", () => {

@@ -9,6 +9,7 @@ export function openSession(id: string, project = "") {
   // Not listed yet means just created. A respawned id must not show its old life's record meanwhile.
   if (!session) talk.forgetEnded(id);
   nav.setTriage("");
+  nav.sidebarQuery = "";
   nav.goCockpit(session?.project || project);
   nav.openSession(id);
 }

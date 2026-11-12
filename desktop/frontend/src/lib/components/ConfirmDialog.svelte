@@ -39,7 +39,7 @@
         {#if req.alternative}
           <Button variant="secondary" size="md" onclick={() => confirm.acceptAlternative()}>{req.alternative.label}</Button>
         {/if}
-        <Button variant="danger-solid" size="md" onclick={() => confirm.accept()}>{req.confirmLabel}</Button>
+        <Button variant={req.confirmVariant ?? "danger-solid"} size="md" onclick={() => confirm.accept()}>{req.confirmLabel}</Button>
       </div>
     {/snippet}
   </Modal>

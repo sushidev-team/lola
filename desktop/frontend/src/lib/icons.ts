@@ -1,3 +1,6 @@
+import House from '@lucide/svelte/icons/house';
+import Archive from '@lucide/svelte/icons/archive';
+import ArchiveRestore from '@lucide/svelte/icons/archive-restore';
 import Trash2 from '@lucide/svelte/icons/trash-2';
 import CircleMinus from '@lucide/svelte/icons/circle-minus';
 import LogOut from '@lucide/svelte/icons/log-out';
@@ -24,6 +27,7 @@ import CircleDot from '@lucide/svelte/icons/circle-dot';
 import CircleHelp from '@lucide/svelte/icons/circle-help';
 import CirclePause from '@lucide/svelte/icons/circle-pause';
 import CircleX from '@lucide/svelte/icons/circle-x';
+import Cloud from '@lucide/svelte/icons/cloud';
 import Clock from '@lucide/svelte/icons/clock';
 import Code from '@lucide/svelte/icons/code';
 import Copy from '@lucide/svelte/icons/copy';
@@ -75,6 +79,9 @@ import User from '@lucide/svelte/icons/user';
 import X from '@lucide/svelte/icons/x';
 
 export const icons = {
+  house: House,
+  'archive': Archive,
+  'archive-restore': ArchiveRestore,
   'circle-minus': CircleMinus,
   'log-out': LogOut,
   'arrow-up-left': ArrowUpLeft,
@@ -101,6 +108,7 @@ export const icons = {
   'circle-pause': CirclePause,
   'circle-x': CircleX,
   'clock': Clock,
+  'cloud': Cloud,
   'code': Code,
   'copy': Copy,
   'ellipsis': Ellipsis,
