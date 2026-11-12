@@ -41,6 +41,8 @@ type SandboxStatus struct {
 	Missing      []string `json:"missing"`      // of Images, the ones not pulled yet
 	ClaudeSource string   `json:"claudeSource"` // secrets.Source*, "" = none
 	GitHubSource string   `json:"githubSource"`
+	UseAPIKey    bool     `json:"useApiKey"` // [sandbox].use_api_key
+	APIKeySet    bool     `json:"apiKeySet"` // ANTHROPIC_API_KEY is in this environment
 }
 
 // CheckSandbox gathers SandboxStatus. Nothing is pulled: a missing image is
@@ -72,10 +74,13 @@ func CheckSandbox(ctx context.Context, cfg *config.Config) SandboxStatus {
 		}
 	}
 	_, st.ClaudeSource = sandboxCredential("CLAUDE_CODE_OAUTH_TOKEN")
-	if st.ClaudeSource == secrets.SourceNone {
-		if _, src := sandboxCredential("ANTHROPIC_API_KEY"); src != secrets.SourceNone {
-			st.ClaudeSource = "ANTHROPIC_API_KEY (" + src + ")"
-		}
+	// The API key counts only when the human switched it on: it bills per
+	// token, and claude prefers it over the subscription token.
+	st.UseAPIKey = cfg.Sandbox.UseAPIKey
+	_, apiSrc := sandboxCredential(config.SandboxAPIKeyEnv)
+	st.APIKeySet = apiSrc != secrets.SourceNone
+	if st.UseAPIKey && st.APIKeySet {
+		st.ClaudeSource = config.SandboxAPIKeyEnv + " (" + apiSrc + ", billed per token)"
 	}
 	_, st.GitHubSource = sandboxCredential("GH_TOKEN")
 	return st
@@ -107,7 +112,10 @@ func sandboxResults(ctx context.Context, cfg *config.Config) []Result {
 	if st.ClaudeSource != "" {
 		out = append(out, Result{Name: checkSandboxClaude, OK: true, Detail: "found in " + st.ClaudeSource})
 	} else {
-		out = append(out, Result{Name: checkSandboxClaude, Detail: "no token for a sandboxed claude: run `claude setup-token`, then `lola sandbox token` (or export CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY for the daemon)"})
+		out = append(out, Result{Name: checkSandboxClaude, Detail: "no token for a sandboxed claude: run `claude setup-token`, then `lola sandbox token` (or export CLAUDE_CODE_OAUTH_TOKEN for the daemon)"})
+	}
+	if cfg.Sandbox.APIKeyFiltered() {
+		out = append(out, Result{Name: checkSandboxClaude, OK: true, Detail: "[sandbox].pass_env lists ANTHROPIC_API_KEY but use_api_key is off, so the key is not passed"})
 	}
 	if st.GitHubSource != "" {
 		out = append(out, Result{Name: checkSandboxGitHub, OK: true, Detail: "from " + st.GitHubSource + " (the sandboxed agent can push and open PRs as you)"})

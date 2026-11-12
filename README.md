@@ -620,8 +620,9 @@ Setup, once per machine:
 2. A Claude Code token for the container (it cannot read your keychain):
    `claude setup-token`, then `lola sandbox token` and paste it (the input is
    not echoed; `--clear` removes it). The desktop app has the same field under
-   Settings → Sandbox. `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` in the
-   daemon's environment work too.
+   Settings → Sandbox. `CLAUDE_CODE_OAUTH_TOKEN` in the daemon's environment
+   works too. The token uses your Claude plan; an API key (billed per token)
+   is passed only if you turn on `[sandbox].use_api_key`.
 3. GitHub: nothing, if `gh auth login` is done on the host (see Credentials).
 
 `lola doctor` checks all three.
@@ -644,9 +645,12 @@ Things to know:
 
 - **Credentials.** The container cannot read the macOS keychain, so lola
   writes the agent's credentials into the session's 0600 env file at spawn.
-  `[sandbox].pass_env` names them; empty means `CLAUDE_CODE_OAUTH_TOKEN`,
-  `ANTHROPIC_API_KEY` and `GH_TOKEN`, each copied from the daemon's
-  environment when set. When the environment lacks one, lola falls back to
+  `[sandbox].pass_env` names them; empty means `CLAUDE_CODE_OAUTH_TOKEN` and
+  `GH_TOKEN`, each copied from the daemon's environment when set.
+  `ANTHROPIC_API_KEY` is never passed by default, nor by listing it in
+  `pass_env`: Claude Code prefers it over the subscription token and it bills
+  per token, so it takes the explicit `[sandbox].use_api_key = true` (the
+  desktop asks for confirmation). When the environment lacks one, lola falls back to
   the keychain item `lola sandbox token` stores (claude) and to the host's
   `gh auth token` (GitHub). **That means a sandboxed agent holds your GitHub
   token**: it can push and open PRs as you, the same power an unsandboxed agent
@@ -1537,7 +1541,8 @@ opts in with `sandbox = "docker"`.
 | `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Default: lola's own, `ghcr.io/sushidev-team/lola-sandbox:<lola version>` (`:edge` for a non-release build). A custom one needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
 | `lola_bin` | string | Optional absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`) for the agent's hooks. Default: the one inside lola's default image, extracted and cached by the daemon. Set it to test hook changes from a dev build. |
 | `hook_port` | int | Loopback port of the hook bridge. Default `7718`. |
-| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Default `["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GH_TOKEN"]`, with the keychain / `gh auth token` fallback described under Credentials. Values never live in the config. |
+| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Default `["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]`, with the keychain / `gh auth token` fallback described under Credentials. `ANTHROPIC_API_KEY` here has no effect without `use_api_key`. Values never live in the config. |
+| `use_api_key` | bool | Pass `ANTHROPIC_API_KEY` from the daemon's environment to sandboxed agents. Claude Code then uses it instead of your Claude plan, billed per token. Default `false`. |
 
 ### `[ui]` (optional)
 

@@ -1,7 +1,8 @@
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/svelte";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const { status, setImage, setToken, clearToken } = vi.hoisted(() => ({
+const { status, setImage, setToken, clearToken, setApiKey } = vi.hoisted(() => ({
+  setApiKey: vi.fn(),
   status: vi.fn(),
   setImage: vi.fn(),
   setToken: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock("@bindings/desktop", () => ({
     SetSandboxImage: (i: string) => setImage(i),
     SetSandboxToken: (t: string) => setToken(t),
     ClearSandboxToken: () => clearToken(),
+    SetSandboxUseAPIKey: (on: boolean) => setApiKey(on),
   },
 }));
 
@@ -30,6 +32,8 @@ function sample(over: Record<string, unknown> = {}) {
     tokenStored: false,
     claudeSource: "",
     githubSource: "gh auth token",
+    useApiKey: false,
+    apiKeySet: true,
     ...over,
   };
 }
@@ -93,5 +97,36 @@ describe("SandboxSettings", () => {
     expect(clearToken).not.toHaveBeenCalled();
     ask.mock.calls[0][0].onConfirm([]);
     await waitFor(() => expect(clearToken).toHaveBeenCalledTimes(1));
+  });
+
+  it("passes the API key only after a confirmed choice", async () => {
+    setApiKey.mockResolvedValue(undefined);
+    render(SandboxSettings);
+    const box = (await screen.findByRole("checkbox", { name: /Use ANTHROPIC_API_KEY instead/ })) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+
+    await fireEvent.click(box);
+    expect(confirm.request?.title).toMatch(/ANTHROPIC_API_KEY/);
+    expect(box.checked).toBe(false);
+    confirm.cancel();
+    expect(setApiKey).not.toHaveBeenCalled();
+
+    await fireEvent.click(box);
+    status.mockResolvedValue(sample({ useApiKey: true }));
+    confirm.accept();
+    await waitFor(() => expect(setApiKey).toHaveBeenCalledWith(true));
+    expect(await screen.findByText("Billed per token to the key's account.")).toBeInTheDocument();
+    expect(box.checked).toBe(true);
+  });
+
+  it("turns the API key off without asking", async () => {
+    setApiKey.mockResolvedValue(undefined);
+    status.mockResolvedValue(sample({ useApiKey: true }));
+    render(SandboxSettings);
+    const box = (await screen.findByRole("checkbox", { name: /Use ANTHROPIC_API_KEY instead/ })) as HTMLInputElement;
+    await waitFor(() => expect(box.checked).toBe(true));
+    await fireEvent.click(box);
+    expect(confirm.request).toBeNull();
+    await waitFor(() => expect(setApiKey).toHaveBeenCalledWith(false));
   });
 });

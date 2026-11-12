@@ -657,6 +657,16 @@ export interface SandboxStatusDTO {
     "tokenStored": boolean;
     "claudeSource": string;
     "githubSource": string;
+
+    /**
+     * [sandbox].use_api_key
+     */
+    "useApiKey": boolean;
+
+    /**
+     * ANTHROPIC_API_KEY exists (presence only)
+     */
+    "apiKeySet": boolean;
 }
 
 export interface SettingsDTO {

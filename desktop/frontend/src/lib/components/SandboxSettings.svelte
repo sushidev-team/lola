@@ -9,6 +9,7 @@
   import { onMount } from "svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
+  import Checkbox from "$lib/components/Checkbox.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import SettingsGroup from "$lib/components/SettingsGroup.svelte";
   import { confirm } from "$lib/confirm.svelte";
@@ -28,6 +29,11 @@
   let tokenBusy = $state(false);
   let tokenMsg = $state("");
   let tokenMsgKind = $state<"good" | "bad">("good");
+  // The API-key switch mirrors status.useApiKey; it turns ON only through the
+  // confirm dialog, so a click that is cancelled leaves it off.
+  let apiOn = $state(false);
+  let apiBusy = $state(false);
+  let apiErr = $state("");
 
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
@@ -40,6 +46,7 @@
     try {
       status = await ConfigService.SandboxStatus();
       image = savedImage = status?.image ?? "";
+      apiOn = !!status?.useApiKey;
     } catch (e) {
       status = null;
       loadErr = String(e);
@@ -108,8 +115,39 @@
     }
   }
 
+  function toggleApiKey() {
+    apiErr = "";
+    if (!apiOn) {
+      void setApiKey(false);
+      return;
+    }
+    // Revert until confirmed: the key bills per token and wins over the token.
+    apiOn = false;
+    confirm.ask({
+      title: "Pass ANTHROPIC_API_KEY to sandboxed agents?",
+      body: "Claude Code then uses the API key instead of your Claude plan. Usage is billed per token to the key's Anthropic account.",
+      detail: "Lola copies the key from the daemon's environment into each new sandboxed session. Running sessions keep what they started with.",
+      confirmLabel: "Use API key",
+      onConfirm: () => void setApiKey(true),
+    });
+  }
+
+  async function setApiKey(on: boolean) {
+    apiBusy = true;
+    try {
+      await ConfigService.SetSandboxUseAPIKey(on);
+      await load();
+    } catch (e) {
+      apiErr = String(e);
+      apiOn = !!status?.useApiKey;
+    } finally {
+      apiBusy = false;
+    }
+  }
+
   const claudeLine = $derived.by(() => {
     if (!status) return "";
+    if (status.useApiKey && status.apiKeySet) return "API key, billed per token";
     if (status.tokenStored) return "Token stored in the keychain";
     if (status.claudeSource) return `Using ${status.claudeSource}`;
     return "Not set";
@@ -141,7 +179,7 @@
             : "The sandbox image is on this Mac."} />
         </li>
       {/if}
-      <li class="flex items-center gap-1.5 {claudeOk ? 'text-good' : 'text-warn'}">
+      <li class="flex items-center gap-1.5 {claudeOk && !(status.useApiKey && status.apiKeySet) ? 'text-good' : 'text-warn'}">
         <Icon name={claudeOk ? "check" : "triangle-alert"} size={14} />
         Claude login: {claudeLine}
         {#if !claudeOk}<HelpText label="Claude login" detail="Sandboxed agents cannot log in yet. Store a token below." />{/if}
@@ -208,6 +246,22 @@
         <Button disabled={tokenBusy} onclick={askClearToken}>Remove token…</Button>
       {/if}
       <span role="status" class="text-sm {msgCls[tokenMsgKind]}">{tokenMsg}</span>
+    </span>
+  </div>
+  <div class={rowCls}>
+    <span class="text-faint">API key</span>
+    <span class="grid gap-1">
+      <label class="flex items-center gap-2 text-sm text-ink">
+        <Checkbox bind:checked={apiOn} disabled={apiBusy || !status} onchange={toggleApiKey} />
+        Use ANTHROPIC_API_KEY instead
+        <HelpText label="API key" detail="Off by default. When on, sandboxed agents get ANTHROPIC_API_KEY from the daemon's environment and Claude Code uses it instead of your Claude plan, billed per token." />
+      </label>
+      {#if status?.useApiKey}
+        <span class="text-sm {status.apiKeySet ? 'text-warn' : 'text-faint'}">
+          {status.apiKeySet ? "Billed per token to the key's account." : "No ANTHROPIC_API_KEY found, so nothing is passed."}
+        </span>
+      {/if}
+      {#if apiErr}<span role="alert" class="text-sm text-bad">{apiErr}</span>{/if}
     </span>
   </div>
 </SettingsGroup>

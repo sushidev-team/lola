@@ -38,6 +38,8 @@ type SandboxStatusDTO struct {
 	TokenStored  bool     `json:"tokenStored"`
 	ClaudeSource string   `json:"claudeSource"`
 	GitHubSource string   `json:"githubSource"`
+	UseAPIKey    bool     `json:"useApiKey"` // [sandbox].use_api_key
+	APIKeySet    bool     `json:"apiKeySet"` // ANTHROPIC_API_KEY exists (presence only)
 }
 
 // SandboxImageDefault is the image a project with no sandbox_image runs:
@@ -65,6 +67,7 @@ func (s *ConfigService) SandboxStatus() (SandboxStatusDTO, error) {
 		Image: cfg.Sandbox.Image, DefaultImage: st.DefaultImage,
 		Docker: st.Docker, DockerOK: st.DockerOK, Missing: st.Missing,
 		TokenStored: stored, ClaudeSource: st.ClaudeSource, GitHubSource: st.GitHubSource,
+		UseAPIKey: st.UseAPIKey, APIKeySet: st.APIKeySet,
 	}, nil
 }
 
@@ -79,6 +82,19 @@ func (s *ConfigService) SetSandboxImage(image string) error {
 		return err
 	}
 	cfg.Sandbox.Image = image
+	return saveConfig(cfg, path)
+}
+
+// SetSandboxUseAPIKey writes [sandbox].use_api_key: whether sandboxed agents
+// get ANTHROPIC_API_KEY from the daemon's environment. A deliberate switch —
+// the key bills per token and claude prefers it over the subscription token —
+// so the UI confirms before turning it on.
+func (s *ConfigService) SetSandboxUseAPIKey(on bool) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.Sandbox.UseAPIKey = on
 	return saveConfig(cfg, path)
 }
 

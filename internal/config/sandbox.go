@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -61,11 +62,15 @@ type SandboxConfig struct {
 	LolaBin  string   `toml:"lola_bin,omitempty"`
 	HookPort int      `toml:"hook_port,omitempty"`
 	PassEnv  []string `toml:"pass_env,omitempty"`
+	// UseAPIKey passes ANTHROPIC_API_KEY from the daemon's environment into
+	// sandboxed agents. Off by default: the key bills per token and claude
+	// prefers it over the subscription token (`claude setup-token`).
+	UseAPIKey bool `toml:"use_api_key,omitempty"`
 }
 
 // isZero reports whether the table carries nothing (omitted on Save).
 func (s SandboxConfig) isZero() bool {
-	return s.Docker == "" && s.Image == "" && s.LolaBin == "" && s.HookPort == 0 && len(s.PassEnv) == 0
+	return s.Docker == "" && s.Image == "" && s.LolaBin == "" && s.HookPort == 0 && len(s.PassEnv) == 0 && !s.UseAPIKey
 }
 
 // sandboxTable is nonZero for SandboxConfig, which holds a slice and so is
@@ -117,8 +122,14 @@ const DefaultSandboxImageRepo = "ghcr.io/sushidev-team/lola-sandbox"
 const DefaultSandboxEdgeTag = "edge"
 
 // DefaultSandboxPassEnv is what an empty [sandbox].pass_env copies: claude's
-// two credential forms and GitHub's token. Each only when set.
-var DefaultSandboxPassEnv = []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GH_TOKEN"}
+// subscription token and GitHub's token. Each only when set.
+var DefaultSandboxPassEnv = []string{"CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"}
+
+// SandboxAPIKeyEnv is the Anthropic API key. Claude Code prefers it over a
+// subscription token and it bills per token, so it reaches a container only
+// through the explicit [sandbox].use_api_key switch, never by default and
+// never by being listed in pass_env alone.
+const SandboxAPIKeyEnv = "ANTHROPIC_API_KEY"
 
 // lolaVersion is the running lola's version, which picks the default image's
 // tag. Set once from main (SetLolaVersion); a package-level value because the
@@ -149,12 +160,29 @@ func DefaultSandboxImage() string {
 	return DefaultSandboxImageRepo + ":" + SandboxImageTag(v)
 }
 
-// EffectivePassEnv is PassEnv with its default applied.
+// EffectivePassEnv is PassEnv with its default applied and the API key
+// gated: ANTHROPIC_API_KEY is in the list exactly when UseAPIKey is set.
 func (s SandboxConfig) EffectivePassEnv() []string {
-	if len(s.PassEnv) == 0 {
-		return DefaultSandboxPassEnv
+	base := s.PassEnv
+	if len(base) == 0 {
+		base = DefaultSandboxPassEnv
 	}
-	return s.PassEnv
+	out := make([]string, 0, len(base)+1)
+	for _, name := range base {
+		if name != SandboxAPIKeyEnv {
+			out = append(out, name)
+		}
+	}
+	if s.UseAPIKey {
+		out = append(out, SandboxAPIKeyEnv)
+	}
+	return out
+}
+
+// APIKeyFiltered reports whether pass_env lists ANTHROPIC_API_KEY while
+// use_api_key is off, so the listing has no effect (doctor says so).
+func (s SandboxConfig) APIKeyFiltered() bool {
+	return !s.UseAPIKey && slices.Contains(s.PassEnv, SandboxAPIKeyEnv)
 }
 
 // AnySandboxed reports whether some project runs its agents in a container —

@@ -449,6 +449,16 @@ export function SetSandboxToken(token: string): $CancellablePromise<void> {
 }
 
 /**
+ * SetSandboxUseAPIKey writes [sandbox].use_api_key: whether sandboxed agents
+ * get ANTHROPIC_API_KEY from the daemon's environment. A deliberate switch —
+ * the key bills per token and claude prefers it over the subscription token —
+ * so the UI confirms before turning it on.
+ */
+export function SetSandboxUseAPIKey(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(679924840, on);
+}
+
+/**
  * SetStackMemberLabels sets which issues each member of stack is checked out
  * for (member name -> labels; empty = every issue), in one write. It touches
  * ONLY Project.Labels, so a stack form saved beside it cannot clobber a

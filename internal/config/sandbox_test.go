@@ -162,10 +162,35 @@ func TestSandboxImageForFallsBackToTheDefault(t *testing.T) {
 }
 
 func TestEffectivePassEnv(t *testing.T) {
-	if got := (SandboxConfig{}).EffectivePassEnv(); strings.Join(got, ",") != "CLAUDE_CODE_OAUTH_TOKEN,ANTHROPIC_API_KEY,GH_TOKEN" {
-		t.Fatalf("default = %v", got)
+	cases := []struct {
+		name string
+		s    SandboxConfig
+		want string
+	}{
+		{"default leaves the API key out", SandboxConfig{}, "CLAUDE_CODE_OAUTH_TOKEN,GH_TOKEN"},
+		{"explicit list", SandboxConfig{PassEnv: []string{"X"}}, "X"},
+		{"a listed API key needs the switch", SandboxConfig{PassEnv: []string{"ANTHROPIC_API_KEY", "GH_TOKEN"}}, "GH_TOKEN"},
+		{"the switch adds it to the default", SandboxConfig{UseAPIKey: true}, "CLAUDE_CODE_OAUTH_TOKEN,GH_TOKEN,ANTHROPIC_API_KEY"},
+		{"the switch never duplicates it", SandboxConfig{UseAPIKey: true, PassEnv: []string{"ANTHROPIC_API_KEY"}}, "ANTHROPIC_API_KEY"},
 	}
-	if got := (SandboxConfig{PassEnv: []string{"X"}}).EffectivePassEnv(); strings.Join(got, ",") != "X" {
-		t.Fatalf("explicit = %v", got)
+	for _, c := range cases {
+		if got := strings.Join(c.s.EffectivePassEnv(), ","); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+	if !(SandboxConfig{PassEnv: []string{"ANTHROPIC_API_KEY"}}).APIKeyFiltered() || (SandboxConfig{UseAPIKey: true, PassEnv: []string{"ANTHROPIC_API_KEY"}}).APIKeyFiltered() {
+		t.Fatal("APIKeyFiltered wrong")
+	}
+}
+
+func TestUseAPIKeyRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cfg := &Config{Sandbox: SandboxConfig{UseAPIKey: true}}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if !strings.Contains(string(raw), "use_api_key = true") {
+		t.Fatalf("not written:\n%s", raw)
 	}
 }

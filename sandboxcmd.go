@@ -41,8 +41,9 @@ Create a long-lived token with ` + "`claude setup-token`" + `, then paste it her
 is not echoed), or pipe it in on stdin. It is never accepted as an argument:
 argv is visible in ps and kept in shell history.
 
-CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the daemon's environment take
-precedence over the stored token. --clear deletes it.`,
+CLAUDE_CODE_OAUTH_TOKEN in the daemon's environment takes precedence over the
+stored token. ANTHROPIC_API_KEY is passed only with [sandbox].use_api_key = true
+(it bills per token instead of your Claude plan). --clear deletes it.`,
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			if clear {

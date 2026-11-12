@@ -227,7 +227,6 @@ func TestSandboxEnvCredentialsAndIdentity(t *testing.T) {
 	for _, must := range []string{
 		"IS_SANDBOX=1\n",
 		"CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-keychain\n",
-		"ANTHROPIC_API_KEY=sk-env\n",
 		"GIT_AUTHOR_NAME='Ada Lovelace'\n", "GIT_AUTHOR_EMAIL=ada@example.com\n",
 		"GIT_COMMITTER_NAME='Ada Lovelace'\n", "GIT_COMMITTER_EMAIL=ada@example.com\n",
 	} {
@@ -235,16 +234,25 @@ func TestSandboxEnvCredentialsAndIdentity(t *testing.T) {
 			t.Errorf("env missing %q:\n%s", must, env)
 		}
 	}
-	if strings.Contains(env, "GH_TOKEN") || strings.Contains(env, "sk-should-not-win") {
+	// The API key is in the daemon env but bills per token: without the
+	// explicit use_api_key switch it never reaches the container.
+	if strings.Contains(env, "GH_TOKEN") || strings.Contains(env, "ANTHROPIC_API_KEY") {
 		t.Errorf("env:\n%s", env)
 	}
 	if strings.Join(asked, ",") != "CLAUDE_CODE_OAUTH_TOKEN,GH_TOKEN" {
 		t.Errorf("fallback asked for %v; the environment answers first", asked)
 	}
 
-	// An explicit pass_env is the whole list: nothing else is copied.
-	f.n.Cfg.Sandbox.PassEnv = []string{"ANTHROPIC_API_KEY"}
-	if env := string(f.n.envFile(f.p, id, filepath.Join(f.root, "nori", id), agent.Claude)); strings.Contains(env, "CLAUDE_CODE_OAUTH_TOKEN") {
-		t.Errorf("explicit pass_env widened:\n%s", env)
+	// Listing the key in pass_env alone is not the switch.
+	f.n.Cfg.Sandbox.PassEnv = []string{"ANTHROPIC_API_KEY", "GH_TOKEN"}
+	if env := string(f.n.envFile(f.p, id, filepath.Join(f.root, "nori", id), agent.Claude)); strings.Contains(env, "ANTHROPIC_API_KEY") || strings.Contains(env, "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Errorf("pass_env without use_api_key passed the key or widened the list:\n%s", env)
+	}
+
+	// The switch passes it, from the environment (which answers first).
+	f.n.Cfg.Sandbox.PassEnv = nil
+	f.n.Cfg.Sandbox.UseAPIKey = true
+	if env := string(f.n.envFile(f.p, id, filepath.Join(f.root, "nori", id), agent.Claude)); !strings.Contains(env, "ANTHROPIC_API_KEY=sk-env\n") || strings.Contains(env, "sk-should-not-win") {
+		t.Errorf("use_api_key did not pass the env key:\n%s", env)
 	}
 }
