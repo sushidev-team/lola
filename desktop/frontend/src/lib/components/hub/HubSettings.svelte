@@ -56,6 +56,7 @@
   import Checkbox from "$lib/components/Checkbox.svelte";
   import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
   import SettingsGroup from "$lib/components/SettingsGroup.svelte";
+  import HubSyncButton from "./HubSyncButton.svelte";
   import TeamLock from "$lib/components/TeamLock.svelte";
   import TimeAgo from "$lib/components/TimeAgo.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -141,7 +142,6 @@
     warn: "border-warn/40 bg-warn/10 text-warn",
   };
   let leaveError = $state("");
-  let syncMsg = $state("");
 
   function askLeave() {
     leaveError = "";
@@ -163,12 +163,6 @@
     } else {
       leaveError = r.error;
     }
-  }
-
-  async function sync() {
-    syncMsg = "";
-    const r = await hub.sync();
-    syncMsg = r.ok ? "Sync queued." : r.error;
   }
 
   // --- policy ---------------------------------------------------------------
@@ -286,9 +280,8 @@
         {/if}
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <Button variant="secondary" size="md" loading={hub.busy === "sync"} disabled={hub.busy !== ""} onclick={sync}>Sync now</Button>
         <Button variant="danger" size="md" loading={hub.busy === "leave"} disabled={hub.busy !== ""} onclick={askLeave}>Leave hub…</Button>
-        {#if syncMsg}<span role="status" class="text-sm text-faint">{syncMsg}</span>{/if}
+        <span class="ml-auto min-w-0"><HubSyncButton /></span>
       </div>
       {#if leaveError}<p role="alert" class="text-sm text-bad">{leaveError}</p>{/if}
     </SettingsGroup>

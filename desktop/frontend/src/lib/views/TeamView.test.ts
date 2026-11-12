@@ -145,7 +145,7 @@ describe("TeamView", () => {
     expect(confirm.request?.body).toBe("Claim GHSA-bbbb and start a session in API?");
     confirm.accept();
     await waitFor(() => expect(Claim).toHaveBeenCalledWith({ itemId: "it_many", project: "api" }));
-    expect(await within(row("it_many")).findByText("hub: not claimed: dispatch held: load")).toBeInTheDocument();
+    expect(await within(row("it_many")).findByText("Not claimed: dispatch held: load")).toBeInTheDocument();
   });
 
   it("releases my chore after a confirm", async () => {
@@ -166,6 +166,9 @@ describe("TeamView", () => {
     await waitFor(() => expect(row("it_open")).not.toBeNull());
     await fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     await waitFor(() => expect(Sync).toHaveBeenCalled());
-    expect(await screen.findByText("Sync queued.")).toBeInTheDocument();
+    // The next read carries a heartbeat newer than the press: the pass ran.
+    Status.mockResolvedValue({ ...joined, lastHeartbeat: new Date(Date.now() + 60_000).toISOString() });
+    expect(await screen.findByRole("button", { name: "Synced" }, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByText("Sync queued.")).not.toBeInTheDocument();
   });
 });

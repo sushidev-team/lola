@@ -16,7 +16,7 @@ vi.mock("@bindings/desktop", () => ({
   HubService: { Status, Board, Org, Join, Leave, Claim, Release, Sync, DefaultDeviceName },
 }));
 
-import { HubStore, HUB_POLL_MS, OUTDATED_MESSAGE, connectionState } from "./hub.svelte";
+import { HubStore, HUB_POLL_MS, OUTDATED_MESSAGE, SYNC_DONE_MS, SYNC_POLL_MS, SYNC_WAIT_MS, connectionState } from "./hub.svelte";
 
 const joined = { enabled: true, joined: true, org: "acme", deviceName: "mac", claimsToday: 0, maxClaimsPerDay: 4, pendingOutcomes: 0, sessions: [] };
 
@@ -162,5 +162,55 @@ describe("connectionState", () => {
     expect(connectionState({ ...joined, lastHeartbeat: "2026-11-11T11:58:00Z", lastError: "boom", lastErrorAt: "2026-11-11T11:59:00Z" } as never, now).tone).toBe("bad");
     // An error older than the last good heartbeat is history, not the state.
     expect(connectionState({ ...joined, lastHeartbeat: "2026-11-11T11:59:00Z", lastError: "boom", lastErrorAt: "2026-11-11T11:58:00Z" } as never, now).tone).toBe("good");
+  });
+});
+
+describe("HubStore.sync", () => {
+  const at = (ms: number) => new Date(ms).toISOString();
+
+  it("stays syncing until a newer heartbeat lands, then reads Synced and settles", async () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    Status.mockResolvedValue({ ...joined, lastHeartbeat: at(t0 - 60_000) });
+    Sync.mockResolvedValue({ queued: true });
+    const hub = new HubStore();
+    await hub.refresh();
+    const run = hub.sync();
+    expect(hub.syncPhase).toBe("syncing");
+    await vi.advanceTimersByTimeAsync(SYNC_POLL_MS * 2);
+    expect(hub.syncPhase).toBe("syncing");
+    Status.mockResolvedValue({ ...joined, lastHeartbeat: at(Date.now()) });
+    await vi.advanceTimersByTimeAsync(SYNC_POLL_MS);
+    await run;
+    expect(hub.syncPhase).toBe("synced");
+    await vi.advanceTimersByTimeAsync(SYNC_DONE_MS);
+    expect(hub.syncPhase).toBe("");
+  });
+
+  it("reports the pass's error, and a refused request", async () => {
+    vi.useFakeTimers();
+    Sync.mockResolvedValue({ queued: true });
+    const hub = new HubStore();
+    const run = hub.sync();
+    Status.mockResolvedValue({ ...joined, lastError: "hub: heartbeat: 503", lastErrorAt: at(Date.now() + 1) });
+    await vi.advanceTimersByTimeAsync(SYNC_POLL_MS);
+    await run;
+    expect(hub.syncPhase).toBe("failed");
+    expect(hub.syncError).toBe("hub: heartbeat: 503");
+
+    Sync.mockRejectedValue(new Error("daemon not running"));
+    await hub.sync();
+    expect(hub.syncPhase).toBe("failed");
+    expect(hub.syncError).toBe("daemon not running");
+  });
+
+  it("says so when no pass shows up in time", async () => {
+    vi.useFakeTimers();
+    Sync.mockResolvedValue({ queued: true });
+    const hub = new HubStore();
+    const run = hub.sync();
+    await vi.advanceTimersByTimeAsync(SYNC_WAIT_MS + SYNC_POLL_MS);
+    await run;
+    expect(hub.syncPhase).toBe("slow");
   });
 });

@@ -211,3 +211,12 @@ export function leaseLeft(expires: string | undefined, now = Date.now()): string
   if (d < 3_600_000) return `Lease ends in ${Math.floor(d / 60_000)}m`;
   return `Lease ends in ${Math.floor(d / 3_600_000)}h`;
 }
+
+/**
+ * A daemon refusal for a row: drop the "hub: " source tags and start with a
+ * capital ("hub: not claimed: X" → "Not claimed: X"). The words stay the daemon's.
+ */
+export function hubReason(msg: string): string {
+  const s = msg.replace(/^(hub:\s*)+/i, "").trim();
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : msg;
+}

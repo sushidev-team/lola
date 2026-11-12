@@ -169,7 +169,8 @@ describe("HubSettings — joined", () => {
     Sync.mockResolvedValue({ queued: true });
     mount();
     await fireEvent.click(await screen.findByRole("button", { name: "Sync now" }));
-    expect(await screen.findByText("Sync queued.")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Syncing…" })).toBeDisabled();
+    expect(Sync).toHaveBeenCalled();
   });
 });
 

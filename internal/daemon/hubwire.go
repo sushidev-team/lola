@@ -881,15 +881,17 @@ func (d *Daemon) hubClaimItem(ctx context.Context, api hubAPI, it hubproto.Item,
 	}
 	v, err := d.hub.verify(ctx, it)
 	if err != nil {
-		return "", errors.New("not confirmed on GitHub: " + err.Error())
+		// ErrNotConfirmed already says "GitHub does not confirm"; keep only the why.
+		why := strings.TrimPrefix(err.Error(), hub.ErrNotConfirmed.Error()+": ")
+		return "", errors.New("GitHub does not confirm it: " + why)
 	}
 	if v.Item.ID != it.ID || v.Item.Kind != it.Kind || hubproto.Validate(v.Item) != nil ||
 		(it.Kind == hubproto.KindRedBumpPR && v.Head == "") {
-		return "", errors.New("not confirmed on GitHub")
+		return "", errors.New("GitHub does not confirm it")
 	}
 	it = v.Item
 	if hubBranch(prefix, it) != branch {
-		return "", errors.New("not confirmed on GitHub: the branch differs")
+		return "", errors.New("GitHub does not confirm it: the branch differs")
 	}
 	brief, err := hub.Briefing(it)
 	if err != nil {

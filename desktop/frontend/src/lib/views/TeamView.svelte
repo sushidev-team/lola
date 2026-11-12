@@ -8,6 +8,7 @@
   // the daemon when pressed, and a refusal is shown in the daemon's words.
   import { onDestroy, onMount } from "svelte";
   import Button from "$lib/components/Button.svelte";
+  import HubSyncButton from "$lib/components/hub/HubSyncButton.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Select from "$lib/components/Select.svelte";
@@ -22,6 +23,7 @@
     deliveryClass,
     deliveryLabel,
     deviceOnline,
+    hubReason,
     itemTitle,
     kindIcon,
     kindLabel,
@@ -57,18 +59,11 @@
   let picks = $state<Record<string, string>>({});
   /** The daemon's refusal of the last claim/release, per item. */
   let rowErrors = $state<Record<string, string>>({});
-  let syncMsg = $state("");
 
   const projectName = (p: string) => store.displayNameFor(p) || p;
 
   function openSettings() {
     nav.openOverlay("settings", "", "hub");
-  }
-
-  async function sync() {
-    syncMsg = "";
-    const r = await hub.sync();
-    syncMsg = r.ok ? "Sync queued." : r.error;
   }
 
   function setError(id: string, msg: string) {
@@ -141,7 +136,7 @@
 {/snippet}
 
 {#snippet rowError(it: HubBoardItem)}
-  {#if rowErrors[it.id]}<p role="alert" class="col-start-1 col-end-3 min-w-0 break-words text-sm text-bad">{rowErrors[it.id]}</p>{/if}
+  {#if rowErrors[it.id]}<p role="alert" class="col-start-1 col-end-3 min-w-0 break-words text-sm text-bad">{hubReason(rowErrors[it.id])}</p>{/if}
 {/snippet}
 
 {#snippet finished(rows: HubBoardItem[], empty: string)}
@@ -183,12 +178,7 @@
       {#if hub.org}<span class="num text-sm text-faint" data-online>{online} of {devices.length} {devices.length === 1 ? "device" : "devices"} online</span>{/if}
     {/if}
     <span class="ml-auto flex shrink-0 items-center gap-2">
-      {#if syncMsg}<span role="status" class="text-sm text-faint">{syncMsg}</span>{/if}
-      {#if hub.joined}
-        <Button variant="secondary" size="md" loading={hub.busy === "sync"} disabled={hub.busy !== ""} onclick={sync}>
-          <Icon name="refresh-cw" size={14} /> Sync now
-        </Button>
-      {/if}
+      {#if hub.joined}<HubSyncButton />{/if}
       <Button size="md" onclick={openSettings}><Icon name="settings" size={14} /> Team hub settings</Button>
     </span>
   </div>

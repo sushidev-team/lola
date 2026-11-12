@@ -37,6 +37,14 @@ const NOT_JOINED_RE = /hub: not (enabled|joined)/i;
 export const OUTDATED_MESSAGE = "Update the lola daemon to use Team hub";
 /** Poll cadence while a hub view is on screen. */
 export const HUB_POLL_MS = 15_000;
+/** After "Sync now": how often to re-read while waiting for the pass, and for how long. */
+export const SYNC_POLL_MS = 1_000;
+export const SYNC_WAIT_MS = 30_000;
+/** How long "Synced" stays before the button reads "Sync now" again. */
+export const SYNC_DONE_MS = 2_500;
+
+/** The life of one "Sync now": "" (idle) → syncing → synced | failed | slow. */
+export type SyncPhase = "" | "syncing" | "synced" | "failed" | "slow";
 
 export type BoardState = "" | "open" | "claimed" | "done" | "failed" | "escalated";
 
@@ -63,6 +71,10 @@ export class HubStore {
   /** The action in flight: "join" | "leave" | "sync" | "claim:<id>" | "release:<id>" | "". */
   busy = $state("");
 
+  /** Where the last "Sync now" is. `syncError` says why it failed. */
+  syncPhase = $state<SyncPhase>("");
+  syncError = $state("");
+
   /** The device name a join uses by default (this Mac's hostname). */
   defaultName = $state("");
 
@@ -73,6 +85,12 @@ export class HubStore {
   /** Each #read takes a number; an answer older than one already applied is dropped. */
   #seq = 0;
   #applied = 0;
+  /** Bumped by each sync; an older sync's wait loop stops when it changes. */
+  #syncRun = 0;
+  #syncDoneTimer: ReturnType<typeof setTimeout> | null = null;
+  #onVisible = () => {
+    if (typeof document !== "undefined" && document.visibilityState === "visible") void this.refresh();
+  };
 
   get joined(): boolean {
     return !!this.status?.joined;
@@ -86,7 +104,14 @@ export class HubStore {
     const board = !!opts.board;
     this.#statusWatchers++;
     if (board) this.#boardWatchers++;
-    if (!this.#timer) this.#timer = setInterval(() => void this.refresh(), HUB_POLL_MS);
+    if (!this.#timer) {
+      this.#timer = setInterval(() => void this.refresh(), HUB_POLL_MS);
+      // Coming back to the window reads at once instead of waiting out the poll.
+      if (typeof window !== "undefined") {
+        window.addEventListener("focus", this.#onVisible);
+        document.addEventListener("visibilitychange", this.#onVisible);
+      }
+    }
     void this.refresh();
     let released = false;
     return () => {
@@ -97,6 +122,10 @@ export class HubStore {
       if (this.#statusWatchers <= 0 && this.#timer) {
         clearInterval(this.#timer);
         this.#timer = null;
+        if (typeof window !== "undefined") {
+          window.removeEventListener("focus", this.#onVisible);
+          document.removeEventListener("visibilitychange", this.#onVisible);
+        }
         this.#statusWatchers = 0;
         this.#boardWatchers = 0;
       }
@@ -114,6 +143,11 @@ export class HubStore {
     this.outdated = false;
     this.loaded = false;
     this.busy = "";
+    this.syncPhase = "";
+    this.syncError = "";
+    this.#syncRun++;
+    if (this.#syncDoneTimer) clearTimeout(this.#syncDoneTimer);
+    this.#syncDoneTimer = null;
     this.#refreshing = null;
   }
 
@@ -238,8 +272,56 @@ export class HubStore {
     return this.#act(`release:${itemId}`, () => HubService.Release(itemId));
   }
 
-  sync(): Promise<HubResult<unknown>> {
-    return this.#act("sync", () => HubService.Sync());
+  /**
+   * "Sync now": ask the daemon for a loop pass, then keep re-reading until the
+   * pass shows up — a heartbeat or an error newer than the press — so the
+   * button can say "Synced" (or why not) instead of a bare "queued". The
+   * daemon only queues the pass, so the answer is read, never assumed.
+   */
+  async sync(): Promise<HubResult<unknown>> {
+    if (this.busy || this.syncPhase === "syncing") return { ok: false, error: "a sync is already running" };
+    const run = ++this.#syncRun;
+    if (this.#syncDoneTimer) clearTimeout(this.#syncDoneTimer);
+    this.syncPhase = "syncing";
+    this.syncError = "";
+    const pressed = Date.now();
+    const beatBefore = stamp(this.status?.lastHeartbeat);
+    const r = await this.#act("sync", () => HubService.Sync());
+    if (run !== this.#syncRun) return r;
+    if (!r.ok) {
+      this.syncPhase = "failed";
+      this.syncError = r.error;
+      return r;
+    }
+    // The request is answered; watching for the pass runs on without the caller.
+    void this.#awaitPass(run, pressed, beatBefore);
+    return r;
+  }
+
+  async #awaitPass(run: number, pressed: number, beatBefore: number) {
+    const deadline = pressed + SYNC_WAIT_MS;
+    while (run === this.#syncRun && Date.now() < deadline) {
+      await this.refresh({ fresh: true });
+      if (run !== this.#syncRun) return;
+      const st = this.status;
+      const beat = stamp(st?.lastHeartbeat);
+      const errAt = stamp(st?.lastErrorAt);
+      // An error stamped after the press, and newer than any heartbeat, is this pass failing.
+      if (st?.lastError && errAt >= pressed - 1000 && !(beat > errAt)) {
+        this.syncPhase = "failed";
+        this.syncError = st.lastError;
+        return;
+      }
+      if (beat > beatBefore) {
+        this.syncPhase = "synced";
+        this.#syncDoneTimer = setTimeout(() => {
+          if (run === this.#syncRun) this.syncPhase = "";
+        }, SYNC_DONE_MS);
+        return;
+      }
+      await new Promise((res) => setTimeout(res, SYNC_POLL_MS));
+    }
+    if (run === this.#syncRun) this.syncPhase = "slow";
   }
 
   /** The board rows, never null. */
@@ -249,6 +331,13 @@ export class HubStore {
 }
 
 export const hub = new HubStore();
+
+/** A wire timestamp in epoch ms; 0 when absent or unparseable. */
+function stamp(v: unknown): number {
+  if (!v) return 0;
+  const n = Date.parse(String(v));
+  return isNaN(n) ? 0 : n;
+}
 
 /** "connected" | "error" | "waiting" for the connection pill. */
 export function connectionState(st: HubStatusData | null, now = Date.now()): { tone: "good" | "bad" | "warn"; label: string } {
