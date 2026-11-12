@@ -968,17 +968,25 @@ func Run(ctx context.Context) error {
 	// holding a pane stream open for hours is the opposite of that, so anything
 	// still streaming when the drain starts hangs shutdown until the phone
 	// happens to disconnect.
-	d.stopRemote()
-	d.stopHookBridge()
-	d.stopSSH()
+	// Each step is timed: a slow stop names its cause in the log.
+	step := func(name string, f func()) {
+		start := time.Now()
+		f()
+		if took := time.Since(start); took > time.Second {
+			logger.Printf("shutdown: %s took %s", name, took.Round(100*time.Millisecond))
+		}
+	}
+	step("remote listener", d.stopRemote)
+	step("hook bridge", d.stopHookBridge)
+	step("ssh", d.stopSSH)
 	defer d.stopTimeline() // last, so what the shutdown itself emits is still written
 	// Before the worker drain: a forward holds accepted connections open for as
 	// long as a browser keeps them, which is exactly the unbounded wait the
 	// drain below is not built for.
-	d.stopDevForwards()
-	d.stopAllWorkers()
-	d.wg.Wait()
-	d.drainConnWork()
+	step("dev forwards", d.stopDevForwards)
+	step("poll workers", d.stopAllWorkers)
+	step("background loops (observer, hub, goals, reviews)", d.wg.Wait)
+	step("socket work in flight", d.drainConnWork)
 	ln.Close()
 	os.Remove(sock)
 	logger.Printf("daemon stopped")

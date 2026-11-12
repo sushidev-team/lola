@@ -18,7 +18,7 @@ import (
 
 const (
 	daemonStartTimeout = 10 * time.Second
-	daemonStopTimeout  = 10 * time.Second
+	daemonStopTimeout  = 30 * time.Second
 	daemonPollInterval = 150 * time.Millisecond
 )
 

@@ -481,7 +481,8 @@ func (s *DaemonService) stopLocked() error {
 	if err := call(protocol.Request{Cmd: "stop"}, shortTimeout, nil); err != nil {
 		return err
 	}
-	return waitDaemon(false, 10*time.Second)
+	// A graceful stop finishes the observer cycle and any spawn in flight.
+	return waitDaemon(false, 30*time.Second)
 }
 
 // RestartDaemon stops (if up), waits for the socket to clear, then respawns. It
