@@ -11,9 +11,17 @@ export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "upda
 const SIDEBAR_KEY = "lola.sidebar";
 /** Which of the sidebar's two tabs is on show. */
 const SIDEBAR_TAB_KEY = "lola.sidebar.tab";
+const PROJECT_TAB_KEY = "lola.project.tab";
 /** When each session was last on screen, so a finished turn can read as not yet seen. */
 const SEEN_KEY = "lola.seen";
 const SEEN_KEEP = 200;
+
+export type ProjectTab = "overview" | "git";
+
+function readProjectTab(): ProjectTab {
+  try { return localStorage.getItem(PROJECT_TAB_KEY) === "git" ? "git" : "overview"; }
+  catch { return "overview"; }
+}
 
 export type SidebarTab = "sessions" | "projects";
 
@@ -58,7 +66,14 @@ class Nav {
     this.openOverlay("newsession", project);
   }
 
+  gitSearchRequest = $state(0);
   view = $state<View>("cockpit");
+  private preferredProjectTab = $state<ProjectTab>(readProjectTab());
+  get projectTab(): ProjectTab { return this.preferredProjectTab; }
+  set projectTab(tab: ProjectTab) {
+    this.preferredProjectTab = tab;
+    try { localStorage.setItem(PROJECT_TAB_KEY, tab); } catch { /* keep the in-memory choice */ }
+  }
   /** Project name backing detail/pickers and the cockpit's project scope. */
   project = $state<string>("");
   /** Cockpit is scoped to `project` (vs global) when true. */
@@ -149,31 +164,18 @@ class Nav {
     this.dropFocus();
     this.setSidebarTab("sessions");
   }
-  /**
-   * What a sidebar project row does when clicked. Clicking the project the
-   * cockpit is ALREADY scoped to drops the scope — the same destination as the
-   * "All" breadcrumb. Without it the project list was the one nav group with no
-   * way back to every-project: Triage carries an explicit "All sessions" row,
-   * Projects does not, so the only exits were the breadcrumb or Escape.
-   *
-   * The toggle fires ONLY while the scope is actually in effect on screen. From
-   * the project hub or the home list a row is still drawn active (`scoped`
-   * outlives `goDetail`), and a click there has to mean "take me to this
-   * project's sessions" — un-scoping would send you somewhere you never asked
-   * for and look like the click was swallowed.
-   */
-  toggleProjectScope(name: string) {
-    const clearing = this.view === "cockpit" && this.scoped && this.project === name;
-    this.goCockpit(clearing ? "" : name);
-  }
   goHome() {
     this.view = "home";
     this.dropFocus();
   }
-  goDetail(name: string) {
+  goDetail(name: string, tab: ProjectTab = this.projectTab) {
     this.project = name;
+    this.projectTab = tab;
+    // Project navigation is a workspace destination, not a session filter.
+    this.scoped = false;
     this.view = "detail";
     this.dropFocus();
+    this.setSidebarTab("projects");
   }
   goPRPicker(name: string) {
     this.project = name;

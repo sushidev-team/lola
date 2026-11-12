@@ -35,7 +35,7 @@ export function disclosureMotion(node: HTMLDetailsElement, group = false) {
     animation.onfinish = () => { node.open = open; node.style.overflow = ''; animation = undefined; };
   }
   function click(event: MouseEvent) {
-    if (!(event.target instanceof Element) || !event.target.closest('summary') || event.target.closest('a')) return;
+    if (!(event.target instanceof Element) || event.target.closest('summary')?.parentElement !== node || event.target.closest('a')) return;
     event.preventDefault();
     setOpen(animation ? !target : !node.open);
   }

@@ -1711,6 +1711,81 @@ picker (`a` in the TUI) and in the manual-worktree form.
 installed; the Go test suite covers the launch-arg and callback-wiring plumbing
 but does not run the real CLIs.
 
+## Project workspaces (desktop app)
+
+Click a project in the sidebar to open its workspace. **Overview** brings together
+its sessions, current activity, repository information and automation settings.
+Opening a session takes you to the session workspace; project navigation itself
+does not filter the session list. Stacks link to their member repositories.
+Your last-used Overview or Git tab is remembered across projects and app launches.
+Projects without a repository show Overview without changing that preference.
+
+**Git** browses the configured repository and its worktrees using your installed
+`git`. Local and remote branches select the history to inspect. The commit graph
+shows ancestry and branch labels; select a commit to inspect its changed files,
+or **⌘-click** (Ctrl-click on other platforms) a second commit to compare the two
+trees. Selection shows metadata and changed files; click a file or **View changes**
+to open a diff. The comparison identifies its direction and can be reversed. Diffs
+offer unified and side-by-side layouts.
+
+Local, Remote, Worktrees and Stashes have distinct collapsible section headers. Branch
+names containing `/` form animated nested folders, and the active local branch is highlighted. Use **Clear branch filter** below the
+history to return to all branches. Working changes occupy the first history row only
+when the checkout has changed files.
+Press **⌘F** (Ctrl-F) to search loaded commits. The column controls at the top right of history
+show or hide columns; drag a column divider or focus it and use the arrow keys to
+resize. Column visibility and widths are remembered.
+
+Branch tips and checkout markers sit to the left of the graph. Matching colors
+connect the labels and graph lanes. A faint tint fades right to left inside only
+the graph column; hovering or focusing a
+commit emphasizes its lane. The commit details list branches that reach the commit
+through loaded history, since shared ancestors are not owned by a single branch.
+GitHub remotes show their user or organization avatar. Author avatars and GitHub
+logins load separately through authenticated `gh`; missing identities and offline
+lookups fall back to initials without delaying local history. Avatar images and
+repository-scoped author/email associations are cached locally. Cached images
+appear immediately; each app launch refreshes profiles in the background when
+first used, keeping the previous image if offline. Initial lookups have a subtle
+loading treatment that respects reduced motion.
+
+Hover the commit-message column for a compact preview with author, date, short
+SHA and grouped branch-history chips. Branch badges align with their graph node
+and keep a compact, left-aligned layout.
+
+The working-copy panel keeps staged and unstaged files in separate scrolling
+sections, with compact list and folder-tree layouts. Shift-click selects a visible
+range; ⌘/Ctrl-click toggles individual files. Green hover actions and the selected
+file action stage precisely that selection. Review a file, stage or
+unstage it, then write a subject and optional body and commit the staged changes.
+**Amend last commit** loads the existing message into an empty draft and asks you
+to confirm the commit being replaced. It refuses if HEAD changed in the meantime;
+it does not force-push rewritten history. Fetch, ordinary
+push and fast-forward-only pull are available from the toolbar. Refresh reloads
+changes made by a terminal or another application. Selecting a branch browses it;
+it does not check it out. Double-click a branch to check it out (or open its
+existing worktree). Right-click branches, remotes, worktrees, commits and stashes
+for their actions. Drag a branch onto another to choose an explicitly named merge
+or rebase, followed by confirmation. Merge/rebase conflicts stay visible with
+Continue and Abort actions.
+
+Pulling an unchecked branch fast-forwards its configured upstream without
+switching the visible checkout; divergence requires an explicit merge or rebase.
+Branch pushes use the existing upstream. **Stash** saves staged, unstaged and
+untracked changes (ignored files stay put); **Pop** restores a selected stash to a
+clean checkout and only removes it after success. Apply, pop and drop are also in
+the stash context menu. These actions require confirmation, and conflicts retain
+the saved stash.
+
+Commits use Git's effective repository/global configuration, identity, hooks and
+credential/signing helpers. The shield beside Amend exposes the configured signing mode in its tooltip.
+To sign every commit, configure `commit.gpgSign=true` in Git along with your
+`user.signingKey` and, for SSH keys, `gpg.format=ssh`. Lola does not turn signing off
+when a helper fails; the error is shown and the message is kept for retry. A
+passphrase-protected key needs its normal signing agent or GUI pinentry available
+to the desktop process. Sandboxed agent worktrees cannot be operated on through
+host Git in this view.
+
 ## The session view (desktop app)
 
 A session opens on its **Conversation**: what the agent said and did, read from its own

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { nav } from "./nav.svelte";
 
 // nav is a singleton; reset the pieces these tests touch so order can't matter.
@@ -10,6 +10,7 @@ beforeEach(() => {
   nav.scoped = false;
   nav.project = "";
   nav.view = "cockpit";
+  nav.projectTab = "overview";
 });
 
 describe("nav help overlay", () => {
@@ -36,53 +37,80 @@ describe("nav.openSession", () => {
     expect(nav.sidebarOpen).toBe(true);
     expect(nav.sidebarTab).toBe("sessions");
   });
-  it("leaves the project scope alone and returns to the cockpit", () => {
+  it("returns from project detail without turning it into a session filter", () => {
     nav.goCockpit("web");
     nav.goDetail("web");
     nav.openSession("s1");
     expect(nav.view).toBe("cockpit");
-    expect(nav.scoped).toBe(true);
+    expect(nav.scoped).toBe(false);
     expect(nav.project).toBe("web");
   });
 });
 
-describe("nav.toggleProjectScope", () => {
-  it("scopes to a project, then clears the scope on a second click", () => {
-    nav.toggleProjectScope("nori");
-    expect(nav.scoped).toBe(true);
-    expect(nav.project).toBe("nori");
-    nav.toggleProjectScope("nori");
-    expect(nav.scoped).toBe(false);
-    expect(nav.project).toBe("");
-  });
-
-  it("switches scope rather than clearing when a DIFFERENT project is clicked", () => {
-    nav.toggleProjectScope("nori");
-    nav.toggleProjectScope("okane");
-    expect(nav.scoped).toBe(true);
-    expect(nav.project).toBe("okane");
-  });
-
-  // `scoped` outlives goDetail, so the row is still drawn active on the project
-  // hub. A click there must NAVIGATE to that project's sessions — clearing would
-  // send the user somewhere they never asked for and read as a swallowed click.
-  it("navigates instead of clearing when the cockpit isn't the current view", () => {
-    nav.toggleProjectScope("nori");
+describe("nav.goDetail", () => {
+  it("opens the project workspace without scoping the session list", () => {
+    nav.goCockpit("old-project");
+    nav.openSession("s1");
     nav.goDetail("nori");
-    nav.toggleProjectScope("nori");
-    expect(nav.view).toBe("cockpit");
-    expect(nav.scoped).toBe(true);
+    expect(nav.view).toBe("detail");
+    expect(nav.scoped).toBe(false);
     expect(nav.project).toBe("nori");
+    expect(nav.sidebarTab).toBe("projects");
+    expect(nav.focusedTerm).toBe("");
+    expect(nav.projectTab).toBe("overview");
   });
 
-  // Same rule the "All" breadcrumb follows: dropping the project scope must not
-  // silently widen the status filter back to everything.
-  it("keeps the triage filter when it clears the scope", () => {
-    nav.setTriage("Needs You");
-    nav.toggleProjectScope("nori");
-    nav.toggleProjectScope("nori");
+  it("repeated project navigation stays in the workspace", () => {
+    nav.goDetail("nori");
+    nav.goDetail("nori");
+    expect(nav.view).toBe("detail");
+    expect(nav.project).toBe("nori");
     expect(nav.scoped).toBe(false);
+  });
+
+  it("can open a member repository directly in Git", () => {
+    nav.goDetail("nori", "git");
+    expect(nav.projectTab).toBe("git");
+    nav.goDetail("okane");
+    expect(nav.projectTab).toBe("git");
+  });
+
+  it("preserves the user's session triage preference", () => {
+    nav.setTriage("Needs You");
+    nav.goDetail("nori");
     expect(nav.triage).toBe("Needs You");
+  });
+});
+
+describe("project view preference", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("keeps the last tab across projects and session navigation", () => {
+    nav.goDetail("nori");
+    nav.projectTab = "git";
+    nav.goCockpit();
+    nav.goDetail("okane");
+    expect(nav.projectTab).toBe("git");
+    expect(localStorage.getItem("lola.project.tab")).toBe("git");
+    nav.projectTab = "overview";
+    nav.goDetail("nori");
+    expect(nav.projectTab).toBe("overview");
+  });
+  it("restores the project view from storage after a fresh load", async () => {
+    nav.projectTab = "git";
+    vi.resetModules();
+    const { nav: restored } = await import("./nav.svelte");
+    restored.goDetail("another-project");
+    expect(restored.projectTab).toBe("git");
+  });
+  it("ignores an invalid saved view and tolerates unavailable storage", async () => {
+    localStorage.setItem("lola.project.tab", "removed-tab");
+    vi.resetModules();
+    const { nav: restored } = await import("./nav.svelte");
+    expect(restored.projectTab).toBe("overview");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
+    restored.projectTab = "git";
+    restored.goDetail("nori");
+    expect(restored.projectTab).toBe("git");
   });
 });
 

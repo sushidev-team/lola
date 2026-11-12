@@ -87,6 +87,7 @@
       if (nav.view === "cockpit" && nav.focusedTerm) void terms.closeActiveTab(nav.focusedTerm);
       return;
     }
+    if (action === "find-project-history") { if (nav.view === "detail" && nav.projectTab === "git") nav.gitSearchRequest++; return; }
     if (action === "commands") { nav.openOverlay("commands"); return; }
     if (action === "new-session") { newSessionHere(); return; }
     if (action === "temporary-shell") { void openShell(); return; }
@@ -493,8 +494,10 @@
        this template is what froze the template effect before. -->
   <Sidebar width={sideWidth} maxWidth={sidebarLimit(windowWidth)} />
 
-  <div class="grid min-h-0 min-w-0" style="grid-template-rows:44px auto minmax(0,1fr)" {@attach reflowGridRows}>
-    <MainTopBar />
+  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{nav.view === 'detail' && store.projectByName(nav.project) ? '0px' : '44px'} auto minmax(0,1fr)" {@attach reflowGridRows}>
+    <!-- Project workspaces own their single window toolbar. Keep the shared
+         bar mounted for the session view, but remove its duplicate chrome. -->
+    <div class="min-h-0" class:overflow-hidden={nav.view === 'detail' && !!store.projectByName(nav.project)} inert={nav.view === 'detail' && !!store.projectByName(nav.project)} aria-hidden={nav.view === 'detail' && !!store.projectByName(nav.project)}><MainTopBar /></div>
     <!-- Out-of-date-daemon banner: always mounted (so it reacts), self-hides when
          there is no push error. The WRAPPER is what must always render: the banner
          itself emits NO DOM node when there is no error, and auto-placement then
