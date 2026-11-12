@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { fly } from "svelte/transition";
-  import { cubicOut } from "svelte/easing";
+  import { cubicOut, cubicIn } from "svelte/easing";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import type { IconName } from "$lib/icons";
@@ -33,7 +32,34 @@
     bad: "bg-bad",
   } as const;
 
-  const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  // No motion for reduced-motion users, and none where the Web Animations API
+  // is missing (jsdom): Svelte drives transitions through element.animate.
+  const reduced =
+    typeof window === "undefined" ||
+    typeof Element.prototype.animate !== "function" ||
+    !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+
+  // |global on both: the toast's nearest block is the {#key} that lives and
+  // dies with the {#if}, and a local transition does not play when its block
+  // is created or destroyed by an ancestor — the first toast and its exit
+  // would just snap. A new message (key change) cross-fades the same way.
+  // Rise + fade + a hint of scale on the way in; a quicker drop on the way out.
+  function enter(_node: Element) {
+    return {
+      duration: reduced ? 0 : 220,
+      easing: cubicOut,
+      css: (t: number, u: number) =>
+        `opacity:${t}; transform: translateY(${u * 14}px) scale(${0.96 + 0.04 * t});`,
+    };
+  }
+  function leave(_node: Element) {
+    return {
+      duration: reduced ? 0 : 160,
+      easing: cubicIn,
+      css: (t: number, u: number) =>
+        `opacity:${t}; transform: translateY(${u * 8}px) scale(${0.98 + 0.02 * t});`,
+    };
+  }
 </script>
 
 <!-- The live region is ALWAYS in the DOM and only its contents change. A
@@ -53,8 +79,8 @@
         role="presentation"
         onmouseenter={() => store.holdFlash(true)}
         onmouseleave={() => store.holdFlash(false)}
-        in:fly={{ y: 12, duration: reduced ? 0 : 180, easing: cubicOut }}
-        out:fly={{ y: 8, duration: reduced ? 0 : 140 }}
+        in:enter|global
+        out:leave|global
       >
         <span class="absolute inset-y-0 left-0 w-1 {ACCENT[flash.kind]}" aria-hidden="true"></span>
         <span class="mt-px {TONE[flash.kind]}"><Icon name={ICON[flash.kind]} size={16} /></span>
