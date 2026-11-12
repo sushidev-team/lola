@@ -510,16 +510,18 @@ endpoint = "https://api.linear.app/graphql"
 # ---------------------------------------------------------------------------
 # [sandbox] — OPTIONAL container sandbox. A project opts in with
 # sandbox = "docker"; its agent then runs in a container that can write only
-# its worktree (+ the git object store a commit needs). Hooks reach the daemon
-# over a token-authenticated loopback port (hook_port), so the container runs a
-# LINUX lola: build one with `make build-linux`.
+# its worktree (+ the git object store a commit needs). Nothing here is
+# required: the default image (ghcr.io/sushidev-team/lola-sandbox:<version>)
+# carries claude, git and gh, and the hooks' linux lola comes out of it.
+# Store the container's Claude login once: `claude setup-token`, then
+# `lola sandbox token`.
 # ---------------------------------------------------------------------------
 # [sandbox]
-# docker   = "docker"                                     # the docker CLI
-# image    = "ghcr.io/acme/agent-node:22"                 # sh + git + the agent on PATH
-# lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # required when sandboxing
+# docker    = "docker"                                    # the docker CLI
+# image     = "ghcr.io/acme/agent-node:22"                # default: lola's image
+# lola_bin  = "/Users/me/src/lola/dist/lola-linux-arm64"  # default: from lola's image
 # hook_port = 7718
-# pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]      # names only; values from the daemon env
+# pass_env  = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GH_TOKEN"]  # the default
 
 # ---------------------------------------------------------------------------
 # [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads
@@ -744,7 +746,7 @@ dev_commands = [
 # Run this project's agents in a container that can write only their worktree
 # (see [sandbox]). "none" (default) | "docker".
 # sandbox = "docker"
-# sandbox_image = "ghcr.io/acme/agent-php:8.4"   # overrides [sandbox].image
+# sandbox_image = "ghcr.io/acme/agent-php:8.4"   # overrides [sandbox].image / lola's image
 # sandbox_ports = ["8000", "5173:5173"]          # published on 127.0.0.1
 # Opt this project into the [hub] chore lane: hub work items (security
 # advisories, red dependency-bump PRs) whose repo matches `repo` above may be

@@ -602,17 +602,35 @@ is still an ordinary lola tmux pane — it runs `docker run -it …` instead of 
 agent — so the terminal views, pane classification, answers and send-keys all
 work unchanged.
 
-```toml
-[sandbox]
-image    = "ghcr.io/acme/agent-node:22"   # sh + git + the coding agent on PATH
-lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # make build-linux
-pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]
+It needs no other configuration. With no `[sandbox]` table, the agent runs in
+lola's own image, `ghcr.io/sushidev-team/lola-sandbox:<version>` (`:edge` for
+a non-release build): Alpine with Claude Code, git, gh, ripgrep, bash and
+curl, running as a non-root user. It is pulled on the first sandboxed spawn.
 
+```toml
 [[project]]
 name          = "web"
 sandbox       = "docker"
 sandbox_ports = ["5173"]          # published on 127.0.0.1:5173
 ```
+
+Setup, once per machine:
+
+1. Docker Desktop, OrbStack or Colima, running.
+2. A Claude Code token for the container (it cannot read your keychain):
+   `claude setup-token`, then `lola sandbox token` and paste it (the input is
+   not echoed; `--clear` removes it). The desktop app has the same field under
+   Settings → Sandbox. `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` in the
+   daemon's environment work too.
+3. GitHub: nothing, if `gh auth login` is done on the host (see Credentials).
+
+`lola doctor` checks all three.
+
+**Custom images** are optional: a project's toolchain (PHP, Node, Go …) goes
+in an image built `FROM` lola's (see `sandbox/README.md`), set as
+`[sandbox].image` or per project as `sandbox_image`. Any image works that has
+`sh`, `git` and the coding agent on `PATH`; it does not need lola, because
+lola mounts its own.
 
 What the container can reach:
 
@@ -624,18 +642,31 @@ What the container can reach:
 
 Things to know:
 
-- **Credentials.** The container cannot read the macOS keychain, so the agent
-  authenticates from environment variables listed in `[sandbox].pass_env`
-  (copied from the daemon's environment into the session's 0600 env file at
-  spawn — names only in config). claude: `CLAUDE_CODE_OAUTH_TOKEN` (from
-  `claude setup-token`) or `ANTHROPIC_API_KEY`; `git push` / `gh`: `GH_TOKEN`.
+- **Credentials.** The container cannot read the macOS keychain, so lola
+  writes the agent's credentials into the session's 0600 env file at spawn.
+  `[sandbox].pass_env` names them; empty means `CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_API_KEY` and `GH_TOKEN`, each copied from the daemon's
+  environment when set. When the environment lacks one, lola falls back to
+  the keychain item `lola sandbox token` stores (claude) and to the host's
+  `gh auth token` (GitHub). **That means a sandboxed agent holds your GitHub
+  token**: it can push and open PRs as you, the same power an unsandboxed agent
+  has through `gh`. Export a narrower `GH_TOKEN` for the daemon, or set
+  `pass_env` without it, to limit that. The commit identity is the host's
+  (`user.name` / `user.email` of the project's checkout, passed as
+  `GIT_AUTHOR_*` / `GIT_COMMITTER_*`). Inside the image, git rewrites GitHub
+  ssh remotes to https and authenticates through gh, since the container
+  holds no ssh keys.
 - **Hooks.** A host unix socket cannot be mounted into Docker Desktop's or
   OrbStack's VM, so a sandboxed agent's hooks reach the daemon over the **hook
   bridge**: `127.0.0.1:[sandbox].hook_port` (default 7718), reached from the
   container as `host.docker.internal`, open only while some project is
   sandboxed, accepting only hook events and `lola report`, each carrying a
-  per-session token. The container runs `[sandbox].lola_bin` — a Linux build
-  (`make build-linux`) — mounted at the host lola's path.
+  per-session token. Inside the container the hooks run a **Linux** lola,
+  mounted read-only at the host lola's path: the one in lola's default image,
+  which the daemon copies out once per image ID into
+  `~/.lola/cache/sandbox/`, or `[sandbox].lola_bin` when set. A custom image
+  therefore needs no lola. Without docker or the image the spawn fails and
+  says why; it never starts an agent lola cannot hear.
 - **claude's state** lives in `.lola/claude` inside the worktree (seeded past
   the first-run dialogs); codex's in `.lola/codex`. The subscription-limit
   readout and codex/opencode token usage are not recorded for sandboxed
@@ -1503,10 +1534,10 @@ opts in with `sandbox = "docker"`.
 | Key | Type | Description |
 | --- | --- | --- |
 | `docker` | string | The docker CLI. Default `docker` from `PATH` (OrbStack, Colima and podman's docker shim work too). |
-| `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
-| `lola_bin` | string | Absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`). Required by any sandboxed project: it is what the agent's hooks run inside the container. |
+| `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Default: lola's own, `ghcr.io/sushidev-team/lola-sandbox:<lola version>` (`:edge` for a non-release build). A custom one needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
+| `lola_bin` | string | Optional absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`) for the agent's hooks. Default: the one inside lola's default image, extracted and cached by the daemon. Set it to test hook changes from a dev build. |
 | `hook_port` | int | Loopback port of the hook bridge. Default `7718`. |
-| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Values never live in the config. |
+| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Default `["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GH_TOKEN"]`, with the keychain / `gh auth token` fallback described under Credentials. Values never live in the config. |
 
 ### `[ui]` (optional)
 
