@@ -303,14 +303,6 @@
   {/if}
 {/snippet}
 
-{#snippet card(label: string, value: number, sub: import("svelte").Snippet | null, attr: string)}
-  <div class="grid min-w-0 content-start gap-1.5 rounded-xl border border-edge bg-panel/40 px-4 py-3" data-team-card={attr}>
-    <span class="label text-faint">{label}</span>
-    <span class="num text-2xl font-medium leading-none text-ink">{value}</span>
-    {#if sub}<span class="min-w-0 text-sm text-faint">{@render sub()}</span>{/if}
-  </div>
-{/snippet}
-
 <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" data-team-view>
   <div class="flex min-w-0 flex-wrap items-center gap-3 border-b border-edge px-5 py-3">
     <span class="min-w-0 truncate text-base font-medium text-ink">{hub.joined ? orgName : "Team"}</span>
@@ -355,16 +347,62 @@
         {#if hub.boardError}<div role="alert" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">{hub.boardError}</div>{/if}
 
         {#if hub.board}
-          {#snippet openSub()}{#if sections.available.length}{@render sevBar(sections.available, "mt-1.5 w-full")}<span class="mt-1.5 block truncate">{severityCounts(sections.available)}</span>{:else}Caught up{/if}{/snippet}
-          {#snippet mineSub()}{working.filter((g) => g.mine).length} {working.filter((g) => g.mine).length === 1 ? "session" : "sessions"}{/snippet}
-          {#snippet theirsSub()}{new Set(sections.teammates.map((it) => it.lease?.deviceName)).size} {new Set(sections.teammates.map((it) => it.lease?.deviceName)).size === 1 ? "device" : "devices"}{/snippet}
-          {#snippet doneSub()}{sections.failed.length} failed · {sections.escalated.length} escalated{/snippet}
-          <div class="grid grid-cols-2 gap-3 lg:grid-cols-4" data-team-summary>
-            {@render card("Open", sections.available.length, openSub, "open")}
-            {@render card("This Mac", sections.mine.length, mineSub, "mine")}
-            {@render card("Teammates", sections.teammates.length, theirsSub, "teammates")}
-            {@render card("Done", sections.done.length, doneSub, "done")}
-          </div>
+          {@const tally = severityTally(sections.available)}
+          {@const sessions = working.filter((g) => g.mine).length}
+          {@const mates = new Set(sections.teammates.map((it) => it.lease?.deviceName || "")).size}
+          <section class="grid min-w-0 overflow-hidden rounded-xl border border-edge bg-panel/40 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]" aria-label="Summary" data-team-summary>
+            <div class="grid min-w-0 content-center gap-3 px-5 py-4" data-team-card="open">
+              <p class="flex items-baseline gap-2">
+                <span class="num text-[28px] font-semibold leading-none text-ink">{sections.available.length}</span>
+                <span class="text-faint">{sections.available.length === 1 ? "open chore" : "open chores"}</span>
+              </p>
+              {#if sections.available.length}
+                <span class="flex h-2.5 gap-0.5 overflow-hidden rounded-full" role="img" aria-label={severityCounts(sections.available)}>
+                  {#each tally as t (t.severity)}
+                    <span class="h-full first:rounded-l-full last:rounded-r-full {severityFill(t.severity)}" style:flex-grow={t.count}></span>
+                  {/each}
+                </span>
+                <ul class="flex flex-wrap gap-x-5 gap-y-1 text-sm" aria-label="Open chores by severity">
+                  {#each tally as t (t.severity)}
+                    <li class="flex items-center gap-1.5">
+                      <span class="h-2 w-2 rounded-full {severityFill(t.severity)}" aria-hidden="true"></span>
+                      <span class="num font-medium text-ink">{t.count}</span>
+                      <span class="text-faint">{t.severity ? severityLabel(t.severity).toLowerCase() : "unrated"}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="flex items-center gap-1.5 text-sm text-good"><Icon name="check" size={14} /> The team is caught up.</p>
+              {/if}
+            </div>
+            <dl class="grid min-w-0 content-center gap-2.5 border-t border-edge px-5 py-4 text-sm lg:border-l lg:border-t-0">
+              <div class="grid grid-cols-[6rem_minmax(0,1fr)] items-baseline gap-3" data-team-card="mine">
+                <dt class="text-faint">This Mac</dt>
+                <dd class="min-w-0 truncate">
+                  {#if sections.mine.length}
+                    <span class="num font-medium text-ink">{sections.mine.length}</span> <span class="text-faint">{sections.mine.length === 1 ? "chore" : "chores"} · {sessions} {sessions === 1 ? "session" : "sessions"}</span>
+                  {:else}<span class="text-faint">Idle</span>{/if}
+                </dd>
+              </div>
+              <div class="grid grid-cols-[6rem_minmax(0,1fr)] items-baseline gap-3" data-team-card="teammates">
+                <dt class="text-faint">Teammates</dt>
+                <dd class="min-w-0 truncate">
+                  {#if sections.teammates.length}
+                    <span class="num font-medium text-ink">{sections.teammates.length}</span> <span class="text-faint">{sections.teammates.length === 1 ? "chore" : "chores"} · {mates} {mates === 1 ? "device" : "devices"}</span>
+                  {:else}<span class="text-faint">None working</span>{/if}
+                </dd>
+              </div>
+              <div class="grid grid-cols-[6rem_minmax(0,1fr)] items-baseline gap-3" data-team-card="done">
+                <dt class="text-faint">Done</dt>
+                <dd class="min-w-0 truncate">
+                  <span class="num font-medium text-ink">{sections.done.length}</span>
+                  {#if sections.failed.length}<span class="text-bad"> · {sections.failed.length} failed</span>{/if}
+                  {#if sections.escalated.length}<span class="text-warn"> · {sections.escalated.length} escalated</span>{/if}
+                  {#if !sections.failed.length && !sections.escalated.length}<span class="text-faint"> · no failures</span>{/if}
+                </dd>
+              </div>
+            </dl>
+          </section>
         {/if}
 
         <div class="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">

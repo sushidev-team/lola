@@ -108,8 +108,9 @@ describe("TeamView", () => {
     expect(within(row("it_blocked")).getByRole("button", { name: "Claim" })).toBeDisabled();
     expect(within(row("it_blocked")).getByText(/not sandboxed/)).toBeInTheDocument();
     // Summary cards.
-    expect(document.querySelector('[data-team-card="open"]')).toHaveTextContent("Open 3 1 critical · 1 high · 1 low");
-    expect(document.querySelector('[data-team-card="mine"]')).toHaveTextContent("1 session");
+    expect(document.querySelector('[data-team-card="open"]')).toHaveTextContent("3 open chores 1 critical 1 high 1 low");
+    expect(document.querySelector('[data-team-card="mine"]')).toHaveTextContent("This Mac 1 chore · 1 session");
+    expect(document.querySelector('[data-team-card="done"]')).toHaveTextContent("Done 1 · 1 escalated");
     // In progress, per session / device: mine opens its session, a teammate's
     // shows the device and lease.
     const mineGroup = document.querySelector("[data-work-group][data-mine]") as HTMLElement;
