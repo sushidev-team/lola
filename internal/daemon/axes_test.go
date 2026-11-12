@@ -525,3 +525,31 @@ func TestObserveDoesNotKillASessionRevivedAfterTheListing(t *testing.T) {
 		t.Fatalf("revived session = %q, want working", got.AgentState)
 	}
 }
+
+// A shutdown stops the observer between sessions instead of letting the
+// shielded cycle observe every one first.
+func TestObserveStopsBetweenSessionsOnShutdown(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	(&fakeObsSeams{}).install(d)
+	for _, id := range []string{"FE-1", "FE-2", "FE-3"} {
+		d.sessions.Upsert(nativeSess(id, "working"))
+	}
+	stop := make(chan struct{})
+	captured := 0
+	d.paneTail = func(ctx context.Context, tmuxName string, lines int) (string, error) {
+		captured++
+		close(stop) // the shutdown arrives while the first session is observed
+		return paneUnknown, nil
+	}
+	d.listTmuxSessions = func(ctx context.Context) ([]tmux.Session, error) {
+		var ls []tmux.Session
+		for _, s := range d.sessions.Snapshot() {
+			ls = append(ls, tmux.Session{Name: s.ID})
+		}
+		return ls, nil
+	}
+	d.observe(withStop(context.Background(), stop))
+	if captured != 1 {
+		t.Fatalf("observed %d sessions after the shutdown began, want 1", captured)
+	}
+}

@@ -96,7 +96,31 @@ func (d *Daemon) safeObserve(ctx context.Context) {
 	// a half-written store. The loop itself still stops on ctx.Done, and every
 	// exec inside the cycle is individually bounded by observeExecTimeout so
 	// the shield can never turn into an indefinite hang.
-	d.observe(context.WithoutCancel(ctx))
+	d.observe(withStop(context.WithoutCancel(ctx), ctx.Done()))
+}
+
+// stopKey carries the daemon's shutdown signal into a shielded cycle.
+type stopKey struct{}
+
+// withStop attaches stop (the run context's Done) to a shielded ctx: the
+// cycle's execs keep running to completion, but the cycle can see the
+// shutdown and stop BETWEEN sessions instead of observing all of them.
+func withStop(ctx context.Context, stop <-chan struct{}) context.Context {
+	return context.WithValue(ctx, stopKey{}, stop)
+}
+
+// stopping reports whether the daemon is shutting down.
+func stopping(ctx context.Context) bool {
+	stop, _ := ctx.Value(stopKey{}).(<-chan struct{})
+	if stop == nil {
+		return false
+	}
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
 }
 
 // observe runs one observation cycle over lola's native sessions (PLAN P2).
@@ -235,6 +259,11 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	interpretPerCycle := d.cfg.StatusAgent.MaxPerCycle
 	d.mu.Unlock()
 	for _, s := range d.sessions.Snapshot() {
+		// A shutdown stops the cycle between sessions: each record's update
+		// is atomic, so the rest simply waits for the next daemon's cycle.
+		if stopping(ctx) {
+			break
+		}
 		if s.Source != "native" {
 			continue
 		}
@@ -528,6 +557,14 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				}
 			}
 		}
+	}
+	if stopping(ctx) {
+		if touched {
+			if err := d.sessions.Save(); err != nil {
+				d.logf("", "observe: persist sessions: %v", err)
+			}
+		}
+		return
 	}
 	// Cross-session passes, AFTER every record carries this cycle's facts.
 	// Overlap detection is local git only and display-only; the merge queue is
