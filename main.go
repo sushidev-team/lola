@@ -38,6 +38,8 @@ var (
 )
 
 func main() {
+	// The default sandbox image's tag follows this build (config.DefaultSandboxImage).
+	config.SetLolaVersion(version)
 	root := &cobra.Command{
 		Use:   "lola",
 		Short: "Lola — run, observe, run again: Linear poller and agent dispatcher",
@@ -63,6 +65,7 @@ func main() {
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
 		hubCmd(),
+		sandboxCmd(),
 		openCmd(),
 		attachCmd(),
 		killCmd(),

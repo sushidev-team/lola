@@ -182,6 +182,9 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	for _, res := range projectResults(cfg) {
 		add(res)
 	}
+	for _, res := range sandboxResults(ctx, cfg) {
+		add(res)
+	}
 	return r
 }
 
