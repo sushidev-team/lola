@@ -318,9 +318,9 @@
       <span class="flex items-center gap-1">
         <label class="flex cursor-pointer items-center gap-2">
           <Checkbox checked={grouped} onchange={() => onChange({ hubGroupChores: !grouped })} />
-          <span>One agent per repository</span>
+          <span>Combine a repository’s issues into one session</span>
         </label>
-        <HelpText label="One agent per repository" detail="All open advisories of a repository go to one agent and one pull request. Off: one agent per advisory." />
+        <HelpText label="Combine a repository’s issues into one session" detail="All open advisories of a repository go to one agent and one pull request. Off: one session per advisory." />
       </span>
       <div class="grid gap-1.5">
         <span class="flex items-center gap-1">
