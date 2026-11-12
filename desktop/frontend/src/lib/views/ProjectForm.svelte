@@ -19,6 +19,7 @@
   import PresetInput from "$lib/components/PresetInput.svelte";
   import { BRANCH_PREFIXES } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
+  import SandboxLoginPrompt from "$lib/components/SandboxLoginPrompt.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
   import { labelIdsFor } from "$lib/labelpick";
@@ -941,7 +942,10 @@
             <p class="text-sm text-faint">Applies to new agent sessions for this {role === "stack" ? "stack" : "project"}. Existing sessions keep their workspace.</p>
             {#if execution.sandbox === "docker" || execution.image}
               {@render textRow("Container image", execution.image, (value) => { execution.image = value; }, sandboxDefaultImage || "Lola’s sandbox image")}
-              <p class="text-sm text-faint">Leave blank for the default image, which carries Claude Code, git and gh. A custom image needs the coding agent and git; Lola mounts its own binary. Clear this override when switching to Host workspace.</p>
+              <p class="text-sm text-faint">Empty uses Lola’s image. <HelpText label="container image" detail="Lola’s image carries Claude Code, git and gh. A custom image needs the coding agent and git; Lola mounts its own binary. Clear this override when switching to Host workspace." /></p>
+            {/if}
+            {#if execution.sandbox === "docker"}
+              <SandboxLoginPrompt />
             {/if}
           {/snippet}
           {@render section("Workspace isolation", isolation)}

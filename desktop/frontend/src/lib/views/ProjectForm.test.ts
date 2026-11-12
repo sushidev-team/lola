@@ -29,6 +29,7 @@ vi.mock("@bindings/desktop", () => ({
     InspectPath: (...a: unknown[]) => inspectPath(...a),
     PickFolder: (...a: unknown[]) => pickFolder(...a),
     SandboxImageDefault: () => Promise.resolve("ghcr.io/sushidev-team/lola-sandbox:edge"),
+    SandboxStatus: () => Promise.resolve({ tokenStored: true, claudeSource: "" }),
   },
   LinearService: {
     Teams: (...a: unknown[]) => teamsFn(...a),
