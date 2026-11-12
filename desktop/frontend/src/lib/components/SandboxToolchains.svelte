@@ -1,11 +1,14 @@
 <script lang="ts">
-  // The toolchains a sandboxed project's container adds to Lola's image
-  // ([[project]].sandbox_toolchains / sandbox_packages). Empty means "what the
-  // repository's files ask for", so the chips start from the detected set; the
-  // first toggle turns that into an explicit list, and Reset goes back to
-  // detection. Lola builds the image on the next sandboxed start.
+  // What a sandboxed project's container adds to Lola's image: toolchains
+  // ([[project]].sandbox_toolchains) and Debian packages (sandbox_packages),
+  // in one tag field. No toolchains set means "what the repository's files ask
+  // for", so the chips start from the detected set; the first change turns
+  // that into an explicit list. Lola builds the image on the next sandboxed
+  // start.
   import Button from "$lib/components/Button.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
+  import Icon from "$lib/components/Icon.svelte";
+  import TagCombobox, { type Tag, type Suggestion } from "$lib/components/TagCombobox.svelte";
   import { ConfigService } from "@bindings/desktop";
   import type { ToolchainInfoDTO } from "@bindings/desktop/models";
 
@@ -22,11 +25,14 @@
   } = $props();
 
   const NAMES: Record<string, string> = { node: "Node", php: "PHP", python: "Python", go: "Go", rust: "Rust", ruby: "Ruby" };
-  const FALLBACK_KINDS = ["node", "php", "python", "go", "rust", "ruby"];
+  const KINDS = ["node", "php", "python", "go", "rust", "ruby"];
+  // Packages people commonly need beside a toolchain; anything else can be typed.
+  const COMMON = ["ffmpeg", "imagemagick", "libvips-dev", "poppler-utils", "ghostscript", "postgresql-client", "default-mysql-client", "redis-tools", "sqlite3", "chromium", "graphviz", "pandoc"];
+  const TOOLCHAIN_RE = /^(node|php|python|go|rust|ruby)(?:@([0-9a-z][0-9a-z._-]*))?$/;
+  const PACKAGE_RE = /^[a-z0-9][a-z0-9.+-]*$/;
 
   let info = $state<ToolchainInfoDTO | null>(null);
-  let pkgDraft = $state<string | null>(null);
-  const id = $props.id();
+  let error = $state("");
 
   $effect(() => {
     const p = path;
@@ -44,60 +50,67 @@
     };
   });
 
-  const kinds = $derived(info?.kinds?.length ? info.kinds : FALLBACK_KINDS);
   const detected = $derived((info?.detected ?? []).map((t) => (t.version ? `${t.kind}@${t.version}` : t.kind)));
   const auto = $derived(toolchains.length === 0);
   const none = $derived(toolchains.length === 1 && toolchains[0] === "none");
   const active = $derived(auto ? detected : none ? [] : toolchains);
-
   const kindOf = (e: string) => e.split("@")[0];
-  const entryFor = (kind: string) => active.find((e) => kindOf(e) === kind);
-  const label = (kind: string) => {
-    const e = entryFor(kind);
-    const v = e?.split("@")[1];
-    return v ? `${NAMES[kind] ?? kind} ${v}` : (NAMES[kind] ?? kind);
+  const nameOf = (e: string) => {
+    const [k, v] = e.split("@");
+    return v ? `${NAMES[k] ?? k} ${v}` : (NAMES[k] ?? k);
   };
 
-  function toggle(kind: string) {
-    const on = !!entryFor(kind);
-    let next = on ? active.filter((e) => kindOf(e) !== kind) : [...active, detected.find((e) => kindOf(e) === kind) ?? kind];
-    // Back to "detected" when the choice matches it; "none" when nothing is left.
+  const tags = $derived<Tag[]>([
+    ...active.map((e) => ({ value: `tc:${e}`, label: nameOf(e) })),
+    ...packages.map((p) => ({ value: `pkg:${p}`, label: p, mono: true })),
+  ]);
+  const suggestions = $derived<Suggestion[]>([
+    ...KINDS.filter((k) => !active.some((e) => kindOf(e) === k)).map((k) => ({ value: k, label: NAMES[k], hint: "Toolchain" })),
+    ...COMMON.filter((p) => !packages.includes(p)).map((p) => ({ value: p, label: p, hint: "Package" })),
+  ]);
+
+  /** An explicit list that equals detection goes back to detection; an empty one is "none". */
+  function setToolchains(next: string[]) {
     const same = next.length === detected.length && next.every((e) => detected.includes(e));
-    if (same) next = [];
-    else if (next.length === 0) next = ["none"];
-    onChange(next, packages);
+    onChange(same ? [] : next.length ? next : ["none"], packages);
   }
 
-  function setPackages(text: string) {
-    pkgDraft = text;
-    onChange(toolchains, text.split(/[\s,]+/).filter(Boolean));
+  function addText(text: string): boolean {
+    error = "";
+    // "PHP 8.4" reads as php@8.4.
+    const t = text.toLowerCase().replace(/^(\w+)\s+([\d.]+)$/, "$1@$2");
+    const tc = TOOLCHAIN_RE.exec(t);
+    if (tc) {
+      const fromRepo = !tc[2] ? detected.find((e) => kindOf(e) === tc[1]) : undefined;
+      setToolchains([...active.filter((e) => kindOf(e) !== tc[1]), fromRepo ?? t]);
+      return true;
+    }
+    if (PACKAGE_RE.test(t)) {
+      if (!packages.includes(t)) onChange(toolchains, [...packages, t]);
+      return true;
+    }
+    error = `“${text}” is not a toolchain or a Debian package name.`;
+    return false;
+  }
+
+  function remove(value: string) {
+    error = "";
+    if (value.startsWith("tc:")) setToolchains(active.filter((e) => e !== value.slice(3)));
+    else onChange(toolchains, packages.filter((p) => p !== value.slice(4)));
   }
 </script>
 
 <div class="grid gap-2" data-sandbox-toolchains>
   <div class="flex items-center gap-1.5 text-ink">
-    <span id={`${id}-label`}>Toolchains</span>
-    <HelpText label="Toolchains" detail="Lola adds these to its image and builds it once on the next sandboxed start. Package caches are kept per project." />
-  </div>
-  <div class="flex flex-wrap gap-1.5" role="group" aria-labelledby={`${id}-label`}>
-    {#each kinds as kind (kind)}
-      {@const on = !!entryFor(kind)}
-      <Button size="xs" variant={on ? "primary" : "secondary"} aria-pressed={on} onclick={() => toggle(kind)}>{label(kind)}</Button>
-    {/each}
-  </div>
-  <p class="flex flex-wrap items-center gap-2 text-sm text-faint">
-    {#if auto}
-      {detected.length || info?.extras?.length ? `Detected from the repository${info?.extras?.length ? ` · ${info.extras.join(", ")}` : ""}` : "Nothing beyond Lola’s image detected"}
-    {:else}
-      <span>Chosen by hand</span>
-      <Button size="xs" onclick={() => onChange([], packages)}>Use detected</Button>
+    <span>Toolchains and packages</span>
+    <HelpText label="Toolchains and packages" detail="Lola adds these to its image and builds it once on the next sandboxed start. Toolchains start from what the repository needs; type any Debian package to add it. Package caches are kept per project." />
+    {#if !auto}
+      <span class="ml-auto">
+        <Button size="xs" icon aria-label="Use the detected toolchains" title="Use the detected toolchains" onclick={() => onChange([], packages)}>
+          <Icon name="rotate-ccw" size={12} />
+        </Button>
+      </span>
     {/if}
-  </p>
-  <label class="grid gap-1 text-sm text-faint">
-    Extra packages
-    <input class="w-full rounded border border-edge bg-canvas px-2 py-1.5 font-mono text-ink outline-none focus:border-accent placeholder:text-placeholder"
-      placeholder="ffmpeg libvips-dev" spellcheck="false" autocomplete="off"
-      value={pkgDraft ?? packages.join(" ")}
-      oninput={(e) => setPackages(e.currentTarget.value)} />
-  </label>
+  </div>
+  <TagCombobox label="Toolchains and packages" {tags} {suggestions} {error} placeholder="Add a toolchain or package…" onAdd={addText} onRemove={remove} />
 </div>
