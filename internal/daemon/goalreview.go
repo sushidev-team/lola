@@ -27,7 +27,7 @@ func (d *Daemon) goalReviewRunner(g goal.Goal, profile string, m *goalwork.Manag
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return goalreview.Runner{Workspaces: m, Docker: d.cfg.Sandbox.DockerBin(), Image: d.cfg.SandboxImageFor(d.cfg.ProjectByName(g.Project)), Agent: kind, Model: provider.Model, PassEnv: slices.Clone(d.cfg.Sandbox.PassEnv), Run: d.goalReviewRun, OnUsage: func(id string, o usage.Observation) error { return d.observeGoalRunUsage(g.ID, id, o) }}, nil
+	return goalreview.Runner{Workspaces: m, Docker: d.cfg.Sandbox.DockerBin(), Image: d.cfg.SandboxImageFor(d.cfg.ProjectByName(g.Project)), Agent: kind, Model: provider.Model, PassEnv: slices.Clone(d.cfg.Sandbox.EffectivePassEnv()), Run: d.goalReviewRun, OnUsage: func(id string, o usage.Observation) error { return d.observeGoalRunUsage(g.ID, id, o) }}, nil
 }
 
 func (d *Daemon) goalReviewEvidence(g goal.Goal, r reviewprofile.Record, m *goalwork.Manager) error {

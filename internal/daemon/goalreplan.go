@@ -81,7 +81,7 @@ func (d *Daemon) runGoalReplan(ctx context.Context, id, operation string) error 
 		}
 		d.mu.Lock()
 		sandbox := d.cfg.Sandbox
-		sandbox.PassEnv = slices.Clone(sandbox.PassEnv)
+		sandbox.PassEnv = slices.Clone(sandbox.EffectivePassEnv())
 		p := d.cfg.ProjectByName(g.Project)
 		kind := d.cfg.AgentForProject(g.Project)
 		image := d.cfg.SandboxImageFor(p)

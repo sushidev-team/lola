@@ -1259,6 +1259,12 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 		Ports:          ports,
 		HookToken:      hookToken,
 		KnowledgeBrief: knowledgeBrief,
+		// The linux lola for sandboxed hooks comes out of the default image,
+		// cached under <home>/cache/sandbox; credentials and the commit
+		// identity come from the host (sandboxcreds.go).
+		SandboxLola:       &runtime.SandboxLola{Home: home},
+		SandboxCredential: runtime.HostSandboxCredential,
+		GitIdentity:       runtime.HostGitIdentity,
 		TrustWorkspace: func(dir string) error {
 			return claudetrust.Trust(claudetrust.ConfigPath(), dir)
 		},

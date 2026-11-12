@@ -20,7 +20,7 @@ func sandboxFixture(t *testing.T) *fixture {
 	f.p.Sandbox = config.SandboxDocker
 	f.p.SandboxPorts = []string{"3000", "8080:80"}
 	f.n.Cfg.Projects[0] = f.p
-	f.n.Cfg.Sandbox = config.SandboxConfig{Image: "acme/agent:1", LolaBin: "/opt/lola-linux", PassEnv: []string{"LOLA_TEST_PASS", "LOLA_TEST_UNSET"}}
+	f.n.Cfg.Sandbox = config.SandboxConfig{Image: "acme/agent:1", LolaBin: fakeLinuxLola(t), PassEnv: []string{"LOLA_TEST_PASS", "LOLA_TEST_UNSET"}}
 	f.n.HookToken = func(id string) string { return "tok-" + id }
 	return f
 }
@@ -50,7 +50,7 @@ func TestSandboxedLaunchRunsTheAgentInDocker(t *testing.T) {
 		`${lola_gcd_0:+"$lola_gcd_0/hooks:$lola_gcd_0/hooks:ro"}`,
 		`${lola_gcd_0:+"$lola_gcd_0:$lola_gcd_0"}`,
 		// the Linux lola, read-only, at the host lola's path
-		"-v /opt/lola-linux:/usr/local/bin/lola:ro",
+		"-v " + shQuote(f.n.Cfg.Sandbox.LolaBin+":/usr/local/bin/lola:ro"),
 		"-p 127.0.0.1:3000:3000", "-p 127.0.0.1:8080:80",
 		// the inner line is the host launch, unchanged, after the prelude
 		"--entrypoint sh acme/agent:1 -c " + shQuote(sandboxPrelude(dir, agent.Claude, usageSlug(dir))+inner),
@@ -71,6 +71,17 @@ func TestSandboxedLaunchRunsTheAgentInDocker(t *testing.T) {
 	if plain := f.n.launchLine("nori", id, agent.Claude, defaultLaunchPrompt(id), "", false); strings.Contains(plain, "docker") {
 		t.Errorf("host launch mentions docker:\n%s", plain)
 	}
+}
+
+// fakeLinuxLola is an explicit [sandbox].lola_bin that exists, as the launch
+// path requires.
+func fakeLinuxLola(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "lola-linux")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func usageSlug(dir string) string { return usage.SlugDir(usage.ProjectsRoot(), dir) }

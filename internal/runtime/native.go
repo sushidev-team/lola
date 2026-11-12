@@ -207,6 +207,18 @@ type Native struct {
 	// RemoveContainer removes a sandboxed session's container (`docker rm -f`)
 	// on teardown. nil = exec the configured docker CLI. A test seam.
 	RemoveContainer func(ctx context.Context, name string) error
+	// SandboxLola provides the linux lola a sandboxed agent's hooks run when
+	// [sandbox].lola_bin is empty (sandboxlola.go). nil = only lola_bin.
+	SandboxLola *SandboxLola
+	// SandboxCredential is the fallback for a credential named in the
+	// effective pass_env that the daemon's environment lacks (the keychain for
+	// claude's token, `gh auth token` for GitHub). The value lands only in the
+	// 0600 env file. nil = no fallback; tests leave it unset.
+	SandboxCredential func(name string) (string, bool)
+	// GitIdentity answers the host's commit identity for a checkout (its
+	// user.name / user.email), handed to a sandboxed agent, whose container
+	// sees neither ~/.gitconfig nor the host's identity. nil = none.
+	GitIdentity func(dir string) (name, email string)
 	// TrustWorkspace pre-accepts Claude Code's workspace-trust dialog for a
 	// worktree before a claude agent launches in it, and UntrustWorkspace drops
 	// that entry when the worktree is removed (internal/claudetrust; see
@@ -382,6 +394,11 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	agentOverride := o.Agent
 	if issue.Identifier == "" {
 		return session.Session{}, errors.New("runtime: spawn: issue has no identifier")
+	}
+	// Before any worktree exists: a sandbox that cannot start (no docker, no
+	// image) refuses the spawn outright rather than leaving a rollback behind.
+	if err := n.prepareSandbox(ctx, n.sandboxProject(p.Name) != nil); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: spawn %s: %w", issue.Identifier, err)
 	}
 	if p.IsStack() {
 		return n.spawnStack(ctx, p, issue, o)
@@ -753,6 +770,9 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 		return nil, rb("write env", err)
 	}
 	n.recordBaseline(ctx, dir, id)
+	if err := n.prepareSandbox(ctx, n.sandboxProject(p.Name) != nil); err != nil {
+		return nil, rb("prepare sandbox", err)
+	}
 	n.trustAgentDir(p.Name, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(p.Name, id, kind, false)); err != nil {
 		if n.Tmux.Has(ctx, id) {
@@ -1664,6 +1684,9 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 			return session.Session{}, fmt.Errorf("runtime: revive %s: codex environment: %w", id, err)
 		}
 		resume = codexHasSession(ctx, home, dir)
+	}
+	if err := n.prepareSandbox(ctx, n.sandboxProject(s.Project) != nil); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
 	}
 	n.trustAgentDir(s.Project, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(s.Project, id, kind, defaultLaunchPrompt(id), s.Model, resume)); err != nil {

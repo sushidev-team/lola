@@ -142,7 +142,9 @@ func (n *Native) syncSandboxRecord(ctx context.Context, s *session.Session) {
 
 // sandboxEnv is the env-file block a sandboxed agent additionally sources
 // INSIDE the container: where the hook bridge is, this session's token, the
-// agent's private config home, and the operator's pass_env credentials. Like
+// agent's private config home, the host's commit identity, and the effective
+// pass_env credentials (each from the daemon's environment, else from the
+// SandboxCredential fallback). Like
 // the rest of the env file it is 0600 and never logged, and every value is
 // shQuote'd.
 func (n *Native) sandboxEnv(p config.Project, id, dir string, kind agent.Kind) string {
@@ -160,11 +162,26 @@ func (n *Native) sandboxEnv(p config.Project, id, dir string, kind agent.Kind) s
 	case agent.Codex:
 		fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(filepath.Join(dir, sandboxCodexDir)))
 	}
-	for _, name := range n.Cfg.Sandbox.PassEnv {
+	// The container is the sandbox: claude accepts skip-permissions there
+	// even when a custom image runs it as root.
+	b.WriteString("IS_SANDBOX=1\n")
+	if n.GitIdentity != nil {
+		name, email := n.GitIdentity(p.Path)
+		if name != "" && email != "" {
+			for _, who := range []string{"AUTHOR", "COMMITTER"} {
+				fmt.Fprintf(&b, "GIT_%s_NAME=%s\nGIT_%s_EMAIL=%s\n", who, shQuote(name), who, shQuote(email))
+			}
+		}
+	}
+	for _, name := range n.Cfg.Sandbox.EffectivePassEnv() {
 		if !envNameRe.MatchString(name) { // defense-in-depth, mirrors envFile
 			continue
 		}
-		if v, ok := os.LookupEnv(name); ok {
+		v, ok := os.LookupEnv(name)
+		if (!ok || v == "") && n.SandboxCredential != nil {
+			v, ok = n.SandboxCredential(name)
+		}
+		if ok && v != "" {
 			fmt.Fprintf(&b, "%s=%s\n", name, shQuote(v))
 		}
 	}
@@ -184,6 +201,9 @@ func (n *Native) sandboxEnv(p config.Project, id, dir string, kind agent.Kind) s
 // The result is still POSIX sh; launchLine wraps it in the same `sh -c` as a
 // host launch.
 func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inner string) string {
+	if n.sandboxLolaPath() == "" {
+		return sandboxHooklessGuard
+	}
 	dir := filepath.Join(n.WT.Root, p.Name, id)
 	docker := shQuote(n.Cfg.Sandbox.DockerBin())
 	var b strings.Builder
@@ -248,7 +268,7 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	if ctxDir := n.sandboxContextDir(p, dir); ctxDir != "" {
 		fmt.Fprintf(&b, " -v %s", shQuote(ctxDir+":"+ctxDir))
 	}
-	if lb, host := n.Cfg.Sandbox.LolaBin, n.lolaBin(); lb != "" && filepath.IsAbs(host) {
+	if lb, host := n.sandboxLolaPath(), n.lolaBin(); lb != "" && filepath.IsAbs(host) {
 		fmt.Fprintf(&b, " -v %s", shQuote(lb+":"+host+":ro"))
 	}
 	for _, r := range repos {

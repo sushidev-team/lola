@@ -197,6 +197,9 @@ func (n *Native) sshHasConversation(ctx context.Context, s session.Session, kind
 // through the hook bridge and otherwise reach nothing of the host's, which is what
 // lets a production host accept it.
 func (n *Native) sandboxScratchLine(id, dir string, kind agent.Kind, inner string) string {
+	if n.sandboxLolaPath() == "" {
+		return sandboxHooklessGuard
+	}
 	docker := shQuote(n.Cfg.Sandbox.DockerBin())
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s rm -f %s >/dev/null 2>&1; ", docker, shQuote(id))
@@ -213,7 +216,7 @@ func (n *Native) sandboxScratchLine(id, dir string, kind agent.Kind, inner strin
 	if transcripts != "" {
 		fmt.Fprintf(&b, " -v %s", shQuote(transcripts+":"+transcripts))
 	}
-	if lb, host := n.Cfg.Sandbox.LolaBin, n.lolaBin(); lb != "" && filepath.IsAbs(host) {
+	if lb, host := n.sandboxLolaPath(), n.lolaBin(); lb != "" && filepath.IsAbs(host) {
 		fmt.Fprintf(&b, " -v %s", shQuote(lb+":"+host+":ro"))
 	}
 	fmt.Fprintf(&b, " --entrypoint sh %s -c %s", shQuote(n.Cfg.SandboxImageFor(nil)), shQuote(sandboxPrelude(dir, kind, transcripts)+inner))

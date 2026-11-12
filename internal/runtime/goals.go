@@ -47,8 +47,12 @@ func (n *Native) SpawnGoal(ctx context.Context, g goal.Goal, attemptID string) (
 		return session.Session{}, errors.New("goal execution is not authorized")
 	}
 	p := n.Cfg.ProjectByName(g.Project)
-	if p == nil || !p.GoalMode || !p.Sandboxed() || n.Cfg.Sandbox.LolaBin == "" {
-		return session.Session{}, errors.New("project goal mode requires a configured Docker sandbox and Linux hook binary")
+	if p == nil || !p.GoalMode || !p.Sandboxed() {
+		return session.Session{}, errors.New("project goal mode requires a configured Docker sandbox")
+	}
+	hookLola, err := n.sandboxLolaBin(ctx)
+	if err != nil {
+		return session.Session{}, err
 	}
 	a, ok := g.Execution.Attempts[attemptID]
 	if !ok || a.State != "reserved" || a.SessionID != GoalSessionID(g.ID, a.ID) {
@@ -137,7 +141,7 @@ func (n *Native) SpawnGoal(ctx context.Context, g goal.Goal, attemptID string) (
 	if err := os.WriteFile(filepath.Join(control, lolaDir, "env"), n.goalEnv(g, a, root, kind), 0600); err != nil {
 		return session.Session{}, err
 	}
-	command, err := n.goalLaunchLine(*p, a, root, control, kind, workspaces)
+	command, err := n.goalLaunchLine(*p, a, root, control, kind, workspaces, hookLola)
 	if err != nil {
 		return session.Session{}, err
 	}
@@ -252,9 +256,13 @@ func (n *Native) goalEnv(g goal.Goal, a goal.Attempt, root string, kind agent.Ki
 	// Strict allowlist: upstream, Linear, SSH and arbitrary project environment
 	// never cross into a goal worker, even if ordinary sandbox PassEnv lists them.
 	allowed := []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "OPENROUTER_API_KEY"}
-	for _, name := range n.Cfg.Sandbox.PassEnv {
+	for _, name := range n.Cfg.Sandbox.EffectivePassEnv() {
 		if slices.Contains(allowed, name) {
-			if value, ok := os.LookupEnv(name); ok {
+			value, ok := os.LookupEnv(name)
+			if (!ok || value == "") && n.SandboxCredential != nil {
+				value, ok = n.SandboxCredential(name)
+			}
+			if ok && value != "" {
 				values[name] = value
 			}
 		}
@@ -271,7 +279,7 @@ func (n *Native) goalEnv(g goal.Goal, a goal.Attempt, root string, kind agent.Ki
 	return []byte(b.String())
 }
 
-func (n *Native) goalLaunchLine(p config.Project, a goal.Attempt, root, control string, kind agent.Kind, workspaces []goalwork.Workspace) (string, error) {
+func (n *Native) goalLaunchLine(p config.Project, a goal.Attempt, root, control string, kind agent.Kind, workspaces []goalwork.Workspace, hookLola string) (string, error) {
 	args := []string{"run", "--rm", "-it", "--init", "--name", a.SessionID, "--label", sandboxLabel + "=" + a.SessionID, "--label", "dev.sushi.lola.goal-worker=true", "--pull", "never", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--pids-limit", "512", "--memory", "4g", "--cpus", "2", "--add-host", sandboxHost + ":host-gateway", "--workdir", root}
 	mount := func(source, target string, readOnly bool) error {
 		if strings.ContainsAny(source+target, ":\x00\r\n") {
@@ -315,7 +323,7 @@ func (n *Native) goalLaunchLine(p config.Project, a goal.Attempt, root, control 
 			}
 		}
 	}
-	if err := mount(n.Cfg.Sandbox.LolaBin, goalContainerLola, true); err != nil {
+	if err := mount(hookLola, goalContainerLola, true); err != nil {
 		return "", err
 	}
 	inner := "set -a; . " + shQuote(filepath.Join(root, lolaDir, "env")) + "; set +a; mkdir -p " + shQuote(filepath.Join(root, ".agent", "claude")) + " " + shQuote(filepath.Join(root, ".agent", "codex")) + "; "
