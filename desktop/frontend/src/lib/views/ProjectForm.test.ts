@@ -28,6 +28,7 @@ vi.mock("@bindings/desktop", () => ({
     GetSettings: () => getSettings(),
     InspectPath: (...a: unknown[]) => inspectPath(...a),
     PickFolder: (...a: unknown[]) => pickFolder(...a),
+    SandboxImageDefault: () => Promise.resolve("ghcr.io/sushidev-team/lola-sandbox:edge"),
   },
   LinearService: {
     Teams: (...a: unknown[]) => teamsFn(...a),
@@ -255,6 +256,16 @@ describe("ProjectForm", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
     expect(saveProject.mock.calls[0][0].execution).toEqual({ goalMode: true, sandbox: "docker", image: "toolchain:stable" });
+  });
+
+  it("shows the default sandbox image as the image placeholder", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Execution" }));
+    await fireEvent.change(screen.getByLabelText("Run agents in"), { target: { value: "docker" } });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Container image")).toHaveAttribute("placeholder", "ghcr.io/sushidev-team/lola-sandbox:edge"),
+    );
+    expect(screen.queryByText(/lola_bin/)).not.toBeInTheDocument();
   });
 
   it("guides a project without Linear placement to Issue pickup", async () => {

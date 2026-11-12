@@ -54,6 +54,7 @@ export type {
     ReviewProviderDTO,
     SSHHostDTO,
     SSHHostPreviewDTO,
+    SandboxStatusDTO,
     SettingsDTO,
     SetupDTO,
     SetupResultDTO,

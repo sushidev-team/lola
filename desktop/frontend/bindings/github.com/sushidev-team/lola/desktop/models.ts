@@ -632,6 +632,33 @@ export interface SSHHostPreviewDTO {
     "approvalTimeoutSeconds": number;
 }
 
+/**
+ * SandboxStatusDTO is the sandbox's configuration and readiness. It never
+ * carries a credential: TokenStored and the *Source fields say only whether
+ * and where one exists.
+ */
+export interface SandboxStatusDTO {
+    /**
+     * [sandbox].image ("" = the default)
+     */
+    "image": string;
+
+    /**
+     * lola's image for this build
+     */
+    "defaultImage": string;
+    "docker": string;
+    "dockerOk": boolean;
+
+    /**
+     * images not pulled yet
+     */
+    "missing": string[] | null;
+    "tokenStored": boolean;
+    "claudeSource": string;
+    "githubSource": string;
+}
+
 export interface SettingsDTO {
     "autoPRComments": boolean;
     "temporaryDirectory": string;

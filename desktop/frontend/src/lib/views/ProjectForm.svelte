@@ -350,6 +350,10 @@
     }
   }
 
+  // The image an empty sandbox_image falls back to ([sandbox].image, else
+  // Lola's sandbox image), shown as the field's placeholder.
+  let sandboxDefaultImage = $state("");
+
   onMount(async () => {
     try {
       const d = await ConfigService.GetProject(nav.overlayProject);
@@ -394,6 +398,11 @@
       defaults = { ...(await ConfigService.GetSettings()) };
     } catch {
       // Non-fatal: reverting a key still works, it just keeps the shown value.
+    }
+    try {
+      sandboxDefaultImage = await ConfigService.SandboxImageDefault();
+    } catch {
+      // Only a placeholder: the generic one stays.
     }
     if (f.stack) {
       try {
@@ -931,10 +940,9 @@
             </div>
             <p class="text-sm text-faint">Applies to new agent sessions for this {role === "stack" ? "stack" : "project"}. Existing sessions keep their workspace.</p>
             {#if execution.sandbox === "docker" || execution.image}
-              {@render textRow("Container image", execution.image, (value) => { execution.image = value; }, "Use the configured default image")}
-              <p class="text-sm text-faint">Use an installed image with the project toolchain and coding agent. Leave blank to use the image in Lola’s sandbox configuration. Clear this override when switching to Host workspace.</p>
+              {@render textRow("Container image", execution.image, (value) => { execution.image = value; }, sandboxDefaultImage || "Lola’s sandbox image")}
+              <p class="text-sm text-faint">Leave blank for the default image, which carries Claude Code, git and gh. A custom image needs the coding agent and git; Lola mounts its own binary. Clear this override when switching to Host workspace.</p>
             {/if}
-            <p class="text-sm text-faint">Docker setup also requires a Linux Lola binary configured in <code>[sandbox].lola_bin</code>. See <code>README.md</code>, “The container sandbox”, for setup.</p>
           {/snippet}
           {@render section("Workspace isolation", isolation)}
           {#snippet goals()}

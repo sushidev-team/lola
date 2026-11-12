@@ -52,6 +52,13 @@ export function AddGroup(label: string): $CancellablePromise<string> {
 }
 
 /**
+ * ClearSandboxToken deletes the stored token.
+ */
+export function ClearSandboxToken(): $CancellablePromise<void> {
+    return $Call.ByID(4005869272);
+}
+
+/**
  * ConfigExists reports whether ~/.lola/config.toml is present, so the frontend
  * can gate a first-run setup screen.
  */
@@ -325,6 +332,22 @@ export function SSHHostPreview(d: $models.SSHHostDTO): $CancellablePromise<$mode
     return $Call.ByID(3347456271, d);
 }
 
+/**
+ * SandboxImageDefault is the image a project with no sandbox_image runs:
+ * [sandbox].image, else lola's default. For the project form's placeholder.
+ */
+export function SandboxImageDefault(): $CancellablePromise<string> {
+    return $Call.ByID(2313913772);
+}
+
+/**
+ * SandboxStatus reads [sandbox] and probes docker, the keychain and gh. It
+ * pulls nothing.
+ */
+export function SandboxStatus(): $CancellablePromise<$models.SandboxStatusDTO> {
+    return $Call.ByID(1302684536);
+}
+
 export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<void> {
     return $Call.ByID(3368157871, dto);
 }
@@ -407,6 +430,22 @@ export function SetProjectLayout(dto: $models.ProjectLayoutDTO): $CancellablePro
  */
 export function SetProjectStack(project: string, stack: string): $CancellablePromise<void> {
     return $Call.ByID(2341952554, project, stack);
+}
+
+/**
+ * SetSandboxImage writes [sandbox].image. "" restores lola's default.
+ */
+export function SetSandboxImage(image: string): $CancellablePromise<void> {
+    return $Call.ByID(4139963821, image);
+}
+
+/**
+ * SetSandboxToken stores the Claude Code token sandboxed agents log in with
+ * (from `claude setup-token`) in the keychain. Write-only: nothing reads it
+ * back to the frontend, and the error never carries it.
+ */
+export function SetSandboxToken(token: string): $CancellablePromise<void> {
+    return $Call.ByID(2071021637, token);
 }
 
 /**

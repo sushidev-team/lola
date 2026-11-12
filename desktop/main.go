@@ -120,6 +120,8 @@ func repaintWindowCanvas(themeID string) {
 
 func main() {
 	ensurePATH()
+	// The default sandbox image's tag follows this build (config.DefaultSandboxImage).
+	config.SetLolaVersion(version)
 
 	daemon := &DaemonService{}
 	term := NewTermService()

@@ -21,6 +21,7 @@
   import Select from "$lib/components/Select.svelte";
   import ReviewProfiles from "$lib/components/ReviewProfiles.svelte";
   import SSHHostSettings from "$lib/components/ssh/SSHHostSettings.svelte";
+  import SandboxSettings from "$lib/components/SandboxSettings.svelte";
   import HubSettings, { CLAIMS_LABEL, POLL_LABEL, hubClaimsError, hubPollError } from "$lib/components/hub/HubSettings.svelte";
   import TeamLock from "$lib/components/TeamLock.svelte";
   import QRCode from "$lib/components/QRCode.svelte";
@@ -75,6 +76,7 @@
     { id: "defaults", label: "General", group: "Workspace" },
     { id: "project", label: "Project defaults", group: "Workspace" },
     { id: "appearance", label: "Appearance", group: "Workspace" },
+    { id: "sandbox", label: "Sandbox", group: "Workspace" },
     { id: "linear", label: "Linear", group: "Connections" },
     { id: "notify", label: "Notifications", group: "Connections" },
     { id: "sshhosts", label: "SSH hosts", group: "Connections" },
@@ -1206,6 +1208,11 @@
         <section>
           {@render head("Team hub")}
           <HubSettings values={d} policy={teamPolicy} onChange={(patch) => Object.assign(d, patch)} onIdentityChange={() => void loadTeamPolicy()} />
+        </section>
+      {:else if tab === "sandbox"}
+        <section>
+          {@render head("Sandbox")}
+          <SandboxSettings formId={`${formId}-sandbox`} />
         </section>
       {:else if tab === "sshhosts"}
         <SSHHostSettings onDirty={(v) => (sshHostDirty = v)} />
