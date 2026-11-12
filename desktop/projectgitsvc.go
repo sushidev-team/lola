@@ -22,9 +22,10 @@ import (
 // channel. Repository identity comes from config; a caller cannot supply an
 // arbitrary directory. Mutations are serialized so rapid clicks cannot race.
 type ProjectGitService struct {
-	draftCommit func(context.Context, string, string) (string, error)
-	mu          sync.Mutex
-	identities  projectgit.PersistentIdentityClient
+	pullRequests projectgit.PullRequestClient
+	draftCommit  func(context.Context, string, string) (string, error)
+	mu           sync.Mutex
+	identities   projectgit.PersistentIdentityClient
 }
 
 func projectGitWithin(path, root string) bool {

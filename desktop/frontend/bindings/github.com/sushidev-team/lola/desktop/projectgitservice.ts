@@ -49,6 +49,10 @@ export function CreateBranch(project: string, worktree: string, name: string, st
     return $Call.ByID(4125785182, project, worktree, name, startSHA, checkout);
 }
 
+export function CreatePullRequest(project: string, worktree: string, request: projectgit$0.PRCreateRequest): $CancellablePromise<projectgit$0.PRResult> {
+    return $Call.ByID(4260371290, project, worktree, request);
+}
+
 /**
  * CreateWorktree creates a human checkout outside managed storage and existing
  * checkouts. The existing parent is resolved before checking isolation boundaries.
@@ -73,6 +77,10 @@ export function DraftCommitMessage(project: string, worktree: string, draft: str
     return $Call.ByID(3096709063, project, worktree, draft);
 }
 
+export function DraftPullRequest(project: string, worktree: string, selection: projectgit$0.PRSelection, title: string, body: string): $CancellablePromise<string> {
+    return $Call.ByID(960403159, project, worktree, selection, title, body);
+}
+
 export function Fetch(project: string, worktree: string): $CancellablePromise<void> {
     return $Call.ByID(4144797822, project, worktree);
 }
@@ -92,8 +100,16 @@ export function PrepareDiscard(project: string, worktree: string): $CancellableP
     return $Call.ByID(2827308293, project, worktree);
 }
 
+export function PreviewPullRequest(project: string, worktree: string, selection: projectgit$0.PRSelection): $CancellablePromise<projectgit$0.PRPreview> {
+    return $Call.ByID(506916882, project, worktree, selection);
+}
+
 export function Pull(project: string, worktree: string): $CancellablePromise<void> {
     return $Call.ByID(3070499569, project, worktree);
+}
+
+export function PullRequestOptions(project: string, worktree: string, remote: string, baseRepo: string): $CancellablePromise<projectgit$0.PROptions> {
+    return $Call.ByID(1339557640, project, worktree, remote, baseRepo);
 }
 
 export function Push(project: string, worktree: string): $CancellablePromise<void> {

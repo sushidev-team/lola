@@ -59,6 +59,59 @@ export interface Identities {
     "remoteAvatars": { [_ in string]?: string } | null;
 }
 
+export interface PRChoice {
+    "value": string;
+    "label": string;
+}
+
+export interface PRCreateRequest {
+    "selection": PRSelection;
+    "title": string;
+    "body": string;
+    "draft": boolean;
+    "push": boolean;
+    "reviewers": string[] | null;
+    "assignees": string[] | null;
+    "labels": string[] | null;
+}
+
+export interface PROptions {
+    "sourceRepo": string;
+    "repositories": string[] | null;
+    "baseRepo": string;
+    "defaultBranch": string;
+    "branches": string[] | null;
+    "reviewers": PRChoice[] | null;
+    "assignees": PRChoice[] | null;
+    "labels": PRChoice[] | null;
+    "notices": string[] | null;
+}
+
+export interface PRPreview {
+    "sourceRepo": string;
+    "head": string;
+    "baseSHA": string;
+    "needsPush": boolean;
+    "commits": number;
+    "files": number;
+    "subject": string;
+}
+
+export interface PRResult {
+    "number": number;
+    "url": string;
+    "existing": boolean;
+    "warnings": string[] | null;
+}
+
+export interface PRSelection {
+    "remote": string;
+    "sourceRef": string;
+    "sourceSHA": string;
+    "baseRepo": string;
+    "base": string;
+}
+
 export interface Ref {
     "name": string;
     "fullName": string;

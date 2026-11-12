@@ -6,7 +6,7 @@ import type { IconName } from './icons';
 
 type Context = { git: ProjectGitState; ref: string; limit: number };
 export type GitDestination = { remote: string; name: string; trackingOnly?: boolean };
-type Callbacks = { viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; inspectFile?: (file: GitFile, staged: boolean) => void; stageFiles?: (paths: string[], staged: boolean) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef, destination?: GitDestination) => void; createBranch?: (sha: string, label: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
+type Callbacks = { createPullRequest?: (branch:GitRef,target?:GitRef)=>void; viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; inspectFile?: (file: GitFile, staged: boolean) => void; stageFiles?: (paths: string[], staged: boolean) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef, destination?: GitDestination) => void; createBranch?: (sha: string, label: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
 export type GitMenuItem = { label: string; icon: IconName; run: () => void; disabled?: boolean; danger?: boolean; separator?: boolean };
 export type GitMenuRequest = { title: string; subtitle?: string; x: number; y: number; items: GitMenuItem[]; anchor: HTMLElement | null };
 
@@ -31,6 +31,10 @@ export class GitActions {
   private mutationBlocked(branch?: GitRef) {
     const owner = branch && this.owner(branch);
     return this.blocked() || !!this.context().git.snapshot?.operation || !!owner?.blocked || !!owner?.prunable;
+  }
+  private canCreatePR(branch?:GitRef) {
+    const remotes=this.context().git.snapshot?.remotes??[];
+    return !!branch&&!this.mutationBlocked(branch)&&remotes.some(r=>r.host==='github.com'&&r.repo&&(!branch.remote||branch.fullName.startsWith(`refs/remotes/${r.name}/`)));
   }
   private upstream(branch: GitRef) { return branch.upstream || (branch.current ? this.context().git.snapshot?.upstream : '') || ''; }
   private destination(branch: GitRef): GitDestination | undefined {
@@ -98,6 +102,7 @@ export class GitActions {
         {label:`Push ${source.name} to ${target.name}…`,icon:'arrow-up' as const,disabled:this.mutationBlocked(source),run:() => this.callbacks.publishBranch?.(source,destination)},
         {label:`Set upstream to ${target.name}…`,icon:'cloud' as const,disabled:this.mutationBlocked(source),run:() => this.callbacks.publishBranch?.(source,{...destination,trackingOnly:true})},
       ] : []),
+      ...(this.callbacks.createPullRequest ? [{label:'Create PR…',icon:'git-pull-request' as const,disabled:!this.canCreatePR(source),run:()=>this.callbacks.createPullRequest?.(source,target)}] : []),
       { label: `Merge ${source.name} into ${target.name}…`, icon: 'git-merge', disabled: target.remote || this.mutationBlocked(target), run: () => this.confirmBranch('merge', source, target) },
       { label: `Rebase ${source.name} onto ${target.name}…`, icon: 'git-branch', disabled: source.remote || this.mutationBlocked(source), run: () => this.confirmBranch('rebase', source, target) },
       { label: 'Cancel', icon: 'x', run: () => this.close(true) },
@@ -114,6 +119,7 @@ export class GitActions {
       { label: 'View branch history', icon: 'list', run: () => this.callbacks.viewHistory(branch.fullName) },
       { label: tree && tree.path !== this.context().git.snapshot?.path ? 'Open checkout' : branch.remote ? 'Check out tracking branch' : 'Check out branch', icon: 'git-branch', disabled: (tree && tree.path !== this.context().git.snapshot?.path ? this.blocked() : busy) || branch.current || !!tree?.blocked || !!tree?.prunable, run: () => this.checkout(branch) },
     ];
+    if(this.callbacks.createPullRequest)items.push({label:'Create PR…',icon:'git-pull-request',disabled:!this.canCreatePR(branch),run:()=>this.callbacks.createPullRequest?.(branch)});
     if (this.callbacks.createBranch) items.push({ label: 'Create branch here…', icon: 'git-branch', disabled: busy || !!this.context().git.snapshot?.operation, run: () => this.callbacks.createBranch?.(branch.sha, branch.name) });
     if (this.callbacks.createWorktree) items.push({label:'Create worktree…',icon:'folder',disabled:busy || !!this.context().git.snapshot?.operation,run:() => this.callbacks.createWorktree?.(branch)});
     if (branch.remote) items.push({ label: 'Fetch remote', icon: 'refresh-cw', disabled: busy || !remote, run: () => { if (remote) this.fetch(remote.name); } });
@@ -140,6 +146,7 @@ export class GitActions {
     const branch = this.context().git.snapshot?.refs.find(r => !r.remote && r.name === tree.branch);
     const disabled = tree.blocked || tree.prunable || this.mutationBlocked();
     const items: GitMenuItem[] = [{ label: 'Open checkout', icon: 'folder', disabled: tree.blocked || tree.prunable, run: () => this.callbacks.openWorktree(tree.path) }];
+    if(branch&&this.callbacks.createPullRequest)items.push({label:'Create PR…',icon:'git-pull-request',disabled:disabled||!this.canCreatePR(branch),run:()=>this.callbacks.createPullRequest?.(branch)});
     if (branch) items.push(
       { label: 'Pull changes', icon: 'arrow-down', disabled:disabled || !this.upstream(branch), run: () => this.action('pull', branch) },
       { label: this.upstream(branch) ? 'Push branch' : 'Publish branch…', icon: 'arrow-up', disabled, run: () => this.push(branch) },
@@ -176,6 +183,7 @@ export class GitActions {
   openRepository(event: MouseEvent) {
     const current = this.current(), git = this.context().git;
     this.menu(git.snapshot?.branch || 'Repository', [
+      ...(current&&this.callbacks.createPullRequest?[{label:'Create PR…',icon:'git-pull-request' as const,disabled:!this.canCreatePR(current),run:()=>this.callbacks.createPullRequest?.(current)}]:[]),
       { label: 'Show all branch history', icon: 'list', run: () => this.callbacks.viewHistory('') },
       ...(this.callbacks.createBranch ? [{ label: 'New branch…', icon: 'git-branch' as const, disabled: this.blocked() || !git.snapshot?.head || !!git.snapshot?.operation, run: () => this.callbacks.createBranch?.(git.snapshot?.head ?? '', git.snapshot?.branch || 'Detached HEAD') }] : []),
       ...(current && this.callbacks.createWorktree ? [{label:'Create worktree…',icon:'folder' as const,disabled:this.mutationBlocked(),run:()=>this.callbacks.createWorktree?.(current)}] : []),

@@ -26,20 +26,7 @@ func (s *ProjectGitService) DraftCommitMessage(project, worktree, draft string) 
 	if err != nil {
 		return "", err
 	}
-	run := s.draftCommit
-	if run == nil {
-		home, err := config.Home()
-		if err != nil {
-			return "", err
-		}
-		helperDir := filepath.Join(home, "helpers")
-		if err = os.MkdirAll(helperDir, 0700); err != nil {
-			return "", err
-		}
-		model := brain.Client{Model: "haiku", Dir: helperDir, Timeout: 30 * time.Second}
-		run = model.Summarize
-	}
-	output, err := run(ctx, projectgit.CommitDraftInstruction, input.Text)
+	output, err := s.runGitDraft(ctx, projectgit.CommitDraftInstruction, input.Text)
 	if errors.Is(err, brain.ErrNotFound) {
 		return "", errors.New("install and sign in to Claude Code to draft commit messages")
 	}
@@ -62,4 +49,21 @@ func (s *ProjectGitService) DraftCommitMessage(project, worktree, draft string) 
 		return "", errors.New("staged changes changed while AI was drafting; generate a new message")
 	}
 	return message, nil
+}
+
+func (s *ProjectGitService) runGitDraft(ctx context.Context, instruction, input string) (string, error) {
+	run := s.draftCommit
+	if run == nil {
+		home, err := config.Home()
+		if err != nil {
+			return "", err
+		}
+		helperDir := filepath.Join(home, "helpers")
+		if err = os.MkdirAll(helperDir, 0700); err != nil {
+			return "", err
+		}
+		model := brain.Client{Model: "haiku", Dir: helperDir, Timeout: 30 * time.Second}
+		run = model.Summarize
+	}
+	return run(ctx, instruction, input)
 }

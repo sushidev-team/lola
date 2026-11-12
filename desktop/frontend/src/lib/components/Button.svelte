@@ -157,6 +157,11 @@
   aria-busy={loading ? true : undefined}
   class={cls}
 >
-  {#if loading}<Icon name="loader-circle" size={14} class={SPINNER} />{/if}
+  {#if loading}<Icon name="loader-circle" size={14} class={`button-spinner ${SPINNER}`} />{/if}
   {@render children()}
 </button>
+
+<style>
+  button[aria-busy="true"] > :global(.button-spinner + .lola-icon),
+  button[aria-busy="true"] > :global(.button-spinner + .button-icon) { display:none; }
+</style>

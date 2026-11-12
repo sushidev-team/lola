@@ -1,8 +1,25 @@
+import type { PRCreateRequest, PRDraft, PRResult } from './gitpullrequest';
 import { ProjectGitService } from '@bindings/desktop';
 import type { GitArea, GitDiff, GitSnapshot, GitAuthorIdentity, GitStash, GitBranchAction, GitIdentities } from './projectgit';
 
 /** Shared per-checkout state keeps operation locks and commit drafts across view mounts. */
 export class ProjectGitState {
+  pullRequestDraft = $state<PRDraft | null>(null);
+  prLoading = $state(false);
+  prPreviewLoading = $state(false);
+  prDrafting = $state(false);
+  async createPullRequest(request: PRCreateRequest, ref = '', limit = 200): Promise<PRResult | null> {
+    if (this.busy) return null;
+    this.busy = 'create-pr'; this.error = '';
+    try {
+      const result = await ProjectGitService.CreatePullRequest(this.project, this.worktree, request);
+      await this.load(ref, limit);
+      this.notice = result.existing ? `Pull request #${result.number} already exists.` : `Pull request #${result.number} created.`;
+      this.pullRequestDraft = null;
+      return {...result, warnings: result.warnings ?? []};
+    } catch(error) { this.error = String(error); return null; }
+    finally { this.busy = ''; }
+  }
   stashes = $state<GitStash[]>([]);
   stashesState = $state<'loading' | 'ready' | 'unavailable'>('loading');
   authors = $state<Record<string, GitAuthorIdentity>>({});

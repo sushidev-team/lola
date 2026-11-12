@@ -40,7 +40,7 @@ it('configures an existing remote tracking branch without publishing commits',as
  git.snapshot={path:'/repo',branch:'local',head:branch.sha,upstream:'',refs:[branch,target],commits:[],worktrees:[],files:[],hasMore:false,signing:{enabled:false,format:'',key:''},remotes:[{name:'origin',host:'',owner:'',repo:'',avatarUrl:''}]};
  const action=vi.spyOn(git,'branchAction').mockResolvedValue('/repo');const onClose=vi.fn();
  render(ProjectGitPublish,{git,branch,destination:{remote:'origin',name:'review',trackingOnly:true},onClose});
- expect(screen.getByRole('combobox',{name:'Remote branch'})).toHaveValue('review');expect(screen.getByText(/No commits will be pushed/)).toBeInTheDocument();expect(action).not.toHaveBeenCalled();
+ expect(screen.getByRole('combobox',{name:'Remote branch'})).toHaveValue('review');expect(screen.queryByText(/Future pulls and pushes/)).toBeNull();expect(action).not.toHaveBeenCalled();
  await fireEvent.submit(screen.getByRole('form',{name:'Set upstream'}));
  expect(action).toHaveBeenCalledWith({action:'set-upstream',source:branch.fullName,sourceSHA:branch.sha,target:target.fullName,targetSHA:target.sha,remote:'origin',remoteBranch:'review'},'',200);
  await waitFor(()=>expect(onClose).toHaveBeenCalledOnce());
