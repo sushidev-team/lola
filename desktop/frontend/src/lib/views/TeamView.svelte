@@ -37,8 +37,12 @@
     packageLine,
     severityClass,
     severityCounts,
+    severityFill,
     severityLabel,
+    severityTally,
+    workGroups,
     type BoardGroup,
+    type WorkGroup,
   } from "$lib/hubboard";
   import type { HubBoardItem } from "@bindings/internal/protocol";
   import { ConfigService } from "@bindings/desktop";
@@ -138,6 +142,31 @@
   }
   const groups = $derived(groupMode === "project" ? groupByRepo(sections.available) : groupByAdvisory(sections.available));
   let expanded = $state<Record<string, boolean>>({});
+  const working = $derived(workGroups(sections.mine, sections.teammates, st));
+  const finishedCount = $derived(sections.done.length + sections.failed.length + sections.escalated.length);
+  const toggle = (key: string) => (expanded = { ...expanded, [key]: !expanded[key] });
+
+  function askReleaseGroup(g: WorkGroup) {
+    setError(g.key, "");
+    if (g.items.length === 1) return askRelease(g.items[0]);
+    confirm.ask({
+      title: "Release these chores?",
+      body: `Release ${g.items.length} chores back to the team?`,
+      detail: "Another device may claim them, and this Mac skips them for 24 hours. The session keeps running, but the hub stops hearing from it.",
+      confirmLabel: "Release all",
+      onConfirm: () => void releaseGroup(g),
+    });
+  }
+
+  async function releaseGroup(g: WorkGroup) {
+    let done = 0;
+    for (const it of g.items) {
+      const r = await hub.release(it.id);
+      if (r.ok) done++;
+      else setError(g.key, r.error);
+    }
+    if (done) store.setFlash(`Released ${done} ${done === 1 ? "chore" : "chores"}`);
+  }
 
   /** A project group's name: this Mac's project for the repository, else the repository. */
   function groupName(g: BoardGroup): string {
@@ -181,94 +210,109 @@
   }
 </script>
 
-{#snippet headline(it: HubBoardItem)}
-  <span class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-    <span class="shrink-0 self-center text-faint" role="img" aria-label={kindLabel(it.kind)} title={kindLabel(it.kind)}>
-      <Icon name={kindIcon(it.kind)} size={14} />
-    </span>
-    <span class="min-w-0 truncate font-medium text-ink" data-item-title>{itemTitle(it)}</span>
-    {#if it.severity}
-      <span class="inline-flex shrink-0 items-center rounded-full border px-2 text-sm {severityClass(it.severity)}" data-severity={it.severity.toLowerCase()}>
-        {severityLabel(it.severity)}
-      </span>
-    {/if}
+{#snippet sevBar(items: HubBoardItem[], cls = "")}
+  {@const tally = severityTally(items)}
+  <span class="flex h-1.5 overflow-hidden rounded-full bg-edge/50 {cls}" role="img" aria-label={severityCounts(items) || "No severity"}>
+    {#each tally as t (t.severity)}
+      <span class="h-full {severityFill(t.severity)}" style:flex-grow={t.count}></span>
+    {/each}
   </span>
 {/snippet}
 
-{#snippet facts(it: HubBoardItem)}
-  <span class="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm text-faint">
-    {#if packageLine(it)}<span class="font-mono text-ink-2">{packageLine(it)}</span><span aria-hidden="true">·</span>{/if}
-    <span class="min-w-0 truncate">{it.repo}</span>
-    {#if it.reporters > 0}<span aria-hidden="true">·</span><span>{it.reporters} {it.reporters === 1 ? "reporter" : "reporters"}</span>{/if}
-    <span aria-hidden="true">·</span><TimeAgo at={it.firstSeen} hint="First reported" />
-  </span>
+{#snippet sevChip(sev: string | undefined)}
+  {#if sev}
+    <span class="inline-flex shrink-0 items-center rounded-full border px-2 text-sm {severityClass(sev)}" data-severity={sev.toLowerCase()}>{severityLabel(sev)}</span>
+  {/if}
 {/snippet}
 
-{#snippet availableRow(it: HubBoardItem, groupReason: string)}
-  {@const choices = claimProjects(it)}
-  {@const claimable = !!it.local?.claimable}
-  <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-2.5 pl-9 pr-3" data-board-item={it.id}>
-    <span class="grid min-w-0 gap-1">
-      {@render headline(it)}
-      {@render facts(it)}
-      {#if !claimable && it.local?.reason && !groupReason}<span class="text-sm text-faint" data-claim-reason>{it.local.reason}</span>{/if}
+{#snippet rowError(it: HubBoardItem)}
+  {#if rowErrors[it.id]}<p role="alert" class="col-span-full min-w-0 break-words text-sm text-bad">{hubReason(rowErrors[it.id])}</p>{/if}
+{/snippet}
+
+<!-- One advisory per line, columns aligned across the group:
+     severity · id · package from → to · where · age · action. -->
+{#snippet itemRow(it: HubBoardItem, where: string, action: import("svelte").Snippet<[HubBoardItem]> | null, note = "")}
+  {@const place = where || (it.reporters > 1 ? `${it.reporters} reporters` : "")}
+  <li class="team-row grid min-w-0 items-center gap-x-4 gap-y-1 py-2 pl-10 pr-3 hover:bg-panel/60" data-board-item={it.id}>
+    <span class="flex w-[5.5rem] shrink-0">{@render sevChip(it.severity)}</span>
+    <span class="flex min-w-0 items-center gap-1.5">
+      <span class="shrink-0 text-faint" role="img" aria-label={kindLabel(it.kind)} title={kindLabel(it.kind)}><Icon name={kindIcon(it.kind)} size={13} /></span>
+      <span class="min-w-0 truncate text-ink" data-item-title>{itemTitle(it)}</span>
     </span>
-    <span class="flex shrink-0 items-center gap-2">
-      {#if claimable && choices.length}
-        <Select aria-label="Project for {itemTitle(it)}" bind:value={picks[it.id]}>
-          <option value="">Choose a project</option>
-          {#each choices as p (p)}<option value={p}>{projectName(p)}</option>{/each}
-        </Select>
-      {/if}
-      <Button
-        size="xs"
-        disabled={!claimable || hub.busy !== ""}
-        loading={hub.busy === `claim:${it.id}`}
-        title={claimable ? `Claim ${itemTitle(it)}` : it.local?.reason || "Not claimable on this Mac"}
-        onclick={() => askClaim(it)}>Claim</Button
-      >
-    </span>
+    <span class="min-w-0 truncate font-mono text-sm text-ink-2" title={packageLine(it)}>{packageLine(it)}</span>
+    <span class="min-w-0 truncate text-sm text-faint" title={place}>{place}</span>
+    <span class="hidden text-sm text-faint xl:inline"><TimeAgo at={it.firstSeen} hint="First reported" /></span>
+    <span class="flex shrink-0 items-center justify-end gap-2">{#if action}{@render action(it)}{/if}</span>
+    {#if note}<span class="col-span-full text-sm text-faint" data-claim-reason>{note}</span>{/if}
     {@render rowError(it)}
   </li>
 {/snippet}
 
-{#snippet rowError(it: HubBoardItem)}
-  {#if rowErrors[it.id]}<p role="alert" class="col-start-1 col-end-3 min-w-0 break-words text-sm text-bad">{hubReason(rowErrors[it.id])}</p>{/if}
+{#snippet claimAction(it: HubBoardItem)}
+  {@const choices = claimProjects(it)}
+  {@const claimable = !!it.local?.claimable}
+  {#if claimable && choices.length}
+    <Select aria-label="Project for {itemTitle(it)}" bind:value={picks[it.id]}>
+      <option value="">Choose a project</option>
+      {#each choices as p (p)}<option value={p}>{projectName(p)}</option>{/each}
+    </Select>
+  {/if}
+  <Button size="xs" disabled={!claimable || hub.busy !== ""} loading={hub.busy === `claim:${it.id}`}
+    title={claimable ? `Claim ${itemTitle(it)}` : it.local?.reason || "Not claimable on this Mac"}
+    onclick={() => askClaim(it)}>Claim</Button>
+{/snippet}
+
+{#snippet releaseAction(it: HubBoardItem)}
+  <Button variant="danger" size="xs" disabled={hub.busy !== ""} loading={hub.busy === `release:${it.id}`} onclick={() => askRelease(it)}>Release…</Button>
+{/snippet}
+
+{#snippet resultAction(it: HubBoardItem)}
+  {#if it.outcome?.delivery}
+    <span class="rounded px-1.5 text-sm {deliveryClass(it.outcome.delivery)}" data-delivery={it.outcome.delivery}>{deliveryLabel(it.outcome.delivery)}</span>
+  {/if}
+  {#if it.outcome?.prUrl}
+    <Button size="xs" icon aria-label="Pull request" title={it.outcome.prUrl} onclick={() => store.openURL(it.outcome!.prUrl)}><Icon name="git-pull-request" size={14} /></Button>
+  {/if}
+  {#if it.escalation?.url}
+    <Button size="xs" title={it.escalation.url} onclick={() => store.openURL(it.escalation!.url!)}>
+      <Icon name="external-link" size={14} /> {it.escalation.identifier || "Linear issue"}
+    </Button>
+  {:else if it.escalation?.pending}
+    <span class="text-sm text-warn">Escalation pending</span>
+  {/if}
 {/snippet}
 
 {#snippet finished(rows: HubBoardItem[], empty: string)}
   {#if rows.length === 0}
     <p class="px-1 py-2 text-sm text-faint">{empty}</p>
   {:else}
-    <ul class="mt-2 divide-y divide-edge/40 rounded-[10px] border border-edge">
+    <ul class="mt-1 divide-y divide-edge/40">
       {#each rows as it (it.id)}
-        <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-3 py-2.5" data-board-item={it.id}>
-          <span class="grid min-w-0 gap-1">{@render headline(it)}{@render facts(it)}</span>
-          <span class="flex shrink-0 flex-wrap items-center justify-end gap-2">
-            {#if it.outcome?.delivery}
-              <span class="rounded px-1.5 text-sm {deliveryClass(it.outcome.delivery)}" data-delivery={it.outcome.delivery}>{deliveryLabel(it.outcome.delivery)}</span>
-            {/if}
-            {#if it.outcome?.prUrl}
-              <Button size="xs" title={it.outcome.prUrl} onclick={() => store.openURL(it.outcome!.prUrl)}>
-                <Icon name="git-pull-request" size={14} /> Pull request
-              </Button>
-            {/if}
-            {#if it.escalation?.url}
-              <Button size="xs" title={it.escalation.url} onclick={() => store.openURL(it.escalation!.url!)}>
-                <Icon name="external-link" size={14} /> {it.escalation.identifier || "Linear issue"}
-              </Button>
-            {:else if it.escalation?.pending}
-              <span class="text-sm text-warn">Escalation pending</span>
-            {/if}
+        <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2" data-board-item={it.id}>
+          <span class="grid min-w-0">
+            <span class="flex min-w-0 items-center gap-1.5">
+              <span class="min-w-0 truncate text-sm text-ink" data-item-title>{itemTitle(it)}</span>
+              {#if it.package}<span class="min-w-0 truncate font-mono text-sm text-faint">{it.package}</span>{/if}
+            </span>
+            <span class="min-w-0 truncate text-sm text-faint">{it.repo}</span>
           </span>
+          <span class="flex shrink-0 items-center gap-1.5">{@render resultAction(it)}</span>
         </li>
       {/each}
     </ul>
   {/if}
 {/snippet}
 
+{#snippet card(label: string, value: number, sub: import("svelte").Snippet | null, attr: string)}
+  <div class="grid min-w-0 content-start gap-1.5 rounded-xl border border-edge bg-panel/40 px-4 py-3" data-team-card={attr}>
+    <span class="label text-faint">{label}</span>
+    <span class="num text-2xl font-medium leading-none text-ink">{value}</span>
+    {#if sub}<span class="min-w-0 text-sm text-faint">{@render sub()}</span>{/if}
+  </div>
+{/snippet}
+
 <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" data-team-view>
-  <div class="flex min-w-0 flex-wrap items-center gap-3 border-b border-edge px-4 py-3">
+  <div class="flex min-w-0 flex-wrap items-center gap-3 border-b border-edge px-5 py-3">
     <span class="min-w-0 truncate text-base font-medium text-ink">{hub.joined ? orgName : "Team"}</span>
     {#if hub.joined}
       <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-sm {toneCls[conn.tone]}" data-connection={conn.tone}>{conn.label}</span>
@@ -281,7 +325,7 @@
   </div>
 
   <div class="min-h-0 overflow-auto">
-    <div class="mx-auto grid w-full max-w-[1040px] gap-8 px-4 py-5">
+    <div class="mx-auto grid w-full max-w-[1480px] gap-6 px-5 py-5">
       {#if hub.outdated}
         <div role="alert" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">{hub.statusError}</div>
       {:else if !hub.loaded}
@@ -310,161 +354,207 @@
         {/if}
         {#if hub.boardError}<div role="alert" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">{hub.boardError}</div>{/if}
 
-        <section aria-labelledby="team-available">
-          <div class="mb-2 flex min-w-0 flex-wrap items-center gap-3">
-            <h2 id="team-available" class="label text-faint">Available <span class="num">{sections.available.length}</span></h2>
-            {#if sections.available.length > 0}
-              <span class="ml-auto flex items-center gap-1" role="group" aria-label="Group available chores">
-                <Button size="xs" variant={groupMode === "project" ? "secondary" : "ghost"} aria-pressed={groupMode === "project"} onclick={() => setGroupMode("project")}>By project</Button>
-                <Button size="xs" variant={groupMode === "advisory" ? "secondary" : "ghost"} aria-pressed={groupMode === "advisory"} onclick={() => setGroupMode("advisory")}>By advisory</Button>
-              </span>
-            {/if}
+        {#if hub.board}
+          {#snippet openSub()}{#if sections.available.length}{@render sevBar(sections.available, "mt-1.5 w-full")}<span class="mt-1.5 block truncate">{severityCounts(sections.available)}</span>{:else}Caught up{/if}{/snippet}
+          {#snippet mineSub()}{working.filter((g) => g.mine).length} {working.filter((g) => g.mine).length === 1 ? "session" : "sessions"}{/snippet}
+          {#snippet theirsSub()}{new Set(sections.teammates.map((it) => it.lease?.deviceName)).size} {new Set(sections.teammates.map((it) => it.lease?.deviceName)).size === 1 ? "device" : "devices"}{/snippet}
+          {#snippet doneSub()}{sections.failed.length} failed · {sections.escalated.length} escalated{/snippet}
+          <div class="grid grid-cols-2 gap-3 lg:grid-cols-4" data-team-summary>
+            {@render card("Open", sections.available.length, openSub, "open")}
+            {@render card("This Mac", sections.mine.length, mineSub, "mine")}
+            {@render card("Teammates", sections.teammates.length, theirsSub, "teammates")}
+            {@render card("Done", sections.done.length, doneSub, "done")}
           </div>
-          {#if !hub.board}
-            <p class="text-sm text-faint">Loading the board…</p>
-          {:else if sections.available.length === 0}
-            <p class="text-sm text-faint" data-available-empty>Nothing waiting. The team is caught up.</p>
-          {:else}
-            <ul class="divide-y divide-edge/40 rounded-[10px] border border-edge">
-              {#each groups as g (g.key)}
-                {@const gid = `group:${g.key}`}
-                {@const open = !!expanded[g.key]}
-                {@const fix = groupMode === "project" ? fixAllItems(g) : []}
-                {@const choices = fix.length > 1 ? claimProjects(fix[0]) : []}
-                <li class="min-w-0" data-board-group={g.key}>
-                  <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-3 py-2.5">
-                    <span class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                      <Button size="sm" variant="ghost" aria-expanded={open} aria-controls={`${gid}-rows`}
-                        onclick={() => (expanded = { ...expanded, [g.key]: !open })}>
-                        <Chevron {open} />
-                        <span class="min-w-0 truncate font-medium text-ink" data-group-title>{groupName(g)}</span>
-                      </Button>
-                      {#if g.worst}
-                        <span class="inline-flex shrink-0 items-center rounded-full border px-2 text-sm {severityClass(g.worst)}">{severityLabel(g.worst)}</span>
+        {/if}
+
+        <div class="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div class="grid min-w-0 gap-6">
+            <section class="min-w-0 rounded-xl border border-edge" aria-labelledby="team-available">
+              <header class="flex min-w-0 flex-wrap items-center gap-3 border-b border-edge px-4 py-3">
+                <h2 id="team-available" class="text-base font-medium text-ink">Available <span class="num ml-1 text-faint">{sections.available.length}</span></h2>
+                {#if sections.available.length > 0}
+                  <span class="ml-auto flex items-center gap-0.5 rounded-lg border border-edge p-0.5" role="group" aria-label="Group available chores">
+                    <Button size="xs" variant={groupMode === "project" ? "secondary" : "ghost"} aria-pressed={groupMode === "project"} onclick={() => setGroupMode("project")}>By project</Button>
+                    <Button size="xs" variant={groupMode === "advisory" ? "secondary" : "ghost"} aria-pressed={groupMode === "advisory"} onclick={() => setGroupMode("advisory")}>By advisory</Button>
+                  </span>
+                {/if}
+              </header>
+              {#if !hub.board}
+                <p class="px-4 py-4 text-sm text-faint">Loading the board…</p>
+              {:else if sections.available.length === 0}
+                <p class="flex items-center gap-2 px-4 py-6 text-sm text-faint" data-available-empty><Icon name="check" size={14} /> Nothing waiting. The team is caught up.</p>
+              {:else}
+                <ul class="divide-y divide-edge/50">
+                  {#each groups as g (g.key)}
+                    {@const gid = `group:${g.key}`}
+                    {@const open = !!expanded[g.key]}
+                    {@const fix = groupMode === "project" ? fixAllItems(g) : []}
+                    {@const choices = fix.length > 1 ? claimProjects(fix[0]) : []}
+                    <li class="min-w-0" data-board-group={g.key}>
+                      <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-3 py-3">
+                        <span class="flex min-w-0 items-center gap-3">
+                          <Button size="sm" variant="ghost" aria-expanded={open} aria-controls={`${gid}-rows`} onclick={() => toggle(g.key)}>
+                            <Chevron {open} />
+                            <span class="min-w-0 truncate text-base font-medium text-ink" data-group-title>{groupName(g)}</span>
+                          </Button>
+                          <span class="grid min-w-0 gap-1">
+                            <span class="flex min-w-0 items-center gap-2">
+                              {@render sevChip(g.worst)}
+                              <span class="num min-w-0 truncate text-sm text-faint" data-group-count>
+                                {groupMode === "project" ? `${g.items.length} ${g.items.length === 1 ? "chore" : "chores"}` : `${g.items.length} ${g.items.length === 1 ? "repository" : "repositories"}`}{#if groupMode === "project" && g.items.length > 1}{` · ${severityCounts(g.items)}`}{/if}
+                              </span>
+                            </span>
+                            {#if groupMode === "project" && groupName(g) !== g.key}<span class="min-w-0 truncate text-sm text-faint">{g.key}</span>{/if}
+                          </span>
+                        </span>
+                        <span class="flex shrink-0 items-center gap-3">
+                          {@render sevBar(g.items, "hidden w-28 md:flex")}
+                          {#if choices.length}
+                            <Select aria-label="Project for {groupName(g)}" bind:value={picks[gid]}>
+                              <option value="">Choose a project</option>
+                              {#each choices as p (p)}<option value={p}>{projectName(p)}</option>{/each}
+                            </Select>
+                          {/if}
+                          {#if groupMode === "project"}
+                            <Button variant="primary" size="sm" disabled={fix.length === 0 || hub.busy !== ""}
+                              loading={hub.busy === `claim:${gid}` || (fix.length === 1 && hub.busy === `claim:${fix[0].id}`)}
+                              title={fix.length ? `Start one agent for ${fix.length === 1 ? "this chore" : `${fix.length} advisories`}` : g.reason || "Not claimable on this Mac"}
+                              onclick={() => askFixAll(g)}>{fix.length > 1 ? `Fix all ${fix.length}` : "Claim"}</Button>
+                          {/if}
+                        </span>
+                        {#if g.reason}<p class="col-span-full flex items-center gap-1.5 pl-10 text-sm text-faint" data-group-reason><Icon name="lock" size={12} /> {g.reason}</p>{/if}
+                        {#if rowErrors[gid]}<p role="alert" class="col-span-full min-w-0 break-words pl-10 text-sm text-bad">{hubReason(rowErrors[gid])}</p>{/if}
+                      </div>
+                      {#if open}
+                        <ul id={`${gid}-rows`} class="divide-y divide-edge/30 border-t border-edge/40 bg-canvas/40 pb-1">
+                          {#each g.items as it (it.id)}
+                            {@render itemRow(it, groupMode === "project" ? "" : it.repo, claimAction, !it.local?.claimable && !g.reason ? (it.local?.reason ?? "") : "")}
+                          {/each}
+                        </ul>
                       {/if}
-                      <span class="num text-sm text-faint" data-group-count>
-                        {groupMode === "project" ? `${g.items.length} ${g.items.length === 1 ? "chore" : "chores"}` : `${g.items.length} ${g.items.length === 1 ? "repository" : "repositories"}`}{#if groupMode === "project" && g.items.length > 1}{` · ${severityCounts(g.items)}`}{/if}
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
+
+            <section class="min-w-0 rounded-xl border border-edge" aria-labelledby="team-progress">
+              <header class="flex items-center gap-3 border-b border-edge px-4 py-3">
+                <h2 id="team-progress" class="text-base font-medium text-ink">In progress <span class="num ml-1 text-faint">{sections.mine.length + sections.teammates.length}</span></h2>
+              </header>
+              {#if working.length === 0}
+                <p class="px-4 py-6 text-sm text-faint">No one is working a chore right now.</p>
+              {:else}
+                <ul class="divide-y divide-edge/50">
+                  {#each working as w (w.key)}
+                    {@const open = !!expanded[w.key]}
+                    {@const proj = w.items.find((it) => it.local?.project)?.local?.project}
+                    <li class="min-w-0" data-work-group={w.key} data-mine={w.mine || undefined}>
+                      <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-3 py-3">
+                        <span class="flex min-w-0 items-center gap-3">
+                          <Button size="sm" variant="ghost" aria-expanded={open} aria-controls={`${w.key}-rows`} onclick={() => toggle(w.key)}>
+                            <Chevron {open} />
+                            <span class="min-w-0 truncate text-base font-medium text-ink">{proj ? projectName(proj) : w.repo}</span>
+                          </Button>
+                          <span class="grid min-w-0 gap-1">
+                            <span class="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+                              <span class="inline-flex items-center gap-1.5 rounded-full px-2 {w.mine ? 'bg-accent-fill text-accent-ink' : 'bg-pill-grey text-pill-grey-fg'}">
+                                <span class="h-1.5 w-1.5 rounded-full {w.mine ? 'bg-accent' : 'bg-faint'}"></span>{w.mine ? "This Mac" : w.device}
+                              </span>
+                              <span class="num text-faint">{w.items.length} {w.items.length === 1 ? "chore" : "chores"}</span>
+                              {#if w.expires}<span class="text-faint">· {leaseLeft(w.expires)}</span>{/if}
+                            </span>
+                            {#if proj}<span class="min-w-0 truncate text-sm text-faint">{w.repo}</span>{/if}
+                          </span>
+                        </span>
+                        <span class="flex shrink-0 items-center gap-2">
+                          {@render sevBar(w.items, "hidden w-28 md:flex")}
+                          {#if w.mine}
+                            {#if w.session}<Button size="sm" variant="secondary" onclick={() => nav.openSession(w.session)}><Icon name="terminal" size={14} /> Open session</Button>{/if}
+                            <Button variant="danger" size="sm" disabled={hub.busy !== ""} onclick={() => askReleaseGroup(w)}>{w.items.length > 1 ? "Release all…" : "Release…"}</Button>
+                          {/if}
+                        </span>
+                        {#if rowErrors[w.key]}<p role="alert" class="col-span-full min-w-0 break-words pl-10 text-sm text-bad">{hubReason(rowErrors[w.key])}</p>{/if}
+                      </div>
+                      {#if open}
+                        <ul id={`${w.key}-rows`} class="divide-y divide-edge/30 border-t border-edge/40 bg-canvas/40 pb-1">
+                          {#each w.items as it (it.id)}
+                            {@render itemRow(it, "", w.mine ? releaseAction : null)}
+                          {/each}
+                        </ul>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
+          </div>
+
+          <aside class="grid min-w-0 gap-6">
+            <section class="min-w-0 rounded-xl border border-edge" aria-labelledby="team-devices">
+              <header class="flex items-center gap-3 border-b border-edge px-4 py-3">
+                <h2 id="team-devices" class="text-base font-medium text-ink">Devices <span class="num ml-1 text-faint">{devices.length}</span></h2>
+              </header>
+              {#if hub.orgError}
+                <p role="alert" class="px-4 py-3 text-sm text-warn">{hub.orgError}</p>
+              {:else if !hub.org}
+                <p class="px-4 py-3 text-sm text-faint">Loading devices…</p>
+              {:else if devices.length === 0}
+                <p class="px-4 py-3 text-sm text-faint">No devices have joined yet.</p>
+              {:else}
+                <ul class="divide-y divide-edge/40">
+                  {#each devices as d (d.name)}
+                    {@const up = deviceOnline(d)}
+                    <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5" data-device={d.name}>
+                      <span class="grid min-w-0 gap-0.5">
+                        <span class="flex min-w-0 items-center gap-2">
+                          <span class="h-2 w-2 shrink-0 rounded-full {up ? 'bg-good' : 'bg-edge'}" role="img" aria-label={up ? "Online" : "Offline"}></span>
+                          <span class="min-w-0 truncate text-ink">{d.name}</span>
+                          {#if d.me}<span class="rounded bg-pill-grey px-1.5 text-sm text-pill-grey-fg">This Mac</span>{/if}
+                        </span>
+                        <span class="min-w-0 truncate pl-4 text-sm text-faint">
+                          {#if d.me}Now{:else if d.lastSeen}<TimeAgo at={d.lastSeen} />{:else}Never{/if}{#if (d.agents ?? []).length} · {(d.agents ?? []).join(", ")}{/if}
+                        </span>
                       </span>
-                      {#if groupMode === "project" && groupName(g) !== g.key}<span class="min-w-0 truncate text-sm text-faint">{g.key}</span>{/if}
-                    </span>
-                    <span class="flex shrink-0 items-center gap-2">
-                      {#if choices.length}
-                        <Select aria-label="Project for {groupName(g)}" bind:value={picks[gid]}>
-                          <option value="">Choose a project</option>
-                          {#each choices as p (p)}<option value={p}>{projectName(p)}</option>{/each}
-                        </Select>
-                      {/if}
-                      {#if groupMode === "project"}
-                        <Button variant="primary" size="xs" disabled={fix.length === 0 || hub.busy !== ""}
-                          loading={hub.busy === `claim:${gid}` || (fix.length === 1 && hub.busy === `claim:${fix[0].id}`)}
-                          title={fix.length ? `Start one agent for ${fix.length === 1 ? "this chore" : `${fix.length} advisories`}` : g.reason || "Not claimable on this Mac"}
-                          onclick={() => askFixAll(g)}>{fix.length > 1 ? `Fix all ${fix.length}` : "Claim"}</Button>
-                      {/if}
-                    </span>
-                    {#if g.reason}<p class="col-start-1 col-end-3 pl-9 text-sm text-faint" data-group-reason>{g.reason}</p>{/if}
-                    {#if rowErrors[gid]}<p role="alert" class="col-start-1 col-end-3 min-w-0 break-words pl-9 text-sm text-bad">{hubReason(rowErrors[gid])}</p>{/if}
-                  </div>
-                  {#if open}
-                    <ul id={`${gid}-rows`} class="divide-y divide-edge/30 border-t border-edge/40">
-                      {#each g.items as it (it.id)}
-                        {@render availableRow(it, g.reason)}
-                      {/each}
-                    </ul>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </section>
-
-        <section aria-labelledby="team-progress">
-          <h2 id="team-progress" class="label mb-2 text-faint">In progress <span class="num">{sections.mine.length + sections.teammates.length}</span></h2>
-          {#if sections.mine.length + sections.teammates.length === 0}
-            <p class="text-sm text-faint">No one is working a chore right now.</p>
-          {:else}
-            <ul class="divide-y divide-edge/40 rounded-[10px] border border-edge">
-              {#each sections.mine as it (it.id)}
-                {@const sid = localSession(it, st)}
-                <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-3 py-2.5" data-board-item={it.id} data-mine>
-                  <span class="grid min-w-0 gap-1">
-                    {@render headline(it)}
-                    {@render facts(it)}
-                    <span class="text-sm text-ink-2">This Mac{#if it.lease?.expires} · {leaseLeft(it.lease.expires)}{/if}</span>
-                  </span>
-                  <span class="flex shrink-0 items-center gap-2">
-                    {#if sid}<Button size="xs" onclick={() => nav.openSession(sid)}>Open session</Button>{/if}
-                    <Button variant="danger" size="xs" disabled={hub.busy !== ""} loading={hub.busy === `release:${it.id}`} onclick={() => askRelease(it)}>Release…</Button>
-                  </span>
-                  {@render rowError(it)}
-                </li>
-              {/each}
-              {#each sections.teammates as it (it.id)}
-                <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-3 py-2.5" data-board-item={it.id}>
-                  <span class="grid min-w-0 gap-1">
-                    {@render headline(it)}
-                    {@render facts(it)}
-                  </span>
-                  <span class="grid shrink-0 justify-items-end text-sm">
-                    <span class="text-ink-2">{it.lease?.deviceName || "A teammate"}</span>
-                    {#if it.lease?.expires}<span class="text-faint">{leaseLeft(it.lease.expires)}</span>{/if}
-                  </span>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </section>
-
-        <section class="grid gap-3" aria-label="Finished chores">
-          <Disclosure label="Done" hint={String(sections.done.length)}>
-            {@render finished(sections.done, "No finished chores yet.")}
-          </Disclosure>
-          <Disclosure label="Failed" hint={String(sections.failed.length)}>
-            {@render finished(sections.failed, "No failed chores.")}
-          </Disclosure>
-          <Disclosure label="Escalated" hint={String(sections.escalated.length)}>
-            {@render finished(sections.escalated, "Nothing escalated.")}
-          </Disclosure>
-        </section>
-
-        <section aria-labelledby="team-devices">
-          <h2 id="team-devices" class="label mb-2 text-faint">Team devices <span class="num">{devices.length}</span></h2>
-          {#if hub.orgError}
-            <p role="alert" class="text-sm text-warn">{hub.orgError}</p>
-          {:else if !hub.org}
-            <p class="text-sm text-faint">Loading devices…</p>
-          {:else if devices.length === 0}
-            <p class="text-sm text-faint">No devices have joined yet.</p>
-          {:else}
-            <table class="w-full overflow-hidden rounded-[10px] border border-edge text-sm">
-              <thead class="label text-left text-faint">
-                <tr>
-                  <th class="px-3 py-2">Device</th>
-                  <th class="px-3 py-2">Last seen</th>
-                  <th class="px-3 py-2 text-right">Free slots</th>
-                  <th class="px-3 py-2">Agents</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each devices as d (d.name)}
-                  {@const up = deviceOnline(d)}
-                  <tr class="border-t border-edge/30" data-device={d.name}>
-                    <td class="px-3 py-2">
-                      <span class="inline-flex min-w-0 items-center gap-2">
-                        <span class="h-1.5 w-1.5 shrink-0 rounded-full {up ? 'bg-good' : 'bg-faint'}" role="img" aria-label={up ? "Online" : "Offline"}></span>
-                        <span class="min-w-0 truncate text-ink">{d.name}</span>
-                        {#if d.me}<span class="rounded bg-pill-grey px-1.5 text-pill-grey-fg">This Mac</span>{/if}
+                      <span class="grid justify-items-end">
+                        <span class="num text-ink">{d.freeSlots}</span>
+                        <span class="text-sm text-faint">free</span>
                       </span>
-                    </td>
-                    <td class="px-3 py-2 text-faint">{#if d.me}Now{:else if d.lastSeen}<TimeAgo at={d.lastSeen} />{:else}Never{/if}</td>
-                    <td class="num px-3 py-2 text-right text-ink">{d.freeSlots}</td>
-                    <td class="px-3 py-2 text-faint">{(d.agents ?? []).join(", ") || "—"}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          {/if}
-        </section>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
+
+            <section class="min-w-0 rounded-xl border border-edge px-4 py-2" aria-label="Finished chores">
+              <h2 class="pb-1 pt-1.5 text-base font-medium text-ink">Results <span class="num ml-1 text-faint">{finishedCount}</span></h2>
+              <div class="grid gap-1">
+                <Disclosure label="Done" hint={String(sections.done.length)}>
+                  {@render finished(sections.done, "No finished chores yet.")}
+                </Disclosure>
+                <Disclosure label="Failed" hint={String(sections.failed.length)}>
+                  {@render finished(sections.failed, "No failed chores.")}
+                </Disclosure>
+                <Disclosure label="Escalated" hint={String(sections.escalated.length)}>
+                  {@render finished(sections.escalated, "Nothing escalated.")}
+                </Disclosure>
+              </div>
+            </section>
+          </aside>
+        </div>
       {/if}
     </div>
   </div>
 </div>
+
+<style>
+  /* severity · id · package · where · age · action */
+  .team-row {
+    grid-template-columns: 5.5rem minmax(9rem, 1.1fr) minmax(0, 1.4fr) minmax(0, 0.9fr) auto auto;
+  }
+  @media (min-width: 1280px) {
+    .team-row {
+      grid-template-columns: 5.5rem minmax(10rem, 1fr) minmax(0, 1.4fr) minmax(0, 0.9fr) 5rem auto;
+    }
+  }
+</style>

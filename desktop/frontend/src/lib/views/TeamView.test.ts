@@ -65,7 +65,8 @@ const row = (id: string) => document.querySelector(`[data-board-item="${id}"]`) 
 /** Available rows sit in collapsed groups: open them all. */
 async function expandGroups() {
   await waitFor(() => expect(document.querySelector("[data-board-group]")).not.toBeNull());
-  for (const b of document.querySelectorAll<HTMLElement>('[data-board-group] [aria-expanded="false"]')) await fireEvent.click(b);
+  await waitFor(() => expect(document.querySelector("[data-work-group]")).not.toBeNull());
+  for (const b of document.querySelectorAll<HTMLElement>('[data-board-group] [aria-expanded="false"], [data-work-group] [aria-expanded="false"]')) await fireEvent.click(b);
 }
 
 describe("TeamView", () => {
@@ -106,11 +107,19 @@ describe("TeamView", () => {
     // Not claimable: disabled, with the daemon's reason.
     expect(within(row("it_blocked")).getByRole("button", { name: "Claim" })).toBeDisabled();
     expect(within(row("it_blocked")).getByText(/not sandboxed/)).toBeInTheDocument();
-    // In progress: mine opens its session, a teammate's shows the device and lease.
-    await fireEvent.click(within(row("it_mine")).getByRole("button", { name: "Open session" }));
+    // Summary cards.
+    expect(document.querySelector('[data-team-card="open"]')).toHaveTextContent("Open 3 1 critical · 1 high · 1 low");
+    expect(document.querySelector('[data-team-card="mine"]')).toHaveTextContent("1 session");
+    // In progress, per session / device: mine opens its session, a teammate's
+    // shows the device and lease.
+    const mineGroup = document.querySelector("[data-work-group][data-mine]") as HTMLElement;
+    expect(within(mineGroup).getByText("This Mac")).toBeInTheDocument();
+    await fireEvent.click(within(mineGroup).getByRole("button", { name: "Open session" }));
     expect(nav.focusedTerm).toBe("sess-9");
-    expect(within(row("it_theirs")).getByText("bobs-mac")).toBeInTheDocument();
-    expect(within(row("it_theirs")).getByText("Lease ends in 1h")).toBeInTheDocument();
+    const theirGroup = document.querySelector('[data-work-group^="d:bobs-mac"]') as HTMLElement;
+    expect(within(theirGroup).getByText("bobs-mac")).toBeInTheDocument();
+    expect(within(theirGroup).getByText(/Lease ends in 1h/)).toBeInTheDocument();
+    expect(row("it_theirs")).not.toBeNull();
     // Done: the PR link goes through the daemon's openURL.
     const openURL = vi.spyOn(store, "openURL").mockResolvedValue(undefined as never);
     await fireEvent.click(screen.getByRole("button", { name: /^Done/ }));
@@ -161,8 +170,8 @@ describe("TeamView", () => {
     Release.mockResolvedValue({ itemId: "it_mine", session: "sess-9", sessionKept: true, message: "released; the session keeps running" });
     const flash = vi.spyOn(store, "setFlash");
     render(TeamView);
-    await waitFor(() => expect(row("it_mine")).not.toBeNull());
-    await fireEvent.click(within(row("it_mine")).getByRole("button", { name: "Release…" }));
+    await waitFor(() => expect(document.querySelector("[data-work-group][data-mine]")).not.toBeNull());
+    await fireEvent.click(within(document.querySelector("[data-work-group][data-mine]") as HTMLElement).getByRole("button", { name: "Release…" }));
     expect(confirm.request?.title).toBe("Release this chore?");
     confirm.accept();
     await waitFor(() => expect(Release).toHaveBeenCalledWith("it_mine"));

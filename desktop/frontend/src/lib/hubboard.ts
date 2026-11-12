@@ -128,6 +128,72 @@ export function severityCounts(items: HubBoardItem[]): string {
     .join(" · ");
 }
 
+/** Severity buckets worst first, with how many rows each holds (empty ones left out). */
+export function severityTally(items: HubBoardItem[]): { severity: string; count: number }[] {
+  const order = ["critical", "high", "moderate", "low", ""];
+  const counts = new Map<string, number>();
+  for (const it of items) {
+    let sev = (it.severity ?? "").toLowerCase();
+    if (sev === "medium") sev = "moderate";
+    if (!order.includes(sev)) sev = "";
+    counts.set(sev, (counts.get(sev) ?? 0) + 1);
+  }
+  return order.filter((s) => counts.get(s)).map((severity) => ({ severity, count: counts.get(severity)! }));
+}
+
+/** The bar fill for a severity bucket. Theme tokens only. */
+export function severityFill(severity: string): string {
+  switch (severity) {
+    case "critical":
+      return "bg-bad";
+    case "high":
+      return "bg-orange";
+    case "moderate":
+      return "bg-warn";
+    case "low":
+      return "bg-faint";
+    default:
+      return "bg-edge";
+  }
+}
+
+/** Chores being worked: this Mac's per session, a teammate's per device and repository. */
+export type WorkGroup = {
+  key: string;
+  mine: boolean;
+  /** This Mac's session ("" for a teammate, or when it is not known here). */
+  session: string;
+  /** The device holding the leases. */
+  device: string;
+  repo: string;
+  items: HubBoardItem[];
+  /** The soonest lease end in the group. */
+  expires: string;
+};
+
+export function workGroups(mine: HubBoardItem[], theirs: HubBoardItem[], status: HubStatusData | null): WorkGroup[] {
+  const byKey = new Map<string, WorkGroup>();
+  const add = (it: HubBoardItem, isMine: boolean) => {
+    const session = isMine ? localSession(it, status) : "";
+    const device = it.lease?.deviceName || (isMine ? "This Mac" : "A teammate");
+    const key = isMine ? `s:${session || it.id}` : `d:${device}|${it.repo}`;
+    let g = byKey.get(key);
+    if (!g) {
+      g = { key, mine: isMine, session, device, repo: it.repo, items: [], expires: "" };
+      byKey.set(key, g);
+    }
+    g.items.push(it);
+    const exp = it.lease?.expires ?? "";
+    if (exp && (!g.expires || time(exp) < time(g.expires))) g.expires = exp;
+  };
+  mine.forEach((it) => add(it, true));
+  theirs.forEach((it) => add(it, false));
+  const out = [...byKey.values()];
+  for (const g of out) g.items.sort((a, b) => severityRank(a) - severityRank(b));
+  out.sort((a, b) => Number(b.mine) - Number(a.mine) || b.items.length - a.items.length || a.key.localeCompare(b.key));
+  return out;
+}
+
 /** The chip classes for an advisory's severity. Theme tokens only. */
 export function severityClass(severity: string | undefined): string {
   switch ((severity ?? "").toLowerCase()) {

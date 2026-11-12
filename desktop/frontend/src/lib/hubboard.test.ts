@@ -87,3 +87,18 @@ describe("board groups", () => {
     expect(groupByAdvisory(items).find((x) => x.key === "G1")?.items.length).toBe(2);
   });
 });
+
+import { workGroups, severityTally } from "./hubboard";
+
+describe("in-progress groups", () => {
+  const it = (id: string, mine: boolean, device: string, repo: string, severity: string) =>
+    ({ id, kind: "dep_advisory", repo, severity, state: "claimed", lease: { mine, deviceName: device, expires: "2026-11-12T12:00:00Z" } }) as never;
+
+  it("groups this Mac's chores per session and a teammate's per device and repository", () => {
+    const status = { sessions: [{ session: "s1", itemId: "a" }, { session: "s1", itemId: "b" }] } as never;
+    const g = workGroups([it("a", true, "me", "o/web", "low"), it("b", true, "me", "o/web", "critical")], [it("c", false, "bob", "o/api", "high")], status);
+    expect(g.map((x) => [x.key, x.items.length])).toEqual([["s:s1", 2], ["d:bob|o/api", 1]]);
+    expect(g[0].items[0].id).toBe("b"); // worst first
+    expect(severityTally(g[0].items)).toEqual([{ severity: "critical", count: 1 }, { severity: "low", count: 1 }]);
+  });
+});
