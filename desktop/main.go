@@ -126,6 +126,7 @@ func main() {
 	daemon := &DaemonService{}
 	term := NewTermService()
 	updater := NewUpdateService()
+	login := &SandboxLoginService{}
 
 	app := application.New(application.Options{
 		// Name drives the app menu's Hide/Quit/About role labels ("Quit Lola").
@@ -141,6 +142,7 @@ func main() {
 			application.NewService(&HubService{}),
 			application.NewService(&TalkService{}),
 			application.NewService(&ConfigService{}),
+			application.NewService(login),
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
 			application.NewService(updater),
@@ -156,6 +158,8 @@ func main() {
 
 	// Give the terminal service the emitter it streams PTY bytes over.
 	term.SetApp(app)
+	// The sandbox login streams its (token-free) screen as events.
+	login.emit = func(name string, data any) { app.Event.Emit(name, data) }
 	// The updater emits download-progress events and quits for the install swap.
 	updater.SetApp(app)
 

@@ -10,6 +10,9 @@ vi.mock("@bindings/desktop", () => ({
   },
 }));
 
+// The runner has its own tests; here it is a button that reports a stored token.
+vi.mock("./SetupTokenRunner.svelte", async () => ({ default: (await import("./SetupTokenRunnerStub.test.svelte")).default }));
+
 import SandboxLoginPrompt from "./SandboxLoginPrompt.svelte";
 
 describe("SandboxLoginPrompt", () => {
@@ -25,13 +28,23 @@ describe("SandboxLoginPrompt", () => {
     status.mockResolvedValue({ tokenStored: false, claudeSource: "" });
     render(SandboxLoginPrompt);
     expect(await screen.findByText("Connect Claude for Docker workspaces")).toBeInTheDocument();
+    expect(screen.queryByText("claude setup-token")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Paste a token instead" }));
     expect(screen.getByText("claude setup-token")).toBeInTheDocument();
-    const input = screen.getByLabelText("2. Paste the token") as HTMLInputElement;
+    const input = screen.getByLabelText("Paste the token") as HTMLInputElement;
     expect(input.type).toBe("password");
     await fireEvent.input(input, { target: { value: "sk-ant-oat01-x" } });
     await fireEvent.click(screen.getByRole("button", { name: "Save token" }));
     await waitFor(() => expect(setToken).toHaveBeenCalledWith("sk-ant-oat01-x"));
     await waitFor(() => expect(screen.queryByText("Connect Claude for Docker workspaces")).not.toBeInTheDocument());
+  });
+
+  it("disappears once Log in with Claude stored a token", async () => {
+    status.mockResolvedValue({ tokenStored: false, claudeSource: "" });
+    render(SandboxLoginPrompt);
+    await fireEvent.click(await screen.findByRole("button", { name: "Log in with Claude" }));
+    await waitFor(() => expect(screen.queryByText("Connect Claude for Docker workspaces")).not.toBeInTheDocument());
+    expect(setToken).not.toHaveBeenCalled();
   });
 
   it("stays hidden when a token is stored or the env supplies one", async () => {
@@ -49,7 +62,8 @@ describe("SandboxLoginPrompt", () => {
     status.mockResolvedValue({ tokenStored: false, claudeSource: "" });
     setToken.mockRejectedValue(new Error("keychain locked"));
     render(SandboxLoginPrompt);
-    const input = (await screen.findByLabelText("2. Paste the token")) as HTMLInputElement;
+    await fireEvent.click(await screen.findByRole("button", { name: "Paste a token instead" }));
+    const input = screen.getByLabelText("Paste the token") as HTMLInputElement;
     await fireEvent.input(input, { target: { value: "sk-ant-oat01-x" } });
     await fireEvent.click(screen.getByRole("button", { name: "Save token" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("keychain locked");

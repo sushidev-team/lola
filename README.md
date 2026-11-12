@@ -617,10 +617,12 @@ sandbox_ports = ["5173"]          # published on 127.0.0.1:5173
 Setup, once per machine:
 
 1. Docker Desktop, OrbStack or Colima, running.
-2. A Claude Code token for the container (it cannot read your keychain):
+2. A Claude Code token for the container (it cannot read your keychain).
+   In the desktop app, Settings → Sandbox → **Log in with Claude** runs
+   `claude setup-token` for you and stores the token in the keychain once the
+   browser login finishes; the token is never shown. Without the app:
    `claude setup-token`, then `lola sandbox token` and paste it (the input is
-   not echoed; `--clear` removes it). The desktop app has the same field under
-   Settings → Sandbox. `CLAUDE_CODE_OAUTH_TOKEN` in the daemon's environment
+   not echoed; `--clear` removes it). `CLAUDE_CODE_OAUTH_TOKEN` in the daemon's environment
    works too. The token uses your Claude plan; an API key (billed per token)
    is passed only if you turn on `[sandbox].use_api_key`.
 3. GitHub: nothing, if `gh auth login` is done on the host (see Credentials).

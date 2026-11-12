@@ -12,6 +12,7 @@
   import Checkbox from "$lib/components/Checkbox.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import SettingsGroup from "$lib/components/SettingsGroup.svelte";
+  import SetupTokenRunner from "$lib/components/SetupTokenRunner.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { ConfigService } from "@bindings/desktop";
   import type { SandboxStatusDTO } from "@bindings/desktop/models";
@@ -182,7 +183,7 @@
       <li class="flex items-center gap-1.5 {claudeOk && !(status.useApiKey && status.apiKeySet) ? 'text-good' : 'text-warn'}">
         <Icon name={claudeOk ? "check" : "triangle-alert"} size={14} />
         Claude login: {claudeLine}
-        {#if !claudeOk}<HelpText label="Claude login" detail="Sandboxed agents cannot log in yet. Store a token below." />{/if}
+        {#if !claudeOk}<HelpText label="Claude login" detail="Sandboxed agents cannot log in yet. Use Log in with Claude below." />{/if}
       </li>
       <li class="flex items-center gap-1.5 {status.githubSource ? 'text-good' : 'text-warn'}">
         <Icon name={status.githubSource ? "check" : "triangle-alert"} size={14} />
@@ -223,6 +224,10 @@
 
 <SettingsGroup title="Claude login">
   <div class={rowCls}>
+    <span class="text-faint">Login</span>
+    <SetupTokenRunner onStored={() => { tokenMsg = ""; void load(); }} />
+  </div>
+  <div class={rowCls}>
     <label for={`${formId}-token`} class="text-faint">{status?.tokenStored ? "New token" : "Token"}</label>
     <span>
       <input
@@ -235,13 +240,13 @@
         disabled={tokenBusy}
         oninput={() => (tokenMsg = "")}
       />
-      <span class={hintCls}>From <code>claude setup-token</code>. <HelpText label="Claude token" detail="A container cannot read your keychain, so sandboxed agents log in with this token. Lola stores it in the macOS keychain and never shows it again." /></span>
+      <span class={hintCls}>Or paste one from <code>claude setup-token</code>. <HelpText label="Claude token" detail="A container cannot read your keychain, so sandboxed agents log in with this token. Lola stores it in the macOS keychain and never shows it again." /></span>
     </span>
   </div>
   <div class={rowCls}>
     <span></span>
     <span class="flex flex-wrap items-center gap-2">
-      <Button variant="primary" disabled={!token.trim() || tokenBusy} loading={tokenBusy} onclick={saveToken}>Save token</Button>
+      <Button variant="secondary" disabled={!token.trim() || tokenBusy} loading={tokenBusy} onclick={saveToken}>Save token</Button>
       {#if status?.tokenStored}
         <Button disabled={tokenBusy} onclick={askClearToken}>Remove token…</Button>
       {/if}

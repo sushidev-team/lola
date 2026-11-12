@@ -8,6 +8,7 @@ import * as DoctorService from "./doctorservice.js";
 import * as HubService from "./hubservice.js";
 import * as LinearService from "./linearservice.js";
 import * as SSHService from "./sshservice.js";
+import * as SandboxLoginService from "./sandboxloginservice.js";
 import * as TalkService from "./talkservice.js";
 import * as TermService from "./termservice.js";
 import * as UpdateService from "./updateservice.js";
@@ -19,6 +20,7 @@ export {
     HubService,
     LinearService,
     SSHService,
+    SandboxLoginService,
     TalkService,
     TermService,
     UpdateService

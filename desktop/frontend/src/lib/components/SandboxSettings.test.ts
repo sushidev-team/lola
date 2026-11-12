@@ -19,6 +19,9 @@ vi.mock("@bindings/desktop", () => ({
   },
 }));
 
+// The runner has its own tests; here it is a button that reports a stored token.
+vi.mock("./SetupTokenRunner.svelte", async () => ({ default: (await import("./SetupTokenRunnerStub.test.svelte")).default }));
+
 import SandboxSettings from "./SandboxSettings.svelte";
 import { confirm } from "$lib/confirm.svelte";
 
@@ -86,6 +89,14 @@ describe("SandboxSettings", () => {
     await waitFor(() => expect(input.value).toBe(""));
     expect(await screen.findByText("Claude login: Token stored in the keychain")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("sk-ant-oat01-secret");
+  });
+
+  it("refreshes the status after Log in with Claude stored a token", async () => {
+    render(SandboxSettings);
+    await screen.findByText("Claude login: Not set");
+    status.mockResolvedValue(sample({ tokenStored: true }));
+    await fireEvent.click(screen.getByRole("button", { name: "Log in with Claude" }));
+    expect(await screen.findByText("Claude login: Token stored in the keychain")).toBeInTheDocument();
   });
 
   it("asks before removing the stored token", async () => {
