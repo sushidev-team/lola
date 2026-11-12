@@ -1379,7 +1379,16 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				if prev.Kind != "" {
 					s.Kind = prev.Kind
 				}
-				if prev.Agentless || prev.Manual {
+				// Only agent launches record an Agent; the shell flows never do.
+				// A record carrying one runs an agent whatever its ID shape says
+				// (hub chores are named like `lola open` shells), and this also
+				// repairs records an earlier adoption wrongly marked agent-less.
+				if prev.Agent != "" {
+					s.Agentless, s.Manual = false, false
+					if s.AgentState == state.AgentShell {
+						s.SetAgentState(state.AgentWorking, "", time.Now())
+					}
+				} else if prev.Agentless || prev.Manual {
 					s.Agentless = true
 					s.Manual = prev.Manual
 					s.Issue = ""
