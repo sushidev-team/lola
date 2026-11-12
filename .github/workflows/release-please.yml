@@ -39,3 +39,17 @@ jobs:
       version: ${{ needs.release-please.outputs.version }}
       tag: ${{ needs.release-please.outputs.tag_name }}
     secrets: inherit
+
+  # The default sandbox image for this release: a release lola runs
+  # ghcr.io/sushidev-team/lola-sandbox:<version> unless configured otherwise.
+  sandbox-image:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/sandbox-image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: ${{ needs.release-please.outputs.version }}
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
