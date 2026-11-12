@@ -500,3 +500,28 @@ func TestAdoptKeepsNotificationWhileStillWaiting(t *testing.T) {
 		t.Errorf("InputReason = %q, want preserved", got.InputReason)
 	}
 }
+
+// A revive that lands after the cycle's tmux listing must not be overwritten
+// with "dead" by that cycle: the listing predates the new pane.
+func TestObserveDoesNotKillASessionRevivedAfterTheListing(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	(&fakeObsSeams{}).install(d)
+	dead := nativeSess("FE-1", "dead")
+	dead.SetAgentState(state.AgentDead, "", time.Now().Add(-time.Minute))
+	d.sessions.Upsert(dead)
+
+	d.listTmuxSessions = func(ctx context.Context) ([]tmux.Session, error) {
+		// The revive lands while this cycle runs.
+		time.Sleep(2 * time.Millisecond)
+		d.sessions.Update(dead.ID, func(cur *session.Session) bool {
+			cur.SetAgentState(state.AgentWorking, "", time.Now())
+			return true
+		})
+		return nil, nil // listed before the new pane existed
+	}
+	d.observe(context.Background())
+
+	if got := getSess(t, d, dead.ID); got.AgentState != state.AgentWorking {
+		t.Fatalf("revived session = %q, want working", got.AgentState)
+	}
+}

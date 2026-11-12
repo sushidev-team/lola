@@ -183,6 +183,10 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		aliveByName    map[string]bool
 		activityByName map[string]time.Time
 	)
+	// When liveness was read. A record whose agent axis moved after this (a
+	// revive or relaunch landing mid-cycle) is newer than the listing, so this
+	// cycle must not declare it dead.
+	listedAt := time.Now()
 	if d.listTmuxSessions != nil {
 		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 		ls, err := d.listTmuxSessions(cctx)
@@ -416,7 +420,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// 2. AGENT axis — liveness + hooks (already merged into cur) + pane
 			// + tmux's own activity stamp.
 			agentChanged := false
-			if !alive {
+			if !alive && cur.AgentStateSince.After(listedAt) {
+				// Revived or relaunched after the listing: the "gone" is stale.
+			} else if !alive {
 				// A dead pane is terminal for the agent axis; the rollup still
 				// reads "merged" when the delivery axis says so (Rollup rule 1).
 				agentChanged = cur.SetAgentState(state.AgentDead, "", now)
