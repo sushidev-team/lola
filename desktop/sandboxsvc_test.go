@@ -77,3 +77,35 @@ func TestSetSandboxImage(t *testing.T) {
 		t.Fatalf("reset: %v", err)
 	}
 }
+
+func TestSandboxLoginNeeded(t *testing.T) {
+	writeTestConfig(t, hubProjectsConfig)
+	stubSandboxSvc(t)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	s := &ConfigService{}
+	on := true
+	if err := s.SaveHubProject(HubProjectPatchDTO{Name: "web", Sandboxed: &on}); err != nil {
+		t.Fatal(err)
+	}
+	stored := false
+	lookupSandboxToken = func(string) (string, bool, error) { return "", stored, nil }
+	ask := func(project, kind string) bool {
+		t.Helper()
+		v, err := s.SandboxLoginNeeded(project, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if !ask("web", "") {
+		t.Fatal("sandboxed claude without a token not flagged")
+	}
+	if ask("api", "") || ask("web", "codex") || ask("nope", "") {
+		t.Fatal("flagged a host project, another agent, or an unknown project")
+	}
+	stored = true
+	if ask("web", "claude") {
+		t.Fatal("flagged with a token in the keychain")
+	}
+}

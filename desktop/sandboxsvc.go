@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -69,6 +72,42 @@ func (s *ConfigService) SandboxStatus() (SandboxStatusDTO, error) {
 		TokenStored: stored, ClaudeSource: st.ClaudeSource, GitHubSource: st.GitHubSource,
 		UseAPIKey: st.UseAPIKey, APIKeySet: st.APIKeySet,
 	}, nil
+}
+
+// SandboxLoginNeeded reports whether a session of agentKind ("" = the
+// project's configured agent) started in project would run a sandboxed claude
+// with no login: it would print "Not logged in" and wait forever. The app asks
+// before such a start and offers the login. Only claude's login is lola's to
+// provide; other agents answer false. The daemon refuses the same start, so
+// this is the friendly half, not the guard.
+func (s *ConfigService) SandboxLoginNeeded(project, agentKind string) (bool, error) {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return false, err
+	}
+	p := cfg.ProjectByName(project)
+	if p == nil || !p.Sandboxed() {
+		return false, nil
+	}
+	kind := agent.Parse(cfg.AgentForProject(project))
+	if agent.Valid(strings.TrimSpace(agentKind)) {
+		kind = agent.Parse(strings.TrimSpace(agentKind))
+	}
+	if kind != agent.Claude {
+		return false, nil
+	}
+	if slices.Contains(cfg.Sandbox.EffectivePassEnv(), "CLAUDE_CODE_OAUTH_TOKEN") {
+		if os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
+			return false, nil
+		}
+		if _, stored, _ := lookupSandboxToken(secrets.SandboxClaudeService); stored {
+			return false, nil
+		}
+	}
+	if cfg.Sandbox.UseAPIKey && os.Getenv(config.SandboxAPIKeyEnv) != "" {
+		return false, nil
+	}
+	return true, nil
 }
 
 // SetSandboxImage writes [sandbox].image. "" restores lola's default.

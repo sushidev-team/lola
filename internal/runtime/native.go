@@ -1642,6 +1642,13 @@ func (n *Native) Alive(ctx context.Context, s session.Session) bool {
 // dispatch guards so the revived session is not duplicated. Revive itself only
 // needs the worktree to still be there.
 func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session, error) {
+	return n.revive(ctx, s, false)
+}
+
+// revive is Revive; fresh launches the agent anew with the standard first
+// prompt instead of resuming (Relogin). A sandboxed session's credentials are
+// refreshed either way, so a login made after the spawn reaches the agent.
+func (n *Native) revive(ctx context.Context, s session.Session, fresh bool) (session.Session, error) {
 	if s.GoalManaged() {
 		return s, errors.New("goal workers resume through a newly reserved attempt")
 	}
@@ -1684,6 +1691,14 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 			return session.Session{}, fmt.Errorf("runtime: revive %s: codex environment: %w", id, err)
 		}
 		resume = codexHasSession(ctx, home, dir)
+	}
+	if fresh {
+		resume = false
+	}
+	if n.sandboxProject(s.Project) != nil {
+		if err := n.refreshSandboxCredentials(dir); err != nil {
+			return session.Session{}, fmt.Errorf("runtime: revive %s: refresh credentials: %w", id, err)
+		}
 	}
 	if err := n.prepareSandbox(ctx, n.sandboxProject(s.Project) != nil); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)

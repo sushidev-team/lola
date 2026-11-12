@@ -490,6 +490,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// waiting_input/quota_limited on the agent axis; the engine notifies
 			// once per episode or auto-switches per the configured chain.
 			d.maybeFallback(ctx, updated)
+			// A sandboxed claude started before any Claude login existed is
+			// relaunched once a login resolves (sandboxlogin.go).
+			d.maybeRelogin(ctx, updated)
 			// Escalation (blocked) write-back AFTER react — react is what sets
 			// Escalated (CI retries exhausted). Re-read the record so the flag
 			// react just wrote is visible this cycle. A dropped (merged-cleaned)

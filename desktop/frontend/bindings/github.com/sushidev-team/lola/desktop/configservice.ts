@@ -348,6 +348,18 @@ export function SandboxImageDefault(): $CancellablePromise<string> {
 }
 
 /**
+ * SandboxLoginNeeded reports whether a session of agentKind ("" = the
+ * project's configured agent) started in project would run a sandboxed claude
+ * with no login: it would print "Not logged in" and wait forever. The app asks
+ * before such a start and offers the login. Only claude's login is lola's to
+ * provide; other agents answer false. The daemon refuses the same start, so
+ * this is the friendly half, not the guard.
+ */
+export function SandboxLoginNeeded(project: string, agentKind: string): $CancellablePromise<boolean> {
+    return $Call.ByID(3065258566, project, agentKind);
+}
+
+/**
  * SandboxStatus reads [sandbox] and probes docker, the keychain and gh. It
  * pulls nothing.
  */

@@ -240,6 +240,10 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 		// default's.
 		agentBin = agent.Parse(strings.TrimSpace(a.AgentKind)).Binary()
 	}
+	kind := agent.Parse(d.cfg.AgentForProject(project))
+	if agent.Valid(strings.TrimSpace(a.AgentKind)) {
+		kind = agent.Parse(strings.TrimSpace(a.AgentKind))
+	}
 	agentBin = sandboxedBin(d.cfg, project, agentBin)
 	d.mu.Unlock()
 	if pp == nil {
@@ -250,6 +254,9 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	}
 	if err := health(agentBin); err != nil {
 		return protocol.OpenData{}, fmt.Errorf("runtime not ready: %w", err)
+	}
+	if proj.Sandboxed() && !d.sandboxLoginReady(kind) {
+		return protocol.OpenData{}, errors.New(sandboxLoginMissing(kind))
 	}
 
 	name := proj.Name

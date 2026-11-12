@@ -16,6 +16,10 @@
 
   const COMMAND = "claude setup-token";
 
+  // always: show without checking (the caller knows a login is missing);
+  // bare: no card chrome, for use inside a dialog; onDone: a login was stored.
+  let { always = false, bare = false, onDone }: { always?: boolean; bare?: boolean; onDone?: () => void } = $props();
+
   let needed = $state(false);
   let token = $state("");
   let busy = $state(false);
@@ -25,6 +29,10 @@
   const id = $props.id();
 
   onMount(async () => {
+    if (always) {
+      needed = true;
+      return;
+    }
     try {
       const st = await ConfigService.SandboxStatus();
       needed = !!st && !st.tokenStored && !st.claudeSource;
@@ -44,6 +52,11 @@
     }
   }
 
+  function stored() {
+    needed = false;
+    onDone?.();
+  }
+
   async function save() {
     if (!token.trim()) return;
     busy = true;
@@ -51,7 +64,7 @@
     try {
       await ConfigService.SetSandboxToken(token);
       token = "";
-      needed = false;
+      stored();
     } catch (e) {
       err = String(e);
     } finally {
@@ -61,13 +74,13 @@
 </script>
 
 {#if needed}
-  <section class="grid gap-3 rounded border border-warn/50 bg-warn/5 p-3 text-sm" aria-labelledby={`${id}-title`}>
-    <div class="flex items-center gap-1.5 text-warn">
+  <section class={bare ? "grid gap-3 text-sm" : "grid gap-3 rounded border border-warn/50 bg-warn/5 p-3 text-sm"} aria-labelledby={`${id}-title`}>
+    <div class="flex items-center gap-1.5 text-warn" class:sr-only={bare}>
       <Icon name="triangle-alert" size={14} />
       <span id={`${id}-title`}>Connect Claude for Docker workspaces</span>
       <HelpText label="Claude login" detail="A container cannot read your keychain, so sandboxed agents log in with a long-lived token. Lola stores it in the macOS keychain and never shows it again. You do this once for all projects." />
     </div>
-    <SetupTokenRunner onStored={() => (needed = false)} />
+    <SetupTokenRunner onStored={stored} />
     {#if !manual}
       <span><Button size="xs" onclick={() => (manual = true)}>Paste a token instead</Button></span>
     {:else}

@@ -4,6 +4,7 @@
 // call `store.kill(id)` — they never touch the bindings directly.
 
 import { Events } from "@wailsio/runtime";
+import { sandboxLogin } from "$lib/sandboxlogin.svelte";
 import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO, type StackFolderAppDTO } from "@bindings/desktop";
 import type {
   SessionInfo as ProtocolSessionInfo,
@@ -567,7 +568,8 @@ class Store {
       delete this.devPending[session];
     }
   }
-  open(project: string, ref: string) {
+  async open(project: string, ref: string) {
+    if (!(await sandboxLogin.ensure(project))) return undefined;
     return this.act(() => DaemonService.Open(project, ref), `opened ${ref}`);
   }
   /**
@@ -582,7 +584,8 @@ class Store {
       (r) => `broadcast: ${r?.message || "sent"}`,
     );
   }
-  openManual(a: OpenManualArgs) {
+  async openManual(a: OpenManualArgs) {
+    if (a.agent && !(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
     return this.act(() => DaemonService.OpenManual(a), `started ${a.name || a.branch || "session"}`);
   }
   renameSession(id: string, name: string) {
@@ -599,10 +602,12 @@ class Store {
       return false;
     }
   }
-  openPr(a: OpenPrArgs) {
+  async openPr(a: OpenPrArgs) {
+    if (!(await sandboxLogin.ensure(a.project))) return undefined;
     return this.act(() => DaemonService.OpenPR(a), `opened PR #${a.number}`);
   }
-  openTicket(a: OpenTicketArgs) {
+  async openTicket(a: OpenTicketArgs) {
+    if (!(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
     return this.act(() => DaemonService.OpenTicket(a), `started ${a.identifier}`);
   }
   // Turn checkpoints. Both flash the daemon's own sentence: it names the

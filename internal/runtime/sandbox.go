@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -173,19 +174,142 @@ func (n *Native) sandboxEnv(p config.Project, id, dir string, kind agent.Kind) s
 			}
 		}
 	}
+	b.WriteString(n.sandboxCredentials())
+	return b.String()
+}
+
+// sandboxCredentials renders the effective pass_env credentials as env-file
+// assignments, each from the daemon's environment, else from the
+// SandboxCredential fallback. Values only ever land in the 0600 env file.
+func (n *Native) sandboxCredentials() string {
+	var b strings.Builder
 	for _, name := range n.Cfg.Sandbox.EffectivePassEnv() {
 		if !envNameRe.MatchString(name) { // defense-in-depth, mirrors envFile
 			continue
 		}
-		v, ok := os.LookupEnv(name)
-		if (!ok || v == "") && n.SandboxCredential != nil {
-			v, ok = n.SandboxCredential(name)
-		}
-		if ok && v != "" {
+		if v := n.sandboxCredential(name); v != "" {
 			fmt.Fprintf(&b, "%s=%s\n", name, shQuote(v))
 		}
 	}
 	return b.String()
+}
+
+// sandboxCredential is one pass_env value as sandboxCredentials resolves it.
+func (n *Native) sandboxCredential(name string) string {
+	v, ok := os.LookupEnv(name)
+	if (!ok || v == "") && n.SandboxCredential != nil {
+		v, _ = n.SandboxCredential(name)
+	}
+	return v
+}
+
+// claudeLoginEnv are the variables that log a sandboxed claude in: the
+// subscription token, and the API key when [sandbox].use_api_key passes it.
+func (n *Native) claudeLoginEnv() []string {
+	out := []string{"CLAUDE_CODE_OAUTH_TOKEN"}
+	if n.Cfg.Sandbox.UseAPIKey {
+		out = append(out, config.SandboxAPIKeyEnv)
+	}
+	return out
+}
+
+// SandboxLoginAvailable reports whether a sandboxed agent of kind would get a
+// login if it started now. Only claude is checked; other kinds report true
+// (their credentials are not lola's to provide yet).
+func (n *Native) SandboxLoginAvailable(kind agent.Kind) bool {
+	if kind != agent.Claude {
+		return true
+	}
+	passed := n.Cfg.Sandbox.EffectivePassEnv()
+	for _, name := range n.claudeLoginEnv() {
+		if slices.Contains(passed, name) && n.sandboxCredential(name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// SandboxLoginMissing reports whether s is a sandboxed claude session whose
+// env file carries no Claude login — it was started before one existed, so
+// its agent shows "Not logged in". Read from the file lola wrote, never from
+// the pane, so nothing the agent prints can trigger a relaunch.
+func (n *Native) SandboxLoginMissing(s session.Session) bool {
+	if s.Sandbox != config.SandboxDocker || s.Kind == session.KindLocal || s.GoalManaged() || s.IsAgentless() {
+		return false
+	}
+	if agent.Parse(s.Agent) != agent.Claude {
+		return false
+	}
+	body, err := os.ReadFile(filepath.Join(n.sessionDir(s), lolaDir, "env"))
+	if err != nil {
+		return false // unknown: never relaunch on a guess
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		for _, name := range n.claudeLoginEnv() {
+			if strings.HasPrefix(line, name+"=") && line != name+"=''" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// sessionDir is the session's worktree (a stack session's folder).
+func (n *Native) sessionDir(s session.Session) string {
+	if s.Worktree != "" {
+		return s.Worktree
+	}
+	return filepath.Join(n.WT.Root, s.Project, s.ID)
+}
+
+// refreshSandboxCredentials appends the current credentials to a sandboxed
+// session's env file, so a relaunch picks up a login made after the spawn.
+// Appended, not rewritten: project env values may hold quoted newlines that
+// look like assignments, and the later assignment wins when sourced.
+func (n *Native) refreshSandboxCredentials(dir string) error {
+	block := n.sandboxCredentials()
+	if block == "" {
+		return nil
+	}
+	path := filepath.Join(dir, lolaDir, "env")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if strings.HasSuffix(string(body), block) {
+		return nil
+	}
+	if len(body) > 0 && body[len(body)-1] != '\n' {
+		body = append(body, '\n')
+	}
+	return os.WriteFile(path, append(body, block...), 0o600)
+}
+
+// Relogin restarts a sandboxed session's agent with the credentials that
+// exist NOW: it refreshes the env file, stops the pane and its container, and
+// launches the agent fresh on the same worktree with the standard first
+// prompt. Fresh, not resumed: a session that never had a login did no work in
+// its conversation, and a resumed one would sit idle without a prompt.
+func (n *Native) Relogin(ctx context.Context, s session.Session) (session.Session, error) {
+	if s.Sandbox != config.SandboxDocker || n.sandboxProject(s.Project) == nil {
+		return s, fmt.Errorf("runtime: relogin %s: not a sandboxed session", s.ID)
+	}
+	if s.Kind == session.KindLocal || s.GoalManaged() || s.IsAgentless() {
+		return s, fmt.Errorf("runtime: relogin %s: not an agent session lola can relaunch", s.ID)
+	}
+	id := s.TmuxName
+	if id == "" {
+		id = s.ID
+	}
+	if n.Tmux.Has(ctx, id) {
+		if err := n.Tmux.KillSessionTree(ctx, id); err != nil {
+			return s, fmt.Errorf("runtime: relogin %s: stop agent: %w", s.ID, err)
+		}
+	}
+	if err := n.removeContainer(ctx, s.ID); err != nil && n.Logf != nil {
+		n.Logf("session %s: removing the sandbox container before relogin failed: %v", s.ID, err)
+	}
+	return n.revive(ctx, s, true)
 }
 
 // sandboxLine wraps an agent's POSIX launch line (inner — what runs INSIDE the

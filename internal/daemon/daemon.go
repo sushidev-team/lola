@@ -99,6 +99,10 @@ type Daemon struct {
 	// (usage.go). Its own lock; never held while taking mu.
 	spend *spendState
 
+	// relogin remembers when each sandboxed session was last relaunched for a
+	// missing login (sandboxlogin.go). Its own lock.
+	relogin reloginState
+
 	mu     sync.Mutex
 	cfg    *config.Config
 	cfgErr string // non-empty = cfg failed validation; polls are held
