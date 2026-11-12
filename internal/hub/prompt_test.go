@@ -71,3 +71,24 @@ func TestSlug(t *testing.T) {
 		t.Error("invalid item must give empty slug")
 	}
 }
+
+func TestGroupBriefing(t *testing.T) {
+	a, b := advisoryItem("acme/web"), advisoryItem("acme/web")
+	b.DepAdvisory.Package, b.DepAdvisory.Advisory = "vite", "GHSA-587h-7wmj-h5pm"
+	got, err := GroupBriefing([]hubproto.Item{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"2 advisories in acme/web", "GHSA-jf85-cpcp-j695", "GHSA-587h-7wmj-h5pm", "`vite`", "ONE pull request"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("briefing lacks %q:\n%s", want, got)
+		}
+	}
+	other := advisoryItem("acme/api")
+	if _, err := GroupBriefing([]hubproto.Item{a, other}); !errors.Is(err, ErrRefusedItem) {
+		t.Errorf("mixed repositories: %v", err)
+	}
+	if _, err := GroupBriefing([]hubproto.Item{a, bumpItem("acme/web")}); !errors.Is(err, ErrRefusedItem) {
+		t.Errorf("mixed kinds: %v", err)
+	}
+}

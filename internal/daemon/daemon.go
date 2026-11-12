@@ -1455,6 +1455,7 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				// another device) and never reports the outcome.
 				if s.HubItem.ItemID == "" {
 					s.HubItem = prev.HubItem
+					s.HubBatch = prev.HubBatch
 				}
 				s.PR = prev.PR
 				// Carry the whole DELIVERY axis: it is derived from persisted gh

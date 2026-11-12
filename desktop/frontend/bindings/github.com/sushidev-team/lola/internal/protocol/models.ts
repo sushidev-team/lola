@@ -803,6 +803,12 @@ export interface HubBoardItem {
  */
 export interface HubClaimArgs {
     "itemId": string;
+
+    /**
+     * ItemIDs claims several dependency advisories of one repository for ONE
+     * session ("Fix all"). When set, ItemID is ignored.
+     */
+    "itemIds"?: string[] | null;
     "project"?: string;
 }
 

@@ -169,8 +169,11 @@ type HubDeviceInfo struct {
 // HubClaimArgs is Request.Args for cmd=hubClaim. Project names the
 // [[project]] when several match the item's repo.
 type HubClaimArgs struct {
-	ItemID  string `json:"itemId"`
-	Project string `json:"project,omitempty"`
+	ItemID string `json:"itemId"`
+	// ItemIDs claims several dependency advisories of one repository for ONE
+	// session ("Fix all"). When set, ItemID is ignored.
+	ItemIDs []string `json:"itemIds,omitempty"`
+	Project string   `json:"project,omitempty"`
 }
 
 // HubClaimData answers a successful cmd=hubClaim.

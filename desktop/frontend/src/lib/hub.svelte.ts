@@ -268,6 +268,11 @@ export class HubStore {
     return this.#act(`claim:${itemId}`, () => HubService.Claim({ itemId, project }));
   }
 
+  /** Claims several advisories of one repository for ONE session ("Fix all"). */
+  claimMany(key: string, itemIds: string[], project = ""): Promise<HubResult<HubClaimData>> {
+    return this.#act(`claim:${key}`, () => HubService.Claim({ itemId: itemIds[0] ?? "", itemIds, project }));
+  }
+
   release(itemId: string): Promise<HubResult<HubReleaseData>> {
     return this.#act(`release:${itemId}`, () => HubService.Release(itemId));
   }

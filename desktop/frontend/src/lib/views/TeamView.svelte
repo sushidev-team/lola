@@ -8,6 +8,7 @@
   // the daemon when pressed, and a refusal is shown in the daemon's words.
   import { onDestroy, onMount } from "svelte";
   import Button from "$lib/components/Button.svelte";
+  import Chevron from "$lib/components/Chevron.svelte";
   import HubSyncButton from "$lib/components/hub/HubSyncButton.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -23,6 +24,9 @@
     deliveryClass,
     deliveryLabel,
     deviceOnline,
+    fixAllItems,
+    groupByAdvisory,
+    groupByRepo,
     hubReason,
     itemTitle,
     kindIcon,
@@ -32,7 +36,9 @@
     onlineCount,
     packageLine,
     severityClass,
+    severityCounts,
     severityLabel,
+    type BoardGroup,
   } from "$lib/hubboard";
   import type { HubBoardItem } from "@bindings/internal/protocol";
   import { ConfigService } from "@bindings/desktop";
@@ -111,6 +117,63 @@
     });
   }
 
+  // Available rows are grouped per project (the default) or per advisory. The
+  // choice is a per-viewer convenience, remembered in this browser only.
+  const GROUP_KEY = "lola.team.groupBy";
+  function readGroupMode(): "project" | "advisory" {
+    try {
+      return localStorage.getItem(GROUP_KEY) === "advisory" ? "advisory" : "project";
+    } catch {
+      return "project";
+    }
+  }
+  let groupMode = $state<"project" | "advisory">(readGroupMode());
+  function setGroupMode(m: "project" | "advisory") {
+    groupMode = m;
+    try {
+      localStorage.setItem(GROUP_KEY, m);
+    } catch {
+      // the choice just is not remembered
+    }
+  }
+  const groups = $derived(groupMode === "project" ? groupByRepo(sections.available) : groupByAdvisory(sections.available));
+  let expanded = $state<Record<string, boolean>>({});
+
+  /** A project group's name: this Mac's project for the repository, else the repository. */
+  function groupName(g: BoardGroup): string {
+    if (groupMode === "advisory") return g.key;
+    const p = g.items.find((it) => it.local?.project)?.local?.project;
+    return p ? projectName(p) : g.key || "Unknown repository";
+  }
+
+  function askFixAll(g: BoardGroup) {
+    const gid = `group:${g.key}`;
+    setError(gid, "");
+    const items = fixAllItems(g);
+    if (items.length === 0) return;
+    if (items.length === 1) return askClaim(items[0]);
+    const choices = claimProjects(items[0]);
+    const project = choices.length ? (picks[gid] ?? "") : (items[0].local?.project ?? "");
+    if (choices.length && !project) {
+      setError(gid, "Choose the project to run it in.");
+      return;
+    }
+    const where = project ? projectName(project) : "its project";
+    confirm.ask({
+      title: "Fix all advisories?",
+      body: `Start one agent for ${items.length} advisories in ${where}?`,
+      detail: "Each advisory is claimed for this Mac. The agent fixes them together and opens one pull request.",
+      confirmLabel: "Fix all",
+      onConfirm: () => void fixAll(g, items, project),
+    });
+  }
+
+  async function fixAll(g: BoardGroup, items: HubBoardItem[], project: string) {
+    const r = await hub.claimMany(`group:${g.key}`, items.map((it) => it.id), project);
+    if (r.ok) store.setFlash(`Claimed ${items.length} advisories in ${projectName(r.data.project)}`);
+    else setError(`group:${g.key}`, r.error);
+  }
+
   async function doRelease(it: HubBoardItem) {
     const r = await hub.release(it.id);
     if (r.ok) store.setFlash(r.data.message || `Released ${itemTitle(it)}`, r.data.queued ? "warn" : "good");
@@ -139,6 +202,34 @@
     {#if it.reporters > 0}<span aria-hidden="true">·</span><span>{it.reporters} {it.reporters === 1 ? "reporter" : "reporters"}</span>{/if}
     <span aria-hidden="true">·</span><TimeAgo at={it.firstSeen} hint="First reported" />
   </span>
+{/snippet}
+
+{#snippet availableRow(it: HubBoardItem, groupReason: string)}
+  {@const choices = claimProjects(it)}
+  {@const claimable = !!it.local?.claimable}
+  <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-2.5 pl-9 pr-3" data-board-item={it.id}>
+    <span class="grid min-w-0 gap-1">
+      {@render headline(it)}
+      {@render facts(it)}
+      {#if !claimable && it.local?.reason && !groupReason}<span class="text-sm text-faint" data-claim-reason>{it.local.reason}</span>{/if}
+    </span>
+    <span class="flex shrink-0 items-center gap-2">
+      {#if claimable && choices.length}
+        <Select aria-label="Project for {itemTitle(it)}" bind:value={picks[it.id]}>
+          <option value="">Choose a project</option>
+          {#each choices as p (p)}<option value={p}>{projectName(p)}</option>{/each}
+        </Select>
+      {/if}
+      <Button
+        size="xs"
+        disabled={!claimable || hub.busy !== ""}
+        loading={hub.busy === `claim:${it.id}`}
+        title={claimable ? `Claim ${itemTitle(it)}` : it.local?.reason || "Not claimable on this Mac"}
+        onclick={() => askClaim(it)}>Claim</Button
+      >
+    </span>
+    {@render rowError(it)}
+  </li>
 {/snippet}
 
 {#snippet rowError(it: HubBoardItem)}
@@ -220,39 +311,66 @@
         {#if hub.boardError}<div role="alert" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">{hub.boardError}</div>{/if}
 
         <section aria-labelledby="team-available">
-          <h2 id="team-available" class="label mb-2 text-faint">Available <span class="num">{sections.available.length}</span></h2>
+          <div class="mb-2 flex min-w-0 flex-wrap items-center gap-3">
+            <h2 id="team-available" class="label text-faint">Available <span class="num">{sections.available.length}</span></h2>
+            {#if sections.available.length > 0}
+              <span class="ml-auto flex items-center gap-1" role="group" aria-label="Group available chores">
+                <Button size="xs" variant={groupMode === "project" ? "secondary" : "ghost"} aria-pressed={groupMode === "project"} onclick={() => setGroupMode("project")}>By project</Button>
+                <Button size="xs" variant={groupMode === "advisory" ? "secondary" : "ghost"} aria-pressed={groupMode === "advisory"} onclick={() => setGroupMode("advisory")}>By advisory</Button>
+              </span>
+            {/if}
+          </div>
           {#if !hub.board}
             <p class="text-sm text-faint">Loading the board…</p>
           {:else if sections.available.length === 0}
             <p class="text-sm text-faint" data-available-empty>Nothing waiting. The team is caught up.</p>
           {:else}
             <ul class="divide-y divide-edge/40 rounded-[10px] border border-edge">
-              {#each sections.available as it (it.id)}
-                {@const choices = claimProjects(it)}
-                {@const claimable = !!it.local?.claimable}
-                <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-3 py-2.5" data-board-item={it.id}>
-                  <span class="grid min-w-0 gap-1">
-                    {@render headline(it)}
-                    {@render facts(it)}
-                    {#if !claimable && it.local?.reason}<span class="text-sm text-faint" data-claim-reason>{it.local.reason}</span>{/if}
-                  </span>
-                  <span class="flex shrink-0 items-center gap-2">
-                    {#if claimable && choices.length}
-                      <Select aria-label="Project for {itemTitle(it)}" bind:value={picks[it.id]}>
-                        <option value="">Choose a project</option>
-                        {#each choices as p (p)}<option value={p}>{projectName(p)}</option>{/each}
-                      </Select>
-                    {/if}
-                    <Button
-                      variant="primary"
-                      size="xs"
-                      disabled={!claimable || hub.busy !== ""}
-                      loading={hub.busy === `claim:${it.id}`}
-                      title={claimable ? `Claim ${itemTitle(it)}` : it.local?.reason || "Not claimable on this Mac"}
-                      onclick={() => askClaim(it)}>Claim</Button
-                    >
-                  </span>
-                  {@render rowError(it)}
+              {#each groups as g (g.key)}
+                {@const gid = `group:${g.key}`}
+                {@const open = !!expanded[g.key]}
+                {@const fix = groupMode === "project" ? fixAllItems(g) : []}
+                {@const choices = fix.length > 1 ? claimProjects(fix[0]) : []}
+                <li class="min-w-0" data-board-group={g.key}>
+                  <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-3 py-2.5">
+                    <span class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                      <Button size="sm" variant="ghost" aria-expanded={open} aria-controls={`${gid}-rows`}
+                        onclick={() => (expanded = { ...expanded, [g.key]: !open })}>
+                        <Chevron {open} />
+                        <span class="min-w-0 truncate font-medium text-ink" data-group-title>{groupName(g)}</span>
+                      </Button>
+                      {#if g.worst}
+                        <span class="inline-flex shrink-0 items-center rounded-full border px-2 text-sm {severityClass(g.worst)}">{severityLabel(g.worst)}</span>
+                      {/if}
+                      <span class="num text-sm text-faint" data-group-count>
+                        {groupMode === "project" ? `${g.items.length} ${g.items.length === 1 ? "chore" : "chores"}` : `${g.items.length} ${g.items.length === 1 ? "repository" : "repositories"}`}{#if groupMode === "project" && g.items.length > 1}{` · ${severityCounts(g.items)}`}{/if}
+                      </span>
+                      {#if groupMode === "project" && groupName(g) !== g.key}<span class="min-w-0 truncate text-sm text-faint">{g.key}</span>{/if}
+                    </span>
+                    <span class="flex shrink-0 items-center gap-2">
+                      {#if choices.length}
+                        <Select aria-label="Project for {groupName(g)}" bind:value={picks[gid]}>
+                          <option value="">Choose a project</option>
+                          {#each choices as p (p)}<option value={p}>{projectName(p)}</option>{/each}
+                        </Select>
+                      {/if}
+                      {#if groupMode === "project"}
+                        <Button variant="primary" size="xs" disabled={fix.length === 0 || hub.busy !== ""}
+                          loading={hub.busy === `claim:${gid}` || (fix.length === 1 && hub.busy === `claim:${fix[0].id}`)}
+                          title={fix.length ? `Start one agent for ${fix.length === 1 ? "this chore" : `${fix.length} advisories`}` : g.reason || "Not claimable on this Mac"}
+                          onclick={() => askFixAll(g)}>{fix.length > 1 ? `Fix all ${fix.length}` : "Claim"}</Button>
+                      {/if}
+                    </span>
+                    {#if g.reason}<p class="col-start-1 col-end-3 pl-9 text-sm text-faint" data-group-reason>{g.reason}</p>{/if}
+                    {#if rowErrors[gid]}<p role="alert" class="col-start-1 col-end-3 min-w-0 break-words pl-9 text-sm text-bad">{hubReason(rowErrors[gid])}</p>{/if}
+                  </div>
+                  {#if open}
+                    <ul id={`${gid}-rows`} class="divide-y divide-edge/30 border-t border-edge/40">
+                      {#each g.items as it (it.id)}
+                        {@render availableRow(it, g.reason)}
+                      {/each}
+                    </ul>
+                  {/if}
                 </li>
               {/each}
             </ul>

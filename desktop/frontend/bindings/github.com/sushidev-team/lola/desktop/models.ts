@@ -829,6 +829,7 @@ export interface SettingsDTO {
      */
     "hubPollSeconds": number | null;
     "hubApplyPolicy": boolean | null;
+    "hubGroupChores": boolean | null;
     "hubTrustedKeys": HubTrustedKeyDTO[] | null;
 }
 

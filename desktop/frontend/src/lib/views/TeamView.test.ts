@@ -62,6 +62,12 @@ beforeEach(() => {
 
 const row = (id: string) => document.querySelector(`[data-board-item="${id}"]`) as HTMLElement;
 
+/** Available rows sit in collapsed groups: open them all. */
+async function expandGroups() {
+  await waitFor(() => expect(document.querySelector("[data-board-group]")).not.toBeNull());
+  for (const b of document.querySelectorAll<HTMLElement>('[data-board-group] [aria-expanded="false"]')) await fireEvent.click(b);
+}
+
 describe("TeamView", () => {
   it("explains the hub and opens its settings when not joined", async () => {
     Status.mockResolvedValue({ enabled: false, joined: false, sessions: [] });
@@ -87,7 +93,7 @@ describe("TeamView", () => {
 
   it("lays out a populated board", async () => {
     render(TeamView);
-    await waitFor(() => expect(row("it_open")).not.toBeNull());
+    await expandGroups();
     expect(screen.getByText("acme")).toBeInTheDocument();
     expect(document.querySelector("[data-connection]")).toHaveTextContent("Connected");
     expect(document.querySelector("[data-online]")).toHaveTextContent("2 of 3 devices online");
@@ -124,7 +130,7 @@ describe("TeamView", () => {
     Claim.mockResolvedValue({ session: "s-new", project: "web", itemId: "it_open" });
     const flash = vi.spyOn(store, "setFlash");
     render(TeamView);
-    await waitFor(() => expect(row("it_open")).not.toBeNull());
+    await expandGroups();
     await fireEvent.click(within(row("it_open")).getByRole("button", { name: "Claim" }));
     expect(confirm.request?.body).toBe("Claim GHSA-aaaa and start a session in Web?");
     expect(Claim).not.toHaveBeenCalled();
@@ -138,7 +144,7 @@ describe("TeamView", () => {
   it("makes an ambiguous claim name a project, and shows a refusal", async () => {
     Claim.mockRejectedValue(new Error("hub: not claimed: dispatch held: load"));
     render(TeamView);
-    await waitFor(() => expect(row("it_many")).not.toBeNull());
+    await expandGroups();
     await fireEvent.click(within(row("it_many")).getByRole("button", { name: "Claim" }));
     expect(confirm.request).toBeNull();
     expect(within(row("it_many")).getByRole("alert")).toHaveTextContent("Choose the project to run it in.");
@@ -166,7 +172,7 @@ describe("TeamView", () => {
   it("syncs from the header", async () => {
     Sync.mockResolvedValue({ queued: true });
     render(TeamView);
-    await waitFor(() => expect(row("it_open")).not.toBeNull());
+    await waitFor(() => expect(document.querySelector("[data-board-group]")).not.toBeNull());
     await fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     await waitFor(() => expect(Sync).toHaveBeenCalled());
     // The next read carries a heartbeat newer than the press: the pass ran.
@@ -180,5 +186,31 @@ describe("TeamView", () => {
     render(TeamView);
     expect(await screen.findByText("No project on this Mac takes chores yet.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Choose projects" })).toBeInTheDocument();
+  });
+
+  it("groups the available chores per project and fixes them with one agent", async () => {
+    Claim.mockResolvedValue({ session: "s-new", project: "web", itemId: "it_open" });
+    render(TeamView);
+    await waitFor(() => expect(document.querySelector("[data-board-group]")).not.toBeNull());
+    const group = document.querySelector('[data-board-group="acme/web"]') as HTMLElement;
+    expect(group.querySelector("[data-group-title]")).toHaveTextContent("Web");
+    expect(group.querySelector("[data-group-count]")).toHaveTextContent("3 chores · 1 critical · 1 high · 1 low");
+    expect(row("it_open")).toBeNull(); // collapsed until asked
+    await fireEvent.click(within(group).getByRole("button", { name: "Fix all 2" }));
+    expect(confirm.request?.body).toBe("Start one agent for 2 advisories in Web?");
+    confirm.accept();
+    await waitFor(() => expect(Claim).toHaveBeenCalledWith({ itemId: "it_open", itemIds: ["it_open", "it_many"], project: "web" }));
+  });
+
+  it("shows one group per advisory on request", async () => {
+    render(TeamView);
+    await waitFor(() => expect(document.querySelector("[data-board-group]")).not.toBeNull());
+    await fireEvent.click(screen.getByRole("button", { name: "By advisory" }));
+    const titles = [...document.querySelectorAll("[data-group-title]")].map((e) => e.textContent?.trim());
+    expect(titles).toEqual(["GHSA-aaaa", "GHSA-bbbb", "GHSA-cccc"]);
+    expect(screen.queryByRole("button", { name: /Fix all/ })).not.toBeInTheDocument();
+    // The blocked advisory says why once, on its group.
+    expect(document.querySelector('[data-board-group="GHSA-cccc"] [data-group-reason]')).toHaveTextContent(/not sandboxed/);
+    await fireEvent.click(screen.getByRole("button", { name: "By project" }));
   });
 });

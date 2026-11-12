@@ -65,6 +65,69 @@ export function boardSections(items: HubBoardItem[]): BoardSections {
   return out;
 }
 
+/** A row group of the Available section: one repository, or one advisory. */
+export type BoardGroup = {
+  /** The repository ("owner/name") or the advisory id. */
+  key: string;
+  items: HubBoardItem[];
+  /** The worst severity in the group ("" when none is known). */
+  worst: string;
+  /** Rows this Mac may claim now. */
+  claimable: HubBoardItem[];
+  /** The one reason no row can be claimed here, when every row shares it. */
+  reason: string;
+};
+
+/** Grouped claims take at most this many advisories (config.MaxGroupedChores). */
+export const MAX_GROUPED = 12;
+
+function groupBy(items: HubBoardItem[], keyOf: (it: HubBoardItem) => string): BoardGroup[] {
+  const byKey = new Map<string, HubBoardItem[]>();
+  for (const it of items) {
+    const k = keyOf(it);
+    byKey.set(k, [...(byKey.get(k) ?? []), it]);
+  }
+  const out: BoardGroup[] = [];
+  for (const [key, rows] of byKey) {
+    rows.sort((a, b) => severityRank(a) - severityRank(b) || time(a.firstSeen) - time(b.firstSeen));
+    const claimable = rows.filter((it) => it.local?.claimable);
+    const reasons = new Set(rows.map((it) => (it.local?.claimable ? "" : (it.local?.reason ?? ""))));
+    const reason = claimable.length === 0 && reasons.size === 1 ? [...reasons][0] : "";
+    out.push({ key, items: rows, worst: rows[0]?.severity ?? "", claimable, reason });
+  }
+  // Worst severity first, then the bigger group.
+  out.sort((a, b) => severityRank(a.items[0]) - severityRank(b.items[0]) || b.items.length - a.items.length || a.key.localeCompare(b.key));
+  return out;
+}
+
+/** Available rows per repository: the view's default. */
+export function groupByRepo(items: HubBoardItem[]): BoardGroup[] {
+  return groupBy(items, (it) => it.repo || "");
+}
+
+/** Available rows per advisory (a PR chore is its own group). */
+export function groupByAdvisory(items: HubBoardItem[]): BoardGroup[] {
+  return groupBy(items, (it) => (it.kind === "dep_advisory" && it.advisory ? it.advisory : itemTitle(it)));
+}
+
+/** The advisories "Fix all" claims together: claimable dependency advisories, capped. */
+export function fixAllItems(g: BoardGroup): HubBoardItem[] {
+  return g.claimable.filter((it) => it.kind === "dep_advisory").slice(0, MAX_GROUPED);
+}
+
+/** "3 high · 1 moderate": a group's severities, worst first. */
+export function severityCounts(items: HubBoardItem[]): string {
+  const counts = new Map<string, number>();
+  for (const it of items) {
+    const sev = (it.severity ?? "").toLowerCase();
+    if (sev) counts.set(sev, (counts.get(sev) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => (SEVERITY_RANK[a[0]] ?? 4) - (SEVERITY_RANK[b[0]] ?? 4))
+    .map(([sev, n]) => `${n} ${sev}`)
+    .join(" · ");
+}
+
 /** The chip classes for an advisory's severity. Theme tokens only. */
 export function severityClass(severity: string | undefined): string {
   switch ((severity ?? "").toLowerCase()) {

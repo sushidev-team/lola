@@ -69,3 +69,21 @@ describe("hubboard", () => {
     expect(hubChipText({ kind: "red_bump_pr" }).label).toBe("Failing dependency bump");
   });
 });
+
+import { groupByRepo, groupByAdvisory, fixAllItems, severityCounts } from "./hubboard";
+
+describe("board groups", () => {
+  const mk = (id: string, repo: string, advisory: string, severity: string, claimable = true, reason = "") =>
+    ({ id, kind: "dep_advisory", repo, advisory, severity, state: "open", firstSeen: "", lastSeen: "", reporters: 1, attempts: 0, label: "", local: { claimable, reason } }) as never;
+
+  it("groups per repository, worst first, with a shared reason only when nothing is claimable", () => {
+    const items = [mk("a", "o/web", "G1", "low"), mk("b", "o/api", "G2", "critical", false, "not sandboxed"), mk("c", "o/web", "G3", "high"), mk("d", "o/api", "G1", "high", false, "not sandboxed")];
+    const g = groupByRepo(items);
+    expect(g.map((x) => x.key)).toEqual(["o/api", "o/web"]);
+    expect(g[0].reason).toBe("not sandboxed");
+    expect(g[1].items.map((i: { id: string }) => i.id)).toEqual(["c", "a"]);
+    expect(fixAllItems(g[1]).length).toBe(2);
+    expect(severityCounts(g[1].items)).toBe("1 high · 1 low");
+    expect(groupByAdvisory(items).find((x) => x.key === "G1")?.items.length).toBe(2);
+  });
+});

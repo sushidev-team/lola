@@ -48,6 +48,52 @@ func depAdvisoryBriefing(d hubproto.DepAdvisory) string {
 	return b.String()
 }
 
+// GroupBriefing renders ONE task for several dependency advisories of the
+// same repository, fixed together in one pull request. Every item is
+// validated like Briefing's; an item of another kind or repository is refused.
+func GroupBriefing(items []hubproto.Item) (string, error) {
+	if len(items) == 0 {
+		return "", ErrRefusedItem
+	}
+	if len(items) == 1 {
+		return Briefing(items[0])
+	}
+	var repo string
+	advs := make([]hubproto.DepAdvisory, 0, len(items))
+	for _, it := range items {
+		if err := hubproto.Validate(it); err != nil {
+			return "", fmt.Errorf("%w: %v", ErrRefusedItem, err)
+		}
+		if it.Kind != hubproto.KindDepAdvisory {
+			return "", fmt.Errorf("%w: only dependency advisories are grouped", ErrRefusedItem)
+		}
+		if repo == "" {
+			repo = it.DepAdvisory.Repo
+		}
+		if it.DepAdvisory.Repo != repo {
+			return "", fmt.Errorf("%w: grouped advisories must share a repository", ErrRefusedItem)
+		}
+		advs = append(advs, *it.DepAdvisory)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Security chores: %d advisories in %s\n\n", len(advs), repo)
+	fmt.Fprintf(&b, "Repository %s has these dependency advisories. Fix all of them in one branch and one pull request:\n\n", repo)
+	for _, d := range advs {
+		target := "the latest unaffected version (no fixed version is published, check the advisory)"
+		if d.Fixed != "" {
+			target = d.Fixed + " or later"
+		}
+		fmt.Fprintf(&b, "- %s (%s): %s package `%s`, affected `%s`, upgrade to %s\n", d.Advisory, d.Severity, d.Ecosystem, d.Package, d.Vulnerable, target)
+	}
+	b.WriteString("\nYou are on a new branch. Do this:\n\n")
+	b.WriteString("1. Upgrade every listed package through the project's own package manager so the lockfiles stay consistent. Several advisories may share a package; one upgrade then fixes them all.\n")
+	b.WriteString("2. Adapt the code to any breaking change of the upgrades. Keep the change minimal: no unrelated upgrades or refactors.\n")
+	b.WriteString("3. Run the project's tests and linters and make them pass.\n")
+	b.WriteString("4. Commit, push and open ONE pull request. Its body must list every advisory id with the package's old and new version.\n\n")
+	b.WriteString("If one upgrade is impossible without a decision a person must make, do the others, and name the one you left and why in the pull request body instead of guessing.\n")
+	return b.String(), nil
+}
+
 func redBumpBriefing(r hubproto.RedBumpPR) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Dependency chore: fix the failing checks of %s#%d\n\n", r.Repo, r.PR)

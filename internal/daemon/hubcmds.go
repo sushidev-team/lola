@@ -276,8 +276,8 @@ func (d *Daemon) hubBoardFetch(ctx context.Context, st hubproto.State, limit int
 func (d *Daemon) hubAnnotate(rows []hubproto.ItemView, h config.HubConfig) []protocol.HubBoardItem {
 	working := map[string]string{}
 	for _, s := range d.sessions.Snapshot() {
-		if s.HubItem.ItemID != "" {
-			working[s.HubItem.ItemID] = s.ID
+		for _, w := range s.HubWorks() {
+			working[w.ItemID] = s.ID
 		}
 	}
 	out := make([]protocol.HubBoardItem, 0, len(rows))
@@ -394,8 +394,17 @@ func (d *Daemon) handleHubOrg(ctx context.Context) (protocol.HubOrgData, error) 
 // ---- claim / release -------------------------------------------------------
 
 func (d *Daemon) handleHubClaim(ctx context.Context, a protocol.HubClaimArgs) (protocol.HubClaimData, error) {
-	if !hubproto.ValidItemID(a.ItemID) {
-		return protocol.HubClaimData{}, errors.New("hub: invalid item id")
+	ids := a.ItemIDs
+	if len(ids) == 0 {
+		ids = []string{a.ItemID}
+	}
+	if len(ids) > config.MaxGroupedChores {
+		return protocol.HubClaimData{}, fmt.Errorf("hub: at most %d items at once", config.MaxGroupedChores)
+	}
+	for _, id := range ids {
+		if !hubproto.ValidItemID(id) {
+			return protocol.HubClaimData{}, errors.New("hub: invalid item id")
+		}
 	}
 	api, snap, err := d.hubHumanClient()
 	if err != nil {
@@ -404,16 +413,20 @@ func (d *Daemon) handleHubClaim(ctx context.Context, a protocol.HubClaimArgs) (p
 	// Shielded: the claim and the spawn must not be cut apart by a client
 	// that hangs up.
 	ctx = context.WithoutCancel(ctx)
-	it, err := d.hubFindItem(ctx, api, a.ItemID)
-	if err != nil {
-		return protocol.HubClaimData{}, err
+	items := make([]hubproto.Item, 0, len(ids))
+	for _, id := range ids {
+		it, err := d.hubFindItem(ctx, api, id)
+		if err != nil {
+			return protocol.HubClaimData{}, err
+		}
+		items = append(items, it)
 	}
-	id, err := d.hubClaimItem(ctx, api, it, snap, hubClaimReq{human: true, project: a.Project})
+	id, err := d.hubClaimGroup(ctx, api, items, snap, hubClaimReq{human: true, project: a.Project})
 	d.hubDropCaches()
 	if err != nil {
 		return protocol.HubClaimData{}, fmt.Errorf("hub: not claimed: %w", err)
 	}
-	out := protocol.HubClaimData{Session: id, ItemID: a.ItemID}
+	out := protocol.HubClaimData{Session: id, ItemID: ids[0]}
 	if s, ok := d.sessions.Get(id); ok {
 		out.Project = s.Project
 	}
@@ -452,19 +465,21 @@ func (d *Daemon) handleHubRelease(ctx context.Context, a protocol.HubReleaseArgs
 		return protocol.HubReleaseData{}, errors.New("hub: invalid item id")
 	}
 	var holder *session.Session
+	var held session.HubWork
 	for _, s := range d.sessions.Snapshot() {
-		if s.HubItem.ItemID != a.ItemID {
+		w := s.HubWork(a.ItemID)
+		if w == nil {
 			continue
 		}
 		switch {
-		case s.HubItem.Released:
+		case w.Released:
 			return protocol.HubReleaseData{}, fmt.Errorf("hub: session %s already released item %s", s.ID, a.ItemID)
-		case s.HubItem.LeaseLost:
+		case w.LeaseLost:
 			return protocol.HubReleaseData{}, fmt.Errorf("hub: session %s already lost the lease on item %s", s.ID, a.ItemID)
-		case s.HubItem.Reported != "":
+		case w.Reported != "":
 			return protocol.HubReleaseData{}, fmt.Errorf("hub: session %s already reported an outcome for item %s", s.ID, a.ItemID)
 		}
-		holder = &s
+		holder, held = &s, *w
 		break
 	}
 	api, _, err := d.hubHumanClient()
@@ -484,7 +499,7 @@ func (d *Daemon) handleHubRelease(ctx context.Context, a protocol.HubReleaseArgs
 	case holder != nil:
 		// The hub is unreachable: the release waits in the outbox, one per
 		// claim, and the session stops renewing the lease meanwhile.
-		d.hubEnqueue(hubOutcome{ItemID: a.ItemID, ClaimedAt: holder.HubItem.ClaimedAt, Action: hubActRelease, Since: now})
+		d.hubEnqueue(hubOutcome{ItemID: a.ItemID, ClaimedAt: held.ClaimedAt, Action: hubActRelease, Since: now})
 		d.hubNudgeOutcomes()
 		out.Queued = true
 	default:
@@ -497,12 +512,13 @@ func (d *Daemon) handleHubRelease(ctx context.Context, a protocol.HubReleaseArgs
 		d.logf("", "hub: a person released item %s", a.ItemID)
 		return out, nil
 	}
-	claimedAt := holder.HubItem.ClaimedAt
+	claimedAt := held.ClaimedAt
 	_, _ = d.sessions.Update(holder.ID, func(cur *session.Session) bool {
-		if cur.HubItem.ItemID != a.ItemID || !cur.HubItem.ClaimedAt.Equal(claimedAt) {
+		w := cur.HubWork(a.ItemID)
+		if w == nil || !w.ClaimedAt.Equal(claimedAt) {
 			return false
 		}
-		cur.HubItem.Released = true
+		w.Released = true
 		return true
 	})
 	if err := d.sessions.Save(); err != nil {

@@ -68,7 +68,7 @@
   import type { HubKindDTO, SettingsDTO, TeamPolicyDTO } from "@bindings/desktop/models";
 
   type HubFields = Pick<SettingsDTO,
-    "hubAcceptKinds" | "hubMaxClaimsPerDay" | "hubRequireSandbox" | "hubPollSeconds" | "hubApplyPolicy" | "hubTrustedKeys">;
+    "hubAcceptKinds" | "hubMaxClaimsPerDay" | "hubRequireSandbox" | "hubPollSeconds" | "hubApplyPolicy" | "hubGroupChores" | "hubTrustedKeys">;
 
   let { values, policy = null, onChange, onIdentityChange = () => {} }: {
     values: HubFields;
@@ -188,6 +188,7 @@
   const poll = $derived(values.hubPollSeconds ?? 300);
   const pollError = $derived(hubPollError(values.hubPollSeconds));
   const sandbox = $derived(values.hubRequireSandbox ?? true);
+  const grouped = $derived(values.hubGroupChores ?? true);
   const applyPolicy = $derived(values.hubApplyPolicy ?? true);
 
   const keys = $derived<TrustedKeyRow[]>(values.hubTrustedKeys ?? []);
@@ -314,6 +315,13 @@
           {#if pollError}<span class="mt-1 block text-sm text-bad">{pollError}</span>{/if}
         </span>
       </div>
+      <span class="flex items-center gap-1">
+        <label class="flex cursor-pointer items-center gap-2">
+          <Checkbox checked={grouped} onchange={() => onChange({ hubGroupChores: !grouped })} />
+          <span>One agent per repository</span>
+        </label>
+        <HelpText label="One agent per repository" detail="All open advisories of a repository go to one agent and one pull request. Off: one agent per advisory." />
+      </span>
       <div class="grid gap-1.5">
         <span class="flex items-center gap-1">
           <label class="flex cursor-pointer items-center gap-2">

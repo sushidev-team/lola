@@ -653,7 +653,7 @@ func TestHubRedBumpTeardownOutcomes(t *testing.T) {
 		s.EnsureAxes()
 		s.SetAgentState(c.agent, "", time.Now())
 		s.SetDelivery(c.del, time.Now())
-		o, ok := hubOutcomeFor(s, true)
+		o, ok := hubOutcomeFor(s, s.HubItem, true)
 		if !ok || o.Action != hubActFail || o.Reason != string(c.want) {
 			t.Errorf("%s: outcome = %+v, want fail:%s", c.name, o, c.want)
 		}
@@ -664,7 +664,7 @@ func TestHubRedBumpTeardownOutcomes(t *testing.T) {
 		PR:      &scm.PR{Number: 42, URL: "https://github.com/acme/widgets/pull/42", State: "OPEN", HeadSHA: "aaa"}}
 	s.EnsureAxes()
 	s.SetDelivery(state.DeliveryCIFailed, time.Now())
-	if o, _ := hubOutcomeFor(s, true); o.Reason == string(hubproto.FailObsolete) {
+	if o, _ := hubOutcomeFor(s, s.HubItem, true); o.Reason == string(hubproto.FailObsolete) {
 		t.Errorf("unknown start head reported not_reproducible: %+v", o)
 	}
 }

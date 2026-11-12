@@ -81,6 +81,9 @@ type HubConfig struct {
 	TrustedPolicyKeys TrustedKeyMap `toml:"trusted_policy_keys,omitempty"`
 	PollSeconds       int           `toml:"poll_seconds,omitzero"`
 	ApplyPolicy       *bool         `toml:"apply_policy,omitempty"`
+	// GroupChores gives all of a repository's open dependency advisories to
+	// ONE agent and one pull request (nil = true); false claims each alone.
+	GroupChores *bool `toml:"group_chores,omitempty"`
 }
 
 // TrustedKeyMap is [hub].trusted_policy_keys: key_id → base64url public key.
@@ -141,6 +144,15 @@ func (h HubConfig) SandboxRequired() bool {
 	return h.RequireSandbox == nil || *h.RequireSandbox
 }
 
+// GroupsChores reports the effective group_chores (default true).
+func (h HubConfig) GroupsChores() bool {
+	return h.GroupChores == nil || *h.GroupChores
+}
+
+// MaxGroupedChores bounds the advisories one grouped session takes: enough
+// for a repository's usual backlog, small enough for one reviewable PR.
+const MaxGroupedChores = 12
+
 // PolicyApplies reports the effective apply_policy (default true).
 func (h HubConfig) PolicyApplies() bool {
 	return h.ApplyPolicy == nil || *h.ApplyPolicy
@@ -186,7 +198,7 @@ func (h HubConfig) TrustedKeyEntries() []string {
 func (h HubConfig) isZero() bool {
 	return !h.Enabled && h.URL == "" && h.DeviceName == "" && len(h.AcceptKinds) == 0 &&
 		h.MaxClaimsPerDay == nil && h.RequireSandbox == nil && len(h.TrustedPolicyKeys) == 0 &&
-		h.PollSeconds == 0 && h.ApplyPolicy == nil
+		h.PollSeconds == 0 && h.ApplyPolicy == nil && h.GroupChores == nil
 }
 
 // hubTable is the Save mirror: nil (table omitted) when nothing is set. Only

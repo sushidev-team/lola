@@ -593,7 +593,7 @@ func (d *Daemon) hubOutcomeCycle(ctx context.Context) {
 // whose agent has not ended. A dead agent's lease is left to expire, so the
 // hub can offer the item again.
 func hubLive(s session.Session) bool {
-	if !s.HubItem.Open() {
+	if !s.HubOpen() {
 		return false
 	}
 	s.EnsureAxes()
@@ -605,8 +605,13 @@ func (d *Daemon) hubHeartbeat(ctx context.Context, api hubAPI, snap hubSnapshot)
 	free := min(max(snap.globalCap-global, 0), hubproto.MaxFreeSlots)
 	var live []string
 	for _, s := range d.sessions.Snapshot() {
-		if hubLive(s) && !slices.Contains(live, s.HubItem.ItemID) && len(live) < hubproto.MaxLiveLeases {
-			live = append(live, s.HubItem.ItemID)
+		if !hubLive(s) {
+			continue
+		}
+		for _, w := range s.HubWorks() {
+			if w.Open() && !slices.Contains(live, w.ItemID) && len(live) < hubproto.MaxLiveLeases {
+				live = append(live, w.ItemID)
+			}
 		}
 	}
 	for _, id := range d.hubUnsent() {
@@ -643,28 +648,34 @@ func (d *Daemon) hubHeartbeat(ctx context.Context, api hubAPI, snap hubSnapshot)
 	}
 	changed := false
 	for _, s := range d.sessions.Snapshot() {
-		item := s.HubItem.ItemID
-		if item == "" || (!lost[item] && renewed[item].IsZero()) {
+		touches := false
+		for _, w := range s.HubWorks() {
+			if lost[w.ItemID] || !renewed[w.ItemID].IsZero() {
+				touches = true
+			}
+		}
+		if !touches {
 			continue
 		}
 		_, _ = d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if cur.HubItem.ItemID != item {
-				return false
-			}
-			if lost[item] {
-				if cur.HubItem.LeaseLost {
-					return false
+			wrote := false
+			for _, w := range cur.HubWorks() {
+				item := w.ItemID
+				switch {
+				case lost[item] && !w.LeaseLost:
+					// The hub took the item back. The session is NOT stopped:
+					// the work may still be useful, and the hub never controls
+					// a session. lola only stops renewing and reporting for it.
+					w.LeaseLost = true
+					d.logf("", "hub: lease on item %s lost; session %s keeps running, no outcome will be reported for it", item, cur.ID)
+					wrote = true
+				case !lost[item] && !renewed[item].IsZero():
+					w.LeaseExpires = renewed[item]
+					wrote = true
 				}
-				// The hub took the item back. The session is NOT stopped: the
-				// work may still be useful, and the hub never controls a
-				// session. lola only stops renewing and reporting for it.
-				cur.HubItem.LeaseLost = true
-				d.logf("", "hub: lease on item %s lost; session %s keeps running, no outcome will be reported", item, cur.ID)
-			} else {
-				cur.HubItem.LeaseExpires = renewed[item]
 			}
-			changed = true
-			return true
+			changed = changed || wrote
+			return wrote
 		})
 	}
 	if changed {
@@ -746,7 +757,17 @@ func (d *Daemon) hubOffers(ctx context.Context, api hubAPI, snap hubSnapshot) {
 	if dropped > 0 {
 		d.logf("", "hub: %d offered item(s) did not validate and were ignored", dropped)
 	}
-	for _, it := range items {
+	groups, single := hubGroupOffers(items, snap.h.GroupsChores())
+	for _, g := range groups {
+		repo := g[0].DepAdvisory.Repo
+		if d.hubRepoBusy(repo) {
+			continue // the running session's pull request comes first
+		}
+		if _, err := d.hubClaimGroup(ctx, api, g, snap, hubClaimReq{}); err != nil && !errors.Is(err, errHubSpawn) {
+			d.logf("", "hub: not claiming %d advisories of %s: %s", len(g), repo, err)
+		}
+	}
+	for _, it := range single {
 		if ok, why := d.hubTryClaim(ctx, api, it, snap); !ok && why != "" {
 			d.logf("", "hub: not claiming %s (%s): %s", it.ID, it.Kind, why)
 		}
@@ -808,7 +829,7 @@ func (d *Daemon) hubClaimItem(ctx context.Context, api hubAPI, it hubproto.Item,
 	defer d.hubEndClaim(it.ID)
 	// Already working this item (a restart, a hub that re-offers)?
 	for _, s := range d.sessions.Snapshot() {
-		if s.HubItem.ItemID == it.ID {
+		if s.HubWork(it.ID) != nil {
 			return "", errors.New("already working it")
 		}
 	}
@@ -1086,8 +1107,8 @@ func hubGreen(d state.DeliveryState) bool {
 //     when a person stopped a live one (no attempt is counted). An unmoved,
 //     still-red bump PR lands here too: closing it as not_reproducible would
 //     bury a real failure for good.
-func hubOutcomeFor(s session.Session, ended bool) (hubOutcome, bool) {
-	o := hubOutcome{ItemID: s.HubItem.ItemID, ClaimedAt: s.HubItem.ClaimedAt}
+func hubOutcomeFor(s session.Session, w session.HubWork, ended bool) (hubOutcome, bool) {
+	o := hubOutcome{ItemID: w.ItemID, ClaimedAt: w.ClaimedAt}
 	url := hubPRURL(s)
 	s.EnsureAxes()
 	if url != "" {
@@ -1095,10 +1116,10 @@ func hubOutcomeFor(s session.Session, ended bool) (hubOutcome, bool) {
 		case s.Delivery == state.DeliveryClosed:
 			o.Action, o.Reason = hubActFail, string(hubproto.FailPRClosed)
 			return o, true
-		case s.HubItem.Kind == string(hubproto.KindDepAdvisory),
+		case w.Kind == string(hubproto.KindDepAdvisory),
 			s.Delivery == state.DeliveryMerged,
-			s.HubItem.Kind == string(hubproto.KindRedBumpPR) && s.HubItem.StartHead != "" &&
-				s.PR.HeadSHA != "" && s.PR.HeadSHA != s.HubItem.StartHead && hubGreen(s.Delivery):
+			w.Kind == string(hubproto.KindRedBumpPR) && w.StartHead != "" &&
+				s.PR.HeadSHA != "" && s.PR.HeadSHA != w.StartHead && hubGreen(s.Delivery):
 			o.Action, o.PRURL, o.Delivery = hubActComplete, url, string(hubproto.DeliveryNone)
 			if hubproto.Delivery(s.Delivery).Valid() {
 				o.Delivery = string(s.Delivery)
@@ -1110,7 +1131,7 @@ func hubOutcomeFor(s session.Session, ended bool) (hubOutcome, bool) {
 		return o, false
 	}
 	o.Action = hubActFail
-	moved := url != "" && s.HubItem.StartHead != "" && s.PR.HeadSHA != "" && s.PR.HeadSHA != s.HubItem.StartHead
+	moved := url != "" && w.StartHead != "" && s.PR.HeadSHA != "" && s.PR.HeadSHA != w.StartHead
 	switch {
 	case moved:
 		o.Reason = string(hubproto.FailCI)
@@ -1130,46 +1151,47 @@ func (d *Daemon) hubOutcomes(ctx context.Context, api hubAPI) {
 	now := d.hub.now()
 	changed := false
 	for _, s := range d.sessions.Snapshot() {
-		if !s.HubItem.Open() {
+		if !s.HubOpen() {
 			continue
 		}
-		var queued *hubOutcome
+		var queued []hubOutcome
 		_, _ = d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if !cur.HubItem.Open() {
-				return false
-			}
 			wrote := false
-			if cur.HubItem.Kind == string(hubproto.KindRedBumpPR) && cur.HubItem.StartHead == "" &&
-				cur.PR != nil && cur.PR.HeadSHA != "" {
-				cur.HubItem.StartHead = cur.PR.HeadSHA
-				wrote = true
-			}
-			if o, ok := hubOutcomeFor(*cur, false); ok {
-				o.Since = now
-				queued = &o
+			for _, w := range cur.HubWorks() {
+				if !w.Open() {
+					continue
+				}
+				if w.Kind == string(hubproto.KindRedBumpPR) && w.StartHead == "" &&
+					cur.PR != nil && cur.PR.HeadSHA != "" {
+					w.StartHead = cur.PR.HeadSHA
+					wrote = true
+				}
+				if o, ok := hubOutcomeFor(*cur, *w, false); ok {
+					o.Since = now
+					queued = append(queued, o)
+				}
 			}
 			changed = changed || wrote
 			return wrote
 		})
-		if queued == nil {
-			continue
-		}
-		// Persist the outcome FIRST, then stamp the one-shot guard: a crash
+		// Persist each outcome FIRST, then stamp its one-shot guard: a crash
 		// in between re-derives the same outcome, which the outbox dedups by
 		// claim. The other order could persist a guard with no outcome.
-		o := *queued
-		d.hubEnqueue(o)
-		_, _ = d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if !cur.HubItem.Open() || cur.HubItem.ItemID != o.ItemID || !cur.HubItem.ClaimedAt.Equal(o.ClaimedAt) {
-				return false
-			}
-			cur.HubItem.Reported = o.Action
-			if o.Reason != "" {
-				cur.HubItem.Reported += ":" + o.Reason
-			}
-			changed = true
-			return true
-		})
+		for _, o := range queued {
+			d.hubEnqueue(o)
+			_, _ = d.sessions.Update(s.ID, func(cur *session.Session) bool {
+				w := cur.HubWork(o.ItemID)
+				if w == nil || !w.Open() || !w.ClaimedAt.Equal(o.ClaimedAt) {
+					return false
+				}
+				w.Reported = o.Action
+				if o.Reason != "" {
+					w.Reported += ":" + o.Reason
+				}
+				changed = true
+				return true
+			})
+		}
 	}
 	if changed {
 		if err := d.sessions.Save(); err != nil {
@@ -1183,16 +1205,21 @@ func (d *Daemon) hubOutcomes(ctx context.Context, api hubAPI) {
 // the store reports its outcome once. Local work only — the request goes out
 // on the hub loop, nudged here — so teardown never waits on the network.
 func (d *Daemon) hubSessionEnded(s session.Session) {
-	if d.hub == nil || !s.HubItem.Open() {
+	if d.hub == nil || !s.HubOpen() {
 		return
 	}
-	o, _ := hubOutcomeFor(s, true)
-	o.Since = d.hub.now()
-	d.hubEnqueue(o)
-	if o.Action != hubActComplete {
-		d.hubCoolDown(o.ItemID, o.Since)
+	for _, w := range s.HubWorks() {
+		if !w.Open() {
+			continue
+		}
+		o, _ := hubOutcomeFor(s, *w, true)
+		o.Since = d.hub.now()
+		d.hubEnqueue(o)
+		if o.Action != hubActComplete {
+			d.hubCoolDown(o.ItemID, o.Since)
+		}
+		d.logf("", "hub: session %s ended; reporting %s %s for item %s", s.ID, o.Action, o.Reason, o.ItemID)
 	}
-	d.logf("", "hub: session %s ended; reporting %s %s for item %s", s.ID, o.Action, o.Reason, o.ItemID)
 	d.hubNudgeOutcomes()
 }
 
@@ -1391,15 +1418,18 @@ func (d *Daemon) hubStatusData() protocol.HubStatusData {
 		}
 	}
 	for _, s := range d.sessions.Snapshot() {
-		if s.HubItem.ItemID == "" {
-			continue
+		for _, w := range s.HubWorks() {
+			summary := w.Label
+			if summary == "" {
+				summary = hubSessionLabel(s)
+			}
+			out.Sessions = append(out.Sessions, protocol.HubSessionInfo{
+				Session: s.ID, Project: s.Project, ItemID: w.ItemID, Kind: w.Kind,
+				ClaimedAt: w.ClaimedAt, LeaseExpires: w.LeaseExpires,
+				LeaseLost: w.LeaseLost, Released: w.Released, Reported: w.Reported,
+				Summary: summary,
+			})
 		}
-		out.Sessions = append(out.Sessions, protocol.HubSessionInfo{
-			Session: s.ID, Project: s.Project, ItemID: s.HubItem.ItemID, Kind: s.HubItem.Kind,
-			ClaimedAt: s.HubItem.ClaimedAt, LeaseExpires: s.HubItem.LeaseExpires,
-			LeaseLost: s.HubItem.LeaseLost, Released: s.HubItem.Released, Reported: s.HubItem.Reported,
-			Summary: hubSessionLabel(s),
-		})
 	}
 	return out
 }
@@ -1407,6 +1437,9 @@ func (d *Daemon) hubStatusData() protocol.HubStatusData {
 // hubSessionLabel is a hub session's item label; records from before Label
 // existed fall back to their title.
 func hubSessionLabel(s session.Session) string {
+	if n := len(s.HubBatch); n > 0 {
+		return fmt.Sprintf("%d advisories", n+1)
+	}
 	if s.HubItem.Label != "" {
 		return s.HubItem.Label
 	}

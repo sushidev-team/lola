@@ -309,6 +309,11 @@ type Session struct {
 	// the hub can use to reach this machine, and carries the one-shot outcome
 	// guard. The zero value means "not hub work".
 	HubItem HubWork `json:"hub_item,omitzero"`
+	// HubBatch are the further items of a BATCHED hub session: dependency
+	// advisories of the same repository, fixed together in one pull request.
+	// Each keeps its own lease and outcome. HubItem is the first item; the
+	// batch is empty for a single-item session.
+	HubBatch []HubWork `json:"hub_batch,omitempty"`
 
 	// Reaction-state fields (PLAN P3): the persisted memory the reaction
 	// engine keeps per session so a reaction fires once per state transition
@@ -1247,6 +1252,41 @@ type HubWork struct {
 	// while the session lived on: the session keeps running, lola stops
 	// renewing and reporting for it, exactly as for a lost lease.
 	Released bool `json:"released,omitempty"`
+}
+
+// HubWorks returns every hub item the session works, HubItem first, as
+// pointers into s so a caller can update them in place. Empty when the session
+// is not hub work.
+func (s *Session) HubWorks() []*HubWork {
+	if s.HubItem.ItemID == "" {
+		return nil
+	}
+	out := []*HubWork{&s.HubItem}
+	for i := range s.HubBatch {
+		out = append(out, &s.HubBatch[i])
+	}
+	return out
+}
+
+// HubWork returns the session's work on item id, or nil.
+func (s *Session) HubWork(id string) *HubWork {
+	for _, w := range s.HubWorks() {
+		if w.ItemID == id {
+			return w
+		}
+	}
+	return nil
+}
+
+// HubOpen reports whether any of the session's hub items still wants renewal
+// and an outcome.
+func (s Session) HubOpen() bool {
+	for _, w := range s.HubWorks() {
+		if w.Open() {
+			return true
+		}
+	}
+	return false
 }
 
 // Open reports whether the claim still wants renewal and an outcome.

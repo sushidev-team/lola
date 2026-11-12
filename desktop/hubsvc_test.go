@@ -149,6 +149,11 @@ func TestHubSettingsRoundTrip(t *testing.T) {
 	dto.HubAcceptKinds = []string{"dep_advisory"}
 	dto.HubMaxClaimsPerDay, dto.HubRequireSandbox, dto.HubPollSeconds, dto.HubApplyPolicy = &claims, &sandbox, &poll, &apply
 	dto.HubTrustedKeys = []HubTrustedKeyDTO{{KeyID: "kadmin1", PublicKey: " " + pub + " "}, {}}
+	if dto.HubGroupChores == nil || !*dto.HubGroupChores {
+		t.Fatal("grouped chores are not the default")
+	}
+	ungroup := false
+	dto.HubGroupChores = &ungroup
 	if err := s.SaveSettings(dto); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +162,7 @@ func TestHubSettingsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := cfg.Hub
-	if h.ClaimsPerDay() != 2 || h.SandboxRequired() || h.PollSeconds != 600 || h.PolicyApplies() ||
+	if h.ClaimsPerDay() != 2 || h.SandboxRequired() || h.PollSeconds != 600 || h.PolicyApplies() || h.GroupsChores() ||
 		len(h.AcceptKinds) != 1 || h.TrustedPolicyKeys["kadmin1"] != pub {
 		t.Fatalf("hub = %+v", h)
 	}
