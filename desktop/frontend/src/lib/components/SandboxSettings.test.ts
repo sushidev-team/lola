@@ -49,8 +49,8 @@ describe("SandboxSettings", () => {
 
   it("shows readiness and the default image as the placeholder", async () => {
     render(SandboxSettings);
-    expect(await screen.findByText(/Docker is running/)).toBeInTheDocument();
-    expect(screen.getByText(/will be pulled on the first sandboxed session/)).toBeInTheDocument();
+    expect(await screen.findByText(/Docker running/)).toBeInTheDocument();
+    expect(screen.getByText(/Image not pulled yet/)).toBeInTheDocument();
     expect(screen.getByText("Claude login: Not set")).toBeInTheDocument();
     expect(screen.getByLabelText("Default image")).toHaveAttribute("placeholder", "ghcr.io/sushidev-team/lola-sandbox:1.2.3");
   });
@@ -58,7 +58,7 @@ describe("SandboxSettings", () => {
   it("says plainly when docker is down", async () => {
     status.mockResolvedValue(sample({ dockerOk: false }));
     render(SandboxSettings);
-    expect(await screen.findByText(/Sandboxed sessions cannot start/)).toBeInTheDocument();
+    expect(await screen.findByText("Docker not running")).toBeInTheDocument();
   });
 
   it("saves an image override and clears back to the default", async () => {

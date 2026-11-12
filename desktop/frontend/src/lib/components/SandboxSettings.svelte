@@ -9,6 +9,7 @@
   import { onMount } from "svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
+  import HelpText from "$lib/components/HelpText.svelte";
   import SettingsGroup from "$lib/components/SettingsGroup.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { ConfigService } from "@bindings/desktop";
@@ -115,40 +116,48 @@
   });
 </script>
 
-<SettingsGroup title="Status" description="Projects set to Docker workspace run their agent in a container.">
+<SettingsGroup title="Status">
   {#if loadErr}
     <p role="alert" class="text-sm text-bad">{loadErr}</p>
   {:else if !status}
     <p class="text-sm text-faint">Checking…</p>
   {:else}
+    {@const missing = status.missing ?? []}
+    {@const claudeOk = status.tokenStored || !!status.claudeSource}
     <ul class="grid gap-1.5 text-sm" aria-label="Sandbox status">
-      <li class={status.dockerOk ? "text-good" : "text-bad"}>
+      <li class="flex items-center gap-1.5 {status.dockerOk ? 'text-good' : 'text-bad'}">
         <Icon name={status.dockerOk ? "check" : "x"} size={14} />
-        {status.dockerOk ? `Docker is running (${status.docker})` : `Docker is not running (${status.docker}). Sandboxed sessions cannot start.`}
+        {status.dockerOk ? "Docker running" : "Docker not running"}
+        <HelpText label="Docker" detail={status.dockerOk
+          ? `Sandboxed sessions run through ${status.docker}.`
+          : `${status.docker} does not answer. Start Docker Desktop or OrbStack; sandboxed sessions cannot start until it runs.`} />
       </li>
       {#if status.dockerOk}
-        <li class="text-ink">
-          <Icon name="check" size={14} />
-          {(status.missing ?? []).length > 0
-            ? `${(status.missing ?? []).join(", ")} will be pulled on the first sandboxed session`
-            : "Images present"}
+        <li class="flex items-center gap-1.5 {missing.length > 0 ? 'text-ink' : 'text-good'}">
+          <Icon name={missing.length > 0 ? "download" : "check"} size={14} />
+          {missing.length > 0 ? "Image not pulled yet" : "Image ready"}
+          <HelpText label="sandbox image" detail={missing.length > 0
+            ? `Lola pulls ${missing.join(", ")} automatically when the first sandboxed session starts. Nothing to do.`
+            : "The sandbox image is on this Mac."} />
         </li>
       {/if}
-      <li class={status.tokenStored || status.claudeSource ? "text-good" : "text-warn"}>
-        <Icon name={status.tokenStored || status.claudeSource ? "check" : "triangle-alert"} size={14} />
+      <li class="flex items-center gap-1.5 {claudeOk ? 'text-good' : 'text-warn'}">
+        <Icon name={claudeOk ? "check" : "triangle-alert"} size={14} />
         Claude login: {claudeLine}
+        {#if !claudeOk}<HelpText label="Claude login" detail="Sandboxed agents cannot log in yet. Store a token below." />{/if}
       </li>
-      <li class={status.githubSource ? "text-ink" : "text-warn"}>
+      <li class="flex items-center gap-1.5 {status.githubSource ? 'text-good' : 'text-warn'}">
         <Icon name={status.githubSource ? "check" : "triangle-alert"} size={14} />
-        {status.githubSource
-          ? `GitHub token from ${status.githubSource}. Sandboxed agents can push and open PRs as you.`
-          : "No GitHub token. Sandboxed agents cannot push. Run gh auth login."}
+        {status.githubSource ? `GitHub token from ${status.githubSource}` : "No GitHub token"}
+        <HelpText label="GitHub token" detail={status.githubSource
+          ? "Sandboxed agents can push and open PRs as you."
+          : "Sandboxed agents cannot push. Run gh auth login on this Mac."} />
       </li>
     </ul>
   {/if}
 </SettingsGroup>
 
-<SettingsGroup title="Image" description="Any image with the coding agent and git works. Lola mounts its own binary.">
+<SettingsGroup title="Image">
   <div class={rowCls}>
     <label for={`${formId}-image`} class="text-faint">Default image</label>
     <span>
@@ -162,7 +171,7 @@
         disabled={imageBusy}
         oninput={() => (imageMsg = "")}
       />
-      <span class={hintCls}>Leave empty for Lola’s sandbox image. A project can override it.</span>
+      <span class={hintCls}>Empty uses Lola’s image. <HelpText label="custom image" detail="Any image with sh, git and the coding agent works; Lola mounts its own binary. A project can set its own image too." /></span>
     </span>
   </div>
   <div class={rowCls}>
@@ -174,7 +183,7 @@
   </div>
 </SettingsGroup>
 
-<SettingsGroup title="Claude login" description="A container cannot read your keychain. Create a long-lived token with claude setup-token and store it here.">
+<SettingsGroup title="Claude login">
   <div class={rowCls}>
     <label for={`${formId}-token`} class="text-faint">{status?.tokenStored ? "New token" : "Token"}</label>
     <span>
@@ -188,7 +197,7 @@
         disabled={tokenBusy}
         oninput={() => (tokenMsg = "")}
       />
-      <span class={hintCls}>Stored in the macOS keychain. Lola never shows it again.</span>
+      <span class={hintCls}>From <code>claude setup-token</code>. <HelpText label="Claude token" detail="A container cannot read your keychain, so sandboxed agents log in with this token. Lola stores it in the macOS keychain and never shows it again." /></span>
     </span>
   </div>
   <div class={rowCls}>
