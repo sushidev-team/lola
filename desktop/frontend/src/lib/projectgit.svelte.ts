@@ -84,7 +84,7 @@ export class ProjectGitState {
     try {
       const result = await ProjectGitService.BranchAction(this.project, this.worktree, request);
       await this.load(ref, limit);
-      this.notice = ({ checkout: 'Branch checked out.', pull: 'Branch updated.', push: 'Branch pushed.', fetch: 'Remote refs updated.', merge: 'Branches merged.', rebase: 'Branch rebased.', continue: 'Operation continued.', abort: 'Operation aborted.' } as Record<string, string>)[request.action] ?? 'Repository updated.';
+      this.notice = ({ checkout: 'Branch checked out.', pull: 'Branch updated.', publish: 'Branch published; upstream configured.', push: 'Branch pushed.', fetch: 'Remote refs updated.', 'cherry-pick': 'Commit cherry-picked.', revert: 'Commit reverted.', merge: 'Branches merged.', rebase: 'Branch rebased.', continue: 'Operation continued.', abort: 'Operation aborted.' } as Record<string, string>)[request.action] ?? 'Repository updated.';
       return result.path;
     } catch (error) {
       // Merge/rebase failures can leave resolvable conflicts. Refresh those facts
@@ -105,6 +105,21 @@ export class ProjectGitState {
       return result.path;
     } catch (error) {
       // A post-checkout hook can fail after Git switched successfully.
+      await this.load(ref, limit);
+      this.error = String(error);
+      return null;
+    } finally { this.busy = ''; }
+  }
+
+  async createWorktree(source: string, sha: string, path: string, newBranch: string, ref = '', limit = 200): Promise<string | null> {
+    if (this.busy) return null;
+    this.busy = 'create-worktree'; this.error = ''; this.notice = '';
+    try {
+      const result = await ProjectGitService.CreateWorktree(this.project, this.worktree, source, sha, path, newBranch);
+      await this.load(ref, limit);
+      this.notice = 'Worktree created.';
+      return result.path;
+    } catch (error) {
       await this.load(ref, limit);
       this.error = String(error);
       return null;
@@ -218,7 +233,7 @@ export class ProjectGitState {
         case 'pull': await ProjectGitService.Pull(this.project, this.worktree); break;
         case 'push': await ProjectGitService.Push(this.project, this.worktree); break;
       }
-      this.notice = { stage: 'Files staged.', unstage: 'Files unstaged.', commit: 'Commit created.', amend: 'Commit amended.', fetch: 'Remote refs updated.', pull: 'Branch is up to date.', push: 'Branch pushed.' }[action];
+      this.notice = { stage: 'Files staged.', unstage: 'Files unstaged.', commit: 'Commit created.', amend: 'Commit amended.', fetch: 'Remote refs updated.', pull: 'Branch is up to date.', publish: 'Branch published; upstream configured.', push: 'Branch pushed.' }[action];
       await this.load(ref, limit);
       return true;
     } catch (error) {

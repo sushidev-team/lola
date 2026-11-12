@@ -4,6 +4,8 @@
   import MenuItem from './MenuItem.svelte';
   import ProjectGitStaging from './ProjectGitStaging.svelte';
   import ProjectGitActionMenu from './ProjectGitActionMenu.svelte';
+  import ProjectGitWorktree from './ProjectGitWorktree.svelte';
+  import ProjectGitPublish from './ProjectGitPublish.svelte';
   import ProjectGitNewBranch from './ProjectGitNewBranch.svelte';
   import { GitActions } from '$lib/gitactions.svelte';
   import { gitCommitTooltip } from '$lib/gittooltip';
@@ -80,10 +82,23 @@
   let showRail = $state(false);
   let draggedBranch = $state<GitRef | null>(null);
   let dropTarget = $state('');
+  let newWorktree = $state<{git: ProjectGitState; branch: GitRef; historyRef: string; limit: number} | null>(null);
+  function openNewWorktree(branch: GitRef) {
+    if (git.busy || data?.operation) return;
+    gitActions.close(); publishBranch = null; newBranch = null;
+    newWorktree = {git, branch:{...branch}, historyRef:ref, limit};
+  }
+  let publishBranch = $state<{git: ProjectGitState; branch: GitRef; historyRef: string; limit: number} | null>(null);
+  function openPublish(branch: GitRef) {
+    if (git.busy || data?.operation) return;
+    git.error = ''; newWorktree = null; newBranch = null; gitActions.close();
+    publishBranch = {git, branch: {...branch}, historyRef: ref, limit};
+  }
   let newBranch = $state<{ git: ProjectGitState; start: { sha: string; label: string }; refs: GitRef[]; historyRef: string; limit: number } | null>(null);
   function openNewBranch(sha = data?.head ?? '', label = data?.branch || 'Detached HEAD') {
     if (!sha || git.busy || data?.operation) return;
     gitActions.close(); cancelBranchDrag();
+    publishBranch = null; newWorktree = null;
     newBranch = { git, start: { sha, label }, refs: (data?.refs ?? []).map(branch => ({ ...branch })), historyRef: ref, limit };
   }
   const gitActions = new GitActions(() => ({ git, ref, limit }), {
@@ -91,6 +106,9 @@
     openWorktree: (value) => chooseWorktree(value === configuredPath ? '' : value),
     viewCommit: showCommitDiff,
     createBranch: openNewBranch,
+    publishBranch: openPublish,
+    createWorktree: openNewWorktree,
+    compareWorking: (sha) => {selected = [sha]; area = 'working'; diffOpen = true; path = ''; activeFile = '';},
     canCompareCommit: (sha) => selected.length === 1 && selected[0] !== sha,
     compareCommit: (sha) => { selected = selectCommits(selected, sha, true); area = 'commit'; diffOpen = false; path = ''; activeFile = ''; },
   });
@@ -251,21 +269,21 @@
   const files = $derived(git.diff?.files ?? []);
   const file = $derived(files.find(f => f.path === activeFile) ?? files[0]);
   const totals = $derived(files.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
-  const diffTitle = $derived(selected.length === 2 ? `${selected[0].slice(0, 8)} → ${selected[1].slice(0, 8)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
+  const diffTitle = $derived(area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${selected[0].slice(0, 8)} → ${selected[1].slice(0, 8)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
 
   $effect(() => {
     project;
-    untrack(() => { newBranch = null; gitActions.close(); cancelBranchDrag(); worktree = ''; ref = ''; query = ''; limit = 200; selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; });
+    untrack(() => { newWorktree = null; publishBranch = null; newBranch = null; gitActions.close(); cancelBranchDrag(); worktree = ''; ref = ''; query = ''; limit = 200; selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; });
   });
   $effect(() => {
     const state = git, branch = ref, count = limit;
-    untrack(() => { if (newBranch && newBranch.git !== state) newBranch = null; gitActions.close(); cancelBranchDrag(); selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; hoveredLane = null; focusedLane = null; state.clearDiff(); void state.load(branch, count); });
+    untrack(() => { if (newWorktree && newWorktree.git !== state) newWorktree = null; if (publishBranch && publishBranch.git !== state) publishBranch = null; if (newBranch && newBranch.git !== state) newBranch = null; gitActions.close(); cancelBranchDrag(); selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; hoveredLane = null; focusedLane = null; state.clearDiff(); void state.load(branch, count); });
   });
   $effect(() => {
     const state = git, snapshot = data, selection = selected, chosenArea = area, chosenPath = path;
     untrack(() => {
       if (!snapshot || !chosenArea) { state.clearDiff(); return; }
-      void state.loadDiff(chosenArea, selection.length === 2 ? selection[0] : '', selection.at(-1) ?? '', chosenPath);
+      void state.loadDiff(chosenArea, chosenArea === 'working' || selection.length === 2 ? selection[0] : '', chosenArea === 'working' ? '' : selection.at(-1) ?? '', chosenPath);
     });
   });
 
@@ -334,7 +352,7 @@
       <div class="toolbar-group">
         <Button size="sm" aria-label="Fetch" disabled={!data || !!git.busy} loading={git.busy === 'fetch'} onclick={() => void act('fetch')} title="Fetch remote refs"><Icon name="refresh-cw" size={15} /><span class="git-action-label">Fetch</span></Button>
         <Button size="sm" aria-label="Pull" disabled={!data?.upstream || !!git.busy || !!data?.operation} loading={git.busy === 'pull'} onclick={() => void act('pull')} title="Pull with fast-forward only"><Icon name="arrow-down" size={15} /><span class="git-action-label">Pull</span></Button>
-        <Button size="sm" variant="primary" class="push-action" aria-label="Push" disabled={!data?.branch || !!git.busy || !!data?.operation} loading={git.busy === 'push'} onclick={() => void act('push')} title="Push current branch"><Icon name="arrow-up" size={16} /><span class="git-action-label">Push</span></Button>
+        <Button size="sm" variant="primary" class="push-action" aria-label="Push" disabled={!data?.branch || !!git.busy || !!data?.operation} loading={git.busy === 'push'} onclick={() => gitActions.push()} title="Push current branch"><Icon name="arrow-up" size={16} /><span class="git-action-label">Push</span></Button>
       </div>
       <span class="toolbar-divider"></span>
       <div class="toolbar-group">
@@ -347,7 +365,11 @@
     <div class="toolbar-project-actions">{#if actions}{@render actions()}{/if}</div>
   </header>
   <div class="git-notices">
-  {#if data?.operation}<div class="operation-notice" role="status"><Icon name="git-merge" size={16}/><strong>{({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data.operation] ?? 'Git operation'} in progress</strong><span>{['merge','rebase'].includes(data.operation) ? 'Resolve conflicts, stage the files, then continue.' : 'Finish or abort this operation in Git.'}</span>{#if ['merge','rebase'].includes(data.operation)}<Button size="xs" variant="secondary" disabled={!!git.busy || data.files.some(f => f.conflict)} onclick={() => gitActions.continueOperation()}>Continue</Button><Button size="xs" disabled={!!git.busy} onclick={() => gitActions.abortOperation()}>Abort…</Button>{/if}</div>{/if}
+  {#if publishBranch}
+    {@const request = publishBranch}
+    {#key request}<ProjectGitPublish {...request} onClose={() => { if (publishBranch === request) publishBranch = null; }} />{/key}
+  {/if}
+  {#if data?.operation}<div class="operation-notice" role="status"><Icon name="git-merge" size={16}/><strong>{({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data.operation] ?? 'Git operation'} in progress</strong><span>{['merge','rebase','cherry-pick','revert'].includes(data.operation) ? 'Resolve conflicts, stage the files, then continue.' : 'Finish or abort this operation in Git.'}</span>{#if ['merge','rebase','cherry-pick','revert'].includes(data.operation)}<Button size="xs" variant="secondary" disabled={!!git.busy || data.files.some(f => f.conflict)} onclick={() => gitActions.continueOperation()}>Continue</Button><Button size="xs" disabled={!!git.busy} onclick={() => gitActions.abortOperation()}>Abort…</Button>{/if}</div>{/if}
   {#if git.error}<div class="git-error" role="alert"><Icon name="circle-alert" size={16} /><span>{git.error}</span><Button size="xs" onclick={() => void git.load(ref, limit)}>Retry</Button></div>{/if}
   </div>
   <div class="git-workbench" class:rail-open={showRail}>
@@ -470,7 +492,7 @@
         <section class="diff-stage" aria-label="Selected changes">
           <div class="comparison-bar"><span><Icon name={selected.length === 2 ? 'git-compare-arrows' : 'file-text'} size={14} />{diffTitle}</span><div>{#if selected.length === 2}<Button size="xs" aria-label="Swap comparison direction" onclick={() => selected = [...selected].reverse()}><Icon name="arrow-right-left" size={13} />Swap</Button>{/if}<Button size="xs" icon aria-label="Close diff" onclick={() => diffOpen = false}><Icon name="x" size={14} /></Button></div></div>
           {#if git.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
-          {:else if git.diffError}<div class="git-empty" role="alert"><Icon name="circle-alert" size={20} /><p>{git.diffError}</p><Button onclick={() => void git.loadDiff(area as GitArea, selected.length === 2 ? selected[0] : '', selected.at(-1) ?? '', path)}>Retry diff</Button></div>
+          {:else if git.diffError}<div class="git-empty" role="alert"><Icon name="circle-alert" size={20} /><p>{git.diffError}</p><Button onclick={() => void git.loadDiff(area as GitArea, area === 'working' || selected.length === 2 ? selected[0] : '', area === 'working' ? '' : selected.at(-1) ?? '', path)}>Retry diff</Button></div>
           {:else if file}<ProjectGitDiff {file} />
           {:else}<div class="git-empty"><Icon name="check" size={20} /><p>No file changes in this comparison</p></div>{/if}
           {#if git.diff?.truncated}<p class="truncated-note">This diff exceeds the preview limit. Some changes are not shown.</p>{/if}
@@ -481,7 +503,8 @@
     <aside class="git-inspector" aria-label={selected.length ? 'Commit details' : 'Staging and commit'}>
       {#if selected.length}
         <div class="selection-details">
-          <div class="inspector-heading"><h3>{selected.length === 2 ? 'Compare commits' : 'Commit'}</h3><code>{selected.at(-1)?.slice(0, 8)}</code></div>
+          <div class="inspector-heading"><h3>{area === 'working' ? 'Compare working changes' : selected.length === 2 ? 'Compare commits' : 'Commit'}</h3><code>{selected.at(-1)?.slice(0, 8)}</code></div>
+          {#if area === 'working'}<div class="compare-endpoints"><span><small>From</small><code>{selected[0]?.slice(0,8)}</code></span><Icon name="arrow-down" size={14}/><span>Working copy</span></div>{/if}
           {#if selected.length === 2}<div class="compare-endpoints"><span><small>From</small><code>{selected[0].slice(0, 8)}</code></span><Icon name="arrow-down" size={14} /><span><small>To</small><code>{selected[1].slice(0, 8)}</code></span></div>{/if}
           {#if currentCommit}<h2 class="selected-subject">{currentCommit.subject}</h2><div class="commit-person"><GitAvatar src={git.authors[currentCommit.sha]?.avatarUrl} name={currentCommit.author} size={30} loading={!!git.identityLoading[currentCommit.sha]} /><span>{currentCommit.author}{#if git.authors[currentCommit.sha]?.login}<small>@{git.authors[currentCommit.sha].login}</small>{/if}<small title={exactTime(currentCommit.date)}>{agoPhrase(currentCommit.date)}</small></span></div>{/if}
           {#if currentCommit && (refsAt.get(currentCommit.sha)?.length ?? 0)}<div class="selected-refs">{#each refsAt.get(currentCommit.sha) ?? [] as branch}<span title={branchDescription(branch)} style={`--lane-color:${refColor(branch)}`}><Icon name={branch.remote ? 'cloud' : 'git-branch'} size={13} />{branch.name}{#if branch.current}<Icon name="monitor" size={13} />{/if}</span>{/each}</div>{/if}
@@ -500,11 +523,15 @@
     </aside>
   </div>
   <ProjectGitActionMenu actions={gitActions} />
+  {#if newWorktree}
+    {@const request = newWorktree}
+    {#key request}<ProjectGitWorktree {...request} onClose={() => {if (newWorktree === request) newWorktree = null;}} onCreated={(path) => {if (request.git !== git) return; newWorktree = null; chooseWorktree(path);}} />{/key}
+  {/if}
   {#if newBranch}
     {@const request = newBranch}
     <ProjectGitNewBranch {...request} onClose={() => newBranch = null} onCreated={(createdPath, checkout) => { if (request.git !== git) return; newBranch = null; if (checkout) { chooseWorktree(createdPath === configuredPath ? '' : createdPath); working(); } }} />
   {/if}
-  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || 'Reading repository'}</span><span role="status">{git.busy ? `${({ 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', push: 'Pushing' } as Record<string, string>)[git.busy]}…` : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
+  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || 'Reading repository'}</span><span role="status">{git.busy ? `${({ 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy]}…` : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
 </div>
 
 <style>

@@ -5,7 +5,7 @@ import type { GitBranchAction, GitCommit, GitRef, GitRemote, GitStash, GitWorktr
 import type { IconName } from './icons';
 
 type Context = { git: ProjectGitState; ref: string; limit: number };
-type Callbacks = { viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; createBranch?: (sha: string, label: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
+type Callbacks = { viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef) => void; createBranch?: (sha: string, label: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
 export type GitMenuItem = { label: string; icon: IconName; run: () => void; disabled?: boolean; danger?: boolean; separator?: boolean };
 export type GitMenuRequest = { title: string; subtitle?: string; x: number; y: number; items: GitMenuItem[]; anchor: HTMLElement | null };
 
@@ -46,6 +46,13 @@ export class GitActions {
     if (path !== null && active.git === this.context().git && ['checkout', 'merge', 'rebase'].includes(request.action)) this.callbacks.openWorktree(path);
   }
   private action(action: string, source?: GitRef, target?: GitRef) { void this.execute(this.context(), this.branchRequest(action, source, target)); }
+  push(branch = this.current()) {
+    if (!branch || this.blocked()) return;
+    this.close();
+    const upstream = branch.upstream || (branch.current ? this.context().git.snapshot?.upstream : '');
+    if (!upstream && this.callbacks.publishBranch) this.callbacks.publishBranch(branch);
+    else this.action('push', branch);
+  }
   checkout(branch: GitRef) { this.close(); this.action('checkout', branch); }
   private confirmBranch(action: 'merge' | 'rebase', source: GitRef, target: GitRef) {
     this.close();
@@ -76,11 +83,12 @@ export class GitActions {
       { label: branch.remote ? 'Check out tracking branch' : 'Check out branch', icon: 'git-branch', disabled: busy || branch.current || !!tree?.blocked, run: () => this.checkout(branch) },
     ];
     if (this.callbacks.createBranch) items.push({ label: 'Create branch here…', icon: 'git-branch', disabled: busy || !!this.context().git.snapshot?.operation, run: () => this.callbacks.createBranch?.(branch.sha, branch.name) });
+    if (this.callbacks.createWorktree) items.push({label:'Create worktree…',icon:'folder',disabled:busy || !!this.context().git.snapshot?.operation,run:() => this.callbacks.createWorktree?.(branch)});
     if (tree) items.push({ label: 'Open checkout', icon: 'folder', disabled: tree.blocked || tree.prunable, run: () => this.callbacks.openWorktree(tree.path) });
     if (branch.remote) items.push({ label: 'Fetch remote', icon: 'refresh-cw', disabled: busy || !remote, run: () => { if (remote) this.fetch(remote.name); } });
     else items.push(
       { label: 'Pull changes', icon: 'arrow-down', disabled: busy || !!tree?.blocked, run: () => this.action('pull', branch) },
-      { label: 'Push branch', icon: 'arrow-up', disabled: busy || !!tree?.blocked, run: () => this.action('push', branch) },
+      { label: 'Push branch', icon: 'arrow-up', disabled: busy || !!tree?.blocked, run: () => this.push(branch) },
     );
     if (current && current.fullName !== branch.fullName) items.push(
       { label: `Merge into ${current.name}…`, icon: 'git-merge', separator: true, disabled: busy, run: () => this.confirmBranch('merge', branch, current) },
@@ -102,7 +110,7 @@ export class GitActions {
     const items: GitMenuItem[] = [{ label: 'Open checkout', icon: 'folder', disabled: tree.blocked || tree.prunable, run: () => this.callbacks.openWorktree(tree.path) }];
     if (branch) items.push(
       { label: 'Pull changes', icon: 'arrow-down', disabled, run: () => this.action('pull', branch) },
-      { label: 'Push branch', icon: 'arrow-up', disabled, run: () => this.action('push', branch) },
+      { label: 'Push branch', icon: 'arrow-up', disabled, run: () => this.push(branch) },
     );
     items.push({ label: 'Copy checkout path', icon: 'copy', run: () => void this.copy(tree.path) });
     this.menu(tree.branch || 'Detached HEAD', items, event, tree.blocked ? 'Managed sandbox — open its session to act' : tree.path);
@@ -112,8 +120,19 @@ export class GitActions {
       { label: 'View changes', icon: 'file-text', run: () => this.callbacks.viewCommit(commit.sha) },
       ...(this.callbacks.createBranch ? [{ label: 'Create branch here…', icon: 'git-branch' as const, disabled: this.blocked() || !!this.context().git.snapshot?.operation, run: () => this.callbacks.createBranch?.(commit.sha, commit.subject) }] : []),
       ...(this.callbacks.compareCommit ? [{ label: 'Compare with selected commit', icon: 'git-compare-arrows' as const, disabled: this.callbacks.canCompareCommit ? !this.callbacks.canCompareCommit(commit.sha) : false, run: () => this.callbacks.compareCommit?.(commit.sha) }] : []),
+      ...(this.callbacks.compareWorking ? [{label:'Compare against working changes',icon:'git-compare-arrows' as const,run:() => this.callbacks.compareWorking?.(commit.sha)}] : []),
+      {label:'Cherry-pick commit…',icon:'git-branch',separator:true,disabled:this.blocked() || !!this.context().git.snapshot?.operation || !this.context().git.snapshot?.head,run:() => this.confirmCommit('cherry-pick',commit)},
+      {label:'Revert commit…',icon:'rotate-ccw',disabled:this.blocked() || !!this.context().git.snapshot?.operation || !this.context().git.snapshot?.head,run:() => this.confirmCommit('revert',commit)},
       { label: 'Copy commit SHA', icon: 'copy', run: () => void this.copy(commit.sha) },
     ], event, commit.sha.slice(0, 8));
+  }
+  private confirmCommit(action: 'cherry-pick' | 'revert', commit: GitCommit) {
+    this.close();
+    const context = this.context(), data = context.git.snapshot;
+    if (!data?.head || data.operation || context.git.busy) return;
+    const request: GitBranchAction = {action,source:'',sourceSHA:commit.sha,target:data.branch ? `refs/heads/${data.branch}` : '',targetSHA:data.head,...(commit.parents.length > 1 ? {mainline:1} : {})};
+    const label = action === 'cherry-pick' ? 'Cherry-pick commit' : 'Revert commit';
+    confirm.ask({title:`${label}?`,body:`${commit.subject} (${commit.sha.slice(0,8)}) → ${data.branch || 'Detached HEAD'}`,detail:(action === 'cherry-pick' ? 'Apply this change as a new commit in the current checkout.' : 'Create a new commit that reverses this change, preserving existing history.') + (commit.parents.length > 1 ? ` This merge is interpreted relative to its first parent (${commit.parents[0].slice(0,8)}).` : '') + ' The checkout must be clean. Conflicts stay here to resolve, continue or abort.',confirmLabel:label,onConfirm:() => void this.execute(context,request)});
   }
   openRepository(event: MouseEvent) {
     const current = this.current(), git = this.context().git;
@@ -123,7 +142,7 @@ export class GitActions {
       { label: 'Fetch all remotes', icon: 'refresh-cw', disabled: this.blocked(), run: () => { const c = this.context(); void c.git.act('fetch', [], c.ref, c.limit); } },
       ...(current ? [
         { label: 'Pull changes', icon: 'arrow-down' as const, disabled: this.blocked(), run: () => this.action('pull', current) },
-        { label: 'Push branch', icon: 'arrow-up' as const, disabled: this.blocked(), run: () => this.action('push', current) },
+        { label: 'Push branch', icon: 'arrow-up' as const, disabled: this.blocked(), run: () => this.push(current) },
       ] : []),
       { label: 'Stash changes…', icon: 'archive', separator: true, disabled: this.blocked() || !git.snapshot?.files.length, run: () => this.stash() },
       { label: 'Pop latest stash…', icon: 'archive-restore', disabled: this.blocked() || !git.stashes.length, run: () => this.pop() },
@@ -148,11 +167,11 @@ export class GitActions {
   }
   continueOperation() {
     const context = this.context(), data = context.git.snapshot;
-    if (data?.operation && ['merge', 'rebase'].includes(data.operation)) void this.execute(context, { action: 'continue', source: data.operation, sourceSHA: data.head, target: '', targetSHA: '' });
+    if (data?.operation && ['merge', 'rebase', 'cherry-pick', 'revert'].includes(data.operation)) void this.execute(context, { action: 'continue', source: data.operation, sourceSHA: data.head, target: '', targetSHA: '' });
   }
   abortOperation() {
     const context = this.context(), operation = context.git.snapshot?.operation;
-    if (!operation || !['merge', 'rebase'].includes(operation)) return;
+    if (!operation || !['merge', 'rebase', 'cherry-pick', 'revert'].includes(operation)) return;
     const request = { action: 'abort', source: operation, sourceSHA: context.git.snapshot?.head ?? '', target: '', targetSHA: '' };
     confirm.ask({ title: `Abort ${operation}?`, body: `Return this checkout to its state before the ${operation}?`, detail: 'Conflict resolutions made during this operation will be discarded.', confirmLabel: `Abort ${operation}`, onConfirm: () => void this.execute(context, request) });
   }

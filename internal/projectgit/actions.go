@@ -12,11 +12,14 @@ import (
 // BranchRequest names full refs and the exact tips the human reviewed.
 // Merge integrates Source into Target; rebase replays Source onto Target.
 type BranchRequest struct {
-	Action    string `json:"action"`
-	Source    string `json:"source"`
-	Target    string `json:"target"`
-	SourceSHA string `json:"sourceSHA"`
-	TargetSHA string `json:"targetSHA"`
+	Action       string `json:"action"`
+	Source       string `json:"source"`
+	Target       string `json:"target"`
+	SourceSHA    string `json:"sourceSHA"`
+	TargetSHA    string `json:"targetSHA"`
+	Remote       string `json:"remote,omitempty"`
+	RemoteBranch string `json:"remoteBranch,omitempty"`
+	Mainline     int    `json:"mainline,omitempty"`
 }
 type BranchResult struct {
 	Path string `json:"path"`
@@ -104,7 +107,7 @@ func (c Client) ActionBranch(ctx context.Context, dir string, r BranchRequest) (
 	switch r.Action {
 	case "merge":
 		return r.Target, nil
-	case "rebase", "pull", "push":
+	case "rebase", "pull", "push", "publish":
 		if strings.HasPrefix(r.Source, "refs/heads/") {
 			return r.Source, nil
 		}
@@ -189,8 +192,8 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		if err != nil {
 			return err
 		}
-		if op != r.Source || (op != "merge" && op != "rebase") {
-			return errors.New("no merge or rebase to continue or abort")
+		if op != r.Source || (op != "merge" && op != "rebase" && op != "cherry-pick" && op != "revert") {
+			return errors.New("no matching operation to continue or abort")
 		}
 		if err := c.requireHead(ctx, dir, r.SourceSHA); err != nil {
 			return err
@@ -199,6 +202,9 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		// while retaining normal signing and hooks without launching an editor.
 		_, err = c.git(ctx, dir, "", "-c", "core.editor=true", op, "--"+r.Action)
 		return err
+	}
+	if r.Action == "cherry-pick" || r.Action == "revert" {
+		return c.commitAction(ctx, dir, r)
 	}
 	if r.Action == "fetch" {
 		names, err := c.text(ctx, dir, "remote")
@@ -224,6 +230,8 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		return err
 	}
 	switch r.Action {
+	case "publish":
+		return c.publishBranch(ctx, dir, r)
 	case "checkout":
 		if strings.HasPrefix(r.Source, "refs/heads/") {
 			return c.checkout(ctx, dir, r.Source)

@@ -1728,6 +1728,25 @@ trees. Selection shows metadata and changed files; click a file or **View change
 to open a diff. The comparison identifies its direction and can be reversed. Diffs
 offer unified and side-by-side layouts.
 
+**New branch** creates a local branch from the current HEAD or another selected
+local/remote tip, with an optional switch to it. **Create branch here** in a branch
+or commit context menu uses that exact commit. Existing branches are never reset;
+Git preserves working changes or refuses an incompatible switch.
+
+For a local-only branch, **Push** opens an inline **Publish branch** form. Choose
+a configured remote and edit the remote branch name; publishing sets that
+destination as the upstream after a successful push. Divergent remote history
+is refused. This also works from a nonchecked branch's context menu.
+
+**Create worktree** in a branch menu creates a separate checkout in a new folder,
+optionally opening it. A branch already checked out elsewhere requires a new
+branch name. Lola refuses destinations inside existing checkouts or its managed
+storage. Commit menus offer **Cherry-pick commit** and **Revert commit**, with
+confirmation, clean-checkout checks and Continue/Abort controls for conflicts.
+Merge commits use their explicitly identified first parent. **Compare against
+working changes** compares a commit with staged, unstaged and untracked files,
+using a temporary index without changing the real index or checkout.
+
 Local, Remote, Worktrees and Stashes have distinct collapsible section headers. Branch
 names containing `/` form animated nested folders, and the active local branch is highlighted. Use **Clear branch filter** below the
 history to return to all branches. Working changes occupy the first history row only

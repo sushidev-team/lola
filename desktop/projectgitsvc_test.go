@@ -86,6 +86,53 @@ func TestProjectGitOnlyAllowsConfiguredRepositoryAndListedWorktrees(t *testing.T
 		t.Fatal("accepted unreadable isolation state")
 	}
 }
+
+func TestProjectGitWorktreeCreationRespectsBoundaries(t *testing.T) {
+	root := projectGitRepo(t)
+	writeTestConfig(t, minimalConfig+fmt.Sprintf("\n[[project]]\nname = \"demo\"\npath = %q\n", root))
+	svc := &ProjectGitService{}
+	snap, err := svc.Snapshot("demo", "", "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := os.Getenv("LOLA_HOME")
+	alias := filepath.Join(t.TempDir(), "managed-link")
+	if err := os.Symlink(home, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(root, "nested"), filepath.Join(home, "human"), filepath.Join(alias, "human"), root, "relative"} {
+		if _, err := svc.CreateWorktree("demo", "", "refs/heads/main", snap.Head, path, "parallel"); err == nil {
+			t.Fatalf("accepted %s", path)
+		}
+	}
+	destination := filepath.Join(t.TempDir(), "human")
+	if _, err := svc.CreateWorktree("missing", "", "refs/heads/main", snap.Head, destination, "parallel"); err == nil {
+		t.Fatal("accepted unknown project")
+	}
+	created, err := svc.CreateWorktree("demo", "", "refs/heads/main", snap.Head, destination, "parallel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonicalPath(created.Path) != canonicalPath(destination) {
+		t.Fatal(created)
+	}
+	if _, err := svc.Snapshot("demo", created.Path, "", 100); err != nil {
+		t.Fatal("created checkout not accessible", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "state"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal([]session.Session{{ID: "sandbox", Worktree: created.Path, Sandbox: "docker"}})
+	if err := os.WriteFile(filepath.Join(home, "state", "sessions.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateWorktree("demo", created.Path, "refs/heads/parallel", snap.Head, filepath.Join(t.TempDir(), "forbidden"), "forbidden"); err == nil {
+		t.Fatal("accepted sandbox source checkout")
+	}
+	if _, err := svc.BranchAction("demo", "", projectgit.BranchRequest{Action: "publish", Source: "refs/heads/parallel", SourceSHA: snap.Head, Remote: "origin", RemoteBranch: "parallel"}); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatal("publish bypassed owner boundary", err)
+	}
+}
 func TestProjectGitRejectsSandboxRootBeforeExecutingGit(t *testing.T) {
 	root := t.TempDir()
 	writeTestConfig(t, minimalConfig+fmt.Sprintf("\n[[project]]\nname = \"demo\"\npath = %q\n", root))

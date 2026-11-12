@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import ProjectGit from './ProjectGit.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
 
-const api = vi.hoisted(() => ({ Snapshot: vi.fn(), CreateBranch: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
+const api = vi.hoisted(() => ({ Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 let serial = 0;
 let project: string;
@@ -41,6 +41,27 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it('opens publish from Push for a local-only branch without pushing prematurely', async () => {
+    api.Snapshot.mockResolvedValue(snapshot({upstream:'',remotes:[{name:'origin',host:'',owner:'',repo:'',avatarUrl:''}]}));
+    await open(); await fireEvent.click(screen.getByRole('button',{name:'Push'}));
+    expect(await screen.findByRole('form',{name:'Publish branch'})).toBeInTheDocument();
+    expect(screen.getByLabelText('Remote branch')).toHaveValue('main');
+    expect(api.Push).not.toHaveBeenCalled();expect(api.BranchAction).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+    expect(screen.queryByRole('form',{name:'Publish branch'})).toBeNull();
+  });
+  it('compares a commit to the working copy through an explicit context action', async () => {
+    await open(); await fireEvent.contextMenu(screen.getByRole('button',{name:/Initial project,/}));
+    await fireEvent.click(await screen.findByRole('menuitem',{name:'Compare against working changes'}));
+    await waitFor(()=>expect(api.Diff).toHaveBeenLastCalledWith(project,'',oldSHA,'','working',''));
+    expect(await screen.findByRole('heading',{name:'Compare working changes'})).toBeInTheDocument();
+    expect(await screen.findByRole('region',{name:'Diff for src/app.ts'})).toBeInTheDocument();
+  });
+  it('opens worktree creation from a branch menu without a mutation', async () => {
+    await open();await fireEvent.contextMenu(screen.getByRole('button',{name:'main'}));
+    await fireEvent.click(await screen.findByRole('menuitem',{name:'Create worktree…'}));
+    expect(await screen.findByRole('dialog',{name:'Create worktree'})).toBeInTheDocument();expect(api.CreateWorktree).not.toHaveBeenCalled();
+  });
   it('compares modifier-selected commits, swaps direction, and renders a text diff', async () => {
     await open();
     await fireEvent.click(screen.getByRole('button', { name: /Initial project,/ }));
@@ -205,7 +226,7 @@ describe('Project Git workspace', () => {
   });
   it('opens branch creation from the toolbar and a commit without creating until submitted', async () => {
     await open();
-    await fireEvent.click(screen.getByRole('button', {name:'New branch',exact:true}));
+    await fireEvent.click(screen.getByRole('button', {name:'New branch'}));
     expect(await screen.findByRole('dialog', {name:'New branch'})).toBeInTheDocument();
     expect(screen.getByRole('checkbox', {name:'Switch to new branch'})).toBeChecked();
     expect(api.CreateBranch).not.toHaveBeenCalled();

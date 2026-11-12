@@ -1,16 +1,16 @@
 export type GitCommit = { sha: string; parents: string[]; subject: string; author: string; email: string; date: string; refs: string[] };
-export type GitRef = { name: string; fullName: string; sha: string; remote: boolean; current: boolean };
+export type GitRef = { name: string; fullName: string; sha: string; remote: boolean; current: boolean; upstream?: string };
 export type GitRemote = { name: string; host: string; owner: string; repo: string; avatarUrl: string };
 export type GitAuthorIdentity = { login: string; avatarUrl: string };
 export type GitIdentities = { authors?: Record<string, GitAuthorIdentity | undefined> | null; remoteAvatars?: Record<string, string | undefined> | null };
 export type GitWorktree = { path: string; branch: string; head: string; locked: boolean; prunable: boolean; blocked: boolean };
 export type GitFile = { path: string; oldPath: string; index: string; worktree: string; untracked: boolean; conflict: boolean };
 export type GitStash = { sha: string; selector: string; subject: string; date: string };
-export type GitBranchAction = { action: string; source: string; target: string; sourceSHA: string; targetSHA: string };
+export type GitBranchAction = { action: string; source: string; target: string; sourceSHA: string; targetSHA: string; remote?: string; remoteBranch?: string; mainline?: number };
 export type GitSnapshot = { operation?: string; path: string; branch: string; head: string; upstream: string; commits: GitCommit[]; refs: GitRef[]; remotes?: GitRemote[]; worktrees: GitWorktree[]; files: GitFile[]; signing: { enabled: boolean; format: string; key: string }; hasMore: boolean };
 export type GitDiffFile = { path: string; oldPath?: string; status?: string; additions: number; deletions: number; binary?: boolean; tooLarge?: boolean; patch?: string };
 export type GitDiff = { files: GitDiffFile[]; truncated?: boolean };
-export type GitArea = 'commit' | 'staged' | 'unstaged' | 'untracked';
+export type GitArea = 'working' | 'commit' | 'staged' | 'unstaged' | 'untracked';
 
 export type BranchNode =
   | { kind: 'branch'; name: string; path: string; branch: GitRef }

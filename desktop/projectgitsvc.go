@@ -210,9 +210,42 @@ func (s *ProjectGitService) CreateBranch(project, worktree, name, startSHA strin
 	return result, err
 }
 
-// BranchAction resolves the owner of the branch before executing anything in a
-// linked checkout. In particular, an unchecked-branch action may not bypass the
-// sandbox boundary merely because it was initiated from the main repository.
+// CreateWorktree creates a human checkout outside managed storage and existing
+// checkouts. The existing parent is resolved before checking isolation boundaries.
+func (s *ProjectGitService) CreateWorktree(project, worktree, source, sha, path, newBranch string) (projectgit.BranchResult, error) {
+	result := projectgit.BranchResult{}
+	err := s.mutate(project, worktree, func(ctx context.Context, dir string) error {
+		destination, err := projectgit.NewWorktreePath(path)
+		if err != nil {
+			return err
+		}
+		blocked, err := projectGitBlocker()
+		if err != nil {
+			return err
+		}
+		home, err := config.Home()
+		if err != nil {
+			return err
+		}
+		if blocked(destination) || projectGitWithin(destination, canonicalPath(home)) {
+			return errors.New("choose a folder outside Lola's managed storage")
+		}
+		trees, err := (projectgit.Client{}).Worktrees(ctx, dir)
+		if err != nil {
+			return err
+		}
+		for _, tree := range trees {
+			if projectGitWithin(destination, canonicalPath(tree.Path)) {
+				return errors.New("choose a folder outside existing checkouts")
+			}
+		}
+		result.Path = destination
+		return (projectgit.Client{}).CreateWorktree(ctx, dir, source, sha, destination, newBranch)
+	})
+	return result, err
+}
+
+// BranchAction resolves and authorizes the owner before writing in a linked checkout.
 func (s *ProjectGitService) BranchAction(project, worktree string, request projectgit.BranchRequest) (projectgit.BranchResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

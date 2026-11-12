@@ -1,12 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProjectGitState } from './projectgit.svelte';
-const api = vi.hoisted(() => ({ Stashes: vi.fn(), CreateBranch: vi.fn(), BranchAction: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Snapshot: vi.fn(), CachedIdentities: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), LastCommitMessage: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
+const api = vi.hoisted(() => ({ Stashes: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), BranchAction: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Snapshot: vi.fn(), CachedIdentities: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), LastCommitMessage: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => resolve = r); return { promise, resolve }; }
 const snapshot = (branch: string) => ({ path: '/repo', branch, head: 'a', upstream: '', commits: [], refs: [], worktrees: [], files: [], signing: { enabled: false, format: '', key: '' }, hasMore: false });
 beforeEach(() => { Object.values(api).forEach(fn => fn.mockReset()); api.Stashes.mockResolvedValue([]); api.Snapshot.mockResolvedValue(snapshot('main')); api.CachedIdentities.mockResolvedValue({ authors: {}, remoteAvatars: {} }); api.Identities.mockResolvedValue({ authors: {} }); });
 
 describe('Project Git request and operation ownership', () => {
+  it('serializes worktree creation, preserves the view, and refreshes failed post-checkout facts', async () => {
+    const state=new ProjectGitState('lola','/tree');
+    const pending=deferred<{path:string}>();api.CreateWorktree.mockReturnValueOnce(pending.promise);
+    const creating=state.createWorktree('refs/heads/main','a'.repeat(40),'/parallel','feature/parallel','refs/heads/main',400);
+    expect(state.busy).toBe('create-worktree');
+    expect(await state.createWorktree('refs/heads/main','a'.repeat(40),'/other','other')).toBeNull();expect(api.CreateWorktree).toHaveBeenCalledTimes(1);
+    pending.resolve({path:'/parallel'});expect(await creating).toBe('/parallel');
+    expect(api.Snapshot).toHaveBeenLastCalledWith('lola','/tree','refs/heads/main',400);
+    api.CreateWorktree.mockRejectedValue(new Error('post-checkout hook failed'));
+    expect(await state.createWorktree('refs/heads/main','a'.repeat(40),'/again','again')).toBeNull();
+    expect(state.error).toContain('post-checkout hook failed');expect(state.busy).toBe('');
+  });
   it('creates at an exact starting commit, holds the action lock, and follows checkout history', async () => {
     const state = new ProjectGitState('lola', '/tree');
     const pending = deferred<{path:string}>(); api.CreateBranch.mockReturnValue(pending.promise);

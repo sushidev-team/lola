@@ -35,6 +35,7 @@ type Ref struct {
 	SHA      string `json:"sha"`
 	Remote   bool   `json:"remote"`
 	Current  bool   `json:"current"`
+	Upstream string `json:"upstream,omitempty"`
 }
 type Worktree struct {
 	Path     string `json:"path"`
@@ -90,11 +91,15 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 func runGit(ctx context.Context, dir, input string, args ...string) ([]byte, error) {
+	return runGitEnvironment(ctx, dir, input, nil, args...)
+}
+func runGitEnvironment(ctx context.Context, dir, input string, env []string, args ...string) ([]byte, error) {
 	if gitguard.Pinned(dir) {
 		return nil, errors.New("sandbox worktrees must be managed through their session")
 	}
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--literal-pathspecs", "-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "LC_ALL=C")
+	cmd.Env = append(cmd.Env, env...)
 	cmd.Stdin = strings.NewReader(input)
 	cmd.WaitDelay = 2 * time.Second
 	var out, stderr boundedBuffer
@@ -199,7 +204,7 @@ func (c Client) Snapshot(ctx context.Context, dir, ref string, limit int) (Snaps
 	s.Branch, _ = c.text(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD")
 	s.Head, _ = c.text(ctx, dir, "rev-parse", "--verify", "HEAD")
 	s.Upstream, _ = c.text(ctx, dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-	b, err := c.git(ctx, dir, "", "for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)", "refs/heads/", "refs/remotes/")
+	b, err := c.git(ctx, dir, "", "for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)%00%(upstream)", "refs/heads/", "refs/remotes/")
 	if err != nil {
 		return s, err
 	}
@@ -207,12 +212,12 @@ func (c Client) Snapshot(ctx context.Context, dir, ref string, limit int) (Snaps
 	validRef := ref == ""
 	for _, line := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
 		p := strings.Split(line, "\x00")
-		if len(p) != 3 {
+		if len(p) != 4 {
 			continue
 		}
 		remote := strings.HasPrefix(p[0], "refs/remotes/")
 		name := strings.TrimPrefix(strings.TrimPrefix(p[0], "refs/heads/"), "refs/remotes/")
-		r := Ref{Name: name, FullName: p[0], SHA: p[1], Remote: remote, Current: p[2] == "*"}
+		r := Ref{Name: name, FullName: p[0], SHA: p[1], Remote: remote, Current: p[2] == "*", Upstream: p[3]}
 		s.Refs = append(s.Refs, r)
 		bySHA[r.SHA] = append(bySHA[r.SHA], name)
 		if ref == r.FullName {
@@ -293,6 +298,19 @@ func (c Client) Diff(ctx context.Context, dir, from, to, area, path string) (git
 	}
 	args := []string{"-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--unified=3"}
 	switch area {
+	case "working":
+		var err error
+		from, err = c.commitSHA(ctx, dir, from)
+		if err != nil {
+			return result, err
+		}
+		var cleanup func()
+		c, cleanup, err = c.workingIndex(ctx, dir)
+		if err != nil {
+			return result, err
+		}
+		defer cleanup()
+		args = append(args, "--cached", from)
 	case "commit":
 		var err error
 		to, err = c.commitSHA(ctx, dir, to)

@@ -24,9 +24,7 @@ export function Amend(project: string, worktree: string, message: string, expect
 }
 
 /**
- * BranchAction resolves the owner of the branch before executing anything in a
- * linked checkout. In particular, an unchecked-branch action may not bypass the
- * sandbox boundary merely because it was initiated from the main repository.
+ * BranchAction resolves and authorizes the owner before writing in a linked checkout.
  */
 export function BranchAction(project: string, worktree: string, request: projectgit$0.BranchRequest): $CancellablePromise<projectgit$0.BranchResult> {
     return $Call.ByID(547594608, project, worktree, request);
@@ -49,6 +47,14 @@ export function Commit(project: string, worktree: string, message: string): $Can
  */
 export function CreateBranch(project: string, worktree: string, name: string, startSHA: string, checkout: boolean): $CancellablePromise<projectgit$0.BranchResult> {
     return $Call.ByID(4125785182, project, worktree, name, startSHA, checkout);
+}
+
+/**
+ * CreateWorktree creates a human checkout outside managed storage and existing
+ * checkouts. The existing parent is resolved before checking isolation boundaries.
+ */
+export function CreateWorktree(project: string, worktree: string, source: string, sha: string, path: string, newBranch: string): $CancellablePromise<projectgit$0.BranchResult> {
+    return $Call.ByID(2147785455, project, worktree, source, sha, path, newBranch);
 }
 
 export function Diff(project: string, worktree: string, $from: string, to: string, area: string, path: string): $CancellablePromise<gitdiff$0.Result> {

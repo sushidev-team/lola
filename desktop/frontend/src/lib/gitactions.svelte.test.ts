@@ -24,6 +24,21 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); confirm.cancel(); vi.restoreAllMocks(); });
 describe('Git action menus', () => {
+  it('routes unchecked local-only Push to publishing while tracked Push stays direct', async () => {
+    const publishBranch=vi.fn();actions=new GitActions(()=>({git,ref:'',limit:200}),{...callbacks,publishBranch});
+    actions.push(feature);expect(publishBranch).toHaveBeenCalledWith(feature);expect(git.branchAction).not.toHaveBeenCalled();
+    actions.push(main);await waitFor(()=>expect(git.branchAction).toHaveBeenCalledWith({action:'push',source:main.fullName,sourceSHA:main.sha,target:'',targetSHA:''},'',200));
+  });
+  it.each(['cherry-pick','revert'] as const)('confirms a pinned %s and enables conflict recovery', async (action) => {
+    render(ProjectGitActionMenu,{actions});
+    actions.openCommit({sha:feature.sha,subject:'Change',author:'A',email:'',date:'',parents:[main.sha],refs:[]},event());
+    await fireEvent.click(await screen.findByRole('menuitem',{name:action==='revert'?'Revert commit…':'Cherry-pick commit…'}));
+    expect(git.branchAction).not.toHaveBeenCalled();confirm.accept();
+    await waitFor(()=>expect(git.branchAction).toHaveBeenCalledWith({action,source:'',sourceSHA:feature.sha,target:main.fullName,targetSHA:main.sha},'',200));
+    git.snapshot!.operation=action;actions.continueOperation();
+    await waitFor(()=>expect(git.branchAction).toHaveBeenLastCalledWith({action:'continue',source:action,sourceSHA:main.sha,target:'',targetSHA:''},'',200));
+    actions.abortOperation();expect(confirm.request?.title).toBe(`Abort ${action}?`);
+  });
   it('opens branch creation from an exact branch or commit without a Git mutation', async () => {
     const createBranch = vi.fn();
     actions = new GitActions(() => ({git, ref:'', limit:200}), {...callbacks, createBranch});
@@ -91,7 +106,7 @@ describe('Git action menus', () => {
     actions.openCommit({ sha: main.sha, subject: 'Some commit', author: 'Author', email: '', date: '', parents: [], refs: [] }, event());
     const view = await screen.findByRole('menuitem', { name: 'View changes' });
     await waitFor(() => expect(view).toHaveFocus());
-    await fireEvent.keyDown(view, { key: 'ArrowDown' });
+    await fireEvent.keyDown(view, { key: 'End' });
     expect(screen.getByRole('menuitem', { name: 'Copy commit SHA' })).toHaveFocus();
     expect(callbacks.viewCommit).not.toHaveBeenCalled();
     await fireEvent.click(view);

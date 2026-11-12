@@ -16,6 +16,9 @@ export interface BranchRequest {
     "target": string;
     "sourceSHA": string;
     "targetSHA": string;
+    "remote"?: string;
+    "remoteBranch"?: string;
+    "mainline"?: number;
 }
 
 export interface BranchResult {
@@ -52,6 +55,7 @@ export interface Ref {
     "sha": string;
     "remote": boolean;
     "current": boolean;
+    "upstream"?: string;
 }
 
 /**
