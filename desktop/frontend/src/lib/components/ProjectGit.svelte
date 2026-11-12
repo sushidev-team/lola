@@ -2,12 +2,13 @@
   import { tick, untrack, onDestroy, type Snippet } from 'svelte';
   import Button from './Button.svelte';
   import MenuItem from './MenuItem.svelte';
+  import GitFilePath from './GitFilePath.svelte';
   import ProjectGitStaging from './ProjectGitStaging.svelte';
   import ProjectGitActionMenu from './ProjectGitActionMenu.svelte';
   import ProjectGitWorktree from './ProjectGitWorktree.svelte';
   import ProjectGitPublish from './ProjectGitPublish.svelte';
   import ProjectGitNewBranch from './ProjectGitNewBranch.svelte';
-  import { GitActions } from '$lib/gitactions.svelte';
+  import { GitActions, type GitDestination } from '$lib/gitactions.svelte';
   import { gitCommitTooltip } from '$lib/gittooltip';
   import { confirm } from '$lib/confirm.svelte';
   import { nav } from '$lib/nav.svelte';
@@ -17,7 +18,7 @@
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
   import { projectGitState, type ProjectGitState } from '$lib/projectgit.svelte';
-  import { commitGraph, graphColor, graphLabelColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
+  import { workingGraphConnection, commitGraph, graphColor, graphLabelColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
   import { agoPhrase, exactTime } from '$lib/time';
 
   let { project, heading, actions, windowInset = false }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean } = $props();
@@ -88,11 +89,11 @@
     gitActions.close(); publishBranch = null; newBranch = null;
     newWorktree = {git, branch:{...branch}, historyRef:ref, limit};
   }
-  let publishBranch = $state<{git: ProjectGitState; branch: GitRef; historyRef: string; limit: number} | null>(null);
-  function openPublish(branch: GitRef) {
+  let publishBranch = $state<{git: ProjectGitState; branch: GitRef; destination?: GitDestination; historyRef: string; limit: number} | null>(null);
+  function openPublish(branch: GitRef, destination?: GitDestination) {
     if (git.busy || data?.operation) return;
     git.error = ''; newWorktree = null; newBranch = null; gitActions.close();
-    publishBranch = {git, branch: {...branch}, historyRef: ref, limit};
+    publishBranch = {git, branch: {...branch}, destination, historyRef: ref, limit};
   }
   let newBranch = $state<{ git: ProjectGitState; start: { sha: string; label: string }; refs: GitRef[]; historyRef: string; limit: number } | null>(null);
   function openNewBranch(sha = data?.head ?? '', label = data?.branch || 'Detached HEAD') {
@@ -108,6 +109,8 @@
     createBranch: openNewBranch,
     publishBranch: openPublish,
     createWorktree: openNewWorktree,
+    inspectFile,
+    stageFiles: (paths, staged) => void act(staged ? 'unstage' : 'stage', paths),
     compareWorking: (sha) => {selected = [sha]; area = 'working'; diffOpen = true; path = ''; activeFile = '';},
     canCompareCommit: (sha) => selected.length === 1 && selected[0] !== sha,
     compareCommit: (sha) => { selected = selectCommits(selected, sha, true); area = 'commit'; diffOpen = false; path = ''; activeFile = ''; },
@@ -148,7 +151,7 @@
     return data?.refs.find(branch => branch.fullName === name);
   }
   function startBranchDrag(event: PointerEvent, branch?: GitRef) {
-    if (!branch || git.busy || event.button !== 0 || event.isPrimary === false) return;
+    if (!branch || git.busy || data?.operation || event.button !== 0 || event.isPrimary === false) return;
     cancelBranchDrag();
     const node = event.currentTarget as HTMLElement, pointer = event.pointerId;
     const source = (event.target instanceof Element ? event.target.closest<HTMLElement>('[data-branch-ref]') : null) ?? node;
@@ -184,14 +187,14 @@
       preview?.style.setProperty('left', `${sourceRect.left + e.clientX - start.x}px`, 'important');
       preview?.style.setProperty('top', `${sourceRect.top + e.clientY - start.y}px`, 'important');
       const target = pointerTarget(e);
-      dropTarget = target?.fullName ?? '';
+      dropTarget = target && gitActions.canDrop(branch,target) ? target.fullName : '';
     };
     const finish = (e: PointerEvent) => {
       if (e.pointerId !== pointer) return;
       if (active && !git.busy) {
         e.preventDefault(); suppressClickUntil = Date.now() + 300;
         const target = pointerTarget(e);
-        if (target) dropBranch(e, target);
+        if (target && gitActions.canDrop(branch,target)) dropBranch(e, target);
       }
       clear();
     };
@@ -241,7 +244,9 @@
   const commits = $derived(data?.commits ?? []);
   const graph = $derived(commitGraph(commits));
   const graphBySHA = $derived(new Map(graph.map(row => [row.sha, row])));
-  const graphWidth = $derived(Math.max(64, ...graph.map(row => row.width * GRAPH_LANE_WIDTH + GRAPH_NODE_X)));
+  const workingConnection = $derived(!query.trim() && data?.files.length ? workingGraphConnection(graph, data.head) : null);
+  const workingX = $derived(GRAPH_NODE_X + (workingConnection?.lane ?? 0) * GRAPH_LANE_WIDTH);
+  const graphWidth = $derived(Math.max(64, workingConnection ? workingX + GRAPH_LANE_WIDTH : 0, ...graph.map(row => row.width * GRAPH_LANE_WIDTH + GRAPH_NODE_X)));
   const branchHistory = $derived(branchesByCommit(commits, data?.refs ?? []));
   const refsAt = $derived.by(() => {
     const result = new Map<string, GitRef[]>();
@@ -352,13 +357,13 @@
       <div class="toolbar-group">
         <Button size="sm" aria-label="Fetch" disabled={!data || !!git.busy} loading={git.busy === 'fetch'} onclick={() => void act('fetch')} title="Fetch remote refs"><Icon name="refresh-cw" size={15} /><span class="git-action-label">Fetch</span></Button>
         <Button size="sm" aria-label="Pull" disabled={!data?.upstream || !!git.busy || !!data?.operation} loading={git.busy === 'pull'} onclick={() => void act('pull')} title="Pull with fast-forward only"><Icon name="arrow-down" size={15} /><span class="git-action-label">Pull</span></Button>
-        <Button size="sm" variant="primary" class="push-action" aria-label="Push" disabled={!data?.branch || !!git.busy || !!data?.operation} loading={git.busy === 'push'} onclick={() => gitActions.push()} title="Push current branch"><Icon name="arrow-up" size={16} /><span class="git-action-label">Push</span></Button>
+        <Button size="sm" variant="primary" class="push-action" aria-label="Push" disabled={!data?.head || !data?.branch || !!git.busy || !!data?.operation} loading={git.busy === 'push' || git.busy === 'publish'} onclick={() => gitActions.push()} title="Push current branch"><Icon name="arrow-up" size={16} /><span class="git-action-label">Push</span></Button>
       </div>
       <span class="toolbar-divider"></span>
       <div class="toolbar-group">
         <Button size="sm" aria-label="New branch" disabled={!data?.head || !!git.busy || !!data?.operation} loading={git.busy === 'create-branch'} onclick={() => openNewBranch()} title="Create a branch from the current checkout"><Icon name="git-branch" size={16} /><span class="git-action-label">New branch</span></Button>
-        <Button size="sm" aria-label="Stash changes" disabled={!data?.files.length || !!git.busy || !!data?.operation} loading={git.busy === 'stash'} onclick={() => gitActions.stash()} title="Stash staged, unstaged and untracked changes"><Icon name="archive" size={16} /><span class="git-action-label">Stash</span></Button>
-        <Button size="sm" aria-label="Pop latest stash" disabled={!git.stashes.length || !!git.busy || !!data?.operation} loading={git.busy === 'pop'} onclick={() => gitActions.pop()} title="Pop latest stash"><Icon name="archive-restore" size={16} /><span class="git-action-label">Pop</span></Button>
+        <Button size="sm" aria-label="Stash changes" disabled={!data?.head || !data?.files.length || !!git.busy || !!data?.operation} loading={git.busy === 'stash'} onclick={() => gitActions.stash()} title="Stash staged, unstaged and untracked changes"><Icon name="archive" size={16} /><span class="git-action-label">Stash</span></Button>
+        <Button size="sm" aria-label="Pop latest stash" disabled={!git.stashes.length || !!data?.files.length || !!git.busy || !!data?.operation} loading={git.busy === 'pop'} onclick={() => gitActions.pop()} title={data?.files.length ? 'Commit or stash current changes before popping a stash' : 'Pop latest stash'}><Icon name="archive-restore" size={16} /><span class="git-action-label">Pop</span></Button>
       </div>
       <Button size="xs" icon class="refresh-action" loading={git.loading} disabled={!!git.busy} aria-label="Refresh repository" title="Refresh repository" onclick={() => void git.load(ref, limit)}><Icon name="refresh-cw" size={14} /></Button>
     </div>
@@ -369,8 +374,8 @@
     {@const request = publishBranch}
     {#key request}<ProjectGitPublish {...request} onClose={() => { if (publishBranch === request) publishBranch = null; }} />{/key}
   {/if}
-  {#if data?.operation}<div class="operation-notice" role="status"><Icon name="git-merge" size={16}/><strong>{({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data.operation] ?? 'Git operation'} in progress</strong><span>{['merge','rebase','cherry-pick','revert'].includes(data.operation) ? 'Resolve conflicts, stage the files, then continue.' : 'Finish or abort this operation in Git.'}</span>{#if ['merge','rebase','cherry-pick','revert'].includes(data.operation)}<Button size="xs" variant="secondary" disabled={!!git.busy || data.files.some(f => f.conflict)} onclick={() => gitActions.continueOperation()}>Continue</Button><Button size="xs" disabled={!!git.busy} onclick={() => gitActions.abortOperation()}>Abort…</Button>{/if}</div>{/if}
-  {#if git.error}<div class="git-error" role="alert"><Icon name="circle-alert" size={16} /><span>{git.error}</span><Button size="xs" onclick={() => void git.load(ref, limit)}>Retry</Button></div>{/if}
+  {#if data?.operation}<div class="operation-notice" role="status"><Icon name="git-merge" size={16}/><strong>{({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data.operation] ?? 'Git operation'} in progress</strong><span>{['merge','rebase','cherry-pick','revert'].includes(data.operation) ? (!data.files.length && ['cherry-pick','revert'].includes(data.operation) ? 'No changes remain for this commit. Skip it to continue.' : 'Resolve conflicts, stage the files, then continue.') : 'Finish or abort this operation in Git.'}</span>{#if ['merge','rebase','cherry-pick','revert'].includes(data.operation)}<Button size="xs" variant="secondary" disabled={!!git.busy || data.files.some(f => f.conflict)} onclick={() => gitActions.continueOperation()}>Continue</Button>{#if ['rebase','cherry-pick','revert'].includes(data.operation)}<Button size="xs" disabled={!!git.busy} onclick={() => gitActions.skipOperation()}>Skip commit…</Button>{/if}<Button size="xs" disabled={!!git.busy} onclick={() => gitActions.abortOperation()}>Abort…</Button>{/if}</div>{/if}
+  {#if git.error}<div class="git-error" role="alert"><Icon name="circle-alert" size={16} /><span>{git.error}</span><Button size="xs" onclick={() => void git.load(ref, limit)}>Refresh</Button></div>{/if}
   </div>
   <div class="git-workbench" class:rail-open={showRail}>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -431,10 +436,10 @@
             {#each shownColumns as column}<div class="column-heading"><span>{column.label}</span><Button variant="bare" role="separator" tabindex={0} aria-label={`Resize ${column.label} column`} aria-orientation="vertical" aria-valuenow={columnWidth(column.id)} aria-valuemin={column.min} aria-valuemax={Math.max(column.max, columnWidth(column.id))} class="column-resize" onpointerdown={(event) => resizeColumn(event, column.id)} onkeydown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); event.stopPropagation(); setColumnWidth(column.id, ((event.currentTarget as HTMLElement).parentElement?.getBoundingClientRect().width || columnWidth(column.id)) + (event.key === 'ArrowRight' ? 10 : -10)); } }}><span class="sr-only">Resize {column.label}</span></Button></div>{/each}
           </div>
           {#if data?.files.length && !search}
-            <Button block variant="bare" selected={!selected.length} class="commit-row working-row" oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext} data-commit="working" aria-label={`Working changes, ${data.files.length} files`} onclick={working}>
+            <Button block variant="bare" selected={!selected.length} class="commit-row working-row" title={`Uncommitted changes on ${data.branch || 'detached HEAD'}`} oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext} data-commit="working" aria-label={`Working changes, ${data.files.length} files`} onclick={working}>
               {#each shownColumns as column}
                 {#if column.id === 'refs'}<span class="working-state"><span class="wip-label"><Icon name="pencil" size={12} />In progress</span></span>
-                {:else if column.id === 'graph'}<span class="working-graph"><svg width="28" height="34" aria-hidden="true"><circle cx={GRAPH_NODE_X} cy="17" r="9" fill="var(--color-canvas)" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.5" /><circle cx={GRAPH_NODE_X} cy="17" r="2.5" fill="currentColor" /></svg></span>
+                {:else if column.id === 'graph'}<span class="working-graph"><svg width={graphWidth} height="34" aria-hidden="true">{#if workingConnection}<path class="working-edge" d={`M${workingX} 26V34`} stroke="currentColor" stroke-width="1.7" fill="none" />{/if}<circle cx={workingX} cy="17" r="9" fill="var(--color-canvas)" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.5" /><circle cx={workingX} cy="17" r="2.5" fill="currentColor" /></svg></span>
                 {:else if column.id === 'subject'}<span class="working-copy"><strong>Working changes</strong><span class="working-count">{data.files.length}</span><span class="working-stats">{#if workingCounts.modified}<span class="working-stat modified" title={`${workingCounts.modified} modified files`}><Icon name="pencil" size={12} />{workingCounts.modified}</span>{/if}{#if workingCounts.added}<span class="working-stat added" title={`${workingCounts.added} added files`}><Icon name="plus" size={12} />{workingCounts.added}</span>{/if}{#if workingCounts.deleted}<span class="working-stat deleted" title={`${workingCounts.deleted} deleted files`}><Icon name="minus" size={12} />{workingCounts.deleted}</span>{/if}{#if workingCounts.conflicts}<span class="working-stat deleted" title={`${workingCounts.conflicts} conflicted files`}><Icon name="circle-alert" size={12} />{workingCounts.conflicts}</span>{/if}</span><span class="working-open">Review changes<Icon name="chevron-right" size={13} /></span></span>
                 {:else if column.id === 'author'}<span class="commit-author">You</span>{:else}<span></span>{/if}
               {/each}
@@ -444,7 +449,7 @@
           {:else if !data && git.error}<div class="git-empty"><Icon name="circle-alert" size={24} /><p>Repository unavailable</p><span>Check the error above, then retry to load the repository.</span></div>
           {:else if !visible.length}<div class="git-empty"><Icon name="git-branch" size={24} /><p>{search ? 'No matching commits' : 'No commits yet'}</p><span>{search ? 'Try a message, author, branch, or commit hash.' : 'Stage your files and create the first commit.'}</span></div>
           {:else}
-            {#each visible as commit (commit.sha)}
+            {#each visible as commit, commitIndex (commit.sha)}
               {@const row = graphBySHA.get(commit.sha)!}
               {@const tips = refsAt.get(commit.sha) ?? []}
               {@const primary = tips[0]}
@@ -474,6 +479,7 @@
                 {#if !columnPrefs.hidden.includes('graph')}<span class="graph-cell">
                   <svg class="commit-graph" width={search ? 40 : graphWidth} height={rowHeight} aria-hidden="true">
                     {#if !search}{#each row.edges as edge}<path class="ancestry-edge" stroke-linecap="round" stroke-linejoin="round" d={graphPath(edge, rowHeight)} stroke={graphColor(edge.color)} stroke-width={tracedLane === edge.color ? 2.5 : 1.7} fill="none" />{/each}{/if}
+                    {#if workingConnection && commitIndex <= workingConnection.index}<path class="working-edge" d={graphPath({from:workingConnection.lane,to:commitIndex === workingConnection.index ? row.lane : workingConnection.lane,start:'top',end:commitIndex === workingConnection.index ? 'node' : 'bottom',color:0},rowHeight)} stroke="var(--color-accent-ink)" stroke-width="1.7" fill="none" stroke-linecap="round" />{/if}
                     <circle cx={nodeX} cy={rowHeight / 2} r={commit.parents?.length > 1 ? 5 : 10.5} fill={commit.parents?.length > 1 || selected.includes(commit.sha) ? graphColor(row.color) : 'var(--color-panel)'} stroke={graphColor(row.color)} stroke-width="2" />
                   </svg>
                   {#if commit.parents?.length <= 1}<span class="graph-avatar" style:left={`${nodeX - 9}px`}><GitAvatar src={author?.avatarUrl} name={commit.author} size={18} loading={!!git.identityLoading[commit.sha]} /></span>{/if}
@@ -514,11 +520,11 @@
           <div class="change-totals"><span>{files.length} changed {files.length === 1 ? 'file' : 'files'}</span><span class="text-good">+{totals.add}</span><span class="text-bad">−{totals.del}</span></div>
         </div>
         <div class="changed-file-list">
-          {#each files as f (f.path)}<Button block selected={file?.path === f.path} class="changed-file" title={f.path} onclick={() => { activeFile = f.path; diffOpen = true; }}><span class={`file-status ${f.status === 'deleted' ? 'text-bad' : f.status === 'added' ? 'text-good' : 'text-orange'}`}>{({ added: 'A', deleted: 'D', renamed: 'R', modified: 'M' } as Record<string, string>)[f.status ?? ''] ?? 'M'}</span><span class="file-copy"><span>{f.path}</span></span><span class="file-delta">+{f.additions} −{f.deletions}</span></Button>{/each}
+          {#each files as f (f.path)}<Button block selected={file?.path === f.path} class="changed-file" title={f.path} aria-label={`${f.path}, +${f.additions} −${f.deletions}`} onclick={() => { activeFile = f.path; diffOpen = true; }}><span class={`file-status ${f.status === 'deleted' ? 'text-bad' : f.status === 'added' ? 'text-good' : 'text-orange'}`}>{({ added: 'A', deleted: 'D', renamed: 'R', modified: 'M' } as Record<string, string>)[f.status ?? ''] ?? 'M'}</span><GitFilePath path={f.path}/><span class="file-delta">+{f.additions} −{f.deletions}</span></Button>{/each}
         </div>
         <div class="inspector-bottom"><Button block variant="secondary" disabled={!files.length || git.diffLoading} onclick={() => diffOpen = true}><Icon name="file-text" size={14} />View changes</Button><Button block onclick={working}><Icon name="circle-dot" size={14} />Back to working changes</Button></div>
       {:else}
-        <ProjectGitStaging {git} {path} {area} {ref} {limit} oninspect={inspectFile} onact={(action, paths) => void act(action, paths)} oncommitted={working} />
+        <ProjectGitStaging {git} {path} {area} {ref} {limit} oninspect={inspectFile} onact={(action, paths) => void act(action, paths)} oncommitted={working} oncontextfile={(file,staged,paths,event) => gitActions.openFile(file,staged,paths,event)} />
       {/if}
     </aside>
   </div>
@@ -531,7 +537,7 @@
     {@const request = newBranch}
     <ProjectGitNewBranch {...request} onClose={() => newBranch = null} onCreated={(createdPath, checkout) => { if (request.git !== git) return; newBranch = null; if (checkout) { chooseWorktree(createdPath === configuredPath ? '' : createdPath); working(); } }} />
   {/if}
-  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || 'Reading repository'}</span><span role="status">{git.busy ? `${({ 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy]}…` : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
+  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || 'Reading repository'}</span><span role="status">{git.busy ? `${({ 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy]}…` : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
 </div>
 
 <style>
@@ -681,8 +687,6 @@
   .inspector-heading h3 { font-size:14px; font-weight:600; }
   .inspector-heading > code { color:var(--color-faint); font-size:12px; }
   .file-status { width:12px; flex-shrink:0; text-align:center; font-family:var(--font-mono); font-size:12px; }
-  .file-copy { display:grid; min-width:0; flex:1; gap:1px; }
-  .file-copy > span { font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .selection-details { min-width:0; }
   .selected-subject { padding:16px 14px 10px; font-size:16px; line-height:1.45; font-weight:600; overflow-wrap:anywhere; }
   .commit-person { display:flex; align-items:center; gap:9px; padding:0 14px 12px; font-size:14px; }

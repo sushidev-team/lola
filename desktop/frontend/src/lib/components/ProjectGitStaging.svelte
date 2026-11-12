@@ -3,6 +3,7 @@
   import { createAttachmentKey, fromAction } from 'svelte/attachments';
   import { tooltip } from '$lib/tooltip';
   import { disclosureSlide } from '$lib/disclosureMotion';
+  import GitFilePath from './GitFilePath.svelte';
   import Button from './Button.svelte';
   import Checkbox from './Checkbox.svelte';
   import Icon from './Icon.svelte';
@@ -10,11 +11,12 @@
   import type { ProjectGitState } from '$lib/projectgit.svelte';
   import { stagedFiles, unstagedFiles, type GitArea, type GitFile } from '$lib/projectgit';
 
-  let { git, path = '', area = '', ref = '', limit = 200, oninspect, onact, oncommitted }: {
+  let { git, path = '', area = '', ref = '', limit = 200, oninspect, onact, oncommitted, oncontextfile }: {
     git: ProjectGitState; path?: string; area?: GitArea | ''; ref?: string; limit?: number;
     oninspect: (file: GitFile, staged: boolean) => void;
     onact: (action: 'stage' | 'unstage', paths: string[]) => void;
     oncommitted: () => void;
+    oncontextfile?: (file: GitFile, staged: boolean, paths: string[], event: MouseEvent) => void;
   } = $props();
   const id = $props.id();
   let mounted = true;
@@ -24,7 +26,7 @@
   const unstaged = $derived(unstagedFiles(data?.files ?? []));
   const conflicts = $derived((data?.files ?? []).some(file => file.conflict));
   const amendStale = $derived(git.amend && !!data && git.amendHead !== data.head);
-  const canCommit = $derived(staged.length > 0 && !!git.subject.trim() && !conflicts && !git.busy && !git.amendLoading && (!git.amend || (!!git.amendHead && !!data?.head && !amendStale)));
+  const canCommit = $derived(staged.length > 0 && !!git.subject.trim() && !conflicts && !git.busy && !data?.operation && !git.amendLoading && (!git.amend || (!!git.amendHead && !!data?.head && !amendStale)));
   const groups = $derived([{ title: 'Unstaged', entries: unstaged, staged: false }, { title: 'Staged', entries: staged, staged: true }]);
   let tree = $state(readTree());
   let collapsed = $state(new Set<string>());
@@ -76,6 +78,12 @@
     }
   }
   function fileKey(event: KeyboardEvent, entry: GitFile, staged: boolean) {
+    if (oncontextfile && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+      event.preventDefault(); event.stopPropagation();
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+      (event.currentTarget as HTMLElement).dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:rect.left+12,clientY:rect.bottom,cancelable:true}));
+      return;
+    }
     const key = groupKey(staged), order = staged ? visibleStaged : visibleUnstaged;
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); selections[key] = []; anchors[key] = ''; return; }
     if ((event.key === ' ' || event.key === 'Enter') && (event.shiftKey || event.metaKey || event.ctrlKey)) { event.preventDefault(); event.stopPropagation(); selectFile(entry, staged, event); return; }
@@ -89,6 +97,12 @@
     target?.focus(); target?.scrollIntoView?.({block:'nearest'});
   }
   function actionPaths(entry: GitFile, staged: boolean) { const selection = selectedPaths(staged); return selection.includes(entry.path) ? selection : [entry.path]; }
+  function fileContext(event: MouseEvent, entry: GitFile, staged: boolean) {
+    if (!oncontextfile) return;
+    event.preventDefault(); event.stopPropagation();
+    if (!selectedPaths(staged).includes(entry.path)) {selections[groupKey(staged)]=[entry.path];anchors[groupKey(staged)]=entry.path;}
+    oncontextfile(entry,staged,actionPaths(entry,staged),event);
+  }
 
   function readTree() { try { return localStorage.getItem('lola.git.files.tree') === '1'; } catch { return false; } }
   function setTree(value: boolean) { tree = value; try { localStorage.setItem('lola.git.files.tree', value ? '1' : '0'); } catch { /* retain in-memory choice */ } }
@@ -121,10 +135,9 @@
   {@const selection = selectedPaths(staged)}
   {@const targets = actionPaths(entry, staged)}
   <div class="stage-file" style={`padding-left:${depth * 12}px`}>
-    <Button block selected={selection.includes(entry.path)} aria-pressed={selection.includes(entry.path)} class="stage-file-main" data-file-path={entry.path} title={entry.oldPath ? `${entry.oldPath} → ${entry.path}` : entry.path} aria-label={`Inspect ${staged ? 'staged' : 'unstaged'} ${entry.path}`} onclick={(event) => selectFile(entry, staged, event)} onkeydown={(event) => fileKey(event, entry, staged)}>
+    <Button block selected={selection.includes(entry.path)} aria-pressed={selection.includes(entry.path)} class="stage-file-main" data-file-path={entry.path} title={entry.oldPath ? `${entry.oldPath} → ${entry.path}` : entry.path} aria-label={`Inspect ${staged ? 'staged' : 'unstaged'} ${entry.path}`} onclick={(event) => selectFile(entry, staged, event)} onkeydown={(event) => fileKey(event, entry, staged)} oncontextmenu={(event)=>fileContext(event,entry,staged)}>
       <span class={`file-status ${entry.conflict ? 'text-bad' : entry.untracked ? 'text-good' : 'text-orange'}`}>{status(entry, staged)}</span>
-      <span class="file-name">{entry.path.split('/').at(-1)}</span>
-      {#if !tree && entry.path.includes('/')}<span class="file-path">{entry.path.slice(0, entry.path.lastIndexOf('/'))}</span>{/if}
+      <GitFilePath path={entry.path} leafOnly={tree}/>
     </Button>
     <Button size="xs" class={staged ? 'stage-action unstage-action' : 'stage-action'} disabled={!!git.busy} aria-label={targets.length > 1 ? `${staged ? 'Unstage' : 'Stage'} ${targets.length} selected files` : `${staged ? 'Unstage' : 'Stage'} ${entry.path}`} onclick={() => onact(staged ? 'unstage' : 'stage', targets)}><Icon name={staged ? 'minus' : 'plus'} size={13} />{staged ? 'Unstage' : 'Stage'} {targets.length > 1 ? `${targets.length} files` : 'file'}</Button>
   </div>
@@ -159,7 +172,8 @@
     <label for={`${id}-subject`}>Commit message</label>
     <input id={`${id}-subject`} aria-label="Commit subject" placeholder={git.amendLoading ? 'Loading last commit…' : 'Summary'} bind:value={git.subject} disabled={!!git.busy} maxlength="1000" />
     <textarea aria-label="Commit body" placeholder="Description (optional)" rows="3" bind:value={git.body} disabled={!!git.busy} maxlength="19000"></textarea>
-    <div class="commit-options"><label class="amend-option"><Checkbox checked={git.amend} onchange={(event) => void git.setAmend(event.currentTarget.checked)} disabled={!!git.busy || !data?.head} /><span>Amend last commit</span>{#if git.amend && git.amendHead}<code>{git.amendHead.slice(0, 8)}</code>{/if}</label><Button size="xs" icon class="signing-icon" aria-label={signingLabel} {...signingTooltip}><Icon name={data?.signing?.enabled ? 'shield-check' : 'info'} size={14} /></Button></div>
+    <div class="commit-options"><label class="amend-option"><Checkbox checked={git.amend} onchange={(event) => void git.setAmend(event.currentTarget.checked)} disabled={!!git.busy || !!data?.operation || !data?.head} /><span>Amend last commit</span>{#if git.amend && git.amendHead}<code>{git.amendHead.slice(0, 8)}</code>{/if}</label><Button size="xs" icon class="signing-icon" aria-label={signingLabel} {...signingTooltip}><Icon name={data?.signing?.enabled ? 'shield-check' : 'info'} size={14} /></Button></div>
+    {#if data?.operation}<p class="conflict-note">Resolve and stage conflicts, then use Continue above to finish the {data.operation}.</p>{/if}
     {#if amendStale}<p class="conflict-note" role="alert">HEAD changed since you selected Amend. Turn Amend off, review the last commit, then enable it again.</p>{/if}
     {#if conflicts}<p class="conflict-note">Resolve conflicted files before committing.</p>{/if}
     <Button block variant="primary" loading={git.busy === 'commit' || git.busy === 'amend'} disabled={!canCommit} type="submit"><Icon name="check" size={14} />{git.amend ? 'Amend' : 'Commit'} {staged.length ? `${staged.length} ${staged.length === 1 ? 'file' : 'files'}` : 'staged changes'}</Button>
@@ -195,8 +209,6 @@
   .stage-file :global(.stage-file-main) { flex:1; height:28px; gap:7px; text-align:left; min-width:0; padding:3px 5px; font-weight:400; }
   .stage-file :global(.stage-file-main:not([aria-pressed="true"])) { color:var(--color-ink-2); }
   .file-status { width:12px; flex-shrink:0; text-align:center; font-family:var(--font-mono); font-size:12px; }
-  .file-name { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex-shrink:0; max-width:70%; }
-  .file-path { font-size:12px; color:var(--color-ink-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   :global(.file-folder) { height:28px; gap:5px; font-size:13px; font-weight:400; }
   .staging-panel :global(.file-folder > span) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .staging-panel :global(.file-folder > small) { margin-left:auto; font-size:12px; color:var(--color-ink-2); }

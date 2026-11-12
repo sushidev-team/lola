@@ -32,3 +32,16 @@ it('explains missing remotes and prevents submission',async()=>{
  const {action}=setup([]);expect(screen.getByRole('button',{name:'Publish branch'})).toBeDisabled();
  expect(screen.getByText(/Add a Git remote/)).toBeInTheDocument();await fireEvent.submit(screen.getByRole('form',{name:'Publish branch'}));expect(action).not.toHaveBeenCalled();
 });
+
+it('configures an existing remote tracking branch without publishing commits',async()=>{
+ const git=new ProjectGitState('demo','/repo');
+ const branch={name:'local',fullName:'refs/heads/local',sha:'a'.repeat(40),remote:false,current:true};
+ const target={name:'origin/review',fullName:'refs/remotes/origin/review',sha:'b'.repeat(40),remote:true,current:false};
+ git.snapshot={path:'/repo',branch:'local',head:branch.sha,upstream:'',refs:[branch,target],commits:[],worktrees:[],files:[],hasMore:false,signing:{enabled:false,format:'',key:''},remotes:[{name:'origin',host:'',owner:'',repo:'',avatarUrl:''}]};
+ const action=vi.spyOn(git,'branchAction').mockResolvedValue('/repo');const onClose=vi.fn();
+ render(ProjectGitPublish,{git,branch,destination:{remote:'origin',name:'review',trackingOnly:true},onClose});
+ expect(screen.getByRole('combobox',{name:'Remote branch'})).toHaveValue('review');expect(screen.getByText(/No commits will be pushed/)).toBeInTheDocument();expect(action).not.toHaveBeenCalled();
+ await fireEvent.submit(screen.getByRole('form',{name:'Set upstream'}));
+ expect(action).toHaveBeenCalledWith({action:'set-upstream',source:branch.fullName,sourceSHA:branch.sha,target:target.fullName,targetSHA:target.sha,remote:'origin',remoteBranch:'review'},'',200);
+ await waitFor(()=>expect(onClose).toHaveBeenCalledOnce());
+});

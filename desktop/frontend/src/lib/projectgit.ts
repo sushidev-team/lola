@@ -81,6 +81,16 @@ type Lane = { sha: string; color: number };
 export type GraphEdge = { from: number; to: number; color: number; start: 'top' | 'node'; end: 'node' | 'bottom' };
 export type GraphRow = { sha: string; lane: number; color: number; width: number; edges: GraphEdge[] };
 
+/** A working-copy edge ends at HEAD, never at an unrelated newest commit. */
+export function workingGraphConnection(rows: GraphRow[], head: string) {
+  const index = rows.findIndex(row => row.sha === head);
+  if (index < 0) return null;
+  // Reserve a separate lane when newer commits precede HEAD, so the edge
+  // cannot run through their nodes and imply that they own the working copy.
+  const lane = index === 0 ? rows[0].lane : Math.max(...rows.slice(0, index + 1).map(row => row.width));
+  return { index, lane, target: rows[index].lane };
+}
+
 /** Follow parent identities, never author names or ref labels: merges join actual ancestry. */
 export function commitGraph(commits: Pick<GitCommit, 'sha' | 'parents'>[]): GraphRow[] {
   // Resolve convergence before drawing. In topological order all children are

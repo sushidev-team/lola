@@ -233,3 +233,26 @@ func TestCommitActionsRejectStaleCheckoutAndRequireMergeMainline(t *testing.T) {
 		t.Fatal("first-parent revert kept topic file")
 	}
 }
+
+func TestSkipEmptyCherryPickKeepsExistingCommit(t *testing.T) {
+	dir := actionRepo(t)
+	c := Client{}
+	ctx := context.Background()
+	head := tip(t, dir, "HEAD")
+	r := BranchRequest{Action: "cherry-pick", SourceSHA: head, Target: "refs/heads/main", TargetSHA: head}
+	if err := c.BranchAction(ctx, dir, r); err == nil {
+		t.Fatal("expected empty cherry-pick")
+	}
+	if op, _ := c.Operation(ctx, dir); op != "cherry-pick" {
+		t.Fatal(op)
+	}
+	if err := c.BranchAction(ctx, dir, BranchRequest{Action: "skip", Source: "cherry-pick", SourceSHA: head}); err != nil {
+		t.Fatal(err)
+	}
+	if tip(t, dir, "HEAD") != head {
+		t.Fatal("skip changed existing history")
+	}
+	if op, _ := c.Operation(ctx, dir); op != "" {
+		t.Fatal(op)
+	}
+}

@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { branchTree, branchesByCommit, commitGraph, graphPath, selectCommits, stagedFiles, unstagedFiles, type GitFile, type GitRef } from './projectgit';
+import { workingGraphConnection, branchTree, branchesByCommit, commitGraph, graphPath, selectCommits, stagedFiles, unstagedFiles, type GitFile, type GitRef } from './projectgit';
 
 describe('Git history selection and topology', () => {
+  it('connects working changes only to HEAD and reserves a lane past unrelated newer commits', () => {
+    const rows=commitGraph([{sha:'newer',parents:['base']},{sha:'head',parents:['base']},{sha:'base',parents:[]}]);
+    expect(workingGraphConnection(rows,'newer')).toEqual({index:0,lane:rows[0].lane,target:rows[0].lane});
+    const link=workingGraphConnection(rows,'head')!;
+    expect(link.index).toBe(1);expect(link.target).toBe(rows[1].lane);
+    expect(link.lane).toBeGreaterThanOrEqual(Math.max(rows[0].width,rows[1].width));
+    expect(workingGraphConnection(rows,'hidden')).toBeNull();
+  });
   it('limits modifier selection to two commits and toggles existing selection', () => {
     expect(selectCommits(['a'], 'b', true)).toEqual(['a', 'b']);
     expect(selectCommits(['a', 'b'], 'c', true)).toEqual(['b', 'c']);

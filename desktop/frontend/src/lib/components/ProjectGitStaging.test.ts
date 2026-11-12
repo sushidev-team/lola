@@ -13,6 +13,19 @@ function setup(files?: GitSnapshot['files']) { const git=new ProjectGitState('lo
 beforeEach(()=>{localStorage.clear();confirm.cancel();Object.values(api).forEach(f=>f.mockReset());api.Snapshot.mockResolvedValue(snapshot());api.Identities.mockResolvedValue({authors:{}});});
 afterEach(()=>{cleanup();vi.useRealTimers();});
 describe('Project Git staging',()=>{
+ it('keeps filename hierarchy and preserves selection in the file context menu',async()=>{
+   const {git,view,oninspect}=setup();const oncontextfile=vi.fn();
+   await view.rerender({git,oninspect,onact:vi.fn(),oncommitted:vi.fn(),oncontextfile});
+   const row=screen.getByRole('button',{name:'Inspect unstaged src/new.ts'});
+   expect(row.querySelector('.directory')?.textContent).toBe('src');expect(row.querySelector('.basename')?.textContent).toBe('/new.ts');
+   await fireEvent.contextMenu(row);expect(oncontextfile).toHaveBeenLastCalledWith(expect.objectContaining({path:'src/new.ts'}),false,['src/new.ts'],expect.any(MouseEvent));expect(oninspect).not.toHaveBeenCalled();
+   await fireEvent.keyDown(row,{key:'F10',shiftKey:true});expect(oncontextfile).toHaveBeenCalledTimes(2);
+ });
+ it('keeps staging available but prevents a separate commit during operation recovery',async()=>{
+   const {git}=setup();git.snapshot!.operation='cherry-pick';git.subject='existing draft';await tick();
+   expect(screen.getByRole('button',{name:'Commit 1 file'})).toBeDisabled();expect(screen.getByRole('checkbox',{name:'Amend last commit'})).toBeDisabled();
+   expect(screen.getByRole('button',{name:'Stage src/new.ts'})).toBeEnabled();expect(screen.getByText(/Continue above/)).toBeInTheDocument();
+ });
  it('keeps both staging groups visible and maps list and tree actions to exact paths',async()=>{
    const {onact,oninspect}=setup();
    expect(within(screen.getByRole('region',{name:'Staged files'})).getByRole('button',{name:'Inspect staged src/app.ts'})).toBeInTheDocument();

@@ -28,7 +28,7 @@
       items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
     }
   }
-  function run(item: GitMenuItem) { if (item.disabled) return; actions.close(); item.run(); }
+  function run(item: GitMenuItem) { if (item.disabled) return; actions.close(true); item.run(); }
   onDestroy(() => actions.close());
   function portal(node: HTMLDivElement) { document.body.appendChild(node); return { destroy: () => node.remove() }; }
   function motion() { return typeof HTMLElement.prototype.animate === 'function' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 100 : 0; }

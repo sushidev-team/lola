@@ -41,6 +41,19 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it('connects the working node to HEAD and removes the connector during search',async()=>{
+    await open();
+    expect(document.querySelector('[data-commit="working"] .working-edge')).toBeInTheDocument();
+    expect(document.querySelector(`[data-commit="${newSHA}"] .working-edge`)).toBeInTheDocument();
+    expect(document.querySelector(`[data-commit="${oldSHA}"] .working-edge`)).toBeNull();
+    await fireEvent.keyDown(window,{key:'f',metaKey:true});await fireEvent.input(screen.getByRole('textbox',{name:'Search loaded commits'}),{target:{value:'Initial'}});
+    expect(document.querySelector('.working-edge')).toBeNull();
+  });
+  it('stages selected files through their context menu without opening an unrelated diff',async()=>{
+    await open();const file=screen.getByRole('button',{name:'Inspect unstaged new.ts'});
+    await fireEvent.contextMenu(file);await fireEvent.click(await screen.findByRole('menuitem',{name:'Stage file'}));
+    await waitFor(()=>expect(api.Stage).toHaveBeenCalledWith(project,'',['new.ts']));
+  });
   it('opens publish from Push for a local-only branch without pushing prematurely', async () => {
     api.Snapshot.mockResolvedValue(snapshot({upstream:'',remotes:[{name:'origin',host:'',owner:'',repo:'',avatarUrl:''}]}));
     await open(); await fireEvent.click(screen.getByRole('button',{name:'Push'}));
@@ -363,7 +376,7 @@ describe('Project Git workspace', () => {
     expect(screen.queryByText('Stage your files and create the first commit.')).not.toBeInTheDocument();
     api.Snapshot.mockResolvedValue(snapshot());
   api.Identities.mockResolvedValue({ authors: {} });
-    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await screen.findByRole('button', { name: /Add project workspace,/ });
     expect(screen.queryByText('Repository unavailable')).not.toBeInTheDocument();
   });

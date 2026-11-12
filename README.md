@@ -1736,21 +1736,26 @@ Git preserves working changes or refuses an incompatible switch.
 For a local-only branch, **Push** opens an inline **Publish branch** form. Choose
 a configured remote and edit the remote branch name; publishing sets that
 destination as the upstream after a successful push. Divergent remote history
-is refused. This also works from a nonchecked branch's context menu.
+is refused. This also works from a nonchecked branch's context menu. **Set upstream**
+links a local branch to an existing remote branch without pushing. Dropping a local
+branch onto a remote branch offers both actions with that destination preselected.
 
 **Create worktree** in a branch menu creates a separate checkout in a new folder,
 optionally opening it. A branch already checked out elsewhere requires a new
 branch name. Lola refuses destinations inside existing checkouts or its managed
 storage. Commit menus offer **Cherry-pick commit** and **Revert commit**, with
-confirmation, clean-checkout checks and Continue/Abort controls for conflicts.
-Merge commits use their explicitly identified first parent. **Compare against
+confirmation, clean-checkout checks and Continue/Skip/Abort controls for conflicts.
+Merge commits first ask which parent to interpret the change against. **Compare against
 working changes** compares a commit with staged, unstaged and untracked files,
 using a temporary index without changing the real index or checkout.
 
 Local, Remote, Worktrees and Stashes have distinct collapsible section headers. Branch
 names containing `/` form animated nested folders, and the active local branch is highlighted. Use **Clear branch filter** below the
 history to return to all branches. Working changes occupy the first history row only
-when the checkout has changed files.
+when the checkout has changed files. Its graph node connects to the actual HEAD,
+including when other branches have newer commits. File lists show a muted directory
+prefix that truncates before the filename. Right-click a changed file, or press
+Shift-F10, to view changes, stage/unstage the selection or copy paths.
 Press **⌘F** (Ctrl-F) to search loaded commits. The column controls at the top right of history
 show or hide columns; drag a column divider or focus it and use the arrow keys to
 resize. Column visibility and widths are remembered.

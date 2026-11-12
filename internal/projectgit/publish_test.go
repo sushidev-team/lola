@@ -82,3 +82,30 @@ func TestPublishRejectsBadDestinationStaleAndDivergent(t *testing.T) {
 		t.Fatal("failed publish set upstream", got)
 	}
 }
+
+func TestSetUpstreamDoesNotPublishOrSwitch(t *testing.T) {
+	dir := actionRepo(t)
+	remote := actionRepo(t)
+	c := Client{}
+	ctx := context.Background()
+	testGit(t, remote, "branch", "review/topic")
+	testGit(t, dir, "remote", "add", "origin", remote)
+	testGit(t, dir, "fetch", "origin")
+	testGit(t, dir, "branch", "local-topic")
+	before := tip(t, remote, "review/topic")
+	r := BranchRequest{Action: "set-upstream", Source: "refs/heads/local-topic", SourceSHA: tip(t, dir, "local-topic"), Target: "refs/remotes/origin/review/topic", TargetSHA: tip(t, dir, "origin/review/topic")}
+	write(t, dir, "base", "keep WIP\n")
+	if err := c.BranchAction(ctx, dir, r); err != nil {
+		t.Fatal(err)
+	}
+	if testGit(t, dir, "config", "--get", "branch.local-topic.merge") != "refs/heads/review/topic" {
+		t.Fatal("wrong upstream")
+	}
+	if tip(t, remote, "review/topic") != before || testGit(t, dir, "branch", "--show-current") != "main" || testGit(t, dir, "diff") == "" {
+		t.Fatal("tracking changed remote or checkout")
+	}
+	r.TargetSHA = "ffffffffffffffffffffffffffffffffffffffff"
+	if err := c.BranchAction(ctx, dir, r); err == nil {
+		t.Fatal("accepted changed tracking target")
+	}
+}

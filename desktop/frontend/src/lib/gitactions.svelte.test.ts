@@ -24,6 +24,37 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); confirm.cancel(); vi.restoreAllMocks(); });
 describe('Git action menus', () => {
+  it('offers push and tracking choices when dropping a local branch onto a remote', async () => {
+    const publishBranch=vi.fn();git.snapshot!.remotes=[{name:'origin',host:'',owner:'',repo:'',avatarUrl:''}];
+    const target={name:'origin/review',fullName:'refs/remotes/origin/review',sha:main.sha,remote:true,current:false};
+    actions=new GitActions(()=>({git,ref:'',limit:200}),{...callbacks,publishBranch});render(ProjectGitActionMenu,{actions});
+    actions.dropBranches(feature,target,event());
+    expect(await screen.findByRole('menuitem',{name:/Merge feature/})).toBeDisabled();
+    await fireEvent.click(await screen.findByRole('menuitem',{name:'Push feature/work to origin/review…'}));
+    expect(publishBranch).toHaveBeenLastCalledWith(feature,{remote:'origin',name:'review'});expect(git.branchAction).not.toHaveBeenCalled();
+    actions.dropBranches(feature,target,event());await fireEvent.click(await screen.findByRole('menuitem',{name:'Set upstream to origin/review…'}));
+    expect(publishBranch).toHaveBeenLastCalledWith(feature,{remote:'origin',name:'review',trackingOnly:true});
+  });
+  it('disables impossible pulls and sandbox writes while allowing history inspection', async () => {
+    render(ProjectGitActionMenu,{actions});actions.openBranch(feature,event());
+    expect(await screen.findByRole('menuitem',{name:'Pull changes'})).toBeDisabled();
+    git.snapshot!.worktrees=[{path:'/sandbox',branch:feature.name,head:feature.sha,blocked:true,locked:false,prunable:false}];
+    actions.dropBranches(main,feature,event());expect(await screen.findByRole('menuitem',{name:/^Merge main/})).toBeDisabled();
+    git.snapshot!.operation='rebase';actions.openBranch(main,event());expect(await screen.findByRole('menuitem',{name:'Push branch'})).toBeDisabled();expect(screen.getByRole('menuitem',{name:'View branch history'})).toBeEnabled();
+  });
+  it('lets merge actions explicitly select their mainline before confirmation', async () => {
+    render(ProjectGitActionMenu,{actions});
+    actions.openCommit({sha:feature.sha,subject:'Merge',author:'A',email:'',date:'',parents:[main.sha,'c'.repeat(40)],refs:[]},event());
+    await fireEvent.click(await screen.findByRole('menuitem',{name:'Revert commit…'}));expect(confirm.request).toBeNull();
+    await fireEvent.click(await screen.findByRole('menuitem',{name:'Parent 2 · cccccccc'}));expect(confirm.request?.detail).toContain('parent 2 (cccccccc)');confirm.accept();
+    await waitFor(()=>expect(git.branchAction).toHaveBeenCalledWith(expect.objectContaining({action:'revert',mainline:2}), '',200));
+  });
+  it('provides recovery from the repository menu and confirms skipping', async () => {
+    git.snapshot!.operation='cherry-pick';render(ProjectGitActionMenu,{actions});actions.openRepository(event());
+    expect(await screen.findByRole('menuitem',{name:'Continue cherry-pick'})).toBeEnabled();
+    await fireEvent.click(screen.getByRole('menuitem',{name:'Skip current commit…'}));expect(git.branchAction).not.toHaveBeenCalled();confirm.accept();
+    await waitFor(()=>expect(git.branchAction).toHaveBeenCalledWith({action:'skip',source:'cherry-pick',sourceSHA:main.sha,target:'',targetSHA:''},'',200));
+  });
   it('routes unchecked local-only Push to publishing while tracked Push stays direct', async () => {
     const publishBranch=vi.fn();actions=new GitActions(()=>({git,ref:'',limit:200}),{...callbacks,publishBranch});
     actions.push(feature);expect(publishBranch).toHaveBeenCalledWith(feature);expect(git.branchAction).not.toHaveBeenCalled();
@@ -53,7 +84,7 @@ describe('Git action menus', () => {
   });
   it('pulls an unselected branch without changing the visible checkout', async () => {
     render(ProjectGitActionMenu, { actions });
-    actions.openBranch(feature, event());
+    actions.openBranch({...feature,upstream:'refs/remotes/origin/feature/work'}, event());
     await fireEvent.click(await screen.findByRole('menuitem', { name: 'Pull changes' }));
     expect(git.branchAction).toHaveBeenCalledWith({ action: 'pull', source: feature.fullName, sourceSHA: feature.sha, target: '', targetSHA: '' }, '', 200);
     await waitFor(() => expect(actions.request).toBeNull());

@@ -84,7 +84,7 @@ export class ProjectGitState {
     try {
       const result = await ProjectGitService.BranchAction(this.project, this.worktree, request);
       await this.load(ref, limit);
-      this.notice = ({ checkout: 'Branch checked out.', pull: 'Branch updated.', publish: 'Branch published; upstream configured.', push: 'Branch pushed.', fetch: 'Remote refs updated.', 'cherry-pick': 'Commit cherry-picked.', revert: 'Commit reverted.', merge: 'Branches merged.', rebase: 'Branch rebased.', continue: 'Operation continued.', abort: 'Operation aborted.' } as Record<string, string>)[request.action] ?? 'Repository updated.';
+      this.notice = ({ checkout: 'Branch checked out.', pull: 'Branch updated.', 'set-upstream': 'Upstream configured.', skip: 'Commit skipped.', publish: 'Branch published; upstream configured.', push: 'Branch pushed.', fetch: 'Remote refs updated.', 'cherry-pick': 'Commit cherry-picked.', revert: 'Commit reverted.', merge: 'Branches merged.', rebase: 'Branch rebased.', continue: 'Operation continued.', abort: 'Operation aborted.' } as Record<string, string>)[request.action] ?? 'Repository updated.';
       return result.path;
     } catch (error) {
       // Merge/rebase failures can leave resolvable conflicts. Refresh those facts
@@ -233,7 +233,7 @@ export class ProjectGitState {
         case 'pull': await ProjectGitService.Pull(this.project, this.worktree); break;
         case 'push': await ProjectGitService.Push(this.project, this.worktree); break;
       }
-      this.notice = { stage: 'Files staged.', unstage: 'Files unstaged.', commit: 'Commit created.', amend: 'Commit amended.', fetch: 'Remote refs updated.', pull: 'Branch is up to date.', publish: 'Branch published; upstream configured.', push: 'Branch pushed.' }[action];
+      this.notice = { stage: 'Files staged.', unstage: 'Files unstaged.', commit: 'Commit created.', amend: 'Commit amended.', fetch: 'Remote refs updated.', pull: 'Branch is up to date.', 'set-upstream': 'Upstream configured.', skip: 'Commit skipped.', publish: 'Branch published; upstream configured.', push: 'Branch pushed.' }[action];
       await this.load(ref, limit);
       return true;
     } catch (error) {

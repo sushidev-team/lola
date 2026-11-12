@@ -107,7 +107,7 @@ func (c Client) ActionBranch(ctx context.Context, dir string, r BranchRequest) (
 	switch r.Action {
 	case "merge":
 		return r.Target, nil
-	case "rebase", "pull", "push", "publish":
+	case "rebase", "pull", "push", "publish", "set-upstream":
 		if strings.HasPrefix(r.Source, "refs/heads/") {
 			return r.Source, nil
 		}
@@ -187,13 +187,16 @@ func (c Client) checkout(ctx context.Context, dir, ref string) error {
 	return err
 }
 func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) error {
-	if r.Action == "continue" || r.Action == "abort" {
+	if r.Action == "continue" || r.Action == "abort" || r.Action == "skip" {
 		op, err := c.Operation(ctx, dir)
 		if err != nil {
 			return err
 		}
 		if op != r.Source || (op != "merge" && op != "rebase" && op != "cherry-pick" && op != "revert") {
 			return errors.New("no matching operation to continue or abort")
+		}
+		if r.Action == "skip" && op == "merge" {
+			return errors.New("a merge cannot skip a commit; continue or abort it")
 		}
 		if err := c.requireHead(ctx, dir, r.SourceSHA); err != nil {
 			return err
@@ -230,6 +233,18 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		return err
 	}
 	switch r.Action {
+	case "set-upstream":
+		if !strings.HasPrefix(r.Source, "refs/heads/") || !strings.HasPrefix(r.Target, "refs/remotes/") {
+			return errors.New("choose a local branch and a remote tracking branch")
+		}
+		if _, err := c.branchRef(ctx, dir, r.Target, r.TargetSHA, false); err != nil {
+			return err
+		}
+		if _, _, err := c.remoteBranch(ctx, dir, r.Target); err != nil {
+			return err
+		}
+		_, err := c.git(ctx, dir, "", "branch", "--set-upstream-to="+r.Target, "--", strings.TrimPrefix(r.Source, "refs/heads/"))
+		return err
 	case "publish":
 		return c.publishBranch(ctx, dir, r)
 	case "checkout":
