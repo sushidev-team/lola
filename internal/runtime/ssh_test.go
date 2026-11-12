@@ -81,8 +81,12 @@ func TestSandboxScratchLineMountsOnlyScratch(t *testing.T) {
 		}
 	}
 	mounts := strings.Count(line, " -v ")
-	if mounts > 3 { // scratch, transcripts, the Linux lola
+	if mounts > 4 { // scratch, the agent's own state folder, transcripts, the Linux lola
 		t.Errorf("%d mounts: %s", mounts, line)
+	}
+	state := filepath.Join(home, "sandbox", "lola-local-a")
+	if !strings.Contains(line, "-v "+state+":"+state) {
+		t.Errorf("the agent's state folder is not this session's own:\n%s", line)
 	}
 }
 

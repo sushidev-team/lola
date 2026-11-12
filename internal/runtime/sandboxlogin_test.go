@@ -62,7 +62,7 @@ func TestReloginGivesALoginlessSandboxedSessionTheNewLogin(t *testing.T) {
 	}
 	// A second refresh appends nothing new.
 	before := string(env)
-	if err := f.n.refreshSandboxCredentials(s.Worktree, agent.Claude); err != nil {
+	if err := f.n.refreshSandboxCredentials(s.ID, s.Worktree, agent.Claude); err != nil {
 		t.Fatal(err)
 	}
 	if after, _ := os.ReadFile(filepath.Join(s.Worktree, ".lola", "env")); string(after) != before {
@@ -98,14 +98,15 @@ func TestSandboxLoginForCodexUsesTheHostLogin(t *testing.T) {
 	if !f.n.SandboxLoginAvailable(agent.Codex) {
 		t.Fatal("host login not seen")
 	}
-	if err := f.n.refreshSandboxCredentials(s.Worktree, agent.Codex); err != nil {
+	if err := f.n.refreshSandboxCredentials(s.ID, s.Worktree, agent.Codex); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(filepath.Join(s.Worktree, ".lola", "codex", "auth.json"))
+	auth := filepath.Join(f.n.Home, "sandbox", s.ID, "codex", "auth.json")
+	got, err := os.ReadFile(auth)
 	if err != nil || string(got) != `{"tokens":"x"}` {
 		t.Fatalf("login not copied: %q %v", got, err)
 	}
-	if fi, _ := os.Stat(filepath.Join(s.Worktree, ".lola", "codex", "auth.json")); fi.Mode().Perm() != 0o600 {
+	if fi, _ := os.Stat(auth); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("copied login mode %v", fi.Mode())
 	}
 	if f.n.SandboxLoginMissing(s) {
@@ -115,5 +116,51 @@ func TestSandboxLoginForCodexUsesTheHostLogin(t *testing.T) {
 	host2.Sandbox = ""
 	if f.n.SandboxLoginMissing(host2) {
 		t.Fatal("a host session reported")
+	}
+}
+
+// The agent's private state lives outside the worktree (repository tools
+// must not walk it), is created and mounted for the launch, keeps a session
+// that already has it in the worktree, and goes with the worktree.
+func TestSandboxAgentStateLivesOutsideTheWorktree(t *testing.T) {
+	f := sandboxFixture(t)
+	f.n.SandboxCredential = func(string) (string, bool) { return "", false }
+	f.n.RemoveContainer = func(context.Context, string) error { return nil }
+	s, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(f.n.Home, "sandbox", s.ID, "claude")
+	env, _ := os.ReadFile(filepath.Join(s.Worktree, ".lola", "env"))
+	if !strings.Contains(string(env), "CLAUDE_CONFIG_DIR="+shQuote(state)+"\n") {
+		t.Fatalf("CLAUDE_CONFIG_DIR not outside the worktree:\n%s", env)
+	}
+	if !isDir(filepath.Join(f.n.Home, "sandbox", s.ID)) {
+		t.Fatal("state folder not created before the launch")
+	}
+	if _, err := os.Stat(filepath.Join(s.Worktree, ".lola", "claude")); err == nil {
+		t.Fatal("state still written into the worktree")
+	}
+
+	// A session started before the move keeps its in-worktree state.
+	legacy := filepath.Join(s.Worktree, ".lola", "codex")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.n.agentStateDir(s.ID, s.Worktree, agent.Codex); got != legacy {
+		t.Fatalf("legacy codex home = %q", got)
+	}
+
+	// Teardown that removes the worktree removes the state; one that keeps it does not.
+	f.n.pruneSandboxState(s)
+	if !isDir(filepath.Join(f.n.Home, "sandbox", s.ID)) {
+		t.Fatal("state pruned while the worktree remains")
+	}
+	if err := os.RemoveAll(s.Worktree); err != nil {
+		t.Fatal(err)
+	}
+	f.n.pruneSandboxState(s)
+	if isDir(filepath.Join(f.n.Home, "sandbox", s.ID)) {
+		t.Fatal("state kept after the worktree went")
 	}
 }

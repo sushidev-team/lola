@@ -61,7 +61,7 @@
     </div>
     {#snippet footer()}
       <div class="dialog-actions">
-        <Button size="md" onclick={() => sandboxLogin.finish(false)}>Cancel</Button>
+        <Button class="cancel" size="md" onclick={() => sandboxLogin.finish(false)}>Cancel</Button>
         {#if req.agent !== "claude"}
           <Button variant="primary" size="md" loading={checking} onclick={check}>Check again</Button>
         {/if}

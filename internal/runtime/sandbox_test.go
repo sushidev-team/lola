@@ -53,7 +53,9 @@ func TestSandboxedLaunchRunsTheAgentInDocker(t *testing.T) {
 		"-v " + shQuote(f.n.Cfg.Sandbox.LolaBin+":/usr/local/bin/lola:ro"),
 		"-p 127.0.0.1:3000:3000", "-p 127.0.0.1:8080:80",
 		// the inner line is the host launch, unchanged, after the prelude
-		"--entrypoint sh acme/agent:1 -c " + shQuote(sandboxPrelude(dir, agent.Claude, usageSlug(dir))+inner),
+		"--entrypoint sh acme/agent:1 -c " + shQuote(sandboxPrelude(dir, f.n.agentStateDir(id, dir, agent.Claude), agent.Claude, usageSlug(dir))+inner),
+		// the agent's private state: this session's folder under ~/.lola/sandbox, never the worktree
+		"-v " + shQuote(filepath.Join(f.n.Home, "sandbox", id)+":"+filepath.Join(f.n.Home, "sandbox", id)),
 	} {
 		if !strings.Contains(line, must) {
 			t.Errorf("launch line missing %q:\n%s", must, line)
@@ -98,7 +100,7 @@ func TestSandboxedEnvFileCarriesTheBridgeAndCredentials(t *testing.T) {
 		"LOLA_SANDBOX=docker\n",
 		"LOLA_HOOK_ADDR=host.docker.internal:7718\n",
 		"LOLA_HOOK_TOKEN=tok-" + id + "\n",
-		"CODEX_HOME=" + shQuote(filepath.Join(dir, ".lola", "codex")) + "\n",
+		"CODEX_HOME=" + shQuote(filepath.Join(f.n.Home, "sandbox", id, "codex")) + "\n",
 		`LOLA_TEST_PASS='s3cr3t'\''x'` + "\n",
 	} {
 		if !strings.Contains(env, must) {
@@ -111,7 +113,7 @@ func TestSandboxedEnvFileCarriesTheBridgeAndCredentials(t *testing.T) {
 	if strings.Count(env, "CODEX_HOME=") != 1 {
 		t.Errorf("host CODEX_HOME leaked into a sandboxed env:\n%s", env)
 	}
-	if claude := string(f.n.envFile(f.p, id, dir, agent.Claude)); !strings.Contains(claude, "CLAUDE_CONFIG_DIR="+shQuote(filepath.Join(dir, ".lola", "claude"))) {
+	if claude := string(f.n.envFile(f.p, id, dir, agent.Claude)); !strings.Contains(claude, "CLAUDE_CONFIG_DIR="+shQuote(filepath.Join(f.n.Home, "sandbox", id, "claude"))) {
 		t.Errorf("claude env missing CLAUDE_CONFIG_DIR:\n%s", claude)
 	}
 

@@ -1486,6 +1486,10 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 			n.Logf("session %s: removing its sandbox container failed: %v", s.ID, err)
 		}
 	}
+	if removeWorktree {
+		// After the worktree is gone (deferred): a kept, dirty one keeps it.
+		defer n.pruneSandboxState(s)
+	}
 	if s.Kind == session.KindLocal {
 		if removeWorktree {
 			if s.Location == LocationSSH {
@@ -1684,7 +1688,7 @@ func (n *Native) revive(ctx context.Context, s session.Session, fresh bool) (ses
 	if kind == agent.Codex && n.sandboxProject(s.Project) != nil {
 		// The container's CODEX_HOME lives in the worktree (sandboxEnv); the
 		// env file already says so and must not be pointed at the host's.
-		resume = codexHasSession(ctx, filepath.Join(dir, sandboxCodexDir), dir)
+		resume = codexHasSession(ctx, n.agentStateDir(id, dir, agent.Codex), dir)
 	} else if kind == agent.Codex {
 		home := userCodexHome()
 		if p := n.Cfg.ProjectByName(s.Project); p != nil && p.Env["CODEX_HOME"] != "" {
@@ -1700,7 +1704,7 @@ func (n *Native) revive(ctx context.Context, s session.Session, fresh bool) (ses
 		resume = false
 	}
 	if n.sandboxProject(s.Project) != nil {
-		if err := n.refreshSandboxCredentials(dir, kind); err != nil {
+		if err := n.refreshSandboxCredentials(id, dir, kind); err != nil {
 			return session.Session{}, fmt.Errorf("runtime: revive %s: refresh credentials: %w", id, err)
 		}
 	}

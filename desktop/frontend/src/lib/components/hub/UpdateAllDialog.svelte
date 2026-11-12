@@ -66,7 +66,7 @@
   </div>
   {#snippet footer()}
     <div class="dialog-actions">
-      <Button size="md" onclick={onClose}>Cancel</Button>
+      <Button class="cancel" size="md" onclick={onClose}>Cancel</Button>
       <Button variant="primary" size="md" loading={busy} disabled={busy}
         onclick={() => onStart({ patch: levels.patch, minor: levels.minor, major: levels.major, note: note.trim() })}>Start update</Button>
     </div>
