@@ -668,7 +668,8 @@
   .repo-rail :global(.stash-row small) { margin-left:auto; font-size:12px; color:var(--color-faint); }
   .branch-glyph { display:inline-flex; flex-shrink:0; }
   .remote-group { margin-top:4px; }
-  .remote-group :global(.remote-fetch) { flex-shrink:0; transition:none; }
+  .remote-group :global(.remote-fetch) { flex-shrink:0; opacity:0; pointer-events:none; transition:none; }
+  .remote-group summary:hover :global(.remote-fetch),.remote-group summary:focus-within :global(.remote-fetch),.remote-group :global(.remote-fetch[aria-busy="true"]) { opacity:1; pointer-events:auto; }
   .remote-group summary { min-height:28px; height:28px; gap:7px; }
   .remote-copy { display:flex; align-items:baseline; gap:7px; min-width:0; flex:1; }
   .remote-copy strong { font-size:13px; font-weight:500; }
