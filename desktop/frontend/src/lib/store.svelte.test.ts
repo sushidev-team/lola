@@ -296,7 +296,7 @@ describe("agent launch and switch actions", () => {
     SwitchAgent.mockResolvedValueOnce({ agent: "codex", message: "" });
     await store.switchAgent("sess-1", "codex");
     expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
-    expect(store.flash?.text).toBe("switched sess-1 to codex");
+    expect(store.flash?.text).toBe("Switched sess-1 to codex");
   });
 });
 

@@ -276,9 +276,34 @@ class Store {
   }
 
   setFlash(text: string, kind: "good" | "warn" | "bad" = "good") {
-    this.flash = { text, kind };
+    // Sentence case at the one place every flash passes: call sites write
+    // "daemon restarted", the toast shows "Daemon restarted". Only a first word
+    // of plain letters is touched: a message that opens with an identifier
+    // ("lola-p1-eng-1: switched …", "eng-123 …") keeps it verbatim.
+    this.flash = { text: /^[a-z]+(?![\w-])/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text, kind };
+    this.armFlashTimer();
+  }
+
+  /** How long a flash stays: an error is read, not glanced at. */
+  private flashMs() {
+    return this.flash?.kind === "bad" ? 8000 : 4000;
+  }
+
+  private armFlashTimer() {
     clearTimeout(this.flashTimer);
-    this.flashTimer = setTimeout(() => (this.flash = null), 4000);
+    this.flashTimer = setTimeout(() => (this.flash = null), this.flashMs());
+  }
+
+  /** Hovering the toast holds it; leaving restarts the full timeout. */
+  holdFlash(hold: boolean) {
+    if (!this.flash) return;
+    if (hold) clearTimeout(this.flashTimer);
+    else this.armFlashTimer();
+  }
+
+  dismissFlash() {
+    clearTimeout(this.flashTimer);
+    this.flash = null;
   }
 
   /** Dismiss the out-of-date banner. A persistent failure is not re-emitted (the
@@ -475,7 +500,7 @@ class Store {
   }
   // coderabbit is kept as the back-compat alias forcing the watch kind.
   coderabbit(session: string) {
-    return this.act(() => DaemonService.CodeRabbit(session), "coderabbit poll requested");
+    return this.act(() => DaemonService.CodeRabbit(session), "CodeRabbit poll requested");
   }
   /**
    * Ask a CONFLICTING session's coding agent to merge the project's default
