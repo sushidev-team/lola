@@ -9,10 +9,10 @@ import (
 )
 
 func TestOsascriptArgv(t *testing.T) {
-	got := osascriptArgv(Note{Title: "Approved", Body: "PR is green", URL: "http://pr/7"})
+	got := osascriptArgv(Note{Title: "Approved", Subtitle: "APP-7 · app #7", Body: "PR is green", URL: "http://pr/7"})
 	want := []string{
 		"/usr/bin/osascript", "-e",
-		`display notification "PR is green" with title "Approved" subtitle "http://pr/7"`,
+		`display notification "PR is green" with title "Approved" subtitle "APP-7 · app #7"`,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("argv = %v, want %v", got, want)
@@ -24,8 +24,8 @@ func TestOsascriptArgv(t *testing.T) {
 	}
 }
 
-func TestOsascriptArgvNoURLOmitsSubtitle(t *testing.T) {
-	got := osascriptArgv(Note{Title: "T", Body: "B"})
+func TestOsascriptArgvNeverUsesURLAsSubtitle(t *testing.T) {
+	got := osascriptArgv(Note{Title: "T", Body: "B", URL: "https://github.com/acme/app/pull/7"})
 	want := `display notification "B" with title "T"`
 	if got[2] != want {
 		t.Fatalf("script = %q, want %q", got[2], want)

@@ -65,6 +65,7 @@ func BaseID(id string) string {
 // session keeps on itself (see the lane fields in Session for each one's
 // meaning).
 type App struct {
+	ReadyNotified   string            `json:"ready_notified,omitempty"`
 	PRCommentGuards map[string]string `json:"pr_comment_guards,omitempty"`
 	// Name is the member project's name, which is also the folder name.
 	Name string `json:"name"`
@@ -130,6 +131,7 @@ func (s Session) LaneView(app string) (Session, bool) {
 	v.Lane = app
 	v.Repo, v.Branch, v.Worktree, v.GitPin = a.Repo, a.Branch, a.Worktree, a.GitPin
 	v.PR = clonePR(a.PR)
+	v.ReadyNotified = a.ReadyNotified
 	v.PRObservedAt, v.PRFetchFailures = a.PRObservedAt, a.PRFetchFailures
 	v.Delivery, v.DeliverySince = a.Delivery, a.DeliverySince
 	if v.Delivery == "" {
@@ -175,6 +177,7 @@ func (s *Session) putLane(v Session, now time.Time) {
 	a := s.Apps[i]
 	a.Repo, a.Branch, a.Worktree, a.GitPin = v.Repo, v.Branch, v.Worktree, v.GitPin
 	a.PR = clonePR(v.PR)
+	a.ReadyNotified = v.ReadyNotified
 	a.PRObservedAt, a.PRFetchFailures = v.PRObservedAt, v.PRFetchFailures
 	a.Delivery, a.DeliverySince = v.Delivery, v.DeliverySince
 	a.LastReactedStatus, a.CIRetries, a.Escalated, a.PendingReaction = v.LastReactedStatus, v.CIRetries, v.Escalated, v.PendingReaction
@@ -193,6 +196,7 @@ func (s *Session) putLane(v Session, now time.Time) {
 	s.Apps[i] = a
 	s.Repo, s.Branch, s.Worktree, s.GitPin = keep.Repo, keep.Branch, keep.Worktree, keep.GitPin
 	s.PR, s.PRObservedAt, s.PRFetchFailures = keep.PR, keep.PRObservedAt, keep.PRFetchFailures
+	s.ReadyNotified = keep.ReadyNotified
 	s.Delivery, s.DeliverySince = keep.Delivery, keep.DeliverySince
 	s.LastReactedStatus, s.CIRetries, s.Escalated, s.PendingReaction = keep.LastReactedStatus, keep.CIRetries, keep.Escalated, keep.PendingReaction
 	s.ReviewedPR, s.LastCodeRabbitAt, s.PendingCodeRabbit, s.PendingReviewFindings = keep.ReviewedPR, keep.LastCodeRabbitAt, keep.PendingCodeRabbit, keep.PendingReviewFindings

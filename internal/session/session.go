@@ -154,6 +154,11 @@ type Session struct {
 	// hook — rendered agent output: display only, never executed, never fed
 	// back to any agent.
 	LastNotification string `json:"last_notification,omitempty"`
+	// InputNotified deduplicates one waiting episode; cleared when the agent resumes.
+	InputNotified state.InputReason `json:"input_notified,omitempty"`
+	// ReadyNotified identifies the repo/PR/head last announced as ready.
+	// Like the PR, this field belongs to a lane in stack sessions.
+	ReadyNotified string `json:"ready_notified,omitempty"`
 
 	// Nudged records that the agent's own "waiting for your input"
 	// notification fired while the session sat idle. It is a DISPLAY-ONLY
@@ -653,6 +658,7 @@ func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, no
 		s.AgentStateSince = now
 		if a != state.AgentWaitingInput {
 			s.InputReason = ""
+			s.InputNotified = ""
 			// LastNotification DESCRIBES the waiting_input condition ("Claude is
 			// waiting for your input", a permission prompt, …). It used to outlive
 			// it: only InputReason was cleared here, so once the human answered and

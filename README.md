@@ -893,6 +893,25 @@ checkpoint restores, and checks attachment again after reading the composer.
 Best-effort desktop + Slack notifications, routed by priority (P3.20). Optional;
 the defaults below apply when the table is absent.
 
+macOS banners are reserved for a human action: an agent question, permission
+request or dialog; an escalation that automation cannot resolve; or a **PR ready**
+banner. Idle reminders, automatic CI retries, review hand-offs and routine
+progress stay quiet on desktop (Slack still follows its configured routing).
+
+The ready banner requires the agent to be idle or finished, no queued follow-up
+work or running Lola review, and fresh GitHub confirmation: a non-draft open PR,
+passing checks (or no configured checks), completed required reviews, no
+unresolved threads (including outdated threads), and a clean merge state for
+the current head and base. Required Lola review gates must also pass. Unknown
+or failed lookups never announce readiness. PRs handled by the automatic merge
+queue stay quiet. Questions alert once per waiting episode; ready PRs once per
+head revision, with guards saved across daemon restarts. These checks run
+on the observer cycle (normally about 30 seconds).
+
+Banners use macOS Notification Center through `osascript`; macOS notification
+permissions and Focus settings still apply. The daemon sends them even when
+the Lola desktop app is closed.
+
 | Key | Type | Description |
 | --- | --- | --- |
 | `desktop` | bool | macOS desktop banners. Default `true` on macOS, `false` elsewhere (no-op off macOS). |
@@ -909,8 +928,8 @@ Routing priorities and their defaults:
 | Priority | Default channels | Used for |
 | --- | --- | --- |
 | `urgent` | `["desktop", "slack"]` | needs-input, escalations |
-| `action` | `["desktop", "slack"]` | changes-requested, CI failed after retries |
-| `info` | `["slack"]` | approved+parked, merged+cleaned |
+| `action` | `["desktop", "slack"]` | verified PR readiness; routine reactions and review findings reach Slack only |
+| `info` | `["slack"]` | routine progress, merged+cleaned |
 
 Priorities you omit under `[notify.routing]` keep their default channels; set a
 priority to `[]` to route it nowhere.

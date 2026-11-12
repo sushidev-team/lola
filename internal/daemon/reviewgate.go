@@ -89,6 +89,20 @@ func headReviewDue(s session.Session, p reviewProvider) bool {
 // observer-driven pass, whose "could not answer" outcomes are retried
 // (noteReviewOutcome); a manual one is final.
 func (d *Daemon) reviewPass(ctx context.Context, s session.Session, p reviewProvider, auto bool) reviewResult {
+	d.reviewMu.Lock()
+	if d.reviewActive == nil {
+		d.reviewActive = map[string]int{}
+	}
+	d.reviewActive[s.ID]++
+	d.reviewMu.Unlock()
+	defer func() {
+		d.reviewMu.Lock()
+		d.reviewActive[s.ID]--
+		if d.reviewActive[s.ID] == 0 {
+			delete(d.reviewActive, s.ID)
+		}
+		d.reviewMu.Unlock()
+	}()
 	repo, sha, gated := d.beginReviewGate(ctx, s, p)
 	res := d.runReviewChain(ctx, s, p)
 	retry := false
