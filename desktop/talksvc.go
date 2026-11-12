@@ -16,6 +16,13 @@ import "github.com/sushidev-team/lola/internal/protocol"
 // waits for a pane to come to rest, and a send waits out a checkpoint restore.
 type TalkService struct{}
 
+// Setting sends a model setting only at a freshly verified empty, idle prompt.
+func (s *TalkService) Setting(a protocol.AgentSettingArgs) (protocol.AgentSettingData, error) {
+	var d protocol.AgentSettingData
+	err := sshCall(protocol.CmdAgentSetting, a, &d, true)
+	return d, err
+}
+
 // Feed reads part of the agent's log. Every field of it is a claim.
 func (s *TalkService) Feed(a protocol.AgentFeedArgs) (protocol.AgentFeedData, error) {
 	var d protocol.AgentFeedData

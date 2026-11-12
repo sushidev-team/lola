@@ -14,6 +14,7 @@ import type {
   AgentFeedOutputData,
   AgentSayArgs,
   AgentSayData,
+  AgentSettingArgs,
   AgentStopData,
   EndedSession,
   TalkStateData,
@@ -179,6 +180,52 @@ class TalkStore {
     const d = await TalkService.Stop({ session: id });
     if (!d.stopped) throw d.why || "Already stopped";
     return d;
+  }
+
+  /** Shared across remounts so a slow background press cannot be sent twice. */
+  backgroundPending = $state<Record<string, boolean>>({});
+  backgroundErrors = $state<Record<string, string>>({});
+
+  settingPending = $state<Record<string, boolean>>({});
+  settingErrors = $state<Record<string, string>>({});
+  settingNotices = $state<Record<string, string>>({});
+  settingTerminal = $state<Record<string, boolean>>({});
+
+  async setting(a: AgentSettingArgs): Promise<void> {
+    const id = a.session;
+    if (this.settingPending[id]) return;
+    this.settingPending[id] = true;
+    this.settingErrors[id] = "";
+    this.settingNotices[id] = "";
+    const t = this.entry(id);
+    t.presses++;
+    try {
+      const d = await TalkService.Setting(a);
+      if (!d.sent) throw new Error("The setting was not sent. Try again at an idle prompt.");
+      this.settingNotices[id] = a.agent === "opencode"
+        ? `Choose the ${a.setting} in the inline terminal.`
+        : `Requested ${a.setting}: ${a.value}. Check the terminal for confirmation.`;
+    } catch (err) {
+      this.settingErrors[id] = errText(err);
+    } finally {
+      t.presses++;
+      this.settingPending[id] = false;
+      void this.refresh(id);
+    }
+  }
+
+  async background(id: string, hash: string): Promise<void> {
+    if (this.backgroundPending[id]) return;
+    this.backgroundPending[id] = true;
+    this.backgroundErrors[id] = "";
+    try {
+      const d = await this.choose(id, hash, "background");
+      if (!d.sent) this.backgroundErrors[id] = d.why || "The command changed. Try again.";
+    } catch (err) {
+      this.backgroundErrors[id] = errText(err);
+    } finally {
+      this.backgroundPending[id] = false;
+    }
   }
 
   say(a: AgentSayArgs): Promise<AgentSayData> {

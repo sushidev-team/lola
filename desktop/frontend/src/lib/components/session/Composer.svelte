@@ -63,6 +63,7 @@
   import MenuItem from "../MenuItem.svelte";
   import SlashList from "./SlashList.svelte";
   import AttachGlyph from "./AttachGlyph.svelte";
+  import ModelSettings from "./ModelSettings.svelte";
 
   let { sessionId, railState = $bindable() }: { sessionId: string; /** What the footer says, for the rail to end in. */ railState?: FootState } = $props();
 
@@ -836,6 +837,7 @@
             <Button variant="secondary" size="xs" class="h-5!" aria-haspopup="menu" aria-expanded={!!switching} onclick={openSwitch}>Switch agent…</Button>
           {/if}
         {/each}
+        {#if !running}{#key sessionId + (session?.agent || "claude")}<ModelSettings {sessionId} />{/key}{/if}
       </div>
       <div class="flex items-center gap-1">
         {#if footer.hint && composerNow !== "card" && composerNow !== "modal"}<span class="truncate text-sm text-faint" data-footer-hint>{footer.hint}</span>

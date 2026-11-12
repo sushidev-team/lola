@@ -10,19 +10,58 @@
   import Button from './Button.svelte';
   import MenuItem from './MenuItem.svelte';
   import Tabs from './Tabs.svelte';
+  let { contextTarget }: { contextTarget?: HTMLElement } = $props();
   const rows = $derived(store.rosterSessions.filter(s => !nav.scoped || s.project === nav.project));
   const needs = $derived(waitingQueue(rows).length);
   const endedCount = $derived(talk.endedList().filter(e => !store.sessionById(e.id) && (!nav.scoped || e.project === nav.project)).length);
   let createOpen = $state(false);
   let createRoot: HTMLDivElement;
   let menu = $state<HTMLDivElement>();
-  let trigger: HTMLButtonElement | undefined;
+  let trigger: HTMLElement | undefined;
+  let searchInput: HTMLInputElement;
+  let position = $state({ x: 0, y: 0 });
+
+  async function placeAndFocus() {
+    await tick();
+    if (!createOpen || !menu) return;
+    const { width, height } = menu.getBoundingClientRect();
+    position = {
+      x: Math.max(4, Math.min(position.x, window.innerWidth - width - 4)),
+      y: Math.max(4, Math.min(position.y, window.innerHeight - height - 4)),
+    };
+    menu.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }
 
   async function toggleCreate(event: MouseEvent) {
     trigger = event.currentTarget as HTMLButtonElement;
+    const rect = trigger.getBoundingClientRect();
+    position = { x: rect.right - 224, y: rect.bottom + 4 };
     createOpen = !createOpen;
-    if (createOpen) { await tick(); menu?.querySelector<HTMLElement>('[role="menuitem"]')?.focus(); }
+    if (createOpen) await placeAndFocus();
   }
+  async function openBackgroundMenu(event: MouseEvent) {
+    // Session rows own their menu; editing fields keep native copy/paste actions.
+    if (event.defaultPrevented || (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable], button, a, [role="menu"]'))) return;
+    event.preventDefault();
+    trigger = searchInput;
+    position = { x: event.clientX, y: event.clientY };
+    createOpen = true;
+    await placeAndFocus();
+  }
+  $effect(() => {
+    const target = contextTarget;
+    target?.addEventListener('contextmenu', openBackgroundMenu);
+    return () => target?.removeEventListener('contextmenu', openBackgroundMenu);
+  });
+  $effect(() => {
+    if (!createOpen) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault(); event.stopPropagation(); closeCreate(true);
+    };
+    window.addEventListener('keydown', escape, true);
+    return () => window.removeEventListener('keydown', escape, true);
+  });
   function closeCreate(focus = false) {
     createOpen = false;
     if (focus) trigger?.focus();
@@ -45,14 +84,14 @@
 <div class="sidebar-session-tools">
   <div class="flex min-w-0 items-center gap-2">
     <div class="relative min-w-0 flex-1">
-      <input class="sidebar-search" aria-label="Search sessions" placeholder="Search sessions…" bind:value={nav.sidebarQuery}
+      <input bind:this={searchInput} class="sidebar-search" aria-label="Search sessions" placeholder="Search sessions…" bind:value={nav.sidebarQuery}
         onkeydown={e => { if (e.key === 'Escape') { nav.sidebarQuery = ''; e.stopPropagation(); } }} />
       {#if nav.sidebarQuery}<button type="button" class="sidebar-search-clear" aria-label="Clear session search" onclick={() => nav.sidebarQuery = ''}><Icon name="x" size={14} /></button>{/if}
     </div>
     <div class="relative" bind:this={createRoot}>
       <Button icon size="xs" aria-label="New session" title="New session" aria-haspopup="menu" aria-expanded={createOpen} onclick={toggleCreate}><Icon name="plus" size={14} /></Button>
       {#if createOpen}
-        <div bind:this={menu} role="menu" tabindex="-1" aria-label="Create session" class="absolute top-full right-0 z-50 mt-1 w-56 rounded-lg border border-edge bg-panel p-1 shadow-xl" onkeydown={menuKey}>
+        <div bind:this={menu} role="menu" tabindex="-1" aria-label="Create session" style="left:{position.x}px;top:{position.y}px" class="fixed z-50 max-h-[calc(100vh-8px)] w-56 max-w-[calc(100vw-8px)] overflow-y-auto rounded-lg border border-edge bg-panel p-1 shadow-xl" onkeydown={menuKey} oncontextmenu={e => e.preventDefault()}>
           <MenuItem icon="+" trailing="⌘N" onclick={() => choose(newSessionHere)}>New session…</MenuItem>
           <MenuItem icon="⌁" trailing="⌘⇧H" onclick={() => choose(() => ssh.newSession())}>SSH session…</MenuItem>
           <MenuItem icon="$" trailing="⌘⇧N" onclick={() => choose(() => { void openShell(); })}>Temporary shell…</MenuItem>

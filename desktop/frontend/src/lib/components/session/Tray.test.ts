@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
-import { conn, freshSession, permission, setTalk, ssh, talkSvc, terms, AGENT } from "./talk.testkit";
+import { conn, freshSession, permission, setTalk, ssh, talk, talkSvc, terms, AGENT } from "./talk.testkit";
 import { nav } from "$lib/nav.svelte";
 import Tray from "./Tray.svelte";
 
@@ -14,6 +14,21 @@ afterEach(() => {
 });
 
 describe("inline terminal controls", () => {
+  it("hosts a requested OpenCode picker without leaving the conversation, and closes on demand", async () => {
+    const id = freshSession({ agent: "opencode", tmuxName: "opencode-pane" });
+    const { rerender } = render(Tray, { sessionId: id });
+    talk.settingTerminal[id] = true;
+    await waitFor(() => expect(screen.getByTestId("terminal").getAttribute("data-name")).toBe("opencode-pane"));
+    await rerender({ sessionId: id, covered: true });
+    expect(screen.queryByTestId("terminal")).toBeNull();
+    await rerender({ sessionId: id, covered: false });
+    await fireEvent.click(screen.getByRole("button", { name: "Close controls" }));
+    expect(talk.settingTerminal[id]).toBe(false);
+    expect(screen.queryByTestId("terminal")).toBeNull();
+    expect(talkSvc.Say).not.toHaveBeenCalled();
+    expect(talkSvc.Choose).not.toHaveBeenCalled();
+  });
+
   const modal = (hash = "clipped-command") => ({
     kind: "modal", hash,
     lines: ["command tail", "Do you want to proceed?", "❯ 1. Yes", "  2. No"],

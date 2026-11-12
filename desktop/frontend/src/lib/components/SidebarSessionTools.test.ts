@@ -13,6 +13,67 @@ beforeEach(() => { cleanup(); vi.clearAllMocks(); nav.triage = ''; nav.scoped = 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('session tools', () => {
+  function background() {
+    const target = document.createElement('div');
+    document.body.append(target);
+    const mounted = render(SidebarSessionTools, { props: { contextTarget: target }, target });
+    return { target, ...mounted };
+  }
+
+  it('opens the shared creation menu on the empty sidebar and preserves the project scope', async () => {
+    nav.project = 'nori';
+    nav.scoped = true;
+    const { target } = background();
+    expect(await fireEvent.contextMenu(target, { clientX: 120, clientY: 260 })).toBe(false);
+    expect(screen.getByRole('menu', { name: 'Create session' })).toHaveStyle({ left: '120px', top: '260px' });
+    expect(screen.getAllByRole('menuitem')).toHaveLength(3);
+    expect(screen.getByRole('menuitem', { name: /New session/ })).toHaveFocus();
+    await fireEvent.click(screen.getByRole('menuitem', { name: /New session/ }));
+    expect(actions.newSessionHere).toHaveBeenCalledOnce();
+    expect(nav.project).toBe('nori');
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('keeps the menu inside the viewport and restores search focus on Escape', async () => {
+    const original = HTMLDivElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLDivElement) {
+      return this.getAttribute('role') === 'menu' ? { width: 224, height: 110 } as DOMRect : original.call(this);
+    });
+    const { target } = background();
+    await fireEvent.contextMenu(target, { clientX: window.innerWidth - 2, clientY: window.innerHeight - 2 });
+    expect(screen.getByRole('menu')).toHaveStyle({ left: `${window.innerWidth - 228}px`, top: `${window.innerHeight - 114}px` });
+    const shortcut = vi.fn();
+    window.addEventListener('keydown', shortcut);
+    try {
+      await fireEvent.keyDown(window, { key: 'Escape' });
+      expect(shortcut).not.toHaveBeenCalled();
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(screen.getByRole('textbox', { name: 'Search sessions' })).toHaveFocus();
+    } finally { window.removeEventListener('keydown', shortcut); }
+  });
+
+  it('leaves editing and session-row context menus alone', async () => {
+    const { target } = background();
+    expect(await fireEvent.contextMenu(screen.getByRole('textbox', { name: 'Search sessions' }))).toBe(true);
+    const row = document.createElement('button');
+    const rowMenu = vi.fn((event: Event) => event.preventDefault());
+    row.addEventListener('contextmenu', rowMenu);
+    target.append(row);
+    await fireEvent.contextMenu(row);
+    expect(rowMenu).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('dismisses on outside press and removes its background listener on unmount', async () => {
+    const { target, unmount } = background();
+    const remove = vi.spyOn(target, 'removeEventListener');
+    await fireEvent.contextMenu(target);
+    await fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('menu')).toBeNull();
+    await unmount();
+    expect(remove).toHaveBeenCalledWith('contextmenu', expect.any(Function));
+  });
+
   it('offers session, SSH and temporary creation from the one plus menu', async () => {
     const sshNew = vi.spyOn(ssh, 'newSession').mockImplementation(() => {});
     render(SidebarSessionTools);

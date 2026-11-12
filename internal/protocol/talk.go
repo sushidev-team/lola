@@ -15,6 +15,7 @@ const (
 	CmdAgentSay          = "agentSay"          // AgentSayArgs → AgentSayData
 	CmdAgentStop         = "agentStop"         // AgentStopArgs → AgentStopData
 	CmdAgentChoose       = "agentChoose"       // AgentChooseArgs → AgentChooseData
+	CmdAgentSetting      = "agentSetting"      // AgentSettingArgs → AgentSettingData
 	CmdAgentQueueRelease = "agentQueueRelease" // AgentQueueReleaseArgs → AgentSayData
 	CmdEndedSessions     = "endedSessions"     // no args → EndedSessionsData
 )
@@ -110,11 +111,25 @@ type AgentFeedOutputData struct {
 // TalkCaps says what lola has measured for this session's agent. Unverified means
 // not offered. Why is lola's own sentence when Send is false.
 type TalkCaps struct {
-	Feed  bool   `json:"feed"`
-	Send  bool   `json:"send"`
-	Stop  bool   `json:"stop"`
-	Cards bool   `json:"cards"`
-	Why   string `json:"why,omitempty"`
+	Settings bool   `json:"settings,omitempty"`
+	Feed     bool   `json:"feed"`
+	Send     bool   `json:"send"`
+	Stop     bool   `json:"stop"`
+	Cards    bool   `json:"cards"`
+	Why      string `json:"why,omitempty"`
+}
+
+// AgentSettingArgs changes one setting in the active agent's own CLI.
+type AgentSettingArgs struct {
+	Session string `json:"session"`
+	Agent   string `json:"agent"`
+	Setting string `json:"setting"` // model | effort | speed | variant
+	Value   string `json:"value"`
+}
+
+// Sent proves delivery only. The agent may refuse a model or open a confirmation.
+type AgentSettingData struct {
+	Sent bool `json:"sent"`
 }
 
 // Composer states, as a fresh pane read says.
@@ -131,7 +146,7 @@ const (
 // AgentPrompt is a read of the pane. Untrusted text, memory only: never written to
 // the session snapshot, the store or a log. Hash pins exactly what a human read.
 type AgentPrompt struct {
-	Kind    string        `json:"kind"` // permission | question | question_multi | modal
+	Kind    string        `json:"kind"` // permission | question | question_multi | modal | background
 	Hash    string        `json:"hash"`
 	Lines   []string      `json:"lines"`
 	Choices []AgentChoice `json:"choices,omitempty"`

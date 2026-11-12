@@ -14,6 +14,8 @@
   import SidebarRoster from "./SidebarRoster.svelte";
   import Tabs from "./Tabs.svelte";
 
+  let sessionsArea = $state<HTMLDivElement>();
+
   const TABS = [
     { id: "sessions", label: "Sessions" },
     { id: "projects", label: "Projects" },
@@ -58,8 +60,8 @@
        and its folders. Projects is the old body, unmoved: folders and drag are untouched. -->
   <div class="grid min-h-0 min-w-0" style="grid-template-rows:auto minmax(0,1fr) auto auto">
     <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => nav.setSidebarTab(t === "projects" ? "projects" : "sessions")} />
-    <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'sessions' ? '' : 'hidden'}" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
-      <SidebarSessionTools />
+    <div bind:this={sessionsArea} class="grid min-h-0 min-w-0 {nav.sidebarTab === 'sessions' ? '' : 'hidden'}" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
+      <SidebarSessionTools contextTarget={sessionsArea} />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
     </div>
     <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'projects' ? '' : 'hidden'}" style="grid-template-rows:minmax(0,1fr) auto">

@@ -215,7 +215,7 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		protocol.CmdSSHRecall, protocol.CmdSSHResolve, protocol.CmdSSHWidgetStatus, protocol.CmdSSHPromptAnswer:
 		return d.handleSSH(ctx, req)
 	case protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdAgentSay, protocol.CmdAgentStop,
-		protocol.CmdAgentChoose, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions:
+		protocol.CmdAgentChoose, protocol.CmdAgentSetting, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions:
 		return d.handleTalk(ctx, req)
 	case "kill":
 		data, err := d.handleKill(ctx, req.Session, req.Force, req.KeepWorktree)

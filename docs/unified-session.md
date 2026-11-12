@@ -456,6 +456,20 @@ Primary is `variant="primary" size="sm"`, `min-width:88px`, always the same plac
 
 **Drafts.** Agent draft keyed `"agent"`, in localStorage (`lola.drafts`, 50 sessions, 8 KiB). Command drafts per connection, memory only. History per host, so ↑ cannot recall a staging command into production. Prompt answers go nowhere near any of it. Both `✎` and the kept draft across every switch read from this.
 
+**Model settings.** The conversation composer offers provider-specific controls:
+Claude model and effort; Codex model, reasoning effort and speed; OpenCode model
+and variant pickers in the inline terminal. Presets are suggestions, with custom
+model IDs for Claude and Codex. OpenCode reads its available choices itself.
+These actions use the human-only `agentSetting` command, pin the active provider,
+and require a fresh idle, empty composer under the send gate. They never queue,
+interrupt a turn or consume the message draft. Pending/error state belongs to
+the conversation store and survives remounts. Delivery is labeled as a request,
+not confirmation of the active model: the CLI can refuse a choice or ask a
+question. Lola's launch model and project configuration remain unchanged.
+Claude's own model/effort commands can save defaults; the controls explain this.
+Unknown daemon capabilities retain a terminal shortcut. Goal, shell and ended
+sessions offer no setting controls.
+
 **Input rules. `FE/slash.ts` is pure.**
 
 | Input | Rule |

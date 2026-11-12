@@ -9,6 +9,7 @@ const talkSvc = vi.hoisted(() => ({
   Say: vi.fn(),
   Stop: vi.fn(),
   Choose: vi.fn(),
+  Setting: vi.fn(),
   QueueRelease: vi.fn(),
   Feed: vi.fn(),
   FeedOutput: vi.fn(),

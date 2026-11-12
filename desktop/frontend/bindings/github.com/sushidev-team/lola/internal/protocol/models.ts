@@ -163,7 +163,7 @@ export interface AgentFeedTool {
  */
 export interface AgentPrompt {
     /**
-     * permission | question | question_multi | modal
+     * permission | question | question_multi | modal | background
      */
     "kind": string;
     "hash": string;
@@ -210,6 +210,27 @@ export interface AgentSayData {
      */
     "why"?: string;
     "agentGone"?: boolean;
+}
+
+/**
+ * AgentSettingArgs changes one setting in the active agent's own CLI.
+ */
+export interface AgentSettingArgs {
+    "session": string;
+    "agent": string;
+
+    /**
+     * model | effort | speed | variant
+     */
+    "setting": string;
+    "value": string;
+}
+
+/**
+ * Sent proves delivery only. The agent may refuse a model or open a confirmation.
+ */
+export interface AgentSettingData {
+    "sent": boolean;
 }
 
 /**
@@ -2683,6 +2704,7 @@ export interface SwitchAgentData {
  * not offered. Why is lola's own sentence when Send is false.
  */
 export interface TalkCaps {
+    "settings"?: boolean;
     "feed": boolean;
     "send": boolean;
     "stop": boolean;
