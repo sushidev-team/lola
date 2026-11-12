@@ -67,6 +67,7 @@ export type {
     HubSessionInfo,
     HubStatusData,
     HubSyncData,
+    HubUpdateScope,
     KillData,
     LoadInfo,
     Match,

@@ -23,6 +23,7 @@ import type {
   HubBoardData,
   HubBoardItem,
   HubClaimData,
+  HubUpdateScope,
   HubJoinData,
   HubLeaveData,
   HubOrgData,
@@ -269,8 +270,8 @@ export class HubStore {
   }
 
   /** Claims several advisories of one repository for ONE session ("Fix all"). */
-  claimMany(key: string, itemIds: string[], project = ""): Promise<HubResult<HubClaimData>> {
-    return this.#act(`claim:${key}`, () => HubService.Claim({ itemId: itemIds[0] ?? "", itemIds, project }));
+  claimMany(key: string, itemIds: string[], project = "", scope: HubUpdateScope | null = null): Promise<HubResult<HubClaimData>> {
+    return this.#act(`claim:${key}`, () => HubService.Claim({ itemId: itemIds[0] ?? "", itemIds, project, ...(scope ? { scope } : {}) }));
   }
 
   release(itemId: string): Promise<HubResult<HubReleaseData>> {

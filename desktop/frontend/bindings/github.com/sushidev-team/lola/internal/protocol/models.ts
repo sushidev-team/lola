@@ -810,6 +810,12 @@ export interface HubClaimArgs {
      */
     "itemIds"?: string[] | null;
     "project"?: string;
+
+    /**
+     * Scope widens the session beyond the advisories: update the
+     * repository's other dependencies too ("Update all dependencies").
+     */
+    "scope"?: HubUpdateScope | null;
 }
 
 /**
@@ -1054,6 +1060,17 @@ export interface HubStatusData {
  */
 export interface HubSyncData {
     "queued": boolean;
+}
+
+/**
+ * HubUpdateScope is what an "update all dependencies" session upgrades
+ * besides the claimed advisories, and the person's own note for the agent.
+ */
+export interface HubUpdateScope {
+    "patch": boolean;
+    "minor": boolean;
+    "major": boolean;
+    "note"?: string;
 }
 
 /**

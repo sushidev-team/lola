@@ -10,6 +10,8 @@
   import Button from "$lib/components/Button.svelte";
   import Chevron from "$lib/components/Chevron.svelte";
   import HubSyncButton from "$lib/components/hub/HubSyncButton.svelte";
+  import FixAllButton from "$lib/components/hub/FixAllButton.svelte";
+  import UpdateAllDialog from "$lib/components/hub/UpdateAllDialog.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Select from "$lib/components/Select.svelte";
@@ -44,7 +46,7 @@
     type BoardGroup,
     type WorkGroup,
   } from "$lib/hubboard";
-  import type { HubBoardItem } from "@bindings/internal/protocol";
+  import type { HubBoardItem, HubUpdateScope } from "@bindings/internal/protocol";
   import { ConfigService } from "@bindings/desktop";
 
   let release: (() => void) | null = null;
@@ -195,6 +197,37 @@
       confirmLabel: "Fix all",
       onConfirm: () => void fixAll(g, items, project),
     });
+  }
+
+  /** The open "Update all dependencies" dialog. */
+  let updating = $state<{ g: BoardGroup; items: HubBoardItem[]; project: string } | null>(null);
+  let updateErr = $state("");
+
+  function openUpdateAll(g: BoardGroup) {
+    const gid = `group:${g.key}`;
+    setError(gid, "");
+    const items = fixAllItems(g);
+    if (items.length === 0) return;
+    const choices = claimProjects(items[0]);
+    const project = choices.length ? (picks[gid] ?? "") : (items[0].local?.project ?? "");
+    if (choices.length && !project) {
+      setError(gid, "Choose the project to run it in.");
+      return;
+    }
+    updateErr = "";
+    updating = { g, items, project };
+  }
+
+  async function startUpdate(scope: HubUpdateScope) {
+    if (!updating) return;
+    const { g, items, project } = updating;
+    const r = await hub.claimMany(`group:${g.key}`, items.map((it) => it.id), project, scope);
+    if (r.ok) {
+      updating = null;
+      store.setFlash(`Started a dependency update in ${projectName(r.data.project)}`);
+    } else {
+      updateErr = hubReason(r.error);
+    }
   }
 
   async function fixAll(g: BoardGroup, items: HubBoardItem[], project: string) {
@@ -412,8 +445,10 @@
                 <h2 id="team-available" class="text-base font-medium text-ink">Available <span class="num ml-1 text-faint">{sections.available.length}</span></h2>
                 {#if sections.available.length > 0}
                   <span class="ml-auto flex items-center gap-0.5 rounded-lg border border-edge p-0.5" role="group" aria-label="Group available chores">
-                    <Button size="xs" variant={groupMode === "project" ? "secondary" : "ghost"} aria-pressed={groupMode === "project"} onclick={() => setGroupMode("project")}>By project</Button>
-                    <Button size="xs" variant={groupMode === "advisory" ? "secondary" : "ghost"} aria-pressed={groupMode === "advisory"} onclick={() => setGroupMode("advisory")}>By advisory</Button>
+                    {#each [["project", "By project"], ["advisory", "By advisory"]] as [mode, text] (mode)}
+                      <Button size="xs" variant="ghost" class={groupMode === mode ? "bg-sel! text-ink!" : "text-faint!"}
+                        aria-pressed={groupMode === mode} onclick={() => setGroupMode(mode as "project" | "advisory")}>{text}</Button>
+                    {/each}
                   </span>
                 {/if}
               </header>
@@ -454,10 +489,11 @@
                             </Select>
                           {/if}
                           {#if groupMode === "project"}
-                            <Button variant="primary" size="sm" disabled={fix.length === 0 || hub.busy !== ""}
+                            <FixAllButton label={fix.length > 1 ? `Fix all ${fix.length}` : "Claim"}
+                              disabled={fix.length === 0 || hub.busy !== ""}
                               loading={hub.busy === `claim:${gid}` || (fix.length === 1 && hub.busy === `claim:${fix[0].id}`)}
                               title={fix.length ? `Start one agent for ${fix.length === 1 ? "this chore" : `${fix.length} advisories`}` : g.reason || "Not claimable on this Mac"}
-                              onclick={() => askFixAll(g)}>{fix.length > 1 ? `Fix all ${fix.length}` : "Claim"}</Button>
+                              onFix={() => askFixAll(g)} onUpdateAll={() => openUpdateAll(g)} />
                           {/if}
                         </span>
                         {#if g.reason}<p class="col-span-full flex items-center gap-1.5 pl-10 text-sm text-faint" data-group-reason><Icon name="lock" size={12} /> {g.reason}</p>{/if}
@@ -584,6 +620,12 @@
     </div>
   </div>
 </div>
+
+{#if updating}
+  <UpdateAllDialog where={updating.project ? projectName(updating.project) : groupName(updating.g)} advisories={updating.items.length}
+    busy={hub.busy === `claim:group:${updating.g.key}`} error={updateErr}
+    onStart={(scope) => void startUpdate(scope)} onClose={() => (updating = null)} />
+{/if}
 
 <style>
   /* severity · id · package · where · age · action */

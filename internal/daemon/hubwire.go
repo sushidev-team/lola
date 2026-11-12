@@ -808,6 +808,16 @@ type hubClaimReq struct {
 	human bool
 	// project names the [[project]] when several work the item's repo.
 	project string
+	// scope, from a person's "update all dependencies", widens the briefing.
+	scope *protocol.HubUpdateScope
+}
+
+// withScope appends a person's update scope to a briefing.
+func withScope(brief string, scope *protocol.HubUpdateScope) string {
+	if scope == nil {
+		return brief
+	}
+	return brief + hub.UpdateBriefing(scope.Patch, scope.Minor, scope.Major, scope.Note)
 }
 
 // errHubSpawn marks a claim whose spawn failed after the lease was taken (the
@@ -918,6 +928,7 @@ func (d *Daemon) hubClaimItem(ctx context.Context, api hubAPI, it hubproto.Item,
 	if err != nil {
 		return "", errors.New(hub.ReasonInvalidItem)
 	}
+	brief = withScope(brief, req.scope)
 	// A person's claim checks no cap (it is intent), but it still RESERVES
 	// so a loop tick spawning beside it counts it.
 	pCap, gCap := projectCap, snap.globalCap

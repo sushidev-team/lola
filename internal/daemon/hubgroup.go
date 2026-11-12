@@ -249,6 +249,8 @@ func (d *Daemon) hubClaimGroup(ctx context.Context, api hubAPI, items []hubproto
 		}
 	}
 
+	brief = withScope(brief, req.scope)
+
 	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
 	sess, err := nat.OpenManualAgent(cctx, p, id, branch, "", brief, "")
 	cancel()

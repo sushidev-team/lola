@@ -174,6 +174,18 @@ type HubClaimArgs struct {
 	// session ("Fix all"). When set, ItemID is ignored.
 	ItemIDs []string `json:"itemIds,omitempty"`
 	Project string   `json:"project,omitempty"`
+	// Scope widens the session beyond the advisories: update the
+	// repository's other dependencies too ("Update all dependencies").
+	Scope *HubUpdateScope `json:"scope,omitempty"`
+}
+
+// HubUpdateScope is what an "update all dependencies" session upgrades
+// besides the claimed advisories, and the person's own note for the agent.
+type HubUpdateScope struct {
+	Patch bool   `json:"patch"`
+	Minor bool   `json:"minor"`
+	Major bool   `json:"major"`
+	Note  string `json:"note,omitempty"`
 }
 
 // HubClaimData answers a successful cmd=hubClaim.

@@ -92,3 +92,24 @@ func TestGroupBriefing(t *testing.T) {
 		t.Errorf("mixed kinds: %v", err)
 	}
 }
+
+func TestUpdateBriefing(t *testing.T) {
+	b := UpdateBriefing(true, true, false, "Keep vite on 5.x.\x1b[31m\nThanks")
+	for _, want := range []string{"newest patch, minor release", "Do not cross a major version", "Keep vite on 5.x.[31m\nThanks", "Notes from the person"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("lacks %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(b, "\x1b") {
+		t.Error("control character kept")
+	}
+	if b := UpdateBriefing(false, false, true, ""); !strings.Contains(b, "newest major release") || strings.Contains(b, "Notes from") {
+		t.Errorf("major only:\n%s", b)
+	}
+	if b := UpdateBriefing(false, false, false, ""); !strings.Contains(b, "no other dependency") {
+		t.Errorf("none:\n%s", b)
+	}
+	if b := UpdateBriefing(true, false, false, strings.Repeat("ž", MaxUpdateNote+50)); strings.Count(b, "ž") != MaxUpdateNote {
+		t.Error("note not bounded")
+	}
+}

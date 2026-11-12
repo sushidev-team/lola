@@ -223,4 +223,32 @@ describe("TeamView", () => {
     expect(document.querySelector('[data-board-group="GHSA-cccc"] [data-group-reason]')).toHaveTextContent(/not sandboxed/);
     await fireEvent.click(screen.getByRole("button", { name: "By project" }));
   });
+
+  it("offers updating all dependencies with chosen levels and a note", async () => {
+    Claim.mockResolvedValue({ session: "s-new", project: "web", itemId: "it_open" });
+    render(TeamView);
+    await waitFor(() => expect(document.querySelector("[data-board-group]")).not.toBeNull());
+    const group = document.querySelector('[data-board-group="acme/web"]') as HTMLElement;
+    await fireEvent.click(within(group).getByRole("button", { name: "More ways to fix" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Update all dependencies…" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/fixes the 2 open advisories/)).toBeInTheDocument();
+    const major = dialog.querySelector('[data-level="major"] input') as HTMLInputElement;
+    expect(major.checked).toBe(false);
+    await fireEvent.click(major);
+    await fireEvent.input(within(dialog).getByLabelText(/Instructions for the agent/), { target: { value: "  Keep vite on 5.x.  " } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Start update" }));
+    await waitFor(() => expect(Claim).toHaveBeenCalledWith({
+      itemId: "it_open", itemIds: ["it_open", "it_many"], project: "web",
+      scope: { patch: true, minor: true, major: true, note: "Keep vite on 5.x." },
+    }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("fills the selected grouping instead of outlining it", async () => {
+    render(TeamView);
+    const byProject = await screen.findByRole("button", { name: "By project" });
+    expect(byProject).toHaveAttribute("aria-pressed", "true");
+    expect(byProject.className).toContain("bg-sel");
+  });
 });

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/hubproto"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
@@ -127,5 +128,27 @@ func TestHubGroupWaitsForTheRunningSession(t *testing.T) {
 	d.hubCycle(context.Background())
 	if len(nat.manualAgents) != 1 {
 		t.Fatalf("a second session started for the same repository: %d", len(nat.manualAgents))
+	}
+}
+
+// A person's "update all dependencies" widens the grouped briefing with the
+// chosen levels and their note.
+func TestHubGroupClaimCarriesTheUpdateScope(t *testing.T) {
+	d, fh, nat := hubFixture(t)
+	items := []hubproto.Item{advisoryFor("it1", "lodash", "GHSA-jf85-cpcp-j695"), advisoryFor("it2", "vite", "GHSA-587h-7wmj-h5pm")}
+	fh.offers = nil
+	snap, ok := d.hubConfig()
+	if !ok {
+		t.Fatal("no hub config")
+	}
+	scope := &protocol.HubUpdateScope{Patch: true, Minor: true, Note: "Leave the PHP side alone."}
+	if _, err := d.hubClaimGroup(context.Background(), fh, items, snap, hubClaimReq{human: true, scope: scope}); err != nil {
+		t.Fatal(err)
+	}
+	prompt := nat.manualAgents[0].prompt
+	for _, want := range []string{"GHSA-587h-7wmj-h5pm", "newest patch, minor release", "Leave the PHP side alone."} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, prompt)
+		}
 	}
 }

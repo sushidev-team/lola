@@ -421,7 +421,10 @@ func (d *Daemon) handleHubClaim(ctx context.Context, a protocol.HubClaimArgs) (p
 		}
 		items = append(items, it)
 	}
-	id, err := d.hubClaimGroup(ctx, api, items, snap, hubClaimReq{human: true, project: a.Project})
+	if a.Scope != nil && len(a.Scope.Note) > 4*hub.MaxUpdateNote {
+		return protocol.HubClaimData{}, errors.New("hub: the note is too long")
+	}
+	id, err := d.hubClaimGroup(ctx, api, items, snap, hubClaimReq{human: true, project: a.Project, scope: a.Scope})
 	d.hubDropCaches()
 	if err != nil {
 		return protocol.HubClaimData{}, fmt.Errorf("hub: not claimed: %w", err)

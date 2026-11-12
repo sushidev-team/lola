@@ -94,6 +94,54 @@ func GroupBriefing(items []hubproto.Item) (string, error) {
 	return b.String(), nil
 }
 
+// MaxUpdateNote bounds the person's note in an update briefing.
+const MaxUpdateNote = 2000
+
+// UpdateBriefing is the section a person's "update all dependencies" adds to a
+// hub briefing: which other updates to make, from lola's own template, then
+// the person's note verbatim (control characters removed, bounded). The note
+// is the person's instruction, never the hub's.
+func UpdateBriefing(patch, minor, major bool, note string) string {
+	var levels []string
+	if patch {
+		levels = append(levels, "patch")
+	}
+	if minor {
+		levels = append(levels, "minor")
+	}
+	if major {
+		levels = append(levels, "major")
+	}
+	var b strings.Builder
+	b.WriteString("\n## Also update the other dependencies\n\n")
+	if len(levels) == 0 {
+		b.WriteString("Update no other dependency beyond the advisories above.\n")
+	} else {
+		fmt.Fprintf(&b, "In the same branch and pull request, update every other dependency of the repository to its newest %s release, through each package manager the repository uses.\n", strings.Join(levels, ", "))
+		if !major {
+			b.WriteString("Do not cross a major version, except where an advisory above requires it.\n")
+		} else {
+			b.WriteString("Major upgrades may break: adapt the code to them, and leave a package on its current major when the change needs a decision a person must make; name it in the pull request body.\n")
+		}
+		b.WriteString("List the updated packages with their old and new versions in the pull request body, separate from the advisories.\n")
+	}
+	clean := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f {
+			return r
+		}
+		return -1
+	}, strings.TrimSpace(note))
+	if len([]rune(clean)) > MaxUpdateNote {
+		clean = string([]rune(clean)[:MaxUpdateNote])
+	}
+	if clean != "" {
+		b.WriteString("\n## Notes from the person who started this\n\n")
+		b.WriteString(clean)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func redBumpBriefing(r hubproto.RedBumpPR) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Dependency chore: fix the failing checks of %s#%d\n\n", r.Repo, r.PR)
