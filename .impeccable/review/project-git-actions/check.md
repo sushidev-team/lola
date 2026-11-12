@@ -64,3 +64,42 @@ Hover/spacing refinement: project rows, folder rows and session controls reveal 
 Remote provider labels now use bundled 16px Simple Icons marks for github.com, gitlab.com, bitbucket.org and codeberg.org; other hosts use a generic Git mark. Provider names remain as tooltips and accessible image labels. No runtime icon downloads or provider guessing for custom hosts. WebKit verified all four marks and fallback sizing/names; 33 Git UI tests, Svelte check and production build passed. [Provider icons](remote-provider-icons.png).
 
 Toolbar/remote follow-up: Fetch now lives beside each remote provider mark and targets that remote through the existing validated branch-action API. Only the active remote shows a spinner; fetching never toggles the disclosure. Fetch all remains in the repository menu. Removed the toolbar refresh control: local facts reread on window focus unless already loading/mutating, with manual Refresh repository in the repository context menu and error recovery. Push's one-shot arrow duration is 260ms. The main checkout uses a house icon and branch name, retaining its full accessible name. Seventy-six focused tests, Svelte check and production build passed; WebKit verified the remote target, disclosure state, refresh menu, icon and duration. [Toolbar](compact-toolbar.png), [Remotes and checkout](remote-fetch-checkouts.png).
+
+
+Create PR: toolbar, branch/worktree/repository menus and branch drag menus share
+one GitHub form. Dragging source onto target preserves that direction. Source
+forks default to the parent; choices include configured repositories. Searchable
+multi-select comboboxes portal their lists above the form, without changing its
+height. Arrow keys/Enter select, Escape closes the list, Tab advances; selected
+values remain visible when closed. Drafts suppress reviewer requests. Local-only
+publication requires an explicit checkbox, pins the source tip and never forces.
+Failed metadata retains the PR URL; existing and ambiguously created PRs are
+recovered without a second creation. AI drafts use bounded committed content,
+preserve human edits, and reject stale selections. GitHub only, via signed-in gh.
+
+The publish form is one row, toolbar says Branch, and loading replaces the leading
+icon. Graph badges omit remote prefixes while accessible descriptions retain them;
+the active checkout uses a computer icon inside its badge.
+
+Validation: 65 focused frontend tests passed, covering the form, combobox keyboard
+behavior, drag direction, stale results and failure recovery. Focused native Go
+package/service tests passed, including source-owner sandbox refusal, fork targets,
+explicit publishing and ambiguous creation. WebKit fixture checked actual pointer
+drag into the PR menu, prefilled form, overlay geometry, selection, fake creation,
+spinner replacement, badge glyphs, compact publish row and dark/light/narrow layouts.
+No real PR or live AI request was made; native app interaction remains unverified.
+Captures: [Drag menu](pr-drag-menu.png), [Create PR and combobox](create-pr.png),
+[Narrow](create-pr-narrow.png), [Light](create-pr-light.png),
+[Compact publish](publish-compact.png).
+
+Final verification: Svelte check reports zero errors/warnings and the production
+build passes (existing bundle-size/dynamic-import warnings remain).
+
+
+Amend confirmation refinement: read remote-tracking ancestry at submit time,
+including non-upstream branches and descendant tips. Local-only commits skip the
+dialog; known published commits show a short warning with a primary action.
+Failed checks and changed drafts/HEAD never trigger an amend. No automatic fetch.
+Twenty-two focused UI tests and native amend/service tests passed, as did Svelte
+check (zero errors/warnings) and production build. WebKit verified both paths
+with fake mutations and the primary styling. [Pushed amend](amend-pushed.png).

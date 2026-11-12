@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -238,6 +239,11 @@ func (p PullRequestClient) Options(ctx context.Context, c Client, dir, remote, t
 		}(kind)
 	}
 	wg.Wait()
+	sort.Strings(out.Branches)
+	sort.Strings(out.Notices)
+	for _, choices := range [][]PRChoice{out.Reviewers, out.Assignees, out.Labels} {
+		sort.Slice(choices, func(i, j int) bool { return strings.ToLower(choices[i].Label) < strings.ToLower(choices[j].Label) })
+	}
 	return out, branchErr
 }
 func (c Client) prSource(ctx context.Context, dir string, s PRSelection) (Remote, string, error) {

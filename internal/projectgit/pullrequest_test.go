@@ -200,3 +200,36 @@ func TestPRRejectsStaleAndUnapprovedRequests(t *testing.T) {
 		})
 	}
 }
+
+func TestPRForkDefaultsToParentAndRecoversAmbiguousCreation(t *testing.T) {
+	f := newPRFixture(t)
+	p := PullRequestClient{Run: func(ctx context.Context, input string, args ...string) ([]byte, error) {
+		method, endpoint := args[4], args[7]
+		if method == "GET" && endpoint == "repos/acme/repo" {
+			return []byte(`{"full_name":"acme/repo","default_branch":"main","parent":{"full_name":"upstream/repo"}}`), nil
+		}
+		if method == "GET" && endpoint == "repos/upstream/repo" {
+			return []byte(`{"full_name":"upstream/repo","default_branch":"main"}`), nil
+		}
+		if method == "POST" && endpoint == "repos/upstream/repo/pulls" {
+			f.existing = true
+			return nil, errors.New("connection interrupted after sending request")
+		}
+		forwarded := append([]string(nil), args...)
+		forwarded[7] = strings.Replace(endpoint, "repos/upstream/repo/", "repos/acme/repo/", 1)
+		return f.github(ctx, input, forwarded...)
+	}}
+	options, err := p.Options(context.Background(), Client{}, f.dir, "origin", "")
+	if err != nil || options.BaseRepo != "upstream/repo" {
+		t.Fatalf("wrong fork target: %+v %v", options, err)
+	}
+	request := f.request()
+	request.Selection.BaseRepo = options.BaseRepo
+	result, err := p.Create(context.Background(), Client{}, f.dir, request)
+	if err != nil || result.Number != 12 || result.URL != "https://github.com/upstream/repo/pull/12" || len(result.Warnings) != 1 {
+		t.Fatalf("ambiguous create lost PR: %+v %v", result, err)
+	}
+	if len(f.posts) != 0 {
+		t.Fatal("retried creation or metadata after ambiguous response")
+	}
+}

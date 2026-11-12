@@ -23,6 +23,10 @@ export function Amend(project: string, worktree: string, message: string, expect
     return $Call.ByID(4236251129, project, worktree, message, expectedHead);
 }
 
+export function AmendNeedsConfirmation(project: string, worktree: string, expectedHead: string): $CancellablePromise<boolean> {
+    return $Call.ByID(1138262519, project, worktree, expectedHead);
+}
+
 /**
  * BranchAction resolves and authorizes the owner before writing in a linked checkout.
  */

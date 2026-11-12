@@ -5,14 +5,35 @@ import ProjectGitStaging from './ProjectGitStaging.svelte';
 import { ProjectGitState } from '$lib/projectgit.svelte';
 import { confirm } from '$lib/confirm.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
-const api = vi.hoisted(() => ({ DraftCommitMessage: vi.fn(), PrepareDiscard: vi.fn(), DiscardUnstaged: vi.fn(), Snapshot: vi.fn(), Identities: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), LastCommitMessage: vi.fn() }));
+const api = vi.hoisted(() => ({ DraftCommitMessage: vi.fn(), PrepareDiscard: vi.fn(), DiscardUnstaged: vi.fn(), Snapshot: vi.fn(), Identities: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), AmendNeedsConfirmation: vi.fn(), LastCommitMessage: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 const head = 'a'.repeat(40);
 function snapshot(): GitSnapshot { return { path:'/repo',branch:'main',head,upstream:'origin/main',refs:[],remotes:[],commits:[],worktrees:[],hasMore:false,signing:{enabled:true,format:'ssh',key:''}, files:[{path:'src/app.ts',oldPath:'',index:'M',worktree:' ',untracked:false,conflict:false},{path:'src/new.ts',oldPath:'',index:'?',worktree:'?',untracked:true,conflict:false}] }; }
 function setup(files?: GitSnapshot['files']) { const git=new ProjectGitState('lola','');git.snapshot={...snapshot(), ...(files ? {files} : {})}; const oninspect=vi.fn(),onact=vi.fn(),oncommitted=vi.fn();const view=render(ProjectGitStaging,{git,oninspect,onact,oncommitted});return {git,oninspect,onact,oncommitted,view}; }
-beforeEach(()=>{localStorage.clear();confirm.cancel();Object.values(api).forEach(f=>f.mockReset());api.Snapshot.mockResolvedValue(snapshot());api.Identities.mockResolvedValue({authors:{}});});
+beforeEach(()=>{localStorage.clear();confirm.cancel();Object.values(api).forEach(f=>f.mockReset());api.AmendNeedsConfirmation.mockResolvedValue(true);api.Snapshot.mockResolvedValue(snapshot());api.Identities.mockResolvedValue({authors:{}});});
 afterEach(()=>{cleanup();vi.useRealTimers();});
 describe('Project Git staging',()=>{
+ it('amends a local commit directly without showing a confirmation',async()=>{
+   api.AmendNeedsConfirmation.mockResolvedValue(false);
+   const {git,oncommitted}=setup();git.subject='fix: local';await git.setAmend(true);
+   await fireEvent.click(screen.getByRole('button',{name:'Amend 1 file'}));
+   await waitFor(()=>expect(oncommitted).toHaveBeenCalledOnce());
+   expect(api.AmendNeedsConfirmation).toHaveBeenCalledWith('lola','',head);
+   expect(confirm.request).toBeNull();expect(api.Amend).toHaveBeenCalledWith('lola','','fix: local',head);
+ });
+ it('does not treat a failed publication check as local or apply a stale result',async()=>{
+   const {git}=setup();git.subject='fix: draft';await git.setAmend(true);
+   api.AmendNeedsConfirmation.mockRejectedValueOnce(new Error('Cannot read remote refs'));
+   await fireEvent.click(screen.getByRole('button',{name:'Amend 1 file'}));
+   await waitFor(()=>expect(git.error).toContain('Cannot read remote refs'));
+   expect(api.Amend).not.toHaveBeenCalled();expect(confirm.request).toBeNull();
+   let finish!:(value:boolean)=>void;api.AmendNeedsConfirmation.mockReturnValueOnce(new Promise(resolve=>finish=resolve));
+   await fireEvent.click(screen.getByRole('button',{name:'Amend 1 file'}));
+   expect(screen.getByRole('button',{name:'Amend 1 file'})).toBeDisabled();
+   git.message='edited during check';finish(false);
+   await waitFor(()=>expect(git.error).toContain('changed'));expect(api.Amend).not.toHaveBeenCalled();expect(confirm.request).toBeNull();
+ });
+
  it('previews discard, explains untracked deletion, and writes only after confirmation',async()=>{
    const {git}=setup();api.PrepareDiscard.mockResolvedValue({token:'reviewed-files',tracked:['src/partial.ts'],untracked:['src/new.ts']});
    const button=screen.getByRole('button',{name:'Discard all unstaged changes'});
@@ -93,11 +114,12 @@ describe('Project Git staging',()=>{
    expect(screen.getByLabelText('Commit body')).toHaveValue('Keep staged files visible.\nSupport nested paths.');
    expect(git.error).toContain('Signing cancelled');
  });
- it('requires a concrete amend confirmation, then pins HEAD and clears a successful draft',async()=>{
+ it('confirms pushed commits with a primary button, pins HEAD and clears a successful draft',async()=>{
    const {git,oncommitted}=setup();
    await fireEvent.input(screen.getByLabelText('Commit subject'),{target:{value:'fix: corrected commit'}});
    await fireEvent.click(screen.getByRole('checkbox',{name:'Amend last commit'}));
    await fireEvent.click(screen.getByRole('button',{name:'Amend 1 file'}));
+   await waitFor(()=>expect(confirm.request?.confirmVariant).toBe('primary'));
    expect(api.Amend).not.toHaveBeenCalled();expect(confirm.request?.body).toContain(head.slice(0,8));
    confirm.accept();await waitFor(()=>expect(oncommitted).toHaveBeenCalledOnce());
    expect(api.Amend).toHaveBeenCalledWith('lola','','fix: corrected commit',head);expect(git.message).toBe('');expect(git.amend).toBe(false);
@@ -105,6 +127,7 @@ describe('Project Git staging',()=>{
  it('does not amend after the checkout or message changes during confirmation',async()=>{
    const {git}=setup();git.subject='fix: draft';await git.setAmend(true);await tick();
    await fireEvent.click(screen.getByRole('button',{name:'Amend 1 file'}));
+   await waitFor(()=>expect(confirm.request).not.toBeNull());
    git.snapshot={...snapshot(),head:'b'.repeat(40)};confirm.accept();
    expect(api.Amend).not.toHaveBeenCalled();expect(git.error).toContain('changed');expect(git.subject).toBe('fix: draft');
  });
@@ -134,7 +157,7 @@ describe('Project Git staging',()=>{
    await fireEvent.input(screen.getByLabelText('Commit subject'),{target:{value:'Reviewed replacement message'}});
    await fireEvent.click(screen.getByRole('checkbox',{name:'Amend last commit'}));
    expect(git.amendHead).toBe(nextHead);expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-   await fireEvent.click(screen.getByRole('button',{name:'Amend 1 file'}));confirm.accept();
+   await fireEvent.click(screen.getByRole('button',{name:'Amend 1 file'}));await waitFor(()=>expect(confirm.request).not.toBeNull());confirm.accept();
    await waitFor(()=>expect(api.Amend).toHaveBeenCalledWith('lola','','Reviewed replacement message\n\nPrevious body.',nextHead));
  });
  it('keeps checkout drafts isolated when the displayed checkout changes',async()=>{

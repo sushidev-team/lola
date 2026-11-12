@@ -520,6 +520,23 @@ func (c Client) Amend(ctx context.Context, dir, message, expectedHead string) er
 	return c.commit(ctx, dir, message, expectedHead)
 }
 
+// AmendNeedsConfirmation checks all locally known remote histories, including
+// descendants of HEAD and remotes other than the branch's configured upstream.
+// It never fetches or treats a failed query as proof that a commit is local.
+func (c Client) AmendNeedsConfirmation(ctx context.Context, dir, expectedHead string) (bool, error) {
+	if !shaPattern.MatchString(expectedHead) {
+		return false, errors.New("refresh the repository and choose a commit to amend")
+	}
+	if err := c.requireHead(ctx, dir, expectedHead); err != nil {
+		return false, err
+	}
+	refs, err := c.text(ctx, dir, "for-each-ref", "--format=%(refname)", "--contains="+expectedHead, "refs/remotes/")
+	if err != nil {
+		return false, err
+	}
+	return refs != "", nil
+}
+
 func (c Client) LastCommitMessage(ctx context.Context, dir, expectedHead string) (string, error) {
 	if !shaPattern.MatchString(expectedHead) {
 		return "", errors.New("refresh the repository and choose a commit to amend")

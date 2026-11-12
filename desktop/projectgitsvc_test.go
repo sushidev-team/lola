@@ -141,6 +141,16 @@ func TestProjectGitWorktreeCreationRespectsBoundaries(t *testing.T) {
 	if _, err := svc.BranchAction("demo", "", projectgit.BranchRequest{Action: "publish", Source: "refs/heads/parallel", SourceSHA: snap.Head, Remote: "origin", RemoteBranch: "parallel"}); err == nil || !strings.Contains(err.Error(), "sandbox") {
 		t.Fatal("publish bypassed owner boundary", err)
 	}
+	selection := projectgit.PRSelection{Remote: "origin", SourceRef: "refs/heads/parallel", SourceSHA: snap.Head, BaseRepo: "acme/repo", Base: "main"}
+	if _, err := svc.PreviewPullRequest("demo", "", selection); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatal("PR preview bypassed source owner boundary", err)
+	}
+	if _, err := svc.CreatePullRequest("demo", "", projectgit.PRCreateRequest{Selection: selection, Title: "test"}); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatal("PR creation bypassed source owner boundary", err)
+	}
+	if _, err := svc.DraftPullRequest("demo", "", selection, "", ""); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatal("PR draft bypassed source owner boundary", err)
+	}
 }
 func TestProjectGitRejectsSandboxRootBeforeExecutingGit(t *testing.T) {
 	root := t.TempDir()

@@ -69,6 +69,14 @@ export class ProjectGitState {
     finally { this.draftingMessage = false; }
   }
 
+  async amendNeedsConfirmation(head: string): Promise<boolean | null> {
+    if (this.busy) return null;
+    this.busy = 'check-amend'; this.error = '';
+    try { return await ProjectGitService.AmendNeedsConfirmation(this.project, this.worktree, head); }
+    catch (error) { this.error = String(error); return null; }
+    finally { this.busy = ''; }
+  }
+
   async setAmend(value: boolean) {
     this.amend = value;
     this.amendHead = value ? this.snapshot?.head ?? '' : '';

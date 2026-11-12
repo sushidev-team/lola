@@ -53,7 +53,7 @@
   .publish-destination { display:grid; grid-template-columns:minmax(100px,140px) minmax(150px,1fr); gap:8px; flex:1; max-width:540px; min-width:260px; }
   input { min-width:0; width:100%; padding:4px 8px; height:28px; border:1px solid var(--color-edge); border-radius:6px; background:var(--color-canvas); color:var(--color-ink); font:12px var(--font-mono); }
   input:focus { outline:2px solid var(--color-accent); outline-offset:1px; }
-  .publish-destination :global(.select-control), .publish-destination :global(select) { height:28px; min-height:28px; }
+  .publish-destination :global(select) { height:28px; min-height:28px; }
   .publish-actions { display:flex; gap:6px; }
   .publish-error { flex-basis:100%; color:var(--color-bad); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
 </style>

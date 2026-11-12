@@ -202,6 +202,15 @@ func (s *ProjectGitService) Amend(project, worktree, message, expectedHead strin
 		return (projectgit.Client{}).Amend(ctx, dir, message, expectedHead)
 	})
 }
+func (s *ProjectGitService) AmendNeedsConfirmation(project, worktree, expectedHead string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	dir, _, err := projectGitTarget(ctx, project, worktree)
+	if err != nil {
+		return false, err
+	}
+	return (projectgit.Client{}).AmendNeedsConfirmation(ctx, dir, expectedHead)
+}
 func (s *ProjectGitService) LastCommitMessage(project, worktree, expectedHead string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

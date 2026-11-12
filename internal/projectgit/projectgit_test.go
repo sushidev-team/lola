@@ -469,3 +469,37 @@ func TestIndexStatusRefreshReadsOnlyFiles(t *testing.T) {
 		t.Fatalf("unexpected reads: %v", calls)
 	}
 }
+
+func TestAmendConfirmationChecksAllRemoteHistories(t *testing.T) {
+	dir := repo(t)
+	ctx := context.Background()
+	c := Client{}
+	write(t, dir, "file", "first")
+	testGit(t, dir, "add", ".")
+	testGit(t, dir, "commit", "-m", "first")
+	first := testGit(t, dir, "rev-parse", "HEAD")
+	check := func(want bool) {
+		t.Helper()
+		got, err := c.AmendNeedsConfirmation(ctx, dir, testGit(t, dir, "rev-parse", "HEAD"))
+		if err != nil || got != want {
+			t.Fatalf("confirmation=%v want=%v err=%v", got, want, err)
+		}
+	}
+	check(false)
+	testGit(t, dir, "update-ref", "refs/remotes/other/topic", first)
+	check(true)
+	write(t, dir, "file", "local change")
+	testGit(t, dir, "commit", "-am", "local")
+	second := testGit(t, dir, "rev-parse", "HEAD")
+	check(false)
+	if _, err := c.AmendNeedsConfirmation(ctx, dir, first); err == nil {
+		t.Fatal("stale HEAD accepted")
+	}
+	testGit(t, dir, "update-ref", "refs/remotes/other/topic", second)
+	// HEAD is an ancestor of a remote tip, not equal to one: still published.
+	testGit(t, dir, "checkout", "--detach", first)
+	check(true)
+	if _, err := c.AmendNeedsConfirmation(ctx, dir, "--all"); err == nil {
+		t.Fatal("invalid hash accepted")
+	}
+}

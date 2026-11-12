@@ -1736,7 +1736,7 @@ If the index or your draft changes during generation, the result is discarded.
 Generation has a 30-second timeout; response time depends on CLI startup and the
 model service, so a one-second response is not guaranteed.
 
-**New branch** creates a local branch from the current HEAD or another selected
+**Branch** creates a local branch from the current HEAD or another selected
 local/remote tip, with an optional switch to it. **Create branch here** in a branch
 or commit context menu uses that exact commit. Existing branches are never reset;
 Git preserves working changes or refuses an incompatible switch.
@@ -1747,6 +1747,18 @@ destination as the upstream after a successful push. Divergent remote history
 is refused. This also works from a nonchecked branch's context menu. **Set upstream**
 links a local branch to an existing remote branch without pushing. Dropping a local
 branch onto a remote branch offers both actions with that destination preselected.
+
+**Create PR** opens a GitHub pull request form from the toolbar, branch/worktree
+menus or a branch drop. Dropping one branch onto another preselects source and
+base in that direction. Choose the repositories and branches, edit the title and
+description, and use searchable multi-select fields for reviewers, assignees and
+labels. Draft PRs defer reviewer requests. The form uses your installed, signed-in
+`gh`; other Git hosts are not supported for PR creation yet. Source forks default
+to their parent repository. Fetch the target first if its base commit is missing
+locally. An unpublished source requires explicit **Push & create PR** consent;
+pushes never force remote history. Existing open PRs are reused, and metadata
+failures retain the created PR link. **AI draft** uses Claude Haiku with bounded
+committed changes and your editable draft; it never submits the PR.
 
 **Create worktree** in a branch menu creates a separate checkout in a new folder,
 optionally opening it. A branch already checked out elsewhere requires a new
@@ -1798,9 +1810,11 @@ sections, with compact list and folder-tree layouts. Shift-click selects a visib
 range; ⌘/Ctrl-click toggles individual files. Green hover actions and the selected
 file action stage precisely that selection. Review a file, stage or
 unstage it, then write a subject and optional body and commit the staged changes.
-**Amend last commit** loads the existing message into an empty draft and asks you
-to confirm the commit being replaced. It refuses if HEAD changed in the meantime;
-it does not force-push rewritten history. Fetch, ordinary
+**Amend last commit** loads the existing message into an empty draft. Local-only
+commits amend immediately; commits contained in a locally known remote branch
+show a brief confirmation. This uses the latest fetched remote history without
+a network request. A failed check or changed HEAD blocks the amend; it does not
+force-push rewritten history. Fetch, ordinary
 push and fast-forward-only pull are available from the toolbar. Refresh reloads
 changes made by a terminal or another application. Selecting a branch browses it;
 it does not check it out. Double-click a branch to check it out (or open its

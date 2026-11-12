@@ -133,20 +133,26 @@
     const ok = await state.act(amend ? 'amend' : 'commit', [], branch, count, head);
     if (ok && state === git) oncommitted();
   }
-  function submit(event: SubmitEvent) {
+  async function submit(event: SubmitEvent) {
     event.preventDefault();
     if (!canCommit) return;
     const state = git, head = git.amendHead, message = git.message, branch = ref, count = limit;
     if (!state.amend) { void commit(state, false, '', branch, count); return; }
+    const valid = () => mounted && state === git && state.message === message && state.amend && state.amendHead === head && state.snapshot?.head === head;
+    const proceed = () => {
+      if (!valid()) { state.error = 'The checkout or commit draft changed. Review it and try again.'; return; }
+      void commit(state, true, head, branch, count);
+    };
+    const published = await state.amendNeedsConfirmation(head);
+    if (published === null) return;
+    if (!valid()) { state.error = 'The checkout or commit draft changed. Review it and try again.'; return; }
+    if (!published) { proceed(); return; }
     confirm.ask({
-      title: 'Amend the last commit?',
-      body: `Replace commit ${head.slice(0, 8)} on ${data?.branch || 'detached HEAD'} with the staged changes and this message?`,
-      detail: 'This rewrites the commit. If it was already pushed, collaborators will still have the original history.',
+      title: 'Amend pushed commit?',
+      body: `Commit ${head.slice(0, 8)} is already on a remote branch. Amending rewrites shared history.`,
       confirmLabel: 'Amend commit',
-      onConfirm: () => {
-        if (!mounted || state !== git || state.message !== message || !state.amend || state.amendHead !== head || state.snapshot?.head !== head) { state.error = 'The checkout or commit draft changed. Review it and try again.'; return; }
-        void commit(state, true, head, branch, count);
-      },
+      confirmVariant: 'primary',
+      onConfirm: proceed,
     });
   }
 </script>
@@ -198,7 +204,7 @@
     {#if data?.operation}<p class="conflict-note">Resolve and stage conflicts, then use Continue above to finish the {data.operation}.</p>{/if}
     {#if amendStale}<p class="conflict-note" role="alert">HEAD changed since you selected Amend. Turn Amend off, review the last commit, then enable it again.</p>{/if}
     {#if conflicts}<p class="conflict-note">Resolve conflicted files before committing.</p>{/if}
-    <Button block variant="primary" loading={git.busy === 'commit' || git.busy === 'amend'} disabled={!canCommit} type="submit"><Icon name="check" size={14} />{git.amend ? 'Amend' : 'Commit'} {staged.length ? `${staged.length} ${staged.length === 1 ? 'file' : 'files'}` : 'staged changes'}</Button>
+    <Button block variant="primary" loading={git.busy === 'commit' || git.busy === 'amend' || git.busy === 'check-amend'} disabled={!canCommit} type="submit"><Icon name="check" size={14} />{git.amend ? 'Amend' : 'Commit'} {staged.length ? `${staged.length} ${staged.length === 1 ? 'file' : 'files'}` : 'staged changes'}</Button>
   </form>
 </div>
 

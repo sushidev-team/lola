@@ -24,6 +24,18 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); confirm.cancel(); vi.restoreAllMocks(); });
 describe('Git action menus', () => {
+  it('opens a PR with the dragged source and drop target without mutating Git', async () => {
+    const createPullRequest = vi.fn();
+    git.snapshot!.remotes = [{name:'origin',host:'github.com',owner:'acme',repo:'acme/repo',avatarUrl:''}];
+    actions = new GitActions(() => ({git,ref:'',limit:200}), {...callbacks,createPullRequest});
+    render(ProjectGitActionMenu, {actions});
+    actions.dropBranches(feature, main, event());
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Create PR…'}));
+    expect(createPullRequest).toHaveBeenCalledWith(feature, main);
+    expect(git.branchAction).not.toHaveBeenCalled();
+    expect(confirm.request).toBeNull();
+  });
+
   it('offers push and tracking choices when dropping a local branch onto a remote', async () => {
     const publishBranch=vi.fn();git.snapshot!.remotes=[{name:'origin',host:'',owner:'',repo:'',avatarUrl:''}];
     const target={name:'origin/review',fullName:'refs/remotes/origin/review',sha:main.sha,remote:true,current:false};

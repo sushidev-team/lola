@@ -186,8 +186,9 @@ describe('Project Git workspace', () => {
     const first = screen.getByRole('button', { name: /Add project workspace,/ });
     const old = screen.getByRole('button', { name: /Initial project,/ });
     expect(first.querySelector('.commit-refs')).toHaveTextContent('main');
-    expect(old.querySelector('.commit-refs')).toHaveTextContent('origin/main');
-    expect(first.querySelector('.checkout-marker')).not.toHaveAttribute('title');
+    expect(old.querySelector('.ref-name')).toHaveTextContent(/^main$/);
+    expect(first.querySelector('.ref-label .lucide-monitor')).toBeInTheDocument();
+    expect(first.querySelector('.checkout-marker')).toBeNull();
     await fireEvent.mouseEnter(first.querySelector('.commit-copy')!);
     expect(await screen.findByRole('tooltip')).toHaveTextContent('Checked out here');
     expect(screen.getByRole('tooltip').querySelector('.git-tip-checkout')).toHaveAttribute('aria-label', 'Active checkout: /repo');
@@ -294,7 +295,7 @@ describe('Project Git workspace', () => {
   });
   it('opens branch creation from the toolbar and a commit without creating until submitted', async () => {
     await open();
-    await fireEvent.click(screen.getByRole('button', {name:'New branch'}));
+    await fireEvent.click(screen.getByRole('button', {name:'Branch'}));
     expect(await screen.findByRole('dialog', {name:'New branch'})).toBeInTheDocument();
     expect(screen.getByRole('checkbox', {name:'Switch to new branch'})).toBeChecked();
     expect(api.CreateBranch).not.toHaveBeenCalled();
