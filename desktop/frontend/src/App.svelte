@@ -32,6 +32,7 @@
   import ProjectDetail from "$lib/views/ProjectDetail.svelte";
   import PRPicker from "$lib/views/PRPicker.svelte";
   import TicketPicker from "$lib/views/TicketPicker.svelte";
+  import TeamView from "$lib/views/TeamView.svelte";
   import DoctorOverlay from "$lib/views/DoctorOverlay.svelte";
   import SettingsForm from "$lib/views/SettingsForm.svelte";
   import ProjectForm from "$lib/views/ProjectForm.svelte";
@@ -39,6 +40,7 @@
   import HelpOverlay from "$lib/views/HelpOverlay.svelte";
   import BestOfOverlay from "$lib/views/BestOfOverlay.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+  import SandboxLoginDialog from "$lib/components/SandboxLoginDialog.svelte";
   import SessionMenu from "$lib/components/SessionMenu.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
@@ -372,6 +374,9 @@
 
     // View-independent globals.
     switch (e.key) {
+      case "T":
+        nav.goTeam();
+        return;
       // Escape unwinds ONE layer per press, outermost first: leave a view, then
       // drop the triage filter, then leave the project scope. Collapsing them
       // into one press would throw away two decisions on a reflex key.
@@ -442,6 +447,8 @@
             <PRPicker />
           {:else if nav.view === "ticketpicker"}
             <TicketPicker />
+          {:else if nav.view === "team"}
+            <TeamView />
           {/if}
         </div>
       {/if}
@@ -481,5 +488,6 @@
   <BestOfOverlay />
 {/if}
 <ConfirmDialog />
+<SandboxLoginDialog />
 <SessionMenu />
 {/if}

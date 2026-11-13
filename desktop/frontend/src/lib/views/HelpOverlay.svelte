@@ -6,6 +6,7 @@
   const groups: { title: string; keys: [string, string][] }[] = [
     { title: "Navigation", keys: [
       ["⌘⇧G", "Git workspace / previous view"],
+      ["T", "Team chores"],
       ["⌘K", "Search projects, sessions and actions"],
       ["⌘B", "Show or hide sidebar"],
       ["⌘⇧E", "Focus sessions sidebar"],

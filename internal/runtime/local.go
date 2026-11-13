@@ -142,6 +142,10 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool,
 	if err != nil {
 		return session.Session{}, err
 	}
+	// The line below mounts the sandbox's linux lola, so it must exist first.
+	if err := n.prepareSandbox(ctx, "", s.Sandbox != "" && !s.IsAgentless()); err != nil {
+		return session.Session{}, err
+	}
 	posix := "set -a; . " + shQuote(filepath.Join(artifacts, "env")) + " || exit; set +a; exec "
 	if s.Location == LocationSSH && !s.IsAgentless() {
 		posix = n.sshPosix(ctx, s, artifacts, resume)
@@ -174,6 +178,7 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool,
 	if err != nil {
 		return session.Session{}, err
 	}
+
 	if err := n.Tmux.NewSession(ctx, s.ID, s.Worktree, line); err != nil {
 		if n.Tmux.Has(ctx, s.ID) {
 			_ = n.Tmux.KillSession(ctx, s.ID)

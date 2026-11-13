@@ -183,8 +183,21 @@ type Project struct {
 	Sandbox      string   `toml:"sandbox,omitempty"`
 	SandboxImage string   `toml:"sandbox_image,omitempty"`
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
+	// SandboxToolchains names the language toolchains the project's
+	// container adds to lola's default image ("php", "node@22"; see
+	// internal/toolchain). Empty = detected from the repository; ["none"]
+	// adds nothing. SandboxPackages are extra Debian packages. Both are
+	// ignored when an image is named (sandbox_image / [sandbox].image): a
+	// custom image carries its own tools.
+	SandboxToolchains []string `toml:"sandbox_toolchains,omitempty"`
+	SandboxPackages   []string `toml:"sandbox_packages,omitempty"`
 	// GoalMode is explicit per project/stack availability, never execution authorization.
 	GoalMode bool `toml:"goal_mode,omitempty"`
+	// HubChores opts this project into the [hub] chore lane: hub work items
+	// whose repo matches Repo may be claimed for it (internal/hub.Accept).
+	// Default false, and deliberately NOT a [defaults] key: an inherited
+	// opt-in would enrol every project by accident.
+	HubChores bool `toml:"hub_chores,omitempty"`
 	// Kind is "" for an ordinary repository project or "stack" for a STACK:
 	// a project with no checkout of its own that owns the Linear side (filter,
 	// write-back, agent, sandbox, budget) for several member repositories. See
@@ -390,6 +403,8 @@ type Config struct {
 	Budget      BudgetConfig          `toml:"budget"`
 	Load        LoadConfig            `toml:"load"`
 	Sandbox     SandboxConfig         `toml:"sandbox"`
+	// Hub enrolls this machine with a team Lola hub.
+	Hub HubConfig `toml:"hub"`
 	// SSHHosts is the [[ssh_host]] catalog: the only hosts an agent-assisted ssh
 	// session can reach (see ssh.go). Empty means the feature is off.
 	SSHHosts []SSHHost `toml:"ssh_host"`
@@ -413,6 +428,11 @@ type Config struct {
 	// project reference, or more than one poll for a project) from config() to
 	// Validate. Unexported: never serialized, nil in the common case.
 	migrateErrs []error
+
+	// teamPolicy marks a Config the team policy overlay was applied to
+	// (teampolicy.go). Save refuses such a Config, so a locked value can never
+	// be frozen into the file. Unexported: never serialized.
+	teamPolicy bool
 }
 
 // Notices returns the non-fatal repairs Load made to the on-disk config, in
@@ -510,6 +530,7 @@ type fileConfig struct {
 	Budget      *BudgetConfig          `toml:"budget,omitempty"`
 	Load        *LoadConfig            `toml:"load,omitempty"`
 	Sandbox     *SandboxConfig         `toml:"sandbox,omitempty"`
+	Hub         *HubConfig             `toml:"hub,omitempty"`
 	SSHHosts    []SSHHost              `toml:"ssh_host,omitempty"`
 }
 
@@ -549,11 +570,22 @@ type fileProject struct {
 	Sandbox      string   `toml:"sandbox,omitempty"`
 	SandboxImage string   `toml:"sandbox_image,omitempty"`
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
+	// SandboxToolchains names the language toolchains the project's
+	// container adds to lola's default image ("php", "node@22"; see
+	// internal/toolchain). Empty = detected from the repository; ["none"]
+	// adds nothing. SandboxPackages are extra Debian packages. Both are
+	// ignored when an image is named (sandbox_image / [sandbox].image): a
+	// custom image carries its own tools.
+	SandboxToolchains []string `toml:"sandbox_toolchains,omitempty"`
+	SandboxPackages   []string `toml:"sandbox_packages,omitempty"`
 	// GoalMode is explicit per project/stack availability, never execution authorization.
-	GoalMode bool     `toml:"goal_mode,omitempty"`
-	Kind     string   `toml:"kind,omitempty"`
-	Stack    string   `toml:"stack,omitempty"`
-	Labels   []string `toml:"labels,omitempty"`
+	GoalMode bool `toml:"goal_mode,omitempty"`
+	// HubChores is PLAIN: not inheritable (an inherited opt-in would enrol
+	// every project by accident).
+	HubChores bool     `toml:"hub_chores,omitempty"`
+	Kind      string   `toml:"kind,omitempty"`
+	Stack     string   `toml:"stack,omitempty"`
+	Labels    []string `toml:"labels,omitempty"`
 
 	Enabled        bool      `toml:"enabled,omitempty"`
 	TeamID         string    `toml:"team_id,omitempty"`
@@ -721,7 +753,10 @@ func projectFromFile(fp fileProject) Project {
 		Sandbox:           fp.Sandbox,
 		SandboxImage:      fp.SandboxImage,
 		SandboxPorts:      fp.SandboxPorts,
+		SandboxToolchains: fp.SandboxToolchains,
+		SandboxPackages:   fp.SandboxPackages,
 		GoalMode:          fp.GoalMode,
+		HubChores:         fp.HubChores,
 		Kind:              fp.Kind,
 		Stack:             fp.Stack,
 		Labels:            fp.Labels,
@@ -797,7 +832,10 @@ func projectToFile(p Project) fileProject {
 		Sandbox:           p.Sandbox,
 		SandboxImage:      p.SandboxImage,
 		SandboxPorts:      p.SandboxPorts,
+		SandboxToolchains: p.SandboxToolchains,
+		SandboxPackages:   p.SandboxPackages,
 		GoalMode:          p.GoalMode,
+		HubChores:         p.HubChores,
 		Kind:              p.Kind,
 		Stack:             p.Stack,
 		Labels:            p.Labels,
@@ -943,6 +981,7 @@ func (fc *fileConfig) config() *Config {
 		Budget:          tableOf(fc.Budget),
 		Load:            tableOf(fc.Load),
 		Sandbox:         tableOf(fc.Sandbox),
+		Hub:             tableOf(fc.Hub),
 		SSHHosts:        fc.SSHHosts,
 	}
 }
@@ -1005,6 +1044,7 @@ func (c *Config) file() *fileConfig {
 		Budget:      nonZero(c.Budget),
 		Load:        nonZero(c.Load),
 		Sandbox:     sandboxTable(c.Sandbox),
+		Hub:         hubTable(c.Hub),
 		SSHHosts:    c.SSHHosts,
 	}
 }
@@ -1242,6 +1282,9 @@ func orString(v, fallback string) string {
 // that mutates [defaults] and saves does not keep stale resolved project
 // values, and save/load is an identity.
 func (c *Config) Save(path string) error {
+	if c.teamPolicy {
+		return ErrTeamPolicyOverlay
+	}
 	c.ResolveInheritance()
 
 	dir := filepath.Dir(path)

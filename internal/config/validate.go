@@ -301,6 +301,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateStacks()...)
 	errs = append(errs, c.validateRemote()...)
 	errs = append(errs, c.validateSSHHosts()...)
+	errs = append(errs, c.validateHub()...)
 
 	return errors.Join(errs...)
 }

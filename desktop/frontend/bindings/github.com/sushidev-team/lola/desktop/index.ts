@@ -5,9 +5,11 @@ import * as ConfigService from "./configservice.js";
 import * as ContextService from "./contextservice.js";
 import * as DaemonService from "./daemonservice.js";
 import * as DoctorService from "./doctorservice.js";
+import * as HubService from "./hubservice.js";
 import * as LinearService from "./linearservice.js";
 import * as ProjectGitService from "./projectgitservice.js";
 import * as SSHService from "./sshservice.js";
+import * as SandboxLoginService from "./sandboxloginservice.js";
 import * as TalkService from "./talkservice.js";
 import * as TermService from "./termservice.js";
 import * as UpdateService from "./updateservice.js";
@@ -16,9 +18,11 @@ export {
     ContextService,
     DaemonService,
     DoctorService,
+    HubService,
     LinearService,
     ProjectGitService,
     SSHService,
+    SandboxLoginService,
     TalkService,
     TermService,
     UpdateService
@@ -33,6 +37,10 @@ export type {
     DoctorReportDTO,
     DoctorResultDTO,
     GroupDTO,
+    HubKindDTO,
+    HubProjectDTO,
+    HubProjectPatchDTO,
+    HubTrustedKeyDTO,
     ImageAttachment,
     InheritsDTO,
     LinearIssueBrief,
@@ -40,6 +48,7 @@ export type {
     LinearOption,
     LinearTeam,
     LinearTeamMeta,
+    LockedSettingDTO,
     PathInfoDTO,
     ProjectExecutionDTO,
     ProjectFormDTO,
@@ -51,11 +60,15 @@ export type {
     ReviewProviderDTO,
     SSHHostDTO,
     SSHHostPreviewDTO,
+    SandboxStatusDTO,
     SettingsDTO,
     SetupDTO,
     SetupResultDTO,
     StackFolderAppDTO,
     StackFolderDTO,
+    TeamPolicyDTO,
+    ToolchainDTO,
+    ToolchainInfoDTO,
     UpdateInfoDTO,
     UpdateProgressDTO,
     UpdateSettingsDTO

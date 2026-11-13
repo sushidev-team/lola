@@ -1779,7 +1779,7 @@ func fieldHelp(fd fieldID) string {
 	case fSandbox:
 		return "Workspace for new sessions. Enter switches host / Docker. Goal mode requires Docker; existing sessions keep their workspace."
 	case fSandboxImage:
-		return "Installed container image with the project toolchain and agent. Empty uses [sandbox].image."
+		return "Container image with the project toolchain and coding agent. Empty uses [sandbox].image, else lola's sandbox image (" + config.DefaultSandboxImage() + ")."
 	case fGoalMode:
 		return "Make goals available for this project or stack. Requires Docker and Linear placement. Each goal still needs a reviewed plan, limits and execution authorization; draft PRs require human merge."
 	case fAgent:

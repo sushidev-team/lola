@@ -20,9 +20,11 @@ and project under **Issue pickup** first. In the TUI editor, the same controls
 appear on the Repo tab as **Workspace isolation**, **Container image** and
 **Autonomous goals**. Stack members use their owner's execution settings.
 
-Docker setup also requires `[sandbox].lola_bin`, an absolute path to a Linux Lola
-build. See [the container sandbox](../README.md#the-container-sandbox) for the
-machine setup. Configuration validation reports missing setup without saving a
+Docker needs no further configuration: lola's default image and the Linux lola
+inside it serve unless `[sandbox].image` / `[sandbox].lola_bin` say otherwise. Goal
+workers run with `--pull never`, so the image must already be present; the first
+ordinary sandboxed spawn pulls it. See
+[the container sandbox](../README.md#the-container-sandbox) for the machine setup. Configuration validation reports missing setup without saving a
 partial change. Switching back to Host workspace requires turning goal mode off
 and clearing any sandbox image override or configured sandbox ports.
 

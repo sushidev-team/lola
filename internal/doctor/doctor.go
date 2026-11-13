@@ -27,6 +27,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/hub"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
@@ -45,6 +46,8 @@ const (
 	checkRepaired  = "config repairs"
 	checkMigration = "migration"
 	checkFallback  = "agent fallback"
+	checkHub       = "hub"
+	checkHubPolicy = "hub policy"
 	// checkStatusAgent is reported ONLY when the daemon's status interpreter
 	// has tripped its circuit breaker (statusagent.go) — there is no healthy
 	// row for it.
@@ -167,10 +170,19 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	if res, ok := repairResult(cfg); ok {
 		add(res)
 	}
+	if res, ok := hubResult(ctx, cfg); ok {
+		add(res)
+	}
+	if res, ok := hubPolicyResult(cfg); ok {
+		add(res)
+	}
 	for _, res := range fallbackResults(cfg) {
 		add(res)
 	}
 	for _, res := range projectResults(cfg) {
+		add(res)
+	}
+	for _, res := range sandboxResults(ctx, cfg) {
 		add(res)
 	}
 	return r
@@ -528,4 +540,101 @@ func firstErr(err error) string {
 		return ""
 	}
 	return firstLine([]byte(err.Error()))
+}
+
+// hubProbeTimeout bounds the reachability probe.
+const hubProbeTimeout = 5 * time.Second
+
+// hubProbe is the reachability seam: one cheap, signed, READ-ONLY call to the
+// hub as this device (GET /v1/org, falling back to /v1/offers on a hub that
+// predates the board views). Tests replace it; nil skips the probe.
+var hubProbe = func(ctx context.Context, url, dir string) error {
+	key, err := hub.LoadKey(dir)
+	if err != nil {
+		return err
+	}
+	c, err := hub.NewClient(url, key)
+	if err != nil {
+		return err
+	}
+	c.Timeout = hubProbeTimeout
+	_, err = c.Org(ctx)
+	var ae *hub.APIError
+	if errors.As(err, &ae) && ae.Status == 404 {
+		_, _, err = c.Offers(ctx)
+	}
+	return err
+}
+
+// hubResult reports [hub] — identity, device key, and, once those are sound,
+// whether the hub answers a signed request — only while the hub is enabled.
+// Never critical: the hub only offers chores, and a daemon without it still
+// dispatches Linear work.
+func hubResult(ctx context.Context, cfg *config.Config) (Result, bool) {
+	if cfg == nil || !cfg.Hub.Enabled {
+		return Result{}, false
+	}
+	dir, err := hub.StateDir()
+	if err != nil {
+		return Result{Name: checkHub, Detail: err.Error()}, true
+	}
+	st := hub.LocalStatus(cfg, dir)
+	switch {
+	case st.IdentityErr != "":
+		return Result{Name: checkHub, Detail: "identity unreadable: " + st.IdentityErr}, true
+	case !st.Joined:
+		return Result{Name: checkHub, Detail: "enabled but not joined — run `lola hub join <url>` with the token on stdin"}, true
+	case st.KeyErr != "":
+		return Result{Name: checkHub, Detail: "device key unreadable: " + st.KeyErr}, true
+	case !st.KeyPresent:
+		return Result{Name: checkHub, Detail: "device key missing — run `lola hub leave` and join again"}, true
+	case st.KeyMismatch:
+		return Result{Name: checkHub, Detail: "device key is not the one that enrolled — run `lola hub leave` and join again"}, true
+	case strings.TrimSuffix(st.Identity.URL, "/") != strings.TrimSuffix(cfg.Hub.URL, "/"):
+		return Result{Name: checkHub, Detail: "joined " + st.Identity.URL + " but [hub].url names " + cfg.Hub.URL}, true
+	}
+	detail := fmt.Sprintf("joined org %s as device %s (%s)", st.Identity.Org, st.Identity.DeviceID, st.Identity.URL)
+	if hubProbe != nil {
+		if err := hubProbe(ctx, cfg.Hub.URL, dir); err != nil {
+			return Result{Name: checkHub, Detail: detail + "; hub not reachable: " + firstErr(err)}, true
+		}
+		detail += ", reachable"
+	}
+	return Result{Name: checkHub, OK: true, Detail: detail}, true
+}
+
+// hubPolicyResult reports the team policy the daemon enforces: which keys it
+// locks, or why a verified policy is not applied, and every key the overlay
+// had to ignore (a review kind the local config cannot run). Never critical:
+// a policy that cannot apply leaves the local config in charge.
+func hubPolicyResult(cfg *config.Config) (Result, bool) {
+	if cfg == nil || !cfg.Hub.Enabled || len(cfg.Hub.TrustedPolicyKeys) == 0 {
+		return Result{}, false
+	}
+	dir, err := hub.StateDir()
+	if err != nil {
+		return Result{}, false
+	}
+	sp, apply, note := hub.ApplicablePolicy(cfg.Hub, dir)
+	switch {
+	case sp == nil && note == "":
+		return Result{}, false // no policy published or fetched yet
+	case sp == nil:
+		return Result{Name: checkHubPolicy, Detail: note}, true
+	case !apply:
+		return Result{Name: checkHubPolicy, OK: true, Detail: fmt.Sprintf("v%d not applied: %s", sp.Policy.Version, note)}, true
+	}
+	applied, notices := config.TeamPolicyPreview(cfg, sp.Policy.Settings)
+	keys := make([]string, len(applied))
+	for i, k := range applied {
+		keys[i] = k.Key
+	}
+	detail := fmt.Sprintf("v%d locks %d key(s)", sp.Policy.Version, len(keys))
+	if len(keys) > 0 {
+		detail += ": " + strings.Join(keys, ", ")
+	}
+	if len(notices) > 0 {
+		return Result{Name: checkHubPolicy, Detail: detail + "; " + strings.Join(notices, "; ")}, true
+	}
+	return Result{Name: checkHubPolicy, OK: true, Detail: detail}, true
 }

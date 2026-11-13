@@ -30,6 +30,7 @@ import CirclePause from '@lucide/svelte/icons/circle-pause';
 import CircleX from '@lucide/svelte/icons/circle-x';
 import Cloud from '@lucide/svelte/icons/cloud';
 import Clock from '@lucide/svelte/icons/clock';
+import Lock from '@lucide/svelte/icons/lock';
 import Code from '@lucide/svelte/icons/code';
 import Copy from '@lucide/svelte/icons/copy';
 import Ellipsis from '@lucide/svelte/icons/ellipsis';
@@ -77,6 +78,9 @@ import Star from '@lucide/svelte/icons/star';
 import Terminal from '@lucide/svelte/icons/terminal';
 import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 import User from '@lucide/svelte/icons/user';
+import Users from '@lucide/svelte/icons/users';
+import Download from '@lucide/svelte/icons/download';
+import Package from '@lucide/svelte/icons/package';
 import X from '@lucide/svelte/icons/x';
 
 export const icons = {
@@ -130,6 +134,7 @@ export const icons = {
   'layers': Layers,
   'list': List,
   'list-filter': ListFilter,
+  'lock': Lock,
   'loader-circle': LoaderCircle,
   'maximize-2': Maximize2,
   'menu': Menu,
@@ -158,6 +163,9 @@ export const icons = {
   'terminal': Terminal,
   'triangle-alert': TriangleAlert,
   'user': User,
+  'users': Users,
+  'download': Download,
+  'package': Package,
   'x': X,
 } as const;
 export type IconName = keyof typeof icons;

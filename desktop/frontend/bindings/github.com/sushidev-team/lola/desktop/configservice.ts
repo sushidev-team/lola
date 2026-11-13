@@ -52,6 +52,13 @@ export function AddGroup(label: string): $CancellablePromise<string> {
 }
 
 /**
+ * ClearSandboxToken deletes the stored token.
+ */
+export function ClearSandboxToken(): $CancellablePromise<void> {
+    return $Call.ByID(4005869272);
+}
+
+/**
  * ConfigExists reports whether ~/.lola/config.toml is present, so the frontend
  * can gate a first-run setup screen.
  */
@@ -102,6 +109,15 @@ export function CreateStackFromFolder(label: string, apps: $models.StackFolderAp
     return $Call.ByID(1223234397, label, apps);
 }
 
+/**
+ * DetectToolchains reads the checkout at path (the project form's folder) and
+ * reports the toolchains a sandboxed session of it would get with no
+ * sandbox_toolchains set. Read-only and bounded (internal/toolchain).
+ */
+export function DetectToolchains(path: string): $CancellablePromise<$models.ToolchainInfoDTO> {
+    return $Call.ByID(2194180648, path);
+}
+
 export function GetAppearance(): $CancellablePromise<$models.AppearanceDTO> {
     return $Call.ByID(306832519);
 }
@@ -127,6 +143,13 @@ export function GetSettings(): $CancellablePromise<$models.SettingsDTO> {
  */
 export function GetTheme(): $CancellablePromise<string> {
     return $Call.ByID(243714106);
+}
+
+/**
+ * HubProjects lists the projects that can take team chores, in config order.
+ */
+export function HubProjects(): $CancellablePromise<$models.HubProjectDTO[] | null> {
+    return $Call.ByID(2192521832);
 }
 
 /**
@@ -325,6 +348,43 @@ export function SSHHostPreview(d: $models.SSHHostDTO): $CancellablePromise<$mode
     return $Call.ByID(3347456271, d);
 }
 
+/**
+ * SandboxImageDefault is the image a project with no sandbox_image runs:
+ * [sandbox].image, else lola's default. For the project form's placeholder.
+ */
+export function SandboxImageDefault(): $CancellablePromise<string> {
+    return $Call.ByID(2313913772);
+}
+
+/**
+ * SandboxLoginNeeded names the agent ("claude", "codex", "opencode") that a
+ * session of agentKind ("" = the project's configured agent) started in
+ * project would run sandboxed with no login — it would only report "Not logged
+ * in" and wait. "" when nothing is missing. The app asks before such a start
+ * and offers the login. The daemon refuses the same start, so this is the
+ * friendly half, not the guard.
+ */
+export function SandboxLoginNeeded(project: string, agentKind: string): $CancellablePromise<string> {
+    return $Call.ByID(3065258566, project, agentKind);
+}
+
+/**
+ * SandboxStatus reads [sandbox] and probes docker, the keychain and gh. It
+ * pulls nothing.
+ */
+export function SandboxStatus(): $CancellablePromise<$models.SandboxStatusDTO> {
+    return $Call.ByID(1302684536);
+}
+
+/**
+ * SaveHubProject writes a project's repo, chore opt-in and Docker sandbox
+ * in one config save. Turning chores on needs an owner/name repo — the same
+ * rule Validate enforces — and the error says so in the UI's words.
+ */
+export function SaveHubProject(patch: $models.HubProjectPatchDTO): $CancellablePromise<void> {
+    return $Call.ByID(2589761182, patch);
+}
+
 export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<void> {
     return $Call.ByID(3368157871, dto);
 }
@@ -410,6 +470,32 @@ export function SetProjectStack(project: string, stack: string): $CancellablePro
 }
 
 /**
+ * SetSandboxImage writes [sandbox].image. "" restores lola's default.
+ */
+export function SetSandboxImage(image: string): $CancellablePromise<void> {
+    return $Call.ByID(4139963821, image);
+}
+
+/**
+ * SetSandboxToken stores the Claude Code token sandboxed agents log in with
+ * (from `claude setup-token`) in the keychain. Write-only: nothing reads it
+ * back to the frontend, and the error never carries it.
+ */
+export function SetSandboxToken(token: string): $CancellablePromise<void> {
+    return $Call.ByID(2071021637, token);
+}
+
+/**
+ * SetSandboxUseAPIKey writes [sandbox].use_api_key: whether sandboxed agents
+ * get ANTHROPIC_API_KEY from the daemon's environment. A deliberate switch —
+ * the key bills per token and claude prefers it over the subscription token —
+ * so the UI confirms before turning it on.
+ */
+export function SetSandboxUseAPIKey(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(679924840, on);
+}
+
+/**
  * SetStackMemberLabels sets which issues each member of stack is checked out
  * for (member name -> labels; empty = every issue), in one write. It touches
  * ONLY Project.Labels, so a stack form saved beside it cannot clobber a
@@ -439,6 +525,13 @@ export function SetTheme(name: string): $CancellablePromise<void> {
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
     return $Call.ByID(3057086516, dto);
+}
+
+/**
+ * TeamPolicy reports which settings the team policy locks.
+ */
+export function TeamPolicy(): $CancellablePromise<$models.TeamPolicyDTO> {
+    return $Call.ByID(174716540);
 }
 
 /**

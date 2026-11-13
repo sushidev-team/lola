@@ -1,0 +1,23 @@
+# System git config of the lola sandbox image (/etc/gitconfig). It only touches
+# what a container needs; the repository's own config stays read-only and
+# authoritative, and the commit identity comes from the host (lola passes
+# GIT_AUTHOR_*/GIT_COMMITTER_* from the project's git config at spawn).
+
+# The worktree and git stores are bind-mounted from the host, owned by a uid
+# that is not this container's user. Without this git refuses every command.
+[safe]
+	directory = *
+
+# The container holds no ssh keys, and host checkouts often use ssh remotes.
+# Rewrite GitHub's ssh forms to https so fetch/push use GH_TOKEN instead.
+[url "https://github.com/"]
+	insteadOf = git@github.com:
+	insteadOf = ssh://git@github.com/
+
+# gh turns GH_TOKEN into git credentials for github.com.
+[credential "https://github.com"]
+	helper =
+	helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !gh auth git-credential

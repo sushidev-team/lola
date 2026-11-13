@@ -26,6 +26,7 @@
   import Button from "./Button.svelte";
   import Chevron from "./Chevron.svelte";
   import StateGlyph from "./StateGlyph.svelte";
+  import HubChip from "./HubChip.svelte";
 
 
   // Asked again whenever a session leaves the list, since that is when one becomes ended, and now
@@ -123,7 +124,7 @@
           {@const title = s.title || s.branch || s.issue || (s.status === 'shell' ? 'Shell' : 'Session')}
           {@const issue = s.issue && s.issue !== title ? s.issue : ''}
           {@const context = !s.issue && !stage ? (s.location === 'ssh' ? 'SSH' : s.location === 'temporary' ? 'Temporary shell' : s.branch !== title ? s.branch : '') : ''}
-          {@const hasMeta = !!(issue || metadataStage || context)}
+          {@const hasMeta = !!(issue || metadataStage || context || s.hub)}
           {@const waited = glyph.glyph === "◉" ? fluidAgo(s.agentStateSince as unknown as string, now).text : ""}
           <div class="sidebar-session-item" class:selected={open === s.id} class:has-pr={!!s.prNumber} class:dev-active={!!s.devActive} class:compact={!hasMeta || line.compact} class:dormant={glyph.label === 'Gone' || glyph.label === 'Orphaned'}>
           <button
@@ -144,6 +145,7 @@
             <span class="sidebar-session-age num text-faint">{waited}</span>
             {#if hasMeta}
             <span class="sidebar-session-meta col-start-2 col-end-4 flex min-w-0 items-baseline gap-1.5" data-roster-meta>
+              {#if s.hub}<HubChip hub={s.hub} class="max-w-[60%]" />{/if}
               {#if issue}<span class="shrink-0 text-ink-2">{issue}</span>{/if}
               {#if metadataStage}<span class="min-w-0 truncate {STAGE_TEXT[metadataStage.tone]}">{issue ? '· ' : ''}{metadataStage.label}</span>{:else if context}<span class="truncate text-faint">{context}</span>{/if}
               {#if line.compact && !atReview && line.text}<span class="min-w-0 truncate text-faint" data-roster-line>· {line.text}</span>{/if}

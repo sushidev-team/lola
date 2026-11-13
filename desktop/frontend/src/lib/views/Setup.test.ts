@@ -10,19 +10,20 @@ vi.mock("$lib/theme-runtime.svelte", async () => {
   const palettes = await import("$lib/catppuccin");
   return { ...palettes, appearance: { init: appearanceInit } };
 });
+import { DEFAULT_THEME_ID } from "$lib/catppuccin";
 import Setup from "./Setup.svelte";
 
 beforeEach(() => {
   vi.resetAllMocks(); store.hasConfig = false; store.startDaemon = startDaemon;
   setup.mockResolvedValue({ keychainStored: true });
   appearanceInit.mockResolvedValue(undefined);
-  themes.mockResolvedValue(["catppuccin-mocha", "catppuccin-latte"]);
+  themes.mockResolvedValue([DEFAULT_THEME_ID, "catppuccin-mocha", "catppuccin-latte"]);
 });
 afterEach(cleanup);
 
 const enterKey = () => fireEvent.input(screen.getByLabelText("Linear API key"), { target: { value: "test-key" } });
 const start = () => screen.getByRole("button", { name: "Start Lola" });
-const defaults = { linearKey: "test-key", agent: "claude", theme: "catppuccin-mocha", concurrencyCap: 2, globalCap: 4, pollInterval: "60s" };
+const defaults = { linearKey: "test-key", agent: "claude", theme: DEFAULT_THEME_ID, concurrencyCap: 2, globalCap: 4, pollInterval: "60s" };
 
 describe("first-run setup", () => {
   it("requires only a Linear key and opens an empty workspace", async () => {
@@ -137,7 +138,7 @@ describe("first-run setup", () => {
   it("keeps the theme defaults usable when the catalog cannot load", async () => {
     themes.mockRejectedValueOnce(new Error("offline"));
     render(Setup); await enterKey();
-    expect(screen.getByLabelText("Theme")).toHaveValue("catppuccin-mocha");
+    expect(screen.getByLabelText("Theme")).toHaveValue(DEFAULT_THEME_ID);
     await fireEvent.click(start());
     await waitFor(() => expect(setup).toHaveBeenCalledWith(defaults));
   });

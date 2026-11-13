@@ -90,7 +90,7 @@ describe('Project Git staging',()=>{
  it('keeps staging available but prevents a separate commit during operation recovery',async()=>{
    const {git}=setup();git.snapshot!.operation='cherry-pick';git.subject='existing draft';await tick();
    expect(screen.getByRole('button',{name:'Commit 1 file'})).toBeDisabled();expect(screen.getByRole('checkbox',{name:'Amend last commit'})).toBeDisabled();
-   expect(screen.getByRole('button',{name:'Stage src/new.ts'})).toBeEnabled();expect(screen.getByText(/Continue above/)).toBeInTheDocument();
+   expect(screen.getByRole('button',{name:'Stage src/new.ts'})).toBeEnabled();expect(screen.queryByText(/Continue above/)).toBeNull();
  });
  it('keeps both staging groups visible and maps list and tree actions to exact paths',async()=>{
    const {onact,oninspect}=setup();

@@ -1,0 +1,21 @@
+# Build context for sandbox/Dockerfile: only what `go build .` needs.
+.git
+.github
+.gocache
+.gomodcache
+.claude
+.agents
+.omo
+bin
+dist
+desktop
+mobile
+docs
+contrib
+node_modules
+**/node_modules
+/lola
+# Root-level docs only (*.md matches the context root; embedded guides elsewhere stay).
+*.md
+**/*_test.go
+**/testdata

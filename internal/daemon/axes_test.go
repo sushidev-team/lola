@@ -509,3 +509,56 @@ func TestAdoptKeepsNotificationWhileStillWaiting(t *testing.T) {
 		t.Error("adoption lost persisted notification guards")
 	}
 }
+
+// A revive that lands after the cycle's tmux listing must not be overwritten
+// with "dead" by that cycle: the listing predates the new pane.
+func TestObserveDoesNotKillASessionRevivedAfterTheListing(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	(&fakeObsSeams{}).install(d)
+	dead := nativeSess("FE-1", "dead")
+	dead.SetAgentState(state.AgentDead, "", time.Now().Add(-time.Minute))
+	d.sessions.Upsert(dead)
+
+	d.listTmuxSessions = func(ctx context.Context) ([]tmux.Session, error) {
+		// The revive lands while this cycle runs.
+		time.Sleep(2 * time.Millisecond)
+		d.sessions.Update(dead.ID, func(cur *session.Session) bool {
+			cur.SetAgentState(state.AgentWorking, "", time.Now())
+			return true
+		})
+		return nil, nil // listed before the new pane existed
+	}
+	d.observe(context.Background())
+
+	if got := getSess(t, d, dead.ID); got.AgentState != state.AgentWorking {
+		t.Fatalf("revived session = %q, want working", got.AgentState)
+	}
+}
+
+// A shutdown stops the observer between sessions instead of letting the
+// shielded cycle observe every one first.
+func TestObserveStopsBetweenSessionsOnShutdown(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	(&fakeObsSeams{}).install(d)
+	for _, id := range []string{"FE-1", "FE-2", "FE-3"} {
+		d.sessions.Upsert(nativeSess(id, "working"))
+	}
+	stop := make(chan struct{})
+	captured := 0
+	d.paneTail = func(ctx context.Context, tmuxName string, lines int) (string, error) {
+		captured++
+		close(stop) // the shutdown arrives while the first session is observed
+		return paneUnknown, nil
+	}
+	d.listTmuxSessions = func(ctx context.Context) ([]tmux.Session, error) {
+		var ls []tmux.Session
+		for _, s := range d.sessions.Snapshot() {
+			ls = append(ls, tmux.Session{Name: s.ID})
+		}
+		return ls, nil
+	}
+	d.observe(withStop(context.Background(), stop))
+	if captured != 1 {
+		t.Fatalf("observed %d sessions after the shutdown began, want 1", captured)
+	}
+}

@@ -96,7 +96,31 @@ func (d *Daemon) safeObserve(ctx context.Context) {
 	// a half-written store. The loop itself still stops on ctx.Done, and every
 	// exec inside the cycle is individually bounded by observeExecTimeout so
 	// the shield can never turn into an indefinite hang.
-	d.observe(context.WithoutCancel(ctx))
+	d.observe(withStop(context.WithoutCancel(ctx), ctx.Done()))
+}
+
+// stopKey carries the daemon's shutdown signal into a shielded cycle.
+type stopKey struct{}
+
+// withStop attaches stop (the run context's Done) to a shielded ctx: the
+// cycle's execs keep running to completion, but the cycle can see the
+// shutdown and stop BETWEEN sessions instead of observing all of them.
+func withStop(ctx context.Context, stop <-chan struct{}) context.Context {
+	return context.WithValue(ctx, stopKey{}, stop)
+}
+
+// stopping reports whether the daemon is shutting down.
+func stopping(ctx context.Context) bool {
+	stop, _ := ctx.Value(stopKey{}).(<-chan struct{})
+	if stop == nil {
+		return false
+	}
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
 }
 
 // observe runs one observation cycle over lola's native sessions (PLAN P2).
@@ -183,6 +207,10 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		aliveByName    map[string]bool
 		activityByName map[string]time.Time
 	)
+	// When liveness was read. A record whose agent axis moved after this (a
+	// revive or relaunch landing mid-cycle) is newer than the listing, so this
+	// cycle must not declare it dead.
+	listedAt := time.Now()
 	if d.listTmuxSessions != nil {
 		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 		ls, err := d.listTmuxSessions(cctx)
@@ -231,6 +259,11 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	interpretPerCycle := d.cfg.StatusAgent.MaxPerCycle
 	d.mu.Unlock()
 	for _, s := range d.sessions.Snapshot() {
+		// A shutdown stops the cycle between sessions: each record's update
+		// is atomic, so the rest simply waits for the next daemon's cycle.
+		if stopping(ctx) {
+			break
+		}
 		if s.Source != "native" {
 			continue
 		}
@@ -417,7 +450,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// 2. AGENT axis — liveness + hooks (already merged into cur) + pane
 			// + tmux's own activity stamp.
 			agentChanged := false
-			if !alive {
+			if !alive && cur.AgentStateSince.After(listedAt) {
+				// Revived or relaunched after the listing: the "gone" is stale.
+			} else if !alive {
 				// A dead pane is terminal for the agent axis; the rollup still
 				// reads "merged" when the delivery axis says so (Rollup rule 1).
 				agentChanged = cur.SetAgentState(state.AgentDead, "", now)
@@ -466,6 +501,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		}
 		if known && prevDelivery != updated.Delivery {
 			d.noteDelivery(updated, prevDelivery)
+			if updated.HubOpen() {
+				d.hubNudgeOutcomes() // non-blocking: the hub loop reports it
+			}
 		}
 		if known {
 			d.noteCI(updated)
@@ -488,6 +526,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// waiting_input/quota_limited on the agent axis; the engine notifies
 			// once per episode or auto-switches per the configured chain.
 			d.maybeFallback(ctx, updated)
+			// A sandboxed claude started before any Claude login existed is
+			// relaunched once a login resolves (sandboxlogin.go).
+			d.maybeRelogin(ctx, updated)
 			// Escalation (blocked) write-back AFTER react — react is what sets
 			// Escalated (CI retries exhausted). Re-read the record so the flag
 			// react just wrote is visible this cycle. A dropped (merged-cleaned)
@@ -519,6 +560,14 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				}
 			}
 		}
+	}
+	if stopping(ctx) {
+		if touched {
+			if err := d.sessions.Save(); err != nil {
+				d.logf("", "observe: persist sessions: %v", err)
+			}
+		}
+		return
 	}
 	// Cross-session passes, AFTER every record carries this cycle's facts.
 	// Overlap detection is local git only and display-only; the merge queue is

@@ -324,12 +324,12 @@ describe("the chords", () => {
     await waitFor(() => expect(store.flash?.text).toContain("not at a turn"));
   });
   it("⌘. shows a refusal the daemon answered as data, in its own words", async () => {
-    stop.mockResolvedValue({ stopped: false, why: "lola can't stop this agent from here. Use its terminal." });
+    stop.mockResolvedValue({ stopped: false, why: "Lola can't stop this agent from here. Use its terminal." });
     await mount([plain(A, { agentState: "working" })]);
     nav.openSession(A);
     flushSync();
     chord("stop");
-    await waitFor(() => expect(store.flash?.text).toBe("lola can't stop this agent from here. Use its terminal."));
+    await waitFor(() => expect(store.flash?.text).toBe("Lola can't stop this agent from here. Use its terminal."));
   });
   it("⌘⇧D toggles Changes and returns to the previous view", async () => {
     await mount([plain(A)]);

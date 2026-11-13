@@ -35,6 +35,8 @@
     switch (nav.view) {
       case "home":
         return [{ text: "Projects" }];
+      case "team":
+        return [{ text: "Team" }];
       case "detail":
         return [{ text: "Projects", onclick: () => nav.goHome() }, { text: projectName }];
       case "prpicker":

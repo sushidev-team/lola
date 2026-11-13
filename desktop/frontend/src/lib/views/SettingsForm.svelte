@@ -22,6 +22,9 @@
   import Select from "$lib/components/Select.svelte";
   import ReviewProfiles from "$lib/components/ReviewProfiles.svelte";
   import SSHHostSettings from "$lib/components/ssh/SSHHostSettings.svelte";
+  import SandboxSettings from "$lib/components/SandboxSettings.svelte";
+  import HubSettings, { CLAIMS_LABEL, POLL_LABEL, hubClaimsError, hubPollError } from "$lib/components/hub/HubSettings.svelte";
+  import TeamLock from "$lib/components/TeamLock.svelte";
   import QRCode from "$lib/components/QRCode.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -30,7 +33,7 @@
   import { deepEqual } from "$lib/deepEqual";
   import { ConfigService, LinearService } from "@bindings/desktop";
   import type { ReviewKindDTO } from "@bindings/desktop";
-  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, ConnectCodeDTO } from "@bindings/desktop/models";
+  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, ConnectCodeDTO, TeamPolicyDTO } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { appearance, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
   import { terms } from "$lib/terms.svelte";
@@ -44,6 +47,11 @@
   let saving = $state(false);
   const globalCapError = $derived(dto && (!Number.isInteger(dto.globalCap) || dto.globalCap < 1) ? "Enter a whole number of at least 1." : "");
   const projectCapError = $derived(dto && (!Number.isInteger(dto.concurrencyCap) || dto.concurrencyCap < 0) ? "Enter a whole number of 0 or more." : "");
+  // The Team hub tab's number fields: a cleared one is NaN, which JSON sends as
+  // null and the daemon would skip, so the save reports success with the old
+  // value. The same gate as the caps blocks the save instead.
+  const hubClaimsErr = $derived(dto ? hubClaimsError(dto.hubMaxClaimsPerDay) : "");
+  const hubPollErr = $derived(dto ? hubPollError(dto.hubPollSeconds) : "");
   // A rejected SaveSettings used to surface only as a footer flash — behind this
   // backdrop, truncated, gone in 4s — so it read like a save that just didn't
   // close. Held here and shown inline instead; cleared on the next attempt.
@@ -69,10 +77,12 @@
     { id: "defaults", label: "General", group: "Workspace" },
     { id: "project", label: "Project defaults", group: "Workspace" },
     { id: "appearance", label: "Appearance", group: "Workspace" },
+    { id: "sandbox", label: "Sandbox", group: "Workspace" },
     { id: "linear", label: "Linear", group: "Connections" },
     { id: "notify", label: "Notifications", group: "Connections" },
     { id: "sshhosts", label: "SSH hosts", group: "Connections" },
     { id: "remote", label: "Phone access", group: "Connections" },
+    { id: "hub", label: "Team hub", group: "Connections" },
     { id: "ai", label: "AI", group: "Automation" },
     { id: "review", label: "Review", group: "Automation" },
     { id: "brain", label: "Summaries", group: "Automation" },
@@ -316,6 +326,35 @@
 
   const statusBinaries = new Map<string, string>();
 
+  // --- team policy ----------------------------------------------------------
+  //
+  // Which settings the daemon's verified team policy LOCKS (ConfigService.
+  // TeamPolicy, one hubStatus round-trip). A locked control is drawn through
+  // <TeamLock>: disabled, with the team's value. The form still loads and saves
+  // config.toml as before; the overlay never reaches the file. A down or older
+  // daemon answers "nothing locked", and a failure here never blocks the form.
+  let teamPolicy = $state<TeamPolicyDTO | null>(null);
+  async function loadTeamPolicy() {
+    try {
+      teamPolicy = await ConfigService.TeamPolicy();
+    } catch {
+      teamPolicy = null;
+    }
+  }
+  const lockFor = (field: string) =>
+    teamPolicy?.applied ? (teamPolicy.locked ?? []).find((l) => l.field === field) ?? null : null;
+  // max_concurrency is a CEILING, not a lock: the daemon runs min(local, team),
+  // so a lower local value still counts. The field stays editable; the team's
+  // value is a hint.
+  const capCeiling = $derived(lockFor("globalCap"));
+  // The review_providers lock sets only WHICH kinds are enabled; each kind still
+  // runs with its local command, author, model and publishing settings (a
+  // locked-on kind with no local entry runs on defaults, and a bot-watch with
+  // no author stays off). So only the Enabled toggles are locked: details stay
+  // editable and drawn for every provider, and Add provider stays, because
+  // adding the local entry is how a member fills a missing author or command.
+  const reviewLock = $derived(lockFor("reviewProviders"));
+
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const formId = $props.id();
@@ -339,6 +378,7 @@
     }
     // Deep-linked straight to the tab that needs them.
     lazyLoadFor(tab);
+    void loadTeamPolicy();
   });
 
   async function save() {
@@ -347,6 +387,12 @@
       tab = "defaults";
       await tick();
       document.getElementById(`${formId}-${globalCapError ? "global" : "project"}-cap`)?.focus();
+      return;
+    }
+    if (hubClaimsErr || hubPollErr) {
+      tab = "hub";
+      await tick();
+      document.querySelector<HTMLElement>(`input[aria-label="${hubClaimsErr ? CLAIMS_LABEL : POLL_LABEL}"]`)?.focus();
       return;
     }
     saving = true;
@@ -856,7 +902,7 @@
               <span>
                 <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
                   aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
-                <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}</span>
+                <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}{#if !globalCapError && capCeiling}{" "}Team ceiling {capCeiling.value} (policy v{teamPolicy?.version ?? 0}).{/if}</span>
               </span>
             </label>
             <label class={rowCls}>
@@ -1168,6 +1214,16 @@
           </SettingsGroup>
           {/if}
         </section>
+      {:else if tab === "hub"}
+        <section>
+          {@render head("Team hub")}
+          <HubSettings values={d} policy={teamPolicy} onChange={(patch) => Object.assign(d, patch)} onIdentityChange={() => void loadTeamPolicy()} />
+        </section>
+      {:else if tab === "sandbox"}
+        <section>
+          {@render head("Sandbox")}
+          <SandboxSettings formId={`${formId}-sandbox`} />
+        </section>
       {:else if tab === "sshhosts"}
         <SSHHostSettings onDirty={(v) => (sshHostDirty = v)} />
       {:else if tab === "remote"}
@@ -1383,6 +1439,8 @@
             </p>
           {/if}
 
+          <TeamLock lock={reviewLock} version={teamPolicy?.version ?? 0} disable={false}>
+          <div class="space-y-5">
           {#each reviewKinds.length ? providers() : [] as p (p.provider)}
             <section aria-label={`${providerName(p.provider)} review`} class="overflow-hidden rounded-lg border border-edge" class:opacity-60={d.reviewLegacy}>
               <header class="flex items-center gap-3 bg-canvas/40 px-4 py-3">
@@ -1390,7 +1448,7 @@
                   <h5 class="text-base font-medium text-ink">{providerName(p.provider)}</h5>
                 </div>
                 <label class="flex cursor-pointer items-center gap-2">
-                  <Checkbox disabled={d.reviewLegacy} bind:checked={p.enabled} />
+                  <Checkbox disabled={d.reviewLegacy || !!reviewLock} bind:checked={p.enabled} />
                   <span>{p.enabled ? "Enabled" : "Disabled"}</span>
                 </label>
                 {#if !d.reviewLegacy}
@@ -1398,7 +1456,7 @@
                 {/if}
               </header>
 
-              {#if p.enabled || d.reviewLegacy}
+              {#if p.enabled || d.reviewLegacy || reviewLock}
                 <div class="space-y-4 p-4">
                   <div class="space-y-3">
                     {#if isCLI(p.provider)}
@@ -1528,6 +1586,8 @@
               </div>
             </Disclosure>
           {/if}
+          </div>
+          </TeamLock>
           <Disclosure label="Specialist reviewers" hint={d.reviewProfiles?.length ? `${d.reviewProfiles.length} configured` : "Optional"}>
             <div class="mt-3">
               <ReviewProfiles bind:profiles={d.reviewProfiles} specialties={d.reviewSpecialties ?? []} providers={d.reviewProviders ?? []} kinds={reviewKinds} />

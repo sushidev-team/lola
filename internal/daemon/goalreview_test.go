@@ -115,14 +115,13 @@ func TestGoalDefaultReviewContainerGatesIntegrationAndPublication(t *testing.T) 
 }
 
 func TestGoalContainerReviewFailureRetainsGoalBase(t *testing.T) {
-	for _, mode := range []string{"launch", "cleanup", "missing-image"} {
+	// (A missing image is no longer a mode: an empty [sandbox].image means
+	// lola's default image, and a docker that cannot run it is "launch".)
+	for _, mode := range []string{"launch", "cleanup"} {
 		t.Run(mode, func(t *testing.T) {
 			d, g, m, _ := submittedGoalFixture(t, nil)
 			isolateGoalReviewFixture(t, d)
 			original := d.goalReviewRun
-			if mode == "missing-image" {
-				d.cfg.Sandbox.Image = ""
-			}
 			d.goalReviewRun = func(ctx context.Context, bin string, args []string, input []byte, env []string) ([]byte, error) {
 				if mode == "launch" && args[0] == "run" || mode == "cleanup" && args[0] == "rm" {
 					return nil, errors.New("unavailable")

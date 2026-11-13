@@ -99,12 +99,18 @@ type Daemon struct {
 	// (usage.go). Its own lock; never held while taking mu.
 	spend *spendState
 
-	mu       sync.Mutex
-	cfg      *config.Config
-	cfgErr   string     // non-empty = cfg failed validation; polls are held
-	lin      linear.API // nil until the Linear API key resolves
-	linOK    bool
-	viewerID string
+	// relogin remembers when each sandboxed session was last relaunched for a
+	// missing login (sandboxlogin.go). Its own lock.
+	relogin reloginState
+
+	mu     sync.Mutex
+	cfg    *config.Config
+	cfgErr string // non-empty = cfg failed validation; polls are held
+	// teamPolicy is what the team policy overlay enforced on cfg (hubpolicy.go).
+	teamPolicy teamPolicyState
+	lin        linear.API // nil until the Linear API key resolves
+	linOK      bool
+	viewerID   string
 	// teamIDs caches team UUID -> Team so the pickers can show a team's NAME
 	// without a Linear round trip per open. Display only; nothing keys by it.
 	teamIDs map[string]linear.Team
@@ -120,7 +126,10 @@ type Daemon struct {
 
 	inflight *inflightSet
 	// slots holds the cap slots of spawns still in flight (slots.go).
-	slots  slotLedger
+	slots slotLedger
+	// hub is the lola-hub loop's state and seams (hubwire.go). Off unless
+	// [hub].enabled and an identity exists.
+	hub    *hubWire
 	seen   *seenStore
 	status *statusTracker
 
@@ -709,6 +718,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	// engine free of nil checks. notify.New always returns a non-nil Notifier.
 	d.notifier = notify.New(notify.NotifyConfig{})
 	d.runtimeHealth = checkRuntimeHealth
+	d.hub = newHubWire()
 	return d
 }
 
@@ -765,7 +775,15 @@ func Run(ctx context.Context) error {
 		logger.Printf("config load failed: %v", err)
 		return err
 	}
+	// Validate the FILE's config, then overlay the team policy (hubpolicy.go):
+	// the overlay is runtime-only and is never validated as if it were a file.
+	cfgInvalid := cfg.Validate()
+	teamPolicy := overlayTeamPolicy(cfg, filepath.Join(home, "state"))
 	d := newDaemon(cfg, nil, logger, home)
+	d.teamPolicy = teamPolicy
+	if teamPolicy.applied {
+		logger.Printf("hub: team policy v%d applied (%d locked key(s))", teamPolicy.version, len(teamPolicy.keys))
+	}
 	d.spend.claude = quota.NewClaudePoller(filepath.Join(home, "state", "quota-claude-api.json"), nil)
 
 	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner. The
@@ -835,7 +853,7 @@ func Run(ctx context.Context) error {
 	if reviewWarn != "" {
 		logger.Printf("%s", reviewWarn)
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := cfgInvalid; err != nil {
 		// Not fatal: the daemon stays up so status/reload can surface and
 		// fix it — but polls are HELD (never ticked). Reload rejects the
 		// same config, and running e.g. a label-mode poll whose flip labels
@@ -935,6 +953,12 @@ func Run(ctx context.Context) error {
 	d.wg.Add(1)
 	go d.goalLoop(ctx)
 
+	// The lola-hub loop (hubwire.go): idle unless [hub].enabled and joined.
+	// Its cycles are shutdown-shielded like the observer's (a claim must not be
+	// cut from its spawn); the loop itself stops on ctx.
+	d.wg.Add(1)
+	go d.hubLoop(ctx)
+
 	go d.serve(ctx, ln)
 
 	logger.Printf("daemon started (socket %s)", sock)
@@ -954,17 +978,25 @@ func Run(ctx context.Context) error {
 	// holding a pane stream open for hours is the opposite of that, so anything
 	// still streaming when the drain starts hangs shutdown until the phone
 	// happens to disconnect.
-	d.stopRemote()
-	d.stopHookBridge()
-	d.stopSSH()
+	// Each step is timed: a slow stop names its cause in the log.
+	step := func(name string, f func()) {
+		start := time.Now()
+		f()
+		if took := time.Since(start); took > time.Second {
+			logger.Printf("shutdown: %s took %s", name, took.Round(100*time.Millisecond))
+		}
+	}
+	step("remote listener", d.stopRemote)
+	step("hook bridge", d.stopHookBridge)
+	step("ssh", d.stopSSH)
 	defer d.stopTimeline() // last, so what the shutdown itself emits is still written
 	// Before the worker drain: a forward holds accepted connections open for as
 	// long as a browser keeps them, which is exactly the unbounded wait the
 	// drain below is not built for.
-	d.stopDevForwards()
-	d.stopAllWorkers()
-	d.wg.Wait()
-	d.drainConnWork()
+	step("dev forwards", d.stopDevForwards)
+	step("poll workers", d.stopAllWorkers)
+	step("background loops (observer, hub, goals, reviews)", d.wg.Wait)
+	step("socket work in flight", d.drainConnWork)
 	ln.Close()
 	os.Remove(sock)
 	logger.Printf("daemon stopped")
@@ -1249,6 +1281,12 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 		Ports:          ports,
 		HookToken:      hookToken,
 		KnowledgeBrief: knowledgeBrief,
+		// The linux lola for sandboxed hooks comes out of the default image,
+		// cached under <home>/cache/sandbox; credentials and the commit
+		// identity come from the host (sandboxcreds.go).
+		SandboxLola:       &runtime.SandboxLola{Home: home},
+		SandboxCredential: runtime.HostSandboxCredential,
+		GitIdentity:       runtime.HostGitIdentity,
 		TrustWorkspace: func(dir string) error {
 			return claudetrust.Trust(claudetrust.ConfigPath(), dir)
 		},
@@ -1359,7 +1397,16 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				if prev.Kind != "" {
 					s.Kind = prev.Kind
 				}
-				if prev.Agentless || prev.Manual {
+				// Only agent launches record an Agent; the shell flows never do.
+				// A record carrying one runs an agent whatever its ID shape says
+				// (hub chores are named like `lola open` shells), and this also
+				// repairs records an earlier adoption wrongly marked agent-less.
+				if prev.Agent != "" {
+					s.Agentless, s.Manual = false, false
+					if s.AgentState == state.AgentShell {
+						s.SetAgentState(state.AgentWorking, "", time.Now())
+					}
+				} else if prev.Agentless || prev.Manual {
 					s.Agentless = true
 					s.Manual = prev.Manual
 					s.Issue = ""
@@ -1413,6 +1460,13 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.WBPRDone = s.WBPRDone || prev.WBPRDone
 				s.WBMergedDone = s.WBMergedDone || prev.WBMergedDone
 				s.WBBlockedDone = s.WBBlockedDone || prev.WBBlockedDone
+				// The hub claim lives only in the record: without it a restart
+				// stops renewing the lease (the hub then re-offers the item to
+				// another device) and never reports the outcome.
+				if s.HubItem.ItemID == "" {
+					s.HubItem = prev.HubItem
+					s.HubBatch = prev.HubBatch
+				}
 				s.PR = prev.PR
 				// Carry the whole DELIVERY axis: it is derived from persisted gh
 				// facts the tmux scan knows nothing about. With it, a dead pane

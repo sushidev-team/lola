@@ -696,7 +696,7 @@ describe("keys that belong to what is on show", () => {
     expect(terms.activeTab(A)).not.toBe(DIFF);
   });
 
-  it("`f` from the sidebar toggles Changes on the active session", async () => {
+  it("⌘⇧D from the sidebar toggles Changes on the active session", async () => {
     await mount([plain(A)]);
     await open(A);
     terms.toggleDiff(A);
@@ -705,7 +705,7 @@ describe("keys that belong to what is on show", () => {
     flushSync();
     await settle();
     nav.select(A);
-    await fireEvent.keyDown(document.querySelector(`[data-roster-row="${A}"]`)!, { key: "f", bubbles: true });
+    chord("changes");
     await settle();
     expect(nav.focusedTerm).toBe(A);
     expect(terms.activeTab(A)).toBe(SSH);

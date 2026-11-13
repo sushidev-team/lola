@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
+
+	"github.com/sushidev-team/lola/internal/toolchain"
 )
 
 // The container SANDBOX ([[project]].sandbox = "docker" + the global [sandbox]
@@ -33,33 +37,42 @@ const DefaultSandboxHookPort = 7718
 //
 //   - Docker is the docker CLI ("" = "docker" from PATH). Any CLI speaking
 //     docker's run flags works (OrbStack, Colima, podman's docker shim).
-//   - Image is the default image a sandboxed project runs
-//     ([[project]].sandbox_image overrides it). It must carry `sh`, `git` and
-//     the coding agent's binary on PATH — lola installs nothing into it.
-//   - LolaBin is a LINUX build of lola (`make build-linux`). The container
-//     cannot run the macOS binary the hooks normally call, so this one is
-//     bind-mounted read-only at the host lola's path: the generated hook
-//     wiring, codex's notify and `lola report` all work unchanged.
+//   - Image is the image a sandboxed project runs ([[project]].sandbox_image
+//     overrides it). Empty means lola's published default image
+//     (DefaultSandboxImage: claude, git, gh, ripgrep), so a sandbox needs no
+//     setup. A custom image must carry `sh`, `git` and the coding agent's
+//     binary on PATH; it does NOT need lola, because lola mounts its own.
+//   - LolaBin is an optional LINUX build of lola (`make build-linux`). The
+//     container cannot run the macOS binary the hooks normally call, so a
+//     linux lola is bind-mounted read-only at the host lola's path: the
+//     generated hook wiring, codex's notify and `lola report` all work
+//     unchanged. Empty means the one inside the default image, which the
+//     daemon extracts and caches (internal/runtime/sandboxlola.go).
 //   - HookPort is the loopback TCP port of the hook bridge (0 = 7718). A
 //     host unix socket cannot be bind-mounted into a container on Docker
 //     Desktop / OrbStack, so a sandboxed agent's hooks reach the daemon over
 //     host.docker.internal:<port>, authenticated per session.
 //   - PassEnv names HOST environment variables copied into the sandboxed
-//     agent's 0600 env file at spawn — the agent's credentials
-//     (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, GH_TOKEN …), since a
+//     agent's 0600 env file at spawn — the agent's credentials, since a
 //     container cannot read the macOS keychain. Names only: a value never lives
-//     in config.toml.
+//     in config.toml. Empty means DefaultSandboxPassEnv; the runtime then also
+//     falls back to the keychain (claude) and `gh auth token` (GitHub) for a
+//     name the daemon's environment does not carry.
 type SandboxConfig struct {
 	Docker   string   `toml:"docker,omitempty"`
 	Image    string   `toml:"image,omitempty"`
 	LolaBin  string   `toml:"lola_bin,omitempty"`
 	HookPort int      `toml:"hook_port,omitempty"`
 	PassEnv  []string `toml:"pass_env,omitempty"`
+	// UseAPIKey passes ANTHROPIC_API_KEY from the daemon's environment into
+	// sandboxed agents. Off by default: the key bills per token and claude
+	// prefers it over the subscription token (`claude setup-token`).
+	UseAPIKey bool `toml:"use_api_key,omitempty"`
 }
 
 // isZero reports whether the table carries nothing (omitted on Save).
 func (s SandboxConfig) isZero() bool {
-	return s.Docker == "" && s.Image == "" && s.LolaBin == "" && s.HookPort == 0 && len(s.PassEnv) == 0
+	return s.Docker == "" && s.Image == "" && s.LolaBin == "" && s.HookPort == 0 && len(s.PassEnv) == 0 && !s.UseAPIKey
 }
 
 // sandboxTable is nonZero for SandboxConfig, which holds a slice and so is
@@ -90,14 +103,95 @@ func (s SandboxConfig) EffectiveHookPort() int {
 // Sandboxed reports whether the project's agents run in a container.
 func (p *Project) Sandboxed() bool { return p.Sandbox == SandboxDocker }
 
+// UsesDefaultSandboxImage reports whether p runs lola's default image (no
+// sandbox_image, no [sandbox].image): only then does lola add the project's
+// toolchains on top of it.
+func (c *Config) UsesDefaultSandboxImage(p *Project) bool {
+	return (p == nil || p.SandboxImage == "") && c.Sandbox.Image == ""
+}
+
 // SandboxImageFor is the image a sandboxed project runs: its own
-// sandbox_image, else [sandbox].image. "" means none is configured (Validate
-// rejects that for a sandboxed project).
+// sandbox_image, else [sandbox].image, else lola's default image. Never "".
 func (c *Config) SandboxImageFor(p *Project) string {
 	if p != nil && p.SandboxImage != "" {
 		return p.SandboxImage
 	}
-	return c.Sandbox.Image
+	if c.Sandbox.Image != "" {
+		return c.Sandbox.Image
+	}
+	return DefaultSandboxImage()
+}
+
+// DefaultSandboxImageRepo is where lola's default sandbox image is published
+// (sandbox/Dockerfile, .github/workflows/sandbox-image.yml).
+const DefaultSandboxImageRepo = "ghcr.io/sushidev-team/lola-sandbox"
+
+// DefaultSandboxEdgeTag is the default image's tag for a lola that is not a
+// release build: the image CI publishes from main.
+const DefaultSandboxEdgeTag = "edge"
+
+// DefaultSandboxPassEnv is what an empty [sandbox].pass_env copies: claude's
+// subscription token and GitHub's token. Each only when set.
+var DefaultSandboxPassEnv = []string{"CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"}
+
+// SandboxAPIKeyEnv is the Anthropic API key. Claude Code prefers it over a
+// subscription token and it bills per token, so it reaches a container only
+// through the explicit [sandbox].use_api_key switch, never by default and
+// never by being listed in pass_env alone.
+const SandboxAPIKeyEnv = "ANTHROPIC_API_KEY"
+
+// lolaVersion is the running lola's version, which picks the default image's
+// tag. Set once from main (SetLolaVersion); a package-level value because the
+// default is read wherever a Config is, and config cannot import main.
+var lolaVersion atomic.Value
+
+// SetLolaVersion records the running lola's build version ("dev" for a
+// non-release build). main calls it before anything reads a config.
+func SetLolaVersion(v string) { lolaVersion.Store(v) }
+
+// releaseVersionRe is a release build's version as goreleaser stamps it.
+var releaseVersionRe = regexp.MustCompile(`^v?([0-9]+\.[0-9]+\.[0-9]+)$`)
+
+// SandboxImageTag is the default image tag for lola version v: a release's
+// own version (the image is published with every release, so lola and the
+// lola inside it match), else DefaultSandboxEdgeTag.
+func SandboxImageTag(v string) string {
+	if m := releaseVersionRe.FindStringSubmatch(strings.TrimSpace(v)); m != nil {
+		return m[1]
+	}
+	return DefaultSandboxEdgeTag
+}
+
+// DefaultSandboxImage is the image a sandboxed agent runs when nothing names
+// one: DefaultSandboxImageRepo at the running lola's tag.
+func DefaultSandboxImage() string {
+	v, _ := lolaVersion.Load().(string)
+	return DefaultSandboxImageRepo + ":" + SandboxImageTag(v)
+}
+
+// EffectivePassEnv is PassEnv with its default applied and the API key
+// gated: ANTHROPIC_API_KEY is in the list exactly when UseAPIKey is set.
+func (s SandboxConfig) EffectivePassEnv() []string {
+	base := s.PassEnv
+	if len(base) == 0 {
+		base = DefaultSandboxPassEnv
+	}
+	out := make([]string, 0, len(base)+1)
+	for _, name := range base {
+		if name != SandboxAPIKeyEnv {
+			out = append(out, name)
+		}
+	}
+	if s.UseAPIKey {
+		out = append(out, SandboxAPIKeyEnv)
+	}
+	return out
+}
+
+// APIKeyFiltered reports whether pass_env lists ANTHROPIC_API_KEY while
+// use_api_key is off, so the listing has no effect (doctor says so).
+func (s SandboxConfig) APIKeyFiltered() bool {
+	return !s.UseAPIKey && slices.Contains(s.PassEnv, SandboxAPIKeyEnv)
 }
 
 // AnySandboxed reports whether some project runs its agents in a container —
@@ -166,17 +260,13 @@ func (c *Config) validateSandbox() []error {
 				errs = append(errs, fmt.Errorf("%s: sandbox_image/sandbox_ports need sandbox = %q", id, SandboxDocker))
 			}
 		case SandboxDocker:
-			if c.SandboxImageFor(p) == "" {
-				errs = append(errs, fmt.Errorf("%s: sandbox = %q needs an image (sandbox_image, or [sandbox].image)", id, SandboxDocker))
-			}
-			// Without a Linux lola inside the container every hook would fail
-			// with "exec format error": the session would run, but lola would be
-			// blind to it — no stop, no notification, no review hand-off.
-			if s.LolaBin == "" {
-				errs = append(errs, fmt.Errorf("%s: sandbox = %q needs [sandbox].lola_bin (a linux lola build, `make build-linux`) so the agent's hooks can reach the daemon", id, SandboxDocker))
-			}
+			// Nothing more to require: the image defaults to lola's own and the
+			// linux lola the hooks need comes out of it (see SandboxConfig).
 		default:
 			errs = append(errs, fmt.Errorf("%s: sandbox must be one of none|docker (empty = none), got %q", id, p.Sandbox))
+		}
+		for _, err := range toolchain.Validate(p.SandboxToolchains, p.SandboxPackages) {
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
 		}
 		for _, spec := range p.SandboxPorts {
 			if _, _, ok := SandboxPortPair(spec); !ok {

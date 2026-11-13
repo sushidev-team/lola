@@ -80,6 +80,8 @@
        only shrinkable item if the worst case (a long status + the wider
        "↑ Update" chip + revealed hover controls) runs out of room. -->
   <span class="ml-auto flex shrink-0 items-center gap-0.5">
+    <Button icon title="Team (T)" aria-label="Team" onclick={() => nav.goTeam()}>
+      <Icon name="users" size={14} /></Button>
     <Button icon title="keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onclick={() => nav.openOverlay("help")}>
       <Icon name="circle-help" size={14} /></Button>
     <Button icon title="Settings" aria-label="Settings" onclick={() => nav.openOverlay("settings")}>

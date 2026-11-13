@@ -104,3 +104,26 @@ func currentUsername() string {
 	}
 	return os.Getenv("USER")
 }
+
+// keychainStore is Store's darwin half, sharing the Linear key's exec seam.
+func keychainStore(service, value string) error { return runSecurityAdd(service, value) }
+
+// keychainDelete is the exec seam behind Delete.
+var keychainDelete = func(service string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), keychainTimeout)
+	defer cancel()
+	cmd := securityCommand(ctx, "delete-generic-password", "-s", service)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == securityExitNotFound {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("keychain delete timed out: %w", ctx.Err())
+		}
+		return fmt.Errorf("keychain delete for service %q failed: %w", service, err)
+	}
+	return nil
+}

@@ -115,7 +115,7 @@ func TestSSHAdmitIsTheProductionRule(t *testing.T) {
 
 func TestSSHDirectSandbox(t *testing.T) {
 	ready := &Config{Sandbox: SandboxConfig{Image: "img", LolaBin: "/l"}}
-	bare := &Config{}
+	bare := &Config{} // the default image needs no [sandbox] table
 	cases := []struct {
 		name    string
 		c       *Config
@@ -125,11 +125,12 @@ func TestSSHDirectSandbox(t *testing.T) {
 	}{
 		{"production with sandbox configured", ready, SSHHost{Alias: "p"}, SandboxDocker, false},
 		{"production prefers sandbox even when allowed out", ready, SSHHost{Alias: "p", AllowUnsandboxed: true}, SandboxDocker, false},
-		{"production without sandbox is refused", bare, SSHHost{Alias: "p"}, "", true},
-		{"production without sandbox, override", bare, SSHHost{Alias: "p", AllowUnsandboxed: true}, SandboxNone, false},
+		{"production with zero config is sandboxed", bare, SSHHost{Alias: "p"}, SandboxDocker, false},
+		{"production with zero config, override still sandboxes", bare, SSHHost{Alias: "p", AllowUnsandboxed: true}, SandboxDocker, false},
+		{"production leaves the sandbox only by saying none", bare, SSHHost{Alias: "p", Sandbox: SandboxNone, AllowUnsandboxed: true}, SandboxNone, false},
 		{"production forced none needs override", ready, SSHHost{Alias: "p", Sandbox: SandboxNone}, "", true},
 		{"production forced none with override", ready, SSHHost{Alias: "p", Sandbox: SandboxNone, AllowUnsandboxed: true}, SandboxNone, false},
-		{"docker without sandbox config", bare, SSHHost{Alias: "p", Sandbox: SandboxDocker}, "", true},
+		{"docker without sandbox config", bare, SSHHost{Alias: "p", Sandbox: SandboxDocker}, SandboxDocker, false},
 		{"staging runs on the host", ready, SSHHost{Alias: "s", Tier: SSHTierStaging}, SandboxNone, false},
 		{"staging can opt in", ready, SSHHost{Alias: "s", Tier: SSHTierStaging, Sandbox: SandboxDocker}, SandboxDocker, false},
 	}
@@ -139,7 +140,7 @@ func TestSSHDirectSandbox(t *testing.T) {
 			t.Errorf("%s: got %q, %v", c.name, got, err)
 		}
 	}
-	if !(&Config{Sandbox: ready.Sandbox, SSHHosts: []SSHHost{{Alias: "p"}}}).AnySSHSandboxed() {
+	if !(&Config{SSHHosts: []SSHHost{{Alias: "p"}}}).AnySSHSandboxed() {
 		t.Error("a sandboxed direct session needs the hook bridge")
 	}
 	if (&Config{SSHHosts: []SSHHost{{Alias: "s", Tier: SSHTierDev}}}).AnySSHSandboxed() {
@@ -195,8 +196,8 @@ func TestSSHHostValidation(t *testing.T) {
 	if msg := sshErrs(&Config{SSHHosts: []SSHHost{{Alias: "a"}, {Name: "a", Alias: "b"}}}); !strings.Contains(msg, "duplicate") {
 		t.Errorf("duplicate: %q", msg)
 	}
-	if msg := sshErrs(&Config{SSHHosts: []SSHHost{{Alias: "s", Tier: SSHTierDev, Sandbox: SandboxDocker}}}); !strings.Contains(msg, "[sandbox].image") {
-		t.Errorf("docker without config: %q", msg)
+	if msg := sshErrs(&Config{SSHHosts: []SSHHost{{Alias: "s", Tier: SSHTierDev, Sandbox: SandboxDocker}}}); msg != "" {
+		t.Errorf("docker needs no [sandbox] table: %q", msg)
 	}
 	// Reaches Validate at all.
 	full := &Config{SSHHosts: []SSHHost{{Alias: "-bad"}}}

@@ -97,7 +97,7 @@ func (d *Daemon) goalPlanInput(ctx context.Context, r goalplan.Request) (goalpla
 		members = []config.Project{cloneProject(*current)}
 	}
 	sandbox := d.cfg.Sandbox
-	sandbox.PassEnv = append([]string(nil), sandbox.PassEnv...)
+	sandbox.PassEnv = append([]string(nil), sandbox.EffectivePassEnv()...)
 	image := d.cfg.SandboxImageFor(current)
 	kind := d.cfg.AgentForProject(r.Project)
 	d.mu.Unlock()

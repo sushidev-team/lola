@@ -1,0 +1,97 @@
+name: Sandbox image
+
+# Builds and publishes lola's default container-sandbox image
+# (sandbox/Dockerfile) to ghcr.io/sushidev-team/lola-sandbox for linux/amd64
+# and linux/arm64.
+#
+#   push to main  -> :edge          (what a non-release lola runs by default)
+#   release       -> :<version> and :latest
+#                    (called from release-please.yml; a release lola runs
+#                    :<version>, so this must succeed for every release)
+#
+# The image carries its own lola, built from the same commit, which the daemon
+# copies out for the agent's hooks.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sandbox/**'
+      - '.dockerignore'
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'hubproto/**'
+      - '.github/workflows/sandbox-image.yml'
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version without the v prefix (e.g. 1.2.3)'
+        required: true
+        type: string
+      tag:
+        description: 'Git tag (e.g. v1.2.3)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without the v prefix (e.g. 1.2.3); empty publishes :edge'
+        required: false
+        type: string
+      tag:
+        description: 'Git tag to build (e.g. v1.2.3); empty builds the selected ref'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: sandbox-image-${{ inputs.version || github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/sushidev-team/lola-sandbox
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Tags
+        id: tags
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "tags=${IMAGE}:${{ inputs.version }},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=edge-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+            echo "tags=${IMAGE}:edge" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sandbox/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            LOLA_VERSION=${{ steps.tags.outputs.version }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -520,12 +520,12 @@ func TestConfigureSessionEmitsChromeArgv(t *testing.T) {
 	// Every set-option is per-session (-t, never -g); the bind-key is a
 	// root-table entry confined to the lola socket (leading -L lola).
 	want := strings.Join([]string{
-		"-L lola set-option -t =lola-NORI-12-1 status on",
-		"-L lola set-option -t =lola-NORI-12-1 status-left-length 80",
-		"-L lola set-option -t =lola-NORI-12-1 status-right-length 80",
-		"-L lola set-option -t =lola-NORI-12-1 status-left LOLA | NORI-12",
-		"-L lola set-option -t =lola-NORI-12-1 status-right working | detach F12",
-		"-L lola set-option -t =lola-NORI-12-1 mouse on",
+		"-L lola set-option -t =lola-NORI-12-1: status on",
+		"-L lola set-option -t =lola-NORI-12-1: status-left-length 80",
+		"-L lola set-option -t =lola-NORI-12-1: status-right-length 80",
+		"-L lola set-option -t =lola-NORI-12-1: status-left LOLA | NORI-12",
+		"-L lola set-option -t =lola-NORI-12-1: status-right working | detach F12",
+		"-L lola set-option -t =lola-NORI-12-1: mouse on",
 		"-L lola bind-key -n F12 detach-client",
 	}, "\n")
 	if args := loggedArgs(t, argsLog); args != want {
@@ -553,10 +553,10 @@ func TestConfigureSessionDefaultsNoDetachBindingNoMouse(t *testing.T) {
 		t.Errorf("Mouse=false must emit no mouse set-option, got:\n%s", got)
 	}
 	// Brand defaults to LOLA; detach hint defaults to C-b d.
-	if !strings.Contains(got, "-L lola set-option -t =s1 status-left LOLA | NORI-12") {
+	if !strings.Contains(got, "-L lola set-option -t =s1: status-left LOLA | NORI-12") {
 		t.Errorf("status-left should default brand to LOLA, got:\n%s", got)
 	}
-	if !strings.Contains(got, "-L lola set-option -t =s1 status-right idle | detach C-b d") {
+	if !strings.Contains(got, "-L lola set-option -t =s1: status-right idle | detach C-b d") {
 		t.Errorf("status-right should carry status + default detach hint, got:\n%s", got)
 	}
 }
@@ -581,8 +581,8 @@ func TestConfigureSessionStatusBarOffByDefault(t *testing.T) {
 	}
 	// The detach binding and mouse mode are independent of the bar and stay.
 	want := strings.Join([]string{
-		"-L lola set-option -t =s1 status off",
-		"-L lola set-option -t =s1 mouse on",
+		"-L lola set-option -t =s1: status off",
+		"-L lola set-option -t =s1: mouse on",
 		"-L lola bind-key -n F12 detach-client",
 	}, "\n")
 	if args := loggedArgs(t, argsLog); args != want {

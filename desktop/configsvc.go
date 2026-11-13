@@ -174,6 +174,94 @@ type SettingsDTO struct {
 	BlockedLabelID string   `json:"blockedLabelId"`
 	DedupMode      string   `json:"dedupMode"`
 	PrioritySort   []string `json:"prioritySort"`
+
+	// [hub] — the team hub's local rules. url / enabled / device_name are not
+	// here: HubService.Join and Leave own them, so a settings save can never
+	// half-join or un-join a hub. Every field is NIL-PRESERVING (an older
+	// client that predates them leaves the table untouched): a plain bool would
+	// read "false" for an absent require_sandbox and silently turn the safe
+	// default off. The values are the EFFECTIVE ones (defaults applied).
+	HubAcceptKinds     []string           `json:"hubAcceptKinds"`
+	HubMaxClaimsPerDay *int               `json:"hubMaxClaimsPerDay"`
+	HubRequireSandbox  *bool              `json:"hubRequireSandbox"`
+	HubPollSeconds     *int               `json:"hubPollSeconds"` // effective cadence in seconds
+	HubApplyPolicy     *bool              `json:"hubApplyPolicy"`
+	HubGroupChores     *bool              `json:"hubGroupChores"`
+	HubTrustedKeys     []HubTrustedKeyDTO `json:"hubTrustedKeys"`
+}
+
+// HubTrustedKeyDTO is one [hub.trusted_policy_keys] entry: an admin key that
+// may sign team policy.
+type HubTrustedKeyDTO struct {
+	KeyID     string `json:"keyId"`
+	PublicKey string `json:"publicKey"`
+}
+
+// hubSettingsDTO fills the [hub] half of SettingsDTO with effective values.
+func hubSettingsDTO(dto *SettingsDTO, h config.HubConfig) {
+	claims, sandbox, poll, apply := h.ClaimsPerDay(), h.SandboxRequired(), h.EffectivePollSeconds(), h.PolicyApplies()
+	dto.HubAcceptKinds = append([]string{}, h.AcceptKinds...)
+	dto.HubMaxClaimsPerDay, dto.HubRequireSandbox, dto.HubPollSeconds, dto.HubApplyPolicy = &claims, &sandbox, &poll, &apply
+	group := h.GroupsChores()
+	dto.HubGroupChores = &group
+	dto.HubTrustedKeys = []HubTrustedKeyDTO{}
+	for _, e := range h.TrustedKeyEntries() {
+		id, pub, _ := strings.Cut(e, ":")
+		dto.HubTrustedKeys = append(dto.HubTrustedKeys, HubTrustedKeyDTO{KeyID: id, PublicKey: pub})
+	}
+}
+
+// applyHubSettings writes the [hub] half of SettingsDTO. A value equal to the
+// default is written only when the file already set the key, so a save never
+// freezes a default into config.toml.
+func applyHubSettings(h *config.HubConfig, dto SettingsDTO) error {
+	if dto.HubAcceptKinds != nil {
+		h.AcceptKinds = nonEmpty(dto.HubAcceptKinds)
+	}
+	if v := dto.HubMaxClaimsPerDay; v != nil && (h.MaxClaimsPerDay != nil || *v != config.DefaultHubMaxClaimsPerDay) {
+		n := *v
+		h.MaxClaimsPerDay = &n
+	}
+	if v := dto.HubRequireSandbox; v != nil && (h.RequireSandbox != nil || !*v) {
+		b := *v
+		h.RequireSandbox = &b
+	}
+	if v := dto.HubApplyPolicy; v != nil && (h.ApplyPolicy != nil || !*v) {
+		b := *v
+		h.ApplyPolicy = &b
+	}
+	if v := dto.HubGroupChores; v != nil && (h.GroupChores != nil || !*v) {
+		b := *v
+		h.GroupChores = &b
+	}
+	if v := dto.HubPollSeconds; v != nil {
+		if *v == config.DefaultHubPollSeconds && h.PollSeconds == 0 {
+			// default stays implicit
+		} else {
+			h.PollSeconds = *v
+		}
+	}
+	if dto.HubTrustedKeys != nil {
+		keys := config.TrustedKeyMap{}
+		for _, k := range dto.HubTrustedKeys {
+			id, pub := strings.TrimSpace(k.KeyID), strings.TrimSpace(k.PublicKey)
+			if id == "" && pub == "" {
+				continue
+			}
+			if id == "" || pub == "" {
+				return errors.New("hub trusted policy keys: each key needs a key id and a public key")
+			}
+			if _, dup := keys[id]; dup {
+				return errors.New("hub trusted policy keys: key id " + id + " is listed twice")
+			}
+			keys[id] = pub
+		}
+		if len(keys) == 0 {
+			keys = nil
+		}
+		h.TrustedPolicyKeys = keys
+	}
+	return nil
 }
 
 // ReviewProviderDTO is one entry of the review provider catalog, flattened for
@@ -367,7 +455,7 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 	if err != nil {
 		return SettingsDTO{}, err
 	}
-	return SettingsDTO{
+	dto := SettingsDTO{
 		TemporaryDirectory:       cfg.Defaults.TemporaryDirectory,
 		GlobalCap:                cfg.Defaults.GlobalCap,
 		ConcurrencyCap:           cfg.Defaults.ConcurrencyCap,
@@ -418,7 +506,9 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		BlockedLabelID: cfg.Defaults.BlockedLabelID,
 		DedupMode:      cfg.Defaults.DedupMode,
 		PrioritySort:   cfg.Defaults.PrioritySort,
-	}, nil
+	}
+	hubSettingsDTO(&dto, cfg.Hub)
+	return dto, nil
 }
 
 func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
@@ -503,6 +593,9 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Defaults.BlockedLabelID = dto.BlockedLabelID
 	cfg.Defaults.DedupMode = dto.DedupMode
 	cfg.Defaults.PrioritySort = nonEmpty(dto.PrioritySort)
+	if err := applyHubSettings(&cfg.Hub, dto); err != nil {
+		return err
+	}
 	return saveConfig(cfg, path)
 }
 
@@ -628,6 +721,10 @@ type ProjectExecutionDTO struct {
 	GoalMode bool   `json:"goalMode"`
 	Sandbox  string `json:"sandbox"`
 	Image    string `json:"image"`
+	// Toolchains is sandbox_toolchains (empty = detected from the
+	// repository); Packages is sandbox_packages.
+	Toolchains []string `json:"toolchains"`
+	Packages   []string `json:"packages"`
 }
 
 // ProjectFormDTO is the whole of one [[project]] — repository setup, Linear
@@ -663,6 +760,10 @@ type ProjectFormDTO struct {
 	// session is ACTIVE (one per project — see internal/daemon/dev.go). Not an
 	// inheritable key: a dev command belongs to one repository.
 	DevCommands []string `json:"devCommands"`
+	// HubChores opts the project into the team hub's chore lane
+	// ([[project]].hub_chores). Nil from an older client leaves it untouched.
+	// Validate refuses it on a stack or without an owner/name repo.
+	HubChores *bool `json:"hubChores"`
 	// PortRange ("4100-4999") and PortsPerSession lease each session its own
 	// port block (LOLA_PORT / LOLA_PORT_1..N) and make dev_commands
 	// multi-active; PreRemove is the teardown hook run before a worktree is
@@ -756,8 +857,9 @@ func labelsDTO(in []string) []string {
 }
 
 func projectDTO(p *config.Project) ProjectFormDTO {
+	hubChores := p.HubChores
 	return ProjectFormDTO{
-		Execution:       &ProjectExecutionDTO{GoalMode: p.GoalMode, Sandbox: p.Sandbox, Image: p.SandboxImage},
+		Execution:       &ProjectExecutionDTO{GoalMode: p.GoalMode, Sandbox: p.Sandbox, Image: p.SandboxImage, Toolchains: nonNil(p.SandboxToolchains), Packages: nonNil(p.SandboxPackages)},
 		Name:            p.Name,
 		Label:           p.Label,
 		Path:            p.Path,
@@ -768,6 +870,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 		Symlinks:        p.Symlinks,
 		PostCreate:      p.PostCreate,
 		DevCommands:     p.DevCommands,
+		HubChores:       &hubChores,
 		PortRange:       p.PortRange,
 		PortsPerSession: p.PortsPerSession,
 		PreRemove:       p.PreRemove,
@@ -859,6 +962,9 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.Symlinks = nonEmpty(dto.Symlinks)
 	p.PostCreate = nonEmpty(dto.PostCreate)
 	p.DevCommands = nonEmpty(dto.DevCommands)
+	if dto.HubChores != nil {
+		p.HubChores = *dto.HubChores
+	}
 	p.PortRange = strings.TrimSpace(dto.PortRange)
 	p.PortsPerSession = dto.PortsPerSession
 	p.PreRemove = nonEmpty(dto.PreRemove)
@@ -876,6 +982,12 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		p.GoalMode = dto.Execution.GoalMode
 		p.Sandbox = strings.TrimSpace(dto.Execution.Sandbox)
 		p.SandboxImage = strings.TrimSpace(dto.Execution.Image)
+		if dto.Execution.Toolchains != nil { // absent (an older client) = untouched
+			p.SandboxToolchains = nonEmpty(trimAll(dto.Execution.Toolchains))
+		}
+		if dto.Execution.Packages != nil {
+			p.SandboxPackages = nonEmpty(trimAll(dto.Execution.Packages))
+		}
 	}
 	p.Enabled = dto.Enabled
 	p.TeamID = dto.TeamID

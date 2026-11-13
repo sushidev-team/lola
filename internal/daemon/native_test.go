@@ -1279,3 +1279,33 @@ func TestAdoptPreservesSharedTasksAndReportedPlan(t *testing.T) {
 		t.Fatalf("adoption lost tasks/plan: %+v", got)
 	}
 }
+
+// Hub chores are named like `lola open` shells, so the scan guesses
+// "agent-less shell" from the ID. The record knows an agent runs: it wins, and
+// a record an earlier adoption already marked agent-less is repaired.
+func TestAdoptKeepsAgentSessionsNamedLikeShells(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	id := "lola-p1-open-hub-ghsa-1"
+	prev := session.Session{ID: id, Source: "native", Kind: session.KindManual, Project: "p1", Agent: "claude", Agentless: true, Manual: true, TmuxName: id}
+	prev.SetAgentState(state.AgentShell, "", time.Now())
+	d.sessions.Upsert(prev)
+	shell := session.Session{ID: "lola-p1-open-scratch", Source: "native", Kind: session.KindManual, Project: "p1", Agentless: true, TmuxName: "lola-p1-open-scratch"}
+	shell.SetAgentState(state.AgentShell, "", time.Now())
+	d.sessions.Upsert(shell)
+
+	scanned := func(id string) session.Session {
+		s := session.Session{ID: id, Source: "native", Project: "p1", Manual: true, Agentless: true, TmuxName: id}
+		s.SetAgentState(state.AgentShell, "", time.Now())
+		return s
+	}
+	d.native = &fakeNative{adopted: []session.Session{scanned(id), scanned(shell.ID)}}
+	d.adoptNativeSessions(context.Background())
+
+	got := findSession(t, d.sessions.Snapshot(), id)
+	if got.IsAgentless() || got.AgentState != state.AgentWorking || got.Agent != "claude" {
+		t.Fatalf("agent session adopted as %+v", got)
+	}
+	if s := findSession(t, d.sessions.Snapshot(), shell.ID); !s.IsAgentless() || s.AgentState != state.AgentShell {
+		t.Fatalf("real shell adopted as %+v", s)
+	}
+}

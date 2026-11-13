@@ -151,6 +151,62 @@ export interface GroupDTO {
 }
 
 /**
+ * HubKindDTO is one chore kind for the settings pickers.
+ */
+export interface HubKindDTO {
+    "id": string;
+    "label": string;
+}
+
+/**
+ * HubProjectDTO is one project as the Team hub settings show it: which repo it
+ * offers the hub and whether it takes chores. Stacks are left out — a stack
+ * has no repository of its own; its member projects are listed instead.
+ */
+export interface HubProjectDTO {
+    "name": string;
+    "label": string;
+
+    /**
+     * Repo is the configured GitHub "owner/name" ("" = none).
+     */
+    "repo": string;
+
+    /**
+     * SuggestedRepo is what the checkout's remote says, offered when Repo is
+     * empty or differs. Read from local git only; "" when unknown.
+     */
+    "suggestedRepo": string;
+    "hubChores": boolean;
+    "sandboxed": boolean;
+
+    /**
+     * Stack is the stack this project is a member of ("" = standalone).
+     */
+    "stack": string;
+}
+
+/**
+ * HubProjectPatchDTO changes one project's hub-facing keys. A nil field is
+ * left as it is.
+ */
+export interface HubProjectPatchDTO {
+    "name": string;
+    "repo": string | null;
+    "hubChores": boolean | null;
+    "sandboxed": boolean | null;
+}
+
+/**
+ * HubTrustedKeyDTO is one [hub.trusted_policy_keys] entry: an admin key that
+ * may sign team policy.
+ */
+export interface HubTrustedKeyDTO {
+    "keyId": string;
+    "publicKey": string;
+}
+
+/**
  * ImageAttachment is an image a person attached: the path the agent is given, and a thumbnail as a
  * data URL for the composer's tile, "" when one could not be made.
  */
@@ -234,6 +290,38 @@ export interface LinearTeamMeta {
 }
 
 /**
+ * LockedSettingDTO is one key the team policy locks.
+ */
+export interface LockedSettingDTO {
+    /**
+     * Key is the hubproto wire key (hubproto.KeyBudgetDaily, ...).
+     */
+    "key": string;
+
+    /**
+     * Label is a Sentence-case name for the control.
+     */
+    "label": string;
+
+    /**
+     * Value is the team's value, Local what config.toml says (human text).
+     */
+    "value": string;
+    "local": string;
+
+    /**
+     * ConfigKey is the config.toml key the policy overrides.
+     */
+    "configKey": string;
+
+    /**
+     * Field is the SettingsDTO json field the key covers ("" when the settings
+     * form has no field for it yet).
+     */
+    "field": string;
+}
+
+/**
  * PathInfoDTO is everything the project form derives from one picked folder.
  * Path is the checkout ROOT when there is one (picking a subdirectory still
  * configures the repository), else the directory as given.
@@ -252,6 +340,13 @@ export interface ProjectExecutionDTO {
     "goalMode": boolean;
     "sandbox": string;
     "image": string;
+
+    /**
+     * Toolchains is sandbox_toolchains (empty = detected from the
+     * repository); Packages is sandbox_packages.
+     */
+    "toolchains": string[] | null;
+    "packages": string[] | null;
 }
 
 /**
@@ -301,6 +396,13 @@ export interface ProjectFormDTO {
      * inheritable key: a dev command belongs to one repository.
      */
     "devCommands": string[] | null;
+
+    /**
+     * HubChores opts the project into the team hub's chore lane
+     * ([[project]].hub_chores). Nil from an older client leaves it untouched.
+     * Validate refuses it on a stack or without an owner/name repo.
+     */
+    "hubChores": boolean | null;
 
     /**
      * PortRange ("4100-4999") and PortsPerSession lease each session its own
@@ -579,6 +681,50 @@ export interface SSHHostPreviewDTO {
     "approvalTimeoutSeconds": number;
 }
 
+/**
+ * SandboxStatusDTO is the sandbox's configuration and readiness. It never
+ * carries a credential: TokenStored and the *Source fields say only whether
+ * and where one exists.
+ */
+export interface SandboxStatusDTO {
+    /**
+     * [sandbox].image ("" = the default)
+     */
+    "image": string;
+
+    /**
+     * lola's image for this build
+     */
+    "defaultImage": string;
+    "docker": string;
+    "dockerOk": boolean;
+
+    /**
+     * images not pulled yet
+     */
+    "missing": string[] | null;
+    "tokenStored": boolean;
+    "claudeSource": string;
+    "githubSource": string;
+
+    /**
+     * [sandbox].use_api_key
+     */
+    "useApiKey": boolean;
+
+    /**
+     * ANTHROPIC_API_KEY exists (presence only)
+     */
+    "apiKeySet": boolean;
+
+    /**
+     * CodexLogin / OpenCodeLogin: the host has a login lola copies into
+     * sandboxed codex / opencode sessions (presence only).
+     */
+    "codexLogin": boolean;
+    "openCodeLogin": boolean;
+}
+
 export interface SettingsDTO {
     "ai"?: { [_ in string]?: config$0.AIProvider } | null;
     "autoPRComments": boolean;
@@ -669,6 +815,26 @@ export interface SettingsDTO {
     "blockedLabelId": string;
     "dedupMode": string;
     "prioritySort": string[] | null;
+
+    /**
+     * [hub] — the team hub's local rules. url / enabled / device_name are not
+     * here: HubService.Join and Leave own them, so a settings save can never
+     * half-join or un-join a hub. Every field is NIL-PRESERVING (an older
+     * client that predates them leaves the table untouched): a plain bool would
+     * read "false" for an absent require_sandbox and silently turn the safe
+     * default off. The values are the EFFECTIVE ones (defaults applied).
+     */
+    "hubAcceptKinds": string[] | null;
+    "hubMaxClaimsPerDay": number | null;
+    "hubRequireSandbox": boolean | null;
+
+    /**
+     * effective cadence in seconds
+     */
+    "hubPollSeconds": number | null;
+    "hubApplyPolicy": boolean | null;
+    "hubGroupChores": boolean | null;
+    "hubTrustedKeys": HubTrustedKeyDTO[] | null;
 }
 
 export interface SetupDTO {
@@ -716,6 +882,68 @@ export interface StackFolderDTO {
     "path": string;
     "suggestedLabel": string;
     "apps": StackFolderAppDTO[] | null;
+}
+
+/**
+ * TeamPolicyDTO is ConfigService.TeamPolicy's answer.
+ */
+export interface TeamPolicyDTO {
+    /**
+     * Available: a daemon answered hubStatus.
+     */
+    "available": boolean;
+    "joined": boolean;
+    "org": string;
+
+    /**
+     * Version is the verified policy's version (0 = none).
+     */
+    "version": number;
+
+    /**
+     * Applied: the daemon's live config enforces Locked.
+     */
+    "applied": boolean;
+
+    /**
+     * Note says why a verified policy is not applied.
+     */
+    "note": string;
+
+    /**
+     * Keys are every key the policy carries (escalate_after included, which
+     * only the hub reads); Summary is the daemon's human rendering.
+     */
+    "keys": string[] | null;
+    "summary": string[] | null;
+
+    /**
+     * Locked is what the daemon enforces. Never null.
+     */
+    "locked": LockedSettingDTO[] | null;
+}
+
+/**
+ * ToolchainDTO is one toolchain the project form shows.
+ */
+export interface ToolchainDTO {
+    "kind": string;
+    "version": string;
+}
+
+/**
+ * ToolchainInfoDTO is what the project form needs to offer toolchains: what
+ * the checkout's files ask for, and every toolchain lola can add.
+ */
+export interface ToolchainInfoDTO {
+    "detected": ToolchainDTO[] | null;
+
+    /**
+     * Extras are details detection adds on its own: PHP extensions and node
+     * package managers ("redis", "pnpm@9.15.0").
+     */
+    "extras": string[] | null;
+    "kinds": string[] | null;
 }
 
 export interface UpdateInfoDTO {

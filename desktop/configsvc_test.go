@@ -32,6 +32,44 @@ func writeTestConfig(t *testing.T, body string) string {
 
 const minimalConfig = "[defaults]\nglobal_cap = 4\nconcurrency_cap = 2\n"
 
+func TestSaveAISettingsWithDefaultSandboxImage(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Projects = []config.Project{
+		{Name: "sushi-dev-website", Path: "/repo/website", Sandbox: config.SandboxDocker},
+		{Name: "lola", Path: "/repo/lola", Sandbox: config.SandboxDocker},
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	svc := &ConfigService{}
+	dto, err := svc.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := config.DefaultAIProvider("claude")
+	profile.Enabled = true
+	dto.AI = map[string]config.AIProvider{"claude": profile}
+	if err := svc.SaveSettings(dto); err != nil {
+		t.Fatalf("save AI settings with default sandbox: %v", err)
+	}
+	saved, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, enabled := saved.AIProfile("claude", "resolve"); !enabled {
+		t.Fatal("AI profile was not saved")
+	}
+	for i := range saved.Projects {
+		if !saved.Projects[i].Sandboxed() || saved.SandboxImageFor(&saved.Projects[i]) != config.DefaultSandboxImage() {
+			t.Fatal("sandbox defaults were lost")
+		}
+	}
+}
+
 func TestEnvRoundTrip(t *testing.T) {
 	lines := []string{"A=1", "B=two=with=eq", "C="}
 	m, err := linesToEnv(lines)

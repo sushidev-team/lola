@@ -19,6 +19,8 @@
   import PresetInput from "$lib/components/PresetInput.svelte";
   import { BRANCH_PREFIXES } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
+  import SandboxLoginPrompt from "$lib/components/SandboxLoginPrompt.svelte";
+  import SandboxToolchains from "$lib/components/SandboxToolchains.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
   import { labelIdsFor } from "$lib/labelpick";
@@ -350,6 +352,10 @@
     }
   }
 
+  // The image an empty sandbox_image falls back to ([sandbox].image, else
+  // Lola's sandbox image), shown as the field's placeholder.
+  let sandboxDefaultImage = $state("");
+
   onMount(async () => {
     try {
       const d = await ConfigService.GetProject(nav.overlayProject);
@@ -394,6 +400,11 @@
       defaults = { ...(await ConfigService.GetSettings()) };
     } catch {
       // Non-fatal: reverting a key still works, it just keeps the shown value.
+    }
+    try {
+      sandboxDefaultImage = await ConfigService.SandboxImageDefault();
+    } catch {
+      // Only a placeholder: the generic one stays.
     }
     if (f.stack) {
       try {
@@ -857,6 +868,24 @@
           </div>
           <p class="text-sm text-faint">When idle, the agent verifies new review comments, pushes fixes and resolves only addressed threads. Existing review-provider handoffs are configured separately.</p>
           {/if}
+          <!-- [[project]].hub_chores: the team hub's opt-in. Not inheritable (an
+               inherited opt-in would enrol every project by accident), and
+               refused by Validate on a stack or without an owner/name repo, so
+               the box is disabled with the reason instead of failing the save. -->
+          {@const choresBlocked = role === "stack"
+            ? "A stack has no repository of its own. Turn it on in the member projects."
+            : !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test((d.repo ?? "").trim())
+              ? "Set the GitHub repository above to offer team chores."
+              : ""}
+          <div class="grid gap-1.5">
+            <label class="flex items-center gap-2 text-ink">
+              <Checkbox checked={!!d.hubChores} disabled={!!choresBlocked && !d.hubChores}
+                onchange={() => { d.hubChores = !d.hubChores; }} />
+              Team chores
+            </label>
+            <p class="text-sm text-faint">Let the team hub hand this project security and dependency chores.</p>
+            {#if choresBlocked}<p class="text-sm {d.hubChores ? 'text-warn' : 'text-faint'}">{choresBlocked}{d.hubChores ? " Turn this off to save." : ""}</p>{/if}
+          </div>
           {#if role === "stack"}
             <!-- A stack session is ONE branch name across every member's
                  worktree, so the prefix is the stack's. -->
@@ -913,10 +942,16 @@
             </div>
             <p class="text-sm text-faint">Applies to new agent sessions for this {role === "stack" ? "stack" : "project"}. Existing sessions keep their workspace.</p>
             {#if execution.sandbox === "docker" || execution.image}
-              {@render textRow("Container image", execution.image, (value) => { execution.image = value; }, "Use the configured default image")}
-              <p class="text-sm text-faint">Use an installed image with the project toolchain and coding agent. Leave blank to use the image in Lola’s sandbox configuration. Clear this override when switching to Host workspace.</p>
+              {@render textRow("Container image", execution.image, (value) => { execution.image = value; }, sandboxDefaultImage || "Lola’s sandbox image")}
+              <p class="text-sm text-faint">Empty uses Lola’s image. <HelpText label="container image" detail="Lola’s image carries Claude Code, Codex, OpenCode, git, gh and Node, plus the toolchains below. A custom image needs the coding agent and git, and replaces the toolchains; Lola mounts its own binary. Clear this override when switching to Host workspace." /></p>
             {/if}
-            <p class="text-sm text-faint">Docker setup also requires a Linux Lola binary configured in <code>[sandbox].lola_bin</code>. See <code>README.md</code>, “The container sandbox”, for setup.</p>
+            {#if execution.sandbox === "docker" && !execution.image.trim()}
+              <SandboxToolchains path={d.path} toolchains={execution.toolchains ?? []} packages={execution.packages ?? []}
+                onChange={(t, p) => { execution.toolchains = t; execution.packages = p; }} />
+            {/if}
+            {#if execution.sandbox === "docker"}
+              <SandboxLoginPrompt />
+            {/if}
           {/snippet}
           {@render section("Workspace isolation", isolation)}
           {#snippet goals()}

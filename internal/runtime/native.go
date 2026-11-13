@@ -207,6 +207,22 @@ type Native struct {
 	// RemoveContainer removes a sandboxed session's container (`docker rm -f`)
 	// on teardown. nil = exec the configured docker CLI. A test seam.
 	RemoveContainer func(ctx context.Context, name string) error
+	// Docker runs the docker CLI for the derived project images
+	// (sandboximage.go): stdin is the Dockerfile of a build. nil = exec it. A
+	// test seam.
+	Docker func(ctx context.Context, docker, stdin string, args ...string) ([]byte, error)
+	// SandboxLola provides the linux lola a sandboxed agent's hooks run when
+	// [sandbox].lola_bin is empty (sandboxlola.go). nil = only lola_bin.
+	SandboxLola *SandboxLola
+	// SandboxCredential is the fallback for a credential named in the
+	// effective pass_env that the daemon's environment lacks (the keychain for
+	// claude's token, `gh auth token` for GitHub). The value lands only in the
+	// 0600 env file. nil = no fallback; tests leave it unset.
+	SandboxCredential func(name string) (string, bool)
+	// GitIdentity answers the host's commit identity for a checkout (its
+	// user.name / user.email), handed to a sandboxed agent, whose container
+	// sees neither ~/.gitconfig nor the host's identity. nil = none.
+	GitIdentity func(dir string) (name, email string)
 	// TrustWorkspace pre-accepts Claude Code's workspace-trust dialog for a
 	// worktree before a claude agent launches in it, and UntrustWorkspace drops
 	// that entry when the worktree is removed (internal/claudetrust; see
@@ -382,6 +398,11 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	agentOverride := o.Agent
 	if issue.Identifier == "" {
 		return session.Session{}, errors.New("runtime: spawn: issue has no identifier")
+	}
+	// Before any worktree exists: a sandbox that cannot start (no docker, no
+	// image) refuses the spawn outright rather than leaving a rollback behind.
+	if err := n.prepareSandbox(ctx, p.Name, n.sandboxProject(p.Name) != nil); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: spawn %s: %w", issue.Identifier, err)
 	}
 	if p.IsStack() {
 		return n.spawnStack(ctx, p, issue, o)
@@ -753,6 +774,9 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 		return nil, rb("write env", err)
 	}
 	n.recordBaseline(ctx, dir, id)
+	if err := n.prepareSandbox(ctx, p.Name, n.sandboxProject(p.Name) != nil); err != nil {
+		return nil, rb("prepare sandbox", err)
+	}
 	n.trustAgentDir(p.Name, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(p.Name, id, kind, false)); err != nil {
 		if n.Tmux.Has(ctx, id) {
@@ -1462,6 +1486,10 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 			n.Logf("session %s: removing its sandbox container failed: %v", s.ID, err)
 		}
 	}
+	if removeWorktree {
+		// After the worktree is gone (deferred): a kept, dirty one keeps it.
+		defer n.pruneSandboxState(s)
+	}
 	if s.Kind == session.KindLocal {
 		if removeWorktree {
 			if s.Location == LocationSSH {
@@ -1622,6 +1650,13 @@ func (n *Native) Alive(ctx context.Context, s session.Session) bool {
 // dispatch guards so the revived session is not duplicated. Revive itself only
 // needs the worktree to still be there.
 func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session, error) {
+	return n.revive(ctx, s, false)
+}
+
+// revive is Revive; fresh launches the agent anew with the standard first
+// prompt instead of resuming (Relogin). A sandboxed session's credentials are
+// refreshed either way, so a login made after the spawn reaches the agent.
+func (n *Native) revive(ctx context.Context, s session.Session, fresh bool) (session.Session, error) {
 	if s.GoalManaged() {
 		return s, errors.New("goal workers resume through a newly reserved attempt")
 	}
@@ -1653,7 +1688,7 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 	if kind == agent.Codex && n.sandboxProject(s.Project) != nil {
 		// The container's CODEX_HOME lives in the worktree (sandboxEnv); the
 		// env file already says so and must not be pointed at the host's.
-		resume = codexHasSession(ctx, filepath.Join(dir, sandboxCodexDir), dir)
+		resume = codexHasSession(ctx, n.agentStateDir(id, dir, agent.Codex), dir)
 	} else if kind == agent.Codex {
 		home := userCodexHome()
 		if p := n.Cfg.ProjectByName(s.Project); p != nil && p.Env["CODEX_HOME"] != "" {
@@ -1664,6 +1699,17 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 			return session.Session{}, fmt.Errorf("runtime: revive %s: codex environment: %w", id, err)
 		}
 		resume = codexHasSession(ctx, home, dir)
+	}
+	if fresh {
+		resume = false
+	}
+	if n.sandboxProject(s.Project) != nil {
+		if err := n.refreshSandboxCredentials(id, dir, kind); err != nil {
+			return session.Session{}, fmt.Errorf("runtime: revive %s: refresh credentials: %w", id, err)
+		}
+	}
+	if err := n.prepareSandbox(ctx, s.Project, n.sandboxProject(s.Project) != nil); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
 	}
 	n.trustAgentDir(s.Project, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(s.Project, id, kind, defaultLaunchPrompt(id), s.Model, resume)); err != nil {

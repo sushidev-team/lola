@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -63,6 +64,124 @@ const sandboxClaudeDir = lolaDir + "/claude"
 // sandboxCodexDir is the CODEX_HOME of a sandboxed codex (the user's
 // ~/.codex is not mounted).
 const sandboxCodexDir = lolaDir + "/codex"
+
+// sandboxOpenCodeDir is the XDG_DATA_HOME of a sandboxed opencode: its
+// data (sessions, auth.json) lives in the worktree, not the image's home.
+const sandboxOpenCodeDir = lolaDir + "/opencode"
+
+// A sandboxed agent's private state (claude's config dir, CODEX_HOME,
+// opencode's data dir: settings, logins, plugins, caches) lives OUTSIDE the
+// worktree, in ~/.lola/sandbox/<session>/<agent>, mounted read-write at the
+// same path. Inside the worktree the repository's own tools — linters,
+// formatters, globs, test runners — walked it (git ignores .lola/, ESLint
+// does not). A session that already keeps its state in the worktree (started
+// before this move) keeps using it, so a revive loses nothing.
+
+// sandboxStateRoot is the host folder holding session id's agent state ("" =
+// no lola home, so the state stays in the worktree).
+func (n *Native) sandboxStateRoot(id string) string {
+	if n.Home == "" || id == "" || strings.ContainsAny(id, "/\\") {
+		return ""
+	}
+	return filepath.Join(n.Home, "sandbox", id)
+}
+
+// agentStateDir is where the sandboxed agent of kind keeps its private state
+// for session id working in dir.
+func (n *Native) agentStateDir(id, dir string, kind agent.Kind) string {
+	var legacy string
+	switch kind {
+	case agent.Claude:
+		legacy = filepath.Join(dir, sandboxClaudeDir)
+	case agent.Codex:
+		legacy = filepath.Join(dir, sandboxCodexDir)
+	case agent.OpenCode:
+		legacy = filepath.Join(dir, sandboxOpenCodeDir)
+	default:
+		return ""
+	}
+	root := n.sandboxStateRoot(id)
+	if root == "" {
+		return legacy
+	}
+	moved := filepath.Join(root, filepath.Base(legacy))
+	if isDir(legacy) && !isDir(moved) {
+		return legacy
+	}
+	return moved
+}
+
+// sandboxStateMount is the host folder a sandboxed launch must create and
+// mount for the agent's state, or "" when the state lives in the worktree.
+func (n *Native) sandboxStateMount(id, dir string, kind agent.Kind) string {
+	st := n.agentStateDir(id, dir, kind)
+	root := n.sandboxStateRoot(id)
+	if st == "" || root == "" || !strings.HasPrefix(st, root+string(filepath.Separator)) {
+		return ""
+	}
+	return root
+}
+
+// pruneSandboxState removes a torn-down session's agent state. Only once its
+// working directory is gone (or it borrowed one): a kept, dirty worktree keeps
+// its state for a revive.
+func (n *Native) pruneSandboxState(s session.Session) {
+	root := n.sandboxStateRoot(s.ID)
+	if root == "" {
+		return
+	}
+	if s.Kind != session.KindLocal && isDir(n.sessionDir(s)) {
+		return
+	}
+	if err := os.RemoveAll(root); err != nil && n.Logf != nil {
+		n.Logf("session %s: removing its sandbox state failed: %v", s.ID, err)
+	}
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// sandboxAuthPath is where a sandboxed agent of kind reads the login lola
+// copies in ("" for claude, which logs in through the env file).
+func (n *Native) sandboxAuthPath(id, dir string, kind agent.Kind) string {
+	st := n.agentStateDir(id, dir, kind)
+	switch kind {
+	case agent.Codex:
+		return filepath.Join(st, "auth.json")
+	case agent.OpenCode:
+		return filepath.Join(st, "opencode", "auth.json")
+	}
+	return ""
+}
+
+// seedAgentLogin copies the host's codex or opencode login into the session's
+// private config (0600, under the git-excluded .lola/), so the sandboxed agent
+// works with the person's own subscription. The copy is the container's:
+// a token the agent refreshes there does not reach the host file. Best
+// effort — a missing host login leaves the agent to report it.
+func (n *Native) seedAgentLogin(id, dir string, kind agent.Kind) {
+	dst := n.sandboxAuthPath(id, dir, kind)
+	src := hostAuthFile(kind)
+	if dst == "" || src == "" {
+		return
+	}
+	body, err := os.ReadFile(src)
+	if err != nil || len(body) == 0 {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return
+	}
+	if err := os.WriteFile(dst, body, 0o600); err != nil && n.Logf != nil {
+		n.Logf("sandbox: copying the %s login failed: %v", kind, err)
+	}
+}
+
+// hostAuthFile is agent.HostAuthFile behind a seam (tests never read the
+// person's real login).
+var hostAuthFile = agent.HostAuthFile
 
 // sandboxProject returns the named project when its agents run in a
 // container, else nil. Always by NAME: a session ID does not identify its
@@ -142,7 +261,9 @@ func (n *Native) syncSandboxRecord(ctx context.Context, s *session.Session) {
 
 // sandboxEnv is the env-file block a sandboxed agent additionally sources
 // INSIDE the container: where the hook bridge is, this session's token, the
-// agent's private config home, and the operator's pass_env credentials. Like
+// agent's private config home, the host's commit identity, and the effective
+// pass_env credentials (each from the daemon's environment, else from the
+// SandboxCredential fallback). Like
 // the rest of the env file it is 0600 and never logged, and every value is
 // shQuote'd.
 func (n *Native) sandboxEnv(p config.Project, id, dir string, kind agent.Kind) string {
@@ -156,19 +277,196 @@ func (n *Native) sandboxEnv(p config.Project, id, dir string, kind agent.Kind) s
 	}
 	switch kind {
 	case agent.Claude:
-		fmt.Fprintf(&b, "CLAUDE_CONFIG_DIR=%s\n", shQuote(filepath.Join(dir, sandboxClaudeDir)))
+		fmt.Fprintf(&b, "CLAUDE_CONFIG_DIR=%s\n", shQuote(n.agentStateDir(id, dir, kind)))
 	case agent.Codex:
-		fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(filepath.Join(dir, sandboxCodexDir)))
+		fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(n.agentStateDir(id, dir, kind)))
+	case agent.OpenCode:
+		fmt.Fprintf(&b, "XDG_DATA_HOME=%s\n", shQuote(n.agentStateDir(id, dir, kind)))
 	}
-	for _, name := range n.Cfg.Sandbox.PassEnv {
+	if root := n.sandboxStateMount(id, dir, kind); root != "" {
+		if err := os.MkdirAll(root, 0o700); err != nil && n.Logf != nil {
+			n.Logf("session %s: creating its sandbox state folder failed: %v", id, err)
+		}
+	}
+	n.seedAgentLogin(id, dir, kind)
+	// The container is the sandbox: claude accepts skip-permissions there
+	// even when a custom image runs it as root.
+	b.WriteString("IS_SANDBOX=1\n")
+	if n.GitIdentity != nil {
+		name, email := n.GitIdentity(p.Path)
+		if name != "" && email != "" {
+			for _, who := range []string{"AUTHOR", "COMMITTER"} {
+				fmt.Fprintf(&b, "GIT_%s_NAME=%s\nGIT_%s_EMAIL=%s\n", who, shQuote(name), who, shQuote(email))
+			}
+		}
+	}
+	b.WriteString(n.sandboxCredentials())
+	return b.String()
+}
+
+// sandboxCredentials renders the effective pass_env credentials as env-file
+// assignments, each from the daemon's environment, else from the
+// SandboxCredential fallback. Values only ever land in the 0600 env file.
+func (n *Native) sandboxCredentials() string {
+	var b strings.Builder
+	for _, name := range n.Cfg.Sandbox.EffectivePassEnv() {
 		if !envNameRe.MatchString(name) { // defense-in-depth, mirrors envFile
 			continue
 		}
-		if v, ok := os.LookupEnv(name); ok {
+		if v := n.sandboxCredential(name); v != "" {
 			fmt.Fprintf(&b, "%s=%s\n", name, shQuote(v))
 		}
 	}
 	return b.String()
+}
+
+// sandboxCredential is one pass_env value as sandboxCredentials resolves it.
+func (n *Native) sandboxCredential(name string) string {
+	v, ok := os.LookupEnv(name)
+	if (!ok || v == "") && n.SandboxCredential != nil {
+		v, _ = n.SandboxCredential(name)
+	}
+	return v
+}
+
+// claudeLoginEnv are the variables that log a sandboxed claude in: the
+// subscription token, and the API key when [sandbox].use_api_key passes it.
+func (n *Native) claudeLoginEnv() []string {
+	out := []string{"CLAUDE_CODE_OAUTH_TOKEN"}
+	if n.Cfg.Sandbox.UseAPIKey {
+		out = append(out, config.SandboxAPIKeyEnv)
+	}
+	return out
+}
+
+// SandboxLoginAvailable reports whether a sandboxed agent of kind would get a
+// login if it started now: claude's token or opted-in API key; codex's or
+// opencode's host login (copied in at launch) or an API key passed through
+// pass_env.
+func (n *Native) SandboxLoginAvailable(kind agent.Kind) bool {
+	passed := n.Cfg.Sandbox.EffectivePassEnv()
+	for _, name := range n.loginEnv(kind) {
+		if slices.Contains(passed, name) && n.sandboxCredential(name) != "" {
+			return true
+		}
+	}
+	if kind == agent.Claude {
+		return false
+	}
+	if p := hostAuthFile(kind); p != "" {
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Size() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// loginEnv are the variables that log a sandboxed agent of kind in.
+func (n *Native) loginEnv(kind agent.Kind) []string {
+	switch kind {
+	case agent.Claude:
+		return n.claudeLoginEnv()
+	case agent.Codex:
+		return []string{"OPENAI_API_KEY", "CODEX_API_KEY"}
+	case agent.OpenCode:
+		var out []string
+		for _, name := range n.Cfg.Sandbox.EffectivePassEnv() {
+			if strings.HasSuffix(name, "_API_KEY") {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// SandboxLoginMissing reports whether s is a sandboxed agent session that was
+// started without a login: its env file carries no login variable and, for
+// codex/opencode, no login was copied into its private config. Read from the
+// files lola wrote, never from the pane, so nothing the agent prints can
+// trigger a relaunch.
+func (n *Native) SandboxLoginMissing(s session.Session) bool {
+	if s.Sandbox != config.SandboxDocker || s.Kind == session.KindLocal || s.GoalManaged() || s.IsAgentless() {
+		return false
+	}
+	kind := agent.Parse(s.Agent)
+	dir := n.sessionDir(s)
+	if p := n.sandboxAuthPath(s.ID, dir, kind); p != "" {
+		if fi, err := os.Stat(p); err == nil && fi.Size() > 0 {
+			return false
+		}
+	}
+	body, err := os.ReadFile(filepath.Join(dir, lolaDir, "env"))
+	if err != nil {
+		return false // unknown: never relaunch on a guess
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		for _, name := range n.loginEnv(kind) {
+			if strings.HasPrefix(line, name+"=") && line != name+"=''" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// sessionDir is the session's worktree (a stack session's folder).
+func (n *Native) sessionDir(s session.Session) string {
+	if s.Worktree != "" {
+		return s.Worktree
+	}
+	return filepath.Join(n.WT.Root, s.Project, s.ID)
+}
+
+// refreshSandboxCredentials appends the current credentials to a sandboxed
+// session's env file, so a relaunch picks up a login made after the spawn.
+// Appended, not rewritten: project env values may hold quoted newlines that
+// look like assignments, and the later assignment wins when sourced.
+func (n *Native) refreshSandboxCredentials(id, dir string, kind agent.Kind) error {
+	n.seedAgentLogin(id, dir, kind)
+	block := n.sandboxCredentials()
+	if block == "" {
+		return nil
+	}
+	path := filepath.Join(dir, lolaDir, "env")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if strings.HasSuffix(string(body), block) {
+		return nil
+	}
+	if len(body) > 0 && body[len(body)-1] != '\n' {
+		body = append(body, '\n')
+	}
+	return os.WriteFile(path, append(body, block...), 0o600)
+}
+
+// Relogin restarts a sandboxed session's agent with the credentials that
+// exist NOW: it refreshes the env file, stops the pane and its container, and
+// launches the agent fresh on the same worktree with the standard first
+// prompt. Fresh, not resumed: a session that never had a login did no work in
+// its conversation, and a resumed one would sit idle without a prompt.
+func (n *Native) Relogin(ctx context.Context, s session.Session) (session.Session, error) {
+	if s.Sandbox != config.SandboxDocker || n.sandboxProject(s.Project) == nil {
+		return s, fmt.Errorf("runtime: relogin %s: not a sandboxed session", s.ID)
+	}
+	if s.Kind == session.KindLocal || s.GoalManaged() || s.IsAgentless() {
+		return s, fmt.Errorf("runtime: relogin %s: not an agent session lola can relaunch", s.ID)
+	}
+	id := s.TmuxName
+	if id == "" {
+		id = s.ID
+	}
+	if n.Tmux.Has(ctx, id) {
+		if err := n.Tmux.KillSessionTree(ctx, id); err != nil {
+			return s, fmt.Errorf("runtime: relogin %s: stop agent: %w", s.ID, err)
+		}
+	}
+	if err := n.removeContainer(ctx, s.ID); err != nil && n.Logf != nil {
+		n.Logf("session %s: removing the sandbox container before relogin failed: %v", s.ID, err)
+	}
+	return n.revive(ctx, s, true)
 }
 
 // sandboxLine wraps an agent's POSIX launch line (inner — what runs INSIDE the
@@ -184,6 +482,9 @@ func (n *Native) sandboxEnv(p config.Project, id, dir string, kind agent.Kind) s
 // The result is still POSIX sh; launchLine wraps it in the same `sh -c` as a
 // host launch.
 func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inner string) string {
+	if n.sandboxLolaPath() == "" {
+		return sandboxHooklessGuard
+	}
 	dir := filepath.Join(n.WT.Root, p.Name, id)
 	docker := shQuote(n.Cfg.Sandbox.DockerBin())
 	var b strings.Builder
@@ -213,6 +514,10 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 		}
 	}
 
+	if root := n.sandboxStateMount(id, dir, kind); root != "" {
+		// A bind mount of a missing source would be created root-owned.
+		fmt.Fprintf(&b, "mkdir -p %s; ", shQuote(root))
+	}
 	fmt.Fprintf(&b, "exec %s run --rm -it --init --name %s --label %s", docker, shQuote(id), shQuote(sandboxLabel+"="+id))
 	fmt.Fprintf(&b, " --add-host %s --security-opt no-new-privileges", shQuote(sandboxHost+":host-gateway"))
 	fmt.Fprintf(&b, " -w %s -v %s", shQuote(dir), shQuote(dir+":"+dir))
@@ -245,10 +550,13 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	if transcripts != "" {
 		fmt.Fprintf(&b, " -v %s", shQuote(transcripts+":"+transcripts))
 	}
+	if root := n.sandboxStateMount(id, dir, kind); root != "" {
+		fmt.Fprintf(&b, " -v %s", shQuote(root+":"+root))
+	}
 	if ctxDir := n.sandboxContextDir(p, dir); ctxDir != "" {
 		fmt.Fprintf(&b, " -v %s", shQuote(ctxDir+":"+ctxDir))
 	}
-	if lb, host := n.Cfg.Sandbox.LolaBin, n.lolaBin(); lb != "" && filepath.IsAbs(host) {
+	if lb, host := n.sandboxLolaPath(), n.lolaBin(); lb != "" && filepath.IsAbs(host) {
 		fmt.Fprintf(&b, " -v %s", shQuote(lb+":"+host+":ro"))
 	}
 	for _, r := range repos {
@@ -267,11 +575,14 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 			fmt.Fprintf(&b, " -p %s", shQuote("127.0.0.1:"+strconv.Itoa(h)+":"+strconv.Itoa(c)))
 		}
 	}
-	image := n.Cfg.SandboxImageFor(p)
+	if vol := n.cacheVolume(p); vol != "" {
+		fmt.Fprintf(&b, " -v %s", shQuote(vol+":/home/lola/.cache"))
+	}
+	image := n.sandboxImageOf(p)
 	// --entrypoint: an image's own entrypoint (git for alpine/git, a wrapper
 	// script for many toolchain images) would otherwise receive `sh -c …` as
 	// ITS arguments. The image contributes a filesystem, not a launcher.
-	fmt.Fprintf(&b, " --entrypoint sh %s -c %s", shQuote(image), shQuote(sandboxPrelude(dir, kind, transcripts)+inner))
+	fmt.Fprintf(&b, " --entrypoint sh %s -c %s", shQuote(image), shQuote(sandboxPrelude(dir, n.agentStateDir(id, dir, kind), kind, transcripts)+inner))
 	return b.String()
 }
 
@@ -306,10 +617,10 @@ func (n *Native) sandboxContextDir(p *config.Project, dir string) string {
 // first-run state marked done — onboarding and the workspace trust dialog are
 // modals that would park a fresh session forever — and the transcript
 // directory linked to the host's, so the transcript lands where lola reads it.
-func sandboxPrelude(dir string, kind agent.Kind, transcripts string) string {
+func sandboxPrelude(dir, state string, kind agent.Kind, transcripts string) string {
 	switch kind {
 	case agent.Claude:
-		cfg := filepath.Join(dir, sandboxClaudeDir)
+		cfg := state
 		state, _ := json.Marshal(map[string]any{
 			"hasCompletedOnboarding": true,
 			"projects":               map[string]any{dir: map[string]any{"hasTrustDialogAccepted": true}},
@@ -322,7 +633,9 @@ func sandboxPrelude(dir string, kind agent.Kind, transcripts string) string {
 		}
 		return s
 	case agent.Codex:
-		return fmt.Sprintf("mkdir -p %s; ", shQuote(filepath.Join(dir, sandboxCodexDir)))
+		return fmt.Sprintf("mkdir -p %s; ", shQuote(state))
+	case agent.OpenCode:
+		return fmt.Sprintf("mkdir -p %s; ", shQuote(state))
 	}
 	return ""
 }

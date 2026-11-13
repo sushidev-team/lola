@@ -272,6 +272,8 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	// [defaults].agent → "claude"): the health gate must confirm THAT binary
 	// is on PATH, not always "claude". Resolved under the config lock.
 	agentBin := sandboxedBin(d.cfg, p.Name, agent.Parse(d.cfg.AgentForProject(p.Name)).Binary())
+	agentKind := agent.Parse(d.cfg.AgentForProject(p.Name))
+	sandboxed := pp.Sandboxed()
 	// A stack's members, for the per-issue app selection below.
 	cfgStack := d.cfg.StackMembers(p.Name)
 	// Best-of trigger (bestof.go): an issue carrying [best_of].label spawns the
@@ -323,6 +325,11 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	}
 	if project.Name == "" {
 		return fail(fmt.Sprintf("unknown project %q", p.Name), nil)
+	}
+	// A sandboxed agent without a login would start, print "Not logged in"
+	// and park forever: skip the tick like any other unready runtime.
+	if sandboxed && !d.sandboxLoginReady(agentKind) {
+		return fail(sandboxLoginMissing(agentKind), nil)
 	}
 	if nat == nil {
 		return fail("native runtime unavailable", nil)

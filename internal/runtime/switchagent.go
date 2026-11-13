@@ -113,6 +113,9 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 		return session.Session{}, fmt.Errorf("runtime: switch agent %s: write env: %w", id, err)
 	}
 
+	if err := n.prepareSandbox(ctx, s.Project, n.sandboxProject(s.Project) != nil); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: switch agent %s: %w", id, err)
+	}
 	n.trustAgentDir(s.Project, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommandPrompt(s.Project, id, kind, handoffLaunchPrompt(id, old), false)); err != nil {
 		// A partially created session must not linger as a zombie pane (same

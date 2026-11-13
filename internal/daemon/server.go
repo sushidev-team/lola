@@ -87,6 +87,11 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return protocol.Response{OK: true}
 	case "status":
 		return dataResponse(d.statusData(ctx))
+	case protocol.CmdHubStatus:
+		return dataResponse(d.hubStatusData())
+	case protocol.CmdHubJoin, protocol.CmdHubLeave, protocol.CmdHubBoard, protocol.CmdHubOrg,
+		protocol.CmdHubClaim, protocol.CmdHubRelease, protocol.CmdHubSync:
+		return d.handleHub(ctx, req)
 	case "sessions":
 		return dataResponse(d.sessionsData())
 	case "projects":
@@ -892,6 +897,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		// The agent's own report — display-only, like the overlay above.
 		si.Board = boardInfo(s.Board, auditClaims(s), now)
 		si.Tasks = s.Tasks
+		si.Hub = hubSessionHub(s)
 		for _, o := range s.Overlaps {
 			si.Overlaps = append(si.Overlaps, protocol.SessionOverlap{
 				Session: o.Session, Issue: o.Issue, Files: slices.Clone(o.Files), More: o.More,
@@ -985,10 +991,13 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	if err := nc.Validate(); err != nil {
 		return fmt.Errorf("config invalid, keeping previous: %w", err)
 	}
+	// The team policy overlay goes on AFTER validation (hubpolicy.go).
+	tp := overlayTeamPolicy(nc, d.hubDir())
 
 	d.mu.Lock()
 	old := d.cfg
 	d.cfg = nc
+	d.teamPolicy = tp
 	d.cfgErr = "" // a validated config lifts the startup hold on polls
 	if old.Linear != nc.Linear {
 		d.lin = nil // key source / endpoint changed: re-resolve lazily
@@ -1040,6 +1049,8 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		d.syncHookBridge(bctx)
 	}
 	d.syncWorkers(ctx)
+	d.hubPolicyStale()
+	d.hubNudge() // a join or leave edits [hub] and reloads: act on it now
 	d.logf("", "config reloaded")
 	return nil
 }
@@ -1051,31 +1062,12 @@ func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) err
 		return errors.New("poll name required")
 	}
 
-	d.mu.Lock()
-	p := d.cfg.PollByName(name)
-	if p == nil {
-		d.mu.Unlock()
-		return fmt.Errorf("unknown poll %q", name)
-	}
-	prev := p.Enabled
-	p.Enabled = enable
-
-	fail := func(err error) error {
-		p.Enabled = prev
-		d.mu.Unlock()
+	// Edit the FILE, never the live config: d.cfg may carry the team policy
+	// overlay, which must not be frozen into config.toml (config.Save refuses
+	// it). The live flag is then flipped to match.
+	if err := d.enablePollInFile(name, enable); err != nil {
 		return err
 	}
-	if err := d.cfg.Validate(); err != nil {
-		return fail(err)
-	}
-	path, err := config.DefaultPath()
-	if err == nil {
-		err = d.cfg.Save(path)
-	}
-	if err != nil {
-		return fail(err)
-	}
-	d.mu.Unlock()
 
 	d.syncWorkers(ctx)
 	verb := "disabled"
@@ -1083,6 +1075,38 @@ func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) err
 		verb = "enabled"
 	}
 	d.logf(name, "poll %s", verb)
+	return nil
+}
+
+// enablePollInFile writes enable for poll name into config.toml (re-loaded
+// from disk) and mirrors it onto the live config. It takes d.mu.
+func (d *Daemon) enablePollInFile(name string, enable bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	live := d.cfg.PollByName(name)
+	if live == nil {
+		return fmt.Errorf("unknown poll %q", name)
+	}
+	path, err := config.DefaultPath()
+	if err != nil {
+		return err
+	}
+	fc, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	fp := fc.PollByName(name)
+	if fp == nil {
+		return fmt.Errorf("unknown poll %q in %s (reload first)", name, path)
+	}
+	fp.Enabled = enable
+	if err := fc.Validate(); err != nil {
+		return err
+	}
+	if err := fc.Save(path); err != nil {
+		return err
+	}
+	live.Enabled = enable
 	return nil
 }
 

@@ -155,6 +155,13 @@ protocol-version mismatch.
 | `lola bestof compare <issue\|group\|session> [--json]` | Every attempt of a best-of group side by side: agent/model, state, PR + CI, review findings, diff size, tokens — with a ★ suggestion (a hint, never acted on). |
 | `lola bestof pick <session>` | Keep one attempt: its draft PR is marked ready, every other attempt's PR is closed (branch kept) and its session torn down; a worktree with uncommitted changes is kept. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
+| `lola hub join <url> [--token-file F] [--name N]` | Enrol this machine with a team [lola hub](#hub-optional-off-by-default) using a one-time token, read from stdin (prompted without echo on a terminal) or `--token-file` — never pass it as an argument, where `ps` and shell history see it (still accepted, with a warning): creates the device key (`~/.lola/state/hub-key`, 0600) if needed, enrols it, writes `~/.lola/state/hub.json` and sets `[hub].enabled` + `url`. A running daemon does the enrolment itself and reloads; with none running the CLI does it locally. Joining a different hub is refused until you leave. |
+| `lola hub status` | The local hub identity, whether the device key matches it, the verified team policy and, when the daemon has a hub loop, its state, including which keys the policy locks (`applied`, `appliedKeys`). |
+| `lola hub leave [--forget-key]` | Remove the hub identity and stored policy and set `[hub].enabled = false`. The device key is kept for a later re-join unless `--forget-key`. The hub is not told: an admin revokes the device there. Like `join`, it goes through a running daemon (which reloads) and falls back to a local edit when none runs. |
+| `lola hub board [--state S] [--limit N] [--fresh] [--json]` | The team's hub items (open, claimed, done, failed, escalated) with their PR or Linear link, and for each whether THIS machine could claim it and with which project. Needs the daemon; cached 20s. |
+| `lola hub claim <item-id> [--project P]` | Claim one item now and start its session. A person's claim needs no `hub_chores` opt-in and spends no `max_claims_per_day`, but `require_sandbox`, `accept_kinds`, the spend/load hold, the health gate and the GitHub re-read still apply. `--project` picks among several projects on the item's repo. |
+| `lola hub release <item-id>` | Give a claimed item back. A session working it keeps running; lola only stops renewing and reporting it. |
+| `lola hub sync` | Run one hub loop pass now, re-fetching the team policy. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
 | `lola post <kind> …` | Agent-facing: publish an item to the session's conversation (`narration`, `widget`, …). Same command as `lola ssh post`, which stays valid. |
@@ -320,6 +327,9 @@ runtime layer, not on config load.
 | `sandbox` | `"none"` \| `"docker"` | Run this project's coding agents inside a container that can write only their worktree. Empty = `none` (on the host). See [The container sandbox](#the-container-sandbox). Not inheritable. |
 | `sandbox_image` | string | Image a sandboxed project runs, overriding `[sandbox].image`. Must carry `sh`, `git` and the coding agent on `PATH`. |
 | `sandbox_ports` | string array | Container ports published on `127.0.0.1`, as `"3000"` or `"<host>:<container>"`, so a dev server the agent starts in the container is reachable from the host. |
+| `sandbox_toolchains` | string array | Toolchains added to lola's image for this project: `node`, `php`, `python`, `go`, `rust`, `ruby`, each optionally `@version`. Unset = detected from the checkout (`composer.json`, `go.mod`, `Cargo.toml`…); `["none"]` adds nothing. lola builds the derived image on the first sandboxed start. Ignored with a custom image. See `sandbox/README.md`. |
+| `sandbox_packages` | string array | Extra Debian packages for the project's image (`["ffmpeg"]`). Ignored with a custom image. |
+| `hub_chores` | bool | Opt this project into the [`[hub]`](#hub-optional-off-by-default) chore lane: hub work items whose repo matches `repo` may be claimed for it. Default `false`; **not** inheritable from `[defaults]` (an inherited opt-in would enrol every project by accident). Needs `repo` set to `owner/name`; not offered for a stack. |
 | `kind` | `""` \| `"stack"` | `"stack"` makes this project a **stack**: no checkout of its own, it owns the Linear side (filter, write-back, agent, sandbox, budget) for its member projects. See [Stacks](#stacks-one-issue-several-repositories). |
 | `stack` | string | Makes this project a **member** (an *app*) of the named stack. It is no longer polled itself; its own Linear, agent and write-back keys are kept but ignored while it is a member. |
 | `labels` | string array | Member only: the issue labels that select this app — a session of the stack checks it out only for an issue carrying one of them (label UUID, name, or `group/name`; case-insensitive). Empty = every issue. |
@@ -594,17 +604,38 @@ is still an ordinary lola tmux pane — it runs `docker run -it …` instead of 
 agent — so the terminal views, pane classification, answers and send-keys all
 work unchanged.
 
-```toml
-[sandbox]
-image    = "ghcr.io/acme/agent-node:22"   # sh + git + the coding agent on PATH
-lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # make build-linux
-pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]
+It needs no other configuration. With no `[sandbox]` table, the agent runs in
+lola's own image, `ghcr.io/sushidev-team/lola-sandbox:<version>` (`:edge` for
+a non-release build): Alpine with Claude Code, git, gh, ripgrep, bash and
+curl, running as a non-root user. It is pulled on the first sandboxed spawn.
 
+```toml
 [[project]]
 name          = "web"
 sandbox       = "docker"
 sandbox_ports = ["5173"]          # published on 127.0.0.1:5173
 ```
+
+Setup, once per machine:
+
+1. Docker Desktop, OrbStack or Colima, running.
+2. A Claude Code token for the container (it cannot read your keychain).
+   In the desktop app, Settings → Sandbox → **Log in with Claude** runs
+   `claude setup-token` for you and stores the token in the keychain once the
+   browser login finishes; the token is never shown. Without the app:
+   `claude setup-token`, then `lola sandbox token` and paste it (the input is
+   not echoed; `--clear` removes it). `CLAUDE_CODE_OAUTH_TOKEN` in the daemon's environment
+   works too. The token uses your Claude plan; an API key (billed per token)
+   is passed only if you turn on `[sandbox].use_api_key`.
+3. GitHub: nothing, if `gh auth login` is done on the host (see Credentials).
+
+`lola doctor` checks all three.
+
+**Custom images** are optional: a project's toolchain (PHP, Node, Go …) goes
+in an image built `FROM` lola's (see `sandbox/README.md`), set as
+`[sandbox].image` or per project as `sandbox_image`. Any image works that has
+`sh`, `git` and the coding agent on `PATH`; it does not need lola, because
+lola mounts its own.
 
 What the container can reach:
 
@@ -616,18 +647,34 @@ What the container can reach:
 
 Things to know:
 
-- **Credentials.** The container cannot read the macOS keychain, so the agent
-  authenticates from environment variables listed in `[sandbox].pass_env`
-  (copied from the daemon's environment into the session's 0600 env file at
-  spawn — names only in config). claude: `CLAUDE_CODE_OAUTH_TOKEN` (from
-  `claude setup-token`) or `ANTHROPIC_API_KEY`; `git push` / `gh`: `GH_TOKEN`.
+- **Credentials.** The container cannot read the macOS keychain, so lola
+  writes the agent's credentials into the session's 0600 env file at spawn.
+  `[sandbox].pass_env` names them; empty means `CLAUDE_CODE_OAUTH_TOKEN` and
+  `GH_TOKEN`, each copied from the daemon's environment when set.
+  `ANTHROPIC_API_KEY` is never passed by default, nor by listing it in
+  `pass_env`: Claude Code prefers it over the subscription token and it bills
+  per token, so it takes the explicit `[sandbox].use_api_key = true` (the
+  desktop asks for confirmation). When the environment lacks one, lola falls back to
+  the keychain item `lola sandbox token` stores (claude) and to the host's
+  `gh auth token` (GitHub). **That means a sandboxed agent holds your GitHub
+  token**: it can push and open PRs as you, the same power an unsandboxed agent
+  has through `gh`. Export a narrower `GH_TOKEN` for the daemon, or set
+  `pass_env` without it, to limit that. The commit identity is the host's
+  (`user.name` / `user.email` of the project's checkout, passed as
+  `GIT_AUTHOR_*` / `GIT_COMMITTER_*`). Inside the image, git rewrites GitHub
+  ssh remotes to https and authenticates through gh, since the container
+  holds no ssh keys.
 - **Hooks.** A host unix socket cannot be mounted into Docker Desktop's or
   OrbStack's VM, so a sandboxed agent's hooks reach the daemon over the **hook
   bridge**: `127.0.0.1:[sandbox].hook_port` (default 7718), reached from the
   container as `host.docker.internal`, open only while some project is
   sandboxed, accepting only hook events and `lola report`, each carrying a
-  per-session token. The container runs `[sandbox].lola_bin` — a Linux build
-  (`make build-linux`) — mounted at the host lola's path.
+  per-session token. Inside the container the hooks run a **Linux** lola,
+  mounted read-only at the host lola's path: the one in lola's default image,
+  which the daemon copies out once per image ID into
+  `~/.lola/cache/sandbox/`, or `[sandbox].lola_bin` when set. A custom image
+  therefore needs no lola. Without docker or the image the spawn fails and
+  says why; it never starts an agent lola cannot hear.
 - **claude's state** lives in `.lola/claude` inside the worktree (seeded past
   the first-run dialogs); codex's in `.lola/codex`. The subscription-limit
   readout and codex/opencode token usage are not recorded for sandboxed
@@ -1548,10 +1595,11 @@ opts in with `sandbox = "docker"`.
 | Key | Type | Description |
 | --- | --- | --- |
 | `docker` | string | The docker CLI. Default `docker` from `PATH` (OrbStack, Colima and podman's docker shim work too). |
-| `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
-| `lola_bin` | string | Absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`). Required by any sandboxed project: it is what the agent's hooks run inside the container. |
+| `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Default: lola's own, `ghcr.io/sushidev-team/lola-sandbox:<lola version>` (`:edge` for a non-release build). A custom one needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
+| `lola_bin` | string | Optional absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`) for the agent's hooks. Default: the one inside lola's default image, extracted and cached by the daemon. Set it to test hook changes from a dev build. |
 | `hook_port` | int | Loopback port of the hook bridge. Default `7718`. |
-| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Values never live in the config. |
+| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Default `["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]`, with the keychain / `gh auth token` fallback described under Credentials. `ANTHROPIC_API_KEY` here has no effect without `use_api_key`. Values never live in the config. |
+| `use_api_key` | bool | Pass `ANTHROPIC_API_KEY` from the daemon's environment to sandboxed agents. Claude Code then uses it instead of your Claude plan, billed per token. Default `false`. |
 
 ### `[ui]` (optional)
 
@@ -1606,6 +1654,54 @@ real terminal. It is not `[remote]`, which means phone pairing.
 | `approval_timeout_seconds` | int | A command nobody answers expires, unrun. Default `1800`. |
 
 Both settings screens edit this table (app: Settings → SSH hosts, TUI: `S` → SSH hosts).
+
+### `[hub]` (optional, off by default)
+
+Enrols this daemon with a team **lola hub**: a coordinator that hands out
+mechanical chores — `dep_advisory` (upgrade a dependency with a security
+advisory) and `red_bump_pr` (fix a Dependabot / Renovate PR whose checks fail) —
+deduplicated across the team, and routes the team's **signed** policy. The hub
+never executes anything and never writes a prompt: an item is a closed kind plus
+fields validated against strict patterns, and lola renders the agent's task from
+its own template, and every offer is re-read from GitHub before it is claimed.
+Set it up with `lola hub join <url>` (token on stdin); the ed25519
+device key lives in `~/.lola/state/hub-key` (0600) and never in this file, argv
+or a log line. Like `[remote]`, the table is not part of the `[defaults]`
+inheritance, and neither is `[[project]].hub_chores`.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Gates the hub loop. Default `false`; `lola hub join` sets it, `lola hub leave` clears it. |
+| `url` | string | The hub's base URL: `https`, or plain `http` only on `localhost` / `127.0.0.1` / `::1` for development. No path, query or credentials. |
+| `device_name` | string | Name shown to the team at enrollment (default: the hostname). |
+| `accept_kinds` | string array | Chore kinds this machine claims: `dep_advisory`, `red_bump_pr`. Empty/absent = every kind lola knows. |
+| `max_claims_per_day` | int | Claims per local day, 0–100. Absent = `4`; `0` claims nothing. |
+| `require_sandbox` | bool | Refuse a chore for a project without `sandbox = "docker"`. Absent = `true`; opting out is a local, explicit decision. |
+| `trusted_policy_keys` | table of strings | `key_id = "<base64url ed25519 public key>"` (or the array of `"<key_id>:<public key>"` entries `lola-hub` prints): the admin keys that may sign team policy. The hub cannot add one, so it cannot forge or alter policy. A verified policy is stored (`~/.lola/state/hub-policy.json`) and, with `apply_policy`, enforced. |
+| `poll_seconds` | int | Hub loop cadence, 60–86400. Absent = `300`. |
+| `apply_policy` | bool | Enforce the verified team policy. Absent = `true`; only meaningful with `trusted_policy_keys`. `false` keeps the policy display-only. |
+
+**Team policy.** Every key a verified policy carries is LOCKED: the daemon
+overrides its running config with it and the settings UIs show it as set by the
+team. Keys the policy does not carry keep your value. The override lives in the
+daemon's memory only and is never written to `config.toml`, so leaving the hub
+(or `apply_policy = false`) restores exactly what the file says. The policy is
+re-fetched every 5 minutes and on `lola hub sync`; a newer version applies on
+the reload it triggers.
+
+| Policy key | Overrides |
+| --- | --- |
+| `review_providers` | Exactly these review provider kinds are enabled, every other kind is off. A listed kind uses your `[[review.provider]]` entry or that kind's defaults; one your config cannot run (a `bot-watch` with no `author`) stays off and `lola doctor` says so. |
+| `budget_daily_weighted_tokens` | `[budget].daily_tokens`. |
+| `merge_queue_enabled` | `[merge_queue].enabled` (a `false` locks it off). |
+| `max_concurrency_hint` | A ceiling on `[defaults].global_cap`: the effective cap is the smaller of the two. |
+| `accept_kinds` | `[hub].accept_kinds`. |
+| `escalate_after` | Read by the hub only; shown, not applied. |
+
+Only keys you set are written back on save, so a default is never frozen into
+the file. Findings come from GitHub through `gh` for the opted-in repos only
+(open Dependabot alerts and failing bot bump PRs), and only the validated fields
+reach the hub — never code, file names, paths or transcripts.
 
 ### `[remote]` (optional)
 

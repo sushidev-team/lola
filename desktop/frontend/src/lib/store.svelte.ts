@@ -4,6 +4,7 @@
 // call `store.kill(id)` — they never touch the bindings directly.
 
 import { Events } from "@wailsio/runtime";
+import { sandboxLogin } from "$lib/sandboxlogin.svelte";
 import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO, type StackFolderAppDTO } from "@bindings/desktop";
 import type {
   SessionInfo as ProtocolSessionInfo,
@@ -285,9 +286,34 @@ class Store {
   }
 
   setFlash(text: string, kind: "good" | "warn" | "bad" = "good") {
-    this.flash = { text, kind };
+    // Sentence case at the one place every flash passes: call sites write
+    // "daemon restarted", the toast shows "Daemon restarted". Only a first word
+    // of plain letters is touched: a message that opens with an identifier
+    // ("lola-p1-eng-1: switched …", "eng-123 …") keeps it verbatim.
+    this.flash = { text: /^[a-z]+(?![\w-])/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text, kind };
+    this.armFlashTimer();
+  }
+
+  /** How long a flash stays: an error is read, not glanced at. */
+  private flashMs() {
+    return this.flash?.kind === "bad" ? 8000 : 4000;
+  }
+
+  private armFlashTimer() {
     clearTimeout(this.flashTimer);
-    this.flashTimer = setTimeout(() => (this.flash = null), 4000);
+    this.flashTimer = setTimeout(() => (this.flash = null), this.flashMs());
+  }
+
+  /** Hovering the toast holds it; leaving restarts the full timeout. */
+  holdFlash(hold: boolean) {
+    if (!this.flash) return;
+    if (hold) clearTimeout(this.flashTimer);
+    else this.armFlashTimer();
+  }
+
+  dismissFlash() {
+    clearTimeout(this.flashTimer);
+    this.flash = null;
   }
 
   /** Dismiss the out-of-date banner. A persistent failure is not re-emitted (the
@@ -485,7 +511,7 @@ class Store {
   }
   // coderabbit is kept as the back-compat alias forcing the watch kind.
   coderabbit(session: string) {
-    return this.act(() => DaemonService.CodeRabbit(session), "coderabbit poll requested");
+    return this.act(() => DaemonService.CodeRabbit(session), "CodeRabbit poll requested");
   }
   /**
    * Ask a CONFLICTING session's coding agent to merge the project's default
@@ -552,7 +578,8 @@ class Store {
       delete this.devPending[session];
     }
   }
-  open(project: string, ref: string) {
+  async open(project: string, ref: string) {
+    if (!(await sandboxLogin.ensure(project))) return undefined;
     return this.act(() => DaemonService.Open(project, ref), `opened ${ref}`);
   }
   /**
@@ -567,7 +594,8 @@ class Store {
       (r) => `broadcast: ${r?.message || "sent"}`,
     );
   }
-  openManual(a: OpenManualArgs) {
+  async openManual(a: OpenManualArgs) {
+    if (a.agent && !(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
     return this.act(() => DaemonService.OpenManual(a), `started ${a.name || a.branch || "session"}`);
   }
   renameSession(id: string, name: string) {
@@ -584,10 +612,12 @@ class Store {
       return false;
     }
   }
-  openPr(a: OpenPrArgs) {
+  async openPr(a: OpenPrArgs) {
+    if (!(await sandboxLogin.ensure(a.project))) return undefined;
     return this.act(() => DaemonService.OpenPR(a), `opened PR #${a.number}`);
   }
-  openTicket(a: OpenTicketArgs) {
+  async openTicket(a: OpenTicketArgs) {
+    if (!(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
     return this.act(() => DaemonService.OpenTicket(a), `started ${a.identifier}`);
   }
   // Turn checkpoints. Both flash the daemon's own sentence: it names the

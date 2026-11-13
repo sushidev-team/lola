@@ -198,3 +198,22 @@ func TestKeychainCommandHelper(t *testing.T) {
 		}
 	}
 }
+
+// TestStoreUsesTheSecurityAddSeam: the generic Store shares the Linear key's
+// stdin-only path, and its error never carries the value.
+func TestStoreUsesTheSecurityAddSeam(t *testing.T) {
+	orig := runSecurityAdd
+	t.Cleanup(func() { runSecurityAdd = orig })
+	var gotService, gotValue string
+	runSecurityAdd = func(service, value string) error {
+		gotService, gotValue = service, value
+		return errors.New("exit status 45")
+	}
+	err := Store(SandboxClaudeService, "sk-ant-oat01-secret")
+	if gotService != SandboxClaudeService || gotValue != "sk-ant-oat01-secret" {
+		t.Fatalf("seam got %q", gotService)
+	}
+	if err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("err = %v", err)
+	}
+}

@@ -185,7 +185,7 @@ func (n *Native) sshHasConversation(ctx context.Context, s session.Session, kind
 	case agent.Codex:
 		home := userCodexHome()
 		if s.Sandbox == config.SandboxDocker {
-			home = filepath.Join(s.Worktree, sandboxCodexDir)
+			home = n.agentStateDir(s.ID, s.Worktree, agent.Codex)
 		}
 		return codexHasSession(ctx, home, s.Worktree)
 	}
@@ -197,6 +197,9 @@ func (n *Native) sshHasConversation(ctx context.Context, s session.Session, kind
 // through the hook bridge and otherwise reach nothing of the host's, which is what
 // lets a production host accept it.
 func (n *Native) sandboxScratchLine(id, dir string, kind agent.Kind, inner string) string {
+	if n.sandboxLolaPath() == "" {
+		return sandboxHooklessGuard
+	}
 	docker := shQuote(n.Cfg.Sandbox.DockerBin())
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s rm -f %s >/dev/null 2>&1; ", docker, shQuote(id))
@@ -207,16 +210,23 @@ func (n *Native) sandboxScratchLine(id, dir string, kind agent.Kind, inner strin
 			fmt.Fprintf(&b, "mkdir -p %s; ", shQuote(transcripts))
 		}
 	}
+	state := n.sandboxStateMount(id, dir, kind)
+	if state != "" {
+		fmt.Fprintf(&b, "mkdir -p %s; ", shQuote(state))
+	}
 	fmt.Fprintf(&b, "exec %s run --rm -it --init --name %s --label %s", docker, shQuote(id), shQuote(sandboxLabel+"="+id))
 	fmt.Fprintf(&b, " --add-host %s --security-opt no-new-privileges", shQuote(sandboxHost+":host-gateway"))
 	fmt.Fprintf(&b, " -w %s -v %s", shQuote(dir), shQuote(dir+":"+dir))
+	if state != "" {
+		fmt.Fprintf(&b, " -v %s", shQuote(state+":"+state))
+	}
 	if transcripts != "" {
 		fmt.Fprintf(&b, " -v %s", shQuote(transcripts+":"+transcripts))
 	}
-	if lb, host := n.Cfg.Sandbox.LolaBin, n.lolaBin(); lb != "" && filepath.IsAbs(host) {
+	if lb, host := n.sandboxLolaPath(), n.lolaBin(); lb != "" && filepath.IsAbs(host) {
 		fmt.Fprintf(&b, " -v %s", shQuote(lb+":"+host+":ro"))
 	}
-	fmt.Fprintf(&b, " --entrypoint sh %s -c %s", shQuote(n.Cfg.SandboxImageFor(nil)), shQuote(sandboxPrelude(dir, kind, transcripts)+inner))
+	fmt.Fprintf(&b, " --entrypoint sh %s -c %s", shQuote(n.Cfg.SandboxImageFor(nil)), shQuote(sandboxPrelude(dir, n.agentStateDir(id, dir, kind), kind, transcripts)+inner))
 	return b.String()
 }
 

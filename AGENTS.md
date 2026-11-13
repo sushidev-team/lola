@@ -41,6 +41,8 @@ make build | vet | test | check | tidy      # tidy = GOPROXY=off go mod tidy
 GOCACHE=$PWD/.gocache GOFLAGS='-mod=mod -buildvcs=false' go test ./internal/daemon -run TestDispatch -v
 ```
 
+`hubproto/` is a nested Go module; `make test` and `make vet` also check it.
+
 Go per `go.mod` (1.25). Deps: cobra, bubbletea + lipgloss, BurntSushi/toml;
 everything else is stdlib + exec seams.
 
@@ -344,6 +346,12 @@ every send path. Re-verify against a live pane.
 - Fire once per transition: persisted one-shot guards (`LastReactedStatus`, `WB*Done`, per-PR review guards).
 
 ### Checkpoints, sandbox, stacks, context
+
+- Docker defaults to Lola’s versioned image (edge for development); its Linux
+  Lola binary is extracted into a protected cache when `sandbox.lola_bin` is
+  unset. Per-project toolchains build on the default image; custom images
+  supply their own tools. API-key billing requires `sandbox.use_api_key`.
+  Desktop sandbox login is handled by `SandboxLoginService`.
 - **Checkpoints are refs** (`refs/lola/checkpoints/<session>/<seq>`), recorded via
   a temporary index (`GIT_INDEX_FILE`), `--no-gpg-sign`, fixed identity; never
   `git stash create`. Baseline recorded by runtime before first launch. `Restore`
@@ -390,6 +398,103 @@ every send path. Re-verify against a live pane.
   weighted tokens budgeted, list price ranks. Rank against finished sessions only.
   Never mix agents in one ranking. `hook.StatusLine` must ALWAYS pass through to
   the user's own status-line command.
+
+### Team hub
+
+- **Hub work is a CLAIM and a candidate, never a command.**
+  (`internal/daemon/hubwire.go`, lola-hub's `DESIGN.md`.) A compromised hub must
+  not mean code execution here. Rules:
+  - An offer is a CANDIDATE: `hub.Accept` (valid item, opted-in non-stack
+    project, accepted kind, daily cap, sandbox unless `require_sandbox = false`)
+    and then exactly a Linear dispatch's gates in its order — `dispatchHold`,
+    the health gate, `reserveSlots` — all BEFORE the claim. Nothing is claimed
+    while the heartbeat fails or the config failed validation.
+  - An offer is the hub's CLAIM about a repo, so it is re-read from GitHub
+    before the claim (`hub.Collector.Verify`, fail closed): a `red_bump_pr`
+    must be OPEN, by the named bot, not cross-repository, on exactly the named
+    branch and still failing; a `dep_advisory` must match an open Dependabot
+    alert (advisory + package + ecosystem). The session — branch, briefing,
+    `StartHead` — is built from GitHub's answer. Without this a compromised hub
+    could have every member's agent push to `main` or install a version it
+    chose. An item ended here without completing is not re-claimed for
+    `hubCooldown`.
+  - The hub never writes a prompt. The agent gets `hub.Briefing`, lola's
+    template over fields `hubproto.Validate` checked, through the SAME launch
+    paths a human uses: `OpenManualAgent` (new branch) for `dep_advisory`,
+    `OpenPRAgent` (the bot's branch, never deleted) for `red_bump_pr`.
+  - The claim is the in-flight mark. The daily count is persisted before the
+    claim, refunded only when the claim is refused, KEPT when the spawn fails
+    (the item is released) — or a broken project claims it every cycle.
+  - The hub never stops a session. A lost lease sets `HubItem.LeaseLost`, logs,
+    and ends renewal and reporting; the agent keeps working.
+  - Outcomes are one-shot PER CLAIM (item id + claim time): queued in a
+    persisted outbox (`state/hub-daemon.json`) FIRST, then `HubItem.Reported`
+    is stamped, with a settled list keyed the same way, so a crash or a down
+    hub neither repeats nor loses one; a re-claim drops whatever an older claim
+    left queued (a stale release would free the new lease). A lease whose
+    outcome is still unsent keeps being renewed. Teardown (`dropSession`) only
+    queues and nudges, it never waits on the network. A `red_bump_pr`
+    completes only once the PR head moved past the one GitHub showed at claim
+    AND is green; an unmoved, still-red one ends as refused / agent_gave_up,
+    never not_reproducible. `HubItem` survives adoption.
+  - Only what the protocol names leaves the machine: repo slugs, validated
+    findings, item ids, a PR URL and a delivery word — never a session id, path
+    or pane text. `hubStatus` is a read a phone may make.
+  - **A verified team policy LOCKS every key it carries, in the daemon's
+    MEMORY only.** (`internal/config/teampolicy.go`, `internal/daemon/
+    hubpolicy.go`.) `overlayTeamPolicy` runs on every config the daemon puts
+    live — startup and each reload — AFTER `Validate` and after
+    `ResolveInheritance`, and calls `config.ApplyTeamPolicy` with the stored
+    bundle once `hub.ApplicablePolicy` says yes: hub enabled, the bundle
+    RE-VERIFIES against the current `trusted_policy_keys`, a joined identity
+    for `[hub].url` names its org, `[hub].apply_policy` is not false. Every
+    unknown applies nothing. Rules:
+    - The overlay is never a file. `ApplyTeamPolicy` marks the Config and
+      `Config.Save` refuses a marked one (`ErrTeamPolicyOverlay`), so a daemon
+      path that writes config.toml must re-`Load` the file and edit that
+      (`handleEnable` does, then mirrors the flag onto `d.cfg`). The TUI and
+      the app never apply it; they read and write the file.
+    - Each key maps to exactly its runtime field: `review_providers` →
+      exactly those kinds enabled in the catalog (own entry or kind defaults;
+      a kind that cannot run stays off with a notice; fallbacks to a disabled
+      kind dropped; legacy tables folded in memory), `budget_daily_weighted_
+      tokens` → `[budget].daily_tokens`, `merge_queue_enabled` →
+      `[merge_queue].enabled` (false locks it off), `max_concurrency_hint` →
+      a CEILING on `global_cap` (min, never a raise), `accept_kinds` →
+      `[hub].accept_kinds`. `escalate_after` is the hub's; it is shown, never
+      applied. Anything unmappable is a notice (`lola doctor`'s "hub policy"
+      row), never a guess. The `Inherits` bitmap is untouched.
+    - A newly fetched version takes effect through ONE reload
+      (`hubPolicyReload`, once per version). The fetch runs every 5 minutes
+      and on `cmd=hubSync`. `hubStatus.policy` carries `applied`,
+      `appliedKeys` (team value + local value) and `applyNote`; the app reads
+      them through `ConfigService.TeamPolicy` to show locked controls.
+    - No Settings key may ever execute anything (hubproto's closed set).
+  - **A person's hub command is a human act, and only a human's.**
+    `protocol.HubHumanCommands` (join, leave, board, org, claim, release,
+    sync) are denied by `internal/remote` as a list (a phone gets none of
+    them, the board and org included: they carry the whole team's work and
+    device names) and named by no sandbox hook-bridge allowlist. Rules:
+    - `cmd=hubClaim` goes through `hubClaimItem`, the loop's path, with the
+      human rules of every human open: the click is the opt-in (no
+      `hub_chores`) and intent (no concurrency cap, no daily count, no
+      cooldown), it still RESERVES a slot so a tick beside it counts it, and
+      `require_sandbox`, the kind filter, `dispatchHold`, the health gate and
+      the GitHub re-read all hold — a click does not make an item safer to run
+      on the host. Several projects on the item's repo need `project`. A
+      per-item in-flight set keeps the loop and a click from claiming one item
+      twice.
+    - `cmd=hubRelease` never stops a session: it sets `HubItem.Released`,
+      which ends renewal and reporting exactly like a lost lease (`Open()`).
+      A hub that cannot be reached gets the release through the outbox; a hub
+      that refuses it changes nothing here.
+    - The board/org views are display data: cached (20s / 60s) so a polling UI
+      cannot flood the hub, refused whole on one bad row, and nothing on them
+      is acted on — a claim re-finds the item (offers, then the open board)
+      and re-reads it from GitHub.
+    - `cmd=hubJoin` carries the enroll token: never logged, echoed or
+      returned, scrubbed from an error that happens to contain it, and the
+      enrollment is shielded from a client hanging up mid-request.
 
 ### SSH (contract: `docs/ssh-sessions.md`)
 - `ssh -O check` exit 0 is the only proof of a connection; nothing read from a

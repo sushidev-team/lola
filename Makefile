@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build build-linux test vet fmt fmtcheck tidy check clean daemon daemon-dev mobile-dev mobile-lan mobile-info mobile-sim mobile-device mobile-wireless desktop-dev
+.PHONY: build build-linux sandbox-image test vet fmt fmtcheck tidy check clean daemon daemon-dev mobile-dev mobile-lan mobile-info mobile-sim mobile-device mobile-wireless desktop-dev
 
 build:
 	go build -o lola .
@@ -17,11 +17,25 @@ LINUX_ARCH ?= $(shell go env GOARCH)
 build-linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(LINUX_ARCH) go build -o dist/lola-linux-$(LINUX_ARCH) .
 
+# sandbox-image builds the default container sandbox image (sandbox/Dockerfile)
+# for this machine's architecture and loads it into the local docker under the
+# tag lola runs by default for a non-release build (`:edge`). Release builds
+# default to `:<version>`; tag it that way too, or set [sandbox].image, to try a
+# local image with a release lola. CI publishes the multi-arch image.
+SANDBOX_IMAGE ?= ghcr.io/sushidev-team/lola-sandbox:edge
+LOLA_VERSION ?= dev
+sandbox-image:
+	docker build -f sandbox/Dockerfile --build-arg LOLA_VERSION=$(LOLA_VERSION) -t $(SANDBOX_IMAGE) .
+
+# hubproto is a NESTED module (the hub's wire contract), so ./... skips it;
+# it is tested and vetted from its own directory.
 test:
 	go test ./...
+	cd hubproto && go test ./...
 
 vet:
 	go vet ./...
+	cd hubproto && go vet ./...
 
 # fmtcheck mirrors .github/workflows/ci.yml's gofmt step BYTE FOR BYTE. It lives
 # in `check` because CI ran it and `make check` did not, so a file could be
