@@ -248,7 +248,7 @@ func (s *UpdateService) DownloadUpdate(url string) (string, error) {
 // swap script, then quits so the script can replace and relaunch the app.
 func (s *UpdateService) InstallAndRestart(dmgPath string) error {
 	if err := update.InstallUpdate(dmgPath); err != nil {
-		return fmt.Errorf("install failed: %w", err)
+		return err
 	}
 	if s.app != nil {
 		s.app.Quit()

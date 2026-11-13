@@ -7,6 +7,7 @@ const { service, on, unsubscribe } = vi.hoisted(() => ({
     ShouldAutoCheck: vi.fn(),
     CheckForUpdates: vi.fn(),
     IsVersionSkipped: vi.fn(),
+    InstallAndRestart: vi.fn(),
   },
   on: vi.fn(),
   unsubscribe: vi.fn(),
@@ -51,6 +52,23 @@ describe("automatic update checks", () => {
   afterEach(() => {
     updates.stop();
     vi.useRealTimers();
+  });
+
+  it("prevents overlapping installations and allows retry after a readable failure", async () => {
+    updates.dmgPath = "/tmp/lola.dmg";
+    let reject!: (error: unknown) => void;
+    service.InstallAndRestart.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    const installing = updates.install();
+    await updates.install();
+    expect(service.InstallAndRestart).toHaveBeenCalledTimes(1);
+    reject(new Error("RuntimeError: Installer is busy. Eject the Lola installer, then try again."));
+    await installing;
+    expect(updates.error).toBe("Installer is busy. Eject the Lola installer, then try again.");
+    expect(updates.installing).toBe(false);
+    service.InstallAndRestart.mockResolvedValueOnce(undefined);
+    await updates.install();
+    expect(service.InstallAndRestart).toHaveBeenCalledTimes(2);
+    expect(updates.error).toBe("");
   });
 
   it("checks at startup even when the saved interval is not due, and initializes once", async () => {

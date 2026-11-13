@@ -148,13 +148,13 @@ class UpdateStore {
   /** Swap the bundle and relaunch. The app quits inside this call, so nothing
    *  after the await runs on success. */
   async install() {
-    if (!this.dmgPath) return;
+    if (!this.dmgPath || this.installing) return;
     this.installing = true;
     this.error = "";
     try {
       await UpdateService.InstallAndRestart(this.dmgPath);
     } catch (err) {
-      this.error = String(err);
+      this.error = String(err).replace(/^(?:(?:RuntimeError|Error):\s*)+/, '');
       this.installing = false;
     }
   }
