@@ -300,6 +300,7 @@ func talkSentence(why string, s session.Session) string {
 func talkCaps(s session.Session) protocol.TalkCaps {
 	c := agent.Caps(agent.Parse(s.Agent))
 	out := protocol.TalkCaps{Feed: c.Feed, Send: c.Send, Stop: c.Stop, Cards: c.Cards}
+	out.Settings = (s.Agent == "" || agent.Valid(s.Agent)) && !s.GoalManaged() && !s.IsAgentless() && sshAgentAlive(s)
 	switch {
 	case s.GoalManaged():
 		out.Send, out.Stop, out.Cards = false, false, false
@@ -751,6 +752,8 @@ func (d *Daemon) reconcileFromPane(id string, p talkPane, prompt *attention.Prom
 	changed := false
 	d.sessions.Update(id, func(cur *session.Session) bool {
 		switch {
+		case prompt != nil && prompt.Kind == attention.PromptBackground:
+			changed = agentReconcile(cur, attention.ActivityWorking, false, agentlog.Unknown, now)
 		case prompt != nil && prompt.Kind == "modal":
 			return false
 		case prompt != nil:
@@ -814,12 +817,19 @@ func (d *Daemon) handleAgentChoose(ctx context.Context, a protocol.AgentChooseAr
 		defer g.Unlock()
 		cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 		defer cancel()
+		s, ok := d.sessions.Get(id)
+		if !ok || !sshAgentAlive(s) || s.GoalManaged() || s.IsAgentless() || agent.Parse(s.Agent) != k {
+			return false, "This agent is no longer available."
+		}
 		p, err := d.readTalkPane(cctx, s)
-		if err != nil || !p.hasCursor {
+		if err != nil || !p.hasCursor || d.readPrompt == nil {
 			return false, "Could not read the terminal"
 		}
 		prompt, found := d.readPrompt(p.visible, p.cursor, k)
 		if !found || prompt.Hash != a.Hash {
+			if a.Key == "background" {
+				return false, "This command has changed or finished. Read it again."
+			}
 			return false, "This question has changed. Read it again."
 		}
 		known := false
@@ -832,12 +842,24 @@ func (d *Daemon) handleAgentChoose(ctx context.Context, a protocol.AgentChooseAr
 		if !known {
 			return false, "That answer is no longer offered."
 		}
-		if d.sendKey == nil {
-			return false, "Could not reach the terminal"
+		send := func() error {
+			if prompt.Kind == attention.PromptBackground {
+				if d.sendBackground == nil || a.Key != "background" {
+					return errors.New("background action unavailable")
+				}
+				return d.sendBackground(cctx, paneTarget(s))
+			}
+			if d.sendKey == nil {
+				return errors.New("key sender unavailable")
+			}
+			return d.sendKey(cctx, paneTarget(s), a.Key)
 		}
-		if err := d.sendKey(cctx, paneTarget(s), a.Key); err != nil {
+		if err := send(); err != nil {
 			d.logf("", "talk: %s: choose: %v", id, err)
 			return false, "Could not reach the terminal"
+		}
+		if prompt.Kind == attention.PromptBackground {
+			d.noteTyped(noteFor(s, "You asked Claude to move the running command to background"), "\x02")
 		}
 		return true, ""
 	}()
@@ -851,7 +873,7 @@ func (d *Daemon) handleAgentChoose(ctx context.Context, a protocol.AgentChooseAr
 	}
 
 	// A human's pressed key is a row, drawn as a moment because the label is pane text.
-	if store, err := d.sshStore(id, true); err == nil && store != nil {
+	if store, err := d.sshStore(id, true); a.Key != "background" && err == nil && store != nil {
 		now := d.ssh.now()
 		text := "You chose: " + sshelement.Line(a.Key+" "+label, 120)
 		if err := store.Update(func(st *sshstore.State) error {

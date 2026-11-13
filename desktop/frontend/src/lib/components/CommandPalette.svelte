@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { toggleGitWorkspace } from "$lib/workspacenav";
   import { nav } from "$lib/nav.svelte";
   import { store } from "$lib/store.svelte";
   import { projectActions, openSession, openShell, newSessionHere } from "$lib/projectActions";
@@ -17,6 +18,11 @@
   const current = $derived(store.sessionById(nav.focusedTerm || nav.selectedId));
   const results = $derived.by<Result[]>(() => {
     const commands: Result[] = [
+      { id: "git", label: nav.inGit ? "Back from Git" : "Open Git workspace", detail: "⌘⇧G", run: toggleGitWorkspace },
+      { id: "sidebar", label: "Toggle sidebar", detail: "⌘B", run: () => nav.toggleSidebar() },
+      { id: "focus-sessions", label: "Focus sessions", detail: "⌘⇧E", run: () => nav.focusSessions() },
+      { id: "shortcuts", label: "Keyboard shortcuts", detail: "⌘/", run: () => nav.openOverlay("help") },
+      { id: "doctor", label: "Doctor", detail: "Action", run: () => nav.openOverlay("doctor") },
       { id: "new", label: "New session…", detail: "Action", run: () => newSessionHere() },
       { id: "temporary", label: "New temporary shell", detail: "Action · default directory", run: () => { void openShell(); } },
       { id: "ssh", label: "New SSH session…", detail: "Action · an agent and a terminal on a host", run: () => ssh.newSession() },

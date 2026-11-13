@@ -18,8 +18,9 @@ type Cursor struct {
 	Visible bool
 }
 
-// Prompt is a question read off a visible pane. The daemon maps it onto
-// protocol.AgentPrompt. Kind is permission | question | question_multi | modal.
+// Prompt is an actionable notice read off a visible pane. The daemon maps it
+// onto protocol.AgentPrompt. Background is optional while a command runs; the
+// other kinds are permission | question | question_multi | modal.
 //
 // Lines is what the question says, command included, and Choices is what can be pressed.
 // An option's row is in Choices only, so a card that draws both does not say it twice.
@@ -39,6 +40,7 @@ const (
 	PromptQuestion      = "question"
 	PromptQuestionMulti = "question_multi"
 	PromptModal         = "modal"
+	PromptBackground    = "background"
 )
 
 // composerCaretX is the column a claude-code composer's cursor rests in when nothing has
@@ -120,8 +122,9 @@ var (
 	permissionCountdownRe = regexp.MustCompile(`(?m)^([ \t]*⚠ Claude Code will automatically block this request in )[0-9]+:[0-5][0-9](, to avoid holding[ \t\n]+up an unattended session[ \t\n]+Do you want to proceed\?[ \t\n]*)$`)
 )
 
-// ReadPrompt reads a question off one capture of the visible screen. It answers false for
-// a pane with nothing to ask, and for any agent without measured cards.
+// ReadPrompt reads a question or a foreground-command action off one capture of
+// the visible screen. It answers false when no supported action is visible, and
+// for any agent without measured cards.
 //
 // A permission or question needs all of these, because a press goes to whatever is really
 // on screen: a resting pane, a hidden cursor (the program is not reading a line), a footer
@@ -138,6 +141,8 @@ func ReadPrompt(visible string, c Cursor, k agent.Kind) (Prompt, bool) {
 	case ActivityBlocked:
 		return modalPrompt(rows), true
 	case ActivityWaiting:
+	case ActivityWorking:
+		return readBackground(visible, c, k)
 	default:
 		return Prompt{}, false
 	}

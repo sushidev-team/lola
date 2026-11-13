@@ -3,6 +3,9 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as config$0 from "../internal/config/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as reviewprofile$0 from "../internal/reviewprofile/models.js";
 
 /**
@@ -796,6 +799,7 @@ export interface SandboxStatusDTO {
 }
 
 export interface SettingsDTO {
+    "ai"?: { [_ in string]?: config$0.AIProvider } | null;
     "autoPRComments": boolean;
     "temporaryDirectory": string;
     "globalCap": number;

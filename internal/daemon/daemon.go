@@ -245,6 +245,8 @@ type Daemon struct {
 	// sendKey presses one key with no Enter, for a human's choice on a card. Never
 	// reach for it from an automatic path: see agentChoose.
 	sendKey func(ctx context.Context, tmuxName, key string) error
+	// sendBackground sends Claude its foreground-task shortcut, after fresh pane proof.
+	sendBackground func(ctx context.Context, tmuxName string) error
 	// paneCursor and paneVisible are the two reads the cursor proof needs. Read the
 	// visible pane BEFORE the cursor. A nil seam (a test that injects only paneTail)
 	// makes the automation gate fall back to attention.EmptyComposer.
@@ -484,6 +486,9 @@ type Daemon struct {
 	reviewCh    chan reviewJob
 	reviewBusy  map[string]bool
 	reviewFails map[string]int
+	// reviewActive includes manual passes, which do not enter reviewBusy's queue.
+	// Counts allow concurrent manual requests without prematurely clearing activity.
+	reviewActive map[string]int // guarded by reviewMu, keyed by session/lane ID
 
 	// escSummaries carries a brain escalation summary from react's Urgent notify
 	// (reactCIFailed) to the P4 blocked Linear comment (writeBackEscalation) in
@@ -517,6 +522,8 @@ type Daemon struct {
 	// cmd=status; a failing check skips the tick WITHOUT mutating seen/labels
 	// (the same discipline as the old AO-down rule). Overridable in tests.
 	runtimeHealth func(binary string) error
+	// validateLocalCheckout verifies an existing project checkout before borrowing it.
+	validateLocalCheckout func(context.Context, string, string, string) error
 
 	// Remote phone listener ([remote], remotewire.go). remote is the TLS
 	// listener a paired mobile client speaks the protocol.Frame envelope to,
@@ -667,6 +674,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	}
 	d.sendEscape = func(ctx context.Context, tmuxName string) error {
 		return d.tmuxClient().SendEscape(ctx, tmuxName)
+	}
+	d.sendBackground = func(ctx context.Context, tmuxName string) error {
+		return d.tmuxClient().SendBackground(ctx, tmuxName)
 	}
 	d.sendKey = func(ctx context.Context, tmuxName, key string) error {
 		return d.tmuxClient().SendKey(ctx, tmuxName, key)
@@ -1490,7 +1500,9 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				if s.AgentState == state.AgentWaitingInput {
 					s.InputReason = prev.InputReason
 					s.LastNotification = prev.LastNotification
+					s.InputNotified = prev.InputNotified
 				}
+				s.ReadyNotified = prev.ReadyNotified
 				s.TranscriptPath = prev.TranscriptPath
 				s.TranscriptSegments = prev.TranscriptSegments
 				s.StopHoldUntil = prev.StopHoldUntil

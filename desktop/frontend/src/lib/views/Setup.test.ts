@@ -14,8 +14,8 @@ vi.mock("$lib/theme-runtime.svelte", async () => {
   const palettes = await import("$lib/catppuccin");
   return { ...palettes, appearance: { init: appearanceInit } };
 });
-import Setup from "./Setup.svelte";
 import { DEFAULT_THEME_ID } from "$lib/catppuccin";
+import Setup from "./Setup.svelte";
 
 beforeEach(() => {
   vi.resetAllMocks(); store.hasConfig = false; store.alive = false; store.startDaemon = startDaemon; store.openURL = openURL;

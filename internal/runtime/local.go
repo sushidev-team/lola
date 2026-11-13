@@ -37,7 +37,15 @@ func (n *Native) OpenDirectory(ctx context.Context, p config.Project, id, dir, l
 
 // OpenDirectoryPrompt is OpenDirectory with the human's opening words, which go to the
 // agent as its first turn. See LocalFirstTurn for exactly what is typed.
-func (n *Native) OpenDirectoryPrompt(ctx context.Context, p config.Project, id, dir, location, kindName string, useAgent bool, prompt string) (result session.Session, launchErr error) {
+func (n *Native) OpenDirectoryPrompt(ctx context.Context, p config.Project, id, dir, location, kindName string, useAgent bool, prompt string) (session.Session, error) {
+	return n.OpenDirectoryProfile(ctx, p, id, dir, location, kindName, useAgent, prompt, "", "")
+}
+
+func (n *Native) OpenDirectoryProfile(ctx context.Context, p config.Project, id, dir, location, kindName string, useAgent bool, prompt, model, effort string) (result session.Session, launchErr error) {
+	if model != "" && !agent.ValidModel(model) || !agent.ValidEffort(agent.Parse(kindName), effort) {
+		return session.Session{}, errors.New("invalid AI model profile")
+	}
+
 	if !strings.HasPrefix(id, "lola-local-") || filepath.Base(id) != id {
 		return session.Session{}, errors.New("invalid local session id")
 	}
@@ -91,7 +99,7 @@ func (n *Native) OpenDirectoryPrompt(ctx context.Context, p config.Project, id, 
 	if err := os.WriteFile(filepath.Join(artifacts, "env"), env, 0600); err != nil {
 		return session.Session{}, err
 	}
-	s := session.Session{ID: id, Source: "native", Kind: session.KindLocal, Location: location, Project: p.Name, Worktree: dir, TmuxName: id, Agentless: !useAgent, Agent: string(kind), Title: "Shell · " + filepath.Base(dir)}
+	s := session.Session{ID: id, Source: "native", Kind: session.KindLocal, Location: location, Project: p.Name, Worktree: dir, TmuxName: id, Agentless: !useAgent, Agent: string(kind), Model: model, ModelEffort: effort, Title: "Shell · " + filepath.Base(dir)}
 	if useAgent {
 		s.Title = kind.Binary() + " · " + filepath.Base(dir)
 	}
@@ -102,7 +110,7 @@ func (n *Native) OpenDirectoryPrompt(ctx context.Context, p config.Project, id, 
 // session's own id, so IsLaunchPrompt hiding what starts with it can only hide that
 // session's own forgery.
 func localLaunchLead(id string) string {
-	return "You are Lola session " + id + ". You are in the project's main checkout, shared with other sessions."
+	return "You are Lola session " + id + ". You are in an existing checkout, which may be shared with other sessions."
 }
 
 // LocalFirstTurn is exactly what an agent in a borrowed directory is given as its first
@@ -147,7 +155,8 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool,
 		kind := agent.Parse(s.Agent)
 		// No cwd-based --continue: two agents can share this directory, so that
 		// would resume an unrelated conversation. Reopen starts a fresh agent.
-		args := agent.LaunchArgs(kind, n.LocalFirstTurn(s.ID, prompt))
+		args := append(agent.LaunchModelArgs(kind, s.Model), agent.EffortArgs(kind, s.ModelEffort)...)
+		args = append(args, agent.LaunchArgs(kind, n.LocalFirstTurn(s.ID, prompt))...)
 		for i, arg := range args {
 			if arg == ".lola/settings.json" {
 				args[i] = filepath.Join(artifacts, "settings.json")

@@ -142,6 +142,7 @@ func main() {
 			application.NewService(&HubService{}),
 			application.NewService(&TalkService{}),
 			application.NewService(&ConfigService{}),
+			application.NewService(&ProjectGitService{}),
 			application.NewService(login),
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
@@ -363,6 +364,12 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	ask := func(action string) func(*application.Context) {
 		return func(*application.Context) { app.Event.Emit(evtSessionAction, action) }
 	}
+	menu.Add("Switch to Git or Back").SetAccelerator("CmdOrCtrl+Shift+g").OnClick(ask("toggle-git"))
+	menu.Add("Show or Hide Sidebar").SetAccelerator("CmdOrCtrl+b").OnClick(ask("toggle-sidebar"))
+	menu.Add("Focus Sessions").SetAccelerator("CmdOrCtrl+Shift+e").OnClick(ask("focus-sessions"))
+	menu.Add("Keyboard Shortcuts…").SetAccelerator("CmdOrCtrl+/").OnClick(ask("shortcuts"))
+	menu.AddSeparator()
+	menu.Add("Find in Project History…").SetAccelerator("CmdOrCtrl+f").OnClick(ask("find-project-history"))
 	menu.Add("Search Projects and Sessions…").SetAccelerator("CmdOrCtrl+k").OnClick(ask("commands"))
 	menu.Add("New Session…").SetAccelerator("CmdOrCtrl+n").OnClick(ask("new-session"))
 	menu.Add("New Temporary Shell").SetAccelerator("CmdOrCtrl+Shift+n").OnClick(ask("temporary-shell"))
@@ -383,6 +390,7 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	menu.Add("Next Waiting").
 		SetAccelerator("CmdOrCtrl+j").
 		OnClick(ask(actionNext))
+	menu.Add("Previous Waiting").SetAccelerator("CmdOrCtrl+Shift+j").OnClick(ask("previous"))
 	menu.Add("Stop This Turn").
 		SetAccelerator("CmdOrCtrl+.").
 		OnClick(ask(actionStop))

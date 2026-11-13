@@ -11,9 +11,23 @@ export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "upda
 const SIDEBAR_KEY = "lola.sidebar";
 /** Which of the sidebar's two tabs is on show. */
 const SIDEBAR_TAB_KEY = "lola.sidebar.tab";
+const PROJECT_TAB_KEY = "lola.project.tab";
+const LAST_GIT_PROJECT_KEY = "lola.git.last-project";
 /** When each session was last on screen, so a finished turn can read as not yet seen. */
 const SEEN_KEY = "lola.seen";
 const SEEN_KEEP = 200;
+
+export type ProjectTab = "overview" | "git";
+
+function readProjectTab(): ProjectTab {
+  try { return localStorage.getItem(PROJECT_TAB_KEY) === "git" ? "git" : "overview"; }
+  catch { return "overview"; }
+}
+
+function readLastGitProject(): string {
+  try { return localStorage.getItem(LAST_GIT_PROJECT_KEY) ?? ""; }
+  catch { return ""; }
+}
 
 export type SidebarTab = "sessions" | "projects";
 
@@ -58,7 +72,40 @@ class Nav {
     this.openOverlay("newsession", project);
   }
 
+  gitSearchRequest = $state(0);
+  lastGitProject = $state(readLastGitProject());
+  rememberGitProject(name: string) {
+    if (!name || name === this.lastGitProject) return;
+    this.lastGitProject = name;
+    try { localStorage.setItem(LAST_GIT_PROJECT_KEY, name); } catch { /* keep the in-memory choice */ }
+  }
   view = $state<View>("cockpit");
+  private preferredProjectTab = $state<ProjectTab>(readProjectTab());
+  get projectTab(): ProjectTab { return this.preferredProjectTab; }
+  set projectTab(tab: ProjectTab) {
+    if (tab === "git" && this.view === "detail" && this.projectTab !== "git") this.rememberGitReturn();
+    this.preferredProjectTab = tab;
+    try { localStorage.setItem(PROJECT_TAB_KEY, tab); } catch { /* keep the in-memory choice */ }
+  }
+  private gitReturn: { view: View; project: string; scoped: boolean; projectTab: ProjectTab; selectedId: string; focusedTerm: string; sidebarTab: SidebarTab; sidebarBrowsing: boolean } | null = null;
+  get inGit() { return this.view === "detail" && this.projectTab === "git"; }
+  private rememberGitReturn() {
+    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, projectTab:this.projectTab, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarTab:this.sidebarTab, sidebarBrowsing:this.sidebarBrowsing};
+  }
+  returnFromGit() {
+    if (!this.inGit) return;
+    const previous = this.gitReturn;
+    this.gitReturn = null;
+    if (!previous) { this.projectTab = "overview"; return; }
+    this.view = previous.view;
+    this.project = previous.project;
+    this.scoped = previous.scoped;
+    this.projectTab = previous.projectTab;
+    this.selectedId = previous.selectedId;
+    this.focusedTerm = previous.focusedTerm;
+    this.sidebarBrowsing = previous.sidebarBrowsing;
+    this.setSidebarTab(previous.sidebarTab);
+  }
   /** Project name backing detail/pickers and the cockpit's project scope. */
   project = $state<string>("");
   /** Cockpit is scoped to `project` (vs global) when true. */
@@ -149,23 +196,6 @@ class Nav {
     this.dropFocus();
     this.setSidebarTab("sessions");
   }
-  /**
-   * What a sidebar project row does when clicked. Clicking the project the
-   * cockpit is ALREADY scoped to drops the scope — the same destination as the
-   * "All" breadcrumb. Without it the project list was the one nav group with no
-   * way back to every-project: Triage carries an explicit "All sessions" row,
-   * Projects does not, so the only exits were the breadcrumb or Escape.
-   *
-   * The toggle fires ONLY while the scope is actually in effect on screen. From
-   * the project hub or the home list a row is still drawn active (`scoped`
-   * outlives `goDetail`), and a click there has to mean "take me to this
-   * project's sessions" — un-scoping would send you somewhere you never asked
-   * for and look like the click was swallowed.
-   */
-  toggleProjectScope(name: string) {
-    const clearing = this.view === "cockpit" && this.scoped && this.project === name;
-    this.goCockpit(clearing ? "" : name);
-  }
   goHome() {
     this.view = "home";
     this.dropFocus();
@@ -175,10 +205,15 @@ class Nav {
     this.view = "team";
     this.dropFocus();
   }
-  goDetail(name: string) {
+  goDetail(name: string, tab: ProjectTab = this.projectTab) {
+    if (tab === "git" && !this.inGit) this.rememberGitReturn();
+    this.projectTab = tab;
     this.project = name;
+    // Project navigation is a workspace destination, not a session filter.
+    this.scoped = false;
     this.view = "detail";
     this.dropFocus();
+    this.setSidebarTab("projects");
   }
   goPRPicker(name: string) {
     this.project = name;

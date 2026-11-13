@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.6.0](https://github.com/sushidev-team/lola/compare/v0.5.0...v0.6.0) (2026-11-13)
+
+
+### Features
+
+* **ai:** add per-provider model and effort profiles ([9dd0f93](https://github.com/sushidev-team/lola/commit/9dd0f93dd551792456139cd05b668e3b6aa9ffe8))
+* **desktop:** refine Git workspace navigation and branch actions ([ef9cf51](https://github.com/sushidev-team/lola/commit/ef9cf5159344e4d5068ab6f0a4f3ef1aeaafe967))
+
+
+### Bug Fixes
+
+* **deps:** bump devalue, vite and source-map-js to patched versions ([35b5bf5](https://github.com/sushidev-team/lola/commit/35b5bf51cf39819ed02aae9d1013c39bff8199f5))
+* **deps:** patch devalue, vite, source-map-js advisories ([435809a](https://github.com/sushidev-team/lola/commit/435809a83c2fdcc65ec52939272c433b1dd56167))
+* **desktop:** explain Git failures with recovery actions ([5610dc6](https://github.com/sushidev-team/lola/commit/5610dc6904696fe90488a2f18ae6ed73735bca92))
+* **desktop:** show success toasts for Git actions ([c6e9700](https://github.com/sushidev-team/lola/commit/c6e97006a368a7aba2e672d61311b2db938fa271))
+* **desktop:** simplify Git deletion dialogs ([7d43792](https://github.com/sushidev-team/lola/commit/7d43792c5d1487fef83c4bf8bb77c77b5f88de37))
+
+## [0.5.0](https://github.com/sushidev-team/lola/compare/v0.4.0...v0.5.0) (2026-11-12)
+
+
+### Features
+
+* add configurable automatic PR comment resolution ([44205f8](https://github.com/sushidev-team/lola/commit/44205f8b8b8c4ceef12ce918be6cea0c5d9b67d3))
+* base for git editor ([275608e](https://github.com/sushidev-team/lola/commit/275608e35491e49150266ed5911732ee2d4ece69))
+* **conversation:** background running Claude commands from cards ([f6029cd](https://github.com/sushidev-team/lola/commit/f6029cd078117e69588c265064861c1910f2523d))
+* **desktop:** add AI commit draft and fetch-remote state to Git view ([8a7733d](https://github.com/sushidev-team/lola/commit/8a7733d340485083712bd2a98045700e8c41e0b3))
+* **desktop:** add AI commit drafts and safe discard for unstaged changes ([33cdc05](https://github.com/sushidev-team/lola/commit/33cdc054132391c0b9c1f3ae8ce4313115006c5e))
+* **desktop:** add conversation model and settings selector ([f77c893](https://github.com/sushidev-team/lola/commit/f77c893f272af265ad0088f23df761a1ffe8faa3))
+* **desktop:** add drag-to-PR and metadata picker to Git view ([ed9f494](https://github.com/sushidev-team/lola/commit/ed9f49416ea97c14038c18de4cca9ab850ae3f46))
+* **desktop:** add Git view actions, PR creation, and AI commit drafts ([9360046](https://github.com/sushidev-team/lola/commit/93600465fd780f5003cdcd5a08f60ec2dfe28b3c))
+* **desktop:** add pull request creation from Git view ([a377276](https://github.com/sushidev-team/lola/commit/a377276131d62f889cf6c493e78068d0744a205b))
+* **desktop:** expose session context for time tracking ([5070657](https://github.com/sushidev-team/lola/commit/50706576d2bf6b5e3661542c7e183e13ae65a14b))
+* **desktop:** publish branches and extend Git workspace actions ([1437082](https://github.com/sushidev-team/lola/commit/143708256b1f61d435cb171cbb088cc9139bd1bd))
+* **desktop:** simplify settings and add native path browsing ([a81b742](https://github.com/sushidev-team/lola/commit/a81b742e36a7601e48278f8b09409315d2f61436))
+* **notify:** add focused macOS alerts for input and ready PRs ([1843780](https://github.com/sushidev-team/lola/commit/18437802fb181ffe6702db6f3f4e5b1b3ffcc747))
+* **notify:** add focused macOS alerts for input and ready PRs ([d8f9f78](https://github.com/sushidev-team/lola/commit/d8f9f784f4a8e0cacd7c280b681aab56a6ea4c0c))
+* **sidebar:** add session background context menu ([b55610d](https://github.com/sushidev-team/lola/commit/b55610d79c363e348164924158ec2ba86c273a10))
+* **stack:** create a stack from a parent folder ([1743e33](https://github.com/sushidev-team/lola/commit/1743e33a88cdfcba39e07b0532c6aade9a2a0133))
+* **stack:** create a stack from a parent folder ([3c353d5](https://github.com/sushidev-team/lola/commit/3c353d5db10fdf413b06c9bc53f75b04382fc938))
+* **stack:** pick each member's labels on the stack's Members tab ([b826870](https://github.com/sushidev-team/lola/commit/b8268704a0d051bd5e64b87784ee892ff3399c1b))
+* **stack:** remove a project or a whole stack from the sidebar ([bca0f4d](https://github.com/sushidev-team/lola/commit/bca0f4d17763e21116046323598ac54607368a7a))
+* **ui:** animate current tool output previews ([7f412a7](https://github.com/sushidev-team/lola/commit/7f412a702959416f4ad54f4f4347a27de97d4ee0))
+
+
+### Bug Fixes
+
+* compact task checks and simplify review summaries ([fba17af](https://github.com/sushidev-team/lola/commit/fba17af76da386558eb19673ac95a9d820dced3d))
+* **desktop:** close active tab with Cmd-W ([e2022b3](https://github.com/sushidev-team/lola/commit/e2022b3189db65efd391b1f58113155d2b800b1f))
+* **desktop:** complete Git action menus and working-copy cues ([34eb83a](https://github.com/sushidev-team/lola/commit/34eb83addc30678fa96d4482888235d3e54ce502))
+* **desktop:** improve project context menus and resize layering ([f447cdf](https://github.com/sushidev-team/lola/commit/f447cdfe23665f13a8fc148ec24eb5b9b995abd3))
+* **desktop:** move compact review button into PR status header ([13d58b0](https://github.com/sushidev-team/lola/commit/13d58b04abd3a571b2768f6e0cea354c27a4358f))
+* **desktop:** remove duplicate project menu divider ([73e6384](https://github.com/sushidev-team/lola/commit/73e63845bb4af8dd17e34a3191fa3ef5b8b23844))
+* **desktop:** reveal remote fetch on hover ([1262e2f](https://github.com/sushidev-team/lola/commit/1262e2f128464c79d6eb0813cd66d604da9e589d))
+* **dispatch:** enforce concurrency_cap on running sessions and close the cross-poll race ([80b6e69](https://github.com/sushidev-team/lola/commit/80b6e69ab7bf71be0367d55df55c9e22fef8f880))
+* keep permission prompts stable during countdowns ([38870ef](https://github.com/sushidev-team/lola/commit/38870efbd6254678248aa5c5521ed009abf0df3d))
+* **stack:** address review on stack removal, label save and the mobile shim ([4595c36](https://github.com/sushidev-team/lola/commit/4595c3604bfc56c786d458d915f4e2d90bc05cd9))
+* **stack:** match folder apps to projects by resolved path ([d2ce63a](https://github.com/sushidev-team/lola/commit/d2ce63a55d8c44d153b3656cdc71c74308d3c42f))
+* **stack:** set the folder dialog's hints at the metadata size ([460fbb2](https://github.com/sushidev-team/lola/commit/460fbb27a513f4cbfccc1023a13c6dd0d512a286))
+* **stack:** show the Members tab after Linear updates ([96e648d](https://github.com/sushidev-team/lola/commit/96e648d702de13699c02c9d8492d02dbab19be6a))
+
 ## [0.4.0](https://github.com/sushidev-team/lola/compare/v0.3.0...v0.4.0) (2026-11-09)
 
 

@@ -942,6 +942,25 @@ checkpoint restores, and checks attachment again after reading the composer.
 Best-effort desktop + Slack notifications, routed by priority (P3.20). Optional;
 the defaults below apply when the table is absent.
 
+macOS banners are reserved for a human action: an agent question, permission
+request or dialog; an escalation that automation cannot resolve; or a **PR ready**
+banner. Idle reminders, automatic CI retries, review hand-offs and routine
+progress stay quiet on desktop (Slack still follows its configured routing).
+
+The ready banner requires the agent to be idle or finished, no queued follow-up
+work or running Lola review, and fresh GitHub confirmation: a non-draft open PR,
+passing checks (or no configured checks), completed required reviews, no
+unresolved threads (including outdated threads), and a clean merge state for
+the current head and base. Required Lola review gates must also pass. Unknown
+or failed lookups never announce readiness. PRs handled by the automatic merge
+queue stay quiet. Questions alert once per waiting episode; ready PRs once per
+head revision, with guards saved across daemon restarts. These checks run
+on the observer cycle (normally about 30 seconds).
+
+Banners use macOS Notification Center through `osascript`; macOS notification
+permissions and Focus settings still apply. The daemon sends them even when
+the Lola desktop app is closed.
+
 | Key | Type | Description |
 | --- | --- | --- |
 | `desktop` | bool | macOS desktop banners. Default `true` on macOS, `false` elsewhere (no-op off macOS). |
@@ -958,8 +977,8 @@ Routing priorities and their defaults:
 | Priority | Default channels | Used for |
 | --- | --- | --- |
 | `urgent` | `["desktop", "slack"]` | needs-input, escalations |
-| `action` | `["desktop", "slack"]` | changes-requested, CI failed after retries |
-| `info` | `["slack"]` | approved+parked, merged+cleaned |
+| `action` | `["desktop", "slack"]` | verified PR readiness; routine reactions and review findings reach Slack only |
+| `info` | `["slack"]` | routine progress, merged+cleaned |
 
 Priorities you omit under `[notify.routing]` keep their default channels; set a
 priority to `[]` to route it nowhere.
@@ -1022,6 +1041,40 @@ Best-of-N dispatch: a poll match that ALSO carries `label` is spawned as the
 | `label` | string | Trigger label UUID. Like every `[defaults]` label it should be a WORKSPACE label (it applies to every project's poll). Empty/absent = no label trigger; `lola bestof start` still works. |
 | `agents` | []string | The mix, one `<agent>[@<model>][:<count>]` entry each — e.g. `["claude:2", "codex@gpt-5-codex"]`. 2–6 attempts. Default `["claude:2"]`. A count after the LAST colon, so a model carrying a colon needs an explicit count (`claude@…-v1:0:1`). |
 
+### AI profiles
+
+Desktop **Settings → AI** stores independent profiles for Claude Code, Codex,
+and OpenCode. The provider selector changes the settings being edited; it does
+not switch the workspace or project agent. Each provider has **Fast**, **Balanced**,
+and **Thorough** profiles with a model and optional reasoning effort (OpenCode
+variant), plus action-to-profile mappings for commit/PR drafts, conflict
+resolution, session summaries, and planning.
+
+Profiles are opt-in per provider. Until enabled, existing settings keep their
+behavior. Drafts and newly started resolver sessions use the project's agent;
+summaries and planning use the workspace default agent. An existing resolver
+session retains its current model. Disabling profiles preserves their values.
+The `[brain].enabled` switch still controls automatic summaries.
+
+Example configuration (use `ai.codex` or `ai.opencode` for their independent settings):
+
+```toml
+[ai.claude]
+enabled = true
+[ai.claude.profiles.fast]
+model = "haiku"
+[ai.claude.profiles.balanced]
+model = "sonnet"
+[ai.claude.profiles.thorough]
+model = "opus"
+effort = "high"
+[ai.claude.actions]
+draft = "fast"
+resolve = "thorough"
+summary = "balanced"
+plan = "thorough"
+```
+
 ### `[brain]` (optional, off by default)
 
 The P5 orchestrator brain: when enabled, lola makes a single headless
@@ -1039,7 +1092,7 @@ content for the daemon's lifetime (up to 256 entries). They never affect merge
 checks or messages sent to the coding agent. Missing Claude, invalid output,
 and timeouts leave the original preview visible; failures back off for ten
 minutes. Each batch is capped at 30 seconds (or a shorter `timeout_seconds`).
-This panel always uses Haiku; `model` selects the other brain summaries.
+Without AI profiles, this panel uses Haiku and `model` selects the other brain summaries. Enabled AI profiles select the summary model for both.
 
 | Key | Type | Description |
 | --- | --- | --- |
@@ -1778,8 +1831,8 @@ history in `.lola/codex` retain that home when revived. Codex pane classificatio
 and turn-complete notifications are supported, but structured inline question
 extraction and transcript-based activity detection remain Claude-specific.
 
-**Distinct from lola's internal helpers.** The `[brain]` summarizer still uses
-`claude -p`; disable it for an installation without Claude. The `[statusagent]`
+**Distinct from lola's internal helpers.** The `[brain]` summarizer defaults to
+`claude -p`; enabled AI profiles can select Codex or OpenCode instead. The `[statusagent]`
 interpreter chooses its own `agent` independently of the worker. Reviews have
 their own provider catalog: select `codex-session` to use Codex for review as well.
 
@@ -1816,6 +1869,135 @@ picker (`a` in the TUI) and in the manual-worktree form.
 **Note:** codex/opencode are exercised end-to-end only with those binaries
 installed; the Go test suite covers the launch-arg and callback-wiring plumbing
 but does not run the real CLIs.
+
+## Project workspaces (desktop app)
+
+Click a project in the sidebar to open its workspace. **Overview** brings together
+its sessions, current activity, repository information and automation settings.
+Opening a session takes you to the session workspace; project navigation itself
+does not filter the session list. Stacks link to their member repositories.
+Your last-used Overview or Git tab is remembered across projects and app launches.
+Projects without a repository show Overview without changing that preference.
+
+**Git** browses the configured repository and its worktrees using your installed
+`git`. Local and remote branches select the history to inspect. The commit graph
+shows ancestry and branch labels; select a commit to inspect its changed files,
+or **⌘-click** (Ctrl-click on other platforms) a second commit to compare the two
+trees. Selection shows metadata and changed files; click a file or **View changes**
+to open a diff. The comparison identifies its direction and can be reversed. Diffs
+offer unified and side-by-side layouts.
+
+**AI draft** beside Commit message uses the enabled AI draft profile, or Claude
+Haiku by default, to suggest an editable subject and body from staged changes. It sends
+bounded staged patch excerpts, file names, recent commit subjects and the current
+draft; it does not include unstaged or untracked content or create a commit.
+If the index or your draft changes during generation, the result is discarded.
+Generation has a 30-second timeout; response time depends on CLI startup and the
+model service, so a one-second response is not guaranteed.
+
+**Branch** creates a local branch from the current HEAD or another selected
+local/remote tip, with an optional switch to it. **Create branch here** in a branch
+or commit context menu uses that exact commit. Existing branches are never reset;
+Git preserves working changes or refuses an incompatible switch.
+
+For a local-only branch, **Push** opens an inline **Publish branch** form. Choose
+a configured remote and edit the remote branch name; publishing sets that
+destination as the upstream after a successful push. Divergent remote history
+is refused. This also works from a nonchecked branch's context menu. **Set upstream**
+links a local branch to an existing remote branch without pushing. Dropping a local
+branch onto a remote branch offers both actions with that destination preselected.
+
+**Create PR** opens a GitHub pull request form from the toolbar, branch/worktree
+menus or a branch drop. Dropping one branch onto another preselects source and
+base in that direction. Choose the repositories and branches, edit the title and
+description, and use searchable multi-select fields for reviewers, assignees and
+labels. Draft PRs defer reviewer requests. The form uses your installed, signed-in
+`gh`; other Git hosts are not supported for PR creation yet. Source forks default
+to their parent repository. Fetch the target first if its base commit is missing
+locally. An unpublished source requires explicit **Push & create PR** consent;
+pushes never force remote history. Existing open PRs are reused, and metadata
+failures retain the created PR link. **AI draft** uses the enabled AI draft profile (Claude Haiku by default) with bounded
+committed changes and your editable draft; it never submits the PR.
+
+**Create worktree** in a branch menu creates a separate checkout in a new folder,
+optionally opening it. A branch already checked out elsewhere requires a new
+branch name. Lola refuses destinations inside existing checkouts or its managed
+storage. Commit menus offer **Cherry-pick commit** and **Revert commit**, with
+confirmation, clean-checkout checks and Continue/Skip/Abort controls for conflicts.
+Merge commits first ask which parent to interpret the change against. **Compare against
+working changes** compares a commit with staged, unstaged and untracked files,
+using a temporary index without changing the real index or checkout.
+
+Local, Remote, Worktrees and Stashes have distinct collapsible section headers. Branch
+names containing `/` form animated nested folders, and the active local branch is highlighted. Use **Clear branch filter** below the
+history to return to all branches. Working changes occupy the first history row only
+when the checkout has changed files. Its graph node connects to the actual HEAD,
+including when other branches have newer commits. File lists show a muted directory
+prefix that truncates before the filename. Right-click a changed file, or press
+Shift-F10, to view changes, stage/unstage the selection or copy paths.
+The Changes header centers the list/tree controls and provides a trash action for
+all unstaged changes. Its confirmation distinguishes restoring tracked files from
+deleting untracked files; staged changes and ignored files are kept. If files or
+the index change while confirming, Lola asks you to review and confirm again.
+Nested repositories, submodules and active conflict recovery are never discarded
+by this action.
+Press **⌘F** (Ctrl-F) to search loaded commits. The column controls at the top right of history
+show or hide columns; drag a column divider or focus it and use the arrow keys to
+resize. Column visibility and widths are remembered.
+Drag either sidebar's inner edge to resize it, or focus the divider and use the
+arrow keys. Widths are remembered; double-click a divider to reset it.
+
+Branch tips and checkout markers sit to the left of the graph. Matching colors
+connect the labels and graph lanes. A faint tint fades right to left inside only
+the graph column; hovering or focusing a
+commit emphasizes its lane. The commit details list branches that reach the commit
+through loaded history, since shared ancestors are not owned by a single branch.
+GitHub remotes show their user or organization avatar. Author avatars and GitHub
+logins load separately through authenticated `gh`; missing identities and offline
+lookups fall back to initials without delaying local history. Avatar images and
+repository-scoped author/email associations are cached locally. Cached images
+appear immediately; each app launch refreshes profiles in the background when
+first used, keeping the previous image if offline. Initial lookups have a subtle
+loading treatment that respects reduced motion.
+
+Hover the commit-message column for a compact preview with author, date, short
+SHA and grouped branch-history chips. Branch badges align with their graph node
+and keep a compact, left-aligned layout.
+
+The working-copy panel keeps staged and unstaged files in separate scrolling
+sections, with compact list and folder-tree layouts. Shift-click selects a visible
+range; ⌘/Ctrl-click toggles individual files. Green hover actions and the selected
+file action stage precisely that selection. Review a file, stage or
+unstage it, then write a subject and optional body and commit the staged changes.
+**Amend last commit** loads the existing message into an empty draft. Local-only
+commits amend immediately; commits contained in a locally known remote branch
+show a brief confirmation. This uses the latest fetched remote history without
+a network request. A failed check or changed HEAD blocks the amend; it does not
+force-push rewritten history. Fetch, ordinary
+push and fast-forward-only pull are available from the toolbar. Refresh reloads
+changes made by a terminal or another application. Selecting a branch browses it;
+it does not check it out. Double-click a branch to check it out (or open its
+existing worktree). Right-click branches, remotes, worktrees, commits and stashes
+for their actions. Drag a branch onto another to choose an explicitly named merge
+or rebase, followed by confirmation. Merge/rebase conflicts stay visible with
+Continue and Abort actions.
+
+Pulling an unchecked branch fast-forwards its configured upstream without
+switching the visible checkout; divergence requires an explicit merge or rebase.
+Branch pushes use the existing upstream. **Stash** saves staged, unstaged and
+untracked changes (ignored files stay put); **Pop** restores a selected stash to a
+clean checkout and only removes it after success. Apply, pop and drop are also in
+the stash context menu. These actions require confirmation, and conflicts retain
+the saved stash.
+
+Commits use Git's effective repository/global configuration, identity, hooks and
+credential/signing helpers. The shield beside Amend exposes the configured signing mode in its tooltip.
+To sign every commit, configure `commit.gpgSign=true` in Git along with your
+`user.signingKey` and, for SSH keys, `gpg.format=ssh`. Lola does not turn signing off
+when a helper fails; the error is shown and the message is kept for retry. A
+passphrase-protected key needs its normal signing agent or GUI pinentry available
+to the desktop process. Sandboxed agent worktrees cannot be operated on through
+host Git in this view.
 
 ## The session view (desktop app)
 

@@ -450,7 +450,7 @@
 
   function openProject(name: string) {
     if (suppressClick) return;
-    nav.toggleProjectScope(name);
+    nav.goDetail(name);
   }
 
   function toggleGroup(name: string, collapsed: boolean) {
@@ -570,11 +570,7 @@
   {@const stack = memberOf(store.projects, p.name)}
   {@const d = pollDot(p, stack)}
   {@const match = searchMatch(query, displayName(p), p.repo, p.path)}
-  {@const active = nav.scoped && nav.project === p.name}
-  <!-- Mirrors nav.toggleProjectScope's own condition: a row is drawn active
-       on the project hub too (scope outlives goDetail), and there the click
-       still navigates rather than clearing. -->
-  {@const clears = active && nav.view === "cockpit"}
+  {@const active = ["detail", "prpicker", "ticketpicker"].includes(nav.view) && nav.project === p.name}
   <NavRow
     label={displayName(p)}
     glyph={d.glyph}
@@ -583,11 +579,7 @@
     {active}
     title={stack ? d.hint : p.lastError
       ? `poll error: ${p.lastError}`
-      : clears
-        ? "clear the project filter"
-        : isStack(p)
-          ? "stack — scope the cockpit to it"
-          : "scope the cockpit to this project"}
+      : isStack(p) ? "Open stack overview" : "Open project overview and Git"}
     onclick={() => openProject(p.name)}
     onkeydown={(e) => {
       // A member is placed by its stack, not by the arrangement keys.
@@ -631,13 +623,6 @@
         >
           <Icon name="settings" class="h-3.5 w-3.5" />
         </Button>
-        <Button
-          size="xs"
-          icon
-          title="open project hub"
-          aria-label="{displayName(p)} hub"
-          onclick={() => nav.goDetail(p.name)}><Icon name="chevron-right" size={14} /></Button
-        >
       </span>
     {/snippet}
   </NavRow>

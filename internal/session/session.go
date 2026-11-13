@@ -64,7 +64,7 @@ type Session struct {
 	PRCommentGuards map[string]string `json:"pr_comment_guards,omitempty"`
 
 	Name      string `json:"name,omitempty"`
-	Location  string `json:"location,omitempty"` // main | temporary; empty for worktrees
+	Location  string `json:"location,omitempty"` // main | checkout | temporary; empty for owned worktrees
 	ID        string `json:"id"`
 	Source    string `json:"source"`          // "ao" | "native"
 	Agent     string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
@@ -154,6 +154,11 @@ type Session struct {
 	// hook — rendered agent output: display only, never executed, never fed
 	// back to any agent.
 	LastNotification string `json:"last_notification,omitempty"`
+	// InputNotified deduplicates one waiting episode; cleared when the agent resumes.
+	InputNotified state.InputReason `json:"input_notified,omitempty"`
+	// ReadyNotified identifies the repo/PR/head last announced as ready.
+	// Like the PR, this field belongs to a lane in stack sessions.
+	ReadyNotified string `json:"ready_notified,omitempty"`
 
 	// Nudged records that the agent's own "waiting for your input"
 	// notification fired while the session sat idle. It is a DISPLAY-ONLY
@@ -512,7 +517,8 @@ type Session struct {
 	// agent's own default). Persisted because a revive must relaunch the SAME
 	// model: a best-of attempt on opus that comes back on the default would no
 	// longer be the attempt it is compared as.
-	Model string `json:"model,omitempty"`
+	Model       string `json:"model,omitempty"`
+	ModelEffort string `json:"modelEffort,omitempty"`
 
 	// BestOf is the best-of-N GROUP this session is one attempt of ("" = an
 	// ordinary session). Attempt is its 1-based place in the group, Attempts the
@@ -664,6 +670,7 @@ func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, no
 		s.AgentStateSince = now
 		if a != state.AgentWaitingInput {
 			s.InputReason = ""
+			s.InputNotified = ""
 			// LastNotification DESCRIBES the waiting_input condition ("Claude is
 			// waiting for your input", a permission prompt, …). It used to outlive
 			// it: only InputReason was cleared here, so once the human answered and

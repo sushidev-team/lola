@@ -560,6 +560,32 @@ describe("SettingsForm", () => {
     }
   });
 
+  it('preserves each provider’s AI profiles while switching the editing context', async () => {
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole('tab',{name:'AI'}));
+    expect(screen.getByLabelText('AI provider')).toHaveValue('codex');
+    await fireEvent.click(screen.getByRole('checkbox',{name:'Use these profiles for Codex'}));
+    await fireEvent.change(screen.getByLabelText('Thorough model'),{target:{value:'custom'}});
+    await fireEvent.input(screen.getByLabelText('Custom Thorough model'),{target:{value:'my-codex-model'}});
+    await fireEvent.change(screen.getByLabelText('Conflict resolution profile'),{target:{value:'balanced'}});
+    await fireEvent.change(screen.getByLabelText('AI provider'),{target:{value:'claude'}});
+    expect(screen.getByLabelText('Thorough model')).toHaveDisplayValue('Opus — complex reasoning');
+    await fireEvent.click(screen.getByRole('checkbox',{name:'Use these profiles for Claude Code'}));
+    await fireEvent.change(screen.getByLabelText('AI provider'),{target:{value:'opencode'}});
+    await fireEvent.change(screen.getByLabelText('Fast model'),{target:{value:'custom'}});
+    await fireEvent.input(screen.getByLabelText('Custom Fast model'),{target:{value:'provider/fast'}});
+    await fireEvent.change(screen.getByLabelText('AI provider'),{target:{value:'codex'}});
+    expect(screen.getByLabelText('Custom Thorough model')).toHaveValue('my-codex-model');
+    expect(screen.getByLabelText('Conflict resolution profile')).toHaveValue('balanced');
+    await fireEvent.click(screen.getByRole('button',{name:/^save$/i}));
+    await waitFor(()=>expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({agent:'codex',ai:{
+      codex:{enabled:true,profiles:{thorough:{model:'my-codex-model'}},actions:{resolve:'balanced'}},
+      claude:{enabled:true,profiles:{thorough:{model:'opus'}}},
+      opencode:{enabled:false,profiles:{fast:{model:'provider/fast'}}},
+    }});
+  });
+
   it("clamps an unknown deep-linked tab id to Defaults instead of a blank pane", async () => {
     nav.overlayTab = "nope";
     try {

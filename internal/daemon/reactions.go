@@ -605,7 +605,7 @@ func (d *Daemon) reactApproved(ctx context.Context, s session.Session, notifier 
 		return
 	}
 	d.reactSave()
-	body := fmt.Sprintf("%s is approved and green — ready to merge", issueLabel(s))
+	body := fmt.Sprintf("%s is approved and green; Lola is checking remaining work and review threads", issueLabel(s))
 	if d.mergeQueueOn() && queueMember(s) {
 		body = fmt.Sprintf("%s is approved and green — queued in lola's merge queue", issueLabel(s))
 	}

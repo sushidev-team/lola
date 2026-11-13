@@ -34,7 +34,10 @@ type OpenManualArgs = ProtocolOpenManualArgs;
 
 type OpenTicketArgs = ProtocolOpenTicketArgs;
 
-type Flash = { text: string; kind: "good" | "warn" | "bad" } | null;
+type RemovalFollowup = { branch: string; onRemoved: () => void | Promise<void> };
+
+export type FlashOptions = { description?: string; action?: { label: string; run: () => void | Promise<void> } };
+type Flash = ({ text: string; kind: "good" | "warn" | "bad" } & FlashOptions) | null;
 
 /**
  * The session's sort tier, over BOTH axes (state.SortRank).
@@ -270,24 +273,31 @@ class Store {
     return this.retained.find((s) => s.id === id);
   }
 
+  /** Only an unambiguous, exact checkout match can authorize session teardown. */
+  sessionForWorktree(path: string): SessionInfo | undefined {
+    if (!path) return;
+    const owners = this.sessions.filter(s => s.worktree === path || s.apps?.some(app => app.worktree === path));
+    return owners.length === 1 ? owners[0] : undefined;
+  }
+
   /** What the sidebar lists: the live sessions, or the last ones known while the daemon is down. */
   get rosterSessions(): SessionInfo[] {
     if ((this.alive && !this.awaitingList) || this.sessions.length) return this.sessions;
     return this.retained;
   }
 
-  setFlash(text: string, kind: "good" | "warn" | "bad" = "good") {
+  setFlash(text: string, kind: "good" | "warn" | "bad" = "good", options: FlashOptions = {}) {
     // Sentence case at the one place every flash passes: call sites write
     // "daemon restarted", the toast shows "Daemon restarted". Only a first word
     // of plain letters is touched: a message that opens with an identifier
     // ("lola-p1-eng-1: switched …", "eng-123 …") keeps it verbatim.
-    this.flash = { text: /^[a-z]+(?![\w-])/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text, kind };
+    this.flash = { text: /^[a-z]+(?![\w-])/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text, kind, ...options };
     this.armFlashTimer();
   }
 
   /** How long a flash stays: an error is read, not glanced at. */
   private flashMs() {
-    return this.flash?.kind === "bad" ? 8000 : 4000;
+    return this.flash?.action ? 10000 : this.flash?.kind === "bad" ? 8000 : 4000;
   }
 
   private armFlashTimer() {
@@ -467,7 +477,7 @@ class Store {
    * worktree is all that survives, so the honest answer is a second question
    * (askForceKill), not a red flash telling a GUI user to rerun a CLI flag.
    */
-  async kill(session: string, force = false, keepWorktree = false) {
+  async kill(session: string, force = false, keepWorktree = false, onRemoved?: () => void | Promise<void>) {
     // Reap the session's worktree shells too, so they don't linger as orphan tabs
     // once the daemon removes the worktree (best-effort, fire-and-forget). The
     // daemon kills the shell tmux sessions on a stop as well.
@@ -476,6 +486,7 @@ class Store {
       const r = await DaemonService.Kill(session, force, keepWorktree);
       this.setFlash(keepWorktree ? `stopped ${session}; worktree kept` : `killed ${session}`, "good");
       void this.refresh();
+      if (r?.removed && !keepWorktree) await onRemoved?.();
       return r;
     } catch (err) {
       const msg = String(err);
@@ -487,7 +498,7 @@ class Store {
       // The agent IS gone and the daemon has flagged the session dead, so refresh
       // regardless of how the follow-up dialog is answered.
       void this.refresh();
-      this.askForceKill(session, dir);
+      this.askForceKill(session, dir, onRemoved);
       return undefined;
     }
   }
@@ -691,8 +702,29 @@ class Store {
   // Every irreversible action routes through `confirm` so it asks the same way,
   // whether it was triggered by a shortcut or a button.
 
-  /** Ask, then kill. Used by the 'x' shortcut and the session panel's button. */
-  askKill(id: string) {
+  /** Explain protected Git actions and route owned checkouts through session cleanup. */
+  askRemoveManagedWorktree(path: string, followup?: RemovalFollowup) {
+    const owner = this.sessionForWorktree(path);
+    if (!owner || owner.location || owner.goalId) {
+      confirm.ask({
+        title: "Protected worktree",
+        body: path,
+        detail: owner?.goalId
+          ? `This checkout belongs to goal ${owner.goalId}. Manage it through the goal's actions; stopping its session keeps the worktree and branch.`
+          : owner?.location
+          ? "This session uses an existing directory. Closing the session preserves the checkout and its branch."
+          : "Lola protects this checkout, but its owning session could not be identified. Refresh the session list and remove it through its owning session. Direct Git deletion is unavailable.",
+        confirmLabel: "Got it",
+        confirmVariant: "primary",
+        onConfirm: () => {},
+      });
+      return;
+    }
+    this.askKill(owner.id, path, followup);
+  }
+
+  /** Ask, then kill. Git actions additionally pin the owning checkout and scope. */
+  askKill(id: string, worktreePath?: string, followup?: RemovalFollowup) {
     const s = this.sessionById(id);
     const label = s ? s.issue || s.id.slice(0, 8) : id;
     const direct = s?.location === "ssh";
@@ -700,15 +732,29 @@ class Store {
     // may outlive them. Say so on the one dialog that does it.
     const sshRan = s?.ssh?.connections?.some((c) => c.state !== "closed" && (c.commandsRun ?? 0) > 0);
     const sshNote = sshRan ? ` ${SSH_REMOTE_OUTLIVES}` : "";
+    // A Git-menu confirmation is tied to the session and checkout shown in it.
+    // Re-check the full scope so a refreshed stack cannot gain extra members.
+    const scope = (session: SessionInfo | undefined) => JSON.stringify([session?.worktree, session?.branch, session?.location, session?.goalId, session?.stack, session?.apps?.map(app => [app.worktree, app.branch])]);
+    const originalScope = scope(s);
+    const remove = (keepWorktree = false) => {
+      if (worktreePath) {
+        const owner = this.sessionForWorktree(worktreePath);
+        if (owner?.id !== id || scope(owner) !== originalScope) {
+          this.setFlash("The owning session changed. Reopen the removal dialog.", "warn");
+          return;
+        }
+      }
+      void this.kill(id, false, keepWorktree, followup?.onRemoved);
+    };
     confirm.ask({
-      title: direct ? "End session?" : s?.location ? "Close session?" : "Kill session?",
-      body: direct ? `End ${s?.title || label}?` : s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
-      detail: (direct ? "This closes its connections and its agent. The command record stays on disk for 14 days in ~/.lola/state/ssh/." :
+      title: worktreePath ? (followup?.branch ? "Remove worktree and branch?" : "Remove worktree?") : direct ? "End session?" : s?.location ? "Close session?" : "Kill session?",
+      body: worktreePath ? (s?.issue ? `${s.issue}${s.title ? ` — ${s.title}` : ""}` : s?.title || id) : direct ? `End ${s?.title || label}?` : s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
+      detail: (worktreePath ? `Stops the session and removes its worktree and owned branches.${followup?.branch ? ` Also deletes local branch ${followup.branch} if Git allows it.` : ""} Unpushed commits may be lost. Remote branches are kept.${s?.stack ? ` This removes the entire stack, including: ${(s.apps ?? []).map(app => app.worktree || app.name).join(", ")}.` : ""}` : direct ? "This closes its connections and its agent. The command record stays on disk for 14 days in ~/.lola/state/ssh/." :
         s?.location ? "Close stops the session and its terminals. The directory and all files are preserved." :
         "Kill stops its agent and removes the worktree — unpushed work is lost. Stop keeps the worktree so the session can be revived.") + sshNote,
-      confirmLabel: direct ? "End session" : s?.location ? "Close session" : "Kill",
-      onConfirm: () => void this.kill(id),
-      alternative: { label: s?.location ? "Stop, keep session" : "Stop, keep worktree", onConfirm: () => void this.kill(id, false, true) },
+      confirmLabel: worktreePath ? "Remove" : direct ? "End session" : s?.location ? "Close session" : "Kill",
+      onConfirm: () => remove(),
+      alternative: worktreePath ? undefined : { label: s?.location ? "Stop, keep session" : "Stop, keep worktree", onConfirm: () => remove(true) },
     });
   }
 
@@ -718,7 +764,7 @@ class Store {
    * force is the only way past it, and it destroys work, so it gets its own
    * question with the path spelled out rather than riding on the first "Kill?".
    */
-  askForceKill(id: string, dir: string) {
+  askForceKill(id: string, dir: string, onRemoved?: () => void | Promise<void>) {
     const s = this.sessionById(id);
     const label = s ? s.issue || s.id.slice(0, 8) : id;
     confirm.ask({
@@ -726,7 +772,7 @@ class Store {
       body: `${label}'s agent is stopped, but its worktree still has uncommitted changes. Delete the worktree anyway?`,
       detail: dir ? `${dir} — the changes there are lost for good.` : "The changes there are lost for good.",
       confirmLabel: "Delete worktree",
-      onConfirm: () => void this.kill(id, true),
+      onConfirm: () => void this.kill(id, true, false, onRemoved),
     });
   }
 

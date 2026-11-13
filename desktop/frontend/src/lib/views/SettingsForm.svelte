@@ -5,6 +5,7 @@
   import Icon from "$lib/components/Icon.svelte";
   import { onMount, onDestroy, tick } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
+  import AISettings from "$lib/components/AISettings.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
@@ -86,6 +87,7 @@
     { id: "sshhosts", label: "SSH hosts", group: "Connections" },
     { id: "remote", label: "Phone access", group: "Connections" },
     { id: "hub", label: "Team hub", group: "Connections" },
+    { id: "ai", label: "AI", group: "Automation" },
     { id: "review", label: "Review", group: "Automation" },
     { id: "assistants", label: "Assistants", group: "Automation" },
   ];
@@ -1228,6 +1230,11 @@
             </label>
           </SettingsGroup>
         </section>
+      {:else if tab === "ai"}
+        <section>
+          {@render head("AI")}
+          <AISettings bind:value={d.ai} defaultProvider={d.agent || 'claude'}/>
+        </section>
       {:else if tab === "assistants"}
         <section>
           {@render head("Assistants")}
@@ -1250,8 +1257,11 @@
               </label>
           </SettingsGroup>
           <SettingsGroup title="Model and limits">
-            <AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
-              onModelChange={(value) => { d.brainModel = value; }} />
+            {#if d.ai?.[d.agent || 'claude']?.enabled}
+              <p class={hintCls}>Model selected by the Session summaries profile in AI settings.</p>
+              <Button size="sm" onclick={()=>selectTab('ai')}>Configure AI profiles</Button>
+            {:else}<AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
+              onModelChange={(value) => { d.brainModel = value; }} />{/if}
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.brainTimeout} />

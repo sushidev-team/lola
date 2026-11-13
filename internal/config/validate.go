@@ -286,6 +286,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateReactions()...)
 	errs = append(errs, c.validateNotify()...)
 	errs = append(errs, c.validateBrain()...)
+	errs = append(errs, c.validateAI()...)
 	errs = append(errs, c.validateMergeQueue()...)
 	errs = append(errs, c.validateBestOf()...)
 	errs = append(errs, c.validateStatusAgent()...)

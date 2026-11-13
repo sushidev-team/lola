@@ -1,4 +1,8 @@
+import House from '@lucide/svelte/icons/house';
+import Archive from '@lucide/svelte/icons/archive';
+import ArchiveRestore from '@lucide/svelte/icons/archive-restore';
 import Trash2 from '@lucide/svelte/icons/trash-2';
+import Tag from '@lucide/svelte/icons/tag';
 import CircleMinus from '@lucide/svelte/icons/circle-minus';
 import LogOut from '@lucide/svelte/icons/log-out';
 import ArrowUpLeft from '@lucide/svelte/icons/arrow-up-left';
@@ -24,6 +28,7 @@ import CircleDot from '@lucide/svelte/icons/circle-dot';
 import CircleHelp from '@lucide/svelte/icons/circle-help';
 import CirclePause from '@lucide/svelte/icons/circle-pause';
 import CircleX from '@lucide/svelte/icons/circle-x';
+import Cloud from '@lucide/svelte/icons/cloud';
 import Clock from '@lucide/svelte/icons/clock';
 import Lock from '@lucide/svelte/icons/lock';
 import Code from '@lucide/svelte/icons/code';
@@ -79,6 +84,9 @@ import Package from '@lucide/svelte/icons/package';
 import X from '@lucide/svelte/icons/x';
 
 export const icons = {
+  house: House,
+  'archive': Archive,
+  'archive-restore': ArchiveRestore,
   'circle-minus': CircleMinus,
   'log-out': LogOut,
   'arrow-up-left': ArrowUpLeft,
@@ -91,6 +99,7 @@ export const icons = {
   'ban': Ban,
   'check': Check,
   'trash-2': Trash2,
+  'tag': Tag,
   'chevron-down': ChevronDown,
   'chevron-left': ChevronLeft,
   'chevron-right': ChevronRight,
@@ -105,6 +114,7 @@ export const icons = {
   'circle-pause': CirclePause,
   'circle-x': CircleX,
   'clock': Clock,
+  'cloud': Cloud,
   'code': Code,
   'copy': Copy,
   'ellipsis': Ellipsis,

@@ -105,6 +105,23 @@ describe("SidebarProjects", () => {
     nav.closeOverlay();
     nav.scoped = false;
     nav.project = "";
+    nav.view = "cockpit";
+  });
+
+  it("opens the project workspace instead of filtering sessions", async () => {
+    nav.goCockpit("okane");
+    nav.setSidebarTab("projects");
+    render(SidebarProjects);
+    const row = screen.getByRole("button", { name: "lola" });
+    await fireEvent.click(row);
+    expect(nav.view).toBe("detail");
+    expect(nav.project).toBe("lola");
+    expect(nav.scoped).toBe(false);
+    expect(nav.sidebarTab).toBe("projects");
+    expect(row).toHaveAttribute("aria-current", "true");
+    await fireEvent.click(row);
+    expect(nav.view).toBe("detail");
+    expect(nav.project).toBe("lola");
   });
 
   it("adds through a MENU, not straight into the project form", async () => {

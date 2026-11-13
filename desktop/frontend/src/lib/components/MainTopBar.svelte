@@ -95,7 +95,7 @@
 >
   {#if !nav.sidebarOpen}
     <!-- Placed AFTER the traffic-light padding, never inside it. -->
-    <Button icon title="show sidebar (b)" aria-label="Show sidebar" onclick={() => nav.toggleSidebar()}><Icon name="chevrons-right" size={14} /></Button>
+    <Button icon title="show sidebar (⌘B)" aria-label="Show sidebar" onclick={() => nav.toggleSidebar()}><Icon name="chevrons-right" size={14} /></Button>
   {/if}
 
   {#if waiting > 0}
@@ -167,7 +167,7 @@
            not by the class attribute. -->
       <Button
         class={store.alive ? "text-warn!" : "text-bad!"}
-        title="{daemonHealth} · open doctor (d)"
+        title="{daemonHealth} · open doctor"
         onclick={() => nav.openOverlay("doctor")}
       >
         <span aria-hidden="true"><GlyphIcon glyph={store.alive ? "▲" : "○"} /></span>

@@ -13,12 +13,16 @@
 export type ConfirmRequest = {
   /** Dialog title, e.g. "Kill session?" */
   title: string;
-  /** The question, as a sentence naming the target. */
+  /** Optional target shown as a compact secondary label. */
+  subject?: string;
+  /** Short explanation of what the action does. */
   body: string;
   /** Optional second line spelling out the consequence. */
   detail?: string;
   /** Label for the confirming button, e.g. "Kill". */
   confirmLabel: string;
+  /** Destructive by default; use primary for non-destructive confirmations. */
+  confirmVariant?: 'primary' | 'danger-solid';
   /**
    * Run on accept. Kept as a closure so the caller decides what "yes" means.
    * Receives the ids of the checked `choices` (empty when there are none).

@@ -79,12 +79,18 @@
         role="presentation"
         onmouseenter={() => store.holdFlash(true)}
         onmouseleave={() => store.holdFlash(false)}
+        onfocusin={() => store.holdFlash(true)}
+        onfocusout={() => store.holdFlash(false)}
         in:enter|global
         out:leave|global
       >
         <span class="absolute inset-y-0 left-0 w-1 {ACCENT[flash.kind]}" aria-hidden="true"></span>
         <span class="mt-px {TONE[flash.kind]}"><Icon name={ICON[flash.kind]} size={16} /></span>
-        <span class="selectable min-w-0 py-px break-words">{flash.text}</span>
+        <div class="selectable min-w-0 py-px break-words">
+          <span class:font-medium={!!flash.description}>{flash.text}</span>
+          {#if flash.description}<p class="mt-1 text-ink-2">{flash.description}</p>{/if}
+          {#if flash.action}<Button size="xs" variant="secondary" class="mt-2" onclick={() => {const action=flash.action; store.dismissFlash(); void action?.run();}}>{flash.action.label}</Button>{/if}
+        </div>
         <Button size="xs" icon aria-label="Dismiss" onclick={() => store.dismissFlash()}>
           <Icon name="x" size={14} />
         </Button>

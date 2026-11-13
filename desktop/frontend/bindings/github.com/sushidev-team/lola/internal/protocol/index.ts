@@ -15,6 +15,8 @@ export type {
     AgentQueueReleaseArgs,
     AgentSayArgs,
     AgentSayData,
+    AgentSettingArgs,
+    AgentSettingData,
     AgentStopArgs,
     AgentStopData,
     BestOfArgs,

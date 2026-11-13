@@ -23,6 +23,10 @@ func (d *Daemon) handleTalk(ctx context.Context, req protocol.Request) protocol.
 		}
 	}
 	switch req.Cmd {
+	case protocol.CmdAgentSetting:
+		return sshRoute(req, func(a protocol.AgentSettingArgs) (protocol.AgentSettingData, error) {
+			return d.handleAgentSetting(ctx, a)
+		})
 	case protocol.CmdAgentFeed:
 		return sshRoute(req, func(a protocol.AgentFeedArgs) (protocol.AgentFeedData, error) { return d.handleAgentFeed(ctx, a) })
 	case protocol.CmdAgentFeedOutput:

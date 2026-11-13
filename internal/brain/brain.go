@@ -1,4 +1,4 @@
-// Package brain is Lola's bounded, opt-in, headless-claude summarizer (PLAN
+// Package brain is Lola's bounded, opt-in, headless summarizer (PLAN
 // P5.25). It exists to turn one attacker-influenceable blob of context (a PR
 // diff, failing CI logs, a tmux pane tail) into a short human-facing SUMMARY
 // at a single decision point, and nothing else.
@@ -9,7 +9,7 @@
 //     explicitly requested planning has its own entry point.
 //     This package has no global state and changes no behavior on its own; a
 //     disabled brain is simply never constructed.
-//   - READ-ONLY + BOUNDED. Each summary is exactly one `claude -p` invocation
+//   - READ-ONLY + BOUNDED. Each summary is exactly one configured agent invocation
 //     with a hard context.WithTimeout (default 120s), a size-capped context
 //     (~12KB) on STDIN, and a bounded stdout read (~8KB). No loops, no
 //     retries: on any error or timeout the caller falls back to its generic
@@ -21,10 +21,8 @@
 //     worker agent (tmux send-keys) — that would be prompt-injection straight
 //     into the control path.
 //
-// Auth is inherited, never managed here: the child claude runs with the
-// daemon's environment (os.Environ), so it uses the user's ~/.claude session
-// or ANTHROPIC_API_KEY from the daemon env. This package never reads, sets, or
-// logs that key; surfaced stderr is claude's own diagnostic text.
+// Auth is inherited from the selected CLI. This package never reads or logs
+// credentials; errors retain the CLI’s own diagnostic text.
 package brain
 
 import (
@@ -32,6 +30,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sushidev-team/lola/internal/agent"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -72,6 +72,8 @@ var (
 // Client runs bounded headless claude summaries. The zero value is usable and
 // resolves "claude" via PATH with a 120s timeout.
 type Client struct {
+	Agent  agent.Kind
+	Effort string
 	// Bin is the claude executable; empty resolves "claude" via PATH.
 	Bin string
 	// Model, when non-empty, is passed as `--model <m>`; empty lets claude
@@ -90,6 +92,9 @@ type Client struct {
 func (c *Client) bin() string {
 	if c.Bin != "" {
 		return c.Bin
+	}
+	if c.Agent != "" {
+		return agent.Parse(string(c.Agent)).Binary()
 	}
 	return defaultBin
 }
@@ -116,7 +121,13 @@ func (c *Client) Available() bool {
 // ErrNotFound / ErrTimeout / ErrNonZeroExit on failure. It makes exactly one
 // attempt with a hard timeout; it never retries.
 func (c *Client) Summarize(ctx context.Context, instruction, contextText string) (string, error) {
-	out, err := runClaude(ctx, c.bin(), c.Dir, c.Model, instruction, capContext(contextText, maxContextBytes), c.timeout())
+	var out string
+	var err error
+	if (c.Agent == "" || c.Agent == agent.Claude) && c.Effort == "" {
+		out, err = runClaude(ctx, c.bin(), c.Dir, c.Model, instruction, capContext(contextText, maxContextBytes), c.timeout())
+	} else {
+		out, err = runHelper(ctx, c.Agent, c.bin(), c.Dir, c.Model, c.Effort, instruction, capContext(contextText, maxContextBytes), c.timeout())
+	}
 	if err != nil {
 		return "", err
 	}
@@ -152,6 +163,43 @@ var runClaude = func(ctx context.Context, bin, dir, model, instruction, stdin st
 	return stdout.String(), nil
 }
 
+// runHelper keeps helper work bounded and independent of interactive agent settings.
+var runHelper = func(ctx context.Context, kind agent.Kind, bin, dir, model, effort, instruction, stdin string, timeout time.Duration) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	kind = agent.Parse(string(kind))
+	args := helperArgs(kind, model, effort, instruction)
+	cmd := exec.CommandContext(cctx, bin, args...)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(stdin)
+	if kind == agent.OpenCode {
+		// This dedicated agent's deny rules apply after global user permissions.
+		cmd.Env = append(os.Environ(), `OPENCODE_CONFIG_CONTENT={"agent":{"lola-context-helper":{"mode":"primary","permission":"deny"}}}`)
+	}
+	stdout, stderr := &cappedBuffer{cap: maxOutputBytes}, &cappedBuffer{cap: maxStderrBytes}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	err := cmd.Run()
+	if e := classifyRunErr(err, cctx.Err(), stderr.String(), timeout); e != nil {
+		return "", e
+	}
+	return stdout.String(), nil
+}
+
+func helperArgs(kind agent.Kind, model, effort, instruction string) []string {
+	if kind == agent.Claude {
+		return append(buildArgs(model, instruction), agent.EffortArgs(kind, effort)...)
+	}
+	args := []string{"exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ignore-user-config", "--disable", "shell_tool", "--disable", "apps", "--disable", "multi_agent", "-c", `web_search="disabled"`}
+	if kind == agent.OpenCode {
+		args = []string{"run", "--pure", "--agent", "lola-context-helper"}
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, agent.EffortArgs(kind, effort)...)
+	return append(args, instruction)
+}
+
 // buildArgs assembles the claude argv. The instruction is the `-p` prompt;
 // the context is NEVER here (it goes on stdin). Output is forced to text.
 func buildArgs(model, instruction string) []string {
@@ -184,7 +232,7 @@ func classifyRunErr(runErr, ctxErr error, stderr string, timeout time.Duration) 
 		}
 		return fmt.Errorf("%w (%s)", ErrNonZeroExit, exitStatus(ee))
 	}
-	return fmt.Errorf("brain: claude run failed: %w", runErr)
+	return fmt.Errorf("brain: AI helper run failed: %w", runErr)
 }
 
 // exitStatus renders an ExitError's code, guarding a nil ProcessState (which

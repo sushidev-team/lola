@@ -7,6 +7,7 @@ import * as DaemonService from "./daemonservice.js";
 import * as DoctorService from "./doctorservice.js";
 import * as HubService from "./hubservice.js";
 import * as LinearService from "./linearservice.js";
+import * as ProjectGitService from "./projectgitservice.js";
 import * as SSHService from "./sshservice.js";
 import * as SandboxLoginService from "./sandboxloginservice.js";
 import * as TalkService from "./talkservice.js";
@@ -19,6 +20,7 @@ export {
     DoctorService,
     HubService,
     LinearService,
+    ProjectGitService,
     SSHService,
     SandboxLoginService,
     TalkService,

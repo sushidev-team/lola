@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
@@ -53,7 +54,13 @@ func (d *Daemon) planSummarizer() planner.Summarize {
 	if d.planSummarize != nil {
 		return d.planSummarize
 	}
-	cl := &brain.Client{Model: d.cfg.Brain.Model, Timeout: planTimeout}
+	cl := &brain.Client{Model: d.cfg.Brain.Model, Timeout: planTimeout, Dir: helperWorkDir()}
+	kind := d.cfg.AgentForProject("")
+	if profile, enabled := d.cfg.AIProfile(kind, "plan"); enabled {
+		cl.Agent = agent.Parse(kind)
+		cl.Model = profile.Model
+		cl.Effort = profile.Effort
+	}
 	if !cl.Available() {
 		return nil
 	}

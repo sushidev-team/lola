@@ -154,5 +154,5 @@
   .select-value { position:absolute; inset:0 32px 0 12px; pointer-events:none; display:grid; align-content:center; gap:2px; font-size:13px; color:var(--color-ink); }
   .select-value > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .option-copy small { display:block; font-size:11px; line-height:16px; color:var(--color-ink-2); }
-  .option-copy { display:grid; gap:3px; min-width:0; }
+  .option-copy { display:grid; gap:0; min-width:0; }
 </style>

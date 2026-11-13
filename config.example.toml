@@ -170,8 +170,27 @@ endpoint = "https://api.linear.app/graphql"
 # info   = ["slack"]                      # approved+parked, merged+cleaned
 
 # ---------------------------------------------------------------------------
+# AI profiles are configured in desktop Settings → AI. Entries are independent
+# per backend (claude/codex/opencode), and only take effect when enabled.
+# Drafts/resolvers use the project's agent; summaries/plans use defaults.agent.
+# Existing agent sessions retain their selected model.
+# [ai.claude]
+# enabled = true
+# [ai.claude.profiles.fast]
+# model = "haiku"
+# [ai.claude.profiles.balanced]
+# model = "sonnet"
+# [ai.claude.profiles.thorough]
+# model = "opus"
+# effort = "high"
+# [ai.claude.actions]
+# draft = "fast"
+# resolve = "thorough"
+# summary = "balanced"
+# plan = "thorough"
+#
 # [brain] — OPTIONAL, OFF BY DEFAULT (P5). When enabled, lola makes ONE headless
-# `claude -p` call to produce a short HUMAN-FACING summary at two decision
+# helper call (Claude by default; AI profiles can select another backend) to produce a short HUMAN-FACING summary at two decision
 # points: when a session escalates (why it's blocked + the next step) and when a
 # PR is approved+green (what it changes + risks to check). The summary rides the
 # notification and an optional Linear comment ONLY — it is NEVER fed back to the
@@ -181,7 +200,7 @@ endpoint = "https://api.linear.app/graphql"
 # GitHub links, and fall back to previews on failure. Batches are capped at 30s
 # (or a shorter timeout_seconds); model below selects the other brain summaries.
 #
-# COST: each summary spends Anthropic tokens. It execs `claude` and uses your
+# COST: each summary uses the configured provider’s tokens. By default, It execs `claude` and uses your
 # existing claude auth (~/.claude) or ANTHROPIC_API_KEY in the daemon's env.
 # Every call is one-shot per transition, hard-timeout-bounded, and skips
 # gracefully (falling back to the generic template) on any error or timeout.

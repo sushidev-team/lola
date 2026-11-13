@@ -111,12 +111,13 @@ func reloadRejectionHint(msg string) string {
 // --- settings ([defaults]/[notify]/[brain]/[review]/[coderabbit]) -----------
 
 type SettingsDTO struct {
-	AutoPRComments     bool   `json:"autoPRComments"`
-	TemporaryDirectory string `json:"temporaryDirectory"`
-	GlobalCap          int    `json:"globalCap"`
-	ConcurrencyCap     int    `json:"concurrencyCap"`
-	PollInterval       string `json:"pollInterval"` // duration string, e.g. "60s"
-	Agent              string `json:"agent"`        // claude|codex|opencode
+	AI                 map[string]config.AIProvider `json:"ai,omitempty"`
+	AutoPRComments     bool                         `json:"autoPRComments"`
+	TemporaryDirectory string                       `json:"temporaryDirectory"`
+	GlobalCap          int                          `json:"globalCap"`
+	ConcurrencyCap     int                          `json:"concurrencyCap"`
+	PollInterval       string                       `json:"pollInterval"` // duration string, e.g. "60s"
+	Agent              string                       `json:"agent"`        // claude|codex|opencode
 
 	NotifyDesktop   bool   `json:"notifyDesktop"`
 	SlackWebhookEnv string `json:"slackWebhookEnv"` // env var NAME, never the URL
@@ -463,6 +464,7 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		Agent:                    cfg.Defaults.Agent,
 		NotifyDesktop:            cfg.Notify.Desktop,
 		SlackWebhookEnv:          cfg.Notify.SlackWebhookEnv,
+		AI:                       cfg.AI,
 		BrainEnabled:             cfg.Brain.Enabled,
 		BrainModel:               cfg.Brain.Model,
 		BrainTimeout:             cfg.Brain.TimeoutSeconds,
@@ -528,6 +530,9 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Defaults.Agent = dto.Agent
 	cfg.Notify.Desktop = dto.NotifyDesktop
 	cfg.Notify.SlackWebhookEnv = dto.SlackWebhookEnv
+	if dto.AI != nil {
+		cfg.AI = dto.AI
+	}
 	cfg.Brain.Enabled = dto.BrainEnabled
 	cfg.Brain.Model = dto.BrainModel
 	cfg.Brain.TimeoutSeconds = dto.BrainTimeout

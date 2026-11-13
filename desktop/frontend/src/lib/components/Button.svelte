@@ -22,7 +22,7 @@
   export type ButtonSize = "xs" | "sm" | "md";
 
   const BASE =
-    "inline-flex shrink-0 items-center gap-1.5 rounded-md whitespace-nowrap transition-colors " +
+    "inline-flex shrink-0 items-center gap-1.5 rounded-md whitespace-nowrap cursor-pointer transition-colors " +
     "disabled:cursor-not-allowed disabled:opacity-40";
 
   // Heights are the sidebar's density ladder: 24 / 28 / 32px against 12–13px type.
@@ -157,6 +157,11 @@
   aria-busy={loading ? true : undefined}
   class={cls}
 >
-  {#if loading}<Icon name="loader-circle" size={14} class={SPINNER} />{/if}
+  {#if loading}<Icon name="loader-circle" size={14} class={`button-spinner ${SPINNER}`} />{/if}
   {@render children()}
 </button>
+
+<style>
+  button[aria-busy="true"] > :global(.button-spinner + .lola-icon),
+  button[aria-busy="true"] > :global(.button-spinner + .button-icon) { display:none; }
+</style>

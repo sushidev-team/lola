@@ -18,6 +18,7 @@
 {#if req}
   <Modal title={req.title} onClose={() => confirm.cancel()} width="480px" describedBy={descriptionId}>
     <div id={descriptionId} class="confirmation-copy">
+      {#if req.subject}<p class="selectable confirmation-subject">{req.subject}</p>{/if}
       <p class="copy confirmation-body">{req.body}</p>
       {#if req.detail}<p class="copy confirmation-detail">{req.detail}</p>{/if}
     </div>
@@ -34,19 +35,21 @@
       </ul>
     {/if}
     {#snippet footer()}
-      <div class="dialog-actions">
-        <Button class="cancel" size="md" onclick={() => confirm.cancel()}>Cancel</Button>
+      <div class="dialog-actions confirmation-actions">
+        <Button class={req.alternative ? "cancel" : ""} size="md" onclick={() => confirm.cancel()}>Cancel</Button>
         {#if req.alternative}
           <Button variant="secondary" size="md" onclick={() => confirm.acceptAlternative()}>{req.alternative.label}</Button>
         {/if}
-        <Button variant="danger-solid" size="md" onclick={() => confirm.accept()}>{req.confirmLabel}</Button>
+        <Button variant={req.confirmVariant ?? "danger-solid"} size="md" onclick={() => confirm.accept()}>{req.confirmLabel}</Button>
       </div>
     {/snippet}
   </Modal>
 {/if}
 
 <style>
+  .confirmation-actions { justify-content:flex-end; }
   .confirmation-copy { min-width:0; overflow-wrap:anywhere; }
+  .confirmation-subject { margin-bottom:12px; font-family:var(--font-mono); font-size:13px; line-height:1.5; color:var(--color-ink-2); white-space:pre-wrap; }
   .confirmation-body { font-size:14px; color:var(--color-ink); }
   .confirmation-detail { margin-top:10px; font-size:13px; color:var(--color-ink-2); }
 </style>

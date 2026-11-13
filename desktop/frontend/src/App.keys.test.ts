@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, cleanup, fireEvent, waitFor, screen } from "@testing-library/svelte";
 import { flushSync, tick } from "svelte";
 
 // One Proxy per service: anything a test does not name answers null, as an old daemon's field would.
@@ -18,10 +18,14 @@ vi.mock("@bindings/desktop", () => {
     UpdateService: svc(),
     GoalService: svc(),
     KnowledgeService: svc(),
+    ProjectGitService: svc(),
+    DesktopContextService: svc(),
   };
 });
+vi.mock("@bindings/desktop/contextservice", () => ({Publish: vi.fn().mockResolvedValue(undefined)}));
 vi.mock("@wailsio/runtime", async (orig) => ({
   ...(await orig<object>()),
+  Window: {SetTitle: vi.fn().mockResolvedValue(undefined)},
   Events: { On: (n: string, f: (e: { data: unknown }) => void) => (handlers.set(n, f), () => {}), Off: () => {} },
 }));
 vi.mock("$lib/components/LiveTerminal.svelte", async () => ({ default: (await import("$lib/components/ssh/TerminalStub.test.svelte")).default }));
@@ -58,6 +62,7 @@ async function mount(sessions: unknown[]) {
 }
 const press = (key: string, target: Element = document.body) => fireEvent.keyDown(target, { key, bubbles: true });
 const chord = (action: string) => {
+  flushSync();
   handlers.get("app:session-action")?.({ data: action });
   flushSync();
 };
@@ -73,6 +78,7 @@ beforeEach(() => {
   nav.selectedId = "";
   nav.scoped = false;
   nav.project = "";
+  nav.lastGitProject = "";
   nav.triage = "";
   nav.sidebarQuery = "";
   nav.sidebarBrowsing = false;
@@ -83,6 +89,118 @@ afterEach(() => {
   nav.closeOverlay();
   confirm.cancel();
   cleanup();
+});
+
+describe("project workspace toolbar", () => {
+  it("closes Go To and opens the last Git repository when there is no current project", async () => {
+    await mount([]);
+    store.projects = [{name:'p',path:'/repo'},{name:'other',path:'/other'}] as typeof store.projects;
+    nav.rememberGitProject('p');
+    nav.goHome();
+    nav.project = '';
+    nav.openOverlay('commands');
+    chord('toggle-git');
+    expect(nav.overlay).toBeNull();
+    expect(nav.inGit).toBe(true);
+    expect(nav.project).toBe('p');
+    chord('toggle-git');
+    expect(nav.view).toBe('home');
+    expect(nav.project).toBe('');
+  });
+  it("uses the current session's repository before the remembered Git repository", async () => {
+    await mount([plain(A)]);
+    store.projects = [{name:'p',path:'/repo'},{name:'other',path:'/other'}] as typeof store.projects;
+    nav.rememberGitProject('other');
+    nav.openSession(A);
+    chord('toggle-git');
+    expect(nav.project).toBe('p');
+  });
+  it("opens Projects on first use without project context, even with only one repository", async () => {
+    await mount([]);
+    store.projects = [{name:'only',path:'/repo'}] as typeof store.projects;
+    nav.goHome();
+    chord('toggle-git');
+    expect(nav.view).toBe('home');
+    expect(nav.sidebarTab).toBe('projects');
+    expect(nav.overlay).toBeNull();
+  });
+  it("toggles Git from the open session and returns with the active tab intact", async () => {
+    await mount([plain(A)]);
+    store.projects = [{name:'p',path:'/repo',agentOk:true}] as typeof store.projects;
+    nav.openSession(A);
+    terms.select(A, DIFF);
+    chord('toggle-git');
+    expect(nav.inGit).toBe(true);
+    expect(nav.project).toBe('p');
+    chord('toggle-git');
+    expect(nav.focusedTerm).toBe(A);
+    expect(nav.view).toBe('cockpit');
+    expect(terms.activeTab(A)).toBe(DIFF);
+  });
+  it("blocks workspace shortcuts in a confirmation and never opens Go To as a fallback", async () => {
+    await mount([]);
+    store.projects = [];
+    nav.selectedId = '';
+    nav.project = '';
+    confirm.ask({title:'Confirm',body:'Keep this open',confirmLabel:'OK',onConfirm:()=>{}});
+    chord('toggle-git');
+    expect(nav.view).toBe('cockpit');
+    expect(confirm.request?.title).toBe('Confirm');
+    confirm.cancel();
+    chord('toggle-git');
+    expect(nav.overlay).toBeNull();
+    expect(nav.view).toBe('home');
+    expect(nav.sidebarTab).toBe('projects');
+  });
+  it("opens global help and focuses the sessions sidebar through native actions", async () => {
+    await mount([plain(A)]);
+    nav.sidebarOpen = false;
+    chord('focus-sessions');
+    expect(nav.sidebarOpen).toBe(true);
+    expect(nav.sidebarTab).toBe('sessions');
+    expect(nav.sidebarBrowsing).toBe(true);
+    chord('shortcuts');
+    expect(nav.overlay).toBe('help');
+  });
+  it("does not mistake a stack with a saved Git tab for a repository", async () => {
+    await mount([]);
+    store.projects = [{name:'stack',kind:'stack',path:'/stack'}] as typeof store.projects;
+    nav.goDetail('stack', 'git');
+    chord('toggle-git');
+    expect(nav.overlay).toBeNull();
+    expect(nav.view).toBe('home');
+    expect(nav.sidebarTab).toBe('projects');
+    expect(nav.project).toBe('stack');
+    expect(nav.projectTab).toBe('overview');
+  });
+  it("routes native Find to Git history only while that view is active", async () => {
+    await mount([]);
+    const initial = nav.gitSearchRequest;
+    chord("find-project-history");
+    expect(nav.gitSearchRequest).toBe(initial);
+    nav.goDetail("missing-project", "git");
+    chord("find-project-history");
+    expect(nav.gitSearchRequest).toBe(initial + 1);
+    nav.openOverlay("settings");
+    chord("find-project-history");
+    expect(nav.gitSearchRequest).toBe(initial + 1);
+    nav.closeOverlay();
+    nav.projectTab = "overview";
+  });
+  it("replaces the shared header and restores navigation for a missing project", async () => {
+    await mount([]);
+    store.projects = [{ name: "workspace", label: "Workspace", path: "/repo", agentOk: true }] as typeof store.projects;
+    nav.sidebarOpen = false;
+    nav.goDetail("workspace");
+    flushSync();
+    expect(screen.getByRole("banner", { name: "Project toolbar" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Back to sessions" })).toBeNull();
+    nav.goDetail("missing-project");
+    flushSync();
+    expect(screen.getByRole("button", { name: "Back to sessions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toBeInTheDocument();
+    nav.sidebarOpen = true;
+  });
 });
 
 describe("in a session", () => {
@@ -309,7 +427,7 @@ describe("in the sessions sidebar", () => {
     expect(nav.overlay).toBe('help');
     nav.closeOverlay();
     const before = nav.sidebarOpen;
-    await press('b', sidebarRow(A));
+    chord('toggle-sidebar');
     expect(nav.sidebarOpen).toBe(!before);
     nav.sidebarOpen = true;
   });
@@ -321,10 +439,10 @@ describe("in the sessions sidebar", () => {
     expect(sidebarRow(B)).not.toBeNull();
     expect(nav.focusedTerm).toBe(A);
   });
-  it("s from a sidebar row opens a shell for that session", async () => {
+  it("native New Shell opens a shell for the selected session", async () => {
     await mount([plain(A)]);
     const shell = vi.spyOn(terms, 'newShell').mockImplementation(() => {});
-    await press('s', sidebarRow(A));
+    chord('new-shell');
     expect(shell).toHaveBeenCalledWith(A, '/w');
     shell.mockRestore();
   });

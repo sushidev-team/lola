@@ -15,6 +15,8 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
+	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
@@ -89,6 +91,11 @@ type directoryPrompter interface {
 	LocalFirstTurn(id, prompt string) string
 }
 
+type directoryProfilePrompter interface {
+	OpenDirectoryProfile(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool, prompt, model, effort string) (session.Session, error)
+	LocalFirstTurn(id, prompt string) string
+}
+
 // noteInitial writes a session's first row: the brief a human gave it. It is created
 // delivered, because it was, and so that no client offers to recall it. typed is the text
 // lola gave the agent as its first turn, when the log will carry a record of that.
@@ -113,11 +120,14 @@ func (d *Daemon) noteInitial(id, prompt, typed string) {
 // A borrowed directory never becomes a worktree owned by Lola. No checkout,
 // setup hooks, branch mutations or implicit project configuration occur here.
 func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualArgs) (protocol.OpenData, error) {
-	if a.Location != "main" && a.Location != "temporary" {
+	if a.Location != "main" && a.Location != "checkout" && a.Location != "temporary" {
 		return protocol.OpenData{}, errors.New("unknown session location")
 	}
 	if err := validateSessionName(a.Name); err != nil {
 		return protocol.OpenData{}, err
+	}
+	if a.AIAction != "" && (a.AIAction != "resolve" || a.Location != "checkout" || !a.Agent) {
+		return protocol.OpenData{}, errors.New("invalid AI action for this session")
 	}
 	if a.Branch != "" || a.Base != "" {
 		return protocol.OpenData{}, errors.New("branch options require a new worktree")
@@ -133,19 +143,27 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 		p = *configured
 	}
 	kind := d.cfg.AgentForProject(a.Project)
+	profile, useProfile := d.cfg.AIProfile(kind, a.AIAction)
 	dir := d.cfg.Defaults.TemporaryDirectory
+	home, validateCheckout := d.home, d.validateLocalCheckout
 	d.mu.Unlock()
 	if nat == nil {
 		return protocol.OpenData{}, errors.New("native runtime unavailable")
 	}
-	if a.Location == "main" {
+	if a.Location == "main" || a.Location == "checkout" {
 		if configured == nil || p.IsStack() || p.Path == "" {
 			return protocol.OpenData{}, fmt.Errorf("unknown project %q", a.Project)
 		}
-		if a.Path != "" {
+		if a.Location == "main" && a.Path != "" {
 			return protocol.OpenData{}, errors.New("main checkout uses the configured project path")
 		}
 		dir = p.Path
+		if a.Location == "checkout" {
+			if a.Path == "" {
+				return protocol.OpenData{}, errors.New("checkout path required")
+			}
+			dir = a.Path
+		}
 	} else if a.Path != "" {
 		dir = a.Path
 	}
@@ -166,11 +184,25 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	if err != nil {
 		return protocol.OpenData{}, fmt.Errorf("session directory: %w", err)
 	}
+	if a.Location == "checkout" {
+		if validateCheckout == nil {
+			validateCheckout = validateBorrowedCheckout
+		}
+		checkCtx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+		err := validateCheckout(checkCtx, p.Path, dir, home)
+		cancel()
+		if err != nil {
+			return protocol.OpenData{}, err
+		}
+	}
 	if a.AgentKind != "" {
 		if !agent.Valid(a.AgentKind) {
 			return protocol.OpenData{}, errors.New("unknown coding agent")
 		}
 		kind = a.AgentKind
+		d.mu.Lock()
+		profile, useProfile = d.cfg.AIProfile(kind, a.AIAction)
+		d.mu.Unlock()
 	}
 	bin := "tmux"
 	if a.Agent {
@@ -195,7 +227,14 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	}
 	var s session.Session
 	typed := ""
-	if opener, ok := nat.(directoryPrompter); ok && prompt != "" {
+	if a.AIAction != "" && useProfile {
+		opener, ok := nat.(directoryProfilePrompter)
+		if !ok {
+			return protocol.OpenData{}, errors.New("runtime cannot apply the selected AI profile")
+		}
+		s, err = opener.OpenDirectoryProfile(cctx, p, id, dir, a.Location, kind, a.Agent, prompt, profile.Model, profile.Effort)
+		typed = opener.LocalFirstTurn(id, prompt)
+	} else if opener, ok := nat.(directoryPrompter); ok && prompt != "" {
 		s, err = opener.OpenDirectoryPrompt(cctx, p, id, dir, a.Location, kind, a.Agent, prompt)
 		typed = opener.LocalFirstTurn(id, prompt)
 	} else {
@@ -215,4 +254,43 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	d.recordSessionEvent("", s)
 	d.noteInitial(id, prompt, typed)
 	return protocol.OpenData{SessionID: id, Worktree: dir, Message: "Session opened"}, nil
+}
+
+// Only a registered, non-isolated checkout can be borrowed. Managed directories
+// must use their existing session; a second host agent must never enter a sandbox.
+func validateBorrowedCheckout(ctx context.Context, root, dir, home string) error {
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	if gitguard.Pinned(root) || gitguard.Pinned(dir) {
+		return errors.New("isolated checkouts must use their existing session")
+	}
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolved
+	}
+	if localPathWithin(root, home) || localPathWithin(dir, home) {
+		return errors.New("managed checkouts must use their existing session")
+	}
+	trees, err := (projectgit.Client{}).Worktrees(ctx, root)
+	if err != nil {
+		return err
+	}
+	return registeredBorrowedCheckout(dir, trees)
+}
+func localPathWithin(path, root string) bool {
+	if root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))))
+}
+func registeredBorrowedCheckout(dir string, trees []projectgit.Worktree) error {
+	for _, tree := range trees {
+		path, err := filepath.EvalSymlinks(tree.Path)
+		if err == nil && path == dir && !tree.Locked && !tree.Prunable {
+			return nil
+		}
+	}
+	return errors.New("directory is not an available checkout of this project")
 }

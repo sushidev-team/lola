@@ -490,6 +490,14 @@ func (c *Client) SendKey(ctx context.Context, name, key string) error {
 	return err
 }
 
+// SendBackground delivers one Ctrl+B directly to the application. send-keys
+// bypasses tmux's prefix processing, so the interactive double press is unnecessary.
+func (c *Client) SendBackground(ctx context.Context, name string) error {
+	_ = c.LeaveCopyMode(ctx, name)
+	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "C-b")
+	return err
+}
+
 // PipePane sends everything the pane prints to a shell command. A new call replaces the
 // previous pipe, so a restarted daemon can re-arm a tab that is already piped.
 func (c *Client) PipePane(ctx context.Context, name, command string) error {

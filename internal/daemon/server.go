@@ -220,7 +220,7 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		protocol.CmdSSHRecall, protocol.CmdSSHResolve, protocol.CmdSSHWidgetStatus, protocol.CmdSSHPromptAnswer:
 		return d.handleSSH(ctx, req)
 	case protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdAgentSay, protocol.CmdAgentStop,
-		protocol.CmdAgentChoose, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions:
+		protocol.CmdAgentChoose, protocol.CmdAgentSetting, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions:
 		return d.handleTalk(ctx, req)
 	case "kill":
 		data, err := d.handleKill(ctx, req.Session, req.Force, req.KeepWorktree)
@@ -859,8 +859,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			// <home>/worktrees/<project>/<id> (see newNativeRuntime); the
 			// store record carries no path, so derive it for the TUI.
 			si.Worktree = filepath.Join(d.home, "worktrees", s.Project, s.ID)
-			if s.Location == runtime.LocationSSH {
-				si.Worktree = s.Worktree // a direct ssh session's scratch folder
+			if s.Location == runtime.LocationSSH || s.Kind == session.KindLocal {
+				si.Worktree = s.Worktree // SSH scratch folder or borrowed checkout
 			}
 		}
 		if s.PR != nil {

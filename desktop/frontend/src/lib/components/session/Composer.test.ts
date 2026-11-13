@@ -24,6 +24,7 @@ describe("no host", () => {
     shown(id);
     await setTalk(id);
     expect(button(/Run on/)).toBeNull();
+    expect(left()).toContainElement(screen.getByRole("combobox", { name: "Model settings" }));
     await type("hello");
     await fireEvent.keyDown(field(), { key: "Meta" });
     await new Promise((r) => setTimeout(r, 220));

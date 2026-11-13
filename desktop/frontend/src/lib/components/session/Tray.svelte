@@ -27,6 +27,7 @@
   import ModalCard from "./ModalCard.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";
+  import BackgroundCard from "./BackgroundCard.svelte";
   import InlineTerminalCard from "./InlineTerminalCard.svelte";
 
   let { sessionId, covered = false }: { sessionId: string; covered?: boolean } = $props();
@@ -37,9 +38,11 @@
   const canControl = $derived(!covered && nav.view === "cockpit" && store.alive && !!session?.tmuxName);
   let terminalFocus = $state(0);
   function leaveControls() {
+    talk.settingTerminal[sessionId] = false;
     view.composerFocus++;
   }
   function expandControls() {
+    talk.settingTerminal[sessionId] = false;
     ssh.showAgentTerminal(sessionId);
   }
   const cards = $derived(
@@ -57,7 +60,8 @@
   const card = $derived(cards[at]);
   // A modal is the actual terminal, immediately. Keep its mount outside the hash-keyed
   // cards so redraws do not reconnect it; detach as soon as it is answered or hidden.
-  const inlineName = $derived(canControl && card?.kind === "modal" ? session?.tmuxName ?? "" : "");
+  const settingsOpen = $derived(!!talk.settingTerminal[sessionId]);
+  const inlineName = $derived(canControl && (card?.kind === "modal" || settingsOpen) ? session?.tmuxName ?? "" : "");
   const counted = $derived(card?.tier === 1 ? first : cards.length - first);
   const position = $derived(card?.tier === 1 ? at + 1 : at - first + 1);
 
@@ -158,10 +162,10 @@
 
 <div class="cv-band cv-dock min-h-0">
   <div class="cv-dock-rail" aria-hidden="true"><div class="cv-rail-line"></div></div>
-  <div class="grid min-h-0 grid-rows-[minmax(0,1fr)] {card || promptNote || session?.devClash ? 'pt-2' : ''}" {@attach widthOf((w) => (width = w))} data-tray>
+  <div class="grid min-h-0 grid-rows-[minmax(0,1fr)] {card || settingsOpen || promptNote || session?.devClash ? 'pt-2' : ''}" {@attach widthOf((w) => (width = w))} data-tray>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_no_static_element_interactions -->
   <div bind:this={root} tabindex="-1" class="grid min-h-0 gap-2 outline-none {inlineName ? 'h-full max-h-full' : narrow ? 'max-h-[60cqh]' : 'max-h-[45cqh]'}" onkeydown={onKey}>
-    <InlineTerminalCard name={inlineName} {agent} {pager} focusRequest={terminalFocus} onLeave={leaveControls} onExpand={expandControls} />
+    <InlineTerminalCard name={inlineName} {agent} {pager} focusRequest={terminalFocus} onLeave={leaveControls} onExpand={expandControls} onClose={settingsOpen ? leaveControls : undefined} />
     {#if card && !inlineName}
       {#key card.id}
         {#if card.kind === "approval"}
@@ -170,6 +174,8 @@
           <SSHGoCard {sessionId} conn={card.conn} {pager} />
         {:else if card.kind === "permission"}
           <PermissionCard {sessionId} prompt={card.prompt} {narrow} {pager} />
+        {:else if card.kind === "background"}
+          <BackgroundCard {sessionId} prompt={card.prompt} disabled={!canControl} {pager} />
         {:else if card.kind === "question"}
           <QuestionCard {sessionId} prompt={card.prompt} {narrow} {pager} />
         {:else if card.kind === "modal"}
