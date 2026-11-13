@@ -214,6 +214,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       await refresh();
       if (request.action === 'continue' && request.source === 'merge' && this.message === request.message) this.message = '';
       this.notice = ({ checkout: 'Branch checked out.', pull: 'Branch updated.', 'set-upstream': 'Upstream configured.', skip: 'Commit skipped.', publish: 'Branch published; upstream configured.', push: 'Branch pushed.', fetch: 'Remote refs updated.', 'cherry-pick': 'Commit cherry-picked.', revert: 'Commit reverted.', merge: 'Branches merged.', rebase: 'Branch rebased.', continue: 'Operation continued.', abort: 'Operation aborted.' } as Record<string, string>)[request.action] ?? 'Repository updated.';
+      store.setFlash(this.notice);
       return result.path;
     } catch (error) {
       // Merge/rebase failures can leave resolvable conflicts. Refresh those facts
@@ -414,6 +415,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       }
       this.notice = { stage: 'Files staged.', unstage: 'Files unstaged.', commit: 'Commit created.', amend: 'Commit amended.', fetch: 'Remote refs updated.', pull: 'Branch is up to date.', 'set-upstream': 'Upstream configured.', skip: 'Commit skipped.', publish: 'Branch published; upstream configured.', push: 'Branch pushed.' }[action];
       await this.load(ref, limit);
+      store.setFlash(this.notice);
       return true;
     } catch (error) {
       this.reportError(error, action);
