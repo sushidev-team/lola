@@ -86,7 +86,7 @@ describe('Git action menus', () => {
     render(ProjectGitActionMenu, {actions});
     actions.openWorktree(tree, event());
     await fireEvent.click(await screen.findByRole('menuitem', {name:deleteBranch ? 'Remove worktree and branch…' : 'Remove worktree…'}));
-    expect(confirm.request?.body).toContain('/linked');
+    expect(confirm.request?.subject).toContain('/linked');
     expect(git.branchAction).not.toHaveBeenCalled();
     confirm.accept();
     await waitFor(() => expect(git.branchAction).toHaveBeenCalledWith({action:deleteBranch ? 'remove-worktree-branch' : 'remove-worktree',source:feature.fullName,sourceSHA:feature.sha,target:'/linked',targetSHA:''}, '', 200));
@@ -120,7 +120,7 @@ describe('Git action menus', () => {
     actions.openBranch(feature, event());
     await fireEvent.click(await screen.findByRole('menuitem', {name:'Delete branch…'}));
     expect(git.branchAction).not.toHaveBeenCalled();
-    expect(confirm.request?.body).toContain('feature/work (bbbbbbbb)');
+    expect(confirm.request?.subject).toBe('feature/work');
     confirm.cancel();
     expect(git.branchAction).not.toHaveBeenCalled();
     actions.openBranch(feature, event());
@@ -143,7 +143,7 @@ describe('Git action menus', () => {
     const remote = {...feature, remote:true, name:'origin/feature/work', fullName:'refs/remotes/origin/feature/work'};
     actions.openBranch(remote, event());
     await fireEvent.click(await screen.findByRole('menuitem', {name:'Delete remote branch…'}));
-    expect(confirm.request?.detail).toContain('for everyone');
+    expect(confirm.request?.body).toContain('for everyone');
     const previous = git;
     git = new ProjectGitState('other', '');
     confirm.accept();

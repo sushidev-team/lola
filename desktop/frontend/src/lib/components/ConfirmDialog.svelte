@@ -18,6 +18,7 @@
 {#if req}
   <Modal title={req.title} onClose={() => confirm.cancel()} width="480px" describedBy={descriptionId}>
     <div id={descriptionId} class="confirmation-copy">
+      {#if req.subject}<p class="selectable confirmation-subject">{req.subject}</p>{/if}
       <p class="copy confirmation-body">{req.body}</p>
       {#if req.detail}<p class="copy confirmation-detail">{req.detail}</p>{/if}
     </div>
@@ -48,6 +49,7 @@
 <style>
   .confirmation-actions { justify-content:flex-end; }
   .confirmation-copy { min-width:0; overflow-wrap:anywhere; }
+  .confirmation-subject { margin-bottom:12px; font-family:var(--font-mono); font-size:13px; line-height:1.5; color:var(--color-ink-2); white-space:pre-wrap; }
   .confirmation-body { font-size:14px; color:var(--color-ink); }
   .confirmation-detail { margin-top:10px; font-size:13px; color:var(--color-ink-2); }
 </style>

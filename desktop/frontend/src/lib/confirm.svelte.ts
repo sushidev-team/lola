@@ -13,7 +13,9 @@
 export type ConfirmRequest = {
   /** Dialog title, e.g. "Kill session?" */
   title: string;
-  /** The question, as a sentence naming the target. */
+  /** Optional target shown as a compact secondary label. */
+  subject?: string;
+  /** Short explanation of what the action does. */
   body: string;
   /** Optional second line spelling out the consequence. */
   detail?: string;

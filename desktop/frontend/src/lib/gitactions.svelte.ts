@@ -123,10 +123,10 @@ export class GitActions {
     const context = this.context(), request = this.branchRequest('delete-branch', branch);
     confirm.ask({
       title: branch.remote ? 'Delete remote branch?' : 'Delete branch?',
-      body: `Delete ${branch.name} (${branch.sha.slice(0, 8)})?`,
-      detail: branch.remote
-        ? 'This deletes the branch from the remote repository for everyone. Deletion is refused if the remote tip has changed.'
-        : 'This deletes only the local branch. Git will refuse if it is checked out or not fully merged; any remote branch is kept.',
+      subject: branch.name,
+      body: branch.remote
+        ? 'Deletes this branch from the remote repository for everyone.'
+        : 'Deletes the local branch. The remote branch is kept.',
       confirmLabel: branch.remote ? 'Delete remote branch' : 'Delete branch',
       onConfirm: () => { if (context.git === this.context().git && !this.deletionBlocked(branch)) void this.execute(context, request); },
     });
@@ -165,8 +165,8 @@ export class GitActions {
     const request = {action:deleteBranch ? 'remove-worktree-branch' : 'remove-worktree', source:tree.branch ? `refs/heads/${tree.branch}` : '', sourceSHA:tree.head, target:tree.path, targetSHA:''};
     confirm.ask({
       title: deleteBranch ? 'Remove worktree and branch?' : 'Remove worktree?',
-      body: deleteBranch ? `Remove ${tree.path} and delete local branch ${tree.branch}?` : `Remove ${tree.path}?`,
-      detail: `The checkout must be clean and unlocked. ${deleteBranch ? 'The branch must be fully merged. Remote branches are kept.' : tree.branch ? 'Its local and remote branches are kept.' : 'This detached checkout has no local branch; commits reachable only from it may become inaccessible.'}`,
+      subject: deleteBranch ? `${tree.branch}\n${tree.path}` : tree.path,
+      body: deleteBranch ? 'Removes this checkout and its local branch. Remote branches are kept.' : tree.branch ? 'Removes this checkout. Local and remote branches are kept.' : 'Removes this detached checkout. Commits reachable only from it may be lost.',
       confirmLabel: deleteBranch ? 'Remove worktree and branch' : 'Remove worktree',
       onConfirm: async () => {
         if (context.git !== this.context().git || this.removalBlocked(tree)) return;
