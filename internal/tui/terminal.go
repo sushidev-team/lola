@@ -70,6 +70,17 @@ func keyToBytes(k tea.KeyPressMsg) []byte {
 	var b []byte
 	switch k.Code {
 	case tea.KeyEnter:
+		// shift+enter is a LINE BREAK, not a submit: a coding agent reads a bare
+		// CR as "send", so the message goes out half-written. ESC CR (meta+enter)
+		// is the byte pair those agents insert a newline for — the same encoding
+		// the app's terminal writes and Claude Code's own `/terminal-setup`
+		// installs. Only reachable when the OUTER terminal encodes the modifier
+		// (kitty/CSI-u); one that folds shift+enter into a plain CR still submits,
+		// and nothing here can tell the difference.
+		if k.Mod.Contains(tea.ModShift) {
+			b = []byte("\x1b\r")
+			break
+		}
 		b = []byte("\r")
 	case tea.KeyTab:
 		b = []byte("\t")

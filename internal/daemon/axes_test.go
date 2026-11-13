@@ -174,7 +174,7 @@ func TestTmuxActivitySustainsWorkingNeverUpgrades(t *testing.T) {
 	}
 
 	working := nativeSess("FE-1", "working")
-	working.Agent = "codex" // no tool_use hook: the old pipeline starved this anchor
+	working.Agent = "codex"                                   // no tool_use hook: the old pipeline starved this anchor
 	working.LastActivityAt = time.Now().Add(-2 * time.Minute) // past the 45s guard
 	idle := nativeSess("FE-2", "idle")
 	d.sessions.Upsert(working)
@@ -238,9 +238,18 @@ func TestReactClosedNotifiesOnceAndUnshields(t *testing.T) {
 		t.Errorf("closed must notify once, got %d", seams.noteCount())
 	}
 
-	// And a closed session no longer accounts for its issue in reconcile.
-	if nativeSessionPresent("closed") {
+	// And a closed session no longer accounts for its issue in reconcile —
+	// whatever its agent is doing, which is the point of asking the axes: the
+	// agent here is idle at its prompt and the rollup would have said "closed"
+	// anyway, but a waiting one would have masked it.
+	if nativeSessionPresent(got) {
 		t.Error("closed must not shield its issue from the orphan revert")
+	}
+	if nativeSessionPresent(session.Session{
+		AgentState: state.AgentWaitingInput,
+		Delivery:   state.DeliveryClosed,
+	}) {
+		t.Error("a closed PR must not shield its issue behind a waiting agent")
 	}
 }
 
@@ -295,14 +304,13 @@ func TestReactSendVerifiesAdoptedGate(t *testing.T) {
 }
 
 // A hook event re-verifies the carried gate (it is live proof from inside the
-// pane), so the cycle after a stop hook sends without any pane capture.
+// pane), but automatic delivery still needs a fresh empty-composer proof.
 func TestHookEventReverifiesAdoptedGate(t *testing.T) {
 	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	seams := &fakeReactSeams{failing: "LOGS"}
 	seams.install(d)
 	d.paneTail = func(ctx context.Context, tmuxName string, lines int) (string, error) {
-		t.Fatal("a hook-verified gate must not need a pane capture")
-		return "", nil
+		return paneWaiting, nil
 	}
 
 	s := reactSess("FE-1", "ci_failed", openPR(9, "MERGEABLE", "", "fail"))
@@ -354,15 +362,24 @@ func TestHookPayloadIngestion(t *testing.T) {
 		t.Fatal("leaving working must clear CurrentTool")
 	}
 
-	// A bare idle-notification classifies as idle_notification.
+	// A bare idle-notification is the agent's own 60s nudge, NOT a question:
+	// it parks the session IDLE and records the nudge on Nudged instead of
+	// minting a waiting_input with reason idle_notification. That one rule was
+	// 90% of the measured needs_input population.
 	d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "user_prompt"})
 	d.handleHookEvent(protocol.Request{
 		Cmd: "hookEvent", Session: s.ID, Event: "notification",
 		Hook: &protocol.HookPayload{Message: "Claude is waiting for your input"},
 	})
 	got = getSess(t, d, s.ID)
-	if got.InputReason != state.InputIdleNotify {
-		t.Fatalf("InputReason = %q, want idle_notification", got.InputReason)
+	if got.AgentState != state.AgentIdle {
+		t.Fatalf("AgentState = %q, want idle after the agent's own nudge", got.AgentState)
+	}
+	if !got.Nudged {
+		t.Fatal("Nudged not recorded for an idle-notification")
+	}
+	if got.InputReason != "" {
+		t.Fatalf("InputReason = %q, want empty — the nudge is not a block", got.InputReason)
 	}
 
 	// Nil payload: still a full transition, no field noise.
@@ -441,6 +458,7 @@ func TestAdoptDropsNotificationWhenAgentResumed(t *testing.T) {
 	prior.SetAgentState(state.AgentWaitingInput, "", time.Now())
 	prior.LastNotification = "Claude is waiting for your input"
 	prior.InputReason = state.InputQuestion
+	prior.InputNotified = state.InputQuestion
 	d.sessions.Upsert(prior)
 
 	// The human answered before the restart; the pane scan sees a busy agent.
@@ -456,6 +474,9 @@ func TestAdoptDropsNotificationWhenAgentResumed(t *testing.T) {
 	if got.InputReason != "" {
 		t.Errorf("InputReason = %q, want dropped", got.InputReason)
 	}
+	if got.InputNotified != "" {
+		t.Error("answered question kept its notification guard")
+	}
 }
 
 // The mirror case: a session still parked on the prompt keeps its message, so
@@ -469,6 +490,8 @@ func TestAdoptKeepsNotificationWhileStillWaiting(t *testing.T) {
 	prior.SetAgentState(state.AgentWaitingInput, "", time.Now())
 	prior.LastNotification = "Claude needs your permission to run rm"
 	prior.InputReason = state.InputPermission
+	prior.InputNotified = state.InputPermission
+	prior.ReadyNotified = "acme/app#42@head"
 	d.sessions.Upsert(prior)
 
 	adopted := prior // still waiting_input
@@ -481,5 +504,8 @@ func TestAdoptKeepsNotificationWhileStillWaiting(t *testing.T) {
 	}
 	if got.InputReason != state.InputPermission {
 		t.Errorf("InputReason = %q, want preserved", got.InputReason)
+	}
+	if got.InputNotified != prior.InputNotified || got.ReadyNotified != prior.ReadyNotified {
+		t.Error("adoption lost persisted notification guards")
 	}
 }

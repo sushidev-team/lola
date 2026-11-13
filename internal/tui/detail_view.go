@@ -161,9 +161,12 @@ func (m *rootModel) detailStripBox(w, h int) []string {
 			}
 			pr := ""
 			if s.PRNumber > 0 {
-				pr = fmt.Sprintf("#%d", s.PRNumber)
+				pr = fmt.Sprintf("%s#%d", focusAppPrefix(s), s.PRNumber)
 			}
-			line := fmt.Sprintf("%-10s %-22s %-14s %s", issue, truncPlain(s.Title, 22), s.Status, pr)
+			// The primary axis word, never the raw rolled-up identifier: this list
+			// used to print "changes_requested" straight into the panel.
+			line := fmt.Sprintf("%-10s %-22s %-10s %s", issue, truncPlain(s.Title, 22),
+				displayLabel(displayOf(s)), pr)
 			body = append(body, previewLine(line, w-4))
 		}
 	}
@@ -177,6 +180,9 @@ func (m *rootModel) detailMessage(w int) string {
 		launch := "shell"
 		if d.wtAgent {
 			launch = goodText.Render("agent")
+			if d.wtAgentKind != "" {
+				launch = goodText.Render("agent·" + d.wtAgentKind)
+			}
 		}
 		return previewLine(warnText.Render("new branch: ")+d.wtBranch+"_"+faintText.Render("  · launch: ")+launch+faintText.Render(" (tab) · enter create · esc cancel"), w)
 	case d.flash != "":
@@ -192,11 +198,11 @@ func (m *rootModel) detailMessage(w int) string {
 
 func (m *rootModel) detailKeybar(w int) string {
 	if m.detail.wtMode {
-		return previewLine(faintText.Render("type a branch · tab agent/shell · enter create · esc cancel"), w)
+		return previewLine(faintText.Render("type a branch · tab agent/shell · shift+tab agent kind · enter create · esc cancel"), w)
 	}
 	// Mirrors detailActions() exactly — "P polls" used to sit here with no 'P'
 	// handler behind it, so the keybar advertised a key that did nothing.
-	keys := []string{"↑↓ move", "enter run", "p PR", "t ticket", "w worktree", "s sessions", "e edit", "esc back"}
+	keys := []string{"↑↓ move", "enter run", "p PR", "t ticket", "w worktree", "g goals", "K learning", "s sessions", "e edit", "esc back"}
 	keys = append(keys, "S settings", "? help", "q quit")
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }

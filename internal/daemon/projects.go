@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/sushidev-team/lola/internal/agent"
@@ -33,6 +34,12 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 		polls     []string
 		enabled   int
 	}
+	groups := make([]protocol.GroupInfo, 0, len(d.cfg.Groups))
+	for _, g := range d.cfg.Groups {
+		groups = append(groups, protocol.GroupInfo{
+			Name: g.Name, Label: g.Label, Position: g.Position, Collapsed: g.Collapsed,
+		})
+	}
 	metas := make([]projMeta, 0, len(d.cfg.Projects))
 	for _, pr := range d.cfg.Projects {
 		kind := d.cfg.AgentForProject(pr.Name)
@@ -56,16 +63,20 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 		info := protocol.ProjectInfo{
 			Name:           m.p.Name,
 			Label:          m.p.Label,
+			Group:          m.p.Group,
 			Path:           m.p.Path,
 			Repo:           m.p.Repo,
 			DefaultBranch:  m.p.DefaultBranch,
+			Kind:           m.p.Kind,
+			Stack:          m.p.Stack,
+			Labels:         slices.Clone(m.p.Labels),
 			Agent:          m.agentKind,
 			AgentBin:       m.agentBin,
 			RepoConfigured: m.p.Repo != "",
 			PollCount:      len(m.polls),
 			PollsEnabled:   m.enabled,
 			Polls:          m.polls,
-			PathOK:         projectPathOK(m.p.Path),
+			PathOK:         m.p.IsStack() || projectPathOK(m.p.Path),
 		}
 		if health != nil {
 			if err := health(m.agentBin); err != nil {
@@ -89,18 +100,25 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 			info.LastError = cfgErr
 		}
 		// Session rollups from the snapshot store (never re-derived, never execs).
+		// Counted off the two AXES, not the collapsed status: the rollup ranks a
+		// waiting agent over every PR state, so a session blocked on a human
+		// while its build was red counted once (NeedsYou) and its red CI went
+		// unreported. The two counters are now independent by construction —
+		// NeedsYou is the agent axis, CIRed the delivery axis — and a session
+		// can legitimately appear in both.
 		for _, s := range snap {
 			if s.Source != "native" || s.Project != m.p.Name {
 				continue
 			}
+			s.EnsureAxes() // no-op on observer-written records; covers a legacy snapshot
 			info.Sessions++
-			if state.HoldsSlot(s.Status) {
+			if state.HoldsSlot(s.AgentState, s.Delivery) {
 				info.LiveCounted++
 			}
-			switch s.Status {
-			case "needs_input":
+			if s.AgentState == state.AgentWaitingInput {
 				info.NeedsYou++
-			case "ci_failed":
+			}
+			if s.Delivery == state.DeliveryCIFailed {
 				info.CIRed++
 			}
 			if s.PR != nil && strings.EqualFold(s.PR.State, "OPEN") {
@@ -109,7 +127,7 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 		}
 		out = append(out, info)
 	}
-	return protocol.ProjectsData{Projects: out}
+	return protocol.ProjectsData{Projects: out, Groups: groups}
 }
 
 // projectPathOK reports whether path exists, is a directory, and holds a .git

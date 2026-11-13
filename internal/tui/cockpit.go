@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -217,23 +218,30 @@ func (m *rootModel) helpModal() string {
 		"",
 		head("Session actions"),
 		row("s", "new worktree shell"),
+		row("D", "run dev here (one per project)"),
+		row("F", "free the port a dev tab died on"),
 		row("< / >", "prev / next terminal tab"),
 		row("w", "close shell tab"),
 		row("a", "answer input"),
-		row("x", "kill session"),
+		row("f", "diff · comment, send to agent"),
+		row("A", "switch agent"),
+		row("x", "kill session (s at prompt: stop, keep worktree)"),
 		row("o", "open PR"),
 		row("c", "coderabbit now"),
 		row("R", "revive dead"),
 		row("O", "open branch/PR"),
 		row("n / N", "next / prev input"),
+		row("H", "ssh workspace · new ssh session"),
 	}
 	right := []string{
 		head("Projects & polls"),
 		row("p", "projects list"),
 		row("P / e", "edit project"),
 		row("n / a", "new project"),
+		row("t", "new stack (multi-repo)"),
 		row("s", "project's sessions"),
 		row("space", "toggle polling"),
+		row("b", "broadcast to its agents"),
 		row("x", "stop polling"),
 		row("X", "remove project"),
 		row("/", "filter projects"),
@@ -392,13 +400,16 @@ func (m *rootModel) detailTitle() string {
 	if sel.Project != "" {
 		extra += " · " + m.projLabel(sel.Project)
 	}
+	// Both axes in the title, primary first: what the agent is doing, then where
+	// its PR stands. It used to render EITHER the PR or a raw rolled-up status
+	// identifier ("ci_pending"), so the agent axis was unreachable the moment a PR
+	// existed — the exact collapse the split removes.
+	extra += " · " + displayLabel(displayOf(*sel))
 	if sel.PRNumber > 0 {
-		extra += fmt.Sprintf(" · #%d", sel.PRNumber)
+		extra += fmt.Sprintf(" · %s#%d", focusAppPrefix(*sel), sel.PRNumber)
 		if sel.Checks != "" {
 			extra += " " + sel.Checks
 		}
-	} else if sel.Status != "" {
-		extra += " · " + sel.Status
 	}
 	if m.embedFocused {
 		if m.embedSelect {
@@ -458,7 +469,10 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 	for i, si := range list {
 		marker := " "
 		issue := si.Issue
-		if si.Status == "needs_input" {
+		// "!" means the AGENT is blocked on this human, right now, at a prompt.
+		// Regressed delivery needs a human too, but it says so on its own chip
+		// (prBadge's red glyphs) rather than borrowing the queue marker.
+		if waitingOnHuman(si) {
 			marker = warnText.Render("!")
 		}
 		if si.ID == selID {
@@ -470,13 +484,67 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		if pr == "" {
 			pr = "-"
 		}
+		// Cross-session markers ride the PR cell rather than taking columns:
+		// "q1" is the session's place in the merge queue, "⚠ovl" says another
+		// session of the project edits the same files (details: the panel).
+		if q := si.MergeQueue; q != nil {
+			pr += fmt.Sprintf(" q%d", q.Position)
+		}
+		if len(si.Overlaps) > 0 {
+			pr += " " + warnText.Render("⚠ovl")
+		}
+		// "★2/3" is a best-of attempt still racing (compare + keep one with
+		// `lola bestof compare <issue>`), "★✓" the attempt that was kept.
+		if b := si.BestOf; b != nil {
+			if b.Winner {
+				pr += " " + goodText.Render("★✓")
+			} else {
+				pr += " " + warnText.Render(fmt.Sprintf("★%d/%d", b.Attempt, b.Of))
+			}
+		}
 		if si.Title != "" {
 			anyTitle = true
 		}
+		// A green dot on the PROJECT cell marks the session currently running
+		// that project's dev_commands — the one question the list has to answer
+		// ("who has the dev server?") without a column of its own.
+		proj := m.projLabel(si.Project)
+		if si.DevActive {
+			proj += " " + goodText.Render("●")
+		}
 		rows[i] = []string{
-			marker, issue, m.projLabel(si.Project),
+			marker, issue, proj,
 			statusPillFor(si), pr,
 			reactingStyle(si.Reacting).Render(dash(si.Reacting)), dash(si.Age),
+		}
+	}
+	// PLAN column — the agent's self-reported progress (`lola report`) — only
+	// when at least one listed session has reported, so a fleet that never does
+	// keeps every column it had. Inserted after STATUS: it qualifies what the
+	// agent is doing, it is not the delivery axis beside it.
+	if anyBoard(list) {
+		headers = insAt(headers, 4, "PLAN")
+		for i, si := range list {
+			rows[i] = insAt(rows[i], 4, dash(boardChip(si)))
+		}
+	}
+	// SSH — the session's agent-assisted connection — only when one is live, so a
+	// fleet with no hosts keeps every column it had. Beside STATUS: it is a third
+	// axis, and it never moves the agent pill or the PR chip.
+	if anySSHChip(list) {
+		headers = insAt(headers, 4, "SSH")
+		for i, si := range list {
+			rows[i] = insAt(rows[i], 4, dash(sshChip(si)))
+		}
+	}
+	// TOKENS — the session's usage, size glyph and burn flame — before AGE,
+	// only when some listed session has a figure (codex/opencode-only fleets
+	// keep their columns).
+	if anyUsage(list) {
+		at := len(headers) - 1
+		headers = insAt(headers, at, "TOKENS")
+		for i, si := range list {
+			rows[i] = insAt(rows[i], at, costCell(si))
 		}
 	}
 	colw := colWidths(headers, rows)
@@ -559,8 +627,19 @@ func (m *rootModel) embedTabBar(w int) string {
 		return faintText.Render(" " + label + " ")
 	}
 	parts := []string{tab("agent", 0)}
-	for i := range shells {
-		parts = append(parts, tab(fmt.Sprintf("sh%d", i+1), i+1))
+	shellNo := 0
+	for i, name := range shells {
+		switch {
+		case devtab.Index(sel.ID, name) > 0:
+			parts = append(parts, tab(devTabLabel(sel, name), i+1))
+		case strings.HasSuffix(name, "-review"):
+			parts = append(parts, tab("rev", i+1))
+		case sshIsTab(sel.ID, name):
+			parts = append(parts, tab(sshTabLabel(sel.ID, name), i+1))
+		default:
+			shellNo++
+			parts = append(parts, tab(fmt.Sprintf("sh%d", shellNo), i+1))
+		}
 	}
 	parts = append(parts, faintText.Render("+"))
 	return previewLine(strings.Join(parts, " "), w)
@@ -603,7 +682,7 @@ func (m *rootModel) projectRailBody(w, h int) []string {
 		return []string{faintText.Render("no projects — press n to add one")}
 	}
 	rows := make([]string, 0, len(m.cfg.Projects))
-	for i, p := range m.cfg.Projects {
+	for i, p := range m.railProjectPtrs() {
 		polls := p.Polls()
 		enabled, last, errd := p.Enabled, "", false
 		if polls {
@@ -619,6 +698,10 @@ func (m *rootModel) projectRailBody(w, h int) []string {
 		}
 		var dot string
 		switch {
+		case p.InStack():
+			// A member never polls on its own — its stack's row carries the
+			// poll status, so the member row stays quiet rather than "not polling".
+			dot = " "
 		case !polls:
 			dot = faintText.Render("·")
 		case errd:
@@ -636,7 +719,7 @@ func (m *rootModel) projectRailBody(w, h int) []string {
 		if polls && !enabled {
 			name = faintText.Render(name)
 		}
-		left := marker + dot + " " + name
+		left := marker + dot + " " + stackMarker(m.cfg, p) + name
 		// Right-align the last-run age within the width.
 		gap := w - lipgloss.Width(left) - lipgloss.Width(last)
 		if gap < 1 {
@@ -677,7 +760,7 @@ func (m *rootModel) triageBody(w int) []string {
 	need := AttentionCount(sess)
 	work, ready, fix := 0, 0, 0
 	for _, x := range sess {
-		switch sortRank(x.Status) {
+		switch sortRank(x) {
 		case 1:
 			fix++
 		case 2:
@@ -783,6 +866,9 @@ func (m *rootModel) vitalsBar(w int) string {
 	if len(polling) > 0 {
 		parts = append(parts, fmt.Sprintf("polls %d/%d", en, len(polling)))
 	}
+	if sv := spendVital(st); sv != "" {
+		parts = append(parts, sv)
+	}
 
 	brand := lipgloss.NewStyle().Bold(true).Render("lola")
 	left := brand + "  " + strings.Join(parts, sep)
@@ -798,6 +884,9 @@ func (m *rootModel) vitalsBar(w int) string {
 // confirmation, a flash, or the daemon-down banner.
 func (m *rootModel) cockpitMessage() string {
 	s := &m.sessions
+	if drive := m.sshDrivingMessage(); drive != "" {
+		return drive
+	}
 	switch {
 	case s.confirmKill:
 		label := s.killTarget
@@ -809,7 +898,37 @@ func (m *rootModel) cockpitMessage() string {
 				}
 			}
 		}
-		return warnText.Render(fmt.Sprintf("kill %s? removes worktree, stops agent (y/n)", label))
+		// A direct ssh session has no worktree worth naming, but it does leave a record.
+		if si := s.byID(s.killTarget); si != nil && si.Location == "ssh" {
+			return warnText.Render(fmt.Sprintf("end %s? y ends it (y/n)", label)) +
+				faintText.Render(" The command record stays on disk for 14 days in ~/.lola/state/ssh/.")
+		}
+		return warnText.Render(fmt.Sprintf("kill %s? y stops agent + removes worktree · s stops agent, keeps worktree (y/s/n)", label))
+	case s.confirmFreePort:
+		return warnText.Render(fmt.Sprintf(
+			"kill the process holding :%d (pid %d) and restart the dev processes? (y/n)", s.freePort, s.freePID))
+	case s.switching:
+		// The agent-switch chooser: one line, the kinds as a cursor pick-list
+		// (the same › marker the answer card uses), the target named by its
+		// issue like the kill confirmation.
+		label := s.switchFor
+		if s.data != nil {
+			for i := range s.data.Sessions {
+				if info := s.data.Sessions[i]; info.ID == s.switchFor && info.Issue != "" {
+					label = info.Issue
+					break
+				}
+			}
+		}
+		kinds := make([]string, len(s.switchKinds))
+		for i, k := range s.switchKinds {
+			if i == s.switchCursor {
+				kinds[i] = warnText.Render("› " + k)
+			} else {
+				kinds[i] = faintText.Render(k)
+			}
+		}
+		return warnText.Render("switch agent on "+label+": ") + strings.Join(kinds, faintText.Render("  "))
 	case m.list.confirmDelete:
 		name := ""
 		if p := m.selectedRailProject(); p != nil {
@@ -850,7 +969,11 @@ func (m *rootModel) keybar(w int) string {
 	case s.answering:
 		return previewLine(faintText.Render("enter send · esc cancel"), w)
 	case s.confirmKill:
-		return previewLine(warnText.Render("y")+faintText.Render(" kill · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
+		return previewLine(warnText.Render("y")+faintText.Render(" kill · ")+warnText.Render("s")+faintText.Render(" stop, keep worktree · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
+	case s.confirmFreePort:
+		return previewLine(warnText.Render("y")+faintText.Render(" free port · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
+	case s.switching:
+		return previewLine(faintText.Render("↑↓ move · enter switch · esc cancel"), w)
 	case m.list.confirmDelete:
 		return previewLine(warnText.Render("y")+faintText.Render(" stop polling · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	}
@@ -861,18 +984,35 @@ func (m *rootModel) keybar(w int) string {
 	// '?' away.
 	var keys []string
 	if m.focus == focusPolls {
-		keys = []string{"↑↓ move", "enter open", "space toggle", "n new", "x stop", "X remove", "tab → sessions"}
+		keys = []string{"↑↓ move", "enter open", "space toggle", "n new", "t stack", "x stop", "X remove", "tab → sessions"}
 	} else {
 		keys = []string{"↑↓ move", "enter focus", "tab → projects", "/ filter", "x kill"}
 		if sel := s.selected(); sel != nil {
-			if sel.Status == "needs_input" {
+			// Offered on exactly the sessions the daemon would accept a reply for
+			// (answerable) — the affordance and the gate must not disagree.
+			if answerable(*sel) {
 				keys = append(keys, "a answer")
+			}
+			if cell := sshKeybarCell(sel); cell != "" {
+				keys = append(keys, cell)
+			} else if m.cfg != nil && len(m.cfg.SSHHosts) > 0 {
+				keys = append(keys, "H new ssh")
 			}
 			if sel.Worktree != "" {
 				if len(m.shellNames[sel.ID]) > 0 {
 					keys = append(keys, "s +shell "+goodText.Render("●")+" · < > tabs") // live shells to switch
 				} else {
 					keys = append(keys, "s shell")
+				}
+			}
+			// The dev toggle only exists for a project that configures
+			// dev_commands, and it reads as its own state: "d dev ●" means this
+			// session is the one holding them.
+			if len(sel.DevCommands) > 0 {
+				if sel.DevActive {
+					keys = append(keys, "D dev "+goodText.Render("●"))
+				} else {
+					keys = append(keys, "D dev")
 				}
 			}
 		}
@@ -955,6 +1095,16 @@ func (m *rootModel) kanbanBodyAt(width, height int) []string {
 	return lines
 }
 
+// anyBoard reports whether any session in list carries a self-report.
+func anyBoard(list []protocol.SessionInfo) bool {
+	for _, si := range list {
+		if si.Board != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // insAt returns s with v spliced in at index i (0 <= i <= len(s)), leaving the
 // input slice untouched — used to widen the sessions table with an optional
 // TITLE column without mutating the base row slices.
@@ -1000,8 +1150,17 @@ func eventPhrase(from, to string) string {
 		return "ended"
 	case "dead":
 		return "died"
+	case "idle":
+		return "idle"
+	case "shell":
+		return "shell opened"
+	case "orphaned":
+		return "orphaned"
 	default:
-		return to
+		// Never the raw word: an unmapped future status would otherwise render as
+		// a bare identifier in the feed. statusLabel de-underscores whatever it
+		// does not know, which is the same floor every other label has.
+		return statusLabel(to)
 	}
 }
 
@@ -1028,9 +1187,11 @@ func (m *rootModel) activityBody(w, h int) []string {
 		if key == "" {
 			key = shortID(e.ID)
 		}
-		phrase := statusStyle(e.To).Render(eventPhrase(e.From, e.To))
+		phrase := legacyStatusStyle(e.To).Render(eventPhrase(e.From, e.To))
 		line := boxTitle.Render(key) + " " + phrase
-		if e.Ago != "" {
+		if !e.At.IsZero() {
+			line += faintText.Render(" · " + shortAgo(e.At))
+		} else if e.Ago != "" {
 			line += faintText.Render(" · " + e.Ago)
 		}
 		out = append(out, truncateANSI(line, w))

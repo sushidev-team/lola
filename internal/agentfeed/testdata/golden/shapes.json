@@ -1,0 +1,107 @@
+[
+  {
+    "id": "s-1:0",
+    "kind": "user",
+    "order": 0,
+    "turn": "s-1:0",
+    "text": "/context",
+    "at": "2026-11-06T10:00:01Z"
+  },
+  {
+    "id": "s-2:0",
+    "kind": "notice",
+    "order": 1,
+    "turn": "s-1:0",
+    "text": "Context usage 12%",
+    "at": "2026-11-06T10:00:02Z"
+  },
+  {
+    "id": "u-2:0",
+    "kind": "user",
+    "order": 2,
+    "turn": "u-2:0",
+    "text": "/rename my session",
+    "at": "2026-11-06T10:00:03Z"
+  },
+  {
+    "id": "u-3:0",
+    "kind": "user",
+    "order": 3,
+    "turn": "u-3:0",
+    "text": "!ls -la",
+    "at": "2026-11-06T10:00:04Z"
+  },
+  {
+    "id": "u-4:0",
+    "kind": "notice",
+    "order": 4,
+    "turn": "u-3:0",
+    "text": "total 0\nwarn",
+    "at": "2026-11-06T10:00:05Z"
+  },
+  {
+    "id": "u-5:0",
+    "kind": "user",
+    "order": 5,
+    "turn": "u-5:0",
+    "text": "A long pasted brief\nwith two lines",
+    "at": "2026-11-06T10:00:06Z"
+  },
+  {
+    "id": "u-6:0",
+    "kind": "user",
+    "order": 6,
+    "turn": "u-6:0",
+    "text": "Background command \"sleep 31\" completed",
+    "origin": "task",
+    "at": "2026-11-06T10:00:07Z"
+  },
+  {
+    "id": "u-7:0",
+    "kind": "user",
+    "order": 7,
+    "turn": "u-7:0",
+    "text": "Continue from where you left off.",
+    "origin": "system",
+    "at": "2026-11-06T10:00:08Z"
+  },
+  {
+    "id": "a-2:0",
+    "kind": "notice",
+    "order": 8,
+    "turn": "u-7:0",
+    "text": "API Error: 529 overloaded",
+    "at": "2026-11-06T10:00:10Z"
+  },
+  {
+    "id": "u-8:0",
+    "kind": "user",
+    "order": 9,
+    "turn": "u-8:0",
+    "text": "Look at this\n[Image]",
+    "at": "2026-11-06T10:00:11Z"
+  },
+  {
+    "id": "u-9:0",
+    "kind": "user",
+    "order": 10,
+    "turn": "u-9:0",
+    "text": "Escape codes and bidi are gone",
+    "at": "2026-11-06T10:00:12Z"
+  },
+  {
+    "id": "s-3:0",
+    "kind": "divider",
+    "order": 11,
+    "turn": "u-9:0",
+    "text": "Compacted",
+    "at": "2026-11-06T10:00:13Z"
+  },
+  {
+    "id": "a-4:0",
+    "kind": "text",
+    "order": 12,
+    "turn": "u-9:0",
+    "text": "Still reading."
+  }
+]

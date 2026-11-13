@@ -1,75 +1,10 @@
 <script lang="ts">
   import { nav } from "$lib/nav.svelte";
-  import Panel from "./Panel.svelte";
-  import SessionsTable from "./SessionsTable.svelte";
-  import SessionsKanban from "./SessionsKanban.svelte";
   import SessionEmbed from "./SessionEmbed.svelte";
-  import TerminalGrid from "$lib/views/TerminalGrid.svelte";
   import { reflowGridRows } from "$lib/reflow";
-
-  // The cockpit's main column, extracted into its own component so Cockpit mounts
-  // it directly (see WKWEBVIEW_REACTIVITY in Cockpit.svelte). Reads the live store
-  // itself; the underlying reactivity is sound because the store no longer writes
-  // sessions + activity in the same flush (see store.svelte.ts).
-  //
-  // The panel is deliberately UNTITLED now: <MainTopBar> names the view, counts
-  // its rows and owns the lens switcher, so a second title + count + accent
-  // border here was two chrome bars saying the same thing.
-
-  // "Focus" (fullscreen) is a CSS state on the SAME detail terminal, NOT a
-  // separate `{#if}` branch: mounting/unmounting a LiveTerminal on a toggle freezes
-  // the template effect in WKWebView (see CockpitLayout.svelte). So the detail
-  // SessionEmbed stays mounted and its wrapper simply becomes a fixed overlay.
-  const focused = $derived(!!nav.focusedTerm);
 </script>
 
-<!-- a grid so panels stretch to full width AND height in WebKit; the fr-rows +
-     reflowGridRows dance is the layout fix documented in $lib/reflow.
-
-     The list row is `fit-content(45vh)`, NOT a fraction: a fixed 2fr/3fr split
-     left a half-empty sessions panel whenever there were only a handful of
-     sessions, and pinned the terminal to a fraction of the column instead of the
-     bottom. fit-content sizes the row to the table's own height and caps it at
-     45vh, past which the table scrolls inside its panel — so the terminal always
-     takes every remaining pixel down to the bottom edge, and short lists give it
-     more of them. The terminal row keeps `minmax(0,1fr)` so it absorbs the rest. -->
-<div
-  class="grid min-h-0 min-w-0 gap-3"
-  style="grid-template-rows:{nav.lens === 'grid' ? 'minmax(0,1fr)' : 'fit-content(45vh) minmax(0,1fr)'}"
-  {@attach reflowGridRows}
->
-  <!-- Accented while the terminal is NOT focused, i.e. exactly when j/k/Enter go
-       to this list. In split view both panels previously rendered unfocused, so
-       nothing on screen said which pane the keyboard was driving. -->
-  <Panel pad={false} focused={!focused}>
-    {#if nav.lens === "list"}
-      <SessionsTable />
-    {:else if nav.lens === "kanban"}
-      <SessionsKanban />
-    {:else}
-      <TerminalGrid />
-    {/if}
-  </Panel>
-
-  {#if nav.lens !== "grid"}
-    <!-- Detail / live terminal. When focused, the wrapper becomes an overlay
-         covering the cockpit area; the SessionEmbed instance is unchanged, so the
-         terminal resizes without remounting. The sidebar stays visible on purpose
-         — losing all navigation on Enter is disorienting, and a terminal running
-         under the traffic lights looks broken.
-
-         `absolute inset-0`, NOT `fixed` offset by --app-sidebar-w: <main> is the
-         nearest positioned ancestor and already spans exactly the cockpit area,
-         so the overlay lands on the right rectangle by construction instead of by
-         arithmetic. The fixed version was pinned at `top-11` — the top bar's
-         height alone — so whenever PushErrorBanner occupied its row the focused
-         terminal covered the "daemon is out of date" alert. -->
-    <div
-      class={focused ? "absolute inset-0 z-30 flex min-h-0 p-3" : "contents"}
-    >
-      <Panel focused={focused} fill={focused} pad={false}>
-        <SessionEmbed sessionId={nav.selectedId} {focused} />
-      </Panel>
-    </div>
-  {/if}
+<!-- Keep the workspace and its terminal mounted across sidebar/focus/layout changes. -->
+<div class="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] bg-canvas" data-session-embed {@attach reflowGridRows}>
+  <SessionEmbed sessionId={nav.focusedTerm || nav.selectedId} />
 </div>

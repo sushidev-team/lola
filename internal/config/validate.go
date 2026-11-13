@@ -6,6 +6,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/sushidev-team/lola/internal/notify"
 )
@@ -62,6 +63,20 @@ func (c *Config) AgentForProject(name string) string {
 		return pr.Agent
 	}
 	return orString(c.Defaults.Agent, DefaultAgent)
+}
+
+// FallbackChainFor resolves the ordered agent fallback chain for the named
+// project: its own agent_fallback when the key is set (a present-but-empty
+// value disables fallback for the project), else [defaults].agent_fallback,
+// else no fallback. The project field normally already holds the resolved
+// value (ResolveInheritance); the nil check keeps this correct on a config
+// that has not been resolved yet — the same posture as EffectiveCap. The
+// caller skips the running agent's own kind and any already-tried kinds.
+func (c *Config) FallbackChainFor(name string) []string {
+	if pr := c.ProjectByName(name); pr != nil && pr.AgentFallback != nil {
+		return slices.Clone(pr.AgentFallback)
+	}
+	return slices.Clone(c.Defaults.AgentFallback)
 }
 
 // BranchPrefixForProject resolves the branch-name prefix for the named project.
@@ -131,7 +146,7 @@ func (c *Config) Validate() error {
 		}
 		projectNames[pr.Name] = true
 
-		if pr.Path == "" {
+		if pr.Path == "" && !pr.IsStack() {
 			errs = append(errs, fmt.Errorf("%s: path is required", id))
 		}
 		if pr.Repo != "" && !repoRe.MatchString(pr.Repo) {
@@ -144,12 +159,46 @@ func (c *Config) Validate() error {
 		default:
 			errs = append(errs, fmt.Errorf("%s: agent must be one of claude|codex|opencode (empty inherits), got %q", id, pr.Agent))
 		}
+		// The per-project fallback chain validates only when the project sets
+		// it — an inherited chain is reported once against [defaults].
+		if !pr.Inherits.AgentFallback {
+			errs = append(errs, validateAgentChain(id+".agent_fallback", pr.AgentFallback)...)
+		}
 		// env keys become NAME= assignments in a shell-sourced file at spawn
 		// time; only POSIX shell identifiers are allowed (see envNameRe) so a
 		// crafted name can never be parsed as a command.
 		for _, k := range slices.Sorted(maps.Keys(pr.Env)) {
 			if !envNameRe.MatchString(k) {
 				errs = append(errs, fmt.Errorf("%s: env key %q is not a valid shell identifier (must match [A-Za-z_][A-Za-z0-9_]*)", id, k))
+			}
+		}
+		// Each dev_commands entry becomes ONE tmux session's command line, so a
+		// blank entry would open a tab that dies instantly and a multi-line one
+		// would be truncated at the newline — both are config mistakes worth
+		// naming rather than debugging in a pane.
+		for j, cmd := range pr.DevCommands {
+			switch {
+			case strings.TrimSpace(cmd) == "":
+				errs = append(errs, fmt.Errorf("%s: dev_commands[%d] is empty", id, j))
+			case strings.ContainsAny(cmd, "\n\r"):
+				errs = append(errs, fmt.Errorf("%s: dev_commands[%d] must be a single line", id, j))
+			}
+		}
+		for j, cmd := range pr.PreRemove {
+			if strings.TrimSpace(cmd) == "" {
+				errs = append(errs, fmt.Errorf("%s: pre_remove[%d] is empty", id, j))
+			}
+		}
+		if lo, hi, err := ParsePortRange(pr.PortRange); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
+		} else {
+			switch n := pr.PortsPerSession; {
+			case n < 0 || n > MaxPortsPerSession:
+				errs = append(errs, fmt.Errorf("%s: ports_per_session must be 0..%d, got %d", id, MaxPortsPerSession, n))
+			case n > 0 && pr.PortRange == "":
+				errs = append(errs, fmt.Errorf("%s: ports_per_session needs a port_range to allocate from", id))
+			case pr.PortRange != "" && hi-lo+1 < max(n, 1):
+				errs = append(errs, fmt.Errorf("%s: port_range %q holds fewer than ports_per_session (%d) ports", id, pr.PortRange, n))
 			}
 		}
 	}
@@ -237,11 +286,20 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateReactions()...)
 	errs = append(errs, c.validateNotify()...)
 	errs = append(errs, c.validateBrain()...)
+	errs = append(errs, c.validateMergeQueue()...)
+	errs = append(errs, c.validateBestOf()...)
 	errs = append(errs, c.validateStatusAgent()...)
 	errs = append(errs, c.validateReview()...)
 	errs = append(errs, c.validateReviewProviders()...)
+	errs = append(errs, c.validateReviewProfiles()...)
 	errs = append(errs, c.validateProjectReview()...)
 	errs = append(errs, c.validateUI()...)
+	errs = append(errs, c.validateLimits()...)
+	errs = append(errs, c.validateSandbox()...)
+	errs = append(errs, c.validateGoalMode()...)
+	errs = append(errs, c.validateStacks()...)
+	errs = append(errs, c.validateRemote()...)
+	errs = append(errs, c.validateSSHHosts()...)
 
 	return errors.Join(errs...)
 }
@@ -271,6 +329,7 @@ func (c *Config) validateProjectDefaults() []error {
 			errs = append(errs, fmt.Errorf("defaults.priority_sort: unknown key %q (must be one of %v)", k, PrioritySortKeys))
 		}
 	}
+	errs = append(errs, validateAgentChain("defaults.agent_fallback", c.Defaults.AgentFallback)...)
 	// Same shell-identifier rule as [[project]].env — these pairs reach the
 	// same 0600 shell-sourced env file at spawn time. See envNameRe.
 	for _, k := range slices.Sorted(maps.Keys(c.Defaults.Env)) {
@@ -295,6 +354,26 @@ func (c *Config) validateProjectDefaults() []error {
 	return errs
 }
 
+// validateAgentChain checks one agent_fallback chain: every entry must name a
+// known coding-agent kind and appear at most once.
+func validateAgentChain(field string, chain []string) []error {
+	var errs []error
+	seen := map[string]bool{}
+	for i, k := range chain {
+		switch k {
+		case "claude", "codex", "opencode":
+		default:
+			errs = append(errs, fmt.Errorf("%s[%d] must be one of claude|codex|opencode, got %q", field, i, k))
+			continue
+		}
+		if seen[k] {
+			errs = append(errs, fmt.Errorf("%s[%d] duplicates %q", field, i, k))
+		}
+		seen[k] = true
+	}
+	return errs
+}
+
 // validateReview checks the [review] table. The only rule is timeout_seconds >= 0;
 // a config lacking the table resolves to the zero ReviewConfig (timeout 0) and so
 // validates cleanly. Enablement, the command override, and the hand-off flags are
@@ -316,12 +395,17 @@ func (c *Config) validateReview() []error {
 //     migrate-review`;
 //   - unknown provider kind; more than one provider of the same kind (guards
 //     key by kind, so a duplicate is ambiguous);
-//   - unknown transport token; the github transport on a coderabbit-watch (its
-//     feedback is already on the PR — a review of it is a self-feedback loop);
+//   - unknown transport token; the github transport on a watch (its feedback is
+//     already on the PR — a review of it is a self-feedback loop);
 //   - fallback on a watch (a watch cannot classify quota); a fallback entry
 //     that is an unknown kind / the provider's own kind / a watch kind / not
 //     present-and-enabled in the catalog / part of a cycle;
-//   - timeout_seconds < 0.
+//   - timeout_seconds < 0;
+//   - an ENABLED kind that names no tool: custom-cli without a `command` and
+//     bot-watch without an `author`. Those two kinds exist purely to point at
+//     something other than the built-in default, so an empty one would poll or
+//     exec nothing at all; the check is gated on Enabled so a half-written,
+//     disabled entry never blocks a reload.
 //
 // An empty catalog validates trivially (the legacy path is checked by
 // validateReview).
@@ -343,7 +427,7 @@ func (c *Config) validateReviewProviders() []error {
 	seen := map[provKind]bool{}
 	for _, p := range c.ReviewProviders {
 		if !p.Provider.valid() {
-			errs = append(errs, fmt.Errorf("review provider: unknown provider kind %q (must be coderabbit-cli|coderabbit-watch|claude-session)", p.Provider))
+			errs = append(errs, fmt.Errorf("review provider: unknown provider kind %q (must be %s)", p.Provider, provKindList()))
 			continue
 		}
 		if seen[p.Provider] {
@@ -360,6 +444,12 @@ func (c *Config) validateReviewProviders() []error {
 		}
 		if p.TimeoutSeconds < 0 {
 			errs = append(errs, fmt.Errorf("review provider %q: timeout_seconds must be >= 0, got %d", p.Provider, p.TimeoutSeconds))
+		}
+		if p.Enabled && ReviewKindRequiresCommand(string(p.Provider)) && strings.TrimSpace(p.Command) == "" {
+			errs = append(errs, fmt.Errorf("review provider %q: command is required (it names the review CLI to run; use the coderabbit-cli kind for CodeRabbit's built-in default)", p.Provider))
+		}
+		if p.Enabled && ReviewKindRequiresAuthor(string(p.Provider)) && strings.TrimSpace(p.Author) == "" {
+			errs = append(errs, fmt.Errorf("review provider %q: author is required (it names the review bot whose PR comments are relayed; use the coderabbit-watch kind for CodeRabbit)", p.Provider))
 		}
 		for _, t := range p.Transports {
 			if !t.valid() {
@@ -467,7 +557,7 @@ func (c *Config) validateProjectReview() []error {
 		for _, k := range pr.Review {
 			switch {
 			case !k.valid():
-				errs = append(errs, fmt.Errorf("%s: review references unknown provider kind %q (must be coderabbit-cli|coderabbit-watch|claude-session)", id, k))
+				errs = append(errs, fmt.Errorf("%s: review references unknown provider kind %q (must be %s)", id, k, provKindList()))
 			case !enabled[k]:
 				errs = append(errs, fmt.Errorf("%s: review kind %q must be an enabled provider in the catalog", id, k))
 			}
@@ -501,6 +591,7 @@ func (c *Config) validateReactions() []error {
 		{"merge_conflict", c.Reactions.MergeConflict},
 		{"approved_and_green", c.Reactions.ApprovedAndGreen},
 		{"merged", c.Reactions.Merged},
+		{"agent_fallback", c.Reactions.AgentFallback},
 	}
 	for _, rc := range reactions {
 		if rc.r.Retries < 0 {

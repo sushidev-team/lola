@@ -1,0 +1,71 @@
+[
+  {
+    "id": "u-1:0",
+    "kind": "user",
+    "order": 0,
+    "turn": "u-1:0",
+    "text": "Run it",
+    "at": "2026-11-06T10:00:00Z"
+  },
+  {
+    "id": "a-1:0",
+    "kind": "tool",
+    "order": 1,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:01Z",
+    "tool": {
+      "name": "Bash",
+      "category": "run",
+      "summary": "sleep 100",
+      "status": "interrupted",
+      "durationMs": 1000,
+      "preview": "The user doesn't want to proceed with this tool use.",
+      "hasOutput": true
+    }
+  },
+  {
+    "id": "u-3:0",
+    "kind": "notice",
+    "order": 2,
+    "turn": "u-1:0",
+    "text": "Interrupted",
+    "at": "2026-11-06T10:00:02Z"
+  },
+  {
+    "id": "u-4:0",
+    "kind": "user",
+    "order": 3,
+    "turn": "u-4:0",
+    "text": "Try again",
+    "at": "2026-11-06T10:00:03Z"
+  },
+  {
+    "id": "a-2:0",
+    "kind": "text",
+    "order": 4,
+    "turn": "u-4:0",
+    "text": "Partial ans",
+    "at": "2026-11-06T10:00:04Z"
+  },
+  {
+    "id": "a-3:0",
+    "kind": "tool",
+    "order": 5,
+    "turn": "u-4:0",
+    "at": "2026-11-06T10:00:04Z",
+    "tool": {
+      "name": "Read",
+      "category": "read",
+      "summary": "a.go",
+      "status": "interrupted"
+    }
+  },
+  {
+    "id": "u-5:0",
+    "kind": "notice",
+    "order": 6,
+    "turn": "u-4:0",
+    "text": "Interrupted",
+    "at": "2026-11-06T10:00:05Z"
+  }
+]

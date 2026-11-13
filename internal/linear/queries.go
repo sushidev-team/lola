@@ -97,6 +97,50 @@ func (c *Client) WorkspaceLabels(ctx context.Context) ([]Label, error) {
 	}
 }
 
+// FilterRefs looks up the given label and state IDs in ONE query. Archived
+// labels are excluded on purpose: an archived label no longer appears on the
+// issue picker, so a filter naming one is as stale as one naming a deleted
+// label. Empty inputs skip their half of the query.
+func (c *Client) FilterRefs(ctx context.Context, labelIDs, stateIDs []string) (labels, states []Ref, err error) {
+	if len(labelIDs) == 0 && len(stateIDs) == 0 {
+		return nil, nil, nil
+	}
+	const q = `query($l:[ID!], $s:[ID!]){
+		issueLabels(filter:{id:{in:$l}}, first:250){ nodes{ id name team{ id } } }
+		workflowStates(filter:{id:{in:$s}}, first:250){ nodes{ id name team{ id } } } }`
+	type node struct {
+		ID, Name string
+		Team     *struct{ ID string }
+	}
+	var r struct {
+		IssueLabels    struct{ Nodes []node }
+		WorkflowStates struct{ Nodes []node }
+	}
+	// An empty `in` list matches nothing, which is exactly "nothing to check".
+	l, s := labelIDs, stateIDs
+	if l == nil {
+		l = []string{}
+	}
+	if s == nil {
+		s = []string{}
+	}
+	if err := c.do(ctx, q, map[string]any{"l": l, "s": s}, &r); err != nil {
+		return nil, nil, err
+	}
+	conv := func(ns []node) []Ref {
+		out := make([]Ref, 0, len(ns))
+		for _, n := range ns {
+			ref := Ref{ID: n.ID, Name: n.Name}
+			if n.Team != nil {
+				ref.TeamID = n.Team.ID
+			}
+			out = append(out, ref)
+		}
+		return out
+	}
+	return conv(r.IssueLabels.Nodes), conv(r.WorkflowStates.Nodes), nil
+}
+
 func (c *Client) Members(ctx context.Context, teamID string) ([]User, error) {
 	const q = `query($t:String!){ team(id:$t){ members{ nodes{ id name email active } } } }`
 	var r struct {
@@ -110,9 +154,20 @@ func (c *Client) Members(ctx context.Context, teamID string) ([]User, error) {
 // until pageInfo.hasNextPage is false. The filter is built via
 // BuildIssueFilter and passed as a variable — never string-interpolated.
 func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCycleID, viewerID string) ([]Issue, error) {
+	// The state/assignee/estimate/updatedAt fields are for the pickers (a human
+	// choosing an issue); dispatch ignores them. They ride the SAME query because
+	// they are plain scalars on a node already being fetched — a second round trip
+	// per tick would cost far more than they do. The relations and children ride
+	// it for DISPATCH: they decide whether an issue is eligible yet (blocked-by
+	// relations, open sub-issues). Capped at 50 each; an issue blocked by more
+	// than that is not a shape lola plans for.
 	const q = `query($filter: IssueFilter, $after: String){
 		issues(filter:$filter, first:100, after:$after){
-			nodes{ id identifier title branchName priority createdAt labels{ nodes{ id } } }
+			nodes{ id identifier title description branchName priority createdAt updatedAt estimate
+				state{ name type } assignee{ displayName name }
+				labels{ nodes{ id name parent{ name } } }
+				inverseRelations(first:50){ nodes{ type issue{ id identifier description state{ type } } } pageInfo{ hasNextPage } }
+				children(first:50){ nodes{ state{ type } } } ` + relatedOutgoingFields + ` }
 			pageInfo{ hasNextPage endCursor } } }`
 
 	filter := BuildIssueFilter(p, activeCycleID, viewerID)
@@ -125,13 +180,30 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 		var r struct {
 			Issues struct {
 				Nodes []struct {
-					ID         string
-					Identifier string
-					Title      string
-					BranchName string
-					Priority   float64
-					CreatedAt  string
-					Labels     struct{ Nodes []struct{ ID string } }
+					GoalOutgoing relationPage
+					ID           string
+					Identifier   string
+					Title        string
+					Description  string
+					BranchName   string
+					Priority     float64
+					CreatedAt    string
+					UpdatedAt    string
+					Estimate     *float64
+					State        *struct{ Name, Type string }
+					Assignee     *struct{ DisplayName, Name string }
+					Labels       struct {
+						Nodes []struct {
+							ID, Name string
+							Parent   *struct{ Name string }
+						}
+					}
+					// inverseRelations are the relations naming THIS issue as
+					// the related one: type "blocks" means .Issue blocks it.
+					InverseRelations relationPage
+					Children         struct {
+						Nodes []struct{ State *struct{ Type string } }
+					}
 				}
 				PageInfo struct {
 					HasNextPage bool
@@ -145,15 +217,50 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 		}
 		for _, n := range r.Issues.Nodes {
 			iss := Issue{
-				ID:         n.ID,
-				Identifier: n.Identifier,
-				Title:      n.Title,
-				BranchName: n.BranchName,
-				Priority:   n.Priority,
-				CreatedAt:  n.CreatedAt,
+				IssueRelations: relatedIssues(n.InverseRelations, n.GoalOutgoing),
+				ID:             n.ID,
+				Identifier:     n.Identifier,
+				Title:          n.Title,
+				Description:    n.Description,
+				BranchName:     n.BranchName,
+				Priority:       n.Priority,
+				CreatedAt:      n.CreatedAt,
+				UpdatedAt:      n.UpdatedAt,
+			}
+			if n.State != nil {
+				iss.StateName, iss.StateType = n.State.Name, n.State.Type
+			}
+			if n.Assignee != nil {
+				if iss.Assignee = n.Assignee.DisplayName; iss.Assignee == "" {
+					iss.Assignee = n.Assignee.Name
+				}
+			}
+			if n.Estimate != nil {
+				iss.Estimate = *n.Estimate
 			}
 			for _, l := range n.Labels.Nodes {
 				iss.LabelIDs = append(iss.LabelIDs, l.ID)
+				iss.LabelNames = append(iss.LabelNames, l.Name)
+				group := ""
+				if l.Parent != nil {
+					group = l.Parent.Name
+				}
+				iss.LabelGroups = append(iss.LabelGroups, group)
+			}
+			for _, r := range n.InverseRelations.Nodes {
+				if r.Type != "blocks" || r.Issue == nil {
+					continue
+				}
+				b := Blocker{ID: r.Issue.ID, Identifier: r.Issue.Identifier}
+				if r.Issue.State != nil {
+					b.StateType = r.Issue.State.Type
+				}
+				iss.BlockedBy = append(iss.BlockedBy, b)
+			}
+			for _, c := range n.Children.Nodes {
+				if c.State == nil || !StateFinished(c.State.Type) {
+					iss.OpenChildren++
+				}
 			}
 			out = append(out, iss)
 		}

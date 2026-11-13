@@ -6,7 +6,7 @@
 // touching this file. Tailwind v4 compiles `@theme` into custom properties on
 // :root and compiles every utility into a `var()` reference:
 //
-//     @layer theme { :root { --color-canvas: #181825; … } }
+//     @layer theme { :root { --color-canvas: #121624; … } }
 //     .bg-canvas { background-color: var(--color-canvas) }
 //
 // so redefining the property re-resolves every utility, every color-mix() in
@@ -32,6 +32,9 @@ import {
   type TermTheme,
   type ThemeId,
 } from "./catppuccin";
+
+import { appearancePreference, resolveAppearance, type AppearancePreference } from "./appearance";
+export type { AppearancePreference } from "./appearance";
 
 export { DEFAULT_THEME_ID, FLAVORS, THEME_IDS, type Flavor, type ThemeId };
 
@@ -197,141 +200,133 @@ export function applyFlavor(flavor: Flavor, root: HTMLElement = document.documen
     root.style.setProperty(name, value);
   }
   root.dataset.theme = flavor.id;
-  // app.css pins `color-scheme: dark` as the compiled default (mocha, the
+  // app.css pins `color-scheme: dark` as the compiled default (Midnight, the
   // default flavor, is dark) so a cold start before JS still renders right.
   // This inline write is what flips native form controls, `<select>` popups and
   // UA scrollbars for latte.
   root.style.colorScheme = flavor.dark ? "dark" : "light";
 }
 
-/**
- * Where the last painted flavor is remembered so the NEXT launch can paint it
- * on the first frame. config.toml stays the source of truth; this is a cache of
- * it, and a stale or absent entry costs at most the one repaint we already do.
- */
 const THEME_CACHE_KEY = "lola.theme";
+const APPEARANCE_CACHE_KEY = "lola.appearance";
 
-/**
- * Last flavor this app painted, or the compiled default. localStorage is
- * per-origin; the app serves its assets from a fixed origin, but if that ever
- * changes the cache simply misses and boot degrades to painting the default
- * first — i.e. exactly the old behaviour, never worse.
- */
-function cachedTheme(): ThemeId {
+function cachedAppearance(): AppearancePreference {
   try {
-    return flavorFor(globalThis.localStorage?.getItem(THEME_CACHE_KEY)).id;
+    const raw = globalThis.localStorage?.getItem(APPEARANCE_CACHE_KEY);
+    if (raw) return appearancePreference(JSON.parse(raw));
+    return appearancePreference({ theme: globalThis.localStorage?.getItem(THEME_CACHE_KEY) });
   } catch {
-    return DEFAULT_THEME_ID; // storage disabled or partitioned
+    return appearancePreference(undefined);
   }
 }
 
-function cacheTheme(id: ThemeId): void {
+function cacheAppearance(preference: AppearancePreference, id: ThemeId): void {
   try {
+    globalThis.localStorage?.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(preference));
     globalThis.localStorage?.setItem(THEME_CACHE_KEY, id);
-  } catch {
-    /* a theme is not worth failing a boot over */
-  }
+  } catch { /* Storage is optional; live appearance still works. */ }
 }
 
-/**
- * Read the persisted theme over the Wails bridge. The binding is loaded lazily
- * and guarded: ConfigService.GetTheme is added by the Go side of this change,
- * and a desktop binary predating it must still paint rather than throw.
- *
- * Returns undefined for "the bridge could not answer", which is deliberately
- * NOT the same as "the bridge said mocha": an unanswerable bridge must leave
- * the cached flavor standing and must not overwrite the cache with a default it
- * never actually read.
- */
-async function readTheme(): Promise<ThemeId | undefined> {
+type AppearanceService = {
+  GetAppearance?: () => Promise<unknown>;
+  SetAppearance?: (value: AppearancePreference) => Promise<void>;
+  GetTheme?: () => Promise<string>;
+  SetTheme?: (name: string) => Promise<void>;
+  PreviewTheme?: (name: string) => Promise<void>;
+};
+let servicePromise: Promise<AppearanceService> | undefined;
+function appearanceService(): Promise<AppearanceService> {
+  // Startup paints and reads preferences together; share their bridge import.
+  return servicePromise ??= import("@bindings/desktop").then(module => module.ConfigService as unknown as AppearanceService);
+}
+async function readAppearance(): Promise<AppearancePreference | undefined> {
   try {
-    const svc = (await import("@bindings/desktop")).ConfigService as unknown as {
-      GetTheme?: () => Promise<string>;
-    };
-    if (typeof svc.GetTheme !== "function") return undefined;
-    return flavorFor(await svc.GetTheme()).id;
-  } catch {
-    return undefined;
-  }
+    const svc = await appearanceService();
+    if (typeof svc.GetAppearance === "function") return appearancePreference(await svc.GetAppearance());
+    if (typeof svc.GetTheme === "function") return appearancePreference({ theme: await svc.GetTheme() });
+  } catch { /* An unavailable bridge must leave the cached preferences intact. */ }
+  return undefined;
 }
 
-async function writeTheme(id: ThemeId): Promise<void> {
-  const svc = (await import("@bindings/desktop")).ConfigService as unknown as {
-    SetTheme?: (name: string) => Promise<void>;
-  };
-  if (typeof svc.SetTheme !== "function") throw new Error("this build cannot save a theme");
-  await svc.SetTheme(id);
-}
-
-/**
- * The live appearance. Deliberately separate from `store.svelte.ts`, which
- * mirrors the daemon: presentation state has nothing to do with sessions, and
- * keeping them apart means a daemon that is down cannot take the theme with it.
- */
+/** Presentation state shared by desktop, mobile, xterm and pane snapshots. */
 class Appearance {
   id = $state<ThemeId>(DEFAULT_THEME_ID);
-
+  preference = $state<AppearancePreference>(appearancePreference(undefined));
+  systemDark = $state(true);
   flavor = $derived(FLAVORS[this.id]);
-  /** xterm.js theme for the current flavor (LiveTerminal spreads this). */
   term = $derived<TermTheme>(toXterm(FLAVORS[this.id]));
-  /** Palette for the DOM snapshot renderer (SnapshotTile → ansi.ts). */
   ansi = $derived<AnsiPalette>(toAnsi(FLAVORS[this.id]));
+  private media?: MediaQueryList;
+  private revision = 0;
+  private paintRevision = 0;
 
-  /** Paint the current flavor. Split out so `set` and `init` share one path. */
-  paint(): void {
-    applyFlavor(FLAVORS[this.id]);
+  snapshot(): AppearancePreference {
+    // Fixed-theme callers may still drive id directly (setup and old clients).
+    return { ...this.preference, theme: this.preference.followSystem ? this.preference.theme : this.id };
   }
 
-  /**
-   * Boot in two steps, and the first one is synchronous on purpose.
-   *
-   * Step 1 paints the LAST FLAVOR THIS APP PAINTED, read from localStorage.
-   * That is what keeps a non-default flavor from flashing mocha on every
-   * launch: the tokens, `data-theme` and `color-scheme` are already right
-   * before `mount()` runs, with no I/O of any kind.
-   *
-   * Step 2 asks config.toml over the bridge and repaints only if it disagrees.
-   * config.toml remains the source of truth; the cache is only a head start.
-   * A bridge that cannot answer (undefined) leaves step 1's paint standing.
-   *
-   * We do NOT gate mounting on step 2. Holding first paint until an IPC
-   * round-trip completes would replace a possible one-repaint colour change
-   * with a guaranteed blank window of unbounded length — strictly worse. The
-   * residual flash is now only (a) the very first launch on a machine and
-   * (b) config.toml edited behind the running app's back.
-   */
-  async init(): Promise<void> {
-    this.id = cachedTheme();
-    this.paint();
-    const id = await readTheme();
-    if (id === undefined) return;
-    if (id !== this.id) {
-      this.id = id;
+  private onSystemChange = (event: MediaQueryListEvent): void => {
+    this.systemDark = event.matches;
+    if (this.preference.followSystem) {
+      this.id = resolveAppearance(this.preference, this.systemDark);
       this.paint();
     }
-    cacheTheme(id);
+  };
+
+  private watchSystem(): void {
+    this.media?.removeEventListener("change", this.onSystemChange);
+    this.media = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : undefined;
+    this.systemDark = this.media?.matches ?? true;
+    this.media?.addEventListener("change", this.onSystemChange);
   }
 
-  /**
-   * Persist the flavor and remember it for the next boot. The ONLY writer —
-   * the settings form used to call ConfigService.SetTheme itself, which wrote
-   * config.toml but never the cache, so `init` kept painting the previous
-   * flavor first and the flash this cache exists to remove came back on the
-   * first launch after every theme change. Anything that changes [ui].theme
-   * goes through here.
-   *
-   * Takes an id rather than reading `this.id` because the settings form
-   * PREVIEWS: by the time it commits, `this.id` is already the new flavor and
-   * a "did it change" guard here would skip the write entirely. Painting is
-   * the caller's business (init paints from cache, the form paints on click);
-   * this method only makes it durable.
-   *
-   * cacheTheme runs only after config.toml agrees, so the cache can never lead
-   * the source of truth into a flavor that failed to save.
-   */
-  async commit(id: ThemeId): Promise<void> {
-    await writeTheme(id);
-    cacheTheme(id);
+  paint(): void {
+    applyFlavor(this.flavor);
+    const revision = ++this.paintRevision;
+    // The native title bar follows previews and OS changes without a config write.
+    void appearanceService().then(svc => {
+      if (revision === this.paintRevision) return svc.PreviewTheme?.(this.id);
+    }).catch(() => { /* Browser/mobile/older binaries have no native window. */ });
+  }
+
+  preview(preference: AppearancePreference): void {
+    this.revision++;
+    this.watchSystem();
+    this.preference = appearancePreference(preference);
+    this.id = resolveAppearance(this.preference, this.systemDark);
+    this.paint();
+  }
+
+  async init(): Promise<void> {
+    this.preview(cachedAppearance());
+    const revision = this.revision;
+    const preference = await readAppearance();
+    // A late startup read must not overwrite an in-progress user preview.
+    if (!preference || revision !== this.revision) return;
+    this.preview(preference);
+    cacheAppearance(preference, this.id);
+  }
+
+  /** Persist only after the backend accepts it. Preview/cancel stays caller-owned. */
+  async commit(value: ThemeId | AppearancePreference): Promise<void> {
+    const svc = await appearanceService();
+    const preference = typeof value === "string"
+      ? appearancePreference({ ...this.snapshot(), theme: value, followSystem: false })
+      : appearancePreference(value);
+    if (typeof value === "string") {
+      if (typeof svc.SetTheme !== "function") throw new Error("this build cannot save a theme");
+      await svc.SetTheme(value);
+    } else {
+      if (typeof svc.SetAppearance !== "function") throw new Error("this build cannot save system appearance; update the desktop app");
+      await svc.SetAppearance(preference);
+    }
+    cacheAppearance(preference, resolveAppearance(preference, this.systemDark));
+  }
+
+  /** The phone owns its appearance locally; it never changes the Mac's config. */
+  commitLocal(preference: AppearancePreference): void {
+    this.preview(preference);
+    cacheAppearance(this.preference, this.id);
   }
 }
 

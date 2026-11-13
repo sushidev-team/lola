@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import LiveTerminal from "./LiveTerminal.svelte";
+import TerminalCell from "./session/TerminalCell.svelte";
 import { TERM_FONT } from "$lib/theme-runtime.svelte";
 
 const gate = vi.hoisted(() => {
@@ -51,9 +52,15 @@ const spies = vi.hoisted(() => {
     fit: vi.fn(),
     refresh: vi.fn(),
     attachKey: vi.fn(),
+    attachWheel: vi.fn(),
     clearTextureAtlas: vi.fn(),
     attach: vi.fn(async () => {}),
+    write: vi.fn(async () => {}),
     detach: vi.fn(async () => {}),
+    detachAll: vi.fn(async () => {}),
+    scroll: vi.fn(async () => {}),
+    openURL: vi.fn(async () => {}),
+    webLinksHandler: undefined as undefined | ((e: MouseEvent, uri: string) => void),
   };
 });
 
@@ -72,6 +79,8 @@ vi.mock("@xterm/xterm", () => ({
     public focus = vi.fn();
     // Captured so the Ctrl-Q escape-hatch tests can drive it directly.
     public attachCustomKeyEventHandler = spies.attachKey;
+    // Same for the wheel handler the scroll tests drive.
+    public attachCustomWheelEventHandler = spies.attachWheel;
     public refresh = spies.refresh;
     public write = vi.fn();
     public writeln = vi.fn();
@@ -95,6 +104,19 @@ vi.mock("@xterm/addon-webgl", () => ({
   },
 }));
 
+vi.mock("@xterm/addon-web-links", () => ({
+  // Captures the click handler the component passes in, so the test can fire it.
+  WebLinksAddon: class {
+    public constructor(handler: (e: MouseEvent, uri: string) => void) {
+      spies.webLinksHandler = handler;
+    }
+    public activate = vi.fn();
+    public dispose = vi.fn();
+  },
+}));
+
+vi.mock("$lib/store.svelte", () => ({ store: { openURL: spies.openURL } }));
+
 vi.mock("@wailsio/runtime", () => ({
   Events: { On: vi.fn(() => () => {}) },
 }));
@@ -103,8 +125,10 @@ vi.mock("@bindings/desktop", () => ({
   TermService: {
     Attach: spies.attach,
     Detach: spies.detach,
-    Write: vi.fn(),
+    DetachAll: spies.detachAll,
+    Write: spies.write,
     Resize: vi.fn(),
+    Scroll: spies.scroll,
   },
 }));
 
@@ -144,7 +168,8 @@ describe("LiveTerminal font ordering", () => {
     gate.state.ready.settle(true);
     await vi.waitFor(() => expect(spies.open).toHaveBeenCalledTimes(1));
     expect(spies.ctor).toHaveBeenCalledWith(expect.objectContaining(TERM_FONT));
-    expect(spies.attach).toHaveBeenCalledWith("s1", 80, 24);
+    // Attach waits for the page's one-time orphan sweep (termboot.ts).
+    await vi.waitFor(() => expect(spies.attach).toHaveBeenCalledWith("s1", 80, 24));
   });
 
   it("does not force a re-measure when the font was there before open()", async () => {
@@ -226,6 +251,139 @@ describe("LiveTerminal font ordering", () => {
     });
   });
 
+  // xterm sends a bare CR for Enter whether or not shift is held (Keyboard.ts
+  // consults only alt), so shift+enter reached the agent as "send this message"
+  // and cut it off mid-sentence. The byte pair an agent inserts a newline for is
+  // ESC CR — meta+enter, which alt+enter already produces.
+  describe("shift+enter line break", () => {
+    /** Boot a terminal and hand back the key handler it registered. */
+    async function bootKeys(name = "s16", interactive = true) {
+      render(LiveTerminal, { props: { name, webgl: false, interactive } });
+      gate.state.ready.settle(true);
+      await vi.waitFor(() => expect(spies.open).toHaveBeenCalledTimes(1));
+      return spies.attachKey.mock.calls[0][0] as (e: KeyboardEvent) => boolean;
+    }
+
+    const enter = (mods: Partial<KeyboardEvent> = {}) =>
+      ({
+        type: "keydown",
+        key: "Enter",
+        shiftKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        preventDefault: vi.fn(),
+        ...mods,
+      }) as unknown as KeyboardEvent;
+
+    it("writes ESC CR and swallows the key so no bare CR follows", async () => {
+      const handler = await bootKeys();
+      expect(handler(enter({ shiftKey: true }))).toBe(false);
+      expect(spies.write).toHaveBeenCalledWith("s16", "\x1b\r");
+    });
+
+    it("leaves a plain Enter alone", async () => {
+      const handler = await bootKeys("s17");
+      expect(handler(enter())).toBe(true);
+      expect(spies.write).not.toHaveBeenCalled();
+    });
+
+    // ⌥⇧Enter and ⌘⇧Enter are somebody else's chords; xterm already encodes the
+    // alt one as ESC CR on its own.
+    it("leaves shift+enter with another modifier alone", async () => {
+      const handler = await bootKeys("s18");
+      expect(handler(enter({ shiftKey: true, altKey: true }))).toBe(true);
+      expect(handler(enter({ shiftKey: true, metaKey: true }))).toBe(true);
+      expect(spies.write).not.toHaveBeenCalled();
+    });
+
+    // A read-only tile has no PTY to write into.
+    it("does not write into a non-interactive terminal", async () => {
+      const handler = await bootKeys("s19", false);
+      expect(handler(enter({ shiftKey: true }))).toBe(true);
+      expect(spies.write).not.toHaveBeenCalled();
+    });
+  });
+
+  // A URL printed by a dev server is the terminal's most-clicked text. Both link
+  // kinds must reach the DAEMON's opener, never window.open — this is a
+  // WKWebView, so a new window would open inside the app, and the daemon is
+  // where the http(s)-only guard lives.
+  describe("link opening", () => {
+    async function boot() {
+      render(LiveTerminal, { props: { name: "s10", webgl: false, interactive: true } });
+      gate.state.ready.settle(true);
+      await vi.waitFor(() => expect(spies.open).toHaveBeenCalledTimes(1));
+    }
+
+    it("opens a plain URL through the daemon", async () => {
+      await boot();
+      spies.webLinksHandler?.(new MouseEvent("click"), "http://127.0.0.1:8000");
+      expect(spies.openURL).toHaveBeenCalledWith("http://127.0.0.1:8000");
+    });
+
+    it("opens an OSC 8 hyperlink through the daemon", async () => {
+      await boot();
+      const activate = (spies.options.linkHandler as { activate: (e: MouseEvent, uri: string) => void }).activate;
+      activate(new MouseEvent("click"), "https://github.com/acme/widgets/pull/7");
+      expect(spies.openURL).toHaveBeenCalledWith("https://github.com/acme/widgets/pull/7");
+    });
+  });
+
+  // `tmux attach` runs on the ALTERNATE screen, so xterm has no scrollback of
+  // its own here and its built-in fallback turns the wheel into cursor keys —
+  // which walks the agent's input history instead of scrolling. The pane's real
+  // history lives in tmux, so the wheel is forwarded to TermService.Scroll and
+  // xterm is told to keep its hands off.
+  describe("wheel scrolling", () => {
+    /** Boot a terminal and hand back the wheel handler it registered. */
+    async function bootWheel(name = "s11") {
+      render(LiveTerminal, { props: { name, webgl: false, interactive: true } });
+      gate.state.ready.settle(true);
+      await vi.waitFor(() => expect(spies.open).toHaveBeenCalledTimes(1));
+      return spies.attachWheel.mock.calls[0][0] as (e: WheelEvent) => boolean;
+    }
+
+    // jsdom reports clientHeight 0, so the component falls back to a 17px cell —
+    // the same number TERM_FONT lands on. Three cells' worth of pixels.
+    const wheel = (deltaY: number, deltaMode = 0) => ({ deltaY, deltaMode }) as WheelEvent;
+
+    it("scrolls the tmux pane back and refuses xterm's arrow-key fallback", async () => {
+      const handler = await bootWheel();
+      expect(handler(wheel(-51))).toBe(false); // wheel up = back into history
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s11", 3));
+    });
+
+    it("scrolls forward again on a downward wheel", async () => {
+      const handler = await bootWheel("s12");
+      expect(handler(wheel(51))).toBe(false);
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s12", -3));
+    });
+
+    it("coalesces a burst into one tmux call", async () => {
+      const handler = await bootWheel("s13");
+      for (let i = 0; i < 4; i++) handler(wheel(-51));
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledTimes(1));
+      expect(spies.scroll).toHaveBeenCalledWith("s13", 12);
+    });
+
+    // A trackpad delivers a few pixels at a time; rounding each event to zero
+    // would make slow scrolling do nothing at all.
+    it("accumulates sub-line deltas instead of dropping them", async () => {
+      const handler = await bootWheel("s14");
+      for (let i = 0; i < 6; i++) handler(wheel(-3));
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s14", 1));
+    });
+
+    it("reads line and page deltas in the cell's units", async () => {
+      const handler = await bootWheel("s15");
+      handler(wheel(-2, 1)); // DOM_DELTA_LINE
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s15", 2));
+      handler(wheel(-1, 2)); // DOM_DELTA_PAGE — one screen of 24 rows
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s15", 24));
+    });
+  });
+
   it("never attaches when unmounted during the font wait", async () => {
     const { unmount } = render(LiveTerminal, {
       props: { name: "s5", webgl: false, interactive: false },
@@ -235,5 +393,14 @@ describe("LiveTerminal font ordering", () => {
     await settle();
     expect(spies.open).not.toHaveBeenCalled();
     expect(spies.attach).not.toHaveBeenCalled();
+  });
+
+  it("detaches the original session when switching from Terminal to Conversation", async () => {
+    const { rerender } = render(TerminalCell, { name: "queued-session", autofocus: false });
+    gate.state.ready.settle(true);
+    await vi.waitFor(() => expect(spies.attach).toHaveBeenCalledWith("queued-session", 80, 24));
+    await rerender({ name: "" });
+    await vi.waitFor(() => expect(spies.detach).toHaveBeenCalledWith("queued-session"));
+    expect(spies.detach).not.toHaveBeenCalledWith("");
   });
 });

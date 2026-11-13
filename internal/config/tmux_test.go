@@ -47,6 +47,7 @@ global_cap = 4
 socket_name = "work"
 detach_key = "F12"
 status_right = "#[fg=green]#S"
+scrollback = 50000
 mouse = true
 status_bar = true
 `
@@ -61,6 +62,7 @@ status_bar = true
 		SocketName:  "work",
 		DetachKey:   "F12",
 		StatusRight: "#[fg=green]#S",
+		Scrollback:  50000,
 		Mouse:       true,
 		StatusBar:   true,
 	}
@@ -106,6 +108,7 @@ func TestTmuxRoundTrip(t *testing.T) {
 		SocketName:  "custom",
 		DetachKey:   "F12",
 		StatusRight: "#[fg=red]lola",
+		Scrollback:  50000,
 		Mouse:       true,
 		StatusBar:   true,
 	}
@@ -141,6 +144,39 @@ func TestTmuxFreshConfigOmitsTable(t *testing.T) {
 	}
 	if got.Tmux != defaultTmux() {
 		t.Errorf("reloaded tmux = %+v, want defaults %+v", got.Tmux, defaultTmux())
+	}
+}
+
+// Scrollback keeps 0 as its "unset" value (so the zero TmuxConfig stays the
+// unconfigured one that Save omits) and resolves to lola's default at read time.
+func TestTmuxScrollbackResolver(t *testing.T) {
+	if got := (TmuxConfig{}).ScrollbackLines(); got != DefaultTmuxScrollback {
+		t.Errorf("unset ScrollbackLines() = %d, want %d", got, DefaultTmuxScrollback)
+	}
+	if got := (TmuxConfig{Scrollback: 50000}).ScrollbackLines(); got != 50000 {
+		t.Errorf("ScrollbackLines() = %d, want 50000", got)
+	}
+	// tmux's own default is 2000 lines — far too little for an agent's output.
+	if DefaultTmuxScrollback <= 2000 {
+		t.Errorf("DefaultTmuxScrollback = %d, want more than tmux's own 2000", DefaultTmuxScrollback)
+	}
+}
+
+// A client built from config carries the socket AND the scroll defaults it must
+// apply before creating a session — the whole reason session-creating callers
+// go through this constructor instead of a bare tmux.Client literal.
+func TestTmuxClientCarriesScrollDefaults(t *testing.T) {
+	c := &Config{}
+	c.Tmux = TmuxConfig{SocketName: "work", Scrollback: 50000, Mouse: true}
+	got := c.TmuxClient("tmux", "/home/dev/.lola")
+	want := tmux.Client{Bin: "tmux", SocketName: "work", Dir: "/home/dev/.lola", Scrollback: 50000, Mouse: true}
+	if *got != want {
+		t.Errorf("TmuxClient = %+v, want %+v", *got, want)
+	}
+	// A zero config still gets the isolated socket and lola's own scrollback.
+	zero := (&Config{}).TmuxClient("", "")
+	if zero.SocketName != DefaultTmuxSocketName || zero.Scrollback != DefaultTmuxScrollback || zero.Mouse {
+		t.Errorf("zero-config TmuxClient = %+v, want lola socket + default scrollback, mouse off", *zero)
 	}
 }
 

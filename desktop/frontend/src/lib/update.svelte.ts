@@ -3,7 +3,7 @@
 // each action wrapping one bound call. Components read `updates.available` etc.
 // and call `updates.download()` — they never touch the bindings directly.
 //
-// Flow: init() loads the compiled version and (interval-gated) auto-checks →
+// Flow: init() loads the compiled version and starts automatic checks →
 // check() populates `info` → download() streams the DMG (progress events) →
 // install() swaps the bundle and quits. The backend is authoritative on whether
 // a newer version exists; the frontend only layers the skip/dismiss UX on top.
@@ -23,22 +23,34 @@ class UpdateStore {
   /** Path to the downloaded DMG once fetched; enables the install step. */
   dmgPath = $state("");
 
-  private started = false;
+  private stopAutoCheck: (() => void) | null = null;
 
-  /** A newer, installable release exists and hasn't been suppressed. */
+  /**
+   * A newer release exists than the running build, and hasn't been suppressed.
+   *
+   * Deliberately NOT gated on a download URL. The macOS DMG is attached by a
+   * separate (signing + notarization) job minutes after the release itself is
+   * published, and it can fail on its own — so for a window after every release,
+   * and indefinitely after a failed one, a newer version exists with no asset to
+   * fetch. Folding that into `available` reported "you're up to date" to
+   * everyone running the previous version, which is the exact opposite of true.
+   */
   available = $derived(
     !!this.info?.available &&
-      !!this.info?.downloadURL &&
       !!this.info?.latestVersion &&
       this.info.latestVersion !== this.info.currentVersion,
   );
 
-  /** Subscribe to progress events, load the version, kick the auto-check. Idempotent. */
-  async init() {
-    if (this.started) return;
-    this.started = true;
+  /** …and its macOS build is published, so the in-app download can run. */
+  installable = $derived(this.available && !!this.info?.downloadURL);
 
-    Events.On("update:download-progress", (e) => {
+  /** Check on launch, then poll the persisted cadence while the app is open. */
+  async init() {
+    if (this.stopAutoCheck) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const unsubscribe = Events.On("update:download-progress", (e) => {
       const p = e.data as UpdateProgressDTO;
       this.progress = p;
       if (p?.status === "complete") {
@@ -50,36 +62,67 @@ class UpdateStore {
       }
     });
 
+    this.stopAutoCheck = () => {
+      stopped = true;
+      clearTimeout(timer);
+      unsubscribe();
+    };
+
+    const poll = async (startup = false) => {
+      try {
+        // Launch checks ignore the previous run's timestamp. Later checks use
+        // the backend's cadence, including manual checks and preference changes.
+        const due = startup
+          ? (await UpdateService.GetUpdateSettings()).autoCheck
+          : await UpdateService.ShouldAutoCheck();
+        if (!stopped && due) await this.check(false);
+      } catch {
+        /* best-effort; retry on the next tick */
+      } finally {
+        // A local preference query each minute; GitHub is only queried when due.
+        // Scheduling after completion also bounds retries and prevents overlap.
+        if (!stopped) timer = setTimeout(() => void poll(), 60_000);
+      }
+    };
+
     try {
       this.version = await UpdateService.GetVersion();
     } catch {
       /* keep the "dev" default */
     }
-    try {
-      if (await UpdateService.ShouldAutoCheck()) await this.check(false);
-    } catch {
-      /* auto-check is best-effort; a manual check surfaces errors */
-    }
+    if (!stopped) await poll(true);
+  }
+
+  /** Release the timer and progress subscription when the app unmounts. */
+  stop() {
+    this.stopAutoCheck?.();
+    this.stopAutoCheck = null;
   }
 
   /**
    * Query the latest release. A manual check surfaces errors and always shows an
    * available update; an auto check stays silent on error and honours the
    * user's skipped version so the footer badge doesn't reappear.
+   *
+   * `manual` is also what forces the backend past its release cache — a human
+   * asking again must be able to get a different answer.
    */
   async check(manual = true) {
+    if (this.checking || this.downloading || this.installing || this.dmgPath) return;
     this.checking = true;
-    this.error = "";
+    if (manual) this.error = "";
     try {
-      const info = await UpdateService.CheckForUpdates();
+      const info = await UpdateService.CheckForUpdates(manual);
       if (!manual && info.available && (await UpdateService.IsVersionSkipped(info.latestVersion))) {
         this.info = { ...info, available: false };
       } else {
         this.info = info;
       }
     } catch (err) {
-      this.error = String(err);
-      if (manual) this.info = null;
+      if (manual) {
+        this.error = String(err);
+        this.info = null;
+      }
     } finally {
       this.checking = false;
     }

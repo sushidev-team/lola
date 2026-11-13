@@ -1,0 +1,30 @@
+<!--
+  Copy this, change what lola.view draws, and post it:
+    lola ssh post widget "Disk on /var" --ref disk --file page.html \
+      --data '{"used":71,"free":"14 GB","history":[60,64,63,71]}'
+  Later, new numbers alone update it live:
+    lola ssh post widget --ref disk --data '{"used":72,"free":"13 GB","history":[64,63,71,72]}'
+-->
+<style>
+  /* Use the theme's variables, so it matches every theme. */
+  .title { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-weight: 600 }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); animation: pulse 2s infinite }
+  @keyframes pulse { 50% { opacity: .3 } }
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px }
+</style>
+<script>
+  const { el, meter, rows, spark } = lola;
+
+  // Called now and on every --data. With no data it shows the empty text instead.
+  lola.view(d => [
+    // CSS animation stops by itself for a human who asked for less motion.
+    // Check lola.reducedMotion before animating from a script.
+    el("div", { class: "title" }, el("span", { class: "dot" }), "Disk on /var"),
+    meter(d.used, { label: "Used", warn: 80, bad: 90 }),
+    rows({ Free: d.free }),
+    el("div", { class: "foot" },
+      spark(d.history, { label: "Used, last hours" }),
+      // This fills the human's message box. Only the human can send it.
+      el("button", { onclick: () => lola.run("df -h /var") }, "Prepare df")),
+  ], { empty: "Waiting for data" });
+</script>

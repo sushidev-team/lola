@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -41,6 +42,38 @@ func Slug(s string) string {
 // trailing "-" or "." that is not a valid id on its own.
 func SlugTyping(s string) string {
 	return slugRe.ReplaceAllString(strings.ToLower(s), "-")
+}
+
+// labelSepRe splits a directory name into the words a Label is built from.
+var labelSepRe = regexp.MustCompile(`[-_.\s]+`)
+
+// LabelFromPath proposes a display Label for a project from its checkout path:
+// the directory's own name, separators turned into spaces and each all-lowercase
+// word capitalized ("nori-app" → "Nori App"). It is the inverse convention of
+// Slug — Slug(LabelFromPath(p)) reproduces the directory name — so picking a
+// folder fills the label AND, through Slug, an id that still matches the folder.
+//
+// A word that already carries capitals is left verbatim ("NoriApp", "iOS"): the
+// human named it that way and re-casing it would be a worse guess than none.
+// Returns "" for a path with no usable base, which callers must treat as "no
+// suggestion" rather than substituting a placeholder.
+func LabelFromPath(p string) string {
+	base := filepath.Base(strings.TrimSpace(p))
+	base = strings.TrimSuffix(base, ".git")
+	if base == "" || base == "." || base == ".." || base == string(filepath.Separator) {
+		return ""
+	}
+	var words []string
+	for _, w := range labelSepRe.Split(base, -1) {
+		if w == "" {
+			continue
+		}
+		if w == strings.ToLower(w) {
+			w = strings.ToUpper(w[:1]) + w[1:]
+		}
+		words = append(words, w)
+	}
+	return strings.Join(words, " ")
 }
 
 // IsSlug reports whether s is already exactly its own Slug — i.e. safe to use as

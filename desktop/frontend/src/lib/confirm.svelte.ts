@@ -19,8 +19,23 @@ export type ConfirmRequest = {
   detail?: string;
   /** Label for the confirming button, e.g. "Kill". */
   confirmLabel: string;
-  /** Run on accept. Kept as a closure so the caller decides what "yes" means. */
-  onConfirm: () => void;
+  /** Destructive by default; use primary for non-destructive confirmations. */
+  confirmVariant?: 'primary' | 'danger-solid';
+  /**
+   * Run on accept. Kept as a closure so the caller decides what "yes" means.
+   * Receives the ids of the checked `choices` (empty when there are none).
+   */
+  onConfirm: (checked: string[]) => void;
+  /**
+   * Optional checkbox list drawn under the copy, e.g. "which members to keep"
+   * when removing a stack. The dialog flips `checked` in place.
+   */
+  choices?: { label: string; items: { id: string; label: string; checked: boolean }[] };
+  /**
+   * Optional milder alternative drawn between Cancel and the confirming button
+   * (e.g. "Stop agent" beside "Kill"). Never reachable by Enter/Escape.
+   */
+  alternative?: { label: string; onConfirm: () => void };
 };
 
 class Confirm {
@@ -38,7 +53,14 @@ class Confirm {
   accept() {
     const r = this.request;
     this.request = null;
-    r?.onConfirm();
+    r?.onConfirm((r.choices?.items ?? []).filter((i) => i.checked).map((i) => i.id));
+  }
+
+  /** Same clear-first order as accept, for the alternative action. */
+  acceptAlternative() {
+    const r = this.request;
+    this.request = null;
+    r?.alternative?.onConfirm();
   }
 }
 

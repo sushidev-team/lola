@@ -1,17 +1,19 @@
 import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
 // when the hoisted vi.mock factories run.
-const { getProject, saveProject, removeProject, getSettings, detectRepo, branchesFn, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
+const { getProject, saveProject, setMemberLabels, removeProject, getSettings, inspectPath, pickFolder, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
   () => ({
     getProject: vi.fn(),
     saveProject: vi.fn(),
+    setMemberLabels: vi.fn(),
     renameProject: vi.fn(),
     removeProject: vi.fn(),
     getSettings: vi.fn(),
-    detectRepo: vi.fn(),
-    branchesFn: vi.fn(),
+    inspectPath: vi.fn(),
+    pickFolder: vi.fn(),
     teamsFn: vi.fn(),
     teamMetaFn: vi.fn(),
   }),
@@ -21,10 +23,11 @@ vi.mock("@bindings/desktop", () => ({
   ConfigService: {
     GetProject: (...a: unknown[]) => getProject(...a),
     SaveProject: (...a: unknown[]) => saveProject(...a),
+    SetStackMemberLabels: (...a: unknown[]) => setMemberLabels(...a),
     RemoveProject: (...a: unknown[]) => removeProject(...a),
     GetSettings: () => getSettings(),
-    DetectRepo: (...a: unknown[]) => detectRepo(...a),
-    Branches: (...a: unknown[]) => branchesFn(...a),
+    InspectPath: (...a: unknown[]) => inspectPath(...a),
+    PickFolder: (...a: unknown[]) => pickFolder(...a),
   },
   LinearService: {
     Teams: (...a: unknown[]) => teamsFn(...a),
@@ -45,6 +48,7 @@ vi.mock("@wailsio/runtime", () => ({
 
 import ProjectForm from "./ProjectForm.svelte";
 import { nav } from "$lib/nav.svelte";
+import { store } from "$lib/store.svelte";
 import { confirm } from "$lib/confirm.svelte";
 
 // A project that overrides post-create/env/blocked-label but inherits
@@ -53,12 +57,14 @@ import { confirm } from "$lib/confirm.svelte";
 function sampleDto() {
   return {
     name: "acme",
+    autoPRComments: true,
     label: "",
     path: "/Users/me/code/acme",
     repo: "acme/acme",
     defaultBranch: "main",
     branchPrefix: "acme/",
     agent: "claude",
+    execution: { goalMode: false, sandbox: "", image: "" },
     symlinks: ["inherited-link"],
     postCreate: ["npm ci"],
     env: ["KEY=own"],
@@ -88,6 +94,7 @@ function sampleDto() {
     prRequiresChecks: true,
 
     inherits: {
+      autoPRComments: true,
       symlinks: true,
       postCreate: false,
       env: false,
@@ -105,6 +112,7 @@ function sampleDto() {
 // [defaults] — what a "revert to inherit" must refill the control with.
 function settingsDto() {
   return {
+    autoPRComments: true,
     symlinks: ["inherited-link"],
     postCreate: ["make setup", "make build"],
     env: ["SHARED=1"],
@@ -134,6 +142,20 @@ const meta = {
   members: [{ id: "user-1", label: "Ada" }],
 };
 
+/** One InspectPath answer; overrides express "this checkout, but …". */
+function pathInfo(over: Record<string, unknown> = {}) {
+  return {
+    path: "",
+    isRepo: false,
+    repo: "",
+    defaultBranch: "",
+    branches: [],
+    suggestedLabel: "",
+    suggestedId: "",
+    ...over,
+  };
+}
+
 /** The grid row that owns a control, so a chip can be found next to its label. */
 function rowOf(control: HTMLElement): HTMLElement {
   return control.closest("div.grid") as HTMLElement;
@@ -144,11 +166,13 @@ describe("ProjectForm", () => {
     cleanup();
     getProject.mockReset().mockResolvedValue(sampleDto());
     saveProject.mockReset().mockResolvedValue(undefined);
+    setMemberLabels.mockReset().mockResolvedValue(undefined);
     renameProject.mockReset().mockResolvedValue({ from: "", to: "", blockers: [] });
     removeProject.mockReset().mockResolvedValue(undefined);
     getSettings.mockReset().mockResolvedValue(settingsDto());
-    detectRepo.mockReset().mockResolvedValue("");
-    branchesFn.mockReset().mockResolvedValue([]);
+    inspectPath.mockReset().mockResolvedValue(pathInfo());
+    // The folder chooser is only auto-opened for a NEW project; "" is a cancel.
+    pickFolder.mockReset().mockResolvedValue("");
     teamsFn.mockReset().mockResolvedValue([
       { id: "team-uuid-1", key: "ENG", name: "Engineering" },
       { id: "team-uuid-2", key: "OPS", name: "Operations" },
@@ -159,28 +183,134 @@ describe("ProjectForm", () => {
     nav.overlayTab = "";
   });
 
+  it("saves explicit PR comment automation off and restores inheritance", async () => {
+    render(ProjectForm);
+    const select = await screen.findByLabelText("Automatically address PR comments");
+    expect(select).toHaveValue("inherit");
+    await fireEvent.change(select, { target: { value: "off" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalled());
+    expect(saveProject.mock.calls[0][0]).toMatchObject({autoPRComments: false, inherits: {autoPRComments: false}});
+    cleanup();
+    getProject.mockResolvedValue({...sampleDto(), autoPRComments: false, inherits: {...sampleDto().inherits, autoPRComments: false}});
+    render(ProjectForm);
+    await fireEvent.change(await screen.findByLabelText("Automatically address PR comments"), { target: { value: "inherit" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(2));
+    expect(saveProject.mock.calls[1][0]).toMatchObject({autoPRComments: true, inherits: {autoPRComments: true}});
+  });
+
   it("loads the whole project and opens on the Repo tab", async () => {
     render(ProjectForm);
     expect(getProject).toHaveBeenCalledWith("acme");
     expect(await screen.findByLabelText("Path")).toHaveValue("/Users/me/code/acme");
     expect(screen.getByText("project: acme")).toBeInTheDocument();
-    expect(screen.getByLabelText("Branch prefix")).toHaveValue("acme/");
+    expect(screen.queryByLabelText("Branch prefix")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Worktree setup" }));
+    expect(screen.getByLabelText("Custom Branch prefix")).toHaveValue("acme/");
     // Every tab of the merged overlay is reachable.
-    for (const t of ["Repo", "Filter", "Labels", "Write-back"]) {
+    for (const t of ["General", "Worktree setup", "Issue pickup", "Linear updates"]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
     }
+    // The stack-only tabs are not offered to a plain project.
+    expect(screen.queryByRole("tab", { name: "Members" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Stack" })).not.toBeInTheDocument();
+  });
+
+  it("requires Docker before enabling goals and saves availability separately", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Execution" }));
+    const toggle = screen.getByRole("checkbox", { name: "Make autonomous goals available" });
+    expect(toggle).toBeDisabled();
+    await fireEvent.change(screen.getByLabelText("Run agents in"), { target: { value: "docker" } });
+    expect(toggle).toBeEnabled();
+    await fireEvent.click(toggle);
+    await fireEvent.input(screen.getByLabelText("Container image"), { target: { value: "toolchain:stable" } });
+    expect(screen.getByText(/Each goal still needs a reviewed plan/)).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0].execution).toEqual({ goalMode: true, sandbox: "docker", image: "toolchain:stable" });
+  });
+
+  it("guides a project without Linear placement to Issue pickup", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), projectId: "", execution: { goalMode: false, sandbox: "docker", image: "" } });
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Execution" }));
+    expect(screen.getByRole("checkbox", { name: "Make autonomous goals available" })).toBeDisabled();
+    await fireEvent.click(screen.getByRole("button", { name: "Choose Linear project" }));
+    expect(screen.getByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("retains rejected settings and allows goal mode to be turned off", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), execution: { goalMode: true, sandbox: "docker", image: "toolchain:stable" } });
+    saveProject.mockRejectedValue(new Error("goal_mode requires sandbox = docker"));
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Execution" }));
+    await fireEvent.change(screen.getByLabelText("Run agents in"), { target: { value: "none" } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(await screen.findByText(/goal_mode requires sandbox = docker/)).toBeInTheDocument();
+    const toggle = screen.getByRole("checkbox", { name: "Make autonomous goals available" });
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeEnabled();
+    expect(screen.getByLabelText("Run agents in")).toHaveValue("none");
+    await fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+  });
+
+  it("hides execution settings on stack members", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), stack: "nori", labels: [] });
+    render(ProjectForm);
+    await screen.findByLabelText("Path");
+    expect(screen.queryByRole("tab", { name: "Execution" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0].execution).toEqual(sampleDto().execution);
+  });
+
+  it("saves explicit defaults for agent and concurrency", async () => {
+    render(ProjectForm);
+    await fireEvent.change(await screen.findByLabelText("Agent"), { target: { value: "" } });
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
+    await fireEvent.change(screen.getByLabelText("Concurrency"), { target: { value: "default" } });
+    expect(screen.queryByLabelText("Concurrency cap")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({ agent: "", concurrencyCap: 0 });
+  });
+
+  it("keeps a custom limit editable while cleared and rejects invalid limits", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+    const cap = screen.getByLabelText("Concurrency cap");
+    for (const value of ["", "0", "1.5"]) {
+      await fireEvent.input(cap, { target: { value } });
+      expect(screen.getByLabelText("Concurrency cap")).toBe(cap);
+      expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    }
+    await fireEvent.input(cap, { target: { value: "7" } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0].concurrencyCap).toBe(7);
+  });
+
+  it("keeps old label links working and shows labels beside the team filter", async () => {
+    nav.overlayTab = "labels";
+    render(ProjectForm);
+    expect(await screen.findByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("Team")).toBeInTheDocument();
+    expect(screen.getByText("Match labels")).toBeInTheDocument();
   });
 
   it("honours a deep link to a tab (nav.overlayTab)", async () => {
     nav.overlayTab = "filter";
     render(ProjectForm);
-    expect(await screen.findByRole("tab", { name: "Filter" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("loads team metadata and renders workflow states as checkboxes, pre-checked from the DTO", async () => {
     render(ProjectForm);
     await waitFor(() => expect(teamMetaFn).toHaveBeenCalledWith("team-uuid-1", false));
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     const todo = (await screen.findByRole("checkbox", { name: "Todo" })) as HTMLInputElement;
     const doing = screen.getByRole("checkbox", { name: "Doing" }) as HTMLInputElement;
@@ -190,8 +320,8 @@ describe("ProjectForm", () => {
 
   it("toggling a state and saving sends the cleaned DTO via SaveProject", async () => {
     render(ProjectForm);
-    await screen.findByRole("tab", { name: "Repo" }); // the form is loaded
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await screen.findByRole("tab", { name: "General" }); // the form is loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     const doing = (await screen.findByRole("checkbox", { name: "Doing" })) as HTMLInputElement;
     await fireEvent.click(doing); // add state-2
@@ -213,8 +343,8 @@ describe("ProjectForm", () => {
     teamsFn.mockRejectedValueOnce(new Error("no api key"));
     teamMetaFn.mockRejectedValueOnce(new Error("no api key"));
     render(ProjectForm);
-    await screen.findByRole("tab", { name: "Repo" }); // the form is loaded
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await screen.findByRole("tab", { name: "General" }); // the form is loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     // With no team list the team field is a raw text input holding the UUID.
     await waitFor(() => expect(screen.getByLabelText("Team")).toHaveValue("team-uuid-1"));
@@ -222,8 +352,8 @@ describe("ProjectForm", () => {
 
   it("clears the team-scoped IDs when the team changes, but leaves inherited ones alone", async () => {
     render(ProjectForm);
-    await screen.findByRole("tab", { name: "Repo" }); // the form is loaded
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await screen.findByRole("tab", { name: "General" }); // the form is loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     const team = await screen.findByLabelText("Team");
     await fireEvent.change(team, { target: { value: "team-uuid-2" } });
@@ -245,26 +375,176 @@ describe("ProjectForm", () => {
     expect(arg.inherits.matchLabels).toBe(true);
   });
 
-  it("ghosts an inherited field and chips it 'inherited'", async () => {
+  it("marks an inherited field and offers an explicit customization action", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const symlinks = await screen.findByLabelText("Symlinks");
-    expect(symlinks.className).toContain("opacity-55");
-    expect(within(rowOf(symlinks)).getByRole("button", { name: "inherited" })).toBeInTheDocument();
+    expect(symlinks.className).toContain("border-dashed");
+    expect(within(rowOf(symlinks)).getByRole("button", { name: /^Customize / })).toBeInTheDocument();
 
     // An overridden neighbour on the same tab chips the other way.
     const postCreate = screen.getByLabelText("Post-create");
-    expect(postCreate.className).not.toContain("opacity-55");
-    expect(within(rowOf(postCreate)).getByRole("button", { name: "override" })).toBeInTheDocument();
+    expect(postCreate.className).not.toContain("border-dashed");
+    expect(within(rowOf(postCreate)).getByRole("button", { name: /^Use default for / })).toBeInTheDocument();
+  });
+
+  it("edits dev_commands as a plain per-project list — no inherit chip", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
+    const dev = await screen.findByLabelText("Dev commands");
+    // dev_commands has no [defaults] counterpart on purpose, so the row carries
+    // neither the ghost nor an Inherited/Override chip.
+    expect(dev.className).not.toContain("border-dashed");
+    expect(within(rowOf(dev)).queryByRole("button", { name: /^Customize / })).not.toBeInTheDocument();
+    expect(within(rowOf(dev)).queryByRole("button", { name: /^Use default for / })).not.toBeInTheDocument();
+
+    await fireEvent.input(dev, { target: { value: "composer dev\nnpm run dev" } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    const arg = saveProject.mock.calls.at(-1)![0];
+    expect(arg.devCommands).toEqual(["composer dev", "npm run dev"]);
+  });
+
+  it("edits the port lease and the pre_remove hook", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
+    // Ports per session only means something once there is a range to lease from.
+    expect(screen.queryByLabelText("Ports per session")).not.toBeInTheDocument();
+    await fireEvent.input(await screen.findByLabelText("Port range"), { target: { value: " 4100-4199 " } });
+    await fireEvent.input(await screen.findByLabelText("Ports per session"), { target: { value: "2" } });
+    await fireEvent.input(screen.getByLabelText("Pre-remove"), { target: { value: 'dropdb "$LOLA_DB_NAME"\n' } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    const arg = saveProject.mock.calls.at(-1)![0];
+    expect(arg.portRange).toBe("4100-4199");
+    expect(arg.portsPerSession).toBe(2);
+    expect(arg.preRemove).toEqual(['dropdb "$LOLA_DB_NAME"']);
+  });
+
+  it("shows a STACK without any repository field, and its members", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "", matchMode: "any", matchLabels: ["lab-default"] });
+    store.projects = [
+      { name: "web", stack: "nori", labels: ["bug"] },
+      { name: "api", stack: "nori", labels: [] },
+      { name: "other" },
+    ] as unknown as typeof store.projects;
+    render(ProjectForm);
+    expect(await screen.findByText("stack: nori")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Path")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Repo")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Worktree setup" })).not.toBeInTheDocument();
+    // The stack owns the branch name every member's worktree shares.
+    expect(screen.getByLabelText("Custom Branch prefix")).toHaveValue("acme/");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    const list = screen.getByRole("list", { name: "Members" });
+    expect(within(list).getByText("web")).toBeInTheDocument();
+    expect(within(list).getByText("every issue")).toBeInTheDocument();
+    expect(within(list).queryByText("other")).not.toBeInTheDocument();
+    expect(screen.getByText(/dragging its project onto this stack/)).toBeInTheDocument();
+    // A member label outside the stack's Match labels is the normal setup
+    // (pickup decides the issue, the label the app), so nothing warns.
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Linear updates" }));
+    expect(screen.getByLabelText("PR requires checks")).toBeInTheDocument();
+    store.projects = [];
+  });
+
+  it("edits each member's labels on the stack's Members tab and saves only the changed ones", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "", matchMode: "any", matchLabels: ["lab-default"] });
+    store.projects = [
+      { name: "web", stack: "nori", labels: ["lab-1"] },
+      { name: "api", stack: "nori", labels: [] },
+    ] as unknown as typeof store.projects;
+    render(ProjectForm);
+    await screen.findByText("stack: nori");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Labels for api" }));
+    const group = await screen.findByRole("group", { name: "Labels for api" });
+    await fireEvent.click(within(group).getByText("bug"));
+    const list = screen.getByRole("list", { name: "Members" });
+    expect(within(list).getAllByText("bug")).toHaveLength(3); // web's summary, api's summary, api's option
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(setMemberLabels).toHaveBeenCalledWith("nori", { api: ["lab-1"] }));
+    expect(saveProject).toHaveBeenCalled();
+    store.projects = [];
+  });
+
+  it("says the stack was saved when only its member labels failed", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "", matchMode: "any", matchLabels: ["lab-default"] });
+    store.projects = [{ name: "api", stack: "nori", labels: [] }] as unknown as typeof store.projects;
+    setMemberLabels.mockRejectedValue(new Error("boom"));
+    render(ProjectForm);
+    await screen.findByText("stack: nori");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Labels for api" }));
+    const group = await screen.findByRole("group", { name: "Labels for api" });
+    await fireEvent.click(within(group).getByText("bug"));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/Stack settings were saved, but member labels were not: .*boom/)).toBeInTheDocument();
+    expect(saveProject).toHaveBeenCalled();
+    expect(nav.overlayProject).toBe("acme"); // still open
+    store.projects = [];
+  });
+
+  it("keeps the stack form open until its removal is confirmed", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "" });
+    nav.overlayProject = "nori";
+    const removeStack = vi.spyOn(store, "removeStack").mockResolvedValue(undefined as never);
+    render(ProjectForm);
+    await screen.findByText("stack: nori");
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(confirm.request?.title).toBe("Remove stack?");
+    expect(nav.overlayProject).toBe("nori");
+    confirm.cancel();
+    expect(nav.overlayProject).toBe("nori");
+    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    confirm.accept();
+    expect(nav.overlayProject).toBe("");
+    expect(removeStack).toHaveBeenCalledWith("nori", []);
+    removeStack.mockRestore();
+  });
+
+  it("shows a MEMBER only its repository half and saves its labels", async () => {
+    getProject.mockImplementation(async (name: string) =>
+      name === "nori"
+        ? { ...sampleDto(), name: "nori", label: "Nori", kind: "stack", stack: "", labels: [], teamId: "team-uuid-2" }
+        : { ...sampleDto(), kind: "", stack: "nori", labels: ["Bug"] },
+    );
+    render(ProjectForm);
+    expect(await screen.findByLabelText("Path")).toHaveValue("/Users/me/code/acme");
+    // Stack-owned: hidden, never cleared.
+    expect(screen.queryByLabelText("Agent")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Issue pickup" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Linear updates" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Worktree setup" }));
+    expect(screen.queryByLabelText("Custom Branch prefix")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Stack" }));
+    expect(screen.getByText(/come from the stack/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open stack settings" })).toBeInTheDocument();
+    // pr_requires_checks only gates the Linear write-back, which is the stack's.
+    expect(screen.queryByLabelText("PR requires checks")).not.toBeInTheDocument();
+    // The picker lists the STACK's team labels; a hand-written name shows ticked.
+    await waitFor(() => expect(teamMetaFn).toHaveBeenCalledWith("team-uuid-2", false));
+    const group = await screen.findByRole("group", { name: "Included for" });
+    expect(within(group).getByText("bug").closest("label")!.querySelector("input")!).toBeChecked();
+    await fireEvent.click(within(group).getByText("agent"));
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    const arg = saveProject.mock.calls[0][0];
+    expect(arg.labels).toEqual(["lab-1", "lab-default"]);
+    // The member's own copies of the stack-owned keys ride along untouched.
+    expect(arg).toMatchObject({ teamId: "team-uuid-1", agent: "claude", branchPrefix: "acme/", stack: "nori" });
   });
 
   it("promotes an inherited field to an override when it is edited", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const symlinks = await screen.findByLabelText("Symlinks");
 
     await fireEvent.input(symlinks, { target: { value: "own-link" } });
 
-    expect(within(rowOf(symlinks)).getByRole("button", { name: "override" })).toBeInTheDocument();
-    expect(symlinks.className).not.toContain("opacity-55");
+    expect(within(rowOf(symlinks)).getByRole("button", { name: /^Use default for / })).toBeInTheDocument();
+    expect(symlinks.className).not.toContain("border-dashed");
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
@@ -273,26 +553,28 @@ describe("ProjectForm", () => {
     expect(arg.symlinks).toEqual(["own-link"]);
   });
 
-  it("promotes an inherited field when its chip is clicked", async () => {
+  it("promotes an inherited field when Customize is clicked", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const symlinks = await screen.findByLabelText("Symlinks");
 
-    await fireEvent.click(within(rowOf(symlinks)).getByRole("button", { name: "inherited" }));
+    await fireEvent.click(within(rowOf(symlinks)).getByRole("button", { name: /^Customize / }));
 
-    expect(within(rowOf(symlinks)).getByRole("button", { name: "override" })).toBeInTheDocument();
+    expect(within(rowOf(symlinks)).getByRole("button", { name: /^Use default for / })).toBeInTheDocument();
   });
 
   it("reverting an override refills the control from [defaults]", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const postCreate = await screen.findByLabelText("Post-create");
     expect(postCreate).toHaveValue("npm ci");
 
-    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: "override" }));
+    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: /^Use default for / }));
 
-    // The ghost now shows what [defaults] will actually apply.
+    // The field now shows what defaults will actually apply.
     expect(postCreate).toHaveValue("make setup\nmake build");
-    expect(postCreate.className).toContain("opacity-55");
-    expect(within(rowOf(postCreate)).getByRole("button", { name: "inherited" })).toBeInTheDocument();
+    expect(postCreate.className).toContain("border-dashed");
+    expect(within(rowOf(postCreate)).getByRole("button", { name: /^Customize / })).toBeInTheDocument();
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
@@ -304,20 +586,77 @@ describe("ProjectForm", () => {
   it("still reverts when [defaults] can't be read, keeping the shown value", async () => {
     getSettings.mockRejectedValueOnce(new Error("no config"));
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const postCreate = await screen.findByLabelText("Post-create");
 
-    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: "override" }));
+    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: /^Use default for / }));
 
-    expect(within(rowOf(postCreate)).getByRole("button", { name: "inherited" })).toBeInTheDocument();
+    expect(within(rowOf(postCreate)).getByRole("button", { name: /^Customize / })).toBeInTheDocument();
     expect(postCreate).toHaveValue("npm ci");
   });
 
-  // Repo auto-detection: filling in Path resolves the checkout's GitHub remote
-  // so owner/name does not have to be copied by hand.
-  describe("repo auto-detection", () => {
+  it("restores a custom draft after comparing it with defaults", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
+    const input = screen.getByLabelText("Post-create");
+    await fireEvent.input(input, { target: { value: "composer install\nnpm ci" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Use default for Post-create" }));
+    expect(input).toHaveValue("make setup\nmake build");
+    await fireEvent.click(screen.getByRole("button", { name: "Customize Post-create" }));
+    expect(input).toHaveValue("composer install\nnpm ci");
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({ postCreate: ["composer install", "npm ci"], inherits: { postCreate: false } });
+  });
+
+  it("retries team metadata without losing manual IDs or selections", async () => {
+    teamMetaFn.mockRejectedValueOnce(new Error("offline"));
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+    await screen.findByRole("button", { name: "Retry team options" });
+    await fireEvent.input(screen.getByLabelText("Project"), { target: { value: "manual-project" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Retry team options" }));
+    await screen.findByRole("checkbox", { name: "Todo" });
+    expect(screen.getByLabelText("Project")).toHaveValue("manual-project");
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({ projectId: "manual-project", stateIds: ["state-1"] });
+  });
+
+  it("ignores an old team's response after switching teams", async () => {
+    let resolveOld!: (value: typeof meta) => void;
+    teamMetaFn.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    teamMetaFn.mockResolvedValue({ ...meta, states: [{ id: "ops-state", label: "Ops ready" }] });
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+    await waitFor(() => expect(teamMetaFn).toHaveBeenCalledTimes(1));
+    await fireEvent.change(screen.getByLabelText("Team"), { target: { value: "team-uuid-2" } });
+    await screen.findByRole("checkbox", { name: "Ops ready" });
+    resolveOld(meta);
+    await tick();
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Todo" })).not.toBeInTheDocument());
+    expect(screen.getByRole("checkbox", { name: "Ops ready" })).toBeInTheDocument();
+  });
+
+  it("keeps format hints visible and retains hidden label settings across pickup modes", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), onSentSetLabel: "lab-1", inherits: { ...sampleDto().inherits, onSentSetLabel: false } });
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
+    expect(screen.getByLabelText("Env")).toHaveAccessibleDescription("KEY=value, one per line.");
+    expect(screen.getByLabelText("Dev commands")).toHaveAccessibleDescription("One command per line.");
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
+    await fireEvent.change(screen.getByLabelText("Repeat pickup"), { target: { value: "seen" } });
+    expect(screen.queryByLabelText("After pickup label")).not.toBeInTheDocument();
+    await fireEvent.change(screen.getByLabelText("Repeat pickup"), { target: { value: "label" } });
+    expect(screen.getByLabelText("After pickup label")).toHaveValue("lab-1");
+  });
+
+  // One InspectPath pass fills the whole Repo tab: the folder is the only thing
+  // the user has to supply.
+  describe("folder-driven autofill", () => {
     it("fills an empty repo from the checkout when Path is set", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), repo: "", path: "" });
-      detectRepo.mockResolvedValue("acme/web");
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/web", isRepo: true, repo: "acme/web" }));
       render(ProjectForm);
 
       const path = await screen.findByLabelText("Path");
@@ -325,50 +664,96 @@ describe("ProjectForm", () => {
       await fireEvent.blur(path);
 
       await waitFor(() => {
-        expect(detectRepo).toHaveBeenCalledWith("/tmp/web");
+        expect(inspectPath).toHaveBeenCalledWith("/tmp/web");
         expect(screen.getByLabelText("Repo")).toHaveValue("acme/web");
       });
-      expect(screen.getByText(/detected from the checkout/)).toBeInTheDocument();
+      await fireEvent.click(screen.getByRole("button", { name: "More about Repo" }));
+      expect(screen.getByRole("note")).toHaveTextContent("detected from the checkout");
     });
 
     it("never overwrites a repo the user already set", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), repo: "mine/web", path: "" });
-      detectRepo.mockResolvedValue("acme/web");
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/web", isRepo: true, repo: "acme/web" }));
       render(ProjectForm);
 
       const path = await screen.findByLabelText("Path");
       await fireEvent.input(path, { target: { value: "/tmp/web" } });
       await fireEvent.blur(path);
 
-      await waitFor(() => expect(screen.getByLabelText("Repo")).toHaveValue("mine/web"));
-      expect(detectRepo).not.toHaveBeenCalled();
+      await waitFor(() => expect(inspectPath).toHaveBeenCalled());
+      expect(screen.getByLabelText("Repo")).toHaveValue("mine/web");
     });
 
     it("leaves the field empty when the checkout has no GitHub remote", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), repo: "", path: "" });
-      detectRepo.mockResolvedValue(""); // fail-closed
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/plain", isRepo: true })); // fail-closed
       render(ProjectForm);
 
       const path = await screen.findByLabelText("Path");
       await fireEvent.input(path, { target: { value: "/tmp/plain" } });
       await fireEvent.blur(path);
 
-      await waitFor(() => expect(detectRepo).toHaveBeenCalled());
+      await waitFor(() => expect(inspectPath).toHaveBeenCalled());
       expect(screen.getByLabelText("Repo")).toHaveValue("");
       expect(screen.queryByText(/detected from the checkout/)).not.toBeInTheDocument();
     });
 
-    it("resolves a given path only once", async () => {
-      getProject.mockResolvedValue({ ...sampleDto(), repo: "", path: "" });
-      detectRepo.mockResolvedValue("");
+    it("says so when the path is not a git checkout", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), path: "" });
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/plain", isRepo: false }));
       render(ProjectForm);
 
       const path = await screen.findByLabelText("Path");
-      await fireEvent.input(path, { target: { value: "/tmp/web" } });
+      await fireEvent.input(path, { target: { value: "/tmp/plain" } });
       await fireEvent.blur(path);
-      await waitFor(() => expect(detectRepo).toHaveBeenCalledTimes(1));
+
+      await waitFor(() => expect(screen.getByText(/not a git checkout/)).toBeInTheDocument());
+    });
+
+    it("opens the native chooser and adopts the checkout root", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), isNew: true, name: "", label: "", path: "", repo: "", defaultBranch: "main" });
+      pickFolder.mockResolvedValue("/Users/me/code/nori-app/src");
+      inspectPath.mockResolvedValue(
+        pathInfo({
+          path: "/Users/me/code/nori-app",
+          isRepo: true,
+          repo: "acme/nori-app",
+          defaultBranch: "develop",
+          branches: ["develop", "main"],
+          suggestedLabel: "Nori App",
+          suggestedId: "nori-app",
+        }),
+      );
+      render(ProjectForm);
+
+      // A NEW project opens straight into the chooser — the folder is the first
+      // decision and everything else falls out of it.
+      await waitFor(() => expect(pickFolder).toHaveBeenCalled());
+      await waitFor(() => expect(screen.getByLabelText("Path")).toHaveValue("/Users/me/code/nori-app"));
+      expect(screen.getByLabelText("Label")).toHaveValue("Nori App");
+      expect(screen.getByLabelText("ID")).toHaveValue("nori-app");
+      expect(screen.getByLabelText("Repo")).toHaveValue("acme/nori-app");
+      expect(screen.getByLabelText("Default branch")).toHaveDisplayValue("develop");
+    });
+
+    it("does not open the chooser for an existing project", async () => {
+      render(ProjectForm);
+      await screen.findByLabelText("Path");
+      expect(pickFolder).not.toHaveBeenCalled();
+    });
+
+    it("keeps an existing project's configured branch and label", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), label: "", defaultBranch: "release", path: "/tmp/web" });
+      inspectPath.mockResolvedValue(
+        pathInfo({ path: "/tmp/web", isRepo: true, defaultBranch: "main", suggestedLabel: "Web", suggestedId: "web" }),
+      );
+      render(ProjectForm);
+
+      const path = await screen.findByLabelText("Path");
       await fireEvent.blur(path);
-      expect(detectRepo).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(inspectPath).toHaveBeenCalled());
+      expect(screen.getByLabelText("Custom Default branch")).toHaveValue("release");
+      expect(screen.getByLabelText("Label")).toHaveValue("");
     });
   });
 
@@ -376,29 +761,29 @@ describe("ProjectForm", () => {
   describe("default branch", () => {
     it("offers the checkout's branches as suggestions", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), path: "/tmp/web" });
-      branchesFn.mockResolvedValue(["main", "develop"]);
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/web", isRepo: true, branches: ["main", "develop"] }));
       render(ProjectForm);
 
       const branch = await screen.findByLabelText("Default branch");
       await fireEvent.focus(branch);
 
-      await waitFor(() => expect(branchesFn).toHaveBeenCalledWith("/tmp/web"));
+      await waitFor(() => expect(inspectPath).toHaveBeenCalledWith("/tmp/web"));
       await waitFor(() => {
-        const list = document.getElementById("lola-branches");
-        const values = Array.from(list?.querySelectorAll("option") ?? []).map((o) => o.value);
-        expect(values).toEqual(["main", "develop"]);
+        const labels = Array.from(branch.querySelectorAll("option")).map((o) => o.textContent);
+        expect(labels).toEqual(["main", "develop", "Custom…"]);
       });
     });
 
     it("stays typable when the path is not a checkout", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), path: "/tmp/plain", defaultBranch: "" });
-      branchesFn.mockResolvedValue([]);
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/plain" }));
       render(ProjectForm);
 
       const branch = await screen.findByLabelText("Default branch");
       await fireEvent.focus(branch);
-      await fireEvent.input(branch, { target: { value: "trunk" } });
-      expect(branch).toHaveValue("trunk");
+      const custom = screen.getByLabelText("Custom Default branch");
+      await fireEvent.input(custom, { target: { value: "trunk" } });
+      expect(custom).toHaveValue("trunk");
     });
   });
 

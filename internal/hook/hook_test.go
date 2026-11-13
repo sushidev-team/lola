@@ -77,7 +77,27 @@ const settingsGolden = `{
           }
         ]
       }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/lola hook permission_request",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
     ]
+  },
+  "skillOverrides": {
+    "auto-mode-setup": "off"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "/usr/local/bin/lola hook statusline"
   }
 }
 `
@@ -113,11 +133,12 @@ func TestSettingsJSONShape(t *testing.T) {
 		cmd   string
 		async bool
 	}{
-		"Stop":             {"/opt/lola hook stop", false},
-		"Notification":     {"/opt/lola hook notification", false},
-		"SessionEnd":       {"/opt/lola hook session_end", false},
-		"PostToolUse":      {"/opt/lola hook tool_use", true},
-		"UserPromptSubmit": {"/opt/lola hook user_prompt", false},
+		"Stop":              {"/opt/lola hook stop", false},
+		"Notification":      {"/opt/lola hook notification", false},
+		"SessionEnd":        {"/opt/lola hook session_end", false},
+		"PostToolUse":       {"/opt/lola hook tool_use", true},
+		"UserPromptSubmit":  {"/opt/lola hook user_prompt", false},
+		"PermissionRequest": {"/opt/lola hook permission_request", true},
 	}
 	if len(parsed.Hooks) != len(want) {
 		t.Errorf("got %d hook events, want %d: %v", len(parsed.Hooks), len(want), parsed.Hooks)
@@ -131,6 +152,34 @@ func TestSettingsJSONShape(t *testing.T) {
 		h := entries[0].Hooks[0]
 		if h.Type != "command" || h.Command != w.cmd || h.Timeout != 10 || h.Async != w.async {
 			t.Errorf("%s hook = %+v, want command=%q timeout=10 async=%v", event, h, w.cmd, w.async)
+		}
+	}
+}
+
+// The settings file also disables the claude-code skills that put up a MODAL an
+// unattended worker can never answer. `auto-mode-setup` is the one that broke a
+// review hand-off: it appears right after a turn ends, in exactly the sessions
+// lola runs (auto permission mode), and swallowed everything typed at the pane.
+func TestSettingsJSONDisablesModalSkills(t *testing.T) {
+	var parsed struct {
+		SkillOverrides map[string]string `json:"skillOverrides"`
+	}
+	if err := json.Unmarshal(SettingsJSON("/opt/lola"), &parsed); err != nil {
+		t.Fatalf("SettingsJSON is not valid JSON: %v", err)
+	}
+	if got := parsed.SkillOverrides["auto-mode-setup"]; got != "off" {
+		t.Errorf(`skillOverrides["auto-mode-setup"] = %q, want "off"`, got)
+	}
+	if len(parsed.SkillOverrides) != len(modalSkills) {
+		t.Errorf("got %d skill overrides, want %d (%v)", len(parsed.SkillOverrides), len(modalSkills), modalSkills)
+	}
+	// "off" is claude-code's own vocabulary; a value outside it is silently
+	// ignored, which would re-open the dialog without any visible failure.
+	for name, mode := range modalSkills {
+		switch mode {
+		case "on", "name-only", "user-invocable-only", "off":
+		default:
+			t.Errorf("skillOverrides[%q] = %q is not a claude-code override mode", name, mode)
 		}
 	}
 }
@@ -249,5 +298,48 @@ func TestPostSurvivesSilentDaemon(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("Post took %v, want return at the ~%v deadline", d, postTimeout)
+	}
+}
+
+// A sandboxed `lola ssh` crosses the bridge with its token, and a failure to reach
+// the daemon is told apart from the daemon's own answer.
+func TestSendAgentCarriesSessionAndToken(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	t.Setenv("LOLA_HOME", t.TempDir())
+	t.Setenv("LOLA_SESSION", "s1")
+	t.Setenv("LOLA_HOOK_ADDR", ln.Addr().String())
+	t.Setenv("LOLA_HOOK_TOKEN", "tok")
+	got := make(chan protocol.Request, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		line, _ := bufio.NewReader(c).ReadBytes('\n')
+		var r protocol.Request
+		_ = json.Unmarshal(line, &r)
+		got <- r
+		_, _ = c.Write([]byte(`{"ok":true,"data":{"id":"e1"}}` + "\n"))
+	}()
+	resp, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{Argv: []string{"narration", "x"}})
+	if err != nil || !resp.OK {
+		t.Fatalf("%+v %v", resp, err)
+	}
+	r := <-got
+	if r.Cmd != "sshAgentPost" || r.Session != "s1" || r.HookToken != "tok" {
+		t.Fatalf("%+v", r)
+	}
+	ln.Close()
+	if _, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{}); !errors.Is(err, ErrNoDaemon) {
+		t.Fatalf("%v", err)
+	}
+	t.Setenv("LOLA_SESSION", "")
+	if _, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{}); !errors.Is(err, ErrNoDaemon) {
+		t.Fatalf("%v", err)
 	}
 }

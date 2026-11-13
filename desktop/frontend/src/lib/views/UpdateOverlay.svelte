@@ -1,12 +1,20 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { onMount } from "svelte";
   import { nav } from "$lib/nav.svelte";
   import { updates } from "$lib/update.svelte";
+  import { store } from "$lib/store.svelte";
   import Modal from "$lib/components/Modal.svelte";
+  import Button from "$lib/components/Button.svelte";
+  import TimeAgo from "$lib/components/TimeAgo.svelte";
 
-  // Open with a fresh check unless a check already produced info this session.
+  // Open with a FRESH check every time, not just when nothing was loaded yet.
+  // Opening this overlay is the one unambiguous "is there something new?" — and
+  // the answer it used to reuse was whatever the launch auto-check saw, which
+  // for a long-running app is hours old. `check(true)` also clears the backend's
+  // release cache, so the two staleness layers lift together.
   onMount(() => {
-    if (!updates.info && !updates.checking) void updates.check(true);
+    if (!updates.checking) void updates.check(true);
   });
 
   function fmtBytes(n: number): string {
@@ -19,12 +27,6 @@
       i++;
     }
     return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
-  }
-
-  function fmtDate(iso: string): string {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? "" : d.toLocaleDateString();
   }
 
   // Prefer the per-version changelog (current < v <= latest); fall back to the
@@ -50,11 +52,25 @@
   {#if updates.checking && !updates.info}
     <div class="text-sm text-faint">checking for updates…</div>
   {:else if updates.error && !updates.info}
-    <div class="text-bad">✗ {updates.error}</div>
+    <div class="text-bad"><Icon name="x" size={14} /> {updates.error}</div>
   {:else if !updates.available}
     <div class="flex flex-col gap-2 py-4 text-center">
-      <span class="text-good">✓ you're up to date</span>
+      <span class="text-good"><Icon name="check" size={14} /> you're up to date</span>
       <span class="num text-sm text-faint">running v{updates.info?.currentVersion || updates.version}</span>
+    </div>
+  {:else if !updates.installable}
+    <!-- A newer version is out but carries no macOS build yet: the release is
+         published minutes before its signed+notarized DMG is attached, and that
+         job can also fail outright. Saying so is the whole point — the previous
+         version of this screen showed "up to date" here. -->
+    <div class="flex flex-col gap-2 py-4 text-center">
+      <span class="text-ink">
+        v{updates.info?.latestVersion} is out — no macOS build attached to it yet
+      </span>
+      <span class="num text-sm text-faint">
+        running v{updates.info?.currentVersion || updates.version} · the .dmg is signed and notarized after the
+        release is published, which takes a few minutes
+      </span>
     </div>
   {:else}
     <div class="flex flex-col gap-3">
@@ -65,7 +81,7 @@
              being offered is the one thing this dialog is about. -->
         <span class="text-xl text-accent-ink">v{updates.info?.latestVersion}</span>
         {#if updates.info?.publishedAt}
-          <span class="ml-auto text-sm text-faint">{fmtDate(updates.info.publishedAt)}</span>
+          <TimeAgo at={updates.info.publishedAt} hint="Published" class="ml-auto text-sm text-faint" />
         {/if}
       </div>
 
@@ -103,51 +119,51 @@
           </div>
         </div>
       {:else if updates.dmgPath}
-        <div class="text-good">✓ downloaded — ready to install</div>
+        <div class="text-good"><Icon name="check" size={14} /> downloaded — ready to install</div>
       {/if}
 
       {#if updates.error}
-        <div class="text-bad">✗ {updates.error}</div>
+        <div class="text-bad"><Icon name="x" size={14} /> {updates.error}</div>
       {/if}
     </div>
   {/if}
 
   {#snippet footer()}
     <div class="flex items-center gap-2">
-      {#if updates.available}
+      {#if updates.available && !updates.installable}
+        {#if updates.info?.browserURL}
+          <Button variant="secondary" size="md" onclick={() => store.openURL(updates.info!.browserURL)}>
+            Open release page
+          </Button>
+        {/if}
+        <Button size="md" disabled={updates.checking} onclick={() => updates.check(true)}>
+          {updates.checking ? "Checking…" : "Check again"}
+        </Button>
+        <span class="num ml-auto text-sm text-faint">v{updates.version}</span>
+      {:else if updates.installable}
         {#if updates.installing}
           <span class="text-faint">installing — the app will restart…</span>
         {:else if updates.dmgPath}
-          <button
-            class="rounded border border-accent bg-accent px-2.5 py-1 font-medium text-on-accent hover:opacity-90"
-            onclick={() => updates.install()}>install & restart</button
-          >
+          <Button variant="primary" size="md" onclick={() => updates.install()}>Install & restart</Button>
           <span class="text-sm text-faint">lola will quit and reopen on the new version</span>
         {:else if updates.downloading}
           <span class="text-faint">please wait…</span>
         {:else}
-          <button
-            class="rounded border border-accent bg-accent px-2.5 py-1 font-medium text-on-accent hover:opacity-90"
-            onclick={() => updates.download()}>download</button
-          >
-          <button
-            class="rounded border border-edge px-2.5 py-1 text-ink hover:border-accent"
+          <Button variant="primary" size="md" onclick={() => updates.download()}>Download</Button>
+          <Button
+            variant="secondary"
+            size="md"
             onclick={() => {
               void updates.skip();
               nav.closeOverlay();
-            }}>skip this version</button
+            }}>Skip this version</Button
           >
-          <button
-            class="ml-auto rounded px-2.5 py-1 text-faint hover:text-ink"
-            onclick={() => nav.closeOverlay()}>later</button
-          >
+          <Button size="md" class="ml-auto" onclick={() => nav.closeOverlay()}>Later</Button>
         {/if}
       {:else}
-        <button
-          class="rounded border border-edge px-2.5 py-1 text-ink hover:border-accent disabled:opacity-50"
-          disabled={updates.checking}
-          onclick={() => updates.check(true)}>{updates.checking ? "checking…" : "check again"}</button
-        >
+        <Button variant="secondary" size="md" disabled={updates.checking} onclick={() => updates.check(true)}>
+          {updates.checking ? "Checking…" : "Check again"}
+        </Button>
         <span class="num ml-auto text-sm text-faint">v{updates.version}</span>
       {/if}
     </div>

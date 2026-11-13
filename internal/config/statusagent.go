@@ -1,9 +1,13 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/sushidev-team/lola/internal/agent"
+)
 
 // The [statusagent] table configures the status INTERPRETER: an opt-in,
-// bounded `claude -p` pass (internal/statusagent) that reads one session's
+// bounded headless agent pass (internal/statusagent) that reads one session's
 // observed material (pane tail, recent events, PR facts, optionally the
 // agent's transcript tail) and judges what the agent is actually doing — a
 // display overlay for the session list, nothing more. Its output is untrusted
@@ -20,8 +24,8 @@ import "fmt"
 const (
 	// DefaultStatusAgentModel is the --model passed when [statusagent].model is
 	// unset (table present, key omitted): the small/fast tier suits a pass that
-	// runs per session on status churn. An explicit model = "" means "claude's
-	// own default model".
+	// runs per session on status churn. Other agents use their own default.
+	// An explicit model = "" always means the agent's own default model.
 	DefaultStatusAgentModel = "sonnet"
 	// DefaultStatusAgentTimeoutSeconds caps one interpretation call.
 	DefaultStatusAgentTimeoutSeconds = 60
@@ -40,10 +44,11 @@ const (
 //
 //   - Enabled gates the whole feature; false (the default, and the value for
 //     an absent table) means the daemon never execs the interpreter.
-//   - Bin is the claude executable; "" resolves "claude" via PATH (launchd
+//   - Agent selects claude (also the empty default), codex, or opencode.
+//   - Bin overrides the selected agent executable; "" resolves it via PATH (launchd
 //     installs should pin an absolute path).
-//   - Model is passed as --model when non-empty; explicitly "" uses claude's
-//     default model (the unset-key default is "sonnet").
+//   - Model is passed as --model when non-empty; explicitly "" uses the agent's
+//     default model (the unset-key default is "sonnet" for Claude only).
 //   - TimeoutSeconds bounds each call; MinIntervalSeconds debounces per
 //     session; MaxPerCycle caps queueing per observe cycle; MinConfidence
 //     drops low-confidence judgements. All must be >= 0 (confidence in [0,1]).
@@ -52,6 +57,7 @@ const (
 //     off).
 type StatusAgentConfig struct {
 	Enabled            bool    `toml:"enabled"`
+	Agent              string  `toml:"agent"`
 	Bin                string  `toml:"bin"`
 	Model              string  `toml:"model"`
 	TimeoutSeconds     int     `toml:"timeout_seconds"`
@@ -70,6 +76,7 @@ type StatusAgentConfig struct {
 
 type fileStatusAgentConfig struct {
 	Enabled            *bool    `toml:"enabled,omitempty"`
+	Agent              *string  `toml:"agent,omitempty"`
 	Bin                *string  `toml:"bin,omitempty"`
 	Model              *string  `toml:"model,omitempty"`
 	TimeoutSeconds     *int     `toml:"timeout_seconds,omitempty"`
@@ -93,6 +100,12 @@ func resolveStatusAgent(fs *fileStatusAgentConfig) StatusAgentConfig {
 		MinIntervalSeconds: DefaultStatusAgentMinIntervalSeconds,
 		MaxPerCycle:        DefaultStatusAgentMaxPerCycle,
 		MinConfidence:      DefaultStatusAgentMinConfidence,
+	}
+	if fs.Agent != nil {
+		c.Agent = *fs.Agent
+	}
+	if agent.Parse(c.Agent) != agent.Claude {
+		c.Model = ""
 	}
 	if fs.Enabled != nil {
 		c.Enabled = *fs.Enabled
@@ -131,6 +144,7 @@ func statusAgentFile(c StatusAgentConfig) *fileStatusAgentConfig {
 	}
 	return &fileStatusAgentConfig{
 		Enabled:            &c.Enabled,
+		Agent:              &c.Agent,
 		Bin:                &c.Bin,
 		Model:              &c.Model,
 		TimeoutSeconds:     &c.TimeoutSeconds,
@@ -146,6 +160,9 @@ func statusAgentFile(c StatusAgentConfig) *fileStatusAgentConfig {
 func (c *Config) validateStatusAgent() []error {
 	var errs []error
 	sa := c.StatusAgent
+	if sa.Agent != "" && !agent.Valid(sa.Agent) {
+		errs = append(errs, fmt.Errorf("statusagent.agent must be claude|codex|opencode (empty uses claude), got %q", sa.Agent))
+	}
 	if sa.TimeoutSeconds < 0 {
 		errs = append(errs, fmt.Errorf("statusagent.timeout_seconds must be >= 0, got %d", sa.TimeoutSeconds))
 	}

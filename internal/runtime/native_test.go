@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -26,6 +27,7 @@ import (
 // time.Now (via withAgentState) so a returned session can DeepEqual a literal
 // fixture; the axis VALUES themselves stay and are asserted.
 func stripAxisStamps(s session.Session) session.Session {
+	s.FirstSeen = time.Time{}
 	s.AgentStateSince = time.Time{}
 	s.DeliverySince = time.Time{}
 	s.StatusSince = time.Time{}
@@ -100,8 +102,13 @@ func newFixture(t *testing.T, gitCases, tmuxCases string) *fixture {
 	}
 
 	addCase := `*"worktree add"*)
-  mkdir -p "$7"
-  printf 'gitdir: %s\n' "` + gitDir + `" > "$7/.git"
+  case "$5" in
+    -b) workdir="$7" ;;
+    --track) workdir="$8" ;;
+    *) workdir="$5" ;;
+  esac
+  mkdir -p "$workdir"
+  printf 'gitdir: %s\n' "` + gitDir + `" > "$workdir/.git"
   exit 0
   ;;
 *"rev-parse --verify --quiet refs/heads/"*)
@@ -130,7 +137,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	f := newFixture(t, "", "")
 	ctx := context.Background()
 
-	got, err := f.n.Spawn(ctx, f.p, issueENG42())
+	got, err := f.n.Spawn(ctx, f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -146,7 +153,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 		IssueUUID: "uuid-42", Branch: "lola/eng-42", Repo: "owner/nori",
 		Worktree: dir,
 		TmuxName: id, Status: "working", Agent: "claude",
-		AgentState: state.AgentStarting,
+		AgentState: state.AgentStarting, ContextKey: "eng-42",
 	}
 	if !reflect.DeepEqual(stripAxisStamps(got), want) {
 		t.Errorf("session = %+v\nwant      %+v", got, want)
@@ -186,7 +193,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings.json: %v", err)
 	}
-	if wantS := string(hook.SettingsJSON("/usr/local/bin/lola")); string(settings) != wantS {
+	if wantS := string(hook.SettingsJSON("/usr/local/bin/lola", resolvedTestPath(t, ContextDir(f.n.Home, "nori", "eng-42")))); string(settings) != wantS {
 		t.Errorf("settings.json = %s\nwant %s", settings, wantS)
 	}
 
@@ -204,13 +211,18 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	// single shell command that sources the 0600 .lola/env (which exports
 	// LOLA_SESSION and any secret) and execs claude with the generated settings
 	// and the short read-the-prompt argv. Nothing secret is on argv.
-	// One detached new-session, then the best-effort per-session chrome on the
-	// SAME isolated "-L lola" server. The DEFAULT chrome hides tmux's status bar
+	// The lola-owned scroll defaults FIRST (tmux reads history-limit when the pane
+	// is created, so it only counts before new-session; mouse is written in both
+	// states so [tmux].mouse is the whole truth about it), then one detached
+	// new-session, then the best-effort per-session chrome on the SAME isolated
+	// "-L lola" server. The DEFAULT chrome hides tmux's status bar
 	// — lola's own surfaces render the issue/status header above the terminal —
 	// so nothing but "status off" is sent; the branding path is covered by
 	// TestSpawnAppliesConfiguredChrome, which opts the bar back on. No custom
-	// detach key or mouse is configured on this fixture.
+	// detach key is configured on this fixture.
 	wantTmux := strings.Join([]string{
+		"-L lola set-option -g history-limit 10000",
+		"-L lola set-option -g mouse off",
 		"-L lola new-session -d -s " + id + " -c " + dir +
 			" exec sh -c 'set -a; . ./.lola/env; set +a; exec /usr/local/bin/claude --settings .lola/settings.json" +
 			` '\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\'''`,
@@ -271,7 +283,7 @@ func TestSpawnForwardsLinearKeyViaEnvFileNotArgv(t *testing.T) {
 	const secret = "lin_api_sup3r-s3cret/value"
 	f.n.LinearKey = func() string { return secret }
 
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
@@ -304,7 +316,7 @@ func TestSpawnNoLinearKeyOmitsKeyLine(t *testing.T) {
 	f := newFixture(t, "", "")
 	f.n.LinearKey = func() string { return "" } // resolvable but unavailable
 
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
@@ -323,7 +335,7 @@ func TestSpawnProjectEnvLandsInEnvFileNotArgv(t *testing.T) {
 	f := newFixture(t, "", "")
 	f.p.Env = map[string]string{"APP_ENV": "local dev", "B_VAR": "plain"}
 
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
@@ -345,7 +357,7 @@ func TestSpawnAppliesConfiguredChrome(t *testing.T) {
 	f := newFixture(t, "", "")
 	f.n.Cfg.Tmux = config.TmuxConfig{DetachKey: "F12", Mouse: true, StatusRight: "custom", StatusBar: true}
 
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	tmuxCalls := loggedArgs(t, f.tmuxLog)
@@ -372,7 +384,7 @@ func TestSpawnChromeFailureIsAdvisoryOnly(t *testing.T) {
 	var logged string
 	f.n.Logf = func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
 
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn must succeed despite chrome failure: %v", err)
 	}
@@ -391,9 +403,9 @@ func TestSpawnChromeFailureIsAdvisoryOnly(t *testing.T) {
 // The claude path stays byte-identical to the legacy behavior (a claude spawn
 // still writes .lola/settings.json and no CODEX_HOME).
 func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
-	// A deterministic (empty) codex source so the codex case never links the
-	// developer's real ~/.codex/auth.json into a temp worktree.
-	t.Setenv("CODEX_HOME", t.TempDir())
+	// A deterministic Codex home for the launch environment assertions.
+	userHome := t.TempDir()
+	t.Setenv("CODEX_HOME", userHome)
 
 	id := "lola-nori-eng-42"
 	cases := []struct {
@@ -402,7 +414,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 		execFrag string // substring the launch line must contain (binary + args)
 	}{
 		{"claude", agent.Claude, "exec /usr/local/bin/claude --settings .lola/settings.json "},
-		{"codex", agent.Codex, "exec codex --ask-for-approval never --sandbox workspace-write "},
+		{"codex", agent.Codex, "exec codex --add-dir "},
 		{"opencode", agent.OpenCode, "exec opencode --prompt "},
 	}
 	for _, c := range cases {
@@ -410,7 +422,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 			f := newFixture(t, "", "")
 			f.n.Cfg.Defaults.Agent = string(c.kind)
 
-			got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+			got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 			if err != nil {
 				t.Fatalf("Spawn: %v", err)
 			}
@@ -427,7 +439,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 			if !strings.Contains(tmuxCalls, c.execFrag) {
 				t.Errorf("launch line missing %q:\n%s", c.execFrag, tmuxCalls)
 			}
-			if !strings.Contains(tmuxCalls, f.n.launchCommand(id, c.kind, false)) {
+			if !strings.Contains(tmuxCalls, f.n.launchCommand("", id, c.kind, false)) {
 				t.Errorf("tmux launch line does not match launchCommand:\n%s", tmuxCalls)
 			}
 
@@ -438,16 +450,13 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 			plugin := filepath.Join(dir, ".opencode", "plugins", "lola-hook.js")
 			switch c.kind {
 			case agent.Claude:
-				if got := readFile(t, settings); got != string(hook.SettingsJSON(f.n.LolaBin)) {
+				if got := readFile(t, settings); got != string(hook.SettingsJSON(f.n.LolaBin, resolvedTestPath(t, ContextDir(f.n.Home, "nori", "eng-42")))) {
 					t.Errorf("settings.json = %s, want hook wiring", got)
 				}
 				assertAbsent(t, codexCfg)
 				assertAbsent(t, filepath.Join(dir, ".opencode"))
 			case agent.Codex:
-				if got := readFile(t, codexCfg); got != string(agent.CodexConfigTOML(f.n.LolaBin)) {
-					t.Errorf("codex config.toml = %s, want CodexConfigTOML", got)
-				}
-				assertMode(t, codexCfg, 0o600)
+				assertAbsent(t, codexCfg) // user configuration is read from its real home
 				assertAbsent(t, settings) // no claude artifact for codex
 			case agent.OpenCode:
 				if got := readFile(t, plugin); got != string(agent.OpenCodePluginJS(f.n.LolaBin)) {
@@ -457,10 +466,9 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 				assertAbsent(t, settings) // no claude artifact for opencode
 			}
 
-			// CODEX_HOME is exported for codex only, pointing at the per-session
-			// .lola/codex; other kinds never carry it.
+			// CODEX_HOME is exported for codex only, preserving the user home.
 			env := readFile(t, filepath.Join(dir, ".lola", "env"))
-			codexHome := filepath.Join(dir, ".lola", "codex")
+			codexHome := userHome
 			if c.kind == agent.Codex {
 				want := "CODEX_HOME=" + shQuote(codexHome) + "\n"
 				if !strings.Contains(env, want) {
@@ -499,7 +507,7 @@ func TestSpawnResolvesPerProjectAgentOverride(t *testing.T) {
 	f.n.Cfg.Defaults.Agent = "claude"   // global default
 	f.n.Cfg.Projects[0].Agent = "codex" // project override wins
 
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -511,58 +519,46 @@ func TestSpawnResolvesPerProjectAgentOverride(t *testing.T) {
 	}
 }
 
-// TestSpawnCodexLinksExistingAuth: when the user has a real codex login
-// (auth.json under $CODEX_HOME), Spawn symlinks it into the per-session
-// CODEX_HOME so `codex` stays authenticated.
-func TestSpawnCodexLinksExistingAuth(t *testing.T) {
+// A normal user config (including model/MCP) and authentication remain in their
+// original home. Spawn neither copies nor overwrites them, and overrides notify
+// only for the launched process.
+func TestSpawnCodexUsesExistingUserHome(t *testing.T) {
 	userHome := t.TempDir()
-	src := filepath.Join(userHome, "auth.json")
-	if err := os.WriteFile(src, []byte(`{"token":"x"}`), 0o600); err != nil {
-		t.Fatal(err)
+	configBody := "model = \"custom-model\"\nnotify = [\"old-notifier\"]\n[mcp_servers.example]\ncommand = \"example-mcp\"\n"
+	for name, body := range map[string]string{"config.toml": configBody, "auth.json": `{"token":"x"}`} {
+		if err := os.WriteFile(filepath.Join(userHome, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("CODEX_HOME", userHome)
-
 	f := newFixture(t, "", "")
 	f.n.Cfg.Defaults.Agent = "codex"
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	link := filepath.Join(f.root, "nori", "lola-nori-eng-42", ".lola", "codex", "auth.json")
-	target, err := os.Readlink(link)
-	if err != nil {
-		t.Fatalf("auth.json must be a symlink to the user's login: %v", err)
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	if got := readFile(t, filepath.Join(dir, ".lola", "env")); !strings.Contains(got, "CODEX_HOME="+shQuote(userHome)+"\n") {
+		t.Error("spawn did not retain the user's Codex home")
 	}
-	if target != src {
-		t.Errorf("auth.json -> %q, want %q", target, src)
+	if got := readFile(t, filepath.Join(userHome, "config.toml")); got != configBody {
+		t.Error("spawn changed the user's Codex config")
+	}
+	assertAbsent(t, filepath.Join(dir, ".lola", "codex"))
+	if !strings.Contains(loggedArgs(t, f.tmuxLog), "codex-notify") {
+		t.Error("spawn must override notify for its own process")
 	}
 }
 
-// TestSpawnCodexWithoutAuthSourceStillSpawns: an absent codex login is not an
-// error — no auth.json symlink is created, the config.toml is still written,
-// and the session launches (API-key users authenticate via OPENAI_API_KEY).
+// An absent Codex login remains a valid spawn; normal CLI authentication errors
+// are handled by the agent rather than inventing an incomplete private home.
 func TestSpawnCodexWithoutAuthSourceStillSpawns(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir()) // empty: no auth.json to link
-
+	t.Setenv("CODEX_HOME", t.TempDir())
 	f := newFixture(t, "", "")
 	f.n.Cfg.Defaults.Agent = "codex"
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
-	if err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn must succeed without a codex login: %v", err)
 	}
-	if got.Status != "working" {
-		t.Errorf("Status = %q, want %q", got.Status, "working")
-	}
-	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
-	if _, err := os.Lstat(filepath.Join(dir, ".lola", "codex", "auth.json")); !os.IsNotExist(err) {
-		t.Errorf("no auth.json symlink may be created when the source is absent (err=%v)", err)
-	}
-	// The config.toml was still written and the session launched.
-	if _, err := os.Stat(filepath.Join(dir, ".lola", "codex", "config.toml")); err != nil {
-		t.Errorf("codex config.toml must be written: %v", err)
-	}
-	if !strings.Contains(loggedArgs(t, f.tmuxLog), "new-session -d -s lola-nori-eng-42") {
-		t.Errorf("codex session must launch without a login:\n%s", loggedArgs(t, f.tmuxLog))
-	}
+	assertAbsent(t, filepath.Join(f.root, "nori", "lola-nori-eng-42", ".lola", "codex"))
 }
 
 func TestSpawnUsesLinearBranchName(t *testing.T) {
@@ -570,7 +566,7 @@ func TestSpawnUsesLinearBranchName(t *testing.T) {
 	issue := issueENG42()
 	issue.BranchName = "feat/eng-42-login"
 
-	got, err := f.n.Spawn(context.Background(), f.p, issue)
+	got, err := f.n.Spawn(context.Background(), f.p, issue, "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -597,7 +593,7 @@ func TestSpawnSuffixesIDAndBranchWhenPreviousWorktreeKept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -624,7 +620,7 @@ func TestSpawnSuffixesWhenBranchSurvives(t *testing.T) {
   exit 0
   ;;`, "")
 
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -639,7 +635,7 @@ func TestSpawnGivesUpAfterMaxAttempts(t *testing.T) {
   exit 0
   ;;`, "")
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error when no session slot is free, got nil")
 	}
@@ -655,7 +651,7 @@ func TestSpawnPrepareFailureRollsBackCleanWorktree(t *testing.T) {
 	f := newFixture(t, "", "")
 	f.p.PostCreate = []string{"echo boom >&2; exit 3"}
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error from failing post_create, got nil")
 	}
@@ -688,7 +684,7 @@ func TestSpawnRollbackKeepsDirtyWorktree(t *testing.T) {
   ;;`, "")
 	f.p.PostCreate = []string{"exit 3"}
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error, got nil")
 	}
@@ -713,7 +709,7 @@ func TestSpawnTmuxFailureRollsBackWithoutSession(t *testing.T) {
 	f := newFixture(t, "", `*"new-session"*) exit 1 ;;
 *"has-session"*) exit 1 ;;`)
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error from tmux failure, got nil")
 	}
@@ -734,7 +730,7 @@ func TestSpawnTmuxFailureKillsHalfCreatedSession(t *testing.T) {
 	// rollback kills it, leaving no tmux session behind.
 	f := newFixture(t, "", `*"new-session"*) exit 1 ;;`)
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error, got nil")
 	}
@@ -746,7 +742,7 @@ func TestSpawnTmuxFailureKillsHalfCreatedSession(t *testing.T) {
 
 func TestSpawnRejectsIssueWithoutIdentifier(t *testing.T) {
 	f := newFixture(t, "", "")
-	if _, err := f.n.Spawn(context.Background(), f.p, linear.Issue{ID: "uuid"}); err == nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, linear.Issue{ID: "uuid"}, ""); err == nil {
 		t.Fatal("Spawn without identifier: want error, got nil")
 	}
 	if loggedArgs(t, f.gitLog) != "" || loggedArgs(t, f.tmuxLog) != "" {
@@ -758,8 +754,10 @@ func TestAdoptPairingMatrix(t *testing.T) {
 	f := newFixture(t, "", "")
 	// On disk + registered: eng-1 (tmux alive -> working), eng-2 (no tmux ->
 	// dead). Tmux only: eng-9 (-> orphaned, reported but never killed), a
-	// non-lola session (ignored), and an embedded shell TAB
-	// ("<id>-shell-1", ignored — it belongs to eng-1, not a session of its own).
+	// non-lola session (ignored), an embedded shell TAB ("<id>-shell-1") and a
+	// DEV tab ("<id>-dev-1") — both ignored: they belong to eng-1, not sessions
+	// of their own, and a dev tab outlives its command (remain-on-exit), so an
+	// unpaired one would otherwise be adopted as an orphan on every restart.
 	base := filepath.Join(f.root, "nori")
 	dir1 := filepath.Join(base, "lola-nori-eng-1")
 	dir2 := filepath.Join(base, "lola-nori-eng-2")
@@ -781,6 +779,7 @@ LOLA_EOF
   cat <<'LOLA_EOF'
 lola-nori-eng-1	1720000000	0
 lola-nori-eng-1-shell-1	1720000003	0
+lola-nori-eng-1-dev-1	1720000004	0
 lola-nori-eng-9	1720000001	0
 main	1720000002	1
 LOLA_EOF
@@ -859,7 +858,17 @@ func TestKillRemovesCleanWorktreeAndBranch(t *testing.T) {
 	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
-	wantTmux := "-L lola has-session -t =lola-nori-eng-42\n-L lola kill-session -t =lola-nori-eng-42"
+	// The agent session is killed with its whole process TREE — hence the pane
+	// pid lookup: an agent's own background servers sit in process groups of
+	// their own and outlive a plain kill-session, still holding their ports
+	// against the worktree this call deletes. Then the server is listed once to
+	// find this session's shell/review tabs (the fake reports none here).
+	wantTmux := strings.Join([]string{
+		"-L lola has-session -t =lola-nori-eng-42",
+		"-L lola display-message -p -t =lola-nori-eng-42: #{pane_pid}",
+		"-L lola kill-session -t =lola-nori-eng-42",
+		"-L lola ls -F #{session_name}\t#{session_created}\t#{session_attached}\t#{session_activity}",
+	}, "\n")
 	if got := loggedArgs(t, f.tmuxLog); got != wantTmux {
 		t.Errorf("tmux calls:\n%s\nwant:\n%s", got, wantTmux)
 	}
@@ -870,6 +879,69 @@ func TestKillRemovesCleanWorktreeAndBranch(t *testing.T) {
 	}, "\n")
 	if got := loggedArgs(t, f.gitLog); got != wantGit {
 		t.Errorf("git calls:\n%s\nwant force=false removal:\n%s", got, wantGit)
+	}
+}
+
+// Shell tabs and the review pane are SEPARATE tmux sessions, so a teardown that
+// killed only the agent left them running against a worktree it then deleted.
+// Kill takes them down with it — and touches nothing belonging to another
+// session, including one whose name is a prefix of this one's.
+func TestKillDropsShellTabsAndReviewPane(t *testing.T) {
+	f := newFixture(t, "", `*"ls -F"*)
+  printf 'lola-nori-eng-42\t1\t0\t1\n'
+  printf 'lola-nori-eng-42-shell-1\t1\t0\t1\n'
+  printf 'lola-nori-eng-42-shell-2\t1\t0\t1\n'
+  printf 'lola-nori-eng-42-review\t1\t0\t1\n'
+  printf 'lola-nori-eng-42-dev-1\t1\t0\t1\n'
+  printf 'lola-nori-eng-420\t1\t0\t1\n'
+  printf 'lola-nori-eng-420-shell-1\t1\t0\t1\n'
+  printf 'lola-nori-eng-420-dev-1\t1\t0\t1\n'
+  exit 0
+  ;;`)
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	calls := loggedArgs(t, f.tmuxLog)
+	for _, want := range []string{
+		"kill-session -t =lola-nori-eng-42\n",
+		"kill-session -t =lola-nori-eng-42-shell-1",
+		"kill-session -t =lola-nori-eng-42-shell-2",
+		"kill-session -t =lola-nori-eng-42-review",
+		// A killed session must not leave its dev server bound to a port.
+		"kill-session -t =lola-nori-eng-42-dev-1",
+	} {
+		if !strings.Contains(calls+"\n", want) {
+			t.Errorf("missing %q in tmux calls:\n%s", want, calls)
+		}
+	}
+	for _, never := range []string{"=lola-nori-eng-420\n", "=lola-nori-eng-420-shell-1", "=lola-nori-eng-420-dev-1"} {
+		if strings.Contains(calls+"\n", "kill-session -t "+never) {
+			t.Errorf("killed a sibling session (%s):\n%s", never, calls)
+		}
+	}
+}
+
+// A tmux that cannot answer must not fail a teardown whose agent is already
+// down — the caller would retry the whole cleanup forever over a shell tab.
+func TestKillSurvivesAuxListFailure(t *testing.T) {
+	f := newFixture(t, "", `*"ls -F"*)
+  echo "no server running" >&2
+  exit 1
+  ;;`)
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
+		t.Fatalf("Kill must not fail when the aux scan does: %v", err)
+	}
+	if !strings.Contains(loggedArgs(t, f.gitLog), "worktree remove") {
+		t.Error("worktree removal must still run after a failed aux scan")
 	}
 }
 
@@ -967,14 +1039,38 @@ func TestKillAbsentTmuxSessionIsNotAnError(t *testing.T) {
 	}
 }
 
-func TestKillMissingWorktreeDirIsNoop(t *testing.T) {
+// A checkout that is already gone still owns a local branch, and leaving it
+// behind was how merged sessions accumulated stale branches. Kill prunes git's
+// stale worktree registration (without it the delete is refused as "checked out
+// in a worktree") and deletes the branch.
+func TestKillMissingWorktreeDirStillDeletesBranch(t *testing.T) {
 	f := newFixture(t, "", `*"has-session"*) exit 1 ;;`)
-	// removeWorktree=true, but the dir never existed: nothing to remove.
 	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
 		t.Fatalf("Kill with missing worktree dir: %v", err)
 	}
+	wantGit := strings.Join([]string{
+		"-C " + f.repo + " worktree prune",
+		"-C " + f.repo + " branch -D lola/eng-42",
+	}, "\n")
+	if got := loggedArgs(t, f.gitLog); got != wantGit {
+		t.Errorf("git calls:\n%s\nwant:\n%s", got, wantGit)
+	}
+	if strings.Contains(loggedArgs(t, f.gitLog), "worktree remove") {
+		t.Error("nothing to remove: `git worktree remove` must not run for a missing dir")
+	}
+}
+
+// A pr-kind session's Branch is the UPSTREAM branch — the missing-dir path must
+// not delete it either.
+func TestKillMissingWorktreeDirKeepsUnownedBranch(t *testing.T) {
+	f := newFixture(t, "", `*"has-session"*) exit 1 ;;`)
+	s := killFixtureSession()
+	s.Kind = session.KindPR
+	if err := f.n.Kill(context.Background(), s, true, false); err != nil {
+		t.Fatalf("Kill with missing worktree dir: %v", err)
+	}
 	if got := loggedArgs(t, f.gitLog); got != "" {
-		t.Errorf("git must not run for a missing worktree dir; got:\n%s", got)
+		t.Errorf("an unowned branch must never be deleted; git calls:\n%s", got)
 	}
 }
 
@@ -1082,7 +1178,7 @@ func TestExcludeLolaDirResolvesWorktreePointer(t *testing.T) {
 
 func TestLaunchCommandQuoting(t *testing.T) {
 	n := &Native{} // ClaudeBin empty -> "claude" from PATH
-	got := n.launchCommand("lola-nori-eng-42", agent.Claude, false)
+	got := n.launchCommand("", "lola-nori-eng-42", agent.Claude, false)
 	// The POSIX line is wrapped in `sh -c '...'` so the user's login shell
 	// (which may be fish/csh/tcsh, not a POSIX sh) only has to exec `sh`; the
 	// inner single quotes around the prompt are escaped as '\''.
@@ -1099,7 +1195,7 @@ func TestLaunchCommandQuoting(t *testing.T) {
 	}
 
 	n.ClaudeBin = "/odd path/claude's bin"
-	got = n.launchCommand("lola-nori-eng-42", agent.Claude, false)
+	got = n.launchCommand("", "lola-nori-eng-42", agent.Claude, false)
 	if !strings.Contains(got, `/odd path/claude`) {
 		t.Errorf("launchCommand must include the binary path:\n%s", got)
 	}
@@ -1116,22 +1212,74 @@ func TestLaunchCommandQuoting(t *testing.T) {
 func TestLaunchCommandPerAgent(t *testing.T) {
 	id := "lola-nori-eng-42"
 	// ClaudeBin must be IGNORED for non-claude kinds — they use their own binary.
-	n := &Native{ClaudeBin: "/should/not/be/used/claude"}
+	n := &Native{ClaudeBin: "/should/not/be/used/claude", LolaBin: "/a path/with 'quotes'/lola"}
 	esc := `'\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\''`
 
-	wantCodex := "exec sh -c 'set -a; . ./.lola/env; set +a; exec codex --ask-for-approval never --sandbox workspace-write " + esc + "'"
-	if got := n.launchCommand(id, agent.Codex, false); got != wantCodex {
-		t.Errorf("codex launchCommand:\n%s\nwant:\n%s", got, wantCodex)
+	// Execute a fake Codex to verify the actual shell quoting of notify JSON.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".lola"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".lola", "env"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	commonDir := filepath.Join(dir, "shared 'git' $(touch injected)")
+	if err := os.MkdirAll(commonDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gitScript := "#!/bin/sh\n[ \"$*\" = 'rev-parse --path-format=absolute --git-common-dir' ] || exit 2\nprintf '%s\\n' " + shQuote(commonDir) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(gitScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", n.launchCommand("", id, agent.Codex, false))
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotArgs := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	notify, _ := json.Marshal([]string{n.LolaBin, "hook", "codex-notify"})
+	wantArgs := append([]string{"--add-dir", commonDir, "-c", "notify=" + string(notify)}, agent.LaunchArgs(agent.Codex, defaultLaunchPrompt(id))...)
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Errorf("codex argv = %q, want %q", gotArgs, wantArgs)
+	}
+
+	// Reviving a prior conversation gets the same per-worktree grant.
+	cmd = exec.Command("sh", "-c", n.launchCommand("", id, agent.Codex, true))
+	cmd.Dir, cmd.Env = dir, append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	out, err = cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantResume := append([]string{"--add-dir", commonDir, "-c", "notify=" + string(notify)}, agent.LaunchArgsResume(agent.Codex, "")...)
+	if got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n"); !reflect.DeepEqual(got, wantResume) {
+		t.Fatalf("resume argv = %q, want %q", got, wantResume)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "injected")); !os.IsNotExist(err) {
+		t.Fatal("git directory was interpreted as shell code")
+	}
+	// An unresolved repository must not turn into a broad or empty grant.
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	failedCmd := exec.Command("sh", "-c", n.launchCommand("", id, agent.Codex, true))
+	failedCmd.Dir, failedCmd.Env = cmd.Dir, cmd.Env
+	if out, err := failedCmd.Output(); err == nil || len(out) != 0 {
+		t.Fatalf("failed git lookup launched codex: output=%q err=%v", out, err)
 	}
 
 	wantOpenCode := "exec sh -c 'set -a; . ./.lola/env; set +a; exec opencode --prompt " + esc + " --auto'"
-	if got := n.launchCommand(id, agent.OpenCode, false); got != wantOpenCode {
+	if got := n.launchCommand("", id, agent.OpenCode, false); got != wantOpenCode {
 		t.Errorf("opencode launchCommand:\n%s\nwant:\n%s", got, wantOpenCode)
 	}
 
 	// Neither non-claude line may leak the ClaudeBin override.
 	for _, k := range []agent.Kind{agent.Codex, agent.OpenCode} {
-		if strings.Contains(n.launchCommand(id, k, false), "should/not/be/used") {
+		if strings.Contains(n.launchCommand("", id, k, false), "should/not/be/used") {
 			t.Errorf("%s launch must not use ClaudeBin", k)
 		}
 	}
@@ -1164,7 +1312,7 @@ func TestLaunchCommandRunsUnderNonPosixLoginShells(t *testing.T) {
 	}
 
 	n := &Native{}
-	line := n.launchCommand("lola-x-eng-1", agent.Claude, false)
+	line := n.launchCommand("", "lola-x-eng-1", agent.Claude, false)
 
 	for _, shell := range []string{"/bin/sh", "/bin/bash", "/bin/zsh", "/bin/csh", "/bin/tcsh"} {
 		if _, err := os.Stat(shell); err != nil {
@@ -1246,8 +1394,10 @@ func TestIssueFromSessionID(t *testing.T) {
 	cases := []struct{ id, project, want string }{
 		{"lola-nori-eng-42", "nori", "ENG-42"},
 		{"lola-my-app-eng-7", "my-app", "ENG-7"},
-		{"lola-nori-eng-42-r2", "nori", "ENG-42"},  // retry suffix stripped
-		{"lola-nori-eng-42-r10", "nori", "ENG-42"}, // multi-digit attempt
+		{"lola-nori-eng-42-r2", "nori", "ENG-42"},    // retry suffix stripped
+		{"lola-nori-eng-42-r10", "nori", "ENG-42"},   // multi-digit attempt
+		{"lola-nori-eng-42-b2", "nori", "ENG-42"},    // best-of attempt suffix
+		{"lola-nori-eng-42-b3-r2", "nori", "ENG-42"}, // best-of attempt, retried
 		{"lola-nori-eng-42", "other", ""},
 		{"lola-nori-eng-42", "", ""},
 		{"unrelated", "nori", ""},
@@ -1354,7 +1504,7 @@ func TestOpenHappyPath(t *testing.T) {
 	if !strings.Contains(string(env), "DATABASE_URL=") {
 		t.Errorf(".lola/env missing project env:\n%s", env)
 	}
-	if strings.Contains(string(env), "LINEAR_API_KEY") || strings.Contains(string(env), "LOLA_SESSION") {
+	if strings.Contains(string(env), "LINEAR_API_KEY") || strings.Contains(string(env), "LOLA_SESSION=") {
 		t.Errorf(".lola/env must not export secrets/session for a manual shell:\n%s", env)
 	}
 }
@@ -1420,6 +1570,186 @@ func TestReviveResumesWhenTranscriptExists(t *testing.T) {
 	}
 }
 
+// TestReviveResumesOpenCodeWhenSessionExists: when opencode saved a session for
+// the worktree, revive relaunches with --continue --auto (and no --prompt) so
+// the agent resumes its prior conversation instead of starting over.
+func TestReviveResumesOpenCodeWhenSessionExists(t *testing.T) {
+	f := newFixture(t, "", "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", t.TempDir()) // no claude transcript either
+	id := "lola-nori-eng-78"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// opencode's project dir is the worktree path with the leading "/" stripped
+	// and the remaining "/" replaced by "-".
+	encoded := strings.ReplaceAll(strings.TrimPrefix(dir, "/"), "/", "-")
+	info := filepath.Join(xdg, "opencode", "project", encoded, "storage", "session", "info")
+	if err := os.MkdirAll(info, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(info, "ses_test.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-78", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--continue") || !strings.Contains(tmuxCalls, "--auto") {
+		t.Errorf("saved opencode session → revive must resume via --continue --auto:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("opencode resume must not pass --prompt (broken with --continue upstream):\n%s", tmuxCalls)
+	}
+}
+
+// TestReviveOpenCodeFreshWithoutSession: an opencode session with no saved
+// opencode session launches fresh (the --prompt briefing, no --continue).
+func TestReviveOpenCodeFreshWithoutSession(t *testing.T) {
+	f := newFixture(t, "", "")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	id := "lola-nori-eng-79"
+	if err := os.MkdirAll(filepath.Join(f.root, "nori", id, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-79", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("no saved opencode session → revive must launch fresh with --prompt:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--continue") {
+		t.Errorf("no saved opencode session → must not resume:\n%s", tmuxCalls)
+	}
+}
+
+// plantOpencodeDB creates a real minimal opencode SQLite session store at
+// <xdg>/opencode/opencode.db with the given rows (directory, parent_id).
+func plantOpencodeDB(t *testing.T, xdg string, rows []struct{ dir, parent string }) {
+	t.Helper()
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 not on PATH")
+	}
+	dir := filepath.Join(xdg, "opencode")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "opencode.db")
+	args := []string{db, "CREATE TABLE session (id text PRIMARY KEY, parent_id text, directory text NOT NULL);"}
+	for i, r := range rows {
+		args = append(args, fmt.Sprintf("INSERT INTO session (id, parent_id, directory) VALUES ('ses_%d', %s, '%s');",
+			i, sqlNull(r.parent), r.dir))
+	}
+	if out, err := exec.Command("sqlite3", args...).CombinedOutput(); err != nil {
+		t.Fatalf("plant opencode db: %v\n%s", err, out)
+	}
+}
+
+// sqlNull renders s as a SQL literal, NULL for the empty string.
+func sqlNull(s string) string {
+	if s == "" {
+		return "NULL"
+	}
+	return "'" + s + "'"
+}
+
+// TestReviveResumesOpenCodeFromSQLite: current opencode builds store sessions
+// in SQLite (<data-root>/opencode/opencode.db, table session, column
+// directory); a root session (parent_id NULL) for the worktree makes revive
+// resume via --continue --auto.
+func TestReviveResumesOpenCodeFromSQLite(t *testing.T) {
+	f := newFixture(t, "", "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", t.TempDir())
+	id := "lola-nori-eng-80"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plantOpencodeDB(t, xdg, []struct{ dir, parent string }{{dir, ""}})
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-80", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--continue") || !strings.Contains(tmuxCalls, "--auto") {
+		t.Errorf("root session in the SQLite store → revive must resume via --continue --auto:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("opencode resume must not pass --prompt:\n%s", tmuxCalls)
+	}
+}
+
+// TestReviveOpenCodeFreshWhenDBHasNoRootSession: the SQLite store exists but
+// holds only a child session (parent_id set) for the worktree — --continue
+// picks root sessions only, so revive launches fresh.
+func TestReviveOpenCodeFreshWhenDBHasNoRootSession(t *testing.T) {
+	f := newFixture(t, "", "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", t.TempDir())
+	id := "lola-nori-eng-81"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plantOpencodeDB(t, xdg, []struct{ dir, parent string }{{dir, "ses_0"}})
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-81", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("no root session in the SQLite store → revive must launch fresh with --prompt:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--continue") {
+		t.Errorf("no root session in the SQLite store → must not resume:\n%s", tmuxCalls)
+	}
+}
+
+// TestReviveOpenCodeSeamConsulted: the SQLite seam is what answers the resume
+// gate — an empty db file (no tables, so the real query would fail) plus a
+// seam override returning true makes revive resume. Proves the wiring without
+// sqlite3.
+func TestReviveOpenCodeSeamConsulted(t *testing.T) {
+	f := newFixture(t, "", "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", t.TempDir())
+	id := "lola-nori-eng-82"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(xdg, "opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(xdg, "opencode", "opencode.db"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := opencodeSessionInDB
+	opencodeSessionInDB = func(ctx context.Context, db, dir string) bool { return true }
+	defer func() { opencodeSessionInDB = orig }()
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-82", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--continue") || !strings.Contains(tmuxCalls, "--auto") {
+		t.Errorf("seam says a session exists → revive must resume via --continue --auto:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("opencode resume must not pass --prompt:\n%s", tmuxCalls)
+	}
+}
+
 // TestReviveWorktreeGoneErrors: with the worktree removed there is nothing to
 // resume, so Revive errors (and never touches tmux) rather than launching into
 // a missing directory.
@@ -1431,5 +1761,171 @@ func TestReviveWorktreeGoneErrors(t *testing.T) {
 	}
 	if got := loggedArgs(t, f.tmuxLog); strings.Contains(got, "new-session") {
 		t.Errorf("Revive must not start a tmux session when the worktree is gone:\n%s", got)
+	}
+}
+
+// A tmux session belonging to some parent lola session — an embedded shell tab
+// or a review pane — is never a session of its own. Adoption drops both from
+// its scan, which is what keeps a held-open review pane from being reported as
+// an orphan after every daemon restart.
+func TestIsAuxSession(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		aux  bool
+	}{
+		{"lola-nori-app-nor-357", false},
+		{"lola-nori-app-nor-357-shell-1", true},
+		{"lola-nori-app-nor-357-review", true},
+		{"lola-nori-app-nor-357-dev-1", true},
+		{"lola-nori-app-nor-357-dev-12", true},
+		{"lola-open-dev-branch", false}, // a session whose branch merely says "dev"
+		{"lola-nori-app-nor-357-dev", false},
+		{"lola-open-review-tool-1", false}, // a session whose branch merely says "review"
+		{"lola-nori-app-nor-357-reviewer", false},
+	} {
+		if got := IsAuxSession(tc.name); got != tc.aux {
+			t.Errorf("IsAuxSession(%q) = %v, want %v", tc.name, got, tc.aux)
+		}
+	}
+}
+
+func TestReviveCodexSelectsOnlyWorktreeHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		history  string
+		matching bool
+		resume   bool
+	}{
+		{"empty", "", false, false},
+		{"shared matching", "shared", true, true},
+		{"project home", "shared", true, true},
+		{"shared unrelated", "shared", false, false},
+		{"legacy matching", "legacy", true, true},
+		{"legacy unrelated", "legacy", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "", "")
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", home)
+			if tc.name == "project home" {
+				home = t.TempDir()
+				f.n.Cfg.Projects[0].Env = map[string]string{"CODEX_HOME": home}
+			}
+			id := "lola-nori-eng-42"
+			dir := filepath.Join(f.root, "nori", id)
+			legacy := filepath.Join(dir, lolaDir, "codex")
+			if err := os.MkdirAll(legacy, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			originalEnv := "LOLA_SESSION=" + id + "\nLINEAR_API_KEY='retained secret'\nMULTILINE='value\nCODEX_HOME=embedded text'\nCODEX_HOME=" + shQuote(legacy) + "\n"
+			if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), []byte(originalEnv), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.history != "" {
+				recordHome := home
+				if tc.history == "legacy" {
+					recordHome = legacy
+				}
+				folder := filepath.Join(recordHome, "sessions", "2026", "09", "05")
+				if err := os.MkdirAll(folder, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				cwd := dir
+				if !tc.matching {
+					cwd = filepath.Join(f.root, "another-session")
+				}
+				meta, _ := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"cwd": cwd, "source": "cli"}})
+				if err := os.WriteFile(filepath.Join(folder, "rollout-example.jsonl"), append(meta, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := session.Session{ID: id, Project: "nori", Issue: "ENG-42", Agent: "codex"}
+			if _, err := f.n.Revive(context.Background(), s); err != nil {
+				t.Fatal(err)
+			}
+			calls := loggedArgs(t, f.tmuxLog)
+			if got := strings.Contains(calls, "resume --last"); got != tc.resume {
+				t.Errorf("resume = %v, want %v: %s", got, tc.resume, calls)
+			}
+			wantHome := home
+			if tc.history == "legacy" && tc.matching {
+				wantHome = legacy
+			}
+			env := readFile(t, filepath.Join(dir, lolaDir, "env"))
+			if !strings.Contains(env, "CODEX_HOME="+shQuote(wantHome)+"\n") ||
+				!strings.HasPrefix(env, originalEnv) {
+				t.Error("revive must select the proper home and preserve other environment assignments")
+			}
+		})
+	}
+}
+
+func TestUserCodexHomeDefaultsToUserConfiguration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	if got := userCodexHome(); got != filepath.Join(home, ".codex") {
+		t.Errorf("home = %q", got)
+	}
+}
+
+func TestCodexResumeIgnoresNonInteractiveHistory(t *testing.T) {
+	for _, source := range []string{`"exec"`, `{"subagent":{"other":"review"}}`, `null`} {
+		t.Run(source, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.Mkdir(filepath.Join(home, "sessions"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			body := `{"type":"session_meta","payload":{"cwd":"/worktree","source":` + source + `}}` + "\n"
+			if err := os.WriteFile(filepath.Join(home, "sessions", "review.jsonl"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if codexHasSession(context.Background(), home, "/worktree") {
+				t.Fatal("noninteractive history must not enable resume --last")
+			}
+		})
+	}
+}
+
+func TestCodexResumeProbeHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"session_meta","payload":{"cwd":"/worktree","source":"cli"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(home, "sessions", "rollout.jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if codexHasSession(ctx, home, "/worktree") {
+		t.Fatal("canceled probe must not enable resume")
+	}
+}
+
+// The record must say what the launch did. ssh's production rule reads it, so a
+// record still saying "docker" over an agent now on the host would pass that rule.
+func TestReviveRecordsTheSandboxItLaunchedWith(t *testing.T) {
+	f := newFixture(t, "", "")
+	t.Setenv("HOME", t.TempDir())
+	removed := []string{}
+	f.n.RemoveContainer = func(_ context.Context, id string) error {
+		removed = append(removed, id)
+		return nil
+	}
+	id := "lola-nori-eng-90"
+	if err := os.MkdirAll(filepath.Join(f.root, "nori", id, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-90", Agent: "claude", Sandbox: config.SandboxDocker}
+	got, err := f.n.Revive(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Sandbox != "" {
+		t.Fatalf("the project has no sandbox, and the record says %q", got.Sandbox)
+	}
+	if len(removed) != 1 || removed[0] != id {
+		t.Fatalf("old container not removed: %v", removed)
 	}
 }

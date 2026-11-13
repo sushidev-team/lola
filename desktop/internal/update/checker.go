@@ -34,7 +34,11 @@ const (
 // Checker fetches releases from GitHub with a small in-process cache. Safe for
 // concurrent use.
 type Checker struct {
-	httpClient     *http.Client
+	httpClient *http.Client
+	// baseURL is the API root. A field rather than the const inlined at the call
+	// sites so a test can point the checker at an httptest server — the caching
+	// behaviour is otherwise only observable against api.github.com.
+	baseURL        string
 	owner          string
 	repo           string
 	cachedRelease  *Release
@@ -48,6 +52,7 @@ type Checker struct {
 func NewChecker() *Checker {
 	return &Checker{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		baseURL:    GitHubAPIURL,
 		owner:      RepoOwner,
 		repo:       RepoName,
 	}
@@ -140,7 +145,7 @@ func (c *Checker) getLatestRelease() (*Release, error) {
 	}
 	c.mu.RUnlock()
 
-	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", GitHubAPIURL, c.owner, c.repo)
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", c.baseURL, c.owner, c.repo)
 	var release Release
 	if err := c.getJSON(url, &release); err != nil {
 		return nil, err
@@ -162,7 +167,7 @@ func (c *Checker) getAllReleases() ([]Release, error) {
 	}
 	c.mu.RUnlock()
 
-	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=50", GitHubAPIURL, c.owner, c.repo)
+	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=50", c.baseURL, c.owner, c.repo)
 	var releases []Release
 	if err := c.getJSON(url, &releases); err != nil {
 		return nil, err

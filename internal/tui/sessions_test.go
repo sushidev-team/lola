@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 func cannedSessions() *protocol.SessionsData {
@@ -35,6 +36,8 @@ func keyMsg(s string) tea.KeyPressMsg {
 	switch s {
 	case "tab":
 		return tea.KeyPressMsg{Code: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 	case "enter":
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
@@ -153,7 +156,109 @@ func TestPRBadgeChecksGlyphs(t *testing.T) {
 	}
 }
 
-func TestStatusStyleMapping(t *testing.T) {
+// The chip is the SECONDARY axis in full: the delivery-only lifecycle marks the
+// checks/review glyphs cannot express, the outstanding-review mark that used to
+// render nothing, and nothing stale trailing a terminal PR.
+func TestPRBadgeCarriesTheDeliveryAxis(t *testing.T) {
+	cases := []struct {
+		name string
+		si   protocol.SessionInfo
+		want []string
+		not  []string
+	}{
+		{
+			name: "draft",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "draft"},
+			want: []string{"#7", "df"},
+		},
+		{
+			name: "conflict beside a red build",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "merge_conflict", Checks: "fail"},
+			want: []string{"#7", "⚠mc", "✗ci"},
+		},
+		{
+			// The most common PR state in the system: parked on a reviewer. The
+			// pill cannot say it any more, so the chip must.
+			name: "review outstanding",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "review_pending", Review: "REVIEW_REQUIRED"},
+			want: []string{"#7", "⧗rev"},
+		},
+		{
+			name: "merged drops stale checks/review",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "merged", Checks: "pass", Review: "APPROVED"},
+			want: []string{"#7", "✓mg"},
+			not:  []string{"✓rev"},
+		},
+		{
+			name: "closed drops stale checks/review",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "closed", Checks: "fail"},
+			want: []string{"#7", "✕"},
+			not:  []string{"✗ci"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := stripANSI(prBadge(c.si))
+			for _, w := range c.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("prBadge = %q, want %q in it", got, w)
+				}
+			}
+			for _, n := range c.not {
+				if strings.Contains(got, n) {
+					t.Errorf("prBadge = %q, must not carry %q", got, n)
+				}
+			}
+		})
+	}
+}
+
+func TestDisplayStyleMapping(t *testing.T) {
+	// The PRIMARY axis: one color per Display value, and NOTHING about the PR.
+	cases := map[state.Display]color.Color{
+		state.DisplayWorking:  lipgloss.Color(colBlue),
+		state.DisplayNeedsYou: lipgloss.Color(colOrange),
+		state.DisplayOrphaned: lipgloss.Color(colWarn),
+		state.DisplayIdle:     lipgloss.Color(colFaint),
+		state.DisplayGone:     lipgloss.Color(colFaint),
+		state.DisplayShell:    lipgloss.Color(colFaint),
+	}
+	for d, want := range cases {
+		if got := displayStyle(d).GetForeground(); got != want {
+			t.Errorf("displayStyle(%q) foreground = %v, want %v", d, got, want)
+		}
+	}
+	// A red build must NOT recolor the pill — that would re-collapse the axes.
+	// The delivery color lives on the chip's own scale.
+	working := protocol.SessionInfo{AgentState: "working", Delivery: "ci_failed"}
+	if got := sessionDisplay(working).Style.GetForeground(); got != lipgloss.Color(colBlue) {
+		t.Errorf("a working agent under a red build must stay blue, got %v", got)
+	}
+}
+
+func TestDeliveryStyleMapping(t *testing.T) {
+	cases := map[state.DeliveryState]color.Color{
+		state.DeliveryCIFailed:         lipgloss.Color(colBad),
+		state.DeliveryChangesRequested: lipgloss.Color(colBad),
+		state.DeliveryMergeConflict:    lipgloss.Color(colBad),
+		state.DeliveryApproved:         lipgloss.Color(colGood),
+		state.DeliveryMerged:           lipgloss.Color(colGood),
+		state.DeliveryCIPending:        lipgloss.Color(colWarn),
+		state.DeliveryDraft:            lipgloss.Color(colFaint),
+		state.DeliveryReviewPending:    lipgloss.Color(colFaint),
+		state.DeliveryClosed:           lipgloss.Color(colFaint),
+		state.DeliveryNone:             lipgloss.Color(colFaint),
+	}
+	for d, want := range cases {
+		if got := deliveryStyle(d).GetForeground(); got != want {
+			t.Errorf("deliveryStyle(%q) foreground = %v, want %v", d, got, want)
+		}
+	}
+}
+
+// legacyStatusStyle survives for the activity feed alone (its events carry the
+// rolled-up vocabulary), so its old mapping must not drift.
+func TestLegacyStatusStyleMapping(t *testing.T) {
 	cases := []struct {
 		status string
 		fg     color.Color
@@ -166,21 +271,21 @@ func TestStatusStyleMapping(t *testing.T) {
 		{"needs_input", lipgloss.Color(colOrange)},
 	}
 	for _, c := range cases {
-		if got := statusStyle(c.status).GetForeground(); got != c.fg {
-			t.Errorf("statusStyle(%q) foreground = %v, want %v", c.status, got, c.fg)
+		if got := legacyStatusStyle(c.status).GetForeground(); got != c.fg {
+			t.Errorf("legacyStatusStyle(%q) foreground = %v, want %v", c.status, got, c.fg)
 		}
 	}
 	// The quiet/terminal states render in the muted palette foreground.
 	for _, dim := range []string{"merged", "session_ended", "idle", "closed", "shell", "orphaned"} {
-		if got := statusStyle(dim).GetForeground(); got != lipgloss.Color(colFaint) {
-			t.Errorf("statusStyle(%q) foreground = %v, want faint %v", dim, got, colFaint)
+		if got := legacyStatusStyle(dim).GetForeground(); got != lipgloss.Color(colFaint) {
+			t.Errorf("legacyStatusStyle(%q) foreground = %v, want faint %v", dim, got, colFaint)
 		}
 	}
-	if bg := statusStyle("dead").GetBackground(); bg != lipgloss.Color(colBad) {
-		t.Errorf("statusStyle(dead) background = %v, want red (%s)", bg, colBad)
+	if bg := legacyStatusStyle("dead").GetBackground(); bg != lipgloss.Color(colBad) {
+		t.Errorf("legacyStatusStyle(dead) background = %v, want red (%s)", bg, colBad)
 	}
-	if fg := statusStyle("review_pending").GetForeground(); fg != (lipgloss.NoColor{}) {
-		t.Errorf("statusStyle(review_pending) foreground = %v, want none", fg)
+	if fg := legacyStatusStyle("review_pending").GetForeground(); fg != (lipgloss.NoColor{}) {
+		t.Errorf("legacyStatusStyle(review_pending) foreground = %v, want none", fg)
 	}
 }
 
@@ -280,7 +385,7 @@ func TestSessionsKillConfirmAndSend(t *testing.T) {
 		t.Fatal("x must open the kill confirmation")
 	}
 	v := m.viewString()
-	if !strings.Contains(v, "kill ENG-123?") || !strings.Contains(v, "(y/n)") {
+	if !strings.Contains(v, "kill ENG-123?") || !strings.Contains(v, "(y/s/n)") {
 		t.Errorf("view must prompt to confirm the kill (naming the issue):\n%s", v)
 	}
 	if strings.Contains(v, "force") || strings.Contains(v, "--force") {
@@ -304,6 +409,24 @@ func TestSessionsKillConfirmAndSend(t *testing.T) {
 	}
 	if !strings.Contains(m.viewString(), "--force") {
 		t.Errorf("the dirty-kept message must render in the view:\n%s", m.viewString())
+	}
+}
+
+// "s" at the confirm stops the agent but keeps the worktree: a command is
+// dispatched and the confirmation closes.
+func TestSessionsKillConfirmStopKeepsWorktree(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("x"))
+	_, cmd := m.Update(keyMsg("s"))
+	if m.sessions.confirmKill {
+		t.Error("s must close the kill confirmation")
+	}
+	if cmd == nil {
+		t.Fatal("s must dispatch a stop command")
 	}
 }
 
@@ -452,6 +575,119 @@ func TestPreviewLineTruncatesAndResets(t *testing.T) {
 	// Narrow lines pass through untruncated.
 	if got := previewLine("ok", 20); got != "ok\x1b[0m" {
 		t.Errorf("previewLine(ok, 20) = %q, want ok + reset", got)
+	}
+}
+
+// 'A' opens the agent-switch chooser: the kinds EXCLUDING the session's current
+// one ("" counts as claude), the chooser owns every keypress (arrows move it,
+// not the list), enter sends cmd=switchAgent for the pinned target, and the
+// daemon's reply flashes green.
+func TestSwitchAgentChooser(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-1", Status: "working", Source: "native",
+		Agent: "codex",
+	}}}
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("A"))
+	if !m.sessions.switching {
+		t.Fatal("'A' should open the agent chooser")
+	}
+	if k := m.sessions.switchKinds; len(k) != 2 || k[0] != "claude" || k[1] != "opencode" {
+		t.Fatalf("kinds = %v, want [claude opencode] (codex excluded)", k)
+	}
+	if v := m.viewString(); !strings.Contains(v, "switch agent on ENG-1") {
+		t.Errorf("the chooser must name its target:\n%s", v)
+	}
+
+	// The chooser owns the keys: j moves the cursor, not the session list.
+	m.Update(keyMsg("j"))
+	if m.sessions.switchCursor != 1 || m.sessions.cursor != 0 {
+		t.Fatalf("cursor=%d list=%d, want chooser cursor 1 and list untouched", m.sessions.switchCursor, m.sessions.cursor)
+	}
+
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.SwitchAgentData{Agent: "opencode", Message: "switched to opencode"}), nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+	if m.sessions.switching {
+		t.Error("enter must close the chooser")
+	}
+	found := false
+	for _, r := range got {
+		if r.Cmd != "switchAgent" {
+			continue
+		}
+		var a protocol.SwitchAgentArgs
+		_ = json.Unmarshal(r.Args, &a)
+		if a.Session == "s1" && a.Agent == "opencode" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected cmd=switchAgent s1→opencode, got %+v", got)
+	}
+	if !m.sessions.flashGood || !strings.Contains(m.sessions.flash, "opencode") {
+		t.Errorf("success must flash the daemon's message, got %q", m.sessions.flash)
+	}
+}
+
+// esc cancels the chooser without sending; a legacy "" agent counts as claude
+// (codex + opencode offered); a shell session has no agent to switch.
+func TestSwitchAgentChooserEscLegacyAndShell(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-1", Status: "working", Source: "native",
+	}}}
+	m.sessions.cursor = 0
+
+	var got []protocol.Request
+	fakeRequest(t, &got, nil, nil)
+	m.Update(keyMsg("A"))
+	if k := m.sessions.switchKinds; len(k) != 2 || k[0] != "codex" || k[1] != "opencode" {
+		t.Fatalf("kinds = %v, want [codex opencode] (legacy claude excluded)", k)
+	}
+	m.Update(keyMsg("esc"))
+	if m.sessions.switching {
+		t.Error("esc must close the chooser")
+	}
+	for _, r := range got {
+		if r.Cmd == "switchAgent" {
+			t.Error("esc must not send a switch")
+		}
+	}
+
+	// A shell session (lola open) never opens the chooser.
+	m.sessions.data.Sessions[0].Status = "shell"
+	m.Update(keyMsg("A"))
+	if m.sessions.switching {
+		t.Error("a shell session must not open the chooser")
+	}
+	if !strings.Contains(m.sessions.flash, "shell") {
+		t.Errorf("expected a shell hint, got %q", m.sessions.flash)
+	}
+}
+
+// A daemon refusal (same kind already running, binary missing, …) is flashed
+// verbatim as a warning, the same way revive refusals surface.
+func TestSwitchAgentRefusalFlashes(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-1", Status: "working", Source: "native",
+		Agent: "claude",
+	}}}
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("A"))
+	fakeRequest(t, nil, &protocol.Response{OK: false, Error: "codex: binary not on PATH"}, nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+	if m.sessions.flashGood {
+		t.Error("a refusal must not flash green")
+	}
+	if !strings.Contains(m.sessions.flash, "codex: binary not on PATH") {
+		t.Errorf("the daemon's refusal must surface verbatim, got %q", m.sessions.flash)
 	}
 }
 
@@ -678,13 +914,61 @@ func TestNoAnswerAffordanceWhenNotNeedsInput(t *testing.T) {
 
 	_, cmd := m.Update(keyMsg("a"))
 	if m.sessions.answering {
-		t.Error("a must not arm on a non-needs_input session")
+		t.Error("a must not arm on a mid-turn session")
 	}
 	if cmd != nil {
 		t.Error("a on a working session must not dispatch a command")
 	}
-	if !strings.Contains(m.sessions.flash, "waits for input") {
+	if !strings.Contains(m.sessions.flash, "parked at its prompt") {
 		t.Errorf("flash should explain answer is unavailable, got %q", m.sessions.flash)
+	}
+}
+
+// The affordance follows the DAEMON's gate, not the rolled-up word. A finished
+// turn resting at its prompt (AgentIdle + AtPrompt) is the session a human most
+// wants to reply to, and the old `Status == "needs_input"` check refused it —
+// while a modal, which swallows typed prose, sailed straight through. Both
+// directions are pinned here because a disagreement between the key and the
+// daemon is the one failure a user cannot diagnose.
+func TestAnswerAffordanceFollowsTheAxisGate(t *testing.T) {
+	arm := func(t *testing.T, mutate func(*protocol.SessionInfo)) *rootModel {
+		t.Helper()
+		m := newTestRoot(t)
+		si := protocol.SessionInfo{
+			ID: "s1", Project: "web", Issue: "ENG-1", Status: "working",
+			TmuxName: "t-s1", Source: "native",
+		}
+		mutate(&si)
+		m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{si}}
+		m.sessions.cursor, m.sessions.selID = 0, "s1"
+		m.sessions.paneData = &protocol.PaneData{Text: "prompt\n"}
+		m.sessions.preview, m.sessions.previewFor = "prompt", "s1"
+		m.Update(keyMsg("a"))
+		return m
+	}
+
+	m := arm(t, func(si *protocol.SessionInfo) {
+		si.AgentState, si.AtPrompt = "idle", true
+	})
+	if !m.sessions.answering {
+		t.Errorf("a must arm on an idle session parked at its prompt (flash %q)", m.sessions.flash)
+	}
+	if !strings.Contains(m.viewString(), "attention") {
+		t.Error("an answerable session must get the attention header")
+	}
+
+	m = arm(t, func(si *protocol.SessionInfo) {
+		si.Status, si.AgentState, si.InputReason = "needs_input", "waiting_input", "dialog"
+	})
+	if m.sessions.answering {
+		t.Error("a must NOT arm over a modal dialog — the widget swallows typed prose")
+	}
+
+	m = arm(t, func(si *protocol.SessionInfo) {
+		si.Status, si.AgentState, si.InputReason = "needs_input", "waiting_input", "quota_limited"
+	})
+	if m.sessions.answering {
+		t.Error("a must NOT arm on a usage-limited session — it cannot act on the reply")
 	}
 }
 
@@ -907,5 +1191,111 @@ func TestSessionPreviewClippedToTerminalWidth(t *testing.T) {
 	}
 	if !strings.Contains(m.viewString(), "aaa") {
 		t.Error("clipped preview line must still render its head")
+	}
+}
+
+// A dev tab that lost a port race is dead with an empty pane, so the detail
+// panel is the only place the reason — and the process responsible — is stated.
+// Acting on it is SHIFTED and confirmed: the holder is regularly not lola's.
+func TestSessionsFreePortConfirmAndSend(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.data.Sessions[0].DevCommands = []string{"cd desktop && wails3 dev"}
+	m.sessions.data.Sessions[0].DevClash = &protocol.DevClashInfo{
+		Tab: "s1-dev-1", Command: "cd desktop && wails3 dev",
+		Port: 9245, PID: 52791, Proc: "node", Dir: "/Users/x/code/app/desktop/frontend",
+	}
+	m.sessions.cursor = 0 // s1
+
+	if d := m.sessionDetail(); !strings.Contains(d, "9245") || !strings.Contains(d, "52791") ||
+		!strings.Contains(d, "/Users/x/code/app/desktop/frontend") {
+		t.Errorf("detail must name the port, the process holding it and where it runs:\n%s", d)
+	}
+
+	m.Update(keyMsg("F"))
+	if !m.sessions.confirmFreePort {
+		t.Fatal("F must open the free-port confirmation")
+	}
+	if v := m.viewString(); !strings.Contains(v, "(y/n)") || !strings.Contains(v, "9245") {
+		t.Errorf("view must ask before killing the holder:\n%s", v)
+	}
+
+	_, cmd := m.Update(keyMsg("y"))
+	if m.sessions.confirmFreePort {
+		t.Error("y must close the confirmation")
+	}
+	if cmd == nil {
+		t.Fatal("y must dispatch the free-port command")
+	}
+}
+
+// Anything but y cancels, and nothing is sent — the same shape as the kill
+// confirmation, because this also ends a process.
+func TestSessionsFreePortConfirmCancel(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.data.Sessions[0].DevClash = &protocol.DevClashInfo{Tab: "s1-dev-1", Port: 9245, PID: 52791, Proc: "node"}
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("F"))
+	_, cmd := m.Update(keyMsg("n"))
+	if m.sessions.confirmFreePort {
+		t.Error("n must close the confirmation")
+	}
+	if cmd != nil {
+		t.Error("n must not dispatch anything")
+	}
+}
+
+// Without a clash on record there is nothing to free: F says so rather than
+// arming a question about a process nobody named.
+func TestSessionsFreePortNeedsAClash(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("F"))
+	if m.sessions.confirmFreePort {
+		t.Fatal("F must not arm a confirmation without a recorded clash")
+	}
+	if !strings.Contains(m.sessions.flash, "no port clash") {
+		t.Errorf("flash = %q, want a hint that there is nothing to free", m.sessions.flash)
+	}
+}
+
+func TestAppLines(t *testing.T) {
+	si := protocol.SessionInfo{Stack: true, FocusApp: "web", PRNumber: 9, Apps: []protocol.SessionApp{
+		{Name: "web", Label: "Website", Number: 9, State: "OPEN", Checks: "pass", Delivery: "ci_pending", Ports: []int{4100, 4101}},
+		{Name: "api", Touched: true},
+		{Name: "docs"},
+	}}
+	got := appLines(si)
+	if len(got) != 3 {
+		t.Fatalf("lines = %q", got)
+	}
+	plain := make([]string, len(got))
+	for i, l := range got {
+		plain[i] = stripANSI(l)
+	}
+	if !strings.Contains(plain[0], "web (Website)  #9 ✓") || !strings.Contains(plain[0], "ports 4100 · 4101") {
+		t.Errorf("web line = %q", plain[0])
+	}
+	if !strings.Contains(plain[1], "api  changes, no PR") {
+		t.Errorf("api line = %q", plain[1])
+	}
+	if !strings.Contains(plain[2], "docs  —") {
+		t.Errorf("docs line = %q", plain[2])
+	}
+	if b := stripANSI(prBadge(si)); !strings.HasPrefix(b, "web #9") {
+		t.Errorf("prBadge = %q, want the focus app named first", b)
+	}
+	if appLines(protocol.SessionInfo{Apps: si.Apps}) != nil {
+		t.Error("a non-stack session must render no app lines")
+	}
+	if b := stripANSI(prBadge(protocol.SessionInfo{PRNumber: 3, FocusApp: "web"})); !strings.HasPrefix(b, "#3") {
+		t.Errorf("non-stack prBadge = %q", b)
 	}
 }

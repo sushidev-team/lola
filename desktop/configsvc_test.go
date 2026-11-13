@@ -1,13 +1,17 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // writeTestConfig isolates $LOLA_HOME to a temp dir and seeds a minimal VALID
@@ -319,5 +323,899 @@ func TestSaveProjectRefusesToForkOnUnknownID(t *testing.T) {
 	}
 	if len(cfg.Projects) != 1 {
 		t.Errorf("projects = %d, want the original one untouched", len(cfg.Projects))
+	}
+}
+
+// A directory that is not a checkout still yields a usable suggestion: the
+// derived facts are empty (fail-closed) but the id/label the form prefills come
+// from the folder name, so the pick is never wasted.
+func TestInspectPathOnPlainDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nori-app")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := (&ConfigService{}).InspectPath(dir)
+	if got.IsRepo {
+		t.Errorf("isRepo = true for %q, want false", dir)
+	}
+	if got.Path != dir {
+		t.Errorf("path = %q, want the directory as given", got.Path)
+	}
+	if got.Repo != "" || got.DefaultBranch != "" {
+		t.Errorf("repo/branch = %q/%q, want both empty (fail closed)", got.Repo, got.DefaultBranch)
+	}
+	if got.Branches == nil {
+		t.Error("branches must marshal as [] rather than null")
+	}
+	if got.SuggestedLabel != "Nori App" || got.SuggestedID != "nori-app" {
+		t.Errorf("suggestion = %q/%q, want Nori App/nori-app", got.SuggestedLabel, got.SuggestedID)
+	}
+}
+
+// An empty path is answered, not errored: the form calls this on every blur.
+func TestInspectPathEmpty(t *testing.T) {
+	got := (&ConfigService{}).InspectPath("")
+	if got.IsRepo || got.Path != "" || got.SuggestedID != "" {
+		t.Errorf("InspectPath(\"\") = %+v, want the zero answer", got)
+	}
+}
+
+// --- [linear] API key -------------------------------------------------------
+//
+// The key was settable only in the first-run wizard: neither this app's settings
+// nor the TUI's had a field for it, so a hand-written config could never gain
+// one and rotating a key meant editing the Keychain by hand — while a daemon
+// without a key fails every poll.
+
+// stubDesktopKeychain replaces the keychain write and records what it received.
+func stubDesktopKeychain(t *testing.T, fail bool) *struct{ service, key string } {
+	t.Helper()
+	got := &struct{ service, key string }{}
+	orig := storeLinearKey
+	storeLinearKey = func(service, key string) error {
+		got.service, got.key = service, key
+		if fail {
+			return errors.New("keychain unavailable")
+		}
+		return nil
+	}
+	t.Cleanup(func() { storeLinearKey = orig })
+	return got
+}
+
+func TestSetLinearKeyStoresToKeychainAndNamesTheSource(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	kc := stubDesktopKeychain(t, false)
+	svc := &ConfigService{}
+
+	msg, err := svc.SetLinearKey("  lin_api_secret  ")
+	if err != nil {
+		t.Fatalf("SetLinearKey: %v", err)
+	}
+	if kc.service != setupKeychainService || kc.key != "lin_api_secret" {
+		t.Errorf("keychain got service=%q key=%q; the key must be trimmed", kc.service, kc.key)
+	}
+	if !strings.Contains(msg, "Keychain") {
+		t.Errorf("message must say where the key went, got %q", msg)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Linear.APIKeyKeychain != setupKeychainService {
+		t.Errorf("api_key_keychain = %q, want %q", cfg.Linear.APIKeyKeychain, setupKeychainService)
+	}
+	// The value must never reach the file — that is what the keychain is for.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "lin_api_secret") {
+		t.Fatalf("the key leaked into config.toml:\n%s", raw)
+	}
+}
+
+// Rotating from an env-var config to a keychain one must not leave BOTH sources
+// named: the stale env var would keep winning or confusing the doctor.
+func TestSetLinearKeyClearsTheEnvSourceOnRotation(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig+"\n[linear]\napi_key_env = \"OLD_VAR\"\n")
+	stubDesktopKeychain(t, false)
+
+	if _, err := (&ConfigService{}).SetLinearKey("lin_api_new"); err != nil {
+		t.Fatalf("SetLinearKey: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Linear.APIKeyEnv != "" {
+		t.Errorf("api_key_env = %q, want it cleared once the keychain holds the key", cfg.Linear.APIKeyEnv)
+	}
+}
+
+// No keychain must still leave a WORKING configuration, and say what the user
+// has left to do.
+func TestSetLinearKeyFallsBackToEnvVar(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	stubDesktopKeychain(t, true)
+
+	msg, err := (&ConfigService{}).SetLinearKey("lin_api_secret")
+	if err != nil {
+		t.Fatalf("SetLinearKey: %v", err)
+	}
+	if !strings.Contains(msg, setupEnvVar) {
+		t.Errorf("message must name the env var to export, got %q", msg)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Linear.APIKeyEnv != setupEnvVar {
+		t.Errorf("api_key_env = %q, want %q", cfg.Linear.APIKeyEnv, setupEnvVar)
+	}
+}
+
+func TestSetLinearKeyRejectsEmpty(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	stubDesktopKeychain(t, false)
+	if _, err := (&ConfigService{}).SetLinearKey("   "); err == nil {
+		t.Fatal("SetLinearKey(\"   \") must fail rather than write a blank key")
+	}
+}
+
+func TestLinearKeyStatusReportsSourceWithoutTheValue(t *testing.T) {
+	writeTestConfig(t, minimalConfig+"\n[linear]\napi_key_env = \"LOLA_TEST_LINEAR_KEY\"\n")
+	t.Setenv("LOLA_TEST_LINEAR_KEY", "lin_api_secret")
+
+	st := (&ConfigService{}).LinearKeyStatus()
+	if !st.Configured || !st.Resolvable {
+		t.Fatalf("status = %+v, want configured and resolvable", st)
+	}
+	if !strings.Contains(st.Source, "LOLA_TEST_LINEAR_KEY") {
+		t.Errorf("source = %q, want the env var named", st.Source)
+	}
+	// Secret discipline: nothing in the DTO may carry the key itself.
+	if strings.Contains(st.Source+st.Detail, "lin_api_secret") {
+		t.Fatalf("the key value leaked into the status DTO: %+v", st)
+	}
+}
+
+// A config naming a source that yields nothing is the exact silent failure the
+// app exists to surface: configured, but not resolvable.
+func TestLinearKeyStatusReportsAnUnreadableSource(t *testing.T) {
+	writeTestConfig(t, minimalConfig+"\n[linear]\napi_key_env = \"LOLA_TEST_MISSING_KEY\"\n")
+	t.Setenv("LOLA_TEST_MISSING_KEY", "")
+
+	st := (&ConfigService{}).LinearKeyStatus()
+	if !st.Configured {
+		t.Errorf("status = %+v, want configured", st)
+	}
+	if st.Resolvable {
+		t.Errorf("status = %+v, want NOT resolvable", st)
+	}
+	if st.Detail == "" {
+		t.Error("an unresolvable key must explain why")
+	}
+}
+
+func TestLinearKeyStatusWithNoSource(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	st := (&ConfigService{}).LinearKeyStatus()
+	if st.Configured || st.Resolvable {
+		t.Fatalf("status = %+v, want neither configured nor resolvable", st)
+	}
+}
+
+// --- groups & layout ---------------------------------------------------------
+
+const twoProjectConfig = `[defaults]
+global_cap = 4
+
+[[project]]
+name = "okane"
+path = "/tmp/okane"
+
+[[project]]
+name = "lola"
+path = "/tmp/lola"
+`
+
+func TestAddGroupSlugsAndDedupes(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+
+	name, err := s.AddGroup("Client Work")
+	if err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if name != "client-work" {
+		t.Fatalf("id = %q", name)
+	}
+	// A second folder a human would also call "Client Work" must coexist, not
+	// silently replace the first.
+	second, err := s.AddGroup("Client Work")
+	if err != nil {
+		t.Fatalf("AddGroup 2: %v", err)
+	}
+	if second != "client-work-2" {
+		t.Fatalf("second id = %q", second)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Groups) != 2 || cfg.Groups[0].Label != "Client Work" {
+		t.Fatalf("groups = %+v", cfg.Groups)
+	}
+}
+
+// A new folder lands at the END of the top-level list — after the ungrouped
+// projects and the folders already there — so adding one moves no existing row.
+func TestAddGroupLandsLast(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if _, err := s.AddGroup("internal"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Groups[0].Position != 2 || cfg.Groups[1].Position != 3 {
+		t.Fatalf("positions = %d, %d", cfg.Groups[0].Position, cfg.Groups[1].Position)
+	}
+}
+
+// Filing a project is the sidebar's job (drag it onto the folder), so the form
+// must leave Project.Group alone rather than carry a stale copy of it.
+func TestSaveProjectLeavesTheGroupAlone(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.SetProjectLayout(ProjectLayoutDTO{
+		Groups:   []GroupDTO{{Name: "clients", Position: 1}},
+		Projects: []ProjectPlacementDTO{{Name: "okane", Group: "clients"}, {Name: "lola"}},
+	}); err != nil {
+		t.Fatalf("SetProjectLayout: %v", err)
+	}
+	dto, err := s.GetProject("okane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto.Label = "Okane renamed"
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.ProjectByName("okane")
+	if p.Group != "clients" {
+		t.Fatalf("group = %q, want clients", p.Group)
+	}
+	if p.Label != "Okane renamed" {
+		t.Fatalf("label = %q", p.Label)
+	}
+}
+
+// A label that already IS its id carries nothing, so it is not written — the
+// same rule SaveProject applies to a project's label.
+func TestAddGroupOmitsRedundantLabel(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Groups[0].Label != "" {
+		t.Fatalf("label = %q, want empty", cfg.Groups[0].Label)
+	}
+}
+
+func TestAddGroupRejectsEmptyName(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("   /// "); err == nil {
+		t.Fatal("want an error for a label that slugs to nothing")
+	}
+}
+
+func TestRemoveGroupUngroupsItsProjects(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.SetProjectLayout(ProjectLayoutDTO{
+		Groups: []GroupDTO{{Name: "clients", Position: 1}},
+		Projects: []ProjectPlacementDTO{
+			{Name: "okane", Group: "clients"},
+			{Name: "lola"},
+		},
+	}); err != nil {
+		t.Fatalf("SetProjectLayout: %v", err)
+	}
+	if err := s.RemoveGroup("clients"); err != nil {
+		t.Fatalf("RemoveGroup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Groups) != 0 {
+		t.Fatalf("groups = %+v", cfg.Groups)
+	}
+	// Deleting a folder must never cost a project.
+	if len(cfg.Projects) != 2 {
+		t.Fatalf("projects = %+v", cfg.Projects)
+	}
+	if cfg.Projects[0].Group != "" {
+		t.Fatalf("project still filed under %q", cfg.Projects[0].Group)
+	}
+}
+
+func TestRenameGroupChangesLabelOnly(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.RenameGroup("clients", "Client Work"); err != nil {
+		t.Fatalf("RenameGroup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Groups[0].Name != "clients" || cfg.Groups[0].Label != "Client Work" {
+		t.Fatalf("group = %+v", cfg.Groups[0])
+	}
+	if err := s.RenameGroup("nope", "x"); err == nil {
+		t.Fatal("want an error renaming a group that does not exist")
+	}
+}
+
+func TestSetGroupCollapsedPersists(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.SetGroupCollapsed("clients", true); err != nil {
+		t.Fatalf("SetGroupCollapsed: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Groups[0].Collapsed {
+		t.Fatal("collapse did not persist")
+	}
+	if err := s.SetGroupCollapsed("nope", true); err == nil {
+		t.Fatal("want an error for a group that does not exist")
+	}
+}
+
+func TestSetProjectLayoutReordersAndFiles(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.SetProjectLayout(ProjectLayoutDTO{
+		Groups: []GroupDTO{{Name: "clients", Position: 1, Collapsed: true}},
+		Projects: []ProjectPlacementDTO{
+			{Name: "lola"},
+			{Name: "okane", Group: "clients"},
+		},
+	}); err != nil {
+		t.Fatalf("SetProjectLayout: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The [[project]] array order IS the render order, in this app and the TUI.
+	if cfg.Projects[0].Name != "lola" || cfg.Projects[1].Name != "okane" {
+		t.Fatalf("order = %q, %q", cfg.Projects[0].Name, cfg.Projects[1].Name)
+	}
+	if cfg.Projects[1].Group != "clients" {
+		t.Fatalf("group = %q", cfg.Projects[1].Group)
+	}
+	if !cfg.Groups[0].Collapsed {
+		t.Fatal("collapse from the layout was dropped")
+	}
+	// The folder's PLACE among the top-level rows rides the layout too — it is
+	// what lets a folder sit between two projects rather than below them.
+	if cfg.Groups[0].Position != 1 {
+		t.Fatalf("position = %d, want 1", cfg.Groups[0].Position)
+	}
+	// Everything else about the project survives a pure arrangement change.
+	if cfg.Projects[1].Path != "/tmp/okane" {
+		t.Fatalf("path = %q", cfg.Projects[1].Path)
+	}
+}
+
+// The layout is computed by a drag handler against a snapshot that may be a
+// reload behind. Anything but an exact permutation is refused whole, so a stale
+// layout can neither resurrect a removed project nor drop an unknown one.
+func TestSetProjectLayoutRefusesStaleLayouts(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+
+	cases := []struct {
+		name string
+		dto  ProjectLayoutDTO
+	}{
+		{"missing a project", ProjectLayoutDTO{Projects: []ProjectPlacementDTO{{Name: "lola"}}}},
+		{"names an unknown project", ProjectLayoutDTO{Projects: []ProjectPlacementDTO{
+			{Name: "lola"}, {Name: "ghost"},
+		}}},
+		{"repeats a project", ProjectLayoutDTO{Projects: []ProjectPlacementDTO{
+			{Name: "lola"}, {Name: "lola"},
+		}}},
+		{"names an unknown group", ProjectLayoutDTO{Projects: []ProjectPlacementDTO{
+			{Name: "lola", Group: "ghost"}, {Name: "okane"},
+		}}},
+		{"names an unknown group table", ProjectLayoutDTO{
+			Groups:   []GroupDTO{{Name: "ghost"}},
+			Projects: []ProjectPlacementDTO{{Name: "lola"}, {Name: "okane"}},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := s.SetProjectLayout(tc.dto); err == nil {
+				t.Fatal("want an error")
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Refused means NOTHING was written.
+			if len(cfg.Projects) != 2 || cfg.Projects[0].Name != "okane" {
+				t.Fatalf("config was mutated: %+v", cfg.Projects)
+			}
+		})
+	}
+}
+
+// --- ConnectCode -----------------------------------------------------------
+
+// TestConnectCodeFields. The whole reason this is a
+// socket round trip rather than a read of ~/.lola is that only the daemon knows
+// what its LIVE listener bound and which key it authenticates with; a DTO that
+// dropped a field would put the operator back to copying it by hand.
+func TestConnectCodeFields(t *testing.T) {
+	want := protocol.PairBeginData{
+		Code:     "lola-insecure1.abc",
+		Hosts:    []string{"127.0.0.1", "::1"},
+		Port:     7717,
+		Pin:      "C4td4uyeJMSyxfoAsB3i98Kd6JhkpOTf3Oxipiq+sxI=",
+		Key:      "0123456789abcdef0123456789abcdef",
+		Insecure: true,
+	}
+	f := startFakeDaemon(t, func(req protocol.Request) protocol.Response {
+		if req.Cmd != "pairBegin" {
+			t.Errorf("cmd = %q, want pairBegin", req.Cmd)
+		}
+		raw, err := json.Marshal(want)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return protocol.Response{OK: true, Data: raw}
+	})
+
+	got, err := (&ConfigService{}).ConnectCode()
+	if err != nil {
+		t.Fatalf("ConnectCode: %v", err)
+	}
+	if got.Code != want.Code || got.Port != want.Port || got.Pin != want.Pin || got.Key != want.Key {
+		t.Fatalf("ConnectCode dropped a field: %+v", got)
+	}
+	if !got.Insecure {
+		t.Error("the insecure flag must survive: it is what the UI says out loud")
+	}
+	if strings.Join(got.Hosts, ",") != "127.0.0.1,::1" {
+		t.Fatalf("hosts = %v", got.Hosts)
+	}
+	if reqs := f.requests(); len(reqs) != 1 {
+		t.Fatalf("expected exactly one request, got %d", len(reqs))
+	}
+}
+
+// TestConnectCodeSendsNoArgs: pairBegin describes the running listener and
+// takes nothing. A field sent here would be one a future handler could read.
+func TestConnectCodeSendsNoArgs(t *testing.T) {
+	f := startFakeDaemon(t, func(protocol.Request) protocol.Response {
+		raw, _ := json.Marshal(protocol.PairBeginData{Problem: "off"})
+		return protocol.Response{OK: true, Data: raw}
+	})
+	if _, err := (&ConfigService{}).ConnectCode(); err != nil {
+		t.Fatalf("ConnectCode: %v", err)
+	}
+	req := f.requests()[0]
+	if len(req.Args) != 0 || req.Session != "" || req.Project != "" || req.Text != "" {
+		t.Fatalf("pairBegin carried arguments: %+v", req)
+	}
+}
+
+// TestConnectCodeProblemIsAState rather than as an error, because "the
+// listener is off" is something the operator fixes on the tab they are looking
+// at.
+func TestConnectCodeProblemIsAState(t *testing.T) {
+	startFakeDaemon(t, func(protocol.Request) protocol.Response {
+		raw, _ := json.Marshal(protocol.PairBeginData{
+			Problem: "The phone listener is off. Enable [remote] and reload before connecting a phone.",
+		})
+		return protocol.Response{OK: true, Data: raw}
+	})
+	got, err := (&ConfigService{}).ConnectCode()
+	if err != nil {
+		t.Fatalf("a problem must not be an error: %v", err)
+	}
+	if got.Problem == "" {
+		t.Fatal("the problem did not survive")
+	}
+	if got.Code != "" || got.Key != "" {
+		t.Fatal("a problem must carry neither a code nor a key")
+	}
+}
+
+// TestConnectCodeRefusalReaches. A release daemon answers pairBegin
+// with an error naming the build tag, and the UI must show that rather than an
+// empty panel.
+func TestConnectCodeRefusalReaches(t *testing.T) {
+	startFakeDaemon(t, func(protocol.Request) protocol.Response {
+		return protocol.Response{OK: false, Error: "this binary cannot hand out a connect code: ... -tags lola_insecure"}
+	})
+	got, err := (&ConfigService{}).ConnectCode()
+	if err == nil {
+		t.Fatal("expected the daemon's refusal")
+	}
+	if !strings.Contains(err.Error(), "lola_insecure") {
+		t.Errorf("the refusal should reach the caller verbatim, got %q", err)
+	}
+	if got.Code != "" {
+		t.Error("a refusal carries no code")
+	}
+}
+
+// TestConnectCodeNeedsADaemon, with the app's own "daemon down"
+// error rather than a raw dial failure.
+func TestConnectCodeNeedsADaemon(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir()) // no socket in it
+	if _, err := (&ConfigService{}).ConnectCode(); err == nil {
+		t.Fatal("expected a failure with no daemon")
+	}
+}
+
+// --- stacks ------------------------------------------------------------------
+
+// A stack is created empty from a label, as a kind=stack project with no
+// checkout; a second stack the same id would produce is refused, not suffixed,
+// because the id names its worktree folder and prefixes its session ids.
+func TestCreateStack(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	name, err := s.CreateStack("Nori App")
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	if name != "nori-app" {
+		t.Fatalf("id = %q", name)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := cfg.ProjectByName("nori-app")
+	if st == nil || !st.IsStack() || st.Path != "" || st.Label != "Nori App" {
+		t.Fatalf("stack = %+v", st)
+	}
+	if _, err := s.CreateStack("nori app"); err == nil {
+		t.Fatal("a duplicate stack id was accepted")
+	}
+	if _, err := s.CreateStack("okane"); err == nil {
+		t.Fatal("a stack shadowing a project id was accepted")
+	}
+	if _, err := s.CreateStack("  "); err == nil {
+		t.Fatal("an empty stack name was accepted")
+	}
+}
+
+// SetProjectStack moves membership only, and refuses everything that would
+// make the config invalid or nest stacks.
+func TestSetProjectStack(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateStack("other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatalf("SetProjectStack: %v", err)
+	}
+	cfg, _ := config.Load(path)
+	if got := cfg.ProjectByName("okane"); got.Stack != "nori" || got.Path != "/tmp/okane" {
+		t.Fatalf("member = %+v", got)
+	}
+	for _, tc := range []struct{ project, stack string }{
+		{"okane", "lola"}, // not a stack
+		{"okane", "nope"}, // unknown stack
+		{"nope", "nori"},  // unknown project
+		{"other", "nori"}, // stacks do not nest
+		{"nori", "nori"},  // nor contain themselves
+	} {
+		if err := s.SetProjectStack(tc.project, tc.stack); err == nil {
+			t.Errorf("SetProjectStack(%q, %q) accepted", tc.project, tc.stack)
+		}
+	}
+	if err := s.SetProjectStack("okane", ""); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	cfg, _ = config.Load(path)
+	if got := cfg.ProjectByName("okane"); got.Stack != "" {
+		t.Fatalf("still a member: %+v", got)
+	}
+}
+
+// Removing a stack frees its members instead of leaving them pointing at a
+// stack that is gone (which would fail validation and block the save).
+func TestRemoveStackFreesMembers(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveProject("nori"); err != nil {
+		t.Fatalf("RemoveProject: %v", err)
+	}
+	cfg, _ := config.Load(path)
+	if cfg.ProjectByName("nori") != nil || cfg.ProjectByName("okane").Stack != "" {
+		t.Fatalf("projects = %+v", cfg.Projects)
+	}
+}
+
+// The form round-trips kind/stack/labels: labels are trimmed, the stack is
+// read-only, and a DTO without labels (an older client) leaves them alone.
+func TestSaveProjectStackFields(t *testing.T) {
+	writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatal(err)
+	}
+	dto, err := s.GetProject("okane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dto.Stack != "nori" || dto.Kind != "" || dto.Labels == nil || len(dto.Labels) != 0 {
+		t.Fatalf("member dto = %+v", dto)
+	}
+	dto.Labels = []string{"apps/web", " "}
+	dto.Stack = "" // the form cannot move membership
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+	got, _ := s.GetProject("okane")
+	if got.Stack != "nori" || !reflect.DeepEqual(got.Labels, []string{"apps/web"}) {
+		t.Fatalf("after save = stack %q labels %#v", got.Stack, got.Labels)
+	}
+	got.Labels = nil
+	if err := s.SaveProject(got); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := s.GetProject("okane"); len(again.Labels) != 1 {
+		t.Fatalf("a DTO without labels wiped them: %#v", again.Labels)
+	}
+	st, _ := s.GetProject("nori")
+	if st.Kind != config.ProjectKindStack {
+		t.Fatalf("stack kind = %q", st.Kind)
+	}
+	if err := s.SaveProject(st); err != nil {
+		t.Fatalf("saving the stack's own form: %v", err)
+	}
+	if again, _ := s.GetProject("nori"); again.Kind != config.ProjectKindStack {
+		t.Fatal("saving a stack's form dropped its kind")
+	}
+}
+
+func TestSystemAppearancePersistsAndRejectsWrongTags(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	svc := &ConfigService{}
+	want := AppearanceDTO{Theme: "catppuccin-mocha", FollowSystem: true, LightTheme: "one-light", DarkTheme: "lola-midnight"}
+	if err := svc.SetAppearance(want); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.GetAppearance(); got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	before, _ := os.ReadFile(path)
+	invalid := want
+	invalid.LightTheme = "lola-midnight"
+	if err := svc.SetAppearance(invalid); err == nil {
+		t.Fatal("accepted dark palette in light slot")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Fatal("rejected appearance changed config")
+	}
+	if err := svc.SetTheme("gruvbox-light"); err != nil {
+		t.Fatal(err)
+	}
+	got := svc.GetAppearance()
+	if got.FollowSystem || got.Theme != "gruvbox-light" || got.LightTheme != want.LightTheme || got.DarkTheme != want.DarkTheme {
+		t.Fatalf("fixed switch lost pair: %+v", got)
+	}
+}
+
+// Creating a stack from a parent folder: the scan marks a checkout that is
+// already a project, and the create adds the rest as members and makes the
+// configured one join, in one write.
+func TestCreateStackFromFolder(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	parent := t.TempDir()
+	for _, app := range []string{"api", "okane"} {
+		dir := filepath.Join(parent, app)
+		if out, err := exec.Command("git", "init", "-b", "main", dir).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+	}
+	okanePath := filepath.Join(parent, "okane")
+	path := writeTestConfig(t, "[defaults]\nglobal_cap = 4\n\n[[project]]\nname = \"okane\"\npath = \""+okanePath+"\"\n")
+	s := &ConfigService{}
+
+	scan := s.ScanStackFolder(parent)
+	if len(scan.Apps) != 2 || scan.SuggestedLabel == "" {
+		t.Fatalf("scan = %+v", scan)
+	}
+	if scan.Apps[0].Project != "" || scan.Apps[1].Project != "okane" || scan.Apps[1].Blocked != "" {
+		t.Fatalf("apps = %+v", scan.Apps)
+	}
+
+	name, err := s.CreateStackFromFolder("Nori", scan.Apps)
+	if err != nil {
+		t.Fatalf("CreateStackFromFolder: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := cfg.ProjectByName(name); st == nil || !st.IsStack() {
+		t.Fatalf("stack = %+v", st)
+	}
+	if api := cfg.ProjectByName("api"); api == nil || api.Stack != name || api.Path != canonicalPath(filepath.Join(parent, "api")) || api.DefaultBranch != "main" {
+		t.Fatalf("api = %+v", api)
+	}
+	if ok := cfg.ProjectByName("okane"); ok.Stack != name {
+		t.Fatalf("okane did not join: %+v", ok)
+	}
+
+	// The joined project now reads as blocked for a second stack.
+	if again := s.ScanStackFolder(parent); again.Apps[1].Blocked == "" {
+		t.Fatalf("member of a stack not blocked: %+v", again.Apps[1])
+	}
+}
+
+// A checkout reached through a symlink is the SAME project as its real path,
+// both ways round: the scan marks it configured (and blocked when it is in
+// another stack), and the create joins it instead of adding a duplicate.
+func TestCreateStackFromFolderResolvesSymlinks(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	real := filepath.Join(t.TempDir(), "web")
+	if out, err := exec.Command("git", "init", "-b", "main", real).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	parent := t.TempDir()
+	if err := os.Symlink(real, filepath.Join(parent, "web")); err != nil {
+		t.Fatal(err)
+	}
+	// Configured under the LINK, as a hand-written config might be.
+	link := filepath.Join(parent, "web")
+	path := writeTestConfig(t, "[defaults]\nglobal_cap = 4\n\n[[project]]\nname = \"web\"\npath = \""+link+"\"\n")
+	s := &ConfigService{}
+
+	scan := s.ScanStackFolder(parent)
+	if len(scan.Apps) != 1 || scan.Apps[0].Project != "web" {
+		t.Fatalf("symlinked checkout not matched to its project: %+v", scan.Apps)
+	}
+	name, err := s.CreateStackFromFolder("Nori", scan.Apps)
+	if err != nil {
+		t.Fatalf("CreateStackFromFolder: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(cfg.Projects); n != 2 {
+		t.Fatalf("projects = %d (%+v), want the stack plus the joined web", n, cfg.Projects)
+	}
+	if web := cfg.ProjectByName("web"); web.Stack != name || web.Path != link {
+		t.Fatalf("web = %+v", web)
+	}
+	// Now in a stack: a second stack from the same folder sees it blocked.
+	if again := s.ScanStackFolder(parent); again.Apps[0].Blocked == "" {
+		t.Fatalf("membership bypassed through the symlink: %+v", again.Apps[0])
+	}
+}
+
+// A member with labels must be able to leave its stack: labels only apply to
+// a member, and keeping them made Validate refuse the write.
+func TestLeavingAStackDropsMemberLabels(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetStackMemberLabels("nori", map[string][]string{"okane": {"apps/app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", ""); err != nil {
+		t.Fatalf("leave stack: %v", err)
+	}
+	cfg, _ := config.Load(path)
+	if p := cfg.ProjectByName("okane"); p.Stack != "" || len(p.Labels) != 0 {
+		t.Fatalf("okane = stack %q labels %q, want both empty", p.Stack, p.Labels)
+	}
+}
+
+func TestRemoveStackKeepsOnlyTheCheckedMembers(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load(path)
+	var names []string
+	for _, p := range cfg.Projects {
+		if !p.IsStack() {
+			names = append(names, p.Name)
+			if err := s.SetProjectStack(p.Name, "nori"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(names) < 2 {
+		t.Fatalf("fixture needs two projects, got %v", names)
+	}
+	if err := s.SetStackMemberLabels("nori", map[string][]string{names[0]: {"apps/app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveStack("nori", []string{"nope"}); err == nil {
+		t.Fatal("keeping a non-member must be refused")
+	}
+	if err := s.RemoveStack("nori", []string{names[0]}); err != nil {
+		t.Fatalf("RemoveStack: %v", err)
+	}
+	cfg, _ = config.Load(path)
+	if cfg.ProjectByName("nori") != nil || cfg.ProjectByName(names[1]) != nil {
+		t.Fatalf("stack and unchecked member must be gone: %+v", cfg.Projects)
+	}
+	if p := cfg.ProjectByName(names[0]); p == nil || p.Stack != "" || len(p.Labels) != 0 {
+		t.Fatalf("kept member = %+v, want standalone with no labels", p)
 	}
 }

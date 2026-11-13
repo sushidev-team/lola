@@ -7,7 +7,7 @@ import (
 
 // The [ui] table is PRESENTATION-ONLY: no daemon behavior reads it. It lives in
 // config.toml rather than a desktop-local preferences file so there is ONE
-// source of truth for a lola install, and the TUI can adopt the same key later
+// source of truth for a lola install, and the TUI shares the same preferences
 // without a second store to keep in sync.
 //
 // Unlike [tmux]/[reactions]/[notify], the in-memory zero value is MEANINGFUL:
@@ -25,7 +25,8 @@ import (
 // DefaultUITheme is the theme lola-desktop paints when [ui].theme is unset. It
 // matches the palette the app's compiled stylesheet ships, so the default
 // install has nothing to re-paint at startup.
-const DefaultUITheme = "catppuccin-mocha"
+const DefaultUITheme = "lola-midnight"
+const DefaultLightTheme = "github-light"
 
 // UIThemes are the ONLY theme identifiers Validate accepts, mirroring the
 // PrioritySortKeys rule: a typo that silently rendered the default would be a
@@ -34,10 +35,16 @@ const DefaultUITheme = "catppuccin-mocha"
 // keeping its own copy that could drift and start writing configs the daemon
 // rejects.
 var UIThemes = []string{
+	"lola-midnight",
 	"catppuccin-latte",
 	"catppuccin-frappe",
 	"catppuccin-macchiato",
 	"catppuccin-mocha",
+	"github-light",
+	"solarized-light",
+	"rose-pine-dawn",
+	"gruvbox-light",
+	"one-light",
 }
 
 // UIConfig is the [ui] table.
@@ -45,7 +52,10 @@ var UIThemes = []string{
 //   - Theme names the palette lola-desktop paints (app chrome, terminal, and
 //     the ANSI 16 used to render pane snapshots). "" means DefaultUITheme.
 type UIConfig struct {
-	Theme string `toml:"theme"`
+	Theme        string `toml:"theme"`
+	FollowSystem bool   `toml:"follow_system"`
+	LightTheme   string `toml:"light_theme"`
+	DarkTheme    string `toml:"dark_theme"`
 }
 
 // UITheme returns the EFFECTIVE theme identifier: [ui].theme when set, else
@@ -58,10 +68,43 @@ func (c *Config) UITheme() string {
 	return DefaultUITheme
 }
 
+// UIThemeIsDark is the palette tag shared by validation and the TUI pickers.
+func UIThemeIsDark(id string) bool {
+	return slices.Contains([]string{"lola-midnight", "catppuccin-mocha", "catppuccin-macchiato", "catppuccin-frappe"}, id)
+}
+
+func (c *Config) UILightTheme() string {
+	if c.UI.LightTheme != "" {
+		return c.UI.LightTheme
+	}
+	return DefaultLightTheme
+}
+
+func (c *Config) UIDarkTheme() string {
+	if c.UI.DarkTheme != "" {
+		return c.UI.DarkTheme
+	}
+	return DefaultUITheme
+}
+
+// UIThemeFor resolves a local appearance signal without reading the OS in config.
+func (c *Config) UIThemeFor(dark bool) string {
+	if !c.UI.FollowSystem {
+		return c.UITheme()
+	}
+	if dark {
+		return c.UIDarkTheme()
+	}
+	return c.UILightTheme()
+}
+
 // --- on-disk mirror --------------------------------------------------------
 
 type fileUIConfig struct {
-	Theme *string `toml:"theme,omitempty"`
+	Theme        *string `toml:"theme,omitempty"`
+	FollowSystem bool    `toml:"follow_system,omitempty"`
+	LightTheme   string  `toml:"light_theme,omitempty"`
+	DarkTheme    string  `toml:"dark_theme,omitempty"`
 }
 
 // resolveUI materializes the [ui] table. An absent table yields the ZERO
@@ -77,6 +120,7 @@ func resolveUI(fu *fileUIConfig) UIConfig {
 	if fu.Theme != nil {
 		u.Theme = *fu.Theme
 	}
+	u.FollowSystem, u.LightTheme, u.DarkTheme = fu.FollowSystem, fu.LightTheme, fu.DarkTheme
 	return u
 }
 
@@ -88,7 +132,11 @@ func uiFile(u UIConfig) *fileUIConfig {
 	if u == (UIConfig{}) {
 		return nil
 	}
-	return &fileUIConfig{Theme: &u.Theme}
+	out := &fileUIConfig{FollowSystem: u.FollowSystem, LightTheme: u.LightTheme, DarkTheme: u.DarkTheme}
+	if u.Theme != "" {
+		out.Theme = &u.Theme
+	}
+	return out
 }
 
 // validateUI checks [ui].theme against UIThemes. Empty is valid and means
@@ -97,9 +145,26 @@ func uiFile(u UIConfig) *fileUIConfig {
 // nothing would leave the operator with no signal. Purely static: this is a
 // string-set membership test, no exec, no stat, no network.
 func (c *Config) validateUI() []error {
-	if c.UI.Theme == "" || slices.Contains(UIThemes, c.UI.Theme) {
-		return nil
+	var errs []error
+	if c.UI.Theme != "" && !slices.Contains(UIThemes, c.UI.Theme) {
+		errs = append(errs, fmt.Errorf("ui.theme must be one of %v (empty uses %q), got %q", UIThemes, DefaultUITheme, c.UI.Theme))
 	}
-	return []error{fmt.Errorf("ui.theme must be one of %v (empty uses %q), got %q",
-		UIThemes, DefaultUITheme, c.UI.Theme)}
+	for _, slot := range []struct {
+		key, id string
+		dark    bool
+	}{
+		{"light_theme", c.UI.LightTheme, false}, {"dark_theme", c.UI.DarkTheme, true},
+	} {
+		if slot.id == "" {
+			continue
+		}
+		if !slices.Contains(UIThemes, slot.id) || UIThemeIsDark(slot.id) != slot.dark {
+			kind := "light"
+			if slot.dark {
+				kind = "dark"
+			}
+			errs = append(errs, fmt.Errorf("ui.%s must name a %s theme, got %q", slot.key, kind, slot.id))
+		}
+	}
+	return errs
 }

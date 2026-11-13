@@ -83,6 +83,9 @@ func notableTransition(from, to string) bool {
 // event. Cheap and lock-safe: it only touches the event ring, never the store,
 // so it is safe to run inside the store's transition callback.
 func (d *Daemon) recordSessionEvent(from string, s session.Session) {
+	if from == "" {
+		d.noteSessionStarted(s) // only enqueues, so it is as lock-safe as the rest of this
+	}
 	if d.events == nil || !notableTransition(from, s.Status) {
 		return
 	}
@@ -114,7 +117,7 @@ func (d *Daemon) eventsFor(id string, n int, now time.Time) []string {
 		if from == "" {
 			from = "spawned"
 		}
-		out = append(out, from+"→"+e.to+" ("+formatAge(now.Sub(e.at))+" ago)")
+		out = append(out, from+"→"+e.to+" ("+formatAgo(now.Sub(e.at))+" ago)")
 	}
 	return out
 }
@@ -136,7 +139,8 @@ func (d *Daemon) eventFeed(now time.Time) []protocol.Event {
 			Title: e.title,
 			From:  e.from,
 			To:    e.to,
-			Ago:   formatAge(now.Sub(e.at)),
+			Ago:   formatAgo(now.Sub(e.at)),
+			At:    e.at,
 		})
 	}
 	return out

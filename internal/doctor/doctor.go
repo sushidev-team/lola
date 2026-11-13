@@ -1,8 +1,10 @@
 // Package doctor runs lola's structured health checks and returns them as
 // plain data so the CLI (`lola doctor`) and the TUI can render them however
 // they like — this package never prints. It probes the native runtime's
-// external tools (tmux, git, claude, gh), the Linear API key, the daemon
-// socket, and the config (validity + per-project repos).
+// external tools (tmux, git, the configured agents, gh), the Linear API key, the daemon
+// socket, and the config (validity + per-project repos) — plus the one fact a
+// checking process cannot see for itself, the daemon's tripped status
+// interpreter (statusagent.go).
 //
 // Secret discipline: the Linear API key value is NEVER placed in a Result
 // (or anywhere else). The key check reports only where the key was found —
@@ -19,9 +21,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/tmux"
@@ -34,19 +38,24 @@ const (
 	checkGit       = "git"
 	checkClaude    = "claude"
 	checkGh        = "gh"
+	checkLolaCLI   = "lola cli"
 	checkLinear    = "linear api key"
 	checkDaemon    = "daemon"
 	checkConfig    = "config"
 	checkRepaired  = "config repairs"
 	checkMigration = "migration"
+	checkFallback  = "agent fallback"
+	// checkStatusAgent is reported ONLY when the daemon's status interpreter
+	// has tripped its circuit breaker (statusagent.go) — there is no healthy
+	// row for it.
+	checkStatusAgent = "status interpreter"
 )
 
 // defaultServerSessions is the seam over tmux.DefaultServerSessions so the
 // migration check is testable without a real default tmux server.
 var defaultServerSessions = tmux.DefaultServerSessions
 
-// execTimeout bounds every subprocess a check runs (only `claude --version`
-// today); LookPath probes never exec.
+// execTimeout bounds each agent version probe; LookPath probes never exec.
 const execTimeout = 5 * time.Second
 
 // socketTimeout bounds the daemon-socket dial. The daemon may legitimately be
@@ -96,14 +105,14 @@ func (r Report) Summary() string {
 }
 
 // RuntimeResults returns the subset of results covering the native runtime's
-// mandatory tools (tmux, git, claude) — the same trio daemon.checkRuntimeHealth
-// gates spawning on. Renderers (and, later, the daemon) can reuse this to show
+// mandatory tools (tmux, git, configured coding agents), matching the tools
+// daemon.checkRuntimeHealth gates spawning on. Renderers (and, later, the daemon) can reuse this to show
 // "why can't lola spawn" without re-probing.
 func RuntimeResults(r Report) []Result {
 	var out []Result
 	for _, res := range r.Results {
 		switch res.Name {
-		case checkTmux, checkGit, checkClaude:
+		case checkTmux, checkGit, checkClaude, "codex", "opencode":
 			out = append(out, res)
 		}
 	}
@@ -118,13 +127,28 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	var r Report
 	add := func(res Result) { r.Results = append(r.Results, res) }
 
-	// Native runtime tools. Presence is a bare PATH lookup; only claude is
-	// exec'd (for its version), under the 5s bound.
+	// Native runtime tools. Each configured coding agent gets a bounded
+	// version probe. Optional helpers have separate non-critical checks.
 	add(lookPathResult(checkTmux, true))
 	add(lookPathResult(checkGit, true))
-	add(claudeResult(ctx))
+	for _, res := range agentResults(ctx, cfg) {
+		add(res)
+	}
+	for _, res := range helperResults(cfg) {
+		add(res)
+	}
 	add(ghResult())
+	add(lolaCLIResult())
 	add(migrationResult(ctx))
+	// Daemon-process runtime facts the checking process cannot see for itself,
+	// read from the breadcrumb the daemon leaves (statusagent.go). Independent
+	// of cfg, so it sits above the cfg == nil early return.
+	if res, ok := statusAgentResult(); ok {
+		add(res)
+	}
+	if res, ok := conversationLogResult(); ok {
+		add(res)
+	}
 
 	if cfg == nil {
 		add(Result{
@@ -143,6 +167,9 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	if res, ok := repairResult(cfg); ok {
 		add(res)
 	}
+	for _, res := range fallbackResults(cfg) {
+		add(res)
+	}
 	for _, res := range projectResults(cfg) {
 		add(res)
 	}
@@ -159,25 +186,119 @@ func lookPathResult(name string, critical bool) Result {
 	return Result{Name: name, OK: true, Critical: critical, Detail: path}
 }
 
-// claudeResult resolves claude and, when present, appends the first line of
-// `claude --version` (bounded by execTimeout). A version-exec failure does not
-// fail the check — presence on PATH is what matters.
-func claudeResult(ctx context.Context) Result {
-	res := lookPathResult(checkClaude, true)
+// lolaCLIResult reports whether the `lola` CLI is on PATH. NOT critical, and
+// deliberately so: the daemon running this check IS lola, and the desktop app
+// falls back to the copy bundled in its own .app — so a miss costs the shell
+// (`lola tui`, every subcommand), not the runtime.
+//
+// It exists because that miss used to be invisible. A DMG-only install ships no
+// CLI, and the app's first-run wizard then failed to start a daemon with an
+// error naming a lookup rather than a fix, while the doctor said nothing at all.
+func lolaCLIResult() Result {
+	path, err := exec.LookPath("lola")
+	if err != nil {
+		return Result{
+			Name:     checkLolaCLI,
+			OK:       false,
+			Critical: false,
+			Detail:   "not found on PATH — `lola` and `lola tui` are unavailable in a terminal (the desktop app uses its bundled copy)",
+		}
+	}
+	return Result{Name: checkLolaCLI, OK: true, Critical: false, Detail: path}
+}
+
+// agentResults checks the default worker and each project's effective worker,
+// once per binary. A config that has not loaded retains the legacy default.
+func agentResults(ctx context.Context, cfg *config.Config) []Result {
+	kinds := []agent.Kind{agent.Claude}
+	if cfg != nil {
+		kinds[0] = agent.Parse(cfg.Defaults.Agent)
+		for _, p := range cfg.Projects {
+			k := agent.Parse(cfg.AgentForProject(p.Name))
+			if !slices.Contains(kinds, k) {
+				kinds = append(kinds, k)
+			}
+		}
+	}
+	out := make([]Result, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, agentResult(ctx, k))
+	}
+	return out
+}
+
+// agentResult appends a bounded --version probe. A version-exec failure does
+// not fail the check: dispatch requires presence on PATH.
+func agentResult(ctx context.Context, k agent.Kind) Result {
+	bin := k.Binary()
+	res := lookPathResult(bin, true)
 	if !res.OK {
 		return res
 	}
+	if k == agent.Codex {
+		if err := CheckCodexAutoApproval(ctx, bin); err != nil {
+			res.OK = false
+			res.Detail = err.Error()
+			return res
+		}
+	}
 	cctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, "claude", "--version").Output()
+	out, err := exec.CommandContext(cctx, bin, "--version").Output()
 	if err != nil {
-		res.Detail = res.Detail + " (version unavailable)"
+		res.Detail += " (version unavailable)"
 		return res
 	}
 	if line := firstLine(out); line != "" {
-		res.Detail = res.Detail + " (" + line + ")"
+		res.Detail += " (" + line + ")"
 	}
 	return res
+}
+
+// CheckCodexAutoApproval verifies the installed CLI supports Lola's autonomous
+// launch mode. A failed probe must not fall back to bypassing approvals.
+func CheckCodexAutoApproval(ctx context.Context, binary string) error {
+	cctx, cancel := context.WithTimeout(ctx, execTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, binary, "--help").Output()
+	if err != nil {
+		return fmt.Errorf("cannot verify Codex auto-approval support: %w", err)
+	}
+	if !strings.Contains(string(out), "--approve-for-me") {
+		return fmt.Errorf("Codex does not support --approve-for-me; upgrade Codex CLI before starting autonomous sessions")
+	}
+	return nil
+}
+
+// helperResults keeps optional Claude helpers and independently configured
+// review agents visible without making them prerequisites for worker dispatch.
+func helperResults(cfg *config.Config) []Result {
+	if cfg == nil {
+		return nil
+	}
+	var out []Result
+	add := func(name, binary string) {
+		res := lookPathResult(binary, false)
+		res.Name = name
+		res.Detail = binary + ": " + res.Detail
+		out = append(out, res)
+	}
+	if cfg.Brain.Enabled {
+		add("brain agent", "claude")
+	}
+	if cfg.StatusAgent.Enabled {
+		binary := cfg.StatusAgent.Bin
+		if binary == "" {
+			binary = agent.Parse(cfg.StatusAgent.Agent).Binary()
+		}
+		add("status agent", binary)
+	}
+	for _, p := range cfg.EffectiveReviewProviders() {
+		if k, ok := config.ReviewAgentFor(string(p.Provider)); p.Enabled && ok {
+			add("review agent ("+string(p.Provider)+")", agent.Parse(k).Binary())
+		}
+	}
+	return out
 }
 
 // ghResult reports gh presence. gh is only needed to reconcile PR checks, so a
@@ -284,6 +405,60 @@ func repairResult(cfg *config.Config) (Result, bool) {
 	}, true
 }
 
+// fallbackResults checks that binaries for configured agent fallback chains
+// resolve on PATH. Missing binaries are reported as non-critical warnings so
+// the operator is alerted before a quota limit triggers a failed fallback.
+// When no fallback chains are configured (or all resolve), no warning results
+// are added.
+func fallbackResults(cfg *config.Config) []Result {
+	if cfg == nil {
+		return nil
+	}
+
+	var out []Result
+	checkChain := func(name string, chain []string) {
+		var seen []string
+		for _, entry := range chain {
+			k := agent.Parse(entry)
+			bin := k.Binary()
+			if slices.Contains(seen, bin) {
+				continue
+			}
+			seen = append(seen, bin)
+			if _, err := exec.LookPath(bin); err != nil {
+				out = append(out, Result{
+					Name:     name,
+					OK:       false,
+					Critical: false,
+					Detail:   fmt.Sprintf("binary %q not found on PATH", bin),
+				})
+			}
+		}
+	}
+
+	// 1. Check [defaults].agent_fallback when set.
+	if len(cfg.Defaults.AgentFallback) > 0 {
+		checkChain(checkFallback, cfg.Defaults.AgentFallback)
+	}
+
+	// 2. Check per-project overrides.
+	for i := range cfg.Projects {
+		p := &cfg.Projects[i]
+		if p.AgentFallback != nil && !p.Inherits.AgentFallback {
+			name := fallbackCheckName(p.Name)
+			checkChain(name, p.AgentFallback)
+		}
+	}
+	return out
+}
+
+func fallbackCheckName(name string) string {
+	if name == "" {
+		return checkFallback + " (unnamed project)"
+	}
+	return fmt.Sprintf("%s (%s)", checkFallback, name)
+}
+
 // projectResults checks each [[project]]'s path exists and is a git repo.
 // Per-project problems are warnings (not critical): a bad project only breaks
 // polls that reference it. With no projects configured, no results are added.
@@ -293,6 +468,14 @@ func projectResults(cfg *config.Config) []Result {
 		p := cfg.Projects[i]
 		name := projectCheckName(p.Name)
 		switch {
+		case p.IsStack():
+			// A stack has no checkout; its members are checked as projects.
+			n := len(cfg.StackMembers(p.Name))
+			r := Result{Name: name, OK: n > 0, Detail: fmt.Sprintf("stack of %d member project(s)", n)}
+			if n == 0 {
+				r.Detail = "stack has no member projects (set stack = \"" + p.Name + "\" on them)"
+			}
+			out = append(out, r)
 		case p.Path == "":
 			out = append(out, Result{Name: name, OK: false, Detail: "no path configured"})
 		default:

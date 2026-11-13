@@ -22,14 +22,14 @@ func (d *desktopChannel) send(ctx context.Context, n Note) error {
 	return osascriptRun(ctx, osascriptArgv(n))
 }
 
-// osascriptArgv builds the full argv for the notification. The URL, when
-// present, is shown as the banner subtitle. All interpolated strings are
-// AppleScript-escaped so a title/body/URL can never break out of its literal.
+// osascriptArgv builds the full argv for the notification. A short subtitle
+// identifies the session; URLs stay in link-capable channels such as Slack.
+// All interpolated strings are escaped as AppleScript literals.
 func osascriptArgv(n Note) []string {
 	script := `display notification "` + escapeAppleScript(n.Body) +
 		`" with title "` + escapeAppleScript(n.Title) + `"`
-	if n.URL != "" {
-		script += ` subtitle "` + escapeAppleScript(n.URL) + `"`
+	if n.Subtitle != "" {
+		script += ` subtitle "` + escapeAppleScript(n.Subtitle) + `"`
 	}
 	return []string{"/usr/bin/osascript", "-e", script}
 }

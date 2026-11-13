@@ -9,17 +9,24 @@ describe("HelpOverlay", () => {
     render(HelpOverlay);
 
     // The three sections.
-    expect(screen.getByText("Navigate")).toBeInTheDocument();
+    expect(screen.getByText("Sessions sidebar")).toBeInTheDocument();
+    expect(screen.getByText("In a session")).toBeInTheDocument();
     expect(screen.getByText("Session actions")).toBeInTheDocument();
     expect(screen.getByText("Global")).toBeInTheDocument();
 
     // A representative key from each group — the ones the trimmed footer drops.
-    expect(screen.getByText("open live terminal")).toBeInTheDocument();
-    expect(screen.getByText("cycle lens · list / board / terminals")).toBeInTheDocument();
+    expect(screen.getByText("open session")).toBeInTheDocument();
+    expect(screen.getByText("resize the focused sidebar divider")).toBeInTheDocument();
     expect(screen.getByText("revive dead session")).toBeInTheDocument();
     // Provider-agnostic wording, and the Session-menu chord next to the bare key.
     expect(screen.getByText("review · configured provider")).toBeInTheDocument();
     expect(screen.getByText("c · ⌘⇧R")).toBeInTheDocument();
+
+    // The chords that lost their connection gate, and the new ones.
+    expect(screen.getByText("h · ⌘\\")).toBeInTheDocument();
+    expect(screen.getByText("⌘J")).toBeInTheDocument();
+    expect(screen.getByText("⌘.")).toBeInTheDocument();
+    expect(screen.getByText("f · ⌘⇧D")).toBeInTheDocument();
 
     // The overlay is a labelled modal dialog (focus-trapped, esc-closable).
     expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();

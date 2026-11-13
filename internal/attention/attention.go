@@ -47,6 +47,8 @@ type Question struct {
 type Choice struct {
 	Key   string
 	Label string
+	// Detail is a question option's description, on the rows under its name.
+	Detail string
 }
 
 const (
@@ -99,7 +101,7 @@ func Parse(paneText string, k agent.Kind) (Question, bool) {
 	if len(paneText) > maxInput {
 		paneText = paneText[len(paneText)-maxInput:]
 	}
-	block := trailingBlock(stripANSI(paneText))
+	block := trailingBlock(dropKeyHints(stripANSI(paneText)))
 	if len(block) == 0 {
 		return Question{}, false
 	}
@@ -165,6 +167,17 @@ func Parse(paneText string, k agent.Kind) (Question, bool) {
 // stripANSI removes ANSI escape sequences, then drops any remaining C0/C1
 // control bytes (bare ESC, BEL, CR — CR is a submit vector and vanishes) while
 // preserving TAB and LF, which carry layout the block scan relies on.
+//
+// It also folds every Unicode space separator (category Zs) to a plain ASCII
+// space. That is not cosmetic: claude-code pads its composer caret with U+00A0
+// NO-BREAK SPACE, so a resting prompt renders as "❯ " (and "❯ <draft
+// text>" once a human has typed). Go's \s is ASCII-only, so every caret pattern
+// below — claudeCaretRe, plainCaretRe, promptIndicatorRe — missed it and
+// ActivityWaiting became UNREACHABLE for claude sessions: the pane never
+// corroborated an idle agent, so every send-keys gate (review hand-off,
+// reactions, the answer path) failed closed forever while the daemon logged
+// "worker is mid-turn". Normalizing here fixes every downstream pattern at once,
+// and an NBSP is a space on screen, so nothing else changes meaning.
 func stripANSI(s string) string {
 	s = ansiEscapeRe.ReplaceAllString(s, "")
 	return strings.Map(func(r rune) rune {
@@ -173,6 +186,9 @@ func stripANSI(s string) string {
 		}
 		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
 			return -1
+		}
+		if unicode.Is(unicode.Zs, r) {
+			return ' '
 		}
 		return r
 	}, s)
@@ -201,6 +217,27 @@ func cleanLine(s string) string {
 	}
 	s = strings.TrimLeft(s, "│| \t")
 	s = strings.TrimRight(s, "│| \t")
+	return s
+}
+
+// keyHintRe matches a footer line that only names keys, such as "Esc to cancel · Tab to
+// amend" or "Enter to select · ↑/↓ to navigate · Esc to cancel".
+var keyHintRe = regexp.MustCompile(`(?i)^\s*` + keyHint + `(?:\s+·\s+` + keyHint + `)*\s*$`)
+
+const keyHint = `(?:esc|enter|tab|space|ctrl\S*|↑/↓|←/→)\s+to\s+[^·]+`
+
+// dropKeyHints removes a trailing footer of key names. Claude Code leaves a blank row
+// between a dialog and that footer, so without this the footer is the whole trailing
+// block and a real permission prompt parses as nothing.
+func dropKeyHints(s string) string {
+	lines := strings.Split(s, "\n")
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	if end > 0 && keyHintRe.MatchString(lines[end-1]) {
+		return strings.Join(lines[:end-1], "\n")
+	}
 	return s
 }
 

@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// GoalStartV2 explicitly requires support for reviewed rollout and separate
+// human acceptance policies. An older daemon must reject the command instead
+// of silently ignoring newly added JSON fields. Clients never fall back.
+const GoalStartV2 = "goalStartV2"
+
 // Request is one line of JSON sent by a client.
 //
 // Cmd "hookEvent" is the Claude Code → daemon callback path: `lola hook
@@ -35,6 +40,9 @@ import (
 // anyway. The daemon always terminates the agent's tmux session first; a clean
 // worktree is then removed and the store entry dropped, while a dirty one is
 // kept unless Force is set (the reply is KillData / an error either way).
+// KeepWorktree stops the agent (and its aux tmux sessions) but leaves the
+// worktree, branch and store entry in place — the session reads dead and can be
+// revived later. It wins over Force.
 //
 // Cmd "revive" is the inverse of a death: Session names a session whose pane
 // died but whose worktree survives, and the daemon relaunches its agent in
@@ -55,7 +63,7 @@ import (
 // PLAN P3/P7). The reply is OK on a delivered answer, an error otherwise.
 // Cmd "review" FORCES a QA review PASS for one session now, ignoring the per-PR
 // one-shot guard: Session names the target. Provider optionally selects WHICH
-// pass provider kind to force (coderabbit-cli | claude-session); "" forces the
+// pass provider kind to force (any pass kind — cli or agent); "" forces the
 // daemon's primary (first enabled) pass provider. The daemon runs one bounded
 // pass against the session's worktree and routes the findings the same way the
 // PR-open auto-trigger does (notify + optional GitHub/Linear comment + optional
@@ -63,6 +71,82 @@ import (
 // with a short outcome. No matching provider enabled yields a "skipped"
 // ReviewData (not an error); an unknown session, a non-pass Provider, or an exec
 // failure is an error.
+// Cmd "dev" moves the project's DEV PROCESSES onto one session, or stops them:
+// Args is a DevArgs naming the session and whether to switch it on. Activating
+// runs every [[project]].dev_commands entry in its own "<id>-dev-N" tmux tab
+// rooted in that session's worktree, after killing the tabs of whichever session
+// of the SAME project held them — only one session per project may run them,
+// because they bind ports. Switching off kills this session's tabs. The reply is
+// DevData. A session whose project configures no dev_commands is an error, as is
+// an unknown session.
+//
+// Cmd "devFreePort" resolves a PORT CLASH a dev tab died on: Args is a
+// DevFreePortArgs naming the session plus the port and pid the client was shown.
+// The daemon kills that process's group tree and restarts the session's dev
+// tabs, replying DevFreePortData. It is the one path that signals a process
+// lola did not start and does not own, so it is deliberately narrow: it is only
+// ever reached by a human answering a dialog, the port/pid must match the clash
+// the daemon has on record (SessionInfo.DevClash), that pid must STILL hold that
+// port when the request arrives (pids are reused), and a process group owning a
+// live tmux pane is refused outright. Anything else is an error and nothing is
+// signalled.
+//
+// Cmd "resolveConflict" asks a CONFLICTING session's coding agent to merge the
+// project's default_branch into its branch and resolve the conflicts: Session
+// names the target. It is the manual trigger for what [reactions].merge_conflict
+// does on its own, so it obeys the same send-keys safety rules — the session's
+// DELIVERY axis must be merge_conflict, its project must still be in config
+// (its default_branch is the whole content of the instruction), and the agent
+// must be provably resting at its prompt right now. Unlike the reaction it does
+// NOT defer: a mid-turn agent is an error, because the caller is a human
+// watching a button. The reply is ResolveConflictData naming the branch asked
+// for.
+//
+// Cmd "diff" returns the session's changes for the in-app diff viewer as
+// DiffData: its worktree against the merge-base with the project's
+// default_branch, uncommitted and untracked work included. Read-only (one
+// bounded local git run, no network); an unknown session, a session with no
+// worktree, or no merge-base is an error.
+//
+// Cmd "feedback" delivers a HUMAN's diff review to the session's coding agent:
+// Args is FeedbackArgs (line comments with path:line context, plus an optional
+// free note), rendered by the daemon into ONE message. It goes through the same
+// send-keys safety as a review hand-off — sanitized, the wide idle gate AND a
+// live pane classified as waiting — and, unlike resolveConflict, it DEFERS
+// rather than refuses: a mid-turn agent gets the message queued (appended to
+// anything already queued) and delivered on the first cycle its pane is
+// verifiably resting. The reply is FeedbackData saying which happened.
+//
+// Cmd "broadcast" sends ONE human message to every LIVE coding agent of a
+// project (Args: BroadcastArgs) — sessions with an agent process alive and a PR
+// that is not merged or closed. Each copy goes through the same send-keys
+// safety as cmd=feedback and DEFERS the same way: an agent not verifiably
+// resting at its prompt gets it queued and delivered when it comes back. The
+// reply is BroadcastData naming the delivered and deferred sessions.
+//
+// Cmd "checkpoints" lists a session's TURN CHECKPOINTS as CheckpointsData:
+// snapshots of its whole worktree (uncommitted and untracked work included) the
+// daemon records when the agent's turn ends, kept on refs under
+// refs/lola/checkpoints/<session>/ rather than as commits on the branch. Session
+// names the target. Read-only.
+//
+// Cmd "checkpointDiff" returns what one turn changed as DiffData: Args is a
+// CheckpointArgs naming the session and the checkpoint's Seq; the diff is the
+// previous checkpoint (or, for the oldest, the HEAD it was taken on) against
+// this one. Read-only.
+//
+// Cmd "restoreCheckpoint" makes the session's worktree match a checkpoint
+// (Args: CheckpointArgs). The current state is recorded first as a new
+// checkpoint, so a restore is itself undoable; only FILES move — HEAD and the
+// branch stay put, so later commits show up as uncommitted edits that undo
+// them. Refused while the agent is mid-turn. The reply is RestoreCheckpointData.
+//
+// Cmd "forkCheckpoint" starts a NEW agent session from a checkpoint (Args:
+// CheckpointArgs, Agent optionally overriding the coding agent): a fresh
+// worktree on a new lola-owned branch cut at the checkpoint's HEAD, holding the
+// checkpoint's files as uncommitted work, briefed as a fork and sharing the
+// parent's .lola/context folder. The parent is untouched. The reply is OpenData.
+//
 // Cmd "coderabbit" FORCES the [coderabbit] PR-comment WATCH for one session now,
 // ignoring the LastCodeRabbitAt watermark: Session names the target. The daemon
 // polls the session's open PR (one `gh pr view`) for CodeRabbit-app comments and
@@ -71,13 +155,46 @@ import (
 // Response.Data = CodeRabbitData with a short outcome. Watch disabled / no open
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
+//
+// Cmd "pairBegin" asks for everything a phone needs to reach this daemon's
+// remote listener — addresses, port, SPKI pin and, in an M1 build, the bearer
+// key — as PairBeginData. It takes no arguments: the answer describes the
+// LISTENER THAT IS RUNNING, which is the whole point of asking the daemon
+// rather than reading a file. ~/.lola/remote-dev-key is only the live key when
+// the script that wrote it also started the daemon, and a desktop that rendered
+// a code from a stale file would produce a scan the daemon refuses with
+// "authenticate first" — indistinguishable from a bad camera read.
+//
+// It is refused for every REMOTE peer unconditionally (see internal/remote's
+// deniedCommands, which has listed it since before it existed): enrolment is a
+// local operation at the machine, and a phone that could ask for the key could
+// enrol a second device that survives revoking the first. Over the unix socket
+// it is answered, because anything that can open ~/.lola/lola.sock already
+// reaches cmd=answer and therefore already has more than the key grants.
+//
+// Cmd "plan" runs the orchestrator's PLANNING pass on one Linear issue: Args is
+// PlanArgs naming it (identifier or UUID). The daemon runs one bounded headless
+// claude that splits the issue into ordered sub-issues with dependencies and
+// replies PlanData. It CREATES NOTHING: the plan is a proposal for a human.
+//
+// Cmd "planApply" is that human's confirmation: Args is PlanApplyArgs carrying
+// the (possibly edited) steps. The daemon re-validates them, creates each step
+// as a Linear sub-issue of the parent — placed so the project's poll matches it
+// — and records every dependency as a "blocks" relation. Dispatch then holds a
+// sub-issue until its blockers are done or merged, and holds the parent while
+// any sub-issue is open. A parent that already has sub-issues is refused. The
+// reply is PlanApplyData.
+//
+// The handler is TAG-SPLIT. A release binary has no bearer-key path at all, so
+// it answers with an error naming that rather than an empty code; only a
+// -tags lola_insecure daemon can fill PairBeginData.Key.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|open|renameProject
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|agentReport|plan|planApply
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
 	// Provider optionally selects which review provider kind cmd=review forces
-	// (coderabbit-cli | claude-session). "" forces the daemon's primary pass
+	// (any pass kind — cli or agent). "" forces the daemon's primary pass
 	// provider. Ignored by every other command.
 	Provider string `json:"provider,omitempty"`
 
@@ -89,19 +206,44 @@ type Request struct {
 	Ref     string `json:"ref,omitempty"`
 
 	// Hook callback fields, set only for cmd=hookEvent.
-	Session string `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill/pane/answer target
-	Event   string `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use|user_prompt
-	Detail  string `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
-	Hook    *HookPayload `json:"hook,omitempty"` // structured payload fields; nil from pre-payload hook binaries
+	Session string       `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill/pane/answer target
+	Event   string       `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use|user_prompt
+	Detail  string       `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
+	Hook    *HookPayload `json:"hook,omitempty"`    // structured payload fields; nil from pre-payload hook binaries
+	// HookToken authenticates a hookEvent/agentReport arriving over the
+	// SANDBOX hook bridge (a loopback TCP listener, internal/daemon/hookbridge.go)
+	// instead of the 0600 unix socket: it is the per-session token the
+	// containerized agent was handed in its env file, and it names exactly one
+	// session. Ignored on the unix socket, whose file mode is the auth.
+	HookToken string `json:"hookToken,omitempty"`
 
 	// Force is set only for cmd=kill: remove the worktree even when it has
 	// uncommitted changes. Deliberate CLI-only friction (`lola kill <id>
 	// --force`); the TUI never sets it.
 	Force bool `json:"force,omitempty"`
 
+	// KeepWorktree is set only for cmd=kill: stop the agent and its tmux
+	// sessions but leave the worktree, branch and store entry untouched (the
+	// session reads dead and `lola revive` brings it back). Wins over Force.
+	KeepWorktree bool `json:"keepWorktree,omitempty"`
+
 	// Text is the human's answer for cmd=answer — typed verbatim into the
 	// session's pane (send-keys appends Enter).
 	Text string `json:"text,omitempty"`
+
+	// Cols and Rows optionally state the size the CLIENT can show, for
+	// cmd=shellCreate: the tmux session is created at that size instead of
+	// tmux's default.
+	//
+	// It exists so a phone's shell tab does not have to be REFLOWED into shape
+	// after the fact. Created at tmux's own size a shell is typically 157x37,
+	// so a phone pinned it a moment later and the tab visibly redrew itself
+	// line by line for several seconds. Born at the right size there is nothing
+	// to redraw. Both are ignored unless positive, and clamped like every other
+	// dimension on this surface, so a client that does not send them (or sends
+	// nonsense) gets exactly the old behaviour.
+	Cols int `json:"cols,omitempty"`
+	Rows int `json:"rows,omitempty"`
 
 	// Lines optionally bounds cmd=pane's capture to the last N rendered rows of
 	// the target pane; 0 means the daemon's default (~40).
@@ -143,6 +285,105 @@ type StatusData struct {
 	RuntimeErr string       `json:"runtimeErr,omitempty"`
 	LinearOK   bool         `json:"linearOk"`
 	Polls      []PollStatus `json:"polls"`
+
+	// Host is this machine's name, for a client that has to say WHICH daemon it
+	// is talking about. A phone reaches the same Mac on a different address at
+	// home and at the office — that is the point of discovery — so an address
+	// is a poor name for it and a stale one is worse: "connecting to
+	// 192.168.10.160" describes a network, not the machine somebody left work
+	// running on.
+	//
+	// It travels on an AUTHENTICATED answer, never in the mDNS advertisement,
+	// and the difference is deliberate. A hostname in a TXT record is a stable
+	// cross-network correlator broadcast to every peer (internal/mdns says so
+	// at length); telling an already-paired device the name of the machine it
+	// is holding a session list from discloses nothing it does not have.
+	Host string `json:"host,omitempty"`
+
+	// Usage is today's token usage against the configured budgets, plus
+	// the last machine-load sample when [load] is on. nil on an older daemon.
+	Usage *UsageStatus `json:"usage,omitempty"`
+}
+
+// UsageInfo is one session's usage over every claude AND codex run in its
+// worktree (worker, subagents, review passes). Tokens are RAW (cache traffic included):
+// the number the UIs show. The *USD figures are the list-price ESTIMATE, kept
+// for tooltips — a subscription user pays nothing per token.
+//
+// Level/Percentile/Of rank the session against the user's own finished
+// sessions (internal/usage.RankAmong): Level is the 4-step size glyph
+// (0 light … 3 top 10%), Percentile the share of history lighter than it, Of
+// the history size — 0 when fixed thresholds decided Level instead. Burning
+// flags a session using tokens faster now than 90% of past sessions ever did;
+// TokensPerHour is that current rate (raw tokens, last ~30 minutes).
+type UsageInfo struct {
+	// Agent is whose scale ranked it ("claude" | "codex"). A codex figure has
+	// no list price (TotalUSD/TodayUSD stay 0) and is ranked against codex
+	// sessions only, by weighted tokens.
+	Agent         string  `json:"agent,omitempty"`
+	Tokens        int64   `json:"tokens"`
+	TodayTokens   int64   `json:"todayTokens"`
+	TotalUSD      float64 `json:"totalUsd"`
+	TodayUSD      float64 `json:"todayUsd"`
+	Level         int     `json:"level"`
+	Percentile    float64 `json:"percentile,omitempty"`
+	Of            int     `json:"of,omitempty"`
+	Burning       bool    `json:"burning,omitempty"`
+	TokensPerHour int64   `json:"tokensPerHour,omitempty"`
+}
+
+// UsageStatus is cmd=status's usage + load summary for one local day. Tokens
+// is raw (what the UIs show); Weighted is what a budget counts
+// (usage.Totals.Weighted) and BudgetTokens its global limit (0 = none).
+// TodayUSD is the list-price estimate, for tooltips only.
+type UsageStatus struct {
+	Day          string         `json:"day"` // local YYYY-MM-DD the totals are for
+	Tokens       int64          `json:"tokens"`
+	Weighted     int64          `json:"weighted"`
+	TodayUSD     float64        `json:"todayUsd"`
+	BudgetTokens int64          `json:"budgetTokens,omitempty"`
+	Projects     []ProjectSpend `json:"projects,omitempty"`
+	// Load is the last [load] sample; nil when [load] is off.
+	Load *LoadInfo `json:"load,omitempty"`
+	// Quotas is how much of each coding agent's SUBSCRIPTION limits is used
+	// (internal/quota). Claude includes availability when no figures are known.
+	Quotas []QuotaInfo `json:"quotas,omitempty"`
+}
+
+// QuotaInfo is one agent's subscription limits as last observed. At is when
+// they were observed, via a hook, session log, or subscription usage poll.
+type QuotaInfo struct {
+	Agent   string        `json:"agent"` // "claude" | "codex"
+	Plan    string        `json:"plan,omitempty"`
+	At      time.Time     `json:"at"`
+	Windows []QuotaWindow `json:"windows"`
+	Stale   bool          `json:"stale,omitempty"`
+	Detail  string        `json:"detail,omitempty"` // safe, human-readable refresh failure
+}
+
+// QuotaWindow is one rate-limit window: "5h", "7d", or "spend" (a gateway's
+// spend limit). Windows whose reset has passed are never sent.
+type QuotaWindow struct {
+	Label       string    `json:"label"`
+	UsedPercent float64   `json:"usedPercent"`
+	ResetsAt    time.Time `json:"resetsAt"`
+}
+
+// ProjectSpend is one project's usage today against its own limit.
+type ProjectSpend struct {
+	Name         string `json:"name"`
+	Tokens       int64  `json:"tokens"`
+	Weighted     int64  `json:"weighted"`
+	BudgetTokens int64  `json:"budgetTokens,omitempty"`
+}
+
+// LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
+// Busy is the hold reason ("" when dispatch is not held by load).
+type LoadInfo struct {
+	Load1          float64 `json:"load1"`
+	CPUs           int     `json:"cpus"`
+	FreeMemPercent float64 `json:"freeMemPercent"`
+	Busy           string  `json:"busy,omitempty"`
 }
 
 type PollStatus struct {
@@ -179,51 +420,160 @@ type Event struct {
 	From  string `json:"from"`
 	To    string `json:"to"`
 	Ago   string `json:"ago"`
+	// At is the transition's own time, so a client can keep Ago live between
+	// refreshes and show the exact moment on hover. Absent on an older daemon.
+	At time.Time `json:"at,omitzero"`
+}
+
+// SessionApp is one repository (app) of a STACK session: its worktree inside
+// the session folder, its PR if any, and the delivery axis of that PR alone.
+// Number 0 means no PR observed yet (the agent has not opened one there, or
+// the repo has no GitHub slug to ask).
+type SessionApp struct {
+	Name     string `json:"name"`            // the member project's name (= its folder in the session)
+	Label    string `json:"label,omitempty"` // the member project's display name
+	Repo     string `json:"repo,omitempty"`
+	Branch   string `json:"branch"`
+	Worktree string `json:"worktree,omitempty"`
+	Number   int    `json:"number,omitempty"`
+	URL      string `json:"url,omitempty"`
+	State    string `json:"state,omitempty"`  // OPEN|CLOSED|MERGED
+	Checks   string `json:"checks,omitempty"` // pass|fail|pending|none
+	Review   string `json:"review,omitempty"` // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED
+	Draft    bool   `json:"draft,omitempty"`
+	Delivery string `json:"delivery,omitempty"` // this app's delivery axis (state vocabulary)
+	// Touched reports local changes against the base with no PR yet.
+	Touched bool `json:"touched,omitempty"`
+	// Ports is this app's own port lease (its [[project]].port_range).
+	Ports []int `json:"ports,omitempty"`
 }
 
 // SessionInfo is one observed session, flattened to render-ready strings and
 // ints so the TUI never needs scm/session imports or re-derivation.
 type SessionInfo struct {
-	ID       string `json:"id"`
-	Project  string `json:"project"`
-	Issue    string `json:"issue"`  // Linear identifier, e.g. ENG-123
-	Title    string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
-	Branch   string `json:"branch"` // "" when unknown
-	Status   string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
-	PRURL    string `json:"prUrl"`
-	PRNumber int    `json:"prNumber"` // 0 when no PR observed
-	Checks   string `json:"checks"`   // pass|fail|pending|none, "" when no PR
-	Review   string `json:"review"`   // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED, "" otherwise
-	TmuxName string `json:"tmuxName"` // "" when no tmux session correlates
-	Source   string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
-	Worktree string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
-	Age      string `json:"age"`      // human duration since first observed, e.g. "2h05m"
+	Location  string `json:"location,omitempty"`
+	GoalID    string `json:"goalId,omitempty"`
+	TaskID    string `json:"taskId,omitempty"`
+	AttemptID string `json:"attemptId,omitempty"`
+	ID        string `json:"id"`
+	Project   string `json:"project"`
+	Issue     string `json:"issue"`  // Linear identifier, e.g. ENG-123
+	Title     string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
+	Branch    string `json:"branch"` // "" when unknown
+	Agent     string `json:"agent"`  // coding-agent kind driving the pane: claude|codex|opencode ("" = legacy claude)
+	Status    string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
+	PRURL     string `json:"prUrl"`
+	PRNumber  int    `json:"prNumber"` // 0 when no PR observed
+	Checks    string `json:"checks"`   // pass|fail|pending|none, "" when no PR
+	Review    string `json:"review"`   // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED, "" otherwise
+	TmuxName  string `json:"tmuxName"` // "" when no tmux session correlates
+	Source    string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
+	Worktree  string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
+	Age       string `json:"age"`      // concise age since first observed, e.g. "2h" or "Oct 4"
+
+	FirstSeen time.Time `json:"firstSeen,omitzero"` // raw session age origin for live client formatting
+
+	// Sandbox is "docker" when the agent runs in a container
+	// ([[project]].sandbox), "" on the host. Absent on an older daemon.
+	Sandbox string `json:"sandbox,omitempty"`
+	// Stack marks a STACK session: Worktree is its folder, Apps its
+	// repositories in the stack's member order, and the PR fields above
+	// (PRURL, PRNumber, Checks, Review, Delivery) describe FocusApp — the app
+	// whose PR needs attention most, so the row's one badge is never greener
+	// than its worst PR.
+	Stack    bool         `json:"stack,omitempty"`
+	Apps     []SessionApp `json:"apps,omitempty"`
+	FocusApp string       `json:"focusApp,omitempty"`
 
 	// The two state axes underneath Status (see internal/state), with raw
 	// freshness timestamps so a client can render a live "ago" between
 	// refreshes. All omitempty: absent on an older daemon.
-	AgentState      string    `json:"agentState,omitempty"`     // starting|working|waiting_input|idle|exited|dead|shell|orphaned
-	Delivery        string    `json:"delivery,omitempty"`       // none|draft|ci_pending|…|merged|closed
-	StatusSince     time.Time `json:"statusSince,omitzero"`     // when the rolled-up Status last changed
-	AgentStateSince time.Time `json:"agentStateSince,omitzero"` // when the agent axis last changed
-	LastActivityAt  time.Time `json:"lastActivityAt,omitzero"`  // last POSITIVE evidence of work
-	ActivitySource  string    `json:"activitySource,omitempty"` // hook|pane|tmux_activity
-	PRObservedAt    time.Time `json:"prObservedAt,omitzero"`    // last successful gh PR fetch
-	PRStale         bool      `json:"prStale,omitempty"`        // PR facts are ≥3 failed fetches old
-	AtPrompt        bool      `json:"atPrompt,omitempty"`        // agent idle at its prompt (send-keys gate open)
-	InputReason     string    `json:"inputReason,omitempty"`     // why waiting_input: permission_prompt|question|idle_notification
-	CurrentTool     string    `json:"currentTool,omitempty"`     // tool the in-flight turn runs right now (PostToolUse)
-	LastNotification string   `json:"lastNotification,omitempty"` // last Notification message (display-only text)
+	AgentState       string    `json:"agentState,omitempty"`       // starting|working|waiting_input|idle|exited|dead|shell|orphaned
+	Delivery         string    `json:"delivery,omitempty"`         // none|draft|ci_pending|…|merged|closed
+	StatusSince      time.Time `json:"statusSince,omitzero"`       // when the rolled-up Status last changed
+	AgentStateSince  time.Time `json:"agentStateSince,omitzero"`   // when the agent axis last changed
+	LastActivityAt   time.Time `json:"lastActivityAt,omitzero"`    // last POSITIVE evidence of work
+	ActivitySource   string    `json:"activitySource,omitempty"`   // hook|pane|tmux_activity|transcript
+	PRObservedAt     time.Time `json:"prObservedAt,omitzero"`      // last successful gh PR fetch
+	PRStale          bool      `json:"prStale,omitempty"`          // PR facts are ≥3 failed fetches old
+	AtPrompt         bool      `json:"atPrompt,omitempty"`         // agent idle at its prompt (send-keys gate open)
+	InputReason      string    `json:"inputReason,omitempty"`      // why waiting_input: permission_prompt|question|idle_notification|dialog
+	CurrentTool      string    `json:"currentTool,omitempty"`      // tool the in-flight turn runs right now (PostToolUse)
+	LastNotification string    `json:"lastNotification,omitempty"` // last Notification message (display-only text)
 
 	// [statusagent] interpreter overlay — untrusted LLM text, DISPLAY ONLY,
 	// pre-gated daemon-side (confidence, freshness, supersession): a client
 	// renders it verbatim or not at all. InterpretedState is set ONLY when the
 	// interpreter DISAGREES with agentState (render with an "approx" marker);
 	// Headline ships whenever a valid judgement exists.
-	InterpretedState string `json:"interpretedState,omitempty"` // working|waiting_input|idle|stuck; "" = no override
-	Headline         string `json:"headline,omitempty"`         // one line: what the agent is doing right now
-	WaitingOn        string `json:"waitingOn,omitempty"`        // what the agent needs, when blocked
-	HeadlineAgo      string `json:"headlineAgo,omitempty"`      // formatted age of the judgement, e.g. "2m"
+	InterpretedState string    `json:"interpretedState,omitempty"` // working|waiting_input|idle|stuck; "" = no override
+	Headline         string    `json:"headline,omitempty"`         // one line: what the agent is doing right now
+	WaitingOn        string    `json:"waitingOn,omitempty"`        // what the agent needs, when blocked
+	HeadlineAgo      string    `json:"headlineAgo,omitempty"`      // formatted age of the judgement, e.g. "2m"
+	HeadlineAt       time.Time `json:"headlineAt,omitzero"`        // when that judgement was made
+
+	// Dev processes ([[project]].dev_commands). DevActive is true while this
+	// session holds them — derived from live tmux facts each observe cycle, so a
+	// closed tab or a crashed command reads as inactive within one cycle.
+	// DevCommands is its project's configured list (in tab order, so index N-1
+	// labels tab "<id>-dev-N"); a client renders the Active toggle only when it
+	// is non-empty.
+	// DevURLs are the local testing addresses those tabs printed
+	// ("http://127.0.0.1:8001"), best first, scraped from the panes by
+	// internal/devurl — lola cannot know what port the command picked, and a
+	// client should offer the link rather than make a human read it out of a
+	// scrolling log. Derived like DevActive: empty the moment the tabs stop.
+	// Only http(s) on a loopback host ever appears here, because a client hands
+	// it to an opener and pane text is untrusted.
+	// DevClash is set while a dev tab of this session is dead BECAUSE another
+	// process holds the port it wanted — the one dev failure lola can name and
+	// offer to undo (cmd=devFreePort). nil whenever the tabs are healthy.
+	// DevForwards are those same servers republished on the local network, so a
+	// phone can open them: the loopback addresses above are unreachable from
+	// anything but this machine. Present only while the session is ACTIVE and
+	// only when [remote].dev_forward is set, and each one ends with the tabs it
+	// belongs to. Empty is the normal state.
+	DevActive   bool          `json:"devActive,omitempty"`
+	DevCommands []string      `json:"devCommands,omitempty"`
+	DevURLs     []string      `json:"devUrls,omitempty"`
+	DevForwards []DevForward  `json:"devForwards,omitempty"`
+	DevClash    *DevClashInfo `json:"devClash,omitempty"`
+	// Ports is this session's leased port block (LOLA_PORT first, then the rest
+	// of LOLA_PORT_1..N) when its project configures a port_range; empty
+	// otherwise. DevParallel is true when that project runs dev_commands
+	// MULTI-ACTIVE — activating this session starts its stack beside the others
+	// instead of moving the project's one stack over — so a client can word the
+	// toggle accordingly.
+	Ports       []int `json:"ports,omitempty"`
+	DevParallel bool  `json:"devParallel,omitempty"`
+
+	// Overlaps names the OTHER live sessions of the same project whose changes
+	// touch the same files as this one — computed each observe cycle from local
+	// git (worktree vs. the merge-base with the default branch), so two agents
+	// editing one file are flagged BEFORE either PR conflicts. Display-only: a
+	// hint for a human, never an input to dispatch, reactions or the queue.
+	Overlaps []SessionOverlap `json:"overlaps,omitempty"`
+
+	// MergeQueue is this session's place in the [merge_queue], nil when the
+	// queue is off or the PR is not in it.
+	MergeQueue *MergeQueueInfo `json:"mergeQueue,omitempty"`
+
+	// Board is the agent's self-reported progress (`lola report …`), nil when
+	// it has reported nothing. A CLAIM, not a fact: render it as the agent's
+	// own words, beside — never instead of — the axes above, and fade it as
+	// Board.UpdatedAt ages (agents forget to report).
+	Board *BoardInfo    `json:"board,omitempty"`
+	Tasks []SessionTask `json:"tasks,omitempty"`
+
+	// FeedbackPending is true while a human's diff-viewer feedback
+	// (cmd=feedback) is queued for this session's agent, waiting for the pane to
+	// be verifiably resting at its prompt.
+	FeedbackPending bool `json:"feedbackPending,omitempty"`
+
+	// Usage is this session's token usage (internal/usage), nil when nothing
+	// is known yet — no transcript written, or an agent whose logs lola cannot
+	// read (codex, opencode). Absent is "unknown", never zero.
+	Usage *UsageInfo `json:"usage,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
@@ -234,6 +584,80 @@ type SessionInfo struct {
 	// STATUS) | "ci retry 1/2" | "escalated" | "awaiting review" |
 	// "addressing review" | "rebasing" | "ready to merge".
 	Reacting string `json:"reacting"`
+
+	// Model is the worker model override the agent runs on, "" = its default.
+	Model string `json:"model,omitempty"`
+	// BestOf is set while this session is one attempt of a best-of-N group
+	// (cmd=bestOf), nil for an ordinary session.
+	BestOf *BestOfInfo `json:"bestOf,omitempty"`
+	// SSH is the session's agent-assisted ssh state (ssh.go), nil when it has
+	// never touched a host.
+	SSH *SSHSessionInfo `json:"ssh,omitempty"`
+}
+
+// BestOfInfo places a session in its best-of-N group. Winner is set on the
+// attempt a human kept; until then the attempts are racing.
+type BestOfInfo struct {
+	Group   string `json:"group"`
+	Attempt int    `json:"attempt"`
+	Of      int    `json:"of"`
+	Winner  bool   `json:"winner,omitempty"`
+}
+
+// BoardInfo is internal/board.Board flattened for rendering. Every string was
+// sanitized daemon-side (one line, no control characters, clipped), so a client
+// renders it as text verbatim — but as text only, never as markup or a link.
+type BoardInfo struct {
+	Phase string      `json:"phase,omitempty"` // planning|investigating|implementing|testing|reviewing|polishing|done
+	Todos []BoardTodo `json:"todos,omitempty"`
+	// Percent is the bar to draw (0–100) when HasProgress: the agent's explicit
+	// value, or done/total of Todos when ProgressDerived.
+	HasProgress     bool         `json:"hasProgress,omitempty"`
+	Percent         int          `json:"percent"`
+	ProgressDerived bool         `json:"progressDerived,omitempty"`
+	ProgressLabel   string       `json:"progressLabel,omitempty"`
+	Done            int          `json:"done"`
+	Total           int          `json:"total"`
+	Current         string       `json:"current,omitempty"` // the active todo's text
+	Blocked         string       `json:"blocked,omitempty"` // what the agent says it needs from a human
+	BlockedAt       time.Time    `json:"blockedAt,omitzero"`
+	Note            string       `json:"note,omitempty"`
+	Checks          []BoardCheck `json:"checks,omitempty"`
+	UpdatedAt       time.Time    `json:"updatedAt,omitzero"`
+	UpdatedAgo      string       `json:"updatedAgo,omitempty"` // formatted age of UpdatedAt, e.g. "2m"
+	// Mismatches are lola's own one-line warnings where a claim above
+	// disagrees with the facts (internal/claimaudit): a "tests pass" check with
+	// no test command in the agent's transcript, a failing last run, a failing
+	// PR CI. Display-only; empty when nothing disagrees or nothing is known.
+	Mismatches []string `json:"mismatches,omitempty"`
+}
+
+// BoardTodo is one plan item: State is pending|active|done.
+type BoardTodo struct {
+	Text  string `json:"text"`
+	State string `json:"state"`
+}
+
+// BoardCheck is one check the agent says it ran locally: State is
+// pass|fail|running. Not CI — that is Checks on the session, a gh fact.
+type BoardCheck struct {
+	Name    string `json:"name"`
+	State   string `json:"state"`
+	Summary string `json:"summary,omitempty"`
+	// Evidence is the claim audit's verdict on a PASS claim: verified | ran |
+	// unverified | contradicted; "" when the check was not audited (not a
+	// pass, a name naming no test/lint/build category, or no readable
+	// transcript). EvidenceNote is lola's own sentence explaining it.
+	Evidence     string `json:"evidence,omitempty"`
+	EvidenceNote string `json:"evidenceNote,omitempty"`
+}
+
+// ReportArgs is the argument payload for cmd=agentReport: the argv typed after
+// `lola report`, parsed and validated DAEMON-side (internal/board.Apply) so the
+// trust boundary is the daemon, not whichever lola binary the pane runs. The
+// session is Request.Session ($LOLA_SESSION).
+type ReportArgs struct {
+	Argv []string `json:"argv"`
 }
 
 // ProjectsData is Response.Data for cmd=projects: the daemon's cached view of
@@ -245,6 +669,24 @@ type SessionInfo struct {
 // with these facts, so the home screen stays navigable when the daemon is down.
 type ProjectsData struct {
 	Projects []ProjectInfo `json:"projects"`
+	// Groups is the configured [[group]] table in FILE ORDER — the UI folders
+	// projects are filed under. It ships beside the projects rather than being
+	// derived from them because an EMPTY group is a real, renderable thing: the
+	// app creates the folder first and lets projects be dragged into it after.
+	Groups []GroupInfo `json:"groups,omitempty"`
+}
+
+// GroupInfo is one configured [[group]] flattened for rendering. It carries no
+// live facts because a group has none — it is arrangement only, and nothing in
+// the daemon's control loop reads it.
+type GroupInfo struct {
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"`
+	// Position is the group's index among the TOP-LEVEL rows — the sidebar draws
+	// folders beside the ungrouped projects, not in a section below them, so a
+	// group carries its own place in that list. See config.Group.
+	Position  int  `json:"position"`
+	Collapsed bool `json:"collapsed,omitempty"`
 }
 
 // ProjectInfo is one configured project flattened to render-ready fields.
@@ -252,11 +694,23 @@ type ProjectInfo struct {
 	// Name is the project's ID — what paths, tmux names and every other
 	// name-keyed protocol field use. Label is its display string, "" when the
 	// project has none (render Name then).
-	Name          string `json:"name"`
-	Label         string `json:"label,omitempty"`
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"`
+	// Group is the [[group]] Name this project is filed under, "" for the top
+	// level. Always resolves to a group present in ProjectsData.Groups — config
+	// repairs a dangling reference to "" on load.
+	Group         string `json:"group,omitempty"`
 	Path          string `json:"path"`
 	Repo          string `json:"repo"`
 	DefaultBranch string `json:"defaultBranch"`
+	// Kind is "stack" for a STACK (no checkout of its own; it owns the Linear
+	// side of its member projects), "" for a repository. Stack names the stack
+	// a member belongs to ("" = not a member), and Labels are the issue
+	// labels that select it. A member is drawn under its stack; its Group is
+	// ignored while it is one.
+	Kind   string   `json:"kind,omitempty"`
+	Stack  string   `json:"stack,omitempty"`
+	Labels []string `json:"labels,omitempty"`
 
 	// Per-PROJECT agent health (not the default agent): AgentBin is the resolved
 	// coding-agent binary for this project (its override → [defaults].agent →
@@ -318,7 +772,7 @@ type PrRow struct {
 	Checks      string `json:"checks"` // pass|fail|pending|none
 	Review      string `json:"review"`
 	URL         string `json:"url"`
-	Status      string `json:"status"`      // scm.DeriveStatus vocabulary
+	Status      string `json:"status"`      // state.DeliveryState vocabulary (daemon.openPRStatus)
 	AlreadyOpen bool   `json:"alreadyOpen"` // a lola session already holds this branch
 }
 
@@ -326,12 +780,21 @@ type PrRow struct {
 // (off Base, empty → the project's default branch) in a fresh worktree. With
 // Agent set it launches the coding agent (seeded with Prompt); otherwise a plain
 // shell. The reply is the shared OpenData.
+// Existing (cmd=openExisting) instead works directly on Branch without owning
+// it, ignoring Base. A distinct command keeps older daemons from creating it.
 type OpenManualArgs struct {
-	Project string `json:"project"`
-	Branch  string `json:"branch"`
-	Base    string `json:"base,omitempty"`
-	Agent   bool   `json:"agent,omitempty"`  // launch the coding agent instead of a shell
-	Prompt  string `json:"prompt,omitempty"` // seed prompt when Agent is set
+	Name     string `json:"name,omitempty"`
+	Location string `json:"location,omitempty"` // worktree (default), main, temporary
+	Path     string `json:"path,omitempty"`     // temporary shell directory
+	Project  string `json:"project"`
+	Branch   string `json:"branch"`
+	Base     string `json:"base,omitempty"`
+	Existing bool   `json:"existing,omitempty"` // use Branch directly; Base is ignored and the branch is never deleted
+	Agent    bool   `json:"agent,omitempty"`    // launch the coding agent instead of a shell
+	Prompt   string `json:"prompt,omitempty"`   // seed prompt when Agent is set
+	// AgentKind optionally overrides WHICH coding agent runs (claude|codex|
+	// opencode) instead of the project's configured default. "" = configured.
+	AgentKind string `json:"agentKind,omitempty"`
 }
 
 // OpenPrArgs is the argument payload for cmd=openPr: open a PR's head branch as a
@@ -359,20 +822,39 @@ type TicketsArgs struct {
 	Scope   string `json:"scope,omitempty"`
 }
 
-// TicketsData is Response.Data for cmd=tickets: the browsable issues.
+// TicketsData is Response.Data for cmd=tickets: the browsable issues. Team is
+// the UUID config keys by; TeamName/TeamKey are its resolved display identity —
+// both may be empty (the lookup fails open), so a client renders the UUID only
+// as a last resort.
 type TicketsData struct {
-	Team   string      `json:"team"`
-	Issues []TicketRow `json:"issues"`
+	Team     string      `json:"team"`
+	TeamName string      `json:"teamName,omitempty"`
+	TeamKey  string      `json:"teamKey,omitempty"`
+	Issues   []TicketRow `json:"issues"`
 }
 
-// TicketRow is one Linear issue for the picker.
+// TicketRow is one Linear issue for the picker. Everything past Branch is
+// DISPLAY: it tells a human which issue to pick (what state it is in, who holds
+// it, how stale it is) and is never read back on the openTicket path.
 type TicketRow struct {
-	Identifier  string  `json:"identifier"`
-	UUID        string  `json:"uuid"`
-	Title       string  `json:"title"`
-	Branch      string  `json:"branch"`
-	Priority    float64 `json:"priority"`
-	AlreadyLive bool    `json:"alreadyLive"` // a lola session already holds this issue
+	Identifier string  `json:"identifier"`
+	UUID       string  `json:"uuid"`
+	Title      string  `json:"title"`
+	Branch     string  `json:"branch"`
+	Priority   float64 `json:"priority"`
+	// State is the team's own workflow-state name ("In Progress"); StateType the
+	// stable enum behind it (triage|backlog|unstarted|started|completed|canceled),
+	// which is what a client colours and sorts by — names are per-team text.
+	State     string   `json:"state,omitempty"`
+	StateType string   `json:"stateType,omitempty"`
+	Assignee  string   `json:"assignee,omitempty"`
+	Labels    []string `json:"labels,omitempty"`
+	Estimate  float64  `json:"estimate,omitempty"`
+	// Updated is a pre-formatted age since the issue last changed ("2h" or "Oct 4"),
+	// formatted daemon-side exactly like SessionInfo.Age so both surfaces read
+	// the same and neither has to parse a timestamp.
+	Updated     string `json:"updated,omitempty"`
+	AlreadyLive bool   `json:"alreadyLive"` // a lola session already holds this issue
 }
 
 // OpenTicketArgs is the argument payload for cmd=openTicket: start a Linear issue
@@ -384,6 +866,9 @@ type OpenTicketArgs struct {
 	UUID       string `json:"uuid"`
 	Branch     string `json:"branch,omitempty"`
 	Title      string `json:"title,omitempty"`
+	// AgentKind optionally overrides WHICH coding agent runs (claude|codex|
+	// opencode) instead of the project's configured default. "" = configured.
+	AgentKind string `json:"agentKind,omitempty"`
 }
 
 // RenameProjectArgs is the argument payload for cmd=renameProject: change a
@@ -419,6 +904,400 @@ type KillData struct {
 	Removed  bool   `json:"removed"`
 	Worktree string `json:"worktree,omitempty"`
 	Message  string `json:"message,omitempty"`
+}
+
+// DevArgs is Request.Args for cmd=dev: Session names the target session and On
+// selects activation (true) or teardown (false).
+type DevArgs struct {
+	Session string `json:"session"`
+	On      bool   `json:"on"`
+}
+
+// DevData is Response.Data for cmd=dev. Active mirrors the resulting state
+// (true when tabs are running), Commands are the dev_commands the tabs run in
+// order, Stopped names the session whose tabs were taken over ("" when none
+// were), and Message is the short human-readable outcome for the CLI/TUI.
+type DevData struct {
+	Active   bool     `json:"active"`
+	Commands []string `json:"commands,omitempty"`
+	Stopped  string   `json:"stopped,omitempty"`
+	Message  string   `json:"message,omitempty"`
+}
+
+// DevForward is one dev server republished on the local network: where a phone
+// goes, and which loopback address it is.
+//
+// BOTH, because the forward's port is allocated by the kernel and means nothing
+// to anybody — "192.168.20.3:65497" identifies no application. The address the
+// developer knows is the ORIGINAL: 8000 is the Laravel app, 5175 is vite. A
+// client showing only the forward makes its user guess which link is which,
+// which with an app and a bundler is a coin flip.
+type DevForward struct {
+	// URL is the address to open, on the network the daemon is on.
+	URL string `json:"url"`
+	// From is the loopback address it publishes ("127.0.0.1:8000").
+	From string `json:"from"`
+}
+
+// SessionOverlap is one other session editing the same files. Files is sorted
+// and capped (More counts the rest); paths are repo-relative as git prints them.
+type SessionOverlap struct {
+	Session string   `json:"session"`
+	Issue   string   `json:"issue,omitempty"`
+	Files   []string `json:"files"`
+	More    int      `json:"more,omitempty"`
+}
+
+// MergeQueueInfo is a session's merge-queue posture. Position is 1-based within
+// its repository (1 = next to land). Step is one of:
+//
+//	queued      waiting behind an earlier PR
+//	waiting_ci  next, checks still running
+//	syncing     next, asked its agent to merge the default branch in
+//	merging     next, the merge was issued
+//	conflict    next, conflicting with the default branch (merge_conflict reaction)
+//	blocked     next, but something the queue cannot judge (fails closed)
+//	failed      next, GitHub refused the merge for this head
+type MergeQueueInfo struct {
+	Position int    `json:"position"`
+	Step     string `json:"step"`
+}
+
+// DevClashInfo is why a dev tab is dead when the reason is a port another
+// process already holds — the flattened session.DevClash, rendered by both UIs
+// beside the dev toggle.
+//
+// It is EVIDENCE for a question, not a verdict: a client shows it and may offer
+// cmd=devFreePort, which re-checks that this pid still holds this port before
+// signalling anything. Port is the only value that came out of the terminal (an
+// integer; see internal/portclash) — Proc and Dir come from lsof, Command from
+// config.
+type DevClashInfo struct {
+	Tab     string `json:"tab"`
+	Command string `json:"command,omitempty"`
+	Port    int    `json:"port"`
+	PID     int    `json:"pid"`
+	Proc    string `json:"proc,omitempty"`
+	Dir     string `json:"dir,omitempty"`
+	// Ours reports whether the holder is listening from inside lola's worktrees
+	// for this project (a stray server of an earlier session) rather than from
+	// the user's own checkout. A client should word its confirmation
+	// differently for the two: reclaiming lola's own leftover is routine,
+	// killing the user's process is not.
+	Ours bool `json:"ours,omitempty"`
+}
+
+// DevFreePortArgs is the argument payload for cmd=devFreePort: kill the process
+// holding the port a session's dev tab died on, then start that session's dev
+// tabs again. Session names the session, and Port/PID must MATCH the clash the
+// daemon currently has on record — a stale dialog (the holder exited, another
+// process took the port, the tabs were restarted meanwhile) is refused rather
+// than applied to whatever is there now.
+type DevFreePortArgs struct {
+	Session string `json:"session"`
+	Port    int    `json:"port"`
+	PID     int    `json:"pid"`
+}
+
+// DevFreePortData is Response.Data for cmd=devFreePort. Freed reports whether
+// the holder was signalled, Dev the outcome of the restart that followed, and
+// Message the short human-readable summary for the CLI/TUI.
+type DevFreePortData struct {
+	Freed   bool    `json:"freed"`
+	Port    int     `json:"port"`
+	Dev     DevData `json:"dev"`
+	Message string  `json:"message,omitempty"`
+}
+
+// ResolveConflictData is Response.Data for cmd=resolveConflict. Branch is the
+// project's default_branch the agent was asked to merge (so a client can say
+// which branch it named rather than repeating its own guess), and Message is the
+// short human-readable outcome.
+type ResolveConflictData struct {
+	Branch  string `json:"branch"`
+	Message string `json:"message,omitempty"`
+}
+
+// DiffData is Response.Data for cmd=diff: the session's worktree compared with
+// the merge-base of its branch and the project's default_branch, uncommitted
+// and untracked changes included (internal/gitdiff). Base is the ref the
+// merge-base was taken against ("origin/main"), MergeBase its sha. Each file's
+// Patch is its unified diff from the first "@@" on; a file past the per-file
+// cap carries TooLarge and no Patch, and Truncated says later files were
+// dropped to keep the reply bounded.
+type DiffData struct {
+	Session   string     `json:"session"`
+	Base      string     `json:"base"`
+	MergeBase string     `json:"mergeBase"`
+	Files     []DiffFile `json:"files"`
+	Truncated bool       `json:"truncated,omitempty"`
+}
+
+// DiffFile is one changed file of a DiffData. Status is added|modified|
+// deleted|renamed; OldPath is set on a rename.
+type DiffFile struct {
+	Path      string `json:"path"`
+	OldPath   string `json:"oldPath,omitempty"`
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Binary    bool   `json:"binary,omitempty"`
+	Untracked bool   `json:"untracked,omitempty"`
+	TooLarge  bool   `json:"tooLarge,omitempty"`
+	Patch     string `json:"patch,omitempty"`
+}
+
+// FeedbackArgs is the argument payload for cmd=feedback: a HUMAN's review of
+// the session's diff, delivered to its coding agent as ONE message. Comments
+// are line comments (Path + Line, optionally a range up to EndLine, on the new
+// side unless Side is "old"); Note is free text not tied to a line. At least
+// one of the two must carry text.
+type FeedbackArgs struct {
+	Session  string            `json:"session"`
+	Comments []FeedbackComment `json:"comments,omitempty"`
+	Note     string            `json:"note,omitempty"`
+}
+
+// FeedbackComment is one line comment. Quote optionally carries the commented
+// line(s) as the human saw them, so the agent can find the spot even after the
+// file has moved on; it is clipped by the daemon.
+type FeedbackComment struct {
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	EndLine int    `json:"endLine,omitempty"`
+	Side    string `json:"side,omitempty"` // "new" (default) | "old" — "old" means a removed line
+	Quote   string `json:"quote,omitempty"`
+	Body    string `json:"body"`
+}
+
+// BestOfArgs is the argument payload for cmd=bestOf: start ONE Linear issue
+// as several attempts on sibling branches. Issue is an identifier (FE-231) or a
+// UUID; Project names the [[project]] to run it in ("" = the one project
+// configured on the issue's Linear team). Agents is a mix in
+// internal/bestof's comma form ("claude:2,codex@gpt-5-codex"); "" uses
+// [best_of].agents.
+type BestOfArgs struct {
+	Issue   string `json:"issue"`
+	Project string `json:"project,omitempty"`
+	Agents  string `json:"agents,omitempty"`
+}
+
+// BestOfData is Response.Data for cmd=bestOf: the group and the sessions it
+// spawned, in attempt order. Failed lists attempts that could not spawn (the
+// others keep running — a group may be smaller than asked).
+type BestOfData struct {
+	Group    string   `json:"group"`
+	Issue    string   `json:"issue"`
+	Sessions []string `json:"sessions"`
+	Failed   []string `json:"failed,omitempty"`
+	Message  string   `json:"message,omitempty"`
+}
+
+// BestOfCompareArgs is the argument payload for cmd=bestOfCompare. Either a
+// Group, or an Issue identifier (its most recent group), or a Session (the
+// group that session belongs to).
+type BestOfCompareArgs struct {
+	Group   string `json:"group,omitempty"`
+	Issue   string `json:"issue,omitempty"`
+	Session string `json:"session,omitempty"`
+}
+
+// BestOfCompareData is Response.Data for cmd=bestOfCompare: every attempt of
+// one group side by side. Suggested is the session internal/bestof.Suggest
+// ranks first ("" when no attempt has an open PR yet) — a HINT for the human,
+// never acted on.
+type BestOfCompareData struct {
+	Group     string          `json:"group"`
+	Issue     string          `json:"issue"`
+	Title     string          `json:"title,omitempty"`
+	Project   string          `json:"project"`
+	Attempts  []BestOfAttempt `json:"attempts"`
+	Suggested string          `json:"suggested,omitempty"`
+	Picked    string          `json:"picked,omitempty"`
+}
+
+// BestOfAttempt is one attempt's facts for the compare view. Display is the
+// primary pill (state.DisplayFor), Delivery the PR chip. Files/Additions/
+// Deletions are local git against the merge-base (DiffError says why they are
+// missing). Review is nil until a review pass answered for the current PR.
+type BestOfAttempt struct {
+	Session   string             `json:"session"`
+	Attempt   int                `json:"attempt"`
+	Agent     string             `json:"agent"`
+	Model     string             `json:"model,omitempty"`
+	Branch    string             `json:"branch"`
+	Display   string             `json:"display"`
+	Delivery  string             `json:"delivery,omitempty"`
+	PRNumber  int                `json:"prNumber,omitempty"`
+	PRURL     string             `json:"prUrl,omitempty"`
+	PRState   string             `json:"prState,omitempty"`
+	Draft     bool               `json:"draft,omitempty"`
+	Checks    string             `json:"checks,omitempty"`
+	Files     int                `json:"files"`
+	Additions int                `json:"additions"`
+	Deletions int                `json:"deletions"`
+	DiffError string             `json:"diffError,omitempty"`
+	Review    *BestOfReviewTally `json:"review,omitempty"`
+	Usage     *UsageInfo         `json:"usage,omitempty"`
+	Age       string             `json:"age,omitempty"`
+	Winner    bool               `json:"winner,omitempty"`
+}
+
+// BestOfReviewTally sums the findings of every review pass that answered for
+// the attempt's current PR. Passes is how many did; all-zero counts with
+// Passes > 0 is a clean review.
+type BestOfReviewTally struct {
+	Passes  int `json:"passes"`
+	Blocker int `json:"blocker"`
+	Major   int `json:"major"`
+	Minor   int `json:"minor"`
+	Other   int `json:"other"`
+}
+
+// BestOfPickArgs is the argument payload for cmd=bestOfPick: keep Session,
+// discard every other attempt of its group.
+type BestOfPickArgs struct {
+	Session string `json:"session"`
+}
+
+// BestOfPickData is Response.Data for cmd=bestOfPick. Removed are discarded
+// attempts fully torn down; Kept are ones whose worktree had uncommitted work
+// and was KEPT (agent stopped, worktree on disk — dirty-safe teardown); Closed
+// are the PR numbers closed. Problems are best-effort steps that failed (a gh
+// close, the ready flip) — the pick itself still stands.
+type BestOfPickData struct {
+	Winner   string   `json:"winner"`
+	PR       int      `json:"pr,omitempty"`
+	Removed  []string `json:"removed,omitempty"`
+	Kept     []string `json:"kept,omitempty"`
+	Closed   []int    `json:"closed,omitempty"`
+	Problems []string `json:"problems,omitempty"`
+	Message  string   `json:"message"`
+}
+
+// PlanArgs is the argument payload for cmd=plan.
+type PlanArgs struct {
+	Issue string `json:"issue"` // identifier (FE-231) or UUID
+}
+
+// PlanStep is one proposed sub-issue. BlockedBy names the 1-based numbers of
+// EARLIER steps that must be finished before this one may be dispatched.
+type PlanStep struct {
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	BlockedBy   []int  `json:"blockedBy,omitempty"`
+}
+
+// PlanData is Response.Data for cmd=plan: the proposal for Issue.
+type PlanData struct {
+	Issue string     `json:"issue"` // the parent's identifier
+	Title string     `json:"title"`
+	Steps []PlanStep `json:"steps"`
+}
+
+// PlanApplyArgs is the argument payload for cmd=planApply. Project optionally
+// names the [[project]] whose poll should pick the sub-issues up; "" means the
+// one project configured on the parent's Linear team (ambiguity is an error).
+type PlanApplyArgs struct {
+	Issue   string     `json:"issue"`
+	Project string     `json:"project,omitempty"`
+	Steps   []PlanStep `json:"steps"`
+}
+
+// PlanApplyData is Response.Data for cmd=planApply: the created sub-issues'
+// identifiers in step order.
+type PlanApplyData struct {
+	Parent  string   `json:"parent"`
+	Project string   `json:"project"`
+	Created []string `json:"created"`
+	Message string   `json:"message,omitempty"`
+}
+
+// FeedbackData is Response.Data for cmd=feedback. Delivered is true when the
+// message was typed into the agent's pane now; otherwise it is Queued (the
+// agent was mid-turn, or its pane did not show a resting prompt) and the daemon
+// delivers it on the first cycle the pane is verifiably waiting. Message is the
+// short human-readable outcome.
+type FeedbackData struct {
+	Delivered bool   `json:"delivered"`
+	Queued    bool   `json:"queued"`
+	Message   string `json:"message,omitempty"`
+}
+
+// BroadcastArgs is the argument payload for cmd=broadcast. Project is the
+// project's Name (its id, not its display label).
+type BroadcastArgs struct {
+	Project string `json:"project"`
+	Message string `json:"message"`
+}
+
+// BroadcastData is Response.Data for cmd=broadcast: the session ids the message
+// was typed into now (Delivered), the ones that have it queued until their
+// agent is back at its prompt (Queued), and the ones whose queue was already
+// full (Skipped). Message is the short human-readable outcome.
+type BroadcastData struct {
+	Delivered []string `json:"delivered"`
+	Queued    []string `json:"queued"`
+	Skipped   []string `json:"skipped,omitempty"`
+	Message   string   `json:"message,omitempty"`
+}
+
+// CheckpointArgs is the argument payload for cmd=checkpointDiff,
+// restoreCheckpoint and forkCheckpoint. Seq names the checkpoint by its
+// per-session sequence number — never a ref or sha, so a client can only reach
+// the session's own checkpoints. Agent is forkCheckpoint's optional coding-agent
+// override ("" = the parent session's agent).
+type CheckpointArgs struct {
+	Session string `json:"session"`
+	Seq     int    `json:"seq"`
+	Agent   string `json:"agent,omitempty"`
+}
+
+// CheckpointInfo is one turn checkpoint. Head is the commit the session's
+// branch was on when it was taken; SHA is the snapshot itself.
+type CheckpointInfo struct {
+	Seq     int       `json:"seq"`
+	SHA     string    `json:"sha"`
+	Head    string    `json:"head"`
+	Label   string    `json:"label"`
+	Created time.Time `json:"created"`
+}
+
+// CheckpointsData is Response.Data for cmd=checkpoints, oldest first.
+// Restorable is false while the agent is mid-turn (restore is refused then);
+// it is a hint for the UI, the daemon re-checks on the request.
+type CheckpointsData struct {
+	Session     string           `json:"session"`
+	Checkpoints []CheckpointInfo `json:"checkpoints"`
+	Restorable  bool             `json:"restorable"`
+}
+
+// RestoreCheckpointData is Response.Data for cmd=restoreCheckpoint. Safety is
+// the checkpoint holding the state from just before the restore — restoring it
+// undoes the restore.
+type RestoreCheckpointData struct {
+	Seq     int    `json:"seq"`
+	Safety  int    `json:"safety"`
+	Message string `json:"message,omitempty"`
+}
+
+// SwitchAgentArgs is the argument payload for cmd=switchAgent: replace the
+// session's coding agent with a DIFFERENT kind on the same worktree and branch
+// (SUSHI-585). Session names the target, Agent the new kind (claude|codex|
+// opencode). The old pane is stopped, a .lola/handoff.md briefing is written,
+// and the new agent launches fresh on the kept checkout. Refused for an
+// unknown session, an agentless shell, an invalid kind, the kind already
+// running, or a kind whose binary is not on PATH.
+type SwitchAgentArgs struct {
+	Session string `json:"session"`
+	Agent   string `json:"agent"`
+}
+
+// SwitchAgentData is Response.Data for cmd=switchAgent. Agent is the kind now
+// running; Message is the short human-readable outcome.
+type SwitchAgentData struct {
+	Agent   string `json:"agent"`
+	Message string `json:"message,omitempty"`
 }
 
 // ReviveData is Response.Data for cmd=revive: a dead session relaunched on its
@@ -505,6 +1384,10 @@ type PollOnceData struct {
 	Poll    string  `json:"poll"`
 	DryRun  bool    `json:"dryRun"`
 	Matches []Match `json:"matches"`
+	// Problems names filter references Linear no longer knows (a deleted
+	// label, a state of another team) that make the poll unable to match
+	// anything. Empty on a healthy poll.
+	Problems []string `json:"problems,omitempty"`
 }
 
 // Match describes one matched issue and what the tick did (or would do) with it.
@@ -513,4 +1396,102 @@ type Match struct {
 	Title      string `json:"title"`
 	Action     string `json:"action"`           // spawned|would-spawn|skipped
 	Reason     string `json:"reason,omitempty"` // dedup-label|dedup-seen|in-flight|capped|error
+}
+
+// PaneInfo is one pane of a session, as cmd=panes reports it.
+//
+// Kind is the ROLE — "agent", "shell", "dev" or "review" — so a client can group
+// and label a tab strip without re-deriving lola's naming convention, which
+// lives in internal/runtime and internal/devtab and is not a client's business.
+// Index is the N of a numbered tab and 0 for the agent and review panes.
+type PaneInfo struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+	Index int    `json:"index,omitempty"`
+}
+
+// PanesData is Response.Data for cmd=panes: which panes EXIST for a session,
+// in the order a tab strip should draw them.
+//
+// It is derived from tmux on every call rather than read from the session
+// record, for the same reason DevActive and DevURLs are: Session.DevTabs is a
+// cache the observer overwrites, shell tabs are recorded nowhere at all, and a
+// strip drawn from a stale cache offers tabs that are gone while hiding ones
+// that are there.
+//
+// CanCreateShell is answered here rather than left for the client to infer from
+// a count whose cap it would have to know.
+type PanesData struct {
+	Session        string     `json:"session"`
+	Panes          []PaneInfo `json:"panes"`
+	Review         PaneInfo   `json:"review,omitempty"`
+	CanCreateShell bool       `json:"canCreateShell"`
+}
+
+// ShellCreateData is Response.Data for cmd=shellCreate: the pane that was
+// started, which the caller subscribes to like any other.
+//
+// The INDEX is allocated by the daemon, not asked for by the caller. The desktop
+// lets its own frontend own the name because both run in one process on one
+// machine; two phones and a desktop racing for "-shell-2" do not have that
+// luxury, and only the daemon sees all of them.
+type ShellCreateData struct {
+	Session string `json:"session"`
+	Pane    string `json:"pane"`
+	Index   int    `json:"index"`
+}
+
+// PairBeginData is Response.Data for cmd=pairBegin: how to reach this daemon's
+// phone listener, as facts rather than as a picture.
+//
+// Two shapes of the same thing, deliberately. Code is the opaque token a client
+// renders as a QR and the mobile app scans; the loose fields are the same
+// values as text, so a scan is a convenience and never the only way in — a
+// camera that will not focus, a phone with the permission denied, or a
+// Simulator with no camera at all must still be able to connect. Rendering is
+// the CLIENT's job (the desktop draws an SVG, `lola pair` prints half-blocks),
+// so the daemon ships a string and takes no QR dependency.
+//
+// EVERY field of this is a secret while Key is set, and the token especially:
+// it CONTAINS the key. It is never logged by the daemon, never placed in an
+// error, and a client must treat it the way it treats a password — revealed on
+// an explicit action, not left on a screen.
+type PairBeginData struct {
+	// Code is the scannable token (internal/remote.EncodeConnectCode). Empty
+	// when the daemon cannot answer, in which case Problem says why.
+	Code string `json:"code,omitempty"`
+
+	// Hosts is every address the listener actually bound, in bind order, and
+	// Port the port it took. Under -tags lola_insecure the bind is forced to
+	// loopback, so this is 127.0.0.1 and ::1 and a phone reaches them through a
+	// forward — a LAN address must never be printed here, because it is one the
+	// daemon cannot deliver.
+	Hosts []string `json:"hosts,omitempty"`
+	Port  int      `json:"port,omitempty"`
+
+	// Pin is the listener's SPKI pin: standard base64 with padding, byte for
+	// byte the value the startup log line carries.
+	Pin string `json:"pin,omitempty"`
+
+	// Key is M1's shared bearer key. Empty in any build without the
+	// lola_insecure path, where Problem names that as the reason.
+	Key string `json:"key,omitempty"`
+
+	// Insecure records that this code carries a shared bearer key with no
+	// device identity and no cryptography, so a client can say so beside it
+	// instead of a reader having to know which build produced it.
+	Insecure bool `json:"insecure,omitempty"`
+
+	// Problem names why there is no code, in one human sentence, when the
+	// daemon can answer the request but not fill it: the listener is not
+	// running, or this build has no way to authenticate a phone. It is a
+	// RENDERED STATE rather than an error so a client shows the reason in place
+	// of the code instead of a failed call with nothing to act on.
+	Problem string `json:"problem,omitempty"`
+}
+
+// GoalArgs addresses a durable goal; publishing never authorizes execution.
+type GoalArgs struct {
+	ID string `json:"id"`
 }

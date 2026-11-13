@@ -1,0 +1,23 @@
+
+> build
+> tsc && vite build
+
+
+<--- Last few GCs --->
+
+[279:0xffffa92c0000]    34706 ms: Mark-Compact 1018.1 (1025.3) -> 1017.0 (1024.5) MB, pooled: 1 MB, 495.18 / 0.00 ms  (average mu = 0.067, current mu = 0.007) allocation failure; scavenge might not succeed
+
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+
+ 1: 0x90e9bc  [node]
+ 2: 0x75ab88 node::OOMErrorHandler(char const*, v8::OOMDetails const&) [node]
+ 3: 0xc1ee4c  [node]
+ 4: 0xc1ef24  [node]
+ 5: 0xe9b30c  [node]
+ 6: 0xe9b33c  [node]
+ 7: 0xe9b694  [node]
+ 8: 0xeaae44  [node]
+ 9: 0xeaeaa4  [node]
+10: 0x18a50f4  [node]
+Aborted

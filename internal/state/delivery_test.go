@@ -86,3 +86,25 @@ func TestDeriveDeliveryUnknownHysteresis(t *testing.T) {
 		t.Errorf("MERGEABLE with prev=merge_conflict = %q, want review_pending (released)", got)
 	}
 }
+
+func TestAggregateDelivery(t *testing.T) {
+	for _, c := range []struct {
+		in   []DeliveryState
+		want DeliveryState
+		at   int
+	}{
+		{nil, DeliveryNone, -1},
+		{[]DeliveryState{DeliveryReviewPending, DeliveryCIFailed}, DeliveryCIFailed, 1},
+		{[]DeliveryState{DeliveryApproved, DeliveryNone}, DeliveryNone, 1},
+		{[]DeliveryState{DeliveryMerged, DeliveryReviewPending}, DeliveryReviewPending, 1},
+		{[]DeliveryState{DeliveryMerged, DeliveryMerged}, DeliveryMerged, 0},
+		{[]DeliveryState{DeliveryClosed, DeliveryMerged}, DeliveryMerged, 1},
+		{[]DeliveryState{DeliveryClosed, DeliveryClosed}, DeliveryClosed, 0},
+		{[]DeliveryState{DeliveryCIPending, DeliveryMergeConflict}, DeliveryMergeConflict, 1},
+	} {
+		got, at := AggregateDelivery(c.in)
+		if got != c.want || at != c.at {
+			t.Errorf("AggregateDelivery(%v) = %s@%d, want %s@%d", c.in, got, at, c.want, c.at)
+		}
+	}
+}

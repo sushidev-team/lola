@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -33,6 +34,10 @@ func newNativeTestForm(t *testing.T, projects []config.Project) (*formModel, str
 		t.Fatal(err)
 	}
 	f, _ := newFormModel(loaded, nil) // returned cmd (teams fetch) is never run
+	// A new form opens INTO the folder browser (the path is what everything else
+	// on the Repo tab derives from). Close it so these tests drive the fields
+	// directly; TestFormNewProjectOpensFolderBrowser covers the auto-open itself.
+	f.dirs = nil
 	return f, path
 }
 
@@ -513,8 +518,13 @@ func TestPickerSpaceDeselects(t *testing.T) {
 	}
 }
 
-// Repo auto-detection: leaving the Path field asks for the checkout's GitHub
-// remote so the user does not have to copy owner/name by hand.
+// inspected builds the message the tea loop delivers after a git inspection.
+func inspected(path string, info gitrepo.Info) pathInspectedMsg {
+	return pathInspectedMsg{path: path, info: info}
+}
+
+// Repo auto-detection: leaving the Path field inspects the checkout so the user
+// does not have to copy owner/name by hand.
 func TestFormDetectsRepoOnLeavingPath(t *testing.T) {
 	f, _ := newNativeTestForm(t, nil)
 	f.tab = tabRepo
@@ -526,7 +536,7 @@ func TestFormDetectsRepoOnLeavingPath(t *testing.T) {
 		t.Fatal("leaving Path with an empty repo must request detection")
 	}
 	// Feed the result back the way the tea loop would.
-	f.update(repoDetectedMsg{path: "/tmp/web", repo: "acme/web"})
+	f.update(inspected("/tmp/web", gitrepo.Info{IsRepo: true, Root: "/tmp/web", Repo: "acme/web"}))
 	if f.poll.Repo != "acme/web" {
 		t.Errorf("Repo = %q, want the detected value", f.poll.Repo)
 	}
@@ -543,11 +553,7 @@ func TestFormDetectionNeverOverwritesTypedRepo(t *testing.T) {
 	f, _ := newNativeTestForm(t, nil)
 	f.poll.Path, f.poll.Repo = "/tmp/web", "mine/web"
 
-	if cmd := f.maybeDetectRepo(); cmd != nil {
-		t.Error("a repo the user already set must not trigger detection")
-	}
-	// Even a stray in-flight result from before must not clobber it.
-	f.update(repoDetectedMsg{path: "/tmp/web", repo: "acme/web"})
+	f.update(inspected("/tmp/web", gitrepo.Info{IsRepo: true, Repo: "acme/web"}))
 	if f.poll.Repo != "mine/web" {
 		t.Errorf("Repo = %q, want the user's value preserved", f.poll.Repo)
 	}
@@ -559,7 +565,7 @@ func TestFormDetectionIgnoresStaleResult(t *testing.T) {
 	f, _ := newNativeTestForm(t, nil)
 	f.poll.Path = "/tmp/second"
 
-	f.update(repoDetectedMsg{path: "/tmp/first", repo: "acme/first"})
+	f.update(inspected("/tmp/first", gitrepo.Info{IsRepo: true, Repo: "acme/first"}))
 	if f.poll.Repo != "" {
 		t.Errorf("Repo = %q, want a stale result dropped", f.poll.Repo)
 	}
@@ -571,26 +577,38 @@ func TestFormDetectionFailsClosed(t *testing.T) {
 	f, _ := newNativeTestForm(t, nil)
 	f.poll.Path = "/tmp/web"
 
-	f.update(repoDetectedMsg{path: "/tmp/web", repo: ""})
+	f.update(inspected("/tmp/web", gitrepo.Info{IsRepo: true}))
 	if f.poll.Repo != "" || f.repoAuto {
 		t.Errorf("no remote must leave the field empty, got %q auto=%v", f.poll.Repo, f.repoAuto)
 	}
 }
 
-// The same path is resolved once, however much the cursor moves over it.
+// The same path is inspected once, however much the cursor moves over it.
 func TestFormDetectionRunsOncePerPath(t *testing.T) {
 	f, _ := newNativeTestForm(t, nil)
 	f.poll.Path = "/tmp/web"
 
-	if f.maybeDetectRepo() == nil {
-		t.Fatal("first detection must run")
+	if f.maybeInspectPath() == nil {
+		t.Fatal("first inspection must run")
 	}
-	if f.maybeDetectRepo() != nil {
-		t.Error("the same path must not be resolved twice")
+	if f.maybeInspectPath() != nil {
+		t.Error("the same path must not be inspected twice")
 	}
 	f.poll.Path = "/tmp/other"
-	if f.maybeDetectRepo() == nil {
-		t.Error("a changed path must be resolved again")
+	if f.maybeInspectPath() == nil {
+		t.Error("a changed path must be inspected again")
+	}
+}
+
+// A path that is not a checkout says so on the field: every worktree forks from
+// it, so the spawn would fail later for a reason the form already knew.
+func TestFormPathSaysWhenNotACheckout(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.poll.Path = "/tmp/plain"
+
+	f.update(inspected("/tmp/plain", gitrepo.Info{}))
+	if got := stripANSI(f.display(fPath)); !strings.Contains(got, "not a git checkout") {
+		t.Errorf("display = %q, want it to flag a non-checkout", got)
 	}
 }
 
@@ -599,13 +617,105 @@ func TestFormDetectionRunsOncePerPath(t *testing.T) {
 func TestFormTypingClearsDetectedMarker(t *testing.T) {
 	f, _ := newNativeTestForm(t, nil)
 	f.poll.Path = "/tmp/web"
-	f.update(repoDetectedMsg{path: "/tmp/web", repo: "acme/web"})
+	f.update(inspected("/tmp/web", gitrepo.Info{IsRepo: true, Repo: "acme/web"}))
 
 	f.tab = tabRepo
 	f.cursor = slices.Index(f.fields(), fRepo)
 	f.key(keyMsg("x"))
 	if f.repoAuto {
 		t.Error("typing into Repo must clear the detected marker")
+	}
+}
+
+// Adding a project starts in the folder browser: the checkout is the one thing
+// nothing else can be derived without.
+func TestFormNewProjectOpensFolderBrowser(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	cfg := &config.Config{Defaults: config.Defaults{PollInterval: time.Minute, ConcurrencyCap: 1, GlobalCap: 4}}
+
+	f, _ := newFormModel(cfg, nil)
+	if f.dirs == nil {
+		t.Fatal("a new project must open into the folder browser")
+	}
+	// esc backs out to the form rather than closing it: nothing is forced.
+	f.key(keyMsg("esc"))
+	if f.dirs != nil {
+		t.Error("esc must close the browser")
+	}
+
+	// An EXISTING project opens on its fields — it already has a path.
+	g, _ := newFormModel(cfg, &config.Project{Name: "web", Path: "/tmp/web"})
+	if g.dirs != nil {
+		t.Error("editing a project must not open the browser")
+	}
+}
+
+// Picking a folder fills the whole identity block: label, id, repo and the
+// checkout's own default branch, with the path snapped to the repository root
+// so browsing into a subdirectory still configures the repo.
+func TestFormFolderPickFillsEverything(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+
+	f.choosePath("/Users/me/code/nori-app/src")
+	f.update(pathInspectedMsg{
+		path: "/Users/me/code/nori-app/src",
+		snap: true,
+		info: gitrepo.Info{
+			IsRepo: true, Root: "/Users/me/code/nori-app",
+			Repo: "acme/nori-app", DefaultBranch: "develop",
+			Branches: []string{"develop", "main"},
+		},
+	})
+
+	if f.poll.Path != "/Users/me/code/nori-app" {
+		t.Errorf("Path = %q, want the checkout root", f.poll.Path)
+	}
+	if f.poll.Label != "Nori App" {
+		t.Errorf("Label = %q, want it derived from the folder", f.poll.Label)
+	}
+	if f.poll.Name != "nori-app" {
+		t.Errorf("Name = %q, want the slug of the label", f.poll.Name)
+	}
+	if f.poll.Repo != "acme/nori-app" {
+		t.Errorf("Repo = %q, want the detected remote", f.poll.Repo)
+	}
+	if f.poll.DefaultBranch != "develop" {
+		t.Errorf("DefaultBranch = %q, want the checkout's default", f.poll.DefaultBranch)
+	}
+	if !slices.Equal(f.branches, []string{"develop", "main"}) {
+		t.Errorf("branches = %v, want the checkout's list", f.branches)
+	}
+}
+
+// An EXISTING project's configured branch is a decision, not a placeholder: an
+// inspection must never replace it (nor invent a label it never had).
+func TestFormInspectionLeavesExistingProjectAlone(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web", DefaultBranch: "release"}}, "web")
+
+	f.update(inspected("/tmp/web", gitrepo.Info{
+		IsRepo: true, Root: "/tmp/web", DefaultBranch: "main", Repo: "acme/web",
+	}))
+	if f.poll.DefaultBranch != "release" {
+		t.Errorf("DefaultBranch = %q, want the configured branch kept", f.poll.DefaultBranch)
+	}
+	if f.poll.Label != "" {
+		t.Errorf("Label = %q, want an existing project's label left empty", f.poll.Label)
+	}
+}
+
+// Typing a branch of your own stops the inspection from filling it — even when
+// the answer arrives afterwards.
+func TestFormTypedBranchSurvivesInspection(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fDefaultBranch)
+	f.poll.DefaultBranch = ""
+	f.key(keyMsg("x"))
+	f.poll.Path = "/tmp/web"
+
+	f.update(inspected("/tmp/web", gitrepo.Info{IsRepo: true, DefaultBranch: "main"}))
+	if f.poll.DefaultBranch != "x" {
+		t.Errorf("DefaultBranch = %q, want the typed value kept", f.poll.DefaultBranch)
 	}
 }
 
@@ -676,19 +786,19 @@ func TestFormBranchListLoadsOnPathChange(t *testing.T) {
 	f, _ := newNativeTestForm(t, nil)
 	f.poll.Path = "/tmp/web"
 
-	if f.maybeLoadBranches() == nil {
+	if f.maybeInspectPath() == nil {
 		t.Fatal("a new path must load its branches")
 	}
-	if f.maybeLoadBranches() != nil {
+	if f.maybeInspectPath() != nil {
 		t.Error("the same path must not reload")
 	}
-	f.update(branchesMsg{path: "/tmp/web", branches: []string{"main"}})
+	f.update(inspected("/tmp/web", gitrepo.Info{IsRepo: true, Branches: []string{"main"}}))
 	if !slices.Equal(f.branches, []string{"main"}) {
 		t.Errorf("branches = %v, want [main]", f.branches)
 	}
 
 	f.poll.Path = "/tmp/other"
-	f.update(branchesMsg{path: "/tmp/web", branches: []string{"stale"}})
+	f.update(inspected("/tmp/web", gitrepo.Info{IsRepo: true, Branches: []string{"stale"}}))
 	if slices.Contains(f.branches, "stale") {
 		t.Error("a result for a superseded path must be dropped")
 	}
@@ -949,7 +1059,7 @@ func TestFormAsyncFillDoesNotArmDiscardPrompt(t *testing.T) {
 	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
 
 	// The detection lands and fills the still-empty repo field.
-	_, _ = f.update(repoDetectedMsg{path: "/tmp/web", repo: "acme/web"})
+	_, _ = f.update(inspected("/tmp/web", gitrepo.Info{IsRepo: true, Repo: "acme/web"}))
 	if f.poll.Repo != "acme/web" {
 		t.Fatalf("repo detection did not fill the field, got %q", f.poll.Repo)
 	}

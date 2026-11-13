@@ -1,27 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { nav } from "./nav.svelte";
 
 // nav is a singleton; reset the pieces these tests touch so order can't matter.
 beforeEach(() => {
-  nav.lens = "list";
   nav.focusedTerm = "";
   nav.overlay = null;
   nav.triage = "";
   nav.sidebarOpen = true;
   nav.scoped = false;
   nav.project = "";
-});
-
-describe("nav.cycleLens", () => {
-  it("cycles list → kanban → grid → list (the V shortcut)", () => {
-    expect(nav.lens).toBe("list");
-    nav.cycleLens();
-    expect(nav.lens).toBe("kanban");
-    nav.cycleLens();
-    expect(nav.lens).toBe("grid");
-    nav.cycleLens();
-    expect(nav.lens).toBe("list");
-  });
+  nav.view = "cockpit";
+  nav.projectTab = "overview";
 });
 
 describe("nav help overlay", () => {
@@ -33,47 +22,95 @@ describe("nav help overlay", () => {
   });
 });
 
-describe("nav.toggleFocusTerm", () => {
-  it("toggles a session's fullscreen terminal on and off", () => {
-    nav.toggleFocusTerm("s1");
+describe("nav.openSession", () => {
+  it("openSession on the open session keeps it open", () => {
+    nav.openSession("s1");
+    nav.openSession("s1");
     expect(nav.focusedTerm).toBe("s1");
-    nav.toggleFocusTerm("s1");
-    expect(nav.focusedTerm).toBe("");
+    expect(nav.selectedId).toBe("s1");
   });
-
-  // The grid lens renders no detail panel, so focusing from it must leave the
-  // grid — otherwise focusedTerm is set with no terminal mounted to own the
-  // keyboard, and the global handler's early return wedges every shortcut.
-  it("leaves the grid lens when focusing a terminal", () => {
-    nav.setLens("grid");
-    nav.toggleFocusTerm("s1");
-    expect(nav.lens).toBe("list");
+  it("returning focus to the sidebar keeps the session open", () => {
+    nav.openSession("s1");
+    nav.sidebarOpen = false;
+    nav.focusSessions();
     expect(nav.focusedTerm).toBe("s1");
+    expect(nav.sidebarOpen).toBe(true);
+    expect(nav.sidebarTab).toBe("sessions");
+  });
+  it("returns from project detail without turning it into a session filter", () => {
+    nav.goCockpit("web");
+    nav.goDetail("web");
+    nav.openSession("s1");
+    expect(nav.view).toBe("cockpit");
+    expect(nav.scoped).toBe(false);
+    expect(nav.project).toBe("web");
   });
 });
 
-describe("nav.setLens", () => {
-  it("clears a focused terminal when switching INTO the grid", () => {
-    nav.setLens("list");
-    nav.toggleFocusTerm("s1");
-    expect(nav.focusedTerm).toBe("s1");
-    nav.setLens("grid");
+describe("nav.goDetail", () => {
+  it("opens the project workspace without scoping the session list", () => {
+    nav.goCockpit("old-project");
+    nav.openSession("s1");
+    nav.goDetail("nori");
+    expect(nav.view).toBe("detail");
+    expect(nav.scoped).toBe(false);
+    expect(nav.project).toBe("nori");
+    expect(nav.sidebarTab).toBe("projects");
     expect(nav.focusedTerm).toBe("");
+    expect(nav.projectTab).toBe("overview");
   });
 
-  it("leaves a focused terminal alone for the other lenses", () => {
-    nav.setLens("list");
-    nav.toggleFocusTerm("s1");
-    nav.setLens("kanban");
-    expect(nav.focusedTerm).toBe("s1");
+  it("repeated project navigation stays in the workspace", () => {
+    nav.goDetail("nori");
+    nav.goDetail("nori");
+    expect(nav.view).toBe("detail");
+    expect(nav.project).toBe("nori");
+    expect(nav.scoped).toBe(false);
   });
 
-  it("cycleLens routes through setLens, so grid still clears the focus", () => {
-    nav.setLens("kanban");
-    nav.focusedTerm = "s1";
-    nav.cycleLens(); // kanban → grid
-    expect(nav.lens).toBe("grid");
-    expect(nav.focusedTerm).toBe("");
+  it("can open a member repository directly in Git", () => {
+    nav.goDetail("nori", "git");
+    expect(nav.projectTab).toBe("git");
+    nav.goDetail("okane");
+    expect(nav.projectTab).toBe("git");
+  });
+
+  it("preserves the user's session triage preference", () => {
+    nav.setTriage("Needs You");
+    nav.goDetail("nori");
+    expect(nav.triage).toBe("Needs You");
+  });
+});
+
+describe("project view preference", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("keeps the last tab across projects and session navigation", () => {
+    nav.goDetail("nori");
+    nav.projectTab = "git";
+    nav.goCockpit();
+    nav.goDetail("okane");
+    expect(nav.projectTab).toBe("git");
+    expect(localStorage.getItem("lola.project.tab")).toBe("git");
+    nav.projectTab = "overview";
+    nav.goDetail("nori");
+    expect(nav.projectTab).toBe("overview");
+  });
+  it("restores the project view from storage after a fresh load", async () => {
+    nav.projectTab = "git";
+    vi.resetModules();
+    const { nav: restored } = await import("./nav.svelte");
+    restored.goDetail("another-project");
+    expect(restored.projectTab).toBe("git");
+  });
+  it("ignores an invalid saved view and tolerates unavailable storage", async () => {
+    localStorage.setItem("lola.project.tab", "removed-tab");
+    vi.resetModules();
+    const { nav: restored } = await import("./nav.svelte");
+    expect(restored.projectTab).toBe("overview");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
+    restored.projectTab = "git";
+    restored.goDetail("nori");
+    expect(restored.projectTab).toBe("git");
   });
 });
 

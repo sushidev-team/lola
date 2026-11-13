@@ -6,10 +6,14 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
 	"math"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +36,12 @@ func fixHiDPIOnReady(win *application.WebviewWindow) {
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// trayIcon includes the runner and flowing hair, rasterized at 4x for Retina.
+// Native template rendering matches the actual menu bar's foreground contrast.
+//
+//go:embed build/trayicon.png
+var trayIcon []byte
+
 // version is the compiled-in app version, injected at build time via
 // -ldflags "-X main.version=<tag>" (see build/darwin/Taskfile.yml and the
 // release workflow). The "dev" default marks an un-tagged local build; the
@@ -47,10 +57,16 @@ var version = "dev"
 // fails if either side moves. Do not add an id here without adding it to
 // config.UIThemes; the same test pins the two sets equal.
 var canvasByTheme = map[string]application.RGBA{
-	"catppuccin-latte":     application.NewRGB(0xe6, 0xe9, 0xef),
+	"lola-midnight":        application.NewRGB(0x12, 0x16, 0x24),
+	"catppuccin-latte":     application.NewRGB(0xed, 0xf0, 0xf7),
 	"catppuccin-frappe":    application.NewRGB(0x29, 0x2c, 0x3c),
 	"catppuccin-macchiato": application.NewRGB(0x1e, 0x20, 0x30),
 	"catppuccin-mocha":     application.NewRGB(0x18, 0x18, 0x25),
+	"github-light":         application.NewRGB(0xf6, 0xf8, 0xfa),
+	"solarized-light":      application.NewRGB(0xee, 0xe8, 0xd5),
+	"rose-pine-dawn":       application.NewRGB(0xfa, 0xf4, 0xed),
+	"gruvbox-light":        application.NewRGB(0xf2, 0xe5, 0xbc),
+	"one-light":            application.NewRGB(0xf1, 0xf4, 0xfb),
 }
 
 // canvasFor maps a [ui].theme id to its native-window background. An unknown or
@@ -66,13 +82,21 @@ func canvasFor(themeID string) application.RGBA {
 	return canvasByTheme[config.DefaultUITheme]
 }
 
-// windowCanvas resolves the NSWindow background from the CONFIGURED flavor at
-// startup, so the native chrome and the page agree in all four — a fixed literal
-// put a near-black rectangle behind Latte's near-white page. It reads the theme
-// through ConfigService.GetTheme, the same accessor the frontend calls, so there
-// is one resolution rule rather than a second copy of the "" → default fallback.
+func systemIsDark() bool {
+	if app := application.Get(); app != nil {
+		return app.Env.IsDarkMode()
+	}
+	return true
+}
+
+// windowCanvas resolves the configured fixed/system preference for native chrome.
+// The frontend also updates it when the OS changes or a theme is previewed.
 func windowCanvas() application.RGBA {
-	return canvasFor((&ConfigService{}).GetTheme())
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return canvasFor(config.DefaultUITheme)
+	}
+	return canvasFor(cfg.UIThemeFor(systemIsDark()))
 }
 
 // repaintWindowCanvas tracks a runtime flavor switch on the native window:
@@ -108,15 +132,20 @@ func main() {
 		Name:        "Lola",
 		Description: "Native cockpit for the lola coding-agent orchestrator",
 		Services: []application.Service{
+			application.NewService(&ContextService{}),
 			application.NewService(daemon),
 			application.NewService(term),
+			application.NewService(&SSHService{}),
+			application.NewService(&TalkService{}),
 			application.NewService(&ConfigService{}),
+			application.NewService(&ProjectGitService{}),
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
 			application.NewService(updater),
 		},
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
+			Handler:    application.AssetFileServerFS(assets),
+			Middleware: runtimeCallGuard,
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
@@ -138,9 +167,8 @@ func main() {
 		MinHeight:        560,
 		BackgroundColour: windowCanvas(),
 		Mac: application.MacWindow{
-			// The whole top strip is draggable (the frontend paints a .drag band
-			// across it — the sidebar's brand row plus the main top bar).
-			InvisibleTitleBarHeight: 36,
+			// The frontend owns title-bar dragging and double-click maximise via
+			// --wails-draggable. An invisible native drag band consumes clicks.
 			// Opaque, not vibrancy: the TUI theme is deliberately one cohesive
 			// opaque canvas, so we match it rather than letting the desktop bleed
 			// through.
@@ -184,7 +212,7 @@ func main() {
 // hidden window.
 func newStatusBarMenu(app *application.App, win application.Window) {
 	tray := app.SystemTray.New()
-	tray.SetLabel("Lola")
+	tray.SetTemplateIcon(trayIcon)
 	tray.SetTooltip("Lola — coding-agent orchestrator")
 
 	menu := app.Menu.New()
@@ -280,13 +308,22 @@ func (z *zoomController) reset() { z.set(1.0) }
 //     refuses a duplicate accelerator loudly instead of two silent handlers.
 //
 // Every accelerator here is Cmd-based and none is a system or Edit-menu one
-// (⌘C/⌘V/⌘X/⌘A/⌘Z/⌘W/⌘Q, and ⌘⌫ which deletes to line start in a text field).
+// (⌘C/⌘V/⌘X/⌘A/⌘Z/⌘Q, and ⌘⌫ which deletes to line start in a text field).
+// File > Close Tab owns ⌘W; closing the last tab must never close Lola.
 // Cmd chords are also the one class tmux/zellij inside a pane never receive, so
 // these can't collide with a shell binding either.
 func installAppMenu(app *application.App, zoom *zoomController) {
 	menu := application.NewMenu()
 	menu.AddRole(application.AppMenu)
-	menu.AddRole(application.FileMenu)
+	file := menu.AddSubmenu("File")
+	// A CloseWindow role keeps AppKit's performClose: selector even if its Go
+	// callback is replaced. Use a plain item so ⌘W reaches the frontend.
+	file.Add("Close Tab").SetAccelerator("CmdOrCtrl+w").OnClick(func(*application.Context) {
+		app.Event.Emit(evtSessionAction, actionCloseTab)
+	})
+	if runtime.GOOS != "darwin" {
+		file.AddRole(application.Quit)
+	}
 	menu.AddRole(application.EditMenu)
 	menu.AddRole(application.ViewMenu)
 	newSessionMenu(app, menu.AddSubmenu("Session"))
@@ -320,6 +357,11 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	ask := func(action string) func(*application.Context) {
 		return func(*application.Context) { app.Event.Emit(evtSessionAction, action) }
 	}
+	menu.Add("Find in Project History…").SetAccelerator("CmdOrCtrl+f").OnClick(ask("find-project-history"))
+	menu.Add("Search Projects and Sessions…").SetAccelerator("CmdOrCtrl+k").OnClick(ask("commands"))
+	menu.Add("New Session…").SetAccelerator("CmdOrCtrl+n").OnClick(ask("new-session"))
+	menu.Add("New Temporary Shell").SetAccelerator("CmdOrCtrl+Shift+n").OnClick(ask("temporary-shell"))
+	menu.AddSeparator()
 	menu.Add("Trigger Review").
 		SetTooltip("run the configured QA review provider on the selected session").
 		SetAccelerator("CmdOrCtrl+Shift+r").
@@ -327,38 +369,140 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	menu.Add("Open PR in Browser").
 		SetAccelerator("CmdOrCtrl+Shift+o").
 		OnClick(ask(actionOpenPR))
-	menu.Add("New Worktree Shell").
+	menu.Add("New Shell Tab").
 		SetAccelerator("CmdOrCtrl+t").
 		OnClick(ask(actionNewShell))
+	menu.AddSeparator()
+	// The session loop. Like the ssh chords below these must work from inside a focused
+	// terminal, which is why they are menu accelerators and not frontend keys.
+	menu.Add("Next Waiting").
+		SetAccelerator("CmdOrCtrl+j").
+		OnClick(ask(actionNext))
+	menu.Add("Stop This Turn").
+		SetAccelerator("CmdOrCtrl+.").
+		OnClick(ask(actionStop))
+	menu.Add("Show or Hide Changes").
+		SetAccelerator("CmdOrCtrl+Shift+d").
+		OnClick(ask(actionChanges))
+	menu.AddSeparator()
+	// Agent-assisted ssh. These live here because they must work from inside a
+	// focused terminal, where a bare key belongs to the shell, and AppKit delivers
+	// a menu accelerator before the web view sees it. Nothing here approves
+	// anything: an approval needs a focused card and its arming delay, so a
+	// keyboard held by a terminal can never answer one (docs/ssh-sessions-ux.md).
+	menu.Add("New SSH Session…").
+		SetAccelerator("CmdOrCtrl+Shift+h").
+		OnClick(ask(actionSSHNew))
+	menu.Add("Take or Return the Wheel").
+		SetAccelerator("CmdOrCtrl+Shift+l").
+		OnClick(ask(actionSSHWheel))
+	menu.Add("Review Next Approval").
+		SetAccelerator("CmdOrCtrl+Shift+a").
+		OnClick(ask(actionSSHApproval))
+	menu.Add("Talk to Agent").
+		SetAccelerator("CmdOrCtrl+l").
+		OnClick(ask(actionSSHTalk))
+	menu.Add("Show or Hide Terminal").
+		SetAccelerator("CmdOrCtrl+\\").
+		OnClick(ask(actionSSHTerminal))
 	menu.AddSeparator()
 	menu.Add("Kill Session…").
 		SetAccelerator("CmdOrCtrl+Shift+k").
 		OnClick(ask(actionKill))
 }
 
-// ensurePATH augments the process PATH with the usual Homebrew locations. A
-// .app launched from Finder inherits a minimal PATH (/usr/bin:/bin:/usr/sbin:
-// /sbin) — not the login shell's — so tmux/git/gh/lola under /opt/homebrew/bin
-// (Apple Silicon) or /usr/local/bin (Intel) would be "command not found". Every
-// child exec (tmux capture/attach, `lola run`) inherits this, so we fix it once
-// at startup. Harmless under `wails3 dev`, where PATH is already rich.
-func ensurePATH() {
-	want := []string{"/opt/homebrew/bin", "/usr/local/bin"}
-	cur := os.Getenv("PATH")
-	parts := strings.Split(cur, ":")
-	have := make(map[string]bool, len(parts))
-	for _, p := range parts {
-		have[p] = true
+// pathProbeTimeout bounds the login-shell PATH probe. A shell with a heavy rc
+// can take a moment; anything past this is a wedged profile we must not block
+// app startup on, and the static fallbacks below still apply.
+//
+// A var rather than a const so the tests that drive the REAL probe can widen
+// it. They spawn an actual shell, and 3 seconds is a startup budget, not a
+// safe margin on a machine running the whole test suite at once — the probe
+// then times out, reports "" like any other failure, and a test asserting on
+// its answer fails for reasons that have nothing to do with the code.
+var pathProbeTimeout = 3 * time.Second
+
+// pathSentinel brackets the PATH the probe asks for. Login rc files print
+// banners, version notices and `motd` to stdout, so reading "the output" would
+// hand exec a directory list made of someone's shell greeting. The sentinel
+// makes the answer findable regardless of what surrounds it.
+const pathSentinel = "__LOLA_PATH__"
+
+// staticPATHDirs are the directories added when (or in addition to) the probe.
+// The Homebrew prefixes are where tmux/gh/git live; the Go and local bins are
+// where a `go install`ed lola lands, which is the single most common way to
+// have a CLI the app could not see.
+var staticPATHDirs = []string{
+	"/opt/homebrew/bin",
+	"/opt/homebrew/sbin",
+	"/usr/local/bin",
+	"~/go/bin",
+	"~/.local/bin",
+	"~/bin",
+}
+
+// loginShellPATH is the exec seam over the probe, so tests can drive ensurePATH
+// without a shell. It returns "" whenever it cannot answer — every caller
+// treats that as "use the static list", never as an error.
+var loginShellPATH = func() string {
+	sh := strings.TrimSpace(os.Getenv("SHELL"))
+	if sh == "" {
+		return ""
 	}
-	var prefix []string
-	for _, w := range want {
-		if !have[w] {
-			prefix = append(prefix, w)
+	ctx, cancel := context.WithTimeout(context.Background(), pathProbeTimeout)
+	defer cancel()
+	// -l (login) but NOT -i (interactive): the login profile is where PATH is
+	// built, and an interactive shell additionally loads prompt/plugin machinery
+	// that is slow and can block on a tty we do not have.
+	out, err := exec.CommandContext(ctx, sh, "-l", "-c",
+		"printf '\\n%s%s\\n' "+pathSentinel+" \"$PATH\"").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), pathSentinel); ok {
+			return v
 		}
 	}
-	if len(prefix) > 0 {
-		_ = os.Setenv("PATH", strings.Join(prefix, ":")+":"+cur)
+	return ""
+}
+
+// ensurePATH rebuilds the process PATH so child execs can find the user's
+// tools. A .app launched from Finder inherits a MINIMAL PATH (/usr/bin:/bin:
+// /usr/sbin:/sbin) — not the login shell's — so tmux/git/gh/claude/lola are all
+// "command not found" no matter where they are installed. Every child exec
+// (tmux capture/attach, `lola run`, the doctor's LookPath probes) inherits this,
+// so it is fixed once at startup.
+//
+// Two sources, in this order:
+//
+//  1. the LOGIN SHELL's PATH, which is the only thing that knows about version
+//     managers (mise, asdf, fnm, volta) — and `claude` is very often installed
+//     through one of those, so the old two-directory list could not find it;
+//  2. a static list of well-known directories, as the floor when the probe
+//     fails (no $SHELL, a wedged profile, a sandbox).
+//
+// Both go AHEAD of the inherited entries, matching the previous behaviour where
+// a Homebrew tool won over a system one — a user who installed a newer git
+// meant to use it. Order within each source is preserved and duplicates are
+// dropped, so the result stays the user's own precedence.
+func ensurePATH() {
+	var ordered []string
+	seen := map[string]bool{}
+	add := func(dirs []string) {
+		for _, d := range dirs {
+			d = expandHome(strings.TrimSpace(d))
+			if d == "" || seen[d] {
+				continue
+			}
+			seen[d] = true
+			ordered = append(ordered, d)
+		}
 	}
+	add(filepath.SplitList(loginShellPATH()))
+	add(staticPATHDirs)
+	add(filepath.SplitList(os.Getenv("PATH")))
+	_ = os.Setenv("PATH", strings.Join(ordered, string(os.PathListSeparator)))
 }
 
 // Event names the frontend subscribes to. Kept in one place so the binding
@@ -390,7 +534,17 @@ const (
 	actionReview   = "review"
 	actionOpenPR   = "open-pr"
 	actionNewShell = "new-shell"
+	actionCloseTab = "close-tab"
 	actionKill     = "kill"
+	actionNext     = "next"
+	actionStop     = "stop"
+	actionChanges  = "changes"
+
+	actionSSHNew      = "ssh-new"
+	actionSSHWheel    = "ssh-wheel"
+	actionSSHApproval = "ssh-approval"
+	actionSSHTalk     = "ssh-talk"
+	actionSSHTerminal = "ssh-terminal"
 )
 
 // PushErrDTO is the payload of evtPushErr: which push-loop command failed and

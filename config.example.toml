@@ -8,6 +8,10 @@
 # names. The `lola` TUI resolves names to IDs for you when creating a poll.
 
 [defaults]
+# Automatically ask idle agents to verify new PR review threads, push fixes,
+# and resolve only addressed threads. Off by default; independent of provider
+# handoffs and reactions. Unchanged unresolved threads are not retried.
+# auto_pr_comments = false
 # Go duration string. Minimum is 30s (Linear rate limit); lower values are
 # clamped up, not rejected. Default when omitted: 60s.
 poll_interval = "60s"
@@ -21,11 +25,12 @@ global_cap = 4
 #   claude   — Claude Code (default). Lifecycle callbacks via a generated
 #              .lola/settings.json hooks file (Stop / Notification / SessionEnd /
 #              PostToolUse / UserPromptSubmit) posted to `lola hook`.
-#   codex    — OpenAI Codex CLI. Runs unattended (--ask-for-approval never,
-#              --sandbox workspace-write). Lifecycle callbacks via its `notify`
-#              config key: lola sets CODEX_HOME=<worktree>/.lola/codex, writes
-#              that config.toml, and best-effort symlinks your existing
-#              ~/.codex/auth.json so a prior `codex login` still works.
+#   codex    — OpenAI Codex CLI with --approve-for-me (automatic approval
+#              review inside the workspace-write sandbox). Requires a CLI that
+#              supports that flag; policy denials can still need human input.
+#              Uses your normal CODEX_HOME (or ~/.codex), preserving auth,
+#              model, MCP and skills. A per-process notify override routes
+#              lifecycle callbacks to lola without modifying your config.
 #   opencode — sst/opencode. Runs unattended (--auto). Lifecycle callbacks via an
 #              in-process plugin lola writes to <worktree>/.opencode/plugins/.
 # The configured agent's binary must be on PATH — the daemon health-gate checks
@@ -39,6 +44,18 @@ global_cap = 4
 # Set false when a launchd KeepAlive job owns the daemon so the TUI never fights
 # the supervisor (it then hides its start/stop/restart keys). Do not run both.
 # manage_daemon = true
+#
+# Pre-accept Claude Code's "Is this a project you created or one you trust?"
+# dialog for every worktree lola creates. lola writes
+# projects[<worktree>].hasTrustDialogAccepted into ~/.claude.json (or
+# $CLAUDE_CONFIG_DIR/.claude.json) just before a claude agent launches, and
+# removes the entry when the worktree is torn down. Trusting ~/.lola/worktrees
+# once does NOT work: Claude Code stops looking for a trusted parent at the git
+# root, and every worktree is its own. Only folders under ~/.lola/worktrees are
+# touched; sandboxed projects are skipped (their claude has its own config).
+# A trusted folder loads its project-level .claude/ settings, hooks and MCP
+# servers without asking. Default true.
+# trust_worktrees = true
 #
 # --- Project defaults -------------------------------------------------------
 # Every key below is the fallback for the same-named [[project]] key. A project
@@ -64,6 +81,11 @@ global_cap = 4
 # branch_prefix = "lola/"
 # symlinks = [".env"]
 # post_create = ["composer install", "bun install --frozen-lockfile"]
+# Fallback chain consulted when a session's agent hits its usage limit (lola
+# detects the banner in the pane): the next listed kind the session has not
+# already run takes over on the SAME worktree and branch — see
+# [reactions.agent_fallback] below. Valid kinds: claude | codex | opencode.
+# agent_fallback = ["codex", "opencode"]
 # match_labels = ["label_UUID_of_your_trigger_label"]
 # match_mode = "any"                 # any | all
 # dedup_mode = "label"               # label | seen | state
@@ -78,6 +100,9 @@ global_cap = 4
 #
 # [defaults.env]
 # APP_ENV = "local"
+# Values may reference this session: {{.Session}} (tmux session id, == the
+# worktree directory name), {{.Issue}} (Linear identifier, EMPTY on PR/manual
+# sessions), {{.Branch}}, {{.Project}}, {{.Worktree}}. See [project.env].
 
 [linear]
 # Keychain SERVICE NAME (tried first):
@@ -121,6 +146,12 @@ endpoint = "https://api.linear.app/graphql"
 #
 # [reactions.merged]              # merged → auto cleanup (remove worktree + branch, free the slot)
 # auto = true
+#
+# [reactions.agent_fallback]      # agent's usage limit hit (pane banner) → hand the
+#                                 # session to the next kind in [defaults].agent_fallback /
+#                                 # [[project]].agent_fallback, on the SAME worktree.
+# auto = false                    # false = notify only (suggest the switch);
+#                                 # true  = switch automatically.
 
 # ---------------------------------------------------------------------------
 # [notify] — best-effort desktop + Slack notifications, routed by priority
@@ -145,6 +176,10 @@ endpoint = "https://api.linear.app/graphql"
 # PR is approved+green (what it changes + risks to check). The summary rides the
 # notification and an optional Linear comment ONLY — it is NEVER fed back to the
 # worker agent, so an attacker-influenceable PR/log can't steer the control loop.
+# The desktop PR comments panel also uses Haiku when enabled, with background
+# summaries cached by comment content. These are display-only, keep the original
+# GitHub links, and fall back to previews on failure. Batches are capped at 30s
+# (or a shorter timeout_seconds); model below selects the other brain summaries.
 #
 # COST: each summary spends Anthropic tokens. It execs `claude` and uses your
 # existing claude auth (~/.claude) or ANTHROPIC_API_KEY in the daemon's env.
@@ -162,8 +197,38 @@ endpoint = "https://api.linear.app/graphql"
 # summarize_approved = true      # summarize an approved+green PR before a human merges
 
 # ---------------------------------------------------------------------------
+# [merge_queue] — OPTIONAL, OFF BY DEFAULT. lola's LOCAL merge queue: approved +
+# green PRs of lola's own sessions are merged ONE AT A TIME per repository
+# (oldest PR first). Before each lands, lola checks the head already contains
+# the default branch; if it does not, the session's agent is asked to merge the
+# default branch in and push, and the PR lands once CI is green again. It fails
+# CLOSED: stale PR facts, an unknown mergeability, a PR into another base, or no
+# CI checks at all hold the queue instead of merging. A PR whose approval
+# GitHub dismisses on that sync push leaves the queue until it is re-approved.
+# ---------------------------------------------------------------------------
+# [merge_queue]
+# enabled = true            # master switch; false (and an absent table) = off
+# method = "squash"         # squash | merge | rebase (passed to `gh pr merge`)
+# allow_no_checks = false   # true only for a repo that runs no CI at all
+
+# ---------------------------------------------------------------------------
+# [best_of] — OPTIONAL. Best-of-N: run several coding agents/models on ONE
+# issue, each on its own sibling branch opening a DRAFT PR, then compare them
+# (`lola bestof compare <issue>`) and keep one (`lola bestof pick <session>`):
+# the kept PR is marked ready, the others are closed (branches kept) and their
+# sessions torn down (a worktree with uncommitted changes is kept). Every
+# attempt counts against the concurrency caps and the budget.
+#
+# A poll match that ALSO carries `label` (a WORKSPACE label UUID) starts a
+# group on its own; `lola bestof start <issue>` works with or without it.
+# ---------------------------------------------------------------------------
+# [best_of]
+# label = "<workspace-label-uuid>"            # "" / absent = no label trigger
+# agents = ["claude:2", "codex@gpt-5-codex"]  # <agent>[@<model>][:<count>], 2–6 attempts; default ["claude:2"]
+
+# ---------------------------------------------------------------------------
 # [statusagent] — OPTIONAL, OFF BY DEFAULT. The status INTERPRETER: a small
-# bounded `claude -p` pass that reads one session's pane tail, recent lifecycle
+# bounded headless agent pass that reads one session's pane tail, recent lifecycle
 # events, and PR facts, and judges what the agent is ACTUALLY doing — an
 # interpreted agent-state overlay plus a one-line headline ("rewriting the auth
 # middleware tests") shown in the TUI and the desktop app. Display only: it can
@@ -178,12 +243,13 @@ endpoint = "https://api.linear.app/graphql"
 # (same pane/facts hash) skips the call entirely — a quiet fleet costs ~0.
 #
 # Omit this whole section to keep the interpreter OFF — zero behavior change.
-# The values shown below are the built-in defaults once enabled.
+# This example uses the selected agent's default model.
 # ---------------------------------------------------------------------------
 # [statusagent]
 # enabled = true                 # master switch; false (and an absent table) = off
-# bin = ""                       # claude executable; "" resolves "claude" via PATH (pin absolute for launchd)
-# model = "sonnet"               # --model per call; explicitly "" = claude's default model
+# agent = "claude"               # claude | codex | opencode, independent of the worker
+# bin = ""                       # executable override; empty uses the selected agent on PATH
+# model = ""                     # selected agent default; use "sonnet" for Claude Sonnet
 # timeout_seconds = 60           # hard cap per interpretation; must be >= 0
 # min_interval_seconds = 120     # per-session debounce between interpretation attempts
 # max_per_cycle = 2              # interpretations queued per 30s observer cycle
@@ -201,12 +267,28 @@ endpoint = "https://api.linear.app/graphql"
 #
 #     lola config migrate-review        # folds legacy -> catalog, then `lola reload`
 #
-# KINDS (three kinds, two execution SHAPES):
-#   coderabbit-cli    (pass)  exec the CodeRabbit CLI on the PR branch; once/PR.
-#   claude-session    (pass)  headless `claude -p` review (diff piped on stdin);
-#                             once/PR. Handy as a coderabbit-cli FALLBACK.
-#   coderabbit-watch  (watch) poll the PR (gh, ~30s) for the CodeRabbit GitHub
-#                             app's comments (or any bot via `author`); watermark.
+# KINDS — seven, in three FAMILIES over two execution SHAPES. Every family is a
+# swappable slot: which agent reviews, which CLI reviews, and whose GitHub review
+# is relayed are all config, not hardcoded.
+#
+#   CLI family (pass) — exec an external review CLI in the worktree, once/PR:
+#     coderabbit-cli      the CodeRabbit CLI; `command` optional (it has a default).
+#     custom-cli          ANY review CLI; `command` REQUIRED. `base_flag` decides
+#                         how the base branch reaches it ("--base" by default,
+#                         empty = pass none).
+#
+#   WATCH family (watch) — poll the PR (gh, ~30s) for a review bot's own comments
+#   against a watermark; needs no local binary:
+#     coderabbit-watch    the CodeRabbit GitHub app; `author` defaults to it.
+#     bot-watch           ANY review bot; `author` REQUIRED (e.g. "greptile").
+#
+#   AGENT family (pass) — ONE bounded, READ-ONLY headless coding-agent review of
+#   the PR diff (piped on stdin), once/PR. Each is its own kind, so one can be
+#   another's over-quota FALLBACK:
+#     claude-session      `claude -p`
+#     codex-session       `codex exec --sandbox read-only`
+#     opencode-session    `opencode run`   (`model` is "provider/model")
+#
 # At most ONE provider per kind (guards key by kind).
 #
 # TRANSPORTS — where findings go: a multiselect over {lola, github, linear}.
@@ -214,12 +296,25 @@ endpoint = "https://api.linear.app/graphql"
 #          per-provider bools: notify (desktop/Slack, gated by `notify`) and the
 #          worker hand-off (send-keys, gated by `send_to_agent`). Muting either
 #          independently is what preserves the legacy notify=false opt-out.
-#   github Post findings as a PLAIN GitHub PR comment (gh pr comment, body on
-#          stdin — never a review that could approve/request-changes). PASS
-#          shapes only; FORBIDDEN on coderabbit-watch (its feedback is already on
+#   github Post findings onto the PR — never a review that could approve or
+#          request changes. TWO SHAPES, picked by `github_inline`:
+#            true  (default) ONE pull-request review (event: COMMENT) carrying a
+#                  summary body plus one ANCHORED, RESOLVABLE thread per finding,
+#                  on the line it names — GitHub's reply box and "Resolve
+#                  conversation" button, like a CodeRabbit review. A finding whose
+#                  line is not in the PR's diff stays in the summary body (and the
+#                  body says how many did); an anchor may snap up to 3 lines to
+#                  reach the diff and says so in its own body when it does. When
+#                  the threads exist the worker hand-off also asks the agent to
+#                  reply to and resolve each thread it fixes.
+#            false ONE plain PR comment (gh pr comment, body on stdin).
+#          Inline degrades to the plain comment by itself: no diff, nothing
+#          anchorable, no write access, a 422. PASS
+#          shapes only; FORBIDDEN on the watch family (its feedback is already on
 #          the PR — re-posting is a self-feedback loop). Idempotent per PR. Any
-#          @coderabbitai mention in the body is neutralized, so lola posting its
-#          own review NEVER triggers a new CodeRabbit run.
+#          @coderabbitai mention — and any @-mention of a bot you have a watch
+#          configured for — is neutralized in every body, so lola posting its own
+#          review NEVER triggers a new run of that bot.
 #   linear Mirror findings onto the session's Linear issue.
 # Only the worker hand-off sanitizes + idle-gates; notify/github/linear are HUMAN
 # sinks carrying the full untrusted findings verbatim (never re-fed as control).
@@ -228,29 +323,40 @@ endpoint = "https://api.linear.app/graphql"
 # kind when THIS one can't answer (tool missing / timeout / OVER-QUOTA). The
 # result routes under the PRIMARY's transports. A real exit/auth error is a
 # graceful skip that does NOT fall through (fail-closed). Fallback is PASS-SHAPE
-# ONLY and is forbidden on coderabbit-watch: the CodeRabbit GitHub app posts
-# "out of reviews" as an ordinary PR comment (err==nil, classifier-undetectable),
-# so a watch has no quota signal — use coderabbit-cli for quota->claude fallback.
+# ONLY and is forbidden on the watch family: a review bot posts "out of reviews"
+# as an ordinary PR comment (err==nil, classifier-undetectable), so a watch has no
+# quota signal — use a cli or agent provider for quota->fallback.
 #
 # Omit this whole section to keep review OFF. The values below are the defaults
 # once a provider is enabled.
 # ---------------------------------------------------------------------------
 # [[review.provider]]
-# provider        = "coderabbit-cli"                        # coderabbit-cli | coderabbit-watch | claude-session
+# provider        = "coderabbit-cli"                        # see KINDS above
 # enabled         = true                                    # master switch; default false
 # on_pr_open      = true                                    # run when a session first opens a PR (pass shapes); default true
-# command         = "coderabbit review --plain --type all"  # coderabbit-cli argv override (space-split); empty = runner default
+# command         = "coderabbit review --plain --type all"  # cli family argv (space-split); empty = coderabbit's default
+# base_flag       = "--base"                                # cli family: flag the base branch is passed with; "" = pass none
 # timeout_seconds = 300                                     # hard cap per pass (pass shapes); must be >= 0
 # transports      = ["lola", "github"]                      # {lola (always forced present), github, linear}
+# github_inline   = true                                    # github: anchored resolvable threads (default) vs one flat comment
+# github_status   = false                                   # post lola/review/<kind> on the PR head + re-review each new head; require it in a ruleset to block merges
+# visible         = true                                    # run the pass in a watchable "<session>-review" tmux session; default true
 # notify          = true                                    # lola transport: notify a human; default true
 # send_to_agent   = true                                    # lola transport: hand findings to the worker; default true
-# fallback        = ["claude-session"]                      # ordered pass kinds tried when this one can't answer
+# fallback        = ["claude-session", "codex-session"]     # ordered pass kinds tried when this one can't answer
 #
 # [[review.provider]]
-# provider        = "claude-session"                        # headless `claude -p`; here only as coderabbit-cli's fallback
+# provider        = "claude-session"                        # headless `claude -p`; here as coderabbit-cli's first fallback
 # enabled         = true
-# model           = "claude-sonnet-4-5"                     # optional --model; empty = claude's default
-# timeout_seconds = 300
+# model           = "claude-sonnet-4-5"                     # optional --model; empty = the agent's default
+# timeout_seconds = 900                                     # agent-family default: this pass reads the PR files
+# transports      = ["lola"]
+#
+# [[review.provider]]
+# provider        = "codex-session"                         # headless `codex exec`; the second fallback above
+# enabled         = true                                    # a fallback-only provider still needs enabled = true
+# on_pr_open      = false                                   # ...but need not run a pass of its own
+# model           = "gpt-5.1"
 # transports      = ["lola"]
 #
 # [[review.provider]]
@@ -261,12 +367,27 @@ endpoint = "https://api.linear.app/graphql"
 # notify          = true
 # send_to_agent   = true
 #
-# WATCH-ONLY posture (read CodeRabbit, never invoke a new run): configure JUST the
-# coderabbit-watch provider above. lola polls + relays the CodeRabbit app's own
-# automatic review and never execs `coderabbit review` (that is coderabbit-cli) and
-# never posts to the PR — so no new CodeRabbit run and no review credit spent. Want
-# lola to also post its OWN public review? Add a claude-session (or coderabbit-cli)
-# provider with transports = ["lola", "github"]; its posted comment is trigger-safe.
+# Swapping the vendor, in full. Neither of these needs any code change:
+#
+# [[review.provider]]
+# provider        = "custom-cli"                            # any review CLI instead of CodeRabbit's
+# enabled         = true
+# command         = "greptile review --plain"               # REQUIRED for this kind
+# base_flag       = "--branch"                              # or "" if the tool takes no base argument
+# transports      = ["lola", "github"]
+#
+# [[review.provider]]
+# provider        = "bot-watch"                             # any review bot's GitHub review instead of CodeRabbit's
+# enabled         = true
+# author          = "greptile-apps"                         # REQUIRED for this kind
+# transports      = ["lola"]
+#
+# WATCH-ONLY posture (read the bot's review, never invoke a new run): configure
+# JUST a watch provider. lola polls + relays that bot's own automatic review and
+# never execs a review CLI (that is the cli family) and never posts to the PR — so
+# no new run and no review credit spent. Want lola to also post its OWN public
+# review? Add an agent or cli provider with transports = ["lola", "github"]; its
+# posted comment is trigger-safe.
 
 # ---------------------------------------------------------------------------
 # [review] — LEGACY, OPTIONAL, OFF BY DEFAULT (P9). Equivalent to a single
@@ -346,13 +467,59 @@ endpoint = "https://api.linear.app/graphql"
 # tmux's bar restated a subset of that one row lower and cost a row of
 # scrollback. Turn it on if you attach in a bare terminal, where nothing else
 # names the session; status_right and the LOLA brand only render when it is on.
+#
+# SCROLLING works with `mouse` either way, in both the app and the TUI: lola
+# asks the pane which history it has — a full-screen program (the agent) keeps
+# its own transcript and is handed the wheel, a plain shell is scrolled through
+# tmux's copy mode — and drives the right one. `mouse` only decides who consumes
+# the events of a REAL mouse: with it on, tmux takes clicks and drags, which
+# costs text selection in the app's terminals. `scrollback` sizes the SHELL kind
+# of history (tmux history-limit) on lola's own server, so it holds whatever
+# ~/.tmux.conf says; tmux reads it when a pane is created, so a change applies
+# to the NEXT session.
 # ---------------------------------------------------------------------------
 # [tmux]
 # socket_name = "lola"   # isolated tmux server socket (tmux -L); its own server, never your default one
 # detach_key = ""        # opt-in single detach key (e.g. "F12"); empty keeps tmux's default Ctrl-b d
 # status_bar = false      # show tmux's own status bar in the session; off = the embedded terminal is chrome-free
 # status_right = ""       # raw tmux status-right override; empty = lola's built-in branded bar (needs status_bar)
-# mouse = false           # enable tmux mouse mode inside the session
+# scrollback = 10000      # tmux history-limit for shell/dev panes; tmux's own default is 2000
+# mouse = false           # let tmux consume real mouse clicks/drags; NOT needed to scroll (see above).
+#                         # Written to lola's server in either state, so this key decides it, not ~/.tmux.conf.
+
+# ---------------------------------------------------------------------------
+# [budget] — OPTIONAL daily token limits, read from the coding agent's own
+# transcripts (claude only). Counted in WEIGHTED tokens — output 5x, cache
+# write 1.25x, cache read 0.1x — so cheap cache reads do not eat the limit.
+# Reaching a limit HOLDS new dispatch (the tick is skipped and the reason shown
+# as the poll's error); running sessions are never touched. Per-project limits
+# are [[project]].daily_budget_tokens. 0 = no limit.
+# ---------------------------------------------------------------------------
+# [budget]
+# daily_tokens = 200_000_000   # global limit across all projects + lola's helpers, per local day
+# notify = true           # notify once per limit per day when it is reached
+
+# ---------------------------------------------------------------------------
+# [load] — OPTIONAL machine-load hold on top of the slot cap: no new dispatch
+# while this machine is saturated. A value the OS does not report holds nothing.
+# ---------------------------------------------------------------------------
+# [load]
+# max_load_per_cpu = 1.5          # 1-minute load average ÷ CPU count; 0 = off
+# min_free_memory_percent = 10    # free memory as the OS reports it; 0 = off
+
+# ---------------------------------------------------------------------------
+# [sandbox] — OPTIONAL container sandbox. A project opts in with
+# sandbox = "docker"; its agent then runs in a container that can write only
+# its worktree (+ the git object store a commit needs). Hooks reach the daemon
+# over a token-authenticated loopback port (hook_port), so the container runs a
+# LINUX lola: build one with `make build-linux`.
+# ---------------------------------------------------------------------------
+# [sandbox]
+# docker   = "docker"                                     # the docker CLI
+# image    = "ghcr.io/acme/agent-node:22"                 # sh + git + the agent on PATH
+# lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # required when sandboxing
+# hook_port = 7718
+# pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]      # names only; values from the daemon env
 
 # ---------------------------------------------------------------------------
 # [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads
@@ -362,12 +529,104 @@ endpoint = "https://api.linear.app/graphql"
 # identifier, so the two surfaces match. Editable from either: the app's
 # Appearance settings tab, or the TUI's S -> Appearance tab.
 #
-# Only the four values below are accepted — an unknown name is REJECTED at load
+# Only the listed theme ids are accepted — an unknown name is REJECTED at load
 # rather than silently falling back, so a typo tells you instead of quietly
-# rendering the default. Omit the key (or the table) to use "catppuccin-mocha".
+# rendering the default. Omit the key (or the table) to use "lola-midnight".
 # ---------------------------------------------------------------------------
 # [ui]
-# theme = "catppuccin-mocha"   # catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+# theme = "lola-midnight"
+# follow_system = false    # desktop: OS appearance; TUI: terminal background
+# light_theme = "github-light"
+# dark_theme = "lola-midnight"
+# Light: catppuccin-latte | github-light | solarized-light | rose-pine-dawn | gruvbox-light | one-light
+# Dark: lola-midnight | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+# System mode switches live and remembers an independent choice for each side.
+# The phone stores its own appearance choices locally.
+
+# ---------------------------------------------------------------------------
+# [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is
+# chosen for what enabling it GRANTS rather than for what it costs.
+#
+# Read this sentence before flipping the key: a paired phone can type arbitrary
+# prose into an autonomous coding agent, and at the higher capability tiers it
+# can trigger reviews, toggle dev servers and tear down worktrees. Terminal
+# write on a "-shell-N" tab is arbitrary code execution on this Mac, with your
+# gh token, SSH agent and login keychain in reach. Losing the phone is answered
+# by revoking the device from the desktop, not by a stingy default here.
+#
+# Omitting the whole table is zero behavior change: nothing binds, nothing
+# listens, and a later save will not grow the table.
+#
+# While the transport is at its first milestone the listener is compiled ONLY
+# into a binary built with the `lola_insecure` build tag, which additionally
+# forces the bind to localhost whatever this table says. A release binary has no
+# listener at all and logs that when this table is enabled, so enabling it there
+# is inert rather than silent.
+# ---------------------------------------------------------------------------
+# [remote]
+# enabled = false
+# # Which interfaces to bind. One of off | localhost | lan | all, or a literal
+# # IP address (a hostname is REJECTED rather than resolved — config loading
+# # never makes a network call).
+# #
+# #   off        bind nothing. Keeps the rest of the table, so it is the way to
+# #              pause the listener without losing your settings.
+# #   localhost  loopback only — what an SSH forward, a VPN or a tailnet wants,
+# #              and the only mode that puts nothing on a network interface.
+# #   lan        only private interfaces (RFC1918 / ULA / link-local) whose
+# #              names are not tunnels or virtual bridges. On a laptop this
+# #              means EVERY network this machine ever joins, conference WiFi
+# #              included. The bound interfaces are logged by name at startup.
+# #   all        0.0.0.0. Never a default.
+# bind = "localhost"
+# # TCP port. 0 uses the built-in default shown here.
+# port = 7717
+#
+# insecure_lan: milestone 1 authenticates a phone with a single shared bearer
+# key, so it FORCES the bind to loopback and a physical phone cannot reach it.
+# A Simulator can — it shares the Mac's loopback — so this is only for a real
+# device. Turning it on honours `bind` above and puts that shared key on your
+# network in the clear: anything that can reach the port and guess the key can
+# type into a running coding agent. Two keys have to agree, so a config that
+# merely says bind = "lan" still binds loopback.
+#
+# It is deleted along with the whole insecure path in milestone 2, which gives
+# each device its own identity and makes a LAN bind unremarkable.
+# insecure_lan = false
+#
+# advertise: publish this listener on the local network with mDNS, so a paired
+# phone finds this Mac on a network whose addresses it has never seen. The key
+# and the pin already work anywhere — only the address goes stale, which is why
+# a phone paired at home cannot reach the same Mac at the office.
+#
+# OFF by default because it is a DISCLOSURE, not a convenience: `_lola._tcp`
+# tells every peer on the network that this machine runs autonomous coding
+# agents and accepts remote control. What is published is the port and a
+# protocol version, and deliberately nothing else — no pin, no hostname, no
+# session names — because those are stable identifiers for one laptop across
+# every network it joins.
+#
+# It stays an optimisation: the addresses a phone already has are tried first,
+# so a network that blocks multicast (many corporate and guest WiFis do) costs
+# nothing. Requires the `dns-sd` tool, which every Mac ships.
+# advertise = false
+#
+# dev_forward: republish an ACTIVE session's dev servers on the local network,
+# so a phone can open the app an agent is building. Their addresses are already
+# known (lola reads what the dev tabs print) and useless from anywhere else:
+# `php artisan serve` binds 127.0.0.1 and vite binds [::1].
+#
+# OFF by default because it puts something on a network. What it replaces is
+# worse, which is the argument for having it at all: the advice every framework
+# gives is `--host 0.0.0.0`, publishing a half-built application — with whatever
+# auth it has so far, while an agent is writing to it — permanently, on a
+# well-known port, on every network the laptop joins. A forward is one random
+# high port on one private interface, for one address lola discovered itself,
+# and it ends when the session stops being active.
+#
+# It is still an exposure: anything on that network can reach the dev server
+# while a forward is up. Use it on a network you control.
+# dev_forward = false
 
 # ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
@@ -376,6 +635,9 @@ endpoint = "https://api.linear.app/graphql"
 # Code in tmux inside it.
 # ---------------------------------------------------------------------------
 [[project]]
+# Omit to inherit [defaults].auto_pr_comments; true/false explicitly overrides.
+# For stack sessions, set this on the owning stack.
+# auto_pr_comments = false
 # name is the project's ID: a path segment (worktrees/<name>/,
 # state/<name>.seen) and the prefix of every session + tmux name
 # ("lola-nori-app-eng-42"). Keep it slug-shaped; changing it is a rename that
@@ -384,6 +646,12 @@ name = "nori-app"
 # label is the free-text display name the UIs show. Optional — empty falls back
 # to `name`. Nothing keys by it, so it is safe to change at any time.
 label = "Nori App"
+# group files this project under a [[group]] below (by that group's `name`).
+# Omit it and the project sits at the top level of the app's project panel. Pure
+# display arrangement — nothing in the daemon reads it — and a group that is not
+# defined is repaired to "no group" on load rather than rejected. The app sets
+# this by DRAGGING the row onto a folder; the project form has no group field.
+# group = "clients"
 # Absolute path to the main checkout (a leading ~ is expanded on load).
 # Worktrees are created NEXT TO it under ~/.lola/, never inside it.
 path = "/Volumes/Git/sushi/internal/nori/nori-app"
@@ -403,6 +671,47 @@ post_create = [
   "composer install",
   "bun install --frozen-lockfile",
 ]
+# Long-running dev processes for THIS repository. They run only in the project's
+# ACTIVE session — one session at a time, each command in its own terminal tab
+# rooted in that session's worktree (with [project.env] exported). Switching
+# another session active stops these first, so the ports are free before the new
+# ones start; a command that dies keeps its pane (so you can read why) and the
+# session stops counting as active. Toggle with the app's "Active" button or `D`
+# in either surface. Per project by design — there is no [defaults].dev_commands.
+# Each entry is a shell line interpreted by sh, so `cd sub && npm run dev`,
+# pipes and env prefixes all work; the working directory is the worktree ROOT.
+dev_commands = [
+  "composer dev",
+  "npm run dev",
+  # "cd desktop && wails3 dev",
+]
+# PARALLEL dev stacks: lease each session its OWN block of ports from this
+# inclusive range (1024-65535). The block is exported into the worktree as
+# LOLA_PORT (the first port) and LOLA_PORT_1..N, so post_create, the agent,
+# shell tabs and dev_commands all see it. Setting a range also makes
+# dev_commands MULTI-ACTIVE: switching a session active no longer stops the
+# others, because each binds its own ports — so only set it once the dev
+# commands actually read them (e.g. `php artisan serve --port=$LOLA_PORT`, or
+# APP_PORT = "{{.Port}}" in [project.env]). Leases live in
+# ~/.lola/state/ports.json, survive a daemon restart, and are released when the
+# session's worktree is removed. Omit for the single-active move above.
+# port_range = "4100-4999"
+# ports_per_session = 2      # LOLA_PORT_1..2; omitted = 1
+# Teardown hook, the mirror of post_create: commands run in the worktree (same
+# env, LOLA_DB_NAME and the port lease included) right before lola removes it —
+# on merged-cleanup and `lola kill`. Skipped when the worktree is dirty (it is
+# kept, and so is what it uses). Bounded (20s for the whole hook) and
+# best-effort: a failure is logged and never keeps the worktree alive. Make
+# each command idempotent; a cleanup that failed for another reason re-runs it.
+# Per project, like dev_commands — there is no [defaults].pre_remove.
+# pre_remove = ['dropdb --if-exists "$LOLA_DB_NAME"']
+# Daily limit on THIS project's weighted tokens (see [budget]); 0 = none.
+# daily_budget_tokens = 50_000_000
+# Run this project's agents in a container that can write only their worktree
+# (see [sandbox]). "none" (default) | "docker".
+# sandbox = "docker"
+# sandbox_image = "ghcr.io/acme/agent-php:8.4"   # overrides [sandbox].image
+# sandbox_ports = ["8000", "5173:5173"]          # published on 127.0.0.1
 # Files symlinked from the main checkout into each worktree.
 # CAVEAT: symlinking .env means every worktree talks to the SAME database
 # (and caches, queues, ...) as the main checkout — concurrent sessions can
@@ -415,6 +724,10 @@ symlinks = [".env"]
 # (which itself defaults to claude). See [defaults].agent above for how each
 # agent's lifecycle callbacks are wired and where provider auth comes from.
 # agent = "claude"
+# Fallback agent chain for THIS repo when a session's agent hits its usage
+# limit. Omit to inherit [defaults].agent_fallback; set to [] to disable the
+# fallback for this project.
+# agent_fallback = ["codex"]
 #
 # --- Linear polling (OPTIONAL) ---------------------------------------------
 # Configure this project to auto-spawn agents from Linear. Omit team_id and the
@@ -443,9 +756,63 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # on_pr_state_id = "state_inreview-..."
 # on_merged_state_id = "state_done-..."
 # comment_on_pr = true
-# Extra environment variables exported into each session.
+# Extra environment variables exported into each session: into the agent's pane,
+# into shell tabs and `lola open` shells, and into post_create commands. They
+# are written to a 0600 <worktree>/.lola/env that each pane sources at start —
+# so a terminal YOU open outside lola does not have them (source that file, or
+# use a shell tab).
+#
+# VALUES may reference the session, with the same {{.Field}} spelling used by
+# reaction and write-back templates:
+#
+#   {{.Session}}   tmux session id, == the worktree directory name
+#                  (lola-nori-app-nor-366) — unique for EVERY session
+#   {{.Issue}}     Linear identifier (NOR-366); EMPTY on PR/manual sessions
+#   {{.Branch}}    branch checked out in the worktree
+#   {{.Project}}   this project's name
+#   {{.Worktree}}  absolute worktree path
+#   {{.Slug}}      same as {{.Session}}, for hostnames ("{{.Slug}}.test")
+#   {{.DBName}}    a stable database name for the session (lola_nori_app_nor_366)
+#   {{.Port}}      the first leased port; {{.Port1}}..{{.PortN}} each one
+#                  (EMPTY without a port_range)
+#
+# Every session also gets LOLA_SESSION_SLUG and LOLA_DB_NAME, plus LOLA_PORT and
+# LOLA_PORT_1..N with a port lease. lola's values win over a same-named key here.
+#
+# This matters when symlinks = [".env"]: every worktree then shares the backing
+# services that .env names, so two dev stacks consume each other's queue jobs —
+# which looks like work vanishing, not like a collision. Give each worktree its
+# own namespace instead. Prefer {{.Session}} where the value must be unique for
+# every session; {{.Issue}} renders empty when there is no issue.
+#
 [project.env]
 # APP_ENV = "local"
+# REDIS_QUEUE = "{{{.Session}}}"   # → {lola-nori-app-nor-366}
+# DB_DATABASE = "{{.DBName}}"       # pair with post_create = ['createdb "$LOLA_DB_NAME"']
+# APP_PORT = "{{.Port}}"            # needs port_range
+
+# STACKS: several repositories that ship together, one Linear issue stream.
+# A stack is a project with kind = "stack" and no path; it owns the Linear
+# filter, write-back, agent, sandbox and budget. Its members are ordinary
+# projects with stack = "<name>" and the labels that select them. A session of
+# the stack is a folder with one worktree per selected app; the agent starts
+# in it. See README "Stacks".
+#
+# [[project]]
+# name = "nori"
+# kind = "stack"
+# team_id = "…"
+# match_labels = ["<apps/app>", "<apps/website>"]
+# match_mode = "any"
+#
+# [[project]]
+# name = "nori-website"
+# stack = "nori"
+# labels = ["apps/website"]       # UUID, name or "group/name"; omit = every issue
+# path = "/Users/me/src/nori-website"
+# repo = "sushidev-team/nori-website"
+# default_branch = "develop"
+# dev_commands = ["npm run dev"]
 
 # ---------------------------------------------------------------------------
 # Poll 4: Linear WRITE-BACK with state-based dedup (P4). Instead of flipping
@@ -507,3 +874,94 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # comment_on_spawn = false
 # comment_on_merged = false
 # comment_on_blocked = true
+
+# ---------------------------------------------------------------------------
+# [[group]] — FOLDERS for the app's project panel (optional, display only).
+#
+# Nothing in the daemon reads a group: it decides how the app arranges its
+# project list and nothing else. The panel draws ONE list in which a folder is a
+# row beside the projects — drop a project onto it to file it there — not a
+# section below them.
+#
+# It is a table of its own, rather than a plain string on the project, so a
+# folder can exist while EMPTY: that is what lets the app's "+ → New group"
+# create one before anything is dragged in.
+#
+# Two things decide the order, and both are hand-editable. The [[project]]
+# tables' own order is the order rows are drawn (the TUI's project list reads the
+# same array, so a drag in the app reorders both), and each [[group]]'s
+# `position` is its index among the top-level rows — needed because an empty
+# folder has no member to take a place from.
+#
+# A [[project]].group naming a group that is not defined here is repaired to "no
+# group" on load with a notice (`lola doctor`), never rejected: the project is
+# shown at the top level rather than hidden inside a folder that does not exist.
+# ---------------------------------------------------------------------------
+# [[group]]
+# # name is the group's ID — the value [[project]].group references. Keep it
+# # slug-shaped; it is stable across a rename of the label below.
+# name = "clients"
+# # label is the free-text display name. Optional — empty falls back to `name`.
+# label = "Clients"
+# # position is the folder's ZERO-BASED index among the top-level rows (the
+# # ungrouped projects and the other folders — not a folder's own members).
+# # A negative value is repaired to 0, one past the end simply lands last, and
+# # two folders claiming the same index keep their order in this file, so a
+# # hand-written guess always loads.
+# position = 1
+# # collapsed persists the folder's disclosure state in the app.
+# collapsed = false
+
+# -----------------------------------------------------------------------------
+# [[ssh_host]] — hosts an agent-assisted ssh session may reach (optional).
+#
+# A coding agent debugs a remote host with nothing installed there: the agent
+# stays local, the daemon owns the connection, and every command is a recorded
+# block a human can read, approve, stop or take over. No table = feature off.
+# See docs/ssh-sessions.md.
+#
+# `alias` is an SSH config alias or hostname. Optional `port` and `identity_file`
+# override SSH settings; key contents stay with SSH. Host keys, passphrases
+# and MFA are answered by you in the terminal tab; the
+# agent never sees them.
+#
+# Lola does NOT filter commands. The restricted `user` is the real limit on what
+# a command can do, so use one. Everything the agent reads goes to its model
+# provider. For an UNSANDBOXED agent the approval gate stops accidents and
+# well-behaved agents, not a determined one, because it runs as you. That is why
+# production refuses unsandboxed agents by default.
+#
+# [[ssh_host]]
+# # alias: required. What ssh connects to.
+# alias = "prod-web-1"
+# # name: the id agents and the CLI use (default: alias). label: free display text.
+# name = "prod-web"
+# label = "Production web 1"
+# # user: an optional restricted remote user (default: whatever ssh config says).
+# user = "lola-ro"
+# # tier: production | staging | dev. Empty or unknown reads as production.
+# #   production  every command is approved one at a time, no grants, and an
+# #               unsandboxed agent is refused unless allow_unsandboxed = true.
+# #   staging/dev a human may also open a time-limited grant while approving.
+# tier = "production"
+# # allow_unsandboxed: accept an unsandboxed agent on a production host.
+# allow_unsandboxed = false
+# # sandbox: how the agent of a DIRECT session (`lola ssh open`) runs: docker, none,
+# # or empty for the default. Empty means docker on production when [sandbox].image
+# # and lola_bin are set, and on the host below production. The container mounts
+# # only the session's scratch folder: no repository and no $HOME.
+# sandbox = ""
+# # agent: the coding agent of a direct session (default: [defaults].agent).
+# agent = "claude"
+# # default_cwd: remote directory for a command that names none (default: login dir).
+# default_cwd = "/var/www/app"
+# # grant_max_minutes: the longest grant. 0 = the tier's default (staging 30, dev
+# # 120), -1 = no grants. Must not be positive on production.
+# grant_max_minutes = 0
+# # Limits. 0 or absent means the value shown.
+# command_timeout_seconds = 120
+# max_command_timeout_seconds = 900
+# output_cap_kb = 1024            # stored per stream; the tail is always kept
+# control_persist_seconds = 900   # how long an idle master lingers after its last client
+# connect_wait_seconds = 300      # time allowed for passphrase and MFA
+# approval_timeout_seconds = 1800 # a command nobody answers expires, unrun

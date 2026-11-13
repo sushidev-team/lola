@@ -16,6 +16,12 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/devtab"
+	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/sshtab"
+	"github.com/sushidev-team/lola/internal/tmux"
 )
 
 // TermService bridges lola's isolated tmux server (tmux -L lola) to the webview.
@@ -141,6 +147,13 @@ func (t *TermService) CaptureMany(names []string, lines int) map[string]string {
 // without it, so neither can ever create or kill an agent session by mistake.
 const shellMarker = "-shell"
 
+// reviewMarker is the suffix of a session's REVIEW pane ("<id>-review"), the
+// tmux session a visible review pass runs in (internal/daemon/reviewvisible.go).
+// The daemon owns its lifetime — it opens the pane, and it holds it open after
+// the pass so the findings stay readable — so the app never CREATES one; it only
+// lists it as a tab beside the shells and may close it like any other tab.
+const reviewMarker = "-review"
+
 // Shell ensures the named shell tmux session exists, rooted in worktree, and
 // returns its name so the frontend can Attach to it exactly like the agent pane.
 // The desktop equivalent of the TUI's shell. The frontend owns the name (and its
@@ -165,15 +178,53 @@ func (t *TermService) Shell(shell, worktree string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// -d creates it detached (the frontend attaches via Attach); an empty command
-	// starts the user's default shell in -c worktree, mirroring internal/tmux's
-	// NewSession. No per-session set-option: the shell inherits the same server
-	// defaults (mouse, etc.) the agent panes use, so both tabs scroll identically.
+	// The scroll defaults FIRST, exactly as the CLI's (*tmux.Client).NewSession
+	// applies them (see its doc comment): tmux reads history-limit when a pane is
+	// created, and a shell tab can be the session that starts a cold server — a
+	// session whose agent pane died takes the whole server with it, and its shell
+	// tab would then be born with tmux's 2000-line default.
+	coldServer := t.configureServer(ctx, bin) != nil
+	// -d creates it detached (the frontend attaches via Attach); the trailing
+	// command starts the user's default shell with the worktree's .lola/env
+	// exported, the same line the agent pane and the TUI's shell tabs use — a
+	// bare login shell would silently lack [[project]].env. No per-session
+	// set-option: the shell inherits the same server defaults (mouse, etc.) the
+	// agent panes use, so both tabs scroll identically.
+	home, err := config.Home()
+	if err != nil {
+		return "", err
+	}
+	command := lolaenv.SessionShellCommand(home, strings.Split(shell, shellMarker)[0])
 	if out, err := exec.CommandContext(ctx, bin, "-L", "lola", "new-session", "-d",
-		"-s", shell, "-c", worktree).CombinedOutput(); err != nil {
+		"-s", shell, "-c", worktree, command).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("new shell %s: %w: %s", shell, err, out)
 	}
+	if coldServer {
+		_ = t.configureServer(ctx, bin) // nothing existed to configure before; there is now
+	}
 	return shell, nil
+}
+
+// configureServer applies lola's scroll defaults to the lola tmux server, the
+// app-side twin of (*tmux.Client).ConfigureServer — same two options, same
+// source: [tmux].scrollback and [tmux].mouse, so both surfaces agree and mouse
+// mode is decided by config rather than by the machine's ~/.tmux.conf. An
+// unreadable config falls back to lola's own defaults rather than leaving
+// tmux's. Best-effort — the error is returned only so the caller can tell a COLD
+// server (nothing to set an option on yet) from a configured one.
+func (t *TermService) configureServer(ctx context.Context, bin string) error {
+	lines, mouse := tmux.DefaultScrollback, "off"
+	if path, err := config.DefaultPath(); err == nil {
+		if cfg, err := config.Load(path); err == nil {
+			lines = cfg.Tmux.ScrollbackLines()
+			if cfg.Tmux.Mouse {
+				mouse = "on"
+			}
+		}
+	}
+	return exec.CommandContext(ctx, bin, "-L", "lola",
+		"set-option", "-g", "history-limit", strconv.Itoa(lines), ";",
+		"set-option", "-g", "mouse", mouse).Run()
 }
 
 // hasSession reports whether the lola tmux server already has an exactly-named
@@ -184,10 +235,15 @@ func (t *TermService) hasSession(bin, name string) bool {
 	return exec.CommandContext(ctx, bin, "-L", "lola", "has-session", "-t", "="+name).Run() == nil
 }
 
-// Shells lists a lola session's shell tmux sessions ("<id>-shell-N") on the lola
-// server, sorted by their trailing index. Both the app and the TUI discover the
-// SAME sessions, so a shell opened in either shows up as a tab in the other. An
-// empty result (or a tmux error) simply means no shells.
+// Shells lists a lola session's auxiliary tmux sessions on the lola server: its
+// dev tabs ("<id>-dev-N", the project's dev_commands — the daemon owns their
+// lifetime, see internal/daemon/dev.go), then its shells ("<id>-shell-N", sorted
+// by their trailing index), then its review pane ("<id>-review") when a visible
+// review pass has opened one. Both the app
+// and the TUI discover the SAME sessions, so a shell opened in either shows up
+// as a tab in the other — and a review the daemon started shows up in both
+// without either having to be told. An empty result (or a tmux error) simply
+// means no auxiliary sessions.
 func (t *TermService) Shells(sessionID string) []string {
 	bin, err := t.tmux()
 	if err != nil || sessionID == "" {
@@ -200,13 +256,44 @@ func (t *TermService) Shells(sessionID string) []string {
 		return nil // no server / no sessions
 	}
 	prefix := sessionID + shellMarker + "-" // "<id>-shell-"
-	var names []string
+	review := sessionID + reviewMarker      // "<id>-review"
+	var names, devs []string
+	var reviewPane string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// An ssh tab is mounted ONLY inside the SSH workspace, and never joins the
+		// strip: one tmux session with two xterm clients would fight over its size.
+		// Checked first, because a session id may itself end in "-shell-1".
+		if sshtab.Is(line) {
+			continue
+		}
 		if strings.HasPrefix(line, prefix) {
 			names = append(names, line)
+			continue
+		}
+		if devtab.Index(sessionID, line) > 0 {
+			devs = append(devs, line)
+			continue
+		}
+		if line == review {
+			reviewPane = line
 		}
 	}
-	sort.Slice(names, func(i, j int) bool { return shellSessionIndex(sessionID, names[i]) < shellSessionIndex(sessionID, names[j]) })
+	sort.Slice(names, func(i, j int) bool {
+		return shellSessionIndex(sessionID, names[i]) < shellSessionIndex(sessionID, names[j])
+	})
+	sort.Slice(devs, func(i, j int) bool {
+		return devtab.Index(sessionID, devs[i]) < devtab.Index(sessionID, devs[j])
+	})
+	// Dev tabs sort FIRST (right after the agent): they belong to the project
+	// rather than to this session, so they hold their place while shells come
+	// and go — and the shell numbering above them never shifts because it is
+	// computed among shells alone.
+	names = append(devs, names...)
+	// The review pane sorts LAST so the shell numbering above it never shifts
+	// when a review starts or ends.
+	if reviewPane != "" {
+		names = append(names, reviewPane)
+	}
 	return names
 }
 
@@ -235,8 +322,14 @@ func (t *TermService) CloseShell(shell string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(shell, shellMarker) {
+	if !strings.Contains(shell, shellMarker) && !strings.HasSuffix(shell, reviewMarker) && !devtab.Is(shell) {
 		return fmt.Errorf("not a shell session name: %q", shell)
+	}
+	// An ssh tab is the daemon's: closing a connection also has to stop its master
+	// with ssh -O exit, and killing the tab alone would leave an authenticated
+	// connection up behind a UI that says it is gone.
+	if sshtab.Is(shell) {
+		return fmt.Errorf("an ssh tab closes with its connection: %q", shell)
 	}
 	_ = t.Detach(shell)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -256,12 +349,29 @@ type ptyStream struct {
 	pending  []byte
 	closed   bool
 	detached bool // teardown was frontend-initiated (Detach), so no exit event fires
+
+	// scrollMu serializes everything that moves the pane in or out of tmux copy
+	// mode: the enter in Scroll, the flag below, and the cancel in Write/Detach.
+	// It is NOT mu (which guards the byte buffer on the read path) because it is
+	// held across a tmux exec, and it has to be held that long: Wails dispatches
+	// each webview call on its own goroutine, so a keystroke arriving between
+	// "Scroll marked the pane scrolled" and "Scroll actually entered copy mode"
+	// would consume the flag before there was a mode to leave — and the pane
+	// would then sit in copy mode with nothing left to cancel it, swallowing
+	// every later keystroke.
+	scrollMu sync.Mutex
+	// scrolled records that Scroll put this pane into tmux copy mode, so the next
+	// keystroke can leave it first (see Write). It is only ever an over-estimate:
+	// copy mode can also end on its own (`copy-mode -e` exits at the bottom), and
+	// the cancel that clears it is a no-op on a pane that has no mode.
+	scrolled bool
 }
 
 // Attach starts an interactive `tmux attach` to the named session in a PTY sized
 // cols×rows and streams its output to the frontend as base64 chunks on the event
 // `pty:<name>`, coalesced to one emit per ~16ms so a chatty agent can't saturate
-// the webview. Re-attaching an already-live stream tears the old one down first.
+// the webview. Attaching is exclusive: every other live stream (and an older one
+// for this name) is torn down first.
 // Returns the stream ID (the session name) the frontend uses for Write/Resize/
 // Detach and the event subscription.
 func (t *TermService) Attach(name string, cols, rows int) (string, error) {
@@ -275,7 +385,14 @@ func (t *TermService) Attach(name string, cols, rows int) (string, error) {
 	if t.app == nil {
 		return "", errors.New("terminal service not wired to app")
 	}
-	_ = t.Detach(name) // idempotent re-attach
+	// The app shows ONE live terminal at a time, so attaching is EXCLUSIVE:
+	// every other stream is detached first, along with any older stream for
+	// this name (idempotent re-attach). That is what stops the leak, not
+	// bookkeeping. A tmux client the app forgot (a web-view reload never runs
+	// LiveTerminal's onDestroy) still counts as "a human is at this terminal",
+	// so the daemon's automation gate (internal/daemon/autoprompt.go) defers
+	// conflict fixes and review hand-offs for that session forever.
+	t.DetachAll()
 
 	if cols <= 0 {
 		cols = 80
@@ -356,8 +473,89 @@ func (t *TermService) Write(name, data string) error {
 	if s == nil {
 		return nil
 	}
+	// Typing snaps back to the live view, the way every terminal behaves. Without
+	// this, a keystroke after a wheel-scroll is swallowed by tmux's copy mode key
+	// table (where "q" quits, "/" searches and prose does nothing) instead of
+	// reaching the agent — the pane would look wedged. One extra exec, and only
+	// for the FIRST key after a scroll: the flag is cleared here, so a normal
+	// typing burst costs nothing.
+	//
+	// The lock is held ACROSS the write, not just the flag: it both makes the
+	// cancel and the keystroke one step (a concurrent Scroll cannot slip copy
+	// mode in between them) and orders concurrent writes, since each one arrives
+	// on its own Wails goroutine.
+	s.scrollMu.Lock()
+	defer s.scrollMu.Unlock()
+	if s.scrolled {
+		s.scrolled = false
+		t.cancelCopyMode(name)
+	}
 	_, err := s.f.Write([]byte(data))
 	return err
+}
+
+// cancelCopyMode leaves copy mode on the pane (a no-op when it has no mode).
+// Best-effort: a failure here costs a keystroke's worth of confusion, never the
+// keystroke itself, so the caller writes regardless.
+func (t *TermService) cancelCopyMode(name string) {
+	bin, err := t.tmux()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = t.scrollClient(bin).LeaveCopyMode(ctx, name)
+}
+
+// Scroll moves the named pane's view back through its history: lines > 0 scrolls
+// BACK (up), lines < 0 forward again, zero is a no-op. It is the whole reason a
+// lola terminal scrolls in the app: `tmux attach` runs on the alternate screen,
+// so xterm.js has no scrollback of its own and its fallback for that case turns
+// the wheel into cursor keys — which walks the AGENT's input history instead of
+// scrolling anything.
+//
+// The work is (*tmux.Client).ScrollPane's, shared with the TUI, and it is what
+// decides WHICH history to move: the program's own (an agent on the alternate
+// screen keeps its transcript itself and asks for the wheel) or tmux's copy mode
+// (a plain shell). All this needs to know is which one happened, because only
+// copy mode leaves a mode behind for the next keystroke to cancel.
+func (t *TermService) Scroll(name string, lines int) error {
+	bin, err := t.tmux()
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return errors.New("empty session name")
+	}
+	if lines == 0 {
+		return nil
+	}
+	t.mu.Lock()
+	s := t.streams[name]
+	t.mu.Unlock()
+	if s != nil {
+		// Held across the exec below, so a keystroke can never consume the flag
+		// before the pane is actually in copy mode (see ptyStream.scrollMu).
+		s.scrollMu.Lock()
+		defer s.scrollMu.Unlock()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	how, err := t.scrollClient(bin).ScrollPane(ctx, name, lines)
+	if s != nil {
+		s.scrolled = how == tmux.ScrollCopyMode
+	}
+	if err != nil {
+		return fmt.Errorf("scroll %s: %w", name, err)
+	}
+	return nil
+}
+
+// scrollClient is the tmux client the scroll path runs through. The socket is
+// the hardcoded "lola" every other exec in this file uses, NOT [tmux].socket_name
+// — the app attaches to that server, so a scroll must address the same one.
+func (t *TermService) scrollClient(bin string) *tmux.Client {
+	return &tmux.Client{Bin: bin, SocketName: "lola"}
 }
 
 // Resize propagates an xterm resize to the PTY so the remote app reflows. Like
@@ -399,8 +597,35 @@ func (t *TermService) Detach(name string) error {
 	s.mu.Lock()
 	s.detached = true
 	s.mu.Unlock()
+	// Hand the pane back live. Copy mode is a property of the PANE, not of this
+	// client, so a terminal closed while scrolled back would leave the agent's
+	// output piling up behind a frozen view for whoever looks next.
+	s.scrollMu.Lock()
+	if s.scrolled {
+		s.scrolled = false
+		t.cancelCopyMode(name)
+	}
+	s.scrollMu.Unlock()
 	t.closeStream(s)
 	return nil
+}
+
+// DetachAll closes every live PTY stream. The frontend calls it once on boot:
+// a page load starts with no LiveTerminal mounted, so any stream still open was
+// left behind by the previous page (a reload or a dev-server HMR never runs
+// onDestroy) and is holding a tmux client nobody is looking at. Without it those
+// orphans would last until the next Attach, and the daemon defers every
+// automatic prompt to a session with a client attached.
+func (t *TermService) DetachAll() {
+	t.mu.Lock()
+	names := make([]string, 0, len(t.streams))
+	for n := range t.streams {
+		names = append(names, n)
+	}
+	t.mu.Unlock()
+	for _, n := range names {
+		_ = t.Detach(n)
+	}
 }
 
 // endStream is the read-loop's teardown path (PTY EOF/error): drop the registry

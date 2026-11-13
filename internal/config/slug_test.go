@@ -92,3 +92,37 @@ func TestDisplayNameForUnknownProject(t *testing.T) {
 		t.Errorf("DisplayNameFor(unknown) = %q, want the id back", got)
 	}
 }
+
+// A picked folder becomes a readable label, and that label slugs BACK to the
+// folder name — so choosing a directory fills both the display name and an id
+// that still matches what is on disk.
+func TestLabelFromPath(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/Users/me/code/nori-app", "Nori App"},
+		{"/Users/me/code/nori_app", "Nori App"},
+		{"nori-app/", "Nori App"},
+		{"/Users/me/code/web", "Web"},
+		{"/Users/me/code/acme.web", "Acme Web"},
+		// Already-capitalized words are the human's own casing; keep them.
+		{"/Users/me/code/NoriApp", "NoriApp"},
+		{"/Users/me/code/iOS-client", "iOS Client"},
+		// A bare clone directory keeps its name, minus the .git suffix.
+		{"/srv/mirrors/web.git", "Web"},
+		{"", ""},
+		{"/", ""},
+	}
+	for _, c := range cases {
+		if got := LabelFromPath(c.in); got != c.want {
+			t.Errorf("LabelFromPath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// The round trip is the point: Slug(LabelFromPath(dir)) is the directory name.
+func TestLabelFromPathRoundTripsThroughSlug(t *testing.T) {
+	for _, dir := range []string{"nori-app", "web", "lola", "internal-tools", "acme2"} {
+		if got := Slug(LabelFromPath("/code/" + dir)); got != dir {
+			t.Errorf("Slug(LabelFromPath(%q)) = %q, want the folder name back", dir, got)
+		}
+	}
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ansiToHtml } from "./ansi";
+import { ansiToHtml, trimTrailingBlankLines, paneColumns } from "./ansi";
 import { FLAVORS, toAnsi } from "./catppuccin";
 
 const mocha = toAnsi(FLAVORS["catppuccin-mocha"]);
@@ -99,5 +99,66 @@ describe("ansiToHtml", () => {
     expect(html).toContain("color:#010203");
     expect(html).not.toContain("<script");
     expect(html).toContain("&lt;script");
+  });
+});
+
+// The grid anchors a snapshot to the bottom of its tile, so tmux's visible-pane
+// padding is no longer harmless: it would be what lands on the floor.
+describe("trimTrailingBlankLines", () => {
+  it("drops trailing empty and whitespace-only lines", () => {
+    expect(trimTrailingBlankLines("a\nb\n\n   \n\n")).toBe("a\nb");
+  });
+
+  it("drops trailing lines that carry only SGR escapes", () => {
+    expect(trimTrailingBlankLines("a\n\x1b[0m\n\x1b[39m   \x1b[0m")).toBe("a");
+  });
+
+  it("keeps blank lines that sit between real output", () => {
+    expect(trimTrailingBlankLines("a\n\nb\n\n")).toBe("a\n\nb");
+  });
+
+  it("leaves a snapshot with no padding untouched, and survives an empty one", () => {
+    expect(trimTrailingBlankLines("only line")).toBe("only line");
+    expect(trimTrailingBlankLines("")).toBe("");
+    expect(trimTrailingBlankLines("\n\n")).toBe("");
+  });
+});
+
+// A tile fits its type to the pane's own width, so what counts as a "column" is
+// load-bearing: an unstripped hyperlink escape would measure as ~80 phantom
+// columns and shrink the whole tile's text.
+describe("OSC handling and paneColumns", () => {
+  const link = "\x1b]8;id=1;https://github.com/o/r/pull/248\x07PR #248\x1b]8;;\x07";
+
+  it("renders an OSC 8 hyperlink as its label, not as the control string", () => {
+    const html = ansiToHtml(link);
+    expect(html).toBe("PR #248");
+    expect(html).not.toContain("]8;");
+    expect(html).not.toContain("github.com");
+  });
+
+  it("accepts the ST-terminated form and a capture-truncated one", () => {
+    expect(ansiToHtml("\x1b]0;title\x1b\\body")).toBe("body");
+    expect(ansiToHtml("a\x1b]8;;https://cut-off-here")).toBe("a");
+  });
+
+  it("keeps SGR colouring around a stripped hyperlink", () => {
+    const html = ansiToHtml("\x1b[31m" + link + "\x1b[0m");
+    expect(html).toContain("color:#f38ba8");
+    expect(html).toContain(">PR #248<");
+  });
+
+  it("measures the widest visible line, ignoring escapes and trailing pad", () => {
+    expect(paneColumns("abc\n\x1b[31mabcdef\x1b[0m   \nxy")).toBe(6);
+    expect(paneColumns(link)).toBe("PR #248".length);
+  });
+
+  it("caps one pathological line so it can't shrink the whole tile", () => {
+    expect(paneColumns("x".repeat(5000))).toBe(220);
+    expect(paneColumns("x".repeat(5000), 100)).toBe(100);
+  });
+
+  it("returns 0 for an empty snapshot", () => {
+    expect(paneColumns("")).toBe(0);
   });
 });

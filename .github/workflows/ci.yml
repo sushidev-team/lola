@@ -40,22 +40,23 @@ jobs:
       # once `wails3 task ios` generates the rest). It isn't app code and can't
       # be built standalone, so exclude it from the generic Go steps.
       #
-      # internal/tui and internal/vtterm run WITHOUT -race: their terminal-embed
-      # tests spin up a real charmbracelet/x/vt emulator, which races on its own
-      # unguarded `closed` bool between Emulator.Close() and the lock-free
-      # SafeEmulator.Read() (an upstream defect, benign — a monotonic set-once
-      # flag — that lola cannot guard from outside the dependency). The only
-      # -race-relevant code in those packages is that upstream-blocked lifecycle,
-      # so they still run here, just not race-instrumented.
+      # EVERY package runs under -race, internal/tui and internal/vtterm
+      # included. They were excluded while vtterm called vt.Emulator.Close(),
+      # which writes an unguarded `closed` bool that the lock-free
+      # SafeEmulator.Read() reads — an upstream defect lola cannot lock from
+      # outside, since Read blocks and a mutex around the pair would deadlock
+      # Close against the read it is releasing. vtterm now closes the emulator's
+      # input pipe directly instead (see Term.closeEmulatorInput), which is what
+      # actually unblocks that read and never touches the flag, so the race is
+      # gone rather than merely unobserved. Keeping the exclusion would matter
+      # more than it used to: internal/panebus runs a vtterm.Term per pane
+      # INSIDE the daemon and closes one on every pane teardown, so that
+      # lifecycle is now on the daemon's own path.
       - name: packages
         id: pkgs
         run: |
           list=$(go list ./... | grep -v '/desktop/build/')
-          {
-            echo "list=$(echo "$list" | tr '\n' ' ')"
-            echo "race=$(echo "$list" | grep -vE '/internal/(tui|vtterm)$' | tr '\n' ' ')"
-            echo "norace=$(echo "$list" | grep -E '/internal/(tui|vtterm)$' | tr '\n' ' ')"
-          } >> "$GITHUB_OUTPUT"
+          echo "list=$(echo "$list" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
 
       - name: go vet
         run: go vet ${{ steps.pkgs.outputs.list }}
@@ -64,7 +65,17 @@ jobs:
         run: go build ${{ steps.pkgs.outputs.list }}
 
       - name: test (race)
-        run: go test -race -count=1 ${{ steps.pkgs.outputs.race }}
+        run: go test -race -count=1 ${{ steps.pkgs.outputs.list }}
 
-      - name: test (tui/vtterm, no race — upstream x/vt closed-flag race)
-        run: go test -count=1 ${{ steps.pkgs.outputs.norace }}
+      # The lola_insecure half of the M1 remote listener compiles ONLY under its
+      # build tag, so nothing above touches it: the insecure authorizer, the
+      # daemon wiring that starts a listener and their tests are all invisible
+      # to an untagged run. Without this step that path can rot silently, and it
+      # is the path that decides whether a bearer key can reach a socket at all.
+      # The untagged build stays the one that ships — `go tool nm` on it finds
+      # none of these symbols — which is exactly why both have to be green.
+      - name: build/vet/test (lola_insecure)
+        run: |
+          go build -tags lola_insecure ${{ steps.pkgs.outputs.list }}
+          go vet -tags lola_insecure ${{ steps.pkgs.outputs.list }}
+          go test -race -count=1 -tags lola_insecure ${{ steps.pkgs.outputs.list }}

@@ -48,6 +48,27 @@ func shiftTabKey() tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 }
 
+// tabTo presses `tab` until the named tab is active, and fails if it never is.
+// Tests about what a tab CONTAINS must not also encode how many tabs precede it
+// — inserting one (Linear) silently broke two such tests, which is exactly the
+// kind of failure that says nothing about the change that caused it. Returns the
+// tea.Cmd of the press that landed, so a test can still assert the arrival's
+// side effect (the label load).
+func tabTo(t *testing.T, f *settingsForm, want settingsTab) tea.Cmd {
+	t.Helper()
+	var cmd tea.Cmd
+	for range settingsTabs {
+		if f.tab == want {
+			return cmd
+		}
+		cmd, _ = f.update(keyMsg("tab"))
+	}
+	if f.tab != want {
+		t.Fatalf("tab %v never reached (stopped on %v)", want, f.tab)
+	}
+	return cmd
+}
+
 // focusField moves the cursor onto the named field, switching to whichever tab
 // owns it. f.cursor is TAB-RELATIVE, so a bare index into f.fields is not a
 // valid cursor.
@@ -80,17 +101,17 @@ func TestSettingsFormPrefillAndSave(t *testing.T) {
 		t.Errorf("poll_interval prefill = %q, want 1m0s", got)
 	}
 	// The watch provider's author pre-fills the effective default when unset.
-	if got := f.field("pv_watch_author").text; got != config.DefaultCodeRabbitAuthor {
+	if got := f.field(pvKey("coderabbit-watch", "author")).text; got != config.DefaultCodeRabbitAuthor {
 		t.Errorf("pv_watch_author prefill = %q, want %q", got, config.DefaultCodeRabbitAuthor)
 	}
 
 	// Turn the watch on, set a custom author, and enable notify + send.
-	f.field("pv_watch_enabled").b = true
-	f.field("pv_watch_notify").b = true
-	f.field("pv_watch_send").b = true
-	f.field("pv_watch_author").text = "sonarcloud"
+	f.field(pvKey("coderabbit-watch", "enabled")).b = true
+	f.field(pvKey("coderabbit-watch", "notify")).b = true
+	f.field(pvKey("coderabbit-watch", "send")).b = true
+	f.field(pvKey("coderabbit-watch", "author")).text = "sonarcloud"
 	// Also enable the coderabbit-cli provider and bump the global cap.
-	f.field("pv_cli_enabled").b = true
+	f.field(pvKey("coderabbit-cli", "enabled")).b = true
 	f.field("global_cap").text = "8"
 
 	if ev := f.save(); ev != settingsFormSaved {
@@ -145,10 +166,7 @@ func TestSettingsFormTabsFilterFields(t *testing.T) {
 	}
 
 	// tab → Project defaults.
-	_, _ = f.update(keyMsg("tab"))
-	if f.tab != stProjectDefaults {
-		t.Fatalf("tab must advance to Project defaults, got %v", f.tab)
-	}
+	tabTo(t, f, stProjectDefaults)
 	out = f.view()
 	if !strings.Contains(out, "Branch prefix") || !strings.Contains(out, "Match mode") {
 		t.Errorf("Project defaults tab must show its fields:\n%s", out)
@@ -157,13 +175,23 @@ func TestSettingsFormTabsFilterFields(t *testing.T) {
 		t.Errorf("Project defaults tab must not show the Defaults fields:\n%s", out)
 	}
 
-	// shift+tab back, then wrap backwards past the first tab onto the last.
-	// Derived from settingsTabs rather than named, so adding a tab doesn't break
-	// a test about WRAPPING.
-	lastTab := settingsTabs[len(settingsTabs)-1].tab
+	// shift+tab steps BACK one tab...
 	_, _ = f.update(shiftTabKey())
+	if f.tab == stProjectDefaults {
+		t.Fatalf("shift+tab must move off Project defaults, got %v", f.tab)
+	}
+	// ...then wrap backwards past the first tab onto the last. Both the walk to
+	// the first tab and the last tab's identity are derived from settingsTabs,
+	// so adding a tab doesn't break a test about WRAPPING.
+	lastTab := settingsTabs[len(settingsTabs)-1].tab
+	for range settingsTabs {
+		if f.tab == stDefaults {
+			break
+		}
+		_, _ = f.update(shiftTabKey())
+	}
 	if f.tab != stDefaults {
-		t.Fatalf("shift+tab must go back to Defaults, got %v", f.tab)
+		t.Fatalf("shift+tab must reach Defaults, got %v", f.tab)
 	}
 	_, _ = f.update(shiftTabKey())
 	if f.tab != lastTab {
@@ -389,7 +417,7 @@ func TestSettingsFormBoolToggleViaKeys(t *testing.T) {
 	m := newTestRoot(t)
 	f := newSettingsForm(m.cfgPath, m.cfg)
 
-	focusField(t, f, "pv_watch_enabled")
+	focusField(t, f, pvKey("coderabbit-watch", "enabled"))
 	before := f.cur().b
 	_, _ = f.update(keyMsg(" "))
 	if f.cur().b == before {
@@ -400,7 +428,7 @@ func TestSettingsFormBoolToggleViaKeys(t *testing.T) {
 func TestSettingsFormRejectsBadInt(t *testing.T) {
 	m := newTestRoot(t)
 	f := newSettingsForm(m.cfgPath, m.cfg)
-	f.field("pv_cli_timeout").text = "abc"
+	f.field(pvKey("coderabbit-cli", "timeout")).text = "abc"
 
 	if ev := f.save(); ev != settingsFormNone || f.err == "" {
 		t.Fatalf("bad int must abort save with an error, got ev=%v err=%q", ev, f.err)
@@ -480,21 +508,25 @@ func TestSettingsFormOnlyDigitsInIntField(t *testing.T) {
 
 // The three review provider KINDS share ONE tab as distinct, indented
 // subsections — so they read as one integration but are never mistaken for each
-// other. No top-level section header: the tab title already says Review, and
+// other. A Providers section distinguishes the catalog from specialist profiles;
 // each subsection names its own provider kind.
 func TestSettingsFormDistinguishesReviewProviders(t *testing.T) {
 	m := newTestRoot(t)
 	f := newSettingsForm(m.cfgPath, m.cfg)
-	cli := f.field("pv_cli_enabled")
-	watch := f.field("pv_watch_enabled")
-	claude := f.field("pv_claude_enabled")
+	cli := f.field(pvKey("coderabbit-cli", "enabled"))
+	watch := f.field(pvKey("coderabbit-watch", "enabled"))
+	claude := f.field(pvKey("claude-session", "enabled"))
 
 	for _, fld := range []*setField{cli, watch, claude} {
 		if fld.tab != stCodeRabbit {
 			t.Errorf("every provider belongs on the Review tab, got %v for %q", fld.tab, fld.key)
 		}
-		if fld.section != "" {
-			t.Errorf("the tab title replaces the section header, got %q for %q", fld.section, fld.key)
+		wantSection := ""
+		if fld == cli {
+			wantSection = "Providers"
+		}
+		if fld.section != wantSection {
+			t.Errorf("provider section = %q, want %q", fld.section, wantSection)
 		}
 		if !fld.indent {
 			t.Errorf("every provider subsection must be indented, got %q not indented", fld.key)
@@ -531,25 +563,40 @@ func TestSettingsFormWatchOmitsGithubAndFallback(t *testing.T) {
 		}
 		return out
 	}
-	if got := tokens(f.field("pv_cli_transports").choices); !slices.Contains(got, "github") {
+	if got := tokens(f.field(pvKey("coderabbit-cli", "transports")).choices); !slices.Contains(got, "github") {
 		t.Errorf("coderabbit-cli transports must offer github, got %v", got)
 	}
-	if got := tokens(f.field("pv_watch_transports").choices); slices.Contains(got, "github") {
+	if got := tokens(f.field(pvKey("coderabbit-watch", "transports")).choices); slices.Contains(got, "github") {
 		t.Errorf("coderabbit-watch transports must NOT offer github, got %v", got)
 	}
-	if f.field("pv_watch_transports").choices == nil {
+	if f.field(pvKey("coderabbit-watch", "transports")).choices == nil {
 		t.Error("watch must still offer a transports picker (lola/linear)")
 	}
 	// The watch has no fallback field at all.
-	if f.field("pv_watch_fallback") != nil {
+	if f.field(pvKey("coderabbit-watch", "fallback")) != nil {
 		t.Error("coderabbit-watch must not have a fallback field")
 	}
-	// A pass provider's fallback offers the OTHER pass kind, never itself or the watch.
-	if got := tokens(f.field("pv_cli_fallback").choices); !slices.Equal(got, []string{"claude-session"}) {
-		t.Errorf("coderabbit-cli fallback must offer [claude-session], got %v", got)
-	}
-	if got := tokens(f.field("pv_claude_fallback").choices); !slices.Equal(got, []string{"coderabbit-cli"}) {
-		t.Errorf("claude-session fallback must offer [coderabbit-cli], got %v", got)
+	// A pass provider's fallback offers every OTHER pass kind, never itself and
+	// never a watch (which cannot classify over-quota).
+	for _, self := range config.ReviewProviderPassKinds() {
+		got := tokens(f.field(pvKey(self, "fallback")).choices)
+		if slices.Contains(got, self) {
+			t.Errorf("%s fallback must not offer itself, got %v", self, got)
+		}
+		for _, k := range got {
+			if config.IsWatchKind(k) {
+				t.Errorf("%s fallback must not offer the watch kind %q, got %v", self, k, got)
+			}
+		}
+		var want []string
+		for _, k := range config.ReviewProviderPassKinds() {
+			if k != self {
+				want = append(want, k)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s fallback = %v, want %v", self, got, want)
+		}
 	}
 }
 
@@ -570,10 +617,10 @@ func TestSettingsFormLegacyReviewMigrates(t *testing.T) {
 	}
 	// Edits are suppressed while read-only.
 	f.tab = stCodeRabbit
-	focusField(t, f, "pv_cli_enabled")
-	before := f.field("pv_cli_enabled").b
+	focusField(t, f, pvKey("coderabbit-cli", "enabled"))
+	before := f.field(pvKey("coderabbit-cli", "enabled")).b
 	_, _ = f.update(keyMsg(" "))
-	if f.field("pv_cli_enabled").b != before {
+	if f.field(pvKey("coderabbit-cli", "enabled")).b != before {
 		t.Error("read-only Review tab must not toggle a field")
 	}
 	// m migrates.
@@ -594,7 +641,7 @@ func TestSettingsFormLegacyReviewMigrates(t *testing.T) {
 		t.Errorf("migration must synthesize both providers, got %d", len(reloaded.ReviewProviders))
 	}
 	// The editor now reflects the catalog and is editable.
-	if !f.field("pv_cli_enabled").b || !f.field("pv_watch_enabled").b {
+	if !f.field(pvKey("coderabbit-cli", "enabled")).b || !f.field(pvKey("coderabbit-watch", "enabled")).b {
 		t.Error("migrated providers must show enabled in the editor")
 	}
 }
@@ -802,9 +849,9 @@ func TestSettingsFormEnablingFlipsDependentSinks(t *testing.T) {
 		master string
 		deps   []string
 	}{
-		{"pv_cli_enabled", []string{"pv_cli_onpropen", "pv_cli_notify", "pv_cli_send"}},
-		{"pv_watch_enabled", []string{"pv_watch_notify", "pv_watch_send"}},
-		{"pv_claude_enabled", []string{"pv_claude_onpropen", "pv_claude_notify", "pv_claude_send"}},
+		{pvKey("coderabbit-cli", "enabled"), []string{pvKey("coderabbit-cli", "onpropen"), pvKey("coderabbit-cli", "notify"), pvKey("coderabbit-cli", "send")}},
+		{pvKey("coderabbit-watch", "enabled"), []string{pvKey("coderabbit-watch", "notify"), pvKey("coderabbit-watch", "send")}},
+		{pvKey("claude-session", "enabled"), []string{pvKey("claude-session", "onpropen"), pvKey("claude-session", "notify"), pvKey("claude-session", "send")}},
 		{"brain_enabled", []string{"brain_esc", "brain_appr"}},
 	}
 	for _, tc := range cases {
@@ -1342,10 +1389,7 @@ func TestSettingsFormLoadsLabelNamesOnTabSwitch(t *testing.T) {
 	}
 
 	// stDefaults -> stProjectDefaults
-	cmd, _ := f.update(keyMsg("tab"))
-	if f.tab != stProjectDefaults {
-		t.Fatalf("tab = %v, want the project-defaults tab", f.tab)
-	}
+	cmd := tabTo(t, f, stProjectDefaults)
 	if cmd == nil || !f.wsLoading {
 		t.Fatalf("landing on the tab must start the label load (cmd=%v loading=%v)", cmd, f.wsLoading)
 	}
@@ -1555,5 +1599,329 @@ func TestSettingsFormRejectsBadConfidence(t *testing.T) {
 	f.field("sa_confidence").text = "1.5"
 	if ev := f.save(); ev == settingsFormSaved {
 		t.Fatal("save accepted an out-of-range confidence (Validate must reject)")
+	}
+}
+
+// --- [linear] API key -------------------------------------------------------
+//
+// The key was settable only in `lola setup`: a hand-written config could never
+// gain one, and rotating a key meant editing the Keychain by hand — while a
+// daemon without a key fails every poll. These pin the field's contract.
+
+// stubKeychain replaces the keychain write for a test and records what it got.
+func stubKeychain(t *testing.T, fail bool) *struct{ service, key string } {
+	t.Helper()
+	got := &struct{ service, key string }{}
+	orig := storeLinearKey
+	storeLinearKey = func(service, key string) error {
+		got.service, got.key = service, key
+		if fail {
+			return errors.New("keychain unavailable")
+		}
+		return nil
+	}
+	t.Cleanup(func() { storeLinearKey = orig })
+	return got
+}
+
+// The field starts EMPTY on every open, because the key is never read back out
+// of the keychain. An untouched Linear tab must therefore write nothing at all.
+func TestSettingsFormLinearKeyStartsEmptyAndSavesNothing(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	if got := f.field("linear_key").text; got != "" {
+		t.Fatalf("linear_key must open empty, got %q", got)
+	}
+	got := stubKeychain(t, false)
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save() = %v, want saved", ev)
+	}
+	if got.key != "" {
+		t.Errorf("an untouched key field must not write the keychain, got %q", got.key)
+	}
+	saved, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Linear.APIKeyKeychain != "" || saved.Linear.APIKeyEnv != "" {
+		t.Errorf("no key source may be written for an untouched field: %+v", saved.Linear)
+	}
+}
+
+// A typed key goes to the KEYCHAIN, and config records only the source's NAME.
+func TestSettingsFormLinearKeyStoresToKeychain(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	kc := stubKeychain(t, false)
+
+	focusField(t, f, "linear_key")
+	f.paste("lin_api_secret")
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save() = %v (err=%q), want saved", ev, f.err)
+	}
+
+	if kc.service != setupKeychainService || kc.key != "lin_api_secret" {
+		t.Errorf("keychain got service=%q key=%q, want %q / the typed key", kc.service, kc.key, setupKeychainService)
+	}
+	saved, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Linear.APIKeyKeychain != setupKeychainService {
+		t.Errorf("api_key_keychain = %q, want %q", saved.Linear.APIKeyKeychain, setupKeychainService)
+	}
+	// The whole point of the keychain: the VALUE must never reach the file.
+	raw, err := os.ReadFile(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "lin_api_secret") {
+		t.Fatalf("the key value leaked into config.toml:\n%s", raw)
+	}
+	// And it must not survive in the form either.
+	if got := f.field("linear_key").text; got != "" {
+		t.Errorf("the key field must be cleared after save, got %q", got)
+	}
+}
+
+// No keychain (non-darwin, a locked login keychain) must still leave a WORKING
+// configuration — an env var by name — and say so, because the user then has to
+// export it themselves.
+func TestSettingsFormLinearKeyFallsBackToEnvVar(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	stubKeychain(t, true)
+
+	focusField(t, f, "linear_key")
+	f.paste("lin_api_secret")
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save() = %v (err=%q), want saved", ev, f.err)
+	}
+	saved, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Linear.APIKeyEnv != setupEnvVar {
+		t.Errorf("api_key_env = %q, want %q", saved.Linear.APIKeyEnv, setupEnvVar)
+	}
+	if !strings.Contains(f.savedNote, setupEnvVar) {
+		t.Errorf("savedNote must name the env var to export, got %q", f.savedNote)
+	}
+}
+
+// The pane's scrollback is captured by lola's own attention parser, so the key
+// must never be rendered as characters.
+func TestSettingsFormLinearKeyRendersMasked(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	focusField(t, f, "linear_key")
+	f.paste("lin_api_secret")
+
+	out := f.view()
+	if strings.Contains(out, "lin_api_secret") {
+		t.Fatalf("the key must not be rendered:\n%s", out)
+	}
+	if !strings.Contains(out, "••") {
+		t.Errorf("expected a masked value:\n%s", out)
+	}
+}
+
+// The Review tab's fields are GENERATED per kind and read back by key, so the
+// generator and the save builder must agree exactly. This asserts every key the
+// builder can read exists — a divergence would nil-deref f.field() on save
+// rather than being caught by the type checker.
+func TestSettingsFormProviderKeysMatchTheSaveBuilder(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	for _, kind := range config.ReviewProviderKinds() {
+		want := []string{"enabled", "notify", "send", "transports"}
+		if config.IsCLIKind(kind) {
+			want = append(want, "command", "baseflag")
+		}
+		if _, isAgent := config.ReviewAgentFor(kind); isAgent {
+			want = append(want, "model")
+		}
+		if config.IsWatchKind(kind) {
+			want = append(want, "author")
+		} else {
+			want = append(want, "timeout", "onpropen", "visible", "inline", "fallback")
+		}
+		for _, name := range want {
+			if f.field(pvKey(kind, name)) == nil {
+				t.Errorf("%s: the save builder reads %q but no field generates it", kind, pvKey(kind, name))
+			}
+		}
+		// ...and the reverse: a field a kind does NOT have must not exist, or the
+		// editor would offer a knob that is silently dropped on save.
+		absent := []string{}
+		if !config.IsCLIKind(kind) {
+			absent = append(absent, "command", "baseflag")
+		}
+		if _, isAgent := config.ReviewAgentFor(kind); !isAgent {
+			absent = append(absent, "model")
+		}
+		if config.IsWatchKind(kind) {
+			absent = append(absent, "timeout", "onpropen", "visible", "inline", "fallback")
+		} else {
+			absent = append(absent, "author")
+		}
+		for _, name := range absent {
+			if f.field(pvKey(kind, name)) != nil {
+				t.Errorf("%s: field %q exists but that kind has no such setting", kind, pvKey(kind, name))
+			}
+		}
+	}
+}
+
+// Enabling a provider in the editor must turn its dependent sinks on, exactly as
+// resolving `enabled = true` alone would — for EVERY kind, so a new one is not
+// silently inert.
+func TestSettingsFormEnableDefaultsCoverEveryKind(t *testing.T) {
+	for _, kind := range config.ReviewProviderKinds() {
+		deps, ok := enableDefaults[pvKey(kind, "enabled")]
+		if !ok {
+			t.Errorf("%s: no enableDefaults entry", kind)
+			continue
+		}
+		want := []string{pvKey(kind, "notify"), pvKey(kind, "send")}
+		if !config.IsWatchKind(kind) {
+			want = append([]string{pvKey(kind, "onpropen")}, want...)
+		}
+		if !slices.Equal(deps, want) {
+			t.Errorf("%s: enableDefaults = %v, want %v", kind, deps, want)
+		}
+	}
+}
+
+// Saving with a new kind enabled writes a valid catalog entry, so the generated
+// editor really is a working path to the new providers.
+func TestSettingsFormSavesTheNewKinds(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	f.field(pvKey("codex-session", "enabled")).b = true
+	f.field(pvKey("codex-session", "model")).text = "gpt-5.1"
+	f.field(pvKey("custom-cli", "enabled")).b = true
+	f.field(pvKey("custom-cli", "command")).text = "greptile review --plain"
+	f.field(pvKey("custom-cli", "baseflag")).text = "--branch"
+	f.field(pvKey("bot-watch", "enabled")).b = true
+	f.field(pvKey("bot-watch", "author")).text = "greptile-apps"
+
+	if ev := f.save(); ev == settingsFormNone || f.err != "" {
+		t.Fatalf("save failed: ev=%v err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := reloaded.Validate(); err != nil {
+		t.Fatalf("the saved config must validate: %v", err)
+	}
+	byKind := map[string]config.ReviewProvider{}
+	for _, p := range reloaded.ReviewProviders {
+		byKind[p.KindString()] = p
+	}
+	if got := byKind["codex-session"]; got.Model != "gpt-5.1" || got.TimeoutSeconds != config.DefaultClaudeReviewTimeoutSeconds {
+		t.Errorf("codex-session = %+v, want the model and the agent timeout default", got)
+	}
+	if got := byKind["custom-cli"]; got.Command != "greptile review --plain" || got.BaseFlag != "--branch" {
+		t.Errorf("custom-cli = %+v, want its own command + base flag", got)
+	}
+	if got := byKind["bot-watch"]; got.Author != "greptile-apps" {
+		t.Errorf("bot-watch author = %q", got.Author)
+	}
+}
+
+// An enabled generic kind left empty is a validation error, and the form must
+// surface it instead of writing a config the daemon then refuses to load.
+func TestSettingsFormRejectsAnEmptyGenericKind(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	f.field(pvKey("bot-watch", "enabled")).b = true // no author
+
+	if ev := f.save(); ev != settingsFormNone || f.err == "" {
+		t.Fatalf("an enabled bot-watch with no author must abort save, got ev=%v err=%q", ev, f.err)
+	}
+	reloaded, _ := config.Load(m.cfgPath)
+	if len(reloaded.ReviewProviders) != 0 {
+		t.Error("a rejected save must not have written anything")
+	}
+}
+
+// --- [remote], the phone listener -------------------------------------------
+
+func TestSettingsFormSavesTheRemoteListener(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	f.field("remote_enabled").b = true
+	f.field("remote_bind").text = "lan"
+	f.field("remote_port").text = "7800"
+	f.field("remote_insecure_lan").b = true
+	f.field("remote_advertise").b = true
+
+	if ev := f.save(); ev == settingsFormNone || f.err != "" {
+		t.Fatalf("save failed: ev=%v err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := reloaded.Validate(); err != nil {
+		t.Fatalf("the saved config must validate: %v", err)
+	}
+	if got := reloaded.Remote; !got.Enabled || got.Bind != "lan" || got.Port != 7800 || !got.InsecureLAN {
+		t.Errorf("remote = %+v, want enabled on lan:7800 with the LAN opt-in", got)
+	}
+	// The advertisement is reachable from this form because the alternative is
+	// hand-editing config.toml, which is where it lived when it shipped.
+	if !reloaded.Remote.Advertise {
+		t.Error("the local-network advertisement did not survive a save")
+	}
+}
+
+// The bind field is free text rather than a cycled enum precisely so an IP
+// literal survives. An enum could only offer the keywords, so saving any
+// unrelated tab would rewrite a configured literal to a keyword and rebind the
+// daemon to a different set of interfaces — silently.
+func TestSettingsFormKeepsARemoteBindLiteral(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "192.168.1.20", Port: 7717}
+
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	if got := f.field("remote_bind").text; got != "192.168.1.20" {
+		t.Fatalf("the form must load the literal verbatim, got %q", got)
+	}
+
+	// Change something on a DIFFERENT tab, which is the path that used to eat it.
+	f.field("brain_model").text = "sonnet"
+
+	if ev := f.save(); ev == settingsFormNone || f.err != "" {
+		t.Fatalf("save failed: ev=%v err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := reloaded.Remote.Bind; got != "192.168.1.20" {
+		t.Errorf("bind = %q, want the literal preserved", got)
+	}
+}
+
+// A bind the daemon does not accept must be refused by the form, not written
+// out for the daemon to reject on its next load.
+func TestSettingsFormRejectsABadRemoteBind(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	f.field("remote_enabled").b = true
+	f.field("remote_bind").text = "marsmac.local" // a hostname is not resolvable offline
+
+	if ev := f.save(); ev != settingsFormNone {
+		t.Fatalf("save must refuse a hostname bind, got ev=%v", ev)
+	}
+	if f.err == "" {
+		t.Error("the form must say why it refused")
 	}
 }

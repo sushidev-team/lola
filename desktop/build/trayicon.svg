@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="40 34 448 448">
+  <!-- Menu-bar adaptation of appicon-compact.svg: two broad hair locks,
+       smooth limbs and open gaps preserve the runner at about 18pt tall.
+       Regenerate: magick -background none -density 384 trayicon.svg -strip PNG32:trayicon.png -->
+  <g fill="#000">
+    <!-- Flowing hair and crown. Wide gaps replace the original fine streaks. -->
+    <path d="M333 92C354 92 363 96 368 111L350 139L310 135L143 140L304 119L151 100Z"/>
+    <!-- Head, rear arm, torso and bent leg. -->
+    <path d="M343 123C351 118 359 103 368 110L368 130L373 138L367 142C363 155 359 155 347 151C336 158 333 166 332 181C332 198 332 207 319 214C299 224 289 239 276 247C305 260 331 272 347 291C362 308 343 319 321 328C287 341 257 352 245 372C241 379 240 387 233 385C225 382 235 361 238 350L240 338C242 332 253 339 263 333C282 323 293 307 313 303C283 295 244 287 230 267C221 254 226 240 238 230C249 221 260 219 269 205L282 180L302 174L250 168L209 203L207 216C197 223 190 222 184 210L196 197C211 181 231 154 243 150L287 150C307 151 319 147 333 134C329 124 333 118 343 123Z"/>
+    <!-- Extended rear leg, with a single clean ankle and foot. -->
+    <path d="M220 267C229 280 239 287 252 293L207 336C175 355 138 384 113 411C108 418 107 425 101 426C94 425 100 409 104 396L108 380C110 374 119 377 126 374C141 362 149 343 163 332C173 323 185 323 192 314Z"/>
+    <!-- Forward arm: a clear elbow and simplified hand. -->
+    <path d="M341 172L368 214L403 192L405 179C407 175 414 169 418 170C424 174 430 182 426 187L369 236C365 239 360 235 357 231L339 207Z"/>
+  </g>
+</svg>

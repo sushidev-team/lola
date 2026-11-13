@@ -16,10 +16,16 @@ import (
 // party to the Go map and the TypeScript table rather than a restatement of
 // either: a drive-by edit to one of them fails against this list.
 var wantCanvasHex = map[string]string{
-	"catppuccin-latte":     "#e6e9ef",
+	"catppuccin-latte":     "#edf0f7",
 	"catppuccin-frappe":    "#292c3c",
 	"catppuccin-macchiato": "#1e2030",
 	"catppuccin-mocha":     "#181825",
+	"lola-midnight":        "#121624",
+	"github-light":         "#f6f8fa",
+	"solarized-light":      "#eee8d5",
+	"rose-pine-dawn":       "#faf4ed",
+	"gruvbox-light":        "#f2e5bc",
+	"one-light":            "#f1f4fb",
 }
 
 const catppuccinTS = "frontend/src/lib/catppuccin.ts"
@@ -39,7 +45,7 @@ func flavorMantles(t *testing.T) map[string]string {
 	if err != nil {
 		t.Fatalf("read %s: %v", catppuccinTS, err)
 	}
-	pair := regexp.MustCompile(`id:\s*"(catppuccin-[a-z]+)"[\s\S]*?\n\s*mantle:\s*"(#[0-9a-f]{6})"`)
+	pair := regexp.MustCompile(`id:\s*"([a-z][a-z0-9-]+)"[\s\S]*?\n\s*mantle:\s*"(#[0-9a-f]{6})"`)
 	out := map[string]string{}
 	for _, m := range pair.FindAllStringSubmatch(string(src), -1) {
 		if prev, dup := out[m[1]]; dup {

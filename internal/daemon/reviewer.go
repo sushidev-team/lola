@@ -5,9 +5,12 @@ package daemon
 // (review.go) and the [coderabbit] PR-comment watch (coderabbit.go) — into a set
 // of pluggable PROVIDERS, each with:
 //
-//   - a KIND (coderabbit-cli | coderabbit-watch | claude-session) mapping to one
-//     of two execution SHAPES: a sync "pass" (exec, return findings) or a "watch"
-//     (poll the PR for bot comments against a watermark);
+//   - a KIND — one of three FAMILIES, each a swappable slot rather than a fixed
+//     tool: an AGENT pass (claude-session | codex-session | opencode-session),
+//     a CLI pass (coderabbit-cli | custom-cli), or a bot WATCH
+//     (coderabbit-watch | bot-watch) — mapping to one of two execution SHAPES:
+//     a sync "pass" (exec, return findings) or a "watch" (poll the PR for bot
+//     comments against a watermark);
 //   - a set of TRANSPORTS (the sinks its findings route to: notify + agent via
 //     the always-on `lola` transport, plus opt-in `github` and `linear`);
 //   - for pass shapes, an ordered FALLBACK chain of other kinds tried when this
@@ -15,11 +18,12 @@ package daemon
 //
 // The descriptors live on d.reviewProviders (guarded by d.mu), built by
 // setReviewProvidersLocked from the [[review.provider]] catalog OR synthesized
-// from the legacy tables. The raw exec CLIENTS stay single func-field seams
-// (d.reviewRun / d.claudeReviewRun / d.coderabbitComments / d.postPRComment) so
-// the existing fake-install test model keeps working; the descriptor never
-// captures a seam — runReviewChain / runProviderWatch look it up under d.mu AT
-// CALL TIME (late binding), so a fake installed after setup still wins.
+// from the legacy tables. The raw exec CLIENTS live in the per-kind seam map
+// d.passRuns (plus the two single func fields d.coderabbitComments /
+// d.postPRComment) so the existing fake-install test model keeps working; the
+// descriptor never captures a seam — runReviewChain / runProviderWatch look it
+// up under d.mu AT CALL TIME (late binding), so a fake installed after setup
+// still wins.
 //
 // Every invariant of the two legacy features is preserved per kind: fire-once
 // guards (now kind-keyed maps), the sanitize + AtPrompt idle-gate on the worker
@@ -35,11 +39,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/review"
-	"github.com/sushidev-team/lola/internal/reviewclaude"
+	"github.com/sushidev-team/lola/internal/reviewagent"
+	"github.com/sushidev-team/lola/internal/reviewmd"
+	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // provKind is the daemon-side provider kind. It mirrors config's (unexported)
@@ -47,11 +56,22 @@ import (
 // built from the catalog by string conversion.
 type provKind string
 
+// The daemon names ONLY the two kinds it must MATCH ON: the legacy guard keys,
+// which are also the coderabbit-cli fallback-hint and `lola coderabbit` alias
+// targets. Every other kind — and every new one — is driven entirely by its
+// config-side FAMILY (config.ReviewAgentFor / config.IsCLIKind /
+// config.IsWatchKind), so adding a review agent needs no daemon change at all.
+// Resist adding a third: a kind named here is a kind the daemon special-cases.
 const (
 	kindCoderabbitCLI   provKind = "coderabbit-cli"
 	kindCoderabbitWatch provKind = "coderabbit-watch"
-	kindClaudeSession   provKind = "claude-session"
 )
+
+// passRun is the pass-shape exec seam: run provider kind K's review of the
+// worktree at dir against base, for the named session. The session id is passed
+// (rather than derived) because a VISIBLE pass runs in a tmux session named
+// after it — see reviewvisible.go; the direct clients ignore it.
+type passRun func(ctx context.Context, sessionID, worktreeDir, baseBranch string) (string, error)
 
 // provShape is a kind's execution shape.
 type provShape int
@@ -79,11 +99,17 @@ type reviewProvider struct {
 	Enabled     bool
 	OnPROpen    bool                // pass shapes: run on the PR-open transition
 	Transports  config.TransportSet // resolved sinks (always contains lola)
+	Inline      bool                // github: post anchored, resolvable threads (not one comment)
+	Status      bool                // post the verdict as a lola/review/<kind> commit status (reviewgate.go)
 	Notify      bool                // lola: fire the notify sink
 	SendToAgent bool                // lola: fire the worker hand-off
 	Handoff     handoffStyle
 	Fallback    []provKind // ordered chain (pass shapes only)
 	Author      string     // watch only
+	// Unconfigured, when non-empty, says WHY an otherwise-enabled provider was
+	// forced off: a generic kind that names no tool or bot. It is reported once
+	// at startup rather than silently swallowed.
+	Unconfigured string
 	// TimeoutSeconds is the pass provider's own exec bound; it feeds the per-cycle
 	// budget ceiling only (each exec self-bounds via its client), 0 ⇒ default.
 	TimeoutSeconds int
@@ -95,59 +121,138 @@ type reviewProvider struct {
 // from Run and handleReload so enabling/disabling a provider (or changing its
 // command/timeout/transports/fallback) takes effect live.
 //
-// The clients (d.review/d.reviewRun for coderabbit-cli, d.claudeReview/
-// d.claudeReviewRun for claude-session) are rebuilt for EVERY enabled pass
-// provider — including a fallback-only one — so the chain can reach it; a nil
-// seam means that kind's binary is unavailable, which the chain treats as
+// The per-kind exec seams (d.passRuns) are rebuilt for EVERY enabled pass
+// provider — including a fallback-only one — so the chain can reach it; a kind
+// ABSENT from the map means its binary is unavailable, which the chain treats as
 // "can't answer" (advance / skip). The watch fetch seam is stateless and left
 // as wired in newDaemon.
+//
+// The per-kind switch is on the config-side FAMILY, never on a list of kind
+// names, so a new review agent (or a new generic CLI / watch kind) is picked up
+// here with no edit at all.
 func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 	eff := nc.EffectiveReviewProviders()
 
-	// Reset the pass clients; each enabled pass provider rebuilds its own below.
-	d.review, d.reviewRun = nil, nil
-	d.claudeReview, d.claudeReviewRun = nil, nil
+	// Reset the pass seams; each enabled pass provider rebuilds its own below.
+	d.passRuns = map[provKind]passRun{}
+	d.passCommands = map[provKind]string{}
 
 	descs := make([]reviewProvider, 0, len(eff))
 	for _, cp := range eff {
+		kind := provKind(string(cp.Provider))
 		desc := reviewProvider{
-			Kind:           provKind(string(cp.Provider)),
+			Kind:           kind,
 			Enabled:        cp.Enabled,
 			OnPROpen:       cp.OnPROpen,
 			Transports:     cp.Transports,
+			Inline:         cp.GitHubInline,
+			Status:         cp.GitHubStatus,
 			Notify:         cp.Notify,
 			SendToAgent:    cp.SendToAgent,
 			Author:         cp.Author,
 			Fallback:       toDaemonKinds(cp.Fallback),
 			TimeoutSeconds: cp.TimeoutSeconds,
 		}
-		switch desc.Kind {
-		case kindClaudeSession:
-			desc.Shape, desc.Handoff = shapePass, handoffFull
-			if cp.Enabled {
-				if cl := buildClaudeReview(cp); cl != nil {
-					d.claudeReview = cl
-					d.claudeReviewRun = cl.Review
-				}
-			}
-		case kindCoderabbitWatch:
+		// FAIL CLOSED on a generic kind that names nothing. Validation rejects
+		// this, but Validate is NOT fatal at startup (it only holds polls), so a
+		// hand-edited config plus a restart would otherwise reach the runtime —
+		// where both defaults fall back to CodeRabbit: an empty `command` resolves
+		// to the coderabbit binary and an empty watch `author` to "coderabbitai".
+		// A provider the operator pointed at Greptile must never silently run
+		// CodeRabbit instead, so it is disabled and named in the startup warning.
+		if why := unconfiguredKindReason(cp); why != "" {
+			desc.Enabled = false
+			desc.Unconfigured = why
+		}
+		if config.IsWatchKind(string(cp.Provider)) {
 			desc.Shape, desc.Handoff = shapeWatch, handoffPointer
-		default: // coderabbit-cli
-			desc.Shape, desc.Handoff = shapePass, handoffFull
-			if cp.Enabled {
-				if cl := buildReview(config.ReviewConfig{
-					Enabled:        true,
-					Command:        cp.Command,
-					TimeoutSeconds: cp.TimeoutSeconds,
-				}); cl != nil {
-					d.review = cl
-					d.reviewRun = cl.Review
-				}
+			descs = append(descs, desc)
+			continue
+		}
+		desc.Shape, desc.Handoff = shapePass, handoffFull
+		if desc.Enabled {
+			d.passCommands[kind] = passBinaryFor(cp)
+			if direct := buildPassClient(cp); direct != nil {
+				d.passRuns[kind] = d.passSeamFor(cp, ignoreSession(direct))
 			}
 		}
 		descs = append(descs, desc)
 	}
 	d.reviewProviders = descs
+}
+
+// passBinaryFor is the executable a pass provider will actually try to run, so
+// an unavailable-warning can name it. An agent kind resolves its agent's binary;
+// a cli kind resolves the head of its `command` argv, and "" when it has none
+// (coderabbit-cli's built-in default).
+func passBinaryFor(cp config.ReviewProvider) string {
+	if a, isAgent := config.ReviewAgentFor(string(cp.Provider)); isAgent {
+		return agent.Kind(a).Binary()
+	}
+	if argv := (config.ReviewConfig{Command: cp.Command}).CommandArgs(); len(argv) > 0 {
+		return argv[0]
+	}
+	return ""
+}
+
+// unconfiguredKindReason reports why cp cannot run — a generic kind whose one
+// mandatory key is blank — or "" when it is fine. It mirrors
+// config.validateReviewProviders, and exists because that validation is not
+// fatal at startup.
+func unconfiguredKindReason(cp config.ReviewProvider) string {
+	if !cp.Enabled {
+		return "" // a disabled provider names nothing on purpose
+	}
+	kind := string(cp.Provider)
+	// An UNKNOWN kind first: every family predicate is false for one, so it would
+	// otherwise fall through to the cli branch and — with no command of its own —
+	// resolve to the coderabbit binary. A typo'd `greptile-cli` sending its PR to
+	// CodeRabbit is the same silent-wrong-vendor failure the two checks below
+	// exist to prevent, so it fails closed the same way.
+	if !config.ValidReviewProviderKind(kind) {
+		return "unknown provider kind (must be " + strings.Join(config.ReviewProviderKinds(), "|") + ")"
+	}
+	if config.ReviewKindRequiresCommand(kind) && strings.TrimSpace(cp.Command) == "" {
+		return "no command configured (it names the review CLI to run)"
+	}
+	if config.ReviewKindRequiresAuthor(kind) && strings.TrimSpace(cp.Author) == "" {
+		return "no author configured (it names the review bot to relay)"
+	}
+	return ""
+}
+
+// buildPassClient constructs the in-process review client for ONE pass provider,
+// or nil when its binary is not on PATH (the caller then leaves the kind out of
+// the seam map, which the chain reads as "can't answer"). Which client it builds
+// follows the kind's FAMILY: an agent kind gets a reviewagent.Client driving that
+// agent, anything else the cli family's review.Client.
+func buildPassClient(cp config.ReviewProvider) func(ctx context.Context, worktreeDir, baseBranch string) (string, error) {
+	if a, isAgent := config.ReviewAgentFor(string(cp.Provider)); isAgent {
+		if cl := buildAgentReview(a, cp); cl != nil {
+			return cl.Review
+		}
+		return nil
+	}
+	if cl := buildReview(cp); cl != nil {
+		return cl.Review
+	}
+	return nil
+}
+
+// passSeamFor picks how a pass EXECUTES: in its own tmux review pane when the
+// provider asks to be visible (reviewvisible.go — the pane falls back to direct
+// on its own whenever it cannot be used), or the plain in-process client call.
+func (d *Daemon) passSeamFor(cp config.ReviewProvider, direct passRun) passRun {
+	if !cp.Visible {
+		return direct
+	}
+	return d.visibleSeam(cp, direct)
+}
+
+// ignoreSession adapts a client's Review(ctx, dir, base) to the pass seam: the
+// in-process clients have no use for the session id.
+func ignoreSession(fn func(ctx context.Context, worktreeDir, baseBranch string) (string, error)) passRun {
+	return func(ctx context.Context, _, dir, base string) (string, error) { return fn(ctx, dir, base) }
 }
 
 // toDaemonKinds converts a catalog fallback chain (config's unexported provKind)
@@ -163,11 +268,12 @@ func toDaemonKinds[K ~string](in []K) []provKind {
 	return out
 }
 
-// buildClaudeReview constructs the headless-claude review client for a
-// claude-session provider, or nil when claude is not on PATH (so the seam stays
-// nil and the chain skips this provider). Model / timeout come from the entry.
-func buildClaudeReview(cp config.ReviewProvider) *reviewclaude.Client {
-	cl := &reviewclaude.Client{Model: cp.Model}
+// buildAgentReview constructs the headless review client for an agent-family
+// provider running coding agent a, or nil when that agent's binary is not on
+// PATH (so the kind stays out of the seam map and the chain skips it). Model /
+// timeout come from the entry.
+func buildAgentReview(a string, cp config.ReviewProvider) *reviewagent.Client {
+	cl := &reviewagent.Client{Agent: agent.Kind(a), Model: cp.Model}
 	if cp.TimeoutSeconds > 0 {
 		cl.Timeout = time.Duration(cp.TimeoutSeconds) * time.Second
 	}
@@ -184,24 +290,36 @@ func buildClaudeReview(cp config.ReviewProvider) *reviewclaude.Client {
 func (d *Daemon) reviewUnavailableWarnLocked() string {
 	var missing []string
 	for _, p := range d.reviewProviders {
-		if !p.Enabled || p.Shape != shapePass {
+		if p.Unconfigured != "" {
+			missing = append(missing, fmt.Sprintf("%s (%s)", p.Kind, p.Unconfigured))
 			continue
 		}
-		switch p.Kind {
-		case kindCoderabbitCLI:
-			if d.reviewRun == nil {
-				missing = append(missing, "coderabbit-cli (coderabbit not on PATH; run: coderabbit auth login)")
-			}
-		case kindClaudeSession:
-			if d.claudeReviewRun == nil {
-				missing = append(missing, "claude-session (claude not on PATH)")
-			}
+		if !p.Enabled || p.Shape != shapePass || d.passRuns[p.Kind] != nil {
+			continue
 		}
+		missing = append(missing, fmt.Sprintf("%s (%s)", p.Kind, passUnavailableHint(p.Kind, d.passCommands[p.Kind])))
 	}
 	if len(missing) == 0 {
 		return ""
 	}
 	return "review: enabled provider(s) unavailable, that pass will not run: " + strings.Join(missing, "; ")
+}
+
+// passUnavailableHint says WHICH binary a pass kind could not resolve, and how
+// to fix it where lola knows. bin is the tool the provider actually configured
+// (recorded at build time), so a custom-cli names the command the operator
+// wrote rather than an unhelpful "its configured command".
+func passUnavailableHint(k provKind, bin string) string {
+	if a, isAgent := config.ReviewAgentFor(string(k)); isAgent {
+		return agent.Kind(a).Binary() + " not on PATH"
+	}
+	if k == kindCoderabbitCLI && bin == "" {
+		return "coderabbit not on PATH; run: coderabbit auth login"
+	}
+	if bin == "" {
+		return "its configured command is not on PATH"
+	}
+	return bin + " not on PATH"
 }
 
 // --- descriptor queries (all snapshot d.reviewProviders under d.mu) ----------
@@ -298,10 +416,20 @@ func (d *Daemon) resolveReviewForce(kind string) (reviewProvider, bool) {
 	return p, true
 }
 
-// watchProvider returns the enabled coderabbit-watch descriptor, if any.
+// watchProvider returns the enabled WATCH descriptor a forced poll targets, if
+// any — coderabbit-watch by preference, else whichever watch kind is enabled.
 func (d *Daemon) watchProvider() (reviewProvider, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// coderabbit-watch wins when both watch kinds are configured, because the
+	// command that reaches here is `lola coderabbit` and answering it with a
+	// different bot's feedback would be a surprise. The observer runs BOTH on the
+	// cadence regardless; this only picks what a forced poll re-surfaces.
+	for _, p := range d.reviewProviders {
+		if p.Enabled && p.Kind == kindCoderabbitWatch {
+			return p, true
+		}
+	}
 	for _, p := range d.reviewProviders {
 		if p.Enabled && p.Shape == shapeWatch {
 			return p, true
@@ -324,16 +452,26 @@ func (d *Daemon) anyGithubPassLocked() bool {
 
 // --- late-bound seam lookups (read the live seam under d.mu at call time) -----
 
-func (d *Daemon) passSeam(k provKind) func(ctx context.Context, dir, base string) (string, error) {
+func (d *Daemon) passSeam(k provKind) passRun {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	switch k {
-	case kindCoderabbitCLI:
-		return d.reviewRun
-	case kindClaudeSession:
-		return d.claudeReviewRun
+	return d.passRuns[k]
+}
+
+// setPassRun installs (or, with a nil fn, removes) one kind's pass seam. It is
+// the ONE writer besides setReviewProvidersLocked, so tests install a fake
+// without reaching into the map under their own lock.
+func (d *Daemon) setPassRun(k provKind, fn passRun) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.passRuns == nil {
+		d.passRuns = map[provKind]passRun{}
 	}
-	return nil
+	if fn == nil {
+		delete(d.passRuns, k)
+		return
+	}
+	d.passRuns[k] = fn
 }
 
 func (d *Daemon) watchSeam() func(ctx context.Context, repo string, pr int, since time.Time, author, selfLogin string) (string, time.Time, error) {
@@ -346,6 +484,15 @@ func (d *Daemon) postSeam() func(ctx context.Context, repo string, pr int, body 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.postPRComment
+}
+
+func (d *Daemon) reviewPostSeams() (
+	post func(ctx context.Context, repo string, pr int, commitID, body string, comments []scm.InlineComment) error,
+	target func(ctx context.Context, repo string, pr int) (string, string, error),
+) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.postPRReview, d.prReviewTarget
 }
 
 // resolveSelfLogin returns lola's own gh login, resolved AT MOST ONCE per daemon
@@ -389,11 +536,20 @@ func (d *Daemon) selfLoginForWatch(ctx context.Context) string {
 
 // --- per-session run (observer entry points) ---------------------------------
 
-// runReviewProviders runs every independently-applying provider for s in one
-// observer cycle: a pass provider fires its PR-open chain (guarded once per PR
+// noProviderSkip is the Skipped reason for "every entry in the chain was
+// unavailable". It is a retryable outcome (a binary can come back), so the
+// worker's attempt budget keys on it — hence a named const, not a literal.
+const noProviderSkip = "no available review provider"
+
+// runReviewProviders runs every independently-applying provider for s
+// SYNCHRONOUSLY: a pass provider fires its PR-open chain (guarded once per PR
 // per kind); a watch provider polls its watermark. Each kind's guards are
 // independent, so one firing never suppresses another. No-op when no providers
 // are configured.
+//
+// The observer does NOT call this — a pass exec runs for minutes and would
+// stall the cycle, so it calls queueReviewProviders (reviewworker.go) and the
+// worker ends up here one provider at a time.
 func (d *Daemon) runReviewProviders(ctx context.Context, s session.Session) {
 	for _, p := range d.appliesIndependently() {
 		if p.Shape == shapeWatch {
@@ -414,10 +570,31 @@ func (d *Daemon) runProviderPassOnPROpen(ctx context.Context, s session.Session,
 	if s.Source != "native" || !isReviewablePROpen(s.PR) {
 		return
 	}
-	if s.ReviewedPRs[string(p.Kind)] == s.PR.Number {
-		return // already reviewed this PR for this kind — never re-run on the cadence
+	if p.Status && !agentSettled(s) {
+		return
 	}
-	d.runReviewChain(ctx, s, p, true)
+	if s.ReviewedPRs[string(p.Kind)] == s.PR.Number {
+		// Already reviewed this PR for this kind — never re-run on the cadence,
+		// unless the review gate wants the NEW head judged (reviewgate.go).
+		if !headReviewDue(s, p) {
+			return
+		}
+		if s.ReviewGates[string(p.Kind)].Rounds >= reviewGateRounds {
+			d.gateLimitReached(ctx, s, p)
+			return
+		}
+		// A new round posts to the PR again, so release the github sink's own
+		// per-PR guard as the forced review does.
+		d.unstampGithubSettled(s.ID, p.Kind, s.PR.Number)
+		if cur, ok := d.sessions.Get(s.ID); ok {
+			s = cur
+		}
+	}
+	// reviewPass hands the outcome to noteReviewOutcome, which decides whether
+	// the guard the chain just stamped stays stamped: a provider that could not
+	// ANSWER (timeout / quota / unavailable) releases it for a bounded number of
+	// retries. See reviewworker.go.
+	d.reviewPass(ctx, s, p, true)
 }
 
 // runReviewChain runs the primary provider p and, when p can't answer, advances
@@ -433,12 +610,15 @@ func (d *Daemon) runProviderPassOnPROpen(ctx context.Context, s session.Session,
 //   - err in {ErrNotFound, ErrTimeout, ErrQuota} ⇒ advance to the next entry.
 //   - err == ErrAuth / ErrExit ⇒ graceful skip, STOP (no fallback): auth is an
 //     operator fix and a real exit must not silently burn the paid fallback.
-//   - chain exhausted ⇒ graceful skip (guard left set, logged once).
+//   - chain exhausted ⇒ graceful skip (guard left set unless the caller
+//     releases it — see noteReviewOutcome, logged once).
 //
-// useCycleBudget selects the exec context: the auto-trigger passes true to run
-// under the shared per-cycle budget; the manual command passes false so it runs
-// under its own caller ctx (immune to a concurrent cycle cancelling it).
-func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p reviewProvider, useCycleBudget bool) reviewResult {
+// The exec runs under the CALLER's context and each client's own Timeout. There
+// is no longer a shared per-cycle budget: the auto-trigger arrives here on the
+// review worker (its own goroutine, one job at a time), so a slow pass delays
+// nothing but the next queued pass, and the manual command arrives on its socket
+// handler. Both are abortable at shutdown through their parent context.
+func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p reviewProvider) reviewResult {
 	d.mu.Lock()
 	home := d.home
 	proj := d.cfg.ProjectByName(s.Project)
@@ -448,20 +628,26 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		return reviewResult{Skipped: "session has no project to review"}
 	}
 	base := proj.DefaultBranch
+	if p.Status && s.PR != nil && s.PR.BaseRef != "" {
+		base = s.PR.BaseRef
+	}
 	if base == "" {
 		base = config.DefaultBranchName
 	}
 	dir := filepath.Join(home, "worktrees", proj.Name, s.ID)
+	if s.Stack {
+		// A stack app's lane reviews THAT app: its worktree against its base.
+		// The session itself has no checkout to review.
+		if s.Lane == "" || s.Worktree == "" {
+			return reviewResult{Skipped: "a stack session is reviewed per app"}
+		}
+		dir, base = s.Worktree, d.laneBase(s)
+	}
 
 	// Stamp the one-shot chain guard BEFORE the (long) exec (a no-op when the PR
 	// already matches or the session has no PR yet).
 	if s.PR != nil && s.PR.Number > 0 {
 		d.stampReviewed(s.ID, p.Kind, s.PR.Number)
-	}
-
-	execCtx := ctx
-	if useCycleBudget {
-		execCtx = d.reviewContext(ctx)
 	}
 
 	prNum := 0
@@ -476,11 +662,19 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		if run == nil {
 			continue // unavailable: advance (fail-closed to no review for this entry)
 		}
-		findings, err := run(execCtx, dir, base)
+		if err := d.verifyGatedReview(ctx, s, p, dir); err != nil {
+			return reviewResult{Err: err}
+		}
+		findings, err := run(ctx, s.ID, dir, base)
 		if err == nil {
+			if err := d.verifyGatedReview(ctx, s, p, dir); err != nil {
+				return reviewResult{Err: err}
+			}
 			if k != p.Kind {
 				d.logf("", "review: %s primary %s could not answer; fallback %s reviewed PR #%d", s.ID, p.Kind, k, prNum)
 			}
+			d.recordReviewTally(s.ID, string(p.Kind), prNum, findings)
+			d.noteReviewTally(s, p, prNum, findings)
 			d.routeFindings(ctx, s, p, findings)
 			return reviewResult{Ran: true, Findings: strings.TrimSpace(findings)}
 		}
@@ -498,18 +692,18 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		d.logf("", "review: %s chain for PR #%d exhausted without an answer: %v", s.ID, prNum, lastErr)
 		return reviewResult{Err: lastErr}
 	}
-	return reviewResult{Skipped: "no available review provider"}
+	return reviewResult{Skipped: noProviderSkip}
 }
 
 // isFallbackErr reports whether err is a "provider can't answer right now" class
-// that should advance to a fallback (over BOTH the review and reviewclaude
+// that should advance to a fallback (over BOTH the review and reviewagent
 // sentinels). ErrAuth / ErrExit are deliberately excluded — they are a graceful
 // stop, not a fall-through.
 func isFallbackErr(err error) bool {
 	switch {
 	case errors.Is(err, review.ErrNotFound), errors.Is(err, review.ErrTimeout), errors.Is(err, review.ErrQuota):
 		return true
-	case errors.Is(err, reviewclaude.ErrNotFound), errors.Is(err, reviewclaude.ErrTimeout), errors.Is(err, reviewclaude.ErrQuota):
+	case errors.Is(err, reviewagent.ErrNotFound), errors.Is(err, reviewagent.ErrTimeout), errors.Is(err, reviewagent.ErrQuota):
 		return true
 	}
 	return false
@@ -579,7 +773,7 @@ func (d *Daemon) routeFindings(ctx context.Context, s session.Session, p reviewP
 	if notifier == nil {
 		notifier = notify.New(notify.NotifyConfig{})
 	}
-	lbl := labelsFor(p.Kind)
+	lbl := labelsFor(p)
 
 	findings = strings.TrimSpace(findings)
 	if findings == "" {
@@ -604,17 +798,27 @@ func (d *Daemon) routeFindings(ctx context.Context, s session.Session, p reviewP
 			URL:      prURL(s),
 		})
 	}
-	// agent — UNTRUSTED sink #2, the ONLY sanitized + idle-gated one.
+	// github — UNTRUSTED sink #2 (a PR comment or an inline review; pass shapes
+	// only). It runs BEFORE the agent hand-off on purpose: the inline shape posts
+	// resolvable threads and stamps InlineReviewPRs, which is what lets the
+	// hand-off below tell the worker to close them (inlineThreadNote). The order
+	// only matters for a worker that happens to be idle right now — a deferred
+	// hand-off is delivered long after either sink — but getting it wrong would
+	// silently drop the instruction in exactly the case where the agent is ready
+	// to act on it.
+	if p.Shape == shapePass && p.Transports.Has(config.TransportGitHub) {
+		d.postGithubSink(ctx, s, p, findings)
+		if cur, ok := d.sessions.Get(s.ID); ok {
+			s = cur // pick up the guards the post just stamped
+		}
+	}
+	// agent — UNTRUSTED sink #3, the ONLY sanitized + idle-gated one.
 	if p.SendToAgent {
 		d.sendHandoffToAgent(ctx, s, p, handoffStash(s, p, findings))
 	}
-	// linear — UNTRUSTED sink #3 (API payload shown to a human, no sanitize).
+	// linear — UNTRUSTED sink #4 (API payload shown to a human, no sanitize).
 	if p.Transports.Has(config.TransportLinear) {
 		d.commentOnLinear(ctx, s, p, findings)
-	}
-	// github — UNTRUSTED sink #4 (a PR comment; pass shapes only).
-	if p.Shape == shapePass && p.Transports.Has(config.TransportGitHub) {
-		d.postGithubSink(ctx, s, p, findings)
 	}
 	d.logf("", "review: %s (%s) routed (notify=%v agent=%v linear=%v github=%v)", s.ID, p.Kind,
 		p.Notify, p.SendToAgent, p.Transports.Has(config.TransportLinear), p.Shape == shapePass && p.Transports.Has(config.TransportGitHub))
@@ -625,36 +829,162 @@ func (d *Daemon) routeFindings(ctx context.Context, s session.Session, p reviewP
 // single-line PR pointer for a watch (never the raw comment text).
 func handoffStash(s session.Session, p reviewProvider, findings string) string {
 	if p.Handoff == handoffPointer {
-		return coderabbitAgentPointer(s)
+		return watchAgentPointer(s, p)
 	}
 	return findings
 }
 
+// handoffDeliverable reports whether the worker is parked somewhere a hand-off
+// can safely be typed. It is DELIBERATELY wider than the bare AtPrompt gate the
+// reaction engine uses, and the extra case is the one that matters in practice:
+//
+//   - AtPrompt — the Stop hook fired and nothing has resumed the agent. The
+//     classic gate; the send CONSUMES it.
+//
+//   - parked on an IDLE notification — AgentWaitingInput with InputIdleNotify.
+//     Claude Code emits that notification a minute or so after Stop, and the
+//     daemon USED TO handle it by parking the axis on waiting_input and closing
+//     AtPrompt ("waiting on a human: never send-keys") — which is what this case
+//     was written for. Without it a hand-off deferred at PR-open (the worker is
+//     virtually always mid-turn then: it just pushed) could only land in the
+//     narrow window between the Stop hook and that notification, which the 30s
+//     observer cadence almost always misses; findings then sat in
+//     PendingHandoffs forever.
+//
+//     A CURRENT daemon no longer mints this pair: server.go classifies the bare
+//     nudge as idleness, parks the axis on AgentIdle and OPENS AtPrompt, so the
+//     same session now qualifies through the first or third case instead. The
+//     clause stays because the pair is still on DISK — every snapshot written by
+//     a pre-split daemon carries it, and those records are loaded verbatim after
+//     a restart (FromLegacy backfills axes, never an InputReason). Deleting it
+//     would strand exactly the sessions this case was added to rescue, on the
+//     one cycle where nobody would think to look.
+//
+//   - RESTING on a pane-derived idle — AgentIdle with the AtPrompt gate closed.
+//     The observer's pane reconcile parks a session there in two ways (a pane
+//     classified "waiting" while a PR is open, and a "working" axis gone stale
+//     with an unreadable pane) and NEITHER opens AtPrompt, so such a session was
+//     unreachable forever: nor-311 sat on an undelivered stash in exactly this
+//     state. It is admitted here only as a CANDIDATE — handoffPromptProof
+//     insists on a live pane classified "waiting" before anything is typed,
+//     because the stale-working variant reaches AgentIdle without ever having
+//     seen the pane.
+//
+// InputPermission stays excluded: typing prose into a y/n approval prompt
+// answers the wrong question, which is what the gate exists to prevent.
+func handoffDeliverable(s session.Session) bool {
+	return s.AtPrompt ||
+		(s.AgentState == state.AgentWaitingInput && s.InputReason == state.InputIdleNotify) ||
+		s.AgentState == state.AgentIdle
+}
+
+// handoffPromptProof is the live activity proof used for a human's answer.
+// Automatic messages use lockAutomationPrompt, which additionally requires
+// detached terminals and an empty composer, whatever opened the idle gate.
+//
+// It deliberately does NOT take the ensurePromptVerified short-circuit the
+// adoption verification uses. A hook verdict is evidence about the moment the hook
+// fired, not about now, and the gap between the two is exactly where this went
+// wrong: claude-code ends a turn (Stop hook → AtPrompt + AtPromptVerified) and
+// THEN puts up a modal setup dialog. The short-circuit answered "verified" from
+// the hook without ever looking at the pane, so the findings were typed into the
+// dialog, the gate was consumed, the stash was dropped — and the log said
+// "handed feedback to the worker" while four PRs' reviews reached nobody.
+// A pane capture costs one bounded tmux exec per delivery; a lost review costs
+// the whole review.
+//
+// Fail closed: an unreadable pane, a modal (ActivityBlocked), or any other
+// non-waiting classification defers the hand-off to a later cycle.
+func (d *Daemon) handoffPromptProof(ctx context.Context, s session.Session) bool {
+	return d.paneWaitingNow(ctx, s)
+}
+
+// paneWaitingNow captures the pane and reports whether the agent is sitting at
+// its prompt AT THIS MOMENT. Unlike ensurePromptVerified it never short-circuits
+// on a cached AtPromptVerified — it is the ONLY evidence handoffPromptProof
+// accepts, so an unreadable pane or any non-waiting classification (Working, a
+// modal's ActivityBlocked, Unknown) is a "no": fail closed, defer, never type.
+func (d *Daemon) paneWaitingNow(ctx context.Context, s session.Session) bool {
+	if d.paneTail == nil {
+		return false
+	}
+	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
+	text, err := d.paneTail(cctx, paneTarget(s), observePaneLines)
+	cancel()
+	if err != nil {
+		d.logf("", "review: %s pane capture failed (deferring the hand-off): %v", s.ID, err)
+		return false
+	}
+	return attention.Classify(text, agent.Parse(s.Agent)) == attention.ActivityWaiting
+}
+
 // sendHandoffToAgent is the generalized send-keys hand-off (PLAN §5.1), keyed on
-// PendingHandoffs[p.Kind]. It enforces the SAME send-keys safety gate as the
-// reaction engine: a mid-turn worker defers (stash, never type); an idle worker
-// has AtPrompt CONSUMED atomically (clearing the pending entry) before the send,
-// so a hook that resumed the agent meanwhile cancels the send (re-stashed).
+// PendingHandoffs[p.Kind]. It enforces the send-keys safety gate: a mid-turn
+// worker defers (stash, never type); a worker parked at its prompt
+// (handoffDeliverable) has that gate CONSUMED atomically — AtPrompt cleared and
+// the pending entry dropped — before the send, so a hook that resumed the agent
+// meanwhile cancels the send (re-stashed).
 //
 // stash is the RAW hand-off text (findings for handoffFull, pointer for
 // handoffPointer); the sanitized/prefixed message is rendered here, immediately
 // before the send — so the stash and every other sink hold the readable text
 // while the pane only ever receives sanitized bytes.
-func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p reviewProvider, stash string) {
+//
+// It reports whether it actually typed, so a caller iterating several pending
+// kinds delivers at most one per pass (see flushReviewHandoffs).
+func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p reviewProvider, stash string) bool {
 	if s.TmuxName == "" {
-		return
+		return false
 	}
-	if !s.AtPrompt || !d.ensurePromptVerified(ctx, s) {
-		// Mid-turn, or an adoption-carried gate that cannot be verified against
-		// the live pane (see ensurePromptVerified): defer, never type.
+	unlock, ready := d.lockAutomationPrompt(ctx, s)
+	if gated := !handoffDeliverable(s); gated || !ready {
+		if ready {
+			unlock()
+		}
+		// Mid-turn, waiting on a permission decision, an adoption-carried gate
+		// that cannot be verified against the live pane (see ensurePromptVerified),
+		// or a pane-derived idle whose pane does not actually show a prompt (see
+		// handoffPromptProof): defer, never type.
+		//
+		// The two halves are named apart on purpose. A stash can sit undelivered
+		// for hours, and "the axes say busy" and "the axes say idle but the pane
+		// does not show a resting prompt" have completely different causes — the
+		// second is a classifier that no longer recognizes the agent's composer,
+		// which is invisible for as long as both read as one "mid-turn" line.
+		why := "the pane does not show a resting prompt"
+		if gated {
+			why = "the worker is mid-turn"
+		}
 		d.deferHandoff(s.ID, p.Kind, stash)
-		d.logf("", "review: %s (%s) worker is mid-turn — deferring the hand-off", s.ID, p.Kind)
-		return
+		d.logf("", "review: %s (%s) %s — deferring the hand-off", s.ID, p.Kind, why)
+		return false
 	}
+	defer unlock()
 
 	msg := stash
 	if p.Handoff == handoffFull {
-		msg = labelsFor(p.Kind).agentPreamble + stash
+		msg = labelsFor(p).agentPreamble + stash
+	}
+	// A stack app's review: say which checkout and PR it is about, FIRST, as
+	// lola's own text (the findings follow it).
+	msg = laneHeader(s) + msg
+	// When the same findings are also sitting on the PR as resolvable threads,
+	// say so and how to close them (lola's own text, appended AFTER the untrusted
+	// findings so nothing in them can rewrite the instruction). It is derived at
+	// SEND time rather than stashed, because a hand-off is usually deferred past
+	// the post that created the threads — often past a daemon restart.
+	//
+	// Two strengths, and which one applies is decided by whether LOLA posted the
+	// threads. inlineThreadNote can state that they exist (InlineReviewPRs proves
+	// it); everything else — a CodeRabbit watch pointer at the bot's OWN inline
+	// comments, a run whose inline post fell back to a plain comment — gets the
+	// conditional prThreadNote, whose listing command is the source of truth. The
+	// worker must close what it fixed either way: leaving a dozen open
+	// conversations behind is exactly the failure this pipeline step exists for.
+	if note := inlineThreadNote(s, p); note != "" {
+		msg += note
+	} else {
+		msg += prThreadNote(s)
 	}
 	msg = sanitizeAgentText(msg)
 
@@ -663,13 +993,17 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 		tmuxName string
 	)
 	d.sessions.Update(s.ID, func(cur *session.Session) bool {
-		if !cur.AtPrompt {
+		if !handoffDeliverable(*cur) {
 			return false // a hook resumed the agent between the read above and here
 		}
 		cur.AtPrompt = false
 		if cur.PendingHandoffs != nil {
 			delete(cur.PendingHandoffs, string(p.Kind)) // consumed
 		}
+		// Claim the prompt atomically (see deliverFeedback): AgentIdle passes
+		// handoffDeliverable with AtPrompt cleared, so without this a concurrent
+		// flush could type a second message into the same prompt mid-send.
+		cur.SetAgentState(state.AgentWorking, "", time.Now())
 		tmuxName = cur.TmuxName
 		sent = true
 		return true
@@ -677,18 +1011,23 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if !sent {
 		d.deferHandoff(s.ID, p.Kind, stash)
 		d.logf("", "review: %s (%s) worker no longer idle at prompt — deferring the hand-off", s.ID, p.Kind)
-		return
+		return false
 	}
 
-	sctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
-	defer cancel()
-	if err := d.sendKeys(sctx, tmuxName, msg); err != nil {
+	if err := d.typeToAgentLocked(ctx, noteFor(s, reviewHandoffLabel(p, s)), tmuxName, msg, reactExecTimeout); err != nil {
 		// Gate already consumed; do not roll back (that would re-fire and spam).
 		d.logf("", "review: %s (%s) send-keys of hand-off failed: %v", s.ID, p.Kind, err)
-		return
+		return false
 	}
+	// The axis was promoted to working when the gate was consumed above, exactly
+	// as handleAnswer does after a human's reply. SetAgentState stamps
+	// LastActivityAt, so the anti-false-working guard grants the full grace
+	// window even for agents that emit no user_prompt hook (codex/opencode) —
+	// and, since the idle-notify parking is cleared, the widened gate cannot
+	// re-deliver on the next cycle.
 	d.reviewSave()
 	d.logf("", "review: %s (%s) handed feedback to the worker", s.ID, p.Kind)
+	return true
 }
 
 // deferHandoff stashes the hand-off text on PendingHandoffs[kind] for a later
@@ -713,36 +1052,84 @@ func (d *Daemon) deferHandoff(id string, k provKind, stash string) {
 }
 
 // flushReviewHandoffs delivers any hand-off deferred earlier (worker mid-turn)
-// once the worker is idle at its prompt again. It attempts every pending kind;
-// the first successful send CONSUMES AtPrompt, so the rest re-defer for the next
-// idle cycle (matching the legacy one-at-a-time flush). Called every cycle.
+// once the worker is parked at its prompt again (handoffDeliverable). It
+// attempts the pending kinds in turn and STOPS after the first successful send:
+// one delivery per pass, the rest re-defer for the next idle cycle. That stop is
+// load-bearing now that a send no longer necessarily consumes an AtPrompt gate —
+// on the idle-notify path several kinds would otherwise all type into the same
+// prompt back-to-back. Called every observer cycle AND straight off the Stop
+// hook (see hookEvent), which is what closes the window the cadence used to miss.
+//
+// A HUMAN's queued diff feedback (feedback.go) goes first and counts as that
+// pass's one delivery: a person waited for it, and a review provider's findings
+// will still be there next cycle. A queued project broadcast (broadcast.go) is
+// the same kind of human message and comes right after it.
 func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
-	s, ok := d.sessions.Get(id)
-	if !ok || len(s.PendingHandoffs) == 0 || !s.AtPrompt {
+	if d.deliverFeedback(ctx, id) || d.deliverBroadcast(ctx, id) || d.deliverSSHQueue(ctx, id) {
 		return
 	}
+	// A stack session's hand-offs are stashed per app lane; still ONE
+	// delivery per pass, since every lane types into the same prompt.
+	if s, ok := d.sessions.Get(id); ok && s.Stack && s.Lane == "" {
+		for _, a := range s.Apps {
+			if d.flushHandoffsOf(ctx, session.LaneID(id, a.Name)) {
+				return
+			}
+		}
+		return
+	}
+	d.flushHandoffsOf(ctx, id)
+}
+
+// flushHandoffsOf delivers at most one pending provider hand-off of the
+// session (or stack lane) id, reporting whether it typed.
+func (d *Daemon) flushHandoffsOf(ctx context.Context, id string) bool {
+	s, ok := d.sessions.Get(id)
+	if !ok || len(s.PendingHandoffs) == 0 || !handoffDeliverable(s) {
+		return false
+	}
 	for kStr := range s.PendingHandoffs {
+		if strings.HasPrefix(kStr, specialistHandoffPrefix) {
+			if d.flushSpecialistHandoff(ctx, s, kStr) {
+				return true
+			}
+			continue
+		}
 		p, ok := d.providerByKind(provKind(kStr))
 		if !ok {
 			continue // kind no longer configured; leave the stash for a future config
 		}
-		d.flushPendingHandoff(ctx, id, p)
+		if d.flushPendingHandoff(ctx, id, p) {
+			return true
+		}
 	}
+	return false
+}
+
+// laneBase is the base branch of a stack lane's app: what its worktree was
+// cut from and its PR targets.
+func (d *Daemon) laneBase(s session.Session) string {
+	if cur, ok := d.sessions.Get(session.BaseID(s.ID)); ok {
+		if i := cur.AppIndex(s.Lane); i >= 0 {
+			return appBase(cur.Apps[i])
+		}
+	}
+	return config.DefaultBranchName
 }
 
 // flushPendingHandoff re-reads the record and delivers the deferred hand-off for
 // p.Kind, no-op when nothing is pending or the worker is still busy (the send
-// just re-stashes then).
-func (d *Daemon) flushPendingHandoff(ctx context.Context, id string, p reviewProvider) {
+// just re-stashes then). It reports whether it typed.
+func (d *Daemon) flushPendingHandoff(ctx context.Context, id string, p reviewProvider) bool {
 	s, ok := d.sessions.Get(id)
-	if !ok || !s.AtPrompt {
-		return
+	if !ok || !handoffDeliverable(s) {
+		return false
 	}
 	stash := s.PendingHandoffs[string(p.Kind)]
 	if stash == "" {
-		return
+		return false
 	}
-	d.sendHandoffToAgent(ctx, s, p, stash)
+	return d.sendHandoffToAgent(ctx, s, p, stash)
 }
 
 // commentOnLinear posts the findings as a Linear comment via the P4 write-back
@@ -760,7 +1147,7 @@ func (d *Daemon) commentOnLinear(ctx context.Context, s session.Session, p revie
 	}
 	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer cancel()
-	body := labelsFor(p.Kind).notifyTitle + ":\n\n" + findings
+	body := labelsFor(p).notifyTitle + ":\n\n" + findings
 	if err := api.CreateComment(cctx, s.IssueUUID, body); err != nil {
 		d.wbLinErr(fmt.Sprintf("%s comment for %s", p.Kind, issueLabel(s)), err)
 		return
@@ -781,7 +1168,14 @@ func (d *Daemon) commentOnLinear(ctx context.Context, s session.Session, p revie
 //
 // The body is the full UNTRUSTED findings — NOT sanitized (a PR comment is a
 // human sink, never re-fed to the agent as control) — bounded inside PostPRComment.
-// It IS run through neutralizeBotTriggers first so a `@coderabbitai` mention that
+// It is the ONLY sink that reshapes the text: reviewmd.Render turns the provider's
+// plain findings into scannable GitHub Markdown (an alert-callout tally plus one
+// collapsed <details> per finding, locations linked to the session's branch)
+// because this is the copy a human reads on the PR. The rendering is
+// presentation-only and fails open (unparseable findings are posted verbatim under
+// a plain heading, a missing repo/branch just drops the links); the agent, notify
+// and Linear sinks keep the raw text byte for byte.
+// It IS run through neutralizeWatchedBots first so a `@coderabbitai` mention that
 // happens to appear in the findings can never kick off a fresh CodeRabbit review
 // on the PR (the "check the PR but never trigger a new CodeRabbit there" guarantee
 // that makes a watch-only posture safe even alongside a github-posting provider).
@@ -792,13 +1186,29 @@ func (d *Daemon) postGithubSink(ctx context.Context, s session.Session, p review
 	if s.PostedGitHubPRs[string(p.Kind)] == s.PR.Number {
 		return // already settled this PR for this kind
 	}
+	if p.Inline {
+		// Try the resolvable-threads shape first. It reports false for every
+		// reason a review cannot be posted that way — no seam, no diff, nothing
+		// anchorable, a permanent rejection — and the plain comment below then
+		// runs exactly as it always has. A TRANSIENT failure returns true after
+		// leaving the guard unstamped, so the next cycle retries the inline post
+		// instead of silently downgrading it.
+		if done := d.postGithubInline(ctx, s, p, findings); done {
+			return
+		}
+	}
 	post := d.postSeam()
 	if post == nil {
 		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer cancel()
-	err := post(cctx, s.Repo, s.PR.Number, neutralizeBotTriggers(findings))
+	body := d.neutralizeWatchedBots(reviewmd.Render(reviewmd.Options{
+		Title: labelsFor(p).notifyTitle,
+		Repo:  s.Repo,
+		Ref:   s.Branch, // empty ⇒ locations render as plain code, never a wrong link
+	}, findings))
+	err := post(cctx, s.Repo, s.PR.Number, body)
 	if err == nil {
 		d.stampGithubSettled(s.ID, p.Kind, s.PR.Number)
 		d.logf("", "review: %s (%s) posted findings to PR #%d as a github comment", s.ID, p.Kind, s.PR.Number)
@@ -834,6 +1244,61 @@ func neutralizeBotTriggers(body string) string {
 	return botTriggerRe.ReplaceAllString(body, "@\u200b$1")
 }
 
+// neutralizeWatchedBots is neutralizeBotTriggers PLUS the login of every WATCHED
+// bot in this daemon's catalog. The hazard generalizes with the catalog: any
+// review bot that reads its own @-mention as a command will start a fresh review
+// when lola's posted findings happen to name it — the same credit burn and the
+// same self-feedback loop, just not CodeRabbit's. So the authors lola is
+// configured to watch are defused too, on EVERY body (summary and thread alike).
+//
+// It is defensive, not exhaustive: lola can only defuse the bots it knows about,
+// and the coderabbit pattern stays unconditional so the historical guarantee
+// holds whether or not a watch is configured.
+func (d *Daemon) neutralizeWatchedBots(body string) string {
+	return d.botNeutralizer()(body)
+}
+
+// botNeutralizer builds neutralizeWatchedBots ONCE, so an inline post — which
+// defuses a dozen bodies (a summary plus one per thread) in a row — reads the
+// catalog and compiles its pattern a single time rather than per body.
+func (d *Daemon) botNeutralizer() func(string) string {
+	authors := d.watchedAuthors()
+	if len(authors) == 0 {
+		return neutralizeBotTriggers
+	}
+	// ONE case-insensitive alternation: GitHub logins are case-insensitive, so
+	// @Greptile-Apps is the same trigger as @greptile-apps. The authors are
+	// already sanitized to login characters, but they are quoted anyway — a
+	// config value must never be spliced into a pattern raw.
+	quoted := make([]string, len(authors))
+	for i, a := range authors {
+		quoted[i] = regexp.QuoteMeta(a)
+	}
+	re, err := regexp.Compile(`(?i)@(` + strings.Join(quoted, "|") + `)`)
+	if err != nil {
+		return neutralizeBotTriggers // unreachable after QuoteMeta; fail toward the plain defuse
+	}
+	return func(body string) string {
+		return re.ReplaceAllString(neutralizeBotTriggers(body), "@\u200b$1")
+	}
+}
+
+// watchedAuthors returns the sanitized login of every ENABLED watch provider.
+func (d *Daemon) watchedAuthors() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []string
+	for _, p := range d.reviewProviders {
+		if !p.Enabled || p.Shape != shapeWatch {
+			continue
+		}
+		if who := botDisplayName(p.Author); who != "Bot" {
+			out = append(out, who)
+		}
+	}
+	return out
+}
+
 // isPermanentGhError classifies a gh error as permanent (the post can never
 // succeed for this PR: 422 unprocessable, 403 forbidden / no write permission) vs
 // transient (5xx, timeout, network — retry next cycle). The error is the
@@ -854,37 +1319,86 @@ func isPermanentGhError(err error) bool {
 	return false
 }
 
-// coderabbitAgentPointer builds the single-line instruction handed to the worker
-// for a watch hand-off. It is derived only from the PR number (our own text — no
-// untrusted content), so it submits cleanly and carries nothing attacker-authored
-// into the pane.
-func coderabbitAgentPointer(s session.Session) string {
+// watchAgentPointer builds the single-line instruction handed to the worker for a
+// watch hand-off. It is derived only from the PR number and the provider's own
+// (sanitized) display name — our own text, no untrusted content — so it submits
+// cleanly and carries nothing attacker-authored into the pane. Naming the bot
+// matters once the watch is pluggable: "CodeRabbit posted feedback" sent for a
+// Greptile watch would point the worker at comments that do not exist.
+func watchAgentPointer(s session.Session, p reviewProvider) string {
 	n := 0
 	if s.PR != nil {
 		n = s.PR.Number
 	}
-	return fmt.Sprintf(config.CodeRabbitAgentPointerFmt, n, n)
+	if p.Kind == kindCoderabbitWatch {
+		return fmt.Sprintf(config.CodeRabbitAgentPointerFmt, n, n)
+	}
+	return config.BotAgentPointer(labelsFor(p).who, n)
 }
 
 // --- per-kind labels ---------------------------------------------------------
 
-// provLabels carries the per-kind human strings so a claude-session's findings
-// read "Claude review" and a coderabbit's read "CodeRabbit" (never mislabelled).
+// provLabels carries the per-provider human strings so a codex review reads
+// "Codex review" and a coderabbit's reads "CodeRabbit" — never mislabelled. With
+// the catalog pluggable, WHO produced a finding is the one thing a reader cannot
+// infer from the finding itself, so it is always stated.
 type provLabels struct {
 	notifyTitle   string
 	agentPreamble string // full hand-off only
+	who           string // the reviewer's display name, used in the watch pointer
 }
 
-func labelsFor(k provKind) provLabels {
-	switch k {
-	case kindClaudeSession:
-		return provLabels{config.ClaudeReviewNotifyTitle, config.ClaudeReviewToAgentPreamble}
-	case kindCoderabbitWatch:
-		return provLabels{config.CodeRabbitNotifyTitle, ""} // pointer hand-off, no preamble
-	default: // coderabbit-cli
-		return provLabels{config.ReviewNotifyTitle, config.ReviewToAgentPreamble}
+// labelsFor derives a provider's labels. It takes the DESCRIPTOR, not the bare
+// kind, because a generic watch is named by its configured `author` — a
+// bot-watch relaying Greptile must not announce itself as CodeRabbit — and only
+// the descriptor carries it.
+func labelsFor(p reviewProvider) provLabels {
+	if a, isAgent := config.ReviewAgentFor(string(p.Kind)); isAgent {
+		switch agent.Kind(a) {
+		case agent.Codex:
+			return provLabels{config.CodexReviewNotifyTitle, config.ReviewAgentPreamble("Codex"), "Codex"}
+		case agent.OpenCode:
+			return provLabels{config.OpenCodeReviewNotifyTitle, config.ReviewAgentPreamble("opencode"), "opencode"}
+		default:
+			return provLabels{config.ClaudeReviewNotifyTitle, config.ClaudeReviewToAgentPreamble, "Claude"}
+		}
 	}
+	switch p.Kind {
+	case kindCoderabbitWatch:
+		return provLabels{config.CodeRabbitNotifyTitle, "", config.DefaultCodeRabbitAuthor} // pointer hand-off, no preamble
+	case kindCoderabbitCLI:
+		return provLabels{config.ReviewNotifyTitle, config.ReviewToAgentPreamble, "CodeRabbit"}
+	}
+	// The generic kinds: a bot-watch is named by the bot it watches, a custom-cli
+	// by nothing at all (its tool is an argv lola must not quote into a label).
+	if p.Shape == shapeWatch {
+		who := botDisplayName(p.Author)
+		return provLabels{who + " review", "", who}
+	}
+	return provLabels{config.CustomCLIReviewNotifyTitle, config.ReviewAgentPreamble("code"), "the review tool"}
 }
+
+// botDisplayName renders a watch's configured author for a human label. The
+// author is an operator-typed login SUBSTRING, so it is clipped and stripped of
+// anything that is not a plain login character before it can reach a
+// notification title, a Linear comment or the worker's pane — it is config, not
+// findings, but it still ends up inside text lola generates.
+func botDisplayName(author string) string {
+	clean := botLoginRe.ReplaceAllString(author, "")
+	if len(clean) > maxBotNameBytes {
+		clean = clean[:maxBotNameBytes]
+	}
+	if clean == "" {
+		return "Bot"
+	}
+	return clean
+}
+
+// botLoginRe keeps only the characters a GitHub login can contain; maxBotNameBytes
+// bounds what a label may carry.
+var botLoginRe = regexp.MustCompile(`[^A-Za-z0-9_.\[\]-]+`)
+
+const maxBotNameBytes = 39 // GitHub's own login length ceiling
 
 // --- kind-keyed guard mutations ----------------------------------------------
 
@@ -929,6 +1443,29 @@ func (d *Daemon) stampGithubSettled(id string, k provKind, pr int) {
 			return false
 		}
 		cur.PostedGitHubPRs[string(k)] = pr
+		return true
+	})
+	d.reviewSave()
+}
+
+// unstampGithubSettled releases the per-PR github settle guard so the NEXT route
+// of this kind's findings posts to the PR again. It is the forced-review
+// counterpart of unstampReviewed: `cmd=review` deliberately ignores the
+// once-per-PR pass guard, and without releasing this one too the re-run's
+// findings reached the worker and Linear while postGithubSink silently no-opped
+// — a second review that said it had been posted and never was.
+//
+// Like unstampReviewed it only clears a guard still pointing at pr, so it can
+// never undo a stamp another writer just made for a newer PR. InlineReviewPRs is
+// deliberately NOT cleared: the threads the first post created are still open on
+// that PR, so the hand-off must keep telling the worker to resolve them even if
+// this run falls back to a plain comment.
+func (d *Daemon) unstampGithubSettled(id string, k provKind, pr int) {
+	d.sessions.Update(id, func(cur *session.Session) bool {
+		if cur.PostedGitHubPRs == nil || cur.PostedGitHubPRs[string(k)] != pr {
+			return false
+		}
+		delete(cur.PostedGitHubPRs, string(k))
 		return true
 	})
 	d.reviewSave()

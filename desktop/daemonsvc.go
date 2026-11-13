@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -87,10 +87,11 @@ func (s *DaemonService) Answer(session, text string) error {
 	return call(protocol.Request{Cmd: "answer", Session: session, Text: text}, shortTimeout, nil)
 }
 
-// Kill tears a session down. A dirty worktree is kept unless force is set.
-func (s *DaemonService) Kill(session string, force bool) (protocol.KillData, error) {
+// Kill tears a session down. A dirty worktree is kept unless force is set;
+// keepWorktree stops the agent only and leaves the worktree for a later revive.
+func (s *DaemonService) Kill(session string, force, keepWorktree bool) (protocol.KillData, error) {
 	var d protocol.KillData
-	err := call(protocol.Request{Cmd: "kill", Session: session, Force: force}, shortTimeout, &d)
+	err := call(protocol.Request{Cmd: "kill", Session: session, Force: force, KeepWorktree: keepWorktree}, shortTimeout, &d)
 	return d, err
 }
 
@@ -102,7 +103,8 @@ func (s *DaemonService) Revive(session string) (protocol.ReviveData, error) {
 }
 
 // Review forces a QA review PASS for one session now. provider optionally
-// selects which pass provider kind to force (coderabbit-cli | claude-session);
+// selects which pass provider kind to force (any pass kind — see
+// config.ReviewProviderPassKinds);
 // "" forces the daemon's primary pass provider.
 func (s *DaemonService) Review(session, provider string) (protocol.ReviewData, error) {
 	var d protocol.ReviewData
@@ -117,6 +119,140 @@ func (s *DaemonService) CodeRabbit(session string) (protocol.CodeRabbitData, err
 	return d, err
 }
 
+// ResolveConflict asks a conflicting session's coding agent to merge the
+// project's default_branch into its branch and resolve the conflicts — the
+// manual trigger for what [reactions].merge_conflict does on its own. The daemon
+// refuses it (as an error) unless the PR really conflicts and the agent is
+// provably resting at its prompt, so a mid-turn worker is never typed into.
+func (s *DaemonService) ResolveConflict(session string) (protocol.ResolveConflictData, error) {
+	var d protocol.ResolveConflictData
+	err := call(protocol.Request{Cmd: "resolveConflict", Session: session}, shortTimeout, &d)
+	return d, err
+}
+
+// Diff returns the session's changes for the diff tab: its worktree against
+// the merge-base with the project's default_branch, uncommitted and untracked
+// work included. Read-only.
+func (s *DaemonService) Diff(session string) (protocol.DiffData, error) {
+	var d protocol.DiffData
+	err := call(protocol.Request{Cmd: "diff", Session: session}, shortTimeout*3, &d)
+	return d, err
+}
+
+// SendFeedback delivers a batch of line comments (plus an optional note) to the
+// session's coding agent as one message. The daemon types it only into a pane
+// verifiably resting at its prompt; otherwise it is queued and delivered later
+// (FeedbackData.Queued) — never typed mid-turn.
+func (s *DaemonService) SendFeedback(args protocol.FeedbackArgs) (protocol.FeedbackData, error) {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return protocol.FeedbackData{}, err
+	}
+	var d protocol.FeedbackData
+	err = call(protocol.Request{Cmd: "feedback", Args: raw}, shortTimeout, &d)
+	return d, err
+}
+
+// Broadcast sends one message to every live coding agent of a project. Agents
+// resting at their prompt get it now; busy ones get it queued and delivered
+// when idle. The reply names both groups so the UI can show the split. Long
+// timeout: the daemon reads (and may type into) one pane per live session.
+func (s *DaemonService) Broadcast(args protocol.BroadcastArgs) (protocol.BroadcastData, error) {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return protocol.BroadcastData{}, err
+	}
+	var d protocol.BroadcastData
+	err = call(protocol.Request{Cmd: "broadcast", Args: raw}, longTimeout, &d)
+	return d, err
+}
+
+// Checkpoints lists the session's turn checkpoints, oldest first: the worktree
+// snapshot the daemon records each time the agent ends a turn.
+func (s *DaemonService) Checkpoints(session string) (protocol.CheckpointsData, error) {
+	var d protocol.CheckpointsData
+	err := call(protocol.Request{Cmd: "checkpoints", Session: session}, shortTimeout*3, &d)
+	return d, err
+}
+
+// CheckpointDiff returns what the turn ending in checkpoint seq changed: the
+// previous checkpoint against this one. Read-only.
+func (s *DaemonService) CheckpointDiff(session string, seq int) (protocol.DiffData, error) {
+	args, _ := json.Marshal(protocol.CheckpointArgs{Session: session, Seq: seq})
+	var d protocol.DiffData
+	err := call(protocol.Request{Cmd: "checkpointDiff", Args: args}, shortTimeout*3, &d)
+	return d, err
+}
+
+// RestoreCheckpoint puts the session's worktree files back to checkpoint seq.
+// The daemon records the current state as a new checkpoint first (the reply's
+// Safety), so the restore is undoable; it refuses while the agent is mid-turn.
+func (s *DaemonService) RestoreCheckpoint(session string, seq int) (protocol.RestoreCheckpointData, error) {
+	args, _ := json.Marshal(protocol.CheckpointArgs{Session: session, Seq: seq})
+	var d protocol.RestoreCheckpointData
+	err := call(protocol.Request{Cmd: "restoreCheckpoint", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// ForkCheckpoint starts a NEW agent session from checkpoint seq on its own
+// branch; agentKind "" keeps the parent's coding agent.
+func (s *DaemonService) ForkCheckpoint(session string, seq int, agentKind string) (protocol.OpenData, error) {
+	args, _ := json.Marshal(protocol.CheckpointArgs{Session: session, Seq: seq, Agent: agentKind})
+	var d protocol.OpenData
+	err := call(protocol.Request{Cmd: "forkCheckpoint", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// BestOfCompare returns every attempt of the best-of group the session belongs
+// to, side by side (read-only; one bounded local git diff per attempt).
+func (s *DaemonService) BestOfCompare(session string) (protocol.BestOfCompareData, error) {
+	args, _ := json.Marshal(protocol.BestOfCompareArgs{Session: session})
+	var d protocol.BestOfCompareData
+	err := call(protocol.Request{Cmd: "bestOfCompare", Args: args}, shortTimeout*3, &d)
+	return d, err
+}
+
+// BestOfPick keeps one best-of attempt: its draft PR is marked ready, every
+// other attempt's PR is closed and its session torn down (a dirty worktree is
+// kept).
+func (s *DaemonService) BestOfPick(session string) (protocol.BestOfPickData, error) {
+	args, _ := json.Marshal(protocol.BestOfPickArgs{Session: session})
+	var d protocol.BestOfPickData
+	err := call(protocol.Request{Cmd: "bestOfPick", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// BestOf starts an issue as a best-of group; agents "" uses [best_of].agents.
+func (s *DaemonService) BestOf(a protocol.BestOfArgs) (protocol.BestOfData, error) {
+	args, _ := json.Marshal(a)
+	var d protocol.BestOfData
+	err := call(protocol.Request{Cmd: "bestOf", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// Dev moves the project's dev processes ([[project]].dev_commands) onto one
+// session, or stops them. Activating is a MOVE: the daemon first kills the tabs
+// of whichever session of that project held them, so the ports are free before
+// the new tabs start.
+func (s *DaemonService) Dev(session string, on bool) (protocol.DevData, error) {
+	args, _ := json.Marshal(protocol.DevArgs{Session: session, On: on})
+	var d protocol.DevData
+	err := call(protocol.Request{Cmd: "dev", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// DevFreePort kills the process holding the port a session's dev tab died on and
+// restarts that session's dev tabs. port/pid must match the clash the daemon
+// currently reports (SessionInfo.devClash) — this is the one path that signals a
+// process lola did not start, so a stale dialog is refused rather than applied to
+// whatever holds the port now.
+func (s *DaemonService) DevFreePort(session string, port, pid int) (protocol.DevFreePortData, error) {
+	args, _ := json.Marshal(protocol.DevFreePortArgs{Session: session, Port: port, PID: pid})
+	var d protocol.DevFreePortData
+	err := call(protocol.Request{Cmd: "devFreePort", Args: args}, longTimeout, &d)
+	return d, err
+}
+
 // --- launches ---------------------------------------------------------------
 
 // Open checks out a branch or PR of a project into a throwaway shell worktree.
@@ -126,11 +262,29 @@ func (s *DaemonService) Open(project, ref string) (protocol.OpenData, error) {
 	return d, err
 }
 
-// OpenManual starts a new branch off a base as an agent or a plain shell.
+// CloseExitedTemporary retires a temporary shell only once all its panes are gone.
+func (s *DaemonService) CloseExitedTemporary(id string) (protocol.KillData, error) {
+	var data protocol.KillData
+	err := call(protocol.Request{Cmd: "closeExitedTemporary", Session: id}, shortTimeout, &data)
+	return data, err
+}
+
+// RenameSession changes a display name without changing the branch or session ID.
+func (s *DaemonService) RenameSession(id, name string) error {
+	return call(protocol.Request{Cmd: "renameSession", Session: id, Text: name}, shortTimeout, nil)
+}
+
+// OpenManual starts an agent or shell in a worktree or borrowed directory.
 func (s *DaemonService) OpenManual(a protocol.OpenManualArgs) (protocol.OpenData, error) {
 	args, _ := json.Marshal(a)
 	var d protocol.OpenData
-	err := call(protocol.Request{Cmd: "openManual", Args: args}, longTimeout, &d)
+	cmd := "openManual"
+	if a.Existing {
+		// A daemon predating branch reuse must reject this request, not ignore
+		// the new field and create an owned branch from the wrong base.
+		cmd = "openExisting"
+	}
+	err := call(protocol.Request{Cmd: cmd, Args: args}, longTimeout, &d)
 	return d, err
 }
 
@@ -147,6 +301,15 @@ func (s *DaemonService) OpenTicket(a protocol.OpenTicketArgs) (protocol.OpenData
 	args, _ := json.Marshal(a)
 	var d protocol.OpenData
 	err := call(protocol.Request{Cmd: "openTicket", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// SwitchAgent replaces a session's coding agent with a different kind on the
+// same worktree and branch (the manual half of the agent fallback).
+func (s *DaemonService) SwitchAgent(a protocol.SwitchAgentArgs) (protocol.SwitchAgentData, error) {
+	args, _ := json.Marshal(a)
+	var d protocol.SwitchAgentData
+	err := call(protocol.Request{Cmd: "switchAgent", Args: args}, longTimeout, &d)
 	return d, err
 }
 
@@ -209,14 +372,67 @@ func (s *DaemonService) PollOnce(poll string, dryRun bool) (protocol.PollOnceDat
 
 // --- daemon process control -------------------------------------------------
 
-// lolaBinary resolves the lola CLI used to (re)start the daemon: $LOLA_BIN, then
-// the first `lola` on PATH. The desktop app is a distinct binary, so it cannot
-// re-exec itself the way the TUI does.
-func lolaBinary() (string, error) {
-	if b := os.Getenv("LOLA_BIN"); b != "" {
-		return b, nil
+// CLIInfoDTO describes the `lola` CLI this app would run, so the UI can say
+// which binary the daemon comes from instead of leaving it invisible. Bundled
+// reports whether this .app ships a copy at all (a `wails3 dev` build does not),
+// which is what decides whether InstallCLI can do anything.
+type CLIInfoDTO struct {
+	Path           string `json:"path"`           // resolved binary, "" when none
+	Source         string `json:"source"`         // LOLA_BIN | PATH | bundled | ""
+	Version        string `json:"version"`        // first line of `lola --version`
+	Found          bool   `json:"found"`          //
+	Error          string `json:"error"`          // why nothing resolved
+	Bundled        bool   `json:"bundled"`        // this .app ships a CLI
+	BundledVersion string `json:"bundledVersion"` // version of the shipped copy
+	// Skewed reports that a PATH/LOLA_BIN binary was chosen whose version differs
+	// from the bundled one. Not an error — a developer's own build is the
+	// documented dev loop — but the cause of "the app has a feature the daemon
+	// has never heard of", so it must be visible rather than diagnosed.
+	Skewed bool `json:"skewed"`
+	// AppVersion is this app's compiled main.version, for the same comparison
+	// from the other side.
+	AppVersion string `json:"appVersion"`
+}
+
+// CLIInfo resolves the CLI and probes versions. Never errors: a machine with no
+// CLI at all is a state the UI has to render, not an exception.
+func (s *DaemonService) CLIInfo() CLIInfoDTO {
+	out := CLIInfoDTO{AppVersion: version}
+	if bp := bundledLolaPath(); bp != "" {
+		out.Bundled = true
+		out.BundledVersion = binVersion(bp)
 	}
-	return exec.LookPath("lola")
+	b, err := resolveLola()
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	out.Found = true
+	out.Path = b.Path
+	out.Source = string(b.Source)
+	out.Version = binVersion(b.Path)
+	out.Skewed = out.Bundled && b.Source != srcBundled &&
+		out.Version != "" && out.BundledVersion != "" && out.Version != out.BundledVersion
+	return out
+}
+
+// InstallCLI symlinks the bundled CLI into the first writable directory on the
+// usual PATH, so `lola` / `lola tui` work in a terminal after a DMG-only
+// install. Returns the created path plus whether the shell will actually see it.
+func (s *DaemonService) InstallCLI() (CLIInstallDTO, error) {
+	path, err := installCLI()
+	if err != nil {
+		return CLIInstallDTO{}, err
+	}
+	return CLIInstallDTO{Path: path, OnPATH: onPATH(filepath.Dir(path))}, nil
+}
+
+// CLIInstallDTO is InstallCLI's result. OnPATH=false means the symlink exists
+// but the user's shell will not find it without a profile edit — worth saying,
+// since the action would otherwise look like it silently did nothing.
+type CLIInstallDTO struct {
+	Path   string `json:"path"`
+	OnPATH bool   `json:"onPath"`
 }
 
 // StartDaemon spawns a detached `lola run` if the socket is dead, mirroring
@@ -235,7 +451,10 @@ func (s *DaemonService) startLocked() error {
 	}
 	bin, err := lolaBinary()
 	if err != nil {
-		return errors.New("lola binary not found on PATH (set LOLA_BIN)")
+		// Surfaced verbatim in the UI, so it must name the FIX. The old text
+		// ("lola binary not found on PATH (set LOLA_BIN)") described the lookup
+		// that failed and left a fresh DMG install with nothing to act on.
+		return err
 	}
 	cmd := exec.Command(bin, "run")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -290,4 +509,34 @@ func waitDaemon(wantAlive bool, timeout time.Duration) error {
 		return errors.New("timed out waiting for daemon to start")
 	}
 	return errors.New("timed out waiting for daemon to stop")
+}
+
+// SessionTask updates the shared task board. User additions also enter the conversation.
+func (s *DaemonService) SessionTask(session string, argv []string) ([]protocol.SessionTask, error) {
+	args, _ := json.Marshal(protocol.ReportArgs{Argv: argv})
+	var tasks []protocol.SessionTask
+	err := call(protocol.Request{Cmd: "sessionTask", Session: session, Args: args}, longTimeout, &tasks)
+	return tasks, err
+}
+
+// PRReadiness reads current GitHub facts and unresolved review conversations.
+func (s *DaemonService) PRReadiness(session string, number int) (protocol.PRReadinessData, error) {
+	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number})
+	var d protocol.PRReadinessData
+	err := call(protocol.Request{Cmd: "prReadiness", Session: session, Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// AddressPRFeedback asks the coding agent to validate, fix, and resolve feedback.
+func (s *DaemonService) AddressPRFeedback(session string, number int) (protocol.AgentSayData, error) {
+	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number})
+	var d protocol.AgentSayData
+	err := call(protocol.Request{Cmd: "addressPRFeedback", Session: session, Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// MergePR rechecks GitHub and merges only the PR head the user confirmed.
+func (s *DaemonService) MergePR(session string, number int, repo, head, method string, confirmUnready bool) error {
+	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number, Repo: repo, Head: head, Method: method, ConfirmUnready: confirmUnready})
+	return call(protocol.Request{Cmd: "mergePR", Session: session, Args: args}, longTimeout, nil)
 }

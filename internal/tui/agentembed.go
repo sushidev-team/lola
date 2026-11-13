@@ -21,6 +21,12 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/devtab"
+	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/sshtab"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/vtterm"
 )
 
@@ -61,7 +67,8 @@ func (m *rootModel) scheduleAgentSync() tea.Cmd {
 // activeTabTmux resolves the SELECTED session's active tab to the tmux session
 // the embed should attach to: a shell name for a shell tab, else the agent's own
 // tmux session. ok is false when there is nothing live to show — no selection, or
-// the agent tab of a dead/terminal session.
+// the agent tab of a session whose agent is gone (exited or dead, which is
+// exactly what the primary axis collapses to as DisplayGone).
 func (m *rootModel) activeTabTmux() (name string, kind int, ok bool) {
 	sel := m.sessions.selected()
 	if sel == nil {
@@ -71,7 +78,7 @@ func (m *rootModel) activeTabTmux() (name string, kind int, ok bool) {
 	if tab := m.embedTab[sel.ID]; tab >= 1 && tab <= len(names) {
 		return names[tab-1], termShell, true
 	}
-	if sel.TmuxName != "" && sel.Status != "dead" && sel.Status != "session_ended" {
+	if sel.TmuxName != "" && displayOf(*sel) != state.DisplayGone {
 		return sel.TmuxName, termAgent, true
 	}
 	return "", termAgent, false
@@ -153,9 +160,16 @@ func (m *rootModel) syncAgentPreview() tea.Cmd {
 	title := "agent · " + dash(sel.Issue)
 	if kind == termShell {
 		title = "shell"
+		switch {
+		case strings.HasSuffix(target, "-review"):
+			title = "review" // the visible review pass's pane, not a worktree shell
+		case devtab.Index(sel.ID, target) > 0:
+			title = "dev · " + devTabLabel(sel, target)
+		case sshIsTab(sel.ID, target):
+			title = "ssh"
+		}
 	}
 	m.agentTerm = &termView{term: t, sessionID: sel.ID, tmuxName: target, kind: kind, title: title, w: cw, h: ch}
-	m.ensureTmuxMouse() // so wheel-scroll reaches the embed once focused
 	cmds := []tea.Cmd{m.armEmbed()}
 	if !m.spinning {
 		m.spinning = true
@@ -287,6 +301,12 @@ func (m *rootModel) closeActiveShell() (tea.Model, tea.Cmd) {
 		return m, nil // on the agent tab — nothing to close
 	}
 	name := names[tab-1]
+	if sshIsTab(sel.ID, name) {
+		// This tab IS the connection's terminal, and closing a connection names
+		// what may survive. A tab-strip key is the wrong place to do that by accident.
+		m.sessions.flash, m.sessions.flashGood = "this is the ssh terminal: H, then C closes the connection", false
+		return m, nil
+	}
 	if m.agentTerm != nil && m.agentTerm.tmuxName == name {
 		m.closeAgent() // drop our attach before killing the session
 	}
@@ -299,9 +319,13 @@ func (m *rootModel) closeActiveShell() (tea.Model, tea.Cmd) {
 
 // --- shell tmux sessions (shared with the desktop app) ----------------------
 
-// refreshShells re-reads the tmux server for this session's "<id>-shell-N"
-// sessions, so tabs reflect shells opened anywhere — the desktop app, another
-// lola, or here. Best-effort: on a tmux error the last-known list stands.
+// refreshShells re-reads the tmux server for this session's auxiliary sessions:
+// its "<id>-dev-N" dev tabs, its "<id>-shell-N" shells, and the "<id>-review"
+// pane a visible review pass runs in (see internal/daemon/reviewvisible.go) — so
+// tabs reflect shells opened anywhere (the desktop app, another lola, or here)
+// and both the review a pass started and the dev processes the daemon started
+// show up without the TUI being told. Best-effort: on a tmux error the
+// last-known list stands.
 func (m *rootModel) refreshShells(id string) {
 	if m.shellNames == nil {
 		m.shellNames = map[string][]string{}
@@ -314,17 +338,58 @@ func (m *rootModel) refreshShells(id string) {
 		return
 	}
 	prefix := id + "-shell-"
-	var names []string
+	review := id + "-review" // the visible review pass's pane, if one is open
+	var names, devs, sshTabs []string
+	reviewPane := ""
 	for _, s := range sessions {
 		if strings.HasPrefix(s.Name, prefix) {
 			names = append(names, s.Name)
+			continue
+		}
+		if devtab.Index(id, s.Name) > 0 {
+			devs = append(devs, s.Name)
+			continue
+		}
+		if sshtab.Index(id, s.Name) > 0 {
+			sshTabs = append(sshTabs, s.Name)
+			continue
+		}
+		if s.Name == review {
+			reviewPane = s.Name
 		}
 	}
 	sort.Slice(names, func(i, j int) bool { return shellIndex(id, names[i]) < shellIndex(id, names[j]) })
+	sort.Slice(devs, func(i, j int) bool { return devtab.Index(id, devs[i]) < devtab.Index(id, devs[j]) })
+	// Dev tabs sort FIRST (right after the agent): they are the project's, not
+	// this session's, so their position stays put while shells come and go.
+	sort.Slice(sshTabs, func(i, j int) bool { return sshtab.Index(id, sshTabs[i]) < sshtab.Index(id, sshTabs[j]) })
+	names = append(append(devs, sshTabs...), names...)
+	// The review pane sorts LAST so a review starting or ending never renumbers
+	// the shell tabs beside it. nextShellName's max-index scan ignores both it
+	// and the dev tabs (neither carries a "-shell-N" suffix), so neither can
+	// claim a shell number.
+	if reviewPane != "" {
+		names = append(names, reviewPane)
+	}
 	m.shellNames[id] = names
 	if m.embedTab[id] > len(names) { // active tab outlived its shell
 		m.embedTab[id] = len(names)
 	}
+}
+
+// devTabLabel is the tab chip for a session's dev tab: the FIRST WORD of the
+// command it runs ("composer", "npm"), which is all a TUI tab has room for and
+// still tells two dev processes apart. It falls back to "dev<N>" whenever the
+// command is unknown — a session record from an older daemon, or a tab left over
+// from a dev_commands list that has since been shortened.
+func devTabLabel(sel *protocol.SessionInfo, name string) string {
+	i := devtab.Index(sel.ID, name)
+	if i > 0 && i <= len(sel.DevCommands) {
+		if word, _, _ := strings.Cut(strings.TrimSpace(sel.DevCommands[i-1]), " "); word != "" {
+			return truncPlain(word, 10)
+		}
+	}
+	return fmt.Sprintf("dev%d", i)
 }
 
 // nextShellName picks the next free "<id>-shell-N" (max existing index + 1),
@@ -341,12 +406,22 @@ func (m *rootModel) nextShellName(id string) string {
 }
 
 // createShellSession spawns a detached tmux session running the default shell in
-// dir. Empty command → the user's login shell, mirroring internal/tmux.NewSession.
+// dir, with the worktree's .lola/env exported — same command the agent pane and
+// `lola open` use. A bare login shell here would be the odd one out: the tab
+// would silently lack [[project]].env, so a project command typed in it would
+// behave differently from the same command in the agent pane.
 func (m *rootModel) createShellSession(name, dir string) error {
-	c := m.sessions.tmuxClient(m.cfg.TmuxSocketName())
+	// Built from config rather than reusing the cached read-only client: this is
+	// the TUI's one session-CREATING call, and the scroll defaults it applies to
+	// the server come from [tmux] (see config.TmuxClient).
+	c := m.cfg.TmuxClient("", "")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return c.NewSession(ctx, name, dir, "")
+	home, err := config.Home()
+	if err != nil {
+		return err
+	}
+	return c.NewSession(ctx, name, dir, lolaenv.SessionShellCommand(home, strings.Split(name, "-shell-")[0]))
 }
 
 // killShellSession terminates one shell tmux session (best-effort, idempotent).
@@ -365,6 +440,11 @@ func (m *rootModel) closeSessionShells(id string) {
 	}
 	m.refreshShells(id)
 	for _, name := range m.shellNames[id] {
+		// An ssh tab is the daemon's to close: it runs ssh -O exit first, so a human
+		// in the shell sees the connection close rather than a tab vanish.
+		if sshIsTab(id, name) {
+			continue
+		}
 		m.killShellSession(name)
 	}
 	delete(m.shellNames, id)
@@ -393,70 +473,44 @@ func (m *rootModel) handleEmbedKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// forwardWheel encodes a mouse-wheel event as an SGR mouse sequence and sends it
-// to the focused embed so the inner app (Claude Code's history, tmux copy-mode)
-// scrolls. Coordinates are translated to the embed's own grid. This only takes
-// effect when the agent's tmux has `mouse on` (ensureTmuxMouse enables it) and
-// the inner app handles the wheel.
+// forwardWheel scrolls the focused embed's tmux pane, through the SAME
+// (*tmux.Client).ScrollPane both surfaces use — so the TUI and the app agree on
+// which history moves (the inner program's own, or tmux's copy mode) instead of
+// each guessing.
+//
+// It deliberately does NOT write an SGR sequence into the embedded tmux CLIENT
+// any more. That route only worked with `mouse on` — tmux drops mouse input from
+// a client otherwise — which is why the embed needed ensureTmuxMouse and why
+// scrolling died the moment [tmux].mouse was honoured as written. Addressing the
+// PANE has no such dependency.
+//
+// Bounded and best-effort: a wheel notch must never block the UI, so it runs on
+// its own goroutine with a short deadline and a failure is simply a notch that
+// did nothing.
 func (m *rootModel) forwardWheel(mo tea.Mouse) {
 	e := m.currentEmbed()
 	if e == nil {
 		return
 	}
-	btn := 64 // SGR wheel-up
+	lines := wheelLines
 	if mo.Button == tea.MouseWheelDown {
-		btn = 65
+		lines = -lines
 	}
-	col, row := m.embedMouseCoord(mo.X, mo.Y)
-	e.term.Write([]byte(fmt.Sprintf("\x1b[<%d;%d;%dM", btn, col, row)))
+	c, name := m.cfg.TmuxClient("", ""), e.tmuxName
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), wheelScrollTimeout)
+		defer cancel()
+		_, _ = c.ScrollPane(ctx, name, lines)
+	}()
 }
 
-// embedMouseCoord maps a screen mouse position to the focused embed's 1-based
-// grid, clamped in-bounds (mirrors the focused mainColumn layout offsets).
-func (m *rootModel) embedMouseCoord(x, y int) (int, int) {
-	W := m.width
-	if W <= 0 {
-		W = 100
-	}
-	railW := 32
-	if W < 104 {
-		railW = 28
-	}
-	const panelTop = 6 // vitals(1) + Sessions strip(4) + top border(1)
-	panelLeft := railW + 2
-	w, h := m.agentSize()
-	return clampInt(x-panelLeft+1, 1, w), clampInt(y-panelTop+1, 1, h)
-}
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
-// ensureTmuxMouse enables `mouse on` on the lola tmux server once, best-effort,
-// so wheel events forwarded to an embedded agent actually reach the inner app.
-func (m *rootModel) ensureTmuxMouse() {
-	if m.tmuxMouseSet {
-		return
-	}
-	m.tmuxMouseSet = true
-	bin := os.Getenv("TMUX_BIN")
-	if bin == "" {
-		bin = "tmux"
-	}
-	sock := m.cfg.TmuxSocketName()
-	// mouse on: tmux processes wheel events from the client.
-	_ = exec.Command(bin, "-L", sock, "set-option", "-g", "mouse", "on").Run()
-	// alternate-scroll off: do NOT translate the wheel into arrow keys for
-	// alt-screen apps (that recalls input history instead of scrolling) — forward
-	// the real wheel so the inner app (Claude) can scroll its own history.
-	_ = exec.Command(bin, "-L", sock, "set-option", "-g", "alternate-scroll", "off").Run()
-}
+const (
+	// wheelLines is how far one notch scrolls, matching the three lines a
+	// terminal emulator sends per notch.
+	wheelLines = 3
+	// wheelScrollTimeout bounds the tmux calls behind one notch.
+	wheelScrollTimeout = 2 * time.Second
+)
 
 // handleEmbedPaste forwards pasted text to the focused embed as a BRACKETED
 // paste, so the child (agent / vim) treats it as one paste rather than

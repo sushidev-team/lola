@@ -20,7 +20,7 @@ PR/CI state via `gh`.
 each session can instead run the **OpenAI Codex CLI** (`codex`) or **opencode**
 (`opencode`) — set globally in `[defaults].agent` and overridable per repository
 with `[[project]].agent` (`claude` | `codex` | `opencode`, default `claude`).
-All three get full lifecycle-callback parity; see
+All three have agent-specific lifecycle callbacks; see
 [The coding agent](#the-coding-agent) for how each one is launched and wired.
 
 One binary, two roles:
@@ -65,11 +65,20 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
    spawn while any of them is missing and reports it in `lola status`.
 
 3. Store your Linear API key in the macOS Keychain (see
-   [Secrets](#secrets)):
+   [Secrets](#secrets)). Any of these writes the same item, so pick whichever
+   surface you are already in:
 
-   ```sh
-   security add-generic-password -a "$USER" -s lola-linear -U -w
-   ```
+   - `lola setup` — the first-run wizard;
+   - the TUI's settings editor (`S` → **Linear**) — also how you rotate a key;
+   - the desktop app's Settings → **Linear**, or its first-run screen;
+   - by hand:
+
+     ```sh
+     security add-generic-password -a "$USER" -s lola-linear -U -w
+     ```
+
+   Whichever you use, only the *name* of the source lands in `config.toml`
+   (`[linear].api_key_keychain`); the key itself never does.
 
 4. Register at least one repository as a `[[project]]`, then give it a `team_id`
    (and the other polling fields) to start it watching Linear — start from
@@ -91,27 +100,66 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
    lola run
    ```
 
+## Installing the desktop app
+
+The macOS app (**Lola.app**) ships as a signed, notarized universal DMG on each
+[release](https://github.com/sushidev-team/lola/releases); the CLI ships beside
+it as `lola_<version>_darwin_<arch>.tar.gz`. Drag the app to `/Applications` and
+it works on its own — **the `.app` bundles the `lola` CLI** at
+`Contents/Resources/bin/lola`, so it can start a daemon with nothing else
+installed. Two consequences worth knowing:
+
+- **The bundled copy does not put `lola` on your `PATH`.** A terminal still has
+  no `lola` / `lola tui` after a DMG-only install. Either open the app's
+  **doctor** overlay (`d`) and press **Install CLI** — it symlinks the bundled
+  binary into the first writable directory of `/usr/local/bin`,
+  `/opt/homebrew/bin`, `~/.local/bin` — or install the tarball yourself.
+- **A `lola` already on `PATH` wins over the bundled one**, so a developer's own
+  `go install` build stays in charge (that is the dev loop). The doctor overlay
+  names which binary is in use and flags a version mismatch between the two;
+  `LOLA_BIN` pins one explicitly.
+
+The app cannot bundle the rest of the runtime — `tmux`, `git`, `gh` and the
+coding agent are the user's own installs (step 2 above), and the doctor reports
+any that are missing. `tmux` in particular must NOT be vendored: `tmux -L lola`
+is a client/server pair shared with the CLI, and mixing builds hits a
+protocol-version mismatch.
+
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[defaults]`/`[notify]`/`[brain]`/`[statusagent]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
-| `lola setup` | Run the first-run configuration wizard (Linear key → Keychain, one `[[project]]`, defaults) and write `config.toml`. Re-runnable any time. |
-| `lola doctor` | Print an aligned health report (tmux/git/claude/gh on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. Never prints the key value. |
+| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[linear]` API key/`[defaults]`/`[notify]`/`[brain]`/`[statusagent]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
+| `lola setup` | Connect Linear (key → Keychain), optionally choose general defaults, and write `config.toml`. Projects are added afterward with **n** in the TUI or **Add project** in the app. Re-running setup preserves existing projects. |
+| `lola doctor` | Print an aligned health report (tmux/git/claude/gh/lola on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. The `lola cli` row is a WARNING, not a critical failure — the daemon running the check is itself lola, and the desktop app falls back to its bundled copy, so a miss costs only the shell. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
+| `lola review-package publish <manifest.json> [--app member]` | From a Lola agent session, retain a Markdown write-up and before/after screenshots for the desktop's full-screen **Review PR** workspace. Packages carry base/head revisions and survive worktree cleanup. No GitHub posting or merge authorization. See [PR review workspace](docs/pr-review-workspace.md). |
+| `lola review-package complete <manifest.json> [--app member]` | Retain final review material and report ordinary-session completion as an agent claim. A stack member does not mark the shared task done. |
+| `lola review-package capture <url> --output <new.png>` | Optional local Playwright capture with URL, viewport and `--selector` context. Uses an installed browser; never overwrites evidence. |
+| `lola review-package list\|mark\|feedback\|verify\|checks\|recover …` | Local human automation with JSON receipts: inspect packages, send contextual feedback, explicitly authorize bounded offline checks of the exact head, and read/recover results. See [usage and boundaries](docs/pr-review-workspace.md#automation-and-completion). |
 | `lola stop` | Graceful shutdown: finish in-flight tick, close socket, exit 0 |
 | `lola status` | Table per polling project (keyed by project name): enabled, last run, last spawn, running, last error — plus `runtimeOk` / `linearOk` health flags |
 | `lola enable <name>` / `lola disable <name>` | Live pause/resume of one polling project's poll, keyed by project name (no restart) |
 | `lola poll <name> --once [--dry-run]` | Run one polling project's tick now (keyed by project name); `--dry-run` prints matches (including cross-project overlaps) with **no** side effects — no spawn, no label flip, no seen write |
 | `lola open <project> <branch\|PR#>` | Manually check out a branch or PR of a project into a **throwaway** worktree with a plain shell — no coding agent — so you can run and test it (e.g. review a PR). A bare number is a PR (fetched via `refs/pull/<n>/head`, works across forks); anything else is a branch. The worktree is **detached HEAD**, so teardown never touches the upstream branch. It shows in the sessions view (status `shell`) and never enters the reaction / write-back / review loop; tear it down with `lola kill <session>` (the printed message names it). In the TUI, press `O`. |
 | `lola attach [session]` | Hand the terminal to tmux on lola's isolated server. With **no argument** it (re)builds an aggregate viewer session with **one tab per live agent** (windows linked from each session, so switching tabs pages through every agent) and attaches to it — "attach once, see all agents". With a **session id** it attaches straight to that one. Talks to tmux directly (works even if the daemon is down); detach with `C-b d`. The viewer is a linked view — detaching or rebuilding it never touches the agent sessions. |
-| `lola kill <session> [--force]` | Terminate a session's agent (tmux) and clean up after it. A **clean** worktree is removed and the issue's slot is freed (so it can re-dispatch if it still matches); a **dirty** one (uncommitted changes) is kept for inspection and the command exits nonzero — rerun with `--force` to remove it anyway. The agent is always stopped first, even when the worktree is kept. |
-| `lola revive <session>` | Inverse of `kill`: relaunch a **dead** session's agent on the worktree that was kept for inspection. Claude resumes its prior conversation via `--continue` when it recorded a transcript before dying, otherwise the agent restarts fresh on the same worktree. Refused if the session is still running. Use when a pane died to a transient fault (instant launch failure, crashed agent, machine sleep) rather than re-dispatching from scratch. |
+| `lola kill <session> [--force]` | Terminate a session's agent (tmux) **and its shell/review tabs**, then clean up after it. A **clean** worktree is removed along with the local branch it was on, and the issue's slot is freed (so it can re-dispatch if it still matches); a **dirty** one (uncommitted changes) keeps both the checkout and the branch for inspection and the command exits nonzero — rerun with `--force` to remove it anyway. The agent is always stopped first, even when the worktree is kept. |
+| `lola revive <session>` | Inverse of `kill`: relaunch a **dead** session's agent on the worktree that was kept for inspection. Claude and opencode resume their prior conversation (`--continue`) when they recorded one before dying, otherwise the agent restarts fresh on the same worktree. Refused if the session is still running. Use when a pane died to a transient fault (instant launch failure, crashed agent, machine sleep) rather than re-dispatching from scratch. |
+| `lola switch-agent <session> <kind>` | Replace a session's coding agent with a different kind (`claude`\|`codex`\|`opencode`) on the **same worktree and branch** — the manual half of the agent fallback (see [Agent fallback](#agent-fallback-usage-limits)). The old pane is stopped (shell/dev/review tabs survive), a `.lola/handoff.md` briefing is written for the new agent, and the new agent launches on it. Refused for an unknown session, a shell session, the kind already running, or a kind whose binary is not on `PATH`. |
+| `lola checkpoint list\|diff\|restore\|fork <session> [n]` | The CLI face of [turn checkpoints](#turn-checkpoints-restore-and-fork): `list` the session's per-turn snapshots, `diff` what the turn ending in checkpoint `n` changed, `restore` the worktree's files to it (undoable; refused while the agent is mid-turn), or `fork` a new agent session from it on its own branch (`--agent` to pick a different coding agent). |
 | `lola answer <session> <text>` | Deliver a human's inline reply to a session parked for input. Refused unless the session's derived status is `needs_input` (the one moment the agent is provably idle at its prompt), so a reply can never corrupt a mid-turn agent. |
-| `lola review <session> [--provider kind]` | Force a **pass-shape** review provider now, ignoring the once-per-PR guard, and route its findings per its transports. With no `--provider` it forces the primary enabled pass provider; `--provider coderabbit-cli\|claude-session` picks one explicitly. Skipped (not an error) when no such provider is enabled or its tool is unavailable. |
+| `lola broadcast <project> <text>` | Send ONE message to every live coding agent of a project ("rebase on main", "stop touching X"). Each copy goes through the same idle gate + pane proof as diff feedback: agents resting at their prompt get it now, busy ones get it queued and delivered when they are idle — never forced. Prints the delivered/deferred split. Also `b` on the TUI's project lists and **Broadcast** on a project's page in the app. |
+| `lola review <session> [--provider kind]` | Force a **pass-shape** review provider now, ignoring the once-per-PR guard, and route its findings per its transports. With no `--provider` it forces the primary enabled pass provider; `--provider <kind>` picks one explicitly (any pass kind: `coderabbit-cli`, `custom-cli`, `claude-session`, `codex-session`, `opencode-session`). Skipped (not an error) when no such provider is enabled or its tool is unavailable. |
+| `lola plan <issue> [--apply] [--project name] [--file path]` | Decompose a large Linear issue into dependent sub-issues. Without `--apply`: one bounded headless claude proposes 2–8 ordered steps, which are printed and saved to `~/.lola/plans/<issue>.json` — **nothing is created**. Review or edit that file, then `--apply` creates each step as a sub-issue (placed so the project's poll matches it) and links every dependency as a Linear "blocked by" relation. See [Decomposing a large issue](#decomposing-a-large-issue). |
+| `lola bestof start <issue> [--agents mix] [--project name]` | Run ONE issue as several independent attempts — different coding agents or models — each on its own sibling branch opening a DRAFT PR. The mix is `<agent>[@<model>][:<count>]`, comma-separated (`claude:2`, `claude@opus,codex@gpt-5-codex`); default `[best_of].agents`. Every attempt counts against the caps and the budget. See [Best-of-N](#best-of-n-several-attempts-one-winner). |
+| `lola bestof compare <issue\|group\|session> [--json]` | Every attempt of a best-of group side by side: agent/model, state, PR + CI, review findings, diff size, tokens — with a ★ suggestion (a hint, never acted on). |
+| `lola bestof pick <session>` | Keep one attempt: its draft PR is marked ready, every other attempt's PR is closed (branch kept) and its session torn down; a worktree with uncommitted changes is kept. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
+| `lola post <kind> …` | Agent-facing: publish an item to the session's conversation (`narration`, `widget`, …). Same command as `lola ssh post`, which stays valid. |
+| `lola ssh <verb>` | **Agent-assisted ssh.** A local agent debugs on a remote host with nothing installed there, a human watches a structured timeline, can ask the agent or run commands from one composer, and can take over at any moment. Commands typed in the terminal become timeline blocks too, private until shared, and `sudo` is labelled wherever it runs. The agent and the human share one working folder per connection. Set `terminal_capture = false` on a host for a plain login shell. Agents can structure answers and post small sandboxed widgets; `lola ssh guide answers` and `lola ssh guide widgets` are their references. Agent verbs, run inside a session: `hosts`, `request <host> --why W [--scope S]`, `run <host> --why W [--cwd D] [--timeout N] [--wait 9m] [--detach] -- cmd`, `wait <block>`, `output <block>`, `post <kind> ...`. Human verbs: `open <host> [--agent K] [--name N] [--brief B] [--drive]` starts an agent-assisted session, `connect <session> <host> [--drive]` connects an existing one without waiting for its agent to ask, `ls`, `go`, `deny`, `approve <conn> <block> [--grant MIN]`, `reject`, `take`, `handback [--note N] [--transcript]`, `stop`, `close`, `terminal`. `run` exits with the remote exit code, or 240 denied, 241 the human has the wheel, 242 not connected, 243 still waiting, 244 timed out, 245 stopped, 246 refused, 247 result unknown, 248 lola unreachable. Hosts are `[[ssh_host]]` in the config; a production host approves every command and refuses an unsandboxed agent unless it sets `allow_unsandboxed`. **Lola does not filter commands: the remote user's permissions are the real limit, everything the agent reads goes to its model provider, and for an unsandboxed agent the approval gate stops accidents and well-behaved agents, not a determined one.** See `docs/ssh-sessions.md`. |
+| `lola report <verb> [args]` | **Run by the coding agent, inside its session**, to publish its own progress: `todo set\|add\|start\|done\|undo\|remove\|clear`, `phase <planning\|investigating\|implementing\|testing\|reviewing\|polishing\|done>`, `progress <0-100\|done/total> [label]`, `blocked <reason>` / `unblocked`, `note <text>`, `check <name> <pass\|fail\|running> [summary]`, `clear`. Every agent's `.lola/prompt.md` teaches it. Shown as the session view's **Report** sidebar, a **Plan** column in the list, a chip on board cards and a `plan:` block in the TUI. Display-only: it is the agent's claim about itself and never drives status, slots, reactions or send-keys. A `check <test\|lint\|build…> pass` claim is **audited**: for claude sessions lola reads the agent's own transcript for a matching command run before the claim (and its exit status), and compares it with the PR's CI — a claim the evidence does not back shows as **Unverified claim** (app) / `⚠ unverified` (TUI). The audit is display-only too. A rejected report exits 1 with the usage error; an unreachable daemon exits 0, so a report never fails the agent's command. `lola report --help` lists every verb. |
 
 `lola hook <event>` also exists but is **internal and hidden**: the generated
 Claude Code settings wire the agent's lifecycle hooks (Stop / Notification /
@@ -138,7 +186,12 @@ environment variable — tests rely on this):
 | `state/<project>.seen` | Per-project seen-issue state |
 | `state/sessions.json` | Native session store (status, PR, worktree, tmux target) |
 | `worktrees/<project>/<session>/` | Per-session git worktree |
+| `context/<project>/<key>/` | Shared context folder, linked into every session as `.lola/context` (key = the lowercased issue, or the session ID for manual/PR sessions). Survives teardown on purpose; delete it by hand when an issue is done. |
+| `plans/<issue>.json` | `lola plan` proposals awaiting review / `--apply` |
 | `cache/linear-<team>.json` | Cached Linear metadata for the TUI forms |
+| `state/ssh/<session>/` | Record of an ssh session: connections, blocks, elements and sanitized output (0700 directory, 0600 files). Kept 14 days after the session ends. |
+| `ssh/<connection>` | ssh control socket, in a verified 0700 directory (`/tmp/lola-ssh-<uid>/` when `LOLA_HOME` makes the path too long for `sun_path`). |
+| `local-sessions/<id>/work/` | A direct ssh session's scratch folder, the agent's working directory. Removed when the session ends. |
 
 ## Configuration reference
 
@@ -155,6 +208,7 @@ Linear **UUIDs**, not names — the TUI form resolves names to IDs for you.
 | `global_cap` | int | Hard ceiling on counted native sessions across **all polling projects**. Must be > 0. Per tick, a project's budget is `min(its cap, global_cap − live counted sessions)`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent spawned per session. Default `claude`. Global default; override per repo with `[[project]].agent`. Empty/omitted resolves to `claude`. See [The coding agent](#the-coding-agent). |
 | `manage_daemon` | bool | Whether the TUI owns the daemon lifecycle: silently start the daemon on open when the socket is dead, `^r` restart, `^x` stop. Default `true`. Set `false` when a launchd `KeepAlive` job owns the daemon, so the TUI never fights the supervisor. See [Running the daemon](#running-the-daemon-launchd-vs-tui). |
+| `trust_worktrees` | bool | Pre-accept Claude Code's workspace-trust dialog ("Is this a project you created or one you trust?") for every worktree lola creates. Before each claude launch, lola writes `projects[<worktree>].hasTrustDialogAccepted = true` into `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), and removes the entry at teardown. The write is atomic, touches only that key, and never rewrites a file that does not parse. Default `true`. Claude Code stops its trusted-parent search at the git root, and each worktree is its own root, so trusting `~/.lola/worktrees` by hand does nothing. Only folders under `~/.lola/worktrees` are touched, and sandboxed projects are skipped. A trusted folder loads its project `.claude/` settings, hooks and MCP servers without asking. Set `false` to get the dialog back. |
 
 `[defaults]` additionally carries a **fallback for each inheritable
 `[[project]]` key**, so shared setup is written once instead of repeated per
@@ -171,6 +225,7 @@ overrides it.
 | `branch_prefix` | string | `[[project]].branch_prefix` — prefix for a session's branch. Ultimate default `"lola/"`. |
 | `symlinks` | string array | `[[project]].symlinks` |
 | `post_create` | string array | `[[project]].post_create` |
+| `agent_fallback` | string array | `[[project]].agent_fallback` — ordered fallback kinds used when a session's agent hits its usage limit. Default none (notify only). See [Agent fallback](#agent-fallback-usage-limits). |
 | `env` | table of strings | `[[project]].env` (as `[defaults.env]`) |
 | `match_labels` | string array | `[[project]].match_labels` |
 | `match_mode` | `"any"` \| `"all"` | `[[project]].match_mode`. Ultimate default `"any"`. |
@@ -252,33 +307,112 @@ runtime layer, not on config load.
 | --- | --- | --- |
 | `name` | string | Unique project **id** (required), and a path segment: it names the worktree directory (`worktrees/<name>/`) and the seen file (`state/<name>.seen`), prefixes every session/tmux name (`lola-<name>-eng-42`), and is what `lola status`, `enable`/`disable`/`poll`/`logs` key by. Keep it slug-shaped (lowercase letters, digits, `.` `_` `-`) — the forms slugify what you type. Changing it is a **rename**, not an edit; see [Renaming a project](#renaming-a-project). |
 | `label` | string | Free-text display name shown in the TUI and desktop (e.g. `"Nori App"`). Optional — empty falls back to `name`. Purely cosmetic: nothing keys by it, so you can change it at any time, including while sessions are running. |
-| `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
-| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Repo auto-detection](#repo-auto-detection). |
-| `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Default `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
+| `group` | string | The `[[group]]` folder this project is filed under in the app's project panel, by that group's `name`. Optional — empty puts it at the top level. Display only, and set by dragging the row rather than on this form; see [Groups and ordering](#groups-and-ordering). A value naming no configured group is repaired to empty on load with a notice, never rejected. |
+| `path` | string | Absolute path to the main checkout (required, except for a [stack](#stacks-one-issue-several-repositories)). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
+| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself). |
+| `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Defaults to the checkout's own default branch when a folder is picked (see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself)), else `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
+| `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session) — unless the project sets `port_range`, which lets every session run them at once. Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
+| `port_range` | string | Inclusive `"lo-hi"` range (within 1024–65535, e.g. `"4100-4999"`) each session leases its **own** block of ports from, exported as `LOLA_PORT` / `LOLA_PORT_1..N`. Setting it makes `dev_commands` **multi-active** — see [Parallel dev stacks](#parallel-dev-stacks). Not inheritable. |
+| `ports_per_session` | integer | Size of each session's block (1–20). Omitted = 1. Needs `port_range`. |
+| `pre_remove` | string array | Teardown hook, the mirror of `post_create`: commands run in the worktree right before lola removes it (merged-cleanup and `lola kill`), with the same env including `LOLA_DB_NAME` and the port lease. Skipped for a dirty (kept) worktree; bounded to 20s in total; a failure is logged, never fatal. Skipped for a [sandboxed](#the-container-sandbox) project: it would run on the host in a worktree the agent could write. Not inheritable. |
+| `sandbox` | `"none"` \| `"docker"` | Run this project's coding agents inside a container that can write only their worktree. Empty = `none` (on the host). See [The container sandbox](#the-container-sandbox). Not inheritable. |
+| `sandbox_image` | string | Image a sandboxed project runs, overriding `[sandbox].image`. Must carry `sh`, `git` and the coding agent on `PATH`. |
+| `sandbox_ports` | string array | Container ports published on `127.0.0.1`, as `"3000"` or `"<host>:<container>"`, so a dev server the agent starts in the container is reachable from the host. |
+| `kind` | `""` \| `"stack"` | `"stack"` makes this project a **stack**: no checkout of its own, it owns the Linear side (filter, write-back, agent, sandbox, budget) for its member projects. See [Stacks](#stacks-one-issue-several-repositories). |
+| `stack` | string | Makes this project a **member** (an *app*) of the named stack. It is no longer polled itself; its own Linear, agent and write-back keys are kept but ignored while it is a member. |
+| `labels` | string array | Member only: the issue labels that select this app — a session of the stack checks it out only for an issue carrying one of them (label UUID, name, or `group/name`; case-insensitive). Empty = every issue. |
+| `daily_budget_tokens` | int | This project's daily limit in **weighted** tokens (see [`[budget]`](#budget-optional)). Once today's usage reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
-| `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent and the `post_create` commands both see them. Omit to inherit `[defaults].env`. |
+| `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
+| `agent_fallback` | string array | Ordered fallback kinds for this repo when a session's agent hits its usage limit, e.g. `["codex", "opencode"]`. Omit to inherit `[defaults].agent_fallback`; set to `[]` to disable the fallback for this project. See [Agent fallback](#agent-fallback-usage-limits). |
 
-#### Repo auto-detection
+#### Groups and ordering
 
-Filling in a project's `path` makes the TUI and desktop forms resolve `repo`
-from the checkout's git remotes, so `owner/name` need not be copied by hand. It
-prefers the **`upstream`** remote over `origin` — in a fork, `origin` is your
-fork but `upstream` is where the pull requests actually land, which is what
-PR/CI observation must watch. A detected value is flagged as such in the form;
-verify it on a fork.
+The app's project panel draws **one list** in which a folder is a row beside the
+projects, not a section under them. Two config facts describe it:
 
-Detection only ever **fills an empty field** and never overwrites a value you
-set. When it cannot determine the repo — not a git checkout, no remotes, a
-non-GitHub host, or a self-hosted GitHub Enterprise on a domain that does not
-name GitHub — it leaves the field **empty rather than guessing**. That is the
-safe direction: an empty `repo` disables the open-PR check (and so the orphan
-revert, fail-closed), whereas a wrong one would have `gh pr list --repo` answer
-confidently about someone else's repository.
+- **Grouping** is `[[project]].group`, naming a `[[group]]` table.
+- **Order** is the `[[project]]` array's own order — which the TUI's project list
+  renders too, so rearranging in the app reorders both surfaces — plus each
+  `[[group]]`'s `position`, its **zero-based** index among the top-level rows
+  (counting the ungrouped projects and the other folders, not a folder's
+  members). A folder needs an index of its own precisely because an **empty** one
+  has no member to derive a place from.
 
-It reads local git remotes only — no network, no `gh`, no auth.
+  The app always writes canonical positions, so these rules only matter when
+  editing by hand: a negative value is repaired to `0` on load, a value past the
+  end simply lands last, and two folders claiming the same index keep their
+  order in the file. Nothing here is ever rejected.
+
+```toml
+[[group]]
+name = "clients"        # the id [[project]].group references
+label = "Clients"       # display name; empty falls back to name
+position = 1            # zero-based index among the top-level rows
+collapsed = false       # the folder's disclosure state in the app
+
+[[project]]
+name = "okane"
+group = "clients"
+```
+
+A group is a **folder, not a policy** — nothing in the daemon reads one, so
+filing a project changes nothing about how it polls, spawns or is counted. It is
+a table of its own rather than a bare string so an **empty** folder can exist:
+the app creates it (panel `+` → *New group*) and projects are dragged in
+afterwards.
+
+In the app the whole arrangement is drag-and-drop: drop a project **onto** a
+folder row to file it there, into a gap to place it (out of a folder if it was in
+one), and drag a folder to move it with its members. There is deliberately **no**
+group field on the project form — a second place to set it would let a stale form
+move a project nobody dragged — so the same moves are bound on the focused row:
+`⌥↑`/`⌥↓` to move it, `⌥→` to file it into the nearest folder, `⌥←` to take it
+back out. Removing a folder never removes a project; its members return to the
+top level.
+
+The TUI does not draw the folders (its list stays flat) but it honours the
+order, and saving config there preserves the `[[group]]` tables.
+
+#### Adding a project: pick the folder, the rest fills itself
+
+Adding a project starts at its checkout, because everything else on the Repo tab
+is derived from it. Both surfaces open the picker for you:
+
+- **Desktop app** — "Add project" opens the native folder chooser straight away;
+  the Path row also carries a **Choose folder…** button. Cancelling leaves an
+  ordinary empty form.
+- **TUI** — `n`/`a` opens the project form directly into a **folder browser**
+  (`enter` on the Path field reopens it later). `↑`/`↓` move, typing narrows the
+  list, `→`/`enter` walks into a folder, `←` goes up, `ctrl-s` takes the folder
+  you are in, `ctrl-t` shows dot-directories and `esc` backs out. Directories
+  that are git checkouts are tagged `git`, and `enter` on one **takes** it — the
+  common case is a single keystroke.
+
+One pass over local git then fills, from the picked folder:
+
+| field | from |
+| --- | --- |
+| `path` | the checkout **root** — picking a subdirectory still configures the repository |
+| `label` / `name` | the folder name (`nori-app` → label "Nori App", id `nori-app`) |
+| `repo` | the GitHub remote, **`upstream`** preferred over `origin` — in a fork, `origin` is your fork but `upstream` is where the pull requests land, which is what PR/CI observation must watch |
+| `default_branch` | `origin/HEAD` when git knows it, else a conventional name (`main`, `master`, `develop`, `trunk`) that **actually exists** in the checkout, else the checked-out branch |
+
+Every one of these only **fills an empty field** (or a value the form itself put
+there) and never overwrites what you set — a detected `repo` is flagged as such,
+so verify it on a fork. When something cannot be determined — not a git
+checkout, no remotes, a non-GitHub host, or a self-hosted GitHub Enterprise on a
+domain that does not name GitHub — the field is left **empty rather than
+guessed**. That is the safe direction: an empty `repo` disables the open-PR check
+(and so the orphan revert, fail-closed), whereas a wrong one would have
+`gh pr list --repo` answer confidently about someone else's repository. A path
+that is not a checkout is called out on the field rather than refused.
+
+It reads local git only — no network, no `gh`, no auth. Typing a path by hand
+still works everywhere the picker does.
 
 #### Renaming a project
 
@@ -308,6 +442,294 @@ running daemon — it is the only thing that knows whether a session is live.
 
 For a new project the id is derived from the label as you type (`Nori App` →
 `nori-app`); typing in the id field yourself breaks that link for good.
+
+#### The active session
+
+Every worktree of a project wants to serve on the same port, so `composer dev`
+can only run in **one** session at a time. `dev_commands` makes that a toggle
+instead of a hunt:
+
+```toml
+[[project]]
+name = "nori-app"
+dev_commands = ["composer dev", "npm run dev"]
+```
+
+Switch a session **Active** — the button in the desktop app's session header,
+`Make active` in its right-click menu, or `D` in either surface — and lola
+
+- stops the dev tabs of whichever session of that project was holding them
+  (*first*, so the ports are free) — killing each tab's whole **process group**,
+  since `composer dev` spawns the process that actually holds the port and that
+  process ignores the hangup a plain tmux kill sends — then
+- starts each command in its own tmux tab beside the agent pane, rooted in that
+  session's worktree with its `env` exported, labelled with the command it runs.
+
+A project that sets `port_range` skips the move entirely: each session runs on
+its own leased ports — see [Parallel dev stacks](#parallel-dev-stacks).
+
+Each entry is a **shell line**, interpreted by `sh` in the worktree **root** —
+`cd desktop && wails3 dev`, `PORT=3001 npm run dev` and pipes all work.
+
+The toggle is **derived from tmux, not remembered**: closing a dev tab, a
+command that crashes, or a killed session all read back as inactive within one
+observe cycle (~30s), and the daemon never has to reconcile a stale flag. A tab
+whose command exits *keeps its pane* (tmux `remain-on-exit`), so the error that
+killed your dev server is still on screen when you come back to it — the session
+simply stops counting as active. Switching the toggle on again replaces the
+pane and restarts the command.
+
+Killing a session takes its dev tabs down with it, so a dead session never
+leaves a port bound.
+
+**When the port is already taken.** lola frees ports automatically only inside
+its own worktrees — a dev server running in *your* checkout is yours, not lola's
+to kill. That is also the clash you hit most: your own `npm run dev` holds 5173,
+the session's tab exits after one line, and the pane is usually cleared by then,
+so the tab just reads as dead. lola therefore reads a dead dev tab once, and if
+it says the address was in use, asks `lsof` who holds it:
+
+```
+clash:    :9245 held by node (pid 52791) — F to free
+          outside lola /Users/you/code/app/desktop/frontend
+```
+
+The app shows the same thing as a banner over the terminal with a **Free port**
+button. Both ask before doing anything — this is the one action that kills a
+process lola did not start — and the daemon re-checks that *that* pid still
+holds *that* port before signalling it, so an answer given a minute late is
+refused rather than aimed at whatever holds the port by then. A process
+belonging to a live lola session is never killed this way. Afterwards the dev
+tabs start again on their own.
+
+#### Parallel dev stacks
+
+The active-session move exists because every worktree wants the same port. A
+project can instead hand each session **its own** ports, and then any number of
+sessions run their dev stacks side by side:
+
+```toml
+[[project]]
+name = "nori-app"
+dev_commands = ["php artisan serve --port=$LOLA_PORT", "npm run dev -- --port $LOLA_PORT_2"]
+port_range = "4100-4999"
+ports_per_session = 2
+post_create = ['createdb "$LOLA_DB_NAME"', "php artisan migrate"]
+pre_remove = ['dropdb --if-exists "$LOLA_DB_NAME"']
+
+[project.env]
+DB_DATABASE = "{{.DBName}}"
+APP_URL = "http://127.0.0.1:{{.Port}}"
+```
+
+- **The lease.** At spawn each session gets the lowest free aligned block of
+  `ports_per_session` ports in `port_range` — skipping ports another session
+  holds (any project) or that something already listens on. It is recorded in
+  `~/.lola/state/ports.json` by session id, so a daemon restart, a revive or an
+  agent switch keep the same ports, and it is released when the session's
+  worktree is removed. A session whose range ran out still spawns, without
+  `LOLA_PORT`.
+- **The variables.** Every session gets `LOLA_SESSION_SLUG` (its id) and
+  `LOLA_DB_NAME` (a stable, identifier-safe database name derived from it);
+  with a lease also `LOLA_PORT` (the first port) and `LOLA_PORT_1..N`. They
+  travel with `[project.env]` — `post_create`, the agent pane, shell tabs, dev
+  tabs and `pre_remove` all see them — and win over a same-named key there.
+- **Multi-active.** With a `port_range`, switching a session **Active** starts
+  its dev tabs without stopping anyone else's, and the stray-server sweep stays
+  inside that session's own worktree. A session holding no lease (spawned
+  before the range was set, or the range was exhausted) is refused rather than
+  allowed to fight the others over a default port — respawn it or widen the
+  range. The session's ports show in the TUI detail (`ports:`) and the app's
+  dev-toggle tooltip; the dev URL chip and port-clash banner work per session
+  as before.
+- **Teardown.** `pre_remove` runs after the session's tmux tabs are down and
+  before the worktree goes, so it can drop the database `post_create` made. It
+  is skipped when the worktree is dirty (lola keeps it, and what it uses),
+  bounded to 20 seconds in total (each command's whole process group is killed
+  at the deadline), and best-effort: every failure is logged and teardown
+  carries on. Keep its commands idempotent.
+
+#### Per-session env values
+
+`[project.env]` values are written to a 0600 `<worktree>/.lola/env`, which every
+lola-started pane sources before it runs anything — the agent, shell tabs,
+`lola open` shells — and which `post_create` commands get through their own
+environment. A terminal *you* open outside lola does not have them; source that
+file, or use a shell tab.
+
+A value may reference the session, with the same `{{.Field}}` spelling the
+reaction and write-back templates use:
+
+| Placeholder | Value |
+|---|---|
+| `{{.Session}}` | tmux session id, identical to the worktree directory name (`lola-nori-app-nor-366`) — unique for every session |
+| `{{.Issue}}` | Linear identifier (`NOR-366`); **empty** on PR and manual sessions |
+| `{{.Branch}}` | branch checked out in the worktree |
+| `{{.Project}}` | this project's name |
+| `{{.Worktree}}` | absolute worktree path |
+| `{{.Slug}}` | same as `{{.Session}}` — reads better in a hostname (`{{.Slug}}.test`) |
+| `{{.DBName}}` | the session's stable database name, `LOLA_DB_NAME` (`lola_nori_app_nor_366`) |
+| `{{.Port}}`, `{{.Port1}}`..`{{.PortN}}` | the leased ports (see [Parallel dev stacks](#parallel-dev-stacks)); **empty** without a `port_range` |
+
+This earns its keep next to `symlinks = [".env"]`. A shared `.env` means every
+worktree also shares the services it names — the same Redis queue, the same
+cache prefix — so two dev stacks quietly consume each other's jobs, which reads
+as work vanishing rather than as a collision. Give each worktree its own
+namespace instead:
+
+```toml
+[project.env]
+REDIS_QUEUE = "{{{.Session}}}"   # → {lola-nori-app-nor-366}
+```
+
+Prefer `{{.Session}}` wherever the value has to be unique for every session:
+`{{.Issue}}` renders empty when there is no issue. Only values are rendered —
+names are validated shell identifiers and are never templated.
+
+#### The container sandbox
+
+`sandbox = "docker"` runs the project's coding agent inside a container, so an
+agent that goes rogue can wreck its worktree and nothing else. The agent's pane
+is still an ordinary lola tmux pane — it runs `docker run -it …` instead of the
+agent — so the terminal views, pane classification, answers and send-keys all
+work unchanged.
+
+```toml
+[sandbox]
+image    = "ghcr.io/acme/agent-node:22"   # sh + git + the coding agent on PATH
+lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # make build-linux
+pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]
+
+[[project]]
+name          = "web"
+sandbox       = "docker"
+sandbox_ports = ["5173"]          # published on 127.0.0.1:5173
+```
+
+What the container can reach:
+
+| Access | What |
+| --- | --- |
+| read-write | the session worktree (for a stack session: its folder, with every app worktree inside it), the repositories' git object/ref stores (a commit writes there), and claude's transcript directory for this worktree (lola's usage, claim audit and revive read it) |
+| read-only | each git store's `config` and `hooks` (a writable one would let the agent plant a hook the **host** runs on the next commit), the Linux lola binary, the targets of `symlinks` |
+| nothing | everything else — `$HOME`, `~/.lola`, the project's main checkout |
+
+Things to know:
+
+- **Credentials.** The container cannot read the macOS keychain, so the agent
+  authenticates from environment variables listed in `[sandbox].pass_env`
+  (copied from the daemon's environment into the session's 0600 env file at
+  spawn — names only in config). claude: `CLAUDE_CODE_OAUTH_TOKEN` (from
+  `claude setup-token`) or `ANTHROPIC_API_KEY`; `git push` / `gh`: `GH_TOKEN`.
+- **Hooks.** A host unix socket cannot be mounted into Docker Desktop's or
+  OrbStack's VM, so a sandboxed agent's hooks reach the daemon over the **hook
+  bridge**: `127.0.0.1:[sandbox].hook_port` (default 7718), reached from the
+  container as `host.docker.internal`, open only while some project is
+  sandboxed, accepting only hook events and `lola report`, each carrying a
+  per-session token. The container runs `[sandbox].lola_bin` — a Linux build
+  (`make build-linux`) — mounted at the host lola's path.
+- **claude's state** lives in `.lola/claude` inside the worktree (seeded past
+  the first-run dialogs); codex's in `.lola/codex`. The subscription-limit
+  readout and codex/opencode token usage are not recorded for sandboxed
+  sessions.
+- **Dev servers.** `dev_commands` still run on the host (they are the human's
+  view of the branch); `sandbox_ports` is for servers the agent starts inside
+  the container.
+- **lola's own git** on a sandboxed worktree (checkpoints, diffs, dirty
+  checks) never follows the worktree's `.git` pointer, which the agent can
+  rewrite: the layout is pinned when lola creates the worktree and every host
+  git call uses it.
+- **Teardown** removes the container (`docker rm -f <session>`) along with the
+  pane. Containers carry the label `dev.sushi.lola.session=<session>`.
+- macOS with Docker Desktop or OrbStack is what this is built and tested
+  against. On a plain Linux engine the bridge's loopback port is not reachable
+  from the default bridge network.
+
+#### Stacks (one issue, several repositories)
+
+Some products are several repositories that ship together — an app, its
+website, its API — and one Linear issue may need any of them. A **stack** is a
+project with no checkout of its own that owns the Linear side for them; its
+**members** ("apps") are ordinary projects with their own settings:
+
+```toml
+[[project]]                        # the stack: Linear filter, agent, write-back
+name = "nori"
+kind = "stack"
+team_id = "…"
+match_labels = ["<apps/app>", "<apps/website>"]  # pick up every app's issues
+match_mode   = "any"
+
+[[project]]                        # an app: an ordinary repository
+name   = "nori-app"
+stack  = "nori"
+labels = ["apps/app"]              # issues that need this repository
+path   = "/src/nori-app"
+repo   = "acme/nori-app"
+default_branch = "main"
+dev_commands   = ["composer dev"]
+port_range     = "4100-4199"
+
+[[project]]
+name   = "nori-website"
+stack  = "nori"
+labels = ["apps/website"]
+path   = "/src/nori-website"
+repo   = "acme/nori-website"
+default_branch = "develop"
+dev_commands   = ["npm run dev"]
+```
+
+**There is no main repository.** A session of a stack is a folder,
+`~/.lola/worktrees/<stack>/<session>/`, holding one worktree per app the
+issue's labels select (`<folder>/nori-app/`, `<folder>/nori-website/`), all on
+the session's branch. The agent — and every new shell tab — starts in that
+folder, so it reaches every app with one `cd`. An issue labelled
+`apps/website` gets the website and nothing else; one labelled with both gets
+both. An app without `labels` is checked out for every issue; an issue that
+selects no app is skipped with a reason (relabel it and it dispatches). The
+selection is made once, at spawn.
+
+**What belongs where.** The stack holds everything a session has only once:
+the Linear filter and dedup, write-back, concurrency, the agent and its
+fallback chain, the branch prefix, the budget, the sandbox, review overrides,
+`pr_requires_checks`. Each app holds everything about its repository: path,
+repo, base branch, symlinks, `post_create`, env, `dev_commands`, `port_range`,
+`pre_remove`. A member keeps its own copies of the stack's keys in the
+file, ignored while it is a member — taking it out of the stack restores them.
+Both config forms hide the keys that do not apply.
+
+**Each app runs as its own project.** Its `post_create` runs in its worktree
+with its own env, its own port lease (`LOLA_PORT…`) and its own
+`LOLA_SESSION_SLUG` / `LOLA_DB_NAME` (`<session>-<app>`), and its
+`.lola/env` is what its dev tabs source. The session's dev toggle starts
+every app's `dev_commands`, each in its app's worktree, one tab each.
+
+**One PR per app, handled per app.** The agent's briefing lists the
+checkouts, names the stack's apps it did NOT get (it reports
+`lola report blocked "needs <name>"` instead of cloning one), and asks for one
+PR per repository it changed, cross-linked. lola then treats every app's PR
+separately: its own CI/conflict/review **reactions** (the message names the
+checkout and the PR), its own **review pass** posted on that PR, its own
+merge-queue place. The session's status shows the app that needs attention
+most — a failing website PR is never hidden by a green app — and the list row
+names that app beside its PR. Linear write-back moves the issue when the first
+PR opens and when the last one merges. The diff viewer and the checkpoints
+cover every app (paths read `nori-website/src/…`); a restore is all or
+nothing.
+
+**Teardown** waits until every app's PR has merged or closed (confirmed by a
+successful lookup), removes each app dirty-safe — an app with uncommitted
+work, or with commits on a branch that has no PR, keeps the whole folder — and
+then the folder, unless the agent left files in it outside the apps.
+
+**In the app**, add a stack from the project panel's `+` menu (**New stack**),
+then drag a project onto it to make it a member (and out again to take it
+back); the project's context menu does the same without the mouse. A member's
+form has an **Included for** label picker.
+
+Not available for stack sessions: best-of-N attempts, forking a checkpoint,
+and opening a branch or PR on the stack itself (open it on a member project).
 
 ### `[[project]]` polling fields (optional; a project polls when `team_id` is set)
 
@@ -408,6 +830,16 @@ The gate uses the same `statusCheckRollup` signal as the rest of lola, so a
 CodeRabbit run counts toward it only if CodeRabbit registers a check (it usually
 does); a review-without-a-check does not hold the transition.
 
+**Only REQUIRED checks count once the branch has a ruleset.** lola reads the
+base branch's active rulesets (`gh api repos/<repo>/rules/branches/<base>`,
+cached 10 minutes) and judges CI by the required checks alone, so a job the
+repository runs but does not require — a shadow-mode suite, a non-blocking
+audit — never reads as failed CI (no `ci_failed` prompt, no held write-back or
+merge queue). A required check that has not reported yet counts as pending.
+Without a ruleset, or when the lookup fails, every check counts, as before.
+Classic branch protection is not consulted (reading it needs admin). lola's own
+`lola/…` commit statuses are never CI.
+
 ### `[reactions]` (optional)
 
 How lola reacts when a live session's derived PR/CI status changes (the P3
@@ -433,17 +865,52 @@ directives.
 | `changes_requested` | `true` | — | Relay review comments (incl. inline) into the session; re-request review on the next push. |
 | `merge_conflict` | `true` | — | Tell the agent to rebase and resolve (detected via the observer's `mergeable`). |
 | `approved_and_green` | **`false`** | — | **Never auto-merge.** Notify and park the worktree for a human; the default message is empty. |
-| `merged` | `true` | — | Auto cleanup: remove the worktree + branch, archive the session, free the slot. |
+| `merged` | `true` | — | Auto cleanup: stop the agent **and its shell/review tabs**, remove the worktree and the local branch it was on, archive the session, free the slot. A worktree with uncommitted changes keeps both the checkout and its branch (you are notified once); a `pr` session's branch is upstream and is never deleted. |
+| `agent_fallback` | **`false`** | — | Agent hit its usage limit (detected from the pane) → hand the session to the next kind in the project's `agent_fallback` chain on the same worktree. Notify-only by default; `message` is unused (the replacement agent gets a generated handoff briefing, not a typed prompt). |
 
 Any unset field takes its default, so you can override just one thing (e.g.
 `retries = 0` to disable CI recovery, or `auto = false` on a single reaction)
 and leave the rest alone. Explicit `false`/`0`/`""` are honored, not treated as
 "unset".
 
+Automatic prompts wait while **any terminal client is attached** to the session
+or its composer contains a draft. Close or detach the session's live terminals
+to release it to automation; an idle timeout never clears or submits your text.
+Lola checks for a visibly empty, idle composer before sending and leaves queued
+reactions, review findings, and feedback pending when it cannot prove that.
+Unknown layouts and visible suggestions also defer rather than guessing. A
+deferral is explained in the daemon log and through the configured notifications,
+once per reason. Deferred CI prompts do not spend a retry. Merge-queue sync
+requests use the same checks; a manual Resolve conflicts request reports that
+the prompt is unavailable instead of queuing a surprise send.
+
+These are terminal checks, not an atomic editor API: an external client attaching
+after the final check can still race delivery. Lola serializes its own sends and
+checkpoint restores, and checks attachment again after reading the composer.
+
 ### `[notify]` (optional)
 
 Best-effort desktop + Slack notifications, routed by priority (P3.20). Optional;
 the defaults below apply when the table is absent.
+
+macOS banners are reserved for a human action: an agent question, permission
+request or dialog; an escalation that automation cannot resolve; or a **PR ready**
+banner. Idle reminders, automatic CI retries, review hand-offs and routine
+progress stay quiet on desktop (Slack still follows its configured routing).
+
+The ready banner requires the agent to be idle or finished, no queued follow-up
+work or running Lola review, and fresh GitHub confirmation: a non-draft open PR,
+passing checks (or no configured checks), completed required reviews, no
+unresolved threads (including outdated threads), and a clean merge state for
+the current head and base. Required Lola review gates must also pass. Unknown
+or failed lookups never announce readiness. PRs handled by the automatic merge
+queue stay quiet. Questions alert once per waiting episode; ready PRs once per
+head revision, with guards saved across daemon restarts. These checks run
+on the observer cycle (normally about 30 seconds).
+
+Banners use macOS Notification Center through `osascript`; macOS notification
+permissions and Focus settings still apply. The daemon sends them even when
+the Lola desktop app is closed.
 
 | Key | Type | Description |
 | --- | --- | --- |
@@ -461,11 +928,69 @@ Routing priorities and their defaults:
 | Priority | Default channels | Used for |
 | --- | --- | --- |
 | `urgent` | `["desktop", "slack"]` | needs-input, escalations |
-| `action` | `["desktop", "slack"]` | changes-requested, CI failed after retries |
-| `info` | `["slack"]` | approved+parked, merged+cleaned |
+| `action` | `["desktop", "slack"]` | verified PR readiness; routine reactions and review findings reach Slack only |
+| `info` | `["slack"]` | routine progress, merged+cleaned |
 
 Priorities you omit under `[notify.routing]` keep their default channels; set a
 priority to `[]` to route it nowhere.
+
+### `[merge_queue]` (optional, off by default)
+
+The desktop's **PR status** panel also offers a manual merge action, even when
+the queue is disabled. Its split-button dropdown chooses squash, merge commit,
+or rebase for the current PR without changing the workspace default. It starts
+with `method` below (squash by default), rechecks
+GitHub and pins the merge to the displayed head commit. Ready PRs merge on
+click. Otherwise, an icon-only action asks for confirmation before attempting
+the merge. GitHub branch protections and Lola's
+required specialist reviews still apply. Goal-managed PRs use their goal's
+delivery workflow. A manual merge can proceed without reviews or CI when
+GitHub reports the PR clean; `allow_no_checks` only controls the automatic queue.
+
+lola's local merge queue. When enabled, approved + green PRs of lola's own
+sessions are merged **one at a time per repository**, oldest PR first. Each
+observe cycle only the head of each repository's queue is acted on:
+
+1. If its head commit does not yet contain the tip of the default branch
+   (GitHub's compare API, `behind_by > 0`), the session's agent is asked —
+   once per head commit, only when it is provably resting at its prompt — to
+   merge the default branch in and push.
+2. CI re-runs on that push; once checks pass, GitHub reports `MERGEABLE` and the
+   head is up to date, lola re-reads the PR and merges it with
+   `gh pr merge --<method> --match-head-commit <sha>`, so a push in between makes
+   GitHub refuse rather than land untested code.
+3. A conflicting head is left to the `merge_conflict` reaction; the queue holds
+   behind it.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
+| `method` | string | `squash` (default), `merge` or `rebase`. |
+| `allow_no_checks` | bool | Let a PR with no CI checks land. Default `false`: right after a push GitHub can report no checks simply because none have registered yet. |
+
+It **fails closed**: stale PR facts, an `UNKNOWN` mergeability, a compare call
+that cannot answer, a PR targeting another base, or a project that left config
+hold the queue and take no action. A merge GitHub refuses (branch protection,
+a missing required check) is recorded, notified once and retried after ten
+minutes or on a new push. PRs of sessions opened on an existing branch (`lola open`) are never merged —
+lola does not own those branches. If the repository dismisses stale approvals
+on push, a synced PR leaves the queue until a human re-approves it.
+
+Independently of the queue, lola flags sessions of the same project whose
+worktrees change the **same files** (local git only, every observe cycle) — a
+`⚠ovl` marker / "Overlaps" chip on both rows — so a collision is visible before
+either PR conflicts. That warning is display-only.
+
+### `[best_of]` (optional)
+
+Best-of-N dispatch: a poll match that ALSO carries `label` is spawned as the
+`agents` mix — several attempts on sibling branches — instead of one agent. See
+[Best-of-N](#best-of-n-several-attempts-one-winner).
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `label` | string | Trigger label UUID. Like every `[defaults]` label it should be a WORKSPACE label (it applies to every project's poll). Empty/absent = no label trigger; `lola bestof start` still works. |
+| `agents` | []string | The mix, one `<agent>[@<model>][:<count>]` entry each — e.g. `["claude:2", "codex@gpt-5-codex"]`. 2–6 attempts. Default `["claude:2"]`. A count after the LAST colon, so a model carrying a colon needs an explicit count (`claude@…-v1:0:1`). |
 
 ### `[brain]` (optional, off by default)
 
@@ -477,6 +1002,15 @@ before merging). **Opt-in and off by default**: omit the table (or leave
 `enabled = false`) and behavior is unchanged — lola uses its generic notify and
 comment templates.
 
+The desktop PR comments panel also uses **Haiku** while the brain is enabled
+to summarize each reviewer's concern and requested fix. Summaries load in the
+background, retain links to the original threads, and are cached by comment
+content for the daemon's lifetime (up to 256 entries). They never affect merge
+checks or messages sent to the coding agent. Missing Claude, invalid output,
+and timeouts leave the original preview visible; failures back off for ten
+minutes. Each batch is capped at 30 seconds (or a shorter `timeout_seconds`).
+This panel always uses Haiku; `model` selects the other brain summaries.
+
 | Key | Type | Description |
 | --- | --- | --- |
 | `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
@@ -485,8 +1019,8 @@ comment templates.
 | `summarize_escalation` | bool | Summarize why a stuck session is blocked. Defaults to `true` when `enabled`. |
 | `summarize_approved` | bool | Summarize an approved+green PR before a human merges. Defaults to `true` when `enabled`. |
 
-Setting `enabled = true` alone turns on both summaries with the default timeout;
-set either `summarize_*` to `false` to run only the other. The two summarizers
+Setting `enabled = true` alone turns on both notification summaries with the default timeout;
+set either `summarize_*` to `false` to run only the other notification summary. The two summarizers
 default to on only while `enabled`, and explicit `false`/`0` are honored, not
 treated as "unset".
 
@@ -506,8 +1040,8 @@ deliberately opt-in. `lola doctor` reports whether `claude` is on `PATH`.
 
 ### `[statusagent]` (optional, off by default)
 
-The **status interpreter**: a small bounded `claude -p` pass (default
-`--model sonnet`) that reads one session's observed material — its tmux pane
+The **status interpreter**: a small bounded pass using Claude, Codex, or
+OpenCode (default: Claude with `--model sonnet`) that reads one session's observed material — its tmux pane
 tail, recent status transitions, PR facts, optionally the agent's own
 transcript tail — and judges what the agent is **actually** doing. The result
 shows up as a one-line **headline** ("rewriting the auth middleware tests")
@@ -520,8 +1054,9 @@ deterministic pipeline cannot see at all.
 | Key | Type | Description |
 | --- | --- | --- |
 | `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
-| `bin` | string | The claude executable; empty resolves `claude` via `PATH` (pin an absolute path for launchd). |
-| `model` | string | Passed as `--model`. Unset key defaults to `sonnet`; explicitly `""` uses claude's default model. |
+| `agent` | string | Interpreter agent: `claude`, `codex`, or `opencode`. Empty or omitted uses Claude, independently of the worker agent. |
+| `bin` | string | Executable override; empty resolves the selected agent via `PATH` (pin an absolute path for launchd). |
+| `model` | string | Passed as `--model`. Unset uses `sonnet` for Claude and the agent default for Codex/OpenCode. Explicitly `""` uses the selected agent’s default. |
 | `timeout_seconds` | int | Hard cap per interpretation. Must be `>= 0`. Default `60`. |
 | `min_interval_seconds` | int | Per-session debounce between interpretation attempts. Default `120`. |
 | `max_per_cycle` | int | Interpretations queued per 30s observer cycle. Default `2`. |
@@ -567,33 +1102,62 @@ provider per kind** is allowed (guards key by kind).
 
 | Key | Type | Applies to | Description |
 | --- | --- | --- | --- |
-| `provider` | string | all | Kind: `coderabbit-cli` \| `coderabbit-watch` \| `claude-session`. Required. |
+| `provider` | string | all | Kind — one of the seven below. Required. |
 | `enabled` | bool | all | Master switch. Default `false`. |
 | `on_pr_open` | bool | pass shapes | Run automatically when a session first opens a PR. Default `true`. |
-| `command` | string | `coderabbit-cli` | Optional space-split argv override; empty uses the runner default. |
-| `timeout_seconds` | int | pass shapes | Hard cap per pass. Must be `>= 0`. Default `300`. |
-| `model` | string | `claude-session` | Optional `--model` for the headless `claude -p` review; empty = claude's default. |
-| `author` | string | `coderabbit-watch` | Login **substring** matched (case-insensitively) against each comment author. Default `"coderabbitai"`. |
+| `command` | string | cli family | Space-split argv for the review CLI. Optional for `coderabbit-cli` (empty uses CodeRabbit's default); **required** for `custom-cli`. |
+| `base_flag` | string | cli family | The flag the PR's base branch is passed with (`… --base main`). Default `"--base"`; an explicit `""` passes **no** base at all, for a tool that takes none. |
+| `timeout_seconds` | int | pass shapes | Hard cap per pass. Must be `>= 0`. Default `300`, but `900` for the agent family — that pass reads the PR's files before it reports, so a real PR takes 7–13 minutes where a CLI pass takes one or two. |
+| `model` | string | agent family | Optional `--model` for the headless review; empty = the agent's own default. `opencode-session` expects `"provider/model"`. |
+| `author` | string | watch family | Login **substring** matched (case-insensitively) against each comment author. Defaults to `"coderabbitai"` for `coderabbit-watch`; **required** for `bot-watch`. |
 | `transports` | []string | all | Multiselect over `{lola, github, linear}`; see below. Default `["lola"]`; `lola` is always forced present. |
+| `github_inline` | bool | pass shapes with the `github` transport | Post the findings as a pull-request **review** with one anchored, **resolvable** thread per finding instead of a single flat comment. Default `true`; it degrades to the flat comment on its own whenever the anchors or the API say no. |
+| `github_status` | bool | pass shapes | Post the pass's verdict as the commit status `lola/review/<kind>` on the PR head — `pending` while it runs, `success` (clean or minor-only), `failure` (any blocker/major finding, or one whose severity cannot be parsed), `error` (it could not run) — and re-review every new head once the agent has settled, up to 3 rounds per PR (then `error`; `lola review <session>` forces the next). The checkout must be clean and match the PR head before and after the pass. Require the context in a ruleset to make the review block merges. lola's own statuses never count as CI. Default `false`. |
 | `notify` | bool | all | `lola` transport: surface findings to a human (desktop/Slack). Default `true`. |
 | `send_to_agent` | bool | all | `lola` transport: hand findings to the worker via the send-keys gate. Default `true`. |
+| `visible` | bool | pass shapes | Run the pass in its own tmux session `<session>-review` so you can watch it and read its output afterwards. Default `true`. |
 | `fallback` | []string | pass shapes | Ordered kinds tried when this provider **can't answer** (unavailable / over-quota). Default none. |
 
-**Provider kinds** — three kinds map to two execution **shapes**:
+**Provider kinds** — seven kinds in three **families** over two execution
+**shapes**. Every family is a swappable slot: which agent reviews, which CLI
+reviews, and whose GitHub review is relayed are all configuration.
 
-- **`coderabbit-cli`** (*pass* shape): execs the CodeRabbit CLI against the PR
-  branch and returns findings synchronously. Runs **once per PR** (a per-session
-  guard records the reviewed PR number; a new PR number re-triggers once).
-- **`claude-session`** (*pass* shape): a headless `claude -p` review — lola pipes
-  the branch diff on stdin and claude returns findings. Same once-per-PR guard.
-  Useful as a `coderabbit-cli` **fallback** (see below). Execs `claude` directly
-  and relies on your existing claude auth (`~/.claude` / `ANTHROPIC_API_KEY`).
-- **`coderabbit-watch`** (*watch* shape): **polls** each session's GitHub PR (via
-  `gh`, on the ~30s observer cadence) for comments/reviews left by the CodeRabbit
-  **GitHub app** — or any reviewer bot, via `author` — and routes each **new**
-  one. A per-session **watermark** makes the poll fire-once per comment *and*
-  survive downtime (a webhook would be lost while the daemon is stopped; the next
-  cycle reconciles the PR's current comments instead of replaying a missed event).
+*CLI family* (*pass* shape) — exec an external review CLI in the worktree and
+return its findings synchronously. Runs **once per PR** (a per-session guard
+records the reviewed PR number; a new PR number re-triggers once).
+
+- **`coderabbit-cli`** — the CodeRabbit CLI. `command` is an optional override;
+  with it empty the built-in `coderabbit review --plain --type all` runs.
+- **`custom-cli`** — any other review CLI. `command` is **required** (there is no
+  built-in tool to fall back on) and `base_flag` decides how — or whether — the
+  base branch reaches it. Everything else (transports, fallback, the visible
+  pane, the once-per-PR guard) is identical to `coderabbit-cli`.
+
+*Agent family* (*pass* shape) — ONE bounded, **read-only** headless coding-agent
+review: lola pipes the branch diff on stdin and the agent returns findings, with
+the same once-per-PR guard. Each agent is its own kind, so one can be another's
+over-quota **fallback** (see below). Each execs its own binary and relies on the
+auth you already have for it — lola never reads or manages a credential.
+
+- **`claude-session`** — `claude -p`.
+- **`codex-session`** — `codex exec --sandbox read-only`.
+- **`opencode-session`** — `opencode run`.
+
+A review reports; it never writes. Each agent is launched in its most restrictive
+non-interactive posture — the deliberate opposite of the unattended worker launch
+— so reads proceed and anything that would edit or exec is refused.
+
+*Watch family* (*watch* shape) — **polls** each session's GitHub PR (via `gh`, on
+the ~30s observer cadence) for comments/reviews a review **bot** leaves, and
+routes each **new** one. Needs no local binary. A per-session **watermark** makes
+the poll fire-once per comment *and* survive downtime (a webhook would be lost
+while the daemon is stopped; the next cycle reconciles the PR's current comments
+instead of replaying a missed event).
+
+- **`coderabbit-watch`** — the CodeRabbit GitHub app; `author` defaults to it.
+- **`bot-watch`** — any other review bot; `author` is **required** (it is the
+  whole point of the kind). Its notification title, its Linear comment and the
+  pointer handed to the worker all name that bot rather than CodeRabbit.
 
 **Transports** — where a provider's findings go. `transports` is a multiselect
 over three friendly tokens:
@@ -603,17 +1167,64 @@ over three friendly tokens:
   (desktop/Slack, gated by `notify`) and the **worker hand-off** sink (send-keys,
   gated by `send_to_agent`). This is what preserves the legacy `notify = false`
   opt-out — mute either sink independently while the other still fires.
-- **`github`** — post findings as a **plain GitHub PR comment** (`gh pr comment`,
-  body on stdin, never a review that could approve/request-changes). **Pass
-  shapes only** — validation forbids `github` on a `coderabbit-watch` (its
-  feedback is already on the PR; re-posting it would be a self-feedback loop).
+- **`github`** — post findings onto the PR. Two shapes, chosen by
+  `github_inline`: **inline review threads** (the default) or one **plain PR
+  comment**. Either way it is never a review that could approve or request
+  changes — the inline shape posts `event: COMMENT`. **Pass
+  shapes only** — validation forbids `github` on a watch provider (its feedback
+  is already on the PR; re-posting it would be a self-feedback loop).
   The post is idempotent per PR (a settle guard prevents per-cycle spam; a
   permanent gh failure such as 422/403 stamps the guard and logs once; a
   transient failure retries next cycle). Fail-closed: a missing repo or
-  unauthenticated `gh` skips silently. Any `@coderabbitai` mention in the posted
-  body is **neutralized** (a zero-width space is inserted after the `@`) so
-  lola's own comment can never be parsed by the CodeRabbit app as a command and
-  trigger a **new** CodeRabbit review — posting is always safe.
+  unauthenticated `gh` skips silently. Any `@coderabbitai` mention — and any
+  @-mention of a bot you have a **watch** configured for — is **neutralized** in
+  the posted body (a zero-width space is inserted after the `@`) so lola's own
+  comment can never be parsed by that bot as a command and trigger a **new**
+  review run. Posting is always safe.
+  The comment is the one sink that is **reformatted for humans**. GitHub
+  sanitizes CSS out of comment bodies, so the rendering spends what survives: a
+  **GitHub alert callout** carrying the title and severity tally (`> [!CAUTION]`
+  for a blocker, `[!WARNING]` for a major, `[!NOTE]` otherwise — the only real
+  colour a comment can show), then one **collapsed `<details>` per finding**,
+  each summary line carrying a severity emoji, the severity in bold and the
+  **file location linked** to that line on the session's branch. Opening a
+  finding shows a quoted block — one sentence on what breaks, one on the fix,
+  then three grade chips (`impact: high`, `confidence: verified`,
+  `effort: small`) drawn as `<kbd>` keys; everything else is folded behind a
+  nested `Detail` disclosure outside the quote. A ten-finding review
+  therefore reads as ten lines, and a triage decision costs two sentences.
+  Nothing is dropped — the worker agent, notify and Linear still receive every
+  field raw. Findings a provider emits in some other shape are posted verbatim
+  (unparsed ones under a plain heading), and a missing repo/branch simply drops
+  the links.
+
+  With `github_inline = true` (the default) that same rendering is split across
+  **one review thread per finding**, anchored on the line the finding names — so
+  each finding gets GitHub's own reply box and **Resolve conversation** button,
+  the way a CodeRabbit review reads, and the summary comment keeps only the
+  callout, the tally, and the findings that could not be anchored. Three rules
+  make that safe and honest:
+  - The GitHub reviews endpoint is **atomic**: one comment naming a line outside
+    the PR's diff rejects the whole review. lola therefore reads the PR's head
+    SHA and diff first, anchors only lines the diff actually carries, and lets a
+    finding whose line is not there travel in the summary body — which says how
+    many did, so the PR never shows fewer findings than the review produced.
+  - A reviewer anchors at "the smallest line that carries the defect", which is
+    often a context line just outside a hunk, so an anchor may **snap** up to
+    three lines to reach the diff. A snapped thread states the reported location
+    in its own body — a comment sitting on a line it is not about, silently, is
+    worse than one in the summary.
+  - Everything degrades to the plain comment: no `gh`, an unreadable diff,
+    nothing anchorable, no write access, a 422 after all. Only a **transient**
+    failure keeps the inline shape (the guard stays unstamped and the next cycle
+    retries), so the shape never depends on the weather.
+
+  When the threads exist, the **worker hand-off** additionally tells the agent
+  they are there and asks it to work them: reply to a thread with what changed
+  and resolve it, or reply why it disagrees and leave it open — with the `gh api
+  graphql` calls to list, reply to and resolve a thread. That instruction is
+  lola's own text appended after the findings, and it is only added for the PR
+  the threads were actually posted for.
 - **`linear`** — mirror findings onto the session's Linear issue as a comment.
 
 Only the **worker hand-off** sanitizes and idle-gates its text; **notify /
@@ -622,8 +1233,10 @@ github / linear are human sinks** that carry the full untrusted findings verbati
 content), so the worker path uses the **same send-keys safety** as reactions:
 sanitized (control chars stripped), delivered only when the agent is idle at its
 prompt (deferred otherwise), and **never run as a command**. Titles/preambles are
-**per-kind**, so a `claude-session`'s findings are labeled "Claude review", not
-"CodeRabbit".
+**per-provider**, so a `codex-session`'s findings are labeled "Codex review" and a
+`bot-watch`'s name the bot it watches — never "CodeRabbit". With the catalog
+pluggable, *who* produced a finding is the one thing a reader cannot infer from
+the finding itself, so it is always stated.
 
 **Fallback chains** — a `fallback = [...]` list lets a pass provider hand off to
 another **pass** kind when it **can't answer**: the tool is missing, times out,
@@ -633,35 +1246,68 @@ primary's transports** (to get a fallback's github post, put `github` on the
 primary). A real exit error or an auth failure is a **graceful skip that does not
 fall through** (fail-closed: auth is an operator fix; a genuine failure must not
 silently burn the paid fallback). Each entry is bounded by its own
-`timeout_seconds`, and the whole cycle is shutdown-abortable.
+`timeout_seconds`, and every pass is shutdown-abortable.
+
+**Watching a review.** With `visible = true` (the default) a pass runs as
+`lola review-run` inside its own tmux session beside the worker's, named after
+it:
+
+```sh
+tmux -L lola attach -t =lola-nori-app-nor-357-review
+```
+
+The desktop app lists it as a **Review** tab next to the session's shell tabs,
+and the TUI sees the same tmux session. The pass **narrates** there — each file
+the reviewer reads shows up as it happens. How depends on the agent: a plain
+`claude -p` prints nothing at all until it finishes, so its visible run asks for
+`--output-format stream-json` and lola renders the events to plain lines, while
+codex and opencode already narrate on stderr and simply have it teed to the pane.
+A cli pass streams its tool's own stdout. The pane **holds** when the
+pass ends, so the findings stay readable; the next review for that session
+replaces it, and killing the session kills it. The daemon never parses the pane:
+the child writes its findings and outcome to `~/.lola/cache/review/<session>/`,
+so a visible pass and a direct one are indistinguishable to the transports, the
+fallback chain and the retry budget. Anything that stops a pane from opening (no
+tmux, a tmux error) falls back to the plain in-process exec.
+
+**Where a pass runs.** A pass never runs on the observe loop: the observer
+queues it and a single **review worker** drains the queue one pass at a time, so
+a multi-minute review delays nothing but the next queued review. A pass that
+could **not answer** (timeout / over-quota / nothing available) releases its
+once-per-PR guard and is retried on a later cycle, up to 3 attempts per PR;
+after that the PR is left alone. A pass that answered — including a clean one —
+and a graceful skip (auth / exit error) are final.
 
 > **Watch cannot fall back.** Fallback is **pass-shape only**, and validation
-> forbids `fallback` on a `coderabbit-watch`. When the CodeRabbit **GitHub app**
-> is out of reviews, it posts that as an ordinary PR comment — non-empty,
+> forbids `fallback` on a watch provider. When the CodeRabbit **GitHub app** is
+> out of reviews, it posts that as an ordinary PR comment — non-empty,
 > `err == nil`, classifier-undetectable — so a watch has no signal to trigger a
-> fallback on. If you want quota → `claude-session` fallback, run the
-> **`coderabbit-cli`** provider (whose exit/stderr carries the quota signal) with
-> `fallback = ["claude-session"]`.
+> fallback on. If you want quota → fallback, run a **cli** or **agent** provider
+> (whose exit/stderr carries the quota signal) with e.g.
+> `fallback = ["codex-session"]`. Agent-to-agent is the common case: run
+> `claude-session` as the primary with `fallback = ["codex-session"]` and a
+> claude usage limit hands the review straight to codex.
 
-> **Watch-only posture (read CodeRabbit, never invoke it).** To let lola
-> automatically pick up CodeRabbit's own automatic PR review **without ever
-> triggering a new CodeRabbit run or spending a review credit**, configure a
-> single `coderabbit-watch` provider (with `lola` and/or `linear` transports).
-> The watch only **polls and relays** the CodeRabbit GitHub app's existing
-> comments — it never execs `coderabbit review` (that is the separate
-> `coderabbit-cli` provider) and never posts to the PR (validation forbids the
-> `github` transport on a watch). If you additionally want lola to post its **own**
-> public review, pair the watch with a `claude-session` (or `coderabbit-cli`)
-> provider carrying the `github` transport: its posted comment is trigger-safe
-> because `@coderabbitai` mentions are neutralized (above), so lola still never
-> spins up a fresh CodeRabbit review.
+> **Watch-only posture (read the bot, never invoke it).** To let lola
+> automatically pick up a review bot's own automatic PR review **without ever
+> triggering a new run or spending a review credit**, configure a single watch
+> provider — `coderabbit-watch`, or `bot-watch` with that bot's `author` — with
+> `lola` and/or `linear` transports. The watch only **polls and relays** the
+> bot's existing comments: it never execs a review CLI (that is the cli family)
+> and never posts to the PR (validation forbids the `github` transport on a
+> watch). If you additionally want lola to post its **own** public review, pair
+> the watch with an agent or cli provider carrying the `github` transport: its
+> posted comment is trigger-safe because mentions of every watched bot are
+> neutralized (above), so lola still never spins up a fresh run.
 
 **Validation** rejects: an unknown `provider` kind; more than one provider per
-kind; an unknown `transports` token; `github` on a `coderabbit-watch`; `fallback`
-on a `coderabbit-watch`; a `fallback` entry that is unknown / the provider's own
-kind / a watch kind / absent-or-disabled in the catalog / part of a cycle;
-`timeout_seconds < 0`; and a **catalog alongside a non-empty legacy table** (run
-`lola config migrate-review`).
+kind; an unknown `transports` token; `github` on a watch; `fallback` on a watch;
+a `fallback` entry that is unknown / the provider's own kind / a watch kind /
+absent-or-disabled in the catalog / part of a cycle; `timeout_seconds < 0`; an
+**enabled `custom-cli` with no `command`** or an **enabled `bot-watch` with no
+`author`** (those kinds exist to point at something other than the built-in
+default, so an empty one would exec or poll nothing); and a **catalog alongside a
+non-empty legacy table** (run `lola config migrate-review`).
 
 Force any pass provider now with `lola review <session> [--provider kind]`, or the
 watch with `lola coderabbit <session>` — both ignore the once-per-PR guard /
@@ -736,41 +1382,248 @@ without `[tmux]` always validates.
 | `detach_key` | string | Opt-in single key bound to detach (e.g. `"F12"`). Empty keeps tmux's default **Ctrl-b d**. The status bar's detach hint follows whatever this resolves to. |
 | `status_bar` | bool | Show tmux's own status bar inside the session. Default `false` — the TUI and lola-desktop each render the issue, title, status and branch in their own header directly above the terminal, so the bar restated a subset of that one row lower and cost a row of scrollback. Turn it on if you attach in a bare terminal, where nothing else names the session. |
 | `status_right` | string | Raw tmux `status-right` format override. Empty uses lola's built-in branded bar. Only rendered when `status_bar` is on. |
-| `mouse` | bool | Enable tmux mouse mode inside the session. Default `false`. |
+| `scrollback` | int | Pane history (tmux `history-limit`) every lola session is created with — the history a **shell** pane scrolls; a full-screen agent keeps its own (see below). Default `10000` — tmux's own default of 2000 lines is a couple of tool calls for an agent. Applied to lola's **own** tmux server, so it holds regardless of the machine's `~/.tmux.conf`; tmux reads it when a pane is created, so a change reaches the **next** session, not running ones. |
+| `mouse` | bool | Let tmux consume real mouse clicks and drags inside the session. Default `false`. This is **not** what makes a session scrollable — see below. lola writes it on lola's own tmux server in **either** state, so this key decides it rather than the machine's `~/.tmux.conf`. |
 
-### `[ui]` (optional)
+**Scrolling.** Sessions are scrollable out of the box in both surfaces, and
+`mouse` is **not** what makes them so. A pane has one of two histories: a
+full-screen program (an agent, `vim`, `less`) runs on the terminal's *alternate
+screen*, where tmux keeps **no scrollback at all** — that program keeps its own
+transcript and gets the wheel handed to it — while a plain shell has tmux's, and
+is scrolled through copy mode. lola asks the pane which it is and scrolls the
+right one; typing (or closing the terminal) returns a copy-mode pane to the live
+view. `mouse` is a separate choice about who consumes the events of a **real**
+mouse: with it on, tmux takes clicks and drags, which costs text selection in
+the app's terminals.
 
-**Appearance only** — nothing the daemon does reads this table, so omitting it
-is zero behavior change. One identifier drives the color of **both** surfaces:
-lola-desktop's app chrome, its embedded terminals and the ANSI palette its
-session grid renders pane snapshots with, *and* the TUI cockpit. The two derive
-their semantic colors from the same flavor with the same contrast math, so they
-match — and picking the light flavor (`catppuccin-latte`) lightens the TUI too.
+### `[budget]` (optional)
 
-Set it from either surface: the app's **Appearance** settings tab (which
-previews a flavor as you move through the list) or the TUI's `S` → **Appearance**
-tab (which repaints on save). Both write the same key.
+Daily limits on how many **tokens** lola's agents use, and the usage figures
+behind them. lola reads each session's token usage from the coding agents' own
+logs, covering everything run in its worktree — the worker, its subagents and
+every review pass:
+
+- **claude:** `~/.claude/projects/<worktree>/…jsonl`;
+- **codex:** `~/.codex/sessions/…/rollout-*.jsonl`, attributed by the cwd each
+  log records. Only logs that ran in a lola worktree are read. codex shows
+  tokens only — lola has no list price for its models;
+- **opencode:** its SQLite database (`~/.local/share/opencode/opencode.db`, or
+  under `$XDG_DATA_HOME`), attributed by each session's directory and read
+  through the `sqlite3` CLI in read-only mode (macOS ships it; without it,
+  opencode simply shows no figure). The `~$` shown is opencode's own price.
+
+codex and opencode sessions are ranked against sessions of their own agent,
+never against claude ones (their weights are different units). The `[brain]` /
+`[statusagent]` helpers run in `~/.lola/helpers` so their usage is counted too
+(globally, against no project). A session with no readable log yet shows a
+blank, not `0`.
+
+**Per session** (a **Tokens** column + the detail header in the app, a `TOKENS`
+column + `tokens:` line in the TUI) lola shows:
+
+- the raw token count, cache traffic included (`46.7M`);
+- a **4-step size glyph** ranking the session against your own *finished*
+  sessions of the same agent from the last 35 days — below the median, p50–75, p75–90, top 10% (the
+  top step is orange). The tooltip says it in words ("heavier than 92% of your
+  last 40 sessions"). Ranking is by list-price weight, not raw tokens, because
+  a subscription limit is spent faster by output and bigger models and barely
+  by cache reads. With fewer than 10 finished sessions, fixed thresholds stand
+  in;
+- a **flame** while the session uses tokens faster (over the last ~30 minutes)
+  than 90% of your past sessions did on average per active hour — the early
+  warning for a runaway, before its total is large.
+
+The list-price dollar estimate appears only in tooltips / the detail line, as
+`~$`: a subscription pays nothing per token.
+
+**Today's total** shows in the app's top bar, the TUI's vitals bar and
+`lola status`, with the budget as a **percentage**. Day totals are kept in
+`~/.lola/state/usage.json`, so a torn-down session still counts toward today.
+
+**Subscription limits** lead the header when known — `Claude 5h 42% · 7d 18% ·
+Codex 7d 4%` in the app's top bar and the TUI's vitals bar, with reset times in
+the tooltip / `lola status` — because that is what a subscriber budgets by.
+Lola combines locally reported figures with a Claude subscription usage poll:
+
+- **Claude Code** passes `rate_limits` only to its status-line command. lola
+  therefore sets the status line in each session's own `--settings` to
+  `lola hook statusline`, which records the figures and then runs **your own**
+  status-line command (project `.claude/settings.local.json`, then
+  `.claude/settings.json`, then `~/.claude/settings.json`) with the same stdin
+  and prints its output, so a lola pane shows your status line unchanged. Your
+  command is bounded to 5 seconds per redraw. Claude sometimes omits these
+  figures even for subscribers. When the reading is missing or five minutes
+  old, the daemon calls the undocumented `api.anthropic.com/api/oauth/usage`
+  endpoint, once for the whole account. It reads the existing macOS
+  `Claude Code-credentials` keychain entry, falling back to
+  `~/.claude/.credentials.json`; a custom `CLAUDE_CONFIG_DIR` uses only its own
+  `.credentials.json`. Lola never refreshes or modifies login credentials.
+  Requests have a ten-second total deadline. Failures back off from five
+  minutes to one hour, respecting longer `Retry-After` delays (up to a day).
+  API snapshots persist in `~/.lola/state/quota-claude-api.json`; only usage
+  figures and timestamps are saved. This endpoint is not a public API and
+  may change or refuse requests.
+- **Codex** writes `rate_limits` into every session log
+  (`~/.codex/sessions/…/rollout-*.jsonl`); lola reads the newest.
+
+The tooltip says when figures were observed. Failed Claude refreshes keep the
+last live reading marked **stale**, with the reason in the tooltip and
+`lola status`. Without a reading, Claude shows **unavailable**, never 0%.
+If the login expired, open Claude Code to let it refresh the credentials.
+Windows whose reset has passed are dropped. Quota polling is display-only;
+its failures never interrupt agents or hold dispatch.
+
+Budgets count **weighted** tokens — each token weighted by its list-price ratio
+to input, the same for every model: output 5×, cache write 1.25×, cache read
+0.1×. Most raw tokens are cache reads (a long session re-reading its own
+context), and a limit counted in raw tokens would be spent mostly by the
+cheapest traffic there is. `lola status` prints both numbers.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `theme` | string | `catppuccin-latte` \| `catppuccin-frappe` \| `catppuccin-macchiato` \| `catppuccin-mocha`. Empty or absent uses `catppuccin-mocha`. |
+| `daily_tokens` | int | Global daily limit in weighted tokens, across every project plus lola's helpers (local calendar day). `0`/absent = no limit. |
+| `notify` | bool | Send one notification per limit per day when usage first reaches it. Default `false`. |
 
-Unlike `[tmux]`, the theme **is** validated: an unrecognized name is rejected at
-load with an error listing the accepted values, rather than silently rendering
-the default — a typo you cannot see is worse than a startup error. A config
-that never sets `[ui]` never grows the table on save, so the default stays a
-default instead of being frozen into your file.
+When a limit is reached, the affected polls **hold** exactly like the runtime
+health gate: the tick is skipped, the reason (`dispatch held: daily token budget
+reached: 212.4M of 200.0M weighted tokens used today …`) becomes the poll's
+`LastError`, and nothing is mutated — no seen entry, no label flip, and
+**never** a live session. Usage is scanned once a minute, so a limit is enforced
+up to a minute late.
+
+### `[load]` (optional)
+
+Holds new dispatch while **this machine** is saturated, on top of the slot cap —
+a slot is one agent, not one agent's `cargo build`. Same hold contract as
+`[budget]`, with the measured value in the reason (`machine busy: load 14.20 on
+8 CPUs (1.78/CPU) is above load.max_load_per_cpu 1.50`).
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `max_load_per_cpu` | float | Hold while the 1-minute load average ÷ CPU count is above this (`1.0` = every core busy). `0`/absent = off. |
+| `min_free_memory_percent` | float | Hold while the OS reports less free memory than this percentage (macOS `kern.memorystatus_level`, Linux `MemAvailable`). `0`/absent = off. |
+
+A value the OS will not report holds **nothing** — a wrong "busy" would mean a
+machine that silently never dispatches.
+
+### `[sandbox]` (optional)
+
+The machine side of the [container sandbox](#the-container-sandbox); a project
+opts in with `sandbox = "docker"`.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `docker` | string | The docker CLI. Default `docker` from `PATH` (OrbStack, Colima and podman's docker shim work too). |
+| `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
+| `lola_bin` | string | Absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`). Required by any sandboxed project: it is what the agent's hooks run inside the container. |
+| `hook_port` | int | Loopback port of the hook bridge. Default `7718`. |
+| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Values never live in the config. |
+
+### `[ui]` (optional)
+
+**Appearance only** — this table controls the desktop chrome, embedded terminals,
+pane snapshots and TUI palette. Midnight remains the default. Choose a fixed
+theme or enable **Follow system appearance** and choose separate light and dark
+themes in **Settings → Appearance**. Desktop previews changes until Save;
+Cancel restores your saved choices.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `theme` | string | Fixed theme, used when `follow_system` is false. Empty or absent uses `lola-midnight`. |
+| `follow_system` | bool | Follow the device's light/dark appearance. Default `false`. The TUI follows the terminal's reported background; terminals that cannot report it use dark. |
+| `light_theme` | string | Light palette to use in system mode. Empty or absent uses `github-light`. |
+| `dark_theme` | string | Dark palette to use in system mode. Empty or absent uses `lola-midnight`. |
+
+Light themes: `catppuccin-latte`, `github-light`, `solarized-light`,
+`rose-pine-dawn`, `gruvbox-light`, and the vibrant `one-light`.
+Dark themes: `lola-midnight`, `catppuccin-frappe`, `catppuccin-macchiato`,
+`catppuccin-mocha`. System pickers show only themes with the matching light/dark
+tag, and switch live when the device appearance changes. The phone offers the
+same choices, saved locally on that phone independently of the desktop config.
+
+Unknown theme names and incorrectly tagged system choices are rejected on load.
+A config that never sets `[ui]` never grows the table on save, so the default
+stays a default instead of being frozen into your file.
+
+### `[[ssh_host]]` (optional)
+
+The hosts an [agent-assisted ssh session](#agent-assisted-ssh) can reach. No table
+means the feature is off. lola holds no address and no key: `alias` is resolved by
+your own `~/.ssh/config`, and you answer host keys, passphrases and MFA yourself in a
+real terminal. It is not `[remote]`, which means phone pairing.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `alias` | string | Required. What ssh connects to. |
+| `name` | string | The id agents and the CLI use. Default: `alias`. |
+| `label` | string | Free display text. |
+| `user` | string | A restricted remote user. Default: whatever your ssh config says. **This is the real limit on what a command can do.** |
+| `tier` | string | `production` \| `staging` \| `dev`. Empty or unknown reads as `production`. |
+| `allow_unsandboxed` | bool | Accept an unsandboxed agent on a production host. Default `false`. |
+| `sandbox` | string | How the agent of a direct session runs: `docker`, `none`, or empty for the default (docker on production when `[sandbox].image` and `lola_bin` are set, and on the host below production). |
+| `agent` | string | The coding agent of a direct session. Default: `[defaults].agent`. |
+| `default_cwd` | string | Remote directory for a command that names none. Default: the login directory. |
+| `grant_max_minutes` | int | The longest time-limited grant. `0` uses the tier's default (staging 30, dev 120), `-1` means no grants. Must not be positive on production. |
+| `command_timeout_seconds` | int | When a command names none. Default `120`. |
+| `max_command_timeout_seconds` | int | The most a command may ask for. Default `900`. |
+| `output_cap_kb` | int | Kept per stream of one command. Past it the head and the last 64 KB are kept. Default `1024`. |
+| `control_persist_seconds` | int | How long an idle connection lingers after its last client. Default `900`. |
+| `connect_wait_seconds` | int | Time allowed for passphrase and MFA. Default `300`. |
+| `approval_timeout_seconds` | int | A command nobody answers expires, unrun. Default `1800`. |
+
+Both settings screens edit this table (app: Settings → SSH hosts, TUI: `S` → SSH hosts).
+
+### `[remote]` (optional)
+
+**The phone listener, and it is off by default for what it grants rather than
+for what it costs.** Enabling it lets a paired mobile client read the session
+list, answer a parked agent and attach to a live pane. Say the consequence
+plainly: that phone can type arbitrary prose into an autonomous coding agent,
+and terminal write on a `-shell-N` tab is arbitrary code execution on this Mac
+with your `gh` token, SSH agent and login keychain in reach. A lost phone is
+answered by revoking the device from the desktop, not by a cautious default
+here.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Gates the whole feature. Default `false`; an absent `[remote]` table means the same and is never written back on save. |
+| `bind` | string | `off` \| `localhost` \| `lan` \| `all`, or a literal IP address. Empty or absent uses `localhost`. |
+| `port` | int | TCP port. `0` (or absent) uses `7717`. |
+
+`bind` decides which interfaces are exposed, and the four keywords are not
+interchangeable. `localhost` is loopback only — what an SSH forward, a VPN or a
+tailnet wants, and the only mode that puts nothing on a network interface.
+`lan` binds the private interfaces (RFC1918 / ULA / link-local) whose names are
+not tunnels or virtual bridges; on a laptop that is **every network this machine
+ever joins**, conference WiFi included, so the daemon logs the bound interfaces
+by name at startup. `all` is `0.0.0.0` and is never a default. `off` binds
+nothing while keeping the rest of the table, which is how you pause the listener
+without losing your settings — so a caller must test both keys, not `enabled`
+alone.
+
+A hostname is **rejected**, not resolved: loading a config never makes a network
+call, so `bind` is either one of the four keywords or an IP literal. Validation
+is otherwise deliberately permissive — `enabled = true` with `bind = "off"` is a
+valid, documented state.
+
+Two things this table does not do yet. mDNS advertisement and push credentials
+are later milestones and have no keys here, because a key that quietly does
+nothing is worse than a missing one. And while the transport is still at its
+first milestone, the listener is compiled **only** into a binary built with the
+`lola_insecure` build tag, which also forces the bind to `localhost` whatever
+this table says and logs a warning on every accept; a release binary contains no
+listener at all and says so in the log when the table is enabled.
 
 ## The coding agent
 
 Each matched issue gets its own session — a git worktree plus a tmux pane
-running a coding agent. **Which agent lola launches is configurable**, with full
-lifecycle-callback parity across all three:
+running a coding agent. **Which agent lola launches is configurable**, with
+agent-specific lifecycle callbacks:
 
 | Kind | Binary | Launched as | Lifecycle callbacks |
 | --- | --- | --- | --- |
 | `claude` (default) | `claude` | `claude --settings .lola/settings.json <prompt>` | Claude Code hooks: lola writes `.lola/settings.json` wiring Stop / Notification / SessionEnd / PostToolUse / UserPromptSubmit to `lola hook`. |
-| `codex` | `codex` | `codex --ask-for-approval never --sandbox workspace-write <prompt>` (unattended) | Codex `notify`: lola sets `CODEX_HOME=<worktree>/.lola/codex` and writes its `config.toml` with `notify = ["lola", "hook", "codex-notify"]`; codex invokes that with a JSON payload on each turn-complete / approval-request, normalized to `stop` / `notification`. |
+| `codex` | `codex` | `codex --approve-for-me <prompt>` | A per-process `-c notify=["/absolute/path/to/lola", "hook", "codex-notify"]` override routes notifications back to this session while preserving the normal Codex home and configuration. |
 | `opencode` | `opencode` | `opencode --prompt <prompt> --auto` (unattended) | opencode plugin: lola writes `<worktree>/.opencode/plugins/lola-hook.js`, an in-process plugin that shells `lola hook <event>` on `session.idle` (→ `stop`), `permission.asked` (→ `notification`), and `tool.execute.after` (→ `tool_use`). |
 
 Set the agent globally in `[defaults].agent` and override it per repository with
@@ -779,10 +1632,10 @@ configs are unchanged. The daemon **health-gate checks the configured agent's
 binary** (not always `claude`) before every dispatch, and `lola doctor` reports
 whether it is on `PATH`.
 
-**Callback artifacts are per-session and git-excluded.** claude's
-`.lola/settings.json` and codex's `.lola/codex/` live under the already-excluded
-`.lola/` directory; for opencode sessions lola also excludes `.opencode/` from
-the worktree. `LOLA_SESSION` is exported into the pane so every callback path
+**Callback artifacts are per-session and git-excluded.** Claude's
+`.lola/settings.json` lives under the already-excluded `.lola/` directory;
+for opencode sessions lola also excludes `.opencode/` from the worktree. Codex
+gets its callback through argv, without modifying the user's config. `LOLA_SESSION` is exported into the pane so every callback path
 attributes the event to the right session.
 
 **Pane-scraping backstop.** Independently of the callbacks, lola classifies each
@@ -794,17 +1647,224 @@ are identical across all three agents.
 
 **Provider auth is inherited from the daemon/pane environment**, never stored in
 `config.toml`: `ANTHROPIC_API_KEY` (claude) or `OPENAI_API_KEY` (codex), or an
-existing CLI login — `~/.claude`, `codex login` (whose `auth.json` lola
-best-effort symlinks into the isolated `CODEX_HOME`), or `opencode auth`.
+existing CLI login — `~/.claude`, `codex login`, or `opencode auth`. New Codex
+sessions use the daemon's `CODEX_HOME` (or `~/.codex`), preserving authentication,
+model settings, MCP servers, skills, and other user configuration.
 
-**Distinct from lola's internal helpers.** The `[brain]` summarizer, `[review]`,
-and `[coderabbit]` features always shell out to `claude -p` regardless of this
-setting — they are lola-internal helpers, **not** the coding agent, and never
-change with the agent choice.
+**Codex automatic approvals.** Coding sessions require a Codex CLI whose
+`--help` advertises `--approve-for-me` (verified with 0.153.2). This enables
+`workspace-write` with automatic review of escalation requests, allowing the
+reviewer to approve Git writes and network commands that the old `never`
+approval policy rejected. It does not blindly approve every action: policy
+denials can still require a human. See [Codex Auto-review](https://learn.chatgpt.com/docs/sandboxing/auto-review).
+Lola also grants each Codex coding session write access to its repository's shared
+Git metadata directory using `--add-dir`. It resolves the directory from the
+current worktree at launch and resume, so fetching, committing and merging
+branches work even when the main checkout lives outside the workspace. No
+per-project path setting is needed; the grant does not include the main
+checkout's working files. Existing Codex processes must be relaunched to receive it.
+Read-only review providers do not enable automatic approvals. An older CLI
+must be upgraded; lola never falls back to bypassing the sandbox.
+
+Codex revival resumes the most recent saved conversation for the same worktree;
+without recorded history it starts from the task briefing. Legacy sessions with
+history in `.lola/codex` retain that home when revived. Codex pane classification
+and turn-complete notifications are supported, but structured inline question
+extraction and transcript-based activity detection remain Claude-specific.
+
+**Distinct from lola's internal helpers.** The `[brain]` summarizer still uses
+`claude -p`; disable it for an installation without Claude. The `[statusagent]`
+interpreter chooses its own `agent` independently of the worker. Reviews have
+their own provider catalog: select `codex-session` to use Codex for review as well.
+
+### Agent fallback (usage limits)
+
+When a session's agent hits its provider's **usage limit**, lola detects the
+banner in the pane (per-CLI wording for claude, codex and opencode; a transient
+"retrying" notice does not count) and the session reads as `needs_input` with
+the reason **usage limit**. What happens next is `[reactions].agent_fallback`:
+
+- `auto = false` (the default) — notify-only: the notification names the next
+  kind in the chain and suggests the switch.
+- `auto = true` — lola hands the session to the next kind in the chain **on the
+  same worktree and branch**: the old pane is replaced (shell, dev and review
+  tabs survive), a `.lola/handoff.md` briefing is written for the new agent
+  (the original prompt, the branch's commits and diffstat, the working-tree
+  status, the old agent's transcript path, and the dying pane's tail), and the
+  new agent launches on it.
+
+The chain is `agent_fallback` — on `[defaults]`, inheritable per `[[project]]` —
+e.g. `agent_fallback = ["codex", "opencode"]`. A session never revisits a kind
+it already ran (after claude → codex, a codex limit continues to opencode,
+never back to claude), and the target kind's binary must resolve on `PATH`
+**before** anything is torn down — a missing binary costs a notification,
+never the running pane. Each quota episode is acted on once and re-arms when
+the session leaves the usage-limited state.
+
+The same switch is available **manually** at any time, limit or not:
+`lola switch-agent <session> <kind>`, the `A` key in the TUI's session view,
+or **Switch agent** in the desktop app's session menu. And each spawn can
+override the project's agent up front — the agent selector in the ticket
+picker (`a` in the TUI) and in the manual-worktree form.
 
 **Note:** codex/opencode are exercised end-to-end only with those binaries
 installed; the Go test suite covers the launch-arg and callback-wiring plumbing
 but does not run the real CLIs.
+
+## Project workspaces (desktop app)
+
+Click a project in the sidebar to open its workspace. **Overview** brings together
+its sessions, current activity, repository information and automation settings.
+Opening a session takes you to the session workspace; project navigation itself
+does not filter the session list. Stacks link to their member repositories.
+Your last-used Overview or Git tab is remembered across projects and app launches.
+Projects without a repository show Overview without changing that preference.
+
+**Git** browses the configured repository and its worktrees using your installed
+`git`. Local and remote branches select the history to inspect. The commit graph
+shows ancestry and branch labels; select a commit to inspect its changed files,
+or **⌘-click** (Ctrl-click on other platforms) a second commit to compare the two
+trees. Selection shows metadata and changed files; click a file or **View changes**
+to open a diff. The comparison identifies its direction and can be reversed. Diffs
+offer unified and side-by-side layouts.
+
+**AI draft** beside Commit message uses your installed, signed-in Claude Code
+with Haiku to suggest an editable subject and body from staged changes. It sends
+bounded staged patch excerpts, file names, recent commit subjects and the current
+draft; it does not include unstaged or untracked content or create a commit.
+If the index or your draft changes during generation, the result is discarded.
+Generation has a 30-second timeout; response time depends on CLI startup and the
+model service, so a one-second response is not guaranteed.
+
+**Branch** creates a local branch from the current HEAD or another selected
+local/remote tip, with an optional switch to it. **Create branch here** in a branch
+or commit context menu uses that exact commit. Existing branches are never reset;
+Git preserves working changes or refuses an incompatible switch.
+
+For a local-only branch, **Push** opens an inline **Publish branch** form. Choose
+a configured remote and edit the remote branch name; publishing sets that
+destination as the upstream after a successful push. Divergent remote history
+is refused. This also works from a nonchecked branch's context menu. **Set upstream**
+links a local branch to an existing remote branch without pushing. Dropping a local
+branch onto a remote branch offers both actions with that destination preselected.
+
+**Create PR** opens a GitHub pull request form from the toolbar, branch/worktree
+menus or a branch drop. Dropping one branch onto another preselects source and
+base in that direction. Choose the repositories and branches, edit the title and
+description, and use searchable multi-select fields for reviewers, assignees and
+labels. Draft PRs defer reviewer requests. The form uses your installed, signed-in
+`gh`; other Git hosts are not supported for PR creation yet. Source forks default
+to their parent repository. Fetch the target first if its base commit is missing
+locally. An unpublished source requires explicit **Push & create PR** consent;
+pushes never force remote history. Existing open PRs are reused, and metadata
+failures retain the created PR link. **AI draft** uses Claude Haiku with bounded
+committed changes and your editable draft; it never submits the PR.
+
+**Create worktree** in a branch menu creates a separate checkout in a new folder,
+optionally opening it. A branch already checked out elsewhere requires a new
+branch name. Lola refuses destinations inside existing checkouts or its managed
+storage. Commit menus offer **Cherry-pick commit** and **Revert commit**, with
+confirmation, clean-checkout checks and Continue/Skip/Abort controls for conflicts.
+Merge commits first ask which parent to interpret the change against. **Compare against
+working changes** compares a commit with staged, unstaged and untracked files,
+using a temporary index without changing the real index or checkout.
+
+Local, Remote, Worktrees and Stashes have distinct collapsible section headers. Branch
+names containing `/` form animated nested folders, and the active local branch is highlighted. Use **Clear branch filter** below the
+history to return to all branches. Working changes occupy the first history row only
+when the checkout has changed files. Its graph node connects to the actual HEAD,
+including when other branches have newer commits. File lists show a muted directory
+prefix that truncates before the filename. Right-click a changed file, or press
+Shift-F10, to view changes, stage/unstage the selection or copy paths.
+The Changes header centers the list/tree controls and provides a trash action for
+all unstaged changes. Its confirmation distinguishes restoring tracked files from
+deleting untracked files; staged changes and ignored files are kept. If files or
+the index change while confirming, Lola asks you to review and confirm again.
+Nested repositories, submodules and active conflict recovery are never discarded
+by this action.
+Press **⌘F** (Ctrl-F) to search loaded commits. The column controls at the top right of history
+show or hide columns; drag a column divider or focus it and use the arrow keys to
+resize. Column visibility and widths are remembered.
+Drag either sidebar's inner edge to resize it, or focus the divider and use the
+arrow keys. Widths are remembered; double-click a divider to reset it.
+
+Branch tips and checkout markers sit to the left of the graph. Matching colors
+connect the labels and graph lanes. A faint tint fades right to left inside only
+the graph column; hovering or focusing a
+commit emphasizes its lane. The commit details list branches that reach the commit
+through loaded history, since shared ancestors are not owned by a single branch.
+GitHub remotes show their user or organization avatar. Author avatars and GitHub
+logins load separately through authenticated `gh`; missing identities and offline
+lookups fall back to initials without delaying local history. Avatar images and
+repository-scoped author/email associations are cached locally. Cached images
+appear immediately; each app launch refreshes profiles in the background when
+first used, keeping the previous image if offline. Initial lookups have a subtle
+loading treatment that respects reduced motion.
+
+Hover the commit-message column for a compact preview with author, date, short
+SHA and grouped branch-history chips. Branch badges align with their graph node
+and keep a compact, left-aligned layout.
+
+The working-copy panel keeps staged and unstaged files in separate scrolling
+sections, with compact list and folder-tree layouts. Shift-click selects a visible
+range; ⌘/Ctrl-click toggles individual files. Green hover actions and the selected
+file action stage precisely that selection. Review a file, stage or
+unstage it, then write a subject and optional body and commit the staged changes.
+**Amend last commit** loads the existing message into an empty draft. Local-only
+commits amend immediately; commits contained in a locally known remote branch
+show a brief confirmation. This uses the latest fetched remote history without
+a network request. A failed check or changed HEAD blocks the amend; it does not
+force-push rewritten history. Fetch, ordinary
+push and fast-forward-only pull are available from the toolbar. Refresh reloads
+changes made by a terminal or another application. Selecting a branch browses it;
+it does not check it out. Double-click a branch to check it out (or open its
+existing worktree). Right-click branches, remotes, worktrees, commits and stashes
+for their actions. Drag a branch onto another to choose an explicitly named merge
+or rebase, followed by confirmation. Merge/rebase conflicts stay visible with
+Continue and Abort actions.
+
+Pulling an unchecked branch fast-forwards its configured upstream without
+switching the visible checkout; divergence requires an explicit merge or rebase.
+Branch pushes use the existing upstream. **Stash** saves staged, unstaged and
+untracked changes (ignored files stay put); **Pop** restores a selected stash to a
+clean checkout and only removes it after success. Apply, pop and drop are also in
+the stash context menu. These actions require confirmation, and conflicts retain
+the saved stash.
+
+Commits use Git's effective repository/global configuration, identity, hooks and
+credential/signing helpers. The shield beside Amend exposes the configured signing mode in its tooltip.
+To sign every commit, configure `commit.gpgSign=true` in Git along with your
+`user.signingKey` and, for SSH keys, `gpg.format=ssh`. Lola does not turn signing off
+when a helper fails; the error is shown and the message is kept for retry. A
+passphrase-protected key needs its normal signing agent or GUI pinentry available
+to the desktop process. Sandboxed agent worktrees cannot be operated on through
+host Git in this view.
+
+## The session view (desktop app)
+
+A session opens on its **Conversation**: what the agent said and did, read from its own
+log, and one place to answer it. The agent is still the ordinary coding agent in its
+terminal, unchanged, and **Terminal** is one tab or ⌘\\ away. Everything from the log is
+the agent's claim. Only what lola itself witnessed (a message you sent, a command on a
+host, a turn's receipt) wears a box or an exit code.
+
+- **↩ never kills anything.** While the agent works, ↩ queues your message on lola's side,
+  where ↑ or `Edit` takes it back, and it goes when the agent rests. `Stop ⌘.` ends this
+  turn and holds what is queued until you speak again; `Stop & send` is the named way to do
+  both. There is no true mid-turn steer, because nothing types into a working agent.
+- **Questions come to you.** A permission prompt or a question shows as a card with the
+  agent's exact words, one key to answer, and the terminal beside it. A screen that only
+  takes keys says so and offers the terminal. `⌘J` goes to the next session waiting on you,
+  across all of them.
+- **Where it opens.** `Open sessions in` under Appearance and in the session's `⋯` picks
+  Conversation or Terminal for all sessions, and a session remembers the view you left it
+  on. An agent whose log lola cannot read yet (codex and opencode today, or a Claude Code
+  version whose format changed) opens on its terminal and says why.
+- **When it ends.** A merged session moves to `Ended` in the sidebar and stays readable for
+  14 days. A session with a goal is run by the goal, and its conversation is read-only.
+- **The phone and the TUI are unchanged and stay terminal-first.**
+
+The full design is [`docs/unified-session.md`](docs/unified-session.md).
 
 ## Attaching to a session
 
@@ -824,6 +1884,75 @@ lola runs these sessions on its **own tmux server** (`tmux -L lola`, or your
 to or detaching from a lola session never touches your own tmux sessions,
 options, or key bindings.
 
+## Reviewing a session's diff
+
+Press **`f`** on a session (TUI and app), or pick **Review diff** from the app's
+session menu, to read what it changed: its worktree against the merge-base with
+the project's `default_branch`, so commits `main` gained since the fork never
+show up as if the agent reverted them — and uncommitted and untracked work is
+included, because most of an agent's work is not committed yet.
+
+- **App** — the session's **Changes** view (`f` or ⌘⇧D): everything against the
+  base, each turn, a file tree, unified or split hunks, light syntax colouring.
+  Click a line number (shift-click for a range) to write a comment; comments
+  queue under their line and survive an app restart. **Send to Claude** in the
+  footer ships the batch.
+- **TUI** — a full-screen overlay: `j`/`k` move, `[`/`]` jump files, `c`
+  comments on the line under the cursor, `n` adds a free note, `u` drops the last
+  comment, `s` sends, `r` re-reads the worktree.
+
+A batch reaches the agent as **one message**, each comment anchored as
+`path:line` (a comment on a removed line names the base version's line) with the
+quoted code. It goes through the same gate as a review hand-off: sanitized, and
+typed only when the agent's pane shows a resting prompt **right now**. A
+mid-turn agent is never typed into — the batch is **queued** and delivered the
+moment it stops (the Stop hook, or the next observe cycle), and a second batch
+sent meanwhile is appended, not lost. Works the same for claude, codex and
+opencode sessions.
+
+## Turn checkpoints: restore and fork
+
+Every time a session's coding agent **ends a turn** (the Stop hook), lola
+snapshots its whole worktree — committed, uncommitted and untracked work, never
+ignored files or `.lola/` — as a commit object kept on a ref under
+`refs/lola/checkpoints/<session>/`, **not** on the session's branch, so the
+branch, the PR and every push are untouched. A turn that changed nothing records
+nothing, and a `start` baseline is recorded just before a new session's first
+agent launch, so even turn 1 can be undone (claude, codex and opencode alike). Each session keeps its newest 100; the refs are deleted when the
+session is torn down with its worktree.
+
+In the app they are the **Turns** column of the session's **Changes** view
+(**Checkpoints** in the session menu lands there, and a turn's receipt in the
+conversation links to it). The list runs newest first; pick one to read what that
+turn changed (the previous checkpoint against it). **All vs base** goes back to
+the whole diff, and ⌘⇧D or Esc to where you came from. Then:
+
+- **Restore…** moves files only: the conversation and git history do not move.
+  It puts the worktree's FILES back to that checkpoint. HEAD and the
+  branch stay put — commits made since stay in history and show up as
+  uncommitted edits that undo them. The current state is saved as a new
+  checkpoint first, so a restore is itself one click to undo. Refused while the
+  agent is mid-turn (nothing is typed into the agent while a restore runs), and
+  refused when it would overwrite an ignored file no checkpoint could bring
+  back. The agent still remembers the discarded changes: tell it.
+- **Fork…** starts a new agent session from that checkpoint on its own branch
+  (`<branch>-fork-<n>`), holding the checkpoint's files as uncommitted work and
+  briefed as a fork. The original session keeps running untouched.
+
+`lola checkpoint list|diff|restore|fork` does the same from a shell.
+
+### The shared context folder
+
+Every agent session gets `.lola/context/` when its setup succeeds: a notes
+folder that lives OUTSIDE the worktree at `~/.lola/context/<project>/<key>/` and
+is linked in, so it survives the worktree. Linking is best-effort — if it fails,
+the session still starts, without the folder, and its briefing leaves the
+section out. Every re-spawn of the same issue (`-r2`, `-r3`, …) and every fork
+gets the same folder, and `.lola/prompt.md` names what earlier sessions left
+there and asks the agent to keep `notes.md` current. It is git-ignored (all of
+`.lola/` is), so nothing in it is ever committed — and it is not part of a
+checkpoint, so a restore never rolls notes back.
+
 ## Secrets
 
 The Linear API key is resolved at dispatch time, keychain first, then
@@ -835,6 +1964,13 @@ environment:
    ```sh
    security add-generic-password -a "$USER" -s lola-linear -U -w
    ```
+
+   `lola setup`, the TUI's settings editor (`S` → **Linear**) and the desktop
+   app's Settings → **Linear** all write this same item under the service name
+   `lola-linear` and point `[linear].api_key_keychain` at it — that is also how
+   you **rotate** a key without touching the Keychain by hand. Both editors
+   show only whether a key is configured and whether it resolves; neither ever
+   reads a stored key back out.
 
    lola reads it back with `security find-generic-password -s <name> -w`.
    A missing item falls through to the env var; any other keychain error
@@ -925,7 +2061,11 @@ For each polling project (`team_id` set and `enabled`), every `poll_interval`:
    the team's active cycle now.
 3. Query matching issues (paginated, 100 per page, until exhausted).
 4. Drop issues already in-flight in another polling project, then apply this
-   project's dedup mode.
+   project's dedup mode. Then hold back issues that are not eligible yet: one
+   with a "blocked by" relation to an issue that is neither completed/canceled
+   in Linear nor merged under lola, and one with open sub-issues (its work
+   lives in them). A held issue is skipped without being marked seen, so it
+   dispatches on the first tick after its blockers land.
 5. Sort by `priority_sort`, take up to
    `min(concurrency_cap, global_cap − live counted native sessions)`.
 6. Per issue: record it as in-flight/seen **first**, then spawn the native
@@ -944,6 +2084,143 @@ orphan timeout (default 15 min), so lost work re-queues instead of vanishing.
 
 Failures ("runtime unavailable", "Linear auth failed", label write failed) are
 always surfaced in `lola status` and the log — never silently swallowed.
+
+## Decomposing a large issue
+
+`lola plan SUSHI-42` is the orchestrator pass: it splits one issue too big
+for a single agent into ordered sub-issues that lola then dispatches in
+dependency order.
+
+1. `lola plan SUSHI-42` reads the issue and runs ONE bounded `claude -p`
+   (4-minute limit, `[brain].model` if set; it does not need `[brain].enabled`).
+   It prints the proposed steps — title, description, and which earlier steps
+   each one waits for — and saves them to `~/.lola/plans/SUSHI-42.json`.
+   Nothing is written to Linear.
+2. Read it. Edit the file if needed: a step may only be blocked by EARLIER
+   steps (`"blockedBy": [1, 2]`), which keeps the plan acyclic.
+3. `lola plan SUSHI-42 --apply` creates the steps as sub-issues of SUSHI-42
+   and records each dependency as a "blocks" relation. Each sub-issue is placed
+   so the project's poll matches it: its team, `project_id`, cycle
+   (`cycle_mode`), assignee (`assignee_mode`), state (`state_ids`) and every
+   `match_labels` entry come from the poll's filter; anything the filter leaves
+   open is inherited from the parent. The project is the one polling the
+   issue's team, or `--project <name>` when several do. In label/seen dedup the
+   parent's trigger labels are removed so it never dispatches itself. An issue
+   that already has sub-issues is refused, so a second `--apply` cannot create
+   a duplicate set.
+
+From then on the ordinary ticks do the work: a step with no blockers
+dispatches right away, and each later step waits (`blocked-by <ID>` in
+`lola poll <project> --once --dry-run`) until its blockers are done or their PRs are
+merged.
+
+## Agent-assisted SSH
+
+A coding agent debugs a remote host with nothing installed there. You watch a
+structured timeline, can dig from any claim to the exact command and raw output, and
+can take the wheel at any moment. The contract is
+[`docs/ssh-sessions.md`](docs/ssh-sessions.md) and the experience
+[`docs/ssh-sessions-ux.md`](docs/ssh-sessions-ux.md).
+
+**How it works.** The agent stays local and holds nothing. The daemon runs real `ssh`
+as a ControlMaster in a `<id>-ssh-N` tmux tab. You authenticate through cards in the timeline, or in that terminal. Each
+agent command then runs over an exec channel on that master, not by typing into a
+shell, so it has a real exit code and separate stdout and stderr. Every command
+becomes a block on the timeline.
+
+**Two ways in.** From a running session, the agent runs `lola ssh request <host> --why
+…`. The session then shows as needing you, and nothing connects before your go. Or you
+start an agent-assisted session yourself: `H` in the TUI, ⌘⇧H in the app, or `lola ssh
+open <host>`. Starting it is the go for connecting, and command approval still applies.
+It needs no project or checkout. You talk to the agent there, and the terminal one tab
+over is yours.
+
+**Approval.** A production host approves every command, one at a time. Hosts below
+production may also take a time-limited grant while you approve. An approval shows the
+exact command, the reason, the host, the user and the tier. A denial can carry a reason
+back to the agent. A command nobody answers expires, unrun.
+
+**The wheel.** Each connection is either the agent's or yours. Taking it (`W` in the
+TUI, `W` or ⌘⇧L in the app, `lola ssh take`) makes `lola ssh run` return a clear "human
+has control" result at once, refuses what was waiting, and ends any grant. A command
+already running stays visible and stoppable. Commands you run in the terminal are not
+recorded. Handing back can include a transcript of your terminal: you read and edit it
+first, and it is sent only if you choose to. Stopping a command or closing a connection
+ends the local ssh, and **the remote process may keep running**.
+
+**What agents can publish.** `lola post <kind> …` (or its old name, `lola ssh post`) adds an item to the conversation:
+`summary`, `narration`, `hypothesis`, `finding`, `plan`, `metric`, `evidence`,
+`recommendation`, `proposal`, `question`. Every agent's briefing teaches them, the same
+for claude, codex and opencode. They are the agent's **claims**: display-only, sanitized,
+rate-limited, and rendered as text. Command, exit code, timing and output are **facts**
+the daemon recorded, and the UIs draw the two differently. An evidence link is verified
+only as "this block exists with these facts", not as "the claim is true". A proposal
+never runs by itself.
+
+### What this does and does not protect
+
+Say these plainly to whoever turns this on:
+
+- **Lola does not filter commands.** There is no read-only mode to trust, because
+  parsing a shell command on the client is not a boundary. The remote user's permissions
+  are the real limit, so point `user` at a restricted account.
+- **Everything the agent reads goes to its model provider,** output included. The
+  approval moment says so too.
+- **For an unsandboxed agent, the approval gate stops accidents and well-behaved agents,
+  not a determined one.** It runs as you, so it can reach the daemon's socket and your ssh
+  keys. That is why a production host refuses an unsandboxed agent unless the host sets
+  `allow_unsandboxed = true`.
+- **For a sandboxed agent the gate is real.** Its container mounts no ssh keys, and the
+  hook bridge admits only the agent verbs: never approval, takeover or open. A direct
+  session runs sandboxed on production when `[sandbox]` is configured, with only its
+  scratch folder writable. Otherwise it is refused with a message naming both ways out.
+- **Remote output is untrusted.** Control characters are stripped, a handback transcript
+  is framed to the agent as untrusted, and a URL opens only through the daemon's
+  http(s)-only `openURL`.
+- **A paired phone sees no ssh details.** Every ssh command is refused over `[remote]`,
+  the `-ssh-N` tab cannot be attached from a phone, and the session list it receives
+  leaves out the ssh glance, so the exact command waiting for approval and the agent's
+  latest summary stay on the machine.
+
+## Workspace learning and goals
+
+The feature-branch implementation adds `lola goal`, `lola learn`, and
+`lola profile` for durable Linear goal plans, scoped learning, and independently
+tracked specialist reviews. Autonomous execution is still in development.
+`lola goal propose` can build a reviewed task graph from an outcome and committed
+repository context; accepting it creates a local goal without starting workers.
+See [usage and implementation status](docs/workspace-goals.md).
+
+## Best-of-N: several attempts, one winner
+
+Some issues are worth solving more than once. Best-of-N runs one issue as
+several **independent attempts** — different coding agents, or one agent on
+different models — and lets a human keep the best one.
+
+- **Start** it with `lola bestof start SUSHI-42 --agents claude:2,codex`, or
+  label the issue with `[best_of].label` and let the poll pick it up. Each
+  attempt is a full session (`lola-<project>-sushi-42-b<k>`, branch
+  `<branch>-b<k>`), told in its briefing that it is attempt k of N and to open
+  its PR as a **draft** titled `[best-of k/N]`. A model is passed to the agent's
+  own flag (`--model` for claude and opencode, `-c model=…` for codex) and kept
+  across a revive.
+- **Every attempt counts**: a poll charges the group N slots of its budget and
+  dispatches it only when all N fit; `lola bestof start` refuses past
+  `global_cap`; both honour the spend/load hold, and every agent of the mix is
+  health-checked before anything starts. The issue itself is deduped once —
+  one in-flight claim, one label flip, one spawn write-back.
+- While the attempts race, their PR-open Linear write-back is **held**, so N
+  draft PRs do not each move the issue to "In Review". CI, reactions and the
+  review providers run on every attempt as usual — that is what gets compared.
+- **Compare** with `lola bestof compare SUSHI-42` (or right-click an attempt in
+  the app → *Compare attempts*): state, PR + CI, review findings for the current
+  PR, diff size against the merge-base, tokens. The ★ is a suggestion — CI
+  first, then fewer blocker/major findings, then the smaller diff.
+- **Pick** with `lola bestof pick <session>` (or *Keep* in the app). The kept
+  PR is marked ready for review and takes over the issue's Linear write-back;
+  every other attempt's PR is **closed with its branch kept**, and its session
+  is torn down by the ordinary dirty-safe teardown — a worktree with uncommitted
+  changes is kept (agent stopped) for a human to look at.
 
 ## History
 

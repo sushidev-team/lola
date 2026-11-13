@@ -28,7 +28,8 @@ import * as application$0 from "../../../wailsapp/wails/v3/pkg/application/model
  * Attach starts an interactive `tmux attach` to the named session in a PTY sized
  * cols×rows and streams its output to the frontend as base64 chunks on the event
  * `pty:<name>`, coalesced to one emit per ~16ms so a chatty agent can't saturate
- * the webview. Re-attaching an already-live stream tears the old one down first.
+ * the webview. Attaching is exclusive: every other live stream (and an older one
+ * for this name) is torn down first.
  * Returns the stream ID (the session name) the frontend uses for Write/Resize/
  * Detach and the event subscription.
  */
@@ -88,12 +89,42 @@ export function Detach(name: string): $CancellablePromise<void> {
 }
 
 /**
+ * DetachAll closes every live PTY stream. The frontend calls it once on boot:
+ * a page load starts with no LiveTerminal mounted, so any stream still open was
+ * left behind by the previous page (a reload or a dev-server HMR never runs
+ * onDestroy) and is holding a tmux client nobody is looking at. Without it those
+ * orphans would last until the next Attach, and the daemon defers every
+ * automatic prompt to a session with a client attached.
+ */
+export function DetachAll(): $CancellablePromise<void> {
+    return $Call.ByID(3924559811);
+}
+
+/**
  * Resize propagates an xterm resize to the PTY so the remote app reflows. Like
  * Write, a resize aimed at an already-gone stream is a no-op (the ResizeObserver
  * can fire once more as the terminal tears down) rather than an error.
  */
 export function Resize(name: string, cols: number, rows: number): $CancellablePromise<void> {
     return $Call.ByID(2185863351, name, cols, rows);
+}
+
+/**
+ * Scroll moves the named pane's view back through its history: lines > 0 scrolls
+ * BACK (up), lines < 0 forward again, zero is a no-op. It is the whole reason a
+ * lola terminal scrolls in the app: `tmux attach` runs on the alternate screen,
+ * so xterm.js has no scrollback of its own and its fallback for that case turns
+ * the wheel into cursor keys — which walks the AGENT's input history instead of
+ * scrolling anything.
+ * 
+ * The work is (*tmux.Client).ScrollPane's, shared with the TUI, and it is what
+ * decides WHICH history to move: the program's own (an agent on the alternate
+ * screen keeps its transcript itself and asks for the wheel) or tmux's copy mode
+ * (a plain shell). All this needs to know is which one happened, because only
+ * copy mode leaves a mode behind for the next keystroke to cancel.
+ */
+export function Scroll(name: string, lines: number): $CancellablePromise<void> {
+    return $Call.ByID(1163232830, name, lines);
 }
 
 /**
@@ -115,10 +146,15 @@ export function Shell(shell: string, worktree: string): $CancellablePromise<stri
 }
 
 /**
- * Shells lists a lola session's shell tmux sessions ("<id>-shell-N") on the lola
- * server, sorted by their trailing index. Both the app and the TUI discover the
- * SAME sessions, so a shell opened in either shows up as a tab in the other. An
- * empty result (or a tmux error) simply means no shells.
+ * Shells lists a lola session's auxiliary tmux sessions on the lola server: its
+ * dev tabs ("<id>-dev-N", the project's dev_commands — the daemon owns their
+ * lifetime, see internal/daemon/dev.go), then its shells ("<id>-shell-N", sorted
+ * by their trailing index), then its review pane ("<id>-review") when a visible
+ * review pass has opened one. Both the app
+ * and the TUI discover the SAME sessions, so a shell opened in either shows up
+ * as a tab in the other — and a review the daemon started shows up in both
+ * without either having to be told. An empty result (or a tmux error) simply
+ * means no auxiliary sessions.
  */
 export function Shells(sessionID: string): $CancellablePromise<string[] | null> {
     return $Call.ByID(3412002816, sessionID);

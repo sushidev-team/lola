@@ -1,12 +1,28 @@
 <script lang="ts">
+  import NewSession from "$lib/components/NewSession.svelte";
+  import NewSSHSession from "$lib/components/ssh/NewSSHSession.svelte";
+  import ConnectSSHHost from "$lib/components/ssh/ConnectSSHHost.svelte";
+  import { ssh } from "$lib/ssh.svelte";
+  import { talk } from "$lib/talk.svelte";
+  import { sshNeedsHuman } from "$lib/ssh";
+  import { changesOffered, conversationOffered } from "$lib/sessionview";
+  import RenameSession from "$lib/components/RenameSession.svelte";
+  import CommandPalette from "$lib/components/CommandPalette.svelte";
+  import ActivityFeed from "$lib/components/ActivityFeed.svelte";
+  import Modal from "$lib/components/Modal.svelte";
+  import { openShell, newSessionHere } from "$lib/projectActions";
   import { onMount } from "svelte";
-  import { Events } from "@wailsio/runtime";
-  import { store, scopedSessions, type SessionInfo } from "$lib/store.svelte";
+  import { Events, Window } from "@wailsio/runtime";
+  import { store, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms } from "$lib/terms.svelte";
-  import { triaged } from "$lib/filters";
+  import { terms, AGENT, DIFF, CHECKPOINTS } from "$lib/terms.svelte";
+  import { visibleRoster } from "$lib/roster";
+  import { sidebarWidth, sidebarLimit } from "$lib/sidebarwidth";
+  let windowWidth = $state(1280);
+  const sideWidth = $derived(sidebarWidth(nav.sidebarWidth, windowWidth));
   import { isChord } from "$lib/keys";
+  import { displayFor } from "$lib/theme";
   import { reflowGridRows } from "$lib/reflow";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import MainTopBar from "$lib/components/MainTopBar.svelte";
@@ -22,20 +38,32 @@
   import ProjectForm from "$lib/views/ProjectForm.svelte";
   import UpdateOverlay from "$lib/views/UpdateOverlay.svelte";
   import HelpOverlay from "$lib/views/HelpOverlay.svelte";
+  import BestOfOverlay from "$lib/views/BestOfOverlay.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import SessionMenu from "$lib/components/SessionMenu.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { overlayClose } from "$lib/overlayClose";
   import Setup from "$lib/views/Setup.svelte";
+  import ReviewWorkspace from "$lib/components/session/ReviewWorkspace.svelte";
+  import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
+  import DesktopContext from "$lib/components/DesktopContext.svelte";
 
-  // The currently-selected cockpit session — the target of every session action
-  // the global key handler fires.
-  const sel = $derived(store.sessionById(nav.selectedId));
+  // The target of every session action: the session you are looking at, and the selection only
+  // when none is open. The selection can differ from the open session (ssh.open, a fork), and ⌘.
+  // must never stop a session you are not looking at.
+  const sel = $derived(store.sessionById(nav.focusedTerm || nav.selectedId));
+
+  function onTitleBarDoubleClick(event: MouseEvent) {
+    if (event.button !== 0 || !(event.target instanceof Element)) return;
+    // Use the same inherited property as Wails so controls and their icons opt out.
+    if (getComputedStyle(event.target).getPropertyValue("--wails-draggable").trim() !== "drag") return;
+    void Window.ToggleMaximise().catch((err) => store.setFlash(String(err), "warn"));
+  }
 
   onMount(() => {
     store.start();
-    // Load the version + run the interval-gated startup auto-check so the
+    // Load the version + start launch and periodic update checks so the
     // sidebar's utility row can surface a badge when a release is out.
     void updates.init();
     // The macOS status-bar menu cannot open an overlay itself — it is nav state
@@ -45,6 +73,7 @@
     // The Session menu's items + their ⌘ accelerators (see installAppMenu). They
     // name an action; the target is the selection, which only the frontend knows.
     Events.On("app:session-action", (e: { data: string }) => sessionAction(e.data));
+    return () => updates.stop();
   });
 
   // Apply a Session-menu action to the current selection. AppKit delivers a menu
@@ -54,6 +83,16 @@
   // open dialog.
   function sessionAction(action: string) {
     if (nav.overlay || confirm.request || sessionMenu.request) return;
+    if (action === "close-tab") {
+      if (nav.view === "cockpit" && nav.focusedTerm) void terms.closeActiveTab(nav.focusedTerm);
+      return;
+    }
+    if (action === "find-project-history") { if (nav.view === "detail" && nav.projectTab === "git") nav.gitSearchRequest++; return; }
+    if (action === "commands") { nav.openOverlay("commands"); return; }
+    if (action === "new-session") { newSessionHere(); return; }
+    if (action === "temporary-shell") { void openShell(); return; }
+    if (action.startsWith("ssh-")) { ssh.menuAction(action, sel); return; }
+    if (action === "next") { ssh.nextWaiting(1); return; }
     const s = sel;
     if (!s) {
       store.setFlash("no session selected", "warn");
@@ -68,10 +107,23 @@
         else store.setFlash("session has no PR yet", "warn");
         break;
       case "new-shell":
-        // The shell tab lives in the detail embed, which the grid lens doesn't
-        // render — leave the grid first, same move as SessionMenu's + add shell.
-        if (nav.lens === "grid") nav.setLens("list");
+        // A tab only exists inside the session, so this opens it first.
+        nav.openSession(s.id);
         terms.newShell(s.id, s.worktree);
+        break;
+      case "stop":
+        // Never a session nobody can see. Home and the project views cover the selection, and a
+        // stray chord there must not end someone's turn.
+        if (nav.view !== "cockpit") {
+          store.setFlash("Open a session to stop it.", "warn");
+          break;
+        }
+        // No connection needed, and the daemon re-reads the pane behind it. Its refusal is a
+        // sentence worth showing.
+        talk.stop(s.id).catch((err) => store.setFlash(String(err), "warn"));
+        break;
+      case "changes":
+        ssh.toggleChanges(s);
         break;
       case "kill":
         store.askKill(s.id); // ask first — shared confirm dialog
@@ -97,7 +149,7 @@
   // sidebar applies — otherwise arrow-key movement walks a different list than
   // the one on screen.
   function cockpitRows(): SessionInfo[] {
-    return triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage);
+    return visibleRoster(store.rosterSessions, store.projects.map(p => p.name), n => store.displayNameFor(n), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project });
   }
 
   function moveSel(delta: number) {
@@ -105,10 +157,15 @@
     if (rows.length === 0) return;
     let i = rows.findIndex((r) => r.id === nav.selectedId);
     i = i < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, i + delta));
-    nav.select(rows[i].id);
+    nav.openSession(rows[i].id);
   }
 
-  // Jump to the next/prev session parked on a human (needs_input), wrapping.
+  // Next or previous row parked on a human, wrapping. It selects and stays in Overview, which is
+  // what makes `n` a way to walk the list: ⌘J is the one that opens.
+  //
+  // The AGENT axis only, deliberately narrower than `attention`: a red CI is work to schedule, not
+  // a prompt to answer. `displayFor` rather than a raw compare so a future agent state that maps
+  // to needs_you is included for free.
   function jumpNeedsInput(dir: number) {
     const rows = cockpitRows();
     const len = rows.length;
@@ -117,8 +174,8 @@
     if (start < 0) start = 0;
     for (let n = 1; n <= len; n++) {
       const r = rows[(((start + dir * n) % len) + len) % len];
-      if (r.status === "needs_input") {
-        nav.select(r.id);
+      if (displayFor(r.agentState) === "needs_you" || sshNeedsHuman(r)) {
+        nav.openSession(r.id);
         return;
       }
     }
@@ -138,16 +195,13 @@
         moveSel(-1);
         return true;
       case "g":
-        if (rows[0]) nav.select(rows[0].id);
+        if (rows[0]) nav.openSession(rows[0].id);
         return true;
       case "G":
-        if (rows.length) nav.select(rows[rows.length - 1].id);
+        if (rows.length) nav.openSession(rows[rows.length - 1].id);
         return true;
       case "Enter":
-        if (sel) nav.toggleFocusTerm(sel.id);
-        return true;
-      case "V":
-        nav.cycleLens();
+        if (sel) nav.openSession(sel.id);
         return true;
       case "n":
         jumpNeedsInput(1);
@@ -156,21 +210,16 @@
         jumpNeedsInput(-1);
         return true;
       case "s":
-        // Open a worktree shell for the selection — the desktop equivalent of the
-        // TUI's "s". Repeatable: each press adds another shell tab. No-op in the
-        // grid lens, which has no embed.
-        if (sel && nav.lens !== "grid") terms.newShell(sel.id, sel.worktree);
+        // A new shell for the selection, each press another. The Glance has no tabs, so it opens
+        // the session to show it.
+        if (sel) {
+          nav.openSession(sel.id);
+          terms.newShell(sel.id, sel.worktree);
+        }
         return true;
-      // '<' / '>' switch terminal tabs. Both the shifted glyph and the unshifted
-      // ',' / '.' on the same key are bound, so it works with or without Shift and
-      // on layouts (German) where '[' / ']' need Option and never arrive.
-      case "<":
-      case ",":
-        if (sel && nav.lens !== "grid") terms.cycleTab(sel.id, -1);
-        return true;
-      case ">":
-      case ".":
-        if (sel && nav.lens !== "grid") terms.cycleTab(sel.id, +1);
+      case "f":
+        // The session's Changes. Opens the session, for the same reason.
+        if (sel) ssh.toggleChanges(sel);
         return true;
       case "x":
         if (sel) store.askKill(sel.id); // ask first — shared confirm dialog
@@ -179,11 +228,20 @@
         if (sel?.prUrl) store.openURL(sel.prUrl);
         return true;
       case "c":
-        // The CONFIGURED review provider (claude-session | coderabbit-cli | …),
-        // not coderabbit specifically — same as the menu's "Trigger Review" and
+        // The CONFIGURED review provider (any pass kind — an agent or cli one),
+        // not coderabbit specifically — same as the overview's "Trigger review" and
         // ⌘⇧R. Forcing the coderabbit-watch pass is still reachable from the
-        // session context menu, which is where a provider-specific action belongs.
-        if (sel) store.review(sel.id);
+        // command palette as "Poll CodeRabbit reviews".
+        if (sel && sel.location !== "ssh") store.review(sel.id);
+        return true;
+      case "D":
+        // Run the project's dev_commands in the selected session (or stop them).
+        // SHIFTED because bare "d" is the doctor overlay — and because the toggle
+        // stops another session's running processes.
+        if (sel) {
+          if (sel.devCommands?.length) store.dev(sel.id, !sel.devActive);
+          else store.setFlash("no dev_commands configured for this project", "warn");
+        }
         return true;
       case "R":
         if (sel && (sel.status === "dead" || sel.status === "session_ended")) store.revive(sel.id);
@@ -193,6 +251,91 @@
         return true;
     }
     return false;
+  }
+
+  // Which view of the open session the keyboard is looking at.
+  const SESSION_RING: Record<string, 1 | -1> = { "<": -1, ",": -1, ">": 1, ".": 1 };
+
+  // The open session's bare keys. `x s c D R o P p d S V Enter` are Overview's: they are dead here
+  // on purpose, so a lost focus cannot fire one mid-sentence. Their paths in a session are chords
+  // and ⋯. `[ ] u j k g G` belong to the timeline, which takes them while it has focus.
+  function sessionKey(e: KeyboardEvent): boolean {
+    const s = sel;
+    if (e.key === "?") {
+      nav.openOverlay("help");
+      return true;
+    }
+    if (e.key === "b") {
+      nav.toggleSidebar();
+      return true;
+    }
+    if (e.key === "Escape") return escapeLadder(s);
+    if (!s) return false;
+    if (ssh.bareKey(e.key, s)) return true;
+    const v = ssh.view(s.id);
+    const conversation = conversationOffered(s);
+    switch (e.key) {
+      case "n":
+        ssh.nextWaiting(1);
+        return true;
+      case "N":
+        ssh.nextWaiting(-1);
+        return true;
+      case "f":
+        if (changesOffered(s)) terms.toggleDiff(s.id);
+        return true;
+      case "F":
+        ssh.cycleFilter(s);
+        return true;
+      case "i":
+        ssh.focusComposer(s);
+        return true;
+      case "t":
+        if (conversation) {
+          ssh.open(s.id);
+          v.holdArrival = true;
+          v.streamFocus++;
+        }
+        return true;
+      case "/":
+        if (conversation) {
+          ssh.open(s.id);
+          v.holdArrival = true;
+          v.findFocus++;
+        }
+        return true;
+      case "w":
+        if (conversation && v.knownWidgets.length) ssh.dockKey(s);
+        return true;
+    }
+    const ring = SESSION_RING[e.key];
+    if (ring) {
+      ssh.ringStrip(s, ring);
+      return true;
+    }
+    return false;
+  }
+
+  // One step per press, and Esc never reaches the agent from here: a terminal holding the keyboard
+  // owns Esc before this runs, and Ctrl-Q is its way out. Changes and an unfocused terminal step
+  // back a view. The conversation steps back to Overview once nothing in it holds focus: the
+  // composer and the timeline each give up focus first, on their own press.
+  function escapeLadder(s: SessionInfo | undefined): boolean {
+    if (!s) {
+      nav.focusSessions();
+      return true;
+    }
+    const tab = terms.activeTab(s.id);
+    if (tab === DIFF || tab === CHECKPOINTS) {
+      terms.toggleDiff(s.id);
+      return true;
+    }
+    if (ssh.onTerminal(s) && conversationOffered(s)) {
+      ssh.leaveTerminal(s);
+      return true;
+    }
+    nav.focusSessions();
+    return true;
   }
 
   function onKey(e: KeyboardEvent) {
@@ -248,7 +391,15 @@
       return;
     }
 
-    if (typing(e.target)) return;
+    if (typing(e.target)) {
+      // The one Esc a field gives up here: the composer's. It keeps its draft. Everything else
+      // that types keeps its Esc, a terminal's textarea above all, since that key is the agent's.
+      if (e.key === "Escape" && (e.target as HTMLElement).closest?.("[data-action-zone]")) {
+        (e.target as HTMLElement).blur();
+        e.preventDefault();
+      }
+      return;
+    }
 
     // Let a focused button/link handle its own Enter/Space natively instead of
     // firing a cockpit action on top of the activation (e.g. a lens toggle that
@@ -258,8 +409,33 @@
       return;
     }
 
-    // A focused live terminal owns the keyboard (handled inside the view).
-    if (nav.focusedTerm) return;
+    // Session navigation belongs to the sidebar; the conversation keeps its own row keys.
+    const inSidebar = !!(e.target as HTMLElement)?.closest?.('[data-sidebar-sessions]');
+    if (inSidebar && nav.view === 'cockpit') {
+      if (e.key === 'Escape') {
+        if (nav.sidebarQuery) nav.sidebarQuery = '';
+        else if (nav.triage) nav.setTriage('');
+        else if (nav.scoped) nav.goCockpit('');
+        e.preventDefault();
+        return;
+      } else if (cockpitKey(e)) { e.preventDefault(); return; }
+    }
+
+    // Two depths, two key maps. Inside a session `typing()` above is the only guard, so a terminal
+    // holding the keyboard keeps every key and this never sees them. Falling through to the globals
+    // and cockpitKey instead would make `j` move the list behind the session, Enter close it, and
+    // `x` ask to kill.
+    if (!inSidebar && nav.focusedTerm && nav.view === "cockpit") {
+      if (sessionKey(e)) e.preventDefault();
+      return;
+    }
+
+    // `A` and `h` and `W` open a session from Overview. The session's own keys, `i t F /`, are not
+    // here: they would bump focus counters for a composer that is not mounted.
+    if (nav.view === "cockpit" && ssh.bareKey(e.key, sel)) {
+      e.preventDefault();
+      return;
+    }
 
     // '?' opens the keybinding reference from any view.
     if (e.key === "?") {
@@ -297,7 +473,8 @@
   }
 </script>
 
-<svelte:window on:keydown={onKey} />
+<svelte:window on:keydown={onKey} on:dblclick={onTitleBarDoubleClick} bind:innerWidth={windowWidth} />
+<DesktopContext />
 
 {#if store.configChecked && !store.hasConfig}
   <div class="h-full bg-canvas text-ink">
@@ -310,15 +487,17 @@
      going to 0px — never an {#if}, which would remount the sidebar. -->
 <div
   class="grid h-full bg-canvas text-ink"
-  style="grid-template-columns:{nav.sidebarOpen ? '248px' : '0px'} minmax(0,1fr)"
+  style="grid-template-columns:{nav.sidebarOpen ? `${sideWidth}px` : '0px'} minmax(0,1fr)"
 >
   <!-- Full height, ALWAYS MOUNTED. Collapse is the grid track going to 0px plus
        overflow-hidden + inert inside — never an {#if}. A new mount boundary in
        this template is what froze the template effect before. -->
-  <Sidebar />
+  <Sidebar width={sideWidth} maxWidth={sidebarLimit(windowWidth)} />
 
-  <div class="grid min-h-0 min-w-0" style="grid-template-rows:44px auto minmax(0,1fr)" {@attach reflowGridRows}>
-    <MainTopBar />
+  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{nav.view === 'detail' && store.projectByName(nav.project) ? '0px' : '44px'} auto minmax(0,1fr)" {@attach reflowGridRows}>
+    <!-- Project workspaces own their single window toolbar. Keep the shared
+         bar mounted for the session view, but remove its duplicate chrome. -->
+    <div class="min-h-0" class:overflow-hidden={nav.view === 'detail' && !!store.projectByName(nav.project)} inert={nav.view === 'detail' && !!store.projectByName(nav.project)} aria-hidden={nav.view === 'detail' && !!store.projectByName(nav.project)}><MainTopBar /></div>
     <!-- Out-of-date-daemon banner: always mounted (so it reacts), self-hides when
          there is no push error. The WRAPPER is what must always render: the banner
          itself emits NO DOM node when there is no error, and auto-placement then
@@ -359,7 +538,21 @@
      message must cost the layout nothing. -->
 <Toast />
 
-{#if nav.overlay === "doctor"}
+{#if nav.overlay === "pr-review"}
+  <ReviewWorkspace sessionId={reviewWorkspace.session} />
+{:else if nav.overlay === "newsession"}
+  <NewSession />
+{:else if nav.overlay === "sshsession"}
+  <NewSSHSession />
+{:else if nav.overlay === "sshconnect"}
+  <ConnectSSHHost />
+{:else if nav.overlay === "commands"}
+  <CommandPalette />
+{:else if nav.overlay === "rename-session"}
+  <RenameSession />
+{:else if nav.overlay === "activity"}
+  <Modal title="Activity" onClose={() => nav.closeOverlay()} width="680px"><ActivityFeed limit={200} /></Modal>
+{:else if nav.overlay === "doctor"}
   <DoctorOverlay />
 {:else if nav.overlay === "settings"}
   <SettingsForm />
@@ -369,6 +562,8 @@
   <UpdateOverlay />
 {:else if nav.overlay === "help"}
   <HelpOverlay />
+{:else if nav.overlay === "bestof"}
+  <BestOfOverlay />
 {/if}
 <ConfirmDialog />
 <SessionMenu />

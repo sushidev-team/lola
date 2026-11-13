@@ -19,9 +19,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
 )
 
 // ErrDirty is wrapped into Remove's error when the worktree has uncommitted
@@ -56,6 +60,9 @@ func (m *Manager) git(ctx context.Context, args ...string) (stdout, stderr strin
 		}
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// `-C <worktree>` on a SANDBOXED worktree must not follow the .git pointer
+	// the agent can rewrite (internal/gitguard).
+	gitguard.Apply(cmd)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -91,31 +98,90 @@ func (m *Manager) Create(ctx context.Context, p config.Project, sessionID, branc
 // exist). An empty base defaults to p.DefaultBranch, so Create delegates here
 // unchanged. Used by the manual-worktree flow to branch off a chosen base.
 func (m *Manager) CreateFrom(ctx context.Context, p config.Project, sessionID, branch, base string) (string, error) {
-	if m.Root == "" {
-		return "", errors.New("worktree: Root not set")
-	}
-	if err := validSegment(p.Name); err != nil {
-		return "", fmt.Errorf("worktree: project name: %w", err)
-	}
-	if err := validSegment(sessionID); err != nil {
-		return "", fmt.Errorf("worktree: session id: %w", err)
-	}
-	if branch == "" {
-		return "", errors.New("worktree: branch must not be empty")
+	if err := m.validCreate(p, sessionID, branch); err != nil {
+		return "", err
 	}
 	if base == "" {
 		base = p.DefaultBranch
 	}
+	return m.createAt(ctx, p, sessionID, branch, func() string {
+		if _, _, err := m.git(ctx, "-C", p.Path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err != nil {
+			return base
+		}
+		return "origin/" + base
+	})
+}
+
+// CreateAt is Create with the new branch cut at an exact COMMIT (a full sha),
+// taken verbatim — no origin/ lookup. Used to fork a session from a turn
+// checkpoint, whose HEAD is a commit, not a branch.
+func (m *Manager) CreateAt(ctx context.Context, p config.Project, sessionID, branch, commit string) (string, error) {
+	if commit == "" || strings.HasPrefix(commit, "-") {
+		return "", fmt.Errorf("worktree: invalid start commit %q", commit)
+	}
+	if err := m.validCreate(p, sessionID, branch); err != nil {
+		return "", err
+	}
+	return m.createAt(ctx, p, sessionID, branch, func() string { return commit })
+}
+
+// CreateApp adds a STACK APP's worktree for a session: a worktree of the
+// repository at repoPath, at dir (inside the stack session's folder, see
+// runtime.StackAppDir), on a new branch cut from origin/<base> (falling back
+// to the local <base>). dir must lie inside Root — the same guard Remove
+// applies, so an app worktree can always be torn down through it — and must
+// not exist yet: a leftover there is somebody's work.
+func (m *Manager) CreateApp(ctx context.Context, repoPath, dir, branch, base string) error {
+	if m.Root == "" {
+		return errors.New("worktree: Root not set")
+	}
+	if repoPath == "" || branch == "" || base == "" {
+		return errors.New("worktree: app repo path, branch and base are required")
+	}
+	if err := m.guardRemovable(config.Project{Path: repoPath}, dir); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dir); err == nil {
+		return fmt.Errorf("worktree: app worktree %s already exists", dir)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	start := base
+	if _, _, err := m.git(ctx, "-C", repoPath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err == nil {
+		start = "origin/" + base
+	}
+	_, _, err := m.git(ctx, "-C", repoPath, "worktree", "add", "-b", branch, dir, start)
+	return err
+}
+
+func (m *Manager) validCreate(p config.Project, sessionID, branch string) error {
+	if m.Root == "" {
+		return errors.New("worktree: Root not set")
+	}
+	if err := validSegment(p.Name); err != nil {
+		return fmt.Errorf("worktree: project name: %w", err)
+	}
+	if err := validSegment(sessionID); err != nil {
+		return fmt.Errorf("worktree: session id: %w", err)
+	}
+	if branch == "" {
+		return errors.New("worktree: branch must not be empty")
+	}
+	return nil
+}
+
+// createAt runs `worktree add -b branch` at the commit-ish start resolves to.
+// start is called only after the directory checks pass, so a refused create
+// never execs the lookup.
+func (m *Manager) createAt(ctx context.Context, p config.Project, sessionID, branch string, start func() string) (string, error) {
 	dir := filepath.Join(m.Root, p.Name, sessionID)
 	if err := m.ensureCleanDir(ctx, p, dir); err != nil {
 		return "", err
 	}
-
-	start := "origin/" + base
-	if _, _, err := m.git(ctx, "-C", p.Path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err != nil {
-		start = base
-	}
-	if _, _, err := m.git(ctx, "-C", p.Path, "worktree", "add", "-b", branch, dir, start); err != nil {
+	if _, _, err := m.git(ctx, "-C", p.Path, "worktree", "add", "-b", branch, dir, start()); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -314,6 +380,131 @@ func (m *Manager) Prepare(ctx context.Context, p config.Project, dir string) err
 	return nil
 }
 
+// Dirty reports whether dir has uncommitted changes (`git status
+// --porcelain` non-empty) — the same test Remove applies before it refuses
+// with ErrDirty. An error means git could not tell.
+func (m *Manager) Dirty(ctx context.Context, dir string) (bool, error) {
+	out, _, err := m.git(ctx, "-C", dir, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+// VerifyReviewHead refuses to certify a checkout that differs from the PR head.
+// Reviewers can read local files as well as the diff, so uncommitted work matters.
+func (m *Manager) VerifyReviewHead(ctx context.Context, dir, sha string) error {
+	out, _, err := m.git(ctx, "-C", dir, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) != sha {
+		return errors.New("worktree HEAD differs from the PR head")
+	}
+	dirty, err := m.Dirty(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return ErrDirty
+	}
+	return nil
+}
+
+// teardownWaitDelay is how long Teardown waits for a hook's output pipes after
+// its process group was killed: a grandchild that escaped the group must not
+// hold Wait open past the deadline.
+const teardownWaitDelay = 2 * time.Second
+
+// Teardown runs the project's pre_remove commands in dir — the mirror of
+// Prepare's post_create: sequential `sh -c`, cwd dir, p.Env layered over the
+// daemon environment. Unlike Prepare it does NOT stop at the first failure: a
+// teardown hook is a list of independent cleanups (drop the database, remove a
+// docker volume), and one that fails must not skip the next. Every failure is
+// returned, in order, for the caller to log; none is fatal.
+//
+// ctx bounds the WHOLE hook. Each command runs in its own process group, and
+// the deadline kills that group rather than just `sh`, so a hung `docker
+// compose down` cannot outlive the teardown it was part of. The group is also
+// killed once the command returns, so a job it backgrounded does not keep using
+// the worktree. A process that leaves the group on purpose (setsid, a daemon
+// that double-forks) is outside lola's reach, as it is for post_create. Once ctx is done
+// the remaining commands are reported as skipped, not run.
+func (m *Manager) Teardown(ctx context.Context, p config.Project, dir string) []error {
+	env := os.Environ()
+	for _, k := range slices.Sorted(maps.Keys(p.Env)) { // deterministic order
+		env = append(env, k+"="+p.Env[k])
+	}
+	var errs []error
+	for _, command := range p.PreRemove {
+		if ctx.Err() != nil {
+			errs = append(errs, fmt.Errorf("pre_remove %q: skipped: %w", command, ctx.Err()))
+			continue
+		}
+		cmd := exec.CommandContext(ctx, "sh", "-c", command)
+		cmd.Dir = dir
+		cmd.Env = env
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			// Negative pid = the whole group: sh and everything it started.
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		cmd.WaitDelay = teardownWaitDelay
+		errb := &tailBuffer{max: teardownStderrMax}
+		cmd.Stderr = errb
+		err := cmd.Run()
+		if cmd.Process != nil {
+			// Whatever the command left running in its group (`cmd &`) goes down
+			// with it: Run returning (or WaitDelay closing the pipes) is not proof
+			// that nothing still uses the worktree about to be removed.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		if err != nil {
+			if msg := strings.TrimSpace(errb.String()); msg != "" {
+				errs = append(errs, fmt.Errorf("pre_remove %q: %w: %s", command, err, lastLine(msg)))
+			} else {
+				errs = append(errs, fmt.Errorf("pre_remove %q: %w", command, err))
+			}
+		}
+	}
+	return errs
+}
+
+// teardownStderrMax caps the stderr a pre_remove command keeps while it runs.
+// Only the last line is ever logged, so the TAIL is what is retained.
+const teardownStderrMax = 4 << 10
+
+// tailBuffer is an io.Writer that keeps only the last max bytes written, so a
+// hook streaming stderr until its deadline cannot grow the daemon's memory.
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if len(p) >= t.max {
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return n, nil
+	}
+	if over := len(t.buf) + len(p) - t.max; over > 0 {
+		t.buf = append(t.buf[:0], t.buf[over:]...)
+	}
+	t.buf = append(t.buf, p...)
+	return n, nil
+}
+
+func (t *tailBuffer) String() string { return string(t.buf) }
+
+// lastLine is the final line of a command's stderr — where a CLI puts the
+// error that ended it — so a chatty hook does not flood the daemon log.
+func lastLine(s string) string {
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
 // Remove deletes the session's worktree and branch. Unless force is set it
 // refuses a dirty worktree (uncommitted changes) with an error matching
 // ErrDirty. dir must lie strictly inside Root and must not be the project's
@@ -348,7 +539,11 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 	}
 
 	args := []string{"-C", p.Path, "worktree", "remove"}
-	if force {
+	// A PINNED (sandboxed) worktree was dirty-checked above through its pin.
+	// `worktree remove` would repeat that check in a child that finds the
+	// repository through the admin dir's `commondir` — a file the agent could
+	// rewrite — so the already-made decision is passed as --force instead.
+	if force || gitguard.Pinned(dir) {
 		args = append(args, "--force")
 	}
 	args = append(args, dir)
@@ -398,6 +593,27 @@ func (m *Manager) removeUnregistered(ctx context.Context, p config.Project, dir,
 	return m.deleteBranch(ctx, p, branch)
 }
 
+// DeleteBranch removes a session's local branch WITHOUT removing a worktree —
+// the teardown path for a session whose checkout is already gone, where there
+// is nothing left for `git worktree remove` to do but the branch still exists.
+// It first prunes git's stale worktree registrations, because a directory that
+// vanished from disk leaves an administrative entry behind and git then refuses
+// to delete "a branch checked out in a worktree". "" is a no-op, so callers can
+// pass a non-owned branch unconditionally.
+//
+// Like the worktree-removing path it force-deletes (`branch -D`): a squash- or
+// rebase-merged PR leaves a local branch git does not consider merged, and the
+// non-force `-d` would refuse exactly the case this exists for.
+func (m *Manager) DeleteBranch(ctx context.Context, p config.Project, branch string) error {
+	if branch == "" {
+		return nil
+	}
+	// Best-effort: a prune failure only means the -D below may refuse, which the
+	// caller surfaces as a normal error.
+	_, _, _ = m.git(ctx, "-C", p.Path, "worktree", "prune")
+	return m.deleteBranch(ctx, p, branch)
+}
+
 // deleteBranch removes the session's local branch; "" and an already-missing
 // branch are both no-ops.
 func (m *Manager) deleteBranch(ctx context.Context, p config.Project, branch string) error {
@@ -427,6 +643,41 @@ func (m *Manager) BranchExists(ctx context.Context, p config.Project, branch str
 		return false, nil
 	}
 	return false, err
+}
+
+// RemoveDir deletes a STACK session folder (internal/runtime/stack.go) once
+// its app worktrees are gone. It is not a worktree, so git has nothing to say
+// about it; the guard is the same as for one — strictly inside Root, never
+// the root itself.
+func (m *Manager) RemoveDir(dir string) error {
+	if err := m.guardRemovable(config.Project{}, dir); err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
+// Ahead counts the commits on branch that its base does not have
+// (origin/<base> when that remote ref exists, else <base>) in the repository at
+// repoPath. A stack session's teardown asks it for an app that has no PR: a
+// branch carrying commits nobody pushed into a PR is work, and deleting it
+// would lose that work although the worktree itself is clean.
+func (m *Manager) Ahead(ctx context.Context, repoPath, base, branch string) (int, error) {
+	if repoPath == "" || base == "" || branch == "" {
+		return 0, errors.New("worktree: ahead: repo, base and branch required")
+	}
+	start := base
+	if _, _, err := m.git(ctx, "-C", repoPath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err == nil {
+		start = "origin/" + base
+	}
+	out, _, err := m.git(ctx, "-C", repoPath, "rev-list", "--count", start+".."+"refs/heads/"+branch)
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("worktree: ahead: %q is not a count", strings.TrimSpace(out))
+	}
+	return n, nil
 }
 
 // List returns the session worktree directories under Root/<p.Name> that git

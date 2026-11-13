@@ -1,0 +1,27 @@
+[
+  {
+    "id": "u-1:0",
+    "kind": "user",
+    "order": 0,
+    "turn": "u-1:0",
+    "text": "Find it",
+    "at": "2026-11-06T10:00:00Z"
+  },
+  {
+    "id": "a-1:0",
+    "kind": "tool",
+    "order": 1,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:01Z",
+    "tool": {
+      "name": "Agent",
+      "category": "agent",
+      "summary": "Find the auth bug",
+      "status": "ok",
+      "durationMs": 180000,
+      "preview": "Found in login.go",
+      "hasOutput": true,
+      "subagent": "abc123"
+    }
+  }
+]

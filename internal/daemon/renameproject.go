@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -95,7 +96,9 @@ func (d *Daemon) handleRenameProject(ctx context.Context, raw json.RawMessage) (
 	// authority (the same snapshot Budget counts), not a client's stale view.
 	var blockers []string
 	for _, s := range d.sessions.Snapshot() {
-		if s.Project == from {
+		// A stack member's name is also a folder inside every session of its
+		// stack: such a session blocks the rename like one of its own.
+		if s.Project == from || (s.Stack && s.AppIndex(from) >= 0) {
 			blockers = append(blockers, s.ID)
 		}
 	}
@@ -123,6 +126,12 @@ func (d *Daemon) handleRenameProject(ctx context.Context, raw json.RawMessage) (
 
 	// --- past every refusal: start writing -------------------------------
 	nc.Projects[idx].Name = to
+	// A stack's members name it: they follow the rename.
+	for i := range nc.Projects {
+		if nc.Projects[i].Stack == from {
+			nc.Projects[i].Stack = to
+		}
+	}
 	if err := nc.Validate(); err != nil {
 		return protocol.RenameProjectData{}, fmt.Errorf("renameProject: config invalid after rename: %w", err)
 	}
@@ -135,6 +144,18 @@ func (d *Daemon) handleRenameProject(ctx context.Context, raw json.RawMessage) (
 	// that matters — a missing seen file only costs some re-dispatch.
 	if err := d.seen.rename(from, to); err != nil {
 		d.logf(to, "renameProject: carry over seen state from %q: %v (issues may re-dispatch once)", from, err)
+	}
+	// The shared context folders (runtime.ContextDir) are keyed by project NAME
+	// too, and they exist precisely to survive sessions — carry them over. No
+	// worktree links into them (renaming is idle-only), so a plain move is
+	// enough. Best-effort: a failure strands notes, it does not break anything.
+	ctxOld, ctxNew := filepath.Join(d.home, "context", from), filepath.Join(d.home, "context", to)
+	if _, err := os.Stat(ctxNew); errors.Is(err, fs.ErrNotExist) {
+		if err := os.Rename(ctxOld, ctxNew); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			d.logf(to, "renameProject: carry over context folders from %q: %v", from, err)
+		}
+	} else {
+		d.logf(to, "renameProject: %s already exists; context folders of %q left at %s", ctxNew, from, ctxOld)
 	}
 	// The now-empty worktrees/<from>/ dir is inert; drop it so a later project
 	// reusing the name does not inherit a stale one. Best-effort by design.

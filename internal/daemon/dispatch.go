@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/bestof"
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
@@ -33,8 +35,9 @@ const SeenTTL = time.Hour
 // post_create legitimately runs package installs.
 const nativeSpawnTimeout = 10 * time.Minute
 
-// Budget returns min(pollCap, globalCap−liveCounted) per the SPEC formula.
-// The result may be <= 0, which means capped out.
+// Budget returns min(pollCap, globalCap−liveCounted). The tick passes the
+// project's REMAINING cap (concurrency_cap minus its own live sessions) as
+// pollCap. The result may be <= 0, which means capped out.
 func Budget(pollCap, globalCap, liveCounted int) int {
 	b := globalCap - liveCounted
 	if pollCap < b {
@@ -44,17 +47,28 @@ func Budget(pollCap, globalCap, liveCounted int) int {
 }
 
 // NativeLiveCounted returns how many native sessions in sessions (a session
-// store snapshot) currently occupy an agent slot (state.HoldsSlot — the ONE
-// slot classification; merge_conflict counts there, a deliberate change from
-// the pre-axis table, because the reaction engine is actively re-prompting
-// that agent to rebase). It is a tick's liveCounted:
+// store snapshot) currently occupy an agent slot (state.HoldsSlot over the two
+// AXES — the ONE slot classification; merge_conflict counts there, a deliberate
+// change from the pre-axis table, because the reaction engine is actively
+// re-prompting that agent to rebase). It is a tick's liveCounted:
 //
-//	budget = Budget(pollCap, globalCap, NativeLiveCounted(store))
-//	       = min(pollCap, globalCap − NativeLiveCounted(store))
+//	budget = Budget(pollCap − projectLive, globalCap, NativeLiveCounted(store))
+//	       = min(pollCap − projectLive, globalCap − NativeLiveCounted(store))
+//
+// (both counts also include spawns still in flight, see slotCounts).
+//
+// The record's axes are ensured first: a pre-axis snapshot record read straight
+// off disk carries only the collapsed status, and an unset agent axis would
+// read as an unknown (i.e. live) agent and over-count the budget. EnsureAxes is
+// a no-op on the axis-bearing records the observer writes.
 func NativeLiveCounted(sessions []session.Session) int {
 	n := 0
 	for _, s := range sessions {
-		if s.Source == "native" && state.HoldsSlot(s.Status) {
+		if s.Source != "native" {
+			continue
+		}
+		s.EnsureAxes()
+		if state.HoldsSlot(s.AgentState, s.Delivery) {
 			n++
 		}
 	}
@@ -175,6 +189,49 @@ func PruneSeen(seen map[string]time.Time, matched map[string]bool, dedupMode str
 	return out
 }
 
+// mergedIssues returns the identifiers of issues whose lola session saw its PR
+// merged, from a session store snapshot.
+func mergedIssues(sessions []session.Session) map[string]bool {
+	out := map[string]bool{}
+	for _, s := range sessions {
+		if s.Issue == "" {
+			continue
+		}
+		s.EnsureAxes()
+		if s.Delivery == state.DeliveryMerged {
+			out[s.Issue] = true
+		}
+	}
+	return out
+}
+
+// dependencyHold returns why is may not be dispatched yet, or "" when it is
+// eligible. Two things hold an issue back:
+//
+//   - an unfinished blocker: a "blocked by" relation whose issue is neither in
+//     a completed/canceled state nor merged (per merged, keyed by identifier);
+//   - open sub-issues: its work was decomposed (see `lola plan`), so the
+//     children are what gets dispatched, not the parent.
+//
+// Like every other skip it writes nothing: the issue simply re-qualifies on
+// the first tick after its blockers land.
+func dependencyHold(is linear.Issue, merged map[string]bool) string {
+	var waiting []string
+	for _, b := range is.BlockedBy {
+		if b.Finished() || merged[b.Identifier] {
+			continue
+		}
+		waiting = append(waiting, b.Identifier)
+	}
+	if len(waiting) > 0 {
+		return "blocked-by " + strings.Join(waiting, ",")
+	}
+	if is.OpenChildren > 0 {
+		return fmt.Sprintf("sub-issues open (%d)", is.OpenChildren)
+	}
+	return ""
+}
+
 // isAuthErr classifies Linear client errors: the client wraps 401/403 as
 // "linear auth failed: http NNN".
 func isAuthErr(err error) bool {
@@ -214,7 +271,18 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	// The coding-agent binary this project spawns (per-project override →
 	// [defaults].agent → "claude"): the health gate must confirm THAT binary
 	// is on PATH, not always "claude". Resolved under the config lock.
-	agentBin := agent.Parse(d.cfg.AgentForProject(p.Name)).Binary()
+	agentBin := sandboxedBin(d.cfg, p.Name, agent.Parse(d.cfg.AgentForProject(p.Name)).Binary())
+	// A stack's members, for the per-issue app selection below.
+	cfgStack := d.cfg.StackMembers(p.Name)
+	// Best-of trigger (bestof.go): an issue carrying [best_of].label spawns the
+	// configured mix instead of one agent. Resolved once per tick.
+	bestOfCfg := d.cfg.BestOf
+	bestOfCfg.Agents = slices.Clone(bestOfCfg.Agents)
+	var bestOfMix []bestof.Attempt
+	var bestOfErr error
+	if bestOfCfg.Label != "" {
+		bestOfMix, bestOfErr = d.cfg.BestOfMix()
+	}
 	d.mu.Unlock()
 
 	now := time.Now()
@@ -259,6 +327,12 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	if nat == nil {
 		return fail("native runtime unavailable", nil)
 	}
+	// 1b. Spend + load gate (usage.go), same contract as the health check: a
+	// reached daily budget or a saturated machine skips the tick, names why in
+	// LastError, and touches nothing — live sessions keep running.
+	if msg := d.dispatchHold(ctx, project.Name, now); msg != "" {
+		return fail("dispatch held: "+msg, nil)
+	}
 
 	// 2. Linear client (key resolved at startup; retried here if missing).
 	api, err := d.ensureLinear()
@@ -295,6 +369,15 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		return linFail("query issues", err)
 	}
 	d.setLinearOK(true)
+	// Zero matches is also exactly what a filter naming a label or state Linear
+	// no longer knows looks like — Linear answers such a query with nothing
+	// rather than an error. Resolve the references only then (a filter that
+	// matched something cannot be unmatchable), so the common tick pays nothing.
+	var refIssues []string
+	if len(issues) == 0 {
+		refIssues = d.filterRefProblems(ctx, api, name, p, now)
+		res.Problems = refIssues
+	}
 
 	seen, err := d.seen.load(name)
 	if err != nil {
@@ -324,13 +407,21 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	if p.DedupMode == "state" {
 		stateLive = map[string]bool{}
 		for _, s := range d.sessions.Snapshot() {
-			if s.Source == "native" && s.Issue != "" && nativeSessionPresent(s.Status) {
+			if s.Source == "native" && s.Issue != "" && nativeSessionPresent(s) {
 				stateLive[s.Issue] = true
 			}
 		}
 	}
+	// Dependencies: an issue waits while a blocker is unfinished. "Finished"
+	// is the blocker's Linear state OR a merged PR lola itself observed — the
+	// write-back to done may lag the merge, or not be configured at all.
+	merged := mergedIssues(d.sessions.Snapshot())
 	var candidates []linear.Issue
 	for _, is := range issues {
+		if reason := d.goalHold(is.ID, is.Description, is.IssueRelations); reason != "" {
+			skip(is, reason)
+			continue
+		}
 		if d.inflight.Has(is.ID) {
 			skip(is, "in-flight")
 			continue
@@ -364,6 +455,17 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 				continue
 			}
 		}
+		if reason := dependencyHold(is, merged); reason != "" {
+			skip(is, reason)
+			continue
+		}
+		// A stack spawns only the apps an issue's labels select; an issue that
+		// selects none has nothing to check out. Skipped WITHOUT a seen entry,
+		// like every candidate skip, so relabelling it dispatches it.
+		if project.IsStack() && len(config.SelectApps(cfgStack, is.LabelIDs, is.LabelNames, is.LabelGroups)) == 0 {
+			skip(is, "no app of the stack matches its labels")
+			continue
+		}
 		candidates = append(candidates, is)
 	}
 
@@ -379,14 +481,19 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	// 7. Deterministic order when capped.
 	SortIssues(candidates, p.PrioritySort)
 
-	// 8. Budget: min(pollCap, globalCap − liveCounted), where liveCounted is
-	// the number of slot-occupying native sessions in the store — the native
-	// store is the only session source.
-	liveCounted := NativeLiveCounted(d.sessions.Snapshot())
-	budget := Budget(pollCap, globalCap, liveCounted)
+	// 8. Budget: min(pollCap − projectLive, globalCap − liveCounted), where
+	// liveCounted is the number of slot-occupying native sessions in the store
+	// plus every spawn still in flight on any poll, and projectLive the same
+	// for THIS project. concurrency_cap bounds how many sessions the project
+	// RUNS, not how many one tick starts: subtracting only the global count
+	// let a project with cap 2 reach 6 sessions in three ticks. Each spawn
+	// below re-checks under the slot ledger (reserveSlots), because another
+	// poll may spawn while this one does.
+	liveCounted, projectLive := d.slotCounts(project.Name)
+	budget := Budget(pollCap-projectLive, globalCap, liveCounted)
 	if budget <= 0 && len(candidates) > 0 {
-		d.logf(name, "capped out: budget=%d (pollCap=%d globalCap=%d liveCounted=%d), %d candidate(s) waiting",
-			budget, pollCap, globalCap, liveCounted, len(candidates))
+		d.logf(name, "capped out: budget=%d (pollCap=%d projectLive=%d globalCap=%d liveCounted=%d), %d candidate(s) waiting",
+			budget, pollCap, projectLive, globalCap, liveCounted, len(candidates))
 	}
 
 	// 9. Dispatch per issue, up to budget.
@@ -394,15 +501,51 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	lastSpawnErr := ""
 	for _, is := range candidates {
 		m := protocol.Match{Identifier: is.Identifier, Title: is.Title}
-		if spawned >= budget {
+		// A best-of issue costs one slot PER ATTEMPT, and the whole group must
+		// fit: a partial group would compare fewer attempts than configured
+		// while still burning the cap.
+		mix := d.bestOfMixForIssue(bestOfCfg, bestOfMix, bestOfErr, name, is)
+		if len(mix) > 0 && project.IsStack() {
+			// N attempts of a stack would be N folders of every app; not offered.
+			d.logf(name, "best-of: %s is in stack %s, which spawns one agent per issue", is.Identifier, project.Name)
+			mix = nil
+		}
+		cost := max(len(mix), 1)
+		if spawned+cost > budget {
 			capped++
 			m.Action, m.Reason = "skipped", "capped"
+			if len(mix) > 0 {
+				m.Reason = fmt.Sprintf("capped (best-of needs %d)", cost)
+			}
 			res.Matches = append(res.Matches, m)
 			continue
 		}
+		// Every agent of the mix must pass the same health gate the tick ran
+		// for the project's own agent — before anything is mutated.
+		if len(mix) > 0 {
+			if err := d.bestOfHealth(project.Name, mix); err != nil {
+				d.logf(name, "best-of: %s skipped, runtime unavailable: %v", is.Identifier, err)
+				m.Action, m.Reason = "skipped", "best-of runtime unavailable"
+				res.Matches = append(res.Matches, m)
+				continue
+			}
+		}
 		if dryRun {
-			spawned++
+			spawned += cost
 			m.Action = "would-spawn"
+			if len(mix) > 0 {
+				m.Reason = fmt.Sprintf("best-of %d", cost)
+			}
+			res.Matches = append(res.Matches, m)
+			continue
+		}
+
+		// Reserve the slots before anything is mutated: the budget above is a
+		// snapshot, and another poll may have spawned since.
+		release, fits := d.reserveSlots(project.Name, cost, pollCap, globalCap)
+		if !fits {
+			capped++
+			m.Action, m.Reason = "skipped", "capped"
 			res.Matches = append(res.Matches, m)
 			continue
 		}
@@ -414,11 +557,17 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		// if that state write fails). In-flight covers the transient spawn window;
 		// across a crash/restart in that window a state-mode issue is instead
 		// shielded by the live-native-session guard in the candidate loop above.
-		d.inflight.Add(is.ID, is.Identifier)
+		if err := d.claimOrdinaryIssue(is.ID, is.Identifier, is.Description, is.IssueRelations); err != nil {
+			release()
+			m.Action, m.Reason = "skipped", err.Error()
+			res.Matches = append(res.Matches, m)
+			continue
+		}
 		if p.DedupMode != "state" {
 			seen[is.ID] = now
 			if err := d.seen.save(name, seen); err != nil {
 				// Without the on-disk guard a crash could double-spawn: skip.
+				release()
 				d.inflight.Remove(is.ID)
 				delete(seen, is.ID)
 				d.logf(name, "persist seen for %s failed, skipping spawn: %v", is.Identifier, err)
@@ -436,27 +585,18 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		// post_create + tmux): see nativeSpawnTimeout — user-supplied
 		// commands run in here and the shielded tick context alone could
 		// never abort them.
+		//
+		// spawnIssue stamps each session with the poll's repo (PR checks run
+		// against it, falling back to the project's — config.PollRepo) and the
+		// owning poll (so lifecycle write-back resolves THIS poll's P4 config),
+		// upserts it and records its birth in the activity feed. A best-of
+		// issue spawns one session per attempt; it fails only when NONE spawned.
 		spawnTarget := "project " + project.Name
-		cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
-		sess, spawnErr := nat.Spawn(cctx, project, is)
-		cancel()
+		spawnedSess, _, spawnErr := d.spawnIssue(ctx, nat, project, is, "", mix, pollRepo, name)
+		release() // spawnIssue upserted what it spawned: the store counts it now
+		var sess session.Session
 		if spawnErr == nil {
-			if pollRepo != "" {
-				// PR checks run against the poll's repo, falling back to the
-				// project's (config.PollRepo) — stamp it on the record so the
-				// observer looks in the right place.
-				sess.Repo = pollRepo
-			}
-			// Stamp the owning poll so later lifecycle write-back (PR-open,
-			// merged, blocked) can resolve THIS poll's P4 config (PLAN P4).
-			sess.PollName = name
-			d.sessions.Upsert(sess)
-			// Record the birth in the activity feed. Spawn enters via Upsert,
-			// which has no transition callback, so record it explicitly (from "").
-			d.recordSessionEvent("", sess)
-			if serr := d.sessions.Save(); serr != nil {
-				d.logf(name, "persist sessions after native spawn of %s: %v", is.Identifier, serr)
-			}
+			sess = spawnedSess[0]
 		}
 		if spawnErr != nil {
 			// Drop the in-flight claim. In label mode the seen entry stays
@@ -478,7 +618,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			res.Matches = append(res.Matches, m)
 			continue
 		}
-		spawned++
+		spawned += cost
 		d.status.setLastSpawn(name, time.Now())
 		d.logf(name, "spawned %s into %s", is.Identifier, spawnTarget)
 		m.Action = "spawned"
@@ -504,16 +644,10 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 				d.logf(name, "label flip for %s failed (seen guards dedup): %v", is.Identifier, err)
 				continue
 			}
-			// Persist the stripped set on the session record (atomic RMW so a
-			// concurrent observer update is not clobbered) for the orphan revert.
-			if _, ok := d.sessions.Update(sess.ID, func(s *session.Session) bool {
-				s.RemovedLabels = removed
-				return true
-			}); ok {
-				if serr := d.sessions.Save(); serr != nil {
-					d.logf(name, "persist removed labels for %s: %v", is.Identifier, serr)
-				}
-			}
+			// Persist the stripped set on every spawned session record (atomic
+			// RMW so a concurrent observer update is not clobbered) for the
+			// orphan revert.
+			d.setRemovedLabels(spawnedSess, removed)
 		}
 
 		// (d) P4 Linear write-back on spawn (all dedup modes): move the issue to
@@ -527,7 +661,13 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	d.logf(name, "tick: matched=%d spawned=%d capped=%d errors=%d%s",
 		len(issues), spawned, capped, errored, map[bool]string{true: " (dry-run)", false: ""}[dryRun])
 	if !dryRun {
-		d.status.setError(name, lastSpawnErr) // clears the error on a clean tick
+		// A spawn failure is the more urgent of the two; otherwise an
+		// unmatchable filter is reported, and a clean tick clears the error.
+		msg := lastSpawnErr
+		if msg == "" {
+			msg = refError(refIssues)
+		}
+		d.status.setError(name, msg)
 	}
 	return res, nil
 }

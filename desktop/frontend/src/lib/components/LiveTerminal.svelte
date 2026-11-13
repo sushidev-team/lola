@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { Events } from "@wailsio/runtime";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebglAddon } from "@xterm/addon-webgl";
+  import { WebLinksAddon } from "@xterm/addon-web-links";
   import { TermService } from "@bindings/desktop";
+  import { store } from "$lib/store.svelte";
+  import { termBoot } from "$lib/termboot";
   import { TERM_FONT, appearance, termFontLoaded, termFontReady } from "$lib/theme-runtime.svelte";
 
   // A live, interactive terminal attached to a session's tmux pane. WebGL is
@@ -40,6 +43,7 @@
     onExit,
     autofocus = false,
     onEscapeFocus,
+    focusRequest = 0,
   }: {
     name: string;
     webgl?: boolean;
@@ -47,7 +51,21 @@
     onExit?: () => void;
     autofocus?: boolean;
     onEscapeFocus?: () => void;
+    /**
+     * Bump to move the keyboard into this terminal after it mounted: the SSH
+     * workspace does it on go and on taking the wheel. A bump during the font wait
+     * is honoured when boot() finishes, because `term` does not exist yet.
+     */
+    focusRequest?: number;
   } = $props();
+  // The keyed parent clears/changes its name before this instance is destroyed.
+  // Transport callbacks must keep the identity we mounted with, or Detach("")
+  // leaves a hidden client attached and blocks queued messages indefinitely.
+  const terminalName = untrack(() => name);
+  const mountedRequest = untrack(() => focusRequest);
+  $effect(() => {
+    if (focusRequest !== mountedRequest) term?.focus();
+  });
 
   let host: HTMLDivElement;
   let term: Terminal | undefined;
@@ -58,6 +76,10 @@
   let ro: ResizeObserver | undefined;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
+  // Wheel → tmux copy-mode scroll, coalesced. See onWheel() below.
+  let wheelPixels = 0;
+  let wheelLines = 0;
+  let wheelTimer: ReturnType<typeof setTimeout> | undefined;
   // The Attach round-trip, tracked so teardown can Detach the SAME session
   // exactly once and never before it was attached (see boot() and onDestroy).
   let attach: Promise<unknown> | undefined;
@@ -66,7 +88,7 @@
   function detachOnce() {
     if (detachDone) return;
     detachDone = true;
-    TermService.Detach(name).catch(() => {});
+    TermService.Detach(terminalName).catch(() => {});
   }
 
   function b64ToBytes(b64: string): Uint8Array {
@@ -103,6 +125,48 @@
     gl?.clearTextureAtlas();
     fit?.fit();
     term.refresh(0, term.rows - 1);
+  }
+
+  // The wheel scrolls the tmux pane, and it has to be driven by hand because
+  // `tmux attach` runs on the ALTERNATE screen: xterm's own scrollback stays
+  // empty, so there is nothing here to scroll and `term.scrollLines` is inert.
+  // TermService.Scroll asks the pane which history it actually has — an agent
+  // keeps its own transcript and wants the wheel itself, a plain shell has
+  // tmux's copy mode — and neither route needs [tmux].mouse.
+  //
+  // Returning false is the load-bearing half: it stops xterm's alt-screen
+  // fallback, which converts the wheel into cursor keys (Terminal.ts:808) and
+  // therefore walks the AGENT's input history instead of scrolling the pane —
+  // the "not scrollable" bug as it actually presents. The handler runs on both
+  // of xterm's wheel paths (its own listener and the mouse-reporting one), so
+  // this is the only place the decision has to be made.
+  //
+  // Lines are accumulated rather than sent per event: one flick is dozens of
+  // wheel events, and each Scroll is a tmux exec. The pixel remainder is kept so
+  // a slow trackpad drag still adds up to a line instead of rounding to nothing.
+  function onWheel(ev: WheelEvent): boolean {
+    if (!term) return true;
+    const cell = term.rows > 0 && host.clientHeight > 0 ? host.clientHeight / term.rows : 17;
+    let px = ev.deltaY;
+    if (ev.deltaMode === 1) px *= cell; // DOM_DELTA_LINE
+    else if (ev.deltaMode === 2) px *= cell * term.rows; // DOM_DELTA_PAGE
+    wheelPixels += px;
+    const lines = Math.trunc(wheelPixels / cell);
+    wheelPixels -= lines * cell;
+    // deltaY is positive scrolling DOWN; Scroll counts positive as scrolling
+    // BACK into history, so the sign flips here.
+    wheelLines -= lines;
+    if (wheelLines !== 0 && wheelTimer === undefined) {
+      wheelTimer = setTimeout(flushWheel, 16);
+    }
+    return false;
+  }
+
+  function flushWheel(): void {
+    wheelTimer = undefined;
+    const lines = wheelLines;
+    wheelLines = 0;
+    if (lines !== 0 && !disposed) void TermService.Scroll(terminalName, lines).catch(() => {});
   }
 
   onMount(() => {
@@ -173,11 +237,49 @@
       }
     }
 
+    // URLs printed by a dev server, a test runner or an agent are the terminal's
+    // most-clicked text, and xterm ships NO link handling by default — the
+    // reported "I can't open the localhost link". Two kinds exist and both are
+    // wired to the same opener:
+    //   - plain text URLs, matched by WebLinksAddon;
+    //   - OSC 8 hyperlinks, where the program marks the text itself
+    //     (`linkHandler`, which xterm consults instead of the addon).
+    // Neither goes through window.open: this is a WKWebView, so a new window
+    // would open INSIDE the app. store.openURL asks the daemon, whose openURL
+    // command refuses anything that is not http(s) — the load-bearing guard,
+    // since a terminal can print `file://` or `javascript:` and a log line is
+    // untrusted text.
+    term.loadAddon(new WebLinksAddon((_e, uri) => void store.openURL(uri)));
+    term.options.linkHandler = {
+      activate: (_e, uri) => void store.openURL(uri),
+    };
+
     // Registered unconditionally and gated INSIDE the handler: `focused` flips
     // without remounting this component (the terminal is keyed on the tmux name,
     // not on focus), so a handler installed only when the prop was set at boot
     // would never exist for the terminal that later becomes fullscreen.
     term.attachCustomKeyEventHandler((e) => {
+      // Shift+Enter must insert a LINE BREAK, not submit. xterm never consults
+      // shift for Enter (Keyboard.ts sends a bare CR unless alt is held), so a
+      // coding agent sees the same byte as a plain Enter and sends the message
+      // half-written. The newline byte an agent actually wants is meta+Enter
+      // (ESC CR) — what ⌥Enter already produces here, and what Claude Code's
+      // own `/terminal-setup` teaches a native terminal to send for Shift+Enter.
+      // Written straight to the PTY rather than fixed up in onData: xterm has
+      // already lost the modifier by then.
+      if (
+        e.type === "keydown" &&
+        e.key === "Enter" &&
+        e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        interactive
+      ) {
+        e.preventDefault();
+        void TermService.Write(terminalName, "\x1b\r");
+        return false; // swallow: the bare CR must never follow
+      }
       if (
         e.type === "keydown" &&
         e.ctrlKey &&
@@ -193,18 +295,20 @@
       return true;
     });
 
+    term.attachCustomWheelEventHandler(onWheel);
+
     fit.fit();
     const { cols, rows } = term;
 
     if (interactive) {
-      term.onData((d) => TermService.Write(name, d));
-      term.onResize(({ cols, rows }) => TermService.Resize(name, cols, rows));
+      term.onData((d) => TermService.Write(terminalName, d));
+      term.onResize(({ cols, rows }) => TermService.Resize(terminalName, cols, rows));
       // Grab the keyboard now so a shell tab / fullscreen embed is typeable
       // without a click — the reported "I start typing and it goes nowhere".
-      if (autofocus) term.focus();
+      if (autofocus || focusRequest !== mountedRequest) term.focus();
     }
 
-    off = Events.On(`pty:${name}`, (e: { data: string }) => {
+    off = Events.On(`pty:${terminalName}`, (e: { data: string }) => {
       term?.write(b64ToBytes(e.data));
     });
 
@@ -212,12 +316,14 @@
     // Subscribe only when wanted (the agent pane passes no onExit): its own tmux
     // ending means the session died, which the store already reflects elsewhere.
     if (onExit) {
-      offExit = Events.On(`pty:${name}:exit`, () => {
+      offExit = Events.On(`pty:${terminalName}:exit`, () => {
         if (!disposed) onExit?.();
       });
     }
 
-    attach = TermService.Attach(name, cols, rows).catch(() => {
+    // After the page's one-time orphan sweep (termboot.ts), never before it:
+    // the sweep would otherwise be able to detach this very terminal.
+    attach = termBoot().then(() => TermService.Attach(terminalName, cols, rows)).catch(() => {
       term?.writeln("\x1b[31m[ could not attach to session ]\x1b[0m");
     });
 
@@ -281,6 +387,7 @@
     offExit?.();
     ro?.disconnect();
     clearTimeout(resizeTimer);
+    clearTimeout(wheelTimer);
     // Detach only a session we actually attached, and only AFTER Attach settles.
     // Tearing down during the pre-Attach font wait leaves `attach` undefined
     // (nothing to detach); tearing down while Attach is in flight defers the

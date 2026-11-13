@@ -13,7 +13,7 @@ const prs = [
     checks: "pass",
     review: "APPROVED",
     url: "https://example.test/pr/12",
-    status: "pr_open",
+    status: "approved",
     alreadyOpen: false,
   },
   {
@@ -70,7 +70,7 @@ describe("PRPicker", () => {
     // empty author renders as an em dash
     expect(screen.getByText("—")).toBeInTheDocument();
     // freshness header
-    expect(screen.getByText(/2 open · 5s ago/)).toBeInTheDocument();
+    expect(screen.getByText("just now").parentElement).toHaveTextContent("2 open · just now");
     // draft suffix
     expect(screen.getByText("[draft]")).toBeInTheDocument();
   });

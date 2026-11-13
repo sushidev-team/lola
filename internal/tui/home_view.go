@@ -8,6 +8,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/timefmt"
 )
 
 // homeView renders the project-list landing screen to a full frame.
@@ -68,7 +69,13 @@ func (m *rootModel) projectsPanel(w, panelH int) []string {
 	header := []string{"PROJECT", "PATH", "POLL", "LIVE", "ATTENTION", "LAST"}
 	cells := make([][]string, 0, len(rows))
 	for _, p := range rows {
-		cells = append(cells, homeRowCells(p, info[p.Name], h.data != nil, cfgPolls[p.Name], cfgEnabled[p.Name]))
+		c := homeRowCells(p, info[p.Name], h.data != nil, cfgPolls[p.Name], cfgEnabled[p.Name])
+		c[0] = stackMarker(m.cfg, &p) + c[0]
+		if p.InStack() {
+			// The stack's row carries the poll status for all of its members.
+			c[2] = faintText.Render("via stack")
+		}
+		cells = append(cells, c)
 	}
 
 	body := make([]string, 0, panelH)
@@ -107,7 +114,9 @@ func (m *rootModel) projectsPanel(w, panelH int) []string {
 // pollCount/enabled come from config so poll posture reads correctly either way.
 func homeRowCells(p config.Project, info protocol.ProjectInfo, haveData bool, pollCount, enabled int) []string {
 	path := p.Path
-	if path == "" {
+	if p.IsStack() {
+		path = faintText.Render("(stack)")
+	} else if path == "" {
 		path = faintText.Render("(no path)")
 	} else {
 		path = compactPath(path)
@@ -166,6 +175,8 @@ func (m *rootModel) homeMessage(w int) string {
 		return previewLine(badText.Render(fmt.Sprintf("REMOVE project %q from config? (y/n)", m.projLabel(h.removeTarget))), w)
 	case h.adding:
 		return previewLine(warnText.Render("new project name: ")+h.addInput+"_"+faintText.Render("  · enter create · esc cancel"), w)
+	case h.broadcasting:
+		return previewLine(warnText.Render("broadcast to "+m.projLabel(h.bcastTarget)+"'s agents: ")+h.bcastInput+"_", w)
 	case h.flash != "":
 		if h.flashGood {
 			return previewLine(goodText.Render(h.flash), w)
@@ -188,6 +199,8 @@ func (m *rootModel) homeKeybar(w int) string {
 		return previewLine(faintText.Render("type to filter · enter apply · esc clear"), w)
 	case h.adding:
 		return previewLine(faintText.Render("type a name · enter create · esc cancel"), w)
+	case h.broadcasting:
+		return previewLine(faintText.Render("type a message · enter send to every live agent (busy ones get it when idle) · esc cancel"), w)
 	case h.confirmStop:
 		return previewLine(warnText.Render("y")+faintText.Render(" stop polling · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case h.confirmRemove:
@@ -195,7 +208,7 @@ func (m *rootModel) homeKeybar(w int) string {
 	}
 	// 'x' stops polling and 'X' removes, matching the cockpit rail — the two used
 	// to be the same key with different meanings on the two project lists.
-	keys := []string{"↑↓ move", "enter open", "s sessions", "n add", "e edit", "space poll", "x stop", "X remove", "/ filter", "esc back"}
+	keys := []string{"↑↓ move", "enter open", "s sessions", "n add", "t new stack", "e edit", "space poll", "b broadcast", "x stop", "X remove", "/ filter", "esc back"}
 	keys = append(keys, "S settings")
 	if m.manageDaemon() && m.home.data == nil {
 		keys = append(keys, "^r start daemon") // urgent while the daemon is down
@@ -214,20 +227,10 @@ func compactPath(p string) string {
 	return p
 }
 
-// shortAgo renders a compact "2m"/"3h"/"5d" since t, or "—" for the zero time.
+// shortAgo renders a fluid age or calendar date, or "—" for the zero time.
 func shortAgo(t time.Time) string {
 	if t.IsZero() {
 		return faintText.Render("—")
 	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
+	return timefmt.Short(t, time.Now())
 }

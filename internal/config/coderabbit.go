@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 // The [coderabbit] table configures the PR-COMMENT WATCH — distinct from the
 // [review] table. [review] execs the CodeRabbit CLI locally against a worktree;
 // [coderabbit] instead POLLS the session's GitHub PR (via gh, on the observer's
@@ -40,6 +42,16 @@ const (
 	// CodeRabbitNotifyTitle titles the human-facing comment notification/comment.
 	CodeRabbitNotifyTitle = "CodeRabbit commented"
 )
+
+// BotAgentPointer is CodeRabbitAgentPointerFmt for a watch on ANY review bot: it
+// names the bot instead of hardcoding CodeRabbit, so a bot-watch relaying a
+// different reviewer tells the worker whose feedback to go read. Same contract —
+// lola's OWN single line, never the comment text, so it submits cleanly and
+// carries nothing attacker-authored into the pane. The caller supplies an
+// already-sanitized display name.
+func BotAgentPointer(who string, pr int) string {
+	return fmt.Sprintf("%s posted new review feedback on PR #%d. Read it (run: gh pr view %d --comments, and check the PR's review comments), address the actionable items, then commit and push.", who, pr, pr)
+}
 
 // CodeRabbitConfig is the [coderabbit] table.
 //

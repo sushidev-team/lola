@@ -1,0 +1,17 @@
+{
+  "baseline/build.log": "b68f757f998f39104017c7a64f2015c0a4cfc1cf0fcb72f7ddd6a994509134d1",
+  "baseline/commands.json": "2203c6f4289062a66bb587872885e74531731eba58dd7da29d4664807a858cae",
+  "baseline/dark-desktop-overflow.png": "1b16cd32478ce748664d9e89c9c42d6f4276d1fe8baedf23f2c409d4f3bac1ed",
+  "baseline/dark-desktop.png": "2fc96e41c8f73c97a7d607e54ab8b4b76d95cb2b8236c52b34d568fd85d31f09",
+  "baseline/dark-narrow-overflow.png": "1ccf958d4974eae651457a25475dac1e27aad2aea20657cde5d3d454d4f075d6",
+  "baseline/dark-narrow.png": "3c0302ab8019da59e5c58a703127bac5df6d2175fb52b73ad7ce1996daca21ae",
+  "baseline/expected-style-failure.log": "a6fc65a8c45a3188e8a4af3b5b221e5fc352d6f35bf83a4abfc8af3f539f4e07",
+  "baseline/interaction.json": "3c587d20f46dfd01e729bf0a8c146e242847a064b18b7eea97d89bc136339407",
+  "baseline/light-desktop-overflow.png": "831f9e0770afbff693f69ac38599b37007c403e5f55a5d3f75baeb02a4cd8ae0",
+  "baseline/light-desktop.png": "915d2a7c2ac04bb067ce51ab5535ffee881a03f3fcf45371b896ba856493a8eb",
+  "baseline/light-narrow-overflow.png": "7536a4e9b5277c08da3cc4c03a63c1ded40872498179c165bb30fa732787f6fb",
+  "baseline/light-narrow.png": "d7aa58d5dee49ff3599b3053c4c6689945d410edc6271b558dc741b8a1e68756",
+  "baseline/storybook-tests.log": "becaee71079d0d4ce81f83f471eb3bdd1475788fa345c6f2ed49d15f77dc3c54",
+  "baseline/unit.log": "cb4b04547210d2588da818cc4a52dca63a686c35d4faf2835ad7a95e22f09c73",
+  "baseline/validation-boundary.log": "a203f87f752b0ca63a5a9fc0aaa231b8048aa2b9000aec68027f8dd2b4161e68"
+}

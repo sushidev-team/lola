@@ -14,9 +14,9 @@ import (
 
 // capture records what the seam received on the last Summarize call.
 type capture struct {
-	bin, model, instruction, stdin string
-	timeout                        time.Duration
-	calls                          int
+	bin, dir, model, instruction, stdin string
+	timeout                             time.Duration
+	calls                               int
 }
 
 // stubSeam installs a runClaude replacement that records its args and returns
@@ -27,7 +27,7 @@ func stubSeam(t *testing.T, out string, err error) *capture {
 	orig := runClaude
 	t.Cleanup(func() { runClaude = orig })
 	c := &capture{}
-	runClaude = func(_ context.Context, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+	runClaude = func(_ context.Context, bin, dir, model, instruction, stdin string, timeout time.Duration) (string, error) {
 		c.calls++
 		c.bin, c.model, c.instruction, c.stdin, c.timeout = bin, model, instruction, stdin, timeout
 		return out, err
@@ -140,7 +140,7 @@ func TestSummarizePropagatesSeamErrors(t *testing.T) {
 func TestBuildArgs(t *testing.T) {
 	// No model: -p <instruction> --output-format text, context absent.
 	got := buildArgs("", "do the thing")
-	want := []string{"-p", "do the thing", "--output-format", "text"}
+	want := []string{"-p", "do the thing", "--output-format", "text", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--settings", `{"disableAllHooks":true}`}
 	if !equal(got, want) {
 		t.Fatalf("buildArgs() = %v, want %v", got, want)
 	}

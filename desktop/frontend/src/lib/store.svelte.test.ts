@@ -2,16 +2,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // The bindings are the process boundary; stub them so the store's own logic —
 // specifically that destructive actions ASK before they act — is what's tested.
-const { Kill, StopDaemon, CloseSessionShells } = vi.hoisted(() => ({
+const { Kill, StopDaemon, CloseSessionShells, Dev, SwitchAgent, OpenManual, OpenTicket } = vi.hoisted(() => ({
   Kill: vi.fn(),
   StopDaemon: vi.fn(),
   CloseSessionShells: vi.fn(),
+  Dev: vi.fn(),
+  SwitchAgent: vi.fn(),
+  OpenManual: vi.fn(),
+  OpenTicket: vi.fn(),
 }));
 
 vi.mock("@bindings/desktop", () => ({
   DaemonService: {
     Kill: (...a: unknown[]) => Kill(...a),
     StopDaemon: () => StopDaemon(),
+    Dev: (...a: unknown[]) => Dev(...a),
+    SwitchAgent: (...a: unknown[]) => SwitchAgent(...a),
+    OpenManual: (...a: unknown[]) => OpenManual(...a),
+    OpenTicket: (...a: unknown[]) => OpenTicket(...a),
     Alive: vi.fn().mockResolvedValue(false),
     Sessions: vi.fn(),
     Projects: vi.fn(),
@@ -29,6 +37,10 @@ beforeEach(() => {
   Kill.mockResolvedValue(undefined);
   StopDaemon.mockResolvedValue(undefined);
   CloseSessionShells.mockResolvedValue(undefined);
+  Dev.mockResolvedValue(undefined);
+  SwitchAgent.mockResolvedValue({ agent: "codex", message: "switched to codex" });
+  OpenManual.mockResolvedValue({ sessionID: "sess-new", branch: "feat/test" });
+  OpenTicket.mockResolvedValue({ sessionID: "sess-ticket", identifier: "ENG-10" });
   confirm.cancel();
   store.sessions = [];
   store.pushErrors = {};
@@ -44,13 +56,44 @@ describe("destructive actions ask first", () => {
   it("accepting the confirmation kills the session", () => {
     store.askKill("sess-1");
     confirm.accept();
-    expect(Kill).toHaveBeenCalledWith("sess-1", false);
+    expect(Kill).toHaveBeenCalledWith("sess-1", false, false);
+  });
+
+  it("the alternative stops the agent but keeps the worktree", () => {
+    store.askKill("sess-1");
+    expect(confirm.request?.alternative?.label).toBe("Stop, keep worktree");
+    confirm.acceptAlternative();
+    expect(Kill).toHaveBeenCalledWith("sess-1", false, true);
   });
 
   it("cancelling the confirmation kills nothing", () => {
     store.askKill("sess-1");
     confirm.cancel();
     expect(Kill).not.toHaveBeenCalled();
+  });
+
+  it("askSwitchAgent opens a confirmation and does NOT switch yet", () => {
+    store.sessions = [{ id: "sess-1", issue: "ENG-42", agent: "claude" } as never];
+    store.askSwitchAgent("sess-1", "codex");
+    expect(SwitchAgent).not.toHaveBeenCalled();
+    expect(confirm.request?.title).toBe("Switch agent?");
+    expect(confirm.request?.body).toBe("Switch ENG-42 from claude to codex?");
+    expect(confirm.request?.detail).toBe("The pane is replaced on the same worktree.");
+    expect(confirm.request?.confirmLabel).toBe("Switch");
+  });
+
+  it("accepting the switch agent confirmation calls switchAgent", () => {
+    store.sessions = [{ id: "sess-1", issue: "ENG-42", agent: "claude" } as never];
+    store.askSwitchAgent("sess-1", "codex");
+    confirm.accept();
+    expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
+  });
+
+  it("cancelling the switch agent confirmation does nothing", () => {
+    store.sessions = [{ id: "sess-1", issue: "ENG-42", agent: "claude" } as never];
+    store.askSwitchAgent("sess-1", "codex");
+    confirm.cancel();
+    expect(SwitchAgent).not.toHaveBeenCalled();
   });
 
   // The daemon-stop button lives in the footer next to "restart"; a misclick used
@@ -112,7 +155,7 @@ describe("dirty-worktree kill re-asks with force", () => {
     Kill.mockRejectedValueOnce(dirty());
     await store.kill("sess-1");
     confirm.accept();
-    expect(Kill).toHaveBeenLastCalledWith("sess-1", true);
+    expect(Kill).toHaveBeenLastCalledWith("sess-1", true, false);
   });
 
   it("declining leaves the worktree alone", async () => {
@@ -157,5 +200,120 @@ describe("push errors", () => {
     store.dismissPushError();
     expect(store.pushErrors).toEqual({});
     expect(store.pushError).toBeNull();
+  });
+});
+
+// The dev toggle is the app's slowest control: the daemon stops the previous
+// holder's tabs and reclaims any port still held in the project's worktrees,
+// each with its own SIGTERM grace, before it answers. The store owns the
+// in-flight flag because the toggle has three triggers (the row's button, the
+// context menu, the `D` shortcut) and only one of them is the button.
+describe("the dev toggle reports that it is in flight", () => {
+  beforeEach(() => {
+    store.devPending = {};
+  });
+
+  it("marks the session pending while the call travels, and clears it after", async () => {
+    let release!: () => void;
+    Dev.mockReturnValue(new Promise<void>((r) => (release = r)));
+
+    const call = store.dev("sess-1", true);
+    expect(store.devPending["sess-1"]).toBe(true);
+    // Only that session: another row's button must not spin.
+    expect(store.devPending["sess-2"]).toBeUndefined();
+
+    release();
+    await call;
+    expect(store.devPending["sess-1"]).toBeUndefined();
+  });
+
+  it("clears the flag when the daemon refuses", async () => {
+    Dev.mockRejectedValue(new Error("project configures no dev_commands"));
+    await store.dev("sess-1", true);
+    expect(store.devPending["sess-1"]).toBeUndefined();
+    expect(store.flash?.kind).toBe("bad");
+  });
+
+  // Activating is a MOVE — it stops another session's dev servers — so a second
+  // click while the first is still travelling is never what was meant.
+  it("ignores a second toggle while the first is still in flight", async () => {
+    let release!: () => void;
+    Dev.mockReturnValue(new Promise<void>((r) => (release = r)));
+
+    const first = store.dev("sess-1", true);
+    await store.dev("sess-1", false);
+    expect(Dev).toHaveBeenCalledTimes(1);
+
+    release();
+    await first;
+  });
+});
+
+describe("agent launch and switch actions", () => {
+  it("openManual carries agentKind into the daemon request", async () => {
+    await store.openManual({
+      project: "acme",
+      branch: "feat/login",
+      agent: true,
+      agentKind: "codex",
+    });
+    expect(OpenManual).toHaveBeenCalledWith({
+      project: "acme",
+      branch: "feat/login",
+      agent: true,
+      agentKind: "codex",
+    });
+  });
+
+  it("openTicket carries agentKind into the daemon request", async () => {
+    await store.openTicket({
+      project: "acme",
+      identifier: "ENG-10",
+      uuid: "uuid-10",
+      agentKind: "opencode",
+    });
+    expect(OpenTicket).toHaveBeenCalledWith({
+      project: "acme",
+      identifier: "ENG-10",
+      uuid: "uuid-10",
+      agentKind: "opencode",
+    });
+  });
+
+  it("switchAgent invokes DaemonService.SwitchAgent and flashes the returned daemon message", async () => {
+    SwitchAgent.mockResolvedValueOnce({
+      agent: "codex",
+      message: "lola-p1-eng-1: switched claude → codex — worktree and branch kept, briefing at .lola/handoff.md",
+    });
+    await store.switchAgent("sess-1", "codex");
+    expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
+    expect(store.flash?.text).toBe(
+      "lola-p1-eng-1: switched claude → codex — worktree and branch kept, briefing at .lola/handoff.md",
+    );
+  });
+
+  it("switchAgent falls back to generated text when the returned message is empty", async () => {
+    SwitchAgent.mockResolvedValueOnce({ agent: "codex", message: "" });
+    await store.switchAgent("sess-1", "codex");
+    expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
+    expect(store.flash?.text).toBe("switched sess-1 to codex");
+  });
+});
+
+describe("retention while the daemon is down", () => {
+  it("is off by default for the phone, and the roster reads what was kept only while down", () => {
+    const s = store as unknown as { retained: unknown[]; retainAll: boolean };
+    const plain = { id: "p" };
+    const withSSH = { id: "s", ssh: { connections: [] } };
+    expect(s.retainAll).toBe(false);
+    store.alive = false;
+    store.sessions = [];
+    s.retained = [plain, withSSH];
+    expect(store.rosterSessions.map((x) => x.id)).toEqual(["p", "s"]);
+    expect(store.sessionById("p")?.id).toBe("p");
+    store.alive = true;
+    expect(store.rosterSessions).toEqual([]);
+    expect(store.sessionById("p")).toBeUndefined();
+    s.retained = [];
   });
 });

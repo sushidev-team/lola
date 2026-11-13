@@ -1,6 +1,23 @@
 import "@testing-library/jest-dom/vitest";
 import { afterAll } from "vitest";
 
+// Svelte's keyed layout animation checks for ongoing Web Animations before
+// fixing an outgoing row's position. jsdom has no animations to enumerate.
+if (!Element.prototype.getAnimations) Element.prototype.getAnimations = () => [];
+
+// jsdom has no layout observer; actual sidebar geometry is checked in WebKit.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
+// Node's experimental storage globals can mask jsdom's browser storage.
+// Use this test window's isolated storage, without requiring a Node CLI flag.
+const testWindow = (globalThis as unknown as { jsdom: { window: Window } }).jsdom.window;
+Object.defineProperty(globalThis, "localStorage", { configurable: true, value: testWindow.localStorage });
+Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: testWindow.sessionStorage });
+
 // @wailsio/runtime's drag.js starts a `window.setInterval` AT IMPORT TIME that
 // polls up to 100 times for the Wails environment (dist/drag.js). In jsdom that
 // environment never arrives, so the interval is still pending when the test file

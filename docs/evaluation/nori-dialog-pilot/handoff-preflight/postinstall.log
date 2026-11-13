@@ -1,0 +1,3 @@
+
+> postinstall
+> cp node_modules/pagedjs/dist/paged.polyfill.js resources/js/assets/pdf/paged.polyfill.js 2>/dev/null || true; node -e "const fs=require('fs'),path=require('path');const main=require.resolve('pdfjs-dist',{paths:[path.dirname(require.resolve('react-pdf/package.json'))]});fs.copyFileSync(path.join(path.dirname(main),'pdf.worker.min.mjs'),'resources/js/assets/pdf/pdf.worker.min.mjs')" 2>/dev/null || true

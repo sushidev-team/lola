@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/secrets"
 )
 
@@ -22,15 +27,32 @@ const (
 	setupEnvVar          = "LINEAR_API_KEY"
 )
 
+// storeLinearKey is the exec seam over the keychain write, so tests exercise
+// Setup and SetLinearKey without touching the operator's real login keychain.
+var storeLinearKey = secrets.StoreLinearAPIKey
+
 // ConfigService lets the settings / project / poll forms read and write
 // config.toml directly, the same way the TUI does — the daemon protocol has no
 // config-write command; config.toml is the single source of truth and the
 // daemon only re-reads it on `reload`. Every Save validates, persists atomically
 // (config.Save is temp+rename, 0600), then best-effort reloads a live daemon.
 //
-// Secrets never pass through here: the Linear key and Slack webhook live in the
-// keychain / env by *name*, and those name fields are the only secret-adjacent
-// values these DTOs carry.
+// Secrets are WRITE-ONLY here, and only through SetLinearKey: the Linear key and
+// Slack webhook live in the keychain / env by *name*, and those name fields are
+// the only secret-adjacent values any DTO carries. Nothing ever reads a secret
+// back out to the frontend — LinearKeyStatus reports where the key lives and
+// whether it resolves, never its value.
+//
+// ConnectCode is the ONE deliberate exception, and it is written down rather
+// than left as an inconsistency. It returns the phone listener's bearer key
+// because the key IS the thing being handed over — a QR nobody can read is not
+// a hand-off — and the exception costs nothing in privilege: the answer comes
+// over ~/.lola/lola.sock, which is srw------- inside a 0700 directory, and
+// anything that can open it already reaches cmd=answer, which types into a
+// running coding agent. What the exception does cost is EXPOSURE, so the rule
+// it replaces the write-only one with is narrower rather than absent: the value
+// is fetched only when a human asks for it, it is never logged or persisted on
+// this side, and the surface that renders it has a hide.
 type ConfigService struct{}
 
 func loadConfig() (*config.Config, string, error) {
@@ -88,10 +110,12 @@ func reloadRejectionHint(msg string) string {
 // --- settings ([defaults]/[notify]/[brain]/[review]/[coderabbit]) -----------
 
 type SettingsDTO struct {
-	GlobalCap      int    `json:"globalCap"`
-	ConcurrencyCap int    `json:"concurrencyCap"`
-	PollInterval   string `json:"pollInterval"` // duration string, e.g. "60s"
-	Agent          string `json:"agent"`        // claude|codex|opencode
+	AutoPRComments     bool   `json:"autoPRComments"`
+	TemporaryDirectory string `json:"temporaryDirectory"`
+	GlobalCap          int    `json:"globalCap"`
+	ConcurrencyCap     int    `json:"concurrencyCap"`
+	PollInterval       string `json:"pollInterval"` // duration string, e.g. "60s"
+	Agent              string `json:"agent"`        // claude|codex|opencode
 
 	NotifyDesktop   bool   `json:"notifyDesktop"`
 	SlackWebhookEnv string `json:"slackWebhookEnv"` // env var NAME, never the URL
@@ -104,6 +128,7 @@ type SettingsDTO struct {
 
 	// [statusagent] — the display-only status interpreter.
 	StatusAgentEnabled           bool    `json:"statusAgentEnabled"`
+	StatusAgentAgent             string  `json:"statusAgentAgent"`
 	StatusAgentBin               string  `json:"statusAgentBin"`
 	StatusAgentModel             string  `json:"statusAgentModel"`
 	StatusAgentTimeout           int     `json:"statusAgentTimeout"`
@@ -112,6 +137,19 @@ type SettingsDTO struct {
 	StatusAgentMinConfidence     float64 `json:"statusAgentMinConfidence"`
 	StatusAgentIncludeTranscript bool    `json:"statusAgentIncludeTranscript"`
 
+	// [remote] — the phone listener (mobile/PLAN.md milestone 1). Three keys and
+	// no inheritance, because a listener is a property of the MACHINE rather than
+	// of a project. RemoteBind is either one of config.RemoteBinds or an IP
+	// literal, so the form must be able to round-trip a literal it cannot offer
+	// in a picker; coercing one back to a keyword on save would silently rebind
+	// the daemon to a different set of interfaces.
+	RemoteEnabled     bool   `json:"remoteEnabled"`
+	RemoteBind        string `json:"remoteBind"`
+	RemotePort        int    `json:"remotePort"`
+	RemoteInsecureLAN bool   `json:"remoteInsecureLan"`
+	RemoteAdvertise   bool   `json:"remoteAdvertise"`
+	RemoteDevForward  bool   `json:"remoteDevForward"`
+
 	// ReviewProviders is the pluggable review catalog ([[review.provider]]),
 	// resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
 	// from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the
@@ -119,6 +157,9 @@ type SettingsDTO struct {
 	// UI shows the providers read-only and offers MigrateReview.
 	ReviewProviders []ReviewProviderDTO `json:"reviewProviders"`
 	ReviewLegacy    bool                `json:"reviewLegacy"`
+	// Nil from an older client preserves profiles; an explicit empty array clears them.
+	ReviewProfiles    []reviewprofile.Profile   `json:"reviewProfiles"`
+	ReviewSpecialties []reviewprofile.Specialty `json:"reviewSpecialties"`
 
 	// Project defaults: the [defaults] counterpart of each inheritable
 	// [[project]] key. A project that does not override the key uses these.
@@ -138,16 +179,20 @@ type SettingsDTO struct {
 // the settings form. Provider/Fallback/Transports are plain strings so the
 // frontend never needs the (unexported) provKind type; the Go side converts.
 type ReviewProviderDTO struct {
-	Provider       string   `json:"provider"` // coderabbit-cli | coderabbit-watch | claude-session
+	Provider       string   `json:"provider"` // one of ReviewKinds()
 	Enabled        bool     `json:"enabled"`
 	OnPROpen       bool     `json:"onPrOpen"`
-	Command        string   `json:"command"`        // coderabbit-cli only
+	Command        string   `json:"command"`        // cli family
+	BaseFlag       string   `json:"baseFlag"`       // cli family; empty appends no base
 	TimeoutSeconds int      `json:"timeoutSeconds"` // pass shapes
-	Model          string   `json:"model"`          // claude-session only
-	Author         string   `json:"author"`         // coderabbit-watch only
+	Model          string   `json:"model"`          // agent family
+	Author         string   `json:"author"`         // watch family
 	Transports     []string `json:"transports"`     // lola (always) | github | linear
+	GitHubInline   bool     `json:"githubInline"`   // github: anchored, resolvable threads instead of one comment
+	GitHubStatus   bool     `json:"githubStatus"`   // pass shapes: lola/review/<kind> commit status on the PR head
 	Notify         bool     `json:"notify"`
 	SendToAgent    bool     `json:"sendToAgent"`
+	Visible        bool     `json:"visible"`  // pass shapes: run in a watchable "<session>-review" tmux session
 	Fallback       []string `json:"fallback"` // ordered pass kinds
 }
 
@@ -158,10 +203,86 @@ func (s *ConfigService) PrioritySortKeys() []string {
 	return append([]string(nil), config.PrioritySortKeys...)
 }
 
+// RemoteBinds returns the [remote].bind keywords the daemon accepts, so the
+// settings form offers them instead of taking free text. Same posture as
+// PrioritySortKeys: MEMBERSHIP is the Go side's call, since config.Validate
+// rejects anything that is neither one of these nor an IP literal.
+//
+// The literal case is why the form cannot be a picker alone — see the comment
+// on SettingsDTO.RemoteBind.
+func (s *ConfigService) RemoteBinds() []string {
+	return append([]string(nil), config.RemoteBinds...)
+}
+
 // ReviewProviderKinds / TransportTokens expose the selectable catalog values so
 // the frontend renders its pickers without hardcoding them.
 func (s *ConfigService) ReviewProviderKinds() []string { return config.ReviewProviderKinds() }
 func (s *ConfigService) TransportTokens() []string     { return config.TransportTokens() }
+
+// ReviewKindDTO describes ONE provider kind to the settings form: its id, the
+// heading it is drawn under, and which fields it actually has. The frontend
+// renders its Review tab from this list instead of a hardcoded array of kinds
+// plus a set of `p.provider === "…"` tests, so adding a review agent to
+// config.ReviewProviderKinds() makes the app offer it with no frontend edit —
+// which is the whole point of a pluggable catalog.
+type ReviewKindDTO struct {
+	Kind string `json:"kind"`
+	// Label is the section heading: the kind's name plus what it does.
+	Label string `json:"label"`
+	// Watch marks the poll/watermark shape: it has an author, and neither a
+	// github transport nor a fallback chain (validation forbids both).
+	Watch bool `json:"watch"`
+	// CLI marks a kind that execs an external review CLI (command + base flag).
+	CLI bool `json:"cli"`
+	// Agent names the coding agent an agent-family kind reviews with, or "" when
+	// the kind is not one (it is also the "offer a model field" test).
+	Agent string `json:"agent"`
+	// RequiresCommand / RequiresAuthor mark the generic kinds, which carry no
+	// built-in tool or bot of their own and are rejected by validation while
+	// enabled-and-empty. The form marks the field required and says why.
+	RequiresCommand bool `json:"requiresCommand"`
+	RequiresAuthor  bool `json:"requiresAuthor"`
+}
+
+// ReviewKinds returns one descriptor per selectable provider kind, in the order
+// the form should offer them.
+func (s *ConfigService) ReviewKinds() []ReviewKindDTO {
+	kinds := config.ReviewProviderKinds()
+	out := make([]ReviewKindDTO, 0, len(kinds))
+	for _, k := range kinds {
+		a, _ := config.ReviewAgentFor(k)
+		out = append(out, ReviewKindDTO{
+			Kind:            k,
+			Label:           reviewKindLabel(k),
+			Watch:           config.IsWatchKind(k),
+			CLI:             config.IsCLIKind(k),
+			Agent:           a,
+			RequiresCommand: config.ReviewKindRequiresCommand(k),
+			RequiresAuthor:  config.ReviewKindRequiresAuthor(k),
+		})
+	}
+	return out
+}
+
+// reviewKindLabel is a kind's section heading. The kind names alone
+// ("custom-cli", "bot-watch") do not say what they do, so each carries one
+// clause that does.
+func reviewKindLabel(kind string) string {
+	switch kind {
+	case "coderabbit-cli":
+		return kind + " — execs `coderabbit review` on PR-open"
+	case "custom-cli":
+		return kind + " — execs your own review CLI on PR-open"
+	case "coderabbit-watch":
+		return kind + " — polls the PR for the CodeRabbit app's comments"
+	case "bot-watch":
+		return kind + " — polls the PR for any review bot's comments"
+	}
+	if a, ok := config.ReviewAgentFor(kind); ok {
+		return kind + " — headless `" + agent.Kind(a).Binary() + "` review on PR-open"
+	}
+	return kind
+}
 
 // reviewProvidersDTO flattens the effective catalog for the form.
 func reviewProvidersDTO(cfg *config.Config) []ReviewProviderDTO {
@@ -173,12 +294,16 @@ func reviewProvidersDTO(cfg *config.Config) []ReviewProviderDTO {
 			Enabled:        p.Enabled,
 			OnPROpen:       p.OnPROpen,
 			Command:        p.Command,
+			BaseFlag:       p.BaseFlag,
 			TimeoutSeconds: p.TimeoutSeconds,
 			Model:          p.Model,
 			Author:         p.Author,
 			Transports:     p.Transports.Strings(),
+			GitHubInline:   p.GitHubInline,
+			GitHubStatus:   p.GitHubStatus,
 			Notify:         p.Notify,
 			SendToAgent:    p.SendToAgent,
+			Visible:        p.Visible,
 			Fallback:       p.FallbackStrings(),
 		})
 	}
@@ -198,11 +323,15 @@ func providersFromDTO(dtos []ReviewProviderDTO) []config.ReviewProvider {
 		p.Enabled = d.Enabled
 		p.OnPROpen = d.OnPROpen
 		p.Command = d.Command
+		p.BaseFlag = d.BaseFlag
 		p.TimeoutSeconds = d.TimeoutSeconds
 		p.Model = d.Model
 		p.Author = d.Author
+		p.GitHubInline = d.GitHubInline
+		p.GitHubStatus = d.GitHubStatus
 		p.Notify = d.Notify
 		p.SendToAgent = d.SendToAgent
+		p.Visible = d.Visible
 		p.SetTransportTokens(d.Transports)
 		p.SetFallbackKinds(d.Fallback)
 		out = append(out, p)
@@ -238,6 +367,7 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		return SettingsDTO{}, err
 	}
 	return SettingsDTO{
+		TemporaryDirectory:       cfg.Defaults.TemporaryDirectory,
 		GlobalCap:                cfg.Defaults.GlobalCap,
 		ConcurrencyCap:           cfg.Defaults.ConcurrencyCap,
 		PollInterval:             cfg.Defaults.PollInterval.String(),
@@ -251,6 +381,7 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		BrainSummarizeApproved:   cfg.Brain.SummarizeApproved,
 
 		StatusAgentEnabled:           cfg.StatusAgent.Enabled,
+		StatusAgentAgent:             cfg.StatusAgent.Agent,
 		StatusAgentBin:               cfg.StatusAgent.Bin,
 		StatusAgentModel:             cfg.StatusAgent.Model,
 		StatusAgentTimeout:           cfg.StatusAgent.TimeoutSeconds,
@@ -259,14 +390,27 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		StatusAgentMinConfidence:     cfg.StatusAgent.MinConfidence,
 		StatusAgentIncludeTranscript: cfg.StatusAgent.IncludeTranscript,
 
-		ReviewProviders: reviewProvidersDTO(cfg),
-		ReviewLegacy:    legacyReviewOnly(cfg),
+		// The EFFECTIVE values, not the raw ones: BindMode/ListenPort resolve ""
+		// and 0 to their defaults, so the form shows what the daemon would
+		// actually do rather than a blank that reads as "nothing".
+		RemoteEnabled:     cfg.Remote.Enabled,
+		RemoteBind:        cfg.Remote.BindMode(),
+		RemotePort:        cfg.Remote.ListenPort(),
+		RemoteInsecureLAN: cfg.Remote.InsecureLAN,
+		RemoteAdvertise:   cfg.Remote.Advertise,
+		RemoteDevForward:  cfg.Remote.DevForward,
+
+		ReviewProviders:   reviewProvidersDTO(cfg),
+		ReviewLegacy:      legacyReviewOnly(cfg),
+		ReviewProfiles:    append([]reviewprofile.Profile{}, cfg.ReviewProfiles...),
+		ReviewSpecialties: reviewprofile.Specialties(),
 
 		BranchPrefix:   cfg.Defaults.BranchPrefix,
 		Symlinks:       cfg.Defaults.Symlinks,
 		PostCreate:     cfg.Defaults.PostCreate,
 		Env:            envToLines(cfg.Defaults.Env),
 		MatchLabels:    cfg.Defaults.MatchLabels,
+		AutoPRComments: cfg.Defaults.AutoPRComments,
 		MatchMode:      cfg.Defaults.MatchMode,
 		OnSentSetLabel: cfg.Defaults.OnSentSetLabel,
 		BlockedLabelID: cfg.Defaults.BlockedLabelID,
@@ -287,6 +431,7 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 		}
 		cfg.Defaults.PollInterval = d
 	}
+	cfg.Defaults.TemporaryDirectory = strings.TrimSpace(dto.TemporaryDirectory)
 	cfg.Defaults.GlobalCap = dto.GlobalCap
 	cfg.Defaults.ConcurrencyCap = dto.ConcurrencyCap
 	cfg.Defaults.Agent = dto.Agent
@@ -298,6 +443,7 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Brain.SummarizeEscalation = dto.BrainSummarizeEscalation
 	cfg.Brain.SummarizeApproved = dto.BrainSummarizeApproved
 	cfg.StatusAgent.Enabled = dto.StatusAgentEnabled
+	cfg.StatusAgent.Agent = dto.StatusAgentAgent
 	cfg.StatusAgent.Bin = dto.StatusAgentBin
 	cfg.StatusAgent.Model = dto.StatusAgentModel
 	cfg.StatusAgent.TimeoutSeconds = dto.StatusAgentTimeout
@@ -305,6 +451,12 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.StatusAgent.MaxPerCycle = dto.StatusAgentMaxPerCycle
 	cfg.StatusAgent.MinConfidence = dto.StatusAgentMinConfidence
 	cfg.StatusAgent.IncludeTranscript = dto.StatusAgentIncludeTranscript
+	cfg.Remote.Enabled = dto.RemoteEnabled
+	cfg.Remote.Bind = dto.RemoteBind
+	cfg.Remote.Port = dto.RemotePort
+	cfg.Remote.InsecureLAN = dto.RemoteInsecureLAN
+	cfg.Remote.Advertise = dto.RemoteAdvertise
+	cfg.Remote.DevForward = dto.RemoteDevForward
 	// Review catalog. While the legacy tables are still present (read-only in the
 	// UI), the provider array is not written back — editing it alongside the
 	// legacy tables would produce a mixed config, a hard validation error;
@@ -312,6 +464,23 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	// array replaces the catalog and the legacy tables stay empty.
 	if !legacyReviewOnly(cfg) {
 		cfg.ReviewProviders = providersFromDTO(dto.ReviewProviders)
+	}
+	if dto.ReviewProfiles != nil {
+		cfg.ReviewProfiles = append([]reviewprofile.Profile{}, dto.ReviewProfiles...)
+		for i := range cfg.ReviewProfiles {
+			p := &cfg.ReviewProfiles[i]
+			p.ID, p.Provider, p.Version = strings.TrimSpace(p.ID), strings.TrimSpace(p.Provider), strings.TrimSpace(p.Version)
+			clean := func(lines []string) []string {
+				out := []string{}
+				for _, line := range lines {
+					if value := strings.TrimSpace(line); value != "" {
+						out = append(out, value)
+					}
+				}
+				return out
+			}
+			p.Projects, p.Paths, p.Artifacts = clean(p.Projects), clean(p.Paths), clean(p.Artifacts)
+		}
 	}
 
 	env, err := linesToEnv(dto.Env)
@@ -323,6 +492,7 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Defaults.PostCreate = nonEmpty(dto.PostCreate)
 	cfg.Defaults.Env = env
 	cfg.Defaults.MatchLabels = nonEmpty(dto.MatchLabels)
+	cfg.Defaults.AutoPRComments = dto.AutoPRComments
 	cfg.Defaults.MatchMode = dto.MatchMode
 	cfg.Defaults.OnSentSetLabel = dto.OnSentSetLabel
 	cfg.Defaults.BlockedLabelID = dto.BlockedLabelID
@@ -374,14 +544,15 @@ func (s *ConfigService) GetTheme() string {
 // saveConfig path — Validate, then config.Save's atomic temp+rename, then a
 // best-effort daemon reload — so an unknown identifier is rejected here by the
 // same static check the daemon applies, and nothing writes the file directly.
-// An empty name clears the key, which drops the [ui] table and restores
-// config.DefaultUITheme.
+// An empty name clears the fixed theme and restores config.DefaultUITheme;
+// the system-mode choices remain available for later.
 func (s *ConfigService) SetTheme(name string) error {
 	cfg, path, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	cfg.UI.Theme = strings.TrimSpace(name)
+	cfg.UI.FollowSystem = false
 	if err := saveConfig(cfg, path); err != nil {
 		return err
 	}
@@ -393,12 +564,50 @@ func (s *ConfigService) SetTheme(name string) error {
 	return nil
 }
 
+// AppearanceDTO keeps a fixed choice alongside the two system-mode choices.
+type AppearanceDTO struct {
+	Theme        string `json:"theme"`
+	FollowSystem bool   `json:"followSystem"`
+	LightTheme   string `json:"lightTheme"`
+	DarkTheme    string `json:"darkTheme"`
+}
+
+func (s *ConfigService) GetAppearance() AppearanceDTO {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		cfg = &config.Config{}
+	}
+	return AppearanceDTO{cfg.UITheme(), cfg.UI.FollowSystem, cfg.UILightTheme(), cfg.UIDarkTheme()}
+}
+
+func (s *ConfigService) SetAppearance(a AppearanceDTO) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.UI = config.UIConfig{Theme: strings.TrimSpace(a.Theme), FollowSystem: a.FollowSystem,
+		LightTheme: strings.TrimSpace(a.LightTheme), DarkTheme: strings.TrimSpace(a.DarkTheme)}
+	if err := saveConfig(cfg, path); err != nil {
+		return err
+	}
+	repaintWindowCanvas(cfg.UIThemeFor(systemIsDark()))
+	return nil
+}
+
+// PreviewTheme updates native chrome only. It never persists an appearance.
+func (s *ConfigService) PreviewTheme(id string) {
+	if slices.Contains(config.UIThemes, id) {
+		repaintWindowCanvas(id)
+	}
+}
+
 // --- project editor ---------------------------------------------------------
 
 // InheritsDTO mirrors config.ProjectInherits: true means the project leaves the
 // key to [defaults], so the form shows the resolved value as a ghost and the
 // key is not written into the project's own table.
 type InheritsDTO struct {
+	AutoPRComments bool `json:"autoPRComments"`
 	Symlinks       bool `json:"symlinks"`
 	PostCreate     bool `json:"postCreate"`
 	Env            bool `json:"env"`
@@ -410,17 +619,32 @@ type InheritsDTO struct {
 	PrioritySort   bool `json:"prioritySort"`
 }
 
+type ProjectExecutionDTO struct {
+	GoalMode bool   `json:"goalMode"`
+	Sandbox  string `json:"sandbox"`
+	Image    string `json:"image"`
+}
+
 // ProjectFormDTO is the whole of one [[project]] — repository setup, Linear
 // polling filter and write-back — because a project IS the poll unit. The
 // values are the RESOLVED ones (see config.ResolveInheritance); Inherits says
 // which of them came from [defaults] rather than the project itself.
 type ProjectFormDTO struct {
+	AutoPRComments bool `json:"autoPRComments"`
+	// Nil from an older client preserves execution settings. Stack members
+	// cannot edit these owning-stack settings through their repository form.
+	Execution *ProjectExecutionDTO `json:"execution,omitempty"`
+
 	// Repository / worktree setup. Name is the project's ID — a path segment and
 	// the prefix of every session/tmux name — while Label is the free-text
 	// display string ("" falls back to Name). Changing Label here is an ordinary
 	// save; changing Name is a RENAME and must go through
 	// DaemonService.RenameProject FIRST, so that by the time SaveProject runs the
 	// project on disk already answers to the new id.
+	// The project's GROUP is deliberately absent: filing a project is done in
+	// the sidebar, by dragging its row onto a folder, and a second place to set
+	// it would let a stale form move a project nobody dragged. SaveProject leaves
+	// Project.Group untouched.
 	Name          string   `json:"name"`
 	Label         string   `json:"label"`
 	Path          string   `json:"path"`
@@ -430,7 +654,28 @@ type ProjectFormDTO struct {
 	Agent         string   `json:"agent"` // ""=inherit | claude | codex | opencode
 	Symlinks      []string `json:"symlinks"`
 	PostCreate    []string `json:"postCreate"`
-	Env           []string `json:"env"` // "KEY=value" lines
+	// DevCommands are the project's long-running dev processes, run by whichever
+	// session is ACTIVE (one per project — see internal/daemon/dev.go). Not an
+	// inheritable key: a dev command belongs to one repository.
+	DevCommands []string `json:"devCommands"`
+	// PortRange ("4100-4999") and PortsPerSession lease each session its own
+	// port block (LOLA_PORT / LOLA_PORT_1..N) and make dev_commands
+	// multi-active; PreRemove is the teardown hook run before a worktree is
+	// removed. Per project, like DevCommands.
+	PortRange       string   `json:"portRange"`
+	PortsPerSession int      `json:"portsPerSession"`
+	PreRemove       []string `json:"preRemove"`
+	Env             []string `json:"env"` // "KEY=value" lines
+	// Kind is "stack" for a STACK (no checkout of its own: it owns the Linear
+	// side of its members), "" for a repository. Stack names the stack this
+	// project is a MEMBER of ("" = none) and is read-only here: membership is
+	// changed by dragging in the sidebar (SetProjectStack), for the same reason
+	// the group is — a stale form must not move a project nobody dragged.
+	// Labels are a member's issue labels (UUID, name or "group/name"; empty =
+	// every issue); nil from an older client leaves them untouched.
+	Kind   string   `json:"kind"`
+	Stack  string   `json:"stack"`
+	Labels []string `json:"labels"`
 
 	// Linear polling filter.
 	Enabled        bool     `json:"enabled"`
@@ -478,7 +723,7 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 			Inherits: config.ProjectInherits{
 				Symlinks: true, PostCreate: true, Env: true,
 				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-				BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+				BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
 			},
 		}
 		// Resolve against a scratch config so the new project's ghosts show the
@@ -497,18 +742,34 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 	return projectDTO(p), nil
 }
 
+// labelsDTO marshals a nil label list as [] rather than null for the frontend.
+func labelsDTO(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
 func projectDTO(p *config.Project) ProjectFormDTO {
 	return ProjectFormDTO{
-		Name:          p.Name,
-		Label:         p.Label,
-		Path:          p.Path,
-		Repo:          p.Repo,
-		DefaultBranch: p.DefaultBranch,
-		BranchPrefix:  p.BranchPrefix,
-		Agent:         p.Agent,
-		Symlinks:      p.Symlinks,
-		PostCreate:    p.PostCreate,
-		Env:           envToLines(p.Env),
+		Execution:       &ProjectExecutionDTO{GoalMode: p.GoalMode, Sandbox: p.Sandbox, Image: p.SandboxImage},
+		Name:            p.Name,
+		Label:           p.Label,
+		Path:            p.Path,
+		Repo:            p.Repo,
+		DefaultBranch:   p.DefaultBranch,
+		BranchPrefix:    p.BranchPrefix,
+		Agent:           p.Agent,
+		Symlinks:        p.Symlinks,
+		PostCreate:      p.PostCreate,
+		DevCommands:     p.DevCommands,
+		PortRange:       p.PortRange,
+		PortsPerSession: p.PortsPerSession,
+		PreRemove:       p.PreRemove,
+		Env:             envToLines(p.Env),
+		Kind:            p.Kind,
+		Stack:           p.Stack,
+		Labels:          labelsDTO(p.Labels),
 
 		Enabled:        p.Enabled,
 		TeamID:         p.TeamID,
@@ -517,6 +778,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 		CycleID:        p.CycleID,
 		StateIDs:       p.StateIDs,
 		MatchLabels:    p.MatchLabels,
+		AutoPRComments: p.AutoPRComments,
 		MatchMode:      p.MatchMode,
 		AssigneeMode:   p.AssigneeMode,
 		AssigneeUserID: p.AssigneeUserID,
@@ -539,6 +801,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 			PostCreate:     p.Inherits.PostCreate,
 			Env:            p.Inherits.Env,
 			MatchLabels:    p.Inherits.MatchLabels,
+			AutoPRComments: p.Inherits.AutoPRComments,
 			MatchMode:      p.Inherits.MatchMode,
 			OnSentSetLabel: p.Inherits.OnSentSetLabel,
 			BlockedLabelID: p.Inherits.BlockedLabelID,
@@ -590,8 +853,25 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.Agent = dto.Agent
 	p.Symlinks = nonEmpty(dto.Symlinks)
 	p.PostCreate = nonEmpty(dto.PostCreate)
+	p.DevCommands = nonEmpty(dto.DevCommands)
+	p.PortRange = strings.TrimSpace(dto.PortRange)
+	p.PortsPerSession = dto.PortsPerSession
+	p.PreRemove = nonEmpty(dto.PreRemove)
 	p.Env = env
+	if dto.IsNew {
+		// Only a new project takes its kind from the form: turning an existing
+		// repository into a stack (or back) is not an edit the form offers.
+		p.Kind = strings.TrimSpace(dto.Kind)
+	}
+	if dto.Labels != nil { // absent (an older client) = untouched, never wiped
+		p.Labels = nonEmpty(dto.Labels)
+	}
 
+	if dto.Execution != nil && !p.InStack() {
+		p.GoalMode = dto.Execution.GoalMode
+		p.Sandbox = strings.TrimSpace(dto.Execution.Sandbox)
+		p.SandboxImage = strings.TrimSpace(dto.Execution.Image)
+	}
 	p.Enabled = dto.Enabled
 	p.TeamID = dto.TeamID
 	p.ProjectID = dto.ProjectID
@@ -599,6 +879,7 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.CycleID = dto.CycleID
 	p.StateIDs = nonEmpty(dto.StateIDs)
 	p.MatchLabels = nonEmpty(dto.MatchLabels)
+	p.AutoPRComments = dto.AutoPRComments
 	p.MatchMode = dto.MatchMode
 	p.AssigneeMode = dto.AssigneeMode
 	p.AssigneeUserID = dto.AssigneeUserID
@@ -622,6 +903,7 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		PostCreate:     dto.Inherits.PostCreate,
 		Env:            dto.Inherits.Env,
 		MatchLabels:    dto.Inherits.MatchLabels,
+		AutoPRComments: dto.Inherits.AutoPRComments,
 		MatchMode:      dto.Inherits.MatchMode,
 		OnSentSetLabel: dto.Inherits.OnSentSetLabel,
 		BlockedLabelID: dto.Inherits.BlockedLabelID,
@@ -631,32 +913,52 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	return saveConfig(cfg, path)
 }
 
-// DetectRepo resolves the GitHub "owner/name" of the checkout at path so the
-// project form can prefill Repo instead of making the user copy it. Returns ""
-// when it cannot be determined — not a git repo, no GitHub remote, a
-// non-GitHub host. That empty value is deliberate and safe: it disables PR
-// checks (fail-closed) rather than pointing them at the wrong repository.
-//
-// Prefers the "upstream" remote over "origin": in a fork, origin is the fork
-// but upstream is where the pull requests actually land.
-func (s *ConfigService) DetectRepo(path string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	return gitrepo.Detect(ctx, path)
+// PathInfoDTO is everything the project form derives from one picked folder.
+// Path is the checkout ROOT when there is one (picking a subdirectory still
+// configures the repository), else the directory as given.
+type PathInfoDTO struct {
+	Path           string   `json:"path"`
+	IsRepo         bool     `json:"isRepo"`
+	Repo           string   `json:"repo"`
+	DefaultBranch  string   `json:"defaultBranch"`
+	Branches       []string `json:"branches"`
+	SuggestedLabel string   `json:"suggestedLabel"`
+	SuggestedID    string   `json:"suggestedId"`
 }
 
-// Branches lists the branches the checkout at path can fork worktrees from —
-// local branches plus remote-tracking ones with no local counterpart, the
-// repository's own default first. Empty when path is not a checkout; the form
-// then leaves the field as free text rather than trapping the user.
-func (s *ConfigService) Branches(path string) []string {
+// InspectPath reads a checkout in ONE pass — GitHub "owner/name", the branch
+// worktrees should fork from, the branch list and a suggested label/id — so
+// picking a folder fills the Repo tab instead of making the user copy four
+// values by hand.
+//
+// Every unknown is empty rather than guessed: a non-GitHub or unrecognised
+// remote leaves Repo "" (fail-closed — that disables PR checks instead of
+// pointing them at the wrong repository), and a directory that is not a checkout
+// simply contributes nothing.
+//
+// The label/id suggestion is computed HERE rather than in the frontend so the
+// app and the TUI propose the same identity for the same folder.
+func (s *ConfigService) InspectPath(path string) PathInfoDTO {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	b := gitrepo.Branches(ctx, path)
-	if b == nil {
-		return []string{} // marshal as [] rather than null for the frontend
+	info := gitrepo.Inspect(ctx, path)
+
+	out := PathInfoDTO{
+		Path:          strings.TrimSpace(path),
+		IsRepo:        info.IsRepo,
+		Repo:          info.Repo,
+		DefaultBranch: info.DefaultBranch,
+		Branches:      info.Branches,
 	}
-	return b
+	if info.Root != "" {
+		out.Path = info.Root
+	}
+	if out.Branches == nil {
+		out.Branches = []string{} // marshal as [] rather than null for the frontend
+	}
+	out.SuggestedLabel = config.LabelFromPath(out.Path)
+	out.SuggestedID = config.Slug(out.SuggestedLabel)
+	return out
 }
 
 func (s *ConfigService) RemoveProject(name string) error {
@@ -671,6 +973,193 @@ func (s *ConfigService) RemoveProject(name string) error {
 		}
 	}
 	cfg.Projects = out
+	// Removing a STACK sets its members free rather than leaving them naming a
+	// stack that is gone (which Validate rejects): they get their own Linear
+	// and agent settings back, exactly as when dragged out one by one. Their
+	// labels go too — labels only apply to a member, and keeping them made
+	// Validate refuse the whole write.
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Stack == name {
+			cfg.Projects[i].Stack = ""
+			cfg.Projects[i].Labels = nil
+		}
+	}
+	return saveConfig(cfg, path)
+}
+
+// RemoveStack removes a stack and every member not named in keep; the kept
+// ones stay configured as standalone projects (config.RemoveStack).
+func (s *ConfigService) RemoveStack(stack string, keep []string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := cfg.RemoveStack(stack, keep); err != nil {
+		return err
+	}
+	return saveConfig(cfg, path)
+}
+
+// CreateStack adds an empty STACK from a free-text label and returns its id.
+// Unlike AddGroup the id is NOT de-duplicated with a suffix: a stack is a
+// project, its id prefixes session ids and names its worktree folder, so a
+// clash is refused and the human picks another name.
+func (s *ConfigService) CreateStack(label string) (string, error) {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	name, err := cfg.AddStack(label)
+	if err != nil {
+		return "", err
+	}
+	if err := saveConfig(cfg, path); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// StackFolderDTO is what a picked PARENT folder offers a new stack: a suggested
+// stack name and the checkouts nested directly inside it.
+type StackFolderDTO struct {
+	Path           string              `json:"path"`
+	SuggestedLabel string              `json:"suggestedLabel"`
+	Apps           []StackFolderAppDTO `json:"apps"`
+}
+
+// StackFolderAppDTO is one nested checkout. Project names the project already
+// configured at that path (it JOINS the stack rather than being duplicated);
+// Blocked says why it cannot be included at all (it is a stack, or a member of
+// another one), and the form shows it unchecked and disabled.
+type StackFolderAppDTO struct {
+	Path          string `json:"path"`
+	Label         string `json:"label"`
+	Repo          string `json:"repo"`
+	DefaultBranch string `json:"defaultBranch"`
+	Project       string `json:"project"`
+	Blocked       string `json:"blocked"`
+}
+
+// ScanStackFolder reads every checkout directly inside a parent folder with
+// LOCAL git (gitrepo.Scan), so creating a stack from it fills each member's
+// path, repo and default branch instead of making the user add them one by one.
+func (s *ConfigService) ScanStackFolder(path string) StackFolderDTO {
+	path = strings.TrimSpace(path)
+	out := StackFolderDTO{Path: path, SuggestedLabel: config.LabelFromPath(path), Apps: []StackFolderAppDTO{}}
+	if path == "" {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cfg, _, _ := loadConfig() // nil config: nothing is marked as configured
+	for _, info := range gitrepo.Scan(ctx, path) {
+		app := StackFolderAppDTO{
+			Path:          info.Root,
+			Label:         config.LabelFromPath(info.Root),
+			Repo:          info.Repo,
+			DefaultBranch: info.DefaultBranch,
+		}
+		if cfg != nil {
+			if p := cfg.ProjectAtPath(canonicalPath(info.Root), canonicalPath); p != nil {
+				app.Project, app.Label = p.Name, p.DisplayName()
+				switch {
+				case p.IsStack():
+					app.Blocked = "is a stack"
+				case p.InStack():
+					app.Blocked = "already in stack " + cfg.DisplayNameFor(p.Stack)
+				}
+			}
+		}
+		out.Apps = append(out.Apps, app)
+	}
+	return out
+}
+
+// canonicalPath is how two checkout paths are compared: symlinks resolved, so a
+// project saved under a link and the same checkout reached through its real
+// path (or the other way round) are one project. An unresolvable path (gone,
+// unreadable) falls back to its cleaned form.
+func canonicalPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
+// CreateStackFromFolder creates a stack AND its members in one write (see
+// config.AddStackFromFolder): a new project per app, or the existing one
+// joining. All-or-nothing, so a refusal leaves the config untouched.
+func (s *ConfigService) CreateStackFromFolder(label string, apps []StackFolderAppDTO) (string, error) {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	in := make([]config.StackApp, 0, len(apps))
+	for _, a := range apps {
+		in = append(in, config.StackApp{Path: a.Path, Label: a.Label, Repo: a.Repo, DefaultBranch: a.DefaultBranch})
+	}
+	name, err := cfg.AddStackFromFolder(label, in, canonicalPath)
+	if err != nil {
+		return "", err
+	}
+	if err := saveConfig(cfg, path); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// SetProjectStack moves a project into a stack (stack = "" takes it out). It
+// touches ONLY Project.Stack: the member's own Linear filter, agent and
+// write-back keys stay in the file, ignored while it is a member, so leaving
+// the stack gives them back. Refused: an unknown project or stack, a target
+// that is not a stack, and a project that is itself a stack (stacks do not
+// nest).
+func (s *ConfigService) SetProjectStack(project, stack string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	p := cfg.ProjectByName(project)
+	if p == nil {
+		return errors.New("no such project: " + project)
+	}
+	stack = strings.TrimSpace(stack)
+	if stack != "" {
+		if p.IsStack() {
+			return errors.New(project + " is a stack — stacks do not nest")
+		}
+		st := cfg.ProjectByName(stack)
+		if st == nil {
+			return errors.New("no such stack: " + stack)
+		}
+		if !st.IsStack() {
+			return errors.New(stack + " is not a stack")
+		}
+	}
+	if p.Stack == stack {
+		return nil // no write for a no-op move
+	}
+	p.Stack = stack
+	if stack == "" {
+		// Labels only apply to a member (Validate refuses them elsewhere), so a
+		// member with labels could not leave its stack at all.
+		p.Labels = nil
+	}
+	return saveConfig(cfg, path)
+}
+
+// SetStackMemberLabels sets which issues each member of stack is checked out
+// for (member name -> labels; empty = every issue), in one write. It touches
+// ONLY Project.Labels, so a stack form saved beside it cannot clobber a
+// member's own repository settings.
+func (s *ConfigService) SetStackMemberLabels(stack string, labels map[string][]string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := cfg.SetMemberLabels(stack, labels); err != nil {
+		return err
+	}
 	return saveConfig(cfg, path)
 }
 
@@ -699,12 +1188,179 @@ func (s *ConfigService) ValidateLinearKey(key string) error {
 	return err
 }
 
+// LinearKeyStatusDTO describes WHERE the Linear key lives and whether it can be
+// resolved right now — never the key. Source is a human-readable origin
+// ("macOS Keychain (lola-linear)" / "environment variable LINEAR_API_KEY"), so
+// the settings screen can say why a key it cannot see is nonetheless fine.
+type LinearKeyStatusDTO struct {
+	Configured bool   `json:"configured"` // config names a source
+	Resolvable bool   `json:"resolvable"` // that source actually yields a key
+	Source     string `json:"source"`
+	Detail     string `json:"detail"` // why it does not resolve, when it doesn't
+}
+
+// LinearKeyStatus reports the key's origin and health for the settings screen.
+//
+// This exists because the key was settable ONLY in the first-run wizard: neither
+// this app's settings nor the TUI's had a field for it, so a key could never be
+// added to a hand-written config, and rotating one meant editing the Keychain by
+// hand. A daemon with no key fails every poll, which is the exact silent failure
+// the app is supposed to surface.
+func (s *ConfigService) LinearKeyStatus() LinearKeyStatusDTO {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return LinearKeyStatusDTO{Detail: err.Error()}
+	}
+	kc, env := cfg.Linear.APIKeyKeychain, cfg.Linear.APIKeyEnv
+	out := LinearKeyStatusDTO{Configured: kc != "" || env != ""}
+	switch {
+	case kc != "":
+		out.Source = "macOS Keychain (" + kc + ")"
+	case env != "":
+		out.Source = "environment variable " + env
+	default:
+		out.Detail = "no key source configured"
+		return out
+	}
+	// Resolve only to learn IF it works. The value is discarded immediately and
+	// never leaves this function.
+	if _, rerr := secrets.LinearAPIKey(kc, env); rerr != nil {
+		out.Detail = rerr.Error()
+		return out
+	}
+	out.Resolvable = true
+	return out
+}
+
+// ConnectCodeDTO is everything a phone needs to reach this machine's daemon:
+// the scannable token plus the same values as text.
+//
+// Both shapes, deliberately. Code is what the Remote tab renders as a QR; the
+// loose fields are what a human reads out when the camera will not focus, the
+// camera permission was denied, or the client is a Simulator with no camera at
+// all. A QR must be a convenience and never the only way in.
+//
+// Every field here is a secret while Key is set, and Code most of all — it
+// CONTAINS the key. Nothing on this side writes any of it to disk or to a log,
+// and the frontend keeps it behind an explicit reveal.
+type ConnectCodeDTO struct {
+	Code     string   `json:"code"`
+	Hosts    []string `json:"hosts"`
+	Port     int      `json:"port"`
+	Pin      string   `json:"pin"`
+	Key      string   `json:"key"`
+	Insecure bool     `json:"insecure"`
+
+	// Problem names why there is no code in one human sentence — the listener
+	// is off, or nothing bound — so the tab renders a reason in place of the
+	// code. It is a STATE rather than an error precisely because it is
+	// actionable; a build with no bearer-key path at all IS an error, and
+	// arrives as one.
+	Problem string `json:"problem"`
+}
+
+// ConnectCode asks the daemon for the phone listener's connect details
+// (cmd=pairBegin) so the Remote tab can hand them to a phone.
+//
+// It asks the DAEMON rather than reading ~/.lola/device.crt and
+// ~/.lola/remote-dev-key, and that is the whole point of the method existing.
+// Recomputing the pin here would mean calling remote.LoadOrCreateDeviceKey,
+// whose only exported form CREATES an identity when none is there — this
+// process would mint the daemon's TLS identity as a side effect of drawing a
+// settings tab, from the wrong process, even with [remote] disabled. And it
+// would answer about a FILE: the key file is the running daemon's key only when
+// the script that wrote it also started the daemon, so a code rendered from it
+// after a `lola run` from another shell produces a scan the daemon answers with
+// "authenticate first" — which, from the phone, is indistinguishable from a bad
+// camera read. The daemon holds the live value of both facts; only it can
+// answer.
+//
+// The timeout is the short one: pairBegin reads in-memory state and execs
+// nothing.
+func (s *ConfigService) ConnectCode() (ConnectCodeDTO, error) {
+	var data protocol.PairBeginData
+	if err := call(protocol.Request{Cmd: "pairBegin"}, 5*time.Second, &data); err != nil {
+		return ConnectCodeDTO{}, err
+	}
+	return ConnectCodeDTO{
+		Code:     data.Code,
+		Hosts:    data.Hosts,
+		Port:     data.Port,
+		Pin:      data.Pin,
+		Key:      data.Key,
+		Insecure: data.Insecure,
+		Problem:  data.Problem,
+	}, nil
+}
+
+// RegenerateRemoteKey rolls the phone listener's shared bearer key
+// (cmd=regenerateRemoteKey) and returns once the listener has been rebuilt
+// around the new one.
+//
+// It is milestone 1's ONLY revocation, and it is blunt: every paired phone
+// loses access at once, because every paired phone holds the same key. The UI
+// says so before it asks, rather than offering it as routine maintenance —
+// milestone 2's per-device revocation is the precise version, and this command
+// disappears with the rest of the insecure path.
+//
+// Like ConnectCode this asks the daemon rather than writing the file here.
+// Deleting a key file from this process would roll the value on disk and leave
+// the RUNNING listener authenticating with the old one, so the app would report
+// a revocation that had not happened — the single worst outcome for a control
+// whose entire purpose is to stop a key working.
+//
+// The timeout is longer than ConnectCode's because the daemon tears the
+// listener down and binds a new one, which closes live connections.
+func (s *ConfigService) RegenerateRemoteKey() error {
+	return call(protocol.Request{Cmd: "regenerateRemoteKey"}, 15*time.Second, nil)
+}
+
+// SetLinearKey stores a new Linear key and points config.toml at it. The key
+// goes to the macOS Keychain under the same service the first-run wizards use,
+// so a key set here is read identically by the daemon, the TUI and this app;
+// when the Keychain is unavailable it falls back to naming an env var, exactly
+// as Setup does. The returned message says which happened.
+//
+// Deliberately NOT a SettingsDTO field, for the reasons the theme is not one
+// (see below) plus one of its own: a whole-form commit would carry a secret
+// through every save of an unrelated field, and a validation failure elsewhere
+// in the form would silently drop the key the user just typed.
+func (s *ConfigService) SetLinearKey(key string) (string, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", errors.New("empty key")
+	}
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	msg := ""
+	if serr := storeLinearKey(setupKeychainService, key); serr == nil {
+		cfg.Linear.APIKeyKeychain = setupKeychainService
+		cfg.Linear.APIKeyEnv = ""
+		msg = "key stored in the macOS Keychain (service " + setupKeychainService + ")"
+	} else {
+		// Keychain unavailable: name an env var instead. The key itself is NOT
+		// written anywhere — the user must export it — so say so plainly.
+		cfg.Linear.APIKeyEnv = setupEnvVar
+		msg = "couldn't use the Keychain — export the key as " + setupEnvVar + " before starting the daemon"
+	}
+	if cfg.Linear.Endpoint == "" {
+		cfg.Linear.Endpoint = config.DefaultEndpoint
+	}
+	if verr := cfg.Validate(); verr != nil {
+		return "", verr
+	}
+	if serr := saveConfig(cfg, path); serr != nil {
+		return "", serr
+	}
+	return msg, nil
+}
+
 type SetupDTO struct {
 	LinearKey      string `json:"linearKey"`
-	ProjectName    string `json:"projectName"`
-	ProjectPath    string `json:"projectPath"`
-	Repo           string `json:"repo"`
-	DefaultBranch  string `json:"defaultBranch"`
+	Agent          string `json:"agent"`
+	Theme          string `json:"theme"`
 	ConcurrencyCap int    `json:"concurrencyCap"`
 	GlobalCap      int    `json:"globalCap"`
 	PollInterval   string `json:"pollInterval"`
@@ -717,55 +1373,48 @@ type SetupResultDTO struct {
 }
 
 // Setup writes the initial config.toml from the wizard: it stores the Linear key
-// in the Keychain (falling back to an env var by name if that fails), records one
-// project, and sets the caps/interval. The key itself is never written to config.
+// in the Keychain (falling back to an env var by name if that fails) and saves
+// general defaults. Projects are added separately; rerunning setup preserves
+// existing projects and unrelated settings. The key never enters config.toml.
 func (s *ConfigService) Setup(dto SetupDTO) (SetupResultDTO, error) {
-	if strings.TrimSpace(dto.ProjectName) == "" {
-		return SetupResultDTO{}, errors.New("project name is required")
+	key := strings.TrimSpace(dto.LinearKey)
+	if key == "" {
+		return SetupResultDTO{}, errors.New("Linear API key is required")
 	}
-	path, err := config.DefaultPath()
+	cfg, path, err := loadConfig()
 	if err != nil {
 		return SetupResultDTO{}, err
 	}
-
-	cfg := &config.Config{}
-	cfg.Linear.Endpoint = config.DefaultEndpoint
-
-	res := SetupResultDTO{}
-	if err := secrets.StoreLinearAPIKey(setupKeychainService, dto.LinearKey); err == nil {
-		cfg.Linear.APIKeyKeychain = setupKeychainService
-		res.KeychainStored = true
-		res.Message = "key stored in the macOS Keychain (service " + setupKeychainService + ")"
-	} else {
-		// Keychain unavailable (or non-darwin): fall back to an env var by name.
-		cfg.Linear.APIKeyEnv = setupEnvVar
-		res.EnvVar = setupEnvVar
-		res.Message = "couldn't use the Keychain — export the key as " + setupEnvVar + " before starting the daemon"
+	if dto.ConcurrencyCap < 0 || dto.GlobalCap < 0 {
+		return SetupResultDTO{}, errors.New("agent limits must be positive whole numbers")
 	}
-
 	cfg.Defaults.ConcurrencyCap = orDefault(dto.ConcurrencyCap, 2)
 	cfg.Defaults.GlobalCap = orDefault(dto.GlobalCap, 4)
-	interval := 60 * time.Second
-	if dto.PollInterval != "" {
-		if d, perr := time.ParseDuration(dto.PollInterval); perr == nil {
-			interval = d
+	cfg.Defaults.Agent = strings.TrimSpace(dto.Agent)
+	cfg.UI.Theme = strings.TrimSpace(dto.Theme)
+	interval := config.DefaultPollInterval
+	if value := strings.TrimSpace(dto.PollInterval); value != "" {
+		interval, err = time.ParseDuration(value)
+		if err != nil || interval < config.MinPollInterval {
+			return SetupResultDTO{}, errors.New("poll interval must be a duration of at least 30s")
 		}
 	}
 	cfg.Defaults.PollInterval = interval
-
-	branch := dto.DefaultBranch
-	if branch == "" {
-		branch = config.DefaultBranchName
-	}
-	cfg.Projects = []config.Project{{
-		Name:          dto.ProjectName,
-		Path:          dto.ProjectPath,
-		Repo:          dto.Repo,
-		DefaultBranch: branch,
-	}}
-
 	if err := cfg.Validate(); err != nil {
-		return res, err
+		return SetupResultDTO{}, err
+	}
+
+	res := SetupResultDTO{}
+	if err := storeLinearKey(setupKeychainService, key); err == nil {
+		cfg.Linear.APIKeyKeychain = setupKeychainService
+		cfg.Linear.APIKeyEnv = ""
+		res.KeychainStored = true
+		res.Message = "key stored in the macOS Keychain (service " + setupKeychainService + ")"
+	} else {
+		cfg.Linear.APIKeyKeychain = ""
+		cfg.Linear.APIKeyEnv = setupEnvVar
+		res.EnvVar = setupEnvVar
+		res.Message = "couldn't use the Keychain — export the key as " + setupEnvVar + " before starting the daemon"
 	}
 	if err := cfg.Save(path); err != nil {
 		return res, err
@@ -822,4 +1471,227 @@ func nonEmpty(in []string) []string {
 		}
 	}
 	return out
+}
+
+// --- project groups & manual order ------------------------------------------
+//
+// A project's place in the sidebar is TWO facts, and both live in config.toml:
+// which [[group]] it is filed under (Project.Group) and where it sits in the
+// order (its index in the [[project]] array — the order every surface already
+// renders, TUI included, so a drag in the app reorders the TUI's list too).
+//
+// The frontend therefore never sends a delta. It computes the whole arrangement
+// and sends it as ONE layout, which is applied atomically or not at all: a drop
+// that moved a project between groups is a single write, and a layout naming a
+// project or group that no longer exists is refused rather than half-applied.
+
+// ProjectPlacementDTO is one row of the sidebar arrangement: a project id and
+// the group it belongs to ("" = top level).
+type ProjectPlacementDTO struct {
+	Name  string `json:"name"`
+	Group string `json:"group"`
+}
+
+// ProjectLayoutDTO is the WHOLE sidebar arrangement — every configured project
+// in render order with its group, and every group in render order. Both lists
+// are complete: a partial layout is a bug in the caller, not a merge to
+// attempt, because the array positions ARE the order.
+type ProjectLayoutDTO struct {
+	Groups   []GroupDTO            `json:"groups"`
+	Projects []ProjectPlacementDTO `json:"projects"`
+}
+
+// GroupDTO is one [[group]] as the frontend sees it. Position is its index
+// among the top-level rows (see config.Group) — the sidebar draws folders beside
+// the projects, so a group's place is a value of its own.
+type GroupDTO struct {
+	Name      string `json:"name"`
+	Label     string `json:"label"`
+	Position  int    `json:"position"`
+	Collapsed bool   `json:"collapsed"`
+}
+
+// AddGroup creates an empty group from a free-text label and returns its id.
+// The id is derived with config.Slug — the same transform a project id goes
+// through — and de-duplicated with a numeric suffix, so two folders a human
+// would both call "Clients" can coexist instead of one silently replacing the
+// other. Empty groups are the point: the folder is created first and projects
+// are dragged into it after.
+func (s *ConfigService) AddGroup(label string) (string, error) {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	label = strings.TrimSpace(label)
+	base := config.Slug(label)
+	if base == "" {
+		return "", errors.New("group name is required")
+	}
+	name := base
+	for i := 2; cfg.GroupByName(name) != nil; i++ {
+		name = base + "-" + strconv.Itoa(i)
+	}
+	// The new folder lands at the END of the top-level list: after the ungrouped
+	// projects and after the folders that already exist. Anywhere else would
+	// move rows the user did not touch.
+	ungrouped := 0
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Group == "" {
+			ungrouped++
+		}
+	}
+	g := config.Group{Name: name, Position: ungrouped + len(cfg.Groups)}
+	if label != name {
+		// A label identical to the id carries nothing — DisplayName falls back
+		// to the id — so it is not written, exactly as a project's is not.
+		g.Label = label
+	}
+	cfg.Groups = append(cfg.Groups, g)
+	if err := saveConfig(cfg, path); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// RenameGroup changes a group's DISPLAY label only. The id stays put on purpose:
+// it is what every [[project]].group references, and rewriting it would have to
+// rewrite those in the same breath for no gain — unlike a project id, a group id
+// names no directory, tmux session or state file, so nothing reads it but this
+// table.
+func (s *ConfigService) RenameGroup(name, label string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	g := cfg.GroupByName(name)
+	if g == nil {
+		return errors.New("no such group: " + name)
+	}
+	label = strings.TrimSpace(label)
+	if config.Slug(label) == "" {
+		return errors.New("group name is required")
+	}
+	if label == g.Name {
+		g.Label = ""
+	} else {
+		g.Label = label
+	}
+	return saveConfig(cfg, path)
+}
+
+// RemoveGroup deletes the folder and files its members at the top level. It
+// never touches a project beyond that reference: a group is arrangement, so
+// deleting one must not be able to lose a project, its worktrees or its
+// sessions.
+func (s *ConfigService) RemoveGroup(name string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.GroupByName(name) == nil {
+		return errors.New("no such group: " + name)
+	}
+	out := cfg.Groups[:0]
+	for _, g := range cfg.Groups {
+		if g.Name != name {
+			out = append(out, g)
+		}
+	}
+	cfg.Groups = out
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Group == name {
+			cfg.Projects[i].Group = ""
+		}
+	}
+	return saveConfig(cfg, path)
+}
+
+// SetGroupCollapsed persists a folder's disclosure state. It lives in
+// config.toml rather than in the web view's storage so the app and a future TUI
+// rendering agree, and so it survives a reinstall like every other arrangement
+// key.
+func (s *ConfigService) SetGroupCollapsed(name string, collapsed bool) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	g := cfg.GroupByName(name)
+	if g == nil {
+		return errors.New("no such group: " + name)
+	}
+	if g.Collapsed == collapsed {
+		return nil // no write for a no-op toggle
+	}
+	g.Collapsed = collapsed
+	return saveConfig(cfg, path)
+}
+
+// SetProjectLayout applies a whole sidebar arrangement: the group order, and
+// every project's group plus its position. It FAILS CLOSED — the projects list
+// must be an exact permutation of what is configured and the groups list an
+// exact permutation of the configured groups, or nothing is written.
+//
+// That strictness is the point. The layout is computed by a drag handler in the
+// frontend against a snapshot that may be a config reload behind; applying it
+// loosely would let a stale layout resurrect a project the user just removed,
+// or drop one it had not heard of yet. A refused layout costs one drag, which
+// the next render corrects.
+func (s *ConfigService) SetProjectLayout(dto ProjectLayoutDTO) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+
+	// Groups first: the projects below reference them.
+	byGroup := make(map[string]config.Group, len(cfg.Groups))
+	for _, g := range cfg.Groups {
+		byGroup[g.Name] = g
+	}
+	if len(dto.Groups) != len(byGroup) {
+		return errors.New("layout is out of date: the configured groups have changed")
+	}
+	groups := make([]config.Group, 0, len(dto.Groups))
+	seenGroup := make(map[string]bool, len(dto.Groups))
+	for _, gd := range dto.Groups {
+		cur, ok := byGroup[gd.Name]
+		if !ok || seenGroup[gd.Name] {
+			return errors.New("layout is out of date: the configured groups have changed")
+		}
+		seenGroup[gd.Name] = true
+		// Only the PLACE (and the disclosure state, which rides along with a
+		// drag) comes from the layout. The label is the rename path's to change.
+		cur.Position = gd.Position
+		cur.Collapsed = gd.Collapsed
+		groups = append(groups, cur)
+	}
+
+	byProject := make(map[string]int, len(cfg.Projects))
+	for i := range cfg.Projects {
+		byProject[cfg.Projects[i].Name] = i
+	}
+	if len(dto.Projects) != len(byProject) {
+		return errors.New("layout is out of date: the configured projects have changed")
+	}
+	projects := make([]config.Project, 0, len(dto.Projects))
+	seenProject := make(map[string]bool, len(dto.Projects))
+	for _, pd := range dto.Projects {
+		idx, ok := byProject[pd.Name]
+		if !ok || seenProject[pd.Name] {
+			return errors.New("layout is out of date: the configured projects have changed")
+		}
+		seenProject[pd.Name] = true
+		p := cfg.Projects[idx]
+		if g := strings.TrimSpace(pd.Group); g == "" {
+			p.Group = ""
+		} else if seenGroup[g] {
+			p.Group = g
+		} else {
+			return errors.New("layout names group " + g + ", which is not configured")
+		}
+		projects = append(projects, p)
+	}
+
+	cfg.Groups = groups
+	cfg.Projects = projects
+	return saveConfig(cfg, path)
 }

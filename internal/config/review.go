@@ -1,6 +1,10 @@
 package config
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/sushidev-team/lola/internal/reviewprofile"
+)
 
 // The [review] table configures the P9 "QA buddy": an EVENT-TRIGGERED CodeRabbit
 // review pass, NOT a persistent second agent. When enabled, lola execs the
@@ -21,6 +25,23 @@ import "strings"
 // omitted). A CodeRabbit review can take a while, so the default is generous; the
 // daemon aborts the pass after this many seconds and skips the review.
 const DefaultReviewTimeoutSeconds = 300
+
+// DefaultClaudeReviewTimeoutSeconds is the same cap for a claude-session pass,
+// which needs a much larger one: that provider reads the PR's files (its prompt
+// tells the reviewer to verify a claim against the surrounding function and its
+// callers before reporting it), so a real PR routinely takes 7-13 minutes where
+// a CodeRabbit CLI pass is done in a couple. At 300s every pass on a
+// medium-sized PR died on the deadline, and since the once-per-PR guard is
+// stamped before the exec, that PR was then never reviewed at all. The pass runs
+// on its own worker (reviewworker.go), so a long review costs nobody else time.
+const DefaultClaudeReviewTimeoutSeconds = 900
+
+// DefaultReviewBaseFlag is the flag a cli-family provider names the PR's base
+// branch with on its argv (`… --base main`). It is what CodeRabbit takes and
+// what most review CLIs take; a tool that wants a different one sets
+// `base_flag`, and a tool that takes no base argument sets `base_flag = ""`
+// (which appends nothing — see review.Client.BaseFlag).
+const DefaultReviewBaseFlag = "--base"
 
 // Default hand-off strings for a completed review. ReviewToAgentPreamble is a
 // plain instruction prepended to the (sanitized) findings before they are typed
@@ -91,7 +112,8 @@ type fileReviewConfig struct {
 	// A catalog-only file leaves every scalar pointer above nil, which is what
 	// hasLegacyReviewScalars keys off so resolveReview does not materialize a
 	// spurious legacy [review] block. See internal/config/reviewprovider.go.
-	Provider []fileReviewProvider `toml:"provider,omitempty"`
+	Provider []fileReviewProvider    `toml:"provider,omitempty"`
+	Profile  []reviewprofile.Profile `toml:"profile,omitempty"`
 }
 
 // hasLegacyReviewScalars reports whether any legacy [review] scalar key is

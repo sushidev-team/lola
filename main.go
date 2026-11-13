@@ -3,19 +3,29 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/daemon"
 	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/review"
+	"github.com/sushidev-team/lola/internal/reviewagent"
+	"github.com/sushidev-team/lola/internal/reviewrun"
+	"github.com/sushidev-team/lola/internal/taskboard"
 	"github.com/sushidev-team/lola/internal/tui"
 )
 
@@ -57,16 +67,36 @@ func main() {
 		killCmd(),
 		reviveCmd(),
 		answerCmd(),
+		broadcastCmd(),
 		reviewCmd(),
+		reviewPackageCmd(),
+		planCmd(),
+		goalCmd(),
+		learnCmd(),
+		profileCmd(),
+		comparisonCmd(),
+		bestofCmd(),
+		switchAgentCmd(),
+		checkpointCmd(),
 		coderabbitCmd(),
 		configCmd(),
 		logsCmd(),
 		doctorCmd(),
 		setupCmd(),
 		hookCmd(),
+		reportCmd(),
+		sshCmd(),
+		sshPostVerb(), // lola post: the same verb, because every agent is told about it
+		reviewRunCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
+		// lola ssh's exit codes are its contract with the agent, and it has already
+		// said why on stderr.
+		var ex sshExitError
+		if errors.As(err, &ex) {
+			os.Exit(ex.code)
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -146,14 +176,15 @@ func attachCmd() *cobra.Command {
 // changes) is kept and the command exits nonzero telling you to rerun with
 // --force; --force removes it anyway. The outcome message is printed by Send.
 func killCmd() *cobra.Command {
-	var force bool
+	var force, keep bool
 	cmd := &cobra.Command{
 		Use: "kill <session-id>", Short: "Kill a session; remove its clean worktree (--force removes a dirty one)", Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {
-			return tui.Send(fmt.Sprintf(`{"cmd":"kill","session":%q,"force":%t}`, a[0], force))
+			return tui.Send(fmt.Sprintf(`{"cmd":"kill","session":%q,"force":%t,"keepWorktree":%t}`, a[0], force, keep))
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "remove the worktree even with uncommitted changes")
+	cmd.Flags().BoolVar(&keep, "keep-worktree", false, "stop the agent and its tmux sessions but keep the worktree (revive later)")
 	return cmd
 }
 
@@ -201,6 +232,123 @@ func answerCmd() *cobra.Command {
 	}
 }
 
+// broadcastCmd sends one message to every live coding agent of a project
+// (`lola broadcast <project> <text...>`) — "rebase on main", "stop touching X".
+// Agents resting at their prompt get it now; busy ones get it queued and
+// delivered when they are idle. Send prints the delivered/deferred split.
+func broadcastCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "broadcast <project> <text...>",
+		Short: "Send one message to every live agent of a project (busy ones get it when idle)",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			args, err := json.Marshal(protocol.BroadcastArgs{Project: a[0], Message: strings.Join(a[1:], " ")})
+			if err != nil {
+				return err
+			}
+			raw, err := json.Marshal(protocol.Request{Cmd: "broadcast", Args: args})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
+}
+
+// switchAgentCmd replaces a session's coding agent with a different kind on the
+// same worktree and branch (`lola switch-agent <session> <claude|codex|
+// opencode>`) — the manual half of the agent fallback: the old pane is stopped,
+// a .lola/handoff.md briefing is written, and the new agent launches fresh on
+// the kept checkout. Send prints the daemon's outcome or its refusal (unknown
+// session, shell session, same kind, binary missing).
+func switchAgentCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "switch-agent <session> <claude|codex|opencode>",
+		Short: "Switch a session's coding agent to a different kind on the same worktree",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			args, err := json.Marshal(protocol.SwitchAgentArgs{Session: a[0], Agent: a[1]})
+			if err != nil {
+				return err
+			}
+			raw, err := json.Marshal(protocol.Request{Cmd: "switchAgent", Args: args})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
+}
+
+// checkpointCmd is `lola checkpoint list|diff|restore|fork`: the CLI face of
+// turn checkpoints — the worktree snapshot the daemon records every time a
+// session's agent ends a turn. Restore puts the files back (the current state is
+// kept as a new checkpoint first, so it is undoable); fork starts a new agent
+// session from one.
+func checkpointCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "checkpoint",
+		Short: "List, inspect, restore or fork from a session's turn checkpoints",
+	}
+	send := func(name, session string, seq int, agentKind string) error {
+		args, err := json.Marshal(protocol.CheckpointArgs{Session: session, Seq: seq, Agent: agentKind})
+		if err != nil {
+			return err
+		}
+		raw, err := json.Marshal(protocol.Request{Cmd: name, Args: args})
+		if err != nil {
+			return err
+		}
+		return tui.Send(string(raw))
+	}
+	seqArg := func(s string) (int, error) {
+		n, err := strconv.Atoi(strings.TrimPrefix(s, "#"))
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("checkpoint number must be a positive integer, got %q", s)
+		}
+		return n, nil
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use: "list <session>", Short: "List a session's checkpoints, oldest first", Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			raw, err := json.Marshal(protocol.Request{Cmd: "checkpoints", Session: a[0]})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	})
+	for _, sub := range []struct{ use, short, cmd string }{
+		{"diff <session> <n>", "Show what the turn ending in checkpoint n changed", "checkpointDiff"},
+		{"restore <session> <n>", "Restore the worktree's files to checkpoint n (undoable; refused mid-turn)", "restoreCheckpoint"},
+	} {
+		cmd.AddCommand(&cobra.Command{
+			Use: sub.use, Short: sub.short, Args: cobra.ExactArgs(2),
+			RunE: func(c *cobra.Command, a []string) error {
+				n, err := seqArg(a[1])
+				if err != nil {
+					return err
+				}
+				return send(sub.cmd, a[0], n, "")
+			},
+		})
+	}
+	var agentKind string
+	fork := &cobra.Command{
+		Use: "fork <session> <n>", Short: "Start a new agent session from checkpoint n on its own branch", Args: cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			n, err := seqArg(a[1])
+			if err != nil {
+				return err
+			}
+			return send("forkCheckpoint", a[0], n, agentKind)
+		},
+	}
+	fork.Flags().StringVar(&agentKind, "agent", "", "coding agent for the fork (claude|codex|opencode); default: the parent's")
+	cmd.AddCommand(fork)
+	return cmd
+}
+
 // reviewCmd forces the P9 QA review pass for one session now (`lola review
 // <session>`): it runs a bounded CodeRabbit review of the session's worktree,
 // ignoring the once-per-PR guard, and routes the findings (human notification +
@@ -222,7 +370,7 @@ func reviewCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&provider, "provider", "",
-		"which pass provider to force (coderabbit-cli | claude-session); default: the primary enabled one")
+		"which pass provider to force ("+strings.Join(config.ReviewProviderPassKinds(), " | ")+"); default: the primary enabled one")
 	return cmd
 }
 
@@ -253,7 +401,7 @@ func coderabbitCmd() *cobra.Command {
 //     normalized event and write the payload to stdin.
 //   - The opencode plugin (OpenCodePluginJS) also calls it directly with a
 //     normalized event ("stop"/"notification"/"tool_use") and empty stdin.
-//   - Codex's `notify` (CodexConfigTOML) calls `lola hook codex-notify
+//   - Codex's per-process `notify` override calls `lola hook codex-notify
 //     '<json>'`, passing its payload as the NEXT argv element, not stdin; we
 //     translate it via agent.ParseCodexNotify and skip unknown notify types.
 //
@@ -272,6 +420,13 @@ func hookCmd() *cobra.Command {
 			event := ""
 			if len(args) > 0 {
 				event = args[0]
+			}
+			// The status line (Claude Code only): record the subscription
+			// limits and print the user's own status line. Needs no session
+			// and never touches the socket.
+			if event == "statusline" {
+				hook.StatusLine(c.InOrStdin(), c.OutOrStdout())
+				return nil
 			}
 			// Codex delivers its notify payload as the next argv element, not
 			// stdin. Normalize it; an unknown notify type maps to "" — ignore
@@ -302,6 +457,51 @@ func hookCmd() *cobra.Command {
 	}
 }
 
+// reportCmd is the coding agent's self-report channel: `lola report <verb>
+// [args]` updates the session's board (todo list, phase, progress, blocker,
+// note, checks) shown in the app and the TUI. The verbs are parsed and
+// validated by the DAEMON (internal/board), so this only forwards argv.
+//
+// Exit status follows from who the caller is — an agent, mid-turn:
+//   - the daemon REJECTED the report (bad verb, bad index): exit 1 with its
+//     usage message, so the agent learns the right call;
+//   - the daemon could not be REACHED (not a lola session, dead socket, an old
+//     daemon): a one-line stderr note and exit 0, because a progress report is
+//     never worth failing the command an agent chained it onto.
+//
+// DisableFlagParsing so a todo text starting with "-" is a todo, not a flag.
+func reportCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:                "report <verb> [args]",
+		Short:              "Report the agent's own progress to lola (todo, phase, progress, blocked, note, check)",
+		Long:               board.Usage,
+		DisableFlagParsing: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+				fmt.Fprintln(c.OutOrStdout(), board.Usage)
+				return nil
+			}
+			if len(args) == 2 && args[0] == "task" && (args[1] == "help" || args[1] == "--help") {
+				fmt.Fprintln(c.OutOrStdout(), taskboard.Briefing("lola"))
+				return nil
+			}
+			data, err := hook.ReportData(args)
+			if err == nil && len(args) > 0 && args[0] == "task" && len(data) > 0 {
+				fmt.Fprintln(c.OutOrStdout(), string(data))
+			}
+			switch {
+			case err == nil:
+				return nil
+			case errors.Is(err, hook.ErrNoDaemon):
+				fmt.Fprintln(c.ErrOrStderr(), "lola report: not delivered:", err)
+				return nil
+			default:
+				return err
+			}
+		},
+	}
+}
+
 // maxHookField caps every extracted hook payload field before it reaches the
 // wire: enough for any real notification/tool name, small enough that a
 // hostile payload cannot bloat the socket line or the session store.
@@ -321,7 +521,26 @@ func capHookField(s string) string {
 // structured fields lola uses: tool name (PostToolUse), notification message,
 // submitted prompt, the transcript path + agent conversation id, and the most
 // specific reason. Any read or parse failure yields the zero payload.
+//
+// A TTY on stdin is never drained: TTYs do not EOF, so io.ReadAll on one
+// blocks forever — and the blocked read competes with the agent TUI for the
+// pane's keystrokes. Diagnosed live: two `lola hook stop` children of an
+// opencode agent (the plugin's Bun `$` shell inherits the pane TTY as stdin)
+// sat blocked in read() for 7+ minutes eating ~4 of every 5 keystrokes the
+// user typed into the TUI, and never delivered their events to the daemon
+// (they block BEFORE the socket post — the source of stale AtPrompt states).
+// A character-device check is the classic isatty guard: no piped payload is
+// coming, so post immediately with an empty payload. Claude's path is
+// unaffected — it pipes JSON on stdin (a pipe, not a char device) and closes
+// it after. Codex is covered too: its payload arrives as argv
+// (set by the runtime), and stdin there is whatever codex hands the notify
+// program, so reading it was always pointless.
 func hookPayload(r io.Reader) protocol.HookPayload {
+	if f, ok := r.(*os.File); ok {
+		if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+			return protocol.HookPayload{}
+		}
+	}
 	raw, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
 		return protocol.HookPayload{}
@@ -498,4 +717,109 @@ func logsCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow the log")
 	return cmd
+}
+
+// reviewRunCmd is the CHILD half of a visible review pass (hidden, internal):
+// the daemon starts it inside a tmux session named "<session>-review" so the
+// pass can be watched while it runs, and reads its result from --state rather
+// than from the pane (a pane is a display — it wraps, scrolls and is eventually
+// overwritten, so nothing may be parsed back out of it).
+//
+// Everything it prints is for a HUMAN: a header, the streamed progress lines,
+// and the findings under a heading. The daemon meanwhile gets the findings
+// verbatim plus an outcome class from the two files reviewrun writes. It always
+// exits 0 — the status file, not the exit code, is the signal, and a nonzero
+// exit would only make tmux tear the pane down before anyone could read it.
+func reviewRunCmd() *cobra.Command {
+	var (
+		kind     string
+		dir      string
+		base     string
+		state    string
+		model    string
+		command  string
+		baseFlag string
+		timeout  int
+	)
+	cmd := &cobra.Command{
+		Use:    "review-run",
+		Short:  "Run one review pass in this terminal (internal)",
+		Hidden: true,
+		RunE: func(c *cobra.Command, _ []string) error {
+			if dir == "" || base == "" || state == "" {
+				return fmt.Errorf("--dir, --base and --state are required")
+			}
+			out := c.OutOrStdout()
+			fmt.Fprintf(out, "lola review — %s\n%s onto %s\n\n", kind, dir, base)
+
+			findings, err := runVisibleReview(c.Context(), kind, dir, base, model, command, baseFlag, timeout, out)
+			printReviewOutcome(out, findings, err)
+			if werr := reviewrun.Write(state, findings, err); werr != nil {
+				fmt.Fprintf(out, "\n! could not hand the result back to lola: %v\n", werr)
+			}
+			holdPane(out)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&kind, "kind", "claude-session",
+		"provider kind: "+strings.Join(config.ReviewProviderPassKinds(), " | "))
+	cmd.Flags().StringVar(&dir, "dir", "", "worktree to review in")
+	cmd.Flags().StringVar(&base, "base", "", "base branch to diff against")
+	cmd.Flags().StringVar(&state, "state", "", "directory to write findings + status into")
+	cmd.Flags().StringVar(&model, "model", "", "optional --model for an agent kind")
+	cmd.Flags().StringVar(&command, "command", "", "argv for a cli kind (required for custom-cli)")
+	cmd.Flags().StringVar(&baseFlag, "base-flag", config.DefaultReviewBaseFlag,
+		"cli kinds: flag the base branch is passed with; empty appends no base at all")
+	cmd.Flags().IntVar(&timeout, "timeout-seconds", 0, "hard cap on the pass; 0 = the client default")
+	return cmd
+}
+
+// runVisibleReview dispatches to the right client's STREAMING entry point, so
+// the pane shows work as it happens instead of ten silent minutes. The dispatch
+// is on the kind's FAMILY (config.ReviewAgentFor), so a new review agent needs no
+// case of its own here.
+func runVisibleReview(ctx context.Context, kind, dir, base, model, command, baseFlag string, timeout int, out io.Writer) (string, error) {
+	if a, isAgent := config.ReviewAgentFor(kind); isAgent {
+		cl := &reviewagent.Client{Agent: agent.Kind(a), Model: model}
+		if timeout > 0 {
+			cl.Timeout = time.Duration(timeout) * time.Second
+		}
+		return cl.ReviewStream(ctx, dir, base, out)
+	}
+	cl := &review.Client{BaseFlag: baseFlag}
+	if argv := (config.ReviewConfig{Command: command}).CommandArgs(); len(argv) > 0 {
+		cl.Bin, cl.Args = argv[0], argv[1:] // ReviewStream appends the base flag itself
+	}
+	if timeout > 0 {
+		cl.Timeout = time.Duration(timeout) * time.Second
+	}
+	return cl.ReviewStream(ctx, dir, base, out)
+}
+
+// printReviewOutcome closes the pane's transcript with what a human wants to
+// see: the findings in full, or why there are none.
+func printReviewOutcome(out io.Writer, findings string, err error) {
+	switch {
+	case err != nil:
+		fmt.Fprintf(out, "\n✗ the review could not run: %v\n", err)
+	case strings.TrimSpace(findings) == "":
+		fmt.Fprintln(out, "\n✓ clean — no findings.")
+	default:
+		fmt.Fprintf(out, "\n─── findings ───\n\n%s\n", findings)
+	}
+}
+
+// holdPane keeps the tmux pane alive after the pass so its output stays
+// readable; the daemon replaces the whole session on the next review, and
+// killing the worker session takes this one with it.
+//
+// It blocks on a SIGNAL, never on a bare `select {}`: with every other goroutine
+// parked, Go's deadlock detector would panic the process, tear the pane down and
+// destroy exactly the output this exists to preserve. Waiting on a signal is
+// also what makes the advertised ctrl-c work.
+func holdPane(out io.Writer) {
+	fmt.Fprintln(out, "\n(this pane stays until the next review — ctrl-c to close it)")
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
 }

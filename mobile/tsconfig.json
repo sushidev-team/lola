@@ -1,0 +1,38 @@
+{
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    /* The golden wire vectors are imported as JSON by the wire package's tests. */
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "types": ["vitest/globals", "@testing-library/jest-dom"],
+    /*
+     * The type-level half of vite.config.ts's alias table. The two must agree or
+     * the editor and the bundler disagree about what a specifier means — and
+     * only one of them fails the build.
+     *
+     * Order is by specificity, as it is there: TypeScript picks the longest
+     * matching pattern, so the "@bindings/desktop/models" entry wins over
+     * "@bindings/desktop" for that one specifier.
+     */
+    "paths": {
+      "@bindings/desktop/models": [
+        "../desktop/frontend/bindings/github.com/sushidev-team/lola/desktop/models.ts"
+      ],
+      "@bindings/internal/protocol": [
+        "../desktop/frontend/bindings/github.com/sushidev-team/lola/internal/protocol/index.ts"
+      ],
+      "@bindings/desktop": ["./src/wailsshim/desktop.ts"],
+      "@wailsio/runtime": ["./src/wailsshim/runtime.ts"],
+      "@bindings/*": ["../desktop/frontend/bindings/github.com/sushidev-team/lola/*"],
+      "$lib/*": ["../desktop/frontend/src/lib/*"],
+      "@mobile/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "vite.config.ts", "capacitor.config.ts"]
+}

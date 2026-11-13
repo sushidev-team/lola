@@ -112,3 +112,33 @@ func TestStatusAgentValidation(t *testing.T) {
 		t.Errorf("Validate(enabled) = %v, want nil", err)
 	}
 }
+
+func TestStatusAgentProviderDefaultsAndRoundTrip(t *testing.T) {
+	for _, provider := range []string{"claude", "codex", "opencode"} {
+		t.Run(provider, func(t *testing.T) {
+			c := loadToml(t, statusAgentBaseToml+"\n[statusagent]\nenabled = true\nagent = \""+provider+"\"\n")
+			wantModel := ""
+			if provider == "claude" {
+				wantModel = DefaultStatusAgentModel
+			}
+			if c.StatusAgent.Agent != provider || c.StatusAgent.Model != wantModel {
+				t.Fatalf("provider defaults: %+v", c.StatusAgent)
+			}
+			out := filepath.Join(t.TempDir(), "out.toml")
+			if err := c.Save(out); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := Load(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reloaded.StatusAgent != c.StatusAgent {
+				t.Fatalf("round trip: %+v != %+v", reloaded.StatusAgent, c.StatusAgent)
+			}
+		})
+	}
+	c := loadToml(t, statusAgentBaseToml+"\n[statusagent]\nagent = \"unsupported\"\n")
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "statusagent.agent") {
+		t.Fatalf("invalid provider accepted: %v", err)
+	}
+}

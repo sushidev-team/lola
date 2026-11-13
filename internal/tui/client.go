@@ -20,6 +20,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/timefmt"
 )
 
 var errDaemonDown = errors.New("daemon not running (start with: lola run)")
@@ -155,7 +156,31 @@ func Send(raw string) error {
 		} else {
 			fmt.Println("ok")
 		}
-	case "open":
+	case "checkpoints":
+		var d protocol.CheckpointsData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad checkpoints data: %w", err)
+		}
+		fmt.Print(renderCheckpoints(&d))
+	case "checkpointDiff":
+		var d protocol.DiffData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad diff data: %w", err)
+		}
+		fmt.Print(renderDiffText(&d))
+	case "restoreCheckpoint":
+		var d protocol.RestoreCheckpointData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad restore data: %w", err)
+		}
+		fmt.Println(d.Message)
+	case "broadcast":
+		var d protocol.BroadcastData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad broadcast data: %w", err)
+		}
+		fmt.Print(renderBroadcast(&d))
+	case "open", "forkCheckpoint":
 		var d protocol.OpenData
 		if err := json.Unmarshal(resp.Data, &d); err != nil {
 			return fmt.Errorf("bad open data: %w", err)
@@ -169,6 +194,62 @@ func Send(raw string) error {
 		fmt.Println("ok")
 	}
 	return nil
+}
+
+// renderBroadcast prints a broadcast's outcome: the summary line, then which
+// sessions got it now and which will get it when their agent is idle.
+func renderBroadcast(d *protocol.BroadcastData) string {
+	var b strings.Builder
+	b.WriteString(d.Message + "\n")
+	for _, g := range []struct {
+		label string
+		ids   []string
+	}{{"delivered", d.Delivered}, {"deferred", d.Queued}, {"skipped", d.Skipped}} {
+		if len(g.ids) > 0 {
+			fmt.Fprintf(&b, "  %-9s %s\n", g.label+":", strings.Join(g.ids, ", "))
+		}
+	}
+	return b.String()
+}
+
+// renderCheckpoints prints a session's checkpoints, newest last.
+func renderCheckpoints(d *protocol.CheckpointsData) string {
+	if len(d.Checkpoints) == 0 {
+		return "no checkpoints yet — one is recorded each time the agent ends a turn\n"
+	}
+	var b strings.Builder
+	for _, c := range d.Checkpoints {
+		fmt.Fprintf(&b, "#%-4d %s  %-8.8s  %s\n", c.Seq, c.Created.Local().Format("2006-01-02 15:04:05"), c.SHA, c.Label)
+	}
+	if !d.Restorable {
+		b.WriteString("(the agent is mid-turn — restore is refused until it finishes)\n")
+	}
+	return b.String()
+}
+
+// renderDiffText prints a DiffData as a plain unified diff.
+func renderDiffText(d *protocol.DiffData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "against %s (%.8s), %d file(s)\n", d.Base, d.MergeBase, len(d.Files))
+	for _, f := range d.Files {
+		old := f.OldPath
+		if old == "" {
+			old = f.Path
+		}
+		fmt.Fprintf(&b, "--- a/%s\n+++ b/%s\n", old, f.Path)
+		switch {
+		case f.Binary:
+			b.WriteString("(binary file)\n")
+		case f.TooLarge:
+			b.WriteString("(diff too large to show)\n")
+		default:
+			b.WriteString(f.Patch)
+		}
+	}
+	if d.Truncated {
+		b.WriteString("(truncated — too large to show in full)\n")
+	}
+	return b.String()
 }
 
 func renderStatus(d *protocol.StatusData) string {
@@ -190,6 +271,9 @@ func renderStatus(d *protocol.StatusData) string {
 		})
 	}
 	b.WriteString(renderTable([]string{"POLL", "ENABLED", "LAST RUN", "LAST SPAWN", "RUNNING", "ERROR"}, rows))
+	if s := spendSummary(d.Usage); s != "" {
+		b.WriteString("\n" + s)
+	}
 	return b.String()
 }
 
@@ -200,6 +284,12 @@ func renderMatches(d *protocol.PollOnceData) string {
 		mode = " (dry-run)"
 	}
 	fmt.Fprintf(&b, "poll %s%s: %d match(es)\n\n", d.Poll, mode, len(d.Matches))
+	for _, pr := range d.Problems {
+		b.WriteString(badText.Render("✗ "+pr) + "\n")
+	}
+	if len(d.Problems) > 0 {
+		b.WriteString("\n")
+	}
 	rows := make([][]string, 0, len(d.Matches))
 	for _, m := range d.Matches {
 		rows = append(rows, []string{m.Identifier, m.Title, m.Action, m.Reason})
@@ -269,20 +359,7 @@ func fmtAgo(t time.Time) string {
 	if t.IsZero() {
 		return "-"
 	}
-	d := time.Since(t)
-	if d < 0 {
-		d = 0
-	}
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return t.Local().Format("2006-01-02 15:04")
-	}
+	return timefmt.Phrase(t, time.Now())
 }
 
 // Logs prints daemon.log lines, filtered to lines containing "[<poll>]" when
@@ -364,4 +441,21 @@ func Logs(poll string, follow bool) error {
 			}
 		}
 	}
+}
+
+// Request sends one request to the daemon and returns its Data payload, or the
+// daemon's error. For CLI subcommands that act on the reply themselves instead
+// of letting Send print it.
+func Request(req protocol.Request) (json.RawMessage, error) {
+	resp, err := request(req)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		if resp.Error == "" {
+			return nil, errors.New("daemon reported failure")
+		}
+		return nil, errors.New(resp.Error)
+	}
+	return resp.Data, nil
 }

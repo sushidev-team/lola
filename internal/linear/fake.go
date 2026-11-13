@@ -2,6 +2,7 @@ package linear
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 
@@ -24,7 +25,8 @@ type Call struct {
 // an injected error is returned on every call until the entry is removed.
 // Every invocation is appended to Calls in order, including failed ones.
 type Fake struct {
-	mu sync.Mutex
+	GoalComments []GoalComment
+	mu           sync.Mutex
 
 	// Fixtures, one per getter.
 	ViewerUser        User
@@ -56,6 +58,20 @@ type Fake struct {
 	// StateByIssue records the last stateId set via SetIssueState per issue
 	// UUID, so tests can assert the exact transition target.
 	StateByIssue map[string]string
+
+	// RefsFunc backs FilterRefs. nil means "every ID exists, workspace-scoped"
+	// so fixtures that predate the reference check never trip it.
+	RefsFunc func(labelIDs, stateIDs []string) (labels, states []Ref, err error)
+
+	// Details backs IssueDetail, matched by UUID or identifier. Created and
+	// Relations record successful CreateIssue inputs (the Nth gets UUID
+	// "created-uuid-N", identifier "NEW-N") and CreateBlocksRelation pairs
+	// (blocker, blocked), in order.
+	Details       []IssueDetail
+	Created       []IssueCreate
+	Relations     [][2]string
+	Milestones    []GoalMilestone
+	GoalRelations []GoalRelation
 
 	// Errs injects an error per method name.
 	Errs map[string]error
@@ -139,6 +155,24 @@ func (f *Fake) States(ctx context.Context, teamID string) ([]State, error) {
 	return slices.Clone(f.StatesByTeam[teamID]), nil
 }
 
+func (f *Fake) FilterRefs(ctx context.Context, labelIDs, stateIDs []string) (labels, states []Ref, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("FilterRefs", slices.Clone(labelIDs), slices.Clone(stateIDs)); err != nil {
+		return nil, nil, err
+	}
+	if f.RefsFunc != nil {
+		return f.RefsFunc(labelIDs, stateIDs)
+	}
+	for _, id := range labelIDs {
+		labels = append(labels, Ref{ID: id, Name: id})
+	}
+	for _, id := range stateIDs {
+		states = append(states, Ref{ID: id, Name: id})
+	}
+	return labels, states, nil
+}
+
 func (f *Fake) WorkspaceLabels(ctx context.Context) ([]Label, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -171,6 +205,9 @@ func (f *Fake) MatchingIssues(ctx context.Context, p config.Project, activeCycle
 	err := f.record("MatchingIssues", p, activeCycleID, viewerID)
 	fn := f.IssuesFunc
 	static := slices.Clone(f.Issues)
+	for i := range static {
+		static[i].IssueRelations = f.relatedIssuesLocked(static[i].ID, static[i].IssueRelations)
+	}
 	f.mu.Unlock()
 
 	if err != nil {
@@ -237,5 +274,56 @@ func (f *Fake) SetIssueState(ctx context.Context, issueUUID, stateID string) err
 		f.StateByIssue = map[string]string{}
 	}
 	f.StateByIssue[issueUUID] = stateID
+	return nil
+}
+
+func (f *Fake) IssueDetail(ctx context.Context, idOrIdentifier string) (IssueDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("IssueDetail", idOrIdentifier); err != nil {
+		return IssueDetail{}, err
+	}
+	for _, d := range f.Details {
+		if d.ID == idOrIdentifier || d.Identifier == idOrIdentifier {
+			d.LabelIDs = slices.Clone(d.LabelIDs)
+			d.IssueRelations = f.relatedIssuesLocked(d.ID, d.IssueRelations)
+			return d, nil
+		}
+	}
+	return IssueDetail{}, fmt.Errorf("graphql: Entity not found: Issue %s", idOrIdentifier)
+}
+
+func (f *Fake) CreateIssue(ctx context.Context, in IssueCreate) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	in.LabelIDs = slices.Clone(in.LabelIDs)
+	if err := f.record("CreateIssue", in); err != nil {
+		return "", "", err
+	}
+	if in.ID != "" {
+		for _, d := range f.Details {
+			if d.ID == in.ID {
+				return "", "", fmt.Errorf("duplicate issue ID")
+			}
+		}
+	}
+	f.Created = append(f.Created, in)
+	n := len(f.Created)
+	id, identifier := in.ID, fmt.Sprintf("NEW-%d", n)
+	if id == "" {
+		id = fmt.Sprintf("created-uuid-%d", n)
+	} else {
+		f.Details = append(f.Details, IssueDetail{ID: id, Identifier: identifier, Title: in.Title, Description: in.Description, TeamID: in.TeamID, ProjectID: in.ProjectID, ParentID: in.ParentID, MilestoneID: in.MilestoneID, LabelIDs: slices.Clone(in.LabelIDs)})
+	}
+	return id, identifier, nil
+}
+
+func (f *Fake) CreateBlocksRelation(ctx context.Context, blockerUUID, blockedUUID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("CreateBlocksRelation", blockerUUID, blockedUUID); err != nil {
+		return err
+	}
+	f.Relations = append(f.Relations, [2]string{blockerUUID, blockedUUID})
 	return nil
 }

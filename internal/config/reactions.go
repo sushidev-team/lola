@@ -19,8 +19,10 @@ const (
 	// DefaultChangesRequestedMessage relays reviewer feedback back into the
 	// session and asks for a re-review.
 	DefaultChangesRequestedMessage = "Changes were requested on your PR ({{.PR}}) for {{.Issue}}. Reviewer feedback:\n\n{{.Detail}}\n\nAddress each point, push, then re-request review."
-	// DefaultMergeConflictMessage asks the agent to rebase and resolve.
-	DefaultMergeConflictMessage = "Your PR ({{.PR}}) for {{.Issue}} has merge conflicts. Rebase onto the base branch, resolve the conflicts, and push."
+	// Merge the base into the published PR branch so recovery needs an ordinary
+	// push: rebasing rewrites published commits and requires force-push approval.
+	DefaultMergeConflictMessage = "Your PR ({{.PR}}) for {{.Issue}} has merge conflicts. Fetch the PR's base branch and merge it into this branch. Resolve the conflicts, preserving the intent of both sides, run the project's checks, commit the merge, and push normally. Do not rebase or force-push. If a conflict is ambiguous, stop and explain it."
+	legacyMergeConflictMessage  = "Your PR ({{.PR}}) for {{.Issue}} has merge conflicts. Rebase onto the base branch, resolve the conflicts, and push."
 )
 
 // DefaultCIRetries is the default number of automatic ci_failed recovery
@@ -55,6 +57,13 @@ type ReactionsConfig struct {
 	MergeConflict    Reaction `toml:"merge_conflict"`
 	ApprovedAndGreen Reaction `toml:"approved_and_green"`
 	Merged           Reaction `toml:"merged"`
+	// AgentFallback governs what happens when the pane classifier sees a
+	// session's agent hit its usage limit (InputReason quota_limited): Auto
+	// true switches the session to the next kind in the resolved
+	// agent_fallback chain; Auto false (the default) only notifies. Retries
+	// and Message are unused — a fallback replaces the pane, it never types
+	// into the quota-dead agent.
+	AgentFallback Reaction `toml:"agent_fallback"`
 }
 
 // NotifyConfig is the [notify] table. It holds the environment-variable NAME
@@ -94,6 +103,8 @@ func defaultRouting() map[string][]string {
 // defaultReactions is the [reactions] default set (PLAN P3): CI failures,
 // review changes, and merge conflicts auto-react by messaging the agent;
 // approved+green never auto-merges (notify-and-park only); merged auto-cleans.
+// agent_fallback defaults to notify-only: an automatic agent switch is a
+// destructive-feeling act (the live pane is replaced), so it is opt-in.
 func defaultReactions() ReactionsConfig {
 	return ReactionsConfig{
 		CIFailed:         Reaction{Auto: true, Retries: DefaultCIRetries, Message: DefaultCIFailedMessage},
@@ -101,6 +112,7 @@ func defaultReactions() ReactionsConfig {
 		MergeConflict:    Reaction{Auto: true, Message: DefaultMergeConflictMessage},
 		ApprovedAndGreen: Reaction{Auto: false, Message: ""},
 		Merged:           Reaction{Auto: true},
+		AgentFallback:    Reaction{Auto: false},
 	}
 }
 
@@ -156,6 +168,7 @@ type fileReactionsConfig struct {
 	MergeConflict    fileReaction `toml:"merge_conflict"`
 	ApprovedAndGreen fileReaction `toml:"approved_and_green"`
 	Merged           fileReaction `toml:"merged"`
+	AgentFallback    fileReaction `toml:"agent_fallback"`
 }
 
 type fileNotifyConfig struct {
@@ -189,8 +202,15 @@ func resolveReactions(frc *fileReactionsConfig) ReactionsConfig {
 	d.CIFailed = frc.CIFailed.resolve(d.CIFailed)
 	d.ChangesRequested = frc.ChangesRequested.resolve(d.ChangesRequested)
 	d.MergeConflict = frc.MergeConflict.resolve(d.MergeConflict)
+	// Save materializes default messages, so changing the fallback alone would
+	// leave existing installations asking for a rebase forever. Upgrade only
+	// the exact former default; keep custom messages and the Auto choice.
+	if d.MergeConflict.Message == legacyMergeConflictMessage {
+		d.MergeConflict.Message = DefaultMergeConflictMessage
+	}
 	d.ApprovedAndGreen = frc.ApprovedAndGreen.resolve(d.ApprovedAndGreen)
 	d.Merged = frc.Merged.resolve(d.Merged)
+	d.AgentFallback = frc.AgentFallback.resolve(d.AgentFallback)
 	return d
 }
 
@@ -233,6 +253,7 @@ func reactionsFile(rc ReactionsConfig) *fileReactionsConfig {
 		MergeConflict:    reactionFile(rc.MergeConflict),
 		ApprovedAndGreen: reactionFile(rc.ApprovedAndGreen),
 		Merged:           reactionFile(rc.Merged),
+		AgentFallback:    reactionFile(rc.AgentFallback),
 	}
 }
 

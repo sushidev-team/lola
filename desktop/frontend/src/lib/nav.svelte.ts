@@ -1,16 +1,53 @@
+import { SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX } from "./sidebarwidth";
 // Navigation state: which top-level view is showing, the project scope, the
-// active modal overlay, and the selected session / terminal lens. Mirrors the
-// TUI's rootModel.view + overlay precedence, extended with a "grid" lens for the
-// new live-terminal overview.
+// active modal overlay, and the active session in the full-height workspace.
 
 export type View = "cockpit" | "home" | "detail" | "prpicker" | "ticketpicker";
 // There is no separate "poll" overlay any more: a project IS the poll unit, so
 // the project overlay covers repo setup, filter, labels and write-back in tabs.
-export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "update" | "help";
-export type Lens = "list" | "kanban" | "grid";
+export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "update" | "help" | "bestof" | "newsession" | "commands" | "rename-session" | "activity" | "sshsession" | "sshconnect" | "pr-review";
 
 /** Webview-local sidebar preference. Deliberately NOT in config.toml. */
 const SIDEBAR_KEY = "lola.sidebar";
+/** Which of the sidebar's two tabs is on show. */
+const SIDEBAR_TAB_KEY = "lola.sidebar.tab";
+const PROJECT_TAB_KEY = "lola.project.tab";
+/** When each session was last on screen, so a finished turn can read as not yet seen. */
+const SEEN_KEY = "lola.seen";
+const SEEN_KEEP = 200;
+
+export type ProjectTab = "overview" | "git";
+
+function readProjectTab(): ProjectTab {
+  try { return localStorage.getItem(PROJECT_TAB_KEY) === "git" ? "git" : "overview"; }
+  catch { return "overview"; }
+}
+
+export type SidebarTab = "sessions" | "projects";
+
+function readSidebarWidth(): number {
+  try {
+    const value = Number(localStorage.getItem("lola.sidebar.width") ?? SIDEBAR_DEFAULT);
+    return Number.isFinite(value) ? Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, value)) : SIDEBAR_DEFAULT;
+  } catch { return SIDEBAR_DEFAULT; }
+}
+
+function readSidebarTab(): SidebarTab {
+  try {
+    return localStorage.getItem(SIDEBAR_TAB_KEY) === "projects" ? "projects" : "sessions";
+  } catch {
+    return "sessions";
+  }
+}
+
+function readSeen(): Record<string, number> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}");
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
 
 function readSidebar(): boolean {
   try {
@@ -21,7 +58,22 @@ function readSidebar(): boolean {
 }
 
 class Nav {
+  sessionLocation = $state<"worktree" | "main" | "temporary">("worktree");
+  sessionAgent = $state(true);
+  newSession(project = "", location: "worktree" | "main" | "temporary" = "worktree", agent = true) {
+    this.sessionLocation = project ? location : "temporary";
+    this.sessionAgent = project ? agent : false;
+    this.openOverlay("newsession", project);
+  }
+
+  gitSearchRequest = $state(0);
   view = $state<View>("cockpit");
+  private preferredProjectTab = $state<ProjectTab>(readProjectTab());
+  get projectTab(): ProjectTab { return this.preferredProjectTab; }
+  set projectTab(tab: ProjectTab) {
+    this.preferredProjectTab = tab;
+    try { localStorage.setItem(PROJECT_TAB_KEY, tab); } catch { /* keep the in-memory choice */ }
+  }
   /** Project name backing detail/pickers and the cockpit's project scope. */
   project = $state<string>("");
   /** Cockpit is scoped to `project` (vs global) when true. */
@@ -33,10 +85,23 @@ class Nav {
   overlayTab = $state<string>("");
   /** Selected session id (reorder-proof selection). */
   selectedId = $state<string>("");
-  /** Sessions-panel lens. */
-  lens = $state<Lens>("list");
-  /** The session whose live terminal is expanded/focused ("" = none). */
+  /** The active session; independent of keyboard focus and never a layout mode. */
   focusedTerm = $state<string>("");
+  sidebarBrowsing = $state(false);
+  sidebarQuery = $state("");
+  sidebarFocus = $state(0);
+  sidebarWidth = $state(readSidebarWidth());
+  setSidebarWidth(width: number) {
+    this.sidebarWidth = Number.isFinite(width) ? Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, width)) : SIDEBAR_DEFAULT;
+    try { localStorage.setItem("lola.sidebar.width", String(this.sidebarWidth)); } catch { /* best effort */ }
+  }
+  focusSessions() {
+    this.sidebarBrowsing = true;
+    this.sidebarOpen = true;
+    try { localStorage.setItem(SIDEBAR_KEY, "1"); } catch { /* best effort */ }
+    this.setSidebarTab("sessions");
+    this.sidebarFocus++;
+  }
   /**
    * Sidebar visible. Webview-local UI state — NOT a config.toml key; the daemon
    * and the TUI never learn about it. Mirrored to localStorage so the choice
@@ -44,11 +109,9 @@ class Nav {
    * throwing over.
    */
   sidebarOpen = $state(readSidebar());
-  /**
-   * Active triage filter — "" = all. One of $lib/filters' TRIAGE_FILTERS, i.e. a
-   * KANBAN_COLUMNS title, so the sidebar filter and the kanban lens partition
-   * sessions the same way.
-   */
+  /** The sidebar's tab. Projects is today's body, unchanged. */
+  sidebarTab = $state<SidebarTab>(readSidebarTab());
+  /** Sidebar attention filter. Empty means all sessions. */
   triage = $state<string>("");
 
   toggleSidebar() {
@@ -57,6 +120,32 @@ class Nav {
       localStorage.setItem(SIDEBAR_KEY, this.sidebarOpen ? "1" : "0");
     } catch {
       /* private mode / disabled storage — the preference just doesn't persist */
+    }
+  }
+  setSidebarTab(t: SidebarTab) {
+    this.sidebarTab = t;
+    try {
+      localStorage.setItem(SIDEBAR_TAB_KEY, t);
+    } catch {
+      /* the choice just doesn't persist */
+    }
+  }
+  private seen = $state<Record<string, number>>(readSeen());
+  /** When the human last had this session open, 0 for never. */
+  seenAt(id: string): number {
+    return this.seen[id] ?? 0;
+  }
+  /** Most recent last, so what gets dropped is what nobody has opened in a while. */
+  markSeen(id: string, at = Date.now()) {
+    const next = { ...this.seen };
+    delete next[id];
+    next[id] = at;
+    for (const old of Object.keys(next).slice(0, -SEEN_KEEP)) delete next[old];
+    this.seen = next;
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(next));
+    } catch {
+      /* a mark that does not survive a relaunch costs one dot */
     }
   }
   setTriage(t: string) {
@@ -72,26 +161,31 @@ class Nav {
     this.view = "cockpit";
     this.scoped = scopeProject !== "";
     this.project = scopeProject;
-    this.focusedTerm = "";
+    this.dropFocus();
+    this.setSidebarTab("sessions");
   }
   goHome() {
     this.view = "home";
-    this.focusedTerm = "";
+    this.dropFocus();
   }
-  goDetail(name: string) {
+  goDetail(name: string, tab: ProjectTab = this.projectTab) {
     this.project = name;
+    this.projectTab = tab;
+    // Project navigation is a workspace destination, not a session filter.
+    this.scoped = false;
     this.view = "detail";
-    this.focusedTerm = "";
+    this.dropFocus();
+    this.setSidebarTab("projects");
   }
   goPRPicker(name: string) {
     this.project = name;
     this.view = "prpicker";
-    this.focusedTerm = "";
+    this.dropFocus();
   }
   goTicketPicker(name: string) {
     this.project = name;
     this.view = "ticketpicker";
-    this.focusedTerm = "";
+    this.dropFocus();
   }
 
   openOverlay(o: Overlay, project = "", tab = "") {
@@ -105,27 +199,19 @@ class Nav {
     this.overlayTab = "";
   }
 
-  select(id: string) {
+  select(id: string) { this.selectedId = id; }
+
+  /** Open without changing filters or recreating the session workspace. */
+  openSession(id: string, keepSidebarFocus = false) {
+    this.sidebarBrowsing = keepSidebarFocus;
     this.selectedId = id;
+    this.focusedTerm = id;
+    this.view = "cockpit";
   }
-  /**
-   * Switch lens. Always go through here rather than assigning `lens`: the grid
-   * lens renders NO detail panel, so a `focusedTerm` surviving into it would
-   * leave the app with no mounted terminal to own the keyboard — and the global
-   * key handler bails out early while `focusedTerm` is set, wedging every
-   * shortcut including the one that would clear it.
-   */
-  setLens(l: Lens) {
-    this.lens = l;
-    if (l === "grid") this.focusedTerm = "";
-  }
-  cycleLens() {
-    this.setLens(this.lens === "list" ? "kanban" : this.lens === "kanban" ? "grid" : "list");
-  }
-  toggleFocusTerm(id: string) {
-    // Focusing from the grid has to leave it first — see setLens.
-    if (this.lens === "grid") this.lens = "list";
-    this.focusedTerm = this.focusedTerm === id ? "" : id;
+
+  /** Release the active session while another top-level view covers it. */
+  private dropFocus() {
+    this.focusedTerm = "";
   }
 }
 

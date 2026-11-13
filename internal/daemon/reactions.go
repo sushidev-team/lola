@@ -1,9 +1,14 @@
 package daemon
 
 // reactions.go is the P3 reaction engine (PLAN P3.16–19): after every observer
-// cycle recomputes a native session's derived status, react() decides whether
-// lola should ACT on that status — re-prompt the live agent (send-keys), notify
-// the operator, or close the loop by cleaning up a merged session.
+// cycle re-derives a native session's two axes, react() decides whether lola
+// should ACT on where the PR now stands — re-prompt the live agent (send-keys),
+// notify the operator, or close the loop by cleaning up a merged session.
+//
+// Every reaction here is DELIVERY-driven: the dispatch, and each reaction's own
+// atomic re-check under the store lock, read s.Delivery rather than the
+// rolled-up s.Status, which collapses the agent axis over the PR axis and hid
+// most of this engine's triggers behind a waiting agent (see react).
 //
 // Two invariants dominate this file:
 //
@@ -31,7 +36,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -50,19 +54,34 @@ import (
 const reactExecTimeout = 30 * time.Second
 
 // react is the per-session reaction decision, called from observeNative with the
-// session record as just updated by that cycle's status/PR merge. It reads the
+// session record as just updated by that cycle's axis/PR merge. It reads the
 // resolved reactions config and the notifier under d.mu, then dispatches on the
-// derived status. Each reaction fires at most once per transition (LastReactedStatus
-// guard) and anything that types into the agent is gated on AtPrompt.
+// DELIVERY axis. Each reaction fires at most once per transition
+// (LastReactedStatus guard) and anything that types into the agent is gated on
+// AtPrompt.
+//
+// The dispatch reads s.Delivery, never the rolled-up s.Status, because the
+// rollup MASKS the PR axis: a live agent waiting on a human outranks every
+// delivery state in Rollup, so a permission prompt mid-fix hid the red CI, the
+// requested changes or the conflict the engine exists to act on — and, with 90%
+// of that waiting population turning out to be the coding agent's own 60s idle
+// nudge, it hid them most of the time. merge_conflict was carved out of the
+// rollup for exactly that reason long before the rest; every delivery-driven
+// reaction now reads the same axis. The PRIORITY between them is unchanged
+// (merged, ci_failed, merge_conflict, changes_requested, approved, closed), and
+// so is every one-shot guard.
 //
 // The decision is computed from the passed (post-update) record; all reaction
 // STATE is applied back via Store.Update, which re-reads the current record
 // under the store lock so a concurrent hook write (a Stop that set AtPrompt, a
 // tool_use that cleared it) is never clobbered.
 func (d *Daemon) react(ctx context.Context, s session.Session) {
-	// Only native sessions with a tmux target are actionable. Dead / no_pr /
-	// closed / session_ended records fall through to resetReactionGuards below,
-	// which never sends anything.
+	if s.GoalManaged() || s.Kind == session.KindLocal {
+		return
+	}
+	// Only native sessions with a tmux target are actionable. Everything else —
+	// an adopted shell, a record with no pane — falls through to
+	// resetReactionGuards below, which never sends anything.
 	if s.Source != "native" || s.TmuxName == "" {
 		return
 	}
@@ -79,8 +98,36 @@ func (d *Daemon) react(ctx context.Context, s session.Session) {
 		notifier = notify.New(notify.NotifyConfig{})
 	}
 
+	// A STACK session reacts per app (session/stack.go): each PR lane gets the
+	// ordinary engine below with its own guards, and the session itself only
+	// the stack-wide close-out — merged means EVERY app the issue touched is.
+	if s.Stack && s.Lane == "" {
+		switch {
+		case s.Delivery == state.DeliveryMerged:
+			// An app's PR still open — or not yet confirmed closed by a
+			// successful lookup since the merge — holds the cleanup: its
+			// worktree lives in this session's folder, and the agent may still
+			// be asked to address review there. The observer refreshes every
+			// app's PR each cycle, so the cleanup fires on the first cycle after
+			// the last one merges or closes.
+			if rc.Merged.Auto && s.AppsSettled(s.DeliverySince) {
+				d.reactMerged(ctx, s, notifier)
+			}
+		default:
+			for _, lane := range s.Lanes() {
+				d.react(ctx, lane)
+			}
+		}
+		return
+	}
+	if s.Lane != "" && s.Delivery == state.DeliveryMerged {
+		// One app shipped; the session lives on until all of them have.
+		d.resetReactionGuards(s)
+		return
+	}
+
 	switch {
-	case s.Status == "merged":
+	case s.Delivery == state.DeliveryMerged:
 		// Loop close: clean up the worktree and free the slot. Gated by the
 		// Merged.auto toggle; a dirty post-merge worktree is kept, not
 		// force-removed. Auto-merge is intentionally NOT implemented anywhere in
@@ -89,46 +136,73 @@ func (d *Daemon) react(ctx context.Context, s session.Session) {
 		// the store entry on success, and a failed cleanup must retry next
 		// cycle (a guard would have suppressed the retry and could never be
 		// stamped anyway — the entry is gone when it succeeds).
+		//
+		// That retry is BOUNDED and BACKED OFF (Session.CleanupFailures): a
+		// worktree git can never remove is otherwise re-attempted every 30s
+		// forever, logging the same line and telling nobody — one real store
+		// carried 1953 identical retries for a single session across 16 hours.
+		// See reactMerged / cleanupRetryDue / noteCleanupFailure.
 		if rc.Merged.Auto {
 			d.reactMerged(ctx, s, notifier)
 		}
 
-	case s.Status == "ci_failed":
+	case s.AgentState == state.AgentDead:
+		// The pane is gone, so there is nothing to re-prompt and nothing to
+		// escalate — the record is the reconcile pass's problem now
+		// (state.Present is false for it) and a human's after that.
+		//
+		// The rollup used to deliver this for free: rule 2, "a dead pane forces
+		// dead", put every non-merged dead session in the default branch below.
+		// Dispatching on the delivery axis takes that away, so the rule is
+		// stated here rather than silently dropped — this is a RESTATEMENT, not
+		// a new policy, and the guards are reset exactly as they were. It sits
+		// BELOW merged deliberately: the merged cleanup is the one reaction a
+		// dead pane still needs (Kill stops tmux before it touches git, so
+		// every retry after the first attempt is by definition a dead session).
+		//
+		// It matters most on the send paths. SetAgentState does NOT close
+		// AtPrompt when a pane dies, so a session that was resting at its
+		// prompt when tmux went away carries an OPEN, verified gate; without
+		// this the engine would consume that gate, stamp the one-shot guard and
+		// send-keys into a tmux session that no longer exists — and the
+		// reaction would then be silently skipped if the session were revived.
+		d.resetReactionGuards(s)
+
+	case s.Delivery == state.DeliveryCIFailed:
 		d.reactCIFailed(ctx, s, rc.CIFailed, notifier)
 
 	case s.Delivery == state.DeliveryMergeConflict:
-		// A conflicting PR is detected off the DELIVERY axis rather than the
-		// rolled-up status so it still fires while a waiting_input agent masks
-		// the rollup as needs_input. ci_failed cannot mask it here: the
-		// delivery derivation ranks ci_failed above merge_conflict, and that
-		// branch above has already handled (and returned for) this session —
-		// the rebase would re-run CI anyway.
+		// ci_failed cannot mask this: DeriveDelivery ranks ci_failed above
+		// merge_conflict, so the branch above has already handled (and returned
+		// for) such a session — the rebase would re-run CI anyway.
 		if rc.MergeConflict.Auto {
 			d.reactSendAgent(ctx, s, "merge_conflict", rc.MergeConflict.Message, notifier, nil)
 		}
 
-	case s.Status == "changes_requested":
+	case s.Delivery == state.DeliveryChangesRequested:
 		if rc.ChangesRequested.Auto {
 			d.reactSendAgent(ctx, s, "changes_requested", rc.ChangesRequested.Message, notifier,
 				func() string { return d.fetchReviewComments(ctx, s) })
 		}
 
-	case s.Status == "approved":
+	case s.Delivery == state.DeliveryApproved:
 		// approved+green: notify and PARK. Never auto-merge — auto=true still
 		// only notifies (documented: there is no merge action in P3).
 		d.reactApproved(ctx, s, notifier)
 
-	case s.Status == "closed":
+	case s.Delivery == state.DeliveryClosed:
 		// A PR closed WITHOUT merging: the work was rejected or abandoned.
 		// Notify once (LastReactedStatus guard) and leave everything alone —
 		// never send-keys, never auto-kill; the human decides what happens to
-		// the worktree. state.Present("closed") is false, so the reconcile
-		// orphan-revert stops shielding this issue and the label can revert.
+		// the worktree. state.Present is false for a closed PR, so the
+		// reconcile orphan-revert stops shielding this issue and the label can
+		// revert.
 		d.reactClosed(ctx, s, notifier)
 
 	default:
-		// Any other (benign / transient) status: the session left whatever state
-		// it last reacted to, so clear the one-shot guards for a clean re-entry.
+		// Delivery is none / draft / ci_pending / review_pending: the PR left
+		// whatever state was last reacted to, so clear the one-shot guards for
+		// a clean re-entry.
 		d.resetReactionGuards(s)
 	}
 }
@@ -143,7 +217,7 @@ func (d *Daemon) reactClosed(ctx context.Context, s session.Session, notifier no
 	}
 	acted := false
 	d.sessions.Update(s.ID, func(cur *session.Session) bool {
-		if cur.Status != "closed" || cur.LastReactedStatus == "closed" {
+		if cur.Delivery != state.DeliveryClosed || cur.LastReactedStatus == "closed" {
 			return false
 		}
 		cur.LastReactedStatus = "closed"
@@ -164,9 +238,104 @@ func (d *Daemon) reactClosed(ctx context.Context, s session.Session, notifier no
 	d.logf("", "react: %s PR closed without merging — notified, session kept", s.ID)
 }
 
+// maxCleanupAttempts bounds how many CONSECUTIVE times the merged cleanup is
+// re-attempted for one session before the engine stops trying and hands the
+// worktree to a human. Eight attempts on the schedule below span ~17 minutes
+// from the merge — long enough to ride out the transient causes (a tmux server
+// restarting, a git index lock, a file briefly held open by a build) and short
+// enough that a permanent one (a worktree git refuses to delete, a missing
+// binary) becomes a notification the same coffee break rather than a log line
+// nobody reads for 16 hours.
+const maxCleanupAttempts = 8
+
+// cleanupBackoffCap is the ceiling on the per-attempt wait. The schedule
+// doubles from the observer's own cadence — 30s, 1m, 2m, 4m — and then holds
+// here, because a retry that is not going to work does not get more likely by
+// waiting an hour, and the attempt budget is what actually ends the loop.
+const cleanupBackoffCap = 5 * time.Minute
+
+// cleanupBackoff is the wait owed AFTER the nth consecutive cleanup failure,
+// before attempt n+1 may run.
+//
+// The FIRST failure owes nothing, which keeps the long-standing contract
+// literally true — "a failed cleanup retries on the next observer cycle" — and
+// is the right shape besides: the cheap causes (a git index lock, a file the
+// pane teardown had not released yet) clear within one cadence, and one free
+// retry costs a single exec. The wait starts growing from the SECOND failure,
+// where the cause has stopped looking transient: observeInterval doubled per
+// further failure, capped at cleanupBackoffCap. So the spacing reads 0, 30s,
+// 1m, 2m, 4m, 5m, 5m — the full budget lands ~17 minutes after the merge
+// instead of grinding for the daemon's whole lifetime.
+func cleanupBackoff(failures int) time.Duration {
+	if failures < 2 {
+		return 0
+	}
+	d := observeInterval
+	for i := 2; i < failures; i++ {
+		if d >= cleanupBackoffCap {
+			break
+		}
+		d *= 2
+	}
+	if d > cleanupBackoffCap {
+		return cleanupBackoffCap
+	}
+	return d
+}
+
+// cleanupBackoffTotal is the cumulative wait owed after `failures` consecutive
+// failures — the offset from the schedule's anchor at which attempt
+// failures+1 comes due. Clamped at maxCleanupAttempts so a hand-edited or
+// corrupted counter cannot turn this into a long loop.
+func cleanupBackoffTotal(failures int) time.Duration {
+	if failures > maxCleanupAttempts {
+		failures = maxCleanupAttempts
+	}
+	var total time.Duration
+	for i := 1; i <= failures; i++ {
+		total += cleanupBackoff(i)
+	}
+	return total
+}
+
+// cleanupRetryDue reports whether this merged session's next cleanup attempt
+// may run now. The first attempt (no failures yet) is always due; afterwards
+// the attempt is due once cleanupBackoffTotal has elapsed since the schedule's
+// ANCHOR.
+//
+// The anchor is DeliverySince — the moment the PR became merged — rather than
+// a "last attempt" stamp, because there is no such stamp on the record and the
+// two coincide in practice: the first cleanup runs in the very observer cycle
+// that flipped the delivery axis to merged, and neither the axis nor its Since
+// moves again while the session stays merged (the agent axis going Dead
+// underneath it cannot touch them). Deriving the schedule from a persisted
+// anchor also means it survives a daemon restart instead of resetting to
+// attempt-every-cycle.
+//
+// Two deliberate consequences. A record with NO anchor (a legacy snapshot, a
+// hand-built session) fails OPEN — it retries on the next cycle, exactly as
+// the unbounded loop used to, and is still stopped by maxCleanupAttempts. And
+// a session that had already been merged for a long while when its first
+// attempt ran (merged.auto switched on after the fact) has its whole schedule
+// already in the past, so it spends the attempt budget over consecutive
+// cycles; the BOUND, not the spacing, is what protects that case.
+func cleanupRetryDue(s session.Session, now time.Time) bool {
+	if s.CleanupFailures < 1 {
+		return true
+	}
+	if s.DeliverySince.IsZero() {
+		return true
+	}
+	return !now.Before(s.DeliverySince.Add(cleanupBackoffTotal(s.CleanupFailures)))
+}
+
 // reactMerged closes the loop for a merged PR by REUSING the kill/cleanup path:
-// terminate the tmux agent, remove the worktree (dirty-safe, never force), drop
-// the store entry, and free the issue's in-flight claim — then notify Info. A
+// terminate the tmux agent AND its shell/review tabs, remove the worktree
+// (dirty-safe, never force) together with the local branch it was checked out
+// on, drop the store entry, and free the issue's in-flight claim — then notify
+// Info. Branch deletion is runtime.Kill's, so it holds the same two rules there:
+// only a lola-OWNED branch is deleted (a pr session's is upstream), and a dirty
+// worktree keeps both the checkout and its branch. A
 // worktree with uncommitted changes is KEPT (not force-removed) and the operator
 // is notified, but the store entry is dropped either way: a clean and a dirty
 // merge both leave the sessions view, differing only in whether the checkout
@@ -174,7 +343,33 @@ func (d *Daemon) reactClosed(ctx context.Context, s session.Session, notifier no
 // "merged" entry is re-observed every cycle and never ages out, so keeping it
 // would let dirty merges pile up permanently. A non-dirty removal error keeps
 // the entry (un-dropped) so the next cycle retries the cleanup.
+//
+// That retry is BOUNDED and BACKED OFF. It used to be neither, and the failure
+// mode was silent: a `git worktree remove` that exits 255 for a reason nothing
+// here can fix is re-attempted on every 30s observer cycle for as long as the
+// daemon runs, writing one identical log line per attempt and telling nobody.
+// So each failure is counted on the record (Session.CleanupFailures), the next
+// attempt waits cleanupBackoff, and at maxCleanupAttempts the engine STOPS and
+// converts the loop into one Action notification naming the session and the
+// last error — see noteCleanupFailure. Nothing about the refusals changes:
+// force is still never passed, so a dirty worktree is still kept rather than
+// destroyed, and the branch rule stays runtime.Kill's.
 func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier notify.Notifier) {
+	if s.CleanupFailures >= maxCleanupAttempts {
+		// Given up already (noteCleanupFailure notified when the budget ran
+		// out). Attempt nothing — but keep the record ALIVE, or the very
+		// problem we just reported would erase its own evidence: the pane is
+		// gone by now (Kill stops tmux before it touches git), so the observer
+		// stops re-writing this record, its LastSeen freezes, and
+		// sessionRetention silently drops the one thing pointing at the
+		// worktree that still needs a hand.
+		d.keepCleanupVisible(s)
+		return
+	}
+	if !cleanupRetryDue(s, time.Now()) {
+		return // backing off between attempts; a later cycle carries this one
+	}
+
 	d.mu.Lock()
 	nat := d.native
 	p := d.cfg.ProjectByName(s.Project)
@@ -195,6 +390,7 @@ func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier no
 		dir = filepath.Join(home, "worktrees", p.Name, s.ID)
 	}
 
+	d.sshCloseSession(cctx, s.ID)
 	err := nat.Kill(cctx, s, removeWorktree, false) // never force: dirty is kept
 	if errors.Is(err, worktree.ErrDirty) {
 		// Kill stops the tmux agent BEFORE touching the worktree (see
@@ -217,20 +413,111 @@ func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier no
 		return
 	}
 	if err != nil {
-		// Left un-stamped on purpose: the next observer cycle retries the
-		// cleanup of this still-merged session.
-		d.logf("", "react: merged cleanup of %s failed (will retry): %v", s.ID, err)
+		// Left un-stamped on purpose: a later observer cycle retries the
+		// cleanup of this still-merged session — counted and spaced by
+		// noteCleanupFailure, which also decides when to stop.
+		d.noteCleanupFailure(ctx, s, dir, err, notifier)
 		return
 	}
 
 	d.dropSession(s) // drops the store entry, frees the in-flight claim, persists
+	removed := "worktree removed"
+	if s.OwnsBranch() && s.Branch != "" {
+		removed = fmt.Sprintf("worktree and branch %s removed", s.Branch)
+	}
 	notifier.Notify(cctx, notify.Note{
 		Title:    "PR merged — cleaned up",
-		Body:     fmt.Sprintf("%s merged; worktree removed and the slot freed", issueLabel(s)),
+		Body:     fmt.Sprintf("%s merged; %s and the slot freed", issueLabel(s), removed),
 		Priority: notify.Info,
 		URL:      prURL(s),
 	})
-	d.logf("", "react: %s merged; worktree removed, slot freed", s.ID)
+	d.logf("", "react: %s merged; %s, tabs closed, slot freed", s.ID, removed)
+}
+
+// noteCleanupFailure records one failed merged-cleanup attempt and decides what
+// the operator hears about it. Inside the budget it is a log line naming the
+// attempt and the wait before the next one; on the attempt that EXHAUSTS the
+// budget it is one Action notification — the loop stops there and the worktree
+// becomes a human's job.
+//
+// The count is incremented inside Store.Update so two writers cannot both read
+// the same value, and the give-up notification fires on the exact transition
+// (failures == maxCleanupAttempts) rather than on ">= max", which is what makes
+// it one-shot: every later cycle short-circuits in reactMerged before reaching
+// here. A record that has vanished under us (a concurrent kill dropped it)
+// leaves failures at 0 and is simply dropped — there is nothing left to retry
+// or report.
+func (d *Daemon) noteCleanupFailure(ctx context.Context, s session.Session, dir string, cause error, notifier notify.Notifier) {
+	failures := 0
+	d.sessions.Update(s.ID, func(cur *session.Session) bool {
+		cur.CleanupFailures++
+		failures = cur.CleanupFailures
+		return true
+	})
+	if failures == 0 {
+		return // the session was dropped meanwhile
+	}
+	d.reactSave()
+
+	if failures < maxCleanupAttempts {
+		next := "on the next cycle"
+		if w := cleanupBackoff(failures); w > 0 {
+			next = "in " + w.String()
+		}
+		d.logf("", "react: merged cleanup of %s failed (attempt %d/%d, retrying %s): %v",
+			s.ID, failures, maxCleanupAttempts, next, cause)
+		return
+	}
+
+	where := dir
+	if where == "" {
+		where = "its worktree" // project gone from config: no path to name
+	}
+	d.logf("", "react: merged cleanup of %s failed %d times — giving up; %s needs a hand (last error: %v)",
+		s.ID, failures, where, cause)
+	notifier.Notify(ctx, notify.Note{
+		Title: "Merged cleanup gave up — needs a hand",
+		Body: fmt.Sprintf("%s merged, but its cleanup failed %d times and lola has stopped retrying. Clear %s by hand, then kill the session. Last error: %s",
+			issueLabel(s), failures, where, clipCause(cause)),
+		Priority: notify.Action,
+		URL:      prURL(s),
+	})
+}
+
+// keepCleanupVisible re-stamps a given-up session's LastSeen so the store's
+// retention prune cannot age it out while its worktree is still stranded. The
+// closure changes no field: the mutation IS the LastSeen stamp Store.Update
+// applies on a true return (and it fires no transition event, since Status is
+// untouched). It returns true only while the give-up state actually holds, so
+// this can never keep an unrelated record alive.
+//
+// Only the in-memory stamp matters: the observer runs its prune at the END of a
+// cycle, after react, so a record loaded from disk with a long-stale LastSeen is
+// rescued before the prune of that same cycle ever sees it. The record then
+// leaves the store the way it should — when a human kills the session.
+func (d *Daemon) keepCleanupVisible(s session.Session) {
+	d.sessions.Update(s.ID, func(cur *session.Session) bool {
+		return cur.CleanupFailures >= maxCleanupAttempts
+	})
+}
+
+// clipCause renders an exec error for a notification body: newlines and runs of
+// whitespace collapsed to single spaces (a git/tmux failure is routinely
+// multi-line, and a desktop banner shows one) and clipped to a length a banner
+// and a Slack line can both carry. The clip counts RUNES, not bytes — a git
+// error naming a path routinely carries non-ASCII, and a byte clip would emit a
+// half rune into a JSON webhook body.
+func clipCause(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := strings.Join(strings.Fields(err.Error()), " ")
+	const max = 240
+	r := []rune(s)
+	if len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
 }
 
 // reactCIFailed handles a red PR (PLAN P3.16): while inside the retry budget it
@@ -258,7 +545,7 @@ func (d *Daemon) reactCIFailed(ctx context.Context, s session.Session, r config.
 		// is NOT gated on AtPrompt.
 		escalated := false
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if cur.Status != "ci_failed" || cur.Escalated || cur.LastReactedStatus == "ci_failed" {
+			if cur.Delivery != state.DeliveryCIFailed || cur.Escalated || cur.LastReactedStatus == "ci_failed" {
 				return false
 			}
 			cur.Escalated = true
@@ -306,7 +593,7 @@ func (d *Daemon) reactApproved(ctx context.Context, s session.Session, notifier 
 	}
 	acted := false
 	d.sessions.Update(s.ID, func(cur *session.Session) bool {
-		if cur.Status != "approved" || cur.LastReactedStatus == "approved" {
+		if cur.Delivery != state.DeliveryApproved || cur.LastReactedStatus == "approved" {
 			return false
 		}
 		cur.LastReactedStatus = "approved"
@@ -318,7 +605,10 @@ func (d *Daemon) reactApproved(ctx context.Context, s session.Session, notifier 
 		return
 	}
 	d.reactSave()
-	body := fmt.Sprintf("%s is approved and green — ready to merge", issueLabel(s))
+	body := fmt.Sprintf("%s is approved and green; Lola is checking remaining work and review threads", issueLabel(s))
+	if d.mergeQueueOn() && queueMember(s) {
+		body = fmt.Sprintf("%s is approved and green — queued in lola's merge queue", issueLabel(s))
+	}
 	// Brain (PLAN P5.25): replace the generic approved body with a bounded,
 	// one-shot claude risk summary of the PR diff. Fires once per entry into
 	// "approved" (inside the LastReactedStatus guard consumed above). The diff is
@@ -351,6 +641,14 @@ func (d *Daemon) reactApproved(ctx context.Context, s session.Session, notifier 
 //     without sending; a real Stop hook re-opens it.
 //   - ActivityUnknown / capture failure: not proven either way — fail CLOSED:
 //     the send defers and a later hook or pane cycle settles the gate.
+//
+// "Still open" is handoffDeliverable, not a bare AtPrompt read, so a worker
+// parked on an idle notification can be verified after a restart too — adoption
+// marks every carried gate unverified, and an AtPrompt-only check could never
+// re-verify a session whose AtPrompt the notification had already closed,
+// stranding its review hand-off forever. This cannot loosen the reaction path:
+// reactSendAgent requires AtPrompt itself before calling here, and its own
+// atomic consume re-checks AtPrompt after.
 func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bool {
 	// Re-read the live record: the caller's copy is a cycle-old snapshot and a
 	// hook may have verified (or closed) the gate since.
@@ -371,7 +669,7 @@ func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bo
 	case attention.ActivityWaiting:
 		verified := false
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if !cur.AtPrompt {
+			if !handoffDeliverable(*cur) {
 				return false // a hook resumed the agent meanwhile: nothing to verify
 			}
 			cur.AtPromptVerified = true
@@ -381,7 +679,7 @@ func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bo
 		return verified
 	case attention.ActivityWorking:
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if !cur.AtPrompt {
+			if !handoffDeliverable(*cur) {
 				return false
 			}
 			cur.AtPrompt = false // the carried gate was stale: close it
@@ -395,7 +693,7 @@ func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bo
 	}
 }
 
-// reactSendAgent is the ONLY path that types into a live agent. It enforces the
+// reactSendAgent is the reaction engine's path into a live agent. It enforces the
 // send-keys safety gate:
 //
 //   - Already reacted to this state-entry (LastReactedStatus == key) → no-op.
@@ -403,8 +701,9 @@ func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bo
 //     across a restart and cannot be verified against the live pane
 //     (ensurePromptVerified) → the reaction is DEFERRED: PendingReaction is
 //     recorded and a later cycle retries. Nothing is typed.
-//   - Agent verifiably idle at its prompt → the (optional) detail is fetched,
-//     the message rendered, then AtPrompt is CONSUMED atomically together with
+//   - After fetching details, require a detached terminal and a fresh, visibly
+//     empty composer (lockAutomationPrompt). A draft or unknown layout defers.
+//   - Agent verifiably idle at its prompt → AtPrompt is CONSUMED atomically with
 //     stamping LastReactedStatus (and, for ci_failed, bumping CIRetries) in one
 //     Store.Update. Only if that atomic consume wins is the text actually sent —
 //     so a hook that flipped AtPrompt false in the meantime cancels the send.
@@ -415,20 +714,22 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 	if s.LastReactedStatus == key {
 		return // one-shot: already sent for this entry into the state
 	}
-
-	if !s.AtPrompt || !d.ensurePromptVerified(ctx, s) {
-		// Defer: the agent is mid-turn (or its carried gate is unverifiable).
-		// Record the pending reaction (idempotently) so it is visible; the
-		// LastReactedStatus guard is what actually makes the next AtPrompt
-		// cycle retry.
+	deferReaction := func() {
+		changed := false
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if cur.PendingReaction == key {
+			if cur.PendingReaction == key || cur.LastReactedStatus == key || cur.Delivery != s.Delivery {
 				return false
 			}
 			cur.PendingReaction = key
+			changed = true
 			return true
 		})
-		d.logf("", "react: %s is %s but the agent is mid-turn — deferring %s reaction", s.ID, s.Status, key)
+		if changed {
+			d.reactSave()
+		}
+	}
+	if !s.AtPrompt || !d.ensurePromptVerified(ctx, s) {
+		deferReaction()
 		return
 	}
 
@@ -437,6 +738,26 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 		detail = fetchDetail()
 	}
 	msg := renderReaction(template, s, detail)
+	if key == "changes_requested" {
+		// The feedback this reaction relays IS a set of review threads — a human
+		// reviewer's, or a bot's inline comments (CodeRabbit posts its findings
+		// that way). Tell the worker to close the ones it fixes, and how: an
+		// agent that is never told leaves the conversations open and the PR reads
+		// as untouched however much of it was actually fixed. lola's own text,
+		// appended AFTER the rendered (untrusted) detail so nothing in the
+		// feedback can rewrite the instruction, and conditional in its wording
+		// because nothing here proves a thread is open right now.
+		msg += prThreadNote(s)
+	}
+	// A Stop hook proves idleness at the time it fired, not that the editor is
+	// empty now. Check AFTER fetching details: a human can start a draft during
+	// the gh request. A deferred send consumes neither the gate nor a CI retry.
+	unlock, ready := d.lockAutomationPrompt(ctx, s)
+	if !ready {
+		deferReaction()
+		return
+	}
+	defer unlock()
 
 	// Atomically re-check AtPrompt under the store lock and consume it. This is
 	// the true gate: the passed copy's AtPrompt may be stale by microseconds.
@@ -446,12 +767,13 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 		attempt  int
 	)
 	updated, _ := d.sessions.Update(s.ID, func(cur *session.Session) bool {
-		if !cur.AtPrompt || cur.LastReactedStatus == key {
+		if !cur.AtPrompt || cur.LastReactedStatus == key || cur.Delivery != s.Delivery {
 			return false // a hook resumed the agent, or another writer reacted
 		}
 		cur.AtPrompt = false
 		cur.LastReactedStatus = key
 		cur.PendingReaction = ""
+		cur.SetAgentState(state.AgentWorking, "", time.Now())
 		if key == "ci_failed" {
 			cur.CIRetries++
 		}
@@ -468,9 +790,7 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 	// AtPrompt is already consumed; the send now happens exactly once. A tmux
 	// failure is logged but not rolled back — the guard stays set so we do not
 	// spam the agent, and a genuine later transition re-reacts.
-	sctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
-	defer cancel()
-	if err := d.sendKeys(sctx, tmuxName, msg); err != nil {
+	if err := d.typeToAgentLocked(ctx, noteFor(s, reactionLabel(key, s)), tmuxName, msg, reactExecTimeout); err != nil {
 		d.logf("", "react: send-keys (%s) to %s failed: %v", key, s.ID, err)
 		return
 	}
@@ -481,30 +801,38 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 	d.logf("", "react: %s %s — re-prompted the agent", s.ID, key)
 }
 
-// resetReactionGuards clears the one-shot guards when a session sits in a benign
-// or transient status, so a later re-entry into a reacted state fires again. The
-// ci retry streak (CIRetries / Escalated) is preserved while CI is still in play
-// (ci_failed / ci_pending) and reset only once CI is out of the picture.
+// resetReactionGuards clears the one-shot guards once a session's DELIVERY axis
+// has left every state the engine reacts to, so a later re-entry into a reacted
+// state fires afresh.
+//
+// Reaching here IS the derivation, and it is a delivery-axis one: react's switch
+// handles merged / ci_failed / merge_conflict / changes_requested / approved /
+// closed off s.Delivery, so its default branch — this function's only caller in
+// the engine — can only be delivery ∈ {none, draft, ci_pending, review_pending}.
+// The PR is demonstrably no longer in a reacted state.
+//
+// There used to be a `Status == "needs_input"` bail-out at the top of this
+// function, and it existed SOLELY because the rolled-up status masked the
+// delivery axis: a live agent waiting on a human outranks every PR state in
+// Rollup, so a permission prompt mid-fix arrived here carrying a still-red,
+// still-conflicting, still-changes-requested PR. Clearing the guards for it
+// would have zeroed the CI retry streak, dropped the Escalated backstop and
+// released the one-shot LastReactedStatus — re-prompting and re-escalating the
+// agent every single time it returned to its prompt. Dispatching off the
+// delivery axis removes the mask at the source: such a session now lands in
+// reactCIFailed / reactSendAgent, which keep their own guards, and never
+// reaches this function at all. So the agent axis is not consulted here in
+// either direction — it no longer carries any information about whether the PR
+// left its reacted state.
+//
+// The ci retry streak (CIRetries / Escalated) is preserved while CI is still in
+// play on the delivery axis and reset only once CI is out of the picture.
 func (d *Daemon) resetReactionGuards(s session.Session) {
-	if s.Status == "needs_input" {
-		// needs_input is a live-pane hook state that MASKS the underlying
-		// PR-derived status (see nativeStatus: a Notification outranks the
-		// PR-derived ci_failed / changes_requested / merge_conflict while the
-		// pane is alive). It is NOT the session leaving the reacted state: the
-		// PR is still red / changes-requested / conflicting, so a permission
-		// prompt mid-fix must not zero the CI retry streak, clear the Escalated
-		// backstop, or drop the one-shot LastReactedStatus guard — that would
-		// re-prompt + re-escalate the agent and re-send review/rebase feedback
-		// every time it returns to its prompt. Preserve all guards; the real
-		// reset fires once the pane returns to idle and the true PR status
-		// re-surfaces (or genuinely resolves).
-		return
-	}
-	// The CI streak is preserved while CI is still in play ON THE DELIVERY
-	// AXIS — readable directly now, instead of inferring it through a rollup
-	// that other states can mask.
+	// ci_failed cannot reach here through react, but a direct caller can hand
+	// any record over; both CI states are named so the streak survives either.
 	ciResolved := s.Delivery != state.DeliveryCIFailed && s.Delivery != state.DeliveryCIPending
-	if s.LastReactedStatus == "" && s.PendingReaction == "" && s.CIRetries == 0 && !s.Escalated {
+	if s.LastReactedStatus == "" && s.PendingReaction == "" && s.CIRetries == 0 && !s.Escalated &&
+		s.CleanupFailures == 0 {
 		return // nothing to clear
 	}
 	changed := false
@@ -523,6 +851,16 @@ func (d *Daemon) resetReactionGuards(s session.Session) {
 			cur.Escalated = false
 			c = true
 		}
+		// The merged-cleanup streak counts CONSECUTIVE failures within ONE
+		// merged episode, and reaching here means the session is no longer
+		// merged — the only partial progress this engine can actually observe
+		// (a successful or dirty cleanup drops the record outright, so neither
+		// needs a reset path). A PR that was reopened and merges again gets a
+		// fresh attempt budget rather than inheriting a spent one.
+		if cur.CleanupFailures != 0 {
+			cur.CleanupFailures = 0
+			c = true
+		}
 		changed = c
 		return c
 	})
@@ -538,9 +876,16 @@ func (d *Daemon) fetchFailingChecks(ctx context.Context, s session.Session) stri
 	if s.PR == nil || s.Repo == "" {
 		return ""
 	}
+	required := d.requiredChecksFor(ctx, s.Repo, s.PR.BaseRef)
 	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer cancel()
-	detail, err := d.failingChecks(cctx, s.Repo, s.PR.Number)
+	var detail string
+	var err error
+	if len(required) > 0 && d.failingChecksAmong != nil {
+		detail, err = d.failingChecksAmong(cctx, s.Repo, s.PR.Number, required)
+	} else {
+		detail, err = d.failingChecks(cctx, s.Repo, s.PR.Number)
+	}
 	if err != nil {
 		d.logf("", "react: fetch failing checks for %s failed: %v", s.ID, err)
 		return ""
@@ -575,52 +920,34 @@ func renderReaction(template string, s session.Session, detail string) string {
 	prRef := ""
 	if s.PR != nil {
 		prRef = fmt.Sprintf("#%d", s.PR.Number)
+		if s.Lane != "" && s.Repo != "" {
+			prRef = s.Repo + prRef // a stack's PRs live in different repositories
+		}
 	}
 	msg := strings.NewReplacer(
 		"{{.Detail}}", detail,
 		"{{.Issue}}", s.Issue,
 		"{{.PR}}", prRef,
 	).Replace(template)
-	return sanitizeAgentText(msg)
+	return sanitizeAgentText(laneHeader(s) + msg)
 }
 
-// ansiEscapeRe matches the ANSI escape sequences (CSI and OSC) that CI logs and
-// terminal captures routinely emit, so they can be stripped whole rather than
-// left as visible garbage once the lone ESC byte is removed.
-var ansiEscapeRe = regexp.MustCompile("\x1b\\[[0-9;?:<>=]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
-
-// sanitizeAgentText makes text safe to hand to tmux send-keys for typing into a
-// live agent's pane. The transport (tmux.Client.SendKeys) types the payload
-// with `send-keys -l` and then submits with a SEPARATE Enter (\r); any \r
-// already inside the payload is an INDISTINGUISHABLE submit, so an embedded
-// carriage return — routine in `gh run view --log-failed` output (npm/pytest/
-// cargo/webpack progress bars) and injectable via attacker-authored PR/review
-// bodies — would submit a partial prompt and defeat the AtPrompt send-keys gate
-// mid-transport. So:
-//
-//   - ANSI escape sequences are stripped whole.
-//   - CR (\r) is dropped: it is the submit vector. A CRLF collapses to a clean
-//     LF; a bare CR (progress bars) vanishes.
-//   - Other C0 controls (and DEL / C1) are dropped so nothing else can steer
-//     the pane's line editor.
-//   - LF (\n) and TAB (\t) are PRESERVED: reaction templates are intentionally
-//     multi-line (see config.DefaultCIFailedMessage) and the agent pane inserts
-//     LF literally — only CR/Enter submits.
-func sanitizeAgentText(s string) string {
-	s = ansiEscapeRe.ReplaceAllString(s, "")
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch {
-		case r == '\n' || r == '\t':
-			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
-			// CR, other C0 controls, DEL, and C1 controls: drop.
-		default:
-			b.WriteRune(r)
+// laneHeader is lola's own first line on anything typed to a stack session's
+// agent about ONE app's PR: which checkout and which pull request it is about.
+// The agent sees several of each; without it a "CI failed" could be fixed in
+// the wrong repository. "" for an ordinary session.
+func laneHeader(s session.Session) string {
+	if s.Lane == "" {
+		return ""
+	}
+	pr := ""
+	if s.PR != nil {
+		pr = fmt.Sprintf(", pull request #%d", s.PR.Number)
+		if s.Repo != "" {
+			pr = fmt.Sprintf(", pull request %s#%d", s.Repo, s.PR.Number)
 		}
 	}
-	return b.String()
+	return fmt.Sprintf("[About the `%s/` checkout%s — work in that directory.]\n", s.Lane, pr)
 }
 
 // reactNotifyText builds the operator notification for a send reaction.
@@ -644,10 +971,14 @@ func reactNotifyText(key string, s session.Session, attempt int) (title, body st
 // issueLabel is a human-friendly session identifier for notifications: the
 // Linear issue identifier when known, else the session ID.
 func issueLabel(s session.Session) string {
+	label := s.ID
 	if s.Issue != "" {
-		return s.Issue
+		label = s.Issue
 	}
-	return s.ID
+	if s.Lane != "" {
+		label += " (" + s.Lane + ")"
+	}
+	return label
 }
 
 // prURL returns the session's PR URL, or "" when it has no PR.

@@ -70,6 +70,15 @@ func newTestDaemon(t *testing.T, cfg *config.Config, fake *linear.Fake, nat Nati
 	d := newDaemon(cfg, fake, log.New(io.Discard, "", 0), home)
 	d.native = nat
 	d.runtimeHealth = func(string) error { return nil }
+	d.promptAttached = func(context.Context, string) (bool, error) { return false, nil }
+	// newDaemon wires these to the real tmux. Left in place, every proof in a test that
+	// injects only paneTail would ask the machine's own lola server about its pane.
+	d.paneCursor, d.paneVisible = nil, nil
+	d.sendKeysTyped = nil // the same reason: a test's sendKeys is the one way to type
+	// Observer notification tests explicitly install these seams. Other tests
+	// must neither query live GitHub readiness nor deliver desktop/Slack alerts.
+	d.prReadiness = nil
+	d.notifier = nil
 	return d
 }
 
@@ -278,7 +287,7 @@ func TestTickDispatchOrdering(t *testing.T) {
 
 	// Spawn got the IDENTIFIER (FE-231) and the resolved [[project]].
 	spawns := nat.spawnCalls()
-	if len(spawns) != 1 || spawns[0] != (nativeSpawnCall{"p1", "FE-231"}) {
+	if len(spawns) != 1 || spawns[0] != (nativeSpawnCall{"p1", "FE-231", ""}) {
 		t.Errorf("spawns = %+v, want [{p1 FE-231}]", spawns)
 	}
 

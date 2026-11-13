@@ -1,4 +1,4 @@
-// A Go port of the desktop app's catppuccin.ts: the four Catppuccin flavor
+// A Go port of the desktop app's catppuccin.ts: the coordinated flavor
 // tables plus the pure color math that turns a flavor into lola's semantic
 // design tokens. This is the SAME data and the SAME arithmetic the app runs, so
 // picking a flavor paints the TUI and the desktop app identically instead of
@@ -23,7 +23,7 @@ import "math"
 // defaultThemeID mirrors config.DefaultUITheme. It lives here as a plain literal
 // (not an import) to keep this file free of the config dependency; theme.go
 // resolves the real config.DefaultUITheme and passes it in.
-const defaultThemeID = "catppuccin-mocha"
+const defaultThemeID = "lola-midnight"
 
 // flavor is one Catppuccin flavor: the 26 named colors plus the two facts the
 // token math needs beyond them — whether it is light (only latte) and which
@@ -31,7 +31,7 @@ const defaultThemeID = "catppuccin-mocha"
 type flavor struct {
 	id    string
 	label string
-	dark  bool // false only for latte — drives every light/dark decision
+	dark  bool // false for light palettes — drives every light/dark decision
 
 	rosewater, flamingo, pink, mauve, red, maroon, peach, yellow string
 	green, teal, sky, sapphire, blue, lavender                   string
@@ -57,12 +57,12 @@ func (f flavor) faint() string {
 
 var mocha = flavor{
 	id: "catppuccin-mocha", label: "Mocha", dark: true,
-	rosewater: "#f5e0dc", flamingo: "#f2cdcd", pink: "#f5c2e7", mauve: "#cba6f7",
-	red: "#f38ba8", maroon: "#eba0ac", peach: "#fab387", yellow: "#f9e2af",
-	green: "#a6e3a1", teal: "#94e2d5", sky: "#89dceb", sapphire: "#74c7ec",
-	blue: "#89b4fa", lavender: "#b4befe",
-	text: "#cdd6f4", subtext1: "#bac2de", subtext0: "#a6adc8",
-	overlay2: "#9399b2", overlay1: "#7f849c", overlay0: "#6c7086",
+	rosewater: "#f5e0dc", flamingo: "#f2cdcd", pink: "#efaee0", mauve: "#c39af5",
+	red: "#f183a0", maroon: "#ec94ac", peach: "#f5ac78", yellow: "#efd28f",
+	green: "#9bd991", teal: "#87d9ca", sky: "#83d6e8", sapphire: "#75bee6",
+	blue: "#88aff5", lavender: "#b6bafa",
+	text: "#e4e5f3", subtext1: "#cbd0e5", subtext0: "#b2b6cf",
+	overlay2: "#a1a6c0", overlay1: "#9095af", overlay0: "#6c7086",
 	surface2: "#585b70", surface1: "#45475a", surface0: "#313244",
 	base: "#1e1e2e", mantle: "#181825", crust: "#11111b",
 	faintKey: "overlay1",
@@ -70,12 +70,12 @@ var mocha = flavor{
 
 var macchiato = flavor{
 	id: "catppuccin-macchiato", label: "Macchiato", dark: true,
-	rosewater: "#f4dbd6", flamingo: "#f0c6c6", pink: "#f5bde6", mauve: "#c6a0f6",
-	red: "#ed8796", maroon: "#ee99a0", peach: "#f5a97f", yellow: "#eed49f",
-	green: "#a6da95", teal: "#8bd5ca", sky: "#91d7e3", sapphire: "#7dc4e4",
-	blue: "#8aadf4", lavender: "#b7bdf8",
-	text: "#cad3f5", subtext1: "#b8c0e0", subtext0: "#a5adcb",
-	overlay2: "#939ab7", overlay1: "#8087a2", overlay0: "#6e738d",
+	rosewater: "#f4dbd6", flamingo: "#f0c6c6", pink: "#efa8df", mauve: "#bd96f4",
+	red: "#f08095", maroon: "#f197aa", peach: "#f4a373", yellow: "#edcc86",
+	green: "#a0d88a", teal: "#7fd5c5", sky: "#85d7e5", sapphire: "#71c2e5",
+	blue: "#84adfa", lavender: "#b0bafa",
+	text: "#e3e8f7", subtext1: "#cbd3eb", subtext0: "#afb9d5",
+	overlay2: "#a3adca", overlay1: "#959fbd", overlay0: "#6e738d",
 	surface2: "#5b6078", surface1: "#494d64", surface0: "#363a4f",
 	base: "#24273a", mantle: "#1e2030", crust: "#181926",
 	faintKey: "overlay1",
@@ -83,44 +83,242 @@ var macchiato = flavor{
 
 var frappe = flavor{
 	id: "catppuccin-frappe", label: "Frappé", dark: true,
-	rosewater: "#f2d5cf", flamingo: "#eebebe", pink: "#f4b8e4", mauve: "#ca9ee6",
-	red: "#e78284", maroon: "#ea999c", peach: "#ef9f76", yellow: "#e5c890",
-	green: "#a6d189", teal: "#81c8be", sky: "#99d1db", sapphire: "#85c1dc",
-	blue: "#8caaee", lavender: "#babbf1",
-	text: "#c6d0f5", subtext1: "#b5bfe2", subtext0: "#a5adce",
-	overlay2: "#949cbb", overlay1: "#838ba7", overlay0: "#737994",
-	surface2: "#626880", surface1: "#51576d", surface0: "#414559",
+	rosewater: "#f2d5cf", flamingo: "#eebebe", pink: "#edafe0", mauve: "#c5a0ef",
+	red: "#ef919b", maroon: "#eea0b0", peach: "#f1ad82", yellow: "#e9ce91",
+	green: "#a8d99a", teal: "#8dd6ca", sky: "#95d9e5", sapphire: "#88c9e8",
+	blue: "#9abafa", lavender: "#bfc5fb",
+	text: "#e6eaf7", subtext1: "#d0d7ec", subtext0: "#bcc5df",
+	overlay2: "#aeb9d2", overlay1: "#a0abc7", overlay0: "#737994",
+	surface2: "#5e6883", surface1: "#4b526b", surface0: "#3b4055",
 	base: "#303446", mantle: "#292c3c", crust: "#232634",
 	faintKey: "overlay1",
 }
 
 var latte = flavor{
 	id: "catppuccin-latte", label: "Latte", dark: false,
-	rosewater: "#dc8a78", flamingo: "#dd7878", pink: "#ea76cb", mauve: "#8839ef",
-	red: "#d20f39", maroon: "#e64553", peach: "#fe640b", yellow: "#df8e1d",
-	green: "#40a02b", teal: "#179299", sky: "#04a5e5", sapphire: "#209fb5",
-	blue: "#1e66f5", lavender: "#7287fd",
-	text: "#4c4f69", subtext1: "#5c5f77", subtext0: "#6c6f85",
-	overlay2: "#7c7f93", overlay1: "#8c8fa1", overlay0: "#9ca0b0",
-	surface2: "#acb0be", surface1: "#bcc0cc", surface0: "#ccd0da",
-	base: "#eff1f5", mantle: "#e6e9ef", crust: "#dce0e8",
+	rosewater: "#bf7064", flamingo: "#cb6578", pink: "#b747a0", mauve: "#8554cd",
+	red: "#bd3158", maroon: "#c8506a", peach: "#bd551f", yellow: "#a66b12",
+	green: "#177e4d", teal: "#168477", sky: "#008ca8", sapphire: "#167fba",
+	blue: "#326bd6", lavender: "#7264d4",
+	text: "#30374f", subtext1: "#48546e", subtext0: "#586580",
+	overlay2: "#66738e", overlay1: "#7d89a2", overlay0: "#94a0b8",
+	surface2: "#aebad0", surface1: "#c9d1e2", surface0: "#e0e5f0",
+	base: "#f7f8fc", mantle: "#edf0f7", crust: "#e2e7f0",
 	faintKey: "overlay2",
 }
 
 // themeIDs is the same order and spelling as config.UIThemes. flavors keys each
 // by its own id.
+var midnight = flavor{
+	id: "lola-midnight", label: "Midnight", dark: true,
+	rosewater: "#f5ddd8",
+	flamingo:  "#f3b9b4",
+	pink:      "#efa0e2",
+	mauve:     "#b986ff",
+	red:       "#ff738f",
+	maroon:    "#f991aa",
+	peach:     "#ffa45c",
+	yellow:    "#efcf7b",
+	green:     "#8ce477",
+	teal:      "#79dccc",
+	sky:       "#7fddea",
+	sapphire:  "#67bfe8",
+	blue:      "#82abff",
+	lavender:  "#b2baff",
+	text:      "#e6e9f5",
+	subtext1:  "#c7cde3",
+	subtext0:  "#adb7d1",
+	overlay2:  "#a1abc5",
+	overlay1:  "#929db9",
+	overlay0:  "#707b96",
+	surface2:  "#48516b",
+	surface1:  "#333c55",
+	surface0:  "#252c43",
+	base:      "#191d2f",
+	mantle:    "#121624",
+	crust:     "#0c0f1a",
+	faintKey:  "overlay1",
+}
+
+var githubLight = flavor{
+	id: "github-light", label: "GitHub Light", dark: false,
+	rosewater: "#bf7064",
+	flamingo:  "#d1577a",
+	pink:      "#bf3989",
+	mauve:     "#8250df",
+	red:       "#cf222e",
+	maroon:    "#a40e26",
+	peach:     "#bc4c00",
+	yellow:    "#9a6700",
+	green:     "#1a7f37",
+	teal:      "#1b7c83",
+	sky:       "#0969da",
+	sapphire:  "#0550ae",
+	blue:      "#0969da",
+	lavender:  "#6639ba",
+	text:      "#24292f",
+	subtext1:  "#424a53",
+	subtext0:  "#57606a",
+	overlay2:  "#68717c",
+	overlay1:  "#818b98",
+	overlay0:  "#9aa4b0",
+	surface2:  "#afb8c1",
+	surface1:  "#d0d7de",
+	surface0:  "#eaeef2",
+	base:      "#ffffff",
+	mantle:    "#f6f8fa",
+	crust:     "#eaeef2",
+	faintKey:  "overlay2",
+}
+
+var solarizedLight = flavor{
+	id: "solarized-light", label: "Solarized Light", dark: false,
+	rosewater: "#b77b64",
+	flamingo:  "#cb786a",
+	pink:      "#d33682",
+	mauve:     "#6c71c4",
+	red:       "#dc322f",
+	maroon:    "#c75a54",
+	peach:     "#cb4b16",
+	yellow:    "#b58900",
+	green:     "#718600",
+	teal:      "#2aa198",
+	sky:       "#268bd2",
+	sapphire:  "#2176a9",
+	blue:      "#268bd2",
+	lavender:  "#7778b4",
+	text:      "#3c5158",
+	subtext1:  "#52666d",
+	subtext0:  "#657b83",
+	overlay2:  "#70848a",
+	overlay1:  "#839496",
+	overlay0:  "#93a1a1",
+	surface2:  "#b5bcb4",
+	surface1:  "#d6d5c4",
+	surface0:  "#e5e1cf",
+	base:      "#fdf6e3",
+	mantle:    "#eee8d5",
+	crust:     "#e4ddc7",
+	faintKey:  "overlay2",
+}
+
+var rosePineDawn = flavor{
+	id: "rose-pine-dawn", label: "Rosé Pine Dawn", dark: false,
+	rosewater: "#b78280",
+	flamingo:  "#d1958b",
+	pink:      "#b4637a",
+	mauve:     "#907aa9",
+	red:       "#b4637a",
+	maroon:    "#c47585",
+	peach:     "#d7827e",
+	yellow:    "#a87319",
+	green:     "#56836b",
+	teal:      "#56949f",
+	sky:       "#286983",
+	sapphire:  "#437d91",
+	blue:      "#286983",
+	lavender:  "#8b78a0",
+	text:      "#4b485f",
+	subtext1:  "#615d76",
+	subtext0:  "#706b84",
+	overlay2:  "#79738c",
+	overlay1:  "#918b9f",
+	overlay0:  "#a69eaa",
+	surface2:  "#c8bdc4",
+	surface1:  "#dfcfd1",
+	surface0:  "#f2e6e2",
+	base:      "#fffaf3",
+	mantle:    "#faf4ed",
+	crust:     "#f2e9e1",
+	faintKey:  "overlay2",
+}
+
+var gruvboxLight = flavor{
+	id: "gruvbox-light", label: "Gruvbox Light", dark: false,
+	rosewater: "#b57654",
+	flamingo:  "#af6754",
+	pink:      "#b16286",
+	mauve:     "#8f3f71",
+	red:       "#9d0006",
+	maroon:    "#cc241d",
+	peach:     "#af3a03",
+	yellow:    "#b57614",
+	green:     "#79740e",
+	teal:      "#427b58",
+	sky:       "#076678",
+	sapphire:  "#458588",
+	blue:      "#076678",
+	lavender:  "#8f6a88",
+	text:      "#3c3836",
+	subtext1:  "#504945",
+	subtext0:  "#665c54",
+	overlay2:  "#75695e",
+	overlay1:  "#928374",
+	overlay0:  "#a89984",
+	surface2:  "#bdae93",
+	surface1:  "#d5c4a1",
+	surface0:  "#ebdbb2",
+	base:      "#fbf1c7",
+	mantle:    "#f2e5bc",
+	crust:     "#ebd9ac",
+	faintKey:  "overlay2",
+}
+
+var oneLight = flavor{
+	id: "one-light", label: "One Light", dark: false,
+	rosewater: "#ca7860",
+	flamingo:  "#e45649",
+	pink:      "#d52b93",
+	mauve:     "#a626a4",
+	red:       "#e02f44",
+	maroon:    "#c93569",
+	peach:     "#d75f00",
+	yellow:    "#b87500",
+	green:     "#268b3a",
+	teal:      "#008c86",
+	sky:       "#2864f0",
+	sapphire:  "#087bb5",
+	blue:      "#2864f0",
+	lavender:  "#7c42dc",
+	text:      "#282c34",
+	subtext1:  "#434a59",
+	subtext0:  "#586174",
+	overlay2:  "#687287",
+	overlay1:  "#818ba0",
+	overlay0:  "#9aa4b8",
+	surface2:  "#b5bfd4",
+	surface1:  "#d1d9eb",
+	surface0:  "#e5eafb",
+	base:      "#fafbff",
+	mantle:    "#f1f4fb",
+	crust:     "#e5eaf5",
+	faintKey:  "overlay2",
+}
+
 var themeIDs = []string{
+	"lola-midnight",
 	"catppuccin-mocha",
 	"catppuccin-macchiato",
 	"catppuccin-frappe",
 	"catppuccin-latte",
+	"github-light",
+	"solarized-light",
+	"rose-pine-dawn",
+	"gruvbox-light",
+	"one-light",
 }
 
 var flavors = map[string]flavor{
-	mocha.id:     mocha,
-	macchiato.id: macchiato,
-	frappe.id:    frappe,
-	latte.id:     latte,
+	midnight.id:       midnight,
+	mocha.id:          mocha,
+	macchiato.id:      macchiato,
+	frappe.id:         frappe,
+	latte.id:          latte,
+	githubLight.id:    githubLight,
+	solarizedLight.id: solarizedLight,
+	rosePineDawn.id:   rosePineDawn,
+	gruvboxLight.id:   gruvboxLight,
+	oneLight.id:       oneLight,
 }
 
 // flavorFor resolves an id to a flavor, falling back to the default for anything
@@ -223,14 +421,9 @@ const (
 	mutedFloor = 3.0
 )
 
-// onFill picks the text drawn on top of a fully saturated fill, by MEASURED
-// contrast against that specific fill rather than a hardcoded end of the ramp —
-// the one rule that stays correct across all four flavors (latte inverts which
-// ramp end is dark, and even within latte the answer differs per fill). The
-// ramp's own extremes win first, so a fill the palette can label stays labelled
-// in the palette; where it cannot, the winner keeps walking PAST the ramp toward
-// the absolute end it already points at, stopping at the first step that clears
-// AA.
+// onFill uses the most legible palette end first. When it misses AA, walk
+// toward whichever absolute endpoint has higher contrast against the fill.
+// Choosing that endpoint independently avoids a mid-luminance dead end.
 func onFill(f flavor, fill string) string {
 	best := f.crust
 	for _, c := range []string{f.base, f.text} {
@@ -242,7 +435,7 @@ func onFill(f flavor, fill string) string {
 		return best
 	}
 	end := "#ffffff"
-	if luminance(best) < luminance(fill) {
+	if contrast("#000000", fill) > contrast("#ffffff", fill) {
 		end = "#000000"
 	}
 	for step := 1; step <= 20; step++ {
@@ -327,7 +520,7 @@ const accentFill = 0.2
 // same table catppuccin.ts emits, with the SAME contrast walks, so the compiled
 // values match the app. theme.go renames these "--color-*" keys onto the TUI's
 // palette variables. The structural mapping (canvas→mantle, panel→base,
-// sel→surface0, edge→surface1) holds in all four flavors because latte preserves
+// sel→surface0, edge→surface1) holds in all flavors because latte preserves
 // the ordinal meaning of the surface ramp even though it inverts its luminance.
 func toTokens(f flavor) map[string]string {
 	surface := panelBg(f)
@@ -337,7 +530,13 @@ func toTokens(f flavor) map[string]string {
 	bare := []string{f.mantle, surface, f.surface0}
 	accent := visible(f.sky, bare...)
 	bad := readable(f.red, bare...)
-	faint := muted(f.faint(), bare...)
+	// Latte alone also walks to AA on canvas and panel, because 3:1 grey on its
+	// near-white reads as washed out rather than as quiet. Same as the app.
+	faintBase := f.faint()
+	if !f.dark {
+		faintBase = readable(faintBase, f.mantle, f.base)
+	}
+	faint := muted(faintBase, bare...)
 	fill := mix(accent, f.mantle, accentFill)
 	fillHover := mix(accent, backdrop(f), accentFill)
 	work := mix(f.blue, f.mantle, pillTintMix)
@@ -355,6 +554,7 @@ func toTokens(f flavor) map[string]string {
 		"--color-accent-fill-hover": fillHover,
 		"--color-on-accent":         onFill(f, accent),
 		"--color-ink":               f.text,
+		"--color-ink-2":             readable(f.subtext0, bare...),
 		"--color-faint":             faint,
 		"--color-placeholder":       readable(faint, f.mantle),
 		"--color-sel":               f.surface0,

@@ -7,10 +7,16 @@
 // The fields are split across a tab strip (tab / shift+tab, or left/right);
 // within a tab they are a flat, navigable list grouped by section header. Five
 // kinds: bool (space/enter toggles), text (type inline), int (digits, validated
-// on save), enum (space/enter cycles a fixed set), and list/env (enter opens a
-// one-entry-per-line sub-editor, over the shared fieldedit.go helpers). The
-// Slack webhook and Linear key are secrets and are NEVER edited here — [notify]
-// exposes only the env-var NAME that holds the webhook, never its value.
+// on save), enum (space/enter cycles a fixed set), list/env (enter opens a
+// one-entry-per-line sub-editor, over the shared fieldedit.go helpers), and
+// secret (types masked, and goes to the KEYCHAIN rather than into config.toml).
+//
+// Secret discipline: a secret's value never reaches config.toml, a log line or
+// the rendered pane. The Slack webhook is still name-only — [notify] exposes the
+// env var that HOLDS it, never its value. The Linear key is the one secret with
+// a write path here (sfSecret), because it was otherwise settable only in
+// `lola setup`, leaving no way to add one to a hand-written config or to rotate
+// a leaked one; it is written straight to the keychain and never read back.
 package tui
 
 import (
@@ -25,9 +31,13 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
+	"github.com/sushidev-team/lola/internal/secrets"
 )
 
 type settingsFormEvent int
@@ -47,6 +57,13 @@ const (
 	sfEnum // fixed set of values, cycled with space/enter (no free typing)
 	sfList // one value per line, edited in an open sub-editor
 	sfEnv  // one KEY=value per line, same sub-editor
+	// sfSecret types like sfText but RENDERS masked and is never written to
+	// config.toml — save() hands it to the keychain instead. Only the Linear API
+	// key uses it. Masking matters here beyond shoulder-surfing: the TUI runs
+	// inside tmux, so a plain-text key would sit in the pane's scrollback, which
+	// lola itself captures for the attention parser.
+	sfSecret
+	sfAction // explicit action, activated with enter
 )
 
 // settingsTab groups the fields into the config tables they write. [defaults]
@@ -57,11 +74,14 @@ type settingsTab int
 
 const (
 	stDefaults settingsTab = iota
+	stLinear
 	stProjectDefaults
 	stNotify
 	stBrain
 	stStatusAgent
 	stCodeRabbit
+	stSSH
+	stRemote
 	stAppearance
 )
 
@@ -70,11 +90,14 @@ var settingsTabs = []struct {
 	title string
 }{
 	{stDefaults, "Defaults"},
+	{stLinear, "Linear"},
 	{stProjectDefaults, "Project defaults"},
 	{stNotify, "Notify"},
 	{stBrain, "Brain"},
 	{stStatusAgent, "Interpreter"},
 	{stCodeRabbit, "Review"},
+	{stSSH, "SSH hosts"},
+	{stRemote, "Remote"},
 	{stAppearance, "Appearance"},
 }
 
@@ -110,15 +133,16 @@ type setField struct {
 }
 
 type settingsForm struct {
-	cfgPath string
-	cfg     *config.Config
-	fields  []setField
-	tab     settingsTab
-	cursor  int  // index into the ACTIVE tab's fields (see visible)
-	scroll  int  // first visible field-region line (cursor-following viewport)
-	editing bool // a list/env field is OPEN for line editing
-	lineCur int  // which line, while editing
-	err     string
+	viewportWidth int // modal content width; zero retains the full test render
+	cfgPath       string
+	cfg           *config.Config
+	fields        []setField
+	tab           settingsTab
+	cursor        int  // index into the ACTIVE tab's fields (see visible)
+	scroll        int  // first visible field-region line (cursor-following viewport)
+	editing       bool // a list/env field is OPEN for line editing
+	lineCur       int  // which line, while editing
+	err           string
 
 	// Unsaved-changes guard, same contract as the project form: baseline is the
 	// state the form opened in, re-taken after an async label load so a fill-in
@@ -153,7 +177,21 @@ type settingsForm struct {
 	// state the Review tab is READ-ONLY (editing would produce a mixed config,
 	// which is a hard validation error) and offers a one-key migration into the
 	// editable provider catalog. Cleared once migrated.
-	reviewLegacy bool
+	reviewLegacy   bool
+	specialistKeys []int
+	nextSpecialist int
+
+	// The SSH hosts tab, generated per host (sshsettings.go). sshRemoving is the
+	// host whose Remove row is waiting on its Y, -1 when none is.
+	sshKeys     []int
+	nextSSHHost int
+	sshRemoving int
+
+	// savedNote is a one-line message a successful save wants shown INSTEAD of
+	// the generic "settings saved" — today only the Linear key's outcome, which
+	// matters because the keychain-unavailable path leaves the user with work to
+	// do (export the env var) that a generic confirmation would hide.
+	savedNote string
 }
 
 // setPicker is the workspace-label chooser floated over the field list. It is
@@ -208,12 +246,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	// tables), falling back to a fresh disabled provider for a kind that is not
 	// configured. A legacy-only config renders these READ-ONLY until migrated.
 	rp := reviewProviderSeed(cfg)
-	cli, watch, claude := rp("coderabbit-cli"), rp("coderabbit-watch"), rp("claude-session")
 	reviewLegacy := legacyReviewOnly(cfg)
-	// The fixed multiselect option sets. github is offered on the pass kinds
-	// only; the watch forbids it (validation), so its editor omits it.
-	trAll := transportOpts(true)
-	trNoGitHub := transportOpts(false)
 	f := &settingsForm{
 		reviewLegacy: reviewLegacy,
 		cfgPath:      cfgPath,
@@ -225,10 +258,21 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "poll_interval", tab: stDefaults, label: "Poll interval", help: "How often each poll ticks, as a Go duration (e.g. 60s, 2m). Clamped up to 30s.", kind: sfText, text: d.PollInterval.String()},
 			{key: "agent", tab: stDefaults, label: "Coding agent", help: "Default coding agent each session spawns (a [[project]] can override). space/enter cycles claude|codex|opencode.", kind: sfEnum, options: agentKindStrings(), text: defaultAgentDisplay(d.Agent)},
 
+			// [linear] — the API key. Its VALUE never lands in config.toml (the
+			// keychain holds it; config records only the source's name), so this
+			// field is handled entirely outside the cfg write in save().
+			//
+			// It exists because the key was settable only in `lola setup`: a
+			// hand-written config could never gain one, and rotating a key meant
+			// editing the Keychain by hand — while a daemon without a key fails
+			// every poll.
+			{key: "linear_key", tab: stLinear, section: "[linear]", sectionNote: "API key (stored in the macOS Keychain)", label: "API key", help: linearKeyHelp(cfg), kind: sfSecret},
+
 			// [defaults] — the per-project fallbacks. Same TOML table, but every
 			// key here is the value a [[project]] gets when it omits its own, so
 			// shared setup is written once (see config.ProjectInherits).
 			{key: "def_branch_prefix", tab: stProjectDefaults, section: "[defaults]", sectionNote: "inherited by every [[project]] that omits the key", label: "Branch prefix", help: "Prepended to a session's branch name (e.g. \"lola/\" → lola/eng-42). Empty resolves to \"lola/\".", kind: sfText, text: d.BranchPrefix},
+			{key: "def_auto_pr_comments", tab: stProjectDefaults, label: "Auto PR comments", help: "Automatically ask idle agents to verify PR review comments, push fixes, and resolve addressed threads. Projects can override. Off by default.", kind: sfBool, b: d.AutoPRComments},
 			{key: "def_symlinks", tab: stProjectDefaults, label: "Symlinks", help: "One relative path per line, linked from the main checkout into each worktree (e.g. .env). enter opens the list. Do NOT symlink vendor/ — it breaks PHP autoload; use post_create.", kind: sfList, lines: append([]string(nil), d.Symlinks...)},
 			{key: "def_post_create", tab: stProjectDefaults, label: "Post-create", help: "One command per line, run in a fresh worktree before the agent starts (e.g. composer install). enter opens the list.", kind: sfList, lines: append([]string(nil), d.PostCreate...)},
 			{key: "def_env", tab: stProjectDefaults, label: "Env (KEY=value)", help: "One KEY=value per line, exported into every session and its post_create commands. Keys must be shell identifiers. enter opens the list.", kind: sfEnv, lines: envLines(d.Env)},
@@ -250,53 +294,69 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "brain_esc", tab: stBrain, label: "Summarize escalation", help: "Summarize WHY a session is blocked on escalation.", kind: sfBool, b: br.SummarizeEscalation},
 			{key: "brain_appr", tab: stBrain, label: "Summarize approved", help: "Summarize PR risk on approved+green.", kind: sfBool, b: br.SummarizeApproved},
 
-		// [statusagent] — the DISPLAY-ONLY status interpreter: a small claude
-		// pass that judges what each agent is actually doing (headline + an
-		// interpreted agent-state overlay). Never enters the control loop.
-		{key: "sa_enabled", tab: stStatusAgent, section: "[statusagent]", sectionNote: "claude status interpretation for the session list", label: "Enabled", help: "Opt-in interpreter: pane + events + PR facts → what the agent is REALLY doing. Display only.", kind: sfBool, b: sa.Enabled},
-		{key: "sa_bin", tab: stStatusAgent, label: "Binary", help: "claude executable; empty resolves \"claude\" via PATH (pin absolute for launchd).", kind: sfText, text: sa.Bin},
-		{key: "sa_model", tab: stStatusAgent, label: "Model", help: "claude --model per interpretation; the recommended default is \"sonnet\"; empty = claude's default.", kind: sfText, text: sa.Model},
-		{key: "sa_timeout", tab: stStatusAgent, label: "Timeout seconds", help: "Hard cap per interpretation call. Must be >= 0.", kind: sfInt, text: itoa(sa.TimeoutSeconds)},
-		{key: "sa_interval", tab: stStatusAgent, label: "Min interval seconds", help: "Per-session debounce between interpretation attempts. Must be >= 0.", kind: sfInt, text: itoa(sa.MinIntervalSeconds)},
-		{key: "sa_maxcycle", tab: stStatusAgent, label: "Max per cycle", help: "Interpretations queued per 30s observer cycle. Must be >= 0.", kind: sfInt, text: itoa(sa.MaxPerCycle)},
-		{key: "sa_confidence", tab: stStatusAgent, label: "Min confidence", help: "0-1; judgements below this are discarded and the deterministic status stands.", kind: sfText, text: formatFloat(sa.MinConfidence)},
-		{key: "sa_transcript", tab: stStatusAgent, label: "Include transcript", help: "Also feed the agent's own transcript tail (more signal, more tokens).", kind: sfBool, b: sa.IncludeTranscript},
+			// [statusagent] — the DISPLAY-ONLY status interpreter: a small claude
+			// pass that judges what each agent is actually doing (headline + an
+			// interpreted agent-state overlay). Never enters the control loop.
+			{key: "sa_enabled", tab: stStatusAgent, section: "[statusagent]", sectionNote: "status interpretation for the session list", label: "Enabled", help: "Opt-in interpreter: pane + events + PR facts → what the agent is REALLY doing. Display only.", kind: sfBool, b: sa.Enabled},
+			{key: "sa_bin", tab: stStatusAgent, label: "Binary", help: "Executable override for the configured interpreter agent; empty uses PATH.", kind: sfText, text: sa.Bin},
+			{key: "sa_model", tab: stStatusAgent, label: "Model", help: "Model for the configured interpreter agent; empty uses its default.", kind: sfText, text: sa.Model},
+			{key: "sa_timeout", tab: stStatusAgent, label: "Timeout seconds", help: "Hard cap per interpretation call. Must be >= 0.", kind: sfInt, text: itoa(sa.TimeoutSeconds)},
+			{key: "sa_interval", tab: stStatusAgent, label: "Min interval seconds", help: "Per-session debounce between interpretation attempts. Must be >= 0.", kind: sfInt, text: itoa(sa.MinIntervalSeconds)},
+			{key: "sa_maxcycle", tab: stStatusAgent, label: "Max per cycle", help: "Interpretations queued per 30s observer cycle. Must be >= 0.", kind: sfInt, text: itoa(sa.MaxPerCycle)},
+			{key: "sa_confidence", tab: stStatusAgent, label: "Min confidence", help: "0-1; judgements below this are discarded and the deterministic status stands.", kind: sfText, text: formatFloat(sa.MinConfidence)},
+			{key: "sa_transcript", tab: stStatusAgent, label: "Include transcript", help: "Also feed the agent's own transcript tail (more signal, more tokens).", kind: sfBool, b: sa.IncludeTranscript},
+
+			// [remote] — the phone listener. The desktop app grew this tab first;
+			// it lives here too because CLAUDE.md's rule is that a setting is
+			// reachable from BOTH surfaces, and because a machine running only the
+			// TUI is exactly the machine whose owner cannot reach the app's version.
+			{key: "remote_enabled", tab: stRemote, section: "[remote]", sectionNote: "TLS listener for the Lola mobile app", label: "Enabled", help: "Off by default, and the default is chosen for what enabling it GRANTS: a paired phone can read every session, watch any pane and type into a running agent.", kind: sfBool, b: cfg.Remote.Enabled},
+			// sfText, NOT sfEnum, and that is the whole point. bind accepts one of
+			// config.RemoteBinds OR an IP literal, and an enum can only cycle the
+			// keywords — so a configured literal would be silently rewritten to a
+			// keyword by the next save of any unrelated tab, rebinding the daemon
+			// to a different set of interfaces. Free text round-trips both, and
+			// config.Validate is what rejects a value neither form allows.
+			{key: "remote_bind", tab: stRemote, label: "Bind", help: "off | localhost | lan | all, or an IP literal (a hostname is rejected — resolving one would turn a config read into a network call). A lola_insecure build forces localhost whatever this says.", kind: sfText, text: cfg.Remote.BindMode()},
+			{key: "remote_port", tab: stRemote, label: "Port", help: "TCP port for the listener. 0 means " + itoa(config.DefaultRemotePort) + ".", kind: sfInt, text: itoa(cfg.Remote.ListenPort())},
+			// The bind rail's one hole. Two keys have to agree — this AND a
+			// non-loopback bind — so a config that merely says "lan" still
+			// binds loopback.
+			{key: "remote_insecure_lan", tab: stRemote, label: "Allow LAN bind", help: "Milestone 1 forces the bind to loopback, which a physical phone cannot reach. Turning this on honours the bind above and puts the shared bearer key on your network in the clear. A Simulator does not need it.", kind: sfBool, b: cfg.Remote.InsecureLAN},
+			// A DISCLOSURE rather than a convenience, which is why it is off by
+			// default and says so: the service announces what this machine is to
+			// every peer on the network. What it buys is RECONNECTION — the key
+			// and the pin already work anywhere, and only the address a phone
+			// stored at pairing time goes stale.
+			{key: "remote_advertise", tab: stRemote, label: "Advertise on the network", help: "Publish this listener with mDNS so a paired phone finds this Mac on a network whose addresses it has never seen (home, office, hotspot) without re-pairing. It announces that this machine runs coding agents and accepts remote control, to every peer on the network; the record itself carries a version and nothing else. Needs dns-sd, which every Mac ships.", kind: sfBool, b: cfg.Remote.Advertise},
+			// The dev servers of the ACTIVE session, republished. Off by default
+			// for the same reason as the two above, and worth having because the
+			// alternative — `--host 0.0.0.0` in every project — is permanent,
+			// well-known and unconditional where this is temporary, random and
+			// scoped to one address.
+			{key: "remote_dev_forward", tab: stRemote, label: "Publish dev servers", help: "Republish the ACTIVE session's dev servers (which bind 127.0.0.1 and are unreachable from a phone) on one private interface, on a random port, for as long as that session stays active. Anything on that network can reach them while it is up.", kind: sfBool, b: cfg.Remote.DevForward},
 
 			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
 			// from this flavor (applyTheme) and so does the desktop app, so the
 			// setting was reachable only from the app until this tab existed.
-			{key: "ui_theme", tab: stAppearance, section: "[ui]", sectionNote: "palette shared with lola-desktop", label: "Theme", help: "Catppuccin flavor for the cockpit and every terminal. space/enter cycles; latte is the light one. Applies on save.", kind: sfEnum, options: config.UIThemes, text: cfg.UITheme()},
+			{key: "ui_theme", tab: stAppearance, section: "[ui]", sectionNote: "palette shared with lola-desktop", label: "Theme", help: "Fixed palette for the cockpit and terminals. space/enter cycles. Applies on save.", kind: sfEnum, options: config.UIThemes, text: cfg.UITheme()},
+			{key: "ui_follow_system", tab: stAppearance, label: "Follow system appearance", help: "The desktop follows OS appearance; the TUI follows the terminal background.", kind: sfBool, b: cfg.UI.FollowSystem},
+			{key: "ui_light_theme", tab: stAppearance, label: "Light theme", help: "Palette used for light appearance.", kind: sfEnum, options: themeChoices(false), text: cfg.UILightTheme()},
+			{key: "ui_dark_theme", tab: stAppearance, label: "Dark theme", help: "Palette used for dark appearance.", kind: sfEnum, options: themeChoices(true), text: cfg.UIDarkTheme()},
 
-			// Review — the pluggable provider catalog ([[review.provider]]). One
-			// indented subsection per KIND; each names its config kind. transports
-			// and fallback are fixed multiselects (enter opens a local picker), the
-			// notify/send toggles refine the always-on `lola` transport. A
-			// legacy-only config shows these READ-ONLY with a migrate action.
-			{key: "pv_cli_enabled", tab: stCodeRabbit, subsection: "coderabbit-cli — execs `coderabbit review` locally on PR-open", indent: true, label: "Enabled", help: "Opt-in CodeRabbit CLI QA pass: execs `coderabbit review` against the worktree when a session first opens a PR.", kind: sfBool, b: cli.Enabled},
-			{key: "pv_cli_onpropen", tab: stCodeRabbit, indent: true, label: "On PR open", help: "Run the pass automatically when a session first opens a PR.", kind: sfBool, b: cli.OnPROpen},
-			{key: "pv_cli_command", tab: stCodeRabbit, indent: true, label: "Command", help: "coderabbit argv override (space-split); empty = built-in default.", kind: sfText, text: cli.Command},
-			{key: "pv_cli_timeout", tab: stCodeRabbit, indent: true, label: "Timeout seconds", help: "Hard cap per review pass. Must be >= 0.", kind: sfInt, text: itoa(cli.TimeoutSeconds)},
-			{key: "pv_cli_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "lola transport: surface findings to a human (desktop/Slack).", kind: sfBool, b: cli.Notify},
-			{key: "pv_cli_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: cli.SendToAgent},
-			{key: "pv_cli_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks findings route to: lola (always on: notify + agent), github (PR comment), linear (issue comment). enter picks.", kind: sfList, choices: trAll, lines: cli.Transports.Strings()},
-			{key: "pv_cli_fallback", tab: stCodeRabbit, indent: true, label: "Fallback", help: "Ordered pass kinds tried when this provider can't answer (unavailable / over-quota). enter picks.", kind: sfList, choices: fallbackOpts("coderabbit-cli"), lines: cli.FallbackStrings()},
-
-			{key: "pv_watch_enabled", tab: stCodeRabbit, subsection: "coderabbit-watch — polls the PR for the app's comments", indent: true, label: "Enabled", help: "Opt-in PR-comment watch: polls the GitHub PR for comments the CodeRabbit app (or another bot) leaves, and routes them. Needs no local coderabbit binary. No github transport / fallback (its feedback is already on the PR).", kind: sfBool, b: watch.Enabled},
-			{key: "pv_watch_author", tab: stCodeRabbit, indent: true, label: "Author", help: "Login substring matched against comment authors. Default coderabbitai.", kind: sfText, text: watchAuthor(watch)},
-			{key: "pv_watch_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "lola transport: surface each new comment to a human.", kind: sfBool, b: watch.Notify},
-			{key: "pv_watch_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: relay each new comment to the worker via the send-keys gate.", kind: sfBool, b: watch.SendToAgent},
-			{key: "pv_watch_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks: lola (always on), linear (issue comment). github is not offered — the feedback is already on the PR. enter picks.", kind: sfList, choices: trNoGitHub, lines: watch.Transports.Strings()},
-
-			{key: "pv_claude_enabled", tab: stCodeRabbit, subsection: "claude-session — headless `claude -p` review on PR-open", indent: true, label: "Enabled", help: "Opt-in headless Claude review pass: runs `claude -p` over the PR diff when a session first opens a PR.", kind: sfBool, b: claude.Enabled},
-			{key: "pv_claude_onpropen", tab: stCodeRabbit, indent: true, label: "On PR open", help: "Run the pass automatically when a session first opens a PR.", kind: sfBool, b: claude.OnPROpen},
-			{key: "pv_claude_model", tab: stCodeRabbit, indent: true, label: "Model", help: "claude --model override; empty = claude's default.", kind: sfText, text: claude.Model},
-			{key: "pv_claude_timeout", tab: stCodeRabbit, indent: true, label: "Timeout seconds", help: "Hard cap per review pass. Must be >= 0.", kind: sfInt, text: itoa(claude.TimeoutSeconds)},
-			{key: "pv_claude_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "lola transport: surface findings to a human.", kind: sfBool, b: claude.Notify},
-			{key: "pv_claude_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: claude.SendToAgent},
-			{key: "pv_claude_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks: lola (always on), github (PR comment), linear (issue comment). enter picks.", kind: sfList, choices: trAll, lines: claude.Transports.Strings()},
-			{key: "pv_claude_fallback", tab: stCodeRabbit, indent: true, label: "Fallback", help: "Ordered pass kinds tried when this provider can't answer. enter picks.", kind: sfList, choices: fallbackOpts("claude-session"), lines: claude.FallbackStrings()},
+			// Review — the pluggable provider catalog ([[review.provider]]) — is
+			// GENERATED, one indented subsection per KIND, from
+			// config.ReviewProviderKinds(). It is generated rather than written out
+			// because the kind set is the pluggable part: hand-written blocks meant
+			// adding a review agent touched the field list, the save builder, the
+			// enable-defaults map and every key string. See reviewProviderFields.
+			// A legacy-only config shows these READ-ONLY with a migrate action.
 		},
 	}
+	f.initSpecialists()
+	f.fields = append(f.fields, reviewProviderFields(rp)...)
+	f.sshRemoving = -1
+	f.initSSHHosts()
 	// Warm the label NAMES from the on-disk cache for rendering. This is a local
 	// file read, never a Linear call, and deliberately does not touch wsLabels:
 	// the picker stays lazy (see openLabelPicker).
@@ -310,6 +370,28 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 // snapshot serializes every editable value across all tabs. The fields slice IS
 // the edit buffer (each setField carries its own text/bool/lines), so hashing it
 // captures the whole form in one place.
+// linearKeyHelp describes where the key currently comes from and whether it
+// resolves, so the field says what typing into it will REPLACE. It resolves the
+// key only to learn whether it can be read; the value is discarded here and
+// never reaches a field, a log line or the pane.
+func linearKeyHelp(cfg *config.Config) string {
+	const how = " Type a key and ctrl+s to store it in the macOS Keychain; config.toml only records the source's name."
+	kc, env := cfg.Linear.APIKeyKeychain, cfg.Linear.APIKeyEnv
+	var src string
+	switch {
+	case kc != "":
+		src = "macOS Keychain (" + kc + ")"
+	case env != "":
+		src = "environment variable " + env
+	default:
+		return "No key configured — every poll fails until one is set." + how
+	}
+	if _, err := secrets.LinearAPIKey(kc, env); err != nil {
+		return "Configured (" + src + ") but UNREADABLE: " + shortErr(err) + "." + how
+	}
+	return "Key configured and readable (" + src + ")." + how
+}
+
 func (f *settingsForm) snapshot() string {
 	var b strings.Builder
 	for i := range f.fields {
@@ -328,8 +410,8 @@ func (f *settingsForm) dirty() bool { return f.snapshot() != f.baseline }
 
 // watchAuthor pre-fills the watch's author field with the effective default
 // when unset, so the editor shows what the watch will actually match.
-func watchAuthor(p config.ReviewProvider) string {
-	if p.Author == "" {
+func watchAuthor(kind string, p config.ReviewProvider) string {
+	if p.Author == "" && !config.ReviewKindRequiresAuthor(kind) {
 		return config.DefaultCodeRabbitAuthor
 	}
 	return p.Author
@@ -356,6 +438,144 @@ func reviewProviderSeed(cfg *config.Config) func(kind string) config.ReviewProvi
 		p.Enabled, p.OnPROpen, p.Notify, p.SendToAgent = false, false, false, false
 		return p
 	}
+}
+
+// pvKey builds a review-provider field key. Keys are derived from the kind, not
+// written out, so the generated fields, the save builder and enableDefaults can
+// never drift apart.
+func pvKey(kind, field string) string { return "pv_" + kind + "_" + field }
+
+// pvSubsection is a kind's subsection heading: the kind's own name plus one line
+// saying what it actually does, since the names alone ("custom-cli",
+// "bot-watch") do not.
+func pvSubsection(kind string) string {
+	switch {
+	case kind == "coderabbit-cli":
+		return kind + " — execs `coderabbit review` locally on PR-open"
+	case kind == "custom-cli":
+		return kind + " — execs YOUR review CLI (set Command) on PR-open"
+	case kind == "coderabbit-watch":
+		return kind + " — polls the PR for the CodeRabbit app's comments"
+	case kind == "bot-watch":
+		return kind + " — polls the PR for ANY review bot's comments (set Author)"
+	}
+	if a, ok := config.ReviewAgentFor(kind); ok {
+		return kind + " — headless `" + agent.Kind(a).Binary() + "` review on PR-open"
+	}
+	return kind
+}
+
+// reviewProviderFields generates the Review tab's editor: one indented
+// subsection per KIND, with only the fields that kind actually has. A pass kind
+// gets on-PR-open / timeout / visible / github+inline / fallback; a watch gets
+// an author and neither github nor fallback (validation forbids both); a cli
+// kind gets command + base flag; an agent kind gets a model.
+//
+// It is the single place the Review tab's shape is decided, so adding a kind to
+// config.ReviewProviderKinds() is all it takes for the TUI to offer it.
+func reviewProviderFields(seed func(kind string) config.ReviewProvider) []setField {
+	itoa := strconv.Itoa
+	var out []setField
+	for _, kind := range config.ReviewProviderKinds() {
+		p := seed(kind)
+		watch := config.IsWatchKind(kind)
+		_, isAgent := config.ReviewAgentFor(kind)
+
+		add := func(f setField) {
+			f.tab, f.indent = stCodeRabbit, true
+			out = append(out, f)
+		}
+		add(setField{key: pvKey(kind, "enabled"), subsection: pvSubsection(kind), label: "Enabled",
+			help: pvEnabledHelp(kind), kind: sfBool, b: p.Enabled})
+		if !watch {
+			add(setField{key: pvKey(kind, "onpropen"), label: "On PR open",
+				help: "Run the pass automatically when a session first opens a PR.", kind: sfBool, b: p.OnPROpen})
+		}
+		if config.IsCLIKind(kind) {
+			cmdHelp := "Review CLI argv (space-split); empty = coderabbit's built-in default."
+			if config.ReviewKindRequiresCommand(kind) {
+				cmdHelp = "Review CLI argv (space-split). REQUIRED for this kind — it names the tool to run, e.g. \"greptile review --plain\"."
+			}
+			add(setField{key: pvKey(kind, "command"), label: "Command", help: cmdHelp, kind: sfText, text: p.Command})
+			add(setField{key: pvKey(kind, "baseflag"), label: "Base flag",
+				help: "Flag the PR's base branch is passed with (default --base). Empty passes no base at all, for a tool that takes none.",
+				kind: sfText, text: p.BaseFlag})
+		}
+		if isAgent {
+			add(setField{key: pvKey(kind, "model"), label: "Model",
+				help: "Agent --model override; empty = the agent's own default. opencode expects \"provider/model\".",
+				kind: sfText, text: p.Model})
+		}
+		if watch {
+			add(setField{key: pvKey(kind, "author"), label: "Author",
+				help: pvAuthorHelp(kind), kind: sfText, text: watchAuthor(kind, p)})
+		} else {
+			add(setField{key: pvKey(kind, "timeout"), label: "Timeout seconds",
+				help: "Hard cap per review pass. Must be >= 0.", kind: sfInt, text: itoa(p.TimeoutSeconds)})
+		}
+		add(setField{key: pvKey(kind, "notify"), label: "Notify",
+			help: "lola transport: surface findings to a human (desktop/Slack).", kind: sfBool, b: p.Notify})
+		add(setField{key: pvKey(kind, "send"), label: "Send to agent",
+			help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: p.SendToAgent})
+		if !watch {
+			add(setField{key: pvKey(kind, "visible"), label: "Watch it run",
+				help: "Run the pass in its own tmux session \"<session>-review\" and stream its progress there, so you can watch it and read its findings afterwards.",
+				kind: sfBool, b: p.Visible})
+		}
+		add(setField{key: pvKey(kind, "transports"), label: "Transports",
+			help: pvTransportsHelp(watch), kind: sfList, choices: transportOpts(!watch), lines: p.Transports.Strings()})
+		if !watch {
+			add(setField{key: pvKey(kind, "inline"), label: "Inline PR threads",
+				help: "github transport: post one anchored, resolvable review thread per finding instead of a single comment, and ask the worker to resolve each one it fixes. Off = one flat comment.",
+				kind: sfBool, b: p.GitHubInline})
+			add(setField{key: pvKey(kind, "status"), label: "Commit status gate",
+				help: "Post lola/review/" + kind + " on the PR head (pending → success / failure on blocking findings / error) and re-review each new head once the agent settles. Require it in a ruleset to block merges.",
+				kind: sfBool, b: p.GitHubStatus})
+			add(setField{key: pvKey(kind, "fallback"), label: "Fallback",
+				help: "Ordered pass kinds tried when this provider can't answer (unavailable / over-quota). enter picks.",
+				kind: sfList, choices: fallbackOpts(kind), lines: p.FallbackStrings()})
+		}
+	}
+	if len(out) > 0 {
+		out[0].section = "Providers"
+		out[0].sectionNote = "agents and review integrations"
+	}
+	return out
+}
+
+// pvEnabledHelp is a kind's one-line "what does enabling this do".
+func pvEnabledHelp(kind string) string {
+	switch kind {
+	case "coderabbit-cli":
+		return "Opt-in CodeRabbit CLI QA pass: execs `coderabbit review` against the worktree when a session first opens a PR."
+	case "custom-cli":
+		return "Opt-in QA pass over any review CLI you name in Command: execs it against the worktree when a session first opens a PR."
+	case "coderabbit-watch":
+		return "Opt-in PR-comment watch: polls the GitHub PR for comments the CodeRabbit app leaves, and routes them. Needs no local binary. No github transport / fallback (its feedback is already on the PR)."
+	case "bot-watch":
+		return "Opt-in PR-comment watch over ANY review bot (name it in Author): polls the PR for its comments and routes them. Needs no local binary. No github transport / fallback."
+	}
+	if a, ok := config.ReviewAgentFor(kind); ok {
+		return "Opt-in headless " + a + " review pass: runs one bounded, read-only `" + agent.Kind(a).Binary() + "` review over the PR diff when a session first opens a PR."
+	}
+	return "Enable this review provider."
+}
+
+// pvAuthorHelp explains the watch's author field, which is optional for the
+// coderabbit kind (it defaults) and mandatory for the generic one.
+func pvAuthorHelp(kind string) string {
+	if config.ReviewKindRequiresAuthor(kind) {
+		return "Login SUBSTRING matched against comment authors, e.g. \"greptile\". REQUIRED for this kind — it names the review bot to relay."
+	}
+	return "Login substring matched against comment authors. Default coderabbitai."
+}
+
+// pvTransportsHelp names the sinks a kind may route to; the watch omits github.
+func pvTransportsHelp(watch bool) string {
+	if watch {
+		return "Sinks: lola (always on), linear (issue comment). github is not offered — the feedback is already on the PR. enter picks."
+	}
+	return "Sinks findings route to: lola (always on: notify + agent), github (PR comment), linear (issue comment). enter picks."
 }
 
 // legacyReviewOnly reports whether the config carries the legacy
@@ -447,7 +667,13 @@ func (f *settingsForm) field(key string) *setField {
 			return &f.fields[i]
 		}
 	}
-	return nil // unreachable: keys are compile-time constants matched in save()
+	// Unreachable in practice: every key save() reads is either a literal that
+	// also appears in the field list, or a review-provider key derived by
+	// pvKey() from the SAME kind list and the SAME family predicates that
+	// generated the fields (see reviewProviderFields). Pinned by
+	// TestSettingsFormProviderKeysMatchTheSaveBuilder — a divergence would nil
+	// deref here rather than saving something wrong.
+	return nil
 }
 
 // visible returns the indices (into f.fields) of the ACTIVE tab's fields, in
@@ -489,7 +715,9 @@ func (f *settingsForm) paste(s string) {
 		return
 	}
 	switch fld.kind {
-	case sfText:
+	case sfText, sfSecret:
+		// Paste is the ONLY sane way to enter a 40-character API key, so the
+		// secret field takes it on the same terms as text.
 		fld.text += pasteInline(s)
 	case sfInt:
 		fld.text += pasteDigits(s)
@@ -541,11 +769,23 @@ func (f *settingsForm) maybeLoadLabelNames() tea.Cmd {
 // resolveCodeRabbit / resolveReview / resolveBrain: `enabled = true` alone
 // defaults these on). The editor mirrors that so enabling a feature in the TUI is
 // not silently inert with every sink left off.
-var enableDefaults = map[string][]string{
-	"pv_cli_enabled":    {"pv_cli_onpropen", "pv_cli_notify", "pv_cli_send"},
-	"pv_watch_enabled":  {"pv_watch_notify", "pv_watch_send"},
-	"pv_claude_enabled": {"pv_claude_onpropen", "pv_claude_notify", "pv_claude_send"},
-	"brain_enabled":     {"brain_esc", "brain_appr"},
+var enableDefaults = buildEnableDefaults()
+
+// buildEnableDefaults derives the review-provider half of the map from the same
+// kind list the fields are generated from, so a new kind's toggles are wired
+// automatically instead of being silently left inert.
+func buildEnableDefaults() map[string][]string {
+	m := map[string][]string{
+		"brain_enabled": {"brain_esc", "brain_appr"},
+	}
+	for _, kind := range config.ReviewProviderKinds() {
+		deps := []string{pvKey(kind, "notify"), pvKey(kind, "send")}
+		if !config.IsWatchKind(kind) {
+			deps = append([]string{pvKey(kind, "onpropen")}, deps...)
+		}
+		m[pvKey(kind, "enabled")] = deps
+	}
+	return m
 }
 
 // toggleBool flips a bool field. When it flips a master "enabled" switch OFF→ON,
@@ -579,11 +819,19 @@ func (f *settingsForm) update(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
 // updateNonKey handles the async results the form asks for. Left as its own
 // method so the key path stays readable; extend it alongside any new tea.Cmd.
 func (f *settingsForm) updateNonKey(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
+	if v, ok := msg.(sshResolvedMsg); ok {
+		f.sshApplyResolved(v)
+		return nil, settingsFormNone
+	}
 	if v, ok := msg.(workspaceLabelsMsg); ok {
+		wasDirty := f.dirty()
 		f.applyWorkspaceLabels(v)
 		// An arriving label set is not a human edit — re-baseline so it can't arm
-		// the discard prompt on a form nobody typed into.
-		f.rebase()
+		// the discard prompt on a form nobody typed into. Preserve prior edits,
+		// including specialists added while the request was in flight.
+		if !wasDirty {
+			f.rebase()
+		}
 	}
 	return nil, settingsFormNone
 }
@@ -599,6 +847,14 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 		return nil, settingsFormNone
 	}
 	f.err = ""
+	if f.sshRemoving >= 0 {
+		serial := f.sshRemoving
+		f.sshRemoving = -1
+		if k.String() == "Y" {
+			f.removeSSHHost(serial)
+		}
+		return nil, settingsFormNone
+	}
 	if f.picker != nil {
 		return f.pickerKey(k)
 	}
@@ -660,6 +916,11 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 			return nil, settingsFormNone
 		}
 		switch fld.kind {
+		case sfAction:
+			if fld.tab == stSSH {
+				return f.sshAction(fld.key), settingsFormNone
+			}
+			f.specialistAction(fld.key)
 		case sfBool:
 			f.toggleBool(fld)
 		case sfEnum:
@@ -685,7 +946,7 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 		if f.reviewReadOnly() {
 			return nil, settingsFormNone
 		}
-		if fld.kind == sfText || fld.kind == sfInt {
+		if fld.kind == sfText || fld.kind == sfInt || fld.kind == sfSecret {
 			fld.text = dropLastRune(fld.text)
 		}
 	default:
@@ -697,12 +958,14 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 	return nil, settingsFormNone
 }
 
-// typeInto appends a typed character to a text/int field (digits only for int).
+// typeInto appends a typed character to a text/secret/int field (digits only
+// for int). A secret accumulates in the same `text` field as plain text — only
+// the RENDERING and the save path differ.
 func (f *settingsForm) typeInto(fld *setField, k tea.KeyPressMsg) {
 	switch {
 	case fld.kind == sfInt && len(k.Text) == 1 && k.Text >= "0" && k.Text <= "9":
 		fld.text += k.Text
-	case fld.kind == sfText && k.Text != "":
+	case (fld.kind == sfText || fld.kind == sfSecret) && k.Text != "":
 		fld.text += k.Text
 	}
 }
@@ -1148,6 +1411,10 @@ func (f *settingsForm) pickerKey(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent)
 // applyPick writes the chosen label ID(s) back into the field's own storage —
 // lines for a multi-select, text for a single — so save() needs no special case.
 func (f *settingsForm) applyPick(p *setPicker) {
+	if p.key == specialistAddKey && len(p.opts) > 0 {
+		f.addSpecialist(p.opts[p.cursor].id)
+		return
+	}
 	fld := f.field(p.key)
 	if fld == nil || len(p.opts) == 0 {
 		return
@@ -1176,6 +1443,8 @@ func (f *settingsForm) pickerView(bodyBudget int) string {
 	p := f.picker
 	hint := "↑/↓ move · enter select · ctrl-r refresh · esc cancel"
 	switch {
+	case p.key == specialistAddKey:
+		hint = "↑/↓ move · enter add · esc cancel"
 	case p.ordered:
 		// No refresh: the options are lola's own constants, not fetched.
 		hint = "↑/↓ move · space add/remove · enter confirm · esc cancel — the NUMBER is the tie-break order"
@@ -1294,6 +1563,10 @@ func (f *settingsForm) save() settingsFormEvent {
 	if err != nil {
 		return settingsFormNone
 	}
+	remotePort, err := f.parseInt("remote_port")
+	if err != nil {
+		return settingsFormNone
+	}
 	interval, perr := time.ParseDuration(strings.TrimSpace(f.field("poll_interval").text))
 	if perr != nil {
 		f.err = "poll interval: " + perr.Error()
@@ -1301,14 +1574,24 @@ func (f *settingsForm) save() settingsFormEvent {
 	}
 	// The provider catalog (skipped entirely while the Review tab is read-only —
 	// the legacy tables stay as they are pending an explicit migrate).
+	var profiles []reviewprofile.Profile
 	var provs []config.ReviewProvider
 	if !f.reviewLegacy {
 		var perr error
+		if profiles, perr = f.buildSpecialists(); perr != nil {
+			f.err = perr.Error()
+			return settingsFormNone
+		}
 		if provs, perr = f.buildReviewProviders(); perr != nil {
 			return settingsFormNone // f.err already set
 		}
 	}
 
+	sshHosts, sshErr := f.buildSSHHosts()
+	if sshErr != nil {
+		f.err = sshErr.Error()
+		return settingsFormNone
+	}
 	c := f.cfg
 	// Snapshot the tables we touch so a failed Validate can be rolled back cleanly.
 	// The slice/map members of Defaults (post_create, symlinks, env, …) are always
@@ -1317,7 +1600,17 @@ func (f *settingsForm) save() settingsFormEvent {
 	oldD, oldN, oldB, oldR, oldC := c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit
 	oldUI := c.UI
 	oldP := c.ReviewProviders
+	oldProfiles := c.ReviewProfiles
 	oldSA := c.StatusAgent
+	oldRem := c.Remote
+	oldLin := c.Linear
+	oldSSH := c.SSHHosts
+
+	// The Linear key, if one was typed. This writes the KEYCHAIN before the
+	// config is validated, which is deliberate and safe in that order: a stored
+	// key that no config points at is inert, whereas a config naming a keychain
+	// service that holds nothing is a daemon that fails every poll.
+	keyMsg := applyLinearKey(c, f.field("linear_key").text)
 
 	c.Defaults.GlobalCap = gc
 	c.Defaults.ConcurrencyCap = cc
@@ -1326,6 +1619,7 @@ func (f *settingsForm) save() settingsFormEvent {
 
 	// [defaults] project fallbacks — the counterpart of each inheritable
 	// [[project]] key (config.ProjectInherits).
+	c.Defaults.AutoPRComments = f.field("def_auto_pr_comments").b
 	c.Defaults.BranchPrefix = strings.TrimSpace(f.field("def_branch_prefix").text)
 	c.Defaults.Symlinks = trimDropEmpty(f.field("def_symlinks").lines)
 	c.Defaults.PostCreate = trimDropEmpty(f.field("def_post_create").lines)
@@ -1355,7 +1649,17 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.StatusAgent.MinConfidence = saConfidence
 	c.StatusAgent.IncludeTranscript = f.field("sa_transcript").b
 
+	c.Remote.Enabled = f.field("remote_enabled").b
+	c.Remote.Bind = strings.TrimSpace(f.field("remote_bind").text)
+	c.Remote.Port = remotePort
+	c.Remote.InsecureLAN = f.field("remote_insecure_lan").b
+	c.Remote.Advertise = f.field("remote_advertise").b
+	c.Remote.DevForward = f.field("remote_dev_forward").b
+
 	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
+	c.UI.FollowSystem = f.field("ui_follow_system").b
+	c.UI.LightTheme = strings.TrimSpace(f.field("ui_light_theme").text)
+	c.UI.DarkTheme = strings.TrimSpace(f.field("ui_dark_theme").text)
 
 	// The review provider catalog replaces the two legacy tables. In catalog
 	// mode the legacy tables MUST stay zero (a non-empty pair alongside a catalog
@@ -1363,13 +1667,19 @@ func (f *settingsForm) save() settingsFormEvent {
 	// here with legacy already cleared, so assigning the built catalog is safe.
 	if !f.reviewLegacy {
 		c.ReviewProviders = provs
+		c.ReviewProfiles = profiles
 	}
 
+	c.SSHHosts = sshHosts
 	rollback := func() {
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
 		c.UI = oldUI
 		c.ReviewProviders = oldP
+		c.ReviewProfiles = oldProfiles
+		c.SSHHosts = oldSSH
 		c.StatusAgent = oldSA
+		c.Remote = oldRem
+		c.Linear = oldLin
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
 	}
 	if err := c.Validate(); err != nil {
@@ -1382,56 +1692,93 @@ func (f *settingsForm) save() settingsFormEvent {
 		f.err = "save failed: " + err.Error()
 		return settingsFormNone
 	}
+	// Drop the typed key as soon as it is committed: the form is discarded on
+	// save anyway, but a secret should not outlive its use even by one frame.
+	f.field("linear_key").text = ""
+	f.savedNote = keyMsg
 	return settingsFormSaved
 }
 
-// buildReviewProviders assembles the catalog from the per-kind fields, emitting
-// an entry for every ENABLED kind (a disabled kind is dropped, so a config that
-// enables nothing writes no [[review.provider]] table — fresh-omits). The two
-// timeout fields are parsed here so a malformed one aborts save before any
-// mutation; on that path f.err is set and a non-nil error is returned.
-func (f *settingsForm) buildReviewProviders() ([]config.ReviewProvider, error) {
-	cliTimeout, err := f.parseInt("pv_cli_timeout")
-	if err != nil {
-		return nil, err
-	}
-	claudeTimeout, err := f.parseInt("pv_claude_timeout")
-	if err != nil {
-		return nil, err
-	}
-	var out []config.ReviewProvider
+// storeLinearKey is the exec seam over the keychain write, so tests exercise
+// save() without touching the real login keychain.
+var storeLinearKey = secrets.StoreLinearAPIKey
 
-	if f.field("pv_cli_enabled").b {
-		p, _ := config.NewReviewProvider("coderabbit-cli")
-		p.Enabled = true
-		p.OnPROpen = f.field("pv_cli_onpropen").b
-		p.Command = strings.TrimSpace(f.field("pv_cli_command").text)
-		p.TimeoutSeconds = cliTimeout
-		p.Notify = f.field("pv_cli_notify").b
-		p.SendToAgent = f.field("pv_cli_send").b
-		p.SetTransportTokens(trimDropEmpty(f.field("pv_cli_transports").lines))
-		p.SetFallbackKinds(trimDropEmpty(f.field("pv_cli_fallback").lines))
-		out = append(out, p)
+// applyLinearKey stores a newly typed API key and points [linear] at its source,
+// mutating c IN PLACE so the caller's Validate + Save carry it. A no-op when the
+// field is empty, which is the normal case: the field starts blank on every open
+// (the key is never read back into it), so an untouched Linear tab writes
+// nothing.
+//
+// The key's VALUE goes only to the keychain. If that fails we fall back to
+// naming an env var — exactly as the setup wizards do — and return the message
+// saying so, because in that case the user still has to export it themselves.
+func applyLinearKey(c *config.Config, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
 	}
-	if f.field("pv_watch_enabled").b {
-		p, _ := config.NewReviewProvider("coderabbit-watch")
-		p.Enabled = true
-		p.Author = strings.TrimSpace(f.field("pv_watch_author").text)
-		p.Notify = f.field("pv_watch_notify").b
-		p.SendToAgent = f.field("pv_watch_send").b
-		p.SetTransportTokens(trimDropEmpty(f.field("pv_watch_transports").lines))
-		out = append(out, p)
+	if err := storeLinearKey(setupKeychainService, key); err != nil {
+		c.Linear.APIKeyEnv = setupEnvVar
+		return "keychain unavailable — export " + setupEnvVar + " with your key before running lola"
 	}
-	if f.field("pv_claude_enabled").b {
-		p, _ := config.NewReviewProvider("claude-session")
+	c.Linear.APIKeyKeychain = setupKeychainService
+	c.Linear.APIKeyEnv = ""
+	return "key stored in the macOS Keychain (service " + setupKeychainService + ")"
+}
+
+// buildReviewProviders assembles the catalog from the generated per-kind fields,
+// emitting an entry for every ENABLED kind (a disabled kind is dropped, so a
+// config that enables nothing writes no [[review.provider]] table —
+// fresh-omits). It walks the SAME kind list and the SAME key derivation
+// reviewProviderFields used, so a kind can never be rendered but not saved.
+//
+// Every pass kind's timeout is parsed — enabled or not, and before anything is
+// appended — so a malformed one aborts save before any mutation; on that path
+// f.err is set and a non-nil error is returned.
+func (f *settingsForm) buildReviewProviders() ([]config.ReviewProvider, error) {
+	var out []config.ReviewProvider
+	for _, kind := range config.ReviewProviderKinds() {
+		// Parse EVERY pass kind's timeout, enabled or not. The field is on screen
+		// and editable whichever way its toggle sits, so a malformed value must be
+		// reported rather than silently dropped when the kind happens to be off —
+		// the behaviour before the editor was generated.
+		timeout := 0
+		if !config.IsWatchKind(kind) {
+			v, err := f.parseInt(pvKey(kind, "timeout"))
+			if err != nil {
+				return nil, err
+			}
+			timeout = v
+		}
+		if !f.field(pvKey(kind, "enabled")).b {
+			continue
+		}
+		p, ok := config.NewReviewProvider(kind)
+		if !ok {
+			continue
+		}
 		p.Enabled = true
-		p.OnPROpen = f.field("pv_claude_onpropen").b
-		p.Model = strings.TrimSpace(f.field("pv_claude_model").text)
-		p.TimeoutSeconds = claudeTimeout
-		p.Notify = f.field("pv_claude_notify").b
-		p.SendToAgent = f.field("pv_claude_send").b
-		p.SetTransportTokens(trimDropEmpty(f.field("pv_claude_transports").lines))
-		p.SetFallbackKinds(trimDropEmpty(f.field("pv_claude_fallback").lines))
+		p.Notify = f.field(pvKey(kind, "notify")).b
+		p.SendToAgent = f.field(pvKey(kind, "send")).b
+		p.SetTransportTokens(trimDropEmpty(f.field(pvKey(kind, "transports")).lines))
+		if config.IsCLIKind(kind) {
+			p.Command = strings.TrimSpace(f.field(pvKey(kind, "command")).text)
+			p.BaseFlag = strings.TrimSpace(f.field(pvKey(kind, "baseflag")).text)
+		}
+		if _, isAgent := config.ReviewAgentFor(kind); isAgent {
+			p.Model = strings.TrimSpace(f.field(pvKey(kind, "model")).text)
+		}
+		if config.IsWatchKind(kind) {
+			p.Author = strings.TrimSpace(f.field(pvKey(kind, "author")).text)
+			out = append(out, p)
+			continue
+		}
+		p.OnPROpen = f.field(pvKey(kind, "onpropen")).b
+		p.TimeoutSeconds = timeout
+		p.Visible = f.field(pvKey(kind, "visible")).b
+		p.GitHubInline = f.field(pvKey(kind, "inline")).b
+		p.GitHubStatus = f.field(pvKey(kind, "status")).b
+		p.SetFallbackKinds(trimDropEmpty(f.field(pvKey(kind, "fallback")).lines))
 		out = append(out, p)
 	}
 	return out, nil
@@ -1472,7 +1819,15 @@ func (f *settingsForm) tabStrip() string {
 		}
 		parts = append(parts, faintText.Render(t.title))
 	}
-	return "  " + strings.Join(parts, faintText.Render(" · "))
+	strip := "  " + strings.Join(parts, faintText.Render(" · "))
+	if f.viewportWidth > 0 && lipgloss.Width(strip) > f.viewportWidth {
+		for _, t := range settingsTabs {
+			if t.tab == f.tab {
+				return "  ‹ " + boxTitleHi.Render(t.title) + " ›  " + faintText.Render("tab / shift-tab to switch")
+			}
+		}
+	}
+	return strip
 }
 
 // fieldRegion renders the ACTIVE tab's section/subsection headers and field
@@ -1493,7 +1848,11 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 		}
 		if fld.subsection != "" {
 			// Indented sub-header grouping fields under a shared section.
-			lines = append(lines, "  "+faintText.Render("▸ "+fld.subsection))
+			heading := fld.subsection
+			if strings.HasPrefix(fld.key, "specialist.") && strings.HasSuffix(fld.key, ".id") {
+				heading = fld.text
+			}
+			lines = append(lines, "  "+faintText.Render("▸ "+heading))
 		}
 		onField := vi == f.cursor
 		open := onField && f.editing
@@ -1544,16 +1903,37 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 				if fld.wsPick && !typing {
 					shown = f.labelText(e)
 				}
+				if !typing {
+					for _, choice := range fld.choices {
+						if choice.id == e {
+							shown = choice.label
+							break
+						}
+					}
+				}
 				lines = append(lines, indent+"      "+bullet+shown+caret)
 			}
 			continue
 		}
 		var val string
 		switch fld.kind {
+		case sfAction:
+			val = faintText.Render("[enter]")
 		case sfBool:
 			val = boolGlyph(fld.b)
 		case sfEnum:
 			val = enumGlyph(fld.text)
+		case sfSecret:
+			// Never the characters themselves: this pane's scrollback is captured
+			// by lola's own attention parser, and a key rendered here would land
+			// in it.
+			val = strings.Repeat("•", len([]rune(fld.text)))
+			if val == "" {
+				val = faintText.Render("(type or paste a key)")
+			}
+			if onField {
+				val += "_"
+			}
 		default:
 			val = fld.text
 			if fld.wsPick {
@@ -1576,6 +1956,13 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 // key hint. Always shown below the (scrolling) field region.
 func (f *settingsForm) footerLines() []string {
 	var out []string
+	f.sshRefreshHelp()
+	if f.sshRemoving >= 0 {
+		h := f.sshHostFromFields(f.sshRemoving)
+		out = append(out, "", warnText.Render(fmt.Sprintf("Remove %s? Its live connections close, and agents can no longer ask for it.", h.DisplayName())),
+			faintText.Render(protocol.SSHRemoteOutlives), "", warnText.Render("Y")+faintText.Render(" remove from this draft · any other key keeps it"))
+		return out
+	}
 	if help := f.cur().help; help != "" {
 		out = append(out, "", faintText.Render(help))
 	}
@@ -1604,7 +1991,7 @@ func (f *settingsForm) footerLines() []string {
 	if f.reviewReadOnly() {
 		out = append(out, "", warnText.Render("! legacy [review]/[coderabbit] tables — read-only. Press m to migrate to the editable provider catalog."))
 	}
-	hint := "tab/⇧tab section · ↑/↓ field · space toggle · ctrl-s save · esc cancel"
+	hint := "tab section · ↑/↓ field · space toggle · ctrl-s save · esc cancel"
 	switch {
 	case f.confirmDiscard:
 		// Replaces the key hint entirely: while the prompt is up, answering it is
@@ -1614,6 +2001,8 @@ func (f *settingsForm) footerLines() []string {
 		return out
 	case f.reviewReadOnly():
 		hint = "m migrate to providers · tab/⇧tab section · ↑/↓ field · ctrl-s save · esc cancel"
+	case f.cur().kind == sfAction:
+		hint = "enter select · ↑/↓ field · ctrl-s save · esc cancel"
 	case f.editing:
 		hint = "editing " + f.cur().label + " — ↑/↓ line · enter new line · esc done"
 	case f.cur().wsPick:
@@ -1683,6 +2072,13 @@ func (f *settingsForm) scrolledView(bodyBudget int) string {
 	}
 	region, fieldLine := f.fieldRegion()
 	footer := f.footerLines()
+	if f.viewportWidth > 0 {
+		var wrapped []string
+		for _, line := range footer {
+			wrapped = append(wrapped, strings.Split(lipgloss.NewStyle().Width(f.viewportWidth).Render(line), "\n")...)
+		}
+		footer = wrapped
+	}
 	avail := bodyBudget - len(footer) - 2 // -2 for the tab strip + its blank
 	if avail < 1 {
 		avail = 1
@@ -1745,6 +2141,7 @@ func (m *rootModel) settingsFormModal() string {
 	}
 	// box shows h-2 body rows; the title lifts into the border and the leading
 	// blank costs one row, so the scroller gets mh-2-2 rows for content+footer.
+	m.settings.viewportWidth = mw - 4
 	lines := strings.Split(strings.TrimRight(m.settings.scrolledView(mh-3), "\n"), "\n")
 	title := "settings"
 	if len(lines) > 0 {
@@ -1759,4 +2156,15 @@ func (m *rootModel) settingsFormModal() string {
 	}
 	modal := box(title, body, mw, mh, true)
 	return strings.Join(placeModal(m.backdropLines(), modal, W), "\n")
+}
+
+// themeChoices uses config's tags, so a light slot cannot offer a dark palette.
+func themeChoices(dark bool) []string {
+	var ids []string
+	for _, id := range config.UIThemes {
+		if config.UIThemeIsDark(id) == dark {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

@@ -1,0 +1,2 @@
+{"timestamp":"2026-11-06T09:00:00Z","type":"session_meta","payload":{"id":"th-3","cwd":"/w/s1","originator":"codex-tui","source":{"subagent":"guardian"},"parent_thread_id":"th-1"}}
+{"timestamp":"2026-11-06T09:00:01Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"x-2","content":"a guardian thread"}}}

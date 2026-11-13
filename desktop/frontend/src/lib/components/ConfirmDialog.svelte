@@ -8,29 +8,45 @@
   // (the header ✕), so a stray Enter dismisses rather than destroys.
   import { confirm } from "$lib/confirm.svelte";
   import Modal from "./Modal.svelte";
+  import Button from "./Button.svelte";
+  import Checkbox from "./Checkbox.svelte";
 
   const req = $derived(confirm.request);
+  const descriptionId = $props.id();
 </script>
 
 {#if req}
-  <Modal title={req.title} onClose={() => confirm.cancel()} width="420px">
-    <!-- `copy` is the only sanctioned line-height deviation: multi-line prose
-         gets 1.55 and a 62ch measure. -->
-    <p class="copy text-ink">{req.body}</p>
-    {#if req.detail}
-      <p class="mt-2 text-sm text-faint">{req.detail}</p>
+  <Modal title={req.title} onClose={() => confirm.cancel()} width="480px" describedBy={descriptionId}>
+    <div id={descriptionId} class="confirmation-copy">
+      <p class="copy confirmation-body">{req.body}</p>
+      {#if req.detail}<p class="copy confirmation-detail">{req.detail}</p>{/if}
+    </div>
+    {#if req.choices?.items.length}
+      <ul class="mt-3 max-h-56 overflow-auto rounded border border-edge" aria-label={req.choices.label}>
+        {#each req.choices.items as item (item.id)}
+          <li class="border-b border-edge last:border-b-0">
+            <label class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-ink">
+              <Checkbox bind:checked={item.checked} aria-label={`${req.choices.label}: ${item.label}`} />
+              <span class="min-w-0 truncate">{item.label}</span>
+            </label>
+          </li>
+        {/each}
+      </ul>
     {/if}
     {#snippet footer()}
-      <div class="flex justify-end gap-2">
-        <button
-          class="rounded border border-edge px-3 py-1.5 text-faint hover:text-ink"
-          onclick={() => confirm.cancel()}>Cancel</button
-        >
-        <button
-          class="rounded bg-bad px-3 py-1.5 font-medium text-on-bad hover:opacity-90"
-          onclick={() => confirm.accept()}>{req.confirmLabel}</button
-        >
+      <div class="dialog-actions">
+        <Button class="cancel" size="md" onclick={() => confirm.cancel()}>Cancel</Button>
+        {#if req.alternative}
+          <Button variant="secondary" size="md" onclick={() => confirm.acceptAlternative()}>{req.alternative.label}</Button>
+        {/if}
+        <Button variant={req.confirmVariant ?? "danger-solid"} size="md" onclick={() => confirm.accept()}>{req.confirmLabel}</Button>
       </div>
     {/snippet}
   </Modal>
 {/if}
+
+<style>
+  .confirmation-copy { min-width:0; overflow-wrap:anywhere; }
+  .confirmation-body { font-size:14px; color:var(--color-ink); }
+  .confirmation-detail { margin-top:10px; font-size:13px; color:var(--color-ink-2); }
+</style>

@@ -4,24 +4,48 @@
 // call `store.kill(id)` — they never touch the bindings directly.
 
 import { Events } from "@wailsio/runtime";
-import { DaemonService, ConfigService, TermService } from "@bindings/desktop";
+import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO, type StackFolderAppDTO } from "@bindings/desktop";
 import type {
-  SessionInfo,
-  ProjectInfo,
+  SessionInfo as ProtocolSessionInfo,
+  ProjectInfo as ProtocolProjectInfo,
+  GroupInfo,
   StatusData,
   Event as ActivityEvent,
   PaneData,
   PrsData,
   TicketsData,
-  OpenManualArgs,
+  OpenManualArgs as ProtocolOpenManualArgs,
   OpenPrArgs,
-  OpenTicketArgs,
+  OpenTicketArgs as ProtocolOpenTicketArgs,
 } from "@bindings/internal/protocol";
-import { sortRank } from "./theme";
+import { legacySortRank, sortRank } from "./theme";
 import { displayName } from "./slug";
 import { confirm } from "./confirm.svelte";
+import { SSH_REMOTE_OUTLIVES } from "./ssh";
+
+type AgentKind = "claude" | "codex" | "opencode";
+
+type SessionInfo = ProtocolSessionInfo;
+
+type ProjectInfo = ProtocolProjectInfo;
+
+type OpenManualArgs = ProtocolOpenManualArgs;
+
+type OpenTicketArgs = ProtocolOpenTicketArgs;
 
 type Flash = { text: string; kind: "good" | "warn" | "bad" } | null;
+
+/**
+ * The session's sort tier, over BOTH axes (state.SortRank).
+ *
+ * Falls back to the collapsed status word when the record carries no agent axis
+ * — a daemon predating the split, or a snapshot written by one. Both axes are
+ * optional on the wire, and `sortRank("", "")` answers 4 for every one of them,
+ * which would flatten a whole push into one indistinguishable tier.
+ */
+function rankOf(s: SessionInfo): number {
+  return s.agentState ? sortRank(s.agentState, s.delivery ?? "") : legacySortRank(s.status ?? "");
+}
 
 /** Stable session sort: attention first (sortRank), then project, then issue. */
 export function sortSessions(list: SessionInfo[]): SessionInfo[] {
@@ -29,7 +53,7 @@ export function sortSessions(list: SessionInfo[]): SessionInfo[] {
   // field (→ undefined over the bridge), and a thrown comparator would leave the
   // whole list unsorted/blank.
   return [...list].sort((a, b) => {
-    const r = sortRank(a.status ?? "") - sortRank(b.status ?? "");
+    const r = rankOf(a) - rankOf(b);
     if (r !== 0) return r;
     const p = (a.project ?? "").localeCompare(b.project ?? "");
     if (p !== 0) return p;
@@ -76,8 +100,24 @@ class Store {
   hasConfig = $state(true); // assume yes until checked, so no setup-screen flash
   configChecked = $state(false);
   sessions = $state<SessionInfo[]>([]);
+  // The sessions as last pushed, kept while the daemon is down. A restart is a daily event,
+  // a story must stay readable through one, and a terminal keeps working because that is
+  // tmux. Without retainAll only the ssh sessions are kept, which is what the phone expects;
+  // the desktop's main.ts turns it on. sessionById and rosterSessions read this, only while
+  // the daemon is down.
+  retainAll = false;
+  private retained: SessionInfo[] = [];
+  // Set from the daemon going down until its first list after coming back. `daemon:alive` and
+  // `daemon:sessions` are separate events with a flush between them, and an open session must not
+  // read as gone across that gap: its terminal would detach and its widgets reload.
+  private awaitingList = $state(false);
   activity = $state<ActivityEvent[]>([]);
   projects = $state<ProjectInfo[]>([]);
+  // The [[group]] folders projects are filed under, in config order. They ride
+  // the same push as the projects (and are pushed even when empty of members),
+  // because an empty group is renderable and must not need a second read to
+  // appear.
+  groups = $state<GroupInfo[]>([]);
   status = $state<StatusData | null>(null);
   flash = $state<Flash>(null);
 
@@ -89,6 +129,22 @@ class Store {
   // current set so a dismissible banner can explain it. Dismissing clears it;
   // a persistent failure is not re-emitted, so it stays dismissed.
   pushErrors = $state<Record<string, string>>({});
+
+  // Sessions whose dev toggle is in flight, so the control can show it. This
+  // lives in the STORE rather than in the button because the toggle has three
+  // triggers (the session row's button, the context menu, the `D` shortcut) and
+  // only one of them is the button — a local flag would leave the other two
+  // looking like nothing happened. The call is genuinely slow: the daemon stops
+  // the previous holder's tabs and reclaims any port still held in the
+  // project's worktrees, each with its own SIGTERM grace, before it answers.
+  devPending = $state<Record<string, boolean>>({});
+
+  // Sessions whose conflict-resolution request is in flight. In the STORE for
+  // the same reason devPending is: the action has two triggers (the status
+  // pill's hover-morph and the context menu), and a flag living in one of them
+  // would leave the other looking inert while the daemon captures the pane and
+  // types.
+  resolvePending = $state<Record<string, boolean>>({});
 
   private flashTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
@@ -126,6 +182,9 @@ class Store {
       this.alive = e.data;
       this.connected = true;
       if (!e.data) {
+        const keep = this.retainAll ? this.sessions : this.sessions.filter((s) => s.ssh);
+        if (keep.length) this.retained = keep;
+        this.awaitingList = true;
         this.sessions = [];
         this.setActivity([]);
         // A down daemon isn't "out of date"; the offline state covers it, so drop
@@ -143,12 +202,14 @@ class Store {
       this.pushErrors = next;
     });
     Events.On("daemon:sessions", (e) => {
+      this.awaitingList = false;
       this.sessions = e.data?.sessions ?? [];
       this.connected = true;
       this.setActivity(e.data?.events ?? []);
     });
     Events.On("daemon:projects", (e) => {
       this.projects = e.data?.projects ?? [];
+      this.groups = e.data?.groups ?? [];
     });
     Events.On("daemon:status", (e) => {
       this.status = e.data;
@@ -184,6 +245,16 @@ class Store {
     return p ? displayName(p) : name;
   }
 
+  /**
+   * A project's configured default_branch — the branch a conflict resolution
+   * merges. Empty for an unknown project (or before the first Projects()
+   * response), so a caller renders a generic phrase rather than naming a branch
+   * lola never resolved.
+   */
+  defaultBranchFor(name: string): string {
+    return this.projectByName(name)?.defaultBranch ?? "";
+  }
+
   // Sort straight off `this.sessions` ($state), NOT via a chained class-$derived:
   // reading a derived-of-a-derived across the module boundary went stale in the
   // production WebView (the list stayed empty until a manual re-render forced a
@@ -193,7 +264,15 @@ class Store {
   }
 
   sessionById(id: string): SessionInfo | undefined {
-    return this.sessions.find((s) => s.id === id);
+    const live = this.sessions.find((s) => s.id === id);
+    if (live || (this.alive && !this.awaitingList)) return live;
+    return this.retained.find((s) => s.id === id);
+  }
+
+  /** What the sidebar lists: the live sessions, or the last ones known while the daemon is down. */
+  get rosterSessions(): SessionInfo[] {
+    if ((this.alive && !this.awaitingList) || this.sessions.length) return this.sessions;
+    return this.retained;
   }
 
   setFlash(text: string, kind: "good" | "warn" | "bad" = "good") {
@@ -231,10 +310,14 @@ class Store {
       DaemonService.Status(),
     ]);
     if (sd.status === "fulfilled") {
+      this.awaitingList = false;
       this.sessions = sd.value.sessions ?? [];
       this.setActivity(sd.value.events ?? []); // separate flush — see setActivity
     }
-    if (pd.status === "fulfilled") this.projects = pd.value.projects ?? [];
+    if (pd.status === "fulfilled") {
+      this.projects = pd.value.projects ?? [];
+      this.groups = pd.value.groups ?? [];
+    }
     if (st.status === "fulfilled") this.status = st.value;
     const rejected = [sd, pd, st].find((r) => r.status === "rejected");
     if (rejected) this.setFlash(String((rejected as PromiseRejectedResult).reason), "warn");
@@ -252,16 +335,101 @@ class Store {
 
   // --- actions (each flashes its outcome) -----------------------------------
 
-  private async act<T>(fn: () => Promise<T>, ok: string): Promise<T | undefined> {
+  private async act<T>(fn: () => Promise<T>, ok: string | ((r: T) => string)): Promise<T | undefined> {
     try {
       const r = await fn();
-      this.setFlash(ok, "good");
+      const msg = typeof ok === "function" ? ok(r) : ok;
+      this.setFlash(msg, "good");
       void this.refresh();
       return r;
     } catch (err) {
       this.setFlash(String(err), "bad");
       return undefined;
     }
+  }
+
+  /**
+   * A config write whose SUCCESS needs no announcement — a drag that landed is
+   * already visible, a folder that collapsed is already collapsed — but whose
+   * FAILURE must still be said out loud, because the UI has by then optimistically
+   * drawn the new arrangement and would otherwise silently disagree with the file.
+   */
+  private async quiet<T>(fn: () => Promise<T>): Promise<T | undefined> {
+    try {
+      const r = await fn();
+      // AWAITED, unlike act()'s: the caller holds an optimistic view on screen
+      // until this resolves, so returning before the reload landed would show
+      // the pre-write arrangement for a frame — exactly the snap-back the
+      // optimistic view exists to prevent.
+      await this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      await this.refresh(); // snap the UI back to what is actually configured
+      return undefined;
+    }
+  }
+
+  // --- project groups & arrangement -----------------------------------------
+
+  removeProject(name: string) {
+    const project = this.projectByName(name);
+    return this.act(() => ConfigService.RemoveProject(name), `removed ${project ? displayName(project) : name}`);
+  }
+
+  addGroup(label: string) {
+    return this.act(() => ConfigService.AddGroup(label), "group added");
+  }
+  renameGroup(name: string, label: string) {
+    return this.act(() => ConfigService.RenameGroup(name, label), "group renamed");
+  }
+  /** Deletes the folder only: its projects move to the top level, untouched. */
+  removeGroup(name: string) {
+    return this.act(() => ConfigService.RemoveGroup(name), "group removed");
+  }
+  setGroupCollapsed(name: string, collapsed: boolean) {
+    return this.quiet(() => ConfigService.SetGroupCollapsed(name, collapsed));
+  }
+  /** Creates an empty stack; resolves to its id (undefined on failure). */
+  createStack(label: string) {
+    return this.act(() => ConfigService.CreateStack(label), "stack created");
+  }
+  /**
+   * Creates a stack AND its members from a parent folder's checkouts in one
+   * write: a new project per app, or the project already configured at that
+   * path joining. Resolves to the stack's id (undefined on failure).
+   */
+  createStackFromFolder(label: string, apps: StackFolderAppDTO[]) {
+    return this.act(
+      () => ConfigService.CreateStackFromFolder(label, apps),
+      `stack created with ${apps.length} app${apps.length === 1 ? "" : "s"}`,
+    );
+  }
+  /** Removes a stack and every member not in keep; kept members stand alone. */
+  removeStack(stack: string, keep: string[]) {
+    return this.act(
+      () => ConfigService.RemoveStack(stack, keep),
+      keep.length ? `stack removed, kept ${keep.length} project${keep.length === 1 ? "" : "s"}` : "stack removed",
+    );
+  }
+  /**
+   * Moves a project into a stack ("" = out of it). Unlike a folder this is NOT
+   * display-only — a member stops polling and is checked out for the stack's
+   * issues — so callers confirm first.
+   */
+  setProjectStack(project: string, stack: string) {
+    // Resolves true on success: the binding itself resolves to nothing.
+    return this.act(
+      async () => {
+        await ConfigService.SetProjectStack(project, stack);
+        return true;
+      },
+      stack ? "added to stack" : "removed from stack",
+    );
+  }
+  /** Applies a whole arrangement (group order + every project's group and place). */
+  setProjectLayout(layout: ProjectLayoutDTO) {
+    return this.quiet(() => ConfigService.SetProjectLayout(layout));
   }
 
   answer(session: string, text: string) {
@@ -273,18 +441,19 @@ class Store {
    * worktree is all that survives, so the honest answer is a second question
    * (askForceKill), not a red flash telling a GUI user to rerun a CLI flag.
    */
-  async kill(session: string, force = false) {
+  async kill(session: string, force = false, keepWorktree = false) {
     // Reap the session's worktree shells too, so they don't linger as orphan tabs
-    // once the daemon removes the worktree (best-effort, fire-and-forget).
+    // once the daemon removes the worktree (best-effort, fire-and-forget). The
+    // daemon kills the shell tmux sessions on a stop as well.
     void TermService.CloseSessionShells(session).catch(() => {});
     try {
-      const r = await DaemonService.Kill(session, force);
-      this.setFlash(`killed ${session}`, "good");
+      const r = await DaemonService.Kill(session, force, keepWorktree);
+      this.setFlash(keepWorktree ? `stopped ${session}; worktree kept` : `killed ${session}`, "good");
       void this.refresh();
       return r;
     } catch (err) {
       const msg = String(err);
-      const dir = force ? null : dirtyWorktreeRefusal(msg);
+      const dir = force || keepWorktree ? null : dirtyWorktreeRefusal(msg);
       if (dir === null) {
         this.setFlash(msg, "bad");
         return undefined;
@@ -300,7 +469,7 @@ class Store {
     return this.act(() => DaemonService.Revive(session), `revived ${session}`);
   }
   // review forces a QA review PASS. provider optionally selects the pass
-  // provider kind (coderabbit-cli | claude-session); "" forces the primary.
+  // provider kind (any pass kind: a cli or agent one); "" forces the primary.
   review(session: string, provider = "") {
     return this.act(() => DaemonService.Review(session, provider), "review requested");
   }
@@ -308,11 +477,102 @@ class Store {
   coderabbit(session: string) {
     return this.act(() => DaemonService.CodeRabbit(session), "coderabbit poll requested");
   }
+  /**
+   * Ask a CONFLICTING session's coding agent to merge the project's default
+   * branch into its branch and resolve the conflicts — the manual trigger for
+   * what [reactions].merge_conflict does on its own.
+   *
+   * The success flash is the DAEMON's sentence, not one composed here: it names
+   * the branch that was actually asked for (the project's configured
+   * default_branch), which is the one thing the click promised and the one thing
+   * this side would have to guess. A refusal — the PR no longer conflicts, or the
+   * agent is mid-turn and must not be typed into — arrives as an error and is
+   * flashed verbatim for the same reason.
+   */
+  async resolveConflict(session: string) {
+    if (this.resolvePending[session]) return undefined;
+    this.resolvePending[session] = true;
+    try {
+      const r = await DaemonService.ResolveConflict(session);
+      this.setFlash(r?.message || "asked the agent to resolve the conflicts", "good");
+      void this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return undefined;
+    } finally {
+      delete this.resolvePending[session];
+    }
+  }
+  /**
+   * Run the project's dev_commands here (on = true), or stop them. Only one
+   * session per project may hold them, so activating MOVES them: the daemon
+   * kills the previous holder's tabs first. The dev TABS follow on their own:
+   * SessionEmbed rediscovers a session's tmux tabs every few seconds, and this
+   * module deliberately does not import terms (which imports this one).
+   */
+  async dev(session: string, on: boolean) {
+    if (this.devPending[session]) return undefined; // already travelling
+    this.devPending[session] = true;
+    try {
+      return await this.act(
+        () => DaemonService.Dev(session, on),
+        on ? "dev processes started here" : "dev processes stopped",
+      );
+    } finally {
+      delete this.devPending[session];
+    }
+  }
+  /**
+   * Free the port a dev tab died on, then restart the tabs. Never called
+   * directly by a button — askFreePort asks first, because this kills a process
+   * lola did not start (see askFreePort).
+   *
+   * Port and pid are sent back exactly as they were shown: the daemon refuses
+   * the request unless they still match what it has on record AND that pid still
+   * holds that port, so a dialog left open while things moved on is rejected
+   * rather than applied to whatever is there now.
+   */
+  async devFreePort(session: string, port: number, pid: number) {
+    if (this.devPending[session]) return undefined;
+    this.devPending[session] = true;
+    try {
+      return await this.act(() => DaemonService.DevFreePort(session, port, pid), `freed port ${port}`);
+    } finally {
+      delete this.devPending[session];
+    }
+  }
   open(project: string, ref: string) {
     return this.act(() => DaemonService.Open(project, ref), `opened ${ref}`);
   }
+  /**
+   * Send one message to every live agent of a project. The daemon types it into
+   * the agents resting at their prompt and queues it for the busy ones, which get
+   * it when idle; the flash is its delivered/deferred split. Resolves to
+   * undefined on failure (the error is flashed).
+   */
+  broadcast(project: string, message: string) {
+    return this.act(
+      () => DaemonService.Broadcast({ project, message }),
+      (r) => `broadcast: ${r?.message || "sent"}`,
+    );
+  }
   openManual(a: OpenManualArgs) {
-    return this.act(() => DaemonService.OpenManual(a), `started ${a.branch}`);
+    return this.act(() => DaemonService.OpenManual(a), `started ${a.name || a.branch || "session"}`);
+  }
+  renameSession(id: string, name: string) {
+    return this.act(() => DaemonService.RenameSession(id, name).then(() => true), "Session renamed");
+  }
+  async closeExitedTemporary(id: string): Promise<boolean> {
+    try {
+      const result = await DaemonService.CloseExitedTemporary(id);
+      if (result.removed) this.sessions = this.sessions.filter(s => s.id !== id);
+      void this.refresh();
+      return result.removed;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return false;
+    }
   }
   openPr(a: OpenPrArgs) {
     return this.act(() => DaemonService.OpenPR(a), `opened PR #${a.number}`);
@@ -320,8 +580,62 @@ class Store {
   openTicket(a: OpenTicketArgs) {
     return this.act(() => DaemonService.OpenTicket(a), `started ${a.identifier}`);
   }
-  openURL(url: string) {
-    return DaemonService.OpenURL(url);
+  // Turn checkpoints. Both flash the daemon's own sentence: it names the
+  // checkpoint that now holds the pre-restore state, which is the undo.
+  restoreCheckpoint(id: string, seq: number) {
+    return this.act(
+      () => DaemonService.RestoreCheckpoint(id, seq),
+      (r) => r?.message || `restored checkpoint #${seq}`,
+    );
+  }
+  forkCheckpoint(id: string, seq: number, agentKind = "") {
+    return this.act(
+      () => DaemonService.ForkCheckpoint(id, seq, agentKind),
+      (r) => r?.message || `forked ${id} at checkpoint #${seq}`,
+    );
+  }
+  // Best-of: keep one attempt. The daemon's sentence names what happened to the
+  // others (removed, or kept because of uncommitted work). A pick that stands
+  // with failed steps (a PR left draft or open) is a WARNING, not a success —
+  // the overlay lists the steps (bestOf.problems) so it outlives the flash.
+  async bestOfPick(id: string) {
+    try {
+      const r = await DaemonService.BestOfPick(id);
+      const n = r?.problems?.length ?? 0;
+      this.setFlash(
+        n > 0 ? `${r?.message || `kept ${id}`} — ${n} step(s) need you` : r?.message || `kept ${id}`,
+        n > 0 ? "warn" : "good",
+      );
+      void this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return undefined;
+    }
+  }
+  switchAgent(id: string, kind: string) {
+    return this.act(
+      () => DaemonService.SwitchAgent({ session: id, agent: kind }),
+      (r) => r?.message || `switched ${id} to ${kind}`,
+    );
+  }
+  // openURL hands a URL to the daemon's opener (which refuses anything that is
+  // not http(s)). A failure is FLASHED rather than thrown: the loudest caller is
+  // a click on a link inside a terminal, where a rejected promise would be an
+  // unhandled rejection and the click would look like it did nothing.
+  async openURL(url: string) {
+    try {
+      await DaemonService.OpenURL(url);
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+    }
+  }
+  async openFolder(path: string) {
+    try {
+      await DaemonService.OpenFolder(path);
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+    }
   }
   reload() {
     return this.act(() => DaemonService.Reload(), "config reloaded");
@@ -351,12 +665,20 @@ class Store {
   askKill(id: string) {
     const s = this.sessionById(id);
     const label = s ? s.issue || s.id.slice(0, 8) : id;
+    const direct = s?.location === "ssh";
+    // Tearing a session down closes its ssh connections too, and what they started
+    // may outlive them. Say so on the one dialog that does it.
+    const sshRan = s?.ssh?.connections?.some((c) => c.state !== "closed" && (c.commandsRun ?? 0) > 0);
+    const sshNote = sshRan ? ` ${SSH_REMOTE_OUTLIVES}` : "";
     confirm.ask({
-      title: "Kill session?",
-      body: s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
-      detail: "This stops its agent and removes the worktree. Unpushed work is lost.",
-      confirmLabel: "Kill",
+      title: direct ? "End session?" : s?.location ? "Close session?" : "Kill session?",
+      body: direct ? `End ${s?.title || label}?` : s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
+      detail: (direct ? "This closes its connections and its agent. The command record stays on disk for 14 days in ~/.lola/state/ssh/." :
+        s?.location ? "Close stops the session and its terminals. The directory and all files are preserved." :
+        "Kill stops its agent and removes the worktree — unpushed work is lost. Stop keeps the worktree so the session can be revived.") + sshNote,
+      confirmLabel: direct ? "End session" : s?.location ? "Close session" : "Kill",
       onConfirm: () => void this.kill(id),
+      alternative: { label: s?.location ? "Stop, keep session" : "Stop, keep worktree", onConfirm: () => void this.kill(id, false, true) },
     });
   }
 
@@ -375,6 +697,46 @@ class Store {
       detail: dir ? `${dir} — the changes there are lost for good.` : "The changes there are lost for good.",
       confirmLabel: "Delete worktree",
       onConfirm: () => void this.kill(id, true),
+    });
+  }
+
+  /**
+   * A dev tab died because another process holds its port: ask before killing
+   * that process.
+   *
+   * This is the one action that reaches OUTSIDE lola's own worktrees, which is
+   * exactly why it is a question and not an automatic sweep — the holder may be
+   * a `npm run dev` the user started in their own checkout an hour ago. So the
+   * dialog names the process, its pid and where it runs, and words the two cases
+   * differently: reclaiming lola's own leftover server is routine, killing the
+   * user's own process is not.
+   */
+  askFreePort(id: string) {
+    const s = this.sessionById(id);
+    const clash = s?.devClash;
+    if (!clash) return;
+    const where = clash.dir ? ` in ${clash.dir}` : "";
+    confirm.ask({
+      title: `Port ${clash.port} is taken`,
+      body: `${clash.proc || "A process"} (pid ${clash.pid})${where} is holding port ${clash.port}. Stop it and start the dev processes here?`,
+      detail: clash.ours
+        ? `It is a leftover dev server inside lola's worktrees — ${clash.command || "the dev command"} could not bind.`
+        : `It was not started by lola — anything unsaved in it is lost.`,
+      confirmLabel: "Stop it and retry",
+      onConfirm: () => void this.devFreePort(id, clash.port, clash.pid),
+    });
+  }
+
+  askSwitchAgent(id: string, targetAgent: string) {
+    const s = this.sessionById(id);
+    const label = s ? s.issue || s.id.slice(0, 8) : id;
+    const current = s?.agent || "claude";
+    confirm.ask({
+      title: "Switch agent?",
+      body: `Switch ${label} from ${current} to ${targetAgent}?`,
+      detail: "The pane is replaced on the same worktree.",
+      confirmLabel: "Switch",
+      onConfirm: () => void this.switchAgent(id, targetAgent),
     });
   }
 
@@ -397,4 +759,4 @@ class Store {
 }
 
 export const store = new Store();
-export type { SessionInfo, ProjectInfo, StatusData, ActivityEvent };
+export type { SessionInfo, ProjectInfo, StatusData, ActivityEvent, OpenManualArgs, OpenTicketArgs, AgentKind };

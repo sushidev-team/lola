@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+.DS_Store
 
 # Test binary, built with `go test -c`
 *.test
@@ -42,6 +43,7 @@ go.work.sum
 /dist/
 
 # lola-desktop (Wails 3 app) build artifacts
+desktop/node_modules/
 desktop/frontend/node_modules/
 # Ignore built assets but keep the dir tracked (via .gitkeep) so the
 # //go:embed all:frontend/dist in desktop/main.go resolves on a clean checkout
@@ -50,3 +52,15 @@ desktop/frontend/dist/*
 !desktop/frontend/dist/.gitkeep
 desktop/bin/
 desktop/build/bin/
+
+# oh-my-opencode orchestration state (plans, run-continuation) — never repo content
+.omo/
+
+# Agent skills vendored per-machine by a skill installer (skills-lock.json pins
+# them to their upstream repo). Not repo content: nothing here references them,
+# they are re-installable from their source, and vendoring third-party prose
+# means keeping it in sync with an upstream this project does not own.
+# .claude/skills holds symlinks into .agents/skills.
+.agents/
+.claude/
+skills-lock.json

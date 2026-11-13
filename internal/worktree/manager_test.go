@@ -71,6 +71,30 @@ func testProject(repo string) config.Project {
 	return config.Project{Name: "nori", Path: repo, DefaultBranch: "main"}
 }
 
+func TestVerifyReviewHead(t *testing.T) {
+	for _, tc := range []struct {
+		name, head, status string
+		exit               int
+		wantErr            bool
+	}{
+		{name: "clean matching head", head: "abc"},
+		{name: "different commit", head: "def", wantErr: true},
+		{name: "uncommitted files", head: "abc", status: " M app.go", wantErr: true},
+		{name: "git cannot answer", exit: 1, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, _ := fakeGit(t,
+				stub{match: "rev-parse --verify HEAD", stdout: tc.head, exit: tc.exit},
+				stub{match: "status --porcelain", stdout: tc.status},
+			)
+			err := (&Manager{GitBin: bin}).VerifyReviewHead(context.Background(), "/work", "abc")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("VerifyReviewHead = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestDefaultRootHonorsLolaHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)

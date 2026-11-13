@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,6 +42,10 @@ func (d *Daemon) safeReconcile(ctx context.Context) {
 			d.logf("", "reconcile panic (daemon keeps running): %v", r)
 		}
 	}()
+	if d.knowledge != nil {
+		d.promoteReviewKnowledge(ctx, "")
+		d.maintainKnowledge(ctx, d.knowledge.List())
+	}
 	d.reconcile(ctx)
 }
 
@@ -60,7 +65,7 @@ func (d *Daemon) reconcile(ctx context.Context) {
 
 	counted := map[string]bool{} // Linear identifier -> has a counted session
 	for _, s := range d.sessions.Snapshot() {
-		if s.Source == "native" && s.Issue != "" && nativeSessionPresent(s.Status) {
+		if s.Source == "native" && s.Issue != "" && nativeSessionPresent(s) {
 			counted[s.Issue] = true
 		}
 	}
@@ -77,6 +82,7 @@ func (d *Daemon) reconcile(ctx context.Context) {
 			d.logf("", "reconcile: cleared stale in-flight claim on %s", e.Identifier)
 		}
 	}
+	d.pruneLeases()
 
 	api, err := d.ensureLinear()
 	if err != nil {
@@ -92,30 +98,56 @@ func (d *Daemon) reconcile(ctx context.Context) {
 	}
 }
 
-// nativeSessionPresent reports whether a native session's status still
-// accounts for its issue in the orphan reconciliation (state.Present). The
-// set is deliberately WIDER than the budget's NativeLiveCounted — a parked
-// session (approved, review_pending, …) holds no agent slot but must still
-// shield its issue from an orphan revert: its pane is alive and its work is
-// delivered. "closed" no longer shields (a change from the pre-axis table):
-// the work was explicitly rejected, so the issue must become revertable
-// instead of being shielded forever by a lingering pane.
-func nativeSessionPresent(status string) bool {
-	return state.Present(status)
+// nativeSessionPresent reports whether a native session still accounts for its
+// issue in the orphan reconciliation (state.Present over the two AXES). The set
+// is deliberately WIDER than the budget's NativeLiveCounted — a parked session
+// (approved, review_pending, …) holds no agent slot but must still shield its
+// issue from an orphan revert: its pane is alive and its work is delivered. A
+// closed PR no longer shields (a change from the pre-axis table): the work was
+// explicitly rejected, so the issue must become revertable instead of being
+// shielded forever by a lingering pane.
+//
+// Taking the SESSION rather than its rolled-up status is what lets the shield
+// see both reasons a session is gone: the rollup ranks merged over a dead pane
+// and any open PR over an exited agent, so a session whose agent had ended kept
+// shielding its issue behind the PR's delivery word. EnsureAxes covers a
+// pre-axis snapshot record; it is a no-op on everything the observer writes.
+func nativeSessionPresent(s session.Session) bool {
+	s.EnsureAxes()
+	return state.Present(s.AgentState, s.Delivery)
 }
 
 // nativeSessionForIssue returns the stored native session working on the
 // Linear identifier, or ok=false when none is on record.
 func (d *Daemon) nativeSessionForIssue(identifier string) (session.Session, bool) {
-	if identifier == "" {
-		return session.Session{}, false
-	}
-	for _, s := range d.sessions.Snapshot() {
-		if s.Source == "native" && s.Issue == identifier {
-			return s, true
-		}
+	if all := d.nativeSessionsForIssue(identifier); len(all) > 0 {
+		return all[0], true
 	}
 	return session.Session{}, false
+}
+
+// nativeSessionsForIssue returns every stored native session working on the
+// Linear identifier (several for a best-of group), the kept attempt first.
+func (d *Daemon) nativeSessionsForIssue(identifier string) []session.Session {
+	if identifier == "" {
+		return nil
+	}
+	var out []session.Session
+	for _, s := range d.sessions.Snapshot() {
+		if s.Source == "native" && s.Issue == identifier {
+			out = append(out, s)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b session.Session) int {
+		switch {
+		case a.BestOfWinner == b.BestOfWinner:
+			return 0
+		case a.BestOfWinner:
+			return -1
+		}
+		return 1
+	})
+	return out
 }
 
 func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Project, counted map[string]bool, now time.Time) {
@@ -130,6 +162,7 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 	// the poll's own `repo`, else its [[project]]'s repo (PollRepo).
 	d.mu.Lock()
 	pollRepo := d.cfg.PollRepo(&p)
+	members := d.cfg.StackMembers(p.Name)
 	d.mu.Unlock()
 
 	// Find issues currently carrying set_label: a minimal poll copy keeping
@@ -162,6 +195,9 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 
 	changed := false
 	for _, is := range issues {
+		if d.goalHold(is.ID, is.Description, is.IssueRelations) != "" {
+			continue
+		}
 		if counted[is.Identifier] {
 			continue // still has a live counted AO session
 		}
@@ -181,29 +217,63 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 		// branch name, and the PR lives in the project's repo (recorded on the
 		// session at spawn). Fall back to the poll's repo (or its project's,
 		// via PollRepo) when no session is on record.
-		branch, repo := is.BranchName, pollRepo
+		//
+		// A best-of issue has one session (and one branch) per attempt, and ANY
+		// of them holding an open PR means the issue delivered — so every
+		// recorded branch is checked, not just the first.
+		type prTarget struct{ branch, repo string }
+		var targets []prTarget
 		var natSess *session.Session
-		if s, ok := d.nativeSessionForIssue(is.Identifier); ok {
-			natSess = &s
+		for _, s := range d.nativeSessionsForIssue(is.Identifier) {
+			if natSess == nil {
+				natSess = &s
+			}
+			if s.Stack {
+				// A stack session delivered when ANY of its apps holds an open PR.
+				for _, a := range s.Apps {
+					targets = append(targets, prTarget{a.Branch, a.Repo})
+				}
+				continue
+			}
+			t := prTarget{is.BranchName, pollRepo}
 			if s.Branch != "" {
-				branch = s.Branch
+				t.branch = s.Branch
 			}
 			if s.Repo != "" {
-				repo = s.Repo
+				t.repo = s.Repo
+			}
+			targets = append(targets, t)
+		}
+		if len(targets) == 0 && p.IsStack() {
+			// No record: the issue's branch in every member repository.
+			for _, m := range members {
+				targets = append(targets, prTarget{is.BranchName, m.Repo})
 			}
 		}
-		if branch != "" {
-			open, err := d.openPR(ctx, repo, branch)
+		if len(targets) == 0 {
+			targets = []prTarget{{is.BranchName, pollRepo}}
+		}
+		delivered, unknown := false, false
+		for _, t := range targets {
+			if t.branch == "" {
+				continue
+			}
+			open, err := d.openPR(ctx, t.repo, t.branch)
 			if err != nil {
 				// Cannot determine PR state: fail CLOSED. The SPEC only
 				// allows the revert when there is provably no open PR —
 				// reverting a held-for-review issue would re-spawn it.
 				d.logf(p.Name, "reconcile: PR check for %s failed, skipping revert: %v", is.Identifier, err)
-				continue
+				unknown = true
+				break
 			}
 			if open {
-				continue // the runner delivered a PR; not an orphan
+				delivered = true
+				break
 			}
+		}
+		if unknown || delivered {
+			continue // could not tell, or the runner delivered a PR; not an orphan
 		}
 
 		current, err := api.IssueLabelIDs(ctx, is.ID)
@@ -224,7 +294,14 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 			restore = natSess.RemovedLabels
 		}
 		newIDs := ApplyLabelDelta(current, []string{p.OnSentSetLabel}, restore)
-		if err := api.SetIssueLabels(ctx, is.ID, newIDs); err != nil {
+		d.goalMu.Lock()
+		if d.goalHold(is.ID, is.Description, is.IssueRelations) != "" {
+			d.goalMu.Unlock()
+			continue
+		}
+		err = api.SetIssueLabels(ctx, is.ID, newIDs)
+		d.goalMu.Unlock()
+		if err != nil {
 			d.logf(p.Name, "reconcile: revert labels for %s failed: %v", is.Identifier, err)
 			continue
 		}
@@ -277,4 +354,31 @@ func (d *Daemon) ghOpenPR(ctx context.Context, repo, branch string) (bool, error
 		return false, fmt.Errorf("gh pr list --repo %s --head %s: bad output: %w", repo, branch, err)
 	}
 	return len(prs) > 0 && strings.EqualFold(prs[0].State, "open"), nil
+}
+
+// pruneLeases releases the port leases of sessions that are no longer in the
+// store. The runtime releases a lease when it removes a worktree, but a session
+// can leave the store without that — a dirty worktree kept on merge, a kill of
+// a session whose project left config — and its ports would otherwise be
+// leased forever. A session gone from the store has no dev tabs left to bind
+// them. The orphanTimeout grace covers a spawn in flight, which leases its
+// ports before its session is upserted.
+func (d *Daemon) pruneLeases() {
+	if d.ports == nil {
+		return
+	}
+	live := map[string]bool{}
+	for _, s := range d.sessions.Snapshot() {
+		live[s.ID] = true
+	}
+	// A stack app's lease is keyed by its lane ID (runtime.EnvVars.LeaseKey)
+	// and lives as long as its session.
+	dropped, err := d.ports.Prune(func(id string) bool { return live[session.BaseID(id)] }, orphanTimeout)
+	if err != nil {
+		d.logf("", "reconcile: prune port leases: %v", err)
+		return
+	}
+	if len(dropped) > 0 {
+		d.logf("", "reconcile: released the port leases of %s (session gone)", strings.Join(dropped, ", "))
+	}
 }

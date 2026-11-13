@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -11,10 +12,14 @@ import (
 // with a canned tickets response.
 func ticketPickerRoot(t *testing.T, issues []protocol.TicketRow) *rootModel {
 	t.Helper()
+	return ticketPickerRootData(t, protocol.TicketsData{Team: "team-1", Issues: issues})
+}
+
+func ticketPickerRootData(t *testing.T, data protocol.TicketsData) *rootModel {
+	t.Helper()
 	m := detailRoot(t)
 	m.detail.project = "A" // "A" is a polling project (has team_id)
-	resp := mustData(t, protocol.TicketsData{Team: "team-1", Issues: issues})
-	fakeRequest(t, nil, resp, nil)
+	fakeRequest(t, nil, mustData(t, data), nil)
 	_, cmd := m.enterTicketPicker("A")
 	runCmd(t, m, cmd)
 	return m
@@ -31,6 +36,63 @@ func TestTicketPickerRendersRows(t *testing.T) {
 	for _, want := range []string{"tickets", "FE-9", "fix oauth flow", "urgent"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("picker view missing %q:\n%s", want, v)
+		}
+	}
+}
+
+// The row carries the facts a human picks by — workflow state and staleness —
+// and the header names the TEAM rather than printing its UUID.
+func TestTicketPickerShowsStateAndTeamName(t *testing.T) {
+	m := ticketPickerRootData(t, protocol.TicketsData{
+		Team: "ace69aca-dd39-4c63-91dc-36bbf48b62c7", TeamName: "Nori", TeamKey: "NOR",
+		Issues: []protocol.TicketRow{
+			{Identifier: "NOR-9", UUID: "u9", Title: "fix oauth flow", Priority: 1,
+				State: "In Progress", StateType: "started", Updated: "2h05m"},
+		},
+	})
+	v := stripANSI(m.ticketPickerView())
+	for _, want := range []string{"Nori (NOR)", "In Progress", "2h05m", "STATUS"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("picker view missing %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "ace69aca") {
+		t.Errorf("the team UUID must not be rendered when a name resolved:\n%s", v)
+	}
+}
+
+// An UNNAMEABLE team leaves the slot empty rather than falling back to the UUID:
+// the crumb already names the project, and a 36-char hex string in a header reads
+// as a bug (it was one, in the app's picker).
+func TestTicketPickerNeverRendersTheTeamUUID(t *testing.T) {
+	m := ticketPickerRootData(t, protocol.TicketsData{
+		Team: "ace69aca-dd39-4c63-91dc-36bbf48b62c7",
+		Issues: []protocol.TicketRow{
+			{Identifier: "NOR-9", UUID: "u9", Title: "fix oauth flow", Priority: 1},
+		},
+	})
+	v := stripANSI(m.ticketPickerView())
+	if strings.Contains(v, "ace69aca") {
+		t.Errorf("an unresolved team must render as nothing, not as its UUID:\n%s", v)
+	}
+	if !strings.Contains(v, "NOR-9") {
+		t.Errorf("the rows must still render:\n%s", v)
+	}
+}
+
+// `/` filters over what the row shows — state, labels and assignee included, not
+// just the identifier and title.
+func TestTicketPickerFilterCoversDisplayedFields(t *testing.T) {
+	m := ticketPickerRoot(t, []protocol.TicketRow{
+		{Identifier: "NOR-1", UUID: "u1", Title: "one", State: "In Review"},
+		{Identifier: "NOR-2", UUID: "u2", Title: "two", Labels: []string{"bug"}},
+		{Identifier: "NOR-3", UUID: "u3", Title: "three", Assignee: "Ada"},
+	})
+	for q, want := range map[string]string{"review": "NOR-1", "bug": "NOR-2", "ada": "NOR-3"} {
+		m.ticket.filter = q
+		rows := m.ticketRows()
+		if len(rows) != 1 || rows[0].Identifier != want {
+			t.Errorf("filter %q = %v, want just %s", q, rows, want)
 		}
 	}
 }
@@ -85,6 +147,57 @@ func TestTicketPickerEscReturnsToDetail(t *testing.T) {
 	m.Update(keyMsg("esc"))
 	if m.view != viewDetail {
 		t.Fatalf("view = %d, want viewDetail", m.view)
+	}
+}
+
+// 'a' cycles the agent override (default → claude → codex → opencode → default),
+// the footer names a non-default choice, and the choice rides cmd=openTicket
+// as agentKind (absent for the default).
+func TestTicketPickerAgentOverride(t *testing.T) {
+	m := ticketPickerRoot(t, []protocol.TicketRow{
+		{Identifier: "FE-9", UUID: "u9", Title: "fix oauth"},
+	})
+	if v := stripANSI(m.ticketPickerView()); strings.Contains(v, "agent:") {
+		t.Errorf("the default choice must not print an agent marker:\n%s", v)
+	}
+
+	for _, want := range []string{"claude", "codex", "opencode", ""} {
+		m.Update(keyMsg("a"))
+		if m.ticket.agentKind != want {
+			t.Fatalf("cycle = %q, want %q", m.ticket.agentKind, want)
+		}
+		v := stripANSI(m.ticketPickerView())
+		if want != "" && !strings.Contains(v, "agent: "+want) {
+			t.Errorf("footer must show agent: %s:\n%s", want, v)
+		}
+		if want == "" && strings.Contains(v, "agent:") {
+			t.Errorf("wrapping past opencode must return to the default:\n%s", v)
+		}
+	}
+
+	// The chosen kind flows into cmd=openTicket.
+	m.Update(keyMsg("a")) // claude
+	m.Update(keyMsg("a")) // codex
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.OpenData{SessionID: "s", Message: "started FE-9"}), nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+
+	found := false
+	for _, r := range got {
+		if r.Cmd != "openTicket" {
+			continue
+		}
+		var a protocol.OpenTicketArgs
+		if err := json.Unmarshal(r.Args, &a); err != nil {
+			t.Fatal(err)
+		}
+		if a.AgentKind == "codex" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected cmd=openTicket with agentKind=codex, got %+v", got)
 	}
 }
 

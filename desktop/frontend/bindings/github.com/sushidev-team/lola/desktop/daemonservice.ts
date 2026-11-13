@@ -22,7 +22,27 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as goal$0 from "../internal/goal/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as goalplan$0 from "../internal/goalplan/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as knowledge$0 from "../internal/knowledge/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as protocol$0 from "../internal/protocol/models.js";
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as $models from "./models.js";
+
+/**
+ * AddressPRFeedback asks the coding agent to validate, fix, and resolve feedback.
+ */
+export function AddressPRFeedback(session: string, $number: number): $CancellablePromise<protocol$0.AgentSayData> {
+    return $Call.ByID(566829218, session, $number);
+}
 
 /**
  * Alive reports whether the daemon socket accepts a connection right now.
@@ -40,10 +60,105 @@ export function Answer(session: string, text: string): $CancellablePromise<void>
 }
 
 /**
+ * BestOf starts an issue as a best-of group; agents "" uses [best_of].agents.
+ */
+export function BestOf(a: protocol$0.BestOfArgs): $CancellablePromise<protocol$0.BestOfData> {
+    return $Call.ByID(207487662, a);
+}
+
+/**
+ * BestOfCompare returns every attempt of the best-of group the session belongs
+ * to, side by side (read-only; one bounded local git diff per attempt).
+ */
+export function BestOfCompare(session: string): $CancellablePromise<protocol$0.BestOfCompareData> {
+    return $Call.ByID(65229141, session);
+}
+
+/**
+ * BestOfPick keeps one best-of attempt: its draft PR is marked ready, every
+ * other attempt's PR is closed and its session torn down (a dirty worktree is
+ * kept).
+ */
+export function BestOfPick(session: string): $CancellablePromise<protocol$0.BestOfPickData> {
+    return $Call.ByID(3218095, session);
+}
+
+/**
+ * Broadcast sends one message to every live coding agent of a project. Agents
+ * resting at their prompt get it now; busy ones get it queued and delivered
+ * when idle. The reply names both groups so the UI can show the split. Long
+ * timeout: the daemon reads (and may type into) one pane per live session.
+ */
+export function Broadcast(args: protocol$0.BroadcastArgs): $CancellablePromise<protocol$0.BroadcastData> {
+    return $Call.ByID(2789386200, args);
+}
+
+/**
+ * CLIInfo resolves the CLI and probes versions. Never errors: a machine with no
+ * CLI at all is a state the UI has to render, not an exception.
+ */
+export function CLIInfo(): $CancellablePromise<$models.CLIInfoDTO> {
+    return $Call.ByID(2538774285);
+}
+
+/**
+ * CheckpointDiff returns what the turn ending in checkpoint seq changed: the
+ * previous checkpoint against this one. Read-only.
+ */
+export function CheckpointDiff(session: string, seq: number): $CancellablePromise<protocol$0.DiffData> {
+    return $Call.ByID(3558083024, session, seq);
+}
+
+/**
+ * Checkpoints lists the session's turn checkpoints, oldest first: the worktree
+ * snapshot the daemon records each time the agent ends a turn.
+ */
+export function Checkpoints(session: string): $CancellablePromise<protocol$0.CheckpointsData> {
+    return $Call.ByID(4102282240, session);
+}
+
+/**
+ * CloseExitedTemporary retires a temporary shell only once all its panes are gone.
+ */
+export function CloseExitedTemporary(id: string): $CancellablePromise<protocol$0.KillData> {
+    return $Call.ByID(873119733, id);
+}
+
+/**
  * CodeRabbit forces the PR-comment watch for one session now (the coderabbit-watch alias).
  */
 export function CodeRabbit(session: string): $CancellablePromise<protocol$0.CodeRabbitData> {
     return $Call.ByID(2376086832, session);
+}
+
+/**
+ * Dev moves the project's dev processes ([[project]].dev_commands) onto one
+ * session, or stops them. Activating is a MOVE: the daemon first kills the tabs
+ * of whichever session of that project held them, so the ports are free before
+ * the new tabs start.
+ */
+export function Dev(session: string, on: boolean): $CancellablePromise<protocol$0.DevData> {
+    return $Call.ByID(340192016, session, on);
+}
+
+/**
+ * DevFreePort kills the process holding the port a session's dev tab died on and
+ * restarts that session's dev tabs. port/pid must match the clash the daemon
+ * currently reports (SessionInfo.devClash) — this is the one path that signals a
+ * process lola did not start, so a stale dialog is refused rather than applied to
+ * whatever holds the port now.
+ */
+export function DevFreePort(session: string, port: number, pid: number): $CancellablePromise<protocol$0.DevFreePortData> {
+    return $Call.ByID(3893206393, session, port, pid);
+}
+
+/**
+ * Diff returns the session's changes for the diff tab: its worktree against
+ * the merge-base with the project's default_branch, uncommitted and untracked
+ * work included. Read-only.
+ */
+export function Diff(session: string): $CancellablePromise<protocol$0.DiffData> {
+    return $Call.ByID(1560242150, session);
 }
 
 export function Disable(poll: string): $CancellablePromise<void> {
@@ -58,10 +173,183 @@ export function Enable(poll: string): $CancellablePromise<void> {
 }
 
 /**
- * Kill tears a session down. A dirty worktree is kept unless force is set.
+ * ForkCheckpoint starts a NEW agent session from checkpoint seq on its own
+ * branch; agentKind "" keeps the parent's coding agent.
  */
-export function Kill(session: string, force: boolean): $CancellablePromise<protocol$0.KillData> {
-    return $Call.ByID(699745421, session, force);
+export function ForkCheckpoint(session: string, seq: number, agentKind: string): $CancellablePromise<protocol$0.OpenData> {
+    return $Call.ByID(460527567, session, seq, agentKind);
+}
+
+export function GoalAcceptBrief(request: goal$0.BriefAcceptance): $CancellablePromise<void> {
+    return $Call.ByID(2467228378, request);
+}
+
+export function GoalAcceptPlan(id: string, revision: number): $CancellablePromise<string> {
+    return $Call.ByID(125344137, id, revision);
+}
+
+/**
+ * GoalControl preserves the revision the human actually reviewed. In particular
+ * a stale request is never retried automatically against the latest revision.
+ */
+export function GoalControl(id: string, revision: number, action: string, reason: string): $CancellablePromise<void> {
+    return $Call.ByID(1341233383, id, revision, action, reason);
+}
+
+export function GoalDeliveryEvidence(request: goal$0.DeliveryEvidenceRequest): $CancellablePromise<void> {
+    return $Call.ByID(1668219419, request);
+}
+
+export function GoalDismissProgress(request: goal$0.ProgressResolution): $CancellablePromise<void> {
+    return $Call.ByID(2163683961, request);
+}
+
+/**
+ * GoalEditPlan preserves an operator's reviewed graph and edit identity. It
+ * neither reruns the coordinator nor publishes or authorizes the goal.
+ */
+export function GoalEditPlan(request: goalplan$0.EditRequest): $CancellablePromise<goalplan$0.Record> {
+    return $Call.ByID(3919045989, request);
+}
+
+/**
+ * GoalOverview reads only durable local records. The project selector is an
+ * identity, never a display label. Empty selects every configured project.
+ */
+export function GoalOverview(project: string): $CancellablePromise<goal$0.Overview[] | null> {
+    return $Call.ByID(2084464305, project);
+}
+
+export function GoalProposal(id: string): $CancellablePromise<goalplan$0.Record> {
+    return $Call.ByID(4228074536, id);
+}
+
+export function GoalProposals(project: string): $CancellablePromise<goalplan$0.Summary[] | null> {
+    return $Call.ByID(338768705, project);
+}
+
+/**
+ * GoalPropose makes one explicit bounded call. The caller retains the request ID
+ * before sending, and recovers uncertain responses through GoalProposal.
+ */
+export function GoalPropose(request: goalplan$0.Request): $CancellablePromise<goalplan$0.Record> {
+    return $Call.ByID(580498952, request);
+}
+
+/**
+ * GoalPublish projects the reviewed goal into its existing Linear project only.
+ * An uncertain response is not retried here; the UI must reload and review again.
+ */
+export function GoalPublish(id: string, revision: number): $CancellablePromise<void> {
+    return $Call.ByID(1518333769, id, revision);
+}
+
+/**
+ * GoalRecovery reads a local snapshot. It never launches work or contacts Linear.
+ */
+export function GoalRecovery(id: string): $CancellablePromise<goal$0.RecoveryView> {
+    return $Call.ByID(663866829, id);
+}
+
+export function GoalStart(authorization: goal$0.Authorization): $CancellablePromise<void> {
+    return $Call.ByID(3214288106, authorization);
+}
+
+/**
+ * GoalStartOptions suggests finite limits and configured repositories without
+ * starting an agent or issuing any remote write.
+ */
+export function GoalStartOptions(id: string): $CancellablePromise<goal$0.StartOptions> {
+    return $Call.ByID(4032076004, id);
+}
+
+/**
+ * GoalSyncBrief reads Linear and retains the observed brief in local history.
+ * A successful refresh is not acceptance of that brief or authority to resume.
+ */
+export function GoalSyncBrief(id: string): $CancellablePromise<void> {
+    return $Call.ByID(3318247019, id);
+}
+
+/**
+ * InstallCLI symlinks the bundled CLI into the first writable directory on the
+ * usual PATH, so `lola` / `lola tui` work in a terminal after a DMG-only
+ * install. Returns the created path plus whether the shell will actually see it.
+ */
+export function InstallCLI(): $CancellablePromise<$models.CLIInstallDTO> {
+    return $Call.ByID(1179931118);
+}
+
+/**
+ * Kill tears a session down. A dirty worktree is kept unless force is set;
+ * keepWorktree stops the agent only and leaves the worktree for a later revive.
+ */
+export function Kill(session: string, force: boolean, keepWorktree: boolean): $CancellablePromise<protocol$0.KillData> {
+    return $Call.ByID(699745421, session, force, keepWorktree);
+}
+
+export function KnowledgeAccept(request: knowledge$0.Acceptance): $CancellablePromise<knowledge$0.Lesson> {
+    return $Call.ByID(1606437259, request);
+}
+
+export function KnowledgeCapture(request: knowledge$0.CaptureRequest, correction: boolean): $CancellablePromise<knowledge$0.Lesson> {
+    return $Call.ByID(3509220303, request, correction);
+}
+
+export function KnowledgeDecideImprovement(request: knowledge$0.ImprovementTriage): $CancellablePromise<knowledge$0.Improvement> {
+    return $Call.ByID(4294648845, request);
+}
+
+export function KnowledgeDispute(scope: knowledge$0.Scope, id: string, version: number, reason: string): $CancellablePromise<void> {
+    return $Call.ByID(1045593053, scope, id, version, reason);
+}
+
+/**
+ * Export produces reviewable file content; it never writes a repository file.
+ */
+export function KnowledgeExport(project: string): $CancellablePromise<{ [_ in string]?: string } | null> {
+    return $Call.ByID(759284245, project);
+}
+
+/**
+ * Export previews files for normal task review; it never installs policy or writes a checkout.
+ */
+export function KnowledgeExportImprovement(scope: knowledge$0.Scope, id: string, revision: string): $CancellablePromise<{ [_ in string]?: string } | null> {
+    return $Call.ByID(2694144031, scope, id, revision);
+}
+
+export function KnowledgeImprovement(scope: knowledge$0.Scope, id: string): $CancellablePromise<knowledge$0.Improvement> {
+    return $Call.ByID(3529074277, scope, id);
+}
+
+/**
+ * Improvement reads are local and on demand; no maintenance or external calls.
+ */
+export function KnowledgeImprovementCatalog(scope: knowledge$0.Scope, after: string): $CancellablePromise<knowledge$0.ImprovementCatalog> {
+    return $Call.ByID(2266833560, scope, after);
+}
+
+export function KnowledgeImprovementDecisions(scope: knowledge$0.Scope, id: string): $CancellablePromise<knowledge$0.ImprovementDecision[] | null> {
+    return $Call.ByID(2216650032, scope, id);
+}
+
+export function KnowledgeImprovementSources(scope: knowledge$0.Scope, id: string, revision: string, after: string): $CancellablePromise<knowledge$0.ImprovementSources> {
+    return $Call.ByID(2202348977, scope, id, revision, after);
+}
+
+export function KnowledgeList(project: string): $CancellablePromise<knowledge$0.Lesson[] | null> {
+    return $Call.ByID(2558447951, project);
+}
+
+export function KnowledgeVersion(scope: knowledge$0.Scope, id: string, version: number): $CancellablePromise<knowledge$0.Lesson> {
+    return $Call.ByID(3526205193, scope, id, version);
+}
+
+/**
+ * MergePR rechecks GitHub and merges only the PR head the user confirmed.
+ */
+export function MergePR(session: string, $number: number, repo: string, head: string, method: string, confirmUnready: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3629649329, session, $number, repo, head, method, confirmUnready);
 }
 
 /**
@@ -72,7 +360,15 @@ export function Open(project: string, ref: string): $CancellablePromise<protocol
 }
 
 /**
- * OpenManual starts a new branch off a base as an agent or a plain shell.
+ * OpenFolder opens an existing directory in Finder on the desktop machine.
+ * This is local UI work, so it does not depend on the daemon's version.
+ */
+export function OpenFolder(path: string): $CancellablePromise<void> {
+    return $Call.ByID(1513891901, path);
+}
+
+/**
+ * OpenManual starts an agent or shell in a worktree or borrowed directory.
  */
 export function OpenManual(a: protocol$0.OpenManualArgs): $CancellablePromise<protocol$0.OpenData> {
     return $Call.ByID(1277103427, a);
@@ -97,6 +393,13 @@ export function OpenTicket(a: protocol$0.OpenTicketArgs): $CancellablePromise<pr
  */
 export function OpenURL(url: string): $CancellablePromise<void> {
     return $Call.ByID(2744861822, url);
+}
+
+/**
+ * PRReadiness reads current GitHub facts and unresolved review conversations.
+ */
+export function PRReadiness(session: string, $number: number): $CancellablePromise<protocol$0.PRReadinessData> {
+    return $Call.ByID(2994349465, session, $number);
 }
 
 /**
@@ -150,6 +453,24 @@ export function RenameProject($from: string, to: string): $CancellablePromise<pr
 }
 
 /**
+ * RenameSession changes a display name without changing the branch or session ID.
+ */
+export function RenameSession(id: string, name: string): $CancellablePromise<void> {
+    return $Call.ByID(3644473889, id, name);
+}
+
+/**
+ * ResolveConflict asks a conflicting session's coding agent to merge the
+ * project's default_branch into its branch and resolve the conflicts — the
+ * manual trigger for what [reactions].merge_conflict does on its own. The daemon
+ * refuses it (as an error) unless the PR really conflicts and the agent is
+ * provably resting at its prompt, so a mid-turn worker is never typed into.
+ */
+export function ResolveConflict(session: string): $CancellablePromise<protocol$0.ResolveConflictData> {
+    return $Call.ByID(1075551445, session);
+}
+
+/**
  * RestartDaemon stops (if up), waits for the socket to clear, then respawns. It
  * holds lifecycleMu across the whole sequence and reuses the locked helpers, so
  * it never re-locks recursively.
@@ -159,12 +480,54 @@ export function RestartDaemon(): $CancellablePromise<void> {
 }
 
 /**
+ * RestoreCheckpoint puts the session's worktree files back to checkpoint seq.
+ * The daemon records the current state as a new checkpoint first (the reply's
+ * Safety), so the restore is undoable; it refuses while the agent is mid-turn.
+ */
+export function RestoreCheckpoint(session: string, seq: number): $CancellablePromise<protocol$0.RestoreCheckpointData> {
+    return $Call.ByID(21321943, session, seq);
+}
+
+/**
  * Review forces a QA review PASS for one session now. provider optionally
- * selects which pass provider kind to force (coderabbit-cli | claude-session);
+ * selects which pass provider kind to force (any pass kind — see
+ * config.ReviewProviderPassKinds);
  * "" forces the daemon's primary pass provider.
  */
 export function Review(session: string, provider: string): $CancellablePromise<protocol$0.ReviewData> {
     return $Call.ByID(4119390853, session, provider);
+}
+
+export function ReviewPackageCapture(session: string, request: protocol$0.ReviewCaptureArgs): $CancellablePromise<protocol$0.ReviewPackage> {
+    return $Call.ByID(2871503043, session, request);
+}
+
+export function ReviewPackageChecks(session: string, packageID: string): $CancellablePromise<protocol$0.ReviewChecksData> {
+    return $Call.ByID(1924001306, session, packageID);
+}
+
+export function ReviewPackageDiff(session: string, $from: string, to: string): $CancellablePromise<protocol$0.DiffData> {
+    return $Call.ByID(1055765448, session, $from, to);
+}
+
+export function ReviewPackageImage(session: string, packageID: string, artifact: string): $CancellablePromise<protocol$0.ReviewImageData> {
+    return $Call.ByID(4205318208, session, packageID, artifact);
+}
+
+export function ReviewPackageMark(session: string, packageID: string, previous: string): $CancellablePromise<protocol$0.ReviewRecord> {
+    return $Call.ByID(565500622, session, packageID, previous);
+}
+
+export function ReviewPackageRecover(session: string, packageID: string, id: string): $CancellablePromise<protocol$0.ReviewCheck> {
+    return $Call.ByID(1798667161, session, packageID, id);
+}
+
+export function ReviewPackageVerify(session: string, request: protocol$0.ReviewVerifyArgs): $CancellablePromise<protocol$0.ReviewCheck> {
+    return $Call.ByID(3958985510, session, request);
+}
+
+export function ReviewPackages(session: string): $CancellablePromise<protocol$0.ReviewPackagesData> {
+    return $Call.ByID(1320644344, session);
 }
 
 /**
@@ -172,6 +535,23 @@ export function Review(session: string, provider: string): $CancellablePromise<p
  */
 export function Revive(session: string): $CancellablePromise<protocol$0.ReviveData> {
     return $Call.ByID(325633556, session);
+}
+
+/**
+ * SendFeedback delivers a batch of line comments (plus an optional note) to the
+ * session's coding agent as one message. The daemon types it only into a pane
+ * verifiably resting at its prompt; otherwise it is queued and delivered later
+ * (FeedbackData.Queued) — never typed mid-turn.
+ */
+export function SendFeedback(args: protocol$0.FeedbackArgs): $CancellablePromise<protocol$0.FeedbackData> {
+    return $Call.ByID(2310802896, args);
+}
+
+/**
+ * SessionTask updates the shared task board. User additions also enter the conversation.
+ */
+export function SessionTask(session: string, argv: string[] | null): $CancellablePromise<protocol$0.SessionTask[] | null> {
+    return $Call.ByID(577629738, session, argv);
 }
 
 /**
@@ -203,6 +583,14 @@ export function Status(): $CancellablePromise<protocol$0.StatusData> {
  */
 export function StopDaemon(): $CancellablePromise<void> {
     return $Call.ByID(2191041505);
+}
+
+/**
+ * SwitchAgent replaces a session's coding agent with a different kind on the
+ * same worktree and branch (the manual half of the agent fallback).
+ */
+export function SwitchAgent(a: protocol$0.SwitchAgentArgs): $CancellablePromise<protocol$0.SwitchAgentData> {
+    return $Call.ByID(2945493222, a);
 }
 
 /**

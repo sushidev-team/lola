@@ -1,11 +1,11 @@
 package daemon
 
-// review.go holds the coderabbit-cli PASS CLIENT builder, the shared per-cycle
+// review.go holds the cli-family PASS CLIENT builder, the shared per-cycle
 // review budget, and the manual `lola review` force command. The trigger,
 // fallback chain, transport dispatch, and kind-keyed guards now live in the
-// provider-agnostic reviewer.go — this file keeps only the coderabbit-cli-shaped
-// bits (its client construction + timeout) plus the budget/context plumbing and
-// small shared helpers (isReviewablePROpen, reviewHead, reviewSave).
+// provider-agnostic reviewer.go — this file keeps only the CLI-shaped bits (its
+// client construction + timeout) plus the budget/context plumbing and small
+// shared helpers (isReviewablePROpen, reviewHead, reviewSave).
 //
 // The dominant invariants are unchanged and now enforced per provider in
 // reviewer.go: opt-in / zero-regression, bounded + fire-once + graceful skip,
@@ -29,58 +29,37 @@ import (
 // worker hand-off and the Linear comment carry the full findings.
 const reviewNotifyHeadBytes = 600
 
-// buildReview constructs the coderabbit-cli review client for rc, or nil when it
-// is disabled OR enabled-but-coderabbit-is-unavailable. A nil result is the
-// caller's "this pass can't answer" signal (a fallback chain skips it), so a
-// missing coderabbit degrades gracefully rather than erroring per cycle. The
-// Command override is split to an argv (bin + args-minus-base); an empty Command
-// uses the review package default.
-func buildReview(rc config.ReviewConfig) *review.Client {
-	if !rc.Enabled {
-		return nil
-	}
-	cl := &review.Client{}
-	if argv := rc.CommandArgs(); len(argv) > 0 {
+// buildReview constructs the review client for a cli-family provider, or nil
+// when its tool is not on PATH. A nil result is the caller's "this pass can't
+// answer" signal (a fallback chain skips it), so a missing binary degrades
+// gracefully rather than erroring per cycle.
+//
+// Command is split to an argv (bin + args-minus-base); an empty Command falls
+// back to the review package's CodeRabbit default, which is what makes
+// coderabbit-cli work with no keys at all while custom-cli — validated to carry
+// a command — runs whatever tool it names. BaseFlag decides how the base branch
+// is appended, and an EMPTY BaseFlag appends nothing (a tool that takes no base
+// argument), which is why it is threaded through rather than hardcoded.
+func buildReview(cp config.ReviewProvider) *review.Client {
+	cl := &review.Client{BaseFlag: cp.BaseFlag}
+	if argv := (config.ReviewConfig{Command: cp.Command}).CommandArgs(); len(argv) > 0 {
 		cl.Bin = argv[0]
-		cl.Args = argv[1:] // review always appends --base itself
+		cl.Args = argv[1:] // Review appends the base flag itself
 	}
-	if rc.TimeoutSeconds > 0 {
-		cl.Timeout = time.Duration(rc.TimeoutSeconds) * time.Second
+	if cp.TimeoutSeconds > 0 {
+		cl.Timeout = time.Duration(cp.TimeoutSeconds) * time.Second
 	}
 	if !cl.Available() {
-		return nil // enabled but coderabbit not on PATH: caller logs once, pass off
+		return nil // enabled but the tool is not on PATH: caller logs once, pass off
 	}
 	return cl
 }
 
-// setReviewCycleCtx installs (or clears, with nil) the current observe cycle's
-// shared review budget context — see the Daemon.reviewCycleCtx field.
-func (d *Daemon) setReviewCycleCtx(ctx context.Context) {
-	d.reviewMu.Lock()
-	d.reviewCycleCtx = ctx
-	d.reviewMu.Unlock()
-}
-
-// reviewContext returns the observe cycle's shared, shutdown-cancellable review
-// budget context when one is active, else fallback. A pass exec runs under it so
-// a hung provider is bounded ONCE per cycle, not once per session, and is aborted
-// at shutdown.
-//
-// It is consulted ONLY by the in-cycle auto-trigger (useCycleBudget). The manual
-// `lola review` command runs on its OWN socket-handler goroutine, concurrently
-// with the observe loop, and must NOT adopt the cycle's budget ctx: a
-// concurrently-finishing cycle would cancel the in-flight manual exec (surfacing
-// a spurious failure and poisoning the guard). The manual path passes its caller
-// ctx straight to the exec instead, where the client's own Timeout still bounds it.
-func (d *Daemon) reviewContext(fallback context.Context) context.Context {
-	d.reviewMu.Lock()
-	c := d.reviewCycleCtx
-	d.reviewMu.Unlock()
-	if c == nil {
-		return fallback
-	}
-	return c
-}
+// The observe cycle no longer shares one review budget: a pass runs on the
+// review worker (reviewworker.go), one at a time, under the cancellable run
+// context and its own client Timeout. The manual `lola review` command likewise
+// runs under its socket-handler ctx. Nothing derives a review context from the
+// cycle any more.
 
 // isReviewablePROpen reports whether pr is a real, open PR the review should
 // trigger on: a genuine PR number in the OPEN state (not merged/closed). Mirrors
@@ -139,7 +118,7 @@ func (d *Daemon) handleReview(ctx context.Context, sessionID string) (protocol.R
 }
 
 // handleReviewProvider is handleReview with the Phase 6 `--provider` selector:
-// kind picks WHICH pass provider to force (coderabbit-cli | claude-session);
+// kind picks WHICH pass provider to force (any pass kind — cli or agent);
 // "" forces the daemon's primary (first enabled) pass provider. A kind naming a
 // disabled/absent provider is a "skipped" outcome; a kind naming a WATCH
 // provider is an error (its force path is `lola coderabbit`).
@@ -164,9 +143,24 @@ func (d *Daemon) handleReviewProvider(ctx context.Context, sessionID, kind strin
 	}
 
 	// force: runReviewChain always runs the exec (the once-per-PR gate lives in
-	// the auto-trigger). useCycleBudget=false — this runs on the socket-handler
-	// goroutine, so it must use its OWN ctx, not the cycle's budget.
-	res := d.runReviewChain(ctx, s, p, false)
+	// the auto-trigger). It runs on this socket-handler goroutine, under the
+	// caller's ctx and the client's own Timeout — a forced review deliberately
+	// does NOT queue behind the review worker.
+	//
+	// The pass guard is not the only per-PR one-shot in the way: the github sink
+	// keeps its OWN settle guard (PostedGitHubPRs[kind]) so the observer cadence
+	// cannot re-post. A forced re-review is an explicit human ask, so release it
+	// here too — otherwise the second review is routed to the worker and Linear
+	// while the PR silently gets nothing, which reads as "it said it posted and
+	// did not". Released BEFORE the exec so a crash mid-pass cannot leave the
+	// sink permanently settled for findings that were never posted.
+	if s.PR != nil && s.PR.Number > 0 {
+		d.unstampGithubSettled(s.ID, p.Kind, s.PR.Number)
+		if cur, ok := d.sessions.Get(s.ID); ok {
+			s = cur
+		}
+	}
+	res := d.reviewPass(ctx, s, p, false)
 	switch {
 	case res.Skipped != "":
 		return protocol.ReviewData{
@@ -179,7 +173,7 @@ func (d *Daemon) handleReviewProvider(ctx context.Context, sessionID, kind strin
 		return protocol.ReviewData{
 			Ran:     true,
 			Clean:   true,
-			Message: fmt.Sprintf("review complete: %s found no issues in %s", labelsFor(p.Kind).notifyTitle, sessionID),
+			Message: fmt.Sprintf("review complete: %s found no issues in %s", labelsFor(p).notifyTitle, sessionID),
 		}, nil
 	default:
 		return protocol.ReviewData{

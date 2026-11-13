@@ -10,9 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/board"
+	"github.com/sushidev-team/lola/internal/gitguard"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -37,14 +41,37 @@ const (
 	// Linear issue (the manual-worktree flow): lola owns the branch and deletes
 	// it on teardown, but it never touches Linear.
 	KindManual Kind = "manual"
+	// KindLocal runs in a borrowed directory. Lola never owns or removes it.
+	KindLocal Kind = "local"
+	// KindGoal is owned by the goal controller. Ordinary PR reactions,
+	// write-back, default-branch merging and worktree cleanup must skip it.
+	KindGoal Kind = "goal"
 )
+
+// DevForward is one dev server republished on the local network: the address a
+// phone opens, and the loopback address it publishes. Both, because the
+// forward's port is kernel-allocated and identifies nothing — 8000 is the app
+// and 5175 is the bundler, and only the original says which is which.
+type DevForward struct {
+	URL  string
+	From string
+}
 
 // Session is one observed agent session, regardless of who spawned it.
 type Session struct {
-	ID      string `json:"id"`
-	Source  string `json:"source"`          // "ao" | "native"
-	Agent   string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
-	Project string `json:"project"`
+	// PRCommentGuards records delivered thread revisions, so unresolved or disputed
+	// findings do not wake the agent repeatedly. Replaced, never mutated in place.
+	PRCommentGuards map[string]string `json:"pr_comment_guards,omitempty"`
+
+	Name      string `json:"name,omitempty"`
+	Location  string `json:"location,omitempty"` // main | temporary; empty for worktrees
+	ID        string `json:"id"`
+	Source    string `json:"source"`          // "ao" | "native"
+	Agent     string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
+	Project   string `json:"project"`
+	GoalID    string `json:"goal_id,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
+	AttemptID string `json:"attempt_id,omitempty"`
 	// Manual marks a session opened by hand via `lola open` (a branch/PR checked
 	// out in a throwaway DETACHED worktree with a plain shell — no coding agent,
 	// no Linear issue) rather than dispatched from a Linear match. It is the
@@ -127,15 +154,108 @@ type Session struct {
 	// hook — rendered agent output: display only, never executed, never fed
 	// back to any agent.
 	LastNotification string `json:"last_notification,omitempty"`
+	// InputNotified deduplicates one waiting episode; cleared when the agent resumes.
+	InputNotified state.InputReason `json:"input_notified,omitempty"`
+	// ReadyNotified identifies the repo/PR/head last announced as ready.
+	// Like the PR, this field belongs to a lane in stack sessions.
+	ReadyNotified string `json:"ready_notified,omitempty"`
+
+	// Nudged records that the agent's own "waiting for your input"
+	// notification fired while the session sat idle. It is a DISPLAY-ONLY
+	// breadcrumb: the axis stays AgentIdle (see internal/daemon/server.go),
+	// because that nudge means "the turn ended and nobody looked", not "the
+	// agent asked a question".
+	//
+	// It exists because that one signal minted 90% of the old needs_input
+	// population — 412 of 458 transitions in the measured history, on a 60s
+	// period, which is also where about half of all status churn came from
+	// (see the numbers at the top of internal/state/display.go). Keeping the
+	// breadcrumb without moving the axis is what lets a UI say "idle, and it
+	// has been asking for you" while the control loop correctly reads idle.
+	// Cleared by SetAgentState the moment the axis leaves AgentIdle.
+	// DevForwards are the local-network addresses this session's dev servers are
+	// currently published at (internal/daemon/devforwardwire.go). DERIVED, like
+	// DevActive and DevURLs: written by the sync pass from live listeners, and
+	// meaningless across a restart because the listeners do not survive one.
+	DevForwards []DevForward `json:"-"`
+
+	Nudged bool `json:"nudged,omitempty"`
+
 	// TranscriptPath is the agent's own transcript file as reported by its
 	// hooks (Claude Code hands the JSONL path on every event).
 	TranscriptPath string `json:"transcript_path,omitempty"`
+
+	// TranscriptSegments are the base names of the transcript files this session's
+	// agent has written, oldest first and capped at 32. A resume or /clear starts a
+	// new file, and the conversation view reads across them. Only a base name is kept:
+	// internal/agentfeed never opens a path a hook handed over.
+	TranscriptSegments []string `json:"transcript_segments,omitempty"`
+	// StopHoldUntil holds every automated send after a human's Stop, so a CI reaction
+	// or a queued message cannot type the moment the pane rests.
+	StopHoldUntil time.Time `json:"stop_hold_until,omitzero"`
+	// QueueHeld keeps the human's queued text back after a Stop, until the human
+	// speaks again.
+	QueueHeld bool `json:"queue_held,omitempty"`
+
+	// AgentsTried records the coding-agent kinds this session has already run
+	// BEFORE the current one (oldest first) — the fallback loop guard: the
+	// chain never hands the session back to a kind that already ran (and, for
+	// a quota switch, already exhausted its quota). Stamped by the daemon's
+	// switch path (internal/daemon/fallback.go).
+	AgentsTried []string `json:"agents_tried,omitempty"`
+
+	// FallbackNotified is the agent kind the "usage limit reached"
+	// notification last fired for, so the observer notifies ONCE per quota
+	// episode rather than on every 30s cycle. Cleared when the session leaves
+	// the quota-limited state and on a successful switch.
+	FallbackNotified string `json:"fallback_notified,omitempty"`
 	// AtPromptVerified qualifies AtPrompt: false when the gate was carried
 	// across a daemon restart (adoption) and no live signal has confirmed it
 	// since. The send-keys paths re-verify an unverified gate against the
 	// pane before typing, so a restart can never cause a send into a
 	// mid-turn agent.
 	AtPromptVerified bool `json:"at_prompt_verified,omitempty"`
+
+	// DevTabs is how many of the project's dev_commands this session currently
+	// holds RUNNING (its "<id>-dev-N" tmux tabs whose pane is still alive), and
+	// DevActive is the toggle the UIs render — true iff at least one is. Both
+	// are DERIVED from tmux facts by the observer, never persisted intent: a
+	// closed tab, a crashed `npm run dev` or a daemon restart therefore all read
+	// straight off the multiplexer rather than off a stale flag. Only one
+	// session per project may hold them (see internal/daemon/dev.go).
+	DevActive bool `json:"dev_active,omitempty"`
+	DevTabs   int  `json:"dev_tabs,omitempty"`
+
+	// DevURLs are the local testing addresses this session's dev tabs printed
+	// into their panes ("http://127.0.0.1:8001"), best first — scraped by
+	// internal/devurl, because lola cannot know what port `composer dev` picked
+	// (it moves the moment 8000 is taken) and reading it out of a scrolling log
+	// is the manual step this removes. DERIVED like the two fields above, and
+	// dropped the moment the tabs stop: an address for a server that is gone is
+	// worse than none.
+	DevURLs []string `json:"dev_urls,omitempty"`
+
+	// DevClash is why a dev tab died, in the ONE case lola can both explain and
+	// offer to fix: another process already holds the port the command wanted.
+	// Derived (see internal/daemon/dev.go), nil whenever the tabs are healthy.
+	DevClash *DevClash `json:"dev_clash,omitempty"`
+
+	// Overlaps are the OTHER live sessions of the same project whose changes
+	// touch the same files as this one (internal/daemon/overlap.go), so two
+	// agents editing one file are flagged before either PR conflicts. DERIVED
+	// every observe cycle from local git and never persisted: after a restart
+	// the first cycle recomputes it. Display-only — nothing in the control loop
+	// reads it.
+	Overlaps []Overlap `json:"-"`
+
+	// MergeQueue is the [merge_queue] posture (internal/daemon/mergequeue.go).
+	// MergeQueueGuard is the PERSISTED one-shot: which action the queue already
+	// took for which head commit, so a 30s cycle never re-sends the sync prompt
+	// or re-issues a merge for the same commit (a new push re-arms it).
+	// MergeQueuePos / MergeQueueStep are DERIVED for display each cycle.
+	MergeQueueGuard *MergeQueueGuard `json:"merge_queue_guard,omitempty"`
+	MergeQueuePos   int              `json:"-"`
+	MergeQueueStep  string           `json:"-"`
 
 	// ---- [statusagent] interpreter overlay (DISPLAY ONLY). These fields are
 	// untrusted LLM output derived from attacker-influenceable pane text:
@@ -153,6 +273,16 @@ type Session struct {
 	// unchanged session skip the LLM call entirely.
 	LastInterpretedAt   time.Time `json:"last_interpreted_at,omitempty"`
 	LastInterpretedHash string    `json:"last_interpreted_hash,omitempty"`
+
+	// Board is the agent's OWN progress report (`lola report …`): plan, phase,
+	// progress, blocker, note, self-run checks. DISPLAY ONLY, like the overlay
+	// above — it is the agent's claim about itself, steerable by whatever it
+	// read, so sessionsData is its one reader. Nothing in the control loop
+	// (axes, slots, reactions, write-back, send-keys gates) may consult it.
+	Board board.Board `json:"board,omitzero"`
+
+	// Tasks are durable shared requirements, independent of the agent report.
+	Tasks []protocol.SessionTask `json:"tasks,omitempty"`
 
 	// RemovedLabels are the match-label UUIDs the post-spawn label flip
 	// actually stripped from this issue (the trigger labels it carried at
@@ -202,6 +332,16 @@ type Session struct {
 	// off to the notifier/human. Stays true until checks pass and reset it, so
 	// an escalated session is never re-prompted in a loop.
 	Escalated bool `json:"escalated,omitempty"`
+
+	// CleanupFailures counts CONSECUTIVE failed merged-cleanup attempts (the
+	// react path's runtime.Kill after a PR merges; see
+	// internal/daemon/reactions.go, which keeps the store entry so the next
+	// cycle retries). The retry is otherwise unbounded and silent: a worktree
+	// that can never be removed — a dirty checkout, a wedged tmux, a missing
+	// binary — is re-attempted every 30s forever, logging the same line and
+	// telling nobody. The counter is what lets the retry back off and become
+	// visible instead. Reset on a successful cleanup.
+	CleanupFailures int `json:"cleanup_failures,omitempty"`
 
 	// AtPrompt is the send-keys SAFETY GATE: true only when the agent is idle
 	// at its input prompt (set by the Claude Code Stop hook), cleared the
@@ -288,11 +428,190 @@ type Session struct {
 	// providers' hand-offs never clobber each other.
 	PendingHandoffs map[string]string `json:"pending_handoffs,omitempty"`
 
+	// PendingFeedback is a HUMAN's diff-viewer feedback (cmd=feedback), already
+	// rendered into the message the agent will read, that could not be typed yet
+	// because the pane was not verifiably resting at its prompt. A second batch
+	// sent before delivery is APPENDED, never replaces the first. Delivered (and
+	// cleared) through the same sanitize + idle gate + pane proof as
+	// PendingHandoffs; kept apart from that map because it has no review
+	// provider behind it and must survive one being reconfigured.
+	PendingFeedback string `json:"pending_feedback,omitempty"`
+
+	// AutomationDeferredReason explains why lola left the input untouched.
+	// Cleared on the next successful prompt proof; also deduplicates notices.
+	AutomationDeferredReason string `json:"automation_deferred_reason,omitempty"`
+
+	// PendingBroadcast is a HUMAN's project-wide message (cmd=broadcast) that
+	// could not be typed yet because the pane was not verifiably resting at its
+	// prompt. Later broadcasts are APPENDED. Delivered (and cleared) through the
+	// same sanitize + idle gate + pane proof as PendingFeedback, and kept apart
+	// from it because the agent is told something different about where each
+	// came from.
+	PendingBroadcast string `json:"pending_broadcast,omitempty"`
+
+	// PendingSSH is what a human said about an ssh session (internal/sshstore
+	// holds the source of truth, item by item) and lola's own one-line nudges, not
+	// delivered yet. It is rewritten from the store whenever a piece is added,
+	// recalled, or delivered through a command's reply. Same sanitize + idle gate +
+	// pane proof as PendingFeedback.
+	PendingSSH string `json:"pending_ssh,omitempty"`
+
+	// ContextKey names the session's SHARED CONTEXT FOLDER,
+	// ~/.lola/context/<project>/<key>/, linked into the worktree as
+	// .lola/context (runtime.ContextKey). Recorded rather than re-derived because
+	// a fork inherits its parent's key: a re-spawn of the same issue derives the
+	// same key on its own, a fork could not. Empty on records written before the
+	// folder existed; runtime.ContextKey then falls back to the derivation.
+	ContextKey string `json:"context_key,omitempty"`
+
+	// Sandbox records how the agent was isolated at spawn: "" (on the host) or
+	// "docker" (in a container named after the session — internal/runtime's
+	// sandbox.go). Recorded rather than re-read from config because teardown
+	// must remove the container even after the project stopped being sandboxed.
+	Sandbox string `json:"sandbox,omitempty"`
+
+	// Stack marks a session of a STACK project (config kind = "stack"): its
+	// Worktree is a plain FOLDER, not a checkout, and its repositories are
+	// Apps — one worktree and one PR lane each. See stack.go.
+	Stack bool `json:"stack,omitempty"`
+	// Apps are a stack session's repositories, in the stack's member order.
+	Apps []App `json:"apps,omitempty"`
+	// Lane names the app a LANE VIEW is about ("" on a real record). It is
+	// never persisted: Store.Get/Update hand a view out for a lane ID
+	// (LaneID) and fold its writes back into the record.
+	Lane string `json:"-"`
+
+	// GitPin is a SANDBOXED worktree's trusted git layout, captured before the
+	// agent first ran (internal/gitguard): host-side git on the worktree uses
+	// it instead of the `.git` pointer the agent can rewrite. nil for a host
+	// session.
+	GitPin *gitguard.Pin `json:"git_pin,omitempty"`
+
 	// PostedGitHubPRs maps a provider kind -> the PR number the github transport
 	// has SETTLED (a successful post OR a permanent gh failure). Per-PR settle
 	// guard so the github sink no-ops for a kind/PR it has already settled and a
 	// transient failure retries next cycle.
 	PostedGitHubPRs map[string]int `json:"posted_github_prs,omitempty"`
+
+	// InlineReviewPRs maps a provider kind -> the PR number for which that kind's
+	// findings were posted as ANCHORED, resolvable review threads (not as one flat
+	// comment). It is the fact the worker hand-off needs and cannot re-derive: the
+	// agent is told to work the threads and resolve them only when they actually
+	// exist, and the hand-off is usually delivered minutes later — often after a
+	// daemon restart — so the fact has to persist. A github post that fell back to
+	// a plain comment leaves no entry, which is what keeps the instruction honest.
+	InlineReviewPRs map[string]int `json:"inline_review_prs,omitempty"`
+
+	// Model is the worker model override the agent was launched with ("" = the
+	// agent's own default). Persisted because a revive must relaunch the SAME
+	// model: a best-of attempt on opus that comes back on the default would no
+	// longer be the attempt it is compared as.
+	Model string `json:"model,omitempty"`
+
+	// BestOf is the best-of-N GROUP this session is one attempt of ("" = an
+	// ordinary session). Attempt is its 1-based place in the group, Attempts the
+	// group's size at spawn. BestOfWinner is set on the one attempt a human
+	// kept (cmd=bestOfPick); until then every attempt is IN THE RACE, which
+	// holds back its PR-open Linear write-back so N draft PRs do not each move
+	// the issue and comment on it. See internal/daemon/bestof.go.
+	BestOf       string `json:"best_of,omitempty"`
+	Attempt      int    `json:"attempt,omitempty"`
+	Attempts     int    `json:"attempts,omitempty"`
+	BestOfWinner bool   `json:"best_of_winner,omitempty"`
+
+	// ReviewTallies maps a review provider kind -> the severity tally of its
+	// last ANSWERED pass, for the PR it reviewed. DISPLAY-ONLY: the best-of
+	// compare view reads it, nothing in the control loop does.
+	ReviewTallies map[string]ReviewTally `json:"review_tallies,omitempty"`
+
+	// ReviewGates maps a review provider kind -> the state of its commit-status
+	// gate (`github_status`) for the current PR. Unlike ReviewTallies it IS
+	// read by the control loop: it decides when a new head is re-reviewed and
+	// whether the merge queue may land the PR.
+	ReviewGates map[string]ReviewGate `json:"review_gates,omitempty"`
+}
+
+// ReviewGate is one kind's review gate on one PR. Head is the commit the latest
+// round reviewed (a retry of the same head is not a new round); State and
+// Posted are the last commit status lola posted and the commit it went on.
+type ReviewGate struct {
+	PR     int       `json:"pr"`
+	Head   string    `json:"head,omitempty"`
+	Rounds int       `json:"rounds,omitempty"`
+	State  string    `json:"state,omitempty"` // pending | success | failure | error
+	Posted string    `json:"posted,omitempty"`
+	At     time.Time `json:"at"`
+}
+
+// ReviewTally is one review pass's findings counted by severity
+// (reviewmd.Count). A clean pass is a tally of zeros for its PR.
+type ReviewTally struct {
+	PR      int       `json:"pr"`
+	Blocker int       `json:"blocker,omitempty"`
+	Major   int       `json:"major,omitempty"`
+	Minor   int       `json:"minor,omitempty"`
+	Other   int       `json:"other,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+// InBestOfRace reports whether s is a best-of attempt nobody has picked yet.
+func (s Session) InBestOfRace() bool { return s.BestOf != "" && !s.BestOfWinner }
+
+// DevClash is a dev tab that died because its port was already taken, together
+// with the process holding it.
+//
+// It is the one dev-tab failure lola can both name and offer to undo, and it is
+// deliberately the only one modelled: everything else a command can die of is
+// its own output to read, while this one is invisible (the pane usually clears
+// itself) and its cause is a process somewhere else on the machine.
+//
+// Every field is DERIVED and re-derived: the port comes from the pane via
+// internal/portclash, the process from lsof via internal/portproc, and the whole
+// record is dropped the moment the tabs change (internal/daemon/dev.go). PID is
+// therefore evidence, never a licence — the kill path re-checks that this pid
+// still holds this port before signalling anything, because pids are reused.
+// Overlap is one other session touching the same files (Session.Overlaps).
+// Files is sorted and capped by the daemon; More counts what the cap left out.
+type Overlap struct {
+	Session string
+	Issue   string
+	Files   []string
+	More    int
+}
+
+// MergeQueueGuard records the merge queue's last action on this session's PR.
+// Action is "sync" (asked the agent to merge the default branch in), "merge"
+// (the merge was issued) or "failed" (GitHub refused the merge); HeadSHA is the
+// PR head it was taken for.
+type MergeQueueGuard struct {
+	Action  string    `json:"action"`
+	HeadSHA string    `json:"head_sha"`
+	At      time.Time `json:"at"`
+	Note    string    `json:"note,omitempty"`
+}
+
+type DevClash struct {
+	// Tab is the tmux session of the dev tab that died ("<id>-dev-2"), and
+	// Command the [[project]].dev_commands entry it was running (config text,
+	// not pane output).
+	Tab     string `json:"tab"`
+	Command string `json:"command,omitempty"`
+	// Port is the only thing taken from the pane: an integer in 1..65535, so no
+	// untrusted text is carried out of the terminal (see internal/portclash).
+	Port int `json:"port"`
+	// The holder, as lsof reports it: pid, short command name and working
+	// directory ("" when it could not be resolved).
+	PID  int    `json:"pid"`
+	Proc string `json:"proc,omitempty"`
+	Dir  string `json:"dir,omitempty"`
+	// Ours is true when the holder is listening from inside lola's worktrees for
+	// this project — a stray server of an earlier session, which the activation
+	// sweep would normally have reclaimed. False means it belongs to the user
+	// (their own checkout, another app entirely), which is exactly the case lola
+	// refuses to act on by itself and asks about instead.
+	Ours bool `json:"ours,omitempty"`
+	// At is when the clash was detected.
+	At time.Time `json:"at,omitempty"`
 }
 
 // migrateReviewState folds the four legacy review scalars into the kind-keyed
@@ -330,8 +649,8 @@ func (s *Session) migrateReviewState() {
 // asserts work thereby restarts the anti-false-working clock, which is what
 // structurally fixes the old revive/answer bug (they set "working" without
 // activity evidence and were downgraded 45s later). Leaving waiting_input
-// clears InputReason; a stopped turn clears CurrentTool. Returns whether the
-// axis changed.
+// clears InputReason; a stopped turn clears CurrentTool; leaving idle clears
+// the Nudged breadcrumb. Returns whether the axis changed.
 func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, now time.Time) bool {
 	changed := s.AgentState != a
 	if changed {
@@ -339,6 +658,7 @@ func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, no
 		s.AgentStateSince = now
 		if a != state.AgentWaitingInput {
 			s.InputReason = ""
+			s.InputNotified = ""
 			// LastNotification DESCRIBES the waiting_input condition ("Claude is
 			// waiting for your input", a permission prompt, …). It used to outlive
 			// it: only InputReason was cleared here, so once the human answered and
@@ -350,6 +670,15 @@ func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, no
 		}
 		if a != state.AgentWorking && a != state.AgentStarting {
 			s.CurrentTool = ""
+		}
+		if a != state.AgentIdle {
+			// Nudged describes an IDLE session the agent has been nagging
+			// about ("waiting for your input" with nobody looking). The
+			// moment the axis moves — the human answered, the agent resumed,
+			// the pane died — the breadcrumb is history, exactly as
+			// LastNotification is above. Leaving it set would make a working
+			// session keep claiming it is being waited on.
+			s.Nudged = false
 		}
 	}
 	if a == state.AgentWorking || a == state.AgentStarting {
@@ -430,9 +759,9 @@ func (s *Session) migrateAxes() {
 	s.StatusSince = s.LastSeen
 	s.AtPromptVerified = true
 	// Deliberately NOT recomputing Status here: a legacy record whose stored
-	// status disagrees with the rollup (possible only for the unreachable
-	// "no_pr"/"pr_open" words) keeps what it displayed; the first live cycle
-	// re-derives everything.
+	// status disagrees with the rollup (possible only for "no_pr", the P1-era
+	// word for a dead pane with no PR — see FromLegacy) keeps what it
+	// displayed; the first live cycle re-derives everything.
 }
 
 // EffectiveKind resolves the session's Kind, failing CLOSED so an unstamped,
@@ -460,7 +789,27 @@ func (s Session) EffectiveKind() Kind {
 // pollForSession would otherwise resolve) can never fire an API call against an
 // empty issue UUID.
 func (s Session) LinearBound() bool {
-	return s.EffectiveKind() == KindLinear && s.IssueUUID != ""
+	return !s.GoalManaged() && s.EffectiveKind() == KindLinear && s.IssueUUID != ""
+}
+
+// GoalManaged fails closed even if a recovery record lost one discriminator.
+func (s Session) GoalManaged() bool {
+	return s.Kind == KindGoal || s.GoalID != "" || IsGoalSessionID(s.ID)
+}
+
+// IsGoalSessionID recognizes the reserved digest shape, not just the prefix:
+// an ordinary project named "goal" still owns normal lola-goal-TEAM-123 IDs.
+func IsGoalSessionID(id string) bool {
+	tail, ok := strings.CutPrefix(id, "lola-goal-")
+	if !ok || len(tail) != 32 {
+		return false
+	}
+	for _, c := range tail {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // IsAgentless reports whether the session has NO coding agent (a plain shell).
@@ -484,12 +833,15 @@ func (s Session) HasAgent() bool { return !s.IsAgentless() }
 // Unlike LinearBound this must NOT depend on the issue UUID: a linear session
 // adopted after a store loss recovers its identifier from the ID shape but not
 // its UUID, yet it still owns the lola-created branch. So the only non-owning
-// case is an explicit pr kind; for a legacy record (Kind unset) fall back to the
+// cases are explicit pr and local kinds; for a legacy record (Kind unset) fall back to the
 // pre-Kind rule — a non-Manual session owns its branch — which is exactly the
 // prior teardown behavior.
 func (s Session) OwnsBranch() bool {
+	if s.GoalManaged() {
+		return false
+	}
 	if s.Kind != "" {
-		return s.Kind != KindPR
+		return s.Kind != KindPR && s.Kind != KindLocal
 	}
 	return !s.Manual
 }
@@ -605,6 +957,13 @@ func (s *Store) snapshotLocked() []Session {
 func (s *Store) Get(id string) (Session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if base, app := SplitLaneID(id); app != "" {
+		sess, ok := s.sessions[base]
+		if !ok {
+			return Session{}, false
+		}
+		return sess.LaneView(app) // a lane ID is a view of its session (stack.go)
+	}
 	sess, ok := s.sessions[id]
 	if !ok {
 		return Session{}, false
@@ -620,6 +979,18 @@ func (s *Store) Get(id string) (Session, bool) {
 // is preserved (stamped now for new entries without one); LastSeen is always
 // stamped now.
 func (s *Store) Upsert(sess Session) {
+	if base, app := SplitLaneID(sess.ID); app != "" {
+		// A lane view written back whole: fold it into its session.
+		sess.Lane = app
+		s.Update(base, func(cur *Session) bool {
+			if cur.AppIndex(app) < 0 {
+				return false
+			}
+			cur.putLane(sess, time.Now())
+			return true
+		})
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -651,6 +1022,9 @@ func (s *Store) Upsert(sess Session) {
 // Get→mutate→Upsert: the unlocked variant races concurrent writers and a
 // stale snapshot would silently erase their transitions.
 func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
+	if base, app := SplitLaneID(id); app != "" {
+		return s.updateLane(base, app, fn)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[id]
@@ -686,6 +1060,30 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 	return sess, true
 }
 
+// updateLane is Update for a lane ID (stack.go): fn mutates the lane VIEW,
+// which is then folded back into the session — the app's PR lane and the
+// session's shared fields — in the same critical section, and the returned
+// session is the new view.
+func (s *Store) updateLane(base, app string, fn func(sess *Session) bool) (Session, bool) {
+	var view Session
+	found := false
+	_, ok := s.Update(base, func(cur *Session) bool {
+		v, ok := cur.LaneView(app)
+		if !ok {
+			return false
+		}
+		found = true
+		if !fn(&v) {
+			view = v
+			return false
+		}
+		cur.putLane(v, time.Now())
+		view, _ = cur.LaneView(app)
+		return true
+	})
+	return view, ok && found
+}
+
 // Apply is Update that also handles the not-yet-present case atomically: fn
 // receives a copy of the current record (zero Session when absent) plus
 // whether it existed, and returns whether to commit. It exists for the
@@ -699,6 +1097,10 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Session, bool) {
 	if id == "" {
 		return Session{}, false
+	}
+	if base, app := SplitLaneID(id); app != "" {
+		// A lane exists only inside its session: never inserted on its own.
+		return s.updateLane(base, app, func(sess *Session) bool { return fn(sess, true) })
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -735,6 +1137,9 @@ func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Sess
 // reports whether it existed. Used by an explicit kill once the session's
 // worktree has been removed; callers Save afterwards to persist the drop.
 func (s *Store) Delete(id string) bool {
+	if _, app := SplitLaneID(id); app != "" {
+		return false // a lane goes with its session
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.sessions[id]; !ok {
@@ -803,4 +1208,12 @@ func (s *Store) Save() error {
 	name := tmp.Name()
 	tmp = nil // written and closed; disarm the cleanup deferral
 	return os.Rename(name, s.path)
+}
+
+// DisplayTitle preserves a custom name independently of task and branch identity.
+func (s Session) DisplayTitle() string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return s.Title
 }

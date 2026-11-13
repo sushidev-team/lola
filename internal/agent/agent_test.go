@@ -3,10 +3,9 @@ package agent
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
-
-	"github.com/BurntSushi/toml"
 )
 
 func TestValid(t *testing.T) {
@@ -109,7 +108,7 @@ func TestLaunchArgs(t *testing.T) {
 		want []string
 	}{
 		{Claude, []string{"--settings", ".lola/settings.json", prompt}},
-		{Codex, []string{"--ask-for-approval", "never", "--sandbox", "workspace-write", prompt}},
+		{Codex, []string{"--approve-for-me", prompt}},
 		{OpenCode, []string{"--prompt", prompt, "--auto"}},
 		// Unknown kinds are treated as Claude.
 		{Kind("bogus"), []string{"--settings", ".lola/settings.json", prompt}},
@@ -134,11 +133,42 @@ func TestLaunchArgsResume(t *testing.T) {
 	if reflect.DeepEqual(got, LaunchArgs(Claude, "PROMPT")) {
 		t.Error("claude resume must differ from a fresh launch (add --continue)")
 	}
-	// Codex and opencode have no reliable headless resume, so they fall back to a
-	// fresh launch — revival still restarts them, just without continuity.
-	for _, k := range []Kind{Codex, OpenCode} {
-		if got := LaunchArgsResume(k, "PROMPT"); !reflect.DeepEqual(got, LaunchArgs(k, "PROMPT")) {
-			t.Errorf("LaunchArgsResume(%q) = %v, want LaunchArgs fallback %v", k, got, LaunchArgs(k, "PROMPT"))
+	// OpenCode resumes its prior session via --continue --auto, with no
+	// --prompt: --continue + --prompt is broken upstream
+	// (anomalyco/opencode#8850), and the resumed session already carries the
+	// task context. --auto keeps the revived session unattended.
+	oc := LaunchArgsResume(OpenCode, "PROMPT")
+	if want := []string{"--continue", "--auto"}; !reflect.DeepEqual(oc, want) {
+		t.Errorf("LaunchArgsResume(opencode) = %v, want %v", oc, want)
+	}
+	if reflect.DeepEqual(oc, LaunchArgs(OpenCode, "PROMPT")) {
+		t.Error("opencode resume must differ from a fresh launch (drop --prompt, add --continue)")
+	}
+	for _, arg := range oc {
+		if arg == "--prompt" {
+			t.Error("opencode resume must not pass --prompt (broken with --continue upstream)")
+		}
+	}
+	// --last keeps cwd filtering; --all could select another worktree's task.
+	if got := LaunchArgsResume(Codex, "PROMPT"); !reflect.DeepEqual(got, []string{"resume", "--last", "--approve-for-me"}) {
+		t.Errorf("LaunchArgsResume(codex) = %v, want cwd-filtered auto-review resume", got)
+	}
+}
+
+func TestCodexAutoReviewOnlyForWorkers(t *testing.T) {
+	for _, args := range [][]string{LaunchArgs(Codex, "task"), LaunchArgsResume(Codex, "task")} {
+		if !slices.Contains(args, "--approve-for-me") {
+			t.Fatalf("worker must automatically review escalations: %v", args)
+		}
+		for _, forbidden := range []string{"never", "--yolo", "--dangerously-bypass-approvals-and-sandbox", "danger-full-access", "--all"} {
+			if slices.Contains(args, forbidden) {
+				t.Errorf("worker disables review or isolation with %q: %v", forbidden, args)
+			}
+		}
+	}
+	for _, args := range [][]string{ReviewArgs(Codex, "review", ""), ReviewStreamArgs(Codex, "review", "")} {
+		if slices.Contains(args, "--approve-for-me") || !slices.Contains(args, "read-only") {
+			t.Errorf("review must retain its read-only posture: %v", args)
 		}
 	}
 }
@@ -151,55 +181,6 @@ func TestLaunchArgsPromptIsLastForPositionalAgents(t *testing.T) {
 		if args[len(args)-1] != "P" {
 			t.Errorf("Kind(%q): prompt not last argv element: %v", k, args)
 		}
-	}
-}
-
-func TestCodexConfigTOML(t *testing.T) {
-	const bin = "/usr/local/bin/lola"
-	body := string(CodexConfigTOML(bin))
-
-	// The notify array must be the very first line.
-	firstLine := body
-	if i := strings.IndexByte(body, '\n'); i >= 0 {
-		firstLine = body[:i]
-	}
-	if !strings.HasPrefix(firstLine, "notify = [") {
-		t.Errorf("first line = %q, want it to start the notify array", firstLine)
-	}
-
-	// It must be valid TOML and decode notify as the expected argv, top-level.
-	var decoded struct {
-		Notify []string `toml:"notify"`
-	}
-	if _, err := toml.Decode(body, &decoded); err != nil {
-		t.Fatalf("CodexConfigTOML is not valid TOML: %v\n%s", err, body)
-	}
-	want := []string{bin, "hook", "codex-notify"}
-	if !reflect.DeepEqual(decoded.Notify, want) {
-		t.Errorf("notify = %v, want %v", decoded.Notify, want)
-	}
-
-	// No [table] header may appear before notify (TOML requires top-level keys
-	// first, and lola asserts it explicitly).
-	notifyIdx := strings.Index(body, "notify")
-	tableIdx := strings.Index(body, "\n[")
-	if tableIdx >= 0 && tableIdx < notifyIdx {
-		t.Errorf("a [table] header precedes notify:\n%s", body)
-	}
-}
-
-func TestCodexConfigTOMLQuotesUnsafePath(t *testing.T) {
-	const bin = `/Users/me/My "Tools"/lola`
-	body := string(CodexConfigTOML(bin))
-
-	var decoded struct {
-		Notify []string `toml:"notify"`
-	}
-	if _, err := toml.Decode(body, &decoded); err != nil {
-		t.Fatalf("CodexConfigTOML with unsafe path is not valid TOML: %v\n%s", err, body)
-	}
-	if len(decoded.Notify) != 3 || decoded.Notify[0] != bin {
-		t.Errorf("notify[0] = %q, want %q (full: %v)", decoded.Notify[0], bin, decoded.Notify)
 	}
 }
 
@@ -216,14 +197,17 @@ func TestOpenCodePluginJS(t *testing.T) {
 		t.Errorf("plugin does not export LolaHook:\n%s", body)
 	}
 	// Every event mapping must be present, keyed off event.type and using
-	// .quiet().nothrow() so a failing hook can't break the agent's turn.
+	// .quiet().nothrow() so a failing hook can't break the agent's turn. Each
+	// command also redirects stdin from /dev/null: Bun's $ inherits the pane
+	// TTY as stdin, and `lola hook` must never sit reading a TTY (it never
+	// EOFs, and the blocked read eats the agent TUI's keystrokes).
 	wants := []string{
 		"session.idle",
-		"${lolaBin} hook stop`.quiet().nothrow()",
+		"${lolaBin} hook stop < /dev/null`.quiet().nothrow()",
 		"permission.asked",
-		"${lolaBin} hook notification`.quiet().nothrow()",
+		"${lolaBin} hook notification < /dev/null`.quiet().nothrow()",
 		"tool.execute.after",
-		"${lolaBin} hook tool_use`.quiet().nothrow()",
+		"${lolaBin} hook tool_use < /dev/null`.quiet().nothrow()",
 	}
 	for _, w := range wants {
 		if !strings.Contains(body, w) {
@@ -329,5 +313,143 @@ func TestParseCodexNotify(t *testing.T) {
 					c.in, gotEvent, gotMsg, gotType, c.wantEvent, c.wantMsg, c.wantType)
 			}
 		})
+	}
+}
+
+// The review argv is the pluggable half of the review system: which agent runs
+// is config, so every kind must produce a runnable, READ-ONLY one-shot argv with
+// the prompt where that CLI expects it and the diff nowhere near it.
+func TestReviewArgs(t *testing.T) {
+	const instr = "REVIEW-INSTRUCTION"
+	for _, tc := range []struct {
+		kind Kind
+		want []string
+	}{
+		{Claude, []string{"-p", instr, "--output-format", "text"}},
+		{Codex, []string{"exec", "--sandbox", "read-only", instr}},
+		{OpenCode, []string{"run", instr}},
+	} {
+		got := ReviewArgs(tc.kind, instr, "")
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("ReviewArgs(%s) = %v, want %v", tc.kind, got, tc.want)
+		}
+	}
+	// An unknown kind reviews with claude rather than producing no argv at all.
+	if got := ReviewArgs(Kind("nope"), instr, ""); !slices.Equal(got, ReviewArgs(Claude, instr, "")) {
+		t.Errorf("ReviewArgs(unknown) = %v, want claude's argv", got)
+	}
+}
+
+// codex and opencode take the prompt POSITIONALLY and append piped stdin to it,
+// so the instruction must be the LAST element — a flag after it would be read as
+// part of the prompt (or eat the prompt as its own value).
+func TestReviewArgsKeepThePromptLast(t *testing.T) {
+	for _, k := range []Kind{Codex, OpenCode} {
+		for _, model := range []string{"", "some-model"} {
+			args := ReviewArgs(k, "INSTR", model)
+			if args[len(args)-1] != "INSTR" {
+				t.Errorf("ReviewArgs(%s, model=%q) = %v, want the prompt last", k, model, args)
+			}
+		}
+	}
+}
+
+// A review READS; it must never be able to write. Each agent's most restrictive
+// non-interactive posture is the guard, and it is the exact opposite of the
+// unattended worker launch — so assert the worker's write-enabling flags are
+// absent from every review argv.
+func TestReviewArgsAreReadOnly(t *testing.T) {
+	forbidden := map[Kind][]string{
+		Claude:   {"--dangerously-skip-permissions", "--permission-mode"},
+		Codex:    {"workspace-write", "danger-full-access", "--yolo", "--dangerously-bypass-approvals-and-sandbox"},
+		OpenCode: {"--auto"},
+	}
+	for _, k := range Kinds {
+		for _, build := range []func() []string{
+			func() []string { return ReviewArgs(k, "i", "m") },
+			func() []string { return ReviewStreamArgs(k, "i", "m") },
+		} {
+			args := build()
+			for _, bad := range forbidden[k] {
+				if slices.Contains(args, bad) {
+					t.Errorf("%s review argv must not carry %q: %v", k, bad, args)
+				}
+			}
+		}
+	}
+	// Codex has no "ask a human" mode in exec, so the sandbox IS the guard.
+	if !slices.Contains(ReviewArgs(Codex, "i", ""), "read-only") {
+		t.Error("codex review must run under --sandbox read-only")
+	}
+}
+
+// Only claude needs a different argv to narrate; the other two already do it on
+// stderr, and the two predicates are what route the visible pass.
+func TestReviewStreamShapes(t *testing.T) {
+	if !ReviewStreamsJSON(Claude) || ReviewProgressOnStderr(Claude) {
+		t.Error("claude streams a stdout event feed, and says nothing on stderr")
+	}
+	for _, k := range []Kind{Codex, OpenCode} {
+		if ReviewStreamsJSON(k) || !ReviewProgressOnStderr(k) {
+			t.Errorf("%s narrates on stderr and emits no stream-json feed", k)
+		}
+		// ...so its streaming argv must be its plain one, unchanged.
+		if !slices.Equal(ReviewStreamArgs(k, "i", "m"), ReviewArgs(k, "i", "m")) {
+			t.Errorf("%s streaming argv must equal its plain argv", k)
+		}
+	}
+	if want := []string{"-p", "i", "--output-format", "stream-json", "--verbose", "--model", "m"}; !slices.Equal(ReviewStreamArgs(Claude, "i", "m"), want) {
+		t.Errorf("claude stream argv = %v, want %v", ReviewStreamArgs(Claude, "i", "m"), want)
+	}
+}
+
+// The model flag is the agent's own, and an empty model leaves the agent's
+// configured default in place rather than passing an empty value.
+func TestReviewArgsModel(t *testing.T) {
+	for _, k := range Kinds {
+		args := ReviewArgs(k, "i", "")
+		if slices.Contains(args, "--model") {
+			t.Errorf("%s: empty model must not pass --model: %v", k, args)
+		}
+		args = ReviewArgs(k, "i", "the-model")
+		i := slices.Index(args, "--model")
+		if i < 0 || i+1 >= len(args) || args[i+1] != "the-model" {
+			t.Errorf("%s: --model the-model missing from %v", k, args)
+		}
+	}
+}
+
+// All four review helpers must normalize a Kind IDENTICALLY. A caller that has
+// not pre-normalized must not get claude's argv from one and codex's renderer
+// from another — that mismatch shows up as an empty review, not as an error.
+func TestReviewHelpersNormalizeAlike(t *testing.T) {
+	for _, raw := range []Kind{"Codex", " codex ", "OPENCODE", "opencode", "nope", ""} {
+		want := Parse(string(raw))
+		if got := ReviewArgs(raw, "i", ""); !slices.Equal(got, ReviewArgs(want, "i", "")) {
+			t.Errorf("ReviewArgs(%q) = %v, want %s's argv", raw, got, want)
+		}
+		if got := ReviewStreamArgs(raw, "i", ""); !slices.Equal(got, ReviewStreamArgs(want, "i", "")) {
+			t.Errorf("ReviewStreamArgs(%q) = %v, want %s's argv", raw, got, want)
+		}
+		if ReviewStreamsJSON(raw) != ReviewStreamsJSON(want) || ReviewProgressOnStderr(raw) != ReviewProgressOnStderr(want) {
+			t.Errorf("%q: the stream predicates disagree with %s", raw, want)
+		}
+		// ...and the argv and the renderer must agree with each other.
+		if ReviewStreamsJSON(raw) != slices.Contains(ReviewStreamArgs(raw, "i", ""), "stream-json") {
+			t.Errorf("%q: ReviewStreamsJSON disagrees with the streaming argv", raw)
+		}
+	}
+}
+
+func TestInterpretArgsWithoutCheckout(t *testing.T) {
+	for _, kind := range Kinds {
+		args := InterpretArgs(kind, "instruction", "model")
+		if kind == Codex {
+			if !slices.Contains(args, "--skip-git-repo-check") || !slices.Contains(args, "read-only") || args[len(args)-1] != "instruction" {
+				t.Fatalf("Codex context-only args: %v", args)
+			}
+		} else if !slices.Equal(args, ReviewArgs(kind, "instruction", "model")) {
+			t.Fatalf("%s changed the headless posture: %v", kind, args)
+		}
 	}
 }

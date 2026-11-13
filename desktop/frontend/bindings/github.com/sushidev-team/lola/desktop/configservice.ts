@@ -8,9 +8,22 @@
  * daemon only re-reads it on `reload`. Every Save validates, persists atomically
  * (config.Save is temp+rename, 0600), then best-effort reloads a live daemon.
  * 
- * Secrets never pass through here: the Linear key and Slack webhook live in the
- * keychain / env by *name*, and those name fields are the only secret-adjacent
- * values these DTOs carry.
+ * Secrets are WRITE-ONLY here, and only through SetLinearKey: the Linear key and
+ * Slack webhook live in the keychain / env by *name*, and those name fields are
+ * the only secret-adjacent values any DTO carries. Nothing ever reads a secret
+ * back out to the frontend — LinearKeyStatus reports where the key lives and
+ * whether it resolves, never its value.
+ * 
+ * ConnectCode is the ONE deliberate exception, and it is written down rather
+ * than left as an inconsistency. It returns the phone listener's bearer key
+ * because the key IS the thing being handed over — a QR nobody can read is not
+ * a hand-off — and the exception costs nothing in privilege: the answer comes
+ * over ~/.lola/lola.sock, which is srw------- inside a 0700 directory, and
+ * anything that can open it already reaches cmd=answer, which types into a
+ * running coding agent. What the exception does cost is EXPOSURE, so the rule
+ * it replaces the write-only one with is narrower rather than absent: the value
+ * is fetched only when a human asks for it, it is never logged or persisted on
+ * this side, and the surface that renders it has a hide.
  * @module
  */
 
@@ -20,16 +33,22 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as protocol$0 from "../internal/protocol/models.js";
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
 /**
- * Branches lists the branches the checkout at path can fork worktrees from —
- * local branches plus remote-tracking ones with no local counterpart, the
- * repository's own default first. Empty when path is not a checkout; the form
- * then leaves the field as free text rather than trapping the user.
+ * AddGroup creates an empty group from a free-text label and returns its id.
+ * The id is derived with config.Slug — the same transform a project id goes
+ * through — and de-duplicated with a numeric suffix, so two folders a human
+ * would both call "Clients" can coexist instead of one silently replacing the
+ * other. Empty groups are the point: the folder is created first and projects
+ * are dragged into it after.
  */
-export function Branches(path: string): $CancellablePromise<string[] | null> {
-    return $Call.ByID(3689606875, path);
+export function AddGroup(label: string): $CancellablePromise<string> {
+    return $Call.ByID(403758441, label);
 }
 
 /**
@@ -41,17 +60,50 @@ export function ConfigExists(): $CancellablePromise<boolean> {
 }
 
 /**
- * DetectRepo resolves the GitHub "owner/name" of the checkout at path so the
- * project form can prefill Repo instead of making the user copy it. Returns ""
- * when it cannot be determined — not a git repo, no GitHub remote, a
- * non-GitHub host. That empty value is deliberate and safe: it disables PR
- * checks (fail-closed) rather than pointing them at the wrong repository.
+ * ConnectCode asks the daemon for the phone listener's connect details
+ * (cmd=pairBegin) so the Remote tab can hand them to a phone.
  * 
- * Prefers the "upstream" remote over "origin": in a fork, origin is the fork
- * but upstream is where the pull requests actually land.
+ * It asks the DAEMON rather than reading ~/.lola/device.crt and
+ * ~/.lola/remote-dev-key, and that is the whole point of the method existing.
+ * Recomputing the pin here would mean calling remote.LoadOrCreateDeviceKey,
+ * whose only exported form CREATES an identity when none is there — this
+ * process would mint the daemon's TLS identity as a side effect of drawing a
+ * settings tab, from the wrong process, even with [remote] disabled. And it
+ * would answer about a FILE: the key file is the running daemon's key only when
+ * the script that wrote it also started the daemon, so a code rendered from it
+ * after a `lola run` from another shell produces a scan the daemon answers with
+ * "authenticate first" — which, from the phone, is indistinguishable from a bad
+ * camera read. The daemon holds the live value of both facts; only it can
+ * answer.
+ * 
+ * The timeout is the short one: pairBegin reads in-memory state and execs
+ * nothing.
  */
-export function DetectRepo(path: string): $CancellablePromise<string> {
-    return $Call.ByID(1658393536, path);
+export function ConnectCode(): $CancellablePromise<$models.ConnectCodeDTO> {
+    return $Call.ByID(3664447846);
+}
+
+/**
+ * CreateStack adds an empty STACK from a free-text label and returns its id.
+ * Unlike AddGroup the id is NOT de-duplicated with a suffix: a stack is a
+ * project, its id prefixes session ids and names its worktree folder, so a
+ * clash is refused and the human picks another name.
+ */
+export function CreateStack(label: string): $CancellablePromise<string> {
+    return $Call.ByID(1612967477, label);
+}
+
+/**
+ * CreateStackFromFolder creates a stack AND its members in one write (see
+ * config.AddStackFromFolder): a new project per app, or the existing one
+ * joining. All-or-nothing, so a refusal leaves the config untouched.
+ */
+export function CreateStackFromFolder(label: string, apps: $models.StackFolderAppDTO[] | null): $CancellablePromise<string> {
+    return $Call.ByID(1223234397, label, apps);
+}
+
+export function GetAppearance(): $CancellablePromise<$models.AppearanceDTO> {
+    return $Call.ByID(306832519);
 }
 
 /**
@@ -78,12 +130,65 @@ export function GetTheme(): $CancellablePromise<string> {
 }
 
 /**
+ * InspectPath reads a checkout in ONE pass — GitHub "owner/name", the branch
+ * worktrees should fork from, the branch list and a suggested label/id — so
+ * picking a folder fills the Repo tab instead of making the user copy four
+ * values by hand.
+ * 
+ * Every unknown is empty rather than guessed: a non-GitHub or unrecognised
+ * remote leaves Repo "" (fail-closed — that disables PR checks instead of
+ * pointing them at the wrong repository), and a directory that is not a checkout
+ * simply contributes nothing.
+ * 
+ * The label/id suggestion is computed HERE rather than in the frontend so the
+ * app and the TUI propose the same identity for the same folder.
+ */
+export function InspectPath(path: string): $CancellablePromise<$models.PathInfoDTO> {
+    return $Call.ByID(1398059134, path);
+}
+
+/**
+ * LinearKeyStatus reports the key's origin and health for the settings screen.
+ * 
+ * This exists because the key was settable ONLY in the first-run wizard: neither
+ * this app's settings nor the TUI's had a field for it, so a key could never be
+ * added to a hand-written config, and rotating one meant editing the Keychain by
+ * hand. A daemon with no key fails every poll, which is the exact silent failure
+ * the app is supposed to surface.
+ */
+export function LinearKeyStatus(): $CancellablePromise<$models.LinearKeyStatusDTO> {
+    return $Call.ByID(1592524511);
+}
+
+/**
  * MigrateReview folds the legacy [review]/[coderabbit] tables into the editable
  * provider catalog and persists (one-way; mirrors `lola config migrate-review`
  * and the TUI's in-place migrate). A no-op when there is nothing to migrate.
  */
 export function MigrateReview(): $CancellablePromise<void> {
     return $Call.ByID(486961436);
+}
+
+/**
+ * PickFile opens the native file chooser. It returns a path, never file contents.
+ * Cancellation returns an empty path.
+ */
+export function PickFile(start: string): $CancellablePromise<string> {
+    return $Call.ByID(3851469632, start);
+}
+
+/**
+ * PickFolder opens the native folder chooser. Cancellation returns an empty path.
+ */
+export function PickFolder(start: string): $CancellablePromise<string> {
+    return $Call.ByID(549249398, start);
+}
+
+/**
+ * PreviewTheme updates native chrome only. It never persists an appearance.
+ */
+export function PreviewTheme(id: string): $CancellablePromise<void> {
+    return $Call.ByID(3560145554, id);
 }
 
 /**
@@ -95,8 +200,98 @@ export function PrioritySortKeys(): $CancellablePromise<string[] | null> {
     return $Call.ByID(3393829323);
 }
 
+/**
+ * RegenerateRemoteKey rolls the phone listener's shared bearer key
+ * (cmd=regenerateRemoteKey) and returns once the listener has been rebuilt
+ * around the new one.
+ * 
+ * It is milestone 1's ONLY revocation, and it is blunt: every paired phone
+ * loses access at once, because every paired phone holds the same key. The UI
+ * says so before it asks, rather than offering it as routine maintenance —
+ * milestone 2's per-device revocation is the precise version, and this command
+ * disappears with the rest of the insecure path.
+ * 
+ * Like ConnectCode this asks the daemon rather than writing the file here.
+ * Deleting a key file from this process would roll the value on disk and leave
+ * the RUNNING listener authenticating with the old one, so the app would report
+ * a revocation that had not happened — the single worst outcome for a control
+ * whose entire purpose is to stop a key working.
+ * 
+ * The timeout is longer than ConnectCode's because the daemon tears the
+ * listener down and binds a new one, which closes live connections.
+ */
+export function RegenerateRemoteKey(): $CancellablePromise<void> {
+    return $Call.ByID(1981404586);
+}
+
+/**
+ * RemoteBinds returns the [remote].bind keywords the daemon accepts, so the
+ * settings form offers them instead of taking free text. Same posture as
+ * PrioritySortKeys: MEMBERSHIP is the Go side's call, since config.Validate
+ * rejects anything that is neither one of these nor an IP literal.
+ * 
+ * The literal case is why the form cannot be a picker alone — see the comment
+ * on SettingsDTO.RemoteBind.
+ */
+export function RemoteBinds(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2477471539);
+}
+
+/**
+ * RemoveGroup deletes the folder and files its members at the top level. It
+ * never touches a project beyond that reference: a group is arrangement, so
+ * deleting one must not be able to lose a project, its worktrees or its
+ * sessions.
+ */
+export function RemoveGroup(name: string): $CancellablePromise<void> {
+    return $Call.ByID(273890374, name);
+}
+
 export function RemoveProject(name: string): $CancellablePromise<void> {
     return $Call.ByID(581203932, name);
+}
+
+/**
+ * RemoveSSHHost removes a host from the catalog. The daemon closes its live
+ * connections on the reload this triggers. An unknown name is not an error: the
+ * outcome the human asked for already holds.
+ */
+export function RemoveSSHHost(name: string): $CancellablePromise<void> {
+    return $Call.ByID(4085403889, name);
+}
+
+/**
+ * RemoveStack removes a stack and every member not named in keep; the kept
+ * ones stay configured as standalone projects (config.RemoveStack).
+ */
+export function RemoveStack(stack: string, keep: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(3244679473, stack, keep);
+}
+
+/**
+ * RenameGroup changes a group's DISPLAY label only. The id stays put on purpose:
+ * it is what every [[project]].group references, and rewriting it would have to
+ * rewrite those in the same breath for no gain — unlike a project id, a group id
+ * names no directory, tmux session or state file, so nothing reads it but this
+ * table.
+ */
+export function RenameGroup(name: string, label: string): $CancellablePromise<void> {
+    return $Call.ByID(2414476480, name, label);
+}
+
+/**
+ * ResolveSSHHost previews the same overrides as the connection, without a daemon.
+ */
+export function ResolveSSHHost(d: $models.SSHHostDTO): $CancellablePromise<protocol$0.SSHResolveData> {
+    return $Call.ByID(2227280739, d);
+}
+
+/**
+ * ReviewKinds returns one descriptor per selectable provider kind, in the order
+ * the form should offer them.
+ */
+export function ReviewKinds(): $CancellablePromise<$models.ReviewKindDTO[] | null> {
+    return $Call.ByID(1023667510);
 }
 
 /**
@@ -107,8 +302,40 @@ export function ReviewProviderKinds(): $CancellablePromise<string[] | null> {
     return $Call.ByID(3055606205);
 }
 
+/**
+ * SSHConfigAliases reads the local SSH catalog without a running daemon.
+ */
+export function SSHConfigAliases(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(1624682467);
+}
+
+/**
+ * SSHHostForms lists the catalog exactly as written, in file order. It reads the
+ * file rather than the daemon, because settings must work with no daemon running.
+ */
+export function SSHHostForms(): $CancellablePromise<$models.SSHHostDTO[] | null> {
+    return $Call.ByID(138930116);
+}
+
+/**
+ * SSHHostPreview says what a host's settings resolve to, saved or not. It decides
+ * with the config's own SSHDirectSandbox, so it cannot drift from the daemon.
+ */
+export function SSHHostPreview(d: $models.SSHHostDTO): $CancellablePromise<$models.SSHHostPreviewDTO> {
+    return $Call.ByID(3347456271, d);
+}
+
 export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<void> {
     return $Call.ByID(3368157871, dto);
+}
+
+/**
+ * SaveSSHHost writes one host. original names the entry being edited, "" for a new
+ * one. Static validation runs in saveConfig, so a bad value comes back as the
+ * config's own sentence and nothing is written.
+ */
+export function SaveSSHHost(original: string, d: $models.SSHHostDTO): $CancellablePromise<void> {
+    return $Call.ByID(2187929006, original, d);
 }
 
 export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void> {
@@ -116,12 +343,89 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
 }
 
 /**
+ * ScanStackFolder reads every checkout directly inside a parent folder with
+ * LOCAL git (gitrepo.Scan), so creating a stack from it fills each member's
+ * path, repo and default branch instead of making the user add them one by one.
+ */
+export function ScanStackFolder(path: string): $CancellablePromise<$models.StackFolderDTO> {
+    return $Call.ByID(341923786, path);
+}
+
+export function SetAppearance(a: $models.AppearanceDTO): $CancellablePromise<void> {
+    return $Call.ByID(744639971, a);
+}
+
+/**
+ * SetGroupCollapsed persists a folder's disclosure state. It lives in
+ * config.toml rather than in the web view's storage so the app and a future TUI
+ * rendering agree, and so it survives a reinstall like every other arrangement
+ * key.
+ */
+export function SetGroupCollapsed(name: string, collapsed: boolean): $CancellablePromise<void> {
+    return $Call.ByID(356289697, name, collapsed);
+}
+
+/**
+ * SetLinearKey stores a new Linear key and points config.toml at it. The key
+ * goes to the macOS Keychain under the same service the first-run wizards use,
+ * so a key set here is read identically by the daemon, the TUI and this app;
+ * when the Keychain is unavailable it falls back to naming an env var, exactly
+ * as Setup does. The returned message says which happened.
+ * 
+ * Deliberately NOT a SettingsDTO field, for the reasons the theme is not one
+ * (see below) plus one of its own: a whole-form commit would carry a secret
+ * through every save of an unrelated field, and a validation failure elsewhere
+ * in the form would silently drop the key the user just typed.
+ */
+export function SetLinearKey(key: string): $CancellablePromise<string> {
+    return $Call.ByID(835844419, key);
+}
+
+/**
+ * SetProjectLayout applies a whole sidebar arrangement: the group order, and
+ * every project's group plus its position. It FAILS CLOSED — the projects list
+ * must be an exact permutation of what is configured and the groups list an
+ * exact permutation of the configured groups, or nothing is written.
+ * 
+ * That strictness is the point. The layout is computed by a drag handler in the
+ * frontend against a snapshot that may be a config reload behind; applying it
+ * loosely would let a stale layout resurrect a project the user just removed,
+ * or drop one it had not heard of yet. A refused layout costs one drag, which
+ * the next render corrects.
+ */
+export function SetProjectLayout(dto: $models.ProjectLayoutDTO): $CancellablePromise<void> {
+    return $Call.ByID(2494129060, dto);
+}
+
+/**
+ * SetProjectStack moves a project into a stack (stack = "" takes it out). It
+ * touches ONLY Project.Stack: the member's own Linear filter, agent and
+ * write-back keys stay in the file, ignored while it is a member, so leaving
+ * the stack gives them back. Refused: an unknown project or stack, a target
+ * that is not a stack, and a project that is itself a stack (stacks do not
+ * nest).
+ */
+export function SetProjectStack(project: string, stack: string): $CancellablePromise<void> {
+    return $Call.ByID(2341952554, project, stack);
+}
+
+/**
+ * SetStackMemberLabels sets which issues each member of stack is checked out
+ * for (member name -> labels; empty = every issue), in one write. It touches
+ * ONLY Project.Labels, so a stack form saved beside it cannot clobber a
+ * member's own repository settings.
+ */
+export function SetStackMemberLabels(stack: string, labels: { [_ in string]?: string[] | null } | null): $CancellablePromise<void> {
+    return $Call.ByID(1387265910, stack, labels);
+}
+
+/**
  * SetTheme persists [ui].theme on its own. It writes through the shared
  * saveConfig path — Validate, then config.Save's atomic temp+rename, then a
  * best-effort daemon reload — so an unknown identifier is rejected here by the
  * same static check the daemon applies, and nothing writes the file directly.
- * An empty name clears the key, which drops the [ui] table and restores
- * config.DefaultUITheme.
+ * An empty name clears the fixed theme and restores config.DefaultUITheme;
+ * the system-mode choices remain available for later.
  */
 export function SetTheme(name: string): $CancellablePromise<void> {
     return $Call.ByID(1831643238, name);
@@ -129,8 +433,9 @@ export function SetTheme(name: string): $CancellablePromise<void> {
 
 /**
  * Setup writes the initial config.toml from the wizard: it stores the Linear key
- * in the Keychain (falling back to an env var by name if that fails), records one
- * project, and sets the caps/interval. The key itself is never written to config.
+ * in the Keychain (falling back to an env var by name if that fails) and saves
+ * general defaults. Projects are added separately; rerunning setup preserves
+ * existing projects and unrelated settings. The key never enters config.toml.
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
     return $Call.ByID(3057086516, dto);

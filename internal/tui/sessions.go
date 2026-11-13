@@ -8,12 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
 
@@ -59,11 +62,48 @@ func rebuildSessionStyles() {
 	prLineStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colMagenta))
 }
 
-// statusStyle maps a derived session status (scm.DeriveStatus / AO attention
-// states / native runtime states) to its display style: working=blue,
-// failures=red, approved=green, attention=orange, dead=red background,
-// merged/session_ended/idle=dim; anything else unstyled.
-func statusStyle(status string) lipgloss.Style {
+// displayStyle colors the PRIMARY axis (the agent pill and its Board badge):
+// working=blue, needs_you=orange, orphaned=warn (an adoption anomaly worth
+// noticing but not a queue entry), and the quiet/terminal rest dim. The
+// delivery story is NOT folded in here — it has its own color scale
+// (deliveryStyle) on its own chip, which is the whole point of the split.
+func displayStyle(d state.Display) lipgloss.Style {
+	switch d {
+	case state.DisplayWorking:
+		return statusBlue
+	case state.DisplayNeedsYou:
+		return statusOrange
+	case state.DisplayOrphaned:
+		return warnText
+	}
+	// idle / gone / shell: quiet.
+	return faintText
+}
+
+// deliveryStyle colors the SECONDARY axis (the PR chip): the regressed states
+// red, the finished ones green, CI in flight amber, everything parked or
+// pre-flight dim. Unlike displayStyle it is keyed on facts about the PR alone,
+// so a red chip beside a blue pill reads exactly as it should — the agent is
+// working, the build is broken.
+func deliveryStyle(d state.DeliveryState) lipgloss.Style {
+	switch d {
+	case state.DeliveryCIFailed, state.DeliveryChangesRequested, state.DeliveryMergeConflict:
+		return badText
+	case state.DeliveryApproved, state.DeliveryMerged:
+		return goodText
+	case state.DeliveryCIPending:
+		return warnText
+	}
+	// none / draft / review_pending / closed.
+	return faintText
+}
+
+// legacyStatusStyle colors a ROLLED-UP status word. It survives for exactly one
+// consumer — the activity feed, whose protocol.Event carries from/to as the
+// legacy 16-word vocabulary (a transition is a historical fact about the rollup,
+// not a live pair we could re-derive). Everything that renders a LIVE session
+// goes through displayStyle/deliveryStyle instead; do not add a caller here.
+func legacyStatusStyle(status string) lipgloss.Style {
 	switch status {
 	case "working":
 		return statusBlue
@@ -132,23 +172,62 @@ func checksGlyph(checks string) string {
 }
 
 // reviewGlyph is the compact review-decision mark appended to a PR badge: an
-// approval ✓rev (green) or a change request ✗rev (red). The neutral
-// awaiting/required state renders nothing (the REACTING column already carries
-// "awaiting review"), keeping the row badge brief.
+// approval ✓rev (green), a change request ✗rev (red), or a review still
+// OUTSTANDING ⧗rev (dim).
+//
+// That last case used to render nothing, on the reasoning that the REACTING
+// column already said "awaiting review". It cannot stay silent now: the pill no
+// longer carries review_pending — it carries what the AGENT is doing — so
+// without a mark the single most common PR state in the whole system ("parked
+// on a reviewer") would be the one state the chip never names. It is drawn dim
+// rather than amber because waiting on a human reviewer is a normal, patient
+// state, not a failure.
 func reviewGlyph(review string) string {
 	switch review {
 	case "APPROVED":
 		return goodText.Render("✓rev")
 	case "CHANGES_REQUESTED":
 		return badText.Render("✗rev")
+	case "REVIEW_REQUIRED":
+		return faintText.Render("⧗rev")
 	}
 	return ""
 }
 
-// prBadge is the scannable PR summary for ANY session that has a PR: "#229 ✓
-// ✓rev" — the number, the checks glyph, and the brief review mark. Deliberately
-// NOT gated on Status/review state (only on hasPR). Returns "" when there is no
-// PR so callers render a placeholder (list row) or omit it (kanban).
+// deliveryGlyph is the compact mark for the delivery-axis facts that the checks
+// and review glyphs CANNOT express. It is deliberately a small set: ci_failed,
+// ci_pending, changes_requested, approved and review_pending are all already
+// spoken for by checksGlyph/reviewGlyph, and marking them twice would make the
+// chip longer without saying anything new. What is left is the PR's own
+// lifecycle — still a draft, conflicting with its base, merged, closed — none of
+// which is a check or a review decision.
+func deliveryGlyph(d state.DeliveryState) string {
+	switch d {
+	case state.DeliveryDraft:
+		return faintText.Render("df")
+	case state.DeliveryMergeConflict:
+		return badText.Render("⚠mc")
+	case state.DeliveryMerged:
+		return goodText.Render("✓mg")
+	case state.DeliveryClosed:
+		return faintText.Render("✕")
+	}
+	return ""
+}
+
+// prBadge is the SECONDARY chip: the whole delivery axis in one scannable cell
+// beside the primary pill — "#229 ⚠mc ✗ci", "#231 ⧗rev", "#204 ✓mg". Its job is
+// to make the PR story visible WITHOUT stealing the pill, which now belongs to
+// the agent axis; before the split, a session's PR state and its agent state had
+// to compete for one word and the PR always won.
+//
+// Deliberately NOT gated on Status/review state (only on hasPR), so a PR is
+// unmissable from the moment it opens. Returns "" when there is no PR so callers
+// render a placeholder (list row) or omit it (kanban).
+//
+// merged and closed stop the chip: a terminal PR's checks and review decision
+// are history, and trailing them behind "✓mg" reads as live facts about work
+// that is over.
 func prBadge(si protocol.SessionInfo) string {
 	if !hasPR(si) {
 		return ""
@@ -156,6 +235,14 @@ func prBadge(si protocol.SessionInfo) string {
 	out := "PR"
 	if si.PRNumber > 0 {
 		out = fmt.Sprintf("#%d", si.PRNumber)
+	}
+	out = focusAppPrefix(si) + out
+	_, d := axesOf(si)
+	if g := deliveryGlyph(d); g != "" {
+		out += " " + g
+	}
+	if d == state.DeliveryMerged || d == state.DeliveryClosed {
+		return out
 	}
 	if g := checksGlyph(si.Checks); g != "" {
 		out += " " + g
@@ -179,7 +266,7 @@ func prDetailBlock(si protocol.SessionInfo) string {
 	if si.PRNumber > 0 {
 		num = fmt.Sprintf("#%d", si.PRNumber)
 	}
-	seg := []string{"PR: " + num}
+	seg := []string{"PR: " + focusAppPrefix(si) + num}
 	if si.Checks != "" {
 		seg = append(seg, "checks: "+si.Checks)
 	}
@@ -214,11 +301,21 @@ type sessionsModel struct {
 	filtering   bool
 	flash       string
 	flashGood   bool   // flash is a success (green) rather than a warning (yellow)
-	confirmKill bool   // "x" pressed: awaiting y/n to kill killTarget
+	confirmKill bool   // "x" pressed: awaiting y (kill) / s (stop, keep worktree) / n for killTarget
 	killTarget  string // session ID captured when "x" was pressed (pinned across refreshes)
-	preview     string // rendered pane text (cmd=pane) for the selected session
-	previewFor  string // session ID the preview + paneData belong to ("" = none)
-	previewErr  string // last cmd=pane failure for previewFor, surfaced in the Detail panel
+
+	// "F" pressed on a session whose dev tab died on a taken port: awaiting y/n
+	// to kill the process holding it. The port/pid are PINNED with the target for
+	// the same reason killTarget is — a refresh between the question and the
+	// answer must not move the question onto another process — and the daemon
+	// refuses the request anyway unless they still match what it has on record.
+	confirmFreePort bool
+	freeTarget      string
+	freePort        int
+	freePID         int
+	preview         string // rendered pane text (cmd=pane) for the selected session
+	previewFor      string // session ID the preview + paneData belong to ("" = none)
+	previewErr      string // last cmd=pane failure for previewFor, surfaced in the Detail panel
 	// paneData is the daemon's read of the selected session's pane: the rendered
 	// text plus the attention parser's extracted question. It backs both the
 	// compact preview and — when the session is needs_input — the answer card.
@@ -244,6 +341,17 @@ type sessionsModel struct {
 	opening     bool
 	openInput   string
 	openProject string
+
+	// Agent-switch chooser ("A"). switching owns every keypress until enter
+	// (send cmd=switchAgent) or esc (cancel), like the answer card. switchFor
+	// pins the target session ID and switchKinds the choice list — every valid
+	// kind EXCEPT the one driving the session when "A" was pressed — so a
+	// background refresh between "A" and enter cannot re-aim the switch; the
+	// daemon re-checks the session, kind and binary anyway.
+	switching    bool
+	switchFor    string
+	switchCursor int
+	switchKinds  []string
 
 	tmux *tmux.Client
 	// hasPane probes whether a session name has a LIVE pane on the lola tmux
@@ -320,10 +428,11 @@ type killDoneMsg struct{ msg string }
 
 // killSelectedCmd sends a (non-force) kill for id and reports the outcome to
 // flash. Force is deliberately never offered here: removing a dirty worktree is
-// CLI-only friction (`lola kill <id> --force`).
-func killSelectedCmd(id string) tea.Cmd {
+// CLI-only friction (`lola kill <id> --force`). keepWorktree stops the agent and
+// its tmux sessions only, leaving the worktree for `R` (revive).
+func killSelectedCmd(id string, keepWorktree bool) tea.Cmd {
 	return func() tea.Msg {
-		resp, err := request(protocol.Request{Cmd: "kill", Session: id})
+		resp, err := request(protocol.Request{Cmd: "kill", Session: id, KeepWorktree: keepWorktree})
 		if err != nil {
 			return killDoneMsg{msg: err.Error()}
 		}
@@ -397,6 +506,61 @@ func openSessionCmd(project, target string) tea.Cmd {
 	}
 }
 
+// devDoneMsg carries the outcome of a `cmd=dev` toggle: msg is a terse line to
+// flash, ok is true when the daemon accepted it.
+type devDoneMsg struct {
+	msg string
+	ok  bool
+}
+
+// devToggleCmd switches the project's dev_commands onto id (on) or stops them.
+// Activating MOVES them: the daemon kills whichever session of the project held
+// the tabs first, so this is the whole "find the other composer dev, kill it,
+// restart it here" dance in one keystroke.
+func devToggleCmd(id string, on bool) tea.Cmd {
+	return func() tea.Msg {
+		args, _ := json.Marshal(protocol.DevArgs{Session: id, On: on})
+		resp, err := requestFn(protocol.Request{Cmd: "dev", Args: args})
+		if err != nil {
+			return devDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return devDoneMsg{msg: resp.Error}
+		}
+		var d protocol.DevData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return devDoneMsg{msg: err.Error()}
+		}
+		return devDoneMsg{ok: true, msg: d.Message}
+	}
+}
+
+// devFreePortCmd kills the process holding the port a session's dev tab died on
+// and restarts the tabs (cmd=devFreePort).
+//
+// Port and pid travel back exactly as they were SHOWN: the daemon refuses the
+// request unless they still match the clash it has on record and that pid still
+// holds that port, so an answer given a minute late is rejected rather than
+// applied to whatever holds the port by then. The outcome rides the same
+// devDoneMsg the toggle uses — from here on the two are the same thing.
+func devFreePortCmd(id string, port, pid int) tea.Cmd {
+	return func() tea.Msg {
+		args, _ := json.Marshal(protocol.DevFreePortArgs{Session: id, Port: port, PID: pid})
+		resp, err := requestFn(protocol.Request{Cmd: "devFreePort", Args: args})
+		if err != nil {
+			return devDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return devDoneMsg{msg: resp.Error}
+		}
+		var d protocol.DevFreePortData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return devDoneMsg{msg: err.Error()}
+		}
+		return devDoneMsg{ok: true, msg: d.Message}
+	}
+}
+
 // coderabbitDoneMsg carries the outcome of a `cmd=coderabbit` force poll. msg is
 // a terse line to flash; ok is true when the poll ran (found or clean), false on
 // a skip (watch off / no open PR) or error.
@@ -430,6 +594,36 @@ func coderabbitSelectedCmd(id string) tea.Cmd {
 		default:
 			return coderabbitDoneMsg{ok: true, msg: "CodeRabbit: no comments on the PR"}
 		}
+	}
+}
+
+// switchDoneMsg carries the outcome of a cmd=switchAgent request. good is true
+// when the new agent launched; false surfaces the daemon's verbatim refusal
+// (unknown session, agentless shell, invalid or already-running kind, missing
+// binary) or a dial error.
+type switchDoneMsg struct {
+	msg  string
+	good bool
+}
+
+// switchAgentCmd replaces a session's coding agent with a different kind
+// (cmd=switchAgent): the daemon stops the old pane, writes a handoff briefing,
+// and launches the new kind on the kept worktree/branch.
+func switchAgentCmd(id, kind string) tea.Cmd {
+	return func() tea.Msg {
+		args, _ := json.Marshal(protocol.SwitchAgentArgs{Session: id, Agent: kind})
+		resp, err := requestFn(protocol.Request{Cmd: "switchAgent", Args: args})
+		if err != nil {
+			return switchDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return switchDoneMsg{msg: resp.Error}
+		}
+		var d protocol.SwitchAgentData
+		if err := json.Unmarshal(resp.Data, &d); err == nil && d.Message != "" {
+			return switchDoneMsg{msg: d.Message, good: true}
+		}
+		return switchDoneMsg{msg: "switched to " + kind, good: true}
 	}
 }
 
@@ -586,8 +780,13 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.opening {
 		return m.updateOpen(k)
 	}
-	// A pending kill confirmation owns the next keypress: y/Y kills, anything
-	// else cancels. Force is never offered here (CLI-only friction). The target
+	// The agent-switch chooser owns every keypress until enter (switch) or esc
+	// (cancel) — see updateSwitchAgent.
+	if s.switching {
+		return m.updateSwitchAgent(k)
+	}
+	// A pending kill confirmation owns the next keypress: y/Y kills, s/S stops
+	// the agent but keeps the worktree, anything else cancels. Force is never offered here (CLI-only friction). The target
 	// is the ID captured when "x" was pressed — NOT s.selected() re-read now: a
 	// background refresh (the 5s tick) can reorder/prune the list and shift the
 	// cursor onto a different session between "x" and "y", which would otherwise
@@ -599,7 +798,26 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if target != "" && (k.String() == "y" || k.String() == "Y") {
 			// The kill removes the worktree, so every shell rooted there must go too.
 			m.closeSessionShells(target)
-			return m, killSelectedCmd(target)
+			return m, killSelectedCmd(target, false)
+		}
+		if target != "" && (k.String() == "s" || k.String() == "S") {
+			// The worktree stays, but the daemon takes its shell tmux sessions
+			// down with the agent, so the tabs are dead either way.
+			m.closeSessionShells(target)
+			return m, killSelectedCmd(target, true)
+		}
+		return m, nil
+	}
+	// The port-clash confirmation, the same shape as the kill one: y/Y frees,
+	// anything else cancels, and the target is what was pinned when "F" was
+	// pressed — killing a process is not something a list refresh may re-aim.
+	if s.confirmFreePort {
+		s.confirmFreePort = false
+		target, port, pid := s.freeTarget, s.freePort, s.freePID
+		s.freeTarget, s.freePort, s.freePID = "", 0, 0
+		if target != "" && (k.String() == "y" || k.String() == "Y") {
+			s.flash, s.flashGood = fmt.Sprintf("freeing :%d…", port), true
+			return m, devFreePortCmd(target, port, pid)
 		}
 		return m, nil
 	}
@@ -624,6 +842,36 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.focusEmbed()
 	case "s":
 		return m.newShell()
+	case "D":
+		// Toggle the project's dev processes onto this session (one per project:
+		// activating takes them off whichever session was holding them). SHIFTED
+		// deliberately: bare "d" is the global doctor overlay, and this key stops
+		// another session's running processes.
+		if sel := s.selected(); sel != nil {
+			if len(sel.DevCommands) == 0 {
+				s.flash, s.flashGood = "no dev_commands configured for this project", false
+				return m, nil
+			}
+			if sel.DevActive {
+				s.flash, s.flashGood = "stopping dev processes…", true
+				return m, devToggleCmd(sel.ID, false)
+			}
+			s.flash, s.flashGood = "starting dev processes…", true
+			return m, devToggleCmd(sel.ID, true)
+		}
+	case "F":
+		// Free the port a dev tab died on, killing whatever holds it. SHIFTED and
+		// CONFIRMED because that process is regularly not lola's at all — it may
+		// be a dev server the human started in their own checkout — which is
+		// exactly why the daemon detects it but never acts on it by itself.
+		if sel := s.selected(); sel != nil {
+			if sel.DevClash == nil {
+				s.flash, s.flashGood = "no port clash to free on this session", false
+				return m, nil
+			}
+			s.confirmFreePort = true
+			s.freeTarget, s.freePort, s.freePID = sel.ID, sel.DevClash.Port, sel.DevClash.PID
+		}
 	case "<", ",":
 		// '<' / '>' switch terminal tabs — Option-free on both US (Shift+,/.) and
 		// German (dedicated <> key) layouts, unlike '[' / ']' which need Option on
@@ -650,11 +898,12 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case "R":
 		// Revive a dead session: relaunch its agent on the kept worktree. Only
-		// meaningful when the pane is gone (dead / session_ended); on any other
-		// status it flashes a hint and stays put (the daemon refuses a live one).
-		// No confirmation — revive is non-destructive, unlike the "x" kill.
+		// meaningful when no agent is running any more — the primary axis reads
+		// "gone", which is exactly what AgentDead and AgentExited collapse to; on
+		// any other display it flashes a hint and stays put (the daemon refuses a
+		// live one). No confirmation — revive is non-destructive, unlike "x" kill.
 		if sel := s.selected(); sel != nil {
-			if sel.Status != "dead" && sel.Status != "session_ended" {
+			if displayOf(*sel) != state.DisplayGone {
 				s.flash, s.flashGood = "revive is only available for a dead session", false
 				return m, nil
 			}
@@ -681,8 +930,18 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// blocked/broken sessions. Re-pin selection if it fell out of view.
 		s.filter.AttentionOnly = !s.filter.AttentionOnly
 		return m, m.reselectVisible()
+	case "f":
+		// The diff overlay: read what the session changed and send line comments
+		// to its agent (diffview.go). Same key as the app's Diff tab.
+		return m.openDiff()
+	case "H":
+		// The SSH workspace of the selection, or the host picker when it has no
+		// connection. Shifted because bare "h" moves the cockpit's selection.
+		return m.openSSH()
 	case "a":
 		return m.startAnswer()
+	case "A":
+		return m.startSwitchAgent()
 	case "O":
 		return m.startOpen()
 	case "n":
@@ -746,18 +1005,21 @@ func (m *rootModel) updateOpen(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // startAnswer opens the inline answer card for the selected session. It is only
-// meaningful on a needs_input session whose pane we have already parsed into a
-// question; anything else flashes a hint and stays put (never sends).
+// meaningful where a human's typed reply can actually land — the SAME gate the
+// daemon applies (answerable, mirroring internal/daemon/answer.go), not the old
+// `Status == "needs_input"` string test, which both refused a finished turn
+// resting at its prompt and accepted a modal that swallows prose. Anything else
+// flashes a hint and stays put (never sends).
 func (m *rootModel) startAnswer() (tea.Model, tea.Cmd) {
 	s := &m.sessions
 	sel := s.selected()
-	if sel == nil || sel.Status != "needs_input" {
-		s.flash, s.flashGood = "answer is only available while a session waits for input", false
+	if sel == nil || !answerable(*sel) {
+		s.flash, s.flashGood = "answer is only available while a session is parked at its prompt", false
 		return m, nil
 	}
 	// We need a fresh pane read to render the card, but NOT a recognized question:
 	// the parser is deliberately fallible (a scrolled-away prompt, an unenumerated
-	// format), yet the session is genuinely needs_input and the daemon accepts a
+	// format), yet the session is genuinely parked and the daemon accepts a
 	// free-form answer for it. When there is no parsed question (or only a
 	// choice-less/non-free-form parse), fall through to a free-form card so a human
 	// can always answer in place rather than being forced to attach.
@@ -775,8 +1037,8 @@ func (m *rootModel) startAnswer() (tea.Model, tea.Cmd) {
 // updateAnswer drives the open answer card. A choice prompt is a pick-list
 // (arrows/j/k move, enter sends the highlighted Key, a matching digit/letter
 // sends that Key directly); a free-form prompt accumulates typed runes and
-// sends on enter. esc cancels without sending. The daemon still re-checks
-// needs_input, so a stale send is refused there, not here.
+// sends on enter. esc cancels without sending. The daemon still re-checks the
+// axis gate AND re-reads the pane, so a stale send is refused there, not here.
 func (m *rootModel) updateAnswer(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.sessions
 	pd := s.paneData
@@ -836,9 +1098,71 @@ func (m *rootModel) sendAnswer(text string) (tea.Model, tea.Cmd) {
 	return m, answerCmd(id, text)
 }
 
+// startSwitchAgent opens the agent-switch chooser for the selected session: the
+// valid kinds EXCLUDING the one currently driving it ("" counts as claude —
+// legacy records). A shell session has no agent to switch and flashes a hint;
+// every other refusal (same kind, missing binary, …) is the daemon's to make.
+func (m *rootModel) startSwitchAgent() (tea.Model, tea.Cmd) {
+	s := &m.sessions
+	sel := s.selected()
+	if sel == nil {
+		return m, nil
+	}
+	if a, _ := axesOf(*sel); a == state.AgentShell {
+		s.flash, s.flashGood = "no agent to switch on a shell session", false
+		return m, nil
+	}
+	cur := sel.Agent
+	if cur == "" {
+		cur = string(agent.Claude)
+	}
+	kinds := make([]string, 0, len(agent.Kinds)-1)
+	for _, k := range agent.Kinds {
+		if string(k) != cur {
+			kinds = append(kinds, string(k))
+		}
+	}
+	s.switching, s.switchFor, s.switchCursor, s.switchKinds = true, sel.ID, 0, kinds
+	return m, nil
+}
+
+// updateSwitchAgent drives the open agent-switch chooser: arrows/j/k move,
+// enter sends cmd=switchAgent for the pinned target, esc cancels.
+func (m *rootModel) updateSwitchAgent(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	s := &m.sessions
+	switch k.String() {
+	case "esc":
+		s.switching, s.switchFor, s.switchKinds = false, "", nil
+		return m, nil
+	case "up", "k":
+		if s.switchCursor > 0 {
+			s.switchCursor--
+		}
+		return m, nil
+	case "down", "j":
+		if s.switchCursor < len(s.switchKinds)-1 {
+			s.switchCursor++
+		}
+		return m, nil
+	case "enter":
+		if s.switchCursor >= len(s.switchKinds) {
+			s.switching, s.switchFor, s.switchKinds = false, "", nil
+			return m, nil
+		}
+		id, kind := s.switchFor, s.switchKinds[s.switchCursor]
+		s.switching, s.switchFor, s.switchKinds = false, "", nil
+		s.flash, s.flashGood = "switching to "+kind+"…", true
+		return m, switchAgentCmd(id, kind)
+	}
+	return m, nil
+}
+
 // jumpNeedsInput moves the cursor to the next (dir=+1) or previous (dir=-1)
-// session, wrapping, whose status is needs_input — so "who needs me" is one
-// keypress away (n forward, N back). Refetches the pane for the new selection.
+// session, wrapping, whose AGENT is blocked on a person — so "who needs me" is
+// one keypress away (n forward, N back). It keys on the agent axis alone
+// (waitingOnHuman), not the wider attention predicate: a red build needs a human
+// too, but it does not need one HERE, at a prompt, right now. Refetches the pane
+// for the new selection.
 func (m *rootModel) jumpNeedsInput(dir int) (tea.Model, tea.Cmd) {
 	s := &m.sessions
 	if s.data == nil || len(s.data.Sessions) == 0 {
@@ -847,7 +1171,7 @@ func (m *rootModel) jumpNeedsInput(dir int) (tea.Model, tea.Cmd) {
 	n := len(s.data.Sessions)
 	for off := 1; off <= n; off++ {
 		i := ((s.cursor+dir*off)%n + n) % n
-		if s.data.Sessions[i].Status == "needs_input" {
+		if waitingOnHuman(s.data.Sessions[i]) {
 			if i == s.cursor {
 				return m, nil // already on the only one
 			}
@@ -876,6 +1200,91 @@ func (m *rootModel) openSelectedPR() tea.Cmd {
 // sessionDetail is the bottom pane: live capture-pane preview for tmux-backed
 // sessions, a static detail card otherwise. Both variants lead with a source
 // badge (ao|native); native sessions additionally show their worktree dir.
+// devClashLines states why a dev tab is dead when the reason is a port another
+// process already holds — and how to act on it.
+//
+// It is rendered in BOTH detail shapes (the live-pane preview and the no-pane
+// card) unlike the rest of the dev block, because a session with a clash almost
+// always has a live agent pane: showing it only on the card would hide it in
+// exactly the case it exists for. The pane itself cannot say any of this — the
+// command clears the screen on its way out — and the holder is usually a process
+// in another checkout entirely, so this is the only place the two facts meet.
+func devClashLines(sel protocol.SessionInfo) []string {
+	c := sel.DevClash
+	if c == nil {
+		return nil
+	}
+	holder := c.Proc
+	if holder == "" {
+		holder = "another process"
+	}
+	lines := []string{statusOrange.Render(
+		fmt.Sprintf("clash:    :%d held by %s (pid %d) — F to free", c.Port, holder, c.PID))}
+	if c.Dir != "" {
+		where := "outside lola"
+		if c.Ours {
+			where = "a leftover in"
+		}
+		lines = append(lines, faintText.Render("          "+where+" "+truncPlain(c.Dir, 70)))
+	}
+	return lines
+}
+
+// overlapLines warns that other sessions of the same project are editing the
+// same files — the collision a merge_conflict reaction would otherwise report
+// only after both PRs were built on it. One line per other session, naming at
+// most three shared paths.
+func overlapLines(sel protocol.SessionInfo) []string {
+	var lines []string
+	for i, o := range sel.Overlaps {
+		who := o.Issue
+		if who == "" {
+			who = o.Session
+		}
+		files := o.Files
+		extra := o.More
+		if len(files) > 3 {
+			extra += len(files) - 3
+			files = files[:3]
+		}
+		list := strings.Join(files, ", ")
+		if extra > 0 {
+			list += fmt.Sprintf(" +%d", extra)
+		}
+		label := "overlap:  "
+		if i > 0 {
+			label = "          "
+		}
+		lines = append(lines, statusOrange.Render(label+"⚠ "+who+" also edits "+truncPlain(list, 80)))
+	}
+	return lines
+}
+
+// mergeQueueLine renders the [merge_queue] posture, "" when not queued.
+func mergeQueueLine(sel protocol.SessionInfo) string {
+	q := sel.MergeQueue
+	if q == nil {
+		return ""
+	}
+	text := map[string]string{
+		"queued":   "waiting behind earlier PRs",
+		"waiting":  "next — waiting for CI / GitHub",
+		"syncing":  "next — agent merging the default branch in",
+		"merging":  "next — merge issued",
+		"conflict": "next — conflicts with the default branch",
+		"blocked":  "next — held (facts the queue cannot judge)",
+		"failed":   "next — GitHub refused the merge",
+	}[q.Step]
+	if text == "" {
+		text = q.Step
+	}
+	line := fmt.Sprintf("queue:    #%d %s", q.Position, text)
+	if q.Step == "conflict" || q.Step == "blocked" || q.Step == "failed" {
+		return statusOrange.Render(line)
+	}
+	return line
+}
+
 func (m *rootModel) sessionDetail() string {
 	s := &m.sessions
 	sel := s.selected()
@@ -890,9 +1299,14 @@ func (m *rootModel) sessionDetail() string {
 	}
 	if sel.TmuxName != "" {
 		fresh := s.previewFor == sel.ID
-		needsInput := sel.Status == "needs_input"
+		// The "attention" header and the answer card below share ONE condition,
+		// and it is the daemon's own answer gate — a card offered where lola would
+		// refuse to type is a dead affordance, and the old `Status == "needs_input"`
+		// test was both (it refused a finished turn resting at its prompt and
+		// offered a card over a modal that swallows prose).
+		canAnswer := answerable(*sel)
 		header := tblHeader.Render("preview")
-		if needsInput {
+		if canAnswer {
 			header = statusOrange.Render("attention")
 		}
 		mode := "compact"
@@ -903,6 +1317,12 @@ func (m *rootModel) sessionDetail() string {
 			faintText.Render(" — tmux "+sel.TmuxName+" · "+mode) + "\n")
 		if sel.Worktree != "" {
 			b.WriteString(faintText.Render("worktree: "+sel.Worktree) + "\n")
+		}
+		if line := portsDetailLine(*sel); line != "" {
+			b.WriteString(line + "\n")
+		}
+		if line := usageDetailLine(*sel); line != "" {
+			b.WriteString(faintText.Render(line) + "\n")
 		}
 		// The agent axis, truthful even under an open PR: what the agent itself
 		// is doing, why it waits, which tool the turn runs, activity freshness.
@@ -915,6 +1335,9 @@ func (m *rootModel) sessionDetail() string {
 		}
 		if sel.PRStale {
 			b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing; the delivery state may be old") + "\n")
+		}
+		for _, line := range devClashLines(*sel) {
+			b.WriteString(line + "\n")
 		}
 		// PR panel above the fold: unmissable for ANY tmux-backed session that has
 		// a PR, not just AO/detail-card sessions.
@@ -932,7 +1355,7 @@ func (m *rootModel) sessionDetail() string {
 		// choices/free-form field; when the parser missed the prompt we still open
 		// a free-form card once the human arms it (s.answering), so a parse miss
 		// never blocks answering in place.
-		if needsInput && fresh && s.paneData != nil &&
+		if canAnswer && fresh && s.paneData != nil &&
 			(s.paneData.HasQuestion || (s.answering && s.answerFor == sel.ID)) {
 			b.WriteString(m.attentionCard())
 		}
@@ -959,7 +1382,14 @@ func (m *rootModel) sessionDetail() string {
 	fmt.Fprintf(&b, "issue:    %s\n", dash(sel.Issue))
 	fmt.Fprintf(&b, "branch:   %s\n", dash(sel.Branch))
 	fmt.Fprintf(&b, "worktree: %s\n", dash(sel.Worktree))
-	fmt.Fprintf(&b, "status:   %s\n", statusStyle(sel.Status).Render(sel.Status))
+	// BOTH axes, side by side: the primary pill says what the agent is doing, the
+	// PR chip where the delivery stands. Rendering only one of them here is what
+	// the whole axis split exists to stop.
+	statusLine := statusPillFor(*sel)
+	if chip := prBadge(*sel); chip != "" {
+		statusLine += " " + chip
+	}
+	fmt.Fprintf(&b, "status:   %s\n", statusLine)
 	if line := agentDetailLine(*sel); line != "" {
 		b.WriteString(faintText.Render(line) + "\n")
 	}
@@ -969,12 +1399,56 @@ func (m *rootModel) sessionDetail() string {
 	if sel.LastNotification != "" {
 		b.WriteString(faintText.Render("note:     "+truncPlain(sel.LastNotification, 100)) + "\n")
 	}
+	// The agent's own report, right under the axes it must never replace.
+	// detailBody clips each line to the panel; 100 is the same soft cap the
+	// other prose lines here use.
+	for _, line := range boardLines(*sel, 100) {
+		b.WriteString(line + "\n")
+	}
+	// The ssh block, beside the agent's report: a third axis that replaces neither.
+	for _, line := range sshDetailLines(*sel, 90) {
+		b.WriteString(line + "\n")
+	}
 	if sel.PRStale {
 		b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing") + "\n")
 	}
 	fmt.Fprintf(&b, "review:   %s\n", dash(sel.Review))
+	for _, line := range appLines(*sel) {
+		b.WriteString(line + "\n")
+	}
+	if sel.Sandbox != "" {
+		fmt.Fprintf(&b, "sandbox:  %s\n", faintText.Render(sel.Sandbox+" — the agent runs in a container"))
+	}
 	if sel.Reacting != "" {
 		fmt.Fprintf(&b, "reacting: %s\n", reactingStyle(sel.Reacting).Render(sel.Reacting))
+	}
+	if line := mergeQueueLine(*sel); line != "" {
+		b.WriteString(line + "\n")
+	}
+	for _, line := range overlapLines(*sel) {
+		b.WriteString(line + "\n")
+	}
+	if len(sel.DevCommands) > 0 {
+		// Named devLine, not `state`: this file imports internal/state now, and a
+		// local of that name shadows the package for the rest of the function.
+		devLine := faintText.Render("off (D to run here)")
+		if sel.DevActive {
+			devLine = goodText.Render("● " + strings.Join(sel.DevCommands, " · "))
+		}
+		fmt.Fprintf(&b, "dev:      %s\n", devLine)
+		// The address the dev server actually took — scraped from its pane by
+		// the daemon, because the port MOVES (8000 taken means 8001) and the
+		// line that says so scrolled away minutes ago. A terminal makes it
+		// clickable on its own; what a human needs from here is to SEE it.
+		if len(sel.DevURLs) > 0 {
+			fmt.Fprintf(&b, "serves:   %s\n", strings.Join(sel.DevURLs, "  "))
+		}
+		for _, line := range devClashLines(*sel) {
+			b.WriteString(line + "\n")
+		}
+	}
+	if line := usageDetailLine(*sel); line != "" {
+		b.WriteString(line + "\n")
 	}
 	fmt.Fprintf(&b, "age:      %s\n", dash(sel.Age))
 	return b.String()
@@ -1142,4 +1616,87 @@ func lastLines(text string, n int) []string {
 		lines = lines[len(lines)-n:]
 	}
 	return lines
+}
+
+// portsDetailLine names the session's leased port block (LOLA_PORT first) —
+// what its dev stack binds when the project leases ports, so a human can open
+// the right one without reading it out of .lola/env. "" without a lease.
+func portsDetailLine(sel protocol.SessionInfo) string {
+	if len(sel.Ports) == 0 {
+		return ""
+	}
+	parts := make([]string, len(sel.Ports))
+	for i, p := range sel.Ports {
+		parts[i] = strconv.Itoa(p)
+	}
+	return fmt.Sprintf("ports:    %s", strings.Join(parts, " · "))
+}
+
+// appLines renders a stack session's apps — one line per member repository it
+// checked out: the app's name (and label), then its own PR chip, "changes, no
+// PR" for local work not yet pushed into a PR, or a faint "—" for an app the
+// agent has not touched; its port lease trails when it has one.
+func appLines(s protocol.SessionInfo) []string {
+	if !s.Stack {
+		return nil
+	}
+	var out []string
+	for _, a := range s.Apps {
+		name := a.Name
+		if a.Label != "" && a.Label != a.Name {
+			name += " (" + a.Label + ")"
+		}
+		var pr string
+		switch {
+		case a.Number > 0 || a.URL != "":
+			pr = appPRBadge(a)
+		case a.Touched:
+			pr = warnText.Render("changes, no PR")
+		default:
+			pr = faintText.Render("—")
+		}
+		line := fmt.Sprintf("app:      %s  %s", name, pr)
+		if len(a.Ports) > 0 {
+			parts := make([]string, len(a.Ports))
+			for i, p := range a.Ports {
+				parts[i] = strconv.Itoa(p)
+			}
+			line += faintText.Render("  ports " + strings.Join(parts, " · "))
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// appPRBadge is prBadge for one app of a stack session: the same glyphs, read
+// off the app's own PR facts and delivery axis.
+func appPRBadge(a protocol.SessionApp) string {
+	out := "PR"
+	if a.Number > 0 {
+		out = fmt.Sprintf("#%d", a.Number)
+	}
+	d := state.DeliveryState(a.Delivery)
+	if g := deliveryGlyph(d); g != "" {
+		out += " " + g
+	}
+	if d == state.DeliveryMerged || d == state.DeliveryClosed {
+		return out
+	}
+	if g := checksGlyph(a.Checks); g != "" {
+		out += " " + g
+	}
+	if r := reviewGlyph(a.Review); r != "" {
+		out += " " + r
+	}
+	return out
+}
+
+// focusAppPrefix names the app a stack session's own PR facts describe
+// (FocusApp, the one whose PR needs attention most), as "web ", so the row's
+// PR chip says WHICH of several PRs it is. "" for a single-repo session.
+func focusAppPrefix(si protocol.SessionInfo) string {
+	if !si.Stack || si.FocusApp == "" {
+		return ""
+	}
+	return si.FocusApp + " "
 }

@@ -36,6 +36,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // wbGuard names the one-shot guard a write-back transition stamps.
@@ -166,6 +167,11 @@ func (d *Daemon) setWBGuard(id string, g wbGuard) {
 // re-dispatched forever. The guard is set optimistically even on comment failure
 // (a retry could double-comment; the dedup already blocks re-dispatch).
 func (d *Daemon) writeBackSpawn(ctx context.Context, api linear.API, p config.Project, is linear.Issue, sess session.Session) {
+	d.goalMu.Lock()
+	defer d.goalMu.Unlock()
+	if d.goalHold(is.ID, is.Description, is.IssueRelations) != "" {
+		return
+	}
 	if p.OnSpawnStateID == "" && !p.CommentOnSpawn {
 		return // nothing configured for spawn
 	}
@@ -226,7 +232,12 @@ func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 		return
 	}
 	prOpen := s.PR != nil && strings.EqualFold(s.PR.State, "OPEN")
-	merged := s.Status == "merged"
+	// Read off the DELIVERY axis, like every other PR-driven decision in the
+	// daemon. Rollup ranks merged first, so this is the same set of sessions
+	// the collapsed word selected — the point is that nothing here has to know
+	// that ranking, and a later rollup change cannot silently move the
+	// write-back.
+	merged := s.Delivery == state.DeliveryMerged
 	if !((prOpen && !s.WBPRDone) || (merged && !s.WBMergedDone)) {
 		return // nothing to transition, or already done
 	}
@@ -235,6 +246,12 @@ func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 		return
 	}
 	needPR := prOpen && !s.WBPRDone && (p.OnPRStateID != "" || p.CommentOnPR)
+	if needPR && s.InBestOfRace() {
+		// One of N best-of attempts nobody has picked yet (bestof.go): its draft
+		// PR is a candidate, not the delivery. WBPRDone stays unset, so the
+		// attempt that is kept transitions the issue on the cycle after the pick.
+		needPR = false
+	}
 	if needPR && p.PRRequiresChecks && !prPassedChecks(s) {
 		// The poll wants "In Review" gated on a valid PR (open, not draft, checks
 		// green), and this PR has not passed yet: defer. WBPRDone stays unset so a
@@ -267,6 +284,11 @@ func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 // comment posted yet); once the state move is done the guard is stamped even if
 // the comment fails, so the comment never double-fires.
 func (d *Daemon) writeBackState(ctx context.Context, api linear.API, s session.Session, stateID string, comment bool, tmpl, detail, label string, g wbGuard) {
+	d.goalMu.Lock()
+	defer d.goalMu.Unlock()
+	if d.goalHold(s.IssueUUID, "") != "" {
+		return
+	}
 	if !s.LinearBound() {
 		return // defense-in-depth: never call the Linear API with an empty issue UUID
 	}
@@ -326,6 +348,11 @@ func (d *Daemon) writeBackEscalation(ctx context.Context, s session.Session) {
 // cycle, no comment yet); once past it the guard is stamped even on comment
 // failure. Callers pass their already-resolved client.
 func (d *Daemon) writeBackBlocked(ctx context.Context, api linear.API, p config.Project, s session.Session, reason string) {
+	d.goalMu.Lock()
+	defer d.goalMu.Unlock()
+	if d.goalHold(s.IssueUUID, "") != "" {
+		return
+	}
 	if s.WBBlockedDone {
 		return
 	}

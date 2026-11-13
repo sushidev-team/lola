@@ -1,7 +1,17 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { triaged } from "$lib/filters";
+  import Button from "./Button.svelte";
+  import { budgetLabel, headerLabel, headerLevel } from "$lib/usage";
+  import QuotaBars from "./QuotaBars.svelte";
+  import HoverCard from "./HoverCard.svelte";
+  import SpendCard from "./SpendCard.svelte";
+  import SessionBar from "./session/SessionBar.svelte";
+  import { waitingQueue } from "$lib/queue";
+  import { ssh } from "$lib/ssh.svelte";
 
   // The main column's 44px context header. It replaces the old full-width vitals
   // bar: it starts at the SIDEBAR's right edge, not the window's, so together
@@ -14,6 +24,12 @@
   type Crumb = { text: string; onclick?: () => void };
 
   const projectName = $derived(store.displayNameFor(nav.project));
+
+  // A session fills <main>, and this bar becomes its bar.
+  const inSession = $derived(!!nav.focusedTerm && nav.view === "cockpit");
+  // The sidebar carries the Waiting line. Hidden, it needs a way to say the same thing, or a
+  // session waiting on you is invisible from inside another one.
+  const waiting = $derived(nav.sidebarOpen ? 0 : waitingQueue(store.rosterSessions).length);
 
   const crumbs = $derived.by<Crumb[]>(() => {
     switch (nav.view) {
@@ -55,52 +71,87 @@
       : "daemon health unknown",
   );
 
-  const lenses: { id: "list" | "kanban" | "grid"; icon: string; label: string }[] = [
-    { id: "list", icon: "≡", label: "list" },
-    { id: "kanban", icon: "▤", label: "board" },
-    { id: "grid", icon: "▦", label: "terminals" },
-  ];
+  // The agents' SUBSCRIPTION limits (Claude 5h/7d, Codex 7d) when any agent has
+  // reported them, else today's tokens; plus the share of [budget].daily_tokens.
+  // Quiet grey until 80% (of a limit or the budget), warn from there, bad from
+  // 95% of a limit or once the budget is reached — and bad while [load] holds
+  // dispatch, since new tickets are then silently waiting and the tooltip says why.
+  const spend = $derived(store.status?.usage ?? null);
+  const spendCls = $derived.by(() => {
+    if (!spend) return "";
+    const level = headerLevel(spend);
+    if (level === "over" || spend.load?.busy) return "text-bad";
+    return level === "near" ? "text-warn" : "text-faint";
+  });
+
 </script>
 
 <header
-  class="drag flex h-11 items-center gap-2 border-b border-edge bg-canvas pr-3 {nav.sidebarOpen
+  class="drag flex h-11 min-w-0 items-center gap-2 bg-canvas pr-3 {inSession ? '' : 'border-b border-edge'} {nav.sidebarOpen
     ? 'pl-3'
     : 'pl-[82px]'}"
 >
   {#if !nav.sidebarOpen}
     <!-- Placed AFTER the traffic-light padding, never inside it. -->
-    <button
-      class="rounded p-1 text-faint hover:bg-sel hover:text-ink"
-      title="show sidebar (b)"
-      aria-label="Show sidebar"
-      onclick={() => nav.toggleSidebar()}>»</button
-    >
+    <Button icon title="show sidebar (b)" aria-label="Show sidebar" onclick={() => nav.toggleSidebar()}><Icon name="chevrons-right" size={14} /></Button>
+  {/if}
+
+  {#if waiting > 0}
+    <Button size="xs" class="num shrink-0 text-orange!" title="{waiting} waiting on you (⌘J)" aria-label="{waiting} waiting on you" onclick={() => ssh.nextWaiting()} data-waiting-badge>
+      <span aria-hidden="true"><Icon name="circle-alert" size={14} /></span>{waiting}
+    </Button>
+  {/if}
+
+  {#if inSession}
+    <SessionBar sessionId={nav.focusedTerm} />
   {/if}
 
   {#if nav.view !== "cockpit"}
-    <button
-      class="rounded p-1 text-faint hover:bg-sel hover:text-ink"
+    <Button
+      icon
+      size="xs"
       title="back to sessions (Esc)"
       aria-label="Back to sessions"
-      onclick={() => nav.goCockpit(nav.scoped ? nav.project : "")}>←</button
+      onclick={() => nav.goCockpit(nav.scoped ? nav.project : "")}
     >
+      <Icon name="chevron-left" class="size-3.5" />
+    </Button>
   {/if}
 
-  <nav class="flex min-w-0 items-baseline gap-1.5" aria-label="Breadcrumb">
+  {#if !inSession}
+  <nav class="flex min-w-0 items-center gap-2 text-sm font-normal" aria-label="Breadcrumb">
     {#each crumbs as c, i (c.text + i)}
-      {#if i > 0}<span class="text-lg text-faint" aria-hidden="true">▸</span>{/if}
+      {#if i > 0}
+        <Icon name="slash" class="h-3 w-2 shrink-0 text-faint" size={14} />
+      {/if}
       {#if c.onclick}
-        <button class="truncate text-lg text-faint hover:text-ink" onclick={c.onclick}>{c.text}</button>
+        <button class="min-w-0 truncate rounded py-1 text-faint hover:text-ink" onclick={c.onclick}>{c.text}</button>
       {:else}
-        <span class="truncate text-lg" class:text-faint={i < crumbs.length - 1}>{c.text}</span>
+        <span class="min-w-0 truncate" class:text-faint={i < crumbs.length - 1} aria-current={i === crumbs.length - 1 ? "page" : undefined}>{c.text}</span>
       {/if}
     {/each}
     {#if nav.view === "cockpit"}
       <span class="num shrink-0 text-sm text-faint">{count}</span>
     {/if}
   </nav>
+  {/if}
 
   <span class="ml-auto flex shrink-0 items-center gap-2">
+    {#if !inSession}
+    <Button size="xs" onclick={() => nav.openOverlay("commands")} title="Search projects, sessions, and actions (⌘K)">Search <span class="text-faint">⌘K</span></Button>
+    {/if}
+    {#if spend}
+      <HoverCard class="num inline-flex items-center text-sm whitespace-nowrap outline-none {spendCls}">
+        {#snippet card()}<SpendCard usage={spend} />{/snippet}
+        {#if spend.quotas?.length}
+          <!-- Limits as bars; each bar carries its own tone, so the wrapper's
+               colour only reaches the budget and load text beside them. -->
+          <QuotaBars quotas={spend.quotas} />{#if budgetLabel(spend)}<span class="ml-2">· {budgetLabel(spend)}</span>{/if}
+        {:else}
+          {headerLabel(spend)}
+        {/if}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}
+      </HoverCard>
+    {/if}
     <!-- Daemon alarm, ONLY while the sidebar is collapsed. <SidebarStatus> is the
          permanent home for liveness, but it lives inside the collapsible <aside>,
          and `sidebarOpen` persists to localStorage — so with the sidebar hidden a
@@ -109,36 +160,18 @@
          when the list is empty. Silent while everything is fine, so the bar stays
          quiet; opens the doctor, same as the sidebar chip. -->
     {#if !nav.sidebarOpen && store.connected && !daemonOk}
-      <button
-        class="flex items-center gap-1.5 rounded px-1.5 py-1 {store.alive ? 'text-warn' : 'text-bad'} hover:bg-sel"
+      <!-- Trailing `!` on the colour: it has to beat the variant's own text-faint,
+           and equal-specificity utilities are resolved by Tailwind's sheet order,
+           not by the class attribute. -->
+      <Button
+        class={store.alive ? "text-warn!" : "text-bad!"}
         title="{daemonHealth} · open doctor (d)"
         onclick={() => nav.openOverlay("doctor")}
       >
-        <span aria-hidden="true">{store.alive ? "▲" : "○"}</span>
-        <span>{store.alive ? "degraded" : "daemon down"}</span>
-      </button>
+        <span aria-hidden="true"><GlyphIcon glyph={store.alive ? "▲" : "○"} /></span>
+        <span>{store.alive ? "Degraded" : "Daemon down"}</span>
+      </Button>
     {/if}
-    {#if nav.view === "cockpit"}
-      <span class="flex items-center gap-0.5 rounded border border-edge p-0.5">
-        {#each lenses as l (l.id)}
-          <button
-            class="rounded px-1.5 py-[1px] text-sm"
-            class:bg-accent={nav.lens === l.id}
-            class:text-on-accent={nav.lens === l.id}
-            class:text-faint={nav.lens !== l.id}
-            title={l.label}
-            aria-label="{l.label} lens"
-            aria-pressed={nav.lens === l.id}
-            onclick={() => nav.setLens(l.id)}>{l.icon}</button
-          >
-        {/each}
-      </span>
-    {:else if nav.view === "home"}
-      <button
-        class="rounded border border-edge px-2 py-1 text-faint hover:border-accent hover:text-accent-ink"
-        title="add a project"
-        onclick={() => nav.openOverlay("project", "")}>+ Add project</button
-      >
-    {/if}
+
   </span>
 </header>

@@ -1,6 +1,9 @@
 package update
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,6 +126,91 @@ func TestPickDMG(t *testing.T) {
 	// No DMG at all → nil (a checksums file / zip must never be offered).
 	if a := pickDMG([]Asset{{Name: "checksums.txt"}, {Name: "src.zip"}}); a != nil {
 		t.Errorf("pickDMG no-dmg = %v, want nil", a)
+	}
+}
+
+// A release whose macOS DMG has not been attached yet (it is signed and
+// notarized by a job that finishes minutes after the release is published, and
+// that can fail on its own) must still report Available. The desktop app treats
+// "no DownloadURL" as "not installable yet" and says so; folding it into
+// Available here would tell everyone on the previous version they were current.
+func TestCheckForUpdatesReportsAReleaseWithNoDMGYet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"tag_name":"v0.2.8","assets":[{"name":"checksums.txt","browser_download_url":"https://x/checksums.txt"}],"html_url":"https://x/releases/tag/v0.2.8"}`)
+	}))
+	defer srv.Close()
+
+	c := NewChecker()
+	c.baseURL = srv.URL
+
+	info, err := c.CheckForUpdates("0.2.7")
+	if err != nil {
+		t.Fatalf("CheckForUpdates: %v", err)
+	}
+	if !info.Available {
+		t.Error("Available = false, want true: 0.2.8 > 0.2.7 regardless of which assets are attached")
+	}
+	if info.DownloadURL != "" {
+		t.Errorf("DownloadURL = %q, want empty: no DMG is attached", info.DownloadURL)
+	}
+	if info.BrowserURL == "" {
+		t.Error("BrowserURL is empty: with nothing to download it is the only place left to send the user")
+	}
+}
+
+// The cache is what makes "check again" answer the same thing for an hour —
+// including through the window where the DMG lands on an already-published
+// release. ClearCache is the escape hatch every manual check goes through.
+func TestClearCacheForcesARefetch(t *testing.T) {
+	var hits int
+	bodies := []string{
+		`{"tag_name":"v0.2.8","assets":[]}`,
+		`{"tag_name":"v0.2.8","assets":[{"name":"lola-desktop-0.2.8-universal.dmg","browser_download_url":"https://x/lola.dmg","size":7}]}`,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The changelog fetch (/releases) rides along on an available update;
+		// only the latest-release fetch is what the cache is being measured on.
+		if !strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			_, _ = io.WriteString(w, `[]`)
+			return
+		}
+		body := bodies[len(bodies)-1]
+		if hits < len(bodies) {
+			body = bodies[hits]
+		}
+		hits++
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	c := NewChecker()
+	c.baseURL = srv.URL
+
+	if _, err := c.CheckForUpdates("0.2.7"); err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+	// Second check inside CacheDuration: served from the cache, still no DMG.
+	info, err := c.CheckForUpdates("0.2.7")
+	if err != nil {
+		t.Fatalf("cached check: %v", err)
+	}
+	if hits != 1 {
+		t.Errorf("requests = %d, want 1: the second check must hit the cache", hits)
+	}
+	if info.DownloadURL != "" {
+		t.Errorf("DownloadURL = %q, want empty from the cached (asset-less) release", info.DownloadURL)
+	}
+
+	c.ClearCache()
+	info, err = c.CheckForUpdates("0.2.7")
+	if err != nil {
+		t.Fatalf("forced check: %v", err)
+	}
+	if hits != 2 {
+		t.Errorf("requests = %d, want 2: ClearCache must force a refetch", hits)
+	}
+	if info.DownloadURL != "https://x/lola.dmg" {
+		t.Errorf("DownloadURL = %q, want the DMG attached since the first check", info.DownloadURL)
 	}
 }
 

@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CAPACITOR_DEBUG</key>
+	<string>$(CAPACITOR_DEBUG)</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+        <string>Lola</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+    <false/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>UIWindowSceneSessionRoleApplication</key>
+      <array>
+        <dict>
+            <key>UISceneConfigurationName</key>
+            <string>Default Configuration</string>
+            <key>UISceneDelegateClassName</key>
+            <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+            <key>UISceneStoryboardFile</key>
+            <string>Main</string>
+        </dict>
+      </array>
+    </dict>
+	</dict>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<!-- Required for the LAN case. iOS fires the local-network prompt on the first
+	     unicast to a private-range address, and an app without this string is denied
+	     WITHOUT ever prompting - which surfaces as an ordinary unreachable host, so
+	     it looks like a wrong address rather than a permission. It does not fire for
+	     loopback, so a Simulator run or a phone-side SSH forward never prompts. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Lola connects to the lola daemon on your Mac over your local network.</string>
+	<!-- The service the daemon advertises (internal/mdns.ServiceType), so this app
+	     may BROWSE for it. iOS refuses an unlisted service type silently: NWBrowser
+	     reports no results rather than an error, which reads as "the Mac is not
+	     advertising" and sends someone to debug the daemon. It must stay byte-identical
+	     to the Go constant. Browsing is what lets a paired phone find the same Mac on a
+	     network whose addresses it has never seen - the key and the pin already work
+	     anywhere, only the address goes stale. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_lola._tcp</string>
+	</array>
+	<!-- Required to scan the pairing QR code the lola desktop app draws. iOS
+	     refuses camera access outright, without ever prompting, when this string is
+	     missing, so its absence looks like a broken scanner rather than a missing
+	     key. The scanner asks for access only when a human opens it. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Lola uses the camera to scan the pairing code shown by the lola app on your Mac.</string>
+	<!-- The DEVELOPMENT URL hand-off. Read the header of
+	     plugins/lola-transport/ios/Sources/LolaTransportPlugin/LolaDevLink.swift
+	     before touching this.
+
+	     It is deliberately NOT `lola`. mobile/PLAN.md rejects a `lola://` URL as the
+	     pairing mechanism, because a custom scheme cannot be claimed exclusively and
+	     the system camera would hand the secret to whichever app registered it -
+	     an argument that applies with more force to M1's longer-lived bearer key.
+	     So the pairing QR stays an opaque token that only the in-app scanner reads,
+	     and this scheme exists for one narrow job: the iOS Simulator has no camera,
+	     so `xcrun simctl openurl` is the only way an agent or a CI job can put the
+	     app in front of a live daemon.
+
+	     Registering the scheme grants nothing on its own. Everything that turns an
+	     arriving URL into a connection is compiled out unless the plugin package is
+	     built in its debug configuration (Package.swift defines LOLA_DEV_LINK
+	     there and only there), so in a release build the URL launches the app and
+	     is dropped. This entry stays unconditional because an Info.plist cannot be
+	     made configuration-dependent without build settings that live outside this
+	     file. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>dev.sushi.lola.mobile.devlink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>lola-dev</string>
+			</array>
+		</dict>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+</dict>
+</plist>

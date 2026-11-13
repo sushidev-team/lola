@@ -470,3 +470,177 @@ func TestNoRepairResultWhenClean(t *testing.T) {
 		}
 	}
 }
+
+func TestFallbackResults(t *testing.T) {
+	t.Run("defaults fallback missing binary", func(t *testing.T) {
+		pathWith(t, "tmux", "git", "claude", "gh")
+		t.Setenv("LOLA_HOME", t.TempDir())
+
+		cfg := &config.Config{
+			Defaults: config.Defaults{
+				GlobalCap:     1,
+				AgentFallback: []string{"codex"},
+			},
+		}
+		r := Check(context.Background(), cfg)
+
+		res := result(t, r, checkFallback)
+		if res.OK {
+			t.Errorf("%s: OK=true, want false (codex missing on PATH)", checkFallback)
+		}
+		if res.Critical {
+			t.Errorf("%s: Critical=true, want false (warning only)", checkFallback)
+		}
+		if !strings.Contains(res.Detail, "codex") {
+			t.Errorf("%s Detail=%q, want it to contain %q", checkFallback, res.Detail, "codex")
+		}
+		if !r.OK() {
+			t.Error("Report.OK()=false on a non-critical fallback warning, want true")
+		}
+	})
+
+	t.Run("defaults fallback present", func(t *testing.T) {
+		pathWith(t, "tmux", "git", "claude", "gh", "codex")
+		t.Setenv("LOLA_HOME", t.TempDir())
+
+		cfg := &config.Config{
+			Defaults: config.Defaults{
+				GlobalCap:     1,
+				AgentFallback: []string{"codex"},
+			},
+		}
+		r := Check(context.Background(), cfg)
+
+		for _, res := range r.Results {
+			if strings.HasPrefix(res.Name, checkFallback) {
+				t.Errorf("unexpected fallback result: %+v", res)
+			}
+		}
+		if !r.OK() {
+			t.Error("Report.OK()=false with all tools and fallback present, want true")
+		}
+	})
+
+	t.Run("no fallback configured", func(t *testing.T) {
+		pathWith(t, "tmux", "git", "claude", "gh")
+		t.Setenv("LOLA_HOME", t.TempDir())
+
+		cfg := &config.Config{
+			Defaults: config.Defaults{
+				GlobalCap: 1,
+			},
+		}
+		r := Check(context.Background(), cfg)
+
+		for _, res := range r.Results {
+			if strings.HasPrefix(res.Name, checkFallback) {
+				t.Errorf("unexpected fallback result when none configured: %+v", res)
+			}
+		}
+	})
+
+	t.Run("project override missing binary", func(t *testing.T) {
+		pathWith(t, "tmux", "git", "claude", "gh")
+		t.Setenv("LOLA_HOME", t.TempDir())
+
+		cfg := &config.Config{
+			Defaults: config.Defaults{
+				GlobalCap: 1,
+			},
+			Projects: []config.Project{
+				{
+					Name:          "nori",
+					AgentFallback: []string{"opencode"},
+				},
+			},
+		}
+		r := Check(context.Background(), cfg)
+
+		expectedName := fallbackCheckName("nori")
+		res := result(t, r, expectedName)
+		if res.OK {
+			t.Errorf("%s: OK=true, want false (opencode missing on PATH)", expectedName)
+		}
+		if res.Critical {
+			t.Errorf("%s: Critical=true, want false (warning only)", expectedName)
+		}
+		if !strings.Contains(res.Detail, "opencode") {
+			t.Errorf("%s Detail=%q, want it to contain %q", expectedName, res.Detail, "opencode")
+		}
+		for _, res := range r.Results {
+			if res.Name == checkFallback {
+				t.Errorf("unexpected global %s result when defaults chain is empty: %+v", checkFallback, res)
+			}
+		}
+	})
+}
+
+func TestCheckCodexOnlyWorkers(t *testing.T) {
+	dir := pathWith(t, "tmux", "git", "gh")
+	fakeBin(t, dir, "codex", `case "$1" in --help) echo --approve-for-me;; --version) echo 'codex-cli 0.153.2';; esac`)
+	t.Setenv("LOLA_HOME", t.TempDir())
+	cfg := &config.Config{Defaults: config.Defaults{GlobalCap: 1, Agent: "codex"}}
+	r := Check(context.Background(), cfg)
+	if !r.OK() {
+		t.Fatalf("Codex-only installation should be healthy: %+v", r)
+	}
+	if res := result(t, r, "codex"); !res.OK || !res.Critical || !strings.Contains(res.Detail, "0.153.2") {
+		t.Fatalf("Codex result: %+v", res)
+	}
+	for _, res := range r.Results {
+		if res.Name == checkClaude {
+			t.Fatal("Codex-only workers must not require Claude")
+		}
+	}
+	if got := RuntimeResults(r); len(got) != 3 || got[2].Name != "codex" {
+		t.Fatalf("runtime checks: %+v", got)
+	}
+}
+
+func TestConfiguredAgentOverridesAndHelpers(t *testing.T) {
+	dir := pathWith(t, "codex")
+	fakeBin(t, dir, "codex", `echo --approve-for-me`)
+	cfg := &config.Config{
+		Defaults:        config.Defaults{Agent: "codex"},
+		Projects:        []config.Project{{Name: "a", Agent: "opencode"}, {Name: "b", Agent: "codex"}},
+		Brain:           config.BrainConfig{Enabled: true},
+		StatusAgent:     config.StatusAgentConfig{Enabled: true},
+		ReviewProviders: []config.ReviewProvider{{Provider: "claude-session", Enabled: true}, {Provider: "codex-session", Enabled: true}},
+	}
+	r := Report{Results: agentResults(context.Background(), cfg)}
+	if len(r.Results) != 2 || result(t, r, "opencode").OK || !result(t, r, "opencode").Critical {
+		t.Fatalf("overrides must be checked once: %+v", r)
+	}
+	r.Results = helperResults(cfg)
+	for _, name := range []string{"brain agent", "status agent", "review agent (claude-session)"} {
+		if res := result(t, r, name); res.OK || res.Critical || !strings.Contains(res.Detail, "claude") {
+			t.Errorf("missing Claude helper must warn: %+v", res)
+		}
+	}
+	if !result(t, r, "review agent (codex-session)").OK || !r.OK() {
+		t.Fatalf("optional helpers must not block worker dispatch: %+v", r)
+	}
+}
+
+func TestCodexAutoApprovalCapability(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		ok         bool
+	}{
+		{"supported", "echo --approve-for-me", true},
+		{"old", "echo --full-auto", false},
+		{"failed", "exit 1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := pathWith(t)
+			fakeBin(t, dir, "codex", tc.body)
+			r := agentResults(context.Background(), &config.Config{Defaults: config.Defaults{Agent: "codex"}})[0]
+			if r.OK != tc.ok || !r.Critical {
+				t.Fatalf("capability gate: %+v", r)
+			}
+			if tc.name == "old" && !strings.Contains(r.Detail, "upgrade Codex CLI") {
+				t.Fatalf("missing upgrade instruction: %+v", r)
+			}
+		})
+	}
+}

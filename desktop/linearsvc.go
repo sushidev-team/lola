@@ -41,6 +41,27 @@ type LinearTeam struct {
 	Name string `json:"name"`
 }
 
+// LinearIssueBrief is the source task context shown in a session's overview.
+type LinearIssueBrief struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+// IssueBrief reads the task itself, independently of the agent's progress report.
+func (s *LinearService) IssueBrief(identifier string) (LinearIssueBrief, error) {
+	c, err := linearClient()
+	if err != nil {
+		return LinearIssueBrief{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	issue, err := c.IssueDetail(ctx, identifier)
+	if err != nil {
+		return LinearIssueBrief{}, err
+	}
+	return LinearIssueBrief{Title: issue.Title, Description: issue.Description}, nil
+}
+
 type LinearTeamMeta struct {
 	Projects      []LinearOption `json:"projects"`
 	Cycles        []LinearOption `json:"cycles"`
@@ -131,7 +152,7 @@ func (s *LinearService) TeamMeta(teamID string, refresh bool) (LinearTeamMeta, e
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// The five picker queries are independent, so fan them out on the shared ctx
+	// The six picker queries are independent, so fan them out on the shared ctx
 	// rather than paying five round-trips in series. errgroup cancels the ctx on
 	// the first failure and returns that error; each result lands in its own
 	// variable, so no lock is needed. Assembly stays sequential below.
@@ -141,6 +162,7 @@ func (s *LinearService) TeamMeta(teamID string, refresh bool) (LinearTeamMeta, e
 		cycles   []linear.Cycle
 		states   []linear.State
 		labels   []linear.Label
+		wsLabels []linear.Label
 		members  []linear.User
 	)
 	g, gctx := errgroup.WithContext(ctx)
@@ -148,6 +170,11 @@ func (s *LinearService) TeamMeta(teamID string, refresh bool) (LinearTeamMeta, e
 	g.Go(func() (err error) { active, cycles, err = c.Cycles(gctx, teamID); return })
 	g.Go(func() (err error) { states, err = c.States(gctx, teamID); return })
 	g.Go(func() (err error) { labels, err = c.Labels(gctx, teamID); return })
+	// Workspace labels are valid on every team's issues, so a project may
+	// legitimately filter on one — and the label picker marks any selected id it
+	// cannot list as "no longer in Linear". Offering only the team's own labels
+	// made every workspace label read as dead.
+	g.Go(func() (err error) { wsLabels, err = c.WorkspaceLabels(gctx); return })
 	g.Go(func() (err error) { members, err = c.Members(gctx, teamID); return })
 	if err := g.Wait(); err != nil {
 		return LinearTeamMeta{}, err
@@ -166,8 +193,15 @@ func (s *LinearService) TeamMeta(teamID string, refresh bool) (LinearTeamMeta, e
 	for _, st := range states {
 		meta.States = append(meta.States, LinearOption{ID: st.ID, Label: st.Name})
 	}
+	seenLabel := map[string]bool{}
 	for _, l := range labels {
+		seenLabel[l.ID] = true
 		meta.Labels = append(meta.Labels, LinearOption{ID: l.ID, Label: labelDisplay(l)})
+	}
+	for _, l := range wsLabels {
+		if !seenLabel[l.ID] {
+			meta.Labels = append(meta.Labels, LinearOption{ID: l.ID, Label: labelDisplay(l) + " · workspace"})
+		}
 	}
 	for _, u := range members {
 		if !u.Active {

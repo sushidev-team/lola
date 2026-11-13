@@ -10,13 +10,19 @@ import (
 	"net"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/notify"
+	"github.com/sushidev-team/lola/internal/portlease"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
+	"github.com/sushidev-team/lola/internal/timefmt"
 )
 
 // serve runs the accept loop until the listener is closed at shutdown.
@@ -66,6 +72,16 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 
 func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Response {
 	switch req.Cmd {
+	case "comparisonTemplate", "comparisonPrepare", "comparisonReport":
+		return d.handleComparison(req)
+	case "goalPropose", "goalProposal", "goalProposals", "goalAcceptPlan", "goalEditPlan":
+		return d.handleGoalPlan(ctx, req)
+	case "reviewProfiles", "profileResults", "profileReview", "profileFindings", "profileDecideFinding", "profileCalibration":
+		return d.handleProfile(ctx, req)
+	case "knowledgeVersion", "knowledgeList", "knowledgeLookup", "knowledgeExport", "knowledgeCapture", "knowledgeCorrect", "knowledgeAccept", "knowledgeDispute", "knowledgeMaintain", "knowledgeImprovementCatalog", "knowledgeImprovementSources", "knowledgeImprovementDecisions", "knowledgeImprovementHistory", "knowledgeImprovements", "knowledgeImprovement", "knowledgeDecideImprovement", "knowledgeExportImprovement":
+		return d.handleKnowledge(ctx, req)
+	case "goalRecovery", "goalDismissProgress", "goalSyncBrief", "goalAcceptBrief", "goalOverview", "goals", "goalCreate", "goalShow", "goalUsage", "goalPublish", "goalPublishReviewed", "goalStartOptions", "goalStart", protocol.GoalStartV2, "goalControl", "goalDeliveryEvidence":
+		return d.handleGoals(ctx, req)
 	case "stop":
 		d.logf("", "stop requested via socket")
 		return protocol.Response{OK: true}
@@ -75,6 +91,18 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(d.sessionsData())
 	case "projects":
 		return dataResponse(d.projectsData(ctx))
+	case "prReadiness", "addressPRFeedback", "mergePR":
+		return d.handlePRReadiness(ctx, req)
+	case protocol.CmdReviewDiff:
+		return d.handleReviewDiff(ctx, req)
+	case protocol.CmdReviewCapture:
+		return d.handleReviewCapture(ctx, req)
+	case protocol.CmdReviewFeedback:
+		return d.handleReviewPackageFeedback(ctx, req)
+	case protocol.CmdReviewVerify, protocol.CmdReviewChecks, protocol.CmdReviewRecover:
+		return d.handleReviewVerification(ctx, req)
+	case protocol.CmdReviewPublish, protocol.CmdReviewComplete, protocol.CmdReviewPackages, protocol.CmdReviewImage, protocol.CmdReviewMark:
+		return d.handleReviewPackage(req)
 	case "prs":
 		data, err := d.handlePrs(ctx, req.Args)
 		if err != nil {
@@ -109,10 +137,88 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "pairBegin":
+		// The reply CONTAINS a bearer key, so nothing on this path logs the
+		// request or the response — handleConn does not, and neither does this.
+		// internal/remote denies the command for every remote peer
+		// unconditionally, so adding the case here reaches the unix socket only.
+		data, err := d.handlePairBegin(ctx)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "regenerateRemoteKey":
+		// Rolls M1's shared bearer key and rebuilds the listener, which is the
+		// only revocation this milestone has. Denied for every remote peer in
+		// internal/remote, so like pairBegin it reaches the unix socket only: a
+		// phone able to roll the key could lock its operator out while keeping
+		// the connection it already holds.
+		if err := d.handleRegenerateRemoteKey(ctx); err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return protocol.Response{OK: true}
+	case "panes":
+		// Reachable remotely BY DESIGN: a phone that cannot enumerate panes
+		// cannot draw a tab strip. Read-only.
+		data, err := d.handlePanes(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "shellCreate":
+		// Also reachable remotely by design, and the most privileged thing on
+		// that surface: a shell in a worktree runs as the developer, with their
+		// gh token and SSH agent in reach. The operator decided phones get shell
+		// access (mobile/PLAN.md); M1 has no capability tiers, so every paired
+		// device has this. It is the first command that should sit behind the
+		// `shell` capability when M2 brings per-device identities.
+		data, err := d.handleShellCreate(ctx, req.Session, req.Cols, req.Rows)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "paneClose":
+		// Closes ONE auxiliary pane. The agent pane is refused by the handler:
+		// it IS the session, and a close on it would be a kill in disguise.
+		var a protocol.PaneCloseArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "paneClose: bad args: " + err.Error()}
+		}
+		data, err := d.handlePaneClose(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "paneResize":
+		// Pins a pane's window to a phone's size while a phone is looking at it,
+		// and releases it after. The deliberate opposite of panebus's
+		// ignore-size attach — see protocol.PaneResizeArgs for why both are right.
+		var a protocol.PaneResizeArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "paneResize: bad args: " + err.Error()}
+		}
+		data, err := d.handlePaneResize(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "hookEvent":
 		return d.handleHookEvent(req)
+	case "sessionTask":
+		return d.handleSessionTask(ctx, req, "user")
+	case "agentReport":
+		return d.handleAgentReport(req)
+	case protocol.CmdSSHAgentHosts, protocol.CmdSSHAgentRequest, protocol.CmdSSHAgentRun, protocol.CmdSSHAgentPoll, protocol.CmdSSHAgentCancel, protocol.CmdSSHAgentPost,
+		protocol.CmdSSHHosts, protocol.CmdSSHOpen, protocol.CmdSSHConnect, protocol.CmdSSHHumanRun, protocol.CmdSSHShareBlock, protocol.CmdSSHTerminalCd, protocol.CmdSSHGo, protocol.CmdSSHDeny, protocol.CmdSSHApprove, protocol.CmdSSHRevokeGrant,
+		protocol.CmdSSHTakeWheel, protocol.CmdSSHHandbackPreview, protocol.CmdSSHHandback, protocol.CmdSSHStop, protocol.CmdSSHClose, protocol.CmdSSHTrash,
+		protocol.CmdSSHTerminal, protocol.CmdSSHTimeline, protocol.CmdSSHOutput, protocol.CmdSSHSay, protocol.CmdSSHAnswer, protocol.CmdSSHProposal,
+		protocol.CmdSSHRecall, protocol.CmdSSHResolve, protocol.CmdSSHWidgetStatus, protocol.CmdSSHPromptAnswer:
+		return d.handleSSH(ctx, req)
+	case protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdAgentSay, protocol.CmdAgentStop,
+		protocol.CmdAgentChoose, protocol.CmdAgentSetting, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions:
+		return d.handleTalk(ctx, req)
 	case "kill":
-		data, err := d.handleKill(ctx, req.Session, req.Force)
+		data, err := d.handleKill(ctx, req.Session, req.Force, req.KeepWorktree)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
@@ -129,10 +235,25 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
-	case "openManual":
+	case "closeExitedTemporary":
+		data, err := d.handleCloseExitedTemporary(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "renameSession":
+		err := d.handleRenameSession(req.Session, req.Text)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return protocol.Response{OK: true}
+	case "openManual", "openExisting":
 		var a protocol.OpenManualArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {
 			return protocol.Response{OK: false, Error: "openManual: bad args: " + err.Error()}
+		}
+		if req.Cmd == "openExisting" {
+			a.Existing = true
 		}
 		data, err := d.handleOpenManual(ctx, a)
 		if err != nil {
@@ -169,6 +290,56 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "plan":
+		var a protocol.PlanArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "plan: bad args: " + err.Error()}
+		}
+		data, err := d.handlePlan(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "bestOf":
+		var a protocol.BestOfArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "bestOf: bad args: " + err.Error()}
+		}
+		data, err := d.handleBestOf(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "bestOfCompare":
+		var a protocol.BestOfCompareArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "bestOfCompare: bad args: " + err.Error()}
+		}
+		data, err := d.handleBestOfCompare(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "bestOfPick":
+		var a protocol.BestOfPickArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "bestOfPick: bad args: " + err.Error()}
+		}
+		data, err := d.handleBestOfPick(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "planApply":
+		var a protocol.PlanApplyArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "planApply: bad args: " + err.Error()}
+		}
+		data, err := d.handlePlanApply(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "openURL":
 		var a protocol.OpenURLArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {
@@ -201,6 +372,95 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "resolveConflict":
+		data, err := d.handleResolveConflict(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "diff":
+		data, err := d.handleDiff(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "feedback":
+		var a protocol.FeedbackArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "feedback: bad args: " + err.Error()}
+		}
+		data, err := d.handleFeedback(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "broadcast":
+		var a protocol.BroadcastArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "broadcast: bad args: " + err.Error()}
+		}
+		data, err := d.handleBroadcast(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "checkpoints":
+		data, err := d.handleCheckpoints(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "checkpointDiff", "restoreCheckpoint", "forkCheckpoint":
+		var a protocol.CheckpointArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		var (
+			data any
+			err  error
+		)
+		switch req.Cmd {
+		case "checkpointDiff":
+			data, err = d.handleCheckpointDiff(ctx, a)
+		case "restoreCheckpoint":
+			data, err = d.handleRestoreCheckpoint(ctx, a)
+		default:
+			data, err = d.handleForkCheckpoint(ctx, a)
+		}
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "switchAgent":
+		var a protocol.SwitchAgentArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "switchAgent: bad args: " + err.Error()}
+		}
+		data, err := d.handleSwitchAgent(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "dev":
+		var a protocol.DevArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "dev: bad args: " + err.Error()}
+		}
+		data, err := d.handleDev(ctx, a.Session, a.On)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "devFreePort":
+		var a protocol.DevFreePortArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "devFreePort: bad args: " + err.Error()}
+		}
+		data, err := d.handleDevFreePort(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	default:
 		return protocol.Response{OK: false, Error: fmt.Sprintf("unknown cmd %q", req.Cmd)}
 	}
@@ -211,7 +471,11 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 //
 //	stop         → status "idle"           turn done; the observer's PR check
 //	                                       may promote it later (ci_*, …)
-//	notification → status "needs_input"    permission prompt / waiting on a human
+//	notification → SPLIT on the reason     a permission prompt parks the agent
+//	                                       on waiting_input; the idle "waiting
+//	                                       for your input" nudge means the turn
+//	                                       ENDED unread, so it parks on idle +
+//	                                       the Nudged breadcrumb (see below)
 //	session_end  → status "session_ended"  the claude process terminated
 //	tool_use     → LastSeen touch only     liveness heartbeat; no status change
 //	                                       unless currently "idle", which a new
@@ -220,10 +484,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 //	                                       including a human attach nudge), when
 //	                                       currently idle / needs_input
 //
-// AtPrompt (PLAN P3 send-keys safety gate) is maintained alongside status: only
-// "stop" sets it (the agent is idle at its input prompt and safe to send-keys
-// into); every other event — a new tool_use, a notification the human must
-// answer, session end, or a user_prompt that STARTS a turn — CLEARS it, so the
+// AtPrompt (PLAN P3 send-keys safety gate) is maintained alongside status. Two
+// events SET it, and both assert the same fact — the agent is resting at its own
+// composer: "stop" (the turn just ended) and a notification classified as the
+// idle nudge (the turn ended ~60s ago and nobody looked). Every other event — a
+// new tool_use, a notification the human must actually answer, session end, or a
+// user_prompt that STARTS a turn — CLEARS it, so the
 // reaction engine never types into a busy or human-blocked pane. user_prompt is
 // the turn-START clear: without it a human-initiated attach turn whose reply is
 // text-only (no PostToolUse) would leave AtPrompt stale-true for the whole turn
@@ -243,8 +509,17 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		unknownEvent  bool
 		statusChanged bool
 		newStatus     string
+		released      bool // a human prompt ended a Stop's hold on the queue
+		exited        bool // this hook is what told us the agent exited
+		// parkedOnPermission is a notification hook that just parked this session.
+		parkedOnPermission bool
+		// ownPrompt says this user_prompt is for something lola typed.
+		ownPrompt bool
 	)
 	now := time.Now()
+	if req.Event == "user_prompt" {
+		ownPrompt = d.talk.takeOwnPrompt(req.Session, now)
+	}
 	// The structured payload is optional: a pre-payload `lola hook` binary in a
 	// long-lived pane sends none, and every consumer below treats the zero
 	// value as "unknown". Message/Prompt are rendered agent/user text —
@@ -262,22 +537,63 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		if payload.TranscriptPath != "" {
 			sess.TranscriptPath = payload.TranscriptPath
 		}
+		appendSegment(sess, payload.AgentSessionID)
 		switch req.Event {
 		case "stop":
 			sess.SetAgentState(state.AgentIdle, "", now)
 			sess.AtPrompt = true // idle at the prompt: safe to send-keys into
 			sess.AtPromptVerified = true
 		case "notification":
-			sess.SetAgentState(state.AgentWaitingInput, "", now)
-			// The message finally says WHY: a permission prompt reads
-			// differently from an idle "waiting for your input" nudge.
-			sess.InputReason = state.ClassifyNotification(payload.Message, payload.Reason)
+			// The message finally says WHY, and the two reasons are OPPOSITE
+			// facts about the agent — so they must not land on the same axis
+			// value. A permission prompt is a real block: the turn cannot
+			// continue until a human approves it. The idle nudge is claude-code
+			// nagging that a FINISHED turn has gone unread for ~60s; the agent
+			// is sitting at its own composer with nothing to ask.
+			//
+			// Treating both as waiting_input is what made needs_input useless.
+			// In a measured 20MB daemon.log, 412 of 458 needs_input transitions
+			// (90%) were minted by this one nudge and only 45 were permission
+			// prompts — and because nothing demotes waiting_input except a NEW
+			// turn (user_prompt / an ActivityWorking pane), a session that
+			// merely finished its work and was not looked at stayed "Needs You"
+			// forever. Worse, the nudge fires on a 60s period against a 30s
+			// observer, so needs_input and the delivery word took turns owning
+			// the rollup: 264 needs_input↔review_pending flips, ~52% of all
+			// state churn, median dwell exactly 60s.
+			//
+			// So the nudge parks the axis on IDLE and leaves a display-only
+			// breadcrumb (Session.Nudged) for a UI that wants to say "idle, and
+			// it has been asking for you". AtPrompt is OPENED, not closed: the
+			// nudge is positive evidence the agent is parked at its own prompt,
+			// which is exactly what "stop" asserts a minute earlier — and the
+			// gate had been closed here purely because the axis said
+			// waiting_input. Every send-keys path still re-proves it against a
+			// live pane before typing a byte.
+			reason := state.ClassifyNotification(payload.Message, payload.Reason)
+			if reason == state.InputIdleNotify {
+				sess.SetAgentState(state.AgentIdle, "", now)
+				sess.Nudged = true
+				sess.AtPrompt = true // parked at its own composer: safe to send-keys
+				sess.AtPromptVerified = true
+			} else {
+				sess.SetAgentState(state.AgentWaitingInput, "", now)
+				sess.InputReason = reason
+				sess.AtPrompt = false // blocked on a human's approval: never send-keys
+				sess.AtPromptVerified = true
+				parkedOnPermission = reason == state.InputPermission
+			}
+			// Recorded for DISPLAY in both branches, and only AFTER the axis
+			// move: SetAgentState clears LastNotification whenever it leaves
+			// waiting_input, which the idle branch above always does.
 			if payload.Message != "" {
 				sess.LastNotification = payload.Message
 			}
-			sess.AtPrompt = false // waiting on a human: never send-keys
-			sess.AtPromptVerified = true
+		case "permission_request":
+			// No axis write: this hook is async and can land after the answer. The
+			// bounded pane read below decides, from the pane itself.
 		case "session_end":
+			exited = sess.AgentState != state.AgentExited && sess.AgentState != state.AgentDead
 			sess.SetAgentState(state.AgentExited, "", now)
 			sess.AtPrompt = false
 			sess.AtPromptVerified = true
@@ -310,6 +626,12 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			case state.AgentIdle, state.AgentWaitingInput, state.AgentStarting:
 				sess.SetAgentState(state.AgentWorking, state.SourceHook, now)
 			}
+			// Only a person's prompt is them speaking again. This hook fires for what lola
+			// typed too, and a CI reaction must not release words they held back.
+			if sess.QueueHeld && !ownPrompt {
+				sess.QueueHeld = false
+				released = true
+			}
 		default:
 			unknownEvent = true
 			return false
@@ -333,7 +655,95 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			d.logf("", "hookEvent: persist sessions: %v", err)
 		}
 	}
+	d.bumpHook(req.Session, req.Event)
+	switch req.Event {
+	case "user_prompt":
+		d.talk.noteTurnStart(req.Session, now)
+		if released {
+			// The human typed in the terminal, which is speaking again.
+			if store, err := d.sshStore(req.Session, false); err == nil && store != nil {
+				d.sshSyncPending(req.Session, store)
+			}
+		}
+	case "permission_request":
+		d.talkReadAsync(req.Session)
+	case "notification":
+		// This hook can land seconds after the dialog, answered or not, and it just parked the
+		// session. The pane decides whether that still stands.
+		if parkedOnPermission {
+			d.talkReadAsync(req.Session)
+		}
+	case "session_end":
+		if exited {
+			if s, ok := d.sessions.Get(req.Session); ok {
+				d.noteAgentExited(s)
+			}
+		}
+	}
+	if req.Event == "stop" {
+		d.flushHandoffsOnStop(req.Session)
+		d.captureLearningsAsync(req.Session)
+		d.captureProfileDisputesAsync(req.Session)
+	}
+	// Turn checkpoints (checkpoints.go): the state every turn ENDED in, plus a
+	// baseline the first time a turn STARTS so turn 1 can be undone too. Async —
+	// a snapshot hashes files and must never hold up the agent's hook.
+	if req.Event == "stop" || req.Event == "user_prompt" {
+		d.recordCheckpointAsync(req.Session, req.Event)
+	}
 	return ok
+}
+
+// segmentRe is a transcript's base name. Nothing else is ever kept: internal/agentfeed never
+// opens a path a hook handed over, and hookEvent is on the sandbox bridge.
+var segmentRe = regexp.MustCompile(`^[0-9a-f-]{36}\.jsonl$`)
+
+// maxSegments is the cap on Session.TranscriptSegments.
+const maxSegments = 32
+
+// appendSegment notes the transcript file this hook's conversation id names, once.
+func appendSegment(sess *session.Session, agentSession string) {
+	name := agentSession + ".jsonl"
+	if !segmentRe.MatchString(name) || slices.Contains(sess.TranscriptSegments, name) {
+		return
+	}
+	sess.TranscriptSegments = append(sess.TranscriptSegments, name)
+	if over := len(sess.TranscriptSegments) - maxSegments; over > 0 {
+		sess.TranscriptSegments = slices.Delete(sess.TranscriptSegments, 0, over)
+	}
+}
+
+// flushHandoffsOnStop delivers a deferred review hand-off the moment the worker
+// goes idle, instead of waiting for the next observer cycle. The Stop hook is
+// the ONLY event that opens the AtPrompt gate, so this is the earliest — and
+// most reliable — delivery point: findings deferred at PR-open (where the worker
+// is essentially always mid-turn) used to have to survive up to 30s of cadence
+// before a flush looked, and Claude Code's idle notification routinely closed
+// the gate first.
+//
+// It runs ASYNC on a shutdown-shielded context, because a hook sits on the
+// agent's critical path (bounded 2s, always exits 0) and the flush execs
+// send-keys. Registering with the conn drain group means graceful shutdown waits
+// for an in-flight hand-off rather than SIGKILLing it mid-send; a daemon already
+// draining simply skips (the stash survives for the next cycle).
+func (d *Daemon) flushHandoffsOnStop(id string) {
+	if s, ok := d.sessions.Get(id); ok && s.GoalManaged() {
+		return
+	}
+	if id == "" || !d.beginConnWork() {
+		return
+	}
+	go func() {
+		defer d.connWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				d.logf("", "hookEvent: hand-off flush panicked for %s: %v", id, r)
+			}
+		}()
+		// Background, not the request context: the connection's context dies with
+		// the hook reply, which lands long before a send-keys can finish.
+		d.flushReviewHandoffs(context.Background(), id)
+	}()
 }
 
 // warnUnknownHookSession logs an unknown hookEvent session once per ID: hooks
@@ -366,22 +776,40 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 	d.mu.Lock()
 	ciBudget := d.cfg.Reactions.CIFailed.Retries
 	minConfidence := d.cfg.StatusAgent.MinConfidence
+	// dev_commands per project, so a client knows whether the Active toggle
+	// applies at all (and what each "<id>-dev-N" tab runs) without a second
+	// round trip into config.
+	devCommands := map[string][]string{}
+	devParallel := map[string]bool{}
+	for _, p := range d.cfg.Projects {
+		if _, _, _, ok := p.PortLease(); ok {
+			devParallel[p.Name] = true
+		}
+		if len(p.DevCommands) > 0 {
+			devCommands[p.Name] = slices.Clone(p.DevCommands)
+		}
+	}
+	cfg := d.cfg
 	d.mu.Unlock()
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
 	for _, s := range snap {
 		si := protocol.SessionInfo{
+			GoalID: s.GoalID, TaskID: s.TaskID, AttemptID: s.AttemptID,
 			ID:        s.ID,
 			Project:   s.Project,
 			Issue:     s.Issue,
-			Title:     s.Title,
+			Title:     s.DisplayTitle(),
+			Location:  s.Location,
 			Branch:    s.Branch,
+			Agent:     agent.Parse(s.Agent).String(), // "" (legacy) reads as claude
 			Status:    s.Status,
 			TmuxName:  s.TmuxName,
 			Source:    s.Source,
-			Age:       formatAge(now.Sub(s.FirstSeen)),
+			Age:       timefmt.Short(s.FirstSeen, now),
+			FirstSeen: s.FirstSeen,
 			CIRetries: s.CIRetries,
 			Escalated: s.Escalated,
-			Reacting:  reactingLabel(s.Status, s.CIRetries, s.Escalated, ciBudget),
+			Reacting:  reactingLabel(s.Delivery, s.CIRetries, s.Escalated, ciBudget),
 
 			AgentState:       string(s.AgentState),
 			Delivery:         string(s.Delivery),
@@ -395,12 +823,40 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			InputReason:      string(s.InputReason),
 			CurrentTool:      s.CurrentTool,
 			LastNotification: s.LastNotification,
+
+			DevActive:   s.DevActive,
+			DevCommands: devCommands[s.Project],
+			DevParallel: devParallel[s.Project],
+			Ports:       leasedPorts(d.ports, s.ID),
+			DevURLs:     s.DevURLs,
+			DevForwards: devForwardInfos(s.DevForwards),
+
+			FeedbackPending: s.PendingFeedback != "",
+			Usage:           d.sessionUsage(s.ID),
+		}
+
+		if s.Kind == session.KindLocal {
+			si.DevCommands = nil
+		}
+		if c := s.DevClash; c != nil {
+			si.DevClash = &protocol.DevClashInfo{
+				Tab:     c.Tab,
+				Command: c.Command,
+				Port:    c.Port,
+				PID:     c.PID,
+				Proc:    c.Proc,
+				Dir:     c.Dir,
+				Ours:    c.Ours,
+			}
 		}
 		if s.Source == "native" {
 			// Native sessions live in worktrees the daemon created at
 			// <home>/worktrees/<project>/<id> (see newNativeRuntime); the
 			// store record carries no path, so derive it for the TUI.
 			si.Worktree = filepath.Join(d.home, "worktrees", s.Project, s.ID)
+			if s.Location == runtime.LocationSSH {
+				si.Worktree = s.Worktree // a direct ssh session's scratch folder
+			}
 		}
 		if s.PR != nil {
 			si.PRURL = s.PR.URL
@@ -408,13 +864,45 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.Checks = s.PR.ChecksState
 			si.Review = s.PR.ReviewDecision
 		}
+		si.Sandbox = s.Sandbox
+		si.SSH = d.sshGlance(s.ID)
+		if s.Stack {
+			si.Stack = true
+			si.Apps = d.appsInfo(cfg, s)
+			si.FocusApp = s.FocusApp()
+			// The CI retry streak is per app; the row shows the focus app's.
+			if i := s.AppIndex(si.FocusApp); i >= 0 {
+				a := s.Apps[i]
+				si.CIRetries, si.Escalated = a.CIRetries, a.Escalated
+				si.Reacting = reactingLabel(s.Delivery, a.CIRetries, a.Escalated, ciBudget)
+			}
+			// The dev toggle runs each app's own dev_commands (apps.go devPlan).
+			plan, parallel, _ := devPlan(cfg, s, si.Worktree)
+			si.DevCommands, si.DevParallel = devLabels(plan), parallel
+		}
 		// [statusagent] display overlay, pre-gated here (the ONE consumer of
 		// the overlay fields): clients render what arrives or nothing.
 		if istate, headline, waitingOn, at := displayOverlay(s, minConfidence, now); headline != "" || istate != "" {
 			si.InterpretedState = istate
 			si.Headline = headline
 			si.WaitingOn = waitingOn
-			si.HeadlineAgo = formatAge(now.Sub(at))
+			si.HeadlineAgo = formatAgo(now.Sub(at))
+			si.HeadlineAt = at
+		}
+		// The agent's own report — display-only, like the overlay above.
+		si.Board = boardInfo(s.Board, auditClaims(s), now)
+		si.Tasks = s.Tasks
+		for _, o := range s.Overlaps {
+			si.Overlaps = append(si.Overlaps, protocol.SessionOverlap{
+				Session: o.Session, Issue: o.Issue, Files: slices.Clone(o.Files), More: o.More,
+			})
+		}
+		if s.MergeQueuePos > 0 {
+			si.MergeQueue = &protocol.MergeQueueInfo{Position: s.MergeQueuePos, Step: s.MergeQueueStep}
+		}
+		si.Model = s.Model
+		if s.BestOf != "" {
+			si.BestOf = &protocol.BestOfInfo{Group: s.BestOf, Attempt: s.Attempt, Of: s.Attempts, Winner: s.BestOfWinner}
 		}
 		out.Sessions = append(out.Sessions, si)
 	}
@@ -423,48 +911,55 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 }
 
 // reactingLabel summarizes the reaction engine's current posture for a session
-// into a short human label for the TUI, derived purely from the persisted
-// reaction state (status + CIRetries + Escalated) plus the configured ci_failed
+// into a short human label, derived purely from the persisted reaction state
+// (the DELIVERY axis + CIRetries + Escalated) plus the configured ci_failed
 // retry budget (the "N/M" denominator). "" means there is no reaction posture
-// worth surfacing beyond the STATUS column; the label never re-states the raw
-// status verbatim. Escalated wins over everything: it is set only while CI is
-// still failing and the session has been handed to a human.
-func reactingLabel(status string, ciRetries int, escalated bool, ciBudget int) string {
+// worth surfacing beyond the status pill; the label never re-states the pill
+// verbatim. Escalated wins over everything: it is set only while CI is still
+// failing and the session has been handed to a human.
+//
+// It reads the SAME axis the engine dispatches on (see react), and it has to:
+// derived from the rolled-up status it went silent for exactly the sessions
+// that most needed it explained, because a live agent waiting on a human
+// outranks every PR state in Rollup — so a session mid ci-retry showed "ci
+// retry 1/2" only while its agent happened not to be at a prompt.
+func reactingLabel(d state.DeliveryState, ciRetries int, escalated bool, ciBudget int) string {
 	switch {
 	case escalated:
 		return "escalated"
-	case status == "ci_failed":
+	case d == state.DeliveryCIFailed:
 		return fmt.Sprintf("ci retry %d/%d", ciRetries, ciBudget)
-	case status == "ci_pending" && ciRetries > 0:
+	case d == state.DeliveryCIPending && ciRetries > 0:
 		// A recovery prompt is in flight and CI is re-running.
 		return fmt.Sprintf("ci retry %d/%d", ciRetries, ciBudget)
-	case status == "changes_requested":
+	case d == state.DeliveryChangesRequested:
 		return "addressing review"
-	case status == "merge_conflict":
+	case d == state.DeliveryMergeConflict:
 		return "rebasing"
-	case status == "approved":
+	case d == state.DeliveryApproved:
 		return "ready to merge"
-	case status == "review_pending":
+	case d == state.DeliveryReviewPending:
 		return "awaiting review"
 	}
 	return ""
 }
 
-// formatAge renders a duration TUI-compactly: "42s", "12m", "3h05m", "2d14h".
-func formatAge(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
+// formatAgo is the "how long ago" of a POINT in time, as concise as the age
+// allows: "<1m", "5m", "3h", "2d" — one unit, never the remainder. Callers
+// append "ago". A minute count inside an hours-old stamp ("10h51m") is
+// precision nobody reads.
+// Kept for legacy wire fields whose consumers append "ago". New consumers
+// should use the raw timestamp with timefmt or the frontend TimeAgo component.
+func formatAgo(d time.Duration) string {
 	switch {
 	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
+		return "<1m"
 	case d < time.Hour:
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+		return fmt.Sprintf("%dh", int(d.Hours()))
 	default:
-		days := int(d.Hours()) / 24
-		return fmt.Sprintf("%dd%dh", days, int(d.Hours())%24)
+		return fmt.Sprintf("%dd", int(d.Hours())/24)
 	}
 }
 
@@ -515,6 +1010,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// nil (that provider off). Under d.mu, like the brain.
 	d.setReviewProvidersLocked(nc)
 	if d.realNative && (!reflect.DeepEqual(old.Projects, nc.Projects) ||
+		!reflect.DeepEqual(old.Sandbox, nc.Sandbox) ||
 		old.TmuxSocketName() != nc.TmuxSocketName()) {
 		// The native runtime captures both its config reference (for the project
 		// registry) AND its tmux socket at construction, so recreate it whenever
@@ -523,10 +1019,26 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		// server as d.tmuxClient's live send-keys/capture; without it a
 		// socket-only reload would leave the observer reading the OLD server while
 		// keys go to the NEW one.
-		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf)
+		nat := newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
+		nat.SessionRecorded = d.sessionRecorded
+		d.native = nat
 	}
+	// [remote] is compared exactly (config.RemoteConfig is comparable) so an
+	// unrelated reload never touches a live listener. Applied AFTER the unlock:
+	// rebinding loads the device identity and binds a socket, and doing that
+	// under the lock every tick and every socket command takes would stall the
+	// daemon for the length of a TLS listener's teardown. See reloadRemote for
+	// why a change is a full rebind rather than an in-place mutation.
+	remoteChanged := old.Remote != nc.Remote
 	d.mu.Unlock()
+	d.sshOnReload()
 
+	if remoteChanged {
+		d.reloadRemote()
+	}
+	if bctx := d.shutdownCtx; bctx != nil {
+		d.syncHookBridge(bctx)
+	}
 	d.syncWorkers(ctx)
 	d.logf("", "config reloaded")
 	return nil
@@ -597,4 +1109,12 @@ func (d *Daemon) handlePollOnce(ctx context.Context, name string, dryRun bool) (
 	mu.Lock()
 	defer mu.Unlock()
 	return d.tick(context.WithoutCancel(ctx), name, dryRun)
+}
+
+// leasedPorts is the session's port lease for the wire, nil without one.
+func leasedPorts(r *portlease.Registry, id string) []int {
+	if l, ok := r.Get(id); ok {
+		return slices.Clone(l.Ports)
+	}
+	return nil
 }

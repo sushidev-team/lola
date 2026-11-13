@@ -15,7 +15,9 @@
 package runtime
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -27,15 +29,22 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
 	"time"
+
+	"os/exec"
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/devtab"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/portlease"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/state"
+	"github.com/sushidev-team/lola/internal/taskboard"
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
@@ -75,14 +84,56 @@ const manualInfix = "open-"
 // must never report them as sessions of their own.
 var shellTabRe = regexp.MustCompile(`-shell-\d+$`)
 
+// reviewPaneRe matches the tmux session a VISIBLE review pass runs in
+// ("<sessionID>-review", see internal/daemon/reviewvisible.go). Like a shell
+// tab it belongs to a parent session — it is a window onto that session's
+// review, never a session of its own — and it deliberately OUTLIVES the pass so
+// its output stays readable, which is exactly when adoption would otherwise
+// report it as an orphan.
+var reviewPaneRe = regexp.MustCompile(`-review$`)
+
 // IsShellTabSession reports whether a tmux session name is an embedded
 // shell TAB of a parent session rather than a session of its own. The daemon
 // uses it to purge phantom records an older daemon's Adopt created.
 func IsShellTabSession(name string) bool { return shellTabRe.MatchString(name) }
 
+// IsAuxSession reports whether a tmux session name is an AUXILIARY session of
+// some parent lola session — an embedded shell tab, a review pane, a dev tab
+// (internal/devtab) or an ssh terminal (internal/sshtab) — rather than a session of its own. Adoption drops these
+// from its scan (a review pane only when its parent is live beside it, see
+// Adopt) and the daemon purges any record an older daemon persisted for one.
+func IsAuxSession(name string) bool {
+	return shellTabRe.MatchString(name) || reviewPaneRe.MatchString(name) || devtab.Is(name) || sshtab.Is(name)
+}
+
+// isSSHTab decides whether a live tmux name is an ssh terminal rather than a session
+// that merely looks like one: issue SSH-42 becomes "lola-infra-ssh-42", and dropping
+// that would orphan a running agent. A name with its own record is a session. Anything
+// else is a tab only if the session it names is live beside it or on record.
+func (n *Native) isSSHTab(name string, live map[string]bool) bool {
+	parent, ok := sshtab.Parent(name)
+	if !ok {
+		return false
+	}
+	if n.SessionRecorded != nil && n.SessionRecorded(name) {
+		return false
+	}
+	return live[parent] || (n.SessionRecorded != nil && n.SessionRecorded(parent))
+}
+
+// reviewPaneParent returns the session a review pane belongs to.
+// A stack session runs one review pane PER APP, named after the app's lane
+// ("<sessionID>~<app>-review"), so the parent is the part before the lane.
+func reviewPaneParent(name string) (string, bool) {
+	if !reviewPaneRe.MatchString(name) {
+		return "", false
+	}
+	return session.BaseID(strings.TrimSuffix(name, "-review")), true
+}
+
 // lolaDir is the runtime scratch directory inside each worktree, holding
 // prompt.md, env, and the per-agent callback artifact(s) (Claude's
-// settings.json, or Codex's codex/ home). It is excluded via the worktree's
+// settings.json). It is excluded via the worktree's
 // git info/exclude, never via the repository's .gitignore.
 const lolaDir = ".lola"
 
@@ -95,12 +146,26 @@ const openCodeDir = ".opencode"
 // Native spawns and manages Lola's own runner sessions (runtime = "native"):
 // one git worktree + one tmux session running Claude Code per Linear issue.
 type Native struct {
-	Cfg  *config.Config
-	WT   *worktree.Manager
-	Tmux *tmux.Client
+	// SessionUsed recognizes pre-reservation session history, even after cleanup.
+	SessionUsed func(id string) (bool, error)
+	// PreviousWork supplies prior outcomes for a fresh issue launch (not a resume).
+	PreviousWork func(project, issue string) string
+	// SessionRecorded reports whether the session store holds a record of this id.
+	// Adoption asks it about names shaped like an ssh tab. Nil means no record.
+	SessionRecorded func(id string) bool
+	// KnowledgeBrief supplies a bounded, recorded knowledge snapshot at launch.
+	// Nil preserves launches without a knowledge store.
+	KnowledgeBrief func(project, sessionID string, prompt []byte) []byte
+	Cfg            *config.Config
+	WT             *worktree.Manager
+	Tmux           *tmux.Client
 	// LolaBin is the absolute path to the lola binary; the generated Claude
 	// Code settings wire lifecycle hooks to `<LolaBin> hook <event>`.
 	LolaBin string
+	// ResolveLolaBin, when set, re-resolves the binary at every launch (see
+	// ResolveLolaBin in lolabin.go): LolaBin is what the daemon started from,
+	// and that file may be gone by the time a session spawns. Nil = LolaBin.
+	ResolveLolaBin func() string
 	// Home is the lola runtime directory (config.Home()), recorded for
 	// diagnostics/state paths; session state itself lives in the caller's
 	// session.Store.
@@ -123,6 +188,32 @@ type Native struct {
 	// launches. A styling failure only logs; the spawn always succeeds. nil
 	// silences these advisories (tests, or callers that don't care).
 	Logf func(format string, args ...any)
+	// Checkpoints is the turn-checkpoint store (internal/checkpoint): ForkAgent
+	// lays a checkpoint into the fork's worktree through it, and a session's
+	// refs are pruned through it when its ID gets a fresh worktree and on
+	// teardown. nil disables both (ForkAgent then refuses) — tests that never
+	// fork leave it unset so no git runs outside the WT seam.
+	Checkpoints Checkpointer
+	// Ports is the per-session port-lease registry (internal/portlease): a
+	// project with a port_range gets its block leased at launch (sessionProject)
+	// and released when its worktree is removed. nil disables leasing — the
+	// sessions then simply carry no LOLA_PORT.
+	Ports *portlease.Registry
+	// HookToken mints the sandbox hook-bridge token for a session ID
+	// (hook.TokenFor under the daemon's secret). It is written into a
+	// SANDBOXED session's 0600 env file only; nil = no token, and the bridge
+	// then rejects that session's hooks.
+	HookToken func(session string) string
+	// RemoveContainer removes a sandboxed session's container (`docker rm -f`)
+	// on teardown. nil = exec the configured docker CLI. A test seam.
+	RemoveContainer func(ctx context.Context, name string) error
+	// TrustWorkspace pre-accepts Claude Code's workspace-trust dialog for a
+	// worktree before a claude agent launches in it, and UntrustWorkspace drops
+	// that entry when the worktree is removed (internal/claudetrust; see
+	// trustAgentDir). nil disables each — tests leave them unset so no run
+	// ever touches the real ~/.claude.json.
+	TrustWorkspace   func(dir string) error
+	UntrustWorkspace func(dir string) error
 }
 
 // SessionID returns the BASE native session identifier for an issue:
@@ -161,9 +252,8 @@ func slugify(label string) string {
 	return s
 }
 
-// maxSpawnAttempts bounds the retry-suffix search in freeSessionSlot; hitting
-// it means many kept-for-inspection leftovers piled up for one issue and a
-// human should clean them up.
+// maxSpawnAttempts bounds collision probes per launch, not the lifetime number
+// of attempts for an issue. Durable reservations advance the starting point.
 const maxSpawnAttempts = 20
 
 // adoptChromeTimeout bounds Adopt's whole status-bar reconciliation pass. It is
@@ -178,37 +268,76 @@ const adoptChromeTimeout = 15 * time.Second
 // lowercased identifier can never end in "-r<digits>" itself.
 var attemptSuffixRe = regexp.MustCompile(`-r\d+$`)
 
-// freeSessionSlot returns the first (session ID, branch) pair that does not
-// collide with leftovers of earlier attempts for the same issue: attempt 1 is
-// the deterministic (baseID, baseBranch) pair, retries append "-r<n>" to
-// both. Collisions checked: the worktree dir on disk (a dead session's
-// worktree is deliberately kept for inspection, and the reconcile pass
-// re-queues its issue — without the suffix that re-queue could never spawn)
-// and the branch in the project repo (it survives a manual `git worktree
-// remove`). A live tmux pane under the base name implies a session record the
-// reconciler still counts, so it never reaches Spawn and needs no check here.
+// bestOfSuffixRe matches the best-of attempt suffix ("-b1", "-b2", …) that
+// SpawnWith puts on each sibling's base ID and branch, BEFORE any retry
+// suffix: "lola-web-eng-42-b2-r2". Like "-r<n>" it cannot end a lowercased
+// Linear identifier.
+var bestOfSuffixRe = regexp.MustCompile(`-b\d+$`)
+
+// freeSessionSlot reserves a fresh identity before creating anything. Reservations
+// survive cleanup and failed launches: reusing a branch can attach an old merged
+// PR, and reusing an ID overwrites the previous conversation.
 func (n *Native) freeSessionSlot(ctx context.Context, p config.Project, baseID, baseBranch string) (id, branch string, err error) {
-	for attempt := 1; attempt <= maxSpawnAttempts; attempt++ {
+	claims, first, err := n.attemptClaims(baseID)
+	if err != nil {
+		return "", "", err
+	}
+	for attempt := first; attempt < first+maxSpawnAttempts; attempt++ {
+		if err := os.Mkdir(filepath.Join(claims, strconv.Itoa(attempt)), 0o700); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				continue // another launch reserved it
+			}
+			return "", "", fmt.Errorf("reserve attempt: %w", err)
+		}
 		id, branch = baseID, baseBranch
 		if attempt > 1 {
 			suffix := "-r" + strconv.Itoa(attempt)
 			id, branch = baseID+suffix, baseBranch+suffix
 		}
-		if _, err := os.Stat(filepath.Join(n.WT.Root, p.Name, id)); err == nil {
-			continue // a previous attempt's worktree is still on disk
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return "", "", err
+		if n.SessionUsed != nil {
+			used, err := n.SessionUsed(id)
+			if err != nil {
+				return "", "", err
+			}
+			if used {
+				continue
+			}
 		}
-		exists, err := n.WT.BranchExists(ctx, p, branch)
+		taken, err := n.SlotTaken(ctx, p, id, branch)
 		if err != nil {
 			return "", "", err
 		}
-		if exists {
-			continue // the branch survived (e.g. a manual worktree remove)
+		if !taken {
+			return id, branch, nil
 		}
-		return id, branch, nil
 	}
-	return "", "", fmt.Errorf("no free session slot after %d attempts — clean up old %s* worktrees and branches", maxSpawnAttempts, baseID)
+	return "", "", fmt.Errorf("no free session slot after %d collision checks for %s", maxSpawnAttempts, baseID)
+}
+
+// SlotTaken reports whether (id, branch) collides with something on disk: a
+// worktree directory for id (a dead session's is kept for inspection) or a
+// local branch (it survives a manual `git worktree remove`). A session record
+// under id is the caller's to check — the runtime keeps no session store.
+func (n *Native) SlotTaken(ctx context.Context, p config.Project, id, branch string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(n.WT.Root, p.Name, id)); err == nil {
+		return true, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	if p.IsStack() {
+		return n.stackBranchTaken(ctx, p, branch)
+	}
+	return n.WT.BranchExists(ctx, p, branch)
+}
+
+// resolveKind picks the agent kind for a launch: an explicit per-spawn
+// override when it names a valid kind (the ticket/manual pickers offer the
+// choice), else the project → [defaults] → claude chain.
+func (n *Native) resolveKind(project, override string) agent.Kind {
+	if agent.Valid(override) {
+		return agent.Parse(override)
+	}
+	return agent.Parse(n.Cfg.AgentForProject(project))
 }
 
 // Spawn creates the full native session for issue in project p:
@@ -218,27 +347,61 @@ func (n *Native) freeSessionSlot(ctx context.Context, p config.Project, baseID, 
 //	running claude.
 //
 // The branch is issue.BranchName when Linear provides one, else
-// "lola/<identifier-lowercased>"; when a previous attempt's worktree or
-// branch still exists (kept for inspection), both the session ID and the
-// branch get a "-r<attempt>" suffix (see freeSessionSlot) so a re-queued
-// issue can always spawn again. On any step failure the already-created
+// "lola/<identifier-lowercased>"; later attempts append "-r<attempt>" to both
+// the session ID and branch even after previous worktrees and branches were
+// removed. Reservations outlive cleanup (see freeSessionSlot). On any step
+// failure the already-created
 // pieces are rolled back best-effort — the tmux session is killed if it came
 // up, the worktree is removed only when clean (force=false; a dirty worktree
 // is kept for inspection) — and the returned error says what was left behind.
-func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue) (session.Session, error) {
+func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue, agentOverride string) (session.Session, error) {
+	return n.SpawnWith(ctx, p, issue, SpawnOpts{Agent: agentOverride})
+}
+
+// SpawnOpts are the per-spawn choices beyond the issue itself.
+//
+//   - Agent overrides the coding agent ("" = project → [defaults] → claude).
+//   - Model pins the worker model (agent.LaunchModelArgs; "" = the agent's own
+//     default). Recorded on the session so a revive relaunches it.
+//   - Group/Attempt/Of make the spawn ONE ATTEMPT of a best-of-N group: the
+//     session ID and branch get a "-b<attempt>" suffix (so the N siblings
+//     never collide with each other or with a plain dispatch of the issue),
+//     the briefing tells the agent it is attempt k of N and to open its PR as
+//     a DRAFT, and the record carries the group. Group "" is a plain spawn.
+type SpawnOpts struct {
+	Agent   string
+	Model   string
+	Group   string
+	Attempt int
+	Of      int
+}
+
+// SpawnWith is Spawn with explicit SpawnOpts.
+func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.Issue, o SpawnOpts) (session.Session, error) {
+	started := time.Now()
+	agentOverride := o.Agent
 	if issue.Identifier == "" {
 		return session.Session{}, errors.New("runtime: spawn: issue has no identifier")
 	}
-	// Resolve which coding agent drives this session's pane: the project's
-	// override, else [defaults].agent, else "claude" (AgentForProject). Parse is
-	// total — an unknown/empty value falls back to Claude — so the launch line,
-	// the callback artifact(s), the launch env, and the recorded Session.Agent
-	// are all derived from this one Kind.
-	kind := agent.Parse(n.Cfg.AgentForProject(p.Name))
+	if p.IsStack() {
+		return n.spawnStack(ctx, p, issue, o)
+	}
+	// Resolve which coding agent drives this session's pane: the per-spawn
+	// override (the ticket picker's choice) when it names a valid kind, else
+	// the project's override, else [defaults].agent, else "claude"
+	// (resolveKind). Parse is total — an unknown/empty value falls back to
+	// Claude — so the launch line, the callback artifact(s), the launch env,
+	// and the recorded Session.Agent are all derived from this one Kind.
+	kind := n.resolveKind(p.Name, agentOverride)
 	baseID := SessionID(p.Name, issue.Identifier)
 	baseBranch := issue.BranchName
 	if baseBranch == "" {
 		baseBranch = n.Cfg.BranchPrefixForProject(p.Name) + strings.ToLower(issue.Identifier)
+	}
+	bestOf := o.Group != "" && o.Attempt > 0
+	if bestOf {
+		suffix := "-b" + strconv.Itoa(o.Attempt)
+		baseID, baseBranch = baseID+suffix, baseBranch+suffix
 	}
 	id, branch, err := n.freeSessionSlot(ctx, p, baseID, baseBranch)
 	if err != nil {
@@ -249,8 +412,19 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s: %w", id, err)
 	}
+	// A sandboxed worktree's git layout is pinned NOW, while lola alone has
+	// touched it — before post_create, the checkpoint baseline or the agent
+	// (internal/gitguard).
+	pin, pinErr := n.pinSandbox(p.Name, dir)
+	n.pruneCheckpoints(ctx, dir, id) // a fresh session starts with no history
+	// Render [[project]].env against this session BEFORE anything reads it —
+	// Prepare hands it to post_create, envFile writes it into the pane.
+	p = n.sessionProject(p, EnvVars{Session: id, Issue: issue.Identifier, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
 		return session.Session{}, n.rollback(ctx, p, id, dir, branch, step, cause)
+	}
+	if pinErr != nil {
+		return fail("pin sandbox git layout", pinErr)
 	}
 
 	if err := n.WT.Prepare(ctx, p, dir); err != nil {
@@ -271,19 +445,24 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
 		return fail("create "+lolaDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), promptMD(p, issue, branch), 0o600); err != nil {
+	ctxKey := contextKeyFor(issue.Identifier, id)
+	ctxDir := n.setupContext(dir, p.Name, ctxKey)
+	brief := n.issuePrompt(p, issue, branch)
+	if bestOf {
+		brief = withBestOfBriefing(brief, o.Attempt, o.Of)
+	}
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing(brief, ctxDir))), 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
 	// Per-agent lifecycle-callback artifact(s): claude's .lola/settings.json,
-	// codex's .lola/codex/config.toml (+ best-effort auth symlink), or
-	// opencode's .opencode/plugins/lola-hook.js. All land under .lola/ or the
+	// or opencode's .opencode/plugins/lola-hook.js. All land under .lola/ or the
 	// just-excluded .opencode/, so they share the other .lola files' rollback
 	// disposition (a clean worktree is removed wholesale, a dirty one is kept).
-	if err := n.writeAgentArtifacts(dir, kind); err != nil {
+	if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
 		return fail("write agent artifacts", err)
 	}
 	// The env file carries the Linear API key, project env, and (for codex) the
-	// per-session CODEX_HOME; it is 0600 and must be in place BEFORE the launch
+	// user CODEX_HOME; it is 0600 and must be in place BEFORE the launch
 	// sources it. Written last of the .lola files so a rollback that keeps a
 	// dirty worktree keeps it too (0600, in the kept dir — same disposition as
 	// the other .lola artifacts).
@@ -291,8 +470,21 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		return fail("write env", err)
 	}
 
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, false)); err != nil {
-		return session.Session{}, n.rollbackTmux(ctx, p, id, dir, branch, "start tmux session", err)
+	model := ""
+	if agent.ValidModel(o.Model) {
+		model = o.Model
+	}
+	n.recordBaseline(ctx, dir, id)
+	n.trustAgentDir(p.Name, id, dir, kind)
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(p.Name, id, kind, defaultLaunchPrompt(id), model, false)); err != nil {
+		// tmux may have created the session although the call failed: down it
+		// goes first, then the same rollback as every other step.
+		if n.Tmux.Has(ctx, id) {
+			if killErr := n.Tmux.KillSession(ctx, id); killErr != nil {
+				return session.Session{}, fmt.Errorf("runtime: spawn %s: start tmux session: %w (rollback failed: %v; tmux session and worktree %s kept)", id, err, killErr, dir)
+			}
+		}
+		return fail("start tmux session", err)
 	}
 
 	// Brand the agent pane's status bar (LOLA · issue · detach hint) and bind the
@@ -304,19 +496,57 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	}
 
 	return withAgentState(session.Session{
-		ID:        id,
-		Source:    "native",
-		Kind:      session.KindLinear,
-		Project:   p.Name,
-		Issue:     issue.Identifier,
-		Title:     issue.Title,
-		IssueUUID: issue.ID,
-		Branch:    branch,
-		Repo:      p.Repo,
-		Worktree:  dir,
-		TmuxName:  id,
-		Agent:     string(kind),
+		ID:         id,
+		FirstSeen:  started,
+		Source:     "native",
+		Kind:       session.KindLinear,
+		Project:    p.Name,
+		Issue:      issue.Identifier,
+		Title:      issue.Title,
+		IssueUUID:  issue.ID,
+		Branch:     branch,
+		Repo:       p.Repo,
+		Worktree:   dir,
+		TmuxName:   id,
+		Agent:      string(kind),
+		ContextKey: ctxKey,
+		Model:      model,
+		BestOf:     groupIf(bestOf, o.Group),
+		Attempt:    intIf(bestOf, o.Attempt),
+		Attempts:   intIf(bestOf, o.Of),
+		Sandbox:    n.SandboxFor(p.Name),
+		GitPin:     pin,
 	}, state.AgentStarting), nil
+}
+
+func groupIf(ok bool, g string) string {
+	if ok {
+		return g
+	}
+	return ""
+}
+
+func intIf(ok bool, v int) int {
+	if ok {
+		return v
+	}
+	return 0
+}
+
+// withBestOfBriefing appends the best-of section to a prompt.md body: the
+// agent is one of several working the same issue independently, and a human
+// compares the results and keeps ONE. The draft PR is what makes that
+// comparison possible without N PRs asking for review at once — CI and the
+// review providers still run on a draft — and the title tag keeps the
+// siblings apart on GitHub. The pick marks the kept one ready.
+func withBestOfBriefing(prompt []byte, attempt, of int) []byte {
+	var b strings.Builder
+	b.Write(prompt)
+	fmt.Fprintf(&b, "\n## Best-of-%d attempt\n\n", of)
+	fmt.Fprintf(&b, "You are attempt %d of %d: other agents are working on this same issue independently, each on its own branch, and a human will compare the results and keep one. Do not look for, coordinate with, or copy from the other attempts — solve it your own way.\n\n", attempt, of)
+	fmt.Fprintf(&b, "- Open your pull request as a **draft** (`gh pr create --draft`) and prefix its title with `[best-of %d/%d]`. lola marks the chosen one ready for review.\n", attempt, of)
+	b.WriteString("- Keep the change focused: the comparison weighs CI, review findings and diff size.\n")
+	return []byte(b.String())
 }
 
 // Open checks out an EXISTING branch or PR of project p into a throwaway
@@ -334,6 +564,9 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 // step failure the worktree is rolled back best-effort (force=false, so a dirty
 // checkout is kept for inspection) and the error says what was left behind.
 func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef, branch string) (session.Session, error) {
+	if err := needsCheckout(p, "Open"); err != nil {
+		return session.Session{}, err
+	}
 	if sessionID == "" || fetchRef == "" {
 		return session.Session{}, errors.New("runtime: open: session id and ref required")
 	}
@@ -341,9 +574,11 @@ func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open %s: %w", sessionID, err)
 	}
+	p = n.sessionProject(p, EnvVars{Session: sessionID, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
 		// The worktree is DETACHED — there is no lola-owned branch to delete, so
 		// pass "" (Remove's deleteBranch no-ops) and never risk the upstream branch.
+		n.releasePorts(sessionID)
 		if rmErr := n.WT.Remove(ctx, p, dir, "", false); rmErr != nil {
 			return session.Session{}, fmt.Errorf("runtime: open %s: %s: %w (rollback failed: %v; worktree kept at %s)", sessionID, step, cause, rmErr, dir)
 		}
@@ -400,6 +635,9 @@ func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef
 // key) → tmux shell. On any step failure the worktree AND its new branch are
 // rolled back best-effort (force=false keeps a dirty checkout for inspection).
 func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error) {
+	if err := needsCheckout(p, "OpenManual"); err != nil {
+		return session.Session{}, err
+	}
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open manual: session id and branch required")
 	}
@@ -407,9 +645,18 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open manual %s: %w", sessionID, err)
 	}
+	return n.finishShellLaunch(ctx, p, sessionID, dir, branch, session.KindManual)
+}
+
+func (n *Native) finishShellLaunch(ctx context.Context, p config.Project, sessionID, dir, branch string, sessionKind session.Kind) (session.Session, error) {
+	p = n.sessionProject(p, EnvVars{Session: sessionID, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
-		// lola OWNS this new branch — pass it so a rollback removes it too.
-		if rmErr := n.WT.Remove(ctx, p, dir, branch, false); rmErr != nil {
+		delBranch := ""
+		if sessionKind == session.KindManual {
+			delBranch = branch
+		}
+		n.releasePorts(sessionID)
+		if rmErr := n.WT.Remove(ctx, p, dir, delBranch, false); rmErr != nil {
 			return session.Session{}, fmt.Errorf("runtime: open manual %s: %s: %w (rollback failed: %v; worktree kept at %s)", sessionID, step, cause, rmErr, dir)
 		}
 		return session.Session{}, fmt.Errorf("runtime: open manual %s: %s: %w (worktree rolled back)", sessionID, step, cause)
@@ -441,8 +688,8 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 	return withAgentState(session.Session{
 		ID:        sessionID,
 		Source:    "native",
-		Kind:      session.KindManual, // lola-owned new branch: owns + deletes it on teardown
-		Agentless: true,               // plain shell, no coding agent
+		Kind:      sessionKind,
+		Agentless: true, // plain shell, no coding agent
 		Project:   p.Name,
 		Title:     "manual: " + branch,
 		Branch:    branch,
@@ -456,53 +703,67 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 // session (as opposed to a shell): prepare the worktree, write the .lola
 // artifacts (the given prompt, the per-agent lifecycle callbacks, and the 0600
 // env with the Linear key + project env), start the agent in tmux, and brand
-// the pane. dir must be a freshly created worktree. On any step failure it rolls
-// the worktree back (force=false, so a dirty checkout is kept for inspection) —
-// deleting the branch only when ownsBranch — and returns the wrapped error.
-func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, dir, branch string, kind agent.Kind, ownsBranch bool, prompt string) error {
+// the pane. dir must be a freshly created worktree. ctxKey names the shared
+// context folder linked in as .lola/context (see setupContext). On any step
+// failure it rolls the worktree back (force=false, so a dirty checkout is kept
+// for inspection) — deleting the branch only when ownsBranch — and returns the
+// wrapped error.
+func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, dir, branch string, kind agent.Kind, ownsBranch bool, ctxKey, prompt string) (*gitguard.Pin, error) {
+	p = n.sessionProject(p, EnvVars{Session: id, Branch: branch, Project: p.Name, Worktree: dir})
 	rb := func(step string, cause error) error {
 		delBranch := ""
 		if ownsBranch {
 			delBranch = branch
 		}
+		n.releasePorts(id)
 		if rmErr := n.WT.Remove(ctx, p, dir, delBranch, false); rmErr != nil {
 			return fmt.Errorf("runtime: launch %s: %s: %w (rollback failed: %v; worktree kept at %s)", id, step, cause, rmErr, dir)
 		}
+		n.untrustAgentDir(id, dir)
 		return fmt.Errorf("runtime: launch %s: %s: %w (worktree rolled back)", id, step, cause)
 	}
+	// Pinned before anything runs in the worktree (internal/gitguard).
+	pin, err := n.pinSandbox(p.Name, dir)
+	if err != nil {
+		return nil, rb("pin sandbox git layout", err)
+	}
 	if err := n.WT.Prepare(ctx, p, dir); err != nil {
-		return rb("prepare worktree", err)
+		return nil, rb("prepare worktree", err)
 	}
 	if err := excludeLolaDir(dir); err != nil {
-		return rb("git info/exclude", err)
+		return nil, rb("git info/exclude", err)
 	}
 	if kind == agent.OpenCode {
 		if err := excludeGitPattern(dir, openCodeDir+"/"); err != nil {
-			return rb("git info/exclude "+openCodeDir, err)
+			return nil, rb("git info/exclude "+openCodeDir, err)
 		}
 	}
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
-		return rb("create "+lolaDir, err)
+		return nil, rb("create "+lolaDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), []byte(prompt), 0o600); err != nil {
-		return rb("write prompt.md", err)
+	n.pruneCheckpoints(ctx, dir, id) // a fresh session starts with no history
+	ctxDir := n.setupContext(dir, p.Name, ctxKey)
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing([]byte(prompt), ctxDir))), 0o600); err != nil {
+		return nil, rb("write prompt.md", err)
 	}
-	if err := n.writeAgentArtifacts(dir, kind); err != nil {
-		return rb("write agent artifacts", err)
+	if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
+		return nil, rb("write agent artifacts", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), n.envFile(p, id, dir, kind), 0o600); err != nil {
-		return rb("write env", err)
+		return nil, rb("write env", err)
 	}
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, false)); err != nil {
+	n.recordBaseline(ctx, dir, id)
+	n.trustAgentDir(p.Name, id, dir, kind)
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(p.Name, id, kind, false)); err != nil {
 		if n.Tmux.Has(ctx, id) {
 			_ = n.Tmux.KillSession(ctx, id)
 		}
-		return rb("start tmux session", err)
+		return nil, rb("start tmux session", err)
 	}
 	if err := n.Tmux.ConfigureSession(ctx, id, n.Cfg.SessionChrome(branch)); err != nil && n.Logf != nil {
 		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
-	return nil
+	return pin, nil
 }
 
 // OpenPRAgent opens a PR's branch as a TRACKING worktree and launches the coding
@@ -510,7 +771,10 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 // PR" upgrade. The branch must be same-owner (the daemon refuses fork PRs before
 // calling this). Session Kind=pr: the branch is upstream and NEVER deleted on
 // teardown. prompt seeds .lola/prompt.md (the caller passes a PR briefing).
-func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt string) (session.Session, error) {
+func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error) {
+	if err := needsCheckout(p, "OpenPRAgent"); err != nil {
+		return session.Session{}, err
+	}
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open pr agent: session id and branch required")
 	}
@@ -518,28 +782,35 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open pr agent %s: %w", sessionID, err)
 	}
-	kind := agent.Parse(n.Cfg.AgentForProject(p.Name))
-	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, false /* pr: upstream branch, not owned */, prompt); err != nil {
+	kind := n.resolveKind(p.Name, agentOverride)
+	pin, err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, false /* pr: upstream branch, not owned */, sessionID, prompt)
+	if err != nil {
 		return session.Session{}, err
 	}
 	return withAgentState(session.Session{
-		ID:       sessionID,
-		Source:   "native",
-		Kind:     session.KindPR,
-		Project:  p.Name,
-		Title:    "PR: " + branch,
-		Branch:   branch,
-		Repo:     p.Repo,
-		Worktree: dir,
-		TmuxName: sessionID,
-		Agent:    string(kind),
+		ID:         sessionID,
+		Source:     "native",
+		Kind:       session.KindPR,
+		Project:    p.Name,
+		Title:      "PR: " + branch,
+		Branch:     branch,
+		Repo:       p.Repo,
+		Worktree:   dir,
+		TmuxName:   sessionID,
+		Agent:      string(kind),
+		ContextKey: sessionID,
+		Sandbox:    n.SandboxFor(p.Name),
+		GitPin:     pin,
 	}, state.AgentStarting), nil
 }
 
 // OpenManualAgent creates a NEW branch off base and launches the coding agent on
 // it — the manual-worktree "with agent" variant. Session Kind=manual: lola owns
 // the branch and deletes it on teardown. prompt seeds .lola/prompt.md.
-func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt string) (session.Session, error) {
+func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error) {
+	if err := needsCheckout(p, "OpenManualAgent"); err != nil {
+		return session.Session{}, err
+	}
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open manual agent: session id and branch required")
 	}
@@ -547,21 +818,25 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open manual agent %s: %w", sessionID, err)
 	}
-	kind := agent.Parse(n.Cfg.AgentForProject(p.Name))
-	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, true /* manual: lola-owned branch */, prompt); err != nil {
+	kind := n.resolveKind(p.Name, agentOverride)
+	pin, err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, true /* manual: lola-owned branch */, sessionID, prompt)
+	if err != nil {
 		return session.Session{}, err
 	}
 	return withAgentState(session.Session{
-		ID:       sessionID,
-		Source:   "native",
-		Kind:     session.KindManual,
-		Project:  p.Name,
-		Title:    "manual: " + branch,
-		Branch:   branch,
-		Repo:     p.Repo,
-		Worktree: dir,
-		TmuxName: sessionID,
-		Agent:    string(kind),
+		ID:         sessionID,
+		Source:     "native",
+		Kind:       session.KindManual,
+		Project:    p.Name,
+		Title:      "manual: " + branch,
+		Branch:     branch,
+		Repo:       p.Repo,
+		Worktree:   dir,
+		TmuxName:   sessionID,
+		Agent:      string(kind),
+		ContextKey: sessionID,
+		Sandbox:    n.SandboxFor(p.Name),
+		GitPin:     pin,
 	}, state.AgentStarting), nil
 }
 
@@ -573,8 +848,7 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 // and NO secret is ever placed on argv. "${SHELL:-/bin/sh}" is the human's login
 // shell, exec'd so the pane's process IS the interactive shell.
 func (n *Native) shellCommand() string {
-	posix := `set -a; [ -f ./` + lolaDir + `/env ] && . ./` + lolaDir + `/env; set +a; exec "${SHELL:-/bin/sh}"`
-	return "exec sh -c " + shQuote(posix)
+	return lolaenv.ShellCommand
 }
 
 // manualEnvFile renders a manual session's 0600 .lola/env: ONLY the project's
@@ -630,19 +904,85 @@ func manualEnvFile(p config.Project) []byte {
 // --continue to pick up its prior conversation instead of the fresh positional
 // prompt. Spawn always passes false; only Revive passes true, and only after
 // confirming there is a transcript to continue.
-func (n *Native) launchCommand(id string, kind agent.Kind, resume bool) string {
+func (n *Native) launchCommand(project, id string, kind agent.Kind, resume bool) string {
+	return n.launchLine(project, id, kind, defaultLaunchPrompt(id), "", resume)
+}
+
+// defaultLaunchPrompt is the fresh-spawn first-turn prompt: point the agent at
+// the briefing file.
+func defaultLaunchPrompt(id string) string {
+	return "You are lola session " + id + ". Read " + lolaDir + "/prompt.md in the current directory first; it contains your task briefing."
+}
+
+// IsLaunchPrompt reports whether text is lola's own first turn for this session, fresh
+// or a takeover from any agent. The conversation view hides such a record, because it
+// would otherwise open every story with a line nobody typed. It is an exact match on the
+// session's own id, so a forged one can only hide itself.
+func IsLaunchPrompt(id, text string) bool {
+	text = strings.TrimSpace(text)
+	if text == defaultLaunchPrompt(id) || strings.HasPrefix(text, localLaunchLead(id)) {
+		return true
+	}
+	for _, from := range agent.Kinds {
+		if text == handoffLaunchPrompt(id, from) {
+			return true
+		}
+	}
+	return false
+}
+
+// launchCommandPrompt is launchCommand with the first-turn prompt supplied by
+// the caller — a takeover spawn (SwitchAgent) points the new agent at
+// .lola/handoff.md first, then .lola/prompt.md.
+func (n *Native) launchCommandPrompt(project, id string, kind agent.Kind, prompt string, resume bool) string {
+	return n.launchLine(project, id, kind, prompt, "", resume)
+}
+
+// launchLine is the one builder behind every agent launch: launchCommandPrompt
+// plus an optional worker MODEL override (agent.LaunchModelArgs; "" = the
+// agent's default), which a best-of attempt carries and a revive repeats.
+//
+// project is the session's project NAME, passed explicitly: recovering it
+// from the session ID is ambiguous ("lola-web-eng-42" is both project "web",
+// issue ENG-42 and project "web-eng", issue 42), and guessing wrong here would
+// launch a sandboxed project's agent on the host.
+func (n *Native) launchLine(project, id string, kind agent.Kind, prompt, model string, resume bool) string {
 	bin := kind.Binary()
 	if kind == agent.Claude && n.ClaudeBin != "" {
 		bin = n.ClaudeBin
 	}
-	prompt := "You are lola session " + id + ". Read " + lolaDir + "/prompt.md in the current directory first; it contains your task briefing."
 	args := agent.LaunchArgs(kind, prompt)
 	if resume {
 		args = agent.LaunchArgsResume(kind, prompt)
 	}
-	posix := "set -a; . ./" + lolaDir + "/env; set +a; exec " + shQuote(bin)
+	// Prepended, so it never follows a positional prompt and precedes codex's
+	// `resume` subcommand.
+	args = append(agent.LaunchModelArgs(kind, model), args...)
+	if kind == agent.Codex {
+		notify, _ := json.Marshal([]string{n.lolaBin(), "hook", "codex-notify"})
+		args = append([]string{"-c", "notify=" + string(notify)}, args...)
+	}
+	posix := "set -a; . ./" + lolaDir + "/env; set +a; "
+	if kind == agent.Codex {
+		// tmux starts this shell in the session worktree. Ask git there so
+		// linked worktrees, separate git dirs and moved checkouts all resolve
+		// correctly. Quote the result as one argv value, never shell code.
+		// The shared metadata holds objects/refs AND the worktree's index;
+		// workspace-write alone cannot fetch, commit or merge without it.
+		posix += `lola_git_common_dir=$(git rev-parse --path-format=absolute --git-common-dir) && test -n "$lola_git_common_dir" && test -d "$lola_git_common_dir" || exit 1; `
+	}
+	posix += "exec " + shQuote(bin)
+	if kind == agent.Codex {
+		posix += ` --add-dir "$lola_git_common_dir"`
+	}
 	for _, arg := range args {
 		posix += " " + shQuote(arg)
+	}
+	// A sandboxed project's agent runs the SAME line inside a container; the
+	// pane runs docker instead (sandbox.go). Every launch path — spawn,
+	// revive, switch-agent, fork — comes through here.
+	if p := n.sandboxProject(project); p != nil {
+		posix = n.sandboxLine(p, id, kind, posix)
 	}
 	return "exec sh -c " + shQuote(posix)
 }
@@ -652,11 +992,8 @@ func (n *Native) launchCommand(id string, kind agent.Kind, resume bool) string {
 //
 //   - Claude:   .lola/settings.json = hook.SettingsJSON(LolaBin) — the hook
 //     wiring Claude Code reads via `--settings`.
-//   - Codex:    .lola/codex/config.toml = agent.CodexConfigTOML(LolaBin), a
-//     per-session CODEX_HOME whose `notify` key routes codex events to `lola
-//     hook codex-notify`, plus a best-effort auth.json symlink to the user's
-//     real codex login so `codex login` survives (absent source is not an
-//     error — API-key users authenticate via OPENAI_API_KEY from the pane env).
+//   - Codex: no config artifact; launchCommand supplies a per-process notify
+//     override while retaining the user's normal CODEX_HOME configuration.
 //   - OpenCode: .opencode/plugins/lola-hook.js = agent.OpenCodePluginJS(LolaBin),
 //     the in-process plugin opencode auto-loads that shells `lola hook` on its
 //     lifecycle events.
@@ -664,33 +1001,30 @@ func (n *Native) launchCommand(id string, kind agent.Kind, resume bool) string {
 // The caller has already created <dir>/.lola (0700) and, for opencode, excluded
 // .opencode/ from git. Files are 0600; directories 0700 — same discipline as
 // the other .lola artifacts.
-func (n *Native) writeAgentArtifacts(dir string, kind agent.Kind) error {
+func (n *Native) writeAgentArtifacts(dir string, kind agent.Kind, ctxDir string) error {
 	switch kind {
 	case agent.Codex:
-		return n.writeCodexArtifacts(dir)
+		return nil // notify is overridden on argv; never rewrite the user's config
 	case agent.OpenCode:
-		return os.WriteFile(openCodePluginPath(dir), agent.OpenCodePluginJS(n.LolaBin), 0o600)
+		return os.WriteFile(openCodePluginPath(dir), agent.OpenCodePluginJS(n.lolaBin()), 0o600)
 	default: // Claude
-		return os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.LolaBin), 0o600)
+		var additionalDirs []string
+		if ctxDir != "" {
+			// Claude checks symlink destinations against its workspace scope.
+			// Grant only this task's notes, never the whole lola home. Resolve
+			// parent symlinks as well (e.g. /var -> /private/var on macOS).
+			realDir, err := filepath.EvalSymlinks(ctxDir)
+			if err != nil {
+				return err
+			}
+			realDir, err = filepath.Abs(realDir)
+			if err != nil {
+				return err
+			}
+			additionalDirs = append(additionalDirs, realDir)
+		}
+		return os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.lolaBin(), additionalDirs...), 0o600)
 	}
-}
-
-// writeCodexArtifacts writes the codex per-session CODEX_HOME under
-// <dir>/.lola/codex: config.toml (with the notify wiring) and a best-effort
-// auth.json symlink to the user's existing codex login. The symlink is
-// advisory — an absent source is skipped silently, so a codex run with no
-// prior `codex login` still launches (it authenticates via OPENAI_API_KEY
-// inherited from the pane env).
-func (n *Native) writeCodexArtifacts(dir string) error {
-	codexHome := filepath.Join(dir, lolaDir, "codex")
-	if err := os.MkdirAll(codexHome, 0o700); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), agent.CodexConfigTOML(n.LolaBin), 0o600); err != nil {
-		return err
-	}
-	linkCodexAuth(codexHome)
-	return nil
 }
 
 // openCodePluginPath returns the plugin file path for an opencode session's
@@ -702,52 +1036,115 @@ func openCodePluginPath(dir string) string {
 	return filepath.Join(pluginsDir, "lola-hook.js")
 }
 
-// linkCodexAuth best-effort symlinks the user's real codex auth.json into the
-// per-session CODEX_HOME so an existing `codex login` carries over. It never
-// returns an error: a missing source (API-key users) or a symlink failure is
-// silently skipped — a codex session must launch regardless.
-func linkCodexAuth(codexHome string) {
-	src := userCodexAuth()
-	if src == "" {
-		return
-	}
-	if _, err := os.Stat(src); err != nil {
-		return // no existing login to carry over
-	}
-	_ = os.Symlink(src, filepath.Join(codexHome, "auth.json"))
-}
-
-// userCodexAuth resolves the path to the user's real codex auth.json: under
-// $CODEX_HOME when set, else ~/.codex/auth.json. Returns "" when no home can be
-// determined (the caller then skips the symlink).
-func userCodexAuth() string {
+// userCodexHome preserves the same configuration/auth/skills home that a normal
+// Codex terminal uses. Export it explicitly because the tmux server may have
+// started with a different environment from the daemon.
+func userCodexHome() string {
 	if h := os.Getenv("CODEX_HOME"); h != "" {
-		return filepath.Join(h, "auth.json")
+		return h
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".codex", "auth.json")
+	return filepath.Join(home, ".codex")
+}
+
+// codexHasSession matches a rollout's first session_meta record against this
+// worktree before enabling resume --last. Another worktree's history must never
+// make an empty session take over an unrelated conversation. Malformed or
+// unreadable records fail closed to a fresh launch.
+func codexHasSession(ctx context.Context, home, dir string) bool {
+	if home == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	found := false
+	_ = filepath.WalkDir(filepath.Join(home, "sessions"), func(path string, entry fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return fs.SkipAll
+		}
+		if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 4096), 1024*1024) // first line may include lengthy base instructions
+		var meta struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Cwd    string `json:"cwd"`
+				Source string `json:"source"`
+			} `json:"payload"`
+		}
+		if scanner.Scan() && json.Unmarshal(scanner.Bytes(), &meta) == nil &&
+			meta.Type == "session_meta" && meta.Payload.Source == "cli" && filepath.Clean(meta.Payload.Cwd) == filepath.Clean(dir) {
+			found = true
+		}
+		_ = f.Close()
+		if found {
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+// reviveCodexHome retains old isolated homes when they carry this worktree's
+// conversation. Otherwise move the session to the normal user home, preserving
+// every other assignment in the generated env file.
+func reviveCodexHome(ctx context.Context, dir, home string) (string, error) {
+	legacy := filepath.Join(dir, lolaDir, "codex")
+	if codexHasSession(ctx, legacy, dir) {
+		home = legacy
+	}
+	path := filepath.Join(dir, lolaDir, "env")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if home == "" {
+		return "", errors.New("cannot determine Codex home")
+	}
+	// Append a final assignment instead of parsing shell source: project env
+	// values may contain quoted newlines that resemble another assignment.
+	override := "CODEX_HOME=" + shQuote(home) + "\n"
+	if strings.HasSuffix(string(body), "\n"+override) || string(body) == override {
+		return home, nil
+	}
+	if len(body) > 0 && body[len(body)-1] != '\n' {
+		body = append(body, '\n')
+	}
+	body = append(body, override...)
+	return home, os.WriteFile(path, body, 0o600)
 }
 
 // envFile renders <dir>/.lola/env: shell-sourceable NAME=value assignments the
 // launch command sources under `set -a`. Each value is single-quoted via
 // shQuote so nothing needs a shell-safe shape, and the file is written 0600 and
 // MUST never be logged — it may hold the Linear API key. It carries, in this
-// order: LOLA_SESSION (not secret); for a codex session, CODEX_HOME pointing at
-// the per-session <dir>/.lola/codex (so codex reads the lola-written config.toml
-// and notify wiring, not the user's real home); LINEAR_API_KEY, only when a
-// LinearKey provider is set and returns a non-empty key (a rotated key is picked
+// order: LOLA_SESSION (not secret); for a codex session, the user's CODEX_HOME
+// (notify is overridden per process, leaving user configuration untouched);
+// LINEAR_API_KEY, only when a LinearKey provider is set and returns a non-empty key (a rotated key is picked
 // up on the next spawn because the provider is called here, each spawn); and
 // every [[project]].env pair in sorted order (the same variables Prepare gives
 // post_create commands — the agent session sees them too). dir is the absolute
-// worktree path, so CODEX_HOME is absolute and resolves regardless of cwd.
+// worktree path.
 func (n *Native) envFile(p config.Project, id, dir string, kind agent.Kind) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "LOLA_SESSION=%s\n", shQuote(id))
-	if kind == agent.Codex {
-		fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(filepath.Join(dir, lolaDir, "codex")))
+	sandboxed := n.sandboxProject(p.Name) != nil
+	if kind == agent.Codex && !sandboxed { // a container cannot see the user's ~/.codex
+		if home := userCodexHome(); home != "" {
+			fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(home))
+		}
+	}
+	if sandboxed {
+		b.WriteString(n.sandboxEnv(p, id, dir, kind))
 	}
 	if n.LinearKey != nil {
 		if key := n.LinearKey(); key != "" {
@@ -785,15 +1182,56 @@ func promptMD(p config.Project, issue linear.Issue, branch string) []byte {
 	return []byte(b.String())
 }
 
+// withReportBriefing appends the progress-reporting section to a prompt.md
+// body. Every AGENT launch gets it (Spawn and finishAgentLaunch; Revive and
+// SwitchAgent reuse the file), so a session's board works whichever agent kind
+// and whichever entry point started it — `lola report` is a plain shell
+// command, which is what gives claude, codex and opencode parity for free.
+//
+// Kept short on purpose: it is read on every launch, and the cadence advice is
+// what keeps the agent from spending a tool call per keystroke on it.
+func (n *Native) withReportBriefing(prompt []byte) []byte {
+	bin := "lola"
+	if lb := n.lolaBin(); lb != "" && lb != "lola" {
+		bin = shQuote(lb)
+	}
+	var b strings.Builder
+	b.Write(prompt)
+	if len(prompt) > 0 && prompt[len(prompt)-1] != '\n' {
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n## Progress reporting\n\n")
+	b.WriteString("Humans watch this session in lola's dashboard. Keep its board current with `" + bin + " report` (a shell command; it never fails your turn):\n\n")
+	b.WriteString("```sh\n")
+	b.WriteString(bin + " report todo set \"Read the issue\" \"Implement X\" \"Add tests\" \"Open the PR\"   # your plan, once you have one\n")
+	b.WriteString(bin + " report todo done 2           # finishing an item advances to the next one\n")
+	b.WriteString(bin + " report phase implementing    # planning|investigating|implementing|testing|reviewing|polishing|done\n")
+	b.WriteString(bin + " report check tests pass \"142/142\"   # a check you ran locally (pass|fail|running)\n")
+	b.WriteString(bin + " report blocked \"need the staging API key\"   # then: " + bin + " report unblocked\n")
+	b.WriteString(bin + " report note \"waiting on the migration to finish\"\n")
+	b.WriteString("```\n\n")
+	b.WriteString(taskboard.Briefing(bin) + "\n")
+	b.WriteString("\n## PR review material\n\nBuild review material DURING implementation and testing, not as a separate final research pass. Before visual edits, retain baseline screenshots and their commit/viewport. Save useful captures and test results as you work, preferably under .lola/review/ in the checkout; keep a manifest there. Reuse those files and recorded results when they still describe the reviewed revision. Do not rerun checks or recreate screenshots solely to format a review package; refresh only missing or stale evidence. Never relabel an old capture as a new revision.\n\nPublish at the end of a meaningful verification pass, before handing the PR to a human: `" + bin + " review-package publish <manifest.json>` (use `--app <member>` for stacks). Run `" + bin + " review-package publish --help` for the JSON schema and limits. Use a short human-readable title and Markdown sections: ## Summary (one sentence), ## Changes (at most three bullets, each beginning with a bold 3-8 word user-visible outcome and an indented New: sentence of at most 16 words describing the new capability; add an indented Includes: list with 2-4 nested user-facing sub-feature bullets; technical detail belongs under Details:), ## Verification (commands and observed results), ## Risks (unresolved or unverified items only; each bullet begins with a bold concrete failure consequence rather than a topic label (New users cannot finish registration, not Mail delivery), followed by Likelihood: low|medium|high|unknown; Impact: low|medium|high|unknown; Outcome: one short plain-language sentence; Assess: one concrete next step to check the risk, not a claim it was performed; Basis: brief evidence for the estimate. Rate likelihood and severity separately; use unknown when unsupported, never invent probabilities). Include ## Agent confidence with two separate lines: Score: N/100 (an integer from 0 to 100 expressing your confidence that this revision meets the requested behavior) and Basis: a brief rationale naming verification performed and remaining uncertainty. Use 0-39 for substantial doubts, 40-69 for meaningful unverified behavior, 70-89 for strong evidence with bounded uncertainty, and 90-100 only for thorough relevant verification with no known gaps. This is your self-assessment, not a measured probability. Do not lower it solely because human approval is pending. Put any extended implementation notes under ## Details. Avoid repeating screenshot captions in the write-up. For visual changes include before/after PNG or JPEG screenshots from the actual baseline and reviewed revision, short captions, screen names and viewport. Paths are relative to the session checkout or selected stack member. Omit unavailable baseline images honestly. Publish a new package after fixes, reusing unaffected evidence only when still accurate and identifying its provenance. This retains material in Lola; it does not post to GitHub or prove checks passed. Report publication errors, not success.\n")
+	b.WriteString("Optional browser capture: `" + bin + " review-package capture <http-url> --output .lola/review/new-capture.png --title <screen> --width 1440 --height 900` uses an already installed local Playwright/Chromium in a fresh browser context. Add --selector for one element; the JSON output is a manifest screen entry. It never overwrites evidence and does not attest to a commit. At completion, `" + bin + " review-package complete <manifest.json>` publishes final material and reports phase done for an ordinary session; --app member publishes only that stack member without marking the shared task done. Neither claims approval, successful verification, or merge authority.\n")
+	b.WriteString("Report on meaningful changes only — a new plan, a finished item, a phase change, a check result, a blocker. Not every step. `" + bin + " report --help` lists every verb. Being blocked on a decision only a human can make is worth reporting even mid-turn.\n")
+	// The claim audit (internal/claimaudit) reads the transcript for the run
+	// behind a `check … pass`; saying so up front is what makes an honest agent
+	// run the suite in a shape whose exit status is its own.
+	b.WriteString("\nA `check … pass` is compared with the commands you actually ran: report one only after running that check, and run it unpiped (`go test ./...`, not `go test ./... | tail`) so its exit status is visible. A claim with no matching run is flagged to the humans.\n")
+	return n.withSSHBriefing(n.withTalkBriefing([]byte(b.String())))
+}
+
 // rollback undoes a partially spawned session after step failed with cause:
 // remove the worktree and its freshly created branch with force=false, so
 // uncommitted artifacts refuse with worktree.ErrDirty and stay on disk for
 // inspection. The returned error always wraps cause and states what, if
 // anything, was left behind.
 func (n *Native) rollback(ctx context.Context, p config.Project, id, dir, branch, step string, cause error) error {
+	n.releasePorts(id) // nothing runs in this worktree any more
 	if rmErr := n.WT.Remove(ctx, p, dir, branch, false); rmErr != nil {
 		return fmt.Errorf("runtime: spawn %s: %s: %w (rollback failed: %v; worktree kept at %s)", id, step, cause, rmErr, dir)
 	}
+	n.untrustAgentDir(id, dir)
 	return fmt.Errorf("runtime: spawn %s: %s: %w (worktree rolled back)", id, step, cause)
 }
 
@@ -830,6 +1268,9 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	}
 	live := map[string]bool{}
 	for _, ts := range tmuxSessions {
+		if session.IsGoalSessionID(ts.Name) || strings.HasPrefix(ts.Name, "lola-local-") {
+			continue
+		} // goals and borrowed directories are adopted from their persisted records
 		if strings.HasPrefix(ts.Name, sessionPrefix) {
 			live[ts.Name] = true
 		}
@@ -842,7 +1283,21 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	// restart. They never pair (no worktree carries the -shell-N suffix), so
 	// dropping them from the orphan scan loses nothing.
 	for name := range live {
-		if shellTabRe.MatchString(name) {
+		// Dev tabs ("<sessionID>-dev-N", a project's dev_commands running beside
+		// the agent) are auxiliary for the same reason, and they outlive their
+		// command (remain-on-exit keeps a crashed `npm run dev` readable), so an
+		// unpaired one is exactly what adoption would otherwise call an orphan.
+		// An ssh terminal ("<sessionID>-ssh-N") too, and the human's terminal
+		// deliberately outlives a dead agent, so its parent need only be RECORDED.
+		if shellTabRe.MatchString(name) || devtab.Is(name) || n.isSSHTab(name, live) {
+			delete(live, name)
+			continue
+		}
+		// A review pane is dropped only when its PARENT session is live beside
+		// it. The suffix alone is not proof: a manual `lola open` session on a
+		// branch that happens to end in "-review" would otherwise vanish from
+		// adoption entirely.
+		if parent, ok := reviewPaneParent(name); ok && live[parent] {
 			delete(live, name)
 		}
 	}
@@ -850,6 +1305,17 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	out := []session.Session{}
 	paired := map[string]bool{}
 	for _, p := range n.Cfg.Projects {
+		if p.IsStack() {
+			for _, s := range n.adoptStack(p, live) {
+				if live[s.ID] {
+					paired[s.ID] = true
+				}
+				out = append(out, s)
+			}
+			continue
+		}
+		// A member can still have standalone worktrees from before it joined
+		// a stack. Scan its old root too; stack worktrees live elsewhere.
 		dirs, err := n.WT.List(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: adopt: project %s: %w", p.Name, err)
@@ -944,49 +1410,191 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	return out, nil
 }
 
-// Kill terminates the session. Ordering is deliberate: the tmux session is
+// Kill terminates the session. Ordering is deliberate: the tmux sessions are
 // killed FIRST (a session that is already gone is not an error), so the agent
 // is always stopped even if the subsequent worktree removal refuses — a dirty
 // worktree then survives with its agent already down. Only when removeWorktree
 // is set does worktree removal follow, with the given force: force=false
 // refuses a dirty worktree with worktree.ErrDirty (which propagates for the
 // caller to surface as "worktree dirty, kept at <dir>"), force=true removes it
-// regardless; a missing worktree directory is a no-op either way. Callers
-// invoke Kill for merged or explicitly killed sessions.
+// regardless. Callers invoke Kill for merged or explicitly killed sessions.
+//
+// "The tmux sessions" is plural on purpose: a session's embedded shell tabs
+// (`<id>-shell-N`) and its visible review pane (`<id>-review`) are SEPARATE
+// tmux sessions on lola's server, so killing only the agent left them running
+// against a worktree that was about to be deleted — a merged session's tabs
+// lingered until the next daemon restart dropped them.
+//
+// A missing worktree directory no longer ends the teardown early: the branch
+// deletion still runs, because a session whose checkout is already gone (the
+// operator removed it, or an earlier cleanup got half-way) otherwise left its
+// local branch behind forever.
 func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error {
+	if s.GoalManaged() {
+		return n.StopGoal(ctx, s)
+	}
 	name := s.TmuxName
 	if name == "" {
 		name = s.ID
 	}
 	if n.Tmux.Has(ctx, name) {
-		if err := n.Tmux.KillSession(ctx, name); err != nil {
+		// The agent session goes down with its whole TREE, for the same reason
+		// the aux sessions below do — and one more. A coding agent starts
+		// servers of its own while it works (`php artisan serve` to look at the
+		// page it just changed), and Claude Code puts every command its Bash
+		// tool runs in its OWN process group, so those children survive both a
+		// kill-session and a kill of the pane's group. They then hold their port
+		// forever, pointed at a worktree this call is about to delete.
+		if err := n.Tmux.KillSessionTree(ctx, name); err != nil {
 			return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 		}
 	}
+	n.killAuxSessions(ctx, s.ID)
+	if name != s.ID {
+		n.killAuxSessions(ctx, name)
+	}
+	// A sandboxed agent's container does not stop with its pane: the pane ran
+	// the docker CLI, and a TTY container ignores its client going away.
+	// Best-effort like the aux sweep — the container is --rm and named after
+	// the session, so the next launch's `docker rm -f` clears a straggler.
+	if s.Sandbox != "" || n.sandboxProject(s.Project) != nil {
+		if err := n.removeContainer(ctx, s.ID); err != nil && n.Logf != nil {
+			n.Logf("session %s: removing its sandbox container failed: %v", s.ID, err)
+		}
+	}
+	if s.Kind == session.KindLocal {
+		if removeWorktree {
+			if s.Location == LocationSSH {
+				n.untrustAgentDir(s.ID, s.Worktree)
+			}
+			return RemoveLocalArtifacts(s.ID)
+		}
+		return nil
+	}
 	if !removeWorktree {
 		return nil
+	}
+	if s.Stack {
+		return n.killStack(ctx, s, force)
 	}
 	p := n.Cfg.ProjectByName(s.Project)
 	if p == nil {
 		return fmt.Errorf("runtime: kill %s: unknown project %q, cannot remove worktree", s.ID, s.Project)
 	}
-	dir := filepath.Join(n.WT.Root, p.Name, s.ID)
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
-		return nil // already gone
-	}
 	// Only lola-owned branches are deleted on teardown (see Session.OwnsBranch): a
 	// linear dispatch's branch and a manual new-branch worktree's branch. A pr
 	// session (`lola open` / the PR picker) is a DETACHED checkout whose recorded
-	// Branch is the UPSTREAM branch/PR label — pass "" so Remove never deletes it
-	// (deleteBranch no-ops on "").
+	// Branch is the UPSTREAM branch/PR label — pass "" so nothing deletes it
+	// (both Remove and DeleteBranch no-op on "").
 	branch := s.Branch
 	if !s.OwnsBranch() {
 		branch = ""
 	}
-	if err := n.WT.Remove(ctx, *p, dir, branch, force); err != nil {
+	dir := filepath.Join(n.WT.Root, p.Name, s.ID)
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		n.releasePorts(s.ID)
+		n.untrustAgentDir(s.ID, dir)
+		// Directory already gone: there is no checkout left to dirty-check or to
+		// hand to `git worktree remove`, but the branch it was checked out on may
+		// still exist. Prune the stale worktree registration and delete the branch
+		// so teardown is complete either way.
+		if err := n.WT.DeleteBranch(ctx, *p, branch); err != nil {
+			return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
+		}
+		if branch != "" && n.Logf != nil {
+			n.Logf("session %s: worktree already gone; deleted local branch %s", s.ID, branch)
+		}
+		n.pruneCheckpoints(ctx, p.Path, s.ID)
+		return nil
+	}
+	// pre_remove runs only for a worktree that is about to GO: a dirty one is
+	// kept (Remove refuses it below), and whatever post_create set up for it —
+	// its database above all — is part of the work being kept. An unanswerable
+	// dirty check skips the hook too; Remove then decides on its own.
+	//
+	// Once the hook has run on a worktree verified CLEAN, removal is forced: the
+	// agent and every tab are already down, so anything dirty now is the hook's
+	// own output (a dump, a log). Refusing it there would keep a worktree whose
+	// database the hook just dropped — a half-cleaned session retried forever.
+	//
+	// A SANDBOXED session skips it: the hook is a HOST shell in a worktree the
+	// agent could write, so whatever it runs (artisan, npm scripts, a Makefile)
+	// may be the agent's code — a sandbox escape on every merged cleanup.
+	removeForce := force
+	sandboxed := s.Sandbox != "" || n.sandboxProject(s.Project) != nil
+	if len(p.PreRemove) > 0 && sandboxed {
+		n.logf("session %s: pre_remove skipped: sandboxed worktree (host commands there would run agent-writable code)", s.ID)
+	} else if len(p.PreRemove) > 0 {
+		if force {
+			n.runPreRemove(ctx, *p, s, dir)
+		} else if dirty, derr := n.WT.Dirty(ctx, dir); derr == nil && !dirty {
+			n.runPreRemove(ctx, *p, s, dir)
+			removeForce = true
+		}
+	}
+	if err := n.WT.Remove(ctx, *p, dir, branch, removeForce); err != nil {
 		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 	}
+	n.releasePorts(s.ID)
+	n.untrustAgentDir(s.ID, dir)
+	gitguard.Clear(dir)
+	// The checkpoints go with the worktree they snapshot. A DIRTY worktree that
+	// Remove kept returned above, and keeps them: the work is still there to
+	// roll back. The shared context folder is deliberately NOT removed — it
+	// exists to outlive this session.
+	n.pruneCheckpoints(ctx, p.Path, s.ID)
 	return nil
+}
+
+// killAuxSessions kills every auxiliary tmux session belonging to parent — its
+// `-shell-N` tabs, its `-review` pane and its `-dev-N` tabs (a killed session
+// must not leave a dev server bound to a port). It is BEST-EFFORT by design: these are
+// display surfaces, so a tmux hiccup here must never fail a teardown that has
+// already stopped the agent (the caller would otherwise retry the whole cleanup
+// forever over a stuck shell tab). A missing tmux, or no aux sessions at all,
+// is silently nothing to do.
+func (n *Native) killAuxSessions(ctx context.Context, parent string) {
+	if parent == "" {
+		return
+	}
+	sessions, err := n.Tmux.ListSessions(ctx)
+	if err != nil {
+		if n.Logf != nil {
+			n.Logf("session %s: could not list tmux sessions to drop its shell/review tabs: %v", parent, err)
+		}
+		return
+	}
+	for _, sess := range sessions {
+		if !isAuxOf(parent, sess.Name) {
+			continue
+		}
+		// Every aux session goes down with its whole process GROUP, not just its
+		// pane process. A plain kill-session only hangs the pane up (SIGHUP),
+		// and anything that ignores it — a dev tab's `php artisan serve`, a
+		// server someone started by hand in a shell tab — survives as an orphan
+		// of pid 1, still holding its port and still pointed at a worktree that
+		// is about to be deleted. These sessions are being destroyed anyway, so
+		// there is nothing here worth preserving from the signal.
+		if err := n.Tmux.KillSessionTree(ctx, sess.Name); err != nil && n.Logf != nil {
+			n.Logf("session %s: could not kill auxiliary tmux session %s: %v", parent, sess.Name, err)
+		}
+	}
+}
+
+// auxSuffixRe matches what a session name may carry BEYOND its parent's name to
+// still be that parent's auxiliary session. It is anchored at both ends
+// deliberately: "lola-fe-42" is a prefix of "lola-fe-420-shell-1", whose
+// remainder ("0-shell-1") ends in a shell-tab suffix and would otherwise make
+// one session's teardown kill an unrelated live session's tab. Keep it in step
+// with internal/devtab (dev tabs), internal/sshtab (ssh terminals) and
+// reviewPaneSuffix.
+// A stack app's review pane carries its lane first ("~<app>-review").
+var auxSuffixRe = regexp.MustCompile(`^(?:-shell-\d+|-review|-dev-\d+|-ssh-\d+|~[A-Za-z0-9][A-Za-z0-9._-]*-review)$`)
+
+// isAuxOf reports whether name is an auxiliary session of parent.
+func isAuxOf(parent, name string) bool {
+	rest, ok := strings.CutPrefix(name, parent)
+	return ok && auxSuffixRe.MatchString(rest)
 }
 
 // Alive reports whether the session's tmux session still exists.
@@ -1000,27 +1608,65 @@ func (n *Native) Alive(ctx context.Context, s session.Session) bool {
 
 // Revive re-creates the tmux agent session for a session whose pane died but
 // whose worktree survives (dead sessions keep their worktree for inspection).
-// It reuses the existing worktree and its .lola artifacts (prompt, settings,
-// env) exactly as the original spawn left them and relaunches the agent in
-// place: when the agent is Claude AND it wrote a transcript before dying, the
-// pane comes back with `claude --continue` and resumes the prior conversation
-// (launchCommand resume=true); otherwise it launches fresh on the same worktree
-// — the case for a session that died so fast it never recorded a transcript
-// (an empty --continue would just error and re-kill the pane).
+// It reuses the existing worktree, prompt and env, refreshes Claude's managed
+// settings and context link, and relaunches the agent in
+// place: when the agent is Claude and it wrote a transcript before dying, or
+// opencode/Codex and it saved a session, the pane comes back in resume mode and
+// resumes the prior conversation (launchCommand resume=true); otherwise it
+// launches fresh on the same worktree — the case for a session that died so
+// fast it never recorded anything (an empty --continue would just error and
+// re-kill the pane).
 //
 // The caller (daemon.handleRevive) is responsible for the checks Revive does
 // not do: that the session is not already alive, and re-establishing the
 // dispatch guards so the revived session is not duplicated. Revive itself only
 // needs the worktree to still be there.
 func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session, error) {
+	if s.GoalManaged() {
+		return s, errors.New("goal workers resume through a newly reserved attempt")
+	}
+	if s.Kind == session.KindLocal {
+		return n.reviveLocal(ctx, s)
+	}
 	id := s.ID
 	dir := filepath.Join(n.WT.Root, s.Project, id)
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: worktree %s is gone — let the issue re-dispatch instead", id, dir)
 	}
+	if s.IsAgentless() {
+		if err := n.Tmux.NewSession(ctx, id, dir, n.shellCommand()); err != nil {
+			return session.Session{}, err
+		}
+		s.SetAgentState(state.AgentShell, "", time.Now())
+		s.TmuxName = id
+		return s, nil
+	}
 	kind := agent.Parse(s.Agent)
-	resume := kind == agent.Claude && claudeHasTranscript(dir)
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, resume)); err != nil {
+	if kind == agent.Claude {
+		ctxDir := n.setupContext(dir, s.Project, ContextKey(s))
+		if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
+			return session.Session{}, fmt.Errorf("runtime: revive %s: write agent artifacts: %w", id, err)
+		}
+	}
+	resume := (kind == agent.Claude && claudeHasTranscript(dir)) ||
+		(kind == agent.OpenCode && opencodeHasSession(ctx, dir))
+	if kind == agent.Codex && n.sandboxProject(s.Project) != nil {
+		// The container's CODEX_HOME lives in the worktree (sandboxEnv); the
+		// env file already says so and must not be pointed at the host's.
+		resume = codexHasSession(ctx, filepath.Join(dir, sandboxCodexDir), dir)
+	} else if kind == agent.Codex {
+		home := userCodexHome()
+		if p := n.Cfg.ProjectByName(s.Project); p != nil && p.Env["CODEX_HOME"] != "" {
+			home = p.Env["CODEX_HOME"]
+		}
+		home, err := reviveCodexHome(ctx, dir, home)
+		if err != nil {
+			return session.Session{}, fmt.Errorf("runtime: revive %s: codex environment: %w", id, err)
+		}
+		resume = codexHasSession(ctx, home, dir)
+	}
+	n.trustAgentDir(s.Project, id, dir, kind)
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(s.Project, id, kind, defaultLaunchPrompt(id), s.Model, resume)); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
 	}
 	// Best-effort chrome, exactly as Spawn: a styling hiccup never loses the
@@ -1029,6 +1675,7 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
 	revived := s
+	n.syncSandboxRecord(ctx, &revived)
 	// SetAgentState stamps LastActivityAt on the working entry, so the freshly
 	// relaunched pane gets the full anti-false-working grace window instead of
 	// inheriting the pre-death activity anchor (which was already stale and
@@ -1055,6 +1702,78 @@ func claudeHasTranscript(dir string) bool {
 	return len(matches) > 0
 }
 
+// opencodeHasSession reports whether opencode has a saved session for the
+// worktree at dir — i.e. whether `opencode --continue` has anything to resume.
+// The gate exists because `--continue` with no prior session is not graceful
+// (it hung the TUI upstream, anomalyco/opencode#23437, later made a clean
+// error-exit), so Revive must know a session exists before passing it.
+// opencode has used TWO storage generations, and either may hold the session:
+//
+//   - Legacy (pre-SQLite): sessions live under
+//     <data-root>/opencode/project/<encoded-dir>/storage/session/info/ses_*.json,
+//     where <encoded-dir> is the worktree's absolute path with the leading "/"
+//     stripped and the remaining "/" replaced by "-".
+//   - Current (SQLite): sessions live in <data-root>/opencode/opencode.db,
+//     table `session`, column `directory` holding the worktree path verbatim.
+//     Only ROOT sessions count (`parent_id IS NULL`) — that mirrors what
+//     `--continue` actually picks (the most recent root session; child/subagent
+//     sessions don't).
+//
+// `--continue` resumes the last session of the CURRENT directory, and each lola
+// session owns its worktree, so that resolves to the right conversation. The
+// data root is $XDG_DATA_HOME (read at call time) or ~/.local/share. Best-effort
+// and fail-closed: an unresolvable data root, a glob error, a missing sqlite3,
+// a locked db or any query failure means "no session", so Revive launches fresh.
+func opencodeHasSession(ctx context.Context, dir string) bool {
+	root := opencodeDataRoot()
+	if root == "" {
+		return false
+	}
+	// Legacy generation.
+	encoded := strings.ReplaceAll(strings.TrimPrefix(dir, "/"), "/", "-")
+	matches, _ := filepath.Glob(filepath.Join(root, "opencode", "project", encoded, "storage", "session", "info", "ses_*.json"))
+	if len(matches) > 0 {
+		return true
+	}
+	// Current generation: the SQLite store, when it exists.
+	db := filepath.Join(root, "opencode", "opencode.db")
+	if fi, err := os.Stat(db); err != nil || fi.IsDir() {
+		return false
+	}
+	return opencodeSessionInDB(ctx, db, dir)
+}
+
+// opencodeDataRoot resolves opencode's data directory: $XDG_DATA_HOME when set
+// (read at call time so tests can override it), else ~/.local/share. Returns ""
+// when neither resolves, which callers treat as "no session".
+func opencodeDataRoot() string {
+	if root := os.Getenv("XDG_DATA_HOME"); root != "" {
+		return root
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share")
+}
+
+// opencodeSessionInDB reports whether opencode's SQLite session store at db
+// holds a root session for dir. Seam: overridden in tests; the default shells
+// the sqlite3 CLI (ships with macOS), bounded and fail-closed — a missing
+// binary, a locked db, a timeout or a schema mismatch all answer false.
+var opencodeSessionInDB = func(ctx context.Context, db, dir string) bool {
+	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	// SQLite string-literal escaping: double the single quotes.
+	esc := strings.ReplaceAll(dir, "'", "''")
+	query := "SELECT 1 FROM session WHERE directory = '" + esc + "' AND parent_id IS NULL LIMIT 1;"
+	out, err := exec.CommandContext(qctx, "sqlite3", db, query).Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "1"
+}
+
 // issueFromSessionID recovers the Linear identifier from a session ID built
 // by SessionID for the given project (retry suffixes like "-r2" are
 // stripped), or "" when the ID has another shape.
@@ -1067,6 +1786,7 @@ func issueFromSessionID(id, project string) string {
 		return "" // a manual (`lola open`) session has no Linear issue
 	}
 	rest = attemptSuffixRe.ReplaceAllString(rest, "")
+	rest = bestOfSuffixRe.ReplaceAllString(rest, "")
 	if rest == "" {
 		return ""
 	}
@@ -1183,4 +1903,11 @@ func shQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func (n *Native) withKnowledge(project, id string, prompt []byte) []byte {
+	if n.KnowledgeBrief == nil {
+		return prompt
+	}
+	return n.KnowledgeBrief(project, id, prompt)
 }

@@ -1,5 +1,7 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { store } from "$lib/store.svelte";
+  import Button from "./Button.svelte";
 
   // Reads the store directly (leaf component, always mounted) so its own template
   // reacts to pushError in the production WKWebView. See WKWEBVIEW_REACTIVITY.
@@ -20,7 +22,7 @@
     class="flex shrink-0 items-center gap-3 border-b border-warn/40 bg-warn/10 px-4 py-2 text-ink"
     role="alert"
   >
-    <span class="shrink-0 text-warn">⚠</span>
+    <span class="shrink-0 text-warn"><Icon name="triangle-alert" size={14} /></span>
     <span class="min-w-0 flex-1">
       {#if stale}
         The daemon is out of date — restart it to pick up the latest build.
@@ -30,16 +32,8 @@
       <span class="selectable text-sm text-faint">({err.cmd}: {err.msg})</span>
     </span>
     {#if stale}
-      <button
-        class="shrink-0 rounded border border-edge px-2 py-[1px] text-ink hover:border-accent hover:text-accent-ink"
-        onclick={() => store.restartDaemon()}>⟳ restart</button
-      >
+      <Button variant="secondary" onclick={() => store.restartDaemon()}>Restart</Button>
     {/if}
-    <button
-      class="shrink-0 rounded px-1.5 py-[1px] text-faint hover:text-ink"
-      title="dismiss"
-      aria-label="dismiss"
-      onclick={() => store.dismissPushError()}>✕</button
-    >
+    <Button icon title="dismiss" aria-label="dismiss" onclick={() => store.dismissPushError()}><Icon name="x" size={14} /></Button>
   </div>
 {/if}

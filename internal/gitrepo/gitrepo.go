@@ -185,6 +185,23 @@ func (b BranchLister) Branches(ctx context.Context, dir string) []string {
 		return nil
 	}
 
+	names := parseBranches(out)
+
+	// Float the repository's own default branch to the top.
+	if def := (BranchLister{GitBin: bin, run: run}).defaultBranch(ctx, dir); def != "" {
+		if i := slices.Index(names, def); i > 0 {
+			names = slices.Insert(slices.Delete(names, i, i+1), 0, def)
+		}
+	}
+	return names
+}
+
+// parseBranches turns one `for-each-ref --format=%(refname:short)` answer over
+// refs/heads + refs/remotes into the sorted, de-duplicated fork-from candidates:
+// remote-tracking names lose their "<remote>/" prefix, a local branch of the
+// same name wins, and "<remote>/HEAD" is dropped. Shared by BranchLister and
+// Inspector so both describe a checkout identically.
+func parseBranches(out string) []string {
 	seen := map[string]bool{}
 	var names []string
 	for _, line := range strings.Split(out, "\n") {
@@ -194,11 +211,10 @@ func (b BranchLister) Branches(ctx context.Context, dir string) []string {
 		}
 		// refs/remotes entries are "<remote>/<branch>"; "<remote>/HEAD" is a
 		// symbolic pointer, not a branch anyone forks from.
-		if remote, branch, ok := strings.Cut(name, "/"); ok && isRemoteRef(line) {
+		if _, branch, ok := strings.Cut(name, "/"); ok && isRemoteRef(line) {
 			if branch == "HEAD" || branch == "" {
 				continue
 			}
-			_ = remote
 			name = branch
 		}
 		if seen[name] {
@@ -208,13 +224,6 @@ func (b BranchLister) Branches(ctx context.Context, dir string) []string {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-
-	// Float the repository's own default branch to the top.
-	if def := (BranchLister{GitBin: bin, run: run}).defaultBranch(ctx, dir); def != "" {
-		if i := slices.Index(names, def); i > 0 {
-			names = slices.Insert(slices.Delete(names, i, i+1), 0, def)
-		}
-	}
 	return names
 }
 

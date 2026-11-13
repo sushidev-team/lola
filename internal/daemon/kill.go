@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/worktree"
@@ -35,7 +36,7 @@ const killExecTimeout = 30 * time.Second
 // concurrent kill of the same session finds the tmux session and worktree
 // already gone and no-ops). Sessions carry no poll name, so there is no owning
 // tick mutex to reuse; the store atomicity is the serialization point.
-func (d *Daemon) handleKill(ctx context.Context, sessionID string, force bool) (protocol.KillData, error) {
+func (d *Daemon) handleKill(ctx context.Context, sessionID string, force, keepWorktree bool) (protocol.KillData, error) {
 	if sessionID == "" {
 		return protocol.KillData{}, errors.New("session id required")
 	}
@@ -55,6 +56,61 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force bool) (
 
 	ctx, cancel := context.WithTimeout(ctx, killExecTimeout)
 	defer cancel()
+	// Its ssh connections close first: the master is not in any pane's process
+	// tree, so nothing below would reach it.
+	d.sshCloseSession(ctx, s.ID)
+	if s.GoalManaged() {
+		if err := nat.Kill(ctx, s, false, false); err != nil {
+			return protocol.KillData{}, err
+		}
+		d.sessions.Update(s.ID, func(cur *session.Session) bool { cur.SetAgentState(state.AgentExited, "", time.Now()); return true })
+		if err := d.sessions.Save(); err != nil {
+			return protocol.KillData{}, err
+		}
+		return protocol.KillData{Removed: false, Worktree: s.Worktree, Message: "Goal worker stopped; its attempt and files are preserved"}, nil
+	}
+
+	// The session's review pane (reviewvisible.go) deliberately outlives its
+	// pass so the findings stay readable — but not its session: kill it here so
+	// a killed worker never leaves a stray tmux session behind.
+	d.killReviewPane(ctx, s.ID)
+
+	// Stop only: the agent and its aux tmux sessions go down, the worktree,
+	// branch, port lease and store entry stay. The record is flagged dead — the
+	// same shape a dirty-worktree refusal leaves — so it frees its concurrency
+	// slot and `revive` relaunches it in place. The in-flight claim stays (the
+	// session still owns its issue), but label mode still strips the sent label
+	// so reconcile does not read the stopped session as an orphan and respawn
+	// the issue into a second worktree.
+	if keepWorktree {
+		if err := nat.Kill(ctx, s, false, false); err != nil {
+			return protocol.KillData{}, err
+		}
+		d.sessions.Update(s.ID, func(cur *session.Session) bool {
+			cur.SetAgentState(state.AgentDead, "", time.Now())
+			return true
+		})
+		if err := d.sessions.Save(); err != nil {
+			d.logf("", "kill: persist sessions: %v", err)
+		}
+		d.clearLabelDispatch(ctx, s)
+		msg := fmt.Sprintf("session %s stopped; worktree kept at %s", s.ID, s.Worktree)
+		d.logf("", "kill: %s", msg)
+		return protocol.KillData{Removed: false, Worktree: s.Worktree, Message: msg}, nil
+	}
+
+	// Borrowed directories never enter worktree teardown.
+	if s.Kind == session.KindLocal {
+		if err := nat.Kill(ctx, s, true, false); err != nil {
+			return protocol.KillData{}, err
+		}
+		d.dropSession(s)
+		if s.Location == runtime.LocationSSH {
+			// A direct ssh session's folder is lola's own scratch space, so it is gone.
+			return protocol.KillData{Removed: true, Message: "Session ended and its connections closed. The command record stays in ~/.lola/state/ssh/ for 14 days."}, nil
+		}
+		return protocol.KillData{Removed: true, Message: "Session closed; directory and files preserved"}, nil
+	}
 
 	// Project gone from config: there is no safe worktree to target (the
 	// project's path/repo are unknown), so terminate the agent only, then drop
@@ -104,6 +160,7 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force bool) (
 // in-flight claim (keyed by issue UUID) so a still-matching issue can
 // re-dispatch, then persists the store.
 func (d *Daemon) dropSession(s session.Session) {
+	d.recordEnded(s) // first, so a client that sees the row go can already read it
 	d.sessions.Delete(s.ID)
 	if s.IssueUUID != "" {
 		d.inflight.Remove(s.IssueUUID)
@@ -130,6 +187,13 @@ func (d *Daemon) dropSession(s session.Session) {
 func (d *Daemon) clearLabelDispatch(ctx context.Context, s session.Session) {
 	if s.IssueUUID == "" {
 		return
+	}
+	// A best-of sibling still working the same issue owns the dispatch: killing
+	// one attempt must not strip the label out from under the others.
+	for _, o := range d.sessions.Snapshot() {
+		if o.ID != s.ID && o.Source == "native" && o.IssueUUID == s.IssueUUID && nativeSessionPresent(o) {
+			return
+		}
 	}
 	// Label-mode polls for this session's project whose set_label the kill
 	// should clear. A session records no poll name, so project scope is the

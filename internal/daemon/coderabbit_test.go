@@ -109,8 +109,15 @@ func TestCodeRabbitWatchRoutesAndWatermarks(t *testing.T) {
 	if !strings.Contains(sends[0].text, "PR #7") || !strings.Contains(sends[0].text, "gh pr view 7") {
 		t.Errorf("hand-off must be the single-line PR pointer, got %q", sends[0].text)
 	}
-	if strings.Contains(sends[0].text, "nil deref") || strings.Contains(sends[0].text, "\n") {
-		t.Errorf("hand-off must NOT carry the raw multi-line comment, got %q", sends[0].text)
+	if strings.Contains(sends[0].text, "nil deref") {
+		t.Errorf("hand-off must NOT carry the raw comment text, got %q", sends[0].text)
+	}
+	// The only multi-line part it may carry is lola's OWN close-the-loop note:
+	// CodeRabbit's findings ARE review threads, and a worker that is never told
+	// to resolve them leaves the PR reading as untouched.
+	if !strings.Contains(sends[0].text, "may also be open as review threads on PR #7") ||
+		!strings.Contains(sends[0].text, "resolveReviewThread") {
+		t.Errorf("watch pointer must ask the worker to close the threads it fixes, got %q", sends[0].text)
 	}
 	if got.AtPrompt {
 		t.Error("AtPrompt must be consumed after the hand-off")

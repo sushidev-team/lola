@@ -84,8 +84,15 @@ func (d *Daemon) handleOpen(ctx context.Context, project, ref string) (protocol.
 // handleOpen it needs git + tmux only (no coding agent), records the session as
 // an agent-less manual-kind shell (kept out of the control loop), and reuses
 // cmd=kill for teardown. Unlike handleOpen the branch is lola-owned, so teardown
-// deletes it.
+// deletes it. With Existing (cmd=openExisting), work directly on the chosen
+// branch instead and keep it on teardown.
 func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs) (protocol.OpenData, error) {
+	if a.Location != "" && a.Location != "worktree" {
+		return d.handleOpenDirectory(ctx, a)
+	}
+	if err := validateSessionName(a.Name); err != nil {
+		return protocol.OpenData{}, err
+	}
 	project := strings.TrimSpace(a.Project)
 	branch := strings.TrimSpace(a.Branch)
 	base := strings.TrimSpace(a.Base)
@@ -99,6 +106,13 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	health := d.runtimeHealth
 	home := d.home
 	agentBin := agent.Parse(d.cfg.AgentForProject(project)).Binary()
+	if agent.Valid(strings.TrimSpace(a.AgentKind)) {
+		// A per-spawn override picks a different coding agent for this one
+		// session; the health gate must confirm THAT binary, not the
+		// configured default's.
+		agentBin = agent.Parse(strings.TrimSpace(a.AgentKind)).Binary()
+	}
+	agentBin = sandboxedBin(d.cfg, project, agentBin)
 	d.mu.Unlock()
 	if p == nil {
 		return protocol.OpenData{}, fmt.Errorf("unknown project %q", project)
@@ -123,8 +137,10 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
 	var sess session.Session
 	var err error
-	if a.Agent {
-		sess, err = nat.OpenManualAgent(cctx, *p, id, branch, base, a.Prompt)
+	if a.Existing {
+		sess, err = nat.OpenExisting(cctx, *p, id, branch, a.Prompt, strings.TrimSpace(a.AgentKind), a.Agent)
+	} else if a.Agent {
+		sess, err = nat.OpenManualAgent(cctx, *p, id, branch, base, a.Prompt, strings.TrimSpace(a.AgentKind))
 	} else {
 		sess, err = nat.OpenManual(cctx, *p, id, branch, base)
 	}
@@ -133,8 +149,12 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 		return protocol.OpenData{}, err
 	}
 	sess.Repo = p.Repo
+	sess.Name = strings.TrimSpace(a.Name)
 	d.sessions.Upsert(sess)
 	d.recordSessionEvent("", sess)
+	if a.Agent {
+		d.noteInitial(id, a.Prompt, "")
+	}
 	if serr := d.sessions.Save(); serr != nil {
 		d.logf("", "openManual: persist sessions after manual worktree %s: %v", branch, serr)
 	}
@@ -144,7 +164,11 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	if a.Agent {
 		kindWord = "agent"
 	}
-	msg := fmt.Sprintf("created %s (%s) with an %s at %s — attach in the TUI, or: tmux -L lola attach -t %s", branch, p.Name, kindWord, dir, id)
+	verb := "created"
+	if a.Existing {
+		verb = "opened"
+	}
+	msg := fmt.Sprintf("%s %s (%s) with an %s at %s — attach in the TUI, or: tmux -L lola attach -t %s", verb, branch, p.Name, kindWord, dir, id)
 	d.logf("", "openManual: %s", msg)
 	return protocol.OpenData{SessionID: id, Worktree: dir, Branch: branch, Message: msg}, nil
 }
@@ -169,7 +193,7 @@ func (d *Daemon) handleOpenPr(ctx context.Context, a protocol.OpenPrArgs) (proto
 	p := d.cfg.ProjectByName(project)
 	health := d.runtimeHealth
 	home := d.home
-	agentBin := agent.Parse(d.cfg.AgentForProject(project)).Binary()
+	agentBin := sandboxedBin(d.cfg, project, agent.Parse(d.cfg.AgentForProject(project)).Binary())
 	d.mu.Unlock()
 	if p == nil {
 		return protocol.OpenData{}, fmt.Errorf("unknown project %q", project)
@@ -189,7 +213,7 @@ func (d *Daemon) handleOpenPr(ctx context.Context, a protocol.OpenPrArgs) (proto
 	prompt := fmt.Sprintf("You are on the branch %q of an existing pull request in %s. Review the current state, address any outstanding review feedback or CI failures, and push your changes back to this branch.", branch, p.Repo)
 
 	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
-	sess, err := nat.OpenPRAgent(cctx, *p, id, branch, prompt)
+	sess, err := nat.OpenPRAgent(cctx, *p, id, branch, prompt, "")
 	cancel()
 	if err != nil {
 		return protocol.OpenData{}, err

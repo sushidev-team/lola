@@ -55,7 +55,7 @@ func buildBrain(bc config.BrainConfig) *brain.Client {
 	if !bc.Enabled {
 		return nil
 	}
-	cl := &brain.Client{Model: bc.Model}
+	cl := &brain.Client{Model: bc.Model, Dir: helperWorkDir()}
 	if bc.TimeoutSeconds > 0 {
 		cl.Timeout = time.Duration(bc.TimeoutSeconds) * time.Second
 	}
@@ -71,11 +71,18 @@ func buildBrain(bc config.BrainConfig) *brain.Client {
 // enabling/disabling the brain (or changing model/timeout) takes effect live.
 func (d *Daemon) setBrainLocked(bc config.BrainConfig) {
 	d.brain = buildBrain(bc)
+	d.commentSummarize = nil
 	if d.brain == nil {
 		d.brainSummarize = nil
 		return
 	}
 	d.brainSummarize = d.brain.Summarize
+	comments := *d.brain
+	comments.Model = "haiku"
+	if comments.Timeout <= 0 || comments.Timeout > commentSummaryTimeout {
+		comments.Timeout = commentSummaryTimeout
+	}
+	d.commentSummarize = comments.Summarize
 }
 
 // brainTimeout is the wall-clock bound applied to a single summary call,
@@ -155,7 +162,11 @@ func (d *Daemon) escalationSummary(ctx context.Context, s session.Session) strin
 func (d *Daemon) gatherEscalationContext(ctx context.Context, s session.Session) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Coding-agent session %s (issue %s) has been handed off after automatic recovery failed.\n", s.ID, issueLabel(s))
-	fmt.Fprintf(&b, "Derived status: %s\n", s.Status)
+	// BOTH axes, not the rolled-up word. The rollup ranks a waiting agent above
+	// every PR state, so an escalated session that had stopped to ask something
+	// described itself to the summarizer as "needs_input" — hiding the red CI
+	// that is the entire reason this summary is being written.
+	fmt.Fprintf(&b, "Agent state: %s\nPR delivery state: %s\n", s.AgentState, s.Delivery)
 	if s.PR != nil {
 		fmt.Fprintf(&b, "PR #%d state=%s checks=%s review=%s mergeable=%s\n",
 			s.PR.Number, s.PR.State, s.PR.ChecksState, s.PR.ReviewDecision, s.PR.Mergeable)

@@ -14,17 +14,21 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // fakeNative is a hermetic NativeAPI: no git, tmux, or claude is ever executed.
@@ -49,9 +53,17 @@ type fakeNative struct {
 	prAgentErr     error // returned from OpenPRAgent
 	manualAgents   []nativeAgentCall
 	manualAgentErr error // returned from OpenManualAgent
+	existingCalls  []nativeExistingCall
+	forks          []runtime.ForkSpec
+	forkErr        error           // returned from ForkAgent
+	takenBranches  map[string]bool // SlotTaken answers true for these branches
+	switches       []nativeSwitchCall
+	switchErr      error // returned from SwitchAgent
+	spawnOpts      []runtime.SpawnOpts
+	attemptErr     map[int]error // SpawnWith: a best-of attempt (1-based) that fails
 }
 
-type nativeSpawnCall struct{ project, identifier string }
+type nativeSpawnCall struct{ project, identifier, agentKind string }
 
 type nativeOpenCall struct{ project, id, ref, branch string }
 
@@ -59,17 +71,73 @@ type nativeOpenManualCall struct{ project, id, branch, base string }
 
 type nativeAgentCall struct{ project, id, branch, base, prompt string }
 
+type nativeExistingCall struct {
+	project, id, branch, prompt, agentKind string
+	useAgent                               bool
+}
+
+func (f *fakeNative) OpenExisting(ctx context.Context, p config.Project, id, branch, prompt, agentKind string, useAgent bool) (session.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.existingCalls = append(f.existingCalls, nativeExistingCall{p.Name, id, branch, prompt, agentKind, useAgent})
+	s := session.Session{ID: id, Source: "native", Kind: session.KindPR, Project: p.Name, Branch: branch, Agentless: !useAgent, Agent: agentKind}
+	if useAgent {
+		s.SetAgentState(state.AgentStarting, "", time.Now())
+	} else {
+		s.SetAgentState(state.AgentShell, "", time.Now())
+	}
+	return s, nil
+}
+
 type nativeKillCall struct {
 	id             string
 	removeWorktree bool
 	force          bool
 }
 
+type nativeSwitchCall struct{ sessionID, kind, reason string }
+
 var _ NativeAPI = (*fakeNative)(nil)
 
-func (f *fakeNative) Spawn(ctx context.Context, p config.Project, is linear.Issue) (session.Session, error) {
+func (f *fakeNative) Spawn(ctx context.Context, p config.Project, is linear.Issue, agentOverride string) (session.Session, error) {
+	return f.SpawnWith(ctx, p, is, runtime.SpawnOpts{Agent: agentOverride})
+}
+
+func (f *fakeNative) SpawnWith(ctx context.Context, p config.Project, is linear.Issue, o runtime.SpawnOpts) (session.Session, error) {
+	sess, err := f.spawn(ctx, p, is, o.Agent)
 	f.mu.Lock()
-	f.spawns = append(f.spawns, nativeSpawnCall{p.Name, is.Identifier})
+	f.spawnOpts = append(f.spawnOpts, o)
+	aerr := f.attemptErr[o.Attempt]
+	f.mu.Unlock()
+	if err != nil {
+		return sess, err
+	}
+	if o.Group != "" && o.Attempt > 0 {
+		if aerr != nil {
+			return session.Session{}, aerr
+		}
+		suffix := "-b" + strconv.Itoa(o.Attempt)
+		sess.ID += suffix
+		sess.TmuxName = sess.ID
+		sess.Branch += suffix
+		sess.BestOf, sess.Attempt, sess.Attempts = o.Group, o.Attempt, o.Of
+	}
+	sess.Model = o.Model
+	if o.Agent != "" {
+		sess.Agent = o.Agent
+	}
+	return sess, nil
+}
+
+func (f *fakeNative) spawnOptsCalls() []runtime.SpawnOpts {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.spawnOpts)
+}
+
+func (f *fakeNative) spawn(ctx context.Context, p config.Project, is linear.Issue, agentOverride string) (session.Session, error) {
+	f.mu.Lock()
+	f.spawns = append(f.spawns, nativeSpawnCall{p.Name, is.Identifier, agentOverride})
 	_, f.spawnDeadline = ctx.Deadline()
 	hook, err := f.onSpawn, f.spawnErr
 	f.mu.Unlock()
@@ -149,7 +217,7 @@ func (f *fakeNative) openManualCalls() []nativeOpenManualCall {
 	return slices.Clone(f.openManuals)
 }
 
-func (f *fakeNative) OpenPRAgent(ctx context.Context, p config.Project, id, branch, prompt string) (session.Session, error) {
+func (f *fakeNative) OpenPRAgent(ctx context.Context, p config.Project, id, branch, prompt, agentOverride string) (session.Session, error) {
 	f.mu.Lock()
 	f.prAgents = append(f.prAgents, nativeAgentCall{p.Name, id, branch, "", prompt})
 	err := f.prAgentErr
@@ -160,7 +228,7 @@ func (f *fakeNative) OpenPRAgent(ctx context.Context, p config.Project, id, bran
 	return session.Session{ID: id, Source: "native", Kind: session.KindPR, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: "working", Agent: "claude"}, nil
 }
 
-func (f *fakeNative) OpenManualAgent(ctx context.Context, p config.Project, id, branch, base, prompt string) (session.Session, error) {
+func (f *fakeNative) OpenManualAgent(ctx context.Context, p config.Project, id, branch, base, prompt, agentOverride string) (session.Session, error) {
 	f.mu.Lock()
 	f.manualAgents = append(f.manualAgents, nativeAgentCall{p.Name, id, branch, base, prompt})
 	err := f.manualAgentErr
@@ -169,6 +237,24 @@ func (f *fakeNative) OpenManualAgent(ctx context.Context, p config.Project, id, 
 		return session.Session{}, err
 	}
 	return session.Session{ID: id, Source: "native", Kind: session.KindManual, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: "working", Agent: "claude"}, nil
+}
+
+func (f *fakeNative) ForkAgent(ctx context.Context, p config.Project, spec runtime.ForkSpec) (session.Session, error) {
+	f.mu.Lock()
+	f.forks = append(f.forks, spec)
+	err := f.forkErr
+	f.mu.Unlock()
+	if err != nil {
+		return session.Session{}, err
+	}
+	return session.Session{ID: spec.SessionID, Source: "native", Kind: session.KindManual, Project: p.Name, Title: spec.Title,
+		Branch: spec.Branch, Repo: p.Repo, TmuxName: spec.SessionID, Status: "working", Agent: "claude", ContextKey: spec.ContextKey}, nil
+}
+
+func (f *fakeNative) SlotTaken(_ context.Context, _ config.Project, _, branch string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.takenBranches[branch], nil
 }
 
 func (f *fakeNative) prAgentCalls() []nativeAgentCall {
@@ -227,6 +313,24 @@ func (f *fakeNative) reviveCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.revives)
+}
+
+func (f *fakeNative) SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.switches = append(f.switches, nativeSwitchCall{s.ID, kind.String(), reason})
+	if f.switchErr != nil {
+		return session.Session{}, f.switchErr
+	}
+	s.Agent = kind.String()
+	s.Status = "working"
+	return s, nil
+}
+
+func (f *fakeNative) switchCalls() []nativeSwitchCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.switches)
 }
 
 func (f *fakeNative) spawnCalls() []nativeSpawnCall {
@@ -298,7 +402,7 @@ func TestTickNativePollSpawnsViaNativeRuntime(t *testing.T) {
 	if m := findMatch(t, res, "FE-7"); m.Action != "spawned" {
 		t.Fatalf("match = %+v, want spawned", m)
 	}
-	if got := nat.spawnCalls(); len(got) != 1 || got[0] != (nativeSpawnCall{"p1", "FE-7"}) {
+	if got := nat.spawnCalls(); len(got) != 1 || got[0] != (nativeSpawnCall{"p1", "FE-7", ""}) {
 		t.Errorf("native spawns = %+v, want [{p1 FE-7}]", got)
 	}
 
@@ -379,21 +483,26 @@ func TestTickNativeUnknownProjectFailsWithoutStateMutation(t *testing.T) {
 
 func TestNativeLiveCounted(t *testing.T) {
 	sessions := []session.Session{
-		nativeSess("FE-1", "working"),                 // counts
-		nativeSess("FE-2", "needs_input"),             // counts
-		nativeSess("FE-3", "ci_failed"),               // counts
-		nativeSess("FE-4", "changes_requested"),       // counts
-		nativeSess("FE-5", "ci_pending"),              // counts
-		nativeSess("FE-11", "draft"),                  // counts: agent still iterating on its draft PR
+		nativeSess("FE-1", "working"),           // counts
+		nativeSess("FE-2", "needs_input"),       // counts
+		nativeSess("FE-3", "ci_failed"),         // counts
+		nativeSess("FE-4", "changes_requested"), // counts
+		nativeSess("FE-5", "ci_pending"),        // counts
+		nativeSess("FE-11", "draft"),            // counts: agent still iterating on its draft PR
+		// Counts, and this is the DELIBERATE change from the pre-axis table:
+		// a live agent between turns with no PR still owns its runner, and the
+		// cap counts runners. It used to be excluded, which was survivable only
+		// while the agent's 60s idle nudge turned every such session into
+		// needs_input (which did count) within a minute. See state.HoldsSlot.
+		nativeSess("FE-10", "idle"),
 		nativeSess("FE-6", "approved"),                // parked: no slot
 		nativeSess("FE-7", "review_pending"),          // parked: no slot
 		nativeSess("FE-8", "merged"),                  // done: no slot
 		nativeSess("FE-9", "dead"),                    // dead: no slot
-		nativeSess("FE-10", "idle"),                   // between turns: no slot
 		{ID: "ao-1", Source: "ao", Status: "working"}, // non-native source: never
 	}
-	if got := NativeLiveCounted(sessions); got != 6 {
-		t.Errorf("NativeLiveCounted = %d, want 6 (slot-occupying states incl. draft)", got)
+	if got := NativeLiveCounted(sessions); got != 7 {
+		t.Errorf("NativeLiveCounted = %d, want 7 (slot-occupying states incl. draft and pre-PR idle)", got)
 	}
 	if got := NativeLiveCounted(nil); got != 0 {
 		t.Errorf("NativeLiveCounted(nil) = %d, want 0", got)
@@ -459,7 +568,11 @@ func TestHandleHookEventStatusTransitions(t *testing.T) {
 		event, before, after string
 	}{
 		{"stop", "working", "idle"},
-		{"notification", "working", "needs_input"},
+		// A notification with no classifiable reason is the agent's own idle
+		// nudge, and an idle nudge is idleness — see server.go's split. Only a
+		// permission/approval notification still parks on needs_input, which
+		// TestHookPayloadIngestion covers (it needs a Hook payload to say so).
+		{"notification", "working", "idle"},
 		{"session_end", "working", "session_ended"},
 		{"tool_use", "idle", "working"},           // heartbeat promotes idle back to working
 		{"user_prompt", "idle", "working"},        // turn start on an idle agent
@@ -668,7 +781,15 @@ func TestObserveNativePreservesConcurrentHookNeedsInput(t *testing.T) {
 	// fires while the observer is "inside" its gh exec, i.e. after the cycle's
 	// snapshot was taken.
 	d.prForBranch = func(ctx context.Context, repo, branch string) (*scm.PR, error) {
-		resp := d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "notification"})
+		// A PERMISSION notification, not a bare one: a bare notification is the
+		// agent's own idle nudge and now parks the session idle, which would
+		// make this test assert nothing about survival. A permission prompt is
+		// the real block, and it is also the InputReason the observer's pane
+		// reconcile is forbidden to demote.
+		resp := d.handleHookEvent(protocol.Request{
+			Cmd: "hookEvent", Session: s.ID, Event: "notification",
+			Hook: &protocol.HookPayload{Message: "Claude needs your permission to use Bash"},
+		})
 		if !resp.OK {
 			t.Errorf("hookEvent mid-cycle failed: %+v", resp)
 		}
@@ -717,6 +838,7 @@ func TestObserveNativeRepoFallsBackToProjectRegistry(t *testing.T) {
 func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	native := nativeSess("FE-1", "working")
+	native.FirstSeen = time.Now().Add(-5*time.Hour - 4*time.Minute)
 	d.sessions.Upsert(native)
 	d.sessions.Upsert(session.Session{ID: "ao-1", Source: "ao", Project: "proj", Issue: "FE-9", Status: "working"})
 
@@ -728,6 +850,9 @@ func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
 	n, ok := byID[native.ID]
 	if !ok {
 		t.Fatalf("native session missing from reply: %+v", data.Sessions)
+	}
+	if !n.FirstSeen.Equal(native.FirstSeen) || n.Age != "5h" {
+		t.Errorf("session age = %q at %v, want 5h at %v", n.Age, n.FirstSeen, native.FirstSeen)
 	}
 	if n.Source != "native" {
 		t.Errorf("native source = %q, want native", n.Source)
@@ -744,34 +869,56 @@ func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
 	}
 }
 
-// reactingLabel is the pure derivation the TUI renders; the retry budget (M in
-// "N/M") comes from the ci_failed reaction config.
+// reactingLabel is the pure derivation the UIs render, off the DELIVERY axis —
+// the same axis react dispatches on, so the label and the engine can never
+// disagree. The retry budget (M in "N/M") comes from the ci_failed reaction
+// config.
 func TestReactingLabel(t *testing.T) {
 	const budget = 2
 	cases := []struct {
 		name      string
-		status    string
+		delivery  state.DeliveryState
 		ciRetries int
 		escalated bool
 		want      string
 	}{
-		{"plain working session", "working", 0, false, ""},
-		{"ci failed, no retry yet", "ci_failed", 0, false, "ci retry 0/2"},
-		{"ci failed, mid retry", "ci_failed", 1, false, "ci retry 1/2"},
-		{"ci pending after a retry send", "ci_pending", 1, false, "ci retry 1/2"},
-		{"ci pending, no retry in flight", "ci_pending", 0, false, ""},
-		{"escalated wins over ci_failed", "ci_failed", 2, true, "escalated"},
-		{"changes requested", "changes_requested", 0, false, "addressing review"},
-		{"merge conflict", "merge_conflict", 0, false, "rebasing"},
-		{"approved and green", "approved", 0, false, "ready to merge"},
-		{"green, awaiting a reviewer", "review_pending", 0, false, "awaiting review"},
-		{"merged is not a posture", "merged", 0, false, ""},
+		{"pre-PR session", state.DeliveryNone, 0, false, ""},
+		{"draft is not a posture", state.DeliveryDraft, 0, false, ""},
+		{"ci failed, no retry yet", state.DeliveryCIFailed, 0, false, "ci retry 0/2"},
+		{"ci failed, mid retry", state.DeliveryCIFailed, 1, false, "ci retry 1/2"},
+		{"ci pending after a retry send", state.DeliveryCIPending, 1, false, "ci retry 1/2"},
+		{"ci pending, no retry in flight", state.DeliveryCIPending, 0, false, ""},
+		{"escalated wins over ci_failed", state.DeliveryCIFailed, 2, true, "escalated"},
+		{"changes requested", state.DeliveryChangesRequested, 0, false, "addressing review"},
+		{"merge conflict", state.DeliveryMergeConflict, 0, false, "rebasing"},
+		{"approved and green", state.DeliveryApproved, 0, false, "ready to merge"},
+		{"green, awaiting a reviewer", state.DeliveryReviewPending, 0, false, "awaiting review"},
+		{"merged is not a posture", state.DeliveryMerged, 0, false, ""},
 	}
 	for _, c := range cases {
-		if got := reactingLabel(c.status, c.ciRetries, c.escalated, budget); got != c.want {
+		if got := reactingLabel(c.delivery, c.ciRetries, c.escalated, budget); got != c.want {
 			t.Errorf("%s: reactingLabel(%q, %d, %v) = %q, want %q",
-				c.name, c.status, c.ciRetries, c.escalated, got, c.want)
+				c.name, c.delivery, c.ciRetries, c.escalated, got, c.want)
 		}
+	}
+}
+
+// The posture survives a WAITING agent, which is the whole reason it moved off
+// the rolled-up status: Rollup ranks waiting_input above every PR state, so a
+// session mid ci-retry that stopped to ask a question used to render a blank
+// REACTING column — exactly when a human most needed to know a retry was
+// already in flight.
+func TestReactingLabelSurvivesAWaitingAgent(t *testing.T) {
+	s := session.Session{
+		AgentState: state.AgentWaitingInput,
+		Delivery:   state.DeliveryCIFailed,
+		CIRetries:  1,
+	}
+	if got := state.Rollup(s.AgentState, s.Delivery); got != "needs_input" {
+		t.Fatalf("precondition: Rollup = %q, want needs_input", got)
+	}
+	if got := reactingLabel(s.Delivery, s.CIRetries, s.Escalated, 2); got != "ci retry 1/2" {
+		t.Errorf("reactingLabel = %q, want \"ci retry 1/2\"", got)
 	}
 }
 
@@ -1110,5 +1257,25 @@ func TestTickFlipRecordsStrippedSubset(t *testing.T) {
 	}
 	if want := []string{"lbl-a"}; !reflect.DeepEqual(sess.RemovedLabels, want) {
 		t.Errorf("session RemovedLabels = %v, want %v", sess.RemovedLabels, want)
+	}
+}
+
+func (f *fakeNative) OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool) (session.Session, error) {
+	return session.Session{ID: id, Project: p.Name, Worktree: dir, Location: location, Agent: kind, Agentless: !useAgent, Kind: session.KindLocal, Source: "native", TmuxName: id}, nil
+}
+
+func TestAdoptPreservesSharedTasksAndReportedPlan(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	prev := nativeSess("FE-1", "working")
+	prev.Tasks = []protocol.SessionTask{{ID: "work", Kind: "task", Text: "Implement", State: "doing", Author: "user"}, {ID: "criterion", ParentID: "work", Kind: "requirement", Text: "Keep focus", State: "todo", Author: "agent"}}
+	prev.Board.Phase = board.PhaseTesting
+	d.sessions.Upsert(prev)
+	d.native = &fakeNative{adopted: []session.Session{{ID: prev.ID, Source: "native", Project: "p1", Status: "working"}}}
+	d.adoptNativeSessions(context.Background())
+	// Load the saved snapshot as another daemon would, not just the in-memory copy.
+	loaded := session.NewStore(filepath.Join(d.home, "state"))
+	got, ok := loaded.Get(prev.ID)
+	if !ok || !reflect.DeepEqual(got.Tasks, prev.Tasks) || !reflect.DeepEqual(got.Board, prev.Board) {
+		t.Fatalf("adoption lost tasks/plan: %+v", got)
 	}
 }

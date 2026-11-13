@@ -176,20 +176,19 @@ func TestObserveLoopStopsOnShutdown(t *testing.T) {
 
 // --- Age formatting -------------------------------------------------------------
 
-func TestFormatAge(t *testing.T) {
-	cases := []struct {
+func TestFormatAgo(t *testing.T) {
+	for _, c := range []struct {
 		d    time.Duration
 		want string
 	}{
-		{-time.Second, "0s"},
-		{42 * time.Second, "42s"},
-		{12 * time.Minute, "12m"},
-		{3*time.Hour + 5*time.Minute, "3h05m"},
-		{50 * time.Hour, "2d2h"},
-	}
-	for _, c := range cases {
-		if got := formatAge(c.d); got != c.want {
-			t.Errorf("formatAge(%v) = %q, want %q", c.d, got, c.want)
+		{-time.Second, "<1m"},
+		{59 * time.Second, "<1m"},
+		{5 * time.Minute, "5m"},
+		{10*time.Hour + 51*time.Minute, "10h"},
+		{50 * time.Hour, "2d"},
+	} {
+		if got := formatAgo(c.d); got != c.want {
+			t.Errorf("formatAgo(%v) = %q, want %q", c.d, got, c.want)
 		}
 	}
 }

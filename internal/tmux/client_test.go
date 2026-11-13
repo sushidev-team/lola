@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,6 +55,31 @@ func TestDirPrecedence(t *testing.T) {
 	}
 	if got := (&Client{}).dir(); got != home {
 		t.Fatalf("empty Dir: got %q, want home %q", got, home)
+	}
+}
+
+func TestHasAttachedClient(t *testing.T) {
+	for _, tc := range []struct {
+		out           string
+		attached, bad bool
+	}{
+		{"0", false, false}, {"1", true, false}, {"2", true, false},
+		{"", false, true}, {"unknown", false, true}, {"-1", false, true},
+	} {
+		t.Run(tc.out, func(t *testing.T) {
+			bin, args := fakeTmux(t, tc.out, "", 0)
+			got, err := (&Client{Bin: bin}).HasAttachedClient(context.Background(), "main")
+			if got != tc.attached || (err != nil) != tc.bad {
+				t.Fatalf("HasAttachedClient = %v, %v", got, err)
+			}
+			if got := loggedArgs(t, args); got != "-L lola display-message -p -t =main: #{session_attached}" {
+				t.Fatalf("unexpected target/query: %s", got)
+			}
+		})
+	}
+	bin, _ := fakeTmux(t, "", "no session", 1)
+	if _, err := (&Client{Bin: bin}).HasAttachedClient(context.Background(), "gone"); err == nil {
+		t.Fatal("a failed query must not be treated as detached")
 	}
 }
 
@@ -229,13 +255,42 @@ func TestSendKeysLiteralThenEnter(t *testing.T) {
 	bin, argsLog := fakeTmux(t, "", "", 0)
 	c := &Client{Bin: bin}
 
+	started := time.Now()
 	if err := c.SendKeys(context.Background(), "main", "fix the CI failure"); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
-	// send-keys also takes a target-PANE, so "=main:" (not "=main").
-	want := "-L lola send-keys -t =main: -l fix the CI failure\n-L lola send-keys -t =main: Enter"
+	if time.Since(started) < submitSettleDelay {
+		t.Error("single-line text must settle before Enter too")
+	}
+	// send-keys also takes a target-PANE, so "=main:" (not "=main"). The
+	// copy-mode cancel comes first: a pane a human scrolled back reads keys as
+	// copy-mode COMMANDS, so the payload would never reach the agent.
+	want := "-L lola copy-mode -q -t =main:\n" +
+		"-L lola send-keys -t =main: -l -- fix the CI failure\n-L lola send-keys -t =main: Enter"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked:\n%s\nwant literal text then Enter:\n%s", args, want)
+	}
+}
+
+// A copy-mode cancel that fails must not stop the send: the pane usually has no
+// mode at all, and "could not leave a mode it was not in" is not a reason to
+// drop a reaction. Only the send-keys result decides.
+func TestSendKeysProceedsWhenCopyModeCancelFails(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	argsLog := filepath.Join(dir, "args.log")
+	// Fail only the copy-mode call; everything else succeeds. argv is
+	// "-L lola <subcommand> ...", so the subcommand is $3.
+	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\n" +
+		"case \"$3\" in copy-mode) exit 1;; esac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Client{Bin: bin}).SendKeys(context.Background(), "main", "hello"); err != nil {
+		t.Fatalf("SendKeys: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "send-keys -t =main: -l -- hello") {
+		t.Errorf("payload not sent after a failed copy-mode cancel:\n%s", args)
 	}
 }
 
@@ -256,9 +311,96 @@ func TestNewSessionArgs(t *testing.T) {
 	if err := c.NewSession(context.Background(), "lola-NORI-12-1", "/work/nori", "claude"); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	want := "-L lola new-session -d -s lola-NORI-12-1 -c /work/nori claude"
+	// The server default precedes the create — tmux reads history-limit when the
+	// PANE is born, so applying it afterwards would be dead configuration.
+	want := "-L lola set-option -g history-limit 10000\n-L lola set-option -g mouse off\n" +
+		"-L lola new-session -d -s lola-NORI-12-1 -c /work/nori claude"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want %q", args, want)
+	}
+}
+
+// The scroll defaults are lola's OWN: a session it spawns has the same history
+// on every machine, whatever ~/.tmux.conf set when the server started.
+func TestNewSessionAppliesConfiguredScrollback(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	c := &Client{Bin: bin, Scrollback: 50000}
+
+	if err := c.NewSession(context.Background(), "s1", "/work", ""); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "-L lola set-option -g history-limit 50000") {
+		t.Errorf("configured scrollback not applied:\n%s", args)
+	}
+}
+
+// [tmux].mouse is the whole truth about mouse mode: it is written on every call,
+// in BOTH states, so a machine whose ~/.tmux.conf turned the mouse on cannot
+// hand tmux the clicks in a lola pane behind the operator's back.
+func TestConfigureServerOwnsTheMouseOption(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	if err := (&Client{Bin: bin}).ConfigureServer(context.Background()); err != nil {
+		t.Fatalf("ConfigureServer: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "-L lola set-option -g mouse off") {
+		t.Errorf("Mouse=false must disable mouse mode server-wide, got:\n%s", args)
+	}
+
+	bin, argsLog = fakeTmux(t, "", "", 0)
+	if err := (&Client{Bin: bin, Mouse: true}).ConfigureServer(context.Background()); err != nil {
+		t.Fatalf("ConfigureServer: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "-L lola set-option -g mouse on") {
+		t.Errorf("Mouse=true must enable mouse mode server-wide, got:\n%s", args)
+	}
+}
+
+// A COLD server has nothing to set an option on — and tmux offers no way to
+// pre-start one (a server with no sessions exits immediately), so the option is
+// applied AGAIN after the create. Without the retry the first session after a
+// reboot keeps tmux's 2000-line default, silently, for its whole life: exactly
+// the "cannot scroll far" symptom the setting exists to fix.
+func TestNewSessionRetriesTheServerDefaultOnAColdServer(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	argsLog := filepath.Join(dir, "args.log")
+	started := filepath.Join(dir, "started")
+	// Stands in for tmux: set-option fails until a session exists.
+	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\n" +
+		"case \"$3\" in\n" +
+		"  set-option) [ -f " + started + " ] || exit 1 ;;\n" +
+		"  new-session) touch " + started + " ;;\n" +
+		"esac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Client{Bin: bin}).NewSession(context.Background(), "s1", "/work", ""); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	want := "-L lola set-option -g history-limit 10000\n-L lola set-option -g mouse off\n" +
+		"-L lola new-session -d -s s1 -c /work\n" +
+		"-L lola set-option -g history-limit 10000\n-L lola set-option -g mouse off"
+	if args := loggedArgs(t, argsLog); args != want {
+		t.Errorf("invoked:\n%s\nwant the default retried once the server exists:\n%s", args, want)
+	}
+}
+
+// A server option is chrome, not a precondition: a tmux that refuses it must
+// still get the session created.
+func TestNewSessionSurvivesServerOptionFailure(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	argsLog := filepath.Join(dir, "args.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\n" +
+		"case \"$3\" in set-option) exit 1;; esac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Client{Bin: bin}).NewSession(context.Background(), "s1", "/work", ""); err != nil {
+		t.Fatalf("NewSession must not fail on a rejected server option: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "new-session -d -s s1") {
+		t.Errorf("session not created:\n%s", args)
 	}
 }
 
@@ -269,7 +411,8 @@ func TestNewSessionOmitsEmptyCommand(t *testing.T) {
 	if err := c.NewSession(context.Background(), "s1", "/work", ""); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	want := "-L lola new-session -d -s s1 -c /work"
+	want := "-L lola set-option -g history-limit 10000\n-L lola set-option -g mouse off\n" +
+		"-L lola new-session -d -s s1 -c /work"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want default-shell form %q", args, want)
 	}
@@ -539,5 +682,718 @@ func TestBuildViewerAllLinksFailTearsDown(t *testing.T) {
 func TestBuildViewerEmptyTabsErrors(t *testing.T) {
 	if err := (&Client{Bin: "/nonexistent/tmux"}).BuildViewer(context.Background(), "lola_viewer", "/wd", nil); err == nil {
 		t.Fatal("BuildViewer must error with no tabs")
+	}
+}
+
+func TestDeadPanesReportsOnlyFullyExitedSessions(t *testing.T) {
+	// A session's panes are listed one per line. "1" is a pane whose command has
+	// exited under remain-on-exit; a session is dead only when EVERY pane is.
+	fixture := "lola-app-eng-1-dev-1\t1\n" +
+		"lola-app-eng-1-dev-2\t0\n" +
+		"lola-app-eng-2-dev-1\t1\n" +
+		"lola-app-eng-2-dev-1\t0\n" + // second pane still alive → session alive
+		"lola-app-eng-3\t0"
+	bin, argsLog := fakeTmux(t, fixture, "", 0)
+	c := &Client{Bin: bin}
+
+	got, err := c.DeadPanes(context.Background())
+	if err != nil {
+		t.Fatalf("DeadPanes: %v", err)
+	}
+	want := map[string]bool{
+		"lola-app-eng-1-dev-1": true,
+		"lola-app-eng-1-dev-2": false,
+		"lola-app-eng-2-dev-1": false,
+		"lola-app-eng-3":       false,
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("DeadPanes[%q] = %v, want %v", name, got[name], w)
+		}
+	}
+	wantArgs := "-L lola list-panes -a -F #{session_name}\t#{pane_dead}"
+	if args := loggedArgs(t, argsLog); args != wantArgs {
+		t.Errorf("invoked %q, want %q", args, wantArgs)
+	}
+}
+
+func TestDeadPanesNoServerIsEmptyNotError(t *testing.T) {
+	bin, _ := fakeTmux(t, "", "no server running on /private/tmp/tmux-501/lola", 1)
+	c := &Client{Bin: bin}
+
+	got, err := c.DeadPanes(context.Background())
+	if err != nil {
+		t.Fatalf("DeadPanes with no server: want nil error, got %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("want empty map, got %#v", got)
+	}
+}
+
+func TestKeepDeadPaneTargetsTheWindowNotTheSession(t *testing.T) {
+	// remain-on-exit is a WINDOW option: targeted at a bare session name tmux
+	// answers "no such window" and the pane vanishes on exit after all.
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	c := &Client{Bin: bin}
+
+	if err := c.KeepDeadPane(context.Background(), "lola-app-eng-1-dev-1"); err != nil {
+		t.Fatalf("KeepDeadPane: %v", err)
+	}
+	wantArgs := "-L lola set-option -t =lola-app-eng-1-dev-1: -w remain-on-exit on"
+	if args := loggedArgs(t, argsLog); args != wantArgs {
+		t.Errorf("invoked %q, want %q", args, wantArgs)
+	}
+}
+
+func TestPanePIDReadsTheActivePane(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "48845\n", "", 0)
+	c := &Client{Bin: bin}
+
+	pid, err := c.PanePID(context.Background(), "lola-app-eng-1-dev-1")
+	if err != nil {
+		t.Fatalf("PanePID: %v", err)
+	}
+	if pid != 48845 {
+		t.Errorf("PanePID = %d, want 48845", pid)
+	}
+	wantArgs := "-L lola display-message -p -t =lola-app-eng-1-dev-1: #{pane_pid}"
+	if args := loggedArgs(t, argsLog); args != wantArgs {
+		t.Errorf("invoked %q, want %q", args, wantArgs)
+	}
+}
+
+// KillSessionTree must ALWAYS take the tmux session down, even when the process
+// group cannot be resolved (a dead pane, a tmux that will not answer) — the tab
+// must never survive because the port could not be freed.
+func TestKillSessionTreeStillKillsTheSessionWithoutAPanePID(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "not-a-pid\n", "", 0)
+	c := &Client{Bin: bin}
+
+	if err := c.KillSessionTree(context.Background(), "lola-app-eng-1-dev-1"); err != nil {
+		t.Fatalf("KillSessionTree: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "kill-session -t =lola-app-eng-1-dev-1") {
+		t.Errorf("invoked %q, want a kill-session despite the unusable pane pid", args)
+	}
+}
+
+// scrollFake stands in for tmux while a pane answers `display-message` with
+// `facts` ("<in_mode> <mouse_any> <width> <height>").
+func scrollFake(t *testing.T, facts string) (bin, argsLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin = filepath.Join(dir, "tmux")
+	argsLog = filepath.Join(dir, "args.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\n" +
+		"case \"$3\" in display-message) echo '" + facts + "' ;; esac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, argsLog
+}
+
+// A program that asked for the wheel gets it. An agent runs full-screen on the
+// ALTERNATE screen, where tmux keeps no scrollback at all — copy mode there
+// opens on an empty history and reads "[0/0]" — so the scroll has to reach the
+// program, which keeps its own transcript. The bytes go straight to the PANE
+// (send-keys -l), not through tmux's mouse handling, so [tmux].mouse cannot
+// switch it off.
+func TestScrollPaneSendsTheWheelToAProgramThatWantsIt(t *testing.T) {
+	bin, argsLog := scrollFake(t, "0 1 80 24")
+	how, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "lola-nori-1", 2)
+	if err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if how != ScrollApp {
+		t.Errorf("transport = %v, want ScrollApp", how)
+	}
+	args := loggedArgs(t, argsLog)
+	// SGR wheel-up (button 64) twice, aimed at the middle of the pane.
+	want := "-L lola send-keys -l -t =lola-nori-1: \x1b[<64;40;12M\x1b[<64;40;12M"
+	if !strings.Contains(args, want) {
+		t.Errorf("invoked:\n%q\nwant a literal SGR wheel burst:\n%q", args, want)
+	}
+	if strings.Contains(args, "copy-mode") {
+		t.Errorf("a program that wants the wheel must not be put in copy mode:\n%s", args)
+	}
+}
+
+func TestScrollPaneWheelDownIsButton65(t *testing.T) {
+	bin, argsLog := scrollFake(t, "0 1 80 24")
+	if _, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "lola-nori-1", -1); err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "\x1b[<65;40;12M") {
+		t.Errorf("invoked %q, want SGR wheel-DOWN (button 65)", args)
+	}
+}
+
+// A plain shell asks for nothing and its history IS tmux's, so there copy mode
+// is the only place to scroll.
+func TestScrollPaneUsesCopyModeWhenTheProgramIgnoresTheMouse(t *testing.T) {
+	bin, argsLog := scrollFake(t, "0 0 80 24")
+	how, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "lola-nori-1-shell-1", 3)
+	if err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if how != ScrollCopyMode {
+		t.Errorf("transport = %v, want ScrollCopyMode", how)
+	}
+	want := "-L lola copy-mode -e -t =lola-nori-1-shell-1: ; send-keys -X -N 3 -t =lola-nori-1-shell-1: scroll-up"
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, want) {
+		t.Errorf("invoked:\n%s\nwant:\n%s", args, want)
+	}
+}
+
+// Once a pane IS in copy mode, keep scrolling copy mode — the same test tmux's
+// own wheel binding makes, so a pane the user scrolled by hand keeps behaving.
+func TestScrollPaneStaysInCopyModeOnceEntered(t *testing.T) {
+	bin, argsLog := scrollFake(t, "1 1 80 24")
+	how, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "lola-nori-1", 1)
+	if err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if how != ScrollCopyMode {
+		t.Errorf("transport = %v, want ScrollCopyMode", how)
+	}
+	if args := loggedArgs(t, argsLog); strings.Contains(args, "send-keys -l") {
+		t.Errorf("a pane already in copy mode must not be sent wheel bytes:\n%s", args)
+	}
+}
+
+// A pane that cannot be described is most likely gone; copy mode is the half
+// that cannot type anything into a program by mistake, so that is where an
+// unanswerable probe lands.
+func TestScrollPaneFailsTowardCopyMode(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "can't find pane", 1)
+	if _, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "gone", 1); err == nil {
+		t.Error("want the copy-mode failure surfaced")
+	}
+	if args := loggedArgs(t, argsLog); strings.Contains(args, "send-keys -l") {
+		t.Errorf("an unanswerable pane must not be sent wheel bytes:\n%s", args)
+	}
+}
+
+func TestScrollPaneBoundsItsInput(t *testing.T) {
+	bin, argsLog := scrollFake(t, "0 0 80 24")
+	c := &Client{Bin: bin}
+	if _, err := c.ScrollPane(context.Background(), "s1", 1<<30); err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "-N 500 ") {
+		t.Errorf("invoked:\n%s\nwant the count clamped to %d", args, MaxScrollLines)
+	}
+	if _, err := c.ScrollPane(context.Background(), "s1", 0); err != nil {
+		t.Fatalf("ScrollPane(0): %v", err)
+	}
+	if got := strings.Count(loggedArgs(t, argsLog), "display-message"); got != 1 {
+		t.Errorf("a zero scroll must not run tmux at all, ran %d probes", got)
+	}
+	if _, err := c.ScrollPane(context.Background(), "", 1); err == nil {
+		t.Error("empty session name must error")
+	}
+}
+
+// TestScrollPaneAgainstRealTmux is the one test that runs a REAL tmux, because
+// the bug it guards was a wrong belief about tmux rather than wrong argv: an
+// agent runs full-screen on the alternate screen, where tmux's scrollback is
+// EMPTY, so the copy mode a fake would happily accept shows "[0/0]" and scrolls
+// nothing. Only a live server can tell the two panes apart.
+func TestScrollPaneAgainstRealTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	sock := fmt.Sprintf("lola-scrolltest-%d", os.Getpid())
+	c := &Client{Bin: "tmux", SocketName: sock, Dir: t.TempDir()}
+	t.Cleanup(func() { _ = exec.Command("tmux", "-L", sock, "kill-server").Run() })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// "app" asks for the wheel exactly as an agent does (DECSET 1003 any-event +
+	// 1006 SGR) and then echoes what it receives; "shell" asks for nothing.
+	if err := c.NewSession(ctx, "app", t.TempDir(), `printf '\033[?1003h\033[?1006h'; cat -v`); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if err := c.NewSession(ctx, "shell", t.TempDir(), `seq 1 200; sleep 60`); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	// The DECSET has to land before the pane can be classified.
+	var wantsMouse bool
+	for i := 0; i < 50 && !wantsMouse; i++ {
+		time.Sleep(100 * time.Millisecond)
+		_, wantsMouse, _, _ = c.paneScrollFacts(ctx, paneTarget("app"))
+	}
+	if !wantsMouse {
+		t.Fatal("the fixture never requested mouse reporting")
+	}
+
+	how, err := c.ScrollPane(ctx, "app", 2)
+	if err != nil {
+		t.Fatalf("ScrollPane(app): %v", err)
+	}
+	if how != ScrollApp {
+		t.Fatalf("transport = %v, want ScrollApp for a program that asked for the wheel", how)
+	}
+	var pane string
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if pane, _ = c.CapturePane(ctx, "app", 0); strings.Contains(pane, "^[[<64;") {
+			break
+		}
+	}
+	if !strings.Contains(pane, "^[[<64;") {
+		t.Errorf("the program never received a wheel event, pane:\n%s", pane)
+	}
+	if inMode, _, _, _ := c.paneScrollFacts(ctx, paneTarget("app")); inMode {
+		t.Error("a program that handles the wheel itself must not be put in copy mode")
+	}
+
+	how, err = c.ScrollPane(ctx, "shell", 5)
+	if err != nil {
+		t.Fatalf("ScrollPane(shell): %v", err)
+	}
+	if how != ScrollCopyMode {
+		t.Fatalf("transport = %v, want ScrollCopyMode for a plain shell", how)
+	}
+	if inMode, _, _, _ := c.paneScrollFacts(ctx, paneTarget("shell")); !inMode {
+		t.Error("a plain shell must end up scrolled in copy mode")
+	}
+	// And a keystroke has to be able to get it back out again.
+	if err := c.LeaveCopyMode(ctx, "shell"); err != nil {
+		t.Fatalf("LeaveCopyMode: %v", err)
+	}
+	if inMode, _, _, _ := c.paneScrollFacts(ctx, paneTarget("shell")); inMode {
+		t.Error("LeaveCopyMode must return the pane to the live view")
+	}
+}
+
+// TestKillSessionTreeToleratesRacedTeardown pins the race the switch-agent
+// path hit live: the process-group kill BLOCKS through its grace window, a
+// promptly-exiting pane takes its tmux session down during that window, and
+// the trailing kill-session then fails with "can't find session" — even
+// though the teardown fully succeeded. KillSessionTree must treat a failed
+// kill-session on a session that no longer exists as success; only an error
+// while the session still exists is real.
+func TestKillSessionTreeToleratesRacedTeardown(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	// A stateful fake: the session exists until the first kill-session, after
+	// which it is gone (the pane died under the group kill). has-session and
+	// display-message answer from that state.
+	script := `#!/bin/sh
+case "$3" in
+  has-session)
+    [ -f "` + dir + `/alive" ] && exit 0
+    echo "can't find session: $5" >&2
+    exit 1
+    ;;
+  display-message)
+    # No pane pid: the pane is already gone, so KillSessionTree skips the
+    # group kill and goes straight to the session teardown.
+    echo "0"
+    exit 0
+    ;;
+  kill-session)
+    if [ -f "` + dir + `/alive" ]; then
+      rm "` + dir + `/alive"
+      exit 0
+    fi
+    echo "can't find session: $5" >&2
+    exit 1
+    ;;
+esac
+exit 0`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "alive"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Client{Bin: bin}
+	ctx := context.Background()
+
+	// Sanity: the session starts alive.
+	if !c.Has(ctx, "lola-nori-app-nor-382") {
+		t.Fatal("precondition: session must exist before the kill")
+	}
+	// First kill tears the session down normally.
+	if err := c.KillSessionTree(ctx, "lola-nori-app-nor-382"); err != nil {
+		t.Fatalf("first KillSessionTree: %v", err)
+	}
+	if c.Has(ctx, "lola-nori-app-nor-382") {
+		t.Fatal("session must be gone after the kill")
+	}
+
+	// The race: kill-session fails because the session is ALREADY gone —
+	// exactly the live failure ("stop claude: tmux kill-session: exit status
+	// 1: can't find session"). This must NOT be an error.
+	if err := c.KillSessionTree(ctx, "lola-nori-app-nor-382"); err != nil {
+		t.Fatalf("KillSessionTree must tolerate a raced teardown, got: %v", err)
+	}
+}
+
+// TestKillSessionTreeRealFailureKeepsError pins the other half: a kill-session
+// error while the session STILL exists is a real failure and must surface.
+func TestKillSessionTreeRealFailureKeepsError(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	// has-session says the session exists; kill-session fails for another
+	// reason (e.g. a permission error), so the error is real and must return.
+	script := `#!/bin/sh
+case "$3" in
+  has-session)
+    exit 0
+    ;;
+  display-message)
+    echo "0"
+    exit 0
+    ;;
+  kill-session)
+    echo "permission denied" >&2
+    exit 1
+    ;;
+esac
+exit 0`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Client{Bin: bin}
+	if err := c.KillSessionTree(context.Background(), "lola-nori-app-nor-382"); err == nil {
+		t.Fatal("a kill-session failure on a live session must be an error")
+	}
+}
+
+// scriptedTmux installs a fake tmux whose exit code depends on its argv: it
+// fails whenever every string in failOn appears on the command line, and
+// succeeds otherwise. fakeTmux cannot express this, and the pin path needs it —
+// its whole question is what happens when the SECOND of two commands fails.
+func scriptedTmux(t *testing.T, failOn []string) (bin, argsLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin = filepath.Join(dir, "tmux")
+	argsLog = filepath.Join(dir, "args.log")
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("echo \"$@\" >> " + argsLog + "\n")
+	if len(failOn) > 0 {
+		b.WriteString("all=\"$*\"\n")
+		b.WriteString("fail=1\n")
+		for _, needle := range failOn {
+			b.WriteString("case \"$all\" in *" + needle + "*) ;; *) fail=0 ;; esac\n")
+		}
+		b.WriteString("[ \"$fail\" = 1 ] && exit 1\n")
+	}
+	b.WriteString("exit 0\n")
+	if err := os.WriteFile(bin, []byte(b.String()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, argsLog
+}
+
+// TestSetWindowSizePinsWithTwoCommands pins the option and then resizes. The
+// option alone changes nothing on screen, so both halves have to be sent.
+func TestSetWindowSizePin(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.SetWindowSize(context.Background(), "lola-fe-42", 50, 20); err != nil {
+		t.Fatalf("SetWindowSize: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	want := "-L lola set-option -w -t =lola-fe-42: window-size manual\n" +
+		"-L lola resize-window -t =lola-fe-42: -x 50 -y 20"
+	if got != want {
+		t.Fatalf("pin sent:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestSetWindowSizeRelease pins BOTH commands and their ORDER. Unsetting
+// window-size resizes nothing (tmux leaves the window at whatever it was last
+// told), and `resize-window -A` re-sets window-size to manual — so recomputing
+// second would leave the window pinned again, ignoring every client that
+// attaches afterwards.
+func TestSetWindowSizeRelease(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.SetWindowSize(context.Background(), "lola-fe-42", 0, 0); err != nil {
+		t.Fatalf("SetWindowSize: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	want := "-L lola resize-window -t =lola-fe-42: -A\n" +
+		"-L lola set-option -w -t =lola-fe-42: -u window-size"
+	if got != want {
+		t.Fatalf("release sent:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestSetWindowSizeFailedPinUndoesItself is the guarantee the phone's release
+// lifecycle rests on: a pin whose resize fails must leave NOTHING pinned, so a
+// refusal the daemon answered means the window is untouched.
+//
+// Without the undo, `window-size manual` is left set on a window nobody is
+// holding — frozen at its current size, no longer following its attached
+// clients — and the phone, having been told the pin failed, would never release
+// it.
+func TestSetWindowSizeFailedPinUndoesItself(t *testing.T) {
+	// Fail only the pinning resize (the one carrying -x), never the undo's -A.
+	bin, argsLog := scriptedTmux(t, []string{"resize-window", "-x"})
+	c := &Client{Bin: bin}
+	if err := c.SetWindowSize(context.Background(), "lola-fe-42", 50, 20); err == nil {
+		t.Fatal("a failed resize must still be reported as an error")
+	}
+	got := loggedArgs(t, argsLog)
+	want := "-L lola set-option -w -t =lola-fe-42: window-size manual\n" +
+		"-L lola resize-window -t =lola-fe-42: -x 50 -y 20\n" +
+		"-L lola resize-window -t =lola-fe-42: -A\n" +
+		"-L lola set-option -w -t =lola-fe-42: -u window-size"
+	if got != want {
+		t.Fatalf("failed pin sent:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestSetWindowSizeAgainstRealTmux drives an ACTUAL tmux server, because the
+// argv tests above cannot see the bug this feature actually had.
+//
+// `window-size` is a window option and `resize-window` takes a target-WINDOW,
+// where "=name" means an exact WINDOW-name match — and windows are named after
+// the command they run. So every call answered `no such window: =<session>`,
+// the pin never resized anything on any machine, and three tests asserting the
+// argv passed the whole time. Only tmux itself knows its target grammar.
+//
+// Isolated and cheap: its own -L socket, torn down at the end, skipped where
+// tmux is not installed. Nothing here touches lola's server or the user's.
+func TestSetWindowSizeAgainstRealTmux(t *testing.T) {
+	bin, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux is not installed")
+	}
+	socket := fmt.Sprintf("lolatest-%d-%d", os.Getpid(), time.Now().UnixNano())
+	c := &Client{Bin: bin, SocketName: socket, Dir: t.TempDir()}
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _, _ = c.run(context.Background(), "kill-server")
+	})
+
+	const name = "sizetest"
+	if _, _, err := c.run(ctx, "new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh"); err != nil {
+		t.Skipf("this environment cannot start a tmux server: %v", err)
+	}
+
+	size := func() string {
+		t.Helper()
+		out, _, err := c.run(ctx, "list-windows", "-t", "="+name+":",
+			"-F", "#{window_width}x#{window_height}")
+		if err != nil {
+			t.Fatalf("list-windows: %v", err)
+		}
+		return strings.TrimSpace(out)
+	}
+	if got := size(); got != "120x40" {
+		t.Fatalf("the fixture window is %s, want 120x40", got)
+	}
+
+	if err := c.SetWindowSize(ctx, name, 50, 20); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if got := size(); got != "50x20" {
+		t.Fatalf("after the pin the window is %s, want 50x20", got)
+	}
+
+	if err := c.SetWindowSize(ctx, name, 0, 0); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	// What it releases TO is tmux's business — with no client attached it picks
+	// its own default — so the assertion is that the pin is gone, which is the
+	// option rather than the number.
+	opt, _, err := c.run(ctx, "show-options", "-w", "-t", "="+name+":", "window-size")
+	if err != nil {
+		t.Fatalf("show-options: %v", err)
+	}
+	if strings.Contains(opt, "manual") {
+		t.Fatalf("window-size is still pinned after a release: %q", opt)
+	}
+}
+
+// A size, when the caller has one: the phone's shell tabs, so the window is
+// born at the phone's capacity instead of tmux's 157x37 and then reflowed.
+func TestNewSessionSizedPassesTheSize(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.NewSessionSized(context.Background(), "s", "/tmp", "sh -l", 50, 20); err != nil {
+		t.Fatalf("NewSessionSized: %v", err)
+	}
+	if got := loggedArgs(t, argsLog); !strings.Contains(got, "-x 50 -y 20") {
+		t.Fatalf("size not sent:\n%s", got)
+	}
+}
+
+// Zero means tmux's own default, and NewSession is exactly that case — the
+// agent panes, dev tabs and review panes must keep the size they have always
+// had.
+func TestNewSessionSendsNoSizeByDefault(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.NewSession(context.Background(), "s", "/tmp", "sh -l"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	if strings.Contains(got, "-x ") || strings.Contains(got, "-y ") {
+		t.Fatalf("an unsized session carried a size:\n%s", got)
+	}
+}
+
+// A secret must reach tmux on stdin and never in an argv, where ps can read it.
+func TestPasteSecretKeepsItOutOfArgv(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\necho \"$@\" >> " + dir + "/argv\nfor a; do [ \"$a\" = load-buffer ] && cat >> " + dir + "/stdin; done\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Bin: bin, SocketName: "x", Dir: dir}
+	const secret = "hunter2-argv-check"
+	if err := c.PasteSecret(context.Background(), "tab", secret); err != nil {
+		t.Fatal(err)
+	}
+	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
+	in, _ := os.ReadFile(filepath.Join(dir, "stdin"))
+	if strings.Contains(string(argv), secret) {
+		t.Fatalf("in argv: %s", argv)
+	}
+	if string(in) != secret {
+		t.Fatalf("stdin = %q", in)
+	}
+	for _, want := range []string{"load-buffer", "paste-buffer -d", "send-keys -t =tab: Enter"} {
+		if !strings.Contains(string(argv), want) {
+			t.Errorf("missing %q in %s", want, argv)
+		}
+	}
+}
+
+func TestPasteSecretAgainstRealTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	sock := fmt.Sprintf("lola-secrettest-%d", os.Getpid())
+	dir := t.TempDir()
+	c := &Client{Bin: "tmux", SocketName: sock, Dir: dir}
+	t.Cleanup(func() { _ = exec.Command("tmux", "-L", sock, "kill-server").Run() })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got := filepath.Join(dir, "got")
+	cmd := `stty -echo; printf 'Password: '; IFS= read -r x; stty echo; printf '%s' "$x" > ` + got + `; echo; echo done; sleep 60`
+	if err := c.NewSession(ctx, "tab", dir, cmd); err != nil {
+		t.Fatal(err)
+	}
+	var in PaneInput
+	for i := 0; i < 50 && !strings.Contains(in.Text, "Password:"); i++ {
+		time.Sleep(100 * time.Millisecond)
+		var err error
+		if in, err = c.PaneInput(ctx, "tab"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !in.Open || !strings.HasSuffix(in.Text, "Password:") {
+		t.Fatalf("PaneInput = %+v", in)
+	}
+	const secret = `p@ss w0rd"'$HOME;~é`
+	// A pane scrolled back must still get it: keys there are copy-mode commands.
+	if _, _, err := c.run(ctx, "copy-mode", "-t", paneTarget("tab")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PasteSecret(ctx, "tab", secret); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if raw, _ = os.ReadFile(got); len(raw) > 0 {
+			break
+		}
+	}
+	if string(raw) != secret {
+		t.Fatalf("the program read %q", raw)
+	}
+	if out, _, _ := c.run(ctx, "list-buffers"); strings.TrimSpace(out) != "" {
+		t.Fatalf("a buffer outlived the paste: %q", out)
+	}
+	if text, _, _ := c.run(ctx, "capture-pane", "-p", "-t", paneTarget("tab")); strings.Contains(text, secret) {
+		t.Fatalf("the pane shows it: %q", text)
+	}
+	in, err := c.PaneInput(ctx, "tab")
+	if err != nil || in.Open {
+		t.Fatalf("after the answer the cursor rests at a line start: %+v %v", in, err)
+	}
+	// A paste that fails must not leave the buffer behind.
+	if err := c.PasteSecret(ctx, "no-such-tab", secret); err == nil {
+		t.Fatal("pasted into nothing")
+	} else if strings.Contains(err.Error(), secret) {
+		t.Fatalf("the error carries it: %v", err)
+	}
+	if out, _, _ := c.run(ctx, "list-buffers"); strings.TrimSpace(out) != "" {
+		t.Fatalf("a failed paste left a buffer: %q", out)
+	}
+}
+
+// CaptureVisible must read the screen and nothing above it, or the rows would not line
+// up with the cursor's Y.
+func TestCaptureVisibleHasNoScrollback(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "on screen", "", 0)
+	got, err := (&Client{Bin: bin}).CaptureVisible(context.Background(), "main")
+	if err != nil || !strings.Contains(got, "on screen") {
+		t.Fatalf("CaptureVisible = %q, %v", got, err)
+	}
+	if args := loggedArgs(t, argsLog); args != "-L lola capture-pane -p -e -t =main:" {
+		t.Errorf("invoked %q", args)
+	}
+}
+
+func TestPaneCursorReadsTheCursor(t *testing.T) {
+	for _, tc := range []struct {
+		out  string
+		want Cursor
+		bad  bool
+	}{
+		{out: "2 17 1", want: Cursor{X: 2, Y: 17, Visible: true}},
+		{out: "0 3 0", want: Cursor{X: 0, Y: 3, Visible: false}},
+		{out: "", bad: true},
+		{out: "2 17", bad: true},
+		{out: "a 17 1", bad: true},
+		{out: "2 17 maybe", bad: true}, // never read an unknown flag as hidden or shown
+	} {
+		bin, argsLog := fakeTmux(t, tc.out, "", 0)
+		got, err := (&Client{Bin: bin}).PaneCursor(context.Background(), "main")
+		if (err != nil) != tc.bad || got != tc.want {
+			t.Errorf("%q: PaneCursor = %+v, %v", tc.out, got, err)
+		}
+		if args := loggedArgs(t, argsLog); args != "-L lola display-message -p -t =main: #{cursor_x} #{cursor_y} #{cursor_flag}" {
+			t.Errorf("invoked %q", args)
+		}
+	}
+	bin, _ := fakeTmux(t, "", "no session", 1)
+	if _, err := (&Client{Bin: bin}).PaneCursor(context.Background(), "gone"); err == nil {
+		t.Error("a failed query must be an error, never a zero cursor")
+	}
+}
+
+func TestSendKeyPressesOneLetterOrDigit(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	if err := (&Client{Bin: bin}).SendKey(context.Background(), "main", "1"); err != nil {
+		t.Fatalf("SendKey: %v", err)
+	}
+	want := "-L lola copy-mode -q -t =main:\n-L lola send-keys -t =main: -l 1"
+	if args := loggedArgs(t, argsLog); args != want {
+		t.Errorf("invoked:\n%s\nwant no Enter and copy mode left first:\n%s", args, want)
+	}
+	for _, key := range []string{"", "12", ";", "-", "\r", "\x1b", " "} {
+		bin, argsLog := fakeTmux(t, "", "", 0)
+		if err := (&Client{Bin: bin}).SendKey(context.Background(), "main", key); err == nil {
+			t.Errorf("SendKey(%q) was accepted", key)
+		}
+		if raw, _ := os.ReadFile(argsLog); len(raw) != 0 {
+			t.Errorf("SendKey(%q) reached tmux: %s", key, raw)
+		}
 	}
 }

@@ -8,6 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sushidev-team/lola/internal/checkpoint"
+	"github.com/sushidev-team/lola/internal/claudetrust"
+	"github.com/sushidev-team/lola/internal/gitdiff"
 	"io"
 	"log"
 	"net"
@@ -22,35 +25,58 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitrepo"
+	"github.com/sushidev-team/lola/internal/goal"
+	"github.com/sushidev-team/lola/internal/goalplan"
+	"github.com/sushidev-team/lola/internal/goalreview"
+	"github.com/sushidev-team/lola/internal/knowledge"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/notify"
-	"github.com/sushidev-team/lola/internal/review"
-	"github.com/sushidev-team/lola/internal/reviewclaude"
+	"github.com/sushidev-team/lola/internal/panebus"
+	"github.com/sushidev-team/lola/internal/portlease"
+	"github.com/sushidev-team/lola/internal/portproc"
+	"github.com/sushidev-team/lola/internal/quota"
+	"github.com/sushidev-team/lola/internal/remote"
+	"github.com/sushidev-team/lola/internal/reviewcapture"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/sshstore"
+	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/statusagent"
 	"github.com/sushidev-team/lola/internal/tmux"
+	"github.com/sushidev-team/lola/internal/usage"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
 
 // NativeAPI is the daemon's seam over the native runtime (runtime.Native) so
 // dispatch, observation, adoption, and kills are testable with fakes. It
-// mirrors runtime.Native's exported lifecycle surface.
+// mirrors runtime.Native's exported lifecycle surface. The agentOverride
+// parameters carry a per-spawn agent-kind choice ("" = resolve from config).
 type NativeAPI interface {
-	Spawn(ctx context.Context, p config.Project, issue linear.Issue) (session.Session, error)
+	Spawn(ctx context.Context, p config.Project, issue linear.Issue, agentOverride string) (session.Session, error)
+	SpawnWith(ctx context.Context, p config.Project, issue linear.Issue, o runtime.SpawnOpts) (session.Session, error)
 	Open(ctx context.Context, p config.Project, sessionID, ref, branch string) (session.Session, error)
 	OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error)
-	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt string) (session.Session, error)
-	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt string) (session.Session, error)
+	OpenExisting(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string, useAgent bool) (session.Session, error)
+	OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool) (session.Session, error)
+	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error)
+	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error)
+	SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error)
 	Adopt(ctx context.Context) ([]session.Session, error)
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool
 	Revive(ctx context.Context, s session.Session) (session.Session, error)
+	ForkAgent(ctx context.Context, p config.Project, f runtime.ForkSpec) (session.Session, error)
+	SlotTaken(ctx context.Context, p config.Project, id, branch string) (bool, error)
 }
 
 var _ NativeAPI = (*runtime.Native)(nil)
@@ -69,12 +95,19 @@ type Daemon struct {
 	log  *log.Logger
 	home string
 
+	// spend is the usage ledger, per-session spend cache and [load] sample
+	// (usage.go). Its own lock; never held while taking mu.
+	spend *spendState
+
 	mu       sync.Mutex
 	cfg      *config.Config
 	cfgErr   string     // non-empty = cfg failed validation; polls are held
 	lin      linear.API // nil until the Linear API key resolves
 	linOK    bool
 	viewerID string
+	// teamIDs caches team UUID -> Team so the pickers can show a team's NAME
+	// without a Linear round trip per open. Display only; nothing keys by it.
+	teamIDs map[string]linear.Team
 	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner.
 	// nil until Run wires the real one; tests inject fakes directly.
 	native     NativeAPI
@@ -86,11 +119,42 @@ type Daemon struct {
 	tickMus  map[string]*sync.Mutex // per-poll tick mutual exclusion
 
 	inflight *inflightSet
-	seen     *seenStore
-	status   *statusTracker
+	// slots holds the cap slots of spawns still in flight (slots.go).
+	slots  slotLedger
+	seen   *seenStore
+	status *statusTracker
 
 	// Session observability (PLAN P1): the observer loop's snapshot store.
-	sessions *session.Store
+	sessions         *session.Store
+	goals            *goal.Store
+	goalsErr         error
+	goalPlans        *goalplan.Store
+	goalPlansErr     error
+	goalPlanMu       sync.Mutex // one bounded coordinator proposal at a time
+	goalPlanRun      goalplan.RunFunc
+	goalSpawn        func(context.Context, goal.Goal, string) (session.Session, error) // test override; production uses Native.SpawnGoal
+	goalProgressMu   sync.Mutex                                                        // serializes the progress outbox independently of execution
+	goalRunMu        sync.Mutex
+	goalJobsMu       sync.Mutex
+	goalJobs         map[string]context.CancelFunc
+	goalVerify       func(context.Context, string, string) error
+	goalReviewRun    goalreview.RunFunc
+	goalUsageScan    func(context.Context, string, string, time.Time) usage.Observation
+	goalCheckRun     func(context.Context, string, []string) (string, error)
+	goalPublishRun   func(context.Context, string, string, []string, []byte) ([]byte, error)
+	knowledge        *knowledge.Store
+	knowledgeErr     error
+	learningCaptures reportLimiter
+	disputeCaptures  reportLimiter
+	profileReviews   *reviewprofile.Store
+	profileErr       error
+	profileRun       profileRun
+	profilePaths     func(context.Context, string, string, string) ([]string, error)
+	goalMu           sync.Mutex // serializes goal provisioning, separate from poll and session locks
+
+	// knowledgeCodeRead replaces local committed-metadata reads in tests.
+	knowledgeCodeRead  func(context.Context, string, string, string) (gitrepo.CodeIdentity, error)
+	knowledgeProofRead func(context.Context, string, string, string) (gitrepo.CodeIdentity, error)
 
 	// events is the in-memory activity feed (recent notable status
 	// transitions) served to the TUI. Fed via sessions.OnTransition + the
@@ -104,6 +168,19 @@ type Daemon struct {
 	// otherwise flood the daemon log.
 	hookWarnMu sync.Mutex
 	hookWarned map[string]bool
+
+	// reports rate-limits `lola report` per session (see report.go).
+	reports          reportLimiter
+	reviewPackageMu  sync.Mutex      // serializes immutable publication and retained-size limits
+	reviewJobs       map[string]bool // guarded by reviewPackageMu; retained receipts survive restart
+	reviewCheckRun   func(context.Context, string, []string) (string, error)
+	reviewCaptureRun reviewcapture.Run // injected browser process for explicit human capture
+	reviewCapturing  map[string]bool   // guarded by reviewPackageMu; one capture per session
+	// ssh is agent-assisted ssh's state and seams (ssh.go). Never nil.
+	ssh *sshState
+
+	// refs caches each poll's stale-filter-reference verdict (filterrefs.go).
+	refs refCache
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -119,10 +196,25 @@ type Daemon struct {
 	// scm.Client. Overridable in tests.
 	prForBranch func(ctx context.Context, repo, branch string) (*scm.PR, error)
 
+	// requiredChecks returns the status-check names the active rulesets require
+	// on a branch (requiredchecks.go); nil in tests = judge every check.
+	// failingChecksAmong is the matching narrowed CI summary for the ci_failed
+	// prompt; nil falls back to failingChecks.
+	requiredChecks     func(ctx context.Context, repo, branch string) ([]string, error)
+	failingChecksAmong func(ctx context.Context, repo string, pr int, required []string) (string, error)
+	required           requiredCache
+
+	// setCommitStatus posts a lola/… commit status (the review gate,
+	// reviewgate.go); nil in tests that never gate.
+	setCommitStatus func(ctx context.Context, repo, sha, state, statusContext, description, targetURL string) error
+	// verifyReviewHead checks the local checkout before and after a gated pass.
+	verifyReviewHead func(ctx context.Context, dir, sha string) error
+
 	// listOpenPRs returns every open PR in repo for the cmd=prs picker; the seam
 	// over scm.Client.ListOpenPRs. Overridable in tests. A gh failure is an
 	// error (never conflated with "no open PRs").
 	listOpenPRs func(ctx context.Context, repo string) ([]scm.OpenPR, error)
+	prReadiness func(ctx context.Context, repo string, number int) (scm.PRReadiness, error)
 
 	// prsCache memoizes cmd=prs results per repo behind a short TTL and a
 	// per-repo lock, so rapid picker opens / two clients don't each exec gh.
@@ -134,8 +226,46 @@ type Daemon struct {
 	// the engine types into a live agent (asserts AtPrompt at the call site);
 	// failingChecks / reviewComments fetch the size-bounded reaction content the
 	// engine hands the agent.
-	notifier       notify.Notifier
-	sendKeys       func(ctx context.Context, tmuxName, text string) error
+	notifier notify.Notifier
+	sendKeys func(ctx context.Context, tmuxName, text string) error
+	// sendKeysTyped is sendKeys without its paste, for an agent whose paste has not been
+	// measured (agent.Caps). nil means sendKeys for every agent.
+	sendKeysTyped func(ctx context.Context, tmuxName, text string) error
+	// sendEscape interrupts an agent's turn, for a human's Stop only.
+	sendEscape func(ctx context.Context, tmuxName string) error
+	// sendKey presses one key with no Enter, for a human's choice on a card. Never
+	// reach for it from an automatic path: see agentChoose.
+	sendKey func(ctx context.Context, tmuxName, key string) error
+	// sendBackground sends Claude its foreground-task shortcut, after fresh pane proof.
+	sendBackground func(ctx context.Context, tmuxName string) error
+	// paneCursor and paneVisible are the two reads the cursor proof needs. Read the
+	// visible pane BEFORE the cursor. A nil seam (a test that injects only paneTail)
+	// makes the automation gate fall back to attention.EmptyComposer.
+	paneCursor  func(ctx context.Context, tmuxName string) (attention.Cursor, error)
+	paneVisible func(ctx context.Context, tmuxName string) (string, error)
+	// humanLock takes the send gate for a send a person pressed this instant. It
+	// defaults to lockHumanPrompt, and exists so the talk commands can be tested
+	// without the gate behind them.
+	humanLock func(ctx context.Context, s session.Session) (unlock func(), why string)
+	// readPrompt reads a question out of a visible pane. Defaults to attention.ReadPrompt.
+	readPrompt func(visible string, c attention.Cursor, k agent.Kind) (attention.Prompt, bool)
+	// feedAdvance moves a session's transcript scanner by at most budget bytes and
+	// answers its newest feed sequence and health. Defaults to advanceFeed.
+	feedAdvance func(ctx context.Context, s session.Session, budget int64) (feedSeq int64, health string)
+	// hookCounts tallies lifecycle hooks per session since the feed scanner started,
+	// in memory only. Comparing them with what the log yielded is how a feed that
+	// silently lost its shape reads as partial.
+	hookCountsMu sync.Mutex
+	hookCounts   map[string]*hookTally
+	// timeline carries system events to the one timeline worker. A caller only ever
+	// enqueues (emitSystem), which is what makes it safe inside a store callback.
+	timeline     chan timelineEvent
+	timelineStop chan struct{}
+	timelineDone chan struct{}
+	// talk is the conversation's memory-only state (talksay.go). Nothing in it persists.
+	talk talkMem
+	// Fresh ownership check for automatic delivery; never use observer cache.
+	promptAttached func(ctx context.Context, tmuxName string) (bool, error)
 	failingChecks  func(ctx context.Context, repo string, pr int) (string, error)
 	reviewComments func(ctx context.Context, repo string, pr int) (string, error)
 
@@ -160,14 +290,114 @@ type Daemon struct {
 	// fed to claude and then shown to a human only — never to send-keys.
 	brain          *brain.Client
 	brainSummarize func(ctx context.Context, instruction, contextText string) (string, error)
-	paneTail       func(ctx context.Context, tmuxName string, lines int) (string, error)
-	prDiff         func(ctx context.Context, repo string, pr int) (string, error)
+	// PR comment summaries use Haiku when the brain is enabled (display only).
+	commentSummarize func(ctx context.Context, instruction, contextText string) (string, error)
+	commentSummaries commentSummaryCache
+	paneTail         func(ctx context.Context, tmuxName string, lines int) (string, error)
+	// planSummarize overrides the `lola plan` planner's claude exec in tests;
+	// nil builds a bounded claude per call (see planSummarizer in plan.go).
+	planSummarize func(ctx context.Context, instruction, contextText string) (string, error)
+	prDiff        func(ctx context.Context, repo string, pr int) (string, error)
+
+	// worktreeDiff reads a session's local changes for the diff viewer
+	// (cmd=diff, feedback.go): the worktree against its merge-base with the
+	// project's default branch. Local git only; tests install a fake.
+	worktreeDiff func(ctx context.Context, dir, base string) (gitdiff.Result, error)
+
+	// checkpoints records, lists and restores a session's per-turn worktree
+	// snapshots (checkpoints.go); commitDiff diffs two of them. Local git only;
+	// tests install fakes. ckptLocks serializes checkpoint work PER SESSION so a
+	// Stop-hook record never interleaves with a restore of the same worktree.
+	checkpoints checkpointStore
+	commitDiff  func(ctx context.Context, dir, from, to string) (gitdiff.Result, error)
+	ckptMu      sync.Mutex
+	ckptLocks   map[string]*sync.Mutex
+	// sendGates serializes daemon sends and checkpoint restores per session.
+	// Automatic sends hold it from fresh composer proof through submit, so a
+	// proof cannot age while waiting behind another send or a restore.
+	sendGates map[string]*sync.RWMutex
+
+	// changedFiles lists the paths a worktree changed against its merge-base
+	// with the default branch — the observer's per-cycle input to cross-session
+	// overlap detection (overlap.go). Local git only; tests install a fake.
+	// overlapWarned holds the last error logged per session so a broken
+	// worktree logs once, not every 30s; touched by the observe loop only.
+	changedFiles  func(ctx context.Context, dir, base string) ([]string, error)
+	overlapWarned map[string]string
+
+	// Merge-queue seams (mergequeue.go): how far a PR head is behind its base,
+	// and the merge itself, pinned to the head the queue judged. Both default
+	// to scm.Client; tests install fakes.
+	behindBy func(ctx context.Context, repo, base, headSHA string) (int, error)
+	mergePR  func(ctx context.Context, repo string, pr int, method, headSHA string) error
+
+	// Best-of seams (bestof.go): a worktree's change size for the compare view
+	// (local git), and the pick's two gh writes — the kept PR out of draft, a
+	// discarded attempt's PR closed (branch kept). Default to gitdiff /
+	// scm.Client; tests install fakes.
+	worktreeStat func(ctx context.Context, dir, base string) (gitdiff.Stat, error)
+	markPRReady  func(ctx context.Context, repo string, pr int) error
+	closePR      func(ctx context.Context, repo string, pr int, comment string) error
+	// bestOfPickMu serializes cmd=bestOfPick so one group can never get two
+	// winners (a pick is rare and human-driven; one lock for all groups is
+	// enough).
+	bestOfPickMu sync.Mutex
 
 	// listTmuxSessions lists every session on lola's tmux server in ONE exec —
 	// the observer's per-cycle liveness + #{session_activity} source (replacing
 	// N per-session has-session probes). nil (tests without the seam) makes the
 	// observer fall back to per-session NativeAPI.Alive with no activity signal.
 	listTmuxSessions func(ctx context.Context) ([]tmux.Session, error)
+
+	// devTmux is the tmux adapter the dev-tab toggle drives (dev.go). nil uses
+	// the real lola-server client; tests inject a fake so the whole take-over →
+	// start → derive path runs without a tmux server.
+	devTmux func() devTmux
+
+	// deadPanes reports which tmux sessions have no live pane left. Only the
+	// DEV TABS need it (they are created with remain-on-exit, so a session
+	// whose command died still exists), and it is called only in a cycle that
+	// actually saw one, so a lola with no dev_commands execs exactly as much
+	// tmux as before. nil (tests without the seam) leaves the last known
+	// dev-tab state alone.
+	deadPanes func(ctx context.Context) (map[string]bool, error)
+
+	// portListeners lists every listening TCP socket with its owning process
+	// and that process's cwd (lsof). ONLY the dev take-over uses it, to reclaim
+	// a port from a server that is running inside one of the project's
+	// worktrees but belongs to no tmux pane — typically one the coding agent
+	// started through its Bash tool, which Claude Code puts in its own process
+	// group and which therefore survives every tmux-side teardown. nil (no
+	// lsof, or a test that did not inject one) skips the sweep entirely, which
+	// is the pre-sweep behavior.
+	portListeners func(ctx context.Context) ([]portproc.Listener, error)
+
+	// ports is the per-session port-lease registry (internal/portlease,
+	// ~/.lola/state/ports.json). The native runtime leases and releases through
+	// it; the daemon reads it for the wire, gates a multi-active dev start on
+	// it (dev.go), and prunes the leases of sessions that left the store
+	// without a teardown (reconcile). Never nil after newDaemon.
+	ports *portlease.Registry
+
+	// devURLTries bounds the pane reads spent hunting for a dev tab's local
+	// address, per session (dev.go). In memory only: it is a cost guard, not
+	// state — a daemon restart re-reading a pane once costs nothing, and a
+	// persisted counter would permanently blind a tab whose budget ran out.
+	devURLTries map[string]int
+
+	// devURLWatching holds the sessions whose STARTUP address watch is running
+	// (dev.go's startDevURLWatch), so a second toggle cannot start a second
+	// watch over the same tabs.
+	devURLWatching map[string]bool
+
+	// devClashChecked holds the dev TABS whose death has already been examined
+	// for a port clash (devclash.go), keyed by tmux session name. A dead tab
+	// stays dead until someone restarts it, so without this the pane read and
+	// the lsof pass would repeat every observe cycle forever. Cleared the moment
+	// the tab lives again or disappears, so a restart is examined afresh. In
+	// memory only: it is a cost guard, and re-examining a dead tab once after a
+	// daemon restart is cheap.
+	devClashChecked map[string]bool
 
 	// Status interpreter ([statusagent], statusagentwire.go): the OPT-IN
 	// display-only LLM pass. statusAgent/interpretSeam are nil when disabled or
@@ -191,24 +421,42 @@ type Daemon struct {
 	// kinds run per session, their transports, and their fallback chains. Rebuilt
 	// under d.mu by setReviewProvidersLocked on Run and reload. Guarded by d.mu.
 	//
-	// review/reviewRun (coderabbit-cli) and claudeReview/claudeReviewRun
-	// (claude-session) are the two sync "pass" exec clients + seams; the seam is
-	// nil when that kind is disabled or its binary is unavailable, which every
-	// call site (and the fallback chain) treats as "that provider can't answer".
-	// The seams are looked up under d.mu AT CALL TIME (late binding), so a fake
-	// installed after setReviewProvidersLocked still wins. Tests install a fake
-	// reviewRun / claudeReviewRun directly.
+	// passRuns holds one sync "pass" exec seam PER KIND — the cli family's
+	// review.Client and the agent family's reviewagent.Client, both adapted to
+	// the same passRun signature. A kind is ABSENT from the map when it is
+	// disabled or its binary is unavailable, which every call site (and the
+	// fallback chain) treats as "that provider can't answer".
+	//
+	// It is a map, not a field per kind, precisely because the kind set is the
+	// pluggable part: adding a review agent must not mean adding a daemon field,
+	// a nil-reset, a seam switch case and a test hook. The seams are looked up
+	// under d.mu AT CALL TIME (late binding), so a fake installed after
+	// setReviewProvidersLocked still wins; tests install one with setPassRun.
 	reviewProviders []reviewProvider
-	review          *review.Client
-	reviewRun       func(ctx context.Context, worktreeDir, baseBranch string) (string, error)
-	claudeReview    *reviewclaude.Client
-	claudeReviewRun func(ctx context.Context, worktreeDir, baseBranch string) (string, error)
+	passRuns        map[provKind]passRun
+	// passCommands records the executable each enabled pass kind will actually
+	// try to run, so the startup "unavailable" warning can NAME it — a custom-cli
+	// otherwise reports only that "its configured command" is missing, which is
+	// exactly the thing the operator needs told back to them.
+	passCommands map[provKind]string
 
 	// postPRComment is the `github` transport WRITE seam (Locked decision 1):
 	// `gh pr comment <pr> --repo <repo> --body-file -` with the untrusted findings
 	// on stdin (scm.PostPRComment). Set once in newDaemon; tests install a counting
 	// fake. Looked up under d.mu at call time like the pass seams.
 	postPRComment func(ctx context.Context, repo string, pr int, body string) error
+
+	// postPRReview / prReviewTarget are the INLINE half of the same transport
+	// (see postGithubInline): one COMMENT review carrying a summary body plus an
+	// anchored, RESOLVABLE thread per finding — the only shape GitHub gives a
+	// "Resolve conversation" button. prReviewTarget fetches the two facts the
+	// anchoring needs first (the head sha the review pins to and the PR's unified
+	// diff); postPRReview posts the result. Both are set once in newDaemon and
+	// looked up under d.mu at call time; a nil seam, a fetch failure, or a
+	// permanent rejection all fall back to postPRComment, so the plain comment is
+	// still the floor this feature stands on.
+	postPRReview   func(ctx context.Context, repo string, pr int, commitID, body string, comments []scm.InlineComment) error
+	prReviewTarget func(ctx context.Context, repo string, pr int) (headSHA, diff string, err error)
 
 	// authedLogin resolves lola's OWN gh login (scm.AuthedLogin), consulted at most
 	// ONCE per daemon lifetime via resolveSelfLogin (selfLoginOnce) so the watch's
@@ -217,15 +465,21 @@ type Daemon struct {
 	selfLoginOnce sync.Once
 	selfLogin     string
 
-	// reviewCycleCtx is the CURRENT observe cycle's shared review budget: one
-	// review timeout for the WHOLE cycle (not per session), derived from
-	// shutdownCtx so a slow/hung `coderabbit review` is capped for the cycle and
-	// abortable at shutdown (it is read-only and safe to abort). observeNative
-	// sets it at cycle start and clears it at the end; runReviewChain reads it
-	// (falling back to its own ctx when nil, e.g. the manual command). Guarded by
+	// Review pass queue (reviewworker.go). A pass provider's exec is the one
+	// review-side call that runs for MINUTES (a claude-session review reads the
+	// PR's files), so it never runs on the observe loop: the observer enqueues a
+	// job and a single worker drains them one at a time. reviewBusy dedups a
+	// session/kind already queued or running; reviewFails counts consecutive
+	// could-not-answer outcomes per session/kind/PR so a retried pass gives up
+	// after reviewMaxAttempts instead of re-running forever. Both guarded by
 	// reviewMu.
-	reviewMu       sync.Mutex
-	reviewCycleCtx context.Context
+	reviewMu    sync.Mutex
+	reviewCh    chan reviewJob
+	reviewBusy  map[string]bool
+	reviewFails map[string]int
+	// reviewActive includes manual passes, which do not enter reviewBusy's queue.
+	// Counts allow concurrent manual requests without prematurely clearing activity.
+	reviewActive map[string]int // guarded by reviewMu, keyed by session/lane ID
 
 	// escSummaries carries a brain escalation summary from react's Urgent notify
 	// (reactCIFailed) to the P4 blocked Linear comment (writeBackEscalation) in
@@ -260,6 +514,62 @@ type Daemon struct {
 	// (the same discipline as the old AO-down rule). Overridable in tests.
 	runtimeHealth func(binary string) error
 
+	// Remote phone listener ([remote], remotewire.go). remote is the TLS
+	// listener a paired mobile client speaks the protocol.Frame envelope to,
+	// and panes is the pane-attach registry it subscribes through. Both are nil
+	// until startRemote binds one, which only ever happens when the [remote]
+	// table says to listen AND this binary was built with the M1 -tags
+	// lola_insecure path — see remotelisten.go and its untagged companion.
+	//
+	// They have their OWN mutex rather than living under d.mu, for two reasons.
+	// Binding a socket and loading the device identity are I/O, and d.mu is the
+	// lock every tick, every observe cycle and every socket command takes; and
+	// handleReload holds d.mu while it swaps the config, so a rebind driven
+	// from there has to happen after that unlock or the daemon stalls for the
+	// length of a TLS listener's teardown.
+	//
+	// LOCK ORDER is remoteMu -> d.mu and never the reverse: startRemote reads
+	// the config under d.mu, RELEASES it, and only then takes remoteMu, under
+	// which it may take d.mu again to build a tmux client.
+	//
+	// paneRegistry is the construction seam: it returns a Registry with its
+	// tmux/vtterm seams already filled. startRemote installs Resolve on the
+	// result itself and never lets the seam supply it, because identity is the
+	// one question only the daemon can answer (see resolvePaneName) and a test
+	// that provided its own gate would be proving nothing about the wiring.
+	// remoteErr is the last reason a listener did not come up, kept so
+	// cmd=pairBegin can REPORT it instead of the caller guessing. The desktop
+	// used to tell an operator to go read the log for an address it could not
+	// bind, which was a guess and was wrong the one time it mattered: the actual
+	// cause was a missing bearer key. It is cleared whenever a listener starts.
+	remoteMu sync.Mutex
+	// bridge is the sandbox HOOK BRIDGE listener + secret (hookbridge.go): a
+	// loopback TCP port open only while some project is sandboxed.
+	bridge       hookBridge
+	remote       *remote.Server
+	remoteErr    string
+	panes        *panebus.Registry
+	paneRegistry func() *panebus.Registry
+	// advertiser publishes the listener on the local network (internal/mdns),
+	// so a phone finds this Mac by name instead of by an address that changes
+	// with every network. Held under remoteMu with the listener because its
+	// lifetime is exactly the listener's: a rebind replaces both. nil until the
+	// first listener comes up, and nil forever on a build with no listener.
+	advertiser *mdns.Advertiser
+	// mdnsStart is internal/mdns's exec seam, for tests that must not spawn
+	// dns-sd. nil uses the real one.
+	mdnsStart mdns.Starter
+
+	// forwards are the live dev-server forwards, keyed by session and target
+	// (internal/daemon/devforwardwire.go). They exist only while a session is
+	// the ACTIVE one and only when [remote].dev_forward is set. forwardOpen and
+	// forwardHosts are the seams tests use so no listener is opened and no
+	// interface is enumerated.
+	forwardMu    sync.Mutex
+	forwards     map[devForwardKey]liveForward
+	forwardOpen  func(host, target string) (string, io.Closer, error)
+	forwardHosts func() []string
+
 	// Socket-initiated tick work (pollOnce) is tracked separately from the
 	// worker/reconcile goroutines so graceful shutdown can drain it too.
 	shutMu   sync.Mutex
@@ -280,10 +590,35 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		seen:     newSeenStore(filepath.Join(home, "state")),
 		status:   newStatusTracker(),
 		sessions: session.NewStore(filepath.Join(home, "state")),
+		ssh:      newSSHState(),
 		events:   newEventLog(eventLogCap),
 
 		hookWarned: map[string]bool{},
+		ckptLocks:  map[string]*sync.Mutex{},
 	}
+	d.goals, d.goalsErr = goal.Open(filepath.Join(home, "state", "goals.json"))
+	if d.goalsErr != nil {
+		logger.Printf("goal store: %v (issue dispatch held)", d.goalsErr)
+	}
+	d.goalPlans, d.goalPlansErr = goalplan.Open(filepath.Join(home, "state", "goal-plans.json"))
+	if d.goalPlansErr != nil {
+		logger.Printf("goal proposals: %v (new proposals held)", d.goalPlansErr)
+	}
+	d.knowledge, d.knowledgeErr = knowledge.Open(filepath.Join(home, "state", "knowledge.json"))
+	if d.knowledgeErr != nil {
+		logger.Printf("knowledge: %v (lessons omitted)", d.knowledgeErr)
+	}
+	d.profileReviews, d.profileErr = reviewprofile.Open(filepath.Join(home, "state", "profile-reviews.json"))
+	if d.profileErr != nil {
+		logger.Printf("specialist reviews: %v (required reviews held)", d.profileErr)
+	}
+	d.profilePaths = (&worktree.Manager{}).ProfilePaths
+	ports, perr := portlease.Open(filepath.Join(home, "state", "ports.json"))
+	if perr != nil {
+		logger.Printf("port leases: %v (starting with none)", perr)
+	}
+	d.ports = ports
+	d.spend = newSpendState(home, func(f string, a ...any) { d.logf("", f, a...) })
 	// Feed the activity ring from every status transition the store commits
 	// (the spawn birth is recorded separately at the dispatch site).
 	d.sessions.OnTransition(func(from string, s session.Session) {
@@ -295,12 +630,20 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	})
 	d.interpretCh = make(chan string, interpretQueueCap)
 	d.interpretBusy = map[string]bool{}
+	d.reviewCh = make(chan reviewJob, reviewQueueCap)
+	d.reviewBusy = map[string]bool{}
+	d.reviewFails = map[string]int{}
 	d.openPR = d.ghOpenPR
 	scmc := &scm.Client{}
 	d.prForBranch = scmc.PRForBranch
 	d.listOpenPRs = scmc.ListOpenPRs
+	d.prReadiness = scmc.Readiness
 	d.prsCache = newPRCache()
 	d.failingChecks = scmc.FailingChecks
+	d.requiredChecks = scmc.RequiredChecks
+	d.failingChecksAmong = scmc.FailingChecksAmong
+	d.setCommitStatus = scmc.SetCommitStatus
+	d.verifyReviewHead = (&worktree.Manager{}).VerifyReviewHead
 	d.reviewComments = scmc.ReviewComments
 	// Flexible-review raw seams (the exec CLIENTS are built later by
 	// setReviewProvidersLocked from the catalog / legacy synthesis). The watch
@@ -309,9 +652,38 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	// by tests after construction.
 	d.coderabbitComments = scmc.CodeRabbitCommentsExcluding
 	d.postPRComment = scmc.PostPRComment
+	d.postPRReview = scmc.PostPRReview
+	d.prReviewTarget = scmc.PRReviewTarget
 	d.authedLogin = scmc.AuthedLogin
 	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
 		return d.tmuxClient().SendKeys(ctx, tmuxName, text)
+	}
+	d.sendKeysTyped = func(ctx context.Context, tmuxName, text string) error {
+		return d.tmuxClient().SendKeysTyped(ctx, tmuxName, text)
+	}
+	d.sendEscape = func(ctx context.Context, tmuxName string) error {
+		return d.tmuxClient().SendEscape(ctx, tmuxName)
+	}
+	d.sendBackground = func(ctx context.Context, tmuxName string) error {
+		return d.tmuxClient().SendBackground(ctx, tmuxName)
+	}
+	d.sendKey = func(ctx context.Context, tmuxName, key string) error {
+		return d.tmuxClient().SendKey(ctx, tmuxName, key)
+	}
+	d.paneCursor = func(ctx context.Context, tmuxName string) (attention.Cursor, error) {
+		c, err := d.tmuxClient().PaneCursor(ctx, tmuxName)
+		return attention.Cursor(c), err
+	}
+	d.paneVisible = func(ctx context.Context, tmuxName string) (string, error) {
+		return d.tmuxClient().CaptureVisible(ctx, tmuxName)
+	}
+	d.humanLock = d.lockHumanPrompt
+	d.readPrompt = attention.ReadPrompt
+	d.feedAdvance = d.advanceFeed
+	d.hookCounts = map[string]*hookTally{}
+	d.timeline = make(chan timelineEvent, timelineBuffer)
+	d.promptAttached = func(ctx context.Context, tmuxName string) (bool, error) {
+		return d.tmuxClient().HasAttachedClient(ctx, tmuxName)
 	}
 	// Brain context-gathering seams (P5.25). brain / brainSummarize stay nil
 	// here: the brain is built by Run/handleReload from [brain] and left off in
@@ -321,6 +693,16 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		return d.tmuxClient().CapturePane(ctx, tmuxName, lines)
 	}
 	d.prDiff = scmc.PRDiff
+	d.worktreeDiff = gitdiff.Diff
+	d.checkpoints = checkpoint.Git{}
+	d.commitDiff = gitdiff.Between
+	d.changedFiles = gitdiff.Differ{}.ChangedFiles
+	d.overlapWarned = map[string]string{}
+	d.behindBy = scmc.BehindBy
+	d.mergePR = scmc.MergePR
+	d.worktreeStat = gitdiff.Differ{}.Stat
+	d.markPRReady = scmc.MarkPRReady
+	d.closePR = scmc.ClosePR
 	// A no-op notifier until Run/reload resolves the [notify] config; keeps the
 	// engine free of nil checks. notify.New always returns a non-nil Notifier.
 	d.notifier = notify.New(notify.NotifyConfig{})
@@ -332,8 +714,8 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 // healthy when tmux is available, git resolves, and the dispatching context's
 // coding-agent binary is on PATH. The caller resolves that binary from the
 // agent kind (claude|codex|opencode); an empty binary falls back to "claude"
-// so a probe with no resolved agent behaves exactly as before. Only LookPath
-// probes — nothing is exec'd.
+// so a probe with no resolved agent behaves exactly as before. Codex also
+// requires verified auto-approval support, cached until the binary changes.
 func checkRuntimeHealth(binary string) error {
 	if binary == "" {
 		binary = "claude"
@@ -344,8 +726,12 @@ func checkRuntimeHealth(binary string) error {
 	if _, err := exec.LookPath("git"); err != nil {
 		return errors.New("missing git")
 	}
-	if _, err := exec.LookPath(binary); err != nil {
+	path, err := exec.LookPath(binary)
+	if err != nil {
 		return fmt.Errorf("missing %s", binary)
+	}
+	if binary == "codex" {
+		return checkCodexCapability(path)
 	}
 	return nil
 }
@@ -378,6 +764,7 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	d := newDaemon(cfg, nil, logger, home)
+	d.spend.claude = quota.NewClaudePoller(filepath.Join(home, "state", "quota-claude-api.json"), nil)
 
 	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner. The
 	// generated per-session Claude Code settings wire the lifecycle hooks to
@@ -387,8 +774,17 @@ func Run(ctx context.Context) error {
 		logger.Printf("resolve lola binary (session hooks fall back to PATH lookup): %v", err)
 		lolaBin = "lola"
 	}
+	// os.Executable names a path, not the running image: a daemon started from
+	// a session worktree's build keeps running after that worktree (and its
+	// binary) is deleted. Never hand such a path to sessions or review panes.
+	if stable := runtime.ResolveLolaBin(lolaBin, filepath.Join(home, "worktrees"), exec.LookPath, nil); stable != lolaBin {
+		logger.Printf("lola binary %q is gone or inside a worktree; sessions use %q (restart the daemon from it to run that build)", lolaBin, stable)
+		lolaBin = stable
+	}
 	d.lolaBin = lolaBin
-	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf)
+	nat := newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
+	nat.SessionRecorded = d.sessionRecorded
+	d.native = nat
 	// One `tmux ls` per observe cycle answers liveness for EVERY session (and
 	// carries #{session_activity}, the zero-cost output-freshness stamp) —
 	// replacing N per-session `has-session` execs. Wired HERE (production
@@ -396,6 +792,18 @@ func Run(ctx context.Context) error {
 	// tmux, and nil makes the observer fall back to per-session Alive.
 	d.listTmuxSessions = func(ctx context.Context) ([]tmux.Session, error) {
 		return d.tmuxClient().ListSessions(ctx)
+	}
+	d.deadPanes = func(ctx context.Context) (map[string]bool, error) {
+		return d.tmuxClient().DeadPanes(ctx)
+	}
+	// Stray-dev-server sweep (dev.go): wired only when lsof is actually there,
+	// so a host without it takes the nil path once instead of failing an exec
+	// on every activation. Like the seams above, production Run only — a bare
+	// test daemon must never exec the real lsof.
+	if finder := (&portproc.Finder{}); finder.Available() {
+		d.portListeners = finder.Listeners
+	} else {
+		logger.Printf("lsof not found: a dev take-over cannot reclaim a port from a stray dev server in a worktree")
 	}
 	d.realNative = true
 	// Reaction notifier (PLAN P3.20): resolve the [notify] table into a live
@@ -487,11 +895,43 @@ func Run(ctx context.Context) error {
 	d.wg.Add(1)
 	go d.observeLoop(ctx)
 
+	// Spend scan (usage.go): local file reads only, so it shares the observer's
+	// shielding needs with none of its exec deadlines; the CANCELLABLE context
+	// is enough, since an aborted pass loses nothing the next one won't redo.
+	d.wg.Add(1)
+	go d.usageLoop(ctx)
+
 	// Status interpreter worker ([statusagent], statusagentwire.go). On the
 	// CANCELLABLE run context, deliberately not shutdown-shielded: an
 	// interpretation is read-only and safe to abort.
 	d.wg.Add(1)
 	go d.interpretLoop(ctx)
+
+	// Review pass worker ([review] pass providers, reviewworker.go). Same
+	// posture as the interpreter: the CANCELLABLE run context, because a review
+	// is a read-only exec that may run for many minutes and must not hold up
+	// graceful shutdown.
+	d.wg.Add(1)
+	go d.reviewLoop(ctx)
+
+	// The phone listener ([remote], remotewire.go). Same posture as the two
+	// workers above: the CANCELLABLE run context, because everything it does is
+	// read-only fan-out or a request already in flight. It binds nothing unless
+	// the table asks for one AND this build carries an authenticator, and a
+	// failure to bind is logged rather than fatal — a daemon that will not
+	// start because a port is taken is strictly worse than one that polls
+	// without a phone attached.
+	d.startRemote(ctx)
+
+	// The sandbox hook bridge (hookbridge.go): open only while a project is
+	// sandboxed, and a bind failure is logged rather than fatal, like [remote].
+	d.syncHookBridge(ctx)
+	// Agent-assisted ssh (ssh.go): read what a previous daemon left and start the
+	// monitors. Masters survive a restart by design, running commands do not.
+	d.startSSH(ctx)
+	d.startTimeline()
+	d.wg.Add(1)
+	go d.goalLoop(ctx)
 
 	go d.serve(ctx, ln)
 
@@ -505,6 +945,21 @@ func Run(ctx context.Context) error {
 	// Native tmux sessions are deliberately NOT killed here: the tmux server
 	// owns them and they survive lola restarts by design — the next daemon
 	// re-adopts them (adoptNativeSessions).
+	// The remote listener goes FIRST and finishes its own work: it closes its
+	// listeners, then every live connection and pane stream, and only then
+	// waits for its own goroutines. That ordering is the invariant — drainConnWork
+	// below is an UNBOUNDED Wait built for bounded socket work, and a phone
+	// holding a pane stream open for hours is the opposite of that, so anything
+	// still streaming when the drain starts hangs shutdown until the phone
+	// happens to disconnect.
+	d.stopRemote()
+	d.stopHookBridge()
+	d.stopSSH()
+	defer d.stopTimeline() // last, so what the shutdown itself emits is still written
+	// Before the worker drain: a forward holds accepted connections open for as
+	// long as a browser keeps them, which is exactly the unbounded wait the
+	// drain below is not built for.
+	d.stopDevForwards()
 	d.stopAllWorkers()
 	d.wg.Wait()
 	d.drainConnWork()
@@ -760,9 +1215,9 @@ func (d *Daemon) tickMutex(name string) *sync.Mutex {
 // lock cannot deadlock.
 func (d *Daemon) tmuxClient() *tmux.Client {
 	d.mu.Lock()
-	sock := d.cfg.TmuxSocketName()
+	c := d.cfg.TmuxClient("tmux", d.home)
 	d.mu.Unlock()
-	return &tmux.Client{Bin: "tmux", SocketName: sock, Dir: d.home}
+	return c
 }
 
 // newNativeRuntime assembles the production native runtime for cfg: worktrees
@@ -773,22 +1228,71 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 // re-read per spawn, so a rotated key is picked up next spawn; it returns ""
 // when no key is available so spawning is never blocked on it. logf carries
 // best-effort styling advisories (status-bar chrome) into the daemon log.
-func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any)) *runtime.Native {
+// hookToken mints a sandboxed session's hook-bridge token (hookbridge.go).
+func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any), ports *portlease.Registry, hookToken func(string) string, knowledgeBrief func(string, string, []byte) []byte) *runtime.Native {
 	return &runtime.Native{
-		Cfg:       cfg,
-		WT:        &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:      &tmux.Client{Bin: "tmux", SocketName: cfg.TmuxSocketName(), Dir: home},
-		LolaBin:   lolaBin,
-		Home:      home,
-		LinearKey: linearKey,
-		Logf:      logf,
+		SessionUsed:  func(id string) (bool, error) { return sessionPreviouslyUsed(home, id) },
+		PreviousWork: func(project, issue string) string { return previousIssueWork(home, project, issue) },
+		Cfg:          cfg,
+		WT:           &worktree.Manager{Root: filepath.Join(home, "worktrees")},
+		Tmux:         cfg.TmuxClient("tmux", home),
+		LolaBin:      lolaBin,
+		ResolveLolaBin: func() string {
+			return runtime.ResolveLolaBin(lolaBin, filepath.Join(home, "worktrees"), exec.LookPath, nil)
+		},
+		Home:           home,
+		LinearKey:      linearKey,
+		Logf:           logf,
+		Checkpoints:    checkpoint.Git{},
+		Ports:          ports,
+		HookToken:      hookToken,
+		KnowledgeBrief: knowledgeBrief,
+		TrustWorkspace: func(dir string) error {
+			return claudetrust.Trust(claudetrust.ConfigPath(), dir)
+		},
+		UntrustWorkspace: func(dir string) error {
+			return claudetrust.Untrust(claudetrust.ConfigPath(), dir)
+		},
 	}
 }
 
-// adoptNativeSessions is the restart-recovery scan (PLAN P2.15): every finding
-// from runtime.Adopt is upserted into the session store — live pairs as
+// purgeAuxRecords removes phantom session records for auxiliary tabs, and reports how
+// many it removed. Store records only: the tmux sessions are live terminal tabs.
+func (d *Daemon) purgeAuxRecords() int {
+	purged := 0
+	for _, s := range d.sessions.Snapshot() {
+		// Not an ssh shape: no older daemon minted those phantoms, and a real session
+		// can have the shape (issue SSH-42 is "lola-infra-ssh-42").
+		if s.Source == "native" && runtime.IsAuxSession(s.ID) && !sshtab.Is(s.ID) {
+			d.sessions.Delete(s.ID)
+			purged++
+			continue
+		}
+		// A daemon older than ssh sessions reads a live <id>-ssh-N tab as an orphaned
+		// session of its own. Only a record in exactly that shape goes: orphaned, on
+		// the tab of a session still on record. A real session named like a tab has no
+		// such parent, and the tmux session is left alone either way.
+		if parent, ok := sshtab.Parent(s.ID); ok && s.Source == "native" && s.AgentState == state.AgentOrphaned {
+			if _, recorded := d.sessions.Get(parent); recorded {
+				d.sessions.Delete(s.ID)
+				purged++
+			}
+		}
+	}
+	return purged
+}
+
+// sessionRecorded is runtime.Native.SessionRecorded.
+func (d *Daemon) sessionRecorded(id string) bool {
+	_, ok := d.sessions.Get(id)
+	return ok
+}
+
+// adoptNativeSessions is the restart-recovery scan (PLAN P2.15): findings from
+// runtime.Adopt are upserted into the session store — live pairs as
 // "working", worktrees without a pane as "dead", panes without a worktree as
-// "orphaned" — and anomalies are reported to the log. Facts observation cannot
+// "orphaned" — except already-ended worktrees without a pane. Anomalies are
+// reported to the log. Facts observation cannot
 // recover (branch, repo, issue UUID, PR state) are preserved from a previously
 // persisted record. Adoption never kills sessions or removes worktrees; acting
 // on dead/orphaned candidates is the reconcile pass's decision.
@@ -804,16 +1308,46 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 		d.logf("", "adopt: native session scan failed: %v", err)
 		return
 	}
+	// Local sessions have no owned worktree to scan. Their persisted paths win.
+	for _, local := range d.sessions.Snapshot() {
+		if local.Kind != session.KindLocal {
+			continue
+		}
+		if nat.Alive(ctx, local) {
+			if local.IsAgentless() {
+				local.SetAgentState(state.AgentShell, "", time.Now())
+			} else {
+				local.SetAgentState(state.AgentWorking, "", time.Now())
+			}
+		} else {
+			local.SetAgentState(state.AgentDead, "", time.Now())
+		}
+		found = append(found, local)
+	}
 	for _, scanned := range found {
 		s := scanned
 		// runtime.Adopt reports axis-bearing records; any other NativeAPI
 		// implementation (tests, future runtimes) may still hand back a bare
 		// legacy Status — give it axes before the merge below rerolls.
 		s.EnsureAxes()
+		// A kept worktree is not a new session. Respect the durable end record
+		// when no pane survived, including ghosts persisted by older daemons.
+		// Live panes and unknown leftovers still recover normally; a genuine
+		// new launch clears Ended through recordSessionEvent.
+		if s.AgentState == state.AgentDead && sshstore.ReadEnded(d.home, session.BaseID(s.ID)) != nil {
+			d.sessions.Delete(s.ID)
+			d.logf("", "adopt: %s remains ended (kept worktree, no tmux session)", s.ID)
+			continue
+		}
 		var adopted session.Session
 		d.sessions.Apply(s.ID, func(cur *session.Session, exists bool) bool {
 			if exists {
 				prev := *cur
+				s.Name = prev.Name
+				s.Location = prev.Location
+				// A tmux scan cannot recover the shared tasks or reported plan.
+				s.Tasks = prev.Tasks
+				s.Board = prev.Board
 				// The persisted record is authoritative for the launch discriminator
 				// (Kind/Agentless) — Adopt only re-derives it from the ID shape as a
 				// store-loss backstop. Carry it forward. An agent-less session
@@ -855,6 +1389,22 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				if s.Agent == "" {
 					s.Agent = prev.Agent // the scan cannot see which coding agent runs inside
 				}
+				// Nor whether it runs in a container, or — for a stack — which
+				// apps (worktrees, branches, PR lanes) it has; teardown needs both.
+				// The record, not the config the scan read: a survivor launched on the
+				// host stays on the host when its project gains a sandbox, and ssh's
+				// production rule reads this field.
+				s.Sandbox = prev.Sandbox
+				// The persisted app records win (they carry branch, pin, PR facts
+				// and every per-PR guard); the scan's disk-rebuilt ones are only
+				// the store-loss backstop.
+				s.Stack = s.Stack || prev.Stack
+				if len(prev.Apps) > 0 {
+					s.Apps = prev.Apps
+				}
+				if s.GitPin == nil {
+					s.GitPin = prev.GitPin
+				}
 				// Carry forward the P4 write-back one-shot guards so a restart never
 				// re-comments a transition already narrated to Linear.
 				s.WBSpawnDone = s.WBSpawnDone || prev.WBSpawnDone
@@ -894,8 +1444,13 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				if s.AgentState == state.AgentWaitingInput {
 					s.InputReason = prev.InputReason
 					s.LastNotification = prev.LastNotification
+					s.InputNotified = prev.InputNotified
 				}
+				s.ReadyNotified = prev.ReadyNotified
 				s.TranscriptPath = prev.TranscriptPath
+				s.TranscriptSegments = prev.TranscriptSegments
+				s.StopHoldUntil = prev.StopHoldUntil
+				s.QueueHeld = prev.QueueHeld
 				s.LastReactedStatus = prev.LastReactedStatus
 				s.CIRetries = prev.CIRetries
 				s.Escalated = prev.Escalated
@@ -919,6 +1474,12 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.ReviewedPRs = prev.ReviewedPRs
 				s.ReviewWatermarks = prev.ReviewWatermarks
 				s.PendingHandoffs = prev.PendingHandoffs
+				s.PendingFeedback = prev.PendingFeedback
+				s.PendingBroadcast = prev.PendingBroadcast
+				s.PendingSSH = prev.PendingSSH
+				if s.ContextKey == "" {
+					s.ContextKey = prev.ContextKey
+				}
 				s.PostedGitHubPRs = prev.PostedGitHubPRs
 				if len(s.RemovedLabels) == 0 {
 					s.RemovedLabels = prev.RemovedLabels
@@ -937,10 +1498,12 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			*cur = s
 			return true
 		})
-		switch adopted.Status {
-		case "dead":
+		// Both anomalies live on the AGENT axis; reading them off the rolled-up
+		// status hid an orphan behind any PR state its record still carried.
+		switch adopted.AgentState {
+		case state.AgentDead:
 			d.logf("", "adopt: %s has a worktree but no tmux session (dead; reconcile may revert its issue)", adopted.ID)
-		case "orphaned":
+		case state.AgentOrphaned:
 			d.logf("", "adopt: %s is a lola tmux session without a worktree (orphaned; kill candidate)", adopted.ID)
 		}
 	}
@@ -950,13 +1513,7 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	// forever: its pane is alive, so the observer keeps re-stamping LastSeen
 	// and the retention prune never fires. Store-record removal only — the
 	// tmux session itself is a live terminal tab and is left alone.
-	purged := 0
-	for _, s := range d.sessions.Snapshot() {
-		if s.Source == "native" && runtime.IsShellTabSession(s.ID) {
-			d.sessions.Delete(s.ID)
-			purged++
-		}
-	}
+	purged := d.purgeAuxRecords()
 	if purged > 0 {
 		d.logf("", "adopt: purged %d phantom shell-tab record(s)", purged)
 	}
@@ -967,6 +1524,10 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "adopt: persist sessions: %v", err)
 	}
+	// Re-register every sandboxed worktree's trusted git layout (or deny host
+	// git on one that lost it) before anything — checkpoint, diff, overlap —
+	// runs host git on it again (internal/gitguard).
+	d.syncGitPins()
 }
 
 // defaultServerSessions is the seam over tmux.DefaultServerSessions so the
