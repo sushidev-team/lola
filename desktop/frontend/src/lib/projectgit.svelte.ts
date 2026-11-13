@@ -2,6 +2,7 @@ import type { PRCreateRequest, PRDraft, PRResult } from './gitpullrequest';
 import { ProjectGitService } from '@bindings/desktop';
 import { store } from './store.svelte';
 import { talk } from './talk.svelte';
+import { gitErrorInfo } from './giterror';
 import type { GitArea, GitDiff, GitSnapshot, GitRef, GitAuthorIdentity, GitStash, GitBranchAction, GitIdentities } from './projectgit';
 
 /** Shared per-checkout state keeps operation locks and commit drafts across view mounts. */
@@ -40,6 +41,12 @@ export class ProjectGitState {
   private historyLimit = 200;
   fetchingRemote = $state('');
   error = $state('');
+  failedAction = $state<GitBranchAction | null>(null);
+  private reportError(error: unknown, action = '') {
+    this.error = String(error);
+    const info = gitErrorInfo(this.error, action);
+    store.setFlash(info.title, info.kind, {description:info.description});
+  }
   diffError = $state('');
   notice = $state('');
   message = $state('');
@@ -153,6 +160,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     this.remoteIdentityLoading = false;
     this.loading = true;
     this.error = '';
+    this.failedAction = null;
     // Keep branch rows mounted while a different ref loads, so double-click
     // checkout still receives its second click. Stores are isolated by checkout.
     try {
@@ -211,7 +219,8 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       // Merge/rebase failures can leave resolvable conflicts. Refresh those facts
       // without losing the actionable Git error to load()'s clearing behavior.
       await refresh();
-      this.error = String(error);
+      this.failedAction = request;
+      this.reportError(error, request.action);
       return null;
     } finally { this.busy = ''; this.fetchingRemote = ''; this.deletingBranch = ''; }
   }
@@ -407,7 +416,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       await this.load(ref, limit);
       return true;
     } catch (error) {
-      this.error = String(error);
+      this.reportError(error, action);
       return false;
     } finally { this.busy = ''; }
   }

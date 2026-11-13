@@ -1,5 +1,7 @@
 import { tick } from 'svelte';
 import { confirm } from './confirm.svelte';
+import { store } from './store.svelte';
+import { gitErrorInfo } from './giterror';
 import { projectGitState, type ProjectGitState } from './projectgit.svelte';
 import type { GitBranchAction, GitCommit, GitRef, GitRemote, GitStash, GitWorktree, GitFile } from './projectgit';
 import type { IconName } from './icons';
@@ -13,7 +15,9 @@ export type GitMenuRequest = { title: string; subtitle?: string; x: number; y: n
 /** One controller per mounted repository. Requests capture exact refs and SHA facts. */
 export class GitActions {
   request = $state<GitMenuRequest | null>(null);
+  private disposed = false;
   constructor(private context: () => Context, private callbacks: Callbacks) {}
+  dispose() { this.disposed = true; this.close(); }
   close(restoreFocus = false) {
     const anchor = this.request?.anchor;
     this.request = null;
@@ -53,7 +57,7 @@ export class GitActions {
     return { action, source: source?.fullName ?? '', sourceSHA: source?.sha ?? '', target: target?.fullName ?? '', targetSHA: target?.sha ?? '' };
   }
   private async execute(context: Context, request: GitBranchAction) {
-    if (context.git !== this.context().git) return;
+    if (this.disposed || context.git !== this.context().git) return;
     let active = context;
     // Open a branch's existing checkout before starting an operation there, so
     // conflicts and Continue/Abort belong to the visible working copy.
@@ -67,10 +71,30 @@ export class GitActions {
     }
     const deletingSelected = ['delete-branch', 'remove-worktree-branch'].includes(request.action) && active.ref === request.source;
     const path = await active.git.branchAction(request, deletingSelected ? '' : active.ref, active.limit);
+    if (path === null && active.git === this.context().git && active.git.error) {
+      const info = gitErrorInfo(active.git.error, request.action);
+      store.setFlash(info.title, info.kind, {description:info.description,action:this.recovery()});
+    }
     if (path !== null && active.git === this.context().git && deletingSelected && this.context().ref === request.source) this.callbacks.viewHistory('');
     if (path !== null && active.git === this.context().git && ['checkout', 'merge', 'rebase'].includes(request.action)) this.callbacks.openWorktree(path);
   }
   private action(action: string, source?: GitRef, target?: GitRef) { void this.execute(this.context(), this.branchRequest(action, source, target)); }
+  recovery(): {label:string;run:()=>void} | undefined {
+    const context=this.context(), git=context.git, request=git.failedAction;
+    if (!git.error || !request) return;
+    const info=gitErrorInfo(git.error,request.action);
+    const source=git.snapshot?.refs.find(branch=>!branch.remote && branch.fullName===request.source);
+    if (!source || this.mutationBlocked(source)) return;
+    const valid=()=>!this.disposed && context.git===this.context().git && git.failedAction===request && !this.mutationBlocked(source) && git.snapshot?.refs.some(branch=>branch.fullName===source.fullName && branch.sha===source.sha);
+    if (info.recovery==='pull' && ['push','publish'].includes(request.action) && this.upstream(source)) {
+      return {label:'Pull changes',run:()=>{if(valid()) void this.execute(context,this.branchRequest('pull',source));}};
+    }
+    if (info.recovery==='merge' && request.action==='pull') {
+      const upstream=this.upstream(source), full=upstream.startsWith('refs/')?upstream:`refs/remotes/${upstream}`;
+      const remote=git.snapshot?.refs.find(branch=>branch.remote && branch.fullName===full);
+      if(remote) return {label:'Merge remote changes',run:()=>{if(valid() && git.snapshot?.refs.some(branch=>branch.fullName===remote.fullName && branch.sha===remote.sha)) void this.execute(context,this.branchRequest('merge',remote,source));}};
+    }
+  }
   push(branch = this.current()) {
     if (!branch || this.mutationBlocked(branch)) return;
     this.close();

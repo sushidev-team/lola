@@ -5,6 +5,7 @@
   import MenuItem from './MenuItem.svelte';
   import GitFilePath from './GitFilePath.svelte';
   import ProjectGitStaging from './ProjectGitStaging.svelte';
+  import ProjectGitError from './ProjectGitError.svelte';
   import ProjectGitRail from './ProjectGitRail.svelte';
   import ProjectGitSectionFilter from './ProjectGitSectionFilter.svelte';
   import { compileSectionFilter, emptySectionFilters, filterActive, readSectionFilters, saveSectionFilters, stashBranch } from '$lib/gitsectionfilters';
@@ -261,7 +262,7 @@
     window.addEventListener('blur', cancel);
     node.addEventListener('lostpointercapture', cancel);
   }
-  onDestroy(() => cancelBranchDrag());
+  onDestroy(() => { cancelBranchDrag(); gitActions.dispose(); });
   function dropBranch(event: MouseEvent, branch?: GitRef) {
     if (!draggedBranch || !branch) return;
     const source = draggedBranch;
@@ -489,7 +490,7 @@
     {@const request = publishBranch}
     {#key request}<ProjectGitPublish {...request} onClose={() => { if (publishBranch === request) publishBranch = null; }} />{/key}
   {/if}
-  {#if git.error}<div class="git-error" role="alert"><Icon name="circle-alert" size={16} /><span>{git.error}</span><Button size="xs" onclick={() => void git.load(ref, limit)}>Refresh</Button></div>{/if}
+  {#if git.error}<ProjectGitError error={git.error} operation={git.failedAction?.action} busy={!!git.busy} recovery={gitActions.recovery()} onrefresh={() => void git.load(ref, limit)} ondismiss={() => git.error=''}/>{/if}
   </div>
   <div class="git-workbench" class:rail-open={showRail} class:resizing={!!resizingSidebar} bind:clientWidth={workbenchWidth} style={`--rail-width:${railWidth}px;--inspector-width:${inspectorWidth}px`}>
     <Button variant="bare" class="sidebar-resize rail-resize" role="separator" aria-label="Resize repository sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={railMax} aria-valuenow={railWidth} title="Drag to resize · Double-click to reset" onpointerdown={(event) => resizeSidebar(event,'rail')} onkeydown={(event) => sidebarKey(event,'rail')} ondblclick={() => setSidebarWidth('rail',sidebarDefaults.rail)}><span class="sr-only">Resize repository sidebar</span></Button>
@@ -720,8 +721,6 @@
   }
   .toolbar-divider { width:1px; height:16px; background:var(--color-edge); margin:0 4px; }
   .git-notices { grid-row:2; min-width:0; }
-  .git-error { display:flex; align-items:flex-start; gap:8px; padding:10px 14px; color:var(--color-bad); background:color-mix(in srgb,var(--color-bad) 5%,var(--color-panel)); font-size:12px; }
-  .git-error span { flex:1; overflow-wrap:anywhere; white-space:pre-wrap; }
   .git-workbench { position:relative; grid-row:3; display:grid; grid-template-columns:var(--rail-width) minmax(0,1fr) var(--inspector-width); min-width:0; min-height:0; overflow:hidden; }
   .git-workbench :global(.sidebar-resize) { position:absolute; top:0; bottom:0; z-index:4; width:8px; height:auto; padding:0; border-radius:0; cursor:col-resize; touch-action:none; background:transparent; }
   .git-workbench :global(.rail-resize) { left:var(--rail-width); transform:translateX(-50%); }

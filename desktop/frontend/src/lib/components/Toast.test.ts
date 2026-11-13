@@ -1,9 +1,17 @@
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/svelte";
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import Toast from "./Toast.svelte";
 import { store } from "$lib/store.svelte";
 
 describe("Toast", () => {
+  it("offers the recovery action and dismisses the toast before running it", async () => {
+    render(Toast);
+    const run=vi.fn(()=>expect(store.flash).toBeNull());
+    store.setFlash('Push blocked','warn',{description:'Pull changes, then push again.',action:{label:'Pull changes',run}});
+    expect(await screen.findByText('Pull changes, then push again.')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button',{name:'Pull changes'}));
+    expect(run).toHaveBeenCalledOnce();
+  });
   afterEach(() => {
     store.dismissFlash();
     cleanup();

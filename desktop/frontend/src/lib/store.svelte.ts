@@ -36,7 +36,8 @@ type OpenTicketArgs = ProtocolOpenTicketArgs;
 
 type RemovalFollowup = { branch: string; onRemoved: () => void | Promise<void> };
 
-type Flash = { text: string; kind: "good" | "warn" | "bad" } | null;
+export type FlashOptions = { description?: string; action?: { label: string; run: () => void | Promise<void> } };
+type Flash = ({ text: string; kind: "good" | "warn" | "bad" } & FlashOptions) | null;
 
 /**
  * The session's sort tier, over BOTH axes (state.SortRank).
@@ -285,18 +286,18 @@ class Store {
     return this.retained;
   }
 
-  setFlash(text: string, kind: "good" | "warn" | "bad" = "good") {
+  setFlash(text: string, kind: "good" | "warn" | "bad" = "good", options: FlashOptions = {}) {
     // Sentence case at the one place every flash passes: call sites write
     // "daemon restarted", the toast shows "Daemon restarted". Only a first word
     // of plain letters is touched: a message that opens with an identifier
     // ("lola-p1-eng-1: switched …", "eng-123 …") keeps it verbatim.
-    this.flash = { text: /^[a-z]+(?![\w-])/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text, kind };
+    this.flash = { text: /^[a-z]+(?![\w-])/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text, kind, ...options };
     this.armFlashTimer();
   }
 
   /** How long a flash stays: an error is read, not glanced at. */
   private flashMs() {
-    return this.flash?.kind === "bad" ? 8000 : 4000;
+    return this.flash?.action ? 10000 : this.flash?.kind === "bad" ? 8000 : 4000;
   }
 
   private armFlashTimer() {

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { GitActions } from './gitactions.svelte';
 import { ProjectGitState, projectGitState } from './projectgit.svelte';
 import { confirm } from './confirm.svelte';
+import { store } from './store.svelte';
 import ProjectGitActionMenu from './components/ProjectGitActionMenu.svelte';
 import type { GitRef, GitSnapshot } from './projectgit';
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: {} }));
@@ -22,8 +23,30 @@ beforeEach(() => {
   actions = new GitActions(() => ({ git, ref: '', limit: 200 }), callbacks);
   confirm.cancel();
 });
-afterEach(() => { cleanup(); confirm.cancel(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); confirm.cancel(); store.dismissFlash(); vi.restoreAllMocks(); });
 describe('Git action menus', () => {
+  it('offers pull after a rejected push and an explicit merge after a diverged pull', async () => {
+    const remote={...main,name:'origin/main',fullName:'refs/remotes/origin/main',remote:true,current:false,sha:'c'.repeat(40)};
+    git.snapshot!.refs.push(remote);
+    vi.mocked(git.branchAction).mockImplementationOnce(async request=>{git.failedAction=request;git.error='push rejected (non-fast-forward)';return null;});
+    actions.push();
+    await waitFor(()=>expect(store.flash?.action?.label).toBe('Pull changes'));
+    vi.mocked(git.branchAction).mockImplementationOnce(async request=>{git.failedAction=request;git.error='branch has diverged; check it out and merge or rebase the upstream explicitly';return null;});
+    store.flash!.action!.run();
+    await waitFor(()=>expect(store.flash?.action?.label).toBe('Merge remote changes'));
+    expect(git.branchAction).toHaveBeenLastCalledWith(expect.objectContaining({action:'pull',source:main.fullName,sourceSHA:main.sha}),'',200);
+    store.flash!.action!.run();
+    await waitFor(()=>expect(git.branchAction).toHaveBeenLastCalledWith({action:'merge',source:remote.fullName,sourceSHA:remote.sha,target:main.fullName,targetSHA:main.sha},'',200));
+  });
+  it.each(['changed','dismissed','disposed'])('does not run a stale toast action after the context is %s', async reason=>{
+    git.failedAction={action:'push',source:main.fullName,sourceSHA:main.sha,target:'',targetSHA:''};
+    git.error='push rejected (non-fast-forward)';
+    const recovery=actions.recovery()!;
+    if(reason==='changed') git.snapshot!.refs=[{...main,sha:'new-tip'}];
+    if(reason==='dismissed') git.failedAction=null;
+    if(reason==='disposed') actions.dispose();
+    recovery.run();expect(git.branchAction).not.toHaveBeenCalled();
+  });
   it.each([true, false])('deletes a borrowed branch after session cleanup only if it still exists (%s)', async (exists) => {
     const tree = {path:'/managed',branch:feature.name,head:feature.sha,blocked:true,locked:false,prunable:false};
     git.snapshot!.worktrees = [tree];
