@@ -119,6 +119,30 @@ func TestToggleSelectedDaemonDownDoesNotClobberExternalChanges(t *testing.T) {
 	}
 }
 
+func TestToggleSelectedDaemonDownRejectsIncompletePickup(t *testing.T) {
+	m := newTestRoot(t)
+	p := m.cfg.PollByName("B")
+	p.Enabled = false
+	p.DedupMode = "label"
+	p.OnSentSetLabel = ""
+	if err := m.cfg.Save(m.cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	m.list.cursor = 2
+	m.list.status = nil
+	m.toggleSelected()
+	if !strings.Contains(m.list.flash, "requires on_sent_set_label") {
+		t.Fatalf("missing activation error: %s", m.list.flash)
+	}
+	saved, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.PollByName("B").Enabled || m.cfg.PollByName("B").Enabled {
+		t.Fatal("invalid pickup was enabled")
+	}
+}
+
 func TestFormSaveDoesNotClobberExternalChanges(t *testing.T) {
 	m := newTestRoot(t)
 	externallyDisable(t, m.cfgPath, "A")

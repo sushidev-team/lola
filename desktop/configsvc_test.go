@@ -32,6 +32,66 @@ func writeTestConfig(t *testing.T, body string) string {
 
 const minimalConfig = "[defaults]\nglobal_cap = 4\nconcurrency_cap = 2\n"
 
+func TestSaveSettingsWithInactiveUnfinishedPickup(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig+`dedup_mode = "label"
+[[project]]
+name = "getvouchers"
+path = "/repo/getvouchers"
+team_id = "team"
+enabled = false
+[[project]]
+name = "fairu-mesh"
+path = "/repo/fairu-mesh"
+team_id = "team"
+match_labels = ["ready"]
+enabled = false
+`)
+	svc := &ConfigService{}
+	dto, err := svc.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto.NotifyDesktop = !dto.NotifyDesktop
+	if err := svc.SaveSettings(dto); err != nil {
+		t.Fatalf("unrelated save blocked by inactive pickup: %v", err)
+	}
+	saved, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Notify.Desktop != dto.NotifyDesktop {
+		t.Fatal("settings were not saved")
+	}
+	for _, p := range saved.Projects {
+		if p.Enabled || p.DedupMode != "label" || !p.Inherits.DedupMode || p.OnSentSetLabel != "" {
+			t.Fatalf("save rewrote pickup settings: %+v", p)
+		}
+	}
+	if got := saved.ProjectByName("fairu-mesh").MatchLabels; !reflect.DeepEqual(got, []string{"ready"}) {
+		t.Fatalf("lost explicit labels: %v", got)
+	}
+	// Enabling the incomplete project still fails; no invalid config is written.
+	project, err := svc.GetProject("getvouchers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project.Enabled = true
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SaveProject(project); err == nil {
+		t.Fatal("enabled incomplete pickup")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("invalid save changed config")
+	}
+}
+
 func TestSaveAISettingsWithDefaultSandboxImage(t *testing.T) {
 	path := writeTestConfig(t, minimalConfig)
 	cfg, err := config.Load(path)
@@ -251,7 +311,7 @@ func TestGetProjectNewIsBlank(t *testing.T) {
 func TestReloadRejectionHint(t *testing.T) {
 	stale := `config invalid, keeping previous: project "Okane" polling: dedup_mode=label requires on_sent_set_label`
 	got := reloadRejectionHint(stale)
-	if !strings.Contains(got, "OLDER binary") {
+	if !strings.Contains(got, "Update the Lola CLI and restart") {
 		t.Errorf("an inherited-key complaint must name the stale daemon:\n%s", got)
 	}
 

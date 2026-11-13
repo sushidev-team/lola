@@ -559,6 +559,11 @@ func (m *rootModel) homeTogglePoll() tea.Cmd {
 		return nil
 	}
 	p.Enabled = !p.Enabled
+	if err := m.cfg.Validate(); err != nil {
+		p.Enabled = !p.Enabled
+		m.home.flash, m.home.flashGood = err.Error(), false
+		return nil
+	}
 	if err := m.cfg.Save(m.cfgPath); err != nil {
 		m.home.flash, m.home.flashGood = "save failed: "+err.Error(), false
 		return nil

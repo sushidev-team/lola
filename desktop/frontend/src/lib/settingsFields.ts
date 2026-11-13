@@ -22,3 +22,20 @@ export const ENTRY_FORMAT: Record<string, string> = {
   "Workflow states": "One UUID per line.",
   "Priority sort": "One sort key per line.",
 };
+
+export function settingsSaveError(error: unknown): { summary: string; description?: string; details?: string } {
+  const message = String(error).replace(/^(?:(?:RuntimeError|Error):\s*)+/, '');
+  const projects = new Set<string>();
+  const other: string[] = [];
+  for (const line of message.split('\n')) {
+    const match = line.match(/^project "([^"]+)" polling: dedup_mode=label requires (?:on_sent_set_label|match_labels)\b/);
+    if (match) projects.add(match[1]);
+    else if (line.trim()) other.push(line);
+  }
+  if (!projects.size) return { summary: message };
+  return {
+    summary: `Label-based pickup needs labels for ${projects.size === 1 ? '1 project' : `${projects.size} projects`}.`,
+    description: 'In Project defaults or the affected project, choose “Remember picked-up issues” under Repeat pickup, or configure Match labels and After pickup label.',
+    details: [`Affected projects: ${[...projects].join(', ')}.`, ...other].join('\n'),
+  };
+}

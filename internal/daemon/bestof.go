@@ -218,6 +218,14 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 	if err != nil {
 		return protocol.BestOfData{}, err
 	}
+	if proj.Polls() {
+		d.mu.Lock()
+		err := d.cfg.ValidatePolling(&proj)
+		d.mu.Unlock()
+		if err != nil {
+			return protocol.BestOfData{}, err
+		}
+	}
 	// After the project is known: a sandboxed project's agents live in its
 	// image, so its gate is the docker CLI rather than each agent's binary.
 	if err := d.bestOfHealth(proj.Name, mix); err != nil {

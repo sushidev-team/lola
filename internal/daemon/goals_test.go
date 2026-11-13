@@ -205,6 +205,10 @@ func TestGoalDispatchExclusionAllPollModes(t *testing.T) {
 			}
 			p := &d.cfg.Projects[0]
 			p.DedupMode = mode
+			if mode == "state" {
+				p.StateIDs = []string{"ready"}
+				p.OnSpawnStateID = "in-progress"
+			}
 			if mode == "no-labels" {
 				p.MatchLabels = nil
 				p.DedupMode = "seen"

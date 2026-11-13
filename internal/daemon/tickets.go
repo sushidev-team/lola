@@ -227,6 +227,14 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	var proj config.Project
 	polls := false
 	if pp != nil {
+		// Opening a ticket also applies pickup labels/state after spawning.
+		// Inactive projects may now have draft settings, so check those first.
+		if pp.Polls() {
+			if err := d.cfg.ValidatePolling(pp); err != nil {
+				d.mu.Unlock()
+				return protocol.OpenData{}, err
+			}
+		}
 		proj = *pp
 		proj.MatchLabels = slices.Clone(pp.MatchLabels)
 		proj.PostCreate = slices.Clone(pp.PostCreate)

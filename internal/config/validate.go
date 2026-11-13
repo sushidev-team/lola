@@ -203,83 +203,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Polling-config checks run only for a project that actually polls (TeamID
-	// set). A non-polling project (manual worktrees / PRs only) needs none of
-	// these. team_id is implied by Polls(); the rest mirror the pre-merge poll
-	// validation, now scoped to the project.
+	// Inactive projects may keep incomplete pickup settings while being set up.
+	// Validate readiness when enabling pickup; manual runs use the same check.
 	for i := range c.Projects {
 		p := &c.Projects[i]
-		if !p.Polls() {
-			continue
-		}
-		id := fmt.Sprintf("project %q polling", p.Name)
-
-		switch p.CycleMode {
-		case "none", "active":
-		case "pinned":
-			if p.CycleID == "" {
-				errs = append(errs, fmt.Errorf("%s: cycle_mode=pinned requires cycle_id", id))
-			}
-		default:
-			errs = append(errs, fmt.Errorf("%s: cycle_mode must be one of none|active|pinned, got %q", id, p.CycleMode))
-		}
-
-		switch p.MatchMode {
-		case "any", "all":
-		default:
-			errs = append(errs, fmt.Errorf("%s: match_mode must be any|all, got %q", id, p.MatchMode))
-		}
-
-		switch p.AssigneeMode {
-		case "anyone", "me":
-		case "user":
-			if p.AssigneeUserID == "" {
-				errs = append(errs, fmt.Errorf("%s: assignee_mode=user requires assignee_user_id", id))
-			}
-		default:
-			errs = append(errs, fmt.Errorf("%s: assignee_mode must be one of anyone|me|user, got %q", id, p.AssigneeMode))
-		}
-
-		switch p.DedupMode {
-		case "label":
-			// Label-mode dedup removes ALL trigger labels on the post-spawn flip
-			// (so the issue stops matching, for any match_mode) and adds
-			// on_sent_set_label to mark it picked up.
-			if p.OnSentSetLabel == "" {
-				errs = append(errs, fmt.Errorf("%s: dedup_mode=label requires on_sent_set_label", id))
-			}
-			if len(p.MatchLabels) == 0 {
-				errs = append(errs, fmt.Errorf("%s: dedup_mode=label requires match_labels (the removed trigger labels are the primary dedup)", id))
-			}
-			if p.OnSentSetLabel != "" && slices.Contains(p.MatchLabels, p.OnSentSetLabel) {
-				errs = append(errs, fmt.Errorf("%s: on_sent_set_label must not be one of match_labels, otherwise the issue re-matches after the flip and respawns forever", id))
-			}
-		case "seen":
-		case "state":
-			// State-based dedup: on spawn Lola moves the issue to OnSpawnStateID,
-			// which must lie OUTSIDE state_ids so it stops matching.
-			if len(p.StateIDs) == 0 {
-				errs = append(errs, fmt.Errorf("%s: dedup_mode=state requires state_ids (the matching set the issue leaves on spawn)", id))
-			}
-			if p.OnSpawnStateID == "" {
-				errs = append(errs, fmt.Errorf("%s: dedup_mode=state requires on_spawn_state_id (the state the issue moves into, out of state_ids)", id))
-			} else if slices.Contains(p.StateIDs, p.OnSpawnStateID) {
-				errs = append(errs, fmt.Errorf("%s: on_spawn_state_id must not be one of state_ids, otherwise the issue still matches after the transition and respawns forever", id))
-			}
-		default:
-			errs = append(errs, fmt.Errorf("%s: dedup_mode must be label|seen|state, got %q", id, p.DedupMode))
-		}
-
-		// An unknown sort key is silently ignored by SortIssues, so a typo would
-		// quietly change pickup order with no signal. Reject it instead.
-		for _, k := range p.PrioritySort {
-			if !slices.Contains(PrioritySortKeys, k) {
-				errs = append(errs, fmt.Errorf("%s: priority_sort: unknown key %q (must be one of %v)", id, k, PrioritySortKeys))
-			}
-		}
-
-		if c.EffectiveCap(p) <= 0 {
-			errs = append(errs, fmt.Errorf("%s: effective concurrency_cap must be > 0 (set the project's concurrency_cap or defaults.concurrency_cap)", id))
+		if p.Polls() && p.Enabled {
+			errs = append(errs, c.ValidatePolling(p))
 		}
 	}
 
@@ -303,6 +232,82 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateSSHHosts()...)
 	errs = append(errs, c.validateHub()...)
 
+	return errors.Join(errs...)
+}
+
+// ValidatePolling checks a project's resolved pickup settings regardless of
+// Enabled. Call it before an explicit one-off run as well as automatic pickup.
+func (c *Config) ValidatePolling(p *Project) error {
+	var errs []error
+	id := fmt.Sprintf("project %q polling", p.Name)
+
+	switch p.CycleMode {
+	case "none", "active":
+	case "pinned":
+		if p.CycleID == "" {
+			errs = append(errs, fmt.Errorf("%s: cycle_mode=pinned requires cycle_id", id))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("%s: cycle_mode must be one of none|active|pinned, got %q", id, p.CycleMode))
+	}
+
+	switch p.MatchMode {
+	case "any", "all":
+	default:
+		errs = append(errs, fmt.Errorf("%s: match_mode must be any|all, got %q", id, p.MatchMode))
+	}
+
+	switch p.AssigneeMode {
+	case "anyone", "me":
+	case "user":
+		if p.AssigneeUserID == "" {
+			errs = append(errs, fmt.Errorf("%s: assignee_mode=user requires assignee_user_id", id))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("%s: assignee_mode must be one of anyone|me|user, got %q", id, p.AssigneeMode))
+	}
+
+	switch p.DedupMode {
+	case "label":
+		// Label-mode dedup removes ALL trigger labels on the post-spawn flip
+		// (so the issue stops matching, for any match_mode) and adds
+		// on_sent_set_label to mark it picked up.
+		if p.OnSentSetLabel == "" {
+			errs = append(errs, fmt.Errorf("%s: dedup_mode=label requires on_sent_set_label", id))
+		}
+		if len(p.MatchLabels) == 0 {
+			errs = append(errs, fmt.Errorf("%s: dedup_mode=label requires match_labels (the removed trigger labels are the primary dedup)", id))
+		}
+		if p.OnSentSetLabel != "" && slices.Contains(p.MatchLabels, p.OnSentSetLabel) {
+			errs = append(errs, fmt.Errorf("%s: on_sent_set_label must not be one of match_labels, otherwise the issue re-matches after the flip and respawns forever", id))
+		}
+	case "seen":
+	case "state":
+		// State-based dedup: on spawn Lola moves the issue to OnSpawnStateID,
+		// which must lie OUTSIDE state_ids so it stops matching.
+		if len(p.StateIDs) == 0 {
+			errs = append(errs, fmt.Errorf("%s: dedup_mode=state requires state_ids (the matching set the issue leaves on spawn)", id))
+		}
+		if p.OnSpawnStateID == "" {
+			errs = append(errs, fmt.Errorf("%s: dedup_mode=state requires on_spawn_state_id (the state the issue moves into, out of state_ids)", id))
+		} else if slices.Contains(p.StateIDs, p.OnSpawnStateID) {
+			errs = append(errs, fmt.Errorf("%s: on_spawn_state_id must not be one of state_ids, otherwise the issue still matches after the transition and respawns forever", id))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("%s: dedup_mode must be label|seen|state, got %q", id, p.DedupMode))
+	}
+
+	// An unknown sort key is silently ignored by SortIssues, so a typo would
+	// quietly change pickup order with no signal. Reject it instead.
+	for _, k := range p.PrioritySort {
+		if !slices.Contains(PrioritySortKeys, k) {
+			errs = append(errs, fmt.Errorf("%s: priority_sort: unknown key %q (must be one of %v)", id, k, PrioritySortKeys))
+		}
+	}
+
+	if c.EffectiveCap(p) <= 0 {
+		errs = append(errs, fmt.Errorf("%s: effective concurrency_cap must be > 0 (set the project's concurrency_cap or defaults.concurrency_cap)", id))
+	}
 	return errors.Join(errs...)
 }
 

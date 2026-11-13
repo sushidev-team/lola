@@ -50,6 +50,20 @@ func TestOpenTicketPollingDedupsLikeTick(t *testing.T) {
 	}
 }
 
+func TestOpenTicketRefusesIncompletePausedPickup(t *testing.T) {
+	p := labelPoll("p1")
+	p.Enabled, p.OnSentSetLabel = false, ""
+	fake, nat := &linear.Fake{}, &fakeNative{}
+	d := newTestDaemon(t, testConfig(p), fake, nat)
+	_, err := d.handleOpenTicket(context.Background(), protocol.OpenTicketArgs{Project: "p1", Identifier: "FE-9", UUID: "issue-9"})
+	if err == nil || !strings.Contains(err.Error(), "requires on_sent_set_label") {
+		t.Fatalf("want pickup validation error, got %v", err)
+	}
+	if len(fake.CallNames()) != 0 || len(nat.spawnCalls()) != 0 || d.inflight.Has("issue-9") {
+		t.Fatal("invalid pickup touched Linear or started a session")
+	}
+}
+
 // An issue already in-flight (claimed by a tick or a re-open) is refused without
 // a spawn.
 func TestOpenTicketRefusesWhenInFlight(t *testing.T) {

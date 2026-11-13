@@ -13,7 +13,7 @@
   import SettingsGroup from "$lib/components/SettingsGroup.svelte";
   import Chevron from "$lib/components/Chevron.svelte";
   import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
-  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT } from "$lib/settingsFields";
+  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT, settingsSaveError } from "$lib/settingsFields";
   import Checkbox from "$lib/components/Checkbox.svelte";
   import AgentModelFields from "$lib/components/AgentModelFields.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
@@ -424,8 +424,10 @@
       store.setFlash("settings saved", "good");
       nav.closeOverlay();
     } catch (err) {
-      saveErr = String(err);
-      store.setFlash(String(err), "bad");
+      const failure = settingsSaveError(err);
+      saveErr = [failure.summary, failure.description, failure.details].filter(Boolean).join('\n\n');
+      if (failure.description) store.setFlash(failure.summary, "bad", { description: failure.description });
+      else store.setFlash(failure.summary, "bad");
     } finally {
       saving = false;
     }
