@@ -31,6 +31,7 @@
   const spend = $derived(store.status?.usage?.projects?.find(p => p.name === nav.project));
   const canGit = $derived(!!project?.path && !isStack);
   const tab = $derived(canGit ? nav.projectTab : "overview");
+  $effect(() => { if (canGit && tab === "git") nav.rememberGitProject(projectName); });
 
   let broadcastOpen = $state(false);
   let broadcastText = $state("");
@@ -92,14 +93,14 @@
   {#if project}
     {#snippet heading()}
       <div class="project-heading">
-        {#if !nav.sidebarOpen}<Button icon aria-label="Show sidebar" title="Show sidebar (b)" onclick={() => nav.toggleSidebar()}><Icon name="chevrons-right" size={16} /></Button>{/if}
+        {#if !nav.sidebarOpen}<Button icon aria-label="Show sidebar" title="Show sidebar (⌘B)" onclick={() => nav.toggleSidebar()}><Icon name="chevrons-right" size={16} /></Button>{/if}
         {#if waiting > 0}<Button size="xs" class="text-orange!" title={`${waiting} waiting on you (⌘J)`} aria-label={`${waiting} waiting on you`} onclick={() => ssh.nextWaiting()}><Icon name="circle-alert" size={15} />{waiting}</Button>{/if}
         {#if !nav.sidebarOpen && store.connected && !daemonOk}<Button icon class={store.alive ? "text-warn!" : "text-bad!"} aria-label={store.alive ? "Daemon degraded" : "Daemon down"} title={`${store.alive ? 'Daemon degraded' : 'Daemon down'} · Open doctor`} onclick={() => nav.openOverlay("doctor")}><Icon name="triangle-alert" size={16} /></Button>{/if}
-        <Button icon aria-label="All projects" title="All projects" onclick={() => nav.goHome()}><Icon name="chevron-left" size={16} /></Button>
+        <Button icon aria-label={tab === "git" ? "Back to previous view" : "All projects"} title={tab === "git" ? "Back to previous view (⌘⇧G)" : "All projects"} onclick={() => tab === "git" ? nav.returnFromGit() : nav.goHome()}><Icon name="chevron-left" size={16} /></Button>
         <h1 title={`${store.displayNameFor(project!.name)} · ${project!.repo || project!.path}`} class="project-title">{store.displayNameFor(project!.name)}</h1>
         <div class="project-tabs no-drag" role="tablist" tabindex="-1" aria-label="Project workspace" onkeydown={tabKey}>
           <Button id="project-tab-overview" class="project-tab" role="tab" aria-label="Overview" title="Project overview" aria-selected={tab === "overview"} aria-controls="project-overview" tabindex={tab === "overview" ? 0 : -1} selected={tab === "overview"} onclick={() => void selectTab("overview")}><Icon name="panels-top-left" size={15} /><span class="tab-label">Overview</span></Button>
-          {#if canGit}<Button id="project-tab-git" class="project-tab" role="tab" aria-label="Git" title="Git workspace" aria-selected={tab === "git"} aria-controls="project-git" tabindex={tab === "git" ? 0 : -1} selected={tab === "git"} onclick={() => void selectTab("git")}><Icon name="git-branch" size={15} /><span class="tab-label">Git</span></Button>{/if}
+          {#if canGit}<Button id="project-tab-git" class="project-tab" role="tab" aria-label="Git" title="Git workspace (⌘⇧G to switch back)" aria-selected={tab === "git"} aria-controls="project-git" tabindex={tab === "git" ? 0 : -1} selected={tab === "git"} onclick={() => void selectTab("git")}><Icon name="git-branch" size={15} /><span class="tab-label">Git</span></Button>{/if}
         </div>
       </div>
     {/snippet}

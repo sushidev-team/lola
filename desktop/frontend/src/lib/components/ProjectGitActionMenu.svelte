@@ -42,7 +42,7 @@
     <div class="menu-heading"><strong>{request.title}</strong>{#if request.subtitle}<span>{request.subtitle}</span>{/if}</div>
     {#each request.items as item}
       {#if item.separator}<div class="menu-separator" role="separator"></div>{/if}
-      <MenuItem disabled={item.disabled} variant={item.danger ? 'danger' : 'default'} onclick={() => run(item)}><span class="action-label"><Icon name={item.icon} size={15} /><span>{item.label}</span></span></MenuItem>
+      <MenuItem disabled={item.disabled} variant={item.danger ? 'danger' : 'default'} onclick={() => run(item)}><span class="action-label" class:danger={item.danger}><Icon name={item.icon} size={15} /><span>{item.label}</span></span></MenuItem>
     {/each}
   </div>
   </div>
@@ -59,5 +59,6 @@
   .git-action-menu :global(button) { padding-block:4px; }
   .action-label { display:flex; align-items:center; gap:7px; font-size:13px; line-height:18px; }
   .action-label > :global(svg) { flex-shrink:0; color:var(--color-ink-2); }
+  .action-label.danger,.action-label.danger > :global(svg) { color:var(--color-bad); }
   .action-label > span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 </style>

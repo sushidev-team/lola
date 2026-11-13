@@ -1,5 +1,5 @@
 import { createAttachmentKey, fromAction } from 'svelte/attachments';
-import { tooltip } from './tooltip';
+import { tooltip, type TooltipRef } from './tooltip';
 import { exactTime } from './time';
 import type { GitCommit, GitRef } from './projectgit';
 
@@ -8,7 +8,7 @@ type AttachmentProps = { [key: symbol]: ReturnType<typeof fromAction<HTMLElement
 const attachments = new WeakMap<GitCommit, { signature: string; props: AttachmentProps }>();
 
 /** Attach to the shared Button's DOM element without adding a wrapper to the graph. */
-export function gitCommitTooltip(commit: GitCommit, branches: GitRef[], checkouts: string[] = []) {
+export function gitCommitTooltip(commit: GitCommit, branches: GitRef[], checkouts: string[] = [], tips?: GitRef[]) {
   const ordered = [...new Map(branches.map(branch => [branch.fullName, branch])).values()].sort((a, b) => Number(b.current) - Number(a.current) || Number(a.remote) - Number(b.remote) || a.name.localeCompare(b.name));
   const grouped = ordered.filter(branch => {
     if (!branch.remote) return true;
@@ -20,7 +20,8 @@ export function gitCommitTooltip(commit: GitCommit, branches: GitRef[], checkout
   const date = new Date(commit.date);
   const content = {
     heading: commit.subject,
-    text: commit.author,
+    text: commit.author || commit.subject,
+    refs: tips ? referenceLabels(commit, tips) : undefined,
     commit: {
       author: commit.author,
       date: Number.isNaN(date.getTime()) ? commit.date : date.toLocaleString(undefined, { year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
@@ -43,5 +44,22 @@ export function gitCommitTooltip(commit: GitCommit, branches: GitRef[], checkout
   // replace it while the pointer is stationary. Weak keys expire with history.
   const props = { [commitTooltipKey]: fromAction(tooltip, () => content) };
   attachments.set(commit, { signature, props });
+  return props;
+}
+
+const refsTooltipKey = createAttachmentKey();
+const refAttachments = new WeakMap<GitCommit, { signature: string; props: AttachmentProps }>();
+function referenceLabels(commit: GitCommit, tips: GitRef[]): TooltipRef[] {
+  return [...tips.map(branch => ({name:branch.name,kind:branch.remote ? 'remote' as const : 'local' as const,current:branch.current})),
+    ...commit.refs.filter(ref => ref.startsWith('tag: ')).map(ref => ({name:ref.slice(5),kind:'tag' as const}))];
+}
+export function gitRefsTooltip(commit: GitCommit, tips: GitRef[]) {
+  const refs = referenceLabels(commit, tips);
+  if (!refs.length) return {};
+  const content = {heading:'Branches and tags',text:'References',refs,focus:false,delay:180,hoverTarget:'.commit-refs'};
+  const signature = JSON.stringify(content), cached = refAttachments.get(commit);
+  if (cached?.signature === signature) return cached.props;
+  const props = {[refsTooltipKey]:fromAction(tooltip, () => content)};
+  refAttachments.set(commit,{signature,props});
   return props;
 }

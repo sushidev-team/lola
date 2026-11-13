@@ -201,9 +201,7 @@
     <input id={`${id}-subject`} aria-label="Commit subject" placeholder={git.amendLoading ? 'Loading last commit…' : 'Summary'} bind:value={git.subject} disabled={!!git.busy || !data} maxlength="1000" />
     <textarea aria-label="Commit body" placeholder="Description (optional)" rows="3" bind:value={git.body} disabled={!!git.busy || !data} maxlength="19000"></textarea>
     <div class="commit-options"><label class="amend-option"><Checkbox checked={git.amend} onchange={(event) => void git.setAmend(event.currentTarget.checked)} disabled={!!git.busy || !!data?.operation || !data?.head} /><span>Amend last commit</span>{#if git.amend && git.amendHead}<code>{git.amendHead.slice(0, 8)}</code>{/if}</label><Button size="xs" icon class="signing-icon" aria-label={signingLabel} {...signingTooltip}><Icon name={data?.signing?.enabled ? 'shield-check' : 'info'} size={14} /></Button></div>
-    {#if data?.operation}<p class="conflict-note">Resolve and stage conflicts, then use Continue above to finish the {data.operation}.</p>{/if}
     {#if amendStale}<p class="conflict-note" role="alert">HEAD changed since you selected Amend. Turn Amend off, review the last commit, then enable it again.</p>{/if}
-    {#if conflicts}<p class="conflict-note">Resolve conflicted files before committing.</p>{/if}
     <Button block variant="primary" loading={git.busy === 'commit' || git.busy === 'amend' || git.busy === 'check-amend'} disabled={!canCommit} type="submit"><Icon name="check" size={14} />{git.amend ? 'Amend' : 'Commit'} {staged.length ? `${staged.length} ${staged.length === 1 ? 'file' : 'files'}` : 'staged changes'}</Button>
   </form>
 </div>

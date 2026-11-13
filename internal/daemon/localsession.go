@@ -15,6 +15,8 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
+	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
@@ -113,7 +115,7 @@ func (d *Daemon) noteInitial(id, prompt, typed string) {
 // A borrowed directory never becomes a worktree owned by Lola. No checkout,
 // setup hooks, branch mutations or implicit project configuration occur here.
 func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualArgs) (protocol.OpenData, error) {
-	if a.Location != "main" && a.Location != "temporary" {
+	if a.Location != "main" && a.Location != "checkout" && a.Location != "temporary" {
 		return protocol.OpenData{}, errors.New("unknown session location")
 	}
 	if err := validateSessionName(a.Name); err != nil {
@@ -134,18 +136,25 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	}
 	kind := d.cfg.AgentForProject(a.Project)
 	dir := d.cfg.Defaults.TemporaryDirectory
+	home, validateCheckout := d.home, d.validateLocalCheckout
 	d.mu.Unlock()
 	if nat == nil {
 		return protocol.OpenData{}, errors.New("native runtime unavailable")
 	}
-	if a.Location == "main" {
+	if a.Location == "main" || a.Location == "checkout" {
 		if configured == nil || p.IsStack() || p.Path == "" {
 			return protocol.OpenData{}, fmt.Errorf("unknown project %q", a.Project)
 		}
-		if a.Path != "" {
+		if a.Location == "main" && a.Path != "" {
 			return protocol.OpenData{}, errors.New("main checkout uses the configured project path")
 		}
 		dir = p.Path
+		if a.Location == "checkout" {
+			if a.Path == "" {
+				return protocol.OpenData{}, errors.New("checkout path required")
+			}
+			dir = a.Path
+		}
 	} else if a.Path != "" {
 		dir = a.Path
 	}
@@ -165,6 +174,17 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	dir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return protocol.OpenData{}, fmt.Errorf("session directory: %w", err)
+	}
+	if a.Location == "checkout" {
+		if validateCheckout == nil {
+			validateCheckout = validateBorrowedCheckout
+		}
+		checkCtx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+		err := validateCheckout(checkCtx, p.Path, dir, home)
+		cancel()
+		if err != nil {
+			return protocol.OpenData{}, err
+		}
 	}
 	if a.AgentKind != "" {
 		if !agent.Valid(a.AgentKind) {
@@ -215,4 +235,43 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	d.recordSessionEvent("", s)
 	d.noteInitial(id, prompt, typed)
 	return protocol.OpenData{SessionID: id, Worktree: dir, Message: "Session opened"}, nil
+}
+
+// Only a registered, non-isolated checkout can be borrowed. Managed directories
+// must use their existing session; a second host agent must never enter a sandbox.
+func validateBorrowedCheckout(ctx context.Context, root, dir, home string) error {
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	if gitguard.Pinned(root) || gitguard.Pinned(dir) {
+		return errors.New("isolated checkouts must use their existing session")
+	}
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolved
+	}
+	if localPathWithin(root, home) || localPathWithin(dir, home) {
+		return errors.New("managed checkouts must use their existing session")
+	}
+	trees, err := (projectgit.Client{}).Worktrees(ctx, root)
+	if err != nil {
+		return err
+	}
+	return registeredBorrowedCheckout(dir, trees)
+}
+func localPathWithin(path, root string) bool {
+	if root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))))
+}
+func registeredBorrowedCheckout(dir string, trees []projectgit.Worktree) error {
+	for _, tree := range trees {
+		path, err := filepath.EvalSymlinks(tree.Path)
+		if err == nil && path == dir && !tree.Locked && !tree.Prunable {
+			return nil
+		}
+	}
+	return errors.New("directory is not an available checkout of this project")
 }

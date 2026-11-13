@@ -12,6 +12,7 @@ const SIDEBAR_KEY = "lola.sidebar";
 /** Which of the sidebar's two tabs is on show. */
 const SIDEBAR_TAB_KEY = "lola.sidebar.tab";
 const PROJECT_TAB_KEY = "lola.project.tab";
+const LAST_GIT_PROJECT_KEY = "lola.git.last-project";
 /** When each session was last on screen, so a finished turn can read as not yet seen. */
 const SEEN_KEY = "lola.seen";
 const SEEN_KEEP = 200;
@@ -21,6 +22,11 @@ export type ProjectTab = "overview" | "git";
 function readProjectTab(): ProjectTab {
   try { return localStorage.getItem(PROJECT_TAB_KEY) === "git" ? "git" : "overview"; }
   catch { return "overview"; }
+}
+
+function readLastGitProject(): string {
+  try { return localStorage.getItem(LAST_GIT_PROJECT_KEY) ?? ""; }
+  catch { return ""; }
 }
 
 export type SidebarTab = "sessions" | "projects";
@@ -67,12 +73,38 @@ class Nav {
   }
 
   gitSearchRequest = $state(0);
+  lastGitProject = $state(readLastGitProject());
+  rememberGitProject(name: string) {
+    if (!name || name === this.lastGitProject) return;
+    this.lastGitProject = name;
+    try { localStorage.setItem(LAST_GIT_PROJECT_KEY, name); } catch { /* keep the in-memory choice */ }
+  }
   view = $state<View>("cockpit");
   private preferredProjectTab = $state<ProjectTab>(readProjectTab());
   get projectTab(): ProjectTab { return this.preferredProjectTab; }
   set projectTab(tab: ProjectTab) {
+    if (tab === "git" && this.view === "detail" && this.projectTab !== "git") this.rememberGitReturn();
     this.preferredProjectTab = tab;
     try { localStorage.setItem(PROJECT_TAB_KEY, tab); } catch { /* keep the in-memory choice */ }
+  }
+  private gitReturn: { view: View; project: string; scoped: boolean; projectTab: ProjectTab; selectedId: string; focusedTerm: string; sidebarTab: SidebarTab; sidebarBrowsing: boolean } | null = null;
+  get inGit() { return this.view === "detail" && this.projectTab === "git"; }
+  private rememberGitReturn() {
+    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, projectTab:this.projectTab, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarTab:this.sidebarTab, sidebarBrowsing:this.sidebarBrowsing};
+  }
+  returnFromGit() {
+    if (!this.inGit) return;
+    const previous = this.gitReturn;
+    this.gitReturn = null;
+    if (!previous) { this.projectTab = "overview"; return; }
+    this.view = previous.view;
+    this.project = previous.project;
+    this.scoped = previous.scoped;
+    this.projectTab = previous.projectTab;
+    this.selectedId = previous.selectedId;
+    this.focusedTerm = previous.focusedTerm;
+    this.sidebarBrowsing = previous.sidebarBrowsing;
+    this.setSidebarTab(previous.sidebarTab);
   }
   /** Project name backing detail/pickers and the cockpit's project scope. */
   project = $state<string>("");
@@ -169,8 +201,9 @@ class Nav {
     this.dropFocus();
   }
   goDetail(name: string, tab: ProjectTab = this.projectTab) {
-    this.project = name;
+    if (tab === "git" && !this.inGit) this.rememberGitReturn();
     this.projectTab = tab;
+    this.project = name;
     // Project navigation is a workspace destination, not a session filter.
     this.scoped = false;
     this.view = "detail";

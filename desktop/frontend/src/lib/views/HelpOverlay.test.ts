@@ -8,25 +8,16 @@ describe("HelpOverlay", () => {
   it("renders the grouped shortcut reference", () => {
     render(HelpOverlay);
 
-    // The three sections.
-    expect(screen.getByText("Sessions sidebar")).toBeInTheDocument();
-    expect(screen.getByText("In a session")).toBeInTheDocument();
-    expect(screen.getByText("Session actions")).toBeInTheDocument();
-    expect(screen.getByText("Global")).toBeInTheDocument();
-
-    // A representative key from each group — the ones the trimmed footer drops.
-    expect(screen.getByText("open session")).toBeInTheDocument();
-    expect(screen.getByText("resize the focused sidebar divider")).toBeInTheDocument();
-    expect(screen.getByText("revive dead session")).toBeInTheDocument();
-    // Provider-agnostic wording, and the Session-menu chord next to the bare key.
-    expect(screen.getByText("review · configured provider")).toBeInTheDocument();
-    expect(screen.getByText("c · ⌘⇧R")).toBeInTheDocument();
-
-    // The chords that lost their connection gate, and the new ones.
-    expect(screen.getByText("h · ⌘\\")).toBeInTheDocument();
-    expect(screen.getByText("⌘J")).toBeInTheDocument();
-    expect(screen.getByText("⌘.")).toBeInTheDocument();
-    expect(screen.getByText("f · ⌘⇧D")).toBeInTheDocument();
+    expect(screen.getByText("Navigation")).toBeInTheDocument();
+    expect(screen.getByText("Session")).toBeInTheDocument();
+    expect(screen.getByText("Project Git")).toBeInTheDocument();
+    expect(screen.getByText("Focused controls")).toBeInTheDocument();
+    expect(screen.getByText("⌘⇧G")).toBeInTheDocument();
+    expect(screen.getByText("Git workspace / previous view")).toBeInTheDocument();
+    expect(screen.getByText("⌘B")).toBeInTheDocument();
+    expect(screen.getByText("⌘⇧E")).toBeInTheDocument();
+    expect(screen.queryByText("x · ⌘⇧K")).not.toBeInTheDocument();
+    expect(screen.queryByText("j / k · g / G")).not.toBeInTheDocument();
 
     // The overlay is a labelled modal dialog (focus-trapped, esc-closable).
     expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();

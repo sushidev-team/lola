@@ -119,6 +119,8 @@ export interface Ref {
     "remote": boolean;
     "current": boolean;
     "upstream"?: string;
+    "ahead"?: number;
+    "behind"?: number;
 }
 
 /**

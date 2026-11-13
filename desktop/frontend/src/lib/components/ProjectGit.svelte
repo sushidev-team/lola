@@ -5,15 +5,20 @@
   import MenuItem from './MenuItem.svelte';
   import GitFilePath from './GitFilePath.svelte';
   import ProjectGitStaging from './ProjectGitStaging.svelte';
+  import ProjectGitRail from './ProjectGitRail.svelte';
+  import ProjectGitSectionFilter from './ProjectGitSectionFilter.svelte';
+  import { compileSectionFilter, emptySectionFilters, filterActive, readSectionFilters, saveSectionFilters, stashBranch } from '$lib/gitsectionfilters';
   import ProjectGitActionMenu from './ProjectGitActionMenu.svelte';
   import ProjectGitWorktree from './ProjectGitWorktree.svelte';
   import ProjectGitPullRequest from './ProjectGitPullRequest.svelte';
   import ProjectGitPublish from './ProjectGitPublish.svelte';
   import ProjectGitNewBranch from './ProjectGitNewBranch.svelte';
   import { GitActions, type GitDestination } from '$lib/gitactions.svelte';
-  import { gitCommitTooltip } from '$lib/gittooltip';
+  import { gitCommitTooltip, gitRefsTooltip } from '$lib/gittooltip';
   import { confirm } from '$lib/confirm.svelte';
   import { nav } from '$lib/nav.svelte';
+  import { store } from '$lib/store.svelte';
+  import { openSession } from '$lib/projectActions';
   import { disclosureMotion, disclosureSlide } from '$lib/disclosureMotion';
   import { gitColumns, readGitColumns, saveGitColumns, defaultGitColumns, type GitColumnID } from '$lib/gitcolumns';
   import GitProviderIcon from './GitProviderIcon.svelte';
@@ -21,7 +26,7 @@
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
   import { projectGitState, type ProjectGitState } from '$lib/projectgit.svelte';
-  import { folderFirstFiles, workingGraphConnection, commitGraph, graphColor, graphLabelColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
+  import { folderFirstFiles, workingGraphConnection, commitGraph, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
   import { agoPhrase, exactTime } from '$lib/time';
 
   let { project, heading, actions, windowInset = false }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean } = $props();
@@ -114,6 +119,9 @@
   $effect(() => { if (nav.gitSearchRequest !== lastSearchRequest) { lastSearchRequest = nav.gitSearchRequest; void openSearch(); } });
   let limit = $state(200);
   let selected = $state<string[]>([]);
+  let comparisonBranches = $state<GitRef[]>([]);
+  const comparingBranches = $derived(selected.length === 2 && selected.every((sha, index) => comparisonBranches[index]?.sha === sha));
+  function comparisonLabel(index: number) { return comparingBranches ? comparisonBranches[index].name : selected[index].slice(0,8); }
   let area = $state<GitArea | ''>('');
   let diffOpen = $state(false);
   let path = $state('');
@@ -146,10 +154,13 @@
     gitActions.close();cancelBranchDrag();publishBranch=null;newWorktree=null;newBranch=null;
     newPR={git,branch:{...branch},target:target?{...target}:undefined,historyRef:ref,limit};
   }
-  const gitActions = new GitActions(() => ({ git, ref, limit }), {
+  const gitActions = new GitActions(() => ({ git, ref, limit, configuredPath }), {
     viewHistory: chooseRef,
+    compareBranches: (source, target) => { branchJump++; comparisonBranches = [target, source]; selected = [target.sha, source.sha]; area = 'commit'; diffOpen = true; path = ''; activeFile = ''; },
     createPullRequest: openPullRequest,
     openWorktree: (value) => chooseWorktree(value === configuredPath ? '' : value),
+    isManagedWorktree: (tree) => !!store.sessionForWorktree(tree.path),
+    removeManagedWorktree: (tree, deleteBranch, onRemoved) => store.askRemoveManagedWorktree(tree.path, {branch: deleteBranch ? tree.branch : "", onRemoved}),
     viewCommit: showCommitDiff,
     createBranch: openNewBranch,
     publishBranch: openPublish,
@@ -177,7 +188,6 @@
       clone.style.setProperty('transition', 'none', 'important');
       clone.removeAttribute('id'); clone.removeAttribute('title'); clone.removeAttribute('aria-describedby');
     });
-    copy.querySelectorAll('.ref-expanded').forEach(node => node.remove());
     copy.classList.add('branch-drag-ghost');
     copy.setAttribute('aria-hidden', 'true'); copy.inert = true;
     for (const [property, value] of Object.entries({ position:'fixed', margin:'0', width:`${rect.width}px`, height:`${rect.height}px`, 'box-sizing':'border-box', 'z-index':'10001' })) copy.style.setProperty(property, value, 'important');
@@ -269,6 +279,7 @@
     node.dispatchEvent(new MouseEvent('contextmenu', { bubbles:true, cancelable:true, clientX:rect.left + 12, clientY:rect.bottom }));
   }
   let collapsedFolders = $state<Set<string>>(new Set());
+  let sectionFilters = $state(emptySectionFilters());
   let hoveredLane = $state<number | null>(null);
   let focusedLane = $state<number | null>(null);
   const tracedLane = $derived(hoveredLane ?? focusedLane);
@@ -286,10 +297,38 @@
     }
     return counts;
   });
-  const localBranches = $derived(branchTree(data?.refs.filter(branch => !branch.remote) ?? []));
+  const localRefs = $derived(data?.refs.filter(branch => !branch.remote) ?? []);
+  const remoteRefs = $derived(data?.refs.filter(branch => branch.remote) ?? []);
+  const localMatch = $derived(compileSectionFilter(sectionFilters.local));
+  const remoteMatch = $derived(compileSectionFilter(sectionFilters.remote));
+  const worktreeMatch = $derived(compileSectionFilter(sectionFilters.worktrees));
+  const stashMatch = $derived(compileSectionFilter(sectionFilters.stashes));
+  const filteredLocal = $derived(localRefs.filter(branch => {
+    const checkedOut = !!data?.worktrees.some(tree => tree.branch === branch.name);
+    const status = sectionFilters.local.status;
+    return localMatch(branch.name, status === 'current' ? branch.current : status === 'checked-out' ? checkedOut : status === 'not-checked-out' ? !checkedOut : true);
+  }));
+  const filteredRemote = $derived(remoteRefs.filter(branch => {
+    const tracked = localRefs.some(local => (local.upstream || (local.current ? data?.upstream : ''))?.replace(/^refs\/remotes\//, '') === branch.name);
+    const status = sectionFilters.remote.status;
+    return remoteMatch(branch.name, status === 'tracked' ? tracked : status === 'untracked' ? !tracked : true);
+  }));
+  const filteredWorktrees = $derived((data?.worktrees ?? []).filter(tree => {
+    const status = sectionFilters.worktrees.status;
+    return worktreeMatch(`${tree.branch} ${tree.path}`, status === 'current' ? tree.path === data?.path : status === 'other' ? tree.path !== data?.path : status === 'locked' ? tree.locked : status === 'unlocked' ? !tree.locked : true);
+  }));
+  const filteredStashes = $derived(git.stashes.filter(stash => {
+    const branch = stashBranch(stash.subject), status = sectionFilters.stashes.status;
+    return stashMatch(stash.subject, status === 'current' ? !!branch && branch === data?.branch : status === 'other' ? !!branch && branch !== data?.branch : status === 'unknown' ? !branch : true);
+  }));
+  const localBranches = $derived(branchTree(filteredLocal));
   const commits = $derived(data?.commits ?? []);
   const graph = $derived(commitGraph(commits));
   const graphBySHA = $derived(new Map(graph.map(row => [row.sha, row])));
+  const operationLabel = $derived(({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data?.operation ?? ''] ?? 'Git operation');
+  const workingColumns = $derived(data?.operation || workingCounts.conflicts ? shownColumns.filter(column => ['refs','graph','subject'].includes(column.id)) : shownColumns);
+  const workingTemplate = $derived(workingColumns.map(column => column.id === 'subject' ? 'minmax(0,1fr)' : `${columnWidth(column.id)}px`).join(' '));
+  const workingSummary = $derived(workingCounts.conflicts ? `${data?.operation ? operationLabel + ' · ' : ''}${workingCounts.conflicts} conflicted ${workingCounts.conflicts === 1 ? 'file' : 'files'}` : data?.operation ? `${operationLabel} in progress` : 'Working changes');
   const workingConnection = $derived(!query.trim() && data?.files.length ? workingGraphConnection(graph, data.head) : null);
   const workingX = $derived(GRAPH_NODE_X + (workingConnection?.lane ?? 0) * GRAPH_LANE_WIDTH);
   const graphWidth = $derived(Math.max(64, workingConnection ? workingX + GRAPH_LANE_WIDTH : 0, ...graph.map(row => row.width * GRAPH_LANE_WIDTH + GRAPH_NODE_X)));
@@ -301,7 +340,7 @@
   });
   const remoteGroups = $derived.by(() => {
     const remotes = [...(data?.remotes ?? [])];
-    const branches = data?.refs.filter(branch => branch.remote) ?? [];
+    const branches = filteredRemote;
     for (const branch of branches) {
       if (!remoteFor(branch, remotes)) {
         const name = branch.name.split('/')[0];
@@ -311,7 +350,7 @@
     return remotes.map(remote => {
       const children = branches.filter(branch => remoteFor(branch, remotes)?.name === remote.name);
       return { ...remote, branches: children, tree: branchTree(children, remote.name + '/') };
-    });
+    }).filter(remote => !filterActive(sectionFilters.remote) || remote.branches.length);
   });
   const search = $derived(query.trim().toLocaleLowerCase());
   const visible = $derived(search ? commits.filter(c => [c.subject, c.author, c.sha, ...(c.refs ?? [])].some(v => v.toLocaleLowerCase().includes(search))) : commits);
@@ -320,15 +359,15 @@
   const files = $derived(folderFirstFiles(git.diff?.files ?? []));
   const file = $derived(files.find(f => f.path === activeFile) ?? files[0]);
   const totals = $derived(files.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
-  const diffTitle = $derived(area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${selected[0].slice(0, 8)} → ${selected[1].slice(0, 8)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
+  const diffTitle = $derived(area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${comparisonLabel(0)} → ${comparisonLabel(1)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
 
   $effect(() => {
     project;
-    untrack(() => { newPR = null; newWorktree = null; publishBranch = null; newBranch = null; gitActions.close(); cancelBranchDrag(); worktree = ''; ref = ''; query = ''; limit = 200; selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; });
+    untrack(() => { sectionFilters = readSectionFilters(project); newPR = null; newWorktree = null; publishBranch = null; newBranch = null; gitActions.close(); cancelBranchDrag(); worktree = ''; ref = ''; query = ''; focusedBranch = ''; branchJump++; limit = 200; selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; });
   });
   $effect(() => {
     const state = git, branch = ref, count = limit;
-    untrack(() => { if (newPR && newPR.git !== state) newPR = null; if (newWorktree && newWorktree.git !== state) newWorktree = null; if (publishBranch && publishBranch.git !== state) publishBranch = null; if (newBranch && newBranch.git !== state) newBranch = null; gitActions.close(); cancelBranchDrag(); selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; hoveredLane = null; focusedLane = null; state.clearDiff(); void state.load(branch, count); });
+    untrack(() => { if (newPR && newPR.git !== state) newPR = null; if (newWorktree && newWorktree.git !== state) newWorktree = null; if (publishBranch && publishBranch.git !== state) publishBranch = null; if (newBranch && newBranch.git !== state) newBranch = null; gitActions.close(); cancelBranchDrag(); selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; hoveredLane = null; focusedLane = null; state.clearDiff(); historyLoad = state.load(branch, count); });
   });
   $effect(() => {
     const state = git, snapshot = data, selection = selected, chosenArea = area, chosenPath = path;
@@ -338,7 +377,10 @@
     });
   });
 
+  $effect(() => { saveSectionFilters(project, sectionFilters); });
+
   function chooseCommit(sha: string, event?: MouseEvent) {
+    branchJump++; focusedBranch = '';
     selected = selectCommits(selected, sha, !!(event?.metaKey || event?.ctrlKey));
     area = selected.length ? 'commit' : '';
     diffOpen = false;
@@ -355,8 +397,24 @@
     const ok = await state.act(action, paths, ref, limit);
     if (ok && state === git && ['stage', 'unstage', 'commit'].includes(action)) working();
   }
-  function chooseWorktree(value: string) { worktree = value; ref = ''; limit = 200; query = ''; showRail = false; }
-  function chooseRef(value: string) { ref = value; limit = 200; query = ''; showRail = false; }
+  function chooseWorktree(value: string) { branchJump++; focusedBranch = ''; worktree = value; ref = ''; limit = 200; query = ''; showRail = false; }
+  let historyLoad: Promise<void> = Promise.resolve();
+  let branchJump = 0;
+  let focusedBranch = $state('');
+  let historyList = $state<HTMLDivElement>();
+  async function goToBranch(branch: GitRef) {
+    const state = git, jump = ++branchJump;
+    ref = ''; query = ''; showRail = false; focusedBranch = branch.fullName;
+    await tick();
+    await historyLoad;
+    if (state !== git || jump !== branchJump) return;
+    const sha = await state.revealBranchTip(branch);
+    if (!sha || state !== git || jump !== branchJump) return;
+    selected = [sha]; area = 'commit'; diffOpen = false; path = ''; activeFile = '';
+    await tick();
+    historyList?.querySelector<HTMLElement>(`[data-commit="${sha}"]`)?.scrollIntoView?.({block:'center'});
+  }
+  function chooseRef(value: string) { branchJump++; focusedBranch = value; ref = value; limit = 200; query = ''; showRail = false; }
   function historyKey(event: KeyboardEvent) {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     const buttons = Array.from(event.currentTarget instanceof HTMLElement ? event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-commit]') : []);
@@ -389,7 +447,12 @@
       {#if expanded}<div transition:disclosureSlide>{@render branchNodes(node.children, scope, depth + 1)}</div>{/if}
     {:else}
       {@const branch = node.branch}
-      <Button block selected={ref === branch.fullName} disabled={!!git.busy} class={`rail-row branch-leaf ${branch.current ? "current-branch" : ""} ${dropTarget === branch.fullName ? "branch-drop-target" : ""}`} style={`--branch-color:${refColor(branch)};padding-left:${19 + Math.min(depth, 8) * 13}px`} aria-current={branch.current ? "true" : undefined} aria-label={branch.name} title={`View history of ${branch.name}`} onclick={(event) => { if (!clickAfterDrag(event)) chooseRef(branch.fullName); }} ondblclick={(event) => { if (!clickAfterDrag(event)) gitActions.checkout(branch); }} oncontextmenu={(event) => gitActions.openBranch(branch, event)} data-branch-ref={branch.fullName} draggable={false} onpointerdown={(event) => startBranchDrag(event, branch)} ondragstart={(event) => event.preventDefault()}><span class="branch-glyph" style:color={refColor(branch)}><Icon name="git-branch" size={14} /></span><span class="truncate">{node.name}</span>{#if branch.current}<span title="Active checkout"><Icon name="monitor" size={13} /></span>{/if}</Button>
+      <div class="rail-entry">
+      <Button block selected={focusedBranch === branch.fullName || ref === branch.fullName} loading={git.deletingBranch === branch.fullName} class={`rail-row branch-leaf ${branch.current ? "current-branch" : ""} ${dropTarget === branch.fullName ? "branch-drop-target" : ""}`} style={`--branch-color:${refColor(branch)};padding-left:${19 + Math.min(depth, 8) * 13}px`} aria-current={branch.current ? "true" : undefined} aria-label={branch.name} title={`Go to latest commit of ${branch.name}`} onclick={(event) => { if (!clickAfterDrag(event)) void goToBranch(branch); }} ondblclick={(event) => { if (!clickAfterDrag(event)) gitActions.checkout(branch); }} oncontextmenu={(event) => gitActions.openBranch(branch, event)} data-branch-ref={branch.fullName} draggable={false} onpointerdown={(event) => startBranchDrag(event, branch)} ondragstart={(event) => event.preventDefault()}>{#if git.deletingBranch !== branch.fullName}<span class="branch-glyph" style:color={refColor(branch)}><Icon name="git-branch" size={14} /></span>{/if}<span class="truncate">{node.name}</span>{#if branch.current}<span title="Active checkout"><Icon name="monitor" size={13} /></span>{/if}
+        {#if !branch.remote && branch.upstream && (branch.ahead || branch.behind)}<span class="branch-divergence" title={`${branch.ahead ?? 0} ahead, ${branch.behind ?? 0} behind ${branch.upstream}`} aria-label={`${branch.ahead ?? 0} commits ahead, ${branch.behind ?? 0} commits behind upstream`}>{#if branch.ahead}<span>↑{branch.ahead}</span>{/if}{#if branch.behind}<span>↓{branch.behind}</span>{/if}</span>{/if}
+      </Button>
+      <Button icon size="xs" class="rail-more" aria-label={`Actions for branch ${branch.name}`} title="Branch actions" aria-haspopup="menu" onclick={(event) => gitActions.openBranch(branch,event)}><Icon name="ellipsis-vertical" size={14}/></Button>
+      </div>
     {/if}
   {/each}
 {/snippet}
@@ -425,7 +488,6 @@
     {@const request = publishBranch}
     {#key request}<ProjectGitPublish {...request} onClose={() => { if (publishBranch === request) publishBranch = null; }} />{/key}
   {/if}
-  {#if data?.operation}<div class="operation-notice" role="status"><Icon name="git-merge" size={16}/><strong>{({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data.operation] ?? 'Git operation'} in progress</strong><span>{['merge','rebase','cherry-pick','revert'].includes(data.operation) ? (!data.files.length && ['cherry-pick','revert'].includes(data.operation) ? 'No changes remain for this commit. Skip it to continue.' : 'Resolve conflicts, stage the files, then continue.') : 'Finish or abort this operation in Git.'}</span>{#if ['merge','rebase','cherry-pick','revert'].includes(data.operation)}<Button size="xs" variant="secondary" disabled={!!git.busy || data.files.some(f => f.conflict)} onclick={() => gitActions.continueOperation()}>Continue</Button>{#if ['rebase','cherry-pick','revert'].includes(data.operation)}<Button size="xs" disabled={!!git.busy} onclick={() => gitActions.skipOperation()}>Skip commit…</Button>{/if}<Button size="xs" disabled={!!git.busy} onclick={() => gitActions.abortOperation()}>Abort…</Button>{/if}</div>{/if}
   {#if git.error}<div class="git-error" role="alert"><Icon name="circle-alert" size={16} /><span>{git.error}</span><Button size="xs" onclick={() => void git.load(ref, limit)}>Refresh</Button></div>{/if}
   </div>
   <div class="git-workbench" class:rail-open={showRail} class:resizing={!!resizingSidebar} bind:clientWidth={workbenchWidth} style={`--rail-width:${railWidth}px;--inspector-width:${inspectorWidth}px`}>
@@ -433,16 +495,15 @@
     <Button variant="bare" class="sidebar-resize inspector-resize" role="separator" aria-label="Resize changes sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={inspectorMax} aria-valuenow={inspectorWidth} title="Drag to resize · Double-click to reset" onpointerdown={(event) => resizeSidebar(event,'inspector')} onkeydown={(event) => sidebarKey(event,'inspector')} ondblclick={() => setSidebarWidth('inspector',sidebarDefaults.inspector)}><span class="sr-only">Resize changes sidebar</span></Button>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <nav class="repo-rail" aria-busy={initialLoading} aria-label="Repository navigation" oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext}>
-      <details use:disclosureMotion class="repo-section" open>
-        <summary><Icon name="git-branch" size={16} /><span>Local</span><span class="section-count">{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data ? data?.refs?.filter(r => !r.remote).length ?? 0 : '—'}{/if}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
-        <div class="section-content">
+      {#snippet localHeading()}<Icon name="git-branch" size={16} /><span>Local</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} />{/snippet}
+      {#snippet localControls()}<ProjectGitSectionFilter name="Local" count={filteredLocal.length} total={localRefs.length} loading={initialLoading} bind:filter={sectionFilters.local} statuses={[{value:'all',label:'All branches'},{value:'current',label:'Current branch'},{value:'checked-out',label:'Checked out'},{value:'not-checked-out',label:'Not checked out'}]}/>{/snippet}
+      {#snippet localContent()}
         {#if initialLoading}{@render loadingRailRows(5)}{:else}{@render branchNodes(localBranches, 'local', 0)}{/if}
-        {#if data && !data.refs?.some(r => !r.remote)}<p class="rail-empty">No local branches yet</p>{/if}
-        </div>
-      </details>
-      <details use:disclosureMotion class="repo-section" open>
-        <summary><Icon name="cloud" size={16} /><span>Remote</span><span class="section-count">{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data ? data?.refs?.filter(r => r.remote).length ?? 0 : '—'}{/if}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
-        <div class="section-content">
+        {#if data && !filteredLocal.length}<p class="rail-empty">{filterActive(sectionFilters.local) ? 'No branches match these filters' : 'No local branches yet'}</p>{/if}
+      {/snippet}
+      {#snippet remoteHeading()}<Icon name="cloud" size={16} /><span>Remote</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} />{/snippet}
+      {#snippet remoteControls()}<ProjectGitSectionFilter name="Remote" count={filteredRemote.length} total={remoteRefs.length} loading={initialLoading} bind:filter={sectionFilters.remote} statuses={[{value:'all',label:'All branches'},{value:'tracked',label:'Tracked locally'},{value:'untracked',label:'Not tracked locally'}]} statusLabel="Tracking status"/>{/snippet}
+      {#snippet remoteContent()}
         {#if initialLoading}{@render loadingRailRows(4)}{/if}
         {#each remoteGroups as remote (remote.name)}
           <details use:disclosureMotion class="remote-group" open>
@@ -457,27 +518,35 @@
             {#if !remote.branches.length}<p class="rail-empty">Fetch to load branches</p>{/if}
           </details>
         {/each}
-        {#if data && !remoteGroups.length}<p class="rail-empty">No remotes configured</p>{/if}
-        </div>
-      </details>
-      <details use:disclosureMotion class="repo-section" open>
-        <summary><Icon name="layers" size={16} /><span>Worktrees</span><span class="section-count">{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data ? data?.worktrees?.length ?? 0 : '—'}{/if}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
-        <div class="section-content">
+        {#if data && !remoteGroups.length}<p class="rail-empty">{filterActive(sectionFilters.remote) ? 'No branches match these filters' : 'No remotes configured'}</p>{/if}
+      {/snippet}
+      {#snippet worktreesHeading()}<Icon name="layers" size={16} /><span>Worktrees</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} />{/snippet}
+      {#snippet worktreesControls()}<ProjectGitSectionFilter name="Worktrees" count={filteredWorktrees.length} total={data?.worktrees.length ?? 0} loading={initialLoading} bind:filter={sectionFilters.worktrees} statuses={[{value:'all',label:'All worktrees'},{value:'current',label:'Current checkout'},{value:'other',label:'Other checkouts'},{value:'locked',label:'Locked'},{value:'unlocked',label:'Unlocked'}]} searchLabel="Branch or path contains"/>{/snippet}
+      {#snippet worktreesContent()}
         {#if initialLoading}{@render loadingRailRows(2)}{/if}
-        {#each data?.worktrees ?? [] as tree, index (tree.path)}
-          <Button block selected={tree.path === data?.path} disabled={tree.blocked || tree.prunable} class="rail-row worktree-row" aria-label={index === 0 ? `Main checkout ${tree.branch || 'Detached HEAD'}` : `${tree.branch || 'Detached HEAD'} ${tree.path}`} oncontextmenu={(event) => gitActions.openWorktree(tree, event)} title={tree.blocked ? `${tree.path} · managed sandbox; open its session to inspect` : tree.path} onclick={() => chooseWorktree(tree.path === configuredPath ? '' : tree.path)}>
-            <Icon name={tree.blocked ? 'shield-check' : index === 0 ? 'house' : 'folder'} size={14} /><span class="tree-copy"><span>{tree.branch || 'Detached HEAD'}</span></span>
+        {#each filteredWorktrees as tree (tree.path)}
+          {@const mainTree = tree.path === data?.worktrees[0]?.path}
+          <div class="rail-entry">
+          <Button block selected={tree.path === data?.path} disabled={tree.prunable} class="rail-row worktree-row" aria-label={mainTree ? `Main checkout ${tree.branch || 'Detached HEAD'}` : `${tree.branch || 'Detached HEAD'} ${tree.path}`} oncontextmenu={(event) => gitActions.openWorktree(tree, event)} title={tree.blocked ? `${tree.path} · managed worktree; open actions for details` : tree.path} onclick={(event) => { if (tree.blocked) gitActions.openWorktree(tree, event); else chooseWorktree(tree.path === configuredPath ? '' : tree.path); }}>
+            <Icon name={tree.blocked ? 'shield-check' : mainTree ? 'house' : 'folder'} size={14} /><span class="tree-copy"><span>{tree.branch || 'Detached HEAD'}</span></span>
           </Button>
+          <Button icon size="xs" class="rail-more" aria-label={`Actions for worktree ${tree.path}`} title="Worktree actions" aria-haspopup="menu" onclick={(event) => gitActions.openWorktree(tree,event)}><Icon name="ellipsis-vertical" size={14}/></Button>
+          </div>
         {/each}
-        </div>
-      </details>
-      <details use:disclosureMotion class="repo-section" open>
-        <summary><Icon name="archive" size={16} /><span>Stashes</span><span class="section-count">{#if initialLoading || (data && git.stashesState === 'loading')}<Skeleton width="16px" height="12px"/>{:else}{data && git.stashesState === 'ready' ? git.stashes.length : '—'}{/if}</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} /></summary>
-        <div class="section-content">
-          {#each git.stashes as stash (stash.sha)}<Button block class="rail-row stash-row" title={stash.subject} onclick={(event) => gitActions.openStash(stash, event)} oncontextmenu={(event) => gitActions.openStash(stash, event)}><Icon name="archive" size={14} /><span class="truncate">{stash.subject}</span><small>{stash.selector.replace('stash@', '')}</small></Button>{/each}
-          {#if initialLoading || (data && git.stashesState === 'loading')}{@render loadingRailRows(1)}{:else if data && !git.stashes.length}<p class="rail-empty">{git.stashesState === 'ready' ? 'No saved stashes' : 'Stashes unavailable'}</p>{/if}
-        </div>
-      </details>
+        {#if data && !filteredWorktrees.length}<p class="rail-empty">No worktrees match these filters</p>{/if}
+      {/snippet}
+      {#snippet stashesHeading()}<Icon name="archive" size={16} /><span>Stashes</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} />{/snippet}
+      {#snippet stashesControls()}<ProjectGitSectionFilter name="Stashes" count={filteredStashes.length} total={git.stashes.length} loading={initialLoading} bind:filter={sectionFilters.stashes} statuses={[{value:'all',label:'All stashes'},{value:'current',label:'Current branch'},{value:'other',label:'Other branches'},{value:'unknown',label:'Unknown branch'}]} statusLabel="Original branch" searchLabel="Stash message contains"/>{/snippet}
+      {#snippet stashesContent()}
+          {#each filteredStashes as stash (stash.sha)}<div class="rail-entry"><Button block class="rail-row stash-row" title={stash.subject} onclick={(event) => gitActions.openStash(stash, event)} oncontextmenu={(event) => gitActions.openStash(stash, event)}><Icon name="archive" size={14} /><span class="truncate">{stash.subject}</span><small>{stash.selector.replace('stash@', '')}</small></Button><Button icon size="xs" class="rail-more" aria-label={`Actions for stash ${stash.selector}`} title="Stash actions" aria-haspopup="menu" onclick={(event) => gitActions.openStash(stash,event)}><Icon name="ellipsis-vertical" size={14}/></Button></div>{/each}
+          {#if initialLoading || (data && git.stashesState === 'loading')}{@render loadingRailRows(1)}{:else if data && !filteredStashes.length}<p class="rail-empty">{git.stashesState !== 'ready' ? 'Stashes unavailable' : filterActive(sectionFilters.stashes) ? 'No stashes match these filters' : 'No saved stashes'}</p>{/if}
+      {/snippet}
+      <ProjectGitRail sections={[
+        { name: 'Local', heading: localHeading, content: localContent, controls: localControls },
+        { name: 'Remote', heading: remoteHeading, content: remoteContent, controls: remoteControls },
+        { name: 'Worktrees', heading: worktreesHeading, content: worktreesContent, controls: worktreesControls },
+        { name: 'Stashes', heading: stashesHeading, content: stashesContent, controls: stashesControls },
+      ]} />
     </nav>
 
     <main class="history-stage" class:with-diff={!!area && diffOpen}>
@@ -487,19 +556,28 @@
           <div class="history-find" transition:disclosureSlide><label class="history-search"><Icon name="search" size={14} /><input bind:this={searchInput} aria-label="Search loaded commits" placeholder="Message, author, branch or SHA…" bind:value={query} onkeydown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeSearch(); } }} /></label><span>{visible.length} matches{data?.hasMore ? ' in loaded history' : ''}</span><Button size="xs" icon aria-label="Close commit search" onclick={closeSearch}><Icon name="x" size={14} /></Button></div>
         {/if}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div class="history-list" style={`--columns:${columnTemplate};--table-width:${tableWidth}px;--details-offset:${detailsOffset}px`} onkeydown={historyKey} role="group" aria-label="Commits; Command or Control click to compare two" aria-busy={git.loading}>
+        <div class="history-list" bind:this={historyList} style={`--columns:${columnTemplate};--table-width:${tableWidth}px;--details-offset:${detailsOffset}px`} onkeydown={historyKey} role="group" aria-label="Commits; Command or Control click to compare two" aria-busy={git.loading}>
           <div class="history-columns">
             {#each shownColumns as column}<div class="column-heading"><span>{column.label}</span><Button variant="bare" role="separator" tabindex={0} aria-label={`Resize ${column.label} column`} aria-orientation="vertical" aria-valuenow={columnWidth(column.id)} aria-valuemin={column.min} aria-valuemax={Math.max(column.max, columnWidth(column.id))} class="column-resize" onpointerdown={(event) => resizeColumn(event, column.id)} onkeydown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); event.stopPropagation(); setColumnWidth(column.id, ((event.currentTarget as HTMLElement).parentElement?.getBoundingClientRect().width || columnWidth(column.id)) + (event.key === 'ArrowRight' ? 10 : -10)); } }}><span class="sr-only">Resize {column.label}</span></Button></div>{/each}
           </div>
-          {#if data?.files.length && !search}
-            <Button block variant="bare" selected={!selected.length} class="commit-row working-row" title={`Uncommitted changes on ${data.branch || 'detached HEAD'}`} oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext} data-commit="working" aria-label={`Working changes, ${data.files.length} files`} onclick={working}>
-              {#each shownColumns as column}
+          {#if data && ((data.files.length && !search) || data.operation || workingCounts.conflicts)}
+            <div class="working-section" class:needs-attention={!!data.operation || !!workingCounts.conflicts}>
+            <Button block variant="bare" selected={!selected.length} class="commit-row working-row" style={`--columns:${workingTemplate}`} title={`Uncommitted changes on ${data.branch || 'detached HEAD'}`} oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext} data-commit="working" aria-label={`Working changes, ${data.files.length} files`} onclick={working}>
+              {#each workingColumns as column}
                 {#if column.id === 'refs'}<span class="working-state"><span class="wip-label"><Icon name="pencil" size={12} />In progress</span></span>
                 {:else if column.id === 'graph'}<span class="working-graph"><svg width={graphWidth} height="34" aria-hidden="true">{#if workingConnection}<path class="working-edge" d={`M${workingX} 26V34`} stroke="currentColor" stroke-width="1.7" fill="none" />{/if}<circle cx={workingX} cy="17" r="9" fill="var(--color-canvas)" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.5" /><circle cx={workingX} cy="17" r="2.5" fill="currentColor" /></svg></span>
-                {:else if column.id === 'subject'}<span class="working-copy"><strong>Working changes</strong><span class="working-count">{data.files.length}</span><span class="working-stats">{#if workingCounts.modified}<span class="working-stat modified" title={`${workingCounts.modified} modified files`}><Icon name="pencil" size={12} />{workingCounts.modified}</span>{/if}{#if workingCounts.added}<span class="working-stat added" title={`${workingCounts.added} added files`}><Icon name="plus" size={12} />{workingCounts.added}</span>{/if}{#if workingCounts.deleted}<span class="working-stat deleted" title={`${workingCounts.deleted} deleted files`}><Icon name="minus" size={12} />{workingCounts.deleted}</span>{/if}{#if workingCounts.conflicts}<span class="working-stat deleted" title={`${workingCounts.conflicts} conflicted files`}><Icon name="circle-alert" size={12} />{workingCounts.conflicts}</span>{/if}</span><span class="working-open">Review changes<Icon name="chevron-right" size={13} /></span></span>
+                {:else if column.id === 'subject'}<span class="working-copy"><strong>{workingSummary}</strong><span class="working-count">{data.files.length}</span><span class="working-stats">{#if workingCounts.modified}<span class="working-stat modified" title={`${workingCounts.modified} modified files`}><Icon name="pencil" size={12} />{workingCounts.modified}</span>{/if}{#if workingCounts.added}<span class="working-stat added" title={`${workingCounts.added} added files`}><Icon name="plus" size={12} />{workingCounts.added}</span>{/if}{#if workingCounts.deleted}<span class="working-stat deleted" title={`${workingCounts.deleted} deleted files`}><Icon name="minus" size={12} />{workingCounts.deleted}</span>{/if}{#if workingCounts.conflicts}<span class="working-stat deleted" title={`${workingCounts.conflicts} conflicted files`}><Icon name="circle-alert" size={12} />{workingCounts.conflicts}</span>{/if}</span><span class="working-open">Review changes<Icon name="chevron-right" size={13} /></span></span>
                 {:else if column.id === 'author'}<span class="commit-author">You</span>{:else}<span></span>{/if}
               {/each}
             </Button>
+            {#if data.operation || workingCounts.conflicts}
+              <div class="working-recovery">
+                {#if workingCounts.conflicts}<Button size="xs" variant="secondary" class="ai-resolve" disabled={!!git.busy} loading={git.busy === 'ai-resolve'} onclick={async () => { const state = git; const id = await state.resolveConflicts(ref, limit); if (id && state === git) openSession(id, project); }}><Icon name="sparkles" size={13}/>AI resolve</Button>
+                {:else if ['merge','rebase','cherry-pick','revert'].includes(data.operation ?? '')}<Button size="xs" variant="secondary" disabled={!!git.busy} loading={git.busy === 'continue'} onclick={() => gitActions.continueOperation()}>Continue</Button>{/if}
+                <Button size="xs" icon aria-label="Conflict actions" title="Continue, skip or abort" onclick={(event) => gitActions.openRepository(event)}><Icon name="ellipsis-vertical" size={14}/></Button>
+              </div>
+            {/if}
+            </div>
           {/if}
           {#if initialLoading}
             <div class="history-skeleton" aria-hidden="true">
@@ -521,23 +599,21 @@
               {@const pairedRemote = primary && !primary.remote ? tips.find(branch => branch.remote && branch.name === `${remoteFor(branch)?.name}/${primary.name}`) : undefined}
               {@const pairedOwner = pairedRemote ? remoteFor(pairedRemote) : undefined}
               {@const extraTips = tips.filter(branch => branch !== primary && branch !== pairedRemote)}
+              {@const tags = commit.refs.filter(ref => ref.startsWith('tag: ')).map(ref => ref.slice(5))}
+              {@const moreRefs = extraTips.length + Math.max(0, tags.length - (primary ? 0 : 1))}
               {@const owner = primary ? remoteFor(primary) : undefined}
               {@const checkouts = data?.worktrees.filter(tree => tree.head === commit.sha) ?? []}
               {@const author = git.authors[commit.sha]}
               {@const memberships = branchHistory.get(commit.sha) ?? []}
               {@const nodeX = search ? GRAPH_NODE_X : GRAPH_NODE_X + row.lane * GRAPH_LANE_WIDTH}
-              <Button block variant="bare" class={`commit-row ${selected.includes(commit.sha) ? 'commit-selected' : ''} ${tracedLane === row.color ? 'lane-traced' : ''}`} style={`--lane-color:${graphColor(row.color)};--lane-label-ink:${graphLabelColor(row.color)}`} data-commit={commit.sha} data-lane={row.color} aria-pressed={selected.includes(commit.sha)} aria-label={`${commit.subject}, ${commit.sha.slice(0, 8)}, ${commit.author}${tips.length ? ", " + tips.map(branchDescription).join(", ") : ""}${checkouts.length ? ", " + checkouts.map(tree => tree.path === data?.path ? "active checkout" : "worktree " + tree.branch).join(", ") : ""}`} oncontextmenu={(event) => { const branch = eventBranch(event); if (branch) gitActions.openBranch(branch, event); else gitActions.openCommit(commit, event); }} onkeydown={keyboardContext} ondblclick={(event) => { if (clickAfterDrag(event)) return; const branch = eventBranch(event); if (branch) gitActions.checkout(branch); }} onpointerdown={(event) => startBranchDrag(event, eventBranch(event))} ondragstart={(event) => event.preventDefault()} onclick={(e) => { if (!clickAfterDrag(e)) chooseCommit(commit.sha, e); }} onpointerenter={() => hoveredLane = row.color} onpointerleave={() => hoveredLane = null} onfocus={() => focusedLane = row.color} onblur={() => focusedLane = null} {...gitCommitTooltip(commit, memberships, checkouts.map(tree => `${tree.path === data?.path ? "Active checkout" : "Worktree"}: ${tree.path}`))}>
+              <Button block variant="bare" class={`commit-row ${selected.includes(commit.sha) ? 'commit-selected' : ''} ${tracedLane === row.color ? 'lane-traced' : ''}`} style={`--lane-color:${graphColor(row.color)}`} data-commit={commit.sha} data-lane={row.color} aria-pressed={selected.includes(commit.sha)} aria-label={`${commit.subject}, ${commit.sha.slice(0, 8)}, ${commit.author}${tips.length ? ", " + tips.map(branchDescription).join(", ") : ""}${checkouts.length ? ", " + checkouts.map(tree => tree.path === data?.path ? "active checkout" : "worktree " + tree.branch).join(", ") : ""}`} oncontextmenu={(event) => { const branch = eventBranch(event); if (branch) gitActions.openBranch(branch, event); else gitActions.openCommit(commit, event); }} onkeydown={keyboardContext} ondblclick={(event) => { if (clickAfterDrag(event)) return; const branch = eventBranch(event); if (branch) gitActions.checkout(branch); }} onpointerdown={(event) => startBranchDrag(event, eventBranch(event))} ondragstart={(event) => event.preventDefault()} onclick={(e) => { if (!clickAfterDrag(e)) chooseCommit(commit.sha, e); }} onpointerenter={() => hoveredLane = row.color} onpointerleave={() => hoveredLane = null} onfocus={() => focusedLane = row.color} onblur={() => focusedLane = null} {...gitCommitTooltip(commit, memberships, checkouts.map(tree => `${tree.path === data?.path ? "Active checkout" : "Worktree"}: ${tree.path}`), tips)} {...(!columnPrefs.hidden.includes('refs') ? gitRefsTooltip(commit, tips) : {})}>
                 {#if !columnPrefs.hidden.includes('refs')}<span class="commit-refs">
-                  {#if primary}<span class:branch-drop-target={dropTarget === primary.fullName} class="ref-label" role="presentation" data-branch-ref={primary.fullName} draggable={false} onpointerenter={(event) => { const badge = event.currentTarget; const edge = badge.closest('.history-list')?.getBoundingClientRect().right ?? window.innerWidth; badge.style.setProperty('--ref-reveal-width', `${Math.max(120, Math.min(560, edge - badge.getBoundingClientRect().left - 12))}px`); }}>
+                  {#if primary}<span class:branch-drop-target={dropTarget === primary.fullName} class="ref-label" role="presentation" data-branch-ref={primary.fullName} draggable={false}>
                     {#if owner?.owner}<GitAvatar src={git.remoteAvatars[owner.name]} name={owner.owner} size={16} loading={git.remoteIdentityLoading} />{:else}<Icon name={primary.current ? 'monitor' : primary.remote ? 'cloud' : 'git-branch'} size={13} />{/if}
                     <span class="ref-name">{badgeName(primary)}</span>
-                    <span class="ref-expanded" aria-hidden="true">
-                      {#if owner?.owner}<GitAvatar src={git.remoteAvatars[owner.name]} name={owner.owner} size={16} loading={git.remoteIdentityLoading} />{:else}<Icon name={primary.current ? 'monitor' : primary.remote ? 'cloud' : 'git-branch'} size={13} />{/if}
-                      <span>{badgeName(primary)}</span>
-                    </span>
-                  </span>{:else if commit.sha === data?.head}<span class="ref-label">HEAD</span>{/if}
+                  </span>{:else if tags.length}<span class="ref-label"><Icon name="tag" size={13}/><span class="ref-name">{tags[0]}</span></span>{:else if commit.sha === data?.head}<span class="ref-label">HEAD</span>{/if}
                   {#if pairedRemote}<span class="paired-remote" class:branch-drop-target={dropTarget === pairedRemote.fullName} data-branch-ref={pairedRemote.fullName} draggable={false}>{#if pairedOwner?.owner}<GitAvatar src={git.remoteAvatars[pairedOwner.name]} name={pairedOwner.owner} size={17} loading={git.remoteIdentityLoading} />{:else}<Icon name="cloud" size={14} />{/if}</span>{/if}
-                  {#if extraTips.length}<span class="extra-refs">+{extraTips.length}</span>{/if}
+                  {#if moreRefs}<span class="extra-refs">+{moreRefs}</span>{/if}
                   {#if checkouts.length && (!primary?.current || checkouts.length > 1)}<span class="checkout-marker"><Icon name={checkouts.some(tree => tree.path === data?.path) ? 'monitor' : 'folder'} size={14} />{#if checkouts.length > 1}<small>{checkouts.length}</small>{/if}</span>{/if}
                 </span>
                 {/if}
@@ -561,7 +637,7 @@
       </section>
       {#if area && diffOpen}
         <section class="diff-stage" aria-label="Selected changes">
-          <div class="comparison-bar"><span><Icon name={selected.length === 2 ? 'git-compare-arrows' : 'file-text'} size={14} />{diffTitle}</span><div>{#if selected.length === 2}<Button size="xs" aria-label="Swap comparison direction" onclick={() => selected = [...selected].reverse()}><Icon name="arrow-right-left" size={13} />Swap</Button>{/if}<Button size="xs" icon aria-label="Close diff" onclick={() => diffOpen = false}><Icon name="x" size={14} /></Button></div></div>
+          <div class="comparison-bar"><span><Icon name={selected.length === 2 ? 'git-compare-arrows' : 'file-text'} size={14} />{diffTitle}</span><div>{#if selected.length === 2}<Button size="xs" aria-label="Swap comparison direction" onclick={() => { comparisonBranches = [...comparisonBranches].reverse(); selected = [...selected].reverse(); }}><Icon name="arrow-right-left" size={13} />Swap</Button>{/if}<Button size="xs" icon aria-label="Close diff" onclick={() => diffOpen = false}><Icon name="x" size={14} /></Button></div></div>
           {#if git.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
           {:else if git.diffError}<div class="git-empty" role="alert"><Icon name="circle-alert" size={20} /><p>{git.diffError}</p><Button onclick={() => void git.loadDiff(area as GitArea, area === 'working' || selected.length === 2 ? selected[0] : '', area === 'working' ? '' : selected.at(-1) ?? '', path)}>Retry diff</Button></div>
           {:else if file}<ProjectGitDiff {file} />
@@ -574,9 +650,9 @@
     <aside class="git-inspector" aria-busy={initialLoading} aria-label={selected.length ? 'Commit details' : 'Staging and commit'}>
       {#if selected.length}
         <div class="selection-details">
-          <div class="inspector-heading"><h3>{area === 'working' ? 'Compare working changes' : selected.length === 2 ? 'Compare commits' : 'Commit'}</h3><code>{selected.at(-1)?.slice(0, 8)}</code></div>
+          <div class="inspector-heading"><h3>{area === 'working' ? 'Compare working changes' : selected.length === 2 ? comparingBranches ? 'Compare branches' : 'Compare commits' : 'Commit'}</h3><code>{selected.at(-1)?.slice(0, 8)}</code></div>
           {#if area === 'working'}<div class="compare-endpoints"><span><small>From</small><code>{selected[0]?.slice(0,8)}</code></span><Icon name="arrow-down" size={14}/><span>Working copy</span></div>{/if}
-          {#if selected.length === 2}<div class="compare-endpoints"><span><small>From</small><code>{selected[0].slice(0, 8)}</code></span><Icon name="arrow-down" size={14} /><span><small>To</small><code>{selected[1].slice(0, 8)}</code></span></div>{/if}
+          {#if selected.length === 2}<div class="compare-endpoints"><span><small>From</small><code>{comparisonLabel(0)}</code></span><Icon name="arrow-down" size={14} /><span><small>To</small><code>{comparisonLabel(1)}</code></span></div>{/if}
           {#if currentCommit}<h2 class="selected-subject">{currentCommit.subject}</h2><div class="commit-person"><GitAvatar src={git.authors[currentCommit.sha]?.avatarUrl} name={currentCommit.author} size={30} loading={!!git.identityLoading[currentCommit.sha]} /><span>{currentCommit.author}{#if git.authors[currentCommit.sha]?.login}<small>@{git.authors[currentCommit.sha].login}</small>{/if}<small title={exactTime(currentCommit.date)}>{agoPhrase(currentCommit.date)}</small></span></div>{/if}
           {#if currentCommit && (refsAt.get(currentCommit.sha)?.length ?? 0)}<div class="selected-refs">{#each refsAt.get(currentCommit.sha) ?? [] as branch}<span title={branchDescription(branch)} style={`--lane-color:${refColor(branch)}`}><Icon name={branch.current ? 'monitor' : branch.remote ? 'cloud' : 'git-branch'} size={13} />{badgeName(branch)}</span>{/each}</div>{/if}
           {#if currentCommit && containedBranches.length}
@@ -602,7 +678,7 @@
     {@const request = newBranch}
     <ProjectGitNewBranch {...request} onClose={() => newBranch = null} onCreated={(createdPath, checkout) => { if (request.git !== git) return; newBranch = null; if (checkout) { chooseWorktree(createdPath === configuredPath ? '' : createdPath); working(); } }} />
   {/if}
-  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || ''}</span><span role="status">{initialLoading ? 'Loading repository…' : git.busy ? `${({ 'create-pr':'Creating pull request', 'prepare-discard': 'Reviewing unstaged changes', discard: 'Discarding unstaged changes', 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy]}…` : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
+  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || ''}</span><span role="status">{initialLoading ? 'Loading repository…' : git.busy ? `${({ 'ai-resolve':'Starting conflict resolution', 'delete-branch':'Deleting branch', 'remove-worktree':'Removing worktree', 'remove-worktree-branch':'Removing worktree and branch', 'create-pr':'Creating pull request', 'prepare-discard': 'Reviewing unstaged changes', discard: 'Discarding unstaged changes', 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy] ?? 'Updating repository'}…` : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
 </div>
 
 <style>
@@ -633,8 +709,6 @@
   }
   .toolbar-divider { width:1px; height:16px; background:var(--color-edge); margin:0 4px; }
   .git-notices { grid-row:2; min-width:0; }
-  .operation-notice { display:flex; align-items:center; gap:8px; padding:7px 12px; color:var(--color-warn); background:var(--color-canvas); border-bottom:1px solid var(--color-edge); font-size:13px; }
-  .operation-notice span { flex:1; color:var(--color-ink-2); }
   .git-error { display:flex; align-items:flex-start; gap:8px; padding:10px 14px; color:var(--color-bad); background:color-mix(in srgb,var(--color-bad) 5%,var(--color-panel)); font-size:12px; }
   .git-error span { flex:1; overflow-wrap:anywhere; white-space:pre-wrap; }
   .git-workbench { position:relative; grid-row:3; display:grid; grid-template-columns:var(--rail-width) minmax(0,1fr) var(--inspector-width); min-width:0; min-height:0; overflow:hidden; }
@@ -644,7 +718,7 @@
   .git-workbench :global(.sidebar-resize:hover),.git-workbench :global(.sidebar-resize:focus-visible) { background:var(--color-accent-fill); box-shadow:inset 0 0 0 1px var(--color-accent); outline:none; }
   .git-workbench.resizing { cursor:col-resize; user-select:none; }
   .git-workbench.resizing :global(*) { cursor:col-resize; user-select:none; }
-  .repo-rail { min-height:0; overflow:auto; border-right:1px solid var(--color-edge); background:var(--color-canvas); padding:0 0 8px; }
+  .repo-rail { min-height:0; overflow:hidden; border-right:1px solid var(--color-edge); background:var(--color-canvas); padding:0; }
   .repo-rail :global(.rail-row) { transition:none; height:28px; gap:7px; font-size:13px; border-radius:0; text-align:left; font-weight:400; min-width:0; }
   .repo-rail :global(.rail-row:not([aria-pressed="true"])) { color:var(--color-ink-2); }
   .repo-rail :global(.rail-row > svg) { flex-shrink:0; }
@@ -657,15 +731,6 @@
   :global(.git-disclosure-chevron) { transition:transform 180ms ease-out; }
   @media (prefers-reduced-motion:reduce) { :global(.git-disclosure-chevron) { transition:none; } }
   details:not([open]) > summary :global(.git-disclosure-chevron) { transform:rotate(-90deg); }
-  .repo-section { margin-top:0; }
-  .repo-section:not([open]) + .repo-section > summary { border-top:0; }
-  .repo-section > summary { position:sticky; top:0; z-index:1; min-height:34px; gap:8px; padding:6px 12px; border-block:1px solid var(--color-edge); border-radius:0; background:var(--color-panel); color:var(--color-ink); font-size:13px; font-weight:600; }
-  .repo-section > summary:hover { background:var(--color-sel); }
-  .repo-section > summary:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
-  .repo-section > summary > :global(svg:first-child) { color:var(--color-ink-2); }
-  .repo-section > summary > :global(.git-disclosure-chevron) { color:var(--color-faint); }
-  .section-count { margin-left:auto; min-width:21px; padding:1px 5px; border-radius:4px; background:var(--color-canvas); color:var(--color-ink-2); font-size:12px; font-weight:500; text-align:center; font-variant-numeric:tabular-nums; }
-  .section-content { padding:4px 0 0; }
   .rail-placeholder { display:flex; align-items:center; gap:9px; height:28px; padding:0 12px; }
   .rail-placeholder > :global(.skeleton:first-child) { flex-shrink:0; }
   .history-placeholder { height:34px; align-items:center; border-bottom:1px solid color-mix(in srgb,var(--color-edge) 20%,transparent); }
@@ -686,6 +751,13 @@
   .remote-copy strong { font-size:13px; font-weight:500; }
   .remote-copy small { font-size:12px; font-weight:400; color:var(--color-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .tree-copy { display:flex; align-items:center; min-width:0; gap:8px; flex:1; }
+  .rail-entry { position:relative; min-width:0; }
+  .rail-entry :global(.rail-row) { padding-right:7px; }
+  .rail-entry:hover :global(.rail-row), .rail-entry:focus-within :global(.rail-row) { padding-right:30px; }
+  .rail-entry :global(.rail-more) { position:absolute; right:3px; top:2px; color:var(--color-ink-2); }
+  .rail-entry :global(.rail-more) { opacity:0; pointer-events:none; }
+  .rail-entry:hover :global(.rail-more), .rail-entry:focus-within :global(.rail-more) { opacity:1; pointer-events:auto; }
+  .branch-divergence { display:flex; gap:5px; margin-left:auto; flex-shrink:0; color:var(--color-ink-2); font-size:12px; font-variant-numeric:tabular-nums; }
   .tree-copy > span { min-width:0; }
   .tree-copy > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .history-stage { display:grid; grid-template-rows:minmax(0,1fr); min-height:0; min-width:0; }
@@ -698,6 +770,19 @@
   .history-list :global(.commit-row.working-row) { background:var(--color-canvas); border-bottom:1px solid var(--color-edge); }
   .history-list :global(.commit-row.working-row[aria-pressed="true"]) { background:var(--color-accent-fill); }
   .history-list :global(.commit-row.working-row:hover),.history-list :global(.commit-row.working-row:focus-visible) { background:color-mix(in srgb,var(--color-accent) 20%,var(--color-panel)); }
+  .working-section { position:relative; min-width:var(--table-width); }
+  .working-section.needs-attention { background:color-mix(in srgb,var(--color-warn) 16%,var(--color-panel)); color:var(--color-warn); border-block:1px solid color-mix(in srgb,var(--color-warn) 35%,var(--color-edge)); }
+  .history-list .needs-attention :global(.commit-row.working-row) { background:transparent; color:var(--color-warn); border:0; box-shadow:none; }
+  .history-list .needs-attention :global(.commit-row.working-row:hover), .history-list .needs-attention :global(.commit-row.working-row:focus-visible) { background:color-mix(in srgb,var(--color-warn) 12%,transparent); }
+  .needs-attention .wip-label { color:var(--color-warn); border-color:currentColor; }
+  .working-recovery { position:absolute; right:8px; top:3px; height:28px; display:flex; align-items:center; gap:4px; white-space:nowrap; }
+  .needs-attention .working-copy { padding-right:128px; }
+  .needs-attention .working-open { display:none; }
+  .needs-attention .working-copy strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .working-stats,.working-count { flex-shrink:0; }
+  .working-recovery :global(.ai-resolve) { border-color:color-mix(in srgb,var(--color-ink) 40%,transparent); }
+  .working-section:hover :global(.ai-resolve), .working-section:focus-within :global(.ai-resolve) { border-color:var(--color-ink); }
+  .working-recovery :global(.ai-resolve:enabled:hover), .working-recovery :global(.ai-resolve:enabled:focus-visible) { background:var(--color-ink); color:var(--color-canvas); border-color:var(--color-ink); }
   .working-state { display:flex; justify-content:flex-start; min-width:0; }
   .wip-label { display:inline-flex; align-items:center; gap:5px; padding:2px 7px; border:1px solid color-mix(in srgb,var(--color-accent) 40%,transparent); border-radius:4px; color:var(--color-accent-ink); background:var(--color-canvas); font-size:12px; line-height:18px; white-space:nowrap; }
   .working-stats { display:flex; gap:10px; margin-left:5px; }
@@ -724,15 +809,12 @@
   .commit-copy { display:flex; align-items:center; min-width:0; }
   .commit-subject { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; min-width:0; }
   .commit-refs { display:flex; align-items:center; justify-content:flex-start; gap:5px; min-width:0; height:100%; }
-  .ref-label { position:relative; display:flex; align-items:center; gap:5px; min-width:0; border:1px solid var(--lane-color); color:var(--lane-label-ink); background:var(--lane-color); border-radius:4px; padding:0 5px; font-size:12px; font-weight:600; line-height:18px; transition:background-color 160ms ease; }
+  .ref-label { position:relative; display:flex; align-items:center; gap:5px; min-width:0; border:1px solid var(--lane-color); color:var(--color-ink); background:color-mix(in srgb,var(--lane-color) 24%,var(--color-panel)); border-radius:4px; padding:0 5px; font-size:12px; font-weight:600; line-height:18px; transition:background-color 160ms ease; }
   .ref-label > .ref-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ref-label:hover { z-index:5; background:color-mix(in srgb,var(--lane-color) 88%,var(--lane-label-ink)); }
-  .ref-expanded { position:absolute; z-index:1; left:-1px; top:-1px; display:flex; align-items:flex-start; gap:5px; width:max-content; min-width:calc(100% + 2px); max-width:var(--ref-reveal-width, min(560px, 60vw)); padding:0 5px; border:1px solid var(--lane-color); border-radius:4px; background:var(--lane-color); color:var(--lane-label-ink); box-shadow:0 3px 8px #0003; opacity:0; visibility:hidden; pointer-events:none; transition:opacity 140ms ease,background-color 160ms ease,visibility 0s 140ms; }
-  .ref-expanded > span:last-child { min-width:0; white-space:normal; overflow-wrap:anywhere; }
-  .ref-expanded > :global(svg) { flex-shrink:0; margin-top:2px; }
-  .ref-label:hover .ref-expanded { opacity:1; visibility:visible; pointer-events:auto; background:color-mix(in srgb,var(--lane-color) 88%,var(--lane-label-ink)); transition-delay:0s; }
-  .project-git.branch-dragging .ref-label .ref-expanded { opacity:0; visibility:hidden; pointer-events:none; transition:none; }
-  @media (prefers-reduced-motion:reduce) { .ref-label,.ref-expanded { transition:none; } }
+  .commit-refs:hover,:global(.commit-row:focus-visible) .commit-refs { position:relative; z-index:5; width:max-content; }
+  .commit-refs:hover .ref-label,:global(.commit-row:focus-visible) .ref-label { flex-shrink:0; min-width:max-content; }
+  .ref-label:hover { z-index:5; background:color-mix(in srgb,var(--lane-color) 32%,var(--color-panel)); }
+  @media (prefers-reduced-motion:reduce) { .ref-label { transition:none; } }
   .ref-label > :global(svg) { color:inherit; flex-shrink:0; }
   .extra-refs { color:var(--color-ink-2); font-size:12px; flex-shrink:0; }
   .paired-remote { display:flex; align-items:center; justify-content:center; width:18px; height:18px; flex-shrink:0; color:var(--lane-color); }
@@ -740,7 +822,7 @@
   .checkout-marker small { font-size:11px; font-variant-numeric:tabular-nums; line-height:16px; }
   .commit-author { color:var(--color-faint); font-size:12px; min-width:0; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; }
   .commit-sha { color:var(--color-faint); font-family:var(--font-mono); font-size:12px; }
-  code,.working-count,.section-count,.rail-count,.commit-sha,.commit-time,.extra-refs,.checkout-marker small,.history-find > span,.commit-person small[title] { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+  code,.working-count,.rail-count,.commit-sha,.commit-time,.extra-refs,.checkout-marker small,.history-find > span,.commit-person small[title] { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
   .repo-rail :global(.stash-row small) { font-family:var(--font-mono); }
   .change-totals > .text-good,.change-totals > .text-bad { font-family:var(--font-mono); }
   .commit-time { color:var(--color-faint); font-size:12px; min-width:0; text-align:right; }
@@ -794,7 +876,8 @@
   .changed-file-list :global(.changed-file) { min-height:28px; height:auto; text-align:left; gap:7px; padding:5px 7px; }
   .inspector-bottom { display:grid; gap:5px; padding:10px; border-top:1px solid var(--color-edge); }
   .compare-endpoints { display:flex; align-items:center; gap:10px; padding:12px 14px 0; }
-  .compare-endpoints > span { display:flex; gap:6px; align-items:center; font-size:12px; }
+  .compare-endpoints > span { display:flex; min-width:0; gap:6px; align-items:center; font-size:12px; }
+  .compare-endpoints code { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .compare-endpoints small { color:var(--color-faint); font-size:12px; }
   .compare-endpoints > :global(svg) { transform:rotate(-90deg); color:var(--color-faint); }
   .git-status { grid-row:4; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:5px 12px; font-size:12px; color:var(--color-faint); border-top:1px solid var(--color-edge); background:var(--color-canvas); min-width:0; }
@@ -804,7 +887,7 @@
   .git-status > span:last-child { flex-shrink:0; }
   :global(.rail-toggle) { display:none; }
   @container (max-width:1150px) { .git-action-label { display:none; } .toolbar-actions :global(button) { width:28px; padding:0; } .toolbar-actions :global(.push-action) { width:30px; padding:0; } }
-  @container (max-width:760px) { .git-toolbar { grid-template-columns:auto minmax(0,1fr) auto; } .toolbar-heading :global(.project-title) { display:none; } .toolbar-actions { gap:2px; } .operation-notice { flex-wrap:wrap; } }
+  @container (max-width:760px) { .git-toolbar { grid-template-columns:auto minmax(0,1fr) auto; } .toolbar-heading :global(.project-title) { display:none; } .toolbar-actions { gap:2px; } }
   @container (max-width:950px) { .git-workbench { grid-template-columns:minmax(0,1fr) var(--inspector-width); position:relative; } .repo-rail { display:none; } .git-workbench :global(.rail-resize) { display:none; } .rail-open .repo-rail { display:block; position:absolute; inset:0 auto 0 0; width:280px; z-index:10; box-shadow:8px 0 20px #0002; } :global(.rail-toggle) { display:inline-flex; } }
   @container (max-width:580px) { .git-workbench :global(.sidebar-resize) { display:none; } .git-workbench { grid-template-columns:minmax(0,1fr); overflow:auto; grid-template-rows:max-content max-content; align-content:start; } .history-stage { height:330px; min-height:330px; } .history-stage.with-diff { height:550px; min-height:550px; } .git-inspector { height:620px; border-left:0; border-top:1px solid var(--color-edge); min-height:0; grid-template-rows:auto auto auto; align-content:start; } .changed-file-list { overflow:visible; } .git-toolbar { gap:4px; padding-inline:8px; } .git-toolbar.window-inset { padding-left:82px; } .toolbar-divider { margin-inline:0; } .git-status > span:last-child { max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } }
 </style>

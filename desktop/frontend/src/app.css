@@ -1375,6 +1375,11 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .git-tip-branch { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 1px 5px; border-radius: 4px; background: var(--color-canvas); color: var(--color-ink-2); font-size: 12px; line-height: 18px; }
 .git-tip-branch.current { background: var(--color-accent-fill); color: var(--color-accent-ink); }
 .git-tip-branch > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-tip-ref-list { display:grid; gap:5px; padding-top:8px; max-width:420px; }
+.git-tip-ref { display:flex; align-items:flex-start; gap:6px; padding:3px 6px; border-radius:4px; background:var(--color-canvas); color:var(--color-ink-2); font-size:13px; line-height:18px; }
+.git-tip-ref.current { background:var(--color-accent-fill); color:var(--color-accent-ink); }
+.git-tip-ref > span:first-child { flex-shrink:0; padding-top:2px; }
+.git-tip-ref > span:last-child { min-width:0; white-space:normal; overflow-wrap:anywhere; }
 .git-tip-branch-label { width: 100%; color: var(--color-ink-2); font-size: 11px; line-height: 16px; }
 .git-tip-more { font-family: var(--font-mono); color: var(--color-ink-2); font-size: 11px; font-variant-numeric: tabular-nums; padding: 1px 3px; }
 .git-tip-checkout { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 11px; line-height: 17px; color: var(--color-ink-2); }

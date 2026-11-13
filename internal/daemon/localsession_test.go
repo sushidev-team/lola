@@ -3,17 +3,87 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
+
+func TestBorrowedCheckoutSession(t *testing.T) {
+	for _, refuse := range []bool{false, true} {
+		t.Run(fmt.Sprint(refuse), func(t *testing.T) {
+			nat := &promptNative{fakeNative: &fakeNative{}}
+			cfg := nativeTestConfig(nativePoll("p1"))
+			cfg.Projects[0].Path = t.TempDir()
+			d := newTestDaemon(t, cfg, &linear.Fake{}, nat)
+			dir, _ := filepath.EvalSymlinks(t.TempDir())
+			checked := false
+			d.validateLocalCheckout = func(_ context.Context, root, path, home string) error {
+				checked = true
+				if root != cfg.Projects[0].Path || path != dir || home != d.home {
+					t.Fatal("wrong checkout validation scope")
+				}
+				if refuse {
+					return errors.New("not registered")
+				}
+				return nil
+			}
+			out, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "p1", Location: "checkout", Path: dir, Agent: true, Prompt: "Resolve and stage conflicts"})
+			if !checked {
+				t.Fatal("checkout was not checked")
+			}
+			if refuse {
+				if err == nil || nat.got != "" {
+					t.Fatal("started an unverified checkout")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, ok := d.sessions.Get(out.SessionID)
+			if !ok || s.Kind != session.KindLocal || s.Worktree != dir || s.OwnsBranch() || nat.got != "Resolve and stage conflicts" {
+				t.Fatalf("wrong borrowed session: %+v", s)
+			}
+			for _, info := range d.sessionsData().Sessions {
+				if info.ID == out.SessionID && info.Worktree != dir {
+					t.Fatalf("wrong checkout on wire: %s", info.Worktree)
+				}
+			}
+		})
+	}
+}
+
+func TestRegisteredBorrowedCheckout(t *testing.T) {
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	for _, tc := range []struct {
+		name    string
+		trees   []projectgit.Worktree
+		allowed bool
+	}{
+		{"registered", []projectgit.Worktree{{Path: dir}}, true},
+		{"unregistered", nil, false},
+		{"locked", []projectgit.Worktree{{Path: dir, Locked: true}}, false},
+		{"prunable", []projectgit.Worktree{{Path: dir, Prunable: true}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if (registeredBorrowedCheckout(dir, tc.trees) == nil) != tc.allowed {
+				t.Fatal("wrong checkout admission")
+			}
+		})
+	}
+	if err := validateBorrowedCheckout(context.Background(), dir, dir, dir); err == nil {
+		t.Fatal("admitted a managed directory")
+	}
+}
 
 func TestCloseExitedTemporary(t *testing.T) {
 	for _, tc := range []struct {

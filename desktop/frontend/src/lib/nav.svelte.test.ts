@@ -48,6 +48,37 @@ describe("nav.openSession", () => {
 });
 
 describe("nav.goDetail", () => {
+  it("returns from Git to the exact session and scope, including on repeated toggles", () => {
+    nav.goCockpit("web");
+    nav.openSession("s1", true);
+    nav.setSidebarTab("sessions");
+    nav.goDetail("web", "git");
+    nav.goDetail("other-repo", "git");
+    nav.returnFromGit();
+    expect(nav.view).toBe("cockpit");
+    expect(nav.focusedTerm).toBe("s1");
+    expect(nav.project).toBe("web");
+    expect(nav.scoped).toBe(true);
+    expect(nav.sidebarBrowsing).toBe(true);
+    expect(nav.sidebarTab).toBe("sessions");
+    nav.openSession("s2");
+    nav.goDetail("web", "git");
+    nav.returnFromGit();
+    expect(nav.focusedTerm).toBe("s2");
+  });
+
+  it("returns from the Git tab to overview and from project navigation to its prior picker", () => {
+    nav.goDetail("web", "overview");
+    nav.projectTab = "git";
+    nav.returnFromGit();
+    expect(nav.view).toBe("detail");
+    expect(nav.projectTab).toBe("overview");
+    nav.goPRPicker("web");
+    nav.goDetail("other", "git");
+    nav.returnFromGit();
+    expect(nav.view).toBe("prpicker");
+    expect(nav.project).toBe("web");
+  });
   it("opens the project workspace without scoping the session list", () => {
     nav.goCockpit("old-project");
     nav.openSession("s1");

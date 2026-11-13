@@ -62,7 +62,7 @@
     const buttons = Array.from(root?.querySelectorAll<HTMLButtonElement>('[data-roster-row]:not([hidden] *), [data-roster-ended]') ?? []);
     const at = buttons.indexOf(event.target as HTMLButtonElement);
     if (at < 0) return;
-    const next = ['ArrowDown', 'j'].includes(event.key) ? at + 1 : ['ArrowUp', 'k'].includes(event.key) ? at - 1 : ['Home', 'g'].includes(event.key) ? 0 : ['End', 'G'].includes(event.key) ? buttons.length - 1 : null;
+    const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : null;
     if (next == null) return;
     event.preventDefault(); event.stopPropagation();
     const button = buttons[Math.max(0, Math.min(buttons.length - 1, next))];

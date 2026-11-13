@@ -233,6 +233,28 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		return err
 	}
 	switch r.Action {
+	case "delete-branch":
+		if strings.HasPrefix(r.Source, "refs/remotes/") {
+			remote, branch, err := c.remoteBranch(ctx, dir, r.Source)
+			if err != nil {
+				return err
+			}
+			ref := "refs/heads/" + branch
+			// Pin deletion to the tip confirmed by the human, even if another
+			// collaborator pushes after our local tracking ref was fetched.
+			_, err = c.git(ctx, dir, "", "push", "--force-with-lease="+ref+":"+r.SourceSHA, "--", remote, ":"+ref)
+			return err
+		}
+		owner, err := c.branchOwner(ctx, dir, r.Source)
+		if err != nil {
+			return err
+		}
+		if owner != "" {
+			return errors.New("branch is checked out; switch its worktree to another branch before deleting it")
+		}
+		// Keep Git's merged-branch and worktree checks; never force deletion.
+		_, err = c.git(ctx, dir, "", "branch", "--delete", "--", strings.TrimPrefix(r.Source, "refs/heads/"))
+		return err
 	case "set-upstream":
 		if !strings.HasPrefix(r.Source, "refs/heads/") || !strings.HasPrefix(r.Target, "refs/remotes/") {
 			return errors.New("choose a local branch and a remote tracking branch")

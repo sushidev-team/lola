@@ -2,6 +2,7 @@ import House from '@lucide/svelte/icons/house';
 import Archive from '@lucide/svelte/icons/archive';
 import ArchiveRestore from '@lucide/svelte/icons/archive-restore';
 import Trash2 from '@lucide/svelte/icons/trash-2';
+import Tag from '@lucide/svelte/icons/tag';
 import CircleMinus from '@lucide/svelte/icons/circle-minus';
 import LogOut from '@lucide/svelte/icons/log-out';
 import ArrowUpLeft from '@lucide/svelte/icons/arrow-up-left';
@@ -94,6 +95,7 @@ export const icons = {
   'ban': Ban,
   'check': Check,
   'trash-2': Trash2,
+  'tag': Tag,
   'chevron-down': ChevronDown,
   'chevron-left': ChevronLeft,
   'chevron-right': ChevronRight,

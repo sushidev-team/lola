@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import ProjectGit from './ProjectGit.svelte';
+import ConfirmDialog from './ConfirmDialog.svelte';
+import { confirm } from '$lib/confirm.svelte';
+import { store } from '$lib/store.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
 
 const api = vi.hoisted(() => ({ Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
@@ -19,8 +22,12 @@ function snapshot(overrides: Partial<GitSnapshot> = {}): GitSnapshot {
   };
 }
 beforeEach(() => {
+  confirm.cancel();
+  store.sessions = [];
   localStorage.removeItem("lola.git.columns");
   localStorage.removeItem("lola.git.sidebar-widths");
+  localStorage.removeItem('lola.git.section-heights');
+  localStorage.removeItem('lola.git.collapsed-sections');
   vi.stubGlobal('PointerEvent', class extends MouseEvent { pointerId = 1; isPrimary = true; });
   if (!document.elementFromPoint) document.elementFromPoint = () => null;
   project = `project-git-${++serial}`;
@@ -31,7 +38,7 @@ beforeEach(() => {
   api.BranchAction.mockResolvedValue({path:'/repo'});
   api.Diff.mockResolvedValue({ files: [{ path: 'src/app.ts', status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-old text\n+new text\n' }] });
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); confirm.cancel(); store.sessions = []; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function open() { render(ProjectGit, { project }); await screen.findByRole('button', { name: /Add project workspace,/ }); }
 async function refreshRepository() {
   await fireEvent.contextMenu(screen.getByRole('navigation', {name:'Repository navigation'}));
@@ -46,6 +53,147 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it('jumps to a branch tip without filtering and offers Solo through its actions button', async () => {
+    await open();
+    await fireEvent.click(screen.getByRole('button',{name:'origin/main'}));
+    await waitFor(()=>expect(screen.getByRole('button',{name:/Initial project,/})).toHaveAttribute('aria-pressed','true'));
+    expect(screen.getByRole('button',{name:/Add project workspace,/})).toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'Clear branch filter'})).toBeNull();
+    expect(api.Snapshot).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByRole('button',{name:'Actions for branch origin/main'}));
+    await fireEvent.click(screen.getByRole('menuitem',{name:'Solo branch'}));
+    await waitFor(()=>expect(api.Snapshot).toHaveBeenLastCalledWith(project,'','refs/remotes/origin/main',200));
+  });
+  it('shows upstream counts and leaves other branches usable while deletion is pending', async () => {
+    const data=snapshot();data.refs[0]={...data.refs[0],upstream:'origin/main',ahead:3,behind:35};
+    data.remotes=[{name:'origin',host:'github.com',owner:'acme',repo:'acme/repo',avatarUrl:''}];
+    api.Snapshot.mockResolvedValue(data);
+    let resolve!: (value:{path:string})=>void;
+    api.BranchAction.mockReturnValue(new Promise(r=>resolve=r));
+    await open();
+    expect(screen.getByLabelText('3 commits ahead, 35 commits behind upstream')).toHaveTextContent('↑3↓35');
+    await fireEvent.click(screen.getByRole('button',{name:'Actions for branch origin/main'}));
+    await fireEvent.click(screen.getByRole('menuitem',{name:'Delete remote branch…'}));
+    confirm.accept();
+    await waitFor(()=>expect(screen.getByRole('button',{name:'origin/main'})).toHaveAttribute('aria-busy','true'));
+    expect(screen.getByRole('button',{name:'main'})).toBeEnabled();
+    await fireEvent.click(screen.getByRole('button',{name:'main'}));
+    await waitFor(()=>expect(screen.getByRole('button',{name:/Add project workspace,/})).toHaveAttribute('aria-pressed','true'));
+    resolve({path:'/repo'});
+    await waitFor(()=>expect(screen.getByRole('button',{name:'origin/main'})).not.toHaveAttribute('aria-busy'));
+  });
+  it('opens removal dialogs from a protected branch and its worktree menu', async () => {
+    const data = snapshot();
+    data.worktrees[1].blocked = true;
+    data.refs.push({name:'feature',fullName:'refs/heads/feature',sha:oldSHA,current:false,remote:false});
+    api.Snapshot.mockResolvedValue(data);
+    store.sessions = [{id:'managed-session',issue:'ENG-42',title:'Update dependency',worktree:'/repo-feature',branch:'feature'} as never];
+    render(ConfirmDialog);
+    await open();
+    await fireEvent.contextMenu(screen.getByRole('button', {name:'feature'}));
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Delete branch…'}));
+    const dialog = await screen.findByRole('dialog', {name:'Remove worktree and branch?'});
+    expect(within(dialog).getByText(/ENG-42 — Update dependency/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', {name:'Remove'})).toBeEnabled();
+    await fireEvent.click(within(dialog).getByRole('button', {name:'Cancel'}));
+    await fireEvent.contextMenu(screen.getByRole('button', {name:'feature /repo-feature'}));
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Remove worktree and branch…'}));
+    expect(await screen.findByRole('dialog', {name:'Remove worktree and branch?'})).toBeInTheDocument();
+    expect(api.BranchAction).not.toHaveBeenCalled();
+  });
+  it('resizes section pairs by keyboard and pointer, preserves other sections, and restores saved sizes', async () => {
+    await open();
+    const names = ['Local', 'Remote', 'Worktrees', 'Stashes'];
+    for (const name of names) {
+      const section = screen.getByRole('region', { name });
+      vi.spyOn(section, 'getBoundingClientRect').mockReturnValue({ height: 160 } as DOMRect);
+    }
+    const local = screen.getByRole('separator', { name: 'Resize Local section' });
+    await fireEvent.keyDown(local, { key: 'ArrowDown' });
+    expect(JSON.parse(localStorage.getItem('lola.git.section-heights')!)).toEqual([170, 150, 160, 160]);
+    const remote = screen.getByRole('separator', { name: 'Resize Remote section' });
+    await fireEvent.pointerDown(remote, { button: 0, clientY: 100 });
+    await fireEvent.pointerMove(window, { clientY: 150 });
+    await fireEvent.pointerUp(window);
+    expect(JSON.parse(localStorage.getItem('lola.git.section-heights')!)).toEqual([160, 210, 110, 160]);
+    await fireEvent.keyDown(local, { key: 'Home' });
+    expect(JSON.parse(localStorage.getItem('lola.git.section-heights')!)).toEqual([62, 258, 160, 160]);
+    cleanup();
+    await open();
+    expect(screen.getByRole('separator', { name: 'Resize Local section' })).toHaveAttribute('aria-valuenow', '19');
+    for (const name of names) expect(screen.getByRole('region', { name })).toBeVisible();
+    await fireEvent.doubleClick(screen.getByRole('separator', { name: 'Resize Local section' }));
+    expect(JSON.parse(localStorage.getItem('lola.git.section-heights')!)).toEqual([1, 1, 1, 1]);
+  });
+  it('keeps section headers available when collapsed and preserves their content on reopen', async () => {
+    await open();
+    const region = screen.getByRole('region', { name: 'Remote' });
+    const heading = within(region).getByRole('button', { name: /^Remote/ });
+    await fireEvent.click(heading);
+    expect(heading).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('separator', { name: 'Resize Remote section' })).toBeDisabled();
+    expect(within(region).queryByRole('button', { name: 'origin/main' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Stashes' })).toBeVisible();
+    cleanup();
+    await open();
+    const restored = screen.getByRole('region', {name:'Remote'});
+    expect(within(restored).getByRole('button', {name:'Remote'})).toHaveAttribute('aria-expanded', 'false');
+    await fireEvent.click(within(restored).getByRole('button', {name:'Remote'}));
+    expect(within(restored).getByRole('button', { name: 'origin/main' })).toBeVisible();
+  });
+  it('filters each section independently and restores regex and search filters for the project', async () => {
+    const refs = [...snapshot().refs, ...['feature/one','fix/two'].map(name => ({name,fullName:`refs/heads/${name}`,sha:oldSHA,remote:false,current:false}))];
+    api.Snapshot.mockResolvedValue(snapshot({refs}));
+    await open();
+    const local = screen.getByRole('region', {name:'Local'});
+    await fireEvent.click(screen.getByRole('button', {name:'Filter Local'}));
+    expect(within(local).getByRole('button', {name:'Local'})).toHaveAttribute('aria-expanded', 'true');
+    await fireEvent.click(screen.getByRole('button', {name:'Add regular expression'}));
+    await fireEvent.input(screen.getByLabelText('Regular expression 1'), {target:{value:'^feature/'}});
+    expect(within(local).queryByRole('button', {name:'main'})).toBeNull();
+    expect(within(local).getByRole('button', {name:'feature/one'})).toBeVisible();
+    expect(within(screen.getByRole('region', {name:'Remote'})).getByRole('button', {name:'origin/main'})).toBeVisible();
+    await fireEvent.click(screen.getByRole('button', {name:'Add regular expression'}));
+    await fireEvent.input(screen.getByLabelText('Regular expression 2'), {target:{value:'^fix/'}});
+    expect(within(local).getByRole('button', {name:'fix/two'})).toBeVisible();
+    await fireEvent.input(screen.getByLabelText('Name contains'), {target:{value:'one'}});
+    expect(within(local).queryByRole('button', {name:'fix/two'})).toBeNull();
+    await fireEvent.input(screen.getByLabelText('Regular expression 2'), {target:{value:'['}});
+    expect(within(screen.getByRole('dialog', {name:'Filter Local'})).getByRole('status')).toHaveTextContent('Invalid regular expression');
+    await fireEvent.input(screen.getByLabelText('Regular expression 2'), {target:{value:'^fix/'}});
+    await fireEvent.keyDown(window, {key:'Escape'});
+    expect(screen.queryByRole('dialog', {name:'Filter Local'})).toBeNull();
+    expect(screen.getByRole('button', {name:'Filter Local'})).toHaveFocus();
+    cleanup();
+    await open();
+    expect(within(screen.getByRole('region', {name:'Local'})).queryByRole('button', {name:'main'})).toBeNull();
+    await fireEvent.click(screen.getByRole('button', {name:'Filter Local'}));
+    expect(screen.getByLabelText('Regular expression 1')).toHaveValue('^feature/');
+    expect(screen.getByLabelText('Name contains')).toHaveValue('one');
+    await fireEvent.click(screen.getByRole('button', {name:'Clear filters'}));
+    expect(within(screen.getByRole('region', {name:'Local'})).getByRole('button', {name:'main'})).toBeVisible();
+  });
+  it('filters remote tracking, worktree checkout status and stash branches', async () => {
+    api.Stashes.mockResolvedValue([
+      {sha:newSHA,selector:'stash@{0}',subject:'On main: current work',date:''},
+      {sha:oldSHA,selector:'stash@{1}',subject:'On feature: other work',date:''},
+    ]);
+    await open();
+    await fireEvent.click(screen.getByRole('button', {name:'Filter Remote'}));
+    await fireEvent.change(screen.getByLabelText('Tracking status'), {target:{value:'untracked'}});
+    expect(within(screen.getByRole('region', {name:'Remote'})).queryByRole('button', {name:'origin/main'})).toBeNull();
+    await fireEvent.click(screen.getByRole('button', {name:'Close filters'}));
+    await fireEvent.click(screen.getByRole('button', {name:'Filter Worktrees'}));
+    await fireEvent.change(screen.getByLabelText('Checkout status'), {target:{value:'other'}});
+    expect(within(screen.getByRole('region', {name:'Worktrees'})).queryByRole('button', {name:'Main checkout main'})).toBeNull();
+    expect(within(screen.getByRole('region', {name:'Worktrees'})).getByRole('button', {name:'feature /repo-feature'})).toBeVisible();
+    await fireEvent.click(screen.getByRole('button', {name:'Close filters'}));
+    await fireEvent.click(screen.getByRole('button', {name:'Filter Stashes'}));
+    await fireEvent.change(screen.getByLabelText('Original branch'), {target:{value:'current'}});
+    const stashes = screen.getByRole('region', {name:'Stashes'});
+    expect(within(stashes).queryByRole('button', {name:/other work/})).toBeNull();
+    expect(within(stashes).getByRole('button', {name:/current work/})).toBeVisible();
+  });
   it('fetches only the chosen remote without collapsing its row or refreshing during the operation', async () => {
     api.Snapshot.mockResolvedValue(snapshot({remotes:['origin','upstream'].map(name=>({name,host:'github.com',owner:'acme',repo:'acme/repo',avatarUrl:''}))}));
     let finish!:(value:{path:string})=>void;
@@ -162,7 +310,7 @@ describe('Project Git workspace', () => {
     api.Snapshot.mockResolvedValue(snapshot({ path: '/repo-feature', branch: 'feature' }));
     await open();
     await fireEvent.click(screen.getByRole('button', { name: 'origin/main' }));
-    await waitFor(() => expect(api.Snapshot).toHaveBeenLastCalledWith(project, '', 'refs/remotes/origin/main', 200));
+    await waitFor(() => expect(screen.getByRole('button', {name:/Initial project,/})).toHaveAttribute('aria-pressed','true'));
     await fireEvent.click(screen.getByRole('button', { name: /Main checkout main/ }));
     await waitFor(() => expect(api.Snapshot).toHaveBeenLastCalledWith(project, '/repo', '', 200));
     await fireEvent.click(screen.getByRole('button', { name: 'feature /repo-feature' }));
@@ -236,13 +384,14 @@ describe('Project Git workspace', () => {
     expect(screen.getByRole('button', { name: 'Remote branch folder origin/feature' })).toHaveAttribute('aria-expanded', 'false');
     await fireEvent.click(screen.getByRole('button', { name: 'Local branch folder feature' }));
     await fireEvent.click(screen.getByRole('button', { name: 'feature/api/login' }));
-    await waitFor(() => expect(api.Snapshot).toHaveBeenLastCalledWith(project, '', 'refs/heads/feature/api/login', 200));
+    await waitFor(() => expect(screen.getByRole('button', {name:/Add project workspace,/})).toHaveAttribute('aria-pressed','true'));
     expect(screen.getByRole('button', { name: 'Remote branch folder origin/feature' })).toHaveAttribute('aria-expanded', 'false');
   });
   it('keeps a clear-filter action after removing the All branches navigation button', async () => {
     await open();
     expect(screen.queryByRole('button', { name: /All branches/ })).toBeNull();
-    await fireEvent.click(screen.getByRole('button', { name: 'origin/main' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for branch origin/main' }));
+    await fireEvent.click(screen.getByRole('menuitem', {name:'Solo branch'}));
     await screen.findByRole('button', { name: 'Clear branch filter' });
     await waitFor(() => expect(api.Snapshot).toHaveBeenLastCalledWith(project, '', 'refs/remotes/origin/main', 200));
     await fireEvent.click(screen.getByRole('button', { name: 'Clear branch filter' }));
@@ -254,10 +403,35 @@ describe('Project Git workspace', () => {
     await screen.findByText('No commits yet');
     await fireEvent.input(screen.getByLabelText('Commit subject'), { target: { value: 'Do not commit conflict' } });
     expect(screen.getByRole('button', { name: 'Commit 1 file' })).toBeDisabled();
-    expect(screen.getByText('Resolve conflicted files before committing.')).toBeInTheDocument();
+    expect(screen.getByText('1 conflicted file')).toBeInTheDocument();
+    expect(screen.queryByText('Resolve conflicted files before committing.')).toBeNull();
     api.Snapshot.mockRejectedValue(new Error('Repository unavailable'));
     await refreshRepository();
     expect(await screen.findByRole('alert')).toHaveTextContent('Repository unavailable');
+  });
+  it('keeps conflict counts, file totals and AI resolution together in the working row', async () => {
+    const data=snapshot({operation:'merge'});
+    data.files.push({path:'conflict.ts',oldPath:'',index:'U',worktree:'U',untracked:false,conflict:true});
+    api.Snapshot.mockResolvedValue(data);
+    await open();
+    const row=screen.getByRole('button',{name:'Working changes, 3 files'});
+    expect(row).toHaveTextContent('Merge · 1 conflicted file');
+    expect(row).toHaveTextContent('3');
+    const section=row.parentElement!;
+    expect(section).toHaveClass('needs-attention');
+    expect(within(section).getByRole('button',{name:'AI resolve'})).toBeEnabled();
+    expect(screen.queryByText(/Resolve and stage conflicts, then use Continue/)).toBeNull();
+    expect(screen.queryByText('Resolve conflicted files before committing.')).toBeNull();
+    await fireEvent.click(within(section).getByRole('button',{name:'Conflict actions'}));
+    expect(await screen.findByRole('menuitem',{name:'Continue merge'})).toBeDisabled();
+    expect(screen.getByRole('menuitem',{name:'Abort merge…'})).toBeEnabled();
+  });
+  it('keeps Continue available for an operation with no remaining file changes', async () => {
+    api.Snapshot.mockResolvedValue(snapshot({operation:'rebase',files:[]}));
+    await open();
+    expect(screen.getByRole('button',{name:'Working changes, 0 files'})).toHaveTextContent('Rebase in progress');
+    expect(screen.getByRole('button',{name:'Continue'})).toBeEnabled();
+    expect(screen.queryByRole('button',{name:'AI resolve'})).toBeNull();
   });
   it('places working changes in history and identifies the checked-out local branch', async () => {
     await open();
@@ -327,7 +501,24 @@ describe('Project Git workspace', () => {
     expect(document.querySelector('.branch-drag-ghost')).toHaveTextContent(source.textContent!.replace(/\s+/g, ' ').trim());
     await fireEvent.pointerUp(window, { clientX:80, clientY:100 });
     expect(document.querySelector('.branch-drag-ghost')).toBeNull();
-    expect(await screen.findByRole('menuitem', {name:'Merge origin/main into main…'})).toBeInTheDocument();
+    expect(await screen.findByRole('menuitem', {name:'Merge origin/main into main'})).toBeInTheDocument();
+    expect(api.BranchAction).not.toHaveBeenCalled();
+  });
+  it('compares dropped branches by their tips and swaps the named endpoints without a mutation', async () => {
+    await open();
+    await pointerDrag(screen.getByRole('button', {name:'origin/main'}), screen.getByRole('button', {name:'main'}));
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.slice(0,4).map(item => item.textContent?.trim())).toEqual([
+      'Merge origin/main into main', 'Rebase origin/main onto main', 'Create PR…', 'Compare branches',
+    ]);
+    await fireEvent.click(screen.getByRole('menuitem', {name:'Compare branches'}));
+    await waitFor(() => expect(api.Diff).toHaveBeenLastCalledWith(project, '', newSHA, oldSHA, 'commit', ''));
+    expect(screen.getByRole('heading', {name:'Compare branches'})).toBeInTheDocument();
+    expect(screen.getByText('main → origin/main')).toBeInTheDocument();
+    expect(await screen.findByRole('region', {name:'Diff for src/app.ts'})).toHaveTextContent('new text');
+    await fireEvent.click(screen.getByRole('button', {name:'Swap comparison direction'}));
+    await waitFor(() => expect(api.Diff).toHaveBeenLastCalledWith(project, '', oldSHA, newSHA, 'commit', ''));
+    expect(screen.getByText('origin/main → main')).toBeInTheDocument();
     expect(api.BranchAction).not.toHaveBeenCalled();
   });
   it('picks up a copy at the original badge size and preserves the pointer grab offset', async () => {
@@ -354,7 +545,7 @@ describe('Project Git workspace', () => {
     const source = direction.startsWith('graph') ? graphSource : sidebarSource;
     const target = direction.endsWith('graph') ? graphTarget : sidebarTarget;
     await pointerDrag(source, target);
-    expect(await screen.findByRole('menuitem', { name: 'Merge origin/main into main…' })).toBeInTheDocument();
+    expect(await screen.findByRole('menuitem', { name: 'Merge origin/main into main' })).toBeInTheDocument();
     expect(api.BranchAction).not.toHaveBeenCalled();
   });
   it('offers normal branch actions when dropped onto its own graph badge', async () => {
@@ -387,7 +578,7 @@ describe('Project Git workspace', () => {
     await fireEvent.pointerUp(window, {clientX:12, clientY:12});
     expect(document.querySelector('.branch-drag-ghost')).toBeNull();
     await fireEvent.click(source);
-    await waitFor(() => expect(api.Snapshot).toHaveBeenLastCalledWith(project, '', 'refs/remotes/origin/main', 200));
+    await waitFor(() => expect(screen.getByRole('button', {name:/Initial project,/})).toHaveAttribute('aria-pressed','true'));
     await pointerDrag(source, target, false);
     expect(document.querySelector('.branch-drag-ghost')).not.toBeNull();
     await fireEvent.keyDown(window, {key:'Escape'});

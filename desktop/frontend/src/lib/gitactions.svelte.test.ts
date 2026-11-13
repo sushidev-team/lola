@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { GitActions } from './gitactions.svelte';
-import { ProjectGitState } from './projectgit.svelte';
+import { ProjectGitState, projectGitState } from './projectgit.svelte';
 import { confirm } from './confirm.svelte';
 import ProjectGitActionMenu from './components/ProjectGitActionMenu.svelte';
 import type { GitRef, GitSnapshot } from './projectgit';
@@ -24,6 +24,108 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); confirm.cancel(); vi.restoreAllMocks(); });
 describe('Git action menus', () => {
+  it.each([true, false])('deletes a borrowed branch after session cleanup only if it still exists (%s)', async (exists) => {
+    const tree = {path:'/managed',branch:feature.name,head:feature.sha,blocked:true,locked:false,prunable:false};
+    git.snapshot!.worktrees = [tree];
+    const root = projectGitState(git.project, '');
+    root.snapshot = {...git.snapshot!,refs:exists ? [feature] : []};
+    vi.spyOn(root, 'load').mockResolvedValue();
+    const deleteBranch = vi.spyOn(root, 'branchAction').mockResolvedValue('/repo');
+    let removed: (() => Promise<void>) | undefined;
+    actions = new GitActions(() => ({git,ref:'',limit:200}), {...callbacks,removeManagedWorktree:(_tree,_deleteBranch,onRemoved)=>{removed=onRemoved;}});
+    actions.openBranch(feature,event());
+    actions.request!.items.find(item=>item.label==='Remove worktree and branch…')!.run();
+    expect(deleteBranch).not.toHaveBeenCalled();
+    await removed!();
+    if (exists) expect(deleteBranch).toHaveBeenCalledWith({action:'delete-branch',source:feature.fullName,sourceSHA:feature.sha,target:'',targetSHA:''},'',200);
+    else expect(deleteBranch).not.toHaveBeenCalled();
+  });
+  it.each([true, false])('routes managed branch and worktree removal to a session dialog (sandbox: %s)', async (blocked) => {
+    const tree = {path:'/managed',branch:feature.name,head:feature.sha,blocked,locked:false,prunable:false};
+    git.snapshot!.worktrees = [tree];
+    const removeManagedWorktree = vi.fn();
+    actions = new GitActions(() => ({git,ref:'',limit:200}), {...callbacks,isManagedWorktree:()=>true,removeManagedWorktree});
+    render(ProjectGitActionMenu, {actions});
+    actions.openBranch(feature, event());
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Delete branch…'}));
+    expect(removeManagedWorktree).toHaveBeenCalledWith(tree, true, expect.any(Function));
+    expect(actions.request).toBeNull();
+    actions.openBranch(feature, event());
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Remove worktree and branch…'}));
+    actions.openWorktree(tree, event());
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Remove worktree…'}));
+    expect(removeManagedWorktree).toHaveBeenCalledTimes(3);
+    expect(git.branchAction).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('confirms worktree removal (delete branch: %s)', async (deleteBranch) => {
+    const tree = {path:'/linked',branch:feature.name,head:feature.sha,blocked:false,locked:false,prunable:false};
+    git.snapshot!.worktrees = [{...tree,path:'/repo',branch:'main',head:main.sha}, tree];
+    render(ProjectGitActionMenu, {actions});
+    actions.openWorktree(tree, event());
+    await fireEvent.click(await screen.findByRole('menuitem', {name:deleteBranch ? 'Remove worktree and branch…' : 'Remove worktree…'}));
+    expect(confirm.request?.body).toContain('/linked');
+    expect(git.branchAction).not.toHaveBeenCalled();
+    confirm.accept();
+    await waitFor(() => expect(git.branchAction).toHaveBeenCalledWith({action:deleteBranch ? 'remove-worktree-branch' : 'remove-worktree',source:feature.fullName,sourceSHA:feature.sha,target:'/linked',targetSHA:''}, '', 200));
+  });
+  it('leaves a displayed worktree before removal and protects main and locked worktrees', async () => {
+    const tree = {path:'/linked',branch:feature.name,head:feature.sha,blocked:false,locked:false,prunable:false};
+    const mainTree = {...tree,path:'/repo',branch:'main',head:main.sha};
+    git.snapshot!.worktrees = [mainTree, tree];
+    const root = git;
+    render(ProjectGitActionMenu, {actions});
+    actions.openWorktree(mainTree, event());
+    expect(await screen.findByRole('menuitem', {name:'Remove worktree…'})).toBeDisabled();
+    actions.openWorktree({...tree,locked:true}, event());
+    await waitFor(() => expect(screen.getByRole('menuitem', {name:'Remove worktree and branch…'})).toBeDisabled());
+    git = new ProjectGitState('project', '/linked');
+    git.snapshot = {...root.snapshot!,path:'/linked',branch:feature.name};
+    vi.spyOn(git, 'branchAction');
+    const linked = git;
+    callbacks.openWorktree.mockImplementation(() => { git = root; });
+    actions.openWorktree(tree, event());
+    await waitFor(() => expect(screen.getByRole('menuitem', {name:'Remove worktree…'})).toBeEnabled());
+    await fireEvent.click(screen.getByRole('menuitem', {name:'Remove worktree…'}));
+    confirm.accept();
+    await waitFor(() => expect(root.branchAction).toHaveBeenCalled());
+    expect(callbacks.openWorktree).toHaveBeenCalledWith('');
+    expect(linked.branchAction).not.toHaveBeenCalled();
+  });
+  it('confirms deletion of the exact branch and clears its selected history only on success', async () => {
+    actions = new GitActions(() => ({git, ref:feature.fullName, limit:200}), callbacks);
+    render(ProjectGitActionMenu, {actions});
+    actions.openBranch(feature, event());
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Delete branch…'}));
+    expect(git.branchAction).not.toHaveBeenCalled();
+    expect(confirm.request?.body).toContain('feature/work (bbbbbbbb)');
+    confirm.cancel();
+    expect(git.branchAction).not.toHaveBeenCalled();
+    actions.openBranch(feature, event());
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Delete branch…'}));
+    confirm.accept();
+    await waitFor(() => expect(callbacks.viewHistory).toHaveBeenCalledWith(''));
+    expect(git.branchAction).toHaveBeenCalledWith({action:'delete-branch',source:feature.fullName,sourceSHA:feature.sha,target:'',targetSHA:''}, '', 200);
+  });
+  it('protects active branches and branches owned by any worktree', async () => {
+    render(ProjectGitActionMenu, {actions});
+    actions.openBranch(main, event());
+    expect(await screen.findByRole('menuitem', {name:'Delete branch…'})).toBeDisabled();
+    git.snapshot!.worktrees = [{path:'/other',branch:feature.name,head:feature.sha,blocked:false,locked:false,prunable:false}];
+    actions.openBranch(feature, event());
+    await waitFor(() => expect(screen.getByRole('menuitem', {name:'Delete branch…'})).toBeDisabled());
+  });
+  it('names remote deletion explicitly and refuses a confirmation after changing repositories', async () => {
+    git.snapshot!.remotes = [{name:'origin',host:'',owner:'',repo:'',avatarUrl:''}];
+    render(ProjectGitActionMenu, {actions});
+    const remote = {...feature, remote:true, name:'origin/feature/work', fullName:'refs/remotes/origin/feature/work'};
+    actions.openBranch(remote, event());
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Delete remote branch…'}));
+    expect(confirm.request?.detail).toContain('for everyone');
+    const previous = git;
+    git = new ProjectGitState('other', '');
+    confirm.accept();
+    expect(previous.branchAction).not.toHaveBeenCalled();
+  });
   it('opens a PR with the dragged source and drop target without mutating Git', async () => {
     const createPullRequest = vi.fn();
     git.snapshot!.remotes = [{name:'origin',host:'github.com',owner:'acme',repo:'acme/repo',avatarUrl:''}];
@@ -52,7 +154,7 @@ describe('Git action menus', () => {
     expect(await screen.findByRole('menuitem',{name:'Pull changes'})).toBeDisabled();
     git.snapshot!.worktrees=[{path:'/sandbox',branch:feature.name,head:feature.sha,blocked:true,locked:false,prunable:false}];
     actions.dropBranches(main,feature,event());expect(await screen.findByRole('menuitem',{name:/^Merge main/})).toBeDisabled();
-    git.snapshot!.operation='rebase';actions.openBranch(main,event());expect(await screen.findByRole('menuitem',{name:'Push branch'})).toBeDisabled();expect(screen.getByRole('menuitem',{name:'View branch history'})).toBeEnabled();
+    git.snapshot!.operation='rebase';actions.openBranch(main,event());expect(await screen.findByRole('menuitem',{name:'Push branch'})).toBeDisabled();expect(screen.getByRole('menuitem',{name:'Solo branch'})).toBeEnabled();
   });
   it('lets merge actions explicitly select their mainline before confirmation', async () => {
     render(ProjectGitActionMenu,{actions});
@@ -102,15 +204,13 @@ describe('Git action menus', () => {
     await waitFor(() => expect(actions.request).toBeNull());
     expect(callbacks.openWorktree).not.toHaveBeenCalled();
   });
-  it('offers explicit drag directions and does not write until merge is confirmed', async () => {
+  it.each(['merge', 'rebase'] as const)('runs a pinned %s directly after choosing the drag action', async (action) => {
     render(ProjectGitActionMenu, { actions });
     actions.dropBranches(feature, main, event());
     expect(git.branchAction).not.toHaveBeenCalled();
-    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Merge feature/work into main…' }));
-    expect(confirm.request?.body).toContain('feature/work (bbbbbbbb) into main (aaaaaaaa)');
-    expect(git.branchAction).not.toHaveBeenCalled();
-    confirm.accept();
-    await waitFor(() => expect(git.branchAction).toHaveBeenCalledWith({ action: 'merge', source: feature.fullName, sourceSHA: feature.sha, target: main.fullName, targetSHA: main.sha }, '', 200));
+    await fireEvent.click(await screen.findByRole('menuitem', { name: action === 'merge' ? 'Merge feature/work into main' : 'Rebase feature/work onto main' }));
+    expect(confirm.request).toBeNull();
+    await waitFor(() => expect(git.branchAction).toHaveBeenCalledWith({ action, source: feature.fullName, sourceSHA: feature.sha, target: main.fullName, targetSHA: main.sha }, '', 200));
   });
   it('confirms stash and pop against the visible HEAD and exact stash SHA', () => {
     actions.stash();

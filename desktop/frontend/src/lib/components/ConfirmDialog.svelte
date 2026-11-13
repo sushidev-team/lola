@@ -34,8 +34,8 @@
       </ul>
     {/if}
     {#snippet footer()}
-      <div class="dialog-actions">
-        <Button class="cancel" size="md" onclick={() => confirm.cancel()}>Cancel</Button>
+      <div class="dialog-actions confirmation-actions">
+        <Button class={req.alternative ? "cancel" : ""} size="md" onclick={() => confirm.cancel()}>Cancel</Button>
         {#if req.alternative}
           <Button variant="secondary" size="md" onclick={() => confirm.acceptAlternative()}>{req.alternative.label}</Button>
         {/if}
@@ -46,6 +46,7 @@
 {/if}
 
 <style>
+  .confirmation-actions { justify-content:flex-end; }
   .confirmation-copy { min-width:0; overflow-wrap:anywhere; }
   .confirmation-body { font-size:14px; color:var(--color-ink); }
   .confirmation-detail { margin-top:10px; font-size:13px; color:var(--color-ink-2); }

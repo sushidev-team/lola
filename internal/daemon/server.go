@@ -854,8 +854,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			// <home>/worktrees/<project>/<id> (see newNativeRuntime); the
 			// store record carries no path, so derive it for the TUI.
 			si.Worktree = filepath.Join(d.home, "worktrees", s.Project, s.ID)
-			if s.Location == runtime.LocationSSH {
-				si.Worktree = s.Worktree // a direct ssh session's scratch folder
+			if s.Location == runtime.LocationSSH || s.Kind == session.KindLocal {
+				si.Worktree = s.Worktree // SSH scratch folder or borrowed checkout
 			}
 		}
 		if s.PR != nil {

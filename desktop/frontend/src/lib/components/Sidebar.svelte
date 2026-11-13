@@ -50,7 +50,7 @@
     <Button
       icon
       class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
-      title="hide sidebar (b)"
+      title="hide sidebar (⌘B)"
       aria-label="Hide sidebar"
       onclick={() => nav.toggleSidebar()}><Icon name="chevrons-left" size={14} /></Button
     >

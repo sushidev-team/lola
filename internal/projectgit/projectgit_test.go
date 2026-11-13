@@ -36,6 +36,29 @@ func write(t *testing.T, dir, path, body string) {
 		t.Fatal(err)
 	}
 }
+func TestSnapshotIncludesLightweightAndAnnotatedTags(t *testing.T) {
+	dir := repo(t)
+	write(t, dir, "base", "base\n")
+	testGit(t, dir, "add", "base")
+	testGit(t, dir, "commit", "-m", "base")
+	testGit(t, dir, "tag", "v0.5.0")
+	testGit(t, dir, "tag", "-a", "release", "-m", "Release")
+	snapshot, err := (Client{}).Snapshot(context.Background(), dir, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Commits) != 1 {
+		t.Fatalf("commits: %+v", snapshot.Commits)
+	}
+	refs := strings.Join(snapshot.Commits[0].Refs, "\n")
+	if !strings.Contains(refs, "tag: v0.5.0") || !strings.Contains(refs, "tag: release") {
+		t.Fatalf("missing tag decorations: %s", refs)
+	}
+	if len(snapshot.Refs) != 1 || snapshot.Refs[0].Name != "main" {
+		t.Fatal("tags leaked into branch actions")
+	}
+}
+
 func TestUnbornStageUnstageCommitAndDiff(t *testing.T) {
 	dir := repo(t)
 	ctx := context.Background()
@@ -501,5 +524,38 @@ func TestAmendConfirmationChecksAllRemoteHistories(t *testing.T) {
 	check(true)
 	if _, err := c.AmendNeedsConfirmation(ctx, dir, "--all"); err == nil {
 		t.Fatal("invalid hash accepted")
+	}
+}
+
+func TestSnapshotReportsUpstreamDivergence(t *testing.T) {
+	dir := repo(t)
+	testGit(t, dir, "commit", "--allow-empty", "-m", "base")
+	testGit(t, dir, "branch", "base")
+	testGit(t, dir, "branch", "upstream")
+	testGit(t, dir, "commit", "--allow-empty", "-m", "local")
+	testGit(t, dir, "checkout", "upstream")
+	testGit(t, dir, "commit", "--allow-empty", "-m", "upstream")
+	testGit(t, dir, "checkout", "main")
+	testGit(t, dir, "branch", "--set-upstream-to=upstream", "main")
+	testGit(t, dir, "branch", "behind", "base")
+	testGit(t, dir, "branch", "--set-upstream-to=upstream", "behind")
+	testGit(t, dir, "branch", "ahead", "main")
+	testGit(t, dir, "branch", "--set-upstream-to=base", "ahead")
+	testGit(t, dir, "branch", "untracked", "main")
+	got, err := (Client{}).Snapshot(context.Background(), dir, "", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := map[string][2]int{"main": {1, 1}, "behind": {0, 1}, "ahead": {1, 0}, "untracked": {0, 0}}
+	for _, ref := range got.Refs {
+		if want, ok := expected[ref.Name]; ok {
+			if ref.Ahead != want[0] || ref.Behind != want[1] {
+				t.Errorf("%s: got +%d -%d, want %v", ref.Name, ref.Ahead, ref.Behind, want)
+			}
+			delete(expected, ref.Name)
+		}
+	}
+	if len(expected) > 0 {
+		t.Fatalf("missing branches: %v", expected)
 	}
 }

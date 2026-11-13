@@ -36,6 +36,8 @@ type Ref struct {
 	Remote   bool   `json:"remote"`
 	Current  bool   `json:"current"`
 	Upstream string `json:"upstream,omitempty"`
+	Ahead    int    `json:"ahead,omitempty"`
+	Behind   int    `json:"behind,omitempty"`
 }
 type Worktree struct {
 	Path     string `json:"path"`
@@ -204,7 +206,7 @@ func (c Client) Snapshot(ctx context.Context, dir, ref string, limit int) (Snaps
 	s.Branch, _ = c.text(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD")
 	s.Head, _ = c.text(ctx, dir, "rev-parse", "--verify", "HEAD")
 	s.Upstream, _ = c.text(ctx, dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-	b, err := c.git(ctx, dir, "", "for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)%00%(upstream)", "refs/heads/", "refs/remotes/")
+	b, err := c.git(ctx, dir, "", "for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)%00%(upstream)%00%(upstream:track,nobracket)", "refs/heads/", "refs/remotes/")
 	if err != nil {
 		return s, err
 	}
@@ -212,12 +214,28 @@ func (c Client) Snapshot(ctx context.Context, dir, ref string, limit int) (Snaps
 	validRef := ref == ""
 	for _, line := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
 		p := strings.Split(line, "\x00")
-		if len(p) != 4 {
+		if len(p) != 5 {
 			continue
 		}
 		remote := strings.HasPrefix(p[0], "refs/remotes/")
 		name := strings.TrimPrefix(strings.TrimPrefix(p[0], "refs/heads/"), "refs/remotes/")
 		r := Ref{Name: name, FullName: p[0], SHA: p[1], Remote: remote, Current: p[2] == "*", Upstream: p[3]}
+		for _, tracking := range strings.Split(p[4], ", ") {
+			parts := strings.Fields(tracking)
+			if len(parts) != 2 {
+				continue
+			}
+			n, err := strconv.Atoi(parts[1])
+			if err != nil || n < 0 {
+				continue
+			}
+			switch parts[0] {
+			case "ahead":
+				r.Ahead = n
+			case "behind":
+				r.Behind = n
+			}
+		}
 		s.Refs = append(s.Refs, r)
 		bySHA[r.SHA] = append(bySHA[r.SHA], name)
 		if ref == r.FullName {
@@ -226,6 +244,34 @@ func (c Client) Snapshot(ctx context.Context, dir, ref string, limit int) (Snaps
 	}
 	if !validRef {
 		return s, errors.New("the selected branch no longer exists; refresh the repository")
+	}
+	// Tags decorate commits but are not branches or checkout targets. Peel
+	// annotated tags so their labels attach to the commit, not the tag object.
+	b, err = c.git(ctx, dir, "", "for-each-ref", "--format=%(refname:strip=2)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)", "refs/tags/")
+	if err != nil {
+		return s, err
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		p := strings.Split(line, "\x00")
+		if len(p) != 5 {
+			continue
+		}
+		sha := p[2]
+		if p[1] == "tag" {
+			if p[3] == "tag" {
+				sha, err = c.text(ctx, dir, "rev-parse", "--verify", "refs/tags/"+p[0]+"^{commit}")
+				if err != nil {
+					continue
+				}
+			} else if p[3] == "commit" {
+				sha = p[4]
+			} else {
+				continue
+			}
+		} else if p[1] != "commit" {
+			continue
+		}
+		bySHA[sha] = append(bySHA[sha], "tag: "+p[0])
 	}
 	enabled, _ := c.text(ctx, dir, "config", "--bool", "--get", "commit.gpgsign")
 	s.Signing.Enabled = enabled == "true"

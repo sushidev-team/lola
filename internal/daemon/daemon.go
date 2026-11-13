@@ -513,6 +513,8 @@ type Daemon struct {
 	// cmd=status; a failing check skips the tick WITHOUT mutating seen/labels
 	// (the same discipline as the old AO-down rule). Overridable in tests.
 	runtimeHealth func(binary string) error
+	// validateLocalCheckout verifies an existing project checkout before borrowing it.
+	validateLocalCheckout func(context.Context, string, string, string) error
 
 	// Remote phone listener ([remote], remotewire.go). remote is the TLS
 	// listener a paired mobile client speaks the protocol.Frame envelope to,

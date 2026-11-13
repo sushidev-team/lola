@@ -1,5 +1,5 @@
 export type GitCommit = { sha: string; parents: string[]; subject: string; author: string; email: string; date: string; refs: string[] };
-export type GitRef = { name: string; fullName: string; sha: string; remote: boolean; current: boolean; upstream?: string };
+export type GitRef = { name: string; fullName: string; sha: string; remote: boolean; current: boolean; upstream?: string; ahead?: number; behind?: number };
 export type GitRemote = { name: string; host: string; owner: string; repo: string; avatarUrl: string };
 export type GitAuthorIdentity = { login: string; avatarUrl: string };
 export type GitIdentities = { authors?: Record<string, GitAuthorIdentity | undefined> | null; remoteAvatars?: Record<string, string | undefined> | null };
@@ -154,8 +154,6 @@ export function commitGraph(commits: Pick<GitCommit, 'sha' | 'parents'>[]): Grap
 
 export const graphColors = ['var(--color-info)', 'var(--color-magenta)', 'var(--color-good)', 'var(--color-orange)', 'var(--color-accent)', 'var(--color-warn)'];
 export function graphColor(color: number): string { return graphColors[color % graphColors.length]; }
-// Semantic lane colors clear AA on canvas; the accent has its own measured on-fill token.
-export function graphLabelColor(color: number): string { return color % graphColors.length === 4 ? 'var(--color-on-accent)' : 'var(--color-canvas)'; }
 
 export const GRAPH_LANE_WIDTH = 24;
 export const GRAPH_NODE_X = 16;

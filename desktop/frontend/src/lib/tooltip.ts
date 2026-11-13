@@ -4,9 +4,10 @@ import Icon from './components/Icon.svelte';
 import type { IconName } from './icons';
 
 export type CommitTooltipDetails = { author: string; date: string; exactDate: string; sha: string; branches: { name: string; current: boolean; remote: boolean }[]; moreBranches: string[]; checkoutLabel?: string; checkoutDetail?: string };
+export type TooltipRef = { name: string; kind: 'local' | 'remote' | 'tag'; current?: boolean };
 let sequence = 0;
 let dismissActive: (() => void) | undefined;
-type TooltipContent = string | { text: string; commit?: CommitTooltipDetails; language?: string; heading?: string; code?: string; meta?: string; tone?: string; instant?: boolean; delay?: number; anchor?: 'element' | 'pointer'; hoverTarget?: string };
+type TooltipContent = string | { text: string; commit?: CommitTooltipDetails; refs?: TooltipRef[]; focus?: boolean; language?: string; heading?: string; code?: string; meta?: string; tone?: string; instant?: boolean; delay?: number; anchor?: 'element' | 'pointer'; hoverTarget?: string };
 const colors = { plain: '', kw: 'text-magenta', str: 'text-good', com: 'text-faint', num: 'text-orange', flag: 'text-info', var: 'text-orange', cmd: 'text-accent-ink', path: 'text-ink-2' };
 /** Text-only rendering, with enough hover tolerance to enter and scroll the preview. */
 export function tooltip(node: HTMLElement, content: TooltipContent) {
@@ -34,7 +35,7 @@ export function tooltip(node: HTMLElement, content: TooltipContent) {
   function render() {
     if (tip) { stay(); return; }
     hide();
-    const { text, language = 'text', heading, code, meta, tone, commit } = typeof content === 'string' ? { text: content } : content;
+    const { text, language = 'text', heading, code, meta, tone, commit, refs } = typeof content === 'string' ? { text: content } : content;
     if (!text) return;
     dismissActive?.();
     dismissActive = hide;
@@ -70,7 +71,7 @@ export function tooltip(node: HTMLElement, content: TooltipContent) {
         tip.append(branches);
       }
       if (commit.checkoutLabel) { const checkout = element('div', 'git-tip-checkout'); icon(checkout, 'monitor'); checkout.append(element('span', '', commit.checkoutLabel)); if (commit.checkoutDetail) checkout.setAttribute('aria-label', commit.checkoutDetail); tip.append(checkout); }
-    } else {
+    } else if (!refs) {
       const body = document.createElement('div');
       body.className = 'cv-tooltip-body';
       tip.append(body);
@@ -95,6 +96,20 @@ export function tooltip(node: HTMLElement, content: TooltipContent) {
         detail.textContent = meta;
         tip.append(detail);
       }
+    }
+    if (refs?.length) {
+      const list = document.createElement('div');
+      list.className = 'git-tip-ref-list';
+      list.setAttribute('aria-label', 'Branches and tags at this commit');
+      for (const ref of refs) {
+        const row = document.createElement('div'); row.className = `git-tip-ref${ref.current ? ' current' : ''}`;
+        row.setAttribute('aria-label', `${ref.kind === 'tag' ? 'Tag' : ref.kind === 'remote' ? 'Remote branch' : 'Local branch'}: ${ref.name}`);
+        const host = document.createElement('span');
+        iconComponents.push(mount(Icon, {target:host, props:{name:ref.kind === 'tag' ? 'tag' : ref.kind === 'remote' ? 'cloud' : 'git-branch',size:14}}));
+        const label = document.createElement('span'); label.textContent = ref.name;
+        row.append(host, label); list.append(row);
+      }
+      tip.append(list);
     }
     tip.addEventListener('mouseenter', stay);
     tip.addEventListener('mouseleave', leave);
@@ -126,8 +141,10 @@ export function tooltip(node: HTMLElement, content: TooltipContent) {
   node.addEventListener('contextmenu', hide);
   node.addEventListener('dragstart', hide);
   hoverNode.addEventListener('mouseleave', leave);
-  node.addEventListener('focusin', show);
-  node.addEventListener('focusout', leave);
+  if (typeof content === 'string' || content.focus !== false) {
+    node.addEventListener('focusin', show);
+    node.addEventListener('focusout', leave);
+  }
   node.addEventListener('click', hide);
   window.addEventListener('keydown', key);
   window.addEventListener('scroll', scroll, true);

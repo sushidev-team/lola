@@ -2,9 +2,24 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import Button from './components/Button.svelte';
-import { gitCommitTooltip } from './gittooltip';
+import { gitCommitTooltip, gitRefsTooltip } from './gittooltip';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
+
+it('reveals every branch and tag at the commit on reference hover', async () => {
+  vi.useFakeTimers();
+  const commit = {sha:'f'.repeat(40),subject:'Tagged commit',author:'A',date:'',parents:[],refs:['tag: v0.5.0','tag: release/<test>'],email:''};
+  const branches = ['main','feature/long-branch','origin/main','other'].map(name => ({name,fullName:`refs/heads/${name}`,sha:commit.sha,remote:name.startsWith('origin/'),current:name==='main'}));
+  render(Button, {...gitRefsTooltip(commit, branches),children:createRawSnippet(() => ({render:() => '<span class="commit-refs">main +5</span>'}))});
+  await fireEvent.mouseEnter(screen.getByText('main +5'));
+  vi.advanceTimersByTime(180);
+  const tip = screen.getByRole('tooltip');
+  expect(tip.querySelectorAll('.git-tip-ref')).toHaveLength(6);
+  expect(tip).toHaveTextContent('feature/long-branch');
+  expect(tip).toHaveTextContent('v0.5.0');
+  expect(tip).toHaveTextContent('release/<test>');
+  expect(tip.querySelector('test')).toBeNull();
+});
 
 it('attaches a delayed structured tooltip directly to the shared commit button', async () => {
   vi.useFakeTimers();

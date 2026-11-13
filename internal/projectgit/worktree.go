@@ -3,10 +3,79 @@ package projectgit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// RemoveWorktree is only for human checkouts authorized by the service. Target
+// is the exact listed path; Source and SourceSHA pin the checkout being removed.
+func (c Client) RemoveWorktree(ctx context.Context, dir string, r BranchRequest) error {
+	if !filepath.IsAbs(r.Target) || sameCheckout(dir, r.Target) {
+		return errors.New("the project's repository folder cannot be removed")
+	}
+	trees, err := c.Worktrees(ctx, dir)
+	if err != nil {
+		return err
+	}
+	var found *Worktree
+	for i := range trees {
+		if sameCheckout(trees[i].Path, r.Target) {
+			if i == 0 {
+				return errors.New("the main worktree cannot be removed")
+			}
+			found = &trees[i]
+		}
+	}
+	if found == nil || found.Locked || found.Prunable {
+		return errors.New("worktree is missing, locked or unavailable; refresh the repository")
+	}
+	ref := ""
+	if found.Branch != "" {
+		ref = "refs/heads/" + found.Branch
+	}
+	if ref != r.Source || !shaPattern.MatchString(r.SourceSHA) || found.Head != r.SourceSHA {
+		return errors.New("worktree changed since it was selected; refresh and try again")
+	}
+	if err = c.requireIdle(ctx, dir); err != nil {
+		return err
+	}
+	if err = c.requireClean(ctx, found.Path); err != nil {
+		return err
+	}
+	deleteBranch := r.Action == "remove-worktree-branch"
+	if deleteBranch {
+		if ref == "" {
+			return errors.New("detached worktree has no branch to delete")
+		}
+		if _, err = c.branchRef(ctx, dir, ref, r.SourceSHA, true); err != nil {
+			return err
+		}
+		// Match branch --delete's merged check before removing the checkout,
+		// so an unmerged branch leaves both the folder and branch intact.
+		base, err := c.text(ctx, dir, "for-each-ref", "--format=%(upstream)", ref)
+		if err != nil {
+			return err
+		}
+		if base == "" {
+			base = "HEAD"
+		}
+		if _, err = c.git(ctx, dir, "", "merge-base", "--is-ancestor", r.SourceSHA, base); err != nil {
+			return errors.New("branch is not fully merged; remove only the worktree to keep its branch")
+		}
+	}
+	if _, err = c.git(ctx, dir, "", "worktree", "remove", "--", found.Path); err != nil {
+		return err
+	}
+	if deleteBranch {
+		r.Action = "delete-branch"
+		if err = c.BranchAction(ctx, dir, r); err != nil {
+			return fmt.Errorf("worktree removed, but branch was kept: %w", err)
+		}
+	}
+	return nil
+}
 
 // NewWorktreePath resolves the existing parent, including symlinks. Creation
 // only accepts a new directory; no reuse, force, pruning or deletion is needed.

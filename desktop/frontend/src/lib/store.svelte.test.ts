@@ -47,6 +47,84 @@ beforeEach(() => {
 });
 
 describe("destructive actions ask first", () => {
+  it("runs explicit borrowed-branch cleanup only after confirmed successful removal", async () => {
+    store.sessions = [{id:"managed",worktree:"/managed"} as never];
+    const onRemoved = vi.fn();
+    const followup = {branch:"dependabot/postcss", onRemoved};
+    store.askRemoveManagedWorktree("/managed", followup);
+    expect(confirm.request?.detail).toContain("dependabot/postcss");
+    confirm.cancel();
+    expect(onRemoved).not.toHaveBeenCalled();
+    Kill.mockResolvedValue({removed:false});
+    store.askRemoveManagedWorktree("/managed", followup);
+    confirm.accept();
+    await vi.waitFor(() => expect(Kill).toHaveBeenCalledOnce());
+    expect(onRemoved).not.toHaveBeenCalled();
+    Kill.mockResolvedValue({removed:true});
+    store.askRemoveManagedWorktree("/managed", followup);
+    confirm.accept();
+    await vi.waitFor(() => expect(onRemoved).toHaveBeenCalledOnce());
+  });
+
+  it("carries explicit branch cleanup through the separate dirty-worktree confirmation", async () => {
+    const onRemoved = vi.fn();
+    Kill.mockRejectedValueOnce(new Error("session managed terminated; worktree kept (uncommitted changes) at /managed — rerun with --force to remove it"));
+    await store.kill("managed", false, false, onRemoved);
+    expect(confirm.request?.title).toBe("Worktree has uncommitted changes");
+    expect(onRemoved).not.toHaveBeenCalled();
+    Kill.mockResolvedValue({removed:true});
+    confirm.accept();
+    await vi.waitFor(() => expect(onRemoved).toHaveBeenCalledOnce());
+    expect(Kill).toHaveBeenLastCalledWith("managed", true, false);
+  });
+  it("explains managed checkout removal and uses session cleanup only after confirmation", () => {
+    store.sessions = [{id:"managed",issue:"ENG-42",title:"Update dependency",worktree:"/managed",branch:"deps"} as never];
+    store.askRemoveManagedWorktree("/managed");
+    expect(confirm.request?.body).toContain("ENG-42 — Update dependency");
+    expect(confirm.request?.body).not.toContain("/managed");
+    expect(confirm.request?.alternative).toBeUndefined();
+    expect(confirm.request?.detail).toContain("Unpushed commits may be lost");
+    expect(Kill).not.toHaveBeenCalled();
+    confirm.accept();
+    expect(Kill).toHaveBeenCalledWith("managed", false, false);
+  });
+
+  it("keeps the managed checkout when cancelled or when ownership changes", () => {
+    store.sessions = [{id:"managed",worktree:"/managed"} as never];
+    store.askRemoveManagedWorktree("/managed");
+    confirm.cancel();
+    expect(Kill).not.toHaveBeenCalled();
+    store.askRemoveManagedWorktree("/managed");
+    store.sessions = [{id:"replacement",worktree:"/managed"} as never];
+    confirm.accept();
+    expect(Kill).not.toHaveBeenCalled();
+    expect(store.flash?.text).toContain("owning session changed");
+  });
+
+  it("names the entire stack and refuses a changed removal scope", () => {
+    store.sessions = [{id:"stack",worktree:"/stack",stack:true,apps:[{name:"api",worktree:"/stack/api"},{name:"web",worktree:"/stack/web"}]} as never];
+    store.askRemoveManagedWorktree("/stack/api");
+    expect(confirm.request?.detail).toContain("entire stack");
+    expect(confirm.request?.detail).toContain("/stack/web");
+    store.sessions[0].apps!.push({name:"extra",worktree:"/stack/extra"} as never);
+    confirm.accept();
+    expect(Kill).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {sessions: []},
+    {sessions: [{id:"local",location:"local",worktree:"/protected"}]},
+    {sessions: [{id:"goal",goalId:"goal-1",worktree:"/protected"}]},
+    {sessions: [{id:"a",worktree:"/protected"},{id:"b",worktree:"/protected"}]},
+  ])("explains protection without deleting an unknown, borrowed, goal or ambiguous checkout", ({sessions}) => {
+    store.sessions = sessions as never;
+    store.askRemoveManagedWorktree("/protected");
+    expect(confirm.request?.title).toBe("Protected worktree");
+    expect(confirm.request?.confirmLabel).toBe("Got it");
+    confirm.accept();
+    expect(Kill).not.toHaveBeenCalled();
+  });
+
   it("askKill opens a confirmation and does NOT kill yet", () => {
     store.askKill("sess-1");
     expect(Kill).not.toHaveBeenCalled();

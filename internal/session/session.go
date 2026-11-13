@@ -64,7 +64,7 @@ type Session struct {
 	PRCommentGuards map[string]string `json:"pr_comment_guards,omitempty"`
 
 	Name      string `json:"name,omitempty"`
-	Location  string `json:"location,omitempty"` // main | temporary; empty for worktrees
+	Location  string `json:"location,omitempty"` // main | checkout | temporary; empty for owned worktrees
 	ID        string `json:"id"`
 	Source    string `json:"source"`          // "ao" | "native"
 	Agent     string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude

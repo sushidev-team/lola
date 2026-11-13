@@ -36,6 +36,10 @@ func projectGitWithin(path, root string) bool {
 // The desktop has a separate process from the daemon, so its gitguard registry
 // is not authoritative. Read persisted isolation records before any Git call.
 func projectGitBlocker() (func(string) bool, error) {
+	return projectGitPathBlocker(false)
+}
+
+func projectGitPathBlocker(removing bool) (func(string) bool, error) {
 	home, err := config.Home()
 	if err != nil {
 		return nil, err
@@ -53,6 +57,9 @@ func projectGitBlocker() (func(string) bool, error) {
 	}
 	return func(path string) bool {
 		path = canonicalPath(path)
+		if removing && projectGitWithin(path, home) {
+			return true
+		}
 		if gitguard.Pinned(path) {
 			return true
 		}
@@ -66,6 +73,9 @@ func projectGitBlocker() (func(string) bool, error) {
 				continue
 			}
 			root := canonicalPath(s.Worktree)
+			if removing && (projectGitWithin(path, root) || projectGitWithin(root, path)) {
+				return true
+			}
 			if projectGitWithin(path, root) {
 				if s.Sandbox != "" && s.Sandbox != "none" {
 					return true
@@ -286,6 +296,28 @@ func (s *ProjectGitService) BranchAction(project, worktree string, request proje
 		return projectgit.BranchResult{}, err
 	}
 	c := projectgit.Client{}
+	if request.Action == "remove-worktree" || request.Action == "remove-worktree-branch" {
+		root, _, err := projectGitTarget(ctx, project, "")
+		if err != nil {
+			return projectgit.BranchResult{}, err
+		}
+		target, _, err := projectGitTarget(ctx, project, request.Target)
+		if err != nil {
+			return projectgit.BranchResult{}, err
+		}
+		if projectGitWithin(root, target) {
+			return projectgit.BranchResult{}, errors.New("the project's repository folder cannot be removed")
+		}
+		blocked, err := projectGitPathBlocker(true)
+		if err != nil {
+			return projectgit.BranchResult{}, err
+		}
+		if blocked(target) {
+			return projectgit.BranchResult{}, errors.New("managed worktrees must be removed through their Lola session")
+		}
+		request.Target = target
+		return projectgit.BranchResult{Path: root}, c.RemoveWorktree(ctx, root, request)
+	}
 	branch, err := c.ActionBranch(ctx, dir, request)
 	if err != nil {
 		return projectgit.BranchResult{}, err

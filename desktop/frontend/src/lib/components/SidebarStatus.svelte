@@ -82,7 +82,7 @@
   <span class="ml-auto flex shrink-0 items-center gap-0.5">
     <Button icon title="keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onclick={() => nav.openOverlay("help")}>
       <Icon name="circle-help" size={14} /></Button>
-    <Button icon title="Settings (S)" aria-label="Settings" onclick={() => nav.openOverlay("settings")}>
+    <Button icon title="Settings" aria-label="Settings" onclick={() => nav.openOverlay("settings")}>
       <Icon name="settings" class="h-4 w-4" />
     </Button>
   </span>

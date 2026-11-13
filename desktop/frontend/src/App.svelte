@@ -4,25 +4,24 @@
   import ConnectSSHHost from "$lib/components/ssh/ConnectSSHHost.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { talk } from "$lib/talk.svelte";
-  import { sshNeedsHuman } from "$lib/ssh";
   import { changesOffered, conversationOffered } from "$lib/sessionview";
   import RenameSession from "$lib/components/RenameSession.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import ActivityFeed from "$lib/components/ActivityFeed.svelte";
   import Modal from "$lib/components/Modal.svelte";
+  import { toggleGitWorkspace } from "$lib/workspacenav";
   import { openShell, newSessionHere } from "$lib/projectActions";
   import { onMount } from "svelte";
   import { Events, Window } from "@wailsio/runtime";
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms, AGENT, DIFF, CHECKPOINTS } from "$lib/terms.svelte";
+  import { terms, DIFF, CHECKPOINTS } from "$lib/terms.svelte";
   import { visibleRoster } from "$lib/roster";
   import { sidebarWidth, sidebarLimit } from "$lib/sidebarwidth";
   let windowWidth = $state(1280);
   const sideWidth = $derived(sidebarWidth(nav.sidebarWidth, windowWidth));
   import { isChord } from "$lib/keys";
-  import { displayFor } from "$lib/theme";
   import { reflowGridRows } from "$lib/reflow";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import MainTopBar from "$lib/components/MainTopBar.svelte";
@@ -82,7 +81,18 @@
   // be repeated here, or ⌘⇧K would stack a second kill confirmation on top of an
   // open dialog.
   function sessionAction(action: string) {
-    if (nav.overlay || confirm.request || sessionMenu.request) return;
+    // Go To has no unsaved work: the Git shortcut can dismiss it and continue.
+    if (action === "toggle-git" && nav.overlay === "commands" && !confirm.request && !sessionMenu.request) {
+      nav.closeOverlay();
+      toggleGitWorkspace();
+      return;
+    }
+    if (nav.overlay || confirm.request || sessionMenu.request || document.querySelector('[aria-modal="true"]')) return;
+    if (action === "toggle-git") { toggleGitWorkspace(); return; }
+    if (action === "toggle-sidebar") { nav.toggleSidebar(); return; }
+    if (action === "focus-sessions") { nav.focusSessions(); return; }
+    if (action === "shortcuts") { nav.openOverlay("help"); return; }
+    if (action === "previous") { ssh.nextWaiting(-1); return; }
     if (action === "close-tab") {
       if (nav.view === "cockpit" && nav.focusedTerm) void terms.closeActiveTab(nav.focusedTerm);
       return;
@@ -160,95 +170,16 @@
     nav.openSession(rows[i].id);
   }
 
-  // Next or previous row parked on a human, wrapping. It selects and stays in Overview, which is
-  // what makes `n` a way to walk the list: ⌘J is the one that opens.
-  //
-  // The AGENT axis only, deliberately narrower than `attention`: a red CI is work to schedule, not
-  // a prompt to answer. `displayFor` rather than a raw compare so a future agent state that maps
-  // to needs_you is included for free.
-  function jumpNeedsInput(dir: number) {
-    const rows = cockpitRows();
-    const len = rows.length;
-    if (len === 0) return;
-    let start = rows.findIndex((r) => r.id === nav.selectedId);
-    if (start < 0) start = 0;
-    for (let n = 1; n <= len; n++) {
-      const r = rows[(((start + dir * n) % len) + len) % len];
-      if (displayFor(r.agentState) === "needs_you" || sshNeedsHuman(r)) {
-        nav.openSession(r.id);
-        return;
-      }
-    }
-  }
-
   // Cockpit session navigation + actions. Returns true when a key was consumed
   // (so the caller can preventDefault the browser's own Enter/arrow/space use).
   function cockpitKey(e: KeyboardEvent): boolean {
     const rows = cockpitRows();
     switch (e.key) {
-      case "j":
-      case "ArrowDown":
-        moveSel(1);
-        return true;
-      case "k":
-      case "ArrowUp":
-        moveSel(-1);
-        return true;
-      case "g":
-        if (rows[0]) nav.openSession(rows[0].id);
-        return true;
-      case "G":
-        if (rows.length) nav.openSession(rows[rows.length - 1].id);
-        return true;
-      case "Enter":
-        if (sel) nav.openSession(sel.id);
-        return true;
-      case "n":
-        jumpNeedsInput(1);
-        return true;
-      case "N":
-        jumpNeedsInput(-1);
-        return true;
-      case "s":
-        // A new shell for the selection, each press another. The Glance has no tabs, so it opens
-        // the session to show it.
-        if (sel) {
-          nav.openSession(sel.id);
-          terms.newShell(sel.id, sel.worktree);
-        }
-        return true;
-      case "f":
-        // The session's Changes. Opens the session, for the same reason.
-        if (sel) ssh.toggleChanges(sel);
-        return true;
-      case "x":
-        if (sel) store.askKill(sel.id); // ask first — shared confirm dialog
-        return true;
-      case "o":
-        if (sel?.prUrl) store.openURL(sel.prUrl);
-        return true;
-      case "c":
-        // The CONFIGURED review provider (any pass kind — an agent or cli one),
-        // not coderabbit specifically — same as the overview's "Trigger review" and
-        // ⌘⇧R. Forcing the coderabbit-watch pass is still reachable from the
-        // command palette as "Poll CodeRabbit reviews".
-        if (sel && sel.location !== "ssh") store.review(sel.id);
-        return true;
-      case "D":
-        // Run the project's dev_commands in the selected session (or stop them).
-        // SHIFTED because bare "d" is the doctor overlay — and because the toggle
-        // stops another session's running processes.
-        if (sel) {
-          if (sel.devCommands?.length) store.dev(sel.id, !sel.devActive);
-          else store.setFlash("no dev_commands configured for this project", "warn");
-        }
-        return true;
-      case "R":
-        if (sel && (sel.status === "dead" || sel.status === "session_ended")) store.revive(sel.id);
-        return true;
-      case "P":
-        if (sel) nav.openOverlay("project", sel.project);
-        return true;
+      case "ArrowDown": moveSel(1); return true;
+      case "ArrowUp": moveSel(-1); return true;
+      case "Home": if (rows[0]) nav.openSession(rows[0].id); return true;
+      case "End": if (rows.length) nav.openSession(rows[rows.length - 1].id); return true;
+      case "Enter": if (sel) nav.openSession(sel.id); return true;
     }
     return false;
   }
@@ -256,17 +187,12 @@
   // Which view of the open session the keyboard is looking at.
   const SESSION_RING: Record<string, 1 | -1> = { "<": -1, ",": -1, ">": 1, ".": 1 };
 
-  // The open session's bare keys. `x s c D R o P p d S V Enter` are Overview's: they are dead here
-  // on purpose, so a lost focus cannot fire one mid-sentence. Their paths in a session are chords
-  // and ⋯. `[ ] u j k g G` belong to the timeline, which takes them while it has focus.
+  // Contextual session navigation. Destructive/session actions use native menu
+  // chords or explicit controls; timeline row keys stay with the focused timeline.
   function sessionKey(e: KeyboardEvent): boolean {
     const s = sel;
     if (e.key === "?") {
       nav.openOverlay("help");
-      return true;
-    }
-    if (e.key === "b") {
-      nav.toggleSidebar();
       return true;
     }
     if (e.key === "Escape") return escapeLadder(s);
@@ -343,7 +269,7 @@
     // BARE key, so without this bail Cmd-C ran "coderabbit review" instead of
     // Copy and Cmd-X opened the kill confirmation instead of Cut (also Cmd-S,
     // Cmd-O, Cmd-N, Cmd-G, Cmd-, …). Shift is not a modifier here — 'V', 'G',
-    // 'N', 'S', 'R', 'P', '?' are themselves shortcuts. See lib/keys.ts.
+    // contextual uppercase keys and '?' are still supported. See lib/keys.ts.
     //
     // It sits ABOVE the menu/confirm/overlay blocks on purpose: those swallow
     // keys only to keep them off the cockpit actions, which this return already
@@ -446,23 +372,12 @@
 
     // View-independent globals.
     switch (e.key) {
-      case "p":
-        nav.goHome();
-        return;
-      case "d":
-        nav.openOverlay("doctor");
-        return;
-      case "S":
-        nav.openOverlay("settings");
-        return;
-      case "b":
-        nav.toggleSidebar();
-        return;
       // Escape unwinds ONE layer per press, outermost first: leave a view, then
       // drop the triage filter, then leave the project scope. Collapsing them
       // into one press would throw away two decisions on a reflex key.
       case "Escape":
-        if (nav.view !== "cockpit") nav.goCockpit(nav.scoped ? nav.project : "");
+        if (nav.inGit) nav.returnFromGit();
+        else if (nav.view !== "cockpit") nav.goCockpit(nav.scoped ? nav.project : "");
         else if (nav.triage !== "") nav.setTriage("");
         else if (nav.scoped) nav.goCockpit("");
         return;

@@ -7,6 +7,26 @@ const snapshot = (branch: string) => ({ path: '/repo', branch, head: 'a', upstre
 beforeEach(() => { Object.values(api).forEach(fn => fn.mockReset()); api.Stashes.mockResolvedValue([]); api.Snapshot.mockResolvedValue(snapshot('main')); api.CachedIdentities.mockResolvedValue({ authors: {}, remoteAvatars: {} }); api.Identities.mockResolvedValue({ authors: {} }); });
 
 describe('Project Git request and operation ownership', () => {
+  it('tracks the deleting branch and preserves a newer history selection during deletion', async () => {
+    const state = new ProjectGitState('lola','');
+    await state.load('refs/heads/old',200);
+    const pending=deferred<{path:string}>();api.BranchAction.mockReturnValueOnce(pending.promise);
+    const removing=state.branchAction({action:'delete-branch',source:'refs/heads/old',sourceSHA:'a',target:'',targetSHA:''},'',200);
+    expect(state.deletingBranch).toBe('refs/heads/old');
+    await state.load('refs/heads/other',400);
+    pending.resolve({path:'/repo'});await removing;
+    expect(api.Snapshot).toHaveBeenLastCalledWith('lola','','refs/heads/other',400);
+    expect(state.deletingBranch).toBe('');
+  });
+  it('adds an unloaded branch tip while retaining the full graph', async () => {
+    const state = new ProjectGitState('lola','');
+    const commit={sha:'a',parents:[],subject:'Current',author:'A',email:'a@test',date:'',refs:[]};
+    state.snapshot={...snapshot('main'),commits:[commit]};
+    api.Snapshot.mockResolvedValue({...snapshot('old'),commits:[{...commit,sha:'b',subject:'Older tip'}]});
+    expect(await state.revealBranchTip({name:'old',fullName:'refs/heads/old',sha:'b',remote:false,current:false})).toBe('b');
+    expect(state.snapshot.commits.map(c=>c.sha)).toEqual(['a','b']);
+    expect(api.Snapshot).toHaveBeenCalledWith('lola','','refs/heads/old',1);
+  });
   it('stages and unstages with authoritative file updates without reloading history or identities',async()=>{
     const state=new ProjectGitState('lola','/tree');await state.load('refs/heads/main',400);
     const commits=state.snapshot!.commits,refs=state.snapshot!.refs;

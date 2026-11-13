@@ -152,6 +152,57 @@ func TestProjectGitWorktreeCreationRespectsBoundaries(t *testing.T) {
 		t.Fatal("PR draft bypassed source owner boundary", err)
 	}
 }
+
+func TestProjectGitWorktreeRemovalRespectsBoundaries(t *testing.T) {
+	root := projectGitRepo(t)
+	writeTestConfig(t, minimalConfig+fmt.Sprintf("\n[[project]]\nname = \"demo\"\npath = %q\n", root))
+	svc := &ProjectGitService{}
+	snap, err := svc.Snapshot("demo", "", "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "linked")
+	if _, err = svc.CreateWorktree("demo", "", "refs/heads/main", snap.Head, path, "topic"); err != nil {
+		t.Fatal(err)
+	}
+	r := projectgit.BranchRequest{Action: "remove-worktree-branch", Source: "refs/heads/topic", SourceSHA: snap.Head, Target: path}
+	for _, target := range []string{root, projectGitRepo(t)} {
+		bad := r
+		bad.Target = target
+		if _, err = svc.BranchAction("demo", "", bad); err == nil {
+			t.Fatalf("accepted target %s", target)
+		}
+	}
+	home := os.Getenv("LOLA_HOME")
+	stateDir := filepath.Join(home, "state")
+	if err = os.MkdirAll(stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, sandbox := range []string{"docker", "none"} {
+		raw, _ := json.Marshal([]session.Session{{ID: "managed", Worktree: path, Sandbox: sandbox}})
+		if err = os.WriteFile(filepath.Join(stateDir, "sessions.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = svc.BranchAction("demo", "", r); err == nil {
+			t.Fatalf("removed %s session worktree", sandbox)
+		}
+		if _, err = os.Stat(path); err != nil {
+			t.Fatal("protected checkout disappeared")
+		}
+	}
+	if err = os.WriteFile(filepath.Join(stateDir, "sessions.json"), []byte("[]"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.BranchAction("demo", "", r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("checkout remains: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", root, "show-ref", "--verify", r.Source).CombinedOutput(); err == nil {
+		t.Fatalf("branch remains: %s", out)
+	}
+}
 func TestProjectGitRejectsSandboxRootBeforeExecutingGit(t *testing.T) {
 	root := t.TempDir()
 	writeTestConfig(t, minimalConfig+fmt.Sprintf("\n[[project]]\nname = \"demo\"\npath = %q\n", root))
