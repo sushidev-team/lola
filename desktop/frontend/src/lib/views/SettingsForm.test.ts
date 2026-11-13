@@ -1048,7 +1048,7 @@ describe("SettingsForm", () => {
     expect(group.getByLabelText("Enabled")).toBeEnabled();
     expect(group.getByText(/provider is unavailable or disabled/)).toBeInTheDocument();
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    expect(await screen.findByText("Error: specialist requires an enabled agent provider")).toBeInTheDocument();
+    expect(await screen.findByText("specialist requires an enabled agent provider")).toBeInTheDocument();
     expect(SaveSettings.mock.calls.at(-1)?.[0].reviewProfiles).toEqual([specialist]);
     await fireEvent.click(group.getByLabelText("Enabled"));
     expect(group.getByLabelText("Enabled")).toBeDisabled();

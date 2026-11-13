@@ -545,7 +545,7 @@ func TestValidate(t *testing.T) {
 	// Invalid polling config on projects (plus a duplicate name and no global cap).
 	bad := &Config{}
 	bad.Projects = []Project{
-		{Name: "", Path: "/x", TeamID: "t", CycleMode: "pinned", MatchMode: "some", AssigneeMode: "user", DedupMode: "label"},
+		{Name: "", Path: "/x", Enabled: true, TeamID: "t", CycleMode: "pinned", MatchMode: "some", AssigneeMode: "user", DedupMode: "label"},
 		{Name: "dup", Path: "/y", TeamID: "t", CycleMode: "none", MatchMode: "all", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1},
 		{Name: "dup", Path: "/z", TeamID: "t", CycleMode: "none", MatchMode: "all", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1},
 	}
@@ -594,6 +594,17 @@ func TestValidateMatrix(t *testing.T) {
 		{"name required", func(c *Config) { c.Projects[0].Name = "" }, "name is required"},
 		{"duplicate names rejected", func(c *Config) { c.Projects = append(c.Projects, c.Projects[0]) }, "duplicate name"},
 		{"no team means no polling (valid)", func(c *Config) { c.Projects[0].TeamID = "" }, ""},
+		{"paused label pickup may be unfinished", func(c *Config) {
+			c.Projects[0].Enabled = false
+			c.Projects[0].OnSentSetLabel = ""
+			c.Projects[0].MatchLabels = nil
+		}, ""},
+		{"paused state pickup may be unfinished", func(c *Config) {
+			c.Projects[0].Enabled = false
+			c.Projects[0].DedupMode = "state"
+			c.Projects[0].StateIDs = nil
+			c.Projects[0].OnSpawnStateID = ""
+		}, ""},
 
 		{"cycle_mode none ok", func(c *Config) { c.Projects[0].CycleMode = "none" }, ""},
 		{"cycle_mode active ok", func(c *Config) { c.Projects[0].CycleMode = "active" }, ""},

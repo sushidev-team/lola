@@ -253,6 +253,12 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		d.mu.Unlock()
 		return res, fmt.Errorf("unknown poll %q", name)
 	}
+	// Paused projects may have unfinished pickup settings. A manual run must
+	// pass the same readiness check as enabling automatic pickup.
+	if err := d.cfg.ValidatePolling(pp); err != nil {
+		d.mu.Unlock()
+		return res, err
+	}
 	// A poll IS a project's polling config now, so the poll and the [[project]]
 	// it dispatches into are one and the same struct (clone every slice/map so
 	// the tick never aliases the live config after d.mu is dropped).

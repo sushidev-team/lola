@@ -33,3 +33,21 @@ export const FIELD_KEYS: Record<string, string> = {
   "Match labels": "match_labels",
   "Workflow states": "state_ids",
 };
+
+export function settingsSaveError(error: unknown): { summary: string; description?: string; details?: string } {
+  const message = String(error).replace(/^(?:(?:RuntimeError|Error):\s*)+/, '');
+  const projects = new Set<string>();
+  const other: string[] = [];
+  for (const line of message.split('\n')) {
+    const match = line.match(/^project "([^"]+)" polling: dedup_mode=label requires (?:on_sent_set_label|match_labels)\b/);
+    if (match) projects.add(match[1]);
+    else if (line.trim()) other.push(line);
+  }
+  if (!projects.size) return { summary: message };
+  return {
+    summary: `Label-based pickup needs labels for ${projects.size === 1 ? '1 project' : `${projects.size} projects`}.`,
+    // Named by the captions the forms show, so the fix can be found by reading.
+    description: `In Project defaults or the affected project, choose “${REPEAT_PICKUP[1].label}” under ${PICKUP_FIELDS.dedupMode}, or set Match labels and ${PICKUP_FIELDS.onSentSetLabel}.`,
+    details: [`Affected projects: ${[...projects].join(', ')}.`, ...other].join('\n'),
+  };
+}

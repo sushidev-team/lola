@@ -92,17 +92,16 @@ func saveConfig(cfg *config.Config, path string) error {
 // command an older daemon does not know) — neither of which is a problem worth
 // interrupting a successful save for.
 //
-// A rejection means the daemon disagrees with the Validate this build just ran,
-// and the daemon is the one running older code: it does not hot-reload its own
-// binary. The tell is a complaint about a key now INHERITED from [defaults] and
-// therefore no longer written into the project's own table.
+// A rejection means the daemon disagrees with the validation this build just
+// ran. It may predate inheritance or allowing incomplete inactive pickup
+// settings; reloading config does not update the daemon binary.
 func reloadRejectionHint(msg string) string {
 	if !strings.Contains(msg, "config invalid") {
 		return ""
 	}
 	for _, key := range []string{"match_mode", "dedup_mode", "on_sent_set_label", "priority_sort", "blocked_label_id", "match_labels"} {
 		if strings.Contains(msg, key) {
-			return msg + "  — this build accepts that config; the daemon is an OLDER binary predating [defaults] inheritance. Restart it from the daemon controls."
+			return msg + "  — this app accepts the config, but the daemon uses older validation rules. Update the Lola CLI and restart the daemon from its controls."
 		}
 	}
 	return msg

@@ -161,6 +161,21 @@ func bestOfDetail(ident string) linear.IssueDetail {
 	return linear.IssueDetail{ID: "uuid-" + ident, Identifier: ident, Title: "title " + ident, TeamID: "team-1", LabelIDs: []string{"lbl-trigger"}}
 }
 
+func TestHandleBestOfRefusesIncompletePausedPickup(t *testing.T) {
+	p := labelPoll("p1")
+	p.Enabled, p.OnSentSetLabel = false, ""
+	fake := &linear.Fake{Details: []linear.IssueDetail{bestOfDetail("FE-9")}}
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(p), fake, nat)
+	_, err := d.handleBestOf(context.Background(), protocol.BestOfArgs{Issue: "FE-9", Agents: "claude:2"})
+	if err == nil || !strings.Contains(err.Error(), "requires on_sent_set_label") {
+		t.Fatalf("want pickup validation error, got %v", err)
+	}
+	if len(nat.spawnCalls()) != 0 || d.inflight.Has("uuid-FE-9") || slices.Contains(fake.CallNames(), "SetIssueLabels") {
+		t.Fatal("invalid pickup mutated state")
+	}
+}
+
 func TestHandleBestOfStartsAGroup(t *testing.T) {
 	fake := &linear.Fake{Details: []linear.IssueDetail{bestOfDetail("FE-9")}, LabelIDsByIssue: map[string][]string{"uuid-FE-9": {"lbl-trigger"}}}
 	nat := &fakeNative{}

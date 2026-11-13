@@ -1105,6 +1105,11 @@ func (m *rootModel) toggleSelected() tea.Cmd {
 		return nil
 	}
 	fp.Enabled = !fp.Enabled
+	if err := m.cfg.Validate(); err != nil {
+		fp.Enabled = !fp.Enabled
+		m.list.flash = err.Error()
+		return nil
+	}
 	if err := m.cfg.Save(m.cfgPath); err != nil {
 		m.list.flash = "save failed: " + err.Error()
 		return nil
