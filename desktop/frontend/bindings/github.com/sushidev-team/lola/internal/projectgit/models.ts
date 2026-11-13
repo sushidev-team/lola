@@ -172,4 +172,16 @@ export interface Worktree {
     "locked": boolean;
     "prunable": boolean;
     "blocked": boolean;
+
+    /**
+     * Changes counts the uncommitted files in a checkout OTHER than the one the
+     * snapshot was taken in (that one lists its files in Snapshot.Files). Zero
+     * also means "not asked" or "could not be read": a count is a cue to go and
+     * look, never a claim that a checkout is clean.
+     */
+    "changes"?: number;
+    "added"?: number;
+    "modified"?: number;
+    "deleted"?: number;
+    "conflicts"?: number;
 }

@@ -150,7 +150,36 @@ func (s *ProjectGitService) Snapshot(project, worktree, ref string, limit int) (
 	for i := range result.Worktrees {
 		result.Worktrees[i].Blocked = blocked(result.Worktrees[i].Path)
 	}
+	projectGitWorktreeChanges(ctx, dir, result.Worktrees)
 	return result, nil
+}
+
+// worktreeChangeProbes bounds how many other checkouts one snapshot asks.
+const worktreeChangeProbes = 24
+
+// projectGitWorktreeChanges counts the uncommitted files of every OTHER
+// checkout, so the history can show work in progress on branches that are
+// checked out elsewhere. It is a display cue and fails open to zero: a blocked
+// (sandboxed) or prunable checkout is never asked, each probe is bounded on its
+// own, and a failed one leaves the count at zero.
+func projectGitWorktreeChanges(ctx context.Context, dir string, trees []projectgit.Worktree) {
+	active := canonicalPath(dir)
+	probes := 0
+	for i := range trees {
+		tree := &trees[i]
+		if tree.Blocked || tree.Prunable || canonicalPath(tree.Path) == active {
+			continue
+		}
+		if probes++; probes > worktreeChangeProbes {
+			return
+		}
+		probe, cancel := context.WithTimeout(ctx, 3*time.Second)
+		n, err := (projectgit.Client{}).ChangeCounts(probe, tree.Path)
+		cancel()
+		if err == nil {
+			tree.Changes, tree.Added, tree.Modified, tree.Deleted, tree.Conflicts = n.Total, n.Added, n.Modified, n.Deleted, n.Conflicts
+		}
+	}
 }
 func (s *ProjectGitService) Diff(project, worktree, from, to, area, path string) (gitdiff.Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -430,3 +430,86 @@ func TestProjectGitIndexActionsReturnFreshFiles(t *testing.T) {
 		t.Fatal("unknown project accepted")
 	}
 }
+
+// A snapshot counts the uncommitted files of the OTHER checkouts, so the
+// history can show work in progress on a branch checked out elsewhere. The
+// checkout the snapshot was taken in lists its files instead, and a sandboxed
+// checkout is never asked.
+func TestProjectGitSnapshotCountsOtherWorktreeChanges(t *testing.T) {
+	root := projectGitRepo(t)
+	writeTestConfig(t, minimalConfig+fmt.Sprintf("\n[[project]]\nname = \"demo\"\npath = %q\n", root))
+	wt := filepath.Join(t.TempDir(), "checkout")
+	if out, err := exec.Command("git", "-C", root, "worktree", "add", "-b", "feature", wt).CombinedOutput(); err != nil {
+		t.Fatalf("worktree: %v %s", err, out)
+	}
+	// One tracked file to modify and one to delete, committed on the feature
+	// checkout, then two new files on top.
+	for _, name := range []string{"keep.txt", "gone.txt"} {
+		if err := os.WriteFile(filepath.Join(wt, name), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "Tracked"}} {
+		if out, err := exec.Command("git", append([]string{"-C", wt}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(wt, "keep.txt"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(wt, "gone.txt")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(wt, name), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changes := func(snap projectgit.Snapshot, path string) int {
+		t.Helper()
+		for _, tree := range snap.Worktrees {
+			if canonicalPath(tree.Path) == canonicalPath(path) {
+				return tree.Changes
+			}
+		}
+		t.Fatalf("worktree %s missing from %+v", path, snap.Worktrees)
+		return 0
+	}
+	svc := &ProjectGitService{}
+	snap, err := svc.Snapshot("demo", "", "", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := changes(snap, wt); got != 4 {
+		t.Fatalf("other checkout changes = %d, want 4", got)
+	}
+	for _, tree := range snap.Worktrees {
+		if canonicalPath(tree.Path) == canonicalPath(wt) && (tree.Added != 2 || tree.Modified != 1 || tree.Deleted != 1 || tree.Conflicts != 0) {
+			t.Fatalf("split = +%d ~%d -%d !%d, want +2 ~1 -1 !0", tree.Added, tree.Modified, tree.Deleted, tree.Conflicts)
+		}
+	}
+	if got := changes(snap, root); got != 0 {
+		t.Fatalf("active checkout changes = %d, want 0 (its files are in Files)", got)
+	}
+	// Seen from the feature checkout, that checkout is the active one.
+	if snap, err = svc.Snapshot("demo", wt, "", 200); err != nil {
+		t.Fatal(err)
+	}
+	if got := changes(snap, wt); got != 0 || len(snap.Files) != 4 {
+		t.Fatalf("active feature checkout: changes=%d files=%d", got, len(snap.Files))
+	}
+	home := os.Getenv("LOLA_HOME")
+	if err = os.MkdirAll(filepath.Join(home, "state"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal([]session.Session{{ID: "sandbox", Worktree: wt, Sandbox: "docker"}})
+	if err = os.WriteFile(filepath.Join(home, "state", "sessions.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if snap, err = svc.Snapshot("demo", "", "", 200); err != nil {
+		t.Fatal(err)
+	}
+	if got := changes(snap, wt); got != 0 {
+		t.Fatalf("sandboxed checkout was asked: changes = %d", got)
+	}
+}

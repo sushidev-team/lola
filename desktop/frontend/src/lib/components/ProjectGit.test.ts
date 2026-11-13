@@ -53,6 +53,55 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it('shows work in progress of another worktree above its commit, split by kind', async () => {
+    const data = snapshot();
+    Object.assign(data.worktrees[1], { changes: 6, modified: 3, added: 2, deleted: 1 });
+    api.Snapshot.mockResolvedValue(data);
+    await open();
+    const row = screen.getByRole('button', { name: /Working changes on feature, 6 files, worktree/ });
+    expect(row).toHaveAttribute('data-worktree-changes', '/repo-feature');
+    // Above the commit that checkout sits on, below the newer one.
+    const rows = Array.from(document.querySelectorAll('.history-list .commit-row'));
+    expect(rows.indexOf(row)).toBe(rows.indexOf(screen.getByRole('button', { name: /Initial project,/ })) - 1);
+    expect(within(row).getByTitle('3 modified files')).toHaveTextContent('3');
+    expect(within(row).getByTitle('2 added files')).toHaveTextContent('2');
+    expect(within(row).getByTitle('1 deleted files')).toHaveTextContent('1');
+    expect(row).not.toHaveTextContent(/another worktree/);
+    expect(within(screen.getByRole('region', { name: 'Worktrees' })).getByTitle('6 uncommitted files')).toBeVisible();
+  });
+  it('peeks at another worktree in the inspector without leaving this checkout', async () => {
+    const data = snapshot();
+    Object.assign(data.worktrees[1], { changes: 1, modified: 1 });
+    const other = snapshot({ path: '/repo-feature', branch: 'feature', head: oldSHA, files: [{ path: 'peeked.ts', oldPath: '', index: ' ', worktree: 'M', untracked: false, conflict: false }] });
+    api.Snapshot.mockImplementation(async (_project: string, worktree: string) => worktree === '/repo-feature' ? other : data);
+    await open();
+    const row = screen.getByRole('button', { name: /Working changes on feature, 1 file, worktree/ });
+    await fireEvent.click(row);
+    await waitFor(() => expect(api.Snapshot).toHaveBeenCalledWith(project, '/repo-feature', '', 1));
+    const heading = await screen.findByRole('group', { name: 'Worktree feature' });
+    expect(row).toHaveAttribute('aria-pressed', 'true');
+    // The history is still this checkout's.
+    expect(screen.getByRole('button', { name: /Add project workspace,/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: /^Working changes, 2 files/ })).not.toHaveAttribute('aria-pressed', 'true');
+    const inspector = screen.getByRole('complementary');
+    await waitFor(() => expect(within(inspector).getByText(/peeked\.ts/)).toBeVisible());
+    expect(within(inspector).queryByText(/new\.ts/)).toBeNull();
+    // Back to this checkout's own changes.
+    await fireEvent.click(within(heading).getByRole('button', { name: "Back to this checkout's changes" }));
+    await waitFor(() => expect(within(screen.getByRole('complementary')).getByText(/new\.ts/)).toBeVisible());
+    // "Open" switches the whole view.
+    await fireEvent.click(row);
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Worktree feature' })).getByRole('button', { name: 'Open' }));
+    await waitFor(() => expect(api.Snapshot).toHaveBeenCalledWith(project, '/repo-feature', '', 200));
+  });
+  it('draws no row for a clean, blocked or active worktree', async () => {
+    const data = snapshot();
+    data.worktrees[0].changes = 2;                       // active: its files are the In progress row
+    data.worktrees[1].changes = 4; data.worktrees[1].blocked = true;
+    api.Snapshot.mockResolvedValue(data);
+    await open();
+    expect(document.querySelector('[data-worktree-changes]')).toBeNull();
+  });
   it('shows named refs and expands extra branch and tag badges without a reference popover', async () => {
     const data = snapshot();
     data.refs = [

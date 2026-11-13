@@ -3,7 +3,7 @@ export type GitRef = { name: string; fullName: string; sha: string; remote: bool
 export type GitRemote = { name: string; host: string; owner: string; repo: string; avatarUrl: string };
 export type GitAuthorIdentity = { login: string; avatarUrl: string };
 export type GitIdentities = { authors?: Record<string, GitAuthorIdentity | undefined> | null; remoteAvatars?: Record<string, string | undefined> | null };
-export type GitWorktree = { path: string; branch: string; head: string; locked: boolean; prunable: boolean; blocked: boolean };
+export type GitWorktree = { path: string; branch: string; head: string; locked: boolean; prunable: boolean; blocked: boolean; changes?: number; added?: number; modified?: number; deleted?: number; conflicts?: number };
 export type GitFile = { path: string; oldPath: string; index: string; worktree: string; untracked: boolean; conflict: boolean };
 export type GitStash = { sha: string; selector: string; subject: string; date: string };
 export type GitBranchAction = { action: string; source: string; target: string; sourceSHA: string; targetSHA: string; remote?: string; remoteBranch?: string; mainline?: number; message?: string };
@@ -103,6 +103,30 @@ export function workingGraphConnection(rows: GraphRow[], head: string) {
   // cannot run through their nodes and imply that they own the working copy.
   const lane = index === 0 ? rows[0].lane : Math.max(...rows.slice(0, index + 1).map(row => row.width));
   return { index, lane, target: rows[index].lane };
+}
+
+export type WorktreeChange = { tree: GitWorktree; lane: number };
+
+/**
+ * Work in progress in the OTHER checkouts, keyed by the commit each one sits on.
+ * Each gets a lane of its own to the right of everything its commit's row
+ * draws (and of the active checkout's working edge when that runs past), so its
+ * edge never passes through a commit that does not own it. A checkout whose
+ * HEAD is outside the loaded history is left out rather than attached to a
+ * wrong commit.
+ */
+export function worktreeChanges(rows: GraphRow[], worktrees: GitWorktree[], activePath: string, working: { index: number; lane: number } | null): Map<string, WorktreeChange[]> {
+  const index = new Map(rows.map((row, i) => [row.sha, i]));
+  const out = new Map<string, WorktreeChange[]>();
+  for (const tree of worktrees) {
+    const at = index.get(tree.head);
+    if (at === undefined || !tree.changes || tree.blocked || tree.prunable || tree.path === activePath) continue;
+    const list = out.get(tree.head) ?? [];
+    const base = Math.max(rows[at].width, working && at <= working.index ? working.lane + 1 : 0);
+    list.push({ tree, lane: base + list.length });
+    out.set(tree.head, list);
+  }
+  return out;
 }
 
 /** Follow parent identities, never author names or ref labels: merges join actual ancestry. */
