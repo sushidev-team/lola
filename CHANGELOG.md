@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/sushidev-team/lola/compare/v0.5.0...v0.6.0) (2026-11-13)
+
+
+### Features
+
+* **ai:** add per-provider model and effort profiles ([9dd0f93](https://github.com/sushidev-team/lola/commit/9dd0f93dd551792456139cd05b668e3b6aa9ffe8))
+* **desktop:** refine Git workspace navigation and branch actions ([ef9cf51](https://github.com/sushidev-team/lola/commit/ef9cf5159344e4d5068ab6f0a4f3ef1aeaafe967))
+
+
+### Bug Fixes
+
+* **deps:** bump devalue, vite and source-map-js to patched versions ([35b5bf5](https://github.com/sushidev-team/lola/commit/35b5bf51cf39819ed02aae9d1013c39bff8199f5))
+* **deps:** patch devalue, vite, source-map-js advisories ([435809a](https://github.com/sushidev-team/lola/commit/435809a83c2fdcc65ec52939272c433b1dd56167))
+* **desktop:** explain Git failures with recovery actions ([5610dc6](https://github.com/sushidev-team/lola/commit/5610dc6904696fe90488a2f18ae6ed73735bca92))
+* **desktop:** show success toasts for Git actions ([c6e9700](https://github.com/sushidev-team/lola/commit/c6e97006a368a7aba2e672d61311b2db938fa271))
+* **desktop:** simplify Git deletion dialogs ([7d43792](https://github.com/sushidev-team/lola/commit/7d43792c5d1487fef83c4bf8bb77c77b5f88de37))
+
 ## [0.5.0](https://github.com/sushidev-team/lola/compare/v0.4.0...v0.5.0) (2026-11-12)
 
 
