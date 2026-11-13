@@ -1,9 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { ansiToHtml, trimTrailingBlankLines, paneColumns } from "./ansi";
-import { FLAVORS, toAnsi } from "./catppuccin";
+import { DEFAULT_THEME_ID, FLAVORS, toAnsi } from "./catppuccin";
 
 const mocha = toAnsi(FLAVORS["catppuccin-mocha"]);
 const latte = toAnsi(FLAVORS["catppuccin-latte"]);
+// The default flavor's normal and bright red, read from the palette rather
+// than spelled as hex: the palettes are tuned over time, and what these tests
+// hold is which slot a code paints, not the slot's current shade.
+const defaults = toAnsi(FLAVORS[DEFAULT_THEME_ID]);
+const RED = defaults.ansi16[1];
+const BRIGHT_RED = defaults.ansi16[9];
 
 describe("ansiToHtml", () => {
   it("passes plain text through, HTML-escaped", () => {
@@ -13,7 +19,7 @@ describe("ansiToHtml", () => {
 
   it("wraps colored runs in styled spans", () => {
     const html = ansiToHtml("\x1b[31mred\x1b[0m");
-    expect(html).toContain("color:#f38ba8"); // Catppuccin Mocha red
+    expect(html).toContain(`color:${RED}`); // the default flavor's red
     expect(html).toContain(">red<");
   });
 
@@ -26,7 +32,7 @@ describe("ansiToHtml", () => {
     // Code 0 must reset in place and CONTINUE, so the trailing 31 still paints
     // red. The old early-return dropped everything after the 0.
     const html = ansiToHtml("\x1b[0;31mred");
-    expect(html).toContain("color:#f38ba8"); // Catppuccin Mocha red
+    expect(html).toContain(`color:${RED}`); // the default flavor's red
     expect(html).toContain(">red<");
   });
 
@@ -37,16 +43,17 @@ describe("ansiToHtml", () => {
 
   it("handles 256-color fg", () => {
     // Index 9 is BRIGHT red, which is a distinct colour from index 1 in
-    // Ghostty's Catppuccin (#f37799 vs #f38ba8). The old table duplicated the
-    // normal colours into slots 9-14, so this used to be indistinguishable.
+    // every flavor. The old table duplicated the normal colours into slots
+    // 9-14, so this used to be indistinguishable.
+    expect(BRIGHT_RED).not.toBe(RED);
     const html = ansiToHtml("\x1b[38;5;9mx");
-    expect(html).toContain("color:#f37799");
-    expect(html).not.toContain("color:#f38ba8");
+    expect(html).toContain(`color:${BRIGHT_RED}`);
+    expect(html).not.toContain(`color:${RED}`);
   });
 
   it("distinguishes bright from normal for SGR 90-97", () => {
-    expect(ansiToHtml("\x1b[91mx")).toContain("color:#f37799"); // bright red
-    expect(ansiToHtml("\x1b[31mx")).toContain("color:#f38ba8"); // normal red
+    expect(ansiToHtml("\x1b[91mx")).toContain(`color:${BRIGHT_RED}`); // bright red
+    expect(ansiToHtml("\x1b[31mx")).toContain(`color:${RED}`); // normal red
   });
 
   it("applies bold weight", () => {
@@ -61,7 +68,7 @@ describe("ansiToHtml", () => {
   // --- palette plumbing -----------------------------------------------------
 
   it("defaults to the default flavor's palette", () => {
-    expect(ansiToHtml("\x1b[31mx")).toBe(ansiToHtml("\x1b[31mx", mocha));
+    expect(ansiToHtml("\x1b[31mx")).toBe(ansiToHtml("\x1b[31mx", defaults));
   });
 
   it("emits a different colour when the flavor changes", () => {
@@ -89,7 +96,7 @@ describe("ansiToHtml", () => {
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
     // The only attribute on the only tag is style=.
-    expect(html.match(/<span [^>]*>/g)).toEqual(['<span style="color:#f38ba8">']);
+    expect(html.match(/<span [^>]*>/g)).toEqual([`<span style="color:${RED}">`]);
   });
 
   it("cannot be made to emit a quote-broken style attribute", () => {
@@ -144,7 +151,7 @@ describe("OSC handling and paneColumns", () => {
 
   it("keeps SGR colouring around a stripped hyperlink", () => {
     const html = ansiToHtml("\x1b[31m" + link + "\x1b[0m");
-    expect(html).toContain("color:#f38ba8");
+    expect(html).toContain(`color:${RED}`);
     expect(html).toContain(">PR #248<");
   });
 

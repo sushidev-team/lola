@@ -125,3 +125,177 @@ func TestDefaultDeviceName(t *testing.T) {
 		t.Fatalf("DefaultDeviceName = %q is not valid", n)
 	}
 }
+
+// joinFixture is a config file, a state dir and a fake hub whose enroll
+// answer the test controls.
+func joinFixture(t *testing.T, answer func(req hubproto.EnrollRequest) (int, any)) (JoinOptions, func() *fakeHub) {
+	t.Helper()
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[[project]]\nname = \"web\"\npath = \"/tmp/web\"\nrepo = \"acme/web\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var fh *fakeHub
+	var srvURL string
+	newClient := func(url string, key *Key) (*Client, error) {
+		if fh == nil {
+			h, srv := newFakeHub(t, key)
+			fh, srvURL = h, srv.URL
+			fh.routes["POST "+hubproto.PathEnroll] = func(body []byte) (int, any) {
+				var req hubproto.EnrollRequest
+				json.Unmarshal(body, &req)
+				return answer(req)
+			}
+		}
+		return NewClient(srvURL, key)
+	}
+	return JoinOptions{URL: "http://127.0.0.1:1", Token: "tok_0123456789abcdef", DeviceName: "mac",
+		ConfigPath: cfgPath, StateDir: filepath.Join(root, "state"), NewClient: newClient}, func() *fakeHub { return fh }
+}
+
+func enrolled(req hubproto.EnrollRequest, extra func(*hubproto.EnrollResponse)) (int, any) {
+	pub, _ := hubproto.DecodePublicKey(req.PublicKey)
+	r := hubproto.EnrollResponse{DeviceID: hubproto.DeviceID(pub), Org: "acme"}
+	if extra != nil {
+		extra(&r)
+	}
+	return 200, r
+}
+
+// The hub's stored (possibly suffixed) name and the member label land in the
+// identity; the config edited while the hub answered is not overwritten.
+func TestJoinKeepsTheHubsNameAndAConcurrentEdit(t *testing.T) {
+	var o JoinOptions
+	o, _ = joinFixture(t, func(req hubproto.EnrollRequest) (int, any) {
+		// A person edits the config while the hub is answering.
+		cfg, err := config.Load(o.ConfigPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Defaults.GlobalCap = 7
+		if err := cfg.Save(o.ConfigPath); err != nil {
+			t.Fatal(err)
+		}
+		// The pending record exists before the token is spent.
+		if _, _, ok := InterruptedJoin(o.StateDir); !ok {
+			t.Error("no pending-join record while the token is in flight")
+		}
+		return enrolled(req, func(r *hubproto.EnrollResponse) { r.DeviceName = "mac-2"; r.Member = "Ana" })
+	})
+	res, err := Join(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Identity.DeviceName != "mac-2" || res.Identity.Member != "Ana" {
+		t.Fatalf("identity = %+v", res.Identity)
+	}
+	cfg, err := config.Load(o.ConfigPath)
+	if err != nil || cfg.Defaults.GlobalCap != 7 || !cfg.Hub.Enabled {
+		t.Fatalf("config = %+v (cap %d), %v", cfg.Hub, cfg.Defaults.GlobalCap, err)
+	}
+	if _, _, ok := InterruptedJoin(o.StateDir); ok {
+		t.Error("the pending record must go once the identity is saved")
+	}
+	if !strings.Contains(LocalStatus(cfg, o.StateDir).Render(), `member "Ana"`) {
+		t.Error("status must show the member label")
+	}
+}
+
+// A hub reply that does not validate (a malformed member label) is refused
+// whole, and the error says the token was most likely used.
+func TestJoinRefusesAMalformedReply(t *testing.T) {
+	o, _ := joinFixture(t, func(req hubproto.EnrollRequest) (int, any) {
+		return enrolled(req, func(r *hubproto.EnrollResponse) { r.Member = "\x1b[2Jevil" })
+	})
+	_, err := Join(context.Background(), o)
+	if !errors.Is(err, ErrTokenUsed) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := LoadIdentity(o.StateDir); !errors.Is(err, ErrNotJoined) {
+		t.Fatalf("identity saved from a refused reply: %v", err)
+	}
+	if _, _, ok := InterruptedJoin(o.StateDir); !ok {
+		t.Error("the pending record must stay: the token was most likely used")
+	}
+}
+
+// Enroll succeeded but the config cannot be saved: the error says the token
+// was used and the identity is kept.
+func TestJoinSaysTheTokenWasUsed(t *testing.T) {
+	var o JoinOptions
+	o, _ = joinFixture(t, func(req hubproto.EnrollRequest) (int, any) {
+		// Break the config file after the pre-flight load.
+		if err := os.WriteFile(o.ConfigPath, []byte("not = [toml"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return enrolled(req, nil)
+	})
+	_, err := Join(context.Background(), o)
+	if !errors.Is(err, ErrTokenUsed) || !strings.Contains(err.Error(), "identity is saved") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), o.Token) {
+		t.Fatal("the error echoes the token")
+	}
+	if _, err := LoadIdentity(o.StateDir); err != nil {
+		t.Fatalf("identity must be kept: %v", err)
+	}
+}
+
+// A refused enroll leaves no pending record and spends nothing locally.
+func TestJoinRefusedLeavesNoPendingRecord(t *testing.T) {
+	o, _ := joinFixture(t, func(hubproto.EnrollRequest) (int, any) {
+		return 401, hubproto.ErrorResponse{Error: "bad token", Code: hubproto.CodeUnauthorized}
+	})
+	if _, err := Join(context.Background(), o); err == nil || errors.Is(err, ErrTokenUsed) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, _, ok := InterruptedJoin(o.StateDir); ok {
+		t.Error("a refused join must not leave a pending record")
+	}
+}
+
+// A revoked device: the identity goes, the status says revoked, a new join
+// clears it, a leave records the hub it left.
+func TestRevocationAndLeaveRecord(t *testing.T) {
+	o, _ := joinFixture(t, func(req hubproto.EnrollRequest) (int, any) { return enrolled(req, nil) })
+	if _, err := Join(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC)
+	r, err := MarkRevoked(o.StateDir, at)
+	if err != nil || r.Org != "acme" || r.URL != o.URL {
+		t.Fatalf("MarkRevoked = %+v, %v", r, err)
+	}
+	if _, err := LoadIdentity(o.StateDir); !errors.Is(err, ErrNotJoined) {
+		t.Fatalf("identity after revoke: %v", err)
+	}
+	if _, err := LoadKey(o.StateDir); err != nil {
+		t.Fatalf("the key must be kept: %v", err)
+	}
+	cfg, _ := config.Load(o.ConfigPath)
+	st := LocalStatus(cfg, o.StateDir)
+	if st.Membership() != "revoked" || !strings.Contains(st.Render(), "revoked") {
+		t.Fatalf("status = %+v\n%s", st, st.Render())
+	}
+	if _, err := MarkRevoked(o.StateDir, at); err == nil {
+		t.Error("nothing to revoke without an identity")
+	}
+	if _, err := Join(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if st := LocalStatus(cfg, o.StateDir); st.Membership() != "joined" || st.Revoked != nil {
+		t.Fatalf("after rejoin = %+v", st)
+	}
+	o2 := LeaveOptions{ConfigPath: o.ConfigPath, StateDir: o.StateDir, Now: func() time.Time { return at }}
+	if err := Leave(o2); err != nil {
+		t.Fatal(err)
+	}
+	left, ok := LoadLeft(o.StateDir)
+	if !ok || left.URL != o.URL || left.Org != "acme" || !left.At.Equal(at) {
+		t.Fatalf("left record = %+v, %v", left, ok)
+	}
+	if st := LocalStatus(cfg, o.StateDir); st.Membership() != "not joined" {
+		t.Fatalf("after leave = %s", st.Membership())
+	}
+}

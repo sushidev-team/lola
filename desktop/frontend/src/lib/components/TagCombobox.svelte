@@ -9,6 +9,10 @@
   // anything not suggested. Enter adds the highlighted suggestion or the typed
   // text; Backspace in an empty field removes the last chip; Escape closes the
   // list (and stops there, so a surrounding dialog stays open).
+  //
+  // Keyboard: focus stays in the field (aria-activedescendant names the
+  // highlighted option). ↓/↑ open the list and move through it, wrapping;
+  // Home/End jump while it is open; the highlighted option scrolls into view.
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
 
@@ -50,14 +54,27 @@
     }
   }
 
+  const listOpen = $derived(open && shown.length > 0);
+
+  function move(to: number) {
+    open = true;
+    const n = shown.length;
+    if (!n) return;
+    active = ((to % n) + n) % n;
+    // The list renders on open; scroll once it is there.
+    queueMicrotask(() => document.getElementById(`${id}-opt-${active}`)?.scrollIntoView?.({ block: "nearest" }));
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      open = true;
-      active = Math.min(active + 1, shown.length - 1);
+      move(listOpen ? active + 1 : 0);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      active = Math.max(active - 1, -1);
+      move(listOpen ? (active < 0 ? shown.length - 1 : active - 1) : shown.length - 1);
+    } else if ((e.key === "Home" || e.key === "End") && listOpen && active >= 0) {
+      e.preventDefault();
+      move(e.key === "Home" ? 0 : shown.length - 1);
     } else if (e.key === "Enter") {
       e.preventDefault();
       add(open && active >= 0 && shown[active] ? shown[active].value : query);
@@ -88,10 +105,11 @@
       class="min-w-[8rem] flex-1 bg-transparent px-1 py-0.5 text-ink outline-none placeholder:text-placeholder"
       role="combobox"
       aria-label={label}
-      aria-expanded={open && shown.length > 0}
-      aria-controls={`${id}-list`}
+      aria-expanded={listOpen}
+      aria-controls={listOpen ? `${id}-list` : undefined}
+      aria-haspopup="listbox"
       aria-autocomplete="list"
-      aria-activedescendant={open && active >= 0 ? `${id}-opt-${active}` : undefined}
+      aria-activedescendant={listOpen && active >= 0 ? `${id}-opt-${active}` : undefined}
       aria-invalid={error ? "true" : undefined}
       spellcheck="false"
       autocomplete="off"
@@ -103,13 +121,20 @@
       {onkeydown}
     />
   </div>
-  {#if open && shown.length > 0}
+  {#if listOpen}
     <ul id={`${id}-list`} role="listbox" aria-label={`${label} suggestions`}
       class="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-auto rounded border border-edge bg-panel py-1 shadow-lg">
       {#each shown as s, i (s.value)}
-        <li id={`${id}-opt-${i}`} role="option" aria-selected={i === active}
+        <!-- Options are reached from the field (aria-activedescendant), so
+             they take no focus themselves; a pointer press keeps the field's.
+             A press adds on mousedown; a click with no press behind it (an
+             assistive technology activating the option) adds on click. -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <li id={`${id}-opt-${i}`} role="option" aria-selected={i === active} tabindex="-1"
+          data-active={i === active ? "" : undefined}
           class="flex cursor-pointer items-center justify-between gap-3 px-2.5 py-1.5 text-sm {i === active ? 'bg-edge text-ink' : 'text-ink'}"
           onmousedown={(e) => { e.preventDefault(); add(s.value); }}
+          onclick={(e) => { if (e.detail === 0) { add(s.value); input?.focus(); } }}
           onmouseenter={() => (active = i)}>
           <span>{s.label}</span>
           {#if s.hint}<span class="text-faint">{s.hint}</span>{/if}

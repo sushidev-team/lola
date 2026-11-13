@@ -1,6 +1,7 @@
 <script lang="ts">
-  // "Fix all N" with a menu half: the main part claims a group's advisories for
-  // one agent; the arrow offers the wider "Update all dependencies…".
+  // "Fix all N" with a menu half: the main part claims a group's chores (its
+  // advisories for one agent, each failing bump on its own); the arrow offers
+  // the wider "Update all dependencies…", which needs at least one advisory.
   import { tick } from "svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -11,6 +12,7 @@
     title = "",
     disabled = false,
     loading = false,
+    updateDisabled = false,
     onFix,
     onUpdateAll,
   }: {
@@ -18,6 +20,8 @@
     title?: string;
     disabled?: boolean;
     loading?: boolean;
+    /** No advisory to update around: the menu entry says so instead of failing later. */
+    updateDisabled?: boolean;
     onFix: () => void;
     onUpdateAll: () => void;
   } = $props();
@@ -62,7 +66,8 @@
   {#if open}
     <div bind:this={menu} id={`${id}-menu`} role="menu" tabindex="-1" aria-label="More ways to fix"
       class="absolute right-0 top-full z-50 mt-1 w-60 rounded-lg border border-edge bg-panel p-1 shadow-xl" onkeydown={onKey}>
-      <MenuItem onclick={() => { close(); onUpdateAll(); }}>Update all dependencies…</MenuItem>
+      <MenuItem disabled={updateDisabled} onclick={() => { close(); onUpdateAll(); }}>Update all dependencies…</MenuItem>
+      {#if updateDisabled}<p class="px-2 pb-1 text-sm text-faint">Needs at least one open security advisory.</p>{/if}
     </div>
   {/if}
 </div>

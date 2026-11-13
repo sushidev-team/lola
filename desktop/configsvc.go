@@ -18,6 +18,7 @@ import (
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/secrets"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // First-run setup constants, matching the TUI wizard (internal/tui/setup.go) so
@@ -817,6 +818,9 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 		return ProjectFormDTO{}, err
 	}
 	if name == "" {
+		// Enabled stays false here: a project without a team polls nothing,
+		// so the form turns Enabled on itself once a team is chosen for a NEW
+		// project (unless the human already set the box), never before.
 		blank := config.Project{
 			DefaultBranch: config.DefaultBranchName,
 			CycleMode:     "none",
@@ -1298,6 +1302,27 @@ func (s *ConfigService) ValidateLinearKey(key string) error {
 	defer cancel()
 	_, err := linear.New(config.DefaultEndpoint, key).Viewer(ctx)
 	return err
+}
+
+// linearKeyHelpURL is Linear's page for personal API keys (Settings → Account
+// → Security & access).
+const linearKeyHelpURL = "https://linear.app/settings/account/security"
+
+// openBrowser is the seam over the system browser, so tests never open one.
+var openBrowser = func(url string) error {
+	app := application.Get()
+	if app == nil || app.Browser == nil {
+		return errors.New("cannot open a browser from here")
+	}
+	return app.Browser.OpenURL(url)
+}
+
+// OpenLinearKeyHelp opens Linear's API-key page in the default browser. The
+// setup screen needs it BEFORE any daemon runs, so the daemon's openURL cannot
+// serve it there. It takes no argument on purpose: the one URL it opens is
+// lola's own constant, so the frontend cannot use it as a general opener.
+func (s *ConfigService) OpenLinearKeyHelp() error {
+	return openBrowser(linearKeyHelpURL)
 }
 
 // LinearKeyStatusDTO describes WHERE the Linear key lives and whether it can be

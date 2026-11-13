@@ -620,12 +620,19 @@ func configCmd() *cobra.Command {
 }
 
 // setupCmd always runs the first-run configuration wizard, even when a config
-// already exists (bare `lola` only enters the wizard when none does).
+// already exists (bare `lola` only enters the wizard when none does). The help
+// names exactly the wizard's steps (internal/tui/setup.go): it has no project
+// step, so it says projects come afterwards rather than promising one.
 func setupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Run the first-run configuration wizard (Linear key, project, defaults)",
-		RunE:  func(c *cobra.Command, _ []string) error { return tui.Setup() },
+		Short: "Run the first-run configuration wizard (Linear key, agent, theme, limits, poll interval); add projects afterwards",
+		Long: "Run the first-run configuration wizard: the Linear API key (checked against Linear, " +
+			"saved in the macOS Keychain), the default coding agent, the theme, the agent limits " +
+			"per project and in total, and the poll interval.\n\n" +
+			"It does not add a project. Add one afterwards in the app or the TUI (`n` on the " +
+			"project list): pick its folder, then its Linear team and the workflow states to pick up.",
+		RunE: func(c *cobra.Command, _ []string) error { return tui.Setup() },
 	}
 }
 

@@ -5,6 +5,7 @@
   import { projectActions, openSession, openShell, newSessionHere } from "$lib/projectActions";
   import { ssh } from "$lib/ssh.svelte";
   import { hub } from "$lib/hub.svelte";
+  import { hubReason } from "$lib/hubboard";
   import { matchesSearch, searchMatch } from "$lib/search";
   import SearchHighlight from "./SearchHighlight.svelte";
   import Modal from "./Modal.svelte";
@@ -24,7 +25,8 @@
       ...ssh.hosts.map((h) => ({ id: `ssh:${h.name}`, label: `SSH to ${h.label || h.name}`, detail: `Action · ${h.tier}`, run: () => ssh.newSession(h.name) })),
       { id: "activity", label: "View all activity", detail: "Action", run: () => nav.openOverlay("activity") },
       { id: "settings", label: "Settings", detail: "Action", run: () => nav.openOverlay("settings") },
-      { id: "team-open", label: "Team: Open", detail: "Action · the team hub's chores and devices", run: () => nav.goTeam() },
+      { id: "team-open", label: "Team: Open", detail: hub.needsCount ? `Action · ${hub.needsCount} ${hub.needsCount === 1 ? "chore needs" : "chores need"} you` : "Action · the team hub's chores and Macs", run: () => nav.goTeam() },
+      ...(hub.joined ? hub.needs : []).slice(0, 5).map((n) => ({ id: `team-needs:${n.id}`, label: `Team: ${n.title}`, detail: `Needs you · ${n.why}`, run: () => { hub.focus(n.id); nav.goTeam(); } })),
       { id: "team-sync", label: "Team: Sync now", detail: "Action · ask the team hub for news", run: () => { void syncTeam(); } },
     ];
     const projects = store.projects.map(p => ({ id: `p:${p.name}`, label: store.displayNameFor(p.name), detail: p.path || p.repo, project: p.name, run: () => nav.goDetail(p.name) }));
@@ -36,10 +38,11 @@
   const project = $derived(selected?.project ? store.projectByName(selected.project) : undefined);
   const actions = $derived(project ? projectActions(project) : []);
   onMount(() => { void tick().then(() => input?.focus()); void ssh.loadHosts(); });
-  // The daemon answers in its own words; a hub that is not joined says so.
+  // The daemon answers in its own words, through the one mapper (hubReason);
+  // a hub that is not joined says so.
   async function syncTeam() {
     const r = await hub.sync();
-    store.setFlash(r.ok ? "Team hub sync queued" : r.error, r.ok ? "good" : "warn");
+    store.setFlash(r.ok ? "Team hub sync queued" : hubReason(r.error), r.ok ? "good" : "warn");
   }
   function run(action: () => void) { nav.closeOverlay(); action(); }
   function key(e: KeyboardEvent) {

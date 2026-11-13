@@ -1,3 +1,22 @@
+<script lang="ts" module>
+  export type LoginFailure = "cancelled" | "timeout" | "missing" | "no_token" | "store" | "other";
+
+  /**
+   * The person-facing words for a login that ended without a token, keyed on
+   * the backend's own fixed texts (desktop/sandboxlogin.go). The text never
+   * carries a token: the backend scrubs it before it reaches this page.
+   */
+  export function loginFailure(raw: string, cancelled = false): { kind: LoginFailure; text: string } {
+    const s = raw.replace(/^Error:\s*/, "");
+    if (cancelled) return { kind: "cancelled", text: "The login was cancelled before Claude gave a token. Start it again, or paste a token instead." };
+    if (/not found on PATH|executable file not found/i.test(s)) return { kind: "missing", text: "Claude Code is not installed on this Mac, so Lola cannot run the login. Install it and try again, or paste a token made on another computer." };
+    if (/timed out/i.test(s)) return { kind: "timeout", text: "The login timed out before it finished in the browser. Start it again, or paste a token instead." };
+    if (/without a token/i.test(s)) return { kind: "no_token", text: "Claude finished without giving a token. Start it again, or paste a token instead." };
+    if (/storing it failed/i.test(s)) return { kind: "store", text: s };
+    return { kind: "other", text: s || "The login ended without a token." };
+  }
+</script>
+
 <script lang="ts">
   // "Log in with Claude": runs `claude setup-token` in the desktop process
   // (SandboxLoginService) and shows its screen here, so the user finishes the
@@ -16,7 +35,11 @@
   import { store } from "$lib/store.svelte";
   import { TERM_FONT, appearance } from "$lib/theme-runtime.svelte";
 
-  let { onStored }: { onStored?: () => void } = $props();
+  let { onStored, onFailed }: {
+    onStored?: () => void;
+    /** The login ended without a token; the caller shows the paste fallback. */
+    onFailed?: (kind: LoginFailure) => void;
+  } = $props();
 
   type Frame = { run: number; data: string };
   type Done = { run: number; stored: boolean; cancelled: boolean; error: string };
@@ -71,12 +94,20 @@
     onStored?.();
   }
 
+  function fail(raw: string, cancelled = false) {
+    const f = loginFailure(raw, cancelled);
+    err = f.text;
+    onFailed?.(f.kind);
+  }
+
   function finish(d: Done) {
     if (d.stored) return finishStored();
     run = 0;
     teardown();
     phase = "idle";
-    err = d.cancelled ? "" : d.error || "The login ended without a token.";
+    // A Cancel pressed here never reaches this (run is 0 by then): a
+    // cancelled end is one the person did not ask for, so it is said.
+    fail(d.error, d.cancelled);
   }
 
   async function start() {
@@ -127,7 +158,7 @@
     } catch (e) {
       teardown();
       phase = "idle";
-      err = String(e);
+      fail(String(e instanceof Error ? e.message : e));
     }
   }
 

@@ -39,6 +39,14 @@ describe("SandboxLoginPrompt", () => {
     await waitFor(() => expect(screen.queryByText("Connect Claude for Docker workspaces")).not.toBeInTheDocument());
   });
 
+  it("opens the paste path at once when the login fails", async () => {
+    status.mockResolvedValue({ tokenStored: false, claudeSource: "" });
+    render(SandboxLoginPrompt);
+    await fireEvent.click(await screen.findByRole("button", { name: "Fail the login" }));
+    expect(screen.getByLabelText("Paste the token")).toBeInTheDocument();
+    expect(screen.getByText("claude setup-token")).toBeInTheDocument();
+  });
+
   it("disappears once Log in with Claude stored a token", async () => {
     status.mockResolvedValue({ tokenStored: false, claudeSource: "" });
     render(SandboxLoginPrompt);

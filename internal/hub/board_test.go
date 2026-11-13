@@ -9,6 +9,7 @@ import (
 
 	"github.com/sushidev-team/lola/hubproto"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 func boardRow(id string) hubproto.ItemView {
@@ -103,5 +104,42 @@ func TestAcceptIntent(t *testing.T) {
 	cfg := &config.Config{Projects: []config.Project{*p, {Name: "other", Repo: "acme/web"}, {Name: "x", Repo: "acme/x"}}}
 	if got := ProjectsFor(cfg, it); len(got) != 2 {
 		t.Errorf("ProjectsFor = %d", len(got))
+	}
+}
+
+// FillBoardItem carries the lifecycle fields of a validated row: owner and
+// member labels, history in order, last failure, reopen count, claim time.
+func TestFillBoardItem(t *testing.T) {
+	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	v := hubproto.ItemView{
+		State: hubproto.StateInReview, LastFail: hubproto.FailCI, Reopened: 2, ClaimedAt: at,
+		Owner: &hubproto.OwnerView{Mine: true, DeviceName: "mac-2", Member: "Ana"},
+		History: []hubproto.Attempt{
+			{DeviceName: "mac", Member: "Ana", Action: hubproto.AttemptFailed, Reason: hubproto.FailCI, At: at.Add(-time.Hour)},
+			{DeviceName: "mac-2", Member: "Ana", Action: hubproto.AttemptInReview, PRURL: "https://github.com/acme/web/pull/7", At: at},
+		},
+	}
+	var bi protocol.HubBoardItem
+	FillBoardItem(&bi, v)
+	if bi.Owner == nil || !bi.Owner.Mine || bi.Owner.Member != "Ana" || bi.Owner.DeviceName != "mac-2" {
+		t.Errorf("owner = %+v", bi.Owner)
+	}
+	if bi.LastFail != "ci_failed" || bi.Reopened != 2 || !bi.ClaimedAt.Equal(at) || bi.Lease != nil {
+		t.Errorf("row = %+v", bi)
+	}
+	if len(bi.History) != 2 || bi.History[0].Action != "failed" || bi.History[0].Reason != "ci_failed" ||
+		bi.History[1].Action != "in_review" || bi.History[1].PRURL != "https://github.com/acme/web/pull/7" {
+		t.Errorf("history = %+v", bi.History)
+	}
+	lease := hubproto.ItemView{Lease: &hubproto.LeaseView{DeviceName: "mac", Member: "Bo", Expires: at}}
+	bi = protocol.HubBoardItem{Lease: &protocol.HubLeaseInfo{DeviceName: "mac", Expires: at}}
+	FillBoardItem(&bi, lease)
+	if bi.Lease.Member != "Bo" {
+		t.Errorf("lease = %+v", bi.Lease)
+	}
+	var di protocol.HubDeviceInfo
+	FillDeviceInfo(&di, hubproto.DeviceView{Member: "Ana", PolicyVersion: 3})
+	if di.Member != "Ana" || di.PolicyVersion != 3 {
+		t.Errorf("device = %+v", di)
 	}
 }

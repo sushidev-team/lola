@@ -118,8 +118,10 @@ func (c *Client) Enroll(ctx context.Context, token, deviceName string) (hubproto
 	if resp.DeviceID != c.DeviceID() {
 		return hubproto.EnrollResponse{}, invalidResponse("device_id does not match this key")
 	}
-	if !hubproto.ValidOrg(resp.Org) {
-		return hubproto.EnrollResponse{}, invalidResponse("org")
+	// org, and the member label and stored device name a newer hub adds
+	// (both optional: an older hub sends neither).
+	if err := resp.Validate(); err != nil {
+		return hubproto.EnrollResponse{}, invalidResponse("enroll: " + err.Error())
 	}
 	return resp, nil
 }
@@ -229,13 +231,29 @@ func (c *Client) Complete(ctx context.Context, id string, req hubproto.CompleteR
 	return c.do(ctx, http.MethodPost, path, req, nil)
 }
 
-// Fail reports a failed item with a reason from the closed set.
-func (c *Client) Fail(ctx context.Context, id string, reason hubproto.FailReason) error {
+// Progress reports the PR opened for a claimed item (claimed -> in_review)
+// or, from in_review, where it stands now. A hub that predates the frame
+// answers 404; the caller then falls back to Complete.
+func (c *Client) Progress(ctx context.Context, id string, req hubproto.ProgressRequest) error {
+	path := hubproto.ProgressPath(id)
+	if path == "" {
+		return errors.New("hub: invalid item id")
+	}
+	if err := req.Validate(); err != nil {
+		return err
+	}
+	return c.do(ctx, http.MethodPost, path, req, nil)
+}
+
+// Fail reports a failed item with a reason from the closed set, and
+// optionally the PR the attempt left and the group of failures it belongs to.
+// A hub that predates pr_url / group refuses them (400): the caller retries
+// with the reason alone.
+func (c *Client) Fail(ctx context.Context, id string, req hubproto.FailRequest) error {
 	path := hubproto.FailPath(id)
 	if path == "" {
 		return errors.New("hub: invalid item id")
 	}
-	req := hubproto.FailRequest{Reason: reason}
 	if err := req.Validate(); err != nil {
 		return err
 	}

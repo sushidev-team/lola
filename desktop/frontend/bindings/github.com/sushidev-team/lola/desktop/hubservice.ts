@@ -85,6 +85,13 @@ export function Release(itemID: string): $CancellablePromise<protocol$0.HubRelea
 }
 
 /**
+ * Stats reads the org's daily counters and sums the last seven days.
+ */
+export function Stats(): $CancellablePromise<$models.HubStatsDTO> {
+    return $Call.ByID(440613761);
+}
+
+/**
  * Status is the daemon's hub view: identity, connection, policy, sessions.
  */
 export function Status(): $CancellablePromise<protocol$0.HubStatusData> {

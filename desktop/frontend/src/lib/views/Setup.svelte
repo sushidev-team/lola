@@ -8,6 +8,7 @@
   import { POLL_INTERVALS } from "$lib/settingPresets";
   import { appearance, FLAVORS, THEME_IDS, DEFAULT_THEME_ID, type ThemeId } from "$lib/theme-runtime.svelte";
   import Button from "$lib/components/Button.svelte";
+  import SetupChecklist from "$lib/components/SetupChecklist.svelte";
 
   // First-run setup connects Linear and saves workspace defaults. Repositories
   // are added from the empty workspace after setup, just as in the TUI.
@@ -25,7 +26,27 @@
 
   const invalidLimit = (value: number | null | undefined) => value != null && (!Number.isInteger(value) || value < 1);
   const limitsInvalid = $derived(invalidLimit(concurrencyCap) || invalidLimit(globalCap));
-  const canSubmit = $derived(key.trim() !== "" && !limitsInvalid && keyState !== "checking" && !submitting);
+  // A check in flight does not disable "Start Lola": the blur that starts it
+  // lands just before the click, and submit waits for that same check.
+  const canSubmit = $derived(key.trim() !== "" && !limitsInvalid && !submitting);
+  // The checklist's key row follows this screen's own check: no config exists
+  // yet, so the doctor has no key to look at.
+  const keyItem = $derived(keyState === "ok" ? "ok" : keyState === "bad" ? "todo" : "unknown");
+
+  // Linear's page for personal API keys. Opened by the system browser, never
+  // window.open: through the daemon when one runs, else through the app,
+  // which opens only this one fixed page (no daemon runs before setup).
+  const LINEAR_KEY_URL = "https://linear.app/settings/account/security";
+  let helpErr = $state("");
+  async function openKeyHelp() {
+    helpErr = "";
+    if (store.alive) return void (await store.openURL(LINEAR_KEY_URL));
+    try {
+      await ConfigService.OpenLinearKeyHelp();
+    } catch {
+      helpErr = `Open ${LINEAR_KEY_URL} in your browser.`;
+    }
+  }
 
   onMount(() => {
     let active = true;
@@ -36,21 +57,29 @@
     return () => { active = false; };
   });
 
-  async function validateKey() {
-    if (!key.trim()) return;
+  // Run on blur as well as on the button, so the verdict is on screen before
+  // "Start Lola" is pressed. One check at a time; a later caller (submit)
+  // waits for the one in flight instead of asking Linear twice.
+  let pending: Promise<void> | null = null;
+  function validateKey(): Promise<void> {
+    if (!key.trim()) return Promise.resolve();
+    if (pending) return pending;
     const checkedKey = key;
     keyState = "checking";
     keyMsg = "";
-    try {
-      await ConfigService.ValidateLinearKey(checkedKey.trim());
-      if (key !== checkedKey) return;
-      keyState = "ok";
-      keyMsg = "Key is valid.";
-    } catch (e) {
-      if (key !== checkedKey) return;
-      keyState = "bad";
-      keyMsg = String(e);
-    }
+    pending = (async () => {
+      try {
+        await ConfigService.ValidateLinearKey(checkedKey.trim());
+        if (key !== checkedKey) return;
+        keyState = "ok";
+        keyMsg = "Key is valid.";
+      } catch (e) {
+        if (key !== checkedKey) return;
+        keyState = "bad";
+        keyMsg = String(e);
+      }
+    })().finally(() => { pending = null; });
+    return pending;
   }
 
   async function submit() {
@@ -65,11 +94,14 @@
     error = "";
     try {
       // Validate automatically so completing setup needs no separate click.
-      if (keyState !== "ok") {
-        await ConfigService.ValidateLinearKey(values.linearKey);
-        keyState = "ok";
-        keyMsg = "Key is valid.";
+      // A failure is said next to the key, where the fix is typed. Nothing is
+      // saved and no daemon starts until Linear accepted this exact key.
+      if (pending) await pending;
+      if (keyState !== "ok" || key.trim() !== values.linearKey) {
+        keyState = "idle";
+        await validateKey();
       }
+      if (keyState !== "ok") return;
       const res = await ConfigService.Setup(values);
       key = "";
       store.hasConfig = true;
@@ -105,6 +137,7 @@
               placeholder="lin_api_…"
               bind:value={key}
               oninput={() => { keyState = "idle"; keyMsg = ""; }}
+              onblur={() => { if (keyState === "idle") void validateKey(); }}
             />
             <Button variant="secondary" size="md" disabled={!key.trim() || keyState === "checking"} onclick={validateKey}>
               {keyState === "checking" ? "Checking…" : "Validate"}
@@ -113,6 +146,10 @@
           {#if keyState === "ok"}<p class="mt-1 text-sm text-good" role="status">{keyMsg}</p>{/if}
           {#if keyState === "bad"}<p class="mt-1 text-sm text-bad" role="alert">{keyMsg}</p>{/if}
           <p class="mt-1 text-sm text-faint">Saved in macOS Keychain when you finish setup.</p>
+          <span class="mt-1 block">
+            <Button size="xs" onclick={openKeyHelp}>Where do I get a Linear key?</Button>
+          </span>
+          {#if helpErr}<p class="mt-1 text-sm text-warn">{helpErr}</p>{/if}
         </div>
 
         <section class="border-t border-edge pt-4" aria-labelledby="setup-general">
@@ -153,5 +190,11 @@
         </div>
       </fieldset>
     </form>
+
+    <!-- What else stands between install and a first agent on a real issue,
+         re-checked whenever the window comes back from a terminal. -->
+    <div class="mt-4 rounded-xl border border-edge bg-panel p-5">
+      <SetupChecklist setup linearKey={keyItem} />
+    </div>
   </div>
 </div>

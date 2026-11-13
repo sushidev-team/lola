@@ -1119,7 +1119,8 @@ each of which owns exactly one external tool or concern behind an **exec seam**
       exactly those kinds enabled in the catalog (own entry or kind defaults;
       a kind that cannot run stays off with a notice; fallbacks to a disabled
       kind dropped; legacy tables folded in memory), `budget_daily_weighted_
-      tokens` → `[budget].daily_tokens`, `merge_queue_enabled` →
+      tokens` → a CEILING on `[budget].daily_tokens` (min when the member set
+      one, the team's when unset — never a raise), `merge_queue_enabled` →
       `[merge_queue].enabled` (false locks it off), `max_concurrency_hint` →
       a CEILING on `global_cap` (min, never a raise), `accept_kinds` →
       `[hub].accept_kinds`. `escalate_after` is the hub's; it is shown, never
@@ -1131,6 +1132,57 @@ each of which owns exactly one external tool or concern behind an **exec seam**
       `appliedKeys` (team value + local value) and `applyNote`; the app reads
       them through `ConfigService.TeamPolicy` to show locked controls.
     - No Settings key may ever execute anything (hubproto's closed set).
+    - A policy stops applying the moment the hub stops vouching for this
+      device or the org stops publishing one. `no_policy` → `hubPolicyWithdrawn`
+      marks the stored bundle withdrawn (`hub.WithdrawPolicy`; it stays the
+      ROLLBACK FLOOR, so a withdrawn v5 cannot be followed by a replayed v1)
+      and forces one reload (`hubForceReload`). A `401 unauthorized` on a
+      signed call → `hubRevokedIf`: `hub.MarkRevoked` swaps the identity for
+      `state/hub-revoked.json` (the device key stays), the loop forgets who it
+      was, a reload drops the overlay, and status reads "revoked" until a new
+      join. Skew and replay are not revocations. A hub can thus WITHHOLD a
+      policy, never forge or roll one back.
+  - **Joining spends a one-time secret; leaving lets go of everything.**
+    (`internal/hub/join.go`, `invite.go`, `internal/daemon/hubcmds.go`.)
+    - The invite (`lola-hub:<url>#<token>[#<key_id>:<pub>]`, `hub.ParseInvite`)
+      or bare token is read from stdin or `--token-file` only; there is no
+      argv path. Parse errors are fixed strings that echo no part of it.
+    - `hub.Join` does everything that can fail BEFORE the token is sent (key,
+      a `hub-join-pending.json` record proving the state dir writable, a probe
+      of the config dir), saves the identity first after the hub accepts, then
+      RE-LOADS config.toml and sets only enabled/url/device_name. A failure past
+      the hub's acceptance (or a reply that does not validate) wraps
+      `hub.ErrTokenUsed` and says what was saved. The hub's stored device name
+      (C5, possibly suffixed) and member label land in the identity.
+    - An invite's policy key is pinned (`hub.PinTrustedKey`, file edit, never
+      replacing a different key under the same id) only after the person
+      confirms its id + `hub.KeyFingerprint` at the terminal or passes
+      `--trust-key`. Piped input cannot confirm. `cmd=hubJoin` accepts an
+      invite in its token field but never pins its key. No key ever comes
+      from a hub response.
+    - `cmd=hubLeave` releases every live lease first (bounded by
+      `hubLeaveReleaseTimeout`, best effort), then `hub.Leave` records the hub
+      url + org left (`state/hub-left.json`), and `hubForgetHubWork` clears the
+      outbox, settled marks, cooldowns, findings and policy stamps and marks
+      every open `HubWork` Released, so no old item id can reach a later hub.
+      The daily claim count is kept.
+  - **Readiness is one list** (`doctor.HubReadiness`): joined, projects that
+    take chores (and which lack a repo or the sandbox), docker, sandbox image,
+    sandbox login, `gh auth status` (bounded, output discarded), policy key
+    pinned. `lola hub join` ends with it, `lola hub status` prints it, `lola
+    doctor` shows it (minus "joined", which its hub row covers) while the hub
+    is enabled. Every `doctor.Result` carries a stable `Fix` id
+    (`doctor.AllFixIDs`) so a UI can attach a button; no row carries a secret
+    value, only sources and key ids.
+  - **The chore lifecycle is the hub's; the daemon reports facts** (C1–C12,
+    `hubproto` items/frames/board). A claim holds a lease; an opened PR is
+    reported with `progress` (claimed → `in_review`, lease dropped, this
+    device the owner), and complete/fail come from the owner. A hub that
+    answers 404 to `progress` gets today's complete-on-PR (C12); a hub that
+    predates `policy_version` on the heartbeat or `pr_url`/`group` on a fail
+    gets frames without them (it decodes with DisallowUnknownFields). Grace,
+    cooldown, stale close, the 14-day reopen and escalation grouping are
+    hub-side; the board only displays history, owner and member.
   - **A person's hub command is a human act, and only a human's.**
     `protocol.HubHumanCommands` (join, leave, board, org, claim, release,
     sync) are denied by `internal/remote` as a list (a phone gets none of
@@ -1156,6 +1208,8 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     - `cmd=hubJoin` carries the enroll token: never logged, echoed or
       returned, scrubbed from an error that happens to contain it, and the
       enrollment is shielded from a client hanging up mid-request.
+    - `[hub].poll_seconds` is capped at 900: leases are renewed on that
+      cadence, so a slower loop would let every claim expire under its agent.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the

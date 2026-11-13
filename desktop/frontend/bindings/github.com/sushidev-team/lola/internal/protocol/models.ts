@@ -728,8 +728,21 @@ export interface HubAppliedKey {
 }
 
 /**
+ * HubAttemptInfo is one entry of an item's history. Action is a
+ * hubproto.AttemptAction word, Reason a hubproto.FailReason ("" = none).
+ */
+export interface HubAttemptInfo {
+    "deviceName"?: string;
+    "member"?: string;
+    "action": string;
+    "reason"?: string;
+    "prUrl"?: string;
+    "at": string;
+}
+
+/**
  * HubBoardArgs is Request.Args for cmd=hubBoard. State "" = every state
- * (open | claimed | done | failed | escalated); Limit 0 = the hub's default
+ * (open | claimed | in_review | done | failed | escalated); Limit 0 = the hub's default
  * (200), at most 500.
  */
 export interface HubBoardArgs {
@@ -792,6 +805,29 @@ export interface HubBoardItem {
     "escalation"?: HubEscalationInfo | null;
 
     /**
+     * Owner is the device that opened the item's PR (in_review, done, failed,
+     * escalated); nil before that.
+     */
+    "owner"?: HubOwnerInfo | null;
+
+    /**
+     * History is the item's attempts, oldest first (at most 20).
+     */
+    "history"?: HubAttemptInfo[] | null;
+
+    /**
+     * LastFail is the last fail reason ("" = none); Reopened counts how often
+     * the hub put the item back on offer.
+     */
+    "lastFail"?: string;
+    "reopened"?: number;
+
+    /**
+     * ClaimedAt is when the current claim began (claimed / in_review only).
+     */
+    "claimedAt"?: string;
+
+    /**
      * Local is THIS machine's answer for the row.
      */
     "local": HubLocalInfo;
@@ -837,6 +873,13 @@ export interface HubDeviceInfo {
     "freeSlots": number;
     "agents": string[] | null;
     "active": boolean;
+
+    /**
+     * Member is the admin-set label of the person the device belongs to;
+     * PolicyVersion the team policy version it applies (0 = none / unknown).
+     */
+    "member"?: string;
+    "policyVersion"?: number;
 }
 
 /**
@@ -886,6 +929,7 @@ export interface HubJoinData {
 export interface HubLeaseInfo {
     "mine": boolean;
     "deviceName": string;
+    "member"?: string;
     "expires": string;
 }
 
@@ -895,6 +939,14 @@ export interface HubLeaseInfo {
 export interface HubLeaveData {
     "left": boolean;
     "keyDeleted"?: boolean;
+
+    /**
+     * Released counts the leases the hub took back before the leave; Kept
+     * those left to expire (unreachable hub, refused, or out of time). The
+     * sessions behind both keep running.
+     */
+    "released"?: number;
+    "kept"?: number;
 }
 
 /**
@@ -908,6 +960,17 @@ export interface HubLocalInfo {
     "project"?: string;
     "projects"?: string[] | null;
     "session"?: string;
+}
+
+/**
+ * HubOfferSkip is one offer the last cycle did not claim, and why. Reason is
+ * one of the stable hub.Reason* words (internal/hub/accept.go).
+ */
+export interface HubOfferSkip {
+    "itemId": string;
+    "kind": string;
+    "reason": string;
+    "at": string;
 }
 
 /**
@@ -927,6 +990,16 @@ export interface HubOrgData {
 export interface HubOutcomeInfo {
     "prUrl": string;
     "delivery": string;
+}
+
+/**
+ * HubOwnerInfo is the device (and its member label) that owns an item in
+ * review or finished.
+ */
+export interface HubOwnerInfo {
+    "mine": boolean;
+    "deviceName": string;
+    "member"?: string;
 }
 
 /**
@@ -965,6 +1038,20 @@ export interface HubReleaseData {
 }
 
 /**
+ * HubRepoHealth is the last findings scan of one opted-in repository.
+ * Alerts: "ok" | "no_access" (Dependabot alerts disabled or not visible:
+ * gh answered 403/404) | "error"; PullRequests: "ok" | "error". Error is the
+ * first gh failure in lola's words plus gh's clipped stderr.
+ */
+export interface HubRepoHealth {
+    "repo": string;
+    "at": string;
+    "alerts": string;
+    "pullRequests": string;
+    "error"?: string;
+}
+
+/**
  * HubSessionHub is SessionInfo.hub: what a hub session works on.
  */
 export interface HubSessionHub {
@@ -972,6 +1059,18 @@ export interface HubSessionHub {
     "kind": string;
     "label"?: string;
     "leaseLost"?: boolean;
+
+    /**
+     * LeaseTaken: the lease was lost AND another device holds the item now
+     * (a re-claim was refused). The session keeps running either way.
+     */
+    "leaseTaken"?: boolean;
+
+    /**
+     * InReview: the hub took the PR (progress acknowledged); no lease is
+     * renewed any more, the item waits for merge or close.
+     */
+    "inReview"?: boolean;
     "released"?: boolean;
 }
 
@@ -986,6 +1085,13 @@ export interface HubSessionInfo {
     "claimedAt"?: string;
     "leaseExpires"?: string;
     "leaseLost"?: boolean;
+    "leaseTaken"?: boolean;
+    "inReview"?: boolean;
+
+    /**
+     * Progress is the delivery last reported to the hub for the PR.
+     */
+    "progress"?: string;
     "released"?: boolean;
     "reported"?: string;
 
@@ -1004,6 +1110,13 @@ export interface HubStatusData {
      */
     "enabled": boolean;
     "joined": boolean;
+
+    /**
+     * Membership is the one-word answer to "is this machine in a team":
+     * "joined", "revoked" (the hub refused this device's signature; a new
+     * token and join are needed) or "not joined" (hub.Status.Membership).
+     */
+    "membership"?: string;
     "url"?: string;
     "device"?: string;
 
@@ -1053,6 +1166,29 @@ export interface HubStatusData {
      * Sessions are the local sessions working a hub item.
      */
     "sessions"?: HubSessionInfo[] | null;
+
+    /**
+     * LastSync is the end of the last cycle in which no stage failed;
+     * LastError is cleared then.
+     */
+    "lastSync"?: string;
+
+    /**
+     * FindingsHealth is the last scan's answer per repository.
+     */
+    "findingsHealth"?: HubRepoHealth[] | null;
+
+    /**
+     * OfferSkips are the offers the last cycle left unclaimed.
+     */
+    "offerSkips"?: HubOfferSkip[] | null;
+
+    /**
+     * LegacyHub: the hub predates the chore lifecycle (no progress frame, no
+     * fail pr_url / group, no heartbeat policy_version); lola falls back to
+     * the old frames for a while and then tries again.
+     */
+    "legacyHub"?: boolean;
 }
 
 /**

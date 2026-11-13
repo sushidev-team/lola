@@ -81,6 +81,7 @@ const (
 	stStatusAgent
 	stCodeRabbit
 	stSSH
+	stHub
 	stRemote
 	stAppearance
 )
@@ -97,6 +98,7 @@ var settingsTabs = []struct {
 	{stStatusAgent, "Interpreter"},
 	{stCodeRabbit, "Review"},
 	{stSSH, "SSH hosts"},
+	{stHub, "Team hub"},
 	{stRemote, "Remote"},
 	{stAppearance, "Appearance"},
 }
@@ -357,6 +359,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	f.fields = append(f.fields, reviewProviderFields(rp)...)
 	f.sshRemoving = -1
 	f.initSSHHosts()
+	f.fields = append(f.fields, hubFields(cfg)...) // hubsettings.go
 	// Warm the label NAMES from the on-disk cache for rendering. This is a local
 	// file read, never a Linear call, and deliberately does not touch wsLabels:
 	// the picker stays lazy (see openLabelPicker).
@@ -1671,7 +1674,9 @@ func (f *settingsForm) save() settingsFormEvent {
 	}
 
 	c.SSHHosts = sshHosts
+	hubOld, hubErr := f.applyHub(c) // hubsettings.go
 	rollback := func() {
+		restoreHub(c, hubOld)
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
 		c.UI = oldUI
 		c.ReviewProviders = oldP
@@ -1681,6 +1686,11 @@ func (f *settingsForm) save() settingsFormEvent {
 		c.Remote = oldRem
 		c.Linear = oldLin
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
+	}
+	if hubErr != nil {
+		rollback()
+		f.err = hubErr.Error()
+		return settingsFormNone
 	}
 	if err := c.Validate(); err != nil {
 		rollback()

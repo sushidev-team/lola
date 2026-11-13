@@ -552,9 +552,12 @@ endpoint = "https://api.linear.app/graphql"
 # Dependabot/Renovate PR whose checks fail) and routes the team's SIGNED policy.
 # It never executes anything: work items are validated, typed fields only, and
 # the agent's prompt is rendered from lola's own template. Set it up with
-# `lola hub join <url>` (the one-time token on stdin), which writes enabled + url; `lola hub leave`
-# turns it off. The device key lives in ~/.lola/state/hub-key (0600) — never
-# here. Not a [defaults] key, and neither is [[project]].hub_chores.
+# `lola hub join`, the invite your admin gave you (lola-hub:<url>#<token>, or
+# a bare token plus the url as the argument) on stdin or in --token-file —
+# never as an argument. It writes enabled + url; `lola hub leave` releases this
+# machine's leases and turns it off. The device key lives in
+# ~/.lola/state/hub-key (0600) — never here. Not a [defaults] key, and neither
+# is [[project]].hub_chores. `lola hub status` lists what is still missing.
 # ---------------------------------------------------------------------------
 # [hub]
 # enabled = false
@@ -569,11 +572,21 @@ endpoint = "https://api.linear.app/graphql"
 # # Refuse a chore for a project without sandbox = "docker". Absent = true;
 # # turning it off is a local, explicit decision.
 # require_sandbox = true
-# # Hub loop cadence in seconds (60..86400). Absent = 300.
+# # Hub loop cadence in seconds (60..900; leases are renewed on it). Absent = 300.
 # poll_seconds = 300
+# # Give all of a repository's open dependency advisories to ONE agent and one
+# # pull request (at most 12). Absent = true; false claims each alone.
+# group_chores = true
+# # Enforce the verified team policy: every key it carries is locked in the
+# # daemon's memory (never written here). Absent = true; false shows it only.
+# # The daily budget and the concurrency hint are CEILINGS: a tighter local
+# # value stays. A policy the hub withdraws, or a device the hub revokes,
+# # stops applying at once.
+# apply_policy = true
 # # Admin keys that may sign the team policy: key_id = base64url ed25519
-# # public key. The hub cannot add one, so it cannot forge policy. Phase 1
-# # only VERIFIES and SHOWS the policy (`lola hub status`); it is not applied.
+# # public key. The hub cannot add one, so it cannot forge policy; a key never
+# # comes from a hub response. An invite may carry one: `lola hub join` shows
+# # its id and fingerprint and pins it only after you confirm (or --trust-key).
 # [hub.trusted_policy_keys]
 # admin-2026 = "base64url-public-key-43-chars"
 # # Instead of the table, the "<key_id>:<public key>" entries lola-hub prints

@@ -145,7 +145,9 @@
             <span class="sidebar-session-age num text-faint">{waited}</span>
             {#if hasMeta}
             <span class="sidebar-session-meta col-start-2 col-end-4 flex min-w-0 items-baseline gap-1.5" data-roster-meta>
-              {#if s.hub}<HubChip hub={s.hub} class="max-w-[60%]" />{/if}
+              <!-- static: the row is itself a <button>, and a nested one would
+                   steal its click; the Team view is a press on the chip in the session bar. -->
+              {#if s.hub}<HubChip hub={s.hub} static class="max-w-[60%]" />{/if}
               {#if issue}<span class="shrink-0 text-ink-2">{issue}</span>{/if}
               {#if metadataStage}<span class="min-w-0 truncate {STAGE_TEXT[metadataStage.tone]}">{issue ? '· ' : ''}{metadataStage.label}</span>{:else if context}<span class="truncate text-faint">{context}</span>{/if}
               {#if line.compact && !atReview && line.text}<span class="min-w-0 truncate text-faint" data-roster-line>· {line.text}</span>{/if}

@@ -1219,3 +1219,31 @@ func TestRemoveStackKeepsOnlyTheCheckedMembers(t *testing.T) {
 		t.Fatalf("kept member = %+v, want standalone with no labels", p)
 	}
 }
+
+// A new project starts disabled: with no team it would poll nothing, and the
+// form turns it on only once a team is chosen.
+func TestNewProjectStartsDisabled(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	dto, err := (&ConfigService{}).GetProject("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dto.Enabled || dto.TeamID != "" || !dto.IsNew {
+		t.Fatalf("blank project = enabled %v team %q new %v, want disabled, no team, new", dto.Enabled, dto.TeamID, dto.IsNew)
+	}
+}
+
+// The setup screen's key link opens lola's own fixed URL, never one the
+// frontend names.
+func TestOpenLinearKeyHelpOpensTheFixedPage(t *testing.T) {
+	var got []string
+	prev := openBrowser
+	openBrowser = func(url string) error { got = append(got, url); return nil }
+	t.Cleanup(func() { openBrowser = prev })
+	if err := (&ConfigService{}).OpenLinearKeyHelp(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "https://linear.app/settings/account/security" {
+		t.Fatalf("opened %v", got)
+	}
+}

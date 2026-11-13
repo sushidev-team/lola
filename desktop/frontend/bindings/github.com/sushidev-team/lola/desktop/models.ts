@@ -128,11 +128,20 @@ export interface DoctorReportDTO {
     "ok": boolean;
 }
 
+/**
+ * DoctorResultDTO is one check row. ID is the row's stable key: the check name,
+ * suffixed "#2", "#3"… when a name repeats (per-project rows can), so a UI
+ * keys its list by ID and never by a name that may collide. Fix is the
+ * doctor.FixID that resolves a failed row ("" = no automated fix): the UI maps
+ * it to a button or a copyable command and never parses Detail for one.
+ */
 export interface DoctorResultDTO {
+    "id": string;
     "name": string;
     "ok": boolean;
     "detail": string;
     "critical": boolean;
+    "fix"?: string;
 }
 
 /**
@@ -192,6 +201,62 @@ export interface HubProjectPatchDTO {
     "repo": string | null;
     "hubChores": boolean | null;
     "sandboxed": boolean | null;
+}
+
+/**
+ * HubReadinessRowDTO is one row of the hub readiness list (doctor.HubReadiness):
+ * a fact in plain words and, when it is not OK, the stable fix id a UI puts a
+ * button on. It never carries a token or a key's value.
+ */
+export interface HubReadinessRowDTO {
+    "name": string;
+    "ok": boolean;
+    "detail": string;
+
+    /**
+     * Fix is a doctor.FixID ("" = no automated fix).
+     */
+    "fix": string;
+}
+
+/**
+ * HubRulesDTO changes the [hub] local rules AT ONCE, like join, leave and the
+ * project toggles, so the Team hub tab has one save model. A nil field is
+ * left as it is; the rules are the same as SettingsDTO's hub fields (and go
+ * through the same applyHubSettings), so a later overlay Save that carries
+ * the same values writes nothing new.
+ */
+export interface HubRulesDTO {
+    "acceptKinds": string[] | null;
+    "maxClaimsPerDay": number | null;
+    "requireSandbox": boolean | null;
+    "pollSeconds": number | null;
+    "applyPolicy": boolean | null;
+    "groupChores": boolean | null;
+    "trustedKeys": HubTrustedKeyDTO[] | null;
+}
+
+/**
+ * HubStatsDTO is the Team view's one stats line, summed here so the frontend
+ * does no date arithmetic: the last seven UTC days, today included.
+ * Available is false when the hub sent no days at all.
+ */
+export interface HubStatsDTO {
+    "available": boolean;
+
+    /**
+     * FixedThisWeek counts items done in the window; FailedThisWeek and
+     * OpenedThisWeek the same for failed and newly reported items.
+     */
+    "fixedThisWeek": number;
+    "failedThisWeek": number;
+    "openedThisWeek": number;
+
+    /**
+     * AvgFixSeconds is the mean time from first report to done over the
+     * window's fixes (0 = no fix in the window).
+     */
+    "avgFixSeconds": number;
 }
 
 /**
@@ -312,10 +377,18 @@ export interface LockedSettingDTO {
     "configKey": string;
 
     /**
-     * Field is the SettingsDTO json field the key covers ("" when the settings
-     * form has no field for it yet).
+     * Field is the settings form's id for the control the key covers: a
+     * SettingsDTO json field, or "budgetDaily" / "mergeQueue" for the two
+     * controls TeamLimits reads and SaveTeamLimits writes ("" = none).
      */
     "field": string;
+
+    /**
+     * Ceiling: the daemon runs min(local, team) for this key, so the control
+     * stays editable and a lower local value still counts. The UI reads it as
+     * "Team ceiling N", not as a lock.
+     */
+    "ceiling": boolean;
 }
 
 /**
@@ -881,6 +954,20 @@ export interface StackFolderDTO {
 }
 
 /**
+ * TeamLimitsDTO is the two local settings a team policy can govern that the
+ * settings form has no SettingsDTO field for: [budget].daily_tokens and
+ * [merge_queue].enabled. They save AT ONCE (SaveTeamLimits), so a policy
+ * lock is drawn over a real control and no overlay Save can drop them.
+ */
+export interface TeamLimitsDTO {
+    /**
+     * BudgetDaily is the daily limit in weighted tokens (0 = no limit).
+     */
+    "budgetDaily": number;
+    "mergeQueue": boolean;
+}
+
+/**
  * TeamPolicyDTO is ConfigService.TeamPolicy's answer.
  */
 export interface TeamPolicyDTO {
@@ -912,6 +999,13 @@ export interface TeamPolicyDTO {
      */
     "keys": string[] | null;
     "summary": string[] | null;
+
+    /**
+     * EscalateAfter is the policy's escalate_after (0 = not set). The hub
+     * alone acts on it, so it is shown whenever the policy carries it, applied
+     * or not, and never locks anything here.
+     */
+    "escalateAfter": number;
 
     /**
      * Locked is what the daemon enforces. Never null.

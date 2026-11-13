@@ -10,9 +10,11 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sushidev-team/lola/hubproto"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // Findings come from GitHub, never from an inventory upload: for each
@@ -153,6 +155,42 @@ type Collector struct {
 	Timeout time.Duration
 	// MaxItems caps the returned items (0 = DefaultMaxFindings).
 	MaxItems int
+	// AlertsTTL is how long one repository's alert listing is reused
+	// (0 = DefaultAlertsTTL). The daemon calls BeginPass at the start of
+	// each cycle, so a listing is shared only within one cycle: the findings
+	// scan and every offer verified after it read GitHub once per repo.
+	AlertsTTL time.Duration
+
+	mu     sync.Mutex
+	cached map[string]cachedAlerts
+}
+
+// DefaultAlertsTTL bounds the per-cycle alert cache, so a verify outside a
+// cycle (a person's claim) never trusts an old listing.
+const DefaultAlertsTTL = 2 * time.Minute
+
+type cachedAlerts struct {
+	at    time.Time
+	items []hubproto.Item
+}
+
+// BeginPass forgets every cached alert listing: a new cycle reads GitHub
+// afresh.
+func (c *Collector) BeginPass() {
+	c.mu.Lock()
+	c.cached = nil
+	c.mu.Unlock()
+}
+
+// RepoHealth is one repository's answer in a Collect pass. Alerts is
+// protocol.HubHealthOK, HubHealthNoAccess (403/404: Dependabot alerts off or
+// not visible) or HubHealthError; PullRequests is OK or Error. Err is the
+// first failure, clipped.
+type RepoHealth struct {
+	Repo         string
+	Alerts       string
+	PullRequests string
+	Err          string
 }
 
 // Result is one collection pass.
@@ -168,6 +206,8 @@ type Result struct {
 	// Errors are per-repo failures (gh error, timeout, bad JSON). The other
 	// repos' findings are still returned.
 	Errors []error
+	// Health is every scanned repository's answer, in input order.
+	Health []RepoHealth
 }
 
 // Collect reads every repo (owner/name, validated first) and returns what it
@@ -200,6 +240,7 @@ func (c *Collector) Collect(ctx context.Context, repos []string) Result {
 			res.Errors = append(res.Errors, fmt.Errorf("hub: findings: %w", err))
 			continue
 		}
+		h := RepoHealth{Repo: repo, Alerts: protocol.HubHealthOK, PullRequests: protocol.HubHealthOK}
 		alerts, err := c.alerts(ctx, repo)
 		switch {
 		case err == nil:
@@ -208,15 +249,25 @@ func (c *Collector) Collect(ctx context.Context, repos []string) Result {
 			}
 		case isNotAvailable(err):
 			res.Skipped = append(res.Skipped, repo)
+			h.Alerts = protocol.HubHealthNoAccess
 		default:
-			res.Errors = append(res.Errors, fmt.Errorf("%s alerts: %w", repo, err))
+			e := fmt.Errorf("%s alerts: %w", repo, err)
+			res.Errors = append(res.Errors, e)
+			h.Alerts, h.Err = protocol.HubHealthError, cleanText(e.Error())
 		}
 		prs, dropped, err := c.redBumps(ctx, repo)
 		res.Dropped += dropped
 		if err != nil {
-			res.Errors = append(res.Errors, fmt.Errorf("%s pull requests: %w", repo, err))
+			e := fmt.Errorf("%s pull requests: %w", repo, err)
+			res.Errors = append(res.Errors, e)
+			h.PullRequests = protocol.HubHealthError
+			if h.Err == "" {
+				h.Err = cleanText(e.Error())
+			}
+			res.Health = append(res.Health, h)
 			continue
 		}
+		res.Health = append(res.Health, h)
 		for _, it := range prs {
 			add(it)
 		}
@@ -273,7 +324,35 @@ type ghAlert struct {
 	} `json:"security_vulnerability"`
 }
 
+// alerts returns repo's open alerts, from this pass's cache when a fresh
+// listing is there. Only a successful listing is cached: a failure is asked
+// again by the next caller.
 func (c *Collector) alerts(ctx context.Context, repo string) ([]hubproto.Item, error) {
+	ttl := c.AlertsTTL
+	if ttl <= 0 {
+		ttl = DefaultAlertsTTL
+	}
+	key := strings.ToLower(repo)
+	c.mu.Lock()
+	hit, ok := c.cached[key]
+	c.mu.Unlock()
+	if ok && time.Since(hit.at) < ttl {
+		return hit.items, nil
+	}
+	items, err := c.fetchAlerts(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if c.cached == nil {
+		c.cached = map[string]cachedAlerts{}
+	}
+	c.cached[key] = cachedAlerts{at: time.Now(), items: items}
+	c.mu.Unlock()
+	return items, nil
+}
+
+func (c *Collector) fetchAlerts(ctx context.Context, repo string) ([]hubproto.Item, error) {
 	out, err := c.gh(ctx, "api", "repos/"+repo+"/dependabot/alerts?state=open&per_page=100", "--paginate")
 	if err != nil {
 		return nil, err
@@ -376,7 +455,7 @@ func (c *Collector) redBumps(ctx context.Context, repo string) ([]hubproto.Item,
 			continue
 		}
 		pkg := packageFromTitle(pr.Title)
-		if pkg == "" {
+		if pkg == "" && !(author == hubproto.AuthorDependabot && dependabotGroupTitle(pr.Title)) {
 			dropped++
 			continue
 		}
@@ -427,8 +506,10 @@ func prFailing(pr ghPR) bool {
 }
 
 // Title shapes the two bots write, matched conservatively. A title that fits
-// none of them (a grouped update, a lockfile refresh) yields "" and the PR is
-// skipped: guessing a package would put a wrong name in front of an agent.
+// none of them (a lockfile refresh, Renovate's "update all") yields "" and
+// the PR is skipped: guessing a package would put a wrong name in front of an
+// agent. Dependabot's grouped update is the one exception
+// (dependabotGroupTitle): it is kept with no package at all.
 var titlePackageRes = []*regexp.Regexp{
 	// Dependabot: "Bump lodash from 4.17.20 to 4.17.21", "build(deps): bump @types/node from 1 to 2 in /web"
 	regexp.MustCompile(`(?i)(?:^|[\s:])bump (\S+) from \S+ to \S+`),
@@ -436,6 +517,20 @@ var titlePackageRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:^|[\s:])update (?:dependency|module|rust crate|crate|gem|package|plugin) (\S+) to \S+`),
 	// Renovate: "Update actions/checkout action to v4"
 	regexp.MustCompile(`(?i)(?:^|[\s:])update (\S+) action to \S+`),
+}
+
+// dependabotGroupRe is Dependabot's grouped update ("Bump the npm_and_yarn
+// group across 1 directory with 3 updates", "build(deps): bump the minor
+// group in /web with 2 updates"). Such a PR names no one package: it is
+// reported with an empty package (the hub keys it by repo and PR number) and
+// briefed from lola's group template, never from the title.
+var dependabotGroupRe = regexp.MustCompile(`(?i)(?:^|[\s:])bump the \S+ group\b`)
+
+func dependabotGroupTitle(title string) bool {
+	if len(title) > maxTitleLen || strings.ContainsAny(title, "\n\r") {
+		return false
+	}
+	return dependabotGroupRe.MatchString(title)
 }
 
 func packageFromTitle(title string) string {

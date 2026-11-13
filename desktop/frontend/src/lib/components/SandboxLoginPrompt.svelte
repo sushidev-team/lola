@@ -66,7 +66,7 @@
       token = "";
       stored();
     } catch (e) {
-      err = String(e);
+      err = String(e instanceof Error ? e.message : e).replace(/^Error:\s*/, "");
     } finally {
       busy = false;
     }
@@ -80,7 +80,8 @@
       <span id={`${id}-title`}>Connect Claude for Docker workspaces</span>
       <HelpText label="Claude login" detail="A container cannot read your keychain, so sandboxed agents log in with a long-lived token. Lola stores it in the macOS keychain and never shows it again. You do this once for all projects." />
     </div>
-    <SetupTokenRunner onStored={stored} />
+    <!-- A failed login opens the paste path: it is the way on. -->
+    <SetupTokenRunner onStored={stored} onFailed={() => (manual = true)} />
     {#if !manual}
       <span><Button size="xs" onclick={() => (manual = true)}>Paste a token instead</Button></span>
     {:else}

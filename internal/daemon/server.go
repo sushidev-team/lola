@@ -90,7 +90,7 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 	case protocol.CmdHubStatus:
 		return dataResponse(d.hubStatusData())
 	case protocol.CmdHubJoin, protocol.CmdHubLeave, protocol.CmdHubBoard, protocol.CmdHubOrg,
-		protocol.CmdHubClaim, protocol.CmdHubRelease, protocol.CmdHubSync:
+		protocol.CmdHubClaim, protocol.CmdHubRelease, protocol.CmdHubSync, protocol.CmdHubStats:
 		return d.handleHub(ctx, req)
 	case "sessions":
 		return dataResponse(d.sessionsData())
