@@ -61,18 +61,19 @@ type Signing struct {
 	Key     string `json:"key"`
 }
 type Snapshot struct {
-	Operation string     `json:"operation"`
-	Remotes   []Remote   `json:"remotes"`
-	Path      string     `json:"path"`
-	Branch    string     `json:"branch"`
-	Head      string     `json:"head"`
-	Upstream  string     `json:"upstream"`
-	Commits   []Commit   `json:"commits"`
-	Refs      []Ref      `json:"refs"`
-	Worktrees []Worktree `json:"worktrees"`
-	Files     []File     `json:"files"`
-	Signing   Signing    `json:"signing"`
-	HasMore   bool       `json:"hasMore"`
+	Operation    string     `json:"operation"`
+	MergeMessage string     `json:"mergeMessage,omitempty"`
+	Remotes      []Remote   `json:"remotes"`
+	Path         string     `json:"path"`
+	Branch       string     `json:"branch"`
+	Head         string     `json:"head"`
+	Upstream     string     `json:"upstream"`
+	Commits      []Commit   `json:"commits"`
+	Refs         []Ref      `json:"refs"`
+	Worktrees    []Worktree `json:"worktrees"`
+	Files        []File     `json:"files"`
+	Signing      Signing    `json:"signing"`
+	HasMore      bool       `json:"hasMore"`
 }
 
 // Client's seam is deliberately private: bound methods never accept an executable.
@@ -202,6 +203,12 @@ func (c Client) Snapshot(ctx context.Context, dir, ref string, limit int) (Snaps
 	s.Operation, err = c.Operation(ctx, dir)
 	if err != nil {
 		return s, err
+	}
+	if s.Operation == "merge" {
+		s.MergeMessage, err = c.MergeMessage(ctx, dir)
+		if err != nil {
+			return s, err
+		}
 	}
 	s.Branch, _ = c.text(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD")
 	s.Head, _ = c.text(ctx, dir, "rev-parse", "--verify", "HEAD")

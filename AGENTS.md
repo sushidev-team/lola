@@ -15,9 +15,10 @@ observes the PR/CI via `gh` and reacts (re-prompt, notify, review, clean up).
 - **Coding agent is pluggable:** `claude` (default) | `codex` | `opencode`, via
   `[defaults].agent` with a per-`[[project]].agent` override.
 - **Three independent agent choices — don't confuse them:** (1) the per-session
-  coding agent above; (2) lola-internal helpers: `[brain]` and `lola plan` always
-  shell `claude -p`, while `[statusagent].agent` picks claude (default) | codex |
-  opencode; (3) review providers, which name their own agent per
+  coding agent above; (2) lola-internal helpers: `[brain]` and `lola plan` default to
+  `claude -p`; enabled `[ai.<provider>]` profiles follow the workspace default
+  agent, while `[statusagent].agent` independently picks claude | codex | opencode;
+  (3) review providers, which name their own agent per
   `[[review.provider]]` kind.
 - **Roles:** `lola run` is the daemon; `lola` / `lola tui` is the Bubble Tea TUI;
   every other subcommand is a thin client on the unix socket `~/.lola/lola.sock`

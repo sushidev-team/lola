@@ -821,15 +821,19 @@ export interface OpenData {
  * it, ignoring Base. A distinct command keeps older daemons from creating it.
  */
 export interface OpenManualArgs {
+    /**
+     * resolve selects the provider-specific AI profile for a new checkout session
+     */
+    "aiAction"?: string;
     "name"?: string;
 
     /**
-     * worktree (default), main, temporary
+     * worktree (default), main, checkout (borrowed), temporary
      */
     "location"?: string;
 
     /**
-     * temporary shell directory
+     * temporary shell or registered borrowed checkout directory
      */
     "path"?: string;
     "project": string;

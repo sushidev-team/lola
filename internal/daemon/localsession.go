@@ -91,6 +91,11 @@ type directoryPrompter interface {
 	LocalFirstTurn(id, prompt string) string
 }
 
+type directoryProfilePrompter interface {
+	OpenDirectoryProfile(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool, prompt, model, effort string) (session.Session, error)
+	LocalFirstTurn(id, prompt string) string
+}
+
 // noteInitial writes a session's first row: the brief a human gave it. It is created
 // delivered, because it was, and so that no client offers to recall it. typed is the text
 // lola gave the agent as its first turn, when the log will carry a record of that.
@@ -121,6 +126,9 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	if err := validateSessionName(a.Name); err != nil {
 		return protocol.OpenData{}, err
 	}
+	if a.AIAction != "" && (a.AIAction != "resolve" || a.Location != "checkout" || !a.Agent) {
+		return protocol.OpenData{}, errors.New("invalid AI action for this session")
+	}
 	if a.Branch != "" || a.Base != "" {
 		return protocol.OpenData{}, errors.New("branch options require a new worktree")
 	}
@@ -135,6 +143,7 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 		p = *configured
 	}
 	kind := d.cfg.AgentForProject(a.Project)
+	profile, useProfile := d.cfg.AIProfile(kind, a.AIAction)
 	dir := d.cfg.Defaults.TemporaryDirectory
 	home, validateCheckout := d.home, d.validateLocalCheckout
 	d.mu.Unlock()
@@ -191,6 +200,9 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 			return protocol.OpenData{}, errors.New("unknown coding agent")
 		}
 		kind = a.AgentKind
+		d.mu.Lock()
+		profile, useProfile = d.cfg.AIProfile(kind, a.AIAction)
+		d.mu.Unlock()
 	}
 	bin := "tmux"
 	if a.Agent {
@@ -215,7 +227,14 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	}
 	var s session.Session
 	typed := ""
-	if opener, ok := nat.(directoryPrompter); ok && prompt != "" {
+	if a.AIAction != "" && useProfile {
+		opener, ok := nat.(directoryProfilePrompter)
+		if !ok {
+			return protocol.OpenData{}, errors.New("runtime cannot apply the selected AI profile")
+		}
+		s, err = opener.OpenDirectoryProfile(cctx, p, id, dir, a.Location, kind, a.Agent, prompt, profile.Model, profile.Effort)
+		typed = opener.LocalFirstTurn(id, prompt)
+	} else if opener, ok := nat.(directoryPrompter); ok && prompt != "" {
 		s, err = opener.OpenDirectoryPrompt(cctx, p, id, dir, a.Location, kind, a.Agent, prompt)
 		typed = opener.LocalFirstTurn(id, prompt)
 	} else {

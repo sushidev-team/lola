@@ -20,6 +20,11 @@ it('starts an agent in the exact borrowed checkout with a resolve-only prompt', 
   const prompt=mocks.open.mock.calls[0][0].prompt;
   expect(prompt).toContain('stage only the resolved files');
   expect(prompt).toContain('Do not start another merge or rebase, commit, continue, abort, reset, or push');
+  expect(prompt).toContain('common ancestor and both branch tips');
+  expect(prompt).toContain('three-way index versions (base, ours, theirs)');
+  expect(prompt).toContain('rebase reverses their usual branch meaning');
+  expect(prompt).toContain('leave that conflict unresolved');
+  expect(prompt).toContain('Run relevant checks for the combined result');
   expect(state.busy).toBe('');
   await state.resolveConflicts();
   expect(mocks.open).toHaveBeenCalledTimes(1);

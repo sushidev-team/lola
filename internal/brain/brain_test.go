@@ -2,6 +2,7 @@ package brain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -10,7 +11,61 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/sushidev-team/lola/internal/agent"
 )
+
+func TestOpenCodeHelperUsesDedicatedDeniedAgent(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s' \"$OPENCODE_CONFIG_CONTENT\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"permission":{"bash":"allow"}}`)
+	out, err := runHelper(context.Background(), agent.OpenCode, bin, t.TempDir(), "", "", "summarize", "untrusted context", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Agent map[string]struct {
+			Permission string `json:"permission"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(out), &cfg); err != nil || cfg.Agent["lola-context-helper"].Permission != "deny" {
+		t.Fatalf("helper permissions not enforced: %s (%v)", out, err)
+	}
+}
+
+func TestProviderProfilesReachBoundedHelper(t *testing.T) {
+	old := runHelper
+	t.Cleanup(func() { runHelper = old })
+	for _, kind := range []agent.Kind{agent.Claude, agent.Codex, agent.OpenCode} {
+		t.Run(string(kind), func(t *testing.T) {
+			called := false
+			runHelper = func(_ context.Context, got agent.Kind, bin, dir, model, effort, instruction, input string, timeout time.Duration) (string, error) {
+				called = true
+				if got != kind || model != "selected-model" || effort != "high" || input != "context" || instruction != "summarize" || timeout != time.Minute {
+					t.Fatal("profile or context lost")
+				}
+				return "summary", nil
+			}
+			got, err := (&Client{Agent: kind, Model: "selected-model", Effort: "high", Timeout: time.Minute}).Summarize(context.Background(), "summarize", "context")
+			if err != nil || got != "summary" || !called {
+				t.Fatal("helper not called")
+			}
+			args := helperArgs(kind, "selected-model", "high", "summarize")
+			joined := strings.Join(args, " ")
+			if !strings.Contains(joined, "selected-model") || !strings.Contains(joined, "high") {
+				t.Fatal("missing explicit model or effort")
+			}
+			if kind == agent.Codex && (!strings.Contains(joined, "--sandbox read-only") || !strings.Contains(joined, "--ignore-user-config") || args[len(args)-1] != "summarize") {
+				t.Fatal("unsafe helper argv")
+			}
+			if kind == agent.OpenCode && (strings.Contains(joined, "--auto") || !strings.Contains(joined, "--pure --agent lola-context-helper") || args[len(args)-1] != "summarize") {
+				t.Fatal("unsafe helper argv")
+			}
+		})
+	}
+}
 
 // capture records what the seam received on the last Summarize call.
 type capture struct {

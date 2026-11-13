@@ -9,10 +9,9 @@ const attachments = new WeakMap<GitCommit, { signature: string; props: Attachmen
 
 /** Attach to the shared Button's DOM element without adding a wrapper to the graph. */
 export function gitCommitTooltip(commit: GitCommit, branches: GitRef[], checkouts: string[] = [], tips?: GitRef[]) {
-  const ordered = [...new Map(branches.map(branch => [branch.fullName, branch])).values()].sort((a, b) => Number(b.current) - Number(a.current) || Number(a.remote) - Number(b.remote) || a.name.localeCompare(b.name));
+  const ordered = [...new Map(branches.filter(branch => branch.name !== 'HEAD' && !(branch.remote && branch.name.endsWith('/HEAD'))).map(branch => [branch.fullName, branch])).values()].sort((a, b) => Number(b.current) - Number(a.current) || Number(a.remote) - Number(b.remote) || a.name.localeCompare(b.name));
   const grouped = ordered.filter(branch => {
     if (!branch.remote) return true;
-    if (branch.name.endsWith('/HEAD') && ordered.some(other => other.fullName !== branch.fullName && !other.name.endsWith('/HEAD') && other.sha === branch.sha)) return false;
     return !ordered.some(local => !local.remote && local.sha === branch.sha && branch.name.slice(branch.name.indexOf('/') + 1) === local.name);
   });
   const active = checkouts.some(path => path.startsWith('Active checkout:'));
@@ -47,19 +46,7 @@ export function gitCommitTooltip(commit: GitCommit, branches: GitRef[], checkout
   return props;
 }
 
-const refsTooltipKey = createAttachmentKey();
-const refAttachments = new WeakMap<GitCommit, { signature: string; props: AttachmentProps }>();
 function referenceLabels(commit: GitCommit, tips: GitRef[]): TooltipRef[] {
-  return [...tips.map(branch => ({name:branch.name,kind:branch.remote ? 'remote' as const : 'local' as const,current:branch.current})),
+  return [...tips.filter(branch => branch.name !== 'HEAD' && !(branch.remote && branch.name.endsWith('/HEAD'))).map(branch => ({name:branch.name,kind:branch.remote ? 'remote' as const : 'local' as const,current:branch.current})),
     ...commit.refs.filter(ref => ref.startsWith('tag: ')).map(ref => ({name:ref.slice(5),kind:'tag' as const}))];
-}
-export function gitRefsTooltip(commit: GitCommit, tips: GitRef[]) {
-  const refs = referenceLabels(commit, tips);
-  if (!refs.length) return {};
-  const content = {heading:'Branches and tags',text:'References',refs,focus:false,delay:180,hoverTarget:'.commit-refs'};
-  const signature = JSON.stringify(content), cached = refAttachments.get(commit);
-  if (cached?.signature === signature) return cached.props;
-  const props = {[refsTooltipKey]:fromAction(tooltip, () => content)};
-  refAttachments.set(commit,{signature,props});
-  return props;
 }

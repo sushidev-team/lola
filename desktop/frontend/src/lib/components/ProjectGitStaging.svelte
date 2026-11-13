@@ -28,7 +28,7 @@
   const unstaged = $derived(folderFirstFiles(unstagedFiles(data?.files ?? [])));
   const conflicts = $derived((data?.files ?? []).some(file => file.conflict));
   const amendStale = $derived(git.amend && !!data && git.amendHead !== data.head);
-  const canCommit = $derived(staged.length > 0 && !!git.subject.trim() && !conflicts && !git.busy && !git.draftingMessage && !data?.operation && !git.amendLoading && (!git.amend || (!!git.amendHead && !!data?.head && !amendStale)));
+  const canCommit = $derived((staged.length > 0 || data?.operation === 'merge') && !!git.subject.trim() && !conflicts && !git.busy && !git.draftingMessage && (!data?.operation || data.operation === 'merge') && !git.amendLoading && (!git.amend || (!!git.amendHead && !!data?.head && !amendStale)));
   const groups = $derived([{ title: 'Unstaged', entries: unstaged, staged: false }, { title: 'Staged', entries: staged, staged: true }]);
   let tree = $state(readTree());
   let collapsed = $state(new Set<string>());
@@ -136,6 +136,12 @@
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     if (!canCommit) return;
+    if (data?.operation === 'merge') {
+      const state = git;
+      const result = await state.branchAction({action:'continue',source:'merge',sourceSHA:data.head,target:'',targetSHA:'',message:state.message}, ref, limit);
+      if (result !== null && state === git) oncommitted();
+      return;
+    }
     const state = git, head = git.amendHead, message = git.message, branch = ref, count = limit;
     if (!state.amend) { void commit(state, false, '', branch, count); return; }
     const valid = () => mounted && state === git && state.message === message && state.amend && state.amendHead === head && state.snapshot?.head === head;
@@ -196,13 +202,16 @@
     {/each}
   </div>
   <form class="commit-composer" onsubmit={submit}>
-    <div class="composer-heading"><label for={`${id}-subject`}>Commit message</label><Button size="xs" variant="accent" loading={git.draftingMessage} disabled={!data || !staged.length || conflicts || !!data.operation || !!git.busy || git.draftingMessage} title="Draft a message from staged changes using Claude Haiku" aria-label="Generate commit message with AI" onclick={() => void git.draftCommitMessage()}><Icon name="sparkles" size={13}/>{git.draftingMessage ? 'Drafting…' : 'AI draft'}</Button></div>
+    <div class="composer-heading"><label for={`${id}-subject`}>Commit message</label><Button size="xs" variant="accent" loading={git.draftingMessage} disabled={!data || !staged.length || conflicts || !!data.operation || !!git.busy || git.draftingMessage} title="Draft a message from staged changes using your AI settings" aria-label="Generate commit message with AI" onclick={() => void git.draftCommitMessage()}><Icon name="sparkles" size={13}/>{git.draftingMessage ? 'Drafting…' : 'AI draft'}</Button></div>
     {#if git.draftError}<p class="draft-error" role="alert">{git.draftError}</p>{/if}
+    <div class="subject-field" class:has-reset={!!data?.mergeMessage && data.operation === 'merge'}>
     <input id={`${id}-subject`} aria-label="Commit subject" placeholder={git.amendLoading ? 'Loading last commit…' : 'Summary'} bind:value={git.subject} disabled={!!git.busy || !data} maxlength="1000" />
+      {#if data?.operation === 'merge' && data.mergeMessage}<Button icon size="xs" class="reset-merge-message" aria-label="Reset merge message" title="Reset to default merge message" disabled={!!git.busy} onclick={() => git.resetMergeMessage()}><Icon name="rotate-ccw" size={13}/></Button>{/if}
+    </div>
     <textarea aria-label="Commit body" placeholder="Description (optional)" rows="3" bind:value={git.body} disabled={!!git.busy || !data} maxlength="19000"></textarea>
     <div class="commit-options"><label class="amend-option"><Checkbox checked={git.amend} onchange={(event) => void git.setAmend(event.currentTarget.checked)} disabled={!!git.busy || !!data?.operation || !data?.head} /><span>Amend last commit</span>{#if git.amend && git.amendHead}<code>{git.amendHead.slice(0, 8)}</code>{/if}</label><Button size="xs" icon class="signing-icon" aria-label={signingLabel} {...signingTooltip}><Icon name={data?.signing?.enabled ? 'shield-check' : 'info'} size={14} /></Button></div>
     {#if amendStale}<p class="conflict-note" role="alert">HEAD changed since you selected Amend. Turn Amend off, review the last commit, then enable it again.</p>{/if}
-    <Button block variant="primary" loading={git.busy === 'commit' || git.busy === 'amend' || git.busy === 'check-amend'} disabled={!canCommit} type="submit"><Icon name="check" size={14} />{git.amend ? 'Amend' : 'Commit'} {staged.length ? `${staged.length} ${staged.length === 1 ? 'file' : 'files'}` : 'staged changes'}</Button>
+    <Button block variant="primary" loading={git.busy === 'commit' || git.busy === 'amend' || git.busy === 'check-amend' || (git.busy === 'continue' && data?.operation === 'merge')} disabled={!canCommit} type="submit"><Icon name="check" size={14} />{data?.operation === 'merge' ? 'Complete merge' : `${git.amend ? 'Amend' : 'Commit'} ${staged.length ? `${staged.length} ${staged.length === 1 ? 'file' : 'files'}` : 'staged changes'}`}</Button>
   </form>
 </div>
 
@@ -248,6 +257,10 @@
   .composer-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .draft-error { color:var(--color-bad); font-size:12px; line-height:1.5; }
   .commit-composer label { font-size:13px; font-weight:500; }
+  .subject-field { position:relative; min-width:0; }
+  .subject-field.has-reset input { padding-right:34px; }
+  .subject-field :global(.reset-merge-message) { position:absolute; right:5px; top:5px; opacity:0; pointer-events:none; }
+  .subject-field:hover :global(.reset-merge-message), .subject-field:focus-within :global(.reset-merge-message) { opacity:1; pointer-events:auto; }
   .commit-composer input,.commit-composer textarea { min-width:0; width:100%; border:1px solid var(--color-edge); border-radius:5px; padding:7px 9px; background:var(--color-panel); color:var(--color-ink); font-size:13px; line-height:1.5; outline:none; }
   .commit-composer textarea { resize:vertical; min-height:64px; max-height:140px; }
   .commit-composer input:focus,.commit-composer textarea:focus { border-color:var(--color-accent); }

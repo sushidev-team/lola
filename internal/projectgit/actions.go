@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,9 +21,68 @@ type BranchRequest struct {
 	Remote       string `json:"remote,omitempty"`
 	RemoteBranch string `json:"remoteBranch,omitempty"`
 	Mainline     int    `json:"mainline,omitempty"`
+	Message      string `json:"message,omitempty"`
 }
 type BranchResult struct {
 	Path string `json:"path"`
+}
+
+// MergeMessage reads Git's own branch-aware message, without conflict comments.
+func (c Client) MergeMessage(ctx context.Context, dir string) (string, error) {
+	path, err := c.text(ctx, dir, "rev-parse", "--git-path", "MERGE_MSG")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 65537))
+	if err != nil {
+		return "", err
+	}
+	if len(b) > 65536 {
+		return "", errors.New("merge message exceeds 64 KB")
+	}
+	clean, err := c.git(ctx, dir, string(b), "stripspace", "--strip-comments")
+	if err != nil {
+		return "", err
+	}
+	message := strings.TrimSpace(string(clean))
+	// Older Lola versions merged a pinned SHA without a descriptive -m. Keep
+	// human-written messages, but recover a readable title for those paused merges.
+	source, err := c.text(ctx, dir, "rev-parse", "--verify", "MERGE_HEAD")
+	if err != nil || message != "Merge commit '"+source+"'" {
+		return message, nil
+	}
+	target, _ := c.text(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if target == "" {
+		return message, nil
+	}
+	refs, err := c.text(ctx, dir, "for-each-ref", "--format=%(refname)", "--points-at", source, "refs/heads/", "refs/remotes/")
+	if err != nil {
+		return message, nil
+	}
+	var local, remote []string
+	for _, ref := range strings.Fields(refs) {
+		if strings.HasPrefix(ref, "refs/heads/") && ref != "refs/heads/"+target {
+			local = append(local, strings.TrimPrefix(ref, "refs/heads/"))
+		}
+		if strings.HasPrefix(ref, "refs/remotes/") && !strings.HasSuffix(ref, "/HEAD") {
+			remote = append(remote, strings.TrimPrefix(ref, "refs/remotes/"))
+		}
+	}
+	if len(local) == 1 {
+		return fmt.Sprintf("Merge branch '%s' into %s", local[0], target), nil
+	}
+	if len(local) == 0 && len(remote) == 1 {
+		return fmt.Sprintf("Merge branch '%s' into %s", remote[0], target), nil
+	}
+	return "Merge changes into " + target, nil
 }
 
 // Operation reports existing Git state, including operations started outside Lola.
@@ -201,6 +261,13 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		if err := c.requireHead(ctx, dir, r.SourceSHA); err != nil {
 			return err
 		}
+		if op == "merge" && r.Action == "continue" && r.Message != "" {
+			if strings.TrimSpace(r.Message) == "" || len(r.Message) > 65536 || strings.ContainsRune(r.Message, 0) {
+				return errors.New("enter a merge message of at most 64 KB")
+			}
+			_, err = c.git(ctx, dir, r.Message, "commit", "--file=-")
+			return err
+		}
 		// The UI explicitly confirms abort; continue uses Git's prepared message,
 		// while retaining normal signing and hooks without launching an editor.
 		_, err = c.git(ctx, dir, "", "-c", "core.editor=true", op, "--"+r.Action)
@@ -326,7 +393,10 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		}
 		var err error
 		if r.Action == "merge" {
-			_, err = c.git(ctx, dir, "", "merge", "--no-edit", "--", r.SourceSHA)
+			source := strings.TrimPrefix(strings.TrimPrefix(r.Source, "refs/heads/"), "refs/remotes/")
+			target := strings.TrimPrefix(r.Target, "refs/heads/")
+			message := fmt.Sprintf("Merge branch '%s' into %s", source, target)
+			_, err = c.git(ctx, dir, "", "merge", "--no-edit", "-m", message, "--", r.SourceSHA)
 		} else {
 			_, err = c.git(ctx, dir, "", "-c", "rebase.autoStash=false", "-c", "rebase.updateRefs=false", "rebase", "--no-autostash", "--", r.TargetSHA)
 		}

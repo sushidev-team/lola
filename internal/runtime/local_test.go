@@ -12,6 +12,30 @@ import (
 	"github.com/sushidev-team/lola/internal/state"
 )
 
+func TestLocalAIProfilePinsModelAndEffort(t *testing.T) {
+	for _, kind := range []string{"claude", "codex", "opencode"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t, "", "*\"has-session\"*) exit 1 ;;")
+			s, err := f.n.OpenDirectoryProfile(context.Background(), f.p, "lola-local-profile", f.repo, "checkout", kind, true, "Resolve conflicts", "provider/model", "high")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Model != "provider/model" || s.ModelEffort != "high" || s.OwnsBranch() {
+				t.Fatalf("profile or ownership lost: %+v", s)
+			}
+			art, _ := localArtifacts(s.ID)
+			raw, err := os.ReadFile(filepath.Join(art, "launch"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			log := string(raw)
+			if !strings.Contains(log, "provider/model") || !strings.Contains(log, "high") {
+				t.Fatalf("launch omitted model/effort: %s", log)
+			}
+		})
+	}
+}
+
 func TestLocalSessionsShareCheckoutWithoutOwningIt(t *testing.T) {
 	f := newFixture(t, "", "*\"has-session\"*) exit 1 ;;")
 	f.p.Env = map[string]string{"PROJECT_VALUE": "hello 'quoted'"}

@@ -85,7 +85,7 @@ func (s *ProjectGitService) DraftPullRequest(project, worktree string, selection
 	if len(existing) > 1000 {
 		existing = existing[:1000]
 	}
-	result, err := s.runGitDraft(ctx, prompt, preview.Context+"\nExisting draft:\n"+existing)
+	result, err := s.runGitDraft(ctx, project, prompt, preview.Context+"\nExisting draft:\n"+existing)
 	if err != nil {
 		return "", err
 	}

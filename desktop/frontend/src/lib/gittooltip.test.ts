@@ -2,24 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import Button from './components/Button.svelte';
-import { gitCommitTooltip, gitRefsTooltip } from './gittooltip';
+import { gitCommitTooltip } from './gittooltip';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
-
-it('reveals every branch and tag at the commit on reference hover', async () => {
-  vi.useFakeTimers();
-  const commit = {sha:'f'.repeat(40),subject:'Tagged commit',author:'A',date:'',parents:[],refs:['tag: v0.5.0','tag: release/<test>'],email:''};
-  const branches = ['main','feature/long-branch','origin/main','other'].map(name => ({name,fullName:`refs/heads/${name}`,sha:commit.sha,remote:name.startsWith('origin/'),current:name==='main'}));
-  render(Button, {...gitRefsTooltip(commit, branches),children:createRawSnippet(() => ({render:() => '<span class="commit-refs">main +5</span>'}))});
-  await fireEvent.mouseEnter(screen.getByText('main +5'));
-  vi.advanceTimersByTime(180);
-  const tip = screen.getByRole('tooltip');
-  expect(tip.querySelectorAll('.git-tip-ref')).toHaveLength(6);
-  expect(tip).toHaveTextContent('feature/long-branch');
-  expect(tip).toHaveTextContent('v0.5.0');
-  expect(tip).toHaveTextContent('release/<test>');
-  expect(tip.querySelector('test')).toBeNull();
-});
 
 it('attaches a delayed structured tooltip directly to the shared commit button', async () => {
   vi.useFakeTimers();
@@ -90,11 +75,11 @@ it('groups paired refs, prioritizes the current branch, and bounds ancestry chip
   expect(tip.querySelector('.git-tip-author')).toHaveTextContent('<img src=x>');
 });
 
-it('keeps a standalone remote HEAD visible when no named branch explains it', async () => {
+it('omits symbolic remote HEAD even when no named branch explains it', async () => {
   vi.useFakeTimers();
   const commit = { sha: 'd'.repeat(40), subject: 'Remote head', author: 'Martin', date: '2026-11-12T14:00:00Z', parents: [], refs: [], email: '' };
   render(Button, { ...gitCommitTooltip(commit, [{ name: 'origin/HEAD', fullName: 'refs/remotes/origin/HEAD', sha: commit.sha, remote: true, current: false }]), children: createRawSnippet(() => ({ render: () => '<span>Remote row</span>' })) });
   await fireEvent.focusIn(screen.getByRole('button', { name: 'Remote row' }));
   vi.advanceTimersByTime(500);
-  expect(screen.getByRole('tooltip').querySelector('.git-tip-branch')).toHaveTextContent('origin/HEAD');
+  expect(screen.getByRole('tooltip').querySelector('.git-tip-branch')).toBeNull();
 });

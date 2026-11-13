@@ -53,6 +53,29 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it('shows named refs and expands extra branch and tag badges without a reference popover', async () => {
+    const data = snapshot();
+    data.refs = [
+      {name:'origin/HEAD',fullName:'refs/remotes/origin/HEAD',sha:newSHA,remote:true,current:false},
+      {name:'origin/main',fullName:'refs/remotes/origin/main',sha:newSHA,remote:true,current:false},
+      {name:'live',fullName:'refs/heads/live',sha:newSHA,remote:false,current:false},
+    ];
+    data.commits[0].refs = ['tag: v1.5.0'];
+    api.Snapshot.mockResolvedValue(data);
+    await open();
+    const row = screen.getByRole('button', {name:/Add project workspace,/});
+    const refs = row.querySelector('.commit-refs')!;
+    expect(refs).not.toHaveTextContent('HEAD');
+    expect(refs.querySelector('.extra-refs')).toHaveTextContent('+2');
+    expect(refs.querySelector('.expanded-refs')).toHaveTextContent('origin/main');
+    expect(refs.querySelector('.expanded-refs')).toHaveTextContent('v1.5.0');
+    await fireEvent.mouseEnter(refs);
+    expect(screen.queryByText('Branches and tags')).toBeNull();
+    const remote = refs.querySelector('[data-branch-ref="refs/remotes/origin/main"]')!;
+    await fireEvent.contextMenu(remote);
+    expect(screen.getByRole('menuitem',{name:'Delete remote branch…'})).toBeInTheDocument();
+  });
+
   it('jumps to a branch tip without filtering and offers Solo through its actions button', async () => {
     await open();
     await fireEvent.click(screen.getByRole('button',{name:'origin/main'}));
@@ -334,7 +357,7 @@ describe('Project Git workspace', () => {
     const first = screen.getByRole('button', { name: /Add project workspace,/ });
     const old = screen.getByRole('button', { name: /Initial project,/ });
     expect(first.querySelector('.commit-refs')).toHaveTextContent('main');
-    expect(old.querySelector('.ref-name')).toHaveTextContent(/^main$/);
+    expect(old.querySelector('.ref-name')).toHaveTextContent(/^origin\/main$/);
     expect(first.querySelector('.ref-label .lucide-monitor')).toBeInTheDocument();
     expect(first.querySelector('.checkout-marker')).toBeNull();
     await fireEvent.mouseEnter(first.querySelector('.commit-copy')!);
@@ -432,6 +455,21 @@ describe('Project Git workspace', () => {
     expect(screen.getByRole('button',{name:'Working changes, 0 files'})).toHaveTextContent('Rebase in progress');
     expect(screen.getByRole('button',{name:'Continue'})).toBeEnabled();
     expect(screen.queryByRole('button',{name:'AI resolve'})).toBeNull();
+  });
+  it('prefills the merge message, restores its default, and completes with the edited text', async () => {
+    api.Snapshot.mockResolvedValue(snapshot({operation:'merge',mergeMessage:"Merge branch 'live' into main"}));
+    await open();
+    expect(screen.getByLabelText('Commit subject')).toHaveValue("Merge branch 'live' into main");
+    await fireEvent.input(screen.getByLabelText('Commit subject'),{target:{value:'Custom merge title'}});
+    await fireEvent.input(screen.getByLabelText('Commit body'),{target:{value:'Custom description'}});
+    await refreshRepository();
+    expect(screen.getByLabelText('Commit subject')).toHaveValue('Custom merge title');
+    await fireEvent.click(screen.getByRole('button',{name:'Reset merge message'}));
+    expect(screen.getByLabelText('Commit subject')).toHaveValue("Merge branch 'live' into main");
+    expect(screen.getByLabelText('Commit body')).toHaveValue('');
+    await fireEvent.input(screen.getByLabelText('Commit subject'),{target:{value:'Merge live changes'}});
+    await fireEvent.click(screen.getAllByRole('button',{name:'Complete merge'})[0]);
+    await waitFor(()=>expect(api.BranchAction).toHaveBeenCalledWith(project,'',expect.objectContaining({action:'continue',source:'merge',message:'Merge live changes'})));
   });
   it('places working changes in history and identifies the checked-out local branch', async () => {
     await open();

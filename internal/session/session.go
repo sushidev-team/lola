@@ -506,7 +506,8 @@ type Session struct {
 	// agent's own default). Persisted because a revive must relaunch the SAME
 	// model: a best-of attempt on opus that comes back on the default would no
 	// longer be the attempt it is compared as.
-	Model string `json:"model,omitempty"`
+	Model       string `json:"model,omitempty"`
+	ModelEffort string `json:"modelEffort,omitempty"`
 
 	// BestOf is the best-of-N GROUP this session is one attempt of ("" = an
 	// ordinary session). Attempt is its 1-based place in the group, Attempts the

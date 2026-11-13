@@ -19,6 +19,7 @@ export interface BranchRequest {
     "remote"?: string;
     "remoteBranch"?: string;
     "mainline"?: number;
+    "message"?: string;
 }
 
 export interface BranchResult {
@@ -143,6 +144,7 @@ export interface Signing {
 
 export interface Snapshot {
     "operation": string;
+    "mergeMessage"?: string;
     "remotes": Remote[] | null;
     "path": string;
     "branch": string;

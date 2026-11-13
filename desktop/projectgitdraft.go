@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/projectgit"
@@ -26,9 +27,9 @@ func (s *ProjectGitService) DraftCommitMessage(project, worktree, draft string) 
 	if err != nil {
 		return "", err
 	}
-	output, err := s.runGitDraft(ctx, projectgit.CommitDraftInstruction, input.Text)
+	output, err := s.runGitDraft(ctx, project, projectgit.CommitDraftInstruction, input.Text)
 	if errors.Is(err, brain.ErrNotFound) {
-		return "", errors.New("install and sign in to Claude Code to draft commit messages")
+		return "", errors.New("install and sign in to the selected AI provider to draft commit messages")
 	}
 	if err != nil {
 		return "", err
@@ -51,7 +52,7 @@ func (s *ProjectGitService) DraftCommitMessage(project, worktree, draft string) 
 	return message, nil
 }
 
-func (s *ProjectGitService) runGitDraft(ctx context.Context, instruction, input string) (string, error) {
+func (s *ProjectGitService) runGitDraft(ctx context.Context, project, instruction, input string) (string, error) {
 	run := s.draftCommit
 	if run == nil {
 		home, err := config.Home()
@@ -63,6 +64,16 @@ func (s *ProjectGitService) runGitDraft(ctx context.Context, instruction, input 
 			return "", err
 		}
 		model := brain.Client{Model: "haiku", Dir: helperDir, Timeout: 30 * time.Second}
+		cfg, _, err := loadConfig()
+		if err != nil {
+			return "", err
+		}
+		kind := cfg.AgentForProject(project)
+		if profile, enabled := cfg.AIProfile(kind, "draft"); enabled {
+			model.Agent = agent.Parse(kind)
+			model.Model = profile.Model
+			model.Effort = profile.Effort
+		}
 		run = model.Summarize
 	}
 	return run(ctx, instruction, input)

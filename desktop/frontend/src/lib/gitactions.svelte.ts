@@ -319,7 +319,7 @@ export class GitActions {
   }
   continueOperation() {
     const context = this.context(), data = context.git.snapshot;
-    if (data?.operation && ['merge', 'rebase', 'cherry-pick', 'revert'].includes(data.operation)) void this.execute(context, { action: 'continue', source: data.operation, sourceSHA: data.head, target: '', targetSHA: '' });
+    if (data?.operation && ['merge', 'rebase', 'cherry-pick', 'revert'].includes(data.operation)) void this.execute(context, { action: 'continue', source: data.operation, sourceSHA: data.head, target: '', targetSHA: '', ...(data.operation === 'merge' && context.git.message.trim() ? {message:context.git.message} : {}) });
   }
   abortOperation() {
     const context = this.context(), operation = context.git.snapshot?.operation;

@@ -371,24 +371,25 @@ type LinearConfig struct {
 }
 
 type Config struct {
-	Defaults    Defaults          `toml:"defaults"`
-	Linear      LinearConfig      `toml:"linear"`
-	Projects    []Project         `toml:"project"`
-	Groups      []Group           `toml:"group"`
-	Reactions   ReactionsConfig   `toml:"reactions"`
-	Notify      NotifyConfig      `toml:"notify"`
-	Brain       BrainConfig       `toml:"brain"`
-	MergeQueue  MergeQueueConfig  `toml:"merge_queue"`
-	BestOf      BestOfConfig      `toml:"best_of"`
-	StatusAgent StatusAgentConfig `toml:"statusagent"`
-	Review      ReviewConfig      `toml:"review"`
-	CodeRabbit  CodeRabbitConfig  `toml:"coderabbit"`
-	Tmux        TmuxConfig        `toml:"tmux"`
-	UI          UIConfig          `toml:"ui"`
-	Remote      RemoteConfig      `toml:"remote"`
-	Budget      BudgetConfig      `toml:"budget"`
-	Load        LoadConfig        `toml:"load"`
-	Sandbox     SandboxConfig     `toml:"sandbox"`
+	Defaults    Defaults              `toml:"defaults"`
+	Linear      LinearConfig          `toml:"linear"`
+	Projects    []Project             `toml:"project"`
+	Groups      []Group               `toml:"group"`
+	Reactions   ReactionsConfig       `toml:"reactions"`
+	Notify      NotifyConfig          `toml:"notify"`
+	AI          map[string]AIProvider `toml:"ai,omitempty"`
+	Brain       BrainConfig           `toml:"brain"`
+	MergeQueue  MergeQueueConfig      `toml:"merge_queue"`
+	BestOf      BestOfConfig          `toml:"best_of"`
+	StatusAgent StatusAgentConfig     `toml:"statusagent"`
+	Review      ReviewConfig          `toml:"review"`
+	CodeRabbit  CodeRabbitConfig      `toml:"coderabbit"`
+	Tmux        TmuxConfig            `toml:"tmux"`
+	UI          UIConfig              `toml:"ui"`
+	Remote      RemoteConfig          `toml:"remote"`
+	Budget      BudgetConfig          `toml:"budget"`
+	Load        LoadConfig            `toml:"load"`
+	Sandbox     SandboxConfig         `toml:"sandbox"`
 	// SSHHosts is the [[ssh_host]] catalog: the only hosts an agent-assisted ssh
 	// session can reach (see ssh.go). Empty means the feature is off.
 	SSHHosts []SSHHost `toml:"ssh_host"`
@@ -496,6 +497,7 @@ type fileConfig struct {
 	Polls       []legacyPoll           `toml:"poll,omitempty"`  // COMPAT-ONLY: pre-merge top-level polls, folded onto their project on load
 	Reactions   *fileReactionsConfig   `toml:"reactions,omitempty"`
 	Notify      *fileNotifyConfig      `toml:"notify,omitempty"`
+	AI          map[string]AIProvider  `toml:"ai,omitempty"`
 	Brain       *fileBrainConfig       `toml:"brain,omitempty"`
 	MergeQueue  *fileMergeQueueConfig  `toml:"merge_queue,omitempty"`
 	BestOf      *fileBestOfConfig      `toml:"best_of,omitempty"`
@@ -926,6 +928,7 @@ func (fc *fileConfig) config() *Config {
 		migrateErrs:     migrateErrs,
 		Reactions:       resolveReactions(fc.Reactions),
 		Notify:          resolveNotify(fc.Notify),
+		AI:              fc.AI,
 		Brain:           resolveBrain(fc.Brain),
 		MergeQueue:      resolveMergeQueue(fc.MergeQueue),
 		BestOf:          resolveBestOf(fc.BestOf),
@@ -989,6 +992,7 @@ func (c *Config) file() *fileConfig {
 		Groups:      slices.Clone(c.Groups),
 		Reactions:   reactionsFile(c.Reactions),
 		Notify:      notifyFile(c.Notify),
+		AI:          c.AI,
 		Brain:       brainFile(c.Brain),
 		MergeQueue:  mergeQueueFile(c.MergeQueue),
 		BestOf:      bestOfFile(c.BestOf),

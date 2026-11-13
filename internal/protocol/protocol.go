@@ -783,6 +783,7 @@ type PrRow struct {
 // Existing (cmd=openExisting) instead works directly on Branch without owning
 // it, ignoring Base. A distinct command keeps older daemons from creating it.
 type OpenManualArgs struct {
+	AIAction string `json:"aiAction,omitempty"` // resolve selects the provider-specific AI profile for a new checkout session
 	Name     string `json:"name,omitempty"`
 	Location string `json:"location,omitempty"` // worktree (default), main, checkout (borrowed), temporary
 	Path     string `json:"path,omitempty"`     // temporary shell or registered borrowed checkout directory

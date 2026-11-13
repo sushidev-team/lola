@@ -5,6 +5,7 @@
   import Icon from "$lib/components/Icon.svelte";
   import { onMount, onDestroy, tick } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
+  import AISettings from "$lib/components/AISettings.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
@@ -72,6 +73,7 @@
     { id: "notify", label: "Notifications", group: "Connections" },
     { id: "sshhosts", label: "SSH hosts", group: "Connections" },
     { id: "remote", label: "Phone access", group: "Connections" },
+    { id: "ai", label: "AI", group: "Automation" },
     { id: "review", label: "Review", group: "Automation" },
     { id: "brain", label: "Summaries", group: "Automation" },
     { id: "interpreter", label: "Status interpretation", group: "Automation" },
@@ -1075,10 +1077,15 @@
             </label>
           </SettingsGroup>
         </section>
+      {:else if tab === "ai"}
+        <section>
+          {@render head("AI")}
+          <AISettings bind:value={d.ai} defaultProvider={d.agent || 'claude'}/>
+        </section>
       {:else if tab === "brain"}
         <section>
           {@render head("Summaries")}
-          <SettingsGroup title="Session summaries" description="Claude summaries use additional tokens.">
+          <SettingsGroup title="Session summaries" description="AI summaries use additional tokens.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.brainEnabled} />
               <span>Enabled</span>
@@ -1096,8 +1103,11 @@
               </label>
           </SettingsGroup>
           <SettingsGroup title="Model and limits">
-            <AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
-              onModelChange={(value) => { d.brainModel = value; }} />
+            {#if d.ai?.[d.agent || 'claude']?.enabled}
+              <p class={hintCls}>Model selected by the Session summaries profile in AI settings.</p>
+              <Button size="sm" onclick={()=>selectTab('ai')}>Configure AI profiles</Button>
+            {:else}<AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
+              onModelChange={(value) => { d.brainModel = value; }} />{/if}
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.brainTimeout} />

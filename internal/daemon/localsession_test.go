@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -16,6 +17,35 @@ import (
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
+
+type profileNative struct {
+	*promptNative
+	model, effort string
+}
+
+func (n *profileNative) OpenDirectoryProfile(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool, prompt, model, effort string) (session.Session, error) {
+	n.model, n.effort = model, effort
+	return n.OpenDirectoryPrompt(ctx, p, id, dir, location, kind, useAgent, prompt)
+}
+func TestResolverUsesProjectAIProfile(t *testing.T) {
+	nat := &profileNative{promptNative: &promptNative{fakeNative: &fakeNative{}}}
+	cfg := nativeTestConfig(nativePoll("p1"))
+	cfg.Projects[0].Agent = "codex"
+	cfg.Projects[0].Path = t.TempDir()
+	p := config.DefaultAIProvider("codex")
+	p.Enabled = true
+	p.Profiles["thorough"] = config.AIModel{Model: "selected-model", Effort: "high"}
+	cfg.AI = map[string]config.AIProvider{"codex": p}
+	d := newTestDaemon(t, cfg, &linear.Fake{}, nat)
+	d.validateLocalCheckout = func(context.Context, string, string, string) error { return nil }
+	_, err := d.handleOpenDirectory(context.Background(), protocol.OpenManualArgs{Project: "p1", Location: "checkout", Path: cfg.Projects[0].Path, Agent: true, AIAction: "resolve", Prompt: "Resolve conflicts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nat.model != "selected-model" || nat.effort != "high" || nat.got != "Resolve conflicts" {
+		t.Fatal("resolver profile or task was lost")
+	}
+}
 
 func TestBorrowedCheckoutSession(t *testing.T) {
 	for _, refuse := range []bool{false, true} {

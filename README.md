@@ -992,6 +992,40 @@ Best-of-N dispatch: a poll match that ALSO carries `label` is spawned as the
 | `label` | string | Trigger label UUID. Like every `[defaults]` label it should be a WORKSPACE label (it applies to every project's poll). Empty/absent = no label trigger; `lola bestof start` still works. |
 | `agents` | []string | The mix, one `<agent>[@<model>][:<count>]` entry each — e.g. `["claude:2", "codex@gpt-5-codex"]`. 2–6 attempts. Default `["claude:2"]`. A count after the LAST colon, so a model carrying a colon needs an explicit count (`claude@…-v1:0:1`). |
 
+### AI profiles
+
+Desktop **Settings → AI** stores independent profiles for Claude Code, Codex,
+and OpenCode. The provider selector changes the settings being edited; it does
+not switch the workspace or project agent. Each provider has **Fast**, **Balanced**,
+and **Thorough** profiles with a model and optional reasoning effort (OpenCode
+variant), plus action-to-profile mappings for commit/PR drafts, conflict
+resolution, session summaries, and planning.
+
+Profiles are opt-in per provider. Until enabled, existing settings keep their
+behavior. Drafts and newly started resolver sessions use the project's agent;
+summaries and planning use the workspace default agent. An existing resolver
+session retains its current model. Disabling profiles preserves their values.
+The `[brain].enabled` switch still controls automatic summaries.
+
+Example configuration (use `ai.codex` or `ai.opencode` for their independent settings):
+
+```toml
+[ai.claude]
+enabled = true
+[ai.claude.profiles.fast]
+model = "haiku"
+[ai.claude.profiles.balanced]
+model = "sonnet"
+[ai.claude.profiles.thorough]
+model = "opus"
+effort = "high"
+[ai.claude.actions]
+draft = "fast"
+resolve = "thorough"
+summary = "balanced"
+plan = "thorough"
+```
+
 ### `[brain]` (optional, off by default)
 
 The P5 orchestrator brain: when enabled, lola makes a single headless
@@ -1009,7 +1043,7 @@ content for the daemon's lifetime (up to 256 entries). They never affect merge
 checks or messages sent to the coding agent. Missing Claude, invalid output,
 and timeouts leave the original preview visible; failures back off for ten
 minutes. Each batch is capped at 30 seconds (or a shorter `timeout_seconds`).
-This panel always uses Haiku; `model` selects the other brain summaries.
+Without AI profiles, this panel uses Haiku and `model` selects the other brain summaries. Enabled AI profiles select the summary model for both.
 
 | Key | Type | Description |
 | --- | --- | --- |
@@ -1672,8 +1706,8 @@ history in `.lola/codex` retain that home when revived. Codex pane classificatio
 and turn-complete notifications are supported, but structured inline question
 extraction and transcript-based activity detection remain Claude-specific.
 
-**Distinct from lola's internal helpers.** The `[brain]` summarizer still uses
-`claude -p`; disable it for an installation without Claude. The `[statusagent]`
+**Distinct from lola's internal helpers.** The `[brain]` summarizer defaults to
+`claude -p`; enabled AI profiles can select Codex or OpenCode instead. The `[statusagent]`
 interpreter chooses its own `agent` independently of the worker. Reviews have
 their own provider catalog: select `codex-session` to use Codex for review as well.
 
@@ -1728,8 +1762,8 @@ trees. Selection shows metadata and changed files; click a file or **View change
 to open a diff. The comparison identifies its direction and can be reversed. Diffs
 offer unified and side-by-side layouts.
 
-**AI draft** beside Commit message uses your installed, signed-in Claude Code
-with Haiku to suggest an editable subject and body from staged changes. It sends
+**AI draft** beside Commit message uses the enabled AI draft profile, or Claude
+Haiku by default, to suggest an editable subject and body from staged changes. It sends
 bounded staged patch excerpts, file names, recent commit subjects and the current
 draft; it does not include unstaged or untracked content or create a commit.
 If the index or your draft changes during generation, the result is discarded.
@@ -1757,7 +1791,7 @@ labels. Draft PRs defer reviewer requests. The form uses your installed, signed-
 to their parent repository. Fetch the target first if its base commit is missing
 locally. An unpublished source requires explicit **Push & create PR** consent;
 pushes never force remote history. Existing open PRs are reused, and metadata
-failures retain the created PR link. **AI draft** uses Claude Haiku with bounded
+failures retain the created PR link. **AI draft** uses the enabled AI draft profile (Claude Haiku by default) with bounded
 committed changes and your editable draft; it never submits the PR.
 
 **Create worktree** in a branch menu creates a separate checkout in a new folder,

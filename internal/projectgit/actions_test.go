@@ -195,10 +195,25 @@ func TestMergeContinueUsesResolvedIndexAndPreparedMessage(t *testing.T) {
 	if err := c.BranchAction(ctx, dir, BranchRequest{Action: "merge", Source: "refs/heads/feature", Target: "refs/heads/main", SourceSHA: source, TargetSHA: target}); err == nil {
 		t.Fatal("expected conflict")
 	}
+	snap, err := c.Snapshot(ctx, dir, "", 20)
+	if err != nil || !strings.Contains(snap.MergeMessage, "feature") || strings.Contains(snap.MergeMessage, "# Conflicts") {
+		t.Fatalf("missing clean merge message: %q %v", snap.MergeMessage, err)
+	}
+	write(t, dir, ".git/MERGE_MSG", "Merge commit '"+source+"'\n\n# Conflicts:\n# base\n")
+	if message, err := c.MergeMessage(ctx, dir); err != nil || message != "Merge branch 'feature' into main" {
+		t.Fatalf("legacy message: %q %v", message, err)
+	}
+	write(t, dir, ".git/MERGE_MSG", "My edited merge message\n\nKeep this explanation.\n")
+	if message, err := c.MergeMessage(ctx, dir); err != nil || message != "My edited merge message\n\nKeep this explanation." {
+		t.Fatalf("edited message changed: %q %v", message, err)
+	}
 	write(t, dir, "base", "resolved\n")
 	testGit(t, dir, "add", "base")
-	if err := c.BranchAction(ctx, dir, BranchRequest{Action: "continue", Source: "merge", SourceSHA: target}); err != nil {
+	if err := c.BranchAction(ctx, dir, BranchRequest{Action: "continue", Source: "merge", SourceSHA: target, Message: "Merge feature into main\n\nKeep both changes."}); err != nil {
 		t.Fatal(err)
+	}
+	if message := testGit(t, dir, "show", "-s", "--format=%B", "HEAD"); !strings.Contains(message, "Merge feature into main\n\nKeep both changes.") {
+		t.Fatalf("edited message was ignored: %q", message)
 	}
 	if parents := strings.Fields(testGit(t, dir, "show", "-s", "--format=%P", "HEAD")); len(parents) != 2 || parents[0] != target || parents[1] != source {
 		t.Fatalf("parents=%v", parents)

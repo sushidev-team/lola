@@ -14,7 +14,7 @@
   import ProjectGitPublish from './ProjectGitPublish.svelte';
   import ProjectGitNewBranch from './ProjectGitNewBranch.svelte';
   import { GitActions, type GitDestination } from '$lib/gitactions.svelte';
-  import { gitCommitTooltip, gitRefsTooltip } from '$lib/gittooltip';
+  import { gitCommitTooltip } from '$lib/gittooltip';
   import { confirm } from '$lib/confirm.svelte';
   import { nav } from '$lib/nav.svelte';
   import { store } from '$lib/store.svelte';
@@ -297,8 +297,9 @@
     }
     return counts;
   });
-  const localRefs = $derived(data?.refs.filter(branch => !branch.remote) ?? []);
-  const remoteRefs = $derived(data?.refs.filter(branch => branch.remote) ?? []);
+  const namedRefs = $derived(data?.refs.filter(branch => branch.name !== 'HEAD' && !(branch.remote && branch.name.endsWith('/HEAD'))) ?? []);
+  const localRefs = $derived(namedRefs.filter(branch => !branch.remote));
+  const remoteRefs = $derived(namedRefs.filter(branch => branch.remote));
   const localMatch = $derived(compileSectionFilter(sectionFilters.local));
   const remoteMatch = $derived(compileSectionFilter(sectionFilters.remote));
   const worktreeMatch = $derived(compileSectionFilter(sectionFilters.worktrees));
@@ -332,10 +333,10 @@
   const workingConnection = $derived(!query.trim() && data?.files.length ? workingGraphConnection(graph, data.head) : null);
   const workingX = $derived(GRAPH_NODE_X + (workingConnection?.lane ?? 0) * GRAPH_LANE_WIDTH);
   const graphWidth = $derived(Math.max(64, workingConnection ? workingX + GRAPH_LANE_WIDTH : 0, ...graph.map(row => row.width * GRAPH_LANE_WIDTH + GRAPH_NODE_X)));
-  const branchHistory = $derived(branchesByCommit(commits, data?.refs ?? []));
+  const branchHistory = $derived(branchesByCommit(commits, namedRefs));
   const refsAt = $derived.by(() => {
     const result = new Map<string, GitRef[]>();
-    for (const branch of [...(data?.refs ?? [])].sort((a, b) => Number(b.current) - Number(a.current) || Number(a.remote) - Number(b.remote) || a.name.localeCompare(b.name))) result.set(branch.sha, [...(result.get(branch.sha) ?? []), branch]);
+    for (const branch of [...namedRefs].sort((a, b) => Number(b.current) - Number(a.current) || Number(a.remote) - Number(b.remote) || a.name.localeCompare(b.name))) result.set(branch.sha, [...(result.get(branch.sha) ?? []), branch]);
     return result;
   });
   const remoteGroups = $derived.by(() => {
@@ -427,7 +428,7 @@
     return branch.remote ? remotes.filter(remote => branch.name.startsWith(`${remote.name}/`)).sort((a, b) => b.name.length - a.name.length)[0] : undefined;
   }
   function refColor(branch: GitRef) { const row = graphBySHA.get(branch.sha); return row ? graphColor(row.color) : 'var(--color-faint)'; }
-  function badgeName(branch: GitRef) { const remote = remoteFor(branch); return remote ? branch.name.slice(remote.name.length + 1) : branch.name; }
+  function badgeName(branch: GitRef) { return branch.name; }
   function branchDescription(branch: GitRef) { return `${branch.remote ? 'Remote' : 'Local'} branch: ${branch.name}${branch.current ? ' · active checkout' : ''}`; }
   function folderKey(scope: string, path: string) { return JSON.stringify([project, worktree, scope, path]); }
   function toggleFolder(key: string) {
@@ -573,7 +574,7 @@
             {#if data.operation || workingCounts.conflicts}
               <div class="working-recovery">
                 {#if workingCounts.conflicts}<Button size="xs" variant="secondary" class="ai-resolve" disabled={!!git.busy} loading={git.busy === 'ai-resolve'} onclick={async () => { const state = git; const id = await state.resolveConflicts(ref, limit); if (id && state === git) openSession(id, project); }}><Icon name="sparkles" size={13}/>AI resolve</Button>
-                {:else if ['merge','rebase','cherry-pick','revert'].includes(data.operation ?? '')}<Button size="xs" variant="secondary" disabled={!!git.busy} loading={git.busy === 'continue'} onclick={() => gitActions.continueOperation()}>Continue</Button>{/if}
+                {:else if ['merge','rebase','cherry-pick','revert'].includes(data.operation ?? '')}<Button size="xs" variant="secondary" disabled={!!git.busy} loading={git.busy === 'continue'} onclick={() => gitActions.continueOperation()}>{data.operation === 'merge' ? 'Complete merge' : 'Continue'}</Button>{/if}
                 <Button size="xs" icon aria-label="Conflict actions" title="Continue, skip or abort" onclick={(event) => gitActions.openRepository(event)}><Icon name="ellipsis-vertical" size={14}/></Button>
               </div>
             {/if}
@@ -606,14 +607,24 @@
               {@const author = git.authors[commit.sha]}
               {@const memberships = branchHistory.get(commit.sha) ?? []}
               {@const nodeX = search ? GRAPH_NODE_X : GRAPH_NODE_X + row.lane * GRAPH_LANE_WIDTH}
-              <Button block variant="bare" class={`commit-row ${selected.includes(commit.sha) ? 'commit-selected' : ''} ${tracedLane === row.color ? 'lane-traced' : ''}`} style={`--lane-color:${graphColor(row.color)}`} data-commit={commit.sha} data-lane={row.color} aria-pressed={selected.includes(commit.sha)} aria-label={`${commit.subject}, ${commit.sha.slice(0, 8)}, ${commit.author}${tips.length ? ", " + tips.map(branchDescription).join(", ") : ""}${checkouts.length ? ", " + checkouts.map(tree => tree.path === data?.path ? "active checkout" : "worktree " + tree.branch).join(", ") : ""}`} oncontextmenu={(event) => { const branch = eventBranch(event); if (branch) gitActions.openBranch(branch, event); else gitActions.openCommit(commit, event); }} onkeydown={keyboardContext} ondblclick={(event) => { if (clickAfterDrag(event)) return; const branch = eventBranch(event); if (branch) gitActions.checkout(branch); }} onpointerdown={(event) => startBranchDrag(event, eventBranch(event))} ondragstart={(event) => event.preventDefault()} onclick={(e) => { if (!clickAfterDrag(e)) chooseCommit(commit.sha, e); }} onpointerenter={() => hoveredLane = row.color} onpointerleave={() => hoveredLane = null} onfocus={() => focusedLane = row.color} onblur={() => focusedLane = null} {...gitCommitTooltip(commit, memberships, checkouts.map(tree => `${tree.path === data?.path ? "Active checkout" : "Worktree"}: ${tree.path}`), tips)} {...(!columnPrefs.hidden.includes('refs') ? gitRefsTooltip(commit, tips) : {})}>
+              <Button block variant="bare" class={`commit-row ${selected.includes(commit.sha) ? 'commit-selected' : ''} ${tracedLane === row.color ? 'lane-traced' : ''}`} style={`--lane-color:${graphColor(row.color)}`} data-commit={commit.sha} data-lane={row.color} aria-pressed={selected.includes(commit.sha)} aria-label={`${commit.subject}, ${commit.sha.slice(0, 8)}, ${commit.author}${tips.length ? ", " + tips.map(branchDescription).join(", ") : ""}${checkouts.length ? ", " + checkouts.map(tree => tree.path === data?.path ? "active checkout" : "worktree " + tree.branch).join(", ") : ""}`} oncontextmenu={(event) => { const branch = eventBranch(event); if (branch) gitActions.openBranch(branch, event); else gitActions.openCommit(commit, event); }} onkeydown={keyboardContext} ondblclick={(event) => { if (clickAfterDrag(event)) return; const branch = eventBranch(event); if (branch) gitActions.checkout(branch); }} onpointerdown={(event) => startBranchDrag(event, eventBranch(event))} ondragstart={(event) => event.preventDefault()} onclick={(e) => { if (!clickAfterDrag(e)) chooseCommit(commit.sha, e); }} onpointerenter={() => hoveredLane = row.color} onpointerleave={() => hoveredLane = null} onfocus={() => focusedLane = row.color} onblur={() => focusedLane = null} {...gitCommitTooltip(commit, memberships, checkouts.map(tree => `${tree.path === data?.path ? "Active checkout" : "Worktree"}: ${tree.path}`), tips)}>
                 {#if !columnPrefs.hidden.includes('refs')}<span class="commit-refs">
                   {#if primary}<span class:branch-drop-target={dropTarget === primary.fullName} class="ref-label" role="presentation" data-branch-ref={primary.fullName} draggable={false}>
                     {#if owner?.owner}<GitAvatar src={git.remoteAvatars[owner.name]} name={owner.owner} size={16} loading={git.remoteIdentityLoading} />{:else}<Icon name={primary.current ? 'monitor' : primary.remote ? 'cloud' : 'git-branch'} size={13} />{/if}
                     <span class="ref-name">{badgeName(primary)}</span>
-                  </span>{:else if tags.length}<span class="ref-label"><Icon name="tag" size={13}/><span class="ref-name">{tags[0]}</span></span>{:else if commit.sha === data?.head}<span class="ref-label">HEAD</span>{/if}
+                  </span>{:else if tags.length}<span class="ref-label"><Icon name="tag" size={13}/><span class="ref-name">{tags[0]}</span></span>{/if}
                   {#if pairedRemote}<span class="paired-remote" class:branch-drop-target={dropTarget === pairedRemote.fullName} data-branch-ref={pairedRemote.fullName} draggable={false}>{#if pairedOwner?.owner}<GitAvatar src={git.remoteAvatars[pairedOwner.name]} name={pairedOwner.owner} size={17} loading={git.remoteIdentityLoading} />{:else}<Icon name="cloud" size={14} />{/if}</span>{/if}
                   {#if moreRefs}<span class="extra-refs">+{moreRefs}</span>{/if}
+                  {#if moreRefs}<span class="expanded-refs">
+                    {#each extraTips as branch (branch.fullName)}
+                      {@const remote = remoteFor(branch)}
+                      <span class="ref-label" class:branch-drop-target={dropTarget === branch.fullName} data-branch-ref={branch.fullName} draggable={false}>
+                        {#if remote?.owner}<GitAvatar src={git.remoteAvatars[remote.name]} name={remote.owner} size={16} loading={git.remoteIdentityLoading}/>{:else}<Icon name={branch.current ? 'monitor' : branch.remote ? 'cloud' : 'git-branch'} size={13}/>{/if}
+                        <span class="ref-name">{badgeName(branch)}</span>
+                      </span>
+                    {/each}
+                    {#each tags.slice(primary ? 0 : 1) as tag}<span class="ref-label"><Icon name="tag" size={13}/><span class="ref-name">{tag}</span></span>{/each}
+                  </span>{/if}
                   {#if checkouts.length && (!primary?.current || checkouts.length > 1)}<span class="checkout-marker"><Icon name={checkouts.some(tree => tree.path === data?.path) ? 'monitor' : 'folder'} size={14} />{#if checkouts.length > 1}<small>{checkouts.length}</small>{/if}</span>{/if}
                 </span>
                 {/if}
@@ -808,11 +819,14 @@
   .graph-avatar { display:grid; position:absolute; top:8px; }
   .commit-copy { display:flex; align-items:center; min-width:0; }
   .commit-subject { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; min-width:0; }
-  .commit-refs { display:flex; align-items:center; justify-content:flex-start; gap:5px; min-width:0; height:100%; }
+  .commit-refs { position:relative; display:flex; align-items:center; justify-content:flex-start; gap:5px; min-width:0; height:100%; }
   .ref-label { position:relative; display:flex; align-items:center; gap:5px; min-width:0; border:1px solid var(--lane-color); color:var(--color-ink); background:color-mix(in srgb,var(--lane-color) 24%,var(--color-panel)); border-radius:4px; padding:0 5px; font-size:12px; font-weight:600; line-height:18px; transition:background-color 160ms ease; }
   .ref-label > .ref-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .commit-refs:hover,:global(.commit-row:focus-visible) .commit-refs { position:relative; z-index:5; width:max-content; }
+  .commit-refs:hover,:global(.commit-row:focus-visible) .commit-refs { z-index:5; }
   .commit-refs:hover .ref-label,:global(.commit-row:focus-visible) .ref-label { flex-shrink:0; min-width:max-content; }
+  .expanded-refs { display:none; position:absolute; left:0; top:calc(50% + 10px); padding-top:3px; width:max-content; flex-direction:column; align-items:flex-start; gap:3px; }
+  .commit-refs:hover .expanded-refs,:global(.commit-row:focus-visible) .expanded-refs { display:flex; }
+  .commit-refs:hover .extra-refs,:global(.commit-row:focus-visible) .extra-refs { display:none; }
   .ref-label:hover { z-index:5; background:color-mix(in srgb,var(--lane-color) 32%,var(--color-panel)); }
   @media (prefers-reduced-motion:reduce) { .ref-label { transition:none; } }
   .ref-label > :global(svg) { color:inherit; flex-shrink:0; }
