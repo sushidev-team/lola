@@ -19,6 +19,7 @@
   import { confirm } from '$lib/confirm.svelte';
   import { nav } from '$lib/nav.svelte';
   import { store } from '$lib/store.svelte';
+  import {branchRemote, pairedBranch, branchPRs, type BranchPR} from '$lib/gitrefdisplay';
   import { openSession } from '$lib/projectActions';
   import { disclosureMotion, disclosureSlide } from '$lib/disclosureMotion';
   import { gitColumns, readGitColumns, saveGitColumns, defaultGitColumns, type GitColumnID } from '$lib/gitcolumns';
@@ -471,11 +472,15 @@
     event.preventDefault(); event.stopPropagation(); buttons[next].focus(); buttons[next].scrollIntoView?.({ block: 'nearest' });
   }
   function remoteFor(branch: GitRef, remotes = data?.remotes ?? []): GitRemote | undefined {
-    return branch.remote ? remotes.filter(remote => branch.name.startsWith(`${remote.name}/`)).sort((a, b) => b.name.length - a.name.length)[0] : undefined;
+    return branchRemote(branch, remotes);
   }
   function refColor(branch: GitRef) { const row = graphBySHA.get(branch.sha); return row ? graphColor(row.color) : 'var(--color-faint)'; }
-  function badgeName(branch: GitRef) { return branch.name; }
-  function branchDescription(branch: GitRef) { return `${branch.remote ? 'Remote' : 'Local'} branch: ${branch.name}${branch.current ? ' · active checkout' : ''}`; }
+  function badgeName(branch: GitRef) { const remote = remoteFor(branch); return branch.remote ? branch.name.slice((remote?.name ?? branch.name.split('/')[0]).length + 1) : branch.name; }
+  function prsFor(branch: GitRef) { return branchPRs(branch, data?.refs ?? [], data?.remotes ?? [], git.branchPullRequests); }
+  function prTitle(pr: BranchPR) { return `${pr.draft ? 'Draft' : 'Open'} PR #${pr.number}: ${pr.title} · ${pr.repo} → ${pr.base}${git.branchPRError ? ' · Last known status; refresh unavailable' : ''}`; }
+  function hasCheckout(branch: GitRef) { return !branch.remote && data?.worktrees.some(tree => tree.branch === branch.name && !tree.prunable); }
+
+  function branchDescription(branch: GitRef) { return `${branch.remote ? 'Remote' : 'Local'} branch: ${branch.name}${branch.current ? ' · active checkout' : hasCheckout(branch) ? ' · checked out in a worktree' : ''}${!branch.remote ? branch.upstream ? ` · tracks ${branch.upstream.replace('refs/remotes/','')} · ${branch.ahead ?? 0} ahead, ${branch.behind ?? 0} behind` : ' · no upstream configured' : ''}`; }
   function folderKey(scope: string, path: string) { return JSON.stringify([project, worktree, scope, path]); }
   function toggleFolder(key: string) {
     const next = new Set(collapsedFolders);
@@ -483,6 +488,24 @@
     collapsedFolders = next;
   }
 </script>
+
+{#snippet refBadge(branch: GitRef, pair?: GitRef, compact = false)}
+  {@const remote = remoteFor(pair ?? branch)}
+  {@const prs = prsFor(branch.remote ? branch : pair ?? branch)}
+  {@const implicitOrigin = compact && remote?.name === 'origin' && data?.remotes?.length === 1}
+  <span class="ref-label" class:compact class:active={branch.current} class:branch-drop-target={dropTarget === branch.fullName} data-branch-ref={branch.fullName} draggable={false}>
+    <span class="ref-main"><Icon name={branch.current ? 'monitor' : branch.remote ? 'cloud' : hasCheckout(branch) ? 'folder' : 'git-branch'} size={13}/><span class="ref-name">{badgeName(branch)}</span></span>
+    {#if pair || (branch.remote && !implicitOrigin)}
+      <span class="ref-scope" class:branch-drop-target={!!pair && dropTarget === pair.fullName} data-branch-ref={pair?.fullName ?? branch.fullName}>
+        {#if pair}<Icon name="cloud" size={11}/>{/if}{#if !implicitOrigin}<span>{remote?.name ?? (pair ?? branch).name.split('/')[0]}</span>{/if}{#if pair}<Icon name="check" size={11}/>{/if}
+      </span>
+    {:else if branch.ahead || branch.behind}
+      <span class="ref-scope">{#if branch.ahead}↑{branch.ahead}{/if}{#if branch.behind} ↓{branch.behind}{/if}</span>
+    {:else if !branch.remote && !branch.upstream && !compact}<span class="ref-scope">local</span>{/if}
+    {#each prs.slice(0,1) as pr}<span class="ref-pr" class:draft={pr.draft}>{#if !compact}<Icon name="git-pull-request" size={12}/>{/if}<span>#{pr.number}</span></span>{/each}
+    {#if prs.length > 1}<span class="ref-pr">+{prs.length-1}</span>{/if}
+  </span>
+{/snippet}
 
 {#snippet branchNodes(nodes: BranchNode[], scope: 'local' | 'remote', depth: number)}
   {#each nodes as node (node.kind + ':' + node.path)}
@@ -494,10 +517,11 @@
       {#if expanded}<div transition:disclosureSlide>{@render branchNodes(node.children, scope, depth + 1)}</div>{/if}
     {:else}
       {@const branch = node.branch}
-      <div class="rail-entry">
+      <div class="rail-entry" class:has-pr={prsFor(branch).length > 0}>
       <Button block selected={focusedBranch === branch.fullName || ref === branch.fullName} loading={git.deletingBranch === branch.fullName} class={`rail-row branch-leaf ${branch.current ? "current-branch" : ""} ${dropTarget === branch.fullName ? "branch-drop-target" : ""}`} style={`--branch-color:${refColor(branch)};padding-left:${19 + Math.min(depth, 8) * 13}px`} aria-current={branch.current ? "true" : undefined} aria-label={branch.name} title={`Go to latest commit of ${branch.name}`} onclick={(event) => { if (!clickAfterDrag(event)) void goToBranch(branch); }} ondblclick={(event) => { if (!clickAfterDrag(event)) gitActions.checkout(branch); }} oncontextmenu={(event) => gitActions.openBranch(branch, event)} data-branch-ref={branch.fullName} draggable={false} onpointerdown={(event) => startBranchDrag(event, branch)} ondragstart={(event) => event.preventDefault()}>{#if git.deletingBranch !== branch.fullName}<span class="branch-glyph" style:color={refColor(branch)}><Icon name="git-branch" size={14} /></span>{/if}<span class="truncate">{node.name}</span>{#if branch.current}<span title="Active checkout"><Icon name="monitor" size={13} /></span>{/if}
         {#if !branch.remote && branch.upstream && (branch.ahead || branch.behind)}<span class="branch-divergence" title={`${branch.ahead ?? 0} ahead, ${branch.behind ?? 0} behind ${branch.upstream}`} aria-label={`${branch.ahead ?? 0} commits ahead, ${branch.behind ?? 0} commits behind upstream`}>{#if branch.ahead}<span>↑{branch.ahead}</span>{/if}{#if branch.behind}<span>↓{branch.behind}</span>{/if}</span>{/if}
       </Button>
+      {#if prsFor(branch).length}<span class="rail-prs">{#each prsFor(branch) as pr (pr.url)}<Button size="xs" class={`rail-pr ${pr.draft ? 'draft' : ''}`} aria-label={`Open PR #${pr.number} for ${branch.name}`} title={prTitle(pr)} onclick={() => void store.openURL(pr.url)}><Icon name="git-pull-request" size={12}/><span>#{pr.number}</span></Button>{/each}</span>{/if}
       <Button icon size="xs" class="rail-more" aria-label={`Actions for branch ${branch.name}`} title="Branch actions" aria-haspopup="menu" onclick={(event) => gitActions.openBranch(branch,event)}><Icon name="ellipsis-vertical" size={14}/></Button>
       </div>
     {/if}
@@ -644,12 +668,10 @@
               {@const row = graphBySHA.get(commit.sha)!}
               {@const tips = refsAt.get(commit.sha) ?? []}
               {@const primary = tips[0]}
-              {@const pairedRemote = primary && !primary.remote ? tips.find(branch => branch.remote && branch.name === `${remoteFor(branch)?.name}/${primary.name}`) : undefined}
-              {@const pairedOwner = pairedRemote ? remoteFor(pairedRemote) : undefined}
+              {@const pairedRemote = pairedBranch(primary, tips, data?.remotes ?? [])}
               {@const extraTips = tips.filter(branch => branch !== primary && branch !== pairedRemote)}
               {@const tags = commit.refs.filter(ref => ref.startsWith('tag: ')).map(ref => ref.slice(5))}
               {@const moreRefs = extraTips.length + Math.max(0, tags.length - (primary ? 0 : 1))}
-              {@const owner = primary ? remoteFor(primary) : undefined}
               {@const checkouts = data?.worktrees.filter(tree => tree.head === commit.sha) ?? []}
               {@const author = git.authors[commit.sha]}
               {@const memberships = branchHistory.get(commit.sha) ?? []}
@@ -675,19 +697,11 @@
               {/each}
               <Button block variant="bare" class={`commit-row ${selected.includes(commit.sha) ? 'commit-selected' : ''} ${tracedLane === row.color ? 'lane-traced' : ''}`} style={`--lane-color:${graphColor(row.color)}`} data-commit={commit.sha} data-lane={row.color} aria-pressed={selected.includes(commit.sha)} aria-label={`${commit.subject}, ${commit.sha.slice(0, 8)}, ${commit.author}${tips.length ? ", " + tips.map(branchDescription).join(", ") : ""}${checkouts.length ? ", " + checkouts.map(tree => tree.path === data?.path ? "active checkout" : "worktree " + tree.branch).join(", ") : ""}`} oncontextmenu={(event) => { const branch = eventBranch(event); if (branch) gitActions.openBranch(branch, event); else gitActions.openCommit(commit, event); }} onkeydown={keyboardContext} ondblclick={(event) => { if (clickAfterDrag(event)) return; const branch = eventBranch(event); if (branch) gitActions.checkout(branch); }} onpointerdown={(event) => startBranchDrag(event, eventBranch(event))} ondragstart={(event) => event.preventDefault()} onclick={(e) => { if (!clickAfterDrag(e)) chooseCommit(commit.sha, e); }} onpointerenter={() => hoveredLane = row.color} onpointerleave={() => hoveredLane = null} onfocus={() => focusedLane = row.color} onblur={() => focusedLane = null} {...gitCommitTooltip(commit, memberships, checkouts.map(tree => `${tree.path === data?.path ? "Active checkout" : "Worktree"}: ${tree.path}`), tips)}>
                 {#if !columnPrefs.hidden.includes('refs')}<span class="commit-refs">
-                  {#if primary}<span class:branch-drop-target={dropTarget === primary.fullName} class="ref-label" role="presentation" data-branch-ref={primary.fullName} draggable={false}>
-                    {#if owner?.owner}<GitAvatar src={git.remoteAvatars[owner.name]} name={owner.owner} size={16} loading={git.remoteIdentityLoading} />{:else}<Icon name={primary.current ? 'monitor' : primary.remote ? 'cloud' : 'git-branch'} size={13} />{/if}
-                    <span class="ref-name">{badgeName(primary)}</span>
-                  </span>{:else if tags.length}<span class="ref-label"><Icon name="tag" size={13}/><span class="ref-name">{tags[0]}</span></span>{/if}
-                  {#if pairedRemote}<span class="paired-remote" class:branch-drop-target={dropTarget === pairedRemote.fullName} data-branch-ref={pairedRemote.fullName} draggable={false}>{#if pairedOwner?.owner}<GitAvatar src={git.remoteAvatars[pairedOwner.name]} name={pairedOwner.owner} size={17} loading={git.remoteIdentityLoading} />{:else}<Icon name="cloud" size={14} />{/if}</span>{/if}
+                  {#if primary}{@render refBadge(primary, pairedRemote, true)}{:else if tags.length}<span class="ref-label"><Icon name="tag" size={13}/><span class="ref-name">{tags[0]}</span></span>{/if}
                   {#if moreRefs}<span class="extra-refs">+{moreRefs}</span>{/if}
                   {#if moreRefs}<span class="expanded-refs">
                     {#each extraTips as branch (branch.fullName)}
-                      {@const remote = remoteFor(branch)}
-                      <span class="ref-label" class:branch-drop-target={dropTarget === branch.fullName} data-branch-ref={branch.fullName} draggable={false}>
-                        {#if remote?.owner}<GitAvatar src={git.remoteAvatars[remote.name]} name={remote.owner} size={16} loading={git.remoteIdentityLoading}/>{:else}<Icon name={branch.current ? 'monitor' : branch.remote ? 'cloud' : 'git-branch'} size={13}/>{/if}
-                        <span class="ref-name">{badgeName(branch)}</span>
-                      </span>
+                      {@render refBadge(branch, undefined, true)}
                     {/each}
                     {#each tags.slice(primary ? 0 : 1) as tag}<span class="ref-label"><Icon name="tag" size={13}/><span class="ref-name">{tag}</span></span>{/each}
                   </span>{/if}
@@ -732,7 +746,15 @@
           {#if area === 'working'}<div class="compare-endpoints"><span><small>From</small><code>{selected[0]?.slice(0,8)}</code></span><Icon name="arrow-down" size={14}/><span>Working copy</span></div>{/if}
           {#if selected.length === 2}<div class="compare-endpoints"><span><small>From</small><code>{comparisonLabel(0)}</code></span><Icon name="arrow-down" size={14} /><span><small>To</small><code>{comparisonLabel(1)}</code></span></div>{/if}
           {#if currentCommit}<h2 class="selected-subject">{currentCommit.subject}</h2><div class="commit-person"><GitAvatar src={git.authors[currentCommit.sha]?.avatarUrl} name={currentCommit.author} size={30} loading={!!git.identityLoading[currentCommit.sha]} /><span>{currentCommit.author}{#if git.authors[currentCommit.sha]?.login}<small>@{git.authors[currentCommit.sha].login}</small>{/if}<small title={exactTime(currentCommit.date)}>{agoPhrase(currentCommit.date)}</small></span></div>{/if}
-          {#if currentCommit && (refsAt.get(currentCommit.sha)?.length ?? 0)}<div class="selected-refs">{#each refsAt.get(currentCommit.sha) ?? [] as branch}<span title={branchDescription(branch)} style={`--lane-color:${refColor(branch)}`}><Icon name={branch.current ? 'monitor' : branch.remote ? 'cloud' : 'git-branch'} size={13} />{badgeName(branch)}</span>{/each}</div>{/if}
+          {#if currentCommit && (refsAt.get(currentCommit.sha)?.length ?? 0)}
+            {@const tips = refsAt.get(currentCommit.sha) ?? []}
+            {@const paired = new Set(tips.map(branch => pairedBranch(branch,tips,data?.remotes ?? [])?.fullName).filter(Boolean))}
+            <div class="selected-refs">{#each tips.filter(branch => !paired.has(branch.fullName)) as branch}<span class="selected-ref" style={`--lane-color:${refColor(branch)}`}>{@render refBadge(branch,pairedBranch(branch,tips,data?.remotes ?? []))}</span>{/each}</div>
+          {/if}
+          {#if currentCommit}
+            {@const prs = [...new Map((refsAt.get(currentCommit.sha) ?? []).flatMap(prsFor).map(pr => [pr.url,pr])).values()]}
+            {#if prs.length}<div class="selected-prs">{#each prs as pr (pr.url)}<Button block class="selected-pr" title={prTitle(pr)} onclick={() => void store.openURL(pr.url)}><Icon name="git-pull-request" size={15}/><span class="selected-pr-copy"><strong>{pr.draft ? 'Draft' : 'Open'} PR #{pr.number}</strong><span>{pr.title}</span></span><Icon name="external-link" size={13}/></Button>{/each}</div>{/if}
+          {/if}
           {#if currentCommit && containedBranches.length}
             <details use:disclosureMotion class="branch-membership"><summary><Icon name="chevron-down" class="git-disclosure-chevron" size={12} />In branch history<span class="rail-count">{containedBranches.length}</span></summary><p>This commit is reachable from these loaded branch tips. Shared commits can appear in several.</p>{#each containedBranches as branch}<div><span class="branch-glyph" style:color={refColor(branch)}><Icon name={branch.remote ? 'cloud' : 'git-branch'} size={13} /></span><span>{branch.name}</span></div>{/each}</details>
           {/if}
@@ -766,11 +788,11 @@
     {@const request = newBranch}
     <ProjectGitNewBranch {...request} onClose={() => newBranch = null} onCreated={(createdPath, checkout) => { if (request.git !== git) return; newBranch = null; if (checkout) { chooseWorktree(createdPath === configuredPath ? '' : createdPath); working(); } }} />
   {/if}
-  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || ''}</span><span role="status" title={git.autoFetchError || undefined}>{initialLoading ? 'Loading repository…' : git.queued ? 'Queued…' : git.busy ? `${({ 'pull-stash':'Stashing, pulling and restoring', 'ai-resolve':'Starting conflict resolution', 'delete-branch':'Deleting branch', 'remove-worktree':'Removing worktree', 'remove-worktree-branch':'Removing worktree and branch', 'create-pr':'Creating pull request', 'prepare-discard': 'Reviewing unstaged changes', discard: 'Discarding unstaged changes', 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy] ?? 'Updating repository'}…` : git.autoFetchError ? 'Automatic fetch failed; retrying shortly.' : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
+  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || ''}</span>{#if git.branchPRError}<span class="pr-unavailable" title={git.branchPRError}>PR info unavailable</span>{/if}<span role="status" title={git.autoFetchError || undefined}>{initialLoading ? 'Loading repository…' : git.queued ? 'Queued…' : git.busy ? `${({ 'pull-stash':'Stashing, pulling and restoring', 'ai-resolve':'Starting conflict resolution', 'delete-branch':'Deleting branch', 'remove-worktree':'Removing worktree', 'remove-worktree-branch':'Removing worktree and branch', 'create-pr':'Creating pull request', 'prepare-discard': 'Reviewing unstaged changes', discard: 'Discarding unstaged changes', 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy] ?? 'Updating repository'}…` : git.autoFetchError ? 'Automatic fetch failed; retrying shortly.' : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
 </div>
 
 <style>
-  .repo-rail :global(.branch-leaf),.ref-label,.paired-remote { user-select:none; touch-action:none; -webkit-user-drag:none; }
+  .repo-rail :global(.branch-leaf),.ref-label { user-select:none; touch-action:none; -webkit-user-drag:none; }
   .project-git { container-type:inline-size; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(0,1fr) auto; min-width:0; min-height:0; height:100%; color:var(--color-ink); background:var(--color-panel); }
   .git-toolbar { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); gap:8px; align-items:center; height:48px; padding:0 12px; border-bottom:1px solid var(--color-edge); }
   .git-toolbar.window-inset { padding-left:82px; }
@@ -911,18 +933,38 @@
   .commit-copy { display:flex; align-items:center; min-width:0; }
   .commit-subject { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; min-width:0; }
   .commit-refs { position:relative; display:flex; align-items:center; justify-content:flex-start; gap:5px; min-width:0; height:100%; }
-  .ref-label { position:relative; display:flex; align-items:center; gap:5px; min-width:0; border:1px solid var(--lane-color); color:var(--color-ink); background:color-mix(in srgb,var(--lane-color) 24%,var(--color-panel)); border-radius:4px; padding:0 5px; font-size:12px; font-weight:600; line-height:18px; transition:background-color 160ms ease; }
+  .ref-label { position:relative; display:flex; align-items:center; gap:0; min-width:0; border:1px solid var(--color-edge); border-left-color:var(--lane-color); color:var(--color-ink); background:var(--color-canvas); border-radius:4px; padding:0 6px; font-size:12px; font-weight:500; line-height:21px; transition:background-color 160ms ease; }
   .ref-label > .ref-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ref-main { display:flex; align-items:center; gap:5px; min-width:0; }
+  .ref-main > :global(svg) { color:var(--lane-color); flex-shrink:0; }
+  .ref-main .ref-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ref-scope,.ref-pr { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; margin-left:7px; padding-left:7px; border-left:1px solid var(--color-edge); color:var(--color-ink-2); font-size:11px; font-weight:400; }
+  .ref-pr { color:var(--color-good); font-variant-numeric:tabular-nums; }
+  .ref-label.compact { padding:0 4px; line-height:19px; }
+  .ref-label.compact .ref-main { gap:3px; }
+  .ref-label.compact .ref-scope,.ref-label.compact .ref-pr { gap:2px; margin-left:4px; padding-left:4px; }
+  .ref-pr.draft { color:var(--color-ink-2); }
+  .rail-entry.has-pr { display:flex; align-items:center; }
+  .rail-entry.has-pr :global(.branch-leaf) { flex:1; min-width:0; }
+  .rail-entry :global(.rail-pr) { flex-shrink:0; color:var(--color-good); gap:3px; padding:2px 5px; margin-right:5px; font-size:11px; font-variant-numeric:tabular-nums; }
+  .rail-entry :global(.rail-pr.draft) { color:var(--color-ink-2); }
+  .rail-prs { display:flex; align-items:center; flex-shrink:0; margin-right:25px; }
+  .selected-prs { display:grid; gap:4px; padding:0 14px 12px; }
+  .selected-prs :global(.selected-pr) { align-items:flex-start; gap:8px; padding:7px 0; text-align:left; color:var(--color-good); }
+  .selected-pr-copy { display:grid; gap:3px; flex:1; min-width:0; }
+  .selected-pr-copy strong { font-size:12px; font-weight:500; }
+  .selected-pr-copy > span { color:var(--color-ink-2); font-size:12px; white-space:normal; overflow-wrap:anywhere; }
+  .pr-unavailable { color:var(--color-warn); }
   .commit-refs:hover,:global(.commit-row:focus-visible) .commit-refs { z-index:5; }
   .commit-refs:hover .ref-label,:global(.commit-row:focus-visible) .ref-label { flex-shrink:0; min-width:max-content; }
+  .ref-label.active { background:color-mix(in srgb,var(--lane-color) 12%,var(--color-canvas)); }
   .expanded-refs { display:none; position:absolute; left:0; top:calc(50% + 10px); padding-top:3px; width:max-content; flex-direction:column; align-items:flex-start; gap:3px; }
   .commit-refs:hover .expanded-refs,:global(.commit-row:focus-visible) .expanded-refs { display:flex; }
   .commit-refs:hover .extra-refs,:global(.commit-row:focus-visible) .extra-refs { display:none; }
-  .ref-label:hover { z-index:5; background:color-mix(in srgb,var(--lane-color) 32%,var(--color-panel)); }
+  .ref-label:hover { z-index:5; background:var(--color-panel); }
   @media (prefers-reduced-motion:reduce) { .ref-label { transition:none; } }
   .ref-label > :global(svg) { color:inherit; flex-shrink:0; }
   .extra-refs { color:var(--color-ink-2); font-size:12px; flex-shrink:0; }
-  .paired-remote { display:flex; align-items:center; justify-content:center; width:18px; height:18px; flex-shrink:0; color:var(--lane-color); }
   .checkout-marker { display:flex; align-items:center; min-width:16px; gap:2px; color:var(--lane-color); flex-shrink:0; }
   .checkout-marker small { font-size:11px; font-variant-numeric:tabular-nums; line-height:16px; }
   .commit-author { color:var(--color-faint); font-size:12px; min-width:0; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; }
@@ -968,8 +1010,8 @@
   .commit-person { display:flex; align-items:center; gap:9px; padding:0 14px 12px; font-size:14px; }
   .commit-person small { display:block; font-size:12px; color:var(--color-faint); margin-top:2px; }
   .selected-refs { display:flex; flex-wrap:wrap; gap:4px; padding:0 14px 12px; }
-  .selected-refs span { display:flex; align-items:center; gap:5px; font-size:12px; overflow-wrap:anywhere; color:var(--color-ink); background:color-mix(in srgb,var(--lane-color) 10%,var(--color-panel)); padding:3px 5px; border-radius:4px; }
-  .selected-refs :global(svg) { color:var(--lane-color); flex-shrink:0; }
+  .selected-ref { min-width:0; max-width:100%; }
+  .selected-ref .ref-label { max-width:100%; }
   .branch-membership { margin:0; padding:0 8px 10px; max-height:180px; overflow:auto; }
   .branch-membership summary { font-size:12px; }
   .branch-membership p { padding:5px 7px; color:var(--color-faint); font-size:12px; line-height:1.5; }

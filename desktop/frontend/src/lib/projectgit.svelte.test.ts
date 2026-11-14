@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTO_FETCH_INTERVAL, ProjectGitState } from './projectgit.svelte';
-const api = vi.hoisted(() => ({ Stashes: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), BranchAction: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Snapshot: vi.fn(), CachedIdentities: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), LastCommitMessage: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
+const api = vi.hoisted(() => ({ BranchPullRequests: vi.fn(), Stashes: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), BranchAction: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Snapshot: vi.fn(), CachedIdentities: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), LastCommitMessage: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => resolve = r); return { promise, resolve }; }
 const snapshot = (branch: string) => ({ path: '/repo', branch, head: 'a', upstream: '', commits: [], refs: [], worktrees: [], files: [], signing: { enabled: false, format: '', key: '' }, hasMore: false });
-beforeEach(() => { Object.values(api).forEach(fn => fn.mockReset()); api.Stashes.mockResolvedValue([]); api.Snapshot.mockResolvedValue(snapshot('main')); api.CachedIdentities.mockResolvedValue({ authors: {}, remoteAvatars: {} }); api.Identities.mockResolvedValue({ authors: {} }); });
+beforeEach(() => { Object.values(api).forEach(fn => fn.mockReset()); api.Stashes.mockResolvedValue([]); api.BranchPullRequests.mockResolvedValue([]); api.Snapshot.mockResolvedValue(snapshot('main')); api.CachedIdentities.mockResolvedValue({ authors: {}, remoteAvatars: {} }); api.Identities.mockResolvedValue({ authors: {} }); });
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('Automatic remote fetching', () => {
@@ -330,4 +330,34 @@ describe('Project Git request and operation ownership', () => {
     pending.resolve({authors:{}});await Promise.resolve();expect(api.Identities).not.toHaveBeenCalled();
   });
 
+});
+
+describe('Background branch PR metadata',()=>{
+  const remotes=[{name:'origin',repo:'team/repo',host:'github.com',owner:'team',avatarUrl:''}];
+  const pr={number:7,title:'Change',url:'https://github.com/team/repo/pull/7',repo:'team/repo',headRepo:'team/repo',head:'topic',base:'main',draft:false};
+  it('shares pending lookups across worktrees and throttles without locking the UI',async()=>{
+    let now=1000; vi.spyOn(Date,'now').mockImplementation(()=>now);
+    const first=new ProjectGitState('pr-shared',''), second=new ProjectGitState('pr-shared','/linked');
+    first.snapshot={...snapshot('main'),remotes}; second.snapshot={...snapshot('topic'),remotes};
+    const pending=deferred<typeof pr[]>(); api.BranchPullRequests.mockReturnValueOnce(pending.promise);
+    const a=first.loadBranchPullRequests(), b=second.loadBranchPullRequests();
+    await vi.waitFor(()=>expect(api.BranchPullRequests).toHaveBeenCalledTimes(1));
+    expect(first.busy).toBe(''); expect(first.loading).toBe(false); expect(first.fetching).toBe(false);
+    pending.resolve([pr]); await Promise.all([a,b]);
+    expect(first.branchPullRequests).toEqual([pr]); expect(second.branchPullRequests).toEqual([pr]);
+    now+=15000; await first.loadBranchPullRequests(); expect(api.BranchPullRequests).toHaveBeenCalledTimes(1);
+    now+=45000; api.BranchPullRequests.mockRejectedValueOnce(new Error('Offline')); await first.loadBranchPullRequests();
+    expect(first.branchPullRequests).toEqual([pr]); expect(first.branchPRError).toContain('Offline'); expect(first.error).toBe('');
+    api.BranchPullRequests.mockResolvedValueOnce([]); await first.loadBranchPullRequests(true);
+    expect(first.branchPullRequests).toEqual([]); expect(first.branchPRError).toBe('');
+  });
+  it('discards responses for remotes that have changed',async()=>{
+    const state=new ProjectGitState('pr-remotes-changed',''); state.snapshot={...snapshot('main'),remotes};
+    const pending=deferred<typeof pr[]>(); api.BranchPullRequests.mockReturnValueOnce(pending.promise);
+    const request=state.loadBranchPullRequests();
+    await vi.waitFor(()=>expect(api.BranchPullRequests).toHaveBeenCalled());
+    state.snapshot={...snapshot('main'),remotes:[]}; await state.loadBranchPullRequests();
+    pending.resolve([pr]); await request;
+    expect(state.branchPullRequests).toEqual([]);
+  });
 });

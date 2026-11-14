@@ -6,7 +6,7 @@ import { confirm } from '$lib/confirm.svelte';
 import { store } from '$lib/store.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
 
-const api = vi.hoisted(() => ({ Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
+const api = vi.hoisted(() => ({ BranchPullRequests: vi.fn(), Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 let serial = 0;
 let project: string;
@@ -34,7 +34,7 @@ beforeEach(() => {
   Object.values(api).forEach(fn => fn.mockReset());
   api.Snapshot.mockResolvedValue(snapshot());
   api.Identities.mockResolvedValue({ authors: {} });
-  api.Stashes.mockResolvedValue([]);
+  api.Stashes.mockResolvedValue([]); api.BranchPullRequests.mockResolvedValue([]);
   api.BranchAction.mockResolvedValue({path:'/repo'});
   api.Diff.mockResolvedValue({ files: [{ path: 'src/app.ts', status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-old text\n+new text\n' }] });
 });
@@ -203,7 +203,8 @@ describe('Project Git workspace', () => {
     const refs = row.querySelector('.commit-refs')!;
     expect(refs).not.toHaveTextContent('HEAD');
     expect(refs.querySelector('.extra-refs')).toHaveTextContent('+2');
-    expect(refs.querySelector('.expanded-refs')).toHaveTextContent('origin/main');
+    expect(refs.querySelector('.expanded-refs .ref-name')).toHaveTextContent('main');
+    expect(refs.querySelector('.expanded-refs .ref-scope')).toHaveTextContent('origin');
     expect(refs.querySelector('.expanded-refs')).toHaveTextContent('v1.5.0');
     await fireEvent.mouseEnter(refs);
     expect(screen.queryByText('Branches and tags')).toBeNull();
@@ -536,7 +537,7 @@ describe('Project Git workspace', () => {
     const first = screen.getByRole('button', { name: /Add project workspace,/ });
     const old = screen.getByRole('button', { name: /Initial project,/ });
     expect(first.querySelector('.commit-refs')).toHaveTextContent('main');
-    expect(old.querySelector('.ref-name')).toHaveTextContent(/^origin\/main$/);
+    expect(old.querySelector('.ref-name')).toHaveTextContent(/^main$/);
     expect(first.querySelector('.ref-label .lucide-monitor')).toBeInTheDocument();
     expect(first.querySelector('.checkout-marker')).toBeNull();
     await fireEvent.mouseEnter(first.querySelector('.commit-copy')!);
@@ -844,4 +845,30 @@ describe('Project Git workspace', () => {
     await screen.findByRole('button', { name: /Add project workspace,/ });
     expect(screen.queryByText('Repository unavailable')).not.toBeInTheDocument();
   });
+});
+
+it('combines local/upstream tips and exposes draft PRs in the rail and inspector',async()=>{
+  const remote={name:'origin',host:'github.com',owner:'acme',repo:'acme/repo',avatarUrl:''};
+  const data=snapshot({remotes:[remote],files:[]});
+  data.refs[0].upstream='refs/remotes/origin/main'; data.refs[1].sha=newSHA;
+  api.Snapshot.mockResolvedValue(data);
+  api.BranchPullRequests.mockResolvedValue([{number:42,title:'Draft change',url:'https://github.com/acme/repo/pull/42',repo:'acme/repo',headRepo:'acme/repo',head:'main',base:'develop',draft:true}]);
+  const openURL=vi.spyOn(store,'openURL').mockResolvedValue();
+  await open();
+  const row=screen.getByRole('button',{name:/Add project workspace,/});
+  await waitFor(()=>expect(row.querySelector('.ref-pr')).toHaveTextContent('#42'));
+  expect(row.querySelectorAll('.ref-label')).toHaveLength(1);
+  expect(row.querySelector('.ref-name')).toHaveTextContent('main');
+  expect(row.querySelector('.ref-scope')).not.toHaveTextContent('origin');
+  expect(row.querySelector('.ref-scope .lucide-cloud')).toBeInTheDocument();
+  expect(row.querySelector('.ref-pr .lucide-git-pull-request')).toBeNull();
+  expect(row.querySelector('.ref-scope .lucide-check')).toBeInTheDocument();
+  expect(row.querySelector('.paired-remote')).toBeNull();
+  expect(row.querySelector('.ref-pr')).toHaveClass('draft');
+  await fireEvent.click(screen.getByRole('button',{name:'Open PR #42 for main'}));
+  expect(openURL).toHaveBeenCalledWith('https://github.com/acme/repo/pull/42');
+  await fireEvent.click(row);
+  expect(await screen.findByRole('button',{name:'Draft PR #42 Draft change'})).toBeInTheDocument();
+  expect(document.querySelectorAll('.selected-refs .ref-label')).toHaveLength(1);
+  expect(document.querySelector('.selected-refs .ref-scope')).toHaveTextContent('origin');
 });
