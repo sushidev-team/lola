@@ -684,7 +684,7 @@ func (c Client) Sync(ctx context.Context, dir, action string) error {
 	var args []string
 	switch action {
 	case "fetch":
-		args = []string{"fetch", "--all"}
+		args = []string{"fetch", "--all", "--prune"}
 	case "pull":
 		args = []string{"pull", "--ff-only", "--no-autostash"}
 	case "push":

@@ -39,7 +39,7 @@ func TestDeleteMergedRemoteBranch(t *testing.T) {
 			if strings.Contains(args, push) != tc.wantPush {
 				t.Fatalf("pinned push = %v, want %v: %s", strings.Contains(args, push), tc.wantPush, args)
 			}
-			if strings.Contains(args, "update-ref -d refs/remotes/origin/"+branch+" "+sha) != tc.wantPrune {
+			if strings.Contains(args, "update-ref --no-deref -d refs/remotes/origin/"+branch+" "+sha) != tc.wantPrune {
 				t.Fatalf("unexpected tracking ref cleanup: %s", args)
 			}
 		})

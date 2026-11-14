@@ -293,7 +293,7 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		if !found {
 			return errors.New("remote no longer exists")
 		}
-		_, err = c.git(ctx, dir, "", "fetch", "--", r.Source)
+		_, err = c.git(ctx, dir, "", "fetch", "--prune", "--", r.Source)
 		return err
 	}
 	if _, err := c.branchRef(ctx, dir, r.Source, r.SourceSHA, r.Action == "rebase"); err != nil {
@@ -310,6 +310,21 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 				return err
 			}
 			ref := "refs/heads/" + branch
+			// The graph can outlive the remote branch (GitHub often deletes it
+			// on merge). An absent ref is success: remove only the cached tip
+			// the human selected, preserving a concurrent fetch of a new tip.
+			out, err := c.text(ctx, dir, "ls-remote", "--refs", "--", remote, ref)
+			if err != nil {
+				return err // an unreachable remote is not proof of deletion
+			}
+			if out == "" {
+				_, err = c.git(ctx, dir, "", "update-ref", "--no-deref", "-d", r.Source, r.SourceSHA)
+				return err
+			}
+			fields := strings.Fields(out)
+			if len(fields) != 2 || fields[0] != r.SourceSHA || fields[1] != ref {
+				return errors.New("remote branch changed since it was fetched; fetch and review its current tip before deleting")
+			}
 			// Pin deletion to the tip confirmed by the human, even if another
 			// collaborator pushes after our local tracking ref was fetched.
 			_, err = c.git(ctx, dir, "", "push", "--force-with-lease="+ref+":"+r.SourceSHA, "--", remote, ":"+ref)

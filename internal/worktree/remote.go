@@ -61,5 +61,5 @@ func (m *Manager) DeleteMergedRemoteBranch(ctx context.Context, p config.Project
 func (m *Manager) pruneMergedRemoteRef(ctx context.Context, dir, branch, headSHA string) {
 	// Pushing by URL does not update origin's cached ref. Best-effort, and
 	// compare-and-delete so a concurrent fetch of a new head is preserved.
-	_, _, _ = m.git(ctx, "-C", dir, "update-ref", "-d", "refs/remotes/origin/"+branch, headSHA)
+	_, _, _ = m.git(ctx, "-C", dir, "update-ref", "--no-deref", "-d", "refs/remotes/origin/"+branch, headSHA)
 }
