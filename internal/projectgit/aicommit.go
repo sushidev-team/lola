@@ -123,6 +123,7 @@ func (c Client) PrepareAICommit(ctx context.Context, dir string) (AICommitInput,
 	}
 	defer root.Close()
 	var input strings.Builder
+	input.WriteString(c.commitHistory(ctx, dir))
 	input.WriteString("Changed files (use these exact paths):\n")
 	for _, f := range in.files {
 		if f.Conflict {

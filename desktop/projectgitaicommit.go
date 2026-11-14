@@ -65,6 +65,10 @@ func (s *ProjectGitService) StartAICommit(project, worktree, token string, inclu
 	if in.Preparation.Staged > 0 && !includeStaged {
 		return AICommitProgress{}, errors.New("confirm including staged files before AI commit")
 	}
+	instruction, err := commitInstructionFor(project, projectgit.AICommitInstruction)
+	if err != nil {
+		return AICommitProgress{}, err
+	}
 	run, cancelRun := context.WithCancel(context.Background())
 	job := &aiCommitJob{progress: AICommitProgress{ID: rand.Text(), Phase: "planning"}, cancel: cancelRun}
 	s.aiMu.Lock()
@@ -94,7 +98,7 @@ func (s *ProjectGitService) StartAICommit(project, worktree, token string, inclu
 			}
 		}()
 		planCtx, planCancel := context.WithTimeout(run, 120*time.Second)
-		output, err := s.runGitHelper(planCtx, project, projectgit.AICommitInstruction, in.Text, true)
+		output, err := s.runGitHelper(planCtx, project, instruction, in.Text, true)
 		planCancel()
 		if run.Err() != nil {
 			runErr = run.Err()

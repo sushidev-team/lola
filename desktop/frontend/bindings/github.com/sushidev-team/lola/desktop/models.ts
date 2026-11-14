@@ -440,6 +440,10 @@ export interface ProjectExecutionDTO {
  * which of them came from [defaults] rather than the project itself.
  */
 export interface ProjectFormDTO {
+    /**
+     * Nil preserves instructions from older clients; empty uses the workspace default.
+     */
+    "commitInstructions"?: string | null;
     "autoPRComments": boolean;
 
     /**
@@ -817,6 +821,10 @@ export interface SandboxStatusDTO {
 }
 
 export interface SettingsDTO {
+    /**
+     * Nil preserves instructions from older clients; empty restores automatic style.
+     */
+    "commitInstructions"?: string | null;
     "ai"?: { [_ in string]?: config$0.AIProvider } | null;
     "autoPRComments": boolean;
     "temporaryDirectory": string;

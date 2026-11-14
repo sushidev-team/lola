@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sushidev-team/lola/internal/agent"
 )
@@ -46,8 +47,25 @@ func (c *Config) AIProfile(provider, action string) (AIModel, bool) {
 	return model, true
 }
 
+// CommitInstructionsFor leaves repository style automatic when no preference is set.
+// A project preference replaces the workspace preference, like AgentForProject.
+func (c *Config) CommitInstructionsFor(project string) string {
+	if p := c.ProjectByName(project); p != nil && strings.TrimSpace(p.CommitInstructions) != "" {
+		return p.CommitInstructions
+	}
+	return c.Defaults.CommitInstructions
+}
+
 func (c *Config) validateAI() []error {
 	var errs []error
+	if len(c.Defaults.CommitInstructions) > 4000 {
+		errs = append(errs, fmt.Errorf("defaults.commit_instructions must be at most 4000 bytes"))
+	}
+	for _, p := range c.Projects {
+		if len(p.CommitInstructions) > 4000 {
+			errs = append(errs, fmt.Errorf("project %s: commit_instructions must be at most 4000 bytes", p.Name))
+		}
+	}
 	for provider, p := range c.AI {
 		if !agent.Valid(provider) {
 			errs = append(errs, fmt.Errorf("ai: unknown provider %q", provider))

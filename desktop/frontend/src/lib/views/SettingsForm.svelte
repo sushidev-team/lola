@@ -6,6 +6,7 @@
   import { onMount, onDestroy, tick } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
   import AISettings from "$lib/components/AISettings.svelte";
+  import CommitInstructions from "$lib/components/CommitInstructions.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
@@ -1235,6 +1236,9 @@
       {:else if tab === "ai"}
         <section>
           {@render head("AI")}
+          <SettingsGroup title="AI commits">
+            <CommitInstructions bind:value={d.commitInstructions}/>
+          </SettingsGroup>
           <AISettings bind:value={d.ai} defaultProvider={d.agent || 'claude'}/>
         </section>
       {:else if tab === "assistants"}

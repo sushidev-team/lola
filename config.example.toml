@@ -79,6 +79,10 @@ global_cap = 4
 # for these keys. Lola cannot tell them apart offline, so this is not validated.
 #
 # branch_prefix = "lola/"
+# AI commit and staged-message drafts follow recent repository history by default.
+# Optional message/grouping preferences; a nonempty [[project]].commit_instructions
+# replaces this workspace default. Blank project instructions use this default.
+# commit_instructions = "Use Conventional Commits. Keep subjects under 72 characters."
 # symlinks = [".env"]
 # post_create = ["composer install", "bun install --frozen-lockfile"]
 # Fallback chain consulted when a session's agent hits its usage limit (lola

@@ -27,7 +27,11 @@ func (s *ProjectGitService) DraftCommitMessage(project, worktree, draft string) 
 	if err != nil {
 		return "", err
 	}
-	output, err := s.runGitDraft(ctx, project, projectgit.CommitDraftInstruction, input.Text)
+	instruction, err := commitInstructionFor(project, projectgit.CommitDraftInstruction)
+	if err != nil {
+		return "", err
+	}
+	output, err := s.runGitDraft(ctx, project, instruction, input.Text)
 	if errors.Is(err, brain.ErrNotFound) {
 		return "", errors.New("install and sign in to the selected AI provider to draft commit messages")
 	}
@@ -50,6 +54,18 @@ func (s *ProjectGitService) DraftCommitMessage(project, worktree, draft string) 
 		return "", errors.New("staged changes changed while AI was drafting; generate a new message")
 	}
 	return message, nil
+}
+
+func commitInstructionFor(project, base string) (string, error) {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	preferences := cfg.CommitInstructionsFor(project)
+	if len(preferences) > 4000 {
+		return "", errors.New("commit instructions must be at most 4000 bytes")
+	}
+	return projectgit.CommitInstruction(base, preferences), nil
 }
 
 func (s *ProjectGitService) runGitDraft(ctx context.Context, project, instruction, input string) (string, error) {

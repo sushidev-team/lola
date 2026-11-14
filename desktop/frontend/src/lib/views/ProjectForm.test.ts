@@ -220,6 +220,16 @@ describe("ProjectForm", () => {
     expect(saveProject.mock.calls[0][0]).toMatchObject({ hubChores: true });
   });
 
+  it.each(['Use ticket prefixes.\nKeep bodies short.', ''])('saves project commit instructions or clears the override: %j', async instructions => {
+    getProject.mockResolvedValue({...sampleDto(),commitInstructions:'Previous project instructions'});
+    render(ProjectForm);
+    const field = await screen.findByLabelText('Commit instructions');
+    expect(field).toHaveValue('Previous project instructions');
+    await fireEvent.input(field, {target:{value:instructions}});
+    await fireEvent.click(screen.getByRole('button', {name:'Save'}));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledWith(expect.objectContaining({commitInstructions:instructions})));
+  });
+
   it("disables team chores with the reason when the project has no repo", async () => {
     getProject.mockResolvedValue({ ...sampleDto(), repo: "" });
     render(ProjectForm);

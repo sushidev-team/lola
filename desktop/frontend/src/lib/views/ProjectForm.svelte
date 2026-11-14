@@ -10,6 +10,7 @@
   import { deepEqual } from "$lib/deepEqual";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
+  import CommitInstructions from "$lib/components/CommitInstructions.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import Button from "$lib/components/Button.svelte";
   import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
@@ -966,6 +967,7 @@
             </span>
           </div>
           {/if}
+          {#if role !== "stack"}<CommitInstructions bind:value={d.commitInstructions} inherited={defaults?.commitInstructions ?? ''}/>{/if}
           {#if role !== "member"}
           <AgentModelFields provider={d.agent} providerLabel="Agent" defaultProvider={defaults?.agent ?? "claude"}
             rowClass={rowCls} labelClass={labelCls} onProviderChange={(value) => { d.agent = value; }} />

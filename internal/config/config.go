@@ -96,6 +96,9 @@ type ProjectInherits struct {
 // it polls Linear iff TeamID is set (and Enabled). Validation here is purely
 // static — path-exists / is-a-git-repo checks live in the runtime layer.
 type Project struct {
+	// Empty uses the workspace default at read time; never copied into projects.
+	CommitInstructions string `toml:"commit_instructions,omitempty"`
+
 	// AutoPRComments asks idle agents to address and resolve new PR review threads.
 	AutoPRComments bool `toml:"auto_pr_comments,omitempty"`
 	// --- Repository / worktree setup ---------------------------------------
@@ -322,6 +325,9 @@ func (p *Project) Polls() bool { return p.TeamID != "" && p.Stack == "" }
 // Defaults is the [defaults] table. PollInterval is a plain time.Duration in
 // memory; on disk it is a string like "60s" (see fileDefaults/Duration).
 type Defaults struct {
+	// CommitInstructions guides both desktop AI commit helpers.
+	CommitInstructions string `toml:"commit_instructions,omitempty"`
+
 	AutoPRComments     bool          `toml:"auto_pr_comments,omitempty"`
 	TemporaryDirectory string        `toml:"temporary_directory"`
 	PollInterval       time.Duration `toml:"-"`
@@ -544,6 +550,9 @@ type fileConfig struct {
 // Inherits bitmap (a SET bit means "inherit this key from [defaults]"); see
 // projectFromFile / projectToFile for the translation.
 type fileProject struct {
+	// Empty uses the workspace default at read time; never copied into projects.
+	CommitInstructions string `toml:"commit_instructions,omitempty"`
+
 	AutoPRComments *bool  `toml:"auto_pr_comments,omitempty"`
 	Name           string `toml:"name"`
 	Label          string `toml:"label,omitempty"`
@@ -733,6 +742,8 @@ func projectFromFile(fp fileProject) Project {
 	agentFallback, hasAgentFallback := deref(fp.AgentFallback)
 
 	return Project{
+		CommitInstructions: fp.CommitInstructions,
+
 		Name:              fp.Name,
 		Label:             fp.Label,
 		Group:             fp.Group,
@@ -812,6 +823,8 @@ func projectToFile(p Project) fileProject {
 	set := func(inherits bool) bool { return !inherits }
 	o := p.Inherits
 	return fileProject{
+		CommitInstructions: p.CommitInstructions,
+
 		Name:              p.Name,
 		Label:             p.Label,
 		Group:             p.Group,
@@ -869,6 +882,9 @@ func projectToFile(p Project) fileProject {
 }
 
 type fileDefaults struct {
+	// CommitInstructions guides both desktop AI commit helpers.
+	CommitInstructions string `toml:"commit_instructions,omitempty"`
+
 	AutoPRComments     bool     `toml:"auto_pr_comments,omitempty"`
 	TemporaryDirectory string   `toml:"temporary_directory,omitempty"`
 	PollInterval       Duration `toml:"poll_interval"`
@@ -939,6 +955,8 @@ func (fc *fileConfig) config() *Config {
 
 	return &Config{
 		Defaults: Defaults{
+			CommitInstructions: fc.Defaults.CommitInstructions,
+
 			PollInterval:       time.Duration(fc.Defaults.PollInterval),
 			ConcurrencyCap:     fc.Defaults.ConcurrencyCap,
 			GlobalCap:          fc.Defaults.GlobalCap,
@@ -1005,6 +1023,8 @@ func (c *Config) file() *fileConfig {
 	}
 	return &fileConfig{
 		Defaults: fileDefaults{
+			CommitInstructions: c.Defaults.CommitInstructions,
+
 			PollInterval:       Duration(c.Defaults.PollInterval),
 			ConcurrencyCap:     c.Defaults.ConcurrencyCap,
 			GlobalCap:          c.Defaults.GlobalCap,

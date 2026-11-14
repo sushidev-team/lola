@@ -110,6 +110,9 @@ func reloadRejectionHint(msg string) string {
 // --- settings ([defaults]/[notify]/[brain]/[review]/[coderabbit]) -----------
 
 type SettingsDTO struct {
+	// Nil preserves instructions from older clients; empty restores automatic style.
+	CommitInstructions *string `json:"commitInstructions,omitempty"`
+
 	AI                 map[string]config.AIProvider `json:"ai,omitempty"`
 	AutoPRComments     bool                         `json:"autoPRComments"`
 	TemporaryDirectory string                       `json:"temporaryDirectory"`
@@ -456,6 +459,8 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		return SettingsDTO{}, err
 	}
 	dto := SettingsDTO{
+		CommitInstructions: &cfg.Defaults.CommitInstructions,
+
 		TemporaryDirectory:       cfg.Defaults.TemporaryDirectory,
 		GlobalCap:                cfg.Defaults.GlobalCap,
 		ConcurrencyCap:           cfg.Defaults.ConcurrencyCap,
@@ -527,6 +532,9 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Defaults.GlobalCap = dto.GlobalCap
 	cfg.Defaults.ConcurrencyCap = dto.ConcurrencyCap
 	cfg.Defaults.Agent = dto.Agent
+	if dto.CommitInstructions != nil {
+		cfg.Defaults.CommitInstructions = strings.TrimSpace(*dto.CommitInstructions)
+	}
 	cfg.Notify.Desktop = dto.NotifyDesktop
 	cfg.Notify.SlackWebhookEnv = dto.SlackWebhookEnv
 	if dto.AI != nil {
@@ -732,6 +740,9 @@ type ProjectExecutionDTO struct {
 // values are the RESOLVED ones (see config.ResolveInheritance); Inherits says
 // which of them came from [defaults] rather than the project itself.
 type ProjectFormDTO struct {
+	// Nil preserves instructions from older clients; empty uses the workspace default.
+	CommitInstructions *string `json:"commitInstructions,omitempty"`
+
 	AutoPRComments bool `json:"autoPRComments"`
 	// Nil from an older client preserves execution settings. Stack members
 	// cannot edit these owning-stack settings through their repository form.
@@ -862,7 +873,9 @@ func labelsDTO(in []string) []string {
 func projectDTO(p *config.Project) ProjectFormDTO {
 	hubChores := p.HubChores
 	return ProjectFormDTO{
-		Execution:       &ProjectExecutionDTO{GoalMode: p.GoalMode, Sandbox: p.Sandbox, Image: p.SandboxImage, Toolchains: nonNil(p.SandboxToolchains), Packages: nonNil(p.SandboxPackages)},
+		Execution:          &ProjectExecutionDTO{GoalMode: p.GoalMode, Sandbox: p.Sandbox, Image: p.SandboxImage, Toolchains: nonNil(p.SandboxToolchains), Packages: nonNil(p.SandboxPackages)},
+		CommitInstructions: &p.CommitInstructions,
+
 		Name:            p.Name,
 		Label:           p.Label,
 		Path:            p.Path,
@@ -962,6 +975,9 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.DefaultBranch = dto.DefaultBranch
 	p.BranchPrefix = dto.BranchPrefix
 	p.Agent = dto.Agent
+	if dto.CommitInstructions != nil {
+		p.CommitInstructions = strings.TrimSpace(*dto.CommitInstructions)
+	}
 	p.Symlinks = nonEmpty(dto.Symlinks)
 	p.PostCreate = nonEmpty(dto.PostCreate)
 	p.DevCommands = nonEmpty(dto.DevCommands)

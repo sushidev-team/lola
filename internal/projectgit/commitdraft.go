@@ -59,9 +59,8 @@ func (c Client) PrepareCommitDraft(ctx context.Context, dir, draft string) (Comm
 	if len(diff.Files) == 0 {
 		return result, errors.New("stage changes before drafting a commit message")
 	}
-	recent, _ := c.text(ctx, dir, "log", "-5", "--format=%s", "--")
 	var text strings.Builder
-	fmt.Fprintf(&text, "Existing draft: %q\nRecent commit subjects: %q\nStaged files: %d\n", clipDraftText(draft, 700), clipDraftText(recent, 600), len(diff.Files))
+	fmt.Fprintf(&text, "Existing draft: %q\n%sStaged files: %d\n", clipDraftText(draft, 700), c.commitHistory(ctx, dir), len(diff.Files))
 	// List the complete scope first, before bounded patch excerpts. Never read
 	// untracked or unstaged bytes, and never send binary file contents.
 	for _, file := range diff.Files {

@@ -586,6 +586,17 @@ describe("SettingsForm", () => {
     }});
   });
 
+  it('saves multiline workspace commit instructions independently of provider profiles', async () => {
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole('tab', {name:'AI'}));
+    const instructions = 'Use Conventional Commits.\nExplain why in the body.';
+    await fireEvent.input(screen.getByLabelText('Commit instructions'), {target:{value:instructions}});
+    await fireEvent.change(screen.getByLabelText('AI provider'), {target:{value:'claude'}});
+    expect(screen.getByLabelText('Commit instructions')).toHaveValue(instructions);
+    await fireEvent.click(screen.getByRole('button', {name:/^save$/i}));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledWith(expect.objectContaining({commitInstructions:instructions})));
+  });
+
   it("clamps an unknown deep-linked tab id to Defaults instead of a blank pane", async () => {
     nav.overlayTab = "nope";
     try {
