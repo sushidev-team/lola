@@ -684,7 +684,7 @@ func (c Client) Sync(ctx context.Context, dir, action string) error {
 	var args []string
 	switch action {
 	case "fetch":
-		args = []string{"fetch", "--all", "--prune"}
+		args = []string{"fetch", "--all", "--prune", "--no-write-fetch-head"}
 	case "pull":
 		ref, err := c.text(ctx, dir, "symbolic-ref", "--quiet", "HEAD")
 		if err != nil {

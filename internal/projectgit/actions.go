@@ -170,7 +170,7 @@ func (c Client) ActionBranch(ctx context.Context, dir string, r BranchRequest) (
 	switch r.Action {
 	case "merge":
 		return r.Target, nil
-	case "rebase", "pull", "push", "publish", "set-upstream":
+	case "rebase", "pull", "pull-stash", "push", "publish", "set-upstream":
 		if strings.HasPrefix(r.Source, "refs/heads/") {
 			return r.Source, nil
 		}
@@ -293,7 +293,7 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		if !found {
 			return errors.New("remote no longer exists")
 		}
-		_, err = c.git(ctx, dir, "", "fetch", "--prune", "--", r.Source)
+		_, err = c.git(ctx, dir, "", "fetch", "--prune", "--no-write-fetch-head", "--", r.Source)
 		return err
 	}
 	if _, err := c.branchRef(ctx, dir, r.Source, r.SourceSHA, r.Action == "rebase"); err != nil {
@@ -374,7 +374,7 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		}
 		_, err = c.git(ctx, dir, "", "switch", "--track", "-c", strings.TrimPrefix(local, "refs/heads/"), "--", strings.TrimPrefix(r.Source, "refs/remotes/"))
 		return err
-	case "pull":
+	case "pull", "pull-stash":
 		return c.pullBranch(ctx, dir, r)
 	case "push":
 		if !strings.HasPrefix(r.Source, "refs/heads/") {
@@ -448,7 +448,10 @@ func (c Client) pullBranch(ctx context.Context, dir string, r BranchRequest) err
 		if err != nil {
 			return err
 		}
-		_, err = c.git(ctx, dir, "", "fetch", "--", remote, "refs/heads/"+branch+":"+r.Source)
+		if r.Action == "pull-stash" {
+			return errors.New("choose the checked-out local branch to stash and pull")
+		}
+		_, err = c.git(ctx, dir, "", "fetch", "--no-write-fetch-head", "--", remote, "refs/heads/"+branch+":"+r.Source)
 		return err
 	}
 	remote, merge, err := c.upstream(ctx, dir, r.Source)
@@ -462,11 +465,6 @@ func (c Client) pullBranch(ctx context.Context, dir string, r BranchRequest) err
 	if owner != "" && !sameCheckout(owner, dir) {
 		return errors.New("branch is checked out elsewhere; open its worktree")
 	}
-	if owner != "" {
-		if err = c.requireClean(ctx, dir); err != nil {
-			return err
-		}
-	}
 	// FETCH_HEAD is used only for the explicitly configured upstream. No forced
 	// ref update and no --update-head-ok; the expected-old update is atomic.
 	if _, err = c.git(ctx, dir, "", "fetch", "--", remote, merge); err != nil {
@@ -479,6 +477,15 @@ func (c Client) pullBranch(ctx context.Context, dir string, r BranchRequest) err
 	if _, err = c.branchRef(ctx, dir, r.Source, r.SourceSHA, true); err != nil {
 		return err
 	}
+	if r.Action == "pull-stash" {
+		return c.stashPull(ctx, dir, r, owner, incoming)
+	}
+	return c.integratePull(ctx, dir, r, owner, incoming)
+}
+
+func (c Client) integratePull(ctx context.Context, dir string, r BranchRequest, owner, incoming string) error {
+	fastForward := true
+	var err error
 	if _, err = c.git(ctx, dir, "", "merge-base", "--is-ancestor", r.SourceSHA, incoming); err != nil {
 		if _, aheadErr := c.git(ctx, dir, "", "merge-base", "--is-ancestor", incoming, r.SourceSHA); aheadErr == nil {
 			return nil
@@ -486,6 +493,7 @@ func (c Client) pullBranch(ctx context.Context, dir string, r BranchRequest) err
 		if owner == "" {
 			return errors.New("branch has diverged; check it out and merge or rebase the upstream explicitly")
 		}
+		fastForward = false
 	}
 	// Recheck ownership after network I/O; Git in another process can create a
 	// checkout while fetch runs. Never move a ref underneath its working tree.
@@ -501,13 +509,29 @@ func (c Client) pullBranch(ctx context.Context, dir string, r BranchRequest) err
 		if err != nil || current != r.Source {
 			return errors.New("checkout changed while fetching; refresh and try again")
 		}
+		if err = c.requireIdle(ctx, dir); err != nil {
+			return err
+		}
+		if _, err = c.branchRef(ctx, dir, r.Source, r.SourceSHA, true); err != nil {
+			return err
+		}
+		if fastForward {
+			// Git preserves unrelated staged/unstaged edits and refuses paths
+			// it would overwrite. --ff-only prevents a dirty three-way merge.
+			_, err = c.git(ctx, dir, "", "merge", "--ff-only", "--no-edit", "--no-autostash", "--no-overwrite-ignore", "--", incoming)
+			return err
+		}
 		if err = c.requireClean(ctx, dir); err != nil {
 			return err
 		}
 		// A checked-out branch can merge divergent history normally. Keep real
 		// conflicts in this checkout for Continue/Abort; never rebase or autostash.
-		message := fmt.Sprintf("Merge branch '%s/%s' into %s", remote, strings.TrimPrefix(merge, "refs/heads/"), strings.TrimPrefix(r.Source, "refs/heads/"))
-		_, err = c.git(ctx, dir, "", "merge", "--ff", "--no-edit", "--no-autostash", "-m", message, "--", incoming)
+		upstream, err := c.text(ctx, dir, "for-each-ref", "--format=%(upstream:short)", r.Source)
+		if err != nil {
+			return err
+		}
+		message := fmt.Sprintf("Merge branch '%s' into %s", upstream, strings.TrimPrefix(r.Source, "refs/heads/"))
+		_, err = c.git(ctx, dir, "", "merge", "--ff", "--no-edit", "--no-autostash", "--no-overwrite-ignore", "-m", message, "--", incoming)
 		return err
 	}
 	_, err = c.git(ctx, dir, "", "update-ref", "-m", "lola: fast-forward upstream", r.Source, incoming, r.SourceSHA)

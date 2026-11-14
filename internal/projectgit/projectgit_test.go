@@ -218,7 +218,7 @@ func TestSyncHasNoForceOrRewrite(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want := [][]string{{"fetch", "--all", "--prune"}, {"push"}}
+	want := [][]string{{"fetch", "--all", "--prune", "--no-write-fetch-head"}, {"push"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v", got)
 	}
