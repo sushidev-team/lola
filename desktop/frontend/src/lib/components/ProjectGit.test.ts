@@ -38,7 +38,7 @@ beforeEach(() => {
   api.BranchAction.mockResolvedValue({path:'/repo'});
   api.Diff.mockResolvedValue({ files: [{ path: 'src/app.ts', status: 'modified', additions: 1, deletions: 1, patch: '@@ -1 +1 @@\n-old text\n+new text\n' }] });
 });
-afterEach(() => { cleanup(); confirm.cancel(); store.sessions = []; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); confirm.cancel(); store.sessions = []; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 async function open() { render(ProjectGit, { project }); await screen.findByRole('button', { name: /Add project workspace,/ }); }
 async function refreshRepository() {
   await fireEvent.contextMenu(screen.getByRole('navigation', {name:'Repository navigation'}));
@@ -53,6 +53,32 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it('auto-fetches every 15 seconds only while focused, and stops on unmount', async () => {
+    vi.useFakeTimers();
+    let focused = true;
+    vi.spyOn(document,'hasFocus').mockImplementation(() => focused);
+    vi.spyOn(document,'visibilityState','get').mockReturnValue('visible');
+    api.Snapshot.mockResolvedValue(snapshot({remotes:[{name:'origin',host:'github.com',owner:'team',repo:'repo',avatarUrl:''}]}));
+    const mounted = render(ProjectGit,{project});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.Fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect(api.Fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(api.Fetch).toHaveBeenCalledTimes(2);
+    focused = false;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.Fetch).toHaveBeenCalledTimes(2);
+    focused = true;
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(api.Fetch).toHaveBeenCalledTimes(3);
+    mounted.unmount();
+    await vi.advanceTimersByTimeAsync(60_000);
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.Fetch).toHaveBeenCalledTimes(3);
+  });
   it('pulls the current branch with the displayed ref and commit', async () => {
     await open();
     await fireEvent.click(screen.getByRole('button', {name:'Pull'}));

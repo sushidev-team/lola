@@ -1,10 +1,73 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProjectGitState } from './projectgit.svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTO_FETCH_INTERVAL, ProjectGitState } from './projectgit.svelte';
 const api = vi.hoisted(() => ({ Stashes: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), BranchAction: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Snapshot: vi.fn(), CachedIdentities: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), LastCommitMessage: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => resolve = r); return { promise, resolve }; }
 const snapshot = (branch: string) => ({ path: '/repo', branch, head: 'a', upstream: '', commits: [], refs: [], worktrees: [], files: [], signing: { enabled: false, format: '', key: '' }, hasMore: false });
 beforeEach(() => { Object.values(api).forEach(fn => fn.mockReset()); api.Stashes.mockResolvedValue([]); api.Snapshot.mockResolvedValue(snapshot('main')); api.CachedIdentities.mockResolvedValue({ authors: {}, remoteAvatars: {} }); api.Identities.mockResolvedValue({ authors: {} }); });
+afterEach(() => { vi.restoreAllMocks(); });
+
+describe('Automatic remote fetching', () => {
+  const remote = {name:'origin',host:'github.com',owner:'team',repo:'repo',avatarUrl:''};
+  it('throttles across worktrees, avoids overlapping requests, and preserves recovery and drafts', async () => {
+    let now = 1_000;
+    vi.spyOn(Date,'now').mockImplementation(() => now);
+    const state = new ProjectGitState('auto-fetch-shared','');
+    const linked = new ProjectGitState('auto-fetch-shared','/linked');
+    state.snapshot = {...snapshot('main'),remotes:[remote]};
+    linked.snapshot = {...snapshot('other'),remotes:[remote]};
+    state.message = 'My draft';
+    state.error = 'Push rejected';
+    state.failedAction = {action:'push',source:'refs/heads/main',sourceSHA:'a',target:'',targetSHA:''};
+    const pending = deferred<void>();
+    api.Fetch.mockReturnValueOnce(pending.promise);
+    const fetching = state.autoFetch();
+    await linked.autoFetch();
+    expect(api.Fetch).toHaveBeenCalledTimes(1);
+    pending.resolve(); await fetching;
+    expect(state.error).toBe('Push rejected');
+    expect(state.failedAction?.action).toBe('push');
+    expect(state.message).toBe('My draft');
+    now += AUTO_FETCH_INTERVAL - 1;
+    await linked.autoFetch();
+    expect(api.Fetch).toHaveBeenCalledTimes(1);
+    now++;
+    await linked.autoFetch();
+    expect(api.Fetch).toHaveBeenCalledTimes(2);
+    expect(api.Fetch).toHaveBeenLastCalledWith('auto-fetch-shared','/linked');
+  });
+  it('backs off failures and resets the interval after success', async () => {
+    let now = 10_000;
+    vi.spyOn(Date,'now').mockImplementation(() => now);
+    const state = new ProjectGitState('auto-fetch-retry','');
+    state.snapshot = {...snapshot('main'),remotes:[remote]};
+    api.Snapshot.mockResolvedValue(state.snapshot);
+    api.Fetch.mockRejectedValueOnce(new Error('Offline')).mockRejectedValueOnce(new Error('Offline'));
+    await state.autoFetch();
+    expect(state.autoFetchError).toContain('Offline');
+    expect(state.error).toBe('');
+    now += AUTO_FETCH_INTERVAL;
+    await state.autoFetch(); expect(api.Fetch).toHaveBeenCalledTimes(1);
+    now += AUTO_FETCH_INTERVAL;
+    await state.autoFetch(); expect(api.Fetch).toHaveBeenCalledTimes(2);
+    now += AUTO_FETCH_INTERVAL * 2;
+    await state.autoFetch(); expect(api.Fetch).toHaveBeenCalledTimes(2);
+    now += AUTO_FETCH_INTERVAL * 2;
+    await state.autoFetch(); expect(api.Fetch).toHaveBeenCalledTimes(3);
+    expect(state.autoFetchError).toBe('');
+    now += AUTO_FETCH_INTERVAL;
+    await state.autoFetch(); expect(api.Fetch).toHaveBeenCalledTimes(4);
+  });
+  it.each(['no remote','busy','loading','merge'])('skips auto-fetch while %s', async reason => {
+    const state = new ProjectGitState('auto-fetch-skip-'+reason,'');
+    state.snapshot = {...snapshot('main'),remotes:reason==='no remote'?[]:[remote]};
+    state.busy = reason==='busy'?'commit':'';
+    state.loading = reason==='loading';
+    state.snapshot.operation = reason==='merge'?'merge':undefined;
+    await state.autoFetch();
+    expect(api.Fetch).not.toHaveBeenCalled();
+  });
+});
 
 describe('Project Git request and operation ownership', () => {
   it('tracks the deleting branch and preserves a newer history selection during deletion', async () => {

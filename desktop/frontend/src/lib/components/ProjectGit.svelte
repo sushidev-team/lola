@@ -391,6 +391,21 @@
   });
 
   $effect(() => {
+    const state = git;
+    let disposed = false;
+    const fetchIfVisible = () => {
+      if (!disposed && document.visibilityState === 'visible' && document.hasFocus()) void state.autoFetch();
+    };
+    untrack(() => { void historyLoad.then(fetchIfVisible); });
+    // A short local tick retries after a busy operation; the shared schedule
+    // permits only one network fetch per 15 seconds, including across worktrees.
+    const timer = setInterval(fetchIfVisible, 1_000);
+    document.addEventListener('visibilitychange', fetchIfVisible);
+    window.addEventListener('focus', fetchIfVisible);
+    return () => { disposed = true; clearInterval(timer); document.removeEventListener('visibilitychange', fetchIfVisible); window.removeEventListener('focus', fetchIfVisible); };
+  });
+
+  $effect(() => {
     const state = peek;
     untrack(() => { if (state) { state.clearDiff(); void state.load('', 1); } });
   });
@@ -750,7 +765,7 @@
     {@const request = newBranch}
     <ProjectGitNewBranch {...request} onClose={() => newBranch = null} onCreated={(createdPath, checkout) => { if (request.git !== git) return; newBranch = null; if (checkout) { chooseWorktree(createdPath === configuredPath ? '' : createdPath); working(); } }} />
   {/if}
-  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || ''}</span><span role="status">{initialLoading ? 'Loading repository…' : git.busy ? `${({ 'ai-resolve':'Starting conflict resolution', 'delete-branch':'Deleting branch', 'remove-worktree':'Removing worktree', 'remove-worktree-branch':'Removing worktree and branch', 'create-pr':'Creating pull request', 'prepare-discard': 'Reviewing unstaged changes', discard: 'Discarding unstaged changes', 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy] ?? 'Updating repository'}…` : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
+  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || ''}</span><span role="status" title={git.autoFetchError || undefined}>{initialLoading ? 'Loading repository…' : git.busy ? `${({ 'ai-resolve':'Starting conflict resolution', 'delete-branch':'Deleting branch', 'remove-worktree':'Removing worktree', 'remove-worktree-branch':'Removing worktree and branch', 'create-pr':'Creating pull request', 'prepare-discard': 'Reviewing unstaged changes', discard: 'Discarding unstaged changes', 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy] ?? 'Updating repository'}…` : git.autoFetchError ? 'Automatic fetch failed; retrying shortly.' : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
 </div>
 
 <style>
