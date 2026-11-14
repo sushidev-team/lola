@@ -1,10 +1,14 @@
 name: CI
 
+# hub/ is the team hub, a separate Go module with its own workflow (hub.yml):
+# a change to it alone runs none of this.
 on:
   push:
     branches: [main]
+    paths-ignore: ['hub/**', '.github/workflows/hub.yml']
   pull_request:
     branches: [main]
+    paths-ignore: ['hub/**', '.github/workflows/hub.yml']
 
 permissions:
   contents: read

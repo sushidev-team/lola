@@ -43,6 +43,15 @@ GOCACHE=$PWD/.gocache GOFLAGS='-mod=mod -buildvcs=false' go test ./internal/daem
 
 `hubproto/` is a nested Go module; `make test` and `make vet` also check it.
 
+`hub/` is the team hub (the server daemons enrol with), a SEPARATE Go module with
+its own rules: read `hub/AGENTS.md` and `hub/DESIGN.md` before touching it. It
+builds with `cd hub && make check`, imports nothing from this module except
+`hubproto`, deploys from `main` through `.github/workflows/hub.yml`, and is
+excluded from lola's CI, releases and sandbox image. A wire change goes in
+`hubproto/` and updates the daemon and the hub in the SAME pull request, and
+stays backward compatible: installed daemons and the deployed hub run different
+versions.
+
 Go per `go.mod` (1.25). Deps: cobra, bubbletea + lipgloss, BurntSushi/toml;
 everything else is stdlib + exec seams.
 
@@ -402,7 +411,7 @@ every send path. Re-verify against a live pane.
 ### Team hub
 
 - **Hub work is a CLAIM and a candidate, never a command.**
-  (`internal/daemon/hubwire.go`, lola-hub's `DESIGN.md`.) A compromised hub must
+  (`internal/daemon/hubwire.go`, `hub/DESIGN.md`.) A compromised hub must
   not mean code execution here. Rules:
   - An offer is a CANDIDATE: `hub.Accept` (valid item, opted-in non-stack
     project, accepted kind, daily cap, sandbox unless `require_sandbox = false`)

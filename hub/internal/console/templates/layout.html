@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · lola hub</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">lola hub <span class="muted">admin</span></a>
+  {{if .CSRF}}
+  <nav>
+    <a href="/">Overview</a>
+    <form method="post" action="/logout" class="inline">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button type="submit" class="ghost">Sign out</button>
+    </form>
+  </nav>
+  {{end}}
+</header>
+<main>
+  {{with .Flash}}<div class="flash {{if .Error}}error{{else}}ok{{end}}" role="status">{{.Text}}</div>{{end}}
+  {{template "content" .}}
+</main>
+<footer class="muted">Loopback-only console. Every change is recorded in the event log.</footer>
+</body>
+</html>
+
+{{define "events"}}
+{{if .}}
+<table class="events">
+  <thead><tr><th>When</th><th>Org</th><th>Event</th><th>Item</th><th>Device</th><th>Detail</th></tr></thead>
+  <tbody>
+  {{range .}}
+    <tr><td title="{{stamp .At}}">{{ago .At}}</td><td>{{.Org}}</td><td>{{.Kind}}</td><td><code>{{.Item}}</code></td><td><code>{{short .Device}}</code></td><td>{{.Detail}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p class="muted">Nothing yet.</p>{{end}}
+{{end}}
+
+{{define "linear"}}
+{{if .NoBox}}
+<div class="flash error" role="status"><strong>No secret key.</strong> The hub cannot store or use any org's Linear key or digest webhook, so escalations are not sent: {{.Waiting}} waiting. Start the hub with <code>LOLA_HUB_SECRET_KEY</code> in its environment (<code>lola-hub secret-key</code> prints one; never in a flag or a file).</div>
+{{else if not .Enabled}}
+<div class="flash error" role="status"><strong>No Linear key.</strong> This org's escalations are not sent: {{.Waiting}} waiting. Set a key below, or let the team's admin set it in Lola.</div>
+{{else if .NoTeam}}
+<div class="flash error" role="status"><strong>No Linear team.</strong> This org's escalations stay pending: {{.Waiting}} waiting. Set a team below.</div>
+{{else if .Waiting}}
+<div class="flash ok" role="status">{{.Waiting}} escalation(s) waiting to be sent to Linear.</div>
+{{end}}
+{{end}}
+
+{{define "escalated-actions"}}
+<form method="post" action="/orgs/{{.Org}}/items/{{.ID}}/resolve" class="inline">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <input type="hidden" name="return_state" value="{{.Filter}}">
+  <input type="hidden" name="return_item" value="{{.Return}}">
+  <button type="submit" data-confirm="Mark this chore done? A person fixed it. Its Linear issue gets a comment and is closed.">Resolve</button>
+</form>
+<form method="post" action="/orgs/{{.Org}}/items/{{.ID}}/reopen" class="inline">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <input type="hidden" name="return_state" value="{{.Filter}}">
+  <input type="hidden" name="return_item" value="{{.Return}}">
+  <button type="submit" class="ghost" data-confirm="Put this chore back on offer with its attempts reset?">Reopen</button>
+</form>
+{{end}}

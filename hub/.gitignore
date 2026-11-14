@@ -1,0 +1,10 @@
+.gocache/
+/lola-hub
+/bin/
+*.db
+data/
+*.test
+*.out
+go.work
+go.work.sum
+data-dev/
