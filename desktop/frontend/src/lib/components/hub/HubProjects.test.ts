@@ -75,3 +75,15 @@ describe("HubProjects", () => {
     expect(await screen.findByText("No projects yet")).toBeInTheDocument();
   });
 });
+
+describe("HubProjects — refresh", () => {
+  it("reports each save and re-reads when asked", async () => {
+    const onSaved = vi.fn();
+    const { rerender } = render(Projects, { onSaved, refresh: 0 });
+    await fireEvent.click(await within(await findRow("web")).findByRole("checkbox", { name: "Team chores for Web" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    const n = HubProjects.mock.calls.length;
+    await rerender({ onSaved, refresh: 1 });
+    await waitFor(() => expect(HubProjects.mock.calls.length).toBe(n + 1));
+  });
+});

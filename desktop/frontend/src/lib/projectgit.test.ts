@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { workingGraphConnection, branchTree, branchesByCommit, commitGraph, graphPath, selectCommits, stagedFiles, unstagedFiles, type GitFile, type GitRef } from './projectgit';
+import { workingGraphConnection, worktreeChanges, branchTree, branchesByCommit, commitGraph, graphPath, selectCommits, stagedFiles, unstagedFiles, type GitFile, type GitRef } from './projectgit';
 
 describe('Git history selection and topology', () => {
   it('connects working changes only to HEAD and reserves a lane past unrelated newer commits', () => {
@@ -132,5 +132,22 @@ describe('Branch folders', () => {
     const result = branchTree(branches);
     expect(result.map(node => node.kind === 'folder' && [node.path, node.count])).toEqual([['feature', 2], ['fix', 1]]);
     expect(branches.map(branch => branch.name)).toEqual(['feature/api/login', 'feature/web/login', 'fix/login']);
+  });
+});
+
+describe('worktreeChanges', () => {
+  const tree = (path: string, head: string, changes = 0, extra = {}) => ({ path, branch: path.slice(1), head, locked: false, prunable: false, blocked: false, changes, ...extra });
+  const rows = commitGraph([{ sha: 'tip', parents: ['base'] }, { sha: 'side', parents: ['base'] }, { sha: 'base', parents: [] }]);
+  it('gives each other checkout a free lane on the commit it sits on', () => {
+    const out = worktreeChanges(rows, [tree('/main', 'tip', 9), tree('/a', 'side', 2), tree('/b', 'side', 1)], '/main', null);
+    expect([...out.keys()]).toEqual(['side']);
+    const side = rows.find(row => row.sha === 'side')!;
+    expect(out.get('side')!.map(change => [change.tree.path, change.lane])).toEqual([['/a', side.width], ['/b', side.width + 1]]);
+  });
+  it('steps past the active working edge and skips what it cannot place', () => {
+    const working = workingGraphConnection(rows, 'base')!;
+    const out = worktreeChanges(rows, [tree('/a', 'side', 2), tree('/clean', 'tip'), tree('/gone', 'unloaded', 5), tree('/box', 'tip', 5, { blocked: true }), tree('/stale', 'tip', 5, { prunable: true })], '/main', working);
+    expect([...out.keys()]).toEqual(['side']);
+    expect(out.get('side')![0].lane).toBeGreaterThan(working.lane);
   });
 });

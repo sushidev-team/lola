@@ -32,12 +32,18 @@ const (
 	ActionComplete ItemAction = "complete" // POST CompleteRequest -> empty JSON object
 	ActionFail     ItemAction = "fail"     // POST FailRequest     -> empty JSON object
 	ActionRelease  ItemAction = "release"  // POST, no body      -> empty JSON object
+	// ActionProgress reports a PR opened for the item. Allowed for the lease
+	// holder while claimed (claimed -> in_review: lease dropped, the device
+	// recorded as owner) and for the owner while in_review (updates delivery).
+	// A hub that predates it answers 404; the daemon then falls back to
+	// complete-on-PR.
+	ActionProgress ItemAction = "progress" // POST ProgressRequest -> empty JSON object
 )
 
 // Valid reports whether a is a known item action.
 func (a ItemAction) Valid() bool {
 	switch a {
-	case ActionClaim, ActionComplete, ActionFail, ActionRelease:
+	case ActionClaim, ActionComplete, ActionFail, ActionRelease, ActionProgress:
 		return true
 	}
 	return false
@@ -52,11 +58,13 @@ func ItemPath(id string, action ItemAction) string {
 	return PathItemsPrefix + id + "/" + string(action)
 }
 
-// ClaimPath, CompletePath, FailPath and ReleasePath are [ItemPath] shorthands.
+// ClaimPath, CompletePath, FailPath, ReleasePath and ProgressPath are
+// [ItemPath] shorthands.
 func ClaimPath(id string) string    { return ItemPath(id, ActionClaim) }
 func CompletePath(id string) string { return ItemPath(id, ActionComplete) }
 func FailPath(id string) string     { return ItemPath(id, ActionFail) }
 func ReleasePath(id string) string  { return ItemPath(id, ActionRelease) }
+func ProgressPath(id string) string { return ItemPath(id, ActionProgress) }
 
 // ParseItemPath is the hub-side inverse of [ItemPath].
 func ParseItemPath(path string) (id string, action ItemAction, ok bool) {
@@ -99,7 +107,47 @@ var (
 	deviceNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]*$`)
 	orgRe        = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	agentNameRe  = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	// A member label: set by an admin on the enroll token, carried by every
+	// device enrolled with it. Display data, so the device-name alphabet.
+	memberLabelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$`)
+	// A fail group: an opaque id a daemon picks to say "these failures are
+	// one problem". Lowercase alnum only; it never reaches an agent.
+	failGroupRe = regexp.MustCompile(`^[a-z0-9]{8,32}$`)
 )
+
+// MaxMemberLabelLen caps a member label (bytes).
+const MaxMemberLabelLen = 40
+
+// ValidMemberLabel reports whether s is an acceptable member label.
+func ValidMemberLabel(s string) bool { return memberLabelRe.MatchString(s) }
+
+// ValidFailGroup reports whether s is an acceptable fail group.
+func ValidFailGroup(s string) bool { return failGroupRe.MatchString(s) }
+
+// UniqueDeviceName returns name, or name with the first free "-2", "-3", …
+// suffix when taken reports it in use, so device display names are unique per
+// org. The base is truncated so the result stays within the device-name length
+// cap. name must already be valid ([ValidDeviceName]); "" is returned for an
+// invalid one, or when no suffix up to 1000 is free.
+func UniqueDeviceName(name string, taken func(string) bool) string {
+	if !ValidDeviceName(name) {
+		return ""
+	}
+	if !taken(name) {
+		return name
+	}
+	for n := 2; n <= 1000; n++ {
+		suffix := "-" + strconv.Itoa(n)
+		base := name
+		if len(base)+len(suffix) > maxDeviceNameLen {
+			base = base[:maxDeviceNameLen-len(suffix)]
+		}
+		if c := base + suffix; !taken(c) {
+			return c
+		}
+	}
+	return ""
+}
 
 // Caps on heartbeat list sizes and slot counts.
 const (
@@ -137,24 +185,53 @@ func (r EnrollRequest) Validate() error {
 	return nil
 }
 
-// EnrollResponse answers an enrollment.
+// EnrollResponse answers an enrollment. Member is the label the admin set on
+// the enroll token (empty for an unlabelled token, or a hub that predates
+// members). DeviceName is the display name the hub stored, which may carry a
+// "-2" style suffix ([UniqueDeviceName]); empty from an older hub.
 type EnrollResponse struct {
-	DeviceID string `json:"device_id"`
-	Org      string `json:"org"`
+	DeviceID   string `json:"device_id"`
+	Org        string `json:"org"`
+	Member     string `json:"member,omitempty"`
+	DeviceName string `json:"device_name,omitempty"`
+}
+
+// Validate checks the response's shape.
+func (r EnrollResponse) Validate() error {
+	if !ValidDeviceID(r.DeviceID) {
+		return invalid("device_id", "bad device id")
+	}
+	if !ValidOrg(r.Org) {
+		return invalid("org", "bad org")
+	}
+	if r.Member != "" && !ValidMemberLabel(r.Member) {
+		return invalid("member", "bad member label")
+	}
+	if r.DeviceName != "" && !ValidDeviceName(r.DeviceName) {
+		return invalid("device_name", "bad device name")
+	}
+	return nil
 }
 
 // HeartbeatRequest (POST /v1/heartbeat) reports capacity and renews leases.
+// PolicyVersion is the policy version the daemon currently APPLIES (0 = none),
+// so the org view can show who lags; omitted at 0, so a heartbeat without a
+// policy is byte-identical to the old frame.
 type HeartbeatRequest struct {
-	FreeSlots  int      `json:"free_slots"`
-	Agents     []string `json:"agents"`      // installed coding agents: claude, codex, …
-	Repos      []string `json:"repos"`       // owner/name slugs the member opted in
-	LiveLeases []string `json:"live_leases"` // item ids this device still works
+	FreeSlots     int      `json:"free_slots"`
+	Agents        []string `json:"agents"`      // installed coding agents: claude, codex, …
+	Repos         []string `json:"repos"`       // owner/name slugs the member opted in
+	LiveLeases    []string `json:"live_leases"` // item ids this device still works
+	PolicyVersion int      `json:"policy_version,omitempty"`
 }
 
 // Validate checks the request's shape.
 func (r HeartbeatRequest) Validate() error {
 	if r.FreeSlots < 0 || r.FreeSlots > MaxFreeSlots {
 		return invalid("free_slots", "out of range")
+	}
+	if r.PolicyVersion < 0 {
+		return invalid("policy_version", "negative")
 	}
 	if len(r.Agents) > MaxHeartbeatAgents {
 		return invalid("agents", "too many")
@@ -275,6 +352,20 @@ func (r CompleteRequest) Validate() error {
 	return nil
 }
 
+// ProgressRequest (POST /v1/items/{id}/progress) reports the PR opened for an
+// item and where it stands. Same shape and rules as [CompleteRequest]; the
+// difference is the state transition (claimed -> in_review, or an update
+// while in_review), not the payload.
+type ProgressRequest struct {
+	PRURL    string   `json:"pr_url"`
+	Delivery Delivery `json:"delivery"`
+}
+
+// Validate checks the PR URL shape and the delivery state.
+func (r ProgressRequest) Validate() error {
+	return CompleteRequest(r).Validate()
+}
+
 // FailReason is the closed enum of failure reasons.
 type FailReason string
 
@@ -298,15 +389,28 @@ func (f FailReason) Valid() bool {
 	return false
 }
 
-// FailRequest (POST /v1/items/{id}/fail).
+// FailRequest (POST /v1/items/{id}/fail). PRURL optionally names the PR the
+// attempt left behind. Group ([ValidFailGroup]) optionally ties failures
+// together: items failed with the same group escalate as ONE Linear issue
+// listing them ([GroupKey]).
 type FailRequest struct {
 	Reason FailReason `json:"reason"`
+	PRURL  string     `json:"pr_url,omitempty"`
+	Group  string     `json:"group,omitempty"`
 }
 
-// Validate checks the reason.
+// Validate checks the reason, and the PR URL and group when present.
 func (r FailRequest) Validate() error {
 	if !r.Reason.Valid() {
 		return invalid("reason", "unknown")
+	}
+	if r.PRURL != "" {
+		if err := ValidatePRURL(r.PRURL); err != nil {
+			return err
+		}
+	}
+	if r.Group != "" && !ValidFailGroup(r.Group) {
+		return invalid("group", "bad group")
 	}
 	return nil
 }

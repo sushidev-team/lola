@@ -1259,6 +1259,25 @@ type HubWork struct {
 	// while the session lived on: the session keeps running, lola stops
 	// renewing and reporting for it, exactly as for a lost lease.
 	Released bool `json:"released,omitempty"`
+	// LeaseTaken is set with LeaseLost when re-claiming the lost lease was
+	// refused because another device holds the item now.
+	LeaseTaken bool `json:"lease_taken,omitempty"`
+	// Progress is the PR delivery last queued as progress for the hub
+	// (dep_advisory): a new one is sent when the delivery changes, and again
+	// periodically while in review (the hub reopens an in-review item that
+	// goes silent for hubproto.InReviewIdleReopen).
+	Progress string `json:"progress,omitempty"`
+	// ProgressAt is when the last progress was queued (zero = before this
+	// field existed): the in-review refresh is timed from it.
+	ProgressAt time.Time `json:"progress_at,omitzero"`
+	// InReview is set once the hub acknowledged the progress: the item is in
+	// review, owned by this device without a lease, so it is no longer
+	// renewed and its complete / fail goes out as the owner's.
+	InReview bool `json:"in_review,omitempty"`
+	// Group ties the items of one grouped session together: a failure of
+	// them is reported with this id so the hub escalates them as one issue.
+	// Random lowercase hex, never derived from a session id or path.
+	Group string `json:"group,omitempty"`
 }
 
 // HubWorks returns every hub item the session works, HubItem first, as

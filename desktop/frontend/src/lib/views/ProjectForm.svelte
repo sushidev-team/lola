@@ -13,7 +13,7 @@
   import HelpText from "$lib/components/HelpText.svelte";
   import Button from "$lib/components/Button.svelte";
   import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
-  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT } from "$lib/settingsFields";
+  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT, FIELD_KEYS } from "$lib/settingsFields";
   import Checkbox from "$lib/components/Checkbox.svelte";
   import AgentModelFields from "$lib/components/AgentModelFields.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
@@ -155,6 +155,10 @@
   // the human types an id of their own, after which it is never rewritten.
   let origName = $state("");
   let idAuto = $state(false);
+  // A NEW project turns pickup on once it has a team, since a team is what it
+  // polls. Only until the human sets the Enabled box: after that the box is
+  // theirs, the same fill-only rule as repoAuto/branchAuto.
+  let enabledAuto = $state(false);
 
   // The checkout's branches, offered as suggestions on Default branch. A
   // custom option keeps the input free text, so a path that is not a checkout — or a
@@ -238,10 +242,20 @@
         ? "add project"
         : `project: ${nav.overlayProject}`,
   );
-  // Saving needs a usable ID, not merely non-empty text: an all-non-ASCII label
+  // Why Save is off, said next to it instead of failing after the click.
+  // Saving needs a folder (config refuses a project without a path; a stack has
+  // none) and a usable ID, not merely non-empty text: an all-non-ASCII label
   // slugs to "" and there is no id to write.
-  const canSave = $derived(!!f && !saving && slug(f.name) !== ""
-    && (!customCap || (Number.isInteger(f.concurrencyCap) && f.concurrencyCap > 0)));
+  const saveBlock = $derived.by(() => {
+    if (!f) return "";
+    if (role !== "stack" && !f.path.trim()) return "Choose the project folder to save.";
+    if (slug(f.name) === "") return "Give the project a label or an ID to save.";
+    if (customCap && !(Number.isInteger(f.concurrencyCap) && f.concurrencyCap > 0)) {
+      return "Set the concurrency cap to a whole number of at least 1 to save.";
+    }
+    return "";
+  });
+  const canSave = $derived(!!f && !saving && !saveBlock);
   const renaming = $derived(!!f && !f.isNew && slug(f.name) !== origName);
 
 
@@ -378,6 +392,7 @@
       // Only a NEW project derives its id from the label. An existing id is
       // load-bearing and must not drift when someone edits the label.
       idAuto = d.isNew;
+      enabledAuto = d.isNew && !d.enabled;
       // The seeded "main" is a placeholder, not a choice — the checkout's own
       // default branch replaces it. An existing project's branch is a decision.
       branchAuto = d.isNew;
@@ -449,6 +464,7 @@
   function onTeam(v: string) {
     if (!f || v === f.teamId) return;
     f.teamId = v;
+    if (f.isNew && enabledAuto) f.enabled = !!v;
     // Team-specific drafts cannot be restored into another team's picker.
     for (const key of ["matchLabels", "onSentSetLabel", "blockedLabelId"] as const) overrideDrafts.delete(key);
     f.projectId = "";
@@ -606,6 +622,8 @@
       {#if controlId}<label for={controlId}>{caption}</label>{:else}<span>{caption}</span>{/if}
       {#if hint}<HelpText label={caption} detail={hint} />{/if}
     </span>
+    <!-- The config.toml key, secondary to the plain caption. -->
+    {#if FIELD_KEYS[caption]}<code class="font-mono text-sm text-faint" data-field-key>{FIELD_KEYS[caption]}</code>{/if}
     {#if k}
       {@const on = inherited(k)}
       <span class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
@@ -737,7 +755,7 @@
       }} />
     </div>
   {:else}
-    {@render areaRow(caption, selected, onChange, "one UUID per line", "", k)}
+    {@render areaRow(caption, selected, onChange, "one ID per line", "", k)}
   {/if}
 {/snippet}
 
@@ -770,6 +788,38 @@
     <div class="px-3 py-8 text-center text-sm text-faint">loading project…</div>
   {:else}
     {@const d = f}
+    <!-- Team drives every dependent picker. -->
+    {#snippet teamRow(caption: string)}
+      <div class={rowCls}>
+        <span class={labelCls}>{caption}</span>
+        {#if teams.length > 0}
+          <Select aria-label={caption} value={d.teamId} onchange={(e) => onTeam(e.currentTarget.value)}>
+            <option value="">(pick a team)</option>
+            {#each teams as t (t.id)}<option value={t.id}>{t.key} — {t.name}</option>{/each}
+          </Select>
+        {:else}
+          <!-- onchange, not oninput: switching teams clears the dependent IDs,
+               which must not happen on every keystroke of a pasted UUID. -->
+          <input
+            class="{inputCls} font-mono"
+            aria-label={caption}
+            value={d.teamId}
+            placeholder="team UUID"
+            onchange={(e) => onTeam(e.currentTarget.value)}
+          />
+        {/if}
+      </div>
+    {/snippet}
+    <!-- A team with neither a state nor a label filter matches EVERY issue in
+         it, which is almost never what someone setting up pickup meant. Said
+         wherever those filters are chosen; it never blocks the save. -->
+    {#snippet unfilteredWarning()}
+      {#if d.teamId && d.enabled && cleanLines(d.stateIds).length === 0 && cleanLines(d.matchLabels).length === 0}
+        <p class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn" data-unfiltered>
+          No workflow state or label is chosen, so Lola picks up every issue in this team. Choose the states to pick up.
+        </p>
+      {/if}
+    {/snippet}
     <Tabs tabs={TABS} active={shownTab} onSelect={(id) => (tab = id)} />
 
     {#if shownTab === "repo"}
@@ -897,6 +947,21 @@
           {/if}
         {/snippet}
         {@render section(role === "stack" ? "Stack and agent" : role === "member" ? "Repository" : "Repository and agent", repository)}
+        {#if d.isNew && role !== "member"}
+          <!-- The short path for a new project: folder, then team, then the
+               states to pick up, all on this first tab. Issue pickup has every
+               other filter. -->
+          {#snippet newPickup()}
+            <p class="text-sm text-faint">Choose the Linear team whose issues this {role === "stack" ? "stack" : "project"} works on, then the workflow states to pick up. Issue pickup has every other filter.</p>
+            {@render teamRow("Linear team")}
+            {#if d.teamId}
+              {#if metaLoading}<p class="text-sm text-faint">Loading workflow states…</p>{/if}
+              {@render multiRow("Workflow states", d.stateIds, meta?.states ?? null, (v) => { d.stateIds = v; })}
+            {/if}
+            {@render unfilteredWarning()}
+          {/snippet}
+          {@render section("Linear pickup", newPickup)}
+        {/if}
         {#if role === "stack"}
           <p class="text-sm text-faint">
             A stack has no checkout of its own: each session gets one worktree per member repository, side by side in
@@ -1128,7 +1193,7 @@
         {/if}
 
         {#snippet pickup()}
-          {@render boolRow("Enabled", d.enabled, () => { d.enabled = !d.enabled; }, "poll Linear for matching issues")}
+          {@render boolRow("Enabled", d.enabled, () => { d.enabled = !d.enabled; enabledAuto = false; }, "poll Linear for matching issues")}
 
           <div class={rowCls}>
             <span class={labelCls}>Concurrency cap</span>
@@ -1152,26 +1217,7 @@
         {/snippet}
         {@render section("Automatic pickup", pickup)}
         {#snippet filters()}
-          <!-- Team drives every dependent picker. -->
-          <div class={rowCls}>
-            <span class={labelCls}>Team</span>
-            {#if teams.length > 0}
-              <Select aria-label="Team" value={d.teamId} onchange={(e) => onTeam(e.currentTarget.value)}>
-                <option value="">(pick a team)</option>
-                {#each teams as t (t.id)}<option value={t.id}>{t.key} — {t.name}</option>{/each}
-              </Select>
-            {:else}
-              <!-- onchange, not oninput: switching teams clears the dependent IDs,
-                   which must not happen on every keystroke of a pasted UUID. -->
-              <input
-                class="{inputCls} font-mono"
-                aria-label="Team"
-                value={d.teamId}
-                placeholder="team UUID"
-                onchange={(e) => onTeam(e.currentTarget.value)}
-              />
-            {/if}
-          </div>
+          {@render teamRow("Team")}
 
           {#if metaLoading}
             <p role="status" class="text-sm text-faint">Loading team options…</p>
@@ -1199,6 +1245,7 @@
           {/if}
 
           {@render multiRow("Workflow states", d.stateIds, meta?.states ?? null, (v) => { d.stateIds = v; })}
+          {@render unfilteredWarning()}
 
           {@render idRow(
             "Assignee",
@@ -1301,8 +1348,9 @@
           }}>Remove</Button>
         {/if}
       {/if}
-      <Button size="md" class="ml-auto" onclick={requestClose}>Cancel</Button>
-      <Button variant="primary" size="md" disabled={!canSave} onclick={save}>{saving ? "Saving…" : "Save"}</Button>
+      {#if saveBlock}<span id={`${formId}-save-why`} class="ml-auto text-right text-sm text-faint">{saveBlock}</span>{/if}
+      <Button size="md" class={saveBlock ? "" : "ml-auto"} onclick={requestClose}>Cancel</Button>
+      <Button variant="primary" size="md" disabled={!canSave} aria-describedby={saveBlock ? `${formId}-save-why` : undefined} onclick={save}>{saving ? "Saving…" : "Save"}</Button>
     </div>
   {/snippet}
 </Modal>

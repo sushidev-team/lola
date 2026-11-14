@@ -89,6 +89,15 @@ describe("SidebarRoster", () => {
     expect(order()).toEqual(['idle']);
   });
 
+  it("draws a hub chore's chip as a static mark inside the row button", () => {
+    store.sessions = [row('a', { hub: { itemId: 'it_1', kind: 'dep_advisory', label: 'GHSA-x · lodash' } })];
+    render(SidebarRoster);
+    const chip = document.querySelector('[data-hub-chip]')!;
+    expect(chip).not.toBeNull();
+    expect(chip.tagName).toBe('SPAN');
+    expect(chip.closest('button')?.querySelector('button')).toBeNull();
+  });
+
   it("opens a PR directly without switching sessions", async () => {
     store.sessions = [row('a', { prNumber: 84, prUrl: 'https://github.com/example/repo/pull/84' }), row('b')];
     nav.openSession('b');

@@ -115,6 +115,22 @@ func TestApplyTeamPolicyConcurrencyIsACeiling(t *testing.T) {
 	}
 }
 
+// The daily budget is a ceiling too: a tighter local budget stays, an unset
+// one (0 = no budget) takes the team's.
+func TestApplyTeamPolicyBudgetIsACeiling(t *testing.T) {
+	c, _, _ := policyBase(t)
+	ApplyTeamPolicy(c, hubproto.Settings{BudgetDailyWeightedTokens: 5000})
+	if c.Budget.DailyTokens != 1000 {
+		t.Errorf("budget = %d, want the local 1000", c.Budget.DailyTokens)
+	}
+	c, _, _ = policyBase(t)
+	c.Budget.DailyTokens = 0
+	ApplyTeamPolicy(c, hubproto.Settings{BudgetDailyWeightedTokens: 5000})
+	if c.Budget.DailyTokens != 5000 {
+		t.Errorf("unset budget = %d, want the team's 5000", c.Budget.DailyTokens)
+	}
+}
+
 func TestApplyTeamPolicyReviewProviders(t *testing.T) {
 	c, _, _ := policyBase(t)
 	got := ApplyTeamPolicy(c, hubproto.Settings{ReviewProviders: []string{"claude-session", "codex-session", "bot-watch"}})

@@ -97,20 +97,39 @@ describe("SetupTokenRunner", () => {
     expect(m.dispose).toHaveBeenCalled();
   });
 
-  it("shows the error when the run ends without a token", async () => {
-    render(SetupTokenRunner);
+  it("shows the error when the run ends without a token, and reports the failure", async () => {
+    const onFailed = vi.fn();
+    render(SetupTokenRunner, { onFailed });
     await fireEvent.click(screen.getByRole("button", { name: "Log in with Claude" }));
     await screen.findByLabelText("Claude login terminal");
     m.fire("sandboxlogin:done", { run: 7, stored: false, cancelled: false, error: "claude setup-token ended without a token." });
-    expect(await screen.findByRole("alert")).toHaveTextContent("ended without a token");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Claude finished without giving a token");
+    expect(onFailed).toHaveBeenCalledWith("no_token");
     expect(screen.getByRole("button", { name: "Log in with Claude" })).toBeInTheDocument();
   });
 
-  it("shows a start failure such as a missing claude", async () => {
-    m.start.mockRejectedValue(new Error("claude was not found on PATH"));
-    render(SetupTokenRunner);
+  it("says a timed-out or cancelled login in its own words", async () => {
+    const onFailed = vi.fn();
+    render(SetupTokenRunner, { onFailed });
     await fireEvent.click(screen.getByRole("button", { name: "Log in with Claude" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("claude was not found on PATH");
+    await screen.findByLabelText("Claude login terminal");
+    m.fire("sandboxlogin:done", { run: 7, stored: false, cancelled: false, error: "The login timed out after 10 minutes." });
+    expect(await screen.findByRole("alert")).toHaveTextContent("The login timed out");
+    expect(onFailed).toHaveBeenLastCalledWith("timeout");
+    await fireEvent.click(screen.getByRole("button", { name: "Log in with Claude" }));
+    await screen.findByLabelText("Claude login terminal");
+    m.fire("sandboxlogin:done", { run: 7, stored: false, cancelled: true, error: "" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("The login was cancelled");
+    expect(onFailed).toHaveBeenLastCalledWith("cancelled");
+  });
+
+  it("shows a start failure such as a missing claude in plain words", async () => {
+    const onFailed = vi.fn();
+    m.start.mockRejectedValue(new Error("claude was not found on PATH. Install Claude Code, then try again"));
+    render(SetupTokenRunner, { onFailed });
+    await fireEvent.click(screen.getByRole("button", { name: "Log in with Claude" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Claude Code is not installed on this Mac");
+    expect(onFailed).toHaveBeenCalledWith("missing");
     expect(screen.queryByLabelText("Claude login terminal")).not.toBeInTheDocument();
   });
 

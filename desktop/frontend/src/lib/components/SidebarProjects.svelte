@@ -33,6 +33,7 @@
   import { askRemoveProject, askRemoveStack } from "$lib/removeAsk";
   import Modal from "./Modal.svelte";
   import Checkbox from "./Checkbox.svelte";
+  import SetupChecklist from "./SetupChecklist.svelte";
   import { ConfigService, type StackFolderAppDTO } from "@bindings/desktop";
 
   // The project switcher, moved out of the old Rail panel onto the shared
@@ -676,14 +677,22 @@
       {:else}<li class="px-2 py-3 text-sm text-faint">No matching projects</li>{/each}
     </ul>
   {:else if store.projects.length === 0 && store.groups.length === 0}
-    <!-- A dashed drop-zone-ish placeholder, not a <Button>: it is an empty STATE
-         that happens to be clickable, and its dashed border and 3-line height are
-         not part of the button ladder. -->
-    <button
-      class="w-full rounded-md border border-dashed border-edge px-2 py-3 text-center text-sm text-faint transition-colors hover:border-accent hover:text-accent-ink"
-      onclick={() => nav.openOverlay("project", "")}>No projects — add one</button
-    >
+    <!-- The empty workspace points at what is left to do, not only at "add a
+         project": a missing tool or a signed-out gh is as much a dead end. The
+         dashed frame marks it as an empty STATE, not a list. -->
+    <div class="grid gap-3 rounded-md border border-dashed border-edge p-2" aria-label="Get started" role="region">
+      <Button variant="secondary" size="sm" block onclick={() => nav.openOverlay("project", "")}>Add project</Button>
+      <SetupChecklist />
+    </div>
   {:else}
+    {#if store.connected && !store.projects.some((p) => p.pollsEnabled > 0)}
+      <!-- Projects exist but none picks up issues: the checklist stays while
+           anything else is left to do. Polling alone does not keep it up — a
+           Mac that only takes hub chores or manual sessions never polls — and
+           the frame is the checklist's own, so nothing is left behind when it
+           hides. Mounted only while no project polls, so its checks stop with it. -->
+      <SetupChecklist hideWhenComplete optional={["poll"]} class="mb-2 rounded-md border border-dashed border-edge p-2" />
+    {/if}
     {@const gap = drag?.kind === "group" ? groupTarget : target?.kind === "top" ? target.index : null}
     <!-- The sidebar owns scrolling; Activity has its own bounded footer. -->
     <div bind:this={listEl} class="min-w-0" class:select-none={!!drag}>

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sushidev-team/lola/hubproto"
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -61,5 +62,58 @@ func TestTeamPolicyNotApplied(t *testing.T) {
 	got := (&ConfigService{}).TeamPolicy()
 	if got.Applied || len(got.Locked) != 0 || got.Note != "[hub].apply_policy = false" || len(got.Keys) != 1 {
 		t.Errorf("TeamPolicy = %+v", got)
+	}
+}
+
+// Budget and concurrency are ceilings with a form field; the merge queue is a
+// lock with one. escalate_after is read back from the summary whether or not
+// the policy is applied.
+func TestTeamPolicyCeilingsAndEscalate(t *testing.T) {
+	withHubStatus(t, protocol.HubStatusData{Joined: true, Policy: &protocol.HubPolicyInfo{
+		Version: 4, Applied: true,
+		Keys:    []string{hubproto.KeyBudgetDaily, hubproto.KeyMergeQueue, hubproto.KeyEscalateAfter},
+		Summary: []string{"daily budget: 100 weighted tokens", "escalate after: 3 failures"},
+		AppliedKeys: []protocol.HubAppliedKey{
+			{Key: hubproto.KeyBudgetDaily, Value: "100", Local: "0"},
+			{Key: hubproto.KeyMergeQueue, Value: "false", Local: "true"},
+		},
+	}}, nil)
+	got := (&ConfigService{}).TeamPolicy()
+	if got.EscalateAfter != 3 || len(got.Locked) != 2 {
+		t.Fatalf("TeamPolicy = %+v", got)
+	}
+	if b := got.Locked[0]; b.Field != "budgetDaily" || !b.Ceiling {
+		t.Errorf("budget = %+v", b)
+	}
+	if m := got.Locked[1]; m.Field != "mergeQueue" || m.Ceiling {
+		t.Errorf("merge queue = %+v", m)
+	}
+
+	withHubStatus(t, protocol.HubStatusData{Joined: true, Policy: &protocol.HubPolicyInfo{
+		Version: 4, Keys: []string{hubproto.KeyEscalateAfter}, Summary: []string{"escalate after: 1 failure"},
+	}}, nil)
+	if got := (&ConfigService{}).TeamPolicy(); got.EscalateAfter != 1 || got.Applied {
+		t.Errorf("not applied: %+v", got)
+	}
+}
+
+func TestTeamLimitsRoundTrip(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if got, err := s.TeamLimits(); err != nil || got.BudgetDaily != 0 || got.MergeQueue {
+		t.Fatalf("TeamLimits = %+v, %v", got, err)
+	}
+	if err := s.SaveTeamLimits(TeamLimitsDTO{BudgetDaily: -1}); err == nil {
+		t.Fatal("accepted a negative budget")
+	}
+	if err := s.SaveTeamLimits(TeamLimitsDTO{BudgetDaily: 5000, MergeQueue: true}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Budget.DailyTokens != 5000 || !cfg.MergeQueue.Enabled {
+		t.Errorf("saved budget=%d mq=%v", cfg.Budget.DailyTokens, cfg.MergeQueue.Enabled)
 	}
 }

@@ -1,8 +1,14 @@
-export type GitErrorInfo = { title:string; description:string; kind:'warn'|'bad'; recovery?:'pull'|'merge'|'refresh' };
+export type GitErrorInfo = { title:string; description:string; kind:'warn'|'bad'; recovery?:'pull'|'merge'|'refresh'|'force-remove'|'force-worktree'|'force-delete' };
 
 /** Git stderr is diagnostic detail; the primary message explains the next step. */
 export function gitErrorInfo(raw:string, action=''):GitErrorInfo {
   const text=raw.toLowerCase();
+  if (action === 'remove-worktree-branch' && text.includes('branch is not fully merged'))
+    return {title:'Branch is not fully merged',description:'Keep the branch, or force removal if you no longer need its commits.',kind:'warn',recovery:'force-remove'};
+  if (action === 'delete-branch' && text.includes('not fully merged'))
+    return {title:'Branch is not fully merged',description:'Force deletion only if you no longer need its commits.',kind:'warn',recovery:'force-delete'};
+  if (['remove-worktree','remove-worktree-branch'].includes(action) && /directory not empty|contains modified or untracked files|commit or stash|worktree removed, but/.test(text))
+    return {title:'Worktree removal incomplete',description:'Review the remaining checkout and branch before forcing removal.',kind:'warn',recovery:'force-worktree'};
   if (/non-fast-forward|fetch first|tip of your current branch is behind/.test(text))
     return {title:'Push blocked',description:'The remote branch has new commits. Pull changes, then push again.',kind:'warn',recovery:'pull'};
   if (/not possible to fast-forward|divergent branches|branches have diverged|branch has diverged|cannot fast-forward/.test(text))

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const { Status, Board, Org, Join, Leave, Claim, Release, Sync, DefaultDeviceName } = vi.hoisted(() => ({
+const { Status, Board, Org, Join, Leave, Claim, Release, Sync, DefaultDeviceName, Stats } = vi.hoisted(() => ({
+  Stats: vi.fn(),
   Status: vi.fn(),
   Board: vi.fn(),
   Org: vi.fn(),
@@ -13,15 +14,16 @@ const { Status, Board, Org, Join, Leave, Claim, Release, Sync, DefaultDeviceName
 }));
 
 vi.mock("@bindings/desktop", () => ({
-  HubService: { Status, Board, Org, Join, Leave, Claim, Release, Sync, DefaultDeviceName },
+  HubService: { Status, Board, Org, Join, Leave, Claim, Release, Sync, DefaultDeviceName, Stats },
 }));
 
-import { HubStore, HUB_POLL_MS, OUTDATED_MESSAGE, SYNC_DONE_MS, SYNC_POLL_MS, SYNC_WAIT_MS, connectionState } from "./hub.svelte";
+import { HubStore, HUB_LIGHT_BOARD_MS, HUB_LIGHT_POLL_MS, HUB_POLL_MS, OUTDATED_MESSAGE, SYNC_DONE_MS, SYNC_POLL_MS, SYNC_WAIT_MS, connectionState } from "./hub.svelte";
 
 const joined = { enabled: true, joined: true, org: "acme", deviceName: "mac", claimsToday: 0, maxClaimsPerDay: 4, pendingOutcomes: 0, sessions: [] };
 
 beforeEach(() => {
-  for (const f of [Status, Board, Org, Join, Leave, Claim, Release, Sync, DefaultDeviceName]) f.mockReset();
+  for (const f of [Status, Board, Org, Join, Leave, Claim, Release, Sync, DefaultDeviceName, Stats]) f.mockReset();
+  Stats.mockRejectedValue(new Error('unknown cmd "hubStats"'));
   Status.mockResolvedValue({ ...joined });
   Board.mockResolvedValue({ fetchedAt: "", items: [{ id: "it_1", label: "GHSA-x · lodash" }] });
   Org.mockResolvedValue({ org: "acme", devices: [] });
@@ -156,9 +158,11 @@ describe("connectionState", () => {
   const now = Date.parse("2026-11-11T12:00:00Z");
   it("reads connected, error, waiting and stale", () => {
     expect(connectionState(null).label).toBe("Not joined");
+    expect(connectionState({ ...joined, joined: false, membership: "revoked" } as never, now)).toEqual({ tone: "bad", label: "Removed by the hub" });
+    expect(connectionState({ ...joined, joined: false, membership: "not joined" } as never, now).label).toBe("Not joined");
     expect(connectionState({ ...joined, lastHeartbeat: "2026-11-11T11:58:00Z" } as never, now)).toEqual({ tone: "good", label: "Connected" });
-    expect(connectionState({ ...joined, lastHeartbeat: "2026-11-11T11:00:00Z" } as never, now).label).toBe("Stale");
-    expect(connectionState({ ...joined } as never, now).label).toBe("Waiting for first heartbeat");
+    expect(connectionState({ ...joined, lastHeartbeat: "2026-11-11T11:00:00Z" } as never, now).label).toBe("Not heard from lately");
+    expect(connectionState({ ...joined } as never, now).label).toBe("Connecting…");
     expect(connectionState({ ...joined, lastHeartbeat: "2026-11-11T11:58:00Z", lastError: "boom", lastErrorAt: "2026-11-11T11:59:00Z" } as never, now).tone).toBe("bad");
     // An error older than the last good heartbeat is history, not the state.
     expect(connectionState({ ...joined, lastHeartbeat: "2026-11-11T11:59:00Z", lastError: "boom", lastErrorAt: "2026-11-11T11:58:00Z" } as never, now).tone).toBe("good");
@@ -212,5 +216,127 @@ describe("HubStore.sync", () => {
     await vi.advanceTimersByTimeAsync(SYNC_WAIT_MS + SYNC_POLL_MS);
     await run;
     expect(hub.syncPhase).toBe("slow");
+  });
+});
+
+describe("HubStore per-row busy", () => {
+  it("keeps one claim from greying out another, and refuses a second press of the same", async () => {
+    let finish: (v: unknown) => void = () => {};
+    Claim.mockImplementation(({ itemId }: { itemId: string }) =>
+      itemId === "a" ? new Promise((r) => (finish = r)) : Promise.resolve({ session: "s", project: "web", itemId }),
+    );
+    const hub = new HubStore();
+    const a = hub.claim("a", "web");
+    expect(hub.isBusy("claim:a")).toBe(true);
+    expect(hub.isBusy("claim:b")).toBe(false);
+    expect((await hub.claim("a", "web")).ok).toBe(false);
+    expect((await hub.claim("b", "web")).ok).toBe(true);
+    // Join waits for nothing to be running.
+    expect((await hub.join("https://hub.example.com", "tok", "mac")).ok).toBe(false);
+    expect(Join).not.toHaveBeenCalled();
+    finish({ session: "s", project: "web", itemId: "a" });
+    expect((await a).ok).toBe(true);
+    expect(hub.isBusy("claim:a")).toBe(false);
+    expect(hub.busy).toBe("");
+  });
+});
+
+describe("HubStore light watch", () => {
+  it("reads status each minute and the board every few minutes, never the org", async () => {
+    vi.useFakeTimers();
+    const hub = new HubStore();
+    const release = hub.watchLight();
+    expect(hub.lightPolling).toBe(true);
+    expect(hub.polling).toBe(false);
+    await vi.waitFor(() => expect(Status).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(Board).toHaveBeenCalledTimes(1));
+    expect(Org).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(HUB_LIGHT_POLL_MS);
+    expect(Status).toHaveBeenCalledTimes(2);
+    expect(Board).toHaveBeenCalledTimes(1); // board still fresh
+    await vi.advanceTimersByTimeAsync(HUB_LIGHT_BOARD_MS);
+    expect(Board.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(Org).not.toHaveBeenCalled();
+    expect(Stats).not.toHaveBeenCalled();
+    release();
+    release();
+    expect(hub.lightPolling).toBe(false);
+  });
+
+  it("does not read the board while not joined", async () => {
+    Status.mockResolvedValue({ enabled: false, joined: false, sessions: [] });
+    const hub = new HubStore();
+    hub.status = { enabled: false, joined: false } as never;
+    const release = hub.watchLight();
+    await vi.waitFor(() => expect(hub.loaded).toBe(true));
+    expect(Board).not.toHaveBeenCalled();
+    expect(hub.needsCount).toBe(0);
+    release();
+  });
+
+  it("counts what needs a person for the badge", async () => {
+    Board.mockResolvedValue({ fetchedAt: "", items: [
+      { id: "c", kind: "dep_advisory", state: "open", severity: "critical", repo: "o/w", attempts: 0, reporters: 1, local: { claimable: true } },
+      { id: "e", kind: "dep_advisory", state: "escalated", repo: "o/w", attempts: 3, reporters: 1, local: { claimable: false } },
+      { id: "o", kind: "dep_advisory", state: "open", severity: "low", repo: "o/w", attempts: 0, reporters: 1, local: { claimable: true } },
+    ] });
+    const hub = new HubStore();
+    const release = hub.watchLight();
+    await vi.waitFor(() => expect(hub.needsCount).toBe(2));
+    release();
+  });
+
+  it("survives a build without the hub bindings", async () => {
+    Status.mockImplementation(() => {
+      throw new Error("HubService.Status is not a function");
+    });
+    const hub = new HubStore();
+    await hub.refresh({ light: true });
+    expect(hub.statusError).toMatch(/not a function/);
+  });
+});
+
+describe("HubStore notices", () => {
+  it("tells the receiver about a chore this Mac took on its own, but not one a person claimed here", async () => {
+    const seen: string[] = [];
+    const hub = new HubStore();
+    hub.onNotice = (n) => seen.push(n.text);
+    await hub.refresh();
+    Claim.mockResolvedValue({ session: "s1", project: "web", itemId: "mine" });
+    Status.mockResolvedValue({ ...joined, sessions: [{ session: "s1", itemId: "mine", kind: "dep_advisory", summary: "GHSA-m" }] });
+    await hub.claim("mine", "web");
+    await hub.refresh({ fresh: true });
+    expect(seen).toEqual([]);
+    Status.mockResolvedValue({ ...joined, sessions: [
+      { session: "s1", itemId: "mine", kind: "dep_advisory", summary: "GHSA-m" },
+      { session: "s2", itemId: "auto", kind: "dep_advisory", summary: "GHSA-a" },
+    ] });
+    await hub.refresh({ fresh: true });
+    expect(seen).toEqual(["This Mac took a team chore: GHSA-a"]);
+  });
+});
+
+describe("HubStore stats and focus", () => {
+  it("reads stats with the board, and an older daemon just has none", async () => {
+    Stats.mockResolvedValue({ available: true, fixedThisWeek: 3, failedThisWeek: 0, openedThisWeek: 4, avgFixSeconds: 3600 });
+    const hub = new HubStore();
+    const release = hub.watch({ board: true });
+    await vi.waitFor(() => expect(hub.stats?.fixedThisWeek).toBe(3));
+    release();
+    const old = new HubStore();
+    Stats.mockRejectedValue(new Error('unknown cmd "hubStats"'));
+    const r2 = old.watch({ board: true });
+    await vi.waitFor(() => expect(Stats).toHaveBeenCalledTimes(2));
+    expect(old.stats).toBeNull();
+    expect(old.boardError).toBe("");
+    r2();
+  });
+
+  it("keeps the item a chip asked for until the view takes it", () => {
+    const hub = new HubStore();
+    hub.focus("it_9");
+    expect(hub.focusItem).toBe("it_9");
+    hub.reset();
+    expect(hub.focusItem).toBe("");
   });
 });

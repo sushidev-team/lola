@@ -9,6 +9,10 @@
   // needing a prop, and CSS `:disabled` styles them as it does any dead control.
   // config.toml keeps its own value; nothing here writes.
   //
+  // A CEILING (budget, concurrency: the daemon runs min(local, team)) is not a
+  // lock: the control stays editable, because a lower local value still
+  // counts, and the note reads "Team ceiling N".
+  //
   // Without a lock the children render bare, so the wrapper costs a form
   // nothing on a machine that has not joined a hub.
   import type { Snippet } from "svelte";
@@ -16,7 +20,7 @@
 
   let { lock = null, version = 0, disable = true, children }: {
     /** The locked key, or null when the policy does not carry it. */
-    lock?: { key: string; label: string; value: string; local: string } | null;
+    lock?: { key: string; label: string; value: string; local: string; ceiling?: boolean } | null;
     /** The applied policy's version. */
     version?: number;
     /**
@@ -33,14 +37,22 @@
 {#snippet note()}
   <p id={id} class="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm text-faint">
     <Icon name="lock" size={12} />
-    <span>Set by team policy v{version}</span>
-    {#if lock?.value}<span class="min-w-0 break-words">· Team value: <span class="text-ink">{lock.value}</span></span>{/if}
+    {#if lock?.ceiling}
+      <span class="text-ink">Team ceiling {lock.value} (policy v{version})</span>
+      <span class="min-w-0 break-words">· The lower of yours and the team’s applies.</span>
+    {:else}
+      <span>Set by team policy v{version}</span>
+      {#if lock?.value}<span class="min-w-0 break-words">· Team value: <span class="text-ink">{lock.value}</span></span>{/if}
+    {/if}
   </p>
 {/snippet}
 
 {#if lock}
   <div class="grid min-w-0 gap-1.5" data-team-lock={lock.key}>
-    {#if disable}
+    {#if lock.ceiling}
+      <div aria-describedby={id} class="min-w-0">{@render children()}</div>
+      {@render note()}
+    {:else if disable}
       <fieldset disabled aria-describedby={id} class="m-0 min-w-0 border-0 p-0 opacity-70">
         {@render children()}
       </fieldset>

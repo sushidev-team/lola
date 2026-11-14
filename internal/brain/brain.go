@@ -121,12 +121,26 @@ func (c *Client) Available() bool {
 // ErrNotFound / ErrTimeout / ErrNonZeroExit on failure. It makes exactly one
 // attempt with a hard timeout; it never retries.
 func (c *Client) Summarize(ctx context.Context, instruction, contextText string) (string, error) {
+	return c.complete(ctx, instruction, capContext(contextText, maxContextBytes))
+}
+
+// Complete is for structured, validated helper results that require the entire
+// input. Unlike a summary it refuses oversized input instead of truncating it.
+// It retains the same tool-free invocation and bounded output as Summarize.
+func (c *Client) Complete(ctx context.Context, instruction, contextText string) (string, error) {
+	if len(contextText) > 128*1024 {
+		return "", errors.New("AI input exceeds 128 KiB; split the changes into a smaller batch")
+	}
+	return c.complete(ctx, instruction, contextText)
+}
+
+func (c *Client) complete(ctx context.Context, instruction, contextText string) (string, error) {
 	var out string
 	var err error
 	if (c.Agent == "" || c.Agent == agent.Claude) && c.Effort == "" {
-		out, err = runClaude(ctx, c.bin(), c.Dir, c.Model, instruction, capContext(contextText, maxContextBytes), c.timeout())
+		out, err = runClaude(ctx, c.bin(), c.Dir, c.Model, instruction, contextText, c.timeout())
 	} else {
-		out, err = runHelper(ctx, c.Agent, c.bin(), c.Dir, c.Model, c.Effort, instruction, capContext(contextText, maxContextBytes), c.timeout())
+		out, err = runHelper(ctx, c.Agent, c.bin(), c.Dir, c.Model, c.Effort, instruction, contextText, c.timeout())
 	}
 	if err != nil {
 		return "", err
@@ -148,6 +162,7 @@ var runClaude = func(ctx context.Context, bin, dir, model, instruction, stdin st
 
 	cmd := exec.CommandContext(cctx, bin, buildArgs(model, instruction)...)
 	cmd.Dir = dir
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Stdin = strings.NewReader(stdin) // context on stdin, never argv
 	stdout := &cappedBuffer{cap: maxOutputBytes}
 	stderr := &cappedBuffer{cap: maxStderrBytes}
@@ -171,6 +186,7 @@ var runHelper = func(ctx context.Context, kind agent.Kind, bin, dir, model, effo
 	args := helperArgs(kind, model, effort, instruction)
 	cmd := exec.CommandContext(cctx, bin, args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Stdin = strings.NewReader(stdin)
 	if kind == agent.OpenCode {
 		// This dedicated agent's deny rules apply after global user permissions.

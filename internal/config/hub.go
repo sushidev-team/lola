@@ -40,8 +40,10 @@ const (
 	// DefaultHubPollSeconds is the hub loop's cadence when poll_seconds is unset.
 	DefaultHubPollSeconds = 300
 	// MinHubPollSeconds / MaxHubPollSeconds bound an explicit poll_seconds.
+	// The ceiling is 15 minutes: a lease is renewed on this cadence, so a
+	// slower loop would let every claim expire under the agent working on it.
 	MinHubPollSeconds = 60
-	MaxHubPollSeconds = 86400
+	MaxHubPollSeconds = 900
 	// maxHubDeviceNameLen mirrors hubproto's enroll cap on device_name.
 	maxHubDeviceNameLen = 64
 )
@@ -283,7 +285,7 @@ func (c *Config) validateHub() []error {
 		errs = append(errs, fmt.Errorf("hub.max_claims_per_day must be within 0..%d, got %d", MaxHubClaimsPerDay, *h.MaxClaimsPerDay))
 	}
 	if h.PollSeconds != 0 && (h.PollSeconds < MinHubPollSeconds || h.PollSeconds > MaxHubPollSeconds) {
-		errs = append(errs, fmt.Errorf("hub.poll_seconds must be within %d..%d (0 = %d), got %d",
+		errs = append(errs, fmt.Errorf("hub.poll_seconds must be between %d and %d seconds (leave it out for %d), got %d",
 			MinHubPollSeconds, MaxHubPollSeconds, DefaultHubPollSeconds, h.PollSeconds))
 	}
 	ids := make([]string, 0, len(h.TrustedPolicyKeys))

@@ -269,6 +269,8 @@ func TestValidateHub(t *testing.T) {
 		{"claims huge", func(c *Config) { c.Hub.MaxClaimsPerDay = intp(1000) }, "max_claims_per_day"},
 		{"claims zero ok", func(c *Config) { c.Hub.MaxClaimsPerDay = intp(0) }, ""},
 		{"poll too fast", func(c *Config) { c.Hub.PollSeconds = 5 }, "poll_seconds"},
+		{"poll too slow", func(c *Config) { c.Hub.PollSeconds = 901 }, "between 60 and 900 seconds"},
+		{"poll ceiling ok", func(c *Config) { c.Hub.PollSeconds = 900 }, ""},
 		{"bad device name", func(c *Config) { c.Hub.DeviceName = "-x\n" }, "device_name"},
 		{"bad key id", func(c *Config) { c.Hub.TrustedPolicyKeys = map[string]string{"bad id": key} }, "key id"},
 		{"bad key", func(c *Config) { c.Hub.TrustedPolicyKeys = map[string]string{"k1": "nope"} }, "not a base64url"},

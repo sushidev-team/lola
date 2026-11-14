@@ -66,10 +66,54 @@ describe("SandboxSettings", () => {
     expect(screen.getByLabelText("Default image")).toHaveAttribute("placeholder", "ghcr.io/sushidev-team/lola-sandbox:1.2.3");
   });
 
-  it("says plainly when docker is down", async () => {
+  it("says plainly when docker is down, with the fix inline", async () => {
     status.mockResolvedValue(sample({ dockerOk: false }));
     render(SandboxSettings);
     expect(await screen.findByText("Docker not running")).toBeInTheDocument();
+    const row = document.querySelector('[data-sandbox-row="docker"]') as HTMLElement;
+    expect(row.dataset.state).toBe("needed");
+    // The fix is on the page, not behind a popover.
+    expect(row).toHaveTextContent("Start Docker Desktop, OrbStack or Colima, then check again.");
+  });
+
+  it("draws one state per row: a missing optional login is not a warning", async () => {
+    status.mockResolvedValue(sample({ useApiKey: true, apiKeySet: true }));
+    render(SandboxSettings);
+    await screen.findByText(/Docker running/);
+    const state = (id: string) => (document.querySelector(`[data-sandbox-row="${id}"]`) as HTMLElement).dataset.state;
+    expect(state("claude")).toBe("ok");
+    expect(state("opencode")).toBe("optional");
+    expect(state("codex")).toBe("ok");
+    expect(state("image")).toBe("info");
+    expect(document.querySelector('[data-sandbox-row="claude"] .text-warn')).toBeNull();
+  });
+
+  it("checks again on request and when the window comes back", async () => {
+    render(SandboxSettings);
+    await screen.findByText(/Docker running/);
+    expect(status).toHaveBeenCalledTimes(1);
+    status.mockResolvedValue(sample({ dockerOk: false }));
+    await fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByText("Docker not running")).toBeInTheDocument();
+    status.mockResolvedValue(sample());
+    window.dispatchEvent(new Event("focus"));
+    expect(await screen.findByText("Docker running")).toBeInTheDocument();
+    expect(status).toHaveBeenCalledTimes(3);
+  });
+
+  it("shows errors without Go's Error: prefix", async () => {
+    setImage.mockRejectedValue(new Error("an image reference has no spaces"));
+    render(SandboxSettings);
+    await fireEvent.input(await screen.findByLabelText("Default image"), { target: { value: "a b" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save image" }));
+    const msg = await screen.findByText("an image reference has no spaces");
+    expect(msg.textContent).not.toMatch(/^Error/);
+  });
+
+  it("opens the paste path when the login fails", async () => {
+    render(SandboxSettings);
+    await fireEvent.click(await screen.findByRole("button", { name: "Fail the login" }));
+    expect(screen.getByLabelText("Token")).toBeInTheDocument();
   });
 
   it("saves an image override and clears back to the default", async () => {
@@ -137,7 +181,7 @@ describe("SandboxSettings", () => {
   it("passes the API key only after a confirmed choice", async () => {
     setApiKey.mockResolvedValue(undefined);
     render(SandboxSettings);
-    const box = (await screen.findByRole("checkbox", { name: /Use ANTHROPIC_API_KEY instead/ })) as HTMLInputElement;
+    const box = (await screen.findByRole("checkbox", { name: /Use an API key instead/ })) as HTMLInputElement;
     expect(box.checked).toBe(false);
 
     await fireEvent.click(box);
@@ -158,7 +202,7 @@ describe("SandboxSettings", () => {
     setApiKey.mockResolvedValue(undefined);
     status.mockResolvedValue(sample({ useApiKey: true }));
     render(SandboxSettings);
-    const box = (await screen.findByRole("checkbox", { name: /Use ANTHROPIC_API_KEY instead/ })) as HTMLInputElement;
+    const box = (await screen.findByRole("checkbox", { name: /Use an API key instead/ })) as HTMLInputElement;
     await waitFor(() => expect(box.checked).toBe(true));
     await fireEvent.click(box);
     expect(confirm.request).toBeNull();

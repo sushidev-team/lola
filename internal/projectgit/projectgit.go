@@ -46,7 +46,21 @@ type Worktree struct {
 	Locked   bool   `json:"locked"`
 	Prunable bool   `json:"prunable"`
 	Blocked  bool   `json:"blocked"`
+	// Changes counts the uncommitted files in a checkout OTHER than the one the
+	// snapshot was taken in (that one lists its files in Snapshot.Files). Zero
+	// also means "not asked" or "could not be read": a count is a cue to go and
+	// look, never a claim that a checkout is clean.
+	Changes   int `json:"changes,omitempty"`
+	Added     int `json:"added,omitempty"`
+	Modified  int `json:"modified,omitempty"`
+	Deleted   int `json:"deleted,omitempty"`
+	Conflicts int `json:"conflicts,omitempty"`
 }
+
+// ChangeCounts splits a checkout's uncommitted files the way the history's
+// working row does: a conflict first, then added (untracked or staged new),
+// then deleted, and everything else modified.
+type ChangeCounts struct{ Total, Added, Modified, Deleted, Conflicts int }
 type File struct {
 	Path      string `json:"path"`
 	OldPath   string `json:"oldPath"`
@@ -163,6 +177,25 @@ func (c Client) Worktrees(ctx context.Context, dir string) ([]Worktree, error) {
 		}
 	}
 	return trees, nil
+}
+
+// ChangeCounts counts the uncommitted files in dir, as status lists them.
+func (c Client) ChangeCounts(ctx context.Context, dir string) (ChangeCounts, error) {
+	files, err := c.status(ctx, dir)
+	n := ChangeCounts{Total: len(files)}
+	for _, f := range files {
+		switch {
+		case f.Conflict:
+			n.Conflicts++
+		case f.Untracked || f.Index == "A":
+			n.Added++
+		case f.Index == "D" || f.Worktree == "D":
+			n.Deleted++
+		default:
+			n.Modified++
+		}
+	}
+	return n, err
 }
 func (c Client) status(ctx context.Context, dir string) ([]File, error) {
 	b, err := c.git(ctx, dir, "", "status", "--porcelain=v1", "-z", "--untracked-files=all")

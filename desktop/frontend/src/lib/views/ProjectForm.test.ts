@@ -52,6 +52,7 @@ import ProjectForm from "./ProjectForm.svelte";
 import { nav } from "$lib/nav.svelte";
 import { store } from "$lib/store.svelte";
 import { confirm } from "$lib/confirm.svelte";
+import { PICKUP_FIELDS } from "$lib/settingsFields";
 
 // A project that overrides post-create/env/blocked-label but inherits
 // symlinks/match-labels/match-mode from [defaults] — so one form exercises both
@@ -682,10 +683,21 @@ describe("ProjectForm", () => {
     expect(screen.getByLabelText("Env")).toHaveAccessibleDescription("KEY=value, one per line.");
     expect(screen.getByLabelText("Dev commands")).toHaveAccessibleDescription("One command per line.");
     await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
-    await fireEvent.change(screen.getByLabelText("Repeat pickup"), { target: { value: "seen" } });
-    expect(screen.queryByLabelText("After pickup label")).not.toBeInTheDocument();
-    await fireEvent.change(screen.getByLabelText("Repeat pickup"), { target: { value: "label" } });
-    expect(screen.getByLabelText("After pickup label")).toHaveValue("lab-1");
+    await fireEvent.change(screen.getByLabelText(PICKUP_FIELDS.dedupMode), { target: { value: "seen" } });
+    expect(screen.queryByLabelText(PICKUP_FIELDS.onSentSetLabel)).not.toBeInTheDocument();
+    await fireEvent.change(screen.getByLabelText(PICKUP_FIELDS.dedupMode), { target: { value: "label" } });
+    expect(screen.getByLabelText(PICKUP_FIELDS.onSentSetLabel)).toHaveValue("lab-1");
+  });
+
+  // Plain words lead; the config.toml key is secondary text beside them.
+  it("shows the config key beside the plain pickup captions", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+    expect(screen.getByLabelText("Avoid starting twice")).toBeInTheDocument();
+    expect(screen.getByLabelText("Label to add when started")).toBeInTheDocument();
+    const keys = Array.from(document.querySelectorAll("[data-field-key]")).map((n) => n.textContent);
+    expect(keys).toEqual(expect.arrayContaining(["dedup_mode", "on_sent_set_label", "match_mode", "match_labels", "state_ids"]));
+    expect(screen.queryByText(/Repeat pickup|After pickup label/)).not.toBeInTheDocument();
   });
 
   // One InspectPath pass fills the whole Repo tab: the folder is the only thing
@@ -1027,6 +1039,118 @@ describe("ProjectForm", () => {
       await fireEvent.click(screen.getByRole("button", { name: /dismiss error/i }));
 
       expect(screen.queryByText(/boom/)).not.toBeInTheDocument();
+    });
+  });
+
+  // Adding a project is folder, then team, then states, all on the first tab.
+  describe("new project short path", () => {
+    const fresh = () => ({ ...sampleDto(), isNew: true, name: "", label: "", path: "", repo: "", teamId: "", projectId: "", stateIds: [], matchLabels: [], enabled: false, cycleMode: "none", assigneeMode: "anyone" });
+
+    it("picks the team and states on General, and turns pickup on", async () => {
+      getProject.mockResolvedValue(fresh());
+      pickFolder.mockResolvedValue("/Users/me/code/nori");
+      inspectPath.mockResolvedValue(pathInfo({ path: "/Users/me/code/nori", isRepo: true, repo: "acme/nori", suggestedLabel: "Nori" }));
+      render(ProjectForm);
+      await waitFor(() => expect(screen.getByLabelText("Path")).toHaveValue("/Users/me/code/nori"));
+      // The text fallback stands in until the teams load; then the picker.
+      await waitFor(() => expect(screen.getByLabelText("Linear team").querySelector('option[value="team-uuid-1"]')).not.toBeNull());
+      const team = screen.getByLabelText("Linear team");
+      await fireEvent.change(team, { target: { value: "team-uuid-1" } });
+      await fireEvent.click(await screen.findByRole("checkbox", { name: "Todo" }));
+      await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(saveProject).toHaveBeenCalled());
+      expect(saveProject.mock.calls[0][0]).toMatchObject({ name: "nori", teamId: "team-uuid-1", stateIds: ["state-1"], enabled: true, path: "/Users/me/code/nori" });
+    });
+
+    it("never overrides an Enabled box the human set", async () => {
+      getProject.mockResolvedValue({ ...fresh(), path: "/tmp/x", name: "x" });
+      render(ProjectForm);
+      await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+      const enabled = screen.getByRole("checkbox", { name: "Enabled" });
+      await fireEvent.click(enabled); // on
+      await fireEvent.click(enabled); // and off again, by hand
+      await waitFor(() => expect(teamsFn).toHaveBeenCalled());
+      await fireEvent.change(await screen.findByLabelText("Team"), { target: { value: "team-uuid-1" } });
+      expect(screen.getByRole("checkbox", { name: "Enabled" })).not.toBeChecked();
+    });
+
+    it("does not turn an existing project's pickup on", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), enabled: false });
+      render(ProjectForm);
+      await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+      await fireEvent.change(screen.getByLabelText("Team"), { target: { value: "team-uuid-2" } });
+      expect(screen.getByRole("checkbox", { name: "Enabled" })).not.toBeChecked();
+    });
+
+    it("warns that a team without a state or label filter picks up every issue", async () => {
+      getProject.mockResolvedValue({ ...fresh(), path: "/tmp/x", name: "x" });
+      render(ProjectForm);
+      // The text fallback stands in until the teams load; then the picker.
+      await waitFor(() => expect(screen.getByLabelText("Linear team").querySelector('option[value="team-uuid-1"]')).not.toBeNull());
+      const team = screen.getByLabelText("Linear team");
+      expect(screen.queryByText(/picks up every issue in this team/)).not.toBeInTheDocument();
+      await fireEvent.change(team, { target: { value: "team-uuid-1" } });
+      expect(await screen.findByText(/picks up every issue in this team/)).toBeInTheDocument();
+      await fireEvent.click(await screen.findByRole("checkbox", { name: "Todo" }));
+      expect(screen.queryByText(/picks up every issue in this team/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the warning on Issue pickup for an existing project too", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), stateIds: [], matchLabels: [] });
+      render(ProjectForm);
+      await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+      expect(screen.getByText(/picks up every issue in this team/)).toBeInTheDocument();
+    });
+
+    it("does not offer the short path on an existing project", async () => {
+      render(ProjectForm);
+      await screen.findByLabelText("Path");
+      expect(screen.queryByLabelText("Linear team")).not.toBeInTheDocument();
+    });
+
+    it("leaves an untouched new form clean", async () => {
+      getProject.mockResolvedValue(fresh());
+      render(ProjectForm);
+      await screen.findByLabelText("Linear team");
+      await waitFor(() => expect(pickFolder).toHaveBeenCalled());
+      const close = vi.spyOn(nav, "closeOverlay");
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(confirm.request).toBeNull();
+      expect(close).toHaveBeenCalledTimes(1);
+      vi.restoreAllMocks();
+    });
+  });
+
+  // Save says why it is off instead of failing after the click.
+  describe("save gate", () => {
+    it("names the missing folder", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), path: "" });
+      render(ProjectForm);
+      await screen.findByLabelText("Label");
+      const save = screen.getByRole("button", { name: "Save" });
+      expect(save).toBeDisabled();
+      expect(save).toHaveAccessibleDescription("Choose the project folder to save.");
+      await fireEvent.input(screen.getByLabelText("Path"), { target: { value: "/tmp/acme" } });
+      expect(save).toBeEnabled();
+      expect(screen.queryByText("Choose the project folder to save.")).not.toBeInTheDocument();
+    });
+
+    it("names the missing id", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), isNew: true, name: "", label: "" });
+      render(ProjectForm);
+      await screen.findByLabelText("Label");
+      const save = screen.getByRole("button", { name: "Save" });
+      expect(save).toBeDisabled();
+      expect(save).toHaveAccessibleDescription("Give the project a label or an ID to save.");
+      await fireEvent.input(screen.getByLabelText("Label"), { target: { value: "Acme" } });
+      expect(save).toBeEnabled();
+    });
+
+    it("does not ask a stack for a folder", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "" });
+      render(ProjectForm);
+      await screen.findByLabelText("Label");
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     });
   });
 });

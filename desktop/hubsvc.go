@@ -29,6 +29,9 @@ type HubService struct{}
 const (
 	hubJoinTimeout = 90 * time.Second
 	hubViewTimeout = 30 * time.Second
+	// A team-admin request is bounded by the daemon at 45s (the hub may ask
+	// Linear); the margin covers the socket round-trip.
+	hubAdminTimeout = 60 * time.Second
 )
 
 // hubCall is the seam over one hub round-trip (tests replace it).
@@ -57,6 +60,12 @@ func normalizeHubStatus(d *protocol.HubStatusData) {
 	if d.Sessions == nil {
 		d.Sessions = []protocol.HubSessionInfo{}
 	}
+	if d.FindingsHealth == nil {
+		d.FindingsHealth = []protocol.HubRepoHealth{}
+	}
+	if d.OfferSkips == nil {
+		d.OfferSkips = []protocol.HubOfferSkip{}
+	}
 	if p := d.Policy; p != nil {
 		if p.Keys == nil {
 			p.Keys = []string{}
@@ -77,6 +86,54 @@ func (s *HubService) Join(a protocol.HubJoinArgs) (protocol.HubJoinData, error) 
 	a.Name = strings.TrimSpace(a.Name)
 	var d protocol.HubJoinData
 	err := hubCall(protocol.CmdHubJoin, a, &d, hubJoinTimeout)
+	return d, err
+}
+
+// ProbeHub asks a hub, before anything is joined, whether a team can be
+// created there without a create code.
+func (s *HubService) ProbeHub(url string) (protocol.HubProbeData, error) {
+	var d protocol.HubProbeData
+	err := hubCall(protocol.CmdHubProbe, protocol.HubProbeArgs{URL: strings.TrimSpace(url)}, &d, hubViewTimeout)
+	return d, err
+}
+
+// CreateTeam creates a team with the operator's one-time create code and
+// makes this Mac its first member and admin. Like Join, the code is a secret
+// carried from the form to the daemon and no further.
+func (s *HubService) CreateTeam(a protocol.HubCreateTeamArgs) (protocol.HubCreateTeamData, error) {
+	a.Code = strings.TrimSpace(a.Code)
+	a.Team = strings.TrimSpace(a.Team)
+	a.Name = strings.TrimSpace(a.Name)
+	var d protocol.HubCreateTeamData
+	err := hubCall(protocol.CmdHubCreateTeam, a, &d, hubJoinTimeout)
+	return d, err
+}
+
+// Invite mints one invite for a teammate (team admins only). The invite holds
+// a one-time token: the frontend shows it once and keeps it nowhere.
+func (s *HubService) Invite(a protocol.HubInviteArgs) (protocol.HubInviteData, error) {
+	a.Label = strings.TrimSpace(a.Label)
+	var d protocol.HubInviteData
+	err := hubCall(protocol.CmdHubInvite, a, &d, hubAdminTimeout)
+	return d, err
+}
+
+// TeamSettings reads the team's settings status, or changes them when a
+// field is set (team admins only). Secrets go in and never come back.
+func (s *HubService) TeamSettings(a protocol.HubTeamSettingsArgs) (protocol.HubTeamSettingsData, error) {
+	var d protocol.HubTeamSettingsData
+	err := hubCall(protocol.CmdHubTeamSettings, a, &d, hubAdminTimeout)
+	if d.Teams == nil {
+		d.Teams = []protocol.HubLinearTeam{}
+	}
+	return d, err
+}
+
+// RevokeDevice revokes a device of the team by its display name (team admins
+// only).
+func (s *HubService) RevokeDevice(name string) (protocol.HubRevokeData, error) {
+	var d protocol.HubRevokeData
+	err := hubCall(protocol.CmdHubRevoke, protocol.HubRevokeArgs{Device: strings.TrimSpace(name)}, &d, hubAdminTimeout)
 	return d, err
 }
 
@@ -126,6 +183,60 @@ func (s *HubService) Sync() (protocol.HubSyncData, error) {
 	var d protocol.HubSyncData
 	err := hubCall(protocol.CmdHubSync, nil, &d, shortTimeout)
 	return d, err
+}
+
+// HubStatsDTO is the Team view's one stats line, summed here so the frontend
+// does no date arithmetic: the last seven UTC days, today included.
+// Available is false when the hub sent no days at all.
+type HubStatsDTO struct {
+	Available bool `json:"available"`
+	// FixedThisWeek counts items done in the window; FailedThisWeek and
+	// OpenedThisWeek the same for failed and newly reported items.
+	FixedThisWeek  int `json:"fixedThisWeek"`
+	FailedThisWeek int `json:"failedThisWeek"`
+	OpenedThisWeek int `json:"openedThisWeek"`
+	// AvgFixSeconds is the mean time from first report to done over the
+	// window's fixes (0 = no fix in the window).
+	AvgFixSeconds int64 `json:"avgFixSeconds"`
+}
+
+// hubStatsWeek is how many UTC days the stats line sums, today included.
+const hubStatsWeek = 7
+
+// Stats reads the org's daily counters and sums the last seven days.
+func (s *HubService) Stats() (HubStatsDTO, error) {
+	var v hubproto.StatsView
+	// protocol.CmdHubStats answers hubproto.StatsView (the hub's GET
+	// /v1/stats, signed by the daemon). A daemon that predates it answers
+	// `unknown cmd`, which the Team view reads as "no stats line", not a fault.
+	if err := hubCall(protocol.CmdHubStats, nil, &v, hubViewTimeout); err != nil {
+		return HubStatsDTO{}, err
+	}
+	return hubStatsSummary(v, time.Now()), nil
+}
+
+// hubStatsSummary sums the days of v that fall in the week ending at now
+// (UTC). A day that does not parse is skipped, never guessed at; the view was
+// validated by the daemon, so that is a belt over the braces.
+func hubStatsSummary(v hubproto.StatsView, now time.Time) HubStatsDTO {
+	out := HubStatsDTO{Available: len(v.Days) > 0}
+	today := now.UTC().Truncate(24 * time.Hour)
+	from := today.AddDate(0, 0, -(hubStatsWeek - 1))
+	var fixSecs int64
+	for _, d := range v.Days {
+		t, err := time.Parse(hubproto.StatsDateLayout, d.Date)
+		if err != nil || t.Before(from) || t.After(today) {
+			continue
+		}
+		out.FixedThisWeek += d.Done
+		out.FailedThisWeek += d.Failed
+		out.OpenedThisWeek += d.Opened
+		fixSecs += d.FixSecondsSum
+	}
+	if out.FixedThisWeek > 0 {
+		out.AvgFixSeconds = fixSecs / int64(out.FixedThisWeek)
+	}
+	return out
 }
 
 // DefaultDeviceName is the name a join uses when none is typed: this Mac's

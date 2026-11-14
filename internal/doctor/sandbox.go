@@ -18,6 +18,9 @@ const (
 	checkSandboxDocker = "sandbox docker"
 	checkSandboxImage  = "sandbox image"
 	checkSandboxClaude = "sandbox claude login"
+	// checkSandboxAPIKey is the note about a filtered ANTHROPIC_API_KEY: its
+	// own name, so a UI keyed on names never confuses it with the login row.
+	checkSandboxAPIKey = "sandbox api key"
 	checkSandboxGitHub = "sandbox github token"
 )
 
@@ -97,7 +100,7 @@ func sandboxResults(ctx context.Context, cfg *config.Config) []Result {
 	if st.DockerOK {
 		out = append(out, Result{Name: checkSandboxDocker, OK: true, Detail: st.Docker + " is running"})
 	} else {
-		out = append(out, Result{Name: checkSandboxDocker, Detail: fmt.Sprintf("%s does not answer: install and start Docker, OrbStack or Colima (or set [sandbox].docker); sandboxed sessions cannot start", st.Docker)})
+		out = append(out, Result{Name: checkSandboxDocker, Detail: fmt.Sprintf("%s does not answer: install and start Docker, OrbStack or Colima (or set [sandbox].docker); sandboxed sessions cannot start", st.Docker), Fix: FixStartDocker})
 	}
 	switch {
 	case !st.DockerOK:
@@ -112,15 +115,15 @@ func sandboxResults(ctx context.Context, cfg *config.Config) []Result {
 	if st.ClaudeSource != "" {
 		out = append(out, Result{Name: checkSandboxClaude, OK: true, Detail: "found in " + st.ClaudeSource})
 	} else {
-		out = append(out, Result{Name: checkSandboxClaude, Detail: "no token for a sandboxed claude: run `claude setup-token`, then `lola sandbox token` (or export CLAUDE_CODE_OAUTH_TOKEN for the daemon)"})
+		out = append(out, Result{Name: checkSandboxClaude, Detail: "no token for a sandboxed claude: run `claude setup-token`, then `lola sandbox token` (or export CLAUDE_CODE_OAUTH_TOKEN for the daemon)", Fix: FixSandboxToken})
 	}
 	if cfg.Sandbox.APIKeyFiltered() {
-		out = append(out, Result{Name: checkSandboxClaude, OK: true, Detail: "[sandbox].pass_env lists ANTHROPIC_API_KEY but use_api_key is off, so the key is not passed"})
+		out = append(out, Result{Name: checkSandboxAPIKey, OK: true, Detail: "[sandbox].pass_env lists ANTHROPIC_API_KEY but use_api_key is off, so the key is not passed"})
 	}
 	if st.GitHubSource != "" {
 		out = append(out, Result{Name: checkSandboxGitHub, OK: true, Detail: "from " + st.GitHubSource + " (the sandboxed agent can push and open PRs as you)"})
 	} else {
-		out = append(out, Result{Name: checkSandboxGitHub, Detail: "no GH_TOKEN and `gh auth token` gave none: sandboxed agents cannot push or open PRs (run `gh auth login`)"})
+		out = append(out, Result{Name: checkSandboxGitHub, Detail: "no GH_TOKEN and `gh auth token` gave none: sandboxed agents cannot push or open PRs (run `gh auth login`)", Fix: FixGhLogin})
 	}
 	return out
 }

@@ -129,7 +129,7 @@ protocol-version mismatch.
 
 | Command | Description |
 | --- | --- |
-| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[linear]` API key/`[defaults]`/`[notify]`/`[brain]`/`[statusagent]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
+| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[linear]` API key/`[defaults]`/`[notify]`/`[brain]`/`[statusagent]`/`[review]`/`[coderabbit]`/SSH hosts/Team hub `[hub]`/`[remote]`/`[ui]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
 | `lola setup` | Connect Linear (key → Keychain), optionally choose general defaults, and write `config.toml`. Projects are added afterward with **n** in the TUI or **Add project** in the app. Re-running setup preserves existing projects. |
 | `lola doctor` | Print an aligned health report (tmux/git/claude/gh/lola on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. The `lola cli` row is a WARNING, not a critical failure — the daemon running the check is itself lola, and the desktop app falls back to its bundled copy, so a miss costs only the shell. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
@@ -155,11 +155,13 @@ protocol-version mismatch.
 | `lola bestof compare <issue\|group\|session> [--json]` | Every attempt of a best-of group side by side: agent/model, state, PR + CI, review findings, diff size, tokens — with a ★ suggestion (a hint, never acted on). |
 | `lola bestof pick <session>` | Keep one attempt: its draft PR is marked ready, every other attempt's PR is closed (branch kept) and its session torn down; a worktree with uncommitted changes is kept. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
-| `lola hub join <url> [--token-file F] [--name N]` | Enrol this machine with a team [lola hub](#hub-optional-off-by-default) using a one-time token, read from stdin (prompted without echo on a terminal) or `--token-file` — never pass it as an argument, where `ps` and shell history see it (still accepted, with a warning): creates the device key (`~/.lola/state/hub-key`, 0600) if needed, enrols it, writes `~/.lola/state/hub.json` and sets `[hub].enabled` + `url`. A running daemon does the enrolment itself and reloads; with none running the CLI does it locally. Joining a different hub is refused until you leave. |
-| `lola hub status` | The local hub identity, whether the device key matches it, the verified team policy and, when the daemon has a hub loop, its state, including which keys the policy locks (`applied`, `appliedKeys`). |
-| `lola hub leave [--forget-key]` | Remove the hub identity and stored policy and set `[hub].enabled = false`. The device key is kept for a later re-join unless `--forget-key`. The hub is not told: an admin revokes the device there. Like `join`, it goes through a running daemon (which reloads) and falls back to a local edit when none runs. |
+| `lola hub join [url] [--token-file F] [--name N] [--trust-key]` | Enrol this machine with a team [lola hub](#hub-optional-off-by-default). Give it the **invite** your admin sent (`lola-hub:<url>#<token>[#<key_id>:<public key>]`) or a bare one-time token plus the hub's url as the argument, on stdin (prompted without echo on a terminal) or in `--token-file`. There is no argv path for the token: `ps` and shell history would see it. Creates the device key (`~/.lola/state/hub-key`, 0600) if needed, checks that the state and config folders are writable BEFORE the token is spent, enrols, writes `~/.lola/state/hub.json` and sets `[hub].enabled` + `url` on a freshly re-read config. If the hub took the token but saving failed, the error says the token is used. An invite's policy key is shown as its id and a short fingerprint and pinned in `trusted_policy_keys` only after you type `yes` (or pass `--trust-key`). Ends with the readiness list. A running daemon does the enrolment itself and reloads; with none running the CLI does it locally. Joining a different hub is refused until you leave. |
+| `lola hub status [--json]` | Whether this machine is **joined**, **revoked** (the hub stopped accepting its signature) or **not joined**; the device key; the verified team policy; the daemon's hub loop in plain words (last contact, last problem, chores today, which policy keys are locked); and the **readiness list**: joined, projects that take chores (and which lack a repo or the sandbox), docker, the sandbox image, the sandboxed agent's login, `gh` access, a pinned policy key. `--json` prints the same as JSON. |
+| `lola hub leave [--forget-key]` | Release every live lease first (bounded, best effort), then remove the hub identity and stored policy, forget the outbox, cooldowns and every session's open claim (the sessions keep running, unreported), record the hub url and org left (`~/.lola/state/hub-left.json`) and set `[hub].enabled = false`. The device key is kept for a later re-join unless `--forget-key`. Like `join`, it goes through a running daemon (which reloads) and falls back to a local edit when none runs. |
+| `lola hub org [--json]` | The team's machines: who each belongs to (the member label of its invite), when it was last seen, free slots, agents and the policy version it applies. Needs the daemon; cached 60s. |
+| `lola hub stats [--json]` | The team's chore counts per UTC day, newest first: reported, fixed, failed, escalated, and the average time from report to fix. Counts and dates only. Needs the daemon; cached 60s. |
 | `lola hub board [--state S] [--limit N] [--fresh] [--json]` | The team's hub items (open, claimed, done, failed, escalated) with their PR or Linear link, and for each whether THIS machine could claim it and with which project. Needs the daemon; cached 20s. |
-| `lola hub claim <item-id> [--project P]` | Claim one item now and start its session. A person's claim needs no `hub_chores` opt-in and spends no `max_claims_per_day`, but `require_sandbox`, `accept_kinds`, the spend/load hold, the health gate and the GitHub re-read still apply. `--project` picks among several projects on the item's repo. |
+| `lola hub claim <item-id>... [--project P] [--patch] [--minor] [--major] [--note T]` | Claim one item — or several advisories of one repository, for ONE session — now and start its session. `--patch` / `--minor` / `--major` also update the repository's other dependencies by that much; `--note` adds your words for the agent. A person's claim needs no `hub_chores` opt-in and spends no `max_claims_per_day`, but `require_sandbox`, `accept_kinds`, the spend/load hold, the health gate and the GitHub re-read still apply. `--project` picks among several projects on the item's repo. |
 | `lola hub release <item-id>` | Give a claimed item back. A session working it keeps running; lola only stops renewing and reporting it. |
 | `lola hub sync` | Run one hub loop pass now, re-fetching the team policy. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
@@ -1664,9 +1666,14 @@ deduplicated across the team, and routes the team's **signed** policy. The hub
 never executes anything and never writes a prompt: an item is a closed kind plus
 fields validated against strict patterns, and lola renders the agent's task from
 its own template, and every offer is re-read from GitHub before it is claimed.
-Set it up with `lola hub join <url>` (token on stdin); the ed25519
+Set it up with `lola hub join` (the invite on stdin); the ed25519
 device key lives in `~/.lola/state/hub-key` (0600) and never in this file, argv
-or a log line. Like `[remote]`, the table is not part of the `[defaults]`
+or a log line. A new team is created from the desktop app (Settings → Team hub →
+Create a team) with a create code from the hub operator, or with just the hub's
+address when its operator opened it to creation: that Mac becomes the
+team's admin, holds the team admin key in `~/.lola/state/hub-admin-key` (0600,
+kept on leave) and can then invite teammates, set the team's Linear key, Linear
+team and Slack digest webhook, and remove a Mac from the team. Like `[remote]`, the table is not part of the `[defaults]`
 inheritance, and neither is `[[project]].hub_chores`.
 
 | Key | Type | Description |
@@ -1678,8 +1685,35 @@ inheritance, and neither is `[[project]].hub_chores`.
 | `max_claims_per_day` | int | Claims per local day, 0–100. Absent = `4`; `0` claims nothing. |
 | `require_sandbox` | bool | Refuse a chore for a project without `sandbox = "docker"`. Absent = `true`; opting out is a local, explicit decision. |
 | `trusted_policy_keys` | table of strings | `key_id = "<base64url ed25519 public key>"` (or the array of `"<key_id>:<public key>"` entries `lola-hub` prints): the admin keys that may sign team policy. The hub cannot add one, so it cannot forge or alter policy. A verified policy is stored (`~/.lola/state/hub-policy.json`) and, with `apply_policy`, enforced. |
-| `poll_seconds` | int | Hub loop cadence, 60–86400. Absent = `300`. |
+| `poll_seconds` | int | Hub loop cadence, 60–900 (leases are renewed on it). Absent = `300`. |
 | `apply_policy` | bool | Enforce the verified team policy. Absent = `true`; only meaningful with `trusted_policy_keys`. `false` keeps the policy display-only. |
+| `group_chores` | bool | Give all of a repository's open dependency advisories to ONE agent and one pull request (at most 12). Absent = `true`; `false` claims each alone. |
+
+Both settings screens edit the member's half of this table (TUI: `S` → Team
+hub: enabled, chore kinds, max chores per day, chores need the sandbox, and each
+project's `hub_chores`). Joining, leaving and pinning a policy key go through
+`lola hub join | leave`.
+
+**Chore lifecycle.** A claimed chore holds a lease the daemon renews on every
+heartbeat. Once the session opens its pull request, lola reports **progress**
+(`POST /v1/items/{id}/progress`): the item moves to `in_review`, the lease is
+dropped and this machine is recorded as its owner; later delivery changes are
+reported the same way, and the merge or failure is reported by the owner. A hub
+that predates the progress frame (404) gets the old complete-on-PR report
+instead. A failure may carry the PR's url and a group id, so a batch that failed
+together escalates as one Linear issue. The board shows each item's history
+(claimed, in review, completed, failed, released, expired, reopened, closed as
+stale), its owner and member, and the hub's rules: an expired lease is held for
+its previous holder for twice its length, a device that let an item go is not
+offered it again for 6 hours, an item in review with no progress for 14 days
+reopens, and an open item no device reports any more closes after 48 hours.
+
+**Membership.** If the hub answers a signed request with `401 unauthorized`, an
+admin revoked this machine: lola drops the identity (the device key stays),
+stops applying the team policy, and `lola hub status` says **revoked** until you
+join again with a new invite. If the hub answers that the org has no policy, the
+policy stops applying at once; the stored bundle is kept only so an older
+version can never be replayed as new.
 
 **Team policy.** Every key a verified policy carries is LOCKED: the daemon
 overrides its running config with it and the settings UIs show it as set by the
@@ -1692,7 +1726,7 @@ the reload it triggers.
 | Policy key | Overrides |
 | --- | --- |
 | `review_providers` | Exactly these review provider kinds are enabled, every other kind is off. A listed kind uses your `[[review.provider]]` entry or that kind's defaults; one your config cannot run (a `bot-watch` with no `author`) stays off and `lola doctor` says so. |
-| `budget_daily_weighted_tokens` | `[budget].daily_tokens`. |
+| `budget_daily_weighted_tokens` | A ceiling on `[budget].daily_tokens`: a tighter budget of yours stays; with none set, the team's applies. |
 | `merge_queue_enabled` | `[merge_queue].enabled` (a `false` locks it off). |
 | `max_concurrency_hint` | A ceiling on `[defaults].global_cap`: the effective cap is the smaller of the two. |
 | `accept_kinds` | `[hub].accept_kinds`. |

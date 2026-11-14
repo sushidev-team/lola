@@ -113,3 +113,23 @@ func TestUpdateBriefing(t *testing.T) {
 		t.Error("note not bounded")
 	}
 }
+
+// A Dependabot grouped update names no package: the briefing says so from
+// lola's own template and never prints an empty package name.
+func TestBriefingRedBumpGroup(t *testing.T) {
+	it := bumpItem("acme/web")
+	it.RedBumpPR.Package = ""
+	it.RedBumpPR.Branch = "dependabot/npm_and_yarn/group-abc"
+	b, err := Briefing(it)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"bump a group of dependencies", "`dependabot/npm_and_yarn/group-abc`", "#42"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("briefing lacks %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(b, "``") {
+		t.Errorf("briefing prints an empty package:\n%s", b)
+	}
+}

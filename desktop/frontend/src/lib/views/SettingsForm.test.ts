@@ -85,6 +85,9 @@ const {
   ConnectCode,
   TeamPolicy,
   HubStatus,
+  TeamLimits,
+  SaveTeamLimits,
+  SaveHubRules,
   setFlash,
   reload,
   closeOverlay,
@@ -107,6 +110,9 @@ const {
   ConnectCode: vi.fn(),
   TeamPolicy: vi.fn(),
   HubStatus: vi.fn(),
+  TeamLimits: vi.fn(),
+  SaveTeamLimits: vi.fn(),
+  SaveHubRules: vi.fn(),
   setFlash: vi.fn(),
   reload: vi.fn(),
   closeOverlay: vi.fn(),
@@ -131,13 +137,19 @@ vi.mock("@bindings/desktop", () => ({
     TeamPolicy: () => TeamPolicy(),
     HubProjects: () => Promise.resolve([]),
     SaveHubProject: () => Promise.resolve(),
+    HubReadiness: () => Promise.resolve([]),
+    PolicyKeyFingerprint: () => Promise.resolve(""),
+    PinPolicyKey: () => Promise.resolve(false),
+    SaveHubRules: (r: unknown) => SaveHubRules(r),
+    TeamLimits: () => TeamLimits(),
+    SaveTeamLimits: (d: unknown) => SaveTeamLimits(d),
   },
   HubService: {
     Status: () => HubStatus(),
     DefaultDeviceName: () => Promise.resolve("studio-mac"),
     Kinds: () => Promise.resolve([{ id: "dep_advisory", label: "Security advisories" }]),
-    Board: vi.fn(),
-    Org: vi.fn(),
+    Board: vi.fn().mockResolvedValue({ items: [] }),
+    Org: vi.fn().mockResolvedValue({ devices: [] }),
   },
   LinearService: {
     WorkspaceLabels: () => WorkspaceLabels(),
@@ -149,6 +161,9 @@ vi.mock("$lib/store.svelte", () => ({ store: { setFlash, reload } }));
 vi.mock("$lib/nav.svelte", () => ({ nav: { closeOverlay, overlayTab: "" } }));
 
 import SettingsForm from "./SettingsForm.svelte";
+// Captions come from the shared vocabulary, so a rewording there is not a
+// failure here.
+import { PICKUP_FIELDS, ENTRY_FORMAT } from "$lib/settingsFields";
 import { nav } from "$lib/nav.svelte"; // the mock above — used to drive overlayTab
 import { confirm } from "$lib/confirm.svelte"; // the real singleton — the guard uses it
 import { terms } from "$lib/terms.svelte";
@@ -281,6 +296,9 @@ describe("SettingsForm", () => {
     });
     TeamPolicy.mockReset().mockResolvedValue({ available: false, joined: false, org: "", version: 0, applied: false, note: "", keys: [], summary: [], locked: [] });
     HubStatus.mockReset().mockResolvedValue({ enabled: false, joined: false, claimsToday: 0, maxClaimsPerDay: 4, pendingOutcomes: 0, sessions: [] });
+    TeamLimits.mockReset().mockResolvedValue({ budgetDaily: 0, mergeQueue: false });
+    SaveTeamLimits.mockReset().mockResolvedValue(undefined);
+    SaveHubRules.mockReset().mockResolvedValue(undefined);
     setFlash.mockReset();
     reload.mockReset().mockResolvedValue(undefined);
     closeOverlay.mockReset();
@@ -336,15 +354,33 @@ describe("SettingsForm", () => {
     GetSettings.mockResolvedValue({ ...fakeDto, hubAcceptKinds: [], hubMaxClaimsPerDay: 4, hubRequireSandbox: true, hubPollSeconds: 300, hubApplyPolicy: true, hubTrustedKeys: [] });
     render(SettingsForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Team hub" }));
-    expect(await screen.findByLabelText("Hub URL")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Invite")).toBeInTheDocument();
   });
 
-  it("saves the hub rules with the rest once joined", async () => {
+  it("saves a hub rule at once, so the overlay is not dirty and its Save agrees", async () => {
     HubStatus.mockResolvedValue({ enabled: true, joined: true, org: "acme", claimsToday: 0, maxClaimsPerDay: 4, pendingOutcomes: 0, sessions: [] });
     GetSettings.mockResolvedValue({ ...fakeDto, hubAcceptKinds: [], hubMaxClaimsPerDay: 4, hubRequireSandbox: true, hubPollSeconds: 300, hubApplyPolicy: true, hubTrustedKeys: [] });
     render(SettingsForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Team hub" }));
-    await fireEvent.input(await screen.findByLabelText("Claims per day"), { target: { value: "2" } });
+    const claims = await screen.findByLabelText("Claims per day");
+    await fireEvent.input(claims, { target: { value: "2" } });
+    await fireEvent.change(claims);
+    await waitFor(() => expect(SaveHubRules).toHaveBeenCalledWith(expect.objectContaining({ maxClaimsPerDay: 2 })));
+    // Already written: closing does not ask to discard it.
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(confirm.request).toBeNull();
+    expect(closeOverlay).toHaveBeenCalled();
+  });
+
+  it("carries the saved hub rule in a later overlay Save", async () => {
+    HubStatus.mockResolvedValue({ enabled: true, joined: true, org: "acme", claimsToday: 0, maxClaimsPerDay: 4, pendingOutcomes: 0, sessions: [] });
+    GetSettings.mockResolvedValue({ ...fakeDto, hubAcceptKinds: [], hubMaxClaimsPerDay: 4, hubRequireSandbox: true, hubPollSeconds: 300, hubApplyPolicy: true, hubTrustedKeys: [] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Team hub" }));
+    const claims = await screen.findByLabelText("Claims per day");
+    await fireEvent.input(claims, { target: { value: "2" } });
+    await fireEvent.change(claims);
+    await waitFor(() => expect(SaveHubRules).toHaveBeenCalled());
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
     expect(SaveSettings.mock.calls[0][0]).toMatchObject({ hubMaxClaimsPerDay: 2, hubRequireSandbox: true });
@@ -356,11 +392,60 @@ describe("SettingsForm", () => {
     render(SettingsForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Team hub" }));
     await fireEvent.input(await screen.findByLabelText("Check every (seconds)"), { target: { value: "" } });
-    expect(screen.getByText("Enter seconds from 60 to 86400.")).toBeInTheDocument();
+    expect(screen.getByText("Enter seconds from 60 to 900.")).toBeInTheDocument();
     await fireEvent.click(screen.getByRole("tab", { name: "General" }));
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.getByLabelText("Check every (seconds)")).toHaveFocus());
     expect(SaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("saves the daily budget and merge queue at once under the team's ceiling and lock", async () => {
+    TeamLimits.mockResolvedValue({ budgetDaily: 5000, mergeQueue: true });
+    TeamPolicy.mockResolvedValue({
+      available: true, joined: true, org: "acme", version: 6, applied: true, note: "", keys: [], summary: [], escalateAfter: 0,
+      locked: [
+        { key: "budget_daily_weighted_tokens", label: "Daily token budget", value: "3000", local: "5000", configKey: "budget.daily_tokens", field: "budgetDaily", ceiling: true },
+        { key: "merge_queue_enabled", label: "Merge queue", value: "false", local: "true", configKey: "merge_queue.enabled", field: "mergeQueue", ceiling: false },
+      ],
+    });
+    render(SettingsForm);
+    const budget = await screen.findByLabelText("Daily token budget");
+    expect(budget).toHaveValue(5000);
+    // A ceiling: still editable, read as the team ceiling.
+    expect(budget).toBeEnabled();
+    expect(await screen.findByText("Team ceiling 3000 (policy v6)")).toBeInTheDocument();
+    // A lock: the merge queue toggle is the team's.
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /Merge approved/ })).toBeDisabled());
+    expect(screen.getByText("Set by team policy v6")).toBeInTheDocument();
+    await fireEvent.input(budget, { target: { value: "2000" } });
+    await fireEvent.change(budget);
+    await waitFor(() => expect(SaveTeamLimits).toHaveBeenCalledWith({ budgetDaily: 2000, mergeQueue: true }));
+    expect(SaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("folds summaries and status interpretation into one Assistants tab, off by default with a cost note", async () => {
+    GetSettings.mockResolvedValue({ ...fakeDto, statusAgentAgent: "", statusAgentBin: "", statusAgentModel: "", statusAgentMinConfidence: 0.5, statusAgentIncludeTranscript: false });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Assistants" }));
+    expect(screen.queryByRole("tab", { name: "Summaries" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Status interpretation" })).toBeNull();
+    expect(document.querySelector("[data-assistants-cost]")).toHaveTextContent(/off by default.*tokens/);
+    expect(screen.getByRole("checkbox", { name: "Summarize sessions" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Interpret session status" })).not.toBeChecked();
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Interpret session status" }));
+    expect(screen.getByRole("checkbox", { name: "Interpret session status" })).toBeChecked();
+    expect(await screen.findByText("Frequency and limits")).toBeInTheDocument();
+    expect(screen.getByLabelText("Min confidence")).toBeInTheDocument();
+  });
+
+  it("lands an old Summaries deep link on the Assistants tab", async () => {
+    nav.overlayTab = "brain";
+    try {
+      render(SettingsForm);
+      expect(await screen.findByRole("tab", { name: "Assistants" })).toHaveAttribute("aria-selected", "true");
+    } finally {
+      nav.overlayTab = "";
+    }
   });
 
   it("saves a temporary shell directory selected with Browse", async () => {
@@ -392,18 +477,18 @@ describe("SettingsForm", () => {
     expect(project).toHaveFocus();
     expect(project).toHaveAttribute("aria-selected", "true");
     await fireEvent.keyDown(project, { key: "End" });
-    expect(screen.getByRole("tab", { name: "Status interpretation" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Assistants" })).toHaveFocus();
     await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(closeOverlay).toHaveBeenCalled();
   });
 
   it("preserves summary tuning while the feature is disabled", async () => {
     render(SettingsForm);
-    await fireEvent.click(await screen.findByRole("tab", { name: "Summaries" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "Assistants" }));
     expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
-    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Summarize sessions" }));
     expect(screen.getByLabelText("Custom Model")).toHaveValue("claude-x");
-    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Summarize sessions" }));
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
     expect(SaveSettings.mock.calls[0][0]).toMatchObject({ brainEnabled: false, brainModel: "claude-x", brainTimeout: 30 });
@@ -423,7 +508,7 @@ describe("SettingsForm", () => {
   it("switches status providers with their own model and executable drafts", async () => {
     GetSettings.mockResolvedValue({ ...fakeDto, statusAgentEnabled: true, statusAgentIncludeTranscript: false, statusAgentAgent: "", statusAgentBin: "/opt/claude", statusAgentModel: "sonnet" });
     render(SettingsForm);
-    await fireEvent.click(await screen.findByRole("tab", { name: "Status interpretation" }));
+    await fireEvent.click(await screen.findByRole("tab", { name: "Assistants" }));
     expect(screen.getByLabelText("Provider")).toHaveValue("claude");
     await fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "codex" } });
     expect(screen.getByRole("option", { name: "GPT-6 Astra" })).toBeInTheDocument();
@@ -449,7 +534,7 @@ describe("SettingsForm", () => {
       "General",
       "Project defaults",
       "Notifications",
-      "Summaries",
+      "Assistants",
       "Review",
       "Phone access",
       "Appearance",
@@ -568,7 +653,7 @@ describe("SettingsForm", () => {
     ).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "blocked" })).not.toBeChecked();
     // …and the two single-select keys are real selects, with a "(none)" option.
-    for (const caption of ["After pickup label", "Blocked label"]) {
+    for (const caption of [PICKUP_FIELDS.onSentSetLabel, "Blocked label"]) {
       const el = screen.getByLabelText(caption);
       expect(el.tagName).toBe("SELECT");
       expect(
@@ -614,7 +699,7 @@ describe("SettingsForm", () => {
       await screen.findByText(/Couldn’t load workspace labels/),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Blocked label").tagName).toBe("INPUT");
-    expect(screen.getByLabelText("Match labels")).toHaveAccessibleDescription("One UUID per line.");
+    expect(screen.getByLabelText("Match labels")).toHaveAccessibleDescription(ENTRY_FORMAT["Match labels"]);
     expect(screen.getByLabelText("Match labels")).toHaveValue("lab-1"); // the textarea escape hatch
   });
 
@@ -630,7 +715,7 @@ describe("SettingsForm", () => {
     expect(
       await screen.findByText(/no organisation-level labels/),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("After pickup label").tagName).toBe("INPUT");
+    expect(screen.getByLabelText(PICKUP_FIELDS.onSentSetLabel).tagName).toBe("INPUT");
   });
 
   it("loads the workspace labels once, not on every visit to the tab", async () => {

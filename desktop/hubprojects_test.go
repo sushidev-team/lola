@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/doctor"
 )
 
 const hubProjectsConfig = minimalConfig +
@@ -68,5 +69,81 @@ func TestSaveHubProject(t *testing.T) {
 	}
 	if err := s.SaveHubProject(HubProjectPatchDTO{Name: "nope", HubChores: &on}); err == nil {
 		t.Fatal("unknown project accepted")
+	}
+}
+
+func TestHubReadinessRows(t *testing.T) {
+	writeTestConfig(t, hubProjectsConfig)
+	prev := hubReadinessProbe
+	t.Cleanup(func() { hubReadinessProbe = prev })
+	hubReadinessProbe = func(_ context.Context, cfg *config.Config) []doctor.Result {
+		return []doctor.Result{
+			{Name: "hub chores", Detail: "no project takes chores", Fix: doctor.FixHubChores},
+			{Name: "hub github access", OK: true, Detail: "gh is logged in"},
+		}
+	}
+	got, err := (&ConfigService{}).HubReadiness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Fix != "hub_chores" || got[0].OK || !got[1].OK || got[1].Fix != "" {
+		t.Fatalf("rows = %+v", got)
+	}
+}
+
+const testPolicyPub = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+func TestPinPolicyKey(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if fp := s.PolicyKeyFingerprint(testPolicyPub); len(fp) != 19 {
+		t.Fatalf("fingerprint %q", fp)
+	}
+	if s.PolicyKeyFingerprint("short") != "" {
+		t.Fatal("fingerprint of a malformed key")
+	}
+	if _, err := s.PinPolicyKey("bad id!", testPolicyPub); err == nil {
+		t.Fatal("pinned a malformed key id")
+	}
+	added, err := s.PinPolicyKey("kadmin1", testPolicyPub)
+	if err != nil || !added {
+		t.Fatalf("pin: %v %v", added, err)
+	}
+	if added, err := s.PinPolicyKey("kadmin1", testPolicyPub); err != nil || added {
+		t.Fatalf("re-pin: %v %v", added, err)
+	}
+	// A different key under the same id is never replaced.
+	other := "B" + testPolicyPub[1:]
+	if _, err := s.PinPolicyKey("kadmin1", other); err == nil {
+		t.Fatal("replaced a pinned key")
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Hub.TrustedPolicyKeys["kadmin1"] != testPolicyPub {
+		t.Fatalf("keys = %v", cfg.Hub.TrustedPolicyKeys)
+	}
+}
+
+func TestSaveHubRulesLeavesNilFields(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig+"[hub]\nmax_claims_per_day = 2\npoll_seconds = 600\n")
+	s := &ConfigService{}
+	off, claims := false, 7
+	if err := s.SaveHubRules(HubRulesDTO{RequireSandbox: &off, MaxClaimsPerDay: &claims,
+		TrustedKeys: []HubTrustedKeyDTO{{KeyID: "kadmin1", PublicKey: testPolicyPub}}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := cfg.Hub
+	if *h.MaxClaimsPerDay != 7 || h.SandboxRequired() || h.PollSeconds != 600 || h.TrustedPolicyKeys["kadmin1"] != testPolicyPub {
+		t.Fatalf("hub = %+v", h)
+	}
+	tooSlow := 5000
+	if err := s.SaveHubRules(HubRulesDTO{PollSeconds: &tooSlow}); err == nil {
+		t.Fatal("accepted a poll past the maximum")
 	}
 }

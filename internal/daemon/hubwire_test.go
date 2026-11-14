@@ -24,24 +24,40 @@ import (
 
 // fakeHub is a scripted hub. Every call is recorded; nothing touches a network.
 type fakeHub struct {
-	mu        sync.Mutex
-	offers    []hubproto.Item
-	claimErr  error
-	beatErr   error
-	lost      []string
-	outErr    error // returned by Complete / Fail / Release
-	beats     []hubproto.HeartbeatRequest
-	findings  [][]hubproto.Item
-	claims    []string
-	completes []hubproto.CompleteRequest
-	fails     []hubproto.FailReason
-	releases  []string
-	policies  int
-	board     hubproto.BoardResponse
-	boardErr  error
-	boards    int
-	org       hubproto.OrgView
-	orgs      int
+	mu       sync.Mutex
+	offers   []hubproto.Item
+	claimErr error
+	beatErr  error
+	lost     []string
+	outErr   error // returned by Complete / Fail / Release / Progress
+	// progErr is returned by Progress (nil = outErr); failErr by a Fail
+	// carrying pr_url or group (an old hub's 400).
+	progErr error
+	failErr error
+	// outErrSeq is consumed first, one error per outcome call (nil = ok).
+	outErrSeq  []error
+	beatErr400 bool // refuse a heartbeat carrying policy_version (an old hub)
+	progresses []hubproto.ProgressRequest
+	failReqs   []hubproto.FailRequest
+	offerCalls int
+	beats      []hubproto.HeartbeatRequest
+	findings   [][]hubproto.Item
+	claims     []string
+	completes  []hubproto.CompleteRequest
+	fails      []hubproto.FailReason
+	releases   []string
+	policies   int
+	board      hubproto.BoardResponse
+	boardErr   error
+	boards     int
+	org        hubproto.OrgView
+	orgs       int
+	stats      hubproto.StatsView
+	statsCalls int
+	// offerErr / findErr / policyErr script those calls' answers.
+	offerErr  error
+	findErr   error
+	policyErr error
 }
 
 func (f *fakeHub) Board(context.Context, hubproto.State, int) (hubproto.BoardResponse, error) {
@@ -58,12 +74,22 @@ func (f *fakeHub) Org(context.Context) (hubproto.OrgView, error) {
 	return f.org, nil
 }
 
+func (f *fakeHub) Stats(context.Context) (hubproto.StatsView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statsCalls++
+	return f.stats, nil
+}
+
 func (f *fakeHub) Heartbeat(_ context.Context, hb hubproto.HeartbeatRequest) (hubproto.HeartbeatResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.beats = append(f.beats, hb)
 	if f.beatErr != nil {
 		return hubproto.HeartbeatResponse{}, f.beatErr
+	}
+	if f.beatErr400 && hb.PolicyVersion > 0 {
+		return hubproto.HeartbeatResponse{}, &hub.APIError{Status: 400, Code: hubproto.CodeBadRequest}
 	}
 	resp := hubproto.HeartbeatResponse{Lost: slices.Clone(f.lost)}
 	for _, id := range hb.LiveLeases {
@@ -78,12 +104,19 @@ func (f *fakeHub) ReportFindings(_ context.Context, items []hubproto.Item) (hubp
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.findings = append(f.findings, items)
+	if f.findErr != nil {
+		return hubproto.FindingsResponse{}, f.findErr
+	}
 	return hubproto.FindingsResponse{Accepted: len(items)}, nil
 }
 
 func (f *fakeHub) Offers(context.Context) ([]hubproto.Item, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.offerCalls++
+	if f.offerErr != nil {
+		return nil, 0, f.offerErr
+	}
 	return slices.Clone(f.offers), 0, nil
 }
 
@@ -101,45 +134,76 @@ func (f *fakeHub) Complete(_ context.Context, _ string, req hubproto.CompleteReq
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.completes = append(f.completes, req)
+	return f.nextErrLocked()
+}
+
+// nextErrLocked is the scripted answer to one outcome call.
+func (f *fakeHub) nextErrLocked() error {
+	if len(f.outErrSeq) > 0 {
+		err := f.outErrSeq[0]
+		f.outErrSeq = f.outErrSeq[1:]
+		return err
+	}
 	return f.outErr
 }
 
-func (f *fakeHub) Fail(_ context.Context, _ string, r hubproto.FailReason) error {
+func (f *fakeHub) Fail(_ context.Context, _ string, req hubproto.FailRequest) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.fails = append(f.fails, r)
-	return f.outErr
+	f.failReqs = append(f.failReqs, req)
+	if f.failErr != nil && (req.PRURL != "" || req.Group != "") {
+		return f.failErr
+	}
+	f.fails = append(f.fails, req.Reason)
+	return f.nextErrLocked()
+}
+
+func (f *fakeHub) Progress(_ context.Context, _ string, req hubproto.ProgressRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.progresses = append(f.progresses, req)
+	if f.progErr != nil {
+		return f.progErr
+	}
+	return f.nextErrLocked()
 }
 
 func (f *fakeHub) Release(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.releases = append(f.releases, id)
-	return f.outErr
+	return f.nextErrLocked()
 }
 
 func (f *fakeHub) FetchPolicy(context.Context, config.HubConfig, string, string, time.Time) (hub.StoredPolicy, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.policies++
+	if f.policyErr != nil {
+		return hub.StoredPolicy{}, f.policyErr
+	}
 	return hub.StoredPolicy{Policy: hubproto.Policy{Version: 3}}, nil
 }
 
 // hubCalls is what a fakeHub saw, copied out from under its lock.
 type hubCalls struct {
-	beats     []hubproto.HeartbeatRequest
-	findings  [][]hubproto.Item
-	claims    []string
-	completes []hubproto.CompleteRequest
-	fails     []hubproto.FailReason
-	releases  []string
-	policies  int
+	progresses []hubproto.ProgressRequest
+	failReqs   []hubproto.FailRequest
+	offerCalls int
+	beats      []hubproto.HeartbeatRequest
+	findings   [][]hubproto.Item
+	claims     []string
+	completes  []hubproto.CompleteRequest
+	fails      []hubproto.FailReason
+	releases   []string
+	policies   int
 }
 
 func (f *fakeHub) snapshot() hubCalls {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return hubCalls{
+		progresses: slices.Clone(f.progresses), failReqs: slices.Clone(f.failReqs), offerCalls: f.offerCalls,
 		beats: slices.Clone(f.beats), findings: slices.Clone(f.findings), claims: slices.Clone(f.claims),
 		completes: slices.Clone(f.completes), fails: slices.Clone(f.fails), releases: slices.Clone(f.releases),
 		policies: f.policies,
@@ -246,14 +310,27 @@ func TestHubRedBumpUsesPRSessionOnBotBranch(t *testing.T) {
 	}
 }
 
-func TestHubSpawnFailureReleases(t *testing.T) {
+// A spawn that fails after the claim reports spawn_failed (an attempt the
+// hub counts, so a broken project escalates) and cools the item down here.
+func TestHubSpawnFailureFailsAndCoolsDown(t *testing.T) {
 	d, fh, nat := hubFixture(t)
 	nat.manualAgentErr = errors.New("worktree add failed")
 	fh.offers = []hubproto.Item{advisoryItem("it1")}
 	d.hubCycle(context.Background())
 	got := fh.snapshot()
-	if !slices.Equal(got.releases, []string{"it1"}) {
-		t.Fatalf("releases = %v", got.releases)
+	if !slices.Equal(got.fails, []hubproto.FailReason{hubproto.FailSpawn}) || len(got.releases) != 0 {
+		t.Fatalf("fails = %v releases = %v", got.fails, got.releases)
+	}
+	if !d.hubCoolingDown("it1", time.Now()) || d.hubCoolingDown("it1", time.Now().Add(hubproto.DeviceCooldown+time.Minute)) {
+		t.Error("the item must cool down here for hubproto.DeviceCooldown")
+	}
+	// The hub re-offers it at once: not claimed again, no count spent.
+	d.hubCycle(context.Background())
+	if n := len(fh.snapshot().claims); n != 1 {
+		t.Errorf("claims = %d, want 1", n)
+	}
+	if st := d.hubStatusData(); len(st.OfferSkips) != 1 || st.OfferSkips[0].Reason != hub.ReasonCooldown {
+		t.Errorf("skips = %+v", st.OfferSkips)
 	}
 	if len(hubSessions(d)) != 0 {
 		t.Errorf("no session may be recorded")
@@ -324,16 +401,25 @@ func TestHubGatesSkipWithoutClaiming(t *testing.T) {
 
 func TestHubLostLeaseMarksButKeepsSession(t *testing.T) {
 	d, fh, nat := hubFixture(t)
+	notes := &hubNotes{}
+	d.notifier = notes
 	fh.offers = []hubproto.Item{advisoryItem("it1")}
 	d.hubCycle(context.Background())
 	fh.mu.Lock()
 	fh.offers, fh.lost = nil, []string{"it1"}
+	fh.claimErr = &hub.APIError{Status: 409, Code: hubproto.CodeConflict} // another device holds it
 	fh.mu.Unlock()
 	d.hubCycle(context.Background())
 
 	ss := hubSessions(d)
-	if len(ss) != 1 || !ss[0].HubItem.LeaseLost {
-		t.Fatalf("session = %+v", ss)
+	if len(ss) != 1 || !ss[0].HubItem.LeaseLost || !ss[0].HubItem.LeaseTaken {
+		t.Fatalf("session = %+v", ss[0].HubItem)
+	}
+	if h := hubSessionHub(ss[0]); h == nil || !h.LeaseTaken {
+		t.Errorf("session hub info = %+v", h)
+	}
+	if !notes.has("Hub chore taken by another device") {
+		t.Errorf("notes = %+v", notes.titles())
 	}
 	if len(nat.killCalls()) != 0 {
 		t.Fatal("a lost lease must never kill the session")
@@ -350,28 +436,59 @@ func TestHubLostLeaseMarksButKeepsSession(t *testing.T) {
 	}
 }
 
-func TestHubCompleteOnceWhenPRAppears(t *testing.T) {
+// A dep_advisory's PR moves the item to in_review: progress once per
+// delivery, the work stays open (no lease renewed, the repo stays busy), and
+// only the merge completes it.
+func TestHubAdvisoryProgressThenCompleteOnMerge(t *testing.T) {
 	d, fh, _ := hubFixture(t)
 	fh.offers = []hubproto.Item{advisoryItem("it1")}
 	d.hubCycle(context.Background())
 	id := hubSessions(d)[0].ID
-	d.sessions.Update(id, func(s *session.Session) bool {
-		s.PR = &scm.PR{Number: 7, URL: "https://github.com/acme/widgets/pull/7", State: "OPEN"}
-		s.SetDelivery(state.DeliveryCIPending, time.Now())
-		return true
-	})
-	d.hubOutcomeCycle(context.Background())
+	setDel := func(del state.DeliveryState) {
+		d.sessions.Update(id, func(s *session.Session) bool {
+			s.PR = &scm.PR{Number: 7, URL: "https://github.com/acme/widgets/pull/7", State: "OPEN"}
+			s.SetDelivery(del, time.Now())
+			return true
+		})
+		d.hubOutcomeCycle(context.Background())
+	}
+	setDel(state.DeliveryCIPending)
 	d.hubOutcomeCycle(context.Background())
 	d.hubCycle(context.Background())
 
 	got := fh.snapshot()
+	if len(got.completes) != 0 || len(got.progresses) != 1 {
+		t.Fatalf("completes = %d progresses = %d, want 0 / 1", len(got.completes), len(got.progresses))
+	}
+	if p := got.progresses[0]; p.PRURL != "https://github.com/acme/widgets/pull/7" || p.Delivery != hubproto.DeliveryCIPending || p.Validate() != nil {
+		t.Errorf("progress = %+v", p)
+	}
+	s, _ := d.sessions.Get(id)
+	if !s.HubItem.InReview || !s.HubItem.Open() || s.HubItem.Reported != "" {
+		t.Fatalf("in review work = %+v", s.HubItem)
+	}
+	if !d.hubRepoBusy("acme/widgets") {
+		t.Error("a PR in review must keep the repository busy")
+	}
+	if lv := got.beats[len(got.beats)-1].LiveLeases; len(lv) != 0 {
+		t.Errorf("an in-review item holds no lease to renew: %v", lv)
+	}
+	// A new delivery is sent again; the same one is not.
+	setDel(state.DeliveryReviewPending)
+	setDel(state.DeliveryReviewPending)
+	if n := len(fh.snapshot().progresses); n != 2 {
+		t.Fatalf("progresses = %d, want 2", n)
+	}
+	setDel(state.DeliveryMerged)
+	d.hubOutcomeCycle(context.Background())
+	got = fh.snapshot()
 	if len(got.completes) != 1 {
 		t.Fatalf("completes = %+v", got.completes)
 	}
-	if c := got.completes[0]; c.PRURL != "https://github.com/acme/widgets/pull/7" || c.Delivery != hubproto.DeliveryCIPending || c.Validate() != nil {
+	if c := got.completes[0]; c.PRURL != "https://github.com/acme/widgets/pull/7" || c.Delivery != hubproto.DeliveryMerged || c.Validate() != nil {
 		t.Errorf("complete = %+v", c)
 	}
-	s, _ := d.sessions.Get(id)
+	s, _ = d.sessions.Get(id)
 	if s.HubItem.Reported != "complete" {
 		t.Errorf("guard = %q", s.HubItem.Reported)
 	}
@@ -653,7 +770,7 @@ func TestHubRedBumpTeardownOutcomes(t *testing.T) {
 		s.EnsureAxes()
 		s.SetAgentState(c.agent, "", time.Now())
 		s.SetDelivery(c.del, time.Now())
-		o, ok := hubOutcomeFor(s, s.HubItem, true)
+		o, ok := hubOutcomeFor(s, s.HubItem, true, false)
 		if !ok || o.Action != hubActFail || o.Reason != string(c.want) {
 			t.Errorf("%s: outcome = %+v, want fail:%s", c.name, o, c.want)
 		}
@@ -664,7 +781,7 @@ func TestHubRedBumpTeardownOutcomes(t *testing.T) {
 		PR:      &scm.PR{Number: 42, URL: "https://github.com/acme/widgets/pull/42", State: "OPEN", HeadSHA: "aaa"}}
 	s.EnsureAxes()
 	s.SetDelivery(state.DeliveryCIFailed, time.Now())
-	if o, _ := hubOutcomeFor(s, s.HubItem, true); o.Reason == string(hubproto.FailObsolete) {
+	if o, _ := hubOutcomeFor(s, s.HubItem, true, false); o.Reason == string(hubproto.FailObsolete) {
 		t.Errorf("unknown start head reported not_reproducible: %+v", o)
 	}
 }
@@ -712,8 +829,8 @@ func TestHubReclaimReportsAgainAndDropsStaleRelease(t *testing.T) {
 	// The new claim's outcome is reported, not swallowed by the old settle.
 	id := hubSessions(d)[0].ID
 	d.sessions.Update(id, func(s *session.Session) bool {
-		s.PR = &scm.PR{Number: 7, URL: "https://github.com/acme/widgets/pull/7", State: "OPEN"}
-		s.SetDelivery(state.DeliveryCIPending, time.Now())
+		s.PR = &scm.PR{Number: 7, URL: "https://github.com/acme/widgets/pull/7", State: "MERGED"}
+		s.SetDelivery(state.DeliveryMerged, time.Now())
 		return true
 	})
 	d.hubOutcomeCycle(context.Background())
@@ -748,8 +865,8 @@ func TestHubUnsentOutcomeKeepsLeaseRenewed(t *testing.T) {
 	fh.mu.Unlock()
 	id := hubSessions(d)[0].ID
 	d.sessions.Update(id, func(s *session.Session) bool {
-		s.PR = &scm.PR{Number: 7, URL: "https://github.com/acme/widgets/pull/7", State: "OPEN"}
-		s.SetDelivery(state.DeliveryCIPending, time.Now())
+		s.PR = &scm.PR{Number: 7, URL: "https://github.com/acme/widgets/pull/7", State: "MERGED"}
+		s.SetDelivery(state.DeliveryMerged, time.Now())
 		return true
 	})
 	d.hubCycle(context.Background())

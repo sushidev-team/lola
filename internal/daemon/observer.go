@@ -498,6 +498,11 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			if prevAgentAtUpdate != state.AgentExited {
 				d.noteAgentExited(updated)
 			}
+			if updated.HubOpen() {
+				// A dead agent's claim fails now, not at the next renewal
+				// pass: the team gets the item back sooner.
+				d.hubNudgeOutcomes()
+			}
 		}
 		if known && prevDelivery != updated.Delivery {
 			d.noteDelivery(updated, prevDelivery)

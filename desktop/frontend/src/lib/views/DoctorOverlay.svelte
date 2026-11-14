@@ -6,6 +6,7 @@
   import Modal from "$lib/components/Modal.svelte";
   import Button from "$lib/components/Button.svelte";
   import { DoctorService, DaemonService } from "@bindings/desktop";
+  import { fixFor } from "$lib/components/SetupChecklist.svelte";
   import type { DoctorReportDTO, DoctorResultDTO, CLIInfoDTO } from "@bindings/desktop";
 
   let report = $state<DoctorReportDTO | null>(null);
@@ -69,6 +70,25 @@
     void loadCLI();
   });
 
+  // A copied command flashes "Copied" on its own row only.
+  let copied = $state("");
+  async function copy(id: string, command: string) {
+    try {
+      await navigator.clipboard.writeText(command);
+      copied = id;
+      setTimeout(() => { if (copied === id) copied = ""; }, 1500);
+    } catch {
+      copied = ""; // the command stays selectable
+    }
+  }
+
+  // An action that opens a form replaces this overlay; one that does not
+  // (starting the daemon) leaves it up, so the checks run again to show it.
+  async function act(fn: () => unknown) {
+    await fn();
+    if (nav.overlay === "doctor") void run();
+  }
+
   // ✓ passing · ✗ failing+critical · ⚠ failing but non-blocking.
   function glyph(r: DoctorResultDTO): { char: string; cls: string } {
     if (r.ok) return { char: "✓", cls: "text-good" };
@@ -88,14 +108,30 @@
     <!-- No size class anywhere in the list: the check name is the base 13px and
          its detail is separated by colour alone. -->
     <div class="selectable flex flex-col gap-0.5 transition-opacity" class:opacity-50={running}>
-      {#each report.results ?? [] as r (r.name)}
+      <!-- Keyed by the row's stable id: per-project rows can share a name, and
+           a duplicate key would break the whole list. A row whose fix id the
+           app knows carries its fix: a button for what the app can do itself,
+           a copyable command for what only the human can run. -->
+      {#each report.results ?? [] as r (r.id || r.name)}
         {@const g = glyph(r)}
-        <div class="flex items-start gap-2 rounded px-1 py-1.5 hover:bg-sel/40">
+        {@const fix = fixFor(r)}
+        <div class="flex items-start gap-2 rounded px-1 py-1.5 hover:bg-sel/40" data-row={r.id || r.name}>
           <span class="w-4 shrink-0 text-center {g.cls}"><GlyphIcon glyph={g.char} /></span>
           <div class="min-w-0 flex-1">
             <span class="font-medium text-ink">{r.name}</span>
             {#if r.detail}<span class="ml-2 text-sm text-faint">{r.detail}</span>{/if}
+            {#if fix?.kind === "command"}
+              <span class="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-sm">
+                <code class="min-w-0 break-all rounded bg-canvas px-1.5 py-0.5 font-mono text-ink">{fix.command}</code>
+                <Button size="xs" aria-label={`Copy command: ${fix.command}`} onclick={() => copy(r.id || r.name, fix.command)}>
+                  {copied === (r.id || r.name) ? "Copied" : "Copy"}
+                </Button>
+              </span>
+            {/if}
           </div>
+          {#if fix?.kind === "action"}
+            <Button size="sm" variant="secondary" onclick={() => act(fix.run)}>{fix.label}</Button>
+          {/if}
         </div>
       {/each}
     </div>

@@ -3,6 +3,10 @@
   // AND updates its other dependencies, in one pull request. The person picks
   // which release levels to take and may add a note for the agent; the
   // daemon renders the task from lola's own template and appends the note.
+  //
+  // Start stays off until at least one level is ticked: an update with no
+  // level is only the advisories, which "Fix all" already does. Major gets a
+  // line of its own, because it is the one level that may break the build.
   import Button from "$lib/components/Button.svelte";
   import Checkbox from "$lib/components/Checkbox.svelte";
   import Modal from "$lib/components/Modal.svelte";
@@ -36,6 +40,7 @@
   let note = $state("");
   const id = $props.id();
   const MAX = 2000;
+  const anyLevel = $derived(levels.patch || levels.minor || levels.major);
 </script>
 
 <Modal title="Update all dependencies" {onClose} width="520px"
@@ -47,7 +52,7 @@
     <fieldset class="grid gap-2">
       <legend class="mb-2 text-ink">Include updates</legend>
       {#each LEVELS as l (l.key)}
-        <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-edge px-3 py-2.5 hover:bg-sel" data-level={l.key}>
+        <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-edge px-3 py-2.5 {levels[l.key] ? 'bg-sel' : ''}" data-level={l.key}>
           <Checkbox bind:checked={levels[l.key]} />
           <span class="grid min-w-0">
             <span class="text-ink">{l.label}</span>
@@ -55,6 +60,12 @@
           </span>
         </label>
       {/each}
+      {#if !anyLevel}<p class="text-sm text-warn" data-no-level>Tick at least one level to update.</p>{/if}
+      {#if levels.major}
+        <p class="flex items-start gap-2 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn" data-major-warning>
+          Major updates can change how a library works. The agent adapts the code, but review the pull request closely before you merge it.
+        </p>
+      {/if}
     </fieldset>
     <div class="grid gap-1.5">
       <label for={`${id}-note`} class="text-ink">Instructions for the agent <span class="text-faint">(optional)</span></label>
@@ -67,7 +78,7 @@
   {#snippet footer()}
     <div class="dialog-actions">
       <Button class="cancel" size="md" onclick={onClose}>Cancel</Button>
-      <Button variant="primary" size="md" loading={busy} disabled={busy}
+      <Button variant="primary" size="md" loading={busy} disabled={busy || !anyLevel}
         onclick={() => onStart({ patch: levels.patch, minor: levels.minor, major: levels.major, note: note.trim() })}>Start update</Button>
     </div>
   {/snippet}

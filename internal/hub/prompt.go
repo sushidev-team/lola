@@ -145,10 +145,20 @@ func UpdateBriefing(patch, minor, major bool, note string) string {
 func redBumpBriefing(r hubproto.RedBumpPR) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Dependency chore: fix the failing checks of %s#%d\n\n", r.Repo, r.PR)
-	fmt.Fprintf(&b, "Pull request #%d in %s was opened by %s to bump `%s`, and its checks fail.\n\n", r.PR, r.Repo, r.Author, r.Package)
-	fmt.Fprintf(&b, "You are on that pull request's branch `%s`. Do this:\n\n", r.Branch)
-	b.WriteString("1. Find out why the checks fail (run the tests and linters locally).\n")
-	b.WriteString("2. Fix what the bump broke: adapt the code, tests or configuration. Keep the version the bot chose and keep the change minimal.\n")
+	if r.Package == "" {
+		// A grouped update (C10): the PR bumps several packages and the item
+		// names none. The agent reads which from the branch, never from a
+		// title or a hub field.
+		fmt.Fprintf(&b, "Pull request #%d in %s was opened by %s to bump a group of dependencies, and its checks fail.\n\n", r.PR, r.Repo, r.Author)
+		fmt.Fprintf(&b, "You are on that pull request's branch `%s`. Do this:\n\n", r.Branch)
+		b.WriteString("1. Find which packages the branch changes (compare its manifests and lockfiles with the base branch), then find out why the checks fail (run the tests and linters locally).\n")
+		b.WriteString("2. Fix what the bumps broke: adapt the code, tests or configuration. Keep the versions the bot chose and keep the change minimal.\n")
+	} else {
+		fmt.Fprintf(&b, "Pull request #%d in %s was opened by %s to bump `%s`, and its checks fail.\n\n", r.PR, r.Repo, r.Author, r.Package)
+		fmt.Fprintf(&b, "You are on that pull request's branch `%s`. Do this:\n\n", r.Branch)
+		b.WriteString("1. Find out why the checks fail (run the tests and linters locally).\n")
+		b.WriteString("2. Fix what the bump broke: adapt the code, tests or configuration. Keep the version the bot chose and keep the change minimal.\n")
+	}
 	fmt.Fprintf(&b, "3. Commit and push to the same branch `%s`. Do not open a new pull request and do not merge.\n\n", r.Branch)
 	b.WriteString("If the bump cannot work without a decision a person must make, stop and say so instead of guessing.\n")
 	return b.String()
