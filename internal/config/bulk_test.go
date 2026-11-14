@@ -59,3 +59,14 @@ func TestApplyBulkClearAndNoop(t *testing.T) {
 		t.Fatalf("%+v %+v", ch, cfg.Projects[0])
 	}
 }
+
+func TestApplyBulkClearSurvivesInheritance(t *testing.T) {
+	cfg := &Config{Defaults: Defaults{MatchLabels: []string{"d"}}, Projects: []Project{{Name: "a", MatchLabels: []string{"d"}, Inherits: ProjectInherits{MatchLabels: true}}}}
+	if _, err := ApplyBulk(cfg, nil, BulkPatch{MatchLabels: bp([]string{})}, fakeResolve); err != nil {
+		t.Fatal(err)
+	}
+	cfg.ResolveInheritance()
+	if len(cfg.Projects[0].MatchLabels) != 0 {
+		t.Fatalf("cleared labels came back: %v", cfg.Projects[0].MatchLabels)
+	}
+}

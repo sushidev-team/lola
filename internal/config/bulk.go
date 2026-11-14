@@ -97,7 +97,7 @@ func applyBulkOne(p *Project, patch BulkPatch, resolve LabelResolver, ch *BulkCh
 		return resolve(*p, ref)
 	}
 	if patch.MatchLabels != nil {
-		var ids []string
+		ids := []string{} // non-nil: nil would mean "inherit" to ResolveInheritance
 		for _, ref := range *patch.MatchLabels {
 			id, err := one(ref)
 			if err != nil {
@@ -107,7 +107,7 @@ func applyBulkOne(p *Project, patch BulkPatch, resolve LabelResolver, ch *BulkCh
 				ids = append(ids, id)
 			}
 		}
-		if !slices.Equal(ids, work.MatchLabels) || work.Inherits.MatchLabels {
+		if !slices.Equal(ids, work.MatchLabels) || work.Inherits.MatchLabels || work.MatchLabels == nil {
 			work.MatchLabels = ids
 			work.Inherits.MatchLabels = false
 			changed = append(changed, "match_labels")

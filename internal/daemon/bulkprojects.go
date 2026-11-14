@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
@@ -35,11 +37,6 @@ func (d *Daemon) handleBulkProjects(ctx context.Context, raw json.RawMessage) (p
 	if err != nil {
 		return protocol.BulkProjectsData{}, err
 	}
-	nc, err := config.Load(path)
-	if err != nil {
-		return protocol.BulkProjectsData{}, err
-	}
-
 	var lin linear.API
 	teamLabels := map[string][]linear.Label{}
 	resolve := func(p config.Project, ref string) (string, error) {
@@ -64,29 +61,59 @@ func (d *Daemon) handleBulkProjects(ctx context.Context, raw json.RawMessage) (p
 		return matchLabelRef(labels, ref)
 	}
 
-	changes, err := config.ApplyBulk(nc, args.Projects, patch, resolve)
-	if err != nil {
-		return protocol.BulkProjectsData{}, err
-	}
-	data := protocol.BulkProjectsData{}
-	failed := 0
-	for _, c := range changes {
-		data.Changes = append(data.Changes, protocol.BulkProjectChange{Project: c.Project, Changed: c.Changed, Error: c.Error})
-		if c.Error != "" {
-			failed++
+	// Read-modify-write with conflict detection: label resolution talks to
+	// Linear, so another writer (a second bulk request, enablePollInFile) may
+	// save meanwhile. The save happens under d.mu, the lock those writers take,
+	// only if the file still holds the bytes this attempt was built from;
+	// otherwise rebuild from the new file (cached team labels make that cheap).
+	var data protocol.BulkProjectsData
+	for attempt := 0; ; attempt++ {
+		before, err := os.ReadFile(path)
+		if err != nil {
+			return protocol.BulkProjectsData{}, err
 		}
-	}
-	if failed > 0 {
-		return data, fmt.Errorf("bulkProjects: %d project%s could not be changed; nothing saved", failed, plural(failed))
-	}
-	if args.DryRun {
-		return data, nil
-	}
-	if err := nc.Validate(); err != nil {
-		return data, fmt.Errorf("bulkProjects: config invalid after change: %w", err)
-	}
-	if err := nc.Save(path); err != nil {
-		return data, fmt.Errorf("bulkProjects: save config: %w", err)
+		nc, err := config.Load(path)
+		if err != nil {
+			return protocol.BulkProjectsData{}, err
+		}
+		changes, err := config.ApplyBulk(nc, args.Projects, patch, resolve)
+		if err != nil {
+			return protocol.BulkProjectsData{}, err
+		}
+		data = protocol.BulkProjectsData{}
+		failed := 0
+		for _, c := range changes {
+			data.Changes = append(data.Changes, protocol.BulkProjectChange{Project: c.Project, Changed: c.Changed, Error: c.Error})
+			if c.Error != "" {
+				failed++
+			}
+		}
+		if failed > 0 {
+			return data, fmt.Errorf("bulkProjects: %d project%s could not be changed; nothing saved", failed, plural(failed))
+		}
+		if err := nc.Validate(); err != nil {
+			return data, fmt.Errorf("bulkProjects: config invalid after change: %w", err)
+		}
+		if args.DryRun {
+			return data, nil
+		}
+		d.mu.Lock()
+		now, rerr := os.ReadFile(path)
+		if rerr == nil && bytes.Equal(now, before) {
+			err = nc.Save(path)
+			d.mu.Unlock()
+			if err != nil {
+				return data, fmt.Errorf("bulkProjects: save config: %w", err)
+			}
+			break
+		}
+		d.mu.Unlock()
+		if rerr != nil {
+			return data, rerr
+		}
+		if attempt >= 2 {
+			return data, fmt.Errorf("bulkProjects: config.toml kept changing underneath; nothing saved, try again")
+		}
 	}
 	data.Applied = true
 	if err := d.handleReload(ctx); err != nil {
