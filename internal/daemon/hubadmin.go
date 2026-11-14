@@ -50,19 +50,39 @@ func hubScrub(err error, secrets ...string) error {
 	return errors.New(msg)
 }
 
+// handleHubProbe asks a hub whether a team can be created there without a
+// create code. Nothing is written and no key is created: the question is
+// unsigned.
+func (d *Daemon) handleHubProbe(ctx context.Context, a protocol.HubProbeArgs) (protocol.HubProbeData, error) {
+	raw := strings.TrimSpace(a.URL)
+	if raw == "" || len(raw) > 1024 {
+		return protocol.HubProbeData{}, errors.New("hub: enter the hub's https address, like https://hub.example.com")
+	}
+	url, info, err := hub.Probe(ctx, raw, nil)
+	if err != nil {
+		return protocol.HubProbeData{}, err
+	}
+	return protocol.HubProbeData{URL: url, OpenTeams: info.OpenTeams}, nil
+}
+
 func (d *Daemon) handleHubCreateTeam(ctx context.Context, a protocol.HubCreateTeamArgs) (protocol.HubCreateTeamData, error) {
 	var none protocol.HubCreateTeamData
 	code := strings.TrimSpace(a.Code)
 	switch {
 	case code == "":
-		return none, errors.New("hub: the create code is required")
+		return none, errors.New("hub: a create code or the hub's address is required")
 	case len(code) > hubTokenMax || strings.ContainsAny(code, " \t\r\n"):
 		return none, errors.New("hub: the create code must be a single line with no spaces")
 	}
-	// Parsed here too, so the secret part is known and can be scrubbed.
-	_, secret, err := hubproto.ParseCreateCode(code)
+	// Parsed here too, so the secret part is known and can be scrubbed. A
+	// bare hub address (a hub open to code-less creation) holds no secret.
+	_, secret, err := hub.ParseCreateTarget(code)
 	if err != nil {
-		return none, errors.New("hub: that is not a create code (lola-hub-create:<url>#<code>)")
+		return none, err
+	}
+	scrub := []string{secret}
+	if secret != "" {
+		scrub = append(scrub, code)
 	}
 	path, err := config.DefaultPath()
 	if err != nil {
@@ -82,7 +102,7 @@ func (d *Daemon) handleHubCreateTeam(ctx context.Context, a protocol.HubCreateTe
 			// The identity is saved; the loop must still learn it.
 			d.hubResetIdentity()
 		}
-		return none, hubScrub(err, code, secret)
+		return none, hubScrub(err, scrub...)
 	}
 	d.hubResetIdentity()
 	d.logf("", "hub: created team %s at %s as %q (device %s, admin key %s)", res.Identity.Org, res.Identity.URL, res.Identity.DeviceName, res.Identity.DeviceID, res.AdminKeyID)

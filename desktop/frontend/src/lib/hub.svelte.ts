@@ -31,6 +31,7 @@ import type {
   HubBoardItem,
   HubClaimData,
   HubCreateTeamData,
+  HubProbeData,
   HubInviteData,
   HubRevokeData,
   HubTeamSettingsArgs,
@@ -404,6 +405,14 @@ export class HubStore {
   /** Enroll this machine. The token is passed through and never stored. */
   join(url: string, token: string, name: string): Promise<HubResult<HubJoinData>> {
     return this.#act("join", () => HubService.Join({ url, token, name }));
+  }
+
+  /**
+   * Ask a hub, before anything is joined, whether a team can be created
+   * there without a create code. Nothing about this Mac is sent.
+   */
+  probeHub(url: string): Promise<HubResult<HubProbeData>> {
+    return this.#act("probe", () => HubService.ProbeHub(url));
   }
 
   /**

@@ -95,6 +95,14 @@ export function Org(): $CancellablePromise<protocol$0.HubOrgData> {
 }
 
 /**
+ * ProbeHub asks a hub, before anything is joined, whether a team can be
+ * created there without a create code.
+ */
+export function ProbeHub(url: string): $CancellablePromise<protocol$0.HubProbeData> {
+    return $Call.ByID(518055595, url);
+}
+
+/**
  * Release gives a claimed item back. The session keeps running.
  */
 export function Release(itemID: string): $CancellablePromise<protocol$0.HubReleaseData> {

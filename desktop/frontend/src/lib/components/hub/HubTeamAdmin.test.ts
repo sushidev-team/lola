@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 
-const { Status, CreateTeam, Invite, TeamSettings } = vi.hoisted(() => ({
+const { Status, CreateTeam, ProbeHub, Invite, TeamSettings } = vi.hoisted(() => ({
   Status: vi.fn(),
+  ProbeHub: vi.fn(),
   CreateTeam: vi.fn(),
   Invite: vi.fn(),
   TeamSettings: vi.fn(),
@@ -12,6 +13,7 @@ vi.mock("@bindings/desktop", () => ({
   HubService: {
     Status,
     CreateTeam,
+    ProbeHub,
     Invite,
     TeamSettings,
     Board: vi.fn().mockResolvedValue({ items: [] }),
@@ -25,7 +27,8 @@ import HubCreateTeam from "./HubCreateTeam.svelte";
 import { confirm } from "$lib/confirm.svelte";
 import { hub } from "$lib/hub.svelte";
 
-const CODE = `lola-hub-create:https://hub.example.com#${"C".repeat(32)}`;
+const TOKEN = "C".repeat(32);
+const CODE = `lola-hub-create:https://hub.example.com#${TOKEN}`;
 const KEY = "lin_api_" + "a".repeat(40);
 const HOOK = "https://hooks.slack.com/services/T0001/B0001/abcDEF123";
 const view = (over = {}) => ({
@@ -41,37 +44,113 @@ beforeEach(() => {
   Status.mockResolvedValue({ enabled: false, joined: false, sessions: [] });
 });
 
+/** Step 1: enter the hub's address and continue. */
+async function address(value: string) {
+  await fireEvent.input(screen.getByLabelText("Hub address"), { target: { value } });
+  await fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+}
+
 describe("HubCreateTeam", () => {
-  it("creates a team from one code and a name, then forgets the code", async () => {
+  it("asks the hub first, and an open hub needs only a team name", async () => {
+    ProbeHub.mockResolvedValue({ url: "https://hub.example.com", openTeams: true });
     CreateTeam.mockResolvedValue({ org: "acme", deviceName: "mac", adminKeyId: "k1", fingerprint: "ab12 cd34 ef56 7890" });
     const onCreated = vi.fn();
     render(HubCreateTeam, { props: { onCreated } });
+    // Nothing about the team is asked before the hub answered.
+    expect(screen.queryByLabelText("Team name")).toBeNull();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+
+    await address(" https://hub.example.com/ ");
+    await screen.findByLabelText("Team name");
+    expect(ProbeHub).toHaveBeenCalledWith("https://hub.example.com");
+    expect(document.querySelector("[data-create-hub]")?.textContent).toBe("https://hub.example.com");
+    expect(screen.queryByLabelText("Create code")).toBeNull();
+
+    // What a person types becomes a valid team name.
     const create = screen.getByRole("button", { name: "Create team" });
     expect(create).toBeDisabled();
-
-    const code = screen.getByLabelText("Create code") as HTMLInputElement;
-    expect(code.type).toBe("password");
-    await fireEvent.input(code, { target: { value: CODE } });
-    expect(screen.getByText("https://hub.example.com")).toBeInTheDocument();
-    // What a person types becomes a valid team name.
     const name = screen.getByLabelText("Team name") as HTMLInputElement;
     await fireEvent.input(name, { target: { value: "Acme Web" } });
     expect(name.value).toBe("acme-web");
-    expect(create).toBeEnabled();
-
     await fireEvent.click(create);
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
-    expect(CreateTeam).toHaveBeenCalledWith({ code: CODE, team: "acme-web", name: "", replaceAdminKey: false });
-    expect(code.value).toBe("");
+    expect(CreateTeam).toHaveBeenCalledWith({ code: "https://hub.example.com", team: "acme-web", name: "", replaceAdminKey: false });
   });
 
-  it("says what is wrong with a pasted invite and sends nothing", async () => {
-    render(HubCreateTeam);
-    await fireEvent.input(screen.getByLabelText("Create code"), { target: { value: `lola-hub:https://hub.example.com#${"T".repeat(32)}` } });
+  it("asks for the create code when the hub is not open, then forgets it", async () => {
+    ProbeHub.mockResolvedValue({ url: "https://hub.example.com", openTeams: false });
+    CreateTeam.mockResolvedValue({ org: "acme", deviceName: "mac", adminKeyId: "k1", fingerprint: "f" });
+    const onCreated = vi.fn();
+    render(HubCreateTeam, { props: { onCreated } });
+    await address("https://hub.example.com");
+    const code = (await screen.findByLabelText("Create code")) as HTMLInputElement;
+    expect(code.type).toBe("password");
     await fireEvent.input(screen.getByLabelText("Team name"), { target: { value: "acme" } });
-    expect(screen.getByText(/Join a team/)).toBeInTheDocument();
+    const create = screen.getByRole("button", { name: "Create team" });
+    expect(create).toBeDisabled();
+
+    // A code for another hub is refused before anything is sent.
+    await fireEvent.input(code, { target: { value: `lola-hub-create:https://other.example.com#${TOKEN}` } });
+    expect(screen.getByText(/another hub/)).toBeInTheDocument();
+    expect(create).toBeDisabled();
+
+    await fireEvent.input(code, { target: { value: TOKEN } });
+    await fireEvent.click(create);
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(CreateTeam).toHaveBeenCalledWith({ code: CODE, team: "acme", name: "", replaceAdminKey: false });
+    // Back at step 1, with no code left anywhere.
+    expect(screen.queryByLabelText("Create code")).toBeNull();
+    expect((screen.getByLabelText("Hub address") as HTMLInputElement).value).toBe("");
+  });
+
+  it("takes a whole create line as the address and asks the hub nothing", async () => {
+    CreateTeam.mockResolvedValue({ org: "acme", deviceName: "mac", adminKeyId: "k1", fingerprint: "f" });
+    const onCreated = vi.fn();
+    render(HubCreateTeam, { props: { onCreated } });
+    await address(CODE);
+    await screen.findByLabelText("Team name");
+    expect(ProbeHub).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Create code")).toBeNull();
+    expect(document.body.textContent).not.toContain(TOKEN);
+    await fireEvent.input(screen.getByLabelText("Team name"), { target: { value: "acme" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create team" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(CreateTeam).toHaveBeenCalledWith({ code: CODE, team: "acme", name: "", replaceAdminKey: false });
+  });
+
+  it("asks for a code when the hub wants one after all", async () => {
+    ProbeHub.mockResolvedValue({ url: "https://hub.example.com", openTeams: true });
+    CreateTeam.mockRejectedValueOnce(new Error("hub: this hub needs a create code to create a team; ask its operator for one"));
+    render(HubCreateTeam);
+    await address("https://hub.example.com");
+    await fireEvent.input(await screen.findByLabelText("Team name"), { target: { value: "acme" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create team" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/needs a create code/);
+    expect(screen.getByLabelText("Create code")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create team" })).toBeDisabled();
-    expect(CreateTeam).not.toHaveBeenCalled();
+  });
+
+  it("stays on the address when the hub does not answer, and lets it be changed later", async () => {
+    ProbeHub.mockRejectedValueOnce(new Error("hub: that address did not answer like a lola hub"));
+    ProbeHub.mockResolvedValueOnce({ url: "https://hub.example.com", openTeams: false });
+    render(HubCreateTeam);
+    await address("https://hub.example.com");
+    expect((await screen.findByRole("alert")).textContent).toMatch(/did not answer like a Lola hub/);
+    expect(screen.queryByLabelText("Team name")).toBeNull();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await fireEvent.input(await screen.findByLabelText("Create code"), { target: { value: TOKEN } });
+    await fireEvent.click(screen.getByRole("button", { name: "Change" }));
+    expect((screen.getByLabelText("Hub address") as HTMLInputElement).value).toBe("https://hub.example.com");
+    expect(screen.queryByLabelText("Create code")).toBeNull();
+  });
+
+  it("says what is wrong with a pasted invite and asks nothing", async () => {
+    render(HubCreateTeam);
+    await fireEvent.input(screen.getByLabelText("Hub address"), { target: { value: `lola-hub:https://hub.example.com#${"T".repeat(32)}` } });
+    expect(screen.getByText(/Join a team/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    expect(ProbeHub).not.toHaveBeenCalled();
   });
 
   it("asks before discarding another team's admin key", async () => {
@@ -79,8 +158,8 @@ describe("HubCreateTeam", () => {
     CreateTeam.mockResolvedValueOnce({ org: "acme", deviceName: "mac", adminKeyId: "k1", fingerprint: "f" });
     const onCreated = vi.fn();
     render(HubCreateTeam, { props: { onCreated } });
-    await fireEvent.input(screen.getByLabelText("Create code"), { target: { value: CODE } });
-    await fireEvent.input(screen.getByLabelText("Team name"), { target: { value: "acme" } });
+    await address(CODE);
+    await fireEvent.input(await screen.findByLabelText("Team name"), { target: { value: "acme" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create team" }));
     await waitFor(() => expect(confirm.request?.title).toMatch(/Discard/));
     expect(onCreated).not.toHaveBeenCalled();
@@ -92,12 +171,12 @@ describe("HubCreateTeam", () => {
   it("shows a refusal in plain words without the code", async () => {
     CreateTeam.mockRejectedValue(new Error("hub: HTTP 401 unauthorized: refused"));
     render(HubCreateTeam);
-    await fireEvent.input(screen.getByLabelText("Create code"), { target: { value: CODE } });
-    await fireEvent.input(screen.getByLabelText("Team name"), { target: { value: "acme" } });
+    await address(CODE);
+    await fireEvent.input(await screen.findByLabelText("Team name"), { target: { value: "acme" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create team" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/works once/);
-    expect(alert.textContent).not.toContain("C".repeat(32));
+    expect(alert.textContent).not.toContain(TOKEN);
   });
 });
 

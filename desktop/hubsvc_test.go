@@ -290,6 +290,9 @@ func TestHubTeamCommandsForward(t *testing.T) {
 	if _, err := svc.RevokeDevice(" laptop-2 "); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := svc.ProbeHub(" https://hub.example.com "); err != nil {
+		t.Fatal(err)
+	}
 	want := []struct {
 		cmd     string
 		timeout time.Duration
@@ -299,6 +302,7 @@ func TestHubTeamCommandsForward(t *testing.T) {
 		{protocol.CmdHubInvite, hubAdminTimeout, `{"label":"Ada"}`},
 		{protocol.CmdHubTeamSettings, hubAdminTimeout, `{"linearKey":"` + key + `"}`},
 		{protocol.CmdHubRevoke, hubAdminTimeout, `{"device":"laptop-2"}`},
+		{protocol.CmdHubProbe, hubViewTimeout, `{"url":"https://hub.example.com"}`},
 	}
 	if len(*calls) != len(want) {
 		t.Fatalf("calls = %d", len(*calls))

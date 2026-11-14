@@ -89,6 +89,14 @@ func (s *HubService) Join(a protocol.HubJoinArgs) (protocol.HubJoinData, error) 
 	return d, err
 }
 
+// ProbeHub asks a hub, before anything is joined, whether a team can be
+// created there without a create code.
+func (s *HubService) ProbeHub(url string) (protocol.HubProbeData, error) {
+	var d protocol.HubProbeData
+	err := hubCall(protocol.CmdHubProbe, protocol.HubProbeArgs{URL: strings.TrimSpace(url)}, &d, hubViewTimeout)
+	return d, err
+}
+
 // CreateTeam creates a team with the operator's one-time create code and
 // makes this Mac its first member and admin. Like Join, the code is a secret
 // carried from the form to the daemon and no further.
