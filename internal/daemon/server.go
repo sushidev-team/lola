@@ -131,6 +131,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return resp
 		}
 		return dataResponse(data)
+	case "bulkProjects":
+		data, err := d.handleBulkProjects(ctx, req.Args)
+		if err != nil {
+			resp := protocol.Response{OK: false, Error: err.Error()}
+			if raw, mErr := json.Marshal(data); mErr == nil {
+				resp.Data = raw
+			}
+			return resp
+		}
+		return dataResponse(data)
 	case "enable", "disable":
 		if err := d.handleEnable(ctx, req.Poll, req.Cmd == "enable"); err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}

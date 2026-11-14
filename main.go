@@ -64,6 +64,7 @@ func main() {
 			RunE: func(c *cobra.Command, _ []string) error { return tui.Send(`{"cmd":"reload"}`) }},
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
+		projectsCmd(),
 		hubCmd(),
 		sandboxCmd(),
 		openCmd(),
