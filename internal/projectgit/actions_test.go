@@ -107,6 +107,88 @@ func TestPullUncheckedBranchFastForwardsWithoutTouchingCheckout(t *testing.T) {
 		t.Fatal("diverged branch moved")
 	}
 }
+func TestPullCheckedOutBranch(t *testing.T) {
+	for _, route := range []string{"branch", "sync"} {
+		for _, scenario := range []string{"fast-forward", "diverged", "conflict", "dirty"} {
+			t.Run(route+"/"+scenario, func(t *testing.T) {
+				remote := actionRepo(t)
+				dir := repo(t)
+				testGit(t, dir, "remote", "add", "origin", remote)
+				testGit(t, dir, "fetch", "origin")
+				testGit(t, dir, "merge", "--ff-only", "origin/main")
+				testGit(t, dir, "branch", "--set-upstream-to=origin/main", "main")
+				// Lola's pull merges regardless of the CLI pull preferences, and
+				// must never stash local changes on the user's behalf.
+				for key, value := range map[string]string{"pull.rebase": "true", "pull.ff": "only", "merge.ff": "only", "merge.autoStash": "true"} {
+					testGit(t, dir, "config", key, value)
+				}
+				if scenario != "fast-forward" {
+					write(t, dir, "base", "local\n")
+					testGit(t, dir, "add", "base")
+					testGit(t, dir, "commit", "-m", "local change")
+				}
+				remoteFile := "remote"
+				if scenario == "conflict" {
+					remoteFile = "base"
+				}
+				write(t, remote, remoteFile, "remote\n")
+				testGit(t, remote, "add", remoteFile)
+				testGit(t, remote, "commit", "-m", "remote change")
+				if scenario == "dirty" {
+					write(t, dir, "base", "unsaved work\n")
+				}
+				localHead, remoteHead := tip(t, dir, "HEAD"), tip(t, remote, "HEAD")
+				c, ctx := Client{}, context.Background()
+				var err error
+				if route == "sync" {
+					err = c.Sync(ctx, dir, "pull")
+				} else {
+					err = c.BranchAction(ctx, dir, BranchRequest{Action: "pull", Source: "refs/heads/main", SourceSHA: localHead})
+				}
+				switch scenario {
+				case "dirty":
+					if err == nil || tip(t, dir, "HEAD") != localHead {
+						t.Fatalf("dirty pull changed HEAD or succeeded: %v", err)
+					}
+					if got, _ := os.ReadFile(filepath.Join(dir, "base")); string(got) != "unsaved work\n" {
+						t.Fatal("dirty pull changed local work")
+					}
+				case "conflict":
+					if err == nil || tip(t, dir, "HEAD") != localHead || tip(t, dir, "MERGE_HEAD") != remoteHead {
+						t.Fatalf("conflict did not leave a recoverable merge: %v", err)
+					}
+					if op, err := c.Operation(ctx, dir); err != nil || op != "merge" {
+						t.Fatalf("operation = %q, %v", op, err)
+					}
+					if err := c.BranchAction(ctx, dir, BranchRequest{Action: "abort", Source: "merge", SourceSHA: localHead}); err != nil {
+						t.Fatal(err)
+					}
+					if got, _ := os.ReadFile(filepath.Join(dir, "base")); string(got) != "local\n" {
+						t.Fatal("abort did not restore local work")
+					}
+				default:
+					if err != nil {
+						t.Fatal(err)
+					}
+					if scenario == "fast-forward" {
+						if tip(t, dir, "HEAD") != remoteHead {
+							t.Fatal("pull did not fast-forward")
+						}
+					} else if got := testGit(t, dir, "show", "-s", "--format=%P", "HEAD"); got != localHead+" "+remoteHead {
+						t.Fatalf("pull did not preserve both histories: %s", got)
+					}
+					if got, _ := os.ReadFile(filepath.Join(dir, "remote")); string(got) != "remote\n" {
+						t.Fatal("pull did not update the checkout")
+					}
+				}
+				if got := testGit(t, dir, "stash", "list"); got != "" {
+					t.Fatalf("pull created a stash: %s", got)
+				}
+			})
+		}
+	}
+}
+
 func TestBranchMergeConflictRecoveryAndStaleAbort(t *testing.T) {
 	dir := actionRepo(t)
 	testGit(t, dir, "switch", "-c", "feature")

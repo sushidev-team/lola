@@ -336,6 +336,25 @@ describe('Git action menus', () => {
     expect(createBranch).toHaveBeenLastCalledWith(main.sha,'A specific commit');
     expect(git.branchAction).not.toHaveBeenCalled();
   });
+  it('opens a pulled branch’s existing worktree so merge conflicts stay visible', async () => {
+    const tracked = {...feature,upstream:'origin/feature/work'};
+    const root = git;
+    root.snapshot!.worktrees = [{path:'/linked',branch:feature.name,head:feature.sha,blocked:false,locked:false,prunable:false}];
+    const linked = new ProjectGitState(git.project, '/linked');
+    linked.snapshot = {...root.snapshot!,path:'/linked',branch:feature.name,head:feature.sha,refs:[{...main,current:false},{...tracked,current:true}]};
+    vi.spyOn(linked, 'branchAction').mockImplementation(async request => {
+      linked.failedAction = request;
+      linked.error = 'Automatic merge failed';
+      linked.snapshot!.operation = 'merge';
+      return null;
+    });
+    callbacks.openWorktree.mockImplementation(() => {git = linked;});
+    actions.pull(tracked);
+    await waitFor(() => expect(linked.branchAction).toHaveBeenCalledWith(expect.objectContaining({action:'pull',source:feature.fullName,sourceSHA:feature.sha}),'',200));
+    expect(callbacks.openWorktree).toHaveBeenCalledWith('/linked');
+    expect(root.branchAction).not.toHaveBeenCalled();
+    expect(git.snapshot!.operation).toBe('merge');
+  });
   it('pulls an unselected branch without changing the visible checkout', async () => {
     render(ProjectGitActionMenu, { actions });
     actions.openBranch({...feature,upstream:'refs/remotes/origin/feature/work'}, event());

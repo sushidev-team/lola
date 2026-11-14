@@ -213,12 +213,12 @@ func TestSyncHasNoForceOrRewrite(t *testing.T) {
 		got = append(got, args)
 		return nil, nil
 	}}
-	for _, a := range []string{"fetch", "pull", "push"} {
+	for _, a := range []string{"fetch", "push"} {
 		if err := c.Sync(context.Background(), "repo", a); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want := [][]string{{"fetch", "--all", "--prune"}, {"pull", "--ff-only", "--no-autostash"}, {"push"}}
+	want := [][]string{{"fetch", "--all", "--prune"}, {"push"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v", got)
 	}

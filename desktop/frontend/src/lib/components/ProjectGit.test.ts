@@ -53,6 +53,22 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it('pulls the current branch with the displayed ref and commit', async () => {
+    await open();
+    await fireEvent.click(screen.getByRole('button', {name:'Pull'}));
+    await waitFor(() => expect(api.BranchAction).toHaveBeenCalledWith(project, '', expect.objectContaining({action:'pull',source:'refs/heads/main',sourceSHA:newSHA})));
+    expect(api.Pull).not.toHaveBeenCalled();
+  });
+  it.each(['branch has diverged', 'push rejected (non-fast-forward)'])('offers a working Pull changes button after %s', async error => {
+    api.BranchAction.mockRejectedValueOnce(new Error(error));
+    await open();
+    await fireEvent.click(screen.getByRole('button', {name:'Push'}));
+    const recovery = await screen.findByRole('button', {name:'Pull changes'});
+    await waitFor(() => expect(recovery).toBeEnabled());
+    await fireEvent.click(recovery);
+    await waitFor(() => expect(api.BranchAction).toHaveBeenLastCalledWith(project, '', expect.objectContaining({action:'pull',source:'refs/heads/main',sourceSHA:newSHA})));
+    await waitFor(() => expect(screen.queryByRole('button', {name:'Pull changes'})).toBeNull());
+  });
   it.each(['commit', 'merge'])('refreshes the graph immediately after a %s in a peeked worktree', async operation => {
     const data = snapshot();
     Object.assign(data.worktrees[1], { changes: 1, modified: 1 });

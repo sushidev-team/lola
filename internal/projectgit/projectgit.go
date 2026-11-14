@@ -686,7 +686,15 @@ func (c Client) Sync(ctx context.Context, dir, action string) error {
 	case "fetch":
 		args = []string{"fetch", "--all", "--prune"}
 	case "pull":
-		args = []string{"pull", "--ff-only", "--no-autostash"}
+		ref, err := c.text(ctx, dir, "symbolic-ref", "--quiet", "HEAD")
+		if err != nil {
+			return err
+		}
+		head, err := c.text(ctx, dir, "rev-parse", "--verify", "HEAD")
+		if err != nil {
+			return err
+		}
+		return c.BranchAction(ctx, dir, BranchRequest{Action: "pull", Source: ref, SourceSHA: head})
 	case "push":
 		args = []string{"push"}
 	default:

@@ -501,7 +501,7 @@
     <div class="toolbar-actions no-drag" role="group" aria-label="Repository actions">
       <Button icon size="xs" class="rail-toggle" selected={showRail} aria-label="Toggle repository navigation" title="Branches and worktrees" onclick={() => showRail = !showRail}><Icon name="list-filter" size={16} /></Button>
       <div class="toolbar-group">
-        <Button size="sm" class="pull-action" aria-label="Pull" disabled={!data?.upstream || !!git.busy || !!data?.operation} loading={git.busy === 'pull'} onclick={() => void act('pull')} title="Pull with fast-forward only"><span class="sync-arrow-window button-icon" aria-hidden="true"><Icon name="arrow-down" size={15} class="sync-arrow" /></span><span class="git-action-label">Pull</span></Button>
+        <Button size="sm" class="pull-action" aria-label="Pull" disabled={!data?.upstream || !!git.busy || !!data?.operation} loading={git.busy === 'pull'} onclick={() => gitActions.pull()} title="Pull and merge remote changes"><span class="sync-arrow-window button-icon" aria-hidden="true"><Icon name="arrow-down" size={15} class="sync-arrow" /></span><span class="git-action-label">Pull</span></Button>
         <Button size="sm" variant="primary" class="push-action" aria-label="Push" disabled={!data?.head || !data?.branch || !!git.busy || !!data?.operation} loading={git.busy === 'push' || git.busy === 'publish'} onclick={() => gitActions.push()} title="Push current branch"><span class="sync-arrow-window button-icon" aria-hidden="true"><Icon name="arrow-up" size={16} class="sync-arrow" /></span><span class="git-action-label">Push</span></Button>
       </div>
       <span class="toolbar-divider"></span>

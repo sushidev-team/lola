@@ -483,7 +483,9 @@ func (c Client) pullBranch(ctx context.Context, dir string, r BranchRequest) err
 		if _, aheadErr := c.git(ctx, dir, "", "merge-base", "--is-ancestor", incoming, r.SourceSHA); aheadErr == nil {
 			return nil
 		}
-		return errors.New("branch has diverged; check it out and merge or rebase the upstream explicitly")
+		if owner == "" {
+			return errors.New("branch has diverged; check it out and merge or rebase the upstream explicitly")
+		}
 	}
 	// Recheck ownership after network I/O; Git in another process can create a
 	// checkout while fetch runs. Never move a ref underneath its working tree.
@@ -502,7 +504,10 @@ func (c Client) pullBranch(ctx context.Context, dir string, r BranchRequest) err
 		if err = c.requireClean(ctx, dir); err != nil {
 			return err
 		}
-		_, err = c.git(ctx, dir, "", "merge", "--ff-only", "--no-edit", "--", incoming)
+		// A checked-out branch can merge divergent history normally. Keep real
+		// conflicts in this checkout for Continue/Abort; never rebase or autostash.
+		message := fmt.Sprintf("Merge branch '%s/%s' into %s", remote, strings.TrimPrefix(merge, "refs/heads/"), strings.TrimPrefix(r.Source, "refs/heads/"))
+		_, err = c.git(ctx, dir, "", "merge", "--ff", "--no-edit", "--no-autostash", "-m", message, "--", incoming)
 		return err
 	}
 	_, err = c.git(ctx, dir, "", "update-ref", "-m", "lola: fast-forward upstream", r.Source, incoming, r.SourceSHA)

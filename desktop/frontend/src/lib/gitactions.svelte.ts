@@ -62,7 +62,7 @@ export class GitActions {
     let active = context;
     // Open a branch's existing checkout before starting an operation there, so
     // conflicts and Continue/Abort belong to the visible working copy.
-    const ownedRef = request.action === 'merge' ? request.target : request.action === 'rebase' ? request.source : '';
+    const ownedRef = request.action === 'merge' ? request.target : ['rebase', 'pull'].includes(request.action) ? request.source : '';
     const owner = ownedRef && context.git.snapshot?.worktrees.find(tree => `refs/heads/${tree.branch}` === ownedRef);
     if (owner && !owner.blocked && !owner.prunable && owner.path !== context.git.snapshot?.path) {
       this.callbacks.openWorktree(owner.path);
@@ -152,7 +152,7 @@ export class GitActions {
         });
       }};
     }
-    if (info.recovery==='pull' && ['push','publish'].includes(request.action) && this.upstream(source)) {
+    if ((info.recovery==='pull' || info.recovery==='merge') && ['push','publish'].includes(request.action) && this.upstream(source)) {
       return {label:'Pull changes',run:()=>{if(valid()) void this.execute(context,this.branchRequest('pull',source));}};
     }
     if (info.recovery==='merge' && request.action==='pull') {
@@ -160,6 +160,11 @@ export class GitActions {
       const remote=git.snapshot?.refs.find(branch=>branch.remote && branch.fullName===full);
       if(remote) return {label:'Merge remote changes',run:()=>{if(valid() && git.snapshot?.refs.some(branch=>branch.fullName===remote.fullName && branch.sha===remote.sha)) void this.execute(context,this.branchRequest('merge',remote,source));}};
     }
+  }
+  pull(branch = this.current()) {
+    if (!branch || this.mutationBlocked(branch) || !this.upstream(branch)) return;
+    this.close();
+    this.action('pull', branch);
   }
   push(branch = this.current()) {
     if (!branch || this.mutationBlocked(branch)) return;
