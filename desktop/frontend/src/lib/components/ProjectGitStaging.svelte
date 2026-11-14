@@ -208,10 +208,11 @@
   <div class="inspector-heading"><h3>Changes <span>{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data?.files.length ?? '—'}{/if}</span></h3><Button size="xs" variant="accent" aria-label="Commit all changes with AI" title="Group related files into commits using AI. Mixed changes within a file stay together." disabled={!data?.files.length || !!git.busy || git.draftingMessage || conflicts || !!data?.operation} loading={git.busy === 'prepare-ai-commit'} onclick={() => void aiCommit()}><Icon name="sparkles" size={13}/>AI commit</Button><div class="view-switch" role="group" aria-label="Changed file layout"><Button size="xs" icon disabled={!!git.aiCommit} selected={!tree} aria-label="File list view" title="File list" onclick={() => setTree(false)}><Icon name="list" size={14} /></Button><Button size="xs" icon disabled={!!git.aiCommit} selected={tree} aria-label="File tree view" title="File tree" onclick={() => setTree(true)}><Icon name="folder" size={14} /></Button></div><Button size="xs" icon variant="danger" class="discard-all" aria-label="Discard all unstaged changes" title={data?.operation || conflicts ? 'Finish the current operation before discarding changes' : 'Discard all unstaged changes…'} disabled={!unstaged.length || !!git.busy || !!data?.operation || conflicts} loading={git.busy === 'prepare-discard' || git.busy === 'discard'} onclick={() => void discardAll()}><Icon name="trash-2" size={14} /></Button></div>
   {#if git.aiCommit}
     {@const job = git.aiCommit}
-    <div class="ai-progress">
+    <div class="ai-progress" class:stopping={job.stopping}>
+      <Icon name="loader-circle" size={15} class="ai-spinner"/>
       <div role="status" aria-live="polite" aria-atomic="true">
-        <strong>{job.stopping ? (job.phase === 'committing' ? 'Stopping after the current commit…' : 'Cancelling…') : job.phase === 'committing' ? `Committing ${Math.min(job.completed + 1, job.total)} of ${job.total}…` : job.phase === 'starting' ? 'Checking changes…' : 'AI is grouping changes…'}</strong>
-        <span>{job.subject || (job.phase === 'committing' ? `${job.completed} completed. Completed commits are kept.` : 'Related files stay together. You can cancel at any time.')}</span>
+        <strong>{job.stopping ? (job.phase === 'committing' ? 'Finishing current commit…' : 'Cancelling…') : job.phase === 'committing' ? `Committing ${Math.min(job.completed + 1, job.total)} of ${job.total}…` : job.phase === 'starting' ? 'Checking changes…' : 'Grouping changes…'}</strong>
+        {#if job.subject && !job.stopping}<span title={job.subject}>{job.subject}</span>{/if}
       </div>
       <Button size="xs" disabled={!job.id || job.stopping} onclick={() => void git.cancelAICommit()}>{job.stopping ? 'Stopping…' : 'Cancel'}</Button>
     </div>
@@ -254,7 +255,12 @@
   .inspector-heading :global(.discard-all:enabled:hover) { background:color-mix(in srgb,var(--color-bad) 28%,var(--color-canvas)); }
   .staging-panel.ai-working { grid-template-rows:auto auto minmax(140px,1fr) auto; }
   .ai-working .staging-files,.ai-working .commit-composer { opacity:.5; }
-  .ai-progress { display:flex; align-items:center; gap:10px; padding:10px; background:color-mix(in srgb,var(--color-accent) 10%,var(--color-panel)); border-block:1px solid color-mix(in srgb,var(--color-accent) 35%,var(--color-edge)); }
+  .ai-progress { position:relative; overflow:hidden; display:flex; align-items:center; gap:8px; padding:8px 10px; background:color-mix(in srgb,var(--color-accent) 10%,var(--color-panel)); border-block:1px solid color-mix(in srgb,var(--color-accent) 35%,var(--color-edge)); }
+  .ai-progress::after { content:''; position:absolute; bottom:0; left:0; width:35%; height:2px; background:var(--color-accent); animation:ai-progress-slide 1.6s ease-in-out infinite; }
+  .ai-progress.stopping::after { animation-play-state:paused; opacity:.4; }
+  .ai-progress :global(.ai-spinner) { color:var(--color-accent); animation:ai-progress-spin .9s linear infinite; }
+  @keyframes ai-progress-spin { to { transform:rotate(360deg); } }
+  @keyframes ai-progress-slide { from { transform:translateX(-100%); } to { transform:translateX(390%); } }
   .ai-progress > div { display:grid; gap:4px; flex:1; min-width:0; }
   .ai-progress strong { font-size:13px; font-weight:600; }
   .ai-progress span { font-size:12px; color:var(--color-ink-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -305,6 +311,6 @@
   .amend-option { display:flex; align-items:center; gap:7px; cursor:pointer; }
   .amend-option code { margin-left:auto; color:var(--color-ink-2); font-size:12px; font-weight:400; }
   .conflict-note { color:var(--color-warn); font-size:12px; }
-  @media (prefers-reduced-motion: reduce) { :global(.folder-chevron),.stage-file :global(.stage-action) { transition:none; } }
+  @media (prefers-reduced-motion: reduce) { .ai-progress::after { animation:none; width:100%; opacity:.4; } .ai-progress :global(.ai-spinner) { animation:none; } :global(.folder-chevron),.stage-file :global(.stage-action) { transition:none; } }
   @media (hover:none) { .stage-file :global(.stage-action) { opacity:1; pointer-events:auto; } }
 </style>
