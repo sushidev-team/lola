@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/sushidev-team/lola/compare/v0.7.0...v0.8.0) (2026-11-14)
+
+
+### Features
+
+* bulk-configure projects (SUSHI-783) ([11ada7d](https://github.com/sushidev-team/lola/commit/11ada7d358d8921766c6eaf0ab334f08ec03cc8a))
+* expand stack settings and clean up merged remote branches ([ffc541d](https://github.com/sushidev-team/lola/commit/ffc541d65ecafd4a3862b7c937a498a6812a1045))
+
+
+### Bug Fixes
+
+* **deps:** bump @capacitor/ios for GHSA-rvm3-566m-v7fv ([da331d9](https://github.com/sushidev-team/lola/commit/da331d93e38f4142377409b2878db620370415f1))
+* **deps:** bump @capacitor/ios to 8.6.2 (GHSA-rvm3-566m-v7fv) ([46dc7fa](https://github.com/sushidev-team/lola/commit/46dc7fab797879f54865d58937093db681a6831c))
+* **deps:** resolve tinypool and @capacitor/ios advisories ([e91f26f](https://github.com/sushidev-team/lola/commit/e91f26f7920f7ec068f002979771a3b67d8a09cd))
+* **mobile:** pin capacitor-swift-pm to 8.6.2 in CapApp-SPM ([c42f00d](https://github.com/sushidev-team/lola/commit/c42f00d2a19bbfda5265b865ffe214938477a351))
+
 ## [0.7.0](https://github.com/sushidev-team/lola/compare/v0.6.0...v0.7.0) (2026-11-14)
 
 
