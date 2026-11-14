@@ -13,6 +13,21 @@ export interface AuthorIdentity {
 }
 
 /**
+ * BranchPR is display metadata for an open pull request, including drafts.
+ * HeadRepo + Head identify the source; equal branch names across forks do not.
+ */
+export interface BranchPR {
+    "number": number;
+    "title": string;
+    "url": string;
+    "repo": string;
+    "headRepo": string;
+    "head": string;
+    "base": string;
+    "draft": boolean;
+}
+
+/**
  * BranchRequest names full refs and the exact tips the human reviewed.
  * Merge integrates Source into Target; rebase replays Source onto Target.
  */

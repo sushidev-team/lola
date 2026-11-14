@@ -8,6 +8,17 @@ import (
 	"github.com/sushidev-team/lola/internal/projectgit"
 )
 
+// BranchPullRequests runs independently of local snapshots and mutation locks.
+func (s *ProjectGitService) BranchPullRequests(project, worktree string) ([]projectgit.BranchPR, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dir, _, err := projectGitTarget(ctx, project, worktree)
+	if err != nil {
+		return nil, err
+	}
+	return s.pullRequests.BranchPRs(ctx, (projectgit.Client{}).Remotes(ctx, dir))
+}
+
 func (s *ProjectGitService) PullRequestOptions(project, worktree, remote, baseRepo string) (projectgit.PROptions, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()

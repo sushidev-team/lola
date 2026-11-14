@@ -28,6 +28,12 @@ func TestProjectPRServicesAuthorizeBeforeGitHub(t *testing.T) {
 	if _, err := s.DraftPullRequest("demo", t.TempDir(), selection, "", ""); err == nil {
 		t.Fatal("foreign checkout reached draft")
 	}
+	if _, err := s.BranchPullRequests("missing", ""); err == nil {
+		t.Fatal("unknown project listed PRs")
+	}
+	if _, err := s.BranchPullRequests("demo", t.TempDir()); err == nil {
+		t.Fatal("foreign checkout listed PRs")
+	}
 	if calls != 0 {
 		t.Fatal("unauthorized request reached GitHub")
 	}

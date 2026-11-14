@@ -4,6 +4,7 @@
 export type {
     AICommitPreparation,
     AuthorIdentity,
+    BranchPR,
     BranchRequest,
     BranchResult,
     Commit,

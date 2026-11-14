@@ -43,6 +43,13 @@ export function BranchAction(project: string, worktree: string, request: project
 }
 
 /**
+ * BranchPullRequests runs independently of local snapshots and mutation locks.
+ */
+export function BranchPullRequests(project: string, worktree: string): $CancellablePromise<projectgit$0.BranchPR[] | null> {
+    return $Call.ByID(798578839, project, worktree);
+}
+
+/**
  * CachedIdentities returns on-disk presentation metadata without network work.
  * The frontend keeps these images visible while Identities refreshes them.
  */
