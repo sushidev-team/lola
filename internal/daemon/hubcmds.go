@@ -115,6 +115,11 @@ func (d *Daemon) handleHub(ctx context.Context, req protocol.Request) protocol.R
 		if err = hubArgs(req, &a); err == nil {
 			data, err = d.handleHubRevoke(ctx, a)
 		}
+	case protocol.CmdHubProbe:
+		var a protocol.HubProbeArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubProbe(ctx, a)
+		}
 	case protocol.CmdHubSync:
 		d.hubDropCaches()
 		d.hubPolicyDue()

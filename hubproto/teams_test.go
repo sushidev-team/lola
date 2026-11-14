@@ -80,6 +80,12 @@ func TestCreateOrgRequestValidate(t *testing.T) {
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	// No code: a hub opened to code-less creation takes it.
+	open := ok
+	open.Code = ""
+	if err := open.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	for name, mut := range map[string]func(*CreateOrgRequest){
 		"code":       func(r *CreateOrgRequest) { r.Code = "short" },
 		"org":        func(r *CreateOrgRequest) { r.Org = "Acme" },

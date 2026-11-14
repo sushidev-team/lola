@@ -29,6 +29,7 @@ import (
 
 // Paths of the team frames.
 const (
+	PathHub         = "/v1/hub"                // GET (unsigned) -> HubInfo
 	PathOrgs        = "/v1/orgs"               // POST CreateOrgRequest -> CreateOrgResponse (create code)
 	PathOrgSettings = "/v1/org/settings"       // GET [?teams=1] -> OrgSettingsView; POST OrgSettingsRequest -> OrgSettingsView
 	PathOrgInvites  = "/v1/org/invites"        // POST InviteRequest -> InviteResponse
@@ -134,10 +135,23 @@ func VerifyAdmin(req *http.Request, body []byte, org string, pub ed25519.PublicK
 	return nil
 }
 
+// ---- what a hub says about itself ------------------------------------------
+
+// HubInfo (GET /v1/hub) is what a hub tells anyone who asks, BEFORE they are
+// enrolled: the request is unsigned and the answer is the same for every
+// caller. It holds no name, no count and nothing about an org.
+type HubInfo struct {
+	// OpenTeams: a team can be created right now without a create code. It
+	// is a hint for a form; POST /v1/orgs is the gate.
+	OpenTeams bool `json:"open_teams"`
+}
+
 // ---- create a team ---------------------------------------------------------
 
 // CreateOrgRequest (POST /v1/orgs) creates an org and enrolls its first
 // device in one step. Code is a one-time create code from the hub operator.
+// It is empty only for a hub the operator opened to code-less creation (a hub
+// that is not answers 401).
 // The request carries BOTH signatures: the device's (as an enrollment does)
 // and the admin key's over [AdminCanonicalString] with Org, which proves the
 // creator holds the admin key it registers.
@@ -146,7 +160,7 @@ func VerifyAdmin(req *http.Request, body []byte, org string, pub ed25519.PublicK
 // is the key members pin, and it reaches them only inside an invite the
 // admin's own app builds. The hub's copy never reaches a daemon.
 type CreateOrgRequest struct {
-	Code           string `json:"code"`
+	Code           string `json:"code,omitempty"`
 	Org            string `json:"org"`
 	DeviceName     string `json:"device_name"`
 	PublicKey      string `json:"public_key"`       // the device's, EncodePublicKey form
@@ -156,7 +170,7 @@ type CreateOrgRequest struct {
 
 // Validate checks the request's shape.
 func (r CreateOrgRequest) Validate() error {
-	if !tokenRe.MatchString(r.Code) {
+	if r.Code != "" && !tokenRe.MatchString(r.Code) {
 		return invalid("code", "bad create code")
 	}
 	if !ValidOrg(r.Org) {

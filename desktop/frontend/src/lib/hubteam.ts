@@ -26,16 +26,25 @@ export const DIGEST_WEBHOOK_RE = /^https:\/\/hooks\.slack\.com\/services\/[A-Za-
 /** hubproto.ValidMemberLabel. */
 const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/;
 
-export type CreateCodeResult = { ok: true; url: string } | { ok: false; error: string };
+/** open: a bare hub address, for a hub that takes a creation without a code. */
+export type CreateCodeResult = { ok: true; url: string; open?: true } | { ok: false; error: string };
 
-/** Parses lola-hub-create:<url>#<code>. Errors never echo the input. */
+/**
+ * Parses lola-hub-create:<url>#<code>, or a bare hub address for a hub its
+ * operator opened to creation without a code. Errors never echo the input.
+ */
 export function parseCreateCode(input: string): CreateCodeResult {
   const s = input.trim();
   const fail = (error: string): CreateCodeResult => ({ ok: false, error });
-  if (!s) return fail("Paste the create code from your hub operator.");
+  if (!s) return fail("Paste the create code from your hub operator, or the hub’s address.");
   if (s.length > MAX_CODE) return fail("This is too long to be a create code.");
   if (/[ \t\r\n]/.test(s)) return fail("A create code is one line with no spaces. Copy it again in one piece.");
   if (s.startsWith("lola-hub:")) return fail("This is an invite to an existing team. Use “Join a team” instead.");
+  if (/^https?:\/\//i.test(s)) {
+    const url = s.replace(/\/$/, "");
+    if (hubURLError(url)) return fail("This hub address is not valid. Use the hub’s base URL, like https://hub.example.com.");
+    return { ok: true, url, open: true };
+  }
   if (!s.startsWith(CREATE_PREFIX)) return fail("This is not a create code. It starts with lola-hub-create:");
   const rest = s.slice(CREATE_PREFIX.length);
   const at = rest.indexOf("#");
@@ -44,6 +53,40 @@ export function parseCreateCode(input: string): CreateCodeResult {
   if (hubURLError(url)) return fail("The create code’s hub URL is not valid. Ask your hub operator for a new one.");
   if (!TOKEN_RE.test(rest.slice(at + 1))) return fail("This create code is incomplete. Copy it again in one piece.");
   return { ok: true, url };
+}
+
+/**
+ * What a person enters first to create a team: the hub's address. A whole
+ * create line (lola-hub-create:<url>#<code>) is taken too, since it names the
+ * hub: `line` is then set and no code is asked again.
+ */
+export type HubAddressResult = { ok: true; url: string; line?: string } | { ok: false; error: string };
+
+export function parseHubAddress(input: string): HubAddressResult {
+  const s = input.trim();
+  if (!s) return { ok: false, error: "Enter the hub’s address, like https://hub.example.com." };
+  const r = parseCreateCode(s);
+  if (!r.ok) return r;
+  return r.open ? { ok: true, url: r.url } : { ok: true, url: r.url, line: s };
+}
+
+export type CreateArgResult = { ok: true; code: string } | { ok: false; error: string };
+
+/**
+ * The create code a person enters for a hub that asked for one: the code
+ * alone, or the whole line the operator sent. The answer is what the daemon
+ * takes (the whole line). A line for ANOTHER hub is refused. Errors never
+ * echo the input.
+ */
+export function createCodeFor(hubURL: string, input: string): CreateArgResult {
+  const s = input.trim();
+  if (!s) return { ok: false, error: "Paste the create code from your hub operator." };
+  if (TOKEN_RE.test(s)) return { ok: true, code: `${CREATE_PREFIX}${hubURL}#${s}` };
+  const r = parseCreateCode(s);
+  if (!r.ok) return r.error.startsWith("This is not a create code") ? { ok: false, error: "This is not a create code. Copy it again in one piece." } : r;
+  if (r.open) return { ok: false, error: "This is an address, not a create code." };
+  if (r.url !== hubURL) return { ok: false, error: "This create code is for another hub. Change the hub address, or ask for a code for this hub." };
+  return { ok: true, code: s };
 }
 
 /** Turns what a person types into a team name: lowercase, dashes for gaps. */
@@ -109,7 +152,10 @@ export function statusClassText(cls: string | undefined): string {
 export function teamErrorText(raw: string): string {
   const s = raw.replace(/^Error:\s*/, "");
   const rules: [RegExp, string][] = [
-    [/accepted the create code/i, "The hub accepted the create code, but this Mac could not finish saving the team. The code is now used: ask your hub operator to check the team."],
+    [/did not answer like a lola hub/i, "That address did not answer like a Lola hub. Check the address."],
+    [/needs a create code/i, "This hub needs a create code to create a team. Ask your hub operator for one."],
+    [/as many teams as it allows/i, "This hub holds as many teams as it allows. Ask your hub operator for a create code."],
+    [/accepted the create code/i, "The hub created the team, but this Mac could not finish saving it. A create code is now used: ask your hub operator to check the team."],
     [/already holds a team admin key/i, "This Mac holds the admin key of another team. Creating a team here would discard that key."],
     [/already joined/i, "This Mac is already in a team. Leave it first."],
     [/not writable|read-only|permission denied/i, "Lola cannot write its settings folder, so nothing was sent."],

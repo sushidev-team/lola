@@ -72,6 +72,7 @@ export type {
     HubOutcomeInfo,
     HubOwnerInfo,
     HubPolicyInfo,
+    HubProbeData,
     HubReleaseData,
     HubRepoHealth,
     HubRevokeData,

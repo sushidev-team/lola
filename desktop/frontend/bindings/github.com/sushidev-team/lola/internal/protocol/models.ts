@@ -890,7 +890,8 @@ export interface HubClaimData {
 export interface HubCreateTeamArgs {
     /**
      * Code is the whole create code from the hub operator
-     * (lola-hub-create:<url>#<code>): it names the hub.
+     * (lola-hub-create:<url>#<code>): it names the hub. For a hub that lets
+     * a team be created without a code it is just the hub's URL.
      */
     "code": string;
 
@@ -1124,6 +1125,23 @@ export interface HubPolicyInfo {
     "applied": boolean;
     "appliedKeys"?: HubAppliedKey[] | null;
     "applyNote"?: string;
+}
+
+/**
+ * HubProbeData answers cmd=hubProbe.
+ */
+export interface HubProbeData {
+    /**
+     * URL is the hub's address as lola will use it.
+     */
+    "url": string;
+
+    /**
+     * OpenTeams: the hub lets a team be created without a create code right
+     * now. False also for a hub too old to say. The hub decides again when
+     * the team is created.
+     */
+    "openTeams": boolean;
 }
 
 /**

@@ -1,12 +1,14 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -37,6 +39,14 @@ var (
 	// ErrAdminKeyExists: creating a team would replace the admin key of
 	// another team.
 	ErrAdminKeyExists = errors.New("hub: this machine already holds a team admin key")
+	// ErrNotAHub: the address answered, but not as a lola hub does.
+	ErrNotAHub = errors.New("hub: that address did not answer like a lola hub")
+	// ErrCodeRequired: the hub does not let a team be created without a
+	// create code.
+	ErrCodeRequired = errors.New("hub: this hub needs a create code to create a team; ask its operator for one")
+	// ErrHubFull: a hub open to code-less creation holds as many teams as it
+	// allows.
+	ErrHubFull = errors.New("hub: this hub holds as many teams as it allows; ask its operator for a create code")
 	// ErrCodeUsed wraps a failure AFTER the hub accepted the create code: the
 	// code is spent, so retrying with it fails.
 	ErrCodeUsed = errors.New("hub: the hub accepted the create code (it is now used)")
@@ -280,10 +290,78 @@ func (k *AdminKey) Invite(token string) string {
 
 // ---- create a team ---------------------------------------------------------
 
+// ParseCreateTarget reads what a person pastes to create a team: a create
+// code (lola-hub-create:<url>#<code>), or a bare hub URL for a hub that lets
+// a team be created without one (code is then ""). No error echoes the input:
+// a create code is a secret.
+func ParseCreateTarget(s string) (url, code string, err error) {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, hubproto.CreateCodePrefix) {
+		if url, code, err = hubproto.ParseCreateCode(s); err != nil {
+			return "", "", errors.New("hub: that is not a create code (lola-hub-create:<url>#<code>)")
+		}
+		return url, code, nil
+	}
+	if url, err = hubproto.CheckHubURL(s); err != nil {
+		return "", "", errors.New("hub: paste a create code (lola-hub-create:<url>#<code>) or the hub's https address")
+	}
+	return url, "", nil
+}
+
+// probeLimit bounds a hub's answer to GET /v1/hub.
+const probeLimit = 4 << 10
+
+// Probe asks a hub, BEFORE this machine holds anything there, whether a team
+// can be created without a create code. The request is unsigned and sends
+// nothing about this machine: no key is created for it.
+//
+// A hub that predates the question (404) needs a code. hc nil = a client that
+// follows no redirect.
+func Probe(ctx context.Context, rawURL string, hc *http.Client) (url string, info hubproto.HubInfo, err error) {
+	if url, err = hubproto.CheckHubURL(strings.TrimSpace(rawURL)); err != nil {
+		return "", info, errors.New("hub: enter the hub's https address, like https://hub.example.com")
+	}
+	if err = config.ValidateHubURL(url); err != nil {
+		return "", info, err
+	}
+	if hc == nil {
+		hc = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	ctx, cancel := context.WithTimeout(ctx, DefaultRequestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url+hubproto.PathHub, nil)
+	if err != nil {
+		return "", info, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", info, fmt.Errorf("hub: not reachable: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, probeLimit+1))
+	if err != nil {
+		return "", info, fmt.Errorf("hub: not reachable: %w", err)
+	}
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return url, hubproto.HubInfo{}, nil
+	case resp.StatusCode != http.StatusOK || len(data) > probeLimit:
+		return "", info, ErrNotAHub
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&info) != nil {
+		return "", hubproto.HubInfo{}, ErrNotAHub
+	}
+	return url, info, nil
+}
+
 // CreateTeamOptions configures CreateTeam. ConfigPath and StateDir are
 // required.
 type CreateTeamOptions struct {
-	// Code is the whole create code, lola-hub-create:<url>#<code>.
+	// Code is the whole create code, lola-hub-create:<url>#<code>, or just
+	// the hub's URL for a hub that lets a team be created without a code.
 	Code string
 	// Org is the new team's name.
 	Org        string
@@ -324,9 +402,9 @@ func CreateTeam(ctx context.Context, o CreateTeamOptions) (CreateTeamResult, err
 	if o.ConfigPath == "" || o.StateDir == "" {
 		return CreateTeamResult{}, errors.New("hub: creating a team needs a config path and a state dir")
 	}
-	url, code, err := hubproto.ParseCreateCode(o.Code)
+	url, code, err := ParseCreateTarget(o.Code)
 	if err != nil {
-		return CreateTeamResult{}, errors.New("hub: that is not a create code (lola-hub-create:<url>#<code>)")
+		return CreateTeamResult{}, err
 	}
 	if err := config.ValidateHubURL(url); err != nil {
 		return CreateTeamResult{}, err
@@ -407,6 +485,17 @@ func CreateTeam(ctx context.Context, o CreateTeamOptions) (CreateTeamResult, err
 	}
 	if err != nil {
 		undo()
+		var ae *APIError
+		if code == "" && errors.As(err, &ae) {
+			// Fixed sentences: without a code these two answers have one
+			// meaning each.
+			switch ae.Status {
+			case http.StatusUnauthorized:
+				return CreateTeamResult{}, ErrCodeRequired
+			case http.StatusServiceUnavailable:
+				return CreateTeamResult{}, ErrHubFull
+			}
+		}
 		return CreateTeamResult{}, err
 	}
 	res := CreateTeamResult{KeyCreated: errors.Is(keyErr, ErrNoKey), AdminKeyID: admin.KeyID, Fingerprint: admin.Fingerprint()}

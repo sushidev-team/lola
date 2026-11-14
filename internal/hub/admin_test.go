@@ -22,14 +22,17 @@ import (
 // teamHub is a hub that knows one create code and verifies BOTH signatures
 // the way lola-hub does: the device's, then the admin key's for the org.
 type teamHub struct {
-	t        *testing.T
-	code     string
-	org      string
-	device   ed25519.PublicKey
-	admin    ed25519.PublicKey
-	adminID  string
-	creates  int
-	lastBody []byte
+	t       *testing.T
+	code    string
+	org     string
+	device  ed25519.PublicKey
+	admin   ed25519.PublicKey
+	adminID string
+	creates int
+	// open: the hub takes a creation without a code. full: it answers that
+	// it holds as many teams as it allows.
+	open, full bool
+	lastBody   []byte
 	// reply overrides the answer of an admin route ("" path = none).
 	reply map[string]func() (int, any)
 }
@@ -71,8 +74,12 @@ func (h *teamHub) serve(w http.ResponseWriter, r *http.Request) {
 		if err := hubproto.VerifyAdmin(r, body, req.Org, apub); err != nil {
 			h.t.Errorf("create: admin signature: %v", err)
 		}
-		if req.Code != h.code {
+		if req.Code != h.code && !(h.open && req.Code == "") {
 			h.refuse(w, 401, hubproto.CodeUnauthorized)
+			return
+		}
+		if h.full && req.Code == "" {
+			h.refuse(w, 503, hubproto.CodeUnavailable)
 			return
 		}
 		h.creates++
@@ -224,6 +231,90 @@ func TestAdminKeyNeverRenders(t *testing.T) {
 	for _, s := range []string{fmt.Sprintf("%v", admin), fmt.Sprintf("%+v", admin), fmt.Sprintf("%#v", admin), string(js)} {
 		if strings.Contains(s, rec.Seed) {
 			t.Errorf("rendering leaks the seed: %s", s)
+		}
+	}
+}
+
+// A hub open to code-less creation: the hub's address alone creates a team.
+func TestCreateTeamWithoutCode(t *testing.T) {
+	h, o := teamSetup(t)
+	h.open = true
+	o.Code = "http://127.0.0.1:1/"
+	res, err := CreateTeam(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Identity.URL != "http://127.0.0.1:1" || res.Identity.Org != "acme" || h.creates != 1 {
+		t.Fatalf("result %+v, creates %d", res.Identity, h.creates)
+	}
+	if strings.Contains(string(h.lastBody), `"code"`) {
+		t.Errorf("a code field was sent: %s", h.lastBody)
+	}
+	if admin, err := LoadAdminKey(o.StateDir); err != nil || admin.Pending {
+		t.Fatalf("admin key = %v, %v", admin, err)
+	}
+
+	for name, tc := range map[string]struct {
+		full bool
+		want error
+	}{"closed hub": {false, ErrCodeRequired}, "full hub": {true, ErrHubFull}} {
+		t.Run(name, func(t *testing.T) {
+			h, o := teamSetup(t)
+			h.open, h.full = tc.full, tc.full
+			o.Code = "http://127.0.0.1:1"
+			if _, err := CreateTeam(context.Background(), o); !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v", err)
+			}
+			if _, err := LoadAdminKey(o.StateDir); !errors.Is(err, ErrNoAdminKey) {
+				t.Errorf("admin key left behind: %v", err)
+			}
+		})
+	}
+	// Not a hub address: http to a host that is not loopback.
+	_, o = teamSetup(t)
+	o.Code = "http://hub.example.com"
+	if _, err := CreateTeam(context.Background(), o); err == nil {
+		t.Fatal("plain http to a remote hub accepted")
+	}
+}
+
+func TestProbe(t *testing.T) {
+	answer := func(status int, body string) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != hubproto.PathHub || r.Method != http.MethodGet || r.Header.Get(hubproto.HeaderDevice) != "" {
+				t.Errorf("probe sent %s %s (device %q)", r.Method, r.URL.Path, r.Header.Get(hubproto.HeaderDevice))
+			}
+			w.WriteHeader(status)
+			io.WriteString(w, body)
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	ctx := context.Background()
+	u := answer(200, `{"open_teams":true}`)
+	if got, info, err := Probe(ctx, u+"/", nil); err != nil || !info.OpenTeams || got != u {
+		t.Fatalf("open: %q %+v %v", got, info, err)
+	}
+	if _, info, err := Probe(ctx, answer(200, `{"open_teams":false}`), nil); err != nil || info.OpenTeams {
+		t.Fatalf("closed: %+v %v", info, err)
+	}
+	// A hub that predates the question needs a code.
+	if _, info, err := Probe(ctx, answer(404, `{"error":"not found"}`), nil); err != nil || info.OpenTeams {
+		t.Fatalf("old hub: %+v %v", info, err)
+	}
+	for name, u := range map[string]string{
+		"not json":      answer(200, "<html>"),
+		"unknown field": answer(200, `{"open_teams":true,"run":"x"}`),
+		"server error":  answer(500, ""),
+		"redirect":      answer(302, ""),
+	} {
+		if _, info, err := Probe(ctx, u, nil); !errors.Is(err, ErrNotAHub) || info.OpenTeams {
+			t.Errorf("%s: %+v %v", name, info, err)
+		}
+	}
+	for _, bad := range []string{"", "hub.example.com", "http://hub.example.com", "https://u:p@hub.example.com", "https://hub.example.com/?a=1"} {
+		if _, _, err := Probe(ctx, bad, nil); err == nil {
+			t.Errorf("%q accepted", bad)
 		}
 	}
 }

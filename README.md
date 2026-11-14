@@ -1669,7 +1669,8 @@ its own template, and every offer is re-read from GitHub before it is claimed.
 Set it up with `lola hub join` (the invite on stdin); the ed25519
 device key lives in `~/.lola/state/hub-key` (0600) and never in this file, argv
 or a log line. A new team is created from the desktop app (Settings → Team hub →
-Create a team) with a create code from the hub operator: that Mac becomes the
+Create a team) with a create code from the hub operator, or with just the hub's
+address when its operator opened it to creation: that Mac becomes the
 team's admin, holds the team admin key in `~/.lola/state/hub-admin-key` (0600,
 kept on leave) and can then invite teammates, set the team's Linear key, Linear
 team and Slack digest webhook, and remove a Mac from the team. Like `[remote]`, the table is not part of the `[defaults]`

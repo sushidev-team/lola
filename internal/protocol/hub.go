@@ -54,16 +54,37 @@ const (
 	// CmdHubRevoke revokes a device of the team by its display name (Args:
 	// HubRevokeArgs → HubRevokeData).
 	CmdHubRevoke = "hubRevoke"
+	// CmdHubProbe asks a hub, before anything is joined, whether a team can
+	// be created there without a create code (Args: HubProbeArgs →
+	// HubProbeData). It sends nothing about this machine.
+	CmdHubProbe = "hubProbe"
 )
 
 // HubHumanCommands are the hub commands no remote peer and no agent may send.
 var HubHumanCommands = []string{CmdHubJoin, CmdHubLeave, CmdHubBoard, CmdHubOrg, CmdHubClaim, CmdHubRelease, CmdHubSync, CmdHubStats,
-	CmdHubCreateTeam, CmdHubInvite, CmdHubTeamSettings, CmdHubRevoke}
+	CmdHubCreateTeam, CmdHubInvite, CmdHubTeamSettings, CmdHubRevoke, CmdHubProbe}
+
+// HubProbeArgs is Request.Args for cmd=hubProbe.
+type HubProbeArgs struct {
+	// URL is the hub's base URL (https, or http to a loopback host).
+	URL string `json:"url"`
+}
+
+// HubProbeData answers cmd=hubProbe.
+type HubProbeData struct {
+	// URL is the hub's address as lola will use it.
+	URL string `json:"url"`
+	// OpenTeams: the hub lets a team be created without a create code right
+	// now. False also for a hub too old to say. The hub decides again when
+	// the team is created.
+	OpenTeams bool `json:"openTeams"`
+}
 
 // HubCreateTeamArgs is Request.Args for cmd=hubCreateTeam.
 type HubCreateTeamArgs struct {
 	// Code is the whole create code from the hub operator
-	// (lola-hub-create:<url>#<code>): it names the hub.
+	// (lola-hub-create:<url>#<code>): it names the hub. For a hub that lets
+	// a team be created without a code it is just the hub's URL.
 	Code string `json:"code"`
 	// Team is the new team's name (lowercase letters, digits, dashes).
 	Team string `json:"team"`
