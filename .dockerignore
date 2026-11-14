@@ -12,6 +12,7 @@ desktop
 mobile
 docs
 contrib
+hub
 node_modules
 **/node_modules
 /lola

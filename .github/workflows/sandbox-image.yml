@@ -18,6 +18,7 @@ on:
       - 'sandbox/**'
       - '.dockerignore'
       - '**.go'
+      - '!hub/**'
       - 'go.mod'
       - 'go.sum'
       - 'hubproto/**'

@@ -1,0 +1,129 @@
+name: Hub
+
+# The team hub (hub/): check, image, deploy to https://lola.sushidev.kitchen.
+# It runs only for the hub and the wire contract it builds against
+# (hubproto/), so a lola change that touches neither deploys nothing.
+on:
+  push:
+    branches: [main]
+    paths: ['hub/**', 'hubproto/**', '.github/workflows/hub.yml']
+  pull_request:
+    branches: [main]
+    paths: ['hub/**', 'hubproto/**', '.github/workflows/hub.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: hub/go.mod
+          cache: false
+      # The hub and hubproto are stdlib only: the Makefile runs with
+      # GOPROXY=off and nothing is downloaded.
+      - name: make check
+        working-directory: hub
+        run: make check
+
+  build-image:
+    name: Build image
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [test]
+    env:
+      REGISTRY: ${{ secrets.DO_REGISTRY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DO_ACCESS_TOKEN }}
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 600
+      # The context is the repository root (the hub builds against
+      # ../hubproto); hub/Dockerfile.dockerignore keeps it to hub/ and hubproto/.
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: hub/Dockerfile
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.REGISTRY }}/lola-hub:${{ github.sha }}
+            ${{ env.REGISTRY }}/lola-hub:latest
+          cache-from: type=gha,scope=lola-hub
+          cache-to: type=gha,mode=max,scope=lola-hub
+
+  deploy:
+    name: Deploy to sushidev-cluster-02
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [build-image]
+    environment:
+      name: hub-production
+      url: https://lola.sushidev.kitchen
+    # One deploy at a time: the hub is a single process with Recreate rollouts.
+    concurrency:
+      group: hub-deploy-production
+      cancel-in-progress: false
+    env:
+      NAMESPACE: lola-hub
+      OVERLAY: hub/deploy/k8s/overlays/production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DO_ACCESS_TOKEN }}
+      - name: Set kube context
+        run: doctl kubernetes cluster kubeconfig save --expiry-seconds 900 sushidev-cluster-02
+
+      - name: Namespace and registry pull secret
+        run: |
+          kubectl apply -f "$OVERLAY/namespace.yaml"
+          doctl registry kubernetes-manifest --namespace "$NAMESPACE" --name registry-sushidev-registry-01 \
+            | kubectl apply -f -
+
+      # LOLA_HUB_SECRET_KEY seals each org's Linear key and digest webhook in
+      # the store (lola-hub secret-key prints one). It goes through a 0600
+      # temp file, never argv or the rendered manifests. Without it the hub
+      # runs but stores no secret, so escalations stay pending.
+      - name: Hub environment secret
+        id: env-secret
+        env:
+          SECRET_KEY: ${{ secrets.LOLA_HUB_SECRET_KEY }}
+        run: |
+          umask 077
+          f="$(mktemp)"
+          trap 'rm -f "$f"' EXIT
+          : > "$f"
+          [ -n "$SECRET_KEY" ] && printf 'LOLA_HUB_SECRET_KEY=%s\n' "$SECRET_KEY" >> "$f"
+          out="$(kubectl -n "$NAMESPACE" create secret generic lola-hub-env --from-env-file="$f" \
+            --dry-run=client -o yaml | kubectl apply -f -)"
+          echo "$out"
+          case "$out" in *configured*) echo "changed=true" >> "$GITHUB_OUTPUT" ;; esac
+
+      - name: Apply manifests
+        run: |
+          yq -i '(.images[] | select(.name == "registry.digitalocean.com/sushidev-registry-01/lola-hub")).newTag = strenv(GITHUB_SHA)' \
+            "$OVERLAY/kustomization.yaml"
+          kubectl apply -k "$OVERLAY"
+
+      # The hub reads its environment once at startup. A secret change on a
+      # deploy whose image tag did not change still needs a new pod.
+      - name: Restart on secret change
+        if: steps.env-secret.outputs.changed == 'true'
+        run: kubectl -n "$NAMESPACE" rollout restart deployment/lola-hub
+
+      - name: Wait for rollout
+        run: kubectl -n "$NAMESPACE" rollout status deployment/lola-hub --timeout=300s
