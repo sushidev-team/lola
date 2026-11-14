@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.0](https://github.com/sushidev-team/lola/compare/v0.6.0...v0.7.0) (2026-11-14)
+
+
+### Features
+
+* **desktop:** open sessions from Git context menus ([b107fb9](https://github.com/sushidev-team/lola/commit/b107fb9e80f2038f440bdffdf339f92679e7f260))
+* **desktop:** show work in progress of other worktrees in the Git graph ([e2ff2ad](https://github.com/sushidev-team/lola/commit/e2ff2ad0c443ea8443d46f02c3d56028a96c686a))
+* **hub:** add team creation and team-admin controls ([4059746](https://github.com/sushidev-team/lola/commit/405974614bed56e4c936afa94bcdc09c07c32f84))
+* **hub:** let teams be created on hubs that accept no code ([038d2b9](https://github.com/sushidev-team/lola/commit/038d2b95f1c71b33f0addcde936e88e42c83a7ad))
+* **hub:** move the team hub into this repository as hub/ ([179b1a2](https://github.com/sushidev-team/lola/commit/179b1a27c5371ba46f6cda8f11557aaf70d2ffa5))
+* **hub:** round out the chore lifecycle, team view and onboarding ([8a3e771](https://github.com/sushidev-team/lola/commit/8a3e771bf9e4eca56de30009a36f9d2f9d1df61a))
+
+
+### Bug Fixes
+
+* **config:** allow inactive pickup drafts without blocking settings ([d84a227](https://github.com/sushidev-team/lola/commit/d84a227c2970c85ed9d33e9f5ad42978d9efe0a8))
+* **deps:** upgrade vitest and uuid for security advisories ([635fb24](https://github.com/sushidev-team/lola/commit/635fb2499d53384a2efdf7dec02158b99bf0a7f7))
+* **deps:** upgrade vitest and uuid for security advisories ([a8276a1](https://github.com/sushidev-team/lola/commit/a8276a13d8c7727bfac1eba04c016a8c8211e3a9))
+* **desktop:** isolate updater mounts and clean failed installs ([b7c6960](https://github.com/sushidev-team/lola/commit/b7c696080a6ee5b5d4bb37b14c24bf0ef5e25829))
+* **desktop:** refresh worktree commits and label fast-forward merges ([c286391](https://github.com/sushidev-team/lola/commit/c2863911683a9708366ecfe9d04e4a95678bfc6f))
+
 ## [0.6.0](https://github.com/sushidev-team/lola/compare/v0.5.0...v0.6.0) (2026-11-13)
 
 
