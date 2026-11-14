@@ -29,6 +29,7 @@ export {
 };
 
 export type {
+    AICommitProgress,
     AppearanceDTO,
     CLIInfoDTO,
     CLIInstallDTO,

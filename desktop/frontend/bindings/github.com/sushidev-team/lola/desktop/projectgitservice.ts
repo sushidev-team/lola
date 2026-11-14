@@ -19,6 +19,14 @@ import * as gitdiff$0 from "../internal/gitdiff/models.js";
 // @ts-ignore: Unused imports
 import * as projectgit$0 from "../internal/projectgit/models.js";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as $models from "./models.js";
+
+export function AICommitStatus(id: string): $CancellablePromise<$models.AICommitProgress> {
+    return $Call.ByID(2622744063, id);
+}
+
 export function Amend(project: string, worktree: string, message: string, expectedHead: string): $CancellablePromise<void> {
     return $Call.ByID(4236251129, project, worktree, message, expectedHead);
 }
@@ -44,6 +52,10 @@ export function CachedIdentities(project: string, shas: string[] | null): $Cance
 
 export function CanFastForward(project: string, worktree: string, request: projectgit$0.BranchRequest): $CancellablePromise<boolean> {
     return $Call.ByID(1969361683, project, worktree, request);
+}
+
+export function CancelAICommit(id: string): $CancellablePromise<void> {
+    return $Call.ByID(3035722579, id);
 }
 
 export function Commit(project: string, worktree: string, message: string): $CancellablePromise<void> {
@@ -104,6 +116,10 @@ export function LastCommitMessage(project: string, worktree: string, expectedHea
     return $Call.ByID(1052261042, project, worktree, expectedHead);
 }
 
+export function PrepareAICommit(project: string, worktree: string): $CancellablePromise<projectgit$0.AICommitPreparation> {
+    return $Call.ByID(3295481682, project, worktree);
+}
+
 export function PrepareDiscard(project: string, worktree: string): $CancellablePromise<projectgit$0.DiscardPlan> {
     return $Call.ByID(2827308293, project, worktree);
 }
@@ -130,6 +146,14 @@ export function Snapshot(project: string, worktree: string, ref: string, limit: 
 
 export function Stage(project: string, worktree: string, paths: string[] | null): $CancellablePromise<projectgit$0.File[] | null> {
     return $Call.ByID(1854711220, project, worktree, paths);
+}
+
+/**
+ * StartAICommit reserves the mutation lock BEFORE returning a job ID. Other
+ * mutations fail immediately instead of queuing surprising actions after it.
+ */
+export function StartAICommit(project: string, worktree: string, token: string, includeStaged: boolean): $CancellablePromise<$models.AICommitProgress> {
+    return $Call.ByID(1932630029, project, worktree, token, includeStaged);
 }
 
 export function StashApply(project: string, worktree: string, sha: string, expectedHead: string, pop: boolean): $CancellablePromise<void> {

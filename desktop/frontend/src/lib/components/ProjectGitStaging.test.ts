@@ -5,7 +5,7 @@ import ProjectGitStaging from './ProjectGitStaging.svelte';
 import { ProjectGitState } from '$lib/projectgit.svelte';
 import { confirm } from '$lib/confirm.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
-const api = vi.hoisted(() => ({ DraftCommitMessage: vi.fn(), PrepareDiscard: vi.fn(), DiscardUnstaged: vi.fn(), Snapshot: vi.fn(), Identities: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), AmendNeedsConfirmation: vi.fn(), LastCommitMessage: vi.fn() }));
+const api = vi.hoisted(() => ({ PrepareAICommit: vi.fn(), StartAICommit: vi.fn(), AICommitStatus: vi.fn(), CancelAICommit: vi.fn(), DraftCommitMessage: vi.fn(), PrepareDiscard: vi.fn(), DiscardUnstaged: vi.fn(), Snapshot: vi.fn(), Identities: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), AmendNeedsConfirmation: vi.fn(), LastCommitMessage: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 const head = 'a'.repeat(40);
 function snapshot(): GitSnapshot { return { path:'/repo',branch:'main',head,upstream:'origin/main',refs:[],remotes:[],commits:[],worktrees:[],hasMore:false,signing:{enabled:true,format:'ssh',key:''}, files:[{path:'src/app.ts',oldPath:'',index:'M',worktree:' ',untracked:false,conflict:false},{path:'src/new.ts',oldPath:'',index:'?',worktree:'?',untracked:true,conflict:false}] }; }
@@ -221,4 +221,57 @@ describe('Project Git staging',()=>{
    await fireEvent.click(signing);expect(git.amend).toBe(false);
  });
 
+});
+
+const planning = {id:'job-1',phase:'planning',completed:0,total:0,subject:'',stopping:false,done:false,error:''};
+describe('AI commit',()=>{
+ it('confirms existing staged files before starting and keeps the draft',async()=>{
+  const {git,oncommitted}=setup();git.subject='Keep my manual draft';
+  api.PrepareAICommit.mockResolvedValue({token:'pinned',staged:1,files:2});
+  api.StartAICommit.mockResolvedValue(planning);
+  api.AICommitStatus.mockResolvedValue({...planning,phase:'complete',done:true,completed:2,total:2});
+  await fireEvent.click(screen.getByRole('button',{name:'Commit all changes with AI'}));
+  await waitFor(()=>expect(confirm.request?.title).toBe('Include staged changes?'));
+  expect(confirm.request?.detail).toContain('both staged and unstaged');
+  expect(api.StartAICommit).not.toHaveBeenCalled();confirm.cancel();
+  await fireEvent.click(screen.getByRole('button',{name:'Commit all changes with AI'}));
+  await waitFor(()=>expect(confirm.request).not.toBeNull());confirm.accept();
+  await waitFor(()=>expect(oncommitted).toHaveBeenCalledOnce());
+  expect(api.StartAICommit).toHaveBeenCalledWith('lola','','pinned',true);
+  expect(git.subject).toBe('Keep my manual draft');expect(git.notice).toBe('Created 2 commits.');
+ });
+ it('locks the whole section and keeps Cancel reachable until cancellation finishes',async()=>{
+  const {git,view}=setup([snapshot().files[1]]);
+  api.PrepareAICommit.mockResolvedValue({token:'pinned',staged:0,files:1});
+  api.StartAICommit.mockResolvedValue(planning);api.AICommitStatus.mockResolvedValue(planning);
+  await fireEvent.click(screen.getByRole('button',{name:'Commit all changes with AI'}));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Cancel'})).toBeEnabled());
+  expect(confirm.request).toBeNull();expect(api.StartAICommit).toHaveBeenCalledWith('lola','','pinned',false);
+  expect(view.container.querySelector('.staging-panel')).toHaveAttribute('aria-busy','true');
+  expect(view.container.querySelector('.staging-files')).toHaveProperty('inert',true);
+  expect(view.container.querySelector('.commit-composer')).toHaveProperty('inert',true);
+  expect(screen.getByRole('button',{name:'Stage all'})).toBeDisabled();
+  expect(screen.getByRole('button',{name:'Discard all unstaged changes'})).toBeDisabled();
+  expect(screen.getByLabelText('Commit subject')).toBeDisabled();
+  await fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+  expect(api.CancelAICommit).toHaveBeenCalledWith('job-1');expect(git.busy).toBe('ai-commit');
+  api.AICommitStatus.mockResolvedValue({...planning,phase:'cancelled',done:true,completed:1,total:2,stopping:true});
+  await waitFor(()=>expect(git.busy).toBe(''));
+  expect(git.notice).toContain('Cancelled after 1 commit');expect(api.Commit).not.toHaveBeenCalled();
+ });
+ it('keeps the section locked after a transient progress failure',async()=>{
+  const {git}=setup();api.StartAICommit.mockResolvedValue(planning);
+  api.AICommitStatus.mockRejectedValueOnce(new Error('Disconnected')).mockResolvedValue({...planning,phase:'cancelled',done:true});
+  const done=git.commitWithAI('pinned',true);
+  await waitFor(()=>expect(git.error).toContain('Disconnected'));
+  expect(git.busy).toBe('ai-commit');await git.cancelAICommit();expect(api.CancelAICommit).toHaveBeenCalledWith('job-1');
+  await done;expect(git.busy).toBe('');
+ });
+ it('joins selected and all actions without repeating Stage',async()=>{
+  const {onact}=setup();await fireEvent.click(screen.getByRole('button',{name:'Inspect unstaged src/new.ts'}));
+  const all=screen.getByRole('button',{name:'Stage all'});expect(all).toHaveTextContent(/^All$/);
+  expect(all.closest('.stage-group-actions')).toHaveClass('joined');
+  expect(screen.getByRole('button',{name:'Stage 1 selected files'})).toHaveTextContent('Stage 1');
+  await fireEvent.click(all);expect(onact).toHaveBeenCalledWith('stage',['src/new.ts']);
+ });
 });

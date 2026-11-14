@@ -53,6 +53,10 @@ func (s *ProjectGitService) DraftCommitMessage(project, worktree, draft string) 
 }
 
 func (s *ProjectGitService) runGitDraft(ctx context.Context, project, instruction, input string) (string, error) {
+	return s.runGitHelper(ctx, project, instruction, input, false)
+}
+
+func (s *ProjectGitService) runGitHelper(ctx context.Context, project, instruction, input string, planning bool) (string, error) {
 	run := s.draftCommit
 	if run == nil {
 		home, err := config.Home()
@@ -68,13 +72,22 @@ func (s *ProjectGitService) runGitDraft(ctx context.Context, project, instructio
 		if err != nil {
 			return "", err
 		}
+		action := "draft"
+		if planning {
+			action = "plan"
+			model.Timeout = 120 * time.Second
+			model.Model = "sonnet"
+		}
 		kind := cfg.AgentForProject(project)
-		if profile, enabled := cfg.AIProfile(kind, "draft"); enabled {
+		if profile, enabled := cfg.AIProfile(kind, action); enabled {
 			model.Agent = agent.Parse(kind)
 			model.Model = profile.Model
 			model.Effort = profile.Effort
 		}
 		run = model.Summarize
+		if planning {
+			run = model.Complete
+		}
 	}
 	return run(ctx, instruction, input)
 }

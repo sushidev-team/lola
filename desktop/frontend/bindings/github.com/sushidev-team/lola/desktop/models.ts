@@ -8,6 +8,17 @@ import * as config$0 from "../internal/config/models.js";
 // @ts-ignore: Unused imports
 import * as reviewprofile$0 from "../internal/reviewprofile/models.js";
 
+export interface AICommitProgress {
+    "id": string;
+    "phase": string;
+    "completed": number;
+    "total": number;
+    "subject": string;
+    "stopping": boolean;
+    "done": boolean;
+    "error": string;
+}
+
 /**
  * AppearanceDTO keeps a fixed choice alongside the two system-mode choices.
  */

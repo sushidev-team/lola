@@ -340,3 +340,26 @@ func tail(s string, n int) string {
 	}
 	return s[len(s)-n:]
 }
+
+func TestCompletePreservesFullInputAndRefusesOversize(t *testing.T) {
+	old := runClaude
+	defer func() { runClaude = old }()
+	calls := 0
+	runClaude = func(_ context.Context, _, _, _, _, input string, _ time.Duration) (string, error) {
+		calls++
+		if len(input) != 20000 {
+			t.Fatalf("input truncated: %d", len(input))
+		}
+		return "{}", nil
+	}
+	c := Client{}
+	if _, err := c.Complete(context.Background(), "JSON", strings.Repeat("x", 20000)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Complete(context.Background(), "JSON", strings.Repeat("x", 128*1024+1)); err == nil {
+		t.Fatal("accepted oversized input")
+	}
+	if calls != 1 {
+		t.Fatal(calls)
+	}
+}
