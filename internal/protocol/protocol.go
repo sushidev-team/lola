@@ -1500,3 +1500,32 @@ type PairBeginData struct {
 type GoalArgs struct {
 	ID string `json:"id"`
 }
+
+// BulkProjectsArgs is the argument payload for cmd=bulkProjects: change the
+// same settings on many [[project]] tables at once. Nil fields are left alone.
+// Label fields are references (UUID, name or "group/name") resolved by the
+// daemon against each project's own team, so one name works across teams that
+// give the same label different ids. Projects empty = every project.
+type BulkProjectsArgs struct {
+	Projects       []string  `json:"projects,omitempty"`
+	Agent          *string   `json:"agent,omitempty"`
+	MatchLabels    *[]string `json:"matchLabels,omitempty"`
+	MatchMode      *string   `json:"matchMode,omitempty"`
+	OnSentSetLabel *string   `json:"onSentSetLabel,omitempty"`
+	BlockedLabel   *string   `json:"blockedLabel,omitempty"`
+	DryRun         bool      `json:"dryRun,omitempty"`
+}
+
+// BulkProjectChange is one project's outcome in BulkProjectsData.
+type BulkProjectChange struct {
+	Project string   `json:"project"`
+	Changed []string `json:"changed,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// BulkProjectsData is Response.Data for cmd=bulkProjects. When any project has
+// an Error nothing was saved.
+type BulkProjectsData struct {
+	Changes []BulkProjectChange `json:"changes"`
+	Applied bool                `json:"applied"`
+}

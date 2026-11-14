@@ -23,6 +23,7 @@ const remoteCmdPrefix = "remote."
 //	                speaking through.
 //	renameProject   rewrites project identity; a config operation, and config
 //	                is not a phone job.
+//	bulkProjects    rewrites many projects' settings at once; config again.
 //	hookEvent       the agent's OWN in-pane callback path, and a remote write
 //	                straight into the send-keys safety gate. One forged frame
 //	                with event "stop" sets AtPrompt AND AtPromptVerified and
@@ -65,6 +66,7 @@ var deniedCommands = map[string]bool{
 	"stop":                     true,
 	"reload":                   true,
 	"renameProject":            true,
+	"bulkProjects":             true,
 	"hookEvent":                true,
 	"agentReport":              true,
 	"pairBegin":                true,
