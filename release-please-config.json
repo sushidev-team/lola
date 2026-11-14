@@ -13,7 +13,21 @@
           "path": "desktop/build/config.yml",
           "jsonpath": "$.info.version"
         }
+      ],
+      "include-component-in-tag": false,
+      "exclude-paths": [
+        "hubproto"
       ]
+    },
+    "hubproto": {
+      "release-type": "go",
+      "package-name": "hubproto",
+      "component": "hubproto",
+      "include-component-in-tag": true,
+      "tag-separator": "/",
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": false
     }
   }
 }

@@ -8,6 +8,12 @@ name: Release Please
 # Note: a tag created by release-please via GITHUB_TOKEN does NOT itself trigger
 # a `push: tags` workflow (GitHub blocks that recursion), which is exactly why
 # build.yml is invoked here via `uses:` rather than by a tag trigger.
+#
+# Two packages: "." (lola itself, tags vX.Y.Z) and "hubproto" (the wire
+# contract lola-hub imports; a separate Go module, so its tags must read
+# hubproto/vX.Y.Z). The outputs used below are the ROOT package's: a release
+# of hubproto alone builds no DMG and no sandbox image. Dependabot in lola-hub
+# picks a new hubproto tag up and opens the PR that moves its go.mod pin.
 on:
   push:
     branches: [main]
