@@ -42,6 +42,10 @@ export function CachedIdentities(project: string, shas: string[] | null): $Cance
     return $Call.ByID(3592592630, project, shas);
 }
 
+export function CanFastForward(project: string, worktree: string, request: projectgit$0.BranchRequest): $CancellablePromise<boolean> {
+    return $Call.ByID(1969361683, project, worktree, request);
+}
+
 export function Commit(project: string, worktree: string, message: string): $CancellablePromise<void> {
     return $Call.ByID(2416522199, project, worktree, message);
 }

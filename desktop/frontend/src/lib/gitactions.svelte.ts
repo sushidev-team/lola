@@ -1,4 +1,5 @@
 import { tick } from 'svelte';
+import { ProjectGitService } from '@bindings/desktop';
 import { confirm } from './confirm.svelte';
 import { store } from './store.svelte';
 import { gitErrorInfo } from './giterror';
@@ -201,6 +202,16 @@ export class GitActions {
       ] : []),
       ...(this.callbacks.compareBranches ? [{label:'Compare branches',icon:'git-compare-arrows' as const,separator:true,run:()=>this.callbacks.compareBranches?.(source,target)}] : []),
     ], event);
+    if (!target.remote && !this.mutationBlocked(target)) void this.labelMerge(source, target);
+  }
+  private async labelMerge(source: GitRef, target: GitRef) {
+    const menu = this.request, context = this.context();
+    try {
+      const fastForward = await ProjectGitService.CanFastForward(context.git.project, context.git.worktree, this.branchRequest('merge', source, target));
+      if (!fastForward || this.disposed || this.request !== menu || this.context().git !== context.git) return;
+      if (![source, target].every(ref => context.git.snapshot?.refs.some(current => current.fullName === ref.fullName && current.sha === ref.sha))) return;
+      if (menu) menu.items[0].label = `Fast-forward ${target.name} to ${source.name}`;
+    } catch { /* Keep the generic Merge label when the outcome cannot be proven. */ }
   }
   canDrop(source: GitRef, target: GitRef) {
     return source.fullName === target.fullName || (!target.remote && !this.mutationBlocked(target)) || (!source.remote && !this.mutationBlocked(source));

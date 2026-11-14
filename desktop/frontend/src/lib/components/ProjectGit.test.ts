@@ -53,6 +53,30 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it.each(['commit', 'merge'])('refreshes the graph immediately after a %s in a peeked worktree', async operation => {
+    const data = snapshot();
+    Object.assign(data.worktrees[1], { changes: 1, modified: 1 });
+    const other = snapshot({path:'/repo-feature',branch:'feature',head:oldSHA,files:[data.files[0]],...(operation === 'merge' ? {operation:'merge',mergeMessage:'Merge topic into feature'} : {})});
+    let committed = false;
+    const sha = 'c'.repeat(40);
+    const commit = {...data.commits[0],sha,subject:'New worktree commit',parents:[oldSHA],refs:['feature']};
+    api.Snapshot.mockImplementation(async (_project: string, worktree: string) => {
+      if (worktree === '/repo-feature') return committed ? {...other,head:sha,files:[],operation:'',commits:[commit]} : other;
+      return committed ? {...data,commits:[commit,...data.commits],worktrees:[data.worktrees[0],{...data.worktrees[1],head:sha,changes:0,modified:0}]} : data;
+    });
+    api.Commit.mockImplementation(async () => { committed = true; });
+    api.BranchAction.mockImplementation(async () => { committed = true; return {path:'/repo-feature'}; });
+    await open();
+    await fireEvent.click(screen.getByRole('button', {name:/Working changes on feature, 1 file, worktree/}));
+    await screen.findByRole('group', {name:'Worktree feature'});
+    await waitFor(() => expect(screen.getByLabelText('Commit subject')).toBeEnabled());
+    await fireEvent.input(screen.getByLabelText('Commit subject'), {target:{value:'New worktree commit'}});
+    await fireEvent.submit(screen.getByLabelText('Commit subject').closest('form')!);
+    expect(await screen.findByRole('button', {name:/New worktree commit,/})).toBeVisible();
+    expect(screen.queryByRole('button', {name:/Working changes on feature,/})).toBeNull();
+    expect(api.Snapshot).toHaveBeenLastCalledWith(project, '', '', 200);
+    expect(screen.getByRole('group', {name:'Worktree feature'})).toBeVisible();
+  });
   it('shows work in progress of another worktree above its commit, split by kind', async () => {
     const data = snapshot();
     Object.assign(data.worktrees[1], { changes: 6, modified: 3, added: 2, deleted: 1 });

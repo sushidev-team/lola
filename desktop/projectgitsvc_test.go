@@ -273,6 +273,18 @@ func TestProjectGitBranchActionsResolveOwnerAndBlockSandbox(t *testing.T) {
 	if current := run("branch", "--show-current"); current != "main" {
 		t.Fatal("changed main checkout")
 	}
+	run("commit", "--allow-empty", "-m", "main advances")
+	preview := projectgit.BranchRequest{Source: "refs/heads/main", SourceSHA: run("rev-parse", "HEAD"), Target: "refs/heads/feature", TargetSHA: sha}
+	if ok, err := svc.CanFastForward("demo", "", preview); err != nil || !ok {
+		t.Fatalf("preview=%v err=%v", ok, err)
+	}
+	// The target's worktree-specific settings determine the merge, even when
+	// the source checkout is the one currently displayed.
+	run("config", "extensions.worktreeConfig", "true")
+	run("-C", wt, "config", "--worktree", "merge.ff", "false")
+	if ok, err := svc.CanFastForward("demo", "", preview); err != nil || ok {
+		t.Fatalf("target settings ignored: preview=%v err=%v", ok, err)
+	}
 	home := os.Getenv("LOLA_HOME")
 	if err = os.MkdirAll(filepath.Join(home, "state"), 0700); err != nil {
 		t.Fatal(err)
@@ -286,6 +298,9 @@ func TestProjectGitBranchActionsResolveOwnerAndBlockSandbox(t *testing.T) {
 		if _, err = svc.BranchAction("demo", "", request); err == nil || !strings.Contains(err.Error(), "sandbox") {
 			t.Fatalf("%s: %v", action, err)
 		}
+	}
+	if _, err = svc.CanFastForward("demo", "", preview); err == nil || !strings.Contains(err.Error(), "sandbox") {
+		t.Fatalf("preview read sandbox target: %v", err)
 	}
 	if _, err = svc.Stashes("demo", wt); err == nil {
 		t.Fatal("listed sandbox stashes")

@@ -406,6 +406,11 @@
     path = ''; activeFile = '';
   }
   function working() { selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; }
+  function committed() {
+    working();
+    // The inspector refreshes its own checkout; the graph belongs to the active one.
+    if (peek) void git.load(ref, limit);
+  }
   function showCommitDiff(sha: string) { selected = [sha]; area = 'commit'; path = ''; activeFile = ''; diffOpen = true; }
   function inspectFile(file: GitFile, staged: boolean) {
     diffOpen = true;
@@ -728,7 +733,7 @@
             <Button size="xs" variant="secondary" title="Switch the whole view to this worktree" onclick={() => openWorktreeChanges(tree)}>Open</Button>
             <Button icon size="xs" aria-label="Back to this checkout's changes" title="Back to this checkout's changes" onclick={ownWorking}><Icon name="x" size={14} /></Button>
           </div>
-          {#key peek}<ProjectGitStaging git={peek} {path} {area} ref="" limit={1} oninspect={inspectFile} onact={(action, paths) => void act(action, paths)} oncommitted={working} oncontextfile={() => {}} />{/key}
+          {#key peek}<ProjectGitStaging git={peek} {path} {area} ref="" limit={1} oninspect={inspectFile} onact={(action, paths) => void act(action, paths)} oncommitted={committed} oncontextfile={() => {}} />{/key}
         {:else}
         <ProjectGitStaging {git} {path} {area} {ref} {limit} oninspect={inspectFile} onact={(action, paths) => void act(action, paths)} oncommitted={working} oncontextfile={(file,staged,paths,event) => gitActions.openFile(file,staged,paths,event)} />
         {/if}

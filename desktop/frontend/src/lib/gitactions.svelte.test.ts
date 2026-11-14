@@ -6,7 +6,8 @@ import { confirm } from './confirm.svelte';
 import { store } from './store.svelte';
 import ProjectGitActionMenu from './components/ProjectGitActionMenu.svelte';
 import type { GitRef, GitSnapshot } from './projectgit';
-vi.mock('@bindings/desktop', () => ({ ProjectGitService: {} }));
+const api = vi.hoisted(() => ({CanFastForward:vi.fn()}));
+vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 const main: GitRef = { name: 'main', fullName: 'refs/heads/main', sha: 'a'.repeat(40), remote: false, current: true };
 const feature: GitRef = { name: 'feature/work', fullName: 'refs/heads/feature/work', sha: 'b'.repeat(40), remote: false, current: false };
 let git: ProjectGitState;
@@ -14,6 +15,7 @@ let actions: GitActions;
 let callbacks: { viewHistory: ReturnType<typeof vi.fn>; openWorktree: ReturnType<typeof vi.fn>; viewCommit: ReturnType<typeof vi.fn> };
 const event = () => new MouseEvent('contextmenu', { clientX: 15, clientY: 20, cancelable: true });
 beforeEach(() => {
+  api.CanFastForward.mockReset().mockResolvedValue(false);
   git = new ProjectGitState('project', '');
   git.snapshot = { path: '/repo', branch: 'main', head: main.sha, refs: [main, feature], worktrees: [], commits: [], files: [], signing: { enabled: true, format: 'ssh', key: '' }, upstream: 'origin/main', hasMore: false } satisfies GitSnapshot;
   git.stashes = [{ sha: 'c'.repeat(40), selector: 'stash@{0}', subject: 'Saved work', date: '' }];
@@ -25,6 +27,33 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); confirm.cancel(); store.dismissFlash(); vi.restoreAllMocks(); });
 describe('Git action menus', () => {
+  it('labels a proven fast-forward with its destination and keeps the pinned merge action', async () => {
+    api.CanFastForward.mockResolvedValue(true);
+    render(ProjectGitActionMenu, {actions});
+    actions.dropBranches(feature, main, event());
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Fast-forward main to feature/work'}));
+    expect(api.CanFastForward).toHaveBeenCalledWith('project', '', {action:'merge',source:feature.fullName,sourceSHA:feature.sha,target:main.fullName,targetSHA:main.sha});
+    expect(git.branchAction).toHaveBeenCalledWith({action:'merge',source:feature.fullName,sourceSHA:feature.sha,target:main.fullName,targetSHA:main.sha}, '', 200);
+  });
+  it.each(['dismissed','replaced','changed','disposed'])('ignores a late merge preview when the menu is %s', async reason => {
+    let resolve!: (value:boolean) => void;
+    api.CanFastForward.mockReturnValueOnce(new Promise<boolean>(r => {resolve=r;}));
+    actions.dropBranches(feature, main, event());
+    const original = actions.request!;
+    if (reason === 'dismissed') actions.close();
+    if (reason === 'replaced') actions.dropBranches(main, feature, event());
+    if (reason === 'changed') git.snapshot!.refs = [{...main,sha:'new'},feature];
+    if (reason === 'disposed') actions.dispose();
+    resolve(true);
+    await Promise.resolve();
+    expect(original.items[0].label).toBe('Merge feature/work into main');
+  });
+  it('keeps Merge when the preview fails', async () => {
+    api.CanFastForward.mockRejectedValue(new Error('Git unavailable'));
+    actions.dropBranches(feature, main, event());
+    await Promise.resolve();
+    expect(actions.request!.items[0].label).toBe('Merge feature/work into main');
+  });
   it('offers pull after a rejected push and an explicit merge after a diverged pull', async () => {
     const remote={...main,name:'origin/main',fullName:'refs/remotes/origin/main',remote:true,current:false,sha:'c'.repeat(40)};
     git.snapshot!.refs.push(remote);
