@@ -52,6 +52,15 @@ export function AddGroup(label: string): $CancellablePromise<string> {
 }
 
 /**
+ * AddStackMembersFromFolder adds selected scan results atomically, rechecking
+ * memberships against the current config so a stale scan cannot move a member
+ * out of another stack. Existing projects keep their settings.
+ */
+export function AddStackMembersFromFolder(stack: string, apps: $models.StackFolderAppDTO[] | null): $CancellablePromise<void> {
+    return $Call.ByID(2767760209, stack, apps);
+}
+
+/**
  * ClearSandboxToken deletes the stored token.
  */
 export function ClearSandboxToken(): $CancellablePromise<void> {
@@ -465,6 +474,15 @@ export function SaveTeamLimits(d: $models.TeamLimitsDTO): $CancellablePromise<vo
  */
 export function ScanStackFolder(path: string): $CancellablePromise<$models.StackFolderDTO> {
     return $Call.ByID(341923786, path);
+}
+
+/**
+ * ScanStackMembers suggests repositories absent from the stack. An empty path
+ * rescans the parent folders of its current members; a supplied parent folder
+ * uses the same bounded, immediate-child scan as creating a stack.
+ */
+export function ScanStackMembers(stack: string, path: string): $CancellablePromise<$models.StackFolderDTO> {
+    return $Call.ByID(2211441053, stack, path);
 }
 
 export function SetAppearance(a: $models.AppearanceDTO): $CancellablePromise<void> {

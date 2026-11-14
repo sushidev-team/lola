@@ -420,6 +420,21 @@ func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier no
 		return
 	}
 
+	if p != nil && !s.Stack && s.OwnsBranch() && s.Branch != "" && s.PR != nil && s.PR.State == "MERGED" {
+		project := *p
+		if s.Repo != "" {
+			project.Repo = s.Repo
+		}
+		if s.Branch == s.PR.BaseRef {
+			err = errors.New("refusing to delete the merged PR's base branch")
+		} else {
+			err = d.deleteMergedRemoteBranch(cctx, project, s.Branch, s.PR.HeadSHA)
+		}
+		if err != nil {
+			d.noteCleanupFailure(ctx, s, "remote branch "+s.Branch, fmt.Errorf("remote branch cleanup: %w", err), notifier)
+			return
+		}
+	}
 	d.dropSession(s) // drops the store entry, frees the in-flight claim, persists
 	removed := "worktree removed"
 	if s.OwnsBranch() && s.Branch != "" {

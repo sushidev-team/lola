@@ -1,9 +1,56 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestAddMembersToExistingStack(t *testing.T) {
+	c := &Config{Projects: []Project{
+		{Name: "nori", Kind: ProjectKindStack, Label: "Nori"},
+		{Name: "web", Path: "/src/web", Stack: "nori", Labels: []string{"website"}},
+		{Name: "api", Path: "/src/api", Repo: "acme/api", DefaultBranch: "develop", Agent: "codex"},
+	}}
+	apps := []StackApp{{Path: "/src/web"}, {Path: "/src/api", Repo: "ignored"}, {Path: "/src/mobile", Repo: "acme/mobile", DefaultBranch: "main"}}
+	if err := c.AddStackMembersFromFolder("nori", apps, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Projects) != 4 || len(c.StackMembers("nori")) != 3 {
+		t.Fatalf("projects: %+v", c.Projects)
+	}
+	if api := c.ProjectByName("api"); api.Repo != "acme/api" || api.Agent != "codex" || api.DefaultBranch != "develop" {
+		t.Fatalf("existing settings overwritten: %+v", api)
+	}
+	if web := c.ProjectByName("web"); !reflect.DeepEqual(web.Labels, []string{"website"}) {
+		t.Fatal("existing member labels changed")
+	}
+	if mobile := c.ProjectByName("mobile"); mobile.Repo != "acme/mobile" || !mobile.Inherits.MatchLabels {
+		t.Fatalf("new member: %+v", mobile)
+	}
+	if err := c.AddStackMembersFromFolder("nori", apps, nil); err != nil || len(c.Projects) != 4 {
+		t.Fatalf("retry duplicated members: %v", err)
+	}
+}
+
+func TestAddMembersToStackIsAtomic(t *testing.T) {
+	c := &Config{Projects: []Project{
+		{Name: "nori", Kind: ProjectKindStack},
+		{Name: "other", Kind: ProjectKindStack},
+		{Name: "api", Path: "/src/api"},
+		{Name: "web", Path: "/src/web", Stack: "other"},
+	}}
+	before := append([]Project(nil), c.Projects...)
+	for _, stack := range []string{"missing", "api", "nori"} {
+		err := c.AddStackMembersFromFolder(stack, []StackApp{{Path: "/src/api"}, {Path: "/src/new"}, {Path: "/src/web"}}, nil)
+		if err == nil {
+			t.Fatalf("accepted additions to %s", stack)
+		}
+		if !reflect.DeepEqual(c.Projects, before) {
+			t.Fatal("failed addition changed projects")
+		}
+	}
+}
 
 func TestNewStacksInheritPRCommentAutomation(t *testing.T) {
 	c := &Config{Defaults: Defaults{AutoPRComments: true}}

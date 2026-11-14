@@ -176,8 +176,76 @@ func TestReactMergedCleansUpAndNotifies(t *testing.T) {
 	}
 }
 
-// A pr-kind session's branch is upstream, so the cleanup must not claim to have
-// deleted it (runtime.Kill does not, via Session.OwnsBranch).
+func TestReactMergedRemoteCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		kind                         session.Kind
+		dirty, disabled, remoteFails bool
+		wantRemote, wantRetained     bool
+	}{
+		{name: "hub advisory", kind: session.KindManual, wantRemote: true},
+		{name: "linear", kind: session.KindLinear, wantRemote: true},
+		{name: "borrowed PR branch", kind: session.KindPR},
+		{name: "dirty worktree", kind: session.KindManual, dirty: true},
+		{name: "auto cleanup disabled", kind: session.KindManual, disabled: true, wantRetained: true},
+		{name: "remote failure retries", kind: session.KindManual, remoteFails: true, wantRemote: true, wantRetained: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nat := &fakeNative{}
+			if tc.dirty {
+				nat.killErr = worktree.ErrDirty
+			}
+			cfg := reactTestConfig(nativePoll("p1"))
+			cfg.Reactions.Merged.Auto = !tc.disabled
+			d := newTestDaemon(t, cfg, &linear.Fake{}, nat)
+			seams := &fakeReactSeams{}
+			seams.install(d)
+			pr := &scm.PR{Number: 7, State: "MERGED", HeadSHA: strings.Repeat("a", 40), BaseRef: "main"}
+			s := reactSess("FE-1", "merged", pr)
+			s.Kind = tc.kind
+			s.Branch = "lola/hub-advisories-20261114-0900"
+			s.HubItem = session.HubWork{ItemID: "advisory", Kind: "dep_advisory"}
+			d.sessions.Upsert(s)
+			calls := 0
+			d.deleteMergedRemoteBranch = func(_ context.Context, p config.Project, branch, sha string) error {
+				calls++
+				if branch != s.Branch || sha != pr.HeadSHA || p.Repo != s.Repo {
+					t.Fatalf("wrong cleanup target: %+v %s %s", p, branch, sha)
+				}
+				if len(nat.killCalls()) == 0 {
+					t.Fatal("remote deletion ran before dirty-safe local cleanup")
+				}
+				if tc.remoteFails {
+					return errors.New("remote refused")
+				}
+				return nil
+			}
+			d.react(context.Background(), s)
+			if (calls == 1) != tc.wantRemote {
+				t.Fatalf("remote calls = %d", calls)
+			}
+			cur, retained := d.sessions.Get(s.ID)
+			if retained != tc.wantRetained {
+				t.Fatalf("session retained = %v", retained)
+			}
+			if tc.remoteFails {
+				if cur.CleanupFailures != 1 {
+					t.Fatalf("cleanup failures = %d", cur.CleanupFailures)
+				}
+				tc.remoteFails = false
+				d.react(context.Background(), cur)
+				if _, ok := d.sessions.Get(s.ID); ok {
+					t.Fatal("successful retry did not finish cleanup")
+				}
+				if calls != 2 {
+					t.Fatalf("retry calls = %d", calls)
+				}
+			}
+		})
+	}
+}
+
+// A pr-kind session's branch is upstream, so cleanup must not claim to delete it.
 func TestReactMergedPRKindDoesNotClaimBranchDeletion(t *testing.T) {
 	nat := &fakeNative{}
 	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, nat)

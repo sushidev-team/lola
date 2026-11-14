@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/hubproto"
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/hub"
+	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
@@ -22,6 +24,40 @@ func advisoryFor(id, pkg, adv string) hubproto.Item {
 	d.Package, d.Advisory = pkg, adv
 	it.DepAdvisory = &d
 	return it
+}
+
+func TestHubAdvisoriesCleanUpWhenObserverSeesMerge(t *testing.T) {
+	d, fh, nat := hubFixture(t)
+	d.lin = &linear.Fake{}
+	d.cfg.Reactions.Merged.Auto = true
+	d.listTmuxSessions = nil // use fakeNative.Alive
+	(&fakeReactSeams{}).install(d)
+	fh.offers = []hubproto.Item{
+		advisoryFor("it1", "lodash", "GHSA-jf85-cpcp-j695"),
+		advisoryFor("it2", "vite", "GHSA-587h-7wmj-h5pm"),
+	}
+	d.hubCycle(context.Background())
+	s := hubSessions(d)[0]
+	pr := &scm.PR{Number: 9, State: "MERGED", HeadSHA: strings.Repeat("a", 40), BaseRef: "main"}
+	(&fakeObsSeams{pr: pr}).install(d)
+	deleted := false
+	d.deleteMergedRemoteBranch = func(_ context.Context, p config.Project, branch, sha string) error {
+		if p.Repo != s.Repo || branch != s.Branch || sha != pr.HeadSHA {
+			t.Fatalf("wrong remote cleanup: %s %s %s", p.Repo, branch, sha)
+		}
+		deleted = true
+		return nil
+	}
+	d.observeNative(context.Background())
+	if !deleted {
+		t.Fatal("merged advisory remote branch was not deleted")
+	}
+	if _, ok := d.sessions.Get(s.ID); ok {
+		t.Fatal("merged advisory session remains")
+	}
+	if calls := nat.killCalls(); len(calls) != 1 || !calls[0].removeWorktree || calls[0].force {
+		t.Fatalf("worktree cleanup = %+v", calls)
+	}
 }
 
 // A repository's advisories go to ONE agent: every item is claimed and

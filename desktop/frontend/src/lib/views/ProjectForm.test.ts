@@ -4,11 +4,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
 // when the hoisted vi.mock factories run.
-const { getProject, saveProject, setMemberLabels, removeProject, getSettings, inspectPath, pickFolder, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
+const { getProject, saveProject, setMemberLabels, scanStackMembers, addStackMembers, removeProject, getSettings, inspectPath, pickFolder, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
   () => ({
     getProject: vi.fn(),
     saveProject: vi.fn(),
     setMemberLabels: vi.fn(),
+    scanStackMembers: vi.fn(),
+    addStackMembers: vi.fn(),
     renameProject: vi.fn(),
     removeProject: vi.fn(),
     getSettings: vi.fn(),
@@ -24,6 +26,8 @@ vi.mock("@bindings/desktop", () => ({
     GetProject: (...a: unknown[]) => getProject(...a),
     SaveProject: (...a: unknown[]) => saveProject(...a),
     SetStackMemberLabels: (...a: unknown[]) => setMemberLabels(...a),
+    ScanStackMembers: (...a: unknown[]) => scanStackMembers(...a),
+    AddStackMembersFromFolder: (...a: unknown[]) => addStackMembers(...a),
     RemoveProject: (...a: unknown[]) => removeProject(...a),
     GetSettings: () => getSettings(),
     InspectPath: (...a: unknown[]) => inspectPath(...a),
@@ -170,6 +174,8 @@ describe("ProjectForm", () => {
     getProject.mockReset().mockResolvedValue(sampleDto());
     saveProject.mockReset().mockResolvedValue(undefined);
     setMemberLabels.mockReset().mockResolvedValue(undefined);
+    scanStackMembers.mockReset().mockResolvedValue({ apps: [] });
+    addStackMembers.mockReset().mockResolvedValue(undefined);
     renameProject.mockReset().mockResolvedValue({ from: "", to: "", blockers: [] });
     removeProject.mockReset().mockResolvedValue(undefined);
     getSettings.mockReset().mockResolvedValue(settingsDto());
@@ -467,7 +473,7 @@ describe("ProjectForm", () => {
       { name: "other" },
     ] as unknown as typeof store.projects;
     render(ProjectForm);
-    expect(await screen.findByText("stack: nori")).toBeInTheDocument();
+    expect(await screen.findByText("Stack: nori")).toBeInTheDocument();
     expect(screen.queryByLabelText("Path")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Repo")).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Worktree setup" })).not.toBeInTheDocument();
@@ -478,13 +484,130 @@ describe("ProjectForm", () => {
     expect(within(list).getByText("web")).toBeInTheDocument();
     expect(within(list).getByText("every issue")).toBeInTheDocument();
     expect(within(list).queryByText("other")).not.toBeInTheDocument();
-    expect(screen.getByText(/dragging its project onto this stack/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add parent folder…" })).toBeInTheDocument();
     // A member label outside the stack's Match labels is the normal setup
     // (pickup decides the issue, the label the app), so nothing warns.
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("tab", { name: "Linear updates" }));
     expect(screen.getByLabelText("PR requires checks")).toBeInTheDocument();
     store.projects = [];
+  });
+
+  it("rescans members, excludes existing members and saves only selected additions", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", path: "", repo: "" });
+    store.projects = [{ name: "api", stack: "nori", labels: [] }] as unknown as typeof store.projects;
+    const web = { path: "/src/web", label: "Web", repo: "acme/web", project: "", blocked: "", defaultBranch: "main" };
+    const mobile = { ...web, path: "/src/mobile", label: "Mobile" };
+    scanStackMembers.mockResolvedValue({ apps: [web, mobile, { ...web, path: "/src/api", project: "api" }, { ...web, path: "/src/other", label: "Other", blocked: "already in stack Other" }] });
+    addStackMembers.mockResolvedValue(undefined);
+    render(ProjectForm);
+    await screen.findByText("Stack: nori");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    expect(screen.queryByText(/The repositories this stack's sessions span/)).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Rescan folders" }));
+    await screen.findByRole("checkbox", { name: "Include Web" });
+    expect(scanStackMembers).toHaveBeenCalledWith("nori", "");
+    expect(pickFolder).not.toHaveBeenCalled();
+    expect(screen.queryByRole("checkbox", { name: "Include api" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Include Other" })).toBeDisabled();
+    await fireEvent.click(screen.getByRole("button", { name: "Deselect all repositories" }));
+    expect(screen.getByRole("checkbox", { name: "Include Web" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Include Mobile" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Deselect all repositories" })).toBeDisabled();
+    await fireEvent.click(screen.getByRole("button", { name: "Select all repositories" }));
+    expect(screen.getByRole("checkbox", { name: "Include Web" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Include Mobile" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Include Other" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Select all repositories" })).toBeDisabled();
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Include Mobile" }));
+    expect(addStackMembers).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    expect(screen.getByRole("checkbox", { name: "Include Mobile" })).not.toBeChecked();
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(addStackMembers).toHaveBeenCalledWith("nori", [web]));
+  });
+
+  it("adds selected repositories immediately without saving other edits or closing", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", path: "", repo: "" });
+    store.projects = [{ name: "api", stack: "nori", labels: [] }] as unknown as typeof store.projects;
+    const web = { path: "/src/web", label: "Web", project: "", blocked: "", repo: "acme/web", defaultBranch: "main" };
+    scanStackMembers.mockResolvedValue({ apps: [web, { ...web, path: "/src/mobile", label: "Mobile" }] });
+    const refresh = vi.spyOn(store, "refresh").mockImplementation(async () => {
+      store.projects = [...store.projects, { name: "web", label: "Web", stack: "nori", labels: [] }] as unknown as typeof store.projects;
+    });
+    try {
+      render(ProjectForm);
+      await screen.findByText("Stack: nori");
+      await fireEvent.input(screen.getByLabelText("Label"), { target: { value: "Nori edited" } });
+      await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+      await fireEvent.click(screen.getByRole("button", { name: "Rescan folders" }));
+      await screen.findByRole("checkbox", { name: "Include Mobile" });
+      await fireEvent.click(screen.getByRole("checkbox", { name: "Include Mobile" }));
+      await fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
+      await screen.findByText("Added 1 repository.");
+      expect(addStackMembers).toHaveBeenCalledWith("nori", [web]);
+      expect(saveProject).not.toHaveBeenCalled();
+      expect(setMemberLabels).not.toHaveBeenCalled();
+      expect(nav.overlayProject).toBe("acme");
+      expect(within(screen.getByRole("list", { name: "Members" })).getByText("Web")).toBeInTheDocument();
+      expect(screen.queryByRole("checkbox", { name: "Include Web" })).not.toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Include Mobile" })).not.toBeChecked();
+      expect(screen.getByRole("button", { name: "Add selected" })).toBeDisabled();
+      await fireEvent.click(screen.getByRole("tab", { name: "General" }));
+      expect(screen.getByLabelText("Label")).toHaveValue("Nori edited");
+      await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+      expect(addStackMembers).toHaveBeenCalledTimes(1);
+    } finally { refresh.mockRestore(); }
+  });
+
+  it("scans another parent folder and keeps additions unsaved on cancel", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", path: "", repo: "" });
+    store.projects = [];
+    pickFolder.mockResolvedValue("/src/new");
+    scanStackMembers.mockResolvedValue({ apps: [{ path: "/src/new/web", label: "Web", blocked: "" }] });
+    render(ProjectForm);
+    await screen.findByText("Stack: nori");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    expect(screen.getByRole("button", { name: "Rescan folders" })).toBeDisabled();
+    await fireEvent.click(screen.getByRole("button", { name: "Add parent folder…" }));
+    await screen.findByRole("checkbox", { name: "Include Web" });
+    expect(scanStackMembers).toHaveBeenCalledWith("nori", "/src/new");
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(confirm.request?.title).toBe("Discard changes?");
+    expect(addStackMembers).not.toHaveBeenCalled();
+  });
+
+  it("reports an empty scan and keeps scan failures recoverable", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", path: "", repo: "" });
+    store.projects = [{ name: "api", stack: "nori" }] as unknown as typeof store.projects;
+    scanStackMembers.mockResolvedValueOnce({ apps: [] }).mockRejectedValueOnce(new Error("Folder unavailable"));
+    render(ProjectForm);
+    await screen.findByText("Stack: nori");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Rescan folders" }));
+    expect(await screen.findByText("No new repositories found. Try another parent folder.")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Rescan folders" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Folder unavailable");
+    expect(screen.getByRole("button", { name: "Rescan folders" })).toBeEnabled();
+    expect(addStackMembers).not.toHaveBeenCalled();
+  });
+
+  it("keeps failed member additions selected for retry", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", path: "", repo: "" });
+    store.projects = [{ name: "api", stack: "nori" }] as unknown as typeof store.projects;
+    scanStackMembers.mockResolvedValue({ apps: [{ path: "/src/web", label: "Web", blocked: "" }] });
+    addStackMembers.mockRejectedValueOnce(new Error("now belongs to another stack"));
+    render(ProjectForm);
+    await screen.findByText("Stack: nori");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Rescan folders" }));
+    await screen.findByRole("checkbox", { name: "Include Web" });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("repositories were not added");
+    expect(screen.getByRole("checkbox", { name: "Include Web" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
   it("edits each member's labels on the stack's Members tab and saves only the changed ones", async () => {
@@ -494,7 +617,7 @@ describe("ProjectForm", () => {
       { name: "api", stack: "nori", labels: [] },
     ] as unknown as typeof store.projects;
     render(ProjectForm);
-    await screen.findByText("stack: nori");
+    await screen.findByText("Stack: nori");
     await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
     await fireEvent.click(screen.getByRole("button", { name: "Labels for api" }));
     const group = await screen.findByRole("group", { name: "Labels for api" });
@@ -512,7 +635,7 @@ describe("ProjectForm", () => {
     store.projects = [{ name: "api", stack: "nori", labels: [] }] as unknown as typeof store.projects;
     setMemberLabels.mockRejectedValue(new Error("boom"));
     render(ProjectForm);
-    await screen.findByText("stack: nori");
+    await screen.findByText("Stack: nori");
     await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
     await fireEvent.click(screen.getByRole("button", { name: "Labels for api" }));
     const group = await screen.findByRole("group", { name: "Labels for api" });
@@ -529,7 +652,7 @@ describe("ProjectForm", () => {
     nav.overlayProject = "nori";
     const removeStack = vi.spyOn(store, "removeStack").mockResolvedValue(undefined as never);
     render(ProjectForm);
-    await screen.findByText("stack: nori");
+    await screen.findByText("Stack: nori");
     await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(confirm.request?.title).toBe("Remove stack?");
     expect(nav.overlayProject).toBe("nori");

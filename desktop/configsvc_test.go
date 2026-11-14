@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1211,6 +1212,48 @@ func TestCreateStackFromFolder(t *testing.T) {
 	// The joined project now reads as blocked for a second stack.
 	if again := s.ScanStackFolder(parent); again.Apps[1].Blocked == "" {
 		t.Fatalf("member of a stack not blocked: %+v", again.Apps[1])
+	}
+}
+
+func TestScanAndAddExistingStackMembers(t *testing.T) {
+	parent := t.TempDir()
+	for _, name := range []string{"api", "web", "other"} {
+		if out, err := exec.Command("git", "init", "-b", "main", filepath.Join(parent, name)).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v %s", err, out)
+		}
+	}
+	path := writeTestConfig(t, fmt.Sprintf("[defaults]\nglobal_cap = 4\n[[project]]\nname = 'nori'\nkind = 'stack'\n[[project]]\nname = 'other-stack'\nkind = 'stack'\n[[project]]\nname = 'api'\nstack = 'nori'\npath = %q\n[[project]]\nname = 'other'\nstack = 'other-stack'\npath = %q\n", filepath.Join(parent, "api"), filepath.Join(parent, "other")))
+	svc := &ConfigService{}
+	for _, root := range []string{"", parent} {
+		scan, err := svc.ScanStackMembers("nori", root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(scan.Apps) != 2 || scan.Apps[0].Project != "other" || scan.Apps[0].Blocked == "" || scan.Apps[1].Label != "Web" || scan.Apps[1].Blocked != "" {
+			t.Fatalf("suggestions: %+v", scan.Apps)
+		}
+	}
+	scan, _ := svc.ScanStackMembers("nori", parent)
+	before, _ := os.ReadFile(path)
+	if err := svc.AddStackMembersFromFolder("nori", scan.Apps); err == nil {
+		t.Fatal("accepted another stack's member")
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatal("failed addition saved partial membership")
+	}
+	if err := svc.AddStackMembersFromFolder("nori", scan.Apps[1:]); err != nil {
+		t.Fatal(err)
+	}
+	again, err := svc.ScanStackMembers("nori", "")
+	if err != nil || len(again.Apps) != 1 || again.Apps[0].Blocked == "" {
+		t.Fatalf("rescan: %+v, %v", again, err)
+	}
+	if _, err := svc.ScanStackMembers("missing", parent); err == nil {
+		t.Fatal("accepted unknown stack")
+	}
+	if _, err := svc.ScanStackMembers("nori", filepath.Join(parent, "missing")); err == nil {
+		t.Fatal("unreadable folder presented as empty")
 	}
 }
 

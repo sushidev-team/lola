@@ -1164,14 +1164,18 @@ type StackFolderAppDTO struct {
 // LOCAL git (gitrepo.Scan), so creating a stack from it fills each member's
 // path, repo and default branch instead of making the user add them one by one.
 func (s *ConfigService) ScanStackFolder(path string) StackFolderDTO {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cfg, _, _ := loadConfig() // nil config: nothing is marked as configured
+	return scanStackFolder(ctx, cfg, path)
+}
+
+func scanStackFolder(ctx context.Context, cfg *config.Config, path string) StackFolderDTO {
 	path = strings.TrimSpace(path)
 	out := StackFolderDTO{Path: path, SuggestedLabel: config.LabelFromPath(path), Apps: []StackFolderAppDTO{}}
 	if path == "" {
 		return out
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	cfg, _, _ := loadConfig() // nil config: nothing is marked as configured
 	for _, info := range gitrepo.Scan(ctx, path) {
 		app := StackFolderAppDTO{
 			Path:          info.Root,
@@ -1193,6 +1197,74 @@ func (s *ConfigService) ScanStackFolder(path string) StackFolderDTO {
 		out.Apps = append(out.Apps, app)
 	}
 	return out
+}
+
+// ScanStackMembers suggests repositories absent from the stack. An empty path
+// rescans the parent folders of its current members; a supplied parent folder
+// uses the same bounded, immediate-child scan as creating a stack.
+func (s *ConfigService) ScanStackMembers(stack, path string) (StackFolderDTO, error) {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return StackFolderDTO{}, err
+	}
+	if p := cfg.ProjectByName(stack); p == nil || !p.IsStack() {
+		return StackFolderDTO{}, errors.New("no such stack: " + stack)
+	}
+	paths := []string{}
+	if path = strings.TrimSpace(path); path != "" {
+		paths = append(paths, path)
+	} else {
+		for _, p := range cfg.Projects {
+			if p.Stack == stack && p.Path != "" {
+				parent := filepath.Dir(canonicalPath(p.Path))
+				if !slices.Contains(paths, parent) {
+					paths = append(paths, parent)
+				}
+			}
+		}
+	}
+	out := StackFolderDTO{Path: path, Apps: []StackFolderAppDTO{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	seen := map[string]bool{}
+	for _, parent := range paths {
+		if _, err := os.ReadDir(parent); err != nil {
+			return out, err
+		}
+		for _, app := range scanStackFolder(ctx, cfg, parent).Apps {
+			key := canonicalPath(app.Path)
+			if p := cfg.ProjectAtPath(key, canonicalPath); p != nil && p.Stack == stack {
+				continue
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out.Apps = append(out.Apps, app)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return out, errors.New("repository scan timed out; choose a smaller parent folder")
+	}
+	return out, nil
+}
+
+// AddStackMembersFromFolder adds selected scan results atomically, rechecking
+// memberships against the current config so a stale scan cannot move a member
+// out of another stack. Existing projects keep their settings.
+func (s *ConfigService) AddStackMembersFromFolder(stack string, apps []StackFolderAppDTO) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	in := make([]config.StackApp, 0, len(apps))
+	for _, a := range apps {
+		in = append(in, config.StackApp{Path: a.Path, Label: a.Label, Repo: a.Repo, DefaultBranch: a.DefaultBranch})
+	}
+	if err := cfg.AddStackMembersFromFolder(stack, in, canonicalPath); err != nil {
+		return err
+	}
+	return saveConfig(cfg, path)
 }
 
 // canonicalPath is how two checkout paths are compared: symlinks resolved, so a

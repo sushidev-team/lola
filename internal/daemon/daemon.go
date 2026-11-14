@@ -339,6 +339,8 @@ type Daemon struct {
 	// to scm.Client; tests install fakes.
 	behindBy func(ctx context.Context, repo, base, headSHA string) (int, error)
 	mergePR  func(ctx context.Context, repo string, pr int, method, headSHA string) error
+	// Merged cleanup deletes only owned remote branches at the merged head.
+	deleteMergedRemoteBranch func(ctx context.Context, p config.Project, branch, headSHA string) error
 
 	// Best-of seams (bestof.go): a worktree's change size for the compare view
 	// (local git), and the pick's two gh writes — the kept PR out of draft, a
@@ -655,6 +657,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.failingChecksAmong = scmc.FailingChecksAmong
 	d.setCommitStatus = scmc.SetCommitStatus
 	d.verifyReviewHead = (&worktree.Manager{}).VerifyReviewHead
+	d.deleteMergedRemoteBranch = (&worktree.Manager{}).DeleteMergedRemoteBranch
 	d.reviewComments = scmc.ReviewComments
 	// Flexible-review raw seams (the exec CLIENTS are built later by
 	// setReviewProvidersLocked from the catalog / legacy synthesis). The watch

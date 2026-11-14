@@ -33,6 +33,7 @@
     LinearTeam,
     LinearTeamMeta,
     LinearOption,
+    StackFolderAppDTO,
   } from "@bindings/desktop/models";
 
   // A project IS the poll unit, so this one overlay covers the whole
@@ -115,6 +116,63 @@
   let memberLabels = $state<Record<string, string[]>>({});
   let memberBase = $state<Record<string, string[]>>({});
   let memberOpen = $state("");
+  let memberCandidates = $state<{ app: StackFolderAppDTO; include: boolean }[]>([]);
+  const pendingMembers = $derived(memberCandidates.filter((c) => c.include && !c.app.blocked).map((c) => c.app));
+  let scanningMembers = $state(false);
+  let addingMembers = $state(false);
+  let memberAddNote = $state("");
+  let memberScanDone = $state(false);
+  let memberScanErr = $state("");
+  let memberScanPath = $state("");
+  let memberScanRequest = 0;
+  onDestroy(() => { memberScanRequest++; });
+
+  async function scanMembers(pick: boolean) {
+    if (scanningMembers || addingMembers || saving) return;
+    const request = ++memberScanRequest;
+    const stack = origName;
+    scanningMembers = true;
+    memberScanErr = "";
+    memberAddNote = "";
+    try {
+      const path = pick ? await ConfigService.PickFolder(memberScanPath) : "";
+      if (request !== memberScanRequest || (pick && !path)) return;
+      const scan = await ConfigService.ScanStackMembers(stack, path);
+      if (request !== memberScanRequest || stack !== origName) return;
+      if (path) memberScanPath = path;
+      const candidates = new Map(memberCandidates.map((c) => [c.app.path, c]));
+      for (const app of scan.apps ?? []) {
+        const prev = candidates.get(app.path);
+        candidates.set(app.path, { app: { ...app }, include: !app.blocked && (prev?.include ?? true) });
+      }
+      memberCandidates = [...candidates.values()].filter((c) => !stackMembersList.some((m) => m.name === c.app.project));
+      memberScanDone = true;
+    } catch (e) {
+      if (request === memberScanRequest) memberScanErr = `Could not scan folders: ${String(e)}`;
+    } finally {
+      if (request === memberScanRequest) scanningMembers = false;
+    }
+  }
+
+  async function addSelectedMembers() {
+    if (addingMembers || scanningMembers || saving || !pendingMembers.length) return;
+    const apps = [...pendingMembers];
+    addingMembers = true;
+    memberScanErr = "";
+    memberAddNote = "";
+    try {
+      await ConfigService.AddStackMembersFromFolder(origName, apps);
+      const added = new Set(apps.map((a) => a.path));
+      memberCandidates = memberCandidates.filter((c) => !added.has(c.app.path));
+      memberScanDone = false;
+      await store.refresh();
+      memberAddNote = `Added ${apps.length} ${apps.length === 1 ? "repository" : "repositories"}.`;
+    } catch (e) {
+      memberScanErr = `Could not add repositories: ${String(e)}`;
+    } finally {
+      addingMembers = false;
+    }
+  }
   $effect(() => {
     for (const m of stackMembersList) {
       if (m.name in memberBase) continue;
@@ -131,7 +189,7 @@
   // AFTER the normalization below so the comparison is against the same shape the
   // form mutates, not the raw backend DTO.
   let loaded = $state<ProjectFormDTO | null>(null);
-  const dirty = $derived.by(() => (f && loaded ? !deepEqual($state.snapshot(f), $state.snapshot(loaded)) : false) || memberChanged.length > 0);
+  const dirty = $derived.by(() => (f && loaded ? !deepEqual($state.snapshot(f), $state.snapshot(loaded)) : false) || memberChanged.length > 0 || pendingMembers.length > 0);
 
   // Everything on this tab is DERIVED from the folder: one InspectPath pass
   // yields the GitHub remote, the branch worktrees fork from, the branch list
@@ -237,7 +295,7 @@
     f
       ? f.isNew
         ? "add project"
-        : `${role === "stack" ? "stack" : "project"}: ${displayName(f)}`
+        : `${role === "stack" ? "Stack" : "project"}: ${displayName(f)}`
       : nav.overlayProject === ""
         ? "add project"
         : `project: ${nav.overlayProject}`,
@@ -255,7 +313,7 @@
     }
     return "";
   });
-  const canSave = $derived(!!f && !saving && !saveBlock);
+  const canSave = $derived(!!f && !saving && !scanningMembers && !addingMembers && !saveBlock);
   const renaming = $derived(!!f && !f.isNew && slug(f.name) !== origName);
 
 
@@ -536,6 +594,14 @@
     };
     try {
       await ConfigService.SaveProject(dto);
+      if (role === "stack" && pendingMembers.length) {
+        try {
+          await ConfigService.AddStackMembersFromFolder(id, pendingMembers);
+          memberCandidates = [];
+        } catch (e) {
+          throw new Error(`Stack settings were saved, but repositories were not added: ${String(e)}`);
+        }
+      }
       if (role === "stack" && memberChanged.length) {
         // A second write: name it, so a failure here does not read as if the
         // stack's own settings were lost too (they are saved; Save retries both).
@@ -565,6 +631,7 @@
    * here, so neither trips the prompt.
    */
   function requestClose() {
+    if (addingMembers) return;
     if (!dirty) {
       nav.closeOverlay();
       return;
@@ -1112,12 +1179,14 @@
       </div>
     {:else if shownTab === "members"}
       <div class="space-y-4">
-        <p class="text-faint">
-          The repositories this stack's sessions span. Issue pickup decides which issues start a session; each
-          member's labels then decide whether its repository is checked out for that issue. A member without labels
-          is checked out for every issue. Add a member by dragging its project onto this stack in the sidebar (or
-          “Add to stack…” on its row's context menu); drag it out to remove it.
-        </p>
+        <div class="flex flex-wrap items-center gap-2">
+          <Button variant="secondary" size="sm" disabled={scanningMembers || addingMembers || saving || stackMembersList.length === 0}
+            onclick={() => void scanMembers(false)}>Rescan folders</Button>
+          <Button variant="secondary" size="sm" disabled={scanningMembers || addingMembers || saving}
+            onclick={() => void scanMembers(true)}><Icon name="folder" size={14} />Add parent folder…</Button>
+          {#if scanningMembers}<span role="status" class="text-sm text-faint">Scanning repositories…</span>{/if}
+        </div>
+        {#if memberScanErr}<p role="alert" class="text-sm text-bad">{memberScanErr}</p>{/if}
         {#if stackMembersList.length === 0}
           <p class="rounded border border-dashed border-edge px-3 py-4 text-center text-sm text-faint">No members yet.</p>
         {:else}
@@ -1156,6 +1225,47 @@
             {/each}
           </ul>
         {/if}
+        {#if memberCandidates.length}
+          <section aria-label="Repositories to add" class="space-y-2">
+            <div class="flex items-center justify-between gap-3">
+              <h3 class="text-sm font-medium text-ink">Repositories to add</h3>
+              <div role="group" aria-label="Repository selection" class="flex items-center gap-1">
+                <Button size="xs" aria-label="Select all repositories"
+                  disabled={saving || scanningMembers || addingMembers || !memberCandidates.some((c) => !c.app.blocked && !c.include)}
+                  onclick={() => { for (const c of memberCandidates) c.include = !c.app.blocked; }}>All</Button>
+                <span aria-hidden="true" class="h-3 w-px bg-edge"></span>
+                <Button size="xs" aria-label="Deselect all repositories"
+                  disabled={saving || scanningMembers || addingMembers || pendingMembers.length === 0}
+                  onclick={() => { for (const c of memberCandidates) c.include = false; }}>None</Button>
+              </div>
+            </div>
+            <ul class="max-h-56 divide-y divide-edge overflow-auto rounded border border-edge" aria-label="Discovered repositories">
+              {#each memberCandidates as c (c.app.path)}
+                <li>
+                  <label class="flex items-start gap-3 px-3 py-2 {c.app.blocked ? '' : 'cursor-pointer'}">
+                    <span class="pt-0.5"><Checkbox bind:checked={c.include} disabled={!!c.app.blocked || saving || addingMembers}
+                      aria-label="Include {c.app.label}" /></span>
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-ink">{c.app.label}</span>
+                      <span class="block truncate text-sm text-faint" title={c.app.path}>{c.app.path}</span>
+                      {#if c.app.blocked}<span class="block text-sm text-warn">{c.app.blocked}</span>
+                      {:else if c.app.project}<span class="block text-sm text-faint">Existing project</span>{/if}
+                    </span>
+                  </label>
+                </li>
+              {/each}
+            </ul>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <p role="status" class="text-sm text-faint">{pendingMembers.length} {pendingMembers.length === 1 ? "repository" : "repositories"} selected</p>
+              <Button variant="secondary" size="sm" loading={addingMembers}
+                disabled={saving || scanningMembers || addingMembers || pendingMembers.length === 0}
+                onclick={() => void addSelectedMembers()}>Add selected</Button>
+            </div>
+          </section>
+        {:else if memberScanDone && !scanningMembers && !memberScanErr}
+          <p role="status" class="text-sm text-faint">No new repositories found. Try another parent folder.</p>
+        {/if}
+        {#if memberAddNote}<p role="status" class="text-sm text-good">{memberAddNote}</p>{/if}
       </div>
     {:else if shownTab === "stack"}
       <div class="space-y-5">

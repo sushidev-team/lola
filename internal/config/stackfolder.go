@@ -86,25 +86,53 @@ func (c *Config) addStackFromFolder(label string, apps []StackApp, canon func(st
 	if err != nil {
 		return "", err
 	}
+	if err := c.addStackMembers(name, apps, canon); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// AddStackMembersFromFolder adds selected checkouts to an existing stack in one
+// change. Already-present members are harmless; another stack's members are
+// refused. On failure no project or membership changes survive.
+func (c *Config) AddStackMembersFromFolder(name string, apps []StackApp, canon func(string) string) error {
+	if p := c.ProjectByName(name); p == nil || !p.IsStack() {
+		return fmt.Errorf("no such stack: %s", name)
+	}
+	if len(apps) == 0 {
+		return errors.New("choose at least one repository")
+	}
+	if canon == nil {
+		canon = filepath.Clean
+	}
+	saved := append([]Project(nil), c.Projects...)
+	if err := c.addStackMembers(name, apps, canon); err != nil {
+		c.Projects = saved
+		return err
+	}
+	return nil
+}
+
+func (c *Config) addStackMembers(name string, apps []StackApp, canon func(string) string) error {
 	seen := map[string]bool{}
 	for _, app := range apps {
 		path := strings.TrimSpace(app.Path)
 		if path == "" || !filepath.IsAbs(path) {
-			return "", fmt.Errorf("app path must be absolute, got %q", app.Path)
+			return fmt.Errorf("app path must be absolute, got %q", app.Path)
 		}
 		path = filepath.Clean(path)
 		key := canon(path)
 		if seen[key] {
-			return "", fmt.Errorf("%s is listed twice", path)
+			return fmt.Errorf("%s is listed twice", path)
 		}
 		seen[key] = true
 
 		if p := c.ProjectAtPath(key, canon); p != nil {
 			switch {
 			case p.IsStack():
-				return "", fmt.Errorf("%s is a stack — stacks do not nest", p.DisplayName())
+				return fmt.Errorf("%s is a stack — stacks do not nest", p.DisplayName())
 			case p.InStack() && p.Stack != name:
-				return "", fmt.Errorf("%s is already a member of stack %s", p.DisplayName(), c.DisplayNameFor(p.Stack))
+				return fmt.Errorf("%s is already a member of stack %s", p.DisplayName(), c.DisplayNameFor(p.Stack))
 			}
 			p.Stack = name
 			continue
@@ -116,7 +144,7 @@ func (c *Config) addStackFromFolder(label string, apps []StackApp, canon func(st
 		}
 		id := c.freeMemberName(name, Slug(lbl), path)
 		if id == "" {
-			return "", fmt.Errorf("no usable project id for %s", path)
+			return fmt.Errorf("no usable project id for %s", path)
 		}
 		m := Project{
 			Name:          id,
@@ -133,7 +161,7 @@ func (c *Config) addStackFromFolder(label string, apps []StackApp, canon func(st
 		}
 		c.Projects = append(c.Projects, m)
 	}
-	return name, nil
+	return nil
 }
 
 // ProjectAtPath returns the configured project whose checkout is key, comparing
