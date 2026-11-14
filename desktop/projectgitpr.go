@@ -49,7 +49,9 @@ func (s *ProjectGitService) PreviewPullRequest(project, worktree string, selecti
 	return s.pullRequests.Preview(ctx, projectgit.Client{}, dir, selection)
 }
 func (s *ProjectGitService) CreatePullRequest(project, worktree string, request projectgit.PRCreateRequest) (projectgit.PRResult, error) {
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		return projectgit.PRResult{}, errors.New("another repository action is running; wait for it to finish")
+	}
 	defer s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

@@ -27,6 +27,94 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); confirm.cancel(); store.dismissFlash(); vi.restoreAllMocks(); });
 describe('Git action menus', () => {
+  function unmergedRemoval() {
+    const tree = {path:'/linked',branch:feature.name,head:feature.sha,blocked:false,locked:false,prunable:false};
+    git.snapshot!.worktrees = [{...tree,path:'/repo',branch:main.name,head:main.sha},tree];
+    git.failedAction = {action:'remove-worktree-branch',source:feature.fullName,sourceSHA:feature.sha,target:tree.path,targetSHA:''};
+    git.error = 'branch is not fully merged; remove only the worktree to keep its branch';
+    return git.failedAction;
+  }
+  it.each(['remove-worktree','remove-worktree-branch'])('confirms discarded files before forcing %s', async action => {
+    const request = unmergedRemoval();
+    request.action = action;
+    git.error = 'git worktree: failed to delete checkout: Directory not empty';
+    actions.recovery()!.run();
+    expect(confirm.request?.body).toContain('uncommitted changes and untracked files');
+    expect(git.branchAction).not.toHaveBeenCalled();
+    confirm.accept();
+    await waitFor(() => expect(git.branchAction).toHaveBeenCalledWith({...request,forceRemoveWorktree:true,forceDeleteBranch:action==='remove-worktree-branch'},'',200));
+  });
+  it('can force a detached worktree without requiring a branch', async () => {
+    const request = unmergedRemoval();
+    request.action = 'remove-worktree'; request.source = '';
+    git.snapshot!.worktrees[1].branch = '';
+    git.error = 'worktree contains modified or untracked files';
+    actions.recovery()!.run(); confirm.accept();
+    await waitFor(() => expect(git.branchAction).toHaveBeenCalledWith({...request,forceRemoveWorktree:true,forceDeleteBranch:false},'',200));
+  });
+  it('keeps the branch when choosing the alternative after a directory error', async () => {
+    const request = unmergedRemoval();
+    git.error = 'Directory not empty';
+    actions.recovery()!.run(); confirm.acceptAlternative();
+    await waitFor(() => expect(git.branchAction).toHaveBeenCalledWith({...request,action:'remove-worktree',forceRemoveWorktree:true,forceDeleteBranch:false},'',200));
+  });
+  it('retries only the branch after Git unregistered the failed checkout', async () => {
+    unmergedRemoval();
+    git.snapshot!.worktrees.splice(1);
+    git.error = 'git worktree: failed to delete checkout: Directory not empty';
+    const recovery = actions.recovery()!;
+    expect(recovery.label).toBe('Delete remaining branch…');
+    recovery.run();
+    expect(confirm.request?.detail).toContain('Any remaining files at /linked are kept');
+    expect(git.branchAction).not.toHaveBeenCalled();
+    confirm.accept();
+    await waitFor(() => expect(git.branchAction).toHaveBeenCalledWith({action:'delete-branch',source:feature.fullName,sourceSHA:feature.sha,target:'',targetSHA:'',forceDeleteBranch:true},'',200));
+  });
+  it.each([false,true])('refuses branch-only recovery if another worktree checks out that branch (managed: %s)', managed => {
+    unmergedRemoval();
+    git.snapshot!.worktrees[1].path = '/new-owner';
+    if (managed) actions = new GitActions(() => ({git,ref:'',limit:200}), {...callbacks,isManagedWorktree:()=>true,removeManagedWorktree:vi.fn()});
+    git.error = 'Directory not empty';
+    expect(actions.recovery()).toBeUndefined();
+  });
+  it('offers confirmed force deletion for an unmerged branch without a worktree', () => {
+    unmergedRemoval();
+    git.failedAction!.action = 'delete-branch';
+    git.snapshot!.worktrees.splice(1);
+    const recovery = actions.recovery()!;
+    expect(recovery.label).toBe('Force delete branch…');
+    recovery.run();
+    git.snapshot!.refs = [main,{...feature,sha:'changed'}];
+    confirm.accept();
+    expect(git.branchAction).not.toHaveBeenCalled();
+  });
+  it.each(['force','keep','cancel'])('confirms recovery of an unmerged worktree (%s)', async choice => {
+    const request = unmergedRemoval();
+    const recovery = actions.recovery()!;
+    expect(recovery.label).toBe('Force remove…');
+    recovery.run();
+    expect(git.branchAction).not.toHaveBeenCalled();
+    expect(confirm.request?.body).toContain('may lose commits');
+    expect(confirm.request?.subject).toContain('/linked');
+    if (choice === 'cancel') { confirm.cancel(); expect(git.branchAction).not.toHaveBeenCalled(); return; }
+    if (choice === 'force') confirm.accept(); else confirm.acceptAlternative();
+    await waitFor(() => expect(git.branchAction).toHaveBeenCalledWith(choice === 'force' ? {...request,forceDeleteBranch:true} : {...request,action:'remove-worktree'}, '', 200));
+  });
+  it.each(['head','branch','locked','managed','missing','dismissed','context','disposed'])('refuses a stale force confirmation after %s changes', reason => {
+    unmergedRemoval();
+    actions.recovery()!.run();
+    const original = git;
+    if (reason === 'head') git.snapshot!.worktrees[1].head = 'new';
+    if (reason === 'branch') git.snapshot!.refs = [main,{...feature,sha:'new'}];
+    if (reason === 'locked') git.snapshot!.worktrees[1].locked = true;
+    if (reason === 'managed') git.snapshot!.worktrees[1].blocked = true;
+    if (reason === 'missing') git.snapshot!.worktrees = [];
+    if (reason === 'dismissed') git.error = '';
+    if (reason === 'context') git = new ProjectGitState('other','');
+    if (reason === 'disposed') actions.dispose();
+    confirm.accept();
+    expect(original.branchAction).not.toHaveBeenCalled();
+  });
   it('labels a proven fast-forward with its destination and keeps the pinned merge action', async () => {
     api.CanFastForward.mockResolvedValue(true);
     render(ProjectGitActionMenu, {actions});

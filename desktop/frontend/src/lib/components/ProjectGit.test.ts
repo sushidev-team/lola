@@ -178,6 +178,49 @@ describe('Project Git workspace', () => {
     resolve({path:'/repo'});
     await waitFor(()=>expect(screen.getByRole('button',{name:'origin/main'})).not.toHaveAttribute('aria-busy'));
   });
+  it('offers a confirmed force retry in the unmerged-worktree error banner', async () => {
+    const data = snapshot();
+    data.refs.push({name:'feature',fullName:'refs/heads/feature',sha:oldSHA,current:false,remote:false});
+    api.Snapshot.mockResolvedValue(data);
+    api.BranchAction.mockRejectedValueOnce(new Error('branch is not fully merged; remove only the worktree to keep its branch'));
+    render(ConfirmDialog);
+    await open();
+    await fireEvent.click(screen.getByRole('button', {name:'Actions for worktree /repo-feature'}));
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Remove worktree and branch…'}));
+    await fireEvent.click(within(await screen.findByRole('dialog', {name:'Remove worktree and branch?'})).getByRole('button', {name:'Remove worktree and branch'}));
+    await fireEvent.click(await screen.findByRole('button', {name:'Force remove…'}));
+    const dialog = await screen.findByRole('dialog', {name:'Remove unmerged worktree and branch?'});
+    expect(within(dialog).getByText(/may lose commits/)).toBeVisible();
+    expect(within(dialog).getByRole('button', {name:'Remove worktree only'})).toBeEnabled();
+    expect(api.BranchAction).toHaveBeenCalledTimes(1);
+    await fireEvent.click(within(dialog).getByRole('button', {name:'Force remove'}));
+    await waitFor(() => expect(api.BranchAction).toHaveBeenLastCalledWith(project, '', {
+      action:'remove-worktree-branch',source:'refs/heads/feature',sourceSHA:oldSHA,target:'/repo-feature',targetSHA:'',forceDeleteBranch:true,
+    }));
+    await waitFor(() => expect(screen.queryByRole('button', {name:'Force remove…'})).toBeNull());
+  });
+  it('offers branch-only recovery after a directory error unregisters the worktree', async () => {
+    const data = snapshot();
+    data.refs.push({name:'feature',fullName:'refs/heads/feature',sha:oldSHA,current:false,remote:false});
+    api.Snapshot.mockImplementation(async () => data);
+    api.BranchAction.mockImplementationOnce(async () => {
+      data.worktrees = [data.worktrees[0]];
+      throw new Error("git worktree: exit status 255: failed to delete '/repo-feature': Directory not empty");
+    });
+    render(ConfirmDialog);
+    await open();
+    await fireEvent.click(screen.getByRole('button', {name:'Actions for worktree /repo-feature'}));
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Remove worktree and branch…'}));
+    confirm.accept();
+    await fireEvent.click(await screen.findByRole('button', {name:'Delete remaining branch…'}));
+    const dialog = await screen.findByRole('dialog', {name:'Force delete local branch?'});
+    expect(within(dialog).getByText(/worktree is no longer registered/)).toBeVisible();
+    expect(api.BranchAction).toHaveBeenCalledTimes(1);
+    await fireEvent.click(within(dialog).getByRole('button', {name:'Force delete branch'}));
+    await waitFor(() => expect(api.BranchAction).toHaveBeenLastCalledWith(project, '', {
+      action:'delete-branch',source:'refs/heads/feature',sourceSHA:oldSHA,target:'',targetSHA:'',forceDeleteBranch:true,
+    }));
+  });
   it('opens removal dialogs from a protected branch and its worktree menu', async () => {
     const data = snapshot();
     data.worktrees[1].blocked = true;

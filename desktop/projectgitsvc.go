@@ -25,6 +25,8 @@ type ProjectGitService struct {
 	pullRequests projectgit.PullRequestClient
 	draftCommit  func(context.Context, string, string) (string, error)
 	mu           sync.Mutex
+	aiMu         sync.Mutex
+	aiJob        *aiCommitJob
 	identities   projectgit.PersistentIdentityClient
 }
 
@@ -191,7 +193,9 @@ func (s *ProjectGitService) Diff(project, worktree, from, to, area, path string)
 	return (projectgit.Client{}).Diff(ctx, dir, from, to, area, path)
 }
 func (s *ProjectGitService) mutate(project, worktree string, fn func(context.Context, string) error) error {
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		return errors.New("another repository action is running; wait for it to finish")
+	}
 	defer s.mu.Unlock()
 	ctx, cancel := projectgit.Context()
 	defer cancel()
@@ -316,7 +320,9 @@ func (s *ProjectGitService) CreateWorktree(project, worktree, source, sha, path,
 
 // BranchAction resolves and authorizes the owner before writing in a linked checkout.
 func (s *ProjectGitService) BranchAction(project, worktree string, request projectgit.BranchRequest) (projectgit.BranchResult, error) {
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		return projectgit.BranchResult{}, errors.New("another repository action is running; wait for it to finish")
+	}
 	defer s.mu.Unlock()
 	ctx, cancel := projectgit.Context()
 	defer cancel()

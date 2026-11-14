@@ -84,9 +84,74 @@ export class GitActions {
     const context=this.context(), git=context.git, request=git.failedAction;
     if (!git.error || !request) return;
     const info=gitErrorInfo(git.error,request.action);
+    const validContext = () => !this.disposed && context.git === this.context().git && git.failedAction === request && !!git.error && !this.mutationBlocked();
+    if (info.recovery === 'force-worktree') {
+      const tree = git.snapshot?.worktrees.find(tree => tree.path === request.target);
+      if (tree) {
+        const removable = () => {
+          const current = git.snapshot?.worktrees.find(tree => tree.path === request.target);
+          return validContext() && !!current && current.head === request.sourceSHA &&
+            (current.branch ? `refs/heads/${current.branch}` : '') === request.source && !this.removalBlocked(current) && !this.managedRemoval(current);
+        };
+        if (!removable() || request.forceRemoveWorktree) return;
+        const deleteBranch = request.action === 'remove-worktree-branch';
+        return {label:'Force remove…',run:() => {
+          if (!removable()) return;
+          const retry = {...request,forceRemoveWorktree:true,forceDeleteBranch:deleteBranch};
+          confirm.ask({
+            title:deleteBranch ? 'Force remove worktree and branch?' : 'Force remove worktree?',
+            subject:tree.branch ? `${tree.branch}\n${tree.path}` : tree.path,
+            body:'Permanently deletes this checkout, including uncommitted changes and untracked files.',
+            detail:deleteBranch ? 'Also deletes its local branch, even if unmerged. Commits that exist only on this branch may be lost. Remote branches are kept.' : 'Local and remote branches are kept. Commits reachable only from a detached checkout may be lost.',
+            confirmLabel:'Force remove',
+            onConfirm:() => { if (removable()) void this.execute(context, retry); },
+            ...(deleteBranch ? {alternative:{label:'Keep branch',onConfirm:() => { if (removable()) void this.execute(context, {...retry,action:'remove-worktree',forceDeleteBranch:false}); }}} : {}),
+          });
+        }};
+      }
+      // Git may already have unregistered the checkout before returning an
+      // error. Only the pinned branch can be retried; never sweep an orphan path.
+      if (request.action !== 'remove-worktree-branch') return;
+      info.recovery = 'force-delete';
+    }
     const source=git.snapshot?.refs.find(branch=>!branch.remote && branch.fullName===request.source);
     if (!source || this.mutationBlocked(source)) return;
     const valid=()=>!this.disposed && context.git===this.context().git && git.failedAction===request && !this.mutationBlocked(source) && git.snapshot?.refs.some(branch=>branch.fullName===source.fullName && branch.sha===source.sha);
+    if (info.recovery === 'force-delete') {
+      const deletable = () => validContext() && valid() && source.sha === request.sourceSHA && !this.owner(source) && !this.deletionBlocked(source);
+      if (!deletable()) return;
+      const partial = request.action === 'remove-worktree-branch';
+      return {label:partial ? 'Delete remaining branch…' : 'Force delete branch…',run:() => {
+        if (!deletable()) return;
+        confirm.ask({
+          title:'Force delete local branch?',subject:source.name,
+          body:'Deletes this local branch even if it is not fully merged. Commits that exist only on this branch may be lost.',
+          detail:partial ? `The worktree is no longer registered. Any remaining files at ${request.target} are kept. Remote branches are kept.` : 'Remote branches are kept.',
+          confirmLabel:'Force delete branch',
+          onConfirm:() => { if (deletable()) void this.execute(context, {...this.branchRequest('delete-branch',source),forceDeleteBranch:true}); },
+        });
+      }};
+    }
+    if (info.recovery === 'force-remove' && request.action === 'remove-worktree-branch' && !request.forceDeleteBranch) {
+      const removable = () => {
+        const tree = git.snapshot?.worktrees.find(tree => tree.path === request.target);
+        return !!git.error && valid() && source.sha === request.sourceSHA && !!tree && tree.head === request.sourceSHA &&
+          `refs/heads/${tree.branch}` === request.source && !this.removalBlocked(tree) && !this.managedRemoval(tree);
+      };
+      if (!removable()) return;
+      return {label:'Force remove…',run:() => {
+        if (!removable()) return;
+        confirm.ask({
+          title:'Remove unmerged worktree and branch?',
+          subject:`${source.name}\n${request.target}`,
+          body:'This branch is not fully merged. Deleting it may lose commits that exist only on this branch.',
+          detail:'Removes the clean worktree and deletes its local branch. Remote branches are kept.',
+          confirmLabel:'Force remove',
+          onConfirm:() => { if (removable()) void this.execute(context, {...request,forceDeleteBranch:true}); },
+          alternative:{label:'Remove worktree only',onConfirm:() => { if (removable()) void this.execute(context, {...request,action:'remove-worktree'}); }},
+        });
+      }};
+    }
     if (info.recovery==='pull' && ['push','publish'].includes(request.action) && this.upstream(source)) {
       return {label:'Pull changes',run:()=>{if(valid()) void this.execute(context,this.branchRequest('pull',source));}};
     }

@@ -165,7 +165,7 @@ func TestProjectGitWorktreeRemovalRespectsBoundaries(t *testing.T) {
 	if _, err = svc.CreateWorktree("demo", "", "refs/heads/main", snap.Head, path, "topic"); err != nil {
 		t.Fatal(err)
 	}
-	r := projectgit.BranchRequest{Action: "remove-worktree-branch", Source: "refs/heads/topic", SourceSHA: snap.Head, Target: path}
+	r := projectgit.BranchRequest{Action: "remove-worktree-branch", Source: "refs/heads/topic", SourceSHA: snap.Head, Target: path, ForceDeleteBranch: true, ForceRemoveWorktree: true}
 	for _, target := range []string{root, projectGitRepo(t)} {
 		bad := r
 		bad.Target = target

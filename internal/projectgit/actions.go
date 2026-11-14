@@ -22,6 +22,9 @@ type BranchRequest struct {
 	RemoteBranch string `json:"remoteBranch,omitempty"`
 	Mainline     int    `json:"mainline,omitempty"`
 	Message      string `json:"message,omitempty"`
+	// ForceDeleteBranch bypasses only the local branch's merged check.
+	ForceDeleteBranch   bool `json:"forceDeleteBranch,omitempty"`
+	ForceRemoveWorktree bool `json:"forceRemoveWorktree,omitempty"`
 }
 type BranchResult struct {
 	Path string `json:"path"`
@@ -319,8 +322,12 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		if owner != "" {
 			return errors.New("branch is checked out; switch its worktree to another branch before deleting it")
 		}
-		// Keep Git's merged-branch and worktree checks; never force deletion.
-		_, err = c.git(ctx, dir, "", "branch", "--delete", "--", strings.TrimPrefix(r.Source, "refs/heads/"))
+		// Force bypasses the merged check, never Git's checked-out branch guard.
+		args := []string{"branch", "--delete"}
+		if r.ForceDeleteBranch {
+			args = append(args, "--force")
+		}
+		_, err = c.git(ctx, dir, "", append(args, "--", strings.TrimPrefix(r.Source, "refs/heads/"))...)
 		return err
 	case "set-upstream":
 		if !strings.HasPrefix(r.Source, "refs/heads/") || !strings.HasPrefix(r.Target, "refs/remotes/") {
