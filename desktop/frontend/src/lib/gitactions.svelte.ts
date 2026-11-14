@@ -9,7 +9,7 @@ import type { IconName } from './icons';
 
 type Context = { git: ProjectGitState; ref: string; limit: number; configuredPath?: string };
 export type GitDestination = { remote: string; name: string; trackingOnly?: boolean };
-type Callbacks = { compareBranches?: (source: GitRef, target: GitRef) => void; isManagedWorktree?: (tree: GitWorktree) => boolean; removeManagedWorktree?: (tree: GitWorktree, deleteBranch: boolean, onRemoved: () => Promise<void>) => void; createPullRequest?: (branch:GitRef,target?:GitRef)=>void; viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; inspectFile?: (file: GitFile, staged: boolean) => void; stageFiles?: (paths: string[], staged: boolean) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef, destination?: GitDestination) => void; createBranch?: (sha: string, label: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
+type Callbacks = { openSession?: (id: string) => void; compareBranches?: (source: GitRef, target: GitRef) => void; isManagedWorktree?: (tree: GitWorktree) => boolean; removeManagedWorktree?: (tree: GitWorktree, deleteBranch: boolean, onRemoved: () => Promise<void>) => void; createPullRequest?: (branch:GitRef,target?:GitRef)=>void; viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; inspectFile?: (file: GitFile, staged: boolean) => void; stageFiles?: (paths: string[], staged: boolean) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef, destination?: GitDestination) => void; createBranch?: (sha: string, label: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
 export type GitMenuItem = { label: string; icon: IconName; run: () => void; disabled?: boolean; danger?: boolean; separator?: boolean };
 export type GitMenuRequest = { title: string; subtitle?: string; x: number; y: number; items: GitMenuItem[]; anchor: HTMLElement | null };
 
@@ -281,6 +281,13 @@ export class GitActions {
   canDrop(source: GitRef, target: GitRef) {
     return source.fullName === target.fullName || (!target.remote && !this.mutationBlocked(target)) || (!source.remote && !this.mutationBlocked(source));
   }
+  private sessionItems(tree?: GitWorktree): GitMenuItem[] {
+    const session = tree && store.sessionForWorktree(tree.path);
+    if (!session || !this.callbacks.openSession) return [];
+    return [{ label: 'Open session', icon: 'terminal', run: () => {
+      if (store.sessionForWorktree(tree!.path)?.id === session.id) this.callbacks.openSession?.(session.id);
+    } }];
+  }
   openBranch(branch: GitRef, event: MouseEvent) {
     const current = this.current(), busy = this.mutationBlocked();
     const remote = this.context().git.snapshot?.remotes?.filter(r => branch.name.startsWith(r.name + '/')).sort((a,b) => b.name.length-a.name.length)[0];
@@ -294,6 +301,7 @@ export class GitActions {
     items.push(
       { label: tree && tree.path !== this.context().git.snapshot?.path ? 'Open checkout' : branch.remote ? 'Check out tracking branch' : 'Check out branch', icon: 'git-branch', separator:true, disabled: (tree && tree.path !== this.context().git.snapshot?.path ? this.blocked() : busy) || branch.current || !!tree?.blocked || !!tree?.prunable, run: () => this.checkout(branch) },
       { label: 'Solo branch', icon: 'list', run: () => this.callbacks.viewHistory(branch.fullName) },
+      ...this.sessionItems(this.owner(branch)),
     );
     const create: GitMenuItem[] = [];
     if (this.callbacks.createPullRequest) create.push({label:'Create PR…',icon:'git-pull-request',disabled:!this.canCreatePR(branch),run:()=>this.callbacks.createPullRequest?.(branch)});
@@ -323,6 +331,7 @@ export class GitActions {
     const branch = this.context().git.snapshot?.refs.find(r => !r.remote && r.name === tree.branch);
     const disabled = tree.blocked || tree.prunable || this.mutationBlocked();
     const items: GitMenuItem[] = [{ label: 'Open checkout', icon: 'folder', disabled: tree.blocked || tree.prunable, run: () => this.callbacks.openWorktree(tree.path) }];
+    items.push(...this.sessionItems(tree));
     if(branch&&this.callbacks.createPullRequest)items.push({label:'Create PR…',icon:'git-pull-request',disabled:disabled||!this.canCreatePR(branch),run:()=>this.callbacks.createPullRequest?.(branch)});
     if (branch) items.push(
       { label: 'Pull changes', icon: 'arrow-down', disabled:disabled || !this.upstream(branch), run: () => this.action('pull', branch) },

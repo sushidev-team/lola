@@ -160,6 +160,7 @@
     compareBranches: (source, target) => { branchJump++; comparisonBranches = [target, source]; selected = [target.sha, source.sha]; area = 'commit'; diffOpen = true; path = ''; activeFile = ''; },
     createPullRequest: openPullRequest,
     openWorktree: (value) => chooseWorktree(value === configuredPath ? '' : value),
+    openSession: (id) => openSession(id, project),
     isManagedWorktree: (tree) => !!store.sessionForWorktree(tree.path),
     removeManagedWorktree: (tree, deleteBranch, onRemoved) => store.askRemoveManagedWorktree(tree.path, {branch: deleteBranch ? tree.branch : "", onRemoved}),
     viewCommit: showCommitDiff,
