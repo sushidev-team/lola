@@ -504,7 +504,7 @@
   {/each}
 {/snippet}
 
-<svelte:window onfocus={() => { if (data && !git.busy && !git.loading) void git.load(ref, limit); }} onkeydown={searchKey} onclick={(event) => { if (!(event.target instanceof Element) || !event.target.closest('.column-options')) columnMenu = false; }} />
+<svelte:window onfocus={() => { if (data && !git.busy && !git.loading && !git.fetching) void git.load(ref, limit); }} onkeydown={searchKey} onclick={(event) => { if (!(event.target instanceof Element) || !event.target.closest('.column-options')) columnMenu = false; }} />
 
 {#snippet loadingRailRows(count: number)}
   <div class="rail-skeleton" aria-hidden="true">{#each Array(count) as _, index}<div class="rail-placeholder"><Skeleton width="12px" height="12px"/><Skeleton width={`${[65,80,52,72][index % 4]}%`} height="11px"/></div>{/each}</div>
@@ -536,6 +536,7 @@
     {#key request}<ProjectGitPublish {...request} onClose={() => { if (publishBranch === request) publishBranch = null; }} />{/key}
   {/if}
   {#if git.error}<ProjectGitError error={git.error} operation={git.failedAction?.action} busy={!!git.busy} recovery={gitActions.recovery()} onrefresh={() => void git.load(ref, limit)} ondismiss={() => git.error=''}/>{/if}
+  {#if git.queued}<div class="git-queued" role="status"><Icon name="clock" size={16}/><strong>{git.busy === 'pull' || git.busy === 'pull-stash' ? 'Pull' : git.busy === 'push' ? 'Push' : 'Repository action'} queued</strong><span>Waiting for the current repository action to finish.</span></div>{/if}
   </div>
   <div class="git-workbench" class:rail-open={showRail} class:resizing={!!resizingSidebar} bind:clientWidth={workbenchWidth} style={`--rail-width:${railWidth}px;--inspector-width:${inspectorWidth}px`}>
     <Button variant="bare" class="sidebar-resize rail-resize" role="separator" aria-label="Resize repository sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={railMax} aria-valuenow={railWidth} title="Drag to resize · Double-click to reset" onpointerdown={(event) => resizeSidebar(event,'rail')} onkeydown={(event) => sidebarKey(event,'rail')} ondblclick={() => setSidebarWidth('rail',sidebarDefaults.rail)}><span class="sr-only">Resize repository sidebar</span></Button>
@@ -558,7 +559,7 @@
               <Icon name="chevron-down" class="git-disclosure-chevron" size={11} />
               {#if remote.owner}<GitAvatar src={git.remoteAvatars[remote.name]} name={remote.owner} size={20} loading={git.remoteIdentityLoading} />{:else}<Icon name="cloud" size={17} />{/if}
               <span class="remote-copy"><strong>{remote.name}</strong>{#if remote.owner}<small>{remote.owner}</small>{:else if remote.host}<small>{remote.host}</small>{/if}</span>
-              <Button size="xs" icon class="remote-fetch" aria-label={`Fetch ${remote.name}`} title={`Fetch from ${remote.name}`} disabled={!!git.busy || git.loading} loading={git.busy === 'fetch' && git.fetchingRemote === remote.name} onclick={(event) => { event.preventDefault(); event.stopPropagation(); gitActions.fetch(remote.name); }}><Icon name="refresh-cw" size={14}/></Button>
+              <Button size="xs" icon class="remote-fetch" aria-label={`Fetch ${remote.name}`} title={`Fetch from ${remote.name}`} disabled={git.fetching} loading={git.fetching && (!git.fetchingRemote || git.fetchingRemote === remote.name)} onclick={(event) => { event.preventDefault(); event.stopPropagation(); gitActions.fetch(remote.name); }}><Icon name="refresh-cw" size={14}/></Button>
               {#if remote.host}<GitProviderIcon host={remote.host}/>{/if}
             </summary>
             {@render branchNodes(remote.tree, 'remote', 0)}
@@ -765,7 +766,7 @@
     {@const request = newBranch}
     <ProjectGitNewBranch {...request} onClose={() => newBranch = null} onCreated={(createdPath, checkout) => { if (request.git !== git) return; newBranch = null; if (checkout) { chooseWorktree(createdPath === configuredPath ? '' : createdPath); working(); } }} />
   {/if}
-  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || ''}</span><span role="status" title={git.autoFetchError || undefined}>{initialLoading ? 'Loading repository…' : git.busy ? `${({ 'ai-resolve':'Starting conflict resolution', 'delete-branch':'Deleting branch', 'remove-worktree':'Removing worktree', 'remove-worktree-branch':'Removing worktree and branch', 'create-pr':'Creating pull request', 'prepare-discard': 'Reviewing unstaged changes', discard: 'Discarding unstaged changes', 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy] ?? 'Updating repository'}…` : git.autoFetchError ? 'Automatic fetch failed; retrying shortly.' : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
+  <footer class="git-status"><span class="footer-checkout" title={`Active checkout: ${data?.branch || 'Detached HEAD'}`}><Icon name="git-branch" size={13} /><strong>{data?.branch || (data?.head ? 'Detached HEAD' : 'Repository')}</strong></span><span class="repo-path" title={data?.path}>{data?.path || ''}</span><span role="status" title={git.autoFetchError || undefined}>{initialLoading ? 'Loading repository…' : git.queued ? 'Queued…' : git.busy ? `${({ 'pull-stash':'Stashing, pulling and restoring', 'ai-resolve':'Starting conflict resolution', 'delete-branch':'Deleting branch', 'remove-worktree':'Removing worktree', 'remove-worktree-branch':'Removing worktree and branch', 'create-pr':'Creating pull request', 'prepare-discard': 'Reviewing unstaged changes', discard: 'Discarding unstaged changes', 'create-worktree': 'Creating worktree', 'cherry-pick': 'Cherry-picking commit', revert: 'Reverting commit', 'create-branch': 'Creating branch', stage: 'Staging files', unstage: 'Unstaging files', checkout:'Checking out branch', merge:'Merging branches', rebase:'Rebasing branch', continue:'Continuing operation', abort:'Aborting operation', stash:'Stashing changes', pop:'Popping stash', apply:'Applying stash', drop:'Dropping stash', commit: 'Creating commit', amend: 'Amending commit', fetch: 'Fetching', pull: 'Pulling', 'set-upstream': 'Setting upstream', skip: 'Skipping commit', publish: 'Publishing branch', push: 'Pushing' } as Record<string, string>)[git.busy] ?? 'Updating repository'}…` : git.autoFetchError ? 'Automatic fetch failed; retrying shortly.' : git.notice || (data?.upstream ? `Tracks ${data.upstream}` : '')}</span></footer>
 </div>
 
 <style>
@@ -797,6 +798,9 @@
   }
   .toolbar-divider { width:1px; height:16px; background:var(--color-edge); margin:0 4px; }
   .git-notices { grid-row:2; min-width:0; }
+  .git-queued { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 12px; font-size:13px; color:var(--color-accent); background:var(--color-accent-fill); border-bottom:1px solid var(--color-edge); }
+  .git-queued strong { font-weight:600; }
+  .git-queued > span { color:var(--color-ink-2); }
   .git-workbench { position:relative; grid-row:3; display:grid; grid-template-columns:var(--rail-width) minmax(0,1fr) var(--inspector-width); min-width:0; min-height:0; overflow:hidden; }
   .git-workbench :global(.sidebar-resize) { position:absolute; top:0; bottom:0; z-index:4; width:8px; height:auto; padding:0; border-radius:0; cursor:col-resize; touch-action:none; background:transparent; }
   .git-workbench :global(.rail-resize) { left:var(--rail-width); transform:translateX(-50%); }

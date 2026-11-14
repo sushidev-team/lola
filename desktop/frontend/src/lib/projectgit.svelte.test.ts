@@ -9,6 +9,54 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 describe('Automatic remote fetching', () => {
   const remote = {name:'origin',host:'github.com',owner:'team',repo:'repo',avatarUrl:''};
+  it.each(['automatic','manual','remote'])('keeps %s fetching and its refresh out of the checkout lock', async mode => {
+    const state = new ProjectGitState('background-fetch-'+mode,'');
+    state.snapshot = {...snapshot('main'),remotes:[remote]};
+    const pending = deferred<void>();
+    if(mode==='remote') api.BranchAction.mockReturnValueOnce(pending.promise.then(()=>({path:'/repo'})));
+    else api.Fetch.mockReturnValueOnce(pending.promise);
+    const fetching = mode==='automatic'?state.autoFetch():mode==='manual'?state.act('fetch'):state.branchAction({action:'fetch',source:'origin',sourceSHA:'',target:'',targetSHA:''});
+    expect(state.busy).toBe('');
+    expect(state.loading).toBe(false);
+    expect(state.fetching).toBe(true);
+    const refresh = deferred<ReturnType<typeof snapshot>>();
+    api.Snapshot.mockReturnValueOnce(refresh.promise);
+    pending.resolve();
+    await vi.waitFor(()=>expect(api.Snapshot).toHaveBeenCalled());
+    expect(state.loading).toBe(false);
+    const files=[{path:'work',oldPath:'',index:'A',worktree:' ',untracked:false,conflict:false}];
+    api.Stage.mockResolvedValue(files);
+    expect(await state.act('stage',['work'])).toBe(true);
+    refresh.resolve(snapshot('main')); await fetching;
+    expect(state.snapshot!.files).toEqual(files);
+    expect(state.fetching).toBe(false);
+  });
+  it('does not clear an operation lock when a fetch finishes during a commit', async () => {
+    const state = new ProjectGitState('background-fetch-commit','');
+    state.snapshot = {...snapshot('main'),remotes:[remote]};
+    const network = deferred<void>(), commit = deferred<void>();
+    api.Fetch.mockReturnValueOnce(network.promise);
+    api.Commit.mockReturnValueOnce(commit.promise);
+    const fetching = state.fetch();
+    const committing = state.act('commit');
+    network.resolve(); await fetching;
+    expect(state.busy).toBe('commit');
+    expect(api.Snapshot).not.toHaveBeenCalled();
+    commit.resolve(); await committing;
+    expect(state.busy).toBe('');
+  });
+  it('does not replace a newer action failure when a manual fetch fails', async () => {
+    const state = new ProjectGitState('background-fetch-error','');
+    let fail!: (error:Error)=>void;
+    api.Fetch.mockReturnValueOnce(new Promise((_,reject)=>{fail=reject;}));
+    const fetching = state.fetch();
+    state.error = 'Push rejected';
+    state.failedAction = {action:'push',source:'refs/heads/main',sourceSHA:'a',target:'',targetSHA:''};
+    fail(new Error('Offline')); await fetching;
+    expect(state.error).toBe('Push rejected');
+    expect(state.failedAction.action).toBe('push');
+    expect(state.autoFetchError).toContain('Offline');
+  });
   it('throttles across worktrees, avoids overlapping requests, and preserves recovery and drafts', async () => {
     let now = 1_000;
     vi.spyOn(Date,'now').mockImplementation(() => now);

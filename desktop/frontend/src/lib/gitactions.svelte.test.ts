@@ -27,6 +27,20 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); confirm.cancel(); store.dismissFlash(); vi.restoreAllMocks(); });
 describe('Git action menus', () => {
+  it.each(['confirm','cancel','changed'])('offers an explicitly confirmed stash-pull recovery (%s)', async outcome => {
+    git.snapshot!.files = [{path:'edited.ts',oldPath:'',index:'M',worktree:'M',untracked:false,conflict:false}];
+    git.failedAction = {action:'pull',source:main.fullName,sourceSHA:main.sha,target:'',targetSHA:''};
+    git.error = 'commit or stash this checkout’s changes before integrating branches';
+    const recovery = actions.recovery()!;
+    expect(recovery.label).toBe('Stash, pull & restore…');
+    recovery.run();
+    expect(confirm.request?.detail).toContain('edited.ts');
+    expect(git.branchAction).not.toHaveBeenCalled();
+    if(outcome==='changed') git.snapshot!.refs = [{...main,sha:'new-head'}];
+    if(outcome==='cancel') confirm.cancel(); else confirm.accept();
+    if(outcome==='confirm') await waitFor(()=>expect(git.branchAction).toHaveBeenCalledWith(expect.objectContaining({action:'pull-stash',source:main.fullName,sourceSHA:main.sha}),'',200));
+    else expect(git.branchAction).not.toHaveBeenCalled();
+  });
   function unmergedRemoval() {
     const tree = {path:'/linked',branch:feature.name,head:feature.sha,blocked:false,locked:false,prunable:false};
     git.snapshot!.worktrees = [{...tree,path:'/repo',branch:main.name,head:main.sha},tree];

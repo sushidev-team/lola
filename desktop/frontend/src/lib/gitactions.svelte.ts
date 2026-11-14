@@ -62,7 +62,7 @@ export class GitActions {
     let active = context;
     // Open a branch's existing checkout before starting an operation there, so
     // conflicts and Continue/Abort belong to the visible working copy.
-    const ownedRef = request.action === 'merge' ? request.target : ['rebase', 'pull'].includes(request.action) ? request.source : '';
+    const ownedRef = request.action === 'merge' ? request.target : ['rebase', 'pull', 'pull-stash'].includes(request.action) ? request.source : '';
     const owner = ownedRef && context.git.snapshot?.worktrees.find(tree => `refs/heads/${tree.branch}` === ownedRef);
     if (owner && !owner.blocked && !owner.prunable && owner.path !== context.git.snapshot?.path) {
       this.callbacks.openWorktree(owner.path);
@@ -72,6 +72,7 @@ export class GitActions {
     }
     const deletingSelected = ['delete-branch', 'remove-worktree-branch'].includes(request.action) && active.ref === request.source;
     const path = await active.git.branchAction(request, deletingSelected ? '' : active.ref, active.limit);
+    if (request.action === 'fetch') return; // background fetch owns its own error reporting
     if (path === null && active.git === this.context().git && active.git.error) {
       const info = gitErrorInfo(active.git.error, request.action);
       store.setFlash(info.title, info.kind, {description:info.description,action:this.recovery()});
@@ -117,6 +118,19 @@ export class GitActions {
     const source=git.snapshot?.refs.find(branch=>!branch.remote && branch.fullName===request.source);
     if (!source || this.mutationBlocked(source)) return;
     const valid=()=>!this.disposed && context.git===this.context().git && git.failedAction===request && !this.mutationBlocked(source) && git.snapshot?.refs.some(branch=>branch.fullName===source.fullName && branch.sha===source.sha);
+    if (info.recovery==='stash-pull' && request.action==='pull' && source.current && git.snapshot?.files.length) {
+      const canStash = () => validContext() && valid() && source.sha===request.sourceSHA && !!git.snapshot?.files.length && !git.snapshot.files.some(file=>file.conflict);
+      return {label:'Stash, pull & restore…',run:()=>{
+        if (!canStash()) return;
+        confirm.ask({
+          title:'Stash, pull & restore?',subject:source.name,
+          body:'Save staged, unstaged and untracked changes, pull the upstream changes, then restore your work, including staging where possible.',
+          detail:`Ignored files stay in place. If merging or restoring needs attention, your saved stash is kept.\n\n${git.snapshot!.files.map(file=>file.path).join('\n')}`,
+          confirmLabel:'Stash, pull & restore',
+          onConfirm:()=>{if(canStash()) void this.execute(context,this.branchRequest('pull-stash',source));},
+        });
+      }};
+    }
     if (info.recovery === 'force-delete') {
       const deletable = () => validContext() && valid() && source.sha === request.sourceSHA && !this.owner(source) && !this.deletionBlocked(source);
       if (!deletable()) return;
@@ -298,7 +312,7 @@ export class GitActions {
     const remote = this.context().git.snapshot?.remotes?.filter(r => branch.name.startsWith(r.name + '/')).sort((a,b) => b.name.length-a.name.length)[0];
     const tree = this.context().git.snapshot?.worktrees.find(t => t.branch === branch.name);
     const items: GitMenuItem[] = branch.remote
-      ? [{ label: 'Fetch remote', icon: 'refresh-cw', disabled: busy || !remote, run: () => { if (remote) this.fetch(remote.name); } }]
+      ? [{ label: 'Fetch remote', icon: 'refresh-cw', disabled: this.context().git.fetching || !remote, run: () => { if (remote) this.fetch(remote.name); } }]
       : [
         { label: 'Pull changes', icon: 'arrow-down', disabled: this.mutationBlocked(branch) || !this.upstream(branch), run: () => this.action('pull', branch) },
         { label: this.upstream(branch) ? 'Push branch' : 'Publish branch…', icon: 'arrow-up', disabled: this.mutationBlocked(branch), run: () => this.push(branch) },
@@ -328,7 +342,7 @@ export class GitActions {
   fetch(remote: string) { const context = this.context(); void this.execute(context, { action: 'fetch', source: remote, target: '', sourceSHA: '', targetSHA: '' }); }
   openRemote(remote: GitRemote, event: MouseEvent) {
     this.menu(remote.name, [
-      { label: 'Fetch remote', icon: 'refresh-cw', disabled: this.blocked(), run: () => this.fetch(remote.name) },
+      { label: 'Fetch remote', icon: 'refresh-cw', disabled: this.context().git.fetching, run: () => this.fetch(remote.name) },
       { label: 'Copy repository name', icon: 'copy', run: () => void this.copy(remote.repo || remote.name) },
     ], event, remote.repo || remote.host);
   }
@@ -382,7 +396,7 @@ export class GitActions {
       ...(current && this.callbacks.createWorktree ? [{label:'Create worktree…',icon:'folder' as const,disabled:this.mutationBlocked(),run:()=>this.callbacks.createWorktree?.(current)}] : []),
       ...this.recoveryItems(),
       { label: 'Refresh repository', icon: 'refresh-cw', disabled: !!git.busy || git.loading, run: () => { const c = this.context(); void c.git.load(c.ref, c.limit); } },
-      { label: 'Fetch all remotes', icon: 'refresh-cw', disabled: this.blocked(), run: () => { const c = this.context(); void c.git.act('fetch', [], c.ref, c.limit); } },
+      { label: 'Fetch all remotes', icon: 'refresh-cw', disabled: git.fetching, run: () => { const c = this.context(); void c.git.act('fetch', [], c.ref, c.limit); } },
       ...(current ? [
         { label: 'Pull changes', icon: 'arrow-down' as const, disabled: this.mutationBlocked(current) || !this.upstream(current), run: () => this.action('pull', current) },
         { label: this.upstream(current) ? 'Push branch' : 'Publish branch…', icon: 'arrow-up' as const, disabled: this.mutationBlocked(current), run: () => this.push(current) },

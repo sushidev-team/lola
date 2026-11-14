@@ -44,6 +44,27 @@ async function refreshRepository() {
   await fireEvent.contextMenu(screen.getByRole('navigation', {name:'Repository navigation'}));
   await fireEvent.click(screen.getByRole('menuitem', {name:'Refresh repository'}));
 }
+
+it('shows a queued pull until the repository lock is available', async () => {
+  let finish!: (result: {path:string}) => void;
+  api.BranchAction.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await open();
+  await fireEvent.click(screen.getByRole('button', {name:'Pull'}));
+  const dispatch = (queued:boolean) => (window as any)._wails.dispatchWailsEvent({name:'project-git:queue',data:{project,worktree:'',action:'pull',queued}});
+  dispatch(true);
+  expect(await screen.findByText('Pull queued')).toBeVisible();
+  expect(screen.getByText('Waiting for the current repository action to finish.')).toBeVisible();
+  expect(screen.getByRole('button', {name:'Pull'})).toBeDisabled();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  dispatch(false);
+  await waitFor(() => expect(screen.queryByText('Pull queued')).not.toBeInTheDocument());
+  expect(screen.getByRole('button', {name:'Pull'})).toBeDisabled();
+  finish({path:'/repo'});
+  await waitFor(() => expect(screen.getByRole('button', {name:'Pull'})).toBeEnabled());
+  dispatch(true);
+  expect(screen.queryByText('Pull queued')).not.toBeInTheDocument();
+  expect(api.BranchAction).toHaveBeenCalledTimes(1);
+});
 async function pointerDrag(source: Element, target: Element, release = true) {
   vi.spyOn(document, 'elementFromPoint').mockReturnValue(target);
   await fireEvent.pointerDown(source, { button: 0, clientX: 10, clientY: 10 });
