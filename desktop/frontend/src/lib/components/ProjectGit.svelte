@@ -766,14 +766,15 @@
   .toolbar-actions :global(button) { font-size:13px; height:28px; }
   .toolbar-actions :global(.push-action) { padding-inline:12px; font-weight:600; transition:background-color 180ms cubic-bezier(.16,1,.3,1); }
   .toolbar-actions :global(.push-action:enabled:hover) { background:color-mix(in srgb,var(--color-accent) 25%,var(--color-accent-fill)); }
-  .toolbar-actions :global(.push-action) { --arrow-travel:-20px; --arrow-duration:260ms; }
+  .toolbar-actions :global(.push-action) { --arrow-travel:-20px; }
   .toolbar-actions :global(.pull-action) { --arrow-travel:20px; }
-  .toolbar-actions :global(button:enabled:hover .sync-arrow) { animation:sync-arrow-travel var(--arrow-duration,440ms) cubic-bezier(.45,0,.55,1) 1; }
+  .toolbar-actions :global(button:enabled:hover .sync-arrow) { animation:sync-arrow-travel 260ms linear 1; }
   .sync-arrow-window { display:grid; place-items:center; width:16px; height:16px; flex-shrink:0; overflow:hidden; }
   @keyframes sync-arrow-travel {
-    0%,100% { transform:translateY(0); }
-    49% { transform:translateY(var(--arrow-travel)); }
-    50% { transform:translateY(calc(-1 * var(--arrow-travel))); }
+    0% { transform:translateY(0); animation-timing-function:cubic-bezier(.55,0,1,.45); }
+    49% { transform:translateY(var(--arrow-travel)); animation-timing-function:step-end; }
+    50% { transform:translateY(calc(-1 * var(--arrow-travel))); animation-timing-function:cubic-bezier(.16,1,.3,1); }
+    100% { transform:translateY(0); }
   }
   @media (prefers-reduced-motion:reduce) {
     .toolbar-actions :global(.push-action) { transition:none; }
