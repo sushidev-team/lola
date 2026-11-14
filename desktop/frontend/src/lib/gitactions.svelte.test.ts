@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { GitActions } from './gitactions.svelte';
 import { ProjectGitState, projectGitState } from './projectgit.svelte';
@@ -11,7 +11,7 @@ const main: GitRef = { name: 'main', fullName: 'refs/heads/main', sha: 'a'.repea
 const feature: GitRef = { name: 'feature/work', fullName: 'refs/heads/feature/work', sha: 'b'.repeat(40), remote: false, current: false };
 let git: ProjectGitState;
 let actions: GitActions;
-let callbacks: { viewHistory: ReturnType<typeof vi.fn>; openWorktree: ReturnType<typeof vi.fn>; viewCommit: ReturnType<typeof vi.fn> };
+let callbacks: { viewHistory: Mock<(ref: string) => void>; openWorktree: Mock<(path: string) => void>; viewCommit: Mock<(sha: string) => void> };
 const event = () => new MouseEvent('contextmenu', { clientX: 15, clientY: 20, cancelable: true });
 beforeEach(() => {
   git = new ProjectGitState('project', '');
