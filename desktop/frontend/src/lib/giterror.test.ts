@@ -1,5 +1,9 @@
 import {expect,it} from 'vitest';
 import {gitErrorInfo} from './giterror';
+it.each(['remote branch changed since it was fetched', 'git push: exit status 1: To github.com:acme/repo.git\n ! [rejected] (delete) -> topic (stale info)'])('explains remote deletion refused for %s', error => {
+ expect(gitErrorInfo(error, 'delete-branch')).toMatchObject({title:'Remote branch changed',kind:'warn'});
+ expect(gitErrorInfo(error, 'delete-branch').description).toContain('Fetch');
+});
 it.each([
  ['RuntimeError: repository action failed: git push: exit status 1: ! [rejected] main -> main (non-fast-forward)','Push blocked','pull'],
  ['branch has diverged; check it out and merge or rebase the upstream explicitly','Branches have diverged','merge'],

@@ -3,6 +3,8 @@ export type GitErrorInfo = { title:string; description:string; kind:'warn'|'bad'
 /** Git stderr is diagnostic detail; the primary message explains the next step. */
 export function gitErrorInfo(raw:string, action=''):GitErrorInfo {
   const text=raw.toLowerCase();
+  if (action === 'delete-branch' && /remote branch changed since|stale info/.test(text))
+    return {title:'Remote branch changed',description:'Fetch the latest branches and review the new tip before deleting.',kind:'warn'};
   if (action === 'remove-worktree-branch' && text.includes('branch is not fully merged'))
     return {title:'Branch is not fully merged',description:'Keep the branch, or force removal if you no longer need its commits.',kind:'warn',recovery:'force-remove'};
   if (action === 'delete-branch' && text.includes('not fully merged'))
