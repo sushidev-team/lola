@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 
-const { Status, Board, Org, Claim, Release, Sync, Stats, HubProjects, SandboxLoginNeeded } = vi.hoisted(() => ({
+const { Status, Board, Org, Claim, Release, Sync, Stats, RevokeDevice, HubProjects, SandboxLoginNeeded } = vi.hoisted(() => ({
+  RevokeDevice: vi.fn(),
   HubProjects: vi.fn(),
   SandboxLoginNeeded: vi.fn(),
   Status: vi.fn(),
@@ -15,7 +16,7 @@ const { Status, Board, Org, Claim, Release, Sync, Stats, HubProjects, SandboxLog
 
 vi.mock("@bindings/desktop", async (orig) => ({
   ...(await orig<object>()),
-  HubService: { Status, Board, Org, Claim, Release, Sync, Stats, Join: vi.fn(), Leave: vi.fn(), DefaultDeviceName: vi.fn(), Kinds: vi.fn() },
+  HubService: { Status, Board, Org, Claim, Release, Sync, Stats, RevokeDevice, Join: vi.fn(), Leave: vi.fn(), DefaultDeviceName: vi.fn(), Kinds: vi.fn() },
   ConfigService: { HubProjects: () => HubProjects(), SandboxLoginNeeded: (p: string, a: string) => SandboxLoginNeeded(p, a) },
 }));
 
@@ -157,6 +158,34 @@ describe("TeamView", () => {
     expect(within(old).getByRole("img", { name: "Offline" })).toBeInTheDocument();
     expect(old.querySelector("[data-device-state]")).toHaveTextContent("Offline");
     expect(document.querySelector('[data-device="bobs-mac"]')).toHaveTextContent(/^\s*Bob/);
+  });
+
+  it("lets only a team admin remove another Mac, after a confirm", async () => {
+    render(TeamView);
+    await waitFor(() => expect(document.querySelector('[data-device="bobs-mac"]')).not.toBeNull());
+    // A plain member sees no Remove.
+    expect(screen.queryByRole("button", { name: /^Remove .* from the team$/ })).toBeNull();
+    cleanup();
+    hub.reset();
+
+    Status.mockResolvedValue({ ...joined, admin: true });
+    RevokeDevice.mockReset().mockResolvedValue({ revoked: true });
+    render(TeamView);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Bob from the team" })).toBeInTheDocument());
+    // Never this Mac.
+    expect(within(document.querySelector('[data-device="studio-mac"]') as HTMLElement).queryByRole("button")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Remove Bob from the team" }));
+    expect(RevokeDevice).not.toHaveBeenCalled();
+    expect(confirm.request?.title).toMatch(/Remove this Mac/);
+    confirm.accept();
+    // The hub knows a device by its name, not the member's label.
+    await waitFor(() => expect(RevokeDevice).toHaveBeenCalledWith("bobs-mac"));
+
+    RevokeDevice.mockRejectedValueOnce(new Error("hub: HTTP 403 forbidden: refused"));
+    await fireEvent.click(screen.getByRole("button", { name: "Remove old-mac from the team" }));
+    confirm.accept();
+    const row = document.querySelector('[data-device="old-mac"]') as HTMLElement;
+    await waitFor(() => expect(within(row).getByRole("alert")).toHaveTextContent(/did not accept this Mac as a team admin/));
   });
 
   it("shows who works a teammate's chore, for how long, and its pull request", async () => {

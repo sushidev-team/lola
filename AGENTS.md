@@ -472,9 +472,30 @@ every send path. Re-verify against a live pane.
     - No Settings key may ever execute anything (hubproto's closed set).
   - **A person's hub command is a human act, and only a human's.**
     `protocol.HubHumanCommands` (join, leave, board, org, claim, release,
-    sync) are denied by `internal/remote` as a list (a phone gets none of
+    sync, stats, and the team commands createTeam, invite, teamSettings,
+    revoke) are denied by `internal/remote` as a list (a phone gets none of
     them, the board and org included: they carry the whole team's work and
     device names) and named by no sandbox hook-bridge allowlist. Rules:
+    - **The team admin key is not the device key.** `cmd=hubCreateTeam`
+      (`hub.CreateTeam`) generates it on this machine and stores it in
+      `state/hub-admin-key` (0600) as a record naming its hub and team; it is
+      written PENDING before the one-time create code is sent and confirmed
+      after the hub answered. It is never in `config.toml`, argv, a log line
+      or a socket reply (`hub.AdminKey` renders its public half only). A
+      leave keeps it; creating another team replaces it only with
+      `replaceAdminKey`. Its PUBLIC half is pinned in `trusted_policy_keys`
+      without a question, because it was generated here, not received.
+    - The team-admin commands (`internal/daemon/hubadmin.go`: `hubInvite`,
+      `hubTeamSettings`, `hubRevoke`) are device-signed AND countersigned
+      with that key (`hubproto.SignAdmin`, `Client.rawSigned`). `hubAdmin()`
+      fails closed before anything is sent: no identity, an admin key for
+      another hub or team, or a device key that did not enroll. A Linear key,
+      a digest webhook and a create code go IN only: never logged, scrubbed
+      from every error (`hubScrub`), answered with fixed sentences. What
+      comes back is status, validated whole (`OrgSettingsView.Validate`; a
+      view of another team is refused). The invite is built HERE
+      (`AdminKey.Invite`) from this machine's hub url and admin key; the hub
+      supplies the token only, so it never chooses the key a member pins.
     - `cmd=hubClaim` goes through `hubClaimItem`, the loop's path, with the
       human rules of every human open: the click is the opt-in (no
       `hub_chores`) and intent (no concurrency cap, no daily count, no

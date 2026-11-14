@@ -95,6 +95,26 @@ func (d *Daemon) handleHub(ctx context.Context, req protocol.Request) protocol.R
 		}
 	case protocol.CmdHubStats:
 		data, err = d.handleHubStats(ctx)
+	case protocol.CmdHubCreateTeam:
+		var a protocol.HubCreateTeamArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubCreateTeam(ctx, a)
+		}
+	case protocol.CmdHubInvite:
+		var a protocol.HubInviteArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubInvite(ctx, a)
+		}
+	case protocol.CmdHubTeamSettings:
+		var a protocol.HubTeamSettingsArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubTeamSettings(ctx, a)
+		}
+	case protocol.CmdHubRevoke:
+		var a protocol.HubRevokeArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubRevoke(ctx, a)
+		}
 	case protocol.CmdHubSync:
 		d.hubDropCaches()
 		d.hubPolicyDue()

@@ -42,11 +42,28 @@ export function Claim(a: protocol$0.HubClaimArgs): $CancellablePromise<protocol$
 }
 
 /**
+ * CreateTeam creates a team with the operator's one-time create code and
+ * makes this Mac its first member and admin. Like Join, the code is a secret
+ * carried from the form to the daemon and no further.
+ */
+export function CreateTeam(a: protocol$0.HubCreateTeamArgs): $CancellablePromise<protocol$0.HubCreateTeamData> {
+    return $Call.ByID(3677264175, a);
+}
+
+/**
  * DefaultDeviceName is the name a join uses when none is typed: this Mac's
  * hostname reduced to what enrollment accepts. Local, no daemon needed.
  */
 export function DefaultDeviceName(): $CancellablePromise<string> {
     return $Call.ByID(4096362550);
+}
+
+/**
+ * Invite mints one invite for a teammate (team admins only). The invite holds
+ * a one-time token: the frontend shows it once and keeps it nowhere.
+ */
+export function Invite(a: protocol$0.HubInviteArgs): $CancellablePromise<protocol$0.HubInviteData> {
+    return $Call.ByID(2619375971, a);
 }
 
 /**
@@ -85,6 +102,14 @@ export function Release(itemID: string): $CancellablePromise<protocol$0.HubRelea
 }
 
 /**
+ * RevokeDevice revokes a device of the team by its display name (team admins
+ * only).
+ */
+export function RevokeDevice(name: string): $CancellablePromise<protocol$0.HubRevokeData> {
+    return $Call.ByID(1457295818, name);
+}
+
+/**
  * Stats reads the org's daily counters and sums the last seven days.
  */
 export function Stats(): $CancellablePromise<$models.HubStatsDTO> {
@@ -103,4 +128,12 @@ export function Status(): $CancellablePromise<protocol$0.HubStatusData> {
  */
 export function Sync(): $CancellablePromise<protocol$0.HubSyncData> {
     return $Call.ByID(4279534985);
+}
+
+/**
+ * TeamSettings reads the team's settings status, or changes them when a
+ * field is set (team admins only). Secrets go in and never come back.
+ */
+export function TeamSettings(a: protocol$0.HubTeamSettingsArgs): $CancellablePromise<protocol$0.HubTeamSettingsData> {
+    return $Call.ByID(1775377134, a);
 }

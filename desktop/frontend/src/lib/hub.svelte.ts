@@ -30,6 +30,11 @@ import type {
   HubBoardData,
   HubBoardItem,
   HubClaimData,
+  HubCreateTeamData,
+  HubInviteData,
+  HubRevokeData,
+  HubTeamSettingsArgs,
+  HubTeamSettingsData,
   HubUpdateScope,
   HubJoinData,
   HubLeaveData,
@@ -66,7 +71,7 @@ export type BoardState = "" | "open" | "claimed" | "in_review" | "done" | "faile
 export type HubResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 /** Actions that change who this Mac is: nothing else runs beside them. */
-const EXCLUSIVE = new Set(["join", "leave"]);
+const EXCLUSIVE = new Set(["join", "leave", "create"]);
 
 /** Call fn as a promise: a throw (a binding missing in an older build) rejects instead of escaping. */
 function attempt<T>(fn: () => Promise<T>): Promise<T> {
@@ -399,6 +404,43 @@ export class HubStore {
   /** Enroll this machine. The token is passed through and never stored. */
   join(url: string, token: string, name: string): Promise<HubResult<HubJoinData>> {
     return this.#act("join", () => HubService.Join({ url, token, name }));
+  }
+
+  /**
+   * Create a team with the operator's create code; this Mac becomes its first
+   * member and its admin. The code is passed through and never stored.
+   */
+  createTeam(code: string, team: string, name: string, replaceAdminKey = false): Promise<HubResult<HubCreateTeamData>> {
+    return this.#act("create", () => HubService.CreateTeam({ code, team, name, replaceAdminKey }));
+  }
+
+  /** This Mac holds the joined team's admin key. The hub still decides. */
+  get admin(): boolean {
+    return !!this.status?.joined && !!this.status?.admin;
+  }
+
+  /** Mint one invite. It holds a one-time token: the caller shows it once. */
+  invite(label: string, ttlSeconds: number): Promise<HubResult<HubInviteData>> {
+    return this.#act("invite", () => HubService.Invite({ label, ttlSeconds }));
+  }
+
+  /** Read the team's settings status, or change them when a field is set. */
+  teamSettings(args: HubTeamSettingsArgs, key = "settings"): Promise<HubResult<HubTeamSettingsData>> {
+    return this.#act(`team:${key}`, () => HubService.TeamSettings(args));
+  }
+
+  /** Read the team's settings status. A read re-reads nothing else. */
+  async readTeamSettings(teams = false): Promise<HubResult<HubTeamSettingsData>> {
+    try {
+      return { ok: true, data: await attempt(() => HubService.TeamSettings({ teams })) };
+    } catch (err) {
+      const msg = message(err);
+      return { ok: false, error: HUB_PREDATES_RE.test(msg) ? OUTDATED_MESSAGE : msg };
+    }
+  }
+
+  revokeDevice(name: string): Promise<HubResult<HubRevokeData>> {
+    return this.#act(`revoke:${name}`, () => HubService.RevokeDevice(name));
   }
 
   leave(forgetKey: boolean): Promise<HubResult<HubLeaveData>> {

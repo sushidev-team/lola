@@ -23,6 +23,7 @@
   import TimeAgo from "$lib/components/TimeAgo.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { hub, connectionState } from "$lib/hub.svelte";
+  import { teamErrorText } from "$lib/hubteam";
   import { nav } from "$lib/nav.svelte";
   import { sandboxLogin } from "$lib/sandboxlogin.svelte";
   import { store } from "$lib/store.svelte";
@@ -357,6 +358,24 @@
     const r = await hub.release(it.id);
     if (r.ok) store.setFlash(r.data.message ? hubReason(r.data.message) : `Released ${itemTitle(it)}`, r.data.queued ? "warn" : "good");
     else setError(errKey, r.error);
+  }
+
+  /** A team admin removes a Mac: the hub stops accepting it at once. */
+  function askRevoke(name: string, shown: string) {
+    setError(`device:${name}`, "");
+    confirm.ask({
+      title: "Remove this Mac from the team?",
+      body: `Remove ${shown} from ${st?.org || "the team"}?`,
+      detail: "The hub stops accepting it at once and hands its chores back to the team. To come back it needs a new invite.",
+      confirmLabel: "Remove",
+      onConfirm: () => void doRevoke(name, shown),
+    });
+  }
+
+  async function doRevoke(name: string, shown: string) {
+    const r = await hub.revokeDevice(name);
+    if (r.ok) store.setFlash(`Removed ${shown} from the team`, "good");
+    else setError(`device:${name}`, teamErrorText(r.error));
   }
 
   /** Busy per row: a claim on one chore never greys out another. */
@@ -889,10 +908,17 @@
                           {#if !d.me}· {#if d.lastSeen}<TimeAgo at={d.lastSeen} prefix="last seen " />{:else}never seen{/if}{/if}{#if (d.agents ?? []).length} · {(d.agents ?? []).join(", ")}{/if}
                         </span>
                       </span>
-                      <span class="grid justify-items-end">
-                        <span class="num text-ink">{d.freeSlots}</span>
-                        <span class="text-sm text-faint">free</span>
+                      <span class="flex items-center gap-3">
+                        <span class="grid justify-items-end">
+                          <span class="num text-ink">{d.freeSlots}</span>
+                          <span class="text-sm text-faint">free</span>
+                        </span>
+                        {#if hub.admin && !d.me}
+                          <Button size="sm" variant="danger" aria-label="Remove {d.member || d.name} from the team"
+                            loading={hub.isBusy(`revoke:${d.name}`)} onclick={() => askRevoke(d.name, d.member || d.name)}>Remove</Button>
+                        {/if}
                       </span>
+                      {@render errorLine(`device:${d.name}`, "col-span-2")}
                     </li>
                   {/each}
                 </ul>

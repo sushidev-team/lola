@@ -2175,6 +2175,9 @@ func (d *Daemon) hubStatusData() protocol.HubStatusData {
 		ms.Revoked = &r
 	}
 	out.Membership = ms.Membership()
+	if out.Joined {
+		out.Admin = hub.IsAdmin(d.hubDir(), hub.Identity{URL: h.URL, Org: out.Org})
+	}
 	for _, s := range d.sessions.Snapshot() {
 		for _, w := range s.HubWorks() {
 			summary := w.Label

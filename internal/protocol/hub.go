@@ -36,10 +36,119 @@ const (
 	// signed by the daemon). It answers hubproto.StatsView as the hub sent
 	// it (snake_case json), validated whole. Org data, so not a phone's.
 	CmdHubStats = "hubStats"
+	// CmdHubCreateTeam creates a team with a one-time create code and makes
+	// this machine its first member and admin (Args: HubCreateTeamArgs →
+	// HubCreateTeamData). The code is never logged, echoed or returned.
+	CmdHubCreateTeam = "hubCreateTeam"
+	// The TEAM-ADMIN commands. Each needs the team admin key on this machine
+	// (state/hub-admin-key) and is countersigned with it; the key itself
+	// never crosses the socket.
+	//
+	// CmdHubInvite mints one invite for a teammate (Args: HubInviteArgs →
+	// HubInviteData). The invite is a secret and is returned ONCE.
+	CmdHubInvite = "hubInvite"
+	// CmdHubTeamSettings reads the team's settings status, or changes them
+	// (Args: HubTeamSettingsArgs → HubTeamSettingsData). Secrets go in, never
+	// out.
+	CmdHubTeamSettings = "hubTeamSettings"
+	// CmdHubRevoke revokes a device of the team by its display name (Args:
+	// HubRevokeArgs → HubRevokeData).
+	CmdHubRevoke = "hubRevoke"
 )
 
 // HubHumanCommands are the hub commands no remote peer and no agent may send.
-var HubHumanCommands = []string{CmdHubJoin, CmdHubLeave, CmdHubBoard, CmdHubOrg, CmdHubClaim, CmdHubRelease, CmdHubSync, CmdHubStats}
+var HubHumanCommands = []string{CmdHubJoin, CmdHubLeave, CmdHubBoard, CmdHubOrg, CmdHubClaim, CmdHubRelease, CmdHubSync, CmdHubStats,
+	CmdHubCreateTeam, CmdHubInvite, CmdHubTeamSettings, CmdHubRevoke}
+
+// HubCreateTeamArgs is Request.Args for cmd=hubCreateTeam.
+type HubCreateTeamArgs struct {
+	// Code is the whole create code from the hub operator
+	// (lola-hub-create:<url>#<code>): it names the hub.
+	Code string `json:"code"`
+	// Team is the new team's name (lowercase letters, digits, dashes).
+	Team string `json:"team"`
+	// Name is this device's name ("" = the hostname).
+	Name string `json:"name,omitempty"`
+	// ReplaceAdminKey discards the admin key of ANOTHER team this machine
+	// holds. Without it such a key refuses the create.
+	ReplaceAdminKey bool `json:"replaceAdminKey,omitempty"`
+}
+
+// HubCreateTeamData answers cmd=hubCreateTeam. It never carries the code or
+// a private key.
+type HubCreateTeamData struct {
+	Org        string `json:"org"`
+	DeviceID   string `json:"deviceId"`
+	DeviceName string `json:"deviceName"`
+	URL        string `json:"url"`
+	KeyCreated bool   `json:"keyCreated,omitempty"`
+	// AdminKeyID and Fingerprint name the team admin key now on this machine
+	// (the fingerprint is what a new member compares).
+	AdminKeyID  string `json:"adminKeyId"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// HubInviteArgs is Request.Args for cmd=hubInvite. TTLSeconds 0 = 7 days.
+type HubInviteArgs struct {
+	// Label names the member the invite is for.
+	Label      string `json:"label"`
+	TTLSeconds int    `json:"ttlSeconds,omitempty"`
+}
+
+// HubInviteData answers cmd=hubInvite. Invite is the one line a teammate
+// pastes; it holds a one-time token, so it is shown once and stored nowhere.
+type HubInviteData struct {
+	Invite    string    `json:"invite"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	// KeyID and Fingerprint are the policy key the invite carries: the admin
+	// reads the fingerprint to the teammate over another channel.
+	KeyID       string `json:"keyId"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// HubTeamSettingsArgs is Request.Args for cmd=hubTeamSettings. With every
+// pointer nil it only reads; a pointer to "" clears that setting. LinearKey
+// and DigestWebhook are secrets: never logged, never echoed.
+type HubTeamSettingsArgs struct {
+	LinearKey     *string `json:"linearKey,omitempty"`
+	LinearTeam    *string `json:"linearTeam,omitempty"`
+	DigestWebhook *string `json:"digestWebhook,omitempty"`
+	// Teams also lists the Linear workspace's teams (a read only).
+	Teams bool `json:"teams,omitempty"`
+}
+
+// HubTeamSettingsData answers cmd=hubTeamSettings: the STATUS of the team's
+// settings, validated whole. It carries no secret.
+type HubTeamSettingsData struct {
+	Org string `json:"org"`
+	// SecretsAvailable is false when the hub cannot store a key or webhook.
+	SecretsAvailable bool   `json:"secretsAvailable"`
+	LinearKeySet     bool   `json:"linearKeySet"`
+	LinearTeam       string `json:"linearTeam,omitempty"`
+	// LinearError / DigestError are the hub's error classes ("" = none).
+	LinearError string          `json:"linearError,omitempty"`
+	DigestSet   bool            `json:"digestSet"`
+	DigestError string          `json:"digestError,omitempty"`
+	Teams       []HubLinearTeam `json:"teams"`
+}
+
+// HubLinearTeam is one team of the Linear workspace. Name may be "".
+type HubLinearTeam struct {
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+	Name string `json:"name,omitempty"`
+}
+
+// HubRevokeArgs is Request.Args for cmd=hubRevoke.
+type HubRevokeArgs struct {
+	// Device is the device's display name, as the org view lists it.
+	Device string `json:"device"`
+}
+
+// HubRevokeData answers cmd=hubRevoke.
+type HubRevokeData struct {
+	Revoked bool `json:"revoked"`
+}
 
 // HubJoinArgs is Request.Args for cmd=hubJoin. Name "" = the hostname.
 type HubJoinArgs struct {
@@ -385,6 +494,9 @@ type HubStatusData struct {
 	// fail pr_url / group, no heartbeat policy_version); lola falls back to
 	// the old frames for a while and then tries again.
 	LegacyHub bool `json:"legacyHub,omitempty"`
+	// Admin: this machine holds the admin key of the joined team
+	// (state/hub-admin-key). The hub still decides on every request.
+	Admin bool `json:"admin,omitempty"`
 }
 
 // HubSessionInfo is one local session working a hub item.

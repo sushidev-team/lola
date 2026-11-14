@@ -299,6 +299,13 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 // raw sends one signed request and returns the 2xx body, read up to limit
 // bytes (hubproto.MaxBody for every frame but the board views).
 func (c *Client) raw(ctx context.Context, method, path string, in any, limit int64) ([]byte, error) {
+	return c.rawSigned(ctx, method, path, in, limit, nil)
+}
+
+// rawSigned is raw with a second signature: countersign (nil = none) runs
+// AFTER the device signature and adds its own headers over the same body
+// (an org-admin request, admin.go).
+func (c *Client) rawSigned(ctx context.Context, method, path string, in any, limit int64, countersign func(*http.Request, []byte) error) ([]byte, error) {
 	var body []byte
 	if in != nil {
 		var err error
@@ -342,6 +349,11 @@ func (c *Client) raw(ctx context.Context, method, path string, in any, limit int
 	}
 	if err := hubproto.SignAt(req, c.DeviceID(), c.key.priv, body, now(), nonce); err != nil {
 		return nil, err
+	}
+	if countersign != nil {
+		if err := countersign(req, body); err != nil {
+			return nil, err
+		}
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

@@ -29,6 +29,9 @@ type HubService struct{}
 const (
 	hubJoinTimeout = 90 * time.Second
 	hubViewTimeout = 30 * time.Second
+	// A team-admin request is bounded by the daemon at 45s (the hub may ask
+	// Linear); the margin covers the socket round-trip.
+	hubAdminTimeout = 60 * time.Second
 )
 
 // hubCall is the seam over one hub round-trip (tests replace it).
@@ -83,6 +86,46 @@ func (s *HubService) Join(a protocol.HubJoinArgs) (protocol.HubJoinData, error) 
 	a.Name = strings.TrimSpace(a.Name)
 	var d protocol.HubJoinData
 	err := hubCall(protocol.CmdHubJoin, a, &d, hubJoinTimeout)
+	return d, err
+}
+
+// CreateTeam creates a team with the operator's one-time create code and
+// makes this Mac its first member and admin. Like Join, the code is a secret
+// carried from the form to the daemon and no further.
+func (s *HubService) CreateTeam(a protocol.HubCreateTeamArgs) (protocol.HubCreateTeamData, error) {
+	a.Code = strings.TrimSpace(a.Code)
+	a.Team = strings.TrimSpace(a.Team)
+	a.Name = strings.TrimSpace(a.Name)
+	var d protocol.HubCreateTeamData
+	err := hubCall(protocol.CmdHubCreateTeam, a, &d, hubJoinTimeout)
+	return d, err
+}
+
+// Invite mints one invite for a teammate (team admins only). The invite holds
+// a one-time token: the frontend shows it once and keeps it nowhere.
+func (s *HubService) Invite(a protocol.HubInviteArgs) (protocol.HubInviteData, error) {
+	a.Label = strings.TrimSpace(a.Label)
+	var d protocol.HubInviteData
+	err := hubCall(protocol.CmdHubInvite, a, &d, hubAdminTimeout)
+	return d, err
+}
+
+// TeamSettings reads the team's settings status, or changes them when a
+// field is set (team admins only). Secrets go in and never come back.
+func (s *HubService) TeamSettings(a protocol.HubTeamSettingsArgs) (protocol.HubTeamSettingsData, error) {
+	var d protocol.HubTeamSettingsData
+	err := hubCall(protocol.CmdHubTeamSettings, a, &d, hubAdminTimeout)
+	if d.Teams == nil {
+		d.Teams = []protocol.HubLinearTeam{}
+	}
+	return d, err
+}
+
+// RevokeDevice revokes a device of the team by its display name (team admins
+// only).
+func (s *HubService) RevokeDevice(name string) (protocol.HubRevokeData, error) {
+	var d protocol.HubRevokeData
+	err := hubCall(protocol.CmdHubRevoke, protocol.HubRevokeArgs{Device: strings.TrimSpace(name)}, &d, hubAdminTimeout)
 	return d, err
 }
 

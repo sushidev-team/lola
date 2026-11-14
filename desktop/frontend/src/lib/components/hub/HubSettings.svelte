@@ -80,6 +80,8 @@
   import Icon from "$lib/components/Icon.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import HubProjects from "./HubProjects.svelte";
+  import HubAdmin from "./HubAdmin.svelte";
+  import HubCreateTeam from "./HubCreateTeam.svelte";
   import HubReadiness, { type FixTarget } from "./HubReadiness.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { hub, connectionState } from "$lib/hub.svelte";
@@ -205,6 +207,15 @@
     joinDone = `Joined ${r.data.org} as ${r.data.deviceName}.`;
     justJoined = true;
     if (key && trusted) await pinInviteKey(key);
+    onIdentityChange();
+  }
+
+  /** A team was created here: the daemon already pinned its admin key. */
+  async function created(d: { org: string; deviceName: string; adminKeyId: string }) {
+    joinDone = `Created ${d.org}. This Mac is its admin: invite your team under Team admin.`;
+    justJoined = true;
+    invite = "";
+    joinToken = "";
     onIdentityChange();
   }
 
@@ -428,7 +439,7 @@
   {/if}
 
   {#if hub.loaded && !hub.outdated && !hub.statusError && !hub.joined}
-    <SettingsGroup title="Join a hub" help="Your team’s hub hands out security and dependency chores and shares the team policy. Ask your hub admin for an invite.">
+    <SettingsGroup title="Join a team" help="Your team’s hub hands out security and dependency chores and shares the team policy. Ask your team admin for an invite.">
       {#if hub.revoked}
         <div role="alert" class="rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad" data-hub-revoked>
           The hub no longer accepts this Mac. Ask your hub admin for a new invite and join again.
@@ -507,6 +518,7 @@
       {/if}
       {#if joinError}<p role="alert" class="text-sm text-bad">{joinError}</p>{/if}
     </SettingsGroup>
+    <HubCreateTeam placeholderName={joinPlaceholder} onCreated={created} />
   {/if}
 
   {#if hub.joined && st}
@@ -539,6 +551,8 @@
       </div>
       {#if leaveError}<p role="alert" class="text-sm text-bad">{leaveError}</p>{/if}
     </SettingsGroup>
+
+    {#if hub.admin}<HubAdmin />{/if}
 
     <div data-hub-projects-group>
       <SettingsGroup title="Projects" help="A ticked project takes chores from the hub. A chore needs the project's GitHub repository and, while “Sandboxed only” is on, the Docker sandbox. Changes here save at once.">
