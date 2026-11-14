@@ -21,7 +21,7 @@ beforeEach(() => {
   git.stashes = [{ sha: 'c'.repeat(40), selector: 'stash@{0}', subject: 'Saved work', date: '' }];
   vi.spyOn(git, 'branchAction').mockResolvedValue('/repo');
   vi.spyOn(git, 'stashAction').mockResolvedValue(true);
-  callbacks = { viewHistory: vi.fn(), openWorktree: vi.fn(), viewCommit: vi.fn() };
+  callbacks = { viewHistory: vi.fn<(ref: string) => void>(), openWorktree: vi.fn<(path: string) => void>(), viewCommit: vi.fn<(sha: string) => void>() };
   actions = new GitActions(() => ({ git, ref: '', limit: 200 }), callbacks);
   confirm.cancel();
 });
