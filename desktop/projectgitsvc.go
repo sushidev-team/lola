@@ -16,6 +16,7 @@ import (
 	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // ProjectGitService is the human repository interface, not an agent command
@@ -25,9 +26,29 @@ type ProjectGitService struct {
 	pullRequests projectgit.PullRequestClient
 	draftCommit  func(context.Context, string, string) (string, error)
 	mu           sync.Mutex
+	fetchMu      sync.Mutex // network ref updates never hold the checkout-edit lock
 	aiMu         sync.Mutex
 	aiJob        *aiCommitJob
 	identities   projectgit.PersistentIdentityClient
+	queueChanged func(ProjectGitQueueEvent)
+}
+
+const evtProjectGitQueue = "project-git:queue"
+
+type ProjectGitQueueEvent struct {
+	Project  string `json:"project"`
+	Worktree string `json:"worktree"`
+	Action   string `json:"action"`
+	Queued   bool   `json:"queued"`
+}
+
+func (s *ProjectGitService) notifyBranchQueue(project, worktree, action string, queued bool) {
+	event := ProjectGitQueueEvent{Project: project, Worktree: worktree, Action: action, Queued: queued}
+	if s.queueChanged != nil {
+		s.queueChanged(event)
+	} else if app := application.Get(); app != nil {
+		app.Event.Emit(evtProjectGitQueue, event)
+	}
 }
 
 func projectGitWithin(path, root string) bool {
@@ -264,7 +285,17 @@ func (s *ProjectGitService) LastCommitMessage(project, worktree, expectedHead st
 	return (projectgit.Client{}).LastCommitMessage(ctx, dir, expectedHead)
 }
 func (s *ProjectGitService) Fetch(project, worktree string) error {
-	return s.mutate(project, worktree, func(ctx context.Context, dir string) error { return (projectgit.Client{}).Sync(ctx, dir, "fetch") })
+	if !s.fetchMu.TryLock() {
+		return errors.New("a fetch is already running")
+	}
+	defer s.fetchMu.Unlock()
+	ctx, cancel := projectgit.Context()
+	defer cancel()
+	dir, _, err := projectGitTarget(ctx, project, worktree)
+	if err != nil {
+		return err
+	}
+	return (projectgit.Client{}).Sync(ctx, dir, "fetch")
 }
 func (s *ProjectGitService) Pull(project, worktree string) error {
 	return s.mutate(project, worktree, func(ctx context.Context, dir string) error { return (projectgit.Client{}).Sync(ctx, dir, "pull") })
@@ -320,10 +351,18 @@ func (s *ProjectGitService) CreateWorktree(project, worktree, source, sha, path,
 
 // BranchAction resolves and authorizes the owner before writing in a linked checkout.
 func (s *ProjectGitService) BranchAction(project, worktree string, request projectgit.BranchRequest) (projectgit.BranchResult, error) {
-	if !s.mu.TryLock() {
-		return projectgit.BranchResult{}, errors.New("another repository action is running; wait for it to finish")
+	lock := &s.mu
+	if request.Action == "fetch" || (request.Action == "pull" && strings.HasPrefix(request.Source, "refs/remotes/")) {
+		lock = &s.fetchMu
 	}
-	defer s.mu.Unlock()
+	if !lock.TryLock() {
+		s.notifyBranchQueue(project, worktree, request.Action, true)
+		lock.Lock()
+		s.notifyBranchQueue(project, worktree, request.Action, false)
+	}
+	defer lock.Unlock()
+	// Start the operation budget and revalidate the requested refs only after
+	// the preceding action finishes. Never replace the tips the human selected.
 	ctx, cancel := projectgit.Context()
 	defer cancel()
 	dir, _, err := projectGitTarget(ctx, project, worktree)

@@ -549,6 +549,13 @@ export interface ProjectFormDTO {
     "isNew": boolean;
 }
 
+export interface ProjectGitQueueEvent {
+    "project": string;
+    "worktree": string;
+    "action": string;
+    "queued": boolean;
+}
+
 /**
  * ProjectLayoutDTO is the WHOLE sidebar arrangement — every configured project
  * in render order with its group, and every group in render order. Both lists

@@ -569,6 +569,7 @@ type PushErrDTO struct {
 }
 
 func init() {
+	application.RegisterEvent[ProjectGitQueueEvent](evtProjectGitQueue)
 	application.RegisterEvent[bool](evtAlive)
 	application.RegisterEvent[struct{}](evtOpenSettings)
 	application.RegisterEvent[struct{}](evtOpenUpdate)

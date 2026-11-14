@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/session"
@@ -25,6 +26,104 @@ func projectGitRepo(t *testing.T) string {
 		}
 	}
 	return dir
+}
+
+func TestProjectGitFetchUsesIndependentLock(t *testing.T) {
+	root := projectGitRepo(t)
+	writeTestConfig(t, minimalConfig+fmt.Sprintf("\n[[project]]\nname = \"demo\"\npath = %q\n", root))
+	if out, err := exec.Command("git", "-C", root, "remote", "add", "origin", root).CombinedOutput(); err != nil {
+		t.Fatalf("remote: %v %s", err, out)
+	}
+	svc := &ProjectGitService{}
+	svc.mu.Lock()
+	if err := svc.Fetch("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BranchAction("demo", "", projectgit.BranchRequest{Action: "fetch", Source: "origin"}); err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.Unlock()
+	svc.fetchMu.Lock()
+	defer svc.fetchMu.Unlock()
+	if err := os.WriteFile(filepath.Join(root, "working"), []byte("working\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Stage("demo", "", []string{"working"}); err != nil {
+		t.Fatalf("fetch blocked staging: %v", err)
+	}
+}
+
+func TestProjectGitPullWaitsAndRevalidates(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("branchChanged=%t", changed), func(t *testing.T) {
+			root := projectGitRepo(t)
+			writeTestConfig(t, minimalConfig+fmt.Sprintf("\n[[project]]\nname = \"demo\"\npath = %q\n", root))
+			run := func(args ...string) string {
+				t.Helper()
+				out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
+				if err != nil {
+					t.Fatalf("git %v: %v %s", args, err, out)
+				}
+				return strings.TrimSpace(string(out))
+			}
+			run("remote", "add", "origin", root)
+			run("fetch", "origin")
+			run("branch", "--set-upstream-to=origin/main")
+			request := projectgit.BranchRequest{Action: "pull", Source: "refs/heads/main", SourceSHA: run("rev-parse", "HEAD")}
+			events := make(chan ProjectGitQueueEvent, 2)
+			svc := &ProjectGitService{queueChanged: func(e ProjectGitQueueEvent) { events <- e }}
+			svc.mu.Lock()
+			locked := true
+			defer func() {
+				if locked {
+					svc.mu.Unlock()
+				}
+			}()
+			done := make(chan error, 1)
+			go func() {
+				_, err := svc.BranchAction("demo", "", request)
+				done <- err
+			}()
+			select {
+			case e := <-events:
+				if e != (ProjectGitQueueEvent{Project: "demo", Action: "pull", Queued: true}) {
+					t.Fatalf("queue event: %+v", e)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("pull was not queued")
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("pull finished before the preceding action: %v", err)
+			default:
+			}
+			if changed {
+				run("commit", "--allow-empty", "-m", "preceding action advances main")
+			}
+			svc.mu.Unlock()
+			locked = false
+			select {
+			case err := <-done:
+				if changed {
+					if err == nil || !strings.Contains(err.Error(), "branch changed since it was selected") {
+						t.Fatalf("stale queued pull: %v", err)
+					}
+				} else if err != nil {
+					t.Fatalf("queued pull failed: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("queued pull did not finish")
+			}
+			select {
+			case e := <-events:
+				if e.Queued {
+					t.Fatal("pull remained queued after acquiring the lock")
+				}
+			default:
+				t.Fatal("missing running event")
+			}
+		})
+	}
 }
 func TestProjectGitOnlyAllowsConfiguredRepositoryAndListedWorktrees(t *testing.T) {
 	root := projectGitRepo(t)

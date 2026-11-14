@@ -56,6 +56,7 @@ export type {
     PathInfoDTO,
     ProjectExecutionDTO,
     ProjectFormDTO,
+    ProjectGitQueueEvent,
     ProjectLayoutDTO,
     ProjectPlacementDTO,
     PushErrDTO,
