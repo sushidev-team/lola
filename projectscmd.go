@@ -91,6 +91,9 @@ Use --dry-run to preview.`,
 	fl.StringVar(&blocked, "blocked-label", "", "label set when a session is blocked")
 	fl.BoolVar(&clearBlocked, "clear-blocked-label", false, "set no blocked label")
 	fl.BoolVar(&dryRun, "dry-run", false, "show what would change without saving")
+	bulk.MarkFlagsMutuallyExclusive("match-label", "clear-match-labels")
+	bulk.MarkFlagsMutuallyExclusive("on-sent-label", "clear-on-sent-label")
+	bulk.MarkFlagsMutuallyExclusive("blocked-label", "clear-blocked-label")
 	cmd.AddCommand(bulk)
 	return cmd
 }
