@@ -31,21 +31,27 @@ func validateSessionName(name string) error {
 	return nil
 }
 
-// A PTY EOF can mean a detached client, not an exited shell. Retire only an
-// ephemeral shell whose primary and auxiliary tmux sessions are ALL gone.
+func isLocalShell(s session.Session) bool {
+	return s.Kind == session.KindLocal && s.IsAgentless() &&
+		(s.Location == "temporary" || s.Location == "main" || s.Location == "checkout")
+}
+
+// A PTY EOF can mean a detached client, not an exited shell. Retire only a
+// borrowed-directory shell whose primary and auxiliary tmux sessions are ALL
+// gone. The command keeps its original name for existing clients.
 func (d *Daemon) handleCloseExitedTemporary(ctx context.Context, id string) (protocol.KillData, error) {
 	s, ok := d.sessions.Get(id)
 	if !ok {
 		return protocol.KillData{Removed: true}, nil
 	}
-	if s.Kind != session.KindLocal || s.Location != "temporary" || !s.IsAgentless() {
-		return protocol.KillData{}, errors.New("session is not a temporary shell")
+	if !isLocalShell(s) {
+		return protocol.KillData{}, errors.New("session is not a local shell")
 	}
 	d.mu.Lock()
 	nat, list := d.native, d.listTmuxSessions
 	d.mu.Unlock()
 	if nat == nil || list == nil {
-		return protocol.KillData{}, errors.New("cannot verify temporary shell liveness")
+		return protocol.KillData{}, errors.New("cannot verify local shell liveness")
 	}
 	cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 	defer cancel()
@@ -67,7 +73,7 @@ func (d *Daemon) handleCloseExitedTemporary(ctx context.Context, id string) (pro
 	// Never call Kill from a PTY-exit notification: even if another tab appeared
 	// after the listing, there is no process termination on this path.
 	if err := runtime.RemoveLocalArtifacts(s.ID); err != nil {
-		d.logf("", "temporary session %s: remove launch artifacts: %v", id, err)
+		d.logf("", "local shell %s: remove launch artifacts: %v", id, err)
 	}
 	return protocol.KillData{Removed: true}, nil
 }

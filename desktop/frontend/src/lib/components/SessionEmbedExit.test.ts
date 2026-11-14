@@ -25,7 +25,8 @@ beforeEach(async () => {
   openSession("temp");
 });
 
-it("retires an exited temporary session and leaves fullscreen", async () => {
+it.each(["temporary", "main", "checkout"])("retires an exited %s shell session and leaves fullscreen", async location => {
+  store.sessions = [{...store.sessions[0],location}] as never;
   render(SessionEmbed,{sessionId:"temp"});
   await fireEvent.click(screen.getByRole("button",{name:"Exit temp"}));
   await waitFor(() => expect(nav.focusedTerm).toBe(""));
@@ -43,12 +44,27 @@ it("keeps a still-running session after an attach client exits", async () => {
 });
 
 it("switches to a remaining shell tab instead of closing it", async () => {
+  store.sessions = [{...store.sessions[0],location:"main"}] as never;
   close.mockResolvedValue({removed:false});
   shells.mockResolvedValue(["temp-shell-1"]);
   render(SessionEmbed,{sessionId:"temp"});
   await fireEvent.click(screen.getByRole("button",{name:"Exit temp"}));
   await waitFor(() => expect(terms.activeTab("temp")).toBe("temp-shell-1"));
   expect(nav.focusedTerm).toBe("temp");
+  close.mockResolvedValue({removed:true});
+  await fireEvent.click(await screen.findByRole("button",{name:"Exit temp-shell-1"}));
+  await waitFor(() => expect(store.sessionById("temp")).toBeUndefined());
+});
+
+it("keeps an agent session when its auxiliary shell exits", async () => {
+  store.sessions = [{...store.sessions[0],location:"main",status:"idle",agentState:"idle"}] as never;
+  shells.mockResolvedValue(["temp-shell-1"]);
+  await terms.refresh("temp");
+  terms.select("temp","temp-shell-1");
+  render(SessionEmbed,{sessionId:"temp"});
+  await fireEvent.click(await screen.findByRole("button",{name:"Exit temp-shell-1"}));
+  expect(close).not.toHaveBeenCalled();
+  expect(store.sessionById("temp")).toBeDefined();
 });
 
 it("does not navigate away from a different session opened during cleanup", async () => {

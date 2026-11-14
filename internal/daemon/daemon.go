@@ -1400,11 +1400,15 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				if prev.Kind != "" {
 					s.Kind = prev.Kind
 				}
-				// Only agent launches record an Agent; the shell flows never do.
+				// Local shells carry the preferred Agent too, so their explicit
+				// launch discriminator must survive a restart unchanged.
+				// For owned worktrees, only agent launches record an Agent.
 				// A record carrying one runs an agent whatever its ID shape says
 				// (hub chores are named like `lola open` shells), and this also
 				// repairs records an earlier adoption wrongly marked agent-less.
-				if prev.Agent != "" {
+				if prev.Kind == session.KindLocal {
+					s.Agentless, s.Manual = prev.Agentless, prev.Manual
+				} else if prev.Agent != "" {
 					s.Agentless, s.Manual = false, false
 					if s.AgentState == state.AgentShell {
 						s.SetAgentState(state.AgentWorking, "", time.Now())

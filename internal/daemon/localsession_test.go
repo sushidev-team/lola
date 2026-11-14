@@ -116,59 +116,62 @@ func TestRegisteredBorrowedCheckout(t *testing.T) {
 }
 
 func TestCloseExitedTemporary(t *testing.T) {
-	for _, tc := range []struct {
-		name, live string
-		listErr    bool
-		removed    bool
-	}{
-		{name: "all gone", removed: true},
-		{name: "primary alive", live: "lola-local-test"},
-		{name: "another shell alive", live: "lola-local-test-shell-1"},
-		{name: "different session", live: "lola-local-test2", removed: true},
-		{name: "unknown liveness", listErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			nat := &fakeNative{}
-			d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
-			s := session.Session{ID: "lola-local-test", Kind: session.KindLocal, Location: "temporary", Agentless: true, Worktree: t.TempDir()}
-			d.sessions.Upsert(s)
-			artifacts := filepath.Join(d.home, "local-sessions", s.ID)
-			if err := os.MkdirAll(artifacts, 0700); err != nil {
-				t.Fatal(err)
-			}
-			d.listTmuxSessions = func(context.Context) ([]tmux.Session, error) {
-				if tc.listErr {
-					return nil, errors.New("tmux unavailable")
+	for _, location := range []string{"temporary", "main", "checkout"} {
+		for _, tc := range []struct {
+			name, live string
+			listErr    bool
+			removed    bool
+		}{
+			{name: "all gone", removed: true},
+			{name: "primary alive", live: "lola-local-test"},
+			{name: "another shell alive", live: "lola-local-test-shell-1"},
+			{name: "different session", live: "lola-local-test2", removed: true},
+			{name: "unknown liveness", listErr: true},
+		} {
+			t.Run(location+"/"+tc.name, func(t *testing.T) {
+				nat := &fakeNative{}
+				d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+				s := session.Session{ID: "lola-local-test", Kind: session.KindLocal, Location: location, Agentless: true, Worktree: t.TempDir()}
+				d.sessions.Upsert(s)
+				artifacts := filepath.Join(d.home, "local-sessions", s.ID)
+				if err := os.MkdirAll(artifacts, 0700); err != nil {
+					t.Fatal(err)
 				}
-				if tc.live != "" {
-					return []tmux.Session{{Name: tc.live}}, nil
+				d.listTmuxSessions = func(context.Context) ([]tmux.Session, error) {
+					if tc.listErr {
+						return nil, errors.New("tmux unavailable")
+					}
+					if tc.live != "" {
+						return []tmux.Session{{Name: tc.live}}, nil
+					}
+					return nil, nil
 				}
-				return nil, nil
-			}
-			out, err := d.handleCloseExitedTemporary(context.Background(), s.ID)
-			if (err != nil) != tc.listErr || out.Removed != tc.removed {
-				t.Fatalf("result %+v, %v", out, err)
-			}
-			if _, exists := d.sessions.Get(s.ID); exists == tc.removed {
-				t.Fatalf("record exists = %v", exists)
-			}
-			if _, err := os.Stat(s.Worktree); err != nil {
-				t.Fatalf("borrowed directory changed: %v", err)
-			}
-			if _, err := os.Stat(artifacts); os.IsNotExist(err) != tc.removed {
-				t.Fatalf("artifacts: %v", err)
-			}
-			if len(nat.killCalls()) != 0 {
-				t.Fatal("exit notification killed a process")
-			}
-		})
+				out, err := d.handleCloseExitedTemporary(context.Background(), s.ID)
+				if (err != nil) != tc.listErr || out.Removed != tc.removed {
+					t.Fatalf("result %+v, %v", out, err)
+				}
+				if _, exists := d.sessions.Get(s.ID); exists == tc.removed {
+					t.Fatalf("record exists = %v", exists)
+				}
+				if _, err := os.Stat(s.Worktree); err != nil {
+					t.Fatalf("borrowed directory changed: %v", err)
+				}
+				if _, err := os.Stat(artifacts); os.IsNotExist(err) != tc.removed {
+					t.Fatalf("artifacts: %v", err)
+				}
+				if len(nat.killCalls()) != 0 {
+					t.Fatal("exit notification killed a process")
+				}
+			})
+		}
 	}
 }
 
 func TestCloseExitedTemporaryRejectsOtherSessions(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	for _, s := range []session.Session{
-		{ID: "lola-local-main", Kind: session.KindLocal, Location: "main", Agentless: true},
+		{ID: "lola-local-main-agent", Kind: session.KindLocal, Location: "main", Agentless: false},
+		{ID: "lola-local-ssh", Kind: session.KindLocal, Location: "ssh", Agentless: true},
 		{ID: "lola-local-agent", Kind: session.KindLocal, Location: "temporary", Agentless: false},
 		{ID: "worktree", Kind: session.KindManual, Agentless: true},
 	} {
@@ -176,6 +179,58 @@ func TestCloseExitedTemporaryRejectsOtherSessions(t *testing.T) {
 		if _, err := d.handleCloseExitedTemporary(context.Background(), s.ID); err == nil {
 			t.Fatalf("accepted %+v", s)
 		}
+	}
+}
+
+func TestObserveLocalShellClosesOnlyAfterLastTerminal(t *testing.T) {
+	for _, location := range []string{"temporary", "main", "checkout"} {
+		t.Run(location, func(t *testing.T) {
+			d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+			s := session.Session{ID: "lola-local-observed", Source: "native", Kind: session.KindLocal, Location: location, Agentless: true, AgentState: state.AgentShell, Worktree: t.TempDir()}
+			d.sessions.Upsert(s)
+			live := []tmux.Session{{Name: s.ID + "-shell-1"}}
+			var listErr error
+			d.listTmuxSessions = func(context.Context) ([]tmux.Session, error) { return live, listErr }
+			d.observeNative(context.Background())
+			if got, ok := d.sessions.Get(s.ID); !ok || got.AgentState != state.AgentShell {
+				t.Fatalf("remaining shell was hidden: %+v", got)
+			}
+			listErr = errors.New("tmux unavailable")
+			d.observeNative(context.Background())
+			if got, ok := d.sessions.Get(s.ID); !ok || got.AgentState != state.AgentShell {
+				t.Fatalf("unknown liveness closed session: %+v", got)
+			}
+			live, listErr = nil, nil
+			d.observeNative(context.Background())
+			if _, ok := d.sessions.Get(s.ID); ok {
+				t.Fatal("last shell exited but session remains")
+			}
+			if _, err := os.Stat(s.Worktree); err != nil {
+				t.Fatalf("borrowed directory changed: %v", err)
+			}
+		})
+	}
+}
+
+func TestAdoptLocalShellKeepsLaunchKind(t *testing.T) {
+	for _, alive := range []bool{true, false} {
+		t.Run(fmt.Sprint(alive), func(t *testing.T) {
+			nat := &fakeNative{alive: map[string]bool{"lola-local-shell": alive}}
+			d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+			d.sessions.Upsert(session.Session{ID: "lola-local-shell", Source: "native", Kind: session.KindLocal, Location: "main", Agentless: true, Agent: "claude", AgentState: state.AgentShell})
+			d.adoptNativeSessions(context.Background())
+			got, ok := d.sessions.Get("lola-local-shell")
+			if !ok || !got.IsAgentless() || got.Agent != "claude" {
+				t.Fatalf("shell reclassified after restart: %+v", got)
+			}
+			want := state.AgentDead
+			if alive {
+				want = state.AgentShell
+			}
+			if got.AgentState != want {
+				t.Fatalf("shell state = %s, want %s", got.AgentState, want)
+			}
+		})
 	}
 }
 

@@ -21,7 +21,7 @@
   import { ssh } from "$lib/ssh.svelte";
   import { talk } from "$lib/talk.svelte";
   import { changes } from "$lib/changes.svelte";
-  import { changesOffered, conversationOffered, feedKnownFrom, stripCells, stripShown } from "$lib/sessionview";
+  import { changesOffered, conversationOffered, feedKnownFrom, isAgentless, stripCells, stripShown } from "$lib/sessionview";
   import ChangesView from "./session/ChangesView.svelte";
   import EndedView from "./session/EndedView.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
@@ -67,9 +67,11 @@
   const covered = $derived(activeTab !== SSH && !(onChanges && rightChanges));
   const noPane = $derived(!!session && activeTab === AGENT && !agentPane);
 
-  async function terminalExited(sid: string, name: string, temporary: boolean, shellTab: boolean) {
+  const localShell = $derived(!!session && isAgentless(session) && ["temporary", "main", "checkout"].includes(session.location ?? ""));
+
+  async function terminalExited(sid: string, name: string, closeSession: boolean, shellTab: boolean) {
     if (shellTab) terms.shellExited(sid, name);
-    if (!temporary) return;
+    if (!closeSession) return;
     const removed = await store.closeExitedTemporary(sid);
     if (removed) {
       // The user may have moved elsewhere while the liveness check ran.
@@ -221,7 +223,7 @@
         autofocus={open && !nav.sidebarBrowsing}
         style={mainStyle}
         focusRequest={id ? terms.terminalFocusAsks(id) : 0}
-        onExit={session && (activeIsShell || session.location === "temporary") ? () => terminalExited(id, terminalName, session.location === "temporary", activeIsShell) : undefined}
+        onExit={session && (activeIsShell || localShell) ? () => terminalExited(id, terminalName, localShell, activeIsShell) : undefined}
         onLeave={leave}
       />
 

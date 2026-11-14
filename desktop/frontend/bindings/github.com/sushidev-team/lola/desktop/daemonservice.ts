@@ -118,7 +118,8 @@ export function Checkpoints(session: string): $CancellablePromise<protocol$0.Che
 }
 
 /**
- * CloseExitedTemporary retires a temporary shell only once all its panes are gone.
+ * CloseExitedTemporary retires a local shell only once all its panes are gone.
+ * The original binding name is retained for existing clients.
  */
 export function CloseExitedTemporary(id: string): $CancellablePromise<protocol$0.KillData> {
     return $Call.ByID(873119733, id);

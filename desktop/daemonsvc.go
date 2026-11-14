@@ -262,7 +262,8 @@ func (s *DaemonService) Open(project, ref string) (protocol.OpenData, error) {
 	return d, err
 }
 
-// CloseExitedTemporary retires a temporary shell only once all its panes are gone.
+// CloseExitedTemporary retires a local shell only once all its panes are gone.
+// The original binding name is retained for existing clients.
 func (s *DaemonService) CloseExitedTemporary(id string) (protocol.KillData, error) {
 	var data protocol.KillData
 	err := call(protocol.Request{Cmd: "closeExitedTemporary", Session: id}, shortTimeout, &data)

@@ -281,15 +281,17 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// send-keys into the human's interactive shell). Refresh it in isolation
 		// and skip the whole agent path.
 		if s.IsAgentless() {
-			// A temporary shell whose pane is gone has nothing left to come back to. The
-			// Glance mounts no terminal, so this cannot hang off a terminal's exit.
-			if !alive && s.Kind == session.KindLocal && s.Location == "temporary" {
+			// Close borrowed-directory shells after their LAST terminal exits.
+			// This also runs when no UI terminal is mounted to report the exit.
+			if !alive && isLocalShell(s) {
 				if res, err := d.handleCloseExitedTemporary(ctx, s.ID); err != nil {
-					d.logf("", "observe: close exited temporary %s: %v", s.ID, err)
+					d.logf("", "observe: close exited shell %s: %v", s.ID, err)
+					continue // unknown liveness must not hide a remaining shell
 				} else if res.Removed {
 					touched = true
 					continue
 				}
+				alive = true // another terminal still belongs to this session
 			}
 			if d.observeManualShell(s, alive) {
 				touched = true
