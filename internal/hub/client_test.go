@@ -221,11 +221,26 @@ func TestItemActions(t *testing.T) {
 	if cr.PRURL != "https://github.com/acme/web/pull/7" {
 		t.Errorf("complete body = %s", h.last().Body)
 	}
-	if err := c.Fail(ctx, "item1", hubproto.FailCI); err != nil {
+	if err := c.Fail(ctx, "item1", hubproto.FailRequest{Reason: hubproto.FailCI}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(h.last().Body), `"ci_failed"`) {
+	if b := string(h.last().Body); b != `{"reason":"ci_failed"}` {
+		t.Errorf("a fail without pr_url / group must be the old frame byte for byte: %s", b)
+	}
+	if err := c.Fail(ctx, "item1", hubproto.FailRequest{Reason: hubproto.FailCI, PRURL: "https://github.com/acme/web/pull/7", Group: "abcdef0123456789"}); err != nil {
+		t.Fatal(err)
+	}
+	var fr hubproto.FailRequest
+	json.Unmarshal(h.last().Body, &fr)
+	if fr.PRURL != "https://github.com/acme/web/pull/7" || fr.Group != "abcdef0123456789" {
 		t.Errorf("fail body = %s", h.last().Body)
+	}
+	h.routes["POST /v1/items/item1/progress"] = func([]byte) (int, any) { return 200, struct{}{} }
+	if err := c.Progress(ctx, "item1", hubproto.ProgressRequest{PRURL: "https://github.com/acme/web/pull/7", Delivery: "review_pending"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.last(); r.Path != "/v1/items/item1/progress" || !strings.Contains(string(r.Body), `"review_pending"`) {
+		t.Errorf("progress = %s %s", r.Path, r.Body)
 	}
 	if err := c.Release(ctx, "item1"); err != nil {
 		t.Fatal(err)
@@ -233,7 +248,16 @@ func TestItemActions(t *testing.T) {
 	for _, fn := range []func() error{
 		func() error { _, err := c.Claim(ctx, "../x"); return err },
 		func() error { return c.Release(ctx, "a/b") },
-		func() error { return c.Fail(ctx, "item1", "because") },
+		func() error { return c.Fail(ctx, "item1", hubproto.FailRequest{Reason: "because"}) },
+		func() error {
+			return c.Fail(ctx, "item1", hubproto.FailRequest{Reason: hubproto.FailCI, Group: "UPPER-case"})
+		},
+		func() error {
+			return c.Progress(ctx, "item1", hubproto.ProgressRequest{PRURL: "https://evil.example/pull/1", Delivery: "merged"})
+		},
+		func() error {
+			return c.Progress(ctx, "../x", hubproto.ProgressRequest{PRURL: "https://github.com/acme/web/pull/7", Delivery: "merged"})
+		},
 		func() error {
 			return c.Complete(ctx, "item1", hubproto.CompleteRequest{PRURL: "https://evil.example/pull/1", Delivery: "merged"})
 		},
@@ -316,5 +340,25 @@ func TestSigningSeams(t *testing.T) {
 	c.Nonce = func() (string, error) { return "bad nonce", nil }
 	if _, _, err := c.Offers(context.Background()); err == nil {
 		t.Error("a malformed nonce must fail signing")
+	}
+}
+
+// A newer hub names the member label and the stored (possibly suffixed)
+// device name; both are validated, and an older hub's answer without them
+// still enrolls.
+func TestEnrollMemberAndStoredName(t *testing.T) {
+	c, h := testClient(t)
+	h.routes["POST "+hubproto.PathEnroll] = func([]byte) (int, any) {
+		return 200, hubproto.EnrollResponse{DeviceID: c.DeviceID(), Org: "acme", Member: "Ana", DeviceName: "mac-2"}
+	}
+	resp, err := c.Enroll(context.Background(), "tok_0123456789abcdef", "mac")
+	if err != nil || resp.Member != "Ana" || resp.DeviceName != "mac-2" {
+		t.Fatalf("Enroll = %+v, %v", resp, err)
+	}
+	h.routes["POST "+hubproto.PathEnroll] = func([]byte) (int, any) {
+		return 200, hubproto.EnrollResponse{DeviceID: c.DeviceID(), Org: "acme", Member: "<script>"}
+	}
+	if _, err := c.Enroll(context.Background(), "tok_0123456789abcdef", "mac"); !errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("bad member label: %v", err)
 	}
 }

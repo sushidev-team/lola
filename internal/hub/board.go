@@ -9,6 +9,7 @@ import (
 
 	"github.com/sushidev-team/lola/hubproto"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // The org board views (hubproto/board.go): READ-ONLY display data a member's
@@ -44,6 +45,53 @@ func (c *Client) Org(ctx context.Context) (hubproto.OrgView, error) {
 		return hubproto.OrgView{}, invalidResponse("org: " + err.Error())
 	}
 	return resp, nil
+}
+
+// Stats is the org's daily counters for the last hubproto.StatsDays days.
+// Counters only; validated whole like the board.
+func (c *Client) Stats(ctx context.Context) (hubproto.StatsView, error) {
+	var resp hubproto.StatsView
+	if err := c.view(ctx, hubproto.PathStats, &resp); err != nil {
+		return hubproto.StatsView{}, err
+	}
+	if err := resp.Validate(); err != nil {
+		return hubproto.StatsView{}, invalidResponse("stats: " + err.Error())
+	}
+	return resp, nil
+}
+
+// FillBoardItem copies a validated row's lifecycle fields — who holds or owns
+// it (device name and member label), its attempt history, the last failure,
+// how often it reopened, when the current claim began — onto the UI row. v
+// passed hubproto validation as part of the whole board, so every field is a
+// closed enum, a pattern-checked label, a github.com PR URL or a time.
+func FillBoardItem(bi *protocol.HubBoardItem, v hubproto.ItemView) {
+	if l := v.Lease; l != nil {
+		if bi.Lease == nil {
+			bi.Lease = &protocol.HubLeaseInfo{Mine: l.Mine, DeviceName: l.DeviceName, Expires: l.Expires}
+		}
+		bi.Lease.Member = l.Member
+	}
+	if o := v.Owner; o != nil {
+		bi.Owner = &protocol.HubOwnerInfo{Mine: o.Mine, DeviceName: o.DeviceName, Member: o.Member}
+	}
+	bi.LastFail = string(v.LastFail)
+	bi.Reopened = v.Reopened
+	bi.ClaimedAt = v.ClaimedAt
+	bi.History = nil
+	for _, a := range v.History {
+		bi.History = append(bi.History, protocol.HubAttemptInfo{
+			DeviceName: a.DeviceName, Member: a.Member, Action: string(a.Action),
+			Reason: string(a.Reason), PRURL: a.PRURL, At: a.At,
+		})
+	}
+}
+
+// FillDeviceInfo copies a validated device row's member label and applied
+// policy version onto the UI row.
+func FillDeviceInfo(di *protocol.HubDeviceInfo, dv hubproto.DeviceView) {
+	di.Member = dv.Member
+	di.PolicyVersion = dv.PolicyVersion
 }
 
 func (c *Client) view(ctx context.Context, path string, out any) error {

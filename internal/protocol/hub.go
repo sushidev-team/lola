@@ -32,10 +32,144 @@ const (
 	CmdHubRelease = "hubRelease"
 	// CmdHubSync runs one hub loop pass soon (coalesced, non-blocking).
 	CmdHubSync = "hubSync"
+	// CmdHubStats is the org's daily counters (the hub's GET /v1/stats,
+	// signed by the daemon). It answers hubproto.StatsView as the hub sent
+	// it (snake_case json), validated whole. Org data, so not a phone's.
+	CmdHubStats = "hubStats"
+	// CmdHubCreateTeam creates a team with a one-time create code and makes
+	// this machine its first member and admin (Args: HubCreateTeamArgs →
+	// HubCreateTeamData). The code is never logged, echoed or returned.
+	CmdHubCreateTeam = "hubCreateTeam"
+	// The TEAM-ADMIN commands. Each needs the team admin key on this machine
+	// (state/hub-admin-key) and is countersigned with it; the key itself
+	// never crosses the socket.
+	//
+	// CmdHubInvite mints one invite for a teammate (Args: HubInviteArgs →
+	// HubInviteData). The invite is a secret and is returned ONCE.
+	CmdHubInvite = "hubInvite"
+	// CmdHubTeamSettings reads the team's settings status, or changes them
+	// (Args: HubTeamSettingsArgs → HubTeamSettingsData). Secrets go in, never
+	// out.
+	CmdHubTeamSettings = "hubTeamSettings"
+	// CmdHubRevoke revokes a device of the team by its display name (Args:
+	// HubRevokeArgs → HubRevokeData).
+	CmdHubRevoke = "hubRevoke"
+	// CmdHubProbe asks a hub, before anything is joined, whether a team can
+	// be created there without a create code (Args: HubProbeArgs →
+	// HubProbeData). It sends nothing about this machine.
+	CmdHubProbe = "hubProbe"
 )
 
 // HubHumanCommands are the hub commands no remote peer and no agent may send.
-var HubHumanCommands = []string{CmdHubJoin, CmdHubLeave, CmdHubBoard, CmdHubOrg, CmdHubClaim, CmdHubRelease, CmdHubSync}
+var HubHumanCommands = []string{CmdHubJoin, CmdHubLeave, CmdHubBoard, CmdHubOrg, CmdHubClaim, CmdHubRelease, CmdHubSync, CmdHubStats,
+	CmdHubCreateTeam, CmdHubInvite, CmdHubTeamSettings, CmdHubRevoke, CmdHubProbe}
+
+// HubProbeArgs is Request.Args for cmd=hubProbe.
+type HubProbeArgs struct {
+	// URL is the hub's base URL (https, or http to a loopback host).
+	URL string `json:"url"`
+}
+
+// HubProbeData answers cmd=hubProbe.
+type HubProbeData struct {
+	// URL is the hub's address as lola will use it.
+	URL string `json:"url"`
+	// OpenTeams: the hub lets a team be created without a create code right
+	// now. False also for a hub too old to say. The hub decides again when
+	// the team is created.
+	OpenTeams bool `json:"openTeams"`
+}
+
+// HubCreateTeamArgs is Request.Args for cmd=hubCreateTeam.
+type HubCreateTeamArgs struct {
+	// Code is the whole create code from the hub operator
+	// (lola-hub-create:<url>#<code>): it names the hub. For a hub that lets
+	// a team be created without a code it is just the hub's URL.
+	Code string `json:"code"`
+	// Team is the new team's name (lowercase letters, digits, dashes).
+	Team string `json:"team"`
+	// Name is this device's name ("" = the hostname).
+	Name string `json:"name,omitempty"`
+	// ReplaceAdminKey discards the admin key of ANOTHER team this machine
+	// holds. Without it such a key refuses the create.
+	ReplaceAdminKey bool `json:"replaceAdminKey,omitempty"`
+}
+
+// HubCreateTeamData answers cmd=hubCreateTeam. It never carries the code or
+// a private key.
+type HubCreateTeamData struct {
+	Org        string `json:"org"`
+	DeviceID   string `json:"deviceId"`
+	DeviceName string `json:"deviceName"`
+	URL        string `json:"url"`
+	KeyCreated bool   `json:"keyCreated,omitempty"`
+	// AdminKeyID and Fingerprint name the team admin key now on this machine
+	// (the fingerprint is what a new member compares).
+	AdminKeyID  string `json:"adminKeyId"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// HubInviteArgs is Request.Args for cmd=hubInvite. TTLSeconds 0 = 7 days.
+type HubInviteArgs struct {
+	// Label names the member the invite is for.
+	Label      string `json:"label"`
+	TTLSeconds int    `json:"ttlSeconds,omitempty"`
+}
+
+// HubInviteData answers cmd=hubInvite. Invite is the one line a teammate
+// pastes; it holds a one-time token, so it is shown once and stored nowhere.
+type HubInviteData struct {
+	Invite    string    `json:"invite"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	// KeyID and Fingerprint are the policy key the invite carries: the admin
+	// reads the fingerprint to the teammate over another channel.
+	KeyID       string `json:"keyId"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// HubTeamSettingsArgs is Request.Args for cmd=hubTeamSettings. With every
+// pointer nil it only reads; a pointer to "" clears that setting. LinearKey
+// and DigestWebhook are secrets: never logged, never echoed.
+type HubTeamSettingsArgs struct {
+	LinearKey     *string `json:"linearKey,omitempty"`
+	LinearTeam    *string `json:"linearTeam,omitempty"`
+	DigestWebhook *string `json:"digestWebhook,omitempty"`
+	// Teams also lists the Linear workspace's teams (a read only).
+	Teams bool `json:"teams,omitempty"`
+}
+
+// HubTeamSettingsData answers cmd=hubTeamSettings: the STATUS of the team's
+// settings, validated whole. It carries no secret.
+type HubTeamSettingsData struct {
+	Org string `json:"org"`
+	// SecretsAvailable is false when the hub cannot store a key or webhook.
+	SecretsAvailable bool   `json:"secretsAvailable"`
+	LinearKeySet     bool   `json:"linearKeySet"`
+	LinearTeam       string `json:"linearTeam,omitempty"`
+	// LinearError / DigestError are the hub's error classes ("" = none).
+	LinearError string          `json:"linearError,omitempty"`
+	DigestSet   bool            `json:"digestSet"`
+	DigestError string          `json:"digestError,omitempty"`
+	Teams       []HubLinearTeam `json:"teams"`
+}
+
+// HubLinearTeam is one team of the Linear workspace. Name may be "".
+type HubLinearTeam struct {
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+	Name string `json:"name,omitempty"`
+}
+
+// HubRevokeArgs is Request.Args for cmd=hubRevoke.
+type HubRevokeArgs struct {
+	// Device is the device's display name, as the org view lists it.
+	Device string `json:"device"`
+}
+
+// HubRevokeData answers cmd=hubRevoke.
+type HubRevokeData struct {
+	Revoked bool `json:"revoked"`
+}
 
 // HubJoinArgs is Request.Args for cmd=hubJoin. Name "" = the hostname.
 type HubJoinArgs struct {
@@ -63,10 +197,15 @@ type HubLeaveArgs struct {
 type HubLeaveData struct {
 	Left       bool `json:"left"`
 	KeyDeleted bool `json:"keyDeleted,omitempty"`
+	// Released counts the leases the hub took back before the leave; Kept
+	// those left to expire (unreachable hub, refused, or out of time). The
+	// sessions behind both keep running.
+	Released int `json:"released,omitempty"`
+	Kept     int `json:"kept,omitempty"`
 }
 
 // HubBoardArgs is Request.Args for cmd=hubBoard. State "" = every state
-// (open | claimed | done | failed | escalated); Limit 0 = the hub's default
+// (open | claimed | in_review | done | failed | escalated); Limit 0 = the hub's default
 // (200), at most 500.
 type HubBoardArgs struct {
 	State string `json:"state,omitempty"`
@@ -111,6 +250,17 @@ type HubBoardItem struct {
 	Lease      *HubLeaseInfo      `json:"lease,omitempty"`
 	Outcome    *HubOutcomeInfo    `json:"outcome,omitempty"`
 	Escalation *HubEscalationInfo `json:"escalation,omitempty"`
+	// Owner is the device that opened the item's PR (in_review, done, failed,
+	// escalated); nil before that.
+	Owner *HubOwnerInfo `json:"owner,omitempty"`
+	// History is the item's attempts, oldest first (at most 20).
+	History []HubAttemptInfo `json:"history,omitempty"`
+	// LastFail is the last fail reason ("" = none); Reopened counts how often
+	// the hub put the item back on offer.
+	LastFail string `json:"lastFail,omitempty"`
+	Reopened int    `json:"reopened,omitempty"`
+	// ClaimedAt is when the current claim began (claimed / in_review only).
+	ClaimedAt time.Time `json:"claimedAt,omitzero"`
 	// Local is THIS machine's answer for the row.
 	Local HubLocalInfo `json:"local"`
 }
@@ -119,7 +269,27 @@ type HubBoardItem struct {
 type HubLeaseInfo struct {
 	Mine       bool      `json:"mine"`
 	DeviceName string    `json:"deviceName"`
+	Member     string    `json:"member,omitempty"`
 	Expires    time.Time `json:"expires"`
+}
+
+// HubOwnerInfo is the device (and its member label) that owns an item in
+// review or finished.
+type HubOwnerInfo struct {
+	Mine       bool   `json:"mine"`
+	DeviceName string `json:"deviceName"`
+	Member     string `json:"member,omitempty"`
+}
+
+// HubAttemptInfo is one entry of an item's history. Action is a
+// hubproto.AttemptAction word, Reason a hubproto.FailReason ("" = none).
+type HubAttemptInfo struct {
+	DeviceName string    `json:"deviceName,omitempty"`
+	Member     string    `json:"member,omitempty"`
+	Action     string    `json:"action"`
+	Reason     string    `json:"reason,omitempty"`
+	PRURL      string    `json:"prUrl,omitempty"`
+	At         time.Time `json:"at"`
 }
 
 // HubOutcomeInfo is the PR a device reported. PRURL is a github.com PR URL
@@ -164,6 +334,10 @@ type HubDeviceInfo struct {
 	FreeSlots int       `json:"freeSlots"`
 	Agents    []string  `json:"agents"`
 	Active    bool      `json:"active"`
+	// Member is the admin-set label of the person the device belongs to;
+	// PolicyVersion the team policy version it applies (0 = none / unknown).
+	Member        string `json:"member,omitempty"`
+	PolicyVersion int    `json:"policyVersion,omitempty"`
 }
 
 // HubClaimArgs is Request.Args for cmd=hubClaim. Project names the
@@ -223,7 +397,13 @@ type HubSessionHub struct {
 	Kind      string `json:"kind"`
 	Label     string `json:"label,omitempty"`
 	LeaseLost bool   `json:"leaseLost,omitempty"`
-	Released  bool   `json:"released,omitempty"`
+	// LeaseTaken: the lease was lost AND another device holds the item now
+	// (a re-claim was refused). The session keeps running either way.
+	LeaseTaken bool `json:"leaseTaken,omitempty"`
+	// InReview: the hub took the PR (progress acknowledged); no lease is
+	// renewed any more, the item waits for merge or close.
+	InReview bool `json:"inReview,omitempty"`
+	Released bool `json:"released,omitempty"`
 }
 
 // HubFindingsInfo is the last findings report.
@@ -233,6 +413,34 @@ type HubFindingsInfo struct {
 	Reported int       `json:"reported"`
 	Accepted int       `json:"accepted"`
 	Rejected int       `json:"rejected"`
+}
+
+// HubRepoHealth is the last findings scan of one opted-in repository.
+// Alerts: "ok" | "no_access" (Dependabot alerts disabled or not visible:
+// gh answered 403/404) | "error"; PullRequests: "ok" | "error". Error is the
+// first gh failure in lola's words plus gh's clipped stderr.
+type HubRepoHealth struct {
+	Repo         string    `json:"repo"`
+	At           time.Time `json:"at"`
+	Alerts       string    `json:"alerts"`
+	PullRequests string    `json:"pullRequests"`
+	Error        string    `json:"error,omitempty"`
+}
+
+// HubRepoHealth states.
+const (
+	HubHealthOK       = "ok"
+	HubHealthNoAccess = "no_access"
+	HubHealthError    = "error"
+)
+
+// HubOfferSkip is one offer the last cycle did not claim, and why. Reason is
+// one of the stable hub.Reason* words (internal/hub/accept.go).
+type HubOfferSkip struct {
+	ItemID string    `json:"itemId"`
+	Kind   string    `json:"kind"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
 }
 
 // HubPolicyInfo is the verified team policy. Keys lists the settings it
@@ -265,10 +473,14 @@ type HubAppliedKey struct {
 // HubStatusData is Response.Data for cmd=hubStatus.
 type HubStatusData struct {
 	// Enabled mirrors [hub].enabled; Joined is whether an identity loaded.
-	Enabled bool   `json:"enabled"`
-	Joined  bool   `json:"joined"`
-	URL     string `json:"url,omitempty"`
-	Device  string `json:"device,omitempty"`
+	Enabled bool `json:"enabled"`
+	Joined  bool `json:"joined"`
+	// Membership is the one-word answer to "is this machine in a team":
+	// "joined", "revoked" (the hub refused this device's signature; a new
+	// token and join are needed) or "not joined" (hub.Status.Membership).
+	Membership string `json:"membership,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Device     string `json:"device,omitempty"`
 	// DeviceName is the name this device enrolled with.
 	DeviceName string `json:"deviceName,omitempty"`
 	Org        string `json:"org,omitempty"`
@@ -292,6 +504,20 @@ type HubStatusData struct {
 	LastFindings *HubFindingsInfo `json:"lastFindings,omitempty"`
 	// Sessions are the local sessions working a hub item.
 	Sessions []HubSessionInfo `json:"sessions,omitempty"`
+	// LastSync is the end of the last cycle in which no stage failed;
+	// LastError is cleared then.
+	LastSync time.Time `json:"lastSync,omitzero"`
+	// FindingsHealth is the last scan's answer per repository.
+	FindingsHealth []HubRepoHealth `json:"findingsHealth,omitempty"`
+	// OfferSkips are the offers the last cycle left unclaimed.
+	OfferSkips []HubOfferSkip `json:"offerSkips,omitempty"`
+	// LegacyHub: the hub predates the chore lifecycle (no progress frame, no
+	// fail pr_url / group, no heartbeat policy_version); lola falls back to
+	// the old frames for a while and then tries again.
+	LegacyHub bool `json:"legacyHub,omitempty"`
+	// Admin: this machine holds the admin key of the joined team
+	// (state/hub-admin-key). The hub still decides on every request.
+	Admin bool `json:"admin,omitempty"`
 }
 
 // HubSessionInfo is one local session working a hub item.
@@ -303,8 +529,12 @@ type HubSessionInfo struct {
 	ClaimedAt    time.Time `json:"claimedAt,omitzero"`
 	LeaseExpires time.Time `json:"leaseExpires,omitzero"`
 	LeaseLost    bool      `json:"leaseLost,omitempty"`
-	Released     bool      `json:"released,omitempty"`
-	Reported     string    `json:"reported,omitempty"`
+	LeaseTaken   bool      `json:"leaseTaken,omitempty"`
+	InReview     bool      `json:"inReview,omitempty"`
+	// Progress is the delivery last reported to the hub for the PR.
+	Progress string `json:"progress,omitempty"`
+	Released bool   `json:"released,omitempty"`
+	Reported string `json:"reported,omitempty"`
 	// Summary is lola's own label for the item ("GHSA-xxxx · lodash").
 	Summary string `json:"summary,omitempty"`
 }

@@ -53,6 +53,79 @@ async function pointerDrag(source: Element, target: Element, release = true) {
 
 
 describe('Project Git workspace', () => {
+  it.each(['commit', 'merge'])('refreshes the graph immediately after a %s in a peeked worktree', async operation => {
+    const data = snapshot();
+    Object.assign(data.worktrees[1], { changes: 1, modified: 1 });
+    const other = snapshot({path:'/repo-feature',branch:'feature',head:oldSHA,files:[data.files[0]],...(operation === 'merge' ? {operation:'merge',mergeMessage:'Merge topic into feature'} : {})});
+    let committed = false;
+    const sha = 'c'.repeat(40);
+    const commit = {...data.commits[0],sha,subject:'New worktree commit',parents:[oldSHA],refs:['feature']};
+    api.Snapshot.mockImplementation(async (_project: string, worktree: string) => {
+      if (worktree === '/repo-feature') return committed ? {...other,head:sha,files:[],operation:'',commits:[commit]} : other;
+      return committed ? {...data,commits:[commit,...data.commits],worktrees:[data.worktrees[0],{...data.worktrees[1],head:sha,changes:0,modified:0}]} : data;
+    });
+    api.Commit.mockImplementation(async () => { committed = true; });
+    api.BranchAction.mockImplementation(async () => { committed = true; return {path:'/repo-feature'}; });
+    await open();
+    await fireEvent.click(screen.getByRole('button', {name:/Working changes on feature, 1 file, worktree/}));
+    await screen.findByRole('group', {name:'Worktree feature'});
+    await waitFor(() => expect(screen.getByLabelText('Commit subject')).toBeEnabled());
+    await fireEvent.input(screen.getByLabelText('Commit subject'), {target:{value:'New worktree commit'}});
+    await fireEvent.submit(screen.getByLabelText('Commit subject').closest('form')!);
+    expect(await screen.findByRole('button', {name:/New worktree commit,/})).toBeVisible();
+    expect(screen.queryByRole('button', {name:/Working changes on feature,/})).toBeNull();
+    expect(api.Snapshot).toHaveBeenLastCalledWith(project, '', '', 200);
+    expect(screen.getByRole('group', {name:'Worktree feature'})).toBeVisible();
+  });
+  it('shows work in progress of another worktree above its commit, split by kind', async () => {
+    const data = snapshot();
+    Object.assign(data.worktrees[1], { changes: 6, modified: 3, added: 2, deleted: 1 });
+    api.Snapshot.mockResolvedValue(data);
+    await open();
+    const row = screen.getByRole('button', { name: /Working changes on feature, 6 files, worktree/ });
+    expect(row).toHaveAttribute('data-worktree-changes', '/repo-feature');
+    // Above the commit that checkout sits on, below the newer one.
+    const rows = Array.from(document.querySelectorAll('.history-list .commit-row'));
+    expect(rows.indexOf(row)).toBe(rows.indexOf(screen.getByRole('button', { name: /Initial project,/ })) - 1);
+    expect(within(row).getByTitle('3 modified files')).toHaveTextContent('3');
+    expect(within(row).getByTitle('2 added files')).toHaveTextContent('2');
+    expect(within(row).getByTitle('1 deleted files')).toHaveTextContent('1');
+    expect(row).not.toHaveTextContent(/another worktree/);
+    expect(within(screen.getByRole('region', { name: 'Worktrees' })).getByTitle('6 uncommitted files')).toBeVisible();
+  });
+  it('peeks at another worktree in the inspector without leaving this checkout', async () => {
+    const data = snapshot();
+    Object.assign(data.worktrees[1], { changes: 1, modified: 1 });
+    const other = snapshot({ path: '/repo-feature', branch: 'feature', head: oldSHA, files: [{ path: 'peeked.ts', oldPath: '', index: ' ', worktree: 'M', untracked: false, conflict: false }] });
+    api.Snapshot.mockImplementation(async (_project: string, worktree: string) => worktree === '/repo-feature' ? other : data);
+    await open();
+    const row = screen.getByRole('button', { name: /Working changes on feature, 1 file, worktree/ });
+    await fireEvent.click(row);
+    await waitFor(() => expect(api.Snapshot).toHaveBeenCalledWith(project, '/repo-feature', '', 1));
+    const heading = await screen.findByRole('group', { name: 'Worktree feature' });
+    expect(row).toHaveAttribute('aria-pressed', 'true');
+    // The history is still this checkout's.
+    expect(screen.getByRole('button', { name: /Add project workspace,/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: /^Working changes, 2 files/ })).not.toHaveAttribute('aria-pressed', 'true');
+    const inspector = screen.getByRole('complementary');
+    await waitFor(() => expect(within(inspector).getByText(/peeked\.ts/)).toBeVisible());
+    expect(within(inspector).queryByText(/new\.ts/)).toBeNull();
+    // Back to this checkout's own changes.
+    await fireEvent.click(within(heading).getByRole('button', { name: "Back to this checkout's changes" }));
+    await waitFor(() => expect(within(screen.getByRole('complementary')).getByText(/new\.ts/)).toBeVisible());
+    // "Open" switches the whole view.
+    await fireEvent.click(row);
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Worktree feature' })).getByRole('button', { name: 'Open' }));
+    await waitFor(() => expect(api.Snapshot).toHaveBeenCalledWith(project, '/repo-feature', '', 200));
+  });
+  it('draws no row for a clean, blocked or active worktree', async () => {
+    const data = snapshot();
+    data.worktrees[0].changes = 2;                       // active: its files are the In progress row
+    data.worktrees[1].changes = 4; data.worktrees[1].blocked = true;
+    api.Snapshot.mockResolvedValue(data);
+    await open();
+    expect(document.querySelector('[data-worktree-changes]')).toBeNull();
+  });
   it('shows named refs and expands extra branch and tag badges without a reference popover', async () => {
     const data = snapshot();
     data.refs = [
@@ -104,6 +177,49 @@ describe('Project Git workspace', () => {
     await waitFor(()=>expect(screen.getByRole('button',{name:/Add project workspace,/})).toHaveAttribute('aria-pressed','true'));
     resolve({path:'/repo'});
     await waitFor(()=>expect(screen.getByRole('button',{name:'origin/main'})).not.toHaveAttribute('aria-busy'));
+  });
+  it('offers a confirmed force retry in the unmerged-worktree error banner', async () => {
+    const data = snapshot();
+    data.refs.push({name:'feature',fullName:'refs/heads/feature',sha:oldSHA,current:false,remote:false});
+    api.Snapshot.mockResolvedValue(data);
+    api.BranchAction.mockRejectedValueOnce(new Error('branch is not fully merged; remove only the worktree to keep its branch'));
+    render(ConfirmDialog);
+    await open();
+    await fireEvent.click(screen.getByRole('button', {name:'Actions for worktree /repo-feature'}));
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Remove worktree and branch…'}));
+    await fireEvent.click(within(await screen.findByRole('dialog', {name:'Remove worktree and branch?'})).getByRole('button', {name:'Remove worktree and branch'}));
+    await fireEvent.click(await screen.findByRole('button', {name:'Force remove…'}));
+    const dialog = await screen.findByRole('dialog', {name:'Remove unmerged worktree and branch?'});
+    expect(within(dialog).getByText(/may lose commits/)).toBeVisible();
+    expect(within(dialog).getByRole('button', {name:'Remove worktree only'})).toBeEnabled();
+    expect(api.BranchAction).toHaveBeenCalledTimes(1);
+    await fireEvent.click(within(dialog).getByRole('button', {name:'Force remove'}));
+    await waitFor(() => expect(api.BranchAction).toHaveBeenLastCalledWith(project, '', {
+      action:'remove-worktree-branch',source:'refs/heads/feature',sourceSHA:oldSHA,target:'/repo-feature',targetSHA:'',forceDeleteBranch:true,
+    }));
+    await waitFor(() => expect(screen.queryByRole('button', {name:'Force remove…'})).toBeNull());
+  });
+  it('offers branch-only recovery after a directory error unregisters the worktree', async () => {
+    const data = snapshot();
+    data.refs.push({name:'feature',fullName:'refs/heads/feature',sha:oldSHA,current:false,remote:false});
+    api.Snapshot.mockImplementation(async () => data);
+    api.BranchAction.mockImplementationOnce(async () => {
+      data.worktrees = [data.worktrees[0]];
+      throw new Error("git worktree: exit status 255: failed to delete '/repo-feature': Directory not empty");
+    });
+    render(ConfirmDialog);
+    await open();
+    await fireEvent.click(screen.getByRole('button', {name:'Actions for worktree /repo-feature'}));
+    await fireEvent.click(await screen.findByRole('menuitem', {name:'Remove worktree and branch…'}));
+    confirm.accept();
+    await fireEvent.click(await screen.findByRole('button', {name:'Delete remaining branch…'}));
+    const dialog = await screen.findByRole('dialog', {name:'Force delete local branch?'});
+    expect(within(dialog).getByText(/worktree is no longer registered/)).toBeVisible();
+    expect(api.BranchAction).toHaveBeenCalledTimes(1);
+    await fireEvent.click(within(dialog).getByRole('button', {name:'Force delete branch'}));
+    await waitFor(() => expect(api.BranchAction).toHaveBeenLastCalledWith(project, '', {
+      action:'delete-branch',source:'refs/heads/feature',sourceSHA:oldSHA,target:'',targetSHA:'',forceDeleteBranch:true,
+    }));
   });
   it('opens removal dialogs from a protected branch and its worktree menu', async () => {
     const data = snapshot();

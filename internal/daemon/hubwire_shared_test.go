@@ -145,14 +145,19 @@ func (m *member) Complete(_ context.Context, id string, _ hubproto.CompleteReque
 	return nil
 }
 
-func (m *member) Fail(_ context.Context, id string, r hubproto.FailReason) error {
+func (m *member) Progress(_ context.Context, id string, _ hubproto.ProgressRequest) error {
+	// This model predates in_review: the old hub's 404.
+	return &hub.APIError{Status: 404, Code: hubproto.CodeNotFound}
+}
+
+func (m *member) Fail(_ context.Context, id string, req hubproto.FailRequest) error {
 	m.h.mu.Lock()
 	defer m.h.mu.Unlock()
 	w, err := m.holdsLocked(id)
 	if err != nil {
 		return err
 	}
-	m.fails = append(m.fails, r)
+	m.fails = append(m.fails, req.Reason)
 	w.holder = ""
 	w.attempts++
 	return nil
@@ -174,6 +179,8 @@ func (m *member) Board(context.Context, hubproto.State, int) (hubproto.BoardResp
 }
 
 func (m *member) Org(context.Context) (hubproto.OrgView, error) { return hubproto.OrgView{}, nil }
+
+func (m *member) Stats(context.Context) (hubproto.StatsView, error) { return hubproto.StatsView{}, nil }
 
 func (m *member) FetchPolicy(context.Context, config.HubConfig, string, string, time.Time) (hub.StoredPolicy, error) {
 	return hub.StoredPolicy{}, &hub.APIError{Status: 404, Code: hubproto.CodeNoPolicy}

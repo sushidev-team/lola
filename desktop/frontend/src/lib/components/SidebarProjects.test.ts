@@ -1,11 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent, within } from "@testing-library/svelte";
+import { render, screen, cleanup, fireEvent, within, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 
 // The bindings are the process boundary. Stubbing them keeps this about what
 // the sidebar OFFERS and what it asks the backend to persist — the arrangement
 // maths itself is pinned in sidebarlayout.test.ts, without a DOM.
-const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack, PickFolder, ScanStackFolder, CreateStackFromFolder, RemoveProject, RemoveStack } = vi.hoisted(() => ({
+const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack, PickFolder, ScanStackFolder, CreateStackFromFolder, RemoveProject, RemoveStack, DoctorRun } = vi.hoisted(() => ({
+  // The setup checklist's one doctor run: gh signed out, so one item is left.
+  DoctorRun: vi.fn().mockResolvedValue({
+    results: [
+      { id: "tmux", name: "tmux", ok: true, detail: "", critical: true },
+      { id: "gh", name: "gh", ok: true, detail: "", critical: false },
+      { id: "gh auth", name: "gh auth", ok: false, detail: "", critical: false, fix: "gh_auth_login" },
+    ],
+    summary: "",
+    ok: true,
+  }),
   CreateStack: vi.fn(),
   PickFolder: vi.fn(),
   ScanStackFolder: vi.fn(),
@@ -43,6 +53,7 @@ vi.mock("@bindings/desktop", () => ({
     RemoveStack: (...a: unknown[]) => RemoveStack(...a),
   },
   TermService: {},
+  DoctorService: { Run: (...a: unknown[]) => DoctorRun(...a) },
 }));
 
 const SidebarProjects = (await import("./SidebarProjects.svelte")).default;
@@ -426,12 +437,58 @@ describe("SidebarProjects", () => {
     store.projects = [];
     store.groups = [];
     render(SidebarProjects);
-    expect(screen.getByRole("button", { name: "No projects — add one" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Get started" })).toBeInTheDocument();
 
     cleanup();
     store.groups = [{ name: "clients", label: "Clients", position: 0 }];
     render(SidebarProjects);
-    expect(screen.queryByRole("button", { name: "No projects — add one" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Get started" })).not.toBeInTheDocument();
+  });
+
+  // The empty workspace points at the checklist, not only at "add one".
+  it("shows the setup checklist and an Add project button when empty", async () => {
+    store.projects = [];
+    store.groups = [];
+    render(SidebarProjects);
+    expect(await screen.findByRole("list", { name: "Setup checklist" })).toBeInTheDocument();
+    expect(screen.getByText("gh is installed but not signed in.")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+    expect(nav.overlay).toBe("project");
+    expect(nav.overlayProject).toBe("");
+    nav.closeOverlay();
+  });
+
+  it("keeps the checklist above the list while no project picks up issues", async () => {
+    store.groups = [];
+    store.connected = true;
+    store.projects = [fakeProject({ pollsEnabled: 0 })];
+    render(SidebarProjects);
+    expect(await screen.findByRole("list", { name: "Setup checklist" })).toBeInTheDocument();
+
+    cleanup();
+    store.projects = [fakeProject({ pollsEnabled: 1 })];
+    render(SidebarProjects);
+    expect(screen.queryByText("Setup checklist")).not.toBeInTheDocument();
+    store.connected = false;
+  });
+
+  // A Mac that only takes hub chores or manual sessions never polls: polling
+  // alone must not keep the checklist (and its frame) up for good.
+  it("hides the checklist when only polling is left", async () => {
+    const ok = (name: string) => ({ id: name, name, ok: true, detail: "", critical: false });
+    DoctorRun.mockResolvedValueOnce({
+      results: [ok("tmux"), ok("git"), ok("gh"), ok("gh auth"), ok("claude"), ok("linear api key"),
+        { id: "polling", name: "polling", ok: false, detail: "", critical: false, fix: "enable_poll" }],
+      summary: "", ok: false,
+    });
+    store.groups = [];
+    store.connected = true;
+    store.projects = [fakeProject({ pollsEnabled: 0 })];
+    const { container } = render(SidebarProjects);
+    await waitFor(() => expect(DoctorRun).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("Setup checklist")).not.toBeInTheDocument());
+    expect(container.querySelector(".border-dashed")).toBeNull();
+    store.connected = false;
   });
 
   // --- stacks -------------------------------------------------------------------

@@ -749,8 +749,21 @@ export interface HubAppliedKey {
 }
 
 /**
+ * HubAttemptInfo is one entry of an item's history. Action is a
+ * hubproto.AttemptAction word, Reason a hubproto.FailReason ("" = none).
+ */
+export interface HubAttemptInfo {
+    "deviceName"?: string;
+    "member"?: string;
+    "action": string;
+    "reason"?: string;
+    "prUrl"?: string;
+    "at": string;
+}
+
+/**
  * HubBoardArgs is Request.Args for cmd=hubBoard. State "" = every state
- * (open | claimed | done | failed | escalated); Limit 0 = the hub's default
+ * (open | claimed | in_review | done | failed | escalated); Limit 0 = the hub's default
  * (200), at most 500.
  */
 export interface HubBoardArgs {
@@ -813,6 +826,29 @@ export interface HubBoardItem {
     "escalation"?: HubEscalationInfo | null;
 
     /**
+     * Owner is the device that opened the item's PR (in_review, done, failed,
+     * escalated); nil before that.
+     */
+    "owner"?: HubOwnerInfo | null;
+
+    /**
+     * History is the item's attempts, oldest first (at most 20).
+     */
+    "history"?: HubAttemptInfo[] | null;
+
+    /**
+     * LastFail is the last fail reason ("" = none); Reopened counts how often
+     * the hub put the item back on offer.
+     */
+    "lastFail"?: string;
+    "reopened"?: number;
+
+    /**
+     * ClaimedAt is when the current claim began (claimed / in_review only).
+     */
+    "claimedAt"?: string;
+
+    /**
      * Local is THIS machine's answer for the row.
      */
     "local": HubLocalInfo;
@@ -849,6 +885,53 @@ export interface HubClaimData {
 }
 
 /**
+ * HubCreateTeamArgs is Request.Args for cmd=hubCreateTeam.
+ */
+export interface HubCreateTeamArgs {
+    /**
+     * Code is the whole create code from the hub operator
+     * (lola-hub-create:<url>#<code>): it names the hub. For a hub that lets
+     * a team be created without a code it is just the hub's URL.
+     */
+    "code": string;
+
+    /**
+     * Team is the new team's name (lowercase letters, digits, dashes).
+     */
+    "team": string;
+
+    /**
+     * Name is this device's name ("" = the hostname).
+     */
+    "name"?: string;
+
+    /**
+     * ReplaceAdminKey discards the admin key of ANOTHER team this machine
+     * holds. Without it such a key refuses the create.
+     */
+    "replaceAdminKey"?: boolean;
+}
+
+/**
+ * HubCreateTeamData answers cmd=hubCreateTeam. It never carries the code or
+ * a private key.
+ */
+export interface HubCreateTeamData {
+    "org": string;
+    "deviceId": string;
+    "deviceName": string;
+    "url": string;
+    "keyCreated"?: boolean;
+
+    /**
+     * AdminKeyID and Fingerprint name the team admin key now on this machine
+     * (the fingerprint is what a new member compares).
+     */
+    "adminKeyId": string;
+    "fingerprint": string;
+}
+
+/**
  * HubDeviceInfo is one member device. LastSeen zero = never heartbeat.
  */
 export interface HubDeviceInfo {
@@ -858,6 +941,13 @@ export interface HubDeviceInfo {
     "freeSlots": number;
     "agents": string[] | null;
     "active": boolean;
+
+    /**
+     * Member is the admin-set label of the person the device belongs to;
+     * PolicyVersion the team policy version it applies (0 = none / unknown).
+     */
+    "member"?: string;
+    "policyVersion"?: number;
 }
 
 /**
@@ -879,6 +969,33 @@ export interface HubFindingsInfo {
     "reported": number;
     "accepted": number;
     "rejected": number;
+}
+
+/**
+ * HubInviteArgs is Request.Args for cmd=hubInvite. TTLSeconds 0 = 7 days.
+ */
+export interface HubInviteArgs {
+    /**
+     * Label names the member the invite is for.
+     */
+    "label": string;
+    "ttlSeconds"?: number;
+}
+
+/**
+ * HubInviteData answers cmd=hubInvite. Invite is the one line a teammate
+ * pastes; it holds a one-time token, so it is shown once and stored nowhere.
+ */
+export interface HubInviteData {
+    "invite": string;
+    "expiresAt": string;
+
+    /**
+     * KeyID and Fingerprint are the policy key the invite carries: the admin
+     * reads the fingerprint to the teammate over another channel.
+     */
+    "keyId": string;
+    "fingerprint": string;
 }
 
 /**
@@ -907,6 +1024,7 @@ export interface HubJoinData {
 export interface HubLeaseInfo {
     "mine": boolean;
     "deviceName": string;
+    "member"?: string;
     "expires": string;
 }
 
@@ -916,6 +1034,23 @@ export interface HubLeaseInfo {
 export interface HubLeaveData {
     "left": boolean;
     "keyDeleted"?: boolean;
+
+    /**
+     * Released counts the leases the hub took back before the leave; Kept
+     * those left to expire (unreachable hub, refused, or out of time). The
+     * sessions behind both keep running.
+     */
+    "released"?: number;
+    "kept"?: number;
+}
+
+/**
+ * HubLinearTeam is one team of the Linear workspace. Name may be "".
+ */
+export interface HubLinearTeam {
+    "id": string;
+    "key": string;
+    "name"?: string;
 }
 
 /**
@@ -929,6 +1064,17 @@ export interface HubLocalInfo {
     "project"?: string;
     "projects"?: string[] | null;
     "session"?: string;
+}
+
+/**
+ * HubOfferSkip is one offer the last cycle did not claim, and why. Reason is
+ * one of the stable hub.Reason* words (internal/hub/accept.go).
+ */
+export interface HubOfferSkip {
+    "itemId": string;
+    "kind": string;
+    "reason": string;
+    "at": string;
 }
 
 /**
@@ -948,6 +1094,16 @@ export interface HubOrgData {
 export interface HubOutcomeInfo {
     "prUrl": string;
     "delivery": string;
+}
+
+/**
+ * HubOwnerInfo is the device (and its member label) that owns an item in
+ * review or finished.
+ */
+export interface HubOwnerInfo {
+    "mine": boolean;
+    "deviceName": string;
+    "member"?: string;
 }
 
 /**
@@ -972,6 +1128,23 @@ export interface HubPolicyInfo {
 }
 
 /**
+ * HubProbeData answers cmd=hubProbe.
+ */
+export interface HubProbeData {
+    /**
+     * URL is the hub's address as lola will use it.
+     */
+    "url": string;
+
+    /**
+     * OpenTeams: the hub lets a team be created without a create code right
+     * now. False also for a hub too old to say. The hub decides again when
+     * the team is created.
+     */
+    "openTeams": boolean;
+}
+
+/**
  * HubReleaseData answers cmd=hubRelease. Session is the local session that
  * held the lease: it is NOT stopped (SessionKept), only no longer reported
  * to the hub. Queued: the hub could not be reached and the release waits in
@@ -986,6 +1159,27 @@ export interface HubReleaseData {
 }
 
 /**
+ * HubRepoHealth is the last findings scan of one opted-in repository.
+ * Alerts: "ok" | "no_access" (Dependabot alerts disabled or not visible:
+ * gh answered 403/404) | "error"; PullRequests: "ok" | "error". Error is the
+ * first gh failure in lola's words plus gh's clipped stderr.
+ */
+export interface HubRepoHealth {
+    "repo": string;
+    "at": string;
+    "alerts": string;
+    "pullRequests": string;
+    "error"?: string;
+}
+
+/**
+ * HubRevokeData answers cmd=hubRevoke.
+ */
+export interface HubRevokeData {
+    "revoked": boolean;
+}
+
+/**
  * HubSessionHub is SessionInfo.hub: what a hub session works on.
  */
 export interface HubSessionHub {
@@ -993,6 +1187,18 @@ export interface HubSessionHub {
     "kind": string;
     "label"?: string;
     "leaseLost"?: boolean;
+
+    /**
+     * LeaseTaken: the lease was lost AND another device holds the item now
+     * (a re-claim was refused). The session keeps running either way.
+     */
+    "leaseTaken"?: boolean;
+
+    /**
+     * InReview: the hub took the PR (progress acknowledged); no lease is
+     * renewed any more, the item waits for merge or close.
+     */
+    "inReview"?: boolean;
     "released"?: boolean;
 }
 
@@ -1007,6 +1213,13 @@ export interface HubSessionInfo {
     "claimedAt"?: string;
     "leaseExpires"?: string;
     "leaseLost"?: boolean;
+    "leaseTaken"?: boolean;
+    "inReview"?: boolean;
+
+    /**
+     * Progress is the delivery last reported to the hub for the PR.
+     */
+    "progress"?: string;
     "released"?: boolean;
     "reported"?: string;
 
@@ -1025,6 +1238,13 @@ export interface HubStatusData {
      */
     "enabled": boolean;
     "joined": boolean;
+
+    /**
+     * Membership is the one-word answer to "is this machine in a team":
+     * "joined", "revoked" (the hub refused this device's signature; a new
+     * token and join are needed) or "not joined" (hub.Status.Membership).
+     */
+    "membership"?: string;
     "url"?: string;
     "device"?: string;
 
@@ -1074,6 +1294,35 @@ export interface HubStatusData {
      * Sessions are the local sessions working a hub item.
      */
     "sessions"?: HubSessionInfo[] | null;
+
+    /**
+     * LastSync is the end of the last cycle in which no stage failed;
+     * LastError is cleared then.
+     */
+    "lastSync"?: string;
+
+    /**
+     * FindingsHealth is the last scan's answer per repository.
+     */
+    "findingsHealth"?: HubRepoHealth[] | null;
+
+    /**
+     * OfferSkips are the offers the last cycle left unclaimed.
+     */
+    "offerSkips"?: HubOfferSkip[] | null;
+
+    /**
+     * LegacyHub: the hub predates the chore lifecycle (no progress frame, no
+     * fail pr_url / group, no heartbeat policy_version); lola falls back to
+     * the old frames for a while and then tries again.
+     */
+    "legacyHub"?: boolean;
+
+    /**
+     * Admin: this machine holds the admin key of the joined team
+     * (state/hub-admin-key). The hub still decides on every request.
+     */
+    "admin"?: boolean;
 }
 
 /**
@@ -1081,6 +1330,45 @@ export interface HubStatusData {
  */
 export interface HubSyncData {
     "queued": boolean;
+}
+
+/**
+ * HubTeamSettingsArgs is Request.Args for cmd=hubTeamSettings. With every
+ * pointer nil it only reads; a pointer to "" clears that setting. LinearKey
+ * and DigestWebhook are secrets: never logged, never echoed.
+ */
+export interface HubTeamSettingsArgs {
+    "linearKey"?: string | null;
+    "linearTeam"?: string | null;
+    "digestWebhook"?: string | null;
+
+    /**
+     * Teams also lists the Linear workspace's teams (a read only).
+     */
+    "teams"?: boolean;
+}
+
+/**
+ * HubTeamSettingsData answers cmd=hubTeamSettings: the STATUS of the team's
+ * settings, validated whole. It carries no secret.
+ */
+export interface HubTeamSettingsData {
+    "org": string;
+
+    /**
+     * SecretsAvailable is false when the hub cannot store a key or webhook.
+     */
+    "secretsAvailable": boolean;
+    "linearKeySet": boolean;
+    "linearTeam"?: string;
+
+    /**
+     * LinearError / DigestError are the hub's error classes ("" = none).
+     */
+    "linearError"?: string;
+    "digestSet": boolean;
+    "digestError"?: string;
+    "teams": HubLinearTeam[] | null;
 }
 
 /**

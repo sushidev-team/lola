@@ -1,6 +1,8 @@
 package hubproto
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -227,7 +229,9 @@ func validatePackage(s string) error {
 	return nil
 }
 
-// RedBumpPR are the fields of a KindRedBumpPR item.
+// RedBumpPR are the fields of a KindRedBumpPR item. Package may be empty: a
+// Dependabot GROUPED PR ("bump the npm_and_yarn group …") names no single
+// package. The dedup key never used it, so it is unchanged.
 type RedBumpPR struct {
 	Repo    string `json:"repo"`
 	PR      int    `json:"pr"`
@@ -247,8 +251,10 @@ func (r RedBumpPR) Validate() error {
 	if err := validateBranch(r.Branch); err != nil {
 		return err
 	}
-	if err := validatePackage(r.Package); err != nil {
-		return err
+	if r.Package != "" {
+		if err := validatePackage(r.Package); err != nil {
+			return err
+		}
 	}
 	if r.Author != AuthorDependabot && r.Author != AuthorRenovate {
 		return invalid("author", "not an allowed bot")
@@ -345,32 +351,101 @@ func DedupKey(item Item) string {
 	return ""
 }
 
+// GroupKey is the escalation key of a fail GROUP ([FailRequest.Group]): items
+// failed with the same group escalate as ONE Linear issue listing them. It
+// returns "" for an invalid group.
+func GroupKey(group string) string {
+	if !ValidFailGroup(group) {
+		return ""
+	}
+	return "group|" + group
+}
+
+// EscalationIssueID is the stable Linear issue id (a UUID, RFC 9562 version 8)
+// for escalating key in org. key is a [DedupKey] or a [GroupKey], NEVER an item
+// id: an item that is reopened, re-found or re-created must land on the same
+// Linear issue instead of filing a duplicate, and two orgs never collide. It
+// returns "" for an invalid org or an empty key.
+func EscalationIssueID(org, key string) string {
+	if !ValidOrg(org) || key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("lola-hub escalation v1\x00" + org + "\x00" + key))
+	u := sum[:16]
+	u[6] = (u[6] & 0x0f) | 0x80 // version 8: custom, name-derived
+	u[8] = (u[8] & 0x3f) | 0x80 // RFC 9562 variant
+	h := hex.EncodeToString(u)
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
 // State of an item on the hub.
 type State string
 
 const (
-	StateOpen      State = "open"
-	StateClaimed   State = "claimed"
+	StateOpen    State = "open"
+	StateClaimed State = "claimed"
+	// StateInReview: the device that held the lease opened a PR for the item
+	// ([ActionProgress]). The lease is dropped and that device is recorded as
+	// the item's OWNER; the item is not offered, and a re-report of the same
+	// finding does not reopen it. Only the owner may move it on (progress,
+	// complete, fail). An in_review item with no progress call for
+	// [InReviewIdleReopen] reopens.
+	StateInReview  State = "in_review"
 	StateDone      State = "done"
 	StateFailed    State = "failed"
 	StateEscalated State = "escalated"
 )
 
+// AllStates lists every valid state, in lifecycle order.
+func AllStates() []State {
+	return []State{StateOpen, StateClaimed, StateInReview, StateDone, StateFailed, StateEscalated}
+}
+
 // Valid reports whether s is a known state.
 func (s State) Valid() bool {
 	switch s {
-	case StateOpen, StateClaimed, StateDone, StateFailed, StateEscalated:
+	case StateOpen, StateClaimed, StateInReview, StateDone, StateFailed, StateEscalated:
 		return true
 	}
 	return false
 }
 
+// Lifecycle timings both sides agree on. The hub enforces them; a daemon reads
+// them only to explain what it sees (a renew refused past MaxLeaseAge, an item
+// it cannot claim during someone else's grace window).
+const (
+	// LeaseGraceFactor: when a lease expires the item is held back for its
+	// previous holder for LeaseGraceFactor x the lease TTL. It is not offered
+	// to any other device, and the previous holder's claim succeeds without
+	// counting a new attempt (a laptop that slept is not a failure).
+	LeaseGraceFactor = 2
+	// DefaultMaxLeaseAge bounds how long renewals may keep one claim alive
+	// (hub flag --max-lease-age). Past it a renew fails and the hub counts a
+	// [FailTimeout] attempt.
+	DefaultMaxLeaseAge = 24 * time.Hour
+	// InReviewIdleReopen: an in_review item with no progress call for this long
+	// reopens.
+	InReviewIdleReopen = 14 * 24 * time.Hour
+	// DefaultStaleAfter: an open item not re-reported for this long, while some
+	// active device still reports its repo, is closed as failed with history
+	// action [AttemptClosedStale] (hub flag --stale-after). Hub-side only.
+	DefaultStaleAfter = 48 * time.Hour
+	// DeviceCooldown: after a device fails, releases, refuses, or lets an item
+	// expire past its grace window, that item is not offered to that device for
+	// this long.
+	DeviceCooldown = 6 * time.Hour
+)
+
 // Lease is a device's time-bounded claim on an item. It is renewed by the
-// heartbeat; once Expires passes without renewal the hub reopens the item.
+// heartbeat; once Expires passes without renewal the item is held for the
+// holder for the grace window ([LeaseGraceFactor]) and then reopens.
+// ClaimedAt is when the claim began (renewals keep it); a hub that predates
+// it omits it.
 type Lease struct {
-	ItemID  string    `json:"item_id"`
-	Device  string    `json:"device"`
-	Expires time.Time `json:"expires"`
+	ItemID    string    `json:"item_id"`
+	Device    string    `json:"device"`
+	Expires   time.Time `json:"expires"`
+	ClaimedAt time.Time `json:"claimed_at,omitzero"`
 }
 
 // Validate checks the lease's shape.
@@ -383,6 +458,9 @@ func (l Lease) Validate() error {
 	}
 	if l.Expires.IsZero() {
 		return invalid("expires", "missing")
+	}
+	if !l.ClaimedAt.IsZero() && l.ClaimedAt.After(l.Expires) {
+		return invalid("claimed_at", "after expires")
 	}
 	return nil
 }

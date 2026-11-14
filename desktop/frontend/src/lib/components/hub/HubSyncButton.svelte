@@ -2,7 +2,7 @@
   // "Sync now" plus what it did. The daemon only QUEUES a pass, so the store
   // keeps re-reading until a heartbeat (or an error) newer than the press shows
   // up; this draws that life: Syncing… → Synced, or the daemon's reason. At
-  // rest it shows how old the last heartbeat is, live, so the view reads as
+  // rest it shows when the hub last heard from this Mac, live, so the view reads as
   // current without anyone pressing anything (the store polls while watched
   // and re-reads when the window comes back).
   import Button from "$lib/components/Button.svelte";
@@ -28,7 +28,7 @@
       <TimeAgo at={beat} prefix="Updated " class="text-faint" />
     {/if}
   </span>
-  <Button variant="secondary" {size} disabled={syncing || hub.busy !== ""} aria-busy={syncing} onclick={() => void hub.sync()}>
+  <Button variant="secondary" {size} disabled={syncing || hub.isBusy("join") || hub.isBusy("leave")} aria-busy={syncing} onclick={() => void hub.sync()}>
     {#if phase === "synced"}
       <span class="text-good"><Icon name="check" size={14} /></span> Synced
     {:else}

@@ -21,6 +21,25 @@ const (
 	ReasonStack        = "stacks take no hub chores"
 )
 
+// The daemon's own skip reasons for an offer that passed Accept but was not
+// claimed (hub status shows them per offer). Stable words, like the above.
+const (
+	ReasonInFlight       = "a claim for it is already in flight"
+	ReasonWorking        = "already working it"
+	ReasonCooldown       = "ended here recently"
+	ReasonRepoBusy       = "the repository's hub pull request comes first"
+	ReasonBranchTaken    = "a session already works the branch"
+	ReasonHeld           = "dispatch held"
+	ReasonRuntime        = "runtime unavailable"
+	ReasonNoSandboxLogin = "the sandboxed agent has no login yet"
+	ReasonCapped         = "capped"
+	ReasonNotConfirmed   = "GitHub does not confirm it"
+	ReasonClaimRefused   = "claim refused"
+	ReasonSpawnFailed    = "spawn failed"
+	ReasonPersist        = "cannot persist the claim count"
+	ReasonOther          = "not claimed"
+)
+
 // Accept is the daemon's PURE decision whether to claim item for project p. It
 // is only the policy half: the daemon still runs dispatchHold, the health gate
 // and reserveSlots before it claims. Order matters only for which reason is

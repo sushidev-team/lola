@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -302,4 +304,202 @@ func TestHubStatusPolicyReReadAfterKeysChange(t *testing.T) {
 	if st := d.hubStatusData(); st.Policy != nil || st.PolicyVersion != 0 {
 		t.Errorf("status still shows the unpinned policy: %+v (v%d)", st.Policy, st.PolicyVersion)
 	}
+}
+
+// A hub answering no_policy drops the overlay (one reload), keeps the bundle
+// as the rollback floor, and a re-served same version applies again.
+func TestTeamPolicyWithdrawnDropsTheOverlay(t *testing.T) {
+	f := newPolicyDaemon(t, hubproto.Settings{BudgetDailyWeightedTokens: 500}, 2, false, nil)
+	d := f.d
+	reloads := 0
+	d.hub.reload = func(ctx context.Context) error { reloads++; return d.handleReload(ctx) }
+	d.hubPolicyReload(context.Background(), 2)
+	if !d.teamPolicy.applied || d.cfg.Budget.DailyTokens != 500 {
+		t.Fatalf("not applied: %+v", d.teamPolicy)
+	}
+	d.hubPolicyWithdrawn(context.Background(), d.cfg.Hub)
+	if reloads != 2 || d.teamPolicy.applied || d.cfg.Budget.DailyTokens != 1000 {
+		t.Fatalf("after withdraw: reloads %d budget %d %+v", reloads, d.cfg.Budget.DailyTokens, d.teamPolicy)
+	}
+	if d.teamPolicy.note != "the team removed its policy" {
+		t.Errorf("note = %q", d.teamPolicy.note)
+	}
+	if st := d.hubStatusData(); st.Policy != nil {
+		t.Errorf("status still shows a withdrawn policy: %+v", st.Policy)
+	}
+	d.hubPolicyWithdrawn(context.Background(), d.cfg.Hub)
+	if reloads != 2 {
+		t.Errorf("a second no_policy reloaded again: %d", reloads)
+	}
+	if _, err := os.Stat(filepath.Join(d.hubDir(), hub.PolicyFile)); err != nil {
+		t.Fatalf("the floor must stay on disk: %v", err)
+	}
+	f.assertFileUntouched(t)
+}
+
+// A 401 unauthorized on a signed call is a revocation: the identity goes,
+// the overlay is dropped, the key stays; other refusals are not.
+func TestHubRevokedDropsIdentityAndOverlay(t *testing.T) {
+	f := newPolicyDaemon(t, hubproto.Settings{BudgetDailyWeightedTokens: 500}, 1, false, nil)
+	d := f.d
+	d.hub.reload = func(ctx context.Context) error { return d.handleReload(ctx) }
+	if err := d.handleReload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !d.teamPolicy.applied {
+		t.Fatal("not applied")
+	}
+	for _, err := range []error{
+		errors.New("connection refused"),
+		&hub.APIError{Status: 401, Code: hubproto.CodeSkew},
+		&hub.APIError{Status: 403, Code: hubproto.CodeForbidden},
+	} {
+		if d.hubRevokedIf(context.Background(), err) {
+			t.Fatalf("%v read as a revocation", err)
+		}
+	}
+	if !d.hubRevokedIf(context.Background(), &hub.APIError{Status: 401, Code: hubproto.CodeUnauthorized}) {
+		t.Fatal("401 unauthorized must read as a revocation")
+	}
+	if _, err := hub.LoadIdentity(d.hubDir()); !errors.Is(err, hub.ErrNotJoined) {
+		t.Fatalf("identity after revoke: %v", err)
+	}
+	if r, ok := hub.LoadRevocation(d.hubDir()); !ok || r.Org != "acme" {
+		t.Fatalf("revocation = %+v, %v", r, ok)
+	}
+	if d.teamPolicy.applied || d.cfg.Budget.DailyTokens != 1000 {
+		t.Fatalf("overlay kept after revoke: %+v", d.teamPolicy)
+	}
+	if st := d.hubStatusData(); st.Joined || !strings.Contains(st.LastError, "revoked") {
+		t.Fatalf("status = joined %v err %q", st.Joined, st.LastError)
+	}
+	f.assertFileUntouched(t)
+}
+
+// saveRevocableIdentity writes an enrolled identity (and its key) for d's
+// hub, so a revocation has one to replace.
+func saveRevocableIdentity(t *testing.T, d *Daemon) {
+	t.Helper()
+	dir := d.hubDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.SaveIdentity(dir, hub.Identity{URL: d.cfg.Hub.URL, DeviceID: strings.Repeat("a", 32), Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+var errUnauthorized = &hub.APIError{Status: 401, Code: hubproto.CodeUnauthorized}
+
+// A heartbeat the hub refuses as unauthorized is a revocation: the cycle
+// claims nothing, the identity goes, and the status keeps saying "revoked"
+// on the next cycles (which find no identity) instead of "not joined".
+func TestHubCycleRevokedOnHeartbeat(t *testing.T) {
+	d, fh, nat := hubFixture(t)
+	saveRevocableIdentity(t, d)
+	fh.beatErr = errUnauthorized
+	fh.offers = []hubproto.Item{advisoryItem("it1")}
+	d.hubCycle(context.Background())
+	if c := fh.snapshot(); len(c.claims) != 0 || c.offerCalls != 0 || len(nat.manualAgents) != 0 {
+		t.Fatalf("a revoked device acted: %+v", c)
+	}
+	if _, err := hub.LoadIdentity(d.hubDir()); !errors.Is(err, hub.ErrNotJoined) {
+		t.Fatalf("identity kept: %v", err)
+	}
+	st := d.hubStatusData()
+	if st.Joined || st.Membership != "revoked" || !strings.HasPrefix(st.LastError, "identity: revoked") {
+		t.Fatalf("status = membership %q joined %v err %q", st.Membership, st.Joined, st.LastError)
+	}
+	d.hub.newClient = newRealHubClient // what the loop does with no identity
+	d.hubCycle(context.Background())
+	if st := d.hubStatusData(); st.Membership != "revoked" || !strings.Contains(st.LastError, "revoked") {
+		t.Fatalf("next cycle = membership %q err %q", st.Membership, st.LastError)
+	}
+}
+
+// Membership reads joined / not joined from the identity on disk.
+func TestHubStatusMembership(t *testing.T) {
+	d, _, _ := hubFixture(t)
+	if m := d.hubStatusData().Membership; m != "not joined" {
+		t.Fatalf("membership = %q", m)
+	}
+	saveRevocableIdentity(t, d)
+	if m := d.hubStatusData().Membership; m != "joined" {
+		t.Fatalf("membership = %q", m)
+	}
+}
+
+// An unauthorized answer on any signed call is read the same way.
+func TestHubRevokedOnOffersAndPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*fakeHub)
+		keys bool
+	}{
+		{"offers", func(f *fakeHub) { f.offerErr = errUnauthorized }, false},
+		{"policy", func(f *fakeHub) { f.policyErr = errUnauthorized }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, fh, _ := hubFixture(t)
+			saveRevocableIdentity(t, d)
+			tc.set(fh)
+			if tc.keys {
+				d.cfg.Hub.TrustedPolicyKeys = map[string]string{"k1": "x"}
+			}
+			d.hubCycle(context.Background())
+			if st := d.hubStatusData(); st.Membership != "revoked" || !strings.Contains(st.LastError, "revoked") {
+				t.Fatalf("status = membership %q err %q", st.Membership, st.LastError)
+			}
+		})
+	}
+}
+
+// A revocation met while flushing the outbox is not the outcome being
+// refused: the queue is kept whole and nothing more is sent.
+func TestHubOutboxKeptOnRevocation(t *testing.T) {
+	d, fh, _ := hubFixture(t)
+	saveRevocableIdentity(t, d)
+	fh.outErr = errUnauthorized
+	now := time.Now()
+	d.hubEnqueue(hubOutcome{ItemID: "it8", Action: hubActFail, Reason: string(hubproto.FailAgent), Since: now})
+	d.hubEnqueue(hubOutcome{ItemID: "it9", Action: hubActFail, Reason: string(hubproto.FailAgent), Since: now})
+	d.hubOutcomeCycle(context.Background())
+	if n := len(fh.snapshot().failReqs); n != 1 {
+		t.Errorf("sent %d outcomes after the revocation, want 1", n)
+	}
+	if st := d.hubStatusData(); st.PendingOutcomes != 2 || st.Membership != "revoked" {
+		t.Fatalf("pending %d membership %q", st.PendingOutcomes, st.Membership)
+	}
+}
+
+// A hub that answers no_policy during a cycle withdraws an applied policy:
+// the overlay is dropped and the stored bundle stays as the floor.
+func TestHubCycleNoPolicyWithdraws(t *testing.T) {
+	f := newPolicyDaemon(t, hubproto.Settings{BudgetDailyWeightedTokens: 500}, 2, false, nil)
+	d := f.d
+	d.hub.reload = func(ctx context.Context) error { return d.handleReload(ctx) }
+	if err := d.handleReload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !d.teamPolicy.applied {
+		t.Fatal("not applied")
+	}
+	fh := &fakeHub{policyErr: &hub.APIError{Status: 404, Code: hubproto.CodeNoPolicy}}
+	d.hub.newClient = func(url, _ string) (hubAPI, hub.Identity, error) {
+		return fh, hub.Identity{URL: url, DeviceID: "dev", Org: "acme"}, nil
+	}
+	d.hubCycle(context.Background())
+	if fh.snapshot().policies != 1 {
+		t.Fatal("the policy was not fetched")
+	}
+	if d.teamPolicy.applied || d.cfg.Budget.DailyTokens != 1000 {
+		t.Fatalf("overlay kept after no_policy: %+v", d.teamPolicy)
+	}
+	if st := d.hubStatusData(); st.LastError != "" {
+		t.Errorf("no_policy is no error: %q", st.LastError)
+	}
+	if _, err := os.Stat(filepath.Join(d.hubDir(), hub.PolicyFile)); err != nil {
+		t.Fatalf("the floor must stay on disk: %v", err)
+	}
+	f.assertFileUntouched(t)
 }

@@ -145,3 +145,53 @@ func TestPolicySummary(t *testing.T) {
 		}
 	}
 }
+
+// A withdrawn policy enforces nothing but stays the rollback floor; the same
+// version served again is live again.
+func TestWithdrawPolicy(t *testing.T) {
+	c, h := testClient(t)
+	dir := t.TempDir()
+	a := newAdmin(t, "admin1")
+	serve := a.sign(t, "acme", 5)
+	h.routes["GET "+hubproto.PathPolicy] = func([]byte) (int, any) { return 200, serve }
+	ctx := context.Background()
+	now := time.Now()
+	trusted, _ := TrustedKeys(a.hubCfg())
+
+	if changed, err := WithdrawPolicy(dir, trusted, now); err != nil || changed {
+		t.Fatalf("nothing stored: %v %v", changed, err)
+	}
+	if _, err := FetchPolicy(ctx, c, a.hubCfg(), "acme", dir, now); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := WithdrawPolicy(dir, trusted, now); err != nil || !changed {
+		t.Fatalf("withdraw: %v %v", changed, err)
+	}
+	if changed, _ := WithdrawPolicy(dir, trusted, now); changed {
+		t.Error("a second withdraw must change nothing")
+	}
+	if _, err := LoadPolicy(dir, trusted); !errors.Is(err, ErrPolicyWithdrawn) {
+		t.Fatalf("LoadPolicy after withdraw: %v", err)
+	}
+	if sp, _, note := ApplicablePolicy(withURL(a.hubCfg()), dir); sp != nil || note != "the team removed its policy" {
+		t.Fatalf("ApplicablePolicy = %+v, %q", sp, note)
+	}
+	// The floor holds: an older signed bundle is still a rollback.
+	serve = a.sign(t, "acme", 2)
+	if _, err := FetchPolicy(ctx, c, a.hubCfg(), "acme", dir, now); !errors.Is(err, ErrPolicyRollback) {
+		t.Fatalf("rollback after withdraw: %v", err)
+	}
+	// The same version again is live again.
+	serve = a.sign(t, "acme", 5)
+	if sp, err := FetchPolicy(ctx, c, a.hubCfg(), "acme", dir, now); err != nil || !sp.WithdrawnAt.IsZero() {
+		t.Fatalf("re-served = %+v, %v", sp, err)
+	}
+	if _, err := LoadPolicy(dir, trusted); err != nil {
+		t.Fatalf("live again: %v", err)
+	}
+}
+
+func withURL(h config.HubConfig) config.HubConfig {
+	h.URL = "https://hub.example.com"
+	return h
+}

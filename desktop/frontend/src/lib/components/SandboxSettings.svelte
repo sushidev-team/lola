@@ -6,7 +6,7 @@
   // own service calls and never touches the settings DTO or its dirty baseline.
   // The token is WRITE-ONLY: the status reports whether one is stored, never the
   // value, and the input is cleared the moment it is saved.
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import Button from "$lib/components/Button.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Checkbox from "$lib/components/Checkbox.svelte";
@@ -16,6 +16,7 @@
   import { confirm } from "$lib/confirm.svelte";
   import { ConfigService } from "@bindings/desktop";
   import type { SandboxStatusDTO } from "@bindings/desktop/models";
+  import type { IconName } from "$lib/icons";
 
   let { formId = "sandbox" }: { formId?: string } = $props();
 
@@ -43,19 +44,36 @@
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const rowCls = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-baseline gap-x-6 gap-y-1.5";
   const msgCls = { good: "text-good", bad: "text-bad" } as const;
+  /** Go errors arrive as "Error: …"; the person reads only the sentence. */
+  const clean = (e: unknown) => String(e instanceof Error ? e.message : e).replace(/^Error:\s*/, "");
 
+  let checking = $state(false);
   async function load() {
     loadErr = "";
+    checking = true;
     try {
       status = await ConfigService.SandboxStatus();
-      image = savedImage = status?.image ?? "";
+      // A re-check keeps an image edit in progress.
+      if (image === savedImage) image = status?.image ?? "";
+      savedImage = status?.image ?? "";
       apiOn = !!status?.useApiKey;
     } catch (e) {
       status = null;
-      loadErr = String(e);
+      loadErr = clean(e);
+    } finally {
+      checking = false;
     }
   }
-  onMount(load);
+  // Docker started, a login made in a terminal: coming back to the window
+  // checks again, so the list never waits for a reopen.
+  const onFocus = () => {
+    if (!checking) void load();
+  };
+  onMount(() => {
+    void load();
+    window.addEventListener("focus", onFocus);
+  });
+  onDestroy(() => window.removeEventListener("focus", onFocus));
 
   async function saveImage() {
     imageBusy = true;
@@ -66,7 +84,7 @@
       imageMsgKind = "good";
       await load();
     } catch (e) {
-      imageMsg = String(e);
+      imageMsg = clean(e);
       imageMsgKind = "bad";
     } finally {
       imageBusy = false;
@@ -84,7 +102,7 @@
       replacing = manual = false;
       await load();
     } catch (e) {
-      tokenMsg = String(e);
+      tokenMsg = clean(e);
       tokenMsgKind = "bad";
     } finally {
       tokenBusy = false;
@@ -110,7 +128,7 @@
       tokenMsgKind = "good";
       await load();
     } catch (e) {
-      tokenMsg = String(e);
+      tokenMsg = clean(e);
       tokenMsgKind = "bad";
     } finally {
       tokenBusy = false;
@@ -140,7 +158,7 @@
       await ConfigService.SetSandboxUseAPIKey(on);
       await load();
     } catch (e) {
-      apiErr = String(e);
+      apiErr = clean(e);
       apiOn = !!status?.useApiKey;
     } finally {
       apiBusy = false;
@@ -153,6 +171,12 @@
     void load();
   }
 
+  // The runner failed (cancelled, timed out, claude missing): the paste path
+  // is the way on, so it opens instead of hiding behind a button.
+  function loginFailed() {
+    manual = true;
+  }
+
   const loggedIn = $derived(!!status && (status.tokenStored || !!status.claudeSource));
   const claudeLine = $derived.by(() => {
     if (!status) return "";
@@ -161,43 +185,68 @@
     if (status.claudeSource) return `Using ${status.claudeSource}`;
     return "Not set";
   });
+
+  // ONE state per row, drawn one way: ok = check in green, needed = x in red,
+  // optional = a dash in grey. The fix is a line under the row, never a popover.
+  type RowState = "ok" | "needed" | "optional" | "info";
+  type Row = { id: string; label: string; term?: string; state: RowState; hint?: string };
+  const look: Record<RowState, { icon: IconName; cls: string; word: string }> = {
+    ok: { icon: "check", cls: "text-good", word: "Ready" },
+    needed: { icon: "x", cls: "text-bad", word: "Needs attention" },
+    optional: { icon: "minus", cls: "text-faint", word: "Optional" },
+    info: { icon: "download", cls: "text-faint", word: "Note" },
+  };
+  const rows = $derived.by<Row[]>(() => {
+    if (!status) return [];
+    const out: Row[] = [];
+    out.push(status.dockerOk
+      ? { id: "docker", label: "Docker running", term: status.docker, state: "ok" }
+      : { id: "docker", label: "Docker not running", term: status.docker, state: "needed", hint: "Start Docker Desktop, OrbStack or Colima, then check again." });
+    if (status.dockerOk) {
+      const missing = status.missing ?? [];
+      out.push({ id: "image", label: missing.length ? "Image pulls on first use" : "Image ready", term: status.image || status.defaultImage, state: missing.length ? "info" : "ok" });
+    }
+    const viaKey = !!(status.useApiKey && status.apiKeySet);
+    out.push({
+      id: "claude",
+      label: `Claude login: ${claudeLine}`,
+      term: viaKey ? "ANTHROPIC_API_KEY" : "claude setup-token",
+      state: loggedIn || viaKey ? "ok" : "needed",
+      hint: loggedIn || viaKey ? undefined : "Log in below, once for all projects.",
+    });
+    for (const a of [{ id: "codex", name: "Codex", ok: status.codexLogin, cmd: "codex login" }, { id: "opencode", name: "OpenCode", ok: status.openCodeLogin, cmd: "opencode auth login" }]) {
+      out.push(a.ok
+        ? { id: a.id, label: `${a.name} login found on this Mac`, state: "ok" }
+        : { id: a.id, label: `No ${a.name} login`, term: a.cmd, state: "optional", hint: `Only needed for ${a.name} sessions. Run ${a.cmd} on this Mac; Lola copies the login into each new sandboxed session.` });
+    }
+    out.push(status.githubSource
+      ? { id: "github", label: "GitHub access", term: status.githubSource, state: "ok" }
+      : { id: "github", label: "No GitHub access", term: "gh auth login", state: "needed", hint: "Sandboxed agents cannot push. Run gh auth login on this Mac, then check again." });
+    return out;
+  });
 </script>
 
 <SettingsGroup title="Status">
+  {#snippet aside()}
+    <Button size="sm" loading={checking} disabled={checking} onclick={() => void load()}>Check again</Button>
+  {/snippet}
   {#if loadErr}
     <p role="alert" class="text-sm text-bad">{loadErr}</p>
   {:else if !status}
     <p class="text-sm text-faint">Checking…</p>
   {:else}
-    {@const missing = status.missing ?? []}
-    <ul class="grid gap-1.5 text-sm" aria-label="Sandbox status">
-      <li class="flex items-center gap-1.5 {status.dockerOk ? 'text-good' : 'text-bad'}">
-        <Icon name={status.dockerOk ? "check" : "x"} size={14} />
-        {status.dockerOk ? "Docker running" : "Docker not running"}
-        {#if !status.dockerOk}<HelpText label="Docker" detail={`${status.docker} does not answer. Start Docker Desktop or OrbStack.`} />{/if}
-      </li>
-      {#if status.dockerOk}
-        <li class="flex items-center gap-1.5 {missing.length > 0 ? 'text-faint' : 'text-good'}">
-          <Icon name={missing.length > 0 ? "download" : "check"} size={14} />
-          {missing.length > 0 ? "Image pulls on first use" : "Image ready"}
-        </li>
-      {/if}
-      <li class="flex items-center gap-1.5 {loggedIn && !(status.useApiKey && status.apiKeySet) ? 'text-good' : 'text-warn'}">
-        <Icon name={loggedIn ? "check" : "triangle-alert"} size={14} />
-        Claude login: {claudeLine}
-      </li>
-      {#each [{ name: "Codex", ok: status.codexLogin, cmd: "codex login" }, { name: "OpenCode", ok: status.openCodeLogin, cmd: "opencode auth login" }] as a (a.name)}
-        <li class="flex items-center gap-1.5 {a.ok ? 'text-good' : 'text-faint'}">
-          <Icon name={a.ok ? "check" : "minus"} size={14} />
-          {a.ok ? `${a.name} login found on this Mac` : `No ${a.name} login`}
-          {#if !a.ok}<HelpText label={`${a.name} login`} detail={`Only needed for ${a.name} sessions. Run ${a.cmd} on this Mac; Lola copies the login into each new sandboxed session.`} />{/if}
+    <ul class="grid gap-2.5 text-sm" aria-label="Sandbox status">
+      {#each rows as r (r.id)}
+        {@const l = look[r.state]}
+        <li class="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-1.5 gap-y-0.5" data-sandbox-row={r.id} data-state={r.state}>
+          <span class="pt-0.5 {l.cls}" title={l.word}><Icon name={l.icon} size={14} /></span>
+          <span class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+            <span class="text-ink">{r.label}</span>
+            {#if r.term}<span class="min-w-0 truncate font-mono text-faint">{r.term}</span>{/if}
+          </span>
+          {#if r.hint}<span class="col-start-2 text-faint">{r.hint}</span>{/if}
         </li>
       {/each}
-      <li class="flex items-center gap-1.5 {status.githubSource ? 'text-good' : 'text-warn'}">
-        <Icon name={status.githubSource ? "check" : "triangle-alert"} size={14} />
-        {status.githubSource ? `GitHub token from ${status.githubSource}` : "No GitHub token"}
-        {#if !status.githubSource}<HelpText label="GitHub token" detail="Sandboxed agents cannot push. Run gh auth login on this Mac." />{/if}
-      </li>
     </ul>
   {/if}
 </SettingsGroup>
@@ -241,7 +290,7 @@
   {:else}
     <div class="grid gap-3">
       <span class="flex flex-wrap items-center gap-2">
-        <SetupTokenRunner onStored={stored} />
+        <SetupTokenRunner onStored={stored} onFailed={loginFailed} />
       </span>
       {#if !manual}
         <span class="flex flex-wrap items-center gap-2">
@@ -273,7 +322,8 @@
     <span class="flex items-center gap-2 text-sm text-ink">
       <label class="flex items-center gap-2">
         <Checkbox bind:checked={apiOn} disabled={apiBusy || !status} onchange={toggleApiKey} />
-        Use ANTHROPIC_API_KEY instead
+        Use an API key instead
+        <span class="font-mono text-sm text-faint">ANTHROPIC_API_KEY</span>
       </label>
       <HelpText label="API key" detail="Sandboxed agents get ANTHROPIC_API_KEY from the daemon's environment instead of your Claude plan, billed per token." />
     </span>

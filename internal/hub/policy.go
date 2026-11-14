@@ -34,14 +34,23 @@ var (
 	ErrPolicyConflict = errors.New("hub: policy differs from the stored one at the same version")
 	// ErrPolicyOrg: the policy names another org than this device joined.
 	ErrPolicyOrg = errors.New("hub: policy belongs to another org")
+	// ErrPolicyWithdrawn: the stored policy was withdrawn (the hub answered
+	// no_policy); it is kept only as the rollback floor and enforces nothing.
+	ErrPolicyWithdrawn = errors.New("hub: the team removed its policy")
 )
 
 // StoredPolicy is state/hub-policy.json: the verified bundle, signature
 // included, so every read re-verifies it against the CURRENT pinned keys (a
 // key removed from config stops vouching for what it signed).
+//
+// WithdrawnAt is set when the hub later answered that the org has no policy:
+// the bundle then enforces nothing (LoadPolicy refuses it with
+// ErrPolicyWithdrawn), but it stays on disk as the ROLLBACK FLOOR, so a hub
+// that withdraws v5 cannot then serve an older signed v1 as if it were new.
 type StoredPolicy struct {
-	Policy     hubproto.Policy `json:"policy"`
-	VerifiedAt time.Time       `json:"verified_at"`
+	Policy      hubproto.Policy `json:"policy"`
+	VerifiedAt  time.Time       `json:"verified_at"`
+	WithdrawnAt time.Time       `json:"withdrawn_at,omitzero"`
 }
 
 // TrustedKeys parses [hub].trusted_policy_keys.
@@ -52,8 +61,19 @@ func TrustedKeys(h config.HubConfig) (map[string]ed25519.PublicKey, error) {
 	return hubproto.ParseTrustedKeys(h.TrustedKeyEntries())
 }
 
-// LoadPolicy reads and RE-VERIFIES the stored policy.
+// LoadPolicy reads and RE-VERIFIES the stored policy. A withdrawn one is
+// refused with ErrPolicyWithdrawn: nothing may enforce or show it as live.
 func LoadPolicy(dir string, trusted map[string]ed25519.PublicKey) (StoredPolicy, error) {
+	sp, err := loadStoredPolicy(dir, trusted)
+	if err == nil && !sp.WithdrawnAt.IsZero() {
+		return StoredPolicy{}, ErrPolicyWithdrawn
+	}
+	return sp, err
+}
+
+// loadStoredPolicy is LoadPolicy without the withdrawn check: the rollback
+// guard needs the floor a withdrawn bundle keeps.
+func loadStoredPolicy(dir string, trusted map[string]ed25519.PublicKey) (StoredPolicy, error) {
 	data, err := os.ReadFile(filepath.Join(dir, PolicyFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		return StoredPolicy{}, ErrNoPolicy
@@ -91,17 +111,28 @@ func FetchPolicy(ctx context.Context, c *Client, h config.HubConfig, org, dir st
 	if p.Org != org {
 		return StoredPolicy{}, ErrPolicyOrg
 	}
-	prev, err := LoadPolicy(dir, trusted)
+	prev, err := loadStoredPolicy(dir, trusted)
 	switch {
 	case err == nil:
+		withdrawn := !prev.WithdrawnAt.IsZero()
 		if p.Version < prev.Policy.Version {
+			if withdrawn {
+				return StoredPolicy{}, ErrPolicyRollback
+			}
 			return prev, ErrPolicyRollback
 		}
 		if p.Version == prev.Policy.Version {
 			if !samePolicy(p, prev.Policy) {
+				if withdrawn {
+					return StoredPolicy{}, ErrPolicyConflict
+				}
 				return prev, ErrPolicyConflict
 			}
-			return prev, nil
+			if !withdrawn {
+				return prev, nil
+			}
+			// The hub serves the withdrawn version again: it is live once
+			// more, re-stored below without the mark.
 		}
 	case errors.Is(err, ErrNoPolicy):
 	default:
@@ -117,6 +148,29 @@ func FetchPolicy(ctx context.Context, c *Client, h config.HubConfig, org, dir st
 		return StoredPolicy{}, err
 	}
 	return sp, nil
+}
+
+// WithdrawPolicy marks the stored policy withdrawn (the hub answered that the
+// org has no policy). It reports whether anything changed: false when there
+// is no stored policy or it is already withdrawn. A stored bundle that no
+// longer verifies is removed instead: it vouches for nothing, not even a
+// floor.
+func WithdrawPolicy(dir string, trusted map[string]ed25519.PublicKey, now time.Time) (bool, error) {
+	sp, err := loadStoredPolicy(dir, trusted)
+	switch {
+	case errors.Is(err, ErrNoPolicy):
+		return false, nil
+	case err != nil:
+		return true, removeIfExists(filepath.Join(dir, PolicyFile))
+	case !sp.WithdrawnAt.IsZero():
+		return false, nil
+	}
+	sp.WithdrawnAt = now.UTC()
+	data, err := json.MarshalIndent(sp, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	return true, writeAtomic(dir, PolicyFile, append(data, '\n'))
 }
 
 func samePolicy(a, b hubproto.Policy) bool {
@@ -173,9 +227,15 @@ func ApplicablePolicy(h config.HubConfig, dir string) (sp *StoredPolicy, apply b
 	if err != nil {
 		return nil, false, "trusted policy keys do not parse"
 	}
+	if r, ok := LoadRevocation(dir); ok && strings.TrimSuffix(r.URL, "/") == strings.TrimSuffix(h.URL, "/") {
+		return nil, false, "this device was revoked by the hub"
+	}
 	got, err := LoadPolicy(dir, trusted)
 	if errors.Is(err, ErrNoPolicy) {
 		return nil, false, ""
+	}
+	if errors.Is(err, ErrPolicyWithdrawn) {
+		return nil, false, "the team removed its policy"
 	}
 	if err != nil {
 		return nil, false, "the stored policy no longer verifies"

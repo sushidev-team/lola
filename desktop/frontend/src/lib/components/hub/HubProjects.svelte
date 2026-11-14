@@ -12,7 +12,13 @@
   import { ConfigService } from "@bindings/desktop";
   import type { HubProjectDTO, HubProjectPatchDTO } from "@bindings/desktop/models";
 
-  let { requireSandbox = true }: { requireSandbox?: boolean } = $props();
+  let { requireSandbox = true, refresh = 0, onSaved = () => {} }: {
+    requireSandbox?: boolean;
+    /** Bump to read the list again (the readiness list turned a project on). */
+    refresh?: number;
+    /** A change was saved, so the readiness list can check again. */
+    onSaved?: () => void;
+  } = $props();
 
   const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
@@ -25,6 +31,15 @@
   let draft = $state("");
 
   onMount(() => void load());
+  // A later bump re-reads; the first run is the mount's load.
+  // svelte-ignore state_referenced_locally
+  let seenRefresh = refresh;
+  $effect(() => {
+    if (refresh !== seenRefresh) {
+      seenRefresh = refresh;
+      void load();
+    }
+  });
 
   async function load() {
     try {
@@ -42,6 +57,7 @@
     try {
       await ConfigService.SaveHubProject({ repo: null, hubChores: null, sandboxed: null, ...patch, name: p.name });
       await load();
+      onSaved();
       return true;
     } catch (e) {
       errors = { ...errors, [p.name]: String(e).replace(/^Error:\s*/, "") };

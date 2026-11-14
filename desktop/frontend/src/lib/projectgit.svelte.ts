@@ -111,6 +111,53 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     finally { this.busy = ''; }
   }
 
+  aiCommit = $state<{id:string; phase:string; completed:number; total:number; subject:string; stopping:boolean; done:boolean; error:string} | null>(null);
+  async prepareAICommit() {
+    if (this.busy || this.draftingMessage) return null;
+    this.busy = 'prepare-ai-commit'; this.error = '';
+    try { return await ProjectGitService.PrepareAICommit(this.project, this.worktree); }
+    catch (error) { this.reportError(error); return null; }
+    finally { this.busy = ''; }
+  }
+  async commitWithAI(token: string, includeStaged: boolean, ref = '', limit = 200) {
+    if (this.busy || this.draftingMessage) return;
+    this.busy = 'ai-commit'; this.error = ''; this.notice = '';
+    this.aiCommit = {id:'', phase:'starting', completed:0, total:0, subject:'', stopping:false, done:false, error:''};
+    try {
+      this.aiCommit = await ProjectGitService.StartAICommit(this.project, this.worktree, token, includeStaged);
+      while (!this.aiCommit.done) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        try {
+          const status = await ProjectGitService.AICommitStatus(this.aiCommit.id);
+          this.aiCommit = {...status, stopping:status.stopping || this.aiCommit.stopping};
+          this.error = '';
+        } catch (error) {
+          // Failed polling does not prove the writer stopped. Keep the lock
+          // and cancellation available until the backend acknowledges it.
+          this.error = `Unable to refresh AI commit progress: ${String(error)}`;
+          await new Promise(resolve => setTimeout(resolve, 1750));
+        }
+      }
+      const result = this.aiCommit;
+      await this.load(ref, limit);
+      this.amend = false; this.amendHead = '';
+      if (result.error) this.reportError(result.error);
+      const count = `${result.completed} ${result.completed === 1 ? 'commit' : 'commits'}`;
+      this.notice = result.phase === 'complete' ? `Created ${count}.` : `${result.phase === 'cancelled' ? 'Cancelled' : 'Stopped'} after ${count}. Remaining changes are kept.`;
+    } catch (error) { this.reportError(error); }
+    finally { this.aiCommit = null; this.busy = ''; }
+  }
+  async cancelAICommit() {
+    const job = this.aiCommit;
+    if (!job?.id || job.done || job.stopping) return;
+    this.aiCommit = {...job, stopping:true};
+    try { await ProjectGitService.CancelAICommit(job.id); }
+    catch (error) {
+      if (this.aiCommit?.id === job.id) this.aiCommit = {...this.aiCommit, stopping:false};
+      this.reportError(error);
+    }
+  }
+
   async draftCommitMessage(): Promise<boolean> {
     if (this.draftingMessage || this.busy || !this.snapshot || this.snapshot.operation) return false;
     const message = this.message, head = this.snapshot.head, revision = this.filesRevision, amend = this.amend;

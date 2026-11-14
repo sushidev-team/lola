@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,6 +45,9 @@ const (
 	hubJoinTimeout = 60 * time.Second
 	// hubTokenMax bounds the enroll token a client may send.
 	hubTokenMax = 4 << 10
+	// hubLeaveReleaseTimeout bounds the releases a leave sends first: a hub
+	// that does not answer must not hold the leave up.
+	hubLeaveReleaseTimeout = 15 * time.Second
 )
 
 // hubBoardCache is one cached board response.
@@ -88,6 +92,33 @@ func (d *Daemon) handleHub(ctx context.Context, req protocol.Request) protocol.R
 		var a protocol.HubReleaseArgs
 		if err = hubArgs(req, &a); err == nil {
 			data, err = d.handleHubRelease(ctx, a)
+		}
+	case protocol.CmdHubStats:
+		data, err = d.handleHubStats(ctx)
+	case protocol.CmdHubCreateTeam:
+		var a protocol.HubCreateTeamArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubCreateTeam(ctx, a)
+		}
+	case protocol.CmdHubInvite:
+		var a protocol.HubInviteArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubInvite(ctx, a)
+		}
+	case protocol.CmdHubTeamSettings:
+		var a protocol.HubTeamSettingsArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubTeamSettings(ctx, a)
+		}
+	case protocol.CmdHubRevoke:
+		var a protocol.HubRevokeArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubRevoke(ctx, a)
+		}
+	case protocol.CmdHubProbe:
+		var a protocol.HubProbeArgs
+		if err = hubArgs(req, &a); err == nil {
+			data, err = d.handleHubProbe(ctx, a)
 		}
 	case protocol.CmdHubSync:
 		d.hubDropCaches()
@@ -149,6 +180,21 @@ func (d *Daemon) handleHubJoin(ctx context.Context, a protocol.HubJoinArgs) (pro
 	case len(token) > hubTokenMax || strings.ContainsAny(token, " \t\r\n"):
 		return protocol.HubJoinData{}, errors.New("hub: the token must be a single line with no spaces")
 	}
+	// The token field may carry a whole invite (lola-hub:<url>#<token>[#key]).
+	// Its URL must agree with the one given; a policy key in it is NOT pinned
+	// here: pinning needs the person's confirmation of its fingerprint, which
+	// `lola hub join` asks for (the key never comes from the hub either way).
+	inv, err := hub.ParseInvite(token)
+	if err != nil {
+		return protocol.HubJoinData{}, err
+	}
+	token = inv.Token
+	if inv.URL != "" {
+		if a.URL != "" && strings.TrimSuffix(strings.TrimSpace(a.URL), "/") != inv.URL {
+			return protocol.HubJoinData{}, errors.New("hub: the invite names another hub url than the one given")
+		}
+		a.URL = inv.URL
+	}
 	path, err := config.DefaultPath()
 	if err != nil {
 		return protocol.HubJoinData{}, err
@@ -162,7 +208,13 @@ func (d *Daemon) handleHubJoin(ctx context.Context, a protocol.HubJoinArgs) (pro
 		ConfigPath: path, StateDir: d.hubDir(), NewClient: d.hub.enroll,
 	})
 	if err != nil {
-		return protocol.HubJoinData{}, errors.New(strings.ReplaceAll(err.Error(), token, "[token]"))
+		msg := strings.ReplaceAll(err.Error(), token, "[token]")
+		if errors.Is(err, hub.ErrTokenUsed) && res.Identity.Org != "" {
+			// The identity is saved; only config.toml lagged. The loop must
+			// still learn the new identity.
+			d.hubResetIdentity()
+		}
+		return protocol.HubJoinData{}, errors.New(msg)
 	}
 	d.hubResetIdentity()
 	d.logf("", "hub: joined org %s as %q (device %s) at %s", res.Identity.Org, res.Identity.DeviceName, res.Identity.DeviceID, res.Identity.URL)
@@ -173,21 +225,104 @@ func (d *Daemon) handleHubJoin(ctx context.Context, a protocol.HubJoinArgs) (pro
 	return out, nil
 }
 
+// handleHubLeave leaves the hub. In order:
+//
+//  1. Every live lease is RELEASED first, best effort and bounded
+//     (hubLeaveReleaseTimeout): the team gets the items back now instead of
+//     after the lease runs out. A hub that does not answer holds nothing up.
+//  2. hub.Leave removes the identity and stored policy, records the hub URL
+//     and org it left (state/hub-left.json) and disables [hub].
+//  3. Everything that names an item of THAT hub is cleared — the outbox,
+//     the settled marks, the cooldowns, the findings stamps — and every
+//     session still working an item stops renewing and reporting
+//     (HubWork.Released), so an old item id can never be sent to a hub
+//     joined later. The sessions themselves keep running; the daily claim
+//     count is kept, or a leave and rejoin would reset the cap.
 func (d *Daemon) handleHubLeave(ctx context.Context, a protocol.HubLeaveArgs) (protocol.HubLeaveData, error) {
 	path, err := config.DefaultPath()
 	if err != nil {
 		return protocol.HubLeaveData{}, err
 	}
-	if err := hub.Leave(hub.LeaveOptions{ConfigPath: path, StateDir: d.hubDir(), ForgetKey: a.ForgetKey}); err != nil {
+	released, kept := d.hubReleaseForLeave(ctx)
+	if err := hub.Leave(hub.LeaveOptions{ConfigPath: path, StateDir: d.hubDir(), ForgetKey: a.ForgetKey, Now: d.hub.now}); err != nil {
 		return protocol.HubLeaveData{}, err
 	}
+	d.hubForgetHubWork()
 	d.hubResetIdentity()
-	d.logf("", "hub: left the hub (forget key: %v); sessions keep running, their leases expire", a.ForgetKey)
-	out := protocol.HubLeaveData{Left: true, KeyDeleted: a.ForgetKey}
+	d.logf("", "hub: left the hub (forget key: %v); released %d lease(s), %d left to expire; sessions keep running", a.ForgetKey, released, kept)
+	out := protocol.HubLeaveData{Left: true, KeyDeleted: a.ForgetKey, Released: released, Kept: kept}
 	if err := d.handleReload(ctx); err != nil {
 		return out, fmt.Errorf("left the hub, but the daemon did not reload: %v", err)
 	}
 	return out, nil
+}
+
+// hubReleaseForLeave releases every live lease this machine holds, bounded
+// by hubLeaveReleaseTimeout. It returns how many the hub took back and how
+// many were left to expire (unreachable hub, refused, or out of time).
+func (d *Daemon) hubReleaseForLeave(ctx context.Context) (released, kept int) {
+	var ids []string
+	for _, s := range d.sessions.Snapshot() {
+		for _, w := range s.HubWorks() {
+			if w.Open() && !slices.Contains(ids, w.ItemID) {
+				ids = append(ids, w.ItemID)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return 0, 0
+	}
+	api, _, err := d.hubHumanClient()
+	if err != nil {
+		return 0, len(ids)
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hubLeaveReleaseTimeout)
+	defer cancel()
+	for _, id := range ids {
+		if rctx.Err() == nil && api.Release(rctx, id) == nil {
+			released++
+			continue
+		}
+		kept++
+	}
+	return released, kept
+}
+
+// hubForgetHubWork clears every trace of the left hub's items: the outbox,
+// the settled marks, the cooldowns and the findings and policy stamps, and
+// marks every open session claim Released. The claim day count stays.
+func (d *Daemon) hubForgetHubWork() {
+	w := d.hub
+	w.mu.Lock()
+	d.hubLoadLocked()
+	w.st.Outbox, w.st.Settled, w.st.Cooldown, w.st.FindingsAt = nil, nil, nil, nil
+	w.st.PolicyAt = time.Time{}
+	if err := d.hubSaveLocked(); err != nil {
+		d.logf("", "hub: persist state after leave: %v", err)
+	}
+	w.mu.Unlock()
+	changed := false
+	for _, s := range d.sessions.Snapshot() {
+		if !s.HubOpen() {
+			continue
+		}
+		_, _ = d.sessions.Update(s.ID, func(cur *session.Session) bool {
+			wrote := false
+			for _, hw := range cur.HubWorks() {
+				if hw.Open() {
+					hw.Released = true
+					wrote = true
+				}
+			}
+			changed = changed || wrote
+			return wrote
+		})
+	}
+	if changed {
+		if err := d.sessions.Save(); err != nil {
+			d.logf("", "hub: persist sessions: %v", err)
+		}
+	}
 }
 
 // hubResetIdentity forgets everything the loop learned about the previous
@@ -197,11 +332,16 @@ func (d *Daemon) hubResetIdentity() {
 	w.mu.Lock()
 	w.joined, w.device, w.deviceName, w.org = false, "", "", ""
 	w.lastErr, w.lastErrT, w.lastBeat = "", time.Time{}, time.Time{}
+	w.beatTried, w.beatFails = time.Time{}, 0
 	w.policy, w.policyV, w.policyRead = nil, 0, false
 	// A leave removes the stored policy, so the reload drops the overlay to
 	// version 0; the rejoin's fetch of the same version must reload again.
 	w.policyReloadedV = 0
 	w.findings = nil
+	// What the old membership learnt about its hub (an old protocol, repo
+	// health, offer skips, the lease life) says nothing about the next one.
+	w.health, w.skips = nil, nil
+	w.legacyUntil, w.leaseTTL = time.Time{}, 0
 	w.mu.Unlock()
 	d.hubDropCaches()
 }
@@ -220,6 +360,7 @@ func (d *Daemon) hubDropCaches() {
 	w := d.hub
 	w.mu.Lock()
 	w.board, w.orgView, w.orgAt = nil, nil, time.Time{}
+	w.statsView, w.statsAt = nil, time.Time{}
 	w.mu.Unlock()
 }
 
@@ -355,6 +496,9 @@ func hubBoardItem(v hubproto.ItemView) protocol.HubBoardItem {
 	if e := v.Escalation; e != nil {
 		bi.Escalation = &protocol.HubEscalationInfo{Pending: e.Pending, Identifier: e.Identifier, URL: e.URL}
 	}
+	// The lifecycle fields: owner, history, last failure, reopen count,
+	// claim start and the holder's member label.
+	hub.FillBoardItem(&bi, v)
 	return bi
 }
 
@@ -386,9 +530,40 @@ func (d *Daemon) handleHubOrg(ctx context.Context) (protocol.HubOrgData, error) 
 		if agents == nil {
 			agents = []string{}
 		}
-		out.Devices = append(out.Devices, protocol.HubDeviceInfo{Name: dv.Name, Me: dv.Me, LastSeen: dv.LastSeen, FreeSlots: dv.FreeSlots, Agents: agents, Active: dv.Active})
+		di := protocol.HubDeviceInfo{Name: dv.Name, Me: dv.Me, LastSeen: dv.LastSeen, FreeSlots: dv.FreeSlots, Agents: agents, Active: dv.Active}
+		hub.FillDeviceInfo(&di, dv)
+		out.Devices = append(out.Devices, di)
 	}
 	return out, nil
+}
+
+// handleHubStats answers cmd=hubStats: the org's daily counters, validated
+// whole by internal/hub (counts and dates only, no free text), cached for
+// hubOrgTTL like the org view so a UI polling it cannot flood the hub.
+func (d *Daemon) handleHubStats(ctx context.Context) (hubproto.StatsView, error) {
+	w := d.hub
+	now := w.now()
+	w.mu.Lock()
+	cached, at := w.statsView, w.statsAt
+	w.mu.Unlock()
+	if cached != nil && now.Sub(at) < hubOrgTTL {
+		return *cached, nil
+	}
+	api, _, err := d.hubHumanClient()
+	if err != nil {
+		return hubproto.StatsView{}, err
+	}
+	v, err := api.Stats(ctx)
+	if err != nil {
+		return hubproto.StatsView{}, err
+	}
+	if v.Days == nil {
+		v.Days = []hubproto.StatsDay{} // the frontend iterates it
+	}
+	w.mu.Lock()
+	w.statsView, w.statsAt = &v, now
+	w.mu.Unlock()
+	return v, nil
 }
 
 // ---- claim / release -------------------------------------------------------

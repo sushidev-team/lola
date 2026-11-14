@@ -5,7 +5,7 @@
  * SandboxLoginService runs `claude setup-token` for the user and stores the
  * token it prints in the keychain, so the Settings → Sandbox "Log in with
  * Claude" button replaces copy-pasting a secret out of a terminal.
- *
+ * 
  * The token must never reach the frontend, a log, an error or an event. Raw
  * PTY bytes are therefore NEVER forwarded: the child's output is modelled by a
  * virtual terminal (charmbracelet/x/vt) owned by this process, and the
@@ -15,13 +15,13 @@
  * cursor movement, so a token need never appear contiguously in the bytes,
  * while on the modelled screen it always does. The PTY is wide
  * (loginPTYCols) so the token and the sign-in URL are never wrapped.
- *
+ * 
  * The moment the screen holds anything token-shaped the run is SEALED: every
  * later frame is a fixed notice, nothing from the screen. Sealing is sticky.
  * The token is read from the screen once output has gone quiet (a frame is
  * written in one burst, so quiet means complete), stored through the same
  * validation and keychain seam as SetSandboxToken, and the child is ended.
- *
+ * 
  * The child runs in a PTY of its own rather than in tmux: a tmux pane keeps
  * scrollback, and the token would outlive the login there.
  * @module

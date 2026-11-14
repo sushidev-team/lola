@@ -153,6 +153,16 @@ export function HubProjects(): $CancellablePromise<$models.HubProjectDTO[] | nul
 }
 
 /**
+ * HubReadiness answers "can this Mac take the team's chores right now?" with
+ * the same rows `lola hub status` prints. It reads config.toml fresh, so a
+ * change saved a moment ago shows at once. Bounded: docker and gh are probed
+ * with their own timeouts inside this one.
+ */
+export function HubReadiness(): $CancellablePromise<$models.HubReadinessRowDTO[] | null> {
+    return $Call.ByID(1202158502);
+}
+
+/**
  * InspectPath reads a checkout in ONE pass — GitHub "owner/name", the branch
  * worktrees should fork from, the branch list and a suggested label/id — so
  * picking a folder fills the Repo tab instead of making the user copy four
@@ -193,6 +203,16 @@ export function MigrateReview(): $CancellablePromise<void> {
 }
 
 /**
+ * OpenLinearKeyHelp opens Linear's API-key page in the default browser. The
+ * setup screen needs it BEFORE any daemon runs, so the daemon's openURL cannot
+ * serve it there. It takes no argument on purpose: the one URL it opens is
+ * lola's own constant, so the frontend cannot use it as a general opener.
+ */
+export function OpenLinearKeyHelp(): $CancellablePromise<void> {
+    return $Call.ByID(3445124062);
+}
+
+/**
  * PickFile opens the native file chooser. It returns a path, never file contents.
  * Cancellation returns an empty path.
  */
@@ -205,6 +225,25 @@ export function PickFile(start: string): $CancellablePromise<string> {
  */
 export function PickFolder(start: string): $CancellablePromise<string> {
     return $Call.ByID(549249398, start);
+}
+
+/**
+ * PinPolicyKey pins keyID → pub in [hub].trusted_policy_keys after the person
+ * ticked "Trust this key" for the key an INVITE carried. The key comes from
+ * the text the person pasted, never from a hub response, and an existing
+ * different key under the same id is never replaced (hub.ErrKeyIDTaken).
+ * Added is false when the same key was already pinned.
+ */
+export function PinPolicyKey(keyID: string, pub: string): $CancellablePromise<boolean> {
+    return $Call.ByID(3286488875, keyID, pub);
+}
+
+/**
+ * PolicyKeyFingerprint is hub.KeyFingerprint: the short fingerprint an admin
+ * reads to a member over another channel. "" for a malformed key.
+ */
+export function PolicyKeyFingerprint(pub: string): $CancellablePromise<string> {
+    return $Call.ByID(3563962936, pub);
 }
 
 /**
@@ -385,6 +424,14 @@ export function SaveHubProject(patch: $models.HubProjectPatchDTO): $CancellableP
     return $Call.ByID(2589761182, patch);
 }
 
+/**
+ * SaveHubRules writes the given [hub] rules and reloads the daemon. The
+ * config's Validate is the gate (ranges, key shapes); its error names the key.
+ */
+export function SaveHubRules(r: $models.HubRulesDTO): $CancellablePromise<void> {
+    return $Call.ByID(1523811520, r);
+}
+
 export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<void> {
     return $Call.ByID(3368157871, dto);
 }
@@ -400,6 +447,15 @@ export function SaveSSHHost(original: string, d: $models.SSHHostDTO): $Cancellab
 
 export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void> {
     return $Call.ByID(298700571, dto);
+}
+
+/**
+ * SaveTeamLimits writes both values. A locked key is still written (the file
+ * keeps the person's own value; the overlay wins while the policy holds), so
+ * the UI disables a locked control rather than relying on a refusal here.
+ */
+export function SaveTeamLimits(d: $models.TeamLimitsDTO): $CancellablePromise<void> {
+    return $Call.ByID(2860107651, d);
 }
 
 /**
@@ -525,6 +581,13 @@ export function SetTheme(name: string): $CancellablePromise<void> {
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
     return $Call.ByID(3057086516, dto);
+}
+
+/**
+ * TeamLimits reads the local values (config.toml, never the policy overlay).
+ */
+export function TeamLimits(): $CancellablePromise<$models.TeamLimitsDTO> {
+    return $Call.ByID(2880940750);
 }
 
 /**

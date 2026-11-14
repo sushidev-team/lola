@@ -67,11 +67,15 @@ const socketTimeout = 500 * time.Millisecond
 
 // Result is one health check outcome. Critical=true means the daemon cannot
 // function without it (a failing critical check makes Report.OK() false).
+//
+// Fix names the action that resolves a failed row (FixNone when there is no
+// automated one), so a UI can attach a button without parsing Detail.
 type Result struct {
 	Name     string
 	OK       bool
 	Detail   string
 	Critical bool
+	Fix      FixID
 }
 
 // Report is the full set of check Results, in check order.
@@ -141,6 +145,11 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 		add(res)
 	}
 	add(ghResult())
+	// One bounded `gh auth status`, shared with the hub readiness rows.
+	ghErr := ghAuthStatus(ctx)
+	if !errors.Is(ghErr, errGhMissing) {
+		add(ghAuthResult(ghErr))
+	}
 	add(lolaCLIResult())
 	add(migrationResult(ctx))
 	// Daemon-process runtime facts the checking process cannot see for itself,
@@ -170,11 +179,36 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	if res, ok := repairResult(cfg); ok {
 		add(res)
 	}
+	if res, ok := projectsResult(cfg); ok {
+		add(res)
+	}
+	if res, ok := pollingResult(cfg); ok {
+		add(res)
+	}
 	if res, ok := hubResult(ctx, cfg); ok {
 		add(res)
 	}
 	if res, ok := hubPolicyResult(cfg); ok {
 		add(res)
+	}
+	if cfg.Hub.Enabled {
+		// The readiness list `lola hub status` prints, minus "hub joined"
+		// (hubResult above already said it, with reachability).
+		if dir, err := hub.StateDir(); err == nil {
+			var sb *SandboxStatus
+			sandbox := func() SandboxStatus {
+				if sb == nil {
+					st := CheckSandbox(ctx, cfg)
+					sb = &st
+				}
+				return *sb
+			}
+			for _, res := range hubReadiness(cfg, dir, sandbox, func() error { return ghErr }) {
+				if res.Name != checkHubJoined {
+					add(res)
+				}
+			}
+		}
 	}
 	for _, res := range fallbackResults(cfg) {
 		add(res)
@@ -321,6 +355,7 @@ func ghResult() Result {
 		res.Detail = res.Detail + " (needed only for PR/CI reconcile)"
 	} else {
 		res.Detail = "not found on PATH (PR/CI reconcile disabled)"
+		res.Fix = FixInstallGh
 	}
 	return res
 }
@@ -385,7 +420,7 @@ func daemonResult() Result {
 	sock := filepath.Join(home, "lola.sock")
 	conn, err := net.DialTimeout("unix", sock, socketTimeout)
 	if err != nil {
-		return Result{Name: checkDaemon, OK: false, Critical: false, Detail: "not running (start with: lola run)"}
+		return Result{Name: checkDaemon, OK: false, Critical: false, Detail: "not running (start with: lola run)", Fix: FixStartDaemon}
 	}
 	conn.Close()
 	return Result{Name: checkDaemon, OK: true, Critical: false, Detail: "running (" + sock + ")"}
@@ -582,14 +617,16 @@ func hubResult(ctx context.Context, cfg *config.Config) (Result, bool) {
 	switch {
 	case st.IdentityErr != "":
 		return Result{Name: checkHub, Detail: "identity unreadable: " + st.IdentityErr}, true
+	case st.Revoked != nil:
+		return Result{Name: checkHub, Detail: "revoked: the hub stopped accepting this device — ask an admin for a new invite and run `lola hub join`", Fix: FixRejoinHub}, true
 	case !st.Joined:
-		return Result{Name: checkHub, Detail: "enabled but not joined — run `lola hub join <url>` with the token on stdin"}, true
+		return Result{Name: checkHub, Detail: "enabled but not joined — run `lola hub join` with the invite on stdin", Fix: FixJoinHub}, true
 	case st.KeyErr != "":
 		return Result{Name: checkHub, Detail: "device key unreadable: " + st.KeyErr}, true
 	case !st.KeyPresent:
-		return Result{Name: checkHub, Detail: "device key missing — run `lola hub leave` and join again"}, true
+		return Result{Name: checkHub, Detail: "device key missing — run `lola hub leave` and join again", Fix: FixRejoinHub}, true
 	case st.KeyMismatch:
-		return Result{Name: checkHub, Detail: "device key is not the one that enrolled — run `lola hub leave` and join again"}, true
+		return Result{Name: checkHub, Detail: "device key is not the one that enrolled — run `lola hub leave` and join again", Fix: FixRejoinHub}, true
 	case strings.TrimSuffix(st.Identity.URL, "/") != strings.TrimSuffix(cfg.Hub.URL, "/"):
 		return Result{Name: checkHub, Detail: "joined " + st.Identity.URL + " but [hub].url names " + cfg.Hub.URL}, true
 	}

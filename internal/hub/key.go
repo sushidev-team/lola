@@ -32,6 +32,16 @@ const (
 	KeyFile      = "hub-key"
 	IdentityFile = "hub.json"
 	PolicyFile   = "hub-policy.json"
+	// RevokedFile records that the hub refused this device's signature (an
+	// admin revoked it): the identity is gone, this says why.
+	RevokedFile = "hub-revoked.json"
+	// LeftFile records the hub this machine last left, so the sessions and
+	// state kept after a leave can be traced to the hub they belonged to.
+	LeftFile = "hub-left.json"
+	// PendingJoinFile is written BEFORE the one-time token is spent and
+	// removed once the identity is saved: a leftover one means a join was
+	// cut short after the hub may already have used the token.
+	PendingJoinFile = "hub-join-pending.json"
 )
 
 var (
@@ -131,11 +141,14 @@ func RemoveKey(dir string) error { return removeIfExists(filepath.Join(dir, KeyF
 
 // Identity is state/hub.json: what `lola hub join` learned from the hub.
 type Identity struct {
-	URL        string    `json:"url"`
-	DeviceID   string    `json:"device_id"`
-	Org        string    `json:"org"`
-	DeviceName string    `json:"device_name,omitempty"`
-	JoinedAt   time.Time `json:"joined_at,omitzero"`
+	URL        string `json:"url"`
+	DeviceID   string `json:"device_id"`
+	Org        string `json:"org"`
+	DeviceName string `json:"device_name,omitempty"`
+	// Member is the admin-set label of the enroll token (C5), "" when the
+	// hub predates members or the token carried none.
+	Member   string    `json:"member,omitempty"`
+	JoinedAt time.Time `json:"joined_at,omitzero"`
 }
 
 // Validate checks the identity's shape (it is read back from disk and the org
@@ -149,6 +162,9 @@ func (id Identity) Validate() error {
 	}
 	if !hubproto.ValidOrg(id.Org) {
 		return errors.New("hub: identity org is malformed")
+	}
+	if id.Member != "" && !hubproto.ValidMemberLabel(id.Member) {
+		return errors.New("hub: identity member is malformed")
 	}
 	return nil
 }
@@ -190,6 +206,83 @@ func RemoveIdentity(dir string) error {
 		removeIfExists(filepath.Join(dir, IdentityFile)),
 		removeIfExists(filepath.Join(dir, PolicyFile)),
 	)
+}
+
+// Revocation is state/hub-revoked.json: the identity the hub stopped
+// accepting, and when lola noticed. Display only; a new join clears it.
+type Revocation struct {
+	URL        string    `json:"url"`
+	Org        string    `json:"org"`
+	DeviceID   string    `json:"device_id"`
+	DeviceName string    `json:"device_name,omitempty"`
+	At         time.Time `json:"at"`
+}
+
+// MarkRevoked records that the hub refused this device and removes the
+// identity (and with it the stored policy), so nothing is sent as a device
+// the hub no longer knows and no team policy stays enforced on its say-so.
+// The device key is kept: a new token re-enrolls the same key. Without an
+// identity there is nothing to mark and nothing is written.
+func MarkRevoked(dir string, at time.Time) (Revocation, error) {
+	id, err := LoadIdentity(dir)
+	if err != nil {
+		return Revocation{}, err
+	}
+	r := Revocation{URL: id.URL, Org: id.Org, DeviceID: id.DeviceID, DeviceName: id.DeviceName, At: at.UTC()}
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return Revocation{}, err
+	}
+	if err := writeAtomic(dir, RevokedFile, append(data, '\n')); err != nil {
+		return Revocation{}, err
+	}
+	return r, RemoveIdentity(dir)
+}
+
+// LoadRevocation reads state/hub-revoked.json; ok=false when there is none or
+// it does not parse (it is display only, so an unknown is "not revoked").
+func LoadRevocation(dir string) (Revocation, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, RevokedFile))
+	if err != nil {
+		return Revocation{}, false
+	}
+	var r Revocation
+	if json.Unmarshal(data, &r) != nil || config.ValidateHubURL(r.URL) != nil || !hubproto.ValidOrg(r.Org) {
+		return Revocation{}, false
+	}
+	return r, true
+}
+
+// ClearRevocation removes the revocation record (a new join, or a leave).
+func ClearRevocation(dir string) error { return removeIfExists(filepath.Join(dir, RevokedFile)) }
+
+// LeftRecord is state/hub-left.json: the hub this machine last left.
+type LeftRecord struct {
+	URL      string    `json:"url"`
+	Org      string    `json:"org,omitempty"`
+	DeviceID string    `json:"device_id,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// LoadLeft reads state/hub-left.json (ok=false when absent or unreadable).
+func LoadLeft(dir string) (LeftRecord, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, LeftFile))
+	if err != nil {
+		return LeftRecord{}, false
+	}
+	var r LeftRecord
+	if json.Unmarshal(data, &r) != nil || config.ValidateHubURL(r.URL) != nil {
+		return LeftRecord{}, false
+	}
+	return r, true
+}
+
+func saveLeft(dir string, r LeftRecord) error {
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeAtomic(dir, LeftFile, append(data, '\n'))
 }
 
 func removeIfExists(path string) error {

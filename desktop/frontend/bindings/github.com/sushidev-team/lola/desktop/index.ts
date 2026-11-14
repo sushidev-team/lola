@@ -29,6 +29,7 @@ export {
 };
 
 export type {
+    AICommitProgress,
     AppearanceDTO,
     CLIInfoDTO,
     CLIInstallDTO,
@@ -40,6 +41,9 @@ export type {
     HubKindDTO,
     HubProjectDTO,
     HubProjectPatchDTO,
+    HubReadinessRowDTO,
+    HubRulesDTO,
+    HubStatsDTO,
     HubTrustedKeyDTO,
     ImageAttachment,
     InheritsDTO,
@@ -66,6 +70,7 @@ export type {
     SetupResultDTO,
     StackFolderAppDTO,
     StackFolderDTO,
+    TeamLimitsDTO,
     TeamPolicyDTO,
     ToolchainDTO,
     ToolchainInfoDTO,

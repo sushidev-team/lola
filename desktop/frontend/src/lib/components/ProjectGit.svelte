@@ -27,7 +27,7 @@
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
   import { projectGitState, type ProjectGitState } from '$lib/projectgit.svelte';
-  import { folderFirstFiles, workingGraphConnection, commitGraph, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
+  import { folderFirstFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
   import { agoPhrase, exactTime } from '$lib/time';
 
   let { project, heading, actions, windowInset = false }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean } = $props();
@@ -287,6 +287,13 @@
   const git = $derived(projectGitState(project, worktree));
   const configuredPath = $derived(projectGitState(project, '').snapshot?.path ?? '');
   const data = $derived(git.snapshot);
+  // A PEEK shows another checkout's uncommitted files in the inspector without
+  // leaving this one: the history, the toolbar and every branch action stay on
+  // the active checkout, and only staging, commit and the diff follow the peek.
+  let peekPath = $state('');
+  const peek = $derived(peekPath ? projectGitState(project, peekPath) : null);
+  const peekTree = $derived(peekPath ? data?.worktrees.find(tree => tree.path === peekPath) : undefined);
+  const view = $derived(peek ?? git);
   const initialLoading = $derived(!data && !git.error);
   const workingCounts = $derived.by(() => {
     const counts = { added: 0, modified: 0, deleted: 0, conflicts: 0 };
@@ -333,7 +340,10 @@
   const workingSummary = $derived(workingCounts.conflicts ? `${data?.operation ? operationLabel + ' · ' : ''}${workingCounts.conflicts} conflicted ${workingCounts.conflicts === 1 ? 'file' : 'files'}` : data?.operation ? `${operationLabel} in progress` : 'Working changes');
   const workingConnection = $derived(!query.trim() && data?.files.length ? workingGraphConnection(graph, data.head) : null);
   const workingX = $derived(GRAPH_NODE_X + (workingConnection?.lane ?? 0) * GRAPH_LANE_WIDTH);
-  const graphWidth = $derived(Math.max(64, workingConnection ? workingX + GRAPH_LANE_WIDTH : 0, ...graph.map(row => row.width * GRAPH_LANE_WIDTH + GRAPH_NODE_X)));
+  // Work in progress in the other checkouts, drawn above the commit each sits on.
+  const otherChanges = $derived(query.trim() || !data ? new Map() as ReturnType<typeof worktreeChanges> : worktreeChanges(graph, data.worktrees, data.path, workingConnection));
+  const otherChangeLanes = $derived(Math.max(-1, ...[...otherChanges.values()].flat().map(change => change.lane)));
+  const graphWidth = $derived(Math.max(64, workingConnection ? workingX + GRAPH_LANE_WIDTH : 0, otherChangeLanes >= 0 ? GRAPH_NODE_X + (otherChangeLanes + 1) * GRAPH_LANE_WIDTH : 0, ...graph.map(row => row.width * GRAPH_LANE_WIDTH + GRAPH_NODE_X)));
   const branchHistory = $derived(branchesByCommit(commits, namedRefs));
   const refsAt = $derived.by(() => {
     const result = new Map<string, GitRef[]>();
@@ -358,48 +368,67 @@
   const visible = $derived(search ? commits.filter(c => [c.subject, c.author, c.sha, ...(c.refs ?? [])].some(v => v.toLocaleLowerCase().includes(search))) : commits);
   const currentCommit = $derived(commits.find(c => c.sha === selected[selected.length - 1]));
   const containedBranches = $derived(currentCommit ? branchHistory.get(currentCommit.sha) ?? [] : []);
-  const files = $derived(folderFirstFiles(git.diff?.files ?? []));
+  const files = $derived(folderFirstFiles(view.diff?.files ?? []));
   const file = $derived(files.find(f => f.path === activeFile) ?? files[0]);
   const totals = $derived(files.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
   const diffTitle = $derived(area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${comparisonLabel(0)} → ${comparisonLabel(1)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
 
   $effect(() => {
     project;
-    untrack(() => { sectionFilters = readSectionFilters(project); newPR = null; newWorktree = null; publishBranch = null; newBranch = null; gitActions.close(); cancelBranchDrag(); worktree = ''; ref = ''; query = ''; focusedBranch = ''; branchJump++; limit = 200; selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; });
+    untrack(() => { sectionFilters = readSectionFilters(project); newPR = null; newWorktree = null; publishBranch = null; newBranch = null; gitActions.close(); cancelBranchDrag(); worktree = ''; peekPath = ''; ref = ''; query = ''; focusedBranch = ''; branchJump++; limit = 200; selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; });
   });
   $effect(() => {
     const state = git, branch = ref, count = limit;
     untrack(() => { if (newPR && newPR.git !== state) newPR = null; if (newWorktree && newWorktree.git !== state) newWorktree = null; if (publishBranch && publishBranch.git !== state) publishBranch = null; if (newBranch && newBranch.git !== state) newBranch = null; gitActions.close(); cancelBranchDrag(); selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; hoveredLane = null; focusedLane = null; state.clearDiff(); historyLoad = state.load(branch, count); });
   });
   $effect(() => {
-    const state = git, snapshot = data, selection = selected, chosenArea = area, chosenPath = path;
+    const state = view, snapshot = view.snapshot, selection = selected, chosenArea = area, chosenPath = path;
     untrack(() => {
       if (!snapshot || !chosenArea) { state.clearDiff(); return; }
       void state.loadDiff(chosenArea, chosenArea === 'working' || selection.length === 2 ? selection[0] : '', chosenArea === 'working' ? '' : selection.at(-1) ?? '', chosenPath);
     });
   });
 
+  $effect(() => {
+    const state = peek;
+    untrack(() => { if (state) { state.clearDiff(); void state.load('', 1); } });
+  });
+  // A peeked checkout that was removed or turned managed has nothing to show.
+  $effect(() => { if (peekPath && data && (!peekTree || peekTree.blocked || peekTree.prunable)) peekPath = ''; });
+
   $effect(() => { saveSectionFilters(project, sectionFilters); });
 
   function chooseCommit(sha: string, event?: MouseEvent) {
-    branchJump++; focusedBranch = '';
+    branchJump++; focusedBranch = ''; peekPath = '';
     selected = selectCommits(selected, sha, !!(event?.metaKey || event?.ctrlKey));
     area = selected.length ? 'commit' : '';
     diffOpen = false;
     path = ''; activeFile = '';
   }
   function working() { selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; }
+  function committed() {
+    working();
+    // The inspector refreshes its own checkout; the graph belongs to the active one.
+    if (peek) void git.load(ref, limit);
+  }
   function showCommitDiff(sha: string) { selected = [sha]; area = 'commit'; path = ''; activeFile = ''; diffOpen = true; }
   function inspectFile(file: GitFile, staged: boolean) {
     diffOpen = true;
     selected = []; area = staged ? 'staged' : file.untracked ? 'untracked' : 'unstaged'; path = file.path; activeFile = file.path;
   }
   async function act(action: 'stage' | 'unstage' | 'commit' | 'fetch' | 'pull' | 'push', paths: string[] = []) {
-    const state = git;
-    const ok = await state.act(action, paths, ref, limit);
-    if (ok && state === git && ['stage', 'unstage', 'commit'].includes(action)) working();
+    const local = ['stage', 'unstage', 'commit'].includes(action);
+    // Fetch, pull and push belong to the toolbar, which is the active checkout's.
+    const state = local ? view : git, peeking = state !== git;
+    const ok = await state.act(action, paths, peeking ? '' : ref, peeking ? 1 : limit);
+    if (ok && state === view && local) working();
+    // The peeked checkout's counts live in the active snapshot.
+    if (ok && peeking) void git.load(ref, limit);
   }
-  function chooseWorktree(value: string) { branchJump++; focusedBranch = ''; worktree = value; ref = ''; limit = 200; query = ''; showRail = false; }
+  function peekWorktree(tree: GitWorktree) { working(); peekPath = tree.path; }
+  function ownWorking() { peekPath = ''; working(); }
+  function openWorktreeChanges(tree: GitWorktree) { chooseWorktree(tree.path === configuredPath ? '' : tree.path); working(); }
+  function chooseWorktree(value: string) { peekPath = ''; branchJump++; focusedBranch = ''; worktree = value; ref = ''; limit = 200; query = ''; showRail = false; }
   let historyLoad: Promise<void> = Promise.resolve();
   let branchJump = 0;
   let focusedBranch = $state('');
@@ -530,7 +559,7 @@
           {@const mainTree = tree.path === data?.worktrees[0]?.path}
           <div class="rail-entry">
           <Button block selected={tree.path === data?.path} disabled={tree.prunable} class="rail-row worktree-row" aria-label={mainTree ? `Main checkout ${tree.branch || 'Detached HEAD'}` : `${tree.branch || 'Detached HEAD'} ${tree.path}`} oncontextmenu={(event) => gitActions.openWorktree(tree, event)} title={tree.blocked ? `${tree.path} · managed worktree; open actions for details` : tree.path} onclick={(event) => { if (tree.blocked) gitActions.openWorktree(tree, event); else chooseWorktree(tree.path === configuredPath ? '' : tree.path); }}>
-            <Icon name={tree.blocked ? 'shield-check' : mainTree ? 'house' : 'folder'} size={14} /><span class="tree-copy"><span>{tree.branch || 'Detached HEAD'}</span></span>
+            <Icon name={tree.blocked ? 'shield-check' : mainTree ? 'house' : 'folder'} size={14} /><span class="tree-copy"><span>{tree.branch || 'Detached HEAD'}</span></span>{#if tree.changes && tree.path !== data?.path}<span class="rail-count worktree-changes" title={`${tree.changes} uncommitted ${tree.changes === 1 ? 'file' : 'files'}`}><Icon name="pencil" size={11} />{tree.changes}</span>{/if}
           </Button>
           <Button icon size="xs" class="rail-more" aria-label={`Actions for worktree ${tree.path}`} title="Worktree actions" aria-haspopup="menu" onclick={(event) => gitActions.openWorktree(tree,event)}><Icon name="ellipsis-vertical" size={14}/></Button>
           </div>
@@ -564,7 +593,7 @@
           </div>
           {#if data && ((data.files.length && !search) || data.operation || workingCounts.conflicts)}
             <div class="working-section" class:needs-attention={!!data.operation || !!workingCounts.conflicts}>
-            <Button block variant="bare" selected={!selected.length} class="commit-row working-row" style={`--columns:${workingTemplate}`} title={`Uncommitted changes on ${data.branch || 'detached HEAD'}`} oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext} data-commit="working" aria-label={`Working changes, ${data.files.length} files`} onclick={working}>
+            <Button block variant="bare" selected={!selected.length && !peekPath} class="commit-row working-row" style={`--columns:${workingTemplate}`} title={`Uncommitted changes on ${data.branch || 'detached HEAD'}`} oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext} data-commit="working" aria-label={`Working changes, ${data.files.length} files`} onclick={ownWorking}>
               {#each workingColumns as column}
                 {#if column.id === 'refs'}<span class="working-state"><span class="wip-label"><Icon name="pencil" size={12} />In progress</span></span>
                 {:else if column.id === 'graph'}<span class="working-graph"><svg width={graphWidth} height="34" aria-hidden="true">{#if workingConnection}<path class="working-edge" d={`M${workingX} 26V34`} stroke="currentColor" stroke-width="1.7" fill="none" />{/if}<circle cx={workingX} cy="17" r="9" fill="var(--color-canvas)" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.5" /><circle cx={workingX} cy="17" r="2.5" fill="currentColor" /></svg></span>
@@ -608,6 +637,25 @@
               {@const author = git.authors[commit.sha]}
               {@const memberships = branchHistory.get(commit.sha) ?? []}
               {@const nodeX = search ? GRAPH_NODE_X : GRAPH_NODE_X + row.lane * GRAPH_LANE_WIDTH}
+              {@const wip = otherChanges.get(commit.sha) ?? []}
+              {#each wip as change, wipIndex (change.tree.path)}
+                {@const wipX = GRAPH_NODE_X + change.lane * GRAPH_LANE_WIDTH}
+                {@const where = change.tree.branch || 'detached HEAD'}
+                <Button block variant="bare" selected={peekPath === change.tree.path && !selected.length} class="commit-row worktree-wip-row" data-worktree-changes={change.tree.path} title={`Uncommitted changes in ${change.tree.path}`} aria-label={`Working changes on ${where}, ${change.tree.changes} ${change.tree.changes === 1 ? 'file' : 'files'}, worktree`} ondblclick={() => openWorktreeChanges(change.tree)} onclick={() => peekWorktree(change.tree)}>
+                  {#each shownColumns as column}
+                    {#if column.id === 'refs'}<span class="working-state"><span class="wip-label wip-elsewhere"><Icon name="layers" size={12} /><span class="ref-name">{where}</span></span></span>
+                    {:else if column.id === 'graph'}<span class="graph-cell wip-graph"><svg class="commit-graph" width={graphWidth} height={rowHeight} aria-hidden="true">
+                      {#each row.edges.filter(edge => edge.start === 'top') as edge}<path class="ancestry-edge" d={`M${GRAPH_NODE_X + edge.from * GRAPH_LANE_WIDTH} 0V${rowHeight}`} stroke={graphColor(edge.color)} stroke-width="1.7" fill="none" />{/each}
+                      {#if workingConnection && commitIndex <= workingConnection.index}<path class="working-edge" d={`M${workingX} 0V${rowHeight}`} stroke="var(--color-accent-ink)" stroke-width="1.7" fill="none" />{/if}
+                      {#each wip.slice(0, wipIndex) as above}<path class="worktree-edge" d={`M${GRAPH_NODE_X + above.lane * GRAPH_LANE_WIDTH} 0V${rowHeight}`} stroke="currentColor" stroke-width="1.7" fill="none" />{/each}
+                      <path class="worktree-edge" d={`M${wipX} ${rowHeight / 2 + 9}V${rowHeight}`} stroke="currentColor" stroke-width="1.7" fill="none" />
+                      <circle cx={wipX} cy={rowHeight / 2} r="9" fill="var(--color-canvas)" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.5" /><circle cx={wipX} cy={rowHeight / 2} r="2.5" fill="currentColor" />
+                    </svg></span>
+                    {:else if column.id === 'subject'}<span class="working-copy"><strong>Working changes</strong><span class="working-count">{change.tree.changes}</span><span class="working-stats">{#if change.tree.modified}<span class="working-stat modified" title={`${change.tree.modified} modified files`}><Icon name="pencil" size={12} />{change.tree.modified}</span>{/if}{#if change.tree.added}<span class="working-stat added" title={`${change.tree.added} added files`}><Icon name="plus" size={12} />{change.tree.added}</span>{/if}{#if change.tree.deleted}<span class="working-stat deleted" title={`${change.tree.deleted} deleted files`}><Icon name="minus" size={12} />{change.tree.deleted}</span>{/if}{#if change.tree.conflicts}<span class="working-stat deleted" title={`${change.tree.conflicts} conflicted files`}><Icon name="circle-alert" size={12} />{change.tree.conflicts}</span>{/if}</span><span class="working-open">Review changes<Icon name="chevron-right" size={13} /></span></span>
+                    {:else}<span></span>{/if}
+                  {/each}
+                </Button>
+              {/each}
               <Button block variant="bare" class={`commit-row ${selected.includes(commit.sha) ? 'commit-selected' : ''} ${tracedLane === row.color ? 'lane-traced' : ''}`} style={`--lane-color:${graphColor(row.color)}`} data-commit={commit.sha} data-lane={row.color} aria-pressed={selected.includes(commit.sha)} aria-label={`${commit.subject}, ${commit.sha.slice(0, 8)}, ${commit.author}${tips.length ? ", " + tips.map(branchDescription).join(", ") : ""}${checkouts.length ? ", " + checkouts.map(tree => tree.path === data?.path ? "active checkout" : "worktree " + tree.branch).join(", ") : ""}`} oncontextmenu={(event) => { const branch = eventBranch(event); if (branch) gitActions.openBranch(branch, event); else gitActions.openCommit(commit, event); }} onkeydown={keyboardContext} ondblclick={(event) => { if (clickAfterDrag(event)) return; const branch = eventBranch(event); if (branch) gitActions.checkout(branch); }} onpointerdown={(event) => startBranchDrag(event, eventBranch(event))} ondragstart={(event) => event.preventDefault()} onclick={(e) => { if (!clickAfterDrag(e)) chooseCommit(commit.sha, e); }} onpointerenter={() => hoveredLane = row.color} onpointerleave={() => hoveredLane = null} onfocus={() => focusedLane = row.color} onblur={() => focusedLane = null} {...gitCommitTooltip(commit, memberships, checkouts.map(tree => `${tree.path === data?.path ? "Active checkout" : "Worktree"}: ${tree.path}`), tips)}>
                 {#if !columnPrefs.hidden.includes('refs')}<span class="commit-refs">
                   {#if primary}<span class:branch-drop-target={dropTarget === primary.fullName} class="ref-label" role="presentation" data-branch-ref={primary.fullName} draggable={false}>
@@ -633,6 +681,7 @@
                   <svg class="commit-graph" width={search ? 40 : graphWidth} height={rowHeight} aria-hidden="true">
                     {#if !search}{#each row.edges as edge}<path class="ancestry-edge" stroke-linecap="round" stroke-linejoin="round" d={graphPath(edge, rowHeight)} stroke={graphColor(edge.color)} stroke-width={tracedLane === edge.color ? 2.5 : 1.7} fill="none" />{/each}{/if}
                     {#if workingConnection && commitIndex <= workingConnection.index}<path class="working-edge" d={graphPath({from:workingConnection.lane,to:commitIndex === workingConnection.index ? row.lane : workingConnection.lane,start:'top',end:commitIndex === workingConnection.index ? 'node' : 'bottom',color:0},rowHeight)} stroke="var(--color-accent-ink)" stroke-width="1.7" fill="none" stroke-linecap="round" />{/if}
+                    {#if !search}{#each wip as change}<path class="worktree-edge" d={graphPath({from:change.lane,to:row.lane,start:'top',end:'node',color:0},rowHeight)} stroke="var(--color-orange)" stroke-width="1.7" fill="none" stroke-linecap="round" />{/each}{/if}
                     <circle cx={nodeX} cy={rowHeight / 2} r={commit.parents?.length > 1 ? 5 : 10.5} fill={commit.parents?.length > 1 || selected.includes(commit.sha) ? graphColor(row.color) : 'var(--color-panel)'} stroke={graphColor(row.color)} stroke-width="2" />
                   </svg>
                   {#if commit.parents?.length <= 1}<span class="graph-avatar" style:left={`${nodeX - 9}px`}><GitAvatar src={author?.avatarUrl} name={commit.author} size={18} loading={!!git.identityLoading[commit.sha]} /></span>{/if}
@@ -650,11 +699,11 @@
       {#if area && diffOpen}
         <section class="diff-stage" aria-label="Selected changes">
           <div class="comparison-bar"><span><Icon name={selected.length === 2 ? 'git-compare-arrows' : 'file-text'} size={14} />{diffTitle}</span><div>{#if selected.length === 2}<Button size="xs" aria-label="Swap comparison direction" onclick={() => { comparisonBranches = [...comparisonBranches].reverse(); selected = [...selected].reverse(); }}><Icon name="arrow-right-left" size={13} />Swap</Button>{/if}<Button size="xs" icon aria-label="Close diff" onclick={() => diffOpen = false}><Icon name="x" size={14} /></Button></div></div>
-          {#if git.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
-          {:else if git.diffError}<div class="git-empty" role="alert"><Icon name="circle-alert" size={20} /><p>{git.diffError}</p><Button onclick={() => void git.loadDiff(area as GitArea, area === 'working' || selected.length === 2 ? selected[0] : '', area === 'working' ? '' : selected.at(-1) ?? '', path)}>Retry diff</Button></div>
+          {#if view.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
+          {:else if view.diffError}<div class="git-empty" role="alert"><Icon name="circle-alert" size={20} /><p>{view.diffError}</p><Button onclick={() => void view.loadDiff(area as GitArea, area === 'working' || selected.length === 2 ? selected[0] : '', area === 'working' ? '' : selected.at(-1) ?? '', path)}>Retry diff</Button></div>
           {:else if file}<ProjectGitDiff {file} />
           {:else}<div class="git-empty"><Icon name="check" size={20} /><p>No file changes in this comparison</p></div>{/if}
-          {#if git.diff?.truncated}<p class="truncated-note">This diff exceeds the preview limit. Some changes are not shown.</p>{/if}
+          {#if view.diff?.truncated}<p class="truncated-note">This diff exceeds the preview limit. Some changes are not shown.</p>{/if}
         </section>
       {/if}
     </main>
@@ -675,9 +724,19 @@
         <div class="changed-file-list">
           {#each files as f (f.path)}<Button block selected={file?.path === f.path} class="changed-file" title={f.path} aria-label={f.path} onclick={() => { activeFile = f.path; diffOpen = true; }}><span class={`file-status ${f.status === 'deleted' ? 'text-bad' : f.status === 'added' ? 'text-good' : 'text-orange'}`}>{({ added: 'A', deleted: 'D', renamed: 'R', modified: 'M' } as Record<string, string>)[f.status ?? ''] ?? 'M'}</span><GitFilePath path={f.path}/></Button>{/each}
         </div>
-        <div class="inspector-bottom"><Button block variant="secondary" disabled={!files.length || git.diffLoading} onclick={() => diffOpen = true}><Icon name="file-text" size={14} />View changes</Button><Button block onclick={working}><Icon name="circle-dot" size={14} />Back to working changes</Button></div>
+        <div class="inspector-bottom"><Button block variant="secondary" disabled={!files.length || view.diffLoading} onclick={() => diffOpen = true}><Icon name="file-text" size={14} />View changes</Button><Button block onclick={ownWorking}><Icon name="circle-dot" size={14} />Back to working changes</Button></div>
       {:else}
+        {#if peek && peekTree}
+          {@const tree = peekTree}
+          <div class="peek-heading" role="group" aria-label={`Worktree ${tree.branch || 'detached HEAD'}`}>
+            <Icon name="layers" size={14} /><span class="peek-copy" title={tree.path}><strong>{tree.branch || 'Detached HEAD'}</strong><small>{tree.path}</small></span>
+            <Button size="xs" variant="secondary" title="Switch the whole view to this worktree" onclick={() => openWorktreeChanges(tree)}>Open</Button>
+            <Button icon size="xs" aria-label="Back to this checkout's changes" title="Back to this checkout's changes" onclick={ownWorking}><Icon name="x" size={14} /></Button>
+          </div>
+          {#key peek}<ProjectGitStaging git={peek} {path} {area} ref="" limit={1} oninspect={inspectFile} onact={(action, paths) => void act(action, paths)} oncommitted={committed} oncontextfile={() => {}} />{/key}
+        {:else}
         <ProjectGitStaging {git} {path} {area} {ref} {limit} oninspect={inspectFile} onact={(action, paths) => void act(action, paths)} oncommitted={working} oncontextfile={(file,staged,paths,event) => gitActions.openFile(file,staged,paths,event)} />
+        {/if}
       {/if}
     </aside>
   </div>
@@ -795,6 +854,18 @@
   .working-recovery :global(.ai-resolve:enabled:hover), .working-recovery :global(.ai-resolve:enabled:focus-visible) { background:var(--color-ink); color:var(--color-canvas); border-color:var(--color-ink); }
   .working-state { display:flex; justify-content:flex-start; min-width:0; }
   .wip-label { display:inline-flex; align-items:center; gap:5px; padding:2px 7px; border:1px solid color-mix(in srgb,var(--color-accent) 40%,transparent); border-radius:4px; color:var(--color-accent-ink); background:var(--color-canvas); font-size:12px; line-height:18px; white-space:nowrap; }
+  .wip-label.wip-elsewhere { max-width:100%; min-width:0; color:var(--color-orange); border-color:color-mix(in srgb,var(--color-orange) 40%,transparent); }
+  .wip-elsewhere .ref-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .history-list :global(.commit-row.worktree-wip-row) { background:color-mix(in srgb,var(--color-orange) 5%,var(--color-canvas)); }
+  .history-list :global(.commit-row.worktree-wip-row:enabled:hover),.history-list :global(.commit-row.worktree-wip-row:focus-visible) { background:color-mix(in srgb,var(--color-orange) 14%,var(--color-panel)); }
+  :global(.worktree-wip-row:hover) .working-open,:global(.worktree-wip-row:focus-visible) .working-open { opacity:1; }
+  .wip-graph { color:var(--color-orange); background:none; border-right-color:transparent; }
+  .history-list :global(.commit-row.worktree-wip-row[aria-pressed="true"]) { background:color-mix(in srgb,var(--color-orange) 20%,var(--color-panel)); }
+  .peek-heading { display:flex; align-items:center; gap:8px; min-height:41px; padding:6px 8px 6px 12px; border-bottom:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-orange) 8%,var(--color-panel)); color:var(--color-orange); }
+  .peek-copy { display:grid; min-width:0; flex:1; color:var(--color-ink); }
+  .peek-copy strong { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .peek-copy small { color:var(--color-faint); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+  .worktree-changes { display:inline-flex; align-items:center; gap:3px; color:var(--color-orange); }
   .working-stats { display:flex; gap:10px; margin-left:5px; }
   .working-stat { display:inline-flex; align-items:center; gap:3px; font:12px var(--font-mono); font-variant-numeric:tabular-nums; }
   .working-stat.modified { color:var(--color-orange); }

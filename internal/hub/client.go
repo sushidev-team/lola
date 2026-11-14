@@ -118,8 +118,10 @@ func (c *Client) Enroll(ctx context.Context, token, deviceName string) (hubproto
 	if resp.DeviceID != c.DeviceID() {
 		return hubproto.EnrollResponse{}, invalidResponse("device_id does not match this key")
 	}
-	if !hubproto.ValidOrg(resp.Org) {
-		return hubproto.EnrollResponse{}, invalidResponse("org")
+	// org, and the member label and stored device name a newer hub adds
+	// (both optional: an older hub sends neither).
+	if err := resp.Validate(); err != nil {
+		return hubproto.EnrollResponse{}, invalidResponse("enroll: " + err.Error())
 	}
 	return resp, nil
 }
@@ -229,13 +231,29 @@ func (c *Client) Complete(ctx context.Context, id string, req hubproto.CompleteR
 	return c.do(ctx, http.MethodPost, path, req, nil)
 }
 
-// Fail reports a failed item with a reason from the closed set.
-func (c *Client) Fail(ctx context.Context, id string, reason hubproto.FailReason) error {
+// Progress reports the PR opened for a claimed item (claimed -> in_review)
+// or, from in_review, where it stands now. A hub that predates the frame
+// answers 404; the caller then falls back to Complete.
+func (c *Client) Progress(ctx context.Context, id string, req hubproto.ProgressRequest) error {
+	path := hubproto.ProgressPath(id)
+	if path == "" {
+		return errors.New("hub: invalid item id")
+	}
+	if err := req.Validate(); err != nil {
+		return err
+	}
+	return c.do(ctx, http.MethodPost, path, req, nil)
+}
+
+// Fail reports a failed item with a reason from the closed set, and
+// optionally the PR the attempt left and the group of failures it belongs to.
+// A hub that predates pr_url / group refuses them (400): the caller retries
+// with the reason alone.
+func (c *Client) Fail(ctx context.Context, id string, req hubproto.FailRequest) error {
 	path := hubproto.FailPath(id)
 	if path == "" {
 		return errors.New("hub: invalid item id")
 	}
-	req := hubproto.FailRequest{Reason: reason}
 	if err := req.Validate(); err != nil {
 		return err
 	}
@@ -281,6 +299,13 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 // raw sends one signed request and returns the 2xx body, read up to limit
 // bytes (hubproto.MaxBody for every frame but the board views).
 func (c *Client) raw(ctx context.Context, method, path string, in any, limit int64) ([]byte, error) {
+	return c.rawSigned(ctx, method, path, in, limit, nil)
+}
+
+// rawSigned is raw with a second signature: countersign (nil = none) runs
+// AFTER the device signature and adds its own headers over the same body
+// (an org-admin request, admin.go).
+func (c *Client) rawSigned(ctx context.Context, method, path string, in any, limit int64, countersign func(*http.Request, []byte) error) ([]byte, error) {
 	var body []byte
 	if in != nil {
 		var err error
@@ -324,6 +349,11 @@ func (c *Client) raw(ctx context.Context, method, path string, in any, limit int
 	}
 	if err := hubproto.SignAt(req, c.DeviceID(), c.key.priv, body, now(), nonce); err != nil {
 		return nil, err
+	}
+	if countersign != nil {
+		if err := countersign(req, body); err != nil {
+			return nil, err
+		}
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

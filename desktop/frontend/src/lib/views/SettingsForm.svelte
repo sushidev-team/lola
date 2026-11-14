@@ -66,7 +66,11 @@
   // The SSH host form saves on its own, with its own button, so it reports its own
   // unsaved edits: a close must not silently drop them either.
   let sshHostDirty = $state(false);
-  const dirty = $derived.by(() => sshHostDirty || (dto && loaded ? !deepEqual($state.snapshot(dto), $state.snapshot(loaded)) : false));
+  // The Team hub tab saves at once, but a trusted key being typed or a number
+  // that is not valid yet is a DRAFT there: it reports itself here so a close
+  // asks first and Save stops at it instead of dropping it.
+  let hubDirty = $state(false);
+  const dirty = $derived.by(() => sshHostDirty || hubDirty || (dto && loaded ? !deepEqual($state.snapshot(dto), $state.snapshot(loaded)) : false));
 
   /** Reset the dirty baseline to the current DTO — after load and after a migrate. */
   function markPristine() {
@@ -85,13 +89,16 @@
     { id: "hub", label: "Team hub", group: "Connections" },
     { id: "ai", label: "AI", group: "Automation" },
     { id: "review", label: "Review", group: "Automation" },
-    { id: "brain", label: "Summaries", group: "Automation" },
-    { id: "interpreter", label: "Status interpretation", group: "Automation" },
+    { id: "assistants", label: "Assistants", group: "Automation" },
   ];
+  // "Summaries" and "Status interpretation" were two tabs; old deep links land
+  // on the one tab that holds both.
+  const TAB_ALIASES: Record<string, string> = { brain: "assistants", interpreter: "assistants" };
 
   // Every tab body is an explicit `{:else if tab === …}` branch with no catch-all,
   // so an unknown deep-link id would render a blank pane. Clamp it to a real tab.
-  let tab = $state(TABS.some((t) => t.id === nav.overlayTab) ? nav.overlayTab : "defaults");
+  const linked = TAB_ALIASES[nav.overlayTab] ?? nav.overlayTab;
+  let tab = $state(TABS.some((t) => t.id === linked) ? linked : "defaults");
 
   // The [defaults] label keys offer WORKSPACE (organisation-level) labels, not
   // team labels: a shared default is inherited by projects on any team, and a
@@ -316,6 +323,8 @@
       void loadReviewKinds();
     } else if (id === "remote") {
       void loadRemoteBinds();
+    } else if (id === "defaults") {
+      void loadTeamLimits();
     }
   }
 
@@ -323,6 +332,10 @@
     tab = id;
     lazyLoadFor(id);
   }
+  let hubVisited = $state(false);
+  $effect(() => {
+    if (tab === "hub") hubVisited = true;
+  });
 
   const statusBinaries = new Map<string, string>();
 
@@ -346,7 +359,59 @@
   // max_concurrency is a CEILING, not a lock: the daemon runs min(local, team),
   // so a lower local value still counts. The field stays editable; the team's
   // value is a hint.
-  const capCeiling = $derived(lockFor("globalCap"));
+  // Read as ceilings whatever an older desktop build's DTO says.
+  const ceilingFor = (field: string) => {
+    const l = lockFor(field);
+    return l ? { ...l, ceiling: true } : null;
+  };
+  const capCeiling = $derived(ceilingFor("globalCap"));
+  const budgetCeiling = $derived(ceilingFor("budgetDaily"));
+  const mergeQueueLock = $derived(lockFor("mergeQueue"));
+
+  // --- team-governed limits ([budget].daily_tokens, [merge_queue].enabled) ---
+  //
+  // Not SettingsDTO fields: they save AT ONCE (ConfigService.SaveTeamLimits),
+  // so the team policy's lock and ceiling sit over a real control and the
+  // overlay's Save never carries a stale copy of them.
+  let limits = $state<{ budgetDaily: number; mergeQueue: boolean } | null>(null);
+  let budgetDraft = $state<number | null>(null);
+  let limitsBusy = $state(false);
+  let limitsMsg = $state("");
+  let limitsErr = $state("");
+  const budgetValue = $derived(budgetDraft ?? limits?.budgetDaily ?? 0);
+  const budgetError = $derived(!Number.isInteger(budgetValue) || budgetValue < 0 ? "Enter a whole number of 0 or more." : "");
+
+  async function loadTeamLimits() {
+    try {
+      limits = { ...(await ConfigService.TeamLimits()) };
+      limitsErr = "";
+    } catch {
+      limits = null; // an older daemon build: the row explains itself
+    }
+  }
+
+  async function saveTeamLimits(patch: Partial<{ budgetDaily: number; mergeQueue: boolean }>) {
+    if (!limits || limitsBusy) return;
+    const next = { ...limits, ...patch };
+    limitsBusy = true;
+    limitsMsg = "";
+    limitsErr = "";
+    try {
+      await ConfigService.SaveTeamLimits(next);
+      limits = next;
+      budgetDraft = null;
+      limitsMsg = "Saved";
+    } catch (err) {
+      limitsErr = String(err).replace(/^Error:\s*/, "");
+    } finally {
+      limitsBusy = false;
+    }
+  }
+
+  function commitBudget() {
+    if (budgetDraft === null || budgetError || budgetDraft === limits?.budgetDaily) return;
+    void saveTeamLimits({ budgetDaily: budgetDraft });
+  }
   // The review_providers lock sets only WHICH kinds are enabled; each kind still
   // runs with its local command, author, model and publishing settings (a
   // locked-on kind with no local entry runs on defaults, and a bot-watch with
@@ -387,6 +452,14 @@
       tab = "defaults";
       await tick();
       document.getElementById(`${formId}-${globalCapError ? "global" : "project"}-cap`)?.focus();
+      return;
+    }
+    if (hubDirty) {
+      // A hub draft (a key being typed, a number not valid yet) never goes out
+      // with this Save and is never dropped by it: show it instead.
+      tab = "hub";
+      await tick();
+      document.querySelector<HTMLElement>("[data-hub-unsaved]")?.focus();
       return;
     }
     if (hubClaimsErr || hubPollErr) {
@@ -902,9 +975,11 @@
             <label class={rowCls}>
               <span class="text-faint">Total running agents</span>
               <span>
-                <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
-                  aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
-                <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}{#if !globalCapError && capCeiling}{" "}Team ceiling {capCeiling.value} (policy v{teamPolicy?.version ?? 0}).{/if}</span>
+                <TeamLock lock={capCeiling} version={teamPolicy?.version ?? 0}>
+                  <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
+                    aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
+                </TeamLock>
+                <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}</span>
               </span>
             </label>
             <label class={rowCls}>
@@ -915,6 +990,38 @@
                 <span id={`${formId}-project-cap-help`} class={hintCls} aria-live="polite">{projectCapError || (d.concurrencyCap === 0 ? "Set a limit in each project." : "Default limit. Projects can override it.")}</span>
               </span>
             </label>
+          </SettingsGroup>
+          <SettingsGroup title="Limits" help="These two save at once. A team policy can cap the budget or set the merge queue.">
+            {#snippet aside()}
+              <span role="status" class="text-sm text-faint">{limitsBusy ? "Saving…" : limitsMsg}</span>
+            {/snippet}
+            {#if !limits}
+              <p class="text-sm text-faint">Loading limits…</p>
+            {:else}
+              <div class={rowCls}>
+                <label for={`${formId}-budget`} class="text-faint">Daily token budget</label>
+                <span>
+                  <TeamLock lock={budgetCeiling} version={teamPolicy?.version ?? 0}>
+                    <input id={`${formId}-budget`} aria-label="Daily token budget" class={inputCls} type="number" min="0" step="1000" value={budgetValue}
+                      aria-invalid={!!budgetError}
+                      oninput={(e) => (budgetDraft = e.currentTarget.valueAsNumber)}
+                      onchange={commitBudget}
+                      onkeydown={(e) => { if (e.key === "Enter") commitBudget(); }} />
+                  </TeamLock>
+                  <span class={hintCls}>{budgetError || "Weighted tokens per day across all projects. 0 is no limit."}</span>
+                </span>
+              </div>
+              <div class={rowCls}>
+                <span class="text-faint">Merge queue</span>
+                <TeamLock lock={mergeQueueLock} version={teamPolicy?.version ?? 0}>
+                  <label class="flex cursor-pointer items-center gap-2">
+                    <Checkbox checked={limits.mergeQueue} disabled={limitsBusy} onchange={() => void saveTeamLimits({ mergeQueue: !limits?.mergeQueue })} />
+                    <span>Merge approved, green pull requests one at a time</span>
+                  </label>
+                </TeamLock>
+              </div>
+            {/if}
+            {#if limitsErr}<p role="alert" class="text-sm text-bad">{limitsErr}</p>{/if}
           </SettingsGroup>
           <SettingsGroup title="Shells">
             <div class={rowCls}>
@@ -1130,13 +1237,14 @@
           {@render head("AI")}
           <AISettings bind:value={d.ai} defaultProvider={d.agent || 'claude'}/>
         </section>
-      {:else if tab === "brain"}
+      {:else if tab === "assistants"}
         <section>
-          {@render head("Summaries")}
-          <SettingsGroup title="Session summaries" description="AI summaries use additional tokens.">
+          {@render head("Assistants")}
+          <p class="mb-6 text-sm text-faint" data-assistants-cost>Helpers that run beside your agents. Both are off by default: each one makes extra model calls, and those use tokens.</p>
+          <SettingsGroup title="Session summaries" description="Claude writes a short summary when a session escalates or is approved.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.brainEnabled} />
-              <span>Enabled</span>
+              <span>Summarize sessions</span>
             </label>
           </SettingsGroup>
           {#if d.brainEnabled}
@@ -1162,14 +1270,10 @@
             </label>
           </SettingsGroup>
           {/if}
-        </section>
-      {:else if tab === "interpreter"}
-        <section>
-          {@render head("Status interpretation")}
-          <SettingsGroup title="AI status estimates" description="Adds display-only estimates and headlines. Uses additional tokens.">
+          <SettingsGroup title="Status interpretation" description="An agent reads each session’s screen and adds display-only estimates and headlines.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.statusAgentEnabled} />
-              <span>Enabled</span>
+              <span>Interpret session status</span>
             </label>
           </SettingsGroup>
           {#if d.statusAgentEnabled}
@@ -1217,10 +1321,7 @@
           {/if}
         </section>
       {:else if tab === "hub"}
-        <section>
-          {@render head("Team hub")}
-          <HubSettings values={d} policy={teamPolicy} onChange={(patch) => Object.assign(d, patch)} onIdentityChange={() => void loadTeamPolicy()} />
-        </section>
+        <!-- Drawn below, outside this chain: it stays mounted once visited. -->
       {:else if tab === "sandbox"}
         <section>
           {@render head("Sandbox")}
@@ -1596,6 +1697,21 @@
             </div>
           </Disclosure>
         </div>
+      {/if}
+      <!-- The Team hub tab stays MOUNTED once visited: its drafts (a key being
+           typed, a number not valid yet) must survive a look at another tab,
+           so the overlay's Save can lead back to them instead of losing them. -->
+      {#if hubVisited}
+        <section hidden={tab !== "hub"}>
+          {@render head("Team hub")}
+          <HubSettings values={d} policy={teamPolicy} onChange={(patch) => Object.assign(d, patch)}
+            onSaved={(patch) => {
+              // Already in config.toml: the values AND the dirty baseline take it.
+              Object.assign(d, patch);
+              if (loaded) loaded = { ...loaded, ...($state.snapshot(patch) as Partial<SettingsDTO>) };
+            }}
+            onIdentityChange={() => void loadTeamPolicy()} onOpenTab={selectTab} onDirty={(v) => (hubDirty = v)} />
+        </section>
       {/if}
     </div>
     </div>

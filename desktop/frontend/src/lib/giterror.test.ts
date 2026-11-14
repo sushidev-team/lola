@@ -19,3 +19,14 @@ it('keeps unknown errors useful without displaying an unbounded stderr dump',()=
  expect(info.title).toBe('Push failed');expect(info.description.length).toBeLessThanOrEqual(160);
  expect(info.description).not.toMatch(/RuntimeError|hint:/);
 });
+it('offers force recovery only for unmerged worktree branch removal',()=>{
+ const error='RuntimeError: branch is not fully merged; remove only the worktree to keep its branch';
+ expect(gitErrorInfo(error,'remove-worktree-branch')).toMatchObject({title:'Branch is not fully merged',kind:'warn',recovery:'force-remove'});
+ expect(gitErrorInfo(error,'delete-branch').recovery).toBe('force-delete');
+ expect(gitErrorInfo('worktree changed since it was selected','remove-worktree-branch').recovery).toBe('refresh');
+});
+it.each(['git worktree: exit status 255: failed to delete checkout: Directory not empty', 'commit or stash this checkout\'s changes before switching or integrating branches', 'worktree contains modified or untracked files'])('offers force recovery for worktree removal: %s', error => {
+ expect(gitErrorInfo(error,'remove-worktree').recovery).toBe('force-worktree');
+ expect(gitErrorInfo(error,'remove-worktree-branch').recovery).toBe('force-worktree');
+ expect(gitErrorInfo(error,'checkout').recovery).not.toBe('force-worktree');
+});

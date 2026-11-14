@@ -27,3 +27,17 @@ describe("TeamLock", () => {
     expect(document.querySelector('[data-team-lock="max_concurrency_hint"]')).not.toBeNull();
   });
 });
+
+describe("TeamLock — ceiling", () => {
+  it("keeps a ceiling editable and reads it as the team ceiling", () => {
+    const { container } = render(TeamLock, {
+      lock: { key: "max_concurrency_hint", label: "Global concurrency cap", value: "2", local: "6", ceiling: true },
+      version: 4,
+      children: field,
+    });
+    expect(screen.getByLabelText("Total running agents")).toBeEnabled();
+    expect(container.querySelector("fieldset")).toBeNull();
+    expect(screen.getByText(/Team ceiling/)).toHaveTextContent("Team ceiling 2 (policy v4)");
+    expect(screen.queryByText(/Set by team policy/)).toBeNull();
+  });
+});

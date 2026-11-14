@@ -2,12 +2,14 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sushidev-team/lola/hubproto"
+	"github.com/sushidev-team/lola/internal/hub"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
@@ -75,6 +77,16 @@ func TestHubGroupsARepositorysAdvisories(t *testing.T) {
 	})
 	d.hubOutcomeCycle(context.Background())
 	d.hubOutcomeCycle(context.Background())
+	// The open PR puts every item in review (progress), none is done yet.
+	if got := fh.snapshot(); len(got.progresses) != 3 || len(got.completes) != 0 {
+		t.Fatalf("progresses = %d, completes = %d, want 3 / 0", len(got.progresses), len(got.completes))
+	}
+	d.sessions.Update(id, func(s *session.Session) bool {
+		s.SetDelivery(state.DeliveryMerged, time.Now())
+		return true
+	})
+	d.hubOutcomeCycle(context.Background())
+	d.hubOutcomeCycle(context.Background())
 	if got := fh.snapshot(); len(got.completes) != 3 {
 		t.Fatalf("completes = %d, want one per item", len(got.completes))
 	}
@@ -104,6 +116,7 @@ func TestHubGroupLostLeaseIsPerItem(t *testing.T) {
 	d.hubCycle(context.Background())
 	fh.mu.Lock()
 	fh.lost = []string{"it2"}
+	fh.claimErr = &hub.APIError{Status: 409, Code: hubproto.CodeConflict} // another device holds it
 	fh.mu.Unlock()
 	d.hubCycle(context.Background())
 	s := hubSessions(d)[0]
@@ -150,5 +163,47 @@ func TestHubGroupClaimCarriesTheUpdateScope(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, prompt)
 		}
+	}
+}
+
+// A failed grouped session reports every item with ONE fail group, so the
+// hub escalates them as one issue; the fail names the PR when one exists.
+func TestHubGroupFailCarriesOneGroupAndThePR(t *testing.T) {
+	d, fh, _ := hubFixture(t)
+	fh.offers = []hubproto.Item{advisoryFor("it1", "lodash", "GHSA-jf85-cpcp-j695"), advisoryFor("it2", "vite", "GHSA-587h-7wmj-h5pm")}
+	d.hubCycle(context.Background())
+	s := hubSessions(d)[0]
+	s.PR = &scm.PR{Number: 9, URL: "https://github.com/acme/widgets/pull/9", State: "CLOSED"}
+	s.EnsureAxes()
+	s.SetDelivery(state.DeliveryClosed, time.Now())
+	d.sessions.Upsert(s)
+	d.hubOutcomeCycle(context.Background())
+	reqs := fh.snapshot().failReqs
+	if len(reqs) != 2 {
+		t.Fatalf("fails = %+v", reqs)
+	}
+	g := reqs[0].Group
+	if !hubproto.ValidFailGroup(g) || reqs[1].Group != g {
+		t.Errorf("fail groups = %q / %q, want one valid group", g, reqs[1].Group)
+	}
+	for _, r := range reqs {
+		if r.Reason != hubproto.FailPRClosed || r.PRURL != "https://github.com/acme/widgets/pull/9" {
+			t.Errorf("fail = %+v", r)
+		}
+	}
+}
+
+// A grouped spawn that fails reports spawn_failed per item, with the group.
+func TestHubGroupSpawnFailureFailsEveryItem(t *testing.T) {
+	d, fh, nat := hubFixture(t)
+	nat.manualAgentErr = errors.New("worktree add failed")
+	fh.offers = []hubproto.Item{advisoryFor("it1", "lodash", "GHSA-jf85-cpcp-j695"), advisoryFor("it2", "vite", "GHSA-587h-7wmj-h5pm")}
+	d.hubCycle(context.Background())
+	reqs := fh.snapshot().failReqs
+	if len(reqs) != 2 || reqs[0].Reason != hubproto.FailSpawn || reqs[0].Group == "" || reqs[0].Group != reqs[1].Group {
+		t.Fatalf("fails = %+v", reqs)
+	}
+	if !d.hubCoolingDown("it1", time.Now()) || !d.hubCoolingDown("it2", time.Now()) {
+		t.Error("a failed spawn must cool both items down locally")
 	}
 }

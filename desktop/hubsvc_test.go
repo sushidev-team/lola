@@ -231,3 +231,86 @@ func TestProjectHubChoresRoundTrip(t *testing.T) {
 	}
 	_ = config.DefaultHubPollSeconds
 }
+
+func TestHubStatsSumsTheLastSevenDays(t *testing.T) {
+	now := time.Date(2026, 11, 12, 15, 0, 0, 0, time.UTC)
+	v := hubproto.StatsView{Days: []hubproto.StatsDay{
+		{Date: "2026-11-05", Done: 9, Failed: 9, Opened: 9, FixSecondsSum: 9000}, // eight days back: outside
+		{Date: "2026-11-06", Done: 2, Failed: 1, Opened: 3, FixSecondsSum: 7200},
+		{Date: "2026-11-12", Done: 1, Opened: 1, FixSecondsSum: 3600},
+	}}
+	got := hubStatsSummary(v, now)
+	want := HubStatsDTO{Available: true, FixedThisWeek: 3, FailedThisWeek: 1, OpenedThisWeek: 4, AvgFixSeconds: 3600}
+	if got != want {
+		t.Fatalf("summary = %+v, want %+v", got, want)
+	}
+	if s := hubStatsSummary(hubproto.StatsView{}, now); s.Available || s.AvgFixSeconds != 0 {
+		t.Fatalf("empty view = %+v", s)
+	}
+	// No fix in the window: no average, never a division by zero.
+	if s := hubStatsSummary(hubproto.StatsView{Days: []hubproto.StatsDay{{Date: "2026-11-12", Opened: 2}}}, now); s.AvgFixSeconds != 0 || !s.Available {
+		t.Fatalf("no fixes = %+v", s)
+	}
+}
+
+func TestHubStatsRoutesToItsCmd(t *testing.T) {
+	today := time.Now().UTC().Format(hubproto.StatsDateLayout)
+	calls := withHubCall(t, hubproto.StatsView{Days: []hubproto.StatsDay{{Date: today, Done: 2, FixSecondsSum: 600}}}, nil)
+	d, err := (&HubService{}).Stats()
+	if err != nil || d.FixedThisWeek != 2 || d.AvgFixSeconds != 300 {
+		t.Fatalf("Stats = %+v, %v", d, err)
+	}
+	if c := (*calls)[0]; c.cmd != protocol.CmdHubStats || c.timeout != hubViewTimeout {
+		t.Fatalf("call = %+v", c)
+	}
+}
+
+func TestHubStatusListsAreNeverNull(t *testing.T) {
+	withHubCall(t, protocol.HubStatusData{Joined: true}, nil)
+	d, err := (&HubService{}).Status()
+	if err != nil || d.FindingsHealth == nil || d.OfferSkips == nil || d.Sessions == nil {
+		t.Fatalf("Status = %+v, %v", d, err)
+	}
+}
+
+func TestHubTeamCommandsForward(t *testing.T) {
+	calls := withHubCall(t, nil, nil)
+	svc := &HubService{}
+	key := "lin_api_0123456789abcdef0123"
+	if _, err := svc.CreateTeam(protocol.HubCreateTeamArgs{Code: " lola-hub-create:https://hub.example.com#c\n", Team: " acme ", Name: " mac "}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Invite(protocol.HubInviteArgs{Label: " Ada "}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := svc.TeamSettings(protocol.HubTeamSettingsArgs{LinearKey: &key})
+	if err != nil || d.Teams == nil {
+		t.Fatalf("TeamSettings = %+v, %v", d, err)
+	}
+	if _, err := svc.RevokeDevice(" laptop-2 "); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProbeHub(" https://hub.example.com "); err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		cmd     string
+		timeout time.Duration
+		args    string
+	}{
+		{protocol.CmdHubCreateTeam, hubJoinTimeout, `{"code":"lola-hub-create:https://hub.example.com#c","team":"acme","name":"mac"}`},
+		{protocol.CmdHubInvite, hubAdminTimeout, `{"label":"Ada"}`},
+		{protocol.CmdHubTeamSettings, hubAdminTimeout, `{"linearKey":"` + key + `"}`},
+		{protocol.CmdHubRevoke, hubAdminTimeout, `{"device":"laptop-2"}`},
+		{protocol.CmdHubProbe, hubViewTimeout, `{"url":"https://hub.example.com"}`},
+	}
+	if len(*calls) != len(want) {
+		t.Fatalf("calls = %d", len(*calls))
+	}
+	for i, w := range want {
+		c := (*calls)[i]
+		if c.cmd != w.cmd || c.timeout != w.timeout || string(c.args) != w.args {
+			t.Errorf("call %d = %s %s %s, want %+v", i, c.cmd, c.timeout, c.args, w)
+		}
+	}
+}

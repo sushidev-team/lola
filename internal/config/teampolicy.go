@@ -68,8 +68,15 @@ func ApplyTeamPolicy(c *Config, s hubproto.Settings) []AppliedKey {
 				out = append(out, a)
 			}
 		case hubproto.KeyBudgetDaily:
-			out = append(out, AppliedKey{Key: key, Value: strconv.FormatInt(s.BudgetDailyWeightedTokens, 10), Local: strconv.FormatInt(c.Budget.DailyTokens, 10)})
-			c.Budget.DailyTokens = s.BudgetDailyWeightedTokens
+			// A CEILING like concurrency: a member who set a tighter budget keeps
+			// it. Unset (0 = no budget) takes the team's, which only tightens.
+			local := c.Budget.DailyTokens
+			eff := s.BudgetDailyWeightedTokens
+			if local > 0 {
+				eff = min(local, eff)
+			}
+			out = append(out, AppliedKey{Key: key, Value: strconv.FormatInt(s.BudgetDailyWeightedTokens, 10), Local: strconv.FormatInt(local, 10)})
+			c.Budget.DailyTokens = eff
 		case hubproto.KeyMergeQueue:
 			out = append(out, AppliedKey{Key: key, Value: strconv.FormatBool(*s.MergeQueueEnabled), Local: strconv.FormatBool(c.MergeQueue.Enabled)})
 			c.MergeQueue.Enabled = *s.MergeQueueEnabled

@@ -458,7 +458,7 @@ every send path. Re-verify against a live pane.
       exactly those kinds enabled in the catalog (own entry or kind defaults;
       a kind that cannot run stays off with a notice; fallbacks to a disabled
       kind dropped; legacy tables folded in memory), `budget_daily_weighted_
-      tokens` → `[budget].daily_tokens`, `merge_queue_enabled` →
+      tokens` → a CEILING on `[budget].daily_tokens` (never a raise), `merge_queue_enabled` →
       `[merge_queue].enabled` (false locks it off), `max_concurrency_hint` →
       a CEILING on `global_cap` (min, never a raise), `accept_kinds` →
       `[hub].accept_kinds`. `escalate_after` is the hub's; it is shown, never
@@ -472,9 +472,30 @@ every send path. Re-verify against a live pane.
     - No Settings key may ever execute anything (hubproto's closed set).
   - **A person's hub command is a human act, and only a human's.**
     `protocol.HubHumanCommands` (join, leave, board, org, claim, release,
-    sync) are denied by `internal/remote` as a list (a phone gets none of
+    sync, stats, and the team commands createTeam, invite, teamSettings,
+    revoke) are denied by `internal/remote` as a list (a phone gets none of
     them, the board and org included: they carry the whole team's work and
     device names) and named by no sandbox hook-bridge allowlist. Rules:
+    - **The team admin key is not the device key.** `cmd=hubCreateTeam`
+      (`hub.CreateTeam`) generates it on this machine and stores it in
+      `state/hub-admin-key` (0600) as a record naming its hub and team; it is
+      written PENDING before the one-time create code is sent and confirmed
+      after the hub answered. It is never in `config.toml`, argv, a log line
+      or a socket reply (`hub.AdminKey` renders its public half only). A
+      leave keeps it; creating another team replaces it only with
+      `replaceAdminKey`. Its PUBLIC half is pinned in `trusted_policy_keys`
+      without a question, because it was generated here, not received.
+    - The team-admin commands (`internal/daemon/hubadmin.go`: `hubInvite`,
+      `hubTeamSettings`, `hubRevoke`) are device-signed AND countersigned
+      with that key (`hubproto.SignAdmin`, `Client.rawSigned`). `hubAdmin()`
+      fails closed before anything is sent: no identity, an admin key for
+      another hub or team, or a device key that did not enroll. A Linear key,
+      a digest webhook and a create code go IN only: never logged, scrubbed
+      from every error (`hubScrub`), answered with fixed sentences. What
+      comes back is status, validated whole (`OrgSettingsView.Validate`; a
+      view of another team is refused). The invite is built HERE
+      (`AdminKey.Invite`) from this machine's hub url and admin key; the hub
+      supplies the token only, so it never chooses the key a member pins.
     - `cmd=hubClaim` goes through `hubClaimItem`, the loop's path, with the
       human rules of every human open: the click is the opt-in (no
       `hub_chores`) and intent (no concurrency cap, no daily count, no
@@ -495,6 +516,45 @@ every send path. Re-verify against a live pane.
     - `cmd=hubJoin` carries the enroll token: never logged, echoed or
       returned, scrubbed from an error that happens to contain it, and the
       enrollment is shielded from a client hanging up mid-request.
+  - **The chore lifecycle is the hub's; the daemon reports facts**
+    (`hubproto` items/frames/board). An opened PR is reported with `progress`
+    (claimed → `in_review`, lease dropped, this device the owner); a
+    `dep_advisory` completes on MERGE, and its `HubWork` stays open so
+    `hubRepoBusy` keeps one PR per repo. A hub that answers 404 to `progress`
+    gets the old complete-on-PR; a hub that predates `policy_version`,
+    `pr_url` or `group` gets frames without them (it decodes strictly).
+    - A lost lease is re-claimed while the item is still open; only another
+      device holding it leaves the work lost. `lease_lost` and a 4xx without
+      a hubproto code are retried, never dropped.
+    - Leases renew on their own timer (≤ TTL/3), and `[hub].poll_seconds` is
+      capped at 900.
+    - Every hub claim passes `sandboxLoginReady`. A failed spawn sends
+      `FailSpawn` and cools the item down. A dead agent and a chore older
+      than the age limit send their fail once; the session is never stopped.
+    - Grace, cooldown, stale close, the 14-day reopen and escalation grouping
+      are hub-side; the board only displays history, owner and member.
+  - **A policy stops applying when the hub stops vouching.** `no_policy` marks
+    the stored bundle withdrawn (it stays the rollback floor); a
+    `401 unauthorized` on a signed call marks the device revoked
+    (`state/hub-revoked.json`, key kept) and drops the overlay. Skew and replay
+    are not revocations. The policy budget is a CEILING like the concurrency
+    cap, never a raise.
+  - **Joining spends a one-time secret; leaving lets go of everything.**
+    (`internal/hub/join.go`, `invite.go`, `internal/daemon/hubcmds.go`.)
+    The invite (`lola-hub:<url>#<token>[#<key_id>:<pub>]`, `hub.ParseInvite`)
+    or bare token is read from stdin or `--token-file` only — no argv path.
+    Everything that can fail runs before the token is sent; a failure after
+    the hub accepted wraps `hub.ErrTokenUsed`. An invite's policy key is pinned
+    (`hub.PinTrustedKey`) only after the person confirms its id + fingerprint
+    or passes `--trust-key`; `cmd=hubJoin` never pins one, and no key ever
+    comes from a hub response. `cmd=hubLeave` releases every live lease first
+    (bounded), then clears outbox, cooldowns and open `HubWork` so no old item
+    id reaches a later hub.
+  - **Readiness is one list** (`doctor.HubReadiness`): joined, projects that
+    take chores, docker, image, sandbox login, `gh auth status`, policy key
+    pinned. `lola hub join`/`status`, `lola doctor` and the app all read it.
+    Every `doctor.Result` carries a stable `Fix` id (`doctor.AllFixIDs`); no
+    row carries a secret value.
 
 ### SSH (contract: `docs/ssh-sessions.md`)
 - `ssh -O check` exit 0 is the only proof of a connection; nothing read from a

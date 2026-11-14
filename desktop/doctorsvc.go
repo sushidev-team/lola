@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
@@ -12,11 +13,18 @@ import (
 // does (internal/doctor.Check) — in-process, off the daemon, bounded to 15s.
 type DoctorService struct{}
 
+// DoctorResultDTO is one check row. ID is the row's stable key: the check name,
+// suffixed "#2", "#3"… when a name repeats (per-project rows can), so a UI
+// keys its list by ID and never by a name that may collide. Fix is the
+// doctor.FixID that resolves a failed row ("" = no automated fix): the UI maps
+// it to a button or a copyable command and never parses Detail for one.
 type DoctorResultDTO struct {
+	ID       string `json:"id"`
 	Name     string `json:"name"`
 	OK       bool   `json:"ok"`
 	Detail   string `json:"detail"`
 	Critical bool   `json:"critical"`
+	Fix      string `json:"fix,omitempty"`
 }
 
 type DoctorReportDTO struct {
@@ -38,16 +46,27 @@ func (s *DoctorService) Run() (DoctorReportDTO, error) {
 	if cfg == nil {
 		cfg = &config.Config{} // Check dereferences cfg fields; never hand it nil
 	}
+	return doctorDTO(doctor.Check(ctx, cfg)), nil
+}
 
-	rep := doctor.Check(ctx, cfg)
+// doctorDTO converts a report for the frontend, giving every row a unique ID.
+func doctorDTO(rep doctor.Report) DoctorReportDTO {
 	out := DoctorReportDTO{Summary: rep.Summary(), OK: rep.OK()}
+	seen := map[string]int{}
 	for _, r := range rep.Results {
+		seen[r.Name]++
+		id := r.Name
+		if n := seen[r.Name]; n > 1 {
+			id += "#" + strconv.Itoa(n)
+		}
 		out.Results = append(out.Results, DoctorResultDTO{
+			ID:       id,
 			Name:     r.Name,
 			OK:       r.OK,
 			Detail:   r.Detail,
 			Critical: r.Critical,
+			Fix:      string(r.Fix),
 		})
 	}
-	return out, nil
+	return out
 }

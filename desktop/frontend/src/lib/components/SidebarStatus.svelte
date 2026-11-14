@@ -3,7 +3,24 @@
   import Icon from "$lib/components/Icon.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { hub } from "$lib/hub.svelte";
+  import { onDestroy, onMount } from "svelte";
   import Button from "./Button.svelte";
+
+  // The Team icon carries the Needs-you count, so a failed or taken chore is
+  // seen without opening the Team view. This row is always on screen, so it
+  // holds the hub store's LIGHT watch (a status read a minute, the board every
+  // few minutes) and routes the store's off-screen notices to the toast.
+  let releaseHub: (() => void) | null = null;
+  onMount(() => {
+    hub.onNotice = (n) => store.setFlash(n.text, n.kind);
+    releaseHub = hub.watchLight();
+  });
+  onDestroy(() => {
+    releaseHub?.();
+    hub.onNotice = null;
+  });
+  const needs = $derived(hub.needsCount);
 
   // The pinned utility row: everything the old footer carried (daemon liveness,
   // start/restart/stop) plus the vitals bar's health dot
@@ -80,8 +97,11 @@
        only shrinkable item if the worst case (a long status + the wider
        "↑ Update" chip + revealed hover controls) runs out of room. -->
   <span class="ml-auto flex shrink-0 items-center gap-0.5">
-    <Button icon title="Team (T)" aria-label="Team" onclick={() => nav.goTeam()}>
-      <Icon name="users" size={14} /></Button>
+    <Button icon class="relative" title={needs ? `Team (T) · ${needs} ${needs === 1 ? "chore needs" : "chores need"} you` : "Team (T)"}
+      aria-label={needs ? `Team, ${needs} ${needs === 1 ? "chore needs" : "chores need"} you` : "Team"} onclick={() => nav.goTeam()}>
+      <Icon name="users" size={14} />
+      {#if needs}<span class="num absolute -right-1 -top-1 min-w-4 rounded-full bg-bad px-1 text-center text-[10px] font-semibold leading-4 text-on-bad" aria-hidden="true" data-team-badge>{needs > 9 ? "9+" : needs}</span>{/if}
+    </Button>
     <Button icon title="keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onclick={() => nav.openOverlay("help")}>
       <Icon name="circle-help" size={14} /></Button>
     <Button icon title="Settings" aria-label="Settings" onclick={() => nav.openOverlay("settings")}>
