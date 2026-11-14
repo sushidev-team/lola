@@ -1,0 +1,90 @@
+# One process per data file (README "Deploying"): exactly one replica, and
+# Recreate so a rollout never runs two pods against the store at once (the
+# ReadWriteOnce volume could not attach to both anyway).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lola-hub
+  labels:
+    app: lola-hub
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: lola-hub
+  template:
+    metadata:
+      labels:
+        app: lola-hub
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      imagePullSecrets:
+        # Created by the deploy workflow (doctl registry kubernetes-manifest).
+        - name: registry-sushidev-registry-01
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: lola-hub
+          image: registry.digitalocean.com/sushidev-registry-01/lola-hub:latest
+          imagePullPolicy: IfNotPresent
+          # TLS terminates at ingress-nginx. The admin console binds pod
+          # loopback only (the hub refuses anything else); see README
+          # "Kubernetes" for the port-forward.
+          args: ["serve", "--addr", ":8080", "--admin-addr", "127.0.0.1:8098"]
+          env:
+            # A subdirectory the hub creates itself (0700), so the store and
+            # admin.token do not sit in the volume root next to lost+found.
+            - name: LOLA_HUB_DATA
+              value: /data/hub/hub.json
+          envFrom:
+            # LOLA_HUB_SECRET_KEY: seals each org's Linear key and digest
+            # webhook in the store. Written by the deploy workflow from a
+            # GitHub secret. Without it the hub runs but stores no secret.
+            - secretRef:
+                name: lola-hub-env
+                optional: true
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lola-hub-data

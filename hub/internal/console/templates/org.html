@@ -1,0 +1,268 @@
+{{define "content"}}
+{{$csrf := .CSRF}}
+{{with .Body}}
+{{$org := .Org}}
+{{$filter := .Filter}}
+<p class="crumbs"><a href="/">Overview</a> / {{$org}}</p>
+<h1>{{$org}}</h1>
+{{template "linear" .Linear}}
+<p class="muted"><a href="/orgs/{{$org}}/events">Event log</a></p>
+
+{{if .Token}}
+<section class="card reveal" aria-live="polite">
+  <h2>Enroll token</h2>
+  <p>{{if .TokenLabel}}For <strong>{{.TokenLabel}}</strong>. {{end}}Single use, expires {{stamp .TokenExpiry}}. It is shown <strong>once</strong>: the hub stores only its hash.</p>
+  <div class="row">
+    <input id="enroll-token" class="mono grow" value="{{.Token}}" readonly aria-label="Enroll token">
+    <button type="button" data-copy="enroll-token">Copy</button>
+  </div>
+  <p class="muted">In Lola: Settings → Team hub → paste the hub URL and this token. Or from a terminal: <code>lola hub join &lt;hub-url&gt;</code> and paste it when asked.</p>
+</section>
+{{end}}
+
+<div class="grid2">
+<section class="card">
+  <div class="head"><h2>Enroll a device</h2></div>
+  <form method="post" action="/orgs/{{$org}}/enroll" class="row">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <label class="inline-label">Member name
+      <input name="label" maxlength="40" pattern="[A-Za-z0-9][A-Za-z0-9 ._\-]{0,39}" placeholder="Ana Lopez">
+    </label>
+    <label class="inline-label">Lifetime
+      <select name="ttl">
+        <option value="1h">1 hour</option>
+        <option value="24h" selected>24 hours</option>
+        <option value="168h">7 days</option>
+      </select>
+    </label>
+    <button type="submit" class="primary">Create enroll token</button>
+  </form>
+  <p class="muted">Inviting a whole team? <code>lola-hub invite --url HUBURL --org {{$org}} --label "Name" --trusted KEYID:PUB</code> on the host prints one-line invites that also carry the policy key.</p>
+  {{if .Tokens}}
+  <table>
+    <thead><tr><th>Token id</th><th>Member</th><th>Created</th><th>Expires</th><th>State</th><th></th></tr></thead>
+    <tbody>
+    {{range .Tokens}}
+      <tr class="{{if ne .Status "unused"}}dim{{end}}">
+        <td><code>{{.ID}}</code></td>
+        <td>{{if .Label}}{{.Label}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td title="{{stamp .CreatedAt}}">{{ago .CreatedAt}}</td>
+        <td title="{{stamp .ExpiresAt}}">{{ago .ExpiresAt}}</td>
+        <td>{{if eq .Status "used"}}used by {{if .UsedBy}}{{.UsedBy}}{{else}}<span class="muted">a removed device</span>{{end}}{{else}}{{.Status}}{{end}}</td>
+        <td class="actions">{{if eq .Status "unused"}}
+          <form method="post" action="/orgs/{{$org}}/enroll/{{.ID}}/revoke" class="inline">
+            <input type="hidden" name="csrf" value="{{$csrf}}">
+            <button type="submit" class="ghost danger" data-confirm="Revoke this enroll token? It can no longer enroll a device.">Revoke</button>
+          </form>{{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+
+<section class="card">
+  <div class="head"><h2>Linear escalation</h2></div>
+  <p>Linear key: {{if .Settings.LinearKeySet}}<span class="pill s-open">set</span>{{else}}<span class="pill">not set</span>{{end}}{{if .Settings.LinearError}} <span class="muted">last error: {{.Settings.LinearError}}</span>{{end}}. The key is stored sealed and never shown; the team's admin can also set it in Lola.</p>
+  <form method="post" action="/orgs/{{$org}}/linear-key" class="row" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input name="key" type="password" class="grow mono" placeholder="lin_api_..." autocomplete="off" aria-label="Linear API key">
+    <button type="submit">Set key</button>
+    {{if .Settings.LinearKeySet}}<button type="submit" name="clear" value="1" class="ghost" data-confirm="Clear the Linear key? Escalations will stay pending.">Clear</button>{{end}}
+  </form>
+  <p>{{if .Team}}Escalations go to team <code>{{.Team}}</code>.{{else}}<span class="muted">No team. Escalations stay pending unless the hub-wide team applies.</span>{{end}}</p>
+  <form method="post" action="/orgs/{{$org}}/linear" class="row">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input name="team" class="grow mono" placeholder="Linear team id" value="{{.Team}}" aria-label="Linear team id">
+    <button type="submit">Set team</button>
+    {{if .Team}}<button type="submit" name="clear" value="1" class="ghost" data-confirm="Clear the Linear team? Escalations will stay pending.">Clear</button>{{end}}
+  </form>
+  <h3>Daily digest</h3>
+  <p>Slack webhook: {{if .Settings.DigestSet}}<span class="pill s-open">set</span>{{else}}<span class="pill">not set</span>{{end}}{{if .Settings.DigestError}} <span class="muted">last error: {{.Settings.DigestError}}</span>{{end}}. Only a Slack incoming webhook is accepted; it is stored sealed and never shown.</p>
+  <form method="post" action="/orgs/{{$org}}/digest" class="row" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input name="webhook" type="password" class="grow mono" placeholder="https://hooks.slack.com/services/..." autocomplete="off" aria-label="Slack incoming webhook">
+    <button type="submit">Set webhook</button>
+    {{if .Settings.DigestSet}}<button type="submit" name="clear" value="1" class="ghost" data-confirm="Clear the digest webhook?">Clear</button>{{end}}
+  </form>
+</section>
+</div>
+
+<section class="card">
+  <div class="head"><h2>Devices</h2><span class="muted">{{len .Devices}}</span></div>
+  {{if .Devices}}
+  <table>
+    <thead><tr><th>Name</th><th>Member</th><th>Status</th><th>Last seen</th><th>Policy</th><th class="num">Free slots</th><th>Agents</th><th class="num">Repos</th><th>Device id</th><th></th></tr></thead>
+    <tbody>
+    {{range .Devices}}
+      <tr class="{{if .Revoked}}dim{{end}}">
+        <td>{{.Name}}</td>
+        <td>{{if .Member}}{{.Member}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td>{{if .Revoked}}<span class="pill">revoked</span>{{else if .Active}}<span class="pill s-open">active</span>{{else}}<span class="pill">idle</span>{{end}}</td>
+        <td title="{{stamp .LastSeen}}">{{ago .LastSeen}}</td>
+        <td>{{if .PolicyVersion}}v{{.PolicyVersion}}{{if not .PolicyCurrent}} <span class="pill">behind</span>{{end}}{{else}}<span class="muted">none</span>{{end}}</td>
+        <td class="num">{{.FreeSlots}}</td>
+        <td>{{.Agents}}</td>
+        <td class="num">{{.Repos}}</td>
+        <td><code title="{{.ID}}">{{short .ID}}</code></td>
+        <td class="actions">{{if not .Revoked}}
+          <form method="post" action="/orgs/{{$org}}/devices/{{.ID}}/revoke" class="inline">
+            <input type="hidden" name="csrf" value="{{$csrf}}">
+            <button type="submit" class="danger" data-confirm="Revoke {{.Name}}? It can no longer reach the hub, and the chores it holds reopen.">Revoke</button>
+          </form>{{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="muted">No device has enrolled yet. Create an enroll token above.</p>{{end}}
+</section>
+
+<section class="card">
+  <div class="head">
+    <h2>Chores</h2>
+    <nav class="filters" aria-label="Filter by state">
+      <a href="/orgs/{{$org}}" class="{{if not $filter}}on{{end}}">All <span class="muted">{{.All}}</span></a>
+      {{range .Counts}}<a href="/orgs/{{$org}}?state={{.State}}" class="{{if eq .State $filter}}on{{end}}">{{.State}} <span class="muted">{{.N}}</span></a>{{end}}
+    </nav>
+  </div>
+  {{if .Items}}
+  <div class="scroll">
+  <table class="items">
+    <thead><tr><th>State</th><th>Kind</th><th>Repo</th><th>Subject</th><th>Severity</th><th class="num">Tries</th><th class="num">Reporters</th><th>Lease / owner</th><th>Outcome</th><th>Escalation</th><th>Last seen</th><th></th></tr></thead>
+    <tbody>
+    {{range .Items}}
+      <tr>
+        <td><a href="/orgs/{{$org}}/items/{{.ID}}"><span class="pill s-{{.State}}">{{.State}}</span></a></td>
+        <td>{{.Kind}}</td>
+        <td>{{.Repo}}</td>
+        <td class="subject">{{.Subject}}</td>
+        <td>{{if .Severity}}<span class="sev sev-{{.Severity}}">{{.Severity}}</span>{{else}}<span class="muted">-</span>{{end}}</td>
+        <td class="num">{{.Attempts}}</td>
+        <td class="num">{{.Reporters}}</td>
+        <td>{{if .Holder}}{{.Holder}} <span class="muted" title="{{stamp .Until}}">until {{ago .Until}}</span>{{else if .Owner}}{{.Owner}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td>{{if .PRURL}}<a href="{{.PRURL}}" rel="noreferrer noopener" target="_blank">PR</a> <span class="muted">{{.Delivery}}</span>{{else if .Delivery}}{{.Delivery}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td>{{if .Escalation}}{{.Escalation}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td title="first seen {{stamp .FirstSeen}}">{{ago .LastSeen}}</td>
+        <td class="actions">
+          {{if eq .State "escalated"}}{{template "escalated-actions" (acts $org .ID $csrf $filter "")}}{{end}}
+          <form method="post" action="/orgs/{{$org}}/items/{{.ID}}/purge" class="inline">
+            <input type="hidden" name="csrf" value="{{$csrf}}">
+            <input type="hidden" name="return_state" value="{{$filter}}">
+            <button type="submit" class="ghost danger" data-confirm="Purge this chore? A device that reports it again creates it anew.">Purge</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}<p class="muted">No chores{{if $filter}} in state {{$filter}}{{end}}.</p>{{end}}
+  {{if $filter}}
+  <form method="post" action="/orgs/{{$org}}/items/purge" class="row end">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input type="hidden" name="state" value="{{$filter}}">
+    <input type="hidden" name="return_state" value="{{$filter}}">
+    <button type="submit" class="danger" data-confirm="Purge every {{$filter}} chore of {{$org}}?">Purge all {{$filter}}</button>
+  </form>
+  {{end}}
+</section>
+
+<section class="card">
+  <div class="head"><h2>Stats</h2><span class="muted">last {{len .Stats}} active day(s) of {{.StatsTotal.Date}}</span></div>
+  {{if .Stats}}
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Day (UTC)</th><th class="num">Opened</th><th class="num">Done</th><th class="num">Failed</th><th class="num">Escalated</th><th class="num">Avg time to fix</th></tr></thead>
+    <tbody>
+    {{with .StatsTotal}}<tr><td><strong>Total</strong></td><td class="num">{{.Opened}}</td><td class="num">{{.Done}}</td><td class="num">{{.Failed}}</td><td class="num">{{.Escalated}}</td><td class="num">{{dur .AvgFix}}</td></tr>{{end}}
+    {{range .Stats}}<tr><td>{{.Date}}</td><td class="num">{{.Opened}}</td><td class="num">{{.Done}}</td><td class="num">{{.Failed}}</td><td class="num">{{.Escalated}}</td><td class="num">{{dur .AvgFix}}</td></tr>{{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}<p class="muted">No activity counted yet.</p>{{end}}
+</section>
+
+<section class="card">
+  <div class="head"><h2>Add chore manually</h2></div>
+  <p class="muted">Stored as if a device had reported it, with the reporter <code>admin</code>. Every field is checked by the same rules a daemon's report must pass. Daemons are offered it only in repos they opted in.</p>
+  <form method="post" action="/orgs/{{$org}}/items/add" class="stack" data-kind-form>
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input type="hidden" name="return_state" value="{{$filter}}">
+    <div class="fields">
+      <label>Kind
+        <select name="kind" data-kind-select>{{range .Kinds}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+      </label>
+      <label>Repo <input name="repo" placeholder="owner/name" required></label>
+      <label>Package <input name="package" placeholder="lodash" required></label>
+    </div>
+    <fieldset data-kind="dep_advisory" class="fields">
+      <legend>Advisory</legend>
+      <label>Ecosystem <input name="ecosystem" placeholder="npm"></label>
+      <label>Vulnerable range <input name="vulnerable" placeholder="&lt; 4.17.21"></label>
+      <label>Fixed version <input name="fixed" placeholder="4.17.21"></label>
+      <label>Advisory id <input name="advisory" placeholder="GHSA-xxxx-xxxx-xxxx"></label>
+      <label>Severity
+        <select name="severity">{{range .Severities}}<option value="{{.}}"{{if eq . "high"}} selected{{end}}>{{.}}</option>{{end}}</select>
+      </label>
+    </fieldset>
+    <fieldset data-kind="red_bump_pr" class="fields">
+      <legend>Red dependency-bump PR</legend>
+      <label>PR number <input name="pr" inputmode="numeric" placeholder="123"></label>
+      <label>Branch <input name="branch" placeholder="dependabot/npm_and_yarn/lodash-4.17.21"></label>
+      <label>Author
+        <select name="author">{{range .Authors}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+      </label>
+    </fieldset>
+    <div><button type="submit" class="primary">Add chore</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <div class="head"><h2>Team policy</h2></div>
+  <p class="muted">The hub never signs a policy. Sign it offline with <code>lola-hub policy sign</code>, register the admin public key here, then paste the signed bundle. Every key present in a published policy is LOCKED on each member's daemon.</p>
+  {{if .Policy}}
+  <dl class="kv">
+    <dt>Version</dt><dd>v{{.Policy.Version}}</dd>
+    <dt>Signed by</dt><dd><code>{{.Policy.KeyID}}</code></dd>
+    <dt>Issued</dt><dd>{{stamp .Policy.IssuedAt}}</dd>
+    <dt>Locked keys</dt><dd>{{range $i, $k := .PolicyKeys}}{{if $i}}, {{end}}<code>{{$k}}</code>{{else}}<span class="muted">none</span>{{end}}</dd>
+  </dl>
+  <pre class="mono">{{.PolicyJSON}}</pre>
+  {{else}}<p><span class="muted">No policy published.</span></p>{{end}}
+
+  <h3>Admin keys</h3>
+  {{if .Keys}}
+  <table>
+    <thead><tr><th>Key id</th><th>Daemons pin</th><th></th></tr></thead>
+    <tbody>{{range $i, $k := .Keys}}<tr><td><code>{{$k.ID}}</code></td><td><input id="trusted-{{$i}}" class="mono grow" value="{{$k.Trusted}}" readonly aria-label="Trusted key"></td><td class="actions"><button type="button" data-copy="trusted-{{$i}}">Copy</button>
+      <form method="post" action="/orgs/{{$org}}/policy/keys/{{$k.ID}}/remove" class="inline">
+        <input type="hidden" name="csrf" value="{{$csrf}}">
+        <button type="submit" class="ghost danger" data-confirm="Remove this admin key? It can no longer publish a policy or change this org's Linear and digest settings from Lola.">Remove</button>
+      </form></td></tr>{{end}}</tbody>
+  </table>
+  {{else}}<p class="muted">No admin key registered.</p>{{end}}
+  <form method="post" action="/orgs/{{$org}}/policy/keys" class="row">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input name="key_id" class="mono" placeholder="key id" aria-label="Key id">
+    <input name="public_key" class="mono grow" placeholder="public key (base64url), or key_id:public_key" required aria-label="Public key">
+    <button type="submit">Register key</button>
+  </form>
+
+  <h3>Publish a signed bundle</h3>
+  <form method="post" action="/orgs/{{$org}}/policy/publish" class="stack">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <input name="register_key" class="mono" placeholder="optional: register the signer too (key_id:public_key, from policy init)" aria-label="Signer key to register">
+    <textarea name="policy" class="mono" rows="8" placeholder='{"org": "{{$org}}", "version": 2, ...signed JSON...}' required aria-label="Signed policy JSON"></textarea>
+    <div><button type="submit" class="primary" data-confirm="Publish this policy? Every member's daemon locks the keys it contains.">Verify and publish</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <div class="head"><h2>Recent events</h2><a href="/orgs/{{$org}}/events">All events</a></div>
+  {{template "events" .Events}}
+</section>
+{{end}}
+{{end}}
+

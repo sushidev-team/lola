@@ -1,0 +1,10 @@
+{{define "content"}}
+{{with .Body}}
+<p class="crumbs"><a href="/">Overview</a> / <a href="/orgs/{{.Org}}">{{.Org}}</a> / events</p>
+<h1>{{.Org}}: event log</h1>
+<p class="muted">The newest {{len .Events}} event(s), newest first. The hub keeps up to 2000 per org.</p>
+<section class="card">
+  {{template "events" .Events}}
+</section>
+{{end}}
+{{end}}

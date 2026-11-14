@@ -1,0 +1,72 @@
+{{define "content"}}
+{{$csrf := .CSRF}}
+{{with .Body}}
+{{$org := .Org}}
+<p class="crumbs"><a href="/">Overview</a> / <a href="/orgs/{{$org}}">{{$org}}</a> / {{.Row.ID}}</p>
+<h1><span class="pill s-{{.Row.State}}">{{.Row.State}}</span> {{.Row.Subject}}</h1>
+
+<section class="card">
+  <div class="head"><h2>Chore</h2>
+    <div class="actions">
+      {{if eq .Row.State "escalated"}}{{template "escalated-actions" (acts $org .Row.ID $csrf "" .Row.ID)}}{{end}}
+      <form method="post" action="/orgs/{{$org}}/items/{{.Row.ID}}/purge" class="inline">
+        <input type="hidden" name="csrf" value="{{$csrf}}">
+        <button type="submit" class="ghost danger" data-confirm="Purge this chore? A device that reports it again creates it anew.">Purge</button>
+      </form>
+    </div>
+  </div>
+  <dl class="kv">
+    <dt>Item id</dt><dd><code>{{.Row.ID}}</code></dd>
+    <dt>Kind</dt><dd>{{.Row.Kind}}</dd>
+    <dt>Repo</dt><dd>{{.Row.Repo}}</dd>
+    {{with .Item.DepAdvisory}}
+    <dt>Advisory</dt><dd><code>{{.Advisory}}</code></dd>
+    <dt>Package</dt><dd>{{.Ecosystem}}/{{.Package}}</dd>
+    <dt>Vulnerable</dt><dd><code>{{.Vulnerable}}</code>{{if .Fixed}} → <code>{{.Fixed}}</code>{{end}}</dd>
+    <dt>Severity</dt><dd><span class="sev sev-{{.Severity}}">{{.Severity}}</span></dd>
+    {{end}}
+    {{with .Item.RedBumpPR}}
+    <dt>PR</dt><dd>#{{.PR}} on <code>{{.Branch}}</code> by {{.Author}}</dd>
+    <dt>Package</dt><dd>{{if .Package}}{{.Package}}{{else}}<span class="muted">grouped bump</span>{{end}}</dd>
+    {{end}}
+    <dt>Attempts</dt><dd>{{.Row.Attempts}}{{if .LastFail}} <span class="muted">last failure {{.LastFail}}</span>{{end}}</dd>
+    <dt>Reopened</dt><dd>{{.Reopened}}</dd>
+    <dt>Reporters</dt><dd>{{.Row.Reporters}}</dd>
+    {{if .Row.Holder}}<dt>Lease</dt><dd>{{.Row.Holder}} <span class="muted" title="{{stamp .Row.Until}}">until {{ago .Row.Until}}</span></dd>{{end}}
+    {{if not .ClaimedAt.IsZero}}<dt>Claimed</dt><dd title="{{stamp .ClaimedAt}}">{{ago .ClaimedAt}}</dd>{{end}}
+    {{if .Row.Owner}}<dt>Owner</dt><dd>{{.Row.Owner}}</dd>{{end}}
+    <dt>Outcome</dt><dd>{{if .Row.PRURL}}<a href="{{.Row.PRURL}}" rel="noreferrer noopener" target="_blank">{{.Row.PRURL}}</a> <span class="muted">{{.Row.Delivery}}</span>{{else}}<span class="muted">-</span>{{end}}</dd>
+    {{if .FailGroup}}<dt>Fail group</dt><dd><code>{{.FailGroup}}</code></dd>{{end}}
+    <dt>Escalation</dt><dd>{{if .Escalation}}{{.Escalation.Reason}}: {{if .LinearURL}}<a href="{{.LinearURL}}" rel="noreferrer noopener" target="_blank">{{.Row.Escalation}}</a>{{else}}{{.Row.Escalation}}{{end}}{{if and .Escalation.Pending (not .Linear.Enabled)}} <span class="muted">(no Linear key: not sent)</span>{{else if and .Escalation.Pending .Linear.NoTeam}} <span class="muted">(no Linear team: not sent)</span>{{end}}{{else}}<span class="muted">none</span>{{end}}</dd>
+    <dt>First seen</dt><dd>{{stamp .Row.FirstSeen}}</dd>
+    <dt>Last seen</dt><dd>{{stamp .Row.LastSeen}}</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <div class="head"><h2>Attempt history</h2><span class="muted">newest first, up to 20</span></div>
+  {{if .History}}
+  <table>
+    <thead><tr><th>When</th><th>Action</th><th>Device</th><th>Member</th><th>Reason</th><th>PR</th></tr></thead>
+    <tbody>
+    {{range .History}}
+      <tr>
+        <td title="{{stamp .At}}">{{ago .At}}</td>
+        <td>{{.Action}}</td>
+        <td>{{if .Device}}{{.Device}}{{else}}<span class="muted">hub</span>{{end}}</td>
+        <td>{{if .Member}}{{.Member}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td>{{if .Reason}}{{.Reason}}{{else}}<span class="muted">-</span>{{end}}</td>
+        <td>{{if .PRURL}}<a href="{{.PRURL}}" rel="noreferrer noopener" target="_blank">PR</a>{{else}}<span class="muted">-</span>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="muted">No attempt yet.</p>{{end}}
+</section>
+
+<section class="card">
+  <div class="head"><h2>Events</h2></div>
+  {{template "events" .Events}}
+</section>
+{{end}}
+{{end}}
