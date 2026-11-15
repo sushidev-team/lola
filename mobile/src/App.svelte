@@ -301,7 +301,7 @@
      edge. `data-phone-app` scopes the phone-only restyles in app.css (the confirm dialog as an action
      sheet). While a sheet is open everything behind it is `inert`, so VoiceOver cannot leave the
      dialog; the sheet, the toast and the confirm dialog are siblings OUTSIDE that wrapper. -->
-<div data-phone-app class="fixed inset-0 flex flex-col overflow-hidden bg-canvas text-ink">
+<div data-phone-app data-frame-clip class="fixed inset-0 flex flex-col overflow-hidden bg-canvas text-ink">
   {#if booting}
     <div class="min-h-0 flex-1" aria-busy="true"></div>
   {:else}
@@ -330,6 +330,7 @@
     {/snippet}
 
     <div
+      data-frame-clip
       class="relative min-h-0 flex-1 overflow-hidden"
       style={bannerCount > 0 ? "--lola-top-inset: 0px" : ""}
     >

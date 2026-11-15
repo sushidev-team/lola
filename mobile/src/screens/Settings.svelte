@@ -77,7 +77,7 @@
 <div class="flex h-full min-h-0 flex-col bg-canvas">
   <LargeTitle title={copy.settings.title} />
 
-  <div class="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto overscroll-contain pb-4">
+  <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto overscroll-contain pb-4">
     <ListGroup header={macName_ || undefined}>
       {#if macName_}
         <!-- An inline name field, not a drill-in: no chevron. -->

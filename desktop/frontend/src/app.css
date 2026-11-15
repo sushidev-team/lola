@@ -1266,6 +1266,10 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .cv-person { --cv-message-accent: var(--color-info); width: fit-content; max-width: min(85%, 660px); margin-left: auto; margin-bottom: 28px; }
 .cv-person .cv-speaker { justify-content: flex-end; margin-bottom: 6px; font-size: 11px; }
 .cv-person .cv-speaker strong { color: var(--cv-message-accent); }
+/* The bubble is sized to its content, and `break-words` leaves the longest
+   unbroken run as the minimum, so a pasted URL or path pushed the bubble past
+   the pane. `anywhere` lets that run count as breakable when sizing. */
+.cv-user-message .copy { overflow-wrap: anywhere; }
 .cv-user-message {
   padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--cv-message-accent) 30%, var(--cv-hairline));

@@ -96,7 +96,7 @@
 <div class="flex h-full min-h-0 flex-col bg-canvas">
   <LargeTitle title={title} back={{ label: copy.projects.back, onclick: () => router.back() }} />
 
-  <div class="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto overscroll-contain pb-4">
+  <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto overscroll-contain pb-4">
     {#if !project}
       <p class="px-8 py-12 text-center text-callout text-faint">
         {store.connected ? copy.projects.gone.body : copy.projects.connecting.status}

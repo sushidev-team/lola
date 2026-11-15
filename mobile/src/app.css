@@ -312,6 +312,42 @@ body {
   overscroll-behavior: none;
 }
 
+/* The app frame and the screen outlet clip, they do not hide. `overflow: hidden`
+   is still a scroll container: WebKit scrolls it to reveal a focused or
+   scrolled-to element, and a pushed screen parked off screen gives it somewhere
+   to scroll to. The whole UI then sits shifted sideways with a blank strip, and
+   no gesture brings it back. `clip` cannot be scrolled by anything. Unlayered on
+   purpose, so it outranks the `overflow-hidden` utility, which stays as the
+   fallback before iOS 16. */
+html,
+body,
+[data-frame-clip] {
+  overflow: clip;
+}
+
+/* A list that scrolls up and down never pans sideways. `overflow-y: auto` alone
+   computes `overflow-x` to `auto` as well, so a few pixels of overhang (a
+   button's enlarged touch area, a long unbroken name) let a finger drag the
+   whole list left. A scroller that is meant to move sideways says so with
+   `overflow-x-auto`. Unlayered for the same reason as the rule above. */
+.overflow-y-auto:not(.overflow-x-auto),
+.overflow-y-scroll:not(.overflow-x-auto),
+.review-layout {
+  overflow-x: hidden;
+}
+
+/* Text the phone did not write (a branch name, a URL, a path, an agent's
+   sentence) has no promise of a space to wrap at. `anywhere` breaks such a run
+   only where it would otherwise leave its box, and lets a flex or grid item
+   shrink below the run's width. Inherited, so one rule covers every screen;
+   `whitespace-nowrap` and `truncate` still win where a line must stay whole.
+   The desktop's `break-words` utility is restated because it sets the weaker
+   `break-word`, which breaks the run but still sizes the box to its full width. */
+body,
+.break-words {
+  overflow-wrap: anywhere;
+}
+
 /* This block MUST stay inside @layer base, and the reason is the whole of the
    next paragraph.
 
