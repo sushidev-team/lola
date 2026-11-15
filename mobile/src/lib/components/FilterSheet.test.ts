@@ -8,7 +8,7 @@ describe("FilterSheet", () => {
   it("is a dialog with one radio per bucket plus All, counts included", () => {
     render(FilterSheet, { props: { value: "", counts, onselect: () => {}, onclose: () => {} } });
     expect(screen.getByRole("dialog", { name: "Filter" })).toBeTruthy();
-    expect(screen.getAllByRole("radio")).toHaveLength(5);
+    expect(screen.getAllByRole("radio")).toHaveLength(7);
     expect(screen.getByRole("radio", { name: /All/ })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: /Working/ }).textContent).toContain("3");
   });
@@ -30,5 +30,16 @@ describe("FilterSheet", () => {
     expect(onselect).toHaveBeenCalledWith("review");
     await fireEvent.click(screen.getByRole("radio", { name: /All/ }));
     expect(onselect).toHaveBeenCalledWith("");
+  });
+
+  it("offers Group by with the current choice checked and reports a pick", async () => {
+    const ongroup = vi.fn();
+    render(FilterSheet, { props: { value: "", counts, group: "project", onselect: () => {}, ongroup, onclose: () => {} } });
+    const grp = screen.getByRole("radiogroup", { name: "Group by" });
+    expect(grp.querySelectorAll('[role="radio"]')).toHaveLength(2);
+    expect(screen.getByRole("radio", { name: "Project" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: "Status" })).toHaveAttribute("aria-checked", "false");
+    await fireEvent.click(screen.getByRole("radio", { name: "Status" }));
+    expect(ongroup).toHaveBeenCalledWith("status");
   });
 });

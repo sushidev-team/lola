@@ -7,7 +7,8 @@ const talkMock = vi.hoisted(() => ({ stop: vi.fn(), poll: vi.fn() }));
 vi.mock("$lib/talk.svelte", () => ({ talk: { state: () => null, poll: talkMock.poll, choose: vi.fn() } }));
 
 import Inbox from "./Inbox.svelte";
-import { INTERACTIVE_MARK, inbox } from "@mobile/lib/inbox.svelte";
+import { INTERACTIVE_MARK, inbox, inboxView } from "@mobile/lib/inbox.svelte";
+import { inboxSearch } from "@mobile/lib/inboxsearch.svelte";
 import { router } from "@mobile/lib/router.svelte";
 import { connection } from "@mobile/lib/connection.svelte";
 import { emit } from "../wailsshim/events";
@@ -20,6 +21,8 @@ beforeEach(() => {
   talkMock.stop.mockReset();
   talkMock.poll.mockReset().mockImplementation(() => talkMock.stop);
   inbox.ingest([]);
+  inboxView.set("status");
+  inboxSearch.clear();
   connection.phase = "ready";
   connection.failure = null;
   router.stack = [{ name: "tab", tab: "inbox" }];
@@ -28,6 +31,70 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Inbox", () => {
+  describe("search", () => {
+    const list = () => [
+      s("a", { title: "Fix login", issue: "NOR-1", agentState: "waiting_input" }),
+      s("b", { title: "Rework billing", issue: "OKA-2", project: "okane" }),
+      s("c", { title: "Docs", issue: "NOR-3", branch: "lola/docs-tweak", agentState: "dead" }),
+    ];
+    const type = async (v: string) => fireEvent.input(screen.getByRole("searchbox", { name: "Search sessions" }), { target: { value: v } });
+
+    it("shows no field while there are no sessions", async () => {
+      render(Inbox);
+      await tick();
+      expect(screen.queryByRole("searchbox")).toBeNull();
+    });
+
+    it("narrows by title, issue key, branch and project, across sections", async () => {
+      render(Inbox);
+      emit("daemon:sessions", { sessions: list(), events: [] });
+      await tick();
+      await type("billing");
+      expect(screen.getByText("Rework billing")).toBeTruthy();
+      expect(screen.queryByText("Fix login")).toBeNull();
+      await type("nor-");
+      expect(screen.getByText("Fix login")).toBeTruthy();
+      expect(screen.getByText("Docs")).toBeTruthy();
+      expect(screen.queryByText("Rework billing")).toBeNull();
+      await type("docs-tweak");
+      expect(screen.getByText("Docs")).toBeTruthy();
+      expect(screen.queryByText("Fix login")).toBeNull();
+    });
+
+    it("composes with the status filter and shows its own count", async () => {
+      router.stack = [{ name: "tab", tab: "inbox", filter: "working" }];
+      render(Inbox);
+      emit("daemon:sessions", { sessions: [s("a", { title: "Fix login" }), s("b", { title: "Fix billing" }), s("c", { title: "Docs" })], events: [] });
+      await tick();
+      await type("fix");
+      expect(screen.getByRole("button", { name: "Clear filter" }).textContent).toContain("Working · 2");
+      await type("billing");
+      expect(screen.getByRole("button", { name: "Clear filter" }).textContent).toContain("Working · 1");
+    });
+
+    it("composes with grouping by project", async () => {
+      inboxView.set("project");
+      render(Inbox);
+      emit("daemon:sessions", { sessions: list(), events: [] });
+      await tick();
+      await type("nor-");
+      expect(screen.getByRole("heading", { name: /^p\b/ })).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: /okane/i })).toBeNull();
+    });
+
+    it("says there are no matches instead of the all-clear, and clears", async () => {
+      render(Inbox);
+      emit("daemon:sessions", { sessions: list(), events: [] });
+      await tick();
+      await type("zzzz");
+      expect(screen.getByText("No matches")).toBeTruthy();
+      expect(screen.queryByText("Nothing needs you")).toBeNull();
+      await fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+      expect(screen.getByText("Fix login")).toBeTruthy();
+      expect(inboxSearch.query).toBe("");
+    });
+  });
+
   it("shows a compact all-clear row, with no hero and no summary, once loaded", async () => {
     render(Inbox);
     await tick();
@@ -154,5 +221,55 @@ describe("Inbox", () => {
     await new Promise((r) => requestAnimationFrame(() => r(null)));
     expect(performance.getEntriesByName(INTERACTIVE_MARK)).toHaveLength(1);
     performance.clearMarks(INTERACTIVE_MARK);
+  });
+});
+
+describe("Inbox grouped by project", () => {
+  const sessions = [
+    s("a1", { project: "alpha" }),
+    s("a2", { project: "alpha", agentState: "waiting_input" }),
+    s("b1", { project: "beta" }),
+    s("n1", { project: "" }),
+  ];
+
+  it("draws one header per project, needs card first, and keeps taps working", async () => {
+    inboxView.set("project");
+    render(Inbox);
+    emit("daemon:sessions", { sessions, events: [] });
+    await tick();
+    expect(screen.getByRole("heading", { name: "alpha 2" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "beta 1" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "No project 1" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /Needs you/ })).toBeNull();
+    const keys = [...document.querySelectorAll("[data-vkey]")].map((n) => n.getAttribute("data-vkey"));
+    expect(keys).toEqual(["group:alpha", "card:a2", "row:a1", "group:beta", "row:b1", "group:", "row:n1"]);
+    expect(screen.getByRole("button", { name: "Filter, grouped by project" })).toBeTruthy();
+  });
+
+  it("composes with the status filter and keeps Show all", async () => {
+    inboxView.set("project");
+    router.stack = [{ name: "tab", tab: "inbox", filter: "done" }];
+    const done = Array.from({ length: 25 }, (_, i) => s(`d${i}`, { project: i % 2 ? "alpha" : "beta", agentState: "dead", delivery: "merged" }));
+    render(Inbox);
+    emit("daemon:sessions", { sessions: done, events: [] });
+    await tick();
+    expect(document.querySelectorAll('[data-vkey^="row:"]')).toHaveLength(20);
+    await fireEvent.click(screen.getByRole("button", { name: /Show all/ }));
+    await tick();
+    expect(document.querySelectorAll('[data-vkey^="row:"]')).toHaveLength(25);
+  });
+
+  it("switching the mode keeps every row's element, so no row plays an enter or leave", async () => {
+    render(Inbox);
+    emit("daemon:sessions", { sessions, events: [] });
+    await tick();
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    await tick();
+    const before = new Map([...document.querySelectorAll('[data-vkey^="row:"],[data-vkey^="card:"]')].map((n) => [n.getAttribute("data-vkey"), n]));
+    inboxView.set("project");
+    await tick();
+    const after = new Map([...document.querySelectorAll('[data-vkey^="row:"],[data-vkey^="card:"]')].map((n) => [n.getAttribute("data-vkey"), n]));
+    expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+    for (const [k, n] of after) expect(n).toBe(before.get(k));
   });
 });

@@ -10,15 +10,21 @@ vi.mock("@mobile/native", () => ({
   },
 }));
 
-import { fireEvent, render, screen } from "@testing-library/svelte";
+const { HubStatus } = vi.hoisted(() => ({ HubStatus: vi.fn() }));
+vi.mock("@mobile/wailsshim", () => ({ HubService: { Status: HubStatus } }));
+
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { tiers } from "@mobile/lib/tiers.svelte";
 import { DEFAULT_THEME_ID, appearance } from "$lib/theme-runtime.svelte";
 import { connection } from "@mobile/lib/connection.svelte";
+import { store } from "$lib/store.svelte";
 import { router } from "@mobile/lib/router.svelte";
 import { transport } from "@mobile/native";
 import Settings from "./Settings.svelte";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  store.status = null;
   appearance.preview({ theme: DEFAULT_THEME_ID, followSystem: false, lightTheme: "github-light", darkTheme: DEFAULT_THEME_ID });
   router.stack = [{ name: "tab", tab: "settings" }];
   router.sheet = "";
@@ -43,6 +49,14 @@ describe("Settings", () => {
     // The footnote form is gone everywhere.
     expect(screen.queryByText(/This phone:/)).toBeNull();
     expect(screen.getByRole("heading", { name: "Appearance" })).toBeTruthy();
+  });
+
+  it("shows the away-from-Wi-Fi row in the Mac group, with the Mac's reason", async () => {
+    tiers.set(["read"]);
+    HubStatus.mockResolvedValue({ enabled: false, joined: false, relay: { state: "off", reason: "not_joined", activeConns: 0, rendezvous: 0 } });
+    render(Settings);
+    expect(screen.getByText("Away from Wi-Fi")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Your Mac is not in a team hub.")).toBeTruthy());
   });
 
   it("hides name rows whose value is a placeholder", () => {
@@ -83,5 +97,45 @@ describe("Settings", () => {
     render(Settings);
     await fireEvent.click(screen.getByRole("switch", { name: "Match iPhone" }));
     expect(appearance.preference.followSystem).toBe(true);
+  });
+
+  it("shows nothing for usage or health until the Mac has reported", () => {
+    render(Settings);
+    expect(screen.queryByRole("heading", { name: "Usage" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Mac health" })).toBeNull();
+  });
+
+  it("shows today's tokens, the subscription windows and their resets", () => {
+    store.status = {
+      runtimeOk: true,
+      linearOk: true,
+      polls: [],
+      usage: {
+        day: "d",
+        tokens: 46_700_000,
+        weighted: 38,
+        todayUsd: 12,
+        budgetTokens: 100,
+        quotas: [{ agent: "claude", at: "x", windows: [{ label: "5h", usedPercent: 42, resetsAt: new Date(Date.now() + 2 * 3_600_000 + 60_000).toISOString() }] }],
+      },
+    };
+    render(Settings);
+    expect(screen.getByRole("heading", { name: "Usage" })).toBeTruthy();
+    expect(screen.getByText("46.7M tokens")).toBeTruthy();
+    expect(screen.getByText("38% of budget")).toBeTruthy();
+    expect(screen.getByText("Claude 5-hour")).toBeTruthy();
+    expect(screen.getByText("42%")).toBeTruthy();
+    expect(screen.getByText(/Resets in 2h/)).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Mac health" })).toBeNull();
+    expect(document.body.textContent).not.toContain("$");
+  });
+
+  it("shows a health group when the daemon reports runtime or Linear trouble", () => {
+    store.status = { runtimeOk: false, runtimeErr: "tmux not found", linearOk: false, polls: [] };
+    render(Settings);
+    expect(screen.getByRole("heading", { name: "Mac health" })).toBeTruthy();
+    expect(screen.getByText("tmux not found")).toBeTruthy();
+    expect(screen.getByText("Agent runtime")).toBeTruthy();
+    expect(screen.getByText("Linear")).toBeTruthy();
   });
 });

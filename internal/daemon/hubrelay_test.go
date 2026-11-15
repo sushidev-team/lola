@@ -31,22 +31,24 @@ type relayHubFake struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu          sync.Mutex
-	posts       [][]hubproto.RelayRendezvous
-	postStatus  int
-	postCode    string
-	conflicts   func([]hubproto.RelayRendezvous) []string
-	postGate    chan struct{} // when set, the FIRST post waits on it
-	ctlStatus   int
-	ctlCode     string
-	ctlMsg      string
-	ctlHang     bool
-	hello       hubproto.RelayMsg
-	cur         *hubproto.WSConn
-	controlHits int
-	accepts     chan *hubproto.WSConn
-	rejects     chan hubproto.RelayMsg
-	gated       bool
+	mu         sync.Mutex
+	posts      [][]hubproto.RelayRendezvous
+	postStatus int
+	postCode   string
+	// refusedPosts counts the rendezvous POSTs answered with postStatus.
+	refusedPosts int
+	conflicts    func([]hubproto.RelayRendezvous) []string
+	postGate     chan struct{} // when set, the FIRST post waits on it
+	ctlStatus    int
+	ctlCode      string
+	ctlMsg       string
+	ctlHang      bool
+	hello        hubproto.RelayMsg
+	cur          *hubproto.WSConn
+	controlHits  int
+	accepts      chan *hubproto.WSConn
+	rejects      chan hubproto.RelayMsg
+	gated        bool
 }
 
 func newRelayHubFake(t *testing.T) *relayHubFake {
@@ -104,6 +106,8 @@ func (f *relayHubFake) rendezvous(w http.ResponseWriter, r *http.Request) {
 	status, code := f.postStatus, f.postCode
 	if status == 0 {
 		f.posts = append(f.posts, req.Entries)
+	} else {
+		f.refusedPosts++
 	}
 	conflicts := f.conflicts
 	f.mu.Unlock()
@@ -317,7 +321,12 @@ func (rd *relayDaemon) pair(t *testing.T, withRelay bool) devices.Device {
 func TestRelayStateMachine(t *testing.T) {
 	t.Run("off reasons", func(t *testing.T) {
 		cases := map[string]func(*relayDaemon){
-			"disabled":   func(rd *relayDaemon) { rd.cfg.Remote.RelayOff = true },
+			"disabled": func(rd *relayDaemon) { rd.cfg.Remote.RelayOff = true },
+			"config_error": func(rd *relayDaemon) {
+				rd.mu.Lock()
+				rd.cfgErr = "config invalid: boom"
+				rd.mu.Unlock()
+			},
 			"hub_off":    func(rd *relayDaemon) { rd.cfg.Hub.Enabled = false },
 			"not_joined": func(rd *relayDaemon) { _ = hub.RemoveIdentity(rd.hubDir()) },
 			"remote_off": nil,
@@ -381,6 +390,66 @@ func TestRelayStateMachine(t *testing.T) {
 		f.postStatus = 0
 		f.mu.Unlock()
 		relayWaitState(t, rd.Daemon, protocol.HubRelayStateConnected)
+	})
+
+	t.Run("hubSync ends the unsupported hold once the hub is upgraded", func(t *testing.T) {
+		f := newRelayHubFake(t)
+		f.postStatus = 404
+		rd := newRelayDaemon(t, f)
+		rd.pair(t, true)
+		rd.serve(t)
+		// The production recheck (6 h) stays: only the sync may end the hold.
+		rd.run(t)
+		relayWaitState(t, rd.Daemon, protocol.HubRelayStateUnsupported)
+		f.mu.Lock()
+		f.postStatus = 0
+		f.mu.Unlock()
+		if resp := rd.handleHub(context.Background(), protocol.Request{Cmd: protocol.CmdHubSync}); !resp.OK {
+			t.Fatalf("hubSync: %s", resp.Error)
+		}
+		relayWaitState(t, rd.Daemon, protocol.HubRelayStateConnected)
+	})
+
+	t.Run("a heartbeat ends the unsupported hold, at a bounded rate", func(t *testing.T) {
+		f := newRelayHubFake(t)
+		f.postStatus = 404
+		rd := newRelayDaemon(t, f)
+		rd.pair(t, true)
+		rd.serve(t)
+		rd.run(t)
+		relayWaitState(t, rd.Daemon, protocol.HubRelayStateUnsupported)
+		posts := func() int {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return len(f.posts) + f.refusedPosts
+		}
+		before := posts()
+		now := time.Now()
+		rd.relayAfterHeartbeat(now)
+		relayWaitFor(t, "a retry after the heartbeat", func() bool { return posts() > before })
+		relayWaitState(t, rd.Daemon, protocol.HubRelayStateUnsupported)
+		// Within the interval a heartbeat sends nothing more.
+		settled := posts()
+		rd.relayAfterHeartbeat(now.Add(relayUnsupportedNudgeEvery - time.Second))
+		time.Sleep(100 * time.Millisecond)
+		if got := posts(); got != settled {
+			t.Fatalf("a heartbeat inside the interval retried the hub (%d posts, want %d)", got, settled)
+		}
+		// The hub is upgraded; the next heartbeat after the interval connects.
+		f.mu.Lock()
+		f.postStatus = 0
+		f.mu.Unlock()
+		rd.relayAfterHeartbeat(now.Add(relayUnsupportedNudgeEvery))
+		relayWaitState(t, rd.Daemon, protocol.HubRelayStateConnected)
+	})
+
+	t.Run("a heartbeat leaves every other state alone", func(t *testing.T) {
+		f := newRelayHubFake(t)
+		rd := newRelayDaemon(t, f)
+		rd.relayAfterHeartbeat(time.Now())
+		if n := len(rd.relay().kick); n != 0 {
+			t.Fatalf("an off relay was nudged (%d)", n)
+		}
 	})
 
 	t.Run("401 refuses and revokes", func(t *testing.T) {

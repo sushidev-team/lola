@@ -99,6 +99,30 @@ final class RelayWireTests: XCTestCase {
         XCTAssertTrue(p.allowsAttempt(now: t0.addingTimeInterval(1), url: "https://other.example.com"))
     }
 
+    func testTheDaemonSayingAvailableLiftsAnOldHubPauseAtOnce() {
+        var p = RelayPolicy()
+        p.record(.hubTooOld, now: t0, storedAt: nil, url: hub)
+        XCTAssertFalse(p.allowsAttempt(now: t0.addingTimeInterval(60), url: hub))
+        p.relayAvailable()
+        XCTAssertEqual(p.state, .ok)
+        XCTAssertNil(p.pausedURL)
+        XCTAssertTrue(p.allowsAttempt(now: t0.addingTimeInterval(60), url: hub))
+    }
+
+    func testTheDaemonSayingAvailableKeepsEveryOtherPause() {
+        var dead = RelayPolicy()
+        dead.record(.credentialDead, now: t0, storedAt: nil, url: hub)
+        let deadBefore = dead
+        dead.relayAvailable()
+        XCTAssertEqual(dead, deadBefore, "only a stored bearer lifts a dead credential")
+
+        var limited = RelayPolicy()
+        limited.record(.rateLimited(30), now: t0, storedAt: nil, url: hub)
+        let limitedBefore = limited
+        limited.relayAvailable()
+        XCTAssertEqual(limited, limitedBefore, "a rate-limit floor holds")
+    }
+
     func testBackoffFollowsTheLadderAndASuccessResetsIt() {
         var p = RelayPolicy()
         var waits: [TimeInterval] = []

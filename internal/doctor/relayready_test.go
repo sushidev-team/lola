@@ -52,6 +52,7 @@ func TestRelayDoctorRows(t *testing.T) {
 		{"unsupported", on, func(t *testing.T, d string) { joined(t, d); status(t, d, "unsupported", "") }, true, false, "this hub has no relay; it needs an upgrade", FixRelayHubUpgrade},
 		{"backoff", on, func(t *testing.T, d string) { joined(t, d); status(t, d, "backoff", "dial_failed") }, true, false, "cannot reach the hub relay: dial_failed", FixNone},
 		{"no phones", on, func(t *testing.T, d string) { joined(t, d); status(t, d, "off", "no_phones") }, true, true, "no paired phone", FixNone},
+		{"config error", on, func(t *testing.T, d string) { joined(t, d); status(t, d, "off", "config_error") }, true, true, "off: config.toml has an error", FixNone},
 		{"connected", on, func(t *testing.T, d string) { joined(t, d); status(t, d, "connected", "") }, true, true, "connected", FixNone},
 		{"syncing", on, func(t *testing.T, d string) { joined(t, d); status(t, d, "syncing", "") }, true, true, "syncing", FixNone},
 		{"connecting", on, func(t *testing.T, d string) { joined(t, d); status(t, d, "connecting", "") }, true, true, "connecting", FixNone},

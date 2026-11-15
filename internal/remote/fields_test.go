@@ -139,7 +139,7 @@ var reviewedArgsFields = map[string][]string{
 	"reviewPackageChecks":   {"id", "package", "spec.artifacts.id", "spec.artifacts.kind", "spec.artifacts.path", "spec.command", "spec.id", "spec.image", "spec.member", "spec.memory_mib", "spec.timeout_seconds"},
 	"reviewPackageDiff":     {"from", "to"},
 	"reviewPackageFeedback": {"note", "package", "section"},
-	"reviewPackageImage":    {"artifact", "package"},
+	"reviewPackageImage":    {"artifact", "chunked", "offset", "package"},
 	"reviewPackageMark":     {"package", "previous"},
 	"reviewPackageRecover":  {"id", "package", "spec.artifacts.id", "spec.artifacts.kind", "spec.artifacts.path", "spec.command", "spec.id", "spec.image", "spec.member", "spec.memory_mib", "spec.timeout_seconds"},
 	"reviewPackageVerify":   {"id", "package", "spec.artifacts.id", "spec.artifacts.kind", "spec.artifacts.path", "spec.command", "spec.id", "spec.image", "spec.member", "spec.memory_mib", "spec.timeout_seconds"},

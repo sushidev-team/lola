@@ -5,7 +5,7 @@
 // worse than a plain failure). Copy follows the phone budget: a title of at most
 // three words, one short sentence for the rest.
 
-import type { FailureCode } from "lola-transport";
+import type { FailureCode, RelayState } from "lola-transport";
 import { FRAME_VERSION_CURRENT } from "@mobile/wire";
 
 export type DiagnosisKind =
@@ -33,6 +33,13 @@ export interface DiagnoseInput {
   refusal?: { code: string; message?: string; minV?: number; maxV?: number } | null;
   /** How the daemon is named to the person, e.g. "Mars Mac". */
   label?: string;
+  /**
+   * This phone's relay state for the daemon (`PairedDaemon.relay`). Unknown
+   * leaves the unreachable sentence as it was; known, it says whether the
+   * team hub relay could have helped, since off the home network it is the
+   * only way in.
+   */
+  relay?: RelayState;
 }
 
 const IDLE: Diagnosis = { kind: "idle", title: "Not connected", detail: "Connect to your Mac.", retryable: false };
@@ -83,7 +90,7 @@ export function diagnose(input: DiagnoseInput): Diagnosis {
     case "timeout":
     case "relay_unavailable":
     case "peer_closed":
-      return { kind: "unreachable", title: "Unreachable", detail: `Can't reach ${where}.`, retryable: true };
+      return { kind: "unreachable", title: "Unreachable", detail: unreachableDetail(where, input.relay), retryable: true };
     case "backgrounded":
       return RACING;
     case "client_closed":
@@ -93,5 +100,26 @@ export function diagnose(input: DiagnoseInput): Diagnosis {
       return input.phase === "connecting" || input.phase === "handshaking" ? RACING : IDLE;
     default:
       return { kind: "failed", title: "Connection failed", detail: "Try again in a moment.", retryable: true };
+  }
+}
+
+/**
+ * Why the Mac could not be reached, as far as the relay explains it. A phone
+ * away from the Mac's network gets in only through the team hub relay, so a
+ * relay this phone cannot use is said, not hidden behind "Can't reach".
+ */
+function unreachableDetail(where: string, relay: RelayState | undefined): string {
+  switch (relay) {
+    case "none":
+      return `Can't reach ${where}, and remote access isn't set up.`;
+    case "hub_too_old":
+      return `Can't reach ${where}; its team hub needs an update.`;
+    case "credential_dead":
+      return `Can't reach ${where}, and remote access has expired.`;
+    case "ok":
+    case "backoff":
+      return `Can't reach ${where} here or through its team hub.`;
+    default:
+      return `Can't reach ${where}.`;
   }
 }

@@ -11,6 +11,7 @@ import { WireError, normalizePanesData } from "../../wire";
 import type { PaneCloseData, PaneResizeData, PanesData, RawPanesData, ShellCreateData } from "../../wire";
 import { bridge } from "../bridge";
 import { MAC_LINK, MAC_ONLY } from "./reasons";
+import { ReadReviewImage } from "./reviewimage";
 import type { Routes } from "./routes";
 
 /** FORWARDED: cmd=addressPRFeedback. */
@@ -381,9 +382,9 @@ export function ReviewPackageDiff(session: string, $from: string, to: string): P
   return bridge.request<P.DiffData>("DaemonService.ReviewPackageDiff", "reviewPackageDiff", { session, args: { from: $from, to } });
 }
 
-/** FORWARDED: cmd=reviewPackageImage. */
+/** FORWARDED: cmd=reviewPackageImage, read in chunks under the frame cap (reviewimage.ts). */
 export function ReviewPackageImage(session: string, packageID: string, artifact: string): Promise<P.ReviewImageData> {
-  return bridge.request<P.ReviewImageData>("DaemonService.ReviewPackageImage", "reviewPackageImage", { session, args: { package: packageID, artifact } });
+  return ReadReviewImage(session, packageID, artifact);
 }
 
 /** FORWARDED: cmd=reviewPackageMark. */

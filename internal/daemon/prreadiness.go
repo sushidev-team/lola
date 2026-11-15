@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
@@ -46,6 +48,11 @@ func (d *Daemon) handlePRReadiness(ctx context.Context, req protocol.Request) pr
 		for _, t := range data.Threads {
 			out.Threads = append(out.Threads, protocol.ReviewThread{ID: t.ID, Path: t.Path, Line: t.Line, Outdated: t.Outdated, Author: t.Author, Preview: t.Preview, URL: t.URL})
 		}
+		baseRef := data.BaseRef
+		if baseRef == "" && s.PR != nil {
+			baseRef = s.PR.BaseRef
+		}
+		out.CheckList, out.ChecksTruncated = publicCheckList(data.CheckList, data.ChecksTruncated, d.requiredChecksFor(readCtx, s.Repo, baseRef)), data.ChecksTruncated
 		d.summarizePRComments(ctx, s.Repo, args.Number, data.Threads, &out)
 		return dataResponse(out)
 	}
@@ -158,4 +165,59 @@ func (d *Daemon) manualMergePolicyBlocked(s session.Session, pr scm.PRReadiness)
 		return "Complete the required specialist reviews before merging."
 	}
 	return ""
+}
+
+// checkTextMax bounds each GitHub-supplied string on a PRCheck.
+const checkTextMax = 200
+
+// publicCheckList copies GitHub's check list for display. Text is folded to
+// one clipped line and a URL survives only when it is https, so a hostile
+// status cannot make a client open another scheme. A required check that has
+// not reported yet is listed as GitHub shows it: Expected, pending (unless the
+// list is truncated, when it may simply be unread). nil in, nil out: an
+// unbound list stays absent on the wire.
+func publicCheckList(in []scm.ReadinessCheck, truncated bool, required []string) []protocol.PRCheck {
+	if in == nil {
+		return nil
+	}
+	req := map[string]bool{}
+	for _, name := range required {
+		req[name] = true
+	}
+	out := make([]protocol.PRCheck, 0, len(in))
+	seen := map[string]bool{}
+	for _, c := range in {
+		seen[c.Name] = true
+		out = append(out, protocol.PRCheck{
+			Name: checkText(c.Name), Workflow: checkText(c.Workflow), State: checkText(c.State), Bucket: c.Bucket,
+			URL: httpsURL(c.URL), Description: checkText(c.Description), Required: req[c.Name], Gate: scm.IsLolaContext(c.Name),
+			StartedAt: c.StartedAt, CompletedAt: c.CompletedAt,
+		})
+	}
+	for _, name := range required {
+		if !truncated && !seen[name] {
+			seen[name] = true
+			out = append(out, protocol.PRCheck{Name: checkText(name), State: "EXPECTED", Bucket: "pending", Required: true, Gate: scm.IsLolaContext(name)})
+		}
+	}
+	return out
+}
+
+func checkText(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			return ' '
+		}
+		return r
+	}, s)
+	return clipRunes(strings.Join(strings.Fields(s), " "), checkTextMax)
+}
+
+// httpsURL returns raw when it is an absolute https URL with a host, else "".
+func httpsURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || len(raw) > 2048 {
+		return ""
+	}
+	return raw
 }

@@ -56,6 +56,8 @@ final class Session: RaceAttempt {
     var onFrames: (([String]) -> Void)?
     /// A credential the daemon issued; the owner saves it.
     var onCredentials: ((RelayCredentials) -> Void)?
+    /// The daemon said its relay is available (`InboundFilter.Effect.relayAvailable`).
+    var onRelayAvailable: (() -> Void)?
     /// The session ended after authentication.
     var onEnded: ((SessionEnd) -> Void)?
     /// A direct path lost viability or a better one exists.
@@ -214,6 +216,8 @@ final class Session: RaceAttempt {
                 report?(.ready)
             case .saveCredentials(let credentials):
                 onCredentials?(credentials)
+            case .relayAvailable:
+                onRelayAvailable?()
             case .send(let request):
                 if let framed = try? FrameEncoder.encode(body: request) {
                     framesOut += 1

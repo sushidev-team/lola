@@ -7,9 +7,11 @@
   import PairDialog from "./PairDialog.svelte";
   import { phones } from "$lib/phones.svelte";
   import { hub } from "$lib/hub.svelte";
+  import { summarizeRelay } from "$lib/phonerelay";
 
   // `relay` is SettingsDTO.remoteRelay: it saves with the rest of the form.
-  let { relay = $bindable(false) }: { relay?: boolean } = $props();
+  // `onJoinHub` opens the Team hub tab; without it the join hint is text only.
+  let { relay = $bindable(false), onJoinHub }: { relay?: boolean; onJoinHub?: () => void } = $props();
 
   let pairing = $state(false);
 
@@ -23,19 +25,7 @@
     };
   });
 
-  const RELAY_STATE: Record<string, string> = {
-    off: "Off",
-    syncing: "Syncing",
-    connecting: "Connecting",
-    connected: "Connected",
-    backoff: "Reconnecting",
-    unsupported: "Hub too old",
-    refused: "Hub refused this Mac",
-  };
-  const relayText = $derived.by(() => {
-    const r = hub.status?.relay;
-    return r ? (RELAY_STATE[r.state] ?? r.state) : "Not available";
-  });
+  const summary = $derived(summarizeRelay(hub.status));
 </script>
 
 <SettingsGroup title="Pair a phone">
@@ -62,12 +52,22 @@
   {/if}
 </SettingsGroup>
 
-<SettingsGroup title="Relay">
+<SettingsGroup
+  title="Away from home"
+  description="Phones off your network reach this Mac through your team hub. It needs a joined team hub; the hub only passes encrypted traffic along.">
   <label class="flex cursor-pointer items-center gap-2">
     <Checkbox bind:checked={relay} />
     <span>Reach this Mac away from home</span>
   </label>
-  <p class="text-sm text-faint">Relay status: {relayText}</p>
+  <div class="grid gap-1" role="status" aria-label="Relay status">
+    <p class={summary.ok ? "text-sm text-good" : "text-sm text-ink"}>{summary.title}</p>
+    <p class="text-sm text-faint">{summary.detail}</p>
+  </div>
+  {#if summary.action === "join" && onJoinHub}
+    <div>
+      <Button size="md" onclick={onJoinHub}>Open Team hub settings</Button>
+    </div>
+  {/if}
 </SettingsGroup>
 
 {#if pairing}

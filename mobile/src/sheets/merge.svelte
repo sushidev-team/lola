@@ -30,6 +30,7 @@
   import { readPRReadiness } from "$lib/prreadiness";
   import { store } from "$lib/store.svelte";
   import SegmentBar from "@mobile/lib/components/SegmentBar.svelte";
+  import SessionChips from "@mobile/lib/components/SessionChips.svelte";
   import Sheet from "@mobile/lib/components/Sheet.svelte";
   import TouchButton from "@mobile/lib/components/TouchButton.svelte";
   import { copy, fill } from "@mobile/lib/copy";
@@ -131,6 +132,7 @@
         <p class="text-subhead" style="color: var(--color-bad)" role="status">{copy.merge.unready.body}</p>
       {/if}
     {/if}
+    <SessionChips session={store.sessionById(id)} detail />
     {#if error}<p class="text-subhead text-warn" role="alert">{error}</p>{/if}
   </div>
 </Sheet>

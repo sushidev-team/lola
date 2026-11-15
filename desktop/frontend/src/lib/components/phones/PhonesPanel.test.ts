@@ -98,7 +98,42 @@ describe("PhonesPanel", () => {
 
   it("reads the relay state from the hub status", async () => {
     render(PhonesPanel);
-    expect(await screen.findByText("Relay status: Connected")).toBeInTheDocument();
+    const status = await screen.findByRole("status", { name: "Relay status" });
+    await waitFor(() => expect(status).toHaveTextContent("Available"));
+    expect(status).toHaveTextContent("Paired phones can reach this Mac away from home.");
+  });
+
+  it("counts phones connected through the relay", async () => {
+    HubStatus.mockResolvedValue({ joined: true, relay: { state: "connected", activeConns: 2, rendezvous: 2 } });
+    render(PhonesPanel);
+    expect(await screen.findByText("2 phones are connected through the team hub.")).toBeInTheDocument();
+  });
+
+  it("says a team hub is needed and opens its settings", async () => {
+    HubStatus.mockResolvedValue({ joined: false, relay: { state: "off", reason: "not_joined", activeConns: 0, rendezvous: 0 } });
+    const onJoinHub = vi.fn();
+    render(PhonesPanel, { onJoinHub });
+    expect(await screen.findByText("Needs a team hub")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Open Team hub settings" }));
+    expect(onJoinHub).toHaveBeenCalledOnce();
+  });
+
+  it("says the team hub needs an update, with no join button", async () => {
+    HubStatus.mockResolvedValue({
+      joined: true,
+      relay: { state: "unsupported", reason: "no_relay", lastError: "hub: HTTP 404 not_found: not found", activeConns: 0, rendezvous: 1 },
+    });
+    render(PhonesPanel, { onJoinHub: vi.fn() });
+    expect(await screen.findByText("Team hub needs an update")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Team hub settings" })).toBeNull();
+    // The daemon's error text is not the panel's sentence.
+    expect(screen.queryByText(/404/)).toBeNull();
+  });
+
+  it("says no phone is paired yet", async () => {
+    HubStatus.mockResolvedValue({ joined: true, relay: { state: "off", reason: "no_phones", activeConns: 0, rendezvous: 0 } });
+    render(PhonesPanel);
+    expect(await screen.findByText("No phone paired yet")).toBeInTheDocument();
   });
 
   it("binds the relay checkbox", async () => {

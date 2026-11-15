@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -249,12 +250,24 @@ func (c *cli) runHub(ctx context.Context, o hubOpts, ready func(hubReady)) error
 		info.TokenPath = filepath.Join(dir, console.TokenFile)
 	}
 
+	// Every background loop writes the store under --data. They run on
+	// their own context, cancelled on the way out, and runHub waits for
+	// them: a caller that removes the data directory after runHub returns
+	// (the dev command's tests do) must never race a late write into it.
+	bgCtx, stopBg := context.WithCancel(ctx)
+	var bg sync.WaitGroup
+	defer func() {
+		stopBg()
+		bg.Wait()
+	}()
+	bg.Add(1)
 	go func() {
+		defer bg.Done()
 		t := time.NewTicker(o.sweep)
 		defer t.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-bgCtx.Done():
 				return
 			case <-t.C:
 				if n, err := srv.Sweep(); err != nil {
@@ -268,20 +281,23 @@ func (c *cli) runHub(ctx context.Context, o hubOpts, ready func(hubReady)) error
 	}()
 	// Revocation through the CLI is another process writing the store: the
 	// recheck runs on its own interval, since --sweep may be long.
+	bg.Add(1)
 	go func() {
+		defer bg.Done()
 		t := time.NewTicker(hubproto.RelayRecheckInterval)
 		defer t.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-bgCtx.Done():
 				return
 			case <-t.C:
 				srv.RelayRecheck()
 			}
 		}
 	}()
-	go esc.Run(ctx, time.Minute)
-	go digest.Run(ctx, escalate.DigestInterval)
+	bg.Add(2)
+	go func() { defer bg.Done(); esc.Run(bgCtx, time.Minute) }()
+	go func() { defer bg.Done(); digest.Run(bgCtx, escalate.DigestInterval) }()
 
 	errc := make(chan error, 2)
 	go func() {

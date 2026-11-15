@@ -9,7 +9,7 @@ const all = async (): Promise<Fixture[]> => Promise.all(FIXTURE_NAMES.map(loadFi
 
 describe("fixture registry", () => {
   it("names every fixture of the spec and each file carries its own name", async () => {
-    expect(FIXTURE_NAMES).toHaveLength(16);
+    expect(FIXTURE_NAMES).toHaveLength(17);
     for (const name of FIXTURE_NAMES) expect((await loadFixture(name)).name).toBe(name);
   });
 
@@ -175,11 +175,30 @@ describe("PreviewDaemon", () => {
   });
 });
 
+describe("review fixtures", () => {
+  it("ci-red lists each check, merge-ready carries a tally, review-package opens on screenshots", async () => {
+    const red = (await loadFixture("ci-red")).readiness.s6.checkList ?? [];
+    expect(red.filter((c) => c.bucket === "fail" && !c.gate).map((c) => c.name)).toEqual(["Unit tests", "Parallel suite"]);
+    expect(red.some((c) => c.gate)).toBe(true);
+    expect(red.every((c) => !c.url || c.url.startsWith("https://"))).toBe(true);
+    const ready = await loadFixture("merge-ready");
+    expect(ready.sessions[0].reviewTallies?.[0]).toMatchObject({ kind: "codex-session", major: 1, minor: 2 });
+    expect((ready.readiness.s5.checkList ?? []).every((c) => c.bucket === "pass")).toBe(true);
+    expect((await loadFixture("review-package")).routes).toContain("/session/s5/review?sheet=reviewPackage&tab=visuals");
+    expect((await loadFixture("ci-red")).routes).toContain("/session/s6/review?sheet=checks");
+  });
+});
+
 describe("readParams", () => {
   it("folds sheet into the route's own query", () => {
     expect(readParams("?route=/inbox&sheet=filter").path).toBe("/inbox?sheet=filter");
     expect(readParams("?route=/inbox%3Ffilter%3Dneeds&sheet=filter").path).toBe("/inbox?filter=needs&sheet=filter");
     expect(readParams("?route=/inbox?sheet=filter").path).toBe("/inbox?sheet=filter");
+  });
+
+  it("folds a sheet's tab after its sheet, and only with one", () => {
+    expect(readParams("?route=/session/s5/review&sheet=reviewPackage&tab=visuals").path).toBe("/session/s5/review?sheet=reviewPackage&tab=visuals");
+    expect(readParams("?route=/session/s5/review&tab=visuals").path).toBe("/session/s5/review");
   });
 
   it("ignores what it does not know", () => {

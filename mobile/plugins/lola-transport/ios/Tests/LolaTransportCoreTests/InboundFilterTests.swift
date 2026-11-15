@@ -117,6 +117,34 @@ final class InboundFilterTests: XCTestCase {
         XCTAssertEqual(f.stored, stored)
     }
 
+    func testAnAvailableReplyWithoutABearerSaysTheRelayIsAvailable() {
+        var f = InboundFilter(stored: stored)
+        _ = f.filter([data(readyFrame)], now: now)
+        let out = f.filter([reply(1, "{\"available\":true}")], now: now)
+        XCTAssertEqual(out.effects, [.relayAvailable])
+        XCTAssertEqual(f.stored, stored)
+    }
+
+    func testRelayAvailableFollowsTheSaveOfTheSameReply() {
+        var f = InboundFilter(stored: nil)
+        _ = f.filter([data(readyFrame)], now: now)
+        let out = f.filter([reply(1, "{\"available\":true,\"url\":\"https://hub.example.com\",\"rv\":\"r\",\"bearer\":\"b\"}")], now: now)
+        guard out.effects.count == 3, case .saveCredentials = out.effects[0], case .send = out.effects[1] else {
+            return XCTFail("effects \(out.effects)")
+        }
+        XCTAssertEqual(out.effects[2], .relayAvailable)
+    }
+
+    func testAnUnavailableOrRefusedReplySaysNothingAboutTheRelay() {
+        var f = InboundFilter(stored: stored)
+        _ = f.filter([data(readyFrame)], now: now)
+        XCTAssertFalse(f.filter([reply(1, "{\"available\":false}")], now: now).effects.contains(.relayAvailable))
+        var g = InboundFilter(stored: stored)
+        _ = g.filter([data(readyFrame)], now: now)
+        let notOK = data("{\"v\":2,\"type\":\"resp\",\"id\":\"lola-relaycred-1\",\"payload\":{\"ok\":false}}")
+        XCTAssertFalse(g.filter([notOK], now: now).effects.contains(.relayAvailable))
+    }
+
     func testABearerWithoutAURLAndNoStoredRecordIsNotSaved() {
         var f = InboundFilter(stored: nil)
         _ = f.filter([data(readyFrame)], now: now)

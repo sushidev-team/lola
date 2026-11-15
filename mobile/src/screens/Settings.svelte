@@ -1,13 +1,17 @@
 <script lang="ts">
   import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
+  import { store } from "$lib/store.svelte";
   import LargeTitle from "@mobile/lib/components/LargeTitle.svelte";
   import ListGroup from "@mobile/lib/components/ListGroup.svelte";
   import ListRow from "@mobile/lib/components/ListRow.svelte";
   import Switch from "@mobile/lib/components/Switch.svelte";
+  import { minuteClock } from "@mobile/lib/clock.svelte";
   import { connection } from "@mobile/lib/connection.svelte";
   import { copy, fill } from "@mobile/lib/copy";
   import { NAME_MAX } from "@mobile/lib/daemonname";
   import { router } from "@mobile/lib/router.svelte";
+  import { remoteAccess } from "@mobile/lib/remoteaccess.svelte";
+  import { usageGlance } from "@mobile/lib/usageglance";
   import {
     appVersion,
     bootMs,
@@ -26,6 +30,14 @@
   $effect(() => {
     void readStatus().then((s) => (boot = bootMs(s?.launchedAt)));
   });
+  // Re-read on every new connection: the Mac's relay answer needs one.
+  $effect(() => {
+    void connection.epoch;
+    void remoteAccess.load();
+  });
+
+  // Today's tokens, subscription windows and any daemon trouble, from the pushed `status`.
+  const glance = $derived(usageGlance(store.status, minuteClock.now));
 
   const connectionWord = $derived(pathWord(connection.ready, connection.path));
   const themeName = $derived(FLAVORS[appearance.id]?.label ?? "");
@@ -92,7 +104,24 @@
         chevron
         onclick={() => router.open("connection")}
       />
+      <ListRow label={copy.remoteAccess.label} value={remoteAccess.row.value} detail={remoteAccess.row.detail} />
     </ListGroup>
+
+    {#if glance.health.length > 0}
+      <ListGroup header={copy.usage.health}>
+        {#each glance.health as r (r.key)}
+          <ListRow label={r.label} value={r.value} detail={r.detail} tone={r.tone} />
+        {/each}
+      </ListGroup>
+    {/if}
+
+    {#if glance.usage.length > 0}
+      <ListGroup header={copy.usage.title}>
+        {#each glance.usage as r (r.key)}
+          <ListRow label={r.label} value={r.value} detail={r.detail} tone={r.tone} />
+        {/each}
+      </ListGroup>
+    {/if}
 
     <ListGroup header={copy.settings.sections.appearance}>
       <ListRow label={copy.settings.rows.matchSystem} trailing={matchSwitch} />

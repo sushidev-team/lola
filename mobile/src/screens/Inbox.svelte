@@ -17,12 +17,15 @@
     attachInbox,
     inbox,
     inboxItems,
+    inboxView,
     itemKind,
     ItemCache,
     markInteractive,
+    projectOrder,
     unwindowed,
     type InboxItem,
   } from "@mobile/lib/inbox.svelte";
+  import { inboxSearch, searchBuckets } from "@mobile/lib/inboxsearch.svelte";
   import { prefetchOnce } from "@mobile/lib/prefetch";
   import { router, type InboxFilter } from "@mobile/lib/router.svelte";
 
@@ -31,6 +34,8 @@
   // Invariants:
   //  - The filter lives in the route, found on the stack because this screen
   //    stays mounted under a pushed session; its cards watch nothing while one is.
+  //  - Grouping by project is a preference (`inboxView`), not a route: the filter
+  //    still narrows the same list, and a group header is one more keyed item.
   //  - The list is one virtualized list of keyed items; a push that changes one
   //    session changes one item.
   //  - No pull to refresh: the list is pushed.
@@ -81,16 +86,34 @@
 
   // One cache for the screen's life: an unchanged row keeps its item object across pushes.
   const itemCache = new ItemCache();
-  const items = $derived(inboxItems(inbox.buckets, filter, showAllDone, itemCache));
+  const order = $derived(projectOrder(store.projects, store.groups));
+  const grouping = $derived(
+    inboxView.group === "project" ? { order, label: (p: string) => (p === "" ? copy.inbox.groupBy.noProject : store.displayNameFor(p)) } : undefined,
+  );
+  // The search narrows the models the filter and the grouping list; the all-clear block is a claim
+  // about the whole Inbox, so it is not drawn over a narrowed list.
+  const searching = $derived(inboxSearch.active);
+  const buckets = $derived(
+    searchBuckets(inbox.buckets, inboxSearch.query, (p) => (p === "" ? copy.inbox.groupBy.noProject : store.displayNameFor(p))),
+  );
+  const items = $derived(
+    inboxItems(buckets, filter, showAllDone, itemCache, grouping).filter((it) => !searching || it.kind !== "clear"),
+  );
   // Off once the tab is left, so a screen being torn down plays no leave.
   const animate = $derived(painted && tabRoute !== null && unwindowed(items.length));
+  const grouped = $derived(inboxView.group === "project");
   const filterLabel = $derived(
-    filter === "" ? "Filter" : `Filter, showing ${copy.inbox.sections[filter]}`,
+    (filter === "" ? "Filter" : `Filter, showing ${copy.inbox.sections[filter]}`) +
+      (grouped ? ", grouped by project" : ""),
   );
 
   const filterName = $derived(filter === "" ? "" : copy.inbox.sections[filter]);
 
-  const counts = $derived(inbox.counts);
+  const counts = $derived(
+    searching
+      ? { needs: buckets.needs.length, working: buckets.working.length, review: buckets.review.length, done: buckets.done.length }
+      : inbox.counts,
+  );
   const chipLabel = $derived(filter === "" ? "" : `${filterName} · ${counts[filter]}`);
 
   // Nothing to show: no list yet, or an empty one while the link is down (an all-clear
@@ -132,7 +155,7 @@
   <LargeTitle title={copy.inbox.title}>
     {#snippet trailing()}
       <TouchButton icon aria-label={filterLabel} onclick={() => router.open("filter")}>
-        <FilterIcon active={filter !== ""} />
+        <FilterIcon active={filter !== "" || grouped} />
       </TouchButton>
     {/snippet}
   </LargeTitle>
@@ -146,6 +169,35 @@
       role={banner.id === "key_changed" ? "alert" : "status"}
       onaction={() => bannerAction(banner.intent)}
     />
+  {/if}
+
+  {#if inbox.rows.size > 0}
+    <div class="shrink-0 px-4 pb-2">
+      <div class="relative flex h-9 items-center rounded-[10px] bg-edge-soft">
+        <Icon name="search" size={16} class="pointer-events-none absolute left-2.5 text-faint" />
+        <input
+          type="search"
+          class="h-full w-full min-w-0 rounded-[10px] bg-transparent pr-9 pl-8 text-body text-ink outline-none placeholder:text-faint"
+          aria-label={copy.inbox.search.placeholder}
+          placeholder={copy.inbox.search.placeholder}
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          enterkeyhint="search"
+          bind:value={inboxSearch.query}
+        />
+        {#if searching}
+          <button
+            type="button"
+            class="absolute right-0 grid size-9 touch-manipulation place-items-center text-faint active:opacity-70"
+            aria-label={copy.inbox.search.clear}
+            onclick={() => inboxSearch.clear()}
+          >
+            <Icon name="x" size={16} />
+          </button>
+        {/if}
+      </div>
+    </div>
   {/if}
 
   {#if filter !== ""}
@@ -168,6 +220,8 @@
         {#snippet row(it: InboxItem)}
           {#if it.kind === "section"}
             <SectionHeader title={copy.inbox.sections[it.bucket]} count={it.count} />
+          {:else if it.kind === "group"}
+            <SectionHeader title={it.label} count={it.count} />
           {:else if it.kind === "card"}
             <InboxCard
               model={it.model}
@@ -199,6 +253,8 @@
           <p class="text-subhead font-normal text-faint" role="status">{copy.inbox.connecting.status}</p>
         </div>
       {/if}
+    {:else if searching}
+      <EmptyState title={copy.inbox.search.none} />
     {:else if filter === ""}
       {@render allClearBlock()}
     {:else}

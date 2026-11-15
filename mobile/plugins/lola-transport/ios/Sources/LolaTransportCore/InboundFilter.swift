@@ -20,7 +20,9 @@ public struct ReadyInfo: Decodable, Equatable, Sendable {
 ///
 /// Right after `ready` the filter asks for `relayCred {holds}`. A reply with a
 /// bearer is saved and acknowledged once by repeating the request with the new
-/// hash; the acknowledgement's own reply never triggers another one.
+/// hash; the acknowledgement's own reply never triggers another one. Any
+/// `available` reply also says the relay is worth trying again (`relayAvailable`),
+/// so a hub upgraded after a 404 is not left paused for hours.
 public struct InboundFilter {
     public static let reservedIDPrefix = "lola-"
     public static let relayCredIDPrefix = "lola-relaycred-"
@@ -32,6 +34,11 @@ public struct InboundFilter {
         case saveCredentials(RelayCredentials)
         /// A complete frame body to write on the session (no length prefix).
         case send(Data)
+        /// The daemon says its relay is available (it answers so only while
+        /// it does not know the hub to lack the relay): lift a `hubTooOld`
+        /// pause with `RelayPolicy.relayAvailable()`. Emitted only while a
+        /// credential is held, after any `saveCredentials` of the same reply.
+        case relayAvailable
     }
 
     public struct Output: Equatable {
@@ -127,6 +134,8 @@ public struct InboundFilter {
         guard let kind = pending.removeValue(forKey: id) else { return }
         // `err` (an older daemon answers `unknown_cmd`) and `ok:false` change nothing.
         guard env.type == "resp", env.payload?.ok == true, let data = env.payload?.data, data.available else { return }
+
+        defer { if stored != nil { out.effects.append(.relayAvailable) } }
 
         let url = data.url ?? stored?.hubURL
         let rv = data.rv ?? stored?.rv

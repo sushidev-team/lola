@@ -499,3 +499,41 @@ it('phone: the version label renders once, as relative day + time, and the tab s
     await waitFor(()=>expect(onstatus.mock.calls.at(-1)![0].tabs.map((t:{label:string})=>t.label)).toContain('Changes'));
   }finally{setTouchSurface(null);}
 });
+
+it('draws no control the client may not send',async()=>{
+  const allowed=new Set(['reviewPackages','reviewPackageImage']);
+  const onstatus=vi.fn();
+  read.mockResolvedValue({packages:[],reviewTracking:true});
+  render(ReviewWorkspace,{sessionId:id,embedded:true,onstatus,can:(c:string)=>allowed.has(c)});
+  await screen.findByText('No review material yet');
+  expect(screen.queryByRole('button',{name:'Ask agent to prepare review'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Capture screenshot'})).toBeNull();
+});
+
+it('gates Mark reviewed, comments and sending on the client’s answer',async()=>{
+  const onstatus=vi.fn();
+  render(ReviewWorkspace,{sessionId:id,embedded:true,onstatus,can:(c:string)=>c!=='reviewPackageMark'&&c!=='feedback'});
+  await screen.findByRole('heading',{name:'A clearer settings screen'});
+  await waitFor(()=>expect(onstatus.mock.calls.at(-1)![0].canMark).toBe(false));
+  expect(screen.queryByRole('textbox',{name:'Review comment'})).toBeNull();
+});
+
+it('phone: no Capture and no check setup, whatever the tier; screenshots are stacked cards',async()=>{
+  const {setTouchSurface}=await import('$lib/touchsurface');
+  setTouchSurface({});
+  try{
+    const onstatus=vi.fn();
+    render(ReviewWorkspace,{sessionId:id,embedded:true,onstatus,tab:'visuals'});
+    await screen.findByRole('article',{name:'Screen 1: Settings'});
+    expect(screen.queryByRole('button',{name:'Capture screenshot'})).toBeNull();
+    expect(screen.queryByRole('button',{name:'Add check'})).toBeNull();
+    expect(screen.queryByRole('button',{name:'Set up check'})).toBeNull();
+    expect(document.querySelector('.review-visuals')).toBeNull();
+    await fireEvent.click(screen.getByRole('button',{name:'Comment on this screen'}));
+    await fireEvent.input(screen.getByRole('textbox',{name:'Comment on this screen'}),{target:{value:'Labels are cramped'}});
+    await fireEvent.click(screen.getByRole('button',{name:'Add to feedback'}));
+    expect(feedback.noteFor(id)).toContain('Section: Screen 1: Settings');
+    expect(feedback.noteFor(id)).toMatch(/Labels are cramped$/);
+    expect(await screen.findByText('Labels are cramped')).toBeInTheDocument();
+  }finally{setTouchSurface(null);}
+});

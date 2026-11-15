@@ -14,6 +14,7 @@ export type HapticEvent =
   | "select"
   | "success"
   | "refusal"
+  | "attention"
   | "notPaired";
 
 export const HAPTIC_FOR: Readonly<Record<HapticEvent, HapticKind>> = {
@@ -23,6 +24,7 @@ export const HAPTIC_FOR: Readonly<Record<HapticEvent, HapticKind>> = {
   select: "selection",
   success: "success",
   refusal: "warning",
+  attention: "warning",
   notPaired: "error",
 };
 

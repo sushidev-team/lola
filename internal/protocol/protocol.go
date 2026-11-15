@@ -560,6 +560,13 @@ type SessionInfo struct {
 	// be verifiably resting at its prompt.
 	FeedbackPending bool `json:"feedbackPending,omitempty"`
 
+	// ReviewRunning is true while a review pass runs for this session.
+	// ReviewTallies are the findings of each review kind's last answered pass
+	// on the CURRENT PR, by kind; a kind with no entry has not reviewed this
+	// PR. Display only: nothing on a client may gate on them.
+	ReviewRunning bool              `json:"reviewRunning,omitempty"`
+	ReviewTallies []ReviewTallyInfo `json:"reviewTallies,omitempty"`
+
 	// Usage is this session's token usage (internal/usage), nil when nothing
 	// is known yet — no transcript written, or an agent whose logs lola cannot
 	// read (codex, opencode). Absent is "unknown", never zero.
@@ -583,6 +590,18 @@ type SessionInfo struct {
 	// SSH is the session's agent-assisted ssh state (ssh.go), nil when it has
 	// never touched a host.
 	SSH *SSHSessionInfo `json:"ssh,omitempty"`
+}
+
+// ReviewTallyInfo is one review kind's findings counted by severity on the
+// session's current PR. All zero is a clean pass. At is when the pass
+// answered (a timestamp, not a formatted age).
+type ReviewTallyInfo struct {
+	Kind    string    `json:"kind"`
+	Blocker int       `json:"blocker,omitempty"`
+	Major   int       `json:"major,omitempty"`
+	Minor   int       `json:"minor,omitempty"`
+	Other   int       `json:"other,omitempty"`
+	At      time.Time `json:"at,omitzero"`
 }
 
 // BestOfInfo places a session in its best-of-N group. Winner is set on the
@@ -1352,6 +1371,10 @@ type ReviewData struct {
 	Skipped  string `json:"skipped,omitempty"`
 	Findings string `json:"findings,omitempty"`
 	Message  string `json:"message,omitempty"`
+	// Started: the pass was launched detached and has not finished (a
+	// phone's request). Ran, Clean and Findings are then unset; the session
+	// row's reviewRunning and reviewTallies report the outcome.
+	Started bool `json:"started,omitempty"`
 }
 
 // CodeRabbitData is Response.Data for cmd=coderabbit: the outcome of a forced

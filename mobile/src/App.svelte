@@ -90,6 +90,7 @@
   import { applyDevLink, installDevLink } from "@mobile/lib/devlink";
   import { applyRoute, followFocus, sheetClosed, sheetForOverlay } from "@mobile/lib/desknav";
   import { installDynamicType } from "@mobile/lib/dynamictype";
+  import { attachAttention } from "@mobile/lib/attention";
   import { haptic } from "@mobile/lib/haptics";
   import { installKeyboardInset } from "@mobile/lib/keyboardinset";
   import { applyMobileTokens, MOTION, reducedMotion } from "@mobile/lib/mobiletokens";
@@ -139,6 +140,8 @@
     // The plugin closes the socket on the way to the background; the connection
     // applies its own gates, so this is unconditional.
     const offAppState = installAppState(() => void connection.reconnect());
+    // A tap on the wrist when a session newly needs the person (lib/attention.ts).
+    const offAttention = attachAttention();
 
     // WebKit scrolls the document to reveal a caret even with scrolling disabled.
     const onFocusIn = (e: FocusEvent): void => {
@@ -158,6 +161,7 @@
     return () => {
       document.removeEventListener("focusin", onFocusIn);
       offAppState();
+      offAttention();
       offDevLink();
       offKeyboard();
       offType();

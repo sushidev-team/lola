@@ -30,7 +30,7 @@
       await connection.refresh();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const at = path === "" ? null : parseLocation(path, { paired: connection.daemons.length > 0 });
-      if (at) applyDevLink(router, { route: at.route, sheet: at.sheet });
+      if (at) applyDevLink(router, { route: at.route, sheet: at.sheet, tab: at.tab });
       await fixture.after?.();
     })();
   });

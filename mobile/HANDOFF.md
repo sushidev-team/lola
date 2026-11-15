@@ -29,10 +29,23 @@ exercised in this tree.
 - **Real handover.** Wi-Fi to cellular, sleep and wake, and direct-to-relay
   migration timing on a device.
 - **Local-network permission.** The iOS prompt and a denial, on hardware only.
-- **Deployed hub.** The relay against `lola.sushidev.kitchen`: the hub deploys
-  from `main`, and this branch is not deployed. An older hub answers 404 and
-  the daemon stays LAN-only. Ingress timeouts and the `--client-ip` bucket are
-  unmeasured.
+- **Deployed hub.** The relay against `lola.sushidev.kitchen` is not live.
+  The Hub workflow run for the mobile-rethink merge (59da966c, run
+  43693322369) failed at `make check` on a flaky `TestDevSetsUpAndServes`
+  ("TempDir RemoveAll cleanup: ... directory not empty"), so build-image and
+  deploy were skipped and the hub still answers 404 on every `/v1/relay/*`
+  path. The cause was `runHub` returning while its sweep, recheck, escalation
+  and digest goroutines could still write into `--data`; it now waits for
+  them (`hub/cmd/lola-hub/serve.go`, 50 race runs clean). The daemon now
+  leaves its `unsupported` hold on `lola hub sync` or within 15 minutes of a
+  heartbeat, and the phone lifts its `hub_too_old` pause on the next
+  `relayCred` that says available, so neither waits 6 h after the upgrade.
+  Still to do: deploy the hub from `main`, check that
+  `curl -si https://lola.sushidev.kitchen/v1/relay/phone` answers with a
+  `Lola-Relay-Code` header, run `lola hub sync`, then a cellular smoke test
+  (connection sheet Path = Relay; `lola hub status` relay line "on" with one
+  phone through the relay). Ingress timeouts and the `--client-ip` bucket are
+  unmeasured. The relay needs a joined team hub; there is no solo path.
 - **Bridge guard in WebKit.** That WebKit exposes `bridge` to a sandboxed
   `data:` frame and `BridgeGuard.swift` drops it (`/dev/bridge-guard`).
 - **App Store signing and distribution.** No TestFlight or App Store build has

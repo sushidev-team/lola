@@ -299,3 +299,28 @@ func TestFailedAuthenticationClosesBeforeAnyFrame(t *testing.T) {
 		t.Error("a frame from an unauthenticated peer reached the handler")
 	}
 }
+
+// TestOversizeResponseRefusesOnlyThatRequest: an answer over the frame cap is
+// never written, so the stream is still in sync. The phone gets a coded
+// refusal on that request's id and keeps its connection; tearing it down made
+// one large screenshot drop every stream the phone had open.
+func TestOversizeResponseRefusesOnlyThatRequest(t *testing.T) {
+	r := newRig(t)
+	r.handler.fn = func(_ context.Context, req protocol.Request) protocol.Response {
+		if req.Cmd == "panes" {
+			big, _ := json.Marshal(strings.Repeat("x", 2*protocol.MaxFrameBytes))
+			return protocol.Response{OK: true, Data: big}
+		}
+		return protocol.Response{OK: true}
+	}
+	r.req("big", "panes", protocol.Request{Session: "lola-fe-42"})
+	f := r.next()
+	if f.Type != protocol.FrameErr || f.ID != "big" {
+		t.Fatalf("got %+v, want a refusal on the request's id", f)
+	}
+	var p protocol.ErrPayload
+	if err := json.Unmarshal(f.Payload, &p); err != nil || p.Code != protocol.CodeFrameTooLarge {
+		t.Fatalf("refusal %+v %v", p, err)
+	}
+	r.wantOpen()
+}

@@ -6,7 +6,7 @@
 import { isFixtureName, type FixtureName } from "./index";
 
 export interface PreviewParams {
-  /** The path to open, with any `?sheet=` it carries folded in. "" keeps the app's own first screen. */
+  /** The path to open, with any `?sheet=` and `&tab=` it carries folded in. "" keeps the app's own first screen. */
   path: string;
   fixture: FixtureName | null;
   theme: string | undefined;
@@ -23,7 +23,10 @@ export function readParams(search: string): PreviewParams {
   const sheet = q.get("sheet") ?? "";
   const fixture = q.get("fixture") ?? "";
   const kb = Number(q.get("kb"));
-  const joined = route !== "" && sheet !== "" && !route.includes("sheet=") ? `${route}${route.includes("?") ? "&" : "?"}sheet=${encodeURIComponent(sheet)}` : route;
+  const tab = q.get("tab") ?? "";
+  const withSheet = route !== "" && sheet !== "" && !route.includes("sheet=") ? `${route}${route.includes("?") ? "&" : "?"}sheet=${encodeURIComponent(sheet)}` : route;
+  // A top-level `tab` (the sheet's tab) folds in the same way, after the sheet it belongs to.
+  const joined = tab !== "" && withSheet.includes("sheet=") && !withSheet.includes("tab=") ? `${withSheet}&tab=${encodeURIComponent(tab)}` : withSheet;
   return {
     path: joined,
     fixture: isFixtureName(fixture) ? fixture : null,

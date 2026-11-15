@@ -113,14 +113,32 @@ type ReviewArtifact struct {
 	Height int    `json:"height"`
 }
 
+// ReviewImageArgs names one retained screenshot. Without Chunked the answer is
+// the whole image as a data URL (the desktop's read; up to MaxImage, over a
+// phone's frame cap). With Chunked it is one ReviewImageChunkBytes part from
+// Offset, which must be a multiple of the chunk size.
 type ReviewImageArgs struct {
 	Package  string `json:"package"`
 	Artifact string `json:"artifact"`
+	Chunked  bool   `json:"chunked,omitempty"`
+	Offset   int64  `json:"offset,omitempty"`
 }
 
+// ReviewImageData is the whole image (DataURL) or, for a chunked read, one
+// part: Mime and Size describe the whole file, Data is at most
+// ReviewImageChunkBytes from Offset, and EOF marks the last part.
 type ReviewImageData struct {
 	DataURL string `json:"dataURL"`
+	Mime    string `json:"mime,omitempty"`
+	Size    int64  `json:"size,omitempty"`
+	Offset  int64  `json:"offset,omitempty"`
+	Data    []byte `json:"data,omitempty"`
+	EOF     bool   `json:"eof,omitempty"`
 }
+
+// ReviewImageChunkBytes is the raw size of one chunked screenshot part: its
+// base64 fits a remote frame, like an attachment part.
+const ReviewImageChunkBytes = AttachChunkBytes
 
 // Screen is -1 to add a screen, otherwise the existing screen's index to update.
 // Paths and revision identities are resolved by the daemon, never the caller.

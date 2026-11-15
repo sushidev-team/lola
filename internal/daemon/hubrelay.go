@@ -86,6 +86,9 @@ type hubRelay struct {
 	// conflictAt is the last conflict-driven rv rotation per device id, under
 	// mu (relayConflictRotateEvery).
 	conflictAt map[string]relayConflictMark
+	// unsupportedNudged is when a heartbeat last ended the unsupported hold
+	// (relayAfterHeartbeat), under mu.
+	unsupportedNudged time.Time
 
 	// Seams (tests replace them).
 	newClient func(url, dir string) (*hub.Client, *hub.RelayClient, hub.Identity, error)
@@ -210,10 +213,35 @@ func relayBackoffDelay(fails int, floor time.Duration) time.Duration {
 	return min(max(d, floor), hubproto.RelayBackoffMax)
 }
 
+// relayUnsupportedNudgeEvery bounds how often a successful heartbeat ends
+// the "unsupported" hold early. A hub that answered 404 to the relay may
+// be upgraded at any time; waiting out RelayUnsupportedRecheck (6 h)
+// would leave phones without the relay for most of a day, and one
+// rendezvous POST per interval to a hub that still says 404 costs nothing.
+const relayUnsupportedNudgeEvery = 15 * time.Minute
+
 // ---- nudges ----------------------------------------------------------------
 
 // hubRelayNudge asks the loop to re-evaluate now (reload, remote start/stop).
 func (d *Daemon) hubRelayNudge() { poke(d.relay().kick) }
+
+// relayAfterHeartbeat runs after every heartbeat the hub accepted. While the
+// relay sits in its "unsupported" hold it nudges the loop, at most once per
+// relayUnsupportedNudgeEvery: the hub answering again is the moment an
+// upgrade may have landed. In any other state it does nothing.
+func (d *Daemon) relayAfterHeartbeat(now time.Time) {
+	r := d.relay()
+	r.mu.Lock()
+	due := r.state == protocol.HubRelayStateUnsupported &&
+		(r.unsupportedNudged.IsZero() || now.Sub(r.unsupportedNudged) >= relayUnsupportedNudgeEvery)
+	if due {
+		r.unsupportedNudged = now
+	}
+	r.mu.Unlock()
+	if due {
+		d.hubRelayNudge()
+	}
+}
 
 // hubRelayDirty says the rendezvous set changed (a device paired, revoked or
 // rotated; a window opened or closed). The generation counter lets a sync that
@@ -268,7 +296,12 @@ func (d *Daemon) relayGather(now time.Time) relayInputs {
 	d.remoteMu.Unlock()
 	joined, why := d.relayJoinedWhy(in.hub)
 	switch {
-	case !in.remote.RelayOn() || cfgErr != "":
+	case cfgErr != "":
+		// Its own word, so a UI can tell "config.toml has an error" from
+		// "turned off". It comes first: the running config is the last valid
+		// one, so its relay switch may not be what the file now says.
+		in.reason = "config_error"
+	case !in.remote.RelayOn():
 		in.reason = "disabled"
 	case !in.hub.Enabled:
 		in.reason = "hub_off"

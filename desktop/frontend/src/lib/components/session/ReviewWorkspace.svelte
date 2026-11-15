@@ -28,13 +28,19 @@
   import ReviewVerification from './ReviewVerification.svelte';
   import { touchSurface } from '$lib/touchsurface';
   import ReviewCapture from './ReviewCapture.svelte';
+  import ReviewScreensPhone from './ReviewScreensPhone.svelte';
+  import { reviewCommentContext } from '$lib/reviewnote';
 
   // `embedded` mounts the workspace without its own modal (the phone's review sheet): the sheet draws the tabs
   // and "Mark reviewed" from `onstatus`, so there is one set of controls. `labels` is the phone's one-line
   // verification verdict. All three default to the desktop's behaviour.
+  // `can` answers whether this client may send a command (the phone's tiers); a control it may not
+  // send is not drawn. On a touch surface Verify and Capture are never drawn, whatever the tier:
+  // both run a command line or agent-written code on the Mac, which is no thing to author or audit
+  // on a phone. Their results stay readable.
   type Status = { tabs: { id: string; label: string }[]; canMark: boolean; reviewed: boolean; marking: boolean; mark: () => void };
-  let { sessionId, embedded = false, tab = $bindable('material'), onstatus, labels }: {
-    sessionId: string; embedded?: boolean; tab?: string; onstatus?: (s: Status) => void; labels?: { verified: string; notVerified: string };
+  let { sessionId, embedded = false, tab = $bindable('material'), onstatus, labels, can = () => true }: {
+    sessionId: string; embedded?: boolean; tab?: string; onstatus?: (s: Status) => void; labels?: { verified: string; notVerified: string }; can?: (cmd: string) => boolean;
   } = $props();
   const phone = touchSurface();
   const session = $derived(store.sessionById(sessionId));
@@ -68,7 +74,9 @@
   let canvasScreen = $state(0);
   let captureOpen = $state(false);
   let captureBusy = $state(false);
-  const captureHost = $derived(!!session && !session.goalId && session.location !== 'ssh' && (!session.sandbox || session.sandbox === 'none'));
+  const captureHost = $derived(!phone && can('reviewPackageCapture') && !!session && !session.goalId && session.location !== 'ssh' && (!session.sandbox || session.sandbox === 'none'));
+  const canVerify = $derived(!phone && can('reviewPackageVerify') && !!session && !session.goalId && (!session.sandbox || session.sandbox === 'none'));
+  const canComment = $derived(!!session && can('feedback'));
   let canvas = $state<ReviewCanvas>();
   const packageIdentity = $derived(current?.id);
   $effect(() => { packageIdentity; canvasScreen = 0; captureOpen = false; captureBusy = false; });
@@ -102,10 +110,10 @@
   const captureReason = $derived(!current ? 'Prepare review material first' : !captureHost ? 'Capture requires a local host checkout' : freshness === 'stale' ? 'Prepare review material for the current revision first' : 'Capture a page or element into this review');
   const sections = $derived(current ? reviewSections(current.body) : []);
   const tabList = $derived([{id:'material',label:'Overview'}, ...(current?.screens?.length || (embedded && captureHost) ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:phone ? 'Changes' : 'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]);
-  $effect(() => { onstatus?.({ tabs: tabList, canMark: !!current && reviewSupported, reviewed: reviewed?.package === current?.id, marking, mark: markReviewed }); });
+  $effect(() => { onstatus?.({ tabs: tabList, canMark: !!current && reviewSupported && can('reviewPackageMark'), reviewed: reviewed?.package === current?.id, marking, mark: markReviewed }); });
   const requests = new SvelteMap<string, { state: 'sending' | 'accepted' | 'error'; message: string }>();
   const request = $derived(requests.get(target));
-  const canRequest = $derived(!!session && !session.goalId && !['dead', 'exited', 'shell', 'orphaned'].includes(session.agentState ?? ''));
+  const canRequest = $derived(can('agentSay') && !!session && !session.goalId && !['dead', 'exited', 'shell', 'orphaned'].includes(session.agentState ?? ''));
 
   const assessmentKey = $derived(`${target}:risks:${current?.id ?? ''}`);
   const assessment = $derived(requests.get(assessmentKey));
@@ -197,10 +205,7 @@
     try { localStorage.setItem(draftKey, JSON.stringify({text:value,subject})); } catch { /* draft remains in memory */ }
   }
   function commentContext(section: string, screenIndex?: number): string {
-    if (!current) return "";
-    const screen = screenIndex === undefined ? undefined : current.screens?.[screenIndex];
-    const images = screen ? `Page: ${screen.url || 'unspecified'}; viewport: ${screen.viewport || 'unspecified'}${screen.selector ? `; element: ${screen.selector}` : ''}\nScreenshots: before ${screen.before || 'unavailable'}, after ${screen.after}\n` : '';
-    return `Review package ${current.id}\nRepository: ${current.repo || 'unspecified'}${current.pr ? ` PR #${current.pr}` : ''}\nBase: ${current.base}\nHead: ${current.head}\nSection: ${section}\n${images}`;
+    return reviewCommentContext(current, section, screenIndex);
   }
   function queueComment(section: string, text: string, screenIndex?: number, previousText?: string): boolean {
     if (!current || !text.trim()) return false;
@@ -241,13 +246,13 @@
 
 {#snippet checks()}
   {#if reviewSession && !embedded}<BeforeMerge session={reviewSession} reviewLayout/>{/if}
-  {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} {labels} canRun={!!session && !session.goalId && (!session.sandbox || session.sandbox === 'none')}/>{/key}{/if}
+  {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} {labels} canRun={canVerify} canRecover={can('reviewPackageRecover')}/>{/key}{/if}
   {#if session && !phone}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><p class="mb-3 text-xs text-faint">Not verified for this version.</p><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
 {/snippet}
 {#snippet reviewFeedback()}
   <section aria-label="Review feedback" class="review-feedback">
     <div class="feedback-heading"><h2><Icon name="send" size={16}/>Feedback</h2>{#if count}<span>Ready to send</span>{/if}</div>
-    {#if session && current}
+    {#if canComment && current}
       <Select aria-label="Comment section" value={subject} onchange={e => { subject = e.currentTarget.value; editDraft(draft); }}><option value="Write-up">Whole write-up</option>{#each sections as section,i}<option value={`Section ${i+1}: ${section.title}`}>{section.title}</option>{/each}</Select>
       {#if subject !== 'Write-up' && draft}<p class="text-sm text-ink-2">Restored draft: {subject}</p>{/if}
       <textarea aria-label="Review comment" class="review-input" rows="2" maxlength="3000" value={draft} oninput={e => editDraft(e.currentTarget.value)} placeholder="What needs changing or explaining?"></textarea>
@@ -256,7 +261,7 @@
     {#if count}
       {#if feedback.draftsFor(sessionId).length}<p class="text-sm text-ink-2">{feedback.draftsFor(sessionId).length} code comments</p>{/if}
       {#if notes}<details><summary><Chevron class="disclosure-chevron" />Inspect feedback draft</summary><textarea aria-label="Feedback draft" class="review-input mt-2" rows="6" value={notes} oninput={e => feedback.setNote(sessionId,e.currentTarget.value)}></textarea></details>{/if}
-      <div><Button size="sm" variant="primary" loading={feedback.isSending(sessionId)} disabled={!session} onclick={send}><Icon name="arrow-up" size={14}/>Send feedback to agent</Button></div>
+      {#if can('feedback')}<div><Button size="sm" variant="primary" loading={feedback.isSending(sessionId)} disabled={!session} onclick={send}><Icon name="arrow-up" size={14}/>Send feedback to agent</Button></div>{/if}
     {/if}
     {#if notice}<p role="status" class="text-sm text-ink-2">{notice}</p>{/if}
   </section>
@@ -271,25 +276,27 @@
       {#if lanes.length}<Select aria-label="Review repository" value={lane?.id} onchange={e => app = e.currentTarget.value}>{#each lanes as a}<option value={a.id}>{a.label}</option>{/each}</Select>{/if}
       {#if embedded && !phone && packages.length}<span class="text-sm text-faint">Version:</span>{/if}
       {#if packages.length}<Select aria-label={phone ? versionAria : 'Review version'} value={current?.id} onchange={e => selected = e.currentTarget.value}>{#each packages as p,i}<option value={p.id} data-selected-label={phone ? phoneVersion(p, i) : i === 0 ? 'Latest' : undefined} data-description={`Commit ${p.head.slice(0,8)}`}>{#if phone}{phoneVersion(p, i)}{:else}{i === 0 ? 'Latest · ' : ''}{new Date(p.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'})}{/if}</option>{/each}</Select>{/if}
-      {#if !embedded && current && reviewSupported}<Button size="sm" variant="secondary" loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button>{/if}
+      {#if !embedded && current && reviewSupported && can('reviewPackageMark')}<Button size="sm" variant="secondary" loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button>{/if}
       <Button size="sm" icon aria-label="Refresh review" title="Refresh review" loading={loading} onclick={refresh}><Icon name="refresh-cw" size={14} /></Button>
     </div>
     {#if markError}<p role="alert" class="w-full text-sm text-warn">{markError} Refresh review and retry.</p>{/if}
   </div>
   <div class="review-layout" class:panel-open={panelOpen && (tab !== 'material' || !current)}>
     <div class="review-main" class:capturing={captureOpen}>
-      <div class="review-tabs" class:embedded>{#if !embedded}<Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} />{/if}<div class="review-tab-actions">{#if !embedded || tab === 'visuals'}<Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{/if}{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div></div>
+      <div class="review-tabs" class:embedded>{#if !embedded}<Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} />{/if}<div class="review-tab-actions">{#if (!embedded || tab === 'visuals') && !phone && can('reviewPackageCapture')}<Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{/if}{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div></div>
       {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={tab === 'visuals' ? canvasScreen : -1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
       {#if tab === 'code' && session}
         <div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><p class="px-4 py-2 text-xs text-faint">Live checkout changes. These may differ from the retained review revision.</p><DiffView {sessionId} /></div>
       {:else if tab === 'since' && comparable && previous && current}
         {#if reviewCode && session}<div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><div class="px-4 py-2 text-xs text-faint"><Button size="xs" onclick={() => reviewCode = false}>Back to material comparison</Button><p>Exact published heads: {previous.head.slice(0,12)} to {current.head.slice(0,12)}. Uncommitted changes are excluded.</p></div><DiffView sessionId={target} reviewRange={{from:previous.id,to:current.id}}/></div>
         {:else}<div class="review-material"><ReviewChanges before={previous} after={current} onCode={session ? () => reviewCode = true : undefined}/></div>{/if}
+      {:else if phone && tab === 'visuals' && current?.screens?.length}
+        <div class="review-material">{#key current.id}<ReviewScreensPhone pkg={current} note={notes} {canComment} onComment={addScreenComment} />{/key}</div>
       {:else if embedded && tab === 'visuals' && !current?.screens?.length}
-        <div class="review-material"><p class="text-sm text-faint">No screenshots yet. Capture one from the running app.</p></div>
+        <div class="review-material"><p class="text-sm text-faint">{phone ? 'No screenshots in this version.' : 'No screenshots yet. Capture one from the running app.'}</p></div>
       {:else if tab === 'visuals' && current?.screens?.length}
         <div class="review-visuals">
-          {#key current.id}<ReviewCanvas bind:this={canvas} onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} canComment={!!session} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
+          {#key current.id}<ReviewCanvas bind:this={canvas} onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} {canComment} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
         </div>
       {:else}
         <div class="review-material">

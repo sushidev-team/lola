@@ -31,6 +31,8 @@
     /** A fact that is good news: "✓ CI pass". */
     good: "text-good",
     /** A fact that is merely true: an input reason, a retry count. */
+    /** A fact worth a second look that is not broken: waiting, an overlap. */
+    warn: "text-warn",
     grey: "text-pill-grey-fg",
   } as const;
 

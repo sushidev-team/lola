@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+  import { listedFeedbackCount } from "@mobile/lib/feedbackcount";
   import { untrack } from "svelte";
   import { changes } from "$lib/changes.svelte";
   import { pushSource } from "$lib/pushsource";
@@ -47,7 +48,7 @@
   // The desktop's feedback bar is hidden (hideFeedbackBar); one full-width button
   // takes its place once there is something to send. The general note lives in
   // the feedback sheet.
-  const drafts = $derived(feedback.count(id));
+  const drafts = $derived(listedFeedbackCount(id));
 
   // The "comment on a line" hint shows while there are no drafts, and is gone for good after the first one.
   const HINT_KEY = "lola.changes.draftHintDone";

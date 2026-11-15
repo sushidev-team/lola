@@ -640,6 +640,7 @@ func renderHubDaemon(d *protocol.HubStatusData, note string) string {
 			fmt.Fprintf(&b, "          team policy v%d does not apply: %s\n", p.Version, p.ApplyNote)
 		}
 	}
+	b.WriteString(renderHubRelay(d.Relay))
 	for _, s := range d.Sessions {
 		state := "working"
 		switch {
@@ -653,6 +654,65 @@ func renderHubDaemon(d *protocol.HubStatusData, note string) string {
 			state = "reported " + s.Reported
 		}
 		fmt.Fprintf(&b, "          session %s: %s (%s)\n", s.Session, s.Summary, state)
+	}
+	return b.String()
+}
+
+// renderHubRelay is the "relay:" line of `lola hub status`: whether a paired
+// phone can reach this machine away from home through the team hub, and why
+// not. Every sentence is fixed and keyed by the daemon's closed state and
+// reason vocabulary; the free-text lastError is shown only as "last problem",
+// as for the heartbeat, and nothing names a rendezvous, a bearer or a hash.
+func renderHubRelay(r *protocol.HubRelayInfo) string {
+	if r == nil {
+		return "relay:    off: phone access is not enabled on this machine ([remote].enabled)\n"
+	}
+	var line string
+	switch r.State {
+	case protocol.HubRelayStateConnected:
+		line = "on: paired phones can reach this machine away from home"
+	case protocol.HubRelayStateSyncing, protocol.HubRelayStateConnecting:
+		line = "connecting to the team hub"
+	case protocol.HubRelayStateUnsupported:
+		if r.Reason == "version" {
+			line = "the team hub speaks another relay version; update lola or the hub"
+		} else {
+			line = "the team hub has no relay yet; it needs an update (then run lola hub sync)"
+		}
+	case protocol.HubRelayStateRefused:
+		line = "the team hub refused this device; join it again"
+	case protocol.HubRelayStateBackoff:
+		line = "cannot reach the team hub's relay; retrying"
+		if r.Reason == "rate_limited" {
+			line = "the team hub asked lola to slow down; retrying later"
+		}
+	default: // off
+		switch r.Reason {
+		case "disabled":
+			line = "off: turned off ([remote].relay = false)"
+		case "config_error":
+			line = "off: config.toml has an error (fix it and run lola reload)"
+		case "hub_off":
+			line = "off: the team hub is turned off ([hub].enabled)"
+		case "not_joined":
+			line = "off: join a team hub to reach phones away from home (lola hub join)"
+		case "revoked":
+			line = "off: the team hub revoked this device; join it again"
+		case "remote_off":
+			line = "off: phone access is not running"
+		case "no_phones":
+			line = "off: no phone is paired yet (lola pair)"
+		default:
+			line = "off"
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "relay:    %s\n", line)
+	if r.ActiveConns > 0 || r.State == protocol.HubRelayStateConnected {
+		fmt.Fprintf(&b, "          phones connected through the relay: %d\n", r.ActiveConns)
+	}
+	if r.LastError != "" && r.State != protocol.HubRelayStateConnected {
+		fmt.Fprintf(&b, "          last problem: %s\n", r.LastError)
 	}
 	return b.String()
 }

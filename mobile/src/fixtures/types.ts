@@ -12,7 +12,9 @@ import type {
   AgentFeedItem,
   CheckpointsData,
   DiffData,
+  EndedSession,
   Event as ActivityEvent,
+  HubStatusData,
   PRReadinessData,
   ProjectInfo,
   PrsData,
@@ -29,6 +31,7 @@ import type { PaneInfo, ResyncPayload } from "../wire";
 export const FIXTURE_NAMES = [
   "empty",
   "busy",
+  "busy-grouped",
   "permission",
   "dialog",
   "question",
@@ -81,6 +84,10 @@ export interface Fixture {
   readiness: Record<string, PRReadinessData>;
   prs: PrsData;
   tickets: TicketsData;
+  /** The Mac's hubStatus; absent: joined, with the relay connected (daemon.ts). */
+  hubStatus?: HubStatusData;
+  /** Sessions that left the roster but stay readable; absent: none (daemon.ts). */
+  ended?: EndedSession[];
 
   /** Webview-local state the shared stores read when they are first imported. */
   storage: Record<string, string>;

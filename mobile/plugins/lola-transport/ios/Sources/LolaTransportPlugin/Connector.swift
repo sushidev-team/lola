@@ -339,6 +339,14 @@ final class Connector {
         persistRelay()
     }
 
+    /// The daemon vouches for its relay again: lift a hub-too-old pause.
+    private func relayAvailable() {
+        let before = policy
+        policy.relayAvailable()
+        guard policy != before else { return }
+        persistRelay()
+    }
+
     // MARK: Migration
 
     private func pathChanged(_ snapshot: PathMonitor.Snapshot) {
@@ -467,6 +475,7 @@ final class Connector {
             candidate: candidate, path: path, queue: queue, daemonId: record.daemonId,
             filter: InboundFilter(stored: credentials, credentialDead: policy.state == .credentialDead))
         session.onCredentials = { [weak self] in self?.storeCredentials($0) }
+        session.onRelayAvailable = { [weak self] in self?.relayAvailable() }
         session.onEnded = { [weak self, weak session] end in
             guard let session else { return }
             self?.sessionEnded(session, end)

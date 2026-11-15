@@ -41,6 +41,14 @@ files and refers here for every wire fact. The inner protocol is spec 01's;
   `relayCred`). The QR carries `{url, rv, tok}` of a single-use pairing window:
   `tok` is a random token the daemon mints for that window alone (never derived
   from the pairing secret); the hub stores its hash with the window's expiry.
+- **The relay needs a joined team hub.** It runs only while `[remote].enabled`,
+  `[hub].enabled` and a device identity enrolled at `[hub].url` are all true
+  (§10.3 "Wanted"). There is no solo path today: a Mac that is not in a team
+  hub is reachable by its phones on the LAN or a VPN only (`[remote].bind` can
+  name a VPN address as an IP literal). Joining needs an invite from a team
+  admin, and creating a team needs a create code unless the hub runs
+  `--open-teams`. `lola hub status`, the Mac's Phones settings and the phone's
+  "Away from Wi-Fi" row say which of these is missing, in fixed sentences.
 
 ---
 
@@ -1102,9 +1110,12 @@ States (`protocol.HubRelayState*`): `off`, `syncing`, `connecting`,
 4. `entries := d.relayEntries(now)`.
 
 **Wanted** = `Remote.RelayOn()` ∧ `Hub.Enabled` ∧ `cfgErr == ""` ∧ `joined` ∧
-`d.remote != nil`. Not wanted → reason one of `disabled`, `hub_off`,
-`not_joined`, `revoked`, `remote_off`. Wanted with `len(entries) == 0` →
-reason `no_phones`.
+`d.remote != nil`. Not wanted → reason one of `config_error` (`cfgErr != ""`:
+config.toml failed validation, checked first), `disabled` (`[remote].relay =
+false`), `hub_off`, `not_joined`, `revoked`, `remote_off`. Wanted with
+`len(entries) == 0` → reason `no_phones`. The reason is an open vocabulary on
+the wire: a client shows a generic sentence for a word it does not know, so a
+new word (as `config_error` was) needs no protocol change.
 
 ```
           ┌──────── kick / not wanted / no entries ───────────────────┐
@@ -1147,7 +1158,12 @@ reason `no_phones`.
   larger, capped at `RelayBackoffMax`). `fails` resets when a channel stayed
   `connected` ≥ `RelayBackoffResetAfter`.
 - `unsupported`: 404 from either endpoint (old hub, §15). Re-evaluate after
-  `RelayUnsupportedRecheck` or on `kick`.
+  `RelayUnsupportedRecheck` or on `kick`. Besides reload and remote start/stop,
+  two things kick it so an upgraded hub is found promptly: `cmd=hubSync`
+  (`lola hub sync`, the app's sync), and a heartbeat the hub accepted, at most
+  once per `relayUnsupportedNudgeEvery` (15 min) while the state is
+  `unsupported` (`relayAfterHeartbeat`). A kick ends only the hard holds
+  (`unsupported`, `refused`), never a 429 backoff floor.
 - `refused`: 401 `unauthorized` on a signed relay call → `d.hubRevokedIf(ctx,
   err)` (`hub.MarkRevoked`, identity dropped, overlay dropped via
   `hubForceReload`). That reload kicks the loop, which then finds `revoked`.
@@ -1500,6 +1516,7 @@ state behind. Name `checkRemoteRelay = "phone relay"`. Never critical.
 | `unsupported` | no | `this hub has no relay; it needs an upgrade` | `FixRelayHubUpgrade = "relay_hub_upgrade"` (new) |
 | `backoff` | no | `cannot reach the hub relay: <class>` | — |
 | `off/no_phones` | yes | `no paired phone` | — |
+| `off/config_error` | yes | `off: config.toml has an error` | — |
 | `connected`, `syncing`, `connecting` | yes | the state word | — |
 
 `FixRelayHubUpgrade` is added to `AllFixIDs` (`internal/doctor/fix.go`) and to
@@ -1633,9 +1650,12 @@ RTT this is ≈ 0.6–0.8 s.
   `RelayPhoneUnauthorizedPause` (1 h), or until a `relayCred` reply delivers a
   bearer. The next authenticated session (any path) sends `relayCred` with
   `holds` OMITTED, which the §10.6 table answers with a reissued bearer.
-  `hubTooOld` (404): pause `RelayUnsupportedRecheck` (6 h), or until the `url`
-  changes. Neither is permanent: a hub restored from backup or a misrouted
-  ingress recovers on its own.
+  `hubTooOld` (404): pause `RelayUnsupportedRecheck` (6 h), until the `url`
+  changes, or until a `relayCred` reply says `available: true` (the daemon
+  answers so only while it does not know the hub to lack the relay;
+  `InboundFilter` emits `relayAvailable`, `RelayPolicy.relayAvailable()` lifts
+  only this pause). Neither is permanent: a hub restored from backup or a
+  misrouted ingress recovers on its own.
 - `daemonOffline`, `busy`, `timeout`: exponential backoff 2 s → 60 s for relay
   attempts; direct attempts are unaffected. `rateLimited(t)`: wait `t`.
 - After every authenticated session (direct or relay), the phone sends
@@ -1729,10 +1749,10 @@ carries these fields and rules in its own sections:
 
 | Daemon | Hub | Behaviour |
 |---|---|---|
-| new | old (no `/v1/relay/*`) | Old hub's mux answers `404 not_found` (its `/` catch-all) to the rendezvous POST and to the control dial. Daemon → `unsupported`, rechecks every 6 h and on reload. `relayPairOffer` returns nil, so QRs carry no relay; `relayCred` answers `available: false`. No other hub call changes. |
+| new | old (no `/v1/relay/*`) | Old hub's mux answers `404 not_found` (its `/` catch-all) to the rendezvous POST and to the control dial. Daemon → `unsupported`, rechecks every 6 h, on reload, on `hubSync` and after an accepted heartbeat (at most every 15 min). `relayPairOffer` returns nil, so QRs carry no relay; `relayCred` answers `available: false`. No other hub call changes. |
 | old | new | An old daemon never calls `/v1/relay/*`; the store's `relay` map stays empty; `omitempty` keeps old snapshots byte-identical. A new hub reading an old snapshot finds no `relay` key (`init` makes the map). |
 | new | new, built without relay (`Config.Relay == nil`) | Same as old hub: 404. |
-| phone | old hub | Phone leg 404 without `Lola-Relay-Code` → `hubTooOld`, relay paused 6 h or until the hub URL changes. |
+| phone | old hub | Phone leg 404 without `Lola-Relay-Code` → `hubTooOld`, relay paused 6 h, until the hub URL changes, or until a `relayCred` reply says `available`. |
 | phone (old app, `lola1.` bearer) | any | Gone with spec 01 (`lola_insecure` deleted); not a relay concern. |
 
 `hubproto` additions are new files and new constants only; no existing frame,

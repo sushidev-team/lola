@@ -431,6 +431,14 @@ func (c *conn) handleReq(f *protocol.Frame) error {
 			return
 		}
 		if err := c.fw.WriteFrame(&out); err != nil {
+			// An oversize answer wrote nothing, so the stream is intact: refuse
+			// that one request and keep the connection. Every other write error
+			// means the transport is broken.
+			if errors.Is(err, protocol.ErrFrameTooLarge) {
+				c.srv.opts.logf()("remote: response for cmd=%s too large: %v", logSafe(cmd), err)
+				c.refuse(id, protocol.CodeFrameTooLarge, "response exceeds the maximum frame size")
+				return
+			}
 			c.failWrite(err)
 		}
 	}()

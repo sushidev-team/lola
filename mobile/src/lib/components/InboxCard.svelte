@@ -142,8 +142,8 @@
     router.push({ name: "session", id: model.id, seg });
   }
 
-  /** The card's own tap: checks lands on review, everything else on the conversation. */
-  const openCard = (): void => open(action === "checks" ? "review" : "conversation");
+  /** The card's own tap: checks, an approved PR and the review bucket land on review, everything else on the conversation. */
+  const openCard = (): void => open(action === "checks" || model.bucket === "review" || model.session.delivery === "approved" ? "review" : "conversation");
 
   async function run(): Promise<void> {
     if (!action || disabled) return;

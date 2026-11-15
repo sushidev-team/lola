@@ -95,6 +95,9 @@ func (d *Daemon) reviewPass(ctx context.Context, s session.Session, p reviewProv
 	}
 	d.reviewActive[s.ID]++
 	d.reviewMu.Unlock()
+	// The row's reviewRunning reads reviewActive, which is not in the store,
+	// so its start and end poke the row themselves.
+	d.pokeReviewRow(s.ID)
 	defer func() {
 		d.reviewMu.Lock()
 		d.reviewActive[s.ID]--
@@ -102,6 +105,7 @@ func (d *Daemon) reviewPass(ctx context.Context, s session.Session, p reviewProv
 			delete(d.reviewActive, s.ID)
 		}
 		d.reviewMu.Unlock()
+		d.pokeReviewRow(s.ID)
 	}()
 	repo, sha, gated := d.beginReviewGate(ctx, s, p)
 	res := d.runReviewChain(ctx, s, p)

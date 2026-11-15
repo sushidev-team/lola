@@ -23,7 +23,9 @@
   // `hideMerge` leaves the merge controls to the host (the phone's sticky bar owns the one merge CTA);
   // `heading = false` drops the "PR status" title. Both default to the desktop's layout.
   // `onunknown` (phone only) tells the host when GitHub could not be read, so its merge button can say so.
-  let { session, reviewLayout = false, can = () => true, hideMerge = false, heading = true, onunknown }: { session: SessionInfo; reviewLayout?: boolean; can?: (cmd: string) => boolean; hideMerge?: boolean; heading?: boolean; onunknown?: (unknown: boolean) => void } = $props();
+  // `onfacts` hands each readiness answer to the host (the phone's Review segment summarises its checks
+  // from it instead of asking GitHub a second time); `target` is the session or stack lane it is for.
+  let { session, reviewLayout = false, can = () => true, hideMerge = false, heading = true, onunknown, onfacts }: { session: SessionInfo; reviewLayout?: boolean; can?: (cmd: string) => boolean; hideMerge?: boolean; heading?: boolean; onunknown?: (unknown: boolean) => void; onfacts?: (f: { target: string; number: number; data: PRReadinessData }) => void } = $props();
   const phone = touchSurface();
   const prs = $derived(session.stack
     ? (session.apps ?? []).filter(a => a.number).map(a => ({ id: `${session.id}~${a.name}`, number: a.number!, label: appLabel(a), url: a.url ?? '' }))
@@ -116,6 +118,7 @@
       const result = await readPRReadiness(target.id, target.number);
       if (version !== generation || key !== identity) return;
       data = result; loadedFor = key; error = '';
+      onfacts?.({ target: target.id, number: target.number, data: result });
     } catch (e) { if (version === generation && key === identity) error = String(e); }
     finally { if (version === generation) loading = false; }
   }

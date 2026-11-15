@@ -8,7 +8,11 @@ vi.mock("@mobile/native", () => ({
   },
 }));
 
-import { fireEvent, render, screen } from "@testing-library/svelte";
+const { HubStatus } = vi.hoisted(() => ({ HubStatus: vi.fn() }));
+vi.mock("@mobile/wailsshim", () => ({ HubService: { Status: HubStatus } }));
+
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { tiers } from "@mobile/lib/tiers.svelte";
 import { connection } from "@mobile/lib/connection.svelte";
 import { router } from "@mobile/lib/router.svelte";
 import Connection from "./connection.svelte";
@@ -51,6 +55,22 @@ describe("connection sheet", () => {
     expect(screen.getByText("Last race")).toBeTruthy();
     expect(screen.queryByText("Frames in")).toBeNull();
     expect(screen.queryByText("None")).toBeNull();
+  });
+
+  it("says whether this phone can reach the Mac away from Wi-Fi, from the Mac's own relay state", async () => {
+    tiers.set(["read"]);
+    HubStatus.mockResolvedValue({ enabled: true, joined: true, relay: { state: "unsupported", reason: "no_relay", activeConns: 0, rendezvous: 1 } });
+    render(Connection);
+    expect(screen.getByText("Away from Wi-Fi")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Team hub needs an update.")).toBeTruthy());
+    expect(screen.getByText("Update needed")).toBeTruthy();
+  });
+
+  it("says Available once the Mac's relay is connected", async () => {
+    tiers.set(["read"]);
+    HubStatus.mockResolvedValue({ enabled: true, joined: true, relay: { state: "connected", activeConns: 1, rendezvous: 1 } });
+    render(Connection);
+    await waitFor(() => expect(screen.getByText("Available")).toBeTruthy());
   });
 
   it("closes through the router", async () => {

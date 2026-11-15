@@ -50,7 +50,7 @@ const pkg = (id: string, title: string, screens: ReturnType<typeof screen>[]) =>
 });
 
 export const fixture: Fixture = base("review-package", {
-  routes: ["/session/s5/review?sheet=reviewPackage"],
+  routes: ["/session/s5/review?sheet=reviewPackage", "/session/s5/review?sheet=reviewPackage&tab=visuals"],
   sessions,
   projects: withCounts(PROJECTS, sessions),
   talk: { s5: talk("s5") },

@@ -19,7 +19,7 @@ vi.mock("@mobile/lib/inbox.svelte", async (orig) => {
 
 import Inbox from "../screens/Inbox.svelte";
 import * as inboxModule from "../lib/inbox.svelte";
-import { InboxModel, attachInbox, inbox, rowModel, type RowModel } from "../lib/inbox.svelte";
+import { InboxModel, attachInbox, inbox, inboxView, rowModel, type RowModel } from "../lib/inbox.svelte";
 import { router } from "../lib/router.svelte";
 import { ESTIMATE, OVERSCAN, VIRTUALIZE_AT } from "../lib/components/VirtualList.svelte";
 import { ShimBridge } from "../wailsshim/bridge";
@@ -208,5 +208,27 @@ describe("virtualization", () => {
     expect(mounted).toBeGreaterThanOrEqual(visible);
     expect(mounted).toBeLessThanOrEqual(visible + 2 * OVERSCAN + 1);
     expect(document.querySelector('[data-vkey="row:s299"]')).toBeNull();
+  });
+
+  it("windows a 300-row Inbox grouped by project too", async () => {
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => VIEWPORT });
+    router.stack = [{ name: "tab", tab: "inbox" }];
+    router.sheet = "";
+    inbox.ingest([]);
+    inboxView.set("project");
+    try {
+      render(Inbox);
+      // Three project headers plus 300 rows.
+      inbox.ingest(rowsOf(300).map((r, i) => ({ ...r, project: `p${i % 3}` }) as SessionInfo));
+      await tick();
+      await tick();
+      expect(document.querySelector("[role=list]")).toHaveAttribute("data-virtual", "on");
+      const mounted = document.querySelectorAll("[data-vkey]").length;
+      expect(mounted).toBeLessThanOrEqual(Math.ceil(VIEWPORT / ESTIMATE.row) + 2 * OVERSCAN + 1);
+      expect(document.querySelector('[data-vkey="group:p0"]')).not.toBeNull();
+      expect(document.querySelector('[data-vkey="row:s299"]')).toBeNull();
+    } finally {
+      inboxView.set("status");
+    }
   });
 });

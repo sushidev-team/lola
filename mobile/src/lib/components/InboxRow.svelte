@@ -3,6 +3,10 @@
   import Icon from "$lib/components/Icon.svelte";
   import { ageLabel, metaLine, rowAriaLabel, type RowModel } from "@mobile/lib/inbox.svelte";
   import { reducedMotion } from "@mobile/lib/mobiletokens";
+  import { router } from "@mobile/lib/router.svelte";
+  import { mergeQueueChip } from "$lib/crosssession";
+  import MetaPill from "./MetaPill.svelte";
+  import { pillTone } from "./SessionChips.svelte";
   import StatusDot from "./StatusDot.svelte";
 
   // One dense Inbox row: a leading 6 pt state dot, title over a meta line
@@ -29,6 +33,12 @@
 
   const reduced = reducedMotion();
 
+  // A row in the review bucket opens the Review segment; every other row is the host's `onopen`.
+  function openRow(): void {
+    if (model.bucket === "review") router.push({ name: "session", id: model.id, seg: "review" });
+    else onopen();
+  }
+
   function enter(_node: Element) {
     return {
       duration: animate && !reduced ? 180 : 0,
@@ -40,14 +50,16 @@
   const settled = $derived(model.bucket === "done");
   const age = $derived(ageLabel(model.since, model.ageFallback));
   const meta = $derived(metaLine(model, projectLabel));
-  const spoken = $derived(rowAriaLabel(model, projectLabel));
+  // The queue place only: a row is dense, and the overlap warning lives on the session.
+  const queue = $derived(mergeQueueChip(model.session.mergeQueue));
+  const spoken = $derived([rowAriaLabel(model, projectLabel), queue?.label ?? ""].filter((p) => p !== "").join(", "));
 </script>
 
 <button
   type="button"
   class="flex min-h-14 w-full touch-manipulation items-center pl-4 text-left active:bg-sel"
   aria-label={spoken}
-  onclick={onopen}
+  onclick={openRow}
   in:enter|global
   out:enter|global
 >
@@ -57,6 +69,9 @@
       <span class="min-w-0 truncate text-body {settled ? 'text-faint' : 'text-ink'}">{model.title}</span>
       <span class="truncate text-footnote text-faint">{meta}</span>
     </span>
+    {#if queue}
+      <MetaPill tone={pillTone(queue.tone)} ground="grey">Queue #{model.session.mergeQueue?.position}</MetaPill>
+    {/if}
     {#if age}
       <span class="num shrink-0 text-footnote text-faint">{age}</span>
     {/if}

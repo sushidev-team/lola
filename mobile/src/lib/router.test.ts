@@ -74,6 +74,21 @@ describe("path grammar", () => {
     expect(parseRoute(p, ctx)).toBeNull();
   });
 
+  it("carries a sheet's tab, and only with a sheet", () => {
+    const loc = { route: { name: "session", id: "s5", seg: "review" } as Route, sheet: "reviewPackage" as const, tab: "visuals" };
+    expect(formatLocation(loc)).toBe("/session/s5/review?sheet=reviewPackage&tab=visuals");
+    expect(parseLocation(formatLocation(loc), ctx)).toEqual(loc);
+    expect(parseLocation("/session/s5/review?tab=visuals", ctx)).toBeNull();
+    expect(parseLocation("/session/s5/review?sheet=reviewPackage&tab=Visuals!", ctx)).toBeNull();
+  });
+
+  it("opens a sheet on a tab and forgets the tab on close", () => {
+    router.open("reviewPackage", "visuals");
+    expect(router.sheetTab).toBe("visuals");
+    router.close();
+    expect(router.sheetTab).toBe("");
+  });
+
   it("sends /connect/* to the inbox while paired", () => {
     expect(parseRoute("/connect", { paired: true, debug: true })).toEqual({ name: "tab", tab: "inbox" });
     expect(parseRoute("/connect/expired", { paired: true, debug: true })).toEqual({ name: "tab", tab: "inbox" });

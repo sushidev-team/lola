@@ -13,6 +13,7 @@ import * as Hub from "./hub";
 import type { Route } from "./routes";
 import * as SSH from "./ssh";
 import * as Talk from "./talk";
+import { clearReviewImageCache } from "./reviewimage";
 import { clearAttachmentCache } from "./talkimage";
 import * as Term from "./term";
 import { expectKeptByDaemon, remoteFieldRules } from "./testkit";
@@ -126,7 +127,8 @@ const ROWS: Record<string, Row> = {
   },
   "DaemonService.ReviewPackageImage": {
     call: () => Daemon.ReviewPackageImage("s1", "p1", "shot"),
-    sends: { session: "s1", args: { package: "p1", artifact: "shot" } },
+    answers: { reviewPackageImage: { dataURL: "", mime: "image/png", size: 3, data: "AAAA", eof: true } },
+    sends: { session: "s1", args: { package: "p1", artifact: "shot", chunked: true } },
   },
   "DaemonService.ReviewPackageMark": {
     call: () => Daemon.ReviewPackageMark("s1", "p1", "p0"),
@@ -237,6 +239,7 @@ const forwarded = Object.entries(SERVICES).flatMap(([service, { routes }]) =>
 beforeEach(() => {
   request.mockReset();
   clearAttachmentCache();
+  clearReviewImageCache();
   native.native.readClipboardImage.mockReset();
   native.native.readClipboardImage.mockResolvedValue({ present: true, mime: "image/png", data: "AAAA" });
 });

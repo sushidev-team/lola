@@ -1604,6 +1604,42 @@ export interface OpenTicketArgs {
 }
 
 /**
+ * PRCheck is one check on the PR head. Display only: nothing acts on it. Name,
+ * Workflow and Description are GitHub's (or a third party's) text, clipped;
+ * URL is https or empty, never another scheme.
+ */
+export interface PRCheck {
+    "name": string;
+    "workflow"?: string;
+
+    /**
+     * GitHub's word, e.g. SUCCESS, FAILURE, IN_PROGRESS, EXPECTED
+     */
+    "state": string;
+
+    /**
+     * pass | fail | pending | skipped
+     */
+    "bucket": string;
+    "url"?: string;
+    "description"?: string;
+
+    /**
+     * Required: the base branch's rulesets require this check. False also
+     * when the requirements are unknown.
+     */
+    "required"?: boolean;
+
+    /**
+     * Gate: one of lola's own review statuses (lola/*), a review verdict and
+     * never CI.
+     */
+    "gate"?: boolean;
+    "startedAt"?: string;
+    "completedAt"?: string;
+}
+
+/**
  * PRReadiness contains facts, not a promise that GitHub will permit a merge.
  */
 export interface PRReadinessData {
@@ -1624,6 +1660,15 @@ export interface PRReadinessData {
     "summariesPending"?: boolean;
     "mergeMethod": string;
     "mergeBlocked": string;
+
+    /**
+     * CheckList is every check and commit status on ChecksHead. It is absent
+     * when the checks could not be bound to the head (or from an older
+     * daemon); a client then links to GitHub instead. ChecksTruncated says
+     * GitHub holds more entries than the list carries.
+     */
+    "checkList"?: PRCheck[] | null;
+    "checksTruncated"?: boolean;
 }
 
 /**
@@ -2063,10 +2108,27 @@ export interface ReviewData {
     "skipped"?: string;
     "findings"?: string;
     "message"?: string;
+
+    /**
+     * Started: the pass was launched detached and has not finished (a
+     * phone's request). Ran, Clean and Findings are then unset; the session
+     * row's reviewRunning and reviewTallies report the outcome.
+     */
+    "started"?: boolean;
 }
 
+/**
+ * ReviewImageData is the whole image (DataURL) or, for a chunked read, one
+ * part: Mime and Size describe the whole file, Data is at most
+ * ReviewImageChunkBytes from Offset, and EOF marks the last part.
+ */
 export interface ReviewImageData {
     "dataURL": string;
+    "mime"?: string;
+    "size"?: number;
+    "offset"?: number;
+    "data"?: string | null;
+    "eof"?: boolean;
 }
 
 /**
@@ -2107,6 +2169,20 @@ export interface ReviewScreen {
     "url"?: string;
     "viewport"?: string;
     "selector"?: string;
+}
+
+/**
+ * ReviewTallyInfo is one review kind's findings counted by severity on the
+ * session's current PR. All zero is a clean pass. At is when the pass
+ * answered (a timestamp, not a formatted age).
+ */
+export interface ReviewTallyInfo {
+    "kind": string;
+    "blocker"?: number;
+    "major"?: number;
+    "minor"?: number;
+    "other"?: number;
+    "at"?: string;
 }
 
 /**
@@ -3374,6 +3450,15 @@ export interface SessionInfo {
      * be verifiably resting at its prompt.
      */
     "feedbackPending"?: boolean;
+
+    /**
+     * ReviewRunning is true while a review pass runs for this session.
+     * ReviewTallies are the findings of each review kind's last answered pass
+     * on the CURRENT PR, by kind; a kind with no entry has not reviewed this
+     * PR. Display only: nothing on a client may gate on them.
+     */
+    "reviewRunning"?: boolean;
+    "reviewTallies"?: ReviewTallyInfo[] | null;
 
     /**
      * Usage is this session's token usage (internal/usage), nil when nothing

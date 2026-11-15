@@ -51,8 +51,12 @@ func RelayResult(cfg *config.Config, dir string, daemonUp bool) (Result, bool) {
 		}
 		return row(false, "cannot reach the hub relay: "+class, FixNone)
 	case "off":
-		if st.Reason == "no_phones" {
+		switch st.Reason {
+		case "no_phones":
 			return row(true, "no paired phone", FixNone)
+		case "config_error":
+			// The config row already fails for the cause; this row names it.
+			return row(true, "off: config.toml has an error", FixNone)
 		}
 		return row(true, "off", FixNone)
 	case "connected", "syncing", "connecting":

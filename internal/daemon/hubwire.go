@@ -938,6 +938,7 @@ func (d *Daemon) hubHeartbeat(ctx context.Context, api hubAPI, snap hubSnapshot)
 		return false
 	}
 	now := d.hub.now()
+	d.relayAfterHeartbeat(now)
 	d.hub.mu.Lock()
 	d.hub.lastBeat = now
 	for _, l := range resp.Renewed {

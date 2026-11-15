@@ -375,6 +375,12 @@ body,
        second tap of any quick interaction. */
     touch-action: manipulation;
   }
+  /* No OS-drawn clear control: the search field draws its own. */
+  input[type="search"]::-webkit-search-cancel-button,
+  input[type="search"]::-webkit-search-decoration {
+    -webkit-appearance: none;
+    appearance: none;
+  }
 }
 
 /* The terminal is the exception: it owns its own gestures, because a touch drag

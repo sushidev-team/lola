@@ -1,12 +1,20 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
-	"github.com/sushidev-team/lola/internal/gitdiff"
+	"image"
+	pngenc "image/png"
+	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/sushidev-team/lola/internal/gitdiff"
 
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
@@ -125,5 +133,78 @@ func TestReviewMarkAndDiffUseRetainedIdentities(t *testing.T) {
 	var data protocol.ReviewPackagesData
 	if err := json.Unmarshal(read.Data, &data); err != nil || data.Reviewed[s.ID].Package != from.ID || !data.ReviewTracking {
 		t.Fatalf("retained review %+v %v", data, err)
+	}
+}
+
+// TestReviewImageChunkedReadFitsAFrame: the desktop keeps its one-shot data
+// URL, while a chunked read hands out parts whose frames stay under the
+// remote cap and reassemble to the exact retained bytes.
+func TestReviewImageChunkedReadFitsAFrame(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	s.Worktree, s.Repo = t.TempDir(), "acme/app"
+	d.sessions.Upsert(s)
+	img := image.NewNRGBA(image.Rect(0, 0, 600, 600))
+	rng := rand.New(rand.NewPCG(1, 2))
+	for i := range img.Pix {
+		img.Pix[i] = byte(rng.Uint32())
+	}
+	var png bytes.Buffer
+	if err := pngenc.Encode(&png, img); err != nil {
+		t.Fatal(err)
+	}
+	if png.Len() <= 2*protocol.ReviewImageChunkBytes {
+		t.Fatalf("fixture too small to need three parts: %d", png.Len())
+	}
+	if err := os.WriteFile(filepath.Join(s.Worktree, "after.png"), png.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := reviewpack.Manifest{Version: 1, Title: "Review", Body: "Screens", Base: strings.Repeat("a", 40), Head: strings.Repeat("b", 40), Screens: []reviewpack.Screen{{Title: "Home", After: "after.png"}}}
+	p, err := reviewpack.Publish(d.home, s.ID, s.Worktree, s.Repo, 42, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(args protocol.ReviewImageArgs) protocol.Response {
+		raw, _ := json.Marshal(args)
+		return d.handle(context.Background(), protocol.Request{Cmd: protocol.CmdReviewImage, Session: s.ID, Args: raw})
+	}
+	whole := read(protocol.ReviewImageArgs{Package: p.ID, Artifact: p.Screens[0].After})
+	var full protocol.ReviewImageData
+	if err := json.Unmarshal(whole.Data, &full); err != nil || full.DataURL != "data:image/png;base64,"+base64.StdEncoding.EncodeToString(png.Bytes()) || full.Data != nil {
+		t.Fatalf("desktop read changed: %v", err)
+	}
+	var got []byte
+	for offset, parts := int64(0), 0; ; parts++ {
+		r := read(protocol.ReviewImageArgs{Package: p.ID, Artifact: p.Screens[0].After, Chunked: true, Offset: offset})
+		if !r.OK {
+			t.Fatal(r.Error)
+		}
+		frame := protocol.Frame{V: protocol.FrameVersionCurrent, Type: protocol.FrameResp, ID: "x"}
+		if err := frame.SetPayload(r); err != nil {
+			t.Fatal(err)
+		}
+		if enc, _ := json.Marshal(frame); len(enc) > protocol.MaxFrameBytes {
+			t.Fatalf("part %d is %d bytes, over the frame cap", parts, len(enc))
+		}
+		var part protocol.ReviewImageData
+		if err := json.Unmarshal(r.Data, &part); err != nil || part.DataURL != "" || part.Mime != "image/png" || part.Size != int64(png.Len()) || part.Offset != offset {
+			t.Fatalf("part %d: %+v %v", parts, part.Offset, err)
+		}
+		got = append(got, part.Data...)
+		if part.EOF {
+			break
+		}
+		offset += int64(len(part.Data))
+		if parts > 10 {
+			t.Fatal("no end of file")
+		}
+	}
+	if !bytes.Equal(got, png.Bytes()) {
+		t.Fatal("chunks do not reassemble to the retained image")
+	}
+	for _, bad := range []int64{-1, 7, int64(png.Len()) + protocol.ReviewImageChunkBytes} {
+		if r := read(protocol.ReviewImageArgs{Package: p.ID, Artifact: p.Screens[0].After, Chunked: true, Offset: bad}); r.OK {
+			t.Fatalf("offset %d accepted", bad)
+		}
 	}
 }

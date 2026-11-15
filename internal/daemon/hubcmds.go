@@ -124,6 +124,10 @@ func (d *Daemon) handleHub(ctx context.Context, req protocol.Request) protocol.R
 		d.hubDropCaches()
 		d.hubPolicyDue()
 		d.hubNudge()
+		// A sync is also how a human says "the hub changed": it ends a
+		// relay hold on a hub that had no relay (a kick ends only the hard
+		// holds, never a 429 backoff floor).
+		d.hubRelayNudge()
 		data = protocol.HubSyncData{Queued: true}
 	default:
 		err = fmt.Errorf("unknown cmd %q", req.Cmd)

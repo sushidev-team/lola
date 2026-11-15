@@ -162,6 +162,18 @@ public struct RelayPolicy: Equatable, Sendable {
         pausedURL = nil
     }
 
+    /// The daemon answered `relayCred` with `available`: it has not seen the
+    /// hub refuse the relay, so a `hubTooOld` pause (which may stem from a
+    /// hub upgraded since) is lifted. Every other state is kept: a dead
+    /// credential lifts only on a stored bearer, and a backoff keeps its floor.
+    public mutating func relayAvailable() {
+        guard state == .hubTooOld else { return }
+        state = .ok
+        retryAt = nil
+        failures = 0
+        pausedURL = nil
+    }
+
     private mutating func backoff(now: Date) {
         failures += 1
         state = .backoff

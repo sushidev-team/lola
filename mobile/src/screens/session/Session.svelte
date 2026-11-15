@@ -38,6 +38,7 @@
   import { copy } from "@mobile/lib/copy";
   import { router } from "@mobile/lib/router.svelte";
   import { can } from "@mobile/lib/tiers.svelte";
+  import SessionChips from "@mobile/lib/components/SessionChips.svelte";
   import SessionHeader from "./SessionHeader.svelte";
 
   // The Session screen (spec §4.4, §5.2). The root pays the keyboard's height as
@@ -59,12 +60,22 @@
 
   // Review packages exist with or without a PR, so any checkout is asked once per
   // session; the effect reads only primitives, so a sessions push that leaves them
-  // alone asks nothing.
+  // alone asks nothing. Packages have no push topic, so the count is asked again
+  // when the review package sheet closes (the person may have asked the agent for
+  // material there); that is the only re-read.
   let packages = $state({ id: "", n: 0 });
+  let packagesAsked = $state(0);
+  let lastSheet = "";
+  $effect(() => {
+    const open = router.sheet;
+    if (lastSheet === "reviewPackage" && open !== "reviewPackage") untrack(() => packagesAsked++);
+    lastSheet = open;
+  });
   const packageCount = $derived(packages.id === id ? packages.n : 0);
   const hasCheckout = $derived(!!session && changesOffered(session));
   $effect(() => {
     const sid = id;
+    void packagesAsked;
     if (!sid || !hasCheckout || !can("reviewPackages")) return;
     let live = true;
     DaemonService.ReviewPackages(sid)
@@ -99,6 +110,9 @@
 >
   <div class="min-w-0 pt-[var(--lola-top-inset,env(safe-area-inset-top,0px))]">
     <SessionHeader {session} {id} onback={() => router.back()} onmenu={() => router.open("sessionMenu")} />
+    {#if session}
+      <div class="px-4 pt-1"><SessionChips {session} /></div>
+    {/if}
   </div>
   <div class="min-w-0 px-4 pt-1 pb-2">
     {#if session}

@@ -10,6 +10,8 @@
 //  - A card has exactly one action, chosen by the first matching row of the
 //    table in `cardAction`. `approveChoice` is the only rule that makes Approve
 //    available, and it accepts nothing but a lone choice labelled exactly "Yes".
+//  - Grouping is a preference, not a route: `inboxView` holds it, and a grouped
+//    list is built from the same models and the same keys as the status list.
 //  - Everything on a card is display. The daemon re-reads the pane against the
 //    hash before any key goes (`agentChoose`).
 
@@ -25,6 +27,8 @@ import { bootMs, readStatus } from "./settings.svelte";
 import { copy } from "./copy";
 import type { InboxFilter } from "./router.svelte";
 import { statusWord } from "./statustone";
+import { loadInboxGroup, saveInboxGroup, type InboxGroup } from "./prefs";
+import { buildRows, stackMembers, type LayoutGroup, type LayoutProject } from "$lib/sidebarlayout";
 import { VIRTUALIZE_AT, type RowKind } from "./components/VirtualList.svelte";
 
 /**
@@ -87,7 +91,7 @@ export function approveChoice(prompt: AgentPrompt | null | undefined): AgentChoi
 
 const REGRESSED = new Set(["ci_failed", "changes_requested", "merge_conflict"]);
 
-function bucketOf(s: SessionInfo): Bucket {
+export function bucketOf(s: SessionInfo): Bucket {
   const key = kanbanKey(s.agentState, s.delivery);
   if (key === "needs" || key === "fixing" || s.delivery === "approved") return "needs";
   if (key === "review") return "review";
@@ -312,6 +316,8 @@ export function attachInbox(model: InboxModel = inbox): () => void {
 /** One entry of the Inbox's flat, virtualized list. */
 export type InboxItem =
   | { key: string; kind: "section"; bucket: Bucket; count: number }
+  /** A project header in a list grouped by project. Drawn like a section header. */
+  | { key: string; kind: "group"; project: string; label: string; count: number }
   | { key: string; kind: "card"; model: RowModel }
   | { key: string; kind: "row"; model: RowModel }
   | { key: string; kind: "more"; hidden: number }
@@ -320,7 +326,7 @@ export type InboxItem =
 
 /** The row kind VirtualList estimates heights with. */
 export function itemKind(it: InboxItem): RowKind {
-  return it.kind === "section" ? "section" : it.kind === "card" || it.kind === "clear" ? "card" : "row";
+  return it.kind === "section" || it.kind === "group" ? "section" : it.kind === "card" || it.kind === "clear" ? "card" : "row";
 }
 
 /**
@@ -355,6 +361,15 @@ export class ItemCache {
     return it;
   }
 
+  group(project: string, label: string, count: number): InboxItem {
+    const key = `group:${project}`;
+    const had = this.byKey.get(key);
+    if (had?.kind === "group" && had.label === label && had.count === count) return had;
+    const it: InboxItem = { key, kind: "group", project, label, count };
+    this.byKey.set(key, it);
+    return it;
+  }
+
   more(hidden: number): InboxItem {
     const had = this.byKey.get("more:done");
     if (had?.kind === "more" && had.hidden === hidden) return had;
@@ -372,14 +387,17 @@ export class ItemCache {
  * The list for a filter: sections in order, empty ones dropped, Done cut to
  * `DONE_VISIBLE` unless `showAllDone`. An unfiltered list with an empty Needs
  * section starts with the `clear` block. Items come from `cache`, so a list
- * built from the same models twice holds the same objects.
+ * built from the same models twice holds the same objects. With `grouping`,
+ * the list is one section per project instead (see `groupedItems`).
  */
 export function inboxItems(
   buckets: Record<Bucket, readonly RowModel[]>,
   filter: InboxFilter,
   showAllDone: boolean,
   cache: ItemCache = new ItemCache(),
+  grouping?: GroupOptions,
 ): InboxItem[] {
+  if (grouping) return groupedItems(buckets, filter, showAllDone, cache, grouping);
   const out: InboxItem[] = [];
   // Nothing needs you but something else is listed: lead with the all-clear block.
   if (filter === "" && buckets.needs.length === 0 && BUCKETS.some((b) => buckets[b].length > 0)) {
@@ -395,6 +413,102 @@ export function inboxItems(
     for (const m of shown) out.push(cache.model(m));
     if (shown.length < list.length) out.push(cache.more(list.length - shown.length));
   }
+  return out;
+}
+
+/** The Inbox's grouping choice, remembered across launches. */
+export class InboxView {
+  group = $state<InboxGroup>(loadInboxGroup());
+
+  set(group: InboxGroup): void {
+    this.group = group;
+    saveInboxGroup(group);
+  }
+}
+
+export const inboxView = new InboxView();
+
+/**
+ * Project ids in the desktop's arrangement: loose projects in config order with
+ * each folder spliced in at its position, a folder's members in place, and a
+ * stack's members right after the stack (the sidebar hides them under it).
+ */
+export function projectOrder(
+  projects: readonly LayoutProject[],
+  groups: readonly LayoutGroup[],
+): string[] {
+  const list = [...projects];
+  const members = stackMembers(list);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (p: LayoutProject): void => {
+    if (seen.has(p.name)) return;
+    seen.add(p.name);
+    out.push(p.name);
+    for (const m of members.get(p.name) ?? []) add(m);
+  };
+  for (const row of buildRows(list, [...groups])) {
+    if (row.kind === "project") add(row.project);
+    else row.projects.forEach(add);
+  }
+  return out;
+}
+
+/** What `inboxItems` needs to list by project. */
+export type GroupOptions = {
+  /** Project ids in display order, from `projectOrder`. */
+  order: readonly string[];
+  /** A project id as a person reads it; "" is a session with no project. */
+  label: (project: string) => string;
+};
+
+/**
+ * The list grouped by project. Groups follow `order`; a project it does not name
+ * comes after, by label, and sessions with no project come last. Inside a group
+ * the status order holds, so needs-you cards lead. The status filter narrows the
+ * models, and Done is cut globally to `DONE_VISIBLE` (a hidden row has no way to
+ * be attributed to a project). A header counts the rows listed under it.
+ */
+function groupedItems(
+  buckets: Record<Bucket, readonly RowModel[]>,
+  filter: InboxFilter,
+  showAllDone: boolean,
+  cache: ItemCache,
+  { order, label }: GroupOptions,
+): InboxItem[] {
+  const out: InboxItem[] = [];
+  if (filter === "" && buckets.needs.length === 0 && BUCKETS.some((b) => buckets[b].length > 0)) {
+    out.push(cache.clear());
+  }
+  const byProject = new Map<string, RowModel[]>();
+  let hidden = 0;
+  for (const b of BUCKETS) {
+    if (filter !== "" && filter !== b) continue;
+    const list = buckets[b];
+    const shown = b === "done" && !showAllDone ? list.slice(0, DONE_VISIBLE) : list;
+    hidden += list.length - shown.length;
+    for (const m of shown) {
+      const group = byProject.get(m.project);
+      if (group) group.push(m);
+      else byProject.set(m.project, [m]);
+    }
+  }
+  const rank = new Map(order.map((p, i) => [p, i]));
+  const projects = [...byProject.keys()].sort((a, b) => {
+    if ((a === "") !== (b === "")) return a === "" ? 1 : -1;
+    const ra = rank.get(a);
+    const rb = rank.get(b);
+    if (ra !== undefined && rb !== undefined) return ra - rb;
+    if (ra !== undefined || rb !== undefined) return ra !== undefined ? -1 : 1;
+    return label(a).localeCompare(label(b)) || a.localeCompare(b);
+  });
+  for (const project of projects) {
+    // Insertion followed BUCKETS order and each bucket is already sorted: keep both.
+    const models = byProject.get(project)!;
+    out.push(cache.group(project, label(project), models.length));
+    for (const m of models) out.push(cache.model(m));
+  }
+  if (hidden > 0) out.push(cache.more(hidden));
   return out;
 }
 

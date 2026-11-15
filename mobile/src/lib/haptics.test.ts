@@ -19,6 +19,7 @@ describe("haptics", () => {
       select: "selection",
       success: "success",
       refusal: "warning",
+      attention: "warning",
       notPaired: "error",
     });
   });

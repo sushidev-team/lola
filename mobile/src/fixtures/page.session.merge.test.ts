@@ -18,5 +18,8 @@ describe("preview page: session, merge-ready", () => {
     expect(app.querySelector("[data-review-actions]")).not.toBeNull();
     const all = Array.from(app.querySelector("[data-review-segment]")!.querySelectorAll("button"));
     expect(all.some((b) => /^\s*Review PR\s*$/.test(b.textContent ?? ""))).toBe(false);
+    // The queue place and the overlap sit under the header.
+    expect(app.querySelector("[data-session-chips]")?.textContent).toContain("Queue #2 · waiting");
+    expect(app.querySelector("[data-session-chips]")?.textContent).toContain("Overlaps NOR-397");
   }, PAGE_TIMEOUT * 2);
 });

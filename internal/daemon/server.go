@@ -452,7 +452,11 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		}
 		return protocol.Response{OK: true}
 	case "review":
-		data, err := d.handleReviewProvider(ctx, req.Session, req.Provider)
+		run := d.handleReviewProvider
+		if isRemoteCall(ctx) {
+			run = d.startDetachedReview // a phone cannot wait minutes on one request
+		}
+		data, err := run(ctx, req.Session, req.Provider)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
@@ -924,6 +928,9 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 
 			FeedbackPending: s.PendingFeedback != "",
 			Usage:           d.sessionUsage(s.ID),
+
+			ReviewRunning: d.reviewRunningFor(s.ID),
+			ReviewTallies: reviewTallyInfos(s),
 		}
 
 		if s.Kind == session.KindLocal {

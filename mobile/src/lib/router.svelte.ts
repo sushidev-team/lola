@@ -46,6 +46,7 @@ export const SHEETS = [
   "filter",
   "connection",
   "reviewPackage",
+  "checks",
   "unpair",
 ] as const;
 export type SheetName = (typeof SHEETS)[number] | "";
@@ -79,9 +80,12 @@ export interface ParseContext {
 export interface Location {
   route: Route;
   sheet: SheetName;
+  /** The tab a sheet opens on (`&tab=visuals`); only with a sheet. The sheet ignores a tab it does not have. */
+  tab?: string;
 }
 
 const NAME = /^[^\s/?#\u0000-\u001f]{1,160}$/;
+const SHEET_TAB = /^[a-z]{1,16}$/;
 
 export function isSheetName(v: string): v is Exclude<SheetName, ""> {
   return (SHEETS as readonly string[]).includes(v);
@@ -153,8 +157,11 @@ export function parseLocation(path: string, ctx: ParseContext = {}): Location | 
   const q = new URLSearchParams(query);
   const sheet = q.get("sheet") ?? "";
   if (sheet !== "" && !isSheetName(sheet)) return null;
+  const tab = q.get("tab");
+  if (tab !== null && (sheet === "" || !SHEET_TAB.test(tab))) return null;
   const route = parseRoutePart(pathname.slice(1).split("/"), q, cx);
-  return route ? { route, sheet: sheet as SheetName } : null;
+  if (!route) return null;
+  return tab ? { route, sheet: sheet as SheetName, tab } : { route, sheet: sheet as SheetName };
 }
 
 export function parseRoute(path: string, ctx: ParseContext = {}): Route | null {
@@ -184,12 +191,14 @@ export function formatRoute(r: Route): string {
 export function formatLocation(l: Location): string {
   const path = formatRoute(l.route);
   if (l.sheet === "") return path;
-  return `${path}${path.includes("?") ? "&" : "?"}sheet=${l.sheet}`;
+  return `${path}${path.includes("?") ? "&" : "?"}sheet=${l.sheet}${l.tab ? `&tab=${l.tab}` : ""}`;
 }
 
 export class Router {
   stack = $state<Route[]>([{ name: "tab", tab: "inbox" }]);
   sheet = $state<SheetName>("");
+  /** The tab the open sheet was asked to start on, or "". */
+  sheetTab = $state("");
 
   get top(): Route {
     return this.stack[this.stack.length - 1];
@@ -221,12 +230,14 @@ export class Router {
     else if (t.project) this.replace({ name: "tab", tab: t.tab });
   }
 
-  open(s: SheetName): void {
+  open(s: SheetName, tab = ""): void {
     this.sheet = s;
+    this.sheetTab = tab;
   }
 
   close(): void {
     this.sheet = "";
+    this.sheetTab = "";
   }
 }
 

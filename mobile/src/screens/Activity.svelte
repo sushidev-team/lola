@@ -1,10 +1,24 @@
 <script lang="ts" module>
-  import type { Event as ActivityEvent } from "@bindings/internal/protocol";
+  import type { EndedSession, Event as ActivityEvent } from "@bindings/internal/protocol";
 
   /** One entry of the flat, virtualized list: a day header or an event. */
   export type ActivityItem =
     | { key: string; kind: "day"; label: string }
-    | { key: string; kind: "event"; ev: ActivityEvent };
+    | { key: string; kind: "event"; ev: ActivityEvent }
+    | { key: string; kind: "ended-head" }
+    | { key: string; kind: "ended"; session: EndedSession };
+
+  /** Ended sessions listed under "Recently ended"; the daemon keeps 14 days, a phone shows the latest. */
+  export const ENDED_VISIBLE = 20;
+
+  /** The "Recently ended" block: a header and the newest ended sessions; nothing when none ended. */
+  export function endedItems(ended: readonly EndedSession[]): ActivityItem[] {
+    if (ended.length === 0) return [];
+    return [
+      { key: "ended-head", kind: "ended-head" },
+      ...ended.slice(0, ENDED_VISIBLE).map((session): ActivityItem => ({ key: `ended:${session.id}`, kind: "ended", session })),
+    ];
+  }
 
   /** A row's key is stable for the life of the event, so the passing minutes never re-mount it. */
   export const eventKey = (ev: ActivityEvent): string => `${ev.id}:${ev.at ?? ev.to}`;
@@ -49,12 +63,15 @@
 
 <script lang="ts">
   import { store } from "$lib/store.svelte";
+  import { talk } from "$lib/talk.svelte";
+  import { untrack } from "svelte";
   import EmptyState from "@mobile/lib/components/EmptyState.svelte";
   import LargeTitle from "@mobile/lib/components/LargeTitle.svelte";
   import SectionHeader from "@mobile/lib/components/SectionHeader.svelte";
   import VirtualList from "@mobile/lib/components/VirtualList.svelte";
   import { minuteClock } from "@mobile/lib/clock.svelte";
   import { copy } from "@mobile/lib/copy";
+  import { router } from "@mobile/lib/router.svelte";
   import { ageLabel, ageSpoken, META_SEP } from "@mobile/lib/inbox.svelte";
   import { activityWord, statusTone } from "@mobile/lib/statustone";
 
@@ -67,33 +84,61 @@
   //    A day header is keyed by its date, so a push animates only changed rows.
   //  - This screen reads `store.activity` and nothing else from the store: the
   //    store defers that write so it never lands in the same flush as sessions.
-  //  - The list is virtualized; events are display, not links.
+  //  - The list is virtualized. A row opens the session it is about while that
+  //    session is live or still readable as ended; an older one is plain text.
+  //    "Recently ended" closes the list: sessions that left the roster, from
+  //    `endedSessions` (read tier), opened into the Session screen's ended view.
 
-  const items = $derived(
-    activityItems(store.activity, minuteClock.now, copy.activity.days),
-  );
+  // Asked once per visit: the daemon's list of sessions whose story is still readable.
+  $effect(() => {
+    untrack(() => void talk.loadEnded());
+  });
+
+  const endedList = $derived(talk.endedList());
+  const items = $derived([
+    ...activityItems(store.activity, minuteClock.now, copy.activity.days),
+    ...endedItems(endedList),
+  ]);
+
+  /** A session this row can open: live, or kept readable by the daemon. */
+  const openable = (id: string): boolean => !!store.sessionById(id) || endedList.some((e) => e.id === id);
+  const open = (id: string): void => router.push({ name: "session", id, seg: "conversation" });
+  const endedMeta = (e: EndedSession): string =>
+    [e.project ? store.displayNameFor(e.project) : "", e.issue ?? "", ageLabel(e.endedAt)].filter((p) => p !== "").join(META_SEP);
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-canvas">
   <LargeTitle title={copy.activity.title} />
 
   <div class="min-h-0 flex-1">
-    {#if store.activity.length === 0}
+    {#if items.length === 0}
       <EmptyState title={copy.activity.empty.body} />
     {:else}
-      <VirtualList {items} key={(it) => it.key} kind={(it) => (it.kind === "day" ? "section" : "row")} label={copy.activity.title}>
+      <VirtualList {items} key={(it) => it.key} kind={(it) => (it.kind === "day" || it.kind === "ended-head" ? "section" : "row")} label={copy.activity.title}>
         {#snippet row(it: ActivityItem)}
           {#if it.kind === "day"}
             <SectionHeader title={it.label} />
+          {:else if it.kind === "ended-head"}
+            <SectionHeader title={copy.activity.ended} />
+          {:else if it.kind === "ended"}
+            {@const e = it.session}
+            <button
+              type="button"
+              class="flex min-h-14 w-full touch-manipulation flex-col justify-center pl-4 text-left active:bg-sel"
+              aria-label={[e.title || e.issue || e.id.slice(0, 8), e.reason ?? "", endedMeta(e)].filter((p) => p !== "").join(", ")}
+              onclick={() => open(e.id)}
+            >
+              <span class="flex min-h-14 w-full min-w-0 flex-col justify-center gap-0.5 border-b border-edge-soft py-[7px] pr-4" aria-hidden="true">
+                <span class="line-clamp-2 text-body text-faint">{e.title || e.issue || e.id.slice(0, 8)}</span>
+                <span class="num truncate text-subhead font-normal text-subtext">{[e.reason ?? "", endedMeta(e)].filter((p) => p !== "").join(META_SEP)}</span>
+              </span>
+            </button>
           {:else}
             {@const ev = it.ev}
-            <div
-              class="flex min-h-14 flex-col justify-center pl-4"
-              role="group"
-              aria-label={[activityWord(ev.from, ev.to), ev.title, ev.issue || ev.id.slice(0, 8), ageSpoken(ev.at, ev.ago)]
-                .filter((p) => p !== "")
-                .join(", ")}
-            >
+            {@const label = [activityWord(ev.from, ev.to), ev.title, ev.issue || ev.id.slice(0, 8), ageSpoken(ev.at, ev.ago)]
+              .filter((p) => p !== "")
+              .join(", ")}
+            {#snippet body()}
               <div class="flex min-h-14 flex-col justify-center gap-0.5 border-b border-edge-soft py-[7px] pr-4" aria-hidden="true">
                 <span class="line-clamp-2 text-body text-ink">{ev.title || activityWord(ev.from, ev.to)}</span>
                 <span class="flex min-w-0 items-center text-subhead font-normal text-subtext">
@@ -108,7 +153,21 @@
                   {/if}
                 </span>
               </div>
-            </div>
+            {/snippet}
+            {#if openable(ev.id)}
+              <button
+                type="button"
+                class="flex min-h-14 w-full touch-manipulation flex-col justify-center pl-4 text-left active:bg-sel"
+                aria-label={label}
+                onclick={() => open(ev.id)}
+              >
+                {@render body()}
+              </button>
+            {:else}
+              <div class="flex min-h-14 flex-col justify-center pl-4" role="group" aria-label={label}>
+                {@render body()}
+              </div>
+            {/if}
           {/if}
         {/snippet}
       </VirtualList>

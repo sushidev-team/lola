@@ -8,7 +8,8 @@
   import { touchSurface } from '$lib/touchsurface';
 
   // `labels` is the phone's one-line verdict ("Verified" / "Not verified"); without it, or off the phone, the full heading shows.
-  let { pkg, canRun = false, freshness = 'unknown', labels }: { pkg: ReviewPackage; canRun?: boolean; freshness?: string; labels?: { verified: string; notVerified: string } } = $props();
+  // `canRecover` (default true) draws "Reconcile interrupted check"; the phone passes its tier answer.
+  let { pkg, canRun = false, canRecover = true, freshness = 'unknown', labels }: { pkg: ReviewPackage; canRun?: boolean; canRecover?: boolean; freshness?: string; labels?: { verified: string; notVerified: string } } = $props();
   const phone = touchSurface();
   let checks = $state<ReviewCheck[]>([]);
   const verdict = $derived(freshness === 'current' && checks.length > 0 && checks.every(c => c.state === 'pass'));
@@ -127,7 +128,7 @@
         <pre>{check.spec.command}</pre><p class="receipt-image">{check.spec.image}</p>
         {#if check.error}<p class="explanation text-warn">{check.error}</p>{/if}
         {#if check.output}<pre aria-label={`Output from ${check.spec.id}`}>{check.output}</pre>{/if}
-        {#if !check.stopped && check.state !== 'running'}<Button size="sm" loading={busy} onclick={() => recover(check)}>Reconcile interrupted check</Button>{/if}
+        {#if canRecover && !check.stopped && check.state !== 'running'}<Button size="sm" loading={busy} onclick={() => recover(check)}>Reconcile interrupted check</Button>{/if}
       </details>
     {/each}
   </div>{/if}

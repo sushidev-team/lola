@@ -184,6 +184,17 @@ describe("InboxCard", () => {
     expect(screen.getByRole("button", { name: label })).toBeTruthy();
   });
 
+  it("opens the Review segment for a card in the review bucket and for an approved PR", async () => {
+    render(InboxCard, { props: { model: rowModel(session({ agentState: "idle", delivery: "review_pending", prNumber: 3 })), projectLabel: "P" } });
+    await fireEvent.click(screen.getByRole("button", { name: /Fix it/ }));
+    expect(router.top).toMatchObject({ name: "session", id: "a", seg: "review" });
+    cleanup();
+    router.stack = [{ name: "tab", tab: "inbox" }];
+    render(InboxCard, { props: { model: rowModel(session({ agentState: "idle", delivery: "approved", prNumber: 3 })), projectLabel: "P" } });
+    await fireEvent.click(screen.getByRole("button", { name: /Fix it/ }));
+    expect(router.top).toMatchObject({ name: "session", id: "a", seg: "review" });
+  });
+
   it("routes the non-command actions", async () => {
     render(InboxCard, { props: { model: rowModel(session({ delivery: "ci_failed" })), projectLabel: "P" } });
     await fireEvent.click(screen.getByRole("button", { name: /Fix it/ }));

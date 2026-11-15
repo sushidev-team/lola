@@ -120,6 +120,9 @@ func TestRenderHubStatusAndOrg(t *testing.T) {
 			t.Errorf("status lacks %q:\n%s", want, out)
 		}
 	}
+	if !strings.Contains(out, "relay:    off: phone access is not enabled") {
+		t.Errorf("status lacks the relay line:\n%s", out)
+	}
 	if out := renderHubDaemon(nil, "not running"); !strings.Contains(out, "not running") {
 		t.Errorf("no daemon: %q", out)
 	}
@@ -205,5 +208,37 @@ func TestHubCLIUsesTheDaemon(t *testing.T) {
 	}
 	if _, err := run("sync"); err == nil || !strings.Contains(err.Error(), "not running") {
 		t.Fatalf("sync without a daemon: %v", err)
+	}
+}
+
+func TestRenderHubRelay(t *testing.T) {
+	cases := []struct {
+		in   *protocol.HubRelayInfo
+		want []string
+	}{
+		{nil, []string{"phone access is not enabled"}},
+		{&protocol.HubRelayInfo{State: protocol.HubRelayStateConnected, ActiveConns: 2}, []string{"on: paired phones", "through the relay: 2"}},
+		{&protocol.HubRelayInfo{State: protocol.HubRelayStateUnsupported, Reason: "no_relay", LastError: "hub: HTTP 404 not_found: not found"},
+			[]string{"needs an update", "lola hub sync", "last problem: hub: HTTP 404"}},
+		{&protocol.HubRelayInfo{State: protocol.HubRelayStateOff, Reason: "not_joined"}, []string{"join a team hub", "lola hub join"}},
+		{&protocol.HubRelayInfo{State: protocol.HubRelayStateOff, Reason: "no_phones"}, []string{"no phone is paired yet"}},
+		{&protocol.HubRelayInfo{State: protocol.HubRelayStateOff, Reason: "disabled"}, []string{"turned off"}},
+		{&protocol.HubRelayInfo{State: protocol.HubRelayStateOff, Reason: "config_error"}, []string{"config.toml has an error"}},
+		{&protocol.HubRelayInfo{State: protocol.HubRelayStateRefused, Reason: "revoked"}, []string{"refused this device"}},
+		{&protocol.HubRelayInfo{State: protocol.HubRelayStateBackoff, Reason: "error"}, []string{"retrying"}},
+	}
+	for _, c := range cases {
+		out := renderHubRelay(c.in)
+		if !strings.HasPrefix(out, "relay:    ") {
+			t.Errorf("%+v: no relay line: %q", c.in, out)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(out, w) {
+				t.Errorf("%+v: lacks %q:\n%s", c.in, w, out)
+			}
+		}
+	}
+	if out := renderHubRelay(&protocol.HubRelayInfo{State: protocol.HubRelayStateOff, Reason: "no_phones"}); strings.Contains(out, "through the relay") {
+		t.Errorf("an off relay counts phones: %q", out)
 	}
 }

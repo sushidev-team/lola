@@ -97,3 +97,60 @@ func TestPRReadinessAddressRefusesUnknownClosedAndEmpty(t *testing.T) {
 		})
 	}
 }
+
+func TestPRReadinessCopiesTheCheckListForDisplay(t *testing.T) {
+	d := prsDaemon(t)
+	d.sessions.Upsert(session.Session{ID: "s", Repo: "acme/app", PR: &scm.PR{Number: 8, BaseRef: "main"}})
+	var branches []string
+	d.requiredChecks = func(_ context.Context, repo, branch string) ([]string, error) {
+		branches = append(branches, repo+"@"+branch)
+		return []string{"test", "e2e"}, nil
+	}
+	long := strings.Repeat("x", 500)
+	d.prReadiness = func(context.Context, string, int) (scm.PRReadiness, error) {
+		return scm.PRReadiness{Number: 8, State: "OPEN", Head: "h", ChecksHead: "h", BaseRef: "release", CheckList: []scm.ReadinessCheck{
+			{Name: "test", Workflow: "CI", State: "FAILURE", Bucket: "fail", URL: "https://github.com/acme/app/actions/runs/1"},
+			{Name: "evil\n‮line", State: "SUCCESS", Bucket: "pass", URL: "javascript:alert(1)", Description: long},
+			{Name: "lola/review/codex", State: "SUCCESS", Bucket: "pass", URL: "http://example.com", Status: true},
+		}}, nil
+	}
+	r := d.handle(context.Background(), feedbackReq("prReadiness", "s", 8))
+	if !r.OK {
+		t.Fatal(r.Error)
+	}
+	var got protocol.PRReadinessData
+	if err := json.Unmarshal(r.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.CheckList) != 4 {
+		t.Fatalf("%+v", got.CheckList)
+	}
+	test, evil, gate, expected := got.CheckList[0], got.CheckList[1], got.CheckList[2], got.CheckList[3]
+	if !test.Required || test.Gate || test.URL == "" || test.Workflow != "CI" || test.Bucket != "fail" {
+		t.Fatalf("required check: %+v", test)
+	}
+	if evil.Name != "evil line" || evil.URL != "" || len([]rune(evil.Description)) != checkTextMax+1 || evil.Required {
+		t.Fatalf("untrusted check text: %+v", evil)
+	}
+	if !gate.Gate || gate.URL != "" {
+		t.Fatalf("review gate: %+v", gate)
+	}
+	if expected.Name != "e2e" || expected.State != "EXPECTED" || expected.Bucket != "pending" || !expected.Required {
+		t.Fatalf("required check that never reported: %+v", expected)
+	}
+	// Truncated lists never invent an Expected entry; an unbound list stays
+	// absent. Without GitHub's base branch the session's is asked.
+	d.prReadiness = func(context.Context, string, int) (scm.PRReadiness, error) {
+		return scm.PRReadiness{Number: 8, State: "OPEN", CheckList: nil}, nil
+	}
+	r = d.handle(context.Background(), feedbackReq("prReadiness", "s", 8))
+	if strings.Contains(string(r.Data), "checkList") {
+		t.Fatalf("unbound check list sent: %s", r.Data)
+	}
+	if strings.Join(branches, ",") != "acme/app@release,acme/app@main" {
+		t.Fatalf("required checks asked for %v", branches)
+	}
+	if out := publicCheckList([]scm.ReadinessCheck{{Name: "test"}}, true, []string{"test", "e2e"}); len(out) != 1 {
+		t.Fatalf("truncated list grew an Expected entry: %+v", out)
+	}
+}

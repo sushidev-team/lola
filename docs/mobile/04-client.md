@@ -702,19 +702,18 @@ conformance and route tests (§2.4) are the authority, not this table.
 | Diff | FWD | diff | read | flat `session` |
 | Checkpoints | FWD | checkpoints | read | |
 | CheckpointDiff | FWD | checkpointDiff | read | args `{session, seq}` |
-| PRReadiness | FWD | prReadiness | read | `session` + args `{number}` |
+| PRReadiness | FWD | prReadiness | read | `session` + args `{number}`. The answer's `checkList` feeds the Review segment and the `checks` sheet; both reuse one read (`readPRReadinessRecent`, 60 s) because prReadiness spends the device's external-API budget |
 | ReviewPackages | FWD | reviewPackages | read | |
 | ReviewPackageDiff | FWD | reviewPackageDiff | read | args `{from, to}` |
-| ReviewPackageImage | FWD | reviewPackageImage | read | args `{package, artifact}` |
+| ReviewPackageImage | FWD | reviewPackageImage | read | args `{package, artifact, chunked, offset}`; the shim (`services/reviewimage.ts`) reads 512 KiB parts and assembles the data URL |
 | ReviewPackageChecks | FWD | reviewPackageChecks | read | args `{package}` |
 | BestOfCompare | FWD | bestOfCompare | read | |
 | Answer | FWD | answer | answer | |
-| SendFeedback | FWD | feedback | answer | args = `FeedbackArgs` |
+| SendFeedback | FWD | feedback | answer | args = `FeedbackArgs`. Review-package comments travel here too, inside the note with a context header (`$lib/reviewnote.ts`); there is no `ReviewPackageFeedback` binding or shim method (`reviewPackageFeedback` is the CLI's command) |
 | ReviewPackageMark | FWD | reviewPackageMark | answer | args `{package, previous}` |
-| ReviewPackageFeedback | FWD | reviewPackageFeedback | answer | args as `reviewpackagesvc.go` builds them |
 | Kill(session, force, keepWorktree) | FWD | kill | destructive | **fix arity** (3 args). `force:true` rejects locally with the existing sentence; `keepWorktree` forwarded (A7) |
 | CloseExitedTemporary | FWD | closeExitedTemporary | destructive | |
-| Revive, Review, CodeRabbit, ResolveConflict | FWD | revive, review, coderabbit, resolveConflict | control | |
+| Revive, Review, CodeRabbit, ResolveConflict | FWD | revive, review, coderabbit, resolveConflict | control | from a phone, `review` answers at once with `started` and runs detached on the Mac; the row's `reviewRunning` and `reviewTallies` carry the outcome |
 | AddressPRFeedback | FWD | addressPRFeedback | control | `session` + args `{number}` |
 | MergePR | FWD | mergePR | control | `session` + args `{number, repo, head, method, confirmUnready}` |
 | SwitchAgent, Dev, DevFreePort | FWD | switchAgent, dev, devFreePort | control | |
@@ -1151,7 +1150,7 @@ whether a request counts as in-flight mutating for `adopt` (§1.7).
 | `../ssh/dock/DockArea.svelte` + widgets | unchanged; `SSHWidget` per §3.2 item 8 | Elements arrive without `html`/`data` (A13), so no widget document ever runs on the phone; `SSHWidget` shows "Open on your Mac to view." The bridge guard (§1.9) is defence in depth for any frame; Workspace (and so DockArea) is still mounted only after item 17 lands. Element answers go through `sshAnswer` (A19); proposals and widget status are `MAC_ONLY` (D5). |
 | `ChangesView` (`compact`) + `DiffView` (`compact`) | unchanged | `compact` gives the one-column body (`.diff-compact .diff-body`) and the file `Select`. A line comment is DiffView's own gutter click → its inline editor (single line on the phone; range selection is shift-click, D6). `nav.openSession(id)` after Fork is mirrored by the desk-nav adapter (§4.2). |
 | `BeforeMerge` (`reviewLayout`) | unchanged | Its "Review PR" calls `reviewWorkspace.open` → desktop `nav.overlay = 'pr-review'`, which the adapter maps to the Review package sheet. |
-| `ReviewWorkspace` | unchanged, mounted in the full-screen `reviewPackage` sheet when `deskNav.overlay === 'pr-review'` | It is a `Modal fullscreen`; phone CSS (§4.3) removes the macOS traffic-light padding. Capture and Verify need `shell` (01 Deviation 1). |
+| `ReviewWorkspace` | mounted `embedded` in the `reviewPackage` sheet when `deskNav.overlay === 'pr-review'`, with the phone's `can` | A control the phone may not send is not drawn (Mark, comments, Send, Reconcile, "Ask agent to prepare review"). Capture and Verify are never drawn on a touch surface, whatever the tier: they run agent-chosen code on the Mac (01 Deviation 1); their results stay readable. On a touch surface the Screenshots tab is `ReviewScreensPhone` (stacked cards, Before/After, a full-screen pinch-zoom viewer, a docked comment field) instead of `ReviewCanvas`. |
 | `ConfirmDialog` | unchanged, mounted once at the root of `mobile/src/App.svelte` | `Modal` already has `@media (max-width:480px)` full-width actions. z-index 40 sits above sheets (30). |
 | `SessionEmbed`, `ViewStrip`, `SessionFooter`, `SessionBar`, `SessionSide`, `TerminalCell`, `SessionMenu`, `MainTopBar`, sidebar/roster components | **replaced** | phone chrome: `SessionHeader`, `SegmentBar`, `sheets/sessionMenu.svelte`, `TerminalSegment` (existing `MobileTerminal` + `PaneTabs` + `AccessoryBar`) |
 | `LiveTerminal` | replaced by `MobileTerminal` | touch scroll, pin lifecycle, accessory bar |
@@ -1284,16 +1283,17 @@ export type Route =
 export type InboxFilter = "" | "needs" | "working" | "review" | "done";
 export const SHEETS = ["sessionMenu", "newSession", "attach", "model", "merge", "feedback",
   "checkpoints", "bestOf", "devLinks", "rename", "broadcast", "tasks", "switchAgent", "paneMenu",
-  "viewSettings", "filter", "connection", "reviewPackage", "unpair"] as const;
+  "viewSettings", "filter", "connection", "reviewPackage", "checks", "unpair"] as const;
 export type SheetName = (typeof SHEETS)[number] | "";
 class Router {
   stack = $state<Route[]>([{ name: "tab", tab: "inbox" }]);
   sheet = $state<SheetName>("");
+  sheetTab = $state("");     // the tab the open sheet was asked to start on (`&tab=`)
   get top(): Route;
   push(r: Route): void;      // session over a tab
   replace(r: Route): void;   // segment change, tab change
   back(): void;              // pop, or tab-level up (pick → project → list); never to connect
-  open(s: SheetName): void; close(): void;
+  open(s: SheetName, tab?: string): void; close(): void;
 }
 export function parseRoute(path: string): Route | null;  // pure, fails closed
 export function formatRoute(r: Route): string;
@@ -1308,7 +1308,7 @@ Path grammar (shared by dev links, preview fixtures and tests):
 /projects | /projects/<name> | /projects/<name>/{prs|tickets}
 /activity | /settings
 /dev/bridge-guard                       (DEBUG only)
-query: sheet=<SheetName>
+query: sheet=<SheetName>[&tab=<a-z, 1–16>]   (tab only with a sheet; reviewPackage reads it)
 ```
 
 Unknown segments return `null` (caller keeps the current route). `/connect/*`
@@ -1365,7 +1365,13 @@ Directory: `mobile/src/screens/` (replaces `mobile/src/views/`).
   show Answer.
 - Rows below, one dense row per session (56 pt, two lines): sections Working,
   In review, Done. Done shows `DONE_VISIBLE = 20` rows then "Show all".
+- A tap on a card or row opens the Conversation, except a `ci_failed` card, an
+  `approved` card and anything in the review bucket, which open the Review segment.
 - Filter chips (`filter` sheet on small widths) map to `InboxFilter`.
+- The `filter` sheet also holds "Group by: Status | Project", a persisted
+  preference (`lola.mobile.inboxGroup`, not a route): project mode lists one
+  header per project in the desktop's arrangement, needs-you cards first, with
+  Done still capped at `DONE_VISIBLE` across all projects.
 - No pull to refresh.
 
 **Session** (`screens/session/Session.svelte`)
@@ -1379,15 +1385,29 @@ Directory: `mobile/src/screens/` (replaces `mobile/src/views/`).
 - Changes: `<ChangesView sessionId compact />` (lazy chunk). Watches
   `diff:<id>` while visible and calls `changes.load(id)` when `rev` changes,
   debounced 500 ms.
-- Review: `<BeforeMerge session reviewLayout />` at the top, then a
-  "Review packages (n)" row (opens `reviewPackage`), then a **"Files changed"**
-  row that switches to the Changes segment when the session offers Changes (the
-  diff is not repeated in Review). A session without a Changes segment keeps
-  `<DiffView sessionId compact />` here. Sticky bar: "Send feedback (n)" (n =
-  `feedback` drafts for the session; opens `feedback`) and "Merge" (opens
-  `merge`; disabled with the readiness reason when not mergeable). A line
-  comment is a tap on DiffView's line gutter, which opens DiffView's own inline
-  editor (single line; `cmd=feedback` queues, never forces).
+- Review: `<BeforeMerge session reviewLayout hideMerge />` at the top (status,
+  threads, "Ask agent to address"). Its `onfacts` hands the readiness answer to
+  the segment, so GitHub is read once. Then two groups:
+  - **Checks**: "CI checks" with a summary of `checkList` ("2 failed · 3
+    passed", "1 running", "All 5 passed"; GitHub's one-word rollup from an older
+    daemon), and, when the agent reported checks, "Agent-reported checks"
+    ("2 of 3 passed"). Both open the `checks` sheet.
+  - **Review**: "Agent review" (value: "Running", the current PR's
+    `reviewTallies` as "2 major · 1 minor" or "Clean", else the review state;
+    a tap starts a detached review where `review` is allowed and none runs),
+    "Review material" (always present with an open PR, so "Ask agent to prepare
+    review" is reachable; opens `reviewPackage`), **"Files changed"** (switches
+    to the Changes segment when the session offers Changes; the diff is not
+    repeated in Review) and "Open #n on GitHub".
+  A session without a Changes segment keeps `<DiffView sessionId compact />`
+  here. Sticky bar: "Send feedback (n)" (n = `feedback` drafts and the note;
+  opens `feedback`) and "Merge" (opens `merge`; disabled with the readiness
+  reason when not mergeable). With red CI the primary is "See checks", which
+  opens the `checks` sheet (not GitHub), and "Merge anyway…" is a text action.
+  A line comment is a tap on DiffView's line gutter, which opens DiffView's own
+  inline editor (single line; `cmd=feedback` queues, never forces). The
+  review-package count is asked once per session and again when the
+  `reviewPackage` sheet closes (packages have no push topic).
 - Terminal: existing `MobileTerminal` + `PaneTabs` + `AccessoryBar` (lazy
   chunk). Attached only while this segment is visible; switching away detaches
   (AGENTS.md: "Terminal attaches only while on screen").
@@ -1424,7 +1444,7 @@ open `fit`.
 | `attach` | medium | Camera, Photos, Paste | `native.pickImage`, `readClipboardImage` → `uploadImage` |
 | `model` | medium | `ModelSettings` (shared) | agentSetting |
 | `merge` | medium | method (Squash/Merge/Rebase from `lola.mergeMethod`), readiness summary, Merge; unready → "Merge anyway" (second confirm) | mergePR (`confirmUnready`) |
-| `feedback` | large | pending line comments (`feedback.svelte.ts`), note, Send | feedback |
+| `feedback` | large | pending line comments (`feedback.svelte.ts`), review-package comments as their own rows (section + text, removable), the person's note, Send | feedback |
 | `checkpoints` | large | list, diff preview, Restore, Fork | checkpoints, checkpointDiff, restoreCheckpoint, forkCheckpoint |
 | `bestOf` | large | attempts compared, Pick | bestOfCompare, bestOfPick |
 | `devLinks` | medium | existing `DevLinksSheet` | — |
@@ -1432,7 +1452,8 @@ open `fit`.
 | `paneMenu`, `viewSettings` | medium | existing terminal sheets | paneClose, paneResize |
 | `filter` | medium | Inbox filter (existing `FilterSheet`) | — |
 | `connection` | medium | path details | — |
-| `reviewPackage` | full | `ReviewWorkspace` | reviewPackage* (Verify needs `shell`) |
+| `reviewPackage` | full | `ReviewWorkspace` (embedded, the phone's `can`); footer "Feedback · n" (opens `feedback`) and "Mark reviewed"; `&tab=visuals` opens on Screenshots | reviewPackages, reviewPackageImage, reviewPackageChecks, reviewPackageMark, feedback, agentSay (Verify and Capture are not drawn on a phone) |
+| `checks` | large | every PR check grouped Failing / Running / Passed / Skipped (required first; workflow, duration, an uncommon state word), then "Review gates" (lola/*, "not CI") and "Agent-reported" (board checks, "not CI"); commit line, stale-commit and truncated notices; no list from an older daemon: "Open on GitHub". A tap opens the check's https page on the phone. Footer "Ask agent to fix" only with `agentSay`: lola's own sentence naming the failing checks (`fixRequest`), never a description or log text | prReadiness (reused), agentSay |
 | `unpair` | — (ConfirmDialog) | | `native.forget` |
 
 Destructive confirmations always use the shared `confirm` store and
@@ -1484,10 +1505,11 @@ sentence; the client list is a courtesy, the daemon gate is the truth.
 | Session segments | — | Conversation · Changes · Review · Terminal |
 | Session gone | Session ended | Its story stays for 14 days. |
 | Review bar | — | Send feedback ({n}) · Merge · "Merge anyway…" · "Couldn't check the PR." · no drafts: "Comment on a line to send feedback." |
-| Review rows | — | Files changed · {n} checks failed · Agent review · Open #{n} on GitHub |
+| Review rows | Checks · Review | CI checks · Agent-reported checks · Agent review · Review material · Files changed · {n} checks failed · Open #{n} on GitHub |
 | Session empty | No messages yet | working: "The agent is working in the terminal." · idle: "Send a message to start." |
 | Session menu | — | Rename · Switch agent · Model · Start/Stop dev server · Open dev server · Tasks · Checkpoints · Compare attempts · Message all · Agent review · CodeRabbit review · Revive · Resolve conflict · Remove session |
-| Review packages row | — | Review packages ({n}) |
+| Review material row | — | Review material · None yet · 1 version · {n} versions |
+| Checks sheet | Checks | Failing · Running · Passed · Skipped · Review gates · Agent-reported · Required · "Ask agent to fix" |
 | Merge sheet | Merge PR | Squash and merge · Merge · Rebase and merge · ready: "All checks passed." · unready: "Not ready." + "Merge anyway" |
 | Discard confirm (dirty text sheet) | Discard changes? | What you typed will be lost. · "Discard" |
 | Remove confirm | Remove session? | Deletes its worktree and branch. · "Remove" |
@@ -1533,7 +1555,7 @@ wire code.
 with a `FakeTransport` (`src/wire/fake.ts`, extended to answer commands, answer
 `watch` with `WatchData`, and emit `event` frames with watch ids) seeded from
 `src/fixtures/<name>.ts`.
-URL: `preview.html?route=<path>&sheet=<name>&fixture=<name>&theme=<id>&kb=<px>`
+URL: `preview.html?route=<path>&sheet=<name>&tab=<sheet tab>&fixture=<name>&theme=<id>&kb=<px>`
 (`kb` fakes the keyboard inset). Viewport 390×844 by default.
 
 | Fixture | Content | Routes it serves |
@@ -1545,9 +1567,9 @@ URL: `preview.html?route=<path>&sheet=<name>&fixture=<name>&theme=<id>&kb=<px>`
 | `long-story` | 300 feed items, 40 tool rows, 1 subagent | /session/s3/conversation |
 | `composer` | draft with paste token and image token | /session/s3/conversation?sheet=attach, kb=336 |
 | `diff` | 40 files, 2 000 lines, 3 drafts | /session/s4/changes, /session/s4/review?sheet=feedback |
-| `merge-ready` | approved, green, mergeable | /session/s5/review?sheet=merge |
-| `ci-red` | ci_failed, 2 failing checks | /inbox, /session/s6/review |
-| `review-package` | 2 packages, 3 screenshots | /session/s5/review?sheet=reviewPackage |
+| `merge-ready` | approved, green, mergeable, an agent-review tally | /session/s5/review?sheet=merge, /session/s5/review |
+| `ci-red` | ci_failed, 2 failing checks in a 7-entry `checkList` (one review gate) | /inbox, /session/s6/review, /session/s6/review?sheet=checks |
+| `review-package` | 2 packages, 3 screenshots | /session/s5/review?sheet=reviewPackage, /session/s5/review?sheet=reviewPackage&tab=visuals |
 | `terminal` | resync screen 80×24 | /session/s1/terminal |
 | `offline` | last snapshot, phase failed/unreachable | /inbox |
 | `key-changed` | last snapshot, phase failed/key_changed | /inbox |

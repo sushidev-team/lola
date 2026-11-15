@@ -1,4 +1,4 @@
-import { base, event, permissionPrompt, session, talk, withCounts, PROJECTS } from "./build";
+import { ago, base, event, permissionPrompt, session, talk, withCounts, PROJECTS } from "./build";
 import type { Fixture } from "./types";
 
 // Fourteen sessions over every column: three need the person, two are broken,
@@ -36,6 +36,11 @@ const events = Array.from({ length: 30 }, (_, i) => {
 });
 
 export const fixture: Fixture = base("busy", {
+  // Two sessions that left the roster: the Activity tab's "Recently ended".
+  ended: [
+    { id: "s13", project: "nori-app", title: "Retire the legacy period picker", issue: "NOR-408", endedAt: ago(120), reason: "PR #330 merged", prNumber: 330 },
+    { id: "s14", project: "okane", title: "Drop the unused currency table", issue: "OKA-85", endedAt: ago(300), reason: "PR #71 merged", prNumber: 71 },
+  ],
   routes: ["/inbox", "/inbox?filter=needs", "/inbox?filter=working", "/inbox?filter=review", "/inbox?filter=done", "/activity"],
   sessions,
   events,

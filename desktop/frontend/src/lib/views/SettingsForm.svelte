@@ -1232,7 +1232,7 @@
               <div class="ml-6"><HelpText label="Publish dev servers of the active session" summary="Dev servers accessible on your network." detail="Shares the active session’s local dev servers on one private interface and a temporary port. Anyone on that network can reach them while the session is active." /></div>
             </div>
           </SettingsGroup>
-          <PhonesPanel bind:relay={d.remoteRelay} />
+          <PhonesPanel bind:relay={d.remoteRelay} onJoinHub={() => (tab = "hub")} />
         </section>
       {:else if tab === "appearance"}
         <section>

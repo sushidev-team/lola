@@ -8,15 +8,22 @@
   import { connection } from "@mobile/lib/connection.svelte";
   import { copy } from "@mobile/lib/copy";
   import { router } from "@mobile/lib/router.svelte";
+  import { remoteAccess } from "@mobile/lib/remoteaccess.svelte";
   import { diagnosticRows, interfaceLabel, pathWord, readStatus } from "@mobile/lib/settings.svelte";
 
   // Path details: where the connection runs, how fast, and (collapsed) what it
   // has carried. The relay's own state is never printed here: "Relay: None"
   // beside a Relay path says the opposite of what the row above it says.
+  // Whether the relay COULD be used is its own row, "Away from Wi-Fi", which
+  // speaks in sentences (lib/remoteaccess.svelte.ts), never in state words.
   let status = $state<StatusResult | null>(null);
   let open = $state(false);
   onMount(() => {
     void readStatus().then((s) => (status = s));
+  });
+  $effect(() => {
+    void connection.epoch;
+    void remoteAccess.load();
   });
 
   const path = $derived(connection.ready ? connection.path : null);
@@ -39,6 +46,10 @@
       {#if secondary}<span class="text-callout text-subtext">{secondary}</span>{/if}
     </div>
   </div>
+
+  <ListGroup>
+    <ListRow label={copy.remoteAccess.label} value={remoteAccess.row.value} detail={remoteAccess.row.detail} />
+  </ListGroup>
 
   <ListGroup>
     <ListRow label={copy.connection.diagnostics} chevron onclick={() => (open = !open)} />

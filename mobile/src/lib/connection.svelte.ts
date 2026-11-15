@@ -44,7 +44,13 @@ export class Connection {
   label = $derived(this.daemons.find((d) => d.daemonId === this.daemonId)?.name || "your Mac");
   ready = $derived(this.phase === "ready");
   diagnosis = $derived<Diagnosis>(
-    diagnose({ phase: this.phase, failure: this.failure, refusal: this.refusal, label: this.label }),
+    diagnose({
+      phase: this.phase,
+      failure: this.failure,
+      refusal: this.refusal,
+      label: this.label,
+      relay: this.daemons.find((d) => d.daemonId === this.daemonId)?.relay,
+    }),
   );
 
   #transport: ShimTransport | undefined;

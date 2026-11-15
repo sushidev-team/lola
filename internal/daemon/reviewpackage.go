@@ -138,11 +138,24 @@ func (d *Daemon) handleReviewPackage(req protocol.Request) protocol.Response {
 		if err := json.Unmarshal(req.Args, &args); err != nil {
 			return fail(err)
 		}
+		if args.Chunked && (args.Offset < 0 || args.Offset%protocol.ReviewImageChunkBytes != 0) {
+			return protocol.Response{Error: "invalid screenshot offset"}
+		}
 		data, mime, err := reviewpack.Image(d.home, req.Session, args.Package, args.Artifact)
 		if err != nil {
 			return fail(err)
 		}
-		return dataResponse(protocol.ReviewImageData{DataURL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)})
+		if !args.Chunked {
+			return dataResponse(protocol.ReviewImageData{DataURL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)})
+		}
+		// The artifact is content-addressed and re-verified on every read, so
+		// parts read separately always belong to the same bytes.
+		size := int64(len(data))
+		if args.Offset >= size && !(args.Offset == 0 && size == 0) {
+			return protocol.Response{Error: "invalid screenshot offset"}
+		}
+		end := min(args.Offset+protocol.ReviewImageChunkBytes, size)
+		return dataResponse(protocol.ReviewImageData{Mime: mime, Size: size, Offset: args.Offset, Data: data[args.Offset:end], EOF: end == size})
 	}
 	return protocol.Response{Error: "unknown review package command"}
 }

@@ -493,6 +493,13 @@ type Daemon struct {
 	// reviewActive includes manual passes, which do not enter reviewBusy's queue.
 	// Counts allow concurrent manual requests without prematurely clearing activity.
 	reviewActive map[string]int // guarded by reviewMu, keyed by session/lane ID
+	// reviewDetached marks a session whose phone-forced review runs detached
+	// (reviewremote.go); a second one is refused until it ends. Guarded by
+	// reviewMu.
+	reviewDetached map[string]bool
+	// runDetachedReview is the test seam for the detached pass; nil runs
+	// handleReviewProvider.
+	runDetachedReview func(ctx context.Context, sessionID, kind string) (protocol.ReviewData, error)
 
 	// escSummaries carries a brain escalation summary from react's Urgent notify
 	// (reactCIFailed) to the P4 blocked Linear comment (writeBackEscalation) in

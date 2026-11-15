@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 
 import Feedback from "./feedback.svelte";
 import { feedback } from "$lib/feedback.svelte";
+import { reviewCommentContext } from "$lib/reviewnote";
 import { router } from "@mobile/lib/router.svelte";
 
 describe("feedback sheet", () => {
@@ -50,5 +51,21 @@ describe("feedback sheet", () => {
     render(Feedback);
     await fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(router.sheet).toBe("feedback");
+  });
+
+  it("shows review-package comments as rows and edits only the person's own note around them", async () => {
+    const pkg = { id: "pkg-1", repo: "o/r", pr: 4, base: "a", head: "b", screens: [{ title: "Light", after: "x.png" }] } as never;
+    const comment = reviewCommentContext(pkg, "Screen 1: Light", 0) + "Header is clipped";
+    feedback.setNote("s1", ["Also check dark mode", comment].join("\n\n"));
+    render(Feedback);
+    expect(screen.getByText("Screen 1: Light")).toBeInTheDocument();
+    expect(screen.getByText("Header is clipped")).toBeInTheDocument();
+    const note = screen.getByRole("textbox", { name: "Note" }) as HTMLTextAreaElement;
+    expect(note.value).toBe("Also check dark mode");
+    await fireEvent.input(note, { target: { value: "Dark mode too" } });
+    expect(feedback.noteFor("s1")).toBe(["Dark mode too", comment].join("\n\n"));
+    await fireEvent.click(screen.getByRole("button", { name: "Remove comment" }));
+    expect(feedback.noteFor("s1")).toBe("Dark mode too");
+    expect(screen.queryByText("Header is clipped")).toBeNull();
   });
 });

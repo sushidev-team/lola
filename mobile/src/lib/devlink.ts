@@ -17,6 +17,8 @@ export interface DevLink {
   route: Route | null;
   /** The sheet to open, or "". */
   sheet: SheetName;
+  /** The tab the sheet opens on, when the route named one. */
+  tab?: string;
   /** Present only for `dev-launch`. */
   pairRef?: string;
 }
@@ -30,6 +32,7 @@ export function devLinkOf(e: DevLinkEvent, paired: boolean): DevLink {
     route: base?.route ?? null,
     sheet: base && base.sheet !== "" ? base.sheet : own,
   };
+  if (base?.tab) link.tab = base.tab;
   if (e.source === "dev-launch" && typeof e.pairRef === "string" && e.pairRef !== "") {
     link.pairRef = e.pairRef;
   }
@@ -39,14 +42,14 @@ export function devLinkOf(e: DevLinkEvent, paired: boolean): DevLink {
 /** Puts the router where the link asked. A session over a tab is pushed, anything else replaces. */
 export function applyDevLink(
   router: Pick<Router, "top" | "push" | "replace" | "open">,
-  link: Pick<DevLink, "route" | "sheet">,
+  link: Pick<DevLink, "route" | "sheet" | "tab">,
 ): void {
   const { route } = link;
   if (route) {
     if (route.name === "session" && router.top.name === "tab") router.push(route);
     else router.replace(route);
   }
-  if (link.sheet !== "") router.open(link.sheet);
+  if (link.sheet !== "") router.open(link.sheet, link.tab);
 }
 
 /**

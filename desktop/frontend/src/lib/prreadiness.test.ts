@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import type { PRReadinessData } from '@bindings/internal/protocol';
 const read = vi.hoisted(()=>vi.fn());
 vi.mock('@bindings/desktop',()=>({DaemonService:{PRReadiness:read}}));
-import { readPRReadiness } from './prreadiness';
+import { readPRReadiness, readPRReadinessRecent } from './prreadiness';
 
 it('shares concurrent reads but fetches again after completion',async()=>{
   let finish!:(value:PRReadinessData)=>void;
@@ -24,4 +24,20 @@ it('removes failed requests so the next refresh can retry',async()=>{
   await expect(readPRReadiness('retry',42)).rejects.toThrow('offline');
   read.mockResolvedValueOnce({head:'recovered'});
   expect(await readPRReadiness('retry',42)).toEqual({head:'recovered'});
+});
+it('answers a recent read from the last result and asks again once it is too old',async()=>{
+  vi.useFakeTimers();
+  try {
+    read.mockReset();
+    read.mockResolvedValueOnce({head:'one'});
+    await readPRReadiness('recent',7);
+    expect(await readPRReadinessRecent('recent',7,30000)).toEqual({head:'one'});
+    expect(read).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(30001);
+    read.mockResolvedValueOnce({head:'two'});
+    expect(await readPRReadinessRecent('recent',7,30000)).toEqual({head:'two'});
+    expect(read).toHaveBeenCalledTimes(2);
+    read.mockResolvedValueOnce({head:'other'});
+    expect(await readPRReadinessRecent('recent',8,30000)).toEqual({head:'other'});
+  } finally { vi.useRealTimers(); }
 });

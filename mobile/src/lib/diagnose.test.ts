@@ -29,6 +29,24 @@ describe("diagnose", () => {
     }
   });
 
+  it("says whether the team hub relay could have helped", () => {
+    const d = (relay: "none" | "ok" | "backoff" | "credential_dead" | "hub_too_old") =>
+      diagnose({ phase: "closed", failure: "unreachable", label: "Mars Mac", relay });
+    expect(d("none").detail).toBe("Can't reach Mars Mac, and remote access isn't set up.");
+    expect(d("hub_too_old").detail).toBe("Can't reach Mars Mac; its team hub needs an update.");
+    expect(d("credential_dead").detail).toBe("Can't reach Mars Mac, and remote access has expired.");
+    expect(d("ok").detail).toBe("Can't reach Mars Mac here or through its team hub.");
+    expect(d("backoff").detail).toBe("Can't reach Mars Mac here or through its team hub.");
+    for (const relay of ["none", "ok", "backoff", "credential_dead", "hub_too_old"] as const) {
+      const x = d(relay);
+      expect(x).toMatchObject({ kind: "unreachable", title: "Unreachable", retryable: true });
+      expect(words(x.detail)).toBeLessThanOrEqual(12);
+      expect(x.detail.match(/[.…]/g)?.length ?? 0).toBe(1);
+    }
+    // Offline is offline whatever the relay.
+    expect(diagnose({ phase: "closed", failure: "offline", relay: "none" }).detail).toBe("No network.");
+  });
+
   it("falls back to a phrase when the Mac has no name", () => {
     expect(diagnose({ phase: "connecting", failure: "unreachable" }).detail).toBe("Can't reach your Mac.");
   });

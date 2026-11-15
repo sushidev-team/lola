@@ -196,3 +196,36 @@ export function prunePaneLabels(known: readonly string[]): Record<string, string
   if (changed) writeLabels(m);
   return m;
 }
+
+// ---------------------------------------------------------------------------
+// Inbox grouping
+// ---------------------------------------------------------------------------
+
+/** How the Inbox lists sessions: by status section (the default) or by project. */
+export type InboxGroup = "status" | "project";
+
+const INBOX_GROUP_KEY = "lola.mobile.inboxGroup";
+
+/** The remembered grouping. Only the exact string "project" selects it; anything else is the default. */
+export function loadInboxGroup(): InboxGroup {
+  try {
+    return globalThis.localStorage?.getItem(INBOX_GROUP_KEY) === "project" ? "project" : "status";
+  } catch {
+    return "status"; // storage disabled or partitioned
+  }
+}
+
+/** Remember a grouping. The default leaves no key behind. */
+export function saveInboxGroup(group: InboxGroup): void {
+  try {
+    if (group === "project") globalThis.localStorage?.setItem(INBOX_GROUP_KEY, "project");
+    else globalThis.localStorage?.removeItem(INBOX_GROUP_KEY);
+  } catch {
+    /* a list grouping is not worth failing a screen over */
+  }
+}
+
+/** Forget it, so the next open uses the default. Used by tests. */
+export function clearInboxGroup(): void {
+  saveInboxGroup("status");
+}
