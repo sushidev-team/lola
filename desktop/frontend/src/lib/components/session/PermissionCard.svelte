@@ -7,13 +7,15 @@
   import type { Snippet } from "svelte";
   import { store } from "$lib/store.svelte";
   import { agentName } from "$lib/ssh";
+  import { touchSurface } from "$lib/touchsurface";
   import ChoiceCard from "./ChoiceCard.svelte";
 
   let { sessionId, prompt, narrow = false, pager }: { sessionId: string; prompt: AgentPrompt; narrow?: boolean; pager?: Snippet } = $props();
 
   const agent = $derived(agentName(store.sessionById(sessionId)?.agent));
   const asksToRun = $derived(/command/i.test(prompt.lines?.[0] ?? ""));
-  const title = $derived(asksToRun ? `${agent} wants to run` : `${agent} wants permission`);
+  const phone = touchSurface();
+  const title = $derived(phone ? (asksToRun ? "Run command?" : "Allow this?") : asksToRun ? `${agent} wants to run` : `${agent} wants permission`);
 </script>
 
 <ChoiceCard {sessionId} {prompt} {title} {narrow} {pager} note={(l) => (l === "No" ? "Ends this turn" : "")} />

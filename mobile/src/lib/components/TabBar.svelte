@@ -1,133 +1,105 @@
 <script lang="ts" module>
   import type { Component } from "svelte";
+  import { kanbanKey } from "$lib/theme";
   import ActivityIcon from "@mobile/lib/icons/ActivityIcon.svelte";
   import ProjectsIcon from "@mobile/lib/icons/ProjectsIcon.svelte";
   import SessionsIcon from "@mobile/lib/icons/SessionsIcon.svelte";
   import SettingsIcon from "@mobile/lib/icons/SettingsIcon.svelte";
-  import type { Tab } from "@mobile/lib/nav.svelte";
+  import { copy } from "@mobile/lib/copy";
+  import { TABS, type Tab } from "@mobile/lib/router.svelte";
 
-  // The bottom bar: four destinations, drawn in the order the design draws
-  // them (Figma node 42:2).
-  //
-  // The table is a module constant rather than markup repeated four times, but
-  // NOTE what is not in it: no class strings. The active/resting colours differ
-  // per state, not per tab, so they belong in the template where Tailwind can
-  // see them as literals — a `text-${tone}` composed out of a table compiles to
-  // nothing (CLAUDE.md's Button rule, and app.css's @source note for why the
-  // failure is silent here in particular).
-  //
-  // The order is `TABS`' order and must stay in step with it: `TABS` is what a
-  // link validates against and what a future keyboard shortcut would index
-  // into, and a bar drawn in a different order than the vocabulary reads is a
-  // bug nobody sees until they count.
-  const ITEMS: { tab: Tab; label: string; icon: Component }[] = [
-    { tab: "sessions", label: "Sessions", icon: SessionsIcon },
-    { tab: "activity", label: "Activity", icon: ActivityIcon },
-    { tab: "projects", label: "Projects", icon: ProjectsIcon },
-    { tab: "settings", label: "Settings", icon: SettingsIcon },
-  ];
+  const ICONS: Record<Tab, Component> = {
+    inbox: SessionsIcon,
+    projects: ProjectsIcon,
+    activity: ActivityIcon,
+    settings: SettingsIcon,
+  };
+  const LABELS: Record<Tab, string> = {
+    inbox: copy.inbox.title,
+    projects: copy.projects.title,
+    activity: copy.activity.title,
+    settings: copy.settings.title,
+  };
+
+  /** Sessions the Inbox shows as "Needs you" cards (spec §5.2): a blocked or regressed one, or an approved PR. */
+  export function needsYouCount(
+    sessions: readonly { agentState?: string; delivery?: string }[],
+  ): number {
+    let n = 0;
+    for (const s of sessions) {
+      const k = kanbanKey(s.agentState, s.delivery);
+      if (k === "needs" || k === "fixing" || s.delivery === "approved") n++;
+    }
+    return n;
+  }
 </script>
 
 <script lang="ts">
   import { store } from "$lib/store.svelte";
-  import { attentionCount } from "$lib/theme";
-  import { nav } from "@mobile/lib/nav.svelte";
+  import { haptic } from "@mobile/lib/haptics";
+  import { router } from "@mobile/lib/router.svelte";
 
-  // WHY IT READS THE SINGLETONS RATHER THAN TAKING PROPS. This is chrome: there
-  // is exactly one of it, it is mounted by App.svelte and by nothing else, and
-  // every fact it draws (which tab, how many sessions need a human) is already
-  // module state that its one parent would only have to forward. The mobile
-  // tests drive those singletons directly for the same reason Sessions.test.ts
-  // does — a mocked store would let this component pass while the real one has
-  // renamed a field underneath it.
+  // The bottom bar: four destinations in `TABS` order, drawn on the tab shell
+  // only (never on a session, never on Connect).
   //
-  // `attentionCount` is the SHARED count, over the legacy status word, and it
-  // is deliberately not recomputed here: theme.ts is a port of Go's
-  // internal/state pinned by desktop/state_parity_test.go, and a second
-  // definition of "needs a human" on the phone is exactly the drift that
-  // vocabulary exists to prevent. The Sessions header counts the same way, so
-  // the badge and the subtitle can never disagree.
-  const needsYou = $derived(attentionCount(store.sessions));
+  // Invariants:
+  //  - A <nav> of buttons with `aria-current="page"`, not role="tablist": these
+  //    are destinations, not panels of one document.
+  //  - The bar is 49pt plus the bottom inset (the home indicator's allowance and
+  //    nothing else), so the screens above it do not pay it. It is translucent
+  //    canvas over a blur; the selected tab draws its glyph filled.
+  //  - The badge is a count capsule on the Inbox glyph: the Inbox's "Needs you"
+  //    cards, the one number that says something is waiting; it is part of the
+  //    button's name when showing.
+  //  - Changing tab replaces the route: each tab keeps its own depth only while
+  //    it is the top of the stack.
+
+  const needs = $derived(needsYouCount(store.sessions));
+  const current = $derived(router.top.name === "tab" ? router.top.tab : null);
+
+  function go(tab: Tab): void {
+    if (tab === current) return;
+    haptic("select");
+    router.replace({ name: "tab", tab });
+  }
 </script>
 
-<!-- A <nav> of buttons, NOT role="tablist".
-     ARIA tabs describe panels inside one document that are shown and hidden;
-     these are four destinations, and a screen reader that announces "tab 2 of 4"
-     for a whole section of the app is describing the wrong thing. `aria-current
-     ="page"` is the pattern for "this is the destination you are on", and it is
-     what iOS's own bar maps to.
-
-     The bar PAYS THE BOTTOM INSET ITSELF (`pb-safe-b`), so the screens above it
-     do not: a screen that also paid it would leave a band of canvas between its
-     last row and a bar that is already clear of the home indicator. The ground
-     and the border sit on the <nav> rather than on the row, so the inset strip
-     under the tabs is crust too — an inset drawn in canvas reads as the bar
-     floating.
-
-     The row is exactly the design's 82pt box (`h-[82px] pt-2 pb-[22px]`), which
-     leaves 52pt of target height: over Apple's 44 minimum, but `tap` states the
-     guarantee rather than leaving it to be re-derived from three paddings. -->
-<!-- THE BOTTOM INSET IS PAID ONCE, AND THE DESIGN ALREADY PAYS MOST OF IT. The
-     Figma frame is 844 points tall, its tab bar starts at 762 and is 82 tall, so
-     the bar runs to the very bottom edge and its own `pb-[22px]` IS the home
-     indicator allowance — the frame draws the indicator inside that band. Adding
-     `pb-safe-b` on top of it therefore counted the same space twice and came to
-     about 116 points of chrome on a notched phone against Apple's own 83.
-
-     `max()` is what pays it exactly once: the drawn 22 points on a device with
-     no inset, and the real inset (34 on the notched phones) where there is one.
-     The 59-point band above it — `pt-2` plus a 51-point row — is the design's
-     and does not move, so the glyph and its label sit where the frame puts them
-     on every device. -->
 <nav
-  class="shrink-0 border-t border-edge-soft bg-crust"
-  style="padding-bottom: max(22px, env(safe-area-inset-bottom, 0px))"
+  class="shrink-0 border-t-[0.5px] border-edge-soft"
+  style="padding-bottom: env(safe-area-inset-bottom, 0px); background: color-mix(in srgb, var(--color-canvas) 80%, transparent); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%)"
   aria-label="Sections"
 >
-  <div class="grid h-[60px] grid-cols-4 pt-2">
-    {#each ITEMS as item (item.tab)}
-      {@const active = nav.tab === item.tab}
-      {@const Icon = item.icon}
-      <!-- The badge is the ONE thing on this bar a sighted user gets and a
-           VoiceOver user would not, so the count goes into the button's name
-           when it is showing — the same trade the sessions header's filter
-           button makes. When there is nothing to say, the visible label IS the
-           name and no aria-label is set: an aria-label duplicating the text it
-           covers is one more string to keep in step for no gain. -->
+  <div class="grid h-[49px] grid-cols-4">
+    {#each TABS as tab (tab)}
+      {@const active = current === tab}
+      {@const Icon = ICONS[tab]}
       <button
         type="button"
-        class="tap flex touch-manipulation flex-col items-center justify-center gap-1
-               active:opacity-70 {active ? 'text-accent' : 'text-faint'}"
+        class="tap flex touch-manipulation flex-col items-center justify-center gap-0.5 active:opacity-70 {active
+          ? 'text-accent'
+          : 'text-tab-idle'}"
         aria-current={active ? "page" : undefined}
-        aria-label={item.tab === "sessions" && needsYou > 0
-          ? `Sessions — ${needsYou} need you`
-          : undefined}
-        onclick={() => nav.toTab(item.tab)}
+        aria-label={tab === "inbox" && needs > 0 ? `${LABELS.inbox}, ${needs} need you` : undefined}
+        onclick={() => go(tab)}
       >
         <span class="relative flex">
-          <Icon />
-          {#if item.tab === "sessions" && needsYou > 0}
-            <!-- Decoration: the state it marks is in the button's accessible
-                 name above and in the Sessions header's subtitle.
-
-                 THE RING IS WHAT MAKES IT A BADGE. A 9px dot laid straight over
-                 a 20x22 glyph of the same weight reads as part of the glyph —
-                 a smudge on the top rule of the list mark. A 2px ring in the
-                 bar's own ground knocks it out of whatever it overlaps, which
-                 is the same trick the Settings glyph's slider handles use (see
-                 the icons README), and it works on every flavor because
-                 `crust` is repainted with the theme by mobiletokens.ts.
-
-                 `orange` rather than `bad`: this is the "waiting for you"
-                 colour the whole design uses for attention, and `bad` is the
-                 broken family — a badge in red would claim something failed. -->
+          <!-- The inbox tray stays the outline glyph when selected, matching the other tabs. -->
+          <Icon filled={active && tab !== "inbox"} size={26} />
+          {#if tab === "inbox" && needs > 0}
+            <!-- An 18px count circle with a 2px crust ring, its centre 10px right of and its top 6px above the
+                 glyph's top-right, so it never covers more than a corner. `on-bad` is the measured
+                 label for the `bad` fill (white on latte, dark on the dark flavors). -->
             <span
-              class="absolute -top-0.5 -right-1.5 size-[9px] rounded-full bg-orange ring-2 ring-crust"
+              class="absolute flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-bad px-1 text-[11px] leading-none font-bold text-on-bad tabular-nums ring-2 ring-crust"
+              style="top: -4px; left: calc(100% - 8px)"
+              data-badge
               aria-hidden="true"
-            ></span>
+            >
+              {needs > 99 ? "99+" : needs}
+            </span>
           {/if}
         </span>
-        <span class="text-sm">{item.label}</span>
+        <span class="text-[10px] leading-[12px] font-medium">{LABELS[tab]}</span>
       </button>
     {/each}
   </div>

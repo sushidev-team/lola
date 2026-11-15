@@ -1,11 +1,15 @@
-//go:build lola_insecure
-
 package daemon
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"math/big"
 	"net"
 	"strconv"
 	"strings"
@@ -13,44 +17,71 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/devices"
 	"github.com/sushidev-team/lola/internal/panebus"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
-// insecureHelloCmd is the req frame M1's bearer-key authorizer consumes before
-// the frame loop starts. internal/remote keeps the constant unexported because
-// the whole path is deleted in M2, so it is spelled out here; the remote.* namespace
-// is denied unconditionally, so a second hello can never reach d.handle.
-const insecureHelloCmd = "remote.hello"
+// pairedPhone is a phone the registry already knows: a generated P-256
+// certificate whose SPKI hash was registered with Registry.Add, which is all a
+// pairing leaves behind. The tests that are not about pairing use it instead of
+// running one.
+type pairedPhone struct {
+	cert tls.Certificate
+	dev  devices.Device
+}
 
-const insecureTestKey = "integration-test-key-not-a-real-secret"
+func addPairedPhone(t *testing.T, d *Daemon, tiers []string) pairedPhone {
+	t.Helper()
+	if tiers == nil {
+		tiers = protocol.DefaultTiers
+	}
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "phone"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, priv.Public(), priv)
+	if err != nil {
+		t.Fatalf("certificate: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	dev, err := d.devices.Add("Test phone", "ios", devices.HashSPKI(leaf.RawSubjectPublicKeyInfo), tiers, nil)
+	if err != nil {
+		t.Fatalf("Registry.Add: %v", err)
+	}
+	return pairedPhone{cert: tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}, dev: dev}
+}
 
-// TestRemoteFrameReachesTheDaemonAndASubscribeReachesThePaneBus is M1's
-// architecture test: one real TLS connection carrying the real frame codec into
-// the real dispatcher and the real pane registry, with only tmux faked.
+// TestRemoteFrameReachesTheDaemonAndASubscribeReachesThePaneBus is the
+// architecture test: one real mutual-TLS connection from a registered phone
+// carrying the real frame codec into the real dispatcher and the real pane
+// registry, with only tmux faked.
 //
-// It proves the four joins nothing else covers, because each lives in a
-// different package and none of those packages may import another:
+// It proves the joins nothing else covers, because each lives in a different
+// package and none of those packages may import another:
 //
-//  1. A req frame decoded by internal/remote reaches internal/daemon's own
-//     d.handle and answers out of the daemon's own state — the Handle seam is
-//     bound to the dispatcher and not to a stub.
-//  2. A sub frame reaches internal/panebus through the remotePanes adapter, and
+//  1. The registry the daemon owns is the one the listener authenticates
+//     against: a phone added with Registry.Add is greeted with a ready frame.
+//  2. A req frame decoded by internal/remote reaches internal/daemon's own
+//     d.handle through handleRemote and answers out of the daemon's own state.
+//  3. A sub frame reaches internal/panebus through the remotePanes adapter, and
 //     the resync that comes back carries the geometry the bus measured, not the
 //     phone's viewport.
-//  3. Pane bytes cross the adapter's channel re-typing and arrive as pty
-//     frames, and a pty write crosses back into the pane.
-//  4. The identity gate is the daemon's session store: a pane in no session's
+//  4. Pane bytes cross the adapter and arrive as pty frames, and a pty write
+//     crosses back into the pane.
+//  5. The identity gate is the daemon's session store: a pane in no session's
 //     namespace is refused BEFORE any attach, so a refusal costs no process.
-//
-// It also pins the M1 rail that makes the insecure path survivable: the bind
-// is forced to loopback even though the configuration says "lan".
 func TestRemoteFrameReachesTheDaemonAndASubscribeReachesThePaneBus(t *testing.T) {
-	t.Setenv("LOLA_REMOTE_INSECURE_KEY", insecureTestKey)
-
 	d := newRemoteTestDaemon(t)
-	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "lan", Port: freePort(t)}
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
 
 	fake := panebus.NewFake()
 	d.paneRegistry = func() *panebus.Registry { return fake.Registry() }
@@ -61,6 +92,7 @@ func TestRemoteFrameReachesTheDaemonAndASubscribeReachesThePaneBus(t *testing.T)
 	d.sessions.Upsert(session.Session{
 		ID: pane, TmuxName: pane, Project: "web", Issue: "ENG-42", Status: "working",
 	})
+	phone := addPairedPhone(t, d, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -68,30 +100,28 @@ func TestRemoteFrameReachesTheDaemonAndASubscribeReachesThePaneBus(t *testing.T)
 	t.Cleanup(d.stopRemote)
 
 	if d.remote == nil {
-		t.Fatal("the listener did not start; a lola_insecure build with a key in the environment must bind one")
+		t.Fatalf("the listener did not start: %s", d.remoteErr)
 	}
-
-	// The M1 rail: bind = "lan" was asked for and loopback is what was taken.
-	// Asserted on the ADDRESSES, not on a mode string, because the address is
-	// what a shared bearer secret would have travelled over.
 	addrs := d.remote.Addrs()
 	if len(addrs) == 0 {
 		t.Fatal("the listener bound no address")
 	}
-	for _, ba := range addrs {
-		host, _, err := net.SplitHostPort(ba.Addr)
-		if err != nil {
-			t.Fatalf("bound address %q: %v", ba.Addr, err)
-		}
-		if ip := net.ParseIP(strings.TrimSuffix(host, "%"+ba.Iface)); ip == nil || !ip.IsLoopback() {
-			t.Errorf("bound %s, but a lola_insecure build must force every bind to loopback", ba.Addr)
-		}
-	}
 
-	c := dialRemote(t, addrs[0].Addr)
-	c.hello(t)
+	c := dialRemote(t, addrs[0].Addr, phone.cert)
 
-	// (1) A req frame reaches d.handle and answers from the daemon's own store.
+	// (1) The first frame is ready, naming the device the registry holds.
+	t.Run("the first frame is ready for the registered device", func(t *testing.T) {
+		f := c.await(t, func(f *protocol.Frame) bool { return f.Type == protocol.FrameReady })
+		var rd protocol.ReadyData
+		if err := f.DecodePayload(&rd); err != nil {
+			t.Fatalf("decode ready: %v", err)
+		}
+		if rd.DeviceID != phone.dev.ID || rd.Via != "lan" {
+			t.Errorf("ready = %+v, want device %s via lan", rd, phone.dev.ID)
+		}
+	})
+
+	// (2) A req frame reaches d.handle and answers from the daemon's own store.
 	t.Run("a request frame reaches the daemon's dispatcher", func(t *testing.T) {
 		c.send(t, protocol.Frame{V: protocol.FrameVersionCurrent, Type: protocol.FrameReq, ID: "r1", Cmd: "sessions"},
 			protocol.Request{Cmd: "sessions"})
@@ -116,7 +146,7 @@ func TestRemoteFrameReachesTheDaemonAndASubscribeReachesThePaneBus(t *testing.T)
 		}
 	})
 
-	// (4) The identity gate runs BEFORE anything is spawned. Asserted first, so
+	// (5) The identity gate runs BEFORE anything is spawned. Asserted first, so
 	// the attach count below is unambiguous.
 	t.Run("a pane in no session's namespace is refused before any attach", func(t *testing.T) {
 		before := fake.CallCount()
@@ -140,7 +170,7 @@ func TestRemoteFrameReachesTheDaemonAndASubscribeReachesThePaneBus(t *testing.T)
 		}
 	})
 
-	// (2) A sub frame reaches the bus, and the resync reports the WINDOW.
+	// (3) A sub frame reaches the bus, and the resync reports the WINDOW.
 	t.Run("a subscribe reaches the pane bus and is acknowledged by a resync", func(t *testing.T) {
 		c.send(t, protocol.Frame{V: protocol.FrameVersionCurrent, Type: protocol.FrameSub, ID: "s1", Pane: pane},
 			protocol.SubPayload{Cols: 55, Rows: 34})
@@ -165,7 +195,7 @@ func TestRemoteFrameReachesTheDaemonAndASubscribeReachesThePaneBus(t *testing.T)
 		}
 	})
 
-	// (3) Bytes cross the adapter in both directions.
+	// (4) Bytes cross the adapter in both directions.
 	t.Run("pane output arrives as pty frames and a write reaches the pane", func(t *testing.T) {
 		p := fake.Pane(pane)
 		if p == nil {
@@ -219,13 +249,37 @@ func TestRemoteFrameReachesTheDaemonAndASubscribeReachesThePaneBus(t *testing.T)
 	})
 }
 
+// TestUntaggedBuildListens replaces the old "an untagged build binds nothing"
+// pin: every binary carries the one listener, so a config that asks for it gets
+// a bound socket with no build tag and no environment key.
+func TestUntaggedBuildListens(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	port := freePort(t)
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: port}
+	d.paneRegistry = func() *panebus.Registry { return panebus.NewFake().Registry() }
+
+	d.startRemote(context.Background())
+	t.Cleanup(d.stopRemote)
+
+	if d.remote == nil {
+		t.Fatalf("the listener did not start: %s", d.remoteErr)
+	}
+	if d.remoteErr != "" {
+		t.Errorf("remoteErr = %q after a successful start", d.remoteErr)
+	}
+	if !d.remoteServes.Load() {
+		t.Error("remoteServes must record that a server should exist")
+	}
+	if _, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port))); err == nil {
+		t.Fatalf("port %d is free, so nothing is listening on it", port)
+	}
+}
+
 // TestRemoteReloadRebindsOntoTheNewPort covers handleReload's half of the
 // wiring: a changed [remote] table tears the listener down and brings a new one
 // up on the new address, and the old port is genuinely released rather than
 // held by a listener nobody can reach any more.
 func TestRemoteReloadRebindsOntoTheNewPort(t *testing.T) {
-	t.Setenv("LOLA_REMOTE_INSECURE_KEY", insecureTestKey)
-
 	d := newRemoteTestDaemon(t)
 	d.shutdownCtx = context.Background()
 	first := freePort(t)
@@ -259,34 +313,64 @@ func TestRemoteReloadRebindsOntoTheNewPort(t *testing.T) {
 	ln.Close()
 }
 
-// remoteClient is a minimal phone: one TLS connection speaking the real codec.
+// TestRegistrySurvivesListenerReload pins who owns the device registry and the
+// pairing window: the daemon, not the listener. A rebind must keep paired
+// devices (the same *Registry, the same entries) and an open pairing window.
+func TestRegistrySurvivesListenerReload(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	d.shutdownCtx = context.Background()
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
+	d.paneRegistry = func() *panebus.Registry { return panebus.NewFake().Registry() }
+
+	phone := addPairedPhone(t, d, nil)
+	reg, pairer := d.devices, d.pairer
+
+	d.startRemote(context.Background())
+	t.Cleanup(d.stopRemote)
+	if d.remote == nil {
+		t.Fatalf("no listener: %s", d.remoteErr)
+	}
+	ticket, err := d.pairer.Begin()
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+
+	d.reloadRemote()
+	if d.remote == nil {
+		t.Fatalf("no listener after the reload: %s", d.remoteErr)
+	}
+	if d.devices != reg || d.pairer != pairer {
+		t.Fatal("a reload replaced the registry or the pairer")
+	}
+	if _, ok := d.devices.Get(phone.dev.ID); !ok {
+		t.Error("the paired device is gone after a listener reload")
+	}
+	st, err := d.pairer.Status(context.Background(), protocol.PairStatusArgs{Pairing: ticket.ID})
+	if err != nil || st.State != protocol.PairStateWaiting {
+		t.Errorf("pairing after the reload = %+v, %v; want it still waiting", st, err)
+	}
+}
+
+// remoteClient is a minimal phone: one mutual-TLS connection speaking the real
+// codec.
 type remoteClient struct {
 	fr   *protocol.FrameReader
 	fw   *protocol.FrameWriter
 	conn net.Conn
 }
 
-func dialRemote(t *testing.T, addr string) *remoteClient {
+func dialRemote(t *testing.T, addr string, cert tls.Certificate) *remoteClient {
 	t.Helper()
-	// M1's client pins the SPKI; the pinning itself is M2, so the test skips
-	// verification and relies on the daemon's own generated identity.
-	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13})
+	// A real phone pins the daemon's SPKI; pinning is internal/remote's own
+	// test, so this one skips verification and presents its own certificate.
+	conn, err := tls.Dial("tcp", addr, &tls.Config{
+		InsecureSkipVerify: true, MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert},
+	})
 	if err != nil {
 		t.Fatalf("dial %s: %v", addr, err)
 	}
 	t.Cleanup(func() { conn.Close() })
 	return &remoteClient{fr: protocol.NewFrameReader(conn), fw: protocol.NewFrameWriter(conn), conn: conn}
-}
-
-// hello performs M1's bearer-key handshake and requires the acknowledgement.
-func (c *remoteClient) hello(t *testing.T) {
-	t.Helper()
-	c.send(t, protocol.Frame{V: protocol.FrameVersionCurrent, Type: protocol.FrameReq, ID: "hello", Cmd: insecureHelloCmd},
-		map[string]string{"key": insecureTestKey})
-	f := c.await(t, func(f *protocol.Frame) bool { return f.ID == "hello" })
-	if f.Type != protocol.FrameResp {
-		t.Fatalf("hello answered with a %s frame, want a resp — the key was refused", f.Type)
-	}
 }
 
 func (c *remoteClient) send(t *testing.T, f protocol.Frame, payload any) {
@@ -331,8 +415,6 @@ func (c *remoteClient) await(t *testing.T, match func(*protocol.Frame) bool) pro
 // otherwise bind a listener AFTER stopRemote had already run — and nothing
 // would ever wait for it or take it down.
 func TestRemoteRefusesToBindOnceTheRunContextIsCancelled(t *testing.T) {
-	t.Setenv("LOLA_REMOTE_INSECURE_KEY", insecureTestKey)
-
 	d := newRemoteTestDaemon(t)
 	port := freePort(t)
 	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: port}

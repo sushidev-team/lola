@@ -80,6 +80,9 @@ type APIError struct {
 	Status  int
 	Code    string
 	Message string
+	// RetryAfter is the hub's Retry-After on a refused relay upgrade (0 = none,
+	// and always 0 for an HTTP call). Only the relay dials set it.
+	RetryAfter time.Duration
 }
 
 func (e *APIError) Error() string {

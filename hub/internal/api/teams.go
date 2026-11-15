@@ -420,5 +420,8 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, dev store.
 		writeError(w, http.StatusNotFound, hubproto.CodeNotFound)
 		return
 	}
+	// The revoked device's relay link and splices close now, not at the
+	// next sweep.
+	s.RelayRecheck()
 	writeJSON(w, http.StatusOK, struct{}{})
 }

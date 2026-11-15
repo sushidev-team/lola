@@ -6,6 +6,7 @@ import { store } from "$lib/store.svelte";
 import { nav } from "$lib/nav.svelte";
 import { ssh } from "$lib/ssh.svelte";
 import { feed } from "$lib/feed.svelte";
+import { setPushSource } from "$lib/pushsource";
 import { buildStory, findInStory } from "$lib/turns";
 import Timeline from "./Timeline.svelte";
 import TimelineSlot from "./TimelineSlot.svelte";
@@ -841,6 +842,50 @@ describe("Timeline's own states", () => {
     expect(screen.getByRole("heading", { name: "Fix login" })).toBeInTheDocument();
     expect(screen.getByText("Fix the redirect.")).toBeInTheDocument();
     expect(screen.getByText("Claude is reading the task")).toBeInTheDocument();
+  });
+
+  it("while following, a scanning feed starts no interval", async () => {
+    setup([]);
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let on: (p: never) => void = () => {};
+    setPushSource({ feed: (_s: string, a: (p: never) => void) => ((on = a), () => {}) } as never);
+    try {
+      render(Timeline, { sessionId: SID });
+      await settle();
+      on({ reset: true, older: false, epoch: "e1", lastSeq: 3, items: [text("x1", "pushed")], scanning: true, health: "ok" } as never);
+      await settle();
+      expect(screen.getByText("Reading this conversation")).toBeInTheDocument();
+      svc.Feed.mockClear();
+      vi.advanceTimersByTime(5000);
+      await settle();
+      expect(svc.Feed).not.toHaveBeenCalled();
+    } finally {
+      setPushSource(null);
+    }
+  });
+
+  it("a topic refused as it is watched is watched once, and the fetch that replaces it settles", async () => {
+    setup([]);
+    // A view already read: the refusal's fetch is the only one, and what it changes must not re-watch.
+    svc.Feed.mockResolvedValue({ session: SID, epoch: "e1", lastSeq: 2, health: "ok", items: [text("x2", "fetched")] });
+    const first = render(Timeline, { sessionId: SID });
+    await settle();
+    first.unmount();
+    svc.Feed.mockResolvedValue({ session: SID, epoch: "e1", lastSeq: 2, scanning: true, health: "ok", items: [text("x2", "fetched")] });
+    const feedFn = vi.fn((_s: string, _on: unknown, onError: (e: string) => void) => {
+      onError("limit");
+      return () => {};
+    });
+    setPushSource({ feed: feedFn, timeline: () => () => {} } as never);
+    try {
+      render(Timeline, { sessionId: SID });
+      await settle();
+      await waitFor(() => expect(screen.getByText("Reading this conversation")).toBeInTheDocument());
+      await settle();
+      expect(feedFn).toHaveBeenCalledTimes(1);
+    } finally {
+      setPushSource(null);
+    }
   });
 
   it("while the scanner reads, it says so and asks for the tail again", async () => {

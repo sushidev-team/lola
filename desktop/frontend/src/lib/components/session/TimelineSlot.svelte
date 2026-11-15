@@ -7,6 +7,7 @@
   import { ssh } from "$lib/ssh.svelte";
   import { feed } from "$lib/feed.svelte";
   import { talk } from "$lib/talk.svelte";
+  import { touchSurface } from "$lib/touchsurface";
   import StoryLine from "./StoryLine.svelte";
   import FeedNotice from "./FeedNotice.svelte";
   import ActivityMap from "./ActivityMap.svelte";
@@ -25,6 +26,9 @@
   // talkState judges health every second, and a feed reply only when there was something to fetch.
   const health = $derived(talk.state(sessionId)?.health || f.health);
   const maxBlock = $derived(view.outputMax ? view.block(view.outputMax) : undefined);
+  // The map is a pointer scrubber the phone never draws. Not mounting it there spares a second
+  // story build and a button per event on every pushed item of a long conversation.
+  const showMap = !touchSurface();
 </script>
 
 <div class="contents" data-timeline-slot>
@@ -34,7 +38,7 @@
     {/if}
     <!-- A daemon that is down answers nothing, and that says nothing about the log. -->
     {#if store.alive}<FeedNotice {sessionId} health={health} />{/if}
-    <ActivityMap {sessionId} />
+    {#if showMap}<ActivityMap {sessionId} />{/if}
     {#if !side}<StoryLine {sessionId} {onside} />{/if}
   </div>
   <Timeline {sessionId} />

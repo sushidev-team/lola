@@ -164,6 +164,8 @@ protocol-version mismatch.
 | `lola hub claim <item-id>... [--project P] [--patch] [--minor] [--major] [--note T]` | Claim one item — or several advisories of one repository, for ONE session — now and start its session. `--patch` / `--minor` / `--major` also update the repository's other dependencies by that much; `--note` adds your words for the agent. A person's claim needs no `hub_chores` opt-in and spends no `max_claims_per_day`, but `require_sandbox`, `accept_kinds`, the spend/load hold, the health gate and the GitHub re-read still apply. `--project` picks among several projects on the item's repo. |
 | `lola hub release <item-id>` | Give a claimed item back. A session working it keeps running; lola only stops renewing and reporting it. |
 | `lola hub sync` | Run one hub loop pass now, re-fetching the team policy. |
+| `lola pair [--tiers a,b] [--no-shell] [--name N] [--json]` | Pair a phone. Opens a 5-minute pairing window, prints its QR code, then waits for you to type the 6-digit code the phone shows (an empty line rejects). The daemon never displays the code, so a stranger on the network cannot confirm a pairing for you. `--tiers` picks the [capability tiers](#remote-optional) the phone gets (must include `read`); `--no-shell` withholds `shell`; `--name` overrides the device name the phone sent; `--json` prints one JSON object per event instead (the code line is still read from stdin). Needs the daemon and an enabled `[remote]`. |
+| `lola devices [--json]` | List paired phones: id, name, tiers, last seen and whether one is connected now. `lola devices revoke <id\|name>` revokes one at once and closes its connections; `lola devices tiers <id\|name> <tier,...>` replaces its tiers (the phone reconnects with the new set). |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola projects bulk [--project name]… [--agent k] [--match-label l]… [--match-mode m] [--on-sent-label l] [--blocked-label l] [--dry-run]` | Change the same settings on all (or the named) projects in one atomic config save. Label values are ids, names or `group/name`, resolved in **each project's own team** (the same label has a different id per team). Nothing is saved if any project fails to resolve; `--dry-run` previews. `--clear-*` flags set a value to empty. |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
@@ -1740,44 +1742,46 @@ reach the hub — never code, file names, paths or transcripts.
 
 ### `[remote]` (optional)
 
-**The phone listener, and it is off by default for what it grants rather than
-for what it costs.** Enabling it lets a paired mobile client read the session
-list, answer a parked agent and attach to a live pane. Say the consequence
-plainly: that phone can type arbitrary prose into an autonomous coding agent,
-and terminal write on a `-shell-N` tab is arbitrary code execution on this Mac
-with your `gh` token, SSH agent and login keychain in reach. A lost phone is
-answered by revoking the device from the desktop, not by a cautious default
-here.
+**The phone listener and relay, off by default for what they grant rather than
+for what they cost.** Enabling it lets a paired phone read the session list,
+answer a parked agent and, with higher tiers, steer and attach to live panes.
+Say the consequence plainly: that phone can type arbitrary prose into an
+autonomous coding agent, and terminal write on a `-shell-N` tab (tier `shell`)
+is arbitrary code execution on this Mac with your `gh` token, SSH agent and
+login keychain in reach. A lost phone is answered by revoking the device
+(`lola devices revoke`, or Settings, Phones in the app), not by a cautious
+default here.
+
+Pairing is `lola pair` or Settings, Phones: scan the QR, then confirm the code
+the phone shows. Each phone gets its own key and its own tiers (`read`,
+`answer`, `control`, `destructive`, `shell`); the listener is in every build and
+needs no build tag.
 
 | Key | Type | Description |
 | --- | --- | --- |
 | `enabled` | bool | Gates the whole feature. Default `false`; an absent `[remote]` table means the same and is never written back on save. |
-| `bind` | string | `off` \| `localhost` \| `lan` \| `all`, or a literal IP address. Empty or absent uses `localhost`. |
+| `bind` | string | `off` \| `localhost` \| `lan` \| `all`, or a literal IP address. Empty or absent uses `localhost`. A direct path needs `lan` (or an IP); with `localhost` only an SSH forward, a VPN or the relay can reach it. |
 | `port` | int | TCP port. `0` (or absent) uses `7717`. |
+| `relay` | bool | Let a paired phone reach this Mac through the joined [team hub](#hub-optional-off-by-default) when it is not on the same network. Default `true`; effective only with `enabled = true` and a joined hub. The relay carries the phone's own end-to-end TLS session, so the hub sees ciphertext only. `false` keeps the phone on LAN/VPN. |
+| `advertise` | bool | Publish the listener with mDNS so a paired phone finds this Mac on a new network. Default `false`: it tells every peer on the network that this machine runs coding agents. |
+| `dev_forward` | bool | Republish an active session's dev servers on the local network so a phone can open them. Default `false`. |
 
 `bind` decides which interfaces are exposed, and the four keywords are not
-interchangeable. `localhost` is loopback only — what an SSH forward, a VPN or a
-tailnet wants, and the only mode that puts nothing on a network interface.
-`lan` binds the private interfaces (RFC1918 / ULA / link-local) whose names are
-not tunnels or virtual bridges; on a laptop that is **every network this machine
-ever joins**, conference WiFi included, so the daemon logs the bound interfaces
-by name at startup. `all` is `0.0.0.0` and is never a default. `off` binds
-nothing while keeping the rest of the table, which is how you pause the listener
-without losing your settings — so a caller must test both keys, not `enabled`
-alone.
+interchangeable. `localhost` is loopback only. `lan` binds the private
+interfaces (RFC1918 / ULA / link-local) whose names are not tunnels or virtual
+bridges; on a laptop that is **every network this machine ever joins**,
+conference WiFi included, so the daemon logs the bound interfaces by name at
+startup. `all` is `0.0.0.0` and is never a default.
+
+**`bind = "off"` stops listening but not the relay.** It binds nothing while
+keeping the rest of the table; with a joined hub and `relay = true` the daemon
+still serves phones through the relay, on a listener-less server. Use
+`relay = false` to stop the relay and `enabled = false` to stop everything, so a
+caller must test the keys, not `enabled` alone.
 
 A hostname is **rejected**, not resolved: loading a config never makes a network
-call, so `bind` is either one of the four keywords or an IP literal. Validation
-is otherwise deliberately permissive — `enabled = true` with `bind = "off"` is a
-valid, documented state.
-
-Two things this table does not do yet. mDNS advertisement and push credentials
-are later milestones and have no keys here, because a key that quietly does
-nothing is worse than a missing one. And while the transport is still at its
-first milestone, the listener is compiled **only** into a binary built with the
-`lola_insecure` build tag, which also forces the bind to `localhost` whatever
-this table says and logs a warning on every accept; a release binary contains no
-listener at all and says so in the log when the table is enabled.
+call. Validation is otherwise permissive: `enabled = true` with `bind = "off"`
+is a valid, documented state.
 
 ## The coding agent
 
@@ -2027,7 +2031,8 @@ host, a turn's receipt) wears a box or an exit code.
   version whose format changed) opens on its terminal and says why.
 - **When it ends.** A merged session moves to `Ended` in the sidebar and stays readable for
   14 days. A session with a goal is run by the goal, and its conversation is read-only.
-- **The phone and the TUI are unchanged and stay terminal-first.**
+- **The phone runs the same Conversation** (the desktop's components, over `[remote]`);
+  the TUI is unchanged and stays terminal-first.
 
 The full design is [`docs/unified-session.md`](docs/unified-session.md).
 
@@ -2342,7 +2347,7 @@ Say these plainly to whoever turns this on:
 - **Remote output is untrusted.** Control characters are stripped, a handback transcript
   is framed to the agent as untrusted, and a URL opens only through the daemon's
   http(s)-only `openURL`.
-- **A paired phone sees no ssh details.** Every ssh command is refused over `[remote]`,
+- **A paired phone sees no ssh details.** Every ssh command is refused over `[remote]` (tier `never`),
   the `-ssh-N` tab cannot be attached from a phone, and the session list it receives
   leaves out the ssh glance, so the exact command waiting for approval and the agent's
   latest summary stay on the machine.

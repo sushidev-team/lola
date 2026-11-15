@@ -17,7 +17,8 @@ import "time"
 //     so for it the gate stops accidents and well-behaved agents, not a determined
 //     one. docs/ssh-sessions.md says so and the UIs must not imply otherwise.
 //
-// Every ssh command is refused over internal/remote for now.
+// Every SSHAgentCommands and SSHHumanCommands entry is tier never in internal/remote;
+// a phone reads SSH only through sessionTimeline.
 //
 // FACTS and CLAIMS are distinct on this wire. In SSHBlock, Command, Cwd, Status,
 // ExitCode, timings, Actor and Approval are facts the daemon recorded, and Why is
@@ -70,14 +71,13 @@ var SSHAgentCommands = []string{
 	CmdSSHAgentHosts, CmdSSHAgentRequest, CmdSSHAgentRun, CmdSSHAgentPoll, CmdSSHAgentCancel, CmdSSHAgentPost,
 }
 
-// SSHHumanCommands must never cross the bridge.
+// SSHHumanCommands must never cross the bridge. sshRecall and sshAnswer are not
+// here: they act on any session's Conversation and live in TalkCommands.
 var SSHHumanCommands = []string{
 	CmdSSHHosts, CmdSSHOpen, CmdSSHConnect, CmdSSHHumanRun, CmdSSHShareBlock, CmdSSHTerminalCd, CmdSSHGo, CmdSSHDeny, CmdSSHApprove, CmdSSHRevokeGrant,
 	CmdSSHTakeWheel, CmdSSHHandbackPreview, CmdSSHHandback, CmdSSHStop, CmdSSHClose, CmdSSHTrash,
-	CmdSSHTerminal, CmdSSHTimeline, CmdSSHOutput, CmdSSHSay, CmdSSHAnswer, CmdSSHProposal,
-	CmdSSHRecall, CmdSSHResolve, CmdSSHWidgetStatus, CmdSSHPromptAnswer,
-	CmdAgentFeed, CmdAgentFeedOutput, CmdTalkState, CmdAgentSay, CmdAgentStop,
-	CmdAgentChoose, CmdAgentSetting, CmdAgentQueueRelease, CmdEndedSessions,
+	CmdSSHTerminal, CmdSSHTimeline, CmdSSHOutput, CmdSSHSay, CmdSSHProposal,
+	CmdSSHResolve, CmdSSHWidgetStatus, CmdSSHPromptAnswer,
 }
 
 // Tiers. An empty or unknown tier reads as production: a host nobody classified

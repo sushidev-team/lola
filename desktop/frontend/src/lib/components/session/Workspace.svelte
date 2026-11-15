@@ -37,6 +37,11 @@
   // The push carries the glance every two seconds, and is always current. A moving lastSeq is
   // the signal to fetch what changed.
   const pushed = $derived(session?.ssh);
+  // Only the view is a dependency: a refused topic fetches inside follow(), and that reads state.
+  $effect(() => {
+    const v = view;
+    if (sessionId) return untrack(() => v.follow());
+  });
   $effect(() => {
     const conns = pushed?.connections;
     if (conns) view.connections = conns;
@@ -45,6 +50,7 @@
   // The daemon coming back counts too: no seq moves for that, and a fetch that failed while it was
   // down would otherwise stay failed for good.
   $effect(() => {
+    if (view.pushed) return;
     const s = seq;
     const up = store.alive;
     if (!sessionId) return;
@@ -56,7 +62,7 @@
   // While a block runs, its row's preview and clock are worth one read a second.
   const anyRunning = $derived(view.items.some((i) => i.block?.status === "running"));
   $effect(() => {
-    if (!anyRunning || !sessionId) return;
+    if (view.pushed || !anyRunning || !sessionId) return;
     const t = setInterval(() => void view.fetch(), 1000);
     return () => clearInterval(t);
   });
@@ -64,7 +70,7 @@
   // would ask again, and the message would outlive the daemon it was about.
   const predates = $derived(view.predates);
   $effect(() => {
-    if (!predates || !sessionId) return;
+    if (view.pushed || !predates || !sessionId) return;
     const t = setInterval(() => void view.fetch(), 3000);
     return () => clearInterval(t);
   });
@@ -72,7 +78,7 @@
   // a question is worth one read a second.
   const signingIn = $derived(view.connections.some((c) => c.state === "connecting" || c.state === "authenticating"));
   $effect(() => {
-    if (!signingIn || !sessionId) return;
+    if (view.pushed || !signingIn || !sessionId) return;
     const t = setInterval(() => void view.fetch(), 1000);
     return () => clearInterval(t);
   });

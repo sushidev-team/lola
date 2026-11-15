@@ -308,6 +308,10 @@ fields.
 | `POST /v1/items/{id}/complete` | `CompleteRequest` → `{}` | PR must be in the item's repo (and be the item's PR for `red_bump_pr`); 409 `lease_lost` without a live lease |
 | `POST /v1/items/{id}/fail` | `FailRequest` → `{}` | `reason` is one of `spawn_failed`, `agent_gave_up`, `ci_failed`, `pr_closed`, `timeout`, `refused`, `sandbox_required`, `not_reproducible`; optional `pr_url` (the PR the attempt left) and `group` (`^[a-z0-9]{8,32}$`: items failed under one group escalate as one Linear issue); see the lease rules below |
 | `POST /v1/items/{id}/release` | empty → `{}` | back to open, no attempt counted |
+| `POST /v1/relay/rendezvous` | `RendezvousRequest` → `RendezvousResponse` | RELAY: the device's WHOLE set of (rendezvous id, bearer SHA-256) entries, at most 17; entries it leaves out are deleted and lose their connections; an rv another device owns is listed in `conflicts`, the rest is stored |
+| `GET /v1/relay/daemon?v=1` | WebSocket | RELAY, signed: the daemon's control channel (`hello`, `incoming`, `cancel`, `reject`, `bye`); a newer channel replaces the old (close 4000) |
+| `GET /v1/relay/accept?conn=<id>` | WebSocket | RELAY, signed: the daemon's data leg for one `incoming`; 404 when that dial is gone |
+| `GET /v1/relay/phone` | WebSocket | RELAY, unsigned: `Lola-Relay-Rv` + `Lola-Relay-Bearer` headers, no query, no `Origin` (403). 401 alike for every bad credential; 429 with `Retry-After`; 503 `offline` / `busy`; 504 `relay_timeout`. Every refusal carries `Lola-Relay-Code`; the 101 comes only once the daemon's leg exists |
 
 Status codes: 400 `bad_request`, 401 `unauthorized` / `stale_timestamp` / `replayed_nonce`, 403
 `forbidden`, 404 `not_found` / `no_policy`, 409 `conflict` / `lease_lost`, 413 `too_large`, 429
@@ -317,6 +321,14 @@ Bodies are decoded with unknown fields refused, so a hub that predates a field a
 daemon sends it (heartbeat `policy_version`, fail `pr_url` / `group`) and 404 for `progress`. A
 daemon talking to an older hub leaves those fields out, and falls back to complete-on-PR when
 `progress` is 404.
+
+The relay paths live in `hubproto/relay.go` and `hubproto/ws.go`. The relay is blind: the two legs
+carry the phone's end-to-end mutual TLS 1.3 session with its daemon, which the hub splices byte for
+byte and cannot open. It stores rendezvous ids and bearer hashes (never a bearer), counts bytes and
+times, and never logs an rv, a bearer, a relay header or a client address. Limits (all `hubproto`
+constants): per rendezvous id 2 connections and 1 GiB a day, per device 4 connections and 4 GiB a
+day, 64 per org, 512 per hub, 30 minutes idle, shaped byte rates per splice, device and org. Design:
+`DESIGN.md`, *Blind relay*.
 
 ### Lease rules
 
@@ -378,6 +390,24 @@ daemon talking to an older hub leaves those fields out, and falls back to comple
   - or skip the console and use `docker exec` for every admin command.
   Never publish the console port (`-p 8098:8098` with a non-loopback bind is refused anyway).
 - Rate limits: 2 requests/s per device with a burst of 60; enrollment shares one global bucket.
+- **WebSocket timeouts.** The relay (`/v1/relay/*`) holds WebSocket connections open for hours. A
+  reverse proxy must forward `Upgrade`/`Connection` and raise its read and send timeouts (the
+  ingress here sets `proxy-read-timeout` and `proxy-send-timeout` to 3600 s). The hub pings every
+  25 s, so the timeouts are an upper bound, not the liveness check.
+- **Single replica, twice over.** Besides the file store, the relay keeps control links, pending
+  dials and splices in process memory: a phone dial and its daemon's control link must land on
+  the same process. Scaling out needs routing by device id and is not built. A rollout drops every
+  control channel and splice; daemons reconnect, phones re-race.
+- **Per-network dial bucket.** `--client-ip` (default `none`) names where the relay reads a
+  phone's network from: `none` (no per-network bucket), `remote-addr` (a hub with no proxy in
+  front) or `header:<Name>`. Behind ingress-nginx and a load balancer without proxy protocol the
+  address is the balancer's, so keep `none` until the cluster's shared controller enables proxy
+  protocol (`use-proxy-protocol: "true"` in its ConfigMap and
+  `service.beta.kubernetes.io/do-loadbalancer-enable-proxy-protocol: "true"` on its LoadBalancer
+  Service; both live outside this repository and affect every ingress on the cluster). Then add
+  `"--client-ip", "header:X-Real-IP"` to the deployment args and verify from two different
+  networks that the controller's `kubectl logs` show two different client addresses for
+  `/v1/relay/phone` (the hub itself never logs one).
 
 ### Kubernetes (https://lola.sushidev.kitchen)
 

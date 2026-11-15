@@ -9,6 +9,7 @@
   import { terms, AGENT } from "$lib/terms.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { store } from "$lib/store.svelte";
+  import { touchSurface } from "$lib/touchsurface";
   import Button from "../Button.svelte";
 
   let { sessionId, covered = false }: { sessionId: string; covered?: boolean } = $props();
@@ -35,10 +36,10 @@
   }
 </script>
 
-{#if shown}
+{#if shown && !touchSurface()}
   <p class="flex h-6 min-w-0 items-center gap-3 text-sm text-faint" data-first-open>
     <span class="min-w-0 truncate">Your agent still runs in its terminal, unchanged.</span>
-    <Button size="xs" class="h-5! shrink-0" onclick={terminal}>Terminal <span class="text-faint">⌘\</span></Button>
+    <Button size="xs" class="h-5! shrink-0" onclick={terminal}>Terminal <span class="text-faint" data-chord>⌘\</span></Button>
     <Button size="xs" class="h-5! shrink-0" onclick={always}>Always open there</Button>
   </p>
 {/if}

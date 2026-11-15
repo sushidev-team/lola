@@ -29,3 +29,30 @@ if (!window.matchMedia) {
     dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
 }
+
+// jsdom has no Web Animations API, which Svelte's transitions run on. A stub
+// that finishes on the next task lets a transition complete and its element
+// leave; what the motion looks like is verified on a device.
+if (!(Element.prototype as unknown as { animate?: unknown }).animate) {
+  (Element.prototype as unknown as { animate: () => Animation }).animate = function () {
+    const animation = {
+      playState: "running",
+      currentTime: 0,
+      effect: null as unknown,
+      onfinish: null as null | (() => void),
+      cancel() {
+        animation.playState = "idle";
+      },
+      play() {},
+      pause() {},
+      finish() {
+        animation.playState = "finished";
+        animation.onfinish?.();
+      },
+    };
+    setTimeout(() => {
+      if (animation.playState === "running") animation.finish();
+    }, 0);
+    return animation as unknown as Animation;
+  };
+}

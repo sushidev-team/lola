@@ -27,8 +27,8 @@ import UIKit
 /// `scrollEnabled: false`. A modally presented view controller owns its own
 /// window space and leaves the WebView alone.
 
-/// Why a scan could not happen. Distinct from `LolaFailureCode`, which is about
-/// the socket.
+/// Why a scan could not happen. Distinct from `FailureCode`, which is about the
+/// connection.
 public enum LolaScanFailureCode: String, Equatable, Sendable {
     /// There is no capture device at all. The iOS Simulator is the case that
     /// matters day to day: it has no camera and cannot be given one, so a build

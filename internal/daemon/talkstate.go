@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
@@ -78,6 +79,7 @@ func (d *Daemon) talkPaneState(ctx context.Context, s session.Session, pressed b
 		return protocol.ComposerWorking, nil
 	}
 	p, err := d.readTalkPane(ctx, s)
+	d.setTalkReadErr(s.ID, err != nil)
 	if err != nil {
 		return protocol.ComposerUnknown, d.talkPromptOf(s.ID)
 	}
@@ -117,6 +119,37 @@ func (d *Daemon) talkPaneState(ctx context.Context, s session.Session, pressed b
 		return protocol.ComposerModal, d.talkPromptOf(s.ID)
 	}
 	return protocol.ComposerPrompt, d.talkPromptOf(s.ID)
+}
+
+// talkReadErrs remembers, per session, whether the last pane read failed. It is a probe-only
+// signal (the watch prober backs off on it) and never reaches a client or a gate.
+type talkReadErrs struct {
+	mu sync.Mutex
+	m  map[string]bool
+}
+
+func (d *Daemon) talkReadErrs() *talkReadErrs {
+	d.talkErrOnce.Do(func() { d.talkErrs = &talkReadErrs{m: map[string]bool{}} })
+	return d.talkErrs
+}
+
+func (d *Daemon) setTalkReadErr(id string, failed bool) {
+	t := d.talkReadErrs()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if failed {
+		t.m[id] = true
+	} else {
+		delete(t.m, id)
+	}
+}
+
+// talkReadErr says whether the last pane read for id failed.
+func (d *Daemon) talkReadErr(id string) bool {
+	t := d.talkReadErrs()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.m[id]
 }
 
 // parkedOnAnsweredPermission is a permission park with no question left to read. A denial
@@ -184,6 +217,10 @@ func (d *Daemon) talkPromptOf(id string) *protocol.AgentPrompt {
 // talkReadAsync reads the pane soon after a hook says a prompt is up. The hook is async and
 // can land after the answer, so it writes nothing itself: the pane is the evidence.
 func (d *Daemon) talkReadAsync(id string) {
+	// A phone watching talk:<id> is probed soon too: the probe reads the same pane.
+	if d.watch != nil {
+		d.watch.PokeSession(id, pokeTalk)
+	}
 	if !d.beginConnWork() {
 		return
 	}

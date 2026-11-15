@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { activitySummary, buildStory, catchUp, clampsRow, collapseWork, diffStat, foldLabel, liveVerb, findInStory, fitNames, flatRows, isFolded, isLolaCall, lastLifeIndex, locate, OPEN_TURNS, resolveStatus, shortName, toolStatusWords, type RunRowData, type ToolRowData, turnParts, turnAsk, turnFiles, workSegments, answerRowId, railKind } from "./turns";
+import { activitySummary, buildStory, keepTurns, catchUp, clampsRow, collapseWork, diffStat, foldLabel, liveVerb, findInStory, fitNames, flatRows, isFolded, isLolaCall, lastLifeIndex, locate, OPEN_TURNS, resolveStatus, shortName, toolStatusWords, type RunRowData, type ToolRowData, turnParts, turnAsk, turnFiles, workSegments, answerRowId, railKind } from "./turns";
 import { answerShaped } from "./answerblocks";
 
 const T0 = 1_700_000_000_000;
@@ -503,5 +503,32 @@ describe("activity summaries", () => {
   it("does not wrap an existing call group in another disclosure", () => {
     const rows = collapseWork([tool("read", "a.go"), tool("read", "b.go")], false);
     expect(turnParts(rows, 0, true)[0].kind).toBe("row");
+  });
+});
+
+describe("keepTurns", () => {
+  const user = (id: string, t: string, s: number): any => ({ id, kind: "user", order: s, seq: s, at: iso(s), text: t });
+  const story = () => {
+    const feed = [user("u1", "first", 1), text("one", 2), user("u2", "second", 3), text("two", 4)];
+    return { feed, story: buildStory({ feed, items: [] }) };
+  };
+
+  it("hands back the previous object for every turn that reads the same", () => {
+    const { feed, story: a } = story();
+    const b = keepTurns(a, buildStory({ feed: [...feed, text("more", 5)], items: [] }));
+    expect(b.turns[0]).toBe(a.turns[0]);
+    expect(b.turns[1]).not.toBe(a.turns[1]);
+    expect(b.turns[1].rows.map((r) => r.id)).toContain("x5");
+  });
+
+  it("keeps the new turn when anything in it changed, and the story when nothing could be kept", () => {
+    const { feed, story: a } = story();
+    const edited = feed.map((f) => (f.id === "x2" ? { ...f, text: "one, edited" } : f));
+    const b = keepTurns(a, buildStory({ feed: edited, items: [] }));
+    expect(b.turns[0]).not.toBe(a.turns[0]);
+    expect(b.turns[1]).toBe(a.turns[1]);
+    const fresh = buildStory({ feed: [user("u9", "other", 9)], items: [] });
+    expect(keepTurns(a, fresh)).toBe(fresh);
+    expect(keepTurns(undefined, fresh)).toBe(fresh);
   });
 });

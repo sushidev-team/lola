@@ -319,12 +319,8 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// keyword by the next save of any unrelated tab, rebinding the daemon
 			// to a different set of interfaces. Free text round-trips both, and
 			// config.Validate is what rejects a value neither form allows.
-			{key: "remote_bind", tab: stRemote, label: "Bind", help: "off | localhost | lan | all, or an IP literal (a hostname is rejected — resolving one would turn a config read into a network call). A lola_insecure build forces localhost whatever this says.", kind: sfText, text: cfg.Remote.BindMode()},
+			{key: "remote_bind", tab: stRemote, label: "Bind", help: "off | localhost | lan | all, or an IP literal (a hostname is rejected — resolving one would turn a config read into a network call).", kind: sfText, text: cfg.Remote.BindMode()},
 			{key: "remote_port", tab: stRemote, label: "Port", help: "TCP port for the listener. 0 means " + itoa(config.DefaultRemotePort) + ".", kind: sfInt, text: itoa(cfg.Remote.ListenPort())},
-			// The bind rail's one hole. Two keys have to agree — this AND a
-			// non-loopback bind — so a config that merely says "lan" still
-			// binds loopback.
-			{key: "remote_insecure_lan", tab: stRemote, label: "Allow LAN bind", help: "Milestone 1 forces the bind to loopback, which a physical phone cannot reach. Turning this on honours the bind above and puts the shared bearer key on your network in the clear. A Simulator does not need it.", kind: sfBool, b: cfg.Remote.InsecureLAN},
 			// A DISCLOSURE rather than a convenience, which is why it is off by
 			// default and says so: the service announces what this machine is to
 			// every peer on the network. What it buys is RECONNECTION — the key
@@ -1655,7 +1651,6 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Remote.Enabled = f.field("remote_enabled").b
 	c.Remote.Bind = strings.TrimSpace(f.field("remote_bind").text)
 	c.Remote.Port = remotePort
-	c.Remote.InsecureLAN = f.field("remote_insecure_lan").b
 	c.Remote.Advertise = f.field("remote_advertise").b
 	c.Remote.DevForward = f.field("remote_dev_forward").b
 

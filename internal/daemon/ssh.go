@@ -228,6 +228,13 @@ func (d *Daemon) sshStore(session string, create bool) (*sshstore.Store, error) 
 		return nil, err
 	}
 	m.stores[session] = s
+	// The one seam for timeline:<id>: every writer of the store is covered by it. The
+	// callback runs after the store's lock is released and only pokes.
+	s.SetNotify(func() {
+		if d.watch != nil {
+			d.watch.PokeSession(session, pokeTimeline)
+		}
+	})
 	s.View(func(st *sshstore.State) {
 		for _, c := range st.Conns {
 			m.conns[c.ID] = session

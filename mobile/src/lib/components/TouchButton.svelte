@@ -26,6 +26,11 @@
   const TOUCH_ICON = "h-11! w-11! px-0!";
   /** A full-width row (the connect screen's primary action, list rows). */
   const TOUCH_BLOCK = "h-12! w-full! justify-center! px-4! text-base!";
+  /** The prominent CTA: 50pt, 12pt radius, full width, callout 600. */
+  const TOUCH_PROMINENT =
+    "h-[50px]! w-full! justify-center! rounded-[12px]! px-4! text-callout! font-semibold!";
+  /** The phone's ONE filled primary: the primary fill under its measured label. */
+  const FILLED = "bg-primary-fill! text-on-primary! font-semibold! border-transparent! disabled:opacity-40!";
 </script>
 
 <script lang="ts">
@@ -52,6 +57,8 @@
     icon = false,
     /** A full-width primary action rather than an inline one. */
     wide = false,
+    /** A 50pt, 12pt-radius, full-width call to action. */
+    prominent = false,
     selected = false,
     loading = false,
     class: klass = "",
@@ -61,18 +68,20 @@
     variant?: ButtonVariant;
     icon?: boolean;
     wide?: boolean;
+    prominent?: boolean;
     selected?: boolean;
     loading?: boolean;
     class?: string;
     children: Snippet;
   } & HTMLButtonAttributes = $props();
 
-  const size = $derived(wide ? TOUCH_BLOCK : icon ? TOUCH_ICON : TOUCH);
+  const size = $derived(prominent ? TOUCH_PROMINENT : wide ? TOUCH_BLOCK : icon ? TOUCH_ICON : TOUCH);
+  const filled = $derived(variant === "primary" ? FILLED : "");
 </script>
 
 <!-- `touch-manipulation` removes Safari's 300ms double-tap-to-zoom delay on the
      control without disabling zoom for the page. Every tap in this app is a
      command, and a third of a second of nothing is how an app feels broken. -->
-<Button {variant} {icon} {selected} {loading} {...rest} class="touch-manipulation {size} {klass}">
+<Button {variant} {icon} {selected} {loading} {...rest} class="touch-manipulation {size} {filled} {klass}">
   {@render children()}
 </Button>

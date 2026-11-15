@@ -3,7 +3,7 @@ import XCTest
 
 /// The cross-language wire contract.
 ///
-/// `mobile/src/wire/testdata/frames.json` holds twenty frames, each with its
+/// `mobile/src/wire/testdata/frames.json` holds nineteen frames, each with its
 /// decoded JSON value and the EXACT bytes that value has on the wire. Three
 /// suites read that one file: `internal/protocol/goldenvectors_test.go` writes
 /// each frame with `protocol.FrameWriter` and asserts the bytes,

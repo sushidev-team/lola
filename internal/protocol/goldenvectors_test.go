@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -14,7 +16,7 @@ import (
 // exact wire bytes, read by BOTH sides of the wire.
 //
 // This test and mobile/src/wire/codec.test.ts load the same
-// mobile/src/wire/testdata/frames.json. This one asserts that the Go codec
+// mobile/src/wire/testdata/*.json. This one asserts that the Go codec
 // produces those bytes; the TypeScript one asserts that its encoder produces
 // them too, and that its decoder round-trips them. There is no code generator
 // between Go, TypeScript and (from M1) Swift — the client's view of this
@@ -35,11 +37,23 @@ import (
 // deliberate, versioned protocol change — and one of those has to bump
 // FrameVersionCurrent, which will fail this test loudly enough to notice.
 
-// goldenVectorPath locates the shared vector file from this package's directory.
-// It is deliberately a relative path rather than an embed: the file belongs to
-// the mobile client, which is where it is edited, and copying it here would
-// create exactly the second copy this whole exercise exists to avoid.
-const goldenVectorPath = "../../mobile/src/wire/testdata/frames.json"
+// goldenVectorDir locates the shared vector directory from this package's
+// directory. It is deliberately a relative path rather than an embed: the files
+// belong to the mobile client, which is where they are edited, and copying them
+// here would create exactly the second copy this whole exercise exists to avoid.
+//
+// The directory holds several files of one schema so that a spec can add vectors
+// without editing a shared one: frames.json (envelope and panes), events.json
+// (watch, event, attachments) and pairing.json (the remote.pair handshake and
+// ready). Every *.json file is loaded, sorted by name, and the cases are the
+// union; a case name is unique across all of them. The files named in
+// notFrameVectors share the directory but hold another schema, pinned by their
+// own writer's test.
+const goldenVectorDir = "../../mobile/src/wire/testdata"
+
+// notFrameVectors are the files in goldenVectorDir that are not frame vectors:
+// tiers.json is the {cmd: tier} map internal/remote's tiers golden test writes.
+var notFrameVectors = map[string]bool{"tiers.json": true}
 
 type goldenVectorFile struct {
 	Note  string         `json:"note"`
@@ -60,21 +74,109 @@ type goldenVector struct {
 	Hex string `json:"hex"`
 }
 
+// goldenVectorFiles lists the vector files, sorted.
+func goldenVectorFiles(t testing.TB) []string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(filepath.FromSlash(goldenVectorDir), "*.json"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no golden vector files under %s (%v)", goldenVectorDir, err)
+	}
+	vectors := files[:0]
+	for _, f := range files {
+		if !notFrameVectors[filepath.Base(f)] {
+			vectors = append(vectors, f)
+		}
+	}
+	if len(vectors) == 0 {
+		t.Fatalf("no golden vector files under %s", goldenVectorDir)
+	}
+	sort.Strings(vectors)
+	return vectors
+}
+
+// loadGoldenVectors returns the union of every vector file's cases.
 func loadGoldenVectors(t *testing.T) goldenVectorFile {
 	t.Helper()
-	b, err := os.ReadFile(filepath.FromSlash(goldenVectorPath))
-	if err != nil {
-		t.Fatalf("read the shared golden vectors: %v", err)
+	var all goldenVectorFile
+	seen := map[string]string{}
+	for _, path := range goldenVectorFiles(t) {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read golden vectors: %v", err)
+		}
+		var gf goldenVectorFile
+		if err := json.Unmarshal(b, &gf); err != nil {
+			t.Fatalf("%s is not decodable: %v", path, err)
+		}
+		if len(gf.Cases) == 0 {
+			t.Fatalf("%s carries no cases", path)
+		}
+		for _, c := range gf.Cases {
+			if prev, dup := seen[c.Name]; dup {
+				t.Fatalf("vector name %q is in both %s and %s", c.Name, prev, path)
+			}
+			seen[c.Name] = path
+		}
+		all.Cases = append(all.Cases, gf.Cases...)
 	}
-	var gf goldenVectorFile
-	if err := json.Unmarshal(b, &gf); err != nil {
-		t.Fatalf("%s is not decodable: %v", goldenVectorPath, err)
-	}
-	if len(gf.Cases) == 0 {
-		t.Fatalf("%s carries no cases", goldenVectorPath)
-	}
-	return gf
+	return all
 }
+
+// vectorHex is the wire form of a vector's frame, written by this package's
+// FrameWriter.
+func vectorHex(t *testing.T, tc goldenVector) string {
+	t.Helper()
+	var f Frame
+	if err := json.Unmarshal(tc.Frame, &f); err != nil {
+		t.Fatalf("%s: the vector's frame is not a protocol.Frame: %v", tc.Name, err)
+	}
+	var buf bytes.Buffer
+	if err := NewFrameWriter(&buf).WriteFrame(&f); err != nil {
+		t.Fatalf("%s: WriteFrame: %v", tc.Name, err)
+	}
+	return hex.EncodeToString(buf.Bytes())
+}
+
+// TestWriteGoldenVectors rewrites the hex of every case in every vector file
+// from its frame. It runs only with LOLA_WRITE_VECTORS=1; a normal run compares
+// (the encode test below) and never writes. Only the hex string literal changes,
+// so a file's formatting and key order are preserved.
+func TestWriteGoldenVectors(t *testing.T) {
+	if os.Getenv("LOLA_WRITE_VECTORS") != "1" {
+		t.Skip("set LOLA_WRITE_VECTORS=1 to rewrite the golden vector hex")
+	}
+	for _, path := range goldenVectorFiles(t) {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var gf goldenVectorFile
+		if err := json.Unmarshal(b, &gf); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		text := string(b)
+		cursor := 0
+		for _, tc := range gf.Cases {
+			at := strings.Index(text[cursor:], `"name": "`+tc.Name+`"`)
+			if at < 0 {
+				t.Fatalf("%s: cannot find case %q in the file text", path, tc.Name)
+			}
+			at += cursor
+			loc := hexLiteral.FindStringSubmatchIndex(text[at:])
+			if loc == nil {
+				t.Fatalf("%s: case %q has no hex literal", path, tc.Name)
+			}
+			start, end := at+loc[2], at+loc[3]
+			text = text[:start] + vectorHex(t, tc) + text[end:]
+			cursor = start
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+var hexLiteral = regexp.MustCompile(`"hex":\s*"([0-9a-f]*)"`)
 
 // Every vector's decoded frame, written by this package's FrameWriter, must
 // produce exactly the bytes the vector states — prefix included.
@@ -92,21 +194,14 @@ func TestGoldenVectorsEncodeToTheStatedBytes(t *testing.T) {
 		seen[tc.Name] = true
 
 		t.Run(tc.Name, func(t *testing.T) {
-			var f Frame
-			if err := json.Unmarshal(tc.Frame, &f); err != nil {
-				t.Fatalf("the vector's frame is not a protocol.Frame: %v", err)
-			}
-			var buf bytes.Buffer
-			if err := NewFrameWriter(&buf).WriteFrame(&f); err != nil {
-				t.Fatalf("WriteFrame: %v", err)
-			}
-			got := hex.EncodeToString(buf.Bytes())
+			got := vectorHex(t, tc)
 			if got != tc.Hex {
 				// The message carries the bytes in the exact shape the vector
 				// file wants, so a legitimate protocol change is a copy and a
 				// paste rather than a hex dump read by hand.
-				t.Fatalf("wire bytes differ.\n want %q\n  got %q\n body %s",
-					tc.Hex, got, buf.Bytes()[FrameHeaderBytes:])
+				body, _ := hex.DecodeString(got)
+				t.Fatalf("wire bytes differ (LOLA_WRITE_VECTORS=1 rewrites them).\n want %q\n  got %q\n body %s",
+					tc.Hex, got, body[FrameHeaderBytes:])
 			}
 		})
 	}
@@ -135,7 +230,7 @@ func TestGoldenVectorsDecodeBackToTheSameFrame(t *testing.T) {
 				t.Fatalf("ReadFrame: %v", err)
 			}
 			if got.V != want.V || got.Type != want.Type || got.ID != want.ID ||
-				got.Cmd != want.Cmd || got.Pane != want.Pane || got.Seq != want.Seq {
+				got.Cmd != want.Cmd || got.Pane != want.Pane || got.Topic != want.Topic || got.Seq != want.Seq {
 				t.Fatalf("envelope changed:\n want %+v\n  got %+v", want, got)
 			}
 			if len(want.Payload) == 0 {
@@ -214,7 +309,7 @@ func TestGoldenVectorsCoverEveryFrameKind(t *testing.T) {
 		}
 		covered[f.Type] = true
 	}
-	for _, typ := range []string{FrameReq, FrameResp, FrameSub, FrameUnsub, FrameResync, FramePTY, FrameErr} {
+	for _, typ := range []string{FrameReq, FrameResp, FrameSub, FrameUnsub, FrameResync, FramePTY, FrameErr, FrameEvent, FrameReady} {
 		if !covered[typ] {
 			t.Errorf("no golden vector carries a %q frame", typ)
 		}

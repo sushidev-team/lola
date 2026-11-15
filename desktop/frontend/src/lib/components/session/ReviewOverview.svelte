@@ -9,14 +9,17 @@
   import Skeleton from '../Skeleton.svelte';
   import SSHRich from '../ssh/SSHRich.svelte';
   import ReviewThumbnail from './ReviewThumbnail.svelte';
+  import { touchSurface } from '$lib/touchsurface';
   let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment, onAssessConfidence, confidenceRequest }: {
     pkg:ReviewPackage; facts?:PRReadinessData; sessionId:string; freshness:'current'|'stale'|'unknown'; onScreen:(index:number)=>void;
     checking?:boolean; checks?:Snippet; feedback?:Snippet; onAssessRisks?:()=>void; assessment?:{state:string;message:string};
     onAssessConfidence?:()=>void; confidenceRequest?:{state:string;message:string};
   } = $props();
   const confidenceID = $props.id();
+  // Phone: no "what is confidence" popover, and an empty breakdown says nothing, so it is not drawn.
+  const phone = touchSurface();
   let confidenceOpen = $state(false);
-  let confidenceRoot: HTMLElement;
+  let confidenceRoot = $state<HTMLElement>();
   let confidencePanel = $state<HTMLDivElement>();
   async function toggleConfidence() {
     confidenceOpen = !confidenceOpen;
@@ -70,12 +73,12 @@
       <p class="summary-copy">{overview.summary}</p>
       {#if freshness === 'stale'}<div class="intro-meta"><span class="stale" role="status"><Icon name="circle-alert" size={14}/>Outdated material</span></div>{/if}
     </header>
-      <section class="review-panel features" aria-label="Changes in this review">
+      {#if !(phone && overview.changes.length === 0)}<section class="review-panel features" aria-label="Changes in this review">
         <div class="section-title"><h2>What changed<span class="section-count">{overview.changes.length}</span></h2></div>
         {#if overview.changes.length}{@render features(overview.changes.slice(0,4))}{:else}<p class="empty-copy">No feature breakdown provided.</p>{/if}
         {#if overview.changes.length > 4}<details class="additional"><summary><Chevron class="disclosure-chevron" />{overview.changes.length-4} more {overview.changes.length === 5 ? 'change' : 'changes'}</summary>{@render features(overview.changes.slice(4))}</details>{/if}
-      </section>
-      {#if screens.length}<section class="review-panel visual-review" aria-label="Screenshot previews">
+      </section>{/if}
+      {#if screens.length && !phone}<section class="review-panel visual-review" aria-label="Screenshot previews">
         <div class="section-title"><h2>See the changes<span class="section-count">{screens.length}</span></h2><Button size="xs" onclick={() => onScreen(0)}>View all<Icon name="arrow-right" size={14}/></Button></div>
         <div class="screenshot-grid">{#each screens.slice(0,4) as screen,i}<button class="screen-preview" onclick={() => onScreen(i)} aria-label={`Review screenshot: ${screen.title}`}>
           <ReviewThumbnail {pkg} artifact={screen.after} label={`Preview: ${screen.title}`}/>
@@ -86,13 +89,14 @@
   </div>
   <div class="decision-column">
     <div class="readiness">
+      {#if !(phone && confidence.score === null)}
       <section class="confidence" aria-label="Review confidence" bind:this={confidenceRoot}>
-        <div class="confidence-label"><div class="confidence-heading"><h2><Icon name="shield-check" size={17}/>Confidence</h2><span class="confidence-info"><Button icon size="xs" aria-label="About confidence" aria-haspopup="dialog" aria-expanded={confidenceOpen} aria-controls={confidenceID} onclick={toggleConfidence}><Icon name="info" size={15}/></Button></span></div><span class:has-issues={!checking && confidence.failed > 0}>{#if checking}<span role="status" aria-label="Loading confidence"><span class="sr-only">Loading confidence…</span><Skeleton width="90px" height="18px"/></span>{:else}{confidence.label}{/if}</span></div>
+        <div class="confidence-label"><div class="confidence-heading"><h2><Icon name="shield-check" size={17}/>Confidence</h2>{#if !phone}<span class="confidence-info"><Button icon size="xs" aria-label="About confidence" aria-haspopup="dialog" aria-expanded={confidenceOpen} aria-controls={confidenceID} onclick={toggleConfidence}><Icon name="info" size={15}/></Button></span>{/if}</div><span class:has-issues={!checking && confidence.failed > 0}>{#if checking}<span role="status" aria-label="Loading confidence"><span class="sr-only">Loading confidence…</span><Skeleton width="90px" height="18px"/></span>{:else}{confidence.label}{/if}</span></div>
         {#if checking}<div class="score"><Skeleton width="100px" height="48px"/></div>
         {:else if confidence.score !== null}<strong class="score">{confidence.score}<small>/100</small></strong>{/if}
-        {#if confidenceOpen}
+        {#if confidenceOpen && !phone}
         <div id={confidenceID} class="confidence-popover" role="dialog" aria-label="About confidence" tabindex="-1" bind:this={confidencePanel}>
-        <div class="confidence-popover-heading"><h3>How confidence is calculated</h3><Button icon size="xs" aria-label="Close confidence details" onclick={() => { confidenceOpen = false; confidenceRoot.querySelector<HTMLButtonElement>('.confidence-info button')?.focus(); }}><Icon name="x" size={14}/></Button></div>
+        <div class="confidence-popover-heading"><h3>How confidence is calculated</h3><Button icon size="xs" aria-label="Close confidence details" onclick={() => { confidenceOpen = false; confidenceRoot?.querySelector<HTMLButtonElement>('.confidence-info button')?.focus(); }}><Icon name="x" size={14}/></Button></div>
         {#if checking}
           <div class="confidence-breakdown" aria-hidden="true"><Skeleton height="40px"/></div>
           <div class="score-explanation"><Skeleton width="65%" height="18px"/></div>
@@ -125,6 +129,7 @@
         </div>
         {/if}
       </section>
+      {/if}
       {#if checks}<div class="checks">{@render checks()}</div>{/if}
     </div>
       <section class="review-panel risks" aria-label="Reported risks">
@@ -267,5 +272,13 @@
   @media(max-width:1100px) { .overview { gap:32px; grid-template-columns:minmax(0,1fr) 330px; } h1 { font-size:26px; } .readiness { padding:20px; } }
   @media(max-width:800px) { .overview { grid-template-columns:minmax(0,1fr); gap:32px; max-width:620px; } .change-column,.decision-column { display:contents; } .readiness { order:1; } .features { order:2; } .visual-review { order:3; } .risks { order:4; } .feedback { order:5; } .source-details { order:6; } }
   @media(max-width:440px) { .risks { padding:20px 16px; } .features { padding:20px 16px; } .features h2 { font-size:20px; } .feature-description { margin-right:0; } h1 { font-size:24px; } .screenshot-grid { gap:16px 12px; } .screen-preview :global(.thumbnail) { padding:6px; border-radius:8px; } .preview-caption { font-size:12px; } .readiness { padding:18px; } }
+  /* Phone: one flat column. No card inside a card, headings no larger than the 28/34 title tier. */
+  :global([data-phone-desk]) .readiness,:global([data-phone-desk]) .features,:global([data-phone-desk]) .risks,:global([data-phone-desk]) .feedback { padding:0; border:0; border-radius:0; background:transparent; }
+  :global([data-phone-desk]) h1 { max-width:none; font-size:28px; line-height:34px; margin-bottom:8px; }
+  :global([data-phone-desk]) .features h2,:global([data-phone-desk]) .risks h2 { font-size:17px; line-height:22px; font-weight:600; letter-spacing:0; gap:8px; }
+  :global([data-phone-desk]) .features .section-count,:global([data-phone-desk]) .risks .section-count { min-width:0; height:auto; padding:0; border-radius:0; background:none; color:var(--color-faint); font-size:13px; line-height:18px; font-weight:400; }
+  :global([data-phone-desk]) .score { font-size:28px; line-height:34px; }
+  :global([data-phone-desk]) .summary-copy { font-size:15px; line-height:22px; }
+  :global([data-phone-desk]) .overview { gap:24px; max-width:none; }
   @media(prefers-reduced-motion:reduce) { .entry > summary :global(svg),.screen-preview :global(.thumbnail),.feature-heading > :global(svg) { transition:none; } }
 </style>

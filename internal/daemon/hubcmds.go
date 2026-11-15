@@ -244,6 +244,8 @@ func (d *Daemon) handleHubLeave(ctx context.Context, a protocol.HubLeaveArgs) (p
 		return protocol.HubLeaveData{}, err
 	}
 	released, kept := d.hubReleaseForLeave(ctx)
+	// The rendezvous entries go before the identity that signs for them.
+	d.hubRelayRelease(ctx)
 	if err := hub.Leave(hub.LeaveOptions{ConfigPath: path, StateDir: d.hubDir(), ForgetKey: a.ForgetKey, Now: d.hub.now}); err != nil {
 		return protocol.HubLeaveData{}, err
 	}

@@ -1,0 +1,144 @@
+{
+  "note": "Golden vectors for the remote.pair handshake and the ready frame, envelope v2. Same schema as frames.json; req_remote_pair lives only here. Function vectors (proof, code, QR payload) are internal/protocol/testdata/pairing_vectors.json.",
+  "cases": [
+    {
+      "name": "req_remote_pair",
+      "why": "The only frame an unpaired certificate may send, within the handshake timeout. The proof here is a fixed test value; a real one is HMAC-SHA256 over a TLS exporter and is never reused. The ONLY home of this vector.",
+      "frame": {
+        "v": 2,
+        "type": "req",
+        "id": "p1",
+        "cmd": "remote.pair",
+        "payload": {
+          "proof": "dGVzdC1wcm9vZi1ub3QtcmVhbC1wcm9vZi12YWx1ZTAw",
+          "name": "Dev iPhone",
+          "platform": "ios"
+        }
+      },
+      "hex": "0000009a7b2276223a322c2274797065223a22726571222c226964223a227031222c22636d64223a2272656d6f74652e70616972222c227061796c6f6164223a7b2270726f6f66223a226447567a64433177636d39765a69317562335174636d566862433177636d39765a693132595778315a544177222c226e616d65223a22446576206950686f6e65222c22706c6174666f726d223a22696f73227d7d"
+    },
+    {
+      "name": "resp_pair_result",
+      "why": "An accepted pairing without a relay credential: relay is omitted.",
+      "frame": {
+        "v": 2,
+        "type": "resp",
+        "id": "p1",
+        "payload": {
+          "ok": true,
+          "data": {
+            "deviceId": "dd3f0a91c2b84e57",
+            "name": "Dev iPhone",
+            "tiers": [
+              "read",
+              "answer"
+            ],
+            "host": "studio.local"
+          }
+        }
+      },
+      "hex": "000000a07b2276223a322c2274797065223a2272657370222c226964223a227031222c227061796c6f6164223a7b226f6b223a747275652c2264617461223a7b226465766963654964223a2264643366306139316332623834653537222c226e616d65223a22446576206950686f6e65222c227469657273223a5b2272656164222c22616e73776572225d2c22686f7374223a2273747564696f2e6c6f63616c227d7d7d"
+    },
+    {
+      "name": "resp_pair_result_relay",
+      "why": "An accepted pairing with the device's own relay credential. The values are placeholders.",
+      "frame": {
+        "v": 2,
+        "type": "resp",
+        "id": "p1",
+        "payload": {
+          "ok": true,
+          "data": {
+            "deviceId": "dd3f0a91c2b84e57",
+            "name": "Dev iPhone",
+            "tiers": [
+              "read",
+              "answer",
+              "control"
+            ],
+            "host": "studio.local",
+            "relay": {
+              "rv": "rv-placeholder-0000000000000000",
+              "bearer": "bearer-placeholder-000000000000000000000000"
+            }
+          }
+        }
+      },
+      "hex": "000001127b2276223a322c2274797065223a2272657370222c226964223a227031222c227061796c6f6164223a7b226f6b223a747275652c2264617461223a7b226465766963654964223a2264643366306139316332623834653537222c226e616d65223a22446576206950686f6e65222c227469657273223a5b2272656164222c22616e73776572222c22636f6e74726f6c225d2c22686f7374223a2273747564696f2e6c6f63616c222c2272656c6179223a7b227276223a2272762d706c616365686f6c6465722d30303030303030303030303030303030222c22626561726572223a226265617265722d706c616365686f6c6465722d303030303030303030303030303030303030303030303030227d7d7d7d"
+    },
+    {
+      "name": "err_pair_failed",
+      "why": "Pairing refused: bad proof, closed window or another phone confirming. The message never says which.",
+      "frame": {
+        "v": 2,
+        "type": "err",
+        "id": "p1",
+        "payload": {
+          "code": "pair_failed",
+          "message": "pairing failed"
+        }
+      },
+      "hex": "0000005a7b2276223a322c2274797065223a22657272222c226964223a227031222c227061796c6f6164223a7b22636f6465223a22706169725f6661696c6564222c226d657373616765223a2270616972696e67206661696c6564227d7d"
+    },
+    {
+      "name": "err_pair_rejected",
+      "why": "The human rejected the pairing on the desktop.",
+      "frame": {
+        "v": 2,
+        "type": "err",
+        "id": "p1",
+        "payload": {
+          "code": "pair_rejected",
+          "message": "pairing was rejected"
+        }
+      },
+      "hex": "000000627b2276223a322c2274797065223a22657272222c226964223a227031222c227061796c6f6164223a7b22636f6465223a22706169725f72656a6563746564222c226d657373616765223a2270616972696e67207761732072656a6563746564227d7d"
+    },
+    {
+      "name": "err_pair_expired",
+      "why": "The confirmation window ran out.",
+      "frame": {
+        "v": 2,
+        "type": "err",
+        "id": "p1",
+        "payload": {
+          "code": "pair_expired",
+          "message": "pairing expired"
+        }
+      },
+      "hex": "0000005c7b2276223a322c2274797065223a22657272222c226964223a227031222c227061796c6f6164223a7b22636f6465223a22706169725f65787069726564222c226d657373616765223a2270616972696e672065787069726564227d7d"
+    },
+    {
+      "name": "err_not_paired",
+      "why": "The refusal after a completed TLS handshake for a device that is not (or no longer) paired. No id: it answers no request.",
+      "frame": {
+        "v": 2,
+        "type": "err",
+        "payload": {
+          "code": "not_paired",
+          "message": "this device is not paired"
+        }
+      },
+      "hex": "0000005a7b2276223a322c2274797065223a22657272222c227061796c6f6164223a7b22636f6465223a226e6f745f706169726564222c226d657373616765223a227468697320646576696365206973206e6f7420706169726564227d7d"
+    },
+    {
+      "name": "ready",
+      "why": "The first frame of a paired connection, exactly once. A client counts a path as authenticated only when this arrives.",
+      "frame": {
+        "v": 2,
+        "type": "ready",
+        "payload": {
+          "deviceId": "dd3f0a91c2b84e57",
+          "name": "Dev iPhone",
+          "tiers": [
+            "read",
+            "answer"
+          ],
+          "via": "lan",
+          "host": "studio.local"
+        }
+      },
+      "hex": "000000907b2276223a322c2274797065223a227265616479222c227061796c6f6164223a7b226465766963654964223a2264643366306139316332623834653537222c226e616d65223a22446576206950686f6e65222c227469657273223a5b2272656164222c22616e73776572225d2c22766961223a226c616e222c22686f7374223a2273747564696f2e6c6f63616c227d7d"
+    }
+  ]
+}

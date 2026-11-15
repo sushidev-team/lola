@@ -168,9 +168,8 @@ func TestLanFailsClosedWhenInterfacesCannotBeRead(t *testing.T) {
 	}
 }
 
-// TestLoopbackAddr backs the insecure build's forced-bind assertion: a bind is
-// safe because every ADDRESS it produced is loopback, never because the mode
-// happened to read "localhost".
+// TestLoopbackAddr: a bind is loopback-only because every ADDRESS it produced is
+// loopback, never because the mode happened to read "localhost".
 func TestLoopbackAddr(t *testing.T) {
 	cases := map[string]bool{
 		"127.0.0.1:7717":     true,
@@ -230,9 +229,7 @@ func TestSameAddrSet(t *testing.T) {
 }
 
 // A listener bound to loopback must never report drift, however the machine's
-// networks change. This is what keeps the check from rebinding forever on the
-// insecure build, whose Listen rewrites a "lan" request to "localhost" before
-// binding — comparing against the CONFIGURED mode would drift on every call.
+// networks change.
 func TestBindDriftedIsStableForLoopback(t *testing.T) {
 	s := &Server{opts: Options{Bind: "localhost", Port: 7717}}
 	var err error

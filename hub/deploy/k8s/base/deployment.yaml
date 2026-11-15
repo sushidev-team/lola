@@ -1,6 +1,10 @@
 # One process per data file (README "Deploying"): exactly one replica, and
 # Recreate so a rollout never runs two pods against the store at once (the
-# ReadWriteOnce volume could not attach to both anyway).
+# ReadWriteOnce volume could not attach to both anyway). Second reason: the
+# relay keeps control links, pending dials and splices in process memory, so a
+# phone dial and its daemon's control link must land on the same process.
+# Scaling out needs routing by device id and is not built. A rollout drops
+# every control channel and splice; daemons reconnect, phones re-race.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -77,10 +81,10 @@ spec:
           resources:
             requests:
               cpu: 20m
-              memory: 32Mi
+              memory: 64Mi
             limits:
               cpu: 500m
-              memory: 128Mi
+              memory: 256Mi
           volumeMounts:
             - name: data
               mountPath: /data

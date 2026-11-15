@@ -27,6 +27,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/devices"
 	"github.com/sushidev-team/lola/internal/hub"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/tmux"
@@ -174,7 +175,8 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	}
 
 	add(linearResult(cfg))
-	add(daemonResult())
+	daemon := daemonResult()
+	add(daemon)
 	add(configResult(cfg))
 	if res, ok := repairResult(cfg); ok {
 		add(res)
@@ -184,6 +186,16 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	}
 	if res, ok := pollingResult(cfg); ok {
 		add(res)
+	}
+	if home, err := config.Home(); err == nil {
+		if cfg.Remote.Enabled || phonesRegistryPresent(home) {
+			add(PhonesResult(home))
+		}
+	}
+	if dir, err := hub.StateDir(); err == nil {
+		if res, ok := RelayResult(cfg, dir, daemon.OK); ok {
+			add(res)
+		}
 	}
 	if res, ok := hubResult(ctx, cfg); ok {
 		add(res)
@@ -674,4 +686,15 @@ func hubPolicyResult(cfg *config.Config) (Result, bool) {
 		return Result{Name: checkHubPolicy, Detail: detail + "; " + strings.Join(notices, "; ")}, true
 	}
 	return Result{Name: checkHubPolicy, OK: true, Detail: detail}, true
+}
+
+// phonesRegistryPresent reports whether a phone registry file exists, so a
+// broken one is surfaced even while [remote] is disabled.
+func phonesRegistryPresent(home string) bool {
+	for _, name := range []string{devices.FileName, devices.RevokedFileName} {
+		if _, err := os.Stat(filepath.Join(home, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }

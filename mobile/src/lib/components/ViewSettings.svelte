@@ -1,41 +1,12 @@
 <script lang="ts" module>
+  import type { GridGeometry } from "@mobile/lib/viewport";
   /**
    * Everything this popover reports about the grid, in the exact shape the
    * terminal screen already assembles from MobileTerminal's `onstate`. It is
    * structural on purpose: the screen keeps one `geom` object and hands it
    * over whole, rather than spreading eight props at the call site.
    */
-  export interface ViewGeometry {
-    /** Columns and rows in the grid the daemon is sending. */
-    cols: number;
-    rows: number;
-    /** Columns actually on screen. Equal to `cols` when nothing is clipped. */
-    shown: number;
-    /**
-     * Rows actually on screen, the mirror of `shown`.
-     *
-     * Together the pair is what this phone can SHOW, which is a different thing
-     * from `cols`/`rows` — the grid the Mac is sending. Only the pair is worth
-     * naming in the size-pin caption below, because it is the size the Mac's own
-     * window would be squeezed to.
-     */
-    shownRows: number;
-    /** The leftmost visible column, 1-based. */
-    first: number;
-    /**
-     * Whether the grid is WIDER THAN THE SCREEN. The field is named for the
-     * gesture it enables rather than for the fact it states — see
-     * viewport.ts's isPanning — but the fact is the one that matters here, and
-     * it is the whole reason this popover exists.
-     */
-    panning: boolean;
-    /** Whether a smaller text size would show more of the grid. */
-    canFit: boolean;
-    /** Whether a fit-width zoom is currently in effect. */
-    fitActive: boolean;
-    /** The size a fit would land on, for the control's label. */
-    fitSize: number;
-  }
+  export type ViewGeometry = GridGeometry;
 
   /**
    * Is the grid WIDER THAN THE SCREEN — i.e. do lines continue past the right
@@ -53,6 +24,11 @@
   export function viewColumnRange(geom: ViewGeometry): string {
     const last = Math.min(geom.cols, geom.first + Math.max(0, geom.shown - 1));
     return `${geom.first}–${last} of ${geom.cols}`;
+  }
+
+  /** Whether the text-size stepper is the sheet's only control (no fit row, no pin). */
+  export function viewTextOnly(geom: ViewGeometry, canPin: boolean): boolean {
+    return !canPin && !(geom.cols > 0 && (geom.canFit || geom.fitActive));
   }
 
   /**
@@ -74,7 +50,10 @@
 </script>
 
 <script lang="ts">
-  import TouchButton from "./TouchButton.svelte";
+  import ListGroup from "./ListGroup.svelte";
+  import ListRow from "./ListRow.svelte";
+  import Switch from "./Switch.svelte";
+  import { copy } from "@mobile/lib/copy";
   import { FONT_MAX, FONT_MIN, stepFont } from "@mobile/lib/viewport";
 
   // The terminal screen's view settings: what is on screen, the text size, and
@@ -139,6 +118,8 @@
      */
     pinned = false,
     /** Turn the size pin on or off. */
+    /** Whether this phone may resize the Mac's pane (the `shell` tier). */
+    canPin = true,
     onpin = (_on: boolean) => {},
     /**
      * Fades and refuses every control. NOT wired to `exited` by the terminal
@@ -161,6 +142,7 @@
     onfont: (size: number) => void;
     onfit: () => void;
     pinned?: boolean;
+    canPin?: boolean;
     onpin?: (on: boolean) => void;
     disabled?: boolean;
     ondone?: () => void;
@@ -170,19 +152,6 @@
   // opens it can never disagree about whether the pane is clipped.
   const clipped = $derived(viewIsClipped(geom));
   const range = $derived(viewColumnRange(geom));
-
-  /**
-   * The size the Mac's window would be squeezed to, in words, or "" before the
-   * pane has been measured.
-   *
-   * Stated rather than left to be discovered. "Resized to fit this phone" is an
-   * abstraction; "about 50 by 20" is the number a person can weigh against the
-   * 211-column grid named four lines above it, which is the whole point of
-   * putting this control in the same sheet as the column readout.
-   */
-  const pinSize = $derived(
-    geom.shown > 0 && geom.shownRows > 0 ? ` — about ${geom.shown} by ${geom.shownRows}` : "",
-  );
 
   const atFloor = $derived(font <= FONT_MIN);
   const atCeiling = $derived(font >= FONT_MAX);
@@ -218,128 +187,63 @@
          size and nothing else — so it belongs beside A− and A+ rather than under
          a heading about what is on screen, and putting it there is what let the
          readout go without taking a control with it. -->
-    <section class="flex flex-col gap-2">
-      <span class="label text-faint">Text size</span>
-      <!-- `secondary`, not the header's `ghost`. In a header a quiet glyph
-           beside other quiet glyphs still reads as a control; in a sheet, sat
-           under an outlined "Fit the width" button, a bare A− read as a
-           caption. The outline is the only thing changed — same size, same
-           behaviour — which is the two-of-three rule the variant map states.
-           Spread apart rather than bunched left, because both ends of this
-           row have to be reachable by one thumb. -->
-      <div class="flex items-center gap-3">
-        <TouchButton
-          icon
-          variant="secondary"
-          aria-label="Smaller text"
-          disabled={disabled || atFloor}
-          onclick={() => onfont(stepFont(font, -1))}>A−</TouchButton
-        >
-        <!-- A live region, so pressing A− announces the size it landed on: the
-             buttons keep their own names, and without this the only feedback
-             is a redraw a screen-reader user cannot see. -->
-        <span class="num flex-1 text-center text-ink" role="status" aria-live="polite">
-          {font} pt
-        </span>
-        <TouchButton
-          icon
-          variant="secondary"
-          aria-label="Larger text"
-          disabled={disabled || atCeiling}
-          onclick={() => onfont(stepFont(font, 1))}>A+</TouchButton
-        >
-      </div>
+<!-- Inset grouped rows, the shared sheet grammar: one group for the reading
+     size (and the fit that is a zoom of it), one for the only control that
+     changes the Mac. The group footer says why a fit is not offered. -->
+{#snippet stepper()}
+  <!-- The value is the row's trailing label; the capsule is one 32pt control with
+       two 44pt halves split by a hairline. A live region, so a press announces
+       the size it landed on. -->
+  <span class="num text-callout text-subtext" role="status" aria-live="polite">{font} pt</span>
+  <div class="flex h-8 items-center rounded-full bg-edge">
+    <button
+      type="button"
+      class="flex h-11 w-11 touch-manipulation items-center justify-center text-body text-ink select-none
+             disabled:opacity-40 enabled:active:opacity-60"
+      aria-label="Smaller text"
+      disabled={disabled || atFloor}
+      onclick={() => onfont(stepFont(font, -1))}>−</button
+    >
+    <span class="h-4 w-[0.5px] bg-subtext/50" aria-hidden="true"></span>
+    <button
+      type="button"
+      class="flex h-11 w-11 touch-manipulation items-center justify-center text-body text-ink select-none
+             disabled:opacity-40 enabled:active:opacity-60"
+      aria-label="Larger text"
+      disabled={disabled || atCeiling}
+      onclick={() => onfont(stepFont(font, 1))}>+</button
+    >
+  </div>
+{/snippet}
 
-      {#if geom.cols > 0 && hasFit}
-        <!-- `ondone` because this one changes what is on screen BEHIND the
-             sheet, so leaving the sheet up hides the thing just asked for. The
-             two buttons above are pressed repeatedly and must not. -->
-        <TouchButton
-          wide
-          variant="secondary"
-          {disabled}
-          onclick={() => {
-            onfit();
-            ondone();
-          }}
-        >
-          {geom.fitActive ? "Back to the reading size" : `Fit the width (${geom.fitSize} pt)`}
-        </TouchButton>
-      {:else if clipped && atFloor}
-        <!-- At the 8-point floor with a grid still wider than the screen there
-             is no fit to offer, and a disabled button offering one anyway is
-             worse than a sentence. See viewport.ts's FitWidth.complete.
-             GATED ON THE FLOOR, not merely on the absence of a fit: `canFit`
-             is also false for a moment before the pane has been measured, and
-             telling a reader at 12 points that they are already at the
-             smallest text is a plain lie about a control they can still
-             use. -->
-        <span class="copy text-sm text-faint">Already at the smallest text.</span>
-      {/if}
-    </section>
+{#snippet pinSwitch()}
+  <Switch checked={pinned} onchange={(on: boolean) => onpin(on)} label={copy.viewSettings.fit} {disabled} />
+{/snippet}
 
-    <div class="h-px bg-edge/60" aria-hidden="true"></div>
+<div class="pt-1">
+<ListGroup footer={geom.cols > 0 && !hasFit && clipped && atFloor ? "Already at the smallest text." : undefined}>
+  <ListRow label={viewTextOnly(geom, canPin) ? "" : copy.viewSettings.textSize} trailing={stepper} />
+  {#if geom.cols > 0 && hasFit}
+    <!-- `ondone` because this one changes what is on screen BEHIND the sheet. -->
+    <ListRow
+      tone="accent"
+      {disabled}
+      label={geom.fitActive ? "Back to the reading size" : `Fit the width (${geom.fitSize} pt)`}
+      onclick={() => {
+        onfit();
+        ondone();
+      }}
+    />
+  {/if}
+</ListGroup>
+</div>
 
-    <!-- THE ONE CONTROL IN THIS APP THAT CHANGES SOMEBODY ELSE'S SCREEN, and the
-         only one in this sheet that still keeps a caption.
-         
-         Everything else here is a zoom on this phone and now says so by being
-         obvious rather than by being explained — the paragraphs under the fit
-         and the column readout are gone. This one is the exact opposite of a
-         local zoom and cannot be inferred from its own label, so the difference
-         stays spelled out: the section is titled for the MAC, the switch is
-         labelled for what happens THERE, and one line names the cost.
-
-         SHORTENED, NOT DROPPED. It used to run four lines. What it may not lose
-         is that somebody else's window narrows and that it lets go on its own —
-         the first is the cost and the second is what stops a reader thinking
-         they have broken something permanently. A control whose cost is one tap
-         away from being read is a control whose cost is not read, which is why
-         this is not a tooltip and not a help icon. -->
-    <section class="flex flex-col gap-2">
-      <span class="label text-faint">Pane size on the Mac</span>
-      <!-- `role="switch"` with `aria-checked` rather than the shared Button's
-           `selected`, which reports `aria-pressed`: a toggle that stays on until
-           it is turned off is a switch, and a switch that also claimed to be a
-           pressed button would be two conflicting states on one element.
-           `w-full!`/`justify-between!` carry the trailing `!` for the reason
-           CLAUDE.md gives — a plain utility ties with the size map's own and the
-           winner would be decided by the compiled sheet's order. The default
-           (non-icon) size sets no justify of its own, so nothing here is
-           fighting a `justify-center`. -->
-      <TouchButton
-        variant="secondary"
-        class="w-full! justify-between!"
-        role="switch"
-        aria-checked={pinned}
-        aria-label="Resize the Mac's pane to fit this phone"
-        {disabled}
-        onclick={() => onpin(!pinned)}
-      >
-        <span class="min-w-0 flex-1 truncate text-left">Resize the Mac's pane to fit</span>
-        <!-- The state is already on `aria-checked`; the word is for eyes only,
-             and announcing it twice makes the switch read as "off off". -->
-        <span class="num shrink-0 text-sm text-faint" aria-hidden="true">
-          {pinned ? "On" : "Off"}
-        </span>
-        <span
-          class="relative h-6 w-11 shrink-0 rounded-full transition-colors {pinned
-            ? 'bg-accent-fill'
-            : 'bg-edge'}"
-          aria-hidden="true"
-        >
-          <span
-            class="absolute top-0.5 h-5 w-5 rounded-full bg-ink transition-all {pinned
-              ? 'left-[1.375rem]'
-              : 'left-0.5'}"
-          ></span>
-        </span>
-      </TouchButton>
-      <span class="copy text-sm text-faint">
-        Narrows the window on the Mac{pinSize} while you are on this pane.
-        Released when you leave.
-      </span>
-    </section>
-
-    <!-- NO "Done" HERE. The sheet these sections sit in owns its own dismiss, and
-         a second one two rows above it would be two ways to close one sheet. -->
+{#if canPin}
+  <!-- THE ONE CONTROL IN THIS APP THAT CHANGES SOMEBODY ELSE'S SCREEN. Its label
+       names the Mac; the switch already says on or off. -->
+  <div class="pt-4">
+    <ListGroup>
+      <ListRow label={copy.viewSettings.fit} trailing={pinSwitch} />
+    </ListGroup>
+  </div>
+{/if}

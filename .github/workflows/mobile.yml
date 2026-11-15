@@ -1,0 +1,43 @@
+name: Mobile
+on:
+  push:
+    branches: [main]
+    paths: ['mobile/**', 'desktop/frontend/**', '.github/workflows/mobile.yml']
+  pull_request:
+    branches: [main]
+    paths: ['mobile/**', 'desktop/frontend/**', '.github/workflows/mobile.yml']
+permissions:
+  contents: read
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            desktop/frontend/package-lock.json
+            mobile/package-lock.json
+            mobile/plugins/lola-transport/package-lock.json
+      - run: npm ci
+        working-directory: desktop/frontend      # shared components resolve their deps here
+      - run: npm ci
+        working-directory: mobile/plugins/lola-transport
+      - run: npm ci
+        working-directory: mobile
+      - run: npm run check
+        working-directory: mobile
+      - run: npm test
+        working-directory: mobile
+      - run: npm run build && npm run budget
+        working-directory: mobile
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+        working-directory: mobile/plugins/lola-transport
+        env:
+          LOLA_CORE_ONLY: '1'

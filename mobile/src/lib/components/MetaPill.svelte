@@ -64,7 +64,7 @@
      * set: the visible text is "#341", which names nothing on its own.
      */
     ariaLabel = "",
-    /** A leading glyph — the caller passes <BranchIcon /> for a PR badge. */
+    /** A leading glyph, drawn before the text. */
     leading = undefined,
     children,
     class: klass = "",

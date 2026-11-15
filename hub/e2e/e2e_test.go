@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/sushidev-team/lola/hub/internal/api"
 	"github.com/sushidev-team/lola/hub/internal/escalate"
+	"github.com/sushidev-team/lola/hub/internal/relay"
 	"github.com/sushidev-team/lola/hub/internal/store"
 	"github.com/sushidev-team/lola/hubproto"
 )
@@ -510,5 +512,131 @@ func TestItemLifecycle(t *testing.T) {
 	}
 	if len(a.offers()) != 0 {
 		t.Fatal("a stale-closed item is offered")
+	}
+}
+
+// TestRelayThroughHub drives the relay the way a phone and a daemon do: the
+// daemon enrolls, registers a rendezvous and opens its control channel; a
+// phone dials with the bearer; the daemon accepts; bytes cross both ways; and
+// revoking the device in the store closes the link on the next recheck.
+func TestRelayThroughHub(t *testing.T) {
+	h := newHub(t)
+	rh := relay.New(h.clk.Now, nil)
+	t.Cleanup(rh.Shutdown)
+	srv := api.New(api.Config{Store: h.st, Now: h.clk.Now, LeaseTTL: 30 * time.Minute, Relay: rh})
+	h.srv.Close()
+	h.srv = httptest.NewServer(srv.Handler())
+	t.Cleanup(h.srv.Close)
+	d := h.join("laptop")
+
+	rv, err := hubproto.NewRelayID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer, hash, err := hubproto.NewRelayBearer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reg hubproto.RendezvousResponse
+	d.must(http.StatusOK, http.MethodPost, hubproto.PathRelayRendezvous,
+		hubproto.RendezvousRequest{Entries: []hubproto.RelayRendezvous{{RV: rv, BearerSHA256: hash}}}, &reg)
+	if reg.Registered != 1 {
+		t.Fatalf("registered %d", reg.Registered)
+	}
+
+	noProxy := func(*http.Request) (*url.URL, error) { return nil, nil }
+	signed := func(path string) *http.Request {
+		req, _ := http.NewRequest(http.MethodGet, h.srv.URL+path, nil)
+		h.nonce++
+		if err := hubproto.SignAt(req, d.id, d.priv, nil, h.clk.Now(), fmt.Sprintf("e2e-nonce-%08d", h.nonce)); err != nil {
+			t.Fatal(err)
+		}
+		return req
+	}
+	dial := func(req *http.Request) *hubproto.WSConn {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ws, err := hubproto.WSDialer{Proxy: noProxy}.Dial(ctx, req)
+		if err != nil {
+			t.Fatalf("dial %s: %v", req.URL.Path, err)
+		}
+		t.Cleanup(func() { _ = ws.CloseNow(hubproto.WSCloseGoingAway) })
+		return ws
+	}
+	read := func(ws *hubproto.WSConn) hubproto.RelayMsg {
+		t.Helper()
+		_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+		b, err := ws.ReadMessage(hubproto.RelayMaxControlMessage)
+		if err != nil {
+			t.Fatalf("control read: %v", err)
+		}
+		var m hubproto.RelayMsg
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+
+	ctrl := dial(signed(hubproto.PathRelayDaemon + "?v=1"))
+	if m := read(ctrl); m.T != "hello" {
+		t.Fatalf("hello = %+v", m)
+	}
+	preq, _ := http.NewRequest(http.MethodGet, h.srv.URL+hubproto.PathRelayPhone, nil)
+	preq.Header.Set(hubproto.HeaderRelayRV, rv)
+	preq.Header.Set(hubproto.HeaderRelayBearer, bearer)
+	phoneCh := make(chan *hubproto.WSConn, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		ws, err := hubproto.WSDialer{Proxy: noProxy}.Dial(ctx, preq)
+		if err != nil {
+			t.Errorf("phone: %v", err)
+		}
+		phoneCh <- ws
+	}()
+	m := read(ctrl)
+	if m.T != "incoming" || m.RV != rv {
+		t.Fatalf("incoming = %+v", m)
+	}
+	leg := dial(signed(hubproto.PathRelayAccept + "?conn=" + m.Conn))
+	phone := <-phoneCh
+	if phone == nil {
+		t.FailNow()
+	}
+	t.Cleanup(func() { _ = phone.CloseNow(hubproto.WSCloseGoingAway) })
+
+	const size = 256 << 10
+	up, down := bytes.Repeat([]byte("u"), size), bytes.Repeat([]byte("d"), size)
+	go func() { _, _ = phone.Write(up) }()
+	go func() { _, _ = leg.Write(down) }()
+	gotUp, gotDown := make([]byte, size), make([]byte, size)
+	_ = leg.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = phone.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.ReadFull(leg, gotUp); err != nil || !bytes.Equal(gotUp, up) {
+		t.Fatalf("up: %v", err)
+	}
+	if _, err := io.ReadFull(phone, gotDown); err != nil || !bytes.Equal(gotDown, down) {
+		t.Fatalf("down: %v", err)
+	}
+
+	// Revocation by another process (the CLI) is effective on the next recheck.
+	if err := h.st.Update(func(dd *store.Data) error {
+		now := h.clk.Now()
+		dd.Devices[d.id].RevokedAt = &now
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv.RelayRecheck()
+	_ = ctrl.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 64)
+	for {
+		if _, err := ctrl.Read(buf); err != nil {
+			break
+		}
+	}
+	if code, ok := ctrl.PeerCloseCode(); !ok || code != hubproto.RelayCloseRevoked {
+		t.Fatalf("control close = %d %v, want %d", code, ok, hubproto.RelayCloseRevoked)
 	}
 }

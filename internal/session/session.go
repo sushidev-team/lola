@@ -874,6 +874,57 @@ type Store struct {
 	// registers it to feed its activity-event ring; nil in tests / bare Stores,
 	// where Update behaves exactly as before.
 	onTransition func(from string, s Session)
+
+	// onChange, when set, is invoked UNDER the store lock after every COMMITTED
+	// change (see OnChange). Same no-reentry rule as onTransition.
+	onChange func(Change)
+}
+
+// Change is one committed change. Prev is nil on insert, Next nil on delete.
+// Both are copies owned by the callback for its duration only.
+type Change struct {
+	ID         string // the BASE id; a lane write reports its session
+	Prev, Next *Session
+}
+
+// OnChange registers fn, invoked under the store lock after a change was
+// COMMITTED: Upsert (always); Update / Apply only when fn returned true and
+// the record was stored (Update's (sess, true) return also covers a no-op and
+// must not be used as the signal); Delete when it removed a record; each id
+// PruneOlderThan drops. Lane writes go through updateLane and are covered.
+// fn must not call back into the store, must not block and must not retain
+// Prev/Next. Pass nil to clear it.
+func (s *Store) OnChange(fn func(Change)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = fn
+}
+
+// emitLocked reports one commit to onChange. The caller holds s.mu. prev and
+// next are nil for an insert and a delete respectively; each is handed over as
+// a private copy with its own PR so the callback cannot reach store state.
+func (s *Store) emitLocked(id string, prev, next *Session) {
+	if s.onChange == nil {
+		return
+	}
+	c := Change{ID: id}
+	if prev != nil {
+		p := *prev
+		if p.PR != nil {
+			pr := *p.PR
+			p.PR = &pr
+		}
+		c.Prev = &p
+	}
+	if next != nil {
+		n := *next
+		if n.PR != nil {
+			pr := *n.PR
+			n.PR = &pr
+		}
+		c.Next = &n
+	}
+	s.onChange(c)
 }
 
 // OnTransition registers a status-transition callback (see the field doc). Pass
@@ -1018,7 +1069,13 @@ func (s *Store) Upsert(sess Session) {
 		sess.PR = &pr // never share a pointer with the caller
 	}
 	sess.EnsureAxes() // a legacy axis-less record gets axes on the way in
+	old, existed := s.sessions[sess.ID]
 	s.sessions[sess.ID] = sess
+	if existed {
+		s.emitLocked(sess.ID, &old, &sess)
+	} else {
+		s.emitLocked(sess.ID, nil, &sess)
+	}
 }
 
 // Update applies fn to the stored session with the given id as ONE atomic
@@ -1044,6 +1101,7 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 		return Session{}, false
 	}
 	oldStatus := sess.Status // captured before fn mutates the copy
+	prev := sess             // the committed record, for onChange
 	if sess.PR != nil {
 		pr := *sess.PR
 		sess.PR = &pr
@@ -1069,6 +1127,7 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 	if s.onTransition != nil && stored.Status != oldStatus {
 		s.onTransition(oldStatus, stored)
 	}
+	s.emitLocked(id, &prev, &stored)
 	return sess, true
 }
 
@@ -1118,6 +1177,7 @@ func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Sess
 	defer s.mu.Unlock()
 	sess, existed := s.sessions[id]
 	oldStatus := sess.Status
+	prev := sess // the committed record, for onChange (unused on insert)
 	if sess.PR != nil {
 		pr := *sess.PR
 		sess.PR = &pr
@@ -1142,6 +1202,11 @@ func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Sess
 	if existed && s.onTransition != nil && stored.Status != oldStatus {
 		s.onTransition(oldStatus, stored)
 	}
+	if existed {
+		s.emitLocked(id, &prev, &stored)
+	} else {
+		s.emitLocked(id, nil, &stored)
+	}
 	return sess, true
 }
 
@@ -1154,10 +1219,12 @@ func (s *Store) Delete(id string) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.sessions[id]; !ok {
+	old, ok := s.sessions[id]
+	if !ok {
 		return false
 	}
 	delete(s.sessions, id)
+	s.emitLocked(id, &old, nil)
 	return true
 }
 
@@ -1171,6 +1238,7 @@ func (s *Store) PruneOlderThan(d time.Duration) int {
 	for id, sess := range s.sessions {
 		if sess.LastSeen.Before(cutoff) {
 			delete(s.sessions, id)
+			s.emitLocked(id, &sess, nil)
 			n++
 		}
 	}

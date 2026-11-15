@@ -899,6 +899,41 @@ export function railKind(row: StoryRow, answerId: string, filter: Filter = "ever
   }
 }
 
+/** Structural equality over the plain objects and arrays a story is built of; anything else by identity. */
+function sameShape(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameShape(a[i], b[i])) return false;
+    return true;
+  }
+  if (Object.getPrototypeOf(a) !== Object.prototype || Object.getPrototypeOf(b) !== Object.prototype) return false;
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) if (!(k in b) || !sameShape((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])) return false;
+  return true;
+}
+
+/**
+ * `next` with every turn that reads exactly as it did in `prev` replaced by the `prev` object.
+ * buildStory makes every turn anew, so without this one pushed item hands every mounted turn a
+ * new object and each of them re-derives what it shows. Source items keep their identity across
+ * pushes, so the comparison stops at them.
+ */
+export function keepTurns(prev: Story | undefined, next: Story): Story {
+  if (!prev?.turns.length) return next;
+  const old = new Map(prev.turns.map((t) => [t.id, t]));
+  let kept = 0;
+  const turns = next.turns.map((t) => {
+    const p = old.get(t.id);
+    if (!p || !sameShape(p, t)) return t;
+    kept++;
+    return p;
+  });
+  return kept ? { ...next, turns } : next;
+}
+
 /** What a turn reads as when it is older than the last few: first answer plus receipt. */
 export function isFolded(index: number, total: number, openedTurns: ReadonlySet<string>, id: string): boolean {
   return index < total - OPEN_TURNS && !openedTurns.has(`turn-${id}`);

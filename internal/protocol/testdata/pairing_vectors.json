@@ -1,0 +1,62 @@
+{
+  "proof": {
+    "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "exporterProof": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "proof": "_JLo1y0Y5ydxbpHAn0B-7TeFwFIVt_jsZATfGSJ13Zw"
+  },
+  "code": {
+    "exporterCode": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "daemonSPKIHash": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "phoneSPKIHash": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+    "code": "680972"
+  },
+  "payloads": [
+    {
+      "name": "direct",
+      "encoded": "lola2.eyJ2IjoyLCJwaW4iOiJ2WU1hR0cxZHdEcHRCZE0vWWxLK0doQU56Z3JwNjZwUnNaL0syMnZySHRvPSIsImFkZHJzIjpbIjE5Mi4xNjguMS4yMCIsImZkMDA6OjIwIl0sInBvcnQiOjQ3ODIxLCJzZWNyZXQiOiJBQUVDQXdRRkJnY0lDUW9MREEwT0R4QVJFaE1VRlJZWEdCa2FHeHdkSGg4In0",
+      "decoded": {
+        "v": 2,
+        "pin": "vYMaGG1dwDptBdM/YlK+GhANzgrp66pRsZ/K22vrHto=",
+        "addrs": [
+          "192.168.1.20",
+          "fd00::20"
+        ],
+        "port": 47821,
+        "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+      }
+    },
+    {
+      "name": "relay",
+      "encoded": "lola2.eyJ2IjoyLCJwaW4iOiJ2WU1hR0cxZHdEcHRCZE0vWWxLK0doQU56Z3JwNjZwUnNaL0syMnZySHRvPSIsInNlY3JldCI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgiLCJyZWxheSI6eyJ1cmwiOiJodHRwczovL2h1Yi5leGFtcGxlLmNvbSIsInJ2IjoiMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJ0b2siOiJYWDRYSlE3NE50ZWtoQ3EyRUZNZFpUQWtmbHVPS1IxellVdG5meHFmZWNZIn19",
+      "decoded": {
+        "v": 2,
+        "pin": "vYMaGG1dwDptBdM/YlK+GhANzgrp66pRsZ/K22vrHto=",
+        "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "relay": {
+          "url": "https://hub.example.com",
+          "rv": "0123456789abcdef0123456789abcdef",
+          "tok": "XX4XJQ74NtekhCq2EFMdZTAkfluOKR1zYUtnfxqfecY"
+        }
+      }
+    },
+    {
+      "name": "both",
+      "encoded": "lola2.eyJ2IjoyLCJwaW4iOiJ2WU1hR0cxZHdEcHRCZE0vWWxLK0doQU56Z3JwNjZwUnNaL0syMnZySHRvPSIsImFkZHJzIjpbIjE5Mi4xNjguMS4yMCIsImZkMDA6OjIwIl0sInBvcnQiOjQ3ODIxLCJzZWNyZXQiOiJBQUVDQXdRRkJnY0lDUW9MREEwT0R4QVJFaE1VRlJZWEdCa2FHeHdkSGg4IiwicmVsYXkiOnsidXJsIjoiaHR0cHM6Ly9odWIuZXhhbXBsZS5jb20iLCJydiI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwidG9rIjoiWFg0WEpRNzROdGVraENxMkVGTWRaVEFrZmx1T0tSMXpZVXRuZnhxZmVjWSJ9fQ",
+      "decoded": {
+        "v": 2,
+        "pin": "vYMaGG1dwDptBdM/YlK+GhANzgrp66pRsZ/K22vrHto=",
+        "addrs": [
+          "192.168.1.20",
+          "fd00::20"
+        ],
+        "port": 47821,
+        "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "relay": {
+          "url": "https://hub.example.com",
+          "rv": "0123456789abcdef0123456789abcdef",
+          "tok": "XX4XJQ74NtekhCq2EFMdZTAkfluOKR1zYUtnfxqfecY"
+        }
+      }
+    }
+  ]
+}

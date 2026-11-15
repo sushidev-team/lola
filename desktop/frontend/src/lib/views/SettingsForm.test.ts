@@ -18,7 +18,7 @@ declare const process: { cwd(): string };
 const fakeDto = {
   remoteEnabled: false,
   remoteBind: "localhost",
-  remoteInsecureLan: false,
+  remoteRelay: true,
   remoteAdvertise: false,
   remoteDevForward: false,
   remotePort: 7717,
@@ -72,7 +72,6 @@ const {
   SaveSettings,
   PrioritySortKeys,
   RemoteBinds,
-  RegenerateRemoteKey,
   ReviewKinds,
   Themes,
   SetTheme,
@@ -82,7 +81,6 @@ const {
   LinearKeyStatus,
   SetLinearKey,
   ValidateLinearKey,
-  ConnectCode,
   TeamPolicy,
   HubStatus,
   TeamLimits,
@@ -97,7 +95,6 @@ const {
   SaveSettings: vi.fn(),
   PrioritySortKeys: vi.fn(),
   RemoteBinds: vi.fn(),
-  RegenerateRemoteKey: vi.fn(),
   ReviewKinds: vi.fn(),
   Themes: vi.fn(),
   SetTheme: vi.fn(),
@@ -107,7 +104,6 @@ const {
   LinearKeyStatus: vi.fn(),
   SetLinearKey: vi.fn(),
   ValidateLinearKey: vi.fn(),
-  ConnectCode: vi.fn(),
   TeamPolicy: vi.fn(),
   HubStatus: vi.fn(),
   TeamLimits: vi.fn(),
@@ -125,7 +121,6 @@ vi.mock("@bindings/desktop", () => ({
     SaveSettings: (dto: unknown) => SaveSettings(dto),
     PrioritySortKeys: () => PrioritySortKeys(),
     RemoteBinds: () => RemoteBinds(),
-    RegenerateRemoteKey: () => RegenerateRemoteKey(),
     ReviewKinds: () => ReviewKinds(),
     Themes: () => Themes(),
     SetTheme: (name: string) => SetTheme(name),
@@ -133,7 +128,6 @@ vi.mock("@bindings/desktop", () => ({
     LinearKeyStatus: () => LinearKeyStatus(),
     SetLinearKey: (k: string) => SetLinearKey(k),
     ValidateLinearKey: (k: string) => ValidateLinearKey(k),
-    ConnectCode: () => ConnectCode(),
     TeamPolicy: () => TeamPolicy(),
     HubProjects: () => Promise.resolve([]),
     SaveHubProject: () => Promise.resolve(),
@@ -150,6 +144,15 @@ vi.mock("@bindings/desktop", () => ({
     Kinds: () => Promise.resolve([{ id: "dep_advisory", label: "Security advisories" }]),
     Board: vi.fn().mockResolvedValue({ items: [] }),
     Org: vi.fn().mockResolvedValue({ devices: [] }),
+  },
+  PhonesService: {
+    Devices: () => Promise.resolve({ devices: [] }),
+    Begin: vi.fn(),
+    Status: vi.fn(),
+    Confirm: vi.fn(),
+    Reject: vi.fn(),
+    Revoke: vi.fn(),
+    SetTiers: vi.fn(),
   },
   LinearService: {
     WorkspaceLabels: () => WorkspaceLabels(),
@@ -267,7 +270,6 @@ describe("SettingsForm", () => {
       "lan",
       "all",
     ]);
-    RegenerateRemoteKey.mockReset().mockResolvedValue(undefined);
     ReviewKinds.mockReset().mockResolvedValue(
       reviewKinds.map((k) => ({ ...k })),
     );
@@ -285,15 +287,6 @@ describe("SettingsForm", () => {
       "key stored in the macOS Keychain (service lola-linear)",
     );
     ValidateLinearKey.mockReset().mockResolvedValue(undefined);
-    ConnectCode.mockReset().mockResolvedValue({
-      code: "lola1.eyJhIjpbIjEyNy4wLjAuMSJdfQ",
-      hosts: ["127.0.0.1"],
-      port: 7717,
-      pin: "C4td4uyeJMSyxfoAsB3i98Kd6JhkpOTf3Oxipiq+sxI=",
-      key: "0123456789abcdef0123456789abcdef",
-      insecure: true,
-      problem: "",
-    });
     TeamPolicy.mockReset().mockResolvedValue({ available: false, joined: false, org: "", version: 0, applied: false, note: "", keys: [], summary: [], locked: [] });
     HubStatus.mockReset().mockResolvedValue({ enabled: false, joined: false, claimsToday: 0, maxClaimsPerDay: 4, pendingOutcomes: 0, sessions: [] });
     TeamLimits.mockReset().mockResolvedValue({ budgetDaily: 0, mergeQueue: false });
@@ -536,7 +529,7 @@ describe("SettingsForm", () => {
       "Notifications",
       "Assistants",
       "Review",
-      "Phone access",
+      "Phones",
       "Appearance",
     ]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
@@ -761,7 +754,7 @@ describe("SettingsForm", () => {
     ]);
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phones" }));
 
     await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
     const sel = screen.getByLabelText("Bind") as HTMLSelectElement;
@@ -778,12 +771,12 @@ describe("SettingsForm", () => {
 
   it("opens phone help without changing the checkbox or dirtying settings", async () => {
     render(SettingsForm);
-    await fireEvent.click(await screen.findByRole("tab", { name: "Phone access" }));
-    const box = screen.getByRole("checkbox", { name: "Allow a LAN bind" });
+    await fireEvent.click(await screen.findByRole("tab", { name: "Phones" }));
+    const box = screen.getByRole("checkbox", { name: "Advertise on the local network" });
     expect(box).not.toBeChecked();
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
-    await fireEvent.click(screen.getByRole("button", { name: "More about Allow a LAN bind" }));
-    expect(screen.getByRole("note")).toHaveTextContent("shared key in the clear");
+    await fireEvent.click(screen.getByRole("button", { name: "More about Advertise on the local network" }));
+    expect(screen.getByRole("note")).toHaveTextContent("no hostname or access key");
     expect(box).not.toBeChecked();
     await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(closeOverlay).toHaveBeenCalled();
@@ -798,7 +791,7 @@ describe("SettingsForm", () => {
     GetSettings.mockResolvedValue({ ...fakeDto, remoteEnabled: true });
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phones" }));
 
     const box = await screen.findByRole("checkbox", { name: "Advertise on the local network" });
     expect(box).not.toBeChecked();
@@ -819,7 +812,7 @@ describe("SettingsForm", () => {
     });
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phones" }));
 
     // The picker cannot show the literal, so the row hands over to a text input
     // carrying the real value — it is never silently rewritten.
@@ -836,7 +829,7 @@ describe("SettingsForm", () => {
   it("switches to a literal on request and saves what was typed", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phones" }));
     await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
 
     await fireEvent.change(screen.getByLabelText("Bind"), {
@@ -853,70 +846,10 @@ describe("SettingsForm", () => {
     });
   });
 
-  // Rolling the key is M1's only revocation and it disconnects every paired
-  // phone, so it must ASK first — the same shared confirm store every other
-  // irreversible action in this app goes through.
-  it("asks before regenerating the key, and does nothing if declined", async () => {
-    render(SettingsForm);
-    await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
-
-    await fireEvent.click(
-      await screen.findByRole("button", { name: /regenerate key/i }),
-    );
-    expect(RegenerateRemoteKey).not.toHaveBeenCalled();
-    expect(confirm.request).not.toBeNull();
-    // The dialog has to say what it costs, not just what it does.
-    expect(confirm.request?.body).toMatch(/every phone/i);
-
-    confirm.cancel();
-    expect(RegenerateRemoteKey).not.toHaveBeenCalled();
-  });
-
-  it("regenerates on confirm and drops the code that described the old key", async () => {
-    render(SettingsForm);
-    await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
-
-    // Reveal a code first, so there is stale material on screen to drop.
-    await fireEvent.click(
-      await screen.findByRole("button", { name: "Show code" }),
-    );
-    await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
-
-    await fireEvent.click(
-      screen.getByRole("button", { name: /regenerate key/i }),
-    );
-    confirm.accept();
-
-    await waitFor(() => expect(RegenerateRemoteKey).toHaveBeenCalledTimes(1));
-    // A stale code scans cleanly and is then refused, which from the phone is
-    // indistinguishable from a bad camera read — so it must not stay up.
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Show code" }),
-      ).toBeInTheDocument(),
-    );
-  });
-
-  it("reports a failed regeneration instead of claiming the key rolled", async () => {
-    RegenerateRemoteKey.mockRejectedValue(new Error("daemon unreachable"));
-    render(SettingsForm);
-    await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
-
-    await fireEvent.click(
-      await screen.findByRole("button", { name: /regenerate key/i }),
-    );
-    confirm.accept();
-
-    expect(await screen.findByText(/daemon unreachable/)).toBeInTheDocument();
-  });
-
   it("saves the listener toggle and port", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phones" }));
     await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
 
     await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
@@ -930,6 +863,20 @@ describe("SettingsForm", () => {
       remoteEnabled: true,
       remotePort: 7800,
     });
+  });
+
+  it("saves the relay checkbox with the rest of the form", async () => {
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Phones" }));
+
+    const box = screen.getByRole("checkbox", { name: "Reach this Mac away from home" });
+    expect(box).toBeChecked();
+    await fireEvent.click(box);
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ remoteRelay: false });
   });
 
   it("saves the dto with the list fields cleaned, flashes good, and closes the overlay", async () => {
@@ -1690,54 +1637,6 @@ describe("SettingsForm", () => {
     });
   });
 
-  // --- connecting a phone: the reveal is a bearer credential ----------------
-
-  it("hides a revealed connect code by itself after the reveal window", async () => {
-    // The exposure this bounds is the one the app can actually control: a code
-    // left up in a share, a recording, or in front of someone walking past. It
-    // used to stay on screen until a human pressed Hide, which for a credential
-    // with no TTL, no single use and no per-device revocation is the wrong
-    // default in the wrong direction.
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      render(SettingsForm);
-      await screen.findByDisplayValue("60s");
-      await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
-      await fireEvent.click(screen.getByRole("button", { name: "Show code" }));
-
-      await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
-      expect(await screen.findByText(/Hides in/)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Hide" })).toBeInTheDocument();
-
-      await vi.advanceTimersByTimeAsync(91_000);
-      await waitFor(() =>
-        expect(
-          screen.getByRole("button", { name: "Show code" }),
-        ).toBeInTheDocument(),
-      );
-      expect(screen.queryByText(/Hides in/)).not.toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("says the copy hands over the key, not just the code", async () => {
-    render(SettingsForm);
-    await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Show code" }));
-    await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
-    // The key row is still masked at this point, which used to imply the mask
-    // was a barrier to more than shoulder-surfing.
-    expect(
-      await screen.findByRole("button", {
-        name: /Copy code \(contains the key\)/,
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Show key" }),
-    ).toBeInTheDocument();
-  });
 });
 
 

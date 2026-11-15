@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { freshSession, talkSvc, terms, AGENT } from "./talk.testkit";
 import QuestionCard from "./QuestionCard.svelte";
+import { setTouchSurface } from "$lib/touchsurface";
 
 afterEach(() => {
+  setTouchSurface(null);
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -17,6 +19,16 @@ const choices = [
 ];
 
 describe("the question card", () => {
+  it("titles the card Question and says Other… on a touch surface, and keeps every answer", () => {
+    setTouchSurface({});
+    render(QuestionCard, { sessionId: freshSession(), prompt: { kind: "question", hash: "q", lines: ["Which?"], choices }, narrow: true } as never);
+    expect(screen.getByRole("heading").textContent).toBe("Question");
+    expect(screen.queryByRole("button", { name: "Terminal" })).toBeNull();
+    expect(screen.getByText("Other…")).toBeTruthy();
+    expect(document.querySelectorAll("[data-choice]")).toHaveLength(3);
+    expect(document.querySelectorAll("[data-card-actions] [data-chord]").length).toBeGreaterThan(0);
+  });
+
   it("keeps Yes and No questions neutral and all answers visible when narrow", () => {
     render(QuestionCard, { sessionId: freshSession(), prompt: { kind: "question", hash: "yes-no", lines: ["Continue?"], choices: [
       { key: "1", label: "Yes" }, { key: "2", label: "No" }, { key: "3", label: "Discuss first" },

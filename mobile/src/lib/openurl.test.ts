@@ -1,10 +1,23 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import {
-  isOpenable,
-  openExternal,
-  resetBrowserCache,
-  type BrowserLoader,
-} from "./openurl";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { isLoopbackUrl, isOpenable, openExternal, openOnPhone, OpenOnPhoneError } from "./openurl";
+
+const held = vi.hoisted(() => ({ native: null as unknown, browser: null as unknown }));
+vi.mock("../native", () => ({
+  get native() {
+    return held.native;
+  },
+  get browser() {
+    return held.browser;
+  },
+}));
+
+afterEach(() => {
+  held.native = null;
+  held.browser = null;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("the scheme guard", () => {
   it("allows http and https", () => {
@@ -13,8 +26,6 @@ describe("the scheme guard", () => {
   });
 
   it("refuses every scheme a log line can also print", () => {
-    // The reason the guard exists: terminal text is untrusted, and an agent can
-    // be induced to print any of these.
     expect(isOpenable("file:///etc/passwd")).toBe(false);
     expect(isOpenable("javascript:alert(1)")).toBe(false);
     expect(isOpenable("data:text/html,<script>1</script>")).toBe(false);
@@ -28,174 +39,110 @@ describe("the scheme guard", () => {
   });
 });
 
+describe("isLoopbackUrl", () => {
+  it("names the Mac for localhost, 127/8 and ::1", () => {
+    for (const u of [
+      "http://localhost:3000",
+      "http://app.localhost/",
+      "http://127.0.0.1:8080",
+      "http://127.4.5.6/",
+      "http://[::1]:3000/",
+    ]) {
+      expect(isLoopbackUrl(u)).toBe(true);
+    }
+  });
+
+  it("leaves LAN and public hosts alone", () => {
+    for (const u of ["http://192.168.20.3:65497", "https://github.com", "http://127.example.com/", "not a url"]) {
+      expect(isLoopbackUrl(u)).toBe(false);
+    }
+  });
+});
+
 describe("openExternal", () => {
-  // The chain is driven with an INJECTED loader rather than through the real
-  // one. `@capacitor/browser` is a genuine dependency, so a dynamic import of it
-  // succeeds under vitest and hands back the plugin's own web implementation —
-  // which would make "there is no plugin here" untestable, and would make the
-  // result depend on whether node_modules happened to be installed.
-  const noPlugin: BrowserLoader = async () => undefined;
-  const plugin =
-    (open: (o: { url: string }) => Promise<unknown>): BrowserLoader =>
-    async () => ({
-      open,
-    });
-
-  afterEach(() => {
-    delete (globalThis as { Capacitor?: unknown }).Capacitor;
-    resetBrowserCache();
-    vi.restoreAllMocks();
-  });
-
   it("does nothing at all for a refused URL", async () => {
+    const openURL = vi.fn();
+    held.native = { openURL };
     const open = vi.fn();
     vi.stubGlobal("open", open);
-    const load = vi.fn(noPlugin);
-    await openExternal("javascript:alert(1)", load);
-    expect(open).not.toHaveBeenCalled();
-    expect(load).not.toHaveBeenCalled(); // the guard runs before anything is loaded
-  });
-
-  it("prefers the browser plugin when one is available", async () => {
-    const plug = vi.fn().mockResolvedValue(undefined);
-    const open = vi.fn();
-    vi.stubGlobal("open", open);
-    await openExternal("https://example.com", plugin(plug));
-    expect(plug).toHaveBeenCalledWith({ url: "https://example.com" });
+    await expect(openExternal("javascript:alert(1)")).resolves.toBe(false);
+    await expect(openExternal("")).resolves.toBe(false);
+    expect(openURL).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("falls back to the system target when there is no plugin", async () => {
-    // "_system" is what Capacitor's WebView maps onto the real browser. A plain
-    // "_blank" in a WKWebView opens the page INSIDE the app, with no way back —
-    // which is why it is the LAST resort and not the first.
+  it("prefers the system browser over the in-app one", async () => {
+    // The in-app browser resolved without presenting anything for a
+    // private-network http address; UIApplication.open reports the system's answer.
+    const openURL = vi.fn().mockResolvedValue(undefined);
+    const inApp = vi.fn().mockResolvedValue(undefined);
+    held.native = { openURL };
+    held.browser = { open: inApp };
+    await expect(openExternal("http://192.168.20.3:65497")).resolves.toBe(true);
+    expect(openURL).toHaveBeenCalledWith({ url: "http://192.168.20.3:65497" });
+    expect(inApp).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the in-app browser when the system one rejects", async () => {
+    held.native = { openURL: vi.fn().mockRejectedValue(new Error("declined")) };
+    const inApp = vi.fn().mockResolvedValue(undefined);
+    held.browser = { open: inApp };
+    await expect(openExternal("https://example.com")).resolves.toBe(true);
+    expect(inApp).toHaveBeenCalledWith({ url: "https://example.com" });
+  });
+
+  it("falls through to the window opener when both plugins fail", async () => {
+    held.native = { openURL: vi.fn().mockRejectedValue(new Error("no")) };
+    held.browser = { open: vi.fn().mockRejectedValue(new Error("no")) };
     const open = vi.fn();
     vi.stubGlobal("open", open);
-    await openExternal("http://127.0.0.1:8000", noPlugin);
-    expect(open).toHaveBeenCalledWith(
-      "http://127.0.0.1:8000",
-      "_system",
-      "noopener",
-    );
+    await expect(openExternal("https://example.com")).resolves.toBe(true);
+    expect(open).toHaveBeenCalledWith("https://example.com", "_system", "noopener");
+  });
+
+  it("uses the window opener in a browser session with no plugins", async () => {
+    const open = vi.fn();
+    vi.stubGlobal("open", open);
+    await expect(openExternal("http://127.0.0.1:8000")).resolves.toBe(true);
     expect(open).toHaveBeenCalledTimes(1);
   });
 
   it("tries _blank when the shell did not recognise _system", async () => {
-    // A desktop browser, which is what `npm run dev` runs in, knows nothing
-    // about "_system" and returns null for it. The header promised this step for
-    // a while before the code had it.
-    const open = vi.fn((_u: string, target?: string) =>
-      target === "_system" ? null : {},
-    );
+    const open = vi.fn((_u: string, target?: string) => (target === "_system" ? null : {}));
     vi.stubGlobal("open", open);
-    await openExternal("https://example.com", noPlugin);
+    await openExternal("https://example.com");
     expect(open.mock.calls.map((c) => c[1])).toEqual(["_system", "_blank"]);
   });
 
-  it("swallows a failing plugin rather than rejecting into xterm's link handler", async () => {
-    // It falls through to the window opener, which HERE succeeds — so the
-    // answer is true. What is asserted is that nothing rejected.
-    const open = vi.fn();
-    vi.stubGlobal("open", open);
-    await expect(
-      openExternal(
-        "https://example.com",
-        plugin(vi.fn().mockRejectedValue(new Error("no"))),
-      ),
-    ).resolves.toBe(true);
-    expect(open).toHaveBeenCalled();
-  });
-
-  it("swallows a loader that throws", async () => {
-    const open = vi.fn();
-    vi.stubGlobal("open", open);
-    await expect(
-      openExternal("https://example.com", async () => {
-        throw new Error("no bundler");
-      }),
-    ).resolves.toBe(true);
-    expect(open).toHaveBeenCalled();
-  });
-
-  it("does not throw when the shell has no window opener either", async () => {
-    // AND SAYS SO. A button whose only job is to open something has to be able
-    // to report that it could not — silence is what "it shows, but nothing
-    // happens on click" is made of.
+  it("answers false when nothing can open it", async () => {
     vi.stubGlobal("open", undefined);
-    await expect(openExternal("https://example.com", noPlugin)).resolves.toBe(
-      false,
-    );
-  });
-
-  it("answers false for a URL it refuses to open", async () => {
-    await expect(openExternal("javascript:alert(1)", noPlugin)).resolves.toBe(
-      false,
-    );
-    await expect(openExternal("", noPlugin)).resolves.toBe(false);
+    await expect(openExternal("https://example.com")).resolves.toBe(false);
   });
 });
 
-describe("the system browser, which is tried first", () => {
-  const plugin =
-    (open: (o: { url: string }) => Promise<unknown>): BrowserLoader =>
-    async () => ({
-      open,
-    });
-
-  // It goes first because the in-app one resolved WITHOUT PRESENTING anything
-  // for a private-network http address — success reported, no browser shown.
-  // UIApplication.open returns the system's own answer instead.
-  function nativePlugin(openURL: (o: { url: string }) => Promise<unknown>) {
-    (globalThis as { Capacitor?: unknown }).Capacitor = {
-      Plugins: { LolaTransport: { openURL } },
-    };
-  }
-
-  afterEach(() => {
-    delete (globalThis as { Capacitor?: unknown }).Capacitor;
+describe("openOnPhone", () => {
+  it("opens an http link natively and resolves", async () => {
+    const openURL = vi.fn().mockResolvedValue(undefined);
+    held.native = { openURL };
+    await expect(openOnPhone("https://github.com/x/y/pull/1")).resolves.toBeUndefined();
+    expect(openURL).toHaveBeenCalledTimes(1);
   });
 
-  it("is preferred over the in-app browser", async () => {
-    const native = vi.fn().mockResolvedValue({ opened: true });
-    nativePlugin(native);
-    const inApp = vi.fn().mockResolvedValue(undefined);
-
-    await expect(
-      openExternal("http://192.168.20.3:65497", plugin(inApp)),
-    ).resolves.toBe(true);
-    expect(native).toHaveBeenCalledWith({ url: "http://192.168.20.3:65497" });
-    expect(inApp).not.toHaveBeenCalled();
+  it("rejects a loopback link before opening anything", async () => {
+    const openURL = vi.fn();
+    held.native = { openURL };
+    await expect(openOnPhone("http://localhost:3000")).rejects.toMatchObject({ reason: "loopback" });
+    expect(openURL).not.toHaveBeenCalled();
   });
 
-  it("falls through to the in-app browser when the system declines", async () => {
-    // `opened: false` is an ANSWER — the phone would not take the link — and the
-    // ladder continues rather than reporting failure on the first rung.
-    nativePlugin(
-      vi.fn().mockResolvedValue({ opened: false, reason: "declined" }),
-    );
-    const inApp = vi.fn().mockResolvedValue(undefined);
-
-    await expect(
-      openExternal("http://192.168.20.3:65497", plugin(inApp)),
-    ).resolves.toBe(true);
-    expect(inApp).toHaveBeenCalled();
+  it("rejects a non-http link", async () => {
+    await expect(openOnPhone("file:///etc/passwd")).rejects.toMatchObject({ reason: "not_http" });
   });
 
-  it("falls through when the plugin method throws", async () => {
-    nativePlugin(vi.fn().mockRejectedValue(new Error("no")));
-    const inApp = vi.fn().mockResolvedValue(undefined);
-
-    await expect(
-      openExternal("https://example.com", plugin(inApp)),
-    ).resolves.toBe(true);
-    expect(inApp).toHaveBeenCalled();
-  });
-
-  it("is skipped entirely in a browser session, where there is no plugin", async () => {
-    const inApp = vi.fn().mockResolvedValue(undefined);
-    await expect(
-      openExternal("https://example.com", plugin(inApp)),
-    ).resolves.toBe(true);
-    expect(inApp).toHaveBeenCalled();
+  it("rejects when no opener worked", async () => {
+    vi.stubGlobal("open", undefined);
+    const err = await openOnPhone("https://example.com").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OpenOnPhoneError);
+    expect(err).toMatchObject({ reason: "failed" });
   });
 });

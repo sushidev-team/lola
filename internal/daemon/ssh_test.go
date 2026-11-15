@@ -1451,9 +1451,11 @@ func TestSSHBridgeAdmitsAgentVerbsOnlyWithAValidToken(t *testing.T) {
 			t.Errorf("%s: a token spoke for another session", cmd)
 		}
 	}
-	for _, cmd := range protocol.SSHHumanCommands {
-		if err := r.d.bridgeAdmit(protocol.Request{Cmd: cmd, Session: "s1", HookToken: token}); err == nil {
-			t.Errorf("%s admitted on the bridge", cmd)
+	for _, list := range [][]string{protocol.SSHHumanCommands, protocol.TalkCommands} {
+		for _, cmd := range list {
+			if err := r.d.bridgeAdmit(protocol.Request{Cmd: cmd, Session: "s1", HookToken: token}); err == nil {
+				t.Errorf("%s admitted on the bridge", cmd)
+			}
 		}
 	}
 }
@@ -1462,7 +1464,7 @@ func TestSSHBridgeAdmitsAgentVerbsOnlyWithAValidToken(t *testing.T) {
 func TestSSHEveryCommandIsHandled(t *testing.T) {
 	r := newSSHRig(t, hostDev)
 	r.session("s1", "")
-	for _, list := range [][]string{protocol.SSHAgentCommands, protocol.SSHHumanCommands} {
+	for _, list := range [][]string{protocol.SSHAgentCommands, protocol.SSHHumanCommands, protocol.TalkCommands} {
 		for _, cmd := range list {
 			resp := r.d.handle(context.Background(), protocol.Request{Cmd: cmd, Session: "s1", Args: json.RawMessage(`{}`)})
 			if strings.HasPrefix(resp.Error, "unknown cmd") || strings.HasPrefix(resp.Error, "unknown ssh command") {

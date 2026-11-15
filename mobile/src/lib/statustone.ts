@@ -26,7 +26,8 @@
 // is faint rather than ink. A status that needs a NEW colour needs it in
 // theme.ts, where all three surfaces read it and the parity test guards it.
 
-import { statusText } from "$lib/theme";
+import { eventPhrase, statusText } from "$lib/theme";
+import { copy } from "./copy";
 
 /**
  * The Tailwind text-colour utility for a status word drawn WITHOUT a pill.
@@ -37,4 +38,78 @@ import { statusText } from "$lib/theme";
 export function statusTone(status: string): string {
   const tone = statusText(status);
   return tone === "text-ink" ? "text-faint" : tone;
+}
+
+/**
+ * The app-wide Sentence-case status word: "Needs you", "CI failed", "In review".
+ *
+ * One mapping for every phone surface that prints a status (Inbox rows, project
+ * sessions, PR pickers, Activity), so the same state never has two spellings.
+ * An unknown word is sentence-cased from its own spelling, never dropped.
+ */
+const WORDS: Record<string, string> = {
+  needs_input: "Needs you",
+  waiting_input: "Needs you",
+  working: "Working",
+  idle: "Idle",
+  draft: "Draft",
+  ci_pending: "CI running",
+  ci_failed: "CI failed",
+  merge_conflict: "Conflict",
+  changes_requested: "Changes requested",
+  review_pending: "In review",
+  approved: "Approved",
+  merged: "Merged",
+  closed: "Closed",
+  session_ended: "Ended",
+  dead: "Ended",
+  quota_limited: "Usage limit",
+};
+
+export function statusWord(status: string): string {
+  const known = WORDS[status];
+  if (known) return known;
+  const w = status.replaceAll("_", " ");
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+/**
+ * The tone of a Linear ticket's state, from the shared palette: a started
+ * ticket and a ticket an agent already runs are the same thing and share one
+ * colour. An unknown type is drawn quietly, never dropped.
+ */
+export function ticketTone(stateType: string | undefined, live = false): string {
+  if (live) return statusTone("working");
+  switch (stateType) {
+    case "started":
+      return statusTone("working");
+    case "triage":
+      return statusTone("needs_input");
+    case "unstarted":
+      return "text-subtext";
+    case "canceled":
+      return "text-faint line-through";
+    default:
+      return "text-faint";
+  }
+}
+
+const ACTIVITY_KEYS: Record<string, keyof typeof copy.activity.words> = {
+  needs_input: "needs_you",
+  approved: "approved",
+  merged: "merged",
+  ci_failed: "ci_failed",
+  working: "resumed",
+};
+
+/**
+ * The Sentence-case word of one Activity transition: "Needs you", "CI failed",
+ * "Restarted" (a return to working). A transition with no word of its own, a
+ * spawn included, falls back to the shared phrase in Sentence case.
+ */
+export function activityWord(from: string, to: string): string {
+  const key = from === "" ? undefined : ACTIVITY_KEYS[to];
+  if (key) return copy.activity.words[key];
+  const phrase = eventPhrase(from, to);
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
 }

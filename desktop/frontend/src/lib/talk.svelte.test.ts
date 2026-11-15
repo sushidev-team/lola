@@ -9,9 +9,11 @@ const svc = vi.hoisted(() => ({
   Feed: vi.fn(),
   FeedOutput: vi.fn(),
   Ended: vi.fn(),
+  Setting: vi.fn(),
 }));
 vi.mock("@bindings/desktop", () => ({ TalkService: svc }));
 
+const { setPushSource } = await import("./pushsource");
 const { talk, TALK_POLL_MS, isTalkUnsupported, unsupportedState } = await import("./talk.svelte");
 
 let n = 0;
@@ -31,6 +33,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setPushSource(null);
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -185,6 +188,106 @@ describe("the wrappers", () => {
   it("rejects a stop the daemon refused as data, with its sentence", async () => {
     svc.Stop.mockResolvedValue({ stopped: false, why: "Could not reach the terminal" });
     await expect(talk.stop(id)).rejects.toBe("Could not reach the terminal");
+  });
+});
+
+describe("a pushed source", () => {
+  type Err = import("./pushsource").PushError;
+  function source() {
+    const h: { on?: (d: unknown) => void; onError?: (e: Err) => void; stop: ReturnType<typeof vi.fn> } = { stop: vi.fn() };
+    const talkFn = vi.fn((_s: string, on: (d: unknown) => void, onError: (e: Err) => void) => {
+      h.on = on;
+      h.onError = onError;
+      return h.stop;
+    });
+    setPushSource({ talk: talkFn, feed: vi.fn(), timeline: vi.fn(), diff: vi.fn() } as never);
+    return h;
+  }
+
+  it("asks the daemon nothing and applies what is pushed", async () => {
+    const h = source();
+    const end = talk.poll(id);
+    await vi.advanceTimersByTimeAsync(TALK_POLL_MS * 3);
+    expect(svc.State).not.toHaveBeenCalled();
+    h.on!({ ...answer, session: id, feedSeq: 9 });
+    expect(talk.state(id)?.feedSeq).toBe(9);
+    expect(talk.answerCount(id)).toBe(1);
+    end();
+    expect(h.stop).toHaveBeenCalledOnce();
+  });
+
+  it("makes no State call after a choice", async () => {
+    const h = source();
+    talk.poll(id);
+    svc.Choose.mockResolvedValue({ sent: true });
+    await talk.choose(id, "h", "1");
+    await flush();
+    expect(svc.State).not.toHaveBeenCalled();
+    expect(h.stop).not.toHaveBeenCalled();
+  });
+
+  it("makes no State call after a setting", async () => {
+    source();
+    talk.poll(id);
+    svc.Setting.mockResolvedValue({ sent: true });
+    await talk.setting({ session: id, agent: "claude", setting: "model", value: "opus" } as never);
+    await flush();
+    expect(svc.State).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the interval when the topic is refused", async () => {
+    const h = source();
+    const end = talk.poll(id);
+    h.onError!("limit");
+    // The refused subscription is released at once, and only once.
+    expect(h.stop).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(svc.State).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(TALK_POLL_MS);
+    expect(svc.State).toHaveBeenCalledTimes(2);
+    // A press now refreshes again, as on the desktop.
+    svc.Choose.mockResolvedValue({ sent: true });
+    await talk.choose(id, "h", "1");
+    expect(svc.State).toHaveBeenCalledTimes(3);
+    end();
+    expect(h.stop).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(TALK_POLL_MS * 2);
+    expect(svc.State).toHaveBeenCalledTimes(3);
+  });
+
+  it("polls, and refreshes after a press, when the source refuses before it returns", async () => {
+    const stop = vi.fn();
+    const talkFn = vi.fn((_s: string, _on: unknown, onError: (e: Err) => void) => {
+      onError("unavailable");
+      return stop;
+    });
+    setPushSource({ talk: talkFn, feed: vi.fn(), timeline: vi.fn(), diff: vi.fn() } as never);
+    const end = talk.poll(id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(svc.State).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledOnce();
+    svc.Choose.mockResolvedValue({ sent: true });
+    await talk.choose(id, "h", "1");
+    expect(svc.State).toHaveBeenCalledTimes(2);
+    end();
+  });
+
+  it("starts no interval for a refusal that arrives after the last view ended", async () => {
+    const h = source();
+    const end = talk.poll(id);
+    end();
+    h.onError!("limit");
+    await vi.advanceTimersByTimeAsync(TALK_POLL_MS * 3);
+    expect(svc.State).not.toHaveBeenCalled();
+  });
+
+  it("marks an unknown session unsupported and polls nothing", async () => {
+    const h = source();
+    talk.poll(id);
+    h.onError!("unknown_session");
+    await vi.advanceTimersByTimeAsync(TALK_POLL_MS * 2);
+    expect(talk.unsupported(id)).toBe(true);
+    expect(svc.State).not.toHaveBeenCalled();
   });
 });
 

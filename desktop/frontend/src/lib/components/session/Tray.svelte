@@ -14,6 +14,7 @@
   import { ssh } from "$lib/ssh.svelte";
   import { talk } from "$lib/talk.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { touchSurface } from "$lib/touchsurface";
   import { agentName } from "$lib/ssh";
   import { tierOneCount, trayAnnouncement, trayCards } from "$lib/composer";
   import { widthOf } from "./measure";
@@ -61,7 +62,9 @@
   // A modal is the actual terminal, immediately. Keep its mount outside the hash-keyed
   // cards so redraws do not reconnect it; detach as soon as it is answered or hidden.
   const settingsOpen = $derived(!!talk.settingTerminal[sessionId]);
-  const inlineName = $derived(canControl && (card?.kind === "modal" || settingsOpen) ? session?.tmuxName ?? "" : "");
+  // The inline terminal cell cannot run on a phone: its dialog card owns the way to the Terminal segment.
+  const phone = touchSurface();
+  const inlineName = $derived(!phone && canControl && (card?.kind === "modal" || settingsOpen) ? session?.tmuxName ?? "" : "");
   const counted = $derived(card?.tier === 1 ? first : cards.length - first);
   const position = $derived(card?.tier === 1 ? at + 1 : at - first + 1);
 

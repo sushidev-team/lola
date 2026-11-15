@@ -2193,6 +2193,7 @@ func (d *Daemon) hubStatusData() protocol.HubStatusData {
 			})
 		}
 	}
+	out.Relay = d.relayStatus()
 	return out
 }
 

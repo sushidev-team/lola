@@ -5,6 +5,7 @@ import ViewSettings, {
   viewColumnRange,
   viewIsClipped,
 } from "./ViewSettings.svelte";
+import { copy } from "@mobile/lib/copy";
 import ViewSettingsHarness from "./ViewSettingsHarness.test.svelte";
 import { FONT_MAX, FONT_MIN } from "@mobile/lib/viewport";
 import { loadFontSize, saveFontSize } from "@mobile/lib/prefs";
@@ -244,11 +245,28 @@ describe("ViewSettings font controls", () => {
     expect(screen.queryByText(/Already at the smallest text/)).toBeNull();
   });
 
-  it("gives both font controls a 44pt target", async () => {
+  it("gives both stepper halves a 44pt target inside one 32pt capsule", async () => {
     mount();
     for (const name of ["Smaller text", "Larger text"]) {
-      expect(screen.getByRole("button", { name }).className).toContain("h-11!");
+      const b = screen.getByRole("button", { name });
+      expect(b.className).toContain("h-11");
+      expect(b.className).toContain("w-11");
     }
+    const capsule = screen.getByRole("button", { name: "Smaller text" }).parentElement as HTMLElement;
+    expect(capsule.className).toContain("h-8");
+    expect(capsule.className).toContain("rounded-full");
+    expect(capsule.className).toContain("bg-edge");
+    expect(screen.getByRole("button", { name: "Smaller text" })).toHaveTextContent("−");
+    expect(screen.getByRole("button", { name: "Larger text" })).toHaveTextContent("+");
+    expect(screen.getByRole("status").className).toContain("text-subtext");
+  });
+
+  it("drops the row label when the stepper is alone, and keeps it beside other controls", async () => {
+    mount({ canPin: false });
+    expect(screen.queryByText(copy.viewSettings.textSize)).toBeNull();
+    cleanup();
+    mount({ canPin: true });
+    expect(screen.getByText(copy.viewSettings.textSize)).toBeInTheDocument();
   });
 
   it("refuses every control when the caller disables it", async () => {
@@ -327,16 +345,17 @@ describe("ViewSettings is addressable", () => {
 describe("ViewSettings size pin", () => {
   it("draws a switch that is off unless the caller says otherwise", async () => {
     mount();
-    const sw = screen.getByRole("switch", { name: "Resize the Mac's pane to fit this phone" });
+    const sw = screen.getByRole("switch", { name: copy.viewSettings.fit });
     expect(sw).toHaveAttribute("aria-checked", "false");
-    expect(sw).toHaveTextContent("Off");
+    // The word "Off" is gone: the switch states it by itself.
+    expect(sw).toHaveTextContent("");
   });
 
   it("reports the state with aria-checked once it is on", async () => {
     mount({ pinned: true });
     const sw = screen.getByRole("switch");
     expect(sw).toHaveAttribute("aria-checked", "true");
-    expect(sw).toHaveTextContent("On");
+    expect(sw).toHaveTextContent("");
   });
 
   it("asks for the opposite of what it currently is", async () => {
@@ -351,30 +370,20 @@ describe("ViewSettings size pin", () => {
     expect(onpin).toHaveBeenLastCalledWith(false);
   });
 
-  // The requirement in one test: the sheet has to say what this does to the
-  // MAC, not only what it does here. It is now the ONLY caption left in the
-  // sheet — the ones under the fit and the column readout went with the copy
-  // trim — which is the point: everything else here is a local zoom and reads as
-  // one, and this is the exact opposite and cannot be inferred from its label.
-  //
-  // Two clauses may not be lost however short it gets: that somebody else's
-  // window narrows, and that it lets go on its own. The first is the cost; the
-  // second is what stops a reader believing they have broken something.
-  it("names the cost to the Mac in plain words, on the sheet", async () => {
+  // The label names the Mac; the old header, the "Off" word and the helper line
+  // ("Narrows the Mac's window") are gone by design.
+  it("draws one labelled switch row and none of the old captions", async () => {
     mount({ geom: CLIPPED });
-    expect(screen.getByText(/Narrows the window on the Mac/i)).toBeInTheDocument();
-    expect(screen.getByText(/Released when you leave/i)).toBeInTheDocument();
-    // ...and the size, so the cost is a number rather than an adjective.
-    expect(screen.getByText(/about 43 by 22/)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: copy.viewSettings.fit })).toBeInTheDocument();
+    expect(screen.queryByText(/Narrows the Mac's window/i)).toBeNull();
+    expect(screen.queryByText(/Pane size on the Mac/i)).toBeNull();
+    expect(screen.queryByText("Off")).toBeNull();
+    expect(screen.queryByText(/about 43 by 22/)).toBeNull();
   });
 
-  it("claims no size before the pane has been measured", async () => {
-    mount({ geom: geometry() });
-    expect(screen.queryByText(/about/)).toBeNull();
-  });
-
-  it("is a 44pt target, and the caller can disable it with the rest", async () => {
-    mount({ disabled: false });
-    expect(screen.getByRole("switch").className).toContain("h-11!");
+  it("draws no pin control without the tier", async () => {
+    mount({ canPin: false });
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByText(copy.viewSettings.fit)).toBeNull();
   });
 });

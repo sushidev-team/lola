@@ -257,9 +257,8 @@ func excludedIface(name string) bool {
 //
 // It compares against the EFFECTIVE mode, s.opts.Bind, which is what was
 // actually bound rather than what config asked for. That distinction is the
-// whole reason this can be a simple comparison: the insecure build rewrites a
-// "lan" request to "localhost" before listening, so comparing against the
-// CONFIGURED mode would report drift on every single call and rebind forever.
+// whole reason this can be a simple comparison: the mode is what the listener
+// actually resolved, so a wildcard or a pinned literal never reports drift.
 //
 // Two cases it deliberately does not catch, because catching them costs more
 // than they are worth. A wildcard bind ("all") never drifts and never needs to:
@@ -370,9 +369,8 @@ func privateIP(ip net.IP) bool {
 }
 
 // loopbackAddr reports whether an address resolved by resolveBind is loopback.
-// It is what the insecure build's forced-localhost assertion is written
-// against: a bind is safe when every address it produced is loopback, not when
-// the MODE happened to read "localhost".
+// A bind is loopback-only when every address it produced is loopback, not when
+// the MODE happened to read "localhost" (the pairing offer asks this).
 func loopbackAddr(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {

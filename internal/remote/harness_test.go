@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/devices"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -50,8 +51,16 @@ func (a *stubAuth) AuthorizeFrame(_ context.Context, p Peer, f *protocol.Frame) 
 	a.mu.Lock()
 	a.seenTypes = append(a.seenTypes, f.Type+":"+f.Cmd)
 	a.seenPeers = append(a.seenPeers, p)
+	err := a.frameErr
 	a.mu.Unlock()
-	return a.frameErr
+	return err
+}
+
+// setFrameErr arms AuthorizeFrame's answer under the lock it is read with.
+func (a *stubAuth) setFrameErr(err error) {
+	a.mu.Lock()
+	a.frameErr = err
+	a.mu.Unlock()
 }
 
 func (a *stubAuth) seen() []string {
@@ -239,8 +248,17 @@ type rig struct {
 	log     *logCapture
 
 	// authOverride replaces the stub authorizer before the connection starts.
-	// The tagged tests use it to drive the real bearer-key handshake.
 	authOverride Authorizer
+
+	// reg holds the rig's one paired device, which stubAuth authenticates as.
+	// tiers are its tiers; setup may change them before the connection starts.
+	reg   *devices.Registry
+	dev   devices.Device
+	tiers []string
+
+	// ready is the ready frame, once the connection has delivered it.
+	ready     protocol.Frame
+	readySeen bool
 
 	// server is the SERVER side of the pipe, for the handful of assertions
 	// about connection state that no frame exchange can reach.
@@ -270,22 +288,33 @@ func newRig(t *testing.T, setup ...func(*rig, *Options)) *rig {
 		readErr: make(chan error, 1),
 		closed:  make(chan struct{}),
 	}
-	opts := Options{Handle: r.handler.handle, Panes: r.bus, Logf: r.log.logf}
+	r.tiers = append([]string(nil), protocol.Tiers...)
+	opts := Options{Handle: r.handler.handle, Panes: r.bus, Logf: r.log.logf, Host: "testhost"}
 	for _, m := range setup {
 		m(r, &opts)
 	}
+	if opts.Devices == nil {
+		opts.Devices = devices.Open(t.TempDir(), time.Now, nil)
+		var err error
+		r.dev, err = opts.Devices.Add("Test phone", "ios", [32]byte{1}, r.tiers, nil)
+		if err != nil {
+			t.Fatalf("add device: %v", err)
+		}
+		r.auth.peer = Peer{DeviceID: r.dev.ID, Label: r.dev.Name, Epoch: r.dev.Epoch}
+	}
+	r.reg = opts.Devices
 
 	var auth Authorizer = r.auth
 	if r.authOverride != nil {
 		auth = r.authOverride
 	}
-	s := &Server{opts: opts, auth: auth, conns: map[*conn]struct{}{}, slots: make(chan struct{}, maxConnections)}
-	s.ctx, s.cancel = context.WithCancel(context.Background())
+	s := newServer(context.Background(), opts, auth, nil)
 	r.srv = s
 
 	clientSide, serverSide := net.Pipe()
 	r.conn = clientSide
 	c := newConn(s, serverSide)
+	c.releasePre = func() {}
 	r.server = c
 	// Registered with the server exactly as serveConn does, so Server.Close
 	// and closeConns reach it.
@@ -345,6 +374,19 @@ func (r *rig) req(id, cmd string, payload any) {
 // refusal the server genuinely sent was thrown away in favour of the close
 // roughly half the time it raced. That reads as a transport bug and is not one.
 func (r *rig) next() protocol.Frame {
+	r.t.Helper()
+	for {
+		f := r.nextRaw()
+		if f.Type == protocol.FrameReady && !r.readySeen {
+			r.readySeen, r.ready = true, f
+			continue
+		}
+		return f
+	}
+}
+
+// nextRaw is next without the ready-frame skipping.
+func (r *rig) nextRaw() protocol.Frame {
 	r.t.Helper()
 	select {
 	case f := <-r.in:

@@ -75,27 +75,6 @@ export interface Endpoint {
    * printed by the daemon. Mirrors `remote.DeviceKey.SPKIPin`.
    */
   spkiPin: string;
-  /**
-   * M1's bearer key, the value of LOLA_REMOTE_INSECURE_KEY on the daemon's
-   * machine. At least INSECURE_MIN_KEY_LEN characters or the daemon's listener
-   * refuses to start.
-   *
-   * A RUNTIME value only: it comes from the environment or from a field the
-   * operator types into the app. It is never committed to this repository, never
-   * written to a log, and never placed in a URL. M2 deletes this field along
-   * with the whole bearer path.
-   */
-  insecureKey?: string;
-  /**
-   * The name a previously stored bearer key is filed under — an endpoint id
-   * (`host:port`). An ADDRESS, not a secret.
-   *
-   * Used instead of `insecureKey` on every launch after the first pairing: the
-   * native plugin reads the Keychain itself, so the plaintext never crosses the
-   * bridge — where Capacitor's own logging prints every resolved payload — and
-   * never sits in the WebView's heap. `insecureKey` wins when both are given.
-   */
-  keyRef?: string;
 }
 
 /**

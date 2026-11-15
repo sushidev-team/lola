@@ -13,11 +13,13 @@
 
   const req = $derived(confirm.request);
   const descriptionId = $props.id();
+  // `data-confirm*` are styling hooks for the phone shell, which restyles this as an action sheet
+  // (mobile/src/app.css); the desktop's markup and classes are unchanged.
 </script>
 
 {#if req}
   <Modal title={req.title} onClose={() => confirm.cancel()} width="480px" describedBy={descriptionId}>
-    <div id={descriptionId} class="confirmation-copy">
+    <div id={descriptionId} class="confirmation-copy" data-confirm>
       {#if req.subject}<p class="selectable confirmation-subject">{req.subject}</p>{/if}
       <p class="copy confirmation-body">{req.body}</p>
       {#if req.detail}<p class="copy confirmation-detail">{req.detail}</p>{/if}
@@ -36,11 +38,11 @@
     {/if}
     {#snippet footer()}
       <div class="dialog-actions confirmation-actions">
-        <Button class={req.alternative ? "cancel" : ""} size="md" onclick={() => confirm.cancel()}>Cancel</Button>
+        <Button class={req.alternative ? "cancel" : ""} size="md" data-confirm-cancel onclick={() => confirm.cancel()}>Cancel</Button>
         {#if req.alternative}
           <Button variant="secondary" size="md" onclick={() => confirm.acceptAlternative()}>{req.alternative.label}</Button>
         {/if}
-        <Button variant={req.confirmVariant ?? "danger-solid"} size="md" onclick={() => confirm.accept()}>{req.confirmLabel}</Button>
+        <Button variant={req.confirmVariant ?? "danger-solid"} size="md" data-confirm-ok onclick={() => confirm.accept()}>{req.confirmLabel}</Button>
       </div>
     {/snippet}
   </Modal>

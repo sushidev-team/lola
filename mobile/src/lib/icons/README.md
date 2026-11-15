@@ -13,5 +13,4 @@ vector: Sessions and Projects. Their geometry is transcribed from the frame's ow
 node metadata (nodes 49:14 and 49:23), which is the same source the exporter
 would have used.
 
-Sizes are the design's: the tab-bar glyphs are 20x22, the AI sparkle 14x16, the
-branch mark 11x12.
+Sizes are the design's: the tab-bar glyphs are 20x22, the AI sparkle 14x16.

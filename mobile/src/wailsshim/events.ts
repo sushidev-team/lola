@@ -1,19 +1,9 @@
-// A local, in-process replacement for the Wails event bus.
+// The in-process replacement for the Wails event bus.
 //
-// The desktop's backend pushes named events into the WebView every two seconds
-// and the frontend subscribes once, in `store.svelte.ts`'s `start()`. That
-// subscription shape is the thing the mobile app most wants to keep: 26 of the
-// 32 Wails-coupled components never touch a binding directly, they read
-// `store.sessions`, and the store is fed entirely by these events. So the shim
-// keeps the bus and changes only who fills it — here it is filled by
-// `bridge.ts`, from frames the daemon answered, rather than by a Go push loop.
-//
-// The API mirrors @wailsio/runtime's Events namespace exactly, including the
-// two details every call site depends on: `On` RETURNS an unsubscribe function
-// (which every caller assigns and later invokes), and the callback receives an
-// EVENT OBJECT whose `data` field carries the payload — not the payload itself.
-// Getting either wrong produces components that look subscribed and never
-// update.
+// Invariants: `On` returns its unsubscribe function, and a callback receives an
+// event object whose `data` is the payload, exactly as `@wailsio/runtime` does,
+// because every call site depends on both. The bridge fills the bus from pushed
+// topics and pane frames; nothing here talks to a daemon.
 
 /** The event object a Wails callback receives. */
 export type WailsEvent<T = any> = {

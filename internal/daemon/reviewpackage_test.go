@@ -59,9 +59,15 @@ func TestReviewPublicationRetainedAndDisplayOnly(t *testing.T) {
 	if err := d.bridgeAdmit(req); err == nil {
 		t.Fatal("token crossed sessions")
 	}
-	for _, cmd := range []string{protocol.CmdReviewPublish, protocol.CmdReviewPackages, protocol.CmdReviewImage, protocol.CmdReviewMark, protocol.CmdReviewDiff} {
-		if !remote.CommandDenied(cmd) {
-			t.Fatalf("remote permits %s", cmd)
+	for cmd, tier := range map[string]string{
+		protocol.CmdReviewPublish:  protocol.TierNever,
+		protocol.CmdReviewPackages: protocol.TierRead,
+		protocol.CmdReviewImage:    protocol.TierRead,
+		protocol.CmdReviewMark:     protocol.TierAnswer,
+		protocol.CmdReviewDiff:     protocol.TierRead,
+	} {
+		if got := remote.TierFor(cmd); got != tier {
+			t.Fatalf("%s: wrong tier for a phone: %q, want %q", cmd, got, tier)
 		}
 		if cmd != protocol.CmdReviewPublish && hookBridgeCmds[cmd] {
 			t.Fatalf("bridge permits read %s", cmd)

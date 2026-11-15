@@ -518,6 +518,32 @@ type HubStatusData struct {
 	// Admin: this machine holds the admin key of the joined team
 	// (state/hub-admin-key). The hub still decides on every request.
 	Admin bool `json:"admin,omitempty"`
+	// Relay is the phone relay's state; nil when [remote] is disabled. It carries
+	// no rendezvous id, bearer, hash or connection id: hubStatus is a read a
+	// phone may make.
+	Relay *HubRelayInfo `json:"relay,omitempty"`
+}
+
+// Relay states (HubRelayInfo.State).
+const (
+	HubRelayStateOff         = "off"
+	HubRelayStateSyncing     = "syncing"
+	HubRelayStateConnecting  = "connecting"
+	HubRelayStateConnected   = "connected"
+	HubRelayStateBackoff     = "backoff"
+	HubRelayStateUnsupported = "unsupported" // the hub predates the relay
+	HubRelayStateRefused     = "refused"     // the hub refused this device's registration
+)
+
+// HubRelayInfo is the daemon's relay leg to the hub, for display.
+type HubRelayInfo struct {
+	State       string    `json:"state"`            // HubRelayState*
+	Reason      string    `json:"reason,omitempty"` // fixed vocabulary
+	Since       time.Time `json:"since,omitzero"`
+	LastError   string    `json:"lastError,omitempty"` // bounded, sanitized
+	LastErrorAt time.Time `json:"lastErrorAt,omitzero"`
+	ActiveConns int       `json:"activeConns"`
+	Rendezvous  int       `json:"rendezvous"`
 }
 
 // HubSessionInfo is one local session working a hub item.

@@ -186,12 +186,10 @@ func TestRemoteValidation(t *testing.T) {
 	}
 }
 
-// Validation is a property of the CONFIG, never of the binary reading it: the
-// TUI and the desktop app are built without the lola_insecure tag and must load
-// exactly the configs the daemon does. A `lan` bind is therefore valid
-// everywhere; the M1 forcing to localhost is a runtime decision in
-// internal/remote, which logs the override.
-func TestRemoteValidationIsBuildTagIndependent(t *testing.T) {
+// Validation is a property of the CONFIG, never of the binary reading it: every
+// surface must load exactly the configs the daemon does, so every bind keyword
+// is valid.
+func TestRemoteValidationAcceptsEveryBindKeyword(t *testing.T) {
 	for _, bind := range RemoteBinds {
 		c := loadToml(t, remoteBaseToml+"[remote]\nenabled = true\nbind = \""+bind+"\"\n")
 		if err := c.Validate(); err != nil {
@@ -250,5 +248,82 @@ func TestRemoteAdvertiseDefaultsOff(t *testing.T) {
 	}
 	if got.Remote.Advertise {
 		t.Error("a table that never mentions advertise resolved to on")
+	}
+}
+
+// relay defaults on (RelayOff is the zero value), round-trips an explicit
+// false, and Serves adds a joined hub to Listens without changing Listens.
+func TestRemoteRelayDefaultAndServes(t *testing.T) {
+	c := loadToml(t, remoteBaseToml+"\n[remote]\nenabled = true\n")
+	if c.Remote.RelayOff || !c.Remote.RelayOn() {
+		t.Fatalf("absent relay key = %+v, want relay on", c.Remote)
+	}
+
+	off := loadToml(t, remoteBaseToml+"\n[remote]\nenabled = true\nrelay = false\n")
+	if !off.Remote.RelayOff || off.Remote.RelayOn() {
+		t.Fatalf("relay = false = %+v, want relay off", off.Remote)
+	}
+	out := filepath.Join(t.TempDir(), "out.toml")
+	if err := off.Save(out); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(out)
+	if !strings.Contains(string(data), "relay = false") {
+		t.Errorf("Save lost relay = false:\n%s", data)
+	}
+	back, err := Load(out)
+	if err != nil || !back.Remote.RelayOff {
+		t.Fatalf("round trip: err=%v remote=%+v", err, back.Remote)
+	}
+
+	cases := []struct {
+		name   string
+		r      RemoteConfig
+		joined bool
+		listen bool
+		serves bool
+	}{
+		{"absent", RemoteConfig{}, true, false, false},
+		{"disabled with hub", RemoteConfig{Enabled: false, Bind: "localhost"}, true, false, false},
+		{"localhost", RemoteConfig{Enabled: true, Bind: "localhost"}, false, true, true},
+		{"bind off, no hub", RemoteConfig{Enabled: true, Bind: "off"}, false, false, false},
+		{"bind off, hub", RemoteConfig{Enabled: true, Bind: "off"}, true, false, true},
+		{"bind off, hub, relay off", RemoteConfig{Enabled: true, Bind: "off", RelayOff: true}, true, false, false},
+		{"lan, relay off", RemoteConfig{Enabled: true, Bind: "lan", RelayOff: true}, true, true, true},
+	}
+	for _, tc := range cases {
+		if got := tc.r.Listens(); got != tc.listen {
+			t.Errorf("%s: Listens = %v, want %v", tc.name, got, tc.listen)
+		}
+		if got := tc.r.Serves(tc.joined); got != tc.serves {
+			t.Errorf("%s: Serves(%v) = %v, want %v", tc.name, tc.joined, got, tc.serves)
+		}
+	}
+}
+
+// The retired milestone-1 key `insecure_lan` still loads (unknown keys are
+// ignored) and the next Save drops it.
+func TestInsecureLANKeyIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(remoteBaseToml+"[remote]\nenabled = true\nbind = \"lan\"\ninsecure_lan = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("an old file with insecure_lan must load: %v", err)
+	}
+	if !c.Remote.Enabled || c.Remote.Bind != "lan" {
+		t.Fatalf("remote = %+v", c.Remote)
+	}
+	if err := c.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "insecure_lan") {
+		t.Fatalf("Save kept the retired key:\n%s", raw)
 	}
 }

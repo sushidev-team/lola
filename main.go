@@ -66,6 +66,8 @@ func main() {
 		pollCmd(),
 		projectsCmd(),
 		hubCmd(),
+		pairCmd(),
+		devicesCmd(),
 		sandboxCmd(),
 		openCmd(),
 		attachCmd(),

@@ -283,3 +283,71 @@ it('keeps the chosen rebase method on another PR', async () => {
   expect(nextPicker).toHaveValue('rebase');
   expect(merge).not.toHaveBeenCalled();
 });
+it('draws no control the client may not send', async () => {
+  read.mockResolvedValue(facts({threads:[thread('a')],review:'REVIEW_REQUIRED'}));
+  freshSession({prNumber:42,prUrl:'https://github.com/acme/app/pull/42'});
+  render(BeforeMerge,{session:store.sessions[0],can:(cmd:string)=>cmd==='review'});
+  await screen.findByText('1 unresolved');
+  expect(screen.queryByRole('button',{name:'Ask agent to address'})).toBeNull();
+  expect(screen.queryByRole('button',{name:/merge/i})).toBeNull();
+  expect(screen.queryByRole('combobox',{name:'Merge method'})).toBeNull();
+});
+it('offers Request agent review only to a client that may send it', async () => {
+  read.mockResolvedValue(facts({review:'REVIEW_REQUIRED'}));
+  freshSession({prNumber:42,prUrl:'https://github.com/acme/app/pull/42'});
+  render(BeforeMerge,{session:store.sessions[0],can:(cmd:string)=>cmd!=='review'});
+  await screen.findByText('Required');
+  expect(screen.queryByRole('button',{name:'Request agent review'})).toBeNull();
+  expect(screen.getByRole('button',{name:/merge/i})).toBeInTheDocument();
+});
+
+it('on the phone: no heading, no merge controls, and the phone strings', async () => {
+  const { setTouchSurface } = await import('$lib/touchsurface');
+  setTouchSurface({});
+  try {
+    read.mockResolvedValue(facts({review:''}));
+    freshSession({prNumber:42,prUrl:'https://github.com/acme/app/pull/42'});
+    render(BeforeMerge,{session:store.sessions[0],reviewLayout:true,hideMerge:true,heading:false});
+    expect(await screen.findByText('None')).toBeInTheDocument();
+    expect(screen.queryByRole('heading',{name:'PR status'})).toBeNull();
+    expect(screen.queryByRole('button',{name:'Squash and merge'})).toBeNull();
+    expect(screen.queryByRole('combobox',{name:'Merge method'})).toBeNull();
+    expect(screen.queryByText('No blockers reported.')).toBeNull();
+    expect(screen.queryByRole('button',{name:'Ask for review'})).toBeNull();
+    expect(screen.getByText('Pull request')).toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'Review PR'})).toBeNull();
+  } finally { setTouchSurface(null); }
+});
+
+it('on the phone: a failed refresh says GitHub is unreachable, with a Retry button and no refresh glyph', async () => {
+  const { setTouchSurface } = await import('$lib/touchsurface');
+  setTouchSurface({});
+  try {
+    read.mockRejectedValue(new Error('offline'));
+    freshSession({prNumber:42,prUrl:'https://github.com/acme/app/pull/42'});
+    render(BeforeMerge,{session:store.sessions[0],reviewLayout:true,hideMerge:true,heading:false});
+    expect(await screen.findByText("Can't reach GitHub.")).toBeInTheDocument();
+    expect(screen.getByRole('button',{name:'Retry'})).toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'Refresh PR status'})).toBeNull();
+  } finally { setTouchSurface(null); }
+});
+
+it('on the phone: reports an unreadable PR to the host', async () => {
+  const { setTouchSurface } = await import('$lib/touchsurface');
+  setTouchSurface({});
+  try {
+    const onunknown = vi.fn();
+    read.mockRejectedValue(new Error('offline'));
+    freshSession({prNumber:42,prUrl:'https://github.com/acme/app/pull/42'});
+    render(BeforeMerge,{session:store.sessions[0],reviewLayout:true,hideMerge:true,heading:false,onunknown});
+    await screen.findByText("Can't reach GitHub.");
+    expect(onunknown).toHaveBeenLastCalledWith(true);
+  } finally { setTouchSurface(null); }
+});
+
+it('keeps the desktop strings by default', async () => {
+  read.mockResolvedValue(facts({review:''}));
+  mount();
+  expect(await screen.findByText('No review')).toBeInTheDocument();
+  expect(screen.getByRole('heading',{name:'PR status'})).toBeInTheDocument();
+});

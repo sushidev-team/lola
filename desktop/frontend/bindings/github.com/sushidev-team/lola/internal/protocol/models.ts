@@ -584,6 +584,40 @@ export interface DevFreePortData {
 }
 
 /**
+ * DeviceInfo is one registry entry as a client may see it.
+ */
+export interface DeviceInfo {
+    "id": string;
+    "name": string;
+    "platform"?: string;
+    "tiers": string[] | null;
+    "pairedAt": string;
+    "lastSeenAt"?: string;
+
+    /**
+     * live connections; 0 when the listener is down
+     */
+    "connected": number;
+
+    /**
+     * hex(SPKIHash[:8]) in 4-char groups
+     */
+    "fingerprint": string;
+}
+
+/**
+ * DevicesData is Response.Data for cmd=devices.
+ */
+export interface DevicesData {
+    "devices": DeviceInfo[] | null;
+
+    /**
+     * registry broken: names the file
+     */
+    "problem"?: string;
+}
+
+/**
  * DiffData is Response.Data for cmd=diff: the session's worktree compared with
  * the merge-base of its branch and the project's default_branch, uncommitted
  * and untracked changes included (internal/gitdiff). Base is the ref the
@@ -1145,6 +1179,30 @@ export interface HubProbeData {
 }
 
 /**
+ * HubRelayInfo is the daemon's relay leg to the hub, for display.
+ */
+export interface HubRelayInfo {
+    /**
+     * HubRelayState*
+     */
+    "state": string;
+
+    /**
+     * fixed vocabulary
+     */
+    "reason"?: string;
+    "since"?: string;
+
+    /**
+     * bounded, sanitized
+     */
+    "lastError"?: string;
+    "lastErrorAt"?: string;
+    "activeConns": number;
+    "rendezvous": number;
+}
+
+/**
  * HubReleaseData answers cmd=hubRelease. Session is the local session that
  * held the lease: it is NOT stopped (SessionKept), only no longer reported
  * to the hub. Queued: the hub could not be reached and the release waits in
@@ -1323,6 +1381,13 @@ export interface HubStatusData {
      * (state/hub-admin-key). The hub still decides on every request.
      */
     "admin"?: boolean;
+
+    /**
+     * Relay is the phone relay's state; nil when [remote] is disabled. It carries
+     * no rendezvous id, bearer, hash or connection id: hubStatus is a read a
+     * phone may make.
+     */
+    "relay"?: HubRelayInfo | null;
 }
 
 /**
@@ -1559,6 +1624,108 @@ export interface PRReadinessData {
     "summariesPending"?: boolean;
     "mergeMethod": string;
     "mergeBlocked": string;
+}
+
+/**
+ * PairBeginData is Response.Data for cmd=pairBegin. Payload is a SECRET until the
+ * pairing burns it: it is never logged and never placed in an error. With a Problem
+ * nothing else is set.
+ */
+export interface PairBeginData {
+    /**
+     * 16 hex; "" with Problem
+     */
+    "pairing": string;
+
+    /**
+     * "lola2.…"
+     */
+    "payload": string;
+    "expiresAt"?: string;
+
+    /**
+     * as in the payload, for display
+     */
+    "addrs"?: string[] | null;
+    "port"?: number;
+
+    /**
+     * daemon SPKI, std base64
+     */
+    "pin"?: string;
+
+    /**
+     * the payload carries a relay rendezvous
+     */
+    "relay"?: boolean;
+    "problem"?: string;
+}
+
+/**
+ * PairConfirmArgs is Request.Args for cmd=pairConfirm.
+ */
+export interface PairConfirmArgs {
+    "pairing": string;
+
+    /**
+     * the 6 digits the human TYPED from the phone
+     */
+    "code": string;
+
+    /**
+     * empty = DefaultTiers
+     */
+    "tiers"?: string[] | null;
+    "name"?: string;
+}
+
+/**
+ * PairStatusArgs is Request.Args for cmd=pairStatus. With WaitMs the call blocks
+ * until State != Since (clamped by the daemon).
+ */
+export interface PairStatusArgs {
+    "pairing": string;
+    "since"?: string;
+    "waitMs"?: number;
+}
+
+/**
+ * PairStatusData is one pairing's state. There is deliberately NO code field: the
+ * daemon never shows the confirmation code. The human reads it on the phone and
+ * types it (PairConfirmArgs.Code).
+ */
+export interface PairStatusData {
+    "pairing": string;
+
+    /**
+     * PairState*
+     */
+    "state": string;
+    "deviceName"?: string;
+    "platform"?: string;
+
+    /**
+     * DeviceName equals a paired device's name
+     */
+    "nameClash"?: boolean;
+
+    /**
+     * id of the entry this key re-pairs
+     */
+    "replaces"?: string;
+    "triesLeft"?: number;
+
+    /**
+     * "lan" | "relay": the presenting connection's path
+     */
+    "via"?: string;
+    "device"?: DeviceInfo | null;
+
+    /**
+     * failed only: PairReason*
+     */
+    "reason"?: string;
+    "expiresAt"?: string;
 }
 
 /**
@@ -1977,6 +2144,18 @@ export interface ReviveData {
     "revived": boolean;
     "tmuxName"?: string;
     "message"?: string;
+}
+
+/**
+ * RevokeDeviceData is Response.Data for cmd=revokeDevice.
+ */
+export interface RevokeDeviceData {
+    "id": string;
+
+    /**
+     * live connections ended
+     */
+    "closed": number;
 }
 
 /**

@@ -18,7 +18,7 @@ a party every daemon can reach:
    across the team, without each person hand-copying `config.toml`.
 3. **Reaching a phone off-network** (later phases) — an App Store build's APNs key belongs to the
    publisher, so a per-daemon push sender cannot ship; and a phone off the daemon's network has no
-   route without a relay.
+   route without a relay (built: see *Blind relay*).
 
 This deliberately reverses the "no cloud backend, ever" line in lola's `mobile/PLAN.md`. The argument
 there was uptime responsibility, which a team service takes on anyway. The other argument — a new
@@ -55,7 +55,7 @@ follows from it.
 | Repo slugs (`owner/name`) a member opted in | Review findings, brain summaries |
 | Findings: advisory id, package, versions, severity, repo | The full dependency inventory |
 | Claims and leases | lola session ids (they embed Linear identifiers) |
-| Outcomes: PR URL, delivery state, done / failed | Plaintext phone traffic (later: relay) |
+| Outcomes: PR URL, delivery state, done / failed. Relay metadata: rendezvous ids, connection times, byte counts, client IP | Plaintext phone traffic: the relay carries an end-to-end mutual TLS session it cannot open |
 
 ## Architecture
 
@@ -270,6 +270,36 @@ A hub that still has the old hub-wide `LOLA_HUB_LINEAR_KEY` / `LOLA_HUB_DIGEST_W
 into its only org at the next start (sealed) and never reads them again; with several orgs it
 adopts nothing.
 
+## Blind relay
+
+A paired phone off the daemon's network reaches it through the hub. Contract:
+lola's `docs/mobile/03-hub-relay.md`.
+
+- **Outbound only, still.** The daemon holds a signed WebSocket control channel
+  (`GET /v1/relay/daemon`). A phone dials `GET /v1/relay/phone` with a
+  rendezvous id and a bearer in `Lola-Relay-*` headers; the hub checks the
+  bearer's SHA-256, tells the daemon `incoming`, the daemon dials
+  `GET /v1/relay/accept?conn=…` (signed), and the hub splices the two legs.
+  The phone's 101 waits for the daemon's leg; every refusal is an HTTP status.
+- **Blind.** Inside the legs is mutual TLS 1.3 between the phone's key and the
+  daemon's P-256 identity, each pinned by the other at pairing. The hub can
+  drop, delay and count; it cannot read, inject or impersonate.
+- **Credentials.** The daemon registers its whole set of (rendezvous id,
+  bearer hash) pairs with a signed replace-all POST; a conflicting rv is
+  refused alone. Pairing-window entries expire within 10 minutes; rotation
+  keeps the previous hash for at most 7 days.
+- **Limits.** Per rendezvous id 2 connections and 1 GiB a day, per device 4
+  and 4 GiB, per org 64, per hub 512; shaped byte rates per splice, device and
+  org, counted in wire bytes; 30 minutes idle; dial buckets per rendezvous id,
+  for authenticated and for failed dials, and per client network when the
+  ingress reports real client addresses. All in `hubproto`.
+- **One process.** Control channels and splices live in memory; the hub runs
+  as a single replica.
+- **Old daemons** never call it; a **new daemon facing an old hub** gets 404 and
+  stays LAN-only.
+- **Accepted risk.** Traffic analysis (volume, timing, rendezvous id linkage)
+  is visible to the hub.
+
 ## Where Linear fits
 
 Linear stays the source of truth for PLANNED work. The chore lane is for mechanical work that
@@ -285,8 +315,8 @@ into Linear.
    `lola hub status` — applying it into config inheritance is Phase 2).
 2. **Phase 2:** apply verified policy as a third inheritance layer (team → `[defaults]` →
    `[[project]]`) with `locked` / `suggested` keys, matched by repo slug; desktop UI.
-3. **Phase 3:** push gateway (APNs + FCM, opaque handles only) and the blind relay for the phone,
-   end-to-end inside the existing pairing transcript.
+3. **Phase 3:** push gateway (APNs + FCM, opaque handles only). The blind relay for the phone is
+   built (see *Blind relay*).
 4. **Phase 4:** scheduled triage leases ("triage repo X today" run on a member's machine), local
    lockfile matching against OSV, Postgres store.
 5. **Phase 5:** lola as a Linear agent app — delegating an issue to "lola" routes it to a member's

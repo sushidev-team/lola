@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { statusText } from "$lib/theme";
-import { statusTone } from "./statustone";
+import { statusTone, statusWord, ticketTone } from "./statustone";
 
 // The one rule this module has, in both directions: every status theme.ts names
 // keeps its colour, and only the unnamed fallback moves.
@@ -47,5 +47,29 @@ describe("statusTone", () => {
     // here eventually. It should read as a quiet state, not as a heading.
     expect(statusTone("wharrgarbl")).toBe("text-faint");
     expect(statusTone("")).toBe("text-faint");
+  });
+});
+
+describe("statusWord", () => {
+  it("spells every known status in Sentence case", () => {
+    expect(statusWord("needs_input")).toBe("Needs you");
+    expect(statusWord("ci_failed")).toBe("CI failed");
+    expect(statusWord("changes_requested")).toBe("Changes requested");
+    expect(statusWord("review_pending")).toBe("In review");
+    expect(statusWord("merge_conflict")).toBe("Conflict");
+  });
+  it("sentence-cases a word it does not know instead of dropping it", () => {
+    expect(statusWord("brand_new")).toBe("Brand new");
+  });
+});
+
+describe("ticketTone", () => {
+  it("gives a started ticket and a running one the same tone", () => {
+    expect(ticketTone("started")).toBe(statusTone("working"));
+    expect(ticketTone("unstarted", true)).toBe(ticketTone("started"));
+  });
+  it("draws unknown and cancelled quietly", () => {
+    expect(ticketTone("wat")).toBe("text-faint");
+    expect(ticketTone("canceled")).toContain("line-through");
   });
 });

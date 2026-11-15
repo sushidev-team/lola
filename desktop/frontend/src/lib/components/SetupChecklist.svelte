@@ -41,6 +41,9 @@
     start_docker: { kind: "command", command: "open -a Docker" },
     sandbox_token: { kind: "action", label: "Open sandbox settings", run: () => nav.openOverlay("settings", "", "sandbox") },
     pin_policy_key: { kind: "action", label: "Open team hub settings", run: () => nav.openOverlay("settings", "", "hub") },
+    phones_registry: { kind: "action", label: "Open phone settings", run: () => nav.openOverlay("settings", "", "phones") },
+    // Informational: the hub's operator must upgrade it; nothing to open or run here.
+    relay_hub_upgrade: { kind: "action", label: "Hub needs an upgrade", run: () => undefined },
   };
 
   /** The fix for a row, or null when it passed or has no known fix. */

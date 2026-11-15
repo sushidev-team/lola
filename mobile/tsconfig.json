@@ -29,9 +29,23 @@
       ],
       "@bindings/desktop": ["./src/wailsshim/desktop.ts"],
       "@wailsio/runtime": ["./src/wailsshim/runtime.ts"],
+      "@bindings/desktop/*service": ["./src/wailsshim/services/*"],
+      "@bindings-generated/desktop": [
+        "../desktop/frontend/bindings/github.com/sushidev-team/lola/desktop/index.ts"
+      ],
+      "lola-transport": ["./plugins/lola-transport/src/index.ts"],
       "@bindings/*": ["../desktop/frontend/bindings/github.com/sushidev-team/lola/*"],
       "$lib/*": ["../desktop/frontend/src/lib/*"],
-      "@mobile/*": ["./src/*"]
+      "@mobile/*": ["./src/*"],
+      /*
+       * One Svelte for the type graph, as vite-plugin-svelte's `dedupe` gives
+       * the bundle one at runtime: shared components under ../desktop would
+       * otherwise type against the desktop's own copy, and a Snippet from one
+       * copy is not assignable to the other's. Subpaths without a file of
+       * their own (`svelte/reactivity`) are declared in types/index.d.ts.
+       */
+      "svelte": ["./node_modules/svelte"],
+      "svelte/*": ["./node_modules/svelte/*", "./node_modules/svelte/types/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "vite.config.ts", "capacitor.config.ts"]

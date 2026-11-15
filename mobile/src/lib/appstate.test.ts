@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { installAppBackground, installAppState } from "./appstate";
 
+const held = vi.hoisted(() => ({ native: null as unknown }));
+vi.mock("../native", () => ({
+  get native() {
+    return held.native;
+  },
+}));
+
 type Cb = (e: { active?: boolean }) => void;
 
 function installPlugin() {
@@ -15,7 +22,7 @@ function installPlugin() {
       return { remove };
     }),
   };
-  (globalThis as { Capacitor?: unknown }).Capacitor = { Plugins: { LolaTransport: p } };
+  held.native = p;
   return {
     p,
     remove,
@@ -26,7 +33,7 @@ function installPlugin() {
 }
 
 afterEach(() => {
-  delete (globalThis as { Capacitor?: unknown }).Capacitor;
+  held.native = null;
   vi.restoreAllMocks();
 });
 
@@ -87,9 +94,7 @@ describe("the foreground signal", () => {
     // An older plugin binary has no such event and the bridge refuses the
     // registration. That must not take the launch down, and it must not stop
     // the web trigger being wired.
-    (globalThis as { Capacitor?: unknown }).Capacitor = {
-      Plugins: { LolaTransport: { addListener: vi.fn().mockRejectedValue(new Error("nope")) } },
-    };
+    held.native = { addListener: vi.fn().mockRejectedValue(new Error("nope")) };
     const onForeground = vi.fn();
     const off = installAppState(onForeground);
     await Promise.resolve();

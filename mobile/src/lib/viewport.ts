@@ -25,6 +25,41 @@
 // clears the slop threshold, so a diagonal smudge does not scroll and pan at the
 // same time.
 
+/** What the view-settings readout needs to know about the grid on screen. */
+export interface GridGeometry {
+  /** The grid the daemon is sending. */
+  cols: number;
+  rows: number;
+  /** What of it fits on this screen. */
+  shown: number;
+  shownRows: number;
+  /** The leftmost visible column, 1-based. */
+  first: number;
+  panning: boolean;
+  canFit: boolean;
+  fitActive: boolean;
+  fitSize: number;
+}
+
+/**
+ * Whether two reports describe the same view. Readers of a geometry object
+ * re-run on every assignment, so a report that changed nothing must not
+ * replace the object.
+ */
+export function sameGeometry(a: GridGeometry, b: GridGeometry): boolean {
+  return (
+    a.cols === b.cols &&
+    a.rows === b.rows &&
+    a.shown === b.shown &&
+    a.shownRows === b.shownRows &&
+    a.first === b.first &&
+    a.panning === b.panning &&
+    a.canFit === b.canFit &&
+    a.fitActive === b.fitActive &&
+    a.fitSize === b.fitSize
+  );
+}
+
 /** The pane's own viewport, in device-independent pixels. */
 export interface PanBox {
   /** Pixel width and height of the rendered grid (cols x cellW, rows x cellH). */

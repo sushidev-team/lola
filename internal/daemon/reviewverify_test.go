@@ -48,9 +48,17 @@ func TestReviewVerificationReadbackAndAuthority(t *testing.T) {
 	if !resp.OK {
 		t.Fatal(resp.Error)
 	}
-	for _, cmd := range []string{protocol.CmdReviewVerify, protocol.CmdReviewChecks, protocol.CmdReviewRecover, protocol.CmdReviewFeedback} {
-		if hookBridgeCmds[cmd] || !remote.CommandDenied(cmd) {
+	for cmd, tier := range map[string]string{
+		protocol.CmdReviewVerify:   protocol.TierShell,
+		protocol.CmdReviewChecks:   protocol.TierRead,
+		protocol.CmdReviewRecover:  protocol.TierControl,
+		protocol.CmdReviewFeedback: protocol.TierAnswer,
+	} {
+		if hookBridgeCmds[cmd] {
 			t.Fatalf("human command escaped boundary: %s", cmd)
+		}
+		if got := remote.TierFor(cmd); got != tier {
+			t.Fatalf("%s: wrong tier for a phone: %q, want %q", cmd, got, tier)
 		}
 		if resp := d.handle(context.Background(), protocol.Request{Cmd: cmd, Session: "foreign", Args: a}); resp.OK {
 			t.Fatalf("cross-session %s", cmd)
@@ -100,7 +108,7 @@ func TestReviewCompletionAndFeedbackAcrossAgents(t *testing.T) {
 			if len(seams.sendCalls()) != 0 {
 				t.Fatal("typed while working")
 			}
-			if !hookBridgeCmds[protocol.CmdReviewComplete] || !remote.CommandDenied(protocol.CmdReviewComplete) {
+			if !hookBridgeCmds[protocol.CmdReviewComplete] || remote.TierFor(protocol.CmdReviewComplete) != protocol.TierNever {
 				t.Fatal("completion boundary")
 			}
 		})

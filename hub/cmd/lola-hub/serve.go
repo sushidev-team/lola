@@ -7,10 +7,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/sushidev-team/lola/hub/internal/console"
 	"github.com/sushidev-team/lola/hub/internal/escalate"
 	"github.com/sushidev-team/lola/hub/internal/lease"
+	"github.com/sushidev-team/lola/hub/internal/relay"
 	"github.com/sushidev-team/lola/hub/internal/secret"
 	"github.com/sushidev-team/lola/hubproto"
 )
@@ -40,6 +43,12 @@ type hubOpts struct {
 	// create code, up to maxTeams teams (0 = api.DefaultMaxOrgs).
 	openTeams bool
 	maxTeams  int
+	// clientIP is the --client-ip source for the relay's per-network dial
+	// bucket ("" = none).
+	clientIP string
+	// writeTimeout is the http.Server WriteTimeout (0 = 30s); a test seam,
+	// since a relay leg must outlive it.
+	writeTimeout time.Duration
 }
 
 // hubReady describes a hub that is listening.
@@ -67,6 +76,7 @@ func (c *cli) serve(args []string) error {
 	fs.DurationVar(&o.staleAfter, "stale-after", hubproto.DefaultStaleAfter, "close an open item not re-reported this long (while its repo is still reported)")
 	fs.BoolVar(&o.openTeams, "open-teams", false, "let anyone who can reach this hub create a team WITHOUT a create code (private networks only)")
 	fs.IntVar(&o.maxTeams, "max-teams", api.DefaultMaxOrgs, "with --open-teams: the most teams the hub holds before creation needs a create code again")
+	fs.StringVar(&o.clientIP, "client-ip", "none", "where the relay's per-network dial bucket reads the client address: none | remote-addr | header:<Name> (name only a source the proxy in front sets)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -114,6 +124,10 @@ func (c *cli) runHub(ctx context.Context, o hubOpts, ready func(hubReady)) error
 	}
 	if o.maxTeams < 0 {
 		return usagef("--max-teams >= 1")
+	}
+	clientIP, err := clientIPFunc(o.clientIP)
+	if err != nil {
+		return err
 	}
 	if o.adminAddr != "" {
 		// Before anything else listens or the store is touched: a console on
@@ -165,22 +179,33 @@ func (c *cli) runHub(ctx context.Context, o hubOpts, ready func(hubReady)) error
 	esc := &escalate.Escalator{Store: st, Box: box, Team: o.team, Logf: logger.Printf}
 	digest := &escalate.Digester{Store: st, Box: box, Logf: logger.Printf}
 
+	// The relay's control links, pending dials and splices live in this
+	// process: it must be the only replica (hub/AGENTS.md).
+	rh := relay.New(time.Now, logger.Printf)
 	srv := api.New(api.Config{Store: st, LeaseTTL: o.ttl, EscalateAfter: o.escAfter,
 		MaxLeaseAge: o.maxLeaseAge, StaleAfter: o.staleAfter, Logf: logger.Printf,
 		Admin:     &admin.Ops{Store: st, Box: box},
-		OpenTeams: o.openTeams, MaxOrgs: o.maxTeams})
+		OpenTeams: o.openTeams, MaxOrgs: o.maxTeams,
+		Relay: rh, ClientIP: clientIP})
 	if o.openTeams {
 		logger.Printf("--open-teams: anyone who can reach this hub can create a team without a create code")
+	}
+	writeTimeout := o.writeTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = 30 * time.Second
 	}
 	hs := &http.Server{
 		Handler:           accessLog(logger, srv.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      writeTimeout,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    16 << 10,
 		ErrorLog:          logger,
 	}
+	// Shutdown does not track hijacked conns: this closes every control
+	// link and splice leg (1001) without waiting on a peer.
+	hs.RegisterOnShutdown(rh.Shutdown)
 	ln, err := net.Listen("tcp", o.addr)
 	if err != nil {
 		return err
@@ -237,6 +262,21 @@ func (c *cli) runHub(ctx context.Context, o hubOpts, ready func(hubReady)) error
 				} else if n > 0 {
 					logger.Printf("sweep: reopened %d expired lease(s)", n)
 				}
+				srv.RelaySweep()
+			}
+		}
+	}()
+	// Revocation through the CLI is another process writing the store: the
+	// recheck runs on its own interval, since --sweep may be long.
+	go func() {
+		t := time.NewTicker(hubproto.RelayRecheckInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				srv.RelayRecheck()
 			}
 		}
 	}()
@@ -292,25 +332,99 @@ func displayAddr(a net.Addr) string {
 	return net.JoinHostPort(host, strconv.Itoa(ta.Port))
 }
 
+// statusWriter records the status a handler wrote. A hijacked connection
+// writes through the raw conn and never reaches it; Unwrap lets
+// http.NewResponseController(w).Hijack() find the real writer.
 type statusWriter struct {
 	http.ResponseWriter
-	status int
+	status int  // valid only when wrote
+	wrote  bool // WriteHeader or Write was called
 }
 
 func (w *statusWriter) WriteHeader(code int) {
-	w.status = code
+	w.status, w.wrote = code, true
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// accessLog logs method, path (never the query or a header) and status.
+func (w *statusWriter) Write(p []byte) (int, error) {
+	if !w.wrote {
+		w.status, w.wrote = http.StatusOK, true
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// accessLog logs method, path (never the query or a header) and status. The
+// duration of a relay leg is the whole splice.
 func accessLog(l *log.Logger, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		sw := &statusWriter{ResponseWriter: w}
 		h.ServeHTTP(sw, r)
 		if r.URL.Path == "/healthz" {
 			return
 		}
-		l.Printf("%q %q %d %s", r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Millisecond))
+		status := sw.status
+		if !sw.wrote {
+			// A hijack writes its 101 through the raw conn; anything else
+			// that wrote nothing is net/http's implicit 200.
+			status = http.StatusOK
+			if r.Header.Get("Upgrade") != "" {
+				status = http.StatusSwitchingProtocols
+			}
+		}
+		l.Printf("%q %q %d %s", r.Method, r.URL.Path, status, time.Since(start).Round(time.Millisecond))
 	})
+}
+
+// clientIPFunc builds the relay's per-network key source from --client-ip.
+// "none" (and "") returns nil: no per-network bucket, because a source nobody
+// verified would be one more global bucket a single client empties for all.
+func clientIPFunc(spec string) (func(*http.Request) (netip.Prefix, bool), error) {
+	switch {
+	case spec == "" || spec == "none":
+		return nil, nil
+	case spec == "remote-addr":
+		return func(r *http.Request) (netip.Prefix, bool) {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr
+			}
+			return networkOf(host)
+		}, nil
+	case strings.HasPrefix(spec, "header:"):
+		name := strings.TrimPrefix(spec, "header:")
+		if name == "" || strings.ContainsAny(name, " \t:,") {
+			return nil, usagef("--client-ip header:<Name> needs a header name")
+		}
+		return func(r *http.Request) (netip.Prefix, bool) {
+			v := r.Header.Values(name)
+			if len(v) == 0 {
+				return netip.Prefix{}, false
+			}
+			return networkOf(strings.TrimSpace(v[0]))
+		}, nil
+	}
+	return nil, usagef("--client-ip is none, remote-addr or header:<Name>")
+}
+
+// networkOf is the bucket key of an address: IPv4 /32, IPv6 /64 (one
+// subscriber allocation, so rotating inside it mints no new keys). An
+// IPv4-mapped IPv6 address is unmapped first. Unparseable = no bucket.
+func networkOf(s string) (netip.Prefix, bool) {
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	a = a.WithZone("").Unmap()
+	bits := 64
+	if a.Is4() {
+		bits = 32
+	}
+	p, err := a.Prefix(bits)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	return p, true
 }

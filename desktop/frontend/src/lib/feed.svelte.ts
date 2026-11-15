@@ -9,6 +9,8 @@
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import type { AgentFeedItem } from "@bindings/internal/protocol";
 import { isTalkUnsupported, talk } from "./talk.svelte";
+import { pushSource, type FeedPush } from "./pushsource";
+import { ViewRetention } from "./viewretention";
 
 /** One page of older history. A client never loops on More: a person asks for each page. */
 export const FEED_PAGE = 300;
@@ -42,15 +44,20 @@ export class SessionFeed {
   outputs = new SvelteMap<string, FeedOutput>();
   threads = new SvelteMap<string, FeedThread>();
 
+  /** A pushed source feeds this view, so `sync` asks nothing. Reactive: a refused topic must wake the interval effects. */
+  following = $state(false);
+
   private id: string;
+  private retention: ViewRetention | undefined;
   private epoch = "";
   private lastSeq = 0;
   private target = 0;
   private inflight = false;
   private again = false;
 
-  constructor(id: string) {
+  constructor(id: string, retention?: ViewRetention) {
     this.id = id;
+    this.retention = retention;
   }
 
   /**
@@ -60,9 +67,66 @@ export class SessionFeed {
    * already copes: a stale epoch is answered with the tail, and the reset below adopts it.
    */
   sync(seq: number | undefined, epoch?: string) {
+    if (this.following) return;
     const rebuilt = (!!epoch && !!this.epoch && epoch !== this.epoch) || (typeof seq === "number" && seq < this.lastSeq);
     if (typeof seq === "number") this.target = rebuilt ? seq : Math.max(this.target, seq);
     if (!this.loaded || this.scanning || rebuilt || this.target > this.lastSeq) void this.fetch();
+  }
+
+  /**
+   * Takes the story from the pushed source for as long as the returned function is not called. With
+   * no source it does nothing. A refused topic hands the view back to `fetch`.
+   */
+  follow(): () => void {
+    const src = pushSource();
+    if (!src) return () => {};
+    this.following = true;
+    const release = this.retention?.hold(this.id);
+    const stop = src.feed(
+      this.id,
+      (p) => this.absorb(p),
+      () => {
+        this.following = false;
+        void this.fetch();
+      },
+    );
+    return () => {
+      this.following = false;
+      stop();
+      release?.();
+    };
+  }
+
+  /** Drops the story and what was read with it; what a person opened stays. The next follow refills it. */
+  trim() {
+    this.items = [];
+    this.more = false;
+    this.scanning = false;
+    this.health = "";
+    this.loaded = false;
+    this.error = "";
+    this.outputs.clear();
+    this.threads.clear();
+    this.epoch = "";
+    this.lastSeq = 0;
+    this.target = 0;
+  }
+
+  private absorb(p: FeedPush) {
+    if (p.reset || p.epoch !== this.epoch) {
+      this.items = p.items;
+      this.more = p.older;
+      this.lastSeq = p.lastSeq;
+    } else {
+      this.items = mergeFeed(this.items, p.items);
+      this.lastSeq = Math.max(this.lastSeq, p.lastSeq);
+    }
+    this.target = this.lastSeq;
+    this.epoch = p.epoch;
+    this.scanning = p.scanning;
+    this.health = p.health;
+    this.loaded = true;
+    this.error = "";
   }
 
   async fetch(): Promise<void> {
@@ -162,11 +226,12 @@ export class SessionFeed {
 class FeedStore {
   // A plain Map for the same reason as ssh.view: this creates on first read, inside $derived.
   private views = new Map<string, SessionFeed>();
+  private retention = new ViewRetention((id) => this.views.get(id)?.trim());
 
   view(id: string): SessionFeed {
     let v = this.views.get(id);
     if (!v) {
-      v = new SessionFeed(id);
+      v = new SessionFeed(id, this.retention);
       this.views.set(id, v);
     }
     return v;

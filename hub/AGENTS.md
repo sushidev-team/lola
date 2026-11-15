@@ -47,6 +47,27 @@ contract.
 - Admin operations live ONCE in `internal/admin`; the CLI, the console and the org-admin API
   (`admin.Ops`, behind `api.OrgAdmin`) all call it. Do not add an operation to one surface only.
 - The hub never opens a connection to a daemon, never merges, never pushes.
+- The relay (`internal/relay`, `/v1/relay/*`) is BLIND. It splices two
+  WebSocket byte streams carrying an end-to-end mutual TLS session between a
+  phone and its daemon. Never parse, buffer beyond a copy chunk, log or store a
+  relayed byte. Never add a key, an endpoint or a mode that would let the hub
+  terminate that TLS. The daemon dials both the control channel and every data
+  leg; the hub only answers.
+- Relay credentials are stored as SHA-256 only (`store.RelayEntry`), compared
+  in constant time, and a phone dial answers 401 alike for an unknown rv, a
+  wrong bearer, an expired window and a revoked device. A failed dial draws on
+  its own bucket, never on the one valid phones use. Never log an rv, a
+  bearer, a relay header or a client IP.
+- Every refusal before a splice is an HTTP status with `Lola-Relay-Code`; the
+  phone gets its 101 only once the daemon's leg exists. Every relay limit is a
+  `hubproto` constant; do not add a hub-local one. `Origin` on an upgrade is
+  refused (403): only daemons and the phone app connect.
+- Every hub leg write is bounded (`RelayWriteStall`); accounting is in wire
+  bytes, every opcode. A pending dial is waiting → claimed → spliced |
+  abandoned under `relay.Hub.mu`; nothing else hands over a leg.
+- Control links, pending dials and splices are in process memory (rendezvous
+  entries are in the store): the hub must run as ONE process.
+  Scaling out needs routing by device id and is not built.
 
 ## Device-facing read views
 
@@ -59,7 +80,9 @@ row that fails `hubproto`'s `Validate`: the daemon drops the whole response if o
 
 Org, devices and their public keys, capacity (free slots, agents), opted-in repo slugs, findings'
 validated fields, leases, outcomes (PR URL + delivery), and each org's Linear key and digest webhook
-(sealed at rest). Accepted risk: a compromised hub with its secret key can read those; it still
+(sealed at rest), plus relay metadata: which devices hold a control channel, rendezvous ids (one
+stable pseudonym per paired phone), when and how long phones connect, byte counts, and the client IP
+the ingress reports. It must never see relayed plaintext. Accepted risk: a compromised hub with its secret key can read those; it still
 cannot execute anything on a member's machine. It must never receive or store code, diffs,
 paths, pane text, transcripts, prompts, review findings or lola session ids. Do not add a field that
 carries any of them.

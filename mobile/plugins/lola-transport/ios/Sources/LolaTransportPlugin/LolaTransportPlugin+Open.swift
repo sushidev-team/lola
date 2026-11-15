@@ -31,13 +31,17 @@ extension LolaTransportPlugin {
     /// The http(s) guard is applied HERE as well as in JavaScript. This method
     /// is reachable from any code in the web view, and the strings it is given
     /// come from terminal output and daemon answers; a `tel:` or a
-    /// `shortcuts://` would otherwise be a small remote-action primitive.
+    /// `shortcuts://` would otherwise be a small remote-action primitive. The
+    /// one exception is this app's own Settings page, matched exactly: it is
+    /// where camera access is granted, and it can do nothing else.
     @objc func openURL(_ call: CAPPluginCall) {
+        guard admit(call) else { return }
         guard let raw = call.getString("url"), let url = URL(string: raw) else {
             call.reject("openURL needs a url")
             return
         }
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+        let ownSettings = raw == UIApplication.openSettingsURLString
+        guard ownSettings || url.scheme?.lowercased() == "http" || url.scheme?.lowercased() == "https" else {
             call.resolve(["opened": false, "reason": "scheme"])
             return
         }

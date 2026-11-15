@@ -78,16 +78,3 @@ jobs:
         run: |
           go vet ./...
           go test -race -count=1 ./...
-
-      # The lola_insecure half of the M1 remote listener compiles ONLY under its
-      # build tag, so nothing above touches it: the insecure authorizer, the
-      # daemon wiring that starts a listener and their tests are all invisible
-      # to an untagged run. Without this step that path can rot silently, and it
-      # is the path that decides whether a bearer key can reach a socket at all.
-      # The untagged build stays the one that ships — `go tool nm` on it finds
-      # none of these symbols — which is exactly why both have to be green.
-      - name: build/vet/test (lola_insecure)
-        run: |
-          go build -tags lola_insecure ${{ steps.pkgs.outputs.list }}
-          go vet -tags lola_insecure ${{ steps.pkgs.outputs.list }}
-          go test -race -count=1 -tags lola_insecure ${{ steps.pkgs.outputs.list }}

@@ -82,6 +82,29 @@ import Users from '@lucide/svelte/icons/users';
 import Download from '@lucide/svelte/icons/download';
 import Package from '@lucide/svelte/icons/package';
 import X from '@lucide/svelte/icons/x';
+import Globe from '@lucide/svelte/icons/globe';
+import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
+import Type from '@lucide/svelte/icons/type';
+import Repeat from '@lucide/svelte/icons/repeat';
+import ListChecks from '@lucide/svelte/icons/list-checks';
+import History from '@lucide/svelte/icons/history';
+import Megaphone from '@lucide/svelte/icons/megaphone';
+import Cpu from '@lucide/svelte/icons/cpu';
+import WifiOff from '@lucide/svelte/icons/wifi-off';
+import KeyRound from '@lucide/svelte/icons/key-round';
+import Camera from '@lucide/svelte/icons/camera';
+import CameraOff from '@lucide/svelte/icons/camera-off';
+import Clipboard from '@lucide/svelte/icons/clipboard';
+import Smartphone from '@lucide/svelte/icons/smartphone';
+import Inbox from '@lucide/svelte/icons/inbox';
+import FileDiff from '@lucide/svelte/icons/file-diff';
+import Laptop from '@lucide/svelte/icons/laptop';
+import ShieldX from '@lucide/svelte/icons/shield-x';
+import TimerOff from '@lucide/svelte/icons/timer-off';
+import Unplug from '@lucide/svelte/icons/unplug';
+import Wifi from '@lucide/svelte/icons/wifi';
+import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
+import MessageSquare from '@lucide/svelte/icons/message-square';
 
 export const icons = {
   house: House,
@@ -167,5 +190,28 @@ export const icons = {
   'download': Download,
   'package': Package,
   'x': X,
+  'globe': Globe,
+  'arrow-up-right': ArrowUpRight,
+  'type': Type,
+  'repeat': Repeat,
+  'list-checks': ListChecks,
+  'history': History,
+  'megaphone': Megaphone,
+  'cpu': Cpu,
+  'wifi-off': WifiOff,
+  'key-round': KeyRound,
+  'camera': Camera,
+  'camera-off': CameraOff,
+  'clipboard': Clipboard,
+  'smartphone': Smartphone,
+  'inbox': Inbox,
+  'file-diff': FileDiff,
+  'laptop': Laptop,
+  'shield-x': ShieldX,
+  'timer-off': TimerOff,
+  'unplug': Unplug,
+  'wifi': Wifi,
+  'chevrons-up-down': ChevronsUpDown,
+  'message-square': MessageSquare,
 } as const;
 export type IconName = keyof typeof icons;

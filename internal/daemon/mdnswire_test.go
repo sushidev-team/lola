@@ -1,9 +1,6 @@
-//go:build lola_insecure
-
 package daemon
 
-// The local-network advertisement, which only exists where a listener does —
-// hence the build tag, as with every other test that starts one.
+// The local-network advertisement, which only exists where a listener does.
 
 import (
 	"context"
@@ -17,7 +14,6 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/panebus"
-	"github.com/sushidev-team/lola/internal/remote"
 )
 
 // The advertisement carries the port and a version, and NOTHING that identifies
@@ -26,11 +22,10 @@ import (
 // mobile/PLAN.md argues the restraint: `_lola._tcp` already announces "this
 // machine runs autonomous coding agents and accepts remote control" to every
 // peer on the network, and an SPKI pin or a hostname in a TXT record is a
-// stable cross-network correlator for one operator's laptop. The bearer key is
-// a separate and absolute rule — a TXT record is readable by everything.
+// stable cross-network correlator for one operator's laptop. Any secret is
+// a separate and absolute rule — a TXT record is readable by everything, so
+// nothing secret (a pairing secret, a bearer) may ever be near one.
 func TestStartRemoteAdvertisesTheListener(t *testing.T) {
-	t.Setenv(remote.InsecureKeyEnv, pairBeginTestKey)
-
 	var mu sync.Mutex
 	var launched [][]string
 	d := newRemoteTestDaemon(t)
@@ -80,9 +75,6 @@ func TestStartRemoteAdvertisesTheListener(t *testing.T) {
 	}
 
 	// THE THINGS THAT MUST NEVER BE THERE.
-	if strings.Contains(joined, pairBeginTestKey) {
-		t.Fatal("the bearer key reached a network advertisement")
-	}
 	if strings.Contains(joined, d.remote.SPKIPin()) {
 		t.Error("the SPKI pin reached a network advertisement: a cross-network correlator")
 	}
@@ -98,8 +90,6 @@ func TestStartRemoteAdvertisesTheListener(t *testing.T) {
 // what this machine is, so a daemon that was not asked to advertise must be
 // silent — and a listener still comes up either way.
 func TestStartRemoteDoesNotAdvertiseUnlessAsked(t *testing.T) {
-	t.Setenv(remote.InsecureKeyEnv, pairBeginTestKey)
-
 	started := make(chan struct{}, 4)
 	d := newRemoteTestDaemon(t)
 	d.mdnsStart = func(ctx context.Context, _ string, _ []string) (mdns.Process, error) {
@@ -126,8 +116,6 @@ func TestStartRemoteDoesNotAdvertiseUnlessAsked(t *testing.T) {
 // The advertisement is withdrawn with the listener. One that outlived its
 // socket would point every browsing phone at a port that refuses.
 func TestStopRemoteWithdrawsTheAdvertisement(t *testing.T) {
-	t.Setenv(remote.InsecureKeyEnv, pairBeginTestKey)
-
 	ended := make(chan struct{}, 4)
 	d := newRemoteTestDaemon(t)
 	d.mdnsStart = func(ctx context.Context, _ string, _ []string) (mdns.Process, error) {

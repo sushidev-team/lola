@@ -23,7 +23,7 @@ observes the PR/CI via `gh` and reacts (re-prompt, notify, review, clean up).
 - **Roles:** `lola run` is the daemon; `lola` / `lola tui` is the Bubble Tea TUI;
   every other subcommand is a thin client on the unix socket `~/.lola/lola.sock`
   (newline-delimited JSON, `internal/protocol`). `desktop/` is the macOS app,
-  `mobile/` the phone client (via `internal/remote`); both are clients too.
+  `mobile/` the phone client (via `internal/remote`, directly or through the hub relay); both are clients too.
 - **Daemon lifecycle** is TUI-managed by default (`internal/tui/daemonctl.go`:
   auto-spawn on open, `^r` restart re-execs the current binary, `^x` stop). With
   `[defaults].manage_daemon = false` launchd `KeepAlive` owns it instead — never both.
@@ -91,8 +91,12 @@ daemon, runtime and UIs can share them).
   On the agent's critical path: bounded 2s, always exits 0.
 - `scm` — `gh` PR/CI FACTS only. `state` — the status vocabulary (see invariants).
 - `session` — pure data: `Session` model + JSON snapshot `Store`.
-- `protocol` — wire types. `remote` — TLS phone listener; `mdns` advertises it;
-  `panebus` multiplexes one tmux attach per pane across subscribers.
+- `protocol` — wire types. `remote` — the phone listener and relay acceptor (one TLS config,
+  one frame loop for both): mutual TLS 1.3, device lookup, pairing, capability tiers, event
+  push; `devices` — the paired-phone registry (`~/.lola/devices.json`); `eventbox` —
+  per-connection event mailbox (coalescing, resnapshot, stream end; transport-free); `qr` —
+  byte-mode QR for `lola pair`; `mdns` advertises the listener; `panebus` multiplexes one
+  tmux attach per pane across subscribers.
 - `tui` — TUI plus the socket client (`Send`/`Logs`) the CLI reuses. `main.go`
   is cobra wiring only.
 
@@ -254,6 +258,55 @@ one `tmux ls`, gh facts → delivery axis, pane → agent axis),
 - `agentStop` needs a working pane, debounces (two Escs open Rewind), holds
   automation 30s and the human queue until the human speaks. `escIfWorking` is the one Esc.
 
+### Server push (contract: `docs/mobile/02-events.md`)
+- **Remote envelope is v2 only** (`FrameVersionMin = FrameVersionCurrent = 2`),
+  the pairing frame included. `event` frames carry the `id` of the `watch`
+  that started the stream (≤ 64 bytes, `[A-Za-z0-9_-]`) and a per-stream
+  `seq` from 1; a client drops other ids and re-watches on a gap. An `err`
+  frame on a watch id ends that stream only.
+- **Every pushed frame is authorized against the live registry**, not only
+  inbound frames: the pump calls `AuthorizeFrame` before each event; a
+  revoked peer is shut, a peer without `read` has its streams ended.
+- **Pokes are free and blind.** `d.watch.Poke*` takes only `pokeMu`, never
+  calls the store or a producer, and returns at once when nothing is watched.
+  `session.Store.OnChange` and `sshstore.Store.SetNotify` are the two commit
+  hooks; a new writer needs no poke of its own. Never call the store from
+  inside them.
+- **One lock order:** producer lock (`sessionsProjector.mu`, `feedPub.mu`,
+  `timelinePub.mu`) → data locks (taken and released inside compute) →
+  `topicState.mu` → `Box.mu` → leaves (`pokeMu`, `watchHub.mu`, which
+  also guards `probed`). Compute, then install: nothing is computed, read or executed
+  under `topicState.mu`. Snapshots are built only by producer runs on the
+  hub's `sem`, never on the connection reader or the pump.
+- **No watcher, no work.** Topic state exists only while watched; the hub
+  ticker stops at zero; the pane is probed only for a watched `talk:<id>`
+  (≤ 1/s whatever the hook rate, 15 s resting, parked when gone), at most 8
+  sessions daemon-wide and 4 per device.
+- **A probe is exactly the desktop's talkState call**, including its pane
+  reconciliation of the agent axis. A watch therefore counts as a viewer. It
+  never types, and it moves the agent axis only by the pane evidence
+  `talkPaneState` already trusts.
+- **Feed claims may drive only display-only pokes** (diff ticks); nothing on
+  the push path feeds a gate, slot, reaction or write-back.
+- **Snapshot, then deltas, under one lock; a slow link degrades, never
+  blocks.** `internal/eventbox` coalesces per slot, resnapshots on overflow
+  at most `ResnapshotLimit` times per minute, then ends the stream. At most
+  `maxWatchingConns` connections hold a box (memory bound). Nothing
+  oversize is ever resnapshotted: items over `EventItemMaxBytes` are
+  `omitted`, an unsplittable value ends its stream.
+- Sessions events use `remoteSessionInfo` (the `handleRemote` projection).
+  `age`, `headlineAgo`, `board.updatedAgo`, `prObservedAt` and `Event.ago`
+  are outside the change fingerprint (`sessionsVolatile`); add any new
+  clock-derived field there. The timeline topic serves only
+  `handleSessionTimeline` (`publicTimeline`) output.
+- `attachImage` writes only through `os.Root` of the session's
+  `.lola/images` (under `$LOLA_HOME`, never a `KindLocal` directory), runs no
+  command, refuses a sandboxed worktree whose gitguard pin is lost, keeps the
+  upload's descriptor and verifies the linked file is that inode, is capped
+  per upload, per session, per device per day and by free disk, and returns
+  the desktop's token (`<worktree>/.lola/images/paste-<16 hex><ext>`).
+  `attachmentImage` roots at `.lola/images` and never serves a link.
+
 ### Pane classification (`attention.Classify`)
 It mirrors claude-code's rendering, so a rendering change silently disables
 every send path. Re-verify against a live pane.
@@ -299,7 +352,8 @@ every send path. Re-verify against a live pane.
   runs nothing under bash 3.2). Classifier stays conservative.
 - Dev URLs: fast watch on activation (`startDevURLWatch`) + observer fallback
   (`scanDevURLs`). Both keep refining after the first address (a sidecar may
-  print before the app settles its port), bounded by `devURLAttempts`; opened via `cmd=openURL` (http(s) only), never `window.open`.
+  print before the app settles its port), bounded by `devURLAttempts`; opened via `cmd=openURL` (http(s) only) on the Mac,
+  never `window.open`; a phone opens them itself under the Phones rule.
 - Port clash: read a dead tab once per death, lsof only when the pane named a
   port, kill only as a human's dialog answer re-verified at click time.
 - `port_range` = multi-active: per-session lease (`portlease`, keyed by session id,
@@ -397,8 +451,9 @@ every send path. Re-verify against a live pane.
 ### Untrusted output, claims, loops, secrets
 - `brain` summaries never reach the worker. Review findings reach it only through
   sanitize + idle gate. `[statusagent]` output reaches only `displayOverlay`.
-  `Session.Board`, the claim audit, `agentfeed`, `quota`, overlaps, best-of
-  ranking are display-only. A report is not activity evidence.
+  `Session.Board`, the claim audit, `quota`, overlaps, best-of
+  ranking are display-only. `agentfeed` is display-only; its one non-display consumer is the
+  push path's diff tick, itself display-only. A report is not activity evidence.
 - Observer and reconcile run on `context.WithoutCancel`, panic-guarded, with a
   deadline on every exec. Spawn is bounded by `nativeSpawnTimeout`.
 - Secrets (Linear key, Slack webhook) never in config, argv, logs or errors.
@@ -446,9 +501,48 @@ every send path. Re-verify against a live pane.
     completes only once the PR head moved past the one GitHub showed at claim
     AND is green; an unmoved, still-red one ends as refused / agent_gave_up,
     never not_reproducible. `HubItem` survives adoption.
-  - Only what the protocol names leaves the machine: repo slugs, validated
-    findings, item ids, a PR URL and a delivery word — never a session id, path
-    or pane text. `hubStatus` is a read a phone may make.
+  - Only what the protocol names leaves the machine in plaintext: repo slugs,
+    validated findings, item ids, a PR URL, a delivery word, rendezvous ids and
+    bearer SHA-256 hashes — never a session id, path or pane text in the clear.
+    Phone traffic crosses the hub only inside the end-to-end mutual TLS session
+    (see **The hub relay is blind**). `hubStatus` is a read a phone may make.
+  - **The hub relay is blind** (`hubproto/ws.go`, `hubproto/relay.go`,
+    `internal/hub/relay.go`, `internal/daemon/hubrelay.go`,
+    `internal/remote/relay.go`, `docs/mobile/03-hub-relay.md`). Rules:
+    - The relayed stream IS the phone's mutual TLS 1.3 session, terminated by
+      `remote.Server` (`ServeRelayed` → `tls.Server(raw, s.tlsConfig)`) and
+      by the phone. Never terminate, inspect or frame-parse it anywhere else;
+      never add a relay-only command path.
+    - The daemon dials out only: a standing control channel
+      (`/v1/relay/daemon`) and one accept leg per phone connection
+      (`/v1/relay/accept?conn=`), both signed with `hubproto.Sign`. The hub
+      never dials a daemon, and its `hello` values never steer the daemon.
+    - Credentials: the daemon keeps and registers HASHES only (replace-all
+      `POST /v1/relay/rendezvous`, every POST serialized). A phone's rv and
+      bearer reach it only inside the inner TLS (`PairResult.Relay`,
+      `relayCred`); the QR carries a single-use window rv and a random window
+      token (`tok`) whose hash expires with the window. Never log an rv, a
+      bearer, a token or a hash.
+      Leaving, `relay = false`, a hub URL change and revoking the last phone
+      all post the empty set to the hub that holds the entries.
+    - An `incoming` is the hub's claim: the daemon dials only for an rv it
+      registered, under its own rate limit and relay pool (4, at most 2 per
+      rv, separate from the LAN pool). A relayed peer must present the client
+      key bound to that rv, or pair through the open window's rv.
+    - `WSConn` write deadlines govern data frames only; control frames carry
+      their own short deadline, and a close never waits on a blocked writer.
+      `remote`'s per-frame write deadline would otherwise kill an idle relayed
+      phone at the first hub ping.
+    - A 401 `unauthorized` on a relay dial is a revocation like any signed
+      call (converted to `hub.APIError`); a 404 means an older hub
+      (`unsupported`, recheck 6 h), never an error to retry hard.
+    - The relay loop never blocks shutdown: every dial and read is bound to the
+      run context and closes with `CloseNow`.
+    - `[remote].relay` (default on) only matters with `[remote].enabled`;
+      `bind = "off"` stops listening but not the relay. A relay-only daemon
+      runs a listener-less `remote.Server`, rebuilt when the hub is joined or
+      left. `RemoteConfig` stays pointer-free (`RelayOff`): `handleReload`
+      compares it by value.
   - **A verified team policy LOCKS every key it carries, in the daemon's
     MEMORY only.** (`internal/config/teampolicy.go`, `internal/daemon/
     hubpolicy.go`.) `overlayTeamPolicy` runs on every config the daemon puts
@@ -482,7 +576,7 @@ every send path. Re-verify against a live pane.
   - **A person's hub command is a human act, and only a human's.**
     `protocol.HubHumanCommands` (join, leave, board, org, claim, release,
     sync, stats, and the team commands createTeam, invite, teamSettings,
-    revoke) are denied by `internal/remote` as a list (a phone gets none of
+    revoke) are tier `never` in `internal/remote/tiers.go` (a phone gets none of
     them, the board and org included: they carry the whole team's work and
     device names) and named by no sandbox hook-bridge allowlist. Rules:
     - **The team admin key is not the device key.** `cmd=hubCreateTeam`
@@ -568,8 +662,9 @@ every send path. Re-verify against a live pane.
 ### SSH (contract: `docs/ssh-sessions.md`)
 - `ssh -O check` exit 0 is the only proof of a connection; nothing read from a
   pane moves a state; no auto-reconnect. Keep `ProxyCommand=false`.
-- `protocol/ssh.go`'s split is the trust boundary (`SSHAgentCommands` vs human
-  commands; bridge and phones get no human commands). Production refuses
+- `protocol/ssh.go`'s split is the trust boundary (`SSHAgentCommands` vs `SSHHumanCommands`; the bridge and phones get no ssh human command —
+  they are tier `never`; Conversation commands, including `sshRecall`/`sshAnswer`, are
+  `protocol.TalkCommands`). Production refuses
   unsandboxed agents unless `allow_unsandboxed` (`SSHAdmit`, `SSHDirectSandbox`).
 - Agent commands run on exec channels, never in the human's shell. Human Run
   blocks are `Private` until `sshShareBlock`. Facts vs claims never mix.
@@ -578,19 +673,136 @@ every send path. Re-verify against a live pane.
 - Two daemon sentences are matched by the UIs ("changed since", "not waiting for
   approval"); rewording them in `sshhuman.go` changes both UIs.
 
+### Phones (`internal/remote`, `internal/devices`; spec `docs/mobile/01-pairing-and-tiers.md`)
+- **A phone is a second HUMAN surface, identified by its key.** The listener is mutual TLS 1.3
+  (`RequireAnyClientCert`, P-256 only); the client SPKI hash is looked up in
+  `~/.lola/devices.json`. Nothing on the wire names a device. An unknown key fails the
+  handshake unless a pairing window is open. No build tag gates the listener. A client counts
+  a connection as authenticated only on the `ready` frame (TLS 1.3 finishes before the server
+  judges the client certificate); post-handshake refusals send `not_paired`.
+- **Pairing is local, one-shot, and the human types the code.** `protocol.LocalOnlyCommands`
+  (pair*, devices, revokeDevice, setDeviceTiers) are tier `never`, refused again in
+  `handleRemote`, absent from the hook bridge. The secret lives 5 min and is burned only by a
+  VALID proof (a wrong one closes only that connection and never moves the pairing, so a
+  stranger on the LAN cannot cancel pairings). The daemon never displays the 6-digit code:
+  `pairConfirm` must carry the code the human read on the phone (`maxConfirmTries`). An
+  unpaired connection may send exactly one frame: `remote.pair`. The payload, secret and
+  relay `tok` are never logged. The pairing connection closes after its outcome; the phone
+  reconnects as a paired device.
+- **`internal/remote/tiers.go` is a closed allowlist.** Every command `d.handle` routes maps to
+  exactly one of read / answer / control / destructive / shell / never
+  (`TestEveryHandledCommandHasATier` parses `server.go`). A new command is unreachable until a
+  human writes it into a tier. Unknown = never. `pty` write is `shell`. What the tiers mean on
+  the Mac: `answer` can approve an agent's permission card, which runs what the agent proposed;
+  `control` starts configured commands (`dev_commands`, `post_create`) inside trees the agent
+  can write; `destructive` removes sessions (`kill`, `closeExitedTemporary`, `bestOfPick`);
+  `shell` is raw terminal input and every command line or program the phone or the agent
+  chose (`open`, `openManual{agent:false}`, `reviewPackageVerify`, `reviewPackageCapture`).
+  Turning `shell` off is not a guarantee that no code runs. Anything that runs an arbitrary
+  command line, or agent-writable code chosen by the request, is `shell`, never `control`.
+  Phones get the desktop's Conversation (`talkState`/`agentFeed`/`sessionTimeline` read;
+  `agentSay`/`agentChoose`/`agentStop`/`agentQueueRelease`/`agentSetting`/`attachImage`
+  answer) and review workspace (`reviewPackages`/`Image`/`Diff`/`Checks` read;
+  `reviewPackageMark`/`Feedback` answer; `reviewPackageRecover` control; `Verify`/`Capture`
+  shell).
+- **Desktop-only (tier `never`):** daemon lifecycle and config (`stop`, `reload`,
+  `renameProject`), pairing and devices, every hub human command, every ssh command, the
+  agent's own channels (`hookEvent`, `agentReport`, `reviewPackagePublish`/`Complete`), plans,
+  goals, review profiles, knowledge, comparison and `openURL`.
+- **`enable`/`disable` (one poll's `enabled`) are the only config writes a phone has; no other
+  config write may be tiered.**
+- **Requests are rebuilt, not forwarded** (`fields.go`): only each command's listed fields
+  survive; `Force` is never carried; a phone opens worktrees only and needs `shell` for a
+  shell; `agentSay.Conn` and `prs.refresh` are dropped. A new field on a reachable Args type
+  fails `TestRemoteArgsFieldsAreReviewed` until reviewed.
+- **Same handlers, same gates.** A phone send is a human send through `typeToAgent`,
+  `sanitizeAgentText` (a leading `!` is defused on every surface), `lockHumanPrompt`/
+  `lockHumanMessage` and `typedNote`. Nothing new types into an agent.
+- **Revocation is immediate and survives restarts.** Every frame re-reads the device (id +
+  epoch); `revokeDevice` also closes its live connections and drops its relay rendezvous at
+  the hub (registry subscriber → `hubRelayDirty`); re-pairing a key bumps its epoch; tier
+  edits apply on the next frame and close the device's live connections, so its next
+  `ready` carries the new tiers. `devices.json` is 0600 and atomic; an unparseable one
+  authenticates nobody and is never rewritten. A revoke that cannot rewrite it is journaled
+  in `devices.revoked`; one that cannot write either keeps the listener and relay off for the
+  run and fails `lola doctor`'s `phones` row.
+- **Unauthenticated peers cannot crowd out paired phones.** Slots are taken at accept in a
+  pre-auth pool capped globally and per source IP (relay has its own pool, spec 03); a
+  connection moves to the authenticated pool only after `Authenticate`. Per device, the OLDEST
+  connection is evicted when a new one authenticates past `maxConnsPerDevice`.
+- **External APIs are budgeted per device.** Commands that call `gh` or Linear on the request
+  path (`extCommands`) take an extra `extRate` bucket; `tickets` is cached like `prs`.
+- **SSH stays on the desktop.** Phones read it only through `sessionTimeline`, an allowlist
+  copy with no Private blocks, prompt cards, host/user/cwd, handback transcript or widget
+  document; `sessions` strips `SSH`. Conversation commands are `protocol.TalkCommands`
+  (including `sshRecall` and `sshAnswer`, which act on any session's Conversation store; an
+  answer to an element scoped to an SSH connection is refused in `handleRemote`), not ssh
+  commands.
+- **Widgets never run on a phone.** `sessionTimeline` drops `SSHElement.HTML`/`Data`. Adding
+  them back requires the phone to render widgets only in a sandboxed `data:` iframe that the
+  native bridge is not injected into (`WKUserScript` `forMainFrameOnly`), proven by a spec 04
+  test, and a change to this rule.
+- **A phone opens URLs itself, and only http(s)** to a `dev_forward` address or the URL's own
+  host; `openURL` (which opens a browser on the Mac) is tier `never`. Untrusted pane text never
+  becomes a non-http(s) open on either surface.
+- Every non-read remote command writes one `remote: audit` line naming the device, never the
+  payload. Rate limits are per device, shared across its connections.
+
 ### Desktop session view (design: `docs/unified-session.md`)
 - One DOM, three container-size layouts (`.cv-*` in `app.css`); one
   `SessionEmbed` at two heights (CSS state, never `{#if}`).
 - `lib/answerblocks.ts` builds elements as data (no `{@html}`), fails open, loses no word.
 - Plates = lola witnessed it; cards = you can act on it; nothing else gets a box.
   State glyphs never appear in story rows.
-- Terminal attaches only while on screen; no hidden/read-only clients.
+- Terminal attaches only while on screen, on both surfaces; no hidden/read-only clients.
 - Ended sessions stay readable 14 days (`State.Ended`). Comments anchor only on the base diff.
 - **Widgets are untrusted:** `sandbox="allow-scripts"` only, `data:` documents,
   a `MessageChannel` port is the only channel, `lola.ask`/`lola.run` only fill.
   Frames never move in the DOM (`DockArea.svelte`, append-only each).
   `desktop/runtimeguard.go` + `TestRuntimeGuardWasReviewedForThisWails` must be
-  re-read on every Wails upgrade. Never claim "no network" in the UI.
+  re-read on every Wails upgrade. Never claim "no network" in the UI. On the phone the same
+  rule rests on `LolaTransportPlugin/BridgeGuard.swift` (main frame only) +
+  `capacitorguard.test.ts`, re-read on every Capacitor upgrade.
+
+### Phone client (`mobile/`, spec: `docs/mobile/04-client.md`)
+- The phone runs the desktop's own Conversation, Changes and Review components
+  through a shim (`mobile/src/wailsshim/`). `wailsshim/conformance.ts` makes
+  `npm run check` fail when the shim drifts from the generated bindings: a new
+  bound method needs a shim route (fwd, local, platform or absent) in the same
+  change.
+- Tiers have one source: `remote.CommandTiers()` → `mobile/src/wire/testdata/tiers.json`
+  (`LOLA_WRITE_VECTORS=1 go test ./internal/remote -run TestTierGolden`) → `wire/tiers.ts`.
+  The client never spells a tier by hand; it never sends a `never` command
+  (`openURL` opens on the phone).
+- Desktop stores take a pushed source (`$lib/pushsource.ts`). With none
+  installed they poll exactly as before; only `mobile/src/main.ts` installs one.
+  A refused topic reverts that store to polling. A desktop edit that adds a poll
+  must add the matching push path or say why the phone does not need it.
+- Secrets never cross the Capacitor bridge: the pairing secret, the QR's
+  `tok`, every relay bearer and the client key stay in Swift and the Keychain.
+  Capacitor logs every resolved payload and listener event in Debug builds.
+  `relayCred` and every `lola-`-prefixed request id are native-only; the
+  plugin refuses them from JS.
+- Widgets never run on the phone: elements arrive without `html`/`data`, and
+  `SSHWidget` renders a placeholder on a client that set `setWidgetsUnavailable`
+  (`$lib/widgetsoff`, only `mobile/src/main.ts` does).
+- The Capacitor `bridge` handler accepts messages from the app's main frame
+  only (`LolaTransportPlugin/BridgeGuard.swift`), so a widget iframe cannot
+  reach a plugin. `mobile/src/native/capacitorguard.test.ts` pins the Capacitor
+  version it was read against; re-read the guard on every Capacitor upgrade.
+- Only an authenticated signal ends a connection: a `not_paired` frame or a
+  TLS alert after the pinned handshake completed. A wrong key, a TLS failure
+  before `.ready`, an mDNS hint or a hub refusal fails one candidate only.
+- The client re-sends a request after a connection change only if its tier is
+  `read`; everything else rejects with `ConnectionClosedError`. A migration
+  waits for in-flight non-read requests (`MIGRATE_DRAIN_MS`).
+- Inbox Approve sends only an exact `Yes` choice, with the hash of the request
+  text it rendered; never a "don't ask again" option.
+- The phone's tier list hides controls; it never grants. The daemon gate is the
+  truth, and a refusal is shown as the daemon's sentence.
+- Screens are reached in tests by `lola-dev://open?route=…` or
+  `preview.html?route=…&fixture=…`, never by synthetic taps. A screen or sheet
+  no route reaches is a bug.
 
 ### UI conventions
 - `[ui].theme` paints both surfaces; `internal/tui/catppuccin.go` ports
@@ -619,6 +831,10 @@ every send path. Re-verify against a live pane.
   unverified.
 - Inject fakes via `Daemon` seam fields and `linear/fake.go`; isolate state with
   `$LOLA_HOME = t.TempDir()`.
+- Pairing in a simulator or E2E run is confirmed with `lola pair` (the code line on stdin,
+  taken from the simulator's `lola-dev pair-code` log line, which only the Debug
+  configuration compiles: `LOLA_DEV_LINK`), never by driving the desktop UI.
+  `mobile/scripts/dev-link.sh --pair` does exactly that.
 - Definition of done for daemon changes: `agent-rules.md`.
 
 ## Desktop app (`desktop/`)
@@ -626,7 +842,7 @@ every send path. Re-verify against a live pane.
 **Lola**: Wails 3 + Svelte 5 runes + Tailwind v4 + xterm.js. A package inside
 this Go module (to reuse `internal/`), a client of the daemon socket, driving
 `tmux -L lola` directly for terminals. Bound services: Talk, SSH, Daemon, Term,
-Config, Context, Doctor, Linear, Update. One project form with tabs (TUI too).
+Config, Context, Doctor, Linear, Update, Phones. One project form with tabs (TUI too).
 Needs the `wails3` CLI. See `desktop/README.md`.
 
 - `wails3 task build` rebuilds only `bin/Lola`; the `.app` is made by
@@ -654,4 +870,6 @@ Needs the `wails3` CLI. See `desktop/README.md`.
 
 `README.md` (commands, full config reference), `config.example.toml`,
 `agent-rules.md` (build spec), `SPEC.md` / `PLAN.md`, `docs/unified-session.md`,
-`docs/ssh-sessions.md`, `docs/workspace-goals.md`.
+`docs/ssh-sessions.md`, `docs/workspace-goals.md`, `docs/mobile-rethink.md` and
+`docs/mobile/` (phones, push, relay, client), `mobile/README.md` (operating the phone app).
+`mobile/PLAN.md` is historical.

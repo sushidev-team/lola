@@ -20,6 +20,9 @@ describe("rootSizeFor", () => {
   it("grows with the setting", () => {
     expect(rootSizeFor(23)).toBeGreaterThan(ROOT_BASE);
     expect(rootSizeFor(28)).toBeGreaterThan(rootSizeFor(23));
+    // AX1 (body 28px) is honoured in full: 16 * 28 / 17.
+    expect(rootSizeFor(28)).toBeCloseTo(26.35, 1);
+    expect(rootSizeFor(28)).toBeLessThan(ROOT_MAX);
   });
 
   it("never shrinks below the phone scale", () => {
@@ -30,8 +33,10 @@ describe("rootSizeFor", () => {
   });
 
   it("stops at the ceiling, which is a layout limit", () => {
-    // AX5 resolves the body font to about 53px. Past ROOT_MAX the session row
-    // and the form captions stop fitting, and clipped text serves nobody.
+    // ROOT_MAX covers AX1-AX2; past it the dense layout is not designed (spec 04 §6), so AX2 (a
+    // body of about 33px) and AX5 (about 53px) both clamp.
+    expect(ROOT_MAX).toBe(28);
+    expect(rootSizeFor(33)).toBe(ROOT_MAX);
     expect(rootSizeFor(53)).toBe(ROOT_MAX);
   });
 

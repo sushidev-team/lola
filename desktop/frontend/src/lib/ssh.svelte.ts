@@ -9,6 +9,9 @@
 import type { Attachment } from "./composerpaste";
 import { SvelteMap, SvelteSet, createSubscriber } from "svelte/reactivity";
 import { SSHService } from "@bindings/desktop";
+import { pushSource } from "./pushsource";
+import { ViewRetention } from "./viewretention";
+import type { SSHTimelineData } from "@bindings/internal/protocol";
 import { store, type SessionInfo } from "./store.svelte";
 import { nav } from "./nav.svelte";
 import { confirm } from "./confirm.svelte";
@@ -300,10 +303,13 @@ class SessionView {
   private fetchedOk = false;
 
   private id = "";
-  bind(id: string, saveDock?: (d: SavedDock) => void, saveDraft?: (text: string) => void) {
+  private retention: ViewRetention | undefined;
+
+  bind(id: string, saveDock?: (d: SavedDock) => void, saveDraft?: (text: string) => void, retention?: ViewRetention) {
     this.id = id;
     this.saveDock = saveDock;
     this.saveDraft = saveDraft;
+    this.retention = retention;
   }
 
   /** Replaces the layout. A sash saves once at the end of its drag, not on every pixel. */
@@ -445,6 +451,56 @@ class SessionView {
     });
   }
 
+  /** A pushed source feeds this view, so the polling effects stand down. Reactive: a refused topic wakes them. */
+  pushed = $state(false);
+
+  /** Takes the timeline from the pushed source until the returned function is called. No source, no-op. */
+  follow(): () => void {
+    const src = pushSource();
+    if (!src) return () => {};
+    this.pushed = true;
+    const release = this.retention?.hold(this.id);
+    const stop = src.timeline(
+      this.id,
+      (r, reset) => {
+        if (reset) this.resetIfBehind(0);
+        this.absorb(r);
+        this.loaded = true;
+        this.fetchedOk = true;
+      },
+      () => {
+        this.pushed = false;
+        void this.fetch();
+      },
+    );
+    return () => {
+      this.pushed = false;
+      stop();
+      release?.();
+    };
+  }
+
+  /** Drops the timeline; drafts, attachments, layout and messages still in flight stay. The next follow refills it. */
+  trim() {
+    this.items = [];
+    this.lastSeq = 0;
+    this.loaded = false;
+    this.fetchedOk = false;
+    this.streams.clear();
+  }
+
+  private absorb(r: SSHTimelineData) {
+    this.items = mergeItems(this.items, r.items);
+    this.outgoing = this.outgoing.filter(sent => !this.items.some(item => item.id === sent.item));
+    if (r.connections) {
+      this.connections = r.connections;
+      // A delta only says what changed, so what a trashed tab owned is dropped here.
+      const known = new Set(r.connections.map((c) => c.id));
+      if (this.items.some((i) => itemConn(i) && !known.has(itemConn(i)))) this.items = this.items.filter((i) => !itemConn(i) || known.has(itemConn(i)));
+    }
+    this.lastSeq = Math.max(this.lastSeq, r.lastSeq ?? 0);
+  }
+
   /** Item ids that came in while the reader was elsewhere are the stream's business. */
   async fetch(): Promise<void> {
     if (!this.id) return;
@@ -457,15 +513,7 @@ class SessionView {
       let more = true;
       while (more) {
         const r = await SSHService.Timeline({ session: this.id, after: this.lastSeq });
-        this.items = mergeItems(this.items, r.items);
-        this.outgoing = this.outgoing.filter(sent => !this.items.some(item => item.id === sent.item));
-        if (r.connections) {
-          this.connections = r.connections;
-          // A delta only says what changed, so what a trashed tab owned is dropped here.
-          const known = new Set(r.connections.map((c) => c.id));
-          if (this.items.some((i) => itemConn(i) && !known.has(itemConn(i)))) this.items = this.items.filter((i) => !itemConn(i) || known.has(itemConn(i)));
-        }
-        this.lastSeq = Math.max(this.lastSeq, r.lastSeq ?? 0);
+        this.absorb(r);
         more = !!r.more && (r.items?.length ?? 0) > 0;
       }
       this.error = "";
@@ -510,6 +558,7 @@ class SSHStore {
   // it inside $derived, where writing to reactive state throws state_unsafe_mutation.
   // Nothing subscribes to the map itself: each SessionView holds its own $state.
   private views = new Map<string, SessionView>();
+  private retention = new ViewRetention((id) => this.views.get(id)?.trim());
   private docks = readDocks();
   private drafts = readDrafts();
 
@@ -527,6 +576,7 @@ class SSHStore {
         id,
         (d) => this.saveDock(id, d),
         (text) => this.saveDraft(id, text),
+        this.retention,
       );
       this.views.set(id, v);
     }
@@ -1117,13 +1167,15 @@ class SSHStore {
       v.queueWhy = r.delivered ? "" : (r.why ?? "");
       if (r.item) v.outgoing.push({ text, conn, item: r.item, delivered: !!r.delivered });
       v.sending = null;
-      void v.fetch();
-      void talk.refresh(session);
+      if (!v.pushed) {
+        void v.fetch();
+        void talk.refresh(session);
+      }
       return true;
     } catch (err) {
       if (isTalkUnsupported(err)) return await this.say(session, text);
       v.setFlash(String(err), "text-bad");
-      void v.fetch();
+      if (!v.pushed) void v.fetch();
       return false;
     } finally {
       v.sending = null;

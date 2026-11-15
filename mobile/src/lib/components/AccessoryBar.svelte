@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Icon from "$lib/components/Icon.svelte";
   import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import {
     BAR_ROW_PRIMARY,
@@ -10,7 +9,7 @@
     type KeyModifiers,
     type TerminalModes,
   } from "@mobile/lib/keybytes";
-  import { overflowFade, type OverflowEdges } from "@mobile/lib/edgefade";
+  import { overflowFade } from "@mobile/lib/edgefade";
   import AccessoryKey from "./AccessoryKey.svelte";
 
   // The keyboard accessory bar: the feature that decides whether this app is
@@ -105,8 +104,12 @@
   // extra point is the difference between nine keys reading as nine and reading
   // as a ruled strip. It has to stay a literal for the reason every class here
   // does — Tailwind scans source text (rule 4).
+  // TRAILING SPACE: 24px after the last key (the 18px `after:` spacer plus the
+  // 6px gap). A real item rather than `pr-6`, because WebKit drops a scroller's
+  // trailing padding. The 24px fade ramp lands on it once scrolled to the end,
+  // so the fade never dims a key it is not hiding.
   const STRIP =
-    "flex min-w-0 flex-1 gap-[5px] overflow-x-auto overscroll-x-contain py-1 [scrollbar-width:none]";
+    "flex min-w-0 flex-1 gap-1.5 overflow-x-auto overscroll-x-contain py-0.5 after:w-[18px] after:shrink-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
 
   // THE MASK IS NOT ENOUGH ON A KEY ROW, and this is the second half.
   //
@@ -121,10 +124,8 @@
   // So each strip also gets an overlay drawn on the ROW, over the strip's own
   // background, plus a chevron. It cannot be defeated by where the boundary
   // falls, because it does not depend on there being a glyph underneath.
-  const NONE: OverflowEdges = { left: false, right: false };
-  let primaryEdges = $state<OverflowEdges>(NONE);
-  let secondaryEdges = $state<OverflowEdges>(NONE);
-
+  /** A 16px fade at the trailing edge only; it lifts once the strip is scrolled to its end. */
+  const FADE = { px: 24, leading: false };
   let expanded = $state(false);
   let ctrl = $state(false);
   let alt = $state(false);
@@ -189,44 +190,41 @@
      `edge-soft` for the rule, because every hairline in the redesign is the
      soft token and plain `edge` reads as a panel border at this weight. -->
 <div
-  class="shrink-0 border-t border-edge-soft bg-crust"
+  class="max-w-full min-w-0 shrink-0 overflow-x-clip border-t border-edge-soft bg-crust"
   style="padding-bottom: {raised ? '0px' : 'env(safe-area-inset-bottom, 0px)'}"
 >
   {#if expanded}
     <!-- No `pt-1` here: STRIP already carries `py-1`, and stacking the two put
          four extra points above the second row that the primary row does not
          have — the exact doubling the note beside STRIP says it avoids. -->
-    <div class="relative flex items-center pr-2 pb-1 pl-2.5">
+    <div class="relative flex items-center pr-3.5 pb-1 pl-3.5">
       <div
         class={STRIP}
-        use:overflowFade={{ onedges: (e) => (secondaryEdges = e) }}
+        use:overflowFade={FADE}
       >
         {#each BAR_ROW_SECONDARY as key (key.id ?? key.value)}
           <AccessoryKey
             label={key.label}
             aria={key.aria}
             repeats={key.repeats}
-            wide={key.label.length > 2}
             {disabled}
             latched={key.kind === "latch" && (key.value === "ctrl" ? ctrl : alt)}
             onfire={() => press(key)}
           />
         {/each}
       </div>
-      {@render edges(secondaryEdges, false)}
     </div>
   {/if}
 
   <!-- The row's own vertical padding is 0 at the top: the strip carries `py-1`
        inside itself, and doubling it here would push the pane up for nothing. -->
-  <div class="relative flex items-center pr-2 pb-1 pl-2.5">
-    <div class={STRIP} use:overflowFade={{ onedges: (e) => (primaryEdges = e) }}>
+  <div class="relative flex items-center pr-3.5 pb-1 pl-3.5">
+    <div class={STRIP} use:overflowFade={FADE}>
       {#each BAR_ROW_PRIMARY as key (key.id)}
         <AccessoryKey
           label={key.label}
           aria={key.aria}
           repeats={key.repeats}
-          wide={key.label.length > 2}
           {disabled}
           onfire={() => press(key)}
         />
@@ -234,7 +232,6 @@
     </div>
     <!-- Inset on the right by the chevron button's width plus its gap, so the
          overlay marks the STRIP's edge and not the row's. -->
-    {@render edges(primaryEdges, true)}
     <!-- OUTSIDE the strip, and that is the whole point of the split. It is the
          only way to reach row two, so a chevron that scrolled away with the keys
          would leave ctrl, alt and the four control chords unreachable on any
@@ -245,48 +242,21 @@
       {disabled}
       aria-label={expanded ? "Hide the second key row" : "Show the second key row"}
       aria-expanded={expanded}
-      class="relative ml-1 flex h-10 min-w-10 shrink-0 touch-manipulation items-center
-             justify-center rounded-[7px] bg-sel text-base text-subtext select-none
-             before:absolute before:-inset-0.5 before:content-['']
-             disabled:opacity-40"
+      class="ml-1.5 flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center
+             select-none disabled:opacity-40"
       onpointerdown={(e) => {
         e.preventDefault();
         expanded = !expanded;
       }}
     >
-      <GlyphIcon glyph={expanded ? "▾" : "▴"} />
+      <span
+        class="flex h-10 w-11 items-center justify-center rounded-lg bg-sel text-base text-subtext"
+      >
+        <GlyphIcon glyph={expanded ? "▾" : "▴"} />
+      </span>
     </button>
   </div>
 </div>
-{#snippet edges(e: OverflowEdges, inset: boolean)}
-  <!-- Painted on the row, above the strip, and never in the way: `inset-y-0`
-       with no hit area, so a swipe passes straight through to the scroller.
-       The chevron is the part that survives a clip landing on empty padding.
 
-       THE GRADIENT MUST NAME THE BAR'S OWN GROUND, which is why it moved from
-       `panel` to `crust` with it. A mask fading to a colour the surface is not
-       does not fade at all — it draws a pale band over the last key and looks
-       like a rendering fault rather than like an edge. Anyone changing the bar's
-       background has to change these two with it; there is no way to say "the
-       parent's colour" in a Tailwind gradient. -->
-  {#if e.left}
-    <div
-      class="pointer-events-none absolute inset-y-0 left-2.5 flex w-7 items-center justify-start
-             bg-gradient-to-r from-crust via-crust/80 to-transparent text-sm text-faint"
-      aria-hidden="true"
-    >
-      <Icon name="chevron-left" size={14} />
-    </div>
-  {/if}
-  {#if e.right}
-    <div
-      class="pointer-events-none absolute inset-y-0 flex w-7 items-center justify-end
-             bg-gradient-to-l from-crust via-crust/80 to-transparent text-sm text-faint
-             {inset ? 'right-13' : 'right-2'}"
-      aria-hidden="true"
-    >
-      <Icon name="chevron-right" size={14} />
-    </div>
-  {/if}
-{/snippet}
+
 

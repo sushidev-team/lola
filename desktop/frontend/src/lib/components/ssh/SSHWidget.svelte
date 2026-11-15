@@ -31,6 +31,7 @@
   import { ssh } from "$lib/ssh.svelte";
   import { appearance } from "$lib/theme-runtime.svelte";
   import { WIDGET_BOOT_GRACE_MS, WIDGET_FAULTS, WIDGET_PING_MISSES, WIDGET_PING_MS, WIDGET_READY_MS, WIDGET_SANDBOX, widgetDoc, widgetFault, widgetSrc, widgetText, widgetThemeVars, type SSHElement, type WidgetFault } from "$lib/ssh";
+  import { widgetsUnavailable } from "$lib/widgetsoff";
   import Button from "../Button.svelte";
 
   // `active` is false for a tab in the background: it stays alive, and costs less.
@@ -38,6 +39,7 @@
 
   const view = $derived(ssh.view(sessionId));
   const html = $derived(element.html ?? "");
+  const unavailable = widgetsUnavailable();
   const data = $derived(element.data);
   const reloads = $derived(view.widgetReloads.get(element.id) ?? 0);
 
@@ -269,7 +271,10 @@
 
 <div class="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-panel" data-widget={element.id}>
   <div class="grid min-h-0 grid-rows-[minmax(0,1fr)]">
-    {#if !closed}
+    {#if unavailable}
+      <!-- A phone is sent the element without its page. Nothing below runs: no frame, no port, no report. -->
+      <p class="px-3 py-2 text-sm text-faint" data-widget-unavailable>Open on your Mac to view.</p>
+    {:else if !closed}
       {#key `${reloads}:${html}`}<iframe
         bind:this={frame}
         title={element.title}
