@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/sushidev-team/lola/compare/v0.9.0...v0.10.0) (2026-11-15)
+
+
+### Features
+
+* **mobile:** full review on the phone, project grouping, relay fixes and companion glances ([c6b3e9e](https://github.com/sushidev-team/lola/commit/c6b3e9e7eec328d34eda16ffad509e738137f640))
+
+
+### Bug Fixes
+
+* **mobile:** clip the app frame and stop lists panning sideways ([7076b9b](https://github.com/sushidev-team/lola/commit/7076b9b2fa5ab61607a0402e5cb228b9d7fc67e1))
+
 ## [0.9.0](https://github.com/sushidev-team/lola/compare/v0.8.0...v0.9.0) (2026-11-15)
 
 
