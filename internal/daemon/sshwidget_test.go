@@ -138,8 +138,8 @@ func TestSSHWidgetStatusIsHumanSideOnly(t *testing.T) {
 	if err := r.d.bridgeAdmit(protocol.Request{Cmd: protocol.CmdSSHWidgetStatus, Session: "s1", HookToken: r.d.hookToken("s1")}); err == nil {
 		t.Fatal("admitted on the hook bridge")
 	}
-	if !remote.CommandDenied(protocol.CmdSSHWidgetStatus) {
-		t.Fatal("reachable from a phone")
+	if got := remote.TierFor(protocol.CmdSSHWidgetStatus); got != protocol.TierNever {
+		t.Fatalf("wrong tier for a phone: %q, want never", got)
 	}
 }
 

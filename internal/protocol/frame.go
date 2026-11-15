@@ -25,7 +25,8 @@ import (
 // the other. See framecodec.go, which is the only I/O in this package.
 //
 // Every field except V and Type is optional, and the rule that keeps V cheap is:
-// V bumps only when the ENVELOPE changes incompatibly. A new Type value, a new
+// V bumps only when the ENVELOPE changes incompatibly (v2 added Topic and the
+// event type, and requires v2 on every frame, the pairing frame included). A new Type value, a new
 // Cmd, or a new omitempty field on a payload is additive and does not bump it —
 // an unknown Type fails closed on either side, which is the correct outcome for
 // both directions of skew. Decoding is therefore deliberately tolerant of
@@ -37,7 +38,13 @@ type Frame struct {
 	ID   string `json:"id,omitempty"`   // request correlation; echoed on the reply
 	Cmd  string `json:"cmd,omitempty"`  // req frames only: the protocol.Request Cmd
 	Pane string `json:"pane,omitempty"` // sub/unsub/pty/resync: the tmux session name
-	Seq  uint64 `json:"seq,omitempty"`  // per-pane stream ordering, for gap detection
+
+	// Topic names the event stream an event frame belongs to, and the stream an
+	// err frame ends. Declared after Pane so every other frame's encoded byte
+	// order is unchanged. See ParseTopic.
+	Topic string `json:"topic,omitempty"`
+
+	Seq uint64 `json:"seq,omitempty"` // per-pane or per-stream ordering, for gap detection
 
 	// Payload is the type-specific body: a protocol.Request on a req frame, a
 	// protocol.Response on a resp frame, and one of the *Payload types below on
@@ -50,8 +57,8 @@ type Frame struct {
 // and refuses anything else with an ErrPayload naming both bounds, so a client
 // can say WHICH side is behind rather than showing a connect error.
 const (
-	FrameVersionCurrent = 1
-	FrameVersionMin     = 1
+	FrameVersionCurrent = 2
+	FrameVersionMin     = 2
 )
 
 // Frame types. Direction is fixed per type and is part of the contract: a
@@ -66,6 +73,8 @@ const (
 	FrameResync = "resync" // daemon -> client: Payload is ResyncPayload
 	FramePTY    = "pty"    // BOTH: PTYOutputPayload outbound, PTYInputPayload inbound
 	FrameErr    = "err"    // BOTH: Payload is ErrPayload; on ID when a request failed
+	FrameEvent  = "event"  // daemon -> client: ID is the watch id, Topic the stream, Payload the topic's event
+	FrameReady  = "ready"  // daemon -> client, exactly once: Payload is ReadyData; the connection is authenticated
 )
 
 // FrameDir is the set of directions a frame type may legitimately travel in.
@@ -94,7 +103,7 @@ func FrameDirections(t string) FrameDir {
 	switch t {
 	case FrameReq, FrameSub, FrameUnsub:
 		return DirToDaemon
-	case FrameResp, FrameResync:
+	case FrameResp, FrameResync, FrameEvent, FrameReady:
 		return DirToClient
 	case FramePTY, FrameErr:
 		return DirToDaemon | DirToClient
@@ -213,7 +222,7 @@ type PTYInputPayload struct {
 // MinV/MaxV are set only on CodeUnsupportedVersion, and they are what let the
 // app name the side that is behind ("update lola on <host>" versus "update Lola
 // from TestFlight") instead of showing a connect error. THIS STRUCT'S FIELD
-// LAYOUT IS FROZEN AT V=1 FOREVER: it has to stay decodable by a peer that
+// LAYOUT HAS BEEN FROZEN SINCE V=1 AND STAYS FROZEN: it has to stay decodable by a peer that
 // understands nothing else about the version it is talking to, which is the
 // whole reason a version mismatch can produce a named screen rather than a
 // socket error. Both bounds are >= 1 today, so omitempty never drops them.
@@ -235,7 +244,29 @@ const (
 	CodeFrameTooLarge      = "frame_too_large"
 	CodeRateLimited        = "rate_limited"
 	CodeInternal           = "internal"
+
+	// Pairing and authentication refusals. After a completed TLS handshake a
+	// device that cannot be admitted gets CodeNotPaired and a close; the three
+	// Pair* codes answer a remote.pair request.
+	CodeNotPaired    = "not_paired"
+	CodePairRejected = "pair_rejected"
+	CodePairExpired  = "pair_expired"
+	CodePairFailed   = "pair_failed"
 )
+
+// ReadyData is the body of the ready frame: the daemon's statement that this
+// connection is authenticated. TLS 1.3 cannot tell a client it was accepted, so
+// a client counts a path as connected only when ready arrives. Tiers is what
+// this device may do now (the client hides the rest); it is display, never the
+// authority: every frame is authorized by the daemon again. Via is "lan" or
+// "relay"; Host is the daemon's hostname, display only.
+type ReadyData struct {
+	DeviceID string   `json:"deviceId"`
+	Name     string   `json:"name"`
+	Tiers    []string `json:"tiers"`
+	Via      string   `json:"via"`
+	Host     string   `json:"host"`
+}
 
 // MaxFrameBytes bounds one encoded frame body (the JSON, excluding the length
 // prefix) in EITHER direction. It matches the 1 MiB cap internal/daemon's

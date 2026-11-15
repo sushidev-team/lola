@@ -183,6 +183,14 @@ func (d *Daemon) recordCheckpoint(ctx context.Context, id, event string) {
 	d.recordCheckpointAt(ctx, id, event, time.Now())
 }
 
+// pokeDiff ticks diff:<id> for watchers. A poke is non-blocking and free when nothing is
+// watched.
+func (d *Daemon) pokeDiff(id, cause string) {
+	if d.watch != nil {
+		d.watch.PokeDiff(id, cause)
+	}
+}
+
 // recordCheckpointAt takes at, the moment the hook arrived, for the receipt's place in the
 // story. The snapshot and the diff can outlast the send a Stop hook flushes, and a receipt
 // stamped when it was written would sort after the next message and close the wrong turn.
@@ -211,6 +219,8 @@ func (d *Daemon) recordCheckpointAt(ctx context.Context, id, event string, at ti
 
 	cctx, cancel := context.WithTimeout(ctx, checkpointTimeout)
 	defer cancel()
+	// The turn's snapshot is committed once this returns, whichever way it went.
+	defer d.pokeDiff(id, protocol.DiffCauseCheckpoint)
 	if s.Stack {
 		d.stackRecordCheckpoint(cctx, s, event)
 		if event == "stop" {
@@ -488,6 +498,7 @@ func (d *Daemon) handleRestoreCheckpoint(ctx context.Context, a protocol.Checkpo
 		return protocol.RestoreCheckpointData{}, err
 	}
 	d.logf("", "checkpoint: %s restored to #%d (previous state kept as #%d)", s.ID, a.Seq, safety.Seq)
+	d.pokeDiff(s.ID, protocol.DiffCauseRestore)
 	msg := fmt.Sprintf("restored checkpoint #%d — the state before it is checkpoint #%d", a.Seq, safety.Seq)
 	if !s.IsAgentless() {
 		msg += "; the agent still remembers the discarded changes, so tell it before its next turn"

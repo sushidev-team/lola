@@ -60,6 +60,9 @@ type Data struct {
 	// CreateCodes: one-time codes that let a member create an org through
 	// the API, by code hash (see tokens.go).
 	CreateCodes map[string]*CreateCode `json:"create_codes,omitempty"`
+	// Relay: rendezvous entries by rv; an rv is unique hub-wide (see
+	// relay.go).
+	Relay map[string]*RelayEntry `json:"relay,omitempty"`
 }
 
 // Org is a team.
@@ -258,6 +261,9 @@ func (d *Data) init() {
 	}
 	if d.CreateCodes == nil {
 		d.CreateCodes = map[string]*CreateCode{}
+	}
+	if d.Relay == nil {
+		d.Relay = map[string]*RelayEntry{}
 	}
 }
 

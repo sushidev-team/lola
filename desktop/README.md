@@ -80,7 +80,7 @@ The settings cleanup keeps the configuration format and saved values intact:
 | Linear state updates and comments | Optional workflow automation; Linear updates. |
 | Reviews | Compact provider cards group run settings and findings. Timeout, live viewing and fallback order are under Advanced settings; disabled cards retain their configuration. |
 | Summaries and status interpretation | Optional AI features; tuning appears only when enabled and survives disabling. |
-| Linear credentials, notifications, phone access and themes | Separate connections and presentation choices; grouped navigation. |
+| Linear credentials, notifications, Phones and themes | Separate connections and presentation choices; grouped navigation. Phones edits `[remote]` (including `relay`) and, through `PhonesService`, pairs a phone (QR, then type the code the phone shows), lists devices, edits tiers and revokes. |
 
 This removes redundant first-run decisions and implementation-oriented prose
 without removing supported workflows or rewriting advanced settings on save.

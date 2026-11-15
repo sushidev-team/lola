@@ -61,6 +61,7 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 		}
 		resp := d.handle(ctx, req)
 		if enc.Encode(resp) != nil {
+			d.abandonReply(req, resp)
 			return
 		}
 		if req.Cmd == "stop" && resp.OK {
@@ -71,6 +72,10 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 }
 
 func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Response {
+	// Watch, attachments and the other push-side commands (server_push.go).
+	if r, ok := d.handlePush(ctx, req); ok {
+		return r
+	}
 	switch req.Cmd {
 	case "comparisonTemplate", "comparisonPrepare", "comparisonReport":
 		return d.handleComparison(req)
@@ -144,26 +149,97 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
-	case "pairBegin":
-		// The reply CONTAINS a bearer key, so nothing on this path logs the
-		// request or the response — handleConn does not, and neither does this.
-		// internal/remote denies the command for every remote peer
-		// unconditionally, so adding the case here reaches the unix socket only.
-		data, err := d.handlePairBegin(ctx)
+	case protocol.CmdPairBegin:
+		// The reply carries the pairing secret inside the QR payload, so nothing
+		// on this path logs the request or the response — handleConn does not,
+		// and neither does this. Local-only: internal/remote tiers it never, so
+		// a phone cannot open a pairing window.
+		var a protocol.PairBeginArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handlePairBegin(ctx, a)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
-	case "regenerateRemoteKey":
-		// Rolls M1's shared bearer key and rebuilds the listener, which is the
-		// only revocation this milestone has. Denied for every remote peer in
-		// internal/remote, so like pairBegin it reaches the unix socket only: a
-		// phone able to roll the key could lock its operator out while keeping
-		// the connection it already holds.
-		if err := d.handleRegenerateRemoteKey(ctx); err != nil {
+	case protocol.CmdPairStatus:
+		var a protocol.PairStatusArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handlePairStatus(ctx, a)
+		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
-		return protocol.Response{OK: true}
+		return dataResponse(data)
+	case protocol.CmdPairConfirm:
+		// The typed confirmation code is in the args: never logged.
+		var a protocol.PairConfirmArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handlePairConfirm(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdPairReject:
+		var a protocol.PairRejectArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handlePairReject(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdDevices:
+		return dataResponse(d.handleDevices())
+	case protocol.CmdRevokeDevice:
+		var a protocol.RevokeDeviceArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handleRevokeDevice(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdSetDeviceTiers:
+		var a protocol.SetDeviceTiersArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handleSetDeviceTiers(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdSessionTimeline:
+		// Reachable remotely: the phone-safe read of a Conversation timeline.
+		var a protocol.SessionTimelineArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handleSessionTimeline(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdRelayCred:
+		// A phone's own relay credential. The answer is about the asking
+		// device, so it exists only on a phone's connection: the handler reads
+		// the peer from ctx and refuses the unix socket.
+		var a protocol.RelayCredArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handleRelayCred(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "panes":
 		// Reachable remotely BY DESIGN: a phone that cannot enumerate panes
 		// cannot draw a tab strip. Read-only.
@@ -175,10 +251,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 	case "shellCreate":
 		// Also reachable remotely by design, and the most privileged thing on
 		// that surface: a shell in a worktree runs as the developer, with their
-		// gh token and SSH agent in reach. The operator decided phones get shell
-		// access (mobile/PLAN.md); M1 has no capability tiers, so every paired
-		// device has this. It is the first command that should sit behind the
-		// `shell` capability when M2 brings per-device identities.
+		// gh token and SSH agent in reach. It sits behind the `shell` tier
+		// (internal/remote), which a device holds only when it was granted it.
 		data, err := d.handleShellCreate(ctx, req.Session, req.Cols, req.Rows)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
@@ -979,6 +1053,14 @@ func dataResponse(v any) protocol.Response {
 	return protocol.Response{OK: true, Data: b}
 }
 
+// decodeArgs unmarshals Request.Args into v; absent args leave v zero.
+func decodeArgs(raw json.RawMessage, v any) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	return json.Unmarshal(raw, v)
+}
+
 // handleReload re-reads config.DefaultPath and applies it live. An invalid
 // config is rejected: the old one keeps running.
 func (d *Daemon) handleReload(ctx context.Context) error {
@@ -1040,19 +1122,25 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// under the lock every tick and every socket command takes would stall the
 	// daemon for the length of a TLS listener's teardown. See reloadRemote for
 	// why a change is a full rebind rather than an in-place mutation.
-	remoteChanged := old.Remote != nc.Remote
+	// A hub join or leave changes whether a relay-only server should exist
+	// without touching [remote], so the answer of Serves is compared too.
+	remoteOld := old.Remote
 	d.mu.Unlock()
 	d.sshOnReload()
 
-	if remoteChanged {
+	serves := nc.Remote.Serves(d.hubRelayJoined(nc.Hub))
+	if remoteOld != nc.Remote || serves != d.remoteServes.Load() {
 		d.reloadRemote()
 	}
+	d.hubRelayNudge()
 	if bctx := d.shutdownCtx; bctx != nil {
 		d.syncHookBridge(bctx)
 	}
 	d.syncWorkers(ctx)
 	d.hubPolicyStale()
 	d.hubNudge() // a join or leave edits [hub] and reloads: act on it now
+	// Display names, dev commands and the project list feed the watched topics.
+	d.watch.PokeGlobal(pokeSessionsAll | pokeProjects | pokeStatus)
 	d.logf("", "config reloaded")
 	return nil
 }
@@ -1072,6 +1160,7 @@ func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) err
 	}
 
 	d.syncWorkers(ctx)
+	d.watch.PokeGlobal(pokeSessionsAll | pokeProjects | pokeStatus)
 	verb := "disabled"
 	if enable {
 		verb = "enabled"

@@ -24,8 +24,11 @@ import (
 // reaction, write-back, gate or agent ever reads it, and agent liveness never derives
 // from it. TestControlLoopNeverImportsAgentfeed keeps it that way.
 //
-// It is pull-driven. talkState moves a viewed session's reader a little every second and
-// agentFeed moves it by wall clock. Nothing runs for a session no client is looking at.
+// It is pull-driven or watch-driven: talkState moves a viewed session's reader a little
+// every second, agentFeed moves it by wall clock, and the push prober (watchprobe.go)
+// moves it for a session a phone watches. Nothing runs for a session no client is
+// looking at or watching. Its one consumer outside a display is the push path's diff
+// tick (an edit/run item pokes diff:<id>), which is itself display-only.
 
 const (
 	// feedSessions bounds how many sessions keep a reader in memory.
@@ -79,7 +82,32 @@ type feedEntry struct {
 type feedHub struct {
 	mu      sync.Mutex
 	entries map[string]*feedEntry
-	clock   int64
+	// pins counts the watches (talk or feed) holding a session's reader. They live on the
+	// hub, not the entry, so an entry replaced on an agent switch keeps its pin. A pinned
+	// reader is never evicted; the watch hub caps pinned sessions at feedSessions.
+	pins  map[string]int
+	clock int64
+}
+
+// pin keeps a session's reader out of LRU eviction until a matching unpin.
+func (h *feedHub) pin(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pins == nil {
+		h.pins = map[string]int{}
+	}
+	h.pins[id]++
+}
+
+// unpin releases one pin. The count never goes below zero.
+func (h *feedHub) unpin(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pins[id] <= 1 {
+		delete(h.pins, id)
+		return
+	}
+	h.pins[id]--
 }
 
 // feedHubs holds each daemon's hub. The daemon has one, a test has many.
@@ -163,7 +191,7 @@ func (h *feedHub) entry(d *Daemon, t feedTarget) *feedEntry {
 	for len(h.entries) > feedSessions {
 		var oldest *feedEntry
 		for _, c := range h.entries {
-			if c != e && (oldest == nil || c.lastUsed < oldest.lastUsed) {
+			if c != e && h.pins[c.id] == 0 && (oldest == nil || c.lastUsed < oldest.lastUsed) {
 				oldest = c
 			}
 		}
@@ -189,6 +217,12 @@ func (e *feedEntry) advance(ctx context.Context, d *Daemon, budget int64) agentf
 		}
 	}
 	e.mark(d)
+	if len(changed) > 0 && d != nil && d.watch != nil {
+		// The one choke point every reader goes through: a desktop pull that moves the
+		// reader also pushes to a phone watching feed:<id>. A poke takes only the hub's
+		// leaf lock, so it is safe under e.mu.
+		d.watch.PokeSession(e.id, pokeFeed)
+	}
 	return h
 }
 

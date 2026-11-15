@@ -25,6 +25,8 @@
   import { store } from "$lib/store.svelte";
   import { ssh, sshClock } from "$lib/ssh.svelte";
   import { talk } from "$lib/talk.svelte";
+  import { touchHaptic, touchSurface } from "$lib/touchsurface";
+  import { imagePicker } from "$lib/composerattach.svelte";
   import {
     SSH_MAX_SAY_BYTES,
     SSH_REMOTE_OUTLIVES,
@@ -105,6 +107,7 @@
   let tapDown = 0; // when ⌘ went down, 0 once another key has made it a chord
   const runsByDefault = $derived(view.runDefault && !!conn);
   const running = $derived(canRun && runsByDefault !== (held && !!conn));
+  const picker = $derived(imagePicker());
 
   // The swap names the destination, so the field shows that destination's draft. Holding ⌘ is
   // only a preview, and what it would run is the text already there.
@@ -217,7 +220,7 @@
     if (t) setText(text.slice(0, t.from) + text.slice(t.to));
     field?.focus();
   }
-  async function prepareImage(load: () => Promise<{ path: string; thumb: string }>, clip = "") {
+  async function prepareImage(load: () => Promise<{ path: string; thumb: string } | null>, clip = "") {
     const targetView = view;
     const targetDest = dest;
     const pending: Attachment = { kind: "image", value: "", loading: true };
@@ -231,6 +234,11 @@
       const got = await load();
       // Removed, replaced or switched to a different draft: never move the caret or reinsert it.
       if (!stillAttached()) return;
+      // A cancelled pick leaves nothing behind: the reserved reference goes the way a removed tile's does.
+      if (!got) {
+        removeAttachment(n);
+        return;
+      }
       targetView.pastes.set(n, { kind: "image", value: got.path, thumb: got.thumb });
     } catch (err) {
       if (!stillAttached()) return;
@@ -346,7 +354,20 @@
   $effect(() => {
     railState = footer.mono ? undefined : { glyph: footer.glyph, glyphCls: footer.glyphCls, text: footer.text, textCls: footer.textCls, clock };
   });
-  const placeholder = $derived(running && conn ? `Command to run on ${hostName(conn)}` : placeholderFor(composerNow, agent, !!driven));
+  // The phone's CSS lives with its Session screen and keys on that root; this only picks the few
+  // strings and the primary that CSS cannot.
+  const phone = touchSurface();
+  // Working with an empty field, the phone's one round button is Stop.
+  const stopIsPrimary = $derived(phone && footer.left.includes("stop") && ["send", "queue"].includes(footer.primary.act) && !text.trim() && !running);
+  const cardOpen = $derived(composerNow === "card" || composerNow === "modal");
+  // A needs-you dialog only takes keys, so the phone's send is dead while one is open and the card
+  // owns the way to the terminal.
+  const modalNow = $derived(phone && composerNow === "modal");
+  // The phone says it shorter and softer than the desktop's "can't confirm" line.
+  const phoneText = $derived(composerNow === "unproven" || composerNow === "modal" ? "" : footer.text);
+  const stopSendBtn = $derived(phone ? footer.secondary.find((b) => b.act === "stopSend") : undefined);
+  const statusId = $derived(`phone-status-${sessionId}`);
+  const placeholder = $derived(running && conn ? `Command to run on ${hostName(conn)}` : phone && cardOpen ? "Add a note…" : placeholderFor(composerNow, agent, !!driven));
 
   // In flight on a host you drive, with their own Stop: Stop ⌘. stops a turn, not these.
   const inFlight = $derived(view.items.filter((i) => i.block?.status === "running" && i.block?.origin !== "terminal" && i.block?.conn === driven?.id));
@@ -525,6 +546,7 @@
 
   function stop() {
     if (guarded()) return;
+    touchHaptic("rigid");
     talk
       .stop(sessionId)
       .then(() => talk.refresh(sessionId))
@@ -698,7 +720,7 @@
   {b.label}{#if b.keys}{" "}<span class="num opacity-70" aria-hidden="true">{b.keys}</span>{/if}
 {/snippet}
 
-<div class="grid gap-2">
+<div class="grid gap-2" data-composer-root>
   {#if inFlight.length}
     <div class="grid text-sm" data-driving>
       {#each inFlight as it, i (it.id)}
@@ -738,6 +760,17 @@
         <Button size="xs" class="h-5!" onclick={() => { view.agentDraft = ""; view.composerFocus++; }}>Clear</Button>
       </div>
     {/if}
+    <!-- The phone's status line: above the field, wrapping, never cut. "Waiting on the card" is not
+         said there, because the card is the cue. -->
+    {#if phone && (phoneText || stopSendBtn) && composerNow !== "card"}
+      <div class="flex min-w-0 items-center gap-2 text-footnote text-faint" id={statusId} data-phone-status>
+        {#if footer.glyph}<span class="size-2 shrink-0 rounded-full bg-current {footer.glyphCls} {footer.pulse ? 'ssh-pulse motion-reduce:animate-none' : ''}" aria-hidden="true" data-phone-dot></span>{/if}
+        <span class="min-w-0 flex-1 {footer.mono ? 'font-mono' : ''}" data-phone-footer-text>{phoneText}{#if clock}{" "}<span class="num">{clock}</span>{/if}</span>
+        {#if stopSendBtn}
+          <button type="button" class="min-h-11 shrink-0 px-2 text-subhead text-accent disabled:opacity-40" disabled={stopSendBtn.disabled || busy || attachmentsBlocked} onclick={() => onPrimary(stopSendBtn)} data-footer-secondary="stopSend">Stop and send</button>
+        {/if}
+      </div>
+    {/if}
     <!-- The same box in both looks: holding ⌘ must not move the story above it. -->
     {#if pasted.length}
       <ul class="flex flex-wrap gap-2 px-3 pt-2.5" aria-label="Attached to this message" data-attachments>
@@ -746,11 +779,11 @@
           {#if item}
             <li class="group relative size-12" data-attachment={item.kind} aria-busy={item.loading ? true : undefined}>
               {#if item.loading}
-                <span class="grid size-12 place-items-center rounded-md border border-dashed border-edge bg-canvas text-faint" role="status" aria-label="Preparing image {t.n}">
+                <span class="grid size-12 place-items-center rounded-md border border-dashed border-edge bg-canvas text-faint" data-attachment-state="loading" role="status" aria-label="Preparing image {t.n}">
                   <span class="size-5 rounded-full border-2 border-current border-t-transparent motion-safe:animate-spin" aria-hidden="true"></span>
                 </span>
               {:else if item.error}
-                <span class="grid size-12 place-items-center rounded-md border border-warn bg-canvas text-warn" role="img" aria-label="Image {t.n} failed to attach" title={item.error}>
+                <span class="grid size-12 place-items-center rounded-md border border-warn bg-canvas text-warn" data-attachment-state="error" role="img" aria-label="Image {t.n} failed to attach" title={item.error}>
                   <Icon name="triangle-alert" class="size-5" />
                 </span>
               {:else if item.kind === "image" && item.thumb}
@@ -761,10 +794,11 @@
                   <AttachGlyph kind={item.kind} class="size-5" />
                 </span>
               {/if}
-              <span class="num absolute -top-1.5 -right-1.5 grid size-[18px] place-items-center rounded-full text-[11px] font-semibold leading-none text-canvas {attachmentTone(t.n).badge}" aria-hidden="true"><span class="block [text-box:trim-both_cap_alphabetic]">{t.n}</span></span>
+              <span data-attachment-badge class="num absolute -top-1.5 -right-1.5 grid size-[18px] place-items-center rounded-full text-[11px] font-semibold leading-none text-canvas {attachmentTone(t.n).badge}" aria-hidden="true"><span class="block [text-box:trim-both_cap_alphabetic]">{t.n}</span></span>
               <!-- Hand-rolled on purpose: a mark sitting on a corner of a tile, smaller than any Button. -->
               <button
                 type="button"
+                data-attachment-remove
                 class="absolute -top-1.5 -left-1.5 hidden size-[18px] place-items-center rounded-full border border-edge bg-panel text-xs text-faint group-hover:grid group-focus-within:grid hover:text-ink focus-visible:grid"
                 aria-label="Remove attachment {t.n}"
                 onclick={() => removeAttachment(t.n)}
@@ -774,12 +808,15 @@
         {/each}
       </ul>
     {/if}
+    {#if phone && picker && !running}
+      <Button variant="ghost" size="sm" icon class="justify-center!" aria-label="Attach image" title="Attach image" onclick={() => prepareImage(picker)} data-composer-attach><Icon name="plus" size={22} /></Button>
+    {/if}
     <div class="cv-composer-field flex items-start" style:--composer-font={running ? 'var(--font-mono)' : 'var(--font-sans)'} data-composer-field>
       {#if running}<span class="text-prose pr-1.5 font-mono text-ink-2" aria-hidden="true">$</span>{/if}
       <div class="relative min-w-0 flex-1">
         {#if segments.length}
           <div bind:this={mirror} class="composer-text pointer-events-none absolute inset-0 overflow-hidden text-ink" aria-hidden="true" data-field-mirror>
-            {#each segments as seg, i (i)}{#if seg.n}{@const tone = attachmentTone(seg.n)}<span class="relative"><span class="text-transparent">{seg.text}</span><span class="absolute top-1/2 left-1/2 grid size-[15px] -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full text-[10px] font-semibold leading-none {tone.tint} {tone.text}" data-field-ref={seg.n}><span class="block [text-box:trim-both_cap_alphabetic]">{seg.n}</span></span></span>{:else}{seg.text}{/if}{/each}{"\u200b"}
+            {#each segments as seg, i (i)}{#if seg.n}{@const tone = attachmentTone(seg.n)}{@const thumb = phone ? view.pastes.get(seg.n)?.thumb : undefined}<span class="relative"><span class="text-transparent">{seg.text}</span><span class="absolute top-1/2 left-1/2 grid -translate-x-1/2 -translate-y-1/2 place-items-center {phone ? 'h-5 min-w-5 grid-flow-col gap-1 rounded-[6px] bg-edge px-1 text-footnote leading-none text-ink' : `size-[15px] rounded-full text-[10px] font-semibold leading-none ${tone.tint} ${tone.text}`}" data-field-ref={seg.n}>{#if thumb}<img src={thumb} alt="" class="size-4 rounded-[3px] object-cover" />{/if}<span class="block [text-box:trim-both_cap_alphabetic]">{seg.n}</span></span></span>{:else}{seg.text}{/if}{/each}{"\u200b"}
           </div>
         {/if}
         <textarea
@@ -789,7 +826,7 @@
           rows="1"
           spellcheck={!running}
           onscroll={syncMirror}
-          class="composer-text relative block max-h-[min(160px,30cqh)] w-full min-w-0 resize-none overflow-y-auto bg-transparent {segments.length ? 'text-transparent' : 'text-ink'} caret-accent outline-none placeholder:text-placeholder focus-visible:outline-none!"
+          class="composer-text relative block {phone ? 'max-h-[min(9rem,30vh)]' : 'max-h-[min(160px,30cqh)]'} w-full min-w-0 resize-none overflow-y-auto bg-transparent {segments.length ? 'text-transparent' : 'text-ink'} caret-accent outline-none placeholder:text-placeholder focus-visible:outline-none!"
           {placeholder}
           aria-label={placeholder}
           oninput={(e) => inputText(e.currentTarget)}
@@ -821,14 +858,20 @@
          is always there and only coloured in Run, so holding ⌘ cannot move the box. -->
     <div class="cv-composer-actions grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-t {running ? runRule : 'border-transparent'}" data-composer-actions data-footer-state={footer.state}>
       <div class="flex min-w-0 items-center gap-1.5 text-sm" data-footer-left>
-        {#if footer.glyph}<span class="w-3.5 shrink-0 {footer.glyphCls} {footer.pulse ? 'ssh-pulse motion-reduce:animate-none' : ''}" aria-hidden="true" data-footer-glyph><GlyphIcon glyph={footer.glyph} /></span>{/if}
-        <span class="selectable min-w-0 truncate {footer.textCls} {footer.mono ? 'font-mono' : ''}" data-run-prompt={footer.mono ? "" : undefined} data-footer-text title={composerNow === "unproven" ? talkData?.caps?.why : undefined}>{footer.text}{#if clock}{" "}<span class="num inline-block min-w-[6ch]">{clock}</span>{/if}</span>
+        {#if footer.glyph}<span class="w-3.5 shrink-0 {footer.glyphCls} {footer.pulse ? 'ssh-pulse motion-reduce:animate-none' : ''}" aria-hidden="true" data-footer-glyph data-desk-only><GlyphIcon glyph={footer.glyph} /></span>{/if}
+        <span class="selectable min-w-0 truncate {footer.textCls} {footer.mono ? 'font-mono' : ''}" data-run-prompt={footer.mono ? "" : undefined} data-footer-text data-desk-only title={composerNow === "unproven" ? talkData?.caps?.why : undefined}>{footer.text}{#if clock}{" "}<span class="num inline-block min-w-[6ch]">{clock}</span>{/if}</span>
         {#each footer.left as act (act)}
-          {#if act === "stop"}
-            <Button variant="danger" size="xs" class="h-5!" title={stopNote} onclick={stop} data-footer-stop><span aria-hidden="true"><Icon name="square" size={14} /></span> Stop <span class="text-faint">⌘.</span></Button>
+          {#if act === "stop" && stopIsPrimary}
+          <!-- It is the round button on the right. -->
+        {:else if act === "stop" && phone}
+          <!-- The phone has no checkbox Stop: the round button stops, and only when the field is empty. -->
+        {:else if act === "stop"}
+            <Button variant="danger" size="xs" class="h-5!" title={stopNote} onclick={stop} data-footer-stop><span aria-hidden="true"><Icon name="square" size={14} /></span> Stop <span class="text-faint" data-chord>⌘.</span></Button>
+          {:else if act === "terminal" && modalNow}
+            <!-- The dialog card owns "Open terminal". -->
           {:else if act === "terminal"}
             <!-- `pointer-events` and opacity: the way out must keep working while the daemon is down. -->
-            <Button size="xs" class="pointer-events-auto! h-5! opacity-100!" onclick={() => ssh.showAgentTerminal(sessionId)}>Terminal <span class="text-faint">⌘\</span></Button>
+            <Button size="xs" class="pointer-events-auto! h-5! opacity-100!" onclick={() => ssh.showAgentTerminal(sessionId)} data-desk-only>Terminal <span class="text-faint" data-chord>⌘\</span></Button>
           {:else if act === "sendThem"}
             <Button variant="secondary" size="xs" class="h-5!" onclick={() => ssh.sendHeld(sessionId)}>Send them</Button>
           {:else if act === "handBack" && driven}
@@ -837,23 +880,30 @@
             <Button variant="secondary" size="xs" class="h-5!" aria-haspopup="menu" aria-expanded={!!switching} onclick={openSwitch}>Switch agent…</Button>
           {/if}
         {/each}
-        {#if !running}{#key sessionId + (session?.agent || "claude")}<ModelSettings {sessionId} />{/key}{/if}
+        {#if picker && !running}<Button size="xs" icon class="h-5! w-5!" aria-label="Attach image" title="Attach image" onclick={() => prepareImage(picker)} data-footer-attach><AttachGlyph kind="image" class="size-4" /></Button>{/if}
+        {#if !running}{#key sessionId + (session?.agent || "claude")}<span class="contents" data-model-settings><ModelSettings {sessionId} /></span>{/key}{/if}
       </div>
       <div class="flex items-center gap-1">
         {#if footer.hint && composerNow !== "card" && composerNow !== "modal"}<span class="truncate text-sm text-faint" data-footer-hint>{footer.hint}</span>
         {:else if !running && composerNow === "resting"}<span class="cv-compose-hint" data-footer-hint><kbd>⇧ ↵</kbd> new line</span>{/if}
         {#each footer.secondary as b (b.act)}
+          {#if !(phone && b.act === "stopSend")}
           <Button variant="secondary" size="sm" disabled={b.disabled || (busy && b.act !== "revive") || (attachmentsBlocked && ["send", "queue", "stopSend"].includes(b.act))} title={b.act === "run" ? (canRun ? route.note : `Not connected, so nothing can run on ${hostName(conn)}.`) : undefined} onclick={() => onPrimary(b)} data-footer-secondary={b.act}>
             {@render keys(b)}
           </Button>
+          {/if}
         {/each}
       </div>
-      <Button variant={footer.primary.variant} size="md" class="cv-composer-send justify-center!" loading={busy || !!view.sending} disabled={footer.primary.disabled || (busy && footer.primary.act !== "revive") || (attachmentsBlocked && ["send", "queue", "stopSend"].includes(footer.primary.act))} title={footer.primary.act === "run" ? route.note : `${footer.primary.label} ${footer.primary.keys ?? ''}`} onclick={() => onPrimary(footer.primary)} data-footer-primary={footer.primary.act}>
+      {#if stopIsPrimary}
+        <Button variant="danger" size="md" class="cv-composer-send justify-center!" title={stopNote} aria-label="Stop" onclick={stop} data-footer-primary="stop" data-footer-stop><Icon name="square" size={phone ? 12 : 16} /></Button>
+      {:else}
+      <Button variant={footer.primary.variant} size="md" class="cv-composer-send justify-center!" loading={busy || !!view.sending} aria-describedby={modalNow && (phoneText || stopSendBtn) ? statusId : undefined} disabled={modalNow || footer.primary.disabled || (busy && footer.primary.act !== "revive") || (attachmentsBlocked && ["send", "queue", "stopSend"].includes(footer.primary.act))} title={footer.primary.act === "run" ? route.note : `${footer.primary.label} ${footer.primary.keys ?? ''}`} onclick={() => onPrimary(footer.primary)} data-footer-primary={footer.primary.act}>
         {#if footer.primary.act === 'send' || footer.primary.act === 'queue'}
           <span class="sr-only">{footer.primary.label}</span>
           <Icon name="arrow-up" class="size-4" />
         {:else}{@render keys(footer.primary)}{/if}
       </Button>
+      {/if}
     </div>
   </div>
 </div>

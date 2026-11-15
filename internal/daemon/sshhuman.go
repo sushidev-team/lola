@@ -924,6 +924,12 @@ func (d *Daemon) handleSSHAnswer(ctx context.Context, a protocol.SSHAnswerArgs) 
 		if a.Revision != it.Element.Revision {
 			return errors.New("the question has changed since you read it")
 		}
+		// Checked here, under the same lock as the revision: a phone may not
+		// answer a connection-scoped question, and an agent update can scope
+		// one after handleRemote's early read.
+		if it.Element.Conn != "" && isRemoteCall(ctx) {
+			return errSSHAnswerOnMac
+		}
 		answered, err := sshelement.Answer(sshElementFromWire(*it.Element), a.Text, now)
 		if err != nil {
 			return err

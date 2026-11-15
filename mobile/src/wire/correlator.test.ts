@@ -7,6 +7,7 @@ import {
   RequestTimeoutError,
   WireRefusalError,
 } from "./correlator";
+import { isWatchId } from "./events";
 import { FakeChannel } from "./fake";
 import { requestFrame, subFrame, type Frame } from "./protocol";
 
@@ -28,14 +29,14 @@ function harness(opts: { maxInFlight?: number; timeoutMs?: number } = {}) {
 }
 
 const resp = (id: string, data: unknown): Frame => ({
-  v: 1,
+  v: 2,
   type: "resp",
   id,
   payload: { ok: true, data },
 });
 
 const errFrame = (id: string, code: string, message = "", extra: Partial<Frame> = {}): Frame => ({
-  v: 1,
+  v: 2,
   type: "err",
   id,
   payload: { code, message },
@@ -111,7 +112,7 @@ describe("failure surfaces", () => {
     const p = c.request(requestFrame("", "status"));
     const id = ch.last!.id!;
     c.accept({
-      v: 1,
+      v: 2,
       type: "err",
       id,
       payload: { code: "unsupported_version", message: "daemon speaks envelope v1", minV: 1, maxV: 1 },
@@ -127,7 +128,7 @@ describe("failure surfaces", () => {
     const { ch, c } = harness();
     const p = c.request(requestFrame("", "answer", { session: "lola-x", text: "hi" }));
     const id = ch.last!.id!;
-    c.accept({ v: 1, type: "resp", id, payload: { ok: false, error: "session is not parked" } });
+    c.accept({ v: 2, type: "resp", id, payload: { ok: false, error: "session is not parked" } });
     return expect(p).rejects.toBeInstanceOf(DaemonError);
   });
 
@@ -331,15 +332,42 @@ describe("the in-flight cap", () => {
     await expect(d).resolves.toEqual({});
   });
 
-  it("narrows its own cap when the daemon refuses one anyway", () => {
+  it("keeps its cap when a request is refused as rate limited", async () => {
+    // A rate_limited refusal now also comes from the daemon's token buckets, so it
+    // says nothing about how many requests may be in flight.
     const { ch, c } = harness({ maxInFlight: 4 });
     const p = c.request(requestFrame("", "sessions"));
-    c.accept(errFrame(ch.last!.id!, "rate_limited", "too many requests in flight on this connection"));
-    void expect(p).rejects.toBeInstanceOf(WireRefusalError);
+    c.accept(errFrame(ch.last!.id!, "rate_limited", "slow down"));
+    await expect(p).rejects.toBeInstanceOf(WireRefusalError);
 
-    // The next burst stays one below what was just refused.
     for (let i = 0; i < 6; i++) void c.request(requestFrame("", "status"));
-    expect(c.inFlight).toBe(3);
+    expect(c.inFlight).toBe(4);
+  });
+
+  it("rejects only the refused request when a command is denied", async () => {
+    const { ch, c } = harness();
+    const denied = c.request(requestFrame("", "kill"));
+    const other = c.request(requestFrame("", "status"));
+    c.accept(errFrame(ch.sent[0].id!, "denied", "not permitted"));
+    await expect(denied).rejects.toMatchObject({ code: "denied" });
+    c.accept(resp(ch.sent[1].id!, { ok: 1 }));
+    await expect(other).resolves.toEqual({ ok: 1 });
+  });
+});
+
+describe("event streams", () => {
+  it("does not settle a request with an err that ends a stream", () => {
+    const { ch, c } = harness();
+    const p = c.request(requestFrame("", "sessions"));
+    void p.catch(() => {});
+    const id = ch.last!.id!;
+    expect(c.accept(errFrame(id, "frame_too_large", "", { topic: "talk:lola-fe-42" }))).toBe(false);
+    expect(c.inFlight).toBe(1);
+  });
+
+  it("generates ids a watch may carry", () => {
+    const { c } = harness();
+    for (let i = 0; i < 3; i++) expect(isWatchId(c.nextID())).toBe(true);
   });
 });
 
@@ -351,7 +379,7 @@ describe("the pane subscription ack", () => {
     const p = c.request(subFrame("", "lola-fe-42", { cols: 55, rows: 34 }), { expect: "resync" });
     const id = ch.last!.id!;
     c.accept({
-      v: 1,
+      v: 2,
       type: "resync",
       id,
       pane: "lola-fe-42",
@@ -368,7 +396,7 @@ describe("the pane subscription ack", () => {
     void c.request(subFrame("", "lola-fe-42"), { expect: "resync" });
     const id = ch.last!.id!;
     const frame: Frame = {
-      v: 1,
+      v: 2,
       type: "resync",
       id,
       pane: "lola-fe-42",

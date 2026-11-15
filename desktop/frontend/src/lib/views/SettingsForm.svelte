@@ -25,15 +25,15 @@
   import SandboxSettings from "$lib/components/SandboxSettings.svelte";
   import HubSettings, { CLAIMS_LABEL, POLL_LABEL, hubClaimsError, hubPollError } from "$lib/components/hub/HubSettings.svelte";
   import TeamLock from "$lib/components/TeamLock.svelte";
-  import QRCode from "$lib/components/QRCode.svelte";
-  import { store } from "$lib/store.svelte";
+  import PhonesPanel from "$lib/components/phones/PhonesPanel.svelte";
+    import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { overlayClose } from "$lib/overlayClose";
   import { deepEqual } from "$lib/deepEqual";
   import { ConfigService, LinearService } from "@bindings/desktop";
   import type { ReviewKindDTO } from "@bindings/desktop";
-  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, ConnectCodeDTO, TeamPolicyDTO } from "@bindings/desktop/models";
+  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, TeamPolicyDTO } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { appearance, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
   import { terms } from "$lib/terms.svelte";
@@ -85,7 +85,7 @@
     { id: "linear", label: "Linear", group: "Connections" },
     { id: "notify", label: "Notifications", group: "Connections" },
     { id: "sshhosts", label: "SSH hosts", group: "Connections" },
-    { id: "remote", label: "Phone access", group: "Connections" },
+    { id: "remote", label: "Phones", group: "Connections" },
     { id: "hub", label: "Team hub", group: "Connections" },
     { id: "ai", label: "AI", group: "Automation" },
     { id: "review", label: "Review", group: "Automation" },
@@ -704,162 +704,6 @@
     }
   }
 
-  // --- connecting a phone (cmd=pairBegin) -----------------------------------
-  //
-  // The four values this hands over used to be copied by hand out of a log line
-  // and a key file, which is four chances to transpose a character into a
-  // failure that looks exactly like a wrong host. The daemon knows all four
-  // about the listener it is actually running, so the app asks it and draws a
-  // code.
-  //
-  // The whole thing is treated as a secret, because it is one: the code
-  // CONTAINS the bearer key. So it is fetched only when a human presses the
-  // button (never on tab open), it is held in memory and never persisted, the
-  // key's characters need a second explicit press on top of that, and it is
-  // dropped on hide, on leaving the tab and on closing the overlay. What that
-  // buys is the thing an app can actually control — a code left on a screen, in
-  // a screen share, or in a window someone walked past.
-  let connect = $state<ConnectCodeDTO | null>(null);
-  let connectBusy = $state(false);
-  let connectErr = $state("");
-  let connectKeyShown = $state(false);
-  let copied = $state("");
-
-  /**
-   * How long a revealed code stays on screen.
-   *
-   * IT IS A CLOCK BECAUSE THE THING ON SCREEN IS A BEARER CREDENTIAL. Every
-   * other control here is right — nothing is fetched on tab open, the reveal
-   * takes a press, the key's characters take a second one, and it is dropped on
-   * hide, on leaving the tab and on closing the overlay — but all of that
-   * bounded the exposure to "until a human remembers". M2 bounds the equivalent
-   * window to 90 seconds precisely because a displayed credential is a bearer
-   * credential, and M1's is strictly longer-lived: no TTL, not single-use,
-   * never zeroed. So the one thing this app can actually control — a code left
-   * up in a share, a recording, or in front of someone walking past — gets the
-   * same 90 seconds.
-   *
-   * Re-revealing costs one socket round trip: cmd=pairBegin reads in-memory
-   * state, execs nothing and is idempotent.
-   */
-  const CONNECT_REVEAL_MS = 90_000;
-
-  let connectUntil = $state(0);
-  let connectNow = $state(0);
-  const connectLeft = $derived(
-    connectUntil > 0 ? Math.max(0, Math.ceil((connectUntil - connectNow) / 1000)) : 0,
-  );
-  let connectTimer: ReturnType<typeof setInterval> | undefined;
-
-  // --- regenerating the key -------------------------------------------------
-  //
-  // Rolling the bearer key is milestone 1's ONLY revocation, and it is blunt:
-  // every paired phone loses access at once, because every paired phone holds
-  // the same key. The dialog says that plainly rather than offering it as
-  // routine maintenance — M2's per-device revocation is the precise version.
-  //
-  // It goes through the shared `confirm` store like every other irreversible
-  // action in this app, so a shortcut and a button ask the same way.
-  let regenBusy = $state(false);
-  let regenDone = $state("");
-
-  function askRegenerate() {
-    confirm.ask({
-      title: "Regenerate the phone key?",
-      body: "Every phone paired with this daemon loses access immediately.",
-      detail:
-        "Milestone 1 authenticates every phone with one shared key, so there is no way to revoke a single device. Each phone has to scan a new code afterwards.",
-      confirmLabel: "Regenerate",
-      onConfirm: () => void regenerateKey(),
-    });
-  }
-
-  async function regenerateKey() {
-    regenBusy = true;
-    connectErr = "";
-    regenDone = "";
-    try {
-      await ConfigService.RegenerateRemoteKey();
-      // Whatever is on screen describes the OLD key, so it is dropped rather
-      // than left looking valid — a stale code scans cleanly and is then
-      // refused, which from the phone is indistinguishable from a bad read.
-      hideConnect();
-      regenDone = "New key in place. The listener was restarted; press Show code for the new one.";
-    } catch (e) {
-      connectErr = String(e);
-    } finally {
-      regenBusy = false;
-    }
-  }
-
-  function stopConnectTimer() {
-    if (connectTimer !== undefined) clearInterval(connectTimer);
-    connectTimer = undefined;
-  }
-
-  async function revealConnect() {
-    connectBusy = true;
-    connectErr = "";
-    try {
-      connect = await ConfigService.ConnectCode();
-      // Only a code that is actually on screen runs a clock. A `problem` answer
-      // carries no key, and an error carries nothing at all.
-      if (connect?.code) {
-        connectNow = Date.now();
-        connectUntil = connectNow + CONNECT_REVEAL_MS;
-        stopConnectTimer();
-        connectTimer = setInterval(() => {
-          connectNow = Date.now();
-          if (connectNow >= connectUntil) hideConnect();
-        }, 1000);
-      }
-    } catch (e) {
-      connect = null;
-      connectErr = String(e);
-    } finally {
-      connectBusy = false;
-    }
-  }
-
-  function hideConnect() {
-    stopConnectTimer();
-    connectUntil = 0;
-    connect = null;
-    connectErr = "";
-    connectKeyShown = false;
-    copied = "";
-  }
-
-  async function copyConnect(what: string, value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      copied = what;
-      // A one-shot confirmation, not a lasting state: the point is to say the
-      // press registered, and a "copied" that stays on screen stops meaning
-      // anything after the second field.
-      setTimeout(() => {
-        if (copied === what) copied = "";
-      }, 1500);
-    } catch {
-      copied = "";
-    }
-  }
-
-  /** The first host is the one the code tells a phone to dial. */
-  const connectHost = $derived(connect?.hosts?.[0] ?? "");
-
-  // Leaving the tab drops it. Without this the code survives behind whatever
-  // tab is opened next and comes back on screen when Remote is opened again —
-  // a reveal nobody performed.
-  $effect(() => {
-    if (tab !== "remote" && connect) hideConnect();
-  });
-
-  // The overlay is mounted inside an {#if} in App.svelte, so closing it really
-  // does destroy this component — but an interval outlives a component that
-  // forgot to clear it, and this one calls hideConnect() on a $state.
-  $effect(() => stopConnectTimer);
-
   async function migrateReview() {
     try {
       await ConfigService.MigrateReview();
@@ -876,19 +720,6 @@
 
 {#snippet head(label: string)}
   <h3 class="settings-heading">{label}</h3>
-{/snippet}
-
-{#snippet connectRow(caption: string, shown: string, value: string)}
-  <!-- `shown` and `value` are separate so the key can be masked on screen and
-       still copy in full: a row that copies its own dots is worse than no copy
-       button, and one that reveals to copy defeats the mask. -->
-  <div class="grid grid-cols-[7rem_1fr_auto] items-center gap-2">
-    <span class="text-sm text-faint">{caption}</span>
-    <span class="truncate font-mono text-sm text-ink" title={caption}>{shown}</span>
-    <Button size="xs" onclick={() => copyConnect(caption, value)}>
-      {copied === caption ? "Copied" : "Copy"}
-    </Button>
-  </div>
 {/snippet}
 
 {#snippet areaRow(caption: string, value: string[] | null, onChange: (v: string[]) => void, placeholder = "", hint = "")}
@@ -1331,7 +1162,7 @@
         <SSHHostSettings onDirty={(v) => (sshHostDirty = v)} />
       {:else if tab === "remote"}
         <section>
-          {@render head("Phone access")}
+          {@render head("Phones")}
           <SettingsGroup title="Connection" description="Let the Lola mobile app access sessions on this Mac.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.remoteEnabled} />
@@ -1371,19 +1202,6 @@
 
           </SettingsGroup>
           <SettingsGroup title="Network sharing">
-            <!-- The bind rail's one hole. Two keys have to agree — this AND a
-                 non-loopback bind — so a config that merely says "lan" still
-                 binds loopback. It is a config key rather than an environment
-                 variable because the daemon is normally started by the restart
-                 button a few inches from here, which cannot set one. -->
-            <div class="pt-1">
-              <label class="flex cursor-pointer items-center gap-2">
-                <Checkbox bind:checked={d.remoteInsecureLan} />
-                <span>Allow a LAN bind</span>
-              </label>
-              <div class="ml-6"><HelpText label="Allow a LAN bind" summary="Shared key sent unencrypted." detail="Allows a physical phone to reach the configured network address. This development mode sends the shared key in the clear. The Simulator does not need it." /></div>
-            </div>
-
             <!-- A DISCLOSURE rather than a convenience, which is why it is off
                  by default and why the copy leads with what it announces. What
                  it buys is RECONNECTION, not pairing: the key and the pin
@@ -1410,81 +1228,7 @@
               <div class="ml-6"><HelpText label="Publish dev servers of the active session" summary="Dev servers accessible on your network." detail="Shares the active session’s local dev servers on one private interface and a temporary port. Anyone on that network can reach them while the session is active." /></div>
             </div>
           </SettingsGroup>
-          <SettingsGroup title="Pairing">
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <div class="copy text-sm text-faint"><HelpText label="connect code" summary="Scan with the mobile app." detail="The code contains the running listener’s address and credentials. Save connection settings before generating a code." /></div>
-              </div>
-              {#if connect || connectErr}
-                <div class="flex shrink-0 items-center gap-2">
-                  {#if connectLeft > 0}
-                    <!-- Says the clock exists, so the reveal disappearing is a
-                         rule rather than a glitch. `num` keeps the countdown
-                         from reflowing the button beside it. -->
-                    <span class="num text-sm text-faint">Hides in {connectLeft}s</span>
-                  {/if}
-                  <Button size="sm" onclick={hideConnect}>Hide</Button>
-                </div>
-              {:else}
-                <Button variant="primary" size="sm" loading={connectBusy} onclick={revealConnect}>Show code</Button>
-              {/if}
-            </div>
-
-            <!-- Regenerating sits BESIDE the reveal rather than inside it: it is
-                 not a step in connecting a phone, it is the undo for having
-                 connected one. `ghost` keeps it quieter than Show code, which is
-                 the action someone actually came here for. -->
-            <div class="mt-2 flex items-center gap-3">
-              <Button size="sm" loading={regenBusy} onclick={askRegenerate}>Regenerate key</Button>
-              <HelpText label="regenerating the key" summary="Disconnects all phones." detail="Reconnect each phone using the new code." />
-            </div>
-            {#if regenDone}
-              <p class="copy mt-2 text-sm text-good">{regenDone}</p>
-            {/if}
-
-            {#if connectErr}
-              <p class="copy mt-3 text-sm text-bad">{connectErr}</p>
-            {:else if connect && connect.problem}
-              <p class="copy mt-3 text-sm text-warn">{connect.problem}</p>
-            {:else if connect}
-              <HelpText label="code privacy" summary="Secret code · hides after 90s."
-                detail="Anyone with this code can control your coding agents. Copying also puts the access key on the clipboard, which may sync to your other devices. Copy something else afterward." />
-              <div class="mt-3 flex flex-wrap items-start gap-4">
-                <QRCode value={connect.code} size={228} label="Connect code" />
-                <div class="min-w-[16rem] flex-1 space-y-1">
-                  {@render connectRow("Address", connectHost, connectHost)}
-                  {@render connectRow("Port", String(connect.port), String(connect.port))}
-                  {@render connectRow("SPKI pin", connect.pin, connect.pin)}
-                  {@render connectRow(
-                    "Access key",
-                    connectKeyShown ? connect.key : "•".repeat(Math.min(connect.key.length, 32)),
-                    connect.key,
-                  )}
-                  <div class="flex flex-wrap gap-2 pt-2">
-                    <Button size="sm" onclick={() => (connectKeyShown = !connectKeyShown)}>
-                      {connectKeyShown ? "Hide key" : "Show key"}
-                    </Button>
-                    <!-- The label names what it hands over. The code CONTAINS
-                         the key, so a button reading "Copy code" beside a key
-                         row still drawn as dots implied the mask was a barrier
-                         to more than shoulder-surfing. It is not: the copy is
-                         the whole credential. -->
-                    <Button size="sm" onclick={() => copyConnect("code", connect?.code ?? "")}>
-                      {copied === "code" ? "Copied" : "Copy code (contains the key)"}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-              {#if connect.hosts && connect.hosts.length > 1}
-                <HelpText label="additional addresses" summary="Fallback addresses included." detail={connect.hosts.slice(1).join(", ")} />
-              {/if}
-              {#if connect.insecure}
-                <HelpText label="shared-key access" summary="One key for all phones." detail="Individual phones cannot be revoked separately. Regenerate the key to disconnect them all." />
-              {/if}
-            {/if}
-          </SettingsGroup>
-
-
+          <PhonesPanel bind:relay={d.remoteRelay} />
         </section>
       {:else if tab === "appearance"}
         <section>

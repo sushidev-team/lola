@@ -15,6 +15,47 @@ import (
 type statusTracker struct {
 	mu sync.Mutex
 	m  map[string]*protocol.PollStatus
+	// onChange is called after a mutation, with mu released. It must not block: it is a
+	// watch-hub poke.
+	onChange func()
+}
+
+// setOnChange installs the change hook; nil clears it.
+func (t *statusTracker) setOnChange(fn func()) {
+	t.mu.Lock()
+	t.onChange = fn
+	t.mu.Unlock()
+}
+
+// bindOnChange installs fn only when no hook is set, so a repeat call is harmless.
+func (t *statusTracker) bindOnChange(fn func()) {
+	t.mu.Lock()
+	if t.onChange == nil {
+		t.onChange = fn
+	}
+	t.mu.Unlock()
+}
+
+// changed runs the hook after the lock is released.
+func (t *statusTracker) changed() {
+	t.mu.Lock()
+	fn := t.onChange
+	t.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// pokeStatusOnChange makes every tracker mutation a status/projects poke. Idempotent.
+func (d *Daemon) pokeStatusOnChange() {
+	if d.status == nil {
+		return
+	}
+	d.status.bindOnChange(func() {
+		if d.watch != nil {
+			d.watch.PokeGlobal(pokeStatus | pokeProjects)
+		}
+	})
 }
 
 func newStatusTracker() *statusTracker {
@@ -33,28 +74,32 @@ func (t *statusTracker) ensure(name string) *protocol.PollStatus {
 
 func (t *statusTracker) begin(name string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.ensure(name).Running = true
+	t.mu.Unlock()
+	t.changed()
 }
 
 func (t *statusTracker) end(name string, ranAt time.Time) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	ps := t.ensure(name)
 	ps.Running = false
 	ps.LastRun = ranAt
+	t.mu.Unlock()
+	t.changed()
 }
 
 func (t *statusTracker) setError(name, msg string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.ensure(name).LastError = msg
+	t.mu.Unlock()
+	t.changed()
 }
 
 func (t *statusTracker) setLastSpawn(name string, at time.Time) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.ensure(name).LastSpawn = at
+	t.mu.Unlock()
+	t.changed()
 }
 
 func (t *statusTracker) get(name string) protocol.PollStatus {
@@ -67,6 +112,9 @@ func (t *statusTracker) get(name string) protocol.PollStatus {
 // runtime health check NOW (tmux/git resolvable and the default coding-agent
 // binary on PATH), linearOk is the last known auth state.
 func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
+	// newDaemon binds the tracker's poke; binding again here (idempotent) covers a Daemon
+	// assembled without newDaemon, which still pushes once anything has asked for status.
+	d.pokeStatusOnChange()
 	d.mu.Lock()
 	linOK := d.linOK
 	cfgErr := d.cfgErr

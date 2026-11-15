@@ -14,14 +14,19 @@
 //
 // There are two targets and exactly ONE product, and the split is deliberate.
 // `LolaTransportCore` is the part with no Capacitor and no Network.framework in
-// it — the frame codec, the SPKI extraction, the bearer handshake, the
-// connection-state vocabulary — which is to say everything a test can exercise
+// it — the frame codec, the SPKI extraction, the pairing handshake, the
+// race state machine, the connection-state vocabulary — which is to say everything a test can exercise
 // without a device. `LolaTransportPlugin` is the bridge and the socket. Only
 // the plugin is a product: `cap sync` adds a package's library product to the
 // app target, and exporting two would make which one it picks a question rather
 // than a fact.
 
+import Foundation
 import PackageDescription
+
+// `LOLA_CORE_ONLY=1` builds only `LolaTransportCore` and its tests, so `swift test` runs on a
+// macOS host with no Capacitor binary frameworks (they ship no macOS slice).
+let coreOnly = ProcessInfo.processInfo.environment["LOLA_CORE_ONLY"] == "1"
 
 // The package name and the library product name must BOTH be "LolaTransport",
 // and neither is a free choice. `cap sync` derives that identifier from the npm
@@ -35,16 +40,39 @@ import PackageDescription
 // entirely. @capacitor/keyboard shows the same convention: package
 // CapacitorKeyboard, product CapacitorKeyboard, target KeyboardPlugin. The
 // TARGET names below are ours and stay descriptive.
+
+let pluginTargets: [Target] = coreOnly ? [] : [
+    .target(
+        name: "LolaTransportPlugin",
+        dependencies: [
+            "LolaTransportCore",
+            .product(name: "Capacitor", package: "capacitor-swift-pm"),
+            .product(name: "Cordova", package: "capacitor-swift-pm")
+        ],
+        path: "ios/Sources/LolaTransportPlugin",
+        // The development URL hand-off (`lola-dev://connect?...`) exists only
+        // where this is defined, and it is defined only for the debug
+        // configuration. It is an OWN condition rather than a reliance on
+        // `DEBUG` because CocoaPods defines DEBUG for its own Debug
+        // configuration, which would arm the path under an integration the
+        // podspec says is without it. See the header of LolaDevLink.swift.
+        swiftSettings: [
+            .define("LOLA_DEV_LINK", .when(configuration: .debug))
+        ]
+    )
+]
+
 let package = Package(
     name: "LolaTransport",
-    platforms: [.iOS(.v15)],
-    products: [
+    // CryptoKit is available from macOS 10.15 and Core builds on a macOS host.
+    platforms: [.iOS(.v15), .macOS(.v13)],
+    products: coreOnly ? [] : [
         .library(
             name: "LolaTransport",
             targets: ["LolaTransportPlugin"]
         )
     ],
-    dependencies: [
+    dependencies: coreOnly ? [] : [
         // The version window must agree with the Capacitor the app resolved in
         // `ios/App/CapApp-SPM/Package.swift`. Capacitor ships this package as
         // binary xcframeworks, so a mismatch is a link error rather than a
@@ -55,38 +83,8 @@ let package = Package(
         .target(
             name: "LolaTransportCore",
             path: "ios/Sources/LolaTransportCore"
-        ),
-        .target(
-            name: "LolaTransportPlugin",
-            dependencies: [
-                "LolaTransportCore",
-                .product(name: "Capacitor", package: "capacitor-swift-pm"),
-                .product(name: "Cordova", package: "capacitor-swift-pm")
-            ],
-            path: "ios/Sources/LolaTransportPlugin",
-            // The development URL hand-off (`lola-dev://connect?...`) exists
-            // only where this is defined, and it is defined only for the debug
-            // configuration. See the header of LolaDevLink.swift for what it is
-            // and why it is fenced.
-            //
-            // It is an OWN condition rather than a reliance on `DEBUG` because
-            // Xcode's package-target settings are not the app target's: whether
-            // `SWIFT_ACTIVE_COMPILATION_CONDITIONS` reaches a dependency is a
-            // property of the integration, and a feature that silently vanishes
-            // from a debug build is worse than one that is absent on purpose.
-            // `.when(configuration: .debug)` is a fact of the manifest, so it
-            // travels with the package.
-            //
-            // It is also the ONLY condition. The gate used to read
-            // `#if LOLA_DEV_LINK || DEBUG`, on the theory that accepting DEBUG
-            // as well cost nothing — but CocoaPods defines DEBUG for its own
-            // Debug configuration, so that spare condition quietly armed the
-            // path under exactly the integration the podspec said it was absent
-            // from. One switch, named here, is what makes both comments true.
-            swiftSettings: [
-                .define("LOLA_DEV_LINK", .when(configuration: .debug))
-            ]
-        ),
+        )
+    ] + pluginTargets + [
         .testTarget(
             name: "LolaTransportCoreTests",
             dependencies: ["LolaTransportCore"],

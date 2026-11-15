@@ -22,7 +22,7 @@
   {#if health === "partial"}
     <p class="flex h-6 items-center gap-2 text-sm text-faint" data-feed-notice="partial">
       Some of this conversation could not be read. The terminal has all of it.
-      <Button size="xs" onclick={() => ssh.showAgentPane(sessionId)}>Terminal <span class="text-faint" aria-hidden="true">⌘\</span></Button>
+      <Button size="xs" onclick={() => ssh.showAgentPane(sessionId)}>Terminal <span class="text-faint" aria-hidden="true" data-chord>⌘\</span></Button>
     </p>
   {:else if outdated}
     <p class="flex items-center gap-2 py-2 text-sm text-faint" data-feed-notice="outdated">

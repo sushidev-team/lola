@@ -10,13 +10,16 @@
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import TaskStateIcon from './TaskStateIcon.svelte';
+  import { touchSurface } from '$lib/touchsurface';
 
   function disclose(node: Element) {
     const reduce = !node.animate || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     return slide(node, { duration: reduce ? 0 : 160, easing: cubicOut });
   }
 
-  let { sessionId }: { sessionId: string } = $props();
+  let { sessionId, emptyText = 'Add a task to get started.' }: { sessionId: string; emptyText?: string } = $props();
+  // On the phone the sheet's own title says "Tasks", so the tab reads "To do".
+  const touch = touchSurface();
   const session = $derived(store.sessionById(sessionId));
   const all = $derived(session?.tasks ?? []);
   const tasks = $derived(all.filter(t => t.kind === 'task'));
@@ -251,10 +254,14 @@
     <div class="task-toolbar">
       <div class="task-tabs" role="tablist" aria-label="Tasks and requirements">
         {#each [{id:'tasks',label:'Tasks'}, {id:'requirements',label:'Requirements'}] as t, i}
-          <button type="button" role="tab" id={`${sessionId}-${t.id}-tab`} aria-controls={`${sessionId}-task-panel`} aria-selected={tab === t.id} tabindex={tab === t.id ? 0 : -1} onclick={() => switchTab(t.id)} onkeydown={(event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1-i; switchTab(next ? 'requirements' : 'tasks'); (event.currentTarget.parentElement?.children[next] as HTMLButtonElement)?.focus(); } }}>{t.label}<span class="num">{t.id === 'tasks' ? visibleItems.length ? `${done}/${visibleItems.length}` : '' : unattached.length || ''}</span></button>
+          <button type="button" role="tab" id={`${sessionId}-${t.id}-tab`} aria-controls={`${sessionId}-task-panel`} aria-selected={tab === t.id} tabindex={tab === t.id ? 0 : -1} onclick={() => switchTab(t.id)} onkeydown={(event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : 1-i; switchTab(next ? 'requirements' : 'tasks'); (event.currentTarget.parentElement?.children[next] as HTMLButtonElement)?.focus(); } }}>{t.id === 'tasks' && touch ? 'To do' : t.label}<span class="num">{t.id === 'tasks' ? visibleItems.length ? `${done}/${visibleItems.length}` : '' : unattached.length || ''}</span></button>
         {/each}
       </div>
-      <Button size="xs" disabled={pending || !store.alive} onclick={() => add()} aria-label={tab === 'tasks' ? 'Add task' : 'Add requirement'}><Icon name="plus" size={13} /> Add</Button>
+      {#if touch}
+        <button type="button" class="phone-add" disabled={pending || !store.alive} onclick={() => add()} aria-label={tab === 'tasks' ? 'Add task' : 'Add requirement'}>+ Add</button>
+      {:else}
+        <Button size="xs" disabled={pending || !store.alive} onclick={() => add()} aria-label={tab === 'tasks' ? 'Add task' : 'Add requirement'}><Icon name="plus" size={13} /> Add</Button>
+      {/if}
     </div>
     <div class="task-body" role="tabpanel" id={`${sessionId}-task-panel`} aria-labelledby={`${sessionId}-${tab}-tab`}>
       {#if composing}
@@ -274,7 +281,7 @@
           </div>
         {/if}
         {#if active.length}{#if issueTask}{@render criteria(active, true)}{:else}<ul class="task-list" aria-label="Active tasks">{#each active as task (task.id)}{@render taskRow(task)}{/each}</ul>{/if}
-        {:else if !tasks.length && !composing}<p class="task-hint">Add a task to get started.</p>{/if}
+        {:else if !tasks.length && !composing}{#if touch}<div class="phone-empty" data-empty><Icon name="list-checks" size={28} /><p>{emptyText}</p></div>{:else}<p class="task-hint">{emptyText}</p>{/if}{/if}
         {#if finished.length}<button type="button" class="completed-toggle" aria-expanded={showDone} onclick={() => showDone = !showDone}><Icon name={showDone ? 'chevron-down' : 'chevron-right'} size={12} />Completed <span class="num">{finished.length}</span></button>{#if showDone}<div transition:disclose>{#if issueTask}{@render criteria(finished, true)}{:else}<ul class="task-list" aria-label="Completed tasks">{#each finished as task (task.id)}{@render taskRow(task)}{/each}</ul>{/if}</div>{/if}{/if}
         {#if issueTask}
           {#if issueTask.state === 'checking' && !hasUnmetRequirements(issueTask)}
@@ -370,5 +377,14 @@
   .task-picker button:hover, .task-picker button:focus { background: var(--color-sel); outline: none; }
   button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
   button:disabled { opacity: .45; cursor: not-allowed; }
+  /* Phone only (the sheet's [data-phone-desk] scope; the desktop never sets it): the tabs are the
+     SegmentBar's look, '+ Add' is a 44pt text button and an empty board is a centred block. */
+  :global([data-phone-desk]) .task-tabs { flex: 1; gap: 0; min-height: 32px; padding-inline: 2px; border-radius: 9px; background: var(--color-sel); }
+  :global([data-phone-desk]) .task-tabs button { flex: 1 1 auto; justify-content: center; min-height: 32px; padding: 0 12px; border-bottom: 0; border-radius: 7px; font-size: var(--text-subhead, 0.8125rem); line-height: 1.125rem; font-weight: 600; white-space: nowrap; position: relative; }
+  :global([data-phone-desk]) .task-tabs button::after { content: ""; position: absolute; inset: -6px 0; }
+  :global([data-phone-desk]) .task-tabs [aria-selected='true'] { background: var(--color-panel); color: var(--color-ink); font-weight: 600; border: 0; }
+  .phone-add { flex-shrink: 0; min-width: 44px; min-height: 44px; padding-inline: 4px; color: var(--color-accent); font-size: var(--text-body, 1.0625rem); line-height: 1.5rem; white-space: nowrap; }
+  .phone-empty { display: grid; justify-items: center; gap: 8px; padding-block: 24px; color: var(--color-faint); text-align: center; }
+  .phone-empty p { margin: 0; color: var(--color-ink); font-size: var(--text-headline, 1.0625rem); font-weight: 600; line-height: 1.375rem; }
   @container (max-width: 300px) { .task-tabs { gap: 8px; } .task-tabs button { font-size: 12px; } }
 </style>

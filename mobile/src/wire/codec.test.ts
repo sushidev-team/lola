@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import vectorFile from "./testdata/frames.json";
 import {
   FrameDecoder,
   FrameEmptyError,
@@ -17,14 +16,6 @@ import {
 } from "./codec";
 import { FRAME_HEADER_BYTES, MAX_FRAME_BYTES, type Frame } from "./protocol";
 
-// NOTE ON HOW THIS FILE IS RUN. There is no node_modules under mobile/ yet — the
-// human runs the toolchain once, from the recipe this milestone produces — so
-// these tests were WRITTEN but not executed here. Their subject was nonetheless
-// verified: every golden vector below was produced by the Go codec (which the
-// author did run, via internal/protocol/goldenvectors_test.go) and the encoder
-// was checked against all twenty of them out of band. What has not run is
-// vitest itself.
-//
 // NOTE ON CHARACTER LITERALS. Backslash and control characters are built from
 // char codes rather than written as escapes. It looks odd and it is deliberate:
 // this file's whole subject is the difference between a character and its
@@ -49,7 +40,15 @@ interface GoldenCase {
   hex: string;
 }
 
-const vectors = (vectorFile as unknown as { note: string; cases: GoldenCase[] }).cases;
+// Every frame vector file in testdata/ (frames, events, pairing; tiers.json is a table), the same union the Go
+// loader reads. Sorted by path so a failure names a stable case.
+const files = import.meta.glob<{ cases: GoldenCase[] }>(["./testdata/*.json", "!./testdata/tiers.json"], {
+  eager: true,
+  import: "default",
+});
+const vectors = Object.keys(files)
+  .sort()
+  .flatMap((k) => files[k].cases);
 
 function toHex(b: Uint8Array): string {
   let s = "";
@@ -88,7 +87,7 @@ describe("golden vectors", () => {
 
   it("covers every frame kind", () => {
     const kinds = new Set(vectors.map((c) => c.frame.type));
-    for (const k of ["req", "resp", "sub", "unsub", "resync", "pty", "err"]) {
+    for (const k of ["req", "resp", "sub", "unsub", "resync", "pty", "err", "event", "ready"]) {
       expect(kinds.has(k)).toBe(true);
     }
   });
@@ -167,6 +166,35 @@ describe("the shapes a client gets wrong", () => {
 // ---------------------------------------------------------------------------
 // Go-compatible JSON string escaping
 // ---------------------------------------------------------------------------
+
+describe("push vectors", () => {
+  const byName = new Map(vectors.map((c) => [c.name, c]));
+
+  it("writes topic between pane and seq, and omits it when empty", () => {
+    const json = encodeFrameJSON({ v: 2, type: "event", id: "w", pane: "p", topic: "diff:x", seq: 2, payload: {} });
+    expect(json.indexOf('"pane"')).toBeLessThan(json.indexOf('"topic"'));
+    expect(json.indexOf('"topic"')).toBeLessThan(json.indexOf('"seq"'));
+    expect(encodeFrameJSON({ v: 2, type: "pty", pane: "p" })).not.toContain("topic");
+  });
+
+  it("decodes a topic and refuses one that is not a string", () => {
+    const body = (j: string) => new TextEncoder().encode(j);
+    expect(decodeFrameBody(body('{"v":2,"type":"event","topic":"status","seq":1}')).topic).toBe("status");
+    expect(() => decodeFrameBody(body('{"v":2,"type":"event","topic":5}'))).toThrow(FrameMalformedError);
+    expect(() => decodeFrameBody(body('{"v":2,"type":"event","topic":5}'))).toThrow("topic is not a string");
+  });
+
+  it("reads a sequence number past 2^32 as a safe integer", () => {
+    const f = decodeFrame(fromHex(byName.get("event_seq_large")!.hex))!.frame;
+    expect(f.seq).toBe(4294967297);
+    expect(Number.isSafeInteger(f.seq)).toBe(true);
+  });
+
+  it("carries the topic of a stream-ending err", () => {
+    const f = decodeFrame(fromHex(byName.get("err_stream_too_large")!.hex))!.frame;
+    expect(f).toMatchObject({ type: "err", id: "w7", topic: "talk:lola-fe-42" });
+  });
+});
 
 describe("goJSONString", () => {
   it("uses the short forms Go uses", () => {

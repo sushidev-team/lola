@@ -14,8 +14,12 @@
   import TurnRail from "./TurnRail.svelte";
   import Button from "../Button.svelte";
   import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
+  import { touchSurface } from "$lib/touchsurface";
 
-  let { sessionId, compact = false }: { sessionId: string; compact?: boolean } = $props();
+  // `hideFeedbackBar` leaves the feedback bar to the host (the phone's sticky bar); on the phone
+  // the Review segment owns the review package row, so "Review PR" is not repeated here.
+  let { sessionId, compact = false, hideFeedbackBar = false }: { sessionId: string; compact?: boolean; hideFeedbackBar?: boolean } = $props();
+  const phone = touchSurface();
 
   const tab = $derived(terms.activeTab(sessionId));
   const st = $derived(checkpoints.of(sessionId));
@@ -35,9 +39,9 @@
   });
 </script>
 
-<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]" data-testid="changes-view">
-  <div class="flex justify-end border-b border-edge px-3 py-1"><Button size="xs" onclick={() => reviewWorkspace.open(sessionId)}>Review PR</Button></div>
-  <DiffView {sessionId} {compact} turn={current?.seq ?? 0}>
+<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] {phone ? 'grid-rows-[minmax(0,1fr)]' : 'grid-rows-[auto_minmax(0,1fr)]'}" data-testid="changes-view">
+  {#if !phone}<div class="flex justify-end border-b border-edge px-3 py-1"><Button size="xs" onclick={() => reviewWorkspace.open(sessionId)}>Review PR</Button></div>{/if}
+  <DiffView {sessionId} {compact} {hideFeedbackBar} turn={current?.seq ?? 0}>
     {#snippet comparison()}
       {#if compact && checkpointed && st.list.length}
         <Select class="diff-comparison min-w-0" aria-label="Compare changes" value={turn} onchange={(event) => selectedTurn = Number(event.currentTarget.value)}>

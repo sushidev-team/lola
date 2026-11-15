@@ -36,7 +36,7 @@ func TestDeviceKeyIsGeneratedOnceAndReused(t *testing.T) {
 		t.Errorf("the pin moved between loads: %s then %s", first.SPKIPin(), second.SPKIPin())
 	}
 	if first.SPKIPin() == "" {
-		t.Error("the pin is empty; M2's QR carries it")
+		t.Error("the pin is empty; the pairing QR carries it")
 	}
 }
 
@@ -172,7 +172,13 @@ func TestTLSConfigIsTLS13WithoutResumption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	cfg := dk.TLSConfig()
+	cfg := dk.TLSConfig(func(tls.ConnectionState) error { return nil })
+	if cfg.ClientAuth != tls.RequireAnyClientCert {
+		t.Errorf("ClientAuth = %v, want RequireAnyClientCert", cfg.ClientAuth)
+	}
+	if cfg.VerifyConnection == nil {
+		t.Error("no VerifyConnection: an unpaired certificate would reach the application")
+	}
 	if cfg.MinVersion != tls.VersionTLS13 {
 		t.Errorf("MinVersion %#x, want TLS 1.3", cfg.MinVersion)
 	}

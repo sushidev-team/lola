@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { REPEAT_DELAY_MS, REPEAT_INTERVAL_MS } from "@mobile/lib/keybytes";
   import {
     KEY_COMMIT_MS,
@@ -42,6 +43,7 @@
   // not exist here. Everything else in the app that is an action IS a Button.
   //
   // THE KEYCAP IS 40 POINTS AND ITS TARGET IS 44, WHICH ARE NOT THE SAME BOX.
+  // (The target is now a real 44pt button around a 40pt keycap; see the markup.)
   // The Figma draws the key as `px-[9px] py-2` around an 11px legend, which
   // comes to 31 points — below Apple's minimum for anything a finger has to
   // hit, and this is the densest row of targets in the app, nine keys wide with
@@ -64,7 +66,6 @@
     aria,
     repeats = false,
     latched = false,
-    wide = false,
     disabled = false,
     onfire,
   }: {
@@ -74,7 +75,6 @@
     /** For a modifier key: drawn as held until the next keypress consumes it. */
     latched?: boolean;
     /** A word-width key (esc, tab, home) rather than a glyph-width one. */
-    wide?: boolean;
     /** Nothing can receive the byte: a dead pane, or no connection. */
     disabled?: boolean;
     /** Fire the key. */
@@ -156,40 +156,36 @@
     gesture = undefined;
     clearTimers();
   }
+
+  // A disabled button gets no lift, and an unmounted one no events at all: either
+  // ends a hold, or the repeat would keep firing into a pane that is gone.
+  $effect(() => {
+    if (disabled) stop();
+  });
+  onDestroy(clearTimers);
 </script>
 
-<!-- THE GROUND MOVED FROM `panel` TO `sel`, AND THE BORDER IS GONE WITH IT.
-     The key used to be a panel-coloured cell with a hairline around it, drawn
-     against a panel-coloured bar — so the border was the only thing separating
-     one key from the next, and at arm's length a row of them read as one ruled
-     strip rather than as nine targets. The design fills the key instead and
-     drops the bar a step to `crust`, which is the same trick a physical
-     keyboard uses: the keycap is lighter than the deck it sits in. Two
-     consequences to keep:
+<!-- THE BUTTON IS THE 44-POINT TOUCH BOX AND THE SPAN INSIDE IS THE 40-POINT KEYCAP.
+     Earlier the 44 was a `before:` skirt, invisible to layout and to anything
+     that measures the control; the box is now real: a transparent `h-11` button
+     with 2 points either side, so two keys 4 apart are drawn 8 apart and no two
+     boxes overlap. The legend is `text-subtext`, the quietest text in the app on
+     purpose: nine of them at full contrast under a live pane compete with it.
 
-       * the PRESSED state had to move up rather than down. It was `bg-sel` over
-         `bg-panel`, which is now the resting state, so a press would have been
-         invisible; `bg-edge` with `text-ink` is the next step in the same
-         surface ramp and reads as a key going in.
-       * the latched state keeps `bg-accent-fill` and loses its `border-accent`.
-         The fill is what says "held" and the border was reinforcing it against
-         a ground it now no longer needs to fight.
-
-     `text-subtext` rather than `text-ink`: the legends are the quietest text in
-     the app on purpose — they name keys a person already knows how to use, and
-     nine of them at full contrast under a live pane compete with the pane. -->
+     THE KEYCAP HAS A SURFACE IN EVERY THEME. It used to take `sel`, which on
+     latte is barely a step off the bar's own ground, so the keys vanished into
+     the deck. The fill is the panel surface (white on latte), with a half-point
+     edge and a 1pt under-shadow, so a key reads as a key in all four flavors.
+     Pressed and latched keep their own grounds, which is why the surface is a
+     class applied only to the resting state: a scoped rule would otherwise beat
+     the utilities on specificity. -->
 <button
   type="button"
   {disabled}
   aria-label={aria}
   aria-pressed={latched ? true : undefined}
-  class="relative flex h-10 shrink-0 touch-manipulation items-center justify-center
-         rounded-[7px] px-[9px] font-mono text-sm font-medium transition-colors select-none
-         before:absolute before:-inset-0.5 before:content-['']
-         disabled:opacity-40
-         {wide ? 'min-w-14' : 'min-w-10'}
-         {latched ? 'bg-accent-fill text-accent-ink' : 'bg-sel text-subtext'}
-         {held ? 'bg-edge text-ink' : ''}"
+  class="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center select-none
+         disabled:opacity-40"
   onpointerdown={down}
   onpointermove={move}
   onpointerup={up}
@@ -197,5 +193,14 @@
   onpointerleave={abort}
   oncontextmenu={(e) => e.preventDefault()}
 >
-  {label}
+  <!-- Every key is the same 44 x 40 cap, radius 8, `sel` ground, 15px mono
+       legend: no variable widths. The button around it is the 44pt hit box. -->
+  <span
+    class="flex h-10 w-11 items-center justify-center rounded-lg font-mono text-[15px]
+           font-medium transition-colors
+           {held ? 'bg-edge text-ink' : latched ? 'bg-accent-fill text-accent-ink' : 'bg-sel text-subtext'}"
+  >
+    {label}
+  </span>
 </button>
+

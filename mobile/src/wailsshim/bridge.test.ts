@@ -1,34 +1,55 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ShimBridge } from "./bridge";
+import { ShimBridge, FALLBACK_POLL_MS } from "./bridge";
+
+const POLL_MS = 50;
 import { ChannelTransport } from "./channeltransport";
+import { LinkError } from "./pluginerror";
+import { copy } from "@mobile/lib/copy";
+import { WireRefusalError } from "@mobile/wire/correlator";
 import { On, OffAll } from "./events";
+import { watches } from "./watch";
 import {
   FRAME_PTY,
   FRAME_RESP,
   FRAME_RESYNC,
   FakeChannel,
-  type Endpoint,
   type Frame,
 } from "../wire";
+import { FakeLink } from "./fakelink";
 
 const PANE = "lola-fe-42";
-const endpoint: Endpoint = { host: "127.0.0.1", spkiPin: "pin" };
 
-/** A scripted daemon: answers `sessions`/`projects`/`status` and a pane sub. */
-function daemon(ch: FakeChannel, answers: Record<string, unknown>, fails = new Set<string>()) {
+type Daemon = {
+  answers: Record<string, unknown>;
+  /** Commands whose `watch` result is refused. */
+  refuseWatch: Set<string>;
+  ids: Map<string, string>;
+};
+
+/** A scripted daemon: answers requests, watches and a pane sub. */
+function script(ch: FakeChannel, d: Daemon) {
   ch.onSend = (f: Frame) => {
+    if (f.type === "req" && f.cmd === "watch") {
+      const topics = (f.payload as { args: { topics: string[] } }).args.topics;
+      for (const t of topics) d.ids.set(t, f.id!);
+      ch.deliver({
+        v: 2,
+        type: FRAME_RESP,
+        id: f.id,
+        payload: {
+          ok: true,
+          data: { topics: topics.map((topic) => (d.refuseWatch.has(topic) ? { topic, ok: false, code: "limit" } : { topic, ok: true })) },
+        },
+      });
+      return;
+    }
     if (f.type === "req") {
-      const cmd = f.cmd ?? "";
-      if (fails.has(cmd)) {
-        ch.deliver({ v: 1, type: FRAME_RESP, id: f.id, payload: { ok: false, error: `${cmd} failed` } });
-        return;
-      }
-      ch.deliver({ v: 1, type: FRAME_RESP, id: f.id, payload: { ok: true, data: answers[cmd] } });
+      ch.deliver({ v: 2, type: FRAME_RESP, id: f.id, payload: { ok: true, data: d.answers[f.cmd ?? ""] } });
       return;
     }
     if (f.type === "sub") {
       ch.deliver({
-        v: 1,
+        v: 2,
         type: FRAME_RESYNC,
         id: f.id,
         pane: f.pane,
@@ -39,105 +60,216 @@ function daemon(ch: FakeChannel, answers: Record<string, unknown>, fails = new S
   };
 }
 
-async function wired(answers: Record<string, unknown> = {}, fails?: Set<string>) {
+async function wired(answers: Record<string, unknown> = {}, refuseWatch: string[] = []) {
   const ch = new FakeChannel();
-  daemon(ch, answers, fails);
+  const d: Daemon = { answers, refuseWatch: new Set(refuseWatch), ids: new Map() };
+  script(ch, d);
   const t = new ChannelTransport({ open: async () => ch });
-  await t.connect(endpoint);
-  const b = new ShimBridge({ pauseWhenHidden: false });
+  await t.connect({ daemonId: "d" });
+  const b = new ShimBridge({ fallbackPollMs: POLL_MS });
   b.installTransport(t);
-  return { b, ch, t };
+  return { b, ch, t, d };
 }
+
+const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, status: "working", ...extra });
+const settle = () => new Promise((r) => setTimeout(r, 40));
 
 beforeEach(() => OffAll());
 afterEach(() => OffAll());
 
-describe("the synthesised push loop", () => {
-  it("turns polled answers into the daemon:* events store.svelte.ts subscribes to", async () => {
-    // There is no server push in the remote protocol: no session frame, no
-    // status frame. The event SHAPE is defined by desktop/main.go's pushLoop,
-    // and this is the port of it.
-    const { b } = await wired({
-      sessions: { sessions: [{ id: "s1" }], events: [] },
-      projects: { projects: [{ name: "p" }], groups: [] },
-      status: { polls: [] },
-    });
-    const got: Record<string, unknown> = {};
-    On("daemon:sessions", (e) => (got.sessions = e.data));
-    On("daemon:projects", (e) => (got.projects = e.data));
-    On("daemon:status", (e) => (got.status = e.data));
-
-    await b.pollOnce();
-
-    expect(got.sessions).toEqual({ sessions: [{ id: "s1" }], events: [] });
-    expect(got.projects).toEqual({ projects: [{ name: "p" }], groups: [] });
-    expect(got.status).toEqual({ polls: [] });
+describe("pushed global state", () => {
+  it("watches sessions, projects and status once connected", async () => {
+    const { b, ch } = await wired();
+    b.start();
+    await settle();
+    const watch = ch.sent.filter((f) => f.cmd === "watch");
+    expect(watch).toHaveLength(1);
+    expect((watch[0].payload as { args: { topics: string[] } }).args.topics).toEqual(["sessions", "projects", "status"]);
+    b.stop();
   });
 
-  it("polls projects and status on every OTHER tick, as the desktop does", async () => {
-    const { b, ch } = await wired({ sessions: {}, projects: {}, status: {} });
-    await b.pollOnce();
-    await b.pollOnce();
-    const cmds = ch.sent.filter((f) => f.type === "req").map((f) => f.cmd);
-    expect(cmds.filter((c) => c === "sessions")).toHaveLength(2);
-    expect(cmds.filter((c) => c === "projects")).toHaveLength(1);
+  it("republishes projects and status as the daemon:* events the store subscribes to", async () => {
+    const { b, ch, d } = await wired();
+    const seen: Record<string, unknown> = {};
+    On("daemon:projects", (e) => (seen.projects = e.data));
+    On("daemon:status", (e) => (seen.status = e.data));
+    b.start();
+    await settle();
+    ch.deliverEvent(d.ids.get("projects")!, "projects", 1, { projects: [{ name: "p" }] });
+    ch.deliverEvent(d.ids.get("status")!, "status", 1, { host: "mac" });
+    expect(seen).toEqual({ projects: { projects: [{ name: "p" }] }, status: { host: "mac" } });
+    b.stop();
   });
 
-  it("emits daemon:alive only on a CHANGE", async () => {
-    const { b, t } = await wired({ sessions: {}, projects: {}, status: {} });
-    const seen: boolean[] = [];
-    On<boolean>("daemon:alive", (e) => seen.push(e.data));
-    await b.pollOnce();
-    await b.pollOnce();
-    await t.disconnect();
-    await b.pollOnce();
-    expect(seen).toEqual([false]); // installTransport already announced `true`
+  it("keeps sessions keyed: a reset replaces, a delta upserts and removes, events persist", async () => {
+    const { b, ch, d } = await wired();
+    const out: { sessions: { id: string }[]; events: unknown[] }[] = [];
+    On("daemon:sessions", (e) => out.push(e.data));
+    b.start();
+    await settle();
+    const id = d.ids.get("sessions")!;
+    ch.deliverEvent(id, "sessions", 1, { reset: true, upsert: [row("a"), row("b")], events: [{ id: "a", to: "idle" }] });
+    await settle();
+    ch.deliverEvent(id, "sessions", 2, { upsert: [row("c")], remove: ["a"] });
+    await settle();
+    expect(out.at(-1)!.sessions.map((s) => s.id)).toEqual(["b", "c"]);
+    // A delta carries no `events`, and Activity must not be cleared by it.
+    expect(out.at(-1)!.events).toEqual([{ id: "a", to: "idle" }]);
+    b.stop();
   });
 
-  it("emits daemon:pusherr only on a change, recovery included", async () => {
-    // The banner it raises is dismissible, so re-emitting the same failure
-    // every two seconds would resurrect a banner the user just dismissed.
-    const fails = new Set(["sessions"]);
-    const { b } = await wired({ sessions: {}, projects: {}, status: {} }, fails);
-    const seen: { cmd: string; msg: string }[] = [];
-    On<{ cmd: string; msg: string }>("daemon:pusherr", (e) => seen.push(e.data));
-
-    await b.pollOnce();
-    await b.pollOnce();
-    expect(seen).toHaveLength(1);
-    expect(seen[0].cmd).toBe("sessions");
-    expect(seen[0].msg).toMatch(/sessions failed/);
-
-    fails.delete("sessions");
-    await b.pollOnce();
-    expect(seen).toHaveLength(2);
-    expect(seen[1]).toEqual({ cmd: "sessions", msg: "" }); // recovery
+  it("keeps the identity of a row a delta did not touch", async () => {
+    const { b, ch, d } = await wired();
+    const out: { sessions: object[] }[] = [];
+    On("daemon:sessions", (e) => out.push(e.data));
+    b.start();
+    await settle();
+    const id = d.ids.get("sessions")!;
+    ch.deliverEvent(id, "sessions", 1, { reset: true, upsert: [row("a"), row("b")] });
+    await settle();
+    ch.deliverEvent(id, "sessions", 2, { upsert: [row("b", { status: "idle" })] });
+    await settle();
+    expect(out.at(-1)!.sessions[0]).toBe(out.at(-2)!.sessions[0]);
+    expect(out.at(-1)!.sessions[1]).not.toBe(out.at(-2)!.sessions[1]);
+    b.stop();
   });
 
-  it("reports the daemon unreachable, and emits no error, with no transport", async () => {
-    const b = new ShimBridge({ pauseWhenHidden: false });
+  it("emits one daemon:sessions per animation frame however many events arrive", async () => {
+    const { b, ch, d } = await wired();
+    let n = 0;
+    On("daemon:sessions", () => n++);
+    b.start();
+    await settle();
+    const id = d.ids.get("sessions")!;
+    ch.deliverEvent(id, "sessions", 1, { reset: true, upsert: [row("a")] });
+    ch.deliverEvent(id, "sessions", 2, { upsert: [row("b")] });
+    ch.deliverEvent(id, "sessions", 3, { upsert: [row("c")] });
+    await settle();
+    expect(n).toBe(1);
+    b.stop();
+  });
+
+  it("fetches an omitted row with one `sessions` request", async () => {
+    const { b, ch, d } = await wired({ sessions: { sessions: [row("big", { big: true })] } });
+    const out: { sessions: { id: string }[] }[] = [];
+    On("daemon:sessions", (e) => out.push(e.data));
+    b.start();
+    await settle();
+    ch.deliverEvent(d.ids.get("sessions")!, "sessions", 1, { reset: true, upsert: [row("a")], omitted: ["big"] });
+    await settle();
+    expect(ch.sent.filter((f) => f.cmd === "sessions")).toHaveLength(1);
+    expect(out.at(-1)!.sessions.map((s) => s.id).sort()).toEqual(["a", "big"]);
+    b.stop();
+  });
+
+  it("emits no daemon:pusherr, ever", async () => {
+    const { b } = await wired({}, ["sessions"]);
+    const errs: unknown[] = [];
+    On("daemon:pusherr", (e) => errs.push(e.data));
+    b.start();
+    await settle();
+    b.stop();
+    expect(errs).toEqual([]);
+  });
+});
+
+describe("a topic the daemon refuses", () => {
+  it("is polled on the fallback interval while connected, until the next epoch", async () => {
+    const { b, ch } = await wired({ projects: { projects: [] } }, ["projects"]);
     const seen: unknown[] = [];
-    On("daemon:pusherr", (e) => seen.push(e.data));
-    On<boolean>("daemon:alive", (e) => seen.push(e.data));
-    await b.pollOnce();
-    expect(b.alive()).toBe(false);
-    expect(seen).toEqual([false]); // alive:false, and no pusherr — see pollOnce
+    On("daemon:projects", (e) => seen.push(e.data));
+    b.start();
+    await new Promise((r) => setTimeout(r, POLL_MS * 4));
+    expect(ch.sent.filter((f) => f.cmd === "projects").length).toBeGreaterThanOrEqual(2);
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    await b.onEpoch();
+    const n = ch.sent.filter((f) => f.cmd === "projects").length;
+    await new Promise((r) => setTimeout(r, POLL_MS * 4));
+    expect(ch.sent.filter((f) => f.cmd === "projects").length).toBe(n);
+    b.stop();
+  });
+});
+
+describe("a refused topic that is watched again", () => {
+  it("stops polling once the topic delivers", async () => {
+    const { b, ch, d } = await wired({ projects: { projects: [] } }, ["projects"]);
+    b.start();
+    await new Promise((r) => setTimeout(r, POLL_MS * 2));
+    expect(ch.sent.filter((f) => f.cmd === "projects").length).toBeGreaterThanOrEqual(1);
+    d.refuseWatch.delete("projects");
+    watches.resume();
+    await settle();
+    ch.deliverEvent(d.ids.get("projects")!, "projects", 1, { projects: [{ name: "p" }] });
+    const n = ch.sent.filter((f) => f.cmd === "projects").length;
+    await new Promise((r) => setTimeout(r, POLL_MS * 4));
+    expect(ch.sent.filter((f) => f.cmd === "projects").length).toBe(n);
+    b.stop();
+  });
+});
+
+describe("defaults", () => {
+  it("polls a refused topic every two seconds", () => {
+    expect(FALLBACK_POLL_MS).toBe(2000);
+  });
+});
+
+describe("requests", () => {
+  it("rejects at once while the page is hidden", async () => {
+    const { b, ch } = await wired({ status: {} });
+    const spy = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      await expect(b.request("DaemonService.Status", "status")).rejects.toMatchObject({ name: "ShimNotConnectedError" });
+      expect(ch.sent.filter((f) => f.cmd === "status")).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
-  it("drops an overlapping tick rather than stacking requests", async () => {
-    // The daemon answers a fifth concurrent request with a rate_limited
-    // refusal, so a slow link must not be able to stack polls into one.
-    const ch = new FakeChannel();
-    const held: Frame[] = [];
-    ch.onSend = (f) => held.push(f);
-    const t = new ChannelTransport({ open: async () => ch });
-    await t.connect(endpoint);
-    const b = new ShimBridge({ pauseWhenHidden: false });
-    b.installTransport(t);
+  it("rejects with the not-connected error naming the call when no transport is installed", async () => {
+    const b = new ShimBridge();
+    await expect(b.request("DaemonService.Status", "status")).rejects.toMatchObject({ name: "ShimNotConnectedError" });
+  });
+});
 
-    void b.pollOnce();
-    await b.pollOnce();
-    expect(held.filter((f) => f.cmd === "sessions")).toHaveLength(1);
+describe("refusals speak a sentence", () => {
+  async function rejected(err: Error): Promise<Error> {
+    const { b, t } = await wired({});
+    vi.spyOn(t, "request").mockRejectedValue(err);
+    return (await b.request("X.Y", "x").catch((e: unknown) => e)) as Error;
+  }
+
+  it("keeps the SAME error object, its class and its code", async () => {
+    const orig = new WireRefusalError("unknown_cmd", "");
+    const got = await rejected(orig);
+    expect(got).toBe(orig);
+    expect(got).toBeInstanceOf(WireRefusalError);
+    expect((got as WireRefusalError).code).toBe("unknown_cmd");
+  });
+
+  it("shows only the sentence in String(e) and e.message", async () => {
+    const e = await rejected(new WireRefusalError("unknown_cmd", ""));
+    expect(String(e)).toBe(copy.refusals.update);
+    expect(e.message).toBe(copy.refusals.update);
+  });
+
+  it("denied with a message shows it; without, the no-tier sentence", async () => {
+    const a = await rejected(new WireRefusalError("denied", "Ask on your Mac."));
+    expect(String(a)).toBe("Ask on your Mac.");
+    const b = await rejected(new WireRefusalError("denied", ""));
+    expect(String(b)).toBe(copy.notices.noTier.body);
+  });
+
+  it("a generic code shows its message part, never the code", async () => {
+    const e = await rejected(new WireRefusalError("bad_args", "Pick a project."));
+    expect(String(e)).toBe("Pick a project.");
+    expect(e.message).not.toContain("bad_args");
+  });
+
+  it("the not-connected rejections say offline too", async () => {
+    const b = new ShimBridge();
+    const e = (await b.request("X.Y", "x").catch((err: unknown) => err)) as Error;
+    expect(e.name).toBe("ShimNotConnectedError");
+    expect(String(e)).toBe(copy.refusals.offline);
   });
 });
 
@@ -164,7 +296,7 @@ describe("the pane bridge", () => {
     await b.attachPane(PANE, 55, 30);
     const chunks: string[] = [];
     On<string>(`pty:${PANE}`, (e) => chunks.push(e.data));
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
     expect(chunks).toEqual(["aGk="]);
   });
 
@@ -173,7 +305,7 @@ describe("the pane bridge", () => {
     await b.attachPane(PANE, 55, 30);
     const chunks: string[] = [];
     On<string>(`pty:${PANE}`, (e) => chunks.push(e.data));
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: null } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: null } });
     expect(chunks).toEqual([]);
   });
 
@@ -184,7 +316,7 @@ describe("the pane bridge", () => {
     On(`pty:${PANE}`, () => events.push("paint"));
     On(`pty:${PANE}:exit`, () => events.push("exit"));
     ch.deliver({
-      v: 1,
+      v: 2,
       type: FRAME_RESYNC,
       pane: PANE,
       seq: 2,
@@ -214,7 +346,7 @@ describe("the pane bridge", () => {
     };
 
     // seq 7 against a lastSeq of 1: five frames the bus dropped.
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 7, payload: { data: "aGk=" } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 7, payload: { data: "aGk=" } });
     // The recovery is a chain of awaits (unsub, subscribe, ack), so wait for its
     // last observable step rather than counting microtasks.
     await vi.waitFor(() => {
@@ -236,13 +368,11 @@ describe("the pane bridge", () => {
     const chunks: string[] = [];
     On<string>(`pty:${PANE}`, (e) => chunks.push(e.data));
     await b.detachPane(PANE);
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
     expect(chunks).toEqual([]);
   });
 
   it("drops every pane binding when the transport is replaced", async () => {
-    // Sequence numbers, subscriptions and correlation ids are all properties of
-    // one connection; none of them survives a reconnect.
     const { b } = await wired();
     await b.attachPane(PANE, 55, 30);
     expect(b.paneSubscription(PANE)).toBeDefined();
@@ -251,27 +381,62 @@ describe("the pane bridge", () => {
   });
 
   it("rejects an attach with no transport, naming the call the component made", async () => {
-    const b = new ShimBridge({ pauseWhenHidden: false });
+    const b = new ShimBridge();
     await expect(b.attachPane(PANE, 80, 24)).rejects.toMatchObject({
       name: "ShimNotConnectedError",
     });
   });
 });
 
-describe("polling lifecycle", () => {
-  it("starts, kicks immediately, and stops cleanly", async () => {
-    vi.useFakeTimers();
-    try {
-      const { b, ch } = await wired({ sessions: {}, projects: {}, status: {} });
-      b.startPolling();
-      await Promise.resolve();
-      expect(ch.sent.some((f) => f.cmd === "sessions")).toBe(true);
-      b.stopPolling();
-      const n = ch.sent.length;
-      vi.advanceTimersByTime(10_000);
-      expect(ch.sent.length).toBe(n);
-    } finally {
-      vi.useRealTimers();
-    }
+
+describe("pane bindings across epochs", () => {
+  async function linkedBridge() {
+    const ch = new FakeLink();
+    const d: Daemon = { answers: {}, refuseWatch: new Set(), ids: new Map() };
+    script(ch, d);
+    const t = new ChannelTransport({ open: async () => ch });
+    await t.connect({ daemonId: "d" });
+    const b = new ShimBridge();
+    b.installTransport(t);
+    return { b, ch, t };
+  }
+
+  it("re-subscribes a bound pane with its viewport when the next epoch is ready, without reporting an exit", async () => {
+    const { b, ch } = await linkedBridge();
+    await b.attachPane(PANE, 55, 30);
+    const exits: unknown[] = [];
+    On(`pty:${PANE}:exit`, () => exits.push(1));
+    ch.raiseDown(new LinkError("peer_closed", "x"));
+    expect(b.paneSubscription(PANE)).toBeUndefined();
+    ch.raiseUp({ epoch: 2 });
+    await b.onEpoch();
+    expect(b.paneSubscription(PANE)).toBeDefined();
+    const subs = ch.sent.filter((f) => f.type === "sub");
+    expect(subs).toHaveLength(2);
+    expect(subs[1].payload).toEqual({ cols: 55, rows: 30 });
+    expect(exits).toEqual([]);
+  });
+
+  it("re-subscribes at the size of the last resize, also one made between epochs", async () => {
+    const { b, ch } = await linkedBridge();
+    await b.attachPane(PANE, 55, 30);
+    await b.resizePane(PANE, 60, 32);
+    ch.raiseDown(new LinkError("peer_closed", "x"));
+    await b.resizePane(PANE, 70, 40);
+    ch.raiseUp({ epoch: 2 });
+    await b.onEpoch();
+    const subs = ch.sent.filter((f) => f.type === "sub");
+    expect(subs).toHaveLength(2);
+    expect(subs[1].payload).toEqual({ cols: 70, rows: 40 });
+  });
+
+  it("does not bring back a pane that was detached", async () => {
+    const { b, ch } = await linkedBridge();
+    await b.attachPane(PANE, 55, 30);
+    await b.detachPane(PANE);
+    ch.raiseDown(new LinkError("peer_closed", "x"));
+    ch.raiseUp({ epoch: 2 });
+    await b.onEpoch();
+    expect(ch.sent.filter((f) => f.type === "sub")).toHaveLength(1);
   });
 });

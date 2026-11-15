@@ -150,7 +150,8 @@
   data-turn={turn.id}
   style="margin-top:{folded && afterFolded ? 4 : turn.gap}px;{mounted ? '' : `height:${height}px`}"
 >
-  {#if folded}
+  <!-- A folded turn far off screen is a placeholder too: a long story is hundreds of folds. -->
+  {#if folded && mounted}
     {@const ask = turnAsk(turn)}
     {@const label = foldLabel(turn)}
     <!-- Only what a person typed goes on their side. A background task that opened a turn is not them. -->

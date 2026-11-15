@@ -148,8 +148,8 @@ func TestReviewCaptureRefusesInvalidScopeAndStaleRevisions(t *testing.T) {
 			}
 		})
 	}
-	if hookBridgeCmds[protocol.CmdReviewCapture] || !remote.CommandDenied(protocol.CmdReviewCapture) {
-		t.Fatal("capture must stay human-only")
+	if hookBridgeCmds[protocol.CmdReviewCapture] || remote.TierFor(protocol.CmdReviewCapture) != protocol.TierShell {
+		t.Fatal("capture must stay off the bridge and on the shell tier")
 	}
 }
 

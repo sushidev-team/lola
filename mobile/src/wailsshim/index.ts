@@ -8,7 +8,7 @@
 // know they are talking to a shim.
 
 export { ChannelTransport, type ChannelFactory, type ChannelTransportOptions } from "./channeltransport";
-export { ShimBridge, bridge, DEFAULT_POLL_INTERVAL_MS, type BridgeOptions } from "./bridge";
+export { ShimBridge, bridge, type BridgeOptions } from "./bridge";
 export { useTransport } from "./bridge";
 export { ShimNotConnectedError, UnsupportedOnMobileError, unsupported } from "./errors";
 export { renderResync, renderResyncBase64, utf8ToBase64 } from "./screen";
@@ -20,9 +20,16 @@ export type { WailsEvent, WailsEventCallback } from "./events";
 // than pretend to be a Wails binding.
 export {
   ConfigService,
+  ContextService,
   DaemonService,
   DoctorService,
+  HubService,
   LinearService,
+  PhonesService,
+  ProjectGitService,
+  SandboxLoginService,
+  SSHService,
+  TalkService,
   TermService,
   UpdateService,
 } from "./desktop";

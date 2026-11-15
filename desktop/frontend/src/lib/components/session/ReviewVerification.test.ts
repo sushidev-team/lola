@@ -59,3 +59,37 @@ it('never carries old package results across selection changes and labels stale 
   await waitFor(()=>expect(screen.queryByText('Passed')).toBeNull());
   expect(screen.getByText('Checks apply to this version, not the current PR.')).toBeInTheDocument();expect(screen.queryByRole('button',{name:'Set up check'})).toBeNull();
 });
+
+it('on the phone with labels and no checks: one No checks row, no verdict header, no second refresh',async()=>{
+  const {setTouchSurface}=await import('$lib/touchsurface');
+  setTouchSurface({});
+  try{
+    render(ReviewVerification,{pkg,freshness:'unknown',labels:{verified:'Verified',notVerified:'Not verified'}});
+    await screen.findByText('No checks');
+    expect(screen.queryByText('Not verified')).toBeNull();
+    expect(screen.queryByText('Revision not confirmed')).toBeNull();
+    expect(screen.queryByRole('button',{name:'Refresh checks'})).toBeNull();
+  }finally{setTouchSurface(null);}
+});
+
+it('on the phone: no checks is one row with an Add check button that still sets up a check',async()=>{
+  const {setTouchSurface}=await import('$lib/touchsurface');
+  setTouchSurface({});
+  try{
+    render(ReviewVerification,{pkg,canRun:true,freshness:'current',labels:{verified:'Verified',notVerified:'Not verified'}});
+    await screen.findByText('No checks');
+    expect(screen.queryByText('No checks yet.')).toBeNull();
+    await fireEvent.click(screen.getByRole('button',{name:'Add check'}));
+    await waitFor(()=>expect(screen.getByLabelText('Command')).toHaveFocus());
+  }finally{setTouchSurface(null);}
+});
+
+it('on the phone: no Add check without the shell tier',async()=>{
+  const {setTouchSurface}=await import('$lib/touchsurface');
+  setTouchSurface({});
+  try{
+    render(ReviewVerification,{pkg,canRun:false,freshness:'current'});
+    await screen.findByText('No checks');
+    expect(screen.queryByRole('button',{name:'Add check'})).toBeNull();
+  }finally{setTouchSurface(null);}
+});

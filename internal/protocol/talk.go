@@ -6,8 +6,9 @@ import "time"
 // session, connected to a host or not. Everything here is additive and carried on
 // its own commands, so nothing new reaches SessionInfo and a phone sees no change.
 
-// Conversation commands. All are HUMAN side: they go in SSHHumanCommands, which
-// refuses them at the hook bridge and at remote. Never add one to SSHAgentCommands.
+// Conversation commands. All are HUMAN side: they are listed in TalkCommands, which
+// the hook bridge refuses and internal/remote admits only by tier. Never add one to
+// SSHAgentCommands or SSHHumanCommands.
 const (
 	CmdAgentFeed         = "agentFeed"         // AgentFeedArgs → AgentFeedData
 	CmdAgentFeedOutput   = "agentFeedOutput"   // AgentFeedOutputArgs → AgentFeedOutputData
@@ -19,6 +20,17 @@ const (
 	CmdAgentQueueRelease = "agentQueueRelease" // AgentQueueReleaseArgs → AgentSayData
 	CmdEndedSessions     = "endedSessions"     // no args → EndedSessionsData
 )
+
+// TalkCommands are the Conversation commands: HUMAN side, never on the hook bridge,
+// reachable from a paired phone only by tier (internal/remote/tiers.go). Never add one
+// to SSHAgentCommands or SSHHumanCommands. sshRecall and sshAnswer keep their
+// historical ssh prefix: they act on the Conversation store of ANY session (recall a
+// queued message, answer a question element), not on an SSH host.
+var TalkCommands = []string{
+	CmdAgentFeed, CmdAgentFeedOutput, CmdTalkState, CmdAgentSay, CmdAgentStop,
+	CmdAgentChoose, CmdAgentSetting, CmdAgentQueueRelease, CmdEndedSessions,
+	CmdSSHRecall, CmdSSHAnswer,
+}
 
 // Feed health. Display only.
 const (

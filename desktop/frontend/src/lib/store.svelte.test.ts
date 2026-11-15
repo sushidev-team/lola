@@ -252,6 +252,19 @@ describe("dirty-worktree kill re-asks with force", () => {
     expect(store.flash?.kind).toBe("bad");
   });
 
+  it("flashes the client's sentence and offers no force when the client cannot force a kill", async () => {
+    store.noForceKill = "Uncommitted changes. Remove it on your Mac.";
+    try {
+      Kill.mockRejectedValueOnce(dirty());
+      await store.kill("sess-1");
+      expect(confirm.request).toBeNull();
+      expect(store.flash).toMatchObject({ text: "Uncommitted changes. Remove it on your Mac.", kind: "warn" });
+      expect(Kill).toHaveBeenCalledTimes(1);
+    } finally {
+      store.noForceKill = null;
+    }
+  });
+
   it("does not re-ask when force was already set", async () => {
     Kill.mockRejectedValueOnce(dirty());
     await store.kill("sess-1", true);

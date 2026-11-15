@@ -10,7 +10,7 @@ import (
 
 // handleTalk serves the conversation commands. They are all human-side: the bridge's
 // allowlist and internal/remote's denial both run before this, because every one of
-// them is in protocol.SSHHumanCommands.
+// them is in protocol.TalkCommands.
 func (d *Daemon) handleTalk(ctx context.Context, req protocol.Request) protocol.Response {
 	if req.Cmd != protocol.CmdEndedSessions {
 		// Every other command names a session. Refuse a request that does not here, so no

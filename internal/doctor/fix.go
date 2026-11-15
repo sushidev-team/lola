@@ -32,6 +32,12 @@ const (
 	FixSandboxToken FixID = "sandbox_token"
 	// FixPinPolicyKey: pin the team's policy key in [hub].trusted_policy_keys.
 	FixPinPolicyKey FixID = "pin_policy_key"
+	// FixPhonesRegistry: open Settings, Phones; the registry file is unreadable
+	// or a revocation is unsaved.
+	FixPhonesRegistry FixID = "phones_registry"
+	// FixRelayHubUpgrade: informational; the joined hub has no relay and its
+	// operator must upgrade it.
+	FixRelayHubUpgrade FixID = "relay_hub_upgrade"
 )
 
 // AllFixIDs lists every non-empty FixID, for UIs and the parity tests.
@@ -39,6 +45,6 @@ func AllFixIDs() []FixID {
 	return []FixID{
 		FixStartDaemon, FixInstallGh, FixGhLogin, FixAddProject, FixEnablePoll,
 		FixJoinHub, FixRejoinHub, FixHubChores, FixSandboxProject, FixStartDocker,
-		FixSandboxToken, FixPinPolicyKey,
+		FixSandboxToken, FixPinPolicyKey, FixPhonesRegistry, FixRelayHubUpgrade,
 	}
 }

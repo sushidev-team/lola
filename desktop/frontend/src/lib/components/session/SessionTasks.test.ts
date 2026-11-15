@@ -292,3 +292,21 @@ it('opens task feedback in the real composer, keeps the draft, and sends it thro
   await waitFor(() => expect(talkSvc.Say).toHaveBeenCalledWith({ session: id, text: message, conn: undefined, stopFirst: undefined }));
   await waitFor(() => expect(view.agentDraft).toBe(''));
 });
+
+it('keeps the desktop empty text and Tasks tab, and takes an empty text and a To do tab on touch', async () => {
+  const id = freshSession();
+  const { unmount } = render(SessionTasks, { sessionId: id });
+  expect(screen.getByText('Add a task to get started.')).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: /^Tasks/ })).toBeInTheDocument();
+  unmount();
+  const { setTouchSurface } = await import('$lib/touchsurface');
+  setTouchSurface({});
+  try {
+    render(SessionTasks, { sessionId: id, emptyText: 'No tasks.' });
+    expect(screen.getByText('No tasks.')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^To do/ })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /^Tasks/ })).toBeNull();
+  } finally {
+    setTouchSurface(null);
+  }
+});

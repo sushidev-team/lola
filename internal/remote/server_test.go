@@ -20,7 +20,7 @@ func TestReqFrameReachesHandleAndEchoesID(t *testing.T) {
 		return protocol.Response{OK: true, Data: json.RawMessage(`{"seen":"` + req.Cmd + `"}`)}
 	}
 
-	r.req("c7", "sessions", protocol.Request{Session: "lola-fe-42"})
+	r.req("c7", "panes", protocol.Request{Session: "lola-fe-42"})
 
 	f := r.next()
 	if f.Type != protocol.FrameResp {
@@ -33,12 +33,12 @@ func TestReqFrameReachesHandleAndEchoesID(t *testing.T) {
 	if err := json.Unmarshal(f.Payload, &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !resp.OK || string(resp.Data) != `{"seen":"sessions"}` {
+	if !resp.OK || string(resp.Data) != `{"seen":"panes"}` {
 		t.Errorf("got %+v, want the handler's own response", resp)
 	}
 	got := r.handler.requests()
-	if len(got) != 1 || got[0].Cmd != "sessions" || got[0].Session != "lola-fe-42" {
-		t.Errorf("handler saw %+v, want one sessions request carrying the session id", got)
+	if len(got) != 1 || got[0].Cmd != "panes" || got[0].Session != "lola-fe-42" {
+		t.Errorf("handler saw %+v, want one panes request carrying the session id", got)
 	}
 }
 
@@ -48,14 +48,14 @@ func TestReqFrameReachesHandleAndEchoesID(t *testing.T) {
 // executed as another.
 func TestEnvelopeCmdWinsOverPayloadCmd(t *testing.T) {
 	r := newRig(t)
-	r.req("c1", "sessions", protocol.Request{Cmd: "kill", Session: "lola-fe-42"})
+	r.req("c1", "panes", protocol.Request{Cmd: "kill", Session: "lola-fe-42"})
 	r.next()
 
 	got := r.handler.requests()
 	if len(got) != 1 {
 		t.Fatalf("handler saw %d requests, want 1", len(got))
 	}
-	if got[0].Cmd != "sessions" {
+	if got[0].Cmd != "panes" {
 		t.Errorf("handler saw cmd %q; the payload must never override the envelope", got[0].Cmd)
 	}
 }
@@ -86,13 +86,13 @@ func TestConcurrentRequestsDoNotSerialize(t *testing.T) {
 	r := newRig(t)
 	release := make(chan struct{})
 	r.handler.fn = func(_ context.Context, req protocol.Request) protocol.Response {
-		if req.Cmd == "openTicket" {
+		if req.Cmd == "revive" {
 			<-release
 		}
 		return protocol.Response{OK: true}
 	}
 
-	r.req("slow", "openTicket", protocol.Request{})
+	r.req("slow", "revive", protocol.Request{})
 	r.req("fast", "sessions", protocol.Request{})
 
 	f := r.next()
@@ -113,7 +113,7 @@ func TestRequestOverflowIsRefusedRatherThanQueued(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, reqConcurrency)
 	r.handler.fn = func(_ context.Context, req protocol.Request) protocol.Response {
-		if req.Cmd == "openTicket" {
+		if req.Cmd == "revive" {
 			started <- struct{}{}
 			<-release
 		}
@@ -121,7 +121,7 @@ func TestRequestOverflowIsRefusedRatherThanQueued(t *testing.T) {
 	}
 
 	for i := 0; i < reqConcurrency; i++ {
-		r.req("slow", "openTicket", protocol.Request{})
+		r.req("slow", "revive", protocol.Request{})
 	}
 	for i := 0; i < reqConcurrency; i++ {
 		select {
@@ -233,36 +233,37 @@ func TestUndecodableEnvelopeCloses(t *testing.T) {
 	}
 }
 
-// TestDeniedCommandsNeverReachHandle walks the closed denial list. Each is
-// refused BEFORE the authorizer is consulted, so no authorizer can grant one,
-// and each closes the connection.
+// TestDeniedCommandsNeverReachHandle walks commands in no tier. Each is refused
+// BEFORE the authorizer is consulted, so no authorizer can grant one, and the
+// connection survives: a refusal costs a strike, not the connection.
 func TestDeniedCommandsNeverReachHandle(t *testing.T) {
 	denied := []string{
 		"stop", "reload", "renameProject", "hookEvent",
 		"pairBegin", "pairStatus", "pairConfirm", "devices", "revokeDevice",
-		"remote.hello", "remote.anything", "",
+		"remote.hello", "remote.pair", "remote.anything", "", "noSuchCommand",
 	}
 	for _, cmd := range denied {
 		t.Run("cmd="+cmd, func(t *testing.T) {
 			r := newRig(t)
 			r.req("d", cmd, protocol.Request{})
 			r.wantErr(protocol.CodeUnknownCmd)
-			r.wantClosed()
-			if r.handler.count() != 0 {
-				t.Errorf("%q reached the handler", cmd)
+			r.wantOpen()
+			if r.handler.count() != 1 { // only wantOpen's status
+				t.Errorf("%q reached the handler (%d calls)", cmd, r.handler.count())
 			}
 			for _, s := range r.auth.seen() {
 				if strings.HasSuffix(s, ":"+cmd) {
-					t.Errorf("%q was offered to the authorizer; the denials must run first", cmd)
+					t.Errorf("%q was offered to the authorizer; tier never must run first", cmd)
 				}
 			}
 		})
 	}
 }
 
-// TestAuthorizerRefusalCloses proves the second gate is wired and that its
-// refusal never leaks the authorizer's reasoning to the peer.
-func TestAuthorizerRefusalCloses(t *testing.T) {
+// TestAuthorizerDenialKeepsTheConnection proves the second gate is wired, that
+// its refusal never leaks the authorizer's reasoning, and that a denial is a
+// refusal and not a hang-up.
+func TestAuthorizerDenialKeepsTheConnection(t *testing.T) {
 	r := newRig(t, func(r *rig, _ *Options) { r.auth.frameErr = ErrDenied })
 
 	r.req("d", "kill", protocol.Request{Session: "lola-fe-42"})
@@ -270,9 +271,21 @@ func TestAuthorizerRefusalCloses(t *testing.T) {
 	if strings.Contains(p.Message, ErrDenied.Error()) {
 		t.Errorf("the refusal echoed the authorizer's error text: %q", p.Message)
 	}
-	r.wantClosed()
 	if r.handler.count() != 0 {
 		t.Error("a denied frame reached the handler")
+	}
+	r.auth.setFrameErr(nil)
+	r.wantOpen()
+}
+
+// TestUnauthenticatedFrameClosesTheConnection: an authorizer that says the
+// device is gone (revoked, re-paired) ends the connection.
+func TestUnauthenticatedFrameClosesTheConnection(t *testing.T) {
+	r := newRig(t, func(r *rig, _ *Options) { r.auth.frameErr = ErrUnauthenticated })
+	r.req("d", "sessions", protocol.Request{})
+	r.wantClosed()
+	if r.handler.count() != 0 {
+		t.Error("a frame from a revoked device reached the handler")
 	}
 }
 

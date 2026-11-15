@@ -69,8 +69,7 @@ describe("MetaPill", () => {
   });
 
   it("renders a leading glyph before its children", () => {
-    // The caller passes <BranchIcon /> for a PR badge; the pill neither knows
-    // nor chooses which glyph that is.
+    // The pill neither knows nor chooses which glyph the caller passes.
     const { container } = mount({ leading: text("[branch]") });
     // Order matters: the glyph leads.
     expect(container.textContent!.replace(/\s+/g, "")).toBe("[branch]#341");

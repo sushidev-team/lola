@@ -20,6 +20,7 @@ import {
   panLimits,
   partialRowHeight,
   pinchFont,
+  sameGeometry,
   stepFont,
   takeScroll,
   touchDistance,
@@ -508,5 +509,43 @@ describe("the capacity to pin to", () => {
       cols: 0,
       rows: 0,
     });
+  });
+});
+
+describe("sameGeometry", () => {
+  const g = {
+    cols: 200,
+    rows: 50,
+    shown: 55,
+    shownRows: 30,
+    first: 1,
+    panning: true,
+    canFit: true,
+    fitActive: false,
+    fitSize: 8,
+  };
+
+  it("is true for an identical report", () => {
+    expect(sameGeometry(g, { ...g })).toBe(true);
+  });
+
+  it("is false when any one field differs", () => {
+    for (const [k, v] of Object.entries({
+      cols: 201,
+      rows: 51,
+      shown: 56,
+      shownRows: 31,
+      first: 2,
+      panning: false,
+      canFit: false,
+      fitActive: true,
+      fitSize: 9,
+    })) {
+      expect(sameGeometry(g, { ...g, [k]: v }), k).toBe(false);
+    }
+  });
+
+  it("ignores fields outside the geometry", () => {
+    expect(sameGeometry(g, { ...g, font: 14, capCols: 3 } as typeof g)).toBe(true);
   });
 });

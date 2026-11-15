@@ -471,8 +471,8 @@ func TestPromptAnswerIsHumanOnly(t *testing.T) {
 	if err := r.d.bridgeAdmit(protocol.Request{Cmd: protocol.CmdSSHPromptAnswer, Session: "s1", HookToken: r.d.hookToken("s1")}); err == nil {
 		t.Fatal("admitted on the hook bridge")
 	}
-	if !remote.CommandDenied(protocol.CmdSSHPromptAnswer) {
-		t.Fatal("reachable by a paired device")
+	if got := remote.TierFor(protocol.CmdSSHPromptAnswer); got != protocol.TierNever {
+		t.Fatalf("wrong tier for a paired device: %q, want never", got)
 	}
 }
 

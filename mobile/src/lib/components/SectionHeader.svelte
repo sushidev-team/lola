@@ -1,6 +1,6 @@
 <script lang="ts">
-  // A section heading in the sessions list: a caps label, a hairline that eats
-  // the remaining width, and a count.
+  // A section heading in the sessions list: a caps label and a right-aligned
+  // count, with no rule (the grouped list below carries the edge).
   //
   // IT IS A REAL HEADING, not a styled row. The list it introduces is a run of
   // buttons with nothing between them, so without an <h2> a screen reader's
@@ -12,8 +12,7 @@
   // The COUNT is inside the heading rather than beside it, so the accessible
   // name reads "Needs you 2" — the count is part of what the section says, and
   // a number floating outside the heading is announced as loose text belonging
-  // to nothing. The RULE is aria-hidden: it is a ruled line, not a separator
-  // between siblings, and announcing it would break the name in half.
+  // to nothing.
   //
   // THE COUNT IS OPTIONAL, and that is what lets the settings screen use this
   // rather than keep a second copy of the geometry. A number is right for a
@@ -33,19 +32,14 @@
   }: { title: string; count?: number } = $props();
 </script>
 
-<!-- `text-xs` is the design's 10/12 bold tracked label step and carries no
-     text-transform of its own (see app.css), so `uppercase` is spelled here.
-     The label stays lowercase in the DOM for the same reason StatusChip's does:
-     capitals in the accessibility tree are read as an initialism.
-
-     `h-px` rather than a border, because the rule has to be a flex ITEM — it
-     takes whatever width the label and the count leave, and a border cannot
-     flex. `bg-edge-soft` is the design's list hairline; plain `edge` is the
-     heavier panel border and is visibly wrong at this weight. -->
-<h2 class="flex items-center gap-3 px-5 pt-3.5 pb-[5px]">
-  <span class="text-xs uppercase text-faint">{title}</span>
-  <span class="h-px flex-1 bg-edge-soft" aria-hidden="true"></span>
+<!-- No rule: the label sits on the ground and the grouped list below carries the edge.
+     `text-micro` is the phone's 11/13 bold tracked label step and carries no
+     text-transform of its own, so `uppercase` is spelled here; the label stays
+     lowercase in the DOM for the same reason StatusChip's does (capitals in the
+     accessibility tree are read as an initialism). -->
+<h2 class="flex items-baseline px-4 pt-6 pb-1.5">
+  <span class="text-micro uppercase text-faint">{title}</span>
   {#if count !== undefined}
-    <span class="num text-sm font-medium text-faint">{count}</span>
+    <span class="ml-auto text-footnote text-faint tabular-nums">{count}</span>
   {/if}
 </h2>

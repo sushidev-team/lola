@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { freshSession, permission, setTalk, ssh, talk, talkSvc, terms, AGENT } from "./talk.testkit";
 import PermissionCard from "./PermissionCard.svelte";
+import { setTouchSurface } from "$lib/touchsurface";
 
 afterEach(() => {
+  setTouchSurface(null);
   cleanup();
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -188,5 +190,45 @@ describe("the permission card", () => {
     await fireEvent.click(document.querySelector("[data-choice-more]")!);
     expect([...document.querySelectorAll("[data-choice]")].map((b) => b.getAttribute("data-choice"))).toEqual(["1", "4", "2", "3"]);
     expect(card().textContent).toContain("Yes, and always allow access to migrations/ from this project");
+  });
+
+  describe("on a touch surface", () => {
+    it("keeps Yes and No, folds the rest under Other answers, and drops the number boxes", async () => {
+      setTouchSurface({});
+      const id = freshSession();
+      show(id, permission(), true);
+      expect([...document.querySelectorAll("[data-choice]")].map((b) => b.getAttribute("data-choice"))).toEqual(["1", "4"]);
+      const other = screen.getByRole("button", { name: "Other answers" });
+      expect(other.closest("[data-phone-list]")).not.toBeNull();
+      expect(other.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("button", { name: /^More/ })).toBeNull();
+      // An answer row (No) has no chevron: only a row that opens the terminal does.
+      expect(document.querySelector("[data-choice='4'] svg")).toBeNull();
+      // Yes is the one filled button; No sits in the grouped list below it.
+      expect(document.querySelector("[data-primary]")?.getAttribute("data-choice")).toBe("1");
+      expect(document.querySelector("[data-phone-list] [data-choice='4']")).not.toBeNull();
+      // Every key hint is tagged for the phone's hide rule.
+      for (const k of document.querySelectorAll("[data-choice] kbd")) expect(k.hasAttribute("data-chord")).toBe(true);
+      // The label line is gone, and the proceed question is the buttons' job.
+      expect(document.querySelector("[data-prompt-label]")).toBeNull();
+      expect([...document.querySelectorAll("[data-prompt-line]")].map((p) => p.textContent)).toEqual(permission().lines.slice(1, -1));
+      expect(screen.getByRole("region", { name: /Run command\?|Allow this\?/ })).toBeTruthy();
+      await fireEvent.click(other);
+      expect(other.getAttribute("aria-expanded")).toBe("true");
+      expect(document.querySelectorAll("[data-choice]").length).toBe(4);
+      expect(document.querySelector("[data-primary]")?.className).toContain("bg-primary-fill");
+    });
+
+    it("has no terminal icon in the header and fires the decision haptic on a press", async () => {
+      vi.useFakeTimers();
+      const haptic = vi.fn();
+      setTouchSurface({ haptic });
+      const id = freshSession();
+      show(id, permission(), true);
+      expect(document.querySelector("[data-card-terminal]")).toBeNull();
+      await armed();
+      await fireEvent.keyDown(card(), { key: "1" });
+      expect(haptic).toHaveBeenCalledWith("decision");
+    });
   });
 });

@@ -268,3 +268,25 @@ describe("the loader's box", () => {
     expect(bound).toBe(2);
   });
 });
+
+describe("loadKeyboard", () => {
+  it("resolves a box, never the plugin proxy itself", async () => {
+    // A thenable resolved through a promise hangs it forever.
+    vi.resetModules();
+    const proxy = { addListener: vi.fn(), then: vi.fn() };
+    vi.doMock("../native", () => ({ keyboard: proxy }));
+    const { loadKeyboard } = await import("./keyboardinset");
+    const box = await loadKeyboard();
+    expect(box.keyboard).toBe(proxy);
+    expect(proxy.then).not.toHaveBeenCalled();
+    vi.doUnmock("../native");
+  });
+
+  it("resolves no keyboard off a device", async () => {
+    vi.resetModules();
+    vi.doMock("../native", () => ({ keyboard: null }));
+    const { loadKeyboard } = await import("./keyboardinset");
+    expect(await loadKeyboard()).toEqual({ keyboard: undefined });
+    vi.doUnmock("../native");
+  });
+});

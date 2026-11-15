@@ -1,73 +1,37 @@
-#!/bin/sh
-# Put the app in front of the running daemon on a Simulator, without a camera
-# and WITHOUT writing the bearer key into the device's log.
+#!/usr/bin/env bash
+# Opens a route, a sheet, or a fresh pairing on a booted Simulator. DEBUG builds only.
 #
-# WHY THIS SCRIPT EXISTS RATHER THAN A LINE IN THE README.
+#   scripts/dev-link.sh --route /inbox?filter=needs
+#   scripts/dev-link.sh --route /session/s1/conversation --sheet sessionMenu
+#   scripts/dev-link.sh --pair [--route /inbox]
 #
-# The Simulator has no camera, so the QR hand-off — the connect screen's primary
-# action — is exactly the path that cannot be exercised on the one device a
-# script can drive. `lola-dev://connect?...` is the answer to that, and the
-# obvious spelling of it discloses the credential: iOS logs the URL for every
-# delivery route it has. `simctl openurl` produces
+# Once paired, links carry only `route` and `sheet`: no credentials.
+# `--pair` runs `lola pair --json`, hands its payload to the app through the
+# launch environment (the Simulator has no camera), reads the 6-digit code the
+# app logs (`lola-dev pair-code <code>`) and types it as the one stdin line
+# `lola pair` waits for. Nothing is confirmed without that line.
 #
-#   CoreSimulatorBridge: Opening URL (lola-dev://connect?...&key=<the key>)
-#
-# in the device's persistent unified log; `SIMCTL_CHILD_LOLA_DEV_LINK` is logged
-# as part of the child's environment dictionary; `--lola-dev-link` is logged
-# twice as part of the argument vector. That store survives a relaunch, is what
-# `simctl diagnose` collects, and the credential in it types into live coding
-# agents. The plugin cannot fix this — the logging happens in the OS before the
-# app runs.
-#
-# So the URL carries a FILE NAME instead. A name is not a credential; the bytes
-# are staged into the app's own container, read once and deleted. See
-# `LolaDevLink.readKeyFile`.
-#
-# The key is never printed by this script either, which matters when it is run
-# from inside a lola session: lola captures its own panes and ships the capture
-# to the [brain] summarizer and the [statusagent] interpreter.
-#
-# Usage:
-#   scripts/dev-link.sh                      connect, land on the session list
-#   scripts/dev-link.sh lola-nori-eng-42     connect and open that pane
-#
-# Environment:
-#   LOLA_SIM     a simulator UDID. Defaults to the booted one.
-#   LOLA_HOST    the address the app dials. Defaults to 127.0.0.1, which the
-#                Simulator shares with the Mac.
-#   LOLA_PORT    defaults to 7717.
-#   LOLA_TRIAGE  a bucket to filter the list by: "Needs You", "Working",
-#                "Fixing", "In Review", "Done".
-#   LOLA_QUERY   a free-text search for the list.
-#   LOLA_SESSION the session the pane belongs to. Defaults to the pane itself,
-#                which is right for an AGENT pane (its tmux name IS the session
-#                id) and wrong for every other one: `cmd=panes` is asked about a
-#                SESSION, so linking straight to `...-shell-1` without this
-#                lands on a terminal with no tab strip at all.
-#   LOLA_SHEET   a sheet to open on arrival: filter | connection | view |
-#                pane. The last two are the terminal's, so they want a pane
-#                argument too. "pane" opens the long-press menu for the pane the
-#                link lands on -- rename and close -- which is otherwise
-#                reachable only by holding a tab for half a second. Names are
-#                matched case-insensitively, which is why every one of them is a
-#                single lowercase word.
-#
-# THE LAST THREE ARE WHY A SCREENSHOT OF THOSE SCREENS EXISTS AT ALL. The filter
-# overlay, the connection settings and the view settings each open only from a
-# tap, and `simctl` has no gesture API — so before they were addressable a
-# reviewer could run their tests and never see one of them. They are
-# destinations, not capabilities: each names somewhere one tap already goes.
+# Environment: LOLA_SIM (a simulator UDID; default the booted one), LOLA_BIN
+# (the lola binary for `--pair`; default `lola` on PATH). An E2E run against a
+# throwaway daemon sets LOLA_BIN to that build and LOLA_HOME to its home.
 
-set -eu
+set -euo pipefail
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-home=${LOLA_HOME:-$HOME/.lola}
 bundle=dev.sushi.lola.mobile
-host=${LOLA_HOST:-127.0.0.1}
-port=${LOLA_PORT:-7717}
-pane=${1:-}
+route=""
+sheet=""
+pair=0
 
 die() { printf 'dev-link: %s\n' "$1" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+	case $1 in
+		--route) [ $# -ge 2 ] || die "--route needs a path"; route=$2; shift 2 ;;
+		--sheet) [ $# -ge 2 ] || die "--sheet needs a name"; sheet=$2; shift 2 ;;
+		--pair) pair=1; shift ;;
+		*) die "usage: dev-link.sh [--route <path>] [--sheet <name>] [--pair]" ;;
+	esac
+done
 
 udid=${LOLA_SIM:-}
 if [ -z "$udid" ]; then
@@ -75,40 +39,7 @@ if [ -z "$udid" ]; then
 	[ -n "$udid" ] || die "no booted simulator. Boot one, or set LOLA_SIM."
 fi
 
-# Read, never echo.
-# TWO NAMES, and the second one is now the usual case. This script predates the
-# daemon generating its own bearer key: back then `make mobile-dev` exported one
-# and wrote it to `remote-dev-key`, and that is still honoured for anyone who
-# has one. The daemon now generates and reuses `remote.key` instead — which is
-# what makes the key survive a restart this script did not perform — so a clean
-# machine has only that file, and the old path died telling the reader to run a
-# command that no longer produces what it names.
-keyfile=$home/remote-dev-key
-[ -f "$keyfile" ] || keyfile=$home/remote.key
-[ -f "$keyfile" ] || die "no $home/remote.key — start the daemon once, or run 'make mobile-dev'"
-key=$(cat "$keyfile")
-[ -n "$key" ] || die "$keyfile is empty"
-
-# The pin is public (a hash of a public key) and is the one value that is safe
-# in the URL. It is read from the listener line the daemon logged.
-pin=$(sed -n 's/.*(SPKI pin \([^)]*\)).*/\1/p' "$home/daemon.log" 2>/dev/null | tail -1)
-[ -n "$pin" ] || die "no SPKI pin in $home/daemon.log — start the daemon once"
-
-container=$(xcrun simctl get_app_container "$udid" "$bundle" data 2>/dev/null) \
-	|| die "$bundle is not installed on $udid — run ./scripts/run-sim.sh first"
-docs=$container/Documents
-mkdir -p "$docs"
-
-# 0600 and a fixed name. The app deletes it after reading, so a run that never
-# reaches the app is the only way one survives; `simctl diagnose` would collect
-# it, which is why it is not left lying around on purpose.
-staged=lola-dev-key
-umask 077
-printf '%s' "$key" > "$docs/$staged"
-
-# Percent-encode one query value. A bucket title has a space in it ("Needs
-# You") and a search term is whatever somebody types, so neither can go into a
-# URL raw. `od` rather than a here-string so this stays POSIX sh.
+# Percent-encodes one query value (POSIX tools only).
 urlencode() {
 	printf '%s' "$1" | od -An -tx1 -v | tr -d '\n' | tr -s ' ' '\n' | while read -r byte; do
 		[ -n "$byte" ] || continue
@@ -120,16 +51,73 @@ urlencode() {
 	done
 }
 
-link="lola-dev://connect?host=$host&port=$port&pin=$pin&keyfile=$staged"
-[ -z "$pane" ] || link="$link&pane=$pane"
-[ -z "${LOLA_SESSION:-}" ] || link="$link&session=$(urlencode "$LOLA_SESSION")"
-[ -z "${LOLA_TRIAGE:-}" ] || link="$link&triage=$(urlencode "$LOLA_TRIAGE")"
-[ -z "${LOLA_QUERY:-}" ] || link="$link&q=$(urlencode "$LOLA_QUERY")"
-[ -z "${LOLA_SHEET:-}" ] || link="$link&sheet=$(urlencode "$LOLA_SHEET")"
+query=""
+add() { query="${query:+$query&}$1=$(urlencode "$2")"; }
+[ -z "$route" ] || add route "$route"
+[ -z "$sheet" ] || add sheet "$sheet"
 
-printf 'dev-link: %s:%s pane=%s session=%s triage=%s query=%s sheet=%s (key staged in the app container, not in the URL)\n' \
-	"$host" "$port" "${pane:-none}" "${LOLA_SESSION:-${pane:-none}}" "${LOLA_TRIAGE:-none}" \
-	"${LOLA_QUERY:-none}" "${LOLA_SHEET:-none}" >&2
+launch() {
+	xcrun simctl terminate "$udid" "$bundle" >/dev/null 2>&1 || true
+	# LolaDevLink.parse accepts only `lola-dev://open?…`; a bare query is no link.
+	SIMCTL_CHILD_LOLA_DEV_LINK="lola-dev://open?$1" xcrun simctl launch "$udid" "$bundle" >/dev/null
+}
 
-xcrun simctl terminate "$udid" "$bundle" >/dev/null 2>&1 || true
-SIMCTL_CHILD_LOLA_DEV_LINK="$link" exec xcrun simctl launch "$udid" "$bundle"
+if [ "$pair" -eq 0 ]; then
+	launch "$query"
+	printf 'dev-link: route=%s sheet=%s\n' "${route:-none}" "${sheet:-none}" >&2
+	exit 0
+fi
+
+work=$(mktemp -d)
+logpid=""
+pairpid=""
+cleanup() {
+	[ -z "$logpid" ] || kill "$logpid" 2>/dev/null || true
+	[ -z "$pairpid" ] || kill "$pairpid" 2>/dev/null || true
+	exec 3>&- 2>/dev/null || true
+	rm -rf "$work"
+}
+trap cleanup EXIT
+
+mkfifo "$work/in"
+# --allow-loopback: the Simulator shares the Mac's loopback, so a daemon bound
+# to localhost (run-sim.sh's fastest loop) must be able to hand out a
+# loopback-only QR. A LAN-bound daemon still lists its LAN addresses first.
+"${LOLA_BIN:-lola}" pair --json --allow-loopback <"$work/in" >"$work/out" 2>"$work/err" &
+pairpid=$!
+exec 3>"$work/in"
+
+wait_for() { # <pattern> <file>
+	for _ in $(seq 1 600); do
+		grep -q "$1" "$2" 2>/dev/null && return 0
+		kill -0 "$pairpid" 2>/dev/null || return 1
+		sleep 0.1
+	done
+	return 1
+}
+
+wait_for '"event":"begin"' "$work/out" || die "lola pair did not begin: $(cat "$work/err")"
+payload=$(sed -n 's/.*"event":"begin".*"payload":"\([^"]*\)".*/\1/p' "$work/out" | head -1)
+[ -n "$payload" ] || die "no payload in the begin line"
+
+# --level info: LolaLog.devLinkNote logs at info, which `log stream` omits by default.
+xcrun simctl spawn "$udid" log stream --level info --style compact \
+	--predicate 'eventMessage BEGINSWITH "lola-dev pair-code"' >"$work/log" 2>/dev/null &
+logpid=$!
+sleep 1
+
+add pair "$payload"
+launch "$query"
+
+wait_for '"state":"confirming"' "$work/out" || die "the app did not present the pairing: $(cat "$work/err")"
+code=""
+for _ in $(seq 1 100); do
+	code=$(sed -n 's/.*lola-dev pair-code \([0-9]\{6\}\).*/\1/p' "$work/log" | tail -1)
+	[ -z "$code" ] || break
+	sleep 0.1
+done
+[ -n "$code" ] || die "no pair code in the device log"
+
+printf '%s\n' "$code" >&3
+wait "$pairpid" || die "pairing did not complete: $(cat "$work/err")"
+printf 'dev-link: paired\n' >&2

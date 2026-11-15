@@ -1,20 +1,11 @@
 import Foundation
 import os
 
-/// The plugin's logging, and its one rule.
-///
-/// NOTHING that passes through this transport is ever logged: not the bearer
-/// key, not a frame body, not a byte of pane output. The daemon holds the same
-/// line on its own side — `internal/remote`'s audit line carries the device,
-/// the command and the outcome and explicitly never the payload, because
-/// `answer` carries prose a human typed at a phone and may contain a pasted
-/// token. A client that logged the same frames would undo that at the other
-/// end, and on iOS the log is readable by anyone with the device and a cable.
-///
-/// So the vocabulary here is deliberately thin: a phase, a host and port, a
-/// count, an error's kind. When something needs more detail than that to
-/// diagnose, the right answer is a packet capture on the developer's own
-/// machine, not a wider log.
+/// The plugin's logging, and its one rule: nothing that passes through this
+/// transport is ever logged. No frame body, no pane byte, no secret, no
+/// pairing payload. The vocabulary is a phase, a host and port, a count and an
+/// error's kind; anything needing more is a packet capture on the developer's
+/// own machine.
 enum LolaLog {
     private static let log = Logger(subsystem: "dev.sushi.lola.mobile", category: "transport")
 
@@ -29,4 +20,13 @@ enum LolaLog {
     static func error(_ message: String) {
         log.error("\(message, privacy: .public)")
     }
+
+    #if LOLA_DEV_LINK
+        /// The one line the Simulator harness reads (`lola-dev pair-code <6 digits>`).
+        /// The code is a display value shown to the human on the phone, not a
+        /// secret, and only a `dev-launch` pairing ever writes it.
+        static func devLinkNote(_ message: String) {
+            log.info("lola-dev \(message, privacy: .public)")
+        }
+    #endif
 }

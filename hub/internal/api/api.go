@@ -19,11 +19,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sushidev-team/lola/hub/internal/lease"
+	"github.com/sushidev-team/lola/hub/internal/relay"
 	"github.com/sushidev-team/lola/hub/internal/store"
 	"github.com/sushidev-team/lola/hubproto"
 )
@@ -88,7 +90,14 @@ type Config struct {
 	// MaxOrgs caps the orgs a code-less creation may bring the hub to;
 	// 0 = DefaultMaxOrgs.
 	MaxOrgs int
-	Logf    func(format string, args ...any)
+	// Relay is the blind relay core. nil turns the four /v1/relay routes
+	// off: they answer 404 not_found, so a hub built without the relay looks
+	// exactly like an old hub.
+	Relay *relay.Hub
+	// ClientIP names the network a phone dial came from, for the per-network
+	// dial bucket. nil = no verified source: the bucket is off.
+	ClientIP func(*http.Request) (netip.Prefix, bool)
+	Logf     func(format string, args ...any)
 }
 
 // Server serves the hub API.
@@ -101,6 +110,10 @@ type Server struct {
 	enroll *bucket
 	open   *bucket // code-less team creations, hub-wide
 	enMu   sync.Mutex
+
+	// acceptTimeout is how long a phone dial waits for the daemon's accept
+	// leg; 0 = hubproto.RelayAcceptTimeout (a test seam).
+	acceptTimeout time.Duration
 }
 
 // perDeviceNonces is the most live nonces a device can legitimately hold:
@@ -188,6 +201,10 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc(hubproto.PathOrgInvites, s.adminAuthed(http.MethodPost, s.handleInvite))
 	mux.HandleFunc(hubproto.PathOrgRevoke, s.adminAuthed(http.MethodPost, s.handleRevoke))
+	mux.HandleFunc(hubproto.PathRelayRendezvous, s.relayOn(s.authed(http.MethodPost, s.handleRendezvous)))
+	mux.HandleFunc(hubproto.PathRelayDaemon, s.relayOn(s.authedUpgrade(s.handleRelayDaemon)))
+	mux.HandleFunc(hubproto.PathRelayAccept, s.relayOn(s.authedUpgrade(s.handleRelayAccept)))
+	mux.HandleFunc(hubproto.PathRelayPhone, s.relayOn(s.handleRelayPhone))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, hubproto.CodeNotFound)
 	})
@@ -212,6 +229,9 @@ var messages = map[string]string{
 	hubproto.CodeInternal:      "internal error",
 	hubproto.CodeUnavailable:   "unavailable",
 	hubproto.CodeInvalidSecret: "the key was refused",
+	hubproto.CodeOffline:       "daemon not connected",
+	hubproto.CodeBusy:          "relay busy",
+	hubproto.CodeRelayTimeout:  "daemon did not answer",
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

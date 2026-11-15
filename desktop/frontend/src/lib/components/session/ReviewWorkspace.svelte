@@ -26,9 +26,17 @@
   import ReviewChanges from './ReviewChanges.svelte';
   import ReviewSkeleton from './ReviewSkeleton.svelte';
   import ReviewVerification from './ReviewVerification.svelte';
+  import { touchSurface } from '$lib/touchsurface';
   import ReviewCapture from './ReviewCapture.svelte';
 
-  let { sessionId }: { sessionId: string } = $props();
+  // `embedded` mounts the workspace without its own modal (the phone's review sheet): the sheet draws the tabs
+  // and "Mark reviewed" from `onstatus`, so there is one set of controls. `labels` is the phone's one-line
+  // verification verdict. All three default to the desktop's behaviour.
+  type Status = { tabs: { id: string; label: string }[]; canMark: boolean; reviewed: boolean; marking: boolean; mark: () => void };
+  let { sessionId, embedded = false, tab = $bindable('material'), onstatus, labels }: {
+    sessionId: string; embedded?: boolean; tab?: string; onstatus?: (s: Status) => void; labels?: { verified: string; notVerified: string };
+  } = $props();
+  const phone = touchSurface();
   const session = $derived(store.sessionById(sessionId));
   let app = $state('');
   const lanes = $derived(session?.stack ? (session.apps ?? []).map(a => ({ id: a.name, label: a.label || a.name, number: a.number ?? 0, url:a.url ?? '' })) : []);
@@ -56,7 +64,6 @@
   let error = $state('');
   let generation = 0;
   let reviewWrite = 0;
-  let tab = $state('material');
   let panelOpen = $state(false);
   let canvasScreen = $state(0);
   let captureOpen = $state(false);
@@ -74,9 +81,28 @@
   const f = $derived(feed.view(sessionId));
   const view = $derived(ssh.view(sessionId));
   const tests = $derived(sessionActivity({feed:f.items,items:view.items,scope:view.scope,alive:false}).filter(e => e.kind === 'tests'));
+  // Phone version labels: relative day + HH:MM, no seconds ("Today 22:28", "Yesterday 18:04", "14 Nov, 18:04").
+  function phoneStamp(at: string): string {
+    const d = new Date(at), now = new Date();
+    const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const gap = Math.round((day(now) - day(d)) / 86400000);
+    const hm = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+    if (gap === 0) return `Today ${hm}`;
+    if (gap === 1) return `Yesterday ${hm}`;
+    return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}, ${hm}`;
+  }
+  const phoneVersion = (p: Package, i: number) => (i === 0 ? 'Latest · ' : '') + phoneStamp(p.createdAt);
+  const versionAria = $derived.by(() => {
+    const i = packages.findIndex(p => p.id === current?.id);
+    if (i < 0 || !current) return 'Review version';
+    const full = new Date(current.createdAt).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    return `Version: ${i === 0 ? 'Latest, ' : ''}${full.replace(',', '')}`;
+  });
   const freshness = $derived(current ? reviewFreshness(current,facts) : 'unknown');
   const captureReason = $derived(!current ? 'Prepare review material first' : !captureHost ? 'Capture requires a local host checkout' : freshness === 'stale' ? 'Prepare review material for the current revision first' : 'Capture a page or element into this review');
   const sections = $derived(current ? reviewSections(current.body) : []);
+  const tabList = $derived([{id:'material',label:'Overview'}, ...(current?.screens?.length || (embedded && captureHost) ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:phone ? 'Changes' : 'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]);
+  $effect(() => { onstatus?.({ tabs: tabList, canMark: !!current && reviewSupported, reviewed: reviewed?.package === current?.id, marking, mark: markReviewed }); });
   const requests = new SvelteMap<string, { state: 'sending' | 'accepted' | 'error'; message: string }>();
   const request = $derived(requests.get(target));
   const canRequest = $derived(!!session && !session.goalId && !['dead', 'exited', 'shell', 'orphaned'].includes(session.agentState ?? ''));
@@ -214,9 +240,9 @@
 </script>
 
 {#snippet checks()}
-  {#if reviewSession}<BeforeMerge session={reviewSession} reviewLayout/>{/if}
-  {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} canRun={!!session && !session.goalId && (!session.sandbox || session.sandbox === 'none')}/>{/key}{/if}
-  {#if session}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><p class="mb-3 text-xs text-faint">Not verified for this version.</p><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
+  {#if reviewSession && !embedded}<BeforeMerge session={reviewSession} reviewLayout/>{/if}
+  {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} {labels} canRun={!!session && !session.goalId && (!session.sandbox || session.sandbox === 'none')}/>{/key}{/if}
+  {#if session && !phone}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><p class="mb-3 text-xs text-faint">Not verified for this version.</p><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
 {/snippet}
 {#snippet reviewFeedback()}
   <section aria-label="Review feedback" class="review-feedback">
@@ -236,28 +262,31 @@
   </section>
 {/snippet}
 
-<Modal title="PR review" onkey={e => { if (tab === 'visuals') canvas?.handleKey(e); }} fullscreen onClose={() => nav.closeOverlay()} bodyClass="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-  <div class="review-toolbar">
-    <div class="min-w-0">
+{#snippet body()}
+  <div class="review-toolbar" class:embedded>
+    {#if !embedded}<div class="min-w-0">
       <p class="truncate font-medium text-ink">{session?.title || session?.issue || sessionId}</p>
-    </div>
+    </div>{/if}
     <div class="flex min-w-0 flex-wrap items-center gap-2">
       {#if lanes.length}<Select aria-label="Review repository" value={lane?.id} onchange={e => app = e.currentTarget.value}>{#each lanes as a}<option value={a.id}>{a.label}</option>{/each}</Select>{/if}
-      {#if packages.length}<Select aria-label="Review version" value={current?.id} onchange={e => selected = e.currentTarget.value}>{#each packages as p,i}<option value={p.id} data-selected-label={i === 0 ? 'Latest' : undefined} data-description={`Commit ${p.head.slice(0,8)}`}>{i === 0 ? 'Latest · ' : ''}{new Date(p.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'})}</option>{/each}</Select>{/if}
-      {#if current && reviewSupported}<Button size="sm" variant="secondary" loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button>{/if}
+      {#if embedded && !phone && packages.length}<span class="text-sm text-faint">Version:</span>{/if}
+      {#if packages.length}<Select aria-label={phone ? versionAria : 'Review version'} value={current?.id} onchange={e => selected = e.currentTarget.value}>{#each packages as p,i}<option value={p.id} data-selected-label={phone ? phoneVersion(p, i) : i === 0 ? 'Latest' : undefined} data-description={`Commit ${p.head.slice(0,8)}`}>{#if phone}{phoneVersion(p, i)}{:else}{i === 0 ? 'Latest · ' : ''}{new Date(p.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'})}{/if}</option>{/each}</Select>{/if}
+      {#if !embedded && current && reviewSupported}<Button size="sm" variant="secondary" loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button>{/if}
       <Button size="sm" icon aria-label="Refresh review" title="Refresh review" loading={loading} onclick={refresh}><Icon name="refresh-cw" size={14} /></Button>
     </div>
     {#if markError}<p role="alert" class="w-full text-sm text-warn">{markError} Refresh review and retry.</p>{/if}
   </div>
   <div class="review-layout" class:panel-open={panelOpen && (tab !== 'material' || !current)}>
     <div class="review-main" class:capturing={captureOpen}>
-      <div class="review-tabs"><Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} /><div class="review-tab-actions"><Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div></div>
+      <div class="review-tabs" class:embedded>{#if !embedded}<Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} />{/if}<div class="review-tab-actions">{#if !embedded || tab === 'visuals'}<Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{/if}{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div></div>
       {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={tab === 'visuals' ? canvasScreen : -1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
       {#if tab === 'code' && session}
         <div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><p class="px-4 py-2 text-xs text-faint">Live checkout changes. These may differ from the retained review revision.</p><DiffView {sessionId} /></div>
       {:else if tab === 'since' && comparable && previous && current}
         {#if reviewCode && session}<div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><div class="px-4 py-2 text-xs text-faint"><Button size="xs" onclick={() => reviewCode = false}>Back to material comparison</Button><p>Exact published heads: {previous.head.slice(0,12)} to {current.head.slice(0,12)}. Uncommitted changes are excluded.</p></div><DiffView sessionId={target} reviewRange={{from:previous.id,to:current.id}}/></div>
         {:else}<div class="review-material"><ReviewChanges before={previous} after={current} onCode={session ? () => reviewCode = true : undefined}/></div>{/if}
+      {:else if embedded && tab === 'visuals' && !current?.screens?.length}
+        <div class="review-material"><p class="text-sm text-faint">No screenshots yet. Capture one from the running app.</p></div>
       {:else if tab === 'visuals' && current?.screens?.length}
         <div class="review-visuals">
           {#key current.id}<ReviewCanvas bind:this={canvas} onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} canComment={!!session} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
@@ -292,7 +321,15 @@
       {@render reviewFeedback()}
     </aside>{/if}
   </div>
-</Modal>
+{/snippet}
+
+{#if embedded}
+  <div class="review-embedded grid min-w-0 grid-cols-[minmax(0,1fr)]" data-review-embedded>{@render body()}</div>
+{:else}
+  <Modal title="PR review" onkey={e => { if (tab === 'visuals') canvas?.handleKey(e); }} fullscreen onClose={() => nav.closeOverlay()} bodyClass="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+    {@render body()}
+  </Modal>
+{/if}
 
 <style>
   summary { list-style:none; }
@@ -321,6 +358,25 @@
   .review-feedback summary,.local-checks summary { cursor:pointer; color:var(--color-ink-2); font-size:12px; }
   .local-checks { margin-top:16px; }
   .review-toolbar > div:last-child { max-width:100%; }
+  .review-toolbar.embedded { padding:0 0 12px; justify-content:flex-start; background:transparent; }
+  /* Phone: the version is a left-aligned accent pull-down ("Latest · Today 22:28 ⌄"); the closed control
+     shows only the selected label (Select's overlay), the native text stays transparent. */
+  :global([data-phone-desk]) .review-toolbar.embedded { justify-content:flex-start; padding-bottom:0; }
+  :global([data-phone-desk]) .review-toolbar.embedded > div:last-child { width:100%; flex-wrap:nowrap; }
+  :global([data-phone-desk]) .review-toolbar.embedded :global(.lola-select) { max-width:none; }
+  :global([data-phone-desk]) .review-toolbar.embedded :global(.lola-field) { min-height:44px; border:0; background:transparent; padding:0 20px 0 0; font-size:15px; }
+  :global([data-phone-desk]) .review-toolbar.embedded :global(.select-value) { inset:0 20px 0 0; color:var(--color-accent); font-size:15px; font-weight:400; }
+  :global([data-phone-desk]) .review-toolbar.embedded :global(.lola-select-caret) { width:12px; height:12px; right:0; color:var(--color-accent); }
+  :global([data-phone-desk]) .review-toolbar.embedded :global([aria-label="Refresh review"]) { margin-left:auto; min-width:44px; min-height:44px; }
+  /* Phone sheet: 22px heading, no generic tile on the change rows. */
+  :global([data-phone-desk]) .review-embedded :global(h1) { font-size:22px; line-height:28px; font-weight:600; }
+  :global([data-phone-desk]) .review-embedded :global(.feature-icon) { display:none; }
+  .review-tabs.embedded { padding:0 0 8px; border:0; background:transparent; justify-content:flex-end; }
+  .review-embedded .review-material { padding:0; background:transparent; overflow:visible; }
+  .review-embedded .review-layout { display:block; }
+  .review-embedded .review-aside { overflow:visible; border-left:0; border-top:1px solid var(--color-edge-soft); padding:16px 0; }
+  .review-embedded .review-visuals { height:60vh; min-height:360px; }
+  .review-embedded .review-code { height:60vh; }
   .review-toolbar :global(.lola-select) { width:auto; max-width:350px; }
   .review-toolbar :global(select) { max-width:350px; }
   .review-aside { display:grid; align-content:start; gap:28px; min-width:0; overflow:auto; padding:24px 20px; border-left:1px solid var(--color-edge); background:var(--color-canvas); }

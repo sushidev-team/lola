@@ -7,6 +7,7 @@
 
 import { untrack } from "svelte";
 import { TalkService } from "@bindings/desktop";
+import { pushSource, type PushError } from "$lib/pushsource";
 import type {
   AgentChooseData,
   AgentFeedArgs,
@@ -63,6 +64,8 @@ class SessionTalk {
   answered = 0;
   pollers = 0;
   timer: ReturnType<typeof setInterval> | undefined;
+  /** Ends the pushed subscription. Set only while a pushed source feeds this session. */
+  stopPush: (() => void) | undefined;
 }
 
 class TalkStore {
@@ -119,9 +122,7 @@ class TalkStore {
     try {
       const d = await TalkService.State({ session: id });
       if (asked !== t.presses) return;
-      t.data = d;
-      t.unsupported = false;
-      t.error = "";
+      this.accept(t, d);
     } catch (err) {
       if (isTalkUnsupported(err)) {
         t.data = unsupportedState(id);
@@ -135,6 +136,12 @@ class TalkStore {
       t.answered++;
       this.changed();
     }
+  }
+
+  private accept(t: SessionTalk, d: TalkStateData) {
+    t.data = d;
+    t.unsupported = false;
+    t.error = "";
   }
 
   /** How many asks about this session have come back. See SessionTalk.answered. */
@@ -152,10 +159,27 @@ class TalkStore {
     const t = this.entry(id);
     t.pollers++;
     if (t.pollers === 1) {
-      void this.refresh(id);
-      t.timer = setInterval(() => {
-        if (document.hasFocus()) void this.refresh(id);
-      }, TALK_POLL_MS);
+      const src = pushSource();
+      if (src) {
+        // A source may refuse inside `talk` itself; the refusal must win over the returned stop.
+        let refused = false;
+        const stop = src.talk(
+          id,
+          (d) => {
+            this.accept(t, d);
+            t.answered++;
+            this.changed();
+          },
+          (e) => {
+            refused = true;
+            this.pushFailed(t, id, e);
+          },
+        );
+        if (refused) stop();
+        else t.stopPush = stop;
+      } else {
+        this.startPolling(t, id);
+      }
     }
     let ended = false;
     return () => {
@@ -165,8 +189,37 @@ class TalkStore {
       if (t.pollers === 0) {
         clearInterval(t.timer);
         t.timer = undefined;
+        t.stopPush?.();
+        t.stopPush = undefined;
       }
     };
+  }
+
+  private startPolling(t: SessionTalk, id: string) {
+    void this.refresh(id);
+    t.timer = setInterval(() => {
+      if (document.hasFocus()) void this.refresh(id);
+    }, TALK_POLL_MS);
+  }
+
+  /**
+   * A refused topic degrades to polling, never to a spinner. An unknown session is an ended one.
+   * The subscription ends here: a refused topic held by the source would be re-watched on every
+   * reconnect, spending a pane probe nobody reads.
+   */
+  private pushFailed(t: SessionTalk, id: string, e: PushError) {
+    const stop = t.stopPush;
+    t.stopPush = undefined;
+    stop?.();
+    if (t.pollers === 0) return;
+    if (e === "unknown_session") {
+      t.data = unsupportedState(id);
+      t.unsupported = true;
+      t.error = "";
+      this.changed();
+      return;
+    }
+    if (!t.timer) this.startPolling(t, id);
   }
 
   /**
@@ -210,7 +263,7 @@ class TalkStore {
     } finally {
       t.presses++;
       this.settingPending[id] = false;
-      void this.refresh(id);
+      if (!t.stopPush) void this.refresh(id);
     }
   }
 
@@ -244,7 +297,7 @@ class TalkStore {
     t.presses++;
     if (t.data && (d.sent || d.prompt)) t.data = { ...t.data, prompt: d.prompt ?? undefined } as TalkStateData;
     this.changed();
-    void this.refresh(id);
+    if (!t.stopPush) void this.refresh(id);
     return d;
   }
 

@@ -110,6 +110,9 @@ class Store {
   // the desktop's main.ts turns it on. sessionById and rosterSessions read this, only while
   // the daemon is down.
   retainAll = false;
+  // Set by a client whose daemon never honours a forced kill (the phone). A dirty-worktree
+  // refusal then flashes this sentence instead of offering a force that cannot succeed.
+  noForceKill: string | null = null;
   private retained: SessionInfo[] = [];
   // Set from the daemon going down until its first list after coming back. `daemon:alive` and
   // `daemon:sessions` are separate events with a flush between them, and an open session must not
@@ -493,6 +496,11 @@ class Store {
       const dir = force || keepWorktree ? null : dirtyWorktreeRefusal(msg);
       if (dir === null) {
         this.setFlash(msg, "bad");
+        return undefined;
+      }
+      if (this.noForceKill !== null) {
+        void this.refresh();
+        this.setFlash(this.noForceKill, "warn");
         return undefined;
       }
       // The agent IS gone and the daemon has flagged the session dead, so refresh

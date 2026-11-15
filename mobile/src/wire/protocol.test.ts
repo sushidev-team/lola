@@ -1,23 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_REMOTE_PORT,
-  DENIED_COMMANDS,
   FRAME_HEADER_BYTES,
   FRAME_VERSION_CURRENT,
   FRAME_VERSION_MIN,
-  HELLO_CMD,
-  INSECURE_MIN_KEY_LEN,
-  MAX_FRAME_BYTES,
-  MAX_PANE_NAME,
-  MAX_REQUESTS_IN_FLIGHT,
-  MAX_SCROLL_LINES,
+  FRAME_EVENT,
+  alwaysFatalCode,
   classifyGap,
   clientAcceptsFrame,
-  commandDenied,
   daemonAcceptsFrame,
   errorFrame,
-  helloFrame,
   knownFrameType,
   ptyResizeFrame,
   ptyScrollFrame,
@@ -31,28 +23,19 @@ import {
   type Frame,
 } from "./protocol";
 import { encodeFrameJSON } from "./codec";
+import { MAX_PANE_NAME, MAX_SCROLL_LINES } from "./limits";
 
-// See the note at the top of codec.test.ts: these tests are written but were not
-// executed here, because mobile/ has no node_modules yet.
-
-describe("constants that must equal the Go side", () => {
-  // Each of these is a number the daemon enforces. Getting one wrong is not a
-  // rejected frame, it is a dropped socket or a refused connection, so they are
-  // asserted literally here rather than derived from anything.
-  it("mirrors internal/protocol", () => {
-    expect(MAX_FRAME_BYTES).toBe(1 << 20); // protocol.MaxFrameBytes
+describe("the envelope version", () => {
+  it("is 2 and only 2: the daemon refuses every other version", () => {
+    expect(FRAME_VERSION_CURRENT).toBe(2); // protocol.FrameVersionCurrent
+    expect(FRAME_VERSION_MIN).toBe(2); // protocol.FrameVersionMin
     expect(FRAME_HEADER_BYTES).toBe(4); // protocol.FrameHeaderBytes
-    expect(FRAME_VERSION_CURRENT).toBe(1); // protocol.FrameVersionCurrent
-    expect(FRAME_VERSION_MIN).toBe(1); // protocol.FrameVersionMin
   });
 
-  it("mirrors internal/remote and internal/config", () => {
-    expect(MAX_REQUESTS_IN_FLIGHT).toBe(4); // remote.reqConcurrency
-    expect(MAX_PANE_NAME).toBe(128); // remote.maxPaneName
-    expect(MAX_SCROLL_LINES).toBe(500); // tmux.MaxScrollLines
-    expect(DEFAULT_REMOTE_PORT).toBe(7717); // config.DefaultRemotePort
-    expect(INSECURE_MIN_KEY_LEN).toBe(16); // remote.insecureMinKeyLen
-    expect(HELLO_CMD).toBe("remote.hello"); // remote.helloCmd
+  it("stamps every builder with it", () => {
+    for (const f of [requestFrame("a", "status"), subFrame("b", "lola-x"), unsubFrame("lola-x"), ptyWriteFrame("lola-x", "AA=="), errorFrame("c", "internal")]) {
+      expect(f.v).toBe(2);
+    }
   });
 });
 
@@ -68,6 +51,7 @@ describe("the direction table", () => {
     ["resync", false, true],
     ["pty", true, true],
     ["err", true, true],
+    [FRAME_EVENT, false, true],
   ];
 
   it.each(table)("%s: toDaemon=%s toClient=%s", (typ, toDaemon, toClient) => {
@@ -76,7 +60,7 @@ describe("the direction table", () => {
     expect(knownFrameType(typ)).toBe(true);
   });
 
-  it.each([[""], ["REQ"], ["event"], ["pair.begin"]])("%s fails closed in both directions", (typ) => {
+  it.each([[""], ["REQ"], ["EVENT"], ["pair.begin"]])("%s fails closed in both directions", (typ) => {
     expect(knownFrameType(typ)).toBe(false);
     expect(daemonAcceptsFrame(typ)).toBe(false);
     expect(clientAcceptsFrame(typ)).toBe(false);
@@ -85,8 +69,8 @@ describe("the direction table", () => {
 
 describe("the version window", () => {
   it("is a closed interval with no v0", () => {
-    expect(supportedFrameVersion(1)).toBe(true);
-    for (const v of [-1, 0, 2, 99]) expect(supportedFrameVersion(v)).toBe(false);
+    expect(supportedFrameVersion(2)).toBe(true);
+    for (const v of [-1, 0, 1, 3, 99]) expect(supportedFrameVersion(v)).toBe(false);
   });
 
   it("refuses a non-integer", () => {
@@ -95,59 +79,9 @@ describe("the version window", () => {
   });
 });
 
-describe("command policy", () => {
-  // Mirrored from internal/remote/policy.go for ONE reason: the daemon answers a
-  // denied cmd with unknown_cmd and then closes, so a single mistyped command
-  // costs a full reconnect and a re-subscribe of every pane.
-  it.each(DENIED_COMMANDS.map((c) => [c]))("denies %s", (cmd) => {
-    expect(commandDenied(cmd)).toBe(true);
-  });
-
-  it("denies an empty command", () => {
-    // A req frame naming nothing has nothing to authorize.
-    expect(commandDenied("")).toBe(true);
-  });
-
-  it("denies the whole remote namespace, the hello included", () => {
-    expect(commandDenied("remote.hello")).toBe(true);
-    expect(commandDenied("remote.anything")).toBe(true);
-  });
-
-  it("permits the commands the app actually uses", () => {
-    for (const cmd of [
-      "status",
-      "sessions",
-      "projects",
-      "prs",
-      "tickets",
-      "pane",
-      "answer",
-      "resolveConflict",
-      "review",
-      "coderabbit",
-      "dev",
-      "devFreePort",
-      "revive",
-      "pollOnce",
-      "enable",
-      "disable",
-      "open",
-      "openPr",
-      "openManual",
-      "openTicket",
-      "switchAgent",
-      "openURL",
-      "kill",
-    ]) {
-      expect(commandDenied(cmd)).toBe(false);
-    }
-  });
-
-  it("does not deny kill, whose FIELD is denied instead", () => {
-    // Discarding a dirty worktree is the one gate teardown has, so Force is
-    // cleared by the daemon rather than the command being refused — and the
-    // client's request builder has no force field at all.
-    expect(commandDenied("kill")).toBe(false);
+describe("request payload", () => {
+  it("has no force field for kill: the daemon clears it", () => {
+    // Discarding a dirty worktree is the one gate teardown has.
     expect(Object.keys(requestPayload("kill", { session: "lola-fe-42" }))).not.toContain("force");
   });
 });
@@ -183,18 +117,29 @@ describe("pane names", () => {
 describe("frame builders", () => {
   it("puts the envelope fields in the daemon's declaration order", () => {
     // encoding/json emits struct fields in declaration order, so the bytes only
-    // match if this order does: v, type, id, cmd, pane, seq, payload.
-    const f: Frame = { v: 1, type: "pty", id: "w1", pane: "lola-fe-42", seq: 3, payload: {} };
+    // match if this order does: v, type, id, cmd, pane, topic, seq, payload.
+    const f: Frame = { v: 2, type: "event", id: "w1", cmd: "c", pane: "p", topic: "talk:x", seq: 3, payload: {} };
     const json = encodeFrameJSON(f);
-    const order = ["v", "type", "id", "cmd", "pane", "seq", "payload"]
+    const order = ["v", "type", "id", "cmd", "pane", "topic", "seq", "payload"]
       .map((k) => json.indexOf('"' + k + '"'))
       .filter((i) => i >= 0);
+    expect(order).toHaveLength(8);
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
   it("builds a request payload in protocol.Request's declaration order", () => {
     const p = requestPayload("answer", { text: "yes", session: "lola-fe-42", poll: "fe" });
     expect(Object.keys(p)).toEqual(["cmd", "poll", "session", "text"]);
+  });
+
+  it("places keepWorktree after session and drops it when false", () => {
+    expect(Object.keys(requestPayload("kill", { text: "t", keepWorktree: true, session: "s" }))).toEqual([
+      "cmd",
+      "session",
+      "keepWorktree",
+      "text",
+    ]);
+    expect(requestPayload("kill", { session: "s", keepWorktree: false })).toEqual({ cmd: "kill", session: "s" });
   });
 
   it("writes cmd to both the envelope and the payload", () => {
@@ -262,15 +207,6 @@ describe("frame builders", () => {
     });
   });
 
-  it("builds the bearer hello with the key outside any Request field", () => {
-    // The key is not a command argument, and putting it in one would make it
-    // something a future handler could read.
-    const f = helloFrame("h1", "replace-me-with-a-real-key");
-    expect(f.cmd).toBe(HELLO_CMD);
-    expect(f.payload).toEqual({ key: "replace-me-with-a-real-key" });
-    expect(Object.keys(f.payload as object)).not.toContain("cmd");
-  });
-
   it("omits an empty error message", () => {
     expect(errorFrame("x", "internal").payload).toEqual({ code: "internal" });
   });
@@ -303,5 +239,18 @@ describe("sequence gaps", () => {
   it("ignores an unnumbered frame and a number that went backwards", () => {
     expect(classifyGap(9, { v: 1, type: "pty", pane: "lola-fe-42" })).toBe("ok");
     expect(classifyGap(40, at("pty", 9))).toBe("ok");
+  });
+});
+
+describe("refusals", () => {
+  it("treats a refused command as that request's problem, not the socket's", () => {
+    for (const code of ["denied", "unknown_cmd", "rate_limited", "unknown_pane", "internal"]) {
+      expect(alwaysFatalCode(code)).toBe(false);
+    }
+  });
+
+  it("still treats a version refusal and an oversize frame as the end of the socket", () => {
+    expect(alwaysFatalCode("unsupported_version")).toBe(true);
+    expect(alwaysFatalCode("frame_too_large")).toBe(true);
   });
 });

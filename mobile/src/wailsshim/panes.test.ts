@@ -4,6 +4,7 @@ import { ChannelTransport } from "./channeltransport";
 import { bridge } from "./bridge";
 import { DaemonService, TermService } from "./desktop";
 import { UnsupportedOnMobileError } from "./errors";
+import { MAC_ONLY } from "./services/reasons";
 import { FRAME_RESP, FakeChannel, type Frame } from "../wire";
 
 // cmd=panes and cmd=shellCreate: the two commands the daemon grew for the phone,
@@ -18,7 +19,7 @@ let ch: FakeChannel;
 function answerWith(data: unknown): void {
   ch.onSend = (f: Frame) => {
     if (f.type === "req") {
-      ch.deliver({ v: 1, type: FRAME_RESP, id: f.id, payload: { ok: true, data } });
+      ch.deliver({ v: 2, type: FRAME_RESP, id: f.id, payload: { ok: true, data } });
     }
   };
 }
@@ -27,7 +28,7 @@ function answerWith(data: unknown): void {
 function refuseWith(reason: string): void {
   ch.onSend = (f: Frame) => {
     if (f.type === "req") {
-      ch.deliver({ v: 1, type: FRAME_RESP, id: f.id, payload: { ok: false, error: reason } });
+      ch.deliver({ v: 2, type: FRAME_RESP, id: f.id, payload: { ok: false, error: reason } });
     }
   };
 }
@@ -43,7 +44,7 @@ beforeEach(async () => {
   ch = new FakeChannel();
   answerWith({});
   const t = new ChannelTransport({ open: async () => ch });
-  await t.connect({ host: "127.0.0.1", spkiPin: "pin" });
+  await t.connect({ daemonId: "d" });
   bridge.installTransport(t);
 });
 
@@ -167,7 +168,7 @@ describe("the neighbouring TermService methods stay platform rejections", () => 
   it.each([
     ["TermService.Shells", () => TermService.Shells("lola-fe-42")],
     ["TermService.Shell", () => TermService.Shell("lola-fe-42-shell-1", "/tmp")],
-  ])("%s rejects and names the method to call instead", async (_name, call) => {
+  ])("%s rejects without a request", async (_name, call) => {
     const err = await call().then(
       () => null,
       (e: unknown) => e,
@@ -176,10 +177,10 @@ describe("the neighbouring TermService methods stay platform rejections", () => 
     expect(ch.sent.filter((f) => f.type === "req")).toHaveLength(0);
   });
 
-  it("points TermService.Shell at DaemonService.ShellCreate in its reason", async () => {
+  it("gives TermService.Shell the Mac-only reason", async () => {
     const err = (await TermService.Shell("lola-fe-42-shell-1", "/tmp").catch(
       (e: unknown) => e,
     )) as UnsupportedOnMobileError;
-    expect(err.reason).toContain("DaemonService.ShellCreate");
+    expect(err.reason).toBe(MAC_ONLY);
   });
 });

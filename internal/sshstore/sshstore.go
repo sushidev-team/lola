@@ -176,6 +176,18 @@ type Store struct {
 	dir  string
 	st   State
 	dirt bool
+
+	// notify is read under mu and called after mu is released (SetNotify).
+	notify func()
+}
+
+// SetNotify sets fn, called AFTER the lock is released whenever Update
+// committed (persisted or not) or Volatile's fn returned true. nil clears it.
+// fn may call View; it must not block.
+func (s *Store) SetNotify(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notify = fn
 }
 
 func statePath(dir string) string { return filepath.Join(dir, "state.json") }
@@ -234,23 +246,42 @@ func Open(home, session string, create bool, logf func(string, ...any)) (*Store,
 // returning an error. A persist failure is returned, the change stays in memory,
 // and the caller decides what an unrecorded fact means.
 func (s *Store) Update(fn func(*State) error) error {
+	notify, err := s.updateLocked(fn)
+	if notify != nil {
+		notify()
+	}
+	return err
+}
+
+// updateLocked is Update's locked half. The deferred unlock keeps a panicking
+// fn from leaving the store locked; notify is returned, never called here.
+func (s *Store) updateLocked(fn func(*State) error) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := fn(&s.st); err != nil {
-		return err
+		return nil, err
 	}
-	return s.persistLocked()
+	return s.notify, s.persistLocked()
 }
 
 // Volatile runs fn under the lock without persisting: the once-a-second progress
 // of a running block. The next Update carries it to disk. fn reports whether it
 // changed anything.
 func (s *Store) Volatile(fn func(*State) bool) {
+	if notify := s.volatileLocked(fn); notify != nil {
+		notify()
+	}
+}
+
+// volatileLocked is Volatile's locked half, shaped like updateLocked.
+func (s *Store) volatileLocked(fn func(*State) bool) func() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if fn(&s.st) {
-		s.dirt = true
+	if !fn(&s.st) {
+		return nil
 	}
+	s.dirt = true
+	return s.notify
 }
 
 // View runs fn under the read lock.

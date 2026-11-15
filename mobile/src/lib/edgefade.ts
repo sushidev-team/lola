@@ -71,6 +71,8 @@ export function edgeFadeMask(
   clientWidth: number,
   scrollWidth: number,
   px: number = FADE_PX,
+  /** False fades only the trailing edge: a strip that reads left to right needs no cue behind it. */
+  leading: boolean = true,
 ): string {
   const overflow = scrollWidth - clientWidth;
   if (!(overflow > EPS)) return ""; // also catches NaN, which is an unlaid-out node
@@ -79,7 +81,7 @@ export function edgeFadeMask(
   // cross and dim the middle, which reads as a disabled control.
   const ramp = Math.max(1, Math.min(px, Math.floor(clientWidth / 3)));
 
-  const left = scrollLeft > EPS;
+  const left = leading && scrollLeft > EPS;
   const right = scrollLeft < overflow - EPS;
   if (!left && !right) return "";
 
@@ -97,6 +99,8 @@ export function edgeFadeMask(
  */
 export interface FadeOptions {
   px?: number;
+  /** Fade the trailing edge only. Default true: both. */
+  leading?: boolean;
   /**
    * Called whenever the overflowing edges change, so the caller can draw an
    * overlay the mask cannot express. See `overflowEdges`.
@@ -107,6 +111,7 @@ export interface FadeOptions {
 export function overflowFade(node: HTMLElement, opts: number | FadeOptions = FADE_PX) {
   let ramp = typeof opts === "number" ? opts : (opts.px ?? FADE_PX);
   let onedges = typeof opts === "number" ? undefined : opts.onedges;
+  let leading = typeof opts === "number" ? true : (opts.leading ?? true);
   let last: OverflowEdges = { left: false, right: false };
 
   function apply() {
@@ -116,7 +121,7 @@ export function overflowFade(node: HTMLElement, opts: number | FadeOptions = FAD
       onedges?.(edges);
     }
 
-    const mask = edgeFadeMask(node.scrollLeft, node.clientWidth, node.scrollWidth, ramp);
+    const mask = edgeFadeMask(node.scrollLeft, node.clientWidth, node.scrollWidth, ramp, leading);
     if (mask === "") {
       node.style.removeProperty("mask-image");
       node.style.removeProperty("-webkit-mask-image");
@@ -146,6 +151,7 @@ export function overflowFade(node: HTMLElement, opts: number | FadeOptions = FAD
     update(next: number | FadeOptions = FADE_PX) {
       ramp = typeof next === "number" ? next : (next.px ?? FADE_PX);
       if (typeof next !== "number") onedges = next.onedges;
+      leading = typeof next === "number" ? true : (next.leading ?? true);
       apply();
     },
     destroy() {

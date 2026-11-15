@@ -45,9 +45,9 @@
   export const inventories: { session: string; names: string[] }[] = $state([]);
 
   /**
-   * The pane whose menu is open, bound the way the terminal screen binds it
-   * into `nav`. A test can read it after the strip has been destroyed, which
-   * is the only way to see a hold timer that outlived its component.
+   * The pane the strip last asked a menu for. A test can read it after the strip
+   * has been destroyed, which is the only way to see a hold timer that outlived
+   * its component.
    */
   export const menu = $state({ pane: "" });
 </script>
@@ -66,5 +66,5 @@
   }}
   onnotice={(m) => notices.push(m)}
   onpanes={(session, names) => inventories.push({ session, names })}
-  bind:menuPane={() => menu.pane, (v) => (menu.pane = v)}
+  onmenu={(p) => (menu.pane = p)}
 />

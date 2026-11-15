@@ -10,6 +10,7 @@
   import { store } from "$lib/store.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { agentName } from "$lib/ssh";
+  import { touchSurface } from "$lib/touchsurface";
   import Button from "../Button.svelte";
   import ChoiceCard from "./ChoiceCard.svelte";
 
@@ -17,6 +18,7 @@
 
   const agent = $derived(agentName(store.sessionById(sessionId)?.agent));
   const view = $derived(ssh.view(sessionId));
+  const phone = touchSurface();
   const multi = $derived(prompt.kind === "question_multi");
 
   function onKey(e: KeyboardEvent) {
@@ -41,9 +43,9 @@
       <p class="mt-2 text-sm text-ink-2">Select multiple answers in the terminal.</p>
     </div>
     <div class="flex justify-end border-t border-edge px-3 py-2">
-      <Button variant="secondary" size="sm" onclick={() => ssh.showAgentTerminal(sessionId)}>Answer in terminal <span class="text-ink-2">⌘\</span></Button>
+      <Button variant="secondary" size="sm" onclick={() => ssh.showAgentTerminal(sessionId)}>Answer in terminal <span class="text-ink-2" data-chord>⌘\</span></Button>
     </div>
   </section>
 {:else}
-  <ChoiceCard {sessionId} {prompt} title="{agent} has a question" reading {narrow} {pager} toTerminal={(l) => /^Type something/i.test(l)} />
+  <ChoiceCard {sessionId} {prompt} title={phone ? "Question" : `${agent} has a question`} reading {narrow} {pager} toTerminal={(l) => /^Type something/i.test(l)} />
 {/if}

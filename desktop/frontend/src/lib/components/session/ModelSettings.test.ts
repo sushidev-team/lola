@@ -22,6 +22,19 @@ it("sends a Claude model choice and explains the default-setting effect", async 
   expect(screen.getByRole("status").textContent).toContain("Requested model: opus");
 });
 
+it("draws a list layout with a check on the active model and no select", async () => {
+  const id = freshSession({ agent: "claude", model: "opus" } as never);
+  talkSvc.Setting.mockResolvedValue({ sent: true });
+  await setTalk(id, { caps: { settings: true }, composer: "resting" });
+  render(ModelSettings, { sessionId: id, layout: "list" });
+  expect(screen.queryByRole("combobox")).toBeNull();
+  const opus = screen.getByRole("menuitemradio", { name: /Opus/ });
+  expect(opus).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("menuitemradio", { name: /Sonnet/ })).toHaveAttribute("aria-checked", "false");
+  await fireEvent.click(screen.getByRole("menuitemradio", { name: /Sonnet/ }));
+  await waitFor(() => expect(talkSvc.Setting).toHaveBeenCalledWith({ session: id, agent: "claude", setting: "model", value: "sonnet" }));
+});
+
 it("offers Codex effort and speed without Claude-only defaults", async () => {
   const id = await show("codex");
   expect(screen.queryByRole("option", { name: "Model default" })).toBeNull();
@@ -85,4 +98,35 @@ it("keeps the terminal fallback compact when the daemon lacks settings support",
   await fireEvent.change(field, { target: { value: "terminal" } });
   expect(talk.settingTerminal[id]).toBe(true);
   expect(talkSvc.Setting).not.toHaveBeenCalled();
+});
+
+it("list layout wears the phone labels and Sentence-case captions, with no Model heading", async () => {
+  const id = freshSession({ agent: "claude", model: "sonnet" } as never);
+  await setTalk(id, { caps: { settings: true }, composer: "resting" });
+  const { container } = render(ModelSettings, { sessionId: id, layout: "list" });
+  expect(screen.getAllByRole("menuitemradio", { name: "Default" })).toHaveLength(2);
+  expect(screen.getByRole("menuitemradio", { name: "Max" })).toBeTruthy();
+  expect(screen.getByRole("menuitemradio", { name: /Sonnet/ })).toHaveTextContent("Balanced");
+  expect(screen.getByRole("menuitemradio", { name: /Opus/ })).toHaveTextContent("Deep reasoning");
+  expect(screen.getByRole("menuitemradio", { name: /Haiku/ })).toHaveTextContent("Fast");
+  expect(screen.getByRole("menuitemradio", { name: /Fable/ })).toHaveTextContent("Long tasks");
+  expect(screen.getByRole("menuitemradio", { name: /Best available/ })).toBeTruthy();
+  const headings = Array.from(container.querySelectorAll("span.uppercase")).map((e) => e.textContent);
+  expect(headings).toEqual(["Effort"]);
+  expect(screen.queryByText("Change on your Mac.")).toBeNull();
+});
+
+it("list layout locked disables every row and says where to change it", async () => {
+  const id = freshSession({ agent: "claude" });
+  await setTalk(id, { caps: { settings: true }, composer: "resting" });
+  render(ModelSettings, { sessionId: id, layout: "list", locked: true });
+  for (const r of screen.getAllByRole("menuitemradio")) expect(r).toBeDisabled();
+  expect(screen.getByText("Change on your Mac.")).toBeInTheDocument();
+});
+
+it("the desktop select keeps its own option labels", async () => {
+  await show();
+  expect(screen.getByRole("option", { name: "Agent default" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "Model default" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "Maximum (this session)" })).toBeTruthy();
 });

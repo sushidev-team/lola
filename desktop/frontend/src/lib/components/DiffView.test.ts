@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
 
 const Diff = vi.fn();
@@ -275,3 +275,71 @@ describe("DiffView", () => {
     expect(screen.queryByPlaceholderText(/General note/)).toBeNull();
   });
 });
+
+describe("DiffView on the phone", () => {
+  beforeEach(async () => {
+    cleanup();
+    Diff.mockReset();
+    Diff.mockResolvedValue(DATA);
+    const { setTouchSurface } = await import("$lib/touchsurface");
+    setTouchSurface({});
+  });
+  afterEachPhone();
+
+  it("draws one toolbar row, unified only, with the base behind the menu", async () => {
+    render(DiffView, { sessionId: "s1", compact: true, hideFeedbackBar: true });
+    await waitFor(() => expect(document.querySelector("[data-phone-toolbar]")).not.toBeNull());
+    expect(screen.queryByRole("button", { name: "Split" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByText(/against/)).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Diff options" }));
+    expect(screen.getByRole("button", { name: /Wrap lines/ })).toHaveAttribute("aria-pressed");
+    expect(screen.getByText("origin/main")).toBeInTheDocument();
+    expect(screen.getByText("01234567")).toBeInTheDocument();
+  });
+
+  it("is one file bar: basename, counts, a basename-only picker, and range hunk labels", async () => {
+    render(DiffView, { sessionId: "s1", compact: true, hideFeedbackBar: true });
+    await waitFor(() => expect(document.querySelector("[data-phone-file-bar]")).not.toBeNull());
+    const bar = document.querySelector("[data-phone-file-bar]")!;
+    expect(bar).toHaveTextContent("foo.go");
+    expect(bar).toHaveTextContent("+1 −1");
+    expect(screen.getByRole("combobox", { name: "Changed file" })).toHaveDisplayValue("foo.go");
+    expect(await screen.findByText("Lines 1–3")).toBeInTheDocument();
+    expect(screen.queryByText(/@@/)).toBeNull();
+  });
+
+  it("marks the tapped row and titles the editor 'Line n' (' −' when removed)", async () => {
+    render(DiffView, { sessionId: "s1", compact: true, hideFeedbackBar: true });
+    await screen.findByText("Lines 1–3");
+    const rows = () => Array.from(document.querySelectorAll<HTMLElement>(".diff-row"));
+    expect(document.querySelector("[data-row-picked]")).toBeNull();
+    const added = rows().find((r) => r.classList.contains("diff-add"))!;
+    await fireEvent.click(added.querySelector(".cursor-pointer")!);
+    expect(await screen.findByText("Line 2")).toBeInTheDocument();
+    expect(document.querySelectorAll("[data-row-picked]")).toHaveLength(1);
+    expect(added).toHaveAttribute("data-row-picked");
+    const removed = rows().find((r) => r.classList.contains("diff-del"))!;
+    await fireEvent.click(removed.querySelector(".cursor-pointer")!);
+    expect(await screen.findByText("Line 2 −")).toBeInTheDocument();
+  });
+
+  it("hides the feedback bar when the host owns it", async () => {
+    render(DiffView, { sessionId: "s1", compact: true, hideFeedbackBar: true });
+    await screen.findByLabelText("File diffs");
+    expect(screen.queryByPlaceholderText(/General note/)).toBeNull();
+  });
+
+  it("says 'No diff yet.' for an empty diff", async () => {
+    Diff.mockResolvedValue({ ...DATA, files: [] });
+    render(DiffView, { sessionId: "s1", compact: true });
+    expect(await screen.findByText("No diff yet.")).toBeInTheDocument();
+  });
+});
+
+function afterEachPhone() {
+  afterEach(async () => {
+    const { setTouchSurface } = await import("$lib/touchsurface");
+    setTouchSurface(null);
+  });
+}

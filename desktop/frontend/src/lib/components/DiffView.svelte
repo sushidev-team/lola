@@ -1,6 +1,7 @@
 <script lang="ts">
   import Select from "./Select.svelte";
   import Icon from "$lib/components/Icon.svelte";
+  import { touchSurface } from "$lib/touchsurface";
   // The diff tab (SUSHI-618): what this session changed against its base branch,
   // read line by line, with comments a human queues on lines and sends back to
   // the coding agent as one message.
@@ -53,7 +54,21 @@
     turnBar,
     comparison,
     reviewRange,
-  }: { sessionId: string; turn?: number; compact?: boolean; rail?: Snippet; turnBar?: Snippet; comparison?: Snippet; reviewRange?:{from:string;to:string} } = $props();
+    hideFeedbackBar = false,
+  }: { sessionId: string; turn?: number; compact?: boolean; rail?: Snippet; turnBar?: Snippet; comparison?: Snippet; reviewRange?:{from:string;to:string}; hideFeedbackBar?: boolean } = $props();
+  // The phone gets its own one-row toolbar (file name, one menu), unified only; its feedback bar is the host's.
+  const phone = touchSurface();
+  const phoneBar = $derived(phone && compact);
+  const basename = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+  // "@@ -1,50 +1,52 @@" reads as "Lines 1–52" on the phone; a one-line hunk as "Line 1".
+  function hunkLabel(text: string): string {
+    const m = /\+(\d+)(?:,(\d+))?/.exec(text);
+    if (!m) return text;
+    const c = Number(m[1]);
+    const d = m[2] === undefined ? 1 : Number(m[2]);
+    return d <= 1 ? `Line ${c}` : `Lines ${c}–${c + d - 1}`;
+  }
+  let menuOpen = $state(false);
   const session = $derived(store.sessionById(sessionId));
   const readOnly = $derived(!!turn || !!reviewRange);
 
@@ -149,7 +164,7 @@
   let mode = $state<"unified" | "split">(readMode());
   let width = $state(0);
   const narrow = $derived(width > 0 && width < 560);
-  const layout = $derived(narrow ? "unified" : mode);
+  const layout = $derived(narrow || phone ? "unified" : mode);
   let wrap = $state(untrack(() => !compact));
   function measureWidth(node: HTMLElement) {
     width = node.clientWidth;
@@ -172,6 +187,7 @@
   let scroller = $state<HTMLDivElement | null>(null);
   let navigator = $state<HTMLElement | null>(null);
   let activeFile = $state("");
+  const activeFileInfo = $derived(orderedFiles.find((f) => f.path === activeFile) ?? orderedFiles[0]);
   let navigation = $state.raw<ReturnType<typeof observeDiffNavigation> | undefined>();
 
   $effect(() => {
@@ -352,9 +368,9 @@
   {#if composerAfter(path, r) && sel}
     <div class="mx-3 my-1.5 rounded-md border border-accent bg-panel p-2 font-sans">
       <div class="mb-1 text-sm text-faint">
-        Comment on {sel.path}:{sel.start}{sel.end > sel.start ? `-${sel.end}` : ""}{sel.side === "old"
+        {#if phone}Line {sel.start}{sel.end > sel.start ? `–${sel.end}` : ""}{sel.side === "old" ? " −" : ""}{:else}Comment on {sel.path}:{sel.start}{sel.end > sel.start ? `-${sel.end}` : ""}{sel.side === "old"
           ? " (removed line)"
-          : ""}
+          : ""}{/if}
       </div>
       <!-- svelte-ignore a11y_autofocus -->
       <textarea
@@ -376,6 +392,38 @@
 
 <div use:measureWidth class="diff-view grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-panel" class:diff-compact={compact} class:wrap-lines={wrap} data-testid="diff-view">
   <!-- Toolbar: what the diff is against, its size, and the view toggles. -->
+  {#if phoneBar}
+  <div class="diff-toolbar phone-toolbar sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 border-b border-edge/60 bg-panel px-4" data-phone-toolbar>
+    <div class="min-w-0">
+      {#if files.length && activeFileInfo}
+        <div class="phone-picker relative flex min-h-11 min-w-0 items-center gap-2" data-phone-file-bar>
+          <Icon name="file-text" size={16} class="shrink-0 text-faint" />
+          <span class="min-w-0 flex-1 truncate text-subhead font-semibold text-ink">{basename(activeFileInfo.path)}</span>
+          <span class="num shrink-0 text-subhead"><span class="text-good">+{activeFileInfo.additions}</span> <span class="text-bad">−{activeFileInfo.deletions}</span></span>
+          <Icon name="chevrons-up-down" size={14} class="shrink-0 text-faint" />
+          <Select class="diff-file-picker absolute inset-0 min-w-0 w-full" aria-label="Changed file" title={activeFile} value={activeFile} onchange={(event) => jump(event.currentTarget.value)}>
+            {#each orderedFiles as file (file.path)}<option value={file.path}>{basename(file.path)}</option>{/each}
+          </Select>
+        </div>
+      {:else if loading}
+        <span class="text-sm text-faint">Loading…</span>
+      {/if}
+    </div>
+    <div class="relative">
+      <button type="button" class="phone-more" aria-label="Diff options" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}><Icon name="ellipsis" size={18} /></button>
+      {#if menuOpen}
+        <div class="phone-menu" role="group" aria-label="Diff options">
+          {#if comparison}<div class="phone-scope">{@render comparison()}</div>{/if}
+          <button type="button" aria-pressed={wrap} onclick={() => { wrap = !wrap; menuOpen = false; }}>Wrap lines{wrap ? " · on" : ""}</button>
+          <button type="button" onclick={() => { menuOpen = false; void load(); }}>Refresh</button>
+          {#if data}<p class="phone-base">vs <span class="font-mono">{data.base}</span>{#if !turn && data.mergeBase} · <span class="font-mono">{data.mergeBase.slice(0, 8)}</span>{/if}</p>{/if}
+        </div>
+      {/if}
+    </div>
+    {#if turn}<div class="col-span-2 flex items-center gap-2">{@render turnBar?.()}</div>{/if}
+    {#if data?.truncated}<span class="col-span-2 pb-2 text-xs text-warn">Truncated — too large to show in full</span>{/if}
+  </div>
+  {:else}
   <div class="diff-toolbar grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-edge/60 px-4 py-2.5">
     <div class="diff-context min-w-0 truncate text-sm text-faint" title={data ? `Against ${data.base}${data.mergeBase ? ` · ${data.mergeBase}` : ''}` : undefined}>
       {#if compact && comparison}{@render comparison()}{/if}
@@ -413,6 +461,7 @@
       </Select>
     {/if}
   </div>
+  {/if}
 
   <!-- Body: the left column (turns, then the file tree) | file diffs. The column stays when a
        turn changed nothing, or there would be no way to pick another. -->
@@ -460,7 +509,7 @@
     {#if error}
       <div class="p-4 text-bad">{error}</div>
     {:else if data && files.length === 0}
-      <div class="grid place-items-center text-faint">{turn ? "This turn changed no files." : `No changes against ${data.base}.`}</div>
+      <div class="grid place-items-center text-faint">{turn ? "This turn changed no files." : phone ? "No diff yet." : `No changes against ${data.base}.`}</div>
     {:else}
       <!-- A focusable scroll region lets keyboard users read without tabbing through every gutter. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -469,6 +518,7 @@
           {@const rows = parsed.get(f.path) ?? []}
           <section data-file={f.path} class="diff-file" class:is-current={activeFile === f.path}>
             <header
+              class:phone-single={phone && files.length === 1}
               class="file-heading sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-edge/60 px-4 py-3 font-sans"
             >
               <span class="flex min-w-0 items-center gap-2.5" title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}>
@@ -494,7 +544,8 @@
                 {@const a = anchorOf(r)}
                 {@const selected = inSelection(sel, f.path, r)}
                 <!-- The row is the click target; a11y via the gutter button. -->
-                <div class="diff-row unified-row grid grid-cols-[3rem_3rem_1.5rem_minmax(0,1fr)] {rowBg(r, selected)}">
+                {@const hasDraft = !!a && draftsAfter(f.path, r).length > 0}
+                <div class="diff-row unified-row grid grid-cols-[3rem_3rem_1.5rem_minmax(0,1fr)] {rowBg(r, selected)}" data-row-picked={phone && selected ? "" : undefined} data-draft={hasDraft ? "" : undefined}>
                   {#if a}
                     <button
                       type="button"
@@ -508,8 +559,9 @@
                     <span class="line-marker text-center select-none">{marker(r)}</span>
                     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                     <div class="cursor-pointer pr-3" onclick={(e) => pick(f.path, r, e)}>{@render code(r, f.path)}</div>
+                    {#if phone && hasDraft}<span class="draft-glyph" aria-hidden="true"><Icon name="message-square-text" size={12} /></span>{/if}
                   {:else}
-                    <span class="hunk-label col-span-4 px-3" title={r.text}>{r.text}</span>
+                    <span class="hunk-label col-span-4 px-3" title={r.text}>{phone ? hunkLabel(r.text) : r.text}</span>
                   {/if}
                 </div>
                 {@render extras(f.path, r)}
@@ -561,7 +613,7 @@
 
   <!-- A free note beside the line comments. Sending is the footer strip's: it says how many are
        drafted, and it is where every view keeps what you can do now. A turn takes no comments. -->
-  {#if !readOnly}
+  {#if !readOnly && !hideFeedbackBar}
     <div class="diff-feedback grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-edge/60 px-4 py-1.5">
       <textarea
         value={note}
@@ -668,6 +720,28 @@
   .file-heading { background: var(--color-panel); }
   .diff-scroller:focus-visible { outline-offset: -2px; }
   .diff-row { min-height: 22px; line-height: 22px; }
+  :global([data-phone-desk]) .diff-row { line-height: 1.25rem; }
+  .diff-toolbar.phone-toolbar { min-height: 44px; padding: 0 16px; }
+  /* The picker is the whole left part of the bar: its field is invisible and covers the visual row. */
+  .phone-picker :global(.lola-field) { min-height: 44px; height: 100%; border: 0; background: transparent; color: transparent; padding: 0; }
+  .phone-picker :global(.lola-select) { display: block; position: absolute; inset: 0; width: 100%; }
+  .phone-picker :global(.lola-field) { -webkit-text-fill-color: transparent; }
+  .phone-picker :global(.lola-select-caret) { display: none; }
+  .phone-scope { padding: 4px 4px 8px; border-bottom: 1px solid var(--color-edge-soft); margin-bottom: 4px; }
+  .phone-scope :global(.lola-field) { min-height: 44px; font-size: 15px; }
+  :global([data-phone-desk]) .diff-file .file-heading { padding-inline: 16px; gap: 8px; }
+  :global([data-phone-desk]) .hunk-label { padding-inline: 16px; font-size: 12px; line-height: 16px; color: var(--color-faint); }
+  :global([data-phone-desk]) .diff-row[data-row-picked] { background: color-mix(in srgb, var(--color-accent) 12%, transparent); box-shadow: inset 2px 0 0 var(--color-accent); }
+  /* One file in view: the toolbar already names it, so its heading row is not repeated. */
+  :global([data-phone-desk]) .file-heading.phone-single { display: none; }
+  /* A line with a draft comment: 3px accent bar in the gutter and a speech-bubble glyph. */
+  :global([data-phone-desk]) .diff-row[data-draft] { position: relative; box-shadow: inset 3px 0 0 var(--color-accent); }
+  .draft-glyph { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; color: var(--color-accent); pointer-events: none; }
+  .phone-more { display: grid; place-items: center; width: 44px; height: 44px; margin-right: -13px; color: var(--color-ink); }
+  .phone-menu { position: absolute; z-index: 20; right: 0; top: 100%; min-width: 200px; padding: 4px; border: 1px solid var(--color-edge); border-radius: 12px; background: var(--color-panel); box-shadow: 0 8px 24px rgb(0 0 0 / 0.3); }
+  .phone-menu button { display: block; width: 100%; min-height: 44px; padding: 0 12px; text-align: left; font-size: 15px; border-radius: 8px; }
+  .phone-menu button[aria-pressed="true"] { color: var(--color-accent); }
+  .phone-base { padding: 6px 12px 8px; font-size: 13px; color: var(--color-faint); }
   .line-gutter { color: var(--color-faint); background: color-mix(in srgb, var(--color-canvas) 35%, transparent); }
   .line-marker { color: var(--color-faint); }
   .diff-add { background: color-mix(in srgb, var(--color-good) 9%, var(--color-panel)); }

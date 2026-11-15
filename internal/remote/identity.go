@@ -16,7 +16,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"github.com/sushidev-team/lola/internal/devices"
 )
 
 // The daemon's own TLS identity: an ECDSA P-256 key and the self-signed
@@ -31,7 +34,7 @@ import (
 // like corruption.
 //
 // The identity is STABLE, and that is its whole purpose. A phone pins the SPKI
-// hash at pairing time (M2 puts it in the QR), so silently minting a new key
+// hash at pairing time (the pairing QR carries it), so silently minting a new key
 // would break every enrolled device with no diagnosable symptom. Hence the
 // fail-closed rules below: a key without its certificate, a certificate without
 // its key, or a pair that does not match are all errors naming both paths.
@@ -87,7 +90,7 @@ func (dk *DeviceKey) SPKISHA256() [32]byte {
 	return sha256.Sum256(dk.Leaf.RawSubjectPublicKeyInfo)
 }
 
-// SPKIPin is the base64 of SPKISHA256, the form M2's QR payload carries and the
+// SPKIPin is the base64 of SPKISHA256, the form the pairing QR payload carries and the
 // form a human compares in a log line. It is standard base64 with padding, the
 // same encoding HPKP used, so a value pasted between tools means one thing.
 func (dk *DeviceKey) SPKIPin() string {
@@ -103,18 +106,113 @@ func (dk *DeviceKey) SPKIPin() string {
 // all, which is the other half of that requirement and is why nothing here has
 // to switch it off.
 //
-// ClientAuth is NoClientCert in M1 because M1 has no cryptography to
-// authenticate with; the peer proves itself in band. M2 turns this into
-// RequireAnyClientCert plus a registry check inside VerifyPeerCertificate, so
-// an unpaired laptop on the same cafe WiFi is rejected inside the TLS stack and
-// never reaches the WebSocket upgrade, the JSON parser or the envelope decoder.
-func (dk *DeviceKey) TLSConfig() *tls.Config {
+// Every peer presents a client certificate (self-signed, pinned by SPKI), and
+// verify decides inside the handshake whether it may continue: an unpaired
+// laptop on the same cafe WiFi is answered with a bad_certificate alert and
+// never reaches the JSON parser or the envelope decoder. The private-key proof
+// is TLS 1.3's CertificateVerify, which Go always checks.
+func (dk *DeviceKey) TLSConfig(verify func(tls.ConnectionState) error) *tls.Config {
 	return &tls.Config{
 		Certificates:           []tls.Certificate{dk.Certificate},
 		MinVersion:             tls.VersionTLS13,
 		SessionTicketsDisabled: true,
-		ClientAuth:             tls.NoClientCert,
+		ClientAuth:             tls.RequireAnyClientCert,
+		VerifyConnection:       verify,
 	}
+}
+
+var (
+	errPeerCert = errors.New("remote: the peer must present exactly one certificate")
+	errPeerKey  = errors.New("remote: the peer key must be ECDSA P-256")
+	errUnpaired = errors.New("remote: unpaired certificate")
+)
+
+// refusalLogRate and refusalLogBurst bound the "refused unpaired certificate"
+// line with ONE global token bucket. There is deliberately no per-address map:
+// an attacker cycling source addresses must cost this process no memory.
+const (
+	refusalLogRate  = 1.0
+	refusalLogBurst = 10.0
+)
+
+// refusalLog is that bucket plus the count of lines it suppressed.
+type refusalLog struct {
+	mu         sync.Mutex
+	b          *bucket
+	suppressed int
+}
+
+func newRefusalLog(now time.Time) *refusalLog {
+	return &refusalLog{b: newBucket(refusalLogRate, refusalLogBurst, now)}
+}
+
+// take reports whether a line may be written now and, when it may, how many
+// were suppressed since the last one.
+func (l *refusalLog) take(now time.Time) (ok bool, suppressed int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b.refill(now)
+	if !l.b.can(1) {
+		l.suppressed++
+		return false, 0
+	}
+	l.b.take(1)
+	suppressed, l.suppressed = l.suppressed, 0
+	return true, suppressed
+}
+
+// printf writes one line through the bucket, appending the count of lines it
+// suppressed since the last one it let through.
+func (l *refusalLog) printf(now time.Time, logf func(string, ...any), format string, args ...any) {
+	ok, n := l.take(now)
+	if !ok {
+		return
+	}
+	if n > 0 {
+		format += "; %d similar lines suppressed"
+		args = append(args, n)
+	}
+	logf(format, args...)
+}
+
+// verifyPeer runs inside the TLS handshake, so it holds no per-connection state
+// (VerifyConnection has nowhere to keep any) and takes no slot. It accepts a
+// paired certificate, or any well-formed one while a pairing window is open.
+func (s *Server) verifyPeer(cs tls.ConnectionState) error {
+	if len(cs.PeerCertificates) != 1 {
+		return errPeerCert
+	}
+	leaf := cs.PeerCertificates[0]
+	pub, ok := leaf.PublicKey.(*ecdsa.PublicKey)
+	if !ok || pub.Curve != elliptic.P256() {
+		return errPeerKey
+	}
+	h := devices.HashSPKI(leaf.RawSubjectPublicKeyInfo)
+	reg, pairer := s.opts.Devices, s.opts.Pairer
+	if reg != nil {
+		if _, ok := reg.Lookup(h); ok {
+			return nil
+		}
+	}
+	if pairer != nil && pairer.windowOpen() {
+		return nil
+	}
+	s.logRefusedCert(h)
+	return errUnpaired
+}
+
+// logRefusedCert writes the throttled refusal line. The address is not known
+// inside VerifyConnection; the fingerprint names the key.
+func (s *Server) logRefusedCert(h [32]byte) {
+	ok, n := s.refusals.take(s.opts.now())
+	if !ok {
+		return
+	}
+	if n > 0 {
+		s.opts.logf()("remote: refused unpaired certificate (fingerprint %s); %d similar lines suppressed", devices.IDFor(h), n)
+		return
+	}
+	s.opts.logf()("remote: refused unpaired certificate (fingerprint %s)", devices.IDFor(h))
 }
 
 // LoadOrCreateDeviceKey loads the identity under dir, generating it on a first

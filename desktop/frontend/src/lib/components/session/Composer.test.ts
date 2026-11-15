@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { conn, freshSession, setTalk, ssh, sshSvc, store, talkSvc, terms, AGENT } from "./talk.testkit";
+import { conn, freshSession, permission, setTalk, ssh, sshSvc, store, talkSvc, terms, AGENT } from "./talk.testkit";
 import { attachmentToken } from "$lib/composerpaste";
+import { setImagePicker } from "$lib/composerattach.svelte";
 import Composer from "./Composer.svelte";
+import { setTouchSurface } from "$lib/touchsurface";
 import Tray from "./Tray.svelte";
 
 afterEach(() => {
+  setTouchSurface(null);
+  setImagePicker(null);
   cleanup();
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -244,6 +248,78 @@ describe("hosts", () => {
     expect(left().textContent).toContain("You're driving prod-api");
     await fireEvent.click(button("Hand back")!);
     expect(v.handback?.conn).toBe("prod-api");
+  });
+});
+
+describe("on a touch surface", () => {
+  it("is Stop while working with an empty field, and Stop and send once there is text", async () => {
+    const haptic = vi.fn();
+    setTouchSurface({ haptic });
+    const id = freshSession({ agentState: "working" });
+    shown(id);
+    await setTalk(id, { composer: "working" });
+    const primary = () => document.querySelector("[data-footer-primary]") as HTMLElement;
+    expect(primary().getAttribute("data-footer-primary")).toBe("stop");
+    expect(document.querySelectorAll("[data-footer-stop]")).toHaveLength(1);
+    // The status is its own line above the field and ends without a stray space.
+    const status = document.querySelector("[data-phone-footer-text]")!;
+    expect(status.textContent).toMatch(/^Working/);
+    expect(status.textContent).not.toMatch(/ …/);
+    await type("more");
+    expect(primary().getAttribute("data-footer-primary")).not.toBe("stop");
+    expect(button("Stop and send")).not.toBeNull();
+    expect(button("Stop & send")).toBeNull();
+  });
+
+  it("does not say it is waiting on the card, and asks for a note", async () => {
+    setTouchSurface({});
+    const id = freshSession({ agentState: "waiting_input" });
+    shown(id);
+    await setTalk(id, { composer: "resting", prompt: permission() });
+    expect(document.querySelector("[data-phone-footer-text]")).toBeNull();
+    expect(field().placeholder).toBe("Add a note…");
+  });
+
+  it("says nothing in the status row when it cannot confirm the prompt, and keeps the daemon's wording off the phone", async () => {
+    setTouchSurface({});
+    const id = freshSession({ agentState: "idle" });
+    shown(id);
+    await setTalk(id, { composer: "unproven" });
+    expect(document.querySelector("[data-phone-footer-text]")).toBeNull();
+    expect(document.querySelector("[data-phone-status]")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/may be busy/);
+  });
+
+  it("has no footer-left Stop on the phone, only the round one when the field is empty", async () => {
+    setTouchSurface({});
+    const id = freshSession({ agentState: "working" });
+    shown(id);
+    await setTalk(id, { composer: "working" });
+    await type("more");
+    expect(document.querySelector("[data-footer-stop]")).toBeNull();
+    expect(button("Stop and send")).not.toBeNull();
+    // The secondary sits in the status row, not the footer.
+    expect(document.querySelector("[data-phone-status] [data-footer-secondary=stopSend]")).not.toBeNull();
+  });
+
+  it("disables send while a dialog is open; the card already says why, so there is no status line", async () => {
+    setTouchSurface({});
+    const id = freshSession({ agentState: "waiting_input" });
+    shown(id);
+    await setTalk(id, { composer: "modal" });
+    const primary = document.querySelector("[data-footer-primary]") as HTMLButtonElement;
+    expect(primary.disabled).toBe(true);
+    expect(document.querySelector("[data-phone-status]")).toBeNull();
+    expect(primary.getAttribute("aria-describedby")).toBeNull();
+    // The dialog card owns "Terminal".
+    expect(left().textContent).not.toMatch(/Terminal/);
+  });
+
+  it("puts attach beside the field", async () => {
+    setTouchSurface({});
+    setImagePicker(async () => ({ path: "/w/.lola/a.png", thumb: "data:image/png;base64,AA" }) as never);
+    shown(freshSession());
+    expect(document.querySelector("[data-composer-attach]")).not.toBeNull();
   });
 });
 
@@ -674,5 +750,41 @@ describe('image preparation feedback', () => {
     await waitFor(() => expect(ssh.view(id).pastes.get(1)?.value).toBe('/first-session.png'));
     expect(field().value).toBe('another session');
     expect(ssh.view(second).pastes.size).toBe(0);
+  });
+});
+
+describe("the image picker", () => {
+  it("shows no attach button on the desktop", () => {
+    shown(freshSession());
+    expect(button("Attach image")).toBeNull();
+  });
+
+  it("attaches what the picker returns", async () => {
+    setImagePicker(async () => ({ path: "/w/.lola/a.png", thumb: "data:image/png;base64,AA" }) as never);
+    const id = freshSession();
+    shown(id);
+    await fireEvent.click(button("Attach image")!);
+    await waitFor(() => expect(ssh.view(id).pastes.get(1)).toMatchObject({ kind: "image", value: "/w/.lola/a.png" }));
+    expect(field().value).toContain(attachmentToken(1));
+  });
+
+  it("shows the attach button for a picker installed after it rendered, and hides it when removed", async () => {
+    const id = freshSession();
+    shown(id);
+    expect(button("Attach image")).toBeNull();
+    setImagePicker(async () => null);
+    await waitFor(() => expect(button("Attach image")).not.toBeNull());
+    setImagePicker(null);
+    await waitFor(() => expect(button("Attach image")).toBeNull());
+  });
+
+  it("leaves no token when the person cancels", async () => {
+    setImagePicker(async () => null);
+    const id = freshSession();
+    shown(id);
+    await fireEvent.click(button("Attach image")!);
+    await waitFor(() => expect(ssh.view(id).pastes.size).toBe(0));
+    expect(field().value).toBe("");
+    expect(ssh.view(id).agentDraft).toBe("");
   });
 });

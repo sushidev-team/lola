@@ -5,14 +5,17 @@
 // platform-free Transport seam the native plugin implements, and the
 // request/response correlator every command goes through.
 //
-// The golden vectors in ./testdata/frames.json are read by BOTH this package's
-// tests and internal/protocol/goldenvectors_test.go. They are what keeps three
-// independent implementations of one wire format — Go, TypeScript and (from M1)
-// Swift — from drifting apart on a device where nothing can be debugged.
+// The golden vectors in ./testdata/*.json are read by BOTH this package's tests
+// and internal/protocol/goldenvectors_test.go: they keep Go, TypeScript and
+// Swift from drifting apart on a device where nothing can be debugged.
 
+export * from "./limits";
 export * from "./protocol";
 export * from "./panes";
 export * from "./codec";
 export * from "./correlator";
+export * from "./events";
+export type * from "./push";
+export * from "./tiers";
 export * from "./transport";
 export { FakeChannel } from "./fake";

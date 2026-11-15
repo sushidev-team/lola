@@ -25,9 +25,8 @@
 // IT ONLY EVER GROWS. The floor is the app's own designed base, because the
 // phone scale was raised on purpose and letting a small Dynamic Type step undo
 // that would re-introduce the failure `app.css` describes. The ceiling is a
-// layout decision rather than a preference: past it the two-line session row
-// and the connect form's field captions stop fitting, and clipped text serves
-// nobody. A user who needs more than the ceiling is better served by system
+// layout decision rather than a preference: it covers AX1-AX2, and past it the
+// dense layout (the two-line session row, the form captions) is not designed. A user who needs more than the ceiling is better served by system
 // zoom, which scales everything including the terminal.
 
 /** The size `--text-base` resolves to at the system's default setting. */
@@ -36,8 +35,12 @@ export const ROOT_BASE = 16;
 /** Never smaller than the designed phone scale. */
 export const ROOT_MIN = 16;
 
-/** Past this the session row and the form captions stop fitting. */
-export const ROOT_MAX = 23;
+/**
+ * Covers Dynamic Type through AX1-AX2 (28px of root is a body of about 30px; AX1 is 28, AX2 is 33). Beyond that the
+ * dense layout is not designed: system zoom serves it better, and docs/mobile/04-client.md §6
+ * records the decision.
+ */
+export const ROOT_MAX = 28;
 
 /**
  * `-apple-system-body` at the system's default Dynamic Type step, in px.

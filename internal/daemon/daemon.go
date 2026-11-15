@@ -29,6 +29,7 @@ import (
 	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/devices"
 	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/goal"
 	"github.com/sushidev-team/lola/internal/goalplan"
@@ -40,6 +41,7 @@ import (
 	"github.com/sushidev-team/lola/internal/panebus"
 	"github.com/sushidev-team/lola/internal/portlease"
 	"github.com/sushidev-team/lola/internal/portproc"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/quota"
 	"github.com/sushidev-team/lola/internal/remote"
 	"github.com/sushidev-team/lola/internal/reviewcapture"
@@ -528,9 +530,8 @@ type Daemon struct {
 	// Remote phone listener ([remote], remotewire.go). remote is the TLS
 	// listener a paired mobile client speaks the protocol.Frame envelope to,
 	// and panes is the pane-attach registry it subscribes through. Both are nil
-	// until startRemote binds one, which only ever happens when the [remote]
-	// table says to listen AND this binary was built with the M1 -tags
-	// lola_insecure path — see remotelisten.go and its untagged companion.
+	// until startRemote builds one, which only happens when the [remote] table
+	// asks for a listener or a relay-only server (RemoteConfig.Serves).
 	//
 	// They have their OWN mutex rather than living under d.mu, for two reasons.
 	// Binding a socket and loading the device identity are I/O, and d.mu is the
@@ -549,24 +550,53 @@ type Daemon struct {
 	// one question only the daemon can answer (see resolvePaneName) and a test
 	// that provided its own gate would be proving nothing about the wiring.
 	// remoteErr is the last reason a listener did not come up, kept so
-	// cmd=pairBegin can REPORT it instead of the caller guessing. The desktop
-	// used to tell an operator to go read the log for an address it could not
-	// bind, which was a guess and was wrong the one time it mattered: the actual
-	// cause was a missing bearer key. It is cleared whenever a listener starts.
+	// cmd=pairBegin can REPORT it instead of the caller guessing (a bind
+	// failure, or an unsaved device registry). It is cleared whenever a
+	// listener starts.
 	remoteMu sync.Mutex
 	// bridge is the sandbox HOOK BRIDGE listener + secret (hookbridge.go): a
 	// loopback TCP port open only while some project is sandboxed.
-	bridge       hookBridge
-	remote       *remote.Server
-	remoteErr    string
-	panes        *panebus.Registry
-	paneRegistry func() *panebus.Registry
+	bridge    hookBridge
+	remote    *remote.Server
+	remoteErr string
+	// remoteUnsaved: the server is held off because the registry holds a
+	// revocation only in memory. Under remoteMu.
+	remoteUnsaved bool
+	panes         *panebus.Registry
+	paneRegistry  func() *panebus.Registry
 	// advertiser publishes the listener on the local network (internal/mdns),
 	// so a phone finds this Mac by name instead of by an address that changes
 	// with every network. Held under remoteMu with the listener because its
 	// lifetime is exactly the listener's: a rebind replaces both. nil until the
 	// first listener comes up, and nil forever on a build with no listener.
 	advertiser *mdns.Advertiser
+
+	// devices is the paired-phone registry and pairer the pairing window. Both
+	// are created ONCE in newDaemon and outlive every listener rebuild, so a
+	// reload or a rebind keeps paired devices and an open pairing window. They
+	// carry their own mutexes and are never held across remoteMu or d.mu;
+	// registry subscribers run outside the registry's lock.
+	devices *devices.Registry
+	pairer  *remote.Pairer
+	// remoteServes is the last answer of RemoteConfig.Serves, so a reload can
+	// tell that a hub join or leave changed whether a server should exist even
+	// though [remote] itself did not.
+	remoteServes atomic.Bool
+	// watch is the event push hub (docs/mobile/02-events.md); hubRelay is the
+	// relay leg to lola-hub (docs/mobile/03-hub-relay.md).
+	watch    *watchHub
+	hubRelay *hubRelay
+	// Lazily built per-daemon state of the phone surface; each getter builds
+	// its value once, so a Daemon assembled without newDaemon (tests) works
+	// too. attach holds the open image uploads (attachimage.go), tickets the
+	// per-(project, scope) Linear ticket cache (tickets.go), talkErrs which
+	// sessions' last pane read failed (talkstate.go).
+	attachOnce  sync.Once
+	attach      *attachRegistry
+	ticketsOnce sync.Once
+	tickets     *ticketsCache
+	talkErrOnce sync.Once
+	talkErrs    *talkReadErrs
 	// mdnsStart is internal/mdns's exec seam, for tests that must not spawn
 	// dns-sd. nil uses the real one.
 	mdnsStart mdns.Starter
@@ -630,6 +660,24 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	}
 	d.ports = ports
 	d.spend = newSpendState(home, func(f string, a ...any) { d.logf("", f, a...) })
+	d.devices = devices.Open(home, time.Now, d.remoteLogf)
+	d.pairer = remote.NewPairer(d.devices, time.Now, d.remoteLogf)
+	d.devices.Subscribe(d.devicesChanged)
+	d.watch = newWatchHub(d)
+	d.hubRelay = &hubRelay{}
+	d.pokeStatusOnChange()
+	// Every committed session change reaches the watch hub as a poke; the hub
+	// decides what to publish and does nothing when no phone is watching.
+	d.sessions.OnChange(func(c session.Change) {
+		bits := pokeRow
+		if talkFieldsChanged(c.Prev, c.Next) {
+			bits |= pokeTalk
+		}
+		d.watch.PokeSession(c.ID, bits)
+		if headChanged(c.Prev, c.Next) {
+			d.watch.PokeDiff(c.ID, protocol.DiffCauseHead)
+		}
+	})
 	// Feed the activity ring from every status transition the store commits
 	// (the spawn birth is recorded separately at the dispatch site).
 	d.sessions.OnTransition(func(from string, s session.Session) {
@@ -959,6 +1007,13 @@ func Run(ctx context.Context) error {
 	d.wg.Add(1)
 	go d.hubLoop(ctx)
 
+	// The relay leg to the hub (hubrelay.go) and the event push hub
+	// (watchhub.go). Both end on ctx and are waited for by d.wg.
+	d.wg.Add(1)
+	go d.hubRelayLoop(ctx)
+	d.wg.Add(1)
+	go d.watch.run(ctx)
+
 	go d.serve(ctx, ln)
 
 	logger.Printf("daemon started (socket %s)", sock)
@@ -987,6 +1042,9 @@ func Run(ctx context.Context) error {
 		}
 	}
 	step("remote listener", d.stopRemote)
+	// No phone can reach an upload now; end the open ones so their temp
+	// files go now rather than at the next daemon's first upload.
+	step("attachments", d.abortAttachments)
 	step("hook bridge", d.stopHookBridge)
 	step("ssh", d.stopSSH)
 	defer d.stopTimeline() // last, so what the shutdown itself emits is still written
@@ -1054,11 +1112,11 @@ func (d *Daemon) ensureLinear() (linear.API, error) {
 	}
 	key, err := secrets.LinearAPIKey(d.cfg.Linear.APIKeyKeychain, d.cfg.Linear.APIKeyEnv)
 	if err != nil {
-		d.linOK = false
+		d.setLinOK(false)
 		return nil, err
 	}
 	d.lin = linear.New(d.cfg.Linear.Endpoint, key)
-	d.linOK = true
+	d.setLinOK(true)
 	return d.lin, nil
 }
 
@@ -1081,7 +1139,7 @@ func (d *Daemon) linearKey() string {
 
 func (d *Daemon) setLinearOK(ok bool) {
 	d.mu.Lock()
-	d.linOK = ok
+	d.setLinOK(ok)
 	d.mu.Unlock()
 }
 
@@ -1091,7 +1149,7 @@ func (d *Daemon) setLinearOK(ok bool) {
 func (d *Daemon) invalidateLinear() {
 	d.mu.Lock()
 	d.lin = nil
-	d.linOK = false
+	d.setLinOK(false)
 	d.mu.Unlock()
 }
 

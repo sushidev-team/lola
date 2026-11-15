@@ -611,7 +611,7 @@ Your message is neutral, never accent. Dev rail is neutral. `DockPanel:137-138` 
 | **Post scoping** | No `--host` and no evidence means `Conn == ""`. `TalkConn` still routes `ConnForHost`. | Narration must not die with a tab. |
 | **Goal sessions** | Open on Terminal. Conversation read-only. No composer, no Changes, no Stop. Link to the goal. `agentSay`, `agentStop`, `agentChoose` refuse. | observer `continue`s, `flushHandoffsOnStop` returns early, `handleDiff` refuses, no checkpoints. A queued Say would never flush, and the goal controller owns delivery. |
 | **Temporary and shell-only** | Terminal body. No Conversation, no composer, strip only with several terminals, footer strip always. Observer closes an exited temporary session. | `sshTalkStore` already refuses agentless. Glance mounts no terminal, so exit cleanup cannot hang off `onExit`. |
-| **Phones and TUI** | Unchanged and terminal-first. All new commands denied through `SSHHumanCommands`. No shim changes. | Phone parity needs its own read-only command written into a tier by hand. |
+| **Phones and TUI** | The TUI is unchanged and terminal-first. Phones get the Conversation through `protocol.TalkCommands` (tiered, `sshRecall`/`sshAnswer` at `answer`) and `sessionTimeline`; see `docs/mobile/04-client.md`. | A phone command exists only once a human writes it into a tier. |
 | **Compact band** | Kept as a Glance with no xterm. | Keeps a habit (Cursor's lesson) and ends browse-time attach. |
 | **Queue semantics** | Next delivery is the head batch: leading non-command entries joined by a blank line, or one command alone. After a batch, the rest waits for the next rest. | Simple. A joined `/compact` would become arguments. |
 | **Steer** | No true mid-turn steer. Queue, Stop, and a named `Stop & send` button. the gates forbid typing into a working pane, Claude's own queue cannot be recalled, and Esc starts it. | Measured. Research wants it, so this is a visible cost. |
@@ -1053,7 +1053,7 @@ Claude: all true, from measurement. Codex and opencode start all false. `Send`, 
 | Bridge allowlist | Untouched. All new commands in `SSHHumanCommands`. Tests iterate it. |
 | Facts versus claims | Plate versus ground, section 2.5. |
 | Widgets, prompts, ssh | Frame layer, `allow-scripts`, `data:` document, port channel, ping, prompt path and `-O check` not touched. Additions only: filled state, leading space. |
-| Phone | No wire field, no shim change, the mobile build stays green. |
+| Phone | Runs these components through the shim and pushed sources: `docs/mobile/04-client.md`. Widgets never reach it. |
 
 ---
 

@@ -626,11 +626,14 @@ endpoint = "https://api.linear.app/graphql"
 # Omitting the whole table is zero behavior change: nothing binds, nothing
 # listens, and a later save will not grow the table.
 #
-# While the transport is at its first milestone the listener is compiled ONLY
-# into a binary built with the `lola_insecure` build tag, which additionally
-# forces the bind to localhost whatever this table says. A release binary has no
-# listener at all and logs that when this table is enabled, so enabling it there
-# is inert rather than silent.
+# Phones pair by QR code plus the 6-digit code the phone shows, typed on the Mac
+# (`lola pair`, or Settings, Phones in the app). Each device then has its own
+# key, its own capability tiers (read, answer, control, destructive, shell) and
+# is revoked with `lola devices revoke`. The listener is in every build.
+#
+# Two ways in: the listener below (LAN / VPN), and the team hub's relay, which
+# needs no open port and no network in common with the phone. The relay is on
+# whenever this table is enabled and a hub is joined (see `relay`).
 # ---------------------------------------------------------------------------
 # [remote]
 # enabled = false
@@ -639,7 +642,9 @@ endpoint = "https://api.linear.app/graphql"
 # # never makes a network call).
 # #
 # #   off        bind nothing. Keeps the rest of the table, so it is the way to
-# #              pause the listener without losing your settings.
+# #              pause the listener without losing your settings. It does NOT
+# #              stop the hub relay: use `relay = false` (LAN settings kept, no
+# #              relay) or `enabled = false` (nothing at all) for that.
 # #   localhost  loopback only — what an SSH forward, a VPN or a tailnet wants,
 # #              and the only mode that puts nothing on a network interface.
 # #   lan        only private interfaces (RFC1918 / ULA / link-local) whose
@@ -651,17 +656,11 @@ endpoint = "https://api.linear.app/graphql"
 # # TCP port. 0 uses the built-in default shown here.
 # port = 7717
 #
-# insecure_lan: milestone 1 authenticates a phone with a single shared bearer
-# key, so it FORCES the bind to loopback and a physical phone cannot reach it.
-# A Simulator can — it shares the Mac's loopback — so this is only for a real
-# device. Turning it on honours `bind` above and puts that shared key on your
-# network in the clear: anything that can reach the port and guess the key can
-# type into a running coding agent. Two keys have to agree, so a config that
-# merely says bind = "lan" still binds loopback.
-#
-# It is deleted along with the whole insecure path in milestone 2, which gives
-# each device its own identity and makes a LAN bind unremarkable.
-# insecure_lan = false
+# relay: let a paired phone reach this Mac through the joined team hub when it
+# is not on the same network. Default true; effective only with enabled = true
+# and a joined hub. The relay carries the phone's own end-to-end TLS session, so
+# the hub sees ciphertext only. Set false to stay LAN/VPN only.
+# relay = true
 #
 # advertise: publish this listener on the local network with mDNS, so a paired
 # phone finds this Mac on a network whose addresses it has never seen. The key

@@ -65,6 +65,8 @@ func main() {
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
 		hubCmd(),
+		pairCmd(),
+		devicesCmd(),
 		sandboxCmd(),
 		openCmd(),
 		attachCmd(),

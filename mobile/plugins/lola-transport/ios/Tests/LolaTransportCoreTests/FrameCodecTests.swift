@@ -8,7 +8,7 @@ final class FrameCodecTests: XCTestCase {
 
     func testEveryGoldenVectorEncodesToItsStatedBytes() throws {
         let vectors = try GoldenVectors.load()
-        XCTAssertEqual(vectors.count, 20, "the vector file should carry twenty cases")
+        XCTAssertEqual(vectors.count, 19, "the vector file should carry nineteen cases")
 
         for vector in vectors {
             let framed = try FrameEncoder.encode(body: vector.body)

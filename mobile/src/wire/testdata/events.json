@@ -1,0 +1,528 @@
+{
+  "note": "Golden vectors for the push vocabulary of envelope v2: watch and unwatch, every event topic, a stream-ending err, and the attachment commands. Same schema and rules as frames.json; written by the Go FrameWriter (LOLA_WRITE_VECTORS=1 rewrites only the hex). Key order inside each payload is the Go struct's declaration order and is significant.",
+  "cases": [
+    {
+      "name": "req_watch_three_topics",
+      "why": "A watch request: the frame id (w7) becomes the watch id every event of these streams carries. Args ride in Request.Args like any typed command.",
+      "frame": {
+        "v": 2,
+        "type": "req",
+        "id": "w7",
+        "cmd": "watch",
+        "payload": {
+          "cmd": "watch",
+          "args": {
+            "topics": [
+              "sessions",
+              "talk:lola-fe-42",
+              "feed:lola-fe-42"
+            ]
+          }
+        }
+      },
+      "hex": "000000897b2276223a322c2274797065223a22726571222c226964223a227737222c22636d64223a227761746368222c227061796c6f6164223a7b22636d64223a227761746368222c2261726773223a7b22746f70696373223a5b2273657373696f6e73222c2274616c6b3a6c6f6c612d66652d3432222c22666565643a6c6f6c612d66652d3432225d7d7d7d"
+    },
+    {
+      "name": "resp_watch_partial",
+      "why": "Per-topic outcomes: the response is ok:true even when a topic was refused; the refusal is data.",
+      "frame": {
+        "v": 2,
+        "type": "resp",
+        "id": "w7",
+        "payload": {
+          "ok": true,
+          "data": {
+            "topics": [
+              {
+                "topic": "sessions",
+                "ok": true
+              },
+              {
+                "topic": "talk:gone-1",
+                "ok": false,
+                "code": "unknown_session",
+                "message": "that session is not here"
+              }
+            ]
+          }
+        }
+      },
+      "hex": "000000c97b2276223a322c2274797065223a2272657370222c226964223a227737222c227061796c6f6164223a7b226f6b223a747275652c2264617461223a7b22746f70696373223a5b7b22746f706963223a2273657373696f6e73222c226f6b223a747275657d2c7b22746f706963223a2274616c6b3a676f6e652d31222c226f6b223a66616c73652c22636f6465223a22756e6b6e6f776e5f73657373696f6e222c226d657373616765223a22746861742073657373696f6e206973206e6f742068657265227d5d7d7d7d"
+    },
+    {
+      "name": "req_unwatch_all",
+      "why": "unwatch with all:true; the reply carries an empty topics array.",
+      "frame": {
+        "v": 2,
+        "type": "req",
+        "id": "u1",
+        "cmd": "unwatch",
+        "payload": {
+          "cmd": "unwatch",
+          "args": {
+            "all": true
+          }
+        }
+      },
+      "hex": "0000005e7b2276223a322c2274797065223a22726571222c226964223a227531222c22636d64223a22756e7761746368222c227061796c6f6164223a7b22636d64223a22756e7761746368222c2261726773223a7b22616c6c223a747275657d7d7d"
+    },
+    {
+      "name": "event_sessions_reset",
+      "why": "The first event of the sessions stream: reset, one whole SessionInfo row and the activity ring. seq starts at 1.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "sessions",
+        "seq": 1,
+        "payload": {
+          "reset": true,
+          "upsert": [
+            {
+              "id": "lola-fe-42",
+              "project": "lola",
+              "issue": "ENG-42",
+              "title": "Fix the \u003clogin\u003e flow",
+              "branch": "lola/eng-42",
+              "agent": "claude",
+              "status": "working",
+              "prUrl": "",
+              "prNumber": 0,
+              "checks": "",
+              "review": "",
+              "tmuxName": "lola-fe-42",
+              "source": "native",
+              "worktree": "/Users/dev/.lola/worktrees/lola/lola-fe-42",
+              "age": "",
+              "firstSeen": "2026-11-14T09:30:00Z",
+              "agentState": "working",
+              "delivery": "none",
+              "headline": "Reading the router",
+              "ciRetries": 0,
+              "escalated": false,
+              "reacting": ""
+            }
+          ],
+          "events": [
+            {
+              "id": "e1",
+              "issue": "ENG-42",
+              "from": "idle",
+              "to": "working",
+              "ago": "1m",
+              "at": "2026-11-14T09:30:00Z"
+            }
+          ]
+        }
+      },
+      "hex": "0000029a7b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a2273657373696f6e73222c22736571223a312c227061796c6f6164223a7b227265736574223a747275652c22757073657274223a5b7b226964223a226c6f6c612d66652d3432222c2270726f6a656374223a226c6f6c61222c226973737565223a22454e472d3432222c227469746c65223a2246697820746865205c75303033636c6f67696e5c753030336520666c6f77222c226272616e6368223a226c6f6c612f656e672d3432222c226167656e74223a22636c61756465222c22737461747573223a22776f726b696e67222c22707255726c223a22222c2270724e756d626572223a302c22636865636b73223a22222c22726576696577223a22222c22746d75784e616d65223a226c6f6c612d66652d3432222c22736f75726365223a226e6174697665222c22776f726b74726565223a222f55736572732f6465762f2e6c6f6c612f776f726b74726565732f6c6f6c612f6c6f6c612d66652d3432222c22616765223a22222c2266697273745365656e223a22323032362d31312d31345430393a33303a30305a222c226167656e745374617465223a22776f726b696e67222c2264656c6976657279223a226e6f6e65222c22686561646c696e65223a2252656164696e672074686520726f75746572222c22636952657472696573223a302c22657363616c61746564223a66616c73652c227265616374696e67223a22227d5d2c226576656e7473223a5b7b226964223a226531222c226973737565223a22454e472d3432222c2266726f6d223a2269646c65222c22746f223a22776f726b696e67222c2261676f223a22316d222c226174223a22323032362d31312d31345430393a33303a30305a227d5d7d7d"
+    },
+    {
+      "name": "event_sessions_delta",
+      "why": "A keyed delta: upsert and remove, no reset key (omitempty).",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "sessions",
+        "seq": 2,
+        "payload": {
+          "upsert": [
+            {
+              "id": "lola-fe-43",
+              "project": "lola",
+              "issue": "ENG-43",
+              "title": "Fix the \u003clogin\u003e flow",
+              "branch": "lola/eng-42",
+              "agent": "claude",
+              "status": "working",
+              "prUrl": "",
+              "prNumber": 0,
+              "checks": "",
+              "review": "",
+              "tmuxName": "lola-fe-42",
+              "source": "native",
+              "worktree": "/Users/dev/.lola/worktrees/lola/lola-fe-42",
+              "age": "",
+              "firstSeen": "2026-11-14T09:30:00Z",
+              "agentState": "working",
+              "delivery": "none",
+              "ciRetries": 0,
+              "escalated": false,
+              "reacting": ""
+            }
+          ],
+          "remove": [
+            "lola-fe-9"
+          ]
+        }
+      },
+      "hex": "000002187b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a2273657373696f6e73222c22736571223a322c227061796c6f6164223a7b22757073657274223a5b7b226964223a226c6f6c612d66652d3433222c2270726f6a656374223a226c6f6c61222c226973737565223a22454e472d3433222c227469746c65223a2246697820746865205c75303033636c6f67696e5c753030336520666c6f77222c226272616e6368223a226c6f6c612f656e672d3432222c226167656e74223a22636c61756465222c22737461747573223a22776f726b696e67222c22707255726c223a22222c2270724e756d626572223a302c22636865636b73223a22222c22726576696577223a22222c22746d75784e616d65223a226c6f6c612d66652d3432222c22736f75726365223a226e6174697665222c22776f726b74726565223a222f55736572732f6465762f2e6c6f6c612f776f726b74726565732f6c6f6c612f6c6f6c612d66652d3432222c22616765223a22222c2266697273745365656e223a22323032362d31312d31345430393a33303a30305a222c226167656e745374617465223a22776f726b696e67222c2264656c6976657279223a226e6f6e65222c22636952657472696573223a302c22657363616c61746564223a66616c73652c227265616374696e67223a22227d5d2c2272656d6f7665223a5b226c6f6c612d66652d39225d7d7d"
+    },
+    {
+      "name": "event_sessions_reset_more",
+      "why": "A split snapshot: the first part is reset with more; later parts carry upsert and more until the last.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "sessions",
+        "seq": 1,
+        "payload": {
+          "reset": true,
+          "more": true,
+          "upsert": [
+            {
+              "id": "lola-fe-42",
+              "project": "lola",
+              "issue": "ENG-42",
+              "title": "Fix the \u003clogin\u003e flow",
+              "branch": "lola/eng-42",
+              "agent": "claude",
+              "status": "working",
+              "prUrl": "",
+              "prNumber": 0,
+              "checks": "",
+              "review": "",
+              "tmuxName": "lola-fe-42",
+              "source": "native",
+              "worktree": "/Users/dev/.lola/worktrees/lola/lola-fe-42",
+              "age": "",
+              "firstSeen": "2026-11-14T09:30:00Z",
+              "agentState": "working",
+              "delivery": "none",
+              "headline": "Reading the router",
+              "ciRetries": 0,
+              "escalated": false,
+              "reacting": ""
+            }
+          ]
+        }
+      },
+      "hex": "0000023a7b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a2273657373696f6e73222c22736571223a312c227061796c6f6164223a7b227265736574223a747275652c226d6f7265223a747275652c22757073657274223a5b7b226964223a226c6f6c612d66652d3432222c2270726f6a656374223a226c6f6c61222c226973737565223a22454e472d3432222c227469746c65223a2246697820746865205c75303033636c6f67696e5c753030336520666c6f77222c226272616e6368223a226c6f6c612f656e672d3432222c226167656e74223a22636c61756465222c22737461747573223a22776f726b696e67222c22707255726c223a22222c2270724e756d626572223a302c22636865636b73223a22222c22726576696577223a22222c22746d75784e616d65223a226c6f6c612d66652d3432222c22736f75726365223a226e6174697665222c22776f726b74726565223a222f55736572732f6465762f2e6c6f6c612f776f726b74726565732f6c6f6c612f6c6f6c612d66652d3432222c22616765223a22222c2266697273745365656e223a22323032362d31312d31345430393a33303a30305a222c226167656e745374617465223a22776f726b696e67222c2264656c6976657279223a226e6f6e65222c22686561646c696e65223a2252656164696e672074686520726f75746572222c22636952657472696573223a302c22657363616c61746564223a66616c73652c227265616374696e67223a22227d5d7d7d"
+    },
+    {
+      "name": "event_talk_prompt",
+      "why": "talk:<id> is TalkStateData verbatim; a prompt carries its hash, lines, choices and since.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "talk:lola-fe-42",
+        "seq": 1,
+        "payload": {
+          "session": "lola-fe-42",
+          "caps": {
+            "feed": true,
+            "send": true,
+            "stop": true,
+            "cards": true
+          },
+          "composer": "prompt",
+          "prompt": {
+            "kind": "permission",
+            "hash": "9f2c41ab",
+            "lines": [
+              "Run `rm -rf build`?"
+            ],
+            "choices": [
+              {
+                "key": "1",
+                "label": "Yes"
+              },
+              {
+                "key": "2",
+                "label": "No",
+                "detail": "Tell the agent what to do instead"
+              }
+            ],
+            "since": "2026-11-14T09:30:00Z"
+          },
+          "feedSeq": 17,
+          "feedEpoch": "ep1",
+          "health": "ok"
+        }
+      },
+      "hex": "000001bc7b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a2274616c6b3a6c6f6c612d66652d3432222c22736571223a312c227061796c6f6164223a7b2273657373696f6e223a226c6f6c612d66652d3432222c2263617073223a7b2266656564223a747275652c2273656e64223a747275652c2273746f70223a747275652c226361726473223a747275657d2c22636f6d706f736572223a2270726f6d7074222c2270726f6d7074223a7b226b696e64223a227065726d697373696f6e222c2268617368223a223966326334316162222c226c696e6573223a5b2252756e2060726d202d7266206275696c64603f225d2c2263686f69636573223a5b7b226b6579223a2231222c226c6162656c223a22596573227d2c7b226b6579223a2232222c226c6162656c223a224e6f222c2264657461696c223a2254656c6c20746865206167656e74207768617420746f20646f20696e7374656164227d5d2c2273696e6365223a22323032362d31312d31345430393a33303a30305a227d2c2266656564536571223a31372c226665656445706f6368223a22657031222c226865616c7468223a226f6b227d7d"
+    },
+    {
+      "name": "event_talk_gone",
+      "why": "The fixed shape of a session that vanished without an ended record: sent once, then nothing.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "talk:lola-fe-42",
+        "seq": 2,
+        "payload": {
+          "session": "lola-fe-42",
+          "caps": {
+            "feed": false,
+            "send": false,
+            "stop": false,
+            "cards": false
+          },
+          "composer": "gone",
+          "feedSeq": 0,
+          "health": "unsupported"
+        }
+      },
+      "hex": "000000d87b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a2274616c6b3a6c6f6c612d66652d3432222c22736571223a322c227061796c6f6164223a7b2273657373696f6e223a226c6f6c612d66652d3432222c2263617073223a7b2266656564223a66616c73652c2273656e64223a66616c73652c2273746f70223a66616c73652c226361726473223a66616c73657d2c22636f6d706f736572223a22676f6e65222c2266656564536571223a302c226865616c7468223a22756e737570706f72746564227d7d"
+    },
+    {
+      "name": "event_feed_reset_older",
+      "why": "A feed snapshot while the reader is still scanning: reset, older, epoch, scanning and a tool item.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "feed:lola-fe-42",
+        "seq": 1,
+        "payload": {
+          "reset": true,
+          "older": true,
+          "session": "lola-fe-42",
+          "epoch": "ep1",
+          "lastSeq": 40,
+          "scanning": true,
+          "health": "ok",
+          "items": [
+            {
+              "id": "i39",
+              "kind": "assistant",
+              "order": 39,
+              "seq": 39,
+              "at": "2026-11-14T09:30:00Z",
+              "text": "Running the tests."
+            },
+            {
+              "id": "i40",
+              "kind": "tool",
+              "order": 40,
+              "seq": 40,
+              "at": "2026-11-14T09:30:00Z",
+              "tool": {
+                "name": "Bash",
+                "category": "run",
+                "summary": "go test ./...",
+                "status": "ok",
+                "durationMs": 1840,
+                "hasOutput": true
+              }
+            }
+          ]
+        }
+      },
+      "hex": "000001ec7b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a22666565643a6c6f6c612d66652d3432222c22736571223a312c227061796c6f6164223a7b227265736574223a747275652c226f6c646572223a747275652c2273657373696f6e223a226c6f6c612d66652d3432222c2265706f6368223a22657031222c226c617374536571223a34302c227363616e6e696e67223a747275652c226865616c7468223a226f6b222c226974656d73223a5b7b226964223a22693339222c226b696e64223a22617373697374616e74222c226f72646572223a33392c22736571223a33392c226174223a22323032362d31312d31345430393a33303a30305a222c2274657874223a2252756e6e696e67207468652074657374732e227d2c7b226964223a22693430222c226b696e64223a22746f6f6c222c226f72646572223a34302c22736571223a34302c226174223a22323032362d31312d31345430393a33303a30305a222c22746f6f6c223a7b226e616d65223a2242617368222c2263617465676f7279223a2272756e222c2273756d6d617279223a22676f2074657374202e2f2e2e2e222c22737461747573223a226f6b222c226475726174696f6e4d73223a313834302c226861734f7574707574223a747275657d7d5d7d7d"
+    },
+    {
+      "name": "event_feed_scan_progress",
+      "why": "Scan progress: scanning true, items empty (never null), no reset key.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "feed:lola-fe-42",
+        "seq": 2,
+        "payload": {
+          "session": "lola-fe-42",
+          "epoch": "ep1",
+          "lastSeq": 55,
+          "scanning": true,
+          "health": "ok",
+          "items": []
+        }
+      },
+      "hex": "000000a97b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a22666565643a6c6f6c612d66652d3432222c22736571223a322c227061796c6f6164223a7b2273657373696f6e223a226c6f6c612d66652d3432222c2265706f6368223a22657031222c226c617374536571223a35352c227363616e6e696e67223a747275652c226865616c7468223a226f6b222c226974656d73223a5b5d7d7d"
+    },
+    {
+      "name": "event_feed_delta_omitted",
+      "why": "An item over EventItemMaxBytes is not sent: items is [] and omitted names {id, seq}.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "feed:lola-fe-42",
+        "seq": 3,
+        "payload": {
+          "session": "lola-fe-42",
+          "epoch": "ep1",
+          "lastSeq": 61,
+          "health": "ok",
+          "items": [],
+          "omitted": [
+            {
+              "id": "i61",
+              "seq": 61
+            }
+          ]
+        }
+      },
+      "hex": "000000bb7b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a22666565643a6c6f6c612d66652d3432222c22736571223a332c227061796c6f6164223a7b2273657373696f6e223a226c6f6c612d66652d3432222c2265706f6368223a22657031222c226c617374536571223a36312c226865616c7468223a226f6b222c226974656d73223a5b5d2c226f6d6974746564223a5b7b226964223a22693631222c22736571223a36317d5d7d7d"
+    },
+    {
+      "name": "event_timeline_delta",
+      "why": "A timeline delta: items plus the whole connection list because it changed.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "timeline:lola-fe-42",
+        "seq": 2,
+        "payload": {
+          "session": "lola-fe-42",
+          "lastSeq": 9,
+          "items": [
+            {
+              "id": "t9",
+              "kind": "system",
+              "order": 9,
+              "seq": 9,
+              "at": "2026-11-14T09:30:00Z",
+              "system": {
+                "kind": "",
+                "text": ""
+              }
+            }
+          ],
+          "connections": [
+            {
+              "id": "c1",
+              "session": "lola-fe-42",
+              "host": "build.example.com",
+              "alias": "build",
+              "tier": "read",
+              "entry": "",
+              "state": "",
+              "wheel": ""
+            }
+          ]
+        }
+      },
+      "hex": "000001757b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a2274696d656c696e653a6c6f6c612d66652d3432222c22736571223a322c227061796c6f6164223a7b2273657373696f6e223a226c6f6c612d66652d3432222c226c617374536571223a392c226974656d73223a5b7b226964223a227439222c226b696e64223a2273797374656d222c226f72646572223a392c22736571223a392c226174223a22323032362d31312d31345430393a33303a30305a222c2273797374656d223a7b226b696e64223a22222c2274657874223a22227d7d5d2c22636f6e6e656374696f6e73223a5b7b226964223a226331222c2273657373696f6e223a226c6f6c612d66652d3432222c22686f7374223a226275696c642e6578616d706c652e636f6d222c22616c696173223a226275696c64222c2274696572223a2272656164222c22656e747279223a22222c227374617465223a22222c22776865656c223a22227d5d7d7d"
+    },
+    {
+      "name": "event_diff",
+      "why": "diff:<id> is a signal-only counter.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "diff:lola-fe-42",
+        "seq": 1,
+        "payload": {
+          "rev": 4,
+          "cause": "checkpoint"
+        }
+      },
+      "hex": "0000006b7b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a22646966663a6c6f6c612d66652d3432222c22736571223a312c227061796c6f6164223a7b22726576223a342c226361757365223a22636865636b706f696e74227d7d"
+    },
+    {
+      "name": "err_stream_too_large",
+      "why": "A stream-ending err frame: id is the watch id, topic names the stream, and the rest of the connection is untouched.",
+      "frame": {
+        "v": 2,
+        "type": "err",
+        "id": "w7",
+        "topic": "talk:lola-fe-42",
+        "payload": {
+          "code": "frame_too_large",
+          "message": "this view is too large to stream"
+        }
+      },
+      "hex": "0000008a7b2276223a322c2274797065223a22657272222c226964223a227737222c22746f706963223a2274616c6b3a6c6f6c612d66652d3432222c227061796c6f6164223a7b22636f6465223a226672616d655f746f6f5f6c61726765222c226d657373616765223a2274686973207669657720697320746f6f206c6172676520746f2073747265616d227d7d"
+    },
+    {
+      "name": "req_attach_image_part0",
+      "why": "Upload part 0 without last: data is base64 of three PNG-magic bytes.",
+      "frame": {
+        "v": 2,
+        "type": "req",
+        "id": "a1",
+        "cmd": "attachImage",
+        "payload": {
+          "cmd": "attachImage",
+          "args": {
+            "session": "lola-fe-42",
+            "name": "k3VxQ9pL2mTz",
+            "mime": "image/png",
+            "data": "iVBO",
+            "part": 0
+          }
+        }
+      },
+      "hex": "000000b27b2276223a322c2274797065223a22726571222c226964223a226131222c22636d64223a22617474616368496d616765222c227061796c6f6164223a7b22636d64223a22617474616368496d616765222c2261726773223a7b2273657373696f6e223a226c6f6c612d66652d3432222c226e616d65223a226b3356785139704c326d547a222c226d696d65223a22696d6167652f706e67222c2264617461223a226956424f222c2270617274223a307d7d7d"
+    },
+    {
+      "name": "resp_attach_image_last",
+      "why": "The last part answers with received and path; thumb is omitted.",
+      "frame": {
+        "v": 2,
+        "type": "resp",
+        "id": "a2",
+        "payload": {
+          "ok": true,
+          "data": {
+            "received": 3,
+            "path": "/Users/dev/.lola/worktrees/lola/lola-fe-42/.lola/images/paste-0123456789abcdef.png"
+          }
+        }
+      },
+      "hex": "000000a77b2276223a322c2274797065223a2272657370222c226964223a226132222c227061796c6f6164223a7b226f6b223a747275652c2264617461223a7b227265636569766564223a332c2270617468223a222f55736572732f6465762f2e6c6f6c612f776f726b74726565732f6c6f6c612f6c6f6c612d66652d34322f2e6c6f6c612f696d616765732f70617374652d303132333435363738396162636465662e706e67227d7d7d"
+    },
+    {
+      "name": "req_attachment_image_offset",
+      "why": "Reading a chunk back: offset is present only when non-zero.",
+      "frame": {
+        "v": 2,
+        "type": "req",
+        "id": "g1",
+        "cmd": "attachmentImage",
+        "payload": {
+          "cmd": "attachmentImage",
+          "args": {
+            "session": "lola-fe-42",
+            "path": "/Users/dev/.lola/worktrees/lola/lola-fe-42/.lola/images/paste-0123456789abcdef.png",
+            "offset": 524288
+          }
+        }
+      },
+      "hex": "000000e67b2276223a322c2274797065223a22726571222c226964223a226731222c22636d64223a226174746163686d656e74496d616765222c227061796c6f6164223a7b22636d64223a226174746163686d656e74496d616765222c2261726773223a7b2273657373696f6e223a226c6f6c612d66652d3432222c2270617468223a222f55736572732f6465762f2e6c6f6c612f776f726b74726565732f6c6f6c612f6c6f6c612d66652d34322f2e6c6f6c612f696d616765732f70617374652d303132333435363738396162636465662e706e67222c226f6666736574223a3532343238387d7d7d"
+    },
+    {
+      "name": "resp_attachment_image_eof",
+      "why": "The last chunk: data is base64, eof true.",
+      "frame": {
+        "v": 2,
+        "type": "resp",
+        "id": "g2",
+        "payload": {
+          "ok": true,
+          "data": {
+            "mime": "image/png",
+            "size": 524291,
+            "offset": 524288,
+            "data": "AQID",
+            "eof": true
+          }
+        }
+      },
+      "hex": "000000887b2276223a322c2274797065223a2272657370222c226964223a226732222c227061796c6f6164223a7b226f6b223a747275652c2264617461223a7b226d696d65223a22696d6167652f706e67222c2273697a65223a3532343239312c226f6666736574223a3532343238382c2264617461223a2241514944222c22656f66223a747275657d7d7d"
+    },
+    {
+      "name": "event_seq_large",
+      "why": "seq beyond 2^32: the TypeScript reader must hold it as a safe integer.",
+      "frame": {
+        "v": 2,
+        "type": "event",
+        "id": "w7",
+        "topic": "diff:lola-fe-42",
+        "seq": 4294967297,
+        "payload": {
+          "rev": 5
+        }
+      },
+      "hex": "0000005f7b2276223a322c2274797065223a226576656e74222c226964223a227737222c22746f706963223a22646966663a6c6f6c612d66652d3432222c22736571223a343239343936373239372c227061796c6f6164223a7b22726576223a357d7d"
+    }
+  ]
+}

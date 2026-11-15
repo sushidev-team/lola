@@ -1,27 +1,17 @@
-// Paying back the soft keyboard's height, and the one import that has to be
-// dynamic.
+// Paying back the soft keyboard's height.
 //
-// WHY THE APP DOES THIS AT ALL. capacitor.config.ts sets
-// `Keyboard.resize: KeyboardResize.None`. Letting the plugin resize the WebView
-// would fight the terminal's own measurement — xterm re-measures on every
-// container change, the resize changes the container, and the two chase each
-// other into a storm for as long as the keyboard is animating. So the app takes
-// the height itself and pays it back as bottom padding on the screen container.
-// Without that, the accessory bar — Escape, Ctrl-C, Shift-Tab, the arrows,
-// Shift+Enter, which is the entire reason this app exists rather than a web page
-// — sits underneath the raised keyboard.
+// capacitor.config.ts sets `Keyboard.resize: KeyboardResize.None`. Letting the
+// plugin resize the WebView would fight the terminal's own measurement (xterm
+// re-measures on every container change, and the two chase each other into a
+// storm while the keyboard animates). So the app takes the height itself and
+// pays it back as bottom padding on the screen container; without that the
+// accessory bar sits underneath the raised keyboard.
 //
-// WHY THE IMPORT IS DYNAMIC RATHER THAN A GLOBAL PROBE. `Capacitor.Plugins.X` is
-// populated by a `registerPlugin("X")` call in JavaScript, not by the native
-// side and not by capacitor.config.ts (which is read by the Capacitor CLI and is
-// not part of the app bundle at all). Reading the global without importing the
-// package therefore finds nothing, on a device as much as in a browser, and the
-// failure is silent: the inset stays 0 and the bar stays hidden. Importing
-// `@capacitor/keyboard` is what runs that registration.
-//
-// It is dynamic rather than a top-level import so that a `npm run dev` session
-// in a desktop browser — which has no bridge — pays nothing at module load and
-// degrades to "there is no keyboard plugin here", which is the truth.
+// The plugin comes from `native/` (`keyboard`, null off a device), which is the
+// import that runs its `registerPlugin`; reading `Capacitor.Plugins.Keyboard`
+// without importing the package finds nothing and fails silently.
+
+import { keyboard } from "../native";
 
 /** What the plugin reports. Only the height matters to us. */
 export interface KeyboardInfo {
@@ -45,9 +35,8 @@ export interface KeyboardLike {
  * A BOX, and the box is the whole fix. Never a bare `KeyboardLike`.
  *
  * `Capacitor.registerPlugin` returns a Proxy whose `get` handler MANUFACTURES A
- * FUNCTION FOR EVERY PROPERTY NAME — the same trap `secretstore.ts` documents
- * for capability probing, arriving here through a different door. `then` is a
- * property name, so the proxy is a THENABLE, and
+ * FUNCTION FOR EVERY PROPERTY NAME. `then` is a property name, so the proxy is
+ * a THENABLE, and
  *
  *     const kb = await load();      // load() resolves with the proxy
  *
@@ -74,10 +63,6 @@ export interface KeyboardBox {
 
 export type KeyboardLoader = () => Promise<KeyboardBox>;
 
-interface CapacitorGlobal {
-  Plugins?: { Keyboard?: KeyboardLike };
-}
-
 /** The slice of `window.visualViewport` this module reads. */
 export interface VisualViewportLike {
   height?: number;
@@ -87,28 +72,10 @@ export interface VisualViewportLike {
 }
 
 /**
- * The real loader: import the package, and fall back to the global in case some
- * other part of the shell registered the plugin first.
- *
- * Never throws. A shell without the package, or a browser where the import
- * resolves but the plugin has no web implementation, both come back as "no
- * keyboard", which is exactly right.
+ * The real loader. Resolves a BOX (see `KeyboardBox`), never the plugin itself;
+ * `keyboard` is null off a device, which is exactly "no keyboard".
  */
-export const loadKeyboard: KeyboardLoader = async () => {
-  try {
-    const mod = (await import("@capacitor/keyboard")) as { Keyboard?: KeyboardLike };
-    // BOXED, not returned bare. Returning `mod.Keyboard` from an async function
-    // resolves the promise WITH a thenable and hangs it forever. See KeyboardBox.
-    if (mod?.Keyboard && typeof mod.Keyboard.addListener === "function") {
-      return { keyboard: mod.Keyboard };
-    }
-  } catch {
-    // No package, or a bundler that could not resolve it. Try the global.
-  }
-  const cap = (globalThis as { Capacitor?: CapacitorGlobal }).Capacitor;
-  const kb = cap?.Plugins?.Keyboard;
-  return { keyboard: typeof kb?.addListener === "function" ? kb : undefined };
-};
+export const loadKeyboard: KeyboardLoader = async () => ({ keyboard: keyboard ?? undefined });
 
 /**
  * The keyboard's overlap read off the VISUAL VIEWPORT, with no plugin involved.

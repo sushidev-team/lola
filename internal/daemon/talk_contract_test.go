@@ -22,10 +22,11 @@ import (
 )
 
 // talkCommands is written out here rather than read from the protocol, so that taking a
-// command off the human list fails this test instead of quietly shrinking it.
+// command off the Conversation list fails this test instead of quietly shrinking it.
 var talkCommands = []string{
 	protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdAgentSay,
 	protocol.CmdAgentStop, protocol.CmdAgentChoose, protocol.CmdAgentSetting, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions,
+	protocol.CmdSSHRecall, protocol.CmdSSHAnswer,
 }
 
 // The cursor proof's fallback for tests is "a nil seam means EmptyComposer". That makes
@@ -93,8 +94,8 @@ func TestTalkCommandsAreHumanOnly(t *testing.T) {
 		t.Fatal("no token")
 	}
 	for _, cmd := range talkCommands {
-		if !slices.Contains(protocol.SSHHumanCommands, cmd) {
-			t.Errorf("%s is not on the human list", cmd)
+		if !slices.Contains(protocol.TalkCommands, cmd) {
+			t.Errorf("%s is not on the Conversation list", cmd)
 		}
 		if slices.Contains(protocol.SSHAgentCommands, cmd) {
 			t.Errorf("%s is on the agent list", cmd)
@@ -105,11 +106,16 @@ func TestTalkCommandsAreHumanOnly(t *testing.T) {
 		if err := r.d.bridgeAdmit(protocol.Request{Cmd: cmd, Session: "s1", HookToken: token}); err == nil {
 			t.Errorf("%s admitted on the bridge with a valid token", cmd)
 		}
-		if !remote.CommandDenied(cmd) {
-			t.Errorf("%s reachable from a phone", cmd)
+		want := protocol.TierAnswer
+		switch cmd {
+		case protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdEndedSessions:
+			want = protocol.TierRead
+		}
+		if got := remote.TierFor(cmd); got != want {
+			t.Errorf("%s: wrong tier for a phone: %q, want %q", cmd, got, want)
 		}
 		resp := r.d.handle(context.Background(), protocol.Request{Cmd: cmd, Session: "s1", Args: json.RawMessage(`{}`)})
-		if strings.HasPrefix(resp.Error, "unknown") {
+		if strings.HasPrefix(resp.Error, "unknown cmd") || strings.HasPrefix(resp.Error, "unknown ssh command") {
 			t.Errorf("%s not routed: %s", cmd, resp.Error)
 		}
 	}

@@ -1,7 +1,10 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import Sheet from "./Sheet.svelte";
-  import TouchButton from "./TouchButton.svelte";
+  import ListGroup from "./ListGroup.svelte";
+  import ListRow from "./ListRow.svelte";
+  import Icon from "$lib/components/Icon.svelte";
+  import { copy } from "@mobile/lib/copy";
   import { PANE_LABEL_MAX, normalizePaneLabel } from "@mobile/lib/prefs";
 
   // One tab's menu: rename it on this phone, or close it on the Mac.
@@ -101,12 +104,6 @@
    */
   const NAME_FIELD = "pane-menu-name";
 
-  // Lifted from the connect screen's form rather than re-invented, so the one
-  // text field on this screen looks like the four on that one.
-  const INPUT =
-    "w-full rounded-md border border-edge bg-canvas px-3 py-3 text-base text-ink outline-none " +
-    "focus:border-accent placeholder:text-placeholder";
-
   function save(): void {
     if (unchanged) return;
     onrename(clean);
@@ -120,91 +117,64 @@
 
 <Sheet
   label="Options for {shown}"
+  title="Rename"
   dismissLabel="Close the pane menu"
+  action={{ label: copy.rename.save, onclick: save, disabled: unchanged }}
   onclose={ondismiss}
 >
-  <section class="flex flex-col gap-2">
-    <span class="label text-faint">Name on this phone</span>
-    <!-- The tmux name, stated plainly. It is the identity every command in this
-         app sends, so a person who has renamed a tab can still tell which pane
-         they are looking at -- and can read it back to somebody at the Mac, who
-         sees only this. -->
-    <span class="num text-sm break-all text-faint">{name}</span>
+  <!-- One inset group: a borderless 44pt field with its own clear button. The
+       tmux name is the group's footnote -- the identity every command sends, so a
+       renamed tab can still be told apart. -->
+  <div class="pt-1">
+  <ListGroup>
+    <div class="flex min-h-11 items-center pl-4" data-list-row>
+      <label class="sr-only" for={NAME_FIELD}>Name for this pane on this phone</label>
+      <input
+        id={NAME_FIELD}
+        class="min-h-11 min-w-0 flex-1 bg-transparent text-body text-ink outline-none placeholder:text-faint"
+        type="text"
+        autocapitalize="none"
+        autocorrect="off"
+        spellcheck="false"
+        maxlength={PANE_LABEL_MAX}
+        placeholder={defaultName || name}
+        bind:value={draft}
+        onkeydown={(e: KeyboardEvent) => {
+          // Enter saves, which is what a one-field form owes a hardware keyboard.
+          // Escape is Sheet's and is deliberately not touched here.
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          save();
+        }}
+      />
+      {#if draft !== ""}
+        <button
+          type="button"
+          class="flex size-11 shrink-0 touch-manipulation items-center justify-center text-faint active:opacity-60"
+          aria-label="Clear name"
+          onclick={() => (draft = "")}
+        >
+          <Icon name="x" size={16} />
+        </button>
+      {/if}
+    </div>
+  </ListGroup>
+  </div>
 
-    <label class="sr-only" for={NAME_FIELD}>Name for this pane on this phone</label>
-    <input
-      id={NAME_FIELD}
-      class={INPUT}
-      type="text"
-      autocapitalize="none"
-      autocorrect="off"
-      spellcheck="false"
-      maxlength={PANE_LABEL_MAX}
-      placeholder={defaultName || name}
-      bind:value={draft}
-      onkeydown={(e: KeyboardEvent) => {
-        // Enter saves, which is what a one-field form owes a hardware keyboard.
-        // Escape is Sheet's and is deliberately not touched here.
-        if (e.key !== "Enter") return;
-        e.preventDefault();
-        save();
-      }}
-    />
-    <span class="copy text-sm text-faint">
-      A nickname on this phone only. The pane keeps its name on the Mac, and no
-      other client sees a change.
-    </span>
-
-    <TouchButton wide variant="secondary" disabled={unchanged} onclick={save}>Save the name</TouchButton>
-    {#if label !== ""}
-      <!-- Only when there is something to undo. An always-present "use the
-           default" on a tab that has never been renamed is a button that does
-           nothing, next to a field that is already empty. -->
-      <TouchButton wide onclick={reset}>Use the default name</TouchButton>
-    {/if}
-  </section>
-
-  <div class="h-px bg-edge/60" aria-hidden="true"></div>
-
-  {#if canClose}
-    <section class="flex flex-col gap-2">
-      <span class="label text-faint">On the Mac</span>
-      <!-- `text-bad!` IS NOT DECORATION, and the trailing `!` is not optional.
-           The shared Button's `danger` variant is
-           `text-faint enabled:hover:bg-bad/15 enabled:hover:text-bad` -- faint
-           at REST, red only on HOVER. That is a perfectly good desktop
-           affordance and it is worth nothing on a phone, where there is no
-           hover at all: the variant rendered this destructive row in exactly
-           the same grey as "Done" two rows below it, which a screenshot on the
-           Simulator caught and no unit test would have. The `!` is the rule
-           CLAUDE.md states -- a plain `text-bad` has the same specificity as the
-           variant's own `text-faint`, so which one won would be decided by
-           Tailwind's order in the compiled sheet rather than by this file.
-           `danger`, not `danger-solid`: a filled red block is the step up
-           reserved for the heaviest actions, and closing one shell is not one. -->
-      <TouchButton
-        wide
-        variant="danger"
-        class="text-bad!"
-        loading={closing}
-        onclick={onclosepane}
-      >
-        Close this pane
-      </TouchButton>
-      <span class="copy text-sm text-faint">
-        Ends this pane and everything running in it on the Mac. The session and
-        its other panes are untouched.
-      </span>
-    </section>
-  {:else}
-    <!-- See the header: absent rather than disabled, and the sentence names the
-         command that does end a session so the obvious next question is already
-         answered. -->
-    <span class="copy text-sm text-faint">
-      This is the session's own pane and cannot be closed here — it is the
-      session. Ending it is <code class="num">lola kill</code>, on the Mac.
-    </span>
+  {#if label !== ""}
+    <div class="pt-4">
+      <ListGroup>
+        <ListRow label="Use the default name" onclick={reset} />
+      </ListGroup>
+    </div>
   {/if}
 
-  <TouchButton wide onclick={ondismiss}>Done</TouchButton>
+  {#if canClose}
+    <!-- Close is one step: holding a tab to get here was the deliberate gesture. -->
+    <div class="pt-4">
+      <ListGroup>
+        <ListRow icon="trash-2" tone="danger" label="Close this pane" disabled={closing} onclick={onclosepane} />
+      </ListGroup>
+    </div>
+  {/if}
 </Sheet>

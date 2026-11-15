@@ -1,4 +1,4 @@
-// Package remote is the daemon's PHONE LISTENER: a TLS socket speaking the
+// Package remote is the daemon's PHONE LISTENER: a mutual-TLS socket speaking the
 // versioned envelope in internal/protocol, so a paired mobile client can read
 // the session list, answer a parked agent and attach to a pane.
 //
@@ -10,42 +10,52 @@
 // other request the phone has in flight. So this package takes the daemon's
 // dispatcher as a plain func seam (Options.Handle, bound to d.handle in
 // production) and reaches it only through frames it has already versioned,
-// direction-checked and authorized. The raw socket vocabulary is unreachable
-// from TCP by construction rather than by review.
+// direction checked, authorized and rebuilt. The raw socket vocabulary is
+// unreachable from TCP by construction rather than by review.
 //
-// # What is in this package and what is not
+// # Who may connect
 //
-// Framing, dispatch, the Handle seam, the authorizer interface and the whole
-// pane path are TAG-FREE: they compile and are unit-tested in an ordinary
-// `make test` run. Exactly two symbols are split by //go:build lola_insecure —
-// newAuthorizer and Listen — and they are the two that can actually open a
-// port. M1 has no cryptography at all, and its stand-in for pairing is a bearer
-// key read from LOLA_REMOTE_INSECURE_KEY; "deleted, not disabled, in M2" is a
-// promise enforced by memory, so it is enforced by the compiler instead. In an
-// untagged build newAuthorizer refuses, Listen therefore binds nothing, and one
-// log line names both the reason and the way out — a silently dead port is the
-// failure this split exists to avoid. While the tag IS active two extra rails
-// hold: the bind mode is forced to loopback whatever config says, because a
-// shared bearer secret must never reach a network interface, and every accept
-// logs a warning, because a daemon running this path should be impossible to
-// forget about.
+// Every peer presents a client certificate, and TLS refuses it inside the
+// handshake unless its SPKI is in the device registry (internal/devices) or a
+// pairing window is open: an unpaired laptop on the same WiFi gets a
+// bad_certificate alert and never reaches the JSON parser. TLS 1.3 reports
+// success to the client before the server checks that certificate, so the
+// daemon writes one ready frame first on every authenticated connection and a
+// client counts a path as connected only when it arrives. A pairing candidate
+// is the one exception: it talks in band (pairing.go) and never authenticates.
 //
-// Cryptography, the device registry, capability tiers, the per-command Request
-// rebuild and the pairing frames are M2 and are not here. What IS here from the
-// security model, because it is a property of the transport rather than of the
-// policy layer above it: the unconditional command denials (policy.go), which
-// no authorizer can grant, and the envelope's own fail-closed rules.
+// There is one Listen and no build tag. A release binary listens when
+// [remote] is enabled; the registry decides who gets in.
+//
+// # What a paired device may do
+//
+// Capability tiers are a closed allowlist (tiers.go): a command in no tier is
+// tier never and unreachable from a phone whatever the registry says, so adding
+// a case to d.handle grants a phone nothing until a human writes it into the
+// table. fields.go then rebuilds each request from that command's own field
+// spec, so a handler that starts reading a new field reads nothing a phone
+// chose. Tiers are read live from the registry on every frame, which makes a
+// downgrade behave like a revocation: it applies on the next frame, and the
+// daemon also drops the device's connections (Server.DropDevice).
 //
 // # Fail closed, and what each refusal costs
 //
-// An unknown envelope version, an unknown frame type, a frame travelling the
-// wrong direction, an oversized or unframable message, and a denied command all
-// REFUSE, LOG and CLOSE the connection, mutating nothing. Closing rather than
-// skipping is the point: a stream whose framing or whose caller cannot be
-// trusted cannot be resynchronized, and a client that asked for a denied
-// command is either broken or hostile. A malformed PAYLOAD on a well-formed
-// envelope is the one recoverable case — the refusal goes back on that frame's
-// id and the connection survives, because the framing is still intact.
+// A framing fault — an unknown envelope version, an unknown frame type, a frame
+// travelling the wrong direction, an oversized or unframable message — REFUSES,
+// LOGS and CLOSES the connection, because a stream whose framing cannot be
+// trusted cannot be resynchronized. A refusal of a well-formed frame (tier
+// never, a tier the device lacks, a field the rebuild rejects, a rate limit) is
+// answered on that frame's id and the connection SURVIVES; a per-connection
+// strike counter ends one that only ever probes. A malformed PAYLOAD on a
+// well-formed envelope is likewise recoverable.
+//
+// Three pools bound what an unauthenticated peer can hold: a LAN pre-auth pool
+// taken at accept (global and per source IP), a relay pre-auth pool, and an
+// authed pool bounded per device, where the oldest connection of a device is
+// the one evicted. Established phones are never displaced by strangers.
+//
+// Every non-read request leaves one audit line (audit.go) naming the device,
+// tier, command and outcome, and never a payload.
 //
 // # Multiplexing
 //
@@ -111,8 +121,11 @@
 //	        Dir:    home,
 //	        Handle: d.handle,
 //	        Panes:  d.panes,   // a remote.PaneBus; see the adapter note below
-//	        Now:    time.Now,
-//	        Logf:   d.remoteLogf,
+//	        Devices: d.devices, // owned by the daemon; survives a listener rebuild
+//	        Pairer:  d.pairer,
+//	        Host:    host,
+//	        Now:     time.Now,
+//	        Logf:    d.remoteLogf,
 //	    })
 //	    if err != nil {
 //	        d.logf("", "remote: not listening: %v", err) // never fatal to Run

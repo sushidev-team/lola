@@ -468,3 +468,34 @@ it('keeps capture unavailable for stale review material',async()=>{
  facts.mockResolvedValue(status({head:'9'.repeat(40)}));render(ReviewWorkspace,{sessionId:id});
  await screen.findByText('Older revision');expect(screen.getByRole('button',{name:'Capture screenshot'})).toBeDisabled();
 });
+
+it('embedded: no modal, tabs and Mark reviewed are handed to the host',async()=>{
+  const onstatus=vi.fn();
+  render(ReviewWorkspace,{sessionId:id,embedded:true,onstatus});
+  await screen.findByRole('heading',{name:'A clearer settings screen'});
+  expect(document.querySelector('[data-review-embedded]')).not.toBeNull();
+  expect(screen.queryByRole('tab')).toBeNull();
+  expect(screen.queryByRole('button',{name:'Mark reviewed'})).toBeNull();
+  await waitFor(()=>{
+    const s=onstatus.mock.calls.at(-1)![0];
+    expect(s.tabs.map((t:{label:string})=>t.label)).toEqual(['Overview','Screenshots','Code changes']);
+    expect(s.canMark).toBe(true);
+    expect(s.reviewed).toBe(false);
+  });
+});
+
+it('phone: the version label renders once, as relative day + time, and the tab says Changes',async()=>{
+  const {setTouchSurface}=await import('$lib/touchsurface');
+  setTouchSurface({});
+  try{
+    const now=new Date();const at=new Date(now.getFullYear(),now.getMonth(),now.getDate(),9,5).toISOString();
+    read.mockResolvedValue({packages:[pkg({id:'new',createdAt:at}),pkg({id:'old',createdAt:'2026-01-02T09:20:15Z'})]});
+    const onstatus=vi.fn();
+    render(ReviewWorkspace,{sessionId:id,embedded:true,onstatus});
+    const versions=await screen.findByLabelText(/^Version: Latest, /);
+    const shown=versions.parentElement!.querySelector('.select-value');
+    expect(shown?.textContent).toMatch(/^Latest · Today \d{2}:\d{2}$/);
+    expect(versions.parentElement!.textContent!.match(/Latest/g)?.length).toBeLessThanOrEqual(2);
+    await waitFor(()=>expect(onstatus.mock.calls.at(-1)![0].tabs.map((t:{label:string})=>t.label)).toContain('Changes'));
+  }finally{setTouchSurface(null);}
+});

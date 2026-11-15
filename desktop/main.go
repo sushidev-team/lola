@@ -139,6 +139,7 @@ func main() {
 			application.NewService(daemon),
 			application.NewService(term),
 			application.NewService(&SSHService{}),
+			application.NewService(&PhonesService{}),
 			application.NewService(&HubService{}),
 			application.NewService(&TalkService{}),
 			application.NewService(&ConfigService{}),

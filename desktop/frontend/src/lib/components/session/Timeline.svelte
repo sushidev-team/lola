@@ -18,7 +18,7 @@
   import { feed, FEED_SCAN_POLL_MS } from "$lib/feed.svelte";
   import { agentName, dockCards, matchesFilter } from "$lib/ssh";
   import { agoPhrase } from "$lib/time";
-  import { buildStory, catchUp, findInStory, isFolded, lastLifeIndex, locate, turnParts, turnAsk, type StoryRow } from "$lib/turns";
+  import { buildStory, catchUp, findInStory, isFolded, keepTurns, lastLifeIndex, locate, turnParts, turnAsk, type Story, type StoryRow } from "$lib/turns";
   import Button from "../Button.svelte";
   import Chevron from "../Chevron.svelte";
   import TimelineTurn from "./TimelineTurn.svelte";
@@ -46,7 +46,9 @@
   const talkState = $derived(talk.state(sessionId));
   // A parked agent can still answer a call. A resting or dead one never will, so it reads no result.
   const alive = $derived(["working", "starting", "waiting_input"].includes(session?.agentState ?? ""));
-  const story = $derived(buildStory({ feed: f.items, items: view.items, filter: view.filter, scope: view.scope, alive, opened: view.openedFolds, standing: f.standing }));
+  // Unchanged turns keep their object, so a pushed item re-renders the turn it landed in only.
+  let lastStory: Story | undefined;
+  const story = $derived((lastStory = keepTurns(lastStory, buildStory({ feed: f.items, items: view.items, filter: view.filter, scope: view.scope, alive, opened: view.openedFolds, standing: f.standing }))));
 
   // --- the feed --------------------------------------------------------------
   const feedSeq = $derived(talkState?.feedSeq);
@@ -56,9 +58,14 @@
     const epoch = feedEpoch;
     untrack(() => f.sync(seq, epoch));
   });
+  // Only the view is a dependency: a refused topic fetches inside follow(), and that reads state.
+  $effect(() => {
+    const v = f;
+    return untrack(() => v.follow());
+  });
   const scanning = $derived(f.scanning);
   $effect(() => {
-    if (!scanning) return;
+    if (f.following || !scanning) return;
     const t = setInterval(() => void f.fetch(), FEED_SCAN_POLL_MS);
     return () => clearInterval(t);
   });

@@ -17,8 +17,14 @@
   import Select from '../Select.svelte';
   import { untrack } from 'svelte';
   import { slide } from 'svelte/transition';
+  import { touchSurface } from '$lib/touchsurface';
 
-  let { session, reviewLayout = false }: { session: SessionInfo; reviewLayout?: boolean } = $props();
+  // `can` answers whether this client may send a command; a control it may not send is not drawn.
+  // `hideMerge` leaves the merge controls to the host (the phone's sticky bar owns the one merge CTA);
+  // `heading = false` drops the "PR status" title. Both default to the desktop's layout.
+  // `onunknown` (phone only) tells the host when GitHub could not be read, so its merge button can say so.
+  let { session, reviewLayout = false, can = () => true, hideMerge = false, heading = true, onunknown }: { session: SessionInfo; reviewLayout?: boolean; can?: (cmd: string) => boolean; hideMerge?: boolean; heading?: boolean; onunknown?: (unknown: boolean) => void } = $props();
+  const phone = touchSurface();
   const prs = $derived(session.stack
     ? (session.apps ?? []).filter(a => a.number).map(a => ({ id: `${session.id}~${a.name}`, number: a.number!, label: appLabel(a), url: a.url ?? '' }))
     : session.prNumber ? [{ id: session.id, number: session.prNumber, label: 'Pull request', url: session.prUrl ?? '' }] : []);
@@ -46,6 +52,7 @@
     chosenMethod = value;
     try { localStorage.setItem(mergeMethodKey, value); } catch { /* best effort */ }
   }
+  $effect(() => { if (phone) onunknown?.(!!error); });
   let viewGeneration = 0;
   let expandedReviewers = $state<string[]>([]);
   let collapsedReviewers = $state<string[]>([]);
@@ -77,23 +84,24 @@
     if (!current) return [];
     return [
       { label: 'CI', value: ({pass:'Passed',fail:'Failed',pending:'Running',none:'No checks'}[current.checks] ?? 'Unknown'), icon: current.checks === 'pass' ? 'check' : current.checks === 'fail' ? 'x' : current.checks === 'pending' ? 'loader-circle' : 'circle', tone: tone(current.checks) },
-      { label: 'Review', value: ({APPROVED:'Approved',CHANGES_REQUESTED:'Changes requested',REVIEW_REQUIRED:'Required'}[current.review] ?? 'No review'), icon: current.review === 'APPROVED' ? 'check' : current.review === 'CHANGES_REQUESTED' ? 'circle-alert' : 'shield-check', tone: current.review === 'APPROVED' ? 'good' : current.review === 'CHANGES_REQUESTED' ? 'bad' : 'faint' },
+      { label: 'Review', value: ({APPROVED:'Approved',CHANGES_REQUESTED:'Changes requested',REVIEW_REQUIRED:'Required'}[current.review] ?? (phone ? 'None' : 'No review')), icon: current.review === 'APPROVED' ? 'check' : current.review === 'CHANGES_REQUESTED' ? 'circle-alert' : 'shield-check', tone: current.review === 'APPROVED' ? 'good' : current.review === 'CHANGES_REQUESTED' ? 'bad' : 'faint' },
       { label: 'Branch', value: current.mergeable === 'CONFLICTING' ? 'Conflicts' : current.mergeState === 'BEHIND' ? 'Behind base' : current.mergeable === 'MERGEABLE' ? 'No conflicts' : 'Checking', icon: current.mergeable === 'CONFLICTING' ? 'git-compare-arrows' : current.mergeable === 'MERGEABLE' ? 'check' : 'circle', tone: current.mergeable === 'CONFLICTING' ? 'bad' : current.mergeState === 'BEHIND' ? 'warn' : current.mergeable === 'MERGEABLE' ? 'good' : 'faint' },
       { label: 'Comments', value: threads.length ? `${threads.length} unresolved` : 'All resolved', icon: threads.length ? 'message-square-text' : 'check', tone: threads.length ? 'warn' : 'good' },
     ];
   });
+  const everyGreen = $derived(!!current && current.checks === 'pass' && current.review !== 'CHANGES_REQUESTED' && current.mergeable === 'MERGEABLE' && !threads.length);
   const next = $derived.by(() => {
     if (!current || terminal) return '';
     if (current.draft) return 'Draft · mark ready on GitHub when ready for review.';
     if (current.mergeable === 'CONFLICTING') return 'Resolve branch conflicts before merging.';
-    if (current.checks === 'fail') return 'Fix failing CI checks.';
+    if (current.checks === 'fail') return phone ? '' : 'Fix failing CI checks.';
     if (threads.length) return 'Validate and address the open feedback.';
     if (current.review === 'CHANGES_REQUESTED') return 'Address the requested changes and ask for another review.';
     if (current.checks === 'pending') return '';
     if (current.mergeState === 'BEHIND') return 'Update the branch with the latest base.';
     if (current.review === 'REVIEW_REQUIRED') return 'Request the required review.';
     if (current.mergeState === 'BLOCKED') return 'GitHub has additional merge requirements.';
-    if (current.mergeState === 'CLEAN') return current.mergeBlocked || 'No blockers reported.';
+    if (current.mergeState === 'CLEAN') return current.mergeBlocked || (phone && everyGreen ? '' : 'No blockers reported.');
     return 'Confirm remaining merge requirements on GitHub.';
   });
   function tone(value: string) { return value === 'pass' ? 'good' : value === 'fail' ? 'bad' : value === 'pending' ? 'info' : 'faint'; }
@@ -178,13 +186,13 @@
 {#if selected}
 <section data-before-merge class:review-layout={reviewLayout} aria-label="PR status">
   <header>
-    <h3 class="cv-overview-heading">PR status</h3>
-    {#if nav.overlay !== 'pr-review'}<Button variant={promoteReview ? 'primary' : 'ghost'} size="xs" onclick={() => reviewWorkspace.open(session.id)}>{#if promoteReview}<Icon name="git-pull-request" size={13} />{/if}Review PR</Button>{/if}
-    <button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request #{selected.number}"><Icon name="git-pull-request" size={13} />#{selected.number}<Icon name="external-link" size={11} /></button>
-    <button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>
+    {#if phone && reviewLayout}<h3 class="phone-section text-micro uppercase text-faint">Pull request</h3>{:else if heading}<h3 class="cv-overview-heading">PR status</h3>{:else}<span class="heading-gap"></span>{/if}
+    {#if !phone && nav.overlay !== 'pr-review'}<Button variant={promoteReview ? 'primary' : 'ghost'} size="xs" onclick={() => reviewWorkspace.open(session.id)}>{#if promoteReview}<Icon name="git-pull-request" size={13} />{/if}Review PR</Button>{/if}
+    {#if !phone}<button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request #{selected.number}"><Icon name="git-pull-request" size={13} />#{selected.number}<Icon name="external-link" size={11} /></button>{/if}
+    {#if !(phone && error)}<button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>{/if}
   </header>
   {#if prs.length > 1}<Tabs tabs={prs.map(p => ({ id:p.id, label:p.label }))} active={selected.id} onSelect={id => chosen = id} />{/if}
-  {#if error}<p class="error text-warn" role="status">{current ? 'Status may be outdated. ' : ''}Could not refresh GitHub. <button type="button" onclick={refresh} title={error}>Retry</button></p>{/if}
+  {#if error}{#if phone}<p class="error error-phone" role="status"><span class="text-subhead text-pill-urgent-soft-fg">Can't reach GitHub.</span><button type="button" class="retry text-subhead text-accent" onclick={refresh} title={error}>Retry</button></p>{:else}<p class="error text-warn" role="status">{current ? 'Status may be outdated. ' : ''}Could not refresh GitHub. <button type="button" onclick={refresh} title={error}>Retry</button></p>{/if}{/if}
   {#if !current && !error}
     <div role="status" aria-label="Loading PR status">
       <span class="sr-only">Loading PR status…</span>
@@ -194,12 +202,12 @@
         {/each}
       </div>
       <p class="next"><Skeleton width="52%" height="18px"/></p>
-      {#if session.location !== 'ssh'}<div class="pr-actions loading-actions"><Skeleton height={reviewLayout ? '34px' : '26px'}/><Skeleton height={reviewLayout ? '34px' : '26px'}/></div>{/if}
+      {#if session.location !== 'ssh' && !hideMerge}<div class="pr-actions loading-actions"><Skeleton height={reviewLayout ? '34px' : '26px'}/><Skeleton height={reviewLayout ? '34px' : '26px'}/></div>{/if}
     </div>
   {:else if terminal}<p class="terminal"><Icon name={current?.state === 'MERGED' ? 'check' : 'circle-minus'} size={15} /><span>{current?.state === 'MERGED' ? 'Merged' : 'Closed without merging'}</span></p>
   {:else if current}
     <div class="signals" aria-label="Merge checks">
-      {#each signals as signal}<div class="signal" use:tooltip={`${signal.label}: ${signal.value}`}><Icon name={signal.icon} size={15} class={`text-${signal.tone} ${signal.icon === 'loader-circle' ? 'merge-spinner' : ''}`} /><span class="signal-label">{signal.label}</span><span class="signal-value text-{signal.tone}">{signal.value}</span></div>{/each}
+      {#each signals as signal}<div class="signal" data-signal={signal.label.toLowerCase()} use:tooltip={`${signal.label}: ${signal.value}`}><Icon name={signal.icon} size={15} class={`text-${signal.tone} ${signal.icon === 'loader-circle' ? 'merge-spinner' : ''}`} /><span class="signal-label">{signal.label}</span><span class="signal-value text-{signal.tone}">{signal.value}</span></div>{/each}
     </div>
     {#if next && next !== 'Validate and address the open feedback.'}<p class="next">{next}</p>{/if}
     {#if threads.length}
@@ -225,12 +233,13 @@
           </section>
         {/each}
       </div>
-      {#if session.location !== 'ssh'}
+      {#if session.location !== 'ssh' && can('addressPRFeedback')}
         <div class="feedback-action"><Button variant="secondary" size="xs" disabled={sending || accepted || !!error} onclick={address} title="Ask the agent to validate findings, fix valid issues, and resolve addressed threads after verification"><Icon name="shield-check" size={13} />{sending ? 'Sending…' : accepted ? 'Requested' : 'Ask agent to address'}</Button></div>
       {/if}
     {/if}
-    {#if session.location !== 'ssh'}
+    {#if session.location !== 'ssh' && (can('mergePR') || can('review')) && !(phone && hideMerge)}
       <div class="pr-actions">
+        {#if can('mergePR') && !hideMerge}
         <div class="merge-split" class:ready={readyToMerge && !promoteReview}>
           <span use:tooltip={mergeHint}><Button class="rounded-r-none!" variant={readyToMerge && !promoteReview ? 'primary' : 'secondary'} size="xs" icon={!readyToMerge && !merging && !mergeRequested} disabled={!canMerge} loading={merging} onclick={askMerge} aria-label={merging ? 'Merging…' : mergeRequested ? 'Merge requested' : readyToMerge ? mergeLabel : 'Merge pull request'}>{#if !merging}<Icon name="git-merge" size={13} />{/if}{#if merging}Merging…{:else if mergeRequested}Merge requested{:else if readyToMerge}{mergeLabel}{/if}</Button></span>
           <span class="merge-method" use:tooltip={'Choose merge method'}>
@@ -241,9 +250,10 @@
             </Select>
           </span>
         </div>
-        {#if !threads.length && current.review !== 'APPROVED'}<Button variant="secondary" size="xs" onclick={() => store.review(selected.id)}><Icon name="shield-check" size={13} />Request agent review</Button>{/if}
+        {/if}
+        {#if !phone && !threads.length && current.review !== 'APPROVED' && can('review')}<Button variant="secondary" size="xs" onclick={() => store.review(selected.id)}><Icon name="shield-check" size={13} />{phone ? 'Ask for review' : 'Request agent review'}</Button>{/if}
       </div>
-      {#if !mergeLabel}<p class="muted">Restart the daemon to enable merging.</p>{/if}
+      {#if !mergeLabel && can('mergePR') && !hideMerge}<p class="muted">Restart the daemon to enable merging.</p>{/if}
     {/if}
     {#if session.mergeQueue}<p class="muted">Merge queue · position {session.mergeQueue.position}</p>{/if}
     {#if session.overlaps?.length}<p class="overlaps"><Icon name="layers" size={12} /><span>Overlaps · {session.overlaps.map(o => o.issue || o.session).join(', ')}</span></p>{/if}
@@ -323,4 +333,20 @@
   .review-layout .merge-split.ready .merge-method :global(.lola-select-caret) { color:var(--color-on-accent); }
   .review-layout .merge-method :global(.lola-select-caret) { right:9px; }
   .review-layout .overlaps { font-size:12px; }
+  .heading-gap { margin-right:auto; }
+  /* Phone: the four signals are an inset grouped list, 44pt rows, 0.5px separators inset past the glyph. */
+  :global([data-phone-desk]) .review-layout .signals { gap:0; padding:0; border:0; border-radius:12px; background:var(--color-panel); overflow:hidden; margin-bottom:12px; }
+  :global([data-phone-desk]) .review-layout .signal { position:relative; min-height:44px; padding:0 16px; grid-template-columns:20px minmax(0,1fr) auto; gap:12px; }
+  :global([data-phone-desk]) .review-layout .signal + .signal::before { content:""; position:absolute; top:0; left:52px; right:0; height:0.5px; background:var(--color-edge-soft); }
+  :global([data-phone-desk]) .review-layout .signal-label { font-size:15px; line-height:20px; color:var(--color-ink); }
+  :global([data-phone-desk]) .review-layout .signal-value { font-size:15px; line-height:20px; }
+  :global([data-phone-desk]) .review-layout .refresh { min-width:44px; min-height:44px; justify-content:center; padding:0; }
+  :global([data-phone-desk]) .review-layout .pr-actions :global(button) { min-height:44px; font-size:15px; }
+  :global([data-phone-desk]) .review-layout .next { font-size:13px; }
+  /* One review row on the phone: the Agent review list row carries the verdict. */
+  :global([data-phone-desk]) .review-layout .signal[data-signal="review"] { display:none; }
+  .phone-section { margin-right:auto; }
+  :global([data-phone-desk]) .review-layout > header { min-height:44px; margin-bottom:0; }
+  .error-phone { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 12px; padding:0 0 0 12px; border-radius:10px; background:var(--color-pill-urgent-soft); }
+  .error-phone .retry { min-height:44px; min-width:44px; padding:0 12px; border:0; background:none; text-decoration:none; }
 </style>

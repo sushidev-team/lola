@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/devices"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -21,19 +22,34 @@ const (
 	// for any screen the app draws and small enough that a flood is visible.
 	reqConcurrency = 4
 
-	// maxConnections bounds live connections per server. A phone needs one;
-	// a reconnect briefly needs two. Beyond that a peer is either broken or
-	// exhausting file descriptors, and the refusal is immediate and logged.
+	// The connection pools (spec 01 §5.1). The listener is untagged and meant
+	// for bind = "lan", so an unauthenticated LAN peer must not be able to fill
+	// the slots a paired phone needs.
 	//
-	// The slot is taken at ACCEPT, not after the handshake, and that is the
-	// whole point of the bound. Counting connections that had already
-	// authenticated left a peer that opens sockets and never sends a ClientHello
-	// entirely uncounted: each one held a file descriptor and a goroutine for
-	// the full handshakeTimeout while admit kept saying yes, so sustained
-	// dialling pinned ten seconds' worth of connections at a time and fd
-	// exhaustion in this process would have taken the unix socket every other
-	// client uses down with it.
-	maxConnections = 8
+	// The pre-auth slot is taken at ACCEPT, before TLS, keyed by source IP, and
+	// is the whole point of the bound: a peer that opens sockets and never sends
+	// a ClientHello would otherwise hold a file descriptor and a goroutine for
+	// the full handshakeTimeout while admission kept saying yes. It is released
+	// when the connection ends or MOVES to the authed pool after Authenticate.
+	// The relay path has its own pre-auth pool, so a LAN flood never blocks a
+	// relayed reconnect, nor the reverse.
+	maxPreAuthConns = 32
+	maxPreAuthPerIP = 2
+
+	// maxConnsPerDevice: past it the device's OLDEST connection is shut down.
+	// The newest has just proven the key; the oldest is the likeliest half-open
+	// socket left by a network change.
+	maxConnsPerDevice = 4
+
+	// maxAuthedConns is reachable only by paired devices.
+	maxAuthedConns = devices.MaxDevices * maxConnsPerDevice
+
+	// maxRefusalsPerConn bounds a probing client: refusals keep the connection,
+	// so something must end one that only ever asks for what it may not have.
+	maxRefusalsPerConn = 64
+
+	// limiterSweepEvery spaces the opportunistic sweep of idle device buckets.
+	limiterSweepEvery = time.Minute
 
 	// keepAliveIdle, keepAliveInterval and keepAliveCount reclaim the slot of a
 	// peer that vanished without a FIN — a phone that walked out of WiFi range.
@@ -128,16 +144,22 @@ type Options struct {
 	// at all.
 	HandlerGrace time.Duration
 
-	// InsecureLAN carries [remote].insecure_lan to the milestone-1 listener,
-	// which is the only thing that reads it: without the lola_insecure tag
-	// there is no bind rail to open and the field is inert. See
-	// config.RemoteConfig.InsecureLAN for why the permission is a config key
-	// rather than the environment variable it started as.
-	//
-	// It lives on Options rather than being read from the environment inside
-	// insecure.go so the daemon owns the whole policy: one place decides, and a
-	// test sets a field instead of mutating process-wide state.
-	InsecureLAN bool
+	// Devices is the registry of paired phones. Required: it is owned by the
+	// daemon and survives listener rebuilds.
+	Devices *devices.Registry
+
+	// Pairer runs pairing. Required, with the same ownership as Devices.
+	Pairer *Pairer
+
+	// Host is os.Hostname(), for ReadyData and PairResult. Display only.
+	Host string
+
+	// Events is the push seam. nil answers every watch with WatchCodeUnavailable.
+	Events Events
+
+	// RelayOnly allows a Server with no listener: bind = "off" with the hub
+	// relay on still serves relayed connections.
+	RelayOnly bool
 }
 
 func (o Options) handlerGrace() time.Duration {
@@ -170,31 +192,98 @@ type Server struct {
 	key   *DeviceKey
 	addrs []BindAddr
 
+	// tlsConfig is built once and shared by the listeners and by ServeRelayed:
+	// one config, one code path.
+	tlsConfig *tls.Config
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
 	wg sync.WaitGroup
 
-	// slots is the connection bound, taken at accept and released when
-	// serveConn returns. It is a semaphore rather than len(conns) because conns
-	// only records peers that finished a handshake.
-	slots chan struct{}
+	// lim holds the per-device rate buckets; refusals throttles the unpaired
+	// certificate log line.
+	lim      *limiter
+	refusals *refusalLog
+
+	// preAuthLog throttles the lines an unauthenticated peer can cause at will
+	// (a refused accept, a failed handshake) with one global bucket, so a flood
+	// costs the unrotated daemon log a bounded number of lines and this process
+	// no per-address state.
+	preAuthLog *refusalLog
+
+	// relaySlots is the relay pre-auth pool (taken by relay.go before TLS) and
+	// relayPerRV counts the slots one rendezvous holds, under mu.
+	relaySlots chan struct{}
+	relayPerRV map[string]int
 
 	mu     sync.Mutex
 	lns    []net.Listener
 	conns  map[*conn]struct{}
 	closed bool
 
+	// preAuth and preAuthIP count LAN sockets between accept and Authenticate;
+	// authed counts authenticated ones. All under mu. preAuthIP holds only IPs
+	// with a live pre-auth socket, so it is bounded by maxPreAuthConns.
+	preAuth   int
+	preAuthIP map[string]int
+	authed    int
+	connSeq   uint64
+	lastSweep time.Time
+
 	closeOnce sync.Once
 }
 
-// listen is the tag-free half of Listen: it loads the identity, resolves the
-// bind addresses, binds them and starts accepting. The tagged half chooses the
-// authorizer and, in an insecure build, forces the bind to loopback before
-// calling this.
+// Listen is the single entry point: it checks the registry, builds the device
+// authorizer, loads the identity, resolves the bind addresses, binds them and
+// starts accepting.
+//
+// A registry that cannot persist a revocation refuses the listener outright (a
+// revoked phone must not be accepted again after a restart); one that cannot be
+// READ still listens, so the doctor and pairing report the problem through the
+// daemon rather than a dead port, and authenticates nobody.
+func Listen(ctx context.Context, opts Options) (*Server, error) {
+	if opts.Devices == nil || opts.Pairer == nil {
+		return nil, errors.New("remote: Options.Devices and Options.Pairer are required")
+	}
+	if err := opts.Devices.Unsaved(); err != nil {
+		return nil, fmt.Errorf("remote: refusing to listen: %w", err)
+	}
+	logf := opts.logf()
+	if err := opts.Devices.Err(); err != nil {
+		logf("remote: devices.json is unreadable; no phone can connect: %v", err)
+	}
+	auth := newDeviceAuthorizer(opts.Devices, opts.Pairer, opts.Host, opts.Now, logf)
+	return listen(ctx, opts, auth)
+}
+
+// newServer builds a Server with no sockets. key may be nil only in a test that
+// drives connections by hand.
+func newServer(ctx context.Context, opts Options, auth Authorizer, key *DeviceKey) *Server {
+	s := &Server{
+		opts:       opts,
+		auth:       auth,
+		key:        key,
+		conns:      map[*conn]struct{}{},
+		preAuthIP:  map[string]int{},
+		relaySlots: make(chan struct{}, maxRelayConnections),
+		relayPerRV: map[string]int{},
+		lim:        newLimiter(opts.Now),
+		refusals:   newRefusalLog(opts.now()),
+		preAuthLog: newRefusalLog(opts.now()),
+	}
+	s.ctx, s.cancel = context.WithCancel(ctx)
+	if key != nil {
+		s.tlsConfig = key.TLSConfig(s.verifyPeer)
+	}
+	return s
+}
+
+// listen is the half of Listen that needs an Authorizer: tests drive it with a
+// stub one.
 func listen(ctx context.Context, opts Options, auth Authorizer) (*Server, error) {
 	if auth == nil {
-		return nil, ErrNoAuthorizer
+		return nil, errors.New("remote: an authorizer is required")
 	}
 	if opts.Handle == nil {
 		return nil, errors.New("remote: Options.Handle is required")
@@ -211,21 +300,21 @@ func listen(ctx context.Context, opts Options, auth Authorizer) (*Server, error)
 	if key.Created {
 		logf("remote: generated a new device identity at %s (SPKI pin %s)", key.KeyPath, key.SPKIPin())
 	}
-
-	addrs, err := resolveBind(opts.Bind, opts.Port, systemIfaces)
-	if err != nil {
-		return nil, err
+	if opts.Pairer != nil {
+		// The confirmation code binds both keys and the connection state does
+		// not expose the local certificate, so the listener supplies it.
+		opts.Pairer.SetDaemonSPKI(key.SPKISHA256())
 	}
 
-	s := &Server{
-		opts:  opts,
-		auth:  auth,
-		key:   key,
-		addrs: addrs,
-		conns: map[*conn]struct{}{},
-		slots: make(chan struct{}, maxConnections),
+	var addrs []BindAddr
+	if !opts.RelayOnly {
+		if addrs, err = resolveBind(opts.Bind, opts.Port, systemIfaces); err != nil {
+			return nil, err
+		}
 	}
-	s.ctx, s.cancel = context.WithCancel(ctx)
+
+	s := newServer(ctx, opts, auth, key)
+	s.addrs = addrs
 
 	// A mode may resolve to several addresses (both loopback families, or every
 	// qualifying LAN interface), and one of them failing is ordinary — a
@@ -235,7 +324,6 @@ func listen(ctx context.Context, opts Options, auth Authorizer) (*Server, error)
 	// success is a daemon that looks healthy and cannot be reached. Which
 	// addresses it actually took is otherwise unanswerable, which is the same
 	// reason bind = "lan" logs its interfaces.
-	tlsCfg := key.TLSConfig()
 	var bound []BindAddr
 	var lastErr error
 	for _, ba := range addrs {
@@ -245,7 +333,7 @@ func listen(ctx context.Context, opts Options, auth Authorizer) (*Server, error)
 			logf("remote: cannot listen on %s%s: %v", ba.Addr, ifaceNote(ba.Iface), err)
 			continue
 		}
-		tln := tls.NewListener(ln, tlsCfg)
+		tln := tls.NewListener(ln, s.tlsConfig)
 		s.mu.Lock()
 		s.lns = append(s.lns, tln)
 		s.mu.Unlock()
@@ -254,7 +342,7 @@ func listen(ctx context.Context, opts Options, auth Authorizer) (*Server, error)
 		s.wg.Add(1)
 		go s.acceptLoop(tln)
 	}
-	if len(bound) == 0 {
+	if len(addrs) > 0 && len(bound) == 0 {
 		s.closeListeners()
 		s.cancel()
 		return nil, fmt.Errorf("remote: no address of %d could be bound: %w", len(addrs), lastErr)
@@ -284,7 +372,8 @@ func ifaceNote(name string) string {
 }
 
 // Addrs reports the addresses actually bound, with the interface each came
-// from. It is what the daemon's startup log and the doctor read.
+// from. It is what the daemon's startup log and the doctor read. Empty for a
+// relay-only server.
 func (s *Server) Addrs() []BindAddr {
 	out := make([]BindAddr, len(s.addrs))
 	copy(out, s.addrs)
@@ -305,9 +394,8 @@ func (s *Server) liveConns() int {
 //
 // Read from a BOUND address rather than from the options, because the two can
 // differ — a port of 0 asks the kernel to pick one — and the advertiser must
-// publish the port a phone can dial, not the one that was requested. Falls back
-// to the requested port when nothing is bound, which is the only value left to
-// state.
+// publish the port a phone can dial, not the one that was requested. A server
+// with no bound address (relay-only) has no port to state and answers 0.
 func (s *Server) Port() int {
 	s.mu.Lock()
 	addrs := append([]BindAddr(nil), s.addrs...)
@@ -319,12 +407,48 @@ func (s *Server) Port() int {
 			}
 		}
 	}
+	if len(addrs) == 0 {
+		return 0
+	}
 	return s.opts.Port
 }
 
 // SPKIPin is the base64 SHA-256 of this daemon's public key: the value a client
-// pins and, from M2, the value the pairing QR carries.
+// pins and the value the pairing QR carries.
 func (s *Server) SPKIPin() string { return s.key.SPKIPin() }
+
+// DropDevice shuts down every authenticated connection of the device and
+// forgets its rate buckets. It is called synchronously after a revoke or a tier
+// change, so a revoked or downgraded device's attached panes end with its
+// connections; the per-frame check covers the race in between.
+func (s *Server) DropDevice(id string) int {
+	var hit []*conn
+	s.mu.Lock()
+	for c := range s.conns {
+		if c.authed && c.peer.DeviceID == id {
+			hit = append(hit, c)
+		}
+	}
+	s.mu.Unlock()
+	for _, c := range hit {
+		c.shutdown()
+	}
+	s.lim.forget(id)
+	return len(hit)
+}
+
+// DeviceConns reports the live authenticated connections of the device.
+func (s *Server) DeviceConns(id string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for c := range s.conns {
+		if c.authed && c.peer.DeviceID == id {
+			n++
+		}
+	}
+	return n
+}
 
 // Close shuts the listener down. It is bounded and synchronous, and the ORDER
 // is the invariant: close the listeners first so Accept returns net.ErrClosed
@@ -364,6 +488,9 @@ func (s *Server) closeListeners() {
 	}
 }
 
+// closeConns shuts every connection down CONCURRENTLY: tls.Conn.Close sends
+// close_notify under its own 5 s write deadline, and in series four stalled
+// connections would add 20 s to a stop.
 func (s *Server) closeConns() {
 	s.mu.Lock()
 	conns := make([]*conn, 0, len(s.conns))
@@ -371,9 +498,15 @@ func (s *Server) closeConns() {
 		conns = append(conns, c)
 	}
 	s.mu.Unlock()
+	var wg sync.WaitGroup
 	for _, c := range conns {
-		c.shutdown()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.shutdown()
+		}()
 	}
+	wg.Wait()
 }
 
 // acceptLoop runs until the listener is closed.
@@ -393,51 +526,73 @@ func (s *Server) acceptLoop(ln net.Listener) {
 			s.opts.logf()("remote: accept: %v", err)
 			continue
 		}
-		if !s.admit() {
-			s.opts.logf()("remote: refused %s: %d connections already open", nc.RemoteAddr(), maxConnections)
+		release, why := s.admitPreAuth(sourceIP(nc.RemoteAddr()))
+		if release == nil {
+			s.logPreAuth("remote: refused %s: %s", logSafe(nc.RemoteAddr().String()), why)
 			nc.Close()
 			continue
 		}
 		s.wg.Add(1)
-		go s.serveConn(nc)
+		go s.serveConn(nc, release)
 	}
 }
 
-// admit takes a connection slot, or reports that there is none. The slot is
-// held from accept until serveConn returns, so an unauthenticated peer parked
-// in the handshake occupies one exactly as an authenticated peer does.
-func (s *Server) admit() bool {
+// sourceIP is the host part of an address, the key of the per-IP pre-auth cap.
+func sourceIP(a net.Addr) string {
+	if a == nil {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(a.String()); err == nil {
+		return host
+	}
+	return a.String()
+}
+
+// admitPreAuth takes a LAN pre-auth slot for ip. The slot is held from accept
+// until the connection ends or authenticates, so an unauthenticated peer parked
+// in the handshake occupies one exactly as an authenticated peer used to. A nil
+// release means refused, and why names the pool for the log. release is
+// idempotent.
+func (s *Server) admitPreAuth(ip string) (release func(), why string) {
 	s.mu.Lock()
-	closed := s.closed
+	if s.closed {
+		s.mu.Unlock()
+		return nil, "server closing"
+	}
+	if s.preAuth >= maxPreAuthConns {
+		s.mu.Unlock()
+		return nil, "pre-auth pool full"
+	}
+	if s.preAuthIP[ip] >= maxPreAuthPerIP {
+		s.mu.Unlock()
+		return nil, "too many unauthenticated connections from one address"
+	}
+	s.preAuth++
+	s.preAuthIP[ip]++
 	s.mu.Unlock()
-	if closed {
-		return false
-	}
-	select {
-	case s.slots <- struct{}{}:
-		return true
-	default:
-		return false
-	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.preAuth--
+			if s.preAuthIP[ip]--; s.preAuthIP[ip] <= 0 {
+				delete(s.preAuthIP, ip)
+			}
+		})
+	}, ""
 }
 
-// release returns a connection slot. Paired with every admit that returned
-// true, from serveConn's defer, so a handshake failure frees the slot too.
-func (s *Server) release() {
-	select {
-	case <-s.slots:
-	default:
-	}
-}
-
-// addConn records a peer that finished its handshake. It is bookkeeping for
-// closeConns, not admission control — the slot was taken at accept.
+// addConn records a connection from the moment it is served, so closeConns
+// reaches one still in its handshake. Bookkeeping, not admission control.
 func (s *Server) addConn(c *conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return false
 	}
+	s.connSeq++
+	c.seq = s.connSeq
 	s.conns[c] = struct{}{}
 	return true
 }
@@ -445,15 +600,71 @@ func (s *Server) addConn(c *conn) bool {
 func (s *Server) removeConn(c *conn) {
 	s.mu.Lock()
 	delete(s.conns, c)
+	if c.authed {
+		s.authed--
+		c.authed = false
+	}
 	s.mu.Unlock()
 }
 
+// admitAuthed moves a connection that just authenticated into the authed pool
+// as peer. At maxConnsPerDevice the device's OLDEST connection is shut down;
+// maxAuthedConns can only be reached by paired devices, and a connection past
+// it is refused. It also publishes the peer under mu, which is what DropDevice
+// and DeviceConns read.
+func (s *Server) admitAuthed(c *conn, peer Peer) bool {
+	var evict *conn
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return false
+	}
+	if s.authed >= maxAuthedConns {
+		s.mu.Unlock()
+		s.opts.logf()("remote: device=%s refused: %d authenticated connections already open", logSafe(peer.DeviceID), maxAuthedConns)
+		return false
+	}
+	n := 0
+	for o := range s.conns {
+		if o != c && o.authed && o.peer.DeviceID == peer.DeviceID {
+			n++
+			if evict == nil || o.seq < evict.seq {
+				evict = o
+			}
+		}
+	}
+	if n < maxConnsPerDevice {
+		evict = nil
+	}
+	c.peer = peer
+	c.authed = true
+	s.authed++
+	sweep := s.opts.now().Sub(s.lastSweep) >= limiterSweepEvery
+	if sweep {
+		s.lastSweep = s.opts.now()
+	}
+	s.mu.Unlock()
+	if evict != nil {
+		s.opts.logf()("remote: device=%s evicted oldest connection", logSafe(peer.DeviceID))
+		evict.shutdown()
+	}
+	if sweep {
+		s.lim.sweep(func(id string) bool { return s.DeviceConns(id) > 0 })
+	}
+	return true
+}
+
 // serveConn completes the TLS handshake under a deadline and runs the frame
-// loop. Every goroutine this package starts is panic-guarded: a panic in a
-// frame handler must cost one connection, never the daemon.
-func (s *Server) serveConn(nc net.Conn) {
+// loop. release frees the connection's PRE-AUTH slot: conn.run calls it right
+// after Authenticate succeeds (the connection then holds an authed slot), and
+// the deferred call here covers every other way out. Every goroutine this
+// package starts is panic-guarded: a panic in a frame handler must cost one
+// connection, never the daemon.
+func (s *Server) serveConn(nc net.Conn, release func()) {
 	defer s.wg.Done()
-	defer s.release()
+	var once sync.Once
+	rel := func() { once.Do(release) }
+	defer rel()
 	defer func() {
 		if r := recover(); r != nil {
 			s.opts.logf()("remote: connection panic: %v", r)
@@ -468,19 +679,29 @@ func (s *Server) serveConn(nc net.Conn) {
 		err := tc.HandshakeContext(hctx)
 		cancel()
 		if err != nil {
-			// The peer's address is worth a line; the error text is not
-			// sensitive, but nothing from the handshake is echoed back.
-			s.opts.logf()("remote: handshake from %s failed: %v", nc.RemoteAddr(), err)
+			// The error text is not sensitive, but nothing from the handshake is
+			// echoed back. A refused unpaired certificate has its own throttled
+			// line, so it is not logged a second time here.
+			if !errors.Is(err, errUnpaired) {
+				s.logPreAuth("remote: handshake from %s failed: %v", logSafe(nc.RemoteAddr().String()), err)
+			}
 			return
 		}
 	}
 
 	c := newConn(s, nc)
+	c.releasePre = rel
 	if !s.addConn(c) {
 		return
 	}
 	defer s.removeConn(c)
 	c.run()
+}
+
+// logPreAuth writes a line an unauthenticated peer caused, through the global
+// pre-auth bucket; suppressed lines are counted and reported with the next one.
+func (s *Server) logPreAuth(format string, args ...any) {
+	s.preAuthLog.printf(s.opts.now(), s.opts.logf(), format, args...)
 }
 
 // tuneKeepAlive shortens the OS keep-alive on an accepted connection so a peer

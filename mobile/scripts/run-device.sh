@@ -168,6 +168,6 @@ you trust the certificate:
   Settings > General > VPN & Device Management > (your Apple ID) > Trust"
 
 printf 'run-device: launched on %s\n' "${name:-device}" >&2
-printf '\nNext: the phone needs to reach the daemon, and a lola_insecure build binds\n' >&2
-printf 'to loopback — which a physical phone cannot reach. See mobile/README.md\n' >&2
-printf 'section 7 for the options.\n' >&2
+printf '\nNext: pair the phone. A device cannot reach a daemon bound to loopback:\n' >&2
+printf 'set [remote].bind = "lan" (or join a hub for the relay), then run\n' >&2
+printf '`lola pair` and scan the QR. See mobile/README.md section 7.\n' >&2

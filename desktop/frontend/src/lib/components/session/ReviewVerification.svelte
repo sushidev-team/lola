@@ -5,9 +5,13 @@
   import Button from '../Button.svelte';
   import Chevron from '../Chevron.svelte';
   import Icon from '../Icon.svelte';
+  import { touchSurface } from '$lib/touchsurface';
 
-  let { pkg, canRun = false, freshness = 'unknown' }: { pkg: ReviewPackage; canRun?: boolean; freshness?: string } = $props();
+  // `labels` is the phone's one-line verdict ("Verified" / "Not verified"); without it, or off the phone, the full heading shows.
+  let { pkg, canRun = false, freshness = 'unknown', labels }: { pkg: ReviewPackage; canRun?: boolean; freshness?: string; labels?: { verified: string; notVerified: string } } = $props();
+  const phone = touchSurface();
   let checks = $state<ReviewCheck[]>([]);
+  const verdict = $derived(freshness === 'current' && checks.length > 0 && checks.every(c => c.state === 'pass'));
   let loading = $state(false);
   let busy = $state(false);
   let error = $state('');
@@ -23,6 +27,8 @@
   let root = $state<HTMLElement>();
   const key = $derived(`lola.review.verify.${pkg.session}.${pkg.id}`);
   const active = $derived(checks.some(c => !c.stopped));
+  // Phone, nothing run yet: one "No checks / Add check" row replaces the verdict header plus a second row.
+  const bare = $derived(phone && !!labels && !loading && !error && !checks.length && !(canRun && editing));
 
   async function focus(selector: string) {
     await tick();
@@ -103,12 +109,13 @@
 </script>
 
 <section class="verification" aria-label="Independent verification" bind:this={root}>
-  <header class="verification-heading">
-    <div><h3 tabindex="-1"><Icon name="shield-check" size={15}/>Independent verification</h3>
+  {#if !bare}<header class="verification-heading">
+    {#if phone && labels}<div><h3 tabindex="-1" aria-label="Independent verification"><Icon name="shield-check" size={15}/>{verdict ? labels.verified : labels.notVerified}</h3></div>
+    {:else}<div><h3 tabindex="-1"><Icon name="shield-check" size={15}/>Independent verification</h3>
       <p class="revision"><code>{pkg.head.slice(0,12)}</code><span class:outdated={freshness === 'stale'}>{freshness === 'current' ? 'Current revision' : freshness === 'stale' ? 'Older revision' : 'Revision not confirmed'}</span></p>
-    </div>
-    <Button size="sm" icon aria-label="Refresh checks" title="Refresh checks" loading={loading} disabled={busy} onclick={refresh}><Icon name="refresh-cw" size={14}/></Button>
-  </header>
+    </div>{/if}
+    {#if !phone}<Button size="sm" icon aria-label="Refresh checks" title="Refresh checks" loading={loading} disabled={busy} onclick={refresh}><Icon name="refresh-cw" size={14}/></Button>{/if}
+  </header>{/if}
   {#if freshness === 'stale'}<p class="context-note outdated">Checks apply to this version, not the current PR.</p>{/if}
   {#if error}<p role="alert" class="message text-warn">{error}</p>{/if}
   {#if uncertain}<p role="status" class="message text-warn">The request may have been accepted. Refresh checks before sending again.</p>{/if}
@@ -155,12 +162,18 @@
         <div class="verification-actions"><Button size="sm" onclick={close}>Cancel</Button><Button size="sm" variant="secondary" type="submit" disabled={active}>Review check<Icon name="arrow-right" size={14}/></Button></div>
       </form>
     {/if}
+  {:else if !loading && !error && phone && !checks.length}
+    <div class="phone-setup" data-phone-setup><span class="text-subtext" style="font-size:15px;line-height:20px">No checks</span>{#if canRun}<button type="button" class="text-accent" style="font-size:15px;font-weight:400" data-setup-check disabled={active} onclick={edit}>Add check</button>{/if}</div>
   {:else if !loading && !error}
     <div class="setup-row"><span class="explanation">{checks.length ? 'Run another check on this revision.' : 'No checks yet.'}</span>{#if canRun}<Button size="sm" variant="secondary" data-setup-check disabled={active} onclick={edit}>Set up check</Button>{/if}</div>
   {/if}
 </section>
 
 <style>
+  :global([data-phone-desk]) .verification { margin-top:0; padding-top:0; border-top:0; }
+  :global([data-phone-desk]) .verification-heading { align-items:center; }
+  :global([data-phone-desk]) .verification-heading h3 { font-size:17px; line-height:22px; font-weight:600; }
+  :global([data-phone-desk]) .verification-heading :global(button) { min-width:44px; min-height:44px; }
   .verification { min-width:0; margin-top:20px; padding-top:16px; border-top:1px solid var(--color-edge); }
   .verification-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
   h3,h4 { color:var(--color-ink); font-size:13px; font-weight:600; line-height:20px; }
@@ -200,4 +213,7 @@
   .authorization-facts { display:grid; gap:8px; font-size:12px; line-height:18px; }
   .authorization-facts > div { display:grid; grid-template-columns:44px minmax(0,1fr); gap:12px; }
   dt { color:var(--color-ink-2); } dd { overflow-wrap:anywhere; min-width:0; }
+  .phone-setup { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:44px; }
+  .phone-setup button { min-height:44px; min-width:44px; padding-left:12px; }
+  .phone-setup button:disabled { opacity:.4; }
 </style>

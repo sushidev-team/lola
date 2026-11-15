@@ -97,6 +97,8 @@ func (c *cli) dev(args []string) error {
 		addr: *addr, adminAddr: *adminAddr, data: path,
 		team: c.getenv("LOLA_HUB_LINEAR_TEAM"), secretKey: sk, openTeams: *openTeams,
 		ttl: lease.DefaultTTL, escAfter: lease.DefaultEscalateAfter, sweep: time.Minute,
+		// A dev hub has no proxy in front of it, so the TCP peer IS the client.
+		clientIP: "remote-addr",
 	}
 	ctx, stop := c.context()
 	defer stop()
