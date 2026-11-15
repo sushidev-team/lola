@@ -796,6 +796,13 @@ func (d *Daemon) relayServe(ctx context.Context, in relayInputs, rc *hub.RelayCl
 				return relayOutcome{state: protocol.HubRelayStateOff}
 			}
 		case <-r.dirty:
+			// The last phone went (a revoke): nothing is left to serve, and no
+			// kick follows a registry change. Leave here; the loop's off path
+			// posts the empty set.
+			if cur := d.relayGather(d.relayNow()); !cur.wanted || len(cur.entries) == 0 {
+				_ = ws.CloseWithCode(hubproto.WSCloseNormal)
+				return relayOutcome{state: protocol.HubRelayStateOff}
+			}
 			// A sync that started at this generation already covers it.
 			r.mu.Lock()
 			covered := r.syncedGen == r.gen.Load() && !syncing

@@ -1350,8 +1350,10 @@ func TestObserverClosesExitedTemporary(t *testing.T) {
 	if _, ok := d.sessions.Get(s.ID); ok {
 		t.Fatal("an exited temporary session should close")
 	}
-	if got, ok := d.sessions.Get(keep.ID); !ok || got.AgentState != state.AgentDead {
-		t.Fatalf("a main-checkout shell stays, dead: %+v", got)
+	// A main-checkout shell is a borrowed-directory shell too: it closes once
+	// its last terminal is gone (isLocalShell).
+	if _, ok := d.sessions.Get(keep.ID); ok {
+		t.Fatal("an exited main-checkout shell should close")
 	}
 }
 

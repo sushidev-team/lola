@@ -423,13 +423,26 @@ func TestRelayStateMachine(t *testing.T) {
 			defer f.mu.Unlock()
 			return len(f.posts) + f.refusedPosts
 		}
-		before := posts()
+		// The loop is at rest only once no kick is pending and the POST count
+		// stopped moving: serve() leaves a kick behind, and the retry it
+		// causes must not be counted as the heartbeat's.
+		rest := func() int {
+			t.Helper()
+			var n int
+			relayWaitFor(t, "the relay loop at rest", func() bool {
+				n = posts()
+				time.Sleep(50 * time.Millisecond)
+				s, _ := rd.relayStateNow()
+				return posts() == n && len(rd.relay().kick) == 0 && s == protocol.HubRelayStateUnsupported
+			})
+			return n
+		}
+		before := rest()
 		now := time.Now()
 		rd.relayAfterHeartbeat(now)
 		relayWaitFor(t, "a retry after the heartbeat", func() bool { return posts() > before })
-		relayWaitState(t, rd.Daemon, protocol.HubRelayStateUnsupported)
 		// Within the interval a heartbeat sends nothing more.
-		settled := posts()
+		settled := rest()
 		rd.relayAfterHeartbeat(now.Add(relayUnsupportedNudgeEvery - time.Second))
 		time.Sleep(100 * time.Millisecond)
 		if got := posts(); got != settled {
