@@ -10,7 +10,6 @@
   import SidebarProjects from "./SidebarProjects.svelte";
   import SidebarStatus from "./SidebarStatus.svelte";
   import SidebarVersion from "./SidebarVersion.svelte";
-  import SidebarActivity from "./SidebarActivity.svelte";
   import SidebarRoster from "./SidebarRoster.svelte";
   import { toggleGitWorkspace } from "$lib/workspacenav";
   import { SIDEBAR_SPLIT } from "$lib/sidebarwidth";
@@ -77,7 +76,7 @@
 
 <aside
   class="sidebar group/side relative grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] overflow-hidden border-r border-edge bg-canvas"
-  style="grid-template-rows:44px minmax(0,1fr) 44px"
+  style="grid-template-rows:44px 36px minmax(0,1fr) 44px"
   aria-label="Sidebar"
   inert={!nav.sidebarOpen}
   {@attach reflowGridRows}
@@ -90,7 +89,18 @@
        here would be neither draggable nor reliably clickable. -->
   <div class="drag flex min-w-0 items-center gap-2 overflow-hidden pr-3 pl-[82px]">
     <LolaLogo class="h-[18px] w-auto shrink-0" />
-    <div role="group" aria-label="Workspace" class="mode-switch ml-1 shrink-0" data-mode={git ? "git" : "code"}>
+    <Button
+      icon
+      class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
+      title="hide sidebar (⌘B)"
+      aria-label="Hide sidebar"
+      onclick={() => nav.toggleSidebar()}><Icon name="chevrons-left" size={14} /></Button
+    >
+  </div>
+
+  <!-- 2. Workspace row: the Code/Git switch, and a search that opens the command palette. -->
+  <div class="flex min-w-0 items-center gap-2 px-3">
+    <div role="group" aria-label="Workspace" class="mode-switch shrink-0" data-mode={git ? "git" : "code"}>
       <span class="mode-thumb" aria-hidden="true"></span>
       {#each MODES as m (m.id)}
         <button
@@ -102,13 +112,9 @@
         >
       {/each}
     </div>
-    <Button
-      icon
-      class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
-      title="hide sidebar (⌘B)"
-      aria-label="Hide sidebar"
-      onclick={() => nav.toggleSidebar()}><Icon name="chevrons-left" size={14} /></Button
-    >
+    <button type="button" class="palette-hint" aria-label="Search projects and sessions" title="Search projects, sessions and actions (⌘K)" onclick={() => nav.openOverlay("commands")}>
+      <Icon name="search" size={13} /><span class="min-w-0 flex-1 truncate text-left">Search</span><kbd>⌘K</kbd>
+    </button>
   </div>
 
   <!-- Projects on the left, the sessions of the chosen project (or all) beside them. Both are always
@@ -117,9 +123,8 @@
     {#if narrow && !git}
       <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => (nav.sidebarTab = t === "projects" ? "projects" : "sessions")} />
     {/if}
-    <div class="grid min-h-0 min-w-0 {git ? '' : narrow ? (nav.sidebarTab === 'projects' ? '' : 'hidden') : 'border-r border-edge'}" style="grid-template-rows:minmax(0,1fr) auto auto">
+    <div class="grid min-h-0 min-w-0 {git ? '' : narrow ? (nav.sidebarTab === 'projects' ? '' : 'hidden') : 'border-r border-edge'}" style="grid-template-rows:minmax(0,1fr) auto">
       <div class="min-h-0 overflow-auto"><SidebarProjects /></div>
-      <SidebarActivity />
       <SidebarVersion />
     </div>
     <div bind:this={sessionsArea} class="grid min-h-0 min-w-0 {git || (narrow && nav.sidebarTab !== 'sessions') ? 'hidden' : ''}" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
@@ -135,10 +140,13 @@
 
 <style>
   .mode-switch { position:relative; display:grid; grid-template-columns:1fr 1fr; padding:2px; border-radius:9px; background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); }
-  .mode-thumb { will-change:transform; position:absolute; top:2px; bottom:2px; left:2px; width:calc(50% - 2px); border-radius:7px; background:linear-gradient(135deg,color-mix(in srgb,var(--color-accent) 85%,white),var(--color-accent)); box-shadow:0 1px 6px color-mix(in srgb,var(--color-accent) 45%,transparent); transition:transform 160ms cubic-bezier(.2,.9,.3,1.15),box-shadow 160ms; }
+  .palette-hint { display:flex; min-width:0; flex:1; align-items:center; gap:6px; height:28px; padding:0 8px; border-radius:9px; font-size:13px; color:var(--color-faint); background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); transition:color 120ms,box-shadow 120ms; }
+  .palette-hint:hover { color:var(--color-ink); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 45%,transparent); }
+  .palette-hint kbd { font:inherit; font-size:11px; padding:1px 5px; border-radius:5px; background:color-mix(in srgb,var(--color-edge) 70%,transparent); }
+  .mode-thumb { will-change:transform; position:absolute; top:2px; bottom:2px; left:2px; width:calc(50% - 2px); border-radius:7px; background:linear-gradient(135deg,color-mix(in srgb,var(--color-accent) 85%,white),var(--color-accent)); box-shadow:0 1px 6px color-mix(in srgb,var(--color-accent) 45%,transparent); transition:transform 340ms cubic-bezier(.45,.05,.2,1),box-shadow 340ms; }
   .mode-switch[data-mode="git"] .mode-thumb { transform:translateX(100%); }
   .mode-btn { position:relative; z-index:1; display:flex; align-items:center; justify-content:center; gap:5px; height:22px; padding:0 9px; border-radius:7px; font-size:13px; color:var(--color-faint); }
-  .mode-btn :global(svg) { transition:transform 200ms cubic-bezier(.2,.9,.3,1.15); }
+  .mode-btn :global(svg) { transition:transform 340ms cubic-bezier(.45,.05,.2,1); }
   .mode-btn:hover { color:var(--color-ink); }
   .mode-btn[aria-pressed="true"] { color:var(--color-canvas); font-weight:600; }
   .mode-btn[aria-pressed="true"] :global(svg) { transform:scale(1.15) rotate(-8deg); }

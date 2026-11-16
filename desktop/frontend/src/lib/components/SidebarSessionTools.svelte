@@ -90,15 +90,12 @@
 <svelte:window onpointerdown={e => { if (createOpen && !createRoot?.contains(e.target as Node)) closeCreate(); }} />
 
 <div class="sidebar-session-tools">
-  <div class="flex min-w-0 items-center gap-2">
-    {#if searching}
-    <div class="relative min-w-0 flex-1">
-      <input bind:this={searchInput} class="sidebar-search" aria-label="Search sessions" placeholder="Search sessions…" bind:value={nav.sidebarQuery}
-        onkeydown={e => { if (e.key === 'Escape') { if (!nav.sidebarQuery) { filterOpen = false; createRoot?.querySelector<HTMLElement>('[aria-label="Filter sessions"]')?.focus(); } nav.sidebarQuery = ''; e.stopPropagation(); } }} />
-      {#if nav.sidebarQuery}<button type="button" class="sidebar-search-clear" aria-label="Clear session search" onclick={() => nav.sidebarQuery = ''}><Icon name="x" size={14} /></button>{/if}
+  <div class="flex min-w-0 items-center gap-1">
+    <div class="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]">
+      <Tabs pill tabs={[{ id: '', label: 'All', count: rows.length }, { id: 'Needs You', label: 'Needs you', count: needs, alert: true }, { id: 'Ended', label: 'Ended', count: endedCount }]}
+        active={nav.triage} onSelect={id => nav.setTriage(id)} />
     </div>
-    {/if}
-    <div class="relative ml-auto flex items-center gap-1" bind:this={createRoot}>
+    <div class="relative flex shrink-0 items-center" bind:this={createRoot}>
       <Button icon size="xs" aria-label="Filter sessions" title="Filter sessions" aria-pressed={searching} onclick={toggleFilter}><Icon name="list-filter" size={14} /></Button>
       <Button icon size="xs" aria-label="New session" title="New session" aria-haspopup="menu" aria-expanded={createOpen} onclick={toggleCreate}><Icon name="plus" size={14} /></Button>
       {#if createOpen}
@@ -110,13 +107,16 @@
       {/if}
     </div>
   </div>
-  <div class="mt-2 -mx-4">
-    <Tabs quiet tabs={[{ id: '', label: 'All', count: rows.length }, { id: 'Needs You', label: 'Needs you', count: needs }, { id: 'Ended', label: 'Ended', count: endedCount }]}
-      active={nav.triage} onSelect={id => nav.setTriage(id)} />
-  </div>
   {#if nav.scoped}
-    <button type="button" class="mt-2 flex w-full min-w-0 items-center gap-2 text-left text-sm text-accent-ink" onclick={() => nav.goCockpit('')} aria-label="Clear project filter">
-      <span class="min-w-0 truncate">{store.displayNameFor(nav.project)}</span><span class="ml-auto" aria-hidden="true"><Icon name="x" size={14} /></span>
+    <button type="button" class="mt-1.5 inline-flex h-6 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-accent-fill py-0 pr-1.5 pl-2 text-sm text-accent-ink hover:brightness-110" onclick={() => nav.goCockpit('')} aria-label="Clear project filter" title="Show every project's sessions">
+      <Icon name="folder" size={12} /><span class="min-w-0 truncate">{store.displayNameFor(nav.project)}</span><span class="shrink-0 opacity-70" aria-hidden="true"><Icon name="x" size={12} /></span>
     </button>
+  {/if}
+  {#if searching}
+    <div class="relative mt-1.5 min-w-0">
+      <input bind:this={searchInput} class="sidebar-search" aria-label="Search sessions" placeholder="Search sessions…" bind:value={nav.sidebarQuery}
+        onkeydown={e => { if (e.key === 'Escape') { if (!nav.sidebarQuery) { filterOpen = false; createRoot?.querySelector<HTMLElement>('[aria-label="Filter sessions"]')?.focus(); } nav.sidebarQuery = ''; e.stopPropagation(); } }} />
+      {#if nav.sidebarQuery}<button type="button" class="sidebar-search-clear" aria-label="Clear session search" onclick={() => nav.sidebarQuery = ''}><Icon name="x" size={14} /></button>{/if}
+    </div>
   {/if}
 </div>

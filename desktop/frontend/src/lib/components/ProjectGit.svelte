@@ -459,7 +459,7 @@
     if (!active) { wasHidden = true; return; }
     if (!wasHidden) return;
     wasHidden = false;
-    const timer = setTimeout(() => untrack(() => { if (active && data && !git.loading && !git.busy) void git.load(ref, limit, true); }), 350);
+    const timer = setTimeout(() => untrack(() => { if (active && data && !git.loading && !git.busy) void git.load(ref, limit, true); }), 450);
     return () => clearTimeout(timer);
   });
   let historyLoad: Promise<void> = Promise.resolve();
