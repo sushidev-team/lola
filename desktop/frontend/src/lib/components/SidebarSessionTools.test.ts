@@ -116,3 +116,24 @@ describe('session tools', () => {
     expect(nav.focusedTerm).toBe('keep-open');
   });
 });
+
+describe('session tools focus', () => {
+  it('returns focus to the filter button when Escape closes an empty search', async () => {
+    render(SidebarSessionTools);
+    const filter = screen.getByRole('button', { name: 'Filter sessions' });
+    await fireEvent.click(filter);
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search sessions' }), { key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: 'Search sessions' })).toBeNull();
+    expect(filter).toHaveFocus();
+  });
+
+  it('gives the background menu a mounted return target while the filter is closed', async () => {
+    const target = document.createElement('div');
+    document.body.append(target);
+    render(SidebarSessionTools, { props: { contextTarget: target }, target });
+    await fireEvent.contextMenu(target, { clientX: 10, clientY: 10 });
+    await fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+});

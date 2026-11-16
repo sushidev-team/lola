@@ -82,14 +82,18 @@
       <span class="num ml-auto shrink-0 text-sm text-faint">{count}</span>
     {/if}
   </button>
-  {#if badges}
-    <span class="flex shrink-0 items-center gap-1 pr-2">{@render badges()}</span>
-  {/if}
-  {#if actions}
-    <span
-      class="pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-md bg-sel pr-1 pl-1 opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
-      >{@render actions()}</span
-    >
+  {#if badges || actions}
+    <!-- Badges keep their place at the right edge. The actions float over the label's trailing end,
+         just left of them (right-full), so they never cover a badge or reserve space. -->
+    <span class="relative flex shrink-0 items-center gap-1 pr-2">
+      {#if actions}
+        <span
+          class="pointer-events-none absolute inset-y-0 right-full flex items-center rounded-md bg-sel pr-1 pl-1 opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+          >{@render actions()}</span
+        >
+      {/if}
+      {#if badges}{@render badges()}{/if}
+    </span>
   {/if}
 </div>
 

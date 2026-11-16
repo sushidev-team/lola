@@ -6,8 +6,9 @@ export function gitTargetProject(): ProjectInfo | undefined {
   const session = nav.view === 'cockpit' ? store.sessionById(nav.focusedTerm || nav.selectedId) : undefined;
   const member = session?.stack ? session.apps?.find(app => app.name === session.focusApp) : undefined;
   const repositories = store.projects.filter(project => project.path && project.kind !== 'stack');
+  // With nothing selected and no history, the first repository: Git never bounces back to Code.
   return [member?.name, session?.project, nav.project, nav.lastGitProject]
-    .map(name => repositories.find(project => project.name === name)).find(Boolean);
+    .map(name => repositories.find(project => project.name === name)).find(Boolean) ?? repositories[0];
 }
 
 /** Use the current repository, then the last Git workspace; otherwise show Projects. */

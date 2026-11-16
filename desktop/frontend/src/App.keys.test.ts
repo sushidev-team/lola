@@ -115,12 +115,13 @@ describe("project workspace toolbar", () => {
     chord('toggle-git');
     expect(nav.project).toBe('p');
   });
-  it("opens Projects on first use without project context, even with only one repository", async () => {
+  it("opens Projects on first use without project context by opening the first repository, never bouncing back", async () => {
     await mount([]);
     store.projects = [{name:'only',path:'/repo'}] as typeof store.projects;
     nav.goHome();
     chord('toggle-git');
-    expect(nav.view).toBe('home');
+    expect(nav.inGit).toBe(true);
+    expect(nav.project).toBe('only');
     expect(nav.overlay).toBeNull();
   });
   it("toggles Git from the open session and returns with the active tab intact", async () => {

@@ -93,8 +93,20 @@
   });
   const shownOptions = $derived(options.filter((o) => matchesSearch(optionsQuery, o.label)));
 
-  onMount(() => { void tick().then(() => input?.focus()); void ssh.loadHosts(); overlayClose.register(close); });
-  onDestroy(() => overlayClose.unregister(close));
+  // Focus goes back to whatever opened the palette, unless closing it opened another overlay.
+  let invoker: HTMLElement | null = null;
+  let dialog: HTMLDivElement;
+  onMount(() => { invoker = document.activeElement as HTMLElement | null; void tick().then(() => input?.focus()); void ssh.loadHosts(); overlayClose.register(close); });
+  onDestroy(() => { overlayClose.unregister(close); if (!nav.overlay) invoker?.focus?.(); });
+  // aria-modal does not contain Tab: wrap it between the first and last control.
+  function trap(e: KeyboardEvent) {
+    if (e.key !== "Tab") return;
+    const els = Array.from(dialog.querySelectorAll<HTMLElement>('input,button:not([disabled]):not([tabindex="-1"])'));
+    if (els.length === 0) return;
+    const first = els[0], last = els[els.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
   // The menu's ⌘K reaches the page through App (a native accelerator never types into the field).
   let seenToggle = nav.commandOptions;
   $effect(() => { if (nav.commandOptions !== seenToggle) { seenToggle = nav.commandOptions; toggleOptions(); } });
@@ -143,7 +155,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div class="fixed inset-0 z-40 flex items-start justify-center bg-black/40 px-4 pt-[12vh] backdrop-blur-[2px]" role="presentation" onclick={(e) => e.target === e.currentTarget && nav.closeOverlay()}>
-  <div class="relative flex max-h-[70vh] w-full max-w-[640px] flex-col overflow-hidden rounded-xl border border-edge bg-panel shadow-2xl" role="dialog" aria-modal="true" aria-label="Search projects, sessions and actions">
+  <div bind:this={dialog} onkeydown={trap} class="relative flex max-h-[70vh] w-full max-w-[640px] flex-col overflow-hidden rounded-xl border border-edge bg-panel shadow-2xl" role="dialog" tabindex="-1" aria-modal="true" aria-label="Search projects, sessions and actions">
     <div class="flex items-center gap-2.5 border-b border-edge/70 px-4">
       <Icon name="search" size={16} class="shrink-0 text-faint" />
       <input bind:this={input} class="h-12 min-w-0 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-faint" placeholder="Search projects, sessions and actions…" aria-label="Search projects, sessions, and actions" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" aria-activedescendant={selected ? `command-${index}` : undefined} bind:value={query} oninput={() => (index = 0)} onkeydown={key} />
@@ -170,12 +182,12 @@
     {#if optionsOpen}
       <div class="absolute right-3 bottom-12 z-10 w-72 overflow-hidden rounded-lg border border-edge bg-panel shadow-xl">
         <p class="truncate px-3 pt-2.5 pb-1 text-sm text-faint">{selected?.label}</p>
-        <div role="menu" aria-label="{selected?.label} actions" class="max-h-60 overflow-auto p-1">
+        <div id="command-options" role="menu" aria-label="{selected?.label} actions" class="max-h-60 overflow-auto p-1">
           {#each shownOptions as o, i (o.id)}
-            <button role="menuitem" tabindex="-1" class="flex h-8 w-full items-center justify-between gap-2 rounded px-2 text-left text-sm hover:bg-sel disabled:opacity-40 {optionsIndex === i ? 'bg-sel' : ''}" disabled={!o.enabled} onmousemove={() => (optionsIndex = i)} onclick={() => run(o.run)}>{o.label}<span class="text-faint">{o.shortcut || ""}</span></button>
+            <button id="command-option-{i}" role="menuitem" tabindex="-1" class="flex h-8 w-full items-center justify-between gap-2 rounded px-2 text-left text-sm hover:bg-sel disabled:opacity-40 {optionsIndex === i ? 'bg-sel' : ''}" disabled={!o.enabled} onmousemove={() => (optionsIndex = i)} onclick={() => run(o.run)}>{o.label}<span class="text-faint">{o.shortcut || ""}</span></button>
           {:else}<p class="px-2 py-3 text-sm text-faint">No matching actions.</p>{/each}
         </div>
-        <input bind:this={optionsInput} class="w-full border-t border-edge/70 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-faint" placeholder="Search for actions…" aria-label="Search for actions" bind:value={optionsQuery} oninput={() => (optionsIndex = 0)} onkeydown={optionsKey} />
+        <input bind:this={optionsInput} role="combobox" aria-expanded="true" aria-controls="command-options" aria-activedescendant={shownOptions[optionsIndex] ? `command-option-${optionsIndex}` : undefined} class="w-full border-t border-edge/70 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-faint" placeholder="Search for actions…" aria-label="Search for actions" bind:value={optionsQuery} oninput={() => (optionsIndex = 0)} onkeydown={optionsKey} />
       </div>
     {/if}
   </div>

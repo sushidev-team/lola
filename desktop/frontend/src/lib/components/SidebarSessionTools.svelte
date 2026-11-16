@@ -51,7 +51,7 @@
     // Session rows own their menu; editing fields keep native copy/paste actions.
     if (event.defaultPrevented || (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable], button, a, [role="menu"]'))) return;
     event.preventDefault();
-    trigger = searchInput;
+    trigger = searchInput ?? createRoot?.querySelector<HTMLElement>('button') ?? undefined;
     position = { x: event.clientX, y: event.clientY };
     createOpen = true;
     await placeAndFocus();
@@ -94,7 +94,7 @@
     {#if searching}
     <div class="relative min-w-0 flex-1">
       <input bind:this={searchInput} class="sidebar-search" aria-label="Search sessions" placeholder="Search sessions…" bind:value={nav.sidebarQuery}
-        onkeydown={e => { if (e.key === 'Escape') { if (!nav.sidebarQuery) filterOpen = false; nav.sidebarQuery = ''; e.stopPropagation(); } }} />
+        onkeydown={e => { if (e.key === 'Escape') { if (!nav.sidebarQuery) { filterOpen = false; createRoot?.querySelector<HTMLElement>('[aria-label="Filter sessions"]')?.focus(); } nav.sidebarQuery = ''; e.stopPropagation(); } }} />
       {#if nav.sidebarQuery}<button type="button" class="sidebar-search-clear" aria-label="Clear session search" onclick={() => nav.sidebarQuery = ''}><Icon name="x" size={14} /></button>{/if}
     </div>
     {/if}
