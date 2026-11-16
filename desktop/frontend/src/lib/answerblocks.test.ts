@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { answerBlocks, answerShaped, answerStatus, cellTone, fenceFold, firstSentenceEnd, labelTone, parseLabel, plainInline, prHref, splitLead } from "./answerblocks";
+import { answerBlocks, answerShaped, answerStatus, cellTone, fenceFold, firstSentenceEnd, labelTone, optionChoices, parseLabel, plainInline, prHref, splitLead } from "./answerblocks";
 
 const kinds = (text: string) => answerBlocks(text).map((b) => b.kind);
 
@@ -212,5 +212,23 @@ describe("failing open", () => {
       spy.mockRestore();
     }
     expect(out).toEqual([{ kind: "p", text: "line one\nline two" }]);
+  });
+});
+
+describe("optionChoices", () => {
+  const ledger = (text: string) => {
+    const b = answerBlocks(text).find((x) => x.kind === "ledger");
+    return b && b.kind === "ledger" ? b.rows : [];
+  };
+
+  it("offers the options of a ledger whose rows are all options", () => {
+    const rows = ledger("Decide:\n\n**Option A (my recommendation):** emit it only where visible.\n\n**Option B:** also show it.\n\n**Option C:** keep it.");
+    expect(optionChoices(rows)?.map((o) => o.reply)).toEqual(["Option A", "Option B", "Option C"]);
+  });
+
+  it("offers nothing for an ordinary ledger or a single option", () => {
+    expect(optionChoices(ledger("**Elements:** a nav.\n\n**Current page:** marked."))).toBeNull();
+    expect(optionChoices(ledger("**Option A:** one.\n\n**Risks:** none."))).toBeNull();
+    expect(optionChoices([{ label: "Option A", text: "x", tone: "", stacked: false }])).toBeNull();
   });
 });

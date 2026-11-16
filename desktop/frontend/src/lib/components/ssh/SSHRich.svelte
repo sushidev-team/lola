@@ -4,15 +4,17 @@
   // data and has no {@html}, because this text is written by something that reads untrusted
   // remote output. Links and block references come from SSHText, as everywhere else.
   import { inlineSpans, itemStatus, richBlocks, type InlineSpan, type RichBlock } from "$lib/ssh";
-  import { answerBlocks, answerStatus, cellTone, fenceFold, prHref } from "$lib/answerblocks";
+  import { answerBlocks, answerStatus, cellTone, fenceFold, optionChoices, prHref } from "$lib/answerblocks";
   import { store } from "$lib/store.svelte";
   import { disclosureMotion } from "$lib/disclosureMotion";
   import Chevron from "../Chevron.svelte";
   import SyntaxText from "../SyntaxText.svelte";
   import Disclosure from "../Disclosure.svelte";
   import SSHText from "./SSHText.svelte";
+  import { ssh } from "$lib/ssh.svelte";
+  import Button from "../Button.svelte";
 
-  let { sessionId, text, quiet = false, conversation = false, compact = false, reveal = false }: {
+  let { sessionId, text, quiet = false, conversation = false, compact = false, reveal = false, picker = false }: {
     sessionId: string;
     text: string | undefined;
     /** Narration: its first line takes the surrounding ink rather than leading with the top one. */
@@ -22,7 +24,17 @@
     /** Completed responses keep supporting sections behind named disclosures. */
     compact?: boolean;
     reveal?: boolean;
+    /** The newest answer: an options list in it can be answered with one press. */
+    picker?: boolean;
   } = $props();
+
+  // One press answers; the choice stays marked so a second click cannot send it twice.
+  let picked = $state("");
+  async function pick(reply: string) {
+    if (picked) return;
+    picked = reply;
+    if (!(await ssh.speak(sessionId, reply))) picked = "";
+  }
 
   const blocks = $derived(conversation ? answerBlocks(text ?? "") : richBlocks(text ?? ""));
   const sections = $derived.by(() => {
@@ -108,6 +120,14 @@
           <dd class="py-[11px] {row.stacked ? 'col-span-2 pt-1' : 'border-t border-edge/50'}" data-ledger-text>{@render inline(row.text)}{#if row.subs}{@render sublist(row.subs)}{/if}</dd>
         {/each}
       </dl>
+      {@const options = picker ? optionChoices(b.rows) : null}
+      {#if options}
+        <div class="flex max-w-[720px] flex-wrap items-center gap-2" role="group" aria-label="Choose an option" data-option-picker>
+          {#each options as o (o.key)}
+            <Button size="sm" variant={picked === o.reply ? "primary" : "secondary"} disabled={!!picked} title={o.label} onclick={() => pick(o.reply)}>{o.reply}</Button>
+          {/each}
+        </div>
+      {/if}
     {:else if b.kind === "table"}
       <div class="max-w-[720px] overflow-x-auto" data-rich-table>
         <table class="w-full border-collapse">

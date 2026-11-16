@@ -232,6 +232,28 @@ function build(text: string): RichBlock[] {
   return blocks;
 }
 
+const OPTION_LABEL = /^(?:Option|Variante|Choice|Approach|Alternative|Opt\.?)\s+([A-Za-z]|\d{1,2})\b/i;
+
+export type OptionChoice = { key: string; label: string; reply: string };
+
+/**
+ * The options a ledger offers, when every row is "Option A", "Option B" and so on. The reply is the
+ * label's own words up to the first parenthesis, so it names what the agent offered. None below two
+ * rows or when any row is not an option, so an ordinary ledger never grows buttons.
+ */
+export function optionChoices(rows: LedgerRow[]): OptionChoice[] | null {
+  if (rows.length < 2) return null;
+  const out: OptionChoice[] = [];
+  for (const row of rows) {
+    const label = row.label.replace(/[`*]/g, "").trim();
+    const m = OPTION_LABEL.exec(label);
+    if (!m) return null;
+    if (out.some((o) => o.key === m[1].toUpperCase())) return null;
+    out.push({ key: m[1].toUpperCase(), label, reply: label.replace(/\s*[(（].*$/, "").trim() });
+  }
+  return out;
+}
+
 /** An answer as elements. Whatever goes wrong in here, the text still reads as text. */
 export function answerBlocks(text: string): RichBlock[] {
   try {
