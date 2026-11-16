@@ -52,3 +52,18 @@ describe("Sidebar narrow layout", () => {
     expect(screen.queryByRole("tab", { name: "Projects" })).toBeNull();
   });
 });
+
+describe("Sidebar in Git mode", () => {
+  afterEach(cleanup);
+  it("hides the sessions column", async () => {
+    store.projects = [{ name: "lola", label: "Lola", path: "/r/lola", repo: "o/lola", kind: "repo" }] as never;
+    nav.goCockpit("");
+    render(Sidebar, { width: 540 });
+    const col = () => document.querySelector("[data-sidebar-sessions]")!;
+    expect(col()).not.toHaveClass("hidden");
+    await fireEvent.click(screen.getByRole("button", { name: "Git" }));
+    expect(col()).toHaveClass("hidden");
+    await fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    expect(col()).not.toHaveClass("hidden");
+  });
+});

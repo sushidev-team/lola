@@ -64,14 +64,15 @@
        here would be neither draggable nor reliably clickable. -->
   <div class="drag flex min-w-0 items-center gap-2 overflow-hidden pr-3 pl-[82px]">
     <LolaLogo class="h-[18px] w-auto min-w-0 shrink" />
-    <div role="group" aria-label="Workspace" class="ml-1 flex shrink-0 items-center rounded-md bg-panel p-0.5">
+    <div role="group" aria-label="Workspace" class="mode-switch ml-1 shrink-0" data-mode={nav.inGit ? "git" : "code"}>
+      <span class="mode-thumb" aria-hidden="true"></span>
       {#each MODES as m (m.id)}
         <button
           type="button"
           aria-pressed={(m.id === "git") === nav.inGit}
-          class="h-5 rounded px-2 text-sm transition-colors {(m.id === 'git') === nav.inGit ? 'bg-sel font-medium text-ink' : 'text-faint hover:text-ink'}"
+          class="mode-btn"
           title={m.id === "git" ? "Git workspace (⌘⇧G)" : "Sessions and code"}
-          onclick={() => pickMode(m.id)}>{m.label}</button
+          onclick={() => pickMode(m.id)}><Icon name={m.id === "git" ? "git-branch" : "code"} size={13} /><span>{m.label}</span></button
         >
       {/each}
     </div>
@@ -86,16 +87,16 @@
 
   <!-- Projects on the left, the sessions of the chosen project (or all) beside them. Both are always
        mounted, so each keeps its scroll and folders. -->
-  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{narrow ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow ? 'minmax(0,1fr)' : 'minmax(168px,38%) minmax(0,1fr)'}">
-    {#if narrow}
+  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{narrow && !nav.inGit ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow || nav.inGit ? 'minmax(0,1fr)' : 'minmax(168px,38%) minmax(0,1fr)'}">
+    {#if narrow && !nav.inGit}
       <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => (nav.sidebarTab = t === "projects" ? "projects" : "sessions")} />
     {/if}
-    <div class="grid min-h-0 min-w-0 {narrow ? (nav.sidebarTab === 'projects' ? '' : 'hidden') : 'border-r border-edge'}" style="grid-template-rows:minmax(0,1fr) auto auto">
+    <div class="grid min-h-0 min-w-0 {nav.inGit ? '' : narrow ? (nav.sidebarTab === 'projects' ? '' : 'hidden') : 'border-r border-edge'}" style="grid-template-rows:minmax(0,1fr) auto auto">
       <div class="min-h-0 overflow-auto"><SidebarProjects /></div>
       <SidebarActivity />
       <SidebarVersion />
     </div>
-    <div bind:this={sessionsArea} class="grid min-h-0 min-w-0 {narrow && nav.sidebarTab !== 'sessions' ? 'hidden' : ''}" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
+    <div bind:this={sessionsArea} class="grid min-h-0 min-w-0 {nav.inGit || (narrow && nav.sidebarTab !== 'sessions') ? 'hidden' : ''}" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
       <SidebarSessionTools contextTarget={sessionsArea} />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
     </div>
@@ -105,3 +106,16 @@
   <SidebarStatus />
   <SidebarResize {width} {maxWidth} />
 </aside>
+
+<style>
+  .mode-switch { position:relative; display:grid; grid-template-columns:1fr 1fr; padding:2px; border-radius:9px; background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); }
+  .mode-thumb { position:absolute; top:2px; bottom:2px; left:2px; width:calc(50% - 2px); border-radius:7px; background:linear-gradient(135deg,color-mix(in srgb,var(--color-accent) 85%,white),var(--color-accent)); box-shadow:0 1px 6px color-mix(in srgb,var(--color-accent) 45%,transparent); transition:transform 280ms cubic-bezier(.34,1.56,.64,1),box-shadow 280ms; }
+  .mode-switch[data-mode="git"] .mode-thumb { transform:translateX(100%); }
+  .mode-btn { position:relative; z-index:1; display:flex; align-items:center; justify-content:center; gap:5px; height:22px; padding:0 9px; border-radius:7px; font-size:13px; color:var(--color-faint); transition:color 200ms; }
+  .mode-btn :global(svg) { transition:transform 320ms cubic-bezier(.34,1.56,.64,1); }
+  .mode-btn:hover { color:var(--color-ink); }
+  .mode-btn[aria-pressed="true"] { color:var(--color-canvas); font-weight:600; }
+  .mode-btn[aria-pressed="true"] :global(svg) { transform:scale(1.15) rotate(-8deg); }
+  .mode-btn:focus-visible { outline:2px solid var(--color-accent); outline-offset:1px; }
+  @media (prefers-reduced-motion:reduce) { .mode-thumb,.mode-btn,.mode-btn :global(svg) { transition:none; } }
+</style>
