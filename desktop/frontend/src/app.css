@@ -364,6 +364,15 @@ input[type="number"]::-webkit-inner-spin-button {
   background: transparent !important;
 }
 
+/* The wheel is driven by hand (LiveTerminal) and the alt screen has no scrollback, so the
+   viewport scrollbar is an empty track. */
+.xterm-viewport {
+  scrollbar-width: none !important;
+}
+.xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
 /* Motion is decoration here — the live-agent pulse in <AgentActivity> is the only
    animation in the chrome, and its meaning is carried by the dot, not by the
    movement. Under prefers-reduced-motion the dot stays and the ping stops. */

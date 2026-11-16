@@ -66,7 +66,7 @@
 </script>
 
 {#if map.length || onraw}
-  <nav class="cv-activity-map flex items-center gap-3" aria-label={f.more ? 'Activity map of loaded recent history' : 'Conversation activity map'}>
+  <nav class="cv-activity-map flex items-center gap-4" aria-label={f.more ? 'Activity map of loaded recent history' : 'Conversation activity map'}>
     {#if map.length}
     <div role="group" onpointerdown={startDrag} onpointermove={scrub} onpointerup={finishDrag} onpointercancel={finishDrag} onlostpointercapture={finishDrag} class="cv-activity-track min-w-0 flex-1" class:cv-activity-scrubbing={!!drag} style={`--activity-count:${map.length}`} aria-label="Entries sized by duration with pauses compressed; arrow keys move between entries">
       {#each map as entry, i (entry.event.id)}

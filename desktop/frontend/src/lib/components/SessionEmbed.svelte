@@ -230,7 +230,7 @@
 
       <!-- The same toggle as beside the activity bar, in the same corner, to get back. -->
       {#if offered && session && activeTab === AGENT && terminalName}
-        <div class="pointer-events-none z-10 flex items-start justify-end p-2 pr-5" style={mainStyle}><div class="pointer-events-auto"><RawToggle on onclick={() => ssh.selectCell(id, { key: "conversation", kind: "conversation" })} /></div></div>
+        <div class="pointer-events-none z-10 flex items-start justify-end px-8 py-4" style={mainStyle}><div class="pointer-events-auto"><RawToggle on onclick={() => ssh.selectCell(id, { key: "conversation", kind: "conversation" })} /></div></div>
       {/if}
 
       {#if onChanges && session && !rightChanges}
