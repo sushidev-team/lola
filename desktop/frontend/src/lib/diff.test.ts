@@ -160,3 +160,10 @@ describe("intraline highlighting", () => {
     expect(out.map((t) => [t.text, t.hot])).toEqual([["ab", false], ["cd", true], ["ef", false]]);
   });
 });
+
+describe("intraline highlighting and surrogate pairs", () => {
+  it("keeps a replaced emoji whole", () => {
+    const c = changedSpans("// 😀", "// 😁");
+    expect(c).toEqual({ old: [[3, 5]], new: [[3, 5]] });
+  });
+});

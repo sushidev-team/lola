@@ -87,7 +87,7 @@ export function splitRows(rows: Row[]): SplitRow[] {
 /** A half-open [start, end) range of characters within a row's text. */
 export type Span = [number, number];
 
-const PIECE_RE = /[A-Za-z0-9_$]+|\s+|[^A-Za-z0-9_$\s]/g;
+const PIECE_RE = /[A-Za-z0-9_$]+|\s+|[^A-Za-z0-9_$\s]/gu;
 const MAX_PIECES = 400;
 
 /** The characters that differ between a removed line and the added line that
