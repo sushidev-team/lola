@@ -12,6 +12,7 @@
 // `triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage)`.
 import { KANBAN_COLUMNS, kanbanColumn, kanbanTitle } from "./theme";
 import type { SessionInfo } from "./store.svelte";
+import { waitingQueue } from "./queue";
 
 /** The title of the column whose filter also takes an SSH session waiting on a human. */
 const NEEDS_YOU = KANBAN_COLUMNS.find((c) => c.key === "needs")?.title ?? "Needs You";
@@ -46,7 +47,9 @@ export function matchesTriageFor(
   // moving the session's kanban column, which stays a function of the two axes.
   // needsHuman is only ever set by daemon facts, never by anything an agent posted.
   if (triage === NEEDS_YOU && s.ssh?.needsHuman) return true;
-  if (triage === ATTENTION) return s.ssh?.needsHuman === true || triageOf(s) === NEEDS_YOU || triageOf(s) === "Fixing";
+  // One predicate for the list, the counts and the top bar: the roster's own "waiting on you" test
+  // (which also holds a waiting session whose PR has merged), or work that regressed.
+  if (triage === ATTENTION) return s.ssh?.needsHuman === true || waitingQueue([s as SessionInfo]).length > 0 || triageOf(s) === NEEDS_YOU || triageOf(s) === "Fixing";
   return triage === "" || triageOf(s) === triage;
 }
 

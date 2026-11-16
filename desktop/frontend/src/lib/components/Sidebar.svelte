@@ -39,8 +39,10 @@
   // The switch answers first: the pill and the column layout follow the click at once, and the
   // (heavier) workspace change runs after that frame has painted, so it never holds the click back.
   let settle: ReturnType<typeof setTimeout>;
+  let selection = 0;
   function pickMode(id: string) {
     if ((id === "git") === git) return;
+    const mine = ++selection;
     nav.pendingMode = id === "git" ? "git" : "code";
     if (id === "git") {
       // Opening the workspace is the heavy side. Done in the same frame as the click, the pill's
@@ -52,6 +54,7 @@
       return;
     }
     requestAnimationFrame(() => setTimeout(() => {
+      if (mine !== selection) return; // a later click superseded this one
       switchMode(id);
       // Nothing to open Git on (no repository): drop the loading shell at once.
       if (id === "git" && !nav.inGit) nav.pendingMode = null;

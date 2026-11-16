@@ -72,7 +72,8 @@
     };
     return [...keep(sessionRows, "session"), ...keep(projectRows, "project"), ...keep(actions, "action")];
   });
-  const selected = $derived(results[Math.min(index, Math.max(0, results.length - 1))]);
+  const active = $derived(Math.min(index, Math.max(0, results.length - 1)));
+  const selected = $derived(results[active]);
   const project = $derived(selected?.project ? store.projectByName(selected.project) : undefined);
 
   // What ⌘K lists for the selected entry. The first is what Enter does.
@@ -131,7 +132,7 @@
   function scroll(id: string) { void tick().then(() => document.getElementById(id)?.scrollIntoView?.({ block: "nearest" })); }
   function key(e: KeyboardEvent) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault(); index = Math.max(0, Math.min(results.length - 1, index + (e.key === "ArrowDown" ? 1 : -1)));
+      e.preventDefault(); index = Math.max(0, Math.min(results.length - 1, active + (e.key === "ArrowDown" ? 1 : -1)));
       scroll(`command-${index}`);
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault(); void toggleOptions();
@@ -158,7 +159,7 @@
   <div bind:this={dialog} onkeydown={trap} class="relative flex max-h-[70vh] w-full max-w-[640px] flex-col overflow-hidden rounded-xl border border-edge bg-panel shadow-2xl" role="dialog" tabindex="-1" aria-modal="true" aria-label="Search projects, sessions and actions">
     <div class="flex items-center gap-2.5 border-b border-edge/70 px-4">
       <Icon name="search" size={16} class="shrink-0 text-faint" />
-      <input bind:this={input} class="h-12 min-w-0 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-faint" placeholder="Search projects, sessions and actions…" aria-label="Search projects, sessions, and actions" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" aria-activedescendant={selected ? `command-${index}` : undefined} bind:value={query} oninput={() => (index = 0)} onkeydown={key} />
+      <input bind:this={input} class="h-12 min-w-0 flex-1 bg-transparent text-base text-ink outline-none placeholder:text-faint" placeholder="Search projects, sessions and actions…" aria-label="Search projects, sessions, and actions" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" aria-activedescendant={selected ? `command-${active}` : undefined} bind:value={query} oninput={() => (index = 0)} onkeydown={key} />
     </div>
     <div id="command-results" role="listbox" aria-label="Results" class="min-h-0 flex-1 overflow-auto p-1.5">
       {#each results as r, i (r.id)}

@@ -102,3 +102,10 @@ describe("Needs attention", () => {
     expect(matchesTriageFor({ status: "", agentState: "working", delivery: "" }, ATTENTION)).toBe(false);
   });
 });
+
+describe("Needs attention agrees between list and counts", () => {
+  it("includes a waiting session whose pull request has merged", async () => {
+    const { matchesTriageFor, ATTENTION } = await import("./filters");
+    expect(matchesTriageFor({ status: "", agentState: "waiting_input", delivery: "merged" }, ATTENTION)).toBe(true);
+  });
+});

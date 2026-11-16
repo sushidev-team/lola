@@ -459,7 +459,12 @@
     if (!active) { wasHidden = true; return; }
     if (!wasHidden) return;
     wasHidden = false;
-    const timer = setTimeout(() => untrack(() => { if (active && data && !git.loading && !git.busy) void git.load(ref, limit, true); }), 450);
+    const timer = setTimeout(() => untrack(() => {
+      if (!active || !data) return;
+      if (!git.loading && !git.busy) void git.load(ref, limit, true);
+      // The inspector reads the peeked checkout's own state, which the line above does not touch.
+      if (peek && !peek.loading && !peek.busy) void peek.load('', 1, true);
+    }), 450);
     return () => clearTimeout(timer);
   });
   let historyLoad: Promise<void> = Promise.resolve();

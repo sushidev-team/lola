@@ -36,7 +36,14 @@ export function bulkProjectActions(names: string[]): BulkAction[] {
             (removable.length < known.length ? " Stacks are skipped; remove them one at a time." : ""),
           confirmLabel: "Remove",
           onConfirm: () => {
-            void (async () => { for (const n of removable) await store.removeProject(n); nav.scopeTo(""); })();
+            // Clear the selection only if the person is still where they confirmed: removal takes a
+            // while, and a project picked or a workspace opened meanwhile must stay.
+            const where = () => `${nav.view}|${nav.scopeNames.join("\u0000")}`;
+            const before = where();
+            void (async () => {
+              for (const n of removable) await store.removeProject(n);
+              if (where() === before) nav.scopeTo("");
+            })();
           },
         }),
     },

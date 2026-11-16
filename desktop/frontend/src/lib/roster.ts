@@ -1,7 +1,7 @@
 import type { SessionInfo } from './store.svelte';
 import { rosterGroups, rosterLine } from './sessionview';
 import { waitingQueue } from './queue';
-import { matchesTriageFor, ATTENTION } from './filters';
+import { matchesTriageFor } from './filters';
 import type { ScopeMatcher } from './scope';
 
 export type RosterFilter = { query: string; triage: string; scoped: boolean; project: string; scope?: ScopeMatcher | null };
@@ -10,7 +10,6 @@ export function rosterMatches(s: SessionInfo, filter: RosterFilter, projectLabel
   if (filter.scope) { if (!filter.scope(s)) return false; }
   else if (filter.scoped && s.project !== filter.project) return false;
   if (filter.triage === 'Needs You' ? !waitingQueue([s]).length
-    : filter.triage === ATTENTION ? !(waitingQueue([s]).length || matchesTriageFor(s, ATTENTION))
     : !matchesTriageFor(s, filter.triage)) return false;
   const words = filter.query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   const haystack = [s.title, s.issue, s.branch, s.id, projectLabel, s.prNumber ? `#${s.prNumber}` : ''].join(' ').toLocaleLowerCase();

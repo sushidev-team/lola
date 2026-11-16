@@ -142,3 +142,18 @@ describe('session tools focus', () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 });
+
+describe('selected-projects menu', () => {
+  it('closes on Escape and returns focus to its trigger', async () => {
+    store.projects = [{ name: 'a', label: 'A' }, { name: 'b', label: 'B' }] as never;
+    nav.goCockpit('');
+    nav.toggleScope('a'); nav.toggleScope('b');
+    render(SidebarSessionTools);
+    const trigger = screen.getByRole('button', { name: /Actions for 2 projects/ });
+    await fireEvent.click(trigger);
+    expect(screen.getByRole('menu', { name: 'Selected projects' })).toBeInTheDocument();
+    await fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Selected projects' })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+});

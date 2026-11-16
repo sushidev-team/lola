@@ -30,7 +30,7 @@
   const counts = $derived.by(() => {
     const waiting = waitingQueue(rows).length;
     const by = (id: string) => rows.filter(s => matchesTriageFor(s, id)).length;
-    const attention = rows.filter(s => waitingQueue([s]).length > 0 || matchesTriageFor(s, ATTENTION)).length;
+    const attention = rows.filter(s => matchesTriageFor(s, ATTENTION)).length;
     const m: Record<string, number> = { "": rows.length, [ATTENTION]: attention, "Needs You": waiting, Ended: endedCount };
     for (const id of ["Fixing", "In Review", "Working", "Done"]) m[id] = by(id);
     return m;
@@ -57,6 +57,17 @@
   let position = $state({ x: 0, y: 0 });
   // Actions for the selected projects, shown once there are two or more.
   let bulkAt = $state<{ x: number; y: number } | null>(null);
+  let bulkTrigger: HTMLElement | undefined;
+  function closeBulk(focus = false) {
+    bulkAt = null;
+    if (focus) bulkTrigger?.focus();
+  }
+  $effect(() => {
+    if (!bulkAt) return;
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeBulk(true); } };
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+  });
   const bulk = $derived(bulkProjectActions(nav.scopeNames));
 
   async function placeAndFocus() {
@@ -147,7 +158,7 @@
       {/each}
       {#if nav.scopeNames.length > 1}
         <button type="button" class="inline-flex h-6 items-center gap-1 rounded-full px-2 text-sm text-faint hover:bg-sel hover:text-ink" aria-haspopup="menu" aria-expanded={bulkAt !== null} aria-label="Actions for {nav.scopeNames.length} projects" title="Actions for the selected projects"
-          onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); bulkAt = bulkAt ? null : { x: Math.min(r.left, window.innerWidth - 232), y: r.bottom + 4 }; }}>
+          onclick={(e) => { bulkTrigger = e.currentTarget as HTMLElement; const r = bulkTrigger.getBoundingClientRect(); bulkAt = bulkAt ? null : { x: Math.min(r.left, window.innerWidth - 232), y: r.bottom + 4 }; }}>
           <Icon name="ellipsis" size={14} />{nav.scopeNames.length} selected
         </button>
       {/if}
@@ -180,7 +191,7 @@
 {/if}
 
 {#if bulkAt}
-  <div class="fixed inset-0 z-40" role="presentation" onclick={() => (bulkAt = null)}></div>
+  <div class="fixed inset-0 z-40" role="presentation" onclick={() => closeBulk()}></div>
   <div role="menu" aria-label="Selected projects" class="fixed z-50 w-56 rounded-lg border border-edge bg-panel p-1 shadow-xl" style="left:{bulkAt.x}px;top:{bulkAt.y}px">
     {#each bulk as a (a.id)}
       {#if a.id === "clear"}<div class="my-1 border-t border-edge"></div>{/if}
