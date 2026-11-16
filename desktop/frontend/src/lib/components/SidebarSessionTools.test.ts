@@ -34,7 +34,7 @@ describe('session tools', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
-  it('keeps the menu inside the viewport and restores search focus on Escape', async () => {
+  it('keeps the menu inside the viewport and returns focus to the tools row on Escape', async () => {
     const original = HTMLDivElement.prototype.getBoundingClientRect;
     vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLDivElement) {
       return this.getAttribute('role') === 'menu' ? { width: 224, height: 110 } as DOMRect : original.call(this);
@@ -48,12 +48,13 @@ describe('session tools', () => {
       await fireEvent.keyDown(window, { key: 'Escape' });
       expect(shortcut).not.toHaveBeenCalled();
       expect(screen.queryByRole('menu')).toBeNull();
-      expect(screen.getByRole('textbox', { name: 'Search sessions' })).toHaveFocus();
+      expect(screen.getByRole('button', { name: 'Filter sessions' })).toHaveFocus();
     } finally { window.removeEventListener('keydown', shortcut); }
   });
 
   it('leaves editing and session-row context menus alone', async () => {
     const { target } = background();
+    await fireEvent.click(screen.getByRole('button', { name: 'Filter sessions' }));
     expect(await fireEvent.contextMenu(screen.getByRole('textbox', { name: 'Search sessions' }))).toBe(true);
     const row = document.createElement('button');
     const rowMenu = vi.fn((event: Event) => event.preventDefault());
@@ -105,12 +106,54 @@ describe('session tools', () => {
     expect(plus).toHaveFocus();
   });
 
-  it('selects Ended with the keyboard without changing the open session', async () => {
+  it('filters by status from the popover without changing the open session', async () => {
     nav.openSession('keep-open');
     render(SidebarSessionTools);
-    await fireEvent.keyDown(screen.getByRole('tab', { name: /^All/ }), { key: 'End' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Filter sessions' }));
+    expect(screen.getByRole('dialog', { name: 'Filter sessions' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Needs attention/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^In review/ })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('radio', { name: /^Ended/ }));
     expect(nav.triage).toBe('Ended');
-    expect(screen.getByRole('tab', { name: /^Ended/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('radio', { name: /^Ended/ })).toHaveAttribute('aria-checked', 'true');
     expect(nav.focusedTerm).toBe('keep-open');
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(nav.triage).toBe('');
+  });
+});
+
+describe('session tools focus', () => {
+  it('returns focus to the filter button when Escape closes an empty search', async () => {
+    render(SidebarSessionTools);
+    const filter = screen.getByRole('button', { name: 'Filter sessions' });
+    await fireEvent.click(filter);
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search sessions' }), { key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: 'Search sessions' })).toBeNull();
+    expect(filter).toHaveFocus();
+  });
+
+  it('gives the background menu a mounted return target while the filter is closed', async () => {
+    const target = document.createElement('div');
+    document.body.append(target);
+    render(SidebarSessionTools, { props: { contextTarget: target }, target });
+    await fireEvent.contextMenu(target, { clientX: 10, clientY: 10 });
+    await fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+});
+
+describe('selected-projects menu', () => {
+  it('closes on Escape and returns focus to its trigger', async () => {
+    store.projects = [{ name: 'a', label: 'A' }, { name: 'b', label: 'B' }] as never;
+    nav.goCockpit('');
+    nav.toggleScope('a'); nav.toggleScope('b');
+    render(SidebarSessionTools);
+    const trigger = screen.getByRole('button', { name: /Actions for 2 projects/ });
+    await fireEvent.click(trigger);
+    expect(screen.getByRole('menu', { name: 'Selected projects' })).toBeInTheDocument();
+    await fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Selected projects' })).toBeNull();
+    expect(trigger).toHaveFocus();
   });
 });

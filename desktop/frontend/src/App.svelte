@@ -13,6 +13,7 @@
   import { openShell, newSessionHere } from "$lib/projectActions";
   import { onMount } from "svelte";
   import { Events, Window } from "@wailsio/runtime";
+  import { makeScope } from "$lib/scope";
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -20,7 +21,11 @@
   import { visibleRoster } from "$lib/roster";
   import { sidebarWidth, sidebarLimit } from "$lib/sidebarwidth";
   let windowWidth = $state(1280);
+  let mountedDetail = $state(false);
+  $effect(() => { if (nav.view === "detail") mountedDetail = true; });
   const sideWidth = $derived(sidebarWidth(nav.sidebarWidth, windowWidth));
+  // Git mode keeps only the projects panel, which leaves the branch rail and history the room.
+  const trackWidth = $derived(nav.gitMode ? Math.min(nav.projectsWidth, sidebarLimit(windowWidth)) : sideWidth);
   import { isChord } from "$lib/keys";
   import { reflowGridRows } from "$lib/reflow";
   import Sidebar from "$lib/components/Sidebar.svelte";
@@ -91,6 +96,8 @@
     }
     // The left sidebar is layout, not an action on anything: ⌘B works in every view and behind
     // every dialog.
+    // ⌘K inside the palette opens its options panel; the accelerator never reaches the field.
+    if (action === "commands" && nav.overlay === "commands") { nav.commandOptions++; return; }
     if (action === "toggle-sidebar") { nav.toggleSidebar(); return; }
     if (nav.overlay || confirm.request || sessionMenu.request || document.querySelector('[aria-modal="true"]')) return;
     if (action === "toggle-git") { toggleGitWorkspace(); return; }
@@ -168,7 +175,7 @@
   // sidebar applies — otherwise arrow-key movement walks a different list than
   // the one on screen.
   function cockpitRows(): SessionInfo[] {
-    return visibleRoster(store.rosterSessions, store.projects.map(p => p.name), n => store.displayNameFor(n), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project });
+    return visibleRoster(store.rosterSessions, store.projects.map(p => p.name), n => store.displayNameFor(n), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project, scope: makeScope(nav.scopeNames, store.projects) });
   }
 
   function moveSel(delta: number) {
@@ -416,12 +423,12 @@
      going to 0px — never an {#if}, which would remount the sidebar. -->
 <div
   class="grid h-full bg-canvas text-ink"
-  style="grid-template-columns:{nav.sidebarOpen ? `${sideWidth}px` : '0px'} minmax(0,1fr)"
+  style="grid-template-columns:{nav.sidebarOpen ? `${trackWidth}px` : '0px'} minmax(0,1fr)"
 >
   <!-- Full height, ALWAYS MOUNTED. Collapse is the grid track going to 0px plus
        overflow-hidden + inert inside — never an {#if}. A new mount boundary in
        this template is what froze the template effect before. -->
-  <Sidebar width={sideWidth} maxWidth={sidebarLimit(windowWidth)} />
+  <Sidebar width={trackWidth} maxWidth={sidebarLimit(windowWidth)} />
 
   <div class="grid min-h-0 min-w-0" style="grid-template-rows:{nav.view === 'detail' && store.projectByName(nav.project) ? '0px' : '44px'} auto minmax(0,1fr)" {@attach reflowGridRows}>
     <!-- Project workspaces own their single window toolbar. Keep the shared
@@ -446,12 +453,16 @@
          replacing it; nav.view changes now always re-render. -->
     <main class="relative min-h-0 overflow-hidden">
       <Cockpit />
-      {#if nav.view !== "cockpit"}
+      {#if mountedDetail}
+        <!-- The Git workspace stays mounted once opened (invisible but still laid out, so showing it is
+             only a paint; its timers are paused), so switching back to
+             Code and again to Git is instant instead of a fresh mount. -->
+        <div class="absolute inset-0 z-40 overflow-hidden bg-canvas" class:invisible={nav.view !== "detail"} class:pointer-events-none={nav.view !== "detail"} inert={nav.view !== "detail"}><ProjectDetail active={nav.view === "detail"} /></div>
+      {/if}
+      {#if nav.view !== "cockpit" && nav.view !== "detail"}
         <div class="absolute inset-0 z-40 overflow-hidden bg-canvas">
           {#if nav.view === "home"}
             <Home />
-          {:else if nav.view === "detail"}
-            <ProjectDetail />
           {:else if nav.view === "prpicker"}
             <PRPicker />
           {:else if nav.view === "ticketpicker"}

@@ -120,11 +120,13 @@ describe("the Ended tab", () => {
     store.projects = [] as never;
     render(SidebarRoster);
     render(SidebarSessionTools);
-    const toggle = await screen.findByRole("tab", { name: /Ended\s+1/ });
-    expect(toggle).toHaveAttribute("aria-selected", "false");
+    await fireEvent.click(screen.getByRole("button", { name: "Filter sessions" }));
+    const toggle = await screen.findByRole("radio", { name: /^Ended/ });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveTextContent("1");
     expect(document.querySelector(`[data-roster-ended="${SID}"]`)).toBeNull();
     await fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute("aria-selected", "true");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
     const row = document.querySelector(`[data-roster-ended="${SID}"]`) as HTMLElement;
     expect(row).toHaveTextContent("PR #412 merged");
     await fireEvent.click(row);

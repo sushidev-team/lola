@@ -1,4 +1,4 @@
-import { SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX } from "./sidebarwidth";
+import { SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX, PROJECTS_DEFAULT, clampProjectsWidth } from "./sidebarwidth";
 // Navigation state: which top-level view is showing, the project scope, the
 // active modal overlay, and the active session in the full-height workspace.
 
@@ -9,8 +9,6 @@ export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "upda
 
 /** Webview-local sidebar preference. Deliberately NOT in config.toml. */
 const SIDEBAR_KEY = "lola.sidebar";
-/** Which of the sidebar's two tabs is on show. */
-const SIDEBAR_TAB_KEY = "lola.sidebar.tab";
 /** The right-hand column of the project views (facts, Git inspector). */
 const ASIDE_KEY = "lola.aside";
 const PROJECT_TAB_KEY = "lola.project.tab";
@@ -31,21 +29,16 @@ function readLastGitProject(): string {
   catch { return ""; }
 }
 
-export type SidebarTab = "sessions" | "projects";
+const PROJECTS_WIDTH_KEY = "lola.sidebar.projects";
+function readProjectsWidth(): number {
+  try { return clampProjectsWidth(Number(localStorage.getItem(PROJECTS_WIDTH_KEY) ?? PROJECTS_DEFAULT)); } catch { return PROJECTS_DEFAULT; }
+}
 
 function readSidebarWidth(): number {
   try {
     const value = Number(localStorage.getItem("lola.sidebar.width") ?? SIDEBAR_DEFAULT);
     return Number.isFinite(value) ? Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, value)) : SIDEBAR_DEFAULT;
   } catch { return SIDEBAR_DEFAULT; }
-}
-
-function readSidebarTab(): SidebarTab {
-  try {
-    return localStorage.getItem(SIDEBAR_TAB_KEY) === "projects" ? "projects" : "sessions";
-  } catch {
-    return "sessions";
-  }
 }
 
 function readSeen(): Record<string, number> {
@@ -97,10 +90,10 @@ class Nav {
     this.preferredProjectTab = tab;
     try { localStorage.setItem(PROJECT_TAB_KEY, tab); } catch { /* keep the in-memory choice */ }
   }
-  private gitReturn: { view: View; project: string; scoped: boolean; projectTab: ProjectTab; selectedId: string; focusedTerm: string; sidebarTab: SidebarTab; sidebarBrowsing: boolean } | null = null;
+  private gitReturn: { view: View; project: string; scoped: boolean; scope: string[]; projectTab: ProjectTab; selectedId: string; focusedTerm: string; sidebarBrowsing: boolean } | null = null;
   get inGit() { return this.view === "detail" && this.projectTab === "git"; }
   private rememberGitReturn() {
-    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, projectTab:this.projectTab, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarTab:this.sidebarTab, sidebarBrowsing:this.sidebarBrowsing};
+    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, scope:this.scope, projectTab:this.projectTab, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarBrowsing:this.sidebarBrowsing};
   }
   returnFromGit() {
     if (!this.inGit) return;
@@ -110,16 +103,20 @@ class Nav {
     this.view = previous.view;
     this.project = previous.project;
     this.scoped = previous.scoped;
+    this.scope = previous.scope;
     this.projectTab = previous.projectTab;
     this.selectedId = previous.selectedId;
     this.focusedTerm = previous.focusedTerm;
     this.sidebarBrowsing = previous.sidebarBrowsing;
-    this.setSidebarTab(previous.sidebarTab);
   }
   /** Project name backing detail/pickers and the cockpit's project scope. */
   project = $state<string>("");
   /** Cockpit is scoped to `project` (vs global) when true. */
   scoped = $state(false);
+  /** The projects the sessions are filtered to (any of them); empty with `scoped` false means all. */
+  scope = $state<string[]>([]);
+  /** The filter as a list, also for a caller that only set `scoped` and `project`. */
+  get scopeNames(): string[] { return this.scoped ? (this.scope.length ? this.scope : [this.project]) : []; }
   overlay = $state<Overlay>(null);
   /** The project whose form overlay is open. */
   overlayProject = $state<string>("");
@@ -132,16 +129,27 @@ class Nav {
   sidebarBrowsing = $state(false);
   sidebarQuery = $state("");
   sidebarFocus = $state(0);
+  /** Bumped by the menu's ⌘K while the palette is open: toggles its options panel. */
+  commandOptions = $state(0);
   sidebarWidth = $state(readSidebarWidth());
+  /** The projects column's width: beside the sessions in Code, the whole sidebar in Git. */
+  projectsWidth = $state(readProjectsWidth());
+  setProjectsWidth(width: number) {
+    this.projectsWidth = clampProjectsWidth(width);
+    try { localStorage.setItem(PROJECTS_WIDTH_KEY, String(this.projectsWidth)); } catch { /* best effort */ }
+  }
   setSidebarWidth(width: number) {
     this.sidebarWidth = Number.isFinite(width) ? Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, width)) : SIDEBAR_DEFAULT;
     try { localStorage.setItem("lola.sidebar.width", String(this.sidebarWidth)); } catch { /* best effort */ }
   }
   focusSessions() {
+    // The sessions column is hidden and inert in Git mode, so leave it first (and settle any switch).
+    if (this.inGit) this.returnFromGit();
+    this.pendingMode = null;
     this.sidebarBrowsing = true;
     this.sidebarOpen = true;
+    this.sidebarTab = "sessions";
     try { localStorage.setItem(SIDEBAR_KEY, "1"); } catch { /* best effort */ }
-    this.setSidebarTab("sessions");
     this.sidebarFocus++;
   }
   /**
@@ -151,8 +159,15 @@ class Nav {
    * throwing over.
    */
   sidebarOpen = $state(readSidebar());
-  /** The sidebar's tab. Projects is today's body, unchanged. */
-  sidebarTab = $state<SidebarTab>(readSidebarTab());
+  /**
+   * The workspace the Code/Git switch has just been told to show, before the (heavier) navigation
+   * behind it has run. The interface reads `gitMode` so the sidebar, the switch and a loading shell
+   * all change in the same frame as the click.
+   */
+  pendingMode = $state<"code" | "git" | null>(null);
+  get gitMode(): boolean { return (this.pendingMode ?? (this.inGit ? "git" : "code")) === "git"; }
+  /** Narrow sidebar only: which of Projects and Sessions is on show (both show side by side when wide). */
+  sidebarTab = $state<"sessions" | "projects">("sessions");
   /** Sidebar attention filter. Empty means all sessions. */
   triage = $state<string>("");
 
@@ -172,14 +187,6 @@ class Nav {
   toggleAside() {
     this.asideOpen = !this.asideOpen;
     try { localStorage.setItem(ASIDE_KEY, this.asideOpen ? "1" : "0"); } catch { /* best effort */ }
-  }
-  setSidebarTab(t: SidebarTab) {
-    this.sidebarTab = t;
-    try {
-      localStorage.setItem(SIDEBAR_TAB_KEY, t);
-    } catch {
-      /* the choice just doesn't persist */
-    }
   }
   private seen = $state<Record<string, number>>(readSeen());
   /** When the human last had this session open, 0 for never. */
@@ -212,8 +219,8 @@ class Nav {
     this.view = "cockpit";
     this.scoped = scopeProject !== "";
     this.project = scopeProject;
+    this.scope = scopeProject ? [scopeProject] : [];
     this.dropFocus();
-    this.setSidebarTab("sessions");
   }
   goHome() {
     this.view = "home";
@@ -230,9 +237,27 @@ class Nav {
     this.project = name;
     // Project navigation is a workspace destination, not a session filter.
     this.scoped = false;
+    this.scope = [];
     this.view = "detail";
     this.dropFocus();
-    this.setSidebarTab("projects");
+  }
+  /**
+   * Filter the sessions column to one project ("" = all). Inside the cockpit the open session
+   * stays on screen; from any other view this returns to the cockpit.
+   */
+  scopeTo(name: string) {
+    if (this.view !== "cockpit") { this.goCockpit(name); return; }
+    this.scoped = name !== "";
+    this.project = name;
+    this.scope = name ? [name] : [];
+  }
+  /** Add or drop one project from the filter, keeping the rest (⌘-click). */
+  toggleScope(name: string) {
+    if (this.view !== "cockpit") { this.goCockpit(name); return; }
+    const next = this.scopeNames.includes(name) ? this.scopeNames.filter(n => n !== name) : [...this.scopeNames, name];
+    this.scope = next;
+    this.scoped = next.length > 0;
+    this.project = next[0] ?? "";
   }
   goPRPicker(name: string) {
     this.project = name;

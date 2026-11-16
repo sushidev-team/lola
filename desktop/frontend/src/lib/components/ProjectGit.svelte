@@ -31,7 +31,7 @@
   import { folderFirstFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
   import { agoPhrase, exactTime } from '$lib/time';
 
-  let { project, heading, actions, windowInset = false }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean } = $props();
+  let { project, heading, actions, windowInset = false, active = true }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean; active?: boolean } = $props();
   const rowHeight = 34;
   let worktree = $state('');
   let ref = $state('');
@@ -113,6 +113,7 @@
   async function openSearch() { searchOpen = true; columnMenu = false; await tick(); searchInput?.focus(); searchInput?.select(); }
   function closeSearch() { searchOpen = false; query = ''; }
   function searchKey(event: KeyboardEvent) {
+    if (!active) return;
     if (event.defaultPrevented || nav.overlay || confirm.request) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !nav.overlay && !confirm.request) { event.preventDefault(); void openSearch(); }
     if (event.key === 'Escape') { if (columnMenu) columnMenu = false; else if (searchOpen) closeSearch(); }
@@ -381,7 +382,11 @@
   });
   $effect(() => {
     const state = git, branch = ref, count = limit;
-    untrack(() => { if (newPR && newPR.git !== state) newPR = null; if (newWorktree && newWorktree.git !== state) newWorktree = null; if (publishBranch && publishBranch.git !== state) publishBranch = null; if (newBranch && newBranch.git !== state) newBranch = null; gitActions.close(); cancelBranchDrag(); selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; hoveredLane = null; focusedLane = null; state.clearDiff(); historyLoad = state.load(branch, count); });
+    untrack(() => { if (newPR && newPR.git !== state) newPR = null; if (newWorktree && newWorktree.git !== state) newWorktree = null; if (publishBranch && publishBranch.git !== state) publishBranch = null; if (newBranch && newBranch.git !== state) newBranch = null; gitActions.close(); cancelBranchDrag(); selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; hoveredLane = null; focusedLane = null; state.clearDiff(); // A checkout this view has not drawn yet but already holds a snapshot for (a switch back to Git)
+      // is refreshed in place; a first visit, or a changed branch or limit, shows loading.
+      const quiet = !drawn.has(state) && !!state.snapshot && branch === "" && count === 200;
+      drawn.add(state);
+      historyLoad = state.load(branch, count, quiet); });
   });
   $effect(() => {
     const state = view, snapshot = view.snapshot, selection = selected, chosenArea = area, chosenPath = path;
@@ -392,6 +397,7 @@
   });
 
   $effect(() => {
+    if (!active) return; // hidden in the background: no polling, no network
     const state = git;
     let disposed = false;
     const fetchIfVisible = () => {
@@ -446,7 +452,23 @@
   function ownWorking() { peekPath = ''; working(); }
   function openWorktreeChanges(tree: GitWorktree) { chooseWorktree(tree.path === configuredPath ? '' : tree.path); working(); }
   function chooseWorktree(value: string) { peekPath = ''; branchJump++; focusedBranch = ''; worktree = value; ref = ''; limit = 200; query = ''; showRail = false; }
+  // Back on screen after being hidden: refresh in place, without a loading state. Not while the
+  // Code/Git switch is still animating, since re-rendering the history then would stall it.
+  let wasHidden = !active;
+  $effect(() => {
+    if (!active) { wasHidden = true; return; }
+    if (!wasHidden) return;
+    wasHidden = false;
+    const timer = setTimeout(() => untrack(() => {
+      if (!active || !data) return;
+      if (!git.loading && !git.busy) void git.load(ref, limit, true);
+      // The inspector reads the peeked checkout's own state, which the line above does not touch.
+      if (peek && !peek.loading && !peek.busy) void peek.load('', 1, true);
+    }), 450);
+    return () => clearTimeout(timer);
+  });
   let historyLoad: Promise<void> = Promise.resolve();
+  const drawn = new WeakSet<object>();
   let branchJump = 0;
   let focusedBranch = $state('');
   let historyList = $state<HTMLDivElement>();
@@ -528,7 +550,7 @@
   {/each}
 {/snippet}
 
-<svelte:window onfocus={() => { if (data && !git.busy && !git.loading && !git.fetching) void git.load(ref, limit); }} onkeydown={searchKey} onclick={(event) => { if (!(event.target instanceof Element) || !event.target.closest('.column-options')) columnMenu = false; }} />
+<svelte:window onfocus={() => { if (active && data && !git.busy && !git.loading && !git.fetching) void git.load(ref, limit); }} onkeydown={searchKey} onclick={(event) => { if (!(event.target instanceof Element) || !event.target.closest('.column-options')) columnMenu = false; }} />
 
 {#snippet loadingRailRows(count: number)}
   <div class="rail-skeleton" aria-hidden="true">{#each Array(count) as _, index}<div class="rail-placeholder"><Skeleton width="12px" height="12px"/><Skeleton width={`${[65,80,52,72][index % 4]}%`} height="11px"/></div>{/each}</div>

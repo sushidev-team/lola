@@ -19,18 +19,26 @@
 
   const waiting = $derived(nav.sidebarOpen ? 0 : waitingQueue(store.rosterSessions).length);
   const daemonOk = $derived(store.alive && store.status?.runtimeOk && store.status?.linearOk);
-  const project = $derived<ProjectInfo | undefined>(store.projectByName(nav.project));
+  // The Git workspace stays mounted (hidden, with its timers paused) after a switch to Code, so
+  // coming back is instant. While hidden it holds the project and tab it was last showing.
+  let { active = true }: { active?: boolean } = $props();
+  let heldProject = $state(nav.project);
+  let heldTab = $state(nav.projectTab);
+  $effect(() => { if (active) { heldProject = nav.project; heldTab = nav.projectTab; } });
+  const current = $derived(active ? nav.project : heldProject);
+  const tabPref = $derived(active ? nav.projectTab : heldTab);
+  const project = $derived<ProjectInfo | undefined>(store.projectByName(current));
   // Daemon updates replace ProjectInfo objects. Keep the Git navigation input
   // scalar so unchanged identity does not retrigger its project-reset effect.
   const projectName = $derived(project?.name ?? "");
-  const sessions = $derived(sortSessions(store.rosterSessions).filter(s => s.project === nav.project));
+  const sessions = $derived(sortSessions(store.rosterSessions).filter(s => s.project === current));
   const shown = $derived(sessions.slice(0, 8));
   const moreCount = $derived(Math.max(0, sessions.length - shown.length));
-  const members = $derived(store.projects.filter(p => p.stack === nav.project));
+  const members = $derived(store.projects.filter(p => p.stack === current));
   const isStack = $derived(project?.kind === "stack");
-  const spend = $derived(store.status?.usage?.projects?.find(p => p.name === nav.project));
+  const spend = $derived(store.status?.usage?.projects?.find(p => p.name === current));
   const canGit = $derived(!!project?.path && !isStack);
-  const tab = $derived(canGit ? nav.projectTab : "overview");
+  const tab = $derived(canGit ? tabPref : "overview");
   $effect(() => { if (canGit && tab === "git") nav.rememberGitProject(projectName); });
 
   let broadcastOpen = $state(false);
@@ -40,7 +48,7 @@
   let actionsMenu = $state<HTMLDetailsElement>();
   let generation = 0;
   $effect(() => {
-    nav.project;
+    current;
     untrack(() => {
       generation++;
       broadcastOpen = false;
@@ -59,20 +67,20 @@
   function showSessions() {
     nav.setTriage("");
     nav.sidebarQuery = "";
-    nav.goCockpit(nav.project);
+    nav.goCockpit(current);
   }
   async function sendBroadcast() {
     const msg = broadcastText.trim();
     if (!msg || broadcasting) return;
-    const current = generation;
+    const gen = generation;
     broadcasting = true;
     try {
-      const r = await store.broadcast(nav.project, msg);
-      if (r === undefined || current !== generation) return;
+      const r = await store.broadcast(current, msg);
+      if (r === undefined || gen !== generation) return;
       broadcastResult = r.message || "";
       broadcastText = "";
     } finally {
-      if (current === generation) broadcasting = false;
+      if (gen === generation) broadcasting = false;
     }
   }
   async function selectTab(next: "overview" | "git") {
@@ -89,6 +97,7 @@
   }
 </script>
 
+{#if active || tab === "git"}
 <div class="project-workspace" class:git-tab={tab === "git"}>
   {#if project}
     {#snippet heading()}
@@ -118,7 +127,7 @@
               <MenuItem disabled={!a.enabled} onclick={() => runAction(a.run)}>{a.label}</MenuItem>
             {/each}
             <MenuItem onclick={() => runAction(() => { nav.projectTab = "overview"; broadcastOpen = !broadcastOpen; broadcastResult = ""; })}>Broadcast</MenuItem>
-            <MenuItem onclick={() => runAction(() => nav.openOverlay("project", nav.project, "filter"))}>Polls</MenuItem>
+            <MenuItem onclick={() => runAction(() => nav.openOverlay("project", current, "filter"))}>Polls</MenuItem>
           </div>
         </details>
         <Button icon class="project-aside-toggle" selected={nav.asideOpen} aria-pressed={nav.asideOpen} aria-label="Right sidebar" title={nav.asideOpen ? "Hide right sidebar (N)" : "Show right sidebar (N)"} onclick={() => nav.toggleAside()}><Icon name="panel-right" size={16} /></Button>
@@ -126,7 +135,7 @@
     {/snippet}
     {#if tab === "git"}
       <div id="project-git" class="min-h-0 min-w-0" role="tabpanel" aria-labelledby="project-tab-git">
-        <ProjectGit project={projectName} {heading} {actions} windowInset={!nav.sidebarOpen} />
+        <ProjectGit project={projectName} {heading} {actions} {active} windowInset={!nav.sidebarOpen} />
       </div>
     {:else}
       <header class="project-header drag" class:window-inset={!nav.sidebarOpen} aria-label="Project toolbar">{@render heading()}{@render actions()}</header>
@@ -158,7 +167,7 @@
                     <Icon name="terminal" size={24} class="text-faint" />
                     <h3 class="font-medium text-ink">No sessions yet</h3>
                     <p class="max-w-md text-sm text-faint">Start an agent, open a shell, or pick work from Linear or GitHub. Sessions and their progress will appear here.</p>
-                    <Button variant="secondary" disabled={!project.path} onclick={() => nav.newSession(nav.project)}>New session…</Button>
+                    <Button variant="secondary" disabled={!project.path} onclick={() => nav.newSession(current)}>New session…</Button>
                   </div>
                 {:else}
                   <div class="session-list">
@@ -176,7 +185,7 @@
                     {#if moreCount}<Button block onclick={showSessions}>Show {moreCount} more sessions<Icon name="arrow-right" size={14} /></Button>{/if}
                   </div>
                 {/if}
-                <div class="session-shortcuts"><Button onclick={() => nav.goTicketPicker(nav.project)}>Start a ticket</Button><Button disabled={!project.repoConfigured} title={!project.repoConfigured ? "set a GitHub repo to list PRs" : undefined} onclick={() => nav.goPRPicker(nav.project)}>Open a PR</Button></div>
+                <div class="session-shortcuts"><Button onclick={() => nav.goTicketPicker(current)}>Start a ticket</Button><Button disabled={!project.repoConfigured} title={!project.repoConfigured ? "set a GitHub repo to list PRs" : undefined} onclick={() => nav.goPRPicker(current)}>Open a PR</Button></div>
               </section>
               {#if isStack}
                 <section aria-label="Stack repositories">
@@ -190,7 +199,7 @@
                   {:else}<p class="text-sm text-faint">Add repositories to this stack from the project sidebar.</p>{/each}
                 </section>
               {/if}
-              <div class="grid gap-3"><ProjectGoals project={nav.project} /><ProjectKnowledge project={nav.project} /></div>
+              <div class="grid gap-3"><ProjectGoals project={current} /><ProjectKnowledge project={current} /></div>
             </div>
             <aside class="project-facts" aria-label="Project information" hidden={!nav.asideOpen}>
               {#if !isStack}
@@ -204,7 +213,7 @@
                 </section>
               {/if}
               <section>
-                <div class="section-heading"><h2>Automation</h2><Button icon size="xs" aria-label="Configure automation" onclick={() => nav.openOverlay("project", nav.project, "filter")}><Icon name="settings" size={14} /></Button></div>
+                <div class="section-heading"><h2>Automation</h2><Button icon size="xs" aria-label="Configure automation" onclick={() => nav.openOverlay("project", current, "filter")}><Icon name="settings" size={14} /></Button></div>
                 <dl class="facts-list">
                   <div><dt>Coding agent</dt><dd>{project.agent || "claude"}</dd></div>
                   <div><dt>Issue pickup</dt><dd>{project.pollsEnabled ? "Enabled" : "Paused"}</dd></div>
@@ -217,8 +226,9 @@
         </div>
       </div>
     {/if}
-  {:else}<p class="p-6 text-faint">Project {nav.project || "(none)"} not found{store.alive ? "" : " — daemon offline"}.</p>{/if}
+  {:else}<p class="p-6 text-faint">Project {current || "(none)"} not found{store.alive ? "" : " — daemon offline"}.</p>{/if}
 </div>
+{/if}
 
 <style>
   .project-workspace { display:grid; height:100%; min-height:0; min-width:0; grid-template-columns:minmax(0,1fr); grid-template-rows:48px minmax(0,1fr); container-type:inline-size; }

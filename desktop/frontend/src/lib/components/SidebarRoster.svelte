@@ -11,6 +11,7 @@
   // Reads the store itself, as a leaf: a container computing rows and passing them down does not
   // re-render on the daemon push in the production WKWebView.
   import { tick, untrack } from "svelte";
+  import { makeScope } from "$lib/scope";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
@@ -42,8 +43,9 @@
     return () => clearInterval(t);
   });
   const ended = $derived(talk.endedList().filter((e) => !store.sessionById(e.id)));
-  const visible = $derived(visibleRoster(store.rosterSessions, store.projects.map(p => p.name), name => store.displayNameFor(name), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project }));
-  const filteredEnded = $derived(ended.filter(e => nav.triage === 'Ended' && (!nav.scoped || e.project === nav.project) && (!nav.sidebarQuery.trim() || `${e.title} ${e.issue} ${e.id}`.toLowerCase().includes(nav.sidebarQuery.trim().toLowerCase()))));
+  const visible = $derived(visibleRoster(store.rosterSessions, store.projects.map(p => p.name), name => store.displayNameFor(name), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project, scope: makeScope(nav.scopeNames, store.projects) }));
+  const scope = $derived(makeScope(nav.scopeNames, store.projects) ?? (() => true));
+  const filteredEnded = $derived(ended.filter(e => nav.triage === 'Ended' && scope(e) && (!nav.sidebarQuery.trim() || `${e.title} ${e.issue} ${e.id}`.toLowerCase().includes(nav.sidebarQuery.trim().toLowerCase()))));
   let root = $state<HTMLElement>();
   let focusSeen = untrack(() => nav.sidebarFocus);
   $effect(() => {

@@ -2,6 +2,7 @@
   import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
+  import { makeScope } from "$lib/scope";
   import { nav } from "$lib/nav.svelte";
   import { triaged } from "$lib/filters";
   import Button from "./Button.svelte";
@@ -48,7 +49,7 @@
         ];
       default: {
         const c: Crumb[] = nav.scoped
-          ? [{ text: "All", onclick: () => nav.goCockpit("") }, { text: projectName }]
+          ? [{ text: "All", onclick: () => nav.goCockpit("") }, { text: nav.scopeNames.map(n => store.displayNameFor(n)).join(", ") }]
           : [{ text: "Sessions" }];
         // The filter is a crumb, and clicking it is how you drop it — the same
         // affordance as Escape, for people who never learn Escape.
@@ -60,7 +61,7 @@
 
   // The number of rows actually visible below — the count that used to sit in
   // the sessions panel header.
-  const count = $derived(triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage).length);
+  const count = $derived(triaged(scopedSessions(store.sessions, nav.scoped, nav.project, makeScope(nav.scopeNames, store.projects)), nav.triage).length);
 
   // Mirrors <SidebarStatus>'s health read so the collapsed-sidebar alarm below
   // fires on the same condition the sidebar chip does.

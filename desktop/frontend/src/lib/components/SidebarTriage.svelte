@@ -1,5 +1,6 @@
 <script lang="ts">
   import { store, scopedSessions } from "$lib/store.svelte";
+  import { makeScope } from "$lib/scope";
   import { nav } from "$lib/nav.svelte";
   import { TRIAGE_FILTERS, matchesTriageFor } from "$lib/filters";
   import { KANBAN_COLUMNS, kanbanDotText } from "$lib/theme";
@@ -12,7 +13,7 @@
 
   // The PROJECT-SCOPED but UN-TRIAGED list: the counts must describe what
   // clicking a row would show, not what the active filter already hid.
-  const rows = $derived(scopedSessions(store.sessions, nav.scoped, nav.project));
+  const rows = $derived(scopedSessions(store.sessions, nav.scoped, nav.project, makeScope(nav.scopeNames, store.projects)));
 
   const counts = $derived.by(() => {
     const m: Record<string, number> = {};

@@ -108,20 +108,39 @@ describe("SidebarProjects", () => {
     nav.view = "cockpit";
   });
 
-  it("opens the project workspace instead of filtering sessions", async () => {
-    nav.goCockpit("okane");
-    nav.setSidebarTab("projects");
+  it("filters the sessions beside it in Code mode and clears on a second click", async () => {
     render(SidebarProjects);
     const row = screen.getByRole("button", { name: "lola" });
     await fireEvent.click(row);
-    expect(nav.view).toBe("detail");
+    expect(nav.view).toBe("cockpit");
+    expect(nav.scoped).toBe(true);
     expect(nav.project).toBe("lola");
-    expect(nav.scoped).toBe(false);
-    expect(nav.sidebarTab).toBe("projects");
     expect(row).toHaveAttribute("aria-current", "true");
     await fireEvent.click(row);
+    expect(nav.scoped).toBe(false);
+    await fireEvent.click(row);
+    await fireEvent.click(screen.getByRole("button", { name: "All sessions" }));
+    expect(nav.scoped).toBe(false);
+  });
+
+  it("opens the Git workspace for a project in Git mode", async () => {
+    nav.goDetail("okane", "git");
+    render(SidebarProjects);
+    expect(screen.queryByRole("button", { name: "All sessions" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "lola" }));
     expect(nav.view).toBe("detail");
+    expect(nav.inGit).toBe(true);
     expect(nav.project).toBe("lola");
+    expect(nav.scoped).toBe(false);
+  });
+
+  it("stays in Git mode when a stack is selected, so its member opens Git next", async () => {
+    store.projects = stackProjects();
+    nav.goDetail("lola", "git");
+    render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "nori" }));
+    expect(nav.inGit).toBe(true);
+    expect(nav.project).toBe("nori");
   });
 
   it("adds through a MENU, not straight into the project form", async () => {
@@ -155,6 +174,7 @@ describe("SidebarProjects", () => {
 
   it("keeps project row menus and the search field's native context menu", async () => {
     render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "Filter projects" }));
     await fireEvent.contextMenu(screen.getByLabelText("Search projects"));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     await fireEvent.contextMenu(screen.getByRole("button", { name: "lola" }));
@@ -164,6 +184,7 @@ describe("SidebarProjects", () => {
 
   it("dismisses the background context menu with Escape", async () => {
     render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "Filter projects" }));
     await fireEvent.contextMenu(screen.getByRole("navigation", { name: "Projects" }));
     await fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -737,6 +758,7 @@ it("searches project names, repositories and paths without changing layout", asy
   cleanup(); store.groups=[];
   store.projects = [fakeProject({name:"alpha", label:"Alpha Website",path:"/code/customer-a",repo:"acme/website" }), fakeProject({name:"beta",label:"Beta",path:"/code/customer-b"})];
   render(SidebarProjects);
+  await fireEvent.click(screen.getByRole("button",{name:"Filter projects"}));
   await fireEvent.input(screen.getByLabelText("Search projects"),{target:{value:"customer-a"}});
   expect(screen.getByText("Alpha Website")).toBeInTheDocument();
   expect(screen.queryByText("Beta")).not.toBeInTheDocument();
@@ -751,4 +773,35 @@ it("searches project names, repositories and paths without changing layout", asy
   expect(screen.getByLabelText("Search projects")).toHaveFocus();
   expect(screen.queryByRole("button", {name:"Clear project search"})).not.toBeInTheDocument();
   expect(screen.getByText("Beta")).toBeInTheDocument();
+});
+
+it("adds projects to the session filter with ⌘-click and replaces it with a plain click", async () => {
+  cleanup(); store.groups = [];
+  store.projects = [fakeProject({ name: "alpha", label: "Alpha" }), fakeProject({ name: "beta", label: "Beta" })];
+  nav.goCockpit("");
+  render(SidebarProjects);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(nav.scopeNames).toEqual(["alpha"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Beta" }), { metaKey: true });
+  expect(nav.scopeNames).toEqual(["alpha", "beta"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }), { metaKey: true });
+  expect(nav.scopeNames).toEqual(["beta"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(nav.scopeNames).toEqual(["alpha"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(nav.scopeNames).toEqual([]);
+});
+
+it("offers actions for several selected projects from a row's menu", async () => {
+  cleanup(); store.groups = [];
+  store.projects = [fakeProject({ name: "alpha", label: "Alpha" }), fakeProject({ name: "beta", label: "Beta" })];
+  nav.goCockpit("");
+  render(SidebarProjects);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Beta" }), { metaKey: true });
+  await fireEvent.contextMenu(screen.getByRole("button", { name: "Beta" }));
+  expect(screen.getByText("2 projects selected")).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole("menuitem", { name: "Remove 2 projects…" }));
+  expect(confirm.request?.title).toBe("Remove 2 projects?");
+  expect(confirm.request?.subject).toBe("Alpha, Beta");
 });

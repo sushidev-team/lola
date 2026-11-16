@@ -4,7 +4,7 @@
   import { projectActions } from "$lib/projectActions";
   import { matchesSearch, searchMatch } from "$lib/search";
   import SearchHighlight from "./SearchHighlight.svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { store, type ProjectInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { confirm } from "$lib/confirm.svelte";
@@ -31,6 +31,7 @@
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
   import { askRemoveProject, askRemoveStack } from "$lib/removeAsk";
+  import { bulkProjectActions } from "$lib/projectbulk";
   import Modal from "./Modal.svelte";
   import Checkbox from "./Checkbox.svelte";
   import SetupChecklist from "./SetupChecklist.svelte";
@@ -55,7 +56,16 @@
   // catches up. Without it the row snaps back to its old place for the frame
   // between the drop and the reload, which reads as "the drag didn't take".
   let query = $state("");
-  let searchInput: HTMLInputElement;
+  let searchInput = $state<HTMLInputElement>();
+  // The search field lives behind the header's filter button; a live query keeps it open.
+  let filterOpen = $state(false);
+  const searching = $derived(filterOpen || query !== "");
+  async function toggleFilter() {
+    if (searching) { query = ""; filterOpen = false; return; }
+    filterOpen = true;
+    await tick();
+    searchInput?.focus();
+  }
   const matches = $derived(store.projects.filter(p => matchesSearch(query, displayName(p), p.repo, p.path)));
   let pending = $state<Row<ProjectInfo>[] | null>(null);
   const rows = $derived(pending ?? buildRows(store.projects, store.groups));
@@ -102,7 +112,7 @@
     if (e.defaultPrevented || (e.target as HTMLElement).closest("input, textarea, [contenteditable], button, a")) return;
     e.preventDefault();
     rowMenu = null;
-    addTrigger = searchInput;
+    addTrigger = searchInput ?? (e.currentTarget as HTMLElement);
     addMenu = {
       x: Math.max(4, Math.min(e.clientX, window.innerWidth - 180)),
       y: Math.max(4, Math.min(e.clientY, window.innerHeight - 120)),
@@ -454,9 +464,14 @@
     });
   }
 
-  function openProject(name: string) {
+  function openProject(name: string, event?: MouseEvent) {
     if (suppressClick) return;
-    nav.goDetail(name);
+    // Git mode: a project is a workspace to open. Code mode: it filters the sessions beside it,
+    // and picking the one already chosen clears the filter.
+    // A stack or path-less project keeps the Git tab too: ProjectDetail shows its overview.
+    if (nav.gitMode) nav.goDetail(name, "git");
+    else if (event && (event.metaKey || event.ctrlKey || event.shiftKey)) nav.toggleScope(name);
+    else { nav.scopeTo(nav.scopeNames.length === 1 && nav.scopeNames[0] === name ? "" : name); nav.sidebarTab = "sessions"; }
   }
 
   function toggleGroup(name: string, collapsed: boolean) {
@@ -576,7 +591,7 @@
   {@const stack = memberOf(store.projects, p.name)}
   {@const d = pollDot(p, stack)}
   {@const match = searchMatch(query, displayName(p), p.repo, p.path)}
-  {@const active = ["detail", "prpicker", "ticketpicker"].includes(nav.view) && nav.project === p.name}
+  {@const active = (nav.view === "cockpit" ? nav.scopeNames.includes(p.name) : ["detail", "prpicker", "ticketpicker"].includes(nav.view) && nav.project === p.name)}
   <NavRow
     label={displayName(p)}
     glyph={d.glyph}
@@ -585,8 +600,8 @@
     {active}
     title={stack ? d.hint : p.lastError
       ? `poll error: ${p.lastError}`
-      : isStack(p) ? "Open stack overview" : "Open project overview and Git"}
-    onclick={() => openProject(p.name)}
+      : nav.gitMode ? "Open in Git" : "Show this project's sessions (⌘-click to add more)"}
+    onclick={(e) => openProject(p.name, e)}
     onkeydown={(e) => {
       // A member is placed by its stack, not by the arrangement keys.
       if (!query.trim() && index >= 0) nudgeProject(e, p.name, group, index);
@@ -641,13 +656,22 @@
   <li class="-my-px h-0.5 rounded-full bg-accent" aria-hidden="true"></li>
 {/snippet}
 
-<nav class="min-h-full min-w-0 px-3 pt-3.5" aria-label="Projects" oncontextmenu={openBackgroundMenu}>
-  <div class="flex items-center px-2 pb-1">
-    <h2 class="label text-faint">Projects</h2>
+<nav class="min-h-full min-w-0 px-3 pt-3" aria-label="Projects" oncontextmenu={openBackgroundMenu}>
+  <div class="flex h-6 items-center px-2">
+    <h2 class="label text-[11px]! text-faint">Projects</h2>
     <Button
       size="xs"
       icon
-      class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
+      class="ml-auto transition-opacity {searching ? '' : 'opacity-0 group-hover/side:opacity-100 focus-visible:opacity-100'}"
+      title="filter projects"
+      aria-label="Filter projects"
+      aria-pressed={searching}
+      onclick={toggleFilter}><Icon name="list-filter" size={14} /></Button
+    >
+    <Button
+      size="xs"
+      icon
+      class="opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
       title="add a project, a group or a stack"
       aria-label="Add"
       aria-haspopup="menu"
@@ -655,16 +679,18 @@
     >
   </div>
 
+  {#if searching}
   <div class="px-2 py-2">
     <div class="relative">
       <input bind:this={searchInput} class="w-full rounded border border-edge bg-panel py-1.5 pr-8 pl-2 text-sm outline-none focus:border-accent" placeholder="Search projects…" aria-label="Search projects" bind:value={query} />
       {#if query}
-        <Button icon size="xs" class="absolute top-1/2 right-1 -translate-y-1/2" aria-label="Clear project search" title="Clear search" onclick={() => { query = ""; searchInput.focus(); }}>
+        <Button icon size="xs" class="absolute top-1/2 right-1 -translate-y-1/2" aria-label="Clear project search" title="Clear search" onclick={() => { query = ""; searchInput?.focus(); }}>
           <Icon name="x" class="size-3" />
         </Button>
       {/if}
     </div>
   </div>
+  {/if}
   {#if query.trim()}
     <ul class="grid gap-0.5" aria-label="Matching projects">
       {#each matches as p (p.name)}
@@ -700,6 +726,11 @@
       <SetupChecklist dismissKey="sidebar" hideWhenComplete optional={["poll", "linear"]} class="mb-2 rounded-md border border-dashed border-edge p-2" />
     {/if}
     {@const gap = drag?.kind === "group" ? groupTarget : target?.kind === "top" ? target.index : null}
+    {#if !nav.gitMode}
+      <div class="pb-1">
+        <NavRow label="All sessions" glyph="∗" active={nav.view === "cockpit" && !nav.scoped} title="Show sessions from every project" onclick={() => nav.scopeTo("")} />
+      </div>
+    {/if}
     <!-- The sidebar owns scrolling; Activity has its own bounded footer. -->
     <div bind:this={listEl} class="min-w-0" class:select-none={!!drag}>
       <ul>
@@ -816,6 +847,13 @@
     role="menu"
     aria-label="{nameOf(menuName)} actions"
   >
+    {#if !rowMenu?.picking && nav.scopeNames.length > 1 && nav.scopeNames.includes(menuName)}
+      <p class="px-2 py-1 text-sm text-faint">{nav.scopeNames.length} projects selected</p>
+      {#each bulkProjectActions(nav.scopeNames) as a (a.id)}
+        <MenuItem variant={a.variant} disabled={!a.enabled} onclick={() => { rowMenu = null; a.run(); }}>{a.label}</MenuItem>
+      {/each}
+      <div class="my-1 border-t border-edge"></div>
+    {/if}
     {#if !rowMenu?.picking && store.projectByName(menuName)}
       {#each projectActions(store.projectByName(menuName)!) as action (action.id)}
         <MenuItem disabled={!action.enabled} onclick={() => { rowMenu=null; action.run(); }}>{action.label}</MenuItem>

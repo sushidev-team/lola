@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { makeScope } from "$lib/scope";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { visibleRoster } from "$lib/roster";
@@ -11,7 +12,7 @@
     // Explicitly opening a terminal wins over a stale session snapshot. A new
     // session can take another push to arrive; never substitute an older row.
     if (nav.focusedTerm || nav.view !== "cockpit") return;
-    const rows = visibleRoster(store.rosterSessions, store.projects.map(p => p.name), n => store.displayNameFor(n), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project });
+    const rows = visibleRoster(store.rosterSessions, store.projects.map(p => p.name), n => store.displayNameFor(n), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project, scope: makeScope(nav.scopeNames, store.projects) });
     if (rows.length > 0) {
       nav.openSession(rows.find(r => r.id === nav.selectedId)?.id ?? rows[0].id);
     }

@@ -51,3 +51,50 @@ it("opens the Team view and syncs the hub from the palette", async () => {
  await fireEvent.keyDown(screen.getByRole("combobox"),{key:"Enter"});
  expect(nav.view).toBe("team"); expect(nav.overlay).toBeNull();
 });
+
+it("shows only common actions until typing, then matches sessions and projects first", async () => {
+ render(CommandPalette);
+ expect(screen.queryByText("Go to…")).toBeNull();
+ const idle = screen.getAllByRole("option").map(o => o.textContent ?? "");
+ expect(idle[0]).toContain("New session");
+ expect(idle.some(t => t.includes("Investigate checkout") || t.includes("Hlmw9 Website"))).toBe(false);
+ expect(screen.queryByRole("option", { name: /Doctor/ })).toBeNull();
+ await fireEvent.input(screen.getByRole("combobox"),{target:{value:"o"}});
+ const text = screen.getAllByRole("option").map(o => o.textContent ?? "");
+ expect(text[0]).toContain("Investigate checkout");
+ expect(text[1]).toContain("Hlmw9 Website");
+ await fireEvent.input(screen.getByRole("combobox"),{target:{value:"Doctor"}});
+ expect(screen.getByRole("option", { name: /Doctor/ })).toBeInTheDocument();
+});
+
+it("shows the selected entry's actions in an options panel on ⌘K", async () => {
+ render(CommandPalette);
+ await fireEvent.input(screen.getByRole("combobox"),{target:{value:"checkout"}});
+ await fireEvent.keyDown(screen.getByRole("combobox"),{key:"k",metaKey:true});
+ expect(screen.getByRole("menu", { name: /Investigate checkout actions/ })).toBeInTheDocument();
+ expect(screen.getByRole("menuitem", { name: /Open session/ })).toBeInTheDocument();
+ await fireEvent.keyDown(screen.getByRole("combobox",{name:"Search for actions"}),{key:"k",metaKey:true});
+ expect(screen.queryByRole("menu")).toBeNull();
+});
+
+it("keeps Tab inside the dialog and exposes the active action", async () => {
+ render(CommandPalette);
+ const input = screen.getByRole("combobox", { name: /Search projects/ });
+ await vi.waitFor(() => expect(input).toHaveFocus());
+ const shift = await fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+ expect(shift).toBe(false);
+ expect(screen.getByRole("button", { name: /Actions/ })).toHaveFocus();
+ await fireEvent.input(input, { target: { value: "checkout" } });
+ await fireEvent.keyDown(input, { key: "k", metaKey: true });
+ const box = screen.getByRole("combobox", { name: "Search for actions" });
+ expect(box.getAttribute("aria-activedescendant")).toBe("command-option-0");
+ expect(document.getElementById("command-option-0")).toBeInTheDocument();
+});
+
+it("returns focus to the invoking control when closed", async () => {
+ const opener = document.createElement("button"); document.body.append(opener); opener.focus();
+ const { unmount } = render(CommandPalette);
+ await vi.waitFor(() => expect(document.activeElement).not.toBe(opener));
+ nav.closeOverlay(); unmount();
+ expect(opener).toHaveFocus(); opener.remove();
+});
