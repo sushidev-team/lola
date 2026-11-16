@@ -259,6 +259,9 @@ func (s *ProjectGitService) DiscardUnstaged(project, worktree, token string) err
 	})
 }
 func (s *ProjectGitService) PrepareDiscardPaths(project, worktree string, paths []string) (projectgit.DiscardPlan, error) {
+	if len(paths) == 0 {
+		return projectgit.DiscardPlan{}, errors.New("choose at least one file to discard")
+	}
 	result := projectgit.DiscardPlan{}
 	err := s.mutate(project, worktree, func(ctx context.Context, dir string) error {
 		var err error
@@ -268,6 +271,9 @@ func (s *ProjectGitService) PrepareDiscardPaths(project, worktree string, paths 
 	return result, err
 }
 func (s *ProjectGitService) DiscardPaths(project, worktree, token string, paths []string) error {
+	if len(paths) == 0 {
+		return errors.New("choose at least one file to discard")
+	}
 	return s.mutate(project, worktree, func(ctx context.Context, dir string) error {
 		return (projectgit.Client{}).DiscardUnstaged(ctx, dir, token, paths...)
 	})
