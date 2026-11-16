@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import Sidebar from "./Sidebar.svelte";
 import { nav } from "$lib/nav.svelte";
@@ -27,10 +27,10 @@ describe("Sidebar workspace switch", () => {
     const git = screen.getByRole("button", { name: "Git" });
     expect(code).toHaveAttribute("aria-pressed", "true");
     await fireEvent.click(git);
-    expect(nav.inGit).toBe(true);
+    await vi.waitFor(() => expect(nav.inGit).toBe(true));
     expect(git).toHaveAttribute("aria-pressed", "true");
     await fireEvent.click(code);
-    expect(nav.inGit).toBe(false);
+    await vi.waitFor(() => expect(nav.inGit).toBe(false));
     expect(nav.view).toBe("cockpit");
     expect(nav.scoped).toBe(true);
     expect(nav.project).toBe("lola");
