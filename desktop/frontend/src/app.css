@@ -1507,3 +1507,8 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .ssh-col:has([data-inline-terminal]:not([hidden])) { grid-template-rows: auto minmax(40px, .65fr) minmax(0, 1fr) auto; }
 .ssh-col:has([data-inline-terminal]:not([hidden])) .cv-bands { max-height: 38cqh; overflow-y: auto; }
 .cv-tray-row, .cv-tray-row > .cv-dock, .cv-tray-row [data-tray] { min-height: 0; }
+
+/* The sidebar's width follows the Code/Git switch smoothly; only while a switch is settling, so a
+   drag on the resize handle still tracks the pointer exactly. */
+.cols-anim { transition: grid-template-columns 340ms cubic-bezier(.45, .05, .2, 1); }
+@media (prefers-reduced-motion: reduce) { .cols-anim { transition: none; } }

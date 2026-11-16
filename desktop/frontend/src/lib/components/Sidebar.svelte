@@ -12,7 +12,7 @@
   import SidebarVersion from "./SidebarVersion.svelte";
   import SidebarRoster from "./SidebarRoster.svelte";
   import { toggleGitWorkspace } from "$lib/workspacenav";
-  import { SIDEBAR_SPLIT } from "$lib/sidebarwidth";
+  import { SIDEBAR_SPLIT, GIT_SIDEBAR_WIDTH } from "$lib/sidebarwidth";
   import Tabs from "./Tabs.svelte";
 
   let sessionsArea = $state<HTMLDivElement>();
@@ -118,8 +118,10 @@
   </div>
 
   <!-- Projects on the left, the sessions of the chosen project (or all) beside them. Both are always
-       mounted, so each keeps its scroll and folders. -->
-  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{narrow && !git ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow || git ? 'minmax(0,1fr)' : 'minmax(168px,38%) minmax(0,1fr)'}">
+       mounted, so each keeps its scroll and folders. In Git mode the aside shrinks to the projects
+       column and the sessions column fades out into the width it gives up; the width itself is
+       animated by App's grid (see `cols-anim`). -->
+  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{narrow && !git ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow && !git ? 'minmax(0,1fr)' : `${GIT_SIDEBAR_WIDTH}px minmax(0,1fr)`}">
     {#if narrow && !git}
       <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => (nav.sidebarTab = t === "projects" ? "projects" : "sessions")} />
     {/if}
@@ -127,7 +129,7 @@
       <div class="min-h-0 overflow-auto"><SidebarProjects /></div>
       <SidebarVersion />
     </div>
-    <div bind:this={sessionsArea} class="grid min-h-0 min-w-0 {git || (narrow && nav.sidebarTab !== 'sessions') ? 'hidden' : ''}" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
+    <div bind:this={sessionsArea} class="sessions-col grid min-h-0 min-w-0 {narrow && !git && nav.sidebarTab !== 'sessions' ? 'hidden' : ''} {git ? 'col-off' : ''}" inert={git} style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
       <SidebarSessionTools contextTarget={sessionsArea} />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
     </div>
@@ -140,6 +142,9 @@
 
 <style>
   .mode-switch { position:relative; display:grid; grid-template-columns:1fr 1fr; padding:2px; border-radius:9px; background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); }
+  .sessions-col { transition:opacity 260ms ease 80ms,transform 340ms cubic-bezier(.45,.05,.2,1),visibility 0s; }
+  .sessions-col.col-off { opacity:0; transform:translateX(-18px); visibility:hidden; pointer-events:none; transition:opacity 180ms ease,transform 340ms cubic-bezier(.45,.05,.2,1),visibility 0s linear 340ms; }
+  @media (prefers-reduced-motion:reduce) { .sessions-col,.sessions-col.col-off { transition:none; } }
   .palette-hint { display:flex; min-width:0; flex:1; align-items:center; gap:6px; height:28px; padding:0 8px; border-radius:9px; font-size:13px; color:var(--color-faint); background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); transition:color 120ms,box-shadow 120ms; }
   .palette-hint:hover { color:var(--color-ink); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 45%,transparent); }
   .palette-hint kbd { font:inherit; font-size:11px; padding:1px 5px; border-radius:5px; background:color-mix(in srgb,var(--color-edge) 70%,transparent); }
