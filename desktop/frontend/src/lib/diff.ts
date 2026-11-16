@@ -84,6 +84,104 @@ export function splitRows(rows: Row[]): SplitRow[] {
   return out;
 }
 
+/** A half-open [start, end) range of characters within a row's text. */
+export type Span = [number, number];
+
+const PIECE_RE = /[A-Za-z0-9_$]+|\s+|[^A-Za-z0-9_$\s]/gu;
+const MAX_PIECES = 400;
+
+/** The characters that differ between a removed line and the added line that
+ * replaces it, as ranges in each. Compared by word, whitespace run and
+ * punctuation mark (so a changed identifier lights up whole), via a longest
+ * common subsequence. Null when a highlight would say nothing: no shared
+ * piece, or lines too long to compare cheaply. */
+export function changedSpans(oldText: string, newText: string): { old: Span[]; new: Span[] } | null {
+  const a = oldText.match(PIECE_RE) ?? [];
+  const b = newText.match(PIECE_RE) ?? [];
+  if (a.length > MAX_PIECES || b.length > MAX_PIECES) return null;
+  const w = b.length + 1;
+  const lcs = new Uint16Array((a.length + 1) * w);
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lcs[i * w + j] = a[i] === b[j] ? lcs[(i + 1) * w + j + 1] + 1 : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1]);
+    }
+  }
+  const keepA = new Array<boolean>(a.length).fill(false);
+  const keepB = new Array<boolean>(b.length).fill(false);
+  let i = 0;
+  let j = 0;
+  let shared = false;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      keepA[i] = keepB[j] = true;
+      if (a[i].trim() !== "") shared = true;
+      i++;
+      j++;
+    } else if (lcs[(i + 1) * w + j] >= lcs[i * w + j + 1]) i++;
+    else j++;
+  }
+  if (!shared) return null;
+  const spans = (pieces: string[], keep: boolean[]): Span[] => {
+    const out: Span[] = [];
+    let at = 0;
+    pieces.forEach((p, k) => {
+      if (!keep[k]) {
+        const last = out[out.length - 1];
+        if (last && last[1] === at) last[1] = at + p.length;
+        else out.push([at, at + p.length]);
+      }
+      at += p.length;
+    });
+    return out;
+  };
+  return { old: spans(a, keepA), new: spans(b, keepB) };
+}
+
+/** Changed-character ranges for every removed/added row that has a partner,
+ * paired the way splitRows pairs them (k-th removal with k-th addition). */
+export function intralineSpans(rows: Row[]): Map<Row, Span[]> {
+  const out = new Map<Row, Span[]>();
+  let i = 0;
+  while (i < rows.length) {
+    if (rows[i].kind !== "del") {
+      i++;
+      continue;
+    }
+    const dels: Row[] = [];
+    const adds: Row[] = [];
+    while (i < rows.length && rows[i].kind === "del") dels.push(rows[i++]);
+    while (i < rows.length && rows[i].kind === "meta") i++;
+    while (i < rows.length && rows[i].kind === "add") adds.push(rows[i++]);
+    for (let k = 0; k < Math.min(dels.length, adds.length); k++) {
+      const c = changedSpans(dels[k].text, adds[k].text);
+      if (!c) continue;
+      if (c.old.length) out.set(dels[k], c.old);
+      if (c.new.length) out.set(adds[k], c.new);
+    }
+  }
+  return out;
+}
+
+/** Cut syntax tokens at the span edges; `hot` marks the pieces inside a span. */
+export function applySpans(tokens: Token[], spans: Span[] | undefined): (Token & { hot: boolean })[] {
+  if (!spans || spans.length === 0) return tokens.map((t) => ({ ...t, hot: false }));
+  const out: (Token & { hot: boolean })[] = [];
+  let at = 0;
+  for (const t of tokens) {
+    let pos = 0;
+    while (pos < t.text.length) {
+      const abs = at + pos;
+      const inside = spans.find((s) => abs >= s[0] && abs < s[1]);
+      const edge = inside ? inside[1] : Math.min(Infinity, ...spans.filter((s) => s[0] > abs).map((s) => s[0]));
+      const end = Math.min(t.text.length, edge - at);
+      out.push({ kind: t.kind, text: t.text.slice(pos, end), hot: !!inside });
+      pos = end;
+    }
+    at += t.text.length;
+  }
+  return out;
+}
+
 /** Which side of the diff a line lives on. A comment on a removed line names
  * the BASE line number (side "old"); everything else names the working tree. */
 export type Side = "new" | "old";

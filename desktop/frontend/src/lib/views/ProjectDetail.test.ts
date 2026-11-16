@@ -30,6 +30,7 @@ function fakeProject(over: Partial<ProjectInfo> = {}): ProjectInfo {
 describe("ProjectDetail", () => {
   beforeEach(() => {
     cleanup();
+    nav.asideOpen = true;
     store.projects = [];
     store.sessions = [];
     nav.goDetail("acme", "overview");
@@ -66,6 +67,17 @@ describe("ProjectDetail", () => {
     expect(screen.getByRole("button", { name: "1 waiting on you" })).toBeInTheDocument();
     await fireEvent.click(screen.getByRole("button", { name: "Daemon down" }));
     expect(nav.overlay).toBe("doctor");
+  });
+
+  it("offers a toggle to bring the right sidebar back", async () => {
+    store.projects = [fakeProject()];
+    nav.asideOpen = false;
+    render(ProjectDetail);
+    const toggle = screen.getByRole("button", { name: "Right sidebar" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await fireEvent.click(toggle);
+    expect(nav.asideOpen).toBe(true);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
   });
 
   it("dims Open a PR and shows the hint when no repo is configured", () => {
