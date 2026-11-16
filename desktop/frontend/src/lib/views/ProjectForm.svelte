@@ -18,6 +18,8 @@
   import Checkbox from "$lib/components/Checkbox.svelte";
   import AgentModelFields from "$lib/components/AgentModelFields.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
+  import VariableMenu from "$lib/components/VariableMenu.svelte";
+  import { commandVariables, envValueVariables, insertVariable, type VariableGroup } from "$lib/fieldVariables";
   import { BRANCH_PREFIXES } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
   import SandboxLoginPrompt from "$lib/components/SandboxLoginPrompt.svelte";
@@ -295,11 +297,11 @@
   const title = $derived(
     f
       ? f.isNew
-        ? "add project"
-        : `${role === "stack" ? "Stack" : "project"}: ${displayName(f)}`
+        ? "Add project"
+        : `${role === "stack" ? "Stack" : "Project"}: ${displayName(f)}`
       : nav.overlayProject === ""
-        ? "add project"
-        : `project: ${nav.overlayProject}`,
+        ? "Add project"
+        : `Project: ${nav.overlayProject}`,
   );
   // Why Save is off, said next to it instead of failing after the click.
   // Saving needs a folder (config refuses a project without a path; a stack has
@@ -665,6 +667,11 @@
   }
 
   const formId = $props.id();
+  // What the "{ }" menu on a worktree field offers: shell variables for the
+  // command lists, {{.Field}} placeholders for env values.
+  const lease = $derived({ range: f?.portRange ?? "", perSession: f?.portsPerSession ?? 0 });
+  const commandVars = $derived(commandVariables(lease, f?.env));
+  const envValueVars = $derived(envValueVariables(lease));
   const rowCls = "project-field grid min-w-0 grid-cols-[170px_minmax(0,1fr)] items-baseline gap-3";
   const rowTopCls = "project-field grid min-w-0 grid-cols-[170px_minmax(0,1fr)] items-start gap-3";
   const labelCls = "label flex items-center gap-1.5 text-faint";
@@ -742,14 +749,29 @@
   placeholder = "",
   hint = "",
   k: InheritKey | null = null,
+  vars: VariableGroup[] | null = null,
 )}
   {@const fieldId = `${formId}-${caption.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
   <div class={rowTopCls}>
     {@render cap(caption, k, hint, fieldId)}
-    <span>
+    <span class="relative">
+      {#if vars}
+        <!-- Overlaid top right; the textarea keeps that corner clear (pr-9). -->
+        <VariableMenu label={caption} groups={vars} class="absolute top-1 right-1 z-10"
+          onpick={(token) => {
+            const el = document.getElementById(fieldId) as HTMLTextAreaElement | null;
+            if (!el) return;
+            const next = insertVariable(el, token, el.dataset.caret === "1");
+            el.dataset.caret = "1";
+            if (k) promote(k);
+            onChange(splitLines(next));
+            el.focus();
+          }} />
+      {/if}
       <textarea
         id={fieldId}
-        class="{inputCls} block resize-y font-mono {inheritedStyle(k)}"
+        class="{inputCls} block resize-y font-mono {inheritedStyle(k)} {vars ? 'pr-9!' : ''}"
+        onfocus={(e) => { e.currentTarget.dataset.caret = "1"; }}
         aria-label={caption}
         aria-describedby={ENTRY_FORMAT[caption] ? `${fieldId}-format` : undefined}
         rows="3"
@@ -1135,6 +1157,7 @@
             "npm install\nmake build",
             "one command per line — run after the worktree is created",
             "postCreate",
+            commandVars,
           )}
           {@render areaRow(
             "Pre-remove",
@@ -1142,8 +1165,10 @@
             (v) => { d.preRemove = v; },
             'dropdb --if-exists "$LOLA_DB_NAME"',
             "one command per line — run in the worktree before lola removes it (merge cleanup, kill); bounded, failures are only logged",
+            null,
+            commandVars,
           )}
-          {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value\nAPI_URL=http://localhost", "one KEY=value per line", "env")}
+          {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value\nAPI_URL=http://localhost", "one KEY=value per line", "env", envValueVars)}
         {/snippet}
         {@render section("Worktree preparation", preparation)}
         {#snippet testing()}
@@ -1155,6 +1180,8 @@
             d.portRange
               ? "one long-running command per line, each in its own terminal tab — every session can run them at once, on its own $LOLA_PORT"
               : "one long-running command per line — only the ACTIVE session runs them (one per project), each in its own terminal tab",
+            null,
+            commandVars,
           )}
           {@render textRow(
             "Port range",

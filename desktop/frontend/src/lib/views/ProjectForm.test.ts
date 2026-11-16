@@ -248,7 +248,7 @@ describe("ProjectForm", () => {
     render(ProjectForm);
     expect(getProject).toHaveBeenCalledWith("acme");
     expect(await screen.findByLabelText("Path")).toHaveValue("/Users/me/code/acme");
-    expect(screen.getByText("project: acme")).toBeInTheDocument();
+    expect(screen.getByText("Project: acme")).toBeInTheDocument();
     expect(screen.queryByLabelText("Branch prefix")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("tab", { name: "Worktree setup" }));
     expect(screen.getByLabelText("Custom Branch prefix")).toHaveValue("acme/");
@@ -440,6 +440,28 @@ describe("ProjectForm", () => {
     const postCreate = screen.getByLabelText("Post-create");
     expect(postCreate.className).not.toContain("border-dashed");
     expect(within(rowOf(postCreate)).getByRole("button", { name: /^Use default for / })).toBeInTheDocument();
+  });
+
+  it("inserts a variable from the field's menu at the caret", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
+    const dev = (await screen.findByLabelText("Dev commands")) as HTMLTextAreaElement;
+    await fireEvent.input(dev, { target: { value: "serve --port=" } });
+    await fireEvent.focus(dev);
+    dev.setSelectionRange(dev.value.length, dev.value.length);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Insert variable into Dev commands" }));
+    const menu = screen.getByRole("menu", { name: "Variables for Dev commands" });
+    await fireEvent.input(screen.getByLabelText("Search variables for Dev commands"), { target: { value: "port" } });
+    expect(within(menu).queryByRole("menuitem", { name: /LOLA_DB_NAME/ })).not.toBeInTheDocument();
+    await fireEvent.click(within(menu).getByRole("menuitem", { name: /\$LOLA_PORT$/ }));
+
+    expect(dev).toHaveValue("serve --port=$LOLA_PORT");
+    expect(screen.queryByRole("menu", { name: "Variables for Dev commands" })).not.toBeInTheDocument();
+    // Env values take lola's own placeholder spelling; paths take none.
+    await fireEvent.click(screen.getByRole("button", { name: "Insert variable into Env" }));
+    expect(screen.getByRole("menuitem", { name: /\{\{\.DBName\}\}/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Insert variable into Symlinks" })).not.toBeInTheDocument();
   });
 
   it("edits dev_commands as a plain per-project list — no inherit chip", async () => {

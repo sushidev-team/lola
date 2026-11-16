@@ -9,6 +9,7 @@ import ArrowUpLeft from '@lucide/svelte/icons/arrow-up-left';
 import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
 // Curated Lucide imports: never import the entire dynamic icon catalog.
 import Activity from '@lucide/svelte/icons/activity';
+import Braces from '@lucide/svelte/icons/braces';
 import ArrowDown from '@lucide/svelte/icons/arrow-down';
 import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 import ArrowRight from '@lucide/svelte/icons/arrow-right';
@@ -107,6 +108,7 @@ import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
 import MessageSquare from '@lucide/svelte/icons/message-square';
 
 export const icons = {
+  'braces': Braces,
   house: House,
   'archive': Archive,
   'archive-restore': ArchiveRestore,
