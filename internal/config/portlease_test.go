@@ -67,3 +67,14 @@ func TestValidatePortLeaseAndPreRemove(t *testing.T) {
 		t.Errorf("a valid lease config was rejected: %v", err)
 	}
 }
+
+func TestPortRangeAuto(t *testing.T) {
+	lo, hi, err := ParsePortRange(" Auto ")
+	if err != nil || lo != AutoPortLo || hi != AutoPortHi {
+		t.Fatalf("auto = %d-%d, %v", lo, hi, err)
+	}
+	p := Project{PortRange: PortRangeAuto}
+	if l, h, n, ok := p.PortLease(); !ok || l != AutoPortLo || h != AutoPortHi || n != 1 {
+		t.Fatalf("PortLease = %d %d %d %v", l, h, n, ok)
+	}
+}

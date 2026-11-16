@@ -170,3 +170,39 @@ func TestNilRegistryIsInert(t *testing.T) {
 		t.Fatal("nil registry cannot lease")
 	}
 }
+
+func TestBusyPortIsAvoidedThenRetriedOnlyAsLastResort(t *testing.T) {
+	r, path := newReg(t)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	r.Now = func() time.Time { return now }
+	busy := map[int]bool{4100: true}
+	r.InUse = func(p int) bool { return busy[p] }
+
+	a, err := r.Acquire("s-a", "app", 4100, 4101, 1)
+	if err != nil || a.Port() != 4101 {
+		t.Fatalf("lease = %v, %v; want 4101 (4100 is busy)", a.Ports, err)
+	}
+	if got := r.BusyPorts(); len(got) != 1 || got[0].Port != 4100 || !got[0].LastTried.Equal(now) {
+		t.Fatalf("busy = %v", got)
+	}
+	// The memory survives a restart.
+	r2, err := Open(path)
+	if err != nil || len(r2.BusyPorts()) != 1 {
+		t.Fatalf("reopened busy = %v, %v", r2.BusyPorts(), err)
+	}
+
+	// Nothing else left, memory still fresh: exhausted, port not retried.
+	busy[4100] = false
+	if _, err := r.Acquire("s-b", "app", 4100, 4101, 1); !errors.Is(err, ErrExhausted) {
+		t.Fatalf("err = %v, want exhausted while the memory is fresh", err)
+	}
+	// Once RetryAfter has passed it is tried again, and forgotten when free.
+	now = now.Add(RetryAfter + time.Minute)
+	b, err := r.Acquire("s-b", "app", 4100, 4101, 1)
+	if err != nil || b.Port() != 4100 {
+		t.Fatalf("lease = %v, %v; want the retried 4100", b.Ports, err)
+	}
+	if len(r.BusyPorts()) != 0 {
+		t.Fatalf("busy = %v, want forgotten", r.BusyPorts())
+	}
+}

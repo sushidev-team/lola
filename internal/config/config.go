@@ -292,6 +292,15 @@ func (p *Project) PortLease() (lo, hi, n int, ok bool) {
 	return lo, hi, n, true
 }
 
+// PortRangeAuto is the port_range value that lets lola pick: each session gets
+// a free block out of the shared AutoPortLo-AutoPortHi pool, which the lease
+// registry keeps disjoint across every project, so nobody has to plan ranges.
+const (
+	PortRangeAuto = "auto"
+	AutoPortLo    = 20000
+	AutoPortHi    = 29999
+)
+
 // ParsePortRange parses "lo-hi" (spaces allowed around the dash). Both ends
 // must lie in 1024..65535 — a privileged port is never something a dev server
 // should be handed — and lo must not exceed hi. "" parses as (0, 0, nil).
@@ -300,14 +309,17 @@ func ParsePortRange(s string) (lo, hi int, err error) {
 	if s == "" {
 		return 0, 0, nil
 	}
+	if strings.EqualFold(s, PortRangeAuto) {
+		return AutoPortLo, AutoPortHi, nil
+	}
 	a, b, found := strings.Cut(s, "-")
 	if !found {
-		return 0, 0, fmt.Errorf(`port_range must be "lo-hi" (e.g. "4100-4999"), got %q`, s)
+		return 0, 0, fmt.Errorf(`port_range must be "auto" or "lo-hi" (e.g. "4100-4999"), got %q`, s)
 	}
 	lo, err1 := strconv.Atoi(strings.TrimSpace(a))
 	hi, err2 := strconv.Atoi(strings.TrimSpace(b))
 	if err1 != nil || err2 != nil {
-		return 0, 0, fmt.Errorf(`port_range must be "lo-hi" (e.g. "4100-4999"), got %q`, s)
+		return 0, 0, fmt.Errorf(`port_range must be "auto" or "lo-hi" (e.g. "4100-4999"), got %q`, s)
 	}
 	if lo < 1024 || hi > 65535 || lo > hi {
 		return 0, 0, fmt.Errorf("port_range %q must lie within 1024-65535 with lo <= hi", s)
