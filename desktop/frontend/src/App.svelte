@@ -423,7 +423,6 @@
      going to 0px — never an {#if}, which would remount the sidebar. -->
 <div
   class="grid h-full bg-canvas text-ink"
-  class:cols-anim={nav.pendingMode !== null}
   style="grid-template-columns:{nav.sidebarOpen ? `${trackWidth}px` : '0px'} minmax(0,1fr)"
 >
   <!-- Full height, ALWAYS MOUNTED. Collapse is the grid track going to 0px plus

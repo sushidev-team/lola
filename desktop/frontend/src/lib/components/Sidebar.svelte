@@ -75,7 +75,7 @@
 </script>
 
 <aside
-  class="sidebar group/side relative grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] overflow-hidden border-r border-edge bg-canvas"
+  class="sidebar group/side relative z-30 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] border-r border-edge bg-canvas {nav.sidebarOpen ? '' : 'overflow-hidden'}"
   style="grid-template-rows:44px 36px minmax(0,1fr) 44px"
   aria-label="Sidebar"
   inert={!nav.sidebarOpen}
@@ -121,7 +121,7 @@
        mounted, so each keeps its scroll and folders. In Git mode the aside shrinks to the projects
        column and the sessions column fades out into the width it gives up; the width itself is
        animated by App's grid (see `cols-anim`). -->
-  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{narrow && !git ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow && !git ? 'minmax(0,1fr)' : `${GIT_SIDEBAR_WIDTH}px minmax(0,1fr)`}">
+  <div class="relative grid min-h-0 min-w-0" style="grid-template-rows:{narrow && !git ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow && !git ? 'minmax(0,1fr)' : `${GIT_SIDEBAR_WIDTH}px minmax(0,1fr)`}">
     {#if narrow && !git}
       <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => (nav.sidebarTab = t === "projects" ? "projects" : "sessions")} />
     {/if}
@@ -143,7 +143,9 @@
 <style>
   .mode-switch { position:relative; display:grid; grid-template-columns:1fr 1fr; padding:2px; border-radius:9px; background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); }
   .sessions-col { transition:opacity 260ms ease 80ms,transform 340ms cubic-bezier(.45,.05,.2,1),visibility 0s; }
-  .sessions-col.col-off { opacity:0; transform:translateX(-18px); visibility:hidden; pointer-events:none; transition:opacity 180ms ease,transform 340ms cubic-bezier(.45,.05,.2,1),visibility 0s linear 340ms; }
+  /* Leaving for Git, the column keeps its place over the (already resized) workspace and fades out
+     sideways: opacity and transform only, so nothing is laid out frame by frame. */
+  .sessions-col.col-off { position:absolute; top:0; bottom:0; left:300px; width:240px; opacity:0; transform:translateX(-24px); visibility:hidden; pointer-events:none; background:var(--color-canvas); transition:opacity 220ms ease,transform 300ms cubic-bezier(.45,.05,.2,1),visibility 0s linear 300ms; }
   @media (prefers-reduced-motion:reduce) { .sessions-col,.sessions-col.col-off { transition:none; } }
   .palette-hint { display:flex; min-width:0; flex:1; align-items:center; gap:6px; height:28px; padding:0 8px; border-radius:9px; font-size:13px; color:var(--color-faint); background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); transition:color 120ms,box-shadow 120ms; }
   .palette-hint:hover { color:var(--color-ink); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 45%,transparent); }
