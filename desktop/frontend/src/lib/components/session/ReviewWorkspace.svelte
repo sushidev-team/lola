@@ -176,7 +176,7 @@
     generation++; loading = false; materialLoading = false; checking = false;
     showScreen = index;
     packages = [result,...packages.filter(p => p.id !== result.id)]; selected = result.id;
-    captureOpen = false; if (!split) tab = 'visuals';
+    captureOpen = false; tab = split ? 'material' : 'visuals'; reviewCode = false;
     await tick(); canvasScreen = index;
   }
   async function closeCapture() {

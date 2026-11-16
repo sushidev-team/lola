@@ -548,3 +548,15 @@ it('phone: no Capture and no check setup, whatever the tier; screenshots are sta
     expect(await screen.findByText('Labels are cramped')).toBeInTheDocument();
   }finally{setTouchSurface(null);}
 });
+
+it('returns to the Review tab to show a screenshot captured from Code changes',async()=>{
+ const next=pkg({id:'e'.repeat(64),screens:[...pkg().screens,{title:'Captured page',after:'f'.repeat(64)}]});
+ vi.mocked(DaemonService.ReviewPackageCapture).mockResolvedValue(next);render(ReviewWorkspace,{sessionId:id});
+ await fireEvent.click(await screen.findByRole('tab',{name:'Code changes'}));
+ const button=await screen.findByRole('button',{name:'Capture screenshot'});
+ await waitFor(()=>expect(button).toBeEnabled());await fireEvent.click(button);
+ await fireEvent.input(screen.getByLabelText('Page URL'),{target:{value:'http://localhost:3000'}});
+ await fireEvent.submit(screen.getByRole('button',{name:'Capture & save'}).closest('form')!);
+ expect(await screen.findByAltText('Captured page — After')).toBeInTheDocument();
+ expect(screen.getByRole('tab',{name:'Review'})).toHaveAttribute('aria-selected','true');
+});
