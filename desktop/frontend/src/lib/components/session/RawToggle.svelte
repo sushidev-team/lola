@@ -10,7 +10,7 @@
   let { on = false, onclick }: { on?: boolean; onclick: () => void } = $props();
 </script>
 
-<span class="inline-flex" use:tooltip={{ instant: true, heading: "Raw", text: on ? "Back to the conversation" : "Raw agent shell" }}>
+<span class="inline-flex" use:tooltip={{ instant: true, text: on ? "Back to conversation view" : "Raw agent shell" }}>
   <Button icon size="sm" selected={on} aria-pressed={on} aria-label="Raw" class="w-10! border border-edge {on ? 'border-accent! text-ink!' : ''}" data-raw-toggle {onclick}>
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M4 6.5 8 10l-4 3.5" />
