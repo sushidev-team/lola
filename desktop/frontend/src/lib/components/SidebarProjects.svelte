@@ -658,7 +658,7 @@
 
 <nav class="min-h-full min-w-0 px-3 pt-3" aria-label="Projects" oncontextmenu={openBackgroundMenu}>
   <div class="flex h-6 items-center px-2">
-    <h2 class="label text-faint">Projects</h2>
+    <h2 class="label text-[11px]! text-faint">Projects</h2>
     <Button
       size="xs"
       icon

@@ -134,7 +134,7 @@
   <!-- The header carries nothing but the title; the filter and the + appear on hover (or focus),
        and the filter stays lit while it is doing something. -->
   <div class="flex h-6 min-w-0 items-center px-1">
-    <h2 class="label text-faint">Sessions</h2>
+    <h2 class="label text-[11px]! text-faint">Sessions</h2>
     {#if filtering}<button type="button" class="ml-2 inline-flex h-5 items-center gap-1 rounded-full bg-accent-fill px-2 text-xs text-accent-ink hover:brightness-110" onclick={clearFilters} aria-label="Clear session filters" title="Clear filters">Filtered<Icon name="x" size={11} /></button>{/if}
     <div class="relative ml-auto flex shrink-0 items-center transition-opacity {filtering || filterAt || createOpen ? '' : 'opacity-0 group-hover/side:opacity-100 focus-within:opacity-100'}" bind:this={createRoot}>
       <Button icon size="xs" aria-label="Filter sessions" title="Filter sessions" aria-haspopup="dialog" aria-expanded={filterAt !== null} aria-pressed={filtering} onclick={toggleFilter}><Icon name="list-filter" size={14} /></Button>
