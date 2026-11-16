@@ -140,6 +140,13 @@ class Nav {
    * throwing over.
    */
   sidebarOpen = $state(readSidebar());
+  /**
+   * The workspace the Code/Git switch has just been told to show, before the (heavier) navigation
+   * behind it has run. The interface reads `gitMode` so the sidebar, the switch and a loading shell
+   * all change in the same frame as the click.
+   */
+  pendingMode = $state<"code" | "git" | null>(null);
+  get gitMode(): boolean { return (this.pendingMode ?? (this.inGit ? "git" : "code")) === "git"; }
   /** Narrow sidebar only: which of Projects and Sessions is on show (both show side by side when wide). */
   sidebarTab = $state<"sessions" | "projects">("sessions");
   /** Sidebar attention filter. Empty means all sessions. */

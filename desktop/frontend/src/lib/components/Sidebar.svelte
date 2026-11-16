@@ -35,17 +35,18 @@
   //
   // The switch answers first: the pill and the column layout follow the click at once, and the
   // (heavier) workspace change runs after that frame has painted, so it never holds the click back.
-  let wanted = $state<"code" | "git" | null>(null);
   let settle: ReturnType<typeof setTimeout>;
-  const git = $derived((wanted ?? (nav.inGit ? "git" : "code")) === "git");
+  const git = $derived(nav.gitMode);
   function pickMode(id: string) {
     if ((id === "git") === git) return;
-    wanted = id === "git" ? "git" : "code";
+    nav.pendingMode = id === "git" ? "git" : "code";
     requestAnimationFrame(() => setTimeout(() => {
       switchMode(id);
+      // Nothing to open Git on (no repository): drop the loading shell at once.
+      if (id === "git" && !nav.inGit) nav.pendingMode = null;
       // Hold the choice until the nav state agrees, so the pill never bounces back mid-load.
       clearTimeout(settle);
-      settle = setTimeout(() => { wanted = null; }, 400);
+      settle = setTimeout(() => { nav.pendingMode = null; }, 400);
     }, 0));
   }
   function switchMode(id: string) {
@@ -120,7 +121,7 @@
 
   <!-- 3. Utility row -->
   <SidebarStatus />
-  <SidebarResize {width} {maxWidth} />
+  {#if !git}<SidebarResize {width} {maxWidth} />{/if}
 </aside>
 
 <style>

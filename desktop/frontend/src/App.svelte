@@ -18,15 +18,18 @@
   import { nav } from "$lib/nav.svelte";
   import { terms, DIFF, CHECKPOINTS } from "$lib/terms.svelte";
   import { visibleRoster } from "$lib/roster";
-  import { sidebarWidth, sidebarLimit } from "$lib/sidebarwidth";
+  import { sidebarWidth, sidebarLimit, GIT_SIDEBAR_WIDTH } from "$lib/sidebarwidth";
   let windowWidth = $state(1280);
   const sideWidth = $derived(sidebarWidth(nav.sidebarWidth, windowWidth));
+  // Git mode keeps only the projects panel, which leaves the branch rail and history the room.
+  const trackWidth = $derived(nav.gitMode ? Math.min(sideWidth, GIT_SIDEBAR_WIDTH) : sideWidth);
   import { isChord } from "$lib/keys";
   import { reflowGridRows } from "$lib/reflow";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import MainTopBar from "$lib/components/MainTopBar.svelte";
   import PushErrorBanner from "$lib/components/PushErrorBanner.svelte";
   import Toast from "$lib/components/Toast.svelte";
+  import GitLoadingShell from "$lib/components/GitLoadingShell.svelte";
   import Cockpit from "$lib/views/Cockpit.svelte";
   import Home from "$lib/views/Home.svelte";
   import ProjectDetail from "$lib/views/ProjectDetail.svelte";
@@ -418,12 +421,12 @@
      going to 0px — never an {#if}, which would remount the sidebar. -->
 <div
   class="grid h-full bg-canvas text-ink"
-  style="grid-template-columns:{nav.sidebarOpen ? `${sideWidth}px` : '0px'} minmax(0,1fr)"
+  style="grid-template-columns:{nav.sidebarOpen ? `${trackWidth}px` : '0px'} minmax(0,1fr)"
 >
   <!-- Full height, ALWAYS MOUNTED. Collapse is the grid track going to 0px plus
        overflow-hidden + inert inside — never an {#if}. A new mount boundary in
        this template is what froze the template effect before. -->
-  <Sidebar width={sideWidth} maxWidth={sidebarLimit(windowWidth)} />
+  <Sidebar width={trackWidth} maxWidth={sidebarLimit(windowWidth)} />
 
   <div class="grid min-h-0 min-w-0" style="grid-template-rows:{nav.view === 'detail' && store.projectByName(nav.project) ? '0px' : '44px'} auto minmax(0,1fr)" {@attach reflowGridRows}>
     <!-- Project workspaces own their single window toolbar. Keep the shared
@@ -448,6 +451,9 @@
          replacing it; nav.view changes now always re-render. -->
     <main class="relative min-h-0 overflow-hidden">
       <Cockpit />
+      {#if nav.pendingMode === "git" && !nav.inGit}
+        <div class="absolute inset-0 z-40 overflow-hidden bg-canvas"><GitLoadingShell /></div>
+      {/if}
       {#if nav.view !== "cockpit"}
         <div class="absolute inset-0 z-40 overflow-hidden bg-canvas">
           {#if nav.view === "home"}
