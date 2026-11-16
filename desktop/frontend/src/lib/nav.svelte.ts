@@ -1,4 +1,4 @@
-import { SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX } from "./sidebarwidth";
+import { SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX, PROJECTS_DEFAULT, clampProjectsWidth } from "./sidebarwidth";
 // Navigation state: which top-level view is showing, the project scope, the
 // active modal overlay, and the active session in the full-height workspace.
 
@@ -27,6 +27,11 @@ function readProjectTab(): ProjectTab {
 function readLastGitProject(): string {
   try { return localStorage.getItem(LAST_GIT_PROJECT_KEY) ?? ""; }
   catch { return ""; }
+}
+
+const PROJECTS_WIDTH_KEY = "lola.sidebar.projects";
+function readProjectsWidth(): number {
+  try { return clampProjectsWidth(Number(localStorage.getItem(PROJECTS_WIDTH_KEY) ?? PROJECTS_DEFAULT)); } catch { return PROJECTS_DEFAULT; }
 }
 
 function readSidebarWidth(): number {
@@ -127,6 +132,12 @@ class Nav {
   /** Bumped by the menu's ⌘K while the palette is open: toggles its options panel. */
   commandOptions = $state(0);
   sidebarWidth = $state(readSidebarWidth());
+  /** The projects column's width: beside the sessions in Code, the whole sidebar in Git. */
+  projectsWidth = $state(readProjectsWidth());
+  setProjectsWidth(width: number) {
+    this.projectsWidth = clampProjectsWidth(width);
+    try { localStorage.setItem(PROJECTS_WIDTH_KEY, String(this.projectsWidth)); } catch { /* best effort */ }
+  }
   setSidebarWidth(width: number) {
     this.sidebarWidth = Number.isFinite(width) ? Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, width)) : SIDEBAR_DEFAULT;
     try { localStorage.setItem("lola.sidebar.width", String(this.sidebarWidth)); } catch { /* best effort */ }

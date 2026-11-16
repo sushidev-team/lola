@@ -19,13 +19,13 @@
   import { nav } from "$lib/nav.svelte";
   import { terms, DIFF, CHECKPOINTS } from "$lib/terms.svelte";
   import { visibleRoster } from "$lib/roster";
-  import { sidebarWidth, sidebarLimit, GIT_SIDEBAR_WIDTH } from "$lib/sidebarwidth";
+  import { sidebarWidth, sidebarLimit } from "$lib/sidebarwidth";
   let windowWidth = $state(1280);
   let mountedDetail = $state(false);
   $effect(() => { if (nav.view === "detail") mountedDetail = true; });
   const sideWidth = $derived(sidebarWidth(nav.sidebarWidth, windowWidth));
   // Git mode keeps only the projects panel, which leaves the branch rail and history the room.
-  const trackWidth = $derived(nav.gitMode ? Math.min(sideWidth, GIT_SIDEBAR_WIDTH) : sideWidth);
+  const trackWidth = $derived(nav.gitMode ? Math.min(nav.projectsWidth, sidebarLimit(windowWidth)) : sideWidth);
   import { isChord } from "$lib/keys";
   import { reflowGridRows } from "$lib/reflow";
   import Sidebar from "$lib/components/Sidebar.svelte";

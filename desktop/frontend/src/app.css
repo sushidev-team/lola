@@ -1507,3 +1507,9 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .ssh-col:has([data-inline-terminal]:not([hidden])) { grid-template-rows: auto minmax(40px, .65fr) minmax(0, 1fr) auto; }
 .ssh-col:has([data-inline-terminal]:not([hidden])) .cv-bands { max-height: 38cqh; overflow-y: auto; }
 .cv-tray-row, .cv-tray-row > .cv-dock, .cv-tray-row [data-tray] { min-height: 0; }
+
+/* The divider between the projects column and the sessions column (see ProjectsResize). */
+.projects-resize { position: absolute; z-index: 20; top: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; user-select: none; }
+.projects-resize::after { content: ''; position: absolute; inset: 0 auto 0 3px; width: 1px; background: transparent; }
+.projects-resize:hover::after, .projects-resize.resizing::after, .projects-resize:focus-visible::after { background: var(--color-accent); width: 2px; }
+.projects-resize:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }

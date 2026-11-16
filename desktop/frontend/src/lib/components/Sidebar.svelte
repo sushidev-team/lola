@@ -12,13 +12,17 @@
   import SidebarVersion from "./SidebarVersion.svelte";
   import SidebarRoster from "./SidebarRoster.svelte";
   import { toggleGitWorkspace } from "$lib/workspacenav";
-  import { SIDEBAR_SPLIT, GIT_SIDEBAR_WIDTH } from "$lib/sidebarwidth";
+  import { SESSIONS_MIN } from "$lib/sidebarwidth";
+  import ProjectsResize from "./ProjectsResize.svelte";
   import Tabs from "./Tabs.svelte";
 
   let sessionsArea = $state<HTMLDivElement>();
 
+  const git = $derived(nav.gitMode);
   // Too narrow for two columns: Projects and Sessions become tabs over one column.
-  const narrow = $derived(width < SIDEBAR_SPLIT);
+  const narrow = $derived(width < nav.projectsWidth + SESSIONS_MIN);
+  // In Git the projects column is the whole sidebar; beside the sessions it leaves them their minimum.
+  const projectsCol = $derived(git ? width : Math.min(nav.projectsWidth, Math.max(0, width - SESSIONS_MIN)));
   const TABS = [
     { id: "projects", label: "Projects" },
     { id: "sessions", label: "Sessions" },
@@ -35,7 +39,6 @@
   // The switch answers first: the pill and the column layout follow the click at once, and the
   // (heavier) workspace change runs after that frame has painted, so it never holds the click back.
   let settle: ReturnType<typeof setTimeout>;
-  const git = $derived(nav.gitMode);
   function pickMode(id: string) {
     if ((id === "git") === git) return;
     nav.pendingMode = id === "git" ? "git" : "code";
@@ -121,7 +124,7 @@
        mounted, so each keeps its scroll and folders. In Git mode the aside shrinks to the projects
        column and the sessions column is hidden. Nothing in the content animates: the switch is just
        the pill above. -->
-  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{narrow && !git ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow && !git ? 'minmax(0,1fr)' : `${GIT_SIDEBAR_WIDTH}px minmax(0,1fr)`}">
+  <div class="relative grid min-h-0 min-w-0" style="grid-template-rows:{narrow && !git ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow && !git ? 'minmax(0,1fr)' : `${projectsCol}px minmax(0,1fr)`}">
     {#if narrow && !git}
       <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => (nav.sidebarTab = t === "projects" ? "projects" : "sessions")} />
     {/if}
@@ -133,6 +136,7 @@
       <SidebarSessionTools contextTarget={sessionsArea} />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
     </div>
+    {#if !(narrow && !git)}<ProjectsResize width={projectsCol} maxWidth={git ? 440 : width - SESSIONS_MIN} />{/if}
   </div>
 
   <!-- 3. Utility row -->
