@@ -83,8 +83,9 @@
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
     e.stopPropagation();
-    const at = all.findIndex((x) => x.key === c.key);
-    const next = all[(at + (e.key === "ArrowRight" ? 1 : -1) + all.length) % all.length];
+    const ring = narrow ? views : all;
+    const at = ring.findIndex((x) => x.key === c.key);
+    const next = ring[(at + (e.key === "ArrowRight" ? 1 : -1) + ring.length) % ring.length];
     void pick(next, true);
   }
 
@@ -237,13 +238,13 @@
   <div role="tablist" aria-label="Session views" class="contents">
     <div class="flex items-stretch gap-4">
       {#each views as c (c.key)}
-        {@const on = current === c.key}
+        {@const on = current === c.key || (raw && c === conversationCell)}
         <button
           bind:this={refs[c.key]}
           type="button"
           role="tab"
           aria-selected={on}
-          tabindex={on || (raw && c === conversationCell) ? 0 : -1}
+          tabindex={on ? 0 : -1}
           class="{cellText} {on ? 'font-medium text-ink' : 'text-faint hover:text-ink'}"
           data-strip-cell={c.key}
           onclick={() => pick(c)}
@@ -335,7 +336,7 @@
   <div aria-hidden="true"></div>
   <div class="flex items-center gap-2">
     {#if rawCell && conversationCell}
-      <Button size="xs" selected={raw} title="Show the raw terminal instead of the conversation" data-raw-toggle onclick={() => pick(raw ? conversationCell : rawCell)}>Raw</Button>
+      <Button size="xs" selected={raw} aria-pressed={raw} title="Show the raw terminal instead of the conversation" data-raw-toggle onclick={() => pick(raw ? conversationCell : rawCell)}>Raw</Button>
     {/if}
     {#if changesInSide}<button bind:this={panelButton} type="button" class="grid size-7 place-items-center rounded-sm text-faint hover:bg-sel hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" aria-label="Panels" title="Show or hide panels" aria-haspopup="menu" aria-expanded={!!panelAt} onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); panelAt = panelAt ? null : { x: Math.max(4, r.right - 224), y: r.bottom + 4 }; }}>
       <Icon name="menu" class="size-4" />

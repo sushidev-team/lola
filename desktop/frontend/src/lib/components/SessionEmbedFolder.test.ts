@@ -102,9 +102,9 @@ it("offers the terminal as a Raw toggle, not a tab, beside the conversation", as
   render(SessionEmbed, { sessionId: "s1" });
   expect(screen.queryByRole("tab", { name: "Terminal" })).toBeNull();
   const raw = screen.getByRole("button", { name: "Raw" });
-  expect(raw).not.toHaveAttribute("aria-pressed");
+  expect(raw).toHaveAttribute("aria-pressed", "false");
   await fireEvent.click(raw);
   expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
   await fireEvent.click(screen.getByRole("button", { name: "Raw" }));
-  expect(screen.getByRole("button", { name: "Raw" })).not.toHaveAttribute("aria-pressed");
+  expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "false");
 });
