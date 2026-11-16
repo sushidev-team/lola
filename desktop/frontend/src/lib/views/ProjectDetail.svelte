@@ -121,6 +121,7 @@
             <MenuItem onclick={() => runAction(() => nav.openOverlay("project", nav.project, "filter"))}>Polls</MenuItem>
           </div>
         </details>
+        <Button icon class="project-aside-toggle" selected={nav.asideOpen} aria-pressed={nav.asideOpen} aria-label="Right sidebar" title={nav.asideOpen ? "Hide right sidebar (N)" : "Show right sidebar (N)"} onclick={() => nav.toggleAside()}><Icon name="panel-right" size={16} /></Button>
       </div>
     {/snippet}
     {#if tab === "git"}
