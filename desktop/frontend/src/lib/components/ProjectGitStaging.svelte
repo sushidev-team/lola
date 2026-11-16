@@ -120,8 +120,9 @@
     if (!total) { await state.load(historyRef, count); return; }
     confirm.ask({
       title: only ? (total === 1 ? 'Discard changes in this file?' : `Discard changes in ${total} files?`) : 'Discard all unstaged changes?',
-      body: only && total === 1 ? `Discard changes in ${[...plan.tracked, ...plan.untracked][0]} on ${branch}?` : `Discard changes in ${total} ${total === 1 ? 'file' : 'files'} on ${branch}?`,
-      detail: [plan.tracked.length ? `Restore ${plan.tracked.length} tracked ${plan.tracked.length === 1 ? 'file' : 'files'} to the staged version.` : '', plan.untracked.length ? `Permanently delete ${plan.untracked.length} untracked ${plan.untracked.length === 1 ? 'file' : 'files'}.` : '', only ? 'Staged changes and other files are kept. This cannot be undone.' : 'Staged changes and ignored files are kept. This cannot be undone.'].filter(Boolean).join(' '),
+      subject: only ? [...plan.tracked, ...plan.untracked].join('\n') : `${total} ${total === 1 ? 'file' : 'files'} on ${branch}`,
+      body: '',
+      detail: [plan.tracked.length ? `Restore ${plan.tracked.length} tracked ${plan.tracked.length === 1 ? 'file' : 'files'} to the staged version.` : '', plan.untracked.length ? `Permanently delete ${plan.untracked.length} untracked ${plan.untracked.length === 1 ? 'file' : 'files'}.` : '', only ? 'Staged changes are kept. This cannot be undone.' : 'Staged changes and ignored files are kept. This cannot be undone.'].filter(Boolean).join(' '),
       confirmLabel: 'Discard changes',
       onConfirm: () => {
         if (!mounted || state !== git) return;

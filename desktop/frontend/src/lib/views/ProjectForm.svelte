@@ -508,7 +508,8 @@
     if (!dirty) return void go();
     confirm.ask({
       title: "Discard changes?",
-      body: `Discard your unsaved changes to ${f ? displayName(f) : "this project"}?`,
+      subject: f ? displayName(f) : "this project",
+      body: "",
       confirmLabel: "Discard",
       onConfirm: () => void go(),
     });
@@ -639,7 +640,8 @@
     }
     confirm.ask({
       title: "Discard changes?",
-      body: `Discard your unsaved changes to ${f ? displayName(f) : "this project"}?`,
+      subject: f ? displayName(f) : "this project",
+      body: "",
       confirmLabel: "Discard",
       onConfirm: () => nav.closeOverlay(),
     });

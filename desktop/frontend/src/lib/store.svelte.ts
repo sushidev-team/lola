@@ -756,7 +756,8 @@ class Store {
     };
     confirm.ask({
       title: worktreePath ? (followup?.branch ? "Remove worktree and branch?" : "Remove worktree?") : direct ? "End session?" : s?.location ? "Close session?" : "Kill session?",
-      body: worktreePath ? (s?.issue ? `${s.issue}${s.title ? ` — ${s.title}` : ""}` : s?.title || id) : direct ? `End ${s?.title || label}?` : s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
+      subject: worktreePath ? (s?.issue ? `${s.issue}${s.title ? ` — ${s.title}` : ""}` : s?.title || id) : s?.title ? `${label} — ${s.title}` : label,
+      body: "",
       detail: (worktreePath ? `Stops the session and removes its worktree and owned branches.${followup?.branch ? ` Also deletes local branch ${followup.branch} if Git allows it.` : ""} Unpushed commits may be lost. Remote branches are kept.${s?.stack ? ` This removes the entire stack, including: ${(s.apps ?? []).map(app => app.worktree || app.name).join(", ")}.` : ""}` : direct ? "This closes its connections and its agent. The command record stays on disk for 14 days in ~/.lola/state/ssh/." :
         s?.location ? "Close stops the session and its terminals. The directory and all files are preserved." :
         "Kill stops its agent and removes the worktree — unpushed work is lost. Stop keeps the worktree so the session can be revived.") + sshNote,
@@ -776,9 +777,10 @@ class Store {
     const s = this.sessionById(id);
     const label = s ? s.issue || s.id.slice(0, 8) : id;
     confirm.ask({
-      title: "Worktree has uncommitted changes",
-      body: `${label}'s agent is stopped, but its worktree still has uncommitted changes. Delete the worktree anyway?`,
-      detail: dir ? `${dir} — the changes there are lost for good.` : "The changes there are lost for good.",
+      title: "Delete worktree with uncommitted changes?",
+      subject: dir || label,
+      body: "",
+      detail: `${label}'s agent is stopped. The uncommitted changes are lost for good.`,
       confirmLabel: "Delete worktree",
       onConfirm: () => void this.kill(id, true, false, onRemoved),
     });
@@ -817,7 +819,8 @@ class Store {
     const current = s?.agent || "claude";
     confirm.ask({
       title: "Switch agent?",
-      body: `Switch ${label} from ${current} to ${targetAgent}?`,
+      subject: `${label}: ${current} → ${targetAgent}`,
+      body: "",
       detail: "The pane is replaced on the same worktree.",
       confirmLabel: "Switch",
       onConfirm: () => void this.switchAgent(id, targetAgent),
@@ -829,7 +832,7 @@ class Store {
     const live = this.sessions.length;
     confirm.ask({
       title: "Stop the daemon?",
-      body: "Stop lola's daemon?",
+      body: "",
       detail:
         `Polling stops and no new issues are picked up until it is started again.` +
         (live > 0 ? ` ${live} observed session${live === 1 ? "" : "s"} keep running in tmux.` : ""),

@@ -198,7 +198,8 @@
     const s = nameOf(stack);
     confirm.ask({
       title: "Add to stack?",
-      body: `Add ${p} to stack ${s}?`,
+      subject: `${p} → ${s}`,
+      body: "",
       detail:
         "Its Linear filter, agent and write-back settings are kept but ignored while it is part of the stack; it is checked out for issues the stack picks up that carry its labels.",
       confirmLabel: "Add",
@@ -210,7 +211,8 @@
   function askLeaveStack(project: string, stack: string, to?: ProjectTarget) {
     confirm.ask({
       title: "Remove from stack?",
-      body: `Remove ${nameOf(project)} from stack ${nameOf(stack)}?`,
+      subject: `${nameOf(project)} ← ${nameOf(stack)}`,
+      body: "",
       detail: "It polls with its own Linear filter, agent and write-back settings again.",
       confirmLabel: "Remove",
       onConfirm: async () => {
@@ -250,7 +252,8 @@
   function askRemoveGroup(name: string, label: string) {
     confirm.ask({
       title: "Remove group?",
-      body: `Remove the group "${label}".`,
+      subject: label,
+      body: "",
       // Said plainly because the opposite is the reasonable fear: this is the
       // one "remove" in the sidebar that costs nothing but the folder.
       detail: "Its projects move back to the top level — nothing is deleted.",

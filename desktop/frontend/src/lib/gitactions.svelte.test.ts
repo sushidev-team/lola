@@ -391,7 +391,7 @@ describe('Git action menus', () => {
     confirm.accept();
     expect(git.stashAction).toHaveBeenCalledWith('stash', '', main.sha, '', 200);
     actions.pop();
-    expect(confirm.request?.body).toContain('stash@{0} (cccccccc)');
+    expect(confirm.request?.subject).toContain('stash@{0} (cccccccc)');
     confirm.accept();
     expect(git.stashAction).toHaveBeenLastCalledWith('pop', 'c'.repeat(40), main.sha, '', 200);
   });

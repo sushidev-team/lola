@@ -265,7 +265,7 @@ describe("TeamView", () => {
     render(TeamView);
     await expandGroups();
     await fireEvent.click(within(row("it_open")).getByRole("button", { name: "Claim" }));
-    expect(confirm.request?.body).toBe("Claim GHSA-aaaa and start a session in Web?");
+    expect(confirm.request?.subject).toBe("GHSA-aaaa");expect(confirm.request?.body).toBe("Starts a session in Web.");
     expect(Claim).not.toHaveBeenCalled();
     confirm.accept();
     // The row named its one project, so the claim names it too: the daemon
@@ -310,7 +310,7 @@ describe("TeamView", () => {
     const select = within(row("it_many")).getByLabelText("Project for GHSA-bbbb") as HTMLSelectElement;
     await fireEvent.change(select, { target: { value: "api" } });
     await fireEvent.click(within(row("it_many")).getByRole("button", { name: "Claim" }));
-    expect(confirm.request?.body).toBe("Claim GHSA-bbbb and start a session in API?");
+    expect(confirm.request?.subject).toBe("GHSA-bbbb");expect(confirm.request?.body).toBe("Starts a session in API.");
     confirm.accept();
     await waitFor(() => expect(Claim).toHaveBeenCalledWith({ itemId: "it_many", project: "api" }));
     expect(await within(row("it_many")).findByText("New sessions are on hold on this Mac: load")).toBeInTheDocument();
@@ -398,7 +398,7 @@ describe("TeamView", () => {
     expect(group.querySelector("[data-group-count]")).toHaveTextContent("3 chores · 1 critical · 1 high · 1 low");
     expect(row("it_open")).toBeNull(); // collapsed until asked
     await fireEvent.click(within(group).getByRole("button", { name: "Fix all 2" }));
-    expect(confirm.request?.body).toBe("Start one agent for 2 advisories in Web?");
+    expect(confirm.request?.body).toBe("Starts one agent for 2 advisories in Web.");
     confirm.accept();
     await waitFor(() => expect(Claim).toHaveBeenCalledWith({ itemId: "it_open", itemIds: ["it_open", "it_many"], project: "web" }));
   });
@@ -412,7 +412,7 @@ describe("TeamView", () => {
     await waitFor(() => expect(document.querySelector("[data-board-group]")).not.toBeNull());
     const group = document.querySelector('[data-board-group="acme/web"]') as HTMLElement;
     await fireEvent.click(within(group).getByRole("button", { name: "Fix all 3" }));
-    expect(confirm.request?.body).toBe("Start 2 agents in Web? One fixes the 2 advisories; each failing dependency bump gets its own.");
+    expect(confirm.request?.body).toBe("Starts 2 agents in Web. One fixes the 2 advisories; each failing dependency bump gets its own.");
     confirm.accept();
     await waitFor(() => expect(Claim).toHaveBeenCalledTimes(2));
     expect(Claim).toHaveBeenCalledWith({ itemId: "it_open", itemIds: ["it_open", "it_open2"], project: "web" });

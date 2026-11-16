@@ -48,7 +48,7 @@ describe('Project Git staging',()=>{
    const {git}=setup();api.PrepareDiscard.mockResolvedValue({token:'reviewed-files',tracked:['src/partial.ts'],untracked:['src/new.ts']});
    const button=screen.getByRole('button',{name:'Discard all unstaged changes'});
    await fireEvent.click(button);await waitFor(()=>expect(confirm.request).not.toBeNull());
-   expect(confirm.request?.body).toContain('2 files on main');expect(confirm.request?.detail).toContain('Permanently delete 1 untracked file');expect(confirm.request?.detail).toContain('Staged changes and ignored files are kept');
+   expect(confirm.request?.subject).toContain('2 files on main');expect(confirm.request?.detail).toContain('Permanently delete 1 untracked file');expect(confirm.request?.detail).toContain('Staged changes and ignored files are kept');
    expect(api.DiscardUnstaged).not.toHaveBeenCalled();confirm.cancel();expect(api.DiscardUnstaged).not.toHaveBeenCalled();
    await fireEvent.click(button);await waitFor(()=>expect(confirm.request).not.toBeNull());confirm.accept();
    await waitFor(()=>expect(api.DiscardUnstaged).toHaveBeenCalledWith('lola','','reviewed-files'));await waitFor(()=>expect(git.busy).toBe(''));
