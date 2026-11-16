@@ -767,7 +767,7 @@ dev_commands = [
 # APP_PORT = "{{.Port}}" in [project.env]). Leases live in
 # ~/.lola/state/ports.json, survive a daemon restart, and are released when the
 # session's worktree is removed. Omit for the single-active move above.
-# port_range = "4100-4999"
+# port_range = "4100-4999"   # or "auto": lola picks free ports from 20000-29999
 # ports_per_session = 2      # LOLA_PORT_1..2; omitted = 1
 # Teardown hook, the mirror of post_create: commands run in the worktree (same
 # env, LOLA_DB_NAME and the port lease included) right before lola removes it —

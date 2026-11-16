@@ -1185,6 +1185,13 @@
             null,
             commandVars,
           )}
+          {@render boolRow(
+            "Automatic ports",
+            d.portRange.trim().toLowerCase() === "auto",
+            () => { d.portRange = d.portRange.trim().toLowerCase() === "auto" ? "" : "auto"; },
+            "lola picks a free block for each session and remembers ports other apps hold",
+          )}
+          {#if d.portRange.trim().toLowerCase() !== "auto"}
           {@render textRow(
             "Port range",
             d.portRange,
@@ -1194,6 +1201,7 @@
             false,
             "each session leases its own block as LOLA_PORT / LOLA_PORT_1..N, so dev commands can run in several sessions at once; empty = one active session",
           )}
+          {/if}
           {#if d.portRange}
             <div class={rowCls}>
               <span class={labelCls}>Ports per session</span>
