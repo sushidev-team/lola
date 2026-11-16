@@ -11,10 +11,10 @@
 </script>
 
 <span class="inline-flex" use:tooltip={{ instant: true, heading: "Raw", text: on ? "Back to the conversation" : "Raw agent shell" }}>
-  <Button icon size="sm" selected={on} aria-pressed={on} aria-label="Raw" class="w-9! border border-edge {on ? 'border-accent! text-ink!' : ''}" data-raw-toggle {onclick}>
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M3.5 5.5 6.5 8l-3 2.5" />
-      <path d="M9 11h3.5" />
+  <Button icon size="sm" selected={on} aria-pressed={on} aria-label="Raw" class="w-10! border border-edge {on ? 'border-accent! text-ink!' : ''}" data-raw-toggle {onclick}>
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M4 6.5 8 10l-4 3.5" />
+      <path d="M10.5 14h5" />
     </svg>
   </Button>
 </span>
