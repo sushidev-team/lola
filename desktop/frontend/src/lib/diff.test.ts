@@ -10,6 +10,9 @@ import {
   quoteFor,
   langOf,
   tokenize,
+  changedSpans,
+  intralineSpans,
+  applySpans,
 } from "./diff";
 
 const PATCH = "@@ -10,3 +10,4 @@ func f() {\n a\n-b\n+B\n+C\n c\n\\ No newline at end of file\n";
@@ -129,5 +132,31 @@ describe("tokenize", () => {
 
   it("does not read digits inside an identifier as a number", () => {
     expect(tokenize("x2 := v1", langOf("a.go")).some((t) => t.kind === "num")).toBe(false);
+  });
+});
+
+describe("intraline highlighting", () => {
+  it("marks only the changed word on each side", () => {
+    const c = changedSpans("class text-header-curve max", "class text-scheme-curve max");
+    expect(c).not.toBeNull();
+    expect(c!.old.map(([s, e]) => "class text-header-curve max".slice(s, e))).toEqual(["header"]);
+    expect(c!.new.map(([s, e]) => "class text-scheme-curve max".slice(s, e))).toEqual(["scheme"]);
+  });
+
+  it("says nothing when the lines share nothing", () => {
+    expect(changedSpans("alpha", "beta")).toBeNull();
+  });
+
+  it("pairs the k-th removal with the k-th addition", () => {
+    const rows = parsePatch("@@ -1,2 +1,2 @@\n-let a = 1;\n-keep x\n+let a = 2;\n+keep x\n");
+    const m = intralineSpans(rows);
+    expect(m.get(rows[1])).toEqual([[8, 9]]);
+    expect(m.get(rows[3])).toEqual([[8, 9]]);
+    expect(m.has(rows[2])).toBe(false);
+  });
+
+  it("splits tokens at span edges", () => {
+    const out = applySpans([{ kind: "plain", text: "abcdef" }], [[2, 4]]);
+    expect(out.map((t) => [t.text, t.hot])).toEqual([["ab", false], ["cd", true], ["ef", false]]);
   });
 });
