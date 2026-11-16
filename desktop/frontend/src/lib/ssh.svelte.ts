@@ -1358,6 +1358,17 @@ class SSHStore {
     v.toggleDock();
   }
 
+  /**
+   * `n`: the session's right sidebar. Only the conversation has one. With nothing docked it
+   * brings Overview back, so the key always has something to show.
+   */
+  sideKey(s: SessionInfo) {
+    if (terms.activeTab(s.id) !== SSH) return;
+    const v = this.view(s.id);
+    if (v.sessionPanels && !allTabs(v.dock).length) v.openWidget(OVERVIEW_PANEL);
+    else v.toggleDock();
+  }
+
   /** `F`: the next filter, with a host only. */
   cycleFilter(s: SessionInfo) {
     if (!(s.ssh?.connections?.length ?? 0)) return;

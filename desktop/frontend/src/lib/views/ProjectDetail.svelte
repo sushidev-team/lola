@@ -148,7 +148,7 @@
               {#if broadcastResult}<p role="status" class="text-sm text-faint">{broadcastResult}</p>{/if}
             </form>
           {/if}
-          <div class="overview-columns">
+          <div class="overview-columns" class:aside-hidden={!nav.asideOpen}>
             <div class="overview-main">
               <section aria-label="Project sessions">
                 <div class="section-heading"><h2>Sessions <span class="text-faint font-normal">{sessions.length}</span></h2><Button onclick={showSessions}>View all sessions<Icon name="arrow-right" size={14} /></Button></div>
@@ -191,7 +191,7 @@
               {/if}
               <div class="grid gap-3"><ProjectGoals project={nav.project} /><ProjectKnowledge project={nav.project} /></div>
             </div>
-            <aside class="project-facts" aria-label="Project information">
+            <aside class="project-facts" aria-label="Project information" hidden={!nav.asideOpen}>
               {#if !isStack}
                 <section>
                   <div class="section-heading"><h2>Repository</h2>{#if canGit}<Button size="xs" onclick={() => void selectTab("git")}>Open Git<Icon name="arrow-right" size={14} /></Button>{/if}</div>
@@ -242,6 +242,8 @@
   .project-stats dt { font-size: 13px; color: var(--color-faint); }
   .project-stats dd { font-size: 18px; line-height: 24px; font-weight: 500; font-variant-numeric: tabular-nums; }
   .overview-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, 0.4fr); gap: 24px; }
+  .overview-columns.aside-hidden { grid-template-columns: minmax(0, 1fr); }
+  .project-facts[hidden] { display: none; }
   .overview-main { display: grid; align-content: start; gap: 20px; min-width: 0; }
   .section-heading { display: flex; align-items: center; justify-content: space-between; min-height: 28px; gap: 12px; margin-bottom: 12px; }
   .section-heading h2 { font-size: 15px; line-height: 20px; font-weight: 600; }

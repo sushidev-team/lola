@@ -219,6 +219,38 @@ describe("in a session", () => {
     expect(confirm.request).toBeNull();
     expect(nav.focusedTerm).toBe(A);
   });
+  it("n hides and shows the right sidebar, and no longer walks the waiting queue", async () => {
+    await mount([plain(A), plain(B, { agentState: "waiting_input" })]);
+    nav.openSession(A);
+    ssh.open(A);
+    flushSync();
+    const v = ssh.view(A);
+    v.ensureSessionPanels(false);
+    const before = v.dockHidden;
+    await press("n");
+    expect(nav.focusedTerm).toBe(A);
+    expect(v.dockHidden).toBe(!before);
+    await press("n");
+    expect(v.dockHidden).toBe(before);
+  });
+  it("n toggles the project views' right column outside a session", async () => {
+    await mount([plain(A)]);
+    nav.view = "detail";
+    const before = nav.asideOpen;
+    await press("n");
+    expect(nav.asideOpen).toBe(!before);
+    await press("n");
+    expect(nav.asideOpen).toBe(before);
+  });
+  it("c opens the new-session form, and ⌘C stays Copy", async () => {
+    await mount([plain(A)]);
+    nav.openSession(A);
+    flushSync();
+    await fireEvent.keyDown(document.body, { key: "c", metaKey: true, bubbles: true });
+    expect(nav.overlay).toBeFalsy();
+    await press("c");
+    expect(nav.overlay).toBeTruthy();
+  });
   it("j does not move the list behind a session", async () => {
     await mount([plain(A), plain(B)]);
     nav.openSession(A);

@@ -11,6 +11,8 @@ export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "upda
 const SIDEBAR_KEY = "lola.sidebar";
 /** Which of the sidebar's two tabs is on show. */
 const SIDEBAR_TAB_KEY = "lola.sidebar.tab";
+/** The right-hand column of the project views (facts, Git inspector). */
+const ASIDE_KEY = "lola.aside";
 const PROJECT_TAB_KEY = "lola.project.tab";
 const LAST_GIT_PROJECT_KEY = "lola.git.last-project";
 /** When each session was last on screen, so a finished turn can read as not yet seen. */
@@ -60,6 +62,14 @@ function readSidebar(): boolean {
     return localStorage.getItem(SIDEBAR_KEY) !== "0";
   } catch {
     return true; // storage unavailable → the sidebar is the default state
+  }
+}
+
+function readAside(): boolean {
+  try {
+    return localStorage.getItem(ASIDE_KEY) !== "0";
+  } catch {
+    return true;
   }
 }
 
@@ -153,6 +163,15 @@ class Nav {
     } catch {
       /* private mode / disabled storage — the preference just doesn't persist */
     }
+  }
+  /**
+   * `n` outside a session: the project views' right column. Webview-local like
+   * sidebarOpen. A session's right column is its dock, with its own state.
+   */
+  asideOpen = $state(readAside());
+  toggleAside() {
+    this.asideOpen = !this.asideOpen;
+    try { localStorage.setItem(ASIDE_KEY, this.asideOpen ? "1" : "0"); } catch { /* best effort */ }
   }
   setSidebarTab(t: SidebarTab) {
     this.sidebarTab = t;

@@ -562,7 +562,7 @@
   {#if git.error}<ProjectGitError error={git.error} operation={git.failedAction?.action} busy={!!git.busy} recovery={gitActions.recovery()} onrefresh={() => void git.load(ref, limit)} ondismiss={() => git.error=''}/>{/if}
   {#if git.queued}<div class="git-queued" role="status"><Icon name="clock" size={16}/><strong>{git.busy === 'pull' || git.busy === 'pull-stash' ? 'Pull' : git.busy === 'push' ? 'Push' : 'Repository action'} queued</strong><span>Waiting for the current repository action to finish.</span></div>{/if}
   </div>
-  <div class="git-workbench" class:rail-open={showRail} class:resizing={!!resizingSidebar} bind:clientWidth={workbenchWidth} style={`--rail-width:${railWidth}px;--inspector-width:${inspectorWidth}px`}>
+  <div class="git-workbench" class:inspector-hidden={!nav.asideOpen} class:rail-open={showRail} class:resizing={!!resizingSidebar} bind:clientWidth={workbenchWidth} style={`--rail-width:${railWidth}px;--inspector-width:${inspectorWidth}px`}>
     <Button variant="bare" class="sidebar-resize rail-resize" role="separator" aria-label="Resize repository sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={railMax} aria-valuenow={railWidth} title="Drag to resize · Double-click to reset" onpointerdown={(event) => resizeSidebar(event,'rail')} onkeydown={(event) => sidebarKey(event,'rail')} ondblclick={() => setSidebarWidth('rail',sidebarDefaults.rail)}><span class="sr-only">Resize repository sidebar</span></Button>
     <Button variant="bare" class="sidebar-resize inspector-resize" role="separator" aria-label="Resize changes sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={inspectorMax} aria-valuenow={inspectorWidth} title="Drag to resize · Double-click to reset" onpointerdown={(event) => resizeSidebar(event,'inspector')} onkeydown={(event) => sidebarKey(event,'inspector')} ondblclick={() => setSidebarWidth('inspector',sidebarDefaults.inspector)}><span class="sr-only">Resize changes sidebar</span></Button>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -828,6 +828,8 @@
   .git-workbench :global(.rail-resize) { left:var(--rail-width); transform:translateX(-50%); }
   .git-workbench :global(.inspector-resize) { right:var(--inspector-width); transform:translateX(50%); }
   .git-workbench :global(.sidebar-resize:hover),.git-workbench :global(.sidebar-resize:focus-visible) { background:var(--color-accent-fill); box-shadow:inset 0 0 0 1px var(--color-accent); outline:none; }
+  .git-workbench.inspector-hidden { --inspector-width:0px !important; }
+  .git-workbench.inspector-hidden .git-inspector,.git-workbench.inspector-hidden :global(.inspector-resize) { display:none; }
   .git-workbench.resizing { cursor:col-resize; user-select:none; }
   .git-workbench.resizing :global(*) { cursor:col-resize; user-select:none; }
   .repo-rail { min-height:0; overflow:hidden; border-right:1px solid var(--color-edge); background:var(--color-canvas); padding:0; }

@@ -203,12 +203,6 @@
     const v = ssh.view(s.id);
     const conversation = conversationOffered(s);
     switch (e.key) {
-      case "n":
-        ssh.nextWaiting(1);
-        return true;
-      case "N":
-        ssh.nextWaiting(-1);
-        return true;
       case "f":
         if (changesOffered(s)) terms.toggleDiff(s.id);
         return true;
@@ -334,6 +328,20 @@
     // still holds focus after a click).
     const active = document.activeElement as HTMLElement | null;
     if ((e.key === "Enter" || e.key === " ") && active && (active.tagName === "BUTTON" || active.tagName === "A")) {
+      return;
+    }
+
+    // `n` and `c` mean the same at every depth and in every view, so they sit above the
+    // per-view key maps. Next / previous waiting stay on ⌘J / ⌘⇧J.
+    if (e.key === "n") {
+      if (nav.view !== "cockpit") nav.toggleAside();
+      else if (sel) ssh.sideKey(sel);
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "c") {
+      newSessionHere();
+      e.preventDefault();
       return;
     }
 
