@@ -43,6 +43,8 @@
   const conversationCell = $derived(cells.views.find((c) => c.kind === "conversation"));
   const rawCell = $derived(conversationCell ? cells.views.find((c) => c.kind === "terminal") : undefined);
   const raw = $derived(!!rawCell && selected === "terminal");
+  // Any terminal on show (a dev tab included) leaves the strip with Conversation as its selected tab.
+  const onTerminal = $derived(!!rawCell && current === "terminal");
   const views = $derived(cells.views.filter(c => (!changesInSide || c.kind !== 'changes') && c !== rawCell));
   const all = $derived([...views, ...cells.machines]);
   // Visible terminals retain their order; drag indices must account for hidden dev tabs.
@@ -238,7 +240,7 @@
   <div role="tablist" aria-label="Session views" class="contents">
     <div class="flex items-stretch gap-4">
       {#each views as c (c.key)}
-        {@const on = current === c.key || (raw && c === conversationCell)}
+        {@const on = current === c.key || (onTerminal && c === conversationCell)}
         <button
           bind:this={refs[c.key]}
           type="button"
