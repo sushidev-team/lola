@@ -404,3 +404,31 @@ it.each(['Backspace','Delete'])('deletes the selected comment with Command+%s wh
   expect(screen.queryByRole('textbox')).toBeNull();
   expect(screen.queryByRole('button',{name:'Comment 1'})).toBeNull();
 });
+
+it('places arrows and ellipses from the keyboard and queues their geometry',async()=>{
+  const onComment=vi.fn().mockReturnValue(true);
+  render(ReviewCanvas,{pkg,onComment});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Draw arrow'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Point at the label'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, arrow from top-left: x=40%, y=50% to x=60%, y=50%\nPoint at the label'),undefined);
+  await fireEvent.click(screen.getByRole('button',{name:'Draw ellipse'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Too round'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, ellipse from top-left: x=50%, y=50%, width=20%, height=20%\nToo round'),undefined);
+  expect(screen.getByRole('button',{name:'Open ellipse comment 2'})).toBeInTheDocument();
+});
+
+it('arms a drawing tool from its shortcut and refuses freehand without a pointer',async()=>{
+  render(ReviewCanvas,{pkg,onComment:()=>true});
+  await screen.findByAltText('Settings — After');
+  const section=screen.getByRole('region',{name:'Screenshot review canvas'});
+  await fireEvent.keyDown(section,{key:'l'});
+  expect(screen.getByRole('button',{name:'Draw line'})).toHaveAttribute('aria-pressed','true');
+  await fireEvent.keyDown(section,{key:'p'});
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  expect(screen.getByRole('status')).toHaveTextContent('Freehand drawing needs a pointer');
+});

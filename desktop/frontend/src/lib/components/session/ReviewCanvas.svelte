@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { DaemonService } from '@bindings/desktop';
   import type { ReviewPackage } from '@bindings/internal/protocol';
-  import { markLocation, type ReviewMark } from '$lib/reviewmaterial';
+  import { markLocation, markKind, validMark, arrowHead, simplifyStroke, type MarkKind, type ReviewMark } from '$lib/reviewmaterial';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Select from '../Select.svelte';
@@ -13,7 +13,7 @@
   let lastComment = $state(-1);
   const saveKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘↵' : 'Ctrl+Enter';
   const shortcuts = [
-    ['C', 'Comment pin'], ['R', 'Rectangle'], ['V / Esc', 'Cancel drawing'],
+    ['C', 'Comment pin'], ['R', 'Rectangle'], ['E', 'Ellipse'], ['A', 'Arrow'], ['L', 'Line'], ['P', 'Pen'], ['V / Esc', 'Cancel drawing'],
     ['↑ / ↓', 'Previous / next screenshot'], ['← / →', 'Move comparison divider'], ['N / Shift+N', 'Next / previous comment'],
     ['1 / 2', 'Slider / side by side'], ['3 / 4', 'Before / after'],
     ['+ / − / 0', 'Zoom in / out / fit'], ['I', 'Screen details'], ['B', 'Checks & feedback'],
@@ -33,7 +33,16 @@
     // Temporary switches for annotations or missing baselines aren't preferences.
     try { localStorage.setItem(modeKey, value); } catch { /* remember for this review */ }
   }
-  let tool = $state<'view' | 'pin' | 'area'>('view');
+  let tool = $state<'view' | MarkKind>('view');
+  let stageW = $state(0), stageH = $state(0);
+  const drawTools: { id: MarkKind; label: string; key: string; icon: 'message-square-text' | 'square' | 'circle' | 'arrow-up-right' | 'minus' | 'pencil'; title: string }[] = [
+    { id: 'pin', label: 'Add pin', key: 'c', icon: 'message-square-text', title: 'Comment pin' },
+    { id: 'area', label: 'Mark area', key: 'r', icon: 'square', title: 'Rectangle' },
+    { id: 'ellipse', label: 'Draw ellipse', key: 'e', icon: 'circle', title: 'Ellipse' },
+    { id: 'arrow', label: 'Draw arrow', key: 'a', icon: 'arrow-up-right', title: 'Arrow' },
+    { id: 'line', label: 'Draw line', key: 'l', icon: 'minus', title: 'Line' },
+    { id: 'pen', label: 'Draw freehand', key: 'p', icon: 'pencil', title: 'Pen' },
+  ];
   let zoom = $state(100);
   const zoomLevels = [100, 150, 200, 300, 400];
   let split = $state(50);
@@ -57,6 +66,15 @@
     if (!node) return;
     const observer = new ResizeObserver(() => { available = {width:node.clientWidth-32,height:node.clientHeight-32}; });
     observer.observe(node);
+    return () => observer.disconnect();
+  });
+  // The drawn shapes are in pixels of the stage, so arrow heads keep their shape at any zoom.
+  $effect(() => {
+    const node = imageStage;
+    if (!node) return;
+    const measure = () => { stageW = node.clientWidth; stageH = node.clientHeight; };
+    const observer = new ResizeObserver(measure);
+    observer.observe(node); measure();
     return () => observer.disconnect();
   });
   let zoomRevision = 0;
@@ -141,8 +159,9 @@
     if (!editing || !mark || !frame || !stage || !popup || !scroller) return;
     function position() {
       const bounds = frame!.getBoundingClientRect(), image = stage!.getBoundingClientRect();
-      const x = image.left - bounds.left + mark!.x * image.width;
-      const y = image.top - bounds.top + mark!.y * image.height;
+      const at = anchor(mark!);
+      const x = image.left - bounds.left + at.x * image.width;
+      const y = image.top - bounds.top + at.y * image.height;
       const width = popup!.offsetWidth, height = popup!.offsetHeight;
       const left = x + 20 + width <= bounds.width - 12 ? x + 20 : x - width - 20;
       editorPosition = {
@@ -219,7 +238,7 @@
     const storage = key; marks = []; active = -1; lastComment = -1; message = '';
     try {
       const saved = JSON.parse(localStorage.getItem(storage) ?? '[]');
-      if (Array.isArray(saved)) marks = saved.filter(m => ['Before','After'].includes(m.side) && typeof m.text === 'string' && ['x','y','w','h'].every(k => Number.isFinite(m[k]) && m[k] >= 0 && m[k] <= 1)).slice(0,30);
+      if (Array.isArray(saved)) marks = saved.filter(validMark).slice(0,30);
     } catch { /* local drafts are optional */ }
   });
   function save() { try { localStorage.setItem(key, JSON.stringify(marks)); } catch { message = 'Draft storage unavailable. Keep this review open until you send your feedback.'; } }
@@ -232,18 +251,48 @@
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)), y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))};
   }
+  // A stroke or a two-point shape between its first and current point.
+  function shape(kind: MarkKind, from: {x:number;y:number}, to: {x:number;y:number}, path: number[]): ReviewMark {
+    if (kind === 'pen') {
+      const xs = path.filter((_,i) => i % 2 === 0), ys = path.filter((_,i) => i % 2 === 1);
+      const x = Math.min(...xs), y = Math.min(...ys);
+      return {kind, x, y, w:Math.max(...xs)-x, h:Math.max(...ys)-y, pts:path, side, text:''};
+    }
+    if (kind === 'arrow' || kind === 'line') return {kind, x:from.x, y:from.y, x2:to.x, y2:to.y, w:Math.abs(from.x-to.x), h:Math.abs(from.y-to.y), side, text:''};
+    return {kind, x:Math.min(from.x,to.x), y:Math.min(from.y,to.y), w:Math.abs(from.x-to.x), h:Math.abs(from.y-to.y), side, text:''};
+  }
+  let path: number[] = [];
+  // Keyboard path: Enter on the armed surface drops a default mark in the middle.
+  function placeDefault() {
+    if (tool === 'view') return;
+    if (tool === 'pen') { message = 'Freehand drawing needs a pointer. Use an arrow or a pin from the keyboard.'; return; }
+    if (tool === 'arrow' || tool === 'line') place(shape(tool, {x:.4,y:.5}, {x:.6,y:.5}, []));
+    else place({kind:tool, x:.5,y:.5,w:tool === 'pin' ? 0 : .2,h:tool === 'pin' ? 0 : .2,side,text:''});
+  }
   function down(e: PointerEvent) {
     if (tool === 'view' || !canComment || e.button !== 0) return;
-    e.preventDefault(); start = point(e);
+    e.preventDefault(); start = point(e); path = [start.x, start.y];
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    dragging = { ...start, w:0, h:0, side, text:'' };
+    dragging = shape(tool, start, start, path);
   }
   function move(e: PointerEvent) {
-    if (!start || tool !== 'area') return;
+    if (!start || tool === 'view' || tool === 'pin') return;
     const p = point(e);
-    dragging = {x:Math.min(start.x,p.x),y:Math.min(start.y,p.y),w:Math.abs(start.x-p.x),h:Math.abs(start.y-p.y),side,text:''};
+    if (tool === 'pen') path = [...path, p.x, p.y];
+    dragging = shape(tool, start, p, path);
   }
-  function up() { if (dragging) place(dragging); dragging = undefined; start = undefined; }
+  function up() {
+    const mark = dragging, kind = tool;
+    dragging = undefined; start = undefined;
+    if (!mark || kind === 'view') return;
+    const extent = Math.max(mark.w, mark.h);
+    if (kind === 'area' || kind === 'pin') { place(extent ? mark : {...mark, kind:'pin'}); return; }
+    // A click without a drag is no arrow, ellipse or stroke.
+    if (extent < .008) return;
+    place(kind === 'pen' ? {...mark, pts:simplifyStroke(path)} : mark);
+  }
+  // Where the number badge sits: a stroke is numbered at its first point, every other mark at x/y.
+  const anchor = (m: ReviewMark) => m.kind === 'pen' && m.pts ? {x:m.pts[0], y:m.pts[1]} : {x:m.x, y:m.y};
   function update(text: string) { saveFailed = false; marks = marks.map((m,i) => i === active ? {...m,text} : m); save(); }
   function saveComment(): boolean {
     if (!selected?.text.trim() || selected.text.trim() === selected.savedText) return true;
@@ -263,7 +312,7 @@
   function nextComment(direction = 1) {
     if (marks.length) openComment(lastComment < 0 ? (direction > 0 ? 0 : marks.length-1) : (lastComment + direction + marks.length) % marks.length);
   }
-  function armTool(value: 'pin' | 'area') {
+  function armTool(value: MarkKind) {
     selectTool(tool === value ? 'view' : value);
     if (tool !== 'view') void tick().then(() => root?.querySelector<HTMLButtonElement>('.annotation-surface')?.focus({preventScroll:true}));
   }
@@ -306,13 +355,16 @@
       if (mode === 'slider') { consume(); split = Math.max(0,Math.min(100,split+(key === 'arrowleft' ? -5 : 5))); }
       return;
     }
-    if (!['c','r','v','i','b','n','arrowup','arrowdown','1','2','3','4'].includes(key)) return;
+    if (!['c','r','e','a','l','p','v','i','b','n','arrowup','arrowdown','1','2','3','4'].includes(key)) return;
     // Never bypass the unsaved-changes prompt by switching tools or images.
     consume();
     if (editing && !requestClose(false)) return;
     switch (key) {
-      case 'c': if (canComment && after && !error) armTool('pin'); break;
-      case 'r': if (canComment && after && !error) armTool('area'); break;
+      case 'c': case 'r': case 'e': case 'a': case 'l': case 'p': {
+        const kind = drawTools.find(t => t.key === key)!.id;
+        if (canComment && after && !error) armTool(kind);
+        break;
+      }
       case 'v': cancelTool(); break;
       case 'i': infoOpen = !infoOpen; break;
       case 'b': onToggleFeedback?.(); break;
@@ -327,6 +379,16 @@
     }
   }
 </script>
+
+{#snippet stroke(m: ReviewMark, i: number)}
+  {@const kind = markKind(m)}
+  {#if kind === 'line' || kind === 'arrow'}
+    {@const x1 = m.x*stageW}{@const y1 = m.y*stageH}{@const x2 = (m.x2 ?? m.x)*stageW}{@const y2 = (m.y2 ?? m.y)*stageH}
+    <g class="stroke" class:chosen={active === i} data-kind={kind}><line {x1} {y1} {x2} {y2} />{#if kind === 'arrow'}<polygon points={arrowHead(x1, y1, x2, y2, 14)} />{/if}</g>
+  {:else if kind === 'pen' && m.pts}
+    <g class="stroke" class:chosen={active === i} data-kind="pen"><polyline points={m.pts.map((v, n) => v * (n % 2 ? stageH : stageW)).join(' ')} /></g>
+  {/if}
+{/snippet}
 
 {#if screen}
 <!-- Route keys bubbling from canvas controls; this region isn't an extra tab stop. -->
@@ -353,7 +415,7 @@
     </div>
     <div class="tool-group">
       {#if marks.length && canComment}<Button size="sm" aria-label="Next comment" title="Next comment · N / Previous · Shift+N" aria-keyshortcuts="n Shift+n" onclick={() => nextComment()}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
-      {#if canComment}<Button icon size="sm" selected={tool === 'pin'} disabled={!after} aria-label="Add pin" title="Comment pin · C" aria-keyshortcuts="c" onclick={() => armTool('pin')}><Icon name="message-square-text" size={15} /></Button><Button icon size="sm" selected={tool === 'area'} disabled={!after} aria-label="Mark area" title="Mark area · R" aria-keyshortcuts="r" onclick={() => armTool('area')}><Icon name="square" size={15} /></Button>{/if}
+            {#if canComment}<div class="tool-group draw-tools" role="group" aria-label="Annotation tools">{#each drawTools as t}<Button icon size="sm" selected={tool === t.id} disabled={!after} aria-label={t.label} title={`${t.title} · ${t.key.toUpperCase()}`} aria-keyshortcuts={t.key} onclick={() => armTool(t.id)}><Icon name={t.icon} size={15} /></Button>{/each}</div>{/if}
       <span class="toolbar-separator"></span>
       <div class="tool-group zoom-controls" role="group" aria-label="Preview zoom">
         <Button icon size="sm" aria-label="Zoom out" title="Zoom out · −" disabled={zoom <= 100} onclick={() => stepZoom(-1)}><Icon name="minus" size={15} /></Button>
@@ -404,12 +466,15 @@
             {#if single && canComment && tool !== 'view'}
               <button type="button" class="annotation-surface" aria-label={`Place comment on ${side} screenshot`}
                 onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={() => { start = undefined; dragging = undefined; }}
-                onclick={e => { if (e.detail === 0) place({x:.5,y:.5,w:tool === 'area' ? .2 : 0,h:tool === 'area' ? .2 : 0,side,text:''}); }}
+                onclick={e => { if (e.detail === 0) placeDefault(); }}
                 ></button>
             {/if}
             {#if single}
-              {#each marks as mark,i}{#if mark.side === side}<button class="pin" class:chosen={active === i} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} data-mark={i} aria-label={`Comment ${i+1}`} aria-expanded={active === i && editing} onclick={e => { e.stopPropagation(); openComment(i); }}>{i+1}</button>{#if mark.w || mark.h}<button type="button" class="region region-hit" aria-label={`Open area comment ${i+1}`} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} style:width={`${mark.w*100}%`} style:height={`${mark.h*100}%`} onclick={() => openComment(i)}></button>{/if}{/if}{/each}
-              {#if dragging}<div class="region" style:left={`${dragging.x*100}%`} style:top={`${dragging.y*100}%`} style:width={`${dragging.w*100}%`} style:height={`${dragging.h*100}%`}></div>{/if}
+              <svg class="shapes" viewBox={`0 0 ${stageW || 1} ${stageH || 1}`} aria-hidden="true">
+                {#each [...marks.map((m,i) => ({m,i})).filter(({m}) => m.side === side), ...(dragging ? [{m:dragging,i:-1}] : [])] as {m,i}}{@render stroke(m, i)}{/each}
+              </svg>
+              {#each marks as mark,i}{#if mark.side === side}{@const at = anchor(mark)}{@const kind = markKind(mark)}<button class="pin" class:chosen={active === i} style:left={`${at.x*100}%`} style:top={`${at.y*100}%`} data-mark={i} aria-label={`Comment ${i+1}`} aria-expanded={active === i && editing} onclick={e => { e.stopPropagation(); openComment(i); }}>{i+1}</button>{#if kind === 'area' || kind === 'ellipse'}<button type="button" class="region region-hit" class:ellipse={kind === 'ellipse'} aria-label={`Open ${kind === 'area' ? 'area' : 'ellipse'} comment ${i+1}`} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} style:width={`${mark.w*100}%`} style:height={`${mark.h*100}%`} onclick={() => openComment(i)}></button>{/if}{/if}{/each}
+              {#if dragging && (dragging.kind === 'area' || dragging.kind === 'ellipse')}<div class="region" class:ellipse={dragging.kind === 'ellipse'} style:left={`${dragging.x*100}%`} style:top={`${dragging.y*100}%`} style:width={`${dragging.w*100}%`} style:height={`${dragging.h*100}%`}></div>{/if}
             {/if}
           </div>
         {/if}
@@ -488,6 +553,12 @@
   .before-label { left:8px; } .after-label { right:8px; }
   .pin { position:absolute; z-index:2; width:26px; height:26px; transform:translate(-50%,-50%); border-radius:50%; background:var(--color-accent-fill); color:var(--color-accent-ink); border:2px solid var(--color-accent); cursor:pointer; font-size:12px; }
   .pin.chosen { outline:2px solid var(--color-ink); outline-offset:2px; }
+  .shapes { position:absolute; inset:0; width:100%; height:100%; z-index:1; pointer-events:none; overflow:visible; }
+  .stroke { stroke:var(--color-accent); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; fill:none; }
+  .stroke polygon { fill:var(--color-accent); stroke-width:1; }
+  .stroke.chosen { stroke:var(--color-ink); filter:drop-shadow(0 0 3px var(--color-accent)); }
+  .stroke.chosen polygon { fill:var(--color-ink); }
+  .region.ellipse { border-radius:50%; }
   .region { position:absolute; border:2px solid var(--color-accent); background:color-mix(in srgb,var(--color-accent) 12%,transparent); pointer-events:none; }
   .region-hit { pointer-events:auto; cursor:pointer; }
   .annotation-editor { position:absolute; z-index:5; width:min(300px,calc(100% - 24px)); max-height:calc(100% - 24px); overflow:auto; padding:10px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; animation:comment-open 150ms cubic-bezier(.16,1,.3,1); }
