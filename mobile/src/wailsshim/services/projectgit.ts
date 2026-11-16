@@ -76,6 +76,9 @@ export function Diff(_project: string, _worktree: string, _$from: string, _to: s
 export function DiscardUnstaged(_project: string, _worktree: string, _token: string): Promise<void> {
   return unsupported("ProjectGitService.DiscardUnstaged", MAC_ONLY);
 }
+export function DiscardPaths(_project: string, _worktree: string, _token: string, _paths: string[] | null): Promise<void> {
+  return unsupported("ProjectGitService.DiscardPaths", MAC_ONLY);
+}
 
 /** PLATFORM. */
 export function DraftCommitMessage(_project: string, _worktree: string, _draft: string): Promise<string> {
@@ -110,6 +113,9 @@ export function PrepareAICommit(_project: string, _worktree: string): Promise<PG
 /** PLATFORM. */
 export function PrepareDiscard(_project: string, _worktree: string): Promise<PG.DiscardPlan> {
   return unsupported("ProjectGitService.PrepareDiscard", MAC_ONLY);
+}
+export function PrepareDiscardPaths(_project: string, _worktree: string, _paths: string[] | null): Promise<PG.DiscardPlan> {
+  return unsupported("ProjectGitService.PrepareDiscardPaths", MAC_ONLY);
 }
 
 /** PLATFORM. */
@@ -187,6 +193,7 @@ export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   CreateWorktree: { kind: "platform", reason: MAC_ONLY },
   Diff: { kind: "platform", reason: MAC_ONLY },
   DiscardUnstaged: { kind: "platform", reason: MAC_ONLY },
+  DiscardPaths: { kind: "platform", reason: MAC_ONLY },
   DraftCommitMessage: { kind: "platform", reason: MAC_ONLY },
   DraftPullRequest: { kind: "platform", reason: MAC_ONLY },
   Fetch: { kind: "platform", reason: MAC_ONLY },
@@ -194,6 +201,7 @@ export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   LastCommitMessage: { kind: "platform", reason: MAC_ONLY },
   PrepareAICommit: { kind: "platform", reason: MAC_ONLY },
   PrepareDiscard: { kind: "platform", reason: MAC_ONLY },
+  PrepareDiscardPaths: { kind: "platform", reason: MAC_ONLY },
   PreviewPullRequest: { kind: "platform", reason: MAC_ONLY },
   Pull: { kind: "platform", reason: MAC_ONLY },
   PullRequestOptions: { kind: "platform", reason: MAC_ONLY },
