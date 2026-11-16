@@ -115,7 +115,7 @@
         >
       {/each}
     </div>
-    <button type="button" class="palette-hint" aria-label="Search projects and sessions" title="Search projects, sessions and actions (⌘K)" onclick={() => nav.openOverlay("commands")}>
+    <button type="button" class="palette-hint" class:compact={git} aria-label="Search projects and sessions" title="Search projects, sessions and actions (⌘K)" onclick={() => nav.openOverlay("commands")}>
       <Icon name="search" size={13} /><span class="min-w-0 flex-1 truncate text-left">Search</span><kbd>⌘K</kbd>
     </button>
   </div>
@@ -147,6 +147,8 @@
 <style>
   .mode-switch { position:relative; display:grid; grid-template-columns:1fr 1fr; padding:2px; border-radius:9px; background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); }
   .palette-hint { display:flex; min-width:0; flex:1; align-items:center; gap:6px; height:28px; padding:0 8px; border-radius:9px; font-size:13px; color:var(--color-faint); background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); transition:color 120ms,box-shadow 120ms; }
+  .palette-hint.compact { flex:none; width:28px; justify-content:center; padding:0; }
+  .palette-hint.compact span, .palette-hint.compact kbd { display:none; }
   .palette-hint:hover { color:var(--color-ink); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 45%,transparent); }
   .palette-hint kbd { font:inherit; font-size:11px; padding:1px 5px; border-radius:5px; background:color-mix(in srgb,var(--color-edge) 70%,transparent); }
   .mode-thumb { will-change:transform; position:absolute; top:2px; bottom:2px; left:2px; width:calc(50% - 2px); border-radius:7px; background:linear-gradient(135deg,color-mix(in srgb,var(--color-accent) 85%,white),var(--color-accent)); box-shadow:0 1px 6px color-mix(in srgb,var(--color-accent) 45%,transparent); transition:transform 340ms cubic-bezier(.45,.05,.2,1),box-shadow 340ms; }

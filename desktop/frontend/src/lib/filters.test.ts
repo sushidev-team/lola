@@ -92,3 +92,13 @@ describe("matchesTriageFor", () => {
     expect(triaged([row], "In Review")).toHaveLength(0);
   });
 });
+
+describe("Needs attention", () => {
+  it("covers sessions waiting on a human and delivered work that regressed", async () => {
+    const { matchesTriageFor, ATTENTION } = await import("./filters");
+    expect(matchesTriageFor({ status: "", agentState: "waiting_input", delivery: "" }, ATTENTION)).toBe(true);
+    expect(matchesTriageFor({ status: "", agentState: "working", delivery: "ci_failed" }, ATTENTION)).toBe(true);
+    expect(matchesTriageFor({ status: "", agentState: "working", delivery: "review_pending" }, ATTENTION)).toBe(false);
+    expect(matchesTriageFor({ status: "", agentState: "working", delivery: "" }, ATTENTION)).toBe(false);
+  });
+});

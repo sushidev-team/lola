@@ -34,13 +34,12 @@ describe('session tools', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
-  it('keeps the menu inside the viewport and restores search focus on Escape', async () => {
+  it('keeps the menu inside the viewport and returns focus to the tools row on Escape', async () => {
     const original = HTMLDivElement.prototype.getBoundingClientRect;
     vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLDivElement) {
       return this.getAttribute('role') === 'menu' ? { width: 224, height: 110 } as DOMRect : original.call(this);
     });
     const { target } = background();
-    await fireEvent.click(screen.getByRole('button', { name: 'Filter sessions' }));
     await fireEvent.contextMenu(target, { clientX: window.innerWidth - 2, clientY: window.innerHeight - 2 });
     expect(screen.getByRole('menu')).toHaveStyle({ left: `${window.innerWidth - 228}px`, top: `${window.innerHeight - 114}px` });
     const shortcut = vi.fn();
@@ -49,7 +48,7 @@ describe('session tools', () => {
       await fireEvent.keyDown(window, { key: 'Escape' });
       expect(shortcut).not.toHaveBeenCalled();
       expect(screen.queryByRole('menu')).toBeNull();
-      expect(screen.getByRole('textbox', { name: 'Search sessions' })).toHaveFocus();
+      expect(screen.getByRole('button', { name: 'Filter sessions' })).toHaveFocus();
     } finally { window.removeEventListener('keydown', shortcut); }
   });
 
@@ -107,13 +106,19 @@ describe('session tools', () => {
     expect(plus).toHaveFocus();
   });
 
-  it('selects Ended with the keyboard without changing the open session', async () => {
+  it('filters by status from the popover without changing the open session', async () => {
     nav.openSession('keep-open');
     render(SidebarSessionTools);
-    await fireEvent.keyDown(screen.getByRole('tab', { name: /^All/ }), { key: 'End' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Filter sessions' }));
+    expect(screen.getByRole('dialog', { name: 'Filter sessions' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Needs attention/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^In review/ })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('radio', { name: /^Ended/ }));
     expect(nav.triage).toBe('Ended');
-    expect(screen.getByRole('tab', { name: /^Ended/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('radio', { name: /^Ended/ })).toHaveAttribute('aria-checked', 'true');
     expect(nav.focusedTerm).toBe('keep-open');
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(nav.triage).toBe('');
   });
 });
 

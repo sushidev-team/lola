@@ -46,6 +46,7 @@ export function matchesTriageFor(
   // moving the session's kanban column, which stays a function of the two axes.
   // needsHuman is only ever set by daemon facts, never by anything an agent posted.
   if (triage === NEEDS_YOU && s.ssh?.needsHuman) return true;
+  if (triage === ATTENTION) return s.ssh?.needsHuman === true || triageOf(s) === NEEDS_YOU || triageOf(s) === "Fixing";
   return triage === "" || triageOf(s) === triage;
 }
 
@@ -63,3 +64,18 @@ export function matchesTriage(status: string, triage: string): boolean {
 export function triaged(list: SessionInfo[], triage: string): SessionInfo[] {
   return triage === "" ? list : list.filter((s) => matchesTriageFor(s, triage));
 }
+
+/** Everything that wants a human soon: a session waiting on you, or delivered work that regressed. */
+export const ATTENTION = "Needs attention";
+
+/** The rows the session filter offers, in the order worth scanning: what needs you first. */
+export const STATUS_OPTIONS: { id: string; label: string; hint: string; key?: string }[] = [
+  { id: "", label: "All sessions", hint: "" },
+  { id: ATTENTION, label: "Needs attention", hint: "Waiting on you, or failing CI", key: "needs" },
+  { id: "Needs You", label: "Waiting on you", hint: "An agent is blocked on an answer", key: "needs" },
+  { id: "Fixing", label: "Fixing", hint: "CI red, changes requested or a conflict", key: "fixing" },
+  { id: "In Review", label: "In review", hint: "Pull request open, waiting on reviewers", key: "review" },
+  { id: "Working", label: "Working", hint: "An agent is busy", key: "working" },
+  { id: "Done", label: "Done", hint: "Merged, closed or finished", key: "done" },
+  { id: "Ended", label: "Ended", hint: "Sessions that have been closed", key: "done" },
+];

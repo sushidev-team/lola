@@ -662,7 +662,7 @@
     <Button
       size="xs"
       icon
-      class="ml-auto"
+      class="ml-auto transition-opacity {searching ? '' : 'opacity-0 group-hover/side:opacity-100 focus-visible:opacity-100'}"
       title="filter projects"
       aria-label="Filter projects"
       aria-pressed={searching}
