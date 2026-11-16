@@ -20,6 +20,8 @@
   import { visibleRoster } from "$lib/roster";
   import { sidebarWidth, sidebarLimit, GIT_SIDEBAR_WIDTH } from "$lib/sidebarwidth";
   let windowWidth = $state(1280);
+  let mountedDetail = $state(false);
+  $effect(() => { if (nav.view === "detail") mountedDetail = true; });
   const sideWidth = $derived(sidebarWidth(nav.sidebarWidth, windowWidth));
   // Git mode keeps only the projects panel, which leaves the branch rail and history the room.
   const trackWidth = $derived(nav.gitMode ? Math.min(sideWidth, GIT_SIDEBAR_WIDTH) : sideWidth);
@@ -29,7 +31,6 @@
   import MainTopBar from "$lib/components/MainTopBar.svelte";
   import PushErrorBanner from "$lib/components/PushErrorBanner.svelte";
   import Toast from "$lib/components/Toast.svelte";
-  import GitLoadingShell from "$lib/components/GitLoadingShell.svelte";
   import Cockpit from "$lib/views/Cockpit.svelte";
   import Home from "$lib/views/Home.svelte";
   import ProjectDetail from "$lib/views/ProjectDetail.svelte";
@@ -451,15 +452,15 @@
          replacing it; nav.view changes now always re-render. -->
     <main class="relative min-h-0 overflow-hidden">
       <Cockpit />
-      {#if nav.pendingMode === "git" && !nav.inGit}
-        <div class="absolute inset-0 z-40 overflow-hidden bg-canvas"><GitLoadingShell /></div>
+      {#if mountedDetail}
+        <!-- The Git workspace stays mounted once opened (hidden, timers paused), so switching back to
+             Code and again to Git is instant instead of a fresh mount. -->
+        <div class="absolute inset-0 z-40 overflow-hidden bg-canvas" class:hidden={nav.view !== "detail"} inert={nav.view !== "detail"}><ProjectDetail active={nav.view === "detail"} /></div>
       {/if}
-      {#if nav.view !== "cockpit"}
+      {#if nav.view !== "cockpit" && nav.view !== "detail"}
         <div class="absolute inset-0 z-40 overflow-hidden bg-canvas">
           {#if nav.view === "home"}
             <Home />
-          {:else if nav.view === "detail"}
-            <ProjectDetail />
           {:else if nav.view === "prpicker"}
             <PRPicker />
           {:else if nav.view === "ticketpicker"}
