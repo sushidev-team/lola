@@ -469,6 +469,25 @@
   });
   let historyLoad: Promise<void> = Promise.resolve();
   const drawn = new WeakSet<object>();
+  // Opening a repository (or switching checkout) brings the active rows of each
+  // rail section into view; later refreshes leave the person's scroll alone.
+  let rail = $state<HTMLElement>();
+  let railRevealed: ProjectGitState | undefined, railWasOpen = false;
+  $effect(() => {
+    const state = git, opened = showRail && !railWasOpen;
+    railWasOpen = showRail;
+    if (!data || !rail || (railRevealed === state && !opened)) return;
+    railRevealed = state;
+    const upstream = data.upstream ? `refs/remotes/${data.upstream.replace(/^refs\/remotes\//, '')}` : '';
+    const rows = [...rail.querySelectorAll<HTMLElement>('.current-branch, .worktree-row[aria-pressed="true"]')];
+    for (const row of rail.querySelectorAll<HTMLElement>('.branch-leaf[data-branch-ref]')) if (upstream && row.dataset.branchRef === upstream) rows.push(row);
+    for (const row of rows) {
+      const box = row.closest<HTMLElement>('.section-content');
+      if (!box) continue;
+      const outer = box.getBoundingClientRect(), inner = row.getBoundingClientRect();
+      if (inner.top < outer.top || inner.bottom > outer.bottom) box.scrollTop += inner.top - outer.top - (outer.height - inner.height) / 2;
+    }
+  });
   let branchJump = 0;
   let focusedBranch = $state('');
   let historyList = $state<HTMLDivElement>();
@@ -588,7 +607,7 @@
     <Button variant="bare" class="sidebar-resize rail-resize" role="separator" aria-label="Resize repository sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={railMax} aria-valuenow={railWidth} title="Drag to resize · Double-click to reset" onpointerdown={(event) => resizeSidebar(event,'rail')} onkeydown={(event) => sidebarKey(event,'rail')} ondblclick={() => setSidebarWidth('rail',sidebarDefaults.rail)}><span class="sr-only">Resize repository sidebar</span></Button>
     <Button variant="bare" class="sidebar-resize inspector-resize" role="separator" aria-label="Resize changes sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={inspectorMax} aria-valuenow={inspectorWidth} title="Drag to resize · Double-click to reset" onpointerdown={(event) => resizeSidebar(event,'inspector')} onkeydown={(event) => sidebarKey(event,'inspector')} ondblclick={() => setSidebarWidth('inspector',sidebarDefaults.inspector)}><span class="sr-only">Resize changes sidebar</span></Button>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <nav class="repo-rail" aria-busy={initialLoading} aria-label="Repository navigation" oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext}>
+    <nav class="repo-rail" bind:this={rail} aria-busy={initialLoading} aria-label="Repository navigation" oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext}>
       {#snippet localHeading()}<Icon name="git-branch" size={16} /><span>Local</span><Icon name="chevron-down" class="git-disclosure-chevron" size={13} />{/snippet}
       {#snippet localControls()}<ProjectGitSectionFilter name="Local" count={filteredLocal.length} total={localRefs.length} loading={initialLoading} bind:filter={sectionFilters.local} statuses={[{value:'all',label:'All branches'},{value:'current',label:'Current branch'},{value:'checked-out',label:'Checked out'},{value:'not-checked-out',label:'Not checked out'}]}/>{/snippet}
       {#snippet localContent()}

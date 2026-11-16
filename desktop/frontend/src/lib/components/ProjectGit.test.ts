@@ -304,6 +304,23 @@ describe('Project Git workspace', () => {
     expect(await screen.findByRole('dialog', {name:'Remove worktree and branch?'})).toBeInTheDocument();
     expect(api.BranchAction).not.toHaveBeenCalled();
   });
+  it('scrolls each rail section to the active branch and checkout on open, and not again on refresh', async () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const row = this.classList.contains('rail-row');
+      return new DOMRect(0, row ? 400 : 0, 200, row ? 20 : 100);
+    });
+    await open();
+    const box = (name: string) => screen.getByRole('region', { name }).querySelector<HTMLElement>('.section-content')!;
+    expect(box('Local').scrollTop).toBe(360);
+    expect(box('Remote').scrollTop).toBe(360);
+    expect(box('Worktrees').scrollTop).toBe(360);
+    expect(box('Stashes').scrollTop).toBe(0);
+    box('Local').scrollTop = 0;
+    await refreshRepository();
+    await waitFor(() => expect(api.Snapshot.mock.calls.length).toBeGreaterThan(1));
+    expect(box('Local').scrollTop).toBe(0);
+  });
+
   it('resizes section pairs by keyboard and pointer, preserves other sections, and restores saved sizes', async () => {
     await open();
     const names = ['Local', 'Remote', 'Worktrees', 'Stashes'];
