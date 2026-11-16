@@ -682,7 +682,7 @@
          dashed frame marks it as an empty STATE, not a list. -->
     <div class="grid gap-3 rounded-md border border-dashed border-edge p-2" aria-label="Get started" role="region">
       <Button variant="secondary" size="sm" block onclick={() => nav.openOverlay("project", "")}>Add project</Button>
-      <SetupChecklist />
+      <SetupChecklist dismissKey="sidebar" />
     </div>
   {:else}
     {#if store.connected && !store.projects.some((p) => p.pollsEnabled > 0)}
@@ -691,7 +691,7 @@
            Mac that only takes hub chores or manual sessions never polls — and
            the frame is the checklist's own, so nothing is left behind when it
            hides. Mounted only while no project polls, so its checks stop with it. -->
-      <SetupChecklist hideWhenComplete optional={["poll"]} class="mb-2 rounded-md border border-dashed border-edge p-2" />
+      <SetupChecklist dismissKey="sidebar" hideWhenComplete optional={["poll", "linear"]} class="mb-2 rounded-md border border-dashed border-edge p-2" />
     {/if}
     {@const gap = drag?.kind === "group" ? groupTarget : target?.kind === "top" ? target.index : null}
     <!-- The sidebar owns scrolling; Activity has its own bounded footer. -->

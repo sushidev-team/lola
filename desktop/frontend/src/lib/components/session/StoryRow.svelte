@@ -96,7 +96,7 @@
       <div class="min-w-0 selectable text-prose text-ink-2" data-voice="agent" data-role="narration"><SSHRich {sessionId} text={row.text} quiet conversation /></div>
     </aside>
   {:else}
-  <div class="selectable {answerShaped(row.text) ? 'text-ink-2' : 'text-ink'} text-prose" data-voice="agent" data-role={role}><SSHRich {sessionId} text={row.text} conversation compact={role === "answer"} reveal={view.cursor === row.id} /></div>
+  <div class="selectable {answerShaped(row.text) ? 'text-ink-2' : 'text-ink'} text-prose" data-voice="agent" data-role={role}><SSHRich {sessionId} text={row.text} conversation compact={role === "answer"} reveal={view.cursor === row.id} picker={role === "answer" && latest && !readonly} /></div>
   {/if}
   {#if row.truncated}
     <p class="mt-1 flex items-center gap-2 text-sm text-faint">
