@@ -362,9 +362,8 @@ func TestMaxConnsPerDeviceEvictsOldest(t *testing.T) {
 			t.Errorf("conn %d did not survive: %+v", i+1, f)
 		}
 	}
-	if n := l.srv.DeviceConns(l.dev.ID); n != maxConnsPerDevice {
-		t.Errorf("DeviceConns = %d, want %d", n, maxConnsPerDevice)
-	}
+	// The client sees the close before the server drops the connection from its count.
+	waitFor(t, "the evicted connection to leave the count", func() bool { return l.srv.DeviceConns(l.dev.ID) == maxConnsPerDevice })
 	if !strings.Contains(l.log.all(), "evicted oldest connection") {
 		t.Error("the eviction was not logged")
 	}
