@@ -70,14 +70,13 @@ describe("Sidebar in Git mode", () => {
 
 describe("Sidebar instant switch", () => {
   afterEach(cleanup);
-  it("changes layout before navigation runs", async () => {
+  it("opens Git in the same frame as the click", async () => {
     store.projects = [{ name: "lola", label: "Lola", path: "/r/lola", repo: "o/lola", kind: "repo" }] as never;
     nav.goCockpit("");
     render(Sidebar, { width: 540 });
     await fireEvent.click(screen.getByRole("button", { name: "Git" }));
     expect(nav.gitMode).toBe(true);
-    expect(nav.inGit).toBe(false);
+    expect(nav.inGit).toBe(true);
     expect(document.querySelector("[data-sidebar-sessions]")).toHaveClass("hidden");
-    await vi.waitFor(() => expect(nav.inGit).toBe(true));
   });
 });

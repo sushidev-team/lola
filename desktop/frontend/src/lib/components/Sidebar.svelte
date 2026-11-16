@@ -40,6 +40,15 @@
   function pickMode(id: string) {
     if ((id === "git") === git) return;
     nav.pendingMode = id === "git" ? "git" : "code";
+    if (id === "git") {
+      // Opening the workspace is the heavy side. Done in the same frame as the click, the pill's
+      // animation starts after it instead of being stalled halfway by it.
+      switchMode(id);
+      if (!nav.inGit) nav.pendingMode = null;
+      clearTimeout(settle);
+      settle = setTimeout(() => { nav.pendingMode = null; }, 400);
+      return;
+    }
     requestAnimationFrame(() => setTimeout(() => {
       switchMode(id);
       // Nothing to open Git on (no repository): drop the loading shell at once.

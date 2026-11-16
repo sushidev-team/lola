@@ -453,9 +453,10 @@
     <main class="relative min-h-0 overflow-hidden">
       <Cockpit />
       {#if mountedDetail}
-        <!-- The Git workspace stays mounted once opened (hidden, timers paused), so switching back to
+        <!-- The Git workspace stays mounted once opened (invisible but still laid out, so showing it is
+             only a paint; its timers are paused), so switching back to
              Code and again to Git is instant instead of a fresh mount. -->
-        <div class="absolute inset-0 z-40 overflow-hidden bg-canvas" class:hidden={nav.view !== "detail"} inert={nav.view !== "detail"}><ProjectDetail active={nav.view === "detail"} /></div>
+        <div class="absolute inset-0 z-40 overflow-hidden bg-canvas" class:invisible={nav.view !== "detail"} class:pointer-events-none={nav.view !== "detail"} inert={nav.view !== "detail"}><ProjectDetail active={nav.view === "detail"} /></div>
       {/if}
       {#if nav.view !== "cockpit" && nav.view !== "detail"}
         <div class="absolute inset-0 z-40 overflow-hidden bg-canvas">
