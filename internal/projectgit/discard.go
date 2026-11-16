@@ -21,7 +21,9 @@ type DiscardPlan struct {
 	Untracked []string `json:"untracked"`
 }
 
-func (c Client) PrepareDiscard(ctx context.Context, dir string) (DiscardPlan, error) {
+// PrepareDiscard plans a discard of every unstaged change, or only of paths
+// when given. Each named path must be an unstaged entry; the token pins them.
+func (c Client) PrepareDiscard(ctx context.Context, dir string, paths ...string) (DiscardPlan, error) {
 	plan := DiscardPlan{Tracked: []string{}, Untracked: []string{}}
 	if err := c.requireIdle(ctx, dir); err != nil {
 		return plan, err
@@ -29,6 +31,23 @@ func (c Client) PrepareDiscard(ctx context.Context, dir string) (DiscardPlan, er
 	files, err := c.status(ctx, dir)
 	if err != nil {
 		return plan, err
+	}
+	if len(paths) > 0 {
+		want := make(map[string]bool, len(paths))
+		for _, p := range paths {
+			want[p] = true
+		}
+		var picked []File
+		for _, f := range files {
+			if want[f.Path] && (f.Untracked || f.Worktree != " ") {
+				picked = append(picked, f)
+				delete(want, f.Path)
+			}
+		}
+		if len(want) > 0 {
+			return plan, errors.New("files changed; review unstaged changes again")
+		}
+		files = picked
 	}
 	branch, branchErr := c.text(ctx, dir, "symbolic-ref", "--quiet", "HEAD")
 	head, headErr := c.text(ctx, dir, "rev-parse", "--verify", "HEAD")
@@ -52,6 +71,7 @@ func (c Client) PrepareDiscard(ctx context.Context, dir string) (DiscardPlan, er
 	// the confirmation even if the previously selected working bytes are unchanged.
 	_ = json.NewEncoder(h).Encode([]string{dir, branch, head, string(index)})
 	_ = json.NewEncoder(h).Encode(files)
+	_ = json.NewEncoder(h).Encode(paths)
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return plan, err
@@ -133,8 +153,8 @@ func (c Client) PrepareDiscard(ctx context.Context, dir string) (DiscardPlan, er
 // DiscardUnstaged restores only the worktree from the index. Untracked files
 // listed in the confirmation are removed individually, never recursively, so
 // ignored files and nested repositories cannot be swept away.
-func (c Client) DiscardUnstaged(ctx context.Context, dir, token string) error {
-	plan, err := c.PrepareDiscard(ctx, dir)
+func (c Client) DiscardUnstaged(ctx context.Context, dir, token string, paths ...string) error {
+	plan, err := c.PrepareDiscard(ctx, dir, paths...)
 	if err != nil {
 		return err
 	}

@@ -258,6 +258,20 @@ func (s *ProjectGitService) DiscardUnstaged(project, worktree, token string) err
 		return (projectgit.Client{}).DiscardUnstaged(ctx, dir, token)
 	})
 }
+func (s *ProjectGitService) PrepareDiscardPaths(project, worktree string, paths []string) (projectgit.DiscardPlan, error) {
+	result := projectgit.DiscardPlan{}
+	err := s.mutate(project, worktree, func(ctx context.Context, dir string) error {
+		var err error
+		result, err = (projectgit.Client{}).PrepareDiscard(ctx, dir, paths...)
+		return err
+	})
+	return result, err
+}
+func (s *ProjectGitService) DiscardPaths(project, worktree, token string, paths []string) error {
+	return s.mutate(project, worktree, func(ctx context.Context, dir string) error {
+		return (projectgit.Client{}).DiscardUnstaged(ctx, dir, token, paths...)
+	})
+}
 func (s *ProjectGitService) Commit(project, worktree, message string) error {
 	return s.mutate(project, worktree, func(ctx context.Context, dir string) error { return (projectgit.Client{}).Commit(ctx, dir, message) })
 }

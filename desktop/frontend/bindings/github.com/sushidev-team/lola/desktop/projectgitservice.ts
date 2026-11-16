@@ -92,6 +92,10 @@ export function Diff(project: string, worktree: string, $from: string, to: strin
     return $Call.ByID(2191256993, project, worktree, $from, to, area, path);
 }
 
+export function DiscardPaths(project: string, worktree: string, token: string, paths: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(2962392216, project, worktree, token, paths);
+}
+
 export function DiscardUnstaged(project: string, worktree: string, token: string): $CancellablePromise<void> {
     return $Call.ByID(1358071133, project, worktree, token);
 }
@@ -129,6 +133,10 @@ export function PrepareAICommit(project: string, worktree: string): $Cancellable
 
 export function PrepareDiscard(project: string, worktree: string): $CancellablePromise<projectgit$0.DiscardPlan> {
     return $Call.ByID(2827308293, project, worktree);
+}
+
+export function PrepareDiscardPaths(project: string, worktree: string, paths: string[] | null): $CancellablePromise<projectgit$0.DiscardPlan> {
+    return $Call.ByID(3816428927, project, worktree, paths);
 }
 
 export function PreviewPullRequest(project: string, worktree: string, selection: projectgit$0.PRSelection): $CancellablePromise<projectgit$0.PRPreview> {
