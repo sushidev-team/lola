@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/sushidev-team/lola/compare/v0.10.0...v0.10.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **daemon:** leave the connected relay when the last phone is revoked ([2a8a43e](https://github.com/sushidev-team/lola/commit/2a8a43ea5bd25ac2003352905c1a0ba91eba213c))
+
 ## [0.10.0](https://github.com/sushidev-team/lola/compare/v0.9.0...v0.10.0) (2026-11-15)
 
 
