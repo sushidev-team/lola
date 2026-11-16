@@ -595,7 +595,7 @@ describe("SidebarProjects", () => {
 
     expect(SetProjectLayout).not.toHaveBeenCalled();
     expect(SetProjectStack).not.toHaveBeenCalled();
-    expect(confirm.request?.body).toBe("Add lola to stack nori?");
+    expect(confirm.request?.subject).toBe("lola → nori");
     expect(confirm.request?.detail).toMatch(/kept but ignored/);
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("lola", "nori");
@@ -613,7 +613,7 @@ describe("SidebarProjects", () => {
     pointer(window, "pointerup");
     await tick();
 
-    expect(confirm.request?.body).toBe("Remove web from stack nori?");
+    expect(confirm.request?.subject).toBe("web ← nori");
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("web", "");
     // Then placed where it was dropped (the top level).
@@ -634,12 +634,12 @@ describe("SidebarProjects", () => {
     await fireEvent.contextMenu(screen.getByRole("button", { name: "lola" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "Add to stack…" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "nori" }));
-    expect(confirm.request?.body).toBe("Add lola to stack nori?");
+    expect(confirm.request?.subject).toBe("lola → nori");
 
     confirm.cancel();
     await fireEvent.contextMenu(screen.getByRole("button", { name: "web" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "Remove from stack" }));
-    expect(confirm.request?.body).toBe("Remove web from stack nori?");
+    expect(confirm.request?.subject).toBe("web ← nori");
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("web", "");
   });
@@ -668,7 +668,7 @@ describe("SidebarProjects", () => {
     await openRemove();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(confirm.request?.title).toBe("Remove project?");
-    expect(confirm.request?.body).toBe("Remove Lola App from lola?");
+    expect(confirm.request?.subject).toBe("Lola App");
     expect(RemoveProject).not.toHaveBeenCalled();
     confirm.cancel();
     expect(RemoveProject).not.toHaveBeenCalled();
@@ -712,7 +712,7 @@ describe("SidebarProjects", () => {
     render(SidebarProjects);
     await fireEvent.contextMenu(screen.getByRole("button", { name: "web" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "Remove project…" }));
-    expect(confirm.request?.body).toBe("Remove web from lola?");
+    expect(confirm.request?.subject).toBe("web");
     confirm.accept();
     expect(RemoveProject).toHaveBeenCalledWith("web");
   });

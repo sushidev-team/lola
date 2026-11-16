@@ -70,7 +70,7 @@ describe("destructive actions ask first", () => {
     const onRemoved = vi.fn();
     Kill.mockRejectedValueOnce(new Error("session managed terminated; worktree kept (uncommitted changes) at /managed — rerun with --force to remove it"));
     await store.kill("managed", false, false, onRemoved);
-    expect(confirm.request?.title).toBe("Worktree has uncommitted changes");
+    expect(confirm.request?.title).toBe("Delete worktree with uncommitted changes?");
     expect(onRemoved).not.toHaveBeenCalled();
     Kill.mockResolvedValue({removed:true});
     confirm.accept();
@@ -80,8 +80,8 @@ describe("destructive actions ask first", () => {
   it("explains managed checkout removal and uses session cleanup only after confirmation", () => {
     store.sessions = [{id:"managed",issue:"ENG-42",title:"Update dependency",worktree:"/managed",branch:"deps"} as never];
     store.askRemoveManagedWorktree("/managed");
-    expect(confirm.request?.body).toContain("ENG-42 — Update dependency");
-    expect(confirm.request?.body).not.toContain("/managed");
+    expect(confirm.request?.subject).toContain("ENG-42 — Update dependency");
+    expect(confirm.request?.subject).not.toContain("/managed");
     expect(confirm.request?.alternative).toBeUndefined();
     expect(confirm.request?.detail).toContain("Unpushed commits may be lost");
     expect(Kill).not.toHaveBeenCalled();
@@ -155,7 +155,7 @@ describe("destructive actions ask first", () => {
     store.askSwitchAgent("sess-1", "codex");
     expect(SwitchAgent).not.toHaveBeenCalled();
     expect(confirm.request?.title).toBe("Switch agent?");
-    expect(confirm.request?.body).toBe("Switch ENG-42 from claude to codex?");
+    expect(confirm.request?.subject).toBe("ENG-42: claude → codex");
     expect(confirm.request?.detail).toBe("The pane is replaced on the same worktree.");
     expect(confirm.request?.confirmLabel).toBe("Switch");
   });
@@ -186,15 +186,15 @@ describe("destructive actions ask first", () => {
   it("names the session in the prompt when it is known", () => {
     store.sessions = [{ id: "sess-1", issue: "ENG-42", title: "fix login" } as never];
     store.askKill("sess-1");
-    expect(confirm.request?.body).toContain("ENG-42");
-    expect(confirm.request?.body).toContain("fix login");
+    expect(confirm.request?.subject).toContain("ENG-42");
+    expect(confirm.request?.subject).toContain("fix login");
   });
 
   // An id with no matching session (removed from the snapshot between the
   // keypress and the dialog) still has to render something the user can read.
   it("falls back to the id when the session is unknown", () => {
     store.askKill("abcdef1234567890");
-    expect(confirm.request?.body).toContain("abcdef12");
+    expect(confirm.request?.subject).toContain("abcdef12");
   });
 });
 

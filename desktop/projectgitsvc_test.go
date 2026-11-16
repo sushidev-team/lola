@@ -627,3 +627,13 @@ func TestProjectGitSnapshotCountsOtherWorktreeChanges(t *testing.T) {
 		t.Fatalf("sandboxed checkout was asked: changes = %d", got)
 	}
 }
+
+func TestProjectGitDiscardPathsRefuseAnEmptySelection(t *testing.T) {
+	svc := &ProjectGitService{}
+	if _, err := svc.PrepareDiscardPaths("demo", "", nil); err == nil || !strings.Contains(err.Error(), "at least one file") {
+		t.Fatalf("empty preview error=%v", err)
+	}
+	if err := svc.DiscardPaths("demo", "", "token", []string{}); err == nil || !strings.Contains(err.Error(), "at least one file") {
+		t.Fatalf("empty discard error=%v", err)
+	}
+}

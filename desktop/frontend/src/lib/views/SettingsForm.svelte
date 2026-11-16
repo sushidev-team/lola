@@ -294,7 +294,8 @@
     }
     confirm.ask({
       title: "Discard changes?",
-      body: "Discard your unsaved changes to settings?",
+      subject: "Settings",
+      body: "",
       confirmLabel: "Discard",
       onConfirm: cancel,
     });

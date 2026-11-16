@@ -171,7 +171,8 @@
     const where = project ? projectName(project) : "its project";
     confirm.ask({
       title: opts.again ? "Claim this chore again?" : "Claim this chore?",
-      body: `Claim ${itemTitle(it)} and start a session in ${where}?`,
+      subject: itemTitle(it),
+      body: `Starts a session in ${where}.`,
       detail: "The team sees this Mac working it. A coding agent starts in a new worktree and opens a pull request.",
       confirmLabel: opts.again ? "Claim again" : "Claim",
       onConfirm: () => void claim(it, project, errKey),
@@ -200,7 +201,8 @@
     setError(errKey, "");
     confirm.ask({
       title: "Release this chore?",
-      body: `Release ${itemTitle(it)} back to the team?`,
+      subject: itemTitle(it),
+      body: "",
       detail: "Another Mac may take it, and this Mac skips it for 24 hours. The session keeps running, but the team stops hearing from it.",
       confirmLabel: "Release",
       onConfirm: () => void doRelease(it, errKey),
@@ -237,8 +239,8 @@
     const held = g.items.filter((it) => it.state === "claimed");
     if (held.length === 1) return askRelease(held[0], g.key);
     confirm.ask({
-      title: "Release these chores?",
-      body: `Release ${held.length} chores back to the team?`,
+      title: `Release ${held.length} chores?`,
+      body: "",
       detail: "Another Mac may take them, and this Mac skips them for 24 hours. The session keeps running, but the team stops hearing from it.",
       confirmLabel: "Release all",
       onConfirm: () => void releaseGroup(g, held),
@@ -282,10 +284,10 @@
     const { advisories, prs } = splitFix(items);
     const agents = (advisories.length ? 1 : 0) + prs.length;
     const body = prs.length === 0
-      ? `Start one agent for ${advisories.length} advisories in ${where}?`
+      ? `Starts one agent for ${advisories.length} advisories in ${where}.`
       : advisories.length === 0
-        ? `Start ${agents} agents in ${where}, one per failing dependency bump?`
-        : `Start ${agents} agents in ${where}? One fixes the ${advisories.length === 1 ? "advisory" : `${advisories.length} advisories`}; each failing dependency bump gets its own.`;
+        ? `Starts ${agents} agents in ${where}, one per failing dependency bump.`
+        : `Starts ${agents} agents in ${where}. One fixes the ${advisories.length === 1 ? "advisory" : `${advisories.length} advisories`}; each failing dependency bump gets its own.`;
     confirm.ask({
       title: "Fix all chores?",
       body,
@@ -365,7 +367,8 @@
     setError(`device:${name}`, "");
     confirm.ask({
       title: "Remove this Mac from the team?",
-      body: `Remove ${shown} from ${st?.org || "the team"}?`,
+      subject: `${shown} · ${st?.org || "the team"}`,
+      body: "",
       detail: "The hub stops accepting it at once and hands its chores back to the team. To come back it needs a new invite.",
       confirmLabel: "Remove",
       onConfirm: () => void doRevoke(name, shown),

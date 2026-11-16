@@ -633,7 +633,7 @@
             onclick={() =>
               confirm.ask({
                 title: "Discard feedback?",
-                body: `Discard ${count} unsent comment${count === 1 ? "" : "s"} for this session?`,
+                body: `${count} unsent comment${count === 1 ? "" : "s"} will be lost.`,
                 confirmLabel: "Discard",
                 onConfirm: () => feedback.clear(sessionId),
               })}>Discard…</Button
