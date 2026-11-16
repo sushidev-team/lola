@@ -60,11 +60,11 @@ describe("Sidebar in Git mode", () => {
     nav.goCockpit("");
     render(Sidebar, { width: 540 });
     const col = () => document.querySelector("[data-sidebar-sessions]")!;
-    expect(col()).not.toHaveClass("col-off");
+    expect(col()).not.toHaveClass("hidden");
     await fireEvent.click(screen.getByRole("button", { name: "Git" }));
-    expect(col()).toHaveClass("col-off");
+    expect(col()).toHaveClass("hidden");
     await fireEvent.click(screen.getByRole("button", { name: "Code" }));
-    expect(col()).not.toHaveClass("col-off");
+    expect(col()).not.toHaveClass("hidden");
   });
 });
 
@@ -77,6 +77,6 @@ describe("Sidebar instant switch", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Git" }));
     expect(nav.gitMode).toBe(true);
     expect(nav.inGit).toBe(true);
-    expect(document.querySelector("[data-sidebar-sessions]")).toHaveClass("col-off");
+    expect(document.querySelector("[data-sidebar-sessions]")).toHaveClass("hidden");
   });
 });

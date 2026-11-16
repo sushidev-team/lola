@@ -119,9 +119,9 @@
 
   <!-- Projects on the left, the sessions of the chosen project (or all) beside them. Both are always
        mounted, so each keeps its scroll and folders. In Git mode the aside shrinks to the projects
-       column and the sessions column fades out into the width it gives up; the width itself is
-       animated by App's grid (see `cols-anim`). -->
-  <div class="relative grid min-h-0 min-w-0" style="grid-template-rows:{narrow && !git ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow && !git ? 'minmax(0,1fr)' : `${GIT_SIDEBAR_WIDTH}px minmax(0,1fr)`}">
+       column and the sessions column is hidden. Nothing in the content animates: the switch is just
+       the pill above. -->
+  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{narrow && !git ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow && !git ? 'minmax(0,1fr)' : `${GIT_SIDEBAR_WIDTH}px minmax(0,1fr)`}">
     {#if narrow && !git}
       <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => (nav.sidebarTab = t === "projects" ? "projects" : "sessions")} />
     {/if}
@@ -129,7 +129,7 @@
       <div class="min-h-0 overflow-auto"><SidebarProjects /></div>
       <SidebarVersion />
     </div>
-    <div bind:this={sessionsArea} class="sessions-col grid min-h-0 min-w-0 {narrow && !git && nav.sidebarTab !== 'sessions' ? 'hidden' : ''} {git ? 'col-off' : ''}" inert={git} style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
+    <div bind:this={sessionsArea} class="grid min-h-0 min-w-0 {git || (narrow && nav.sidebarTab !== 'sessions') ? 'hidden' : ''}" inert={git} style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
       <SidebarSessionTools contextTarget={sessionsArea} />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
     </div>
@@ -142,13 +142,6 @@
 
 <style>
   .mode-switch { position:relative; display:grid; grid-template-columns:1fr 1fr; padding:2px; border-radius:9px; background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); }
-  /* The sessions column is wiped in and out from its left edge, so the sidebar seems to open and
-     close with the Code/Git switch. clip-path is paint-only: unlike animating the width, it does
-     not lay the workspace out again on every frame. Leaving for Git the column keeps its place
-     over the already resized workspace until the wipe has finished. */
-  .sessions-col { clip-path:inset(0 0 0 0); transition:clip-path 360ms cubic-bezier(.45,.05,.2,1),visibility 0s; }
-  .sessions-col.col-off { z-index:45; position:absolute; top:0; bottom:0; left:300px; width:240px; clip-path:inset(0 100% 0 0); visibility:hidden; pointer-events:none; background:var(--color-canvas); box-shadow:inset 1px 0 0 var(--color-edge); transition:clip-path 360ms cubic-bezier(.45,.05,.2,1),visibility 0s linear 360ms; }
-  @media (prefers-reduced-motion:reduce) { .sessions-col,.sessions-col.col-off { transition:none; } }
   .palette-hint { display:flex; min-width:0; flex:1; align-items:center; gap:6px; height:28px; padding:0 8px; border-radius:9px; font-size:13px; color:var(--color-faint); background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); transition:color 120ms,box-shadow 120ms; }
   .palette-hint:hover { color:var(--color-ink); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 45%,transparent); }
   .palette-hint kbd { font:inherit; font-size:11px; padding:1px 5px; border-radius:5px; background:color-mix(in srgb,var(--color-edge) 70%,transparent); }
