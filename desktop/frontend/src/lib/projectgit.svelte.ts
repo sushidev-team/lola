@@ -483,23 +483,23 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     }
   }
 
-  async prepareDiscard() {
+  async prepareDiscard(paths?: string[]) {
     if (this.busy) return null;
     this.busy = 'prepare-discard'; this.error = ''; this.notice = '';
     try {
-      const plan = await ProjectGitService.PrepareDiscard(this.project, this.worktree);
+      const plan = paths ? await ProjectGitService.PrepareDiscardPaths(this.project, this.worktree, paths) : await ProjectGitService.PrepareDiscard(this.project, this.worktree);
       return {...plan, tracked:plan.tracked ?? [], untracked:plan.untracked ?? []};
     }
     catch (error) { this.error = String(error); return null; }
     finally { this.busy = ''; }
   }
 
-  async discardUnstaged(token: string, ref = '', limit = 200): Promise<boolean> {
+  async discardUnstaged(token: string, ref = '', limit = 200, paths?: string[]): Promise<boolean> {
     if (this.busy) return false;
     this.busy = 'discard'; this.error = ''; this.notice = '';
     let ok = false;
     try {
-      await ProjectGitService.DiscardUnstaged(this.project, this.worktree, token);
+      if (paths) await ProjectGitService.DiscardPaths(this.project, this.worktree, token, paths); else await ProjectGitService.DiscardUnstaged(this.project, this.worktree, token);
       this.notice = 'Unstaged changes discarded.'; ok = true;
     } catch (error) { this.error = String(error); }
     finally {

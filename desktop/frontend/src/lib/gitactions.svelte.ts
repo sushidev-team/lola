@@ -408,13 +408,13 @@ export class GitActions {
   }
   stash() {
     this.close(); const context = this.context(), head = context.git.snapshot?.head ?? '';
-    confirm.ask({ title: 'Stash working changes?', body: `Save the staged, unstaged and untracked files in ${context.git.snapshot?.branch || 'this checkout'} to a new stash?`, detail: 'Ignored files stay in place. Stashed files are removed from the working copy until you apply or pop the stash.', confirmLabel: 'Stash changes', onConfirm: () => { if (context.git === this.context().git) void context.git.stashAction('stash', '', head, context.ref, context.limit); } });
+    confirm.ask({ title: 'Stash working changes?', subject: context.git.snapshot?.branch || 'this checkout', body: '', detail: 'Ignored files stay in place. Stashed files are removed from the working copy until you apply or pop the stash.', confirmLabel: 'Stash changes', onConfirm: () => { if (context.git === this.context().git) void context.git.stashAction('stash', '', head, context.ref, context.limit); } });
   }
   pop() { const stash = this.context().git.stashes[0]; if (stash) this.confirmStash('pop', stash); }
   private confirmStash(action: 'apply' | 'pop' | 'drop', stash: GitStash) {
     this.close(); const context = this.context(), head = context.git.snapshot?.head ?? '';
     const label = { apply: 'Apply stash', pop: 'Pop stash', drop: 'Drop stash' }[action];
-    confirm.ask({ title: `${label}?`, body: `${label} ${stash.selector} (${stash.sha.slice(0, 8)}): ${stash.subject}?`, detail: action === 'drop' ? 'This removes the saved stash. It does not change files in your checkout.' : action === 'pop' ? 'Apply to this clean checkout, then remove the saved stash only if applying succeeds. Conflicts keep the stash.' : 'Apply to this clean checkout and keep the saved stash.', confirmLabel: label, onConfirm: () => { if (context.git === this.context().git) void context.git.stashAction(action, stash.sha, head, context.ref, context.limit); } });
+    confirm.ask({ title: `${label}?`, subject: `${stash.selector} (${stash.sha.slice(0, 8)}): ${stash.subject}`, body: '', detail: action === 'drop' ? 'This removes the saved stash. It does not change files in your checkout.' : action === 'pop' ? 'Apply to this clean checkout, then remove the saved stash only if applying succeeds. Conflicts keep the stash.' : 'Apply to this clean checkout and keep the saved stash.', confirmLabel: label, onConfirm: () => { if (context.git === this.context().git) void context.git.stashAction(action, stash.sha, head, context.ref, context.limit); } });
   }
   openStash(stash: GitStash, event: MouseEvent) {
     this.menu(stash.subject, [
@@ -443,7 +443,7 @@ export class GitActions {
     const context=this.context(),data=context.git.snapshot,operation=data?.operation;
     if (!operation || !['rebase','cherry-pick','revert'].includes(operation) || this.blocked()) return;
     const request={action:'skip',source:operation,sourceSHA:data.head,target:'',targetSHA:''};
-    confirm.ask({title:'Skip current commit?',body:`Skip the current commit in this ${operation}?`,detail:'Any conflict resolutions for this commit will be discarded. Git will continue with the remaining commits.',confirmLabel:'Skip commit',onConfirm:()=>void this.execute(context,request)});
+    confirm.ask({title:'Skip current commit?',body:'',detail:'Any conflict resolutions for this commit will be discarded. Git will continue with the remaining commits.',confirmLabel:'Skip commit',onConfirm:()=>void this.execute(context,request)});
   }
   continueOperation() {
     const context = this.context(), data = context.git.snapshot;
@@ -453,7 +453,7 @@ export class GitActions {
     const context = this.context(), operation = context.git.snapshot?.operation;
     if (!operation || !['merge', 'rebase', 'cherry-pick', 'revert'].includes(operation)) return;
     const request = { action: 'abort', source: operation, sourceSHA: context.git.snapshot?.head ?? '', target: '', targetSHA: '' };
-    confirm.ask({ title: `Abort ${operation}?`, body: `Return this checkout to its state before the ${operation}?`, detail: 'Conflict resolutions made during this operation will be discarded.', confirmLabel: `Abort ${operation}`, onConfirm: () => void this.execute(context, request) });
+    confirm.ask({ title: `Abort ${operation}?`, body: '', detail: `Returns this checkout to its state before the ${operation}. Conflict resolutions made so far are discarded.`, confirmLabel: `Abort ${operation}`, onConfirm: () => void this.execute(context, request) });
   }
   private async copy(text: string) {
     try { await navigator.clipboard.writeText(text); } catch { this.context().git.error = 'Could not copy to the clipboard.'; }

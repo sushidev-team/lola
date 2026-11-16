@@ -198,7 +198,8 @@
     const s = nameOf(stack);
     confirm.ask({
       title: "Add to stack?",
-      body: `Add ${p} to stack ${s}?`,
+      subject: `${p} → ${s}`,
+      body: "",
       detail:
         "Its Linear filter, agent and write-back settings are kept but ignored while it is part of the stack; it is checked out for issues the stack picks up that carry its labels.",
       confirmLabel: "Add",
@@ -210,7 +211,8 @@
   function askLeaveStack(project: string, stack: string, to?: ProjectTarget) {
     confirm.ask({
       title: "Remove from stack?",
-      body: `Remove ${nameOf(project)} from stack ${nameOf(stack)}?`,
+      subject: `${nameOf(project)} ← ${nameOf(stack)}`,
+      body: "",
       detail: "It polls with its own Linear filter, agent and write-back settings again.",
       confirmLabel: "Remove",
       onConfirm: async () => {
@@ -226,6 +228,9 @@
   let rowMenu = $state<{ x: number; y: number; name: string; picking: boolean } | null>(null);
   const menuName = $derived(rowMenu?.name ?? "");
   const menuStack = $derived(rowMenu ? memberOf(store.projects, rowMenu.name) : "");
+  // Projects a stack's menu can pull in: not a stack, not already in any stack
+  // (a member of another stack leaves that one first).
+  const joinable = $derived(store.projects.filter((x) => !isStack(x) && !memberOf(store.projects, x.name)));
 
   function openRowMenu(e: MouseEvent, name: string) {
     const p = store.projectByName(name);
@@ -250,7 +255,8 @@
   function askRemoveGroup(name: string, label: string) {
     confirm.ask({
       title: "Remove group?",
-      body: `Remove the group "${label}".`,
+      subject: label,
+      body: "",
       // Said plainly because the opposite is the reasonable fear: this is the
       // one "remove" in the sidebar that costs nothing but the folder.
       detail: "Its projects move back to the top level — nothing is deleted.",
@@ -825,6 +831,15 @@
           askLeaveStack(name, stack);
         }}>Remove from stack</MenuItem
       >
+    {:else if !rowMenu?.picking && store.projectByName(menuName) && isStack(store.projectByName(menuName)!)}
+      <div class="my-1 border-t border-edge"></div>
+      <MenuItem
+        icon="◆"
+        trailing="›"
+        disabled={joinable.length === 0}
+        title={joinable.length === 0 ? "Every project is already in a stack" : undefined}
+        onclick={() => rowMenu && (rowMenu = { ...rowMenu, picking: true })}>Add project…</MenuItem
+      >
     {:else if !rowMenu?.picking && !isStack(store.projectByName(menuName)!)}
       <div class="my-1 border-t border-edge"></div>
       <!-- A submenu in place: the stack list replaces the root items. -->
@@ -835,6 +850,17 @@
         title={stacks.length === 0 ? "No stacks yet — add one with + → New stack" : undefined}
         onclick={() => rowMenu && (rowMenu = { ...rowMenu, picking: true })}>Add to stack…</MenuItem
       >
+    {:else if rowMenu?.picking && store.projectByName(menuName) && isStack(store.projectByName(menuName)!)}
+      {#each joinable as pr (pr.name)}
+        <MenuItem
+          icon="◆"
+          onclick={() => {
+            const stack = menuName;
+            rowMenu = null;
+            askJoinStack(pr.name, stack);
+          }}>{displayName(pr)}</MenuItem
+        >
+      {/each}
     {:else if rowMenu?.picking}
       {#each stacks as st (st.name)}
         <MenuItem

@@ -158,7 +158,7 @@ describe("SessionMenu", () => {
     await fireEvent.click(screen.getByRole("menuitem", { name: "Switch to codex" }));
     expect(sessionMenu.request).toBeNull();
     expect(confirm.request?.title).toBe("Switch agent?");
-    expect(confirm.request?.body).toBe("Switch ENG-1 from claude to codex?");
+    expect(confirm.request?.subject).toBe("ENG-1: claude → codex");
     expect(confirm.request?.detail).toBe("The pane is replaced on the same worktree.");
     expect(confirm.request?.confirmLabel).toBe("Switch");
   });

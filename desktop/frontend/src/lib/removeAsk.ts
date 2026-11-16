@@ -13,7 +13,8 @@ const name = (id: string) => {
 export function askRemoveProject(project: string) {
   confirm.ask({
     title: "Remove project?",
-    body: `Remove ${name(project)} from lola?`,
+    subject: name(project),
+    body: "",
     detail: "Only lola's configuration changes: the repository on disk, running sessions and their worktrees are left alone.",
     confirmLabel: "Remove",
     onConfirm: () => void store.removeProject(project),
@@ -30,7 +31,8 @@ export function askRemoveStack(stack: string, onConfirmed?: () => void) {
   const members = store.projects.filter((p) => p.stack === stack);
   confirm.ask({
     title: "Remove stack?",
-    body: `Remove stack ${name(stack)}?`,
+    subject: name(stack),
+    body: "",
     detail: members.length
       ? "Checked projects stay in lola on their own; unchecked ones are removed with the stack. Repositories on disk are left alone."
       : "Repositories on disk are left alone.",

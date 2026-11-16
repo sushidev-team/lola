@@ -175,3 +175,47 @@ func TestDiscardUnstagedRefusesIntentToAddWithoutErasingOtherChanges(t *testing.
 		t.Fatal("changed another file")
 	}
 }
+
+func TestDiscardUnstagedCanTargetSingleFiles(t *testing.T) {
+	dir := repo(t)
+	c := Client{}
+	ctx := context.Background()
+	write(t, dir, "a", "a\n")
+	write(t, dir, "b", "b\n")
+	testGit(t, dir, "add", ".")
+	testGit(t, dir, "commit", "-m", "base")
+	write(t, dir, "a", "a changed\n")
+	write(t, dir, "b", "b changed\n")
+	write(t, dir, "new", "untracked\n")
+	if _, err := c.PrepareDiscard(ctx, dir, "missing"); err == nil {
+		t.Fatal("accepted a path with no unstaged change")
+	}
+	plan, err := c.PrepareDiscard(ctx, dir, "a")
+	if err != nil || len(plan.Tracked) != 1 || len(plan.Untracked) != 0 {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	if err = c.DiscardUnstaged(ctx, dir, plan.Token, "b"); err == nil {
+		t.Fatal("a token for one file authorised another")
+	}
+	if err = c.DiscardUnstaged(ctx, dir, plan.Token, "a"); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{"a": "a\n", "b": "b changed\n", "new": "untracked\n"} {
+		if b, e := os.ReadFile(filepath.Join(dir, path)); e != nil || string(b) != want {
+			t.Fatalf("%s=%q err=%v", path, b, e)
+		}
+	}
+	plan, err = c.PrepareDiscard(ctx, dir, "new")
+	if err != nil || len(plan.Untracked) != 1 {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	if err = c.DiscardUnstaged(ctx, dir, plan.Token, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, e := os.Stat(filepath.Join(dir, "new")); !os.IsNotExist(e) {
+		t.Fatal("untracked file remains")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "b")); string(b) != "b changed\n" {
+		t.Fatal("other file touched")
+	}
+}

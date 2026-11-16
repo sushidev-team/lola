@@ -159,7 +159,8 @@
     confirm.ask({
       title: `Merge PR #${target.number} anyway?`,
       body: current.mergeBlocked,
-      detail: `${mergeLabel} ${repo}#${target.number}? GitHub will still enforce branch protections.`,
+      subject: `${repo}#${target.number}`,
+      detail: "GitHub still enforces branch protections.",
       confirmLabel: mergeLabel,
       onConfirm: () => {
         if (view !== viewGeneration || key !== identity || !canMerge || current?.head !== head || current?.repo !== repo || mergeMethod !== method) return;

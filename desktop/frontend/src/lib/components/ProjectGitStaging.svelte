@@ -111,21 +111,22 @@
   function toggle(key: string) { const next = new Set(collapsed); if (next.has(key)) next.delete(key); else next.add(key); collapsed = next; }
   function folders(entries: GitFile[], prefix: string) { return [...new Set(entries.map(file => file.path.slice(prefix.length)).filter(path => path.includes('/')).map(path => path.slice(0, path.indexOf('/'))))].sort((a,b) => a.localeCompare(b)); }
   function status(file: GitFile, staged: boolean) { return file.conflict ? '!' : file.untracked ? '+' : (staged ? file.index : file.worktree).trim() || 'M'; }
-  async function discardAll() {
+  async function discardFiles(only?: string[]) {
     if (git.busy || !unstaged.length || conflicts || data?.operation) return;
     const state = git, historyRef = ref, count = limit, branch = data?.branch || 'detached HEAD';
-    const plan = await state.prepareDiscard();
+    const plan = await state.prepareDiscard(only);
     if (!plan || !mounted || state !== git) return;
     const total = plan.tracked.length + plan.untracked.length;
     if (!total) { await state.load(historyRef, count); return; }
     confirm.ask({
-      title: 'Discard all unstaged changes?',
-      body: `Discard changes in ${total} ${total === 1 ? 'file' : 'files'} on ${branch}?`,
-      detail: [plan.tracked.length ? `Restore ${plan.tracked.length} tracked ${plan.tracked.length === 1 ? 'file' : 'files'} to the staged version.` : '', plan.untracked.length ? `Permanently delete ${plan.untracked.length} untracked ${plan.untracked.length === 1 ? 'file' : 'files'}.` : '', 'Staged changes and ignored files are kept. This cannot be undone.'].filter(Boolean).join(' '),
+      title: only ? (total === 1 ? 'Discard changes in this file?' : `Discard changes in ${total} files?`) : 'Discard all unstaged changes?',
+      subject: only ? [...plan.tracked, ...plan.untracked].join('\n') : `${total} ${total === 1 ? 'file' : 'files'} on ${branch}`,
+      body: '',
+      detail: [plan.tracked.length ? `Restore ${plan.tracked.length} tracked ${plan.tracked.length === 1 ? 'file' : 'files'} to the staged version.` : '', plan.untracked.length ? `Permanently delete ${plan.untracked.length} untracked ${plan.untracked.length === 1 ? 'file' : 'files'}.` : '', only ? 'Staged changes are kept. This cannot be undone.' : 'Staged changes and ignored files are kept. This cannot be undone.'].filter(Boolean).join(' '),
       confirmLabel: 'Discard changes',
       onConfirm: () => {
         if (!mounted || state !== git) return;
-        void state.discardUnstaged(plan.token, historyRef, count);
+        void state.discardUnstaged(plan.token, historyRef, count, only);
       },
     });
   }
@@ -188,7 +189,10 @@
       <span class={`file-status ${entry.conflict ? 'text-bad' : entry.untracked ? 'text-good' : 'text-orange'}`}>{status(entry, staged)}</span>
       <GitFilePath path={entry.path} leafOnly={tree}/>
     </Button>
+    <span class="row-actions">
+    {#if !staged && !entry.conflict}<Button size="xs" icon class="discard-file" disabled={!!git.busy || !!data?.operation || conflicts} aria-label={targets.length > 1 ? `Discard changes in ${targets.length} selected files` : `Discard changes in ${entry.path}`} title={targets.length > 1 ? `Discard changes in ${targets.length} selected files…` : 'Discard changes in this file…'} onclick={() => void discardFiles(targets)}><Icon name="trash-2" size={13} /></Button>{/if}
     <Button size="xs" class={staged ? 'stage-action unstage-action' : 'stage-action'} disabled={!!git.busy} aria-label={targets.length > 1 ? `${staged ? 'Unstage' : 'Stage'} ${targets.length} selected files` : `${staged ? 'Unstage' : 'Stage'} ${entry.path}`} onclick={() => onact(staged ? 'unstage' : 'stage', targets)}>{staged ? 'Unstage' : 'Stage'} {targets.length > 1 ? `${targets.length} files` : 'file'}</Button>
+    </span>
   </div>
 {/snippet}
 
@@ -205,7 +209,7 @@
 {/snippet}
 
 <div class="staging-panel" class:ai-working={!!git.aiCommit} aria-busy={!!git.aiCommit}>
-  <div class="inspector-heading"><h3>Changes <span>{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data?.files.length ?? '—'}{/if}</span></h3><Button size="xs" variant="accent" aria-label="Commit all changes with AI" title="Group related files into commits using AI. Mixed changes within a file stay together." disabled={!data?.files.length || !!git.busy || git.draftingMessage || conflicts || !!data?.operation} loading={git.busy === 'prepare-ai-commit'} onclick={() => void aiCommit()}><Icon name="sparkles" size={13}/>AI commit</Button><div class="view-switch" role="group" aria-label="Changed file layout"><Button size="xs" icon disabled={!!git.aiCommit} selected={!tree} aria-label="File list view" title="File list" onclick={() => setTree(false)}><Icon name="list" size={14} /></Button><Button size="xs" icon disabled={!!git.aiCommit} selected={tree} aria-label="File tree view" title="File tree" onclick={() => setTree(true)}><Icon name="folder" size={14} /></Button></div><Button size="xs" icon variant="danger" class="discard-all" aria-label="Discard all unstaged changes" title={data?.operation || conflicts ? 'Finish the current operation before discarding changes' : 'Discard all unstaged changes…'} disabled={!unstaged.length || !!git.busy || !!data?.operation || conflicts} loading={git.busy === 'prepare-discard' || git.busy === 'discard'} onclick={() => void discardAll()}><Icon name="trash-2" size={14} /></Button></div>
+  <div class="inspector-heading"><h3>Changes <span>{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data?.files.length ?? '—'}{/if}</span></h3><Button size="xs" variant="accent" aria-label="Commit all changes with AI" title="Group related files into commits using AI. Mixed changes within a file stay together." disabled={!data?.files.length || !!git.busy || git.draftingMessage || conflicts || !!data?.operation} loading={git.busy === 'prepare-ai-commit'} onclick={() => void aiCommit()}><Icon name="sparkles" size={13}/>AI commit</Button><div class="view-switch" role="group" aria-label="Changed file layout"><Button size="xs" icon disabled={!!git.aiCommit} selected={!tree} aria-label="File list view" title="File list" onclick={() => setTree(false)}><Icon name="list" size={14} /></Button><Button size="xs" icon disabled={!!git.aiCommit} selected={tree} aria-label="File tree view" title="File tree" onclick={() => setTree(true)}><Icon name="folder" size={14} /></Button></div><Button size="xs" icon variant="danger" class="discard-all" aria-label="Discard all unstaged changes" title={data?.operation || conflicts ? 'Finish the current operation before discarding changes' : 'Discard all unstaged changes…'} disabled={!unstaged.length || !!git.busy || !!data?.operation || conflicts} loading={git.busy === 'prepare-discard' || git.busy === 'discard'} onclick={() => void discardFiles()}><Icon name="trash-2" size={14} /></Button></div>
   {#if git.aiCommit}
     {@const job = git.aiCommit}
     <div class="ai-progress" class:stopping={job.stopping}>
@@ -280,8 +284,11 @@
   .staging-panel :global(.stage-all),.staging-panel :global(.stage-selected),.staging-panel :global(.unstage-all),.staging-panel :global(.unstage-selected),.stage-file :global(.stage-action) { --stage-color:var(--color-good); color:white; border:1px solid var(--stage-color); background:color-mix(in srgb,var(--stage-color) 35%,#14171f); font-weight:600; transition:none; }
   .staging-panel :global(.unstage-all),.staging-panel :global(.unstage-selected),.stage-file :global(.unstage-action) { --stage-color:var(--color-bad); }
   .staging-panel :global(.stage-all:enabled:hover),.staging-panel :global(.stage-selected:enabled:hover),.staging-panel :global(.unstage-all:enabled:hover),.staging-panel :global(.unstage-selected:enabled:hover),.stage-file :global(.stage-action:enabled:hover) { color:white; background:color-mix(in srgb,var(--stage-color) 45%,#14171f); }
-  .stage-file :global(.stage-action) { position:absolute; right:0; top:2px; height:24px; opacity:0; pointer-events:none; font-size:12px; font-weight:600; transition:none; }
-  .stage-file:hover :global(.stage-action),.stage-file:focus-within :global(.stage-action) { opacity:1; pointer-events:auto; }
+  .stage-file .row-actions { position:absolute; right:0; top:2px; display:flex; gap:4px; opacity:0; pointer-events:none; }
+  .stage-file :global(.stage-action) { height:24px; font-size:12px; font-weight:600; transition:none; }
+  .stage-file :global(.discard-file) { height:24px; color:var(--color-bad); border:1px solid var(--color-bad); background:color-mix(in srgb,var(--color-bad) 16%,var(--color-canvas)); }
+  .stage-file :global(.discard-file:enabled:hover) { background:color-mix(in srgb,var(--color-bad) 28%,var(--color-canvas)); }
+  .stage-file:hover .row-actions,.stage-file:focus-within .row-actions { opacity:1; pointer-events:auto; }
   .commit-options { display:flex; align-items:center; gap:6px; }
   .commit-options .amend-option { flex:1; min-width:0; }
   .commit-options :global(.signing-icon) { margin-left:auto; color:var(--color-ink-2); }
@@ -312,5 +319,5 @@
   .amend-option code { margin-left:auto; color:var(--color-ink-2); font-size:12px; font-weight:400; }
   .conflict-note { color:var(--color-warn); font-size:12px; }
   @media (prefers-reduced-motion: reduce) { .ai-progress::after { animation:none; width:100%; opacity:.4; } .ai-progress :global(.ai-spinner) { animation:none; } :global(.folder-chevron),.stage-file :global(.stage-action) { transition:none; } }
-  @media (hover:none) { .stage-file :global(.stage-action) { opacity:1; pointer-events:auto; } }
+  @media (hover:none) { .stage-file .row-actions { opacity:1; pointer-events:auto; } }
 </style>

@@ -5,7 +5,7 @@ import ProjectGitStaging from './ProjectGitStaging.svelte';
 import { ProjectGitState } from '$lib/projectgit.svelte';
 import { confirm } from '$lib/confirm.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
-const api = vi.hoisted(() => ({ PrepareAICommit: vi.fn(), StartAICommit: vi.fn(), AICommitStatus: vi.fn(), CancelAICommit: vi.fn(), DraftCommitMessage: vi.fn(), PrepareDiscard: vi.fn(), DiscardUnstaged: vi.fn(), Snapshot: vi.fn(), Identities: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), AmendNeedsConfirmation: vi.fn(), LastCommitMessage: vi.fn() }));
+const api = vi.hoisted(() => ({ PrepareAICommit: vi.fn(), StartAICommit: vi.fn(), AICommitStatus: vi.fn(), CancelAICommit: vi.fn(), DraftCommitMessage: vi.fn(), PrepareDiscard: vi.fn(), DiscardUnstaged: vi.fn(), PrepareDiscardPaths: vi.fn(), DiscardPaths: vi.fn(), Snapshot: vi.fn(), Identities: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), AmendNeedsConfirmation: vi.fn(), LastCommitMessage: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 const head = 'a'.repeat(40);
 function snapshot(): GitSnapshot { return { path:'/repo',branch:'main',head,upstream:'origin/main',refs:[],remotes:[],commits:[],worktrees:[],hasMore:false,signing:{enabled:true,format:'ssh',key:''}, files:[{path:'src/app.ts',oldPath:'',index:'M',worktree:' ',untracked:false,conflict:false},{path:'src/new.ts',oldPath:'',index:'?',worktree:'?',untracked:true,conflict:false}] }; }
@@ -34,11 +34,21 @@ describe('Project Git staging',()=>{
    await waitFor(()=>expect(git.error).toContain('changed'));expect(api.Amend).not.toHaveBeenCalled();expect(confirm.request).toBeNull();
  });
 
+ it('discards a single unstaged file only after confirmation',async()=>{
+   const {git}=setup();api.PrepareDiscardPaths.mockResolvedValue({token:'one',tracked:['src/partial.ts'],untracked:[]});
+   const row=screen.getAllByRole('button',{name:/^Discard changes in /}).find(b=>b.getAttribute('aria-label')?.includes('src/'))!;
+   const path=row.getAttribute('aria-label')!.replace('Discard changes in ','');
+   await fireEvent.click(row);await waitFor(()=>expect(confirm.request).not.toBeNull());
+   expect(api.PrepareDiscardPaths).toHaveBeenCalledWith('lola','',[path]);expect(api.DiscardPaths).not.toHaveBeenCalled();
+   expect(confirm.request?.title).toBe('Discard changes in this file?');
+   confirm.accept();await waitFor(()=>expect(api.DiscardPaths).toHaveBeenCalledWith('lola','','one',[path]));await waitFor(()=>expect(git.busy).toBe(''));
+   expect(api.DiscardUnstaged).not.toHaveBeenCalled();
+ });
  it('previews discard, explains untracked deletion, and writes only after confirmation',async()=>{
    const {git}=setup();api.PrepareDiscard.mockResolvedValue({token:'reviewed-files',tracked:['src/partial.ts'],untracked:['src/new.ts']});
    const button=screen.getByRole('button',{name:'Discard all unstaged changes'});
    await fireEvent.click(button);await waitFor(()=>expect(confirm.request).not.toBeNull());
-   expect(confirm.request?.body).toContain('2 files on main');expect(confirm.request?.detail).toContain('Permanently delete 1 untracked file');expect(confirm.request?.detail).toContain('Staged changes and ignored files are kept');
+   expect(confirm.request?.subject).toContain('2 files on main');expect(confirm.request?.detail).toContain('Permanently delete 1 untracked file');expect(confirm.request?.detail).toContain('Staged changes and ignored files are kept');
    expect(api.DiscardUnstaged).not.toHaveBeenCalled();confirm.cancel();expect(api.DiscardUnstaged).not.toHaveBeenCalled();
    await fireEvent.click(button);await waitFor(()=>expect(confirm.request).not.toBeNull());confirm.accept();
    await waitFor(()=>expect(api.DiscardUnstaged).toHaveBeenCalledWith('lola','','reviewed-files'));await waitFor(()=>expect(git.busy).toBe(''));
