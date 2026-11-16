@@ -39,8 +39,8 @@
     {/if}
     <!-- A daemon that is down answers nothing, and that says nothing about the log. -->
     {#if store.alive}<FeedNotice {sessionId} health={health} />{/if}
-    {#if showMap}<ActivityMap {sessionId} />{/if}
-    <StoryLine {sessionId} {onside} {onraw} account={!side} />
+    {#if showMap}<ActivityMap {sessionId} {onraw} />{/if}
+    <StoryLine {sessionId} {onside} onraw={showMap ? undefined : onraw} account={!side} />
   </div>
   <Timeline {sessionId} />
   {#if maxBlock}

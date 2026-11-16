@@ -9,6 +9,7 @@
   import { inScope } from "$lib/turns";
   import { hasReport } from "$lib/sessionview";
   import Button from "../Button.svelte";
+  import RawToggle from "./RawToggle.svelte";
   import Chevron from "../Chevron.svelte";
   import BoardPanel from "../BoardPanel.svelte";
 
@@ -75,7 +76,7 @@
         {#if onside}<Button size="xs" title="Show the agent's account beside the story" onclick={onside}>Sidebar</Button>{/if}
         <Button size="xs" aria-expanded={open} aria-haspopup="dialog" onclick={() => (view.reportOpen = !open)}>Report <Chevron open={!open} class={open ? "-rotate-90" : ""} /></Button>
         {/if}
-        {#if onraw}<Button size="xs" title="Show the raw terminal instead of the conversation" data-raw-toggle onclick={onraw}>Raw</Button>{/if}
+        {#if onraw}<RawToggle onclick={onraw} />{/if}
       </span>
     </div>
     {#if open}

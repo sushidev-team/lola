@@ -4,7 +4,8 @@
   import { store } from '$lib/store.svelte';
   import { sessionActivity, activitySegments, activityDuration, activityStatus } from '$lib/sessionactivity';
   import { tooltip } from '$lib/tooltip';
-  let { sessionId }: { sessionId: string } = $props();
+  import RawToggle from './RawToggle.svelte';
+  let { sessionId, onraw }: { sessionId: string; onraw?: () => void } = $props();
   let focusId = $state('');
   const f = $derived(feed.view(sessionId));
   const view = $derived(ssh.view(sessionId));
@@ -64,9 +65,10 @@
   }
 </script>
 
-{#if map.length}
-  <nav class="cv-activity-map" aria-label={f.more ? 'Activity map of loaded recent history' : 'Conversation activity map'}>
-    <div role="group" onpointerdown={startDrag} onpointermove={scrub} onpointerup={finishDrag} onpointercancel={finishDrag} onlostpointercapture={finishDrag} class="cv-activity-track" class:cv-activity-scrubbing={!!drag} style={`--activity-count:${map.length}`} aria-label="Entries sized by duration with pauses compressed; arrow keys move between entries">
+{#if map.length || onraw}
+  <nav class="cv-activity-map flex items-center gap-3" aria-label={f.more ? 'Activity map of loaded recent history' : 'Conversation activity map'}>
+    {#if map.length}
+    <div role="group" onpointerdown={startDrag} onpointermove={scrub} onpointerup={finishDrag} onpointercancel={finishDrag} onlostpointercapture={finishDrag} class="cv-activity-track min-w-0 flex-1" class:cv-activity-scrubbing={!!drag} style={`--activity-count:${map.length}`} aria-label="Entries sized by duration with pauses compressed; arrow keys move between entries">
       {#each map as entry, i (entry.event.id)}
         {@const e = entry.event}
         <button type="button" class="cv-activity-band" data-activity-id={e.id} data-activity-kind={e.kind} data-failed={e.status === 'error'} data-running={e.status === 'running'} aria-current={e.id === selectedId ? 'location' : undefined}
@@ -75,5 +77,7 @@
           aria-label={label(entry)} use:tooltip={drag ? '' : { instant: true, text: e.label, heading: e.kind === 'tests' ? 'Tests' : e.kind === 'files' ? 'Files' : e.kind === 'commands' ? 'Command' : 'Agent update', meta: [e.status ? activityStatus(e.status) : '', entry.elapsed ? activityDuration(entry.elapsed) : 'Duration not recorded', entry.gapMs ? `${activityDuration(entry.gapMs)} pause before` : ''].filter(Boolean).join(' · '), tone: e.kind }} onclick={event => { if (event.detail === 0) jump(e.id); }}></button>
       {/each}
     </div>
+    {/if}
+    {#if onraw}<RawToggle onclick={onraw} />{/if}
   </nav>
 {/if}
