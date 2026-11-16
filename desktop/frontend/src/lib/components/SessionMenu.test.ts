@@ -116,6 +116,44 @@ describe("SessionMenu", () => {
     open.mockRestore();
   });
 
+  it("Project settings opens the session's project form, and is absent without a configured project", async () => {
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    const { unmount } = render(SessionMenu);
+    expect(screen.queryByRole("menuitem", { name: "Project settings" })).not.toBeInTheDocument();
+    unmount();
+
+    store.projects = [{ name: "acme", label: "Acme" } as ProjectInfo];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Project settings" }));
+    expect(nav.overlay).toBe("project");
+    expect(nav.overlayProject).toBe("acme");
+    expect(sessionMenu.request).toBeNull();
+    nav.closeOverlay();
+  });
+
+  it("a stack session expands Project settings into the stack and each app's project", async () => {
+    store.projects = [
+      { name: "acme", label: "Acme", kind: "stack" },
+      { name: "acme-web", label: "Web", stack: "acme" },
+      { name: "acme-api", label: "API", stack: "acme" },
+    ] as ProjectInfo[];
+    store.sessions = [fakeSession({ stack: true, apps: [{ name: "acme-web" }, { name: "acme-api" }] as never })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    expect(screen.queryByRole("menuitem", { name: "API" })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("menuitem", { name: "Project settings" });
+    await fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(sessionMenu.request).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Acme" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Web" })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "API" }));
+    expect(nav.overlay).toBe("project");
+    expect(nav.overlayProject).toBe("acme-api");
+    nav.closeOverlay();
+  });
+
   it("offers revive for ended sessions while PR access stays outside the menu", () => {
     store.sessions = [fakeSession({ prNumber: 7, prUrl: "https://x/pr/7", status: "dead" })];
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };

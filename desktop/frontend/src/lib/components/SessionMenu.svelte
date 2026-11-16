@@ -17,6 +17,30 @@
   const AGENT_KINDS = ["claude", "codex", "opencode"] as const;
   const otherAgents = $derived(session?.location ? [] : AGENT_KINDS.filter((k) => k !== (session?.agent || "claude")));
 
+  // The projects whose settings this session runs on. A plain session has one;
+  // a STACK session has the stack (issue side) plus one member project per app
+  // it checked out. A project-free temporary session, or a project since
+  // removed from the config, has none. Several targets fold behind one row
+  // that expands in place, so the menu stays short until asked.
+  const projectTargets = $derived.by(() => {
+    if (!session) return [];
+    const names = [session.project, ...(session.stack ? (session.apps ?? []).map((a) => a.name) : [])];
+    return [...new Set(names)]
+      .filter((n) => n && store.projects.some((p) => p.name === n))
+      .map((n) => ({ name: n, label: store.displayNameFor(n) }));
+  });
+  // The name arrives as an argument, read BEFORE the close: closing empties
+  // the derived list, so a lazy read inside the action would find nothing.
+  function openProject(name: string) {
+    sessionMenu.close();
+    nav.openOverlay("project", name);
+  }
+  let projectsOpen = $state(false);
+  $effect(() => {
+    void req;
+    projectsOpen = false;
+  });
+
   const sshConn = $derived(urgentConn(session?.ssh?.connections));
   const sshLive = $derived(!!sshConn && !isEnded(sshConn));
 
@@ -71,6 +95,16 @@
     <MenuItem icon="✎" onclick={() => run(s => nav.openOverlay("rename-session", s.id))}>Rename session…</MenuItem>
     {#if session.worktree}
       <MenuItem icon="◆" title={session.worktree} onclick={() => run(s => store.openFolder(s.worktree))}>Open in Finder</MenuItem>
+    {/if}
+    {#if projectTargets.length === 1}
+      <MenuItem icon="⚙" onclick={() => openProject(projectTargets[0].name)}>Project settings</MenuItem>
+    {:else if projectTargets.length > 1}
+      <MenuItem icon="⚙" trailing={projectsOpen ? "▴" : "▾"} aria-expanded={projectsOpen} onclick={() => (projectsOpen = !projectsOpen)}>Project settings</MenuItem>
+      {#if projectsOpen}
+        {#each projectTargets as t (t.name)}
+          <MenuItem title={t.name} onclick={() => openProject(t.name)}>{t.label}</MenuItem>
+        {/each}
+      {/if}
     {/if}
     {#if sshConn && sshLive}
       <div class="my-1 h-px bg-edge/60"></div>
