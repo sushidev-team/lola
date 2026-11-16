@@ -12,14 +12,22 @@
   import SidebarVersion from "./SidebarVersion.svelte";
   import SidebarActivity from "./SidebarActivity.svelte";
   import SidebarRoster from "./SidebarRoster.svelte";
-  import Tabs from "./Tabs.svelte";
+  import { toggleGitWorkspace } from "$lib/workspacenav";
 
   let sessionsArea = $state<HTMLDivElement>();
 
-  const TABS = [
-    { id: "sessions", label: "Sessions" },
-    { id: "projects", label: "Projects" },
+  const MODES = [
+    { id: "code", label: "Code" },
+    { id: "git", label: "Git" },
   ];
+
+  // Code and Git are two workspaces over the same projects. The switch sits beside the logo so it
+  // is one reach away from anywhere; Git remembers where Code was (nav.returnFromGit).
+  function pickMode(id: string) {
+    if (id === "git") { if (!nav.inGit) toggleGitWorkspace(); }
+    else if (nav.inGit) nav.returnFromGit();
+    else if (nav.view !== "cockpit") nav.goCockpit(nav.scoped ? nav.project : "");
+  }
 
   // Sidebar makes ZERO store reads. It is pure layout; every child reads
   // $lib/store.svelte / $lib/nav.svelte itself. A container that computes rows
@@ -47,6 +55,17 @@
        here would be neither draggable nor reliably clickable. -->
   <div class="drag flex min-w-0 items-center gap-2 overflow-hidden pr-3 pl-[82px]">
     <LolaLogo class="h-[18px] w-auto min-w-0 shrink" />
+    <div role="group" aria-label="Workspace" class="ml-1 flex shrink-0 items-center rounded-md bg-panel p-0.5">
+      {#each MODES as m (m.id)}
+        <button
+          type="button"
+          aria-pressed={(m.id === "git") === nav.inGit}
+          class="h-5 rounded px-2 text-sm transition-colors {(m.id === 'git') === nav.inGit ? 'bg-sel font-medium text-ink' : 'text-faint hover:text-ink'}"
+          title={m.id === "git" ? "Git workspace (⌘⇧G)" : "Sessions and code"}
+          onclick={() => pickMode(m.id)}>{m.label}</button
+        >
+      {/each}
+    </div>
     <Button
       icon
       class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
@@ -56,19 +75,18 @@
     >
   </div>
 
-  <!-- Both tabs stay mounted and the other one is hidden, so switching keeps each one's scroll
-       and its folders. Projects is the old body, unmoved: folders and drag are untouched. -->
-  <div class="grid min-h-0 min-w-0" style="grid-template-rows:auto minmax(0,1fr) auto auto">
-    <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => nav.setSidebarTab(t === "projects" ? "projects" : "sessions")} />
-    <div bind:this={sessionsArea} class="grid min-h-0 min-w-0 {nav.sidebarTab === 'sessions' ? '' : 'hidden'}" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
+  <!-- Projects on the left, the sessions of the chosen project (or all) beside them. Both are always
+       mounted, so each keeps its scroll and folders. -->
+  <div class="grid min-h-0 min-w-0" style="grid-template-columns:minmax(168px,38%) minmax(0,1fr)">
+    <div class="grid min-h-0 min-w-0 border-r border-edge" style="grid-template-rows:minmax(0,1fr) auto auto">
+      <div class="min-h-0 overflow-auto"><SidebarProjects /></div>
+      <SidebarActivity />
+      <SidebarVersion />
+    </div>
+    <div bind:this={sessionsArea} class="grid min-h-0 min-w-0" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
       <SidebarSessionTools contextTarget={sessionsArea} />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
     </div>
-    <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'projects' ? '' : 'hidden'}" style="grid-template-rows:minmax(0,1fr) auto">
-      <div class="min-h-0 overflow-auto"><SidebarProjects /></div>
-      <SidebarActivity />
-    </div>
-    <SidebarVersion />
   </div>
 
   <!-- 3. Utility row -->

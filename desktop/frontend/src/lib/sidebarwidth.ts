@@ -1,6 +1,6 @@
-export const SIDEBAR_DEFAULT = 320;
-export const SIDEBAR_MIN = 240;
-export const SIDEBAR_MAX = 480;
+export const SIDEBAR_DEFAULT = 540;
+export const SIDEBAR_MIN = 440;
+export const SIDEBAR_MAX = 760;
 export const WORKSPACE_MIN = 560;
 export function sidebarLimit(windowWidth: number): number {
   return Math.max(0, Math.min(SIDEBAR_MAX, windowWidth - WORKSPACE_MIN));

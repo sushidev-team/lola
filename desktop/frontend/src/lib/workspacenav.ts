@@ -15,7 +15,6 @@ export function toggleGitWorkspace() {
     .map(name => repositories.find(project => project.name === name)).find(Boolean);
   if (!project) {
     nav.goHome();
-    nav.setSidebarTab('projects');
     return;
   }
   nav.rememberGitProject(project.name);

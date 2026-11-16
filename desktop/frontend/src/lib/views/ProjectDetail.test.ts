@@ -139,7 +139,6 @@ describe("ProjectDetail", () => {
     await fireEvent.click(screen.getByRole("button", { name: /Implement login/ }));
     expect(nav.view).toBe("cockpit");
     expect(nav.focusedTerm).toBe("s1");
-    expect(nav.sidebarTab).toBe("sessions");
     expect(nav.project).toBe("acme");
     expect(nav.sidebarQuery).toBe("");
   });

@@ -456,7 +456,12 @@
 
   function openProject(name: string) {
     if (suppressClick) return;
-    nav.goDetail(name);
+    // Git mode: a project is a workspace to open. Code mode: it filters the sessions beside it,
+    // and picking the one already chosen clears the filter.
+    const p = store.projectByName(name);
+    if (nav.inGit && p?.path && !isStack(p)) nav.goDetail(name, "git");
+    else if (nav.inGit) nav.goDetail(name, "overview");
+    else nav.scopeTo(nav.scoped && nav.project === name ? "" : name);
   }
 
   function toggleGroup(name: string, collapsed: boolean) {
@@ -576,7 +581,7 @@
   {@const stack = memberOf(store.projects, p.name)}
   {@const d = pollDot(p, stack)}
   {@const match = searchMatch(query, displayName(p), p.repo, p.path)}
-  {@const active = ["detail", "prpicker", "ticketpicker"].includes(nav.view) && nav.project === p.name}
+  {@const active = (nav.view === "cockpit" ? nav.scoped : ["detail", "prpicker", "ticketpicker"].includes(nav.view)) && nav.project === p.name}
   <NavRow
     label={displayName(p)}
     glyph={d.glyph}
@@ -585,7 +590,7 @@
     {active}
     title={stack ? d.hint : p.lastError
       ? `poll error: ${p.lastError}`
-      : isStack(p) ? "Open stack overview" : "Open project overview and Git"}
+      : nav.inGit ? "Open in Git" : "Show only this project's sessions"}
     onclick={() => openProject(p.name)}
     onkeydown={(e) => {
       // A member is placed by its stack, not by the arrangement keys.
@@ -700,6 +705,11 @@
       <SetupChecklist dismissKey="sidebar" hideWhenComplete optional={["poll", "linear"]} class="mb-2 rounded-md border border-dashed border-edge p-2" />
     {/if}
     {@const gap = drag?.kind === "group" ? groupTarget : target?.kind === "top" ? target.index : null}
+    {#if !nav.inGit}
+      <div class="pb-1">
+        <NavRow label="All sessions" glyph="∗" active={nav.view === "cockpit" && !nav.scoped} title="Show sessions from every project" onclick={() => nav.scopeTo("")} />
+      </div>
+    {/if}
     <!-- The sidebar owns scrolling; Activity has its own bounded footer. -->
     <div bind:this={listEl} class="min-w-0" class:select-none={!!drag}>
       <ul>

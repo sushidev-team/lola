@@ -9,8 +9,6 @@ export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "upda
 
 /** Webview-local sidebar preference. Deliberately NOT in config.toml. */
 const SIDEBAR_KEY = "lola.sidebar";
-/** Which of the sidebar's two tabs is on show. */
-const SIDEBAR_TAB_KEY = "lola.sidebar.tab";
 /** The right-hand column of the project views (facts, Git inspector). */
 const ASIDE_KEY = "lola.aside";
 const PROJECT_TAB_KEY = "lola.project.tab";
@@ -31,21 +29,11 @@ function readLastGitProject(): string {
   catch { return ""; }
 }
 
-export type SidebarTab = "sessions" | "projects";
-
 function readSidebarWidth(): number {
   try {
     const value = Number(localStorage.getItem("lola.sidebar.width") ?? SIDEBAR_DEFAULT);
     return Number.isFinite(value) ? Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, value)) : SIDEBAR_DEFAULT;
   } catch { return SIDEBAR_DEFAULT; }
-}
-
-function readSidebarTab(): SidebarTab {
-  try {
-    return localStorage.getItem(SIDEBAR_TAB_KEY) === "projects" ? "projects" : "sessions";
-  } catch {
-    return "sessions";
-  }
 }
 
 function readSeen(): Record<string, number> {
@@ -97,10 +85,10 @@ class Nav {
     this.preferredProjectTab = tab;
     try { localStorage.setItem(PROJECT_TAB_KEY, tab); } catch { /* keep the in-memory choice */ }
   }
-  private gitReturn: { view: View; project: string; scoped: boolean; projectTab: ProjectTab; selectedId: string; focusedTerm: string; sidebarTab: SidebarTab; sidebarBrowsing: boolean } | null = null;
+  private gitReturn: { view: View; project: string; scoped: boolean; projectTab: ProjectTab; selectedId: string; focusedTerm: string; sidebarBrowsing: boolean } | null = null;
   get inGit() { return this.view === "detail" && this.projectTab === "git"; }
   private rememberGitReturn() {
-    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, projectTab:this.projectTab, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarTab:this.sidebarTab, sidebarBrowsing:this.sidebarBrowsing};
+    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, projectTab:this.projectTab, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarBrowsing:this.sidebarBrowsing};
   }
   returnFromGit() {
     if (!this.inGit) return;
@@ -114,7 +102,6 @@ class Nav {
     this.selectedId = previous.selectedId;
     this.focusedTerm = previous.focusedTerm;
     this.sidebarBrowsing = previous.sidebarBrowsing;
-    this.setSidebarTab(previous.sidebarTab);
   }
   /** Project name backing detail/pickers and the cockpit's project scope. */
   project = $state<string>("");
@@ -141,7 +128,6 @@ class Nav {
     this.sidebarBrowsing = true;
     this.sidebarOpen = true;
     try { localStorage.setItem(SIDEBAR_KEY, "1"); } catch { /* best effort */ }
-    this.setSidebarTab("sessions");
     this.sidebarFocus++;
   }
   /**
@@ -151,8 +137,6 @@ class Nav {
    * throwing over.
    */
   sidebarOpen = $state(readSidebar());
-  /** The sidebar's tab. Projects is today's body, unchanged. */
-  sidebarTab = $state<SidebarTab>(readSidebarTab());
   /** Sidebar attention filter. Empty means all sessions. */
   triage = $state<string>("");
 
@@ -172,14 +156,6 @@ class Nav {
   toggleAside() {
     this.asideOpen = !this.asideOpen;
     try { localStorage.setItem(ASIDE_KEY, this.asideOpen ? "1" : "0"); } catch { /* best effort */ }
-  }
-  setSidebarTab(t: SidebarTab) {
-    this.sidebarTab = t;
-    try {
-      localStorage.setItem(SIDEBAR_TAB_KEY, t);
-    } catch {
-      /* the choice just doesn't persist */
-    }
   }
   private seen = $state<Record<string, number>>(readSeen());
   /** When the human last had this session open, 0 for never. */
@@ -213,7 +189,6 @@ class Nav {
     this.scoped = scopeProject !== "";
     this.project = scopeProject;
     this.dropFocus();
-    this.setSidebarTab("sessions");
   }
   goHome() {
     this.view = "home";
@@ -232,7 +207,15 @@ class Nav {
     this.scoped = false;
     this.view = "detail";
     this.dropFocus();
-    this.setSidebarTab("projects");
+  }
+  /**
+   * Filter the sessions column to one project ("" = all). Inside the cockpit the open session
+   * stays on screen; from any other view this returns to the cockpit.
+   */
+  scopeTo(name: string) {
+    if (this.view !== "cockpit") { this.goCockpit(name); return; }
+    this.scoped = name !== "";
+    this.project = name;
   }
   goPRPicker(name: string) {
     this.project = name;

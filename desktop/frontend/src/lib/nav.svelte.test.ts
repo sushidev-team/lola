@@ -35,7 +35,6 @@ describe("nav.openSession", () => {
     nav.focusSessions();
     expect(nav.focusedTerm).toBe("s1");
     expect(nav.sidebarOpen).toBe(true);
-    expect(nav.sidebarTab).toBe("sessions");
   });
   it("returns from project detail without turning it into a session filter", () => {
     nav.goCockpit("web");
@@ -51,7 +50,6 @@ describe("nav.goDetail", () => {
   it("returns from Git to the exact session and scope, including on repeated toggles", () => {
     nav.goCockpit("web");
     nav.openSession("s1", true);
-    nav.setSidebarTab("sessions");
     nav.goDetail("web", "git");
     nav.goDetail("other-repo", "git");
     nav.returnFromGit();
@@ -60,7 +58,6 @@ describe("nav.goDetail", () => {
     expect(nav.project).toBe("web");
     expect(nav.scoped).toBe(true);
     expect(nav.sidebarBrowsing).toBe(true);
-    expect(nav.sidebarTab).toBe("sessions");
     nav.openSession("s2");
     nav.goDetail("web", "git");
     nav.returnFromGit();
@@ -86,7 +83,6 @@ describe("nav.goDetail", () => {
     expect(nav.view).toBe("detail");
     expect(nav.scoped).toBe(false);
     expect(nav.project).toBe("nori");
-    expect(nav.sidebarTab).toBe("projects");
     expect(nav.focusedTerm).toBe("");
     expect(nav.projectTab).toBe("overview");
   });

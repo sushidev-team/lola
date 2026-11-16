@@ -108,20 +108,30 @@ describe("SidebarProjects", () => {
     nav.view = "cockpit";
   });
 
-  it("opens the project workspace instead of filtering sessions", async () => {
-    nav.goCockpit("okane");
-    nav.setSidebarTab("projects");
+  it("filters the sessions beside it in Code mode and clears on a second click", async () => {
     render(SidebarProjects);
     const row = screen.getByRole("button", { name: "lola" });
     await fireEvent.click(row);
-    expect(nav.view).toBe("detail");
+    expect(nav.view).toBe("cockpit");
+    expect(nav.scoped).toBe(true);
     expect(nav.project).toBe("lola");
-    expect(nav.scoped).toBe(false);
-    expect(nav.sidebarTab).toBe("projects");
     expect(row).toHaveAttribute("aria-current", "true");
     await fireEvent.click(row);
+    expect(nav.scoped).toBe(false);
+    await fireEvent.click(row);
+    await fireEvent.click(screen.getByRole("button", { name: "All sessions" }));
+    expect(nav.scoped).toBe(false);
+  });
+
+  it("opens the Git workspace for a project in Git mode", async () => {
+    nav.goDetail("okane", "git");
+    render(SidebarProjects);
+    expect(screen.queryByRole("button", { name: "All sessions" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "lola" }));
     expect(nav.view).toBe("detail");
+    expect(nav.inGit).toBe(true);
     expect(nav.project).toBe("lola");
+    expect(nav.scoped).toBe(false);
   });
 
   it("adds through a MENU, not straight into the project form", async () => {
