@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import ProjectsResize from './ProjectsResize.svelte';
 import { nav } from '$lib/nav.svelte';
-import { PROJECTS_DEFAULT, PROJECTS_MAX, PROJECTS_MIN } from '$lib/sidebarwidth';
+import { PROJECTS_DEFAULT, PROJECTS_GIT_MIN, PROJECTS_MAX, PROJECTS_MIN } from '$lib/sidebarwidth';
 
 afterEach(() => { cleanup(); nav.setProjectsWidth(PROJECTS_DEFAULT); });
 
@@ -20,6 +20,15 @@ describe('projects column divider', () => {
     expect(nav.projectsWidth).toBe(PROJECTS_MIN);
     await fireEvent.dblClick(handle);
     expect(nav.projectsWidth).toBe(PROJECTS_DEFAULT);
+  });
+  it('keeps the Git-mode floor when the column is the whole sidebar', async () => {
+    nav.sidebarOpen = true;
+    render(ProjectsResize, { width: PROJECTS_GIT_MIN, minWidth: PROJECTS_GIT_MIN, maxWidth: 440 });
+    const handle = screen.getByRole('separator', { name: 'Resize projects column' });
+    await fireEvent.keyDown(handle, { key: 'ArrowLeft' });
+    expect(nav.projectsWidth).toBe(PROJECTS_GIT_MIN);
+    await fireEvent.keyDown(handle, { key: 'Home' });
+    expect(nav.projectsWidth).toBe(PROJECTS_GIT_MIN);
   });
   it('never stores a width outside the allowed range', () => {
     nav.setProjectsWidth(5000);

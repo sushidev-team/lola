@@ -12,7 +12,7 @@
   import SidebarVersion from "./SidebarVersion.svelte";
   import SidebarRoster from "./SidebarRoster.svelte";
   import { toggleGitWorkspace } from "$lib/workspacenav";
-  import { SESSIONS_MIN } from "$lib/sidebarwidth";
+  import { SESSIONS_MIN, PROJECTS_MIN, PROJECTS_GIT_MIN } from "$lib/sidebarwidth";
   import ProjectsResize from "./ProjectsResize.svelte";
   import Tabs from "./Tabs.svelte";
 
@@ -139,7 +139,7 @@
       <SidebarSessionTools contextTarget={sessionsArea} />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
     </div>
-    {#if !(narrow && !git)}<ProjectsResize width={projectsCol} maxWidth={git ? 440 : width - SESSIONS_MIN} />{/if}
+    {#if !(narrow && !git)}<ProjectsResize width={projectsCol} minWidth={git ? PROJECTS_GIT_MIN : PROJECTS_MIN} maxWidth={git ? 440 : width - SESSIONS_MIN} />{/if}
   </div>
 
   <!-- 3. Utility row -->

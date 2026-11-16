@@ -11,11 +11,13 @@ export function sidebarWidth(preference: number, windowWidth: number): number {
   return Math.min(wanted, sidebarLimit(windowWidth));
 }
 /**
- * The projects column. In Git mode it is the whole sidebar, so it never goes narrower than the
- * header row: traffic-light inset, logo, the Code/Git switch and its search.
+ * The projects column. Beside the sessions it may shrink to PROJECTS_MIN (labels truncate). In Git
+ * mode it is the whole sidebar, so there it never goes narrower than the header row
+ * (PROJECTS_GIT_MIN): traffic-light inset, logo, the Code/Git switch and its search.
  */
 export const PROJECTS_DEFAULT = 300;
-export const PROJECTS_MIN = 260;
+export const PROJECTS_MIN = 180;
+export const PROJECTS_GIT_MIN = 260;
 export const PROJECTS_MAX = 440;
 /** The least the sessions column gets beside it before the sidebar switches to tabs. */
 export const SESSIONS_MIN = 180;
