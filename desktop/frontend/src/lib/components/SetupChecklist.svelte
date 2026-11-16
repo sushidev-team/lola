@@ -167,6 +167,7 @@
     linearKey = "unknown",
     hideWhenComplete = false,
     optional = [],
+    dismissKey = "",
     class: klass = "",
   }: {
     /** The first-run screen: no config yet (see checklist()). */
@@ -182,6 +183,12 @@
      * checklist waiting for a poll would never go away.
      */
     optional?: string[];
+    /**
+     * When set, the checklist can be dismissed and stays away: the choice is
+     * remembered in this browser under `lola.checklist.<dismissKey>`. The
+     * first-run screen sets none, so it cannot be dismissed.
+     */
+    dismissKey?: string;
     /** Classes for the checklist's own frame (it goes with the checklist when it hides). */
     class?: string;
   } = $props();
@@ -190,6 +197,16 @@
   let failed = $state(false);
   let running = $state(false);
   let copied = $state("");
+
+  const storageKey = $derived(dismissKey ? `lola.checklist.${dismissKey}` : "");
+  function readDismissed(key: string): boolean {
+    try { return !!key && localStorage.getItem(key) === "1"; } catch { return false; }
+  }
+  let dismissed = $state(readDismissed(storageKey));
+  function dismiss() {
+    dismissed = true;
+    try { localStorage.setItem(storageKey, "1"); } catch { /* stays dismissed for this run */ }
+  }
 
   const items = $derived(results ? checklist(results, { setup, linearKey }) : []);
   const complete = $derived(!!results && items.every((i) => i.state === "ok"));
@@ -236,7 +253,7 @@
   }
 </script>
 
-{#if !(hideWhenComplete && settled)}
+{#if !dismissed && !(hideWhenComplete && settled)}
   <section class="grid gap-2 text-sm {klass}" aria-labelledby="setup-checklist-title">
     <div class="flex items-center gap-2">
       <h2 id="setup-checklist-title" class="font-medium text-ink">Setup checklist</h2>
@@ -244,6 +261,7 @@
         <span class="text-faint" role="status">{complete ? "All set." : `${remaining} left`}</span>
       {/if}
       <Button size="xs" class="ml-auto" disabled={running} onclick={run}>{running ? "Checking…" : "Check again"}</Button>
+      {#if dismissKey}<Button size="xs" aria-label="Dismiss setup checklist" onclick={dismiss}>Dismiss</Button>{/if}
     </div>
     {#if failed && !results}
       <p class="text-bad" role="alert">The checks could not run. Try again.</p>
