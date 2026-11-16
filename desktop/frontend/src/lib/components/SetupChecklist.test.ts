@@ -182,3 +182,24 @@ describe("SetupChecklist", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The checks could not run.");
   });
 });
+
+describe("SetupChecklist dismissal", () => {
+  it("can be dismissed and stays dismissed", async () => {
+    localStorage.clear();
+    runMock.mockResolvedValue({ results: allGood.map((r) => (r.name === "tmux" ? row("tmux", false) : r)), summary: "", ok: false });
+    const { unmount } = render(SetupChecklist, { dismissKey: "t" });
+    await fireEvent.click(await screen.findByRole("button", { name: "Dismiss setup checklist" }));
+    expect(screen.queryByText("Setup checklist")).not.toBeInTheDocument();
+    unmount();
+    render(SetupChecklist, { dismissKey: "t" });
+    expect(screen.queryByText("Setup checklist")).not.toBeInTheDocument();
+    localStorage.clear();
+  });
+
+  it("offers no dismiss without a key", async () => {
+    runMock.mockResolvedValue({ results: allGood, summary: "", ok: true });
+    render(SetupChecklist);
+    await screen.findByText("Setup checklist");
+    expect(screen.queryByRole("button", { name: "Dismiss setup checklist" })).toBeNull();
+  });
+});

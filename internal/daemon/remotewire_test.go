@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -265,12 +264,12 @@ func (p stubMDNS) Wait() error {
 
 // newLoggingRemoteDaemon is newRemoteTestDaemon with the daemon log captured,
 // for the tests whose subject is what an operator is told.
-func newLoggingRemoteDaemon(t *testing.T) (*Daemon, *bytes.Buffer) {
+func newLoggingRemoteDaemon(t *testing.T) (*Daemon, *syncBuf) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
-	var buf bytes.Buffer
-	return newDaemon(remoteTestConfig(), &linear.Fake{}, log.New(&buf, "", 0), home), &buf
+	buf := &syncBuf{}
+	return newDaemon(remoteTestConfig(), &linear.Fake{}, log.New(buf, "", 0), home), buf
 }
 
 // freePort asks the kernel for a port and gives it straight back. The window
