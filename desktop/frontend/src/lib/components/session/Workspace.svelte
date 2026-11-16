@@ -185,7 +185,7 @@
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <div class="relative min-h-0 min-w-0 bg-canvas [container-type:size] {store.alive ? '' : 'ssh-offline'}" class:invisible={covered} inert={covered} onclick={clickStory} data-conversation>
             <div class="ssh-col absolute inset-0 grid" data-carded={cards.length > 0 ? "" : undefined} data-deciding={deciding ? "" : undefined}>
-              <TimelineSlot {sessionId} {covered} {side} onside={sideFits ? () => view.openWidget(OVERVIEW_PANEL) : undefined} />
+              <TimelineSlot {sessionId} {covered} {side} onside={sideFits ? () => view.openWidget(OVERVIEW_PANEL) : undefined} onraw={session ? () => ssh.selectCell(session.id, { key: "terminal", kind: "terminal" }) : undefined} />
               <ActionZone {sessionId} {covered} />
             </div>
           </div>

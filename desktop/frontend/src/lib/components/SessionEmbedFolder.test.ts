@@ -96,28 +96,32 @@ it("falls back to the terminal when the conversation it was showing is no longer
   expect(terms.activeTab("s1")).toBe("agent");
 });
 
-it("offers the terminal as a Raw toggle, not a tab, beside the conversation", async () => {
-  store.sessions = [{ id: "s1", worktree: "/code/x", location: "ssh" }] as never;
+it("puts Raw beside the activity bar, and the same toggle over the agent terminal to go back", async () => {
+  const { ssh } = await import("$lib/ssh.svelte");
+  ssh.view("s1").narrow = "stream";
+  store.sessions = [{ id: "s1", worktree: "/code/x", location: "ssh", tmuxName: "lola-s1" }] as never;
   terms.select("s1", SSH);
   render(SessionEmbed, { sessionId: "s1" });
   expect(screen.queryByRole("tab", { name: "Terminal" })).toBeNull();
-  const raw = screen.getByRole("button", { name: "Raw" });
+  const raw = screen.getByRole("button", { name: /^raw$/i });
   expect(raw).toHaveAttribute("aria-pressed", "false");
+  expect(raw.closest("[data-view-strip]")).toBeNull();
   await fireEvent.click(raw);
-  expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
-  await fireEvent.click(screen.getByRole("button", { name: "Raw" }));
-  expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "false");
+  expect(terms.activeTab("s1")).toBe("agent");
+  const back = screen.getAllByRole("button", { name: /^raw$/i }).find((b) => b.getAttribute("aria-pressed") === "true");
+  expect(back).toBeTruthy();
+  await fireEvent.click(back!);
+  expect(terms.activeTab("s1")).toBe(SSH);
 });
 
-it("keeps Conversation selected on a dev terminal, without marking Raw pressed", async () => {
+it("shows no Raw toggle over a dev terminal, and keeps Conversation selected in the strip", async () => {
   const { ssh } = await import("$lib/ssh.svelte");
   ssh.view("s1").narrow = "stream";
   store.sessions = [{ id: "s1", worktree: "/code/x", location: "ssh" }] as never;
   (terms as unknown as { shells: Map<string, string[]> }).shells.set("s1", ["s1-dev-1"]);
   terms.select("s1", "s1-dev-1");
-  expect(terms.activeTab("s1")).toBe("s1-dev-1");
   render(SessionEmbed, { sessionId: "s1" });
   const tabs = screen.getAllByRole("tab", { name: "Conversation" });
   expect(tabs.some((t) => t.getAttribute("aria-selected") === "true" && t.tabIndex === 0)).toBe(true);
-  for (const b of screen.getAllByRole("button", { name: "Raw" })) expect(b).toHaveAttribute("aria-pressed", "false");
+  for (const b of screen.queryAllByRole("button", { name: /^raw$/i })) expect(b).toHaveAttribute("aria-pressed", "false");
 });
