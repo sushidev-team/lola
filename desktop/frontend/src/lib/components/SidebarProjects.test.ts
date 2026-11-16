@@ -644,6 +644,19 @@ describe("SidebarProjects", () => {
     expect(SetProjectStack).toHaveBeenCalledWith("web", "");
   });
 
+  it("adds a project to a stack from the stack row's context menu", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "nori" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Add project…" }));
+    // Only projects outside every stack are offered.
+    expect(screen.queryByRole("menuitem", { name: "web" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "lola" }));
+    expect(confirm.request?.body).toBe("Add lola to stack nori?");
+    confirm.accept();
+    expect(SetProjectStack).toHaveBeenCalledWith("lola", "nori");
+  });
+
   it("confirms removal of the context-menu project by id and allows cancellation", async () => {
     store.projects = [fakeProject({ name: "lola", label: "Lola App" }), fakeProject({ name: "other" })];
     nav.project = "other";
