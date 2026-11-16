@@ -656,8 +656,8 @@
   <li class="-my-px h-0.5 rounded-full bg-accent" aria-hidden="true"></li>
 {/snippet}
 
-<nav class="min-h-full min-w-0 px-3 pt-3.5" aria-label="Projects" oncontextmenu={openBackgroundMenu}>
-  <div class="flex items-center px-2 pb-1">
+<nav class="min-h-full min-w-0 px-3 pt-3" aria-label="Projects" oncontextmenu={openBackgroundMenu}>
+  <div class="flex h-6 items-center px-2">
     <h2 class="label text-faint">Projects</h2>
     <Button
       size="xs"

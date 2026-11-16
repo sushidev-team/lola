@@ -1396,7 +1396,7 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .sidebar-resize::after { content: ''; position: absolute; inset: 0 0 0 auto; width: 2px; background: transparent; }
 .sidebar-resize:hover::after, .sidebar-resize.resizing::after, .sidebar-resize:focus-visible::after { background: var(--color-accent); }
 .sidebar-resize:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
-.sidebar-session-tools { min-width: 0; padding: 8px 10px 8px; border-bottom: 1px solid color-mix(in srgb, var(--color-edge) 45%, transparent); }
+.sidebar-session-tools { min-width: 0; padding: 12px 10px 8px; border-bottom: 1px solid color-mix(in srgb, var(--color-edge) 45%, transparent); }
 .sidebar-search { width: 100%; min-width: 0; height: 30px; padding: 4px 26px 4px 9px; border: 1px solid var(--color-edge); border-radius: 5px; background: var(--color-panel); color: var(--color-ink); font-size: 12px; }
 .sidebar-search::placeholder { color: var(--color-placeholder); }
 .sidebar-search:focus-visible { outline: 1px solid var(--color-accent); }
