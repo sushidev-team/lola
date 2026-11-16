@@ -226,6 +226,9 @@
   let rowMenu = $state<{ x: number; y: number; name: string; picking: boolean } | null>(null);
   const menuName = $derived(rowMenu?.name ?? "");
   const menuStack = $derived(rowMenu ? memberOf(store.projects, rowMenu.name) : "");
+  // Projects a stack's menu can pull in: not a stack, not already in any stack
+  // (a member of another stack leaves that one first).
+  const joinable = $derived(store.projects.filter((x) => !isStack(x) && !memberOf(store.projects, x.name)));
 
   function openRowMenu(e: MouseEvent, name: string) {
     const p = store.projectByName(name);
@@ -825,6 +828,15 @@
           askLeaveStack(name, stack);
         }}>Remove from stack</MenuItem
       >
+    {:else if !rowMenu?.picking && store.projectByName(menuName) && isStack(store.projectByName(menuName)!)}
+      <div class="my-1 border-t border-edge"></div>
+      <MenuItem
+        icon="◆"
+        trailing="›"
+        disabled={joinable.length === 0}
+        title={joinable.length === 0 ? "Every project is already in a stack" : undefined}
+        onclick={() => rowMenu && (rowMenu = { ...rowMenu, picking: true })}>Add project…</MenuItem
+      >
     {:else if !rowMenu?.picking && !isStack(store.projectByName(menuName)!)}
       <div class="my-1 border-t border-edge"></div>
       <!-- A submenu in place: the stack list replaces the root items. -->
@@ -835,6 +847,17 @@
         title={stacks.length === 0 ? "No stacks yet — add one with + → New stack" : undefined}
         onclick={() => rowMenu && (rowMenu = { ...rowMenu, picking: true })}>Add to stack…</MenuItem
       >
+    {:else if rowMenu?.picking && store.projectByName(menuName) && isStack(store.projectByName(menuName)!)}
+      {#each joinable as pr (pr.name)}
+        <MenuItem
+          icon="◆"
+          onclick={() => {
+            const stack = menuName;
+            rowMenu = null;
+            askJoinStack(pr.name, stack);
+          }}>{displayName(pr)}</MenuItem
+        >
+      {/each}
     {:else if rowMenu?.picking}
       {#each stacks as st (st.name)}
         <MenuItem
