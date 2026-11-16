@@ -23,7 +23,8 @@
   const KIND_LABEL: Record<Kind, string> = { session: "Session", project: "Project", action: "Action" };
   const HEADING: Record<Kind, string> = { session: "Sessions", project: "Projects", action: "Actions" };
   const LIMIT: Record<Kind, number> = { session: 8, project: 8, action: 8 };
-  const IDLE_LIMIT: Record<Kind, number> = { session: 5, project: 6, action: 5 };
+  // Nothing typed: only the common actions. Sessions and projects appear when the query matches them.
+  const IDLE_LIMIT: Record<Kind, number> = { session: 0, project: 0, action: 8 };
 
   let query = $state("");
   let index = $state(0);
