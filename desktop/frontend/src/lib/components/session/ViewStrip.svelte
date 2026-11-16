@@ -2,7 +2,7 @@
   import Icon from "$lib/components/Icon.svelte";
   // The strip under the top bar. Three groups, and only the middle one can move or scroll:
   //
-  //   Conversation  Terminal  Changes     $ prod-api  zsh  review  +            Widgets 2 •
+  //   Conversation  Changes     $ prod-api  zsh  review  +            Widgets 2 •
   //   └ fixed, never moves ───────────┘   └ mono, machine things, past a fade ┘         └ fixed ┘
   //
   // `+` sits right after the tabs it adds to, and keeps its place when they scroll past the fade.
@@ -39,7 +39,12 @@
   const cells = $derived(stripCells(session, shells));
   const selected = $derived(ssh.currentCell(session));
   const current = $derived(terms.isDevTab(selected) ? "terminal" : changesInSide && selected === "changes" ? "conversation" : selected);
-  const views = $derived(cells.views.filter(c => !changesInSide || c.kind !== 'changes'));
+  // With a Conversation the terminal is its raw form: a toggle beside the activity bar (RawToggle), not a tab.
+  const conversationCell = $derived(cells.views.find((c) => c.kind === "conversation"));
+  const rawCell = $derived(conversationCell ? cells.views.find((c) => c.kind === "terminal") : undefined);
+  // Any terminal on show (a dev tab included) leaves the strip with Conversation as its selected tab.
+  const onTerminal = $derived(!!rawCell && current === "terminal");
+  const views = $derived(cells.views.filter(c => (!changesInSide || c.kind !== 'changes') && c !== rawCell));
   const all = $derived([...views, ...cells.machines]);
   // Visible terminals retain their order; drag indices must account for hidden dev tabs.
   const terminals = $derived(cells.machines.filter((c): c is Extract<StripCell, { name: string }> => c.kind !== "host"));
@@ -79,8 +84,9 @@
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
     e.stopPropagation();
-    const at = all.findIndex((x) => x.key === c.key);
-    const next = all[(at + (e.key === "ArrowRight" ? 1 : -1) + all.length) % all.length];
+    const ring = narrow ? views : all;
+    const at = ring.findIndex((x) => x.key === c.key);
+    const next = ring[(at + (e.key === "ArrowRight" ? 1 : -1) + ring.length) % ring.length];
     void pick(next, true);
   }
 
@@ -233,7 +239,7 @@
   <div role="tablist" aria-label="Session views" class="contents">
     <div class="flex items-stretch gap-4">
       {#each views as c (c.key)}
-        {@const on = current === c.key}
+        {@const on = current === c.key || (onTerminal && c === conversationCell)}
         <button
           bind:this={refs[c.key]}
           type="button"

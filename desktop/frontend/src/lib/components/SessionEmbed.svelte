@@ -27,6 +27,7 @@
   import DevClashBanner from "./DevClashBanner.svelte";
   import Button from "./Button.svelte";
   import TerminalCell from "./session/TerminalCell.svelte";
+  import RawToggle from "./session/RawToggle.svelte";
   import Workspace from "./session/Workspace.svelte";
   import ViewStrip from "./session/ViewStrip.svelte";
   import SessionFooter from "./session/SessionFooter.svelte";
@@ -226,6 +227,11 @@
         onExit={session && (activeIsShell || localShell) ? () => terminalExited(id, terminalName, localShell, activeIsShell) : undefined}
         onLeave={leave}
       />
+
+      <!-- The same toggle as beside the activity bar, to get back. Its inset is that row's own (.cv-activity-map: 12px 20px, a 28px track), so it does not move between the two views. -->
+      {#if offered && session && activeTab === AGENT && terminalName}
+        <div class="pointer-events-none z-10 flex items-start justify-end px-5 pt-3" style={mainStyle}><div class="pointer-events-auto"><RawToggle on onclick={() => ssh.selectCell(id, { key: "conversation", kind: "conversation" })} /></div></div>
+      {/if}
 
       {#if onChanges && session && !rightChanges}
         <div class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] bg-panel" style="grid-area:1/1"><div>{#if offered && strip}<ViewStrip {session} />{/if}</div><ChangesView sessionId={session.id} /></div>
