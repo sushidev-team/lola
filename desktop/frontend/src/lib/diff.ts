@@ -150,6 +150,7 @@ export function intralineSpans(rows: Row[]): Map<Row, Span[]> {
     const dels: Row[] = [];
     const adds: Row[] = [];
     while (i < rows.length && rows[i].kind === "del") dels.push(rows[i++]);
+    while (i < rows.length && rows[i].kind === "meta") i++;
     while (i < rows.length && rows[i].kind === "add") adds.push(rows[i++]);
     for (let k = 0; k < Math.min(dels.length, adds.length); k++) {
       const c = changedSpans(dels[k].text, adds[k].text);

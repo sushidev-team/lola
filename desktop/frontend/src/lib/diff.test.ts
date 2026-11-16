@@ -167,3 +167,13 @@ describe("intraline highlighting and surrogate pairs", () => {
     expect(c).toEqual({ old: [[3, 5]], new: [[3, 5]] });
   });
 });
+
+describe("intraline highlighting across a no-newline marker", () => {
+  it("pairs a removal with its addition past the meta row", () => {
+    const rows = parsePatch("@@ -1 +1 @@\n-const x = 1;\n\\ No newline at end of file\n+const x = 2;\n\\ No newline at end of file\n");
+    expect(rows.map((r) => r.kind)).toEqual(["hunk", "del", "meta", "add", "meta"]);
+    const m = intralineSpans(rows);
+    expect(m.get(rows[1])).toEqual([[10, 11]]);
+    expect(m.get(rows[3])).toEqual([[10, 11]]);
+  });
+});
