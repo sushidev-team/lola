@@ -42,7 +42,7 @@
   // With a Conversation the terminal is its raw form: a toggle, not a tab of its own.
   const conversationCell = $derived(cells.views.find((c) => c.kind === "conversation"));
   const rawCell = $derived(conversationCell ? cells.views.find((c) => c.kind === "terminal") : undefined);
-  const raw = $derived(!!rawCell && current === "terminal");
+  const raw = $derived(!!rawCell && selected === "terminal");
   const views = $derived(cells.views.filter(c => (!changesInSide || c.kind !== 'changes') && c !== rawCell));
   const all = $derived([...views, ...cells.machines]);
   // Visible terminals retain their order; drag indices must account for hidden dev tabs.
