@@ -626,6 +626,12 @@ every send path. Re-verify against a live pane.
     `hubRepoBusy` keeps one PR per repo. A hub that answers 404 to `progress`
     gets the old complete-on-PR; a hub that predates `policy_version`,
     `pr_url` or `group` gets frames without them (it decodes strictly).
+    - An advisory no published version fixes yet (`hubproto.Item.AwaitsFix`:
+      an empty `fixed`) WAITS: the hub does not offer it, the loop refuses it
+      before the claim (`hub.Accept`) and again on GitHub's answer, and the
+      board shows it under "Waiting for a fix" (`HubBoardItem.NoFix`). A
+      person's claim still takes it. No state or fail reason was added for it:
+      a new state fails an older daemon's board validation whole.
     - A lost lease is re-claimed while the item is still open; only another
       device holding it leaves the work lost. `lease_lost` and a 4xx without
       a hubproto code are retried, never dropped.

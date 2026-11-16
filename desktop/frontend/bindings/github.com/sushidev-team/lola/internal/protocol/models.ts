@@ -850,6 +850,13 @@ export interface HubBoardItem {
     "fixed"?: string;
 
     /**
+     * NoFix: an open advisory that no published version fixes yet
+     * (hubproto.Item.AwaitsFix). It waits: no Mac takes it on its own, a
+     * person may still claim it.
+     */
+    "noFix"?: boolean;
+
+    /**
      * red_bump_pr fields.
      */
     "prNumber"?: number;

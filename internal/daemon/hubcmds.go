@@ -489,6 +489,7 @@ func hubBoardItem(v hubproto.ItemView) protocol.HubBoardItem {
 	case it.DepAdvisory != nil:
 		a := it.DepAdvisory
 		bi.Package, bi.Advisory, bi.Severity, bi.Ecosystem, bi.Vulnerable, bi.Fixed = a.Package, a.Advisory, string(a.Severity), a.Ecosystem, a.Vulnerable, a.Fixed
+		bi.NoFix = v.State == hubproto.StateOpen && it.AwaitsFix()
 	case it.RedBumpPR != nil:
 		r := it.RedBumpPR
 		bi.Package, bi.PRNumber, bi.Branch, bi.Author = r.Package, r.PR, r.Branch, r.Author

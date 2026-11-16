@@ -26,6 +26,11 @@ export type BoardSections = {
   available: HubBoardItem[];
   /** Claimed or in-review rows this Mac works. */
   mine: HubBoardItem[];
+  /**
+   * Open advisories that no published version fixes yet: no Mac takes one on
+   * its own, a person may still claim it.
+   */
+  waiting: HubBoardItem[];
   /** Claimed or in-review rows a teammate's Mac works. */
   teammates: HubBoardItem[];
   done: HubBoardItem[];
@@ -46,16 +51,17 @@ function time(s: string | undefined | null): number {
 
 /**
  * Split the board into the view's sections. Available is worst severity first,
- * then oldest first (a chore that has waited longest goes up). An in-review
+ * then oldest first (a chore that has waited longest goes up), and so is
+ * Waiting, the open advisories nothing fixes yet. An in-review
  * row belongs to whoever opened its pull request (the board's owner). The
  * finished sections are newest first.
  */
 export function boardSections(items: HubBoardItem[]): BoardSections {
-  const out: BoardSections = { available: [], mine: [], teammates: [], done: [], failed: [], escalated: [] };
+  const out: BoardSections = { available: [], waiting: [], mine: [], teammates: [], done: [], failed: [], escalated: [] };
   for (const it of items) {
     switch (it.state) {
       case "open":
-        out.available.push(it);
+        (it.noFix ? out.waiting : out.available).push(it);
         break;
       case "claimed":
         (it.lease?.mine ? out.mine : out.teammates).push(it);
@@ -74,7 +80,9 @@ export function boardSections(items: HubBoardItem[]): BoardSections {
         break;
     }
   }
-  out.available.sort((a, b) => severityRank(a) - severityRank(b) || time(a.firstSeen) - time(b.firstSeen));
+  const worstOldest = (a: HubBoardItem, b: HubBoardItem) => severityRank(a) - severityRank(b) || time(a.firstSeen) - time(b.firstSeen);
+  out.available.sort(worstOldest);
+  out.waiting.sort(worstOldest);
   const newest = (a: HubBoardItem, b: HubBoardItem) => time(b.lastSeen) - time(a.lastSeen);
   out.done.sort(newest);
   out.failed.sort(newest);
@@ -513,6 +521,7 @@ const REASON_WORDS: [string, string][] = [
   ["kind not accepted", "This Mac does not take this kind of chore"],
   ["item repo does not match the project", "The chore's repository is not this project's"],
   ["stacks take no hub chores", "Stacks do not take team chores"],
+  ["no fixed version is published yet", "No version fixes it yet, so this Mac waits for one"],
   ["no project", "No project on this Mac works this repository"],
   ["hub disabled", "Team hub is off on this Mac"],
   ["not claimed", "Not claimed"],

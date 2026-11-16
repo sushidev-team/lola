@@ -299,3 +299,23 @@ func TestOffersFilterAndOrder(t *testing.T) {
 		}
 	}
 }
+
+// An advisory no version fixes yet is not offered, stays open, can still be
+// claimed by a person, and goes on offer once a report names a fix.
+func TestAdvisoryWithoutFixWaits(t *testing.T) {
+	it := adv("acme/web", hubproto.SeverityHigh)
+	it.DepAdvisory.Fixed = ""
+	w := NewItem("i1", "acme", it, "a", t0)
+	items := map[string]*store.WorkItem{"i1": w}
+	if got := Offers(items, dev("a"), nil, 0, t0); len(got) != 0 || w.State != hubproto.StateOpen {
+		t.Fatalf("offered %v, state %s", got, w.State)
+	}
+	w.Item.DepAdvisory.Fixed = "4.17.21"
+	if got := Offers(items, dev("a"), nil, 0, t0); len(got) != 1 {
+		t.Fatal("not offered once a fix is published")
+	}
+	w.Item.DepAdvisory.Fixed = ""
+	if _, err := Claim(w, dev("a"), t0, Config{}); err != nil || w.State != hubproto.StateClaimed {
+		t.Fatalf("a person's claim: %v, state %s", err, w.State)
+	}
+}

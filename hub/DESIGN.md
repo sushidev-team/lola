@@ -212,6 +212,13 @@ Fail reasons are a closed set: `spawn_failed`, `agent_gave_up`, `ci_failed`, `pr
   announced again; when its stable id names a closed issue, the hub comments and reopens it.
 - **C10 grouped bumps.** A `red_bump_pr` may have an empty `package` (Dependabot's "bump the X
   group"); its dedup key is unchanged.
+- **C12 waiting for a fix.** A `dep_advisory` whose `fixed` is empty (GitHub's alert names no first
+  patched version) is not OFFERED: an agent has nothing to upgrade to, and it would only fail twice
+  and escalate. The item stays `open` and on the board, is not stale while it is reported, and goes
+  on offer as soon as a report carries a fixed version (the newest report of an open item wins). A
+  person may still claim it (the claim does not ask). A critical one still escalates at once. No
+  new state, frame or fail reason (`hubproto.Item.AwaitsFix`), so every older hub and daemon reads
+  the same item; a daemon facing an older hub refuses such an offer itself, unclaimed.
 - **C11 stats.** `GET /v1/stats` returns the org's daily counters for 90 days (opened, done, failed,
   escalated, the sum of fix seconds). Counters only, no item data.
 

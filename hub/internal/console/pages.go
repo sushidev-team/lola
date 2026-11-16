@@ -449,6 +449,8 @@ func subjectOf(it hubproto.Item) string {
 		s := a.Advisory + " · " + a.Ecosystem + "/" + a.Package + " " + a.Vulnerable
 		if a.Fixed != "" {
 			s += " → " + a.Fixed
+		} else {
+			s += " (no fix published)"
 		}
 		return s
 	case it.RedBumpPR != nil:

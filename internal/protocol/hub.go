@@ -242,6 +242,10 @@ type HubBoardItem struct {
 	Ecosystem  string `json:"ecosystem,omitempty"`
 	Vulnerable string `json:"vulnerable,omitempty"`
 	Fixed      string `json:"fixed,omitempty"`
+	// NoFix: an open advisory that no published version fixes yet
+	// (hubproto.Item.AwaitsFix). It waits: no Mac takes it on its own, a
+	// person may still claim it.
+	NoFix bool `json:"noFix,omitempty"`
 	// red_bump_pr fields.
 	PRNumber int    `json:"prNumber,omitempty"`
 	Branch   string `json:"branch,omitempty"`

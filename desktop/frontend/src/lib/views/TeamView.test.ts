@@ -276,6 +276,22 @@ describe("TeamView", () => {
     await waitFor(() => expect(flash).toHaveBeenCalledWith("Claimed GHSA-aaaa in Web"));
   });
 
+  it("keeps an advisory nothing fixes yet out of Available, and still lets a person claim it", async () => {
+    const noFix = { ...base, id: "it_nofix", state: "open", advisory: "GHSA-hhhh", severity: "low", package: "deepmerge", vulnerable: ">= 4.2.0, <= 4.3.1", noFix: true, attempts: 1, lastFail: "agent_gave_up", local: { claimable: true, project: "web" } };
+    Board.mockResolvedValue({ fetchedAt: new Date().toISOString(), items: [open1, noFix] });
+    Claim.mockResolvedValue({ session: "s-new", project: "web", itemId: "it_nofix" });
+    render(TeamView);
+    const waiting = await screen.findByRole("region", { name: /Waiting for a fix/ });
+    expect(within(waiting).getByText(/No published version fixes these yet/)).toBeInTheDocument();
+    expect(waiting.contains(row("it_nofix"))).toBe(true);
+    expect(within(row("it_nofix")).getByText(/1 attempt/)).toBeInTheDocument();
+    // Not counted as an open chore, not part of the group's Fix all.
+    expect(document.querySelector("#team-available")?.textContent).toMatch(/Available\s*1/);
+    await fireEvent.click(within(row("it_nofix")).getByRole("button", { name: "Claim" }));
+    confirm.accept();
+    await waitFor(() => expect(Claim).toHaveBeenCalledWith({ itemId: "it_nofix", project: "web" }));
+  });
+
   it("does not claim while the sandboxed agent has no login", async () => {
     SandboxLoginNeeded.mockResolvedValue("claude");
     render(TeamView);

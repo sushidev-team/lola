@@ -26,7 +26,8 @@ func severityRank(s hubproto.Severity) int {
 // is in the device's reported repos and whose kind is in kinds (nil = every
 // kind), most severe first, then oldest first, capped at limit (<=0 means
 // hubproto.MaxOfferItems). An item held in another device's grace window, or
-// in dev's own cooldown, is left out. A revoked device is offered nothing.
+// in dev's own cooldown, or an advisory that no version fixes yet
+// (hubproto.Item.AwaitsFix), is left out. A revoked device is offered nothing.
 // items is not mutated; expire leases before calling.
 func Offers(items map[string]*store.WorkItem, dev *store.Device, kinds map[hubproto.Kind]bool, limit int, now time.Time) []hubproto.Item {
 	if dev == nil || dev.Revoked() {
@@ -47,6 +48,12 @@ func Offers(items map[string]*store.WorkItem, dev *store.Device, kinds map[hubpr
 			continue
 		}
 		if HeldForOther(w, dev.ID, now) || w.CoolingFor(dev.ID, now) {
+			continue
+		}
+		// An advisory with no fixed version gives an agent nothing to
+		// upgrade to: it waits, open, until a report names one. A person
+		// may still claim it (Claim does not ask).
+		if w.Item.AwaitsFix() {
 			continue
 		}
 		// Defense in depth: never offer what a daemon would refuse.

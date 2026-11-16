@@ -19,6 +19,7 @@ const (
 	ReasonDailyCap     = "daily claim cap reached"
 	ReasonNeedsSandbox = "project is not sandboxed (hub.require_sandbox)"
 	ReasonStack        = "stacks take no hub chores"
+	ReasonNoFix        = "no fixed version is published yet"
 )
 
 // The daemon's own skip reasons for an offer that passed Accept but was not
@@ -51,7 +52,10 @@ const (
 //     (case-insensitive: GitHub slugs are);
 //   - the kind is accepted ([hub].accept_kinds, empty = all known kinds);
 //   - fewer than [hub].max_claims_per_day claims today;
-//   - when [hub].require_sandbox (default true), p runs sandboxed.
+//   - when [hub].require_sandbox (default true), p runs sandboxed;
+//   - the advisory has a fixed version (hubproto.Item.AwaitsFix): the loop
+//     never spends an agent on an upgrade that does not exist. A person's
+//     claim (AcceptIntent) may.
 func Accept(item hubproto.Item, p *config.Project, h config.HubConfig, claimsToday int) (bool, string) {
 	if hubproto.Validate(item) != nil {
 		return false, ReasonInvalidItem
@@ -79,6 +83,9 @@ func Accept(item hubproto.Item, p *config.Project, h config.HubConfig, claimsTod
 	}
 	if h.SandboxRequired() && !p.Sandboxed() {
 		return false, ReasonNeedsSandbox
+	}
+	if item.AwaitsFix() {
+		return false, ReasonNoFix
 	}
 	return true, ""
 }

@@ -14,6 +14,12 @@ func advisoryItem(repo string) hubproto.Item {
 	}}
 }
 
+func noFixItem(repo string) hubproto.Item {
+	it := advisoryItem(repo)
+	it.DepAdvisory.Fixed = ""
+	return it
+}
+
 func bumpItem(repo string) hubproto.Item {
 	return hubproto.Item{Kind: hubproto.KindRedBumpPR, RedBumpPR: &hubproto.RedBumpPR{
 		Repo: repo, PR: 42, Branch: "dependabot/npm_and_yarn/lodash-4.17.21", Package: "lodash", Author: hubproto.AuthorDependabot,
@@ -43,6 +49,7 @@ func TestAccept(t *testing.T) {
 		{"kind rejected", bumpItem("acme/web"), &sandboxed, config.HubConfig{Enabled: true, AcceptKinds: []string{"dep_advisory"}}, 0, ReasonKindRejected},
 		{"cap", advisoryItem("acme/web"), &sandboxed, config.HubConfig{Enabled: true}, 4, ReasonDailyCap},
 		{"cap zero", advisoryItem("acme/web"), &sandboxed, config.HubConfig{Enabled: true, MaxClaimsPerDay: &zero}, 0, ReasonDailyCap},
+		{"no fix", noFixItem("acme/web"), &sandboxed, config.HubConfig{Enabled: true}, 0, ReasonNoFix},
 		{"needs sandbox", advisoryItem("acme/web"), &config.Project{Repo: "acme/web", HubChores: true}, config.HubConfig{Enabled: true}, 0, ReasonNeedsSandbox},
 		{"sandbox opt-out", advisoryItem("acme/web"), &config.Project{Repo: "acme/web", HubChores: true}, config.HubConfig{Enabled: true, RequireSandbox: &f}, 0, ""},
 	}

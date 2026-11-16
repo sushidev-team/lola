@@ -1378,6 +1378,11 @@ func (d *Daemon) hubClaimItem(ctx context.Context, api hubAPI, it hubproto.Item,
 		return "", hubRefuse(hub.ReasonNotConfirmed, "")
 	}
 	it = v.Item
+	// GitHub's alert is the fact: the hub may still name a fixed version
+	// that the advisory lost.
+	if !req.human && it.AwaitsFix() {
+		return "", hubRefuse(hub.ReasonNoFix, "")
+	}
 	if hubBranch(prefix, it) != branch {
 		return "", hubRefuse(hub.ReasonNotConfirmed, "GitHub does not confirm it: the branch differs")
 	}

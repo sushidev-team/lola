@@ -765,7 +765,7 @@
               {#if !hub.board}
                 <p class="px-4 py-4 text-sm text-faint">Loading the board…</p>
               {:else if sections.available.length === 0}
-                <p class="flex items-center gap-2 px-4 py-6 text-sm text-faint" data-available-empty><Icon name="check" size={14} /> Nothing waiting. The team is caught up.</p>
+                <p class="flex items-center gap-2 px-4 py-6 text-sm text-faint" data-available-empty><Icon name="check" size={14} /> {sections.waiting.length ? "Nothing to start on. The rest waits for a fix." : "Nothing waiting. The team is caught up."}</p>
               {:else}
                 <ul class="divide-y divide-edge/50">
                   {#each groups as g (g.key)}
@@ -818,6 +818,22 @@
                 </ul>
               {/if}
             </section>
+
+            {#if sections.waiting.length > 0}
+              <!-- Open advisories nothing fixes yet: no Mac takes one on its own.
+                   A person may still claim one (to replace or pin the package). -->
+              <section class="min-w-0 rounded-xl border border-edge" aria-labelledby="team-waiting">
+                <header class="grid gap-1 border-b border-edge px-4 py-3">
+                  <h2 id="team-waiting" class="text-base font-medium text-ink">Waiting for a fix <span class="num ml-1 text-faint">{sections.waiting.length}</span></h2>
+                  <p class="text-sm text-faint">No published version fixes these yet, so no Mac starts on them. Each one is offered again as soon as a fix is out.</p>
+                </header>
+                <ul class="divide-y divide-edge/50" data-board-waiting>
+                  {#each sections.waiting as it (it.id)}
+                    {@render itemRow(it, it.repo, claimAction, whyLine(it))}
+                  {/each}
+                </ul>
+              </section>
+            {/if}
 
             <section class="min-w-0 rounded-xl border border-edge" aria-labelledby="team-progress">
               <header class="flex items-center gap-3 border-b border-edge px-4 py-3">

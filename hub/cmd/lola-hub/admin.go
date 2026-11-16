@@ -611,7 +611,7 @@ func (c *cli) itemsAdd(args []string) error {
 	fs.StringVar(&f.Package, "package", "", "package name (required)")
 	fs.StringVar(&f.Ecosystem, "ecosystem", "", "dep_advisory: npm, pip, composer, ...")
 	fs.StringVar(&f.Vulnerable, "vulnerable", "", "dep_advisory: vulnerable range, e.g. \"< 1.2.3\"")
-	fs.StringVar(&f.Fixed, "fixed", "", "dep_advisory: first fixed version (may be empty)")
+	fs.StringVar(&f.Fixed, "fixed", "", "dep_advisory: first fixed version (empty: no fix is published, so the item waits and is not offered)")
 	fs.StringVar(&f.Advisory, "advisory", "", "dep_advisory: GHSA/CVE/OSV id")
 	fs.StringVar(&f.Severity, "severity", "", "dep_advisory: low|moderate|high|critical")
 	fs.StringVar(&f.PR, "pr", "", "red_bump_pr: PR number")

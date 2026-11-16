@@ -242,6 +242,11 @@ func TestItemAccessors(t *testing.T) {
 	if a.Severity() != SeverityHigh || b.Severity() != "" {
 		t.Fatal("Severity")
 	}
+	n := d
+	n.Fixed = ""
+	if a.AwaitsFix() || b.AwaitsFix() || (Item{}).AwaitsFix() || !(Item{Kind: KindDepAdvisory, DepAdvisory: &n}).AwaitsFix() {
+		t.Fatal("AwaitsFix")
+	}
 }
 
 func TestEnums(t *testing.T) {

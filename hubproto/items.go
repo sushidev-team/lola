@@ -324,6 +324,17 @@ func (item Item) Repo() string {
 	return ""
 }
 
+// AwaitsFix reports whether item is a dependency advisory that no published
+// version fixes yet (GitHub's alert names no first patched version, so
+// [DepAdvisory.Fixed] is empty). An agent has nothing to upgrade to, so the
+// hub does not OFFER such an item and a daemon does not claim it on its own;
+// it stays open and visible, a person may still claim it, and it goes on
+// offer as soon as a report carries a fixed version. No new state and no new
+// frame: an older hub or daemon reads the same item as before.
+func (item Item) AwaitsFix() bool {
+	return item.Kind == KindDepAdvisory && item.DepAdvisory != nil && item.DepAdvisory.Fixed == ""
+}
+
 // Severity returns the item's severity; only dep_advisory carries one.
 func (item Item) Severity() Severity {
 	if item.Kind == KindDepAdvisory && item.DepAdvisory != nil {

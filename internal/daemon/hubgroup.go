@@ -248,6 +248,10 @@ func (d *Daemon) hubClaimGroupFull(ctx context.Context, api hubAPI, items []hubp
 			d.logf("", "hub: not grouping %s: GitHub does not confirm it", it.ID)
 			continue
 		}
+		if !req.human && v.Item.AwaitsFix() {
+			d.logf("", "hub: not grouping %s: %s", it.ID, hub.ReasonNoFix)
+			continue
+		}
 		confirmed = append(confirmed, v.Item)
 	}
 	if len(confirmed) == 0 {

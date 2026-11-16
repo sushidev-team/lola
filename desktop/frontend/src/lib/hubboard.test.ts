@@ -26,8 +26,11 @@ describe("hubboard", () => {
       item({ id: "d", state: "done" }),
       item({ id: "f", state: "failed" }),
       item({ id: "e", state: "escalated" }),
+      item({ id: "nofix-low", severity: "low", noFix: true }),
+      item({ id: "nofix-high", severity: "high", noFix: true }),
     ]);
     expect(s.available.map((i) => i.id)).toEqual(["crit-old", "crit-new", "low"]);
+    expect(s.waiting.map((i) => i.id)).toEqual(["nofix-high", "nofix-low"]);
     expect(s.mine.map((i) => i.id)).toEqual(["mine"]);
     expect(s.teammates.map((i) => i.id)).toEqual(["theirs"]);
     expect([s.done.length, s.failed.length, s.escalated.length]).toEqual([1, 1, 1]);
@@ -178,6 +181,7 @@ describe("plain words", () => {
     expect(hubReason("Error: hub: not claimed: dispatch held: load")).toBe("New sessions are on hold on this Mac: load");
     expect(hubReason("hub: not claimed: capped")).toBe("This Mac already runs as many sessions as allowed.");
     expect(hubReason("project is not sandboxed (hub.require_sandbox)")).toMatch(/^The project is not sandboxed/);
+    expect(hubReason("not claimed: no fixed version is published yet")).toBe("No version fixes it yet, so this Mac waits for one.");
     expect(hubReason("Error: Error: something new")).toBe("Something new");
     expect(hubReason("")).toBe("");
     expect(hubReason(undefined)).toBe("");
