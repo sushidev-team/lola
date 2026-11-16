@@ -80,7 +80,7 @@
        rule opts it out of the drag region automatically — a clickable <div>
        here would be neither draggable nor reliably clickable. -->
   <div class="drag flex min-w-0 items-center gap-2 overflow-hidden pr-3 pl-[82px]">
-    <LolaLogo class="h-[18px] w-auto min-w-0 shrink" />
+    <LolaLogo class="h-[18px] w-auto shrink-0" />
     <div role="group" aria-label="Workspace" class="mode-switch ml-1 shrink-0" data-mode={git ? "git" : "code"}>
       <span class="mode-thumb" aria-hidden="true"></span>
       {#each MODES as m (m.id)}

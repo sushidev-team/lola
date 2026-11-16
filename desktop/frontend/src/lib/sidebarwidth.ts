@@ -12,4 +12,5 @@ export function sidebarWidth(preference: number, windowWidth: number): number {
   const wanted = Number.isFinite(preference) ? Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, preference)) : SIDEBAR_DEFAULT;
   return Math.min(wanted, sidebarLimit(windowWidth));
 }
-export const GIT_SIDEBAR_WIDTH = 260;
+/** Git mode keeps the projects panel only, but never narrower than the brand row: traffic-light inset, logo and the Code/Git switch. */
+export const GIT_SIDEBAR_WIDTH = 332;
