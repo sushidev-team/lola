@@ -96,15 +96,19 @@ it("falls back to the terminal when the conversation it was showing is no longer
   expect(terms.activeTab("s1")).toBe("agent");
 });
 
-it("offers the terminal as a Raw toggle, not a tab, beside the conversation", async () => {
+it("has no Terminal tab beside the conversation; Raw sits in the conversation and opens the terminal", async () => {
+  const { ssh } = await import("$lib/ssh.svelte");
+  ssh.view("s1").narrow = "stream";
+  terms.select("s1", "s1-review");
   store.sessions = [{ id: "s1", worktree: "/code/x", location: "ssh" }] as never;
   terms.select("s1", SSH);
   render(SessionEmbed, { sessionId: "s1" });
   expect(screen.queryByRole("tab", { name: "Terminal" })).toBeNull();
-  const raw = screen.getByRole("button", { name: "Raw" });
-  expect(raw).toHaveAttribute("aria-pressed", "false");
+  expect(document.querySelector("[data-strip] [data-raw-toggle]")).toBeNull();
+  const raw = document.querySelector("[data-conversation] [data-raw-toggle]") as HTMLElement;
+  expect(raw).not.toBeNull();
   await fireEvent.click(raw);
-  expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
-  await fireEvent.click(screen.getByRole("button", { name: "Raw" }));
-  expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "false");
+  // The agent's own terminal, never whichever shell or review pane was used last.
+  expect(terms.activeTab("s1")).toBe("agent");
+  expect(screen.getByRole("tab", { name: "Conversation" })).toHaveAttribute("aria-selected", "true");
 });

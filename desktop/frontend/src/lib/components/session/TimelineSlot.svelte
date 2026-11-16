@@ -19,7 +19,8 @@
     covered = false,
     side = false,
     onside,
-  }: { sessionId: string; covered?: boolean; side?: boolean; onside?: () => void } = $props();
+    onraw,
+  }: { sessionId: string; covered?: boolean; side?: boolean; onside?: () => void; onraw?: () => void } = $props();
 
   const view = $derived(ssh.view(sessionId));
   const f = $derived(feed.view(sessionId));
@@ -39,7 +40,7 @@
     <!-- A daemon that is down answers nothing, and that says nothing about the log. -->
     {#if store.alive}<FeedNotice {sessionId} health={health} />{/if}
     {#if showMap}<ActivityMap {sessionId} />{/if}
-    {#if !side}<StoryLine {sessionId} {onside} />{/if}
+    <StoryLine {sessionId} {onside} {onraw} account={!side} />
   </div>
   <Timeline {sessionId} />
   {#if maxBlock}

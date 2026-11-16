@@ -12,14 +12,14 @@
   import Chevron from "../Chevron.svelte";
   import BoardPanel from "../BoardPanel.svelte";
 
-  let { sessionId, onside }: { sessionId: string; onside?: () => void } = $props();
+  let { sessionId, onside, onraw, account = true }: { sessionId: string; onside?: () => void; onraw?: () => void; account?: boolean } = $props();
 
   const view = $derived(ssh.view(sessionId));
   const session = $derived(store.sessionById(sessionId));
   const board = $derived(session?.board);
   const brief = $derived(deriveBrief(inScope(view.items, view.scope), sshClock.now));
   const hasBrief = $derived(hasReport(false, brief));
-  const shown = $derived(hasChip(board) || hasBrief || !!onside);
+  const shown = $derived(!!onraw || (account && (hasChip(board) || hasBrief || !!onside)));
   const blocked = $derived(board?.blocked ?? "");
   const theories = $derived(
     [
@@ -63,16 +63,19 @@
   <div bind:this={root} class="cv-band" data-story-line>
     <div class="grid h-6 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-sm text-faint">
       <span class="min-w-0 truncate">
-        {#if blocked}
+        {#if account && blocked}
           <span class="text-orange">Says blocked: {blocked}</span>
-        {:else}
+        {:else if account}
           {#if line.lead}<span class="num">{line.lead}</span>{/if}{#if line.lead && line.rest}{" · "}{/if}{line.rest}
         {/if}
       </span>
       <span class="flex items-center gap-2">
+        {#if account}
         {#if hasMismatch(board)}<span class="text-warn" title={board.mismatches?.join("\n")}>Unverified claim</span>{/if}
         {#if onside}<Button size="xs" title="Show the agent's account beside the story" onclick={onside}>Sidebar</Button>{/if}
         <Button size="xs" aria-expanded={open} aria-haspopup="dialog" onclick={() => (view.reportOpen = !open)}>Report <Chevron open={!open} class={open ? "-rotate-90" : ""} /></Button>
+        {/if}
+        {#if onraw}<Button size="xs" title="Show the raw terminal instead of the conversation" data-raw-toggle onclick={onraw}>Raw</Button>{/if}
       </span>
     </div>
     {#if open}
