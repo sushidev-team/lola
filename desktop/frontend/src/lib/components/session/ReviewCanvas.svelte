@@ -1,13 +1,14 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { DaemonService } from '@bindings/desktop';
   import type { ReviewPackage } from '@bindings/internal/protocol';
   import { markLocation, markKind, validMark, arrowHead, simplifyStroke, type MarkKind, type ReviewMark } from '$lib/reviewmaterial';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Select from '../Select.svelte';
-  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment, onToggleFeedback }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void; onToggleFeedback?: () => void } = $props();
-  let infoOpen = $state(true);
+  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment, onToggleFeedback, compact = false }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void; onToggleFeedback?: () => void; compact?: boolean } = $props();
+  // `compact` (the screenshots half of the Review screen) starts with the screen list folded away.
+  let infoOpen = $state(untrack(() => !compact));
   let shortcutsOpen = $state(false);
   let root = $state<HTMLElement>();
   let lastComment = $state(-1);
@@ -513,7 +514,7 @@
 <style>
   .canvas { min-width:0; height:100%; display:grid; grid-template-rows:auto minmax(0,1fr); }
   .canvas:focus { outline:none; }
-  .tools { position:relative; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
+  .tools { position:relative; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
   .shortcut-help { position:absolute; z-index:6; top:calc(100% + 6px); right:8px; width:min(340px,calc(100% - 16px)); max-height:70vh; overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; font-size:12px; }
   .shortcut-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
   .shortcut-help dl div { display:flex; justify-content:space-between; gap:16px; padding:4px 0; }

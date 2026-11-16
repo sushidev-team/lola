@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import Chevron from "$lib/components/Chevron.svelte";
   import { DaemonService, TalkService } from '@bindings/desktop';
   import { SvelteMap } from 'svelte/reactivity';
@@ -43,6 +43,8 @@
     sessionId: string; embedded?: boolean; tab?: string; onstatus?: (s: Status) => void; labels?: { verified: string; notVerified: string }; can?: (cmd: string) => boolean;
   } = $props();
   const phone = touchSurface();
+  // Desktop: overview and screenshots share one screen, so there is no separate Screenshots tab.
+  const split = $derived(!embedded && !phone);
   const session = $derived(store.sessionById(sessionId));
   let app = $state('');
   const lanes = $derived(session?.stack ? (session.apps ?? []).map(a => ({ id: a.name, label: a.label || a.name, number: a.number ?? 0, url:a.url ?? '' })) : []);
@@ -70,7 +72,8 @@
   let error = $state('');
   let generation = 0;
   let reviewWrite = 0;
-  let panelOpen = $state(false);
+  // The desktop keeps Checks & feedback beside the work at all times; the phone's sheet draws its own.
+  let panelOpen = $state(untrack(() => !embedded));
   let canvasScreen = $state(0);
   let captureOpen = $state(false);
   let captureBusy = $state(false);
@@ -79,7 +82,10 @@
   const canComment = $derived(!!session && can('feedback'));
   let canvas = $state<ReviewCanvas>();
   const packageIdentity = $derived(current?.id);
-  $effect(() => { packageIdentity; canvasScreen = 0; captureOpen = false; captureBusy = false; });
+  // A fresh capture names the screen to show in the package it created; any other package starts at its first.
+  let showScreen = -1;
+  $effect(() => { packageIdentity; canvasScreen = showScreen >= 0 ? showScreen : 0; showScreen = -1; captureOpen = false; captureBusy = false; });
+  $effect(() => { if (split && tab === 'visuals') tab = 'material'; });
   let subject = $state('Write-up');
   let draft = $state('');
   let notice = $state('');
@@ -109,7 +115,7 @@
   const freshness = $derived(current ? reviewFreshness(current,facts) : 'unknown');
   const captureReason = $derived(!current ? 'Prepare review material first' : !captureHost ? 'Capture requires a local host checkout' : freshness === 'stale' ? 'Prepare review material for the current revision first' : 'Capture a page or element into this review');
   const sections = $derived(current ? reviewSections(current.body) : []);
-  const tabList = $derived([{id:'material',label:'Overview'}, ...(current?.screens?.length || (embedded && captureHost) ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:phone ? 'Changes' : 'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]);
+  const tabList = $derived([{id:'material',label:split ? 'Review' : 'Overview'}, ...(!split && (current?.screens?.length || (embedded && captureHost)) ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:phone ? 'Changes' : 'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]);
   $effect(() => { onstatus?.({ tabs: tabList, canMark: !!current && reviewSupported && can('reviewPackageMark'), reviewed: reviewed?.package === current?.id, marking, mark: markReviewed }); });
   const requests = new SvelteMap<string, { state: 'sending' | 'accepted' | 'error'; message: string }>();
   const request = $derived(requests.get(target));
@@ -168,8 +174,9 @@
   async function captured(result: Package, index: number) {
     if (result.session !== current?.session) return;
     generation++; loading = false; materialLoading = false; checking = false;
+    showScreen = index;
     packages = [result,...packages.filter(p => p.id !== result.id)]; selected = result.id;
-    captureOpen = false; tab = 'visuals';
+    captureOpen = false; if (!split) tab = 'visuals';
     await tick(); canvasScreen = index;
   }
   async function closeCapture() {
@@ -245,7 +252,8 @@
 </script>
 
 {#snippet checks()}
-  {#if reviewSession && !embedded}<BeforeMerge session={reviewSession} reviewLayout/>{/if}
+  {#if reviewSession && !embedded && number}<BeforeMerge session={reviewSession} reviewLayout/>
+  {:else if !embedded && !phone}<section class="no-pr" aria-label="PR status"><h3><Icon name="git-pull-request" size={14}/>No pull request yet</h3><p>Review works on the checkout. CI, reviewers, conflicts and merge status appear here once a PR is open.</p></section>{/if}
   {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} {labels} canRun={canVerify} canRecover={can('reviewPackageRecover')}/>{/key}{/if}
   {#if session && !phone}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><p class="mb-3 text-xs text-faint">Not verified for this version.</p><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
 {/snippet}
@@ -265,6 +273,29 @@
     {/if}
     {#if notice}<p role="status" class="text-sm text-ink-2">{notice}</p>{/if}
   </section>
+{/snippet}
+
+{#snippet material()}
+        {#if error}<p role="alert" class="mb-5 text-warn">Could not load review material. {error} Try Refresh review; an older daemon may need restarting.</p>{/if}
+        {#if current}
+          {#if comparable}<p role="status" class="mb-5 text-sm text-info">This package differs from your last review. <Button size="xs" onclick={() => { tab = 'since'; reviewCode = false; }}>See changes since review</Button></p>{/if}
+          {#if current.id !== packages[0]?.id}<p class="mb-5 text-sm text-info">A newer review package is available. <Button size="xs" onclick={() => selected = packages[0].id}>View latest package</Button></p>{/if}
+          <ReviewOverview {split} pkg={current} {facts} {sessionId} {freshness} {checking} onScreen={index => { canvasScreen = index; if (!split) tab = 'visuals'; }} {checks} feedback={reviewFeedback} onAssessRisks={canRequest ? () => requestMaterial(true) : undefined} {assessment} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest}/>
+        {:else if materialLoading}<ReviewSkeleton/>
+        {:else if !error}
+          <div class="empty-review">
+            <h1 class="text-lg font-semibold text-ink">No review material yet</h1>
+            <p class="mt-2 text-prose text-ink-2">Get a summary of the changes, verification results, and screenshots from the agent.</p>
+            <div class="mt-5 flex flex-wrap items-center gap-2">
+              {#if canRequest}
+                <Button variant="primary" size="md" loading={request?.state === 'sending'} disabled={request?.state === 'accepted'} onclick={() => requestMaterial()}>{request?.state === 'accepted' ? 'Review requested' : request?.state === 'error' ? 'Retry request' : 'Ask agent to prepare review'}</Button>
+              {/if}
+              {#if session}<Button variant="secondary" size="md" onclick={() => tab = 'code'}>View code changes</Button>{/if}
+            </div>
+            {#if request?.message}<p role={request.state === 'error' ? 'alert' : 'status'} class="mt-3 text-sm text-ink-2">{request.message}</p>
+            {:else if !canRequest}<p class="mt-3 text-sm text-faint">{session ? 'Resume the coding agent in the conversation to request review material.' : 'This session ended without publishing review material.'}</p>{/if}
+          </div>
+        {/if}
 {/snippet}
 
 {#snippet body()}
@@ -299,28 +330,7 @@
           {#key current.id}<ReviewCanvas bind:this={canvas} onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} {canComment} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
         </div>
       {:else}
-        <div class="review-material">
-          {#if error}<p role="alert" class="mb-5 text-warn">Could not load review material. {error} Try Refresh review; an older daemon may need restarting.</p>{/if}
-          {#if current}
-            {#if comparable}<p role="status" class="mb-5 text-sm text-info">This package differs from your last review. <Button size="xs" onclick={() => { tab = 'since'; reviewCode = false; }}>See changes since review</Button></p>{/if}
-            {#if current.id !== packages[0]?.id}<p class="mb-5 text-sm text-info">A newer review package is available. <Button size="xs" onclick={() => selected = packages[0].id}>View latest package</Button></p>{/if}
-            <ReviewOverview pkg={current} {facts} {sessionId} {freshness} {checking} onScreen={index => { canvasScreen = index; tab = 'visuals'; }} {checks} feedback={reviewFeedback} onAssessRisks={canRequest ? () => requestMaterial(true) : undefined} {assessment} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest}/>
-          {:else if materialLoading}<ReviewSkeleton/>
-          {:else if !error}
-            <div class="empty-review">
-              <h1 class="text-lg font-semibold text-ink">No review material yet</h1>
-              <p class="mt-2 text-prose text-ink-2">Get a summary of the changes, verification results, and screenshots from the agent.</p>
-              <div class="mt-5 flex flex-wrap items-center gap-2">
-                {#if canRequest}
-                  <Button variant="primary" size="md" loading={request?.state === 'sending'} disabled={request?.state === 'accepted'} onclick={() => requestMaterial()}>{request?.state === 'accepted' ? 'Review requested' : request?.state === 'error' ? 'Retry request' : 'Ask agent to prepare review'}</Button>
-                {/if}
-                {#if session}<Button variant="secondary" size="md" onclick={() => tab = 'code'}>View code changes</Button>{/if}
-              </div>
-              {#if request?.message}<p role={request.state === 'error' ? 'alert' : 'status'} class="mt-3 text-sm text-ink-2">{request.message}</p>
-              {:else if !canRequest}<p class="mt-3 text-sm text-faint">{session ? 'Resume the coding agent in the conversation to request review material.' : 'This session ended without publishing review material.'}</p>{/if}
-            </div>
-          {/if}
-        </div>
+        <div class="review-material">{@render material()}</div>
       {/if}
     </div>
     {#if panelOpen && (tab !== 'material' || !current)}<aside class="review-aside" aria-label="Review actions">
@@ -330,11 +340,69 @@
   </div>
 {/snippet}
 
+{#snippet versionPicker()}
+  {#if packages.length}<Select aria-label="Review version" value={current?.id} onchange={e => selected = e.currentTarget.value}>{#each packages as p,i}<option value={p.id} data-selected-label={i === 0 ? 'Latest' : undefined} data-description={`Commit ${p.head.slice(0,8)}`}>{i === 0 ? 'Latest · ' : ''}{new Date(p.createdAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'})}</option>{/each}</Select>{/if}
+{/snippet}
+
+{#snippet deskHeader()}
+    <header class="desk-head" aria-label="Review toolbar">
+      <div class="head-title">
+        <strong class="truncate" title={session?.title || session?.issue || sessionId}>{session?.title || session?.issue || sessionId}</strong>
+        {#if number}<span class="chip"><Icon name="git-pull-request" size={12}/>PR #{number}</span>{:else}<span class="chip muted">No PR yet</span>{/if}
+        {#if current}<span class="chip" data-fresh={freshness} title={freshness === 'current' ? 'Matches the PR head GitHub reports' : freshness === 'stale' ? 'The branch moved on since this was published' : 'Cannot tell whether this matches the branch'}>{freshness === 'current' ? 'Current' : freshness === 'stale' ? 'Outdated' : 'Unverified'}</span>{/if}
+      </div>
+      <div class="head-tabs"><Tabs tabs={tabList} active={tab} onSelect={id => { tab = id; reviewCode = false; }} /></div>
+      <div class="head-actions">
+        {#if lanes.length}<Select aria-label="Review repository" value={lane?.id} onchange={e => app = e.currentTarget.value}>{#each lanes as a}<option value={a.id}>{a.label}</option>{/each}</Select>{/if}
+        {@render versionPicker()}
+        {#if can('reviewPackageCapture')}<Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{/if}
+        {#if current && reviewSupported && can('reviewPackageMark')}<Button size="sm" variant={reviewed?.package === current.id ? 'secondary' : 'primary'} loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{#if reviewed?.package === current.id}<Icon name="check" size={14}/>{/if}{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button>{/if}
+        <Button size="sm" icon aria-label="Refresh review" title="Refresh review" loading={loading} onclick={refresh}><Icon name="refresh-cw" size={14} /></Button>
+        <span class="toolbar-divider"></span>
+        <Button size="sm" title="Checks & feedback · B" aria-keyshortcuts="b" selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}><Icon name="panel-right" size={14}/>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>
+      </div>
+    </header>
+{/snippet}
+
+{#snippet deskBody()}
+  <div class="desk-body">
+  {#if markError}<p role="alert" class="head-error text-sm text-warn">{markError} Refresh review and retry.</p>{/if}
+  <div class="review-layout desk" class:panel-open={panelOpen}>
+    <div class="review-main" class:capturing={captureOpen}>
+      {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={-1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
+      {#if tab === 'code' && session}
+        <div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><p class="px-4 py-2 text-xs text-faint">Live checkout changes. These may differ from the retained review revision.</p><DiffView {sessionId} /></div>
+      {:else if tab === 'since' && comparable && previous && current}
+        {#if reviewCode && session}<div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><div class="px-4 py-2 text-xs text-faint"><Button size="xs" onclick={() => reviewCode = false}>Back to material comparison</Button><p>Exact published heads: {previous.head.slice(0,12)} to {current.head.slice(0,12)}. Uncommitted changes are excluded.</p></div><DiffView sessionId={target} reviewRange={{from:previous.id,to:current.id}}/></div>
+        {:else}<div class="review-material"><ReviewChanges before={previous} after={current} onCode={session ? () => reviewCode = true : undefined}/></div>{/if}
+      {:else}
+        <div class="review-split" class:solo={!current}>
+          <div class="split-left review-material">{@render material()}</div>
+          {#if current}
+            <section class="split-right" aria-label="Screenshots">
+              {#if current.screens?.length}
+                {#key current.id}<ReviewCanvas bind:this={canvas} compact onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} {canComment} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
+              {:else}
+                <div class="no-shots"><Icon name="image" size={28}/><h2>No screenshots yet</h2><p>{captureHost ? 'Capture the running app to compare it with what shipped, and mark up what needs to change.' : 'The agent has not published screenshots for this version.'}</p>{#if captureHost && can('reviewPackageCapture') && freshness !== 'stale'}<Button size="sm" variant="primary" onclick={() => captureOpen = true}><Icon name="image" size={14}/>Capture screenshot</Button>{/if}</div>
+              {/if}
+            </section>
+          {/if}
+        </div>
+      {/if}
+    </div>
+    {#if panelOpen}<aside class="review-aside desk-aside" aria-label="Review actions">
+      <div class="aside-scroll">{@render checks()}</div>
+      <div class="aside-feedback">{@render reviewFeedback()}</div>
+    </aside>{/if}
+  </div>
+  </div>
+{/snippet}
+
 {#if embedded}
   <div class="review-embedded grid min-w-0 grid-cols-[minmax(0,1fr)]" data-review-embedded>{@render body()}</div>
 {:else}
-  <Modal title="PR review" onkey={e => { if (tab === 'visuals') canvas?.handleKey(e); }} fullscreen onClose={() => nav.closeOverlay()} bodyClass="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-    {@render body()}
+  <Modal title="Review" headerContent={split ? deskHeader : undefined} onkey={e => { if (tab === 'visuals' || (split && tab === 'material')) canvas?.handleKey(e); }} fullscreen onClose={() => nav.closeOverlay()} bodyClass={split ? 'grid min-h-0 grid-rows-[minmax(0,1fr)]' : 'grid min-h-0 grid-rows-[auto_minmax(0,1fr)]'}>
+    {#if split}{@render deskBody()}{:else}{@render body()}{/if}
   </Modal>
 {/if}
 
@@ -386,6 +454,42 @@
   .review-embedded .review-code { height:60vh; }
   .review-toolbar :global(.lola-select) { width:auto; max-width:350px; }
   .review-toolbar :global(select) { max-width:350px; }
+  /* Desktop header: the Git toolbar's 48px bar, title left, views centred, actions right. */
+  .desk-head { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; gap:12px; min-height:32px; padding:0; }
+  .head-title { display:flex; align-items:center; gap:8px; min-width:0; }
+  .head-title strong { font-size:13px; font-weight:600; color:var(--color-ink); min-width:0; }
+  .chip { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; padding:2px 8px; border-radius:999px; font-size:11px; line-height:16px; color:var(--color-ink-2); background:color-mix(in srgb,var(--color-ink) 7%,transparent); }
+  .chip.muted { color:var(--color-faint); }
+  .chip[data-fresh=current] { color:var(--color-ok,var(--color-accent-ink)); background:color-mix(in srgb,var(--color-ok,var(--color-accent)) 14%,transparent); }
+  .chip[data-fresh=stale] { color:var(--color-warn); background:color-mix(in srgb,var(--color-warn) 14%,transparent); }
+  .head-tabs :global([role=tablist]) { margin-bottom:0; border:0; gap:2px; padding:3px; border-radius:9px; background:color-mix(in srgb,var(--color-ink) 6%,transparent); }
+  .head-tabs :global([role=tab]) { margin:0; border:0; border-radius:7px; padding:5px 14px; font-size:12px; color:var(--color-ink-2); }
+  .head-tabs :global([role=tab][aria-selected=true]) { background:var(--color-panel); color:var(--color-ink); box-shadow:0 1px 2px #0003; }
+  .head-tabs :global([role=tab]:hover) { color:var(--color-ink); }
+  .head-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; min-width:0; }
+  .head-actions :global(.lola-select) { width:auto; max-width:230px; }
+  .toolbar-divider { width:1px; height:20px; background:var(--color-edge); margin:0 2px; }
+  .head-error { padding:8px 14px; border-bottom:1px solid var(--color-edge); }
+  .desk-body { display:flex; flex-direction:column; min-height:0; min-width:0; }
+  .review-layout.desk { flex:1; min-height:0; grid-template-columns:minmax(0,1fr); }
+  .review-layout.desk.panel-open { grid-template-columns:minmax(0,1fr) minmax(300px,340px); }
+  .desk .review-main { grid-template-rows:minmax(0,1fr); }
+  .desk .review-main.capturing { grid-template-rows:auto minmax(0,1fr); }
+  .review-split { display:grid; grid-template-columns:minmax(340px,5fr) minmax(0,7fr); min-height:0; min-width:0; }
+  .review-split.solo { grid-template-columns:minmax(0,1fr); }
+  .split-left.review-material { padding:20px 20px 40px; border-right:1px solid var(--color-edge); min-height:0; }
+  .review-split.solo .split-left.review-material { border-right:0; padding:40px; }
+  .split-right { min-width:0; min-height:0; overflow:hidden; background:var(--color-canvas); }
+  .no-shots { display:grid; justify-items:center; align-content:center; gap:10px; height:100%; padding:32px; text-align:center; color:var(--color-faint); }
+  .no-shots h2 { font-size:15px; font-weight:600; color:var(--color-ink); }
+  .no-shots p { max-width:38ch; font-size:13px; line-height:1.6; color:var(--color-ink-2); }
+  .desk-aside { grid-template-rows:minmax(0,1fr) auto; gap:0; padding:0; overflow:hidden; }
+  .aside-scroll { min-height:0; overflow:auto; padding:18px 18px 8px; }
+  .aside-feedback { padding:14px 18px 18px; border-top:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 5%,var(--color-canvas)); max-height:55%; overflow:auto; }
+  .no-pr { display:grid; gap:6px; padding:14px; border:1px dashed var(--color-edge); border-radius:10px; }
+  .no-pr h3 { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--color-ink); }
+  .no-pr p { font-size:12px; line-height:1.6; color:var(--color-ink-2); }
+  @media(max-width:1180px) { .review-split { grid-template-columns:minmax(0,1fr); overflow:auto; } .split-left.review-material { overflow:visible; border-right:0; } .split-right { min-height:560px; } .desk-head { grid-template-columns:minmax(0,1fr) auto; } .head-tabs { grid-row:2; grid-column:1 / -1; padding-bottom:8px; } }
   .review-aside { display:grid; align-content:start; gap:28px; min-width:0; overflow:auto; padding:24px 20px; border-left:1px solid var(--color-edge); background:var(--color-canvas); }
   .review-input { width:100%; resize:vertical; padding:12px; border:1px solid color-mix(in srgb,var(--color-edge) 70%,transparent); border-radius:8px; background:var(--color-canvas); color:var(--color-ink); font-size:13px; line-height:20px; }
   .review-input:focus { border-color:var(--color-accent); outline:none; }

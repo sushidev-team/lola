@@ -10,10 +10,12 @@
   import SSHRich from '../ssh/SSHRich.svelte';
   import ReviewThumbnail from './ReviewThumbnail.svelte';
   import { touchSurface } from '$lib/touchsurface';
-  let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment, onAssessConfidence, confidenceRequest }: {
+  let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment, onAssessConfidence, confidenceRequest, split = false }: {
     pkg:ReviewPackage; facts?:PRReadinessData; sessionId:string; freshness:'current'|'stale'|'unknown'; onScreen:(index:number)=>void;
     checking?:boolean; checks?:Snippet; feedback?:Snippet; onAssessRisks?:()=>void; assessment?:{state:string;message:string};
     onAssessConfidence?:()=>void; confidenceRequest?:{state:string;message:string};
+    // The desktop workspace shows screenshots and checks beside the overview, so `split` leaves them out of it.
+    split?:boolean;
   } = $props();
   const confidenceID = $props.id();
   // Phone: no "what is confidence" popover, and an empty breakdown says nothing, so it is not drawn.
@@ -66,7 +68,7 @@
   <span class="risk-level" data-level={value}><span class="level-bars" aria-hidden="true">{#each [1,2,3] as n}<i class:filled={n <= riskWeight[value]}></i>{/each}</span>{value === 'unknown' ? 'Not rated' : value}</span>
 {/snippet}
 
-<div class="overview">
+<div class="overview" class:split>
   <div class="change-column">
     <header class="review-intro">
       <h1>{overview.title}</h1>
@@ -78,7 +80,7 @@
         {#if overview.changes.length}{@render features(overview.changes.slice(0,4))}{:else}<p class="empty-copy">No feature breakdown provided.</p>{/if}
         {#if overview.changes.length > 4}<details class="additional"><summary><Chevron class="disclosure-chevron" />{overview.changes.length-4} more {overview.changes.length === 5 ? 'change' : 'changes'}</summary>{@render features(overview.changes.slice(4))}</details>{/if}
       </section>{/if}
-      {#if screens.length && !phone}<section class="review-panel visual-review" aria-label="Screenshot previews">
+      {#if screens.length && !phone && !split}<section class="review-panel visual-review" aria-label="Screenshot previews">
         <div class="section-title"><h2>See the changes<span class="section-count">{screens.length}</span></h2><Button size="xs" onclick={() => onScreen(0)}>View all<Icon name="arrow-right" size={14}/></Button></div>
         <div class="screenshot-grid">{#each screens.slice(0,4) as screen,i}<button class="screen-preview" onclick={() => onScreen(i)} aria-label={`Review screenshot: ${screen.title}`}>
           <ReviewThumbnail {pkg} artifact={screen.after} label={`Preview: ${screen.title}`}/>
@@ -130,7 +132,7 @@
         {/if}
       </section>
       {/if}
-      {#if checks}<div class="checks">{@render checks()}</div>{/if}
+      {#if checks && !split}<div class="checks">{@render checks()}</div>{/if}
     </div>
       <section class="review-panel risks" aria-label="Reported risks">
         <div class="section-title"><h2>Risks &amp; follow-up<span class="section-count">{overview.risks.length}</span></h2></div><p class="risk-attribution">Agent assessment</p>
@@ -147,7 +149,7 @@
         {#if unrated && onAssessRisks}<Button size="xs" variant="secondary" loading={assessment?.state === 'sending'} disabled={assessment?.state === 'accepted'} onclick={onAssessRisks}><Icon name="sparkles" size={13}/>{assessment?.state === 'accepted' ? 'Assessment requested' : assessment?.state === 'error' ? 'Retry assessment' : 'Ask agent to assess risks'}</Button>{/if}
         {#if assessment?.message}<p class="assessment-message" role={assessment.state === 'error' ? 'alert' : 'status'}>{assessment.message}</p>{/if}
       </section>
-      {#if feedback}<div class="review-panel feedback">{@render feedback()}</div>{/if}
+      {#if feedback && !split}<div class="review-panel feedback">{@render feedback()}</div>{/if}
   </div>
 </div>
 
@@ -156,6 +158,19 @@
   summary > :global(.disclosure-chevron) { margin-right:6px; vertical-align:-2px; color:var(--color-ink-2); }
   details[open] > summary > :global(.disclosure-chevron) { transform:rotate(90deg); }
   .overview { display:grid; grid-template-columns:minmax(0,1fr) minmax(370px,.7fr); gap:40px; align-items:start; max-width:1400px; margin:0 auto; min-width:0; }
+  /* Split: one scrolling column of cards; the screenshots and checks live beside it. */
+  .overview.split { grid-template-columns:minmax(0,1fr); gap:20px; max-width:none; }
+  .overview.split .change-column,.overview.split .decision-column { gap:20px; }
+  .overview.split .decision-column { display:contents; }
+  .overview.split .change-column { display:contents; }
+  .overview.split .review-intro { order:0; } .overview.split .readiness { order:1; } .overview.split .features { order:2; } .overview.split .risks { order:3; } .overview.split .source-details { order:4; }
+  .overview.split h1 { font-size:22px; max-width:none; margin-bottom:10px; }
+  .overview.split .readiness { padding:16px 18px; border-radius:12px; }
+  .overview.split .confidence { padding-bottom:0; border-bottom:0; }
+  .overview.split .score { font-size:34px; }
+  .overview.split .features,.overview.split .risks { padding:18px; border-radius:12px; }
+  .overview.split .features h2,.overview.split .risks h2 { font-size:16px; }
+  .overview.split .confidence-popover { right:auto; left:0; }
   .change-column,.decision-column { min-width:0; display:grid; gap:32px; }
   .review-intro { min-width:0; padding:4px 0 0; }
   h1 { margin:0 0 16px; max-width:32ch; font-size:30px; line-height:1.2; letter-spacing:-.025em; font-weight:600; color:var(--color-ink); text-wrap:balance; overflow-wrap:anywhere; }
