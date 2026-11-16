@@ -41,6 +41,19 @@ describe('Git action menus', () => {
     if(outcome==='confirm') await waitFor(()=>expect(git.branchAction).toHaveBeenCalledWith(expect.objectContaining({action:'pull-stash',source:main.fullName,sourceSHA:main.sha}),'',200));
     else expect(git.branchAction).not.toHaveBeenCalled();
   });
+  it.each([true,false])('pulls with stash and restore on its own when local changes block it (dirty=%s)', async dirty => {
+    git.snapshot!.files = dirty ? [{path:'edited.ts',oldPath:'',index:'M',worktree:'M',untracked:false,conflict:false}] : [];
+    const spy = git.branchAction as unknown as Mock;
+    spy.mockImplementation(async (request: {action:string}) => {
+      if (request.action === 'pull') { git.failedAction = {action:'pull',source:main.fullName,sourceSHA:main.sha,target:'',targetSHA:''}; git.error = 'commit or stash this checkout’s changes before integrating branches'; return null; }
+      return '/repo';
+    });
+    actions.pull(main);
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.objectContaining({action:'pull'}),'',200));
+    if (dirty) await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.objectContaining({action:'pull-stash',source:main.fullName,sourceSHA:main.sha}),'',200));
+    else { await Promise.resolve(); expect(spy).toHaveBeenCalledTimes(1); }
+    expect(confirm.request).toBeNull();
+  });
   function unmergedRemoval() {
     const tree = {path:'/linked',branch:feature.name,head:feature.sha,blocked:false,locked:false,prunable:false};
     git.snapshot!.worktrees = [{...tree,path:'/repo',branch:main.name,head:main.sha},tree];

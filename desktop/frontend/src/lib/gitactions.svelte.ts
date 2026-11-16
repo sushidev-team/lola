@@ -73,6 +73,7 @@ export class GitActions {
     const deletingSelected = ['delete-branch', 'remove-worktree-branch'].includes(request.action) && active.ref === request.source;
     const path = await active.git.branchAction(request, deletingSelected ? '' : active.ref, active.limit);
     if (request.action === 'fetch') return; // background fetch owns its own error reporting
+    if (path === null && request.action === 'pull' && active.git === this.context().git && active.git.error && this.autoStashPull(active, request)) return;
     if (path === null && active.git === this.context().git && active.git.error) {
       const info = gitErrorInfo(active.git.error, request.action);
       store.setFlash(info.title, info.kind, {description:info.description,action:this.recovery()});
@@ -81,6 +82,17 @@ export class GitActions {
     if (path !== null && active.git === this.context().git && ['checkout', 'merge', 'rebase'].includes(request.action)) this.callbacks.openWorktree(path);
   }
   private action(action: string, source?: GitRef, target?: GitRef) { void this.execute(this.context(), this.branchRequest(action, source, target)); }
+  // A pull refused only because local changes are in the way is retried as
+  // stash, pull & restore without asking. The recovery button's checks apply;
+  // the stash is kept if merging or restoring needs attention.
+  private autoStashPull(context: Context, request: GitBranchAction): boolean {
+    const git = context.git;
+    if (git.failedAction?.action !== 'pull' || git.failedAction.source !== request.source || gitErrorInfo(git.error, 'pull').recovery !== 'stash-pull') return false;
+    const source = git.snapshot?.refs.find(branch => !branch.remote && branch.fullName === request.source);
+    if (!source || !source.current || source.sha !== request.sourceSHA || this.mutationBlocked(source) || !git.snapshot?.files.length || git.snapshot.files.some(file => file.conflict)) return false;
+    void this.execute(context, this.branchRequest('pull-stash', source));
+    return true;
+  }
   recovery(): {label:string;run:()=>void} | undefined {
     const context=this.context(), git=context.git, request=git.failedAction;
     if (!git.error || !request) return;
