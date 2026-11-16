@@ -167,7 +167,7 @@ it('keeps area comments anchored while zooming and scrolling, including an open 
   Object.defineProperty(surface,'setPointerCapture',{value:vi.fn()});
   await fireEvent(surface,new MouseEvent('pointerdown',{bubbles:true,button:0,clientX:100,clientY:100}));
   await fireEvent(surface,new MouseEvent('pointermove',{bubbles:true,clientX:300,clientY:250}));
-  await fireEvent(surface,new MouseEvent('pointerup',{bubbles:true}));
+  await fireEvent(surface,new MouseEvent('pointerup',{bubbles:true,clientX:300,clientY:250}));
   await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Keep this position'}});
   const pin=screen.getByRole('button',{name:'Comment 1'});
   const region=screen.getByRole('button',{name:'Open area comment 1'});
@@ -431,4 +431,21 @@ it('arms a drawing tool from its shortcut and refuses freehand without a pointer
   await fireEvent.keyDown(section,{key:'p'});
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   expect(screen.getByRole('status')).toHaveTextContent('Freehand drawing needs a pointer');
+});
+
+it('ends an arrow where the pointer is released, even without a final move',async()=>{
+  const onComment=vi.fn().mockReturnValue(true);
+  render(ReviewCanvas,{pkg,onComment});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Draw arrow'}));
+  const surface=screen.getByRole('button',{name:'Place comment on After screenshot'});
+  surface.getBoundingClientRect=()=>({left:0,top:0,width:100,height:100,right:100,bottom:100,x:0,y:0,toJSON(){}}) as DOMRect;
+  surface.setPointerCapture=()=>{};
+  const at=(type:string,x:number,y:number)=>{const e=new MouseEvent(type,{clientX:x,clientY:y,button:0,bubbles:true,cancelable:true});Object.defineProperty(e,'pointerId',{value:1});return e;};
+  await fireEvent(surface,at('pointerdown',10,20));
+  await fireEvent(surface,at('pointermove',40,20));
+  await fireEvent(surface,at('pointerup',60,20));
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Here'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('arrow from top-left: x=10%, y=20% to x=60%, y=20%'),undefined);
 });

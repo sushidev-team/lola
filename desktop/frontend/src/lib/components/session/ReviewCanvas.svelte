@@ -282,7 +282,13 @@
     if (tool === 'pen') path = [...path, p.x, p.y];
     dragging = shape(tool, start, p, path);
   }
-  function up() {
+  function up(e: PointerEvent) {
+    // The release can carry a position no move reported, so the shape ends where the pointer was lifted.
+    if (start && tool !== 'view' && tool !== 'pin') {
+      const p = point(e);
+      if (tool === 'pen') path = [...path, p.x, p.y];
+      dragging = shape(tool, start, p, path);
+    }
     const mark = dragging, kind = tool;
     dragging = undefined; start = undefined;
     if (!mark || kind === 'view') return;
