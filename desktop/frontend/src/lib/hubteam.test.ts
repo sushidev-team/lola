@@ -109,6 +109,8 @@ describe("words", () => {
   it("explains known error classes and passes unknown ones through", () => {
     expect(statusClassText("")).toBe("");
     expect(statusClassText("linear: unauthorized")).toMatch(/no longer accepts/);
+    expect(statusClassText("linear: forbidden")).toMatch(/may not do/);
+    expect(statusClassText("linear: graphql error")).toMatch(/accepts the key/);
     expect(statusClassText("linear: odd")).toContain("linear: odd");
   });
   it("turns daemon errors into something to act on", () => {

@@ -202,6 +202,28 @@ func TestLinearClient(t *testing.T) {
 	if _, err := l.CreateIssue(context.Background(), "team", IssueID("i1"), Issue{}); !errors.Is(err, ErrGraphQL) || strings.Contains(err.Error(), key) {
 		t.Fatalf("graphql: %v", err)
 	}
+	// Linear's own reason becomes a class; its words never do.
+	for _, c := range []struct {
+		status int
+		body   string
+		want   error
+	}{
+		{http.StatusOK, `{"errors":[{"message":"` + key + `","extensions":{"type":"forbidden"}}]}`, ErrForbidden},
+		{http.StatusOK, `{"errors":[{"extensions":{"code":"FORBIDDEN"}}]}`, ErrForbidden},
+		{http.StatusOK, `{"errors":[{"extensions":{"type":"authentication error"}}]}`, ErrAuth},
+		{http.StatusOK, `{"errors":[{"extensions":{"type":"invalid input"}}]}`, ErrInput},
+		{http.StatusBadRequest, `{"errors":[{"extensions":{"code":"INPUT_ERROR"}}]}`, ErrInput},
+		{http.StatusBadRequest, `{"errors":[{"extensions":{"code":"RATELIMITED"}}]}`, ErrRateLimit},
+		{http.StatusOK, `{"errors":[{"extensions":{"type":"` + key + `"}}]}`, ErrGraphQL},
+		{http.StatusBadRequest, `{"errors":[{"extensions":{"type":"` + key + `"}}]}`, ErrHTTP},
+		{http.StatusBadRequest, `not json`, ErrHTTP},
+	} {
+		status, resp = c.status, c.body
+		_, err := l.CreateIssue(context.Background(), "team", IssueID("i1"), Issue{})
+		if !errors.Is(err, c.want) || strings.Contains(err.Error(), key) || !hubproto.ValidStatusClass(errClass(err)) {
+			t.Fatalf("%d %s: %v", c.status, c.body, err)
+		}
+	}
 }
 
 func TestRunOnceRecordsAttemptBeforeCalling(t *testing.T) {

@@ -135,7 +135,48 @@ var (
 	ErrNetwork = errors.New("linear: network error")
 	ErrNoState = errors.New("linear: no completed state")
 	ErrNoTeam  = errors.New("linear: no such team")
+	// Linear's own reason for a refused request, when it names one of these
+	// (see linearClass). Anything else stays ErrGraphQL.
+	ErrForbidden = errors.New("linear: forbidden")
+	ErrInput     = errors.New("linear: invalid input")
+	ErrRateLimit = errors.New("linear: rate limited")
 )
+
+// linearClass maps the errors of a Linear answer onto one of the hub's
+// classes: nil when the answer carries none, ErrGraphQL when it names no
+// reason the hub knows. Linear tags an error with extensions.type
+// ("forbidden", "invalid input", "ratelimited", "authentication error") and
+// extensions.code ("FORBIDDEN", "INPUT_ERROR", "RATELIMITED",
+// "AUTHENTICATION_ERROR"). Only the match against this closed set leaves the
+// function: never a message, a type or a code as Linear wrote it.
+func linearClass(raw []byte) error {
+	var out struct {
+		Errors []struct {
+			Extensions struct {
+				Type string `json:"type"`
+				Code string `json:"code"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(raw, &out) != nil || len(out.Errors) == 0 {
+		return nil
+	}
+	for _, e := range out.Errors {
+		for _, tag := range []string{e.Extensions.Type, e.Extensions.Code} {
+			switch strings.ReplaceAll(strings.ToLower(tag), "_", " ") {
+			case "authentication error":
+				return ErrAuth
+			case "forbidden":
+				return ErrForbidden
+			case "invalid input", "input error":
+				return ErrInput
+			case "ratelimited", "rate limited":
+				return ErrRateLimit
+			}
+		}
+	}
+	return ErrGraphQL
+}
 
 // Linear is the GraphQL Creator.
 type Linear struct {
@@ -450,7 +491,15 @@ func (l *Linear) post(ctx context.Context, query string, vars map[string]any) ([
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return nil, ErrAuth
 	case resp.StatusCode != http.StatusOK:
+		// Linear answers a rate limit or a bad input with a 400 and the
+		// same errors array: its reason beats the bare status.
+		if c := linearClass(raw); c != nil && c != ErrGraphQL {
+			return nil, c
+		}
 		return nil, fmt.Errorf("%w: status %d", ErrHTTP, resp.StatusCode)
+	}
+	if c := linearClass(raw); c != nil {
+		return nil, c
 	}
 	return raw, nil
 }
@@ -1144,7 +1193,7 @@ func (e *Escalator) closeDone(ctx context.Context) {
 var errSkip = errors.New("skip")
 
 func errClass(err error) string {
-	for _, c := range []error{ErrAuth, ErrHTTP, ErrGraphQL, ErrNetwork, ErrNoState, ErrNoTeam} {
+	for _, c := range []error{ErrAuth, ErrHTTP, ErrGraphQL, ErrNetwork, ErrNoState, ErrNoTeam, ErrForbidden, ErrInput, ErrRateLimit} {
 		if errors.Is(err, c) {
 			return c.Error()
 		}

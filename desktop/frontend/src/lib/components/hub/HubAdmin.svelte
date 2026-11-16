@@ -239,7 +239,7 @@
         {#if view?.linearKeySet}<Button variant="danger" size="md" disabled={linearBusy} onclick={askClearLinear}>Remove</Button>{/if}
       </span>
       {#if keyError}<span class="text-sm text-bad">{keyError}</span>{/if}
-      <span class="text-sm text-faint">The hub checks the key with Linear before it stores it. Use a key that may only create and close issues.</span>
+      <span class="text-sm text-faint">The hub checks the key with Linear before it stores it. The key must read, create, comment on and update issues in the chosen team, and needs nothing more.</span>
       {#if view?.linearKeySet}
         <span class="flex min-w-0 flex-wrap items-center gap-2">
           <span class="text-sm text-faint">Team</span>

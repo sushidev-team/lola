@@ -138,7 +138,10 @@ export function statusClassText(cls: string | undefined): string {
     "linear: network error": "The hub could not reach Linear the last time it tried.",
     "linear: timeout": "Linear did not answer the hub in time the last time it tried.",
     "linear: http error": "Linear answered the hub with an error the last time it tried.",
-    "linear: graphql error": "Linear refused the hub’s last request.",
+    "linear: forbidden": "Linear accepts the key, but the key may not do what the hub asked. It must read, create, comment on and update issues in the chosen team.",
+    "linear: invalid input": "Linear accepts the key, but rejected the hub’s last request as invalid. Pick the team again.",
+    "linear: rate limited": "Linear rate-limited the hub’s last request. The hub tries again on its own.",
+    "linear: graphql error": "Linear accepts the key, but answered the hub’s last request with an error and no reason the hub knows. The hub tries again on its own.",
     "digest: webhook post failed": "Slack did not accept the last digest. Check the webhook, or paste a new one.",
     "digest: webhook cannot be opened": "The hub can no longer read the stored webhook. Paste it again.",
   };

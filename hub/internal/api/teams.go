@@ -244,9 +244,10 @@ func (s *Server) adminErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, secret.ErrNoKey), errors.Is(err, secret.ErrOtherKey), errors.Is(err, secret.ErrCorrupt):
 		writeError(w, http.StatusServiceUnavailable, hubproto.CodeUnavailable)
-	case errors.Is(err, escalate.ErrAuth):
+	case errors.Is(err, escalate.ErrAuth), errors.Is(err, escalate.ErrForbidden):
 		writeError(w, http.StatusUnprocessableEntity, hubproto.CodeInvalidSecret)
 	case errors.Is(err, escalate.ErrNetwork), errors.Is(err, escalate.ErrHTTP), errors.Is(err, escalate.ErrGraphQL),
+		errors.Is(err, escalate.ErrInput), errors.Is(err, escalate.ErrRateLimit),
 		errors.Is(err, context.DeadlineExceeded):
 		writeError(w, http.StatusServiceUnavailable, hubproto.CodeUnavailable)
 	case errors.Is(err, store.ErrLimit):
