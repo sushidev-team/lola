@@ -468,7 +468,7 @@
     // Git mode: a project is a workspace to open. Code mode: it filters the sessions beside it,
     // and picking the one already chosen clears the filter.
     // A stack or path-less project keeps the Git tab too: ProjectDetail shows its overview.
-    if (nav.inGit) nav.goDetail(name, "git");
+    if (nav.gitMode) nav.goDetail(name, "git");
     else { nav.scopeTo(nav.scoped && nav.project === name ? "" : name); nav.sidebarTab = "sessions"; }
   }
 
@@ -598,7 +598,7 @@
     {active}
     title={stack ? d.hint : p.lastError
       ? `poll error: ${p.lastError}`
-      : nav.inGit ? "Open in Git" : "Show only this project's sessions"}
+      : nav.gitMode ? "Open in Git" : "Show only this project's sessions"}
     onclick={() => openProject(p.name)}
     onkeydown={(e) => {
       // A member is placed by its stack, not by the arrangement keys.
@@ -724,7 +724,7 @@
       <SetupChecklist dismissKey="sidebar" hideWhenComplete optional={["poll", "linear"]} class="mb-2 rounded-md border border-dashed border-edge p-2" />
     {/if}
     {@const gap = drag?.kind === "group" ? groupTarget : target?.kind === "top" ? target.index : null}
-    {#if !nav.inGit}
+    {#if !nav.gitMode}
       <div class="pb-1">
         <NavRow label="All sessions" glyph="∗" active={nav.view === "cockpit" && !nav.scoped} title="Show sessions from every project" onclick={() => nav.scopeTo("")} />
       </div>

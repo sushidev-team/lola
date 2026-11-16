@@ -1,5 +1,10 @@
 <script lang="ts">
   import Skeleton from "./Skeleton.svelte";
+  import Icon from "./Icon.svelte";
+  import { store } from "$lib/store.svelte";
+  import { gitTargetProject } from "$lib/workspacenav";
+  // The project Git is about to open on, so the title is right in the first frame.
+  const title = $derived.by(() => { const p = gitTargetProject(); return p ? store.displayNameFor(p.name) : ""; });
   // What the Git workspace looks like before it has mounted: a toolbar, the branch rail and the
   // history. Drawn from plain placeholders so it paints in the same frame as the switch, while the
   // real workspace loads behind it.
@@ -8,7 +13,7 @@
 </script>
 
 <div class="grid h-full grid-rows-[44px_minmax(0,1fr)]" role="status" aria-label="Loading Git workspace">
-  <div class="flex items-center gap-3 border-b border-edge/70 px-4 pl-5"><Skeleton width="120px" height="14px" /><span class="ml-auto flex gap-2"><Skeleton width="64px" height="24px" /><Skeleton width="64px" height="24px" /><Skeleton width="72px" height="24px" /></span></div>
+  <div class="flex items-center gap-3 border-b border-edge/70 px-4"><span class="flex size-7 items-center justify-center text-faint"><Icon name="chevron-left" size={16} /></span>{#if title}<h1 class="truncate text-base font-semibold text-ink">{title}</h1>{:else}<Skeleton width="120px" height="14px" />{/if}<span class="ml-auto flex gap-2"><Skeleton width="64px" height="24px" /><Skeleton width="64px" height="24px" /><Skeleton width="72px" height="24px" /></span></div>
   <div class="grid min-h-0 grid-cols-[260px_minmax(0,1fr)]">
     <div class="grid content-start gap-5 border-r border-edge/70 p-4">
       {#each rail as group}

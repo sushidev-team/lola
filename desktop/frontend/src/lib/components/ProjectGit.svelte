@@ -381,7 +381,11 @@
   });
   $effect(() => {
     const state = git, branch = ref, count = limit;
-    untrack(() => { if (newPR && newPR.git !== state) newPR = null; if (newWorktree && newWorktree.git !== state) newWorktree = null; if (publishBranch && publishBranch.git !== state) publishBranch = null; if (newBranch && newBranch.git !== state) newBranch = null; gitActions.close(); cancelBranchDrag(); selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; hoveredLane = null; focusedLane = null; state.clearDiff(); historyLoad = state.load(branch, count); });
+    untrack(() => { if (newPR && newPR.git !== state) newPR = null; if (newWorktree && newWorktree.git !== state) newWorktree = null; if (publishBranch && publishBranch.git !== state) publishBranch = null; if (newBranch && newBranch.git !== state) newBranch = null; gitActions.close(); cancelBranchDrag(); selected = []; area = ''; diffOpen = false; path = ''; activeFile = ''; hoveredLane = null; focusedLane = null; state.clearDiff(); // A checkout this view has not drawn yet but already holds a snapshot for (a switch back to Git)
+      // is refreshed in place; a first visit, or a changed branch or limit, shows loading.
+      const quiet = !drawn.has(state) && !!state.snapshot && branch === "" && count === 200;
+      drawn.add(state);
+      historyLoad = state.load(branch, count, quiet); });
   });
   $effect(() => {
     const state = view, snapshot = view.snapshot, selection = selected, chosenArea = area, chosenPath = path;
@@ -447,6 +451,7 @@
   function openWorktreeChanges(tree: GitWorktree) { chooseWorktree(tree.path === configuredPath ? '' : tree.path); working(); }
   function chooseWorktree(value: string) { peekPath = ''; branchJump++; focusedBranch = ''; worktree = value; ref = ''; limit = 200; query = ''; showRail = false; }
   let historyLoad: Promise<void> = Promise.resolve();
+  const drawn = new WeakSet<object>();
   let branchJump = 0;
   let focusedBranch = $state('');
   let historyList = $state<HTMLDivElement>();
