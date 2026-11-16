@@ -23,7 +23,7 @@ export async function openShell(project = "") {
   if (result?.sessionId) openSession(result.sessionId, project);
 }
 
-// ⌘N and the palette. A prompt needs a project to land in, so with none in scope this picks the
+// `c`, the Session menu and the palette. A prompt needs a project to land in, so with none in scope this picks the
 // open session's, else the first with a checkout. Only with no project at all does it become the
 // temporary form.
 export function newSessionHere() {

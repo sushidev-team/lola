@@ -219,7 +219,7 @@ describe("in a session", () => {
     expect(confirm.request).toBeNull();
     expect(nav.focusedTerm).toBe(A);
   });
-  it("n hides and shows the right sidebar, and no longer walks the waiting queue", async () => {
+  it("⌘N hides and shows the right sidebar, and bare n does nothing", async () => {
     await mount([plain(A), plain(B, { agentState: "waiting_input" })]);
     nav.openSession(A);
     ssh.open(A);
@@ -229,18 +229,29 @@ describe("in a session", () => {
     const before = v.dockHidden;
     await press("n");
     expect(nav.focusedTerm).toBe(A);
+    expect(v.dockHidden).toBe(before);
+    chord("toggle-right-sidebar");
     expect(v.dockHidden).toBe(!before);
-    await press("n");
+    chord("toggle-right-sidebar");
     expect(v.dockHidden).toBe(before);
   });
-  it("n toggles the project views' right column outside a session", async () => {
+  it("⌘N toggles the project views' right column outside a session", async () => {
     await mount([plain(A)]);
     nav.view = "detail";
     const before = nav.asideOpen;
-    await press("n");
+    chord("toggle-right-sidebar");
     expect(nav.asideOpen).toBe(!before);
-    await press("n");
+    chord("toggle-right-sidebar");
     expect(nav.asideOpen).toBe(before);
+  });
+  it("⌘B toggles the left sidebar behind an open overlay", async () => {
+    await mount([plain(A)]);
+    nav.openOverlay("help");
+    const before = nav.sidebarOpen;
+    chord("toggle-sidebar");
+    expect(nav.sidebarOpen).toBe(!before);
+    chord("toggle-sidebar");
+    expect(nav.sidebarOpen).toBe(before);
   });
   it("c opens the new-session form, and ⌘C stays Copy", async () => {
     await mount([plain(A)]);

@@ -367,12 +367,14 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	}
 	menu.Add("Switch to Git or Back").SetAccelerator("CmdOrCtrl+Shift+g").OnClick(ask("toggle-git"))
 	menu.Add("Show or Hide Sidebar").SetAccelerator("CmdOrCtrl+b").OnClick(ask("toggle-sidebar"))
+	menu.Add("Show or Hide Right Sidebar").SetAccelerator("CmdOrCtrl+n").OnClick(ask("toggle-right-sidebar"))
 	menu.Add("Focus Sessions").SetAccelerator("CmdOrCtrl+Shift+e").OnClick(ask("focus-sessions"))
 	menu.Add("Keyboard Shortcuts…").SetAccelerator("CmdOrCtrl+/").OnClick(ask("shortcuts"))
 	menu.AddSeparator()
 	menu.Add("Find in Project History…").SetAccelerator("CmdOrCtrl+f").OnClick(ask("find-project-history"))
 	menu.Add("Search Projects and Sessions…").SetAccelerator("CmdOrCtrl+k").OnClick(ask("commands"))
-	menu.Add("New Session…").SetAccelerator("CmdOrCtrl+n").OnClick(ask("new-session"))
+	// No accelerator: ⌘N is the right sidebar. The frontend's bare `c` opens the form.
+	menu.Add("New Session…").OnClick(ask("new-session"))
 	menu.Add("New Temporary Shell").SetAccelerator("CmdOrCtrl+Shift+n").OnClick(ask("temporary-shell"))
 	menu.AddSeparator()
 	menu.Add("Trigger Review").

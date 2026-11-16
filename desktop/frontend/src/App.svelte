@@ -89,9 +89,16 @@
       toggleGitWorkspace();
       return;
     }
+    // The left sidebar is layout, not an action on anything: ⌘B works in every view and behind
+    // every dialog.
+    if (action === "toggle-sidebar") { nav.toggleSidebar(); return; }
     if (nav.overlay || confirm.request || sessionMenu.request || document.querySelector('[aria-modal="true"]')) return;
     if (action === "toggle-git") { toggleGitWorkspace(); return; }
-    if (action === "toggle-sidebar") { nav.toggleSidebar(); return; }
+    if (action === "toggle-right-sidebar") {
+      if (nav.view !== "cockpit") nav.toggleAside();
+      else if (sel) ssh.sideKey(sel);
+      return;
+    }
     if (action === "focus-sessions") { nav.focusSessions(); return; }
     if (action === "shortcuts") { nav.openOverlay("help"); return; }
     if (action === "previous") { ssh.nextWaiting(-1); return; }
@@ -331,14 +338,8 @@
       return;
     }
 
-    // `n` and `c` mean the same at every depth and in every view, so they sit above the
-    // per-view key maps. Next / previous waiting stay on ⌘J / ⌘⇧J.
-    if (e.key === "n") {
-      if (nav.view !== "cockpit") nav.toggleAside();
-      else if (sel) ssh.sideKey(sel);
-      e.preventDefault();
-      return;
-    }
+    // `c` means the same at every depth and in every view, so it sits above the per-view key
+    // maps. The right sidebar is ⌘N, a menu chord (see sessionAction).
     if (e.key === "c") {
       newSessionHere();
       e.preventDefault();

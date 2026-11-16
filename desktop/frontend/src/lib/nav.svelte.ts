@@ -165,7 +165,7 @@ class Nav {
     }
   }
   /**
-   * `n` outside a session: the project views' right column. Webview-local like
+   * ⌘N outside a session: the project views' right column. Webview-local like
    * sidebarOpen. A session's right column is its dock, with its own state.
    */
   asideOpen = $state(readAside());

@@ -238,7 +238,7 @@ case for case; change both together.
 
 ### Custom sessions and quick navigation
 
-Use **New session…** on a project, its sidebar actions menu, or **⌘N** to
+Use **New session…** on a project, its sidebar actions menu, or **C** to
 create a named agent or shell session. Choose **New worktree** to create a
 branch, or **Main checkout** to use the project's existing directory and
 current branch. **Open shell here** skips the form. Names can be changed from

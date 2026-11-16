@@ -1359,7 +1359,7 @@ class SSHStore {
   }
 
   /**
-   * `n`: the session's right sidebar. Only the conversation has one. With nothing docked it
+   * ⌘N: the session's right sidebar. Only the conversation has one. With nothing docked it
    * brings Overview back, so the key always has something to show.
    */
   sideKey(s: SessionInfo) {
