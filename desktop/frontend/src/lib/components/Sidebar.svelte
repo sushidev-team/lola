@@ -36,11 +36,17 @@
   // The switch answers first: the pill and the column layout follow the click at once, and the
   // (heavier) workspace change runs after that frame has painted, so it never holds the click back.
   let wanted = $state<"code" | "git" | null>(null);
+  let settle: ReturnType<typeof setTimeout>;
   const git = $derived((wanted ?? (nav.inGit ? "git" : "code")) === "git");
   function pickMode(id: string) {
     if ((id === "git") === git) return;
     wanted = id === "git" ? "git" : "code";
-    requestAnimationFrame(() => setTimeout(() => { switchMode(id); wanted = null; }, 0));
+    requestAnimationFrame(() => setTimeout(() => {
+      switchMode(id);
+      // Hold the choice until the nav state agrees, so the pill never bounces back mid-load.
+      clearTimeout(settle);
+      settle = setTimeout(() => { wanted = null; }, 400);
+    }, 0));
   }
   function switchMode(id: string) {
     if (id === "git") { if (!nav.inGit) toggleGitWorkspace(); }
@@ -121,7 +127,7 @@
   .mode-switch { position:relative; display:grid; grid-template-columns:1fr 1fr; padding:2px; border-radius:9px; background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); }
   .mode-thumb { position:absolute; top:2px; bottom:2px; left:2px; width:calc(50% - 2px); border-radius:7px; background:linear-gradient(135deg,color-mix(in srgb,var(--color-accent) 85%,white),var(--color-accent)); box-shadow:0 1px 6px color-mix(in srgb,var(--color-accent) 45%,transparent); transition:transform 160ms cubic-bezier(.2,.9,.3,1.15),box-shadow 160ms; }
   .mode-switch[data-mode="git"] .mode-thumb { transform:translateX(100%); }
-  .mode-btn { position:relative; z-index:1; display:flex; align-items:center; justify-content:center; gap:5px; height:22px; padding:0 9px; border-radius:7px; font-size:13px; color:var(--color-faint); transition:color 200ms; }
+  .mode-btn { position:relative; z-index:1; display:flex; align-items:center; justify-content:center; gap:5px; height:22px; padding:0 9px; border-radius:7px; font-size:13px; color:var(--color-faint); }
   .mode-btn :global(svg) { transition:transform 200ms cubic-bezier(.2,.9,.3,1.15); }
   .mode-btn:hover { color:var(--color-ink); }
   .mode-btn[aria-pressed="true"] { color:var(--color-canvas); font-weight:600; }
