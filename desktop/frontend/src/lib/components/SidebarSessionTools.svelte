@@ -18,7 +18,15 @@
   let createRoot: HTMLDivElement;
   let menu = $state<HTMLDivElement>();
   let trigger: HTMLElement | undefined;
-  let searchInput: HTMLInputElement;
+  let searchInput = $state<HTMLInputElement>();
+  let filterOpen = $state(false);
+  const searching = $derived(filterOpen || nav.sidebarQuery !== "");
+  async function toggleFilter() {
+    if (searching) { nav.sidebarQuery = ""; filterOpen = false; return; }
+    filterOpen = true;
+    await tick();
+    searchInput?.focus();
+  }
   let position = $state({ x: 0, y: 0 });
 
   async function placeAndFocus() {
@@ -83,12 +91,15 @@
 
 <div class="sidebar-session-tools">
   <div class="flex min-w-0 items-center gap-2">
+    {#if searching}
     <div class="relative min-w-0 flex-1">
       <input bind:this={searchInput} class="sidebar-search" aria-label="Search sessions" placeholder="Search sessions…" bind:value={nav.sidebarQuery}
-        onkeydown={e => { if (e.key === 'Escape') { nav.sidebarQuery = ''; e.stopPropagation(); } }} />
+        onkeydown={e => { if (e.key === 'Escape') { if (!nav.sidebarQuery) filterOpen = false; nav.sidebarQuery = ''; e.stopPropagation(); } }} />
       {#if nav.sidebarQuery}<button type="button" class="sidebar-search-clear" aria-label="Clear session search" onclick={() => nav.sidebarQuery = ''}><Icon name="x" size={14} /></button>{/if}
     </div>
-    <div class="relative" bind:this={createRoot}>
+    {/if}
+    <div class="relative ml-auto flex items-center gap-1" bind:this={createRoot}>
+      <Button icon size="xs" aria-label="Filter sessions" title="Filter sessions" aria-pressed={searching} onclick={toggleFilter}><Icon name="list-filter" size={14} /></Button>
       <Button icon size="xs" aria-label="New session" title="New session" aria-haspopup="menu" aria-expanded={createOpen} onclick={toggleCreate}><Icon name="plus" size={14} /></Button>
       {#if createOpen}
         <div bind:this={menu} role="menu" tabindex="-1" aria-label="Create session" style="left:{position.x}px;top:{position.y}px" class="fixed z-50 max-h-[calc(100vh-8px)] w-56 max-w-[calc(100vw-8px)] overflow-y-auto rounded-lg border border-edge bg-panel p-1 shadow-xl" onkeydown={menuKey} oncontextmenu={e => e.preventDefault()}>

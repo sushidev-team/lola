@@ -51,3 +51,26 @@ it("opens the Team view and syncs the hub from the palette", async () => {
  await fireEvent.keyDown(screen.getByRole("combobox"),{key:"Enter"});
  expect(nav.view).toBe("team"); expect(nav.overlay).toBeNull();
 });
+
+it("lists sessions and projects before actions and has no title bar", async () => {
+ render(CommandPalette);
+ expect(screen.queryByText("Go to…")).toBeNull();
+ const ids = screen.getAllByRole("option").map(o => o.id);
+ expect(ids[0]).toBe("command-0");
+ const text = screen.getAllByRole("option").map(o => o.textContent ?? "");
+ expect(text[0]).toContain("Investigate checkout");
+ expect(text[1]).toContain("Hlmw9 Website");
+ expect(text[2]).toContain("New session");
+ expect(screen.queryByRole("option", { name: /Doctor/ })).toBeNull();
+ await fireEvent.input(screen.getByRole("combobox"),{target:{value:"Doctor"}});
+ expect(screen.getByRole("option", { name: /Doctor/ })).toBeInTheDocument();
+});
+
+it("shows the selected entry's actions in an options panel on ⌘K", async () => {
+ render(CommandPalette);
+ await fireEvent.keyDown(screen.getByRole("combobox"),{key:"k",metaKey:true});
+ expect(screen.getByRole("menu", { name: /Investigate checkout actions/ })).toBeInTheDocument();
+ expect(screen.getByRole("menuitem", { name: /Open session/ })).toBeInTheDocument();
+ await fireEvent.keyDown(screen.getByRole("textbox",{name:"Search for actions"}),{key:"k",metaKey:true});
+ expect(screen.queryByRole("menu")).toBeNull();
+});

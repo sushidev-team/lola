@@ -119,6 +119,8 @@ class Nav {
   sidebarBrowsing = $state(false);
   sidebarQuery = $state("");
   sidebarFocus = $state(0);
+  /** Bumped by the menu's ⌘K while the palette is open: toggles its options panel. */
+  commandOptions = $state(0);
   sidebarWidth = $state(readSidebarWidth());
   setSidebarWidth(width: number) {
     this.sidebarWidth = Number.isFinite(width) ? Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, width)) : SIDEBAR_DEFAULT;
@@ -127,6 +129,7 @@ class Nav {
   focusSessions() {
     this.sidebarBrowsing = true;
     this.sidebarOpen = true;
+    this.sidebarTab = "sessions";
     try { localStorage.setItem(SIDEBAR_KEY, "1"); } catch { /* best effort */ }
     this.sidebarFocus++;
   }
@@ -137,6 +140,8 @@ class Nav {
    * throwing over.
    */
   sidebarOpen = $state(readSidebar());
+  /** Narrow sidebar only: which of Projects and Sessions is on show (both show side by side when wide). */
+  sidebarTab = $state<"sessions" | "projects">("sessions");
   /** Sidebar attention filter. Empty means all sessions. */
   triage = $state<string>("");
 

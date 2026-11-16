@@ -4,7 +4,7 @@
   import { projectActions } from "$lib/projectActions";
   import { matchesSearch, searchMatch } from "$lib/search";
   import SearchHighlight from "./SearchHighlight.svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { store, type ProjectInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { confirm } from "$lib/confirm.svelte";
@@ -55,7 +55,16 @@
   // catches up. Without it the row snaps back to its old place for the frame
   // between the drop and the reload, which reads as "the drag didn't take".
   let query = $state("");
-  let searchInput: HTMLInputElement;
+  let searchInput = $state<HTMLInputElement>();
+  // The search field lives behind the header's filter button; a live query keeps it open.
+  let filterOpen = $state(false);
+  const searching = $derived(filterOpen || query !== "");
+  async function toggleFilter() {
+    if (searching) { query = ""; filterOpen = false; return; }
+    filterOpen = true;
+    await tick();
+    searchInput?.focus();
+  }
   const matches = $derived(store.projects.filter(p => matchesSearch(query, displayName(p), p.repo, p.path)));
   let pending = $state<Row<ProjectInfo>[] | null>(null);
   const rows = $derived(pending ?? buildRows(store.projects, store.groups));
@@ -102,7 +111,7 @@
     if (e.defaultPrevented || (e.target as HTMLElement).closest("input, textarea, [contenteditable], button, a")) return;
     e.preventDefault();
     rowMenu = null;
-    addTrigger = searchInput;
+    addTrigger = searchInput ?? (e.currentTarget as HTMLElement);
     addMenu = {
       x: Math.max(4, Math.min(e.clientX, window.innerWidth - 180)),
       y: Math.max(4, Math.min(e.clientY, window.innerHeight - 120)),
@@ -460,7 +469,7 @@
     // and picking the one already chosen clears the filter.
     // A stack or path-less project keeps the Git tab too: ProjectDetail shows its overview.
     if (nav.inGit) nav.goDetail(name, "git");
-    else nav.scopeTo(nav.scoped && nav.project === name ? "" : name);
+    else { nav.scopeTo(nav.scoped && nav.project === name ? "" : name); nav.sidebarTab = "sessions"; }
   }
 
   function toggleGroup(name: string, collapsed: boolean) {
@@ -651,7 +660,16 @@
     <Button
       size="xs"
       icon
-      class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
+      class="ml-auto"
+      title="filter projects"
+      aria-label="Filter projects"
+      aria-pressed={searching}
+      onclick={toggleFilter}><Icon name="list-filter" size={14} /></Button
+    >
+    <Button
+      size="xs"
+      icon
+      class="opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
       title="add a project, a group or a stack"
       aria-label="Add"
       aria-haspopup="menu"
@@ -659,16 +677,18 @@
     >
   </div>
 
+  {#if searching}
   <div class="px-2 py-2">
     <div class="relative">
       <input bind:this={searchInput} class="w-full rounded border border-edge bg-panel py-1.5 pr-8 pl-2 text-sm outline-none focus:border-accent" placeholder="Search projects…" aria-label="Search projects" bind:value={query} />
       {#if query}
-        <Button icon size="xs" class="absolute top-1/2 right-1 -translate-y-1/2" aria-label="Clear project search" title="Clear search" onclick={() => { query = ""; searchInput.focus(); }}>
+        <Button icon size="xs" class="absolute top-1/2 right-1 -translate-y-1/2" aria-label="Clear project search" title="Clear search" onclick={() => { query = ""; searchInput?.focus(); }}>
           <Icon name="x" class="size-3" />
         </Button>
       {/if}
     </div>
   </div>
+  {/if}
   {#if query.trim()}
     <ul class="grid gap-0.5" aria-label="Matching projects">
       {#each matches as p (p.name)}

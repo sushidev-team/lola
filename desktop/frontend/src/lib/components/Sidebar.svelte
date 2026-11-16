@@ -6,15 +6,24 @@
   import Button from "./Button.svelte";
   import SidebarSessionTools from "./SidebarSessionTools.svelte";
   import SidebarResize from "./SidebarResize.svelte";
-  let { width = 320, maxWidth = 480 }: { width?: number; maxWidth?: number } = $props();
+  let { width = 540, maxWidth = 760 }: { width?: number; maxWidth?: number } = $props();
   import SidebarProjects from "./SidebarProjects.svelte";
   import SidebarStatus from "./SidebarStatus.svelte";
   import SidebarVersion from "./SidebarVersion.svelte";
   import SidebarActivity from "./SidebarActivity.svelte";
   import SidebarRoster from "./SidebarRoster.svelte";
   import { toggleGitWorkspace } from "$lib/workspacenav";
+  import { SIDEBAR_SPLIT } from "$lib/sidebarwidth";
+  import Tabs from "./Tabs.svelte";
 
   let sessionsArea = $state<HTMLDivElement>();
+
+  // Too narrow for two columns: Projects and Sessions become tabs over one column.
+  const narrow = $derived(width < SIDEBAR_SPLIT);
+  const TABS = [
+    { id: "projects", label: "Projects" },
+    { id: "sessions", label: "Sessions" },
+  ];
 
   const MODES = [
     { id: "code", label: "Code" },
@@ -77,13 +86,16 @@
 
   <!-- Projects on the left, the sessions of the chosen project (or all) beside them. Both are always
        mounted, so each keeps its scroll and folders. -->
-  <div class="grid min-h-0 min-w-0" style="grid-template-columns:minmax(168px,38%) minmax(0,1fr)">
-    <div class="grid min-h-0 min-w-0 border-r border-edge" style="grid-template-rows:minmax(0,1fr) auto auto">
+  <div class="grid min-h-0 min-w-0" style="grid-template-rows:{narrow ? 'auto ' : ''}minmax(0,1fr);grid-template-columns:{narrow ? 'minmax(0,1fr)' : 'minmax(168px,38%) minmax(0,1fr)'}">
+    {#if narrow}
+      <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => (nav.sidebarTab = t === "projects" ? "projects" : "sessions")} />
+    {/if}
+    <div class="grid min-h-0 min-w-0 {narrow ? (nav.sidebarTab === 'projects' ? '' : 'hidden') : 'border-r border-edge'}" style="grid-template-rows:minmax(0,1fr) auto auto">
       <div class="min-h-0 overflow-auto"><SidebarProjects /></div>
       <SidebarActivity />
       <SidebarVersion />
     </div>
-    <div bind:this={sessionsArea} class="grid min-h-0 min-w-0" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
+    <div bind:this={sessionsArea} class="grid min-h-0 min-w-0 {narrow && nav.sidebarTab !== 'sessions' ? 'hidden' : ''}" style="grid-template-rows:auto minmax(0,1fr)" data-sidebar-sessions>
       <SidebarSessionTools contextTarget={sessionsArea} />
       <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
     </div>

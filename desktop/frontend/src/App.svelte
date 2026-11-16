@@ -91,6 +91,8 @@
     }
     // The left sidebar is layout, not an action on anything: ⌘B works in every view and behind
     // every dialog.
+    // ⌘K inside the palette opens its options panel; the accelerator never reaches the field.
+    if (action === "commands" && nav.overlay === "commands") { nav.commandOptions++; return; }
     if (action === "toggle-sidebar") { nav.toggleSidebar(); return; }
     if (nav.overlay || confirm.request || sessionMenu.request || document.querySelector('[aria-modal="true"]')) return;
     if (action === "toggle-git") { toggleGitWorkspace(); return; }

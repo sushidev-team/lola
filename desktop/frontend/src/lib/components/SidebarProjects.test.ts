@@ -174,6 +174,7 @@ describe("SidebarProjects", () => {
 
   it("keeps project row menus and the search field's native context menu", async () => {
     render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "Filter projects" }));
     await fireEvent.contextMenu(screen.getByLabelText("Search projects"));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     await fireEvent.contextMenu(screen.getByRole("button", { name: "lola" }));
@@ -183,6 +184,7 @@ describe("SidebarProjects", () => {
 
   it("dismisses the background context menu with Escape", async () => {
     render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "Filter projects" }));
     await fireEvent.contextMenu(screen.getByRole("navigation", { name: "Projects" }));
     await fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -756,6 +758,7 @@ it("searches project names, repositories and paths without changing layout", asy
   cleanup(); store.groups=[];
   store.projects = [fakeProject({name:"alpha", label:"Alpha Website",path:"/code/customer-a",repo:"acme/website" }), fakeProject({name:"beta",label:"Beta",path:"/code/customer-b"})];
   render(SidebarProjects);
+  await fireEvent.click(screen.getByRole("button",{name:"Filter projects"}));
   await fireEvent.input(screen.getByLabelText("Search projects"),{target:{value:"customer-a"}});
   expect(screen.getByText("Alpha Website")).toBeInTheDocument();
   expect(screen.queryByText("Beta")).not.toBeInTheDocument();

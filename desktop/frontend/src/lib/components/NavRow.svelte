@@ -62,7 +62,7 @@
   // text was carrying the entire selected state on its own. The `text-ink` /
   // `text-faint` split is the one signal that survives both flavors.
   const rowCls = $derived(
-    "sidebar-nav-row group/row flex h-7 w-full items-center rounded-md " +
+    "sidebar-nav-row group/row relative flex h-7 w-full items-center rounded-md " +
       (active ? "bg-sel text-ink" : "text-faint hover:bg-sel/60 hover:text-ink"),
   );
 </script>
@@ -87,7 +87,7 @@
   {/if}
   {#if actions}
     <span
-      class="flex shrink-0 items-center pr-2 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100"
+      class="pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-md bg-sel pr-1 pl-1 opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
       >{@render actions()}</span
     >
   {/if}

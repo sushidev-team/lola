@@ -1,6 +1,8 @@
 export const SIDEBAR_DEFAULT = 540;
-export const SIDEBAR_MIN = 440;
+export const SIDEBAR_MIN = 280;
 export const SIDEBAR_MAX = 760;
+/** Below this the two columns do not fit; the sidebar offers Projects and Sessions as tabs instead. */
+export const SIDEBAR_SPLIT = 480;
 export const WORKSPACE_MIN = 560;
 export function sidebarLimit(windowWidth: number): number {
   return Math.max(0, Math.min(SIDEBAR_MAX, windowWidth - WORKSPACE_MIN));

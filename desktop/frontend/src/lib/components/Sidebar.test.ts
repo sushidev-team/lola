@@ -17,7 +17,7 @@ describe("Sidebar workspace switch", () => {
   it("shows projects beside sessions at once", () => {
     render(Sidebar);
     expect(screen.getByRole("navigation", { name: "Projects" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Search sessions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filter sessions" })).toBeInTheDocument();
   });
 
   it("switches between Code and Git beside the logo and returns to the same scope", async () => {
@@ -34,5 +34,21 @@ describe("Sidebar workspace switch", () => {
     expect(nav.view).toBe("cockpit");
     expect(nav.scoped).toBe(true);
     expect(nav.project).toBe("lola");
+  });
+});
+
+describe("Sidebar narrow layout", () => {
+  afterEach(cleanup);
+  it("offers Projects and Sessions as tabs below the split width", async () => {
+    render(Sidebar, { width: 320 });
+    const tab = screen.getByRole("tab", { name: "Projects" });
+    await fireEvent.click(tab);
+    expect(nav.sidebarTab).toBe("projects");
+    await fireEvent.click(screen.getByRole("tab", { name: "Sessions" }));
+    expect(nav.sidebarTab).toBe("sessions");
+  });
+  it("shows no tabs when wide", () => {
+    render(Sidebar, { width: 600 });
+    expect(screen.queryByRole("tab", { name: "Projects" })).toBeNull();
   });
 });

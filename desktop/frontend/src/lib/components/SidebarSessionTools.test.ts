@@ -40,6 +40,7 @@ describe('session tools', () => {
       return this.getAttribute('role') === 'menu' ? { width: 224, height: 110 } as DOMRect : original.call(this);
     });
     const { target } = background();
+    await fireEvent.click(screen.getByRole('button', { name: 'Filter sessions' }));
     await fireEvent.contextMenu(target, { clientX: window.innerWidth - 2, clientY: window.innerHeight - 2 });
     expect(screen.getByRole('menu')).toHaveStyle({ left: `${window.innerWidth - 228}px`, top: `${window.innerHeight - 114}px` });
     const shortcut = vi.fn();
@@ -54,6 +55,7 @@ describe('session tools', () => {
 
   it('leaves editing and session-row context menus alone', async () => {
     const { target } = background();
+    await fireEvent.click(screen.getByRole('button', { name: 'Filter sessions' }));
     expect(await fireEvent.contextMenu(screen.getByRole('textbox', { name: 'Search sessions' }))).toBe(true);
     const row = document.createElement('button');
     const rowMenu = vi.fn((event: Event) => event.preventDefault());
