@@ -75,7 +75,7 @@
 </script>
 
 <aside
-  class="sidebar group/side relative z-30 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] border-r border-edge bg-canvas {nav.sidebarOpen ? '' : 'overflow-hidden'}"
+  class="sidebar group/side relative grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] border-r border-edge bg-canvas {nav.sidebarOpen ? '' : 'overflow-hidden'}"
   style="grid-template-rows:44px 36px minmax(0,1fr) 44px"
   aria-label="Sidebar"
   inert={!nav.sidebarOpen}
@@ -147,7 +147,7 @@
      not lay the workspace out again on every frame. Leaving for Git the column keeps its place
      over the already resized workspace until the wipe has finished. */
   .sessions-col { clip-path:inset(0 0 0 0); transition:clip-path 360ms cubic-bezier(.45,.05,.2,1),visibility 0s; }
-  .sessions-col.col-off { position:absolute; top:0; bottom:0; left:300px; width:240px; clip-path:inset(0 100% 0 0); visibility:hidden; pointer-events:none; background:var(--color-canvas); box-shadow:inset 1px 0 0 var(--color-edge); transition:clip-path 360ms cubic-bezier(.45,.05,.2,1),visibility 0s linear 360ms; }
+  .sessions-col.col-off { z-index:45; position:absolute; top:0; bottom:0; left:300px; width:240px; clip-path:inset(0 100% 0 0); visibility:hidden; pointer-events:none; background:var(--color-canvas); box-shadow:inset 1px 0 0 var(--color-edge); transition:clip-path 360ms cubic-bezier(.45,.05,.2,1),visibility 0s linear 360ms; }
   @media (prefers-reduced-motion:reduce) { .sessions-col,.sessions-col.col-off { transition:none; } }
   .palette-hint { display:flex; min-width:0; flex:1; align-items:center; gap:6px; height:28px; padding:0 8px; border-radius:9px; font-size:13px; color:var(--color-faint); background:var(--color-panel); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-edge) 80%,transparent); transition:color 120ms,box-shadow 120ms; }
   .palette-hint:hover { color:var(--color-ink); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 45%,transparent); }

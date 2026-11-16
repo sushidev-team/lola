@@ -132,6 +132,9 @@ class Nav {
     try { localStorage.setItem("lola.sidebar.width", String(this.sidebarWidth)); } catch { /* best effort */ }
   }
   focusSessions() {
+    // The sessions column is hidden and inert in Git mode, so leave it first (and settle any switch).
+    if (this.inGit) this.returnFromGit();
+    this.pendingMode = null;
     this.sidebarBrowsing = true;
     this.sidebarOpen = true;
     this.sidebarTab = "sessions";

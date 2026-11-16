@@ -172,3 +172,16 @@ describe("nav.setTriage", () => {
     expect(nav.triage).toBe("Fixing");
   });
 });
+
+describe("nav.focusSessions in Git", () => {
+  it("leaves Git mode so the sessions column can take focus", () => {
+    nav.goCockpit("");
+    nav.goDetail("lola", "git");
+    nav.pendingMode = "git";
+    expect(nav.gitMode).toBe(true);
+    nav.focusSessions();
+    expect(nav.inGit).toBe(false);
+    expect(nav.gitMode).toBe(false);
+    expect(nav.sidebarBrowsing).toBe(true);
+  });
+});
