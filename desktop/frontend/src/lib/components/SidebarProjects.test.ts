@@ -134,6 +134,15 @@ describe("SidebarProjects", () => {
     expect(nav.scoped).toBe(false);
   });
 
+  it("stays in Git mode when a stack is selected, so its member opens Git next", async () => {
+    store.projects = stackProjects();
+    nav.goDetail("lola", "git");
+    render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "nori" }));
+    expect(nav.inGit).toBe(true);
+    expect(nav.project).toBe("nori");
+  });
+
   it("adds through a MENU, not straight into the project form", async () => {
     render(SidebarProjects);
     // The "+" is the whole point of the ticket: one affordance, two things to

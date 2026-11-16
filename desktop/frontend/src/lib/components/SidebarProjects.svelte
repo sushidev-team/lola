@@ -458,9 +458,8 @@
     if (suppressClick) return;
     // Git mode: a project is a workspace to open. Code mode: it filters the sessions beside it,
     // and picking the one already chosen clears the filter.
-    const p = store.projectByName(name);
-    if (nav.inGit && p?.path && !isStack(p)) nav.goDetail(name, "git");
-    else if (nav.inGit) nav.goDetail(name, "overview");
+    // A stack or path-less project keeps the Git tab too: ProjectDetail shows its overview.
+    if (nav.inGit) nav.goDetail(name, "git");
     else nav.scopeTo(nav.scoped && nav.project === name ? "" : name);
   }
 
