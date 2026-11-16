@@ -228,9 +228,9 @@
         onLeave={leave}
       />
 
-      <!-- The same toggle as beside the activity bar, in the same corner, to get back. -->
+      <!-- The same toggle as beside the activity bar, to get back. Its inset is that row's own (.cv-activity-map: 12px 20px, a 28px track), so it does not move between the two views. -->
       {#if offered && session && activeTab === AGENT && terminalName}
-        <div class="pointer-events-none z-10 flex items-start justify-end px-8 py-4" style={mainStyle}><div class="pointer-events-auto"><RawToggle on onclick={() => ssh.selectCell(id, { key: "conversation", kind: "conversation" })} /></div></div>
+        <div class="pointer-events-none z-10 flex items-start justify-end px-5 pt-3" style={mainStyle}><div class="pointer-events-auto"><RawToggle on onclick={() => ssh.selectCell(id, { key: "conversation", kind: "conversation" })} /></div></div>
       {/if}
 
       {#if onChanges && session && !rightChanges}
