@@ -55,6 +55,7 @@ import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 import Maximize2 from '@lucide/svelte/icons/maximize-2';
 import Menu from '@lucide/svelte/icons/menu';
 import Minimize2 from '@lucide/svelte/icons/minimize-2';
+import PanelRight from '@lucide/svelte/icons/panel-right';
 import PanelsTopLeft from '@lucide/svelte/icons/panels-top-left';
 import MessageSquareText from '@lucide/svelte/icons/message-square-text';
 import Minus from '@lucide/svelte/icons/minus';
@@ -164,6 +165,7 @@ export const icons = {
   'maximize-2': Maximize2,
   'menu': Menu,
   'minimize-2': Minimize2,
+  'panel-right': PanelRight,
   'panels-top-left': PanelsTopLeft,
   'message-square-text': MessageSquareText,
   'minus': Minus,

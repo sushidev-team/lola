@@ -40,6 +40,9 @@
     quoteFor,
     langOf,
     tokenize,
+    intralineSpans,
+    applySpans,
+    type Span,
     type Row,
     type Selection,
     type TokKind,
@@ -344,10 +347,10 @@
   <Icon name="file-text" class="size-3.5 shrink-0" />
 {/snippet}
 
-{#snippet code(r: Row, path: string)}
+{#snippet code(r: Row, path: string, words?: Span[])}
   {@const lang = langOf(path)}
   <span class="code-text"
-    >{#each tokenize(r.text, lang) as t, i (i)}<span class={TOK[t.kind]}>{t.text}</span>{/each}</span
+    >{#each applySpans(tokenize(r.text, lang), words) as t, i (i)}<span class={t.hot ? `${TOK[t.kind]} word-hot` : TOK[t.kind]}>{t.text}</span>{/each}</span
   >
 {/snippet}
 
@@ -516,6 +519,7 @@
       <div bind:this={scroller} onkeydown={navigationKey} tabindex="0" role="region" aria-label="File diffs" class="diff-scroller min-h-0 min-w-0 overflow-auto font-mono text-sm leading-5">
         {#each orderedFiles as f (f.path)}
           {@const rows = parsed.get(f.path) ?? []}
+          {@const words = intralineSpans(rows)}
           <section data-file={f.path} class="diff-file" class:is-current={activeFile === f.path}>
             <header
               class:phone-single={phone && files.length === 1}
@@ -558,7 +562,7 @@
                     </button>
                     <span class="line-marker text-center select-none">{marker(r)}</span>
                     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-                    <div class="cursor-pointer pr-3" onclick={(e) => pick(f.path, r, e)}>{@render code(r, f.path)}</div>
+                    <div class="cursor-pointer pr-3" onclick={(e) => pick(f.path, r, e)}>{@render code(r, f.path, words.get(r))}</div>
                     {#if phone && hasDraft}<span class="draft-glyph" aria-hidden="true"><Icon name="message-square-text" size={12} /></span>{/if}
                   {:else}
                     <span class="hunk-label col-span-4 px-3" title={r.text}>{phone ? hunkLabel(r.text) : r.text}</span>
@@ -589,7 +593,7 @@
                           <span class="line-marker text-center select-none">{marker(r)}</span>
                           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                           <div class="cursor-pointer pr-2" onclick={(e) => pick(f.path, r, e)}>
-                            {@render code(r, f.path)}
+                            {@render code(r, f.path, words.get(r))}
                           </div>
                         {/if}
                       </div>
@@ -745,6 +749,8 @@
   .line-gutter { color: var(--color-faint); background: color-mix(in srgb, var(--color-canvas) 35%, transparent); }
   .line-marker { color: var(--color-faint); }
   .diff-add { background: color-mix(in srgb, var(--color-good) 9%, var(--color-panel)); }
+  .diff-add .word-hot { background: color-mix(in srgb, var(--color-good) 28%, transparent); border-radius: 2px; }
+  .diff-del .word-hot { background: color-mix(in srgb, var(--color-bad) 28%, transparent); border-radius: 2px; }
   .diff-del { background: color-mix(in srgb, var(--color-bad) 9%, var(--color-panel)); }
   .diff-add .line-gutter, .diff-add .line-marker { color: var(--color-good); background: color-mix(in srgb, var(--color-good) 8%, transparent); }
   .diff-del .line-gutter, .diff-del .line-marker { color: var(--color-bad); background: color-mix(in srgb, var(--color-bad) 8%, transparent); }
