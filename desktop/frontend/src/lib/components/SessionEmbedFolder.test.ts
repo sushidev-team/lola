@@ -77,7 +77,7 @@ it("gives each live host one `$` cell with no ×, and a click leaves the scope a
   terms.select("s1", SSH);
   render(SessionEmbed, { sessionId: "s1" });
   const cells = [...document.querySelectorAll("[data-strip-cell]")].map((t) => t.getAttribute("data-strip-cell"));
-  expect(cells).toEqual(["conversation", "terminal", "host:c1", "host:c3"]);
+  expect(cells).toEqual(["conversation", "host:c1", "host:c3"]);
   const cell = document.querySelector('[data-strip-cell="host:c3"]') as HTMLElement;
   expect(cell.parentElement?.querySelector('[aria-label*="close"]')).toBeNull();
   await fireEvent.click(cell);
@@ -94,4 +94,17 @@ it("falls back to the terminal when the conversation it was showing is no longer
   // Agentless with one terminal: no strip at all, and the terminal is what is on show.
   expect(screen.queryByRole("tab", { name: "Conversation" })).toBeNull();
   expect(terms.activeTab("s1")).toBe("agent");
+});
+
+it("offers the terminal as a Raw toggle, not a tab, beside the conversation", async () => {
+  store.sessions = [{ id: "s1", worktree: "/code/x", location: "ssh" }] as never;
+  terms.select("s1", SSH);
+  render(SessionEmbed, { sessionId: "s1" });
+  expect(screen.queryByRole("tab", { name: "Terminal" })).toBeNull();
+  const raw = screen.getByRole("button", { name: "Raw" });
+  expect(raw).not.toHaveAttribute("aria-pressed");
+  await fireEvent.click(raw);
+  expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
+  await fireEvent.click(screen.getByRole("button", { name: "Raw" }));
+  expect(screen.getByRole("button", { name: "Raw" })).not.toHaveAttribute("aria-pressed");
 });

@@ -2,7 +2,7 @@
   import Icon from "$lib/components/Icon.svelte";
   // The strip under the top bar. Three groups, and only the middle one can move or scroll:
   //
-  //   Conversation  Terminal  Changes     $ prod-api  zsh  review  +            Widgets 2 •
+  //   Conversation  Changes     $ prod-api  zsh  review  +                  Raw  Widgets 2 •
   //   └ fixed, never moves ───────────┘   └ mono, machine things, past a fade ┘         └ fixed ┘
   //
   // `+` sits right after the tabs it adds to, and keeps its place when they scroll past the fade.
@@ -39,7 +39,11 @@
   const cells = $derived(stripCells(session, shells));
   const selected = $derived(ssh.currentCell(session));
   const current = $derived(terms.isDevTab(selected) ? "terminal" : changesInSide && selected === "changes" ? "conversation" : selected);
-  const views = $derived(cells.views.filter(c => !changesInSide || c.kind !== 'changes'));
+  // With a Conversation the terminal is its raw form: a toggle, not a tab of its own.
+  const conversationCell = $derived(cells.views.find((c) => c.kind === "conversation"));
+  const rawCell = $derived(conversationCell ? cells.views.find((c) => c.kind === "terminal") : undefined);
+  const raw = $derived(!!rawCell && current === "terminal");
+  const views = $derived(cells.views.filter(c => (!changesInSide || c.kind !== 'changes') && c !== rawCell));
   const all = $derived([...views, ...cells.machines]);
   // Visible terminals retain their order; drag indices must account for hidden dev tabs.
   const terminals = $derived(cells.machines.filter((c): c is Extract<StripCell, { name: string }> => c.kind !== "host"));
@@ -239,7 +243,7 @@
           type="button"
           role="tab"
           aria-selected={on}
-          tabindex={on ? 0 : -1}
+          tabindex={on || (raw && c === conversationCell) ? 0 : -1}
           class="{cellText} {on ? 'font-medium text-ink' : 'text-faint hover:text-ink'}"
           data-strip-cell={c.key}
           onclick={() => pick(c)}
@@ -330,6 +334,9 @@
   </div>
   <div aria-hidden="true"></div>
   <div class="flex items-center gap-2">
+    {#if rawCell && conversationCell}
+      <Button size="xs" selected={raw} title="Show the raw terminal instead of the conversation" data-raw-toggle onclick={() => pick(raw ? conversationCell : rawCell)}>Raw</Button>
+    {/if}
     {#if changesInSide}<button bind:this={panelButton} type="button" class="grid size-7 place-items-center rounded-sm text-faint hover:bg-sel hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" aria-label="Panels" title="Show or hide panels" aria-haspopup="menu" aria-expanded={!!panelAt} onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); panelAt = panelAt ? null : { x: Math.max(4, r.right - 224), y: r.bottom + 4 }; }}>
       <Icon name="menu" class="size-4" />
     </button>{/if}
