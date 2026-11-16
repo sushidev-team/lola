@@ -452,11 +452,15 @@
   function ownWorking() { peekPath = ''; working(); }
   function openWorktreeChanges(tree: GitWorktree) { chooseWorktree(tree.path === configuredPath ? '' : tree.path); working(); }
   function chooseWorktree(value: string) { peekPath = ''; branchJump++; focusedBranch = ''; worktree = value; ref = ''; limit = 200; query = ''; showRail = false; }
-  // Back on screen after being hidden: refresh in place, without a loading state.
-  let wasActive = active;
+  // Back on screen after being hidden: refresh in place, without a loading state. Not while the
+  // Code/Git switch is still animating, since re-rendering the history then would stall it.
+  let wasHidden = !active;
   $effect(() => {
-    const on = active;
-    untrack(() => { if (on && !wasActive && data && !git.loading && !git.busy) void git.load(ref, limit, true); wasActive = on; });
+    if (!active) { wasHidden = true; return; }
+    if (!wasHidden) return;
+    wasHidden = false;
+    const timer = setTimeout(() => untrack(() => { if (active && data && !git.loading && !git.busy) void git.load(ref, limit, true); }), 350);
+    return () => clearTimeout(timer);
   });
   let historyLoad: Promise<void> = Promise.resolve();
   const drawn = new WeakSet<object>();
