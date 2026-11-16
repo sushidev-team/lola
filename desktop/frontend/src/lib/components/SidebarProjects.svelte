@@ -31,6 +31,7 @@
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
   import { askRemoveProject, askRemoveStack } from "$lib/removeAsk";
+  import { bulkProjectActions } from "$lib/projectbulk";
   import Modal from "./Modal.svelte";
   import Checkbox from "./Checkbox.svelte";
   import SetupChecklist from "./SetupChecklist.svelte";
@@ -846,6 +847,13 @@
     role="menu"
     aria-label="{nameOf(menuName)} actions"
   >
+    {#if !rowMenu?.picking && nav.scopeNames.length > 1 && nav.scopeNames.includes(menuName)}
+      <p class="px-2 py-1 text-sm text-faint">{nav.scopeNames.length} projects selected</p>
+      {#each bulkProjectActions(nav.scopeNames) as a (a.id)}
+        <MenuItem variant={a.variant} disabled={!a.enabled} onclick={() => { rowMenu = null; a.run(); }}>{a.label}</MenuItem>
+      {/each}
+      <div class="my-1 border-t border-edge"></div>
+    {/if}
     {#if !rowMenu?.picking && store.projectByName(menuName)}
       {#each projectActions(store.projectByName(menuName)!) as action (action.id)}
         <MenuItem disabled={!action.enabled} onclick={() => { rowMenu=null; action.run(); }}>{action.label}</MenuItem>

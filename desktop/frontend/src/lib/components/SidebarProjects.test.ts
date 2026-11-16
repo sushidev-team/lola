@@ -791,3 +791,17 @@ it("adds projects to the session filter with ⌘-click and replaces it with a pl
   await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
   expect(nav.scopeNames).toEqual([]);
 });
+
+it("offers actions for several selected projects from a row's menu", async () => {
+  cleanup(); store.groups = [];
+  store.projects = [fakeProject({ name: "alpha", label: "Alpha" }), fakeProject({ name: "beta", label: "Beta" })];
+  nav.goCockpit("");
+  render(SidebarProjects);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Beta" }), { metaKey: true });
+  await fireEvent.contextMenu(screen.getByRole("button", { name: "Beta" }));
+  expect(screen.getByText("2 projects selected")).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole("menuitem", { name: "Remove 2 projects…" }));
+  expect(confirm.request?.title).toBe("Remove 2 projects?");
+  expect(confirm.request?.subject).toBe("Alpha, Beta");
+});

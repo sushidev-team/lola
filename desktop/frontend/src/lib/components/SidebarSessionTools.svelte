@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import Icon from "$lib/components/Icon.svelte";
   import { makeScope } from '$lib/scope';
+  import { bulkProjectActions } from '$lib/projectbulk';
   import { nav } from '$lib/nav.svelte';
   import { store } from '$lib/store.svelte';
   import { talk } from '$lib/talk.svelte';
@@ -30,6 +31,9 @@
     searchInput?.focus();
   }
   let position = $state({ x: 0, y: 0 });
+  // Actions for the selected projects, shown once there are two or more.
+  let bulkAt = $state<{ x: number; y: number } | null>(null);
+  const bulk = $derived(bulkProjectActions(nav.scopeNames));
 
   async function placeAndFocus() {
     await tick();
@@ -117,6 +121,12 @@
           <Icon name="folder" size={12} /><span class="min-w-0 truncate">{store.displayNameFor(name)}</span><span class="shrink-0 opacity-70" aria-hidden="true"><Icon name="x" size={12} /></span>
         </button>
       {/each}
+      {#if nav.scopeNames.length > 1}
+        <button type="button" class="inline-flex h-6 items-center gap-1 rounded-full px-2 text-sm text-faint hover:bg-sel hover:text-ink" aria-haspopup="menu" aria-expanded={bulkAt !== null} aria-label="Actions for {nav.scopeNames.length} projects" title="Actions for the selected projects"
+          onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); bulkAt = bulkAt ? null : { x: Math.min(r.left, window.innerWidth - 232), y: r.bottom + 4 }; }}>
+          <Icon name="ellipsis" size={14} />{nav.scopeNames.length} selected
+        </button>
+      {/if}
     </div>
   {/if}
   {#if searching}
@@ -127,3 +137,13 @@
     </div>
   {/if}
 </div>
+
+{#if bulkAt}
+  <div class="fixed inset-0 z-40" role="presentation" onclick={() => (bulkAt = null)}></div>
+  <div role="menu" aria-label="Selected projects" class="fixed z-50 w-56 rounded-lg border border-edge bg-panel p-1 shadow-xl" style="left:{bulkAt.x}px;top:{bulkAt.y}px">
+    {#each bulk as a (a.id)}
+      {#if a.id === "clear"}<div class="my-1 border-t border-edge"></div>{/if}
+      <MenuItem variant={a.variant} disabled={!a.enabled} onclick={() => { bulkAt = null; a.run(); }}>{a.label}</MenuItem>
+    {/each}
+  </div>
+{/if}
