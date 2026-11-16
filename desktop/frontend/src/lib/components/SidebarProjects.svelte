@@ -627,9 +627,6 @@
       {#if p.needsYou > 0}<span class="num text-sm text-orange" title="{p.needsYou} need you"
           ><span aria-hidden="true">{p.needsYou}!</span><span class="sr-only">{p.needsYou} need you</span></span
         >{/if}
-      {#if p.ciRed > 0}<span class="num text-sm text-bad" title="{p.ciRed} failing CI"
-          ><span aria-hidden="true">{p.ciRed}<Icon name="x" size={14} /></span><span class="sr-only">{p.ciRed} failing CI</span></span
-        >{/if}
     {/snippet}
     {#snippet actions()}
       <!-- data-drag-ignore: these are controls, not drag handles. -->
