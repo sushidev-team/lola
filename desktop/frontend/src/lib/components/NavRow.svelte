@@ -43,7 +43,7 @@
     /** Quieten the label (a project whose polls are off), never the whole row. */
     dim?: boolean;
     title?: string;
-    onclick: () => void;
+    onclick: (event: MouseEvent) => void;
     /** Optional key handling ON THE ROW's own control (the sidebar's alt+arrow
      *  reorder). Left undefined by every other caller. */
     onkeydown?: (e: KeyboardEvent) => void;

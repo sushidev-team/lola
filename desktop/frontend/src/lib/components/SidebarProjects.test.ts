@@ -774,3 +774,20 @@ it("searches project names, repositories and paths without changing layout", asy
   expect(screen.queryByRole("button", {name:"Clear project search"})).not.toBeInTheDocument();
   expect(screen.getByText("Beta")).toBeInTheDocument();
 });
+
+it("adds projects to the session filter with ⌘-click and replaces it with a plain click", async () => {
+  cleanup(); store.groups = [];
+  store.projects = [fakeProject({ name: "alpha", label: "Alpha" }), fakeProject({ name: "beta", label: "Beta" })];
+  nav.goCockpit("");
+  render(SidebarProjects);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(nav.scopeNames).toEqual(["alpha"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Beta" }), { metaKey: true });
+  expect(nav.scopeNames).toEqual(["alpha", "beta"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }), { metaKey: true });
+  expect(nav.scopeNames).toEqual(["beta"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(nav.scopeNames).toEqual(["alpha"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(nav.scopeNames).toEqual([]);
+});

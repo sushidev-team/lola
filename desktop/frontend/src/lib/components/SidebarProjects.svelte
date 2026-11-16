@@ -463,13 +463,14 @@
     });
   }
 
-  function openProject(name: string) {
+  function openProject(name: string, event?: MouseEvent) {
     if (suppressClick) return;
     // Git mode: a project is a workspace to open. Code mode: it filters the sessions beside it,
     // and picking the one already chosen clears the filter.
     // A stack or path-less project keeps the Git tab too: ProjectDetail shows its overview.
     if (nav.gitMode) nav.goDetail(name, "git");
-    else { nav.scopeTo(nav.scoped && nav.project === name ? "" : name); nav.sidebarTab = "sessions"; }
+    else if (event && (event.metaKey || event.ctrlKey || event.shiftKey)) nav.toggleScope(name);
+    else { nav.scopeTo(nav.scopeNames.length === 1 && nav.scopeNames[0] === name ? "" : name); nav.sidebarTab = "sessions"; }
   }
 
   function toggleGroup(name: string, collapsed: boolean) {
@@ -589,7 +590,7 @@
   {@const stack = memberOf(store.projects, p.name)}
   {@const d = pollDot(p, stack)}
   {@const match = searchMatch(query, displayName(p), p.repo, p.path)}
-  {@const active = (nav.view === "cockpit" ? nav.scoped : ["detail", "prpicker", "ticketpicker"].includes(nav.view)) && nav.project === p.name}
+  {@const active = (nav.view === "cockpit" ? nav.scopeNames.includes(p.name) : ["detail", "prpicker", "ticketpicker"].includes(nav.view) && nav.project === p.name)}
   <NavRow
     label={displayName(p)}
     glyph={d.glyph}
@@ -598,8 +599,8 @@
     {active}
     title={stack ? d.hint : p.lastError
       ? `poll error: ${p.lastError}`
-      : nav.gitMode ? "Open in Git" : "Show only this project's sessions"}
-    onclick={() => openProject(p.name)}
+      : nav.gitMode ? "Open in Git" : "Show this project's sessions (⌘-click to add more)"}
+    onclick={(e) => openProject(p.name, e)}
     onkeydown={(e) => {
       // A member is placed by its stack, not by the arrangement keys.
       if (!query.trim() && index >= 0) nudgeProject(e, p.name, group, index);

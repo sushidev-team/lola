@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import Icon from "$lib/components/Icon.svelte";
+  import { makeScope } from '$lib/scope';
   import { nav } from '$lib/nav.svelte';
   import { store } from '$lib/store.svelte';
   import { talk } from '$lib/talk.svelte';
@@ -11,9 +12,10 @@
   import MenuItem from './MenuItem.svelte';
   import Tabs from './Tabs.svelte';
   let { contextTarget }: { contextTarget?: HTMLElement } = $props();
-  const rows = $derived(store.rosterSessions.filter(s => !nav.scoped || s.project === nav.project));
+  const scope = $derived(makeScope(nav.scopeNames, store.projects) ?? (() => true));
+  const rows = $derived(store.rosterSessions.filter(s => scope(s)));
   const needs = $derived(waitingQueue(rows).length);
-  const endedCount = $derived(talk.endedList().filter(e => !store.sessionById(e.id) && (!nav.scoped || e.project === nav.project)).length);
+  const endedCount = $derived(talk.endedList().filter(e => !store.sessionById(e.id) && scope(e)).length);
   let createOpen = $state(false);
   let createRoot: HTMLDivElement;
   let menu = $state<HTMLDivElement>();
@@ -108,9 +110,14 @@
     </div>
   </div>
   {#if nav.scoped}
-    <button type="button" class="mt-1.5 inline-flex h-6 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-accent-fill py-0 pr-1.5 pl-2 text-sm text-accent-ink hover:brightness-110" onclick={() => nav.goCockpit('')} aria-label="Clear project filter" title="Show every project's sessions">
-      <Icon name="folder" size={12} /><span class="min-w-0 truncate">{store.displayNameFor(nav.project)}</span><span class="shrink-0 opacity-70" aria-hidden="true"><Icon name="x" size={12} /></span>
-    </button>
+    <!-- Any of these projects: a session counts when it is part of at least one. -->
+    <div class="mt-1.5 flex min-w-0 flex-wrap gap-1" role="group" aria-label="Project filter">
+      {#each nav.scopeNames as name (name)}
+        <button type="button" class="inline-flex h-6 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-accent-fill py-0 pr-1.5 pl-2 text-sm text-accent-ink hover:brightness-110" onclick={() => nav.toggleScope(name)} aria-label="Remove {store.displayNameFor(name)} from the filter" title="Remove from the filter">
+          <Icon name="folder" size={12} /><span class="min-w-0 truncate">{store.displayNameFor(name)}</span><span class="shrink-0 opacity-70" aria-hidden="true"><Icon name="x" size={12} /></span>
+        </button>
+      {/each}
+    </div>
   {/if}
   {#if searching}
     <div class="relative mt-1.5 min-w-0">

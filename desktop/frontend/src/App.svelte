@@ -13,6 +13,7 @@
   import { openShell, newSessionHere } from "$lib/projectActions";
   import { onMount } from "svelte";
   import { Events, Window } from "@wailsio/runtime";
+  import { makeScope } from "$lib/scope";
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -174,7 +175,7 @@
   // sidebar applies — otherwise arrow-key movement walks a different list than
   // the one on screen.
   function cockpitRows(): SessionInfo[] {
-    return visibleRoster(store.rosterSessions, store.projects.map(p => p.name), n => store.displayNameFor(n), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project });
+    return visibleRoster(store.rosterSessions, store.projects.map(p => p.name), n => store.displayNameFor(n), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project, scope: makeScope(nav.scopeNames, store.projects) });
   }
 
   function moveSel(delta: number) {

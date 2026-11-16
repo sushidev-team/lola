@@ -85,10 +85,10 @@ class Nav {
     this.preferredProjectTab = tab;
     try { localStorage.setItem(PROJECT_TAB_KEY, tab); } catch { /* keep the in-memory choice */ }
   }
-  private gitReturn: { view: View; project: string; scoped: boolean; projectTab: ProjectTab; selectedId: string; focusedTerm: string; sidebarBrowsing: boolean } | null = null;
+  private gitReturn: { view: View; project: string; scoped: boolean; scope: string[]; projectTab: ProjectTab; selectedId: string; focusedTerm: string; sidebarBrowsing: boolean } | null = null;
   get inGit() { return this.view === "detail" && this.projectTab === "git"; }
   private rememberGitReturn() {
-    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, projectTab:this.projectTab, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarBrowsing:this.sidebarBrowsing};
+    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, scope:this.scope, projectTab:this.projectTab, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarBrowsing:this.sidebarBrowsing};
   }
   returnFromGit() {
     if (!this.inGit) return;
@@ -98,6 +98,7 @@ class Nav {
     this.view = previous.view;
     this.project = previous.project;
     this.scoped = previous.scoped;
+    this.scope = previous.scope;
     this.projectTab = previous.projectTab;
     this.selectedId = previous.selectedId;
     this.focusedTerm = previous.focusedTerm;
@@ -107,6 +108,10 @@ class Nav {
   project = $state<string>("");
   /** Cockpit is scoped to `project` (vs global) when true. */
   scoped = $state(false);
+  /** The projects the sessions are filtered to (any of them); empty with `scoped` false means all. */
+  scope = $state<string[]>([]);
+  /** The filter as a list, also for a caller that only set `scoped` and `project`. */
+  get scopeNames(): string[] { return this.scoped ? (this.scope.length ? this.scope : [this.project]) : []; }
   overlay = $state<Overlay>(null);
   /** The project whose form overlay is open. */
   overlayProject = $state<string>("");
@@ -200,6 +205,7 @@ class Nav {
     this.view = "cockpit";
     this.scoped = scopeProject !== "";
     this.project = scopeProject;
+    this.scope = scopeProject ? [scopeProject] : [];
     this.dropFocus();
   }
   goHome() {
@@ -217,6 +223,7 @@ class Nav {
     this.project = name;
     // Project navigation is a workspace destination, not a session filter.
     this.scoped = false;
+    this.scope = [];
     this.view = "detail";
     this.dropFocus();
   }
@@ -228,6 +235,15 @@ class Nav {
     if (this.view !== "cockpit") { this.goCockpit(name); return; }
     this.scoped = name !== "";
     this.project = name;
+    this.scope = name ? [name] : [];
+  }
+  /** Add or drop one project from the filter, keeping the rest (⌘-click). */
+  toggleScope(name: string) {
+    if (this.view !== "cockpit") { this.goCockpit(name); return; }
+    const next = this.scopeNames.includes(name) ? this.scopeNames.filter(n => n !== name) : [...this.scopeNames, name];
+    this.scope = next;
+    this.scoped = next.length > 0;
+    this.project = next[0] ?? "";
   }
   goPRPicker(name: string) {
     this.project = name;

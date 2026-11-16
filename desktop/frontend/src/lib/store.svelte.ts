@@ -71,8 +71,9 @@ export function sortSessions(list: SessionInfo[]): SessionInfo[] {
  * the global keyboard handler so arrow-key movement walks the SAME order the
  * table renders — a second copy of the sort/filter would drift.
  */
-export function scopedSessions(list: SessionInfo[], scoped: boolean, project: string): SessionInfo[] {
+export function scopedSessions(list: SessionInfo[], scoped: boolean, project: string, match?: ((s: SessionInfo) => boolean) | null): SessionInfo[] {
   const sorted = sortSessions(list);
+  if (match) return sorted.filter(match);
   return scoped ? sorted.filter((s) => s.project === project) : sorted;
 }
 
