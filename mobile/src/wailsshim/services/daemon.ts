@@ -49,6 +49,11 @@ export function Broadcast(args: P.BroadcastArgs): Promise<P.BroadcastData> {
   return bridge.request<P.BroadcastData>("DaemonService.Broadcast", "broadcast", { args: args });
 }
 
+/** PLATFORM: plan approval is a Mac decision (planDecide is tier never). */
+export function DecidePlan(_session: string, _approve: boolean, _comment: string): Promise<void> {
+  return unsupported("DaemonService.DecidePlan", MAC_ONLY);
+}
+
 /** PLATFORM. */
 export function CLIInfo(): Promise<M.CLIInfoDTO> {
   return unsupported("DaemonService.CLIInfo", MAC_ONLY);
@@ -496,6 +501,7 @@ export const ROUTES: Routes<typeof Gen.DaemonService, "Panes" | "ShellCreate" | 
   BestOfPick: { kind: "fwd", cmd: "bestOfPick" },
   Broadcast: { kind: "fwd", cmd: "broadcast" },
   CLIInfo: { kind: "platform", reason: MAC_ONLY },
+  DecidePlan: { kind: "platform", reason: MAC_ONLY },
   CheckpointDiff: { kind: "fwd", cmd: "checkpointDiff" },
   Checkpoints: { kind: "fwd", cmd: "checkpoints" },
   CloseExitedTemporary: { kind: "fwd", cmd: "closeExitedTemporary" },
