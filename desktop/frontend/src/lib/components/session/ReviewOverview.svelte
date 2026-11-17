@@ -80,8 +80,8 @@
           {#each overview.risks as risk}<details class="entry risk-entry" class:priority={risk.priority >= 6}>
             <summary><span class="risk-title"><Icon name="chevron-right" size={14}/>{risk.title}</span><span class="risk-rating" aria-label={`Likelihood: ${risk.likelihood}`}>{@render level(risk.likelihood, 'likelihood')}</span><span class="risk-rating" aria-label={`Impact: ${risk.impact}`}>{@render level(risk.impact, 'impact')}</span></summary>
             <div class="risk-detail">
-              {#if risk.description}<div><h3>What could happen</h3><p>{risk.description}</p></div>{/if}
-              {#if risk.assess}<div><h3>How to assess it</h3><p>{risk.assess}</p></div>{/if}
+              {#if risk.description}<div><h3>If it goes wrong</h3><p>{risk.description}</p></div>{/if}
+              {#if risk.assess}<div><h3>How to check</h3><p>{risk.assess}</p></div>{/if}
             </div>
           </details>{/each}
         {:else}<p class="empty-copy">{overview.riskReportProvided ? 'No unresolved risks reported.' : 'Risks have not been assessed.'}</p>{/if}
@@ -174,15 +174,15 @@
   .risk-title { display:flex; gap:8px; align-items:baseline; overflow-wrap:anywhere; font-size:13px; line-height:1.55; }
   .risk-title :global(svg) { position:relative; top:2px; }
   .risk-rating { min-width:0; }
-  .risk-level { box-sizing:border-box; width:100%; display:flex; align-items:center; gap:6px; padding:5px 8px; border-radius:6px; font-size:12px; line-height:16px; text-transform:capitalize; white-space:nowrap; color:var(--color-ink-2); background:color-mix(in srgb,var(--color-ink) 5%,transparent); }
+  .risk-level { box-sizing:border-box; width:100%; display:flex; align-items:center; gap:6px; padding:5px 8px; border-radius:6px; font-size:12px; line-height:16px; white-space:nowrap; color:var(--color-ink-2); background:color-mix(in srgb,var(--color-ink) 5%,transparent); }
   .level-bars { display:inline-flex; align-items:end; gap:2px; height:12px; }
   .level-bars i { width:3px; height:4px; border-radius:1px; background:color-mix(in srgb,var(--color-ink-2) 22%,transparent); }
   .level-bars i:nth-child(2) { height:8px; } .level-bars i:nth-child(3) { height:12px; }
   .level-bars i.filled { background:currentColor; }
   [data-level=high] { color:var(--color-warn); background:color-mix(in srgb,var(--color-warn) 12%,transparent); }
   [data-level=medium] { color:var(--color-ink); }
-  .risk-detail { display:grid; gap:16px; padding:0 0 20px 22px; }
-  .risk-detail h3 { font-size:12px; font-weight:500; color:var(--color-ink-2); margin:0 0 6px; }
+  .risk-detail { display:grid; gap:10px; margin:0 0 14px 22px; padding-left:12px; border-left:2px solid color-mix(in srgb,var(--color-edge) 80%,transparent); }
+  .risk-detail h3 { font-size:11px; font-weight:500; letter-spacing:.02em; color:var(--color-faint); margin:0 0 2px; }
   @container (max-width:440px) {
     .risk-columns { display:none; }
     .risk-attribution { margin-bottom:8px; }
@@ -192,9 +192,9 @@
     .risk-rating { min-width:0; }
     .risk-rating:nth-of-type(2) { padding-left:22px; }
     .risk-level { padding:2px 6px; font-size:11px; line-height:14px; }
-    .risk-detail { gap:10px; padding-bottom:10px; }
+    .risk-detail { gap:8px; margin-bottom:10px; }
   }
-  .risk-detail p { font-size:13px; line-height:1.6; color:var(--color-ink); max-width:65ch; overflow-wrap:anywhere; }
+  .risk-detail p { margin:0; font-size:13px; line-height:1.5; color:var(--color-ink-2); max-width:65ch; overflow-wrap:anywhere; }
   .risks > :global(button) { margin-top:16px; }
   .assessment-message { color:var(--color-ink-2); font-size:12px; line-height:1.5; margin-top:12px; }
   .feedback { padding:20px; border-radius:12px; background:color-mix(in srgb,var(--color-info) 6%,var(--color-panel)); }
