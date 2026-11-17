@@ -20,6 +20,7 @@
   import { widthOf } from "./measure";
   import Button from "../Button.svelte";
   import HoverCard from "../HoverCard.svelte";
+  import ShareControl from "./ShareControl.svelte";
 
   let { sessionId }: { sessionId: string } = $props();
 
@@ -29,6 +30,8 @@
   const title = $derived(session?.title || session?.branch || session?.issue || ended?.title || ended?.issue || "Session");
   const issue = $derived(session?.issue || ended?.issue || "");
   const agentless = $derived(!!session && isAgentless(session));
+  // Only a session lola owns can be shared: not a plain shell, a stack, or a borrowed directory.
+  const shareable = $derived(!!session && !agentless && !session.stack && (!session.location || session.location === "worktree"));
 
   let width = $state(0);
   // 0 means not measured yet, which is the wide layout: never narrow a bar on a guess.
@@ -95,6 +98,7 @@
     {#if action && !narrow}
       <Button variant="secondary" size="xs" loading={action.loading} onclick={action.run} data-session-action>{action.label}</Button>
     {/if}
+    {#if shareable}<ShareControl {sessionId} />{/if}
     {#if session}<Button icon size="xs" aria-label="Session actions" aria-haspopup="menu" title="Session actions" onclick={(e) => sessionMenu.open(sessionId, e)}><Icon name="ellipsis" size={14} /></Button>{/if}
   </div>
 </div>
