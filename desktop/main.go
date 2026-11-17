@@ -538,6 +538,8 @@ const (
 	evtSessions = "daemon:sessions" // protocol.SessionsData
 	evtProjects = "daemon:projects" // protocol.ProjectsData
 	evtStatus   = "daemon:status"   // protocol.StatusData
+	// evtFilesDropped names the drop target's element id and the paths dropped on it.
+	evtFilesDropped = "files:dropped" // FilesDroppedDTO
 	// evtPushErr carries a push-loop command failure so the frontend can explain
 	// a blanked read (an out-of-date daemon answering `unknown cmd`) instead of
 	// swallowing it. A non-empty Msg means failure; "" means the command recovered.
