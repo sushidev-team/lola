@@ -216,7 +216,12 @@ func (c *conn) sendReady() bool {
 		DeviceID: c.peer.DeviceID, Name: c.peer.Label, Tiers: []string{},
 		Via: c.peer.Via, Host: c.srv.opts.Host,
 	}
-	if reg := c.srv.opts.Devices; reg != nil {
+	if c.peer.Member {
+		if !c.srv.memberLive(c.peer) {
+			c.refuse("", protocol.CodeNotPaired, "this device is not paired")
+			return false
+		}
+	} else if reg := c.srv.opts.Devices; reg != nil {
 		d, ok := reg.Get(c.peer.DeviceID)
 		if !ok || d.Epoch != c.peer.Epoch {
 			c.refuse("", protocol.CodeNotPaired, "this device is not paired")
@@ -292,6 +297,9 @@ var errStrikeLimit = errors.New("remote: too many refusals on one connection")
 // A refusal does not close the connection: the strike counter bounds a probing
 // client. The returned error is non-nil only when the connection must close.
 func (c *conn) admit(f *protocol.Frame, tier string) (verdict, error) {
+	if c.peer.Member {
+		return c.admitMember(f)
+	}
 	if tier == protocol.TierNever {
 		c.srv.opts.logf()("remote: device=%s denied type=%s cmd=%s", logSafe(c.peer.DeviceID), logSafe(f.Type), logSafe(f.Cmd))
 		return verdict{protocol.CodeUnknownCmd, "command is not available remotely"}, c.strike()
@@ -334,6 +342,9 @@ func (c *conn) hasTier(tier string) bool {
 // read overwrites). A returned error closes the connection; a refusal on the
 // frame's id does not.
 func (c *conn) handleReq(f *protocol.Frame) error {
+	if c.peer.Member {
+		return c.handleMemberReq(f)
+	}
 	tier := frameTier(f)
 	cmd, id := f.Cmd, f.ID
 

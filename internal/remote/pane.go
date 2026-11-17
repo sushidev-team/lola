@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -54,6 +55,9 @@ type subscription struct {
 	// from another goroutine — the pump, a status command — makes that untrue
 	// and must take c.mu first.
 	cols, rows int
+
+	// since is when this subscription attached (presence).
+	since time.Time
 
 	once sync.Once
 }
@@ -197,7 +201,7 @@ func (c *conn) subscribe(op paneOp) {
 		return
 	}
 
-	s := &subscription{pane: op.pane, id: op.id, stream: stream, cols: op.sub.Cols, rows: op.sub.Rows}
+	s := &subscription{pane: op.pane, id: op.id, stream: stream, cols: op.sub.Cols, rows: op.sub.Rows, since: c.srv.opts.now()}
 	c.mu.Lock()
 	if c.isDone() {
 		c.mu.Unlock()
