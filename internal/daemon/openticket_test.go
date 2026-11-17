@@ -197,6 +197,25 @@ func TestHandleTickets(t *testing.T) {
 	}
 }
 
+// A stack member has no team of its own: the picker browses its stack's team.
+func TestHandleTicketsStackMemberUsesStackTeam(t *testing.T) {
+	fake := &linear.Fake{Issues: []linear.Issue{{ID: "u1", Identifier: "NOR-1", Title: "one"}}}
+	d := newTestDaemon(t, &config.Config{
+		Defaults: config.Defaults{GlobalCap: 10, ConcurrencyCap: 10},
+		Projects: []config.Project{
+			{Name: "nori", Kind: config.ProjectKindStack, TeamID: "team-nori"},
+			{Name: "extractor", Path: "/tmp/extractor", Stack: "nori"},
+		},
+	}, fake, &fakeNative{})
+	data, err := d.handleTickets(context.Background(), protocol.TicketsArgs{Project: "extractor", Scope: "team"})
+	if err != nil {
+		t.Fatalf("a stack member must browse its stack's team: %v", err)
+	}
+	if data.Team != "team-nori" || len(data.Issues) != 1 {
+		t.Errorf("want team-nori + 1 issue, got team=%q issues=%d", data.Team, len(data.Issues))
+	}
+}
+
 // The picker ships the DISPLAY facts a human picks by (state, assignee, labels,
 // age) and orders the list so the top of it is the answer: started work first,
 // then urgency, then the freshest. Linear's own order buries an urgent
