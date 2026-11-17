@@ -32,7 +32,7 @@ const CODE = `lola-hub-create:https://hub.example.com#${TOKEN}`;
 const KEY = "lin_api_" + "a".repeat(40);
 const HOOK = "https://hooks.slack.com/services/T0001/B0001/abcDEF123";
 const view = (over = {}) => ({
-  org: "acme", secretsAvailable: true, linearKeySet: false, digestSet: false, teams: [], ...over,
+  org: "acme", secretsAvailable: true, linearKeySet: false, digestSet: false, linearWebhookSet: false, teams: [], ...over,
 });
 
 beforeEach(() => {
@@ -231,6 +231,24 @@ describe("HubAdmin", () => {
     await waitFor(() => expect(document.querySelector("[data-digest-state]")?.textContent).toMatch(/is set/));
     expect(TeamSettings).toHaveBeenLastCalledWith({ digestWebhook: HOOK });
     expect(document.body.innerHTML).not.toContain(HOOK);
+  });
+
+  it("saves the Linear webhook secret write-only and never shows it back", async () => {
+    const SECRET = "whsec_0123456789abcdefghij";
+    TeamSettings.mockResolvedValueOnce(view());
+    render(HubAdmin);
+    const field = (await screen.findByLabelText("Linear webhook signing secret")) as HTMLInputElement;
+    await waitFor(() => expect(field).toBeEnabled());
+    const save = screen.getByRole("button", { name: "Save secret" });
+    await fireEvent.input(field, { target: { value: "short" } });
+    expect(save).toBeDisabled();
+    await fireEvent.input(field, { target: { value: SECRET } });
+    TeamSettings.mockResolvedValueOnce(view({ linearWebhookSet: true }));
+    await fireEvent.click(save);
+    await waitFor(() => expect(document.querySelector("[data-bell-state]")?.textContent).toMatch(/is set/));
+    expect(TeamSettings).toHaveBeenLastCalledWith({ linearWebhookSecret: SECRET });
+    expect(field.value).toBe("");
+    expect(document.body.innerHTML).not.toContain(SECRET);
   });
 
   it("disables secrets on a hub that cannot store them", async () => {
