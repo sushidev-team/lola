@@ -50,12 +50,13 @@
 <div class="overview" class:split>
   <div class="change-column">
     <header class="review-intro">
-      <h1>{overview.title}</h1>
-      <p class="summary-copy">{overview.summary}</p>
+      {#if split}<h1 class="sr-only">{overview.title}</h1>{:else}<h1>{overview.title}</h1>
+      <p class="summary-copy">{overview.summary}</p>{/if}
       {#if freshness === 'stale' && !split}<div class="intro-meta"><span class="stale" role="status"><Icon name="circle-alert" size={14}/>Outdated material</span></div>{/if}
     </header>
       {#if !(phone && overview.changes.length === 0)}<section class="review-panel features" aria-label="Changes in this review">
         <div class="section-title"><h2>What changed<span class="section-count">{overview.changes.length}</span></h2></div>
+        {#if split && overview.summary}<p class="summary-copy lead">{overview.summary}</p>{/if}
         {#if overview.changes.length}{@render features(overview.changes.slice(0,4))}{:else}<p class="empty-copy">No feature breakdown provided.</p>{/if}
         {#if overview.changes.length > 4}<details class="additional"><summary><Chevron class="disclosure-chevron" />{overview.changes.length-4} more {overview.changes.length === 5 ? 'change' : 'changes'}</summary>{@render features(overview.changes.slice(4))}</details>{/if}
       </section>{/if}
@@ -112,6 +113,7 @@
   .change-column,.decision-column { min-width:0; display:grid; gap:32px; }
   .review-intro { min-width:0; padding:4px 0 0; }
   h1 { margin:0 0 16px; max-width:32ch; font-size:30px; line-height:1.2; letter-spacing:-.025em; font-weight:600; color:var(--color-ink); text-wrap:balance; overflow-wrap:anywhere; }
+  .summary-copy.lead { margin:0 0 14px; font-size:13px; line-height:1.55; }
   .summary-copy { max-width:65ch; color:var(--color-ink-2); font-size:14px; line-height:1.65; margin:0; }
   .intro-meta { margin-top:16px; font-size:12px; }
   .stale { display:inline-flex; align-items:center; gap:6px; color:var(--color-warn); }
@@ -166,13 +168,13 @@
   .risks h2 { font-size:20px; line-height:1.3; font-weight:600; letter-spacing:-.015em; gap:12px; }
   .risks .section-count { display:inline-flex; align-items:center; justify-content:center; min-width:25px; height:25px; padding:0 7px; border-radius:7px; background:var(--color-accent-fill); color:var(--color-accent-ink); font-size:12px; font-weight:500; letter-spacing:0; }
   .risk-attribution { font-size:12px; color:var(--color-ink-2); margin-bottom:24px; }
-  .risk-columns,.risk-entry > summary { display:grid; grid-template-columns:minmax(0,1fr) 84px 84px; gap:14px; }
+  .risk-columns,.risk-entry > summary { display:grid; grid-template-columns:minmax(0,1fr) 104px 104px; gap:14px; }
   .risk-columns { padding:0 0 12px; font-size:12px; color:var(--color-ink-2); border-bottom:1px solid var(--color-edge); }
   .risk-entry > summary { padding:18px 0; align-items:center; }
   .risk-title { display:flex; gap:8px; align-items:baseline; overflow-wrap:anywhere; font-size:13px; line-height:1.55; }
   .risk-title :global(svg) { position:relative; top:2px; }
   .risk-rating { min-width:0; }
-  .risk-level { display:inline-flex; align-items:center; gap:6px; padding:5px 7px; border-radius:6px; font-size:12px; line-height:16px; text-transform:capitalize; white-space:nowrap; color:var(--color-ink-2); background:color-mix(in srgb,var(--color-ink) 5%,transparent); }
+  .risk-level { box-sizing:border-box; width:100%; display:flex; align-items:center; gap:6px; padding:5px 8px; border-radius:6px; font-size:12px; line-height:16px; text-transform:capitalize; white-space:nowrap; color:var(--color-ink-2); background:color-mix(in srgb,var(--color-ink) 5%,transparent); }
   .level-bars { display:inline-flex; align-items:end; gap:2px; height:12px; }
   .level-bars i { width:3px; height:4px; border-radius:1px; background:color-mix(in srgb,var(--color-ink-2) 22%,transparent); }
   .level-bars i:nth-child(2) { height:8px; } .level-bars i:nth-child(3) { height:12px; }
@@ -185,10 +187,10 @@
     .risk-columns { display:none; }
     .risk-attribution { margin-bottom:8px; }
     .risk-entry:first-of-type { border-top:1px solid var(--color-edge); }
-    .risk-entry > summary { grid-template-columns:auto auto minmax(0,1fr); gap:4px 10px; padding:9px 0; }
+    .risk-entry > summary { grid-template-columns:minmax(0,134px) minmax(0,112px) minmax(0,1fr); gap:8px 8px; padding:10px 0 12px; }
     .risk-title { grid-column:1/-1; font-size:13px; line-height:1.4; }
-    .risk-rating { display:flex; align-items:center; gap:5px; padding-left:22px; }
-    .risk-rating + .risk-rating { padding-left:0; }
+    .risk-rating { min-width:0; }
+    .risk-rating:nth-of-type(2) { padding-left:22px; }
     .risk-level { padding:2px 6px; font-size:11px; line-height:14px; }
     .risk-detail { gap:10px; padding-bottom:10px; }
   }
