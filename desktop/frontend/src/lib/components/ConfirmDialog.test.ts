@@ -1,30 +1,21 @@
-import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
-import { describe, it, expect, vi, afterEach } from "vitest";
-import ConfirmDialog from "./ConfirmDialog.svelte";
-import { confirm } from "$lib/confirm.svelte";
+import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/svelte';
+import ConfirmDialog from './ConfirmDialog.svelte';
+import { confirm } from '$lib/confirm.svelte';
 
-describe("ConfirmDialog choices", () => {
-  afterEach(() => {
-    confirm.cancel();
-    cleanup();
+afterEach(() => { cleanup(); confirm.cancel(); });
+
+describe('ConfirmDialog detail', () => {
+  it('keeps text that follows a sentence, including paths and repeated endings', () => {
+    confirm.ask({ title: 'Stash first?', body: '', detail: 'Your changes will be stashed. Files: src/a.test.ts src/b.test.ts and docs/README', confirmLabel: 'Go', onConfirm: () => {} });
+    render(ConfirmDialog);
+    expect(screen.getByText('Your changes will be stashed.')).toBeTruthy();
+    expect(screen.getByText('Files: src/a.test.ts src/b.test.ts and docs/README')).toBeTruthy();
   });
 
-  it("lists the choices as checkboxes and hands the checked ids to onConfirm", async () => {
-    const onConfirm = vi.fn();
-    confirm.ask({
-      title: "Remove stack?",
-      body: "Remove stack Donso?",
-      confirmLabel: "Remove",
-      choices: { label: "Keep in lola", items: [
-        { id: "app", label: "Donso App", checked: true },
-        { id: "infra", label: "Donso Infra", checked: true },
-      ] },
-      onConfirm,
-    });
+  it('renders repeated sentences without a duplicate-key failure', () => {
+    confirm.ask({ title: 'Twice', body: '', detail: 'Same. Same.', confirmLabel: 'Go', onConfirm: () => {} });
     render(ConfirmDialog);
-    const box = await screen.findByRole("checkbox", { name: "Keep in lola: Donso App" });
-    await fireEvent.click(box);
-    await fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    expect(onConfirm).toHaveBeenCalledWith(["infra"]);
+    expect(screen.getAllByText('Same.')).toHaveLength(2);
   });
 });

@@ -107,6 +107,8 @@ import TimerOff from '@lucide/svelte/icons/timer-off';
 import Unplug from '@lucide/svelte/icons/unplug';
 import Wifi from '@lucide/svelte/icons/wifi';
 import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
+import ChevronsUp from '@lucide/svelte/icons/chevrons-up';
+import ChevronsDown from '@lucide/svelte/icons/chevrons-down';
 import MessageSquare from '@lucide/svelte/icons/message-square';
 
 export const icons = {
@@ -218,6 +220,8 @@ export const icons = {
   'unplug': Unplug,
   'wifi': Wifi,
   'chevrons-up-down': ChevronsUpDown,
+  'chevrons-up': ChevronsUp,
+  'chevrons-down': ChevronsDown,
   'message-square': MessageSquare,
 } as const;
 export type IconName = keyof typeof icons;
