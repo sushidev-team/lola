@@ -34,7 +34,7 @@
     // Temporary switches for annotations or missing baselines aren't preferences.
     try { localStorage.setItem(modeKey, value); } catch { /* remember for this review */ }
   }
-  const modes = [{id:'slider',label:'Slider',icon:'arrow-right-left'},{id:'split',label:'Side by side',icon:'columns-2'},{id:'before',label:'Before',icon:'history'},{id:'after',label:'After',icon:'sparkles'}] as const;
+  const modes = [{id:'slider',label:'Slider',icon:'arrow-right-left'},{id:'split',label:'Side by side',icon:'columns-2'},{id:'before',label:'Before',icon:'panel-left'},{id:'after',label:'After',icon:'panel-right'}] as const;
   let tool = $state<'view' | MarkKind>('view');
   let stageW = $state(0), stageH = $state(0);
   const drawTools: { id: MarkKind; label: string; key: string; icon: 'message-square-text' | 'square' | 'circle' | 'arrow-up-right' | 'minus' | 'pencil'; title: string }[] = [
@@ -543,6 +543,8 @@
   .tools { position:relative; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
   .view-overlay { position:absolute; z-index:6; right:12px; bottom:12px; display:flex; align-items:center; gap:4px; padding:3px; border:1px solid var(--color-edge); border-radius:10px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); box-shadow:0 4px 16px #0005; }
   .view-overlay :global(.lola-select) { width:72px; }
+  .view-overlay :global(.lola-field) { border-color:transparent; background:transparent; box-shadow:none; }
+  .view-overlay :global(.lola-field:hover) { background:color-mix(in srgb,var(--color-ink) 8%,transparent); }
   .shortcut-help { position:absolute; z-index:6; bottom:calc(100% + 8px); right:0; width:min(400px,calc(100% - 16px)); max-height:70vh; overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; font-size:12px; }
   .shortcut-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
   .shortcut-help dl { display:grid; gap:6px; }
