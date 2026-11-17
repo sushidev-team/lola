@@ -164,7 +164,7 @@
   {:else if !loading && !error && phone && !checks.length}
     <div class="phone-setup" data-phone-setup><span class="text-subtext" style="font-size:15px;line-height:20px">No checks</span>{#if canRun}<button type="button" class="text-accent" style="font-size:15px;font-weight:400" data-setup-check disabled={active} onclick={edit}>Add check</button>{/if}</div>
   {:else if !loading && !error}
-    <div class="setup-row"><span class="explanation">{checks.length ? '' : 'No checks yet.'}</span>{#if canRun}<Button size="sm" variant="secondary" data-setup-check disabled={active} onclick={edit}>Set up check</Button>{/if}</div>
+    <div class="setup-row"><span class="explanation">{checks.length ? '' : 'No checks yet.'}</span>{#if canRun}<Button size="xs" variant="secondary" data-setup-check disabled={active} onclick={edit}>Set up check</Button>{/if}</div>
   {/if}
   {#if extra}<div class="extra">{@render extra()}</div>{/if}
 </section>
@@ -175,7 +175,7 @@
   :global([data-phone-desk]) .verification-heading h3 { font-size:17px; line-height:22px; font-weight:600; }
   :global([data-phone-desk]) .verification-heading :global(button) { min-width:44px; min-height:44px; }
   .verification { min-width:0; margin-top:4px; padding:12px 14px; border:1px solid var(--color-edge); border-radius:12px; }
-  .verification.slim { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:8px 12px; border-style:dashed; }
+  .verification.slim { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; padding:6px 10px; border-style:dashed; }
   .slim .verification-heading { align-items:center; gap:8px; }
   .slim .context-note,.slim .setup-row .explanation { display:none; }
   .extra { flex:1 0 100%; margin-top:10px; padding-top:8px; border-top:1px solid var(--color-edge); }

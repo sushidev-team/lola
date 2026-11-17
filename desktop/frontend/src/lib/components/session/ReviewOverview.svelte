@@ -10,10 +10,10 @@
   import ReviewThumbnail from './ReviewThumbnail.svelte';
   import { tooltip } from '$lib/tooltip';
   import { touchSurface } from '$lib/touchsurface';
-  let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment, onAssessConfidence, confidenceRequest, onUpdateMaterial, materialRequest, split = false }: {
+  let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment, confidenceRequest, split = false }: {
     pkg:ReviewPackage; facts?:PRReadinessData; sessionId:string; freshness:'current'|'stale'|'unknown'; onScreen:(index:number)=>void;
     checking?:boolean; checks?:Snippet; feedback?:Snippet; onAssessRisks?:()=>void; assessment?:{state:string;message:string};
-    onAssessConfidence?:()=>void; confidenceRequest?:{state:string;message:string}; onUpdateMaterial?:()=>void; materialRequest?:{state:string;message:string};
+    confidenceRequest?:{state:string;message:string};
     // The desktop workspace shows screenshots and checks beside the overview, so `split` leaves them out of it.
     split?:boolean;
   } = $props();
@@ -69,7 +69,7 @@
   </div>
   <div class="decision-column">
     {#if !split}<div class="readiness">
-      <ReviewConfidence {pkg} {facts} {checking} {onAssessConfidence} {confidenceRequest} {onUpdateMaterial} {materialRequest}/>
+      <ReviewConfidence {pkg} {facts} {checking} {confidenceRequest}/>
       {#if checks}<div class="checks">{@render checks()}</div>{/if}
     </div>{/if}
       <section class="review-panel risks" aria-label="Reported risks">

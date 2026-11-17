@@ -269,6 +269,7 @@
     // Only remove the exact pending entry, never other comments or sent history.
     feedback.setNote(sessionId, notes.replace(context + text.trim(), '').trim());
   }
+  async function sendAll() { if (draft.trim()) addComment(); await send(); }
   async function send() {
     const sent = await feedback.send(sessionId);
     notice = sent ? 'Feedback accepted. Lola delivers it when the agent is ready.' : 'Feedback was not accepted. Your draft is kept; check the error and retry.';
@@ -291,7 +292,7 @@
 {/snippet}
 {#snippet reviewFeedback()}
   <section aria-label="Review feedback" class="review-feedback">
-    <div class="feedback-heading"><h2><Icon name="send" size={16}/>Feedback</h2>{#if count}<span>Ready to send</span>{/if}</div>
+    <div class="feedback-heading"><h2><Icon name="send" size={16}/>Feedback</h2></div>
     {#if canComment && current}
       <Select aria-label="Comment section" value={subject} onchange={e => { subject = e.currentTarget.value; editDraft(draft); }}><option value="Write-up">Whole write-up</option>{#each sections as section,i}<option value={`Section ${i+1}: ${section.title}`}>{section.title}</option>{/each}</Select>
       {#if subject !== 'Write-up' && draft}<p class="text-sm text-ink-2">Restored draft: {subject}</p>{/if}
@@ -301,8 +302,8 @@
     {#if count}
       {#if feedback.draftsFor(sessionId).length}<p class="text-sm text-ink-2">{feedback.draftsFor(sessionId).length} code comments</p>{/if}
       {#if notes}<details><summary><Chevron class="disclosure-chevron" />Inspect feedback draft</summary><textarea aria-label="Feedback draft" class="review-input mt-2" rows="6" value={notes} oninput={e => feedback.setNote(sessionId,e.currentTarget.value)}></textarea></details>{/if}
-      {#if can('feedback')}<div><Button size="sm" variant="primary" loading={feedback.isSending(sessionId)} disabled={!session} onclick={send}><Icon name="arrow-up" size={14}/>Send feedback to agent</Button></div>{/if}
     {/if}
+    {#if can('feedback')}<div class="send-row"><span>{count ? `${count} ready` : 'Nothing to send yet'}</span><Button size="sm" variant="primary" loading={feedback.isSending(sessionId)} disabled={!session || (!count && !draft.trim())} aria-label="Send feedback to agent" onclick={sendAll}><Icon name="arrow-up" size={14}/>Send</Button></div>{/if}
     {#if notice}<p role="status" class="text-sm text-ink-2">{notice}</p>{/if}
   </section>
 {/snippet}
@@ -312,7 +313,7 @@
         {#if current}
           {#if comparable}<p role="status" class="mb-5 text-sm text-info">This package differs from your last review. <Button size="xs" onclick={() => { tab = 'since'; reviewCode = false; }}>See changes since review</Button></p>{/if}
           {#if current.id !== packages[0]?.id}<p class="mb-5 text-sm text-info">A newer review package is available. <Button size="xs" onclick={() => selected = packages[0].id}>View latest package</Button></p>{/if}
-          <ReviewOverview {split} pkg={current} {facts} {sessionId} {freshness} {checking} onScreen={index => { canvasScreen = index; if (!split) tab = 'visuals'; }} {checks} feedback={reviewFeedback} onAssessRisks={canRequest ? () => requestMaterial(true) : undefined} {assessment} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest} onUpdateMaterial={canRequest ? () => requestMaterial() : undefined} materialRequest={request}/>
+          <ReviewOverview {split} pkg={current} {facts} {sessionId} {freshness} {checking} onScreen={index => { canvasScreen = index; if (!split) tab = 'visuals'; }} {checks} feedback={reviewFeedback} onAssessRisks={canRequest ? () => requestMaterial(true) : undefined} {assessment} {confidenceRequest}/>
         {:else if materialLoading}<ReviewSkeleton/>
         {:else if !error}
           <div class="empty-review">
@@ -389,6 +390,7 @@
         {@render versionPicker()}
         {#if can('reviewPackageCapture')}<Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{/if}
         <Button size="sm" icon aria-label="Refresh review" title="Refresh review" loading={loading} onclick={refresh}><Icon name="refresh-cw" size={14} /></Button>
+        {#if canRequest && current}<Button size="sm" icon aria-label={confidenceRequest?.state === 'accepted' ? 'Update requested' : 'Update review'} title={confidenceRequest?.state === 'accepted' ? 'Update requested' : 'Ask the agent to update the review and its confidence'} loading={confidenceRequest?.state === 'sending'} disabled={confidenceRequest?.state === 'accepted'} onclick={() => requestMaterial(false,true)}><Icon name={confidenceRequest?.state === 'accepted' ? 'check' : 'message-square-text'} size={14} /></Button>{/if}
         <span class="toolbar-divider"></span>
         <Button size="sm" title="Checks & feedback · B" aria-label="Checks & feedback" aria-keyshortcuts="b" selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}><Icon name="panel-right" size={14}/>{count ? count : ''}</Button>
       </div>
@@ -427,7 +429,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
     {#if panelOpen}<div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize checks column" tabindex="0" aria-valuenow={asideW} style:right={`${asideW - 4}px`} onpointerdown={e => drag(e, "aside")} onkeydown={e => nudge(e, "aside")} ondblclick={() => { asideW = widths.aside.def; save(widths.aside.key, asideW); }}></div>
     <aside class="review-aside desk-aside" aria-label="Review actions">
-      <div class="aside-scroll">{#if current}<ReviewConfidence pkg={current} {facts} {checking} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest} onUpdateMaterial={canRequest ? () => requestMaterial() : undefined} materialRequest={request}/>{/if}{@render checks()}<div class="aside-feedback">{@render reviewFeedback()}</div></div>
+      <div class="aside-scroll">{#if current}<ReviewConfidence pkg={current} {facts} {checking} {confidenceRequest}/>{/if}{@render checks()}<div class="aside-feedback">{@render reviewFeedback()}</div></div>
     </aside>{/if}
   </div>
   </div>
@@ -461,10 +463,10 @@
   .review-material { width:100%; min-width:0; }
   .review-main { display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; }
   .review-material { overflow:auto; padding:40px 40px 64px; background:var(--color-canvas); }
-  .review-feedback { display:grid; gap:12px; }
+  .review-feedback { display:grid; gap:8px; }
+  .send-row { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; color:var(--color-ink-2); }
   .feedback-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .feedback-heading h2 { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; }
-  .feedback-heading > span { color:var(--color-accent); font-size:11px; }
   .review-feedback summary,.local-checks summary { cursor:pointer; color:var(--color-ink-2); font-size:12px; }
   .local-checks { margin-top:16px; }
   .review-toolbar > div:last-child { max-width:100%; }
@@ -524,8 +526,8 @@
   .no-shots h2 { font-size:15px; font-weight:600; color:var(--color-ink); }
   .no-shots p { max-width:38ch; font-size:13px; line-height:1.6; color:var(--color-ink-2); }
   .desk-aside { display:flex; flex-direction:column; gap:0; padding:0; overflow:hidden; }
-  .aside-scroll { flex:1 1 0; min-height:0; overflow:auto; display:grid; align-content:start; gap:16px; padding:18px 18px 0; }
-  .aside-feedback { position:sticky; bottom:0; z-index:2; margin:0 -18px; padding:14px 18px 16px; border-top:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 6%,var(--color-canvas)); }
+  .aside-scroll { flex:1 1 0; min-height:0; overflow:auto; display:grid; align-content:start; gap:10px; padding:10px 10px 0; }
+  .aside-feedback { position:sticky; bottom:0; z-index:2; margin:0 -10px; padding:10px 10px 12px; border-top:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 6%,var(--color-canvas)); }
   .no-pr { display:grid; gap:6px; padding:14px; border:1px dashed var(--color-edge); border-radius:10px; }
   .no-pr h3 { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--color-ink); }
   .no-pr p { font-size:12px; line-height:1.6; color:var(--color-ink-2); }

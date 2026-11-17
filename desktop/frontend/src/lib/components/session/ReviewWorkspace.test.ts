@@ -456,8 +456,8 @@ it('requests a revision-bound self-assessment without sending draft review feedb
   feedback.setNote(id,'Keep my unsent comments');
   talkSvc.Say.mockResolvedValueOnce({item:'h',delivered:true});
   render(ReviewWorkspace,{sessionId:id});
-  await fireEvent.click(await screen.findByRole('button',{name:'Update confidence'}));
-  expect(await screen.findByRole('button',{name:'Self-assessment requested'})).toBeDisabled();
+  await fireEvent.click(await screen.findByRole('button',{name:'Update review'}));
+  expect(await screen.findByRole('button',{name:'Update requested'})).toBeDisabled();
   expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining(`Add an explicit self-assessment to review package ${pkg().id}`)});
   expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining('Score: N/100')});
   expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining('Do not lower it solely because human approval is pending')});
@@ -573,4 +573,12 @@ it('resizes the material and checks columns from the keyboard and remembers the 
   expect(aside).toHaveAttribute('aria-valuenow','316');
   await fireEvent.keyDown(left,{key:'Home'});
   expect(left).toHaveAttribute('aria-valuenow','300');
+});
+
+it('always offers Send, enabled once there is a typed or queued comment',async()=>{
+  render(ReviewWorkspace,{sessionId:id});
+  const sendButton=await screen.findByRole('button',{name:'Send feedback to agent'});
+  expect(sendButton).toBeDisabled();
+  await fireEvent.input(screen.getByRole('textbox',{name:'Review comment'}),{target:{value:'Fix the badge font'}});
+  expect(sendButton).toBeEnabled();
 });
