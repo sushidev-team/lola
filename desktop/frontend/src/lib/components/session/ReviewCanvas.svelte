@@ -14,7 +14,7 @@
   let lastComment = $state(-1);
   const saveKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘↵' : 'Ctrl+Enter';
   const shortcuts = [
-    ['C', 'Comment pin'], ['R', 'Rectangle'], ['E', 'Ellipse'], ['A', 'Arrow'], ['L', 'Line'], ['P', 'Pen'], ['V / Esc', 'Cancel drawing'],
+    ['C', 'Comment (click or drag)'], ['R', 'Rectangle'], ['E', 'Ellipse'], ['A', 'Arrow'], ['L', 'Line'], ['P', 'Pen'], ['V / Esc', 'Cancel drawing'],
     ['↑ / ↓', 'Previous / next screenshot'], ['← / →', 'Move comparison divider'], ['N / Shift+N', 'Next / previous comment'],
     ['1 / 2', 'Slider / side by side'], ['3 / 4', 'Before / after'],
     ['+ / − / 0', 'Zoom in / out / fit'], ['I', 'Screen details'], ['B', 'Checks & feedback'],
@@ -37,7 +37,7 @@
   let tool = $state<'view' | MarkKind>('view');
   let stageW = $state(0), stageH = $state(0);
   const drawTools: { id: MarkKind; label: string; key: string; icon: 'message-square-text' | 'square' | 'circle' | 'arrow-up-right' | 'minus' | 'pencil'; title: string }[] = [
-    { id: 'pin', label: 'Add pin', key: 'c', icon: 'message-square-text', title: 'Comment pin' },
+    { id: 'pin', label: 'Add pin', key: 'c', icon: 'message-square-text', title: 'Comment: click or drag' },
     { id: 'area', label: 'Mark area', key: 'r', icon: 'square', title: 'Rectangle' },
     { id: 'ellipse', label: 'Draw ellipse', key: 'e', icon: 'circle', title: 'Ellipse' },
     { id: 'arrow', label: 'Draw arrow', key: 'a', icon: 'arrow-up-right', title: 'Arrow' },
@@ -202,7 +202,7 @@
     save(); closeComment(false); focusCanvas();
   }
   function discardChanges() {
-    if (selected?.savedText) marks = marks.map((m,i) => i === active ? {...m,text:m.savedText!} : m);
+    if (selected?.savedFeedback) marks = marks.map((m,i) => i === active ? {...m,text:m.savedText ?? ''} : m);
     else marks = marks.filter((_,i) => i !== active);
     save(); closeComment(false); focusCanvas();
   }
@@ -244,13 +244,24 @@
   });
   function save() { try { localStorage.setItem(key, JSON.stringify(marks)); } catch { message = 'Draft storage unavailable. Keep this review open until you send your feedback.'; } }
   function selectTool(value: typeof tool) { message = ''; tool = value; if (value !== 'view' && !single) mode = 'after'; }
-  function place(mark: ReviewMark) {
+  // Comment marks open the editor. A drawn shape is feedback on its own: it is sent as it is, and a double click adds words to it.
+  function place(mark: ReviewMark, comment = true) {
     if (!canComment || marks.length >= 30) { message = 'This screen has reached its 30-annotation limit.'; return; }
-    marks = [...marks, mark]; save(); openComment(marks.length - 1);
+    if (comment) { marks = [...marks, mark]; save(); openComment(marks.length - 1); return; }
+    const id = crypto.randomUUID();
+    const content = `Annotation ${id} (latest comment)\n${markLocation(mark)}\nMarked without a comment.`;
+    if (!onComment(index, content, undefined)) { message = 'Couldn’t add the drawing to feedback.'; return; }
+    marks = [...marks, {...mark, id, text:'', savedText:'', savedFeedback:content}]; save(); message = 'Drawing added to feedback.';
   }
   function point(e: PointerEvent) {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)), y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))};
+  }
+  // Shift locks a line or arrow to the nearer axis (90° steps), measured in stage pixels, not normalized units.
+  function locked(e: PointerEvent, from: {x:number;y:number}, to: {x:number;y:number}) {
+    if (!e.shiftKey || (tool !== 'line' && tool !== 'arrow')) return to;
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return Math.abs(to.x-from.x)*r.width >= Math.abs(to.y-from.y)*r.height ? {x:to.x, y:from.y} : {x:from.x, y:to.y};
   }
   // A stroke or a two-point shape between its first and current point.
   function shape(kind: MarkKind, from: {x:number;y:number}, to: {x:number;y:number}, path: number[]): ReviewMark {
@@ -267,38 +278,44 @@
   function placeDefault() {
     if (tool === 'view') return;
     if (tool === 'pen') { message = 'Freehand drawing needs a pointer. Use an arrow or a pin from the keyboard.'; return; }
-    if (tool === 'arrow' || tool === 'line') place(shape(tool, {x:.4,y:.5}, {x:.6,y:.5}, []));
-    else place({kind:tool, x:.5,y:.5,w:tool === 'pin' ? 0 : .2,h:tool === 'pin' ? 0 : .2,side,text:''});
+    if (tool === 'arrow' || tool === 'line') place(shape(tool, {x:.4,y:.5}, {x:.6,y:.5}, []), false);
+    else if (tool === 'pin') place({kind:'pin', x:.5,y:.5,w:0,h:0,side,text:''});
+    else place({kind:tool, x:.5,y:.5,w:.2,h:.2,side,text:''}, false);
   }
   function down(e: PointerEvent) {
     if (tool === 'view' || !canComment || e.button !== 0) return;
     e.preventDefault(); start = point(e); path = [start.x, start.y];
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    dragging = shape(tool, start, start, path);
+    dragging = shape(drawKind(), start, start, path);
   }
+  // The comment tool draws a rectangle while dragging; a plain click stays a point.
+  const drawKind = (): MarkKind => tool === 'pin' ? 'area' : tool as MarkKind;
   function move(e: PointerEvent) {
-    if (!start || tool === 'view' || tool === 'pin') return;
-    const p = point(e);
+    if (!start || tool === 'view') return;
+    const p = locked(e, start, point(e));
     if (tool === 'pen') path = [...path, p.x, p.y];
-    dragging = shape(tool, start, p, path);
+    dragging = shape(drawKind(), start, p, path);
   }
   function up(e: PointerEvent) {
     // The release can carry a position no move reported, so the shape ends where the pointer was lifted.
-    if (start && tool !== 'view' && tool !== 'pin') {
-      const p = point(e);
+    if (start && tool !== 'view') {
+      const p = locked(e, start, point(e));
       if (tool === 'pen') path = [...path, p.x, p.y];
-      dragging = shape(tool, start, p, path);
+      dragging = shape(drawKind(), start, p, path);
     }
     const mark = dragging, kind = tool;
     dragging = undefined; start = undefined;
     if (!mark || kind === 'view') return;
     const extent = Math.max(mark.w, mark.h);
-    if (kind === 'area' || kind === 'pin') { place(extent ? mark : {...mark, kind:'pin'}); return; }
-    // A click without a drag is no arrow, ellipse or stroke.
+    if (kind === 'pin') { place(extent >= .008 ? mark : {...mark, kind:'pin', w:0, h:0}); return; }
+    // A click without a drag is no rectangle, arrow, ellipse or stroke.
     if (extent < .008) return;
-    place(kind === 'pen' ? {...mark, pts:simplifyStroke(path)} : mark);
+    place(kind === 'pen' ? {...mark, pts:simplifyStroke(path)} : mark, false);
   }
   // Where the number badge sits: a stroke is numbered at its first point, every other mark at x/y.
+  // A drawing sent without words carries no number; the number appears once there is a comment to point at.
+  const numbered = (m: ReviewMark, i: number) => i === active || markKind(m) === 'pin' || !!(m.text.trim() || m.savedText);
+  const number = (i: number) => marks.slice(0, i + 1).filter((m, n) => numbered(m, n)).length;
   const anchor = (m: ReviewMark) => m.kind === 'pen' && m.pts ? {x:m.pts[0], y:m.pts[1]} : {x:m.x, y:m.y};
   function update(text: string) { saveFailed = false; marks = marks.map((m,i) => i === active ? {...m,text} : m); save(); }
   function saveComment(): boolean {
@@ -391,9 +408,10 @@
   {@const kind = markKind(m)}
   {#if kind === 'line' || kind === 'arrow'}
     {@const x1 = m.x*stageW}{@const y1 = m.y*stageH}{@const x2 = (m.x2 ?? m.x)*stageW}{@const y2 = (m.y2 ?? m.y)*stageH}
-    <g class="stroke" class:chosen={active === i} data-kind={kind}><line {x1} {y1} {x2} {y2} />{#if kind === 'arrow'}<polygon points={arrowHead(x1, y1, x2, y2, 14)} />{/if}</g>
+    <g class="stroke" class:chosen={active === i} data-kind={kind} role="presentation" ondblclick={() => i >= 0 && openComment(i)}><line class="hit" {x1} {y1} {x2} {y2} /><line {x1} {y1} {x2} {y2} />{#if kind === 'arrow'}<polygon points={arrowHead(x1, y1, x2, y2, 14)} />{/if}</g>
   {:else if kind === 'pen' && m.pts}
-    <g class="stroke" class:chosen={active === i} data-kind="pen"><polyline points={m.pts.map((v, n) => v * (n % 2 ? stageH : stageW)).join(' ')} /></g>
+    {@const pts = m.pts.map((v, n) => v * (n % 2 ? stageH : stageW)).join(' ')}
+    <g class="stroke" class:chosen={active === i} data-kind="pen" role="presentation" ondblclick={() => i >= 0 && openComment(i)}><polyline class="hit" points={pts} /><polyline points={pts} /></g>
   {/if}
 {/snippet}
 
@@ -480,7 +498,7 @@
               <svg class="shapes" viewBox={`0 0 ${stageW || 1} ${stageH || 1}`} aria-hidden="true">
                 {#each [...marks.map((m,i) => ({m,i})).filter(({m}) => m.side === side), ...(dragging ? [{m:dragging,i:-1}] : [])] as {m,i}}{@render stroke(m, i)}{/each}
               </svg>
-              {#each marks as mark,i}{#if mark.side === side}{@const at = anchor(mark)}{@const kind = markKind(mark)}<button class="pin" class:chosen={active === i} style:left={`${at.x*100}%`} style:top={`${at.y*100}%`} data-mark={i} aria-label={`Comment ${i+1}`} aria-expanded={active === i && editing} onclick={e => { e.stopPropagation(); openComment(i); }}>{i+1}</button>{#if kind === 'area' || kind === 'ellipse'}<button type="button" class="region region-hit" class:ellipse={kind === 'ellipse'} aria-label={`Open ${kind === 'area' ? 'area' : 'ellipse'} comment ${i+1}`} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} style:width={`${mark.w*100}%`} style:height={`${mark.h*100}%`} onclick={() => openComment(i)}></button>{/if}{/if}{/each}
+              {#each marks as mark,i}{#if mark.side === side}{@const at = anchor(mark)}{@const kind = markKind(mark)}{#if numbered(mark, i)}<button class="pin" class:chosen={active === i} style:left={`${at.x*100}%`} style:top={`${at.y*100}%`} data-mark={i} aria-label={`Comment ${number(i)}`} aria-expanded={active === i && editing} onclick={e => { e.stopPropagation(); openComment(i); }}>{number(i)}</button>{/if}{#if kind === 'area' || kind === 'ellipse'}<button type="button" class="region region-hit" class:ellipse={kind === 'ellipse'} aria-label={`Open ${kind === 'area' ? 'area' : 'ellipse'} comment${numbered(mark, i) ? ` ${number(i)}` : ''}`} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} style:width={`${mark.w*100}%`} style:height={`${mark.h*100}%`} onclick={e => { if (e.detail === 0) openComment(i); }} ondblclick={() => openComment(i)}></button>{/if}{/if}{/each}
               {#if dragging && (dragging.kind === 'area' || dragging.kind === 'ellipse')}<div class="region" class:ellipse={dragging.kind === 'ellipse'} style:left={`${dragging.x*100}%`} style:top={`${dragging.y*100}%`} style:width={`${dragging.w*100}%`} style:height={`${dragging.h*100}%`}></div>{/if}
             {/if}
           </div>
@@ -489,10 +507,10 @@
     {/if}
   </div>
   {#if editing && selected}
-    <div class="annotation-editor" bind:this={editor} role="dialog" aria-label={`Comment ${active+1} · ${selected.side}`} tabindex="-1" style:left={`${editorPosition.left}px`} style:top={`${editorPosition.top}px`}
+    <div class="annotation-editor" bind:this={editor} role="dialog" aria-label={`Comment ${number(active)} · ${selected.side}`} tabindex="-1" style:left={`${editorPosition.left}px`} style:top={`${editorPosition.top}px`}
       onkeydown={handleKey}>
       <div class="editor-heading">
-        <label for="canvas-comment">Comment {active+1}<span class="editor-side">{selected.side}</span></label>
+        <label for="canvas-comment">Comment {number(active)}<span class="editor-side">{selected.side}</span></label>
         <div class="editor-controls">
           <Button icon size="xs" variant="danger" aria-label="Delete comment" title="Delete comment · ⌘Backspace / ⌘Delete" aria-keyshortcuts="Meta+Backspace Meta+Delete Delete Backspace" onclick={() => deleteComment()}><Icon name="trash-2" size={14} /></Button>
           <Button icon size="xs" aria-label="Close comment" title="Close comment · Esc" aria-keyshortcuts="Escape" onclick={() => requestClose()}><Icon name="x" size={14} /></Button>
@@ -521,11 +539,13 @@
   .canvas { min-width:0; height:100%; display:grid; grid-template-rows:auto minmax(0,1fr); }
   .canvas:focus { outline:none; }
   .tools { position:relative; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
-  .shortcut-help { position:absolute; z-index:6; top:calc(100% + 6px); right:8px; width:min(340px,calc(100% - 16px)); max-height:70vh; overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; font-size:12px; }
+  .shortcut-help { position:absolute; z-index:6; top:calc(100% + 6px); right:8px; width:min(400px,calc(100% - 16px)); max-height:70vh; overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; font-size:12px; }
   .shortcut-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
-  .shortcut-help dl div { display:flex; justify-content:space-between; gap:16px; padding:4px 0; }
-  .shortcut-help dt { color:var(--color-ink-2); }
-  .shortcut-help kbd { font:inherit; color:var(--color-ink); white-space:nowrap; }
+  .shortcut-help dl { display:grid; gap:6px; }
+  .shortcut-help dl div { display:flex; flex-direction:row-reverse; justify-content:flex-end; align-items:baseline; gap:12px; }
+  .shortcut-help dt { color:var(--color-ink); font-size:13px; }
+  /* Same key chip as the app-wide Keyboard shortcuts sheet. */
+  .shortcut-help kbd { display:inline-block; min-width:5.5rem; flex-shrink:0; padding:1px 8px; border:1px solid var(--color-edge); border-radius:4px; background:var(--color-canvas); color:var(--color-accent-ink); font-family:var(--font-mono); font-size:12px; text-align:center; white-space:nowrap; }
   .shortcut-help p { margin-top:10px; color:var(--color-ink-2); font-size:11px; }
   .tool-group { display:flex; align-items:center; gap:3px; }
   .comparison { padding:2px; border-radius:6px; background:var(--color-canvas); }
@@ -563,6 +583,7 @@
   .shapes { position:absolute; inset:0; width:100%; height:100%; z-index:1; pointer-events:none; overflow:visible; }
   .stroke { stroke:var(--color-accent); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; fill:none; }
   .stroke polygon { fill:var(--color-accent); stroke-width:1; }
+  .stroke .hit { stroke:transparent; stroke-width:16; pointer-events:stroke; cursor:pointer; }
   .stroke.chosen { stroke:var(--color-ink); filter:drop-shadow(0 0 3px var(--color-accent)); }
   .stroke.chosen polygon { fill:var(--color-ink); }
   .region.ellipse { border-radius:50%; }

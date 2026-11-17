@@ -20,6 +20,7 @@
   import Tabs from '../Tabs.svelte';
   import DiffView from '../DiffView.svelte';
   import ReviewOverview from './ReviewOverview.svelte';
+  import ReviewConfidence from './ReviewConfidence.svelte';
   import BeforeMerge from './BeforeMerge.svelte';
   import OverviewChecks from './OverviewChecks.svelte';
   import ReviewCanvas from './ReviewCanvas.svelte';
@@ -255,7 +256,7 @@
   {#if reviewSession && !embedded && number}<BeforeMerge session={reviewSession} reviewLayout/>
   {:else if !embedded && !phone}<section class="no-pr" aria-label="PR status"><h3><Icon name="git-pull-request" size={14}/>No pull request yet</h3><p>Review works on the checkout. CI, reviewers, conflicts and merge status appear here once a PR is open.</p></section>{/if}
   {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} {labels} canRun={canVerify} canRecover={can('reviewPackageRecover')}/>{/key}{/if}
-  {#if session && !phone}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><p class="mb-3 text-xs text-faint">Not verified for this version.</p><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
+  {#if session && !phone}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
 {/snippet}
 {#snippet reviewFeedback()}
   <section aria-label="Review feedback" class="review-feedback">
@@ -391,7 +392,7 @@
       {/if}
     </div>
     {#if panelOpen}<aside class="review-aside desk-aside" aria-label="Review actions">
-      <div class="aside-scroll">{@render checks()}</div>
+      <div class="aside-scroll">{#if current}<ReviewConfidence pkg={current} {facts} {checking} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest}/>{/if}{@render checks()}</div>
       <div class="aside-feedback">{@render reviewFeedback()}</div>
     </aside>{/if}
   </div>
@@ -484,7 +485,7 @@
   .no-shots h2 { font-size:15px; font-weight:600; color:var(--color-ink); }
   .no-shots p { max-width:38ch; font-size:13px; line-height:1.6; color:var(--color-ink-2); }
   .desk-aside { grid-template-rows:minmax(0,1fr) auto; gap:0; padding:0; overflow:hidden; }
-  .aside-scroll { min-height:0; overflow:auto; padding:18px 18px 8px; }
+  .aside-scroll { min-height:0; overflow:auto; display:grid; align-content:start; gap:16px; padding:18px 18px 8px; }
   .aside-feedback { padding:14px 18px 18px; border-top:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 5%,var(--color-canvas)); max-height:55%; overflow:auto; }
   .no-pr { display:grid; gap:6px; padding:14px; border:1px dashed var(--color-edge); border-radius:10px; }
   .no-pr h3 { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--color-ink); }

@@ -1,12 +1,11 @@
 <script lang="ts">
   import Chevron from "$lib/components/Chevron.svelte";
-  import { tick, type Snippet } from 'svelte';
+  import type { Snippet } from 'svelte';
   import type { ReviewPackage, PRReadinessData } from '@bindings/internal/protocol';
-  import { tooltip } from '$lib/tooltip';
-  import { reviewOverview, reviewConfidence, riskWeight, type OverviewItem, type ReviewChange, type RiskLevel } from '$lib/reviewoverview';
+  import { reviewOverview, riskWeight, type OverviewItem, type ReviewChange, type RiskLevel } from '$lib/reviewoverview';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
-  import Skeleton from '../Skeleton.svelte';
+  import ReviewConfidence from './ReviewConfidence.svelte';
   import SSHRich from '../ssh/SSHRich.svelte';
   import ReviewThumbnail from './ReviewThumbnail.svelte';
   import { touchSurface } from '$lib/touchsurface';
@@ -17,35 +16,12 @@
     // The desktop workspace shows screenshots and checks beside the overview, so `split` leaves them out of it.
     split?:boolean;
   } = $props();
-  const confidenceID = $props.id();
-  // Phone: no "what is confidence" popover, and an empty breakdown says nothing, so it is not drawn.
+  // Phone: flat layout, no card chrome.
   const phone = touchSurface();
-  let confidenceOpen = $state(false);
-  let confidenceRoot = $state<HTMLElement>();
-  let confidencePanel = $state<HTMLDivElement>();
-  async function toggleConfidence() {
-    confidenceOpen = !confidenceOpen;
-    if (confidenceOpen) { await tick(); confidencePanel?.focus(); }
-  }
-  function closeConfidence(event: KeyboardEvent) {
-    if (confidenceOpen && event.key === 'Escape') {
-      event.preventDefault(); event.stopPropagation();
-      confidenceOpen = false;
-      confidenceRoot?.querySelector<HTMLButtonElement>('.confidence-info button')?.focus();
-    }
-  }
-  function dismissConfidence(event: PointerEvent) {
-    if (confidenceOpen && !confidenceRoot?.contains(event.target as Node)) confidenceOpen = false;
-  }
-  $effect(() => { pkg.id; confidenceOpen = false; });
   const overview = $derived(reviewOverview(pkg));
-  const confidence = $derived(reviewConfidence(pkg,facts));
-  const confidenceAction = $derived(confidenceRequest?.state === 'sending' ? 'Requesting self-assessment' : confidenceRequest?.state === 'accepted' ? 'Self-assessment requested' : confidenceRequest?.state === 'error' ? 'Retry self-assessment' : 'Ask agent for self-assessment');
   const screens = $derived(pkg.screens ?? []);
   const unrated = $derived(!overview.riskReportProvided || overview.risks.some(r => r.likelihood === 'unknown' || r.impact === 'unknown'));
 </script>
-
-<svelte:window onkeydowncapture={closeConfidence} onpointerdowncapture={dismissConfidence} />
 
 {#snippet entries(items: OverviewItem[], empty: string)}
   {#if items.length}<div class="entries">{#each items as item}<details class="entry">
@@ -87,53 +63,13 @@
           <span class="preview-caption"><span>{screen.title}</span><Icon name="arrow-right" size={14}/></span>
         </button>{/each}</div>
       </section>{/if}
-      <details class="additional source-details"><summary><Chevron class="disclosure-chevron" />Source &amp; revision</summary><div class="source-copy"><code>{pkg.base.slice(0,12)} → {pkg.head.slice(0,12)}</code><p>Write-up, risk estimates, and screenshots are agent-provided.</p></div>{#if overview.details.length}{@render entries(overview.details,'')}{/if}</details>
+      {#if overview.details.length}<details class="additional source-details"><summary><Chevron class="disclosure-chevron" />Details</summary>{@render entries(overview.details,'')}</details>{/if}
   </div>
   <div class="decision-column">
-    <div class="readiness">
-      {#if !(phone && confidence.score === null)}
-      <section class="confidence" aria-label="Review confidence" bind:this={confidenceRoot}>
-        <div class="confidence-label"><div class="confidence-heading"><h2><Icon name="shield-check" size={17}/>Confidence</h2>{#if !phone}<span class="confidence-info"><Button icon size="xs" aria-label="About confidence" aria-haspopup="dialog" aria-expanded={confidenceOpen} aria-controls={confidenceID} onclick={toggleConfidence}><Icon name="info" size={15}/></Button></span>{/if}</div><span class:has-issues={!checking && confidence.failed > 0}>{#if checking}<span role="status" aria-label="Loading confidence"><span class="sr-only">Loading confidence…</span><Skeleton width="90px" height="18px"/></span>{:else}{confidence.label}{/if}</span></div>
-        {#if checking}<div class="score"><Skeleton width="100px" height="48px"/></div>
-        {:else if confidence.score !== null}<strong class="score">{confidence.score}<small>/100</small></strong>{/if}
-        {#if confidenceOpen && !phone}
-        <div id={confidenceID} class="confidence-popover" role="dialog" aria-label="About confidence" tabindex="-1" bind:this={confidencePanel}>
-        <div class="confidence-popover-heading"><h3>How confidence is calculated</h3><Button icon size="xs" aria-label="Close confidence details" onclick={() => { confidenceOpen = false; confidenceRoot?.querySelector<HTMLButtonElement>('.confidence-info button')?.focus(); }}><Icon name="x" size={14}/></Button></div>
-        {#if checking}
-          <div class="confidence-breakdown" aria-hidden="true"><Skeleton height="40px"/></div>
-          <div class="score-explanation"><Skeleton width="65%" height="18px"/></div>
-        {:else}
-        <dl class="confidence-breakdown">
-          <div><dt>Observed results <small>70%</small></dt><dd>{#if confidence.evidence === null}Pending{:else}<span class="confidence-number">{Math.round(confidence.evidence)}/100</span>{/if}</dd></div>
-          <div><dt>Agent self-confidence <small>30%</small></dt><dd>
-            {#if confidence.agent}<span class="confidence-number">{confidence.agent.score}/100</span>{confidence.current ? '' : ' · unverified'}
-            {:else}
-              <span class="confidence-trigger" use:tooltip={onAssessConfidence ? confidenceAction : 'Resume the agent to request a self-assessment'}>
-                <Button icon size="xs" variant="ghost" class="text-magenta!" aria-label={confidenceAction} loading={confidenceRequest?.state === 'sending'} disabled={!onAssessConfidence || confidenceRequest?.state === 'accepted'} onclick={onAssessConfidence}>
-                  {#if confidenceRequest?.state !== 'sending'}<Icon name={confidenceRequest?.state === 'accepted' ? 'check' : confidenceRequest?.state === 'error' ? 'refresh-cw' : 'sparkles'} size={16}/>{/if}
-                </Button>
-              </span>
-            {/if}
-          </dd></div>
-        </dl>
-        {#if confidence.current && confidence.pending}<p class="confidence-note">{confidence.pending} {confidence.pending === 1 ? 'result is' : 'results are'} pending or unavailable; excluded from the score.</p>{/if}
-        {#if confidence.failed}<p class="confidence-note has-issues">{confidence.failed} {confidence.failed === 1 ? 'observed issue lowers' : 'observed issues lower'} confidence.</p>{/if}
-        {#if !confidence.agent && confidenceRequest?.message}<div class="confidence-request"><p class="assessment-message" role={confidenceRequest.state === 'error' ? 'alert' : 'status'}>{confidenceRequest.message}</p></div>{/if}
-        <div class="score-explanation">
-          {#if !confidence.current}<p>This review hasn’t been matched to the current PR. Live PR checks are shown below.</p>{/if}
-          {#if confidence.agent}<p><strong>Agent’s rationale:</strong> {confidence.agent.basis}</p>{:else}<p>The agent hasn’t provided a valid self-assessment for this package. A combined score needs both observed results and an explicit self-assessment.</p>{/if}
-          <dl>{#each confidence.signals as signal}<div><dt>{signal.label}</dt><dd>{signal.value}</dd></div>{/each}</dl>
-          <p>70% observed results + 30% agent self-confidence. Observed results are the share of known signals that pass, weighted equally. Failures, conflicts, unresolved threads, and requested changes lower that share. Pending or unavailable signals are excluded. Approval does not change confidence.</p>
-          <p>This is an assessment of the current revision, not a probability of correctness or permission to merge. The score is provisional while evidence is incomplete.</p>
-          {#if facts?.observedAt}<p>Observed on GitHub {new Date(facts.observedAt).toLocaleString()}. CI revision: {facts.checksHead?.slice(0,12) || 'unconfirmed'}.</p>{/if}
-        </div>
-        {/if}
-        </div>
-        {/if}
-      </section>
-      {/if}
-      {#if checks && !split}<div class="checks">{@render checks()}</div>{/if}
-    </div>
+    {#if !split}<div class="readiness">
+      <ReviewConfidence {pkg} {facts} {checking} {onAssessConfidence} {confidenceRequest}/>
+      {#if checks}<div class="checks">{@render checks()}</div>{/if}
+    </div>{/if}
       <section class="review-panel risks" aria-label="Reported risks">
         <div class="section-title"><h2>Risks &amp; follow-up<span class="section-count">{overview.risks.length}</span></h2></div><p class="risk-attribution">Agent assessment</p>
         {#if overview.risks.length}
@@ -163,14 +99,10 @@
   .overview.split .change-column,.overview.split .decision-column { gap:20px; }
   .overview.split .decision-column { display:contents; }
   .overview.split .change-column { display:contents; }
-  .overview.split .review-intro { order:0; } .overview.split .readiness { order:1; } .overview.split .features { order:2; } .overview.split .risks { order:3; } .overview.split .source-details { order:4; }
+  .overview.split .review-intro { order:0; } .overview.split .features { order:2; } .overview.split .risks { order:3; } .overview.split .source-details { order:4; }
   .overview.split h1 { font-size:22px; max-width:none; margin-bottom:10px; }
-  .overview.split .readiness { padding:16px 18px; border-radius:12px; }
-  .overview.split .confidence { padding-bottom:0; border-bottom:0; }
-  .overview.split .score { font-size:34px; }
   .overview.split .features,.overview.split .risks { padding:18px; border-radius:12px; }
   .overview.split .features h2,.overview.split .risks h2 { font-size:16px; }
-  .overview.split .confidence-popover { right:auto; left:0; }
   .change-column,.decision-column { min-width:0; display:grid; gap:32px; }
   .review-intro { min-width:0; padding:4px 0 0; }
   h1 { margin:0 0 16px; max-width:32ch; font-size:30px; line-height:1.2; letter-spacing:-.025em; font-weight:600; color:var(--color-ink); text-wrap:balance; overflow-wrap:anywhere; }
@@ -181,32 +113,7 @@
   .review-panel { min-width:0; }
   .section-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
   .section-count { font-size:12px; font-weight:400; font-variant-numeric:tabular-nums; color:var(--color-ink-2); }
-  .readiness { min-width:0; padding:24px; border:1px solid color-mix(in srgb,var(--color-accent) 22%,var(--color-edge)); border-radius:16px; background:var(--color-panel); }
-  .confidence { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; padding-bottom:20px; border-bottom:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
-  .confidence-label { display:grid; align-content:center; gap:6px; }
-  .confidence-heading { display:flex; align-items:center; gap:4px; }
-  .confidence-label h2 { font-size:13px; }
-  .confidence-popover { position:absolute; top:calc(100% - 10px); right:0; z-index:30; width:min(480px,calc(100vw - 48px)); max-height:min(60vh,600px); overflow:auto; display:grid; gap:14px; padding:20px; border:1px solid var(--color-edge); border-radius:10px; background:var(--color-panel); color:var(--color-ink); box-shadow:0 12px 32px rgb(0 0 0 / .25); }
-  .confidence-popover-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  .confidence-popover-heading h3 { margin:0; font-size:13px; font-weight:600; }
-  .confidence-popover:focus { outline:none; }
-  .confidence-label h2 :global(svg) { color:var(--color-magenta); }
-  .confidence-label > span { color:var(--color-ink-2); font-size:12px; }
-  .score,.confidence-number { font-family:var(--font-mono); font-variant-numeric:lining-nums tabular-nums slashed-zero; }
-  .score { align-self:center; white-space:nowrap; font-size:44px; line-height:1.1; letter-spacing:-.04em; font-weight:700; color:var(--color-magenta); }
-  .score small { font-size:14px; font-weight:400; letter-spacing:0; color:var(--color-ink-2); margin-left:6px; }
-  .confidence-trigger { align-self:center; display:inline-flex; }
-  .confidence-breakdown { grid-column:1/-1; margin:0; display:grid; gap:8px; font-size:12px; }
-  .confidence-breakdown > div { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  .confidence-breakdown dt { color:var(--color-ink-2); }
-  .confidence-breakdown small { margin-left:4px; font-size:11px; }
-  .confidence-breakdown dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
-  .confidence-note { grid-column:1/-1; margin:0; color:var(--color-ink-2); font-size:12px; line-height:1.5; }
-  .confidence-request { grid-column:1/-1; min-width:0; }
-  .confidence .has-issues { color:var(--color-warn); }
-  .score-explanation { grid-column:1/-1; font-size:12px; color:var(--color-ink-2); }
-  .score-explanation dl { margin:12px 0 8px; } .score-explanation dl > div { display:flex; justify-content:space-between; gap:12px; margin:8px 0; }
-  .score-explanation p { line-height:1.6; }
+  .readiness { min-width:0; }
   .checks { margin-top:20px; }
   summary { cursor:pointer; list-style:none; }
   summary::-webkit-details-marker { display:none; }
@@ -240,7 +147,7 @@
   .empty-copy { color:var(--color-ink-2); padding:8px 0 16px; font-size:13px; }
   .additional { margin-top:12px; font-size:12px; color:var(--color-ink-2); }
   .additional > summary { margin-bottom:12px; }
-  .source-details { margin:0; } .source-copy { font-size:12px; line-height:1.6; margin:12px 0; }
+  .source-details { margin:0; }
   .screenshot-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
   .screen-preview { align-self:start; text-align:left; min-width:0; border-radius:12px; cursor:pointer; background:transparent; }
   .screen-preview :global(.thumbnail) { display:flex; border:1px solid color-mix(in srgb,var(--color-info) 20%,var(--color-edge)); border-radius:12px; padding:12px; background:color-mix(in srgb,var(--color-info) 9%,var(--color-panel)); transition:border-color 160ms ease-out,background 160ms ease-out; }
@@ -284,15 +191,14 @@
   .assessment-message { color:var(--color-ink-2); font-size:12px; line-height:1.5; margin-top:12px; }
   .feedback { padding:20px; border-radius:12px; background:color-mix(in srgb,var(--color-info) 6%,var(--color-panel)); }
   @media(min-width:1200px) { .screenshot-grid { grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; } }
-  @media(max-width:1100px) { .overview { gap:32px; grid-template-columns:minmax(0,1fr) 330px; } h1 { font-size:26px; } .readiness { padding:20px; } }
+  @media(max-width:1100px) { .overview { gap:32px; grid-template-columns:minmax(0,1fr) 330px; } h1 { font-size:26px; } }
   @media(max-width:800px) { .overview { grid-template-columns:minmax(0,1fr); gap:32px; max-width:620px; } .change-column,.decision-column { display:contents; } .readiness { order:1; } .features { order:2; } .visual-review { order:3; } .risks { order:4; } .feedback { order:5; } .source-details { order:6; } }
-  @media(max-width:440px) { .risks { padding:20px 16px; } .features { padding:20px 16px; } .features h2 { font-size:20px; } .feature-description { margin-right:0; } h1 { font-size:24px; } .screenshot-grid { gap:16px 12px; } .screen-preview :global(.thumbnail) { padding:6px; border-radius:8px; } .preview-caption { font-size:12px; } .readiness { padding:18px; } }
+  @media(max-width:440px) { .risks { padding:20px 16px; } .features { padding:20px 16px; } .features h2 { font-size:20px; } .feature-description { margin-right:0; } h1 { font-size:24px; } .screenshot-grid { gap:16px 12px; } .screen-preview :global(.thumbnail) { padding:6px; border-radius:8px; } .preview-caption { font-size:12px; } }
   /* Phone: one flat column. No card inside a card, headings no larger than the 28/34 title tier. */
   :global([data-phone-desk]) .readiness,:global([data-phone-desk]) .features,:global([data-phone-desk]) .risks,:global([data-phone-desk]) .feedback { padding:0; border:0; border-radius:0; background:transparent; }
   :global([data-phone-desk]) h1 { max-width:none; font-size:28px; line-height:34px; margin-bottom:8px; }
   :global([data-phone-desk]) .features h2,:global([data-phone-desk]) .risks h2 { font-size:17px; line-height:22px; font-weight:600; letter-spacing:0; gap:8px; }
   :global([data-phone-desk]) .features .section-count,:global([data-phone-desk]) .risks .section-count { min-width:0; height:auto; padding:0; border-radius:0; background:none; color:var(--color-faint); font-size:13px; line-height:18px; font-weight:400; }
-  :global([data-phone-desk]) .score { font-size:28px; line-height:34px; }
   :global([data-phone-desk]) .summary-copy { font-size:15px; line-height:22px; }
   :global([data-phone-desk]) .overview { gap:24px; max-width:none; }
   @media(prefers-reduced-motion:reduce) { .entry > summary :global(svg),.screen-preview :global(.thumbnail),.feature-heading > :global(svg) { transition:none; } }

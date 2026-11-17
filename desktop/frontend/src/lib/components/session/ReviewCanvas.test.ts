@@ -28,7 +28,7 @@ it('keeps region drafts across reopening, and queues coordinates with the commen
   const onComment=vi.fn().mockReturnValue(false);
   const mounted=render(ReviewCanvas,{pkg,onComment});
   await screen.findByAltText('Settings — After');
-  await fireEvent.click(screen.getByRole('button',{name:'Mark area'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Align this area'}});
   mounted.unmount();
@@ -37,7 +37,7 @@ it('keeps region drafts across reopening, and queues coordinates with the commen
   await fireEvent.click(screen.getByRole('button',{name:'Next comment'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Align this area');
   await fireEvent.click(screen.getByRole('button',{name:'Save'}));
-  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, area from top-left: x=50%, y=50%, width=20%, height=20%\nAlign this area'),undefined);
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, point from top-left: x=50%, y=50%\nAlign this area'),undefined);
   expect(screen.getByRole('textbox')).toHaveValue('Align this area');
   onComment.mockReturnValue(true);
   await fireEvent.click(screen.getByRole('button',{name:'Save'}));
@@ -157,7 +157,7 @@ it('keeps area comments anchored while zooming and scrolling, including an open 
   render(ReviewCanvas,{pkg,onComment});
   await screen.findByAltText('Settings — After');
   await fireEvent.change(screen.getByLabelText('Screenshot zoom'),{target:{value:'200'}});
-  await fireEvent.click(screen.getByRole('button',{name:'Mark area'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   const surface=screen.getByRole('button',{name:'Place comment on After screenshot'});
   const stage=surface.parentElement!, viewport=stage.closest<HTMLElement>('.viewport')!;
   let bounds={left:-100,top:-50,width:800,height:600};
@@ -405,21 +405,23 @@ it.each(['Backspace','Delete'])('deletes the selected comment with Command+%s wh
   expect(screen.queryByRole('button',{name:'Comment 1'})).toBeNull();
 });
 
-it('places arrows and ellipses from the keyboard and queues their geometry',async()=>{
+it('places arrows and ellipses from the keyboard without a comment, and adds words on a double click',async()=>{
   const onComment=vi.fn().mockReturnValue(true);
   render(ReviewCanvas,{pkg,onComment});
   await screen.findByAltText('Settings — After');
   await fireEvent.click(screen.getByRole('button',{name:'Draw arrow'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
-  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Point at the label'}});
-  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
-  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, arrow from top-left: x=40%, y=50% to x=60%, y=50%\nPoint at the label'),undefined);
+  expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, arrow from top-left: x=40%, y=50% to x=60%, y=50%\nMarked without a comment.'),undefined);
   await fireEvent.click(screen.getByRole('button',{name:'Draw ellipse'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, ellipse from top-left: x=50%, y=50%, width=20%, height=20%\nMarked without a comment.'),undefined);
+  expect(screen.queryByRole('button',{name:/^Comment \d/})).toBeNull();
+  const sent=onComment.mock.calls.at(-1)![1];
+  await fireEvent.dblClick(screen.getByRole('button',{name:'Open ellipse comment'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Too round'}});
   await fireEvent.click(screen.getByRole('button',{name:'Save'}));
-  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, ellipse from top-left: x=50%, y=50%, width=20%, height=20%\nToo round'),undefined);
-  expect(screen.getByRole('button',{name:'Open ellipse comment 2'})).toBeInTheDocument();
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('ellipse from top-left: x=50%, y=50%, width=20%, height=20%\nToo round'),sent);
 });
 
 it('arms a drawing tool from its shortcut and refuses freehand without a pointer',async()=>{
@@ -445,7 +447,20 @@ it('ends an arrow where the pointer is released, even without a final move',asyn
   await fireEvent(surface,at('pointerdown',10,20));
   await fireEvent(surface,at('pointermove',40,20));
   await fireEvent(surface,at('pointerup',60,20));
-  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Here'}});
-  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
   expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('arrow from top-left: x=10%, y=20% to x=60%, y=20%'),undefined);
+});
+
+it('locks a line to the nearer axis while Shift is held',async()=>{
+  const onComment=vi.fn().mockReturnValue(true);
+  render(ReviewCanvas,{pkg,onComment});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Draw line'}));
+  const surface=screen.getByRole('button',{name:'Place comment on After screenshot'});
+  surface.getBoundingClientRect=()=>({left:0,top:0,width:100,height:100,right:100,bottom:100,x:0,y:0,toJSON(){}}) as DOMRect;
+  surface.setPointerCapture=()=>{};
+  const at=(type:string,x:number,y:number,shiftKey=false)=>{const e=new MouseEvent(type,{clientX:x,clientY:y,button:0,shiftKey,bubbles:true,cancelable:true});Object.defineProperty(e,'pointerId',{value:1});return e;};
+  await fireEvent(surface,at('pointerdown',10,20));
+  await fireEvent(surface,at('pointermove',60,28,true));
+  await fireEvent(surface,at('pointerup',60,28,true));
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('line from top-left: x=10%, y=20% to x=60%, y=20%'),undefined);
 });
