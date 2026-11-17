@@ -40,6 +40,11 @@ export function isImagePath(text: string): boolean {
   return IMAGE_PATH_RE.test(text.trim());
 }
 
+/** The element id of a session's conversation view, which Wails reports back for a file drop. */
+export function dropTargetId(sessionId: string): string {
+  return `drop-${sessionId}`;
+}
+
 export function attachmentToken(n: number): string {
   return `${JOIN}\u00a0(${n})\u00a0${JOIN}`;
 }
