@@ -21,6 +21,7 @@ beforeEach(() => {
   git.stashes = [{ sha: 'c'.repeat(40), selector: 'stash@{0}', subject: 'Saved work', date: '' }];
   vi.spyOn(git, 'branchAction').mockResolvedValue('/repo');
   vi.spyOn(git, 'stashAction').mockResolvedValue(true);
+  vi.spyOn(git, 'uncommit').mockResolvedValue(true);
   callbacks = { viewHistory: vi.fn<(ref: string) => void>(), openWorktree: vi.fn<(path: string) => void>(), viewCommit: vi.fn<(sha: string) => void>() };
   actions = new GitActions(() => ({ git, ref: '', limit: 200 }), callbacks);
   confirm.cancel();
@@ -407,6 +408,28 @@ describe('Git action menus', () => {
     expect(confirm.request?.subject).toContain('stash@{0} (cccccccc)');
     confirm.accept();
     expect(git.stashAction).toHaveBeenLastCalledWith('pop', 'c'.repeat(40), main.sha, '', 200);
+  });
+  it('undoes only the newest unpushed commit, pinned to the visible HEAD', async () => {
+    const tip = { sha: main.sha, parents: ['d'.repeat(40)], subject: 'Oops', author: '', email: '', date: '', refs: [] };
+    const older = { ...tip, sha: 'd'.repeat(40), parents: ['e'.repeat(40)], subject: 'Earlier' };
+    git.snapshot!.commits = [tip, older];
+    render(ProjectGitActionMenu, { actions });
+    actions.openCommit(older, event());
+    await screen.findByRole('menuitem', { name: 'Revert commit…' });
+    expect(screen.queryByRole('menuitem', { name: 'Undo commit…' })).toBeNull();
+    actions.openCommit(tip, event());
+    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Undo commit…' }));
+    expect(git.uncommit).not.toHaveBeenCalled();
+    expect(confirm.request?.subject).toBe('Oops (aaaaaaaa)');
+    confirm.accept();
+    expect(git.uncommit).toHaveBeenCalledWith(main.sha, '', 200);
+    git.snapshot!.refs[0].ahead = 0; // the upstream already has this tip
+    try {
+      actions.uncommit();
+      expect(confirm.request).toBeNull();
+      actions.openCommit(tip, event());
+      expect(await screen.findByRole('menuitem', { name: 'Undo commit…' })).toBeDisabled();
+    } finally { delete main.ahead; }
   });
   it('pins abort to the operation and HEAD visible at confirmation', () => {
     git.snapshot!.operation = 'rebase';

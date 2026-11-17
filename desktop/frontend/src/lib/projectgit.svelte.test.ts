@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTO_FETCH_INTERVAL, ProjectGitState } from './projectgit.svelte';
-const api = vi.hoisted(() => ({ BranchPullRequests: vi.fn(), Stashes: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), BranchAction: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Snapshot: vi.fn(), CachedIdentities: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), LastCommitMessage: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
+const api = vi.hoisted(() => ({ BranchPullRequests: vi.fn(), Stashes: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), BranchAction: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Uncommit: vi.fn(), Snapshot: vi.fn(), CachedIdentities: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), LastCommitMessage: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => resolve = r); return { promise, resolve }; }
 const snapshot = (branch: string) => ({ path: '/repo', branch, head: 'a', upstream: '', commits: [], refs: [], worktrees: [], files: [], signing: { enabled: false, format: '', key: '' }, hasMore: false });
@@ -243,6 +243,16 @@ describe('Project Git request and operation ownership', () => {
     expect(await state.stashAction('pop', 'c'.repeat(40), 'a'.repeat(40))).toBe(false);
     expect(api.StashApply).toHaveBeenCalledWith('lola', '/tree', 'c'.repeat(40), 'a'.repeat(40), true);
     expect(state.error).toContain('stash kept'); expect(state.busy).toBe('');
+  });
+  it('undoes a commit against the exact HEAD and returns its message to an empty commit box', async () => {
+    const state = new ProjectGitState('lola', '/tree');
+    api.LastCommitMessage.mockResolvedValue('Oops\n\nbody\n'); api.Uncommit.mockResolvedValue(undefined);
+    expect(await state.uncommit('a'.repeat(40))).toBe(true);
+    expect(api.Uncommit).toHaveBeenCalledWith('lola', '/tree', 'a'.repeat(40));
+    expect(state.message).toBe('Oops\n\nbody'); expect(state.notice).toContain('staged'); expect(state.busy).toBe('');
+    state.message = 'Keep this draft'; api.Uncommit.mockRejectedValue(new Error('this commit is already on a remote'));
+    expect(await state.uncommit('a'.repeat(40))).toBe(false);
+    expect(state.message).toBe('Keep this draft'); expect(state.error).toContain('already on a remote');
   });
   it('ignores old diff replies, including after closing the diff', async () => {
     const pending = deferred<{ files: { path: string }[] }>(); api.Diff.mockReturnValueOnce(pending.promise).mockResolvedValue({ files: [] });

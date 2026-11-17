@@ -391,6 +391,26 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     } finally { this.busy = ''; }
   }
 
+  /** Removes the newest commit, keeps its changes staged and hands its message back to an empty commit box. */
+  async uncommit(expectedHead: string, ref = '', limit = 200): Promise<boolean> {
+    if (this.busy) return false;
+    this.busy = 'uncommit'; this.error = ''; this.notice = '';
+    try {
+      const message = await ProjectGitService.LastCommitMessage(this.project, this.worktree, expectedHead).catch(() => '');
+      await ProjectGitService.Uncommit(this.project, this.worktree, expectedHead);
+      // Amend was pinned to the commit that is now gone.
+      if (this.amend) await this.setAmend(false);
+      if (!this.message.trim()) this.message = message.replace(/\n$/, '');
+      await this.load(ref, limit);
+      this.notice = 'Commit undone. Its changes are staged.';
+      return true;
+    } catch (error) {
+      await this.load(ref, limit);
+      this.error = String(error);
+      return false;
+    } finally { this.busy = ''; }
+  }
+
   async stashAction(action: 'stash' | 'apply' | 'pop' | 'drop', sha: string, expectedHead: string, ref = '', limit = 200): Promise<boolean> {
     if (this.busy) return false;
     this.busy = action; this.error = ''; this.notice = '';
