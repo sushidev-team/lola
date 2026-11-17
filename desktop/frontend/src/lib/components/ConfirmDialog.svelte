@@ -32,7 +32,7 @@
           {#if group.text}<p class="copy confirmation-lead">{group.text}</p>{/if}
           <ul class="confirmation-files" aria-label={group.text ?? "Affected files"}>
             {#each group.files as path (path)}
-              <li class="confirmation-file" title={path}><Icon name="file-text" size={13} /><span class="confirmation-path"><span class="confirmation-dir">{dir(path)}</span><strong>{leaf(path)}</strong></span>{#if group.tag}<span class="confirmation-tag">{group.tag}</span>{/if}</li>
+              <li class="confirmation-file" title={path}><Icon name="file-text" size={13} /><span class="confirmation-path"><span class="confirmation-dir">{dir(path)}</span><strong>{leaf(path)}</strong></span>{#if group.tag}<span class="confirmation-tag">{group.tag}</span>{/if}{#if group.stats?.[path]}{@const stat = group.stats[path]}<span class="confirmation-stat" title={`${stat.add} added, ${stat.del} removed lines`}><span class="add">+{stat.add}</span><span class="del">−{stat.del}</span></span>{/if}</li>
             {/each}
           </ul>
         </section>
@@ -77,6 +77,9 @@
   .confirmation-copy { min-width:0; overflow-wrap:anywhere; display:grid; gap:14px; }
   .confirmation-section { display:grid; gap:6px; }
   .confirmation-section + .confirmation-section { margin-top:-12px; }
+  .confirmation-stat { flex:none; margin-left:auto; display:inline-flex; gap:6px; font-family:var(--font-mono); font-size:12px; font-variant-numeric:tabular-nums; }
+  .confirmation-stat .add { color:var(--color-good); }
+  .confirmation-stat .del { color:var(--color-bad); }
   .confirmation-tag { flex:none; font-size:11px; color:var(--color-faint); }
   .confirmation-lead { font-size:13px; line-height:1.5; color:var(--color-ink); }
   .confirmation-subject { padding:9px 12px; border:1px solid var(--color-edge); border-radius:8px; background:color-mix(in srgb,var(--color-ink) 5%,var(--color-canvas)); font-family:var(--font-mono); font-size:13px; line-height:1.5; color:var(--color-ink); white-space:pre-wrap; }
@@ -88,6 +91,6 @@
   .confirmation-body { font-size:14px; line-height:1.5; color:var(--color-ink); }
   .confirmation-notes { display:grid; gap:2px; margin:0; padding:0; list-style:none; }
   .confirmation-note { display:flex; align-items:center; gap:8px; font-size:13px; line-height:1.5; color:var(--color-ink-2); }
-  .confirmation-note.warn { align-items:center; margin-top:8px; font-weight:600; color:var(--color-bad); }
+  .confirmation-note.warn { align-items:center; margin-top:8px; font-weight:400; color:var(--color-bad); }
   .confirmation-note.warn :global(svg) { flex:none; }
 </style>

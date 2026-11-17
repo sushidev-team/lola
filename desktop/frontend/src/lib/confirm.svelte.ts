@@ -16,7 +16,7 @@ export type ConfirmRequest = {
   /** The entry the action targets, drawn as its own row. Put names here, not in the body. */
   subject?: string;
   /** Repository paths drawn as file rows. A group may carry a lead sentence and a tag shown after each path. */
-  fileGroups?: { text?: string; tag?: string; files: string[] }[];
+  fileGroups?: { text?: string; tag?: string; files: string[]; /** Added and removed line counts per path, shown beside it. */ stats?: Record<string, { add: number; del: number }> }[];
   /** Short explanation of what the action does. May be empty when title + subject say it all; never restate the title as a question. */
   body: string;
   /** Optional second line spelling out the consequence. */

@@ -118,11 +118,13 @@
     if (!plan || !mounted || state !== git) return;
     const total = plan.tracked.length + plan.untracked.length;
     if (!total) { await state.load(historyRef, count); return; }
+    const stats = await state.unstagedStats(plan.untracked);
+    if (!mounted || state !== git) return;
     confirm.ask({
       title: 'Discard unstaged changes?',
       fileGroups: [
-        ...(plan.tracked.length ? [{ files: plan.tracked }] : []),
-        ...(plan.untracked.length ? [{ tag: 'untracked', files: plan.untracked }] : []),
+        ...(plan.tracked.length ? [{ files: plan.tracked, stats }] : []),
+        ...(plan.untracked.length ? [{ tag: 'untracked', files: plan.untracked, stats }] : []),
       ],
       body: '',
       detail: 'This cannot be undone.',
