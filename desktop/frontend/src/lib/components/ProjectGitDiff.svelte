@@ -115,6 +115,19 @@
     const el = rowEls[changeStarts[position]];
     if (!el) return;
     el.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    void flashChange(changeStarts[position]);
+  }
+  // The change just reached dims its whole section for a moment, so it is easy to find.
+  let flash = $state<{ from: number; to: number } | null>(null);
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  async function flashChange(from: number) {
+    let to = from;
+    while (to + 1 < rows.length && (rows[to + 1].kind === 'add' || rows[to + 1].kind === 'del')) to++;
+    clearTimeout(flashTimer);
+    flash = null;
+    await tick(); // lets the same change replay its animation
+    flash = { from, to };
+    flashTimer = setTimeout(() => { flash = null; }, 1400);
   }
   $effect(() => { file.path; currentChange = -1; });
   $effect(() => {
@@ -242,7 +255,7 @@
             {:else}{@const row = item.row}{@const index = item.index}
             {#if row.kind === 'hunk' || row.kind === 'meta'}<div class="diff-meta" bind:this={rowEls[index]}>{row.text}</div>
             {:else}<!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="unified-row row-{row.kind}" class:selectable class:picked={selectable && anchor >= 0 && index >= low && index <= high} bind:this={rowEls[index]} data-row={index} onpointerdown={(event) => pick(event, index)} onpointerenter={() => enter(index)} oncontextmenu={(event) => context(event, index)}>
+              <div class="unified-row row-{row.kind}" class:selectable class:flash={!!flash && index >= flash.from && index <= flash.to} class:picked={selectable && anchor >= 0 && index >= low && index <= high} bind:this={rowEls[index]} data-row={index} onpointerdown={(event) => pick(event, index)} onpointerenter={() => enter(index)} oncontextmenu={(event) => context(event, index)}>
                 <span class="line-no gutter" onpointerdown={(event) => press(event, index)}>{row.oldLine || ''}</span><span class="line-no gutter" onpointerdown={(event) => press(event, index)}>{row.newLine || ''}</span><span class="change-mark" aria-hidden="true">{row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '}</span>{@render code(row)}
               </div>{/if}
             {/if}
@@ -289,6 +302,9 @@
   .line-action:disabled { opacity:.5; cursor:default; }
   .line-action-icon { position:sticky; top:4px; display:grid; place-content:center; width:100%; height:19px; }
   .line-action:not(.tall) .line-action-icon { position:static; height:100%; }
+  .flash,.flash .gutter { animation:change-flash 1.4s ease-out; }
+  @keyframes change-flash { 0% { box-shadow:inset 0 0 0 100vmax color-mix(in srgb,#000 32%,transparent); } 100% { box-shadow:inset 0 0 0 100vmax transparent; } }
+  @media (prefers-reduced-motion: reduce) { .flash,.flash .gutter { animation:none; box-shadow:inset 0 0 0 100vmax color-mix(in srgb,#000 18%,transparent); } }
   .more-row { display:flex; align-items:center; gap:8px; position:sticky; left:0; width:100%; min-width:0; padding:3px 14px; border:0; border-block:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 6%,var(--color-panel)); color:var(--color-info); font:inherit; font-size:12px; line-height:18px; cursor:pointer; text-align:left; }
   .more-row:hover { background:var(--color-accent-fill); color:var(--color-ink); }
   .more-row small { color:var(--color-faint); }
