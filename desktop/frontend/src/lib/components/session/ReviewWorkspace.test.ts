@@ -82,7 +82,7 @@ it('marks only the inspected package, retains the baseline on refresh, and compa
   expect(await screen.findByRole('button',{name:'Reviewed'})).toBeDisabled();
   const next=pkg({id:'new-package',body:'## Changes\nCorrected spacing.\n## Risks\nNew risk.'});
   read.mockResolvedValue({packages:[next,pkg()],reviewed:{[id]:reviewed},reviewTracking:true});
-  await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
+  await fireEvent.focus(window);
   await fireEvent.click(await screen.findByRole('button',{name:'View latest package'}));
   await fireEvent.click(await screen.findByRole('button',{name:'See changes since review'}));
   expect(await screen.findByRole('heading',{name:'Since your last review'})).toBeInTheDocument();
@@ -202,7 +202,7 @@ it('shows retained material, missing baseline, and truthful revision freshness',
   await fireEvent.change(screen.getByLabelText('Screenshot zoom'),{target:{value:'150'}});
   expect(screen.getByLabelText('Screenshot zoom')).toHaveValue('150');
   facts.mockResolvedValue(status({head:'e'.repeat(40)}));
-  await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
+  await fireEvent.focus(window);
   await fireEvent.click(screen.getByRole('tab',{name:'Review'}));
   await screen.findByText('Outdated');
   expect(screen.queryByText(/Outdated material|Older revision/)).toBeNull();
@@ -269,7 +269,7 @@ it('retains saved annotations across reopening and updates their pending feedbac
 it('keeps the inspected revision when a newer package arrives',async()=>{
   render(ReviewWorkspace,{sessionId:id});await openScreens();
   read.mockResolvedValue({packages:[pkg({id:'f'.repeat(64),title:'Corrected layout'}),pkg()]});
-  await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
+  await fireEvent.focus(window);
   await fireEvent.click(screen.getByRole('tab',{name:'Review'}));
   await screen.findByText(/A newer review package is available/);
   expect(screen.getByRole('heading',{name:'A clearer settings screen'})).toBeInTheDocument();
@@ -280,7 +280,7 @@ it('keeps the inspected revision when a newer package arrives',async()=>{
 it('does not call unknown freshness current, and allows retry on old daemon errors',async()=>{
   read.mockRejectedValueOnce(new Error('unknown cmd "reviewPackages"'));facts.mockRejectedValue(new Error('offline'));
   render(ReviewWorkspace,{sessionId:id});await screen.findByRole('alert');
-  await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
+  await fireEvent.focus(window);
   await screen.findByText('Not verified',{exact:true});
   expect(screen.queryByText(/Package head matches/)).toBeNull();
 });

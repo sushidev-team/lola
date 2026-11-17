@@ -209,7 +209,9 @@
     packages = []; selected = ''; notice = ''; reviews = {}; markError = ''; reviewCode = false; reviewSupported = false;
     void refresh();
     const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 60000);
-    return () => { generation++; clearInterval(timer); };
+    const onFocus = () => { void refresh(); };
+    window.addEventListener('focus', onFocus);
+    return () => { generation++; clearInterval(timer); window.removeEventListener('focus', onFocus); };
   });
   async function captured(result: Package, index: number) {
     if (result.session !== current?.session) return;
@@ -320,7 +322,7 @@
 {/snippet}
 
 {#snippet material()}
-        {#if error}<p role="alert" class="mb-5 text-warn">Could not load review material. {error} Try Refresh review; an older daemon may need restarting.</p>{/if}
+        {#if error}<p role="alert" class="mb-5 text-warn">Could not load review material. {error} It re-reads when this window regains focus; an older daemon may need restarting.</p>{/if}
         {#if current}
           {#if comparable}<p role="status" class="mb-5 text-sm text-info">This package differs from your last review. <Button size="xs" onclick={() => { tab = 'since'; reviewCode = false; }}>See changes since review</Button></p>{/if}
           {#if current.id !== packages[0]?.id}<p class="mb-5 text-sm text-info">A newer review package is available. <Button size="xs" onclick={() => selected = packages[0].id}>View latest package</Button></p>{/if}
@@ -354,7 +356,7 @@
       {#if !embedded && current && reviewSupported && can('reviewPackageMark')}<Button size="sm" variant="secondary" loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button>{/if}
       <Button size="sm" icon aria-label="Refresh review" title="Refresh review" loading={loading} onclick={refresh}><Icon name="refresh-cw" size={14} /></Button>
     </div>
-    {#if markError}<p role="alert" class="w-full text-sm text-warn">{markError} Refresh review and retry.</p>{/if}
+    {#if markError}<p role="alert" class="w-full text-sm text-warn">{markError} Reopen the review and retry.</p>{/if}
   </div>
   <div class="review-layout" class:panel-open={panelOpen && (tab !== 'material' || !current)}>
     <div class="review-main" class:capturing={captureOpen}>
@@ -399,9 +401,8 @@
       <div class="head-actions">
         {#if lanes.length}<Select aria-label="Review repository" value={lane?.id} onchange={e => app = e.currentTarget.value}>{#each lanes as a}<option value={a.id}>{a.label}</option>{/each}</Select>{/if}
         {@render versionPicker()}
-        {#if can('reviewPackageCapture')}<Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{/if}
-        <Button size="sm" icon aria-label="Refresh review" title="Refresh review" loading={loading} onclick={refresh}><Icon name="refresh-cw" size={14} /></Button>
-        {#if canRequest && current}<Button size="sm" icon aria-label={confidenceRequest?.state === 'accepted' ? 'Update requested' : 'Update review'} title={confidenceRequest?.state === 'accepted' ? 'Update requested' : 'Ask the agent to update the review and its confidence'} loading={confidenceRequest?.state === 'sending'} disabled={confidenceRequest?.state === 'accepted'} onclick={() => requestMaterial(false,true)}><Icon name={confidenceRequest?.state === 'accepted' ? 'check' : 'message-square-text'} size={14} /></Button>{/if}
+        {#if can('reviewPackageCapture') && captureHost}<Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{/if}
+        {#if canRequest && current}<Button size="sm" variant="secondary" aria-label={confidenceRequest?.state === 'accepted' ? 'Update requested' : 'Update review'} title={confidenceRequest?.state === 'accepted' ? 'Update requested' : 'Ask the agent to update the review and its confidence'} loading={confidenceRequest?.state === 'sending'} disabled={confidenceRequest?.state === 'accepted'} onclick={() => requestMaterial(false,true)}><Icon name={confidenceRequest?.state === 'accepted' ? 'check' : 'refresh-cw'} size={14} />{confidenceRequest?.state === 'accepted' ? 'Requested' : 'Update review'}</Button>{/if}
         <span class="toolbar-divider"></span>
         <Button size="sm" title="Checks & feedback · B" aria-label="Checks & feedback" aria-keyshortcuts="b" selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}><Icon name="panel-right" size={14}/>{count ? count : ''}</Button>
       </div>
@@ -410,7 +411,7 @@
 
 {#snippet deskBody()}
   <div class="desk-body">
-  {#if markError}<p role="alert" class="head-error text-sm text-warn">{markError} Refresh review and retry.</p>{/if}
+  {#if markError}<p role="alert" class="head-error text-sm text-warn">{markError} Reopen the review and retry.</p>{/if}
   <div class="review-layout desk" class:panel-open={panelOpen} bind:this={layoutEl} style:--aside-w={`${asideEff}px`}>
     <div class="review-main" class:capturing={captureOpen}>
       {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={-1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
