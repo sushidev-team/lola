@@ -489,7 +489,7 @@ describe('Project Git workspace', () => {
   it('compares a commit to the working copy through an explicit context action', async () => {
     await open(); await fireEvent.contextMenu(screen.getByRole('button',{name:/Initial project,/}));
     await fireEvent.click(await screen.findByRole('menuitem',{name:'Compare against working changes'}));
-    await waitFor(()=>expect(api.Diff).toHaveBeenLastCalledWith(project,'',oldSHA,'','working',''));
+    await waitFor(()=>expect(api.Diff).toHaveBeenCalledWith(project,'',oldSHA,'','working',''));
     expect(await screen.findByRole('heading',{name:'Compare working changes'})).toBeInTheDocument();
     expect(await screen.findByRole('region',{name:'Diff for src/app.ts'})).toBeInTheDocument();
   });
@@ -502,13 +502,13 @@ describe('Project Git workspace', () => {
     await open();
     await fireEvent.click(screen.getByRole('button', { name: /Initial project,/ }));
     await fireEvent.click(screen.getByRole('button', { name: /Add project workspace,/ }), { metaKey: true });
-    await waitFor(() => expect(api.Diff).toHaveBeenLastCalledWith(project, '', oldSHA, newSHA, 'commit', ''));
+    await waitFor(() => expect(api.Diff).toHaveBeenCalledWith(project, '', oldSHA, newSHA, 'commit', ''));
     expect(await screen.findByRole('heading', { name: 'Compare commits' })).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Diff for src/app.ts' })).toBeNull();
     await fireEvent.click(await screen.findByRole('button', {name:'View changes'}));
     expect(await screen.findByRole('region', { name: 'Diff for src/app.ts' })).toHaveTextContent('new text');
     await fireEvent.click(screen.getByRole('button', { name: 'Swap comparison direction' }));
-    await waitFor(() => expect(api.Diff).toHaveBeenLastCalledWith(project, '', newSHA, oldSHA, 'commit', ''));
+    await waitFor(() => expect(api.Diff).toHaveBeenCalledWith(project, '', newSHA, oldSHA, 'commit', ''));
     await fireEvent.click(screen.getByRole('button', { name: 'Close diff' }));
     expect(screen.queryByRole('region', { name:'Selected changes' })).toBeNull();
     expect(screen.getByRole('heading', {name:'Compare commits'})).toBeInTheDocument();
@@ -747,12 +747,12 @@ describe('Project Git workspace', () => {
       'Merge origin/main into main', 'Rebase origin/main onto main', 'Create PR…', 'Compare branches',
     ]);
     await fireEvent.click(screen.getByRole('menuitem', {name:'Compare branches'}));
-    await waitFor(() => expect(api.Diff).toHaveBeenLastCalledWith(project, '', newSHA, oldSHA, 'commit', ''));
+    await waitFor(() => expect(api.Diff).toHaveBeenCalledWith(project, '', newSHA, oldSHA, 'commit', ''));
     expect(screen.getByRole('heading', {name:'Compare branches'})).toBeInTheDocument();
     expect(screen.getByText('main → origin/main')).toBeInTheDocument();
     expect(await screen.findByRole('region', {name:'Diff for src/app.ts'})).toHaveTextContent('new text');
     await fireEvent.click(screen.getByRole('button', {name:'Swap comparison direction'}));
-    await waitFor(() => expect(api.Diff).toHaveBeenLastCalledWith(project, '', oldSHA, newSHA, 'commit', ''));
+    await waitFor(() => expect(api.Diff).toHaveBeenCalledWith(project, '', oldSHA, newSHA, 'commit', ''));
     expect(screen.getByText('origin/main → main')).toBeInTheDocument();
     expect(api.BranchAction).not.toHaveBeenCalled();
   });
