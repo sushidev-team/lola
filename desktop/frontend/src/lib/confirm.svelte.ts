@@ -15,6 +15,8 @@ export type ConfirmRequest = {
   title: string;
   /** The entry the action targets, drawn as its own row. Put names here, not in the body. */
   subject?: string;
+  /** 'files': the subject is one repository path per line, drawn as file rows. */
+  subjectKind?: 'files';
   /** Short explanation of what the action does. May be empty when title + subject say it all; never restate the title as a question. */
   body: string;
   /** Optional second line spelling out the consequence. */
