@@ -509,11 +509,21 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	agentBin := sandboxedBin(d.cfg, p.Name, agent.Parse(d.cfg.AgentForProject(p.Name)).Binary())
 	health := d.runtimeHealth
 	d.mu.Unlock()
+	// Both checks go through the shared slot ledger (slots.go), the same one a poll
+	// tick reserves from: peek early, RESERVE inside openTicket's critical section.
 	hasSlot := func() error {
-		if Budget(pollCap, globalCap, NativeLiveCounted(d.sessions.Snapshot())) <= 0 {
+		global, own := d.slotCounts(p.Name)
+		if global+1 > globalCap || own+1 > pollCap {
 			return errCapped
 		}
 		return nil
+	}
+	reserve := func() (func(), error) {
+		release, ok := d.reserveSlots(p.Name, 1, pollCap, globalCap)
+		if !ok {
+			return nil, errCapped
+		}
+		return release, nil
 	}
 	queue := func() {
 		if !known {
@@ -544,7 +554,7 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	ra.saveLedger(d.home, d.logf)
 	od, err := d.openTicket(ctx, protocol.OpenTicketArgs{
 		Project: p.Name, Identifier: is.Identifier, UUID: is.ID, Title: is.Title, Branch: is.BranchName,
-	}, hasSlot)
+	}, reserve)
 	if errors.Is(err, errCapped) {
 		queue() // lost the race for the last slot: back to the queue, not rejected
 		ra.saveLedger(d.home, d.logf)

@@ -303,7 +303,7 @@ var errCapped = errors.New("at the concurrency cap")
 // claim, immediately before the spawn. The Linear agent loop passes a budget
 // check there: checked any earlier, a poll tick spawning under the same mutex
 // could fill the last slot between the check and this spawn.
-func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admit func() error) (protocol.OpenData, error) {
+func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admit func() (func(), error)) (protocol.OpenData, error) {
 	project := strings.TrimSpace(a.Project)
 	identifier := strings.TrimSpace(a.Identifier)
 	uuid := strings.TrimSpace(a.UUID)
@@ -409,12 +409,20 @@ func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admi
 		return protocol.OpenData{}, err
 	}
 
+	// admit RESERVES the slot (the shared slot ledger, so a poll or another
+	// project's admission cannot take the same last global slot); the
+	// reservation is released once the spawn returned and its session is in the
+	// store, or on any earlier exit.
+	release := func() {}
 	if admit != nil {
-		if err := admit(); err != nil {
+		r, err := admit()
+		if err != nil {
 			d.inflight.Remove(uuid)
 			return protocol.OpenData{}, err
 		}
+		release = r
 	}
+	defer release()
 
 	// (2) Persist seen BEFORE the spawn for a polling project (crash guard),
 	// matching dispatch — except dedup_mode=state, which dedups via the state
@@ -458,6 +466,7 @@ func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admi
 	if serr := d.sessions.Save(); serr != nil {
 		d.logf(name, "openTicket: persist sessions after spawn of %s: %v", identifier, serr)
 	}
+	release()
 
 	// (4) Label flip + P4 write-back for a label-mode polling project.
 	if polls && proj.DedupMode == "label" {

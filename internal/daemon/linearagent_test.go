@@ -617,3 +617,29 @@ func TestLinearAgentReloadsStorageAfterDeadPersistedToken(t *testing.T) {
 		t.Fatalf("re-login in storage must be picked up: %v", err)
 	}
 }
+
+// A spawn still in flight elsewhere (a poll, another project's admission)
+// holds a slot in the shared ledger: the agent loop must queue instead of
+// taking the same last global slot.
+func TestLinearAgentRespectsInFlightReservations(t *testing.T) {
+	p := config.Project{Name: "app", Path: "/tmp/app", TeamID: "team-1"}
+	d, api, nat := agentDaemon(t, p)
+	d.cfg.Defaults.GlobalCap = 1
+	release, ok := d.reserveSlots("other", 1, noProjectCap, 1)
+	if !ok {
+		t.Fatal("setup: reservation refused")
+	}
+	api.sessions = []linear.AgentSession{pendingSession("as-3", "ENG-3", "team-1")}
+	d.linearAgentCycle(context.Background())
+	if len(nat.spawnCalls()) != 0 {
+		t.Fatal("must not spawn into a slot another admission holds")
+	}
+	release()
+	d.linearAgentCycle(context.Background())
+	if len(nat.spawnCalls()) != 1 {
+		t.Fatalf("must start once the reservation is released, spawns=%d", len(nat.spawnCalls()))
+	}
+	if g, _ := d.slotCounts("app"); g > 1 {
+		t.Fatalf("reservation leaked: %d", g)
+	}
+}
