@@ -456,8 +456,7 @@ it('requests a revision-bound self-assessment without sending draft review feedb
   feedback.setNote(id,'Keep my unsent comments');
   talkSvc.Say.mockResolvedValueOnce({item:'h',delivered:true});
   render(ReviewWorkspace,{sessionId:id});
-  await fireEvent.click(await screen.findByRole('button',{name:'About confidence'}));
-  await fireEvent.click(await screen.findByRole('button',{name:'Ask agent for self-assessment'}));
+  await fireEvent.click(await screen.findByRole('button',{name:'Update confidence'}));
   expect(await screen.findByRole('button',{name:'Self-assessment requested'})).toBeDisabled();
   expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining(`Add an explicit self-assessment to review package ${pkg().id}`)});
   expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining('Score: N/100')});

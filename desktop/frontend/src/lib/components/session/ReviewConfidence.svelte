@@ -8,9 +8,9 @@
   import Skeleton from '../Skeleton.svelte';
   import { touchSurface } from '$lib/touchsurface';
 
-  let { pkg, facts, checking = false, onAssessConfidence, confidenceRequest }: {
+  let { pkg, facts, checking = false, onAssessConfidence, confidenceRequest, onUpdateMaterial, materialRequest }: {
     pkg: ReviewPackage; facts?: PRReadinessData; checking?: boolean;
-    onAssessConfidence?: () => void; confidenceRequest?: { state: string; message: string };
+    onAssessConfidence?: () => void; confidenceRequest?: { state: string; message: string }; onUpdateMaterial?: () => void; materialRequest?: { state: string; message: string };
   } = $props();
   const id = $props.id();
   // Phone: no "what is confidence" panel, and a score that cannot be computed says nothing, so it is not drawn.
@@ -19,7 +19,10 @@
   let root = $state<HTMLElement>();
   let panel = $state<HTMLDivElement>();
   const confidence = $derived(reviewConfidence(pkg, facts));
-  const action = $derived(confidenceRequest?.state === 'sending' ? 'Requesting self-assessment' : confidenceRequest?.state === 'accepted' ? 'Self-assessment requested' : confidenceRequest?.state === 'error' ? 'Retry self-assessment' : 'Ask agent for self-assessment');
+  const confLabel = $derived(confidenceRequest?.state === 'accepted' ? 'Requested' : confidenceRequest?.state === 'error' ? 'Retry confidence' : 'Update confidence');
+  const matLabel = $derived(materialRequest?.state === 'accepted' ? 'Requested' : materialRequest?.state === 'error' ? 'Retry review' : 'Update review');
+  const hint = $derived(confidenceRequest?.message || materialRequest?.message || '');
+  const hintState = $derived(confidenceRequest?.message ? confidenceRequest.state : materialRequest?.state);
   const score = $derived(confidence.score);
   const tone = $derived(checking || score === null ? 'none' : confidence.failed ? 'bad' : score >= 75 ? 'good' : 'warn');
   const observed = $derived(confidence.evidence === null ? null : Math.round(confidence.evidence));
@@ -51,27 +54,24 @@
   {#if !checking}<div class="parts">
     <span class="part" class:issues={confidence.failed > 0}><i>Checks</i><b>{observed === null ? '–' : observed}</b></span>
     <span class="part"><i>Agent</i><b>{confidence.agent ? confidence.agent.score : '–'}</b></span>
-    <span class="part rev" use:tooltip={'Reviewed changes, from base to head'}><Icon name="git-branch" size={11}/><code>{pkg.base.slice(0,7)}</code><Icon name="arrow-right" size={10}/><code>{pkg.head.slice(0,7)}</code></span>
   </div>{/if}
+  {#if !phone}<div class="actions">
+    <span use:tooltip={onUpdateMaterial ? 'Ask the agent to refresh the write-up, screenshots and confidence' : 'Resume the agent to update the review'}><Button size="xs" variant="secondary" aria-label={materialRequest?.state === 'accepted' ? 'Review update requested' : matLabel} loading={materialRequest?.state === 'sending'} disabled={!onUpdateMaterial || materialRequest?.state === 'accepted'} onclick={onUpdateMaterial}><Icon name={materialRequest?.state === 'accepted' ? 'check' : 'refresh-cw'} size={12}/>{matLabel}</Button></span>
+    <span use:tooltip={onAssessConfidence ? 'Ask the agent to re-assess its confidence' : 'Resume the agent to update confidence'}><Button size="xs" variant="secondary" aria-label={confidenceRequest?.state === 'accepted' ? 'Self-assessment requested' : confLabel} loading={confidenceRequest?.state === 'sending'} disabled={!onAssessConfidence || confidenceRequest?.state === 'accepted'} onclick={onAssessConfidence}><Icon name={confidenceRequest?.state === 'accepted' ? 'check' : 'activity'} size={12}/>{confLabel}</Button></span>
+  </div>
+  {#if hint}<p class="hint" role={hintState === 'error' ? 'alert' : 'status'}>{hint}</p>{/if}{/if}
   {#if open && !phone}
-  <div {id} class="panel" role="dialog" aria-label="About confidence" tabindex="-1" bind:this={panel}>
-    <div class="panel-head"><h3>How it is calculated</h3><Button icon size="xs" aria-label="Close confidence details" onclick={close}><Icon name="x" size={14}/></Button></div>
+  <div {id} class="explain" role="dialog" aria-label="About confidence" tabindex="-1" bind:this={panel}>
+    <div class="explain-head"><h3>How it is calculated</h3><Button icon size="xs" aria-label="Close confidence details" onclick={close}><Icon name="x" size={14}/></Button></div>
     {#if checking}<Skeleton height="40px"/>
     {:else}
     <dl class="split">
       <div><dt>Observed results <small>70%</small></dt><dd>{#if confidence.evidence === null}Pending{:else}{Math.round(confidence.evidence)}/100{/if}</dd></div>
       <div><dt>Agent self-confidence <small>30%</small></dt><dd>
         {#if confidence.agent}{confidence.agent.score}/100{confidence.current ? '' : ' · unverified'}
-        {:else}
-          <span class="trigger" use:tooltip={onAssessConfidence ? action : 'Resume the agent to request a self-assessment'}>
-            <Button icon size="xs" variant="ghost" class="text-magenta!" aria-label={action} loading={confidenceRequest?.state === 'sending'} disabled={!onAssessConfidence || confidenceRequest?.state === 'accepted'} onclick={onAssessConfidence}>
-              {#if confidenceRequest?.state !== 'sending'}<Icon name={confidenceRequest?.state === 'accepted' ? 'check' : confidenceRequest?.state === 'error' ? 'refresh-cw' : 'sparkles'} size={16}/>{/if}
-            </Button>
-          </span>
-        {/if}
+        {:else}Not assessed{/if}
       </dd></div>
     </dl>
-    {#if !confidence.agent && confidenceRequest?.message}<p class="note" role={confidenceRequest.state === 'error' ? 'alert' : 'status'}>{confidenceRequest.message}</p>{/if}
     {#if !confidence.current}<p class="note">Not matched to the current PR yet.</p>{/if}
     {#if confidence.agent}<p class="note"><strong>Agent’s rationale:</strong> {confidence.agent.basis}</p>{/if}
     <dl class="signals">{#each confidence.signals as signal}<div><dt>{signal.label}</dt><dd>{signal.value}</dd></div>{/each}</dl>
@@ -99,16 +99,15 @@
   .parts { display:flex; flex-wrap:wrap; gap:6px; }
   .part { display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:999px; background:color-mix(in srgb,var(--color-ink) 6%,transparent); font-size:11px; color:var(--color-ink-2); }
   .part i { font-style:normal; } .part b { font-family:var(--font-mono); font-weight:600; font-size:12px; color:var(--color-ink); font-variant-numeric:tabular-nums; }
-  .part.rev { gap:4px; color:var(--color-faint); }
-  .rev code { font-family:var(--font-mono); color:var(--color-ink-2); }
-  .panel { display:grid; gap:10px; padding-top:12px; border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); font-size:12px; color:var(--color-ink-2); }
-  .panel:focus { outline:none; }
-  .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  .panel-head h3 { margin:0; font-size:12px; font-weight:600; color:var(--color-ink); }
+  .explain { display:grid; gap:10px; padding-top:12px; border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); font-size:12px; color:var(--color-ink-2); }
+  .explain:focus { outline:none; }
+  .explain-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .explain-head h3 { margin:0; font-size:12px; font-weight:600; color:var(--color-ink); }
+  .actions { display:flex; flex-wrap:wrap; gap:6px; }
+  .hint { margin:0; font-size:11px; line-height:1.4; color:var(--color-ink-2); }
   dl { margin:0; display:grid; gap:6px; }
   dl > div { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   dt small { margin-left:4px; font-size:11px; } dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; color:var(--color-ink); }
   .signals { padding-top:8px; border-top:1px dashed var(--color-edge); }
   .note { margin:0; line-height:1.5; }
-  .trigger { display:inline-flex; }
 </style>

@@ -312,7 +312,7 @@
         {#if current}
           {#if comparable}<p role="status" class="mb-5 text-sm text-info">This package differs from your last review. <Button size="xs" onclick={() => { tab = 'since'; reviewCode = false; }}>See changes since review</Button></p>{/if}
           {#if current.id !== packages[0]?.id}<p class="mb-5 text-sm text-info">A newer review package is available. <Button size="xs" onclick={() => selected = packages[0].id}>View latest package</Button></p>{/if}
-          <ReviewOverview {split} pkg={current} {facts} {sessionId} {freshness} {checking} onScreen={index => { canvasScreen = index; if (!split) tab = 'visuals'; }} {checks} feedback={reviewFeedback} onAssessRisks={canRequest ? () => requestMaterial(true) : undefined} {assessment} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest}/>
+          <ReviewOverview {split} pkg={current} {facts} {sessionId} {freshness} {checking} onScreen={index => { canvasScreen = index; if (!split) tab = 'visuals'; }} {checks} feedback={reviewFeedback} onAssessRisks={canRequest ? () => requestMaterial(true) : undefined} {assessment} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest} onUpdateMaterial={canRequest ? () => requestMaterial() : undefined} materialRequest={request}/>
         {:else if materialLoading}<ReviewSkeleton/>
         {:else if !error}
           <div class="empty-review">
@@ -427,7 +427,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
     {#if panelOpen}<div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize checks column" tabindex="0" aria-valuenow={asideW} style:right={`${asideW - 4}px`} onpointerdown={e => drag(e, "aside")} onkeydown={e => nudge(e, "aside")} ondblclick={() => { asideW = widths.aside.def; save(widths.aside.key, asideW); }}></div>
     <aside class="review-aside desk-aside" aria-label="Review actions">
-      <div class="aside-scroll">{#if current}<ReviewConfidence pkg={current} {facts} {checking} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest}/>{/if}{@render checks()}<div class="aside-feedback">{@render reviewFeedback()}</div></div>
+      <div class="aside-scroll">{#if current}<ReviewConfidence pkg={current} {facts} {checking} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest} onUpdateMaterial={canRequest ? () => requestMaterial() : undefined} materialRequest={request}/>{/if}{@render checks()}<div class="aside-feedback">{@render reviewFeedback()}</div></div>
     </aside>{/if}
   </div>
   </div>
