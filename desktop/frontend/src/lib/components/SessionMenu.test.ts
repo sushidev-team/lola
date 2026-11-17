@@ -86,6 +86,8 @@ describe("SessionMenu", () => {
     nav.selectedId = "";
     nav.sidebarQuery = "";
     nav.triage = "";
+    nav.sidebarOpen = true;
+    nav.sidebarSplit = false;
     sessionMenu.close();
     confirm.cancel();
   });
@@ -130,6 +132,21 @@ describe("SessionMenu", () => {
     expect(nav.overlayProject).toBe("acme");
     expect(sessionMenu.request).toBeNull();
     nav.closeOverlay();
+  });
+
+  it("leaves Project settings out while the projects column shows beside the sessions", () => {
+    store.projects = [{ name: "acme", label: "Acme" } as ProjectInfo];
+    nav.sidebarSplit = true;
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    const { unmount } = render(SessionMenu);
+    expect(screen.queryByRole("menuitem", { name: "Project settings" })).not.toBeInTheDocument();
+    unmount();
+
+    // A closed sidebar shows no projects, so the row is back.
+    nav.sidebarOpen = false;
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    expect(screen.getByRole("menuitem", { name: "Project settings" })).toBeInTheDocument();
   });
 
   it("a stack session expands Project settings into the stack and each app's project", async () => {

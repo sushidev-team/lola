@@ -21,9 +21,11 @@
   // a STACK session has the stack (issue side) plus one member project per app
   // it checked out. A project-free temporary session, or a project since
   // removed from the config, has none. Several targets fold behind one row
-  // that expands in place, so the menu stays short until asked.
+  // that expands in place, so the menu stays short until asked. With the
+  // projects column on screen beside the sessions the row is left out: the
+  // project is right there, with its own settings.
   const projectTargets = $derived.by(() => {
-    if (!session) return [];
+    if (!session || nav.projectsBeside) return [];
     const names = [session.project, ...(session.stack ? (session.apps ?? []).map((a) => a.name) : [])];
     return [...new Set(names)]
       .filter((n) => n && store.projects.some((p) => p.name === n))
