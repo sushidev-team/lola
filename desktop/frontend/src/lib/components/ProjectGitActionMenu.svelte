@@ -39,7 +39,7 @@
   <div use:portal>
   <div class="git-menu-backdrop" role="presentation" onclick={() => actions.close()} oncontextmenu={(event) => { event.preventDefault(); actions.close(); }}></div>
   <div class="git-action-menu" bind:this={element} style={`left:${request.x}px;top:${request.y}px`} role="menu" aria-label="Git actions" tabindex="-1" onkeydown={key} transition:fade={{duration:motion()}}>
-    <div class="menu-heading"><strong>{request.title}</strong>{#if request.subtitle}<span>{request.subtitle}</span>{/if}</div>
+    {#if request.title}<div class="menu-heading"><strong>{request.title}</strong>{#if request.subtitle}<span>{request.subtitle}</span>{/if}</div>{/if}
     {#each request.items as item}
       {#if item.separator}<div class="menu-separator" role="separator"></div>{/if}
       <MenuItem disabled={item.disabled} variant={item.danger ? 'danger' : 'default'} onclick={() => run(item)}><span class="action-label" class:danger={item.danger}><Icon name={item.icon} size={15} /><span>{item.label}</span></span></MenuItem>

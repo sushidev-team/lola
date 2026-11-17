@@ -459,7 +459,7 @@
     // A refused patch (the file moved on) is redrawn too, so the next click is on what is really there.
     // Another file or view may have been picked meanwhile; it owns the diff now.
     if (state !== view || shown !== diffKey()) return;
-    await state.loadDiff(chosenArea, '', '', chosen.path);
+    await state.loadDiff(chosenArea, '', '', chosen.path, true);
     if (shown !== diffKey() || state !== view) return;
     if (ok && !state.diff?.files.length) working();
   }

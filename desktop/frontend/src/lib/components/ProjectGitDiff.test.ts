@@ -43,9 +43,19 @@ describe('Project Git diff line actions', () => {
     render(ProjectGitDiff, { file, lineAction: 'stage', onlines, oncontext });
     await fireEvent.contextMenu(screen.getByText('D').closest('.unified-row')!);
     const [title, items] = oncontext.mock.calls[0];
-    expect(title).toBe('doc.txt');
+    expect(title).toBe('');
     expect(items.map((item: { label: string }) => item.label)).toEqual(['Stage line', 'Stage hunk', 'Clear selection']);
     items[1].run();
     expect(onlines).toHaveBeenCalledWith([2, 3, 5, 6]);
+  });
+
+  it('moves the selection from the keyboard', async () => {
+    const onlines = vi.fn();
+    render(ProjectGitDiff, { file, lineAction: 'stage', onlines });
+    const region = screen.getByRole('region', { name: 'Code changes' });
+    await fireEvent.pointerDown(gutter('B'), { button: 0 });
+    await fireEvent.pointerUp(window);
+    await fireEvent.keyDown(region, { key: 'Enter' });
+    expect(onlines).toHaveBeenCalledWith([3]);
   });
 });

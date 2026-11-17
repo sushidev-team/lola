@@ -58,6 +58,13 @@
     if (event.shiftKey && anchor >= 0) head = index; else { anchor = head = index; }
     dragging = true;
     event.preventDefault();
+    (event.currentTarget as HTMLElement).closest<HTMLElement>('.diff-code')?.focus();
+  }
+  // Clicking the code selects its row (shift extends) without blocking text selection;
+  // only the gutter starts a drag, since a drag over code selects text.
+  function pick(event: PointerEvent, index: number) {
+    if (!selectable || event.button > 0 || (event.target as HTMLElement).closest('.gutter')) return;
+    if (event.shiftKey && anchor >= 0) { head = index; event.preventDefault(); } else if (!window.getSelection()?.toString()) anchor = head = index;
   }
   function enter(index: number) {
     if (dragging) head = index;
@@ -86,10 +93,12 @@
     ];
     if (hunk >= 0) items.push({ label: `${verb} hunk`, icon: lineAction === 'unstage' ? 'minus' : 'plus', disabled: busy, run: () => apply(hunkLines(hunk)) });
     items.push({ label: 'Clear selection', icon: 'x', separator: true, run: () => { anchor = head = -1; } });
-    oncontext(file.path, items, event);
+    oncontext('', items, event);
   }
   function key(event: KeyboardEvent) {
     if (event.key === 'Escape' && anchor >= 0) { event.stopPropagation(); anchor = head = -1; }
+    // Enter (or s / u) moves the selected lines, or the hovered one, without reaching for the button.
+    else if (selectable && target && (event.key === 'Enter' || event.key === (lineAction === 'unstage' ? 'u' : 's')) && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); apply(target.lines); }
   }
 </script>
 
@@ -136,7 +145,7 @@
           {#each rows as row, index}
             {#if row.kind === 'hunk' || row.kind === 'meta'}<div class="diff-meta" bind:this={rowEls[index]}>{row.text}</div>
             {:else}<!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="unified-row row-{row.kind}" class:selectable class:picked={selectable && anchor >= 0 && index >= low && index <= high} bind:this={rowEls[index]} onpointerenter={() => enter(index)} oncontextmenu={(event) => context(event, index)}>
+              <div class="unified-row row-{row.kind}" class:selectable class:picked={selectable && anchor >= 0 && index >= low && index <= high} bind:this={rowEls[index]} onpointerdown={(event) => pick(event, index)} onpointerenter={() => enter(index)} oncontextmenu={(event) => context(event, index)}>
                 <span class="line-no gutter" onpointerdown={(event) => press(event, index)}>{row.oldLine || ''}</span><span class="line-no gutter" onpointerdown={(event) => press(event, index)}>{row.newLine || ''}</span><span class="change-mark" aria-hidden="true">{row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '}</span>{@render code(row)}
               </div>{/if}
           {/each}
@@ -168,7 +177,10 @@
   .line-no { text-align:right; padding-right:10px; user-select:none; color:var(--color-faint); font-size:12px; }
   .change-mark { color:var(--color-faint); user-select:none; }
   .diff-meta { color:var(--color-info); background:color-mix(in srgb,var(--color-info) 6%,var(--color-panel)); padding:5px 14px; white-space:pre; font-size:12px; }
-  .gutter { cursor:default; }
+  .gutter { position:sticky; left:0; z-index:1; background:var(--color-panel); cursor:default; }
+  .gutter + .gutter { left:44px; }
+  .row-add .gutter { background:color-mix(in srgb,var(--color-good) 10%,var(--color-panel)); }
+  .row-del .gutter { background:color-mix(in srgb,var(--color-bad) 10%,var(--color-panel)); }
   .selectable .gutter { cursor:pointer; }
   .picked { box-shadow:inset 3px 0 0 var(--color-accent); background-image:linear-gradient(var(--color-accent-fill),var(--color-accent-fill)); }
   .action-rail { position:sticky; left:0; height:0; z-index:2; pointer-events:none; }

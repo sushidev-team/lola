@@ -65,6 +65,14 @@ export function CancelAICommit(id: string): $CancellablePromise<void> {
     return $Call.ByID(3035722579, id);
 }
 
+/**
+ * ChangeLines stages or unstages only the chosen changed lines of one file; the
+ * patch is the one the human saw and is refused if the file has moved on.
+ */
+export function ChangeLines(project: string, worktree: string, area: string, path: string, patch: string, lines: number[] | null, stage: boolean): $CancellablePromise<projectgit$0.File[] | null> {
+    return $Call.ByID(2829500693, project, worktree, area, path, patch, lines, stage);
+}
+
 export function Commit(project: string, worktree: string, message: string): $CancellablePromise<void> {
     return $Call.ByID(2416522199, project, worktree, message);
 }
@@ -94,10 +102,6 @@ export function Diff(project: string, worktree: string, $from: string, to: strin
 
 export function DiscardPaths(project: string, worktree: string, token: string, paths: string[] | null): $CancellablePromise<void> {
     return $Call.ByID(2962392216, project, worktree, token, paths);
-}
-
-export function ChangeLines(project: string, worktree: string, area: string, path: string, patch: string, lines: number[] | null, stage: boolean): $CancellablePromise<projectgit$0.File[] | null> {
-    return $Call.ByID(2829500693, project, worktree, area, path, patch, lines, stage);
 }
 
 export function DiscardUnstaged(project: string, worktree: string, token: string): $CancellablePromise<void> {

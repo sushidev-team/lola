@@ -488,10 +488,10 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     this.diffLoading = false;
   }
 
-  async loadDiff(area: GitArea, from = '', to = '', path = '') {
+  async loadDiff(area: GitArea, from = '', to = '', path = '', quiet = false) {
     const sequence = ++this.diffSequence;
-    this.diffLoading = true;
-    this.diff = null;
+    // A quiet refresh keeps the drawn diff (and its scroll position) until the new one arrives.
+    if (!quiet) { this.diffLoading = true; this.diff = null; }
     this.diffError = '';
     try {
       const result = await ProjectGitService.Diff(this.project, this.worktree, from, to, area, path);
