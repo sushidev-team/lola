@@ -30,13 +30,15 @@ import (
 )
 
 const (
-	FileName             = "devices.json"
-	RevokedFileName      = "devices.revoked"
-	FileVersion          = 1
-	MaxDevices           = 16
-	MaxNameRunes         = 64
-	maxPlatformRunes     = 32
-	lastSeenPersistEvery = 10 * time.Minute
+	FileName               = "devices.json"
+	RevokedFileName        = "devices.revoked"
+	MembersFileName        = "members.json"
+	MembersRevokedFileName = "members.revoked"
+	FileVersion            = 1
+	MaxDevices             = 16
+	MaxNameRunes           = 64
+	maxPlatformRunes       = 32
+	lastSeenPersistEvery   = 10 * time.Minute
 )
 
 // Device is one paired phone.
@@ -50,6 +52,10 @@ type Device struct {
 	PairedAt   time.Time    `json:"pairedAt"`
 	LastSeenAt time.Time    `json:"lastSeenAt,omitzero"`
 	Relay      *DeviceRelay `json:"relay,omitempty"` // nil = no relay rendezvous
+	// Hub is set on a team member entry (members.json only): the hub identity
+	// the owner pinned. Display and re-verification data; the TLS key (SPKI)
+	// is what authenticates.
+	Hub *HubIdentity `json:"hub,omitempty"`
 }
 
 // DeviceRelay is the device's hub rendezvous. HASHES ONLY: the plaintext
@@ -72,6 +78,7 @@ var (
 	ErrBadTiers      = errors.New("devices: tiers must be known and include read")
 	ErrBadName       = errors.New("devices: name is empty, too long or not printable")
 	ErrBadRelay      = errors.New("devices: relay record is malformed")
+	ErrBadMember     = errors.New("devices: member entry needs a hub identity")
 	ErrRevokeUnsaved = errors.New("devices: revoked for this run only: neither devices.json nor devices.revoked could be written")
 )
 
@@ -93,6 +100,7 @@ type file struct {
 type Registry struct {
 	mu          sync.RWMutex
 	dir         string
+	file, jfile string // devices.json and devices.revoked, or the members pair
 	st          file
 	byKey       map[[32]byte]int
 	byID        map[string]int
@@ -113,6 +121,18 @@ type Registry struct {
 // Open loads the registry from home. It never returns nil: a file it must not
 // trust yields a registry whose Err is non-nil and which authenticates nobody.
 func Open(home string, now func() time.Time, logf func(string, ...any)) *Registry {
+	return open(home, FileName, RevokedFileName, now, logf)
+}
+
+// OpenMembers opens the registry of team members who may attach to shared
+// sessions. It is the same registry in its own files (members.json,
+// members.revoked), never devices.json: an older lola reading phones would
+// otherwise take a teammate for a phone with the read tier.
+func OpenMembers(home string, now func() time.Time, logf func(string, ...any)) *Registry {
+	return open(home, MembersFileName, MembersRevokedFileName, now, logf)
+}
+
+func open(home, name, jname string, now func() time.Time, logf func(string, ...any)) *Registry {
 	if now == nil {
 		now = time.Now
 	}
@@ -120,13 +140,13 @@ func Open(home string, now func() time.Time, logf func(string, ...any)) *Registr
 		logf = func(string, ...any) {}
 	}
 	r := &Registry{
-		dir: home, now: now, logf: logf,
+		dir: home, file: name, jfile: jname, now: now, logf: logf,
 		write: writeAtomic, appendJournal: appendJournalLine,
 		st: file{Version: FileVersion},
 	}
 	if fi, err := os.Stat(home); err == nil && fi.IsDir() {
 		if m := fi.Mode().Perm(); m&0o077 != 0 {
-			logf("devices: %s is mode %04o; 0700 is expected for the directory holding %s", home, m, FileName)
+			logf("devices: %s is mode %04o; 0700 is expected for the directory holding %s", home, m, r.file)
 		}
 	}
 	if err := r.load(); err != nil {
@@ -136,8 +156,8 @@ func Open(home string, now func() time.Time, logf func(string, ...any)) *Registr
 	return r
 }
 
-func (r *Registry) path() string        { return filepath.Join(r.dir, FileName) }
-func (r *Registry) journalPath() string { return filepath.Join(r.dir, RevokedFileName) }
+func (r *Registry) path() string        { return filepath.Join(r.dir, r.file) }
+func (r *Registry) journalPath() string { return filepath.Join(r.dir, r.jfile) }
 
 func (r *Registry) break_(cause error) {
 	r.broken = fmt.Errorf("%w: %v (move %s away to start with an empty registry)", ErrBroken, cause, r.path())
@@ -148,7 +168,7 @@ func (r *Registry) break_(cause error) {
 func (r *Registry) load() error {
 	denied, err := readJournal(r.journalPath())
 	if err != nil {
-		return fmt.Errorf("%s: %w", RevokedFileName, err)
+		return fmt.Errorf("%s: %w", r.jfile, err)
 	}
 	r.journal = len(denied) > 0
 	b, err := os.ReadFile(r.path())
@@ -195,7 +215,7 @@ func (r *Registry) load() error {
 		var k [32]byte
 		copy(k[:], raw)
 		if ep, ok := denied[k]; ok && d.Epoch <= ep {
-			r.logf("devices: %s is revoked in %s; hiding it", d.ID, RevokedFileName)
+			r.logf("devices: %s is revoked in %s; hiding it", d.ID, r.jfile)
 			continue
 		}
 		out = append(out, d)
@@ -276,6 +296,10 @@ func (f file) clone() file {
 
 func (d Device) clone() Device {
 	d.Tiers = slices.Clone(d.Tiers)
+	if d.Hub != nil {
+		h := *d.Hub
+		d.Hub = &h
+	}
 	if d.Relay != nil {
 		rl := *d.Relay
 		d.Relay = &rl
@@ -564,7 +588,7 @@ func (r *Registry) Revoke(id string) (Device, error) {
 	if saveErr != nil {
 		if jerr := r.appendJournal(r.journalPath(), dev.SPKI, dev.Epoch); jerr == nil {
 			r.journal = true
-			result = fmt.Errorf("revoked; %s could not be rewritten, the revocation is kept in %s: %w", FileName, RevokedFileName, saveErr)
+			result = fmt.Errorf("revoked; %s could not be rewritten, the revocation is kept in %s: %w", r.file, r.jfile, saveErr)
 		} else {
 			r.unsaved = true
 			r.logf("devices: revocation of %s is memory-only: save: %v; journal: %v", dev.ID, saveErr, jerr)
@@ -616,7 +640,7 @@ func (r *Registry) persist(st file) error {
 	if r.journal {
 		if err := truncateJournal(r.journalPath()); err != nil {
 			// Harmless: journal lines only hide entries up to their epoch.
-			r.logf("devices: truncating %s: %v", RevokedFileName, err)
+			r.logf("devices: truncating %s: %v", r.jfile, err)
 		} else {
 			r.journal = false
 		}
@@ -651,4 +675,47 @@ func writeAtomic(path string, b []byte) (err error) {
 	name := tmp.Name()
 	tmp = nil
 	return os.Rename(name, path)
+}
+
+// HubIdentity is what a team member entry remembers of the hub-side identity
+// the owner confirmed: the member device's hub id and ed25519 key, and the
+// fingerprint the person compared.
+type HubIdentity struct {
+	DeviceID    string `json:"device_id"`
+	PublicKey   string `json:"public_key"`
+	Fingerprint string `json:"fingerprint"`
+	Member      string `json:"member,omitempty"`
+}
+
+// AddMember registers a team member's inner TLS key in a registry opened with
+// OpenMembers. A member holds the read tier and nothing else: what it may
+// reach is decided per shared session by the daemon, never by tiers.
+func (r *Registry) AddMember(name string, spki [32]byte, hub HubIdentity) (Device, error) {
+	name, err := checkName(name)
+	if err != nil {
+		return Device{}, err
+	}
+	if hub.DeviceID == "" || hub.PublicKey == "" || hub.Fingerprint == "" {
+		return Device{}, ErrBadMember
+	}
+	return r.mutate(func(st *file) (int, error) {
+		id := IDFor(spki)
+		at := indexOf(st, id)
+		if at < 0 && len(st.Devices) >= MaxDevices {
+			return 0, ErrFull
+		}
+		st.Epoch++
+		h := hub
+		d := Device{
+			ID: id, Name: name, Platform: "member",
+			SPKI:  base64.StdEncoding.EncodeToString(spki[:]),
+			Tiers: []string{protocol.TierRead}, Epoch: st.Epoch, PairedAt: r.now().UTC(), Hub: &h,
+		}
+		if at < 0 {
+			st.Devices = append(st.Devices, d)
+			return len(st.Devices) - 1, nil
+		}
+		st.Devices[at] = d
+		return at, nil
+	})
 }
