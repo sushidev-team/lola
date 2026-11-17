@@ -20,6 +20,8 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/shareterm"
 	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
@@ -41,6 +43,10 @@ type TermService struct {
 
 	mu      sync.Mutex
 	streams map[string]*ptyStream
+
+	// remote streams a teammate's shared session into the same terminal events
+	// (names starting with shareterm.Prefix); nil in a hand-built service.
+	remote *shareterm.Terms
 }
 
 // NewTermService resolves the tmux binary once (PATH is already augmented in
@@ -48,7 +54,20 @@ type TermService struct {
 // and Attach surface it as an error so the UI can show a health hint.
 func NewTermService() *TermService {
 	bin, _ := exec.LookPath("tmux")
-	return &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	t := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	t.remote = shareterm.New(shareterm.Options{
+		Emit: func(event string, data any) {
+			if t.app != nil {
+				t.app.Event.Emit(event, data)
+			}
+		},
+		Offers: func() (protocol.ShareOfferedData, error) {
+			var d protocol.ShareOfferedData
+			err := call(protocol.Request{Cmd: protocol.CmdShareOffered}, shortTimeout, &d)
+			return d, err
+		},
+	})
+	return t
 }
 
 // SetApp injects the Wails emitter. Called once from main before Run.
@@ -375,6 +394,12 @@ type ptyStream struct {
 // Returns the stream ID (the session name) the frontend uses for Write/Resize/
 // Detach and the event subscription.
 func (t *TermService) Attach(name string, cols, rows int) (string, error) {
+	if t.remote != nil && shareterm.IsStream(name) {
+		// A teammate's session: same exclusivity as a local attach (one live
+		// terminal at a time), a different far end.
+		t.DetachAll()
+		return t.remote.Attach(name, cols, rows)
+	}
 	bin, err := t.tmux()
 	if err != nil {
 		return "", err
@@ -467,6 +492,9 @@ func (t *TermService) flushLoop(name string, s *ptyStream) {
 // down a frame before xterm's last onData) is a silent no-op, NOT an error: the
 // keystroke has nowhere to go and surfacing it would spam the log on every exit.
 func (t *TermService) Write(name, data string) error {
+	if t.remote != nil && shareterm.IsStream(name) {
+		return t.remote.Write(name, data)
+	}
 	t.mu.Lock()
 	s := t.streams[name]
 	t.mu.Unlock()
@@ -520,6 +548,9 @@ func (t *TermService) cancelCopyMode(name string) {
 // (a plain shell). All this needs to know is which one happened, because only
 // copy mode leaves a mode behind for the next keystroke to cancel.
 func (t *TermService) Scroll(name string, lines int) error {
+	if t.remote != nil && shareterm.IsStream(name) {
+		return t.remote.Scroll(name, lines)
+	}
 	bin, err := t.tmux()
 	if err != nil {
 		return err
@@ -562,6 +593,9 @@ func (t *TermService) scrollClient(bin string) *tmux.Client {
 // Write, a resize aimed at an already-gone stream is a no-op (the ResizeObserver
 // can fire once more as the terminal tears down) rather than an error.
 func (t *TermService) Resize(name string, cols, rows int) error {
+	if t.remote != nil && shareterm.IsStream(name) {
+		return t.remote.Resize(name, cols, rows)
+	}
 	t.mu.Lock()
 	s := t.streams[name]
 	t.mu.Unlock()
@@ -587,6 +621,9 @@ func clampWinDim(n int) uint16 {
 // was intentional and suppresses the exit event — detaching a shell tab must NOT
 // look like the shell exiting, or switching tabs would kill the shell.
 func (t *TermService) Detach(name string) error {
+	if t.remote != nil && shareterm.IsStream(name) {
+		return t.remote.Detach(name)
+	}
 	t.mu.Lock()
 	s := t.streams[name]
 	delete(t.streams, name)
@@ -617,6 +654,9 @@ func (t *TermService) Detach(name string) error {
 // orphans would last until the next Attach, and the daemon defers every
 // automatic prompt to a session with a client attached.
 func (t *TermService) DetachAll() {
+	if t.remote != nil {
+		t.remote.DetachAll()
+	}
 	t.mu.Lock()
 	names := make([]string, 0, len(t.streams))
 	for n := range t.streams {
@@ -657,4 +697,18 @@ func (t *TermService) closeStream(s *ptyStream) {
 	s.mu.Unlock()
 	s.cancel()
 	_ = s.f.Close()
+}
+
+// ShareInfo returns the latest roster row (title, level, who is attached) of an
+// attached remote terminal. The same row is pushed on `share:<name>` while it
+// lives; this is the value to render before the first push arrives.
+func (t *TermService) ShareInfo(name string) (protocol.SharedSession, error) {
+	if t.remote == nil || !shareterm.IsStream(name) {
+		return protocol.SharedSession{}, errors.New("not a shared session")
+	}
+	info, ok := t.remote.Session(name)
+	if !ok {
+		return protocol.SharedSession{}, errors.New("not attached")
+	}
+	return info, nil
 }
