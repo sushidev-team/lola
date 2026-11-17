@@ -177,7 +177,15 @@ func (c *conn) admitMember(f *protocol.Frame) (verdict, error) {
 			if lvl != LevelType {
 				return deny()
 			}
-		case protocol.PTYActionScroll, protocol.PTYActionResize:
+		case protocol.PTYActionScroll:
+			// A scroll moves the OWNER's pane (tmux copy mode or the agent's own
+			// wheel), for everyone attached including the owner. A viewer must not
+			// change what the owner sees, so scrolling needs the same level as typing.
+			if lvl != LevelType {
+				return deny()
+			}
+		case protocol.PTYActionResize:
+			// Recorded and ignored by the host; harmless at any level that can attach.
 			if lvl == LevelNone {
 				return deny()
 			}
@@ -211,6 +219,12 @@ func (c *conn) handleMemberReq(f *protocol.Frame) error {
 	}
 	if err != nil {
 		return err
+	}
+	// A member's one request is cheap but unbounded without this: it shares the
+	// per-device read bucket every phone request pays.
+	if !c.srv.lim.allowReq(c.peer.DeviceID, protocol.TierRead, f.Cmd, 0, false) {
+		c.refuse(f.ID, protocol.CodeRateLimited, "rate limit exceeded")
+		return nil
 	}
 	data, rerr := c.srv.opts.MemberGate.Roster(c.peer.DeviceID, c.srv.MemberAttachments())
 	if rerr != nil {

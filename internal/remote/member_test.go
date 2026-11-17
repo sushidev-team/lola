@@ -162,6 +162,17 @@ func TestMemberAttachScopeAndLevels(t *testing.T) {
 	m.write(c, "lola-a", "rm -rf ~\n")
 	wantErrCode(t, c, protocol.CodeDenied)
 
+	// A viewer must not scroll the owner's pane either.
+	f := protocol.Frame{V: protocol.FrameVersionCurrent, Type: protocol.FramePTY, Pane: "lola-a"}
+	_ = f.SetPayload(protocol.PTYInputPayload{Action: protocol.PTYActionScroll, Lines: 5})
+	if err := c.fw.WriteFrame(&f); err != nil {
+		t.Fatal(err)
+	}
+	wantErrCode(t, c, protocol.CodeDenied)
+	if _, _, scrolls := m.bus.snapshot(); len(scrolls) != 0 {
+		t.Fatalf("a view-level scroll reached the pane: %v", scrolls)
+	}
+
 	// type: keystrokes reach the pane.
 	m.sub(c, "lola-b")
 	_ = c.mustRead()
@@ -233,5 +244,24 @@ func TestRevokedMemberIsDisconnected(t *testing.T) {
 	c2 := m.dialRV(shareRV)
 	if f, err := c2.read(); err == nil && f.Type == protocol.FrameReady {
 		t.Fatal("revoked member reconnected")
+	}
+}
+
+func TestMemberRosterIsRateLimited(t *testing.T) {
+	m := newMemberRig(t)
+	c := m.dialRV(shareRV)
+	c.wantReady()
+	limited := false
+	for i := 0; i < 600 && !limited; i++ {
+		c.req("r", protocol.CmdShareSessions, nil)
+		f := c.mustRead()
+		if f.Type == protocol.FrameErr {
+			var e protocol.ErrPayload
+			_ = json.Unmarshal(f.Payload, &e)
+			limited = e.Code == protocol.CodeRateLimited
+		}
+	}
+	if !limited {
+		t.Fatal("a member could ask for the roster without limit")
 	}
 }
