@@ -185,6 +185,10 @@
                inner grid, because a container query cannot restyle its own container. -->
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <div class="relative min-h-0 min-w-0 bg-canvas [container-type:size] {store.alive ? '' : 'ssh-offline'}" class:invisible={covered} inert={covered} onclick={clickStory} data-conversation data-file-drop-target id={dropTargetId(sessionId)}>
+            <div data-drop-hint aria-hidden="true">
+              <div class="sheets"><span class="sheet"></span><span class="sheet"></span><span class="sheet"></span></div>
+              <p>Drop images to attach</p>
+            </div>
             <div class="ssh-col absolute inset-0 grid" data-carded={cards.length > 0 ? "" : undefined} data-deciding={deciding ? "" : undefined}>
               <TimelineSlot {sessionId} {covered} {side} onside={sideFits ? () => view.openWidget(OVERVIEW_PANEL) : undefined} onraw={session ? () => ssh.selectCell(session.id, { key: "terminal", kind: "terminal" }) : undefined} />
               <ActionZone {sessionId} {covered} />
