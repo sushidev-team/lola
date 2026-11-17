@@ -106,12 +106,24 @@
     });
   });
 
+  // A change is a run of adjacent added/removed rows; the arrows walk them in file order.
+  const changeStarts = $derived(rows.flatMap((row, index) => (row.kind === 'add' || row.kind === 'del') && !(rows[index - 1]?.kind === 'add' || rows[index - 1]?.kind === 'del') ? [index] : []));
+  let currentChange = $state(-1);
+  function goToChange(position: number) {
+    if (position < 0 || position >= changeStarts.length) return;
+    currentChange = position;
+    const el = rowEls[changeStarts[position]];
+    if (!el) return;
+    el.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  }
+  $effect(() => { file.path; currentChange = -1; });
   $effect(() => {
     const path = file.path;
     void tick().then(() => {
       if (path !== file.path) return;
       const at = rows.findIndex(row => row.kind === 'add' || row.kind === 'del');
       rowEls[at]?.scrollIntoView?.({ block: 'center' });
+      if (at >= 0) currentChange = 0;
     });
   });
 
@@ -192,7 +204,7 @@
 <section class="git-diff" class:wrap aria-label={`Diff for ${file.path}`}>
   <header class="diff-header">
     <span class="diff-path" title={file.path}><Icon name="file-text" size={14} /><span>{file.path}</span></span>
-    <div class="diff-options"><span class="add-count">+{file.additions}</span><span class="del-count">−{file.deletions}</span>
+    <div class="diff-options">{#if changeStarts.length}<span class="change-nav" role="group" aria-label="Changes in this file"><Button size="xs" icon aria-label="Previous change" title="Previous change" disabled={currentChange <= 0} onclick={() => goToChange(currentChange - 1)}><Icon name="chevron-up" size={14} /></Button><span class="change-count" aria-live="polite">{Math.max(currentChange, 0) + 1} / {changeStarts.length}</span><Button size="xs" icon aria-label="Next change" title="Next change" disabled={currentChange >= changeStarts.length - 1} onclick={() => goToChange(currentChange + 1)}><Icon name="chevron-down" size={14} /></Button></span>{/if}<span class="add-count">+{file.additions}</span><span class="del-count">−{file.deletions}</span>
       <Button size="xs" selected={!split} onclick={() => split = false}>Unified</Button>
       <Button size="xs" selected={split} onclick={() => split = true}>Split</Button>
       <Button size="xs" selected={wrap} onclick={() => wrap = !wrap}>Wrap</Button>
@@ -247,6 +259,8 @@
   .diff-path { display:flex; align-items:center; gap:8px; min-width:0; flex:1; }
   .diff-path > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
   .diff-options { display:flex; align-items:center; gap:4px; font-size:12px; }
+  .change-nav { display:inline-flex; align-items:center; gap:2px; margin-right:10px; }
+  .change-count { min-width:42px; text-align:center; color:var(--color-ink-2); font-variant-numeric:tabular-nums; }
   .add-count,.del-count { font-family:var(--font-mono); }
   .add-count { color:var(--color-good); font-variant-numeric:tabular-nums; }
   .del-count { color:var(--color-bad); margin-right:8px; font-variant-numeric:tabular-nums; }

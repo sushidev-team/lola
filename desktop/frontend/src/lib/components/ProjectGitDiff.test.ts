@@ -89,4 +89,17 @@ describe('Project Git diff line actions', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Stage 3 lines' }));
     expect(onlines).toHaveBeenCalledWith([3, 5, 6]);
   });
+
+  it('steps through the changes of a file', async () => {
+    render(ProjectGitDiff, { file, lineAction: null });
+    const next = screen.getByRole('button', { name: 'Next change' }) as HTMLButtonElement;
+    const prev = screen.getByRole('button', { name: 'Previous change' }) as HTMLButtonElement;
+    await waitFor(() => expect(screen.getByText('1 / 2')).toBeTruthy());
+    expect(prev.disabled).toBe(true);
+    await fireEvent.click(next);
+    expect(screen.getByText('2 / 2')).toBeTruthy();
+    expect(next.disabled).toBe(true);
+    await fireEvent.click(prev);
+    expect(screen.getByText('1 / 2')).toBeTruthy();
+  });
 });
