@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/hubproto"
 )
@@ -67,18 +68,7 @@ func TestSharesAudienceAndOrgIsolation(t *testing.T) {
 	}
 }
 
-func contains(b []byte, s string) bool {
-	return len(s) > 0 && string(b) != "" && indexOf(string(b), s) >= 0
-}
-
-func indexOf(h, n string) int {
-	for i := 0; i+len(n) <= len(h); i++ {
-		if h[i:i+len(n)] == n {
-			return i
-		}
-	}
-	return -1
-}
+func contains(b []byte, s string) bool { return s != "" && strings.Contains(string(b), s) }
 
 func TestSharesRefuseAnotherDevicesIDs(t *testing.T) {
 	e := relayEnv(t)
@@ -209,5 +199,47 @@ func TestMemberDialOfflineOwner(t *testing.T) {
 	owner.control()
 	if got := mate.listShares().Shares; len(got) != 1 || !got[0].Online {
 		t.Fatalf("online owner listed offline: %+v", got)
+	}
+}
+
+func TestPhoneRegistrationKeepsShareSplices(t *testing.T) {
+	e := relayEnv(t)
+	owner, mate := relayDaemon(e), relayDaemon(e)
+	s := owner.share("mini")
+	if r := owner.publish(s); r.status != 200 {
+		t.Fatal(r.status)
+	}
+	ctrl := owner.control()
+	ch := make(chan *hubproto.WSConn, 1)
+	go func() { ws, _ := mate.dialWS(hubproto.PathRelayMember + "?share=" + s.ID); ch <- ws }()
+	m := readMsg(t, ctrl)
+	leg, err := owner.dialWS(hubproto.PathRelayAccept + "?conn=" + m.Conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = leg.CloseNow(hubproto.WSCloseGoingAway) })
+	member := <-ch
+	if member == nil {
+		t.Fatal("member dial failed")
+	}
+	t.Cleanup(func() { _ = member.CloseNow(hubproto.WSCloseGoingAway) })
+	// Re-registering the (empty) phone set must not cut the member's splice.
+	if _, st := owner.register(); st != 200 {
+		t.Fatal(st)
+	}
+	if _, err := member.Write([]byte("still")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 5)
+	_ = leg.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := leg.Read(buf); err != nil || string(buf) != "still" {
+		t.Fatalf("splice cut by a phone registration: %q %v", buf, err)
+	}
+	// Unsharing does cut it.
+	if r := owner.publish(); r.status != 200 {
+		t.Fatal(r.status)
+	}
+	if code := readCloseCode(t, member); code != hubproto.RelayCloseRevoked {
+		t.Fatalf("member close %d", code)
 	}
 }

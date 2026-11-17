@@ -117,6 +117,12 @@ func (s *Server) handleRendezvous(w http.ResponseWriter, r *http.Request, auth s
 			}
 			kept[e.RV] = true
 		}
+		// A published share keeps its rendezvous: this set is the phones only.
+		if rec := d.Shares[dev.ID]; rec != nil {
+			for _, sh := range rec.Entries {
+				kept[sh.RV] = true
+			}
+		}
 		resp.Registered = len(accepted)
 		return nil
 	})
