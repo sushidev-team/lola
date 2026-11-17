@@ -448,6 +448,18 @@
     // The peeked checkout's counts live in the active snapshot.
     if (ok && peeking) void git.load(ref, limit);
   }
+  // Single lines move only for a tracked, modified text file in the staged or unstaged list.
+  const lineAction = $derived(file?.status === 'modified' && !file.binary && !file.tooLarge ? area === 'unstaged' ? 'stage' as const : area === 'staged' ? 'unstage' as const : null : null);
+  async function changeLines(lines: number[]) {
+    const state = view, chosenArea = area, chosen = file, peeking = state !== git;
+    if (!chosen || !chosenArea || !chosen.patch) return;
+    const ok = await state.changeLines(chosenArea, chosen.path, chosen.patch, lines, peeking ? '' : ref, peeking ? 1 : limit);
+    if (state !== view) return;
+    if (peeking && ok) void git.load(ref, limit);
+    // A refused patch (the file moved on) is redrawn too, so the next click is on what is really there.
+    await state.loadDiff(chosenArea, '', '', chosen.path);
+    if (ok && state === view && !state.diff?.files.length) working();
+  }
   function peekWorktree(tree: GitWorktree) { working(); peekPath = tree.path; }
   function ownWorking() { peekPath = ''; working(); }
   function openWorktreeChanges(tree: GitWorktree) { chooseWorktree(tree.path === configuredPath ? '' : tree.path); working(); }
@@ -773,7 +785,7 @@
           <div class="comparison-bar"><span><Icon name={selected.length === 2 ? 'git-compare-arrows' : 'file-text'} size={14} />{diffTitle}</span><div>{#if selected.length === 2}<Button size="xs" aria-label="Swap comparison direction" onclick={() => { comparisonBranches = [...comparisonBranches].reverse(); selected = [...selected].reverse(); }}><Icon name="arrow-right-left" size={13} />Swap</Button>{/if}<Button size="xs" icon aria-label="Close diff" onclick={() => diffOpen = false}><Icon name="x" size={14} /></Button></div></div>
           {#if view.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
           {:else if view.diffError}<div class="git-empty" role="alert"><Icon name="circle-alert" size={20} /><p>{view.diffError}</p><Button onclick={() => void view.loadDiff(area as GitArea, area === 'working' || selected.length === 2 ? selected[0] : '', area === 'working' ? '' : selected.at(-1) ?? '', path)}>Retry diff</Button></div>
-          {:else if file}<ProjectGitDiff {file} />
+          {:else if file}<ProjectGitDiff {file} lineAction={lineAction} busy={!!view.busy} onlines={(lines) => void changeLines(lines)} oncontext={(title, items, event) => gitActions.openItems(title, items, event)} />
           {:else}<div class="git-empty"><Icon name="check" size={20} /><p>No file changes in this comparison</p></div>{/if}
           {#if view.diff?.truncated}<p class="truncated-note">This diff exceeds the preview limit. Some changes are not shown.</p>{/if}
         </section>
@@ -916,7 +928,6 @@
   .tree-copy > span { min-width:0; }
   .tree-copy > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .history-stage { display:grid; grid-template-rows:minmax(0,1fr); min-height:0; min-width:0; }
-  .history-stage.with-diff { grid-template-rows:minmax(150px,0.9fr) minmax(180px,1.1fr); }
   .history { container:history / inline-size; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto; min-height:0; min-width:0; position:relative; }
   .history-search { display:flex; align-items:center; gap:6px; padding:0 7px; border:1px solid var(--color-edge); border-radius:5px; background:var(--color-canvas); width:210px; min-width:90px; height:28px; color:var(--color-faint); }
   .history-search:focus-within { border-color:var(--color-accent); }
@@ -1035,7 +1046,7 @@
   .working-graph { display:flex; align-items:center; height:34px; color:var(--color-accent-ink); }
   .history-hint > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .history-hint { display:flex; align-items:center; justify-content:space-between; min-height:28px; padding:4px 12px; border-top:1px solid var(--color-edge); font-size:12px; color:var(--color-faint); }
-  .diff-stage { display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; border-top:1px solid var(--color-edge); }
+  .diff-stage { position:absolute; top:0; bottom:0; left:0; right:var(--inspector-width); z-index:5; display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; background:var(--color-panel); border-right:1px solid var(--color-edge); }
   .comparison-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:5px 12px; background:var(--color-canvas); border-bottom:1px solid var(--color-edge); }
   .comparison-bar > span,.comparison-bar > div { display:flex; align-items:center; gap:7px; font-size:12px; }
   .comparison-bar > span { color:var(--color-ink-2); }
@@ -1079,5 +1090,5 @@
   @container (max-width:1150px) { .git-action-label { display:none; } .toolbar-actions :global(button) { width:28px; padding:0; } .toolbar-actions :global(.push-action) { width:30px; padding:0; } }
   @container (max-width:760px) { .git-toolbar { grid-template-columns:auto minmax(0,1fr) auto; } .toolbar-heading :global(.project-title) { display:none; } .toolbar-actions { gap:2px; } }
   @container (max-width:950px) { .git-workbench { grid-template-columns:minmax(0,1fr) var(--inspector-width); position:relative; } .repo-rail { display:none; } .git-workbench :global(.rail-resize) { display:none; } .rail-open .repo-rail { display:block; position:absolute; inset:0 auto 0 0; width:280px; z-index:10; box-shadow:8px 0 20px #0002; } :global(.rail-toggle) { display:inline-flex; } }
-  @container (max-width:580px) { .git-workbench :global(.sidebar-resize) { display:none; } .git-workbench { grid-template-columns:minmax(0,1fr); overflow:auto; grid-template-rows:max-content max-content; align-content:start; } .history-stage { height:330px; min-height:330px; } .history-stage.with-diff { height:550px; min-height:550px; } .git-inspector { height:620px; border-left:0; border-top:1px solid var(--color-edge); min-height:0; grid-template-rows:auto auto auto; align-content:start; } .changed-file-list { overflow:visible; } .git-toolbar { gap:4px; padding-inline:8px; } .git-toolbar.window-inset { padding-left:82px; } .toolbar-divider { margin-inline:0; } .git-status > span:last-child { max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } }
+  @container (max-width:580px) { .history-stage.with-diff { grid-template-rows:minmax(150px,0.9fr) minmax(180px,1.1fr); } .diff-stage { position:static; border-right:0; border-top:1px solid var(--color-edge); } .git-workbench :global(.sidebar-resize) { display:none; } .git-workbench { grid-template-columns:minmax(0,1fr); overflow:auto; grid-template-rows:max-content max-content; align-content:start; } .history-stage { height:330px; min-height:330px; } .history-stage.with-diff { height:550px; min-height:550px; } .git-inspector { height:620px; border-left:0; border-top:1px solid var(--color-edge); min-height:0; grid-template-rows:auto auto auto; align-content:start; } .changed-file-list { overflow:visible; } .git-toolbar { gap:4px; padding-inline:8px; } .git-toolbar.window-inset { padding-left:82px; } .toolbar-divider { margin-inline:0; } .git-status > span:last-child { max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } }
 </style>

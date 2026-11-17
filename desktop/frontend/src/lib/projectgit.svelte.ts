@@ -532,6 +532,27 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     return ok;
   }
 
+  /** Stage or unstage chosen lines of one file; the file list is refreshed from the answer. */
+  async changeLines(area: GitArea, path: string, patch: string, lines: number[], ref = '', limit = 200): Promise<boolean> {
+    if (this.busy) return false;
+    const stage = area === 'unstaged';
+    this.busy = stage ? 'stage' : 'unstage'; this.error = ''; this.notice = '';
+    this.filesRevision++;
+    try {
+      const files = await ProjectGitService.ChangeLines(this.project, this.worktree, area, path, patch, lines, stage);
+      this.filesRevision++;
+      if (this.snapshot && Array.isArray(files)) this.snapshot.files = files;
+      else await this.load(ref, limit);
+      this.notice = stage ? 'Lines staged.' : 'Lines unstaged.';
+      return true;
+    } catch (error) {
+      this.filesRevision++;
+      await this.load(ref, limit);
+      this.error = String(error);
+      return false;
+    } finally { this.busy = ''; }
+  }
+
   private async changeIndex(action: 'stage' | 'unstage', paths: string[], ref: string, limit: number): Promise<boolean> {
     if (this.busy) return false;
     this.busy = action; this.error = ''; this.notice = '';

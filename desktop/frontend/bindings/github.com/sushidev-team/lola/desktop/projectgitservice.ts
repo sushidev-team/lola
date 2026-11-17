@@ -96,6 +96,10 @@ export function DiscardPaths(project: string, worktree: string, token: string, p
     return $Call.ByID(2962392216, project, worktree, token, paths);
 }
 
+export function ChangeLines(project: string, worktree: string, area: string, path: string, patch: string, lines: number[] | null, stage: boolean): $CancellablePromise<projectgit$0.File[] | null> {
+    return $Call.ByID(2829500693, project, worktree, area, path, patch, lines, stage);
+}
+
 export function DiscardUnstaged(project: string, worktree: string, token: string): $CancellablePromise<void> {
     return $Call.ByID(1358071133, project, worktree, token);
 }
