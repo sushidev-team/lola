@@ -21,6 +21,7 @@
   const overview = $derived(reviewOverview(pkg));
   const screens = $derived(pkg.screens ?? []);
   const unrated = $derived(!overview.riskReportProvided || overview.risks.some(r => r.likelihood === 'unknown' || r.impact === 'unknown'));
+  const riskWords = { likelihood: { low: 'Unlikely', medium: 'Possible', high: 'Likely' }, impact: { low: 'Minor', medium: 'Moderate', high: 'Severe' } } as const;
 </script>
 
 {#snippet entries(items: OverviewItem[], empty: string)}
@@ -40,8 +41,8 @@
     </div>
   </details>{/each}</div>
 {/snippet}
-{#snippet level(value: RiskLevel)}
-  <span class="risk-level" data-level={value}><span class="level-bars" aria-hidden="true">{#each [1,2,3] as n}<i class:filled={n <= riskWeight[value]}></i>{/each}</span>{value === 'unknown' ? 'Not rated' : value}</span>
+{#snippet level(value: RiskLevel, kind: 'likelihood' | 'impact')}
+  <span class="risk-level" data-level={value} title={`${kind === 'impact' ? 'Impact' : 'Likelihood'}: ${value === 'unknown' ? 'not rated' : value}`}><span class="level-bars" aria-hidden="true">{#each [1,2,3] as n}<i class:filled={n <= riskWeight[value]}></i>{/each}</span>{value === 'unknown' ? 'Not rated' : riskWords[kind][value]}</span>
 {/snippet}
 
 <div class="overview" class:split>
@@ -75,7 +76,7 @@
         {#if overview.risks.length}
           <div class="risk-columns" aria-hidden="true"><span>Risk</span><span>Likelihood</span><span>Impact</span></div>
           {#each overview.risks as risk}<details class="entry risk-entry" class:priority={risk.priority >= 6}>
-            <summary><span class="risk-title"><Icon name="chevron-right" size={14}/>{risk.title}</span><span class="risk-rating" aria-label={`Likelihood: ${risk.likelihood}`}><span class="rating-label" aria-hidden="true">Likelihood</span>{@render level(risk.likelihood)}</span><span class="risk-rating" aria-label={`Impact: ${risk.impact}`}><span class="rating-label" aria-hidden="true">Impact</span>{@render level(risk.impact)}</span></summary>
+            <summary><span class="risk-title"><Icon name="chevron-right" size={14}/>{risk.title}</span><span class="risk-rating" aria-label={`Likelihood: ${risk.likelihood}`}>{@render level(risk.likelihood, 'likelihood')}</span><span class="risk-rating" aria-label={`Impact: ${risk.impact}`}>{@render level(risk.impact, 'impact')}</span></summary>
             <div class="risk-detail">
               {#if risk.description}<div><h3>What could happen</h3><p>{risk.description}</p></div>{/if}
               {#if risk.assess}<div><h3>How to assess it</h3><p>{risk.assess}</p></div>{/if}
@@ -171,7 +172,6 @@
   .risk-title { display:flex; gap:8px; align-items:baseline; overflow-wrap:anywhere; font-size:13px; line-height:1.55; }
   .risk-title :global(svg) { position:relative; top:2px; }
   .risk-rating { min-width:0; }
-  .rating-label { display:none; }
   .risk-level { display:inline-flex; align-items:center; gap:6px; padding:5px 7px; border-radius:6px; font-size:12px; line-height:16px; text-transform:capitalize; white-space:nowrap; color:var(--color-ink-2); background:color-mix(in srgb,var(--color-ink) 5%,transparent); }
   .level-bars { display:inline-flex; align-items:end; gap:2px; height:12px; }
   .level-bars i { width:3px; height:4px; border-radius:1px; background:color-mix(in srgb,var(--color-ink-2) 22%,transparent); }
@@ -189,7 +189,6 @@
     .risk-title { grid-column:1/-1; font-size:13px; line-height:1.4; }
     .risk-rating { display:flex; align-items:center; gap:5px; padding-left:22px; }
     .risk-rating + .risk-rating { padding-left:0; }
-    .rating-label { display:block; font-size:11px; color:var(--color-faint); }
     .risk-level { padding:2px 6px; font-size:11px; line-height:14px; }
     .risk-detail { gap:10px; padding-bottom:10px; }
   }
