@@ -47,7 +47,7 @@ it('expands sub-features and risk descriptions without showing raw implementatio
   expect(screen.queryByText('Source notes')).toBeNull();
   expect(screen.queryByText(/MustVerifyEmail/)).toBeNull();
   await fireEvent.click(screen.getByText('New users cannot finish registration',{selector:'.risk-title'}).closest('summary')!);
-  expect(screen.getByRole('heading',{name:'How to check'})).toBeInTheDocument();
+  expect(screen.getByRole('heading',{name:'Next step'})).toBeInTheDocument();
   expect(screen.getByText('Check production email delivery.',{selector:'.risk-detail p'})).toBeInTheDocument();
 });
 

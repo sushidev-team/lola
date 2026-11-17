@@ -80,8 +80,8 @@
           {#each overview.risks as risk}<details class="entry risk-entry" class:priority={risk.priority >= 6}>
             <summary><span class="risk-title"><Icon name="chevron-right" size={14}/>{risk.title}</span><span class="risk-rating" aria-label={`Likelihood: ${risk.likelihood}`}>{@render level(risk.likelihood, 'likelihood')}</span><span class="risk-rating" aria-label={`Impact: ${risk.impact}`}>{@render level(risk.impact, 'impact')}</span></summary>
             <div class="risk-detail">
-              {#if risk.description}<div><h3>If it goes wrong</h3><p>{risk.description}</p></div>{/if}
-              {#if risk.assess}<div><h3>How to check</h3><p>{risk.assess}</p></div>{/if}
+              {#if risk.description && risk.description.replace(/[.!]$/, '').toLowerCase() !== risk.title.toLowerCase()}<p>{risk.description}</p>{/if}
+              {#if risk.assess}<div><h3>Next step</h3><p>{risk.assess}</p></div>{/if}
             </div>
           </details>{/each}
         {:else}<p class="empty-copy">{overview.riskReportProvided ? 'No unresolved risks reported.' : 'Risks have not been assessed.'}</p>{/if}
