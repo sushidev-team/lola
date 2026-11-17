@@ -24,6 +24,10 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as application$0 from "../../../wailsapp/wails/v3/pkg/application/models.js";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as protocol$0 from "../internal/protocol/models.js";
+
 /**
  * Attach starts an interactive `tmux attach` to the named session in a PTY sized
  * cols×rows and streams its output to the frontend as base64 chunks on the event
@@ -132,6 +136,15 @@ export function Scroll(name: string, lines: number): $CancellablePromise<void> {
  */
 export function SetApp(app: application$0.App | null): $CancellablePromise<void> {
     return $Call.ByID(2962051340, app);
+}
+
+/**
+ * ShareInfo returns the latest roster row (title, level, who is attached) of an
+ * attached remote terminal. The same row is pushed on `share:<name>` while it
+ * lives; this is the value to render before the first push arrives.
+ */
+export function ShareInfo(name: string): $CancellablePromise<protocol$0.SharedSession> {
+    return $Call.ByID(1959845478, name);
 }
 
 /**

@@ -67,6 +67,31 @@ export function RevokeDevice(_name: string): Promise<P.HubRevokeData> {
   return unsupported("HubService.RevokeDevice", MAC_ONLY);
 }
 
+/** PLATFORM: sharing a session is a person's act on the Mac. */
+export function SetShared(_a: P.ShareSessionArgs): Promise<P.ShareSessionData> {
+  return unsupported("HubService.SetShared", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function ShareMembers(): Promise<P.ShareMembersData> {
+  return unsupported("HubService.ShareMembers", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function ShareOffered(): Promise<P.ShareOfferedData> {
+  return unsupported("HubService.ShareOffered", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function ShareTrust(_a: P.ShareTrustArgs): Promise<P.ShareMembersData> {
+  return unsupported("HubService.ShareTrust", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function ShareUntrust(_deviceID: string): Promise<P.ShareMembersData> {
+  return unsupported("HubService.ShareUntrust", MAC_ONLY);
+}
+
 /** PLATFORM. */
 export function Stats(): Promise<M.HubStatsDTO> {
   return unsupported("HubService.Stats", MAC_ONLY);
@@ -100,6 +125,11 @@ export const ROUTES: Routes<typeof Gen.HubService> = {
   ProbeHub: { kind: "platform", reason: MAC_ONLY },
   Release: { kind: "platform", reason: MAC_ONLY },
   RevokeDevice: { kind: "platform", reason: MAC_ONLY },
+  SetShared: { kind: "platform", reason: MAC_ONLY },
+  ShareMembers: { kind: "platform", reason: MAC_ONLY },
+  ShareOffered: { kind: "platform", reason: MAC_ONLY },
+  ShareTrust: { kind: "platform", reason: MAC_ONLY },
+  ShareUntrust: { kind: "platform", reason: MAC_ONLY },
   Stats: { kind: "platform", reason: MAC_ONLY },
   Status: { kind: "fwd", cmd: "hubStatus" },
   Sync: { kind: "platform", reason: MAC_ONLY },

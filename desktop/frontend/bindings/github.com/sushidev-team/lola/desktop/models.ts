@@ -216,6 +216,7 @@ export interface HubRulesDTO {
     "pollSeconds": number | null;
     "applyPolicy": boolean | null;
     "groupChores": boolean | null;
+    "shareNewSessions": boolean | null;
     "trustedKeys": HubTrustedKeyDTO[] | null;
 }
 
@@ -906,6 +907,7 @@ export interface SettingsDTO {
     "hubPollSeconds": number | null;
     "hubApplyPolicy": boolean | null;
     "hubGroupChores": boolean | null;
+    "hubShareNew": boolean | null;
     "hubTrustedKeys": HubTrustedKeyDTO[] | null;
 }
 

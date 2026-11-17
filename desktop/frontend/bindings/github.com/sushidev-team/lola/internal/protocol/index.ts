@@ -187,5 +187,15 @@ export type {
     TicketRow,
     TicketsData,
     UsageInfo,
-    UsageStatus
+    UsageStatus,
+    SessionShare,
+    ShareMemberInfo,
+    ShareMembersData,
+    ShareOffer,
+    ShareOfferedData,
+    ShareSessionArgs,
+    ShareSessionData,
+    ShareTrustArgs,
+    ShareViewer,
+    SharedSession,
 } from "./models.js";
