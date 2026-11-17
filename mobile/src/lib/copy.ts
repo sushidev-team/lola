@@ -267,7 +267,7 @@ export const copy = {
     requestChanges: "Request changes",
     round: "Round {n}",
     feedbackLabel: "Feedback for the agent",
-    placeholder: "What should change? (required to request changes)",
+    placeholder: "What should change?",
     none: "No plan is waiting for approval.",
   },
   broadcast: {
