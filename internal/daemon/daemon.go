@@ -823,6 +823,10 @@ func Run(ctx context.Context) error {
 	}
 	defer logFile.Close()
 	logger := log.New(io.MultiWriter(os.Stderr, logFile), "", log.LstdFlags)
+	// Before anything resolves an agent home: see dropSessionEnv.
+	if dropped := dropSessionEnv(home); len(dropped) > 0 {
+		logger.Printf("daemon: started from a session's environment; ignoring its %s", strings.Join(dropped, ", "))
+	}
 
 	cfgPath, err := config.DefaultPath()
 	if err != nil {

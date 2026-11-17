@@ -6,8 +6,14 @@ export function gitTargetProject(): ProjectInfo | undefined {
   const session = nav.view === 'cockpit' ? store.sessionById(nav.focusedTerm || nav.selectedId) : undefined;
   const member = session?.stack ? session.apps?.find(app => app.name === session.focusApp) : undefined;
   const repositories = store.projects.filter(project => project.path && project.kind !== 'stack');
+  // The projects column highlights the session filter, and a filter keeps the open session on
+  // screen even when it belongs elsewhere. Git opens on what is highlighted, so the open
+  // session only decides while it is inside the filter (or nothing is filtered).
+  const scope = nav.view === 'cockpit' ? nav.scopeNames : [];
+  const own = [member?.name, session?.project];
+  const inScope = !scope.length || scope.includes(session?.project ?? '');
   // With nothing selected and no history, the first repository: Git never bounces back to Code.
-  return [member?.name, session?.project, nav.project, nav.lastGitProject]
+  return [...(inScope ? [...own, ...scope] : [...scope, ...own]), nav.project, nav.lastGitProject]
     .map(name => repositories.find(project => project.name === name)).find(Boolean) ?? repositories[0];
 }
 

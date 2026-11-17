@@ -448,6 +448,8 @@ export class GitActions {
       { label: 'Drop stash…', icon: 'trash-2', separator: true, danger: true, disabled: this.blocked(), run: () => this.confirmStash('drop', stash) },
     ], event, `${stash.selector} · ${stash.sha.slice(0, 8)}`);
   }
+  /** A menu another view builds (the diff's line actions) shown with the same chrome. */
+  openItems(title: string, items: GitMenuItem[], event: MouseEvent, subtitle?: string) { this.menu(title, items, event, subtitle); }
   openFile(file: GitFile, staged: boolean, paths: string[], event: MouseEvent) {
     this.menu(paths.length > 1 ? `${paths.length} selected files` : file.path, [
       {label:'View changes',icon:'file-text',run:()=>this.callbacks.inspectFile?.(file,staged)},

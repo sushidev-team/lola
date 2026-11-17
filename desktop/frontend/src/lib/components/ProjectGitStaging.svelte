@@ -113,16 +113,21 @@
   function status(file: GitFile, staged: boolean) { return file.conflict ? '!' : file.untracked ? '+' : (staged ? file.index : file.worktree).trim() || 'M'; }
   async function discardFiles(only?: string[]) {
     if (git.busy || !unstaged.length || conflicts || data?.operation) return;
-    const state = git, historyRef = ref, count = limit, branch = data?.branch || 'detached HEAD';
+    const state = git, historyRef = ref, count = limit;
     const plan = await state.prepareDiscard(only);
     if (!plan || !mounted || state !== git) return;
     const total = plan.tracked.length + plan.untracked.length;
     if (!total) { await state.load(historyRef, count); return; }
+    const stats = await state.unstagedStats(plan.untracked);
+    if (!mounted || state !== git) return;
     confirm.ask({
-      title: only ? (total === 1 ? 'Discard changes in this file?' : `Discard changes in ${total} files?`) : 'Discard all unstaged changes?',
-      subject: only ? [...plan.tracked, ...plan.untracked].join('\n') : `${total} ${total === 1 ? 'file' : 'files'} on ${branch}`,
+      title: 'Discard unstaged changes?',
+      fileGroups: [
+        ...(plan.tracked.length ? [{ files: plan.tracked, stats }] : []),
+        ...(plan.untracked.length ? [{ tag: 'untracked', files: plan.untracked, stats }] : []),
+      ],
       body: '',
-      detail: [plan.tracked.length ? `Restore ${plan.tracked.length} tracked ${plan.tracked.length === 1 ? 'file' : 'files'} to the staged version.` : '', plan.untracked.length ? `Permanently delete ${plan.untracked.length} untracked ${plan.untracked.length === 1 ? 'file' : 'files'}.` : '', only ? 'Staged changes are kept. This cannot be undone.' : 'Staged changes and ignored files are kept. This cannot be undone.'].filter(Boolean).join(' '),
+      detail: 'This cannot be undone.',
       confirmLabel: 'Discard changes',
       onConfirm: () => {
         if (!mounted || state !== git) return;

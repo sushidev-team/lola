@@ -26,7 +26,7 @@
   import HostBar from "../ssh/HostBar.svelte";
   import TimelineSlot from "./TimelineSlot.svelte";
   import ActionZone from "./ActionZone.svelte";
-  import { OVERVIEW_PANEL } from "$lib/sessionpanels";
+  import { OVERVIEW_PANEL, SIDE_MIN_WIDTH } from "$lib/sessionpanels";
   import { terms, isChangesTab } from "$lib/terms.svelte";
 
   let { sessionId = "", covered = false, changesInSide = false, onmain, header }: { sessionId?: string; covered?: boolean; changesInSide?: boolean; header?: Snippet; onmain?: (rect: Rect, host: HTMLElement) => void } = $props();
@@ -135,7 +135,6 @@
   // The agent's account: a sidebar once it has used one and the column has room. Below that, and
   // when hidden, it stays one line over the story. Measured, never a guess: the band under the list
   // and the open session are the same width, so they make the same choice.
-  const SIDE_MIN_WIDTH = 1180;
   let rootWidth = $state(0);
   const attachWidth = (el: HTMLElement) => {
     if (typeof ResizeObserver === "undefined") return;
@@ -146,6 +145,11 @@
   };
   const sideHas = $derived(!!session && (changesOffered(session) || sideHasContent(deriveSide(inScope(view.items, view.scope), session.board), session.board)));
   const sideFits = $derived(rootWidth >= SIDE_MIN_WIDTH && sideHas);
+  // ⌘N reads this: in a column too narrow to seed the panels it still has an account to open.
+  $effect(() => {
+    const has = sideHas;
+    untrack(() => (view.sideOffered = has));
+  });
   const sideDiff = $derived(changesInSide && isChangesTab(terms.activeTab(sessionId)));
   const side = $derived(sideFits && (!view.dockHidden || sideDiff));
   // The menu's Report asks for the account. With a sidebar there is no overlay to open.
