@@ -991,7 +991,7 @@
               <div class={rowTopCls}>
                 <span class="text-faint">Match labels</span>
                 <span>
-                  <CheckboxOptions label="Match labels" options={wsLabels ?? []} selected={d.matchLabels.filter(isKnownLabel)}
+                  <CheckboxOptions label="Match labels" options={wsLabels ?? []} selected={(d.matchLabels ?? []).filter(isKnownLabel)}
                     onChange={(value) => { d.matchLabels = [...value, ...matchLabelNames]; }} />
                   <span class={hintCls}>Workspace labels, or type names below.</span>
                 </span>
@@ -999,7 +999,7 @@
               {@render areaRow(
                 "Match label names",
                 matchLabelNames,
-                (v) => { d.matchLabels = [...d.matchLabels.filter(isKnownLabel), ...v]; },
+                (v) => { d.matchLabels = [...(d.matchLabels ?? []).filter(isKnownLabel), ...v]; },
                 "one name per line, e.g. apps/website",
                 NAME_HINT,
               )}
