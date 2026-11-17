@@ -3,9 +3,11 @@ package shareterm
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,20 +72,22 @@ func (g *gate) Roster(string, []remote.Attachment) (protocol.ShareSessionsData, 
 }
 
 type rig struct {
-	t     *testing.T
-	srv   *remote.Server
-	bus   *bus
-	gate  *gate
-	host  *remote.DeviceKey
-	me    *remote.DeviceKey
-	mu    sync.Mutex
-	evts  []string
-	terms *Terms
+	t       *testing.T
+	srv     *remote.Server
+	bus     *bus
+	gate    *gate
+	host    *remote.DeviceKey
+	me      *remote.DeviceKey
+	mu      sync.Mutex
+	evts    []string
+	terms   *Terms
+	trusted atomic.Bool
 }
 
 func newRig(t *testing.T, level string) *rig {
 	t.Helper()
 	r := &rig{t: t, bus: &bus{}, gate: &gate{level: level}}
+	r.trusted.Store(true)
 	hostDir := t.TempDir()
 	var err error
 	if r.me, err = remote.LoadOrCreateDeviceKey(t.TempDir(), nil); err != nil {
@@ -129,28 +133,31 @@ func toString(v any) string {
 		return x
 	case protocol.SharedSession:
 		return "roster:" + x.ID
+	case Size:
+		return fmt.Sprintf("size:%dx%d", x.Cols, x.Rows)
 	}
 	return "?"
 }
 
-func (r *rig) dial(ctx context.Context, shareID string) (*shareclient.Conn, error) {
+func (r *rig) dial(ctx context.Context, shareID string) (*shareclient.Conn, func() bool, error) {
 	slot, ok := r.srv.ReserveRelay(testRV)
 	if !ok {
 		r.t.Fatal("no relay slot")
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer ln.Close()
 	acc := make(chan net.Conn, 1)
 	go func() { c, _ := ln.Accept(); acc <- c }()
 	cp, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	go func() { _ = r.srv.ServeRelayed(<-acc, remote.RelayMeta{RV: testRV}, slot) }()
-	return shareclient.Dial(ctx, cp, shareclient.Config{Cert: r.me.Certificate, HostSPKI: r.host.SPKISHA256()})
+	c, err := shareclient.Dial(ctx, cp, shareclient.Config{Cert: r.me.Certificate, HostSPKI: r.host.SPKISHA256()})
+	return c, func() bool { return r.trusted.Load() }, err
 }
 
 func (r *rig) seen(substr string) bool {
@@ -275,4 +282,25 @@ func TestOwnerSPKIComesOnlyFromTheTrustFile(t *testing.T) {
 	if _, err := ownerSPKI(home2, "d1"); err == nil {
 		t.Fatal("allowing a teammate to attach to us trusted their sessions")
 	}
+}
+
+func TestRemovingTheOwnersPinEndsTheAttachment(t *testing.T) {
+	r := newRig(t, remote.LevelView)
+	name := Prefix + testShare
+	if _, err := r.terms.Attach(name, 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the first screen", func() bool { return r.seen("hello") })
+	r.trusted.Store(false)
+	waitFor(t, "the exit event", func() bool { return r.seen("pty:" + name + ":exit") })
+}
+
+func TestTheOwnersGridIsForwardedWithEachScreen(t *testing.T) {
+	r := newRig(t, remote.LevelView)
+	name := Prefix + testShare
+	if _, err := r.terms.Attach(name, 120, 40); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.terms.DetachAll)
+	waitFor(t, "the owner's size", func() bool { return r.seen("ptysize:" + name + "|size:80x24") })
 }

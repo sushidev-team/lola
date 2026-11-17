@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"sync"
@@ -263,5 +264,34 @@ func TestMemberRosterIsRateLimited(t *testing.T) {
 	}
 	if !limited {
 		t.Fatal("a member could ask for the roster without limit")
+	}
+}
+
+// revokingBus withdraws the member's access while Subscribe is still running,
+// after the frame was admitted and before the subscription is installed.
+type revokingBus struct {
+	*fakeBus
+	revoke func()
+}
+
+func (b *revokingBus) Subscribe(ctx context.Context, pane string, cols, rows int) (PaneStream, error) {
+	st, err := b.fakeBus.Subscribe(ctx, pane, cols, rows)
+	b.revoke()
+	return st, err
+}
+
+func TestAccessWithdrawnDuringSubscribeIsNotStreamed(t *testing.T) {
+	m := newMemberRig(t)
+	m.gate.set(m.dev.ID, "lola-a", LevelView)
+	m.srv.opts.Panes = &revokingBus{fakeBus: m.bus, revoke: func() {
+		m.gate.set(m.dev.ID, "lola-a", LevelNone)
+		m.srv.RecheckMembers() // runs before the subscription exists
+	}}
+	c := m.dialRV(shareRV)
+	c.wantReady()
+	m.sub(c, "lola-a")
+	wantErrCode(t, c, protocol.CodeUnknownPane)
+	if got := m.srv.MemberAttachments(); len(got) != 0 {
+		t.Fatalf("a revoked member kept a subscription: %+v", got)
 	}
 }

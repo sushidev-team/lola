@@ -52,12 +52,21 @@ func shareIDOf(name string) string { return strings.TrimPrefix(name, Prefix) }
 
 // remoteDial is the seam over everything between "attach to this share" and a
 // connected shareclient.Conn (tests replace it).
-type remoteDial func(ctx context.Context, shareID string) (*shareclient.Conn, error)
+type remoteDial func(ctx context.Context, shareID string) (*dialed, error)
+
+// dialed is a connected share and the check that its owner is still trusted.
+type dialed struct {
+	conn *shareclient.Conn
+	// trusted reports whether the owner's pin still stands (nil = always). It is
+	// asked while the stream lives, so removing the pin ends the attachment.
+	trusted func() bool
+}
 
 // remoteStream is one attached remote terminal.
 type remoteStream struct {
-	conn *shareclient.Conn
-	pane string
+	conn    *shareclient.Conn
+	pane    string
+	trusted func() bool
 
 	mu      sync.Mutex
 	pending []byte
@@ -87,7 +96,7 @@ type Options struct {
 	// hub's listing through the daemon's validated client).
 	Offers func() (protocol.ShareOfferedData, error)
 	// Dial replaces the whole connection step (tests only).
-	Dial func(ctx context.Context, shareID string) (*shareclient.Conn, error)
+	Dial func(ctx context.Context, shareID string) (*shareclient.Conn, func() bool, error)
 	// RosterEvery is how often an attached terminal refreshes who is attached
 	// (0 = 3s).
 	RosterEvery time.Duration
@@ -95,8 +104,16 @@ type Options struct {
 
 // New returns a ready Terms.
 func New(o Options) *Terms {
-	r := &Terms{rosterEvery: o.RosterEvery, emit: o.Emit, offers: o.Offers, dial: o.Dial, streams: map[string]*remoteStream{}}
-	if r.dial == nil {
+	r := &Terms{rosterEvery: o.RosterEvery, emit: o.Emit, offers: o.Offers, streams: map[string]*remoteStream{}}
+	if o.Dial != nil {
+		r.dial = func(ctx context.Context, id string) (*dialed, error) {
+			c, t, err := o.Dial(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return &dialed{conn: c, trusted: t}, nil
+		}
+	} else {
 		r.dial = r.dialShare
 	}
 	return r
@@ -115,10 +132,11 @@ func (r *Terms) Attach(name string, cols, rows int) (string, error) {
 	_ = r.Detach(name)
 	ctx, cancel := context.WithTimeout(context.Background(), shareDialTimeout)
 	defer cancel()
-	conn, err := r.dial(ctx, shareID)
+	dl, err := r.dial(ctx, shareID)
 	if err != nil {
 		return "", err
 	}
+	conn := dl.conn
 	roster, err := conn.Roster(ctx)
 	if err != nil {
 		conn.Close()
@@ -144,7 +162,7 @@ func (r *Terms) Attach(name string, cols, rows int) (string, error) {
 		conn.Close()
 		return "", err
 	}
-	s := &remoteStream{conn: conn, pane: info.Pane, info: *info, done: make(chan struct{})}
+	s := &remoteStream{conn: conn, pane: info.Pane, info: *info, done: make(chan struct{}), trusted: dl.trusted}
 	r.mu.Lock()
 	r.streams[name] = s
 	r.mu.Unlock()
@@ -178,6 +196,12 @@ func (r *Terms) pump(name string, s *remoteStream) {
 	for ev := range s.conn.Events() {
 		switch ev.Kind {
 		case shareclient.Resync:
+			// The owner's grid, not ours: the host attaches at its own window size
+			// and never resizes for a viewer, so the terminal must adopt that size
+			// or lines wrap and absolute cursor moves land on the wrong cells.
+			if ev.Screen.Cols > 0 && ev.Screen.Rows > 0 {
+				r.emit("ptysize:"+name, Size{Cols: ev.Screen.Cols, Rows: ev.Screen.Rows})
+			}
 			s.push(shareclient.Render(ev.Screen))
 		case shareclient.Output:
 			s.push(ev.Data)
@@ -231,6 +255,11 @@ func (r *Terms) pollRoster(name string, s *remoteStream, shareID string) {
 		case <-s.done:
 			return
 		case <-t.C:
+		}
+		// Trust is re-read each tick: removing the owner's pin ends the attachment.
+		if s.trusted != nil && !s.trusted() {
+			s.conn.Close()
+			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), max(every, time.Second))
 		roster, err := s.conn.Roster(ctx)
@@ -337,7 +366,7 @@ func (r *Terms) Session(name string) (protocol.SharedSession, bool) {
 // this is (the hub's listing, through the daemon's validated client), looks the
 // owner's key up in owners.json, dials the hub's member leg and runs the pinned
 // TLS handshake over it.
-func (r *Terms) dialShare(ctx context.Context, shareID string) (*shareclient.Conn, error) {
+func (r *Terms) dialShare(ctx context.Context, shareID string) (*dialed, error) {
 	if r.offers == nil {
 		return nil, errors.New("not connected to the daemon")
 	}
@@ -396,7 +425,11 @@ func (r *Terms) dialShare(ctx context.Context, shareID string) (*shareclient.Con
 		}
 		return nil, err
 	}
-	return conn, nil
+	device := offer.OwnerDevice
+	return &dialed{conn: conn, trusted: func() bool {
+		cur, err := ownerSPKI(home, device)
+		return err == nil && cur == hostSPKI
+	}}, nil
 }
 
 // ownerSPKI reads the pinned key of the owner's hub device from owners.json.
@@ -418,4 +451,10 @@ func ownerSPKI(home, hubDevice string) ([32]byte, error) {
 		return out, nil
 	}
 	return out, errors.New("that teammate is not trusted yet")
+}
+
+// Size is the owner's pane grid, pushed on `ptysize:<name>` with each screen.
+type Size struct {
+	Cols int `json:"cols"`
+	Rows int `json:"rows"`
 }

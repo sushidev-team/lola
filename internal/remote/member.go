@@ -199,6 +199,15 @@ func (c *conn) admitMember(f *protocol.Frame) (verdict, error) {
 	return verdict{}, nil
 }
 
+// memberLevel is the level this connection's member holds on pane now.
+func (c *conn) memberLevel(pane string) string {
+	g := c.srv.opts.MemberGate
+	if g == nil || !c.srv.memberLive(c.peer) {
+		return LevelNone
+	}
+	return g.PaneAccess(c.peer.DeviceID, pane)
+}
+
 // memberLive reports whether the member entry the peer authenticated under
 // still stands.
 func (s *Server) memberLive(peer Peer) bool {

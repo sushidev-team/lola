@@ -430,9 +430,11 @@ func (c *Conn) inOrder(pane string, seq uint64) bool {
 }
 
 func (c *Conn) deliver(f protocol.Frame) {
+	// The send happens under c.mu: fail closes these channels under the same
+	// lock, so a send can never meet a closed channel.
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	ch := c.pending[f.ID]
-	c.mu.Unlock()
 	if ch == nil {
 		return
 	}
@@ -455,10 +457,15 @@ func (c *Conn) onErr(f protocol.Frame) {
 		}
 	}
 	if f.Pane != "" {
-		c.mu.Lock()
-		delete(c.subs, f.Pane)
-		delete(c.seq, f.Pane)
-		c.mu.Unlock()
+		// Only a refusal that ends the subscription forgets it. A denied or
+		// rate-limited input leaves the stream running; forgetting it would make
+		// the gap rule discard every later frame and freeze the screen.
+		if e.Code == protocol.CodeUnknownPane {
+			c.mu.Lock()
+			delete(c.subs, f.Pane)
+			delete(c.seq, f.Pane)
+			c.mu.Unlock()
+		}
 		c.emit(Event{Pane: f.Pane, Kind: Refused, Code: e.Code, Msg: e.Message})
 		return
 	}

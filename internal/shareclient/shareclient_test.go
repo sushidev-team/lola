@@ -332,3 +332,35 @@ func tcpPair(t *testing.T) (client, server net.Conn) {
 	t.Cleanup(func() { client.Close() })
 	return client, <-acc
 }
+
+func TestDeniedInputKeepsTheStreamRunning(t *testing.T) {
+	r := newRig(t)
+	c, err := r.dial(r.host.SPKISHA256(), testRV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Subscribe("lola-v", 80, 24)
+	_ = next(t, c)
+	_ = c.Scroll("lola-v", 3)
+	if ev := next(t, c); ev.Kind != Refused || ev.Code != protocol.CodeDenied {
+		t.Fatalf("event = %+v", ev)
+	}
+	// Output after the refusal must still be drawn: the subscription is alive.
+	r.bus.stream(0).ch <- remote.PaneFrame{Kind: remote.PaneOutput, Seq: 2, Data: []byte("still live")}
+	if ev := next(t, c); ev.Kind != Output || string(ev.Data) != "still live" {
+		t.Fatalf("event = %+v, want the output", ev)
+	}
+}
+
+func TestCloseDuringRosterDoesNotPanic(t *testing.T) {
+	r := newRig(t)
+	c, err := r.dial(r.host.SPKISHA256(), testRV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		go func() { _, _ = c.Roster(context.Background()) }()
+	}
+	c.Close()
+	time.Sleep(50 * time.Millisecond)
+}

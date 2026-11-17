@@ -487,3 +487,23 @@ func TestUntrustRemovesOnlyTheNamedDirection(t *testing.T) {
 		t.Fatal("neither direction named should remove both")
 	}
 }
+
+func TestFirstPinStartsSharingForSessionsSharedEarlier(t *testing.T) {
+	rd, sh := newShareDaemon(t)
+	rd.addSession("lola-a", func(s *session.Session) { s.Sandbox = "docker" })
+	if _, err := shareDo[protocol.ShareSessionData](t, rd.Daemon, protocol.CmdShareSession, protocol.ShareSessionArgs{Session: "lola-a", On: true}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rd.stopRemote)
+	if rd.remote != nil {
+		t.Fatal("a server exists with nobody pinned")
+	}
+	m, k := sh.teammate(t, "ada-mini")
+	if _, err := shareDo[protocol.ShareMembersData](t, rd.Daemon, protocol.CmdShareTrust,
+		protocol.ShareTrustArgs{DeviceID: m.DeviceID, Fingerprint: hubproto.Fingerprint(k), Allow: true}); err != nil {
+		t.Fatal(err)
+	}
+	if rd.remote == nil {
+		t.Fatal("pinning the first teammate did not bring the server up")
+	}
+}

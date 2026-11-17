@@ -74,6 +74,7 @@
   let gl: WebglAddon | undefined;
   let off: (() => void) | undefined;
   let offExit: (() => void) | undefined;
+  let offSize: (() => void) | undefined;
   let ro: ResizeObserver | undefined;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
@@ -312,6 +313,13 @@
     off = Events.On(`pty:${terminalName}`, (e: { data: string }) => {
       term?.write(b64ToBytes(e.data));
     });
+    // A teammate's pane keeps the OWNER's grid (the host never resizes for a viewer), so the
+    // terminal adopts it instead of fitting to this window; the host scrolls if it is larger.
+    if (isShareStream(terminalName)) {
+      offSize = Events.On(`ptysize:${terminalName}`, (e: { data: { cols: number; rows: number } }) => {
+        if (e.data.cols > 0 && e.data.rows > 0) term?.resize(e.data.cols, e.data.rows);
+      });
+    }
 
     // A shell tab asks to be told when its session ends so it can close itself.
     // Subscribe only when wanted (the agent pane passes no onExit): its own tmux
@@ -333,6 +341,7 @@
 
     ro = new ResizeObserver(() => {
       clearTimeout(resizeTimer);
+      if (isShareStream(terminalName)) return;
       resizeTimer = setTimeout(() => fit?.fit(), 60);
     });
     ro.observe(host);
@@ -389,6 +398,7 @@
     disposed = true;
     off?.();
     offExit?.();
+    offSize?.();
     ro?.disconnect();
     clearTimeout(resizeTimer);
     clearTimeout(wheelTimer);
@@ -403,4 +413,4 @@
   });
 </script>
 
-<div bind:this={host} class="term-live h-full w-full overflow-hidden"></div>
+<div bind:this={host} class="term-live h-full w-full {isShareStream(terminalName) ? 'overflow-auto' : 'overflow-hidden'}"></div>

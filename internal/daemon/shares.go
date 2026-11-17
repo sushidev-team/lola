@@ -196,6 +196,8 @@ func (d *Daemon) shareKnownRV(rv string) bool { return shareGate{d}.KnownRV(rv) 
 // published set are refreshed.
 func (d *Daemon) membersChanged() {
 	d.shareRecheck()
+	// The first pin (or the last removal) changes whether a server should exist.
+	d.reloadRemoteIfShareChanged()
 	d.hubRelayDirty()
 	d.shareNudge()
 }
