@@ -42,6 +42,10 @@ func (d *Daemon) safeReconcile(ctx context.Context) {
 			d.logf("", "reconcile panic (daemon keeps running): %v", r)
 		}
 	}()
+	if d.knowledge != nil {
+		d.promoteReviewKnowledge(ctx, "")
+		d.maintainKnowledge(ctx, d.knowledge.List())
+	}
 	d.reconcile(ctx)
 }
 
@@ -191,6 +195,9 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 
 	changed := false
 	for _, is := range issues {
+		if d.goalHold(is.ID, is.Description, is.IssueRelations) != "" {
+			continue
+		}
 		if counted[is.Identifier] {
 			continue // still has a live counted AO session
 		}
@@ -287,7 +294,14 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 			restore = natSess.RemovedLabels
 		}
 		newIDs := ApplyLabelDelta(current, []string{p.OnSentSetLabel}, restore)
-		if err := api.SetIssueLabels(ctx, is.ID, newIDs); err != nil {
+		d.goalMu.Lock()
+		if d.goalHold(is.ID, is.Description, is.IssueRelations) != "" {
+			d.goalMu.Unlock()
+			continue
+		}
+		err = api.SetIssueLabels(ctx, is.ID, newIDs)
+		d.goalMu.Unlock()
+		if err != nil {
 			d.logf(p.Name, "reconcile: revert labels for %s failed: %v", is.Identifier, err)
 			continue
 		}

@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "desktop/frontend/src/lib/components/session/ReviewScreenshot.svelte"
+        ],
+        "createdAt": "2026-11-07T21:09:50.564Z",
+        "reason": "Agent verified: img renders only after a validated nonempty PNG/JPEG data URL resolves; loading and failure branches render text instead."
+      },
+      {
+        "rule": "layout-transition",
+        "value": "*",
+        "files": [
+          "desktop/frontend/src/lib/components/session/ToolPreview.svelte"
+        ],
+        "createdAt": "2026-11-10T09:58:38.231Z",
+        "reason": "User requested smooth in-place expansion of the same output element. This component bounds its max-height transition to 100–320px for 200ms only on disclosure changes; reduced motion disables it."
+      }
+    ]
+  }
+}

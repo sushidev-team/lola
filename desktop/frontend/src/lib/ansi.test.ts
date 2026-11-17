@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { ansiToHtml, trimTrailingBlankLines, paneColumns } from "./ansi";
-import { FLAVORS, toAnsi } from "./catppuccin";
+import { DEFAULT_THEME_ID, FLAVORS, toAnsi } from "./catppuccin";
 
+const defaultFlavor = FLAVORS[DEFAULT_THEME_ID];
+const defaultPalette = toAnsi(defaultFlavor);
 const mocha = toAnsi(FLAVORS["catppuccin-mocha"]);
 const latte = toAnsi(FLAVORS["catppuccin-latte"]);
 
@@ -13,7 +15,7 @@ describe("ansiToHtml", () => {
 
   it("wraps colored runs in styled spans", () => {
     const html = ansiToHtml("\x1b[31mred\x1b[0m");
-    expect(html).toContain("color:#f38ba8"); // Catppuccin Mocha red
+    expect(html).toContain(`color:${defaultFlavor.ansi16[1]}`);
     expect(html).toContain(">red<");
   });
 
@@ -26,7 +28,7 @@ describe("ansiToHtml", () => {
     // Code 0 must reset in place and CONTINUE, so the trailing 31 still paints
     // red. The old early-return dropped everything after the 0.
     const html = ansiToHtml("\x1b[0;31mred");
-    expect(html).toContain("color:#f38ba8"); // Catppuccin Mocha red
+    expect(html).toContain(`color:${defaultFlavor.ansi16[1]}`);
     expect(html).toContain(">red<");
   });
 
@@ -37,16 +39,16 @@ describe("ansiToHtml", () => {
 
   it("handles 256-color fg", () => {
     // Index 9 is BRIGHT red, which is a distinct colour from index 1 in
-    // Ghostty's Catppuccin (#f37799 vs #f38ba8). The old table duplicated the
+    // the active default palette. The old table duplicated the
     // normal colours into slots 9-14, so this used to be indistinguishable.
     const html = ansiToHtml("\x1b[38;5;9mx");
-    expect(html).toContain("color:#f37799");
-    expect(html).not.toContain("color:#f38ba8");
+    expect(html).toContain(`color:${defaultFlavor.ansi16[9]}`);
+    expect(html).not.toContain(`color:${defaultFlavor.ansi16[1]}`);
   });
 
   it("distinguishes bright from normal for SGR 90-97", () => {
-    expect(ansiToHtml("\x1b[91mx")).toContain("color:#f37799"); // bright red
-    expect(ansiToHtml("\x1b[31mx")).toContain("color:#f38ba8"); // normal red
+    expect(ansiToHtml("\x1b[91mx")).toContain(`color:${defaultFlavor.ansi16[9]}`); // bright red
+    expect(ansiToHtml("\x1b[31mx")).toContain(`color:${defaultFlavor.ansi16[1]}`); // normal red
   });
 
   it("applies bold weight", () => {
@@ -61,7 +63,7 @@ describe("ansiToHtml", () => {
   // --- palette plumbing -----------------------------------------------------
 
   it("defaults to the default flavor's palette", () => {
-    expect(ansiToHtml("\x1b[31mx")).toBe(ansiToHtml("\x1b[31mx", mocha));
+    expect(ansiToHtml("\x1b[31mx")).toBe(ansiToHtml("\x1b[31mx", defaultPalette));
   });
 
   it("emits a different colour when the flavor changes", () => {
@@ -89,7 +91,7 @@ describe("ansiToHtml", () => {
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
     // The only attribute on the only tag is style=.
-    expect(html.match(/<span [^>]*>/g)).toEqual(['<span style="color:#f38ba8">']);
+    expect(html.match(/<span [^>]*>/g)).toEqual([`<span style="color:${defaultFlavor.ansi16[1]}">`]);
   });
 
   it("cannot be made to emit a quote-broken style attribute", () => {
@@ -144,7 +146,7 @@ describe("OSC handling and paneColumns", () => {
 
   it("keeps SGR colouring around a stripped hyperlink", () => {
     const html = ansiToHtml("\x1b[31m" + link + "\x1b[0m");
-    expect(html).toContain("color:#f38ba8");
+    expect(html).toContain(`color:${defaultFlavor.ansi16[1]}`);
     expect(html).toContain(">PR #248<");
   });
 

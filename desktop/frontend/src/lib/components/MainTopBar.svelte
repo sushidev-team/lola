@@ -1,5 +1,8 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
+  import { makeScope } from "$lib/scope";
   import { nav } from "$lib/nav.svelte";
   import { triaged } from "$lib/filters";
   import Button from "./Button.svelte";
@@ -7,6 +10,9 @@
   import QuotaBars from "./QuotaBars.svelte";
   import HoverCard from "./HoverCard.svelte";
   import SpendCard from "./SpendCard.svelte";
+  import SessionBar from "./session/SessionBar.svelte";
+  import { waitingQueue } from "$lib/queue";
+  import { ssh } from "$lib/ssh.svelte";
 
   // The main column's 44px context header. It replaces the old full-width vitals
   // bar: it starts at the SIDEBAR's right edge, not the window's, so together
@@ -20,10 +26,18 @@
 
   const projectName = $derived(store.displayNameFor(nav.project));
 
+  // A session fills <main>, and this bar becomes its bar.
+  const inSession = $derived(!!nav.focusedTerm && nav.view === "cockpit");
+  // The sidebar carries the Waiting line. Hidden, it needs a way to say the same thing, or a
+  // session waiting on you is invisible from inside another one.
+  const waiting = $derived(nav.sidebarOpen ? 0 : waitingQueue(store.rosterSessions).length);
+
   const crumbs = $derived.by<Crumb[]>(() => {
     switch (nav.view) {
       case "home":
         return [{ text: "Projects" }];
+      case "team":
+        return [{ text: "Team" }];
       case "detail":
         return [{ text: "Projects", onclick: () => nav.goHome() }, { text: projectName }];
       case "prpicker":
@@ -35,7 +49,7 @@
         ];
       default: {
         const c: Crumb[] = nav.scoped
-          ? [{ text: "All", onclick: () => nav.goCockpit("") }, { text: projectName }]
+          ? [{ text: "All", onclick: () => nav.goCockpit("") }, { text: nav.scopeNames.map(n => store.displayNameFor(n)).join(", ") }]
           : [{ text: "Sessions" }];
         // The filter is a crumb, and clicking it is how you drop it — the same
         // affordance as Escape, for people who never learn Escape.
@@ -47,7 +61,7 @@
 
   // The number of rows actually visible below — the count that used to sit in
   // the sessions panel header.
-  const count = $derived(triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage).length);
+  const count = $derived(triaged(scopedSessions(store.sessions, nav.scoped, nav.project, makeScope(nav.scopeNames, store.projects)), nav.triage).length);
 
   // Mirrors <SidebarStatus>'s health read so the collapsed-sidebar alarm below
   // fires on the same condition the sidebar chip does.
@@ -73,89 +87,62 @@
     return level === "near" ? "text-warn" : "text-faint";
   });
 
-  // The lens picker draws its three glyphs as SVG rather than as the box-drawing
-  // characters it used to spend (≡ ▤ ▦). Those are text: the font sets their
-  // weight, width and baseline, so the three sat at different sizes, none of them
-  // optically centred, in buttons that were pill-shaped around them. Drawn on the
-  // same 24-unit grid with the same stroke as the sidebar's gear, they finally
-  // read as one set — and they can then sit in genuinely square buttons.
-  const lenses: { id: "list" | "kanban" | "grid"; label: string }[] = [
-    { id: "list", label: "List" },
-    { id: "kanban", label: "Board" },
-    { id: "grid", label: "Terminals" },
-  ];
 </script>
 
-{#snippet lensIcon(id: "list" | "kanban" | "grid")}
-  <svg
-    viewBox="0 0 24 24"
-    class="h-4 w-4"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="1.9"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    aria-hidden="true"
-  >
-    {#if id === "list"}
-      <!-- Rows with a leading marker: a plain three-line glyph reads as a hamburger menu. -->
-      <line x1="9" y1="6" x2="20" y2="6" />
-      <line x1="9" y1="12" x2="20" y2="12" />
-      <line x1="9" y1="18" x2="20" y2="18" />
-      <line x1="4" y1="6" x2="4.01" y2="6" />
-      <line x1="4" y1="12" x2="4.01" y2="12" />
-      <line x1="4" y1="18" x2="4.01" y2="18" />
-    {:else if id === "kanban"}
-      <!-- A framed board with two stacks of unequal height. Drawn as bars inside
-           a frame rather than as three bare outlined columns: at 16px an outlined
-           rect is nearly all stroke, and the three of them read as loose boxes
-           rather than as one board. -->
-      <rect x="3" y="3" width="18" height="18" rx="2.5" />
-      <line x1="8.5" y1="7.5" x2="8.5" y2="16.5" />
-      <line x1="15.5" y1="7.5" x2="15.5" y2="12.5" />
-    {:else}
-      <rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.5" />
-      <rect x="13" y="3.5" width="7.5" height="7.5" rx="1.5" />
-      <rect x="3.5" y="13" width="7.5" height="7.5" rx="1.5" />
-      <rect x="13" y="13" width="7.5" height="7.5" rx="1.5" />
-    {/if}
-  </svg>
-{/snippet}
-
 <header
-  class="drag flex h-11 items-center gap-2 border-b border-edge bg-canvas pr-3 {nav.sidebarOpen
+  class="drag flex h-11 min-w-0 items-center gap-2 bg-canvas pr-3 {inSession ? '' : 'border-b border-edge'} {nav.sidebarOpen
     ? 'pl-3'
     : 'pl-[82px]'}"
 >
   {#if !nav.sidebarOpen}
     <!-- Placed AFTER the traffic-light padding, never inside it. -->
-    <Button icon title="show sidebar (b)" aria-label="Show sidebar" onclick={() => nav.toggleSidebar()}>»</Button>
+    <Button icon title="show sidebar (⌘B)" aria-label="Show sidebar" onclick={() => nav.toggleSidebar()}><Icon name="chevrons-right" size={14} /></Button>
+  {/if}
+
+  {#if waiting > 0}
+    <Button size="xs" class="num shrink-0 text-orange!" title="{waiting} waiting on you (⌘J)" aria-label="{waiting} waiting on you" onclick={() => ssh.nextWaiting()} data-waiting-badge>
+      <span aria-hidden="true"><Icon name="circle-alert" size={14} /></span>{waiting}
+    </Button>
+  {/if}
+
+  {#if inSession}
+    <SessionBar sessionId={nav.focusedTerm} />
   {/if}
 
   {#if nav.view !== "cockpit"}
     <Button
       icon
+      size="xs"
       title="back to sessions (Esc)"
       aria-label="Back to sessions"
-      onclick={() => nav.goCockpit(nav.scoped ? nav.project : "")}>←</Button
+      onclick={() => nav.goCockpit(nav.scoped ? nav.project : "")}
     >
+      <Icon name="chevron-left" class="size-3.5" />
+    </Button>
   {/if}
 
-  <nav class="flex min-w-0 items-baseline gap-1.5" aria-label="Breadcrumb">
+  {#if !inSession}
+  <nav class="flex min-w-0 items-center gap-2 text-sm font-normal" aria-label="Breadcrumb">
     {#each crumbs as c, i (c.text + i)}
-      {#if i > 0}<span class="text-lg text-faint" aria-hidden="true">▸</span>{/if}
+      {#if i > 0}
+        <Icon name="slash" class="h-3 w-2 shrink-0 text-faint" size={14} />
+      {/if}
       {#if c.onclick}
-        <button class="truncate text-lg text-faint hover:text-ink" onclick={c.onclick}>{c.text}</button>
+        <button class="min-w-0 truncate rounded py-1 text-faint hover:text-ink" onclick={c.onclick}>{c.text}</button>
       {:else}
-        <span class="truncate text-lg" class:text-faint={i < crumbs.length - 1}>{c.text}</span>
+        <span class="min-w-0 truncate" class:text-faint={i < crumbs.length - 1} aria-current={i === crumbs.length - 1 ? "page" : undefined}>{c.text}</span>
       {/if}
     {/each}
     {#if nav.view === "cockpit"}
       <span class="num shrink-0 text-sm text-faint">{count}</span>
     {/if}
   </nav>
+  {/if}
 
   <span class="ml-auto flex shrink-0 items-center gap-2">
+    {#if !inSession}
+    <Button size="xs" onclick={() => nav.openOverlay("commands")} title="Search projects, sessions, and actions (⌘K)">Search <span class="text-faint">⌘K</span></Button>
+    {/if}
     {#if spend}
       <HoverCard class="num inline-flex items-center text-sm whitespace-nowrap outline-none {spendCls}">
         {#snippet card()}<SpendCard usage={spend} />{/snippet}
@@ -181,38 +168,13 @@
            not by the class attribute. -->
       <Button
         class={store.alive ? "text-warn!" : "text-bad!"}
-        title="{daemonHealth} · open doctor (d)"
+        title="{daemonHealth} · open doctor"
         onclick={() => nav.openOverlay("doctor")}
       >
-        <span aria-hidden="true">{store.alive ? "▲" : "○"}</span>
+        <span aria-hidden="true"><GlyphIcon glyph={store.alive ? "▲" : "○"} /></span>
         <span>{store.alive ? "Degraded" : "Daemon down"}</span>
       </Button>
     {/if}
-    {#if nav.view === "cockpit"}
-      <!-- Square buttons in a hairline rail: a segmented control of icons, so the
-           three cells must be the same shape whatever is drawn in them. `icon` at
-           `xs` gives that (24px) — the old `size="xs"` text buttons were pills
-           whose width followed their glyph. The icon inside is 16px, i.e. the cell
-           is mostly icon and only 4px of gutter: a picker in the title bar should
-           spend its space on the marks, not around them. -->
-      <span class="flex items-center gap-0.5 rounded-lg border border-edge p-0.5">
-        {#each lenses as l (l.id)}
-          <Button
-            size="xs"
-            icon
-            selected={nav.lens === l.id}
-            title={l.label}
-            aria-label="{l.label} lens"
-            onclick={() => nav.setLens(l.id)}
-          >
-            {@render lensIcon(l.id)}
-          </Button>
-        {/each}
-      </span>
-    {:else if nav.view === "home"}
-      <Button variant="secondary" title="add a project" onclick={() => nav.openOverlay("project", "")}>
-        <span aria-hidden="true">+</span> Add project
-      </Button>
-    {/if}
+
   </span>
 </header>

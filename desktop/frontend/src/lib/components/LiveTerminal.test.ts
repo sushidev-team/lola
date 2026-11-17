@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import LiveTerminal from "./LiveTerminal.svelte";
+import TerminalCell from "./session/TerminalCell.svelte";
 import { TERM_FONT } from "$lib/theme-runtime.svelte";
 
 const gate = vi.hoisted(() => {
@@ -56,6 +57,7 @@ const spies = vi.hoisted(() => {
     attach: vi.fn(async () => {}),
     write: vi.fn(async () => {}),
     detach: vi.fn(async () => {}),
+    detachAll: vi.fn(async () => {}),
     scroll: vi.fn(async () => {}),
     openURL: vi.fn(async () => {}),
     webLinksHandler: undefined as undefined | ((e: MouseEvent, uri: string) => void),
@@ -123,6 +125,7 @@ vi.mock("@bindings/desktop", () => ({
   TermService: {
     Attach: spies.attach,
     Detach: spies.detach,
+    DetachAll: spies.detachAll,
     Write: spies.write,
     Resize: vi.fn(),
     Scroll: spies.scroll,
@@ -165,7 +168,8 @@ describe("LiveTerminal font ordering", () => {
     gate.state.ready.settle(true);
     await vi.waitFor(() => expect(spies.open).toHaveBeenCalledTimes(1));
     expect(spies.ctor).toHaveBeenCalledWith(expect.objectContaining(TERM_FONT));
-    expect(spies.attach).toHaveBeenCalledWith("s1", 80, 24);
+    // Attach waits for the page's one-time orphan sweep (termboot.ts).
+    await vi.waitFor(() => expect(spies.attach).toHaveBeenCalledWith("s1", 80, 24));
   });
 
   it("does not force a re-measure when the font was there before open()", async () => {
@@ -389,5 +393,14 @@ describe("LiveTerminal font ordering", () => {
     await settle();
     expect(spies.open).not.toHaveBeenCalled();
     expect(spies.attach).not.toHaveBeenCalled();
+  });
+
+  it("detaches the original session when switching from Terminal to Conversation", async () => {
+    const { rerender } = render(TerminalCell, { name: "queued-session", autofocus: false });
+    gate.state.ready.settle(true);
+    await vi.waitFor(() => expect(spies.attach).toHaveBeenCalledWith("queued-session", 80, 24));
+    await rerender({ name: "" });
+    await vi.waitFor(() => expect(spies.detach).toHaveBeenCalledWith("queued-session"));
+    expect(spies.detach).not.toHaveBeenCalledWith("");
   });
 });

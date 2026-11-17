@@ -47,7 +47,7 @@
      m/2xl · 28/34 large title   Inter Bold      28/34  -0.018em   --text-2xl
      m/base-semi · title         Inter SemiBold  15/20  -0.010em   --text-lg
      m/xs-med · row              Inter Medium    13/17   0         --text-base
-     m/xs · body                 Inter Regular   12/16   0         --text-body
+     m/xs · body                 Inter Regular   12/16   0         (text-footnote)
      m/2xs · meta                Inter Regular   11/15   0         --text-sm
      m/2xs-caps · label          Inter Bold      10/12   0.070em   --text-xs
 
@@ -58,12 +58,8 @@
    move to the design's. `--text-lg` in particular lands back on the desktop's
    own 15/20 — the two surfaces agree about a card title and always did.
 
-   `--text-body` IS THE ONE ADDITION, and it is forced. The design uses SIX
-   sizes and Tailwind's ladder here has five rungs plus the large title; 12px
-   prose and 13px row text are genuinely different tiers in it (the activity
-   sentence under a card's heading is 12, the heading of a compact row is 13),
-   so one of them needs a name outside the ladder. Prose gets it, because the
-   ladder's `base` must stay the DEFAULT — `body` reads `var(--text-base)`.
+   The phone's own named scale (`text-title` … `text-code`, spec §6.1) follows
+   this block; it is what phone-owned components are written against.
 
    Overriding is the whole reason this block sits AFTER the desktop import:
    Tailwind v4 merges `@theme` blocks and the later definition wins.
@@ -80,12 +76,6 @@
      legends — the --color-faint tier, and the most repeated size in the app. */
   --text-sm: 0.6875rem; /* 11px */
   --text-sm--line-height: 0.9375rem; /* 15px */
-
-  /* Prose. The agent's activity sentence, the interpreter's headline, a hint
-     under a field: text that is read rather than scanned. Outside the ladder on
-     purpose — see the note above. */
-  --text-body: 0.75rem; /* 12px */
-  --text-body--line-height: 1rem; /* 16px */
 
   /* THE DEFAULT, set on `body`. Compact row titles, chip labels, pane tabs,
      button text, field values. */
@@ -124,8 +114,8 @@
   /* -------------------------------------------------------------------------
      The seven colours the phone design names that the shared set does not.
 
-     These are STATIC FALLBACKS in the compiled sheet, and they are macchiato's
-     because that is the flavor the design was drawn in. The live values are
+     These are STATIC FALLBACKS in the compiled sheet, and they are Midnight's
+     to match the shared default before JS runs. The live values are
      written onto the root element at runtime by src/lib/mobiletokens.ts, which
      derives every one of them from the ACTIVE flavor — so `[ui].theme` repaints
      these along with the shared tokens and latte does not get a black tab bar.
@@ -136,20 +126,88 @@
   ------------------------------------------------------------------------- */
 
   /* The chrome ground: tab bar, accessory bar. One step below `canvas`. */
-  --color-crust: #11111b;
+  --color-crust: #0c0f1a;
 
   /* Prose, between `ink` and `faint` — Catppuccin `subtext1`. */
-  --color-subtext: #bac2de;
+  --color-subtext: #c7cde3;
 
   /* List hairlines and card borders: softer than `edge`, which reads as a
      panel border. */
-  --color-edge-soft: #2b2b3c;
+  --color-edge-soft: #20263b;
 
   /* The two soft status-chip grounds and their labels. */
-  --color-pill-urgent-soft: #4e3f42;
-  --color-pill-urgent-soft-fg: #fab387;
-  --color-pill-broken-soft: #4d3649;
-  --color-pill-broken-soft-fg: #f38ba8;
+  --color-pill-urgent-soft: #4c3b39;
+  --color-pill-urgent-soft-fg: #ffa45c;
+  --color-pill-broken-soft: #4c3044;
+  --color-pill-broken-soft-fg: #ff7a95;
+
+  /* Text on a filled accent (the one primary button). Live value: mobiletokens.ts. */
+  --color-on-accent: #0c0f1a;
+
+  /* Inactive tab label, measured against the bar. Live value: mobiletokens.ts. */
+  --color-tab-idle: #9aa0b8;
+
+  /* The filled primary button on the phone, and the segment control's thumb. */
+  --color-primary-fill: #7dc4e4;
+  --color-on-primary: #0c0f1a;
+  --color-segment-thumb: #333c55;
+  --segment-thumb-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
+/* ---------------------------------------------------------------------------
+   The phone type scale (spec §6.1), sizes against the Dynamic Type root.
+   Each `--text-<name>` yields a `text-<name>` utility with its line height,
+   weight and tracking. Micro labels are uppercased at the call site.
+--------------------------------------------------------------------------- */
+@theme {
+  --text-title: 1.75rem; /* 28/34, screen titles */
+  --text-title--line-height: 2.125rem;
+  --text-title--font-weight: 700;
+  --text-title--letter-spacing: -0.018em;
+
+  --text-headline: 1.0625rem; /* 17/22, card and sheet titles */
+  --text-headline--line-height: 1.375rem;
+  --text-headline--font-weight: 600;
+
+  --text-body: 1.0625rem; /* 17/24, row line 1, form fields */
+  --text-body--line-height: 1.5rem;
+
+  --text-reading: 1rem; /* 16/24, Conversation prose */
+  --text-reading--line-height: 1.5rem;
+
+  --text-callout: 0.9375rem; /* 15/20, card body, buttons */
+  --text-callout--line-height: 1.25rem;
+
+  --text-subhead: 0.8125rem; /* 13/18, segment labels, metadata line 2 */
+  --text-subhead--line-height: 1.125rem;
+  --text-subhead--font-weight: 600;
+
+  --text-footnote: 0.75rem; /* 12/16, ages and counts */
+  --text-footnote--line-height: 1rem;
+
+  --text-micro: 0.6875rem; /* 11/13, section labels */
+  --text-micro--line-height: 0.8125rem;
+  --text-micro--font-weight: 700;
+  --text-micro--letter-spacing: 0.07em;
+
+  --text-mono: 0.8125rem; /* 13/18, code and tool output */
+  --text-mono--line-height: 1.125rem;
+
+  --text-code: 2.125rem; /* 34/40, the pairing code only */
+  --text-code--line-height: 2.5rem;
+  --text-code--font-weight: 600;
+
+  /* The one side gutter every phone screen shares (spec §6.2). */
+  --gutter: 16px;
+
+  /* Radii (spec §6.2). */
+  --radius-card: 14px;
+  --radius-composer: 20px;
+  --radius-button: 10px;
+
+  /* The one shadow, on sheets and the tab bar. `mobiletokens.ts` writes the
+     flavor's value; this is the dark fallback before JS runs. */
+  --shadow-sheet: 0 -8px 24px rgb(0 0 0 / 0.32);
 }
 
 /* ---------------------------------------------------------------------------
@@ -244,12 +302,50 @@ html {
 --------------------------------------------------------------------------- */
 html,
 body {
+  /* The WebView's own ground: a 1-2px sliver at an edge shows this, never white. */
+  background: var(--color-canvas);
   /* Kill the whole-document rubber band. The WebView is the app's frame, not a
      page, and a bouncing frame reads as the UI coming loose from the screen.
      capacitor.config.ts sets ios.scrollEnabled: false for the same reason;
      both are needed, because that option governs the WKWebView's scroll view
      and this governs the document inside it. */
   overscroll-behavior: none;
+}
+
+/* The app frame and the screen outlet clip, they do not hide. `overflow: hidden`
+   is still a scroll container: WebKit scrolls it to reveal a focused or
+   scrolled-to element, and a pushed screen parked off screen gives it somewhere
+   to scroll to. The whole UI then sits shifted sideways with a blank strip, and
+   no gesture brings it back. `clip` cannot be scrolled by anything. Unlayered on
+   purpose, so it outranks the `overflow-hidden` utility, which stays as the
+   fallback before iOS 16. */
+html,
+body,
+[data-frame-clip] {
+  overflow: clip;
+}
+
+/* A list that scrolls up and down never pans sideways. `overflow-y: auto` alone
+   computes `overflow-x` to `auto` as well, so a few pixels of overhang (a
+   button's enlarged touch area, a long unbroken name) let a finger drag the
+   whole list left. A scroller that is meant to move sideways says so with
+   `overflow-x-auto`. Unlayered for the same reason as the rule above. */
+.overflow-y-auto:not(.overflow-x-auto),
+.overflow-y-scroll:not(.overflow-x-auto),
+.review-layout {
+  overflow-x: hidden;
+}
+
+/* Text the phone did not write (a branch name, a URL, a path, an agent's
+   sentence) has no promise of a space to wrap at. `anywhere` breaks such a run
+   only where it would otherwise leave its box, and lets a flex or grid item
+   shrink below the run's width. Inherited, so one rule covers every screen;
+   `whitespace-nowrap` and `truncate` still win where a line must stay whole.
+   The desktop's `break-words` utility is restated because it sets the weaker
+   `break-word`, which breaks the run but still sizes the box to its full width. */
+body,
+.break-words {
+  overflow-wrap: anywhere;
 }
 
 /* This block MUST stay inside @layer base, and the reason is the whole of the
@@ -278,6 +374,12 @@ body {
     /* No 300ms tap delay and no double-tap zoom, which would otherwise eat the
        second tap of any quick interaction. */
     touch-action: manipulation;
+  }
+  /* No OS-drawn clear control: the search field draws its own. */
+  input[type="search"]::-webkit-search-cancel-button,
+  input[type="search"]::-webkit-search-decoration {
+    -webkit-appearance: none;
+    appearance: none;
   }
 }
 
@@ -316,4 +418,280 @@ body {
 /* A row that is a tap target without being square — list rows, menu items. */
 @utility tap-row {
   min-height: 44px !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Desktop components in a 390 pt column (spec §4.3).
+
+   Everything shared sits under `[data-phone-desk]`, the Session screen root.
+   Tailwind v4 utilities read `var(--text-*)`, so redefining the variables on
+   the container rescales every shared utility without a desktop edit; `rem`
+   follows the Dynamic Type root.
+
+   Hit area: grow the TOUCH target, never the box. Button.svelte's class list
+   contains `cursor-pointer`; xs (24 px) + 2x10 = 44, sm (28 px) + 2x8 = 44. No
+   rule sets `min-height` or `height` on a button: DiffView draws a
+   `.line-gutter` button per line and QueueRows uses small icon buttons, and a
+   44 px floor would triple a 2 000-line diff. `phonecss.test.ts` pins this.
+--------------------------------------------------------------------------- */
+[data-phone-desk] {
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.125rem;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.375rem;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.5rem;
+}
+[data-phone-desk] [data-conversation] {
+  font-size: 1rem;
+  line-height: 1.5rem;
+}
+/* No iOS focus zoom. */
+[data-phone-desk] textarea,
+[data-phone-desk] input {
+  font-size: max(16px, 1rem);
+}
+/* No traffic lights to clear. */
+[data-phone-desk] .modal-header.drag {
+  padding-left: 16px;
+}
+/* 3rem gutters plus code fit at 390. */
+[data-phone-desk] .diff-row {
+  font-size: 12px;
+}
+[data-phone-desk] button.cursor-pointer {
+  position: relative;
+}
+[data-phone-desk] button.cursor-pointer::after {
+  content: "";
+  position: absolute;
+  inset: -10px;
+}
+/* Dense rows keep their own targets: one per line gutters and inline row buttons. */
+[data-phone-desk] :is(.diff-body, .line-gutter, [data-queue-row]) button::after,
+[data-phone-desk] button.line-gutter::after {
+  content: none;
+}
+
+/* The Session screen's root pads for the soft keyboard (spec §4.4). `--kb` is
+   written by App.svelte from `installKeyboardInset`; the curve is the iOS
+   keyboard's, and reduced motion gets none. */
+@utility kb-pad {
+  padding-bottom: var(--kb, 0px);
+  transition: padding-bottom 250ms cubic-bezier(0.17, 0.59, 0.4, 0.77);
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Phone-only globals. This whole stylesheet is phone-only, so none of these
+   need a media query.
+--------------------------------------------------------------------------- */
+
+/* A textarea grows by its own logic (composer, feedback), never by a drag handle. */
+textarea {
+  resize: none;
+}
+
+/* The side gutter as a utility: `px-gutter`. */
+@utility px-gutter {
+  padding-inline: var(--gutter);
+}
+@utility mx-gutter {
+  margin-inline: var(--gutter);
+}
+
+/* A sheet is focused on open for the screen reader; it must not draw a focus ring on its top edge. */
+[role="dialog"][data-detent]:focus,
+[role="dialog"][data-detent]:focus-visible {
+  outline: none !important;
+  box-shadow: var(--shadow-sheet) !important;
+}
+
+/* Placeholder: the full subtext colour. At .7 opacity it measured 3.6-3.9:1 on the
+   light flavors' panels; the full colour clears 4.5:1 on every flavor (pinned by
+   mobiletokens.test.ts). */
+::placeholder {
+  color: var(--color-subtext);
+  opacity: 1;
+}
+
+/* Desktop keyboard chrome has no meaning on a phone: chord hints, kbd chips, the
+   composer's shortcut line. Order B tags the chord spans with `data-chord`. */
+[data-phone-desk] [data-chord],
+[data-phone-desk] kbd,
+[data-phone-desk] .cv-compose-hint {
+  display: none !important;
+}
+
+/* SegmentBar keeps its 32pt track; each tab grows a 44pt hit area with an
+   invisible 6px inset above and below (32 + 12 = 44), so the visual size is untouched. */
+[role="tab"] {
+  position: relative;
+}
+[role="tab"]::after {
+  content: "";
+  position: absolute;
+  inset: -6px 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Inset grouped lists (ListGroup / ListRow): the separator is a hairline drawn
+   between adjacent rows, inset from the left by the row's icon column. It is a
+   ::before rule, not a glyph.
+--------------------------------------------------------------------------- */
+[data-list-row] {
+  position: relative;
+}
+[data-list-row] + [data-list-row]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: var(--row-inset, 16px);
+  height: 0.5px;
+  background: var(--color-edge-soft);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   The shared ConfirmDialog as an iOS action sheet. Desktop markup is untouched;
+   the phone shell (`[data-phone-app]`) re-lays it out from the data attributes
+   ConfirmDialog.svelte carries (`data-confirm` on the copy block, `-cancel` and
+   `-ok` on the buttons). The Modal shell is found with :has(), because Modal.svelte
+   spreads nothing onto it. Rows: the title and body (one group), the destructive
+   row (full-width, 56pt, --color-bad on panel), then Cancel as its own bold 56pt
+   group below via `order`. The close x is hidden: Cancel and the backdrop dismiss.
+--------------------------------------------------------------------------- */
+[data-phone-app] .modal-shell:has([data-confirm]) {
+  position: fixed !important;
+  inset: auto 12px calc(env(safe-area-inset-bottom, 0px) + 8px) 12px !important;
+  width: auto !important;
+  max-width: none !important;
+  max-height: none !important;
+  display: flex !important;
+  flex-direction: column;
+  border: 0 !important;
+  border-radius: 14px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+  animation: none !important;
+}
+[data-phone-app] .modal-shell:has([data-confirm]) .modal-header {
+  order: 0;
+  justify-content: center;
+  border: 0 !important;
+  border-radius: 14px 14px 0 0;
+  background: var(--color-panel);
+  padding: 16px 16px 0 !important;
+}
+[data-phone-app] .modal-shell:has([data-confirm]) .modal-header h2 {
+  width: 100%;
+  text-align: center;
+  font-size: 17px !important;
+  line-height: 22px !important;
+  font-weight: 600;
+}
+/* The close x (the only button in the header). */
+[data-phone-app] .modal-shell:has([data-confirm]) .modal-header button,
+[data-phone-app] .modal-shell:has([data-confirm]) [data-confirm-close] {
+  display: none !important;
+}
+[data-phone-app] .modal-shell:has([data-confirm]) .modal-body {
+  order: 1;
+  margin: 0 !important;
+  background: var(--color-panel);
+  padding: 4px 16px 16px !important;
+  text-align: center;
+}
+[data-phone-app] [data-confirm] .confirmation-body,
+[data-phone-app] [data-confirm] .confirmation-detail {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--color-faint);
+}
+[data-phone-app] .modal-shell:has([data-confirm]) .modal-footer,
+[data-phone-app] .modal-shell:has([data-confirm]) .dialog-actions {
+  display: contents !important;
+}
+[data-phone-app] .modal-shell:has([data-confirm]) .dialog-actions button {
+  display: flex;
+  width: 100%;
+  height: 56px;
+  min-height: 56px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  background: var(--color-panel);
+  font-size: 17px;
+  line-height: 22px;
+  font-weight: 400;
+  order: 2;
+}
+[data-phone-app] .modal-shell:has([data-confirm]) button[data-confirm-ok] {
+  order: 2;
+  position: relative;
+  border-radius: 0 0 14px 14px !important;
+  background: var(--color-panel) !important;
+  color: var(--color-bad) !important;
+}
+[data-phone-app] .modal-shell:has([data-confirm]) button[data-confirm-ok]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 0.5px;
+  background: var(--color-edge-soft);
+}
+[data-phone-app] .modal-shell:has([data-confirm]) button[data-confirm-cancel] {
+  order: 3;
+  margin-top: 8px;
+  border-radius: 14px !important;
+  color: var(--color-accent) !important;
+  font-weight: 600 !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Round 2: form fields at touch size, and fields inside an inset group.
+--------------------------------------------------------------------------- */
+/* The shared Select's trigger (`select.lola-field` inside `.lola-select`) is a
+   32px desktop control; on the phone it is a 44pt target. */
+[data-phone-desk] .lola-select .lola-field {
+  min-height: 44px;
+  padding-block: 12px;
+}
+/* A field inside a ListGroup is the row: no box of its own, 44pt, 16px inset. */
+[data-list-group] .lola-field,
+[data-list-group] textarea,
+[data-list-group] input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: 44px;
+  width: 100%;
+  padding-inline: 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: max(16px, 1rem);
+}
+[data-list-group] textarea {
+  padding-block: 12px;
+  resize: none;
+}
+/* The group is edge-soft, so the row hairline cannot be too. */
+[data-list-group] [data-list-row] + [data-list-row]::before {
+  background: var(--color-edge);
+}
+/* A Select that is a row: the value sits right and the group draws its own
+   up/down glyph, so the desktop caret goes. */
+[data-list-group] .lola-select .lola-select-caret {
+  display: none;
+}
+[data-list-group] .lola-select select.lola-field {
+  padding-right: 40px;
+  text-align: right;
+  text-align-last: right;
 }

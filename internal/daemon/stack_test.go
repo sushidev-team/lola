@@ -156,6 +156,63 @@ func TestStackReviewsQueuePerAppLane(t *testing.T) {
 	}
 }
 
+func TestStackRequiredChecksApplyPerApp(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	d.prForBranch = func(_ context.Context, repo, _ string) (*scm.PR, error) {
+		return &scm.PR{Number: 1, State: "OPEN", BaseRef: "main", ChecksState: "fail",
+			Checks: []scm.Check{{Name: "test", Bucket: "pass"}, {Name: "shadow", Bucket: "fail"}}}, nil
+	}
+	d.requiredChecks = func(_ context.Context, repo, _ string) ([]string, error) {
+		if repo == "acme/web" {
+			return []string{"shadow"}, nil
+		}
+		return []string{"test"}, nil
+	}
+	facts := d.observeApps(context.Background(), stackSess("FE-1"))
+	if len(facts) != 2 || facts[0].pr.ChecksState != "pass" || facts[1].pr.ChecksState != "fail" {
+		t.Fatalf("per-app required checks = %+v", facts)
+	}
+}
+
+func TestStackReviewStatusesStayOnTheirApp(t *testing.T) {
+	d, fr, fs, _ := gatedDaemon(t)
+	fr.findings = ""
+	s := stackSess("FE-1")
+	for i := range s.Apps {
+		s.Apps[i].PR = openPR(7, "MERGEABLE", "", "pass")
+		s.Apps[i].PR.HeadSHA = headA
+	}
+	s.Reaggregate(time.Now())
+	d.sessions.Upsert(s)
+	// A stack's aggregate PR is for display only; it cannot own a review.
+	p, _ := d.providerByKind(kindClaudeSession)
+	res := d.reviewPass(context.Background(), s, p, false)
+	if res.Skipped == "" || len(fs.states()) != 0 {
+		t.Fatalf("aggregate review posted a status: %+v / %v", res, fs.states())
+	}
+	app, _ := d.sessions.Get(session.LaneID(s.ID, "app"))
+	d.runReviewProviders(context.Background(), app)
+	app, _ = d.sessions.Get(app.ID)
+	web, _ := d.sessions.Get(session.LaneID(s.ID, "web"))
+	if !d.reviewGatesOpen(app) || d.reviewGatesOpen(web) {
+		t.Fatal("reviewing one app must open only that app's gate")
+	}
+	d.runReviewProviders(context.Background(), web)
+	web, _ = d.sessions.Get(web.ID)
+	if !d.reviewGatesOpen(web) || fr.callCount() != 2 {
+		t.Fatal("the other app must receive its own review")
+	}
+	for i, call := range fs.calls {
+		wantRepo := "acme/app"
+		if i >= 2 {
+			wantRepo = "acme/web"
+		}
+		if call.repo != wantRepo {
+			t.Fatalf("status %d posted to %s, want %s", i, call.repo, wantRepo)
+		}
+	}
+}
+
 func TestStackAppsAndFocusOnTheWire(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	s := stackSess("FE-1")

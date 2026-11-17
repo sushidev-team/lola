@@ -508,7 +508,7 @@ func TestSettingsFormOnlyDigitsInIntField(t *testing.T) {
 
 // The three review provider KINDS share ONE tab as distinct, indented
 // subsections — so they read as one integration but are never mistaken for each
-// other. No top-level section header: the tab title already says Review, and
+// other. A Providers section distinguishes the catalog from specialist profiles;
 // each subsection names its own provider kind.
 func TestSettingsFormDistinguishesReviewProviders(t *testing.T) {
 	m := newTestRoot(t)
@@ -521,8 +521,12 @@ func TestSettingsFormDistinguishesReviewProviders(t *testing.T) {
 		if fld.tab != stCodeRabbit {
 			t.Errorf("every provider belongs on the Review tab, got %v for %q", fld.tab, fld.key)
 		}
-		if fld.section != "" {
-			t.Errorf("the tab title replaces the section header, got %q for %q", fld.section, fld.key)
+		wantSection := ""
+		if fld == cli {
+			wantSection = "Providers"
+		}
+		if fld.section != wantSection {
+			t.Errorf("provider section = %q, want %q", fld.section, wantSection)
 		}
 		if !fld.indent {
 			t.Errorf("every provider subsection must be indented, got %q not indented", fld.key)
@@ -1854,7 +1858,6 @@ func TestSettingsFormSavesTheRemoteListener(t *testing.T) {
 	f.field("remote_enabled").b = true
 	f.field("remote_bind").text = "lan"
 	f.field("remote_port").text = "7800"
-	f.field("remote_insecure_lan").b = true
 	f.field("remote_advertise").b = true
 
 	if ev := f.save(); ev == settingsFormNone || f.err != "" {
@@ -1867,8 +1870,8 @@ func TestSettingsFormSavesTheRemoteListener(t *testing.T) {
 	if err := reloaded.Validate(); err != nil {
 		t.Fatalf("the saved config must validate: %v", err)
 	}
-	if got := reloaded.Remote; !got.Enabled || got.Bind != "lan" || got.Port != 7800 || !got.InsecureLAN {
-		t.Errorf("remote = %+v, want enabled on lan:7800 with the LAN opt-in", got)
+	if got := reloaded.Remote; !got.Enabled || got.Bind != "lan" || got.Port != 7800 {
+		t.Errorf("remote = %+v, want enabled on lan:7800", got)
 	}
 	// The advertisement is reachable from this form because the alternative is
 	// hand-editing config.toml, which is where it lived when it shipped.

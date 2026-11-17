@@ -1,11 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
 
 const Diff = vi.fn();
+const CheckpointDiff = vi.fn();
+const ReviewPackageDiff = vi.fn();
 const SendFeedback = vi.fn();
 vi.mock("@bindings/desktop", () => ({
   DaemonService: {
     Diff: (...a: unknown[]) => Diff(...a),
+    CheckpointDiff: (...a: unknown[]) => CheckpointDiff(...a),
+    ReviewPackageDiff: (...a: unknown[]) => ReviewPackageDiff(...a),
     SendFeedback: (...a: unknown[]) => SendFeedback(...a),
     Alive: vi.fn().mockResolvedValue(false),
     Sessions: vi.fn(),
@@ -39,7 +43,22 @@ describe("DiffView", () => {
     cleanup();
     feedback.clear("s1");
     Diff.mockReset().mockResolvedValue(DATA);
+    ReviewPackageDiff.mockReset().mockResolvedValue(DATA);
     SendFeedback.mockReset().mockResolvedValue({ delivered: true, queued: false });
+  });
+
+  it('compares exact review packages without live feedback or modifying the checkout summary',async()=>{
+    localStorage.setItem('lola.diff.mode','unified');
+    feedback.add('s1',{path:'internal/foo/foo.go',side:'new',line:2,endLine:2,quote:'var x = 2',body:'Live draft'});
+    render(DiffView,{sessionId:'s1',reviewRange:{from:'reviewed',to:'selected'}});
+    await screen.findByText('origin/main');
+    expect(ReviewPackageDiff).toHaveBeenCalledWith('s1','reviewed','selected');
+    expect(Diff).not.toHaveBeenCalled();
+    expect(screen.queryByText('Live draft')).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    await fireEvent.click(screen.getByRole('button',{name:'Line 2'}));
+    expect(screen.queryByPlaceholderText('What should the agent change here?')).toBeNull();
+    expect(feedback.draftsFor('s1')).toHaveLength(1);
   });
 
   it("shows the files changed against the merge-base", async () => {
@@ -47,6 +66,21 @@ describe("DiffView", () => {
     expect(await screen.findByText("origin/main")).toBeInTheDocument();
     expect(Diff).toHaveBeenCalledWith("s1");
     expect(screen.getByRole("navigation", { name: "changed files" })).toHaveTextContent("foo.go");
+  });
+
+  it("keeps sidebar code unwrapped until requested and retains old-side comment anchors", async () => {
+    localStorage.setItem("lola.diff.mode", "unified");
+    const { container } = render(DiffView, { sessionId: "s1", compact: true });
+    await screen.findByText("origin/main");
+    expect(screen.getByRole("combobox", { name: "Changed file" })).toHaveDisplayValue("foo.go · internal/foo (+1 −1)");
+    const wrap = screen.getByRole("button", { name: "Wrap lines" });
+    expect(wrap).toHaveAttribute("aria-pressed", "false");
+    await fireEvent.click(wrap);
+    expect(container.querySelector('.diff-view')).toHaveClass('wrap-lines');
+    await fireEvent.click(screen.getByRole("button", { name: "Removed line 2, add comment" }));
+    await fireEvent.input(await screen.findByPlaceholderText("What should the agent change here?"), { target: { value: "Keep the previous value" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Add comment" }));
+    expect(feedback.draftsFor("s1")[0]).toMatchObject({ side: "old", line: 2 });
   });
 
   it("renders both diff layouts in sidebar order, independent of folder folding", async () => {
@@ -169,7 +203,8 @@ describe("DiffView", () => {
     expect(feedback.count("s1")).toBe(1);
     expect(screen.getByText("Why 2?")).toBeInTheDocument();
 
-    await fireEvent.click(screen.getByRole("button", { name: /Send to agent \(1\)/ }));
+    // Sending is the footer strip's button: see ChangesView.test.ts.
+    await feedback.send("s1");
     await waitFor(() => expect(SendFeedback).toHaveBeenCalled());
     expect(SendFeedback.mock.calls[0][0]).toEqual({
       session: "s1",
@@ -195,7 +230,7 @@ describe("DiffView", () => {
     feedback.add("s1", { path: "a.go", side: "new", line: 1, endLine: 1, quote: "", body: "x" });
     render(DiffView, { sessionId: "s1" });
     await screen.findByText("origin/main");
-    await fireEvent.click(screen.getByRole("button", { name: /Send to agent/ }));
+    await feedback.send("s1");
     await waitFor(() => expect(SendFeedback).toHaveBeenCalled());
     expect(feedback.count("s1")).toBe(1);
   });
@@ -228,9 +263,83 @@ describe("DiffView", () => {
     expect(screen.queryByText("origin/stale")).not.toBeInTheDocument();
   });
 
-  it("has nothing to send until something is written", async () => {
-    render(DiffView, { sessionId: "s1" });
+  it("takes no comment on a turn, because a line number in one turn means nothing later", async () => {
+    Diff.mockClear();
+    CheckpointDiff.mockResolvedValue(DATA);
+    render(DiffView, { sessionId: "s1", turn: 3 });
+    await waitFor(() => expect(CheckpointDiff).toHaveBeenCalledWith("s1", 3));
+    expect(Diff).not.toHaveBeenCalled();
     await screen.findByText("origin/main");
-    expect(screen.getByRole("button", { name: /Send to agent/ })).toBeDisabled();
+    await fireEvent.click(document.querySelectorAll(".line-gutter")[2]);
+    expect(screen.queryByPlaceholderText("What should the agent change here?")).toBeNull();
+    expect(screen.queryByPlaceholderText(/General note/)).toBeNull();
   });
 });
+
+describe("DiffView on the phone", () => {
+  beforeEach(async () => {
+    cleanup();
+    Diff.mockReset();
+    Diff.mockResolvedValue(DATA);
+    const { setTouchSurface } = await import("$lib/touchsurface");
+    setTouchSurface({});
+  });
+  afterEachPhone();
+
+  it("draws one toolbar row, unified only, with the base behind the menu", async () => {
+    render(DiffView, { sessionId: "s1", compact: true, hideFeedbackBar: true });
+    await waitFor(() => expect(document.querySelector("[data-phone-toolbar]")).not.toBeNull());
+    expect(screen.queryByRole("button", { name: "Split" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    expect(screen.queryByText(/against/)).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Diff options" }));
+    expect(screen.getByRole("button", { name: /Wrap lines/ })).toHaveAttribute("aria-pressed");
+    expect(screen.getByText("origin/main")).toBeInTheDocument();
+    expect(screen.getByText("01234567")).toBeInTheDocument();
+  });
+
+  it("is one file bar: basename, counts, a basename-only picker, and range hunk labels", async () => {
+    render(DiffView, { sessionId: "s1", compact: true, hideFeedbackBar: true });
+    await waitFor(() => expect(document.querySelector("[data-phone-file-bar]")).not.toBeNull());
+    const bar = document.querySelector("[data-phone-file-bar]")!;
+    expect(bar).toHaveTextContent("foo.go");
+    expect(bar).toHaveTextContent("+1 −1");
+    expect(screen.getByRole("combobox", { name: "Changed file" })).toHaveDisplayValue("foo.go");
+    expect(await screen.findByText("Lines 1–3")).toBeInTheDocument();
+    expect(screen.queryByText(/@@/)).toBeNull();
+  });
+
+  it("marks the tapped row and titles the editor 'Line n' (' −' when removed)", async () => {
+    render(DiffView, { sessionId: "s1", compact: true, hideFeedbackBar: true });
+    await screen.findByText("Lines 1–3");
+    const rows = () => Array.from(document.querySelectorAll<HTMLElement>(".diff-row"));
+    expect(document.querySelector("[data-row-picked]")).toBeNull();
+    const added = rows().find((r) => r.classList.contains("diff-add"))!;
+    await fireEvent.click(added.querySelector(".cursor-pointer")!);
+    expect(await screen.findByText("Line 2")).toBeInTheDocument();
+    expect(document.querySelectorAll("[data-row-picked]")).toHaveLength(1);
+    expect(added).toHaveAttribute("data-row-picked");
+    const removed = rows().find((r) => r.classList.contains("diff-del"))!;
+    await fireEvent.click(removed.querySelector(".cursor-pointer")!);
+    expect(await screen.findByText("Line 2 −")).toBeInTheDocument();
+  });
+
+  it("hides the feedback bar when the host owns it", async () => {
+    render(DiffView, { sessionId: "s1", compact: true, hideFeedbackBar: true });
+    await screen.findByLabelText("File diffs");
+    expect(screen.queryByPlaceholderText(/General note/)).toBeNull();
+  });
+
+  it("says 'No diff yet.' for an empty diff", async () => {
+    Diff.mockResolvedValue({ ...DATA, files: [] });
+    render(DiffView, { sessionId: "s1", compact: true });
+    expect(await screen.findByText("No diff yet.")).toBeInTheDocument();
+  });
+});
+
+function afterEachPhone() {
+  afterEach(async () => {
+    const { setTouchSurface } = await import("$lib/touchsurface");
+    setTouchSurface(null);
+  });
+}

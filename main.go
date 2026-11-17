@@ -25,6 +25,7 @@ import (
 	"github.com/sushidev-team/lola/internal/review"
 	"github.com/sushidev-team/lola/internal/reviewagent"
 	"github.com/sushidev-team/lola/internal/reviewrun"
+	"github.com/sushidev-team/lola/internal/taskboard"
 	"github.com/sushidev-team/lola/internal/tui"
 )
 
@@ -37,6 +38,8 @@ var (
 )
 
 func main() {
+	// The default sandbox image's tag follows this build (config.DefaultSandboxImage).
+	config.SetLolaVersion(version)
 	root := &cobra.Command{
 		Use:   "lola",
 		Short: "Lola — run, observe, run again: Linear poller and agent dispatcher",
@@ -61,6 +64,11 @@ func main() {
 			RunE: func(c *cobra.Command, _ []string) error { return tui.Send(`{"cmd":"reload"}`) }},
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
+		projectsCmd(),
+		hubCmd(),
+		pairCmd(),
+		devicesCmd(),
+		sandboxCmd(),
 		openCmd(),
 		attachCmd(),
 		killCmd(),
@@ -68,7 +76,12 @@ func main() {
 		answerCmd(),
 		broadcastCmd(),
 		reviewCmd(),
+		reviewPackageCmd(),
 		planCmd(),
+		goalCmd(),
+		learnCmd(),
+		profileCmd(),
+		comparisonCmd(),
 		bestofCmd(),
 		switchAgentCmd(),
 		checkpointCmd(),
@@ -81,10 +94,18 @@ func main() {
 		reportCmd(),
 		planGateCmd(),
 		linearAgentCmd(),
+		sshCmd(),
+		sshPostVerb(), // lola post: the same verb, because every agent is told about it
 		reviewRunCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
+		// lola ssh's exit codes are its contract with the agent, and it has already
+		// said why on stderr.
+		var ex sshExitError
+		if errors.As(err, &ex) {
+			os.Exit(ex.code)
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -164,14 +185,15 @@ func attachCmd() *cobra.Command {
 // changes) is kept and the command exits nonzero telling you to rerun with
 // --force; --force removes it anyway. The outcome message is printed by Send.
 func killCmd() *cobra.Command {
-	var force bool
+	var force, keep bool
 	cmd := &cobra.Command{
 		Use: "kill <session-id>", Short: "Kill a session; remove its clean worktree (--force removes a dirty one)", Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {
-			return tui.Send(fmt.Sprintf(`{"cmd":"kill","session":%q,"force":%t}`, a[0], force))
+			return tui.Send(fmt.Sprintf(`{"cmd":"kill","session":%q,"force":%t,"keepWorktree":%t}`, a[0], force, keep))
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "remove the worktree even with uncommitted changes")
+	cmd.Flags().BoolVar(&keep, "keep-worktree", false, "stop the agent and its tmux sessions but keep the worktree (revive later)")
 	return cmd
 }
 
@@ -478,7 +500,14 @@ func reportCmd() *cobra.Command {
 				fmt.Fprintln(c.OutOrStdout(), board.Usage)
 				return nil
 			}
-			err := hook.Report(args)
+			if len(args) == 2 && args[0] == "task" && (args[1] == "help" || args[1] == "--help") {
+				fmt.Fprintln(c.OutOrStdout(), taskboard.Briefing("lola"))
+				return nil
+			}
+			data, err := hook.ReportData(args)
+			if err == nil && len(args) > 0 && args[0] == "task" && len(data) > 0 {
+				fmt.Fprintln(c.OutOrStdout(), string(data))
+			}
 			switch {
 			case err == nil:
 				return nil
@@ -606,12 +635,19 @@ func configCmd() *cobra.Command {
 }
 
 // setupCmd always runs the first-run configuration wizard, even when a config
-// already exists (bare `lola` only enters the wizard when none does).
+// already exists (bare `lola` only enters the wizard when none does). The help
+// names exactly the wizard's steps (internal/tui/setup.go): it has no project
+// step, so it says projects come afterwards rather than promising one.
 func setupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Run the first-run configuration wizard (Linear key, project, defaults)",
-		RunE:  func(c *cobra.Command, _ []string) error { return tui.Setup() },
+		Short: "Run the first-run configuration wizard (Linear key, agent, theme, limits, poll interval); add projects afterwards",
+		Long: "Run the first-run configuration wizard: the Linear API key (checked against Linear, " +
+			"saved in the macOS Keychain), the default coding agent, the theme, the agent limits " +
+			"per project and in total, and the poll interval.\n\n" +
+			"It does not add a project. Add one afterwards in the app or the TUI (`n` on the " +
+			"project list): pick its folder, then its Linear team and the workflow states to pick up.",
+		RunE: func(c *cobra.Command, _ []string) error { return tui.Setup() },
 	}
 }
 

@@ -1,0 +1,12 @@
+{{define "content"}}
+<section class="card narrow">
+  <h1>Sign in</h1>
+  <p class="muted">Paste the admin token. It is in <code>admin.token</code> next to the hub's data file, and was printed when the hub first started.</p>
+  <form method="post" action="/login" class="stack">
+    <label>Admin token
+      <input type="password" name="token" autocomplete="current-password" required autofocus>
+    </label>
+    <button type="submit" class="primary">Sign in</button>
+  </form>
+</section>
+{{end}}

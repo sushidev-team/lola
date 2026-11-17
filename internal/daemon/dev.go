@@ -67,6 +67,12 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	if !ok {
 		return protocol.DevData{}, fmt.Errorf("unknown session %s", sessionID)
 	}
+	if s.Kind == session.KindLocal {
+		return protocol.DevData{}, errors.New("run dev commands in a shell tab for a shared checkout")
+	}
+	if s.GoalManaged() {
+		return protocol.DevData{}, errors.New("goal previews must run in their isolated validation environment")
+	}
 
 	d.mu.Lock()
 	cfg := d.cfg
@@ -660,8 +666,7 @@ func (d *Daemon) watchDevURLs(ctx context.Context, sessionID string, tabs int) {
 // keeps its app URL ahead of its bundler's even though the panes are ranked
 // independently. A tab that cannot be read is skipped, never fatal.
 func (d *Daemon) readDevURLs(ctx context.Context, names []string, lines int) []string {
-	var found []string
-	seen := map[string]bool{}
+	var panes []string
 	for _, name := range names {
 		cctx, cancel := context.WithTimeout(ctx, devExecTimeout)
 		pane, err := d.paneTail(cctx, name, lines)
@@ -670,17 +675,9 @@ func (d *Daemon) readDevURLs(ctx context.Context, names []string, lines int) []s
 			d.logf("", "observe: could not read %s for its dev address: %v", name, err)
 			continue
 		}
-		for _, u := range devurl.URLs(pane) {
-			if !seen[u] {
-				seen[u] = true
-				found = append(found, u)
-			}
-		}
+		panes = append(panes, pane)
 	}
-	if len(found) > devurl.MaxCandidates {
-		found = found[:devurl.MaxCandidates]
-	}
-	return found
+	return devurl.Merge(panes)
 }
 
 // setDevURLs writes the derived addresses onto the record, reporting whether

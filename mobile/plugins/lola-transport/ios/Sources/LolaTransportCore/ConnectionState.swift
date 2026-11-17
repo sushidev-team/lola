@@ -1,125 +1,133 @@
 import Foundation
 
-/// The connection lifecycle, as the app sees it.
-///
-/// It is a separate vocabulary from `NWConnection.State` on purpose. Network
-/// framework's states answer "what is the socket doing", and the app's question
-/// is different and coarser: is there something to type into, and if not, is
-/// that because the phone is on the wrong network or because the daemon said
-/// no. Those two are the distinction the whole enum exists to make, because
-/// they have completely different remedies and a single "disconnected" state
-/// forces a human to guess which one they are looking at.
-public enum LolaConnectionPhase: String, Equatable, Sendable {
-    case connecting
-    case handshaking
-    case connected
-    case failed
-    case closed
+/// The connection lifecycle as the app sees it (04 §1.6). Coarser than
+/// `NWConnection.State` on purpose: the app asks "is there something to type
+/// into, and if not, why", never "what is the socket doing".
+public enum ConnectionPhase: String, Equatable, Sendable {
+    case idle, racing, ready, migrating, closed, failed
 }
 
-/// Why a connection failed or closed.
-///
-/// Deliberately small. Every value here has to survive being rendered as a
-/// sentence to somebody holding a phone, so a code that only a developer could
-/// act on belongs in `reason` instead.
-public enum LolaFailureCode: String, Equatable, Sendable {
-    /// No route, connection refused, or the local-network permission was
-    /// denied.
-    ///
-    /// Those three genuinely cannot be told apart on iOS: a denied local-network
-    /// permission surfaces as an ordinary unreachable-host failure, the prompt
-    /// never comes back, and there is no API that reports the decision. So the
-    /// app shows the Settings hint on a first-connect failure and does not
-    /// pretend to know which of the three it is.
-    case network
-
-    /// A connect or handshake budget elapsed.
+/// Why a connection failed or closed. Every value must survive being rendered
+/// as one sentence to somebody holding a phone.
+public enum FailureCode: String, Equatable, Sendable {
+    /// The path monitor reports no usable interface.
+    case offline
+    /// Every candidate failed before an authenticated `ready`.
+    case unreachable
     case timeout
-
-    /// The TLS handshake failed for some reason other than the pin.
-    case tls
-
-    /// The peer's SPKI hash is not the pinned one. Distinct from `tls` because
-    /// it is the one TLS failure with a specific, actionable meaning: either
-    /// the pin was copied wrong, or this is not the daemon it claims to be.
-    case pinMismatch = "pin_mismatch"
-
-    /// The daemon refused the handshake.
-    case rejected
-
-    /// The peer violated the framing: a zero-length or oversized frame.
+    /// Every candidate that completed a certificate exchange showed the same
+    /// key, and it is not the pinned one.
+    case keyChanged = "key_changed"
+    /// The daemon (not a hub, not a stranger) refused this device.
+    case notPaired = "not_paired"
+    case unsupportedVersion = "unsupported_version"
+    /// Relay was the only candidate and the hub answered 503 or 504.
+    case relayUnavailable = "relay_unavailable"
     case protocolViolation = "protocol"
-
-    /// The daemon closed the connection.
     case peerClosed = "peer_closed"
-
-    /// `disconnect()` was called.
     case clientClosed = "client_closed"
-
-    /// The app was backgrounded and the socket was torn down.
-    ///
-    /// This is not a failure and is reported as a `closed` phase. It has its
-    /// own code because the app's correct response is unlike any other: come
-    /// back to the foreground and reconnect, rather than show anything.
     case backgrounded
-
-    /// A defect in the plugin.
     case internalError = "internal"
+
+    /// The connector retries these on its own while the app is foreground;
+    /// `notPaired` and `unsupportedVersion` never retry.
+    public var isRetryable: Bool {
+        switch self {
+        case .offline, .unreachable, .timeout, .relayUnavailable, .peerClosed, .backgrounded, .keyChanged:
+            return true
+        case .notPaired, .unsupportedVersion, .protocolViolation, .clientClosed, .internalError:
+            return false
+        }
+    }
 }
 
-/// One lifecycle event, ready to be turned into a bridge payload.
+public enum RelayState: String, Equatable, Sendable, Codable {
+    case none, ok, backoff
+    case credentialDead = "credential_dead"
+    case hubTooOld = "hub_too_old"
+}
+
+public enum PathKind: String, Equatable, Sendable {
+    /// The daemon's `ReadyData.via == "lan"`.
+    case direct
+    case relay
+}
+
+public enum NetworkInterface: String, Equatable, Sendable {
+    case wifi, cellular, wired, other
+}
+
+public struct PathInfo: Equatable, Sendable {
+    public let kind: PathKind
+    public let host: String?
+    public let port: Int?
+    public let interface: NetworkInterface?
+
+    public init(kind: PathKind, host: String? = nil, port: Int? = nil, interface: NetworkInterface? = nil) {
+        self.kind = kind
+        self.host = host
+        self.port = port
+        self.interface = interface
+    }
+
+    /// Absent fields are omitted, never sent as null, so the TypeScript
+    /// optionals mean what they say.
+    public func payload() -> [String: Any] {
+        var out: [String: Any] = ["kind": kind.rawValue]
+        if let host { out["host"] = host }
+        if let port { out["port"] = port }
+        if let interface { out["interface"] = interface.rawValue }
+        return out
+    }
+}
+
+/// One lifecycle event, shaped like `StateEvent` in `src/definitions.ts`.
 ///
-/// `epoch` is what makes a late callback recognisably stale. Network
-/// framework's handlers are queued, and tearing a connection down does not
-/// unqueue the callbacks already scheduled behind it, so a connection that has
-/// been replaced can still deliver a state change or a read afterwards. Every
-/// event carries the epoch of the connection that produced it, and the JavaScript
-/// side drops anything that is not the current one.
-public struct LolaConnectionEvent: Equatable, Sendable {
+/// `epoch` makes a late callback recognisably stale: Network.framework's
+/// handlers are queued behind a teardown, so a replaced connection can still
+/// deliver a state change. JS drops anything that is not the current epoch.
+public struct ConnectionState: Equatable, Sendable {
     public let epoch: Int
-    public let phase: LolaConnectionPhase
-    public let code: LolaFailureCode?
-    public let reason: String?
-    public let spkiPin: String?
-    public let pinned: Bool?
+    public let phase: ConnectionPhase
+    public let path: PathInfo?
+    public let code: FailureCode?
     public let daemonCode: String?
     public let minV: Int?
     public let maxV: Int?
+    public let raceMs: Int?
+    public let relay: RelayState?
 
     public init(
         epoch: Int,
-        phase: LolaConnectionPhase,
-        code: LolaFailureCode? = nil,
-        reason: String? = nil,
-        spkiPin: String? = nil,
-        pinned: Bool? = nil,
+        phase: ConnectionPhase,
+        path: PathInfo? = nil,
+        code: FailureCode? = nil,
         daemonCode: String? = nil,
         minV: Int? = nil,
-        maxV: Int? = nil
+        maxV: Int? = nil,
+        raceMs: Int? = nil,
+        relay: RelayState? = nil
     ) {
         self.epoch = epoch
         self.phase = phase
+        self.path = path
         self.code = code
-        self.reason = reason
-        self.spkiPin = spkiPin
-        self.pinned = pinned
         self.daemonCode = daemonCode
         self.minV = minV
         self.maxV = maxV
+        self.raceMs = raceMs
+        self.relay = relay
     }
 
-    /// The dictionary shape `notifyListeners` sends and `LolaStateEvent`
-    /// declares. Absent fields are omitted rather than sent as null, so the
-    /// TypeScript optionals mean what they say.
     public func payload() -> [String: Any] {
         var out: [String: Any] = ["epoch": epoch, "phase": phase.rawValue]
+        if let path { out["path"] = path.payload() }
         if let code { out["code"] = code.rawValue }
-        if let reason { out["reason"] = reason }
-        if let spkiPin { out["spkiPin"] = spkiPin }
-        if let pinned { out["pinned"] = pinned }
         if let daemonCode { out["daemonCode"] = daemonCode }
         if let minV { out["minV"] = minV }
         if let maxV { out["maxV"] = maxV }
+        if let raceMs { out["raceMs"] = raceMs }
+        if let relay { out["relay"] = relay.rawValue }
         return out
     }
 }

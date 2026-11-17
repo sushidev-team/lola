@@ -1,0 +1,11 @@
+# Build context for hub/Dockerfile (the repository root): only the hub and the
+# wire contract. The root .dockerignore belongs to sandbox/Dockerfile.
+*
+!hub
+!hubproto
+hub/.gocache
+hub/lola-hub
+hub/data
+hub/data-dev
+**/*.db
+**/.DS_Store

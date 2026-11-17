@@ -92,6 +92,35 @@ func TestNotifyRoutingDedupsChannels(t *testing.T) {
 	}
 }
 
+func TestDesktopOnlyInterruptsForHumanAction(t *testing.T) {
+	desk := &fakeChannel{n: ChannelDesktop}
+	slack := &fakeChannel{n: ChannelSlack}
+	o := &notifier{
+		byName: map[string]channel{ChannelDesktop: desk, ChannelSlack: slack},
+		routing: map[Priority][]string{
+			Urgent: {ChannelDesktop, ChannelSlack}, Action: {ChannelDesktop, ChannelSlack}, Info: {ChannelDesktop, ChannelSlack},
+		},
+	}
+	for _, n := range []Note{
+		{Title: "Automatic CI retry", Priority: Action},
+		{Title: "Review findings sent to agent", Priority: Action},
+		{Title: "Merged", Priority: Info},
+		{Title: "Question", Priority: Urgent},
+		{Title: "Ready", Priority: Action, ReadyForUser: true},
+	} {
+		o.Notify(context.Background(), n)
+	}
+	if desk.count() != 2 || slack.count() != 5 {
+		t.Fatalf("desktop=%d slack=%d", desk.count(), slack.count())
+	}
+	// Eligibility never overrides a user's disabled routing.
+	o.routing[Action] = nil
+	o.Notify(context.Background(), Note{Priority: Action, ReadyForUser: true})
+	if desk.count() != 2 {
+		t.Fatal("ready note bypassed disabled routing")
+	}
+}
+
 // TestNewEmptyConfigIsNoop verifies an unconfigured notifier delivers nothing
 // and does not panic.
 func TestNewEmptyConfigIsNoop(t *testing.T) {
@@ -149,6 +178,7 @@ func TestSlackText(t *testing.T) {
 		{Note{Title: "T"}, "T"},
 		{Note{Title: "T", Body: "B"}, "T\nB"},
 		{Note{Title: "T", Body: "B", URL: "http://x"}, "T\nB\nhttp://x"},
+		{Note{Title: "T", Subtitle: "PR #7", Body: "B", URL: "http://x"}, "T\nPR #7\nB\nhttp://x"},
 		{Note{Title: "T", URL: "http://x"}, "T\nhttp://x"},
 	}
 	for _, c := range cases {

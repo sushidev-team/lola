@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import DoctorOverlay from "./DoctorOverlay.svelte";
+import { nav } from "$lib/nav.svelte";
 
 // DoctorService.Run() bridges into the Wails runtime, which is absent under
 // jsdom — mock the module so the component sees a fixed report. Hoisted so the
@@ -25,6 +26,10 @@ vi.mock("@bindings/desktop", () => ({
   DaemonService: { CLIInfo: cliInfoMock, InstallCLI: installMock },
 }));
 
+// The fix table (SetupChecklist) reaches the store; keep it off the Wails runtime.
+const { startDaemon } = vi.hoisted(() => ({ startDaemon: vi.fn() }));
+vi.mock("$lib/store.svelte", () => ({ store: { projects: [], startDaemon } }));
+
 // A CLI resolved from the app's own bundle: the DMG-only install this whole
 // section exists for.
 const bundledCLI = {
@@ -48,6 +53,8 @@ describe("DoctorOverlay", () => {
     cliInfoMock.mockResolvedValue(bundledCLI);
     installMock.mockReset();
     installMock.mockResolvedValue({ path: "/usr/local/bin/lola", onPath: true });
+    startDaemon.mockReset();
+    nav.closeOverlay();
   });
 
   it("shows the loading line, then renders one row per result plus the summary", async () => {
@@ -170,6 +177,72 @@ describe("DoctorOverlay", () => {
       render(DoctorOverlay);
       await screen.findByText("tmux"); // the checks still render
       expect(screen.queryByText("lola CLI")).toBeNull();
+    });
+  });
+
+  // A row with a fix id carries its way out: a copyable command for what only
+  // the human can run, a button for what the app does itself.
+  describe("fixes", () => {
+    const fixReport = {
+      results: [
+        { id: "gh auth", name: "gh auth", ok: false, detail: "gh is not logged in", critical: false, fix: "gh_auth_login" },
+        { id: "projects", name: "projects", ok: false, detail: "no projects yet", critical: false, fix: "add_project" },
+        { id: "daemon", name: "daemon", ok: false, detail: "not running", critical: false, fix: "start_daemon" },
+        { id: "tmux", name: "tmux", ok: true, detail: "/usr/bin/tmux", critical: true, fix: "" },
+      ],
+      summary: "1 ok, 3 warning, 0 critical",
+      ok: true,
+    };
+
+    it("offers a copyable command for a fix only the human can run", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+      runMock.mockResolvedValue(fixReport);
+      render(DoctorOverlay);
+      expect(await screen.findByText("gh auth login")).toBeInTheDocument();
+      await fireEvent.click(screen.getByRole("button", { name: "Copy command: gh auth login" }));
+      expect(writeText).toHaveBeenCalledWith("gh auth login");
+    });
+
+    it("runs an app fix from its button", async () => {
+      runMock.mockResolvedValue(fixReport);
+      nav.openOverlay("doctor");
+      render(DoctorOverlay);
+      await fireEvent.click(await screen.findByRole("button", { name: "Add project" }));
+      expect(nav.overlay).toBe("project");
+      expect(nav.overlayProject).toBe("");
+    });
+
+    it("re-runs the checks after a fix that leaves the overlay up", async () => {
+      runMock.mockResolvedValue(fixReport);
+      nav.openOverlay("doctor");
+      render(DoctorOverlay);
+      await fireEvent.click(await screen.findByRole("button", { name: "Start daemon" }));
+      expect(startDaemon).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(runMock).toHaveBeenCalledTimes(2));
+    });
+
+    it("gives a passing row no fix", async () => {
+      runMock.mockResolvedValue(fixReport);
+      const { container } = render(DoctorOverlay);
+      await screen.findByText("tmux");
+      expect(container.querySelector('[data-row="tmux"] button')).toBeNull();
+    });
+
+    // Per-project rows can share a name; keyed by name, the list would throw.
+    it("keys rows by id, so a repeated name renders twice", async () => {
+      runMock.mockResolvedValue({
+        results: [
+          { id: "repo", name: "repo", ok: true, detail: "first", critical: false },
+          { id: "repo#2", name: "repo", ok: false, detail: "second", critical: false },
+        ],
+        summary: "",
+        ok: true,
+      });
+      render(DoctorOverlay);
+      expect(await screen.findByText("first")).toBeInTheDocument();
+      expect(screen.getByText("second")).toBeInTheDocument();
+      expect(screen.getAllByText("repo")).toHaveLength(2);
     });
   });
 });

@@ -152,6 +152,7 @@ func (d *Daemon) deliverBroadcast(ctx context.Context, id string) bool {
 		field: func(s *session.Session) *string { return &s.PendingBroadcast },
 		wrap:  broadcastMessage,
 		done:  "delivered the human's project broadcast to the agent",
+		label: broadcastLabel,
 	})
 }
 

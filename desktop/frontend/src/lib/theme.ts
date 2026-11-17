@@ -191,6 +191,15 @@ export function deliveryLabel(delivery: string | undefined): string {
 }
 
 /**
+ * The chip's word: Sentence case, like every other label in the app, and `CI` as the roster spells
+ * it. statusLabel stays lowercase because the rolled-up status word is the phone's vocabulary.
+ */
+export function deliveryChipWord(delivery: string | undefined): string {
+  const w = deliveryLabel(delivery);
+  return w.startsWith("ci ") ? `CI ${w.slice(3)}` : w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+/**
  * One-character mark for a delivery state, so the chip reads at a glance in a
  * table cell that is mostly a PR number. All BMP glyphs a system UI font
  * carries — nothing that falls back to Apple Color Emoji, which paints its own

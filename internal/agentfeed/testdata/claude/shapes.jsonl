@@ -1,0 +1,24 @@
+{"type":"future-record-type","uuid":"f-1","message":{"content":"nothing to see"}}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-06T10:00:00Z","content":"typed while busy"}
+{"type":"queue-operation","operation":"dequeue","timestamp":"2026-11-06T10:00:00Z"}
+{"type":"user","isMeta":true,"message":{"content":"<local-command-caveat>Caveat</local-command-caveat>"},"uuid":"m-1","timestamp":"2026-11-06T10:00:00Z"}
+{"type":"user","message":{"content":"<local-command-caveat>Caveat</local-command-caveat>"},"uuid":"m-2","timestamp":"2026-11-06T10:00:00Z"}
+{"type":"system","subtype":"local_command","content":"<command-name>/context</command-name><command-message>context</command-message><command-args></command-args>","uuid":"s-1","timestamp":"2026-11-06T10:00:01Z"}
+{"type":"user","message":{"content":"<command-name>/context</command-name><command-message>context</command-message><command-args></command-args>"},"uuid":"u-1","timestamp":"2026-11-06T10:00:01Z"}
+{"type":"system","subtype":"local_command","content":"<local-command-stdout>Context usage 12%</local-command-stdout>","uuid":"s-2","timestamp":"2026-11-06T10:00:02Z"}
+{"type":"user","message":{"content":"<command-name>/rename</command-name><command-args>my session</command-args>"},"uuid":"u-2","timestamp":"2026-11-06T10:00:03Z"}
+{"type":"user","message":{"content":"<bash-input>ls -la</bash-input>"},"uuid":"u-3","timestamp":"2026-11-06T10:00:04Z"}
+{"type":"user","message":{"content":"<bash-stdout>total 0</bash-stdout><bash-stderr>warn</bash-stderr>"},"uuid":"u-4","timestamp":"2026-11-06T10:00:05Z"}
+{"type":"user","message":{"content":"\n\n<pasted_content id=\"ab12\">\nA long pasted brief\nwith two lines\n</pasted_content id=\"ab12\">\n"},"uuid":"u-5","timestamp":"2026-11-06T10:00:06Z"}
+{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n<summary>Background command \"sleep 31\" completed</summary>\n</task-notification>"},"uuid":"u-6","timestamp":"2026-11-06T10:00:07Z"}
+{"type":"user","promptSource":"system","message":{"content":"Continue from where you left off."},"uuid":"u-7","timestamp":"2026-11-06T10:00:08Z"}
+{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"No response requested."}]},"uuid":"a-1","timestamp":"2026-11-06T10:00:09Z"}
+{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: 529 overloaded"}]},"uuid":"a-2","timestamp":"2026-11-06T10:00:10Z"}
+{"type":"user","message":{"content":[{"type":"text","text":"Look at this"},{"type":"image","source":{"type":"base64","data":"QUJDRA=="}}]},"uuid":"u-8","timestamp":"2026-11-06T10:00:11Z"}
+{"type":"user","message":{"content":"Escape \u001b[31mcodes\u001b[0m and ‮bidi are gone"},"uuid":"u-9","timestamp":"2026-11-06T10:00:12Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","uuid":"s-3","timestamp":"2026-11-06T10:00:13Z"}
+{"type":"user","isCompactSummary":true,"message":{"content":"This session is being continued from a previous conversation..."},"uuid":"u-10","timestamp":"2026-11-06T10:00:13Z"}
+{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"a sidechain line in the main file"}]},"uuid":"a-3","timestamp":"2026-11-06T10:00:14Z"}
+this is not json
+{"type":"user","message":"content of the wrong type","uuid":"u-11","timestamp":"2026-11-06T10:00:15Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Still reading."}]},"uuid":"a-4","timestamp":"not a time"}

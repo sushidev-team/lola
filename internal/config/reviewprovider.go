@@ -206,6 +206,9 @@ func ReviewAgentPreamble(who string) string {
 //     human can watch it and read its output afterwards; pass shapes only.
 //   - Fallback is the ordered chain of kinds tried when this provider cannot
 //     answer; pass shapes only, empty for a watch.
+//   - GitHubStatus posts the pass's verdict as a commit status
+//     (`lola/review/<kind>`) on the PR head and re-reviews every new head, so a
+//     ruleset can REQUIRE the review; pass shapes only, off by default.
 type ReviewProvider struct {
 	Provider       provKind
 	Enabled        bool
@@ -217,6 +220,7 @@ type ReviewProvider struct {
 	Author         string
 	Transports     TransportSet
 	GitHubInline   bool
+	GitHubStatus   bool
 	Notify         bool
 	SendToAgent    bool
 	Visible        bool
@@ -243,6 +247,7 @@ type fileReviewProvider struct {
 	Author         *string       `toml:"author,omitempty"`
 	Transports     *TransportSet `toml:"transports,omitempty"`
 	GitHubInline   *bool         `toml:"github_inline,omitempty"`
+	GitHubStatus   *bool         `toml:"github_status,omitempty"`
 	Notify         *bool         `toml:"notify,omitempty"`
 	SendToAgent    *bool         `toml:"send_to_agent,omitempty"`
 	Visible        *bool         `toml:"visible,omitempty"`
@@ -334,6 +339,9 @@ func resolveReviewProvider(fp fileReviewProvider) ReviewProvider {
 	if fp.GitHubInline != nil {
 		p.GitHubInline = *fp.GitHubInline
 	}
+	if fp.GitHubStatus != nil {
+		p.GitHubStatus = *fp.GitHubStatus
+	}
 	if fp.Notify != nil {
 		p.Notify = *fp.Notify
 	}
@@ -344,7 +352,8 @@ func resolveReviewProvider(fp fileReviewProvider) ReviewProvider {
 		p.Visible = *fp.Visible
 	}
 	if p.Provider.isWatch() {
-		p.Visible = false // a watch has no exec to watch: it polls the PR
+		p.Visible = false      // a watch has no exec to watch: it polls the PR
+		p.GitHubStatus = false // a watch relays someone else's review; it has no verdict to post
 	}
 	if fp.Transports != nil {
 		p.Transports = slices.Clone(*fp.Transports)
@@ -388,6 +397,7 @@ func reviewProvidersFile(ps []ReviewProvider) []fileReviewProvider {
 			Model:          &p.Model,
 			Author:         &p.Author,
 			GitHubInline:   &p.GitHubInline,
+			GitHubStatus:   &p.GitHubStatus,
 			Notify:         &p.Notify,
 			SendToAgent:    &p.SendToAgent,
 			Visible:        &p.Visible,

@@ -1,13 +1,15 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,8 +18,10 @@ import (
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/panebus"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/remote"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/sshstore"
 )
 
 // TestPaneAuxParentNamesTheParentSession pins the one piece of vocabulary the
@@ -260,12 +264,12 @@ func (p stubMDNS) Wait() error {
 
 // newLoggingRemoteDaemon is newRemoteTestDaemon with the daemon log captured,
 // for the tests whose subject is what an operator is told.
-func newLoggingRemoteDaemon(t *testing.T) (*Daemon, *bytes.Buffer) {
+func newLoggingRemoteDaemon(t *testing.T) (*Daemon, *syncBuf) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
-	var buf bytes.Buffer
-	return newDaemon(remoteTestConfig(), &linear.Fake{}, log.New(&buf, "", 0), home), &buf
+	buf := &syncBuf{}
+	return newDaemon(remoteTestConfig(), &linear.Fake{}, log.New(buf, "", 0), home), buf
 }
 
 // freePort asks the kernel for a port and gives it straight back. The window
@@ -357,5 +361,303 @@ func TestResyncCarriesWhetherTheCursorIsHidden(t *testing.T) {
 				t.Fatalf("the adapter dropped cursor visibility: got %v, want %v", got.CursorVisible, tc.visible)
 			}
 		})
+	}
+}
+
+// TestNewDaemonHasRegistryAndPairer pins that both exist straight out of
+// newDaemon, before Run: every test daemon, startRemote and d.handle meet them
+// non-nil, and a started listener authenticates against THIS registry.
+func TestNewDaemonHasRegistryAndPairer(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	if d.devices == nil || d.pairer == nil || d.watch == nil {
+		t.Fatalf("newDaemon left devices=%v pairer=%v watch=%v", d.devices, d.pairer, d.watch)
+	}
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
+	d.paneRegistry = func() *panebus.Registry { return panebus.NewFake().Registry() }
+	d.startRemote(context.Background())
+	t.Cleanup(d.stopRemote)
+	if d.remote == nil {
+		t.Fatalf("no listener without Run: %s", d.remoteErr)
+	}
+}
+
+// TestRegistryChangeNudgesTheRelay pins the subscription newDaemon makes: a
+// registry change reaches devicesChanged (spec 03 hangs the relay's rendezvous
+// set on it).
+func TestRegistryChangeNudgesTheRelay(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	fired := make(chan struct{}, 4)
+	d.devices.Subscribe(func() { fired <- struct{}{} })
+	addPairedPhone(t, d, nil)
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a registry change notified no subscriber")
+	}
+}
+
+// TestHandleRemoteRefusesLocalOnly is the defence behind the tier gate: a
+// local-only or unclassified command that reaches handleRemote anyway is
+// refused, logged, and never routed to d.handle.
+func TestHandleRemoteRefusesLocalOnly(t *testing.T) {
+	d, logBuf := newLoggingRemoteDaemon(t)
+	cmds := append([]string{"stop", "reload", "hookEvent", "no-such-command", ""}, protocol.LocalOnlyCommands...)
+	for _, cmd := range cmds {
+		resp := d.handleRemote(context.Background(), protocol.Request{Cmd: cmd})
+		if resp.OK || resp.Error != "not available remotely" {
+			t.Errorf("handleRemote(%q) = %+v, want the fixed refusal", cmd, resp)
+		}
+	}
+	if !strings.Contains(logBuf.String(), "tier gate bypassed") {
+		t.Errorf("the refusal left no log line: %q", logBuf.String())
+	}
+}
+
+// TestPairCommandsNotOnBridge: the sandbox hook bridge admits only the two
+// agent callbacks, so no pairing or device command can be reached from inside
+// a sandbox.
+func TestPairCommandsNotOnBridge(t *testing.T) {
+	for _, cmd := range protocol.LocalOnlyCommands {
+		if hookBridgeCmds[cmd] {
+			t.Errorf("%s must not be on the sandbox hook bridge", cmd)
+		}
+	}
+}
+
+// answerElement posts a question element into session s1 and returns its id,
+// optionally scoped to an SSH connection.
+func answerElement(t *testing.T, r *sshRig, conn string) string {
+	t.Helper()
+	q, err := r.d.handleSSHAgentPost("s1", protocol.SSHAgentPostArgs{Argv: []string{"question", "--ref", "q", "Restart?"}})
+	if err != nil {
+		t.Fatalf("question: %v", err)
+	}
+	if conn != "" {
+		store, err := r.d.sshStore("s1", false)
+		if err != nil || store == nil {
+			t.Fatalf("store: %v", err)
+		}
+		if err := store.Update(func(st *sshstore.State) error {
+			st.Item(q.ID).Element.Conn = conn
+			return nil
+		}); err != nil {
+			t.Fatalf("scope: %v", err)
+		}
+	}
+	return q.ID
+}
+
+func sshAnswerReq(t *testing.T, element string) protocol.Request {
+	t.Helper()
+	raw, err := json.Marshal(protocol.SSHAnswerArgs{Session: "s1", Element: element, Revision: 1, Text: "yes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return protocol.Request{Cmd: protocol.CmdSSHAnswer, Session: "s1", Args: raw}
+}
+
+// TestHandleRemoteRefusesSSHScopedAnswer: a phone may answer an agent's plain
+// question, but a question scoped to an SSH connection is an SSH human act and
+// stays on the Mac. Anything unreadable refuses too.
+func TestHandleRemoteRefusesSSHScopedAnswer(t *testing.T) {
+	r := newSSHRig(t, hostDev)
+	r.session("s1", "")
+	plain := answerElement(t, r, "")
+
+	if resp := r.d.handleRemote(context.Background(), sshAnswerReq(t, plain)); !resp.OK {
+		t.Fatalf("a plain question must be answerable from a phone: %s", resp.Error)
+	}
+
+	r2 := newSSHRig(t, hostDev)
+	r2.session("s1", "")
+	scoped := answerElement(t, r2, "c1")
+	resp := r2.d.handleRemote(context.Background(), sshAnswerReq(t, scoped))
+	if resp.OK || !strings.Contains(resp.Error, "answer it on the Mac") {
+		t.Fatalf("an ssh-scoped question was answered from a phone: %+v", resp)
+	}
+
+	for name, req := range map[string]protocol.Request{
+		"unknown element": sshAnswerReq(t, "nope"),
+		"bad args":        {Cmd: protocol.CmdSSHAnswer, Args: json.RawMessage(`{`)},
+		"no session":      {Cmd: protocol.CmdSSHAnswer, Args: json.RawMessage(`{"element":"x"}`)},
+	} {
+		if r.d.remoteMayAnswer(req) {
+			t.Errorf("%s: remoteMayAnswer = true, want false", name)
+		}
+	}
+}
+
+// TestRemoteAnswerScopeIsCheckedUnderTheRevisionPin: handleRemote's early read
+// and the handler's update are two reads, and an agent update may scope a
+// question to an SSH connection between them. The handler therefore refuses a
+// phone's answer to a scoped question itself, inside the update that pins the
+// revision, and the early read refuses a revision it did not see.
+func TestRemoteAnswerScopeIsCheckedUnderTheRevisionPin(t *testing.T) {
+	r := newSSHRig(t, hostDev)
+	r.session("s1", "")
+	el := answerElement(t, r, "")
+
+	// The early read only admits the revision it saw.
+	stale := sshAnswerReq(t, el)
+	raw, _ := json.Marshal(protocol.SSHAnswerArgs{Session: "s1", Element: el, Revision: 2, Text: "yes"})
+	stale.Args = raw
+	if r.d.remoteMayAnswer(stale) {
+		t.Fatal("remoteMayAnswer admitted a revision the element is not at")
+	}
+
+	// The element is scoped after the early read: the handler refuses a phone...
+	store, err := r.d.sshStore("s1", false)
+	if err != nil || store == nil {
+		t.Fatalf("store: %v", err)
+	}
+	if err := store.Update(func(st *sshstore.State) error {
+		st.Item(el).Element.Conn = "c1"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a := protocol.SSHAnswerArgs{Session: "s1", Element: el, Revision: 1, Text: "yes"}
+	remoteCtx := context.WithValue(context.Background(), remoteCallKey{}, true)
+	if _, err := r.d.handleSSHAnswer(remoteCtx, a); !errors.Is(err, errSSHAnswerOnMac) {
+		t.Fatalf("phone answered a scoped question: err = %v", err)
+	}
+	// ...and still takes the desktop's answer.
+	if _, err := r.d.handleSSHAnswer(context.Background(), a); err != nil {
+		t.Fatalf("desktop answer refused: %v", err)
+	}
+}
+
+// TestRemoteRecallTakesBackQueuedMessage: sshRecall is an answer-tier command
+// that goes through handleRemote to the same handler the desktop uses.
+func TestRemoteRecallTakesBackQueuedMessage(t *testing.T) {
+	r := newSSHRig(t, hostDev)
+	r.session("s1", "")
+	say, err := r.d.handleSSHSay(context.Background(), protocol.SSHSayArgs{Session: "s1", Text: "never mind"})
+	if err != nil || say.Item == "" {
+		t.Fatalf("say: %+v %v", say, err)
+	}
+	if got := remote.TierFor(protocol.CmdSSHRecall); got != protocol.TierAnswer {
+		t.Fatalf("sshRecall tier = %q, want answer", got)
+	}
+	raw, _ := json.Marshal(protocol.SSHRecallArgs{Session: "s1", Item: say.Item})
+	resp := r.d.handleRemote(context.Background(), protocol.Request{Cmd: protocol.CmdSSHRecall, Session: "s1", Args: raw})
+	if !resp.OK {
+		t.Fatalf("recall from a phone: %s", resp.Error)
+	}
+	var out protocol.SSHRecallData
+	if err := json.Unmarshal(resp.Data, &out); err != nil || !out.Recalled {
+		t.Fatalf("recall reply = %s, %v", resp.Data, err)
+	}
+	if s, _ := r.d.sessions.Get("s1"); strings.Contains(s.PendingSSH, "never mind") {
+		t.Errorf("the recalled words are still pending: %q", s.PendingSSH)
+	}
+}
+
+// TestRevokeUnsavedStopsListener: a revocation the registry could persist
+// nowhere would be forgotten by a restart, so the server stops (and says why)
+// until a later save succeeds, and then comes back by itself.
+func TestRevokeUnsavedStopsListener(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	d := newRemoteTestDaemon(t)
+	d.shutdownCtx = context.Background()
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
+	d.paneRegistry = func() *panebus.Registry { return panebus.NewFake().Registry() }
+	phone := addPairedPhone(t, d, nil)
+
+	d.startRemote(context.Background())
+	t.Cleanup(d.stopRemote)
+	if d.remote == nil {
+		t.Fatalf("no listener: %s", d.remoteErr)
+	}
+
+	// Neither devices.json nor its journal can be written in a read-only home.
+	if err := os.Chmod(d.home, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(d.home, 0o700) })
+	if _, err := d.devices.Revoke(phone.dev.ID); err == nil || d.devices.Unsaved() == nil {
+		t.Fatalf("Revoke err=%v unsaved=%v, want an unsaved revocation", err, d.devices.Unsaved())
+	}
+	d.dropRemoteDevice(phone.dev.ID)
+
+	if d.remote != nil {
+		t.Fatal("the listener kept running with a revocation that lives only in memory")
+	}
+	if !strings.Contains(d.remoteErr, "revoked") {
+		t.Errorf("remoteErr = %q, want the registry's reason", d.remoteErr)
+	}
+	d.startRemote(context.Background())
+	if d.remote != nil {
+		t.Fatal("startRemote must refuse while the registry has an unsaved revocation")
+	}
+
+	// A later save clears it, and the observe cycle brings the server back.
+	if err := os.Chmod(d.home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	addPairedPhone(t, d, nil)
+	if d.devices.Unsaved() != nil {
+		t.Fatal("a good save must clear Unsaved")
+	}
+	d.reconcileRemoteBind()
+	if d.remote == nil {
+		t.Fatalf("the server did not come back: %s", d.remoteErr)
+	}
+}
+
+// TestReloadIdenticalRemoteDoesNotRebind: a reload that changes nothing about
+// [remote] (and not whether a server should exist) must keep the live listener
+// and its connections.
+func TestReloadIdenticalRemoteDoesNotRebind(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LOLA_HOME", home)
+	cfgPath, err := config.DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := freePort(t)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(strings.Join([]string{
+		"[defaults]", `poll_interval = "1m"`, "concurrency_cap = 10", "global_cap = 10", "",
+		"[remote]", "enabled = true", `bind = "localhost"`, "port = " + strconv.Itoa(port), "",
+	}, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	d := newDaemon(cfg, &linear.Fake{}, log.New(io.Discard, "", 0), home)
+	d.shutdownCtx = context.Background()
+	d.mdnsStart = func(ctx context.Context, _ string, _ []string) (mdns.Process, error) { return stubMDNS{ctx: ctx}, nil }
+	d.paneRegistry = func() *panebus.Registry { return panebus.NewFake().Registry() }
+	d.startRemote(context.Background())
+	t.Cleanup(d.stopRemote)
+	if d.remote == nil {
+		t.Fatalf("no listener: %s", d.remoteErr)
+	}
+	before := d.remote
+
+	if err := d.handleReload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if d.remote != before {
+		t.Error("an unchanged [remote] table must not rebuild the listener")
+	}
+
+	// A changed table does.
+	cfg.Remote.Port = freePort(t)
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := d.handleReload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if d.remote == before || d.remote == nil {
+		t.Error("a changed [remote] table must rebuild the listener")
 	}
 }

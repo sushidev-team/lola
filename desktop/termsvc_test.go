@@ -408,3 +408,73 @@ func TestWriteWaitsForAnInFlightScroll(t *testing.T) {
 		t.Errorf("the keystroke must leave copy mode AFTER the scroll entered it:\n%s", log)
 	}
 }
+
+// fakeStream is a live-looking ptyStream with no process behind it: an os.Pipe
+// stands in for the PTY so closeStream has a real file to close.
+func fakeStream(t *testing.T) (*ptyStream, *bool) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	cancelled := false
+	return &ptyStream{f: r, cancel: func() { cancelled = true }}, &cancelled
+}
+
+// TestDetachAllClosesEveryStream pins the reload-leak fix: streams left behind
+// by a previous page (nobody looking at them) all go, so no orphaned tmux
+// client keeps the daemon's "a human is at this terminal" gate shut.
+func TestDetachAllClosesEveryStream(t *testing.T) {
+	a, aCancelled := fakeStream(t)
+	b, bCancelled := fakeStream(t)
+	svc := &TermService{streams: map[string]*ptyStream{"lola-x-1": a, "lola-x-2": b}}
+
+	svc.DetachAll()
+
+	if len(svc.streams) != 0 {
+		t.Errorf("streams left: %v", svc.streams)
+	}
+	for name, s := range map[string]*ptyStream{"lola-x-1": a, "lola-x-2": b} {
+		if !s.closed || !s.detached {
+			t.Errorf("%s: closed=%v detached=%v, want both", name, s.closed, s.detached)
+		}
+	}
+	if !*aCancelled || !*bCancelled {
+		t.Error("every stream's tmux client must be cancelled")
+	}
+	svc.DetachAll() // idempotent on an empty registry
+}
+
+// An ssh tab is mounted only inside the SSH workspace, so it must never join the
+// strip, even for a session whose own id ends in "-shell-1".
+func TestShellsLeavesOutSSHTabs(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\nprintf 'lola-x\\nlola-x-shell-1\\nlola-x-ssh-1\\nlola-x-shell-ssh-2\\nlola-x-review\\n'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	got := strings.Join(svc.Shells("lola-x"), ",")
+	if got != "lola-x-shell-1,lola-x-review" {
+		t.Fatalf("Shells = %q", got)
+	}
+}
+
+// Closing an ssh tab is the daemon's job, because it also has to stop the master.
+// Killing the tab alone would leave an authenticated connection up behind a UI that
+// says it is gone.
+func TestCloseShellRefusesAnSSHTab(t *testing.T) {
+	bin, logPath := fakeTmux(t, true)
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	if err := svc.CloseShell("lola-x-ssh-1"); err == nil {
+		t.Fatal("an ssh tab must not close through CloseShell")
+	}
+	if err := svc.CloseShell("lola-x-shell-ssh-1"); err == nil {
+		t.Fatal("the shell marker must not smuggle an ssh tab past the guard")
+	}
+	if strings.Contains(tmuxLog(t, logPath), "kill-session") {
+		t.Fatalf("killed a session: %s", tmuxLog(t, logPath))
+	}
+}

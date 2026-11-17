@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -52,6 +53,7 @@ type fakeNative struct {
 	prAgentErr     error // returned from OpenPRAgent
 	manualAgents   []nativeAgentCall
 	manualAgentErr error // returned from OpenManualAgent
+	existingCalls  []nativeExistingCall
 	forks          []runtime.ForkSpec
 	forkErr        error           // returned from ForkAgent
 	takenBranches  map[string]bool // SlotTaken answers true for these branches
@@ -68,6 +70,24 @@ type nativeOpenCall struct{ project, id, ref, branch string }
 type nativeOpenManualCall struct{ project, id, branch, base string }
 
 type nativeAgentCall struct{ project, id, branch, base, prompt string }
+
+type nativeExistingCall struct {
+	project, id, branch, prompt, agentKind string
+	useAgent                               bool
+}
+
+func (f *fakeNative) OpenExisting(ctx context.Context, p config.Project, id, branch, prompt, agentKind string, useAgent bool) (session.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.existingCalls = append(f.existingCalls, nativeExistingCall{p.Name, id, branch, prompt, agentKind, useAgent})
+	s := session.Session{ID: id, Source: "native", Kind: session.KindPR, Project: p.Name, Branch: branch, Agentless: !useAgent, Agent: agentKind}
+	if useAgent {
+		s.SetAgentState(state.AgentStarting, "", time.Now())
+	} else {
+		s.SetAgentState(state.AgentShell, "", time.Now())
+	}
+	return s, nil
+}
 
 type nativeKillCall struct {
 	id             string
@@ -1237,5 +1257,55 @@ func TestTickFlipRecordsStrippedSubset(t *testing.T) {
 	}
 	if want := []string{"lbl-a"}; !reflect.DeepEqual(sess.RemovedLabels, want) {
 		t.Errorf("session RemovedLabels = %v, want %v", sess.RemovedLabels, want)
+	}
+}
+
+func (f *fakeNative) OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool) (session.Session, error) {
+	return session.Session{ID: id, Project: p.Name, Worktree: dir, Location: location, Agent: kind, Agentless: !useAgent, Kind: session.KindLocal, Source: "native", TmuxName: id}, nil
+}
+
+func TestAdoptPreservesSharedTasksAndReportedPlan(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	prev := nativeSess("FE-1", "working")
+	prev.Tasks = []protocol.SessionTask{{ID: "work", Kind: "task", Text: "Implement", State: "doing", Author: "user"}, {ID: "criterion", ParentID: "work", Kind: "requirement", Text: "Keep focus", State: "todo", Author: "agent"}}
+	prev.Board.Phase = board.PhaseTesting
+	d.sessions.Upsert(prev)
+	d.native = &fakeNative{adopted: []session.Session{{ID: prev.ID, Source: "native", Project: "p1", Status: "working"}}}
+	d.adoptNativeSessions(context.Background())
+	// Load the saved snapshot as another daemon would, not just the in-memory copy.
+	loaded := session.NewStore(filepath.Join(d.home, "state"))
+	got, ok := loaded.Get(prev.ID)
+	if !ok || !reflect.DeepEqual(got.Tasks, prev.Tasks) || !reflect.DeepEqual(got.Board, prev.Board) {
+		t.Fatalf("adoption lost tasks/plan: %+v", got)
+	}
+}
+
+// Hub chores are named like `lola open` shells, so the scan guesses
+// "agent-less shell" from the ID. The record knows an agent runs: it wins, and
+// a record an earlier adoption already marked agent-less is repaired.
+func TestAdoptKeepsAgentSessionsNamedLikeShells(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	id := "lola-p1-open-hub-ghsa-1"
+	prev := session.Session{ID: id, Source: "native", Kind: session.KindManual, Project: "p1", Agent: "claude", Agentless: true, Manual: true, TmuxName: id}
+	prev.SetAgentState(state.AgentShell, "", time.Now())
+	d.sessions.Upsert(prev)
+	shell := session.Session{ID: "lola-p1-open-scratch", Source: "native", Kind: session.KindManual, Project: "p1", Agentless: true, TmuxName: "lola-p1-open-scratch"}
+	shell.SetAgentState(state.AgentShell, "", time.Now())
+	d.sessions.Upsert(shell)
+
+	scanned := func(id string) session.Session {
+		s := session.Session{ID: id, Source: "native", Project: "p1", Manual: true, Agentless: true, TmuxName: id}
+		s.SetAgentState(state.AgentShell, "", time.Now())
+		return s
+	}
+	d.native = &fakeNative{adopted: []session.Session{scanned(id), scanned(shell.ID)}}
+	d.adoptNativeSessions(context.Background())
+
+	got := findSession(t, d.sessions.Snapshot(), id)
+	if got.IsAgentless() || got.AgentState != state.AgentWorking || got.Agent != "claude" {
+		t.Fatalf("agent session adopted as %+v", got)
+	}
+	if s := findSession(t, d.sessions.Snapshot(), shell.ID); !s.IsAgentless() || s.AgentState != state.AgentShell {
+		t.Fatalf("real shell adopted as %+v", s)
 	}
 }

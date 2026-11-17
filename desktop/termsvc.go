@@ -20,6 +20,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
 
@@ -189,8 +190,13 @@ func (t *TermService) Shell(shell, worktree string) (string, error) {
 	// bare login shell would silently lack [[project]].env. No per-session
 	// set-option: the shell inherits the same server defaults (mouse, etc.) the
 	// agent panes use, so both tabs scroll identically.
+	home, err := config.Home()
+	if err != nil {
+		return "", err
+	}
+	command := lolaenv.SessionShellCommand(home, strings.Split(shell, shellMarker)[0])
 	if out, err := exec.CommandContext(ctx, bin, "-L", "lola", "new-session", "-d",
-		"-s", shell, "-c", worktree, lolaenv.ShellCommand).CombinedOutput(); err != nil {
+		"-s", shell, "-c", worktree, command).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("new shell %s: %w: %s", shell, err, out)
 	}
 	if coldServer {
@@ -254,6 +260,12 @@ func (t *TermService) Shells(sessionID string) []string {
 	var names, devs []string
 	var reviewPane string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// An ssh tab is mounted ONLY inside the SSH workspace, and never joins the
+		// strip: one tmux session with two xterm clients would fight over its size.
+		// Checked first, because a session id may itself end in "-shell-1".
+		if sshtab.Is(line) {
+			continue
+		}
 		if strings.HasPrefix(line, prefix) {
 			names = append(names, line)
 			continue
@@ -313,6 +325,12 @@ func (t *TermService) CloseShell(shell string) error {
 	if !strings.Contains(shell, shellMarker) && !strings.HasSuffix(shell, reviewMarker) && !devtab.Is(shell) {
 		return fmt.Errorf("not a shell session name: %q", shell)
 	}
+	// An ssh tab is the daemon's: closing a connection also has to stop its master
+	// with ssh -O exit, and killing the tab alone would leave an authenticated
+	// connection up behind a UI that says it is gone.
+	if sshtab.Is(shell) {
+		return fmt.Errorf("an ssh tab closes with its connection: %q", shell)
+	}
 	_ = t.Detach(shell)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -352,7 +370,8 @@ type ptyStream struct {
 // Attach starts an interactive `tmux attach` to the named session in a PTY sized
 // cols×rows and streams its output to the frontend as base64 chunks on the event
 // `pty:<name>`, coalesced to one emit per ~16ms so a chatty agent can't saturate
-// the webview. Re-attaching an already-live stream tears the old one down first.
+// the webview. Attaching is exclusive: every other live stream (and an older one
+// for this name) is torn down first.
 // Returns the stream ID (the session name) the frontend uses for Write/Resize/
 // Detach and the event subscription.
 func (t *TermService) Attach(name string, cols, rows int) (string, error) {
@@ -366,7 +385,14 @@ func (t *TermService) Attach(name string, cols, rows int) (string, error) {
 	if t.app == nil {
 		return "", errors.New("terminal service not wired to app")
 	}
-	_ = t.Detach(name) // idempotent re-attach
+	// The app shows ONE live terminal at a time, so attaching is EXCLUSIVE:
+	// every other stream is detached first, along with any older stream for
+	// this name (idempotent re-attach). That is what stops the leak, not
+	// bookkeeping. A tmux client the app forgot (a web-view reload never runs
+	// LiveTerminal's onDestroy) still counts as "a human is at this terminal",
+	// so the daemon's automation gate (internal/daemon/autoprompt.go) defers
+	// conflict fixes and review hand-offs for that session forever.
+	t.DetachAll()
 
 	if cols <= 0 {
 		cols = 80
@@ -582,6 +608,24 @@ func (t *TermService) Detach(name string) error {
 	s.scrollMu.Unlock()
 	t.closeStream(s)
 	return nil
+}
+
+// DetachAll closes every live PTY stream. The frontend calls it once on boot:
+// a page load starts with no LiveTerminal mounted, so any stream still open was
+// left behind by the previous page (a reload or a dev-server HMR never runs
+// onDestroy) and is holding a tmux client nobody is looking at. Without it those
+// orphans would last until the next Attach, and the daemon defers every
+// automatic prompt to a session with a client attached.
+func (t *TermService) DetachAll() {
+	t.mu.Lock()
+	names := make([]string, 0, len(t.streams))
+	for n := range t.streams {
+		names = append(names, n)
+	}
+	t.mu.Unlock()
+	for _, n := range names {
+		_ = t.Detach(n)
+	}
 }
 
 // endStream is the read-loop's teardown path (PTY EOF/error): drop the registry

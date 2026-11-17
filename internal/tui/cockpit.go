@@ -225,12 +225,13 @@ func (m *rootModel) helpModal() string {
 		row("a", "answer input"),
 		row("f", "diff · comment, send to agent"),
 		row("A", "switch agent"),
-		row("x", "kill session"),
+		row("x", "kill session (s at prompt: stop, keep worktree)"),
 		row("o", "open PR"),
 		row("c", "coderabbit now"),
 		row("R", "revive dead"),
 		row("O", "open branch/PR"),
 		row("n / N", "next / prev input"),
+		row("H", "ssh workspace · new ssh session"),
 	}
 	right := []string{
 		head("Projects & polls"),
@@ -527,6 +528,15 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 			rows[i] = insAt(rows[i], 4, dash(boardChip(si)))
 		}
 	}
+	// SSH — the session's agent-assisted connection — only when one is live, so a
+	// fleet with no hosts keeps every column it had. Beside STATUS: it is a third
+	// axis, and it never moves the agent pill or the PR chip.
+	if anySSHChip(list) {
+		headers = insAt(headers, 4, "SSH")
+		for i, si := range list {
+			rows[i] = insAt(rows[i], 4, dash(sshChip(si)))
+		}
+	}
 	// TOKENS — the session's usage, size glyph and burn flame — before AGE,
 	// only when some listed session has a figure (codex/opencode-only fleets
 	// keep their columns).
@@ -624,6 +634,8 @@ func (m *rootModel) embedTabBar(w int) string {
 			parts = append(parts, tab(devTabLabel(sel, name), i+1))
 		case strings.HasSuffix(name, "-review"):
 			parts = append(parts, tab("rev", i+1))
+		case sshIsTab(sel.ID, name):
+			parts = append(parts, tab(sshTabLabel(sel.ID, name), i+1))
 		default:
 			shellNo++
 			parts = append(parts, tab(fmt.Sprintf("sh%d", shellNo), i+1))
@@ -872,6 +884,9 @@ func (m *rootModel) vitalsBar(w int) string {
 // confirmation, a flash, or the daemon-down banner.
 func (m *rootModel) cockpitMessage() string {
 	s := &m.sessions
+	if drive := m.sshDrivingMessage(); drive != "" {
+		return drive
+	}
 	switch {
 	case s.confirmKill:
 		label := s.killTarget
@@ -883,7 +898,12 @@ func (m *rootModel) cockpitMessage() string {
 				}
 			}
 		}
-		return warnText.Render(fmt.Sprintf("kill %s? removes worktree, stops agent (y/n)", label))
+		// A direct ssh session has no worktree worth naming, but it does leave a record.
+		if si := s.byID(s.killTarget); si != nil && si.Location == "ssh" {
+			return warnText.Render(fmt.Sprintf("end %s? y ends it (y/n)", label)) +
+				faintText.Render(" The command record stays on disk for 14 days in ~/.lola/state/ssh/.")
+		}
+		return warnText.Render(fmt.Sprintf("kill %s? y stops agent + removes worktree · s stops agent, keeps worktree (y/s/n)", label))
 	case s.confirmFreePort:
 		return warnText.Render(fmt.Sprintf(
 			"kill the process holding :%d (pid %d) and restart the dev processes? (y/n)", s.freePort, s.freePID))
@@ -949,7 +969,7 @@ func (m *rootModel) keybar(w int) string {
 	case s.answering:
 		return previewLine(faintText.Render("enter send · esc cancel"), w)
 	case s.confirmKill:
-		return previewLine(warnText.Render("y")+faintText.Render(" kill · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
+		return previewLine(warnText.Render("y")+faintText.Render(" kill · ")+warnText.Render("s")+faintText.Render(" stop, keep worktree · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case s.confirmFreePort:
 		return previewLine(warnText.Render("y")+faintText.Render(" free port · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case s.switching:
@@ -972,6 +992,11 @@ func (m *rootModel) keybar(w int) string {
 			// (answerable) — the affordance and the gate must not disagree.
 			if answerable(*sel) {
 				keys = append(keys, "a answer")
+			}
+			if cell := sshKeybarCell(sel); cell != "" {
+				keys = append(keys, cell)
+			} else if m.cfg != nil && len(m.cfg.SSHHosts) > 0 {
+				keys = append(keys, "H new ssh")
 			}
 			if sel.Worktree != "" {
 				if len(m.shellNames[sel.ID]) > 0 {

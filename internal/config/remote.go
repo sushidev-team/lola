@@ -20,15 +20,10 @@ import (
 // is a property of the machine, not of a project, so there is nothing for a
 // project to override.
 //
-// Validation here is BUILD-TAG INDEPENDENT and offline, and both halves of that
-// are load-bearing. Offline, because a hostname cannot be resolved at load time
+// Validation here is offline: a hostname cannot be resolved at load time
 // without turning a config read into a network call, so `bind` is either one of
 // the four keywords or an IP literal and anything else is an error rather than a
-// lookup. Build-tag independent, because the TUI and the desktop app are built
-// WITHOUT the lola_insecure tag and must not reject a config the daemon accepts:
-// the M1 restriction — the listener exists only in a lola_insecure build, and
-// that build forces the bind to localhost whatever this table says — is enforced
-// at RUNTIME in internal/remote, which logs the override, not here.
+// lookup.
 //
 // Keys this table deliberately does NOT have yet: [remote.push] (APNs) belongs
 // to a later milestone, and this repo rejects keys that quietly do nothing —
@@ -58,9 +53,9 @@ const (
 // symmetric.
 //
 //	off        bind nothing — keep the port and the rest of the table, listen
-//	           on no interface. Distinct from enabled = false only in intent,
-//	           and kept because "stop listening, do not lose my settings" is a
-//	           thing operators do.
+//	           on no interface. Does not stop the hub relay; `relay = false`
+//	           or `enabled = false` does. Kept because "stop listening, do
+//	           not lose my settings" is a thing operators do.
 //	localhost  loopback only.
 //	lan        only private interfaces (RFC1918 / ULA / link-local) whose names
 //	           are not tunnels or virtual bridges. On a laptop that means every
@@ -81,30 +76,12 @@ type RemoteConfig struct {
 	Bind    string `toml:"bind"`
 	Port    int    `toml:"port"`
 
-	// InsecureLAN lets a milestone-1 daemon honour a non-loopback Bind instead
-	// of forcing loopback. It exists so a PHYSICAL phone can reach the daemon:
-	// a Simulator shares the Mac's loopback and never needs it, but a real
-	// device cannot reach 127.0.0.1 on another machine.
-	//
-	// It is a CONFIG KEY rather than an environment variable, and that was a
-	// correction. The first version read LOLA_REMOTE_INSECURE_LAN, reasoning
-	// that the permission should not persist — but the daemon is normally
-	// started by the TUI's ^r or the desktop app's restart button, and neither
-	// can set an environment variable. So the opt-in was lost on every restart
-	// and the listener silently dropped back to loopback, which presents as a
-	// phone that connected yesterday and cannot today. A permission nobody can
-	// grant through the UI that runs the daemon is not a safe default, it is an
-	// unusable one.
-	//
-	// What actually contains this is the BUILD TAG: none of the insecure path
-	// exists in a release binary, so the key is inert there. Within a
-	// lola_insecure build it still takes TWO deliberate keys — this one AND a
-	// Bind naming something other than loopback — so a config that merely says
-	// bind = "lan" still binds loopback.
-	//
-	// It is deleted with the rest of the tag. M2's per-device identities and
-	// mutual TLS make binding to a LAN an ordinary thing needing no opt-in.
-	InsecureLAN bool `toml:"insecure_lan"`
+	// RelayOff keeps the daemon LAN/VPN only. The zero value means relay on
+	// (the key `relay` is absent or true), so the resolved struct stays
+	// pointer-free: reload compares RemoteConfig values and remoteFile tests
+	// for the zero value, and a pointer would make every reload a change.
+	// Effective only with enabled = true and a joined hub (see RelayOn, Serves).
+	RelayOff bool `toml:"-"`
 
 	// Advertise publishes the listener on the local network with mDNS
 	// (internal/mdns), so a paired phone finds this Mac on a network whose
@@ -168,6 +145,19 @@ func (r RemoteConfig) Listens() bool {
 	return r.Enabled && r.BindMode() != "off"
 }
 
+// RelayOn reports whether the hub relay may carry phone connections: the
+// feature is enabled and relay was not switched off. It does not know whether a
+// hub is joined; Serves adds that.
+func (r RemoteConfig) RelayOn() bool { return r.Enabled && !r.RelayOff }
+
+// Serves reports whether a remote.Server should exist: a socket to bind, or a
+// relay to serve. Listens keeps its meaning (a socket is bound), so
+// `bind = "off"` stops listening on every interface but does not by itself
+// stop the relay.
+func (r RemoteConfig) Serves(hubJoined bool) bool {
+	return r.Listens() || (r.RelayOn() && hubJoined)
+}
+
 // --- on-disk mirror --------------------------------------------------------
 //
 // Pointer-per-field (the [brain] / [statusagent] pattern) so Load can tell an
@@ -178,12 +168,12 @@ func (r RemoteConfig) Listens() bool {
 // so Save never grows a [remote] block on a config that never mentioned it.
 
 type fileRemoteConfig struct {
-	Enabled     *bool   `toml:"enabled,omitempty"`
-	Bind        *string `toml:"bind,omitempty"`
-	Port        *int    `toml:"port,omitempty"`
-	InsecureLAN *bool   `toml:"insecure_lan,omitempty"`
-	Advertise   *bool   `toml:"advertise,omitempty"`
-	DevForward  *bool   `toml:"dev_forward,omitempty"`
+	Enabled    *bool   `toml:"enabled,omitempty"`
+	Bind       *string `toml:"bind,omitempty"`
+	Port       *int    `toml:"port,omitempty"`
+	Relay      *bool   `toml:"relay,omitempty"`
+	Advertise  *bool   `toml:"advertise,omitempty"`
+	DevForward *bool   `toml:"dev_forward,omitempty"`
 }
 
 // resolveRemote materializes the [remote] table. A nil (absent) mirror yields
@@ -208,9 +198,7 @@ func resolveRemote(fr *fileRemoteConfig) RemoteConfig {
 	if fr.Port != nil {
 		r.Port = *fr.Port
 	}
-	if fr.InsecureLAN != nil {
-		r.InsecureLAN = *fr.InsecureLAN
-	}
+	r.RelayOff = fr.Relay != nil && !*fr.Relay
 	if fr.Advertise != nil {
 		r.Advertise = *fr.Advertise
 	}
@@ -228,13 +216,14 @@ func remoteFile(r RemoteConfig) *fileRemoteConfig {
 	if r == (RemoteConfig{}) {
 		return nil
 	}
+	relay := !r.RelayOff
 	return &fileRemoteConfig{
-		Enabled:     &r.Enabled,
-		Bind:        &r.Bind,
-		Port:        &r.Port,
-		InsecureLAN: &r.InsecureLAN,
-		Advertise:   &r.Advertise,
-		DevForward:  &r.DevForward,
+		Enabled:    &r.Enabled,
+		Bind:       &r.Bind,
+		Port:       &r.Port,
+		Relay:      &relay,
+		Advertise:  &r.Advertise,
+		DevForward: &r.DevForward,
 	}
 }
 
@@ -246,11 +235,8 @@ func remoteFile(r RemoteConfig) *fileRemoteConfig {
 // documented "keep my port, stop listening" state, and rejecting it would force
 // an operator to delete settings in order to pause the feature.
 //
-// It does NOT treat `lan` or `all` as errors, under any build. Whether the
-// insecure M1 path is compiled in is a property of the BINARY, and the TUI and
-// the desktop app are built without that tag; a rule that depended on it would
-// have those two surfaces reject a config the daemon happily runs. The forcing
-// belongs to the listener, which knows which build it is.
+// It does NOT treat `lan` or `all` as errors: pairing and mutual TLS make a
+// LAN bind an ordinary setting that needs no opt-in.
 func (c *Config) validateRemote() []error {
 	var errs []error
 	r := c.Remote

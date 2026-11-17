@@ -129,10 +129,14 @@ protocol-version mismatch.
 
 | Command | Description |
 | --- | --- |
-| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[linear]` API key/`[defaults]`/`[notify]`/`[brain]`/`[statusagent]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
-| `lola setup` | Run the first-run configuration wizard (Linear key → Keychain, one `[[project]]`, defaults) and write `config.toml`. Re-runnable any time. |
+| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[linear]` API key/`[defaults]`/`[notify]`/`[brain]`/`[statusagent]`/`[review]`/`[coderabbit]`/SSH hosts/Team hub `[hub]`/`[remote]`/`[ui]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
+| `lola setup` | Connect Linear (key → Keychain), optionally choose general defaults, and write `config.toml`. Projects are added afterward with **n** in the TUI or **Add project** in the app. Re-running setup preserves existing projects. |
 | `lola doctor` | Print an aligned health report (tmux/git/claude/gh/lola on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. The `lola cli` row is a WARNING, not a critical failure — the daemon running the check is itself lola, and the desktop app falls back to its bundled copy, so a miss costs only the shell. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
+| `lola review-package publish <manifest.json> [--app member]` | From a Lola agent session, retain a Markdown write-up and before/after screenshots for the desktop's full-screen **Review PR** workspace. Packages carry base/head revisions and survive worktree cleanup. No GitHub posting or merge authorization. See [PR review workspace](docs/pr-review-workspace.md). |
+| `lola review-package complete <manifest.json> [--app member]` | Retain final review material and report ordinary-session completion as an agent claim. A stack member does not mark the shared task done. |
+| `lola review-package capture <url> --output <new.png>` | Optional local Playwright capture with URL, viewport and `--selector` context. Uses an installed browser; never overwrites evidence. |
+| `lola review-package list\|mark\|feedback\|verify\|checks\|recover …` | Local human automation with JSON receipts: inspect packages, send contextual feedback, explicitly authorize bounded offline checks of the exact head, and read/recover results. See [usage and boundaries](docs/pr-review-workspace.md#automation-and-completion). |
 | `lola stop` | Graceful shutdown: finish in-flight tick, close socket, exit 0 |
 | `lola status` | Table per polling project (keyed by project name): enabled, last run, last spawn, running, last error — plus `runtimeOk` / `linearOk` health flags |
 | `lola enable <name>` / `lola disable <name>` | Live pause/resume of one polling project's poll, keyed by project name (no restart) |
@@ -151,8 +155,22 @@ protocol-version mismatch.
 | `lola bestof compare <issue\|group\|session> [--json]` | Every attempt of a best-of group side by side: agent/model, state, PR + CI, review findings, diff size, tokens — with a ★ suggestion (a hint, never acted on). |
 | `lola bestof pick <session>` | Keep one attempt: its draft PR is marked ready, every other attempt's PR is closed (branch kept) and its session torn down; a worktree with uncommitted changes is kept. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
+| `lola hub join [url] [--token-file F] [--name N] [--trust-key]` | Enrol this machine with a team [lola hub](#hub-optional-off-by-default). Give it the **invite** your admin sent (`lola-hub:<url>#<token>[#<key_id>:<public key>]`) or a bare one-time token plus the hub's url as the argument, on stdin (prompted without echo on a terminal) or in `--token-file`. There is no argv path for the token: `ps` and shell history would see it. Creates the device key (`~/.lola/state/hub-key`, 0600) if needed, checks that the state and config folders are writable BEFORE the token is spent, enrols, writes `~/.lola/state/hub.json` and sets `[hub].enabled` + `url` on a freshly re-read config. If the hub took the token but saving failed, the error says the token is used. An invite's policy key is shown as its id and a short fingerprint and pinned in `trusted_policy_keys` only after you type `yes` (or pass `--trust-key`). Ends with the readiness list. A running daemon does the enrolment itself and reloads; with none running the CLI does it locally. Joining a different hub is refused until you leave. |
+| `lola hub status [--json]` | Whether this machine is **joined**, **revoked** (the hub stopped accepting its signature) or **not joined**; the device key; the verified team policy; the daemon's hub loop in plain words (last contact, last problem, chores today, which policy keys are locked); and the **readiness list**: joined, projects that take chores (and which lack a repo or the sandbox), docker, the sandbox image, the sandboxed agent's login, `gh` access, a pinned policy key. `--json` prints the same as JSON. |
+| `lola hub leave [--forget-key]` | Release every live lease first (bounded, best effort), then remove the hub identity and stored policy, forget the outbox, cooldowns and every session's open claim (the sessions keep running, unreported), record the hub url and org left (`~/.lola/state/hub-left.json`) and set `[hub].enabled = false`. The device key is kept for a later re-join unless `--forget-key`. Like `join`, it goes through a running daemon (which reloads) and falls back to a local edit when none runs. |
+| `lola hub org [--json]` | The team's machines: who each belongs to (the member label of its invite), when it was last seen, free slots, agents and the policy version it applies. Needs the daemon; cached 60s. |
+| `lola hub stats [--json]` | The team's chore counts per UTC day, newest first: reported, fixed, failed, escalated, and the average time from report to fix. Counts and dates only. Needs the daemon; cached 60s. |
+| `lola hub board [--state S] [--limit N] [--fresh] [--json]` | The team's hub items (open, claimed, done, failed, escalated) with their PR or Linear link, and for each whether THIS machine could claim it and with which project. Needs the daemon; cached 20s. |
+| `lola hub claim <item-id>... [--project P] [--patch] [--minor] [--major] [--note T]` | Claim one item — or several advisories of one repository, for ONE session — now and start its session. `--patch` / `--minor` / `--major` also update the repository's other dependencies by that much; `--note` adds your words for the agent. A person's claim needs no `hub_chores` opt-in and spends no `max_claims_per_day`, but `require_sandbox`, `accept_kinds`, the spend/load hold, the health gate and the GitHub re-read still apply. `--project` picks among several projects on the item's repo. |
+| `lola hub release <item-id>` | Give a claimed item back. A session working it keeps running; lola only stops renewing and reporting it. |
+| `lola hub sync` | Run one hub loop pass now, re-fetching the team policy. |
+| `lola pair [--tiers a,b] [--no-shell] [--name N] [--json]` | Pair a phone. Opens a 5-minute pairing window, prints its QR code, then waits for you to type the 6-digit code the phone shows (an empty line rejects). The daemon never displays the code, so a stranger on the network cannot confirm a pairing for you. `--tiers` picks the [capability tiers](#remote-optional) the phone gets (must include `read`); `--no-shell` withholds `shell`; `--name` overrides the device name the phone sent; `--json` prints one JSON object per event instead (the code line is still read from stdin). Needs the daemon and an enabled `[remote]`. |
+| `lola devices [--json]` | List paired phones: id, name, tiers, last seen and whether one is connected now. `lola devices revoke <id\|name>` revokes one at once and closes its connections; `lola devices tiers <id\|name> <tier,...>` replaces its tiers (the phone reconnects with the new set). |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
+| `lola projects bulk [--project name]… [--agent k] [--match-label l]… [--match-mode m] [--on-sent-label l] [--blocked-label l] [--dry-run]` | Change the same settings on all (or the named) projects in one atomic config save. Label values are ids, names or `group/name`, resolved in **each project's own team** (the same label has a different id per team). Nothing is saved if any project fails to resolve; `--dry-run` previews. `--clear-*` flags set a value to empty. |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
+| `lola post <kind> …` | Agent-facing: publish an item to the session's conversation (`narration`, `widget`, …). Same command as `lola ssh post`, which stays valid. |
+| `lola ssh <verb>` | **Agent-assisted ssh.** A local agent debugs on a remote host with nothing installed there, a human watches a structured timeline, can ask the agent or run commands from one composer, and can take over at any moment. Commands typed in the terminal become timeline blocks too, private until shared, and `sudo` is labelled wherever it runs. The agent and the human share one working folder per connection. Set `terminal_capture = false` on a host for a plain login shell. Agents can structure answers and post small sandboxed widgets; `lola ssh guide answers` and `lola ssh guide widgets` are their references. Agent verbs, run inside a session: `hosts`, `request <host> --why W [--scope S]`, `run <host> --why W [--cwd D] [--timeout N] [--wait 9m] [--detach] -- cmd`, `wait <block>`, `output <block>`, `post <kind> ...`. Human verbs: `open <host> [--agent K] [--name N] [--brief B] [--drive]` starts an agent-assisted session, `connect <session> <host> [--drive]` connects an existing one without waiting for its agent to ask, `ls`, `go`, `deny`, `approve <conn> <block> [--grant MIN]`, `reject`, `take`, `handback [--note N] [--transcript]`, `stop`, `close`, `terminal`. `run` exits with the remote exit code, or 240 denied, 241 the human has the wheel, 242 not connected, 243 still waiting, 244 timed out, 245 stopped, 246 refused, 247 result unknown, 248 lola unreachable. Hosts are `[[ssh_host]]` in the config; a production host approves every command and refuses an unsandboxed agent unless it sets `allow_unsandboxed`. **Lola does not filter commands: the remote user's permissions are the real limit, everything the agent reads goes to its model provider, and for an unsandboxed agent the approval gate stops accidents and well-behaved agents, not a determined one.** See `docs/ssh-sessions.md`. |
 | `lola report <verb> [args]` | **Run by the coding agent, inside its session**, to publish its own progress: `todo set\|add\|start\|done\|undo\|remove\|clear`, `phase <planning\|investigating\|implementing\|testing\|reviewing\|polishing\|done>`, `progress <0-100\|done/total> [label]`, `blocked <reason>` / `unblocked`, `note <text>`, `check <name> <pass\|fail\|running> [summary]`, `clear`. Every agent's `.lola/prompt.md` teaches it. Shown as the session view's **Report** sidebar, a **Plan** column in the list, a chip on board cards and a `plan:` block in the TUI. Display-only: it is the agent's claim about itself and never drives status, slots, reactions or send-keys. A `check <test\|lint\|build…> pass` claim is **audited**: for claude sessions lola reads the agent's own transcript for a matching command run before the claim (and its exit status), and compares it with the PR's CI — a claim the evidence does not back shows as **Unverified claim** (app) / `⚠ unverified` (TUI). The audit is display-only too. A rejected report exits 1 with the usage error; an unreachable daemon exits 0, so a report never fails the agent's command. `lola report --help` lists every verb. |
 | `lola plan-gate submit [file]` | **Run by the coding agent** in a `require_plan` session: hands in its plan (stdin, or a file) for human approval. See [Plan approval](#plan-approval-require_plan). |
 | `lola plan-gate approve <session>` / `lola plan-gate reject <session> <comment>` | A human's verdict on a submitted plan. `approve` unlocks coding (and, before any plan arrives, waives the gate); `reject` needs a comment, which is typed to the agent so it re-plans. The same decision is offered in the app's session view and in the Linear agent session. |
@@ -188,6 +206,9 @@ environment variable — tests rely on this):
 | `context/<project>/<key>/` | Shared context folder, linked into every session as `.lola/context` (key = the lowercased issue, or the session ID for manual/PR sessions). Survives teardown on purpose; delete it by hand when an issue is done. |
 | `plans/<issue>.json` | `lola plan` proposals awaiting review / `--apply` |
 | `cache/linear-<team>.json` | Cached Linear metadata for the TUI forms |
+| `state/ssh/<session>/` | Record of an ssh session: connections, blocks, elements and sanitized output (0700 directory, 0600 files). Kept 14 days after the session ends. |
+| `ssh/<connection>` | ssh control socket, in a verified 0700 directory (`/tmp/lola-ssh-<uid>/` when `LOLA_HOME` makes the path too long for `sun_path`). |
+| `local-sessions/<id>/work/` | A direct ssh session's scratch folder, the agent's working directory. Removed when the session ends. |
 
 ## Configuration reference
 
@@ -204,6 +225,7 @@ Linear **UUIDs**, not names — the TUI form resolves names to IDs for you.
 | `global_cap` | int | Hard ceiling on counted native sessions across **all polling projects**. Must be > 0. Per tick, a project's budget is `min(its cap, global_cap − live counted sessions)`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent spawned per session. Default `claude`. Global default; override per repo with `[[project]].agent`. Empty/omitted resolves to `claude`. See [The coding agent](#the-coding-agent). |
 | `manage_daemon` | bool | Whether the TUI owns the daemon lifecycle: silently start the daemon on open when the socket is dead, `^r` restart, `^x` stop. Default `true`. Set `false` when a launchd `KeepAlive` job owns the daemon, so the TUI never fights the supervisor. See [Running the daemon](#running-the-daemon-launchd-vs-tui). |
+| `trust_worktrees` | bool | Pre-accept Claude Code's workspace-trust dialog ("Is this a project you created or one you trust?") for every worktree lola creates. Before each claude launch, lola writes `projects[<worktree>].hasTrustDialogAccepted = true` into `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), and removes the entry at teardown. The write is atomic, touches only that key, and never rewrites a file that does not parse. Default `true`. Claude Code stops its trusted-parent search at the git root, and each worktree is its own root, so trusting `~/.lola/worktrees` by hand does nothing. Only folders under `~/.lola/worktrees` are touched, and sandboxed projects are skipped. A trusted folder loads its project `.claude/` settings, hooks and MCP servers without asking. Set `false` to get the dialog back. |
 
 `[defaults]` additionally carries a **fallback for each inheritable
 `[[project]]` key**, so shared setup is written once instead of repeated per
@@ -310,12 +332,15 @@ runtime layer, not on config load.
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
 | `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session) — unless the project sets `port_range`, which lets every session run them at once. Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
-| `port_range` | string | Inclusive `"lo-hi"` range (within 1024–65535, e.g. `"4100-4999"`) each session leases its **own** block of ports from, exported as `LOLA_PORT` / `LOLA_PORT_1..N`. Setting it makes `dev_commands` **multi-active** — see [Parallel dev stacks](#parallel-dev-stacks). Not inheritable. |
+| `port_range` | string | Inclusive `"lo-hi"` range (within 1024–65535, e.g. `"4100-4999"`), or `"auto"` to let lola pick free blocks from a shared pool (20000–29999) that never overlaps across projects and remembers ports other apps held (retried only as a last resort after an hour), each session leases its **own** block of ports from, exported as `LOLA_PORT` / `LOLA_PORT_1..N`. Setting it makes `dev_commands` **multi-active** — see [Parallel dev stacks](#parallel-dev-stacks). Not inheritable. |
 | `ports_per_session` | integer | Size of each session's block (1–20). Omitted = 1. Needs `port_range`. |
 | `pre_remove` | string array | Teardown hook, the mirror of `post_create`: commands run in the worktree right before lola removes it (merged-cleanup and `lola kill`), with the same env including `LOLA_DB_NAME` and the port lease. Skipped for a dirty (kept) worktree; bounded to 20s in total; a failure is logged, never fatal. Skipped for a [sandboxed](#the-container-sandbox) project: it would run on the host in a worktree the agent could write. Not inheritable. |
 | `sandbox` | `"none"` \| `"docker"` | Run this project's coding agents inside a container that can write only their worktree. Empty = `none` (on the host). See [The container sandbox](#the-container-sandbox). Not inheritable. |
 | `sandbox_image` | string | Image a sandboxed project runs, overriding `[sandbox].image`. Must carry `sh`, `git` and the coding agent on `PATH`. |
 | `sandbox_ports` | string array | Container ports published on `127.0.0.1`, as `"3000"` or `"<host>:<container>"`, so a dev server the agent starts in the container is reachable from the host. |
+| `sandbox_toolchains` | string array | Toolchains added to lola's image for this project: `node`, `php`, `python`, `go`, `rust`, `ruby`, each optionally `@version`. Unset = detected from the checkout (`composer.json`, `go.mod`, `Cargo.toml`…); `["none"]` adds nothing. lola builds the derived image on the first sandboxed start. Ignored with a custom image. See `sandbox/README.md`. |
+| `sandbox_packages` | string array | Extra Debian packages for the project's image (`["ffmpeg"]`). Ignored with a custom image. |
+| `hub_chores` | bool | Opt this project into the [`[hub]`](#hub-optional-off-by-default) chore lane: hub work items whose repo matches `repo` may be claimed for it. Default `false`; **not** inheritable from `[defaults]` (an inherited opt-in would enrol every project by accident). Needs `repo` set to `owner/name`; not offered for a stack. |
 | `kind` | `""` \| `"stack"` | `"stack"` makes this project a **stack**: no checkout of its own, it owns the Linear side (filter, write-back, agent, sandbox, budget) for its member projects. See [Stacks](#stacks-one-issue-several-repositories). |
 | `stack` | string | Makes this project a **member** (an *app*) of the named stack. It is no longer polled itself; its own Linear, agent and write-back keys are kept but ignored while it is a member. |
 | `labels` | string array | Member only: the issue labels that select this app — a session of the stack checks it out only for an issue carrying one of them (label UUID, name, or `group/name`; case-insensitive). Empty = every issue. |
@@ -590,17 +615,38 @@ is still an ordinary lola tmux pane — it runs `docker run -it …` instead of 
 agent — so the terminal views, pane classification, answers and send-keys all
 work unchanged.
 
-```toml
-[sandbox]
-image    = "ghcr.io/acme/agent-node:22"   # sh + git + the coding agent on PATH
-lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # make build-linux
-pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]
+It needs no other configuration. With no `[sandbox]` table, the agent runs in
+lola's own image, `ghcr.io/sushidev-team/lola-sandbox:<version>` (`:edge` for
+a non-release build): Alpine with Claude Code, git, gh, ripgrep, bash and
+curl, running as a non-root user. It is pulled on the first sandboxed spawn.
 
+```toml
 [[project]]
 name          = "web"
 sandbox       = "docker"
 sandbox_ports = ["5173"]          # published on 127.0.0.1:5173
 ```
+
+Setup, once per machine:
+
+1. Docker Desktop, OrbStack or Colima, running.
+2. A Claude Code token for the container (it cannot read your keychain).
+   In the desktop app, Settings → Sandbox → **Log in with Claude** runs
+   `claude setup-token` for you and stores the token in the keychain once the
+   browser login finishes; the token is never shown. Without the app:
+   `claude setup-token`, then `lola sandbox token` and paste it (the input is
+   not echoed; `--clear` removes it). `CLAUDE_CODE_OAUTH_TOKEN` in the daemon's environment
+   works too. The token uses your Claude plan; an API key (billed per token)
+   is passed only if you turn on `[sandbox].use_api_key`.
+3. GitHub: nothing, if `gh auth login` is done on the host (see Credentials).
+
+`lola doctor` checks all three.
+
+**Custom images** are optional: a project's toolchain (PHP, Node, Go …) goes
+in an image built `FROM` lola's (see `sandbox/README.md`), set as
+`[sandbox].image` or per project as `sandbox_image`. Any image works that has
+`sh`, `git` and the coding agent on `PATH`; it does not need lola, because
+lola mounts its own.
 
 What the container can reach:
 
@@ -612,18 +658,34 @@ What the container can reach:
 
 Things to know:
 
-- **Credentials.** The container cannot read the macOS keychain, so the agent
-  authenticates from environment variables listed in `[sandbox].pass_env`
-  (copied from the daemon's environment into the session's 0600 env file at
-  spawn — names only in config). claude: `CLAUDE_CODE_OAUTH_TOKEN` (from
-  `claude setup-token`) or `ANTHROPIC_API_KEY`; `git push` / `gh`: `GH_TOKEN`.
+- **Credentials.** The container cannot read the macOS keychain, so lola
+  writes the agent's credentials into the session's 0600 env file at spawn.
+  `[sandbox].pass_env` names them; empty means `CLAUDE_CODE_OAUTH_TOKEN` and
+  `GH_TOKEN`, each copied from the daemon's environment when set.
+  `ANTHROPIC_API_KEY` is never passed by default, nor by listing it in
+  `pass_env`: Claude Code prefers it over the subscription token and it bills
+  per token, so it takes the explicit `[sandbox].use_api_key = true` (the
+  desktop asks for confirmation). When the environment lacks one, lola falls back to
+  the keychain item `lola sandbox token` stores (claude) and to the host's
+  `gh auth token` (GitHub). **That means a sandboxed agent holds your GitHub
+  token**: it can push and open PRs as you, the same power an unsandboxed agent
+  has through `gh`. Export a narrower `GH_TOKEN` for the daemon, or set
+  `pass_env` without it, to limit that. The commit identity is the host's
+  (`user.name` / `user.email` of the project's checkout, passed as
+  `GIT_AUTHOR_*` / `GIT_COMMITTER_*`). Inside the image, git rewrites GitHub
+  ssh remotes to https and authenticates through gh, since the container
+  holds no ssh keys.
 - **Hooks.** A host unix socket cannot be mounted into Docker Desktop's or
   OrbStack's VM, so a sandboxed agent's hooks reach the daemon over the **hook
   bridge**: `127.0.0.1:[sandbox].hook_port` (default 7718), reached from the
   container as `host.docker.internal`, open only while some project is
   sandboxed, accepting only hook events and `lola report`, each carrying a
-  per-session token. The container runs `[sandbox].lola_bin` — a Linux build
-  (`make build-linux`) — mounted at the host lola's path.
+  per-session token. Inside the container the hooks run a **Linux** lola,
+  mounted read-only at the host lola's path: the one in lola's default image,
+  which the daemon copies out once per image ID into
+  `~/.lola/cache/sandbox/`, or `[sandbox].lola_bin` when set. A custom image
+  therefore needs no lola. Without docker or the image the spawn fails and
+  says why; it never starts an agent lola cannot hear.
 - **claude's state** lives in `.lola/claude` inside the worktree (seeded past
   the first-run dialogs); codex's in `.lola/codex`. The subscription-limit
   readout and codex/opencode token usage are not recorded for sandboxed
@@ -826,6 +888,16 @@ The gate uses the same `statusCheckRollup` signal as the rest of lola, so a
 CodeRabbit run counts toward it only if CodeRabbit registers a check (it usually
 does); a review-without-a-check does not hold the transition.
 
+**Only REQUIRED checks count once the branch has a ruleset.** lola reads the
+base branch's active rulesets (`gh api repos/<repo>/rules/branches/<base>`,
+cached 10 minutes) and judges CI by the required checks alone, so a job the
+repository runs but does not require — a shadow-mode suite, a non-blocking
+audit — never reads as failed CI (no `ci_failed` prompt, no held write-back or
+merge queue). A required check that has not reported yet counts as pending.
+Without a ruleset, or when the lookup fails, every check counts, as before.
+Classic branch protection is not consulted (reading it needs admin). lola's own
+`lola/…` commit statuses are never CI.
+
 ### `[reactions]` (optional)
 
 How lola reacts when a live session's derived PR/CI status changes (the P3
@@ -879,6 +951,25 @@ checkpoint restores, and checks attachment again after reading the composer.
 Best-effort desktop + Slack notifications, routed by priority (P3.20). Optional;
 the defaults below apply when the table is absent.
 
+macOS banners are reserved for a human action: an agent question, permission
+request or dialog; an escalation that automation cannot resolve; or a **PR ready**
+banner. Idle reminders, automatic CI retries, review hand-offs and routine
+progress stay quiet on desktop (Slack still follows its configured routing).
+
+The ready banner requires the agent to be idle or finished, no queued follow-up
+work or running Lola review, and fresh GitHub confirmation: a non-draft open PR,
+passing checks (or no configured checks), completed required reviews, no
+unresolved threads (including outdated threads), and a clean merge state for
+the current head and base. Required Lola review gates must also pass. Unknown
+or failed lookups never announce readiness. PRs handled by the automatic merge
+queue stay quiet. Questions alert once per waiting episode; ready PRs once per
+head revision, with guards saved across daemon restarts. These checks run
+on the observer cycle (normally about 30 seconds).
+
+Banners use macOS Notification Center through `osascript`; macOS notification
+permissions and Focus settings still apply. The daemon sends them even when
+the Lola desktop app is closed.
+
 | Key | Type | Description |
 | --- | --- | --- |
 | `desktop` | bool | macOS desktop banners. Default `true` on macOS, `false` elsewhere (no-op off macOS). |
@@ -895,13 +986,24 @@ Routing priorities and their defaults:
 | Priority | Default channels | Used for |
 | --- | --- | --- |
 | `urgent` | `["desktop", "slack"]` | needs-input, escalations |
-| `action` | `["desktop", "slack"]` | changes-requested, CI failed after retries |
-| `info` | `["slack"]` | approved+parked, merged+cleaned |
+| `action` | `["desktop", "slack"]` | verified PR readiness; routine reactions and review findings reach Slack only |
+| `info` | `["slack"]` | routine progress, merged+cleaned |
 
 Priorities you omit under `[notify.routing]` keep their default channels; set a
 priority to `[]` to route it nowhere.
 
 ### `[merge_queue]` (optional, off by default)
+
+The desktop's **PR status** panel also offers a manual merge action, even when
+the queue is disabled. Its split-button dropdown chooses squash, merge commit,
+or rebase for the current PR without changing the workspace default. It starts
+with `method` below (squash by default), rechecks
+GitHub and pins the merge to the displayed head commit. Ready PRs merge on
+click. Otherwise, an icon-only action asks for confirmation before attempting
+the merge. GitHub branch protections and Lola's
+required specialist reviews still apply. Goal-managed PRs use their goal's
+delivery workflow. A manual merge can proceed without reviews or CI when
+GitHub reports the PR clean; `allow_no_checks` only controls the automatic queue.
 
 lola's local merge queue. When enabled, approved + green PRs of lola's own
 sessions are merged **one at a time per repository**, oldest PR first. Each
@@ -948,6 +1050,40 @@ Best-of-N dispatch: a poll match that ALSO carries `label` is spawned as the
 | `label` | string | Trigger label UUID. Like every `[defaults]` label it should be a WORKSPACE label (it applies to every project's poll). Empty/absent = no label trigger; `lola bestof start` still works. |
 | `agents` | []string | The mix, one `<agent>[@<model>][:<count>]` entry each — e.g. `["claude:2", "codex@gpt-5-codex"]`. 2–6 attempts. Default `["claude:2"]`. A count after the LAST colon, so a model carrying a colon needs an explicit count (`claude@…-v1:0:1`). |
 
+### AI profiles
+
+Desktop **Settings → AI** stores independent profiles for Claude Code, Codex,
+and OpenCode. The provider selector changes the settings being edited; it does
+not switch the workspace or project agent. Each provider has **Fast**, **Balanced**,
+and **Thorough** profiles with a model and optional reasoning effort (OpenCode
+variant), plus action-to-profile mappings for commit/PR drafts, conflict
+resolution, session summaries, and planning.
+
+Profiles are opt-in per provider. Until enabled, existing settings keep their
+behavior. Drafts and newly started resolver sessions use the project's agent;
+summaries and planning use the workspace default agent. An existing resolver
+session retains its current model. Disabling profiles preserves their values.
+The `[brain].enabled` switch still controls automatic summaries.
+
+Example configuration (use `ai.codex` or `ai.opencode` for their independent settings):
+
+```toml
+[ai.claude]
+enabled = true
+[ai.claude.profiles.fast]
+model = "haiku"
+[ai.claude.profiles.balanced]
+model = "sonnet"
+[ai.claude.profiles.thorough]
+model = "opus"
+effort = "high"
+[ai.claude.actions]
+draft = "fast"
+resolve = "thorough"
+summary = "balanced"
+plan = "thorough"
+```
+
 ### `[brain]` (optional, off by default)
 
 The P5 orchestrator brain: when enabled, lola makes a single headless
@@ -958,6 +1094,15 @@ before merging). **Opt-in and off by default**: omit the table (or leave
 `enabled = false`) and behavior is unchanged — lola uses its generic notify and
 comment templates.
 
+The desktop PR comments panel also uses **Haiku** while the brain is enabled
+to summarize each reviewer's concern and requested fix. Summaries load in the
+background, retain links to the original threads, and are cached by comment
+content for the daemon's lifetime (up to 256 entries). They never affect merge
+checks or messages sent to the coding agent. Missing Claude, invalid output,
+and timeouts leave the original preview visible; failures back off for ten
+minutes. Each batch is capped at 30 seconds (or a shorter `timeout_seconds`).
+Without AI profiles, this panel uses Haiku and `model` selects the other brain summaries. Enabled AI profiles select the summary model for both.
+
 | Key | Type | Description |
 | --- | --- | --- |
 | `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
@@ -966,8 +1111,8 @@ comment templates.
 | `summarize_escalation` | bool | Summarize why a stuck session is blocked. Defaults to `true` when `enabled`. |
 | `summarize_approved` | bool | Summarize an approved+green PR before a human merges. Defaults to `true` when `enabled`. |
 
-Setting `enabled = true` alone turns on both summaries with the default timeout;
-set either `summarize_*` to `false` to run only the other. The two summarizers
+Setting `enabled = true` alone turns on both notification summaries with the default timeout;
+set either `summarize_*` to `false` to run only the other notification summary. The two summarizers
 default to on only while `enabled`, and explicit `false`/`0` are honored, not
 treated as "unset".
 
@@ -1059,6 +1204,7 @@ provider per kind** is allowed (guards key by kind).
 | `author` | string | watch family | Login **substring** matched (case-insensitively) against each comment author. Defaults to `"coderabbitai"` for `coderabbit-watch`; **required** for `bot-watch`. |
 | `transports` | []string | all | Multiselect over `{lola, github, linear}`; see below. Default `["lola"]`; `lola` is always forced present. |
 | `github_inline` | bool | pass shapes with the `github` transport | Post the findings as a pull-request **review** with one anchored, **resolvable** thread per finding instead of a single flat comment. Default `true`; it degrades to the flat comment on its own whenever the anchors or the API say no. |
+| `github_status` | bool | pass shapes | Post the pass's verdict as the commit status `lola/review/<kind>` on the PR head — `pending` while it runs, `success` (clean or minor-only), `failure` (any blocker/major finding, or one whose severity cannot be parsed), `error` (it could not run) — and re-review every new head once the agent has settled, up to 3 rounds per PR (then `error`; `lola review <session>` forces the next). The checkout must be clean and match the PR head before and after the pass. Require the context in a ruleset to make the review block merges. lola's own statuses never count as CI. Default `false`. |
 | `notify` | bool | all | `lola` transport: surface findings to a human (desktop/Slack). Default `true`. |
 | `send_to_agent` | bool | all | `lola` transport: hand findings to the worker via the send-keys gate. Default `true`. |
 | `visible` | bool | pass shapes | Run the pass in its own tmux session `<session>-review` so you can watch it and read its output afterwards. Default `true`. |
@@ -1460,74 +1606,188 @@ opts in with `sandbox = "docker"`.
 | Key | Type | Description |
 | --- | --- | --- |
 | `docker` | string | The docker CLI. Default `docker` from `PATH` (OrbStack, Colima and podman's docker shim work too). |
-| `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
-| `lola_bin` | string | Absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`). Required by any sandboxed project: it is what the agent's hooks run inside the container. |
+| `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Default: lola's own, `ghcr.io/sushidev-team/lola-sandbox:<lola version>` (`:edge` for a non-release build). A custom one needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
+| `lola_bin` | string | Optional absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`) for the agent's hooks. Default: the one inside lola's default image, extracted and cached by the daemon. Set it to test hook changes from a dev build. |
 | `hook_port` | int | Loopback port of the hook bridge. Default `7718`. |
-| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Values never live in the config. |
+| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Default `["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]`, with the keychain / `gh auth token` fallback described under Credentials. `ANTHROPIC_API_KEY` here has no effect without `use_api_key`. Values never live in the config. |
+| `use_api_key` | bool | Pass `ANTHROPIC_API_KEY` from the daemon's environment to sandboxed agents. Claude Code then uses it instead of your Claude plan, billed per token. Default `false`. |
 
 ### `[ui]` (optional)
 
-**Appearance only** — nothing the daemon does reads this table, so omitting it
-is zero behavior change. One identifier drives the color of **both** surfaces:
-lola-desktop's app chrome, its embedded terminals and the ANSI palette its
-session grid renders pane snapshots with, *and* the TUI cockpit. The two derive
-their semantic colors from the same flavor with the same contrast math, so they
-match — and picking the light flavor (`catppuccin-latte`) lightens the TUI too.
-
-Set it from either surface: the app's **Appearance** settings tab (which
-previews a flavor as you move through the list) or the TUI's `S` → **Appearance**
-tab (which repaints on save). Both write the same key.
+**Appearance only** — this table controls the desktop chrome, embedded terminals,
+pane snapshots and TUI palette. Midnight remains the default. Choose a fixed
+theme or enable **Follow system appearance** and choose separate light and dark
+themes in **Settings → Appearance**. Desktop previews changes until Save;
+Cancel restores your saved choices.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `theme` | string | `catppuccin-latte` \| `catppuccin-frappe` \| `catppuccin-macchiato` \| `catppuccin-mocha`. Empty or absent uses `catppuccin-mocha`. |
+| `theme` | string | Fixed theme, used when `follow_system` is false. Empty or absent uses `lola-midnight`. |
+| `follow_system` | bool | Follow the device's light/dark appearance. Default `false`. The TUI follows the terminal's reported background; terminals that cannot report it use dark. |
+| `light_theme` | string | Light palette to use in system mode. Empty or absent uses `github-light`. |
+| `dark_theme` | string | Dark palette to use in system mode. Empty or absent uses `lola-midnight`. |
 
-Unlike `[tmux]`, the theme **is** validated: an unrecognized name is rejected at
-load with an error listing the accepted values, rather than silently rendering
-the default — a typo you cannot see is worse than a startup error. A config
-that never sets `[ui]` never grows the table on save, so the default stays a
-default instead of being frozen into your file.
+Light themes: `catppuccin-latte`, `github-light`, `solarized-light`,
+`rose-pine-dawn`, `gruvbox-light`, and the vibrant `one-light`.
+Dark themes: `lola-midnight`, `catppuccin-frappe`, `catppuccin-macchiato`,
+`catppuccin-mocha`. System pickers show only themes with the matching light/dark
+tag, and switch live when the device appearance changes. The phone offers the
+same choices, saved locally on that phone independently of the desktop config.
+
+Unknown theme names and incorrectly tagged system choices are rejected on load.
+A config that never sets `[ui]` never grows the table on save, so the default
+stays a default instead of being frozen into your file.
+
+### `[[ssh_host]]` (optional)
+
+The hosts an [agent-assisted ssh session](#agent-assisted-ssh) can reach. No table
+means the feature is off. lola holds no address and no key: `alias` is resolved by
+your own `~/.ssh/config`, and you answer host keys, passphrases and MFA yourself in a
+real terminal. It is not `[remote]`, which means phone pairing.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `alias` | string | Required. What ssh connects to. |
+| `name` | string | The id agents and the CLI use. Default: `alias`. |
+| `label` | string | Free display text. |
+| `user` | string | A restricted remote user. Default: whatever your ssh config says. **This is the real limit on what a command can do.** |
+| `tier` | string | `production` \| `staging` \| `dev`. Empty or unknown reads as `production`. |
+| `allow_unsandboxed` | bool | Accept an unsandboxed agent on a production host. Default `false`. |
+| `sandbox` | string | How the agent of a direct session runs: `docker`, `none`, or empty for the default (docker on production when `[sandbox].image` and `lola_bin` are set, and on the host below production). |
+| `agent` | string | The coding agent of a direct session. Default: `[defaults].agent`. |
+| `default_cwd` | string | Remote directory for a command that names none. Default: the login directory. |
+| `grant_max_minutes` | int | The longest time-limited grant. `0` uses the tier's default (staging 30, dev 120), `-1` means no grants. Must not be positive on production. |
+| `command_timeout_seconds` | int | When a command names none. Default `120`. |
+| `max_command_timeout_seconds` | int | The most a command may ask for. Default `900`. |
+| `output_cap_kb` | int | Kept per stream of one command. Past it the head and the last 64 KB are kept. Default `1024`. |
+| `control_persist_seconds` | int | How long an idle connection lingers after its last client. Default `900`. |
+| `connect_wait_seconds` | int | Time allowed for passphrase and MFA. Default `300`. |
+| `approval_timeout_seconds` | int | A command nobody answers expires, unrun. Default `1800`. |
+
+Both settings screens edit this table (app: Settings → SSH hosts, TUI: `S` → SSH hosts).
+
+### `[hub]` (optional, off by default)
+
+Enrols this daemon with a team **lola hub**: a coordinator that hands out
+mechanical chores — `dep_advisory` (upgrade a dependency with a security
+advisory) and `red_bump_pr` (fix a Dependabot / Renovate PR whose checks fail) —
+deduplicated across the team, and routes the team's **signed** policy. The hub
+never executes anything and never writes a prompt: an item is a closed kind plus
+fields validated against strict patterns, and lola renders the agent's task from
+its own template, and every offer is re-read from GitHub before it is claimed.
+Set it up with `lola hub join` (the invite on stdin); the ed25519
+device key lives in `~/.lola/state/hub-key` (0600) and never in this file, argv
+or a log line. A new team is created from the desktop app (Settings → Team hub →
+Create a team) with a create code from the hub operator, or with just the hub's
+address when its operator opened it to creation: that Mac becomes the
+team's admin, holds the team admin key in `~/.lola/state/hub-admin-key` (0600,
+kept on leave) and can then invite teammates, set the team's Linear key, Linear
+team and Slack digest webhook, and remove a Mac from the team. Like `[remote]`, the table is not part of the `[defaults]`
+inheritance, and neither is `[[project]].hub_chores`.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Gates the hub loop. Default `false`; `lola hub join` sets it, `lola hub leave` clears it. |
+| `url` | string | The hub's base URL: `https`, or plain `http` only on `localhost` / `127.0.0.1` / `::1` for development. No path, query or credentials. |
+| `device_name` | string | Name shown to the team at enrollment (default: the hostname). |
+| `accept_kinds` | string array | Chore kinds this machine claims: `dep_advisory`, `red_bump_pr`. Empty/absent = every kind lola knows. |
+| `max_claims_per_day` | int | Claims per local day, 0–100. Absent = `4`; `0` claims nothing. |
+| `require_sandbox` | bool | Refuse a chore for a project without `sandbox = "docker"`. Absent = `true`; opting out is a local, explicit decision. |
+| `trusted_policy_keys` | table of strings | `key_id = "<base64url ed25519 public key>"` (or the array of `"<key_id>:<public key>"` entries `lola-hub` prints): the admin keys that may sign team policy. The hub cannot add one, so it cannot forge or alter policy. A verified policy is stored (`~/.lola/state/hub-policy.json`) and, with `apply_policy`, enforced. |
+| `poll_seconds` | int | Hub loop cadence, 60–900 (leases are renewed on it). Absent = `300`. |
+| `apply_policy` | bool | Enforce the verified team policy. Absent = `true`; only meaningful with `trusted_policy_keys`. `false` keeps the policy display-only. |
+| `group_chores` | bool | Give all of a repository's open dependency advisories to ONE agent and one pull request (at most 12). Absent = `true`; `false` claims each alone. |
+
+Both settings screens edit the member's half of this table (TUI: `S` → Team
+hub: enabled, chore kinds, max chores per day, chores need the sandbox, and each
+project's `hub_chores`). Joining, leaving and pinning a policy key go through
+`lola hub join | leave`.
+
+**Chore lifecycle.** A claimed chore holds a lease the daemon renews on every
+heartbeat. Once the session opens its pull request, lola reports **progress**
+(`POST /v1/items/{id}/progress`): the item moves to `in_review`, the lease is
+dropped and this machine is recorded as its owner; later delivery changes are
+reported the same way, and the merge or failure is reported by the owner. A hub
+that predates the progress frame (404) gets the old complete-on-PR report
+instead. A failure may carry the PR's url and a group id, so a batch that failed
+together escalates as one Linear issue. The board shows each item's history
+(claimed, in review, completed, failed, released, expired, reopened, closed as
+stale), its owner and member, and the hub's rules: an expired lease is held for
+its previous holder for twice its length, a device that let an item go is not
+offered it again for 6 hours, an item in review with no progress for 14 days
+reopens, and an open item no device reports any more closes after 48 hours.
+
+**Membership.** If the hub answers a signed request with `401 unauthorized`, an
+admin revoked this machine: lola drops the identity (the device key stays),
+stops applying the team policy, and `lola hub status` says **revoked** until you
+join again with a new invite. If the hub answers that the org has no policy, the
+policy stops applying at once; the stored bundle is kept only so an older
+version can never be replayed as new.
+
+**Team policy.** Every key a verified policy carries is LOCKED: the daemon
+overrides its running config with it and the settings UIs show it as set by the
+team. Keys the policy does not carry keep your value. The override lives in the
+daemon's memory only and is never written to `config.toml`, so leaving the hub
+(or `apply_policy = false`) restores exactly what the file says. The policy is
+re-fetched every 5 minutes and on `lola hub sync`; a newer version applies on
+the reload it triggers.
+
+| Policy key | Overrides |
+| --- | --- |
+| `review_providers` | Exactly these review provider kinds are enabled, every other kind is off. A listed kind uses your `[[review.provider]]` entry or that kind's defaults; one your config cannot run (a `bot-watch` with no `author`) stays off and `lola doctor` says so. |
+| `budget_daily_weighted_tokens` | A ceiling on `[budget].daily_tokens`: a tighter budget of yours stays; with none set, the team's applies. |
+| `merge_queue_enabled` | `[merge_queue].enabled` (a `false` locks it off). |
+| `max_concurrency_hint` | A ceiling on `[defaults].global_cap`: the effective cap is the smaller of the two. |
+| `accept_kinds` | `[hub].accept_kinds`. |
+| `escalate_after` | Read by the hub only; shown, not applied. |
+
+Only keys you set are written back on save, so a default is never frozen into
+the file. Findings come from GitHub through `gh` for the opted-in repos only
+(open Dependabot alerts and failing bot bump PRs), and only the validated fields
+reach the hub — never code, file names, paths or transcripts.
 
 ### `[remote]` (optional)
 
-**The phone listener, and it is off by default for what it grants rather than
-for what it costs.** Enabling it lets a paired mobile client read the session
-list, answer a parked agent and attach to a live pane. Say the consequence
-plainly: that phone can type arbitrary prose into an autonomous coding agent,
-and terminal write on a `-shell-N` tab is arbitrary code execution on this Mac
-with your `gh` token, SSH agent and login keychain in reach. A lost phone is
-answered by revoking the device from the desktop, not by a cautious default
-here.
+**The phone listener and relay, off by default for what they grant rather than
+for what they cost.** Enabling it lets a paired phone read the session list,
+answer a parked agent and, with higher tiers, steer and attach to live panes.
+Say the consequence plainly: that phone can type arbitrary prose into an
+autonomous coding agent, and terminal write on a `-shell-N` tab (tier `shell`)
+is arbitrary code execution on this Mac with your `gh` token, SSH agent and
+login keychain in reach. A lost phone is answered by revoking the device
+(`lola devices revoke`, or Settings, Phones in the app), not by a cautious
+default here.
+
+Pairing is `lola pair` or Settings, Phones: scan the QR, then confirm the code
+the phone shows. Each phone gets its own key and its own tiers (`read`,
+`answer`, `control`, `destructive`, `shell`); the listener is in every build and
+needs no build tag.
 
 | Key | Type | Description |
 | --- | --- | --- |
 | `enabled` | bool | Gates the whole feature. Default `false`; an absent `[remote]` table means the same and is never written back on save. |
-| `bind` | string | `off` \| `localhost` \| `lan` \| `all`, or a literal IP address. Empty or absent uses `localhost`. |
+| `bind` | string | `off` \| `localhost` \| `lan` \| `all`, or a literal IP address. Empty or absent uses `localhost`. A direct path needs `lan` (or an IP); with `localhost` only an SSH forward, a VPN or the relay can reach it. |
 | `port` | int | TCP port. `0` (or absent) uses `7717`. |
+| `relay` | bool | Let a paired phone reach this Mac through the joined [team hub](#hub-optional-off-by-default) when it is not on the same network. Default `true`; effective only with `enabled = true` and a joined hub. The relay carries the phone's own end-to-end TLS session, so the hub sees ciphertext only. `false` keeps the phone on LAN/VPN. |
+| `advertise` | bool | Publish the listener with mDNS so a paired phone finds this Mac on a new network. Default `false`: it tells every peer on the network that this machine runs coding agents. |
+| `dev_forward` | bool | Republish an active session's dev servers on the local network so a phone can open them. Default `false`. |
 
 `bind` decides which interfaces are exposed, and the four keywords are not
-interchangeable. `localhost` is loopback only — what an SSH forward, a VPN or a
-tailnet wants, and the only mode that puts nothing on a network interface.
-`lan` binds the private interfaces (RFC1918 / ULA / link-local) whose names are
-not tunnels or virtual bridges; on a laptop that is **every network this machine
-ever joins**, conference WiFi included, so the daemon logs the bound interfaces
-by name at startup. `all` is `0.0.0.0` and is never a default. `off` binds
-nothing while keeping the rest of the table, which is how you pause the listener
-without losing your settings — so a caller must test both keys, not `enabled`
-alone.
+interchangeable. `localhost` is loopback only. `lan` binds the private
+interfaces (RFC1918 / ULA / link-local) whose names are not tunnels or virtual
+bridges; on a laptop that is **every network this machine ever joins**,
+conference WiFi included, so the daemon logs the bound interfaces by name at
+startup. `all` is `0.0.0.0` and is never a default.
+
+**`bind = "off"` stops listening but not the relay.** It binds nothing while
+keeping the rest of the table; with a joined hub and `relay = true` the daemon
+still serves phones through the relay, on a listener-less server. Use
+`relay = false` to stop the relay and `enabled = false` to stop everything, so a
+caller must test the keys, not `enabled` alone.
 
 A hostname is **rejected**, not resolved: loading a config never makes a network
-call, so `bind` is either one of the four keywords or an IP literal. Validation
-is otherwise deliberately permissive — `enabled = true` with `bind = "off"` is a
-valid, documented state.
-
-Two things this table does not do yet. mDNS advertisement and push credentials
-are later milestones and have no keys here, because a key that quietly does
-nothing is worse than a missing one. And while the transport is still at its
-first milestone, the listener is compiled **only** into a binary built with the
-`lola_insecure` build tag, which also forces the bind to `localhost` whatever
-this table says and logs a warning on every accept; a release binary contains no
-listener at all and says so in the log when the table is enabled.
+call. Validation is otherwise permissive: `enabled = true` with `bind = "off"`
+is a valid, documented state.
 
 ### `[linear_agent]` (optional)
 
@@ -1673,8 +1933,8 @@ history in `.lola/codex` retain that home when revived. Codex pane classificatio
 and turn-complete notifications are supported, but structured inline question
 extraction and transcript-based activity detection remain Claude-specific.
 
-**Distinct from lola's internal helpers.** The `[brain]` summarizer still uses
-`claude -p`; disable it for an installation without Claude. The `[statusagent]`
+**Distinct from lola's internal helpers.** The `[brain]` summarizer defaults to
+`claude -p`; enabled AI profiles can select Codex or OpenCode instead. The `[statusagent]`
 interpreter chooses its own `agent` independently of the worker. Reviews have
 their own provider catalog: select `codex-session` to use Codex for review as well.
 
@@ -1712,6 +1972,162 @@ picker (`a` in the TUI) and in the manual-worktree form.
 installed; the Go test suite covers the launch-arg and callback-wiring plumbing
 but does not run the real CLIs.
 
+## Project workspaces (desktop app)
+
+Click a project in the sidebar to open its workspace. **Overview** brings together
+its sessions, current activity, repository information and automation settings.
+Opening a session takes you to the session workspace; project navigation itself
+does not filter the session list. Stacks link to their member repositories.
+Your last-used Overview or Git tab is remembered across projects and app launches.
+Projects without a repository show Overview without changing that preference.
+
+**Git** browses the configured repository and its worktrees using your installed
+`git`. Local and remote branches select the history to inspect. The commit graph
+shows ancestry and branch labels; select a commit to inspect its changed files,
+or **⌘-click** (Ctrl-click on other platforms) a second commit to compare the two
+trees. Selection shows metadata and changed files; click a file or **View changes**
+to open a diff. The comparison identifies its direction and can be reversed. Diffs
+offer unified and side-by-side layouts.
+
+**AI draft** beside Commit message uses the enabled AI draft profile, or Claude
+Haiku by default, to suggest an editable subject and body from staged changes. It sends
+bounded staged patch excerpts, file names, recent commit subjects and the current
+draft; it does not include unstaged or untracked content or create a commit.
+If the index or your draft changes during generation, the result is discarded.
+Generation has a 30-second timeout; response time depends on CLI startup and the
+model service, so a one-second response is not guaranteed.
+
+**Branch** creates a local branch from the current HEAD or another selected
+local/remote tip, with an optional switch to it. **Create branch here** in a branch
+or commit context menu uses that exact commit. Existing branches are never reset;
+Git preserves working changes or refuses an incompatible switch.
+
+For a local-only branch, **Push** opens an inline **Publish branch** form. Choose
+a configured remote and edit the remote branch name; publishing sets that
+destination as the upstream after a successful push. Divergent remote history
+is refused. This also works from a nonchecked branch's context menu. **Set upstream**
+links a local branch to an existing remote branch without pushing. Dropping a local
+branch onto a remote branch offers both actions with that destination preselected.
+
+**Create PR** opens a GitHub pull request form from the toolbar, branch/worktree
+menus or a branch drop. Dropping one branch onto another preselects source and
+base in that direction. Choose the repositories and branches, edit the title and
+description, and use searchable multi-select fields for reviewers, assignees and
+labels. Draft PRs defer reviewer requests. The form uses your installed, signed-in
+`gh`; other Git hosts are not supported for PR creation yet. Source forks default
+to their parent repository. Fetch the target first if its base commit is missing
+locally. An unpublished source requires explicit **Push & create PR** consent;
+pushes never force remote history. Existing open PRs are reused, and metadata
+failures retain the created PR link. **AI draft** uses the enabled AI draft profile (Claude Haiku by default) with bounded
+committed changes and your editable draft; it never submits the PR.
+
+**Create worktree** in a branch menu creates a separate checkout in a new folder,
+optionally opening it. A branch already checked out elsewhere requires a new
+branch name. Lola refuses destinations inside existing checkouts or its managed
+storage. Commit menus offer **Cherry-pick commit** and **Revert commit**, with
+confirmation, clean-checkout checks and Continue/Skip/Abort controls for conflicts.
+Merge commits first ask which parent to interpret the change against. **Compare against
+working changes** compares a commit with staged, unstaged and untracked files,
+using a temporary index without changing the real index or checkout.
+
+Local, Remote, Worktrees and Stashes have distinct collapsible section headers. Branch
+names containing `/` form animated nested folders, and the active local branch is highlighted. Use **Clear branch filter** below the
+history to return to all branches. Working changes occupy the first history row only
+when the checkout has changed files. Its graph node connects to the actual HEAD,
+including when other branches have newer commits. File lists show a muted directory
+prefix that truncates before the filename. Right-click a changed file, or press
+Shift-F10, to view changes, stage/unstage the selection or copy paths.
+The Changes header centers the list/tree controls and provides a trash action for
+all unstaged changes. Its confirmation distinguishes restoring tracked files from
+deleting untracked files; staged changes and ignored files are kept. If files or
+the index change while confirming, Lola asks you to review and confirm again.
+Nested repositories, submodules and active conflict recovery are never discarded
+by this action.
+Press **⌘F** (Ctrl-F) to search loaded commits. The column controls at the top right of history
+show or hide columns; drag a column divider or focus it and use the arrow keys to
+resize. Column visibility and widths are remembered.
+Drag either sidebar's inner edge to resize it, or focus the divider and use the
+arrow keys. Widths are remembered; double-click a divider to reset it.
+
+Branch tips and checkout markers sit to the left of the graph. Matching colors
+connect the labels and graph lanes. A faint tint fades right to left inside only
+the graph column; hovering or focusing a
+commit emphasizes its lane. The commit details list branches that reach the commit
+through loaded history, since shared ancestors are not owned by a single branch.
+GitHub remotes show their user or organization avatar. Author avatars and GitHub
+logins load separately through authenticated `gh`; missing identities and offline
+lookups fall back to initials without delaying local history. Avatar images and
+repository-scoped author/email associations are cached locally. Cached images
+appear immediately; each app launch refreshes profiles in the background when
+first used, keeping the previous image if offline. Initial lookups have a subtle
+loading treatment that respects reduced motion.
+
+Hover the commit-message column for a compact preview with author, date, short
+SHA and grouped branch-history chips. Branch badges align with their graph node
+and keep a compact, left-aligned layout.
+
+The working-copy panel keeps staged and unstaged files in separate scrolling
+sections, with compact list and folder-tree layouts. Shift-click selects a visible
+range; ⌘/Ctrl-click toggles individual files. Green hover actions and the selected
+file action stage precisely that selection. Review a file, stage or
+unstage it, then write a subject and optional body and commit the staged changes.
+**Amend last commit** loads the existing message into an empty draft. Local-only
+commits amend immediately; commits contained in a locally known remote branch
+show a brief confirmation. This uses the latest fetched remote history without
+a network request. A failed check or changed HEAD blocks the amend; it does not
+force-push rewritten history. Fetch, ordinary
+push and fast-forward-only pull are available from the toolbar. Refresh reloads
+changes made by a terminal or another application. Selecting a branch browses it;
+it does not check it out. Double-click a branch to check it out (or open its
+existing worktree). Right-click branches, remotes, worktrees, commits and stashes
+for their actions. Drag a branch onto another to choose an explicitly named merge
+or rebase, followed by confirmation. Merge/rebase conflicts stay visible with
+Continue and Abort actions.
+
+Pulling an unchecked branch fast-forwards its configured upstream without
+switching the visible checkout; divergence requires an explicit merge or rebase.
+Branch pushes use the existing upstream. **Stash** saves staged, unstaged and
+untracked changes (ignored files stay put); **Pop** restores a selected stash to a
+clean checkout and only removes it after success. Apply, pop and drop are also in
+the stash context menu. These actions require confirmation, and conflicts retain
+the saved stash.
+
+Commits use Git's effective repository/global configuration, identity, hooks and
+credential/signing helpers. The shield beside Amend exposes the configured signing mode in its tooltip.
+To sign every commit, configure `commit.gpgSign=true` in Git along with your
+`user.signingKey` and, for SSH keys, `gpg.format=ssh`. Lola does not turn signing off
+when a helper fails; the error is shown and the message is kept for retry. A
+passphrase-protected key needs its normal signing agent or GUI pinentry available
+to the desktop process. Sandboxed agent worktrees cannot be operated on through
+host Git in this view.
+
+## The session view (desktop app)
+
+A session opens on its **Conversation**: what the agent said and did, read from its own
+log, and one place to answer it. The agent is still the ordinary coding agent in its
+terminal, unchanged, and **Terminal** is one tab or ⌘\\ away. Everything from the log is
+the agent's claim. Only what lola itself witnessed (a message you sent, a command on a
+host, a turn's receipt) wears a box or an exit code.
+
+- **↩ never kills anything.** While the agent works, ↩ queues your message on lola's side,
+  where ↑ or `Edit` takes it back, and it goes when the agent rests. `Stop ⌘.` ends this
+  turn and holds what is queued until you speak again; `Stop & send` is the named way to do
+  both. There is no true mid-turn steer, because nothing types into a working agent.
+- **Questions come to you.** A permission prompt or a question shows as a card with the
+  agent's exact words, one key to answer, and the terminal beside it. A screen that only
+  takes keys says so and offers the terminal. `⌘J` goes to the next session waiting on you,
+  across all of them.
+- **Where it opens.** `Open sessions in` under Appearance and in the session's `⋯` picks
+  Conversation or Terminal for all sessions, and a session remembers the view you left it
+  on. An agent whose log lola cannot read yet (codex and opencode today, or a Claude Code
+  version whose format changed) opens on its terminal and says why.
+- **When it ends.** A merged session moves to `Ended` in the sidebar and stays readable for
+  14 days. A session with a goal is run by the goal, and its conversation is read-only.
+- **The phone runs the same Conversation** (the desktop's components, over `[remote]`);
+  the TUI is unchanged and stays terminal-first.
+
+The full design is [`docs/unified-session.md`](docs/unified-session.md).
+
 ## Attaching to a session
 
 Each agent runs inside a **tmux session** — a git worktree with Claude Code
@@ -1738,10 +2154,11 @@ the project's `default_branch`, so commits `main` gained since the fork never
 show up as if the agent reverted them — and uncommitted and untracked work is
 included, because most of an agent's work is not committed yet.
 
-- **App** — a **Diff** tab beside the terminal tabs: a file tree, unified or
-  split hunks, light syntax colouring. Click a line number (shift-click for a
-  range) to write a comment; comments queue under their line and survive an app
-  restart. **Send to agent** ships the batch.
+- **App** — the session's **Changes** view (`f` or ⌘⇧D): everything against the
+  base, each turn, a file tree, unified or split hunks, light syntax colouring.
+  Click a line number (shift-click for a range) to write a comment; comments
+  queue under their line and survive an app restart. **Send to Claude** in the
+  footer ships the batch.
 - **TUI** — a full-screen overlay: `j`/`k` move, `[`/`]` jump files, `c`
   comments on the line under the cursor, `n` adds a free note, `u` drops the last
   comment, `s` sends, `r` re-reads the worktree.
@@ -1766,13 +2183,14 @@ nothing, and a `start` baseline is recorded just before a new session's first
 agent launch, so even turn 1 can be undone (claude, codex and opencode alike). Each session keeps its newest 100; the refs are deleted when the
 session is torn down with its worktree.
 
-In the app they are a tab of the session sidebar, beside the agent's report
-(**Info** toggles the sidebar; **Checkpoints** in the session menu opens that
-tab). The list runs newest first; pick one to read what that turn changed (the
-previous checkpoint against it) in the main pane — **Close** or the **Agent**
-tab goes back to the terminal. Then:
+In the app they are the **Turns** column of the session's **Changes** view
+(**Checkpoints** in the session menu lands there, and a turn's receipt in the
+conversation links to it). The list runs newest first; pick one to read what that
+turn changed (the previous checkpoint against it). **All vs base** goes back to
+the whole diff, and ⌘⇧D or Esc to where you came from. Then:
 
-- **Restore…** puts the worktree's FILES back to that checkpoint. HEAD and the
+- **Restore…** moves files only: the conversation and git history do not move.
+  It puts the worktree's FILES back to that checkpoint. HEAD and the
   branch stay put — commits made since stay in history and show up as
   uncommitted edits that undo them. The current state is saved as a new
   checkpoint first, so a restore is itself one click to undo. Refused while the
@@ -1957,6 +2375,83 @@ From then on the ordinary ticks do the work: a step with no blockers
 dispatches right away, and each later step waits (`blocked-by <ID>` in
 `lola poll <project> --once --dry-run`) until its blockers are done or their PRs are
 merged.
+
+## Agent-assisted SSH
+
+A coding agent debugs a remote host with nothing installed there. You watch a
+structured timeline, can dig from any claim to the exact command and raw output, and
+can take the wheel at any moment. The contract is
+[`docs/ssh-sessions.md`](docs/ssh-sessions.md) and the experience
+[`docs/ssh-sessions-ux.md`](docs/ssh-sessions-ux.md).
+
+**How it works.** The agent stays local and holds nothing. The daemon runs real `ssh`
+as a ControlMaster in a `<id>-ssh-N` tmux tab. You authenticate through cards in the timeline, or in that terminal. Each
+agent command then runs over an exec channel on that master, not by typing into a
+shell, so it has a real exit code and separate stdout and stderr. Every command
+becomes a block on the timeline.
+
+**Two ways in.** From a running session, the agent runs `lola ssh request <host> --why
+…`. The session then shows as needing you, and nothing connects before your go. Or you
+start an agent-assisted session yourself: `H` in the TUI, ⌘⇧H in the app, or `lola ssh
+open <host>`. Starting it is the go for connecting, and command approval still applies.
+It needs no project or checkout. You talk to the agent there, and the terminal one tab
+over is yours.
+
+**Approval.** A production host approves every command, one at a time. Hosts below
+production may also take a time-limited grant while you approve. An approval shows the
+exact command, the reason, the host, the user and the tier. A denial can carry a reason
+back to the agent. A command nobody answers expires, unrun.
+
+**The wheel.** Each connection is either the agent's or yours. Taking it (`W` in the
+TUI, `W` or ⌘⇧L in the app, `lola ssh take`) makes `lola ssh run` return a clear "human
+has control" result at once, refuses what was waiting, and ends any grant. A command
+already running stays visible and stoppable. Commands you run in the terminal are not
+recorded. Handing back can include a transcript of your terminal: you read and edit it
+first, and it is sent only if you choose to. Stopping a command or closing a connection
+ends the local ssh, and **the remote process may keep running**.
+
+**What agents can publish.** `lola post <kind> …` (or its old name, `lola ssh post`) adds an item to the conversation:
+`summary`, `narration`, `hypothesis`, `finding`, `plan`, `metric`, `evidence`,
+`recommendation`, `proposal`, `question`. Every agent's briefing teaches them, the same
+for claude, codex and opencode. They are the agent's **claims**: display-only, sanitized,
+rate-limited, and rendered as text. Command, exit code, timing and output are **facts**
+the daemon recorded, and the UIs draw the two differently. An evidence link is verified
+only as "this block exists with these facts", not as "the claim is true". A proposal
+never runs by itself.
+
+### What this does and does not protect
+
+Say these plainly to whoever turns this on:
+
+- **Lola does not filter commands.** There is no read-only mode to trust, because
+  parsing a shell command on the client is not a boundary. The remote user's permissions
+  are the real limit, so point `user` at a restricted account.
+- **Everything the agent reads goes to its model provider,** output included. The
+  approval moment says so too.
+- **For an unsandboxed agent, the approval gate stops accidents and well-behaved agents,
+  not a determined one.** It runs as you, so it can reach the daemon's socket and your ssh
+  keys. That is why a production host refuses an unsandboxed agent unless the host sets
+  `allow_unsandboxed = true`.
+- **For a sandboxed agent the gate is real.** Its container mounts no ssh keys, and the
+  hook bridge admits only the agent verbs: never approval, takeover or open. A direct
+  session runs sandboxed on production when `[sandbox]` is configured, with only its
+  scratch folder writable. Otherwise it is refused with a message naming both ways out.
+- **Remote output is untrusted.** Control characters are stripped, a handback transcript
+  is framed to the agent as untrusted, and a URL opens only through the daemon's
+  http(s)-only `openURL`.
+- **A paired phone sees no ssh details.** Every ssh command is refused over `[remote]` (tier `never`),
+  the `-ssh-N` tab cannot be attached from a phone, and the session list it receives
+  leaves out the ssh glance, so the exact command waiting for approval and the agent's
+  latest summary stay on the machine.
+
+## Workspace learning and goals
+
+The feature-branch implementation adds `lola goal`, `lola learn`, and
+`lola profile` for durable Linear goal plans, scoped learning, and independently
+tracked specialist reviews. Autonomous execution is still in development.
+`lola goal propose` can build a reviewed task graph from an outcome and committed
+repository context; accepting it creates a local goal without starting workers.
+See [usage and implementation status](docs/workspace-goals.md).
 
 ## Best-of-N: several attempts, one winner
 

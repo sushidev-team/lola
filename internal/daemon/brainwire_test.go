@@ -358,7 +358,7 @@ func TestBrainApprovedToggleOffUsesGeneric(t *testing.T) {
 		t.Fatalf("approved Summarize calls = %d with the toggle off, want 0", n)
 	}
 	action := seams.notesByPriority(notify.Action)
-	if len(action) != 1 || !strings.Contains(action[0].Body, "ready to merge") {
+	if len(action) != 1 || !strings.Contains(action[0].Body, "checking remaining work and review threads") || action[0].ReadyForUser {
 		t.Fatalf("Action notify = %+v, want the generic template", action)
 	}
 }

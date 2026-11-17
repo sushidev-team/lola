@@ -1,0 +1,30 @@
+# Public API for daemons. Every request is signed by the device; TLS stops
+# observation. Request bodies are capped at 64 KiB by the hub itself.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lola-hub
+  annotations:
+    cert-manager.io/cluster-issuer: image-proxy-letsencrypt-production
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # The relay (/v1/relay/*) holds WebSocket connections open for hours.
+    # The hub pings every 25 s, so these are an upper bound, not the liveness check.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - lola.sushidev.kitchen
+      secretName: lola-hub-tls
+  rules:
+    - host: lola.sushidev.kitchen
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lola-hub
+                port:
+                  name: http

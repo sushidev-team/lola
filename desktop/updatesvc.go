@@ -149,7 +149,7 @@ func (s *UpdateService) CheckForUpdates(force bool) (UpdateInfoDTO, error) {
 	}, nil
 }
 
-// ShouldAutoCheck reports whether the startup auto-check is due (respects the
+// ShouldAutoCheck reports whether a periodic auto-check is due (respects the
 // AutoCheck toggle and the interval).
 func (s *UpdateService) ShouldAutoCheck() bool {
 	return s.loadPrefs().ShouldAutoCheck(time.Now())
@@ -248,7 +248,7 @@ func (s *UpdateService) DownloadUpdate(url string) (string, error) {
 // swap script, then quits so the script can replace and relaunch the app.
 func (s *UpdateService) InstallAndRestart(dmgPath string) error {
 	if err := update.InstallUpdate(dmgPath); err != nil {
-		return fmt.Errorf("install failed: %w", err)
+		return err
 	}
 	if s.app != nil {
 		s.app.Quit()

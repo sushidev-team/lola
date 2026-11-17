@@ -1,22 +1,13 @@
 // Per-device display preferences: small, non-secret, and remembered so the phone
 // does not forget a setting the moment a screen unmounts.
 //
-// WHY A SEPARATE MODULE, and why not either of the two places that already
-// persist something:
-//
-//   * secretstore.ts remembers the endpoint, but its whole subject is what may
-//     and may not be written in the clear. A font size does not belong in a file
-//     whose opening paragraph is about the access key never touching
-//     localStorage, and putting it there invites the next reader to assume the
-//     rules are the same for both.
-//   * viewport.ts owns the arithmetic (FONT_MIN/MAX/DEFAULT and clampFont), and
-//     its header promises "pure functions, no DOM" so the trickiest part of the
-//     terminal can be exercised in Node. Reaching for a browser global there
-//     would cost exactly that property.
+// WHY A SEPARATE MODULE: viewport.ts owns the arithmetic (FONT_MIN/MAX/DEFAULT
+// and clampFont), and its header promises "pure functions, no DOM" so the
+// trickiest part of the terminal can be exercised in Node. Reaching for a
+// browser global there would cost exactly that property.
 //
 // So the validator is imported from viewport.ts and the storage lives here. The
-// pattern is the one loadEndpoint/saveEndpoint and theme-runtime's flavor cache
-// already use, and it is deliberate in three ways: a namespaced key, try/catch
+// pattern is theme-runtime's flavor cache, and it is deliberate in three ways: a namespaced key, try/catch
 // on BOTH sides because a WKWebView can have storage disabled or partitioned,
 // and a tolerant read that validates rather than trusting what it finds. Nothing
 // here is worth failing a screen over — every failure degrades to the default.
@@ -204,4 +195,37 @@ export function prunePaneLabels(known: readonly string[]): Record<string, string
   }
   if (changed) writeLabels(m);
   return m;
+}
+
+// ---------------------------------------------------------------------------
+// Inbox grouping
+// ---------------------------------------------------------------------------
+
+/** How the Inbox lists sessions: by status section (the default) or by project. */
+export type InboxGroup = "status" | "project";
+
+const INBOX_GROUP_KEY = "lola.mobile.inboxGroup";
+
+/** The remembered grouping. Only the exact string "project" selects it; anything else is the default. */
+export function loadInboxGroup(): InboxGroup {
+  try {
+    return globalThis.localStorage?.getItem(INBOX_GROUP_KEY) === "project" ? "project" : "status";
+  } catch {
+    return "status"; // storage disabled or partitioned
+  }
+}
+
+/** Remember a grouping. The default leaves no key behind. */
+export function saveInboxGroup(group: InboxGroup): void {
+  try {
+    if (group === "project") globalThis.localStorage?.setItem(INBOX_GROUP_KEY, "project");
+    else globalThis.localStorage?.removeItem(INBOX_GROUP_KEY);
+  } catch {
+    /* a list grouping is not worth failing a screen over */
+  }
+}
+
+/** Forget it, so the next open uses the default. Used by tests. */
+export function clearInboxGroup(): void {
+  saveInboxGroup("status");
 }

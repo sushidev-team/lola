@@ -295,6 +295,9 @@ func (m *rootModel) kanbanColumnLines(c KanbanColumn, sess []protocol.SessionInf
 		if chip := boardChip(si); chip != "" {
 			out = append(out, "  "+chip)
 		}
+		if chip := sshChip(si); chip != "" {
+			out = append(out, "  "+chip)
+		}
 		out = append(out, "")
 	}
 	return out

@@ -6,7 +6,7 @@ vi.mock("@bindings/desktop", () => ({
   TermService: { Shells: vi.fn(async () => []), Shell: vi.fn(async () => ""), CloseShell: vi.fn(async () => {}) },
 }));
 
-const { terms, AGENT, isReviewTab, isDevTab, devTabIndex } = await import("./terms.svelte");
+const { terms, AGENT, DIFF, SSH, isReviewTab, isDevTab, devTabIndex } = await import("./terms.svelte");
 const { store } = await import("./store.svelte");
 
 // The store is a singleton; give each test its own session id instead of
@@ -21,6 +21,47 @@ function seed(id: string, names: string[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("Close Tab menu action", () => {
+  it("closes only the active shell and selects a remaining tab", async () => {
+    const id = newId();
+    const first = `${id}-shell-1`;
+    const second = `${id}-shell-2`;
+    seed(id, [first, second]);
+    terms.select(id, second);
+    const { TermService } = await import("@bindings/desktop");
+    vi.mocked(TermService.Shells).mockResolvedValueOnce([first]);
+
+    await terms.closeActiveTab(id);
+
+    expect(TermService.CloseShell).toHaveBeenCalledExactlyOnceWith(second);
+    expect(terms.activeTab(id)).toBe(first);
+  });
+
+  it("returns to the session after closing its last shell", async () => {
+    const id = newId();
+    const shell = `${id}-shell-1`;
+    seed(id, [shell]);
+    terms.select(id, shell);
+
+    await terms.closeActiveTab(id);
+
+    expect(terms.shellsFor(id)).toEqual([]);
+    expect(terms.activeTab(id)).toBe(AGENT);
+  });
+
+  it("leaves permanent views and their background shells running", async () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`]);
+    const { TermService } = await import("@bindings/desktop");
+    for (const tab of [AGENT, DIFF, SSH]) {
+      terms.select(id, tab);
+      await terms.closeActiveTab(id);
+    }
+    expect(TermService.CloseShell).not.toHaveBeenCalled();
+    expect(terms.shellsFor(id)).toEqual([`${id}-shell-1`]);
+  });
 });
 
 describe("review pane tabs", () => {
@@ -46,17 +87,6 @@ describe("review pane tabs", () => {
     expect(TermService.Shell).toHaveBeenCalledWith(`${id}-shell-2`, "/tmp/wt");
   });
 
-  it("cycles through the review pane like any other tab", () => {
-    const id = newId();
-    seed(id, [`${id}-shell-1`, `${id}-review`]);
-    terms.select(id, AGENT);
-    terms.cycleTab(id, 1);
-    expect(terms.activeTab(id)).toBe(`${id}-shell-1`);
-    terms.cycleTab(id, 1);
-    expect(terms.activeTab(id)).toBe(`${id}-review`);
-    terms.cycleTab(id, 1);
-    expect(terms.activeTab(id)).toBe(AGENT);
-  });
 
   it("falls back off a review tab that has gone away", async () => {
     const id = newId();
@@ -142,14 +172,6 @@ describe("drag-to-sort tabs", () => {
     expect(fresh.labelFor(id, `${id}-shell-1`)).toBe("Deploy");
   });
 
-  it("cycles in the sorted order", () => {
-    const id = newId();
-    seed(id, [`${id}-shell-1`, `${id}-shell-2`]);
-    terms.moveTab(id, 1, 0);
-    terms.select(id, AGENT);
-    terms.cycleTab(id, 1);
-    expect(terms.activeTab(id)).toBe(`${id}-shell-2`);
-  });
 });
 
 describe("dev tabs", () => {
@@ -207,4 +229,69 @@ describe("dev tabs", () => {
     await terms.openShell(id, "/tmp/wt");
     expect(TermService.Shell).toHaveBeenCalledWith(`${id}-shell-2`, "/tmp/wt");
   });
+});
+
+describe("where a session opens", () => {
+  const conn = { id: "c", state: "connected" };
+  it("remembers a pick across a relaunch, and only a pick", () => {
+    const id = newId();
+    terms.select(id, AGENT);
+    expect(JSON.parse(localStorage.getItem("lola.tabs") ?? "{}")[id]).toBe(AGENT);
+    const other = newId();
+    terms.show(other, AGENT);
+    expect(JSON.parse(localStorage.getItem("lola.tabs") ?? "{}")[other]).toBeUndefined();
+  });
+  it("opens a claude session on its conversation, and one with no reader on its terminal", () => {
+    const a = newId();
+    const b = newId();
+    const c = newId();
+    store.sessions = [{ id: a, agent: "claude", ssh: { connections: [conn] } }, { id: b, agent: "codex" }, { id: c, agent: "claude" }] as never;
+    expect(terms.activeTab(a)).toBe(SSH);
+    expect(terms.activeTab(b)).toBe(AGENT);
+    expect(terms.activeTab(c)).toBe(SSH);
+    store.sessions = [];
+  });
+  it("pins what it landed on, so a later answer cannot flip the view", () => {
+    const a = newId();
+    store.sessions = [{ id: a, agent: "claude", ssh: { connections: [conn] } }] as never;
+    terms.arrive(a);
+    expect(terms.activeTab(a)).toBe(SSH);
+    terms.arrive(a, false);
+    expect(terms.activeTab(a)).toBe(SSH);
+    store.sessions = [];
+  });
+  it("Changes returns to the view it was opened from", () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`]);
+    terms.select(id, `${id}-shell-1`);
+    terms.toggleDiff(id);
+    expect(terms.activeTab(id)).toBe(DIFF);
+    terms.toggleDiff(id);
+    expect(terms.activeTab(id)).toBe(`${id}-shell-1`);
+  });
+  it("remembers the last terminal used, and falls back when it is gone", () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`]);
+    terms.select(id, `${id}-shell-1`);
+    terms.select(id, DIFF);
+    expect(terms.lastTerminal(id)).toBe(`${id}-shell-1`);
+    seed(id, []);
+    expect(terms.lastTerminal(id)).toBe(AGENT);
+  });
+});
+
+it('keeps discovery order and identity across unchanged polls', async () => {
+  const { TermService } = await import('@bindings/desktop');
+  const id = newId();
+  const a = `${id}-dev-1`, b = `${id}-dev-2`, c = `${id}-shell-1`;
+  vi.mocked(TermService.Shells).mockResolvedValueOnce([a, b]);
+  await terms.refresh(id);
+  const cache = (terms as unknown as { shells: Map<string, string[]> }).shells;
+  const first = cache.get(id);
+  vi.mocked(TermService.Shells).mockResolvedValueOnce([b, a]);
+  await terms.refresh(id);
+  expect(cache.get(id)).toBe(first);
+  vi.mocked(TermService.Shells).mockResolvedValueOnce([c, b]);
+  await terms.refresh(id);
+  expect(terms.shellsFor(id)).toEqual([b, c]);
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/svelte";
-import { ALL_STATUSES, isAttention, statusLabel } from "$lib/theme";
+import { ALL_STATUSES, isAttention } from "$lib/theme";
+import { statusWord } from "@mobile/lib/statustone";
 import StatusChip from "./StatusChip.svelte";
 
 // The chip's TONE MAPPING and its accessible output.
@@ -75,15 +76,12 @@ describe("StatusChip", () => {
     expect(dot(container)).toBeFalsy();
   });
 
-  it("prints the shared spelling and shouts it in CSS, not in the string", () => {
+  it("prints the Sentence-case word, not an uppercase label", () => {
     const { container } = mount({ status: "ci_failed" });
-
-    // statusLabel("ci_failed") === "ci failed". Uppercasing in JS would put
-    // "CI FAILED" in the accessibility tree, where a screen reader reads
-    // capitals as an initialism and spells some of them out.
-    expect(chip(container).textContent!.trim()).toBe(statusLabel("ci_failed"));
-    expect(chip(container).textContent).not.toContain("CI FAILED");
-    expect(chip(container).className).toContain("uppercase");
+    expect(chip(container).textContent!.trim()).toBe(statusWord("ci_failed"));
+    expect(chip(container).textContent!.trim()).toBe("CI failed");
+    expect(chip(container).className).not.toContain("uppercase");
+    expect(chip(container).className).toContain("text-subhead");
   });
 
   it("carries a caller's own text at a forced tone", () => {

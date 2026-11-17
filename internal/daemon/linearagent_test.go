@@ -111,10 +111,34 @@ func (f *fakeAgentAPI) bodies(id string) string {
 
 func agentDaemon(t *testing.T, projects ...config.Project) (*Daemon, *fakeAgentAPI, *fakeNative) {
 	t.Helper()
+	for i := range projects {
+		// A polling project must carry a valid filter (ValidatePolling gates
+		// openTicket); these fixtures only care about the team.
+		p := &projects[i]
+		if p.CycleMode == "" {
+			p.CycleMode = "none"
+		}
+		if p.MatchMode == "" {
+			p.MatchMode = "any"
+		}
+		if p.AssigneeMode == "" {
+			p.AssigneeMode = "anyone"
+		}
+		if p.DedupMode == "" {
+			p.DedupMode = "seen"
+		}
+	}
 	cfg := testConfig(projects...)
 	cfg.LinearAgent = config.LinearAgentConfig{Enabled: true, ClientID: "cid", PollInterval: config.DefaultLinearAgentPollInterval}
 	nat := &fakeNative{}
-	d := newTestDaemon(t, cfg, &linear.Fake{}, nat)
+	// openTicket re-reads the issue through the human client; seed the identifiers
+	// the agent tests delegate (pendingSession's uuid-<identifier> convention).
+	lin := &linear.Fake{}
+	for n := 1; n <= 20; n++ {
+		ident := fmt.Sprintf("ENG-%d", n)
+		lin.Details = append(lin.Details, linear.IssueDetail{ID: "uuid-" + ident, Identifier: ident, Title: "t " + ident, TeamID: "team-1"})
+	}
+	d := newTestDaemon(t, cfg, lin, nat)
 	api := newFakeAgentAPI()
 	d.agent.apiOverride = api
 	t.Cleanup(d.connWg.Wait) // async notice flushes and Linear posts finish first

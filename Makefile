@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build build-linux test vet fmt fmtcheck tidy check clean daemon daemon-dev mobile-dev mobile-lan mobile-info mobile-sim mobile-device desktop-dev
+.PHONY: build build-linux sandbox-image test vet fmt fmtcheck tidy check clean daemon daemon-dev mobile-sim mobile-device mobile-wireless desktop-dev
 
 build:
 	go build -o lola .
@@ -17,11 +17,25 @@ LINUX_ARCH ?= $(shell go env GOARCH)
 build-linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(LINUX_ARCH) go build -o dist/lola-linux-$(LINUX_ARCH) .
 
+# sandbox-image builds the default container sandbox image (sandbox/Dockerfile)
+# for this machine's architecture and loads it into the local docker under the
+# tag lola runs by default for a non-release build (`:edge`). Release builds
+# default to `:<version>`; tag it that way too, or set [sandbox].image, to try a
+# local image with a release lola. CI publishes the multi-arch image.
+SANDBOX_IMAGE ?= ghcr.io/sushidev-team/lola-sandbox:edge
+LOLA_VERSION ?= dev
+sandbox-image:
+	docker build -f sandbox/Dockerfile --build-arg LOLA_VERSION=$(LOLA_VERSION) -t $(SANDBOX_IMAGE) .
+
+# hubproto is a NESTED module (the hub's wire contract), so ./... skips it;
+# it is tested and vetted from its own directory.
 test:
 	go test ./...
+	cd hubproto && go test ./...
 
 vet:
 	go vet ./...
+	cd hubproto && go vet ./...
 
 # fmtcheck mirrors .github/workflows/ci.yml's gofmt step BYTE FOR BYTE. It lives
 # in `check` because CI ran it and `make check` did not, so a file could be
@@ -47,59 +61,19 @@ check: fmtcheck build vet test
 clean:
 	rm -rf lola .gocache
 
-# --- mobile (milestone 1) ---------------------------------------------------
-#
-# The phone listener only exists in a build tagged lola_insecure, and the binary
-# that actually runs is the one on PATH rather than ./lola — so `make build`
-# alone can never bring it up. These delegate to one script that both this
-# Makefile and mobile/package.json call, so neither side owns the sequence.
+# --- mobile / daemon --------------------------------------------------------
 
-mobile-dev:
-	@contrib/lola-mobile-dev.sh
-
-# The same, but reachable from a PHYSICAL phone. A separate target rather than
-# `make mobile-dev --lan`, which cannot work: make claims a leading `--` for its
-# own options and never passes it through.
-#
-# It binds beyond loopback, so the shared bearer key crosses your network. The
-# daemon says so loudly on every start. Note that the TUI's ^r and the desktop
-# app's restart button do NOT carry the opt-in, so a restart from either drops
-# back to loopback and the phone silently loses its route — come back here.
-mobile-lan:
-	@contrib/lola-mobile-dev.sh --lan
-
-mobile-info:
-	@contrib/lola-mobile-dev.sh --info
-
-# Install the daemon binary this machine runs, from COMMITTED HEAD. Builds and
-# stops there — nothing is started and a daemon already running is left alone.
-#
-# It exists because `make build` writes ./lola, which nothing ever executes: the
-# TUI's ^r, the desktop app's restart button and a hand-started `lola run` all
-# resolve `lola` from PATH. So this installs where those look, with the
-# lola_insecure tag the phone listener only exists under.
-#
-# The SOURCE is what separates it from mobile-lan, which installs the WORKING
-# TREE — right when the change being tested is uncommitted, wrong when somebody
-# else's half-finished work is sitting beside it. This builds `git archive
-# HEAD`, so only committed code reaches the operator's daemon.
-#
-# Note that a running daemon keeps the inode it started with, so this build is
-# not live until it restarts: `make daemon-dev`, the TUI's ^r, or the app's
-# restart button.
+# Install the daemon binary this machine runs (the one on PATH), from the
+# working tree. The TUI's ^r, the desktop app's restart button and a hand-started
+# `lola run` all resolve `lola` from PATH, not ./lola, so `make build` alone
+# never reaches them. A running daemon keeps the inode it started with: the new
+# build is not live until it restarts.
 daemon:
-	@contrib/lola-mobile-dev.sh --head --build-only
+	GOCACHE=$(GOCACHE) GOFLAGS='$(GOFLAGS)' go install .
 
-# The same build, then RUN it, LAN-reachable for a phone. The daemon logs to
-# this terminal and ^C stops it — the `-dev` suffix means the same thing here as
-# in desktop-dev and mobile-dev.
-#
-# It stops whatever is already running first, which is the point: a daemon
-# started by the TUI or the app carries no LAN opt-in, so it is bound to
-# loopback and a phone cannot reach it however healthy it looks.
-daemon-dev:
-	@contrib/lola-mobile-dev.sh --lan --head
-
+# The same, then run it in the foreground (^C stops it).
+daemon-dev: daemon
+	lola run
 
 # Build the app and launch it on an iOS Simulator without opening Xcode. The
 # Simulator shares the Mac's loopback, so a daemon bound to localhost is reached
@@ -114,6 +88,11 @@ mobile-sim:
 # Needs a signing team once — the script says how. See mobile/README.md Â§7.
 mobile-device:
 	cd mobile && ./scripts/run-device.sh
+
+# Build/install/launch over Wi-Fi after pairing the phone with Xcode once.
+# Select a phone by name or UDID with LOLA_DEVICE=Speedy.
+mobile-wireless:
+	cd mobile && ./scripts/run-device.sh --wireless
 
 # The desktop app's dev loop. `wails3 task build` only refreshes the loose
 # bin/Lola, so `open bin/Lola.app` after one launches the OLD bundled binary and

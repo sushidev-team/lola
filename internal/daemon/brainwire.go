@@ -37,6 +37,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/session"
@@ -71,11 +72,27 @@ func buildBrain(bc config.BrainConfig) *brain.Client {
 // enabling/disabling the brain (or changing model/timeout) takes effect live.
 func (d *Daemon) setBrainLocked(bc config.BrainConfig) {
 	d.brain = buildBrain(bc)
+	kind := d.cfg.AgentForProject("")
+	if profile, enabled := d.cfg.AIProfile(kind, "summary"); enabled && bc.Enabled {
+		d.brain = &brain.Client{Agent: agent.Parse(kind), Model: profile.Model, Effort: profile.Effort, Dir: helperWorkDir(), Timeout: brainTimeout(bc)}
+		if !d.brain.Available() {
+			d.brain = nil
+		}
+	}
+	d.commentSummarize = nil
 	if d.brain == nil {
 		d.brainSummarize = nil
 		return
 	}
 	d.brainSummarize = d.brain.Summarize
+	comments := *d.brain
+	if _, enabled := d.cfg.AIProfile(kind, "summary"); !enabled {
+		comments.Model = "haiku"
+	}
+	if comments.Timeout <= 0 || comments.Timeout > commentSummaryTimeout {
+		comments.Timeout = commentSummaryTimeout
+	}
+	d.commentSummarize = comments.Summarize
 }
 
 // brainTimeout is the wall-clock bound applied to a single summary call,

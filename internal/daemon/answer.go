@@ -167,6 +167,18 @@ func (d *Daemon) handleAnswer(ctx context.Context, sessionID, text string) error
 	if !d.handoffPromptProof(ctx, s) {
 		return fmt.Errorf("session %s is not resting at its prompt right now — lola will not type into a mid-turn agent; try again when it is idle", sessionID)
 	}
+	// A question on screen is what a waiting session's reply answers, and it has no empty
+	// composer to find. A resting agent has no question, so its composer must really be
+	// empty: a reply typed behind a person's draft would be sent as one message with it.
+	if s.AgentState == state.AgentIdle {
+		read, err := d.readComposer(ctx, s)
+		if err != nil {
+			return fmt.Errorf("session %s: cannot verify that its prompt is empty: %w", sessionID, err)
+		}
+		if !read.empty {
+			return fmt.Errorf("session %s has text in its own prompt or a screen open — lola will not type over it; finish it in the terminal (lola attach %s)", sessionID, sessionID)
+		}
+	}
 
 	// The human's answer is verbatim operator input (CLI args, or a TUI card that
 	// accepts bracketed pastes), so it can carry an embedded CR — which the
@@ -176,7 +188,7 @@ func (d *Daemon) handleAnswer(ctx context.Context, sessionID, text string) error
 	// through sanitizeAgentText (as the reaction path does) so only the explicit
 	// trailing Enter submits. Choice keys are already safe (constrained to
 	// [0-9A-Za-z] by the parser).
-	if err := d.typeToAgent(ctx, sessionID, paneTarget(s), sanitizeAgentText(text), answerExecTimeout); err != nil {
+	if err := d.typeToAgent(ctx, noteFor(s, answerLabel(s)), sessionID, paneTarget(s), sanitizeAgentText(text), answerExecTimeout); err != nil {
 		return fmt.Errorf("send answer to %s: %w", sessionID, err)
 	}
 

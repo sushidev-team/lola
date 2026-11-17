@@ -84,8 +84,15 @@ func (d *Daemon) handleOpen(ctx context.Context, project, ref string) (protocol.
 // handleOpen it needs git + tmux only (no coding agent), records the session as
 // an agent-less manual-kind shell (kept out of the control loop), and reuses
 // cmd=kill for teardown. Unlike handleOpen the branch is lola-owned, so teardown
-// deletes it.
+// deletes it. With Existing (cmd=openExisting), work directly on the chosen
+// branch instead and keep it on teardown.
 func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs) (protocol.OpenData, error) {
+	if a.Location != "" && a.Location != "worktree" {
+		return d.handleOpenDirectory(ctx, a)
+	}
+	if err := validateSessionName(a.Name); err != nil {
+		return protocol.OpenData{}, err
+	}
 	project := strings.TrimSpace(a.Project)
 	branch := strings.TrimSpace(a.Branch)
 	base := strings.TrimSpace(a.Base)
@@ -130,7 +137,9 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
 	var sess session.Session
 	var err error
-	if a.Agent {
+	if a.Existing {
+		sess, err = nat.OpenExisting(cctx, *p, id, branch, a.Prompt, strings.TrimSpace(a.AgentKind), a.Agent)
+	} else if a.Agent {
 		sess, err = nat.OpenManualAgent(cctx, *p, id, branch, base, a.Prompt, strings.TrimSpace(a.AgentKind))
 	} else {
 		sess, err = nat.OpenManual(cctx, *p, id, branch, base)
@@ -140,8 +149,12 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 		return protocol.OpenData{}, err
 	}
 	sess.Repo = p.Repo
+	sess.Name = strings.TrimSpace(a.Name)
 	d.sessions.Upsert(sess)
 	d.recordSessionEvent("", sess)
+	if a.Agent {
+		d.noteInitial(id, a.Prompt, "")
+	}
 	if serr := d.sessions.Save(); serr != nil {
 		d.logf("", "openManual: persist sessions after manual worktree %s: %v", branch, serr)
 	}
@@ -151,7 +164,11 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	if a.Agent {
 		kindWord = "agent"
 	}
-	msg := fmt.Sprintf("created %s (%s) with an %s at %s — attach in the TUI, or: tmux -L lola attach -t %s", branch, p.Name, kindWord, dir, id)
+	verb := "created"
+	if a.Existing {
+		verb = "opened"
+	}
+	msg := fmt.Sprintf("%s %s (%s) with an %s at %s — attach in the TUI, or: tmux -L lola attach -t %s", verb, branch, p.Name, kindWord, dir, id)
 	d.logf("", "openManual: %s", msg)
 	return protocol.OpenData{SessionID: id, Worktree: dir, Branch: branch, Message: msg}, nil
 }

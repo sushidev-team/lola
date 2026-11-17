@@ -2,82 +2,70 @@ import XCTest
 
 @testable import LolaTransportCore
 
-/// The bridge payload's shape.
-///
-/// These are the exact keys `LolaStateEvent` declares in `src/definitions.ts`.
-/// Nothing in Swift or TypeScript checks the other, so this test is the seam:
-/// a renamed key here has to be renamed there, and a payload that starts
-/// sending nulls where the TypeScript declares optionals turns every `if
-/// (event.code)` in the app into a truthiness bug.
+/// The bridge payload's shape: the exact keys `StateEvent` declares in
+/// `src/definitions.ts`. Nothing checks the other side, so a renamed key here
+/// must be renamed there.
 final class ConnectionStateTests: XCTestCase {
 
     func testAMinimalEventCarriesOnlyEpochAndPhase() {
-        let payload = LolaConnectionEvent(epoch: 3, phase: .connecting).payload()
+        let payload = ConnectionState(epoch: 3, phase: .racing).payload()
         XCTAssertEqual(payload.count, 2)
         XCTAssertEqual(payload["epoch"] as? Int, 3)
-        XCTAssertEqual(payload["phase"] as? String, "connecting")
+        XCTAssertEqual(payload["phase"] as? String, "racing")
     }
 
     func testAbsentFieldsAreOmittedRatherThanSentAsNull() {
-        // A JavaScript optional means "the key is not there". Sending null
-        // instead would still be falsy, but it would also make every payload
-        // the same size and hide which fields the plugin actually knows.
-        let payload = LolaConnectionEvent(
-            epoch: 1, phase: .failed, code: .network, reason: "unreachable"
-        ).payload()
-        XCTAssertNil(payload["spkiPin"])
-        XCTAssertNil(payload["pinned"])
-        XCTAssertNil(payload["daemonCode"])
-        XCTAssertNil(payload["minV"])
-        XCTAssertNil(payload["maxV"])
+        let payload = ConnectionState(epoch: 1, phase: .failed, code: .unreachable).payload()
+        for key in ["path", "daemonCode", "minV", "maxV", "raceMs", "relay"] { XCTAssertNil(payload[key], key) }
     }
 
-    func testAConnectedEventReportsThePinAndWhetherItWasChecked() {
-        let payload = LolaConnectionEvent(
-            epoch: 7, phase: .connected, spkiPin: "abc=", pinned: false
+    func testAReadyEventCarriesPathRaceTimeAndRelayState() {
+        let payload = ConnectionState(
+            epoch: 7, phase: .ready,
+            path: PathInfo(kind: .relay, host: "hub.example.com", port: 443, interface: .cellular),
+            raceMs: 812, relay: .ok
         ).payload()
-        XCTAssertEqual(payload["spkiPin"] as? String, "abc=")
-        XCTAssertEqual(payload["pinned"] as? Bool, false)
-        // The observed pin is reported whether or not it was verified: on an
-        // unpinned first connection it is the value a human is about to write
-        // down, and on a pinned one it is what makes the connection auditable.
+        let path = payload["path"] as? [String: Any]
+        XCTAssertEqual(path?["kind"] as? String, "relay")
+        XCTAssertEqual(path?["host"] as? String, "hub.example.com")
+        XCTAssertEqual(path?["port"] as? Int, 443)
+        XCTAssertEqual(path?["interface"] as? String, "cellular")
+        XCTAssertEqual(payload["raceMs"] as? Int, 812)
+        XCTAssertEqual(payload["relay"] as? String, "ok")
     }
 
     func testAVersionRefusalCarriesBothBounds() {
-        let payload = LolaConnectionEvent(
-            epoch: 2,
-            phase: .failed,
-            code: .protocolViolation,
-            reason: "refused",
-            daemonCode: "unsupported_version",
-            minV: 1,
-            maxV: 1
+        let payload = ConnectionState(
+            epoch: 2, phase: .failed, code: .unsupportedVersion, daemonCode: "unsupported_version", minV: 2, maxV: 2
         ).payload()
-        XCTAssertEqual(payload["code"] as? String, "protocol")
+        XCTAssertEqual(payload["code"] as? String, "unsupported_version")
         XCTAssertEqual(payload["daemonCode"] as? String, "unsupported_version")
-        XCTAssertEqual(payload["minV"] as? Int, 1)
-        XCTAssertEqual(payload["maxV"] as? Int, 1)
+        XCTAssertEqual(payload["minV"] as? Int, 2)
+        XCTAssertEqual(payload["maxV"] as? Int, 2)
     }
 
     func testTheWireStringsAreTheOnesTypeScriptDeclares() {
-        // `protocol` and `pin_mismatch` are the two that cannot be spelled the
-        // same in both languages: one is a Swift keyword and the other is
-        // camelCase on this side and snake_case on the wire.
-        XCTAssertEqual(LolaFailureCode.protocolViolation.rawValue, "protocol")
-        XCTAssertEqual(LolaFailureCode.pinMismatch.rawValue, "pin_mismatch")
-        XCTAssertEqual(LolaFailureCode.peerClosed.rawValue, "peer_closed")
-        XCTAssertEqual(LolaFailureCode.clientClosed.rawValue, "client_closed")
-        XCTAssertEqual(LolaFailureCode.internalError.rawValue, "internal")
-        XCTAssertEqual(LolaFailureCode.network.rawValue, "network")
-        XCTAssertEqual(LolaFailureCode.timeout.rawValue, "timeout")
-        XCTAssertEqual(LolaFailureCode.tls.rawValue, "tls")
-        XCTAssertEqual(LolaFailureCode.rejected.rawValue, "rejected")
-        XCTAssertEqual(LolaFailureCode.backgrounded.rawValue, "backgrounded")
+        let codes: [FailureCode: String] = [
+            .offline: "offline", .unreachable: "unreachable", .timeout: "timeout", .keyChanged: "key_changed",
+            .notPaired: "not_paired", .unsupportedVersion: "unsupported_version",
+            .relayUnavailable: "relay_unavailable", .protocolViolation: "protocol", .peerClosed: "peer_closed",
+            .clientClosed: "client_closed", .backgrounded: "backgrounded", .internalError: "internal",
+        ]
+        for (code, raw) in codes { XCTAssertEqual(code.rawValue, raw) }
+        XCTAssertEqual(
+            [ConnectionPhase.idle, .racing, .ready, .migrating, .closed, .failed].map(\.rawValue),
+            ["idle", "racing", "ready", "migrating", "closed", "failed"])
+        XCTAssertEqual(
+            [RelayState.none, .ok, .backoff, .credentialDead, .hubTooOld].map(\.rawValue),
+            ["none", "ok", "backoff", "credential_dead", "hub_too_old"])
+        XCTAssertEqual([PathKind.direct, .relay].map(\.rawValue), ["direct", "relay"])
+    }
 
-        XCTAssertEqual(LolaConnectionPhase.connecting.rawValue, "connecting")
-        XCTAssertEqual(LolaConnectionPhase.handshaking.rawValue, "handshaking")
-        XCTAssertEqual(LolaConnectionPhase.connected.rawValue, "connected")
-        XCTAssertEqual(LolaConnectionPhase.failed.rawValue, "failed")
-        XCTAssertEqual(LolaConnectionPhase.closed.rawValue, "closed")
+    func testOnlyTheDaemonsRefusalsAreTerminal() {
+        let terminal = Set([FailureCode.notPaired, .unsupportedVersion, .protocolViolation, .clientClosed, .internalError])
+        for code in [FailureCode.offline, .unreachable, .timeout, .keyChanged, .relayUnavailable, .peerClosed, .backgrounded] {
+            XCTAssertTrue(code.isRetryable, code.rawValue)
+        }
+        for code in terminal { XCTAssertFalse(code.isRetryable, code.rawValue) }
     }
 }

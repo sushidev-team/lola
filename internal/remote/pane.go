@@ -88,6 +88,25 @@ func (c *conn) enqueuePane(f *protocol.Frame) error {
 		c.refusePane(f.ID, "", protocol.CodeUnknownPane, "no pane named")
 		return nil
 	}
+	// Per-device limits, shared by a device's direct and relayed connections. A
+	// limited sub or write is dropped and answered on the pane; the connection
+	// survives. A pty write is dropped rather than queued: silently delaying
+	// keystrokes into a live agent is worse than refusing them.
+	switch {
+	case f.Type == protocol.FrameSub && !c.srv.lim.allowSub(c.peer.DeviceID):
+		c.refusePane(f.ID, clipPane(op.pane), protocol.CodeRateLimited, "too many subscriptions")
+		return nil
+	case f.Type == protocol.FramePTY && op.in.Action == protocol.PTYActionWrite &&
+		!c.srv.lim.allowPTY(c.peer.DeviceID, len(op.in.Data)):
+		c.refusePane(f.ID, clipPane(op.pane), protocol.CodeRateLimited, "terminal input rate exceeded")
+		return nil
+	case f.Type == protocol.FramePTY && op.in.Action == protocol.PTYActionScroll &&
+		!c.srv.lim.allowScroll(c.peer.DeviceID):
+		// A scroll is tier read but not free: it execs tmux twice and can put
+		// a shared pane into copy mode for every attached client.
+		c.refusePane(f.ID, clipPane(op.pane), protocol.CodeRateLimited, "terminal scroll rate exceeded")
+		return nil
+	}
 	if len(op.pane) > maxPaneName {
 		// Bounded HERE, before the name is queued, logged or handed to the pane
 		// layer. Frame.Pane is otherwise capped only by the frame size — a
@@ -109,6 +128,13 @@ func (c *conn) enqueuePane(f *protocol.Frame) error {
 		c.srv.opts.logf()("remote: device=%s pane queue full; closing", logSafe(c.peer.DeviceID))
 		return errRefused
 	}
+}
+
+func clipPane(p string) string {
+	if len(p) > maxPaneName {
+		return p[:maxPaneName]
+	}
+	return p
 }
 
 // paneLoop drains the ordered queue.
@@ -201,6 +227,12 @@ func (c *conn) paneInput(op paneOp) {
 		if len(op.in.Data) == 0 {
 			return
 		}
+		// Raw keystrokes are the shell tier: one audit line per (connection,
+		// pane), never the bytes.
+		if !c.ptyAudited[op.pane] {
+			c.ptyAudited[op.pane] = true
+			c.auditPTYWrite(op.pane)
+		}
 		if err := c.srv.opts.Panes.Write(op.pane, op.in.Data); err != nil {
 			c.refusePane(op.id, op.pane, protocol.CodeInternal, "write failed")
 			c.srv.opts.logf()("remote: device=%s write pane=%s failed: %v",
@@ -212,7 +244,7 @@ func (c *conn) paneInput(op paneOp) {
 		cancel()
 		if err != nil {
 			c.refusePane(op.id, op.pane, protocol.CodeInternal, "scroll failed")
-			c.srv.opts.logf()("remote: device=%s scroll pane=%s failed: %v",
+			c.logDevice("remote: device=%s scroll pane=%s failed: %v",
 				logSafe(c.peer.DeviceID), logSafe(op.pane), err)
 		}
 	case protocol.PTYActionResize:

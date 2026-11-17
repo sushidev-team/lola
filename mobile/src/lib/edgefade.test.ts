@@ -85,3 +85,14 @@ describe("overflowEdges", () => {
     expect(overflowEdges(199.6, 300, 500)).toEqual({ left: true, right: false });
   });
 });
+
+describe("trailing-only fade", () => {
+  it("fades the end of an overflowing strip and never the start", () => {
+    expect(edgeFadeMask(0, 300, 500, 16, false)).toBe("linear-gradient(to right, black 0px, black calc(100% - 16px), transparent 100%)");
+    expect(edgeFadeMask(100, 300, 500, 16, false)).toBe("linear-gradient(to right, black 0px, black calc(100% - 16px), transparent 100%)");
+  });
+
+  it("is off once scrolled to the end", () => {
+    expect(edgeFadeMask(200, 300, 500, 16, false)).toBe("");
+  });
+});

@@ -2,6 +2,7 @@ package session
 
 import (
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -64,6 +65,8 @@ func BaseID(id string) string {
 // session keeps on itself (see the lane fields in Session for each one's
 // meaning).
 type App struct {
+	ReadyNotified   string            `json:"ready_notified,omitempty"`
+	PRCommentGuards map[string]string `json:"pr_comment_guards,omitempty"`
 	// Name is the member project's name, which is also the folder name.
 	Name string `json:"name"`
 	// Repo is the member's GitHub owner/name ("" = no PR can be found).
@@ -96,6 +99,7 @@ type App struct {
 	PostedGitHubPRs   map[string]int         `json:"posted_github_prs,omitempty"`
 	InlineReviewPRs   map[string]int         `json:"inline_review_prs,omitempty"`
 	ReviewTallies     map[string]ReviewTally `json:"review_tallies,omitempty"`
+	ReviewGates       map[string]ReviewGate  `json:"review_gates,omitempty"`
 	MergeQueueGuard   *MergeQueueGuard       `json:"merge_queue_guard,omitempty"`
 	MergeQueuePos     int                    `json:"-"`
 	MergeQueueStep    string                 `json:"-"`
@@ -127,6 +131,7 @@ func (s Session) LaneView(app string) (Session, bool) {
 	v.Lane = app
 	v.Repo, v.Branch, v.Worktree, v.GitPin = a.Repo, a.Branch, a.Worktree, a.GitPin
 	v.PR = clonePR(a.PR)
+	v.ReadyNotified = a.ReadyNotified
 	v.PRObservedAt, v.PRFetchFailures = a.PRObservedAt, a.PRFetchFailures
 	v.Delivery, v.DeliverySince = a.Delivery, a.DeliverySince
 	if v.Delivery == "" {
@@ -135,6 +140,8 @@ func (s Session) LaneView(app string) (Session, bool) {
 	v.LastReactedStatus, v.CIRetries, v.Escalated, v.PendingReaction = a.LastReactedStatus, a.CIRetries, a.Escalated, a.PendingReaction
 	v.ReviewedPRs, v.ReviewWatermarks, v.PendingHandoffs = maps.Clone(a.ReviewedPRs), maps.Clone(a.ReviewWatermarks), maps.Clone(a.PendingHandoffs)
 	v.PostedGitHubPRs, v.InlineReviewPRs, v.ReviewTallies = maps.Clone(a.PostedGitHubPRs), maps.Clone(a.InlineReviewPRs), maps.Clone(a.ReviewTallies)
+	v.PRCommentGuards = maps.Clone(a.PRCommentGuards)
+	v.ReviewGates = maps.Clone(a.ReviewGates)
 	v.MergeQueueGuard, v.MergeQueuePos, v.MergeQueueStep = a.MergeQueueGuard, a.MergeQueuePos, a.MergeQueueStep
 	// The legacy single-provider scalars are not lane-scoped; a lane starts
 	// from none so the review state migration cannot resurrect the
@@ -170,11 +177,14 @@ func (s *Session) putLane(v Session, now time.Time) {
 	a := s.Apps[i]
 	a.Repo, a.Branch, a.Worktree, a.GitPin = v.Repo, v.Branch, v.Worktree, v.GitPin
 	a.PR = clonePR(v.PR)
+	a.ReadyNotified = v.ReadyNotified
 	a.PRObservedAt, a.PRFetchFailures = v.PRObservedAt, v.PRFetchFailures
 	a.Delivery, a.DeliverySince = v.Delivery, v.DeliverySince
 	a.LastReactedStatus, a.CIRetries, a.Escalated, a.PendingReaction = v.LastReactedStatus, v.CIRetries, v.Escalated, v.PendingReaction
 	a.ReviewedPRs, a.ReviewWatermarks, a.PendingHandoffs = v.ReviewedPRs, v.ReviewWatermarks, v.PendingHandoffs
 	a.PostedGitHubPRs, a.InlineReviewPRs, a.ReviewTallies = v.PostedGitHubPRs, v.InlineReviewPRs, v.ReviewTallies
+	a.PRCommentGuards = maps.Clone(v.PRCommentGuards)
+	a.ReviewGates = maps.Clone(v.ReviewGates)
 	a.MergeQueueGuard, a.MergeQueuePos, a.MergeQueueStep = v.MergeQueueGuard, v.MergeQueuePos, v.MergeQueueStep
 
 	// Everything else is the session's: take the view wholesale, then
@@ -186,11 +196,14 @@ func (s *Session) putLane(v Session, now time.Time) {
 	s.Apps[i] = a
 	s.Repo, s.Branch, s.Worktree, s.GitPin = keep.Repo, keep.Branch, keep.Worktree, keep.GitPin
 	s.PR, s.PRObservedAt, s.PRFetchFailures = keep.PR, keep.PRObservedAt, keep.PRFetchFailures
+	s.ReadyNotified = keep.ReadyNotified
 	s.Delivery, s.DeliverySince = keep.Delivery, keep.DeliverySince
 	s.LastReactedStatus, s.CIRetries, s.Escalated, s.PendingReaction = keep.LastReactedStatus, keep.CIRetries, keep.Escalated, keep.PendingReaction
 	s.ReviewedPR, s.LastCodeRabbitAt, s.PendingCodeRabbit, s.PendingReviewFindings = keep.ReviewedPR, keep.LastCodeRabbitAt, keep.PendingCodeRabbit, keep.PendingReviewFindings
 	s.ReviewedPRs, s.ReviewWatermarks, s.PendingHandoffs = keep.ReviewedPRs, keep.ReviewWatermarks, keep.PendingHandoffs
 	s.PostedGitHubPRs, s.InlineReviewPRs, s.ReviewTallies = keep.PostedGitHubPRs, keep.InlineReviewPRs, keep.ReviewTallies
+	s.PRCommentGuards = keep.PRCommentGuards
+	s.ReviewGates = keep.ReviewGates
 	s.MergeQueueGuard, s.MergeQueuePos, s.MergeQueueStep = keep.MergeQueueGuard, keep.MergeQueuePos, keep.MergeQueueStep
 	// The view's rollup was the lane's; the session's is re-derived below
 	// (SetAgentState on the view already moved the agent axis it shares).
@@ -280,5 +293,6 @@ func clonePR(pr *scm.PR) *scm.PR {
 		return nil
 	}
 	c := *pr
+	c.Checks = slices.Clone(pr.Checks)
 	return &c
 }

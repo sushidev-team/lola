@@ -1,64 +1,175 @@
-// The hand-off inbox: one pending payload, and who offered it.
+// The pairing flow behind the connect screen (spec §1.5, §5.2).
 //
-// WHY A MODULE-LEVEL INBOX RATHER THAN A CALL. A payload can arrive from two
-// places and only one of them is the connect screen. An in-app scan happens
-// inside `Connect.svelte` and could apply itself directly; a payload from the
-// OS URL router arrives whenever iOS decides to deliver it, which may be while
-// the user is on Sessions, or during a cold launch before any screen has
-// mounted. Both therefore drop the payload HERE, and the connect screen drains
-// it — which is what makes a scan and a link converge on one piece of applying
-// code instead of two that drift.
-//
-// `source` IS A SECURITY FIELD, not bookkeeping. A scan is something the user
-// did one second ago with the camera in their hand, so it may dial on its own.
-// A link is something an arbitrary app asked the OS to deliver, so it may only
-// FILL THE FORM and wait for a tap — PLAN.md's objection to URL-routed pairing
-// is exactly that anyone can send one, and silently dialling whatever arrives
-// would import that problem after going to the trouble of avoiding it.
+// Invariants:
+//  - Nothing secret is here. The scanned payload is held natively under an
+//    opaque `pairRef`; this model holds the ref, the display code and the view.
+//  - The code is shown only after `pairBegin` resolved, i.e. after the proof was
+//    written; the Mac, not this phone, confirms it.
+//  - Every native outcome ends in exactly one view, and a finished pairing
+//    forgets its ref so leaving the screen never cancels a pairing that ended.
+//  - The idle timer is held off only while a pairing waits (auto-lock would
+//    background the app and fail it as `phone_left`), and is always released.
+//  - A pairing outcome for a ref this screen did not start (a development
+//    launch the plugin ran itself) is applied like our own.
 
-import type { DevLinkTarget } from "./devlink";
-import type { PairPayload, PairSource } from "./pairpayload";
+import type { PairingEvent } from "lola-transport";
+import { transport } from "@mobile/native";
+import { connection } from "./connection.svelte";
+import { haptic } from "./haptics";
+import {
+  invalidNotice,
+  outcomeState,
+  pairError,
+  type PairNotice,
+} from "./paircopy";
+import { router, type ConnectState } from "./router.svelte";
+import { scanCapability, scanOnce } from "./scan";
 
-export interface PairOffer {
-  payload: PairPayload;
-  source: PairSource;
-  /**
-   * Where the offer asks the app to land once connected, or null for the list.
-   *
-   * Only a development link ever sets one, and it is applied by whichever
-   * connect actually succeeded — never by the offer itself — for the same
-   * reason `devLinkActive` is: a flag a link could set for itself would
-   * describe nothing.
-   */
-  target?: DevLinkTarget | null;
+/** The name the Mac shows for this phone. */
+export function deviceName(userAgent: string = globalThis.navigator?.userAgent ?? ""): string {
+  return /iPad/i.test(userAgent) ? "iPad" : "iPhone";
 }
 
 class Pairing {
-  /** The payload waiting to be applied, if any. */
-  pending = $state<PairOffer | null>(null);
+  view = $state<ConnectState>("scan");
+  /** A message over the scan view; null when the view says its own words. */
+  notice = $state<PairNotice | null>(null);
+  /** The six digits to type on the Mac, once the proof is written. */
+  code = $state("");
+  /** True from the scan until the code is shown or the attempt ended. */
+  busy = $state(false);
 
-  /**
-   * True while the LIVE connection is one a development URL set up.
-   *
-   * This is the third fence around `lola-dev://` and it is the app's half of
-   * it: the plugin's contract requires a PERSISTENT banner for as long as such
-   * a connection is up, which is what makes the scheme a labelled test fixture
-   * rather than a hidden back door. `App.svelte` renders it above every screen.
-   * It is set by whichever connect actually succeeded, never by the URL — a
-   * flag a link could set for itself would label nothing.
-   */
-  devLinkActive = $state(false);
+  #ref = "";
+  #awake = false;
+  #live = false;
+  #handle: { remove(): unknown } | undefined;
 
-  /** Hand a payload to whichever screen is in a position to use it. */
-  offer(payload: PairPayload, source: PairSource, target: DevLinkTarget | null = null): void {
-    this.pending = { payload, source, target };
+  /** Starts the screen: a scan state presents the scanner, any other state is shown as given. */
+  open(initial: ConnectState = "scan"): void {
+    this.close();
+    this.view = initial;
+    this.notice = null;
+    this.code = "";
+    this.#live = true;
+    void transport
+      .addListener("pairing", (e) => this.#outcome(e))
+      .then((h) => {
+        if (this.#live) this.#handle = h;
+        else void h.remove();
+      })
+      .catch(() => {});
+    if (initial === "scan") void this.scan();
   }
 
-  /** Take the pending payload, leaving the inbox empty. */
-  take(): PairOffer | null {
-    const p = this.pending;
-    this.pending = null;
-    return p;
+  /** Leaves the screen: abandons a pairing still waiting and releases everything. */
+  close(): void {
+    if (this.#ref !== "") void transport.pairCancel({ pairRef: this.#ref }).catch(() => {});
+    this.#ref = "";
+    this.#live = false;
+    void this.#handle?.remove();
+    this.#handle = undefined;
+    this.#hold(false);
+    this.busy = false;
+  }
+
+  /** Back to the scan and presents the scanner. */
+  async rescan(): Promise<void> {
+    if (this.busy) return;
+    if (this.#ref !== "") {
+      void transport.pairCancel({ pairRef: this.#ref }).catch(() => {});
+      this.#ref = "";
+      this.#hold(false);
+    }
+    this.view = "scan";
+    this.notice = null;
+    this.code = "";
+    await this.scan();
+  }
+
+  /** One scan; a readable code goes straight on to the pairing. */
+  async scan(): Promise<void> {
+    if (this.busy || this.view === "code") return;
+    this.busy = true;
+    this.notice = null;
+    try {
+      const cap = await scanCapability();
+      if (!cap.available) {
+        if (cap.reason === "denied") this.notice = "cameraOff";
+        else this.view = "no-camera";
+        return;
+      }
+      const r = await scanOnce();
+      switch (r.kind) {
+        case "scanned":
+          await this.#begin(r.pairRef);
+          return;
+        case "invalid":
+          this.notice = invalidNotice(r.why);
+          return;
+        case "denied":
+          this.notice = "cameraOff";
+          return;
+        case "restricted":
+        case "unavailable":
+          this.view = "no-camera";
+          return;
+        case "failed":
+          this.view = "failed";
+          return;
+        case "cancelled":
+          return;
+      }
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async #begin(pairRef: string): Promise<void> {
+    this.#ref = pairRef;
+    this.#hold(true);
+    try {
+      const r = await transport.pairBegin({ pairRef, deviceName: deviceName() });
+      // An outcome event can overtake this reply; it has already decided the view.
+      if (this.#ref !== pairRef) return;
+      this.code = r.code;
+      this.view = "code";
+    } catch (e) {
+      if (this.#ref !== pairRef) return;
+      this.#ref = "";
+      this.#hold(false);
+      const out = pairError(e);
+      if (out.kind === "notice") this.notice = out.notice;
+      else if (out.kind === "state") this.view = out.state;
+    }
+  }
+
+  #outcome(e: PairingEvent): void {
+    if (this.#ref !== "" && e.pairRef !== this.#ref) return;
+    this.#ref = "";
+    this.#hold(false);
+    this.busy = false;
+    if (e.outcome === "paired") {
+      void this.#paired(e.daemonId);
+      return;
+    }
+    haptic("refusal");
+    this.code = "";
+    this.notice = null;
+    this.view = outcomeState(e.outcome);
+  }
+
+  async #paired(daemonId: string | undefined): Promise<void> {
+    haptic("success");
+    await connection.refresh();
+    router.replace({ name: "tab", tab: "inbox" });
+    const ok = await connection.connect(daemonId || connection.daemonId);
+    if (!ok && connection.diagnosis.retryable) connection.retryLater();
+  }
+
+  #hold(on: boolean): void {
+    if (this.#awake === on) return;
+    this.#awake = on;
+    void transport.setIdleTimerDisabled({ disabled: on }).catch(() => {});
   }
 }
 

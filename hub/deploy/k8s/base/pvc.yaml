@@ -1,0 +1,14 @@
+# The file store: device public keys, hashed enroll tokens, items, policies and
+# the console's admin.token. Retain: deleting the PVC (or the namespace) must
+# not delete the volume, or every device has to re-enroll.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lola-hub-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: do-block-storage-retain
+  resources:
+    requests:
+      storage: 1Gi

@@ -1,0 +1,41 @@
+diff --git a/resources/js/components/ui/__tests__/dialog.test.tsx b/resources/js/components/ui/__tests__/dialog.test.tsx
+index 529c8d3cc..2a9266ee7 100644
+--- a/resources/js/components/ui/__tests__/dialog.test.tsx
++++ b/resources/js/components/ui/__tests__/dialog.test.tsx
+@@ -148,3 +148,14 @@ describe("AlertDialogContent height", () => {
+     expect(screen.getByRole("dialog").className).toContain("overflow-hidden");
+   });
+ });
++
++describe("DialogContent design tokens", () => {
++  test("uses the scrim and dialog shadow tokens", () => {
++    const dialog = openDialog();
++    expect(dialog.className).toContain("[box-shadow:var(--shadow-dialog)]");
++    expect(dialog.className).not.toContain("shadow-lg");
++    const overlay = document.querySelector(".bg-overlay-scrim");
++    expect(overlay).not.toBeNull();
++    expect(document.querySelector(".bg-black\\/80")).toBeNull();
++  });
++});
+diff --git a/resources/js/components/ui/dialog.tsx b/resources/js/components/ui/dialog.tsx
+index dc9bf312e..fe49b0736 100644
+--- a/resources/js/components/ui/dialog.tsx
++++ b/resources/js/components/ui/dialog.tsx
+@@ -21,7 +21,7 @@ const DialogOverlay = React.forwardRef<
+   <DialogPrimitive.Overlay
+     ref={ref}
+     className={cn(
+-      "fixed inset-0 z-50 bg-black/80  data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
++      "fixed inset-0 z-50 bg-overlay-scrim data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+       className,
+     )}
+     {...props}
+@@ -96,7 +96,7 @@ const DialogContent = React.forwardRef<
+           // overflow classes coexist on purpose: Tailwind emits the `overflow`
+           // shorthand before the `overflow-y` longhand, so this reads as
+           // "clip sideways, scroll down" rather than either one alone.
+-          "@container fixed left-[50%] top-[50%] z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 rounded-lg overflow-hidden overflow-y-auto [&>*]:min-w-0",
++          "@container fixed left-[50%] top-[50%] z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 [box-shadow:var(--shadow-dialog)] duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 rounded-lg overflow-hidden overflow-y-auto [&>*]:min-w-0",
+           className,
+         )}
+         {...props}

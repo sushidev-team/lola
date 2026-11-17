@@ -51,9 +51,8 @@ func (c *Client) BehindBy(ctx context.Context, repo, base, headSHA string) (int,
 }
 
 // MergePR merges PR #pr in repo with method (squash|merge|rebase), but only if
-// its head is still headSHA. The remote branch is left alone: lola's own
-// teardown removes the local branch once the PR reads merged, and deleting the
-// remote one is the repository's setting to make.
+// its head is still headSHA. Branch cleanup runs separately once the observer
+// confirms the merge, including for PRs merged outside Lola.
 func (c *Client) MergePR(ctx context.Context, repo string, pr int, method, headSHA string) error {
 	switch method {
 	case "squash", "merge", "rebase":

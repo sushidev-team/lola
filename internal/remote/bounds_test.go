@@ -12,26 +12,32 @@ import (
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
-// TestUnauthenticatedConnectionsAreBoundedAtAccept proves the connection bound
+// TestUnauthenticatedConnectionsAreBoundedAtAccept proves the pre-auth bound
 // counts what it claims to.
 //
-// maxConnections was checked against the map of peers that had FINISHED a
+// The bound used to be checked against the map of peers that had FINISHED a
 // handshake, so a peer that opens TCP sockets and never sends a ClientHello was
 // not counted at all: each held a file descriptor and a goroutine for the whole
 // handshake timeout while admission kept saying yes. fd exhaustion in this
 // process takes the unix socket every other lola client uses down with it.
 func TestUnauthenticatedConnectionsAreBoundedAtAccept(t *testing.T) {
-	s := startTestListener(t, &stubHandler{}, newFakeBus())
+	s := startTestListener(t, &stubHandler{}, newFakeBus()).srv
 	addr := s.Addrs()[0].Addr
+	preAuth := func() int {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.preAuth
+	}
 
-	// Fill every slot with peers that complete TCP and then say nothing.
+	// Fill this address's allowance with peers that complete TCP and then say
+	// nothing.
 	var held []net.Conn
 	defer func() {
 		for _, c := range held {
 			c.Close()
 		}
 	}()
-	for i := 0; i < maxConnections; i++ {
+	for i := 0; i < maxPreAuthPerIP; i++ {
 		c, err := net.DialTimeout("tcp", addr, testTimeout)
 		if err != nil {
 			t.Fatalf("dial %d: %v", i, err)
@@ -43,7 +49,7 @@ func TestUnauthenticatedConnectionsAreBoundedAtAccept(t *testing.T) {
 	// connection is refused PROMPTLY rather than parked in the handshake for
 	// handshakeTimeout.
 	waitFor(t, "one slot per ACCEPTED connection (a peer parked in the handshake must not be counted for nothing)",
-		func() bool { return len(s.slots) == maxConnections })
+		func() bool { return preAuth() == maxPreAuthPerIP })
 
 	extra, err := net.DialTimeout("tcp", addr, testTimeout)
 	if err != nil {
@@ -54,14 +60,14 @@ func TestUnauthenticatedConnectionsAreBoundedAtAccept(t *testing.T) {
 	if _, err := extra.Read(make([]byte, 1)); err == nil {
 		t.Fatal("the over-limit connection was served")
 	} else if errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("the over-limit connection was accepted and left parked; %d unauthenticated peers counted for nothing", maxConnections)
+		t.Fatalf("the over-limit connection was accepted and left parked; %d unauthenticated peers counted for nothing", maxPreAuthPerIP)
 	}
 
 	// A slot freed by a departing peer is reusable, so the bound is a bound and
 	// not a leak.
 	held[0].Close()
 	held = held[1:]
-	waitFor(t, "the slot to be released", func() bool { return len(s.slots) < maxConnections })
+	waitFor(t, "the slot to be released", func() bool { return preAuth() < maxPreAuthPerIP })
 }
 
 // TestCloseIsNotHeldByAShieldedHandler is the shutdown bound.
@@ -85,21 +91,12 @@ func TestCloseIsNotHeldByAShieldedHandler(t *testing.T) {
 		return protocol.Response{OK: true}
 	}}
 
-	s, err := listen(context.Background(), Options{
-		Bind:         "localhost",
-		Port:         freePort(t),
-		Dir:          t.TempDir(),
-		Handle:       h.handle,
-		Panes:        newFakeBus(),
-		Logf:         func(string, ...any) {},
-		HandlerGrace: 150 * time.Millisecond,
-	}, &stubAuth{})
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { s.Close() })
+	l := startTestListener(t, h, newFakeBus(), func(o *Options) { o.HandlerGrace = 150 * time.Millisecond })
+	s := l.srv
 
-	_, w, _ := dialTLS(t, s)
+	c := l.dial()
+	c.wantReady()
+	w := c.fw
 	f := protocol.Frame{V: protocol.FrameVersionCurrent, Type: protocol.FrameReq, ID: "p1", Cmd: "pollOnce"}
 	if err := f.SetPayload(protocol.Request{Cmd: "pollOnce"}); err != nil {
 		t.Fatalf("payload: %v", err)

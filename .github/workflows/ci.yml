@@ -1,10 +1,14 @@
 name: CI
 
+# hub/ is the team hub, a separate Go module with its own workflow (hub.yml):
+# a change to it alone runs none of this.
 on:
   push:
     branches: [main]
+    paths-ignore: ['hub/**', '.github/workflows/hub.yml']
   pull_request:
     branches: [main]
+    paths-ignore: ['hub/**', '.github/workflows/hub.yml']
 
 permissions:
   contents: read
@@ -67,15 +71,10 @@ jobs:
       - name: test (race)
         run: go test -race -count=1 ${{ steps.pkgs.outputs.list }}
 
-      # The lola_insecure half of the M1 remote listener compiles ONLY under its
-      # build tag, so nothing above touches it: the insecure authorizer, the
-      # daemon wiring that starts a listener and their tests are all invisible
-      # to an untagged run. Without this step that path can rot silently, and it
-      # is the path that decides whether a bearer key can reach a socket at all.
-      # The untagged build stays the one that ships — `go tool nm` on it finds
-      # none of these symbols — which is exactly why both have to be green.
-      - name: build/vet/test (lola_insecure)
+      # hubproto is a nested module (the hub's wire contract), so `go list ./...`
+      # above does not include it.
+      - name: hubproto (vet + race)
+        working-directory: hubproto
         run: |
-          go build -tags lola_insecure ${{ steps.pkgs.outputs.list }}
-          go vet -tags lola_insecure ${{ steps.pkgs.outputs.list }}
-          go test -race -count=1 -tags lola_insecure ${{ steps.pkgs.outputs.list }}
+          go vet ./...
+          go test -race -count=1 ./...

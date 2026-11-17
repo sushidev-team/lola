@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import { onMount } from "svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -112,7 +114,7 @@
       bind:value={filter}
     />
     <Button variant="primary" size="md" disabled={loading} onclick={() => load(true)}>
-      <span aria-hidden="true">↻</span> Refresh
+      <span aria-hidden="true"><Icon name="refresh-cw" size={14} /></span> Refresh
     </Button>
   </div>
 
@@ -156,8 +158,8 @@
               <td class="px-3 py-2 font-mono text-sm text-faint" onclick={() => openShell(p)}>
                 <div class="max-w-[26ch] truncate">{p.branch}</div>
               </td>
-              <td class="px-3 py-2 text-center {ci.cls}" title={p.checks} onclick={() => openShell(p)}>{ci.glyph}</td>
-              <td class="px-3 py-2 text-sm {rv.cls}" title={p.review} onclick={() => openShell(p)}>{rv.text}</td>
+              <td class="px-3 py-2 text-center {ci.cls}" title={p.checks} onclick={() => openShell(p)}><GlyphIcon glyph={ci.glyph} /></td>
+              <td class="px-3 py-2 text-sm {rv.cls}" title={p.review} onclick={() => openShell(p)}><GlyphIcon glyph={rv.text} /></td>
               <td class="px-3 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100">
                 <div class="flex items-center justify-end gap-0.5">
                   <Button size="xs" disabled={p.alreadyOpen} onclick={() => openShell(p)}>Shell</Button>

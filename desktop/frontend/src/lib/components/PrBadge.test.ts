@@ -23,7 +23,7 @@ describe("PrBadge delivery chip", () => {
   it("states the delivery state in words", () => {
     render(PrBadge, { session: pr(), delivery: "ci_failed" });
     expect(screen.getByText("#42")).toBeInTheDocument();
-    expect(screen.getByText(/ci failed/)).toBeInTheDocument();
+    expect(screen.getByText(/CI failed/)).toBeInTheDocument();
   });
 
   it("says nothing about a PR that is not asking for anything", () => {

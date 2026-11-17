@@ -42,7 +42,8 @@
 </script>
 
 <script lang="ts">
-  import { pillKind, statusLabel } from "$lib/theme";
+  import { pillKind } from "$lib/theme";
+  import { statusWord } from "@mobile/lib/statustone";
 
   let {
     /** The rolled-up status word. Drives both the tone and the label. */
@@ -102,23 +103,19 @@
   }
 
   const kind = $derived<ChipTone>(tone === "auto" ? toneFor(status) : tone);
-  const text = $derived(label || statusLabel(status));
+  const text = $derived(label || statusWord(status));
 </script>
 
-<!-- UPPERCASE IS CSS, NOT THE STRING. `text-xs` is the design's 10/12 bold
-     tracked label step and it deliberately does not carry `text-transform` (see
-     app.css), so the transform is added here — and only here. Uppercasing in JS
-     would put "NEEDS YOU" in the accessibility tree, where a screen reader
-     reads capitals as an initialism and spells some of them out. The DOM keeps
-     theme.ts's own spelling; only the pixels are shouted.
+<!-- SENTENCE CASE, NOT SHOUTED. One word at `text-subhead` (13/18, 600): the chip
+     reads as a word in a soft ground, not as a tracked label. The spelling is
+     `statusWord`, the one app-wide Sentence-case mapping.
 
      The dot is `bg-current`, so it is the chip's foreground by construction and
      can never drift from it — and it is absent on grey by rule: a dot on a
-     quiet chip is a lit indicator saying nothing, which is how six of them in a
-     list stop meaning anything. -->
+     quiet chip is a lit indicator saying nothing. -->
 <span
   class="inline-flex shrink-0 items-center gap-[5px] rounded-md py-[3px] pr-2 pl-[7px]
-         text-xs uppercase {GROUNDS[kind]} {klass}"
+         text-subhead {GROUNDS[kind]} {klass}"
 >
   {#if kind !== "grey"}
     <span class="h-[5px] w-[5px] shrink-0 rounded-full bg-current" aria-hidden="true"></span>

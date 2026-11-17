@@ -50,6 +50,8 @@ func (d *Daemon) observeApps(ctx context.Context, s session.Session) []appFact {
 			if err != nil {
 				d.logf("", "observe: PR check for %s app %s (branch %s in %s) failed: %v", s.ID, a.Name, a.Branch, a.Repo, err)
 			} else {
+				p = prForAttempt(s, p)
+				d.applyRequiredChecks(ctx, a.Repo, p)
 				f.known, f.pr, pr = true, p, p
 			}
 		}
@@ -163,7 +165,9 @@ func (d *Daemon) syncGitPins() {
 		}
 	}
 	for _, s := range d.sessions.Snapshot() {
-		sandboxed := s.Sandbox != ""
+		// A pin outlives the sandbox: an agent had write access to that metadata, so
+		// host git must keep ignoring it after a relaunch on the host.
+		sandboxed := s.Sandbox != "" || s.GitPin != nil
 		if p := cfg.ProjectByName(s.Project); p != nil && p.Sandboxed() {
 			sandboxed = true
 		}

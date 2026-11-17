@@ -1,7 +1,11 @@
 <script lang="ts">
   import type { DevForward } from "@bindings/internal/protocol/models";
   import Sheet from "./Sheet.svelte";
-  import TouchButton from "./TouchButton.svelte";
+  import ListGroup from "./ListGroup.svelte";
+  import ListRow from "./ListRow.svelte";
+  import Icon from "$lib/components/Icon.svelte";
+  import EmptyState from "./EmptyState.svelte";
+  import { copy, fill } from "@mobile/lib/copy";
 
   /**
    * The addresses of a session's dev servers, as this phone can reach them.
@@ -21,49 +25,79 @@
    * THEY OPEN ON THIS PHONE. `openExternal`, never the daemon's `cmd=openURL`:
    * that one runs `open` on the MAC, so it would launch Safari on an unattended
    * desktop in another room. Same gesture, opposite machine — this sheet says
-   * "on this phone" out loud for that reason.
+   * "on this phone" out loud for that reason. The sheet's rows now carry only
+   * what names a server (its port and path); the title and the arrow say the
+   * rest, and the opening behaviour (http(s) only, forward host) is unchanged.
    */
   let {
     forwards,
+    notice = "",
+    onstart,
     onopen,
     onclose,
   }: {
     forwards: readonly DevForward[];
+    /** Why the last link did not open, or "". */
+    notice?: string;
+    /** Starts the session's dev server; given only when the session has one to start and this phone may. */
+    onstart?: () => void;
     onopen: (url: string) => void;
     onclose: () => void;
   } = $props();
 
   /**
-   * What to call one address: THE ORIGINAL, always.
+   * What to call one address: THE ORIGINAL's port, always.
    *
    * The forward's own port is allocated by the kernel — 65497 identifies
    * nothing and changes on every restart. The address a developer knows is the
    * one the server printed: 8000 is the Laravel app, 5175 is vite. Leading with
-   * the forward made every row look the same and turned choosing into a guess,
-   * which with an app and a bundler is a coin flip.
+   * the forward made every row look the same.
    */
-  function label(f: DevForward): string {
-    return f.from || f.url;
+  function parts(f: DevForward): { port: string; path: string } {
+    for (const raw of [f.from, f.url]) {
+      if (!raw) continue;
+      try {
+        const u = new URL(raw.includes("://") ? raw : `http://${raw}`);
+        const port = u.port || (u.protocol === "https:" ? "443" : "80");
+        const path = u.pathname + u.search;
+        // The original may carry no path; the forward's URL can still name one.
+        if (path !== "/" || raw === f.url) return { port, path: path || "/" };
+        const own = new URL(f.url);
+        return { port, path: own.pathname + own.search || "/" };
+      } catch {
+        // fall through to the next candidate
+      }
+    }
+    return { port: f.from || f.url, path: "/" };
   }
 </script>
 
-<Sheet label="Dev server links" {onclose}>
-  <p class="copy text-sm text-faint">
-    Opens on THIS phone. The session's dev servers, republished on your network by the daemon —
-    they are reachable only while this session is the active one.
-  </p>
+<Sheet label="Dev servers" title={copy.devLinks.title} {onclose}>
+  {#if notice}
+    <p class="copy text-sm text-bad" role="status">{notice}</p>
+  {/if}
 
-  {#each forwards as f (f.url)}
-    <TouchButton wide variant="secondary" onclick={() => onopen(f.url)}>
-      <span class="flex min-w-0 flex-col items-start">
-        <!-- The original first, because it is the one that names the thing. -->
-        <span class="num">{label(f)}</span>
-        <!-- And where it actually goes, because a person checking WHICH machine
-             this reaches has nothing else to read it from. -->
-        <span class="num truncate text-xs text-faint">via {f.url}</span>
-      </span>
-    </TouchButton>
-  {/each}
-
-  <TouchButton wide onclick={onclose}>Cancel</TouchButton>
+  {#if forwards.length === 0}
+    <EmptyState
+      size="sheet"
+      icon="globe"
+      title={copy.devLinks.empty.title}
+      action={onstart ? { label: copy.devLinks.empty.action, onclick: onstart } : undefined}
+    />
+  {:else}
+    <ListGroup>
+      {#each forwards as f (f.url)}
+        {@const p = parts(f)}
+        <ListRow
+          icon="globe"
+          label={fill(copy.devLinks.row, { port: p.port })}
+          detail={p.path}
+          detailMono
+          onclick={() => onopen(f.url)}
+        >
+          {#snippet trailing()}<span class="text-faint"><Icon name="arrow-up-right" size={18} /></span>{/snippet}
+        </ListRow>
+      {/each}
+    </ListGroup>
+  {/if}
 </Sheet>

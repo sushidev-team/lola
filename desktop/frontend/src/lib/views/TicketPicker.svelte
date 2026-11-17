@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import { onMount } from "svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -177,7 +178,7 @@
       {/each}
     </span>
     <Button variant="primary" size="md" disabled={loading || !store.alive} onclick={() => load()}>
-      <span aria-hidden="true">↻</span> Refresh
+      <span aria-hidden="true"><Icon name="refresh-cw" size={14} /></span> Refresh
     </Button>
   </div>
 
@@ -210,7 +211,7 @@
             {@const st = stateChip(t)}
             <tr class="group border-t border-edge/30 hover:bg-sel/50" class:opacity-60={t.alreadyLive}>
               <td class="cursor-pointer px-3 py-2 font-mono text-sm whitespace-nowrap text-faint" onclick={() => start(t)}>
-                {#if t.alreadyLive}<span class="mr-1 text-good" title="already running">●</span>{/if}
+                {#if t.alreadyLive}<span class="mr-1 text-good" title="already running"><Icon name="circle-dot" size={14} /></span>{/if}
                 {t.identifier}
               </td>
               <td class="cursor-pointer px-3 py-2" onclick={() => start(t)}>
@@ -239,7 +240,7 @@
               <td class="px-3 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100">
                 <div class="flex items-center justify-end">
                   <Button size="xs" disabled={starting === t.identifier} onclick={() => start(t)}>
-                    {#if t.alreadyLive}Live{:else}Start <span aria-hidden="true">›</span>{/if}
+                    {#if t.alreadyLive}Live{:else}Start <span aria-hidden="true"><Icon name="chevron-right" size={14} /></span>{/if}
                   </Button>
                 </div>
               </td>

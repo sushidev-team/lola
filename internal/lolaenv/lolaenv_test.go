@@ -110,3 +110,19 @@ func TestCommandLineQuotesEmbeddedSingleQuotes(t *testing.T) {
 		t.Errorf("want exactly one wrapper: %s", got)
 	}
 }
+
+func TestLocalShellUsesOnlyItsOwnEnvironment(t *testing.T) {
+	got := SessionShellCommand("/tmp/space 'quote'", "lola-local-a")
+	if !strings.Contains(got, "shell-env") || strings.Contains(got, "./.lola/env") {
+		t.Fatalf("wrong source: %s", got)
+	}
+	if strings.Contains(got, "LOLA_SESSION=") {
+		t.Fatal("agent identity leaked")
+	}
+	if got := SessionShellCommand("/tmp", "normal-session"); got != ShellCommand {
+		t.Fatal("changed worktree shell")
+	}
+	if got := SessionShellCommand("/tmp", "lola-local-../../elsewhere"); got != ShellCommand {
+		t.Fatal("accepted traversal")
+	}
+}

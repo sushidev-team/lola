@@ -1,18 +1,9 @@
 // The module vite.config.ts aliases `@wailsio/runtime` at.
 //
-// Only the `Events` namespace is imported by the shared frontend (five
-// subscriptions in store.svelte.ts, one in update.svelte.ts, two dynamic PTY
-// channels in LiveTerminal.svelte, three menu events in App.svelte which the
-// mobile app does not reuse). Everything else Wails exports — Window, Dialogs,
-// Screens, Clipboard, System, WML — has no call site and is therefore absent
-// rather than stubbed: a missing export is a build error naming the file that
-// wants it, which is the failure mode to prefer over a runtime no-op.
-//
-// `Call` and `CancellablePromise` are the exception. They are what the
-// GENERATED binding files import, and those files are aliased out of the build
-// entirely — but if an alias is ever mistyped, one of them loads, and it should
-// fail with a sentence rather than with "$Call is not defined". So both exist,
-// and the runtime one rejects.
+// Only `Events` is imported by the shared frontend, so everything else Wails
+// exports is absent rather than stubbed: a missing export is a build error naming
+// the file that wants it. `Call` exists only to fail with a sentence if a
+// generated binding is ever loaded instead of the shim.
 
 import * as EventsImpl from "./events";
 import { UnsupportedOnMobileError } from "./errors";

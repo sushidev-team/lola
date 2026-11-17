@@ -1,0 +1,17 @@
+# The API only. The admin console listens on 127.0.0.1:8098 inside the pod and
+# is never part of a Service; reach it with kubectl port-forward.
+apiVersion: v1
+kind: Service
+metadata:
+  name: lola-hub
+  labels:
+    app: lola-hub
+spec:
+  type: ClusterIP
+  selector:
+    app: lola-hub
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

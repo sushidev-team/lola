@@ -96,7 +96,31 @@ func (d *Daemon) safeObserve(ctx context.Context) {
 	// a half-written store. The loop itself still stops on ctx.Done, and every
 	// exec inside the cycle is individually bounded by observeExecTimeout so
 	// the shield can never turn into an indefinite hang.
-	d.observe(context.WithoutCancel(ctx))
+	d.observe(withStop(context.WithoutCancel(ctx), ctx.Done()))
+}
+
+// stopKey carries the daemon's shutdown signal into a shielded cycle.
+type stopKey struct{}
+
+// withStop attaches stop (the run context's Done) to a shielded ctx: the
+// cycle's execs keep running to completion, but the cycle can see the
+// shutdown and stop BETWEEN sessions instead of observing all of them.
+func withStop(ctx context.Context, stop <-chan struct{}) context.Context {
+	return context.WithValue(ctx, stopKey{}, stop)
+}
+
+// stopping reports whether the daemon is shutting down.
+func stopping(ctx context.Context) bool {
+	stop, _ := ctx.Value(stopKey{}).(<-chan struct{})
+	if stop == nil {
+		return false
+	}
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
 }
 
 // observe runs one observation cycle over lola's native sessions (PLAN P2).
@@ -183,6 +207,10 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		aliveByName    map[string]bool
 		activityByName map[string]time.Time
 	)
+	// When liveness was read. A record whose agent axis moved after this (a
+	// revive or relaunch landing mid-cycle) is newer than the listing, so this
+	// cycle must not declare it dead.
+	listedAt := time.Now()
 	if d.listTmuxSessions != nil {
 		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 		ls, err := d.listTmuxSessions(cctx)
@@ -231,16 +259,40 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	interpretPerCycle := d.cfg.StatusAgent.MaxPerCycle
 	d.mu.Unlock()
 	for _, s := range d.sessions.Snapshot() {
+		// A shutdown stops the cycle between sessions: each record's update
+		// is atomic, so the rest simply waits for the next daemon's cycle.
+		if stopping(ctx) {
+			break
+		}
 		if s.Source != "native" {
 			continue
 		}
 		alive, tmuxActivity := sessionAlive(s)
+		if s.GoalManaged() {
+			if d.observeGoalAgent(ctx, s, alive, tmuxActivity) {
+				touched = true
+			}
+			d.notifyUserReady(ctx, s.ID)
+			continue // goal controller alone owns verification, delivery and retries
+		}
 		// An agent-less shell (`lola open`, the manual-shell flow) has no coding
 		// agent: its status is pure tmux liveness and it must NEVER reach the
 		// reaction / write-back / review / coderabbit engines below (which would
 		// send-keys into the human's interactive shell). Refresh it in isolation
 		// and skip the whole agent path.
 		if s.IsAgentless() {
+			// Close borrowed-directory shells after their LAST terminal exits.
+			// This also runs when no UI terminal is mounted to report the exit.
+			if !alive && isLocalShell(s) {
+				if res, err := d.handleCloseExitedTemporary(ctx, s.ID); err != nil {
+					d.logf("", "observe: close exited shell %s: %v", s.ID, err)
+					continue // unknown liveness must not hide a remaining shell
+				} else if res.Removed {
+					touched = true
+					continue
+				}
+				alive = true // another terminal still belongs to this session
+			}
 			if d.observeManualShell(s, alive) {
 				touched = true
 			}
@@ -279,6 +331,8 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			if err != nil {
 				d.logf("", "observe: PR check for native %s (branch %s in %s) failed: %v", s.ID, s.Branch, repo, err)
 			} else {
+				p = prForAttempt(s, p)
+				d.applyRequiredChecks(ctx, repo, p)
 				pr, prKnown = p, true
 			}
 		}
@@ -364,8 +418,11 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// hook transition flows into the merge and is preserved.
 		now := time.Now()
 		becameDead, applied, titleBackfilled := false, false, false
+		var prevAgentAtUpdate state.AgentState
+		var prevDelivery state.DeliveryState
 		updated, known := d.sessions.Update(s.ID, func(cur *session.Session) bool {
 			prevAgent := cur.AgentState
+			prevAgentAtUpdate, prevDelivery = cur.AgentState, cur.Delivery
 			if backfillTitle != "" && cur.Title == "" {
 				cur.Title = backfillTitle
 				titleBackfilled = true
@@ -395,7 +452,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// 2. AGENT axis — liveness + hooks (already merged into cur) + pane
 			// + tmux's own activity stamp.
 			agentChanged := false
-			if !alive {
+			if !alive && cur.AgentStateSince.After(listedAt) {
+				// Revived or relaunched after the listing: the "gone" is stale.
+			} else if !alive {
 				// A dead pane is terminal for the agent axis; the rollup still
 				// reads "merged" when the delivery axis says so (Rollup rule 1).
 				agentChanged = cur.SetAgentState(state.AgentDead, "", now)
@@ -438,6 +497,23 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		})
 		if becameDead {
 			d.logf("", "observe: native session %s pane is gone without a merged PR → dead", s.ID)
+			if prevAgentAtUpdate != state.AgentExited {
+				d.noteAgentExited(updated)
+			}
+			if updated.HubOpen() {
+				// A dead agent's claim fails now, not at the next renewal
+				// pass: the team gets the item back sooner.
+				d.hubNudgeOutcomes()
+			}
+		}
+		if known && prevDelivery != updated.Delivery {
+			d.noteDelivery(updated, prevDelivery)
+			if updated.HubOpen() {
+				d.hubNudgeOutcomes() // non-blocking: the hub loop reports it
+			}
+		}
+		if known {
+			d.noteCI(updated)
 		}
 		if applied || titleBackfilled {
 			touched = true
@@ -457,6 +533,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// waiting_input/quota_limited on the agent axis; the engine notifies
 			// once per episode or auto-switches per the configured chain.
 			d.maybeFallback(ctx, updated)
+			// A sandboxed claude started before any Claude login existed is
+			// relaunched once a login resolves (sandboxlogin.go).
+			d.maybeRelogin(ctx, updated)
 			// Escalation (blocked) write-back AFTER react — react is what sets
 			// Escalated (CI retries exhausted). Re-read the record so the flag
 			// react just wrote is visible this cycle. A dropped (merged-cleaned)
@@ -473,9 +552,10 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// Flush any hand-off deferred because the worker was mid-turn, once it is
 			// idle at its prompt again (re-reads the record itself; one delivered
 			// per cycle since a send consumes AtPrompt).
-			if !d.flushAgentNotices(ctx, s.ID) {
-				d.flushReviewHandoffs(ctx, s.ID)
-			}
+			d.flushReviewHandoffs(ctx, s.ID)
+			d.autoPRComments(ctx, s.ID)
+			// Notify only after automation has had its chance to resume work.
+			d.notifyUserReady(ctx, s.ID)
 			// Status interpreter, ambiguous-state sweep: a session whose
 			// deterministic story is thin (waiting on a human, unreadable pane,
 			// long-quiet "working") queues an interpretation — capped per cycle,
@@ -487,6 +567,14 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				}
 			}
 		}
+	}
+	if stopping(ctx) {
+		if touched {
+			if err := d.sessions.Save(); err != nil {
+				d.logf("", "observe: persist sessions: %v", err)
+			}
+		}
+		return
 	}
 	// Cross-session passes, AFTER every record carries this cycle's facts.
 	// Overlap detection is local git only and display-only; the merge queue is

@@ -1,9 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
-	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // writeTestConfig isolates $LOLA_HOME to a temp dir and seeds a minimal VALID
@@ -31,6 +31,104 @@ func writeTestConfig(t *testing.T, body string) string {
 }
 
 const minimalConfig = "[defaults]\nglobal_cap = 4\nconcurrency_cap = 2\n"
+
+func TestSaveSettingsWithInactiveUnfinishedPickup(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig+`dedup_mode = "label"
+[[project]]
+name = "getvouchers"
+path = "/repo/getvouchers"
+team_id = "team"
+enabled = false
+[[project]]
+name = "fairu-mesh"
+path = "/repo/fairu-mesh"
+team_id = "team"
+match_labels = ["ready"]
+enabled = false
+`)
+	svc := &ConfigService{}
+	dto, err := svc.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto.NotifyDesktop = !dto.NotifyDesktop
+	if err := svc.SaveSettings(dto); err != nil {
+		t.Fatalf("unrelated save blocked by inactive pickup: %v", err)
+	}
+	saved, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Notify.Desktop != dto.NotifyDesktop {
+		t.Fatal("settings were not saved")
+	}
+	for _, p := range saved.Projects {
+		if p.Enabled || p.DedupMode != "label" || !p.Inherits.DedupMode || p.OnSentSetLabel != "" {
+			t.Fatalf("save rewrote pickup settings: %+v", p)
+		}
+	}
+	if got := saved.ProjectByName("fairu-mesh").MatchLabels; !reflect.DeepEqual(got, []string{"ready"}) {
+		t.Fatalf("lost explicit labels: %v", got)
+	}
+	// Enabling the incomplete project still fails; no invalid config is written.
+	project, err := svc.GetProject("getvouchers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project.Enabled = true
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SaveProject(project); err == nil {
+		t.Fatal("enabled incomplete pickup")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("invalid save changed config")
+	}
+}
+
+func TestSaveAISettingsWithDefaultSandboxImage(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Projects = []config.Project{
+		{Name: "sushi-dev-website", Path: "/repo/website", Sandbox: config.SandboxDocker},
+		{Name: "lola", Path: "/repo/lola", Sandbox: config.SandboxDocker},
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	svc := &ConfigService{}
+	dto, err := svc.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := config.DefaultAIProvider("claude")
+	profile.Enabled = true
+	dto.AI = map[string]config.AIProvider{"claude": profile}
+	if err := svc.SaveSettings(dto); err != nil {
+		t.Fatalf("save AI settings with default sandbox: %v", err)
+	}
+	saved, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, enabled := saved.AIProfile("claude", "resolve"); !enabled {
+		t.Fatal("AI profile was not saved")
+	}
+	for i := range saved.Projects {
+		if !saved.Projects[i].Sandboxed() || saved.SandboxImageFor(&saved.Projects[i]) != config.DefaultSandboxImage() {
+			t.Fatal("sandbox defaults were lost")
+		}
+	}
+}
 
 func TestEnvRoundTrip(t *testing.T) {
 	lines := []string{"A=1", "B=two=with=eq", "C="}
@@ -196,6 +294,40 @@ func TestSaveSettingsPreservesTheme(t *testing.T) {
 	}
 }
 
+// remoteRelay is the inverse of RelayOff: absent reads as on, an untouched
+// settings commit keeps it on, and switching it off persists `relay = false`
+// and reads back off.
+func TestSaveSettingsRemoteRelay(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	dto, err := s.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if !dto.RemoteRelay {
+		t.Fatal("an absent [remote].relay must read as on")
+	}
+	if err := s.SaveSettings(dto); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	if data, _ := os.ReadFile(path); strings.Contains(string(data), "relay = false") {
+		t.Fatalf("an untouched relay must stay on:\n%s", data)
+	}
+
+	dto.RemoteRelay = false
+	if err := s.SaveSettings(dto); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "relay = false") {
+		t.Fatalf("relay off must persist, got:\n%s", data)
+	}
+	back, err := s.GetSettings()
+	if err != nil || back.RemoteRelay {
+		t.Fatalf("GetSettings after relay off = %v, %v", back.RemoteRelay, err)
+	}
+}
+
 func TestGetProjectNewIsBlank(t *testing.T) {
 	s := &ConfigService{}
 	dto, err := s.GetProject("")
@@ -213,7 +345,7 @@ func TestGetProjectNewIsBlank(t *testing.T) {
 func TestReloadRejectionHint(t *testing.T) {
 	stale := `config invalid, keeping previous: project "Okane" polling: dedup_mode=label requires on_sent_set_label`
 	got := reloadRejectionHint(stale)
-	if !strings.Contains(got, "OLDER binary") {
+	if !strings.Contains(got, "Update the Lola CLI and restart") {
 		t.Errorf("an inherited-key complaint must name the stale daemon:\n%s", got)
 	}
 
@@ -789,116 +921,6 @@ func TestSetProjectLayoutRefusesStaleLayouts(t *testing.T) {
 	}
 }
 
-// --- ConnectCode -----------------------------------------------------------
-
-// TestConnectCodeFields. The whole reason this is a
-// socket round trip rather than a read of ~/.lola is that only the daemon knows
-// what its LIVE listener bound and which key it authenticates with; a DTO that
-// dropped a field would put the operator back to copying it by hand.
-func TestConnectCodeFields(t *testing.T) {
-	want := protocol.PairBeginData{
-		Code:     "lola-insecure1.abc",
-		Hosts:    []string{"127.0.0.1", "::1"},
-		Port:     7717,
-		Pin:      "C4td4uyeJMSyxfoAsB3i98Kd6JhkpOTf3Oxipiq+sxI=",
-		Key:      "0123456789abcdef0123456789abcdef",
-		Insecure: true,
-	}
-	f := startFakeDaemon(t, func(req protocol.Request) protocol.Response {
-		if req.Cmd != "pairBegin" {
-			t.Errorf("cmd = %q, want pairBegin", req.Cmd)
-		}
-		raw, err := json.Marshal(want)
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		return protocol.Response{OK: true, Data: raw}
-	})
-
-	got, err := (&ConfigService{}).ConnectCode()
-	if err != nil {
-		t.Fatalf("ConnectCode: %v", err)
-	}
-	if got.Code != want.Code || got.Port != want.Port || got.Pin != want.Pin || got.Key != want.Key {
-		t.Fatalf("ConnectCode dropped a field: %+v", got)
-	}
-	if !got.Insecure {
-		t.Error("the insecure flag must survive: it is what the UI says out loud")
-	}
-	if strings.Join(got.Hosts, ",") != "127.0.0.1,::1" {
-		t.Fatalf("hosts = %v", got.Hosts)
-	}
-	if reqs := f.requests(); len(reqs) != 1 {
-		t.Fatalf("expected exactly one request, got %d", len(reqs))
-	}
-}
-
-// TestConnectCodeSendsNoArgs: pairBegin describes the running listener and
-// takes nothing. A field sent here would be one a future handler could read.
-func TestConnectCodeSendsNoArgs(t *testing.T) {
-	f := startFakeDaemon(t, func(protocol.Request) protocol.Response {
-		raw, _ := json.Marshal(protocol.PairBeginData{Problem: "off"})
-		return protocol.Response{OK: true, Data: raw}
-	})
-	if _, err := (&ConfigService{}).ConnectCode(); err != nil {
-		t.Fatalf("ConnectCode: %v", err)
-	}
-	req := f.requests()[0]
-	if len(req.Args) != 0 || req.Session != "" || req.Project != "" || req.Text != "" {
-		t.Fatalf("pairBegin carried arguments: %+v", req)
-	}
-}
-
-// TestConnectCodeProblemIsAState rather than as an error, because "the
-// listener is off" is something the operator fixes on the tab they are looking
-// at.
-func TestConnectCodeProblemIsAState(t *testing.T) {
-	startFakeDaemon(t, func(protocol.Request) protocol.Response {
-		raw, _ := json.Marshal(protocol.PairBeginData{
-			Problem: "The phone listener is off. Enable [remote] and reload before connecting a phone.",
-		})
-		return protocol.Response{OK: true, Data: raw}
-	})
-	got, err := (&ConfigService{}).ConnectCode()
-	if err != nil {
-		t.Fatalf("a problem must not be an error: %v", err)
-	}
-	if got.Problem == "" {
-		t.Fatal("the problem did not survive")
-	}
-	if got.Code != "" || got.Key != "" {
-		t.Fatal("a problem must carry neither a code nor a key")
-	}
-}
-
-// TestConnectCodeRefusalReaches. A release daemon answers pairBegin
-// with an error naming the build tag, and the UI must show that rather than an
-// empty panel.
-func TestConnectCodeRefusalReaches(t *testing.T) {
-	startFakeDaemon(t, func(protocol.Request) protocol.Response {
-		return protocol.Response{OK: false, Error: "this binary cannot hand out a connect code: ... -tags lola_insecure"}
-	})
-	got, err := (&ConfigService{}).ConnectCode()
-	if err == nil {
-		t.Fatal("expected the daemon's refusal")
-	}
-	if !strings.Contains(err.Error(), "lola_insecure") {
-		t.Errorf("the refusal should reach the caller verbatim, got %q", err)
-	}
-	if got.Code != "" {
-		t.Error("a refusal carries no code")
-	}
-}
-
-// TestConnectCodeNeedsADaemon, with the app's own "daemon down"
-// error rather than a raw dial failure.
-func TestConnectCodeNeedsADaemon(t *testing.T) {
-	t.Setenv("LOLA_HOME", t.TempDir()) // no socket in it
-	if _, err := (&ConfigService{}).ConnectCode(); err == nil {
-		t.Fatal("expected a failure with no daemon")
-	}
-}
-
 // --- stacks ------------------------------------------------------------------
 
 // A stack is created empty from a label, as a kind=stack project with no
@@ -1034,6 +1056,259 @@ func TestSaveProjectStackFields(t *testing.T) {
 	}
 	if again, _ := s.GetProject("nori"); again.Kind != config.ProjectKindStack {
 		t.Fatal("saving a stack's form dropped its kind")
+	}
+}
+
+func TestSystemAppearancePersistsAndRejectsWrongTags(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	svc := &ConfigService{}
+	want := AppearanceDTO{Theme: "catppuccin-mocha", FollowSystem: true, LightTheme: "one-light", DarkTheme: "lola-midnight"}
+	if err := svc.SetAppearance(want); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.GetAppearance(); got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	before, _ := os.ReadFile(path)
+	invalid := want
+	invalid.LightTheme = "lola-midnight"
+	if err := svc.SetAppearance(invalid); err == nil {
+		t.Fatal("accepted dark palette in light slot")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Fatal("rejected appearance changed config")
+	}
+	if err := svc.SetTheme("gruvbox-light"); err != nil {
+		t.Fatal(err)
+	}
+	got := svc.GetAppearance()
+	if got.FollowSystem || got.Theme != "gruvbox-light" || got.LightTheme != want.LightTheme || got.DarkTheme != want.DarkTheme {
+		t.Fatalf("fixed switch lost pair: %+v", got)
+	}
+}
+
+// Creating a stack from a parent folder: the scan marks a checkout that is
+// already a project, and the create adds the rest as members and makes the
+// configured one join, in one write.
+func TestCreateStackFromFolder(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	parent := t.TempDir()
+	for _, app := range []string{"api", "okane"} {
+		dir := filepath.Join(parent, app)
+		if out, err := exec.Command("git", "init", "-b", "main", dir).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+	}
+	okanePath := filepath.Join(parent, "okane")
+	path := writeTestConfig(t, "[defaults]\nglobal_cap = 4\n\n[[project]]\nname = \"okane\"\npath = \""+okanePath+"\"\n")
+	s := &ConfigService{}
+
+	scan := s.ScanStackFolder(parent)
+	if len(scan.Apps) != 2 || scan.SuggestedLabel == "" {
+		t.Fatalf("scan = %+v", scan)
+	}
+	if scan.Apps[0].Project != "" || scan.Apps[1].Project != "okane" || scan.Apps[1].Blocked != "" {
+		t.Fatalf("apps = %+v", scan.Apps)
+	}
+
+	name, err := s.CreateStackFromFolder("Nori", scan.Apps)
+	if err != nil {
+		t.Fatalf("CreateStackFromFolder: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := cfg.ProjectByName(name); st == nil || !st.IsStack() {
+		t.Fatalf("stack = %+v", st)
+	}
+	if api := cfg.ProjectByName("api"); api == nil || api.Stack != name || api.Path != canonicalPath(filepath.Join(parent, "api")) || api.DefaultBranch != "main" {
+		t.Fatalf("api = %+v", api)
+	}
+	if ok := cfg.ProjectByName("okane"); ok.Stack != name {
+		t.Fatalf("okane did not join: %+v", ok)
+	}
+
+	// The joined project now reads as blocked for a second stack.
+	if again := s.ScanStackFolder(parent); again.Apps[1].Blocked == "" {
+		t.Fatalf("member of a stack not blocked: %+v", again.Apps[1])
+	}
+}
+
+func TestScanAndAddExistingStackMembers(t *testing.T) {
+	parent := t.TempDir()
+	for _, name := range []string{"api", "web", "other"} {
+		if out, err := exec.Command("git", "init", "-b", "main", filepath.Join(parent, name)).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v %s", err, out)
+		}
+	}
+	path := writeTestConfig(t, fmt.Sprintf("[defaults]\nglobal_cap = 4\n[[project]]\nname = 'nori'\nkind = 'stack'\n[[project]]\nname = 'other-stack'\nkind = 'stack'\n[[project]]\nname = 'api'\nstack = 'nori'\npath = %q\n[[project]]\nname = 'other'\nstack = 'other-stack'\npath = %q\n", filepath.Join(parent, "api"), filepath.Join(parent, "other")))
+	svc := &ConfigService{}
+	for _, root := range []string{"", parent} {
+		scan, err := svc.ScanStackMembers("nori", root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(scan.Apps) != 2 || scan.Apps[0].Project != "other" || scan.Apps[0].Blocked == "" || scan.Apps[1].Label != "Web" || scan.Apps[1].Blocked != "" {
+			t.Fatalf("suggestions: %+v", scan.Apps)
+		}
+	}
+	scan, _ := svc.ScanStackMembers("nori", parent)
+	before, _ := os.ReadFile(path)
+	if err := svc.AddStackMembersFromFolder("nori", scan.Apps); err == nil {
+		t.Fatal("accepted another stack's member")
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatal("failed addition saved partial membership")
+	}
+	if err := svc.AddStackMembersFromFolder("nori", scan.Apps[1:]); err != nil {
+		t.Fatal(err)
+	}
+	again, err := svc.ScanStackMembers("nori", "")
+	if err != nil || len(again.Apps) != 1 || again.Apps[0].Blocked == "" {
+		t.Fatalf("rescan: %+v, %v", again, err)
+	}
+	if _, err := svc.ScanStackMembers("missing", parent); err == nil {
+		t.Fatal("accepted unknown stack")
+	}
+	if _, err := svc.ScanStackMembers("nori", filepath.Join(parent, "missing")); err == nil {
+		t.Fatal("unreadable folder presented as empty")
+	}
+}
+
+// A checkout reached through a symlink is the SAME project as its real path,
+// both ways round: the scan marks it configured (and blocked when it is in
+// another stack), and the create joins it instead of adding a duplicate.
+func TestCreateStackFromFolderResolvesSymlinks(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	real := filepath.Join(t.TempDir(), "web")
+	if out, err := exec.Command("git", "init", "-b", "main", real).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	parent := t.TempDir()
+	if err := os.Symlink(real, filepath.Join(parent, "web")); err != nil {
+		t.Fatal(err)
+	}
+	// Configured under the LINK, as a hand-written config might be.
+	link := filepath.Join(parent, "web")
+	path := writeTestConfig(t, "[defaults]\nglobal_cap = 4\n\n[[project]]\nname = \"web\"\npath = \""+link+"\"\n")
+	s := &ConfigService{}
+
+	scan := s.ScanStackFolder(parent)
+	if len(scan.Apps) != 1 || scan.Apps[0].Project != "web" {
+		t.Fatalf("symlinked checkout not matched to its project: %+v", scan.Apps)
+	}
+	name, err := s.CreateStackFromFolder("Nori", scan.Apps)
+	if err != nil {
+		t.Fatalf("CreateStackFromFolder: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(cfg.Projects); n != 2 {
+		t.Fatalf("projects = %d (%+v), want the stack plus the joined web", n, cfg.Projects)
+	}
+	if web := cfg.ProjectByName("web"); web.Stack != name || web.Path != link {
+		t.Fatalf("web = %+v", web)
+	}
+	// Now in a stack: a second stack from the same folder sees it blocked.
+	if again := s.ScanStackFolder(parent); again.Apps[0].Blocked == "" {
+		t.Fatalf("membership bypassed through the symlink: %+v", again.Apps[0])
+	}
+}
+
+// A member with labels must be able to leave its stack: labels only apply to
+// a member, and keeping them made Validate refuse the write.
+func TestLeavingAStackDropsMemberLabels(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetStackMemberLabels("nori", map[string][]string{"okane": {"apps/app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", ""); err != nil {
+		t.Fatalf("leave stack: %v", err)
+	}
+	cfg, _ := config.Load(path)
+	if p := cfg.ProjectByName("okane"); p.Stack != "" || len(p.Labels) != 0 {
+		t.Fatalf("okane = stack %q labels %q, want both empty", p.Stack, p.Labels)
+	}
+}
+
+func TestRemoveStackKeepsOnlyTheCheckedMembers(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load(path)
+	var names []string
+	for _, p := range cfg.Projects {
+		if !p.IsStack() {
+			names = append(names, p.Name)
+			if err := s.SetProjectStack(p.Name, "nori"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(names) < 2 {
+		t.Fatalf("fixture needs two projects, got %v", names)
+	}
+	if err := s.SetStackMemberLabels("nori", map[string][]string{names[0]: {"apps/app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveStack("nori", []string{"nope"}); err == nil {
+		t.Fatal("keeping a non-member must be refused")
+	}
+	if err := s.RemoveStack("nori", []string{names[0]}); err != nil {
+		t.Fatalf("RemoveStack: %v", err)
+	}
+	cfg, _ = config.Load(path)
+	if cfg.ProjectByName("nori") != nil || cfg.ProjectByName(names[1]) != nil {
+		t.Fatalf("stack and unchecked member must be gone: %+v", cfg.Projects)
+	}
+	if p := cfg.ProjectByName(names[0]); p == nil || p.Stack != "" || len(p.Labels) != 0 {
+		t.Fatalf("kept member = %+v, want standalone with no labels", p)
+	}
+}
+
+// A new project starts disabled: with no team it would poll nothing, and the
+// form turns it on only once a team is chosen.
+func TestNewProjectStartsDisabled(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	dto, err := (&ConfigService{}).GetProject("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dto.Enabled || dto.TeamID != "" || !dto.IsNew {
+		t.Fatalf("blank project = enabled %v team %q new %v, want disabled, no team, new", dto.Enabled, dto.TeamID, dto.IsNew)
+	}
+}
+
+// The setup screen's key link opens lola's own fixed URL, never one the
+// frontend names.
+func TestOpenLinearKeyHelpOpensTheFixedPage(t *testing.T) {
+	var got []string
+	prev := openBrowser
+	openBrowser = func(url string) error { got = append(got, url); return nil }
+	t.Cleanup(func() { openBrowser = prev })
+	if err := (&ConfigService{}).OpenLinearKeyHelp(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "https://linear.app/settings/account/security" {
+		t.Fatalf("opened %v", got)
 	}
 }
 

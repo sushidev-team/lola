@@ -1,0 +1,40 @@
+
+
+  [2m[37mRan [0;1m[37m1[0;2m[37m shell command [0m
+
+[97m⏺[39m I ran [94mtouch perm-g3.txt[39m. It completed with no output.
+
+  The two earlier commands ([94mtouch perm-g1.txt[39m and [94mtouch perm-g2.txt[39m) were rejected when I tried them, so those files
+  were not created.
+
+[2m[37m✻[0m [2m[37mSautéed for 4s · done 1:12 AM[0m
+
+[37m[100m❯ [97mUse the AskUserQuestion tool once: ask "Pick a color" with options Red, Green, Blue. Then, after my answer, reply [39m
+  [97monly with the chosen color.[39m
+
+[37m[49m⏺ [39mUser answered Claude's questions:
+[2m[37m  ⎿  [0m[37m· Pick a color → Green[39m
+
+[97m⏺[39m Green
+
+[2m[37m✻[0m [2m[37mSautéed for 3s · done 1:12 AM[0m
+
+[37m[100m❯ [97mUse the AskUserQuestion tool once with multiSelect true: ask "Pick colors" with options Red, Green, Blue. Then reply [39m
+  [97monly with the choice.[39m
+[37m[49m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+← [30m[104m ☐ Colors [39m[49m ✔ Submit  →
+
+[1m[97mPick colors[0m
+
+[94m❯[39m [2m[37m1.[0m [ ] [94mRed[39m
+         [37mChoose red[39m
+  [2m[37m2.[0m [ ] Green
+         [37mChoose green[39m
+  [2m[37m3.[0m [ ] Blue
+         [37mChoose blue[39m
+  [2m[37m4. [0m[ ] [37mType something[39m
+     [1mSubmit[0m
+[37m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  5. Chat about this
+
+[2m[37mEnter to select · ↑/↓ to navigate · Esc to cancel[0m

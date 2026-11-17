@@ -102,3 +102,35 @@ func TestLaneIDsAreNeverInsertedOrDeleted(t *testing.T) {
 		t.Errorf("snapshot has %d records, want the one session", n)
 	}
 }
+
+func TestStackReviewGatesStayPerAppAndPersist(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	s := stackFixture()
+	st.Upsert(s)
+	webID := LaneID(s.ID, "nori-website")
+	gate := ReviewGate{PR: 8, Head: "web-head", Posted: "web-head", State: "success", Rounds: 1}
+	st.Update(webID, func(cur *Session) bool {
+		cur.ReviewGates = map[string]ReviewGate{"codex-session": gate}
+		return true
+	})
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	st = NewStore(dir)
+	web, _ := st.Get(webID)
+	if got := web.ReviewGates["codex-session"]; got != gate {
+		t.Fatalf("persisted website gate = %+v, want %+v", got, gate)
+	}
+	for _, id := range []string{s.ID, LaneID(s.ID, "nori-app")} {
+		got, _ := st.Get(id)
+		if len(got.ReviewGates) != 0 {
+			t.Fatalf("website gate leaked into %s: %+v", id, got.ReviewGates)
+		}
+	}
+	web.ReviewGates["codex-session"] = ReviewGate{State: "failure"}
+	again, _ := st.Get(webID)
+	if again.ReviewGates["codex-session"] != gate {
+		t.Fatal("mutating a lane snapshot changed the stored gate")
+	}
+}

@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChannelTransport } from "./channeltransport";
+import { ChannelTransport, MIGRATE_DRAIN_MS } from "./channeltransport";
+import { FakeLink } from "./fakelink";
+import { LinkError } from "./pluginerror";
 import {
+  ConnectionClosedError,
   FRAME_ERR,
+  FRAME_EVENT,
   FRAME_PTY,
   FRAME_RESP,
   FRAME_RESYNC,
@@ -9,81 +13,55 @@ import {
   FakeChannel,
   WireRefusalError,
   base64ToBytes,
-  type Endpoint,
   type Frame,
   type PaneEvent,
 } from "../wire";
 
 const PANE = "lola-fe-42";
-const endpoint: Endpoint = { host: "127.0.0.1", spkiPin: "pin", insecureKey: "0123456789abcdef" };
+const target = { daemonId: "d1" };
 
 function ok(id: string, data?: unknown): Frame {
   return { v: FRAME_VERSION_CURRENT, type: FRAME_RESP, id, payload: { ok: true, data } };
 }
 
-/** A transport whose channel answers the bearer hello and nothing else. */
 async function connected(): Promise<{ t: ChannelTransport; ch: FakeChannel }> {
   const ch = new FakeChannel();
-  ch.onSend = (f) => {
-    if (f.cmd === "remote.hello") ch.deliver(ok(f.id!));
-  };
   const t = new ChannelTransport({ open: async () => ch });
-  await t.connect(endpoint);
+  await t.connect(target);
+  return { t, ch };
+}
+
+async function linked(): Promise<{ t: ChannelTransport; ch: FakeLink }> {
+  const ch = new FakeLink();
+  const t = new ChannelTransport({ open: async () => ch });
+  await t.connect(target);
   return { t, ch };
 }
 
 describe("connecting", () => {
-  it("sends the bearer hello as the FIRST frame, outside the request path", async () => {
-    // remote.hello is on the daemon's denial list (the whole `remote.` prefix
-    // is), so it cannot go through request(); and its payload is {key}, not a
-    // protocol.Request. It is also required to be the connection's first frame.
-    const { ch } = await connected();
-    expect(ch.sent).toHaveLength(1);
-    expect(ch.sent[0]).toMatchObject({
-      v: 1,
-      type: "req",
-      cmd: "remote.hello",
-      payload: { key: "0123456789abcdef" },
-    });
+  it("is ready with the plugin's epoch, path and device, and sends nothing", async () => {
+    const ch = new FakeLink();
+    ch.up = { epoch: 7, path: { kind: "relay" }, device: { deviceId: "x", name: "n", tiers: ["read"], host: "h" } };
+    const t = new ChannelTransport({ open: async () => ch });
+    await t.connect(target);
+    expect(t.status).toMatchObject({ phase: "ready", epoch: 7, path: { kind: "relay" }, device: { deviceId: "x" } });
+    expect(ch.sent).toHaveLength(0);
   });
 
-  it("reaches `ready` only after the hello is acknowledged", async () => {
+  it("numbers epochs itself for a channel that reports none", async () => {
     const { t } = await connected();
-    expect(t.status.phase).toBe("ready");
+    expect(t.status).toMatchObject({ phase: "ready", epoch: 1 });
   });
 
-  it("closes and reports the refusal when the key is wrong", async () => {
-    const ch = new FakeChannel();
-    ch.onSend = (f) =>
-      ch.deliver({
-        v: 1,
-        type: FRAME_ERR,
-        id: f.id,
-        payload: { code: "denied", message: "authenticate first" },
-      });
-    const t = new ChannelTransport({ open: async () => ch });
-    await expect(t.connect(endpoint)).rejects.toBeInstanceOf(WireRefusalError);
-    expect(t.status.phase).toBe("closed");
-  });
-
-  it("sends NO hello when the channel already authenticated (the native plugin's case)", async () => {
-    // The plugin's own connect() only resolves once the daemon accepted the
-    // key. A second hello would arrive as an ordinary req naming a `remote.`
-    // command on an authenticated connection, which is denied — and a denied
-    // command is fatal: one err frame and the socket closes.
-    const ch = new FakeChannel();
-    const t = new ChannelTransport({ open: async () => ch, handshake: "channel" });
-    await t.connect(endpoint); // endpoint DOES carry an insecureKey
-    expect(ch.sent).toHaveLength(0);
-    expect(t.status.phase).toBe("ready");
-  });
-
-  it("never sends the bearer key when the endpoint carries none", async () => {
-    const ch = new FakeChannel();
-    const t = new ChannelTransport({ open: async () => ch });
-    await t.connect({ host: "h", spkiPin: "p" });
-    expect(ch.sent).toHaveLength(0);
-    expect(t.status.phase).toBe("ready");
+  it("closes and records the failure code when no path came up", async () => {
+    const boom = new LinkError("unreachable", "unreachable: no path");
+    const t = new ChannelTransport({
+      open: async () => {
+        throw boom;
+      },
+    });
+    await expect(t.connect(target)).rejects.toBe(boom);
+    expect(t.status).toMatchObject({ phase: "closed", failure: "unreachable" });
   });
 });
 
@@ -94,35 +72,154 @@ describe("requests", () => {
       if (f.type === "req") ch.deliver(ok(f.id!, { sessions: [] }));
     };
     await expect(t.request("sessions")).resolves.toEqual({ sessions: [] });
-    expect(ch.last).toMatchObject({
-      v: 1,
-      type: "req",
-      cmd: "sessions",
-      payload: { cmd: "sessions" },
-    });
+    expect(ch.last).toMatchObject({ v: 2, type: "req", cmd: "sessions", payload: { cmd: "sessions" } });
   });
 
-  it("refuses a DENIED command locally instead of putting it on the wire", async () => {
-    // A denied command is FATAL daemon-side: one err frame and the socket
-    // closes, taking every live pane subscription with it. One mistyped
-    // command would otherwise cost a full reconnect and re-subscribe.
+  it("sends whatever command it is given and lets the daemon refuse it", async () => {
     const { t, ch } = await connected();
-    const before = ch.sent.length;
-    await expect(t.request("reload")).rejects.toMatchObject({ code: "unknown_cmd" });
-    await expect(t.request("hookEvent")).rejects.toMatchObject({ code: "unknown_cmd" });
-    await expect(t.request("")).rejects.toMatchObject({ code: "unknown_cmd" });
-    expect(ch.sent.length).toBe(before);
-    expect(t.status.phase).toBe("ready"); // the connection is untouched
+    const p = t.request("reload");
+    ch.deliver({ v: 2, type: FRAME_ERR, id: ch.last!.id, payload: { code: "denied" } });
+    await expect(p).rejects.toMatchObject({ code: "denied" });
+    expect(ch.sent).toHaveLength(1);
+    expect(t.status.phase).toBe("ready");
   });
 
   it("rejects with the daemon's own error text on ok:false", async () => {
     const { t, ch } = await connected();
     ch.onSend = (f) => {
-      if (f.type === "req") {
-        ch.deliver({ v: 1, type: FRAME_RESP, id: f.id, payload: { ok: false, error: "no such session" } });
-      }
+      if (f.type === "req") ch.deliver({ v: 2, type: FRAME_RESP, id: f.id, payload: { ok: false, error: "no such session" } });
     };
     await expect(t.request("kill", { session: "x" })).rejects.toThrow(/no such session/);
+  });
+
+  it("rejects at once when not connected", async () => {
+    const t = new ChannelTransport({ open: async () => new FakeChannel() });
+    await expect(t.request("sessions")).rejects.toBeInstanceOf(ConnectionClosedError);
+  });
+
+  it("begin() reports the request id before anything is answered", async () => {
+    const { t, ch } = await connected();
+    const { id, done } = t.begin("watch", { args: { topics: ["sessions"] } });
+    expect(ch.last).toMatchObject({ id, cmd: "watch" });
+    ch.deliver(ok(id, { topics: [] }));
+    await expect(done).resolves.toEqual({ topics: [] });
+  });
+});
+
+describe("epochs", () => {
+  it("fails in-flight requests when the connection drops and goes back to ready with a new epoch", async () => {
+    const { t, ch } = await linked();
+    const seen: string[] = [];
+    t.onStatus((s) => seen.push(`${s.phase}:${s.epoch}`));
+    const p = t.request("kill", { session: "x" });
+    const settled = p.catch((e) => e);
+    ch.raiseDown(new LinkError("peer_closed", "peer_closed"));
+    expect(await settled).toBeInstanceOf(ConnectionClosedError);
+    expect(t.status).toMatchObject({ phase: "connecting", failure: "peer_closed" });
+    ch.raiseUp({ epoch: 2 });
+    expect(seen).toEqual(["connecting:1", "ready:2"]);
+  });
+
+  it("re-sends a read-tier request once on the next epoch", async () => {
+    const { t, ch } = await linked();
+    const p = t.request("sessions");
+    ch.raiseDown(new LinkError("peer_closed", "x"));
+    ch.raiseUp({ epoch: 2 });
+    await Promise.resolve();
+    await Promise.resolve();
+    const again = ch.sent.filter((f) => f.cmd === "sessions");
+    expect(again).toHaveLength(2);
+    ch.deliver(ok(again[1].id!, { sessions: [] }));
+    await expect(p).resolves.toEqual({ sessions: [] });
+  });
+
+  it("never re-sends a request that is not read-tier", async () => {
+    const { t, ch } = await linked();
+    const p = t.request("agentSay", { session: "s", text: "hi" });
+    const settled = p.catch((e) => e);
+    ch.raiseDown(new LinkError("peer_closed", "x"));
+    ch.raiseUp({ epoch: 2 });
+    expect(await settled).toBeInstanceOf(ConnectionClosedError);
+    expect(ch.sent.filter((f) => f.cmd === "agentSay")).toHaveLength(1);
+  });
+
+  it("does not re-send after a deliberate disconnect", async () => {
+    const { t, ch } = await linked();
+    const p = t.request("sessions");
+    const settled = p.catch((e) => e);
+    await t.disconnect("by hand");
+    expect(await settled).toBeInstanceOf(ConnectionClosedError);
+    expect(ch.sent.filter((f) => f.cmd === "sessions")).toHaveLength(1);
+  });
+
+  it("fails every pane subscription with connection_closed when the epoch ends", async () => {
+    const { t, ch } = await linked();
+    ch.onSend = (f) => {
+      if (f.type === "sub") ch.deliver({ v: 2, type: FRAME_RESYNC, id: f.id, pane: f.pane, seq: 1, payload: { cols: 80, rows: 24 } });
+    };
+    const sub = await t.subscribe(PANE);
+    const errs: WireRefusalError[] = [];
+    sub.onError((e) => errs.push(e));
+    ch.raiseDown(new LinkError("peer_closed", "x"));
+    expect(errs.map((e) => e.code)).toEqual(["connection_closed"]);
+    expect(t.subscription(PANE)).toBeUndefined();
+  });
+
+  describe("a migration", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("is adopted at once when no mutating request is in flight", async () => {
+      const { ch } = await linked();
+      ch.raiseMigrating({ epoch: 2 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ch.adopted).toEqual([2]);
+    });
+
+    it("waits for a mutating request, then adopts", async () => {
+      const { t, ch } = await linked();
+      void t.request("agentSay", { session: "s", text: "x" }).catch(() => {});
+      const id = ch.last!.id!;
+      ch.raiseMigrating({ epoch: 2 });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(ch.adopted).toEqual([]);
+      ch.deliver(ok(id));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ch.adopted).toEqual([2]);
+    });
+
+    it("adopts after MIGRATE_DRAIN_MS whatever is still in flight", async () => {
+      const { t, ch } = await linked();
+      void t.request("agentSay", { session: "s", text: "x" }).catch(() => {});
+      ch.raiseMigrating({ epoch: 2 });
+      await vi.advanceTimersByTimeAsync(MIGRATE_DRAIN_MS - 1);
+      expect(ch.adopted).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(ch.adopted).toEqual([2]);
+    });
+
+    it("does not wait for a read-tier request", async () => {
+      const { t, ch } = await linked();
+      void t.request("sessions").catch(() => {});
+      ch.raiseMigrating({ epoch: 2 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ch.adopted).toEqual([2]);
+    });
+  });
+});
+
+describe("pushed events", () => {
+  it("routes event frames and the err that ends a stream to onEvent, not to the connection", async () => {
+    const { t, ch } = await connected();
+    const seen: Frame[] = [];
+    const refusals: WireRefusalError[] = [];
+    t.onEvent((f) => seen.push(f));
+    t.onRefusal((e) => refusals.push(e));
+    ch.deliverEvent("r1", "sessions", 1, { reset: true });
+    ch.deliver({ v: 2, type: FRAME_ERR, id: "r1", topic: "sessions", payload: { code: "rate_limited" } });
+    expect(seen.map((f) => f.type)).toEqual([FRAME_EVENT, FRAME_ERR]);
+    expect(refusals).toHaveLength(0);
+    expect(t.status.phase).toBe("ready");
   });
 });
 
@@ -133,7 +230,7 @@ describe("pane subscriptions", () => {
     ch.onSend = (f) => {
       if (f.type === "sub") {
         ch.deliver({
-          v: 1,
+          v: 2,
           type: FRAME_RESYNC,
           id: f.id,
           pane: f.pane,
@@ -162,8 +259,8 @@ describe("pane subscriptions", () => {
     // discards them, and an idle agent writes nothing else for minutes — so the
     // pane stays empty until something forces a repaint.
     const { ch, sub } = await subscribed();
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 3, payload: { data: "IXo=" } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 3, payload: { data: "IXo=" } });
 
     const events: PaneEvent[] = [];
     sub.onEvent((e) => events.push(e));
@@ -174,7 +271,7 @@ describe("pane subscriptions", () => {
 
   it("replays only to the FIRST listener, so a second reader does not double-render", async () => {
     const { ch, sub } = await subscribed();
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
 
     const first: PaneEvent[] = [];
     const second: PaneEvent[] = [];
@@ -200,7 +297,7 @@ describe("pane subscriptions", () => {
     // escape sequence.
     const { ch, sub } = await subscribed();
     for (let i = 0; i < 300; i++) {
-      ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2 + i, payload: { data: "eA==" } });
+      ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 2 + i, payload: { data: "eA==" } });
     }
     const events: PaneEvent[] = [];
     sub.onEvent((e) => events.push(e));
@@ -215,7 +312,7 @@ describe("pane subscriptions", () => {
     // will never write again.
     const { ch, sub } = await subscribed();
     ch.deliver({
-      v: 1,
+      v: 2,
       type: FRAME_RESYNC,
       pane: PANE,
       seq: 2,
@@ -238,8 +335,8 @@ describe("pane subscriptions", () => {
     const { ch, sub } = await subscribed();
     const events: PaneEvent[] = [];
     sub.onEvent((e) => events.push(e));
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 3, payload: { data: null } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 3, payload: { data: null } });
     expect(events).toHaveLength(2);
     expect(new TextDecoder().decode((events[0] as { data: Uint8Array }).data)).toBe("hi");
     expect((events[1] as { data: Uint8Array }).data).toHaveLength(0);
@@ -254,13 +351,13 @@ describe("pane subscriptions", () => {
     const events: PaneEvent[] = [];
     sub.onEvent((e) => events.push(e));
     ch.deliver({
-      v: 1,
+      v: 2,
       type: FRAME_RESYNC,
       pane: PANE,
       seq: 9,
       payload: { cols: 120, rows: 40, cursorX: 0, cursorY: 0 },
     });
-    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 40, payload: { data: "" } });
+    ch.deliver({ v: 2, type: FRAME_PTY, pane: PANE, seq: 40, payload: { data: "" } });
     expect(events[0]).toMatchObject({ kind: "resync", repaired: true });
     expect(events[1]).toMatchObject({ kind: "output", gap: true });
   });
@@ -270,7 +367,7 @@ describe("pane subscriptions", () => {
     const events: PaneEvent[] = [];
     sub.onEvent((e) => events.push(e));
     ch.deliver({
-      v: 1,
+      v: 2,
       type: FRAME_RESYNC,
       pane: PANE,
       seq: 2,
@@ -287,7 +384,7 @@ describe("pane subscriptions", () => {
     const { ch, sub } = await subscribed();
     await sub.write("y\r");
     expect(ch.last).toEqual({
-      v: 1,
+      v: 2,
       type: "pty",
       pane: PANE,
       payload: { action: "write", data: "eQ0=" },
@@ -305,7 +402,7 @@ describe("pane subscriptions", () => {
   it("sends unsub with no id and does not wait for an acknowledgement", async () => {
     const { ch, sub } = await subscribed();
     await sub.close(); // resolves; the daemon never replies to an unsub
-    expect(ch.last).toEqual({ v: 1, type: "unsub", pane: PANE });
+    expect(ch.last).toEqual({ v: 2, type: "unsub", pane: PANE });
   });
 
   it("fails every pane and every pending request when the channel closes", async () => {
@@ -327,7 +424,7 @@ describe("frames the client must not accept", () => {
     const { t, ch } = await connected();
     const refusals: WireRefusalError[] = [];
     t.onRefusal((e) => refusals.push(e));
-    ch.deliver({ v: 1, type: "sub", pane: PANE }); // client -> daemon only
+    ch.deliver({ v: 2, type: "sub", pane: PANE }); // client -> daemon only
     expect(refusals[0]?.code).toBe("unknown_type");
   });
 
@@ -345,33 +442,29 @@ describe("frames the client must not accept", () => {
 
   it("tears the connection down on a code that is always fatal", async () => {
     const { t, ch } = await connected();
-    ch.deliver({ v: 1, type: FRAME_ERR, payload: { code: "frame_too_large" } });
+    ch.deliver({ v: 2, type: FRAME_ERR, payload: { code: "frame_too_large" } });
     expect(t.status.phase).toBe("closed");
   });
 
   it("tears down on a fatal code even when it settled a pending request", async () => {
-    // Every fatal refusal the daemon actually produces — `denied`,
-    // `unknown_cmd`, `unsupported_version` — is written in reply to a frame the
-    // client sent, so it carries that frame's id and the correlator settles it.
-    // Checking `alwaysFatalCode` only for the uncorrelated remainder made the
-    // check dead for exactly the codes it exists to catch, and the client then
-    // learned the socket was gone only when the close arrived.
+    // The fatal code is read before the correlator settles the request, so the
+    // request still rejects with its own refusal and the connection still dies
+    // without waiting for the socket close to arrive.
     const { t, ch } = await connected();
     const p = t.request("sessions");
-    ch.deliver({ v: 1, type: FRAME_ERR, id: ch.last!.id, payload: { code: "denied" } });
-
-    // The pending request still rejects with its own specific refusal...
-    await expect(p).rejects.toMatchObject({ code: "denied" });
-    // ...and the connection is gone, without waiting for the socket to notice.
+    ch.deliver({ v: 2, type: FRAME_ERR, id: ch.last!.id, payload: { code: "frame_too_large" } });
+    await expect(p).rejects.toMatchObject({ code: "frame_too_large" });
     expect(t.status.phase).toBe("closed");
   });
 
-  it("leaves the connection up for a non-fatal refusal on a request", async () => {
+  it("rejects one request and keeps the socket up for denied, unknown_cmd and rate_limited", async () => {
     const { t, ch } = await connected();
-    const p = t.request("sessions");
-    ch.deliver({ v: 1, type: FRAME_ERR, id: ch.last!.id, payload: { code: "rate_limited" } });
-    await expect(p).rejects.toMatchObject({ code: "rate_limited" });
-    expect(t.status.phase).toBe("ready");
+    for (const code of ["denied", "unknown_cmd", "rate_limited"]) {
+      const p = t.request("sessions");
+      ch.deliver({ v: 2, type: FRAME_ERR, id: ch.last!.id, payload: { code } });
+      await expect(p).rejects.toMatchObject({ code });
+      expect(t.status.phase).toBe("ready");
+    }
   });
 });
 
@@ -399,13 +492,12 @@ describe("a subscribe that does not complete", () => {
   it("does NOT unsubscribe after a refusal, which created nothing to undo", async () => {
     const ch = new FakeChannel();
     ch.onSend = (f) => {
-      if (f.cmd === "remote.hello") ch.deliver(ok(f.id!));
       if (f.type === "sub") {
-        ch.deliver({ v: 1, type: FRAME_ERR, id: f.id, pane: f.pane, payload: { code: "unknown_pane" } });
+        ch.deliver({ v: 2, type: FRAME_ERR, id: f.id, pane: f.pane, payload: { code: "unknown_pane" } });
       }
     };
     const t = new ChannelTransport({ open: async () => ch });
-    await t.connect(endpoint);
+    await t.connect(target);
 
     await expect(t.subscribe(PANE)).rejects.toMatchObject({ code: "unknown_pane" });
     expect(ch.sent.filter((f) => f.type === "unsub")).toHaveLength(0);
@@ -413,11 +505,9 @@ describe("a subscribe that does not complete", () => {
 });
 
 describe("a refusal that arrives instead of a channel", () => {
-  // The native plugin performs the bearer handshake itself, so a wrong key
-  // never reaches the frame layer: `connect` simply rejects. If that rejection
-  // only lands in `status.error`, `diagnose` finds no refusal, falls through to
-  // its silence branch and tells the user their phone is not on the Mac's
-  // network — with the address, the port and the pin all correct.
+  // The plugin authenticates itself, so a daemon refusal never reaches the frame
+  // layer: `connect` rejects. It must land in `status.refusal`, not only in
+  // `status.error`, or the screen blames the network for what the daemon said.
 
   it("records a WireRefusalError from the channel factory as status.refusal", async () => {
     const refusal = new WireRefusalError("denied", "the daemon refused the connection");
@@ -425,10 +515,9 @@ describe("a refusal that arrives instead of a channel", () => {
       open: async () => {
         throw refusal;
       },
-      handshake: "channel",
     });
 
-    await expect(t.connect(endpoint)).rejects.toBe(refusal);
+    await expect(t.connect(target)).rejects.toBe(refusal);
     expect(t.status.phase).toBe("closed");
     expect(t.status.refusal).toEqual({
       code: "denied",
@@ -444,9 +533,8 @@ describe("a refusal that arrives instead of a channel", () => {
       open: async () => {
         throw refusal;
       },
-      handshake: "channel",
     });
-    await expect(t.connect(endpoint)).rejects.toBe(refusal);
+    await expect(t.connect(target)).rejects.toBe(refusal);
     expect(t.status.refusal?.minV).toBe(2);
     expect(t.status.refusal?.maxV).toBe(3);
   });
@@ -457,9 +545,8 @@ describe("a refusal that arrives instead of a channel", () => {
       open: async () => {
         throw boom;
       },
-      handshake: "channel",
     });
-    await expect(t.connect(endpoint)).rejects.toBe(boom);
+    await expect(t.connect(target)).rejects.toBe(boom);
     expect(t.status.error).toBe(boom);
     expect(t.status.refusal).toBeUndefined();
   });
@@ -481,9 +568,8 @@ describe("a refusal that arrives instead of a channel", () => {
         },
         close: async () => ch.close(),
       }),
-      handshake: "channel",
     });
-    await t.connect(endpoint);
+    await t.connect(target);
     expect(t.status.phase).toBe("ready");
 
     onClose?.(new WireRefusalError("denied", "the daemon refused the connection"));

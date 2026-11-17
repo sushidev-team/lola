@@ -94,6 +94,53 @@ func dialDaemon(home string, deadline time.Time) (net.Conn, string, error) {
 	return conn, "", err
 }
 
+// SendAgent sends one agent-side command for the session named by $LOLA_SESSION
+// and returns the daemon's reply. It shares dialDaemon, so a sandboxed `lola ssh`
+// crosses the hook bridge with its token. Unlike a hook or a report the caller
+// cares about the answer, so the deadline is longer. A failure to reach the daemon
+// wraps ErrNoDaemon.
+func SendAgent(cmd string, args any) (*protocol.Response, error) {
+	session := os.Getenv("LOLA_SESSION")
+	if session == "" {
+		return nil, fmt.Errorf("%w: not a lola session ($LOLA_SESSION unset)", ErrNoDaemon)
+	}
+	home, err := config.Home()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	rawArgs, err := json.Marshal(args)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(agentSendTimeout)
+	conn, token, err := dialDaemon(home, deadline)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(deadline)
+	raw, err := json.Marshal(protocol.Request{Cmd: cmd, Session: session, Args: rawArgs, HookToken: token})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.Write(append(raw, '\n')); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	var resp protocol.Response
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return nil, fmt.Errorf("%w: bad reply: %v", ErrNoDaemon, err)
+	}
+	return &resp, nil
+}
+
+// agentSendTimeout bounds one agent-side command, inside the bridge's own 10s
+// connection deadline.
+const agentSendTimeout = 8 * time.Second
+
 // ErrNoDaemon wraps every failure to REACH the daemon from Report (no session
 // env, no socket, a timeout) as opposed to the daemon answering "no". The CLI
 // treats the two differently: an unreachable daemon must not fail an agent's
@@ -106,50 +153,56 @@ var ErrNoDaemon = errors.New("lola daemon unreachable")
 // the daemon's verdict. Validation happens daemon-side (internal/board), so a
 // non-nil error that is not ErrNoDaemon is the daemon's own usage message.
 func Report(argv []string) error {
+	_, err := ReportData(argv)
+	return err
+}
+
+// ReportData also returns task-board reads through the session-authenticated bridge.
+func ReportData(argv []string) (json.RawMessage, error) {
 	session := os.Getenv("LOLA_SESSION")
 	if session == "" {
-		return fmt.Errorf("%w: not a lola session ($LOLA_SESSION unset)", ErrNoDaemon)
+		return nil, fmt.Errorf("%w: not a lola session ($LOLA_SESSION unset)", ErrNoDaemon)
 	}
 	home, err := config.Home()
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
 	}
 	args, err := json.Marshal(protocol.ReportArgs{Argv: argv})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	deadline := time.Now().Add(postTimeout)
 	conn, token, err := dialDaemon(home, deadline)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
 	}
 	raw, err := json.Marshal(protocol.Request{Cmd: "agentReport", Session: session, Args: args, HookToken: token})
 	if err != nil {
 		conn.Close()
-		return err
+		return nil, err
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(deadline)
 	if _, err := conn.Write(append(raw, '\n')); err != nil {
-		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
 	}
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		return fmt.Errorf("%w: no reply: %v", ErrNoDaemon, err)
+		return nil, fmt.Errorf("%w: no reply: %v", ErrNoDaemon, err)
 	}
 	var resp protocol.Response
 	if err := json.Unmarshal([]byte(line), &resp); err != nil {
-		return fmt.Errorf("%w: bad reply: %v", ErrNoDaemon, err)
+		return nil, fmt.Errorf("%w: bad reply: %v", ErrNoDaemon, err)
 	}
 	if !resp.OK {
 		// A daemon predating the command answers `unknown cmd`; that is the
 		// same "nobody to report to" as a dead socket, not the agent's fault.
 		if strings.HasPrefix(resp.Error, "unknown cmd") {
-			return fmt.Errorf("%w: %s", ErrNoDaemon, resp.Error)
+			return nil, fmt.Errorf("%w: %s", ErrNoDaemon, resp.Error)
 		}
-		return errors.New(resp.Error)
+		return nil, errors.New(resp.Error)
 	}
-	return nil
+	return resp.Data, nil
 }
 
 // request sends one request for the session named by $LOLA_SESSION and decodes
@@ -258,12 +311,13 @@ type matcherEntry struct {
 
 type settingsFile struct {
 	Hooks struct {
-		Stop             []matcherEntry `json:"Stop"`
-		Notification     []matcherEntry `json:"Notification"`
-		SessionEnd       []matcherEntry `json:"SessionEnd"`
-		PostToolUse      []matcherEntry `json:"PostToolUse"`
-		UserPromptSubmit []matcherEntry `json:"UserPromptSubmit"`
-		PreToolUse       []matcherEntry `json:"PreToolUse"`
+		Stop              []matcherEntry `json:"Stop"`
+		Notification      []matcherEntry `json:"Notification"`
+		SessionEnd        []matcherEntry `json:"SessionEnd"`
+		PostToolUse       []matcherEntry `json:"PostToolUse"`
+		UserPromptSubmit  []matcherEntry `json:"UserPromptSubmit"`
+		PermissionRequest []matcherEntry `json:"PermissionRequest"`
+		PreToolUse        []matcherEntry `json:"PreToolUse"`
 	} `json:"hooks"`
 	SkillOverrides map[string]string `json:"skillOverrides,omitempty"`
 	StatusLine     *statusLineSpec   `json:"statusLine,omitempty"`
@@ -317,6 +371,9 @@ var modalSkills = map[string]string{
 //	                                                which fires no PostToolUse for
 //	                                                a text-only reply — is never
 //	                                                seen as idle mid-turn)
+//	PermissionRequest → <lolaBin> hook permission_request (async: it only asks the
+//	                                                daemon to read the pane soon, and
+//	                                                can land after the answer)
 //
 // Each hook has an explicit 10s timeout. Hook commands run with the pane's
 // environment, so the exported LOLA_SESSION is visible to `lola hook`.
@@ -366,6 +423,7 @@ func SettingsJSON(lolaBin string, additionalDirs ...string) []byte {
 			Timeout: 10,
 		}},
 	}}
+	s.Hooks.PermissionRequest = entry("permission_request", true)
 	s.SkillOverrides = modalSkills
 	s.StatusLine = &statusLineSpec{Type: "command", Command: bin + " " + statusLineSelf}
 	if len(additionalDirs) > 0 {

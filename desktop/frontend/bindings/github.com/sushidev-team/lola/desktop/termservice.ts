@@ -28,7 +28,8 @@ import * as application$0 from "../../../wailsapp/wails/v3/pkg/application/model
  * Attach starts an interactive `tmux attach` to the named session in a PTY sized
  * cols×rows and streams its output to the frontend as base64 chunks on the event
  * `pty:<name>`, coalesced to one emit per ~16ms so a chatty agent can't saturate
- * the webview. Re-attaching an already-live stream tears the old one down first.
+ * the webview. Attaching is exclusive: every other live stream (and an older one
+ * for this name) is torn down first.
  * Returns the stream ID (the session name) the frontend uses for Write/Resize/
  * Detach and the event subscription.
  */
@@ -85,6 +86,18 @@ export function CloseShell(shell: string): $CancellablePromise<void> {
  */
 export function Detach(name: string): $CancellablePromise<void> {
     return $Call.ByID(2614283856, name);
+}
+
+/**
+ * DetachAll closes every live PTY stream. The frontend calls it once on boot:
+ * a page load starts with no LiveTerminal mounted, so any stream still open was
+ * left behind by the previous page (a reload or a dev-server HMR never runs
+ * onDestroy) and is holding a tmux client nobody is looking at. Without it those
+ * orphans would last until the next Attach, and the daemon defers every
+ * automatic prompt to a session with a client attached.
+ */
+export function DetachAll(): $CancellablePromise<void> {
+    return $Call.ByID(3924559811);
 }
 
 /**

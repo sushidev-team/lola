@@ -5,10 +5,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
-	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -35,7 +33,24 @@ type conn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	peer  Peer
+	// peer, authed and seq are written under srv.mu (admitAuthed, addConn,
+	// removeConn), which is what DropDevice and DeviceConns read them under. The
+	// reader goroutine reads peer unlocked: it is the only writer after the
+	// handshake.
+	peer   Peer
+	authed bool
+	seq    uint64
+
+	// releasePre frees this connection's pre-auth slot; nil outside serveConn.
+	releasePre func()
+
+	// strikes counts refusals that kept the connection; reader goroutine only.
+	strikes int
+
+	// ptyAudited records the panes whose first raw write was audited; pane
+	// worker only.
+	ptyAudited map[string]bool
+
 	frame protocol.Frame // the reader's reusable destination
 
 	sem   chan struct{}
@@ -72,6 +87,8 @@ func newConn(s *Server, nc net.Conn) *conn {
 		queue: make(chan paneOp, paneQueueDepth),
 		subs:  map[string]*subscription{},
 		done:  make(chan struct{}),
+
+		ptyAudited: map[string]bool{},
 	}
 	c.ctx, c.cancel = context.WithCancel(s.ctx)
 	return c
@@ -100,7 +117,18 @@ func (c *conn) run() {
 	defer c.waitGoroutines()
 	defer c.shutdown()
 
-	if !c.authenticate() {
+	peer, ok := c.authenticate()
+	if !ok {
+		return
+	}
+	// Authenticated: the connection leaves the pre-auth pool for the authed one.
+	if c.releasePre != nil {
+		c.releasePre()
+	}
+	if !c.srv.admitAuthed(c, peer) {
+		return
+	}
+	if !c.sendReady() {
 		return
 	}
 
@@ -113,23 +141,22 @@ func (c *conn) run() {
 			c.logClose(err)
 			return
 		}
-		if err := c.authorize(f); err != nil {
-			return
-		}
 		switch f.Type {
 		case protocol.FrameReq:
-			if err := c.dispatchReq(f); err != nil {
-				return
-			}
+			err = c.handleReq(f)
 		case protocol.FrameSub, protocol.FrameUnsub, protocol.FramePTY:
-			if err := c.enqueuePane(f); err != nil {
-				return
-			}
+			err = c.handlePane(f)
 		case protocol.FrameErr:
 			// A client reporting a refusal it made locally. The daemon never
 			// asked it a question, so there is nothing to act on; it is logged
-			// without the payload and the connection carries on.
-			c.srv.opts.logf()("remote: device=%s reported an error frame", logSafe(c.peer.DeviceID))
+			// without the payload, through the device's log bucket (it costs
+			// the peer nothing else), and the connection carries on.
+			if _, err = c.admit(f, protocol.TierRead); err == nil {
+				c.logDevice("remote: device=%s reported an error frame", logSafe(c.peer.DeviceID))
+			}
+		}
+		if err != nil {
+			return
 		}
 	}
 }
@@ -137,15 +164,18 @@ func (c *conn) run() {
 // authenticate runs the authorizer's one-shot handshake under a bounded read
 // deadline, then clears it: an attached pane is legitimately silent for
 // minutes, so there is no idle deadline afterwards and shutdown is bounded by
-// Close rather than by a timer.
-func (c *conn) authenticate() bool {
+// Close rather than by a timer. It does not publish the peer; admitAuthed does,
+// under the server's lock.
+func (c *conn) authenticate() (Peer, bool) {
 	_ = c.nc.SetReadDeadline(time.Now().Add(handshakeTimeout))
 	defer func() { _ = c.nc.SetReadDeadline(time.Time{}) }()
 
 	hs := &Handshake{
-		RemoteAddr: c.nc.RemoteAddr().String(),
-		At:         c.srv.opts.now(),
-		NextFrame:  c.readValidated,
+		RemoteAddr:      c.nc.RemoteAddr().String(),
+		At:              c.srv.opts.now(),
+		Via:             ViaLAN,
+		NextFrame:       c.readValidated,
+		SetReadDeadline: c.nc.SetReadDeadline,
 		Send: func(f *protocol.Frame) error {
 			return c.fw.WriteFrame(f)
 		},
@@ -153,18 +183,57 @@ func (c *conn) authenticate() bool {
 	if tc, ok := c.nc.(*tls.Conn); ok {
 		st := tc.ConnectionState()
 		hs.TLS = &st
+		if r, ok := tc.NetConn().(relayed); ok {
+			hs.Via, hs.RelayRV = ViaRelay, r.relayRV()
+		}
 	}
 
 	peer, err := c.srv.auth.Authenticate(c.ctx, hs)
-	if err != nil {
-		c.srv.opts.logf()("remote: rejected %s: %v", hs.RemoteAddr, err)
-		return false
+	switch {
+	case errors.Is(err, ErrPairingDone):
+		c.srv.opts.logf()("remote: pairing connection from %s via=%s finished", logSafe(hs.RemoteAddr), hs.Via)
+		return Peer{}, false
+	case err != nil:
+		// Any certificate passes TLS while a pairing window is open, so this
+		// line is one an unauthenticated peer can cause at will.
+		c.srv.logPreAuth("remote: rejected %s via=%s: %v", logSafe(hs.RemoteAddr), hs.Via, err)
+		return Peer{}, false
 	}
 	peer.RemoteAddr = hs.RemoteAddr
+	peer.Via = hs.Via
 	if peer.ConnectedAt.IsZero() {
 		peer.ConnectedAt = hs.At
 	}
-	c.peer = peer
+	return peer, true
+}
+
+// sendReady writes the one ready frame of a connection, before any frame is
+// read. TLS 1.3 cannot tell a client it was accepted, so a client counts a path
+// as authenticated only when this arrives. A device that vanished from the
+// registry since Authenticate gets not_paired instead.
+func (c *conn) sendReady() bool {
+	data := protocol.ReadyData{
+		DeviceID: c.peer.DeviceID, Name: c.peer.Label, Tiers: []string{},
+		Via: c.peer.Via, Host: c.srv.opts.Host,
+	}
+	if reg := c.srv.opts.Devices; reg != nil {
+		d, ok := reg.Get(c.peer.DeviceID)
+		if !ok || d.Epoch != c.peer.Epoch {
+			c.refuse("", protocol.CodeNotPaired, "this device is not paired")
+			c.srv.opts.logf()("remote: device=%s vanished before ready", logSafe(c.peer.DeviceID))
+			return false
+		}
+		data.Tiers = d.Tiers
+	}
+	f := protocol.Frame{V: protocol.FrameVersionCurrent, Type: protocol.FrameReady}
+	if err := f.SetPayload(data); err != nil {
+		c.srv.opts.logf()("remote: encode ready: %v", err)
+		return false
+	}
+	if err := c.fw.WriteFrame(&f); err != nil {
+		c.failWrite(err)
+		return false
+	}
 	return true
 }
 
@@ -187,66 +256,145 @@ func (c *conn) readValidated() (*protocol.Frame, error) {
 		// error. The daemon never adopts an unknown version.
 		ref := protocol.UnsupportedVersionFrame(f.ID)
 		_ = c.fw.WriteFrame(&ref)
-		c.srv.opts.logf()("remote: %s sent envelope v%d; this daemon speaks v%d..v%d",
+		c.logPeer("remote: %s sent envelope v%d; this daemon speaks v%d..v%d",
 			c.nc.RemoteAddr(), f.V, protocol.FrameVersionMin, protocol.FrameVersionCurrent)
 		return nil, errRefused
 	}
 	if !protocol.KnownFrameType(f.Type) {
 		c.refuse(f.ID, protocol.CodeUnknownType, "unknown frame type")
-		c.srv.opts.logf()("remote: %s sent unknown frame type %q", c.nc.RemoteAddr(), logSafe(f.Type))
+		c.logPeer("remote: %s sent unknown frame type %q", c.nc.RemoteAddr(), logSafe(f.Type))
 		return nil, errRefused
 	}
 	if !protocol.DaemonAcceptsFrame(f.Type) {
 		// A daemon-to-client type arriving inbound. Refused rather than
 		// guessed at: the direction table is part of the contract.
 		c.refuse(f.ID, protocol.CodeUnknownType, "frame type is not accepted by the daemon")
-		c.srv.opts.logf()("remote: %s sent outbound-only frame type %q", c.nc.RemoteAddr(), logSafe(f.Type))
+		c.logPeer("remote: %s sent outbound-only frame type %q", c.nc.RemoteAddr(), logSafe(f.Type))
 		return nil, errRefused
 	}
 	return f, nil
 }
 
-// authorize applies the unconditional denials FIRST and only then consults the
-// authorizer, so no implementation of Authorizer can ever grant stop,
-// hookEvent or one of the pairing commands. Both refusals close the connection:
-// a peer asking for a denied command is broken or hostile, and there is nothing
-// useful for it to do next on this connection.
-func (c *conn) authorize(f *protocol.Frame) error {
-	if f.Type == protocol.FrameReq && CommandDenied(f.Cmd) {
-		c.refuse(f.ID, protocol.CodeUnknownCmd, "command is not available remotely")
-		c.srv.opts.logf()("remote: device=%s denied cmd=%s", logSafe(c.peer.DeviceID), logSafe(f.Cmd))
-		return errRefused
+// verdict is a refusal that keeps the connection.
+type verdict struct{ code, msg string }
+
+func (v verdict) refused() bool { return v.code != "" }
+
+// errStrikeLimit closes a connection that keeps asking for what it may not have.
+var errStrikeLimit = errors.New("remote: too many refusals on one connection")
+
+// admit is the per-frame gate, shared by every inbound frame type. Tier never is
+// refused BEFORE the authorizer is consulted, so no implementation can grant
+// stop, hookEvent or a forced kill. The authorizer then answers ErrDenied (a
+// refusal; the connection survives) or ErrUnauthenticated, which means the
+// device was revoked or re-paired and ends the connection.
+//
+// A refusal does not close the connection: the strike counter bounds a probing
+// client. The returned error is non-nil only when the connection must close.
+func (c *conn) admit(f *protocol.Frame, tier string) (verdict, error) {
+	if tier == protocol.TierNever {
+		c.srv.opts.logf()("remote: device=%s denied type=%s cmd=%s", logSafe(c.peer.DeviceID), logSafe(f.Type), logSafe(f.Cmd))
+		return verdict{protocol.CodeUnknownCmd, "command is not available remotely"}, c.strike()
 	}
 	if err := c.srv.auth.AuthorizeFrame(c.ctx, c.peer, f); err != nil {
-		c.refuse(f.ID, protocol.CodeDenied, "not permitted for this device")
-		c.srv.opts.logf()("remote: device=%s denied type=%s cmd=%s: %v",
-			logSafe(c.peer.DeviceID), logSafe(f.Type), logSafe(f.Cmd), err)
-		return errRefused
+		if errors.Is(err, ErrDenied) {
+			c.srv.opts.logf()("remote: device=%s denied type=%s cmd=%s tier=%s", logSafe(c.peer.DeviceID),
+				logSafe(f.Type), logSafe(f.Cmd), logSafe(tier))
+			return verdict{protocol.CodeDenied, "not permitted for this device"}, c.strike()
+		}
+		c.srv.opts.logf()("remote: device=%s closed on type=%s: %v", logSafe(c.peer.DeviceID), logSafe(f.Type), err)
+		return verdict{}, errRefused
+	}
+	return verdict{}, nil
+}
+
+// strike counts one refusal.
+func (c *conn) strike() error {
+	c.strikes++
+	if c.strikes >= maxRefusalsPerConn {
+		c.srv.opts.logf()("remote: device=%s closed after %d refusals", logSafe(c.peer.DeviceID), c.strikes)
+		return errStrikeLimit
 	}
 	return nil
 }
 
-// dispatchReq decodes the request HERE, on the reader goroutine (the payload
-// aliases a buffer the next read overwrites), and then runs it concurrently.
-// A returned error closes the connection; a refusal on the frame's id does not.
-func (c *conn) dispatchReq(f *protocol.Frame) error {
-	var req protocol.Request
-	if err := f.DecodePayload(&req); err != nil {
-		// The framing is intact, so the connection survives and the refusal
-		// goes back on this frame's id. The closed code list has no
-		// bad-payload member at V=1, so the message names it; the decoder's
-		// own text stays in the local log, never on the wire.
-		c.refuse(f.ID, protocol.CodeInternal, "malformed request payload")
+// hasTier reads the device's tiers live from the registry. A server with no
+// registry grants nothing.
+func (c *conn) hasTier(tier string) bool {
+	reg := c.srv.opts.Devices
+	if reg == nil {
+		return false
+	}
+	d, ok := reg.Get(c.peer.DeviceID)
+	return ok && d.Has(tier)
+}
+
+// handleReq gates, rebuilds, rate-limits and dispatches one req frame. It
+// decodes HERE, on the reader goroutine (the payload aliases a buffer the next
+// read overwrites). A returned error closes the connection; a refusal on the
+// frame's id does not.
+func (c *conn) handleReq(f *protocol.Frame) error {
+	tier := frameTier(f)
+	cmd, id := f.Cmd, f.ID
+
+	var in protocol.Request
+	decodeErr := f.DecodePayload(&in)
+
+	v, err := c.admit(f, tier)
+	if v.refused() {
+		c.audit(auditRecord{tier: tier, cmd: cmd, session: in.Session, code: v.code})
+		c.refuse(id, v.code, v.msg)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	if decodeErr != nil {
+		// The framing is intact, so the connection survives and the refusal goes
+		// back on this frame's id; the decoder's own text stays off the wire.
+		c.audit(auditRecord{tier: tier, cmd: cmd, code: protocol.CodeInternal})
+		c.refuse(id, protocol.CodeInternal, "malformed request payload")
+		// Costs a strike like every other refusal: it reaches neither the
+		// handler nor a rate bucket, so nothing else bounds a peer repeating it.
+		return c.strike()
+	}
+
+	// Cmd comes from the ENVELOPE, never from the payload: authorization read the
+	// envelope's Cmd, so a payload naming another command would be authorized as
+	// one thing and executed as another. rebuild builds a FRESH request from the
+	// command's own field spec and discards everything else the phone sent.
+	req, res, rerr := rebuild(cmd, in, c.hasTier)
+	if rerr != nil {
+		c.audit(auditRecord{tier: tier, cmd: cmd, session: in.Session, code: protocol.CodeDenied})
+		c.refuse(id, protocol.CodeDenied, rerr.Error())
+		return c.strike()
+	}
+	rec := auditRecord{
+		tier: tier, cmd: cmd, session: req.Session,
+		fields: auditFields(requestFields[cmd].audit, req), dropped: res.dropped,
+	}
+	// A rate-limit refusal keeps the connection and costs no strike (a busy
+	// phone is not a probing one), so its line goes through the device's log
+	// bucket: the frames are bounded by the bucket that refused them, the
+	// lines by this one.
+	if !c.srv.lim.allowReq(c.peer.DeviceID, tier, cmd, res.attachBytes, res.attachLast) {
+		rec.code = protocol.CodeRateLimited
+		c.auditThrottled(rec)
+		c.refuse(id, protocol.CodeRateLimited, "rate limit exceeded")
 		return nil
 	}
-	req = normalizeRequest(f.Cmd, req)
-	id := f.ID
+
+	if c.dispatchEvents(id, req) {
+		return nil
+	}
 
 	select {
 	case c.sem <- struct{}{}:
 	default:
 		// Refused rather than queued: queueing it HERE would block the reader,
 		// which is exactly the head-of-line block this design removes.
+		rec.code = protocol.CodeRateLimited
+		c.auditThrottled(rec)
 		c.refuse(id, protocol.CodeRateLimited, "too many requests in flight on this connection")
 		return nil
 	}
@@ -257,45 +405,57 @@ func (c *conn) dispatchReq(f *protocol.Frame) error {
 		defer func() { <-c.sem }()
 		defer func() {
 			if r := recover(); r != nil {
-				c.srv.opts.logf()("remote: handler panic on cmd=%s: %v", logSafe(req.Cmd), r)
+				c.srv.opts.logf()("remote: handler panic on cmd=%s: %v", logSafe(cmd), r)
+				rec.code = protocol.CodeInternal
+				c.audit(rec)
 				c.refuse(id, protocol.CodeInternal, "handler failed")
 			}
 		}()
 
-		resp := c.srv.opts.Handle(c.ctx, req)
-		c.audit(req, resp)
+		resp := c.srv.opts.Handle(WithPeer(c.ctx, c.peer), req)
+		rec.ok = resp.OK
+		// An accepted non-final attachImage part writes no line; the last part
+		// does, and a refused non-final part writes one through the device's
+		// log bucket, because it paid a read token, not a write.
+		switch {
+		case cmd != protocol.CmdAttachImage || res.attachLast:
+			c.audit(rec)
+		case !resp.OK:
+			c.auditThrottled(rec)
+		}
 
 		out := protocol.Frame{V: protocol.FrameVersionCurrent, Type: protocol.FrameResp, ID: id}
 		if err := out.SetPayload(resp); err != nil {
-			c.srv.opts.logf()("remote: encode response for cmd=%s: %v", logSafe(req.Cmd), err)
+			c.srv.opts.logf()("remote: encode response for cmd=%s: %v", logSafe(cmd), err)
 			c.refuse(id, protocol.CodeInternal, "response could not be encoded")
 			return
 		}
 		if err := c.fw.WriteFrame(&out); err != nil {
+			// An oversize answer wrote nothing, so the stream is intact: refuse
+			// that one request and keep the connection. Every other write error
+			// means the transport is broken.
+			if errors.Is(err, protocol.ErrFrameTooLarge) {
+				c.srv.opts.logf()("remote: response for cmd=%s too large: %v", logSafe(cmd), err)
+				c.refuse(id, protocol.CodeFrameTooLarge, "response exceeds the maximum frame size")
+				return
+			}
 			c.failWrite(err)
 		}
 	}()
 	return nil
 }
 
-// audit writes the one line a mutating remote frame leaves behind: the device,
-// the command, the session and the outcome — and NEVER the payload. That
-// exclusion is load-bearing rather than fastidious: answer carries prose a human
-// typed at a phone, which may contain a pasted token; openManual and openTicket
-// carry prompt seeds; openURL's own handler logs a full URL today and this path
-// must not. PTY bytes and resync frames are never logged at any level.
-//
-// The daemon's log is append-only, unrotated, and mirrored to stderr through an
-// io.MultiWriter, so a remote peer can now drive writes into a file that grows
-// without bound and into whatever a launchd stderr redirect points at. Reads
-// are therefore not audited at all, and every field that reaches the line is
-// clipped and stripped of control characters first.
-func (c *conn) audit(req protocol.Request, resp protocol.Response) {
-	if !auditable(req.Cmd) {
-		return
+// handlePane gates a sub, unsub or pty frame and hands it to the ordered worker.
+func (c *conn) handlePane(f *protocol.Frame) error {
+	v, err := c.admit(f, frameTier(f))
+	if v.refused() {
+		c.refusePane(f.ID, f.Pane, v.code, v.msg)
+		return err
 	}
-	c.srv.opts.logf()("remote: device=%s insecure=%t cmd=%s session=%s ok=%t",
-		logSafe(c.peer.DeviceID), c.peer.Insecure, logSafe(req.Cmd), logSafe(req.Session), resp.OK)
+	if err != nil {
+		return err
+	}
+	return c.enqueuePane(f)
 }
 
 // refuse writes one err frame, best effort. A write failure here is not worth a
@@ -393,6 +553,7 @@ func (c *conn) shutdown() {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		c.cancel()
+		c.stopEvents()
 		c.nc.Close()
 		c.mu.Lock()
 		subs := make([]*subscription, 0, len(c.subs))
@@ -405,28 +566,4 @@ func (c *conn) shutdown() {
 			s.close()
 		}
 	})
-}
-
-// logSafe clips an untrusted string and strips whatever would forge a log line.
-// Session ids, command names and device labels all reach the audit line, and
-// all of them are peer-supplied; a newline in one of them would write a second
-// line that reads as the daemon's own.
-func logSafe(s string) string {
-	const max = 64
-	if s == "" {
-		return "-"
-	}
-	var b strings.Builder
-	for i, r := range s {
-		if i >= max {
-			b.WriteString("...")
-			break
-		}
-		if r == unicode.ReplacementChar || unicode.IsControl(r) {
-			b.WriteByte('?')
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }

@@ -212,3 +212,50 @@ func TestUIValidateTheme(t *testing.T) {
 		})
 	}
 }
+
+func TestUISystemAppearanceRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c := &Config{}
+	c.Defaults.GlobalCap = 4
+	c.UI = UIConfig{Theme: "catppuccin-mocha", FollowSystem: true, LightTheme: "one-light", DarkTheme: "catppuccin-frappe"}
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UI != c.UI {
+		t.Fatalf("round trip = %+v, want %+v", got.UI, c.UI)
+	}
+	if got.UIThemeFor(false) != "one-light" || got.UIThemeFor(true) != "catppuccin-frappe" {
+		t.Fatal("system pair not resolved")
+	}
+	got.UI.FollowSystem = false
+	if got.UIThemeFor(false) != "catppuccin-mocha" || got.UIThemeFor(true) != "catppuccin-mocha" {
+		t.Fatal("fixed choice not retained")
+	}
+}
+
+func TestUISystemThemeTags(t *testing.T) {
+	for _, id := range UIThemes {
+		c := &Config{}
+		c.UI.FollowSystem = true
+		if UIThemeIsDark(id) {
+			c.UI.DarkTheme = id
+		} else {
+			c.UI.LightTheme = id
+		}
+		if errs := c.validateUI(); len(errs) != 0 {
+			t.Fatalf("valid tag %s: %v", id, errs)
+		}
+		c.UI.LightTheme, c.UI.DarkTheme = c.UI.DarkTheme, c.UI.LightTheme
+		if errs := c.validateUI(); len(errs) == 0 {
+			t.Fatalf("wrong slot accepted %s", id)
+		}
+	}
+	c := &Config{UI: UIConfig{FollowSystem: true}}
+	if c.UIThemeFor(false) != DefaultLightTheme || c.UIThemeFor(true) != DefaultUITheme {
+		t.Fatal("default system pair")
+	}
+}

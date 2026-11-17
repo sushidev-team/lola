@@ -1,23 +1,13 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import type { SVGAttributes } from "svelte/elements";
-  let { ...rest }: SVGAttributes<SVGSVGElement> = $props();
+  // The pulse line. It has no area to fill, so selected is a heavier stroke.
+  let { filled = false, size = 25, ...rest }: { filled?: boolean; size?: number } & SVGAttributes<SVGSVGElement> = $props();
 </script>
 
-<!-- tab/Activity — an ECG trace. -->
-<svg
-  width="20"
-  height="22"
-  viewBox="0 0 21.8 22"
-  fill="none"
-  class="block shrink-0"
-  aria-hidden="true"
+<span class="relative inline-flex shrink-0" data-filled={filled ? "" : undefined}><Icon
   {...rest}
->
-  <path
-    d="M0.9 13H5.9L8.9 5L12.9 18L15.9 11H20.9"
-    stroke="currentColor"
-    stroke-width="1.8"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
-</svg>
+  name="activity"
+  {size}
+  stroke-width={filled ? 2.5 : 1.75}
+/></span>

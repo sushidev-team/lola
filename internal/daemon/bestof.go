@@ -211,9 +211,20 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 	if err != nil {
 		return protocol.BestOfData{}, d.linearErr("read "+ident, err)
 	}
+	if reason := d.goalHold(detail.ID, detail.Description, detail.IssueRelations); reason != "" {
+		return protocol.BestOfData{}, errors.New(reason)
+	}
 	proj, err := d.planProject(a.Project, detail.TeamID)
 	if err != nil {
 		return protocol.BestOfData{}, err
+	}
+	if proj.Polls() {
+		d.mu.Lock()
+		err := d.cfg.ValidatePolling(&proj)
+		d.mu.Unlock()
+		if err != nil {
+			return protocol.BestOfData{}, err
+		}
 	}
 	// After the project is known: a sandboxed project's agents live in its
 	// image, so its gate is the docker CLI rather than each agent's binary.
@@ -234,7 +245,7 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 			}
 		}
 		if globalCap > 0 {
-			if live := NativeLiveCounted(snap); live+len(mix) > globalCap {
+			if live, _ := d.slotCounts(proj.Name); live+len(mix) > globalCap {
 				return fmt.Errorf("best-of needs %d slot(s) but only %d of global_cap=%d are free", len(mix), max(globalCap-live, 0), globalCap)
 			}
 		}
@@ -256,12 +267,22 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 		mu.Lock()
 		defer mu.Unlock()
 	}
-	if !d.inflight.Claim(detail.ID, detail.Identifier) {
-		return protocol.BestOfData{}, fmt.Errorf("%s is already being worked on — check sessions", detail.Identifier)
+	if err := d.claimOrdinaryIssue(detail.ID, detail.Identifier, detail.Description, detail.IssueRelations); err != nil {
+		return protocol.BestOfData{}, err
 	}
 	if err := slotCheck(); err != nil {
 		d.inflight.Remove(detail.ID)
 		return protocol.BestOfData{}, err
+	}
+	// Hold the group's slots until it is spawned, so a poll ticking meanwhile
+	// sees them taken (slots.go). global_cap only: best-of is a human's ask.
+	if globalCap > 0 {
+		release, ok := d.reserveSlots(proj.Name, len(mix), noProjectCap, globalCap)
+		if !ok {
+			d.inflight.Remove(detail.ID)
+			return protocol.BestOfData{}, fmt.Errorf("best-of needs %d slot(s) and global_cap=%d is full", len(mix), globalCap)
+		}
+		defer release()
 	}
 	if polls && proj.DedupMode != "state" {
 		seen, _ := d.seen.load(name)
@@ -275,7 +296,7 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 		}
 	}
 
-	is := linear.Issue{ID: detail.ID, Identifier: detail.Identifier, Title: detail.Title, LabelIDs: detail.LabelIDs}
+	is := linear.Issue{ID: detail.ID, Identifier: detail.Identifier, Title: detail.Title, LabelIDs: detail.LabelIDs, LabelNames: detail.LabelNames, LabelGroups: detail.LabelGroups}
 	pollName := ""
 	if polls {
 		pollName = name
@@ -589,6 +610,7 @@ func (d *Daemon) discardAttempt(ctx context.Context, nat NativeAPI, s session.Se
 	kctx, cancel := context.WithTimeout(ctx, killExecTimeout)
 	defer cancel()
 	d.killReviewPane(kctx, s.ID)
+	d.sshCloseSession(kctx, s.ID)
 	err = nat.Kill(kctx, s, true, false)
 	if errors.Is(err, worktree.ErrDirty) {
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {
@@ -603,6 +625,10 @@ func (d *Daemon) discardAttempt(ctx context.Context, nat NativeAPI, s session.Se
 	if err != nil {
 		return false, err
 	}
+	// Not through dropSession: a loser's teardown must not free the in-flight claim or clear
+	// the label, because the winner still works the issue. Its story stays readable all the
+	// same, which is how someone compares what it did.
+	d.recordEndedAs(s, "Not picked")
 	d.sessions.Delete(s.ID)
 	if serr := d.sessions.Save(); serr != nil {
 		d.logf("", "bestOfPick: persist sessions: %v", serr)

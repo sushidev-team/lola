@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import { store, type ProjectInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { displayName } from "$lib/slug";
@@ -61,10 +63,10 @@
           <tr class="group border-t border-edge/30 hover:bg-sel/50">
             <td class="cursor-pointer px-3 py-2 font-medium" onclick={() => nav.goDetail(p.name)}>
               {displayName(p)}
-              {#if !p.agentOk}<span class="ml-1 text-bad" title={p.agentErr}>✗</span>{/if}
+              {#if !p.agentOk}<span class="ml-1 text-bad" title={p.agentErr}><Icon name="x" size={14} /></span>{/if}
             </td>
             <td class="px-3 py-2 font-mono text-sm text-faint">{compactPath(p.path)}</td>
-            <td class="px-3 py-2 text-sm {poll.cls}">{poll.text}</td>
+            <td class="px-3 py-2 text-sm {poll.cls}"><GlyphIcon glyph={poll.text} /></td>
             <td class="num px-3 py-2 text-right">{store.alive ? p.liveCounted : "—"}</td>
             <td class="num px-3 py-2 text-sm">
               {#if p.needsYou > 0}<span class="text-orange">{p.needsYou} need</span>{/if}
@@ -79,7 +81,7 @@
               <div class="flex items-center justify-end gap-0.5">
                 <Button size="xs" onclick={() => nav.goCockpit(p.name)}>Sessions</Button>
                 <Button size="xs" onclick={() => nav.openOverlay("project", p.name)}>Edit</Button>
-                <Button size="xs" onclick={() => nav.goDetail(p.name)}>Open <span aria-hidden="true">›</span></Button>
+                <Button size="xs" onclick={() => nav.goDetail(p.name)}>Open <span aria-hidden="true"><Icon name="chevron-right" size={14} /></span></Button>
               </div>
             </td>
           </tr>

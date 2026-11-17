@@ -56,12 +56,17 @@ const (
 	ChannelSlack   = "slack"
 )
 
-// Note is a single notification. Body and URL may be empty.
+// Note is a single notification. Subtitle, Body and URL may be empty.
 type Note struct {
 	Title    string
+	Subtitle string // short session/PR identity, never a raw URL
 	Body     string
 	Priority Priority
 	URL      string
+	// ReadyForUser admits a verified completion to the desktop channel.
+	// Other desktop notes must be Urgent (a human intervention is required).
+	// Routine progress still follows priority routing to non-desktop channels.
+	ReadyForUser bool
 }
 
 // Notifier delivers a Note. It is best-effort: it never returns an error and
@@ -139,6 +144,9 @@ func (o *notifier) Notify(ctx context.Context, n Note) {
 	var wg sync.WaitGroup
 	seen := make(map[string]bool)
 	for _, name := range o.routing[n.Priority] {
+		if name == ChannelDesktop && n.Priority != Urgent && !n.ReadyForUser {
+			continue
+		}
 		if seen[name] {
 			continue
 		}
@@ -240,6 +248,12 @@ func (s *slackChannel) send(ctx context.Context, n Note) error {
 func slackText(n Note) string {
 	var b strings.Builder
 	b.WriteString(n.Title)
+	if n.Subtitle != "" {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(n.Subtitle)
+	}
 	if n.Body != "" {
 		if b.Len() > 0 {
 			b.WriteByte('\n')

@@ -1,7 +1,26 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { hub } from "$lib/hub.svelte";
+  import { onDestroy, onMount } from "svelte";
   import Button from "./Button.svelte";
+
+  // The Team icon carries the Needs-you count, so a failed or taken chore is
+  // seen without opening the Team view. This row is always on screen, so it
+  // holds the hub store's LIGHT watch (a status read a minute, the board every
+  // few minutes) and routes the store's off-screen notices to the toast.
+  let releaseHub: (() => void) | null = null;
+  onMount(() => {
+    hub.onNotice = (n) => store.setFlash(n.text, n.kind);
+    releaseHub = hub.watchLight();
+  });
+  onDestroy(() => {
+    releaseHub?.();
+    hub.onNotice = null;
+  });
+  const needs = $derived(hub.needsCount);
 
   // The pinned utility row: everything the old footer carried (daemon liveness,
   // start/restart/stop) plus the vitals bar's health dot
@@ -38,7 +57,7 @@
 
 <div class="group/status flex h-11 items-center gap-1 border-t border-edge px-3 text-sm">
   <Button class="min-w-0 shrink! {daemonCls}" title="{health} · open doctor (d)" onclick={() => nav.openOverlay("doctor")}>
-    <span aria-hidden="true">{degraded ? "▲" : store.alive ? "●" : "○"}</span>
+    <span aria-hidden="true"><GlyphIcon glyph={degraded ? "▲" : store.alive ? "●" : "○"} /></span>
     <span class="truncate">{daemonText}</span>
   </Button>
 
@@ -59,25 +78,11 @@
       class="flex max-w-0 items-center overflow-hidden opacity-0 transition-all duration-150 group-hover/status:max-w-16 group-hover/status:opacity-100 focus-within:max-w-16 focus-within:opacity-100"
     >
       <Button icon title="restart daemon" aria-label="Restart daemon" onclick={() => store.restartDaemon()}>
-        <svg
-          viewBox="0 0 24 24"
-          class="h-4 w-4"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-          <path d="M21 3v6h-6" />
-        </svg>
+        <Icon name="refresh-cw" class="h-4 w-4" />
       </Button>
       <!-- Asks first: stopping the daemon halts every poll. -->
       <Button variant="danger" icon title="stop daemon" aria-label="Stop daemon" onclick={() => store.askStopDaemon()}>
-        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="currentColor" aria-hidden="true">
-          <rect x="6" y="6" width="12" height="12" rx="2" />
-        </svg>
+        <Icon name="square" class="h-4 w-4" />
       </Button>
     </span>
   {:else if store.connected}
@@ -92,23 +97,15 @@
        only shrinkable item if the worst case (a long status + the wider
        "↑ Update" chip + revealed hover controls) runs out of room. -->
   <span class="ml-auto flex shrink-0 items-center gap-0.5">
-    <Button icon title="keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onclick={() => nav.openOverlay("help")}>
-      ?
+    <Button icon class="relative" title={needs ? `Team (T) · ${needs} ${needs === 1 ? "chore needs" : "chores need"} you` : "Team (T)"}
+      aria-label={needs ? `Team, ${needs} ${needs === 1 ? "chore needs" : "chores need"} you` : "Team"} onclick={() => nav.goTeam()}>
+      <Icon name="users" size={14} />
+      {#if needs}<span class="num absolute -right-1 -top-1 min-w-4 rounded-full bg-bad px-1 text-center text-[10px] font-semibold leading-4 text-on-bad" aria-hidden="true" data-team-badge>{needs > 9 ? "9+" : needs}</span>{/if}
     </Button>
-    <Button icon title="Settings (S)" aria-label="Settings" onclick={() => nav.openOverlay("settings")}>
-      <svg
-        viewBox="0 0 24 24"
-        class="h-4 w-4"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.8"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-      >
-        <circle cx="12" cy="12" r="3" />
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-      </svg>
+    <Button icon title="keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onclick={() => nav.openOverlay("help")}>
+      <Icon name="circle-help" size={14} /></Button>
+    <Button icon title="Settings" aria-label="Settings" onclick={() => nav.openOverlay("settings")}>
+      <Icon name="settings" class="h-4 w-4" />
     </Button>
   </span>
 </div>

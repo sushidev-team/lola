@@ -1,0 +1,36 @@
+[
+  {
+    "id": "u-1:0",
+    "kind": "user",
+    "order": 0,
+    "turn": "u-1:0",
+    "text": "Deploy",
+    "at": "2026-11-06T10:00:00Z"
+  },
+  {
+    "id": "a-4:0",
+    "kind": "tool",
+    "order": 1,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:06Z",
+    "tool": {
+      "name": "Bash",
+      "category": "run",
+      "summary": "lola report check tests pass \u0026\u0026 go test ./...",
+      "status": "running"
+    }
+  },
+  {
+    "id": "a-5:0",
+    "kind": "tool",
+    "order": 2,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:07Z",
+    "tool": {
+      "name": "Bash",
+      "category": "run",
+      "summary": "lolaxyz report",
+      "status": "running"
+    }
+  }
+]

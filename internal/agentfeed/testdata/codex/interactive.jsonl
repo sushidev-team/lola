@@ -1,0 +1,12 @@
+{"timestamp":"2026-11-06T10:00:00Z","type":"session_meta","payload":{"id":"th-1","cwd":"/w/s1","originator":"codex-tui","source":"cli","thread_source":"user"}}
+{"timestamp":"2026-11-06T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"injected context, not the human"}]}}
+{"timestamp":"2026-11-06T10:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"timestamp":"2026-11-06T10:00:02Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"UserMessage","id":"i-1","client_id":"c","content":[{"type":"text","text":"Fix the build"}]}}}
+{"timestamp":"2026-11-06T10:00:03Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"Reasoning","id":"i-2","summary_text":[]}}}
+{"timestamp":"2026-11-06T10:00:04Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"CommandExecution","id":"i-3","command":["bash","-lc","go build ./..."],"aggregated_output":"ok\n","exit_code":0,"duration_ms":1500}}}
+{"timestamp":"2026-11-06T10:00:05Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"CommandExecution","id":"i-4","command":"go test ./...","aggregated_output":"FAIL\n","exit_code":1}}}
+{"timestamp":"2026-11-06T10:00:06Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"CommandExecution","id":"i-5","command":"lola report phase x","aggregated_output":"","exit_code":0}}}
+{"timestamp":"2026-11-06T10:00:07Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"FileChange","id":"i-6","changes":{"b.go":{},"a.go":{}}}}}
+{"timestamp":"2026-11-06T10:00:08Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"AgentMessage","id":"i-7","phase":"final_answer","content":[{"type":"Text","text":"Done."}]}}}
+{"timestamp":"2026-11-06T10:00:09Z","type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}
+{"timestamp":"2026-11-06T10:00:10Z","type":"compacted","payload":{}}

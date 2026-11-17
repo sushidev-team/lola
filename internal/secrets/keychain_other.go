@@ -15,3 +15,9 @@ func keychainLookup(string) (string, error) {
 func StoreLinearAPIKey(string, string) error {
 	return errors.New("keychain storage is only supported on macOS; set api_key_env and export the key instead")
 }
+
+func keychainStore(string, string) error {
+	return errors.New("keychain storage is only supported on macOS; export the variable in the daemon's environment instead")
+}
+
+func keychainDelete(string) error { return nil }

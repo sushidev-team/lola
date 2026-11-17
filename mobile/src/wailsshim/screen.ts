@@ -1,39 +1,10 @@
-// Turning a resync frame back into bytes a terminal can render.
+// A resync frame rendered back into bytes a terminal can write.
 //
-// This is the one adaptation the reuse bet actually required, and it is worth
-// being precise about why. On the desktop, `TermService.Attach` runs a real
-// `tmux attach` in a PTY and streams its raw bytes to `pty:<name>`; the initial
-// screen arrives as bytes like everything else, so LiveTerminal.svelte only
-// ever calls `term.write(bytes)`. Over the remote protocol the initial screen
-// arrives as a RESYNC frame instead — a structured snapshot of the daemon's
-// shadow emulator (cols, rows, rendered lines with SGR intact, cursor position,
-// alternate-screen flag, cursor visibility).
-//
-// The frame exists because an agent runs on the alternate screen, where a fresh
-// attach replays nothing: without it a subscriber stares at a blank pane until
-// the agent next repaints itself, which for a parked Claude Code session is
-// never. A raw byte ring could not replace it either — resuming a ring can
-// begin mid-escape-sequence, whereas a rendered frame is parseable from its
-// first byte.
-//
-// So the shim renders that snapshot back into an escape sequence and feeds it
-// down the same `pty:<name>` channel as everything else, and LiveTerminal needs
-// no change at all. The alternative — teaching the component about resync
-// frames — would have meant editing desktop/frontend, which this project does
-// not do.
-//
-// THE ESCAPE SEQUENCE ITSELF IS NOT HERE. It lives in `@mobile/lib/resync`,
-// which `MobileTerminal.svelte` also uses, and this module is only the base64
-// wrapper the `pty:<name>` event needs.
-//
-// That is a deliberate correction. There were briefly two independent renderers,
-// one per consumer. They agreed on every decision that mattered — alternate
-// screen first, auto-wrap off for the repaint, absolute row placement, a per-row
-// SGR reset, cursor visibility written in both directions — and differed in how
-// they erased, where the per-row reset went, and whether `lines` was clipped to
-// `rows`. Nothing pinned them together, so a fix to one would silently not have
-// reached the other, and the difference would first show up as "the phone
-// repaints correctly and the reused LiveTerminal does not".
+// Invariant: the initial screen of a pane arrives as a structured snapshot, not
+// as bytes, and the reused LiveTerminal only ever writes bytes, so the snapshot is
+// rendered here and pushed down the same `pty:<name>` channel as output. The
+// escape sequence itself lives in `@mobile/lib/resync`, shared with
+// MobileTerminal so the two renderers cannot drift.
 
 import { resyncToBytes } from "@mobile/lib/resync";
 import { bytesToBase64, type ResyncPayload } from "../wire";

@@ -40,6 +40,12 @@ func handoffLaunchPrompt(id string, from agent.Kind) string {
 // the kill leaves the worktree intact and the session reads dead — the
 // existing revive path covers it.
 func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error) {
+	if s.Kind == session.KindLocal {
+		return s, fmt.Errorf("create a new session to use another agent in this directory")
+	}
+	if s.GoalManaged() {
+		return s, fmt.Errorf("goal workers switch agents through a newly reserved attempt")
+	}
 	id := s.TmuxName
 	if id == "" {
 		id = s.ID
@@ -107,6 +113,10 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 		return session.Session{}, fmt.Errorf("runtime: switch agent %s: write env: %w", id, err)
 	}
 
+	if err := n.prepareSandbox(ctx, s.Project, n.sandboxProject(s.Project) != nil); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: switch agent %s: %w", id, err)
+	}
+	n.trustAgentDir(s.Project, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommandPrompt(s.Project, id, kind, handoffLaunchPrompt(id, old), false)); err != nil {
 		// A partially created session must not linger as a zombie pane (same
 		// cleanup as finishAgentLaunch) — but the worktree is NEVER rolled
@@ -129,6 +139,7 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 	}
 
 	switched := s
+	n.syncSandboxRecord(ctx, &switched)
 	switched.Agent = string(kind)
 	// A model override names a model of the OLD agent; the new one runs on its
 	// own default (the launch above passed none).

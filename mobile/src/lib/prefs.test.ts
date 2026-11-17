@@ -1,7 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   PANE_LABEL_MAX,
   clearFontSize,
+  clearInboxGroup,
+  loadInboxGroup,
+  saveInboxGroup,
   clearPaneLabel,
   loadFontSize,
   loadPaneLabels,
@@ -203,5 +206,35 @@ describe("per-pane display labels", () => {
     } finally {
       if (real) Object.defineProperty(globalThis, "localStorage", real);
     }
+  });
+});
+
+describe("inbox grouping", () => {
+  it("defaults to status and round-trips project", () => {
+    expect(loadInboxGroup()).toBe("status");
+    saveInboxGroup("project");
+    expect(loadInboxGroup()).toBe("project");
+  });
+
+  it("leaves no key behind for the default", () => {
+    saveInboxGroup("project");
+    saveInboxGroup("status");
+    expect(globalThis.localStorage.getItem("lola.mobile.inboxGroup")).toBeNull();
+    saveInboxGroup("project");
+    clearInboxGroup();
+    expect(loadInboxGroup()).toBe("status");
+  });
+
+  it("reads garbage as the default", () => {
+    globalThis.localStorage.setItem("lola.mobile.inboxGroup", "Project ");
+    expect(loadInboxGroup()).toBe("status");
+  });
+
+  it("survives storage that throws", () => {
+    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    expect(loadInboxGroup()).toBe("status");
+    spy.mockRestore();
   });
 });

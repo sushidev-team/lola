@@ -1,0 +1,21 @@
+{"type":"mode","mode":"default"}
+{"type":"permission-mode","permissionMode":"default"}
+{"type":"file-history-snapshot","messageId":"x","snapshot":{}}
+{"parentUuid":null,"isSidechain":false,"cwd":"/w/s1","sessionId":"s","type":"user","message":{"role":"user","content":"Fix the login bug"},"uuid":"u-1","timestamp":"2026-11-06T10:00:00.000Z","promptSource":"typed","origin":{"kind":"human"}}
+{"type":"attachment","attachment":{"type":"x","text":"\"type\":\"user\""}}
+{"type":"api-request-blob","text":"{\"type\":\"user\"}","blob":"lots"}
+{"type":"api-request","requestId":"r"}
+{"parentUuid":"u-1","type":"assistant","message":{"id":"m1","role":"assistant","model":"m","content":[{"type":"thinking","thinking":""}]},"uuid":"a-0","timestamp":"2026-11-06T10:00:01.000Z"}
+{"parentUuid":"u-1","type":"assistant","message":{"id":"m1","role":"assistant","model":"m","content":[{"type":"text","text":"Looking at the handler."}]},"uuid":"a-1","timestamp":"2026-11-06T10:00:02.000Z"}
+{"parentUuid":"a-1","cwd":"/w/s1","type":"assistant","message":{"id":"m1","role":"assistant","model":"m","content":[{"type":"tool_use","id":"t-1","name":"Read","input":{"file_path":"/w/s1/auth/login.go"}}]},"uuid":"a-2","timestamp":"2026-11-06T10:00:03.000Z"}
+{"parentUuid":"a-2","type":"user","message":{"role":"user","content":[{"tool_use_id":"t-1","type":"tool_result","content":"package auth\nfunc Login() {}"}]},"uuid":"u-2","timestamp":"2026-11-06T10:00:04.500Z","toolUseResult":{"type":"text","file":{"filePath":"/w/s1/auth/login.go"}}}
+{"parentUuid":"u-2","type":"assistant","message":{"id":"m2","role":"assistant","model":"m","content":[{"type":"tool_use","id":"t-2","name":"Edit","input":{"file_path":"/w/s1/auth/login.go","old_string":"a","new_string":"b"}}]},"uuid":"a-3","timestamp":"2026-11-06T10:00:05.000Z"}
+{"parentUuid":"a-3","type":"user","message":{"role":"user","content":[{"tool_use_id":"t-2","type":"tool_result","content":"ok"}]},"uuid":"u-3","timestamp":"2026-11-06T10:00:05.200Z","toolUseResult":{"structuredPatch":[{"oldStart":1,"lines":[" keep","-old","+new1","+new2"]}]}}
+{"parentUuid":"u-3","type":"assistant","message":{"id":"m3","role":"assistant","model":"m","content":[{"type":"tool_use","id":"t-3","name":"Write","input":{"file_path":"/w/s1/new.go","content":"SECRET-BODY-LINE-1\nline2\nline3\n"}}]},"uuid":"a-4","timestamp":"2026-11-06T10:00:06.000Z"}
+{"parentUuid":"a-4","type":"user","message":{"role":"user","content":[{"tool_use_id":"t-3","type":"tool_result","content":"File created"}]},"uuid":"u-4","timestamp":"2026-11-06T10:00:06.100Z","toolUseResult":"a plain string where an object usually is"}
+{"parentUuid":"u-4","type":"assistant","message":{"id":"m4","role":"assistant","model":"m","content":[{"type":"tool_use","id":"t-4","name":"Bash","input":{"command":"go test ./auth\necho done","description":"tests"}}]},"uuid":"a-5","timestamp":"2026-11-06T10:00:07.000Z"}
+{"parentUuid":"a-5","type":"user","message":{"role":"user","content":[{"tool_use_id":"t-4","type":"tool_result","content":"--- FAIL: TestLogin\n\u001b[31mred\u001b[0m","is_error":true}]},"uuid":"u-5","timestamp":"2026-11-06T10:00:09.000Z"}
+{"parentUuid":"u-5","type":"assistant","message":{"id":"m5","role":"assistant","model":"m","content":[{"type":"text","text":"The test still fails."}],"stop_reason":"end_turn"},"uuid":"a-6","timestamp":"2026-11-06T10:00:10.000Z"}
+{"type":"system","subtype":"stop_hook_summary","uuid":"sys-1","timestamp":"2026-11-06T10:00:10.100Z"}
+{"type":"system","subtype":"turn_duration","durationMs":10000,"uuid":"sys-2","timestamp":"2026-11-06T10:00:10.200Z"}
+{"type":"last-prompt","leafUuid":"a-6"}

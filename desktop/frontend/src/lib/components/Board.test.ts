@@ -130,19 +130,19 @@ describe("BoardPanel motion", () => {
 
   it("animates only while the agent is working on a fresh report", () => {
     const { container } = render(BoardPanel, { session: sess(plan(), { agentState: "working" }) });
-    expect(container.querySelector(".breathe")).not.toBeNull();
+    expect(container.querySelector('[class*="animate-pulse"]')).not.toBeNull();
     expect(container.querySelector(".shimmer")).not.toBeNull();
   });
 
   it("sits still for an idle agent", () => {
     const { container } = render(BoardPanel, { session: sess(plan(), { agentState: "idle" }) });
-    expect(container.querySelector(".breathe, .ripple, .shimmer")).toBeNull();
+    expect(container.querySelector('[class*="animate-pulse"], [class*="animate-spin"], .shimmer')).toBeNull();
   });
 
   it("sits still for a stale report even mid-turn", () => {
     const old = { ...plan(), updatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() };
     const { container } = render(BoardPanel, { session: sess(old, { agentState: "working" }) });
-    expect(container.querySelector(".breathe, .ripple, .shimmer")).toBeNull();
+    expect(container.querySelector('[class*="animate-pulse"], [class*="animate-spin"], .shimmer')).toBeNull();
   });
 });
 
@@ -176,6 +176,6 @@ describe("claim audit", () => {
     render(BoardPanel, { session: sess(unverified()) });
     expect(screen.getByText("Claim not backed by evidence")).toBeInTheDocument();
     expect(screen.getByText('"tests" claimed pass, but no test command ran before the claim')).toBeInTheDocument();
-    expect(screen.getByText("· no run found")).toBeInTheDocument();
+    expect(screen.getByText("no run found")).toBeInTheDocument();
   });
 });

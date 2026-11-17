@@ -1,19 +1,33 @@
 <script lang="ts">
+  import ThemeSwatch from "$lib/components/ThemeSwatch.svelte";
+  import SystemThemePicker from "$lib/components/SystemThemePicker.svelte";
+  import type { AppearancePreference } from "$lib/appearance";
+  import Icon from "$lib/components/Icon.svelte";
   import { onMount, onDestroy, tick } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
+  import AISettings from "$lib/components/AISettings.svelte";
+  import CommitInstructions from "$lib/components/CommitInstructions.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
   import Button from "$lib/components/Button.svelte";
+  import SettingsGroup from "$lib/components/SettingsGroup.svelte";
+  import Chevron from "$lib/components/Chevron.svelte";
   import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
-  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT } from "$lib/settingsFields";
+  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT, settingsSaveError } from "$lib/settingsFields";
   import Checkbox from "$lib/components/Checkbox.svelte";
   import AgentModelFields from "$lib/components/AgentModelFields.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
+  import PathInput from "$lib/components/PathInput.svelte";
   import { POLL_INTERVALS, BRANCH_PREFIXES, BASE_FLAGS } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
-  import QRCode from "$lib/components/QRCode.svelte";
-  import { store } from "$lib/store.svelte";
+  import ReviewProfiles from "$lib/components/ReviewProfiles.svelte";
+  import SSHHostSettings from "$lib/components/ssh/SSHHostSettings.svelte";
+  import SandboxSettings from "$lib/components/SandboxSettings.svelte";
+  import HubSettings, { CLAIMS_LABEL, POLL_LABEL, hubClaimsError, hubPollError } from "$lib/components/hub/HubSettings.svelte";
+  import TeamLock from "$lib/components/TeamLock.svelte";
+  import PhonesPanel from "$lib/components/phones/PhonesPanel.svelte";
+    import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { overlayClose } from "$lib/overlayClose";
@@ -24,11 +38,12 @@
     SettingsDTO,
     LinearOption,
     LinearKeyStatusDTO,
-    ConnectCodeDTO,
+    TeamPolicyDTO,
     LinearAgentSecretsDTO,
   } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
-  import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
+  import { appearance, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
+  import { terms } from "$lib/terms.svelte";
 
   // The bindings hand back a class instance, which $state does NOT deep-proxy —
   // copy it into a plain object so the segmented controls and pickers below
@@ -39,6 +54,11 @@
   let saving = $state(false);
   const globalCapError = $derived(dto && (!Number.isInteger(dto.globalCap) || dto.globalCap < 1) ? "Enter a whole number of at least 1." : "");
   const projectCapError = $derived(dto && (!Number.isInteger(dto.concurrencyCap) || dto.concurrencyCap < 0) ? "Enter a whole number of 0 or more." : "");
+  // The Team hub tab's number fields: a cleared one is NaN, which JSON sends as
+  // null and the daemon would skip, so the save reports success with the old
+  // value. The same gate as the caps blocks the save instead.
+  const hubClaimsErr = $derived(dto ? hubClaimsError(dto.hubMaxClaimsPerDay) : "");
+  const hubPollErr = $derived(dto ? hubPollError(dto.hubPollSeconds) : "");
   // A rejected SaveSettings used to surface only as a footer flash — behind this
   // backdrop, truncated, gone in 4s — so it read like a save that just didn't
   // close. Held here and shown inline instead; cleared on the next attempt.
@@ -50,7 +70,14 @@
   // on every close path (see previewTheme / revertTheme), so a theme-only preview
   // is not "unsaved changes" to guard.
   let loaded = $state<SettingsDTO | null>(null);
-  const dirty = $derived.by(() => (dto && loaded ? !deepEqual($state.snapshot(dto), $state.snapshot(loaded)) : false));
+  // The SSH host form saves on its own, with its own button, so it reports its own
+  // unsaved edits: a close must not silently drop them either.
+  let sshHostDirty = $state(false);
+  // The Team hub tab saves at once, but a trusted key being typed or a number
+  // that is not valid yet is a DRAFT there: it reports itself here so a close
+  // asks first and Save stops at it instead of dropping it.
+  let hubDirty = $state(false);
+  const dirty = $derived.by(() => sshHostDirty || hubDirty || (dto && loaded ? !deepEqual($state.snapshot(dto), $state.snapshot(loaded)) : false));
 
   /** Reset the dirty baseline to the current DTO — after load and after a migrate. */
   function markPristine() {
@@ -61,18 +88,25 @@
     { id: "defaults", label: "General", group: "Workspace" },
     { id: "project", label: "Project defaults", group: "Workspace" },
     { id: "appearance", label: "Appearance", group: "Workspace" },
+    { id: "sandbox", label: "Sandbox", group: "Workspace" },
     { id: "linear", label: "Linear", group: "Connections" },
     { id: "linearAgent", label: "Linear agent", group: "Connections" },
     { id: "notify", label: "Notifications", group: "Connections" },
-    { id: "remote", label: "Phone access", group: "Connections" },
+    { id: "sshhosts", label: "SSH hosts", group: "Connections" },
+    { id: "remote", label: "Phones", group: "Connections" },
+    { id: "hub", label: "Team hub", group: "Connections" },
+    { id: "ai", label: "AI", group: "Automation" },
     { id: "review", label: "Review", group: "Automation" },
-    { id: "brain", label: "Summaries", group: "Automation" },
-    { id: "interpreter", label: "Status interpretation", group: "Automation" },
+    { id: "assistants", label: "Assistants", group: "Automation" },
   ];
+  // "Summaries" and "Status interpretation" were two tabs; old deep links land
+  // on the one tab that holds both.
+  const TAB_ALIASES: Record<string, string> = { brain: "assistants", interpreter: "assistants" };
 
   // Every tab body is an explicit `{:else if tab === …}` branch with no catch-all,
   // so an unknown deep-link id would render a blank pane. Clamp it to a real tab.
-  let tab = $state(TABS.some((t) => t.id === nav.overlayTab) ? nav.overlayTab : "defaults");
+  const linked = TAB_ALIASES[nav.overlayTab] ?? nav.overlayTab;
+  let tab = $state(TABS.some((t) => t.id === linked) ? linked : "defaults");
 
   // The [defaults] label keys offer WORKSPACE (organisation-level) labels, not
   // team labels: a shared default is inherited by projects on any team, and a
@@ -191,13 +225,14 @@
   // Escape, backdrop) puts the persisted flavor back.
   //
   // It is deliberately NOT a SettingsDTO field: [ui] is presentation, not a
-  // [defaults] key, and ConfigService.SetTheme is its sole writer. `save`
-  // therefore issues a second, single-key write alongside SaveSettings.
+  // [defaults] key. `save` persists the appearance preference through its own
+  // service method after SaveSettings succeeds.
 
   // The flavor that is actually in config.toml. `appearance.id` is the LIVE one,
   // which the preview moves around; this is the baseline it snaps back to.
-  let savedTheme: ThemeId = appearance.id;
-  let themeId = $state<ThemeId>(appearance.id);
+  let savedAppearance = appearance.snapshot();
+  let themePreference = $state<AppearancePreference>(appearance.snapshot());
+  const themeId = $derived(themePreference.theme);
 
   // Which ids to offer. MEMBERSHIP is the Go side's call — config.Validate
   // rejects anything outside config.UIThemes, so offering more would just build
@@ -234,16 +269,17 @@
    * out of from reaching config.toml or the boot cache.
    */
   function previewTheme(id: ThemeId) {
-    themeId = id;
-    appearance.id = id;
-    appearance.paint();
+    previewAppearance({ ...themePreference, theme: id, followSystem: false });
+  }
+
+  function previewAppearance(value: AppearancePreference) {
+    themePreference = value;
+    appearance.preview(value);
   }
 
   /** Undo an uncommitted preview. A no-op once save has moved the baseline. */
   function revertTheme() {
-    if (appearance.id === savedTheme) return;
-    appearance.id = savedTheme;
-    appearance.paint();
+    appearance.preview(savedAppearance);
   }
 
   function cancel() {
@@ -265,7 +301,8 @@
     }
     confirm.ask({
       title: "Discard changes?",
-      body: "Discard your unsaved changes to settings?",
+      subject: "Settings",
+      body: "",
       confirmLabel: "Discard",
       onConfirm: cancel,
     });
@@ -297,6 +334,8 @@
       void loadReviewKinds();
     } else if (id === "remote") {
       void loadRemoteBinds();
+    } else if (id === "defaults") {
+      void loadTeamLimits();
     }
   }
 
@@ -304,15 +343,100 @@
     tab = id;
     lazyLoadFor(id);
   }
+  let hubVisited = $state(false);
+  $effect(() => {
+    if (tab === "hub") hubVisited = true;
+  });
 
   const statusBinaries = new Map<string, string>();
+
+  // --- team policy ----------------------------------------------------------
+  //
+  // Which settings the daemon's verified team policy LOCKS (ConfigService.
+  // TeamPolicy, one hubStatus round-trip). A locked control is drawn through
+  // <TeamLock>: disabled, with the team's value. The form still loads and saves
+  // config.toml as before; the overlay never reaches the file. A down or older
+  // daemon answers "nothing locked", and a failure here never blocks the form.
+  let teamPolicy = $state<TeamPolicyDTO | null>(null);
+  async function loadTeamPolicy() {
+    try {
+      teamPolicy = await ConfigService.TeamPolicy();
+    } catch {
+      teamPolicy = null;
+    }
+  }
+  const lockFor = (field: string) =>
+    teamPolicy?.applied ? (teamPolicy.locked ?? []).find((l) => l.field === field) ?? null : null;
+  // max_concurrency is a CEILING, not a lock: the daemon runs min(local, team),
+  // so a lower local value still counts. The field stays editable; the team's
+  // value is a hint.
+  // Read as ceilings whatever an older desktop build's DTO says.
+  const ceilingFor = (field: string) => {
+    const l = lockFor(field);
+    return l ? { ...l, ceiling: true } : null;
+  };
+  const capCeiling = $derived(ceilingFor("globalCap"));
+  const budgetCeiling = $derived(ceilingFor("budgetDaily"));
+  const mergeQueueLock = $derived(lockFor("mergeQueue"));
+
+  // --- team-governed limits ([budget].daily_tokens, [merge_queue].enabled) ---
+  //
+  // Not SettingsDTO fields: they save AT ONCE (ConfigService.SaveTeamLimits),
+  // so the team policy's lock and ceiling sit over a real control and the
+  // overlay's Save never carries a stale copy of them.
+  let limits = $state<{ budgetDaily: number; mergeQueue: boolean } | null>(null);
+  let budgetDraft = $state<number | null>(null);
+  let limitsBusy = $state(false);
+  let limitsMsg = $state("");
+  let limitsErr = $state("");
+  const budgetValue = $derived(budgetDraft ?? limits?.budgetDaily ?? 0);
+  const budgetError = $derived(!Number.isInteger(budgetValue) || budgetValue < 0 ? "Enter a whole number of 0 or more." : "");
+
+  async function loadTeamLimits() {
+    try {
+      limits = { ...(await ConfigService.TeamLimits()) };
+      limitsErr = "";
+    } catch {
+      limits = null; // an older daemon build: the row explains itself
+    }
+  }
+
+  async function saveTeamLimits(patch: Partial<{ budgetDaily: number; mergeQueue: boolean }>) {
+    if (!limits || limitsBusy) return;
+    const next = { ...limits, ...patch };
+    limitsBusy = true;
+    limitsMsg = "";
+    limitsErr = "";
+    try {
+      await ConfigService.SaveTeamLimits(next);
+      limits = next;
+      budgetDraft = null;
+      limitsMsg = "Saved";
+    } catch (err) {
+      limitsErr = String(err).replace(/^Error:\s*/, "");
+    } finally {
+      limitsBusy = false;
+    }
+  }
+
+  function commitBudget() {
+    if (budgetDraft === null || budgetError || budgetDraft === limits?.budgetDaily) return;
+    void saveTeamLimits({ budgetDaily: budgetDraft });
+  }
+  // The review_providers lock sets only WHICH kinds are enabled; each kind still
+  // runs with its local command, author, model and publishing settings (a
+  // locked-on kind with no local entry runs on defaults, and a bot-watch with
+  // no author stays off). So only the Enabled toggles are locked: details stay
+  // editable and drawn for every provider, and Add provider stays, because
+  // adding the local entry is how a member fills a missing author or command.
+  const reviewLock = $derived(lockFor("reviewProviders"));
 
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const formId = $props.id();
   let pollingOpen = $state(false);
-  const rowCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-baseline gap-3";
-  const rowTopCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-start gap-3";
+  const rowCls = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-baseline gap-x-6 gap-y-1.5";
+  const rowTopCls = "settings-field grid min-w-0 grid-cols-[10rem_minmax(0,1fr)] items-start gap-x-6 gap-y-1.5";
   const hintCls = "mt-1 block text-sm text-faint";
 
 
@@ -330,6 +454,7 @@
     }
     // Deep-linked straight to the tab that needs them.
     lazyLoadFor(tab);
+    void loadTeamPolicy();
   });
 
   async function save() {
@@ -338,6 +463,20 @@
       tab = "defaults";
       await tick();
       document.getElementById(`${formId}-${globalCapError ? "global" : "project"}-cap`)?.focus();
+      return;
+    }
+    if (hubDirty) {
+      // A hub draft (a key being typed, a number not valid yet) never goes out
+      // with this Save and is never dropped by it: show it instead.
+      tab = "hub";
+      await tick();
+      document.querySelector<HTMLElement>("[data-hub-unsaved]")?.focus();
+      return;
+    }
+    if (hubClaimsErr || hubPollErr) {
+      tab = "hub";
+      await tick();
+      document.querySelector<HTMLElement>(`input[aria-label="${hubClaimsErr ? CLAIMS_LABEL : POLL_LABEL}"]`)?.focus();
       return;
     }
     saving = true;
@@ -351,7 +490,7 @@
         matchLabels: cleanLines(dto.matchLabels),
         prioritySort: cleanLines(dto.prioritySort),
       });
-      // [ui].theme is a single-key write on its own path, not a DTO field.
+      // [ui] is written on its own path, not as a SettingsDTO field.
       // Sequenced AFTER the settings write so a payload the daemon rejects can
       // never leave a theme change behind on disk.
       //
@@ -360,15 +499,19 @@
       // first frame is written there. Calling the binding straight left the
       // cache on the OLD flavor, so the very next launch — the one right after
       // the user changed the theme — flashed the previous colours.
-      if (themeId !== savedTheme) {
-        await appearance.commit(themeId);
-        savedTheme = themeId; // the preview is now the persisted value
+      if (!deepEqual(themePreference, savedAppearance)) {
+        const onlyFixedTheme = !themePreference.followSystem && !savedAppearance.followSystem &&
+          themePreference.lightTheme === savedAppearance.lightTheme && themePreference.darkTheme === savedAppearance.darkTheme;
+        await appearance.commit(onlyFixedTheme ? themeId : $state.snapshot(themePreference));
+        savedAppearance = { ...themePreference };
       }
       store.setFlash("settings saved", "good");
       nav.closeOverlay();
     } catch (err) {
-      saveErr = String(err);
-      store.setFlash(String(err), "bad");
+      const failure = settingsSaveError(err);
+      saveErr = [failure.summary, failure.description, failure.details].filter(Boolean).join('\n\n');
+      if (failure.description) store.setFlash(failure.summary, "bad", { description: failure.description });
+      else store.setFlash(failure.summary, "bad");
     } finally {
       saving = false;
     }
@@ -460,6 +603,9 @@
         // The github transport posts anchored, resolvable threads by default;
         // it degrades to one flat comment by itself when nothing can be anchored.
         githubInline: true,
+        // Opt-in: a required lola/review status blocks merges until a review
+        // has passed the PR's current head.
+        githubStatus: false,
         notify: true,
         sendToAgent: true,
         // A pass runs in a watchable "<session>-review" tmux session by default;
@@ -504,6 +650,7 @@
   // without a key fails every poll, the exact silent failure this app is for.
   let keyStatus = $state<LinearKeyStatusDTO | null>(null);
   let keyInput = $state("");
+  let keyEditing = $state(false);
   let keyBusy = $state<"" | "validating" | "saving">("");
   let keyMsg = $state("");
   let keyMsgKind = $state<"good" | "bad">("good");
@@ -542,6 +689,14 @@
     } finally {
       agentSecretBusy = "";
     }
+  }
+
+  async function editKey(editing: boolean) {
+    keyInput = "";
+    keyMsg = "";
+    keyEditing = editing;
+    await tick();
+    document.getElementById(`${formId}-${editing ? "linear-key" : "replace-key"}`)?.focus();
   }
 
   async function loadKeyStatus() {
@@ -585,6 +740,9 @@
       // The daemon reads the key at startup and on reload, so a key saved into a
       // running daemon means nothing until it re-reads config.
       await store.reload();
+      keyEditing = false;
+      await tick();
+      document.getElementById(`${formId}-replace-key`)?.focus();
     } catch (e) {
       keyMsg = String(e);
       keyMsgKind = "bad";
@@ -592,162 +750,6 @@
       keyBusy = "";
     }
   }
-
-  // --- connecting a phone (cmd=pairBegin) -----------------------------------
-  //
-  // The four values this hands over used to be copied by hand out of a log line
-  // and a key file, which is four chances to transpose a character into a
-  // failure that looks exactly like a wrong host. The daemon knows all four
-  // about the listener it is actually running, so the app asks it and draws a
-  // code.
-  //
-  // The whole thing is treated as a secret, because it is one: the code
-  // CONTAINS the bearer key. So it is fetched only when a human presses the
-  // button (never on tab open), it is held in memory and never persisted, the
-  // key's characters need a second explicit press on top of that, and it is
-  // dropped on hide, on leaving the tab and on closing the overlay. What that
-  // buys is the thing an app can actually control — a code left on a screen, in
-  // a screen share, or in a window someone walked past.
-  let connect = $state<ConnectCodeDTO | null>(null);
-  let connectBusy = $state(false);
-  let connectErr = $state("");
-  let connectKeyShown = $state(false);
-  let copied = $state("");
-
-  /**
-   * How long a revealed code stays on screen.
-   *
-   * IT IS A CLOCK BECAUSE THE THING ON SCREEN IS A BEARER CREDENTIAL. Every
-   * other control here is right — nothing is fetched on tab open, the reveal
-   * takes a press, the key's characters take a second one, and it is dropped on
-   * hide, on leaving the tab and on closing the overlay — but all of that
-   * bounded the exposure to "until a human remembers". M2 bounds the equivalent
-   * window to 90 seconds precisely because a displayed credential is a bearer
-   * credential, and M1's is strictly longer-lived: no TTL, not single-use,
-   * never zeroed. So the one thing this app can actually control — a code left
-   * up in a share, a recording, or in front of someone walking past — gets the
-   * same 90 seconds.
-   *
-   * Re-revealing costs one socket round trip: cmd=pairBegin reads in-memory
-   * state, execs nothing and is idempotent.
-   */
-  const CONNECT_REVEAL_MS = 90_000;
-
-  let connectUntil = $state(0);
-  let connectNow = $state(0);
-  const connectLeft = $derived(
-    connectUntil > 0 ? Math.max(0, Math.ceil((connectUntil - connectNow) / 1000)) : 0,
-  );
-  let connectTimer: ReturnType<typeof setInterval> | undefined;
-
-  // --- regenerating the key -------------------------------------------------
-  //
-  // Rolling the bearer key is milestone 1's ONLY revocation, and it is blunt:
-  // every paired phone loses access at once, because every paired phone holds
-  // the same key. The dialog says that plainly rather than offering it as
-  // routine maintenance — M2's per-device revocation is the precise version.
-  //
-  // It goes through the shared `confirm` store like every other irreversible
-  // action in this app, so a shortcut and a button ask the same way.
-  let regenBusy = $state(false);
-  let regenDone = $state("");
-
-  function askRegenerate() {
-    confirm.ask({
-      title: "Regenerate the phone key?",
-      body: "Every phone paired with this daemon loses access immediately.",
-      detail:
-        "Milestone 1 authenticates every phone with one shared key, so there is no way to revoke a single device. Each phone has to scan a new code afterwards.",
-      confirmLabel: "Regenerate",
-      onConfirm: () => void regenerateKey(),
-    });
-  }
-
-  async function regenerateKey() {
-    regenBusy = true;
-    connectErr = "";
-    regenDone = "";
-    try {
-      await ConfigService.RegenerateRemoteKey();
-      // Whatever is on screen describes the OLD key, so it is dropped rather
-      // than left looking valid — a stale code scans cleanly and is then
-      // refused, which from the phone is indistinguishable from a bad read.
-      hideConnect();
-      regenDone = "New key in place. The listener was restarted; press Show code for the new one.";
-    } catch (e) {
-      connectErr = String(e);
-    } finally {
-      regenBusy = false;
-    }
-  }
-
-  function stopConnectTimer() {
-    if (connectTimer !== undefined) clearInterval(connectTimer);
-    connectTimer = undefined;
-  }
-
-  async function revealConnect() {
-    connectBusy = true;
-    connectErr = "";
-    try {
-      connect = await ConfigService.ConnectCode();
-      // Only a code that is actually on screen runs a clock. A `problem` answer
-      // carries no key, and an error carries nothing at all.
-      if (connect?.code) {
-        connectNow = Date.now();
-        connectUntil = connectNow + CONNECT_REVEAL_MS;
-        stopConnectTimer();
-        connectTimer = setInterval(() => {
-          connectNow = Date.now();
-          if (connectNow >= connectUntil) hideConnect();
-        }, 1000);
-      }
-    } catch (e) {
-      connect = null;
-      connectErr = String(e);
-    } finally {
-      connectBusy = false;
-    }
-  }
-
-  function hideConnect() {
-    stopConnectTimer();
-    connectUntil = 0;
-    connect = null;
-    connectErr = "";
-    connectKeyShown = false;
-    copied = "";
-  }
-
-  async function copyConnect(what: string, value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      copied = what;
-      // A one-shot confirmation, not a lasting state: the point is to say the
-      // press registered, and a "copied" that stays on screen stops meaning
-      // anything after the second field.
-      setTimeout(() => {
-        if (copied === what) copied = "";
-      }, 1500);
-    } catch {
-      copied = "";
-    }
-  }
-
-  /** The first host is the one the code tells a phone to dial. */
-  const connectHost = $derived(connect?.hosts?.[0] ?? "");
-
-  // Leaving the tab drops it. Without this the code survives behind whatever
-  // tab is opened next and comes back on screen when Remote is opened again —
-  // a reveal nobody performed.
-  $effect(() => {
-    if (tab !== "remote" && connect) hideConnect();
-  });
-
-  // The overlay is mounted inside an {#if} in App.svelte, so closing it really
-  // does destroy this component — but an interval outlives a component that
-  // forgot to clear it, and this one calls hideConnect() on a $state.
-  $effect(() => stopConnectTimer);
 
   async function migrateReview() {
     try {
@@ -764,24 +766,7 @@
 </script>
 
 {#snippet head(label: string)}
-  <!-- text-lg, not `label`: a section head rendered as an 12px uppercase faint
-       micro-label is smaller AND quieter than the 13px rows it heads, which is
-       hierarchy upside down. This is the one place in the settings overlay that
-       must out-rank the content under it. `label` stays for per-field captions. -->
-  <h3 class="mb-2 text-lg text-ink">{label}</h3>
-{/snippet}
-
-{#snippet connectRow(caption: string, shown: string, value: string)}
-  <!-- `shown` and `value` are separate so the key can be masked on screen and
-       still copy in full: a row that copies its own dots is worse than no copy
-       button, and one that reveals to copy defeats the mask. -->
-  <div class="grid grid-cols-[7rem_1fr_auto] items-center gap-2">
-    <span class="text-sm text-faint">{caption}</span>
-    <span class="truncate font-mono text-sm text-ink" title={caption}>{shown}</span>
-    <Button size="xs" onclick={() => copyConnect(caption, value)}>
-      {copied === caption ? "Copied" : "Copy"}
-    </Button>
-  </div>
+  <h3 class="settings-heading">{label}</h3>
 {/snippet}
 
 {#snippet areaRow(caption: string, value: string[] | null, onChange: (v: string[]) => void, placeholder = "", hint = "")}
@@ -858,17 +843,20 @@
 
     <!-- No size class: every field caption, control and option inherits the
          13px base. Only the faint explanations and micro-labels step down. -->
-    <div role="region" aria-label="Settings content" class="min-h-0 min-w-0 overflow-y-auto overscroll-contain p-4">
+    <div role="region" aria-label="Settings content" class="settings-content min-h-0 min-w-0 overflow-y-auto overscroll-contain p-6">
       {#if tab === "defaults"}
         <section>
           {@render head("General")}
-          <div class="copy mb-4 text-sm text-faint"><HelpText label="session limits" summary="Workspace limit and project defaults." detail="Choose the coding agent and how many sessions can run at once. Projects can override their agent and limit." /></div>
-          <div class="space-y-2">
+          <SettingsGroup title="Agent sessions">
+            <AgentModelFields provider={d.agent || "claude"} providerLabel="Default agent" rowClass={rowCls}
+              onProviderChange={(value) => { d.agent = value; }} />
             <label class={rowCls}>
               <span class="text-faint">Total running agents</span>
               <span>
-                <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
-                  aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
+                <TeamLock lock={capCeiling} version={teamPolicy?.version ?? 0}>
+                  <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
+                    aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
+                </TeamLock>
                 <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}</span>
               </span>
             </label>
@@ -880,11 +868,49 @@
                 <span id={`${formId}-project-cap-help`} class={hintCls} aria-live="polite">{projectCapError || (d.concurrencyCap === 0 ? "Set a limit in each project." : "Default limit. Projects can override it.")}</span>
               </span>
             </label>
-            <AgentModelFields provider={d.agent || "claude"} providerLabel="Default agent" rowClass={rowCls}
-              onProviderChange={(value) => { d.agent = value; }} />
-            <div class="border-t border-edge pt-3">
+          </SettingsGroup>
+          <SettingsGroup title="Limits" help="These two save at once. A team policy can cap the budget or set the merge queue.">
+            {#snippet aside()}
+              <span role="status" class="text-sm text-faint">{limitsBusy ? "Saving…" : limitsMsg}</span>
+            {/snippet}
+            {#if !limits}
+              <p class="text-sm text-faint">Loading limits…</p>
+            {:else}
+              <div class={rowCls}>
+                <label for={`${formId}-budget`} class="text-faint">Daily token budget</label>
+                <span>
+                  <TeamLock lock={budgetCeiling} version={teamPolicy?.version ?? 0}>
+                    <input id={`${formId}-budget`} aria-label="Daily token budget" class={inputCls} type="number" min="0" step="1000" value={budgetValue}
+                      aria-invalid={!!budgetError}
+                      oninput={(e) => (budgetDraft = e.currentTarget.valueAsNumber)}
+                      onchange={commitBudget}
+                      onkeydown={(e) => { if (e.key === "Enter") commitBudget(); }} />
+                  </TeamLock>
+                  <span class={hintCls}>{budgetError || "Weighted tokens per day across all projects. 0 is no limit."}</span>
+                </span>
+              </div>
+              <div class={rowCls}>
+                <span class="text-faint">Merge queue</span>
+                <TeamLock lock={mergeQueueLock} version={teamPolicy?.version ?? 0}>
+                  <label class="flex cursor-pointer items-center gap-2">
+                    <Checkbox checked={limits.mergeQueue} disabled={limitsBusy} onchange={() => void saveTeamLimits({ mergeQueue: !limits?.mergeQueue })} />
+                    <span>Merge approved, green pull requests one at a time</span>
+                  </label>
+                </TeamLock>
+              </div>
+            {/if}
+            {#if limitsErr}<p role="alert" class="text-sm text-bad">{limitsErr}</p>{/if}
+          </SettingsGroup>
+          <SettingsGroup title="Shells">
+            <div class={rowCls}>
+              <label for={`${formId}-temporary-directory`} class="text-faint">Temporary shell directory</label>
+              <div><PathInput id={`${formId}-temporary-directory`} label="Temporary shell directory" placeholder="~" bind:value={d.temporaryDirectory} />
+              <span class={hintCls}>Used for shells outside a project. Empty uses your home folder.</span></div>
+            </div>
+          </SettingsGroup>
+          <div class="mt-6 border-t border-edge pt-4">
               <Button aria-expanded={pollingOpen} aria-controls={`${formId}-polling-frequency`} onclick={() => { pollingOpen = !pollingOpen; }}>
-                <span aria-hidden="true">{pollingOpen ? "▾" : "▸"}</span>Polling frequency
+                <Chevron open={pollingOpen} />Polling frequency
               </Button>
               <div id={`${formId}-polling-frequency`} class="mt-3" hidden={!pollingOpen}>
                 <div class={rowCls}>
@@ -892,73 +918,73 @@
                   <PresetInput label="Poll interval" value={d.pollInterval} options={POLL_INTERVALS} onChange={(v) => { d.pollInterval = v; }} />
                 </div>
               </div>
-            </div>
           </div>
         </section>
       {:else if tab === "linear"}
         <section>
           {@render head("Linear")}
-          <HelpText label="Linear key storage" summary="Stored in Keychain." detail="Lola uses this key to read Linear issues. The key stays in macOS Keychain; config stores only its source name." />
-
-          <div class="mb-4 rounded-lg border border-edge bg-canvas px-3 py-2.5">
-            {#if !keyStatus}
-              <span class="text-faint">Checking…</span>
-            {:else if keyStatus.resolvable}
-              <span class="text-good">✓ Key configured</span>
-              <span class="mt-1 block text-sm text-faint">Read from {keyStatus.source}.</span>
-            {:else if keyStatus.configured}
-              <span class="text-bad">✗ Key configured but unreadable</span>
-              <span class="mt-1 block text-sm text-faint">{keyStatus.source} — {keyStatus.detail}</span>
-            {:else}
-              <span class="text-warn">▲ No key configured</span>
-              <span class="mt-1 block text-sm text-faint">Every poll will fail until one is set.</span>
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              {#if !keyStatus}
+                <span class="text-faint">Checking…</span>
+              {:else if keyStatus.resolvable}
+                <span class="text-good"><Icon name="check" size={14} /> Key configured</span>
+              {:else if keyStatus.configured}
+                <span class="text-bad"><Icon name="x" size={14} /> Key configured but unreadable</span>
+                <span class="mt-1 block text-sm text-faint">{keyStatus.source} — {keyStatus.detail}</span>
+              {:else}
+                <span class="text-warn"><Icon name="triangle-alert" size={14} /> No key configured</span>
+                <span class="mt-1 block text-sm text-faint">Every poll will fail until one is set.</span>
+              {/if}
+            </div>
+            {#if keyStatus?.configured && !keyEditing}
+              <Button id={`${formId}-replace-key`} variant="secondary" onclick={() => editKey(true)}>Replace key…</Button>
             {/if}
           </div>
 
-          <div class="space-y-2">
-            <div class={rowTopCls}>
-              <span class="text-faint">{keyStatus?.configured ? "Replace key" : "API key"}</span>
-              <span>
-                <input
-                  class="{inputCls} font-mono"
-                  type="password"
-                  autocomplete="off"
-                  aria-label="Linear API key"
-                  placeholder="lin_api_…"
-                  bind:value={keyInput}
-                  oninput={() => (keyMsg = "")}
-                />
-                <HelpText label="creating a Linear key" summary="Personal API key." detail="In Linear, open Settings → Security &amp; access → API keys." />
-              </span>
-            </div>
-            <div class={rowCls}>
-              <span></span>
-              <span class="flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  disabled={!keyInput.trim() || keyBusy !== ""}
-                  loading={keyBusy === "validating"}
-                  onclick={validateKey}>Validate</Button
-                >
-                <Button
-                  variant="primary"
-                  disabled={!keyInput.trim() || keyBusy !== ""}
-                  loading={keyBusy === "saving"}
-                  onclick={saveKey}>Save key</Button
-                >
-              </span>
-            </div>
-            {#if keyMsg}
+          {#if !keyStatus?.configured || keyEditing}
+            <div class="space-y-2">
               <div class={rowTopCls}>
-                <span></span>
-                <p class="text-sm {keyMsgKind === 'good' ? 'text-good' : 'text-bad'}">{keyMsg}</p>
+                <label for={`${formId}-linear-key`} class="text-faint">{keyStatus?.configured ? "New API key" : "API key"}</label>
+                <span>
+                  <input
+                    id={`${formId}-linear-key`}
+                    class="{inputCls} font-mono"
+                    type="password"
+                    autocomplete="off"
+                    aria-label="Linear API key"
+                    aria-describedby={`${formId}-linear-key-help`}
+                    placeholder="lin_api_…"
+                    bind:value={keyInput}
+                    disabled={keyBusy !== ""}
+                    oninput={() => (keyMsg = "")}
+                  />
+                  <span id={`${formId}-linear-key-help`} class={hintCls}>Create a personal key in Linear → Settings → Security &amp; access → API keys.</span>
+                </span>
               </div>
-            {/if}
-          </div>
-
-          <!-- Saved on its own, not by the overlay's Save: the key is a secret and
-               must not ride along on an unrelated form commit (see saveKey). -->
-          <HelpText label="saving the Linear key" summary="Save key applies immediately." detail="The main Save button saves settings only. Use Save key to store or replace your Linear credential." />
+              <div class={rowCls}>
+                <span></span>
+                <span class="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    disabled={!keyInput.trim() || keyBusy !== ""}
+                    loading={keyBusy === "validating"}
+                    onclick={validateKey}>Validate</Button
+                  >
+                  <Button
+                    variant="primary"
+                    disabled={!keyInput.trim() || keyBusy !== ""}
+                    loading={keyBusy === "saving"}
+                    onclick={saveKey}>Save key</Button
+                  >
+                  {#if keyStatus?.configured}
+                    <Button disabled={keyBusy !== ""} onclick={() => editKey(false)}>Cancel replacement</Button>
+                  {/if}
+                </span>
+              </div>
+            </div>
+          {/if}
+          <p role="status" class="mt-2 text-sm {keyMsgKind === 'good' ? 'text-good' : 'text-bad'}">{keyMsg}</p>
         </section>
       {:else if tab === "linearAgent"}
         <section>
@@ -1027,10 +1053,8 @@
       {:else if tab === "project"}
         <section>
           {@render head("Project defaults")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="project defaults" summary="Defaults for all projects." detail="Shared settings for all projects. Override them in an individual project when needed.
-            Shared labels must be workspace labels so they work across teams." /></div>
-          <div class="space-y-2">
-            <h4 class="mb-3 text-ink">Worktree setup</h4>
+          <p class="mb-6 text-sm text-faint">Shared defaults. Override them in individual projects.</p>
+          <SettingsGroup title="Worktree setup">
             <div class={rowCls}>
               <span class="text-faint">Branch prefix</span>
               <PresetInput label="Branch prefix" value={d.branchPrefix} options={BRANCH_PREFIXES} onChange={(v) => { d.branchPrefix = v; }} />
@@ -1039,7 +1063,8 @@
             {@render areaRow("Post-create", d.postCreate, (v) => { d.postCreate = v; }, "npm install", "one command per line")}
             {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value", "one KEY=value per line")}
 
-            <h4 class="border-t border-edge pt-4 text-ink">Plan approval</h4>
+          </SettingsGroup>
+          <SettingsGroup title="Plan approval">
             <div class={rowCls}>
               <span class="text-faint">Require plan</span>
               <span>
@@ -1049,8 +1074,8 @@
                 </label>
               </span>
             </div>
-
-            <h4 class="border-t border-edge pt-4 text-ink">Issue pickup</h4>
+          </SettingsGroup>
+          <SettingsGroup title="Issue pickup">
             {#if wsLoading}
               <p role="status" class="text-sm text-faint">Loading workspace labels…</p>
             {:else if wsErr}
@@ -1132,16 +1157,25 @@
                 "one key per line — empty means priority, createdAt",
               )}
             {/if}
-          </div>
+          </SettingsGroup>
+          <SettingsGroup title="PR follow-up">
+            <label class="flex items-center gap-2">
+              <Checkbox checked={!!d.autoPRComments} onchange={() => { d.autoPRComments = !d.autoPRComments; }} />
+              Automatically address and resolve PR comments
+            </label>
+            <p class="text-sm text-faint">When idle, the agent verifies new review comments, pushes fixes and resolves only addressed threads. Projects can override this default. Existing review-provider handoffs are configured separately.</p>
+          </SettingsGroup>
         </section>
       {:else if tab === "notify"}
         <section>
           {@render head("Notifications")}
-          <div class="space-y-2">
+          <SettingsGroup title="Desktop">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.notifyDesktop} />
               <span>Desktop notifications</span>
             </label>
+          </SettingsGroup>
+          <SettingsGroup title="Slack">
             <label class={rowTopCls}>
               <span class="text-faint">Slack webhook env</span>
               <div>
@@ -1149,25 +1183,28 @@
                 <span class={hintCls}>Variable name, not URL.</span>
               </div>
             </label>
-          </div>
+          </SettingsGroup>
         </section>
-      {:else if tab === "brain"}
+      {:else if tab === "ai"}
         <section>
-          {@render head("Summaries")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="summaries" summary="AI summaries · uses tokens." detail="Use Claude to summarize sessions that need attention or are approved. Summaries use additional tokens." /></div>
-          <div class="space-y-2">
+          {@render head("AI")}
+          <SettingsGroup title="AI commits">
+            <CommitInstructions bind:value={d.commitInstructions}/>
+          </SettingsGroup>
+          <AISettings bind:value={d.ai} defaultProvider={d.agent || 'claude'}/>
+        </section>
+      {:else if tab === "assistants"}
+        <section>
+          {@render head("Assistants")}
+          <p class="mb-6 text-sm text-faint" data-assistants-cost>Helpers that run beside your agents. Both are off by default: each one makes extra model calls, and those use tokens.</p>
+          <SettingsGroup title="Session summaries" description="Claude writes a short summary when a session escalates or is approved.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.brainEnabled} />
-              <span>Enabled</span>
+              <span>Summarize sessions</span>
             </label>
-            {#if d.brainEnabled}
-            <AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
-              onModelChange={(value) => { d.brainModel = value; }} />
-            <label class={rowCls}>
-              <span class="text-faint">Timeout (s)</span>
-              <input class={inputCls} type="number" min="0" bind:value={d.brainTimeout} />
-            </label>
-            <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
+          </SettingsGroup>
+          {#if d.brainEnabled}
+          <SettingsGroup title="When to summarize">
               <label class="flex cursor-pointer items-center gap-2">
                 <Checkbox bind:checked={d.brainSummarizeEscalation} />
                 <span>Summarize on escalation</span>
@@ -1176,20 +1213,27 @@
                 <Checkbox bind:checked={d.brainSummarizeApproved} />
                 <span>Summarize on approved</span>
               </label>
-            </div>
-            {/if}
-          </div>
-        </section>
-      {:else if tab === "interpreter"}
-        <section>
-          {@render head("Status interpretation")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="status interpretation" summary="AI status estimates · uses tokens." detail="Use the selected agent to add a status estimate and short headline to each session. This changes only the display and uses additional tokens." /></div>
-          <div class="space-y-2">
+          </SettingsGroup>
+          <SettingsGroup title="Model and limits">
+            {#if d.ai?.[d.agent || 'claude']?.enabled}
+              <p class={hintCls}>Model selected by the Session summaries profile in AI settings.</p>
+              <Button size="sm" onclick={()=>selectTab('ai')}>Configure AI profiles</Button>
+            {:else}<AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
+              onModelChange={(value) => { d.brainModel = value; }} />{/if}
+            <label class={rowCls}>
+              <span class="text-faint">Timeout (s)</span>
+              <input class={inputCls} type="number" min="0" bind:value={d.brainTimeout} />
+            </label>
+          </SettingsGroup>
+          {/if}
+          <SettingsGroup title="Status interpretation" description="An agent reads each session’s screen and adds display-only estimates and headlines.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.statusAgentEnabled} />
-              <span>Enabled</span>
+              <span>Interpret session status</span>
             </label>
-            {#if d.statusAgentEnabled}
+          </SettingsGroup>
+          {#if d.statusAgentEnabled}
+          <SettingsGroup title="Agent and model">
             <AgentModelFields provider={d.statusAgentAgent || "claude"} model={d.statusAgentModel ?? ""} rowClass={rowCls}
               onProviderChange={(value) => {
                 statusBinaries.set(d.statusAgentAgent || "claude", d.statusAgentBin);
@@ -1200,11 +1244,13 @@
             <Disclosure label="Executable override">
               <div class="mt-3 {rowCls}">
                 <span class="text-faint">Binary</span>
-                <PresetInput label="Binary" value={d.statusAgentBin}
+                <PresetInput label="Binary" value={d.statusAgentBin} pathKind="file"
                   options={[{ value: "", label: `Default (${d.statusAgentAgent || "claude"} on PATH)` }, { value: d.statusAgentAgent || "claude", label: d.statusAgentAgent || "claude" }]}
                   onChange={(v) => { d.statusAgentBin = v; }} placeholder={`/path/to/${d.statusAgentAgent || "claude"}`} />
               </div>
             </Disclosure>
+          </SettingsGroup>
+          <SettingsGroup title="Frequency and limits">
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.statusAgentTimeout} />
@@ -1217,6 +1263,8 @@
               <span class="text-faint">Max per cycle</span>
               <input class={inputCls} type="number" min="0" bind:value={d.statusAgentMaxPerCycle} />
             </label>
+          </SettingsGroup>
+          <SettingsGroup title="Evidence">
             <label class={rowCls}>
               <span class="text-faint">Min confidence</span>
               <input class={inputCls} type="number" min="0" max="1" step="0.05" bind:value={d.statusAgentMinConfidence} />
@@ -1225,14 +1273,22 @@
               <Checkbox bind:checked={d.statusAgentIncludeTranscript} />
               <span>Include transcript tail</span>
             </label>
-            {/if}
-          </div>
+          </SettingsGroup>
+          {/if}
         </section>
+      {:else if tab === "hub"}
+        <!-- Drawn below, outside this chain: it stays mounted once visited. -->
+      {:else if tab === "sandbox"}
+        <section>
+          {@render head("Sandbox")}
+          <SandboxSettings formId={`${formId}-sandbox`} />
+        </section>
+      {:else if tab === "sshhosts"}
+        <SSHHostSettings onDirty={(v) => (sshHostDirty = v)} />
       {:else if tab === "remote"}
         <section>
-          {@render head("Phone access")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="phone access" summary="Connect the mobile app." detail="Connect the Lola mobile app to this Mac. Paired phones can read sessions, watch terminals and send messages to your coding agents." /></div>
-          <div class="space-y-2">
+          {@render head("Phones")}
+          <SettingsGroup title="Connection" description="Let the Lola mobile app access sessions on this Mac.">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.remoteEnabled} />
               <span>Enabled</span>
@@ -1248,7 +1304,7 @@
                   <option value={BIND_LITERAL}>IP literal…</option>
                 </Select>
                 {#if !bindShowsLiteral && BIND_HELP[d.remoteBind]}
-                  <span class="text-xs text-faint">{BIND_HELP[d.remoteBind]}</span>
+                  <span class="text-sm text-faint">{BIND_HELP[d.remoteBind]}</span>
                 {/if}
               </span>
             </div>
@@ -1261,7 +1317,7 @@
                   placeholder="192.168.1.20"
                   bind:value={d.remoteBind} />
               </label>
-              <div class="copy text-xs text-faint"><HelpText label="bind address" summary="IP address, not hostname." detail="An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
+              <div class="copy text-sm text-faint"><HelpText label="bind address" summary="IP address, not hostname." detail="An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
                 network call, so the daemon rejects one." /></div>
             {/if}
             <label class={rowCls}>
@@ -1269,19 +1325,8 @@
               <input class={inputCls} type="number" min="0" max="65535" bind:value={d.remotePort} />
             </label>
 
-            <!-- The bind rail's one hole. Two keys have to agree — this AND a
-                 non-loopback bind — so a config that merely says "lan" still
-                 binds loopback. It is a config key rather than an environment
-                 variable because the daemon is normally started by the restart
-                 button a few inches from here, which cannot set one. -->
-            <div class="pt-1">
-              <label class="flex cursor-pointer items-center gap-2">
-                <Checkbox bind:checked={d.remoteInsecureLan} />
-                <span>Allow a LAN bind</span>
-              </label>
-              <div class="ml-6"><HelpText label="Allow a LAN bind" summary="Shared key sent unencrypted." detail="Allows a physical phone to reach the configured network address. This development mode sends the shared key in the clear. The Simulator does not need it." /></div>
-            </div>
-
+          </SettingsGroup>
+          <SettingsGroup title="Network sharing">
             <!-- A DISCLOSURE rather than a convenience, which is why it is off
                  by default and why the copy leads with what it announces. What
                  it buys is RECONNECTION, not pairing: the key and the pin
@@ -1307,131 +1352,48 @@
               </label>
               <div class="ml-6"><HelpText label="Publish dev servers of the active session" summary="Dev servers accessible on your network." detail="Shares the active session’s local dev servers on one private interface and a temporary port. Anyone on that network can reach them while the session is active." /></div>
             </div>
-          </div>
-          <div class="mt-4 border-t border-edge pt-4">
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <h4 class="text-ink">Connect a phone</h4>
-                <div class="copy text-sm text-faint"><HelpText label="connect code" summary="Scan with the mobile app." detail="The code contains the running listener’s address and credentials. Save connection settings before generating a code." /></div>
-              </div>
-              {#if connect || connectErr}
-                <div class="flex shrink-0 items-center gap-2">
-                  {#if connectLeft > 0}
-                    <!-- Says the clock exists, so the reveal disappearing is a
-                         rule rather than a glitch. `num` keeps the countdown
-                         from reflowing the button beside it. -->
-                    <span class="num text-sm text-faint">Hides in {connectLeft}s</span>
-                  {/if}
-                  <Button size="sm" onclick={hideConnect}>Hide</Button>
-                </div>
-              {:else}
-                <Button variant="primary" size="sm" loading={connectBusy} onclick={revealConnect}>Show code</Button>
-              {/if}
-            </div>
-
-            <!-- Regenerating sits BESIDE the reveal rather than inside it: it is
-                 not a step in connecting a phone, it is the undo for having
-                 connected one. `ghost` keeps it quieter than Show code, which is
-                 the action someone actually came here for. -->
-            <div class="mt-2 flex items-center gap-3">
-              <Button size="sm" loading={regenBusy} onclick={askRegenerate}>Regenerate key</Button>
-              <HelpText label="regenerating the key" summary="Disconnects all phones." detail="Reconnect each phone using the new code." />
-            </div>
-            {#if regenDone}
-              <p class="copy mt-2 text-sm text-good">{regenDone}</p>
-            {/if}
-
-            {#if connectErr}
-              <p class="copy mt-3 text-sm text-bad">{connectErr}</p>
-            {:else if connect && connect.problem}
-              <p class="copy mt-3 text-sm text-warn">{connect.problem}</p>
-            {:else if connect}
-              <HelpText label="code privacy" summary="Secret code · hides after 90s."
-                detail="Anyone with this code can control your coding agents. Copying also puts the access key on the clipboard, which may sync to your other devices. Copy something else afterward." />
-              <div class="mt-3 flex flex-wrap items-start gap-4">
-                <QRCode value={connect.code} size={228} label="Connect code" />
-                <div class="min-w-[16rem] flex-1 space-y-1">
-                  {@render connectRow("Address", connectHost, connectHost)}
-                  {@render connectRow("Port", String(connect.port), String(connect.port))}
-                  {@render connectRow("SPKI pin", connect.pin, connect.pin)}
-                  {@render connectRow(
-                    "Access key",
-                    connectKeyShown ? connect.key : "•".repeat(Math.min(connect.key.length, 32)),
-                    connect.key,
-                  )}
-                  <div class="flex flex-wrap gap-2 pt-2">
-                    <Button size="sm" onclick={() => (connectKeyShown = !connectKeyShown)}>
-                      {connectKeyShown ? "Hide key" : "Show key"}
-                    </Button>
-                    <!-- The label names what it hands over. The code CONTAINS
-                         the key, so a button reading "Copy code" beside a key
-                         row still drawn as dots implied the mask was a barrier
-                         to more than shoulder-surfing. It is not: the copy is
-                         the whole credential. -->
-                    <Button size="sm" onclick={() => copyConnect("code", connect?.code ?? "")}>
-                      {copied === "code" ? "Copied" : "Copy code (contains the key)"}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-              {#if connect.hosts && connect.hosts.length > 1}
-                <HelpText label="additional addresses" summary="Fallback addresses included." detail={connect.hosts.slice(1).join(", ")} />
-              {/if}
-              {#if connect.insecure}
-                <HelpText label="shared-key access" summary="One key for all phones." detail="Individual phones cannot be revoked separately. Regenerate the key to disconnect them all." />
-              {/if}
-            {/if}
-          </div>
-
-
+          </SettingsGroup>
+          <PhonesPanel bind:relay={d.remoteRelay} onJoinHub={() => (tab = "hub")} />
         </section>
       {:else if tab === "appearance"}
         <section>
           {@render head("Appearance")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="theme preview" summary="Preview a theme." detail="Preview a theme for the app and terminals. Save to keep it, or cancel to restore your current theme." /></div>
+          <!-- Applies at once and never joins the form's save: it is this viewer's own preference,
+               in localStorage, and config.toml and the daemon never read it. A session you picked
+               a view for keeps it. -->
+          <SettingsGroup title="Session view">
+          <div class="grid gap-2" data-open-sessions-in>
+            <span class="text-sm text-faint">Open sessions in</span>
+            <div class="flex w-fit gap-0.5 rounded-md border border-edge/60 bg-canvas p-0.5" role="group" aria-label="Open sessions in">
+              <Button size="xs" selected={terms.globalView === "conversation"} onclick={() => terms.setGlobalView("conversation")}>Conversation</Button>
+              <Button size="xs" selected={terms.globalView === "terminal"} onclick={() => terms.setGlobalView("terminal")}>Terminal</Button>
+            </div>
+          </div>
+          </SettingsGroup>
+          <SettingsGroup title="Theme">
+          <div>
+            <SystemThemePicker value={themePreference} {themeIds} onchange={previewAppearance} />
+          </div>
+          <p class="text-sm text-faint">Save to keep the preview, or cancel to restore your theme.</p>
           <!-- Grid, not flex: WKWebView does not stretch a flex child inside a
                flex column, so a flex layout that fills correctly in Chrome
                collapses to content width in the packaged .app. -->
+          {#if !themePreference.followSystem}
           <div class="grid grid-cols-2 gap-2">
             {#each themeIds as id (id)}
-              {@const f = FLAVORS[id]}
-              {@const on = themeId === id}
-              <!-- Each option is drawn in its OWN colours, so the choice is
-                   legible before it is applied. Catppuccin guarantees the
-                   base/text pair's contrast, so this stays readable under
-                   whichever flavor is currently live. -->
-              <button
-                type="button"
-                aria-pressed={on}
-                class="grid gap-2 rounded-lg border p-2.5 text-left {on ? 'ring-2 ring-accent' : ''}"
-                style="background:{f.base};border-color:{on ? f.sky : f.surface1}"
-                onclick={() => previewTheme(id)}
-              >
-                <span class="flex items-baseline gap-2">
-                  <span class="font-medium" style="color:{f.text}">{f.label}</span>
-                  <span class="label ml-auto" style="color:{on ? f.sky : f.overlay1}">
-                    {on ? "selected" : f.dark ? "dark" : "light"}
-                  </span>
-                </span>
-                <!-- The surface ramp first, then the accents lola maps onto
-                     status — the parts of the palette the UI actually spends. -->
-                <span class="grid auto-cols-max grid-flow-col gap-1">
-                  {#each [f.surface0, f.surface2, f.subtext0, f.sky, f.green, f.yellow, f.peach, f.red, f.mauve] as c, i (i)}
-                    <span class="h-3 w-3 rounded-sm" style="background:{c}"></span>
-                  {/each}
-                </span>
-              </button>
+              <ThemeSwatch {id} selected={themeId === id} onclick={() => previewTheme(id)} />
             {/each}
           </div>
+          {/if}
+          </SettingsGroup>
         </section>
       {:else if tab === "review"}
+        {@render head("Review")}
         <div class="space-y-5">
+          <h4 class="text-lg text-ink">Review providers</h4>
           {#if d.reviewLegacy}
             <div class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-ink">
-              <p>
-                This config still uses the legacy <code>[review]</code>/<code>[coderabbit]</code> tables. They are
-                <span class="text-faint">read-only</span> here — migrate them into the editable provider catalog to continue.
-              </p>
+              <p>Migrate the legacy review config to edit providers.</p>
               <Button variant="secondary" size="md" class="mt-2" onclick={migrateReview}>Migrate to providers</Button>
             </div>
           {/if}
@@ -1449,15 +1411,16 @@
             </p>
           {/if}
 
+          <TeamLock lock={reviewLock} version={teamPolicy?.version ?? 0} disable={false}>
+          <div class="space-y-5">
           {#each reviewKinds.length ? providers() : [] as p (p.provider)}
             <section aria-label={`${providerName(p.provider)} review`} class="overflow-hidden rounded-lg border border-edge" class:opacity-60={d.reviewLegacy}>
               <header class="flex items-center gap-3 bg-canvas/40 px-4 py-3">
                 <div class="min-w-0 flex-1">
-                  <h3 class="text-base font-medium text-ink">{providerName(p.provider)}</h3>
-                  <span class="text-xs text-faint">{isWatch(p.provider) ? "PR comments" : isCLI(p.provider) ? "CLI review" : "Agent review"}</span>
+                  <h5 class="text-base font-medium text-ink">{providerName(p.provider)}</h5>
                 </div>
                 <label class="flex cursor-pointer items-center gap-2">
-                  <Checkbox disabled={d.reviewLegacy} bind:checked={p.enabled} />
+                  <Checkbox disabled={d.reviewLegacy || !!reviewLock} bind:checked={p.enabled} />
                   <span>{p.enabled ? "Enabled" : "Disabled"}</span>
                 </label>
                 {#if !d.reviewLegacy}
@@ -1465,7 +1428,7 @@
                 {/if}
               </header>
 
-              {#if p.enabled || d.reviewLegacy}
+              {#if p.enabled || d.reviewLegacy || reviewLock}
                 <div class="space-y-4 p-4">
                   <div class="space-y-3">
                     {#if isCLI(p.provider)}
@@ -1494,10 +1457,7 @@
                   </div>
 
                   <div class="space-y-3 border-t border-edge pt-3">
-                    <div class="flex items-center justify-between gap-2">
-                      <h4 class="font-medium text-ink">Findings</h4>
-                      <HelpText label="review findings" summary="Always in Lola." detail="Every review appears in Lola. Choose whether to notify you, send findings to the coding agent, or publish them elsewhere." />
-                    </div>
+                    <h6 class="font-medium text-ink">After review</h6>
                     <div class="grid grid-cols-2 gap-x-4 gap-y-2">
                       <label class="flex cursor-pointer items-center gap-2">
                         <Checkbox disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
@@ -1507,20 +1467,37 @@
                         <Checkbox disabled={d.reviewLegacy} bind:checked={p.notify} />
                         <span>Notify me</span>
                       </label>
-                      {#each transportsFor(p.provider).filter((t) => t !== "lola") as t}
-                        <label class="flex cursor-pointer items-center gap-2">
-                          <Checkbox disabled={d.reviewLegacy} checked={(p.transports ?? []).includes(t)}
-                            onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
-                          <span>{t === "github" ? "GitHub" : "Linear"}</span>
-                        </label>
-                      {/each}
                     </div>
-                    {#if !isWatch(p.provider) && (p.transports ?? []).includes("github")}
-                      <label class="ml-6 flex cursor-pointer items-center gap-2 text-sm text-faint">
-                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
-                        <span>Inline PR threads</span>
-                      </label>
-                    {/if}
+                    <Disclosure label="Publishing" hint={[
+                      ...(p.transports ?? []).filter((t: string) => t !== "lola").map((t: string) => t === "github" ? "GitHub" : "Linear"),
+                      ...(!isWatch(p.provider) && p.githubStatus ? ["Status gate"] : []),
+                    ].join(" · ")}>
+                      <div class="mt-3 space-y-3">
+                        <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                          {#each transportsFor(p.provider).filter((t) => t !== "lola") as t}
+                            <label class="flex cursor-pointer items-center gap-2">
+                              <Checkbox disabled={d.reviewLegacy} checked={(p.transports ?? []).includes(t)}
+                                onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
+                              <span>{t === "github" ? "GitHub" : "Linear"}</span>
+                            </label>
+                          {/each}
+                        </div>
+                        {#if !isWatch(p.provider) && (p.transports ?? []).includes("github")}
+                          <label class="ml-6 flex cursor-pointer items-center gap-2 text-sm text-faint">
+                            <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
+                            <span>Inline PR threads</span>
+                          </label>
+                        {/if}
+                        {#if !isWatch(p.provider)}
+                          <label class="flex cursor-pointer items-center gap-2 text-sm"
+                            title={`Posts lola/review/${p.provider} on the PR head and re-reviews each new head; require it in a ruleset to block merges on blocking findings.`}>
+                            <Checkbox disabled={d.reviewLegacy} checked={p.githubStatus ?? false}
+                              onchange={(e) => (p.githubStatus = (e.currentTarget as HTMLInputElement).checked)} />
+                            <span>Commit status gate</span>
+                          </label>
+                        {/if}
+                      </div>
+                    </Disclosure>
                   </div>
 
                   {#if !isWatch(p.provider)}
@@ -1549,7 +1526,7 @@
                                   onchange={(e) => toggleFallback(p, k, (e.currentTarget as HTMLInputElement).checked)} />
                                 <span>{providerName(k)}</span>
                                 {#if (p.fallback ?? []).includes(k)}
-                                  <span class="num text-xs text-faint">{p.fallback.indexOf(k) + 1}</span>
+                                  <span class="num text-sm text-faint">{p.fallback.indexOf(k) + 1}</span>
                                 {/if}
                               </label>
                             {/each}
@@ -1568,20 +1545,42 @@
           {#if !d.reviewLegacy && providers().length === 0}
             <div class="rounded border border-edge/60 px-3 py-3">
               <p class="text-ink">No review pass configured.</p>
-              <div class="copy mt-1 text-sm text-faint"><HelpText label="review providers" summary="Add a provider to enable reviews." detail="A provider runs a QA pass over each pull request and routes its findings back — to the worker agent, the PR, or
-                the Linear issue. Add one below to turn reviews on." /></div>
+
             </div>
           {/if}
 
           {#if !d.reviewLegacy && missingKinds().length}
-            <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
-              <span class="text-sm text-faint">Add provider:</span>
-              {#each missingKinds() as k}
-                <Button variant="secondary" class="whitespace-normal! text-left" title={kindLabel(k)} onclick={() => addProvider(k)}>{providerName(k)}</Button>
-              {/each}
-            </div>
+            <Disclosure label="Add provider">
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                {#each missingKinds() as k}
+                  <Button variant="secondary" class="whitespace-normal! text-left" title={kindLabel(k)} onclick={() => addProvider(k)}>{providerName(k)}</Button>
+                {/each}
+              </div>
+            </Disclosure>
           {/if}
+          </div>
+          </TeamLock>
+          <Disclosure label="Specialist reviewers" hint={d.reviewProfiles?.length ? `${d.reviewProfiles.length} configured` : "Optional"}>
+            <div class="mt-3">
+              <ReviewProfiles bind:profiles={d.reviewProfiles} specialties={d.reviewSpecialties ?? []} providers={d.reviewProviders ?? []} kinds={reviewKinds} />
+            </div>
+          </Disclosure>
         </div>
+      {/if}
+      <!-- The Team hub tab stays MOUNTED once visited: its drafts (a key being
+           typed, a number not valid yet) must survive a look at another tab,
+           so the overlay's Save can lead back to them instead of losing them. -->
+      {#if hubVisited}
+        <section hidden={tab !== "hub"}>
+          {@render head("Team hub")}
+          <HubSettings values={d} policy={teamPolicy} onChange={(patch) => Object.assign(d, patch)}
+            onSaved={(patch) => {
+              // Already in config.toml: the values AND the dirty baseline take it.
+              Object.assign(d, patch);
+              if (loaded) loaded = { ...loaded, ...($state.snapshot(patch) as Partial<SettingsDTO>) };
+            }}
+            onIdentityChange={() => void loadTeamPolicy()} onOpenTab={selectTab} onDirty={(v) => (hubDirty = v)} />
+        </section>
       {/if}
     </div>
     </div>
@@ -1594,7 +1593,7 @@
   {#if saveErr}
     <div role="alert" class="mb-3 flex max-h-32 items-start gap-2 overflow-auto rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
-      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}>✕</Button>
+      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}><Icon name="x" size={14} /></Button>
     </div>
   {/if}
 
@@ -1608,8 +1607,32 @@
 </Modal>
 
 <style>
-  @media (max-width: 760px) {
-    :global(.settings-field) { grid-template-columns: minmax(0, 1fr); gap: 0.375rem; }
+  .settings-content { container-type: inline-size; }
+  .settings-heading, .settings-content :global([data-ssh-settings] > h3) {
+    margin-bottom: 24px;
+    font-size: 18px;
+    line-height: 24px;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .settings-content :global(.settings-field > :first-child) { color: var(--color-ink); }
+  .settings-content :global(input[type="number"]) { width: 7.5rem; max-width: 100%; }
+  .settings-content :global(.settings-field > span) { min-width: 0; }
+  .settings-nav :global([role="tablist"] > .label) {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding-left: 8px;
+    padding-top: 24px;
+    padding-bottom: 4px;
+  }
+  .settings-nav :global([role="tablist"] > .label:first-child) { padding-top: 0; }
+  .settings-nav :global([role="tab"]) { padding-left: 20px; }
+  .settings-nav :global([role="tab"][aria-selected="false"]) { color: var(--color-ink-2); }
+  .settings-nav :global([role="tab"][aria-selected="false"]:hover) { color: var(--color-ink); }
+  @container (max-width: 440px) {
+    .settings-content :global(.settings-field) { grid-template-columns: minmax(0, 1fr); gap: 0.375rem; }
   }
   @media (max-width: 540px) {
     .settings-layout { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }

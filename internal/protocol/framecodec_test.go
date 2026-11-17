@@ -330,7 +330,9 @@ func TestFrameDirections(t *testing.T) {
 		{FrameErr, true, true},
 		{"", false, false},
 		{"REQ", false, false},
-		{"event", false, false},
+		{FrameEvent, false, true},
+		{FrameReady, false, true},
+		{"notify", false, false},
 	}
 	for _, tc := range tests {
 		if got := DaemonAcceptsFrame(tc.typ); got != tc.toDaemon {

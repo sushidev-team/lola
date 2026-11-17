@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import Button from "./Button.svelte";
 
   // A project FOLDER's row. It sits in the project list beside the projects
@@ -46,14 +47,14 @@
      right edge and left the row looking permanently mid-hover. -->
 <div
   data-head
-  class="group/row relative flex h-7 w-full items-center rounded-md text-faint transition-colors hover:bg-sel/60 hover:text-ink"
+  class="sidebar-nav-row group/row relative flex h-7 w-full items-center rounded-md text-faint hover:bg-sel/60 hover:text-ink"
   class:opacity-40={dragging}
   class:bg-accent-fill={dropTarget}
   class:text-accent-ink={dropTarget}
   {onpointerdown}
 >
   <button
-    class="flex h-full min-w-0 grow items-center gap-2 rounded-md px-2 text-left group-hover/row:pr-14 group-focus-within/row:pr-14"
+    class="flex h-full min-w-0 grow cursor-pointer items-center gap-2 rounded-md px-2 text-left group-hover/row:pr-14 group-focus-within/row:pr-14"
     aria-expanded={!collapsed}
     title={collapsed ? "expand group" : "collapse group"}
     onclick={ontoggle}
@@ -64,40 +65,32 @@
          two characters could not animate between states. This is the sidebar's
          own icon language (see the project row's gear) at the same 14px as the
          glyph column it sits in, and it ROTATES rather than swapping shape. -->
-    <svg
-      viewBox="0 0 24 24"
-      class="h-3.5 w-3.5 shrink-0 transition-transform duration-150"
-      class:rotate-90={!collapsed}
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2.5"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M9 5l7 7-7 7" />
-    </svg>
+    <Icon name="chevron-right" class="h-3.5 w-3.5 shrink-0 transition-transform duration-150 {!collapsed ? 'rotate-90' : ''}" />
     <span class="truncate font-medium">{label}</span>
     <!-- Always rendered, 0 included: a count that appears and vanishes as
          projects move in and out makes the whole list jump. It steps aside for
          the actions on hover — they share this slot rather than queueing up
          beside it, which is what keeps the count on the right edge at rest. -->
     <span
-      class="num ml-auto shrink-0 pl-2 text-sm transition-opacity group-hover/row:opacity-0 group-focus-within/row:opacity-0"
+      class="num ml-auto shrink-0 pl-2 text-sm group-hover/row:opacity-0 group-focus-within/row:opacity-0"
       class:text-faint={!dropTarget}>{count}</span
     >
   </button>
   <!-- data-drag-ignore: controls, not drag handles (see SidebarProjects).
        ABSOLUTE, so at rest they cost no width — see the wrapper's comment. -->
   <span
-    class="absolute right-2 flex items-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100"
+    class="absolute right-2 flex items-center opacity-0 group-hover/row:opacity-100 focus-within:opacity-100"
     data-drag-ignore
   >
-    <Button size="xs" icon title="rename group" aria-label="Rename {label}" onclick={onrename}>✎</Button>
+    <Button size="xs" icon title="rename group" aria-label="Rename {label}" onclick={onrename}><Icon name="pencil" size={14} /></Button>
     <!-- Deleting a folder never deletes a project — they return to the top
          level — but it is still irreversible arrangement, so it confirms. -->
     <Button size="xs" icon variant="danger" title="remove group" aria-label="Remove {label}" onclick={onremove}
-      >✕</Button
+      ><Icon name="x" size={14} /></Button
     >
   </span>
 </div>
+
+<style>
+  .sidebar-nav-row :global(button) { transition:none; }
+</style>

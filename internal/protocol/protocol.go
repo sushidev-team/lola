@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// GoalStartV2 explicitly requires support for reviewed rollout and separate
+// human acceptance policies. An older daemon must reject the command instead
+// of silently ignoring newly added JSON fields. Clients never fall back.
+const GoalStartV2 = "goalStartV2"
+
 // Request is one line of JSON sent by a client.
 //
 // Cmd "hookEvent" is the Claude Code → daemon callback path: `lola hook
@@ -35,6 +40,9 @@ import (
 // anyway. The daemon always terminates the agent's tmux session first; a clean
 // worktree is then removed and the store entry dropped, while a dirty one is
 // kept unless Force is set (the reply is KillData / an error either way).
+// KeepWorktree stops the agent (and its aux tmux sessions) but leaves the
+// worktree, branch and store entry in place — the session reads dead and can be
+// revived later. It wins over Force.
 //
 // Cmd "revive" is the inverse of a death: Session names a session whose pane
 // died but whose worktree survives, and the daemon relaunches its agent in
@@ -148,21 +156,11 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 //
-// Cmd "pairBegin" asks for everything a phone needs to reach this daemon's
-// remote listener — addresses, port, SPKI pin and, in an M1 build, the bearer
-// key — as PairBeginData. It takes no arguments: the answer describes the
-// LISTENER THAT IS RUNNING, which is the whole point of asking the daemon
-// rather than reading a file. ~/.lola/remote-dev-key is only the live key when
-// the script that wrote it also started the daemon, and a desktop that rendered
-// a code from a stale file would produce a scan the daemon refuses with
-// "authenticate first" — indistinguishable from a bad camera read.
-//
-// It is refused for every REMOTE peer unconditionally (see internal/remote's
-// deniedCommands, which has listed it since before it existed): enrolment is a
-// local operation at the machine, and a phone that could ask for the key could
-// enrol a second device that survives revoking the first. Over the unix socket
-// it is answered, because anything that can open ~/.lola/lola.sock already
-// reaches cmd=answer and therefore already has more than the key grants.
+// Cmd "pairBegin" opens a pairing window and returns the QR payload a phone scans
+// (PairBeginArgs → PairBeginData, devices.go). Like every pairing and device
+// command (LocalOnlyCommands) it is answered on the unix socket only: enrolment is
+// a local act at the machine, and a phone that could start one could enrol a
+// second device that survives revoking the first.
 //
 // Cmd "plan" runs the orchestrator's PLANNING pass on one Linear issue: Args is
 // PlanArgs naming it (identifier or UUID). The daemon runs one bounded headless
@@ -176,12 +174,8 @@ import (
 // sub-issue until its blockers are done or merged, and holds the parent while
 // any sub-issue is open. A parent that already has sub-issues is refused. The
 // reply is PlanApplyData.
-//
-// The handler is TAG-SPLIT. A release binary has no bearer-key path at all, so
-// it answers with an error naming that rather than an empty code; only a
-// -tags lola_insecure daemon can fill PairBeginData.Key.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|agentReport|plan|planApply|planSubmit|planDecide|planGate
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|pairStatus|pairConfirm|pairReject|devices|revokeDevice|setDeviceTiers|sessionTimeline|relayCred|agentReport|plan|planApply|planSubmit|planDecide|planGate
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -213,6 +207,11 @@ type Request struct {
 	// uncommitted changes. Deliberate CLI-only friction (`lola kill <id>
 	// --force`); the TUI never sets it.
 	Force bool `json:"force,omitempty"`
+
+	// KeepWorktree is set only for cmd=kill: stop the agent and its tmux
+	// sessions but leave the worktree, branch and store entry untouched (the
+	// session reads dead and `lola revive` brings it back). Wins over Force.
+	KeepWorktree bool `json:"keepWorktree,omitempty"`
 
 	// Text is the human's answer for cmd=answer — typed verbatim into the
 	// session's pane (send-keys appends Enter).
@@ -442,21 +441,25 @@ type SessionApp struct {
 // SessionInfo is one observed session, flattened to render-ready strings and
 // ints so the TUI never needs scm/session imports or re-derivation.
 type SessionInfo struct {
-	ID       string `json:"id"`
-	Project  string `json:"project"`
-	Issue    string `json:"issue"`  // Linear identifier, e.g. ENG-123
-	Title    string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
-	Branch   string `json:"branch"` // "" when unknown
-	Agent    string `json:"agent"`  // coding-agent kind driving the pane: claude|codex|opencode ("" = legacy claude)
-	Status   string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
-	PRURL    string `json:"prUrl"`
-	PRNumber int    `json:"prNumber"` // 0 when no PR observed
-	Checks   string `json:"checks"`   // pass|fail|pending|none, "" when no PR
-	Review   string `json:"review"`   // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED, "" otherwise
-	TmuxName string `json:"tmuxName"` // "" when no tmux session correlates
-	Source   string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
-	Worktree string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
-	Age      string `json:"age"`      // concise age since first observed, e.g. "2h" or "Oct 4"
+	Location  string `json:"location,omitempty"`
+	GoalID    string `json:"goalId,omitempty"`
+	TaskID    string `json:"taskId,omitempty"`
+	AttemptID string `json:"attemptId,omitempty"`
+	ID        string `json:"id"`
+	Project   string `json:"project"`
+	Issue     string `json:"issue"`  // Linear identifier, e.g. ENG-123
+	Title     string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
+	Branch    string `json:"branch"` // "" when unknown
+	Agent     string `json:"agent"`  // coding-agent kind driving the pane: claude|codex|opencode ("" = legacy claude)
+	Status    string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
+	PRURL     string `json:"prUrl"`
+	PRNumber  int    `json:"prNumber"` // 0 when no PR observed
+	Checks    string `json:"checks"`   // pass|fail|pending|none, "" when no PR
+	Review    string `json:"review"`   // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED, "" otherwise
+	TmuxName  string `json:"tmuxName"` // "" when no tmux session correlates
+	Source    string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
+	Worktree  string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
+	Age       string `json:"age"`      // concise age since first observed, e.g. "2h" or "Oct 4"
 
 	FirstSeen time.Time `json:"firstSeen,omitzero"` // raw session age origin for live client formatting
 
@@ -549,12 +552,24 @@ type SessionInfo struct {
 	// it has reported nothing. A CLAIM, not a fact: render it as the agent's
 	// own words, beside — never instead of — the axes above, and fade it as
 	// Board.UpdatedAt ages (agents forget to report).
-	Board *BoardInfo `json:"board,omitempty"`
+	Board *BoardInfo    `json:"board,omitempty"`
+	Tasks []SessionTask `json:"tasks,omitempty"`
+
+	// Hub is set for a session working a lola-hub item (nil otherwise, so
+	// mobile/ and older clients see nothing new).
+	Hub *HubSessionHub `json:"hub,omitempty"`
 
 	// FeedbackPending is true while a human's diff-viewer feedback
 	// (cmd=feedback) is queued for this session's agent, waiting for the pane to
 	// be verifiably resting at its prompt.
 	FeedbackPending bool `json:"feedbackPending,omitempty"`
+
+	// ReviewRunning is true while a review pass runs for this session.
+	// ReviewTallies are the findings of each review kind's last answered pass
+	// on the CURRENT PR, by kind; a kind with no entry has not reviewed this
+	// PR. Display only: nothing on a client may gate on them.
+	ReviewRunning bool              `json:"reviewRunning,omitempty"`
+	ReviewTallies []ReviewTallyInfo `json:"reviewTallies,omitempty"`
 
 	// Usage is this session's token usage (internal/usage), nil when nothing
 	// is known yet — no transcript written, or an agent whose logs lola cannot
@@ -584,6 +599,21 @@ type SessionInfo struct {
 	// BestOf is set while this session is one attempt of a best-of-N group
 	// (cmd=bestOf), nil for an ordinary session.
 	BestOf *BestOfInfo `json:"bestOf,omitempty"`
+	// SSH is the session's agent-assisted ssh state (ssh.go), nil when it has
+	// never touched a host.
+	SSH *SSHSessionInfo `json:"ssh,omitempty"`
+}
+
+// ReviewTallyInfo is one review kind's findings counted by severity on the
+// session's current PR. All zero is a clean pass. At is when the pass
+// answered (a timestamp, not a formatted age).
+type ReviewTallyInfo struct {
+	Kind    string    `json:"kind"`
+	Blocker int       `json:"blocker,omitempty"`
+	Major   int       `json:"major,omitempty"`
+	Minor   int       `json:"minor,omitempty"`
+	Other   int       `json:"other,omitempty"`
+	At      time.Time `json:"at,omitzero"`
 }
 
 // BestOfInfo places a session in its best-of-N group. Winner is set on the
@@ -812,12 +842,19 @@ type PrRow struct {
 // (off Base, empty → the project's default branch) in a fresh worktree. With
 // Agent set it launches the coding agent (seeded with Prompt); otherwise a plain
 // shell. The reply is the shared OpenData.
+// Existing (cmd=openExisting) instead works directly on Branch without owning
+// it, ignoring Base. A distinct command keeps older daemons from creating it.
 type OpenManualArgs struct {
-	Project string `json:"project"`
-	Branch  string `json:"branch"`
-	Base    string `json:"base,omitempty"`
-	Agent   bool   `json:"agent,omitempty"`  // launch the coding agent instead of a shell
-	Prompt  string `json:"prompt,omitempty"` // seed prompt when Agent is set
+	AIAction string `json:"aiAction,omitempty"` // resolve selects the provider-specific AI profile for a new checkout session
+	Name     string `json:"name,omitempty"`
+	Location string `json:"location,omitempty"` // worktree (default), main, checkout (borrowed), temporary
+	Path     string `json:"path,omitempty"`     // temporary shell or registered borrowed checkout directory
+	Project  string `json:"project"`
+	Branch   string `json:"branch"`
+	Base     string `json:"base,omitempty"`
+	Existing bool   `json:"existing,omitempty"` // use Branch directly; Base is ignored and the branch is never deleted
+	Agent    bool   `json:"agent,omitempty"`    // launch the coding agent instead of a shell
+	Prompt   string `json:"prompt,omitempty"`   // seed prompt when Agent is set
 	// AgentKind optionally overrides WHICH coding agent runs (claude|codex|
 	// opencode) instead of the project's configured default. "" = configured.
 	AgentKind string `json:"agentKind,omitempty"`
@@ -1387,6 +1424,10 @@ type ReviewData struct {
 	Skipped  string `json:"skipped,omitempty"`
 	Findings string `json:"findings,omitempty"`
 	Message  string `json:"message,omitempty"`
+	// Started: the pass was launched detached and has not finished (a
+	// phone's request). Ran, Clean and Findings are then unset; the session
+	// row's reviewRunning and reviewTallies report the outcome.
+	Started bool `json:"started,omitempty"`
 }
 
 // CodeRabbitData is Response.Data for cmd=coderabbit: the outcome of a forced
@@ -1468,51 +1509,36 @@ type ShellCreateData struct {
 	Index   int    `json:"index"`
 }
 
-// PairBeginData is Response.Data for cmd=pairBegin: how to reach this daemon's
-// phone listener, as facts rather than as a picture.
-//
-// Two shapes of the same thing, deliberately. Code is the opaque token a client
-// renders as a QR and the mobile app scans; the loose fields are the same
-// values as text, so a scan is a convenience and never the only way in — a
-// camera that will not focus, a phone with the permission denied, or a
-// Simulator with no camera at all must still be able to connect. Rendering is
-// the CLIENT's job (the desktop draws an SVG, `lola pair` prints half-blocks),
-// so the daemon ships a string and takes no QR dependency.
-//
-// EVERY field of this is a secret while Key is set, and the token especially:
-// it CONTAINS the key. It is never logged by the daemon, never placed in an
-// error, and a client must treat it the way it treats a password — revealed on
-// an explicit action, not left on a screen.
-type PairBeginData struct {
-	// Code is the scannable token (internal/remote.EncodeConnectCode). Empty
-	// when the daemon cannot answer, in which case Problem says why.
-	Code string `json:"code,omitempty"`
+// GoalArgs addresses a durable goal; publishing never authorizes execution.
+type GoalArgs struct {
+	ID string `json:"id"`
+}
 
-	// Hosts is every address the listener actually bound, in bind order, and
-	// Port the port it took. Under -tags lola_insecure the bind is forced to
-	// loopback, so this is 127.0.0.1 and ::1 and a phone reaches them through a
-	// forward — a LAN address must never be printed here, because it is one the
-	// daemon cannot deliver.
-	Hosts []string `json:"hosts,omitempty"`
-	Port  int      `json:"port,omitempty"`
+// BulkProjectsArgs is the argument payload for cmd=bulkProjects: change the
+// same settings on many [[project]] tables at once. Nil fields are left alone.
+// Label fields are references (UUID, name or "group/name") resolved by the
+// daemon against each project's own team, so one name works across teams that
+// give the same label different ids. Projects empty = every project.
+type BulkProjectsArgs struct {
+	Projects       []string  `json:"projects,omitempty"`
+	Agent          *string   `json:"agent,omitempty"`
+	MatchLabels    *[]string `json:"matchLabels,omitempty"`
+	MatchMode      *string   `json:"matchMode,omitempty"`
+	OnSentSetLabel *string   `json:"onSentSetLabel,omitempty"`
+	BlockedLabel   *string   `json:"blockedLabel,omitempty"`
+	DryRun         bool      `json:"dryRun,omitempty"`
+}
 
-	// Pin is the listener's SPKI pin: standard base64 with padding, byte for
-	// byte the value the startup log line carries.
-	Pin string `json:"pin,omitempty"`
+// BulkProjectChange is one project's outcome in BulkProjectsData.
+type BulkProjectChange struct {
+	Project string   `json:"project"`
+	Changed []string `json:"changed,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
 
-	// Key is M1's shared bearer key. Empty in any build without the
-	// lola_insecure path, where Problem names that as the reason.
-	Key string `json:"key,omitempty"`
-
-	// Insecure records that this code carries a shared bearer key with no
-	// device identity and no cryptography, so a client can say so beside it
-	// instead of a reader having to know which build produced it.
-	Insecure bool `json:"insecure,omitempty"`
-
-	// Problem names why there is no code, in one human sentence, when the
-	// daemon can answer the request but not fill it: the listener is not
-	// running, or this build has no way to authenticate a phone. It is a
-	// RENDERED STATE rather than an error so a client shows the reason in place
-	// of the code instead of a failed call with nothing to act on.
-	Problem string `json:"problem,omitempty"`
+// BulkProjectsData is Response.Data for cmd=bulkProjects. When any project has
+// an Error nothing was saved.
+type BulkProjectsData struct {
+	Changes []BulkProjectChange `json:"changes"`
+	Applied bool                `json:"applied"`
 }

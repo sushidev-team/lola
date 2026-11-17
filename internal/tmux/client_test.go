@@ -255,14 +255,18 @@ func TestSendKeysLiteralThenEnter(t *testing.T) {
 	bin, argsLog := fakeTmux(t, "", "", 0)
 	c := &Client{Bin: bin}
 
+	started := time.Now()
 	if err := c.SendKeys(context.Background(), "main", "fix the CI failure"); err != nil {
 		t.Fatalf("SendKeys: %v", err)
+	}
+	if time.Since(started) < submitSettleDelay {
+		t.Error("single-line text must settle before Enter too")
 	}
 	// send-keys also takes a target-PANE, so "=main:" (not "=main"). The
 	// copy-mode cancel comes first: a pane a human scrolled back reads keys as
 	// copy-mode COMMANDS, so the payload would never reach the agent.
 	want := "-L lola copy-mode -q -t =main:\n" +
-		"-L lola send-keys -t =main: -l fix the CI failure\n-L lola send-keys -t =main: Enter"
+		"-L lola send-keys -t =main: -l -- fix the CI failure\n-L lola send-keys -t =main: Enter"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked:\n%s\nwant literal text then Enter:\n%s", args, want)
 	}
@@ -285,7 +289,7 @@ func TestSendKeysProceedsWhenCopyModeCancelFails(t *testing.T) {
 	if err := (&Client{Bin: bin}).SendKeys(context.Background(), "main", "hello"); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
-	if args := loggedArgs(t, argsLog); !strings.Contains(args, "send-keys -t =main: -l hello") {
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "send-keys -t =main: -l -- hello") {
 		t.Errorf("payload not sent after a failed copy-mode cancel:\n%s", args)
 	}
 }
@@ -516,12 +520,12 @@ func TestConfigureSessionEmitsChromeArgv(t *testing.T) {
 	// Every set-option is per-session (-t, never -g); the bind-key is a
 	// root-table entry confined to the lola socket (leading -L lola).
 	want := strings.Join([]string{
-		"-L lola set-option -t =lola-NORI-12-1 status on",
-		"-L lola set-option -t =lola-NORI-12-1 status-left-length 80",
-		"-L lola set-option -t =lola-NORI-12-1 status-right-length 80",
-		"-L lola set-option -t =lola-NORI-12-1 status-left LOLA | NORI-12",
-		"-L lola set-option -t =lola-NORI-12-1 status-right working | detach F12",
-		"-L lola set-option -t =lola-NORI-12-1 mouse on",
+		"-L lola set-option -t =lola-NORI-12-1: status on",
+		"-L lola set-option -t =lola-NORI-12-1: status-left-length 80",
+		"-L lola set-option -t =lola-NORI-12-1: status-right-length 80",
+		"-L lola set-option -t =lola-NORI-12-1: status-left LOLA | NORI-12",
+		"-L lola set-option -t =lola-NORI-12-1: status-right working | detach F12",
+		"-L lola set-option -t =lola-NORI-12-1: mouse on",
 		"-L lola bind-key -n F12 detach-client",
 	}, "\n")
 	if args := loggedArgs(t, argsLog); args != want {
@@ -549,10 +553,10 @@ func TestConfigureSessionDefaultsNoDetachBindingNoMouse(t *testing.T) {
 		t.Errorf("Mouse=false must emit no mouse set-option, got:\n%s", got)
 	}
 	// Brand defaults to LOLA; detach hint defaults to C-b d.
-	if !strings.Contains(got, "-L lola set-option -t =s1 status-left LOLA | NORI-12") {
+	if !strings.Contains(got, "-L lola set-option -t =s1: status-left LOLA | NORI-12") {
 		t.Errorf("status-left should default brand to LOLA, got:\n%s", got)
 	}
-	if !strings.Contains(got, "-L lola set-option -t =s1 status-right idle | detach C-b d") {
+	if !strings.Contains(got, "-L lola set-option -t =s1: status-right idle | detach C-b d") {
 		t.Errorf("status-right should carry status + default detach hint, got:\n%s", got)
 	}
 }
@@ -577,8 +581,8 @@ func TestConfigureSessionStatusBarOffByDefault(t *testing.T) {
 	}
 	// The detach binding and mouse mode are independent of the bar and stay.
 	want := strings.Join([]string{
-		"-L lola set-option -t =s1 status off",
-		"-L lola set-option -t =s1 mouse on",
+		"-L lola set-option -t =s1: status off",
+		"-L lola set-option -t =s1: mouse on",
 		"-L lola bind-key -n F12 detach-client",
 	}, "\n")
 	if args := loggedArgs(t, argsLog); args != want {
@@ -1236,5 +1240,160 @@ func TestNewSessionSendsNoSizeByDefault(t *testing.T) {
 	got := loggedArgs(t, argsLog)
 	if strings.Contains(got, "-x ") || strings.Contains(got, "-y ") {
 		t.Fatalf("an unsized session carried a size:\n%s", got)
+	}
+}
+
+// A secret must reach tmux on stdin and never in an argv, where ps can read it.
+func TestPasteSecretKeepsItOutOfArgv(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\necho \"$@\" >> " + dir + "/argv\nfor a; do [ \"$a\" = load-buffer ] && cat >> " + dir + "/stdin; done\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Bin: bin, SocketName: "x", Dir: dir}
+	const secret = "hunter2-argv-check"
+	if err := c.PasteSecret(context.Background(), "tab", secret); err != nil {
+		t.Fatal(err)
+	}
+	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
+	in, _ := os.ReadFile(filepath.Join(dir, "stdin"))
+	if strings.Contains(string(argv), secret) {
+		t.Fatalf("in argv: %s", argv)
+	}
+	if string(in) != secret {
+		t.Fatalf("stdin = %q", in)
+	}
+	for _, want := range []string{"load-buffer", "paste-buffer -d", "send-keys -t =tab: Enter"} {
+		if !strings.Contains(string(argv), want) {
+			t.Errorf("missing %q in %s", want, argv)
+		}
+	}
+}
+
+func TestPasteSecretAgainstRealTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	sock := fmt.Sprintf("lola-secrettest-%d", os.Getpid())
+	dir := t.TempDir()
+	c := &Client{Bin: "tmux", SocketName: sock, Dir: dir}
+	t.Cleanup(func() { _ = exec.Command("tmux", "-L", sock, "kill-server").Run() })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got := filepath.Join(dir, "got")
+	cmd := `stty -echo; printf 'Password: '; IFS= read -r x; stty echo; printf '%s' "$x" > ` + got + `; echo; echo done; sleep 60`
+	if err := c.NewSession(ctx, "tab", dir, cmd); err != nil {
+		t.Fatal(err)
+	}
+	var in PaneInput
+	for i := 0; i < 50 && !strings.Contains(in.Text, "Password:"); i++ {
+		time.Sleep(100 * time.Millisecond)
+		var err error
+		if in, err = c.PaneInput(ctx, "tab"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !in.Open || !strings.HasSuffix(in.Text, "Password:") {
+		t.Fatalf("PaneInput = %+v", in)
+	}
+	const secret = `p@ss w0rd"'$HOME;~é`
+	// A pane scrolled back must still get it: keys there are copy-mode commands.
+	if _, _, err := c.run(ctx, "copy-mode", "-t", paneTarget("tab")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PasteSecret(ctx, "tab", secret); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if raw, _ = os.ReadFile(got); len(raw) > 0 {
+			break
+		}
+	}
+	if string(raw) != secret {
+		t.Fatalf("the program read %q", raw)
+	}
+	if out, _, _ := c.run(ctx, "list-buffers"); strings.TrimSpace(out) != "" {
+		t.Fatalf("a buffer outlived the paste: %q", out)
+	}
+	if text, _, _ := c.run(ctx, "capture-pane", "-p", "-t", paneTarget("tab")); strings.Contains(text, secret) {
+		t.Fatalf("the pane shows it: %q", text)
+	}
+	in, err := c.PaneInput(ctx, "tab")
+	if err != nil || in.Open {
+		t.Fatalf("after the answer the cursor rests at a line start: %+v %v", in, err)
+	}
+	// A paste that fails must not leave the buffer behind.
+	if err := c.PasteSecret(ctx, "no-such-tab", secret); err == nil {
+		t.Fatal("pasted into nothing")
+	} else if strings.Contains(err.Error(), secret) {
+		t.Fatalf("the error carries it: %v", err)
+	}
+	if out, _, _ := c.run(ctx, "list-buffers"); strings.TrimSpace(out) != "" {
+		t.Fatalf("a failed paste left a buffer: %q", out)
+	}
+}
+
+// CaptureVisible must read the screen and nothing above it, or the rows would not line
+// up with the cursor's Y.
+func TestCaptureVisibleHasNoScrollback(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "on screen", "", 0)
+	got, err := (&Client{Bin: bin}).CaptureVisible(context.Background(), "main")
+	if err != nil || !strings.Contains(got, "on screen") {
+		t.Fatalf("CaptureVisible = %q, %v", got, err)
+	}
+	if args := loggedArgs(t, argsLog); args != "-L lola capture-pane -p -e -t =main:" {
+		t.Errorf("invoked %q", args)
+	}
+}
+
+func TestPaneCursorReadsTheCursor(t *testing.T) {
+	for _, tc := range []struct {
+		out  string
+		want Cursor
+		bad  bool
+	}{
+		{out: "2 17 1", want: Cursor{X: 2, Y: 17, Visible: true}},
+		{out: "0 3 0", want: Cursor{X: 0, Y: 3, Visible: false}},
+		{out: "", bad: true},
+		{out: "2 17", bad: true},
+		{out: "a 17 1", bad: true},
+		{out: "2 17 maybe", bad: true}, // never read an unknown flag as hidden or shown
+	} {
+		bin, argsLog := fakeTmux(t, tc.out, "", 0)
+		got, err := (&Client{Bin: bin}).PaneCursor(context.Background(), "main")
+		if (err != nil) != tc.bad || got != tc.want {
+			t.Errorf("%q: PaneCursor = %+v, %v", tc.out, got, err)
+		}
+		if args := loggedArgs(t, argsLog); args != "-L lola display-message -p -t =main: #{cursor_x} #{cursor_y} #{cursor_flag}" {
+			t.Errorf("invoked %q", args)
+		}
+	}
+	bin, _ := fakeTmux(t, "", "no session", 1)
+	if _, err := (&Client{Bin: bin}).PaneCursor(context.Background(), "gone"); err == nil {
+		t.Error("a failed query must be an error, never a zero cursor")
+	}
+}
+
+func TestSendKeyPressesOneLetterOrDigit(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	if err := (&Client{Bin: bin}).SendKey(context.Background(), "main", "1"); err != nil {
+		t.Fatalf("SendKey: %v", err)
+	}
+	want := "-L lola copy-mode -q -t =main:\n-L lola send-keys -t =main: -l 1"
+	if args := loggedArgs(t, argsLog); args != want {
+		t.Errorf("invoked:\n%s\nwant no Enter and copy mode left first:\n%s", args, want)
+	}
+	for _, key := range []string{"", "12", ";", "-", "\r", "\x1b", " "} {
+		bin, argsLog := fakeTmux(t, "", "", 0)
+		if err := (&Client{Bin: bin}).SendKey(context.Background(), "main", key); err == nil {
+			t.Errorf("SendKey(%q) was accepted", key)
+		}
+		if raw, _ := os.ReadFile(argsLog); len(raw) != 0 {
+			t.Errorf("SendKey(%q) reached tmux: %s", key, raw)
+		}
 	}
 }

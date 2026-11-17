@@ -1,0 +1,13 @@
+
+┌  storybook v10.3.6
+│
+●  Starting...
+│ ╭────────────────────────────────────────────────────╮
+│ │   Storybook ready!                                 │
+│ │                                                    │
+│ │   - Local:                http://localhost:6006/   │
+│ │   - On your network:      http://127.0.0.1:6006/   │
+│ │                                                    │
+│ ╰────────────────────────────────────────────────────╯
+│
+●  150 ms for manager and 329 ms for preview

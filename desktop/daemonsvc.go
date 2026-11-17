@@ -95,10 +95,11 @@ func (s *DaemonService) DecidePlan(session string, approve bool, comment string)
 	return call(protocol.Request{Cmd: "planDecide", Session: session, Args: args}, shortTimeout, nil)
 }
 
-// Kill tears a session down. A dirty worktree is kept unless force is set.
-func (s *DaemonService) Kill(session string, force bool) (protocol.KillData, error) {
+// Kill tears a session down. A dirty worktree is kept unless force is set;
+// keepWorktree stops the agent only and leaves the worktree for a later revive.
+func (s *DaemonService) Kill(session string, force, keepWorktree bool) (protocol.KillData, error) {
 	var d protocol.KillData
-	err := call(protocol.Request{Cmd: "kill", Session: session, Force: force}, shortTimeout, &d)
+	err := call(protocol.Request{Cmd: "kill", Session: session, Force: force, KeepWorktree: keepWorktree}, shortTimeout, &d)
 	return d, err
 }
 
@@ -269,11 +270,30 @@ func (s *DaemonService) Open(project, ref string) (protocol.OpenData, error) {
 	return d, err
 }
 
-// OpenManual starts a new branch off a base as an agent or a plain shell.
+// CloseExitedTemporary retires a local shell only once all its panes are gone.
+// The original binding name is retained for existing clients.
+func (s *DaemonService) CloseExitedTemporary(id string) (protocol.KillData, error) {
+	var data protocol.KillData
+	err := call(protocol.Request{Cmd: "closeExitedTemporary", Session: id}, shortTimeout, &data)
+	return data, err
+}
+
+// RenameSession changes a display name without changing the branch or session ID.
+func (s *DaemonService) RenameSession(id, name string) error {
+	return call(protocol.Request{Cmd: "renameSession", Session: id, Text: name}, shortTimeout, nil)
+}
+
+// OpenManual starts an agent or shell in a worktree or borrowed directory.
 func (s *DaemonService) OpenManual(a protocol.OpenManualArgs) (protocol.OpenData, error) {
 	args, _ := json.Marshal(a)
 	var d protocol.OpenData
-	err := call(protocol.Request{Cmd: "openManual", Args: args}, longTimeout, &d)
+	cmd := "openManual"
+	if a.Existing {
+		// A daemon predating branch reuse must reject this request, not ignore
+		// the new field and create an owned branch from the wrong base.
+		cmd = "openExisting"
+	}
+	err := call(protocol.Request{Cmd: cmd, Args: args}, longTimeout, &d)
 	return d, err
 }
 
@@ -470,7 +490,8 @@ func (s *DaemonService) stopLocked() error {
 	if err := call(protocol.Request{Cmd: "stop"}, shortTimeout, nil); err != nil {
 		return err
 	}
-	return waitDaemon(false, 10*time.Second)
+	// A graceful stop finishes the observer cycle and any spawn in flight.
+	return waitDaemon(false, 30*time.Second)
 }
 
 // RestartDaemon stops (if up), waits for the socket to clear, then respawns. It
@@ -498,4 +519,34 @@ func waitDaemon(wantAlive bool, timeout time.Duration) error {
 		return errors.New("timed out waiting for daemon to start")
 	}
 	return errors.New("timed out waiting for daemon to stop")
+}
+
+// SessionTask updates the shared task board. User additions also enter the conversation.
+func (s *DaemonService) SessionTask(session string, argv []string) ([]protocol.SessionTask, error) {
+	args, _ := json.Marshal(protocol.ReportArgs{Argv: argv})
+	var tasks []protocol.SessionTask
+	err := call(protocol.Request{Cmd: "sessionTask", Session: session, Args: args}, longTimeout, &tasks)
+	return tasks, err
+}
+
+// PRReadiness reads current GitHub facts and unresolved review conversations.
+func (s *DaemonService) PRReadiness(session string, number int) (protocol.PRReadinessData, error) {
+	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number})
+	var d protocol.PRReadinessData
+	err := call(protocol.Request{Cmd: "prReadiness", Session: session, Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// AddressPRFeedback asks the coding agent to validate, fix, and resolve feedback.
+func (s *DaemonService) AddressPRFeedback(session string, number int) (protocol.AgentSayData, error) {
+	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number})
+	var d protocol.AgentSayData
+	err := call(protocol.Request{Cmd: "addressPRFeedback", Session: session, Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// MergePR rechecks GitHub and merges only the PR head the user confirmed.
+func (s *DaemonService) MergePR(session string, number int, repo, head, method string, confirmUnready bool) error {
+	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number, Repo: repo, Head: head, Method: method, ConfirmUnready: confirmUnready})
+	return call(protocol.Request{Cmd: "mergePR", Session: session, Args: args}, longTimeout, nil)
 }

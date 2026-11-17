@@ -1,4 +1,5 @@
 <script lang="ts">
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import type { Snippet } from "svelte";
 
   // The single definition of sidebar row density, so the triage rows and the
@@ -15,9 +16,11 @@
   // The wrapper owns the background so hover/active still cover the actions.
   let {
     label,
+    labelContent,
     count,
     glyph = "",
     glyphCls = "",
+    icon,
     active = false,
     dim = false,
     title,
@@ -27,16 +30,20 @@
     actions,
   }: {
     label: string;
+    /** Optional rich label. */
+    labelContent?: Snippet;
     /** Rendered even when 0 — a nav whose counts appear and vanish is jumpy. */
     count?: number;
     /** ≤1-char leading glyph. The slot is always reserved so labels line up. */
     glyph?: string;
     glyphCls?: string;
+    /** Drawn icon in the same leading column, replacing the text glyph. */
+    icon?: Snippet;
     active?: boolean;
     /** Quieten the label (a project whose polls are off), never the whole row. */
     dim?: boolean;
     title?: string;
-    onclick: () => void;
+    onclick: (event: MouseEvent) => void;
     /** Optional key handling ON THE ROW's own control (the sidebar's alt+arrow
      *  reorder). Left undefined by every other caller. */
     onkeydown?: (e: KeyboardEvent) => void;
@@ -55,31 +62,41 @@
   // text was carrying the entire selected state on its own. The `text-ink` /
   // `text-faint` split is the one signal that survives both flavors.
   const rowCls = $derived(
-    "group/row flex h-7 w-full items-center rounded-md transition-colors " +
+    "sidebar-nav-row group/row relative flex h-7 w-full items-center rounded-md " +
       (active ? "bg-sel text-ink" : "text-faint hover:bg-sel/60 hover:text-ink"),
   );
 </script>
 
 <div class={rowCls} {title}>
   <button
-    class="flex h-full min-w-0 grow items-center gap-2 rounded-md px-2 text-left"
+    class="flex h-full min-w-0 grow cursor-pointer items-center gap-2 rounded-md px-2 text-left"
     aria-current={active ? "true" : undefined}
     {onclick}
     {onkeydown}
   >
-    <span class="w-3.5 shrink-0 text-center text-sm {glyphCls}" aria-hidden="true">{glyph}</span>
-    <span class="truncate" class:font-medium={active} class:text-faint={dim && !active}>{label}</span>
+    <span class="flex w-3.5 shrink-0 items-center justify-center text-sm {glyphCls}" aria-hidden="true">
+      {#if icon}{@render icon()}{:else}<GlyphIcon {glyph} />{/if}
+    </span>
+    <span class="truncate" class:font-medium={active} class:text-faint={dim && !active}>{#if labelContent}{@render labelContent()}{:else}{label}{/if}</span>
     {#if count !== undefined}
       <span class="num ml-auto shrink-0 text-sm text-faint">{count}</span>
     {/if}
   </button>
-  {#if badges}
-    <span class="flex shrink-0 items-center gap-1 pr-2">{@render badges()}</span>
-  {/if}
-  {#if actions}
-    <span
-      class="flex shrink-0 items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100"
-      >{@render actions()}</span
-    >
+  {#if badges || actions}
+    <!-- Badges keep their place at the right edge. The actions float over the label's trailing end,
+         just left of them (right-full), so they never cover a badge or reserve space. -->
+    <span class="relative flex shrink-0 items-center gap-1 pr-2">
+      {#if actions}
+        <span
+          class="pointer-events-none absolute inset-y-0 right-full flex items-center rounded-md bg-sel pr-1 pl-1 opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+          >{@render actions()}</span
+        >
+      {/if}
+      {#if badges}{@render badges()}{/if}
+    </span>
   {/if}
 </div>
+
+<style>
+  .sidebar-nav-row :global(button) { transition:none; }
+</style>

@@ -437,7 +437,7 @@ func TestSendsWaitOutARestore(t *testing.T) {
 	}()
 	<-ck.inRestore
 	sent := make(chan error, 1)
-	go func() { sent <- d.typeToAgent(ctx, s.ID, s.TmuxName, "hello", time.Second) }()
+	go func() { sent <- d.typeToAgent(ctx, typedNote{Session: s.ID}, s.ID, s.TmuxName, "hello", time.Second) }()
 	select {
 	case <-sent:
 		t.Fatal("a send went through while the restore was replacing files")

@@ -25,7 +25,7 @@
 // the live `Flavor`, applied the same way and at the same moment the shared
 // tokens are.
 
-import { mix, readable, type Flavor } from "$lib/catppuccin";
+import { mix, onFill, panelBg, readable, toTokens, visible, type Flavor } from "$lib/catppuccin";
 
 /**
  * How far `edge-soft` sits from the app ground toward the selected-row band.
@@ -49,6 +49,51 @@ export const EDGE_SOFT_T = 0.74;
  */
 export const PILL_SOFT_T = 0.22;
 
+export const SHEET_SHADOW_DARK = "0 -8px 24px rgb(0 0 0 / 0.32)";
+export const SHEET_SHADOW_LIGHT = "0 -8px 24px rgb(0 0 0 / 0.10)";
+
+/** A `Spring` option set (`svelte/motion`) and the settle time it produces. */
+export interface SpringSpec {
+  stiffness: number;
+  damping: number;
+}
+
+/**
+ * Motion constants (spec §6.4). Durations are the settle times the springs
+ * produce; the CSS-driven ones are milliseconds.
+ */
+export const MOTION = {
+  push: { stiffness: 0.12, damping: 0.85 } satisfies SpringSpec,
+  sheet: { stiffness: 0.15, damping: 0.82 } satisfies SpringSpec,
+  /** Reduced motion replaces every translation with a fade of this length. */
+  reducedFadeMs: 150,
+  bannerMs: 200,
+  /** Left-edge swipe: the touch must start within this many pt of the edge. */
+  edgeSwipeStartPt: 20,
+  /** Release faster than this (pt/s) or past `popFraction` of the width pops. */
+  popVelocity: 500,
+  popFraction: 0.35,
+  /** Sheet dismiss: drag past this fraction of the height or faster than this (pt/s). */
+  dismissFraction: 0.3,
+  dismissVelocity: 800,
+} as const;
+
+/**
+ * Sheet detents. `fit` (the default) is as tall as the content under a cap; `medium` and `large`
+ * are fractions of the container; `full` is 100% minus the top safe area.
+ */
+export const DETENT = { medium: 0.52, large: 0.92 } as const;
+export type Detent = keyof typeof DETENT | "full" | "fit";
+
+/** True when the person asked the system for less motion. */
+export function reducedMotion(): boolean {
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The mobile-only tokens for one flavor, in the shape `applyFlavor` writes.
  *
@@ -63,6 +108,18 @@ export function mobileTokens(f: Flavor): Record<string, string> {
   // walk every other status colour in this app takes.
   const urgentSoft = mix(f.peach, f.base, PILL_SOFT_T);
   const brokenSoft = mix(f.red, f.base, PILL_SOFT_T);
+
+  // The accent fill is the shared token's own derivation (`visible` on the three grounds); the
+  // filled primary button labels it, measured: dark text on the dark flavors, white on latte and
+  // GitHub Light, always >= 4.5:1.
+  const surface = panelBg(f);
+  const accent = visible(f.sky, f.mantle, surface, f.surface0);
+  const onAccent = readable(onFill(f, accent), accent);
+
+  // The filled primary: dark flavors keep the accent under its measured label; light flavors
+  // put the base ground on a fill walked darker until that label clears 4.5:1.
+  const primaryFill = f.dark ? accent : readable(accent, f.base);
+  const onPrimary = f.dark ? onAccent : f.base;
 
   return {
     // The chrome ground: the tab bar and the accessory bar. One step BELOW the
@@ -84,6 +141,23 @@ export function mobileTokens(f: Flavor): Record<string, string> {
     "--color-pill-urgent-soft-fg": readable(f.peach, urgentSoft),
     "--color-pill-broken-soft": brokenSoft,
     "--color-pill-broken-soft-fg": readable(f.red, brokenSoft),
+
+    // Text on the one filled primary.
+    "--color-on-accent": onAccent,
+
+    "--color-primary-fill": primaryFill,
+    "--color-on-primary": onPrimary,
+
+    // The selected segment's thumb: lighter than its track on dark, the base ground on light.
+    "--color-segment-thumb": f.dark ? f.surface1 : f.base,
+    "--segment-thumb-shadow": f.dark ? "0 1px 3px rgb(0 0 0 / 0.3)" : "0 0.5px 2px rgb(0 0 0 / 0.12)",
+
+    // The inactive tab label, measured against the (translucent) bar's ground.
+    "--color-tab-idle": readable(toTokens(f)["--color-faint"], f.mantle, f.base),
+
+    // The one shadow of the design (spec §6.2): sheets and the tab bar. Dark
+    // flavors carry it heavier than the light one.
+    "--shadow-sheet": f.dark ? SHEET_SHADOW_DARK : SHEET_SHADOW_LIGHT,
   };
 }
 

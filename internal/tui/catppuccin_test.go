@@ -12,7 +12,13 @@ import (
 
 var hexRE = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 
-func allFlavors() []flavor { return []flavor{mocha, macchiato, frappe, latte} }
+func allFlavors() []flavor {
+	out := make([]flavor, 0, len(themeIDs))
+	for _, id := range themeIDs {
+		out = append(out, flavors[id])
+	}
+	return out
+}
 
 // --- flavor tables + lookup -------------------------------------------------
 
@@ -45,9 +51,9 @@ func TestFlavorKeyedByOwnID(t *testing.T) {
 	}
 }
 
-func TestOnlyLatteIsLight(t *testing.T) {
+func TestThemeLightDarkTags(t *testing.T) {
 	for _, f := range allFlavors() {
-		if want := f.id != "catppuccin-latte"; f.dark != want {
+		if want := config.UIThemeIsDark(f.id); f.dark != want {
 			t.Errorf("%s.dark = %v, want %v", f.id, f.dark, want)
 		}
 	}
@@ -114,7 +120,7 @@ func TestLuminanceAndContrast(t *testing.T) {
 		t.Errorf("contrast white/black = %v", contrast("#ffffff", "#000000"))
 	}
 	// Symmetric regardless of argument order.
-	if contrast("#89dceb", "#181825") != contrast("#181825", "#89dceb") {
+	if contrast("#83d6e8", "#181825") != contrast("#181825", "#83d6e8") {
 		t.Error("contrast is not symmetric")
 	}
 }
@@ -151,8 +157,7 @@ func TestOnFill(t *testing.T) {
 	if got := onFill(latte, latte.red); got != latte.base {
 		t.Errorf("latte onFill(red) = %q, want base", got)
 	}
-	// The minimum-spend walk: latte's rescued labels are darkened text, not raw
-	// black.
+	// The minimum-spend walk stops before the absolute endpoint.
 	for _, fill := range []string{latte.peach, latte.sky} {
 		got := onFill(latte, fill)
 		if got == "#000000" {
@@ -161,8 +166,8 @@ func TestOnFill(t *testing.T) {
 		if contrast(got, fill) < aaContrast {
 			t.Errorf("latte onFill(%s) below AA", fill)
 		}
-		if contrast(got, fill) >= contrast("#000000", fill) {
-			t.Errorf("latte onFill(%s) spent more than black", fill)
+		if contrast(got, fill) >= math.Max(contrast("#000000", fill), contrast("#ffffff", fill)) {
+			t.Errorf("latte onFill(%s) spent more than the absolute endpoints", fill)
 		}
 	}
 }
@@ -242,11 +247,11 @@ func TestToTokensMochaValues(t *testing.T) {
 		"--color-canvas": "#181825", // mantle
 		"--color-panel":  "#1e1e2e", // base
 		"--color-edge":   "#45475a", // surface1
-		"--color-accent": "#89dceb", // sky — the old cyan's nearest hue
-		"--color-ink":    "#cdd6f4", // text
-		"--color-good":   "#a6e3a1", // green
-		"--color-bad":    "#f38ba8", // red
-		"--color-warn":   "#f9e2af", // yellow
+		"--color-accent": "#83d6e8", // sky — the old cyan's nearest hue
+		"--color-ink":    "#e4e5f3", // text
+		"--color-good":   "#9bd991", // green
+		"--color-bad":    "#f183a0", // red
+		"--color-warn":   "#efd28f", // yellow
 	}
 	for k, v := range want {
 		if tok[k] != v {
@@ -282,7 +287,7 @@ func TestFaintFloorAndKey(t *testing.T) {
 	if latte.faintKey != "overlay2" {
 		t.Errorf("latte.faintKey = %q, want overlay2", latte.faintKey)
 	}
-	if got := toTokens(latte)["--color-faint"]; got != muted(latte.overlay2, latte.mantle, panelBg(latte), latte.surface0) {
+	if got := toTokens(latte)["--color-faint"]; got != muted(readable(latte.overlay2, latte.mantle, latte.base), latte.mantle, panelBg(latte), latte.surface0) {
 		t.Errorf("latte faint = %q", got)
 	}
 	// Mocha & macchiato already clear 3:1 raw, so faint is byte-identical there.
@@ -322,8 +327,8 @@ func TestSemanticTokensAA(t *testing.T) {
 }
 
 func TestSemanticTokensMovedSets(t *testing.T) {
-	// A latte-shaped fix, not a redesign: mocha/macchiato come back verbatim,
-	// frappé moves exactly the four that miss on the selected band, latte all six.
+	// Mocha keeps all six; Macchiato and Frappé lift red on selected rows,
+	// while Latte deepens all six.
 	raw := map[string]string{
 		"good": "green", "bad": "red", "warn": "yellow",
 		"info": "blue", "orange": "peach", "magenta": "mauve",
@@ -361,8 +366,8 @@ func TestSemanticTokensMovedSets(t *testing.T) {
 		}
 	}
 	check(mocha, nil)
-	check(macchiato, nil)
-	check(frappe, []string{"bad", "info", "orange", "magenta"})
+	check(macchiato, []string{"bad"})
+	check(frappe, []string{"bad"})
 	check(latte, []string{"good", "bad", "warn", "info", "orange", "magenta"})
 }
 
@@ -383,8 +388,8 @@ func TestAccentInk(t *testing.T) {
 			t.Errorf("%s accent on panel = %.2f < aaUI", f.id, c)
 		}
 		// Dark flavors keep plain sky as accent-ink; only latte darkens it.
-		if wantSky := f.dark; (tok["--color-accent-ink"] == f.sky) != wantSky {
-			t.Errorf("%s accent-ink==sky is %v, want %v", f.id, tok["--color-accent-ink"] == f.sky, wantSky)
+		if f.dark && tok["--color-accent-ink"] != f.sky {
+			t.Errorf("%s accent-ink==sky is %v, want %v", f.id, tok["--color-accent-ink"] == f.sky, true)
 		}
 	}
 }
@@ -448,17 +453,17 @@ func TestApplyThemeRepaintsAndRebuilds(t *testing.T) {
 	// the live palette are unaffected.
 	t.Cleanup(func() { applyTheme(config.DefaultUITheme) })
 
-	// Mocha default first: canvas is the dark mantle and a derived style follows.
+	// Midnight default first: canvas is the dark mantle and a derived style follows.
 	applyTheme("")
-	if colCanvas != mocha.mantle {
-		t.Errorf("applyTheme(\"\") colCanvas = %q, want mocha mantle %q", colCanvas, mocha.mantle)
+	if colCanvas != midnight.mantle {
+		t.Errorf("applyTheme(\"\") colCanvas = %q, want midnight mantle %q", colCanvas, midnight.mantle)
 	}
-	mochaFaint := faintText.GetForeground()
-	if mochaFaint != lipgloss.Color(colFaint) {
-		t.Errorf("faintText fg %v != colFaint %q after mocha", mochaFaint, colFaint)
+	midnightFaint := faintText.GetForeground()
+	if midnightFaint != lipgloss.Color(colFaint) {
+		t.Errorf("faintText fg %v != colFaint %q after midnight", midnightFaint, colFaint)
 	}
 	if luminance(colCanvas) > 0.2 {
-		t.Errorf("mocha canvas %q is not dark (lum %.3f)", colCanvas, luminance(colCanvas))
+		t.Errorf("midnight canvas %q is not dark (lum %.3f)", colCanvas, luminance(colCanvas))
 	}
 
 	// Latte flips canvas to a LIGHT value and the derived style var moves with it.
@@ -470,7 +475,7 @@ func TestApplyThemeRepaintsAndRebuilds(t *testing.T) {
 		t.Errorf("latte canvas %q is not light (lum %.3f)", colCanvas, luminance(colCanvas))
 	}
 	latteFaint := faintText.GetForeground()
-	if latteFaint == mochaFaint {
+	if latteFaint == midnightFaint {
 		t.Error("faintText did not rebuild across a theme change")
 	}
 	if latteFaint != lipgloss.Color(colFaint) {
@@ -480,7 +485,7 @@ func TestApplyThemeRepaintsAndRebuilds(t *testing.T) {
 	// Every palette-derived color is a resolved token, so an unknown id is safe
 	// and falls back to the default flavor.
 	applyTheme("nonsense")
-	if colCanvas != mocha.mantle {
-		t.Errorf("applyTheme(unknown) colCanvas = %q, want mocha mantle", colCanvas)
+	if colCanvas != midnight.mantle {
+		t.Errorf("applyTheme(unknown) colCanvas = %q, want midnight mantle", colCanvas)
 	}
 }

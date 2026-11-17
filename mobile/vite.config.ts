@@ -6,54 +6,24 @@ import tailwindcss from "@tailwindcss/vite";
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
-// The desktop app's frontend, reused rather than copied. Everything mobile
-// borrows lives under its src/lib; nothing outside that directory is imported,
-// and no file under desktop/ is ever written by this project.
+// The desktop app's frontend, reused rather than copied. Mobile imports its
+// src/lib and generated bindings; phone-only behaviour enters desktop code only
+// through its seams (pushsource, composerattach, widgetsoff, store flags).
 const desktop = r("../desktop/frontend");
 
-// ---------------------------------------------------------------------------
-// THE ALIAS TABLE
-//
-// This is the single mechanism the whole reuse bet rests on, so it is worth
-// stating plainly what it does and why the entries are in this order.
-//
-// The desktop's components import three families of specifier:
-//
-//   $lib/...                    its own library modules (pure logic + Svelte)
-//   @bindings/internal/protocol the Wails-generated daemon DTOs
-//   @bindings/desktop           the Wails-generated SERVICE call surface
-//   @wailsio/runtime            the Wails event bus (Events.On/Emit)
-//
-// The first two are free. `$lib` is just a directory, so pointing it at the
-// desktop's tree makes those modules compile here unchanged. The generated DTO
-// modules contain nothing but `export interface` declarations — no classes, no
-// imports, no runtime code at all — so they are erased at build time and can be
-// aliased straight at the real generated files. A DTO is a shape, and the shape
-// is identical on both platforms because the same daemon produces it.
-//
-// The last two are the ones that would otherwise force a fork. `@bindings/
-// desktop` and `@wailsio/runtime` are RUNTIME modules that reach the Go side
-// through a Wails IPC bridge that does not exist inside a Capacitor WebView.
-// Pointing them at src/wailsshim swaps the backend out from under 26 components
-// that never learn about it: they keep calling `DaemonService.Sessions()` and
-// `Events.On("daemon:sessions", ...)`, and the shim turns each into a frame on
-// the daemon's remote listener and each incoming frame back into the event they
-// already subscribe to.
-//
-// ORDER MATTERS. Vite resolves array-form aliases in order and matches on
-// prefix, so the specific entries must precede the general ones: without the
-// first entry, `@bindings/desktop/models` would be captured by the
-// `@bindings/desktop` entry and resolve to the shim, which exports services
-// rather than model types.
-// ---------------------------------------------------------------------------
+// The alias table. ORDER MATTERS: Vite tries array-form aliases in order and
+// matches on prefix, so each specific entry precedes the general one it would
+// otherwise be captured by (`@bindings/desktop/models` before `@bindings/desktop`).
 const alias = [
-  // Generated DTO types. Type-only, therefore free — see above.
+  // Generated DTO types: type-only, so the real files.
   { find: /^@bindings\/desktop\/models$/, replacement: `${desktop}/bindings/github.com/sushidev-team/lola/desktop/models.ts` },
   { find: /^@bindings\/internal\/protocol$/, replacement: `${desktop}/bindings/github.com/sushidev-team/lola/internal/protocol/index.ts` },
 
-  // The two runtime swaps. Everything reusable resolves its backend here.
+  // The runtime swaps: services and the event bus resolve to the shim.
   { find: /^@bindings\/desktop$/, replacement: r("./src/wailsshim/desktop.ts") },
   { find: /^@wailsio\/runtime$/, replacement: r("./src/wailsshim/runtime.ts") },
+  // One service module imported directly gets the shim's module of that name.
+  { find: /^@bindings\/desktop\/([a-z]+)service$/, replacement: `${r("./src/wailsshim/services")}/$1.ts` },
 
   // Anything else under @bindings falls through to the real generated tree.
   { find: /^@bindings\//, replacement: `${desktop}/bindings/github.com/sushidev-team/lola/` },
@@ -62,10 +32,24 @@ const alias = [
   { find: /^\$lib\//, replacement: `${desktop}/src/lib/` },
   { find: /^\$lib$/, replacement: `${desktop}/src/lib` },
 
-  // Mobile's own additions, so a mobile view can say `@mobile/wire` rather than
-  // counting `../..` segments out of a nested views directory.
+  // Mobile's own tree.
   { find: /^@mobile\//, replacement: r("./src/") },
 ];
+
+// Every static import of the desktop LiveTerminal resolves to a wrapper that
+// loads it on first render, so xterm stays out of each segment's static graph
+// (scripts/bundle-budget.mjs checks it). Not under Vitest: tests mock xterm and
+// mount the real component synchronously.
+const lazyWrapper = r("./src/lib/components/LazyLiveTerminal.svelte");
+const lazyLiveTerminal = () => ({
+  name: "lola-lazy-live-terminal",
+  enforce: "pre" as const,
+  resolveId(source: string, importer?: string) {
+    if (!/(^|[\\/])LiveTerminal\.svelte$/.test(source)) return null;
+    if (!importer || importer.split("?")[0] === lazyWrapper) return null;
+    return lazyWrapper;
+  },
+});
 
 export default defineConfig(({ mode }) => ({
   resolve: {
@@ -96,6 +80,23 @@ export default defineConfig(({ mode }) => ({
     // A packaged app has no network latency to amortise, and one file is easier
     // to reason about when the Web Inspector is the only debugger available.
     assetsInlineLimit: 4096,
+    // scripts/bundle-budget.mjs reads dist/.vite/manifest.json to prove that
+    // xterm and the diff viewer stay out of the entry chunk's static imports.
+    manifest: true,
+    rolldownOptions: {
+      output: {
+        advancedChunks: {
+          // A group holds only the modules it names. Pulling in their
+          // dependencies would drag the Svelte runtime and the stores the entry
+          // shares into the lazy chunk, and the entry would then import it.
+          includeDependenciesRecursively: false,
+          groups: [
+            { name: "terminal", test: /[\\/]node_modules[\\/]@xterm[\\/]/ },
+            { name: "diff", test: /DiffView\.svelte|[\\/]diff\.ts$|diffnavigation/ },
+          ],
+        },
+      },
+    },
   },
 
   server: {
@@ -112,7 +113,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
 
-  plugins: [tailwindcss(), svelte()],
+  plugins: [...(mode === "test" ? [] : [lazyLiveTerminal()]), tailwindcss(), svelte()],
 
   // The vitest configuration lives here rather than in its own vitest.config.ts
   // so the tests run through the SAME alias table and Svelte plugin the app

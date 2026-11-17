@@ -1,0 +1,17 @@
+{
+  "purpose": "environment preflight of the historical candidate; not a live goal receipt",
+  "base_commit": "f94d30d7c8f08178c14297d67756a014d3ff089c",
+  "historical_patch": "docs/evaluation/nori-dialog-pilot/recovery/candidate.patch",
+  "image": "sha256:5a75b7519c908829a8151115e5f2a32c73de18e30150b5cfaa79fd47bea8d674",
+  "command": "NODE_OPTIONS=--max-old-space-size=1792 PILOT_ASSERT_STYLE=1 sh /opt/pilot/check.sh",
+  "memory_mib": 2048,
+  "cpus": 2,
+  "pids": 256,
+  "scratch_bytes": 536870912,
+  "network": "none",
+  "root": "read-only",
+  "started_at": "2026-10-22T06:57:56.674069+00:00",
+  "exit_code": 0,
+  "elapsed_seconds": 95.386,
+  "finished_at": "2026-10-22T06:59:32.059983+00:00"
+}

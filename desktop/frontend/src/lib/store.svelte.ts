@@ -4,7 +4,8 @@
 // call `store.kill(id)` — they never touch the bindings directly.
 
 import { Events } from "@wailsio/runtime";
-import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO } from "@bindings/desktop";
+import { sandboxLogin } from "$lib/sandboxlogin.svelte";
+import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO, type StackFolderAppDTO } from "@bindings/desktop";
 import type {
   SessionInfo as ProtocolSessionInfo,
   ProjectInfo as ProtocolProjectInfo,
@@ -21,6 +22,7 @@ import type {
 import { legacySortRank, sortRank } from "./theme";
 import { displayName } from "./slug";
 import { confirm } from "./confirm.svelte";
+import { SSH_REMOTE_OUTLIVES } from "./ssh";
 
 type AgentKind = "claude" | "codex" | "opencode";
 
@@ -32,7 +34,10 @@ type OpenManualArgs = ProtocolOpenManualArgs;
 
 type OpenTicketArgs = ProtocolOpenTicketArgs;
 
-type Flash = { text: string; kind: "good" | "warn" | "bad" } | null;
+type RemovalFollowup = { branch: string; onRemoved: () => void | Promise<void> };
+
+export type FlashOptions = { description?: string; action?: { label: string; run: () => void | Promise<void> } };
+type Flash = ({ text: string; kind: "good" | "warn" | "bad" } & FlashOptions) | null;
 
 /**
  * The session's sort tier, over BOTH axes (state.SortRank).
@@ -66,8 +71,9 @@ export function sortSessions(list: SessionInfo[]): SessionInfo[] {
  * the global keyboard handler so arrow-key movement walks the SAME order the
  * table renders — a second copy of the sort/filter would drift.
  */
-export function scopedSessions(list: SessionInfo[], scoped: boolean, project: string): SessionInfo[] {
+export function scopedSessions(list: SessionInfo[], scoped: boolean, project: string, match?: ((s: SessionInfo) => boolean) | null): SessionInfo[] {
   const sorted = sortSessions(list);
+  if (match) return sorted.filter(match);
   return scoped ? sorted.filter((s) => s.project === project) : sorted;
 }
 
@@ -99,6 +105,20 @@ class Store {
   hasConfig = $state(true); // assume yes until checked, so no setup-screen flash
   configChecked = $state(false);
   sessions = $state<SessionInfo[]>([]);
+  // The sessions as last pushed, kept while the daemon is down. A restart is a daily event,
+  // a story must stay readable through one, and a terminal keeps working because that is
+  // tmux. Without retainAll only the ssh sessions are kept, which is what the phone expects;
+  // the desktop's main.ts turns it on. sessionById and rosterSessions read this, only while
+  // the daemon is down.
+  retainAll = false;
+  // Set by a client whose daemon never honours a forced kill (the phone). A dirty-worktree
+  // refusal then flashes this sentence instead of offering a force that cannot succeed.
+  noForceKill: string | null = null;
+  private retained: SessionInfo[] = [];
+  // Set from the daemon going down until its first list after coming back. `daemon:alive` and
+  // `daemon:sessions` are separate events with a flush between them, and an open session must not
+  // read as gone across that gap: its terminal would detach and its widgets reload.
+  private awaitingList = $state(false);
   activity = $state<ActivityEvent[]>([]);
   projects = $state<ProjectInfo[]>([]);
   // The [[group]] folders projects are filed under, in config order. They ride
@@ -170,6 +190,9 @@ class Store {
       this.alive = e.data;
       this.connected = true;
       if (!e.data) {
+        const keep = this.retainAll ? this.sessions : this.sessions.filter((s) => s.ssh);
+        if (keep.length) this.retained = keep;
+        this.awaitingList = true;
         this.sessions = [];
         this.setActivity([]);
         // A down daemon isn't "out of date"; the offline state covers it, so drop
@@ -187,6 +210,7 @@ class Store {
       this.pushErrors = next;
     });
     Events.On("daemon:sessions", (e) => {
+      this.awaitingList = false;
       this.sessions = e.data?.sessions ?? [];
       this.connected = true;
       this.setActivity(e.data?.events ?? []);
@@ -248,13 +272,53 @@ class Store {
   }
 
   sessionById(id: string): SessionInfo | undefined {
-    return this.sessions.find((s) => s.id === id);
+    const live = this.sessions.find((s) => s.id === id);
+    if (live || (this.alive && !this.awaitingList)) return live;
+    return this.retained.find((s) => s.id === id);
   }
 
-  setFlash(text: string, kind: "good" | "warn" | "bad" = "good") {
-    this.flash = { text, kind };
+  /** Only an unambiguous, exact checkout match can authorize session teardown. */
+  sessionForWorktree(path: string): SessionInfo | undefined {
+    if (!path) return;
+    const owners = this.sessions.filter(s => s.worktree === path || s.apps?.some(app => app.worktree === path));
+    return owners.length === 1 ? owners[0] : undefined;
+  }
+
+  /** What the sidebar lists: the live sessions, or the last ones known while the daemon is down. */
+  get rosterSessions(): SessionInfo[] {
+    if ((this.alive && !this.awaitingList) || this.sessions.length) return this.sessions;
+    return this.retained;
+  }
+
+  setFlash(text: string, kind: "good" | "warn" | "bad" = "good", options: FlashOptions = {}) {
+    // Sentence case at the one place every flash passes: call sites write
+    // "daemon restarted", the toast shows "Daemon restarted". Only a first word
+    // of plain letters is touched: a message that opens with an identifier
+    // ("lola-p1-eng-1: switched …", "eng-123 …") keeps it verbatim.
+    this.flash = { text: /^[a-z]+(?![\w-])/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text, kind, ...options };
+    this.armFlashTimer();
+  }
+
+  /** How long a flash stays: an error is read, not glanced at. */
+  private flashMs() {
+    return this.flash?.action ? 10000 : this.flash?.kind === "bad" ? 8000 : 4000;
+  }
+
+  private armFlashTimer() {
     clearTimeout(this.flashTimer);
-    this.flashTimer = setTimeout(() => (this.flash = null), 4000);
+    this.flashTimer = setTimeout(() => (this.flash = null), this.flashMs());
+  }
+
+  /** Hovering the toast holds it; leaving restarts the full timeout. */
+  holdFlash(hold: boolean) {
+    if (!this.flash) return;
+    if (hold) clearTimeout(this.flashTimer);
+    else this.armFlashTimer();
+  }
+
+  dismissFlash() {
+    clearTimeout(this.flashTimer);
+    this.flash = null;
   }
 
   /** Dismiss the out-of-date banner. A persistent failure is not re-emitted (the
@@ -286,6 +350,7 @@ class Store {
       DaemonService.Status(),
     ]);
     if (sd.status === "fulfilled") {
+      this.awaitingList = false;
       this.sessions = sd.value.sessions ?? [];
       this.setActivity(sd.value.events ?? []); // separate flush — see setActivity
     }
@@ -347,6 +412,11 @@ class Store {
 
   // --- project groups & arrangement -----------------------------------------
 
+  removeProject(name: string) {
+    const project = this.projectByName(name);
+    return this.act(() => ConfigService.RemoveProject(name), `removed ${project ? displayName(project) : name}`);
+  }
+
   addGroup(label: string) {
     return this.act(() => ConfigService.AddGroup(label), "group added");
   }
@@ -363,6 +433,24 @@ class Store {
   /** Creates an empty stack; resolves to its id (undefined on failure). */
   createStack(label: string) {
     return this.act(() => ConfigService.CreateStack(label), "stack created");
+  }
+  /**
+   * Creates a stack AND its members from a parent folder's checkouts in one
+   * write: a new project per app, or the project already configured at that
+   * path joining. Resolves to the stack's id (undefined on failure).
+   */
+  createStackFromFolder(label: string, apps: StackFolderAppDTO[]) {
+    return this.act(
+      () => ConfigService.CreateStackFromFolder(label, apps),
+      `stack created with ${apps.length} app${apps.length === 1 ? "" : "s"}`,
+    );
+  }
+  /** Removes a stack and every member not in keep; kept members stand alone. */
+  removeStack(stack: string, keep: string[]) {
+    return this.act(
+      () => ConfigService.RemoveStack(stack, keep),
+      keep.length ? `stack removed, kept ${keep.length} project${keep.length === 1 ? "" : "s"}` : "stack removed",
+    );
   }
   /**
    * Moves a project into a stack ("" = out of it). Unlike a folder this is NOT
@@ -408,26 +496,33 @@ class Store {
    * worktree is all that survives, so the honest answer is a second question
    * (askForceKill), not a red flash telling a GUI user to rerun a CLI flag.
    */
-  async kill(session: string, force = false) {
+  async kill(session: string, force = false, keepWorktree = false, onRemoved?: () => void | Promise<void>) {
     // Reap the session's worktree shells too, so they don't linger as orphan tabs
-    // once the daemon removes the worktree (best-effort, fire-and-forget).
+    // once the daemon removes the worktree (best-effort, fire-and-forget). The
+    // daemon kills the shell tmux sessions on a stop as well.
     void TermService.CloseSessionShells(session).catch(() => {});
     try {
-      const r = await DaemonService.Kill(session, force);
-      this.setFlash(`killed ${session}`, "good");
+      const r = await DaemonService.Kill(session, force, keepWorktree);
+      this.setFlash(keepWorktree ? `stopped ${session}; worktree kept` : `killed ${session}`, "good");
       void this.refresh();
+      if (r?.removed && !keepWorktree) await onRemoved?.();
       return r;
     } catch (err) {
       const msg = String(err);
-      const dir = force ? null : dirtyWorktreeRefusal(msg);
+      const dir = force || keepWorktree ? null : dirtyWorktreeRefusal(msg);
       if (dir === null) {
         this.setFlash(msg, "bad");
+        return undefined;
+      }
+      if (this.noForceKill !== null) {
+        void this.refresh();
+        this.setFlash(this.noForceKill, "warn");
         return undefined;
       }
       // The agent IS gone and the daemon has flagged the session dead, so refresh
       // regardless of how the follow-up dialog is answered.
       void this.refresh();
-      this.askForceKill(session, dir);
+      this.askForceKill(session, dir, onRemoved);
       return undefined;
     }
   }
@@ -441,7 +536,7 @@ class Store {
   }
   // coderabbit is kept as the back-compat alias forcing the watch kind.
   coderabbit(session: string) {
-    return this.act(() => DaemonService.CodeRabbit(session), "coderabbit poll requested");
+    return this.act(() => DaemonService.CodeRabbit(session), "CodeRabbit poll requested");
   }
   /**
    * Ask a CONFLICTING session's coding agent to merge the project's default
@@ -508,7 +603,8 @@ class Store {
       delete this.devPending[session];
     }
   }
-  open(project: string, ref: string) {
+  async open(project: string, ref: string) {
+    if (!(await sandboxLogin.ensure(project))) return undefined;
     return this.act(() => DaemonService.Open(project, ref), `opened ${ref}`);
   }
   /**
@@ -523,13 +619,30 @@ class Store {
       (r) => `broadcast: ${r?.message || "sent"}`,
     );
   }
-  openManual(a: OpenManualArgs) {
-    return this.act(() => DaemonService.OpenManual(a), `started ${a.branch}`);
+  async openManual(a: OpenManualArgs) {
+    if (a.agent && !(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
+    return this.act(() => DaemonService.OpenManual(a), `started ${a.name || a.branch || "session"}`);
   }
-  openPr(a: OpenPrArgs) {
+  renameSession(id: string, name: string) {
+    return this.act(() => DaemonService.RenameSession(id, name).then(() => true), "Session renamed");
+  }
+  async closeExitedTemporary(id: string): Promise<boolean> {
+    try {
+      const result = await DaemonService.CloseExitedTemporary(id);
+      if (result.removed) this.sessions = this.sessions.filter(s => s.id !== id);
+      void this.refresh();
+      return result.removed;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return false;
+    }
+  }
+  async openPr(a: OpenPrArgs) {
+    if (!(await sandboxLogin.ensure(a.project))) return undefined;
     return this.act(() => DaemonService.OpenPR(a), `opened PR #${a.number}`);
   }
-  openTicket(a: OpenTicketArgs) {
+  async openTicket(a: OpenTicketArgs) {
+    if (!(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
     return this.act(() => DaemonService.OpenTicket(a), `started ${a.identifier}`);
   }
   // Turn checkpoints. Both flash the daemon's own sentence: it names the
@@ -582,6 +695,13 @@ class Store {
       this.setFlash(String(err), "bad");
     }
   }
+  async openFolder(path: string) {
+    try {
+      await DaemonService.OpenFolder(path);
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+    }
+  }
   reload() {
     return this.act(() => DaemonService.Reload(), "config reloaded");
   }
@@ -606,16 +726,60 @@ class Store {
   // Every irreversible action routes through `confirm` so it asks the same way,
   // whether it was triggered by a shortcut or a button.
 
-  /** Ask, then kill. Used by the 'x' shortcut and the session panel's button. */
-  askKill(id: string) {
+  /** Explain protected Git actions and route owned checkouts through session cleanup. */
+  askRemoveManagedWorktree(path: string, followup?: RemovalFollowup) {
+    const owner = this.sessionForWorktree(path);
+    if (!owner || owner.location || owner.goalId) {
+      confirm.ask({
+        title: "Protected worktree",
+        body: path,
+        detail: owner?.goalId
+          ? `This checkout belongs to goal ${owner.goalId}. Manage it through the goal's actions; stopping its session keeps the worktree and branch.`
+          : owner?.location
+          ? "This session uses an existing directory. Closing the session preserves the checkout and its branch."
+          : "Lola protects this checkout, but its owning session could not be identified. Refresh the session list and remove it through its owning session. Direct Git deletion is unavailable.",
+        confirmLabel: "Got it",
+        confirmVariant: "primary",
+        onConfirm: () => {},
+      });
+      return;
+    }
+    this.askKill(owner.id, path, followup);
+  }
+
+  /** Ask, then kill. Git actions additionally pin the owning checkout and scope. */
+  askKill(id: string, worktreePath?: string, followup?: RemovalFollowup) {
     const s = this.sessionById(id);
     const label = s ? s.issue || s.id.slice(0, 8) : id;
+    const direct = s?.location === "ssh";
+    // Tearing a session down closes its ssh connections too, and what they started
+    // may outlive them. Say so on the one dialog that does it.
+    const sshRan = s?.ssh?.connections?.some((c) => c.state !== "closed" && (c.commandsRun ?? 0) > 0);
+    const sshNote = sshRan ? ` ${SSH_REMOTE_OUTLIVES}` : "";
+    // A Git-menu confirmation is tied to the session and checkout shown in it.
+    // Re-check the full scope so a refreshed stack cannot gain extra members.
+    const scope = (session: SessionInfo | undefined) => JSON.stringify([session?.worktree, session?.branch, session?.location, session?.goalId, session?.stack, session?.apps?.map(app => [app.worktree, app.branch])]);
+    const originalScope = scope(s);
+    const remove = (keepWorktree = false) => {
+      if (worktreePath) {
+        const owner = this.sessionForWorktree(worktreePath);
+        if (owner?.id !== id || scope(owner) !== originalScope) {
+          this.setFlash("The owning session changed. Reopen the removal dialog.", "warn");
+          return;
+        }
+      }
+      void this.kill(id, false, keepWorktree, followup?.onRemoved);
+    };
     confirm.ask({
-      title: "Kill session?",
-      body: s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
-      detail: "This stops its agent and removes the worktree. Unpushed work is lost.",
-      confirmLabel: "Kill",
-      onConfirm: () => void this.kill(id),
+      title: worktreePath ? (followup?.branch ? "Remove worktree and branch?" : "Remove worktree?") : direct ? "End session?" : s?.location ? "Close session?" : "Kill session?",
+      subject: worktreePath ? (s?.issue ? `${s.issue}${s.title ? ` — ${s.title}` : ""}` : s?.title || id) : s?.title ? `${label} — ${s.title}` : label,
+      body: "",
+      detail: (worktreePath ? `Stops the session and removes its worktree and owned branches.${followup?.branch ? ` Also deletes local branch ${followup.branch} if Git allows it.` : ""} Unpushed commits may be lost. Remote branches are kept.${s?.stack ? ` This removes the entire stack, including: ${(s.apps ?? []).map(app => app.worktree || app.name).join(", ")}.` : ""}` : direct ? "This closes its connections and its agent. The command record stays on disk for 14 days in ~/.lola/state/ssh/." :
+        s?.location ? "Close stops the session and its terminals. The directory and all files are preserved." :
+        "Kill stops its agent and removes the worktree — unpushed work is lost. Stop keeps the worktree so the session can be revived.") + sshNote,
+      confirmLabel: worktreePath ? "Remove" : direct ? "End session" : s?.location ? "Close session" : "Kill",
+      onConfirm: () => remove(),
+      alternative: worktreePath ? undefined : { label: s?.location ? "Stop, keep session" : "Stop, keep worktree", onConfirm: () => remove(true) },
     });
   }
 
@@ -625,15 +789,16 @@ class Store {
    * force is the only way past it, and it destroys work, so it gets its own
    * question with the path spelled out rather than riding on the first "Kill?".
    */
-  askForceKill(id: string, dir: string) {
+  askForceKill(id: string, dir: string, onRemoved?: () => void | Promise<void>) {
     const s = this.sessionById(id);
     const label = s ? s.issue || s.id.slice(0, 8) : id;
     confirm.ask({
-      title: "Worktree has uncommitted changes",
-      body: `${label}'s agent is stopped, but its worktree still has uncommitted changes. Delete the worktree anyway?`,
-      detail: dir ? `${dir} — the changes there are lost for good.` : "The changes there are lost for good.",
+      title: "Delete worktree with uncommitted changes?",
+      subject: dir || label,
+      body: "",
+      detail: `${label}'s agent is stopped. The uncommitted changes are lost for good.`,
       confirmLabel: "Delete worktree",
-      onConfirm: () => void this.kill(id, true),
+      onConfirm: () => void this.kill(id, true, false, onRemoved),
     });
   }
 
@@ -670,7 +835,8 @@ class Store {
     const current = s?.agent || "claude";
     confirm.ask({
       title: "Switch agent?",
-      body: `Switch ${label} from ${current} to ${targetAgent}?`,
+      subject: `${label}: ${current} → ${targetAgent}`,
+      body: "",
       detail: "The pane is replaced on the same worktree.",
       confirmLabel: "Switch",
       onConfirm: () => void this.switchAgent(id, targetAgent),
@@ -682,7 +848,7 @@ class Store {
     const live = this.sessions.length;
     confirm.ask({
       title: "Stop the daemon?",
-      body: "Stop lola's daemon?",
+      body: "",
       detail:
         `Polling stops and no new issues are picked up until it is started again.` +
         (live > 0 ? ` ${live} observed session${live === 1 ? "" : "s"} keep running in tmux.` : ""),

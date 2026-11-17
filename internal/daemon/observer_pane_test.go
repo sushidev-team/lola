@@ -754,6 +754,32 @@ func TestObserveDeadPaneNeverReadsATranscript(t *testing.T) {
 	}
 }
 
+// A hub chore whose agent dies is reported at once: the observer nudges the
+// outcome pass instead of leaving the fail to the next renewal pass. A
+// session with no hub item nudges nothing.
+func TestObserveDeadHubAgentNudgesOutcomes(t *testing.T) {
+	for _, hubWork := range []bool{true, false} {
+		seed := nativeSess("FE-1", "working")
+		if hubWork {
+			seed.HubItem = session.HubWork{ItemID: "it1", Kind: "dep_advisory", ClaimedAt: time.Now()}
+		}
+		d := paneDaemon(t, seed, false, paneWaiting) // pane gone
+		d.observe(context.Background())
+		if got := getSess(t, d, seed.ID); got.AgentState != state.AgentDead {
+			t.Fatalf("AgentState = %q, want dead", got.AgentState)
+		}
+		nudged := false
+		select {
+		case <-d.hub.outcomes:
+			nudged = true
+		default:
+		}
+		if nudged != hubWork {
+			t.Errorf("hub work %v: outcome pass nudged = %v", hubWork, nudged)
+		}
+	}
+}
+
 // No flapping across cycles, with the transcript in play: a held tool_use stays
 // working and a recorded end_turn stays idle, however many times the loop runs.
 func TestObserveTranscriptDoesNotFlapAcrossCycles(t *testing.T) {

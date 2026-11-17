@@ -1,15 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import SessionMenu from "./SessionMenu.svelte";
-import SessionsTable from "./SessionsTable.svelte";
-import SessionEmbed from "./SessionEmbed.svelte";
+import SidebarRoster from "./SidebarRoster.svelte";
+import SessionBar from "./session/SessionBar.svelte";
 import { store, type SessionInfo } from "$lib/store.svelte";
 import type { ProjectInfo } from "@bindings/internal/protocol";
 import { nav } from "$lib/nav.svelte";
 import { sessionMenu } from "$lib/sessionmenu.svelte";
 import { confirm } from "$lib/confirm.svelte";
-import { sidePanel, REPORT, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
-import { terms, AGENT } from "$lib/terms.svelte";
+import { flushSync } from "svelte";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -85,6 +84,8 @@ describe("SessionMenu", () => {
     nav.scoped = false;
     nav.project = "";
     nav.selectedId = "";
+    nav.sidebarQuery = "";
+    nav.triage = "";
     sessionMenu.close();
     confirm.cancel();
   });
@@ -94,65 +95,71 @@ describe("SessionMenu", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("offers add shell and trigger review for a live session", () => {
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+
+
+  it("keeps the menu focused on session management even when other features are available", () => {
+    store.sessions = [fakeSession({ agent: 'claude', prNumber: 7, prUrl: 'https://example.test/pr/7', devActive: true, devCommands: ['npm run dev'], devUrls: ['http://localhost:3000'], board: { phase: 'done' } as never })];
+    nav.focusedTerm = 'acme-eng-1';
+    sessionMenu.request = { id: 'acme-eng-1', x: 10, y: 10 };
     render(SessionMenu);
-    expect(screen.getByRole("menu")).toBeInTheDocument();
-    // By ROLE + accessible name, not by text: a <MenuItem> wraps its label in a
-    // span beside an aria-hidden glyph, so getByText would hand back the span
-    // and `toBeEnabled` would assert on the wrong node.
-    expect(screen.getByRole("menuitem", { name: "Add shell" })).toBeEnabled();
-    expect(screen.getByRole("menuitem", { name: "Trigger review" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "CodeRabbit" })).toBeInTheDocument();
-    // No PR observed and not dead: the conditional items stay hidden.
-    expect(screen.queryByRole("menuitem", { name: "Open PR" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: "Revive" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent?.trim())).toEqual([
+      'Rename session…', 'Open in Finder', 'Switch to codex', 'Switch to opencode', 'Kill…',
+    ]);
   });
 
-  it("disables add shell when the session has no worktree", () => {
-    store.sessions = [fakeSession({ worktree: "" })];
+  it("Open in Finder opens the session's folder", async () => {
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    const open = vi.spyOn(store, "openFolder").mockResolvedValue();
     render(SessionMenu);
-    expect(screen.getByRole("menuitem", { name: "Add shell" })).toBeDisabled();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Open in Finder" }));
+    expect(open).toHaveBeenCalledWith("/tmp/wt/acme-eng-1");
+    open.mockRestore();
   });
 
-  it("opens checkpoints in the sidebar, not as a terminal-strip tab", async () => {
-    sidePanel.select(REPORT);
-    if (!sidePanel.hidden) sidePanel.toggle();
+  it("Project settings opens the session's project form, and is absent without a configured project", async () => {
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    const { unmount } = render(SessionMenu);
+    expect(screen.queryByRole("menuitem", { name: "Project settings" })).not.toBeInTheDocument();
+    unmount();
+
+    store.projects = [{ name: "acme", label: "Acme" } as ProjectInfo];
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
-    await fireEvent.click(screen.getByRole("menuitem", { name: "Checkpoints" }));
-    expect(nav.selectedId).toBe("acme-eng-1");
-    expect(sidePanel.tab).toBe(CHECKPOINTS_TAB);
-    expect(sidePanel.hidden).toBe(false);
-    expect(terms.activeTab("acme-eng-1")).toBe(AGENT);
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Project settings" }));
+    expect(nav.overlay).toBe("project");
+    expect(nav.overlayProject).toBe("acme");
+    expect(sessionMenu.request).toBeNull();
+    nav.closeOverlay();
   });
 
-  it("shows open PR and revive only when the session state warrants them", () => {
+  it("a stack session expands Project settings into the stack and each app's project", async () => {
+    store.projects = [
+      { name: "acme", label: "Acme", kind: "stack" },
+      { name: "acme-web", label: "Web", stack: "acme" },
+      { name: "acme-api", label: "API", stack: "acme" },
+    ] as ProjectInfo[];
+    store.sessions = [fakeSession({ stack: true, apps: [{ name: "acme-web" }, { name: "acme-api" }] as never })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    expect(screen.queryByRole("menuitem", { name: "API" })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("menuitem", { name: "Project settings" });
+    await fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(sessionMenu.request).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Acme" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Web" })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "API" }));
+    expect(nav.overlay).toBe("project");
+    expect(nav.overlayProject).toBe("acme-api");
+    nav.closeOverlay();
+  });
+
+  it("offers revive for ended sessions while PR access stays outside the menu", () => {
     store.sessions = [fakeSession({ prNumber: 7, prUrl: "https://x/pr/7", status: "dead" })];
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
-    expect(screen.getByRole("menuitem", { name: "Open PR" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Open PR" })).toBeNull();
     expect(screen.getByRole("menuitem", { name: "Revive" })).toBeInTheDocument();
-  });
-
-  it("omits the dev toggle for a project with no dev_commands", () => {
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    expect(screen.queryByRole("menuitem", { name: /dev/i })).not.toBeInTheDocument();
-  });
-
-  it("offers 'Make active' when the project has dev_commands, and reads back the running state", () => {
-    store.sessions = [fakeSession({ devCommands: ["composer dev"], devActive: false })];
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    expect(screen.getByRole("menuitem", { name: "Make active" })).toBeInTheDocument();
-
-    cleanup();
-    store.sessions = [fakeSession({ devCommands: ["composer dev"], devActive: true })];
-    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
-    render(SessionMenu);
-    expect(screen.getByRole("menuitem", { name: "Active — stop dev" })).toBeInTheDocument();
   });
 
   it("offers 'Resolve conflicts' only for a conflicting session, naming the branch", () => {
@@ -189,7 +196,7 @@ describe("SessionMenu", () => {
     await fireEvent.click(screen.getByRole("menuitem", { name: "Switch to codex" }));
     expect(sessionMenu.request).toBeNull();
     expect(confirm.request?.title).toBe("Switch agent?");
-    expect(confirm.request?.body).toBe("Switch ENG-1 from claude to codex?");
+    expect(confirm.request?.subject).toBe("ENG-1: claude → codex");
     expect(confirm.request?.detail).toBe("The pane is replaced on the same worktree.");
     expect(confirm.request?.confirmLabel).toBe("Switch");
   });
@@ -235,19 +242,22 @@ describe("session surfaces open the menu", () => {
     nav.scoped = false;
     nav.project = "";
     nav.selectedId = "";
+    nav.sidebarQuery = "";
+    nav.triage = "";
     sessionMenu.close();
   });
 
-  it("right-clicking a table row selects the session and opens the menu at the pointer", async () => {
-    render(SessionsTable);
-    const row = screen.getByText("ENG-1").closest("tr")!;
+  it("right-clicking a sidebar row selects the session and opens the menu at the pointer", async () => {
+    render(SidebarRoster);
+    const row = screen.getByText("ENG-1").closest("[data-roster-row]")!;
     await fireEvent.contextMenu(row, { clientX: 42, clientY: 24 });
     expect(nav.selectedId).toBe("acme-eng-1");
     expect(sessionMenu.request).toEqual({ id: "acme-eng-1", x: 42, y: 24 });
   });
 });
 
-describe("SessionEmbed header", () => {
+// The filled agent chip left the header, and the agent's name went to the title's hover card.
+describe("SessionBar hover card", () => {
   beforeEach(() => {
     cleanup();
     store.sessions = [];
@@ -257,24 +267,32 @@ describe("SessionEmbed header", () => {
     nav.scoped = false;
     nav.project = "";
     nav.selectedId = "";
+    nav.sidebarQuery = "";
+    nav.triage = "";
   });
 
-  it("renders the agent kind chip for a session with agent: 'codex'", () => {
+  async function hover() {
+    render(SessionBar, { props: { sessionId: "acme-eng-1" } });
+    await fireEvent.pointerEnter(document.querySelector("[data-session-bar] [tabindex='0']")!);
+  }
+
+  it("names the agent for a session with agent: 'codex', with no chip at rest", async () => {
     store.sessions = [fakeSession({ id: "acme-eng-1", agent: "codex" })];
-    render(SessionEmbed, { props: { sessionId: "acme-eng-1" } });
-    expect(screen.getByText("codex")).toBeInTheDocument();
+    await hover();
+    expect(await screen.findByText("Codex")).toBeInTheDocument();
   });
 
-  it("renders claude for an older session with empty agent", () => {
+  it("reads as Claude for an older session with empty agent", async () => {
     store.sessions = [fakeSession({ id: "acme-eng-1", agent: "" })];
-    render(SessionEmbed, { props: { sessionId: "acme-eng-1" } });
-    expect(screen.getByText("claude")).toBeInTheDocument();
+    await hover();
+    expect(await screen.findByText("Claude")).toBeInTheDocument();
   });
 
-  it("omits the agent kind chip for a shell session", () => {
+  it("names no agent for a shell session", async () => {
     store.sessions = [fakeSession({ id: "acme-eng-1", status: "shell", agent: "codex" })];
-    render(SessionEmbed, { props: { sessionId: "acme-eng-1" } });
-    expect(screen.queryByText("codex")).not.toBeInTheDocument();
-    expect(screen.queryByText("claude")).not.toBeInTheDocument();
+    await hover();
+    await screen.findByText("Worktree");
+    expect(screen.queryByText("Codex")).not.toBeInTheDocument();
+    expect(screen.queryByText("Claude")).not.toBeInTheDocument();
   });
 });

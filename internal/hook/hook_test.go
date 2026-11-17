@@ -78,6 +78,19 @@ const settingsGolden = `{
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/lola hook permission_request",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
@@ -132,12 +145,13 @@ func TestSettingsJSONShape(t *testing.T) {
 		cmd   string
 		async bool
 	}{
-		"Stop":             {"/opt/lola hook stop", false},
-		"Notification":     {"/opt/lola hook notification", false},
-		"SessionEnd":       {"/opt/lola hook session_end", false},
-		"PostToolUse":      {"/opt/lola hook tool_use", true},
-		"UserPromptSubmit": {"/opt/lola hook user_prompt", false},
-		"PreToolUse":       {"/opt/lola hook pre_tool_use", false},
+		"Stop":              {"/opt/lola hook stop", false},
+		"Notification":      {"/opt/lola hook notification", false},
+		"SessionEnd":        {"/opt/lola hook session_end", false},
+		"PostToolUse":       {"/opt/lola hook tool_use", true},
+		"UserPromptSubmit":  {"/opt/lola hook user_prompt", false},
+		"PermissionRequest": {"/opt/lola hook permission_request", true},
+		"PreToolUse":        {"/opt/lola hook pre_tool_use", false},
 	}
 	if len(parsed.Hooks) != len(want) {
 		t.Errorf("got %d hook events, want %d: %v", len(parsed.Hooks), len(want), parsed.Hooks)
@@ -297,6 +311,49 @@ func TestPostSurvivesSilentDaemon(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("Post took %v, want return at the ~%v deadline", d, postTimeout)
+	}
+}
+
+// A sandboxed `lola ssh` crosses the bridge with its token, and a failure to reach
+// the daemon is told apart from the daemon's own answer.
+func TestSendAgentCarriesSessionAndToken(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	t.Setenv("LOLA_HOME", t.TempDir())
+	t.Setenv("LOLA_SESSION", "s1")
+	t.Setenv("LOLA_HOOK_ADDR", ln.Addr().String())
+	t.Setenv("LOLA_HOOK_TOKEN", "tok")
+	got := make(chan protocol.Request, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		line, _ := bufio.NewReader(c).ReadBytes('\n')
+		var r protocol.Request
+		_ = json.Unmarshal(line, &r)
+		got <- r
+		_, _ = c.Write([]byte(`{"ok":true,"data":{"id":"e1"}}` + "\n"))
+	}()
+	resp, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{Argv: []string{"narration", "x"}})
+	if err != nil || !resp.OK {
+		t.Fatalf("%+v %v", resp, err)
+	}
+	r := <-got
+	if r.Cmd != "sshAgentPost" || r.Session != "s1" || r.HookToken != "tok" {
+		t.Fatalf("%+v", r)
+	}
+	ln.Close()
+	if _, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{}); !errors.Is(err, ErrNoDaemon) {
+		t.Fatalf("%v", err)
+	}
+	t.Setenv("LOLA_SESSION", "")
+	if _, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{}); !errors.Is(err, ErrNoDaemon) {
+		t.Fatalf("%v", err)
 	}
 }
 

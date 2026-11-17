@@ -1,4 +1,5 @@
 <script lang="ts">
+  let { limit = 30 }: { limit?: number } = $props();
   import { store } from "$lib/store.svelte";
   import { eventPhrase, statusText } from "$lib/theme";
   import TimeAgo from "./TimeAgo.svelte";
@@ -15,7 +16,7 @@
   <ul class="flex flex-col gap-1 text-sm">
     <!-- 30, not 40: the sidebar's activity track is shorter than the old rail
          panel, and rows nobody can scroll to are just retained memory. -->
-    {#each store.activity.slice(0, 30) as ev (ev.id + ev.to + ev.ago)}
+    {#each store.activity.slice(0, limit) as ev (ev.id + ev.to + ev.ago)}
       <li class="flex min-w-0 items-baseline gap-1.5">
         <span class="shrink-0 font-medium text-ink">{ev.issue || ev.id.slice(0, 6)}</span>
         <span class="truncate {statusText(ev.to)}">{eventPhrase(ev.from, ev.to)}</span>

@@ -1,0 +1,53 @@
+[
+  {
+    "id": "u-1:0",
+    "kind": "user",
+    "order": 0,
+    "turn": "u-1:0",
+    "text": "Read both",
+    "at": "2026-11-06T10:00:00Z"
+  },
+  {
+    "id": "a-1:0",
+    "kind": "tool",
+    "order": 1,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:01Z",
+    "tool": {
+      "name": "Read",
+      "category": "read",
+      "summary": "a.go",
+      "status": "ok",
+      "durationMs": 3000
+    }
+  },
+  {
+    "id": "a-2:0",
+    "kind": "tool",
+    "order": 2,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:01Z",
+    "tool": {
+      "name": "Grep",
+      "category": "read",
+      "summary": "needle",
+      "status": "ok",
+      "durationMs": 2000,
+      "preview": "found",
+      "hasOutput": true
+    }
+  },
+  {
+    "id": "a-3:0",
+    "kind": "tool",
+    "order": 3,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:02Z",
+    "tool": {
+      "name": "mcp__x__lookup",
+      "category": "other",
+      "summary": "q",
+      "status": "running"
+    }
+  }
+]

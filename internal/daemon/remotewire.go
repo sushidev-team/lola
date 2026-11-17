@@ -2,18 +2,23 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/panebus"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/remote"
+	"github.com/sushidev-team/lola/internal/sshstore"
 )
 
-// The remote phone listener's daemon-side wiring (mobile/PLAN.md, M1).
+// The remote phone listener's daemon-side wiring (docs/mobile/01-pairing-and-tiers.md §5).
 //
 // This file is the seam between three packages that deliberately do not know
 // about each other. internal/remote owns the TLS socket, the frame codec and
@@ -24,14 +29,11 @@ import (
 // the dispatcher, the pane bus and the session store — so it is where the
 // adapter and the identity gate live.
 //
-// Two things are deliberately NOT here. The listener's construction is
-// tag-split (remotelisten.go / remotelisten_off.go), because M1 authenticates
-// a phone with a shared bearer key and a release binary must not be able to do
-// that by accident. And nothing this file starts registers with connWg: that
-// group's drain is unbounded and was built for bounded socket work, whereas a
-// phone holds a pane stream open for hours. remote.Server owns its own
-// WaitGroup and Close is bounded and synchronous, which is what lets shutdown
-// take it down FIRST and only then observe an empty drain group.
+// One thing is deliberately NOT here: nothing this file starts registers with
+// connWg. That group's drain is unbounded and was built for bounded socket
+// work, whereas a phone holds a pane stream open for hours. remote.Server owns
+// its own WaitGroup and Close is bounded and synchronous, which is what lets
+// shutdown take it down FIRST and only then observe an empty drain group.
 
 // errUnknownPane is the identity gate's refusal. It says nothing about which
 // panes exist: internal/remote answers every subscribe failure with the same
@@ -75,10 +77,10 @@ func paneAuxParent(name string) string {
 // here.
 //
 // It fails closed in every direction: an empty name, a name in no session's
-// namespace, or a store that answers nothing all refuse. M1 has no per-device
-// capability tiers — internal/devices is M2 — so this asks only whether the
-// pane belongs to a session lola knows about; the capability check belongs in
-// front of this call, not inside it, and this is the seam it will be added to.
+// namespace, or a store that answers nothing all refuse. It asks only whether
+// the pane belongs to a session lola knows about; the device's capability tier
+// is checked in internal/remote before a subscribe or a pty frame reaches the
+// bus, never here.
 func (d *Daemon) resolvePaneName(_ context.Context, name string) error {
 	if name == "" {
 		return errUnknownPane
@@ -121,8 +123,9 @@ func (d *Daemon) remoteLogf(format string, args ...any) {
 	d.logf("", format, args...)
 }
 
-// startRemote brings the phone listener up, if the configuration asks for one
-// and this build has a way to authenticate a peer.
+// startRemote brings the phone server up, if the configuration asks for one: a
+// listener (RemoteConfig.Listens) or a relay-only server (a relay turned on
+// and a hub joined; see RemoteConfig.Serves).
 //
 // ctx is the daemon's CANCELLABLE run context, the same posture as the
 // interpreter and review workers and for the same reason: everything the
@@ -138,8 +141,13 @@ func (d *Daemon) remoteLogf(format string, args ...any) {
 func (d *Daemon) startRemote(ctx context.Context) {
 	d.mu.Lock()
 	rc := d.cfg.Remote
+	hubCfg := d.cfg.Hub
 	d.mu.Unlock()
-	if !rc.Listens() {
+	// Computed with no lock held: the joined check reads the hub identity from
+	// disk.
+	serves := rc.Serves(d.hubRelayJoined(hubCfg))
+	d.remoteServes.Store(serves)
+	if !serves {
 		return
 	}
 
@@ -152,11 +160,27 @@ func (d *Daemon) startRemote(ctx context.Context) {
 		return
 	}
 
+	// Registered before remoteMu is taken, so it runs after the unlock (defers
+	// are last in, first out) and the relay loop never sees the lock held.
+	defer d.hubRelayNudge()
+
 	d.remoteMu.Lock()
 	defer d.remoteMu.Unlock()
 	if d.remote != nil {
-		return // already listening; reloadRemote stops before it starts
+		return // already serving; reloadRemote stops before it starts
 	}
+
+	if err := d.devices.Unsaved(); err != nil {
+		// A revocation that lives only in memory must not be forgotten by a
+		// restart that would accept the revoked phone again, so nothing is
+		// served until a later save succeeds. Kept as remoteErr so pairBegin
+		// reports the real reason; reconcileRemoteBind retries.
+		d.logf("", "remote: not serving: %v", err)
+		d.remoteErr = err.Error()
+		d.remoteUnsaved = true
+		return
+	}
+	d.remoteUnsaved = false
 
 	build := d.paneRegistry
 	if build == nil {
@@ -169,27 +193,33 @@ func (d *Daemon) startRemote(ctx context.Context) {
 	// this daemon cannot see.
 	reg.Resolve = d.resolvePaneName
 
-	srv, err := d.listenRemote(ctx, remote.Options{
-		Bind: rc.BindMode(),
-		Port: rc.ListenPort(),
-		// Only the milestone-1 listener reads this; without the tag there is no
-		// bind rail to open. See config.RemoteConfig.InsecureLAN.
-		InsecureLAN: rc.InsecureLAN,
-		Dir:         d.home,
-		Handle:      d.handle,
-		Panes:       remotePanes{reg: reg, logf: d.remoteLogf},
-		Logf:        d.remoteLogf,
-	})
+	host, _ := os.Hostname()
+	opts := remote.Options{
+		Bind:      rc.BindMode(),
+		Port:      rc.ListenPort(),
+		Dir:       d.home,
+		Handle:    d.handleRemote,
+		Panes:     remotePanes{reg: reg, logf: d.remoteLogf},
+		Devices:   d.devices,
+		Pairer:    d.pairer,
+		Host:      host,
+		Logf:      d.remoteLogf,
+		RelayOnly: !rc.Listens(),
+	}
+	if d.watch != nil {
+		// Assigned only when set: a nil *watchHub in the interface would not be
+		// nil, and the server answers a nil Events with "unavailable".
+		opts.Events = d.watch
+	}
+	srv, err := d.listenRemote(ctx, opts)
 	if err != nil {
-		// The refusal itself was logged where it was decided (a missing
-		// authorizer, an unbindable address); this line says the daemon is
+		// The refusal itself was logged where it was decided (an unsaved
+		// registry, an unbindable address); this line says the daemon is
 		// carrying on without a listener, which is the part an operator
 		// reading the log for "why can't my phone connect" needs.
 		d.logf("", "remote: not listening: %v", err)
 		// KEPT, so cmd=pairBegin reports the real reason instead of sending a
-		// human to the log for a bind failure that may not be one — the first
-		// time it mattered, the cause was a missing key and the UI said the
-		// address could not be bound. Safe to put in front of an operator:
+		// human to the log. Safe to put in front of an operator:
 		// internal/remote is careful that no key ever reaches an error.
 		d.remoteErr = err.Error()
 		_ = reg.Close()
@@ -199,6 +229,11 @@ func (d *Daemon) startRemote(ctx context.Context) {
 	d.remoteErr = ""
 	d.panes = reg
 
+	if len(srv.Addrs()) == 0 {
+		// Relay-only: there is no socket to name and no port to advertise.
+		d.logf("", "remote: relay-only server up (SPKI pin %s)", srv.SPKIPin())
+		return
+	}
 	var where []string
 	for _, ba := range srv.Addrs() {
 		where = append(where, ba.Addr)
@@ -210,12 +245,12 @@ func (d *Daemon) startRemote(ctx context.Context) {
 // startAdvertiserLocked publishes the listener on the local network, when the
 // operator has asked for it.
 //
-// WHAT IT BUYS. The bearer key and the SPKI pin identify the DAEMON, not an
-// address, so a paired phone already has everything it needs on any network —
-// except where to dial. The connect code carries the addresses this machine had
-// at pairing time, which is why a phone paired at home finds nothing at the
-// office. A phone that can BROWSE finds the daemon wherever it is, with the
-// same credentials and no re-pairing.
+// WHAT IT BUYS. The pinned daemon identity and the phone's own key identify
+// the pair, not an address, so a paired phone already has everything it needs
+// on any network — except where to dial. The pairing code carries the
+// addresses this machine had at pairing time, which is why a phone paired at
+// home finds nothing at the office. A phone that can BROWSE finds the daemon
+// wherever it is, with the same credentials and no re-pairing.
 //
 // OFF UNLESS ASKED FOR ([remote].advertise), because it is a DISCLOSURE.
 // `_lola._tcp` announces "this machine runs autonomous coding agents and
@@ -285,8 +320,21 @@ func (d *Daemon) stopAdvertiserLocked() {
 func (d *Daemon) reconcileRemoteBind() {
 	d.remoteMu.Lock()
 	srv := d.remote
+	held := d.remoteUnsaved && d.devices.Unsaved() == nil
+	if held {
+		d.remoteUnsaved = false
+	}
 	d.remoteMu.Unlock()
-	if srv == nil || !srv.BindDrifted() {
+	if srv == nil {
+		// A server held off by an unsaved revocation comes back once a later
+		// save succeeded.
+		if held {
+			d.logf("", "remote: the device registry saved again; starting the phone server")
+			d.reloadRemote()
+		}
+		return
+	}
+	if !srv.BindDrifted() {
 		return
 	}
 
@@ -325,6 +373,8 @@ func (d *Daemon) stopRemote() {
 	if reg != nil {
 		_ = reg.Close()
 	}
+	// A relay that was serving through this server must stop accepting.
+	d.hubRelayNudge()
 }
 
 // reloadRemote applies a changed [remote] table by tearing the listener down
@@ -522,4 +572,115 @@ func toRemoteScreen(sc *panebus.Screen) *remote.PaneScreen {
 		CursorVisible: sc.CursorVisible,
 		AltScreen:     sc.AltScreen,
 	}
+}
+
+// handleRemote is the daemon's request handler as a paired device sees it.
+//
+// internal/remote has already tiered, field-rebuilt and rate-limited the
+// request; this is defence in depth behind that gate. A local-only command or
+// a command with no tier reaching it means the gate was bypassed, which is a
+// bug in internal/remote, so it is logged rather than answered quietly.
+func (d *Daemon) handleRemote(ctx context.Context, req protocol.Request) protocol.Response {
+	if slices.Contains(protocol.LocalOnlyCommands, req.Cmd) || remote.TierFor(req.Cmd) == protocol.TierNever {
+		d.logf("", "remote: handleRemote refused %s (tier gate bypassed?)", logSafeCmd(req.Cmd))
+		return protocol.Response{OK: false, Error: "not available remotely"}
+	}
+	if req.Cmd == protocol.CmdSSHAnswer && !d.remoteMayAnswer(req) {
+		return protocol.Response{OK: false, Error: errSSHAnswerOnMac.Error()}
+	}
+	ctx = context.WithValue(ctx, remoteCallKey{}, true)
+	if req.Cmd != "sessions" {
+		return d.handle(ctx, req)
+	}
+	// A session's ssh glance carries the exact command waiting for approval and
+	// the agent's latest summary, and every ssh command is denied remotely, so
+	// a phone could read those details without being able to act on them. It
+	// gets the session list without them.
+	data := d.sessionsData()
+	for i := range data.Sessions {
+		data.Sessions[i] = remoteSessionInfo(data.Sessions[i])
+	}
+	return dataResponse(data)
+}
+
+// logSafeCmd bounds and flattens a command name taken from the wire before it
+// reaches a log line.
+func logSafeCmd(cmd string) string {
+	if len(cmd) > 40 {
+		cmd = cmd[:40]
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '?'
+		}
+		return r
+	}, cmd)
+}
+
+// errSSHAnswerOnMac refuses a phone's answer to a question scoped to an SSH
+// connection: that is an SSH human act and stays on the desktop.
+var errSSHAnswerOnMac = errors.New("this question is about an SSH host; answer it on the Mac")
+
+// remoteCallKey marks a context whose request came through handleRemote, so a
+// handler can apply a phone-only rule inside its own critical section.
+type remoteCallKey struct{}
+
+// isRemoteCall reports whether ctx carries a request from a paired device.
+func isRemoteCall(ctx context.Context) bool {
+	v, _ := ctx.Value(remoteCallKey{}).(bool)
+	return v
+}
+
+// remoteMayAnswer is the early refusal of a phone's sshAnswer: only an element
+// that exists, is at the revision the phone read, and is not scoped to an SSH
+// connection; anything unreadable (no store, unknown element, bad args) answers
+// false. It is a courtesy, not the gate: an agent update may land between this
+// read and the handler's, so handleSSHAnswer re-checks the scope (isRemoteCall)
+// in the same store.Update that pins the revision.
+func (d *Daemon) remoteMayAnswer(req protocol.Request) bool {
+	var a protocol.SSHAnswerArgs
+	if err := json.Unmarshal(req.Args, &a); err != nil || a.Session == "" || a.Element == "" {
+		return false
+	}
+	store, err := d.sshStore(a.Session, false)
+	if err != nil || store == nil {
+		return false
+	}
+	ok := false
+	store.View(func(st *sshstore.State) {
+		it := st.Item(a.Element)
+		ok = it != nil && it.Element != nil && it.Element.Conn == "" && it.Element.Revision == a.Revision
+	})
+	return ok
+}
+
+// devicesChanged is the registry subscriber: the rendezvous set a relay
+// registers with the hub derives from the registry, so any change nudges it.
+func (d *Daemon) devicesChanged() { d.hubRelayDirty() }
+
+// dropRemoteDevice closes every live connection of a device (a revoke, a tier
+// change) and reports how many it closed. It must be called after the registry
+// change, so a reconnect cannot succeed in between.
+//
+// When the registry could not persist a revocation, the server is stopped as
+// well: a restart would forget the revocation and accept the phone again, so
+// nothing is served until a later save succeeds (reconcileRemoteBind brings it
+// back).
+func (d *Daemon) dropRemoteDevice(id string) int {
+	d.remoteMu.Lock()
+	srv := d.remote
+	d.remoteMu.Unlock()
+	n := 0
+	if srv != nil {
+		n = srv.DropDevice(id)
+	}
+	if err := d.devices.Unsaved(); err != nil {
+		d.logf("", "remote: stopping the phone server: %v", err)
+		d.stopRemote()
+		d.remoteMu.Lock()
+		d.remoteErr = err.Error()
+		d.remoteUnsaved = true
+		d.remoteMu.Unlock()
+	}
+	return n
 }

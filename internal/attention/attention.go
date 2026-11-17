@@ -47,6 +47,8 @@ type Question struct {
 type Choice struct {
 	Key   string
 	Label string
+	// Detail is a question option's description, on the rows under its name.
+	Detail string
 }
 
 const (
@@ -99,7 +101,7 @@ func Parse(paneText string, k agent.Kind) (Question, bool) {
 	if len(paneText) > maxInput {
 		paneText = paneText[len(paneText)-maxInput:]
 	}
-	block := trailingBlock(stripANSI(paneText))
+	block := trailingBlock(dropKeyHints(stripANSI(paneText)))
 	if len(block) == 0 {
 		return Question{}, false
 	}
@@ -215,6 +217,27 @@ func cleanLine(s string) string {
 	}
 	s = strings.TrimLeft(s, "│| \t")
 	s = strings.TrimRight(s, "│| \t")
+	return s
+}
+
+// keyHintRe matches a footer line that only names keys, such as "Esc to cancel · Tab to
+// amend" or "Enter to select · ↑/↓ to navigate · Esc to cancel".
+var keyHintRe = regexp.MustCompile(`(?i)^\s*` + keyHint + `(?:\s+·\s+` + keyHint + `)*\s*$`)
+
+const keyHint = `(?:esc|enter|tab|space|ctrl\S*|↑/↓|←/→)\s+to\s+[^·]+`
+
+// dropKeyHints removes a trailing footer of key names. Claude Code leaves a blank row
+// between a dialog and that footer, so without this the footer is the whole trailing
+// block and a real permission prompt parses as nothing.
+func dropKeyHints(s string) string {
+	lines := strings.Split(s, "\n")
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	if end > 0 && keyHintRe.MatchString(lines[end-1]) {
+		return strings.Join(lines[:end-1], "\n")
+	}
 	return s
 }
 

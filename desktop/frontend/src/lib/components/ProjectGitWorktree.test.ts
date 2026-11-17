@@ -1,0 +1,22 @@
+import {afterEach, expect, it, vi} from 'vitest';
+import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/svelte';
+import ProjectGitWorktree from './ProjectGitWorktree.svelte';
+import {ProjectGitState} from '$lib/projectgit.svelte';
+vi.mock('@bindings/desktop',()=>({ProjectGitService:{}}));
+afterEach(()=>{cleanup();vi.restoreAllMocks();});
+it('requires a new branch for an occupied checkout and preserves drafts on failure',async()=>{
+ const git=new ProjectGitState('demo','/repo');
+ git.snapshot={path:'/repo',branch:'main',head:'a'.repeat(40),upstream:'',refs:[],commits:[],worktrees:[{path:'/repo',branch:'main',head:'a'.repeat(40),locked:false,prunable:false,blocked:false}],files:[],hasMore:false,signing:{enabled:false,format:'',key:''}};
+ const branch={name:'main',fullName:'refs/heads/main',sha:'a'.repeat(40),remote:false,current:true};
+ const create=vi.spyOn(git,'createWorktree').mockImplementationOnce(async()=>{git.error='Folder already exists';return null;}).mockResolvedValue('/parallel');
+ const onCreated=vi.fn(),onClose=vi.fn();render(ProjectGitWorktree,{git,branch,onCreated,onClose});
+ expect(screen.getByRole('checkbox',{name:'Create a new branch'})).toBeChecked();expect(screen.getByRole('checkbox',{name:'Create a new branch'})).toBeDisabled();
+ expect(screen.getByRole('button',{name:'Create worktree'})).toBeDisabled();
+ await fireEvent.input(screen.getByLabelText('Branch name'),{target:{value:'feature/parallel'}});
+ await fireEvent.input(screen.getByLabelText('New folder'),{target:{value:'/parallel'}});
+ await fireEvent.submit(screen.getByLabelText('New folder').closest('form')!);
+ expect(await screen.findByRole('alert')).toHaveTextContent('Folder already exists');expect(screen.getByLabelText('Branch name')).toHaveValue('feature/parallel');
+ await fireEvent.submit(screen.getByLabelText('New folder').closest('form')!);
+ expect(create).toHaveBeenLastCalledWith(branch.fullName,branch.sha,'/parallel','feature/parallel','',200);
+ await waitFor(()=>expect(onCreated).toHaveBeenCalledWith('/parallel'));expect(onClose).not.toHaveBeenCalled();
+});

@@ -1,0 +1,93 @@
+{
+  "coverage": {
+    "cost_unavailable": 0,
+    "missing": 0,
+    "partial": 2,
+    "runs": 2
+  },
+  "goal": "d2d2db8a-3f28-43c6-ae11-0eb272a09b9f",
+  "limits": {
+    "agent_runs": 8,
+    "attempt_minutes": 12,
+    "attempts_per_task": 2,
+    "concurrency": 1,
+    "max_tasks": 1,
+    "review_rounds": 1,
+    "runtime_minutes": 25,
+    "tokens": 250000
+  },
+  "observed_spend_usd": 0.3151782,
+  "observed_tokens": 285000,
+  "runs": {
+    "15cdf8d6-f42d-443e-9631-1bcd50445475": {
+      "estimated": true,
+      "finished_at": "2026-10-21T23:53:10.358115Z",
+      "id": "15cdf8d6-f42d-443e-9631-1bcd50445475",
+      "kind": "coordinator",
+      "reserved_at": "2026-10-21T23:52:49.937055Z",
+      "spend_usd": 0.1888308,
+      "subject": "d2d2db8a-3f28-43c6-ae11-0eb272a09b9f",
+      "tokens": 54787,
+      "usage": {
+        "agent": "claude",
+        "at": "2026-10-21T23:53:09.679309Z",
+        "cost_status": "estimate",
+        "days": {
+          "2026-10-22": {
+            "cache_read": 11228,
+            "cache_write": 41311,
+            "cost_usd": 0.1888308,
+            "input": 2,
+            "output": 2246
+          }
+        },
+        "reason": "CLI-reported usage; interrupted or unsupported events may omit consumption",
+        "status": "partial"
+      }
+    },
+    "7ce8420f-b4c3-4e11-a2ba-bd0a7b08e09d": {
+      "estimated": true,
+      "finished_at": "0001-01-01T00:00:00Z",
+      "id": "7ce8420f-b4c3-4e11-a2ba-bd0a7b08e09d",
+      "kind": "worker",
+      "reserved_at": "2026-10-21T23:57:22.787634Z",
+      "spend_usd": 0.12634740000000003,
+      "subject": "adfd7fa2-8874-4bf8-b73b-711be14ec88a",
+      "tokens": 230213,
+      "usage": {
+        "agent": "claude",
+        "at": "2026-10-22T02:01:54.475967+02:00",
+        "cost_status": "estimate",
+        "days": {
+          "2026-10-22": {
+            "cache_read": 211447,
+            "cache_write": 17251,
+            "cost_usd": 0.12634740000000003,
+            "input": 12,
+            "output": 1503,
+            "slots": 2
+          }
+        },
+        "reason": "Agent-reported usage; logs may be delayed, incomplete or modified",
+        "status": "partial"
+      }
+    }
+  },
+  "updated_at": "2026-10-22T02:01:54.475967+02:00",
+  "validation": {
+    "cost_status": "unavailable",
+    "cpu_limit": 2,
+    "expected_checks": 0,
+    "inspected_checks": 0,
+    "invalid_receipts": 0,
+    "memory_limit_bytes": 2147483648,
+    "not_started_or_missing": 0,
+    "note": "Elapsed time includes container launch and cleanup; interrupted and running durations are unknown. Resource limits are ceilings, not measured CPU or memory usage. Missing receipts do not establish zero consumption.",
+    "observed_elapsed_millis": 0,
+    "partial": false,
+    "pid_limit": 256,
+    "runs": [],
+    "scratch_limit_bytes": 536870912,
+    "unknown_duration_runs": 0
+  }
+}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import Button from "./Button.svelte";
   let { label, summary = "", detail = "" }: { label: string; summary?: string; detail?: string } = $props();
   let open = $state(false);
@@ -62,9 +63,7 @@
         trigger = e.currentTarget as HTMLButtonElement;
         open = !open;
       }}>
-      <svg class="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
-        <circle cx="8" cy="8" r="6" /><path d="M8 7v4" /><circle cx="8" cy="4.5" r=".5" fill="currentColor" />
-      </svg>
+      <Icon name="info" class="size-3.5" />
     </Button>
   {/if}
 </span>

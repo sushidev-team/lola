@@ -290,6 +290,26 @@ func InterpretArgs(k Kind, instruction, model string) []string {
 	return args
 }
 
+// TelemetryArgs requests provider event envelopes without changing tool
+// permissions. Context-only planners may run outside a Git checkout.
+func TelemetryArgs(k Kind, instruction, model string, contextOnly bool) []string {
+	k = Parse(string(k))
+	if k == Claude {
+		return ReviewStreamArgs(k, instruction, model)
+	}
+	args := ReviewArgs(k, instruction, model)
+	args = args[:len(args)-1] // the positional instruction always comes last
+	if k == Codex {
+		args = append(args, "--json")
+		if contextOnly {
+			args = append(args, "--skip-git-repo-check")
+		}
+	} else {
+		args = append(args, "--format", "json")
+	}
+	return append(args, instruction)
+}
+
 // ReviewStreamArgs is ReviewArgs for a VISIBLE review — one run in a tmux pane a
 // human watches. Only Claude needs a different argv: a plain `claude -p` prints
 // NOTHING until it finishes, so the visible pass asks for the stream-json event

@@ -1,17 +1,15 @@
 // An in-memory FrameChannel, for tests and for developing the app with no
 // daemon in reach.
 //
-// It is shipped rather than kept inside a test file because three different
-// pieces need one: this package's own correlator tests, the wailsshim's event
-// synthesis (there is no server push in M1, so `daemon:sessions` has to be
-// produced by polling `cmd=sessions`, and testing that needs a fake daemon), and
-// any view that wants to be developed against a scripted pane.
+// It is shipped rather than kept inside a test file because several pieces need
+// one: this package's correlator and event tests, the wailsshim's push bridge,
+// and any view developed against a scripted pane or a scripted event stream.
 //
 // It deliberately does NOT emulate the daemon's policy. It will happily carry a
 // denied command or a frame travelling the wrong way, because a test that wants
 // to see the client refuse one has to be able to send it.
 
-import type { Frame } from "./protocol";
+import { FRAME_EVENT, FRAME_VERSION_CURRENT, type Frame } from "./protocol";
 import type { FrameChannel, Unsubscribe } from "./transport";
 
 /** A recorded exchange: what the client sent, in order. */
@@ -44,6 +42,11 @@ export class FakeChannel implements FrameChannel {
   /** Push one inbound frame at the client. */
   deliver(frame: Frame): void {
     for (const l of [...this.frameListeners]) l(frame);
+  }
+
+  /** Push one `event` frame of the stream `watchId` started for `topic`. */
+  deliverEvent(watchId: string, topic: string, seq: number, payload: unknown): void {
+    this.deliver({ v: FRAME_VERSION_CURRENT, type: FRAME_EVENT, id: watchId, topic, seq, payload });
   }
 
   onFrame(listener: (f: Frame) => void): Unsubscribe {

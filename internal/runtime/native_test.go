@@ -27,6 +27,7 @@ import (
 // time.Now (via withAgentState) so a returned session can DeepEqual a literal
 // fixture; the axis VALUES themselves stay and are asserted.
 func stripAxisStamps(s session.Session) session.Session {
+	s.FirstSeen = time.Time{}
 	s.AgentStateSince = time.Time{}
 	s.DeliverySince = time.Time{}
 	s.StatusSince = time.Time{}
@@ -101,8 +102,13 @@ func newFixture(t *testing.T, gitCases, tmuxCases string) *fixture {
 	}
 
 	addCase := `*"worktree add"*)
-  mkdir -p "$7"
-  printf 'gitdir: %s\n' "` + gitDir + `" > "$7/.git"
+  case "$5" in
+    -b) workdir="$7" ;;
+    --track) workdir="$8" ;;
+    *) workdir="$5" ;;
+  esac
+  mkdir -p "$workdir"
+  printf 'gitdir: %s\n' "` + gitDir + `" > "$workdir/.git"
   exit 0
   ;;
 *"rev-parse --verify --quiet refs/heads/"*)
@@ -220,7 +226,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 		"-L lola new-session -d -s " + id + " -c " + dir +
 			" exec sh -c 'set -a; . ./.lola/env; set +a; exec /usr/local/bin/claude --settings .lola/settings.json" +
 			` '\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\'''`,
-		"-L lola set-option -t =" + id + " status off",
+		"-L lola set-option -t =" + id + ": status off",
 	}, "\n")
 	if gotTmux := loggedArgs(t, f.tmuxLog); gotTmux != wantTmux {
 		t.Errorf("tmux calls:\n%s\nwant:\n%s", gotTmux, wantTmux)
@@ -357,9 +363,9 @@ func TestSpawnAppliesConfiguredChrome(t *testing.T) {
 	tmuxCalls := loggedArgs(t, f.tmuxLog)
 	id := "lola-nori-eng-42"
 	for _, want := range []string{
-		"-L lola set-option -t =" + id + " status-left LOLA | ENG-42",
-		"-L lola set-option -t =" + id + " status-right custom | detach F12",
-		"-L lola set-option -t =" + id + " mouse on",
+		"-L lola set-option -t =" + id + ": status-left LOLA | ENG-42",
+		"-L lola set-option -t =" + id + ": status-right custom | detach F12",
+		"-L lola set-option -t =" + id + ": mouse on",
 		"-L lola bind-key -n F12 detach-client",
 	} {
 		if !strings.Contains(tmuxCalls, want) {
@@ -809,8 +815,8 @@ LOLA_EOF
 	// Only the LIVE ones: eng-2 is dead and eng-9 orphaned-but-live.
 	calls := loggedArgs(t, tmuxLog)
 	for _, want := range []string{
-		"-L lola set-option -t =lola-nori-eng-1 status off",
-		"-L lola set-option -t =lola-nori-eng-9 status off",
+		"-L lola set-option -t =lola-nori-eng-1: status off",
+		"-L lola set-option -t =lola-nori-eng-9: status off",
 	} {
 		if !strings.Contains(calls, want) {
 			t.Errorf("Adopt should re-apply chrome, missing %q:\n%s", want, calls)
@@ -1894,6 +1900,33 @@ func TestCodexResumeProbeHonorsCancellation(t *testing.T) {
 	}
 	if codexHasSession(ctx, home, "/worktree") {
 		t.Fatal("canceled probe must not enable resume")
+	}
+}
+
+// The record must say what the launch did. ssh's production rule reads it, so a
+// record still saying "docker" over an agent now on the host would pass that rule.
+func TestReviveRecordsTheSandboxItLaunchedWith(t *testing.T) {
+	f := newFixture(t, "", "")
+	t.Setenv("HOME", t.TempDir())
+	removed := []string{}
+	f.n.RemoveContainer = func(_ context.Context, id string) error {
+		removed = append(removed, id)
+		return nil
+	}
+	id := "lola-nori-eng-90"
+	if err := os.MkdirAll(filepath.Join(f.root, "nori", id, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-90", Agent: "claude", Sandbox: config.SandboxDocker}
+	got, err := f.n.Revive(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Sandbox != "" {
+		t.Fatalf("the project has no sandbox, and the record says %q", got.Sandbox)
+	}
+	if len(removed) != 1 || removed[0] != id {
+		t.Fatalf("old container not removed: %v", removed)
 	}
 }
 

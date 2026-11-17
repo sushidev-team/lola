@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 
 const OpenURL = vi.fn().mockResolvedValue(undefined);
+const PRReadiness = vi.fn().mockResolvedValue({ number: 9, url: 'https://github.com/acme/api/pull/9', state: 'OPEN', checks: 'fail', threads: [] });
 vi.mock("@bindings/desktop", () => ({
   DaemonService: {
     Diff: vi.fn().mockResolvedValue({ session: "s1", base: "origin/main", mergeBase: "abc", files: [] }),
     OpenURL: (...a: unknown[]) => OpenURL(...a),
+    PRReadiness: (...a: unknown[]) => PRReadiness(...a),
     Alive: vi.fn().mockResolvedValue(false),
     Sessions: vi.fn(),
     Projects: vi.fn(),
@@ -15,15 +17,13 @@ vi.mock("@bindings/desktop", () => ({
   TermService: { Shells: vi.fn(async () => []) },
 }));
 
-const { default: SessionEmbed } = await import("./SessionEmbed.svelte");
+const { default: SessionBar } = await import("./session/SessionBar.svelte");
+const { default: BeforeMerge } = await import("./session/BeforeMerge.svelte");
 const { store } = await import("$lib/store.svelte");
-const { terms, DIFF } = await import("$lib/terms.svelte");
 
-// SUSHI-628: a sandboxed session says so, and a STACK session shows one chip
-// per app — its PR (clickable), or whether it has changes yet — instead of a
-// single "Open PR" that would reach only one repository.
-describe("SessionEmbed sandbox + stack apps", () => {
-  it("shows the sandbox chip and one chip per app", async () => {
+// Sandbox details live on the title's hover card; stack PRs live in PR status.
+describe("SessionBar sandbox + stack apps", () => {
+  it("names the sandbox on hover and opens the focused app's PR from PR status", async () => {
     store.sessions = [
       {
         id: "s1",
@@ -42,19 +42,20 @@ describe("SessionEmbed sandbox + stack apps", () => {
         ],
       } as never,
     ];
-    // The diff tab, not the live terminal: xterm cannot draw in jsdom.
-    terms.select("s1", DIFF);
-    render(SessionEmbed, { sessionId: "s1", focused: true });
-    expect(screen.getByText("docker")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Open PR/ })).toBeNull();
-    const strip = screen.getByRole("list", { name: "Apps" });
-    const items = within(strip).getAllByRole("listitem");
-    expect(items.map((li) => li.textContent?.replace(/\s+/g, " ").trim())).toEqual([
-      expect.stringMatching(/^Web · changes, no PR :4100, :4101$/),
-      expect.stringMatching(/^api · #9/),
-      expect.stringMatching(/^docs · untouched$/),
-    ]);
-    await fireEvent.click(within(items[1]).getByRole("button", { name: /#9/ }));
+    render(SessionBar, { sessionId: "s1" });
+    // No filled chip for it any more, only the card.
+    expect(screen.queryByText("docker")).toBeNull();
+    await fireEvent.pointerEnter(document.querySelector("[data-session-bar] [tabindex='0']")!);
+    expect(await screen.findByText("docker")).toBeInTheDocument();
+    await fireEvent.pointerLeave(document.querySelector("[data-session-bar] [tabindex='0']")!);
+
+    expect(screen.queryByRole("button", { name: "Delivery" })).toBeNull();
+    render(BeforeMerge, { session: store.sessions[0] });
+    await waitFor(() => expect(PRReadiness).toHaveBeenCalledWith('s1~api', 9));
+    expect(screen.queryByRole("menuitem", { name: /Open PR/ })).toBeNull();
+    expect(screen.getByRole("region", { name: "PR status" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /#9/ })).toHaveLength(1);
+    await fireEvent.click(screen.getByRole("button", { name: /#9/ }));
     expect(OpenURL).toHaveBeenCalledWith("https://github.com/acme/api/pull/9");
   });
 });

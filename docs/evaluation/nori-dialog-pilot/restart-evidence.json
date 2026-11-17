@@ -1,0 +1,26 @@
+{
+  "before": {
+    "state": "running",
+    "revision": 25,
+    "attempts": [
+      "7ce8420f-b4c3-4e11-a2ba-bd0a7b08e09d"
+    ],
+    "agent_runs": [
+      "15cdf8d6-f42d-443e-9631-1bcd50445475",
+      "7ce8420f-b4c3-4e11-a2ba-bd0a7b08e09d"
+    ]
+  },
+  "after": {
+    "state": "running",
+    "revision": 26,
+    "attempts": [
+      "7ce8420f-b4c3-4e11-a2ba-bd0a7b08e09d"
+    ],
+    "agent_runs": [
+      "15cdf8d6-f42d-443e-9631-1bcd50445475",
+      "7ce8420f-b4c3-4e11-a2ba-bd0a7b08e09d"
+    ]
+  },
+  "same_attempts": true,
+  "same_calls": true
+}

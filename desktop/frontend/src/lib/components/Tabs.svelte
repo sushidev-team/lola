@@ -7,9 +7,15 @@
     active,
     onSelect,
     vertical = false,
+    quiet = false,
+    pill = false,
   }: {
-    tabs: { id: string; label: string; group?: string }[];
+    tabs: { id: string; label: string; count?: number; group?: string; alert?: boolean }[];
+    /** Compact rounded chips with a count badge, for dense toolbars. */
+    pill?: boolean;
     vertical?: boolean;
+    /** Chrome that must stay under the content: ink, not accent, and no margin of its own. */
+    quiet?: boolean;
     active: string;
     onSelect: (id: string) => void;
   } = $props();
@@ -34,7 +40,7 @@
   }
 </script>
 
-<div role="tablist" aria-orientation={vertical ? "vertical" : "horizontal"} class={vertical ? "space-y-1" : "mb-3 flex flex-wrap items-center gap-1 border-b border-edge/60"}>
+<div role="tablist" aria-orientation={vertical ? "vertical" : "horizontal"} class={vertical ? "space-y-1" : pill ? "flex min-w-0 items-center gap-1" : quiet ? "flex items-center gap-3 px-4" : "mb-3 flex flex-wrap items-center gap-1 border-b border-edge/60"}>
   {#each tabs as t, i (t.id)}
     {#if vertical && t.group && t.group !== tabs[i - 1]?.group}
       <div class="label px-2.5 pt-4 pb-1 text-faint first:pt-0">{t.group}</div>
@@ -45,11 +51,13 @@
       role="tab"
       aria-selected={active === t.id}
       tabindex={active === t.id ? 0 : -1}
-      class="px-2.5 py-2 transition-colors {vertical ? 'w-full rounded-md text-left' : '-mb-px border-b-2'} {active === t.id
-        ? (vertical ? 'bg-sel font-medium text-accent-ink' : 'border-accent font-medium text-accent-ink')
-        : 'border-transparent text-faint hover:text-ink'}"
+      class={pill
+        ? `flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-sm transition-colors ${active === t.id ? 'bg-sel font-medium text-ink' : 'text-faint hover:bg-sel/50 hover:text-ink'}`
+        : `${quiet ? 'h-7 text-sm' : 'px-2.5 py-2'} transition-colors ${vertical ? 'w-full rounded-md text-left' : quiet ? 'border-b-2' : '-mb-px border-b-2'} ${active === t.id
+          ? (vertical ? 'bg-sel font-medium text-accent-ink' : quiet ? 'border-ink text-ink' : 'border-accent font-medium text-accent-ink')
+          : 'border-transparent text-faint hover:text-ink'}`}
       onclick={() => onSelect(t.id)}
-      onkeydown={(e) => onKey(e, i)}>{t.label}</button
+      onkeydown={(e) => onKey(e, i)}>{t.label}{#if t.count !== undefined}<span class={pill ? (t.alert && t.count > 0 ? 'num rounded-full bg-orange/20 px-1.5 text-xs font-medium text-orange' : 'num text-xs text-faint') : 'num ml-1.5 font-normal text-faint'}>{t.count}</span>{/if}</button
     >
   {/each}
 </div>

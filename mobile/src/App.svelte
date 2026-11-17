@@ -1,435 +1,394 @@
+<script lang="ts" module>
+  import type { Component } from "svelte";
+  import type { Route } from "@mobile/lib/router.svelte";
+
+  type Loaded = { default: Component };
+  type Loader = () => Promise<Loaded>;
+
+  // One lazy chunk per screen, from a FIXED map: a D1 item replaces the file at
+  // its path and never edits this one. Route to screen is a pure function.
+  const SCREENS = {
+    connect: () => import("./screens/Connect.svelte"),
+    inbox: () => import("./screens/Inbox.svelte"),
+    activity: () => import("./screens/Activity.svelte"),
+    projects: () => import("./screens/Projects.svelte"),
+    projectDetail: () => import("./screens/ProjectDetail.svelte"),
+    prPicker: () => import("./screens/PRPicker.svelte"),
+    ticketPicker: () => import("./screens/TicketPicker.svelte"),
+    settings: () => import("./screens/Settings.svelte"),
+    session: () => import("./screens/session/Session.svelte"),
+    bridgeGuard: () => import("./screens/dev/BridgeGuard.svelte"),
+  } as const satisfies Record<string, Loader>;
+  type ScreenKey = keyof typeof SCREENS;
+
+  export function screenKey(r: Route): ScreenKey {
+    switch (r.name) {
+      case "connect":
+        return "connect";
+      case "session":
+        return "session";
+      case "dev":
+        return "bridgeGuard";
+      case "tab":
+        if (r.tab === "projects") {
+          if (!r.project) return "projects";
+          return r.pick === "prs" ? "prPicker" : r.pick === "tickets" ? "ticketPicker" : "projectDetail";
+        }
+        return r.tab;
+    }
+  }
+
+  // A resolved import is kept, so a screen that re-renders awaits the same
+  // promise and never flashes its pending state.
+  const screenCache = new Map<ScreenKey, Promise<Loaded>>();
+  function screen(key: ScreenKey): Promise<Loaded> {
+    let p = screenCache.get(key);
+    if (!p) {
+      p = SCREENS[key]();
+      screenCache.set(key, p);
+    }
+    return p;
+  }
+
+  // Sheets are `sheets/<name>.svelte`, resolved by name; a sheet whose file has
+  // not landed renders nothing. Each sheet mounts its own `Sheet` (it owns the
+  // title and the detent) and closes through `router.close()`.
+  const sheetLoaders: Record<string, Loader> = Object.fromEntries(
+    Object.entries(
+      import.meta.glob<Loaded>(["./sheets/*.svelte", "!./sheets/*.test.svelte"]),
+    ).map(([path, load]) => [path.replace(/^.*\/([^/]+)\.svelte$/, "$1"), load]),
+  );
+  const sheetCache = new Map<string, Promise<Loaded>>();
+  function sheet(name: string): Promise<Loaded> | null {
+    const load = sheetLoaders[name];
+    if (!load) return null;
+    let p = sheetCache.get(name);
+    if (!p) {
+      p = load();
+      sheetCache.set(name, p);
+    }
+    return p;
+  }
+
+  /** Debug-only routes exist everywhere but a production build. */
+  const DEBUG_BUILD = import.meta.env.MODE !== "production";
+</script>
+
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { store } from "$lib/store.svelte";
+  import { onMount, untrack } from "svelte";
+  import { Spring } from "svelte/motion";
+  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+  import { confirm } from "$lib/confirm.svelte";
+  import { nav as deskNav } from "$lib/nav.svelte";
   import { appearance } from "$lib/theme-runtime.svelte";
-  import { connection } from "@mobile/lib/connection.svelte";
-  import { daemonLabel } from "@mobile/lib/daemonname";
-  import { DEFAULT_REMOTE_PORT, endpointId, parsePort } from "@mobile/lib/endpoint";
-  import { nav } from "@mobile/lib/nav.svelte";
-  import { installAppState } from "@mobile/lib/appstate";
-  import { installDevLink, type DevLinkTarget } from "@mobile/lib/devlink";
-  import { installDynamicType } from "@mobile/lib/dynamictype";
-  import { applyMobileTokens } from "@mobile/lib/mobiletokens";
-  import { pairing } from "@mobile/lib/pairing.svelte";
+  import Banner, { connectionBanner } from "@mobile/lib/components/Banner.svelte";
+  import FlashToast from "@mobile/lib/components/FlashToast.svelte";
   import TabBar from "@mobile/lib/components/TabBar.svelte";
-  import Activity from "@mobile/views/Activity.svelte";
-  import Connect from "@mobile/views/Connect.svelte";
-  import ProjectDetail from "@mobile/views/ProjectDetail.svelte";
-  import Projects from "@mobile/views/Projects.svelte";
-  import PRPicker from "@mobile/views/PRPicker.svelte";
-  import Sessions from "@mobile/views/Sessions.svelte";
-  import Settings from "@mobile/views/Settings.svelte";
-  import Splash from "@mobile/views/Splash.svelte";
-  import Terminal from "@mobile/views/Terminal.svelte";
-  import TicketPicker from "@mobile/views/TicketPicker.svelte";
+  import { installAppState } from "@mobile/lib/appstate";
+  import { connection } from "@mobile/lib/connection.svelte";
+  import { copy } from "@mobile/lib/copy";
+  import { applyDevLink, installDevLink } from "@mobile/lib/devlink";
+  import { applyRoute, followFocus, sheetClosed, sheetForOverlay } from "@mobile/lib/desknav";
+  import { installDynamicType } from "@mobile/lib/dynamictype";
+  import { attachAttention } from "@mobile/lib/attention";
+  import { haptic } from "@mobile/lib/haptics";
+  import { installKeyboardInset } from "@mobile/lib/keyboardinset";
+  import { applyMobileTokens, MOTION, reducedMotion } from "@mobile/lib/mobiletokens";
+  import { router, type ConnectState } from "@mobile/lib/router.svelte";
 
-  // The whole app: three screens, four tabs, and the rules for moving between
-  // them.
+  // The app shell: the router outlet, the banners above it, the tab bar below it
+  // and the sheet host over it (spec §4.2, §5.1, §6.4).
   //
-  // DELIBERATELY NOT the desktop's App.svelte. That file is a keyboard router
-  // and a macOS menu bridge — bare keys for actions, Cmd chords delegated to
-  // AppKit, an overlay stack, a two-pane cockpit. None of it means anything on a
-  // phone, where there are no chords, no menu bar, and one screen at a time.
-  //
-  // ONE RULE WORTH STATING. Losing the connection does NOT send the user back to
-  // Connect. PLAN.md is explicit that an off-network phone must land on the last
-  // snapshot behind a banner naming the actual reason, and must never be shown
-  // the pairing screen — because that screen is what REVOCATION looks like, and
-  // if the app cannot tell "your WiFi changed" from "this device was revoked",
-  // neither can the person holding it. So a dropped connection stays where it
-  // is, and only an explicit disconnect returns here.
-  //
-  // THAT RULE NOW HAS TEETH ON THE BOOT PATH TOO, which it did not before. A
-  // cold launch that has a remembered Mac and its key and simply cannot reach it
-  // used to fall through to the connect form — the pairing screen, for the one
-  // case that is definitionally not revocation. It goes to the session list
-  // instead, with the banner and the retry ladder running. The form is still
-  // where a REFUSAL lands, because a refused key, a mismatched pin and a version
-  // skew each need a human and a field; `diagnosis.retryable` is exactly that
-  // distinction and is what the boot branches on.
+  // Invariants:
+  //  - Losing the connection never routes. Only `not_paired` and an explicit
+  //    unpair put Connect on the stack; everything else is a banner over the
+  //    screen the person was on. `key_changed` keeps the screen too.
+  //  - Nothing here identifies or authenticates a daemon: the connection store
+  //    holds public ids and names, the pairing record is native.
+  //  - The boot holds a blank ground only until the paired list is read (the
+  //    Keychain answers in milliseconds), so a paired phone never flashes
+  //    Connect; the dial itself happens behind the Inbox and its banner.
+  //  - The first banner pays the status-bar inset and the screens below it are
+  //    told not to (`--lola-top-inset`).
 
-  // BOOT STATE. The restore path is asynchronous — the keychain, then a dial —
-  // so until it answers the app cannot know whether it is heading for the
-  // session list or the connect form. Rendering the form meanwhile asks for
-  // credentials that may already be stored and then replaces itself a second
-  // later, so the splash holds the screen instead. It is released on EVERY
-  // outcome, including the failures, which is why the release sits in a finally
-  // rather than after the happy path.
   let booting = $state(true);
-  let bootMessage = $state("Starting…");
+  let devLinked = $state(false);
 
-  // A boot must never be able to strand someone on a logo. The restore path is
-  // already bounded (Connection#awaitTransport gives up after 4s), but this is
-  // the backstop for anything that is not: whatever happens, the form is
-  // reachable. It is deliberately longer than the transport wait, so the
-  // specific failure wins the race and the generic one is only ever a
-  // last resort.
-  const BOOT_CEILING_MS = 8000;
+  function toConnect(state: ConnectState): void {
+    router.stack = [{ name: "connect", state }];
+    router.sheet = "";
+  }
 
   onMount(() => {
-    // Paint the flavor before anything else. Step one is synchronous from
-    // localStorage, so a non-default theme never flashes; step two asks the
-    // daemon and is a no-op if the shim cannot answer yet.
-    void appearance.init();
-
-    // The system text size, measured once and tracked. The stylesheet's type
-    // scale is rem against the root size this writes; see dynamictype.ts for
-    // why a measurement is the only way to read the setting at all.
     const offType = installDynamicType();
-
-    // Development URLs, if this is a build that has them. Registered HERE and
-    // not on the connect screen because the plugin retains a pending link until
-    // something consumes it: a cold launch delivers the URL while the WebView
-    // is still loading, and a listener that waited for a screen to mount would
-    // be handed a link nobody could use.
-    // The source travels with the payload: a URL from the OS router may only
-    // fill the form, a link from this process's own launch environment may
-    // connect. `devLinkSource` decides, and fails closed toward the form.
-    const offDevLink = installDevLink((p, source, target) =>
-      pairing.offer(p, source, target),
-    );
-
-    // Subscribe to the daemon push events. Idempotent, and safe to call before
-    // a transport exists: the shim's first poll simply fails and the store
-    // reports "connecting" rather than inventing an empty list.
-    store.start();
-
-    // Coming back from the background. The plugin closes the socket on the way
-    // out — see appstate.ts — so something has to reopen it, and this is that
-    // something. It is registered here rather than on a screen because the app
-    // can be suspended from any of them, and the connection applies its own
-    // gates (an explicit disconnect, a connect already in flight, no stored
-    // key), so this callback is unconditional on purpose.
-    const offAppState = installAppState(() => {
-      void (async () => {
-        if (await connection.reconnect()) void store.refresh();
-      })();
+    const offKeyboard = installKeyboardInset((px) => {
+      document.documentElement.style.setProperty(
+        "--kb",
+        `max(0px, calc(${px}px - env(safe-area-inset-bottom, 0px)))`,
+      );
+      document.documentElement.toggleAttribute("data-kb", px > 0);
     });
+    // Registered here and not on a screen: the plugin keeps a pending link until
+    // something consumes it, and a cold launch delivers it before any screen mounts.
+    const offDevLink = installDevLink(
+      (link) => {
+        devLinked = true;
+        applyDevLink(router, link);
+      },
+      () => connection.daemons.length > 0,
+    );
+    // The plugin closes the socket on the way to the background; the connection
+    // applies its own gates, so this is unconditional.
+    const offAppState = installAppState(() => void connection.reconnect());
+    // A tap on the wrist when a session newly needs the person (lib/attention.ts).
+    const offAttention = attachAttention();
 
-    // If a previous run remembered an endpoint AND its key survived in the
-    // keychain, go straight past the connect screen. Anything less than both
-    // lands on the form with what is known already filled in.
-    const ceiling = setTimeout(() => {
-      booting = false;
-    }, BOOT_CEILING_MS);
+    // WebKit scrolls the document to reveal a caret even with scrolling disabled.
+    const onFocusIn = (e: FocusEvent): void => {
+      if ((e.target as HTMLElement | null)?.closest?.("[data-phone-desk] textarea")) {
+        requestAnimationFrame(() => window.scrollTo(0, 0));
+      }
+    };
+    document.addEventListener("focusin", onFocusIn);
 
     void (async () => {
-      try {
-        bootMessage = "Checking for a saved connection…";
-        const prev = await connection.restore();
-        // Either half is a pairing: `key` for a Keychain that refused and left
-        // it in memory, `keyRef` for the ordinary case where the plugin holds
-        // it and the plaintext deliberately never crosses the bridge.
-        if (!prev || (prev.key === "" && prev.keyRef === "")) return;
-        // Name the MACHINE being dialled, not the address. A boot that hangs
-        // here is exactly the case where knowing WHICH Mac is unreachable is
-        // the whole diagnosis — and the address is the half that changes
-        // between home and the office, so it is only the fallback.
-        const bootPort = parsePort(prev.draft.port) ?? DEFAULT_REMOTE_PORT;
-        bootMessage = `Connecting to ${daemonLabel(
-          endpointId(prev.draft.host, bootPort),
-          `${prev.draft.host}:${bootPort}`,
-        )}…`;
-        if (await connection.connect(prev.draft, prev.key, false, [], prev.keyRef)) {
-          void store.refresh();
-          nav.toSessions();
-        } else if (connection.diagnosis.retryable) {
-          // Unreachable, not refused: the credential is intact and the daemon
-          // is simply not answering right now. Show the list behind its banner
-          // and keep trying quietly — `retryLater` arms the ladder without
-          // paying a second connect timeout on top of the one just spent.
-          nav.toSessions();
-          connection.retryLater();
-        }
-      } finally {
-        clearTimeout(ceiling);
-        booting = false;
-      }
+      const paired = await connection.refresh();
+      booting = false;
+      if (paired.length === 0) toConnect("scan");
+      else void connection.boot();
     })();
 
     return () => {
-      clearTimeout(ceiling);
+      document.removeEventListener("focusin", onFocusIn);
       offAppState();
+      offAttention();
       offDevLink();
+      offKeyboard();
       offType();
     };
   });
 
-  // Reaching `ready` from anywhere means the list is now worth showing. Written
-  // as an effect rather than folded into the connect handler so an
-  // auto-reconnect that succeeds while the user is staring at the form also
-  // moves them along.
-  $effect(() => {
-    // `landed` has already moved on by the time this runs for a hand-off, so the
-    // screen check is what keeps a deep link from being overwritten by the list.
-    if (connection.ready && nav.screen === "connect") nav.toSessions();
-  });
-
-  // A LAUNCH LINK'S DESTINATION, HELD UNTIL THERE IS A CONNECTION TO APPLY IT
-  // TO. These two effects exist because the pane half of a development link was
-  // being lost, which made the terminal screen — the screen this whole app is a
-  // bet on — unreachable by link and therefore unscreenshottable, the single
-  // thing `DevLinkTarget` exists to prevent.
-  //
-  // WHAT ACTUALLY HAPPENS, measured on the Simulator rather than guessed at.
-  // The plugin accepts the link and posts it ("dev link accepted … via=
-  // dev-launch … pane=true" in the device log), the offer routes to the connect
-  // screen, and the connect screen's own dial then fails — the boot restore is
-  // already holding a connection to the same daemon, and the second attempt
-  // ends as "connection failed: network". `onconnected` never fires, so
-  // `landed` never runs, and the restore's connection carries on serving a
-  // session list with the target gone. Nothing on screen distinguishes that
-  // from a link that was never delivered.
-  //
-  // So the destination is REMEMBERED rather than consumed on arrival, and
-  // applied by whichever connection is actually live. The offer itself still
-  // travels its ordinary path untouched — this reads it, it does not drain it —
-  // so the connect screen, the credential handling and `devLinkActive` behave
-  // exactly as before.
-  //
-  // THE FENCE IS `launch`, AND IT IS THE ONLY ONE NEEDED. That is this
-  // process's own launch environment: setting it means having started the app,
-  // which is the same reason `devLinkSource` already lets that door dial on its
-  // own, while anything the OS URL router delivered stays `link` and is ignored
-  // here. A destination grants nothing beyond navigation — it names a pane, and
-  // a pane that does not exist on the connected daemon simply reports itself
-  // gone in the terminal's own banner. Deliberately NOT also matched against
-  // the live endpoint: the remembered endpoint is whichever address the app was
-  // first paired on (a LAN address as easily as loopback), so that comparison
-  // rejected the ordinary case and put the feature straight back where it was.
-  //
-  // No banner is set here, correctly: a connection restored from the Keychain
-  // did not arrive by link and must not claim that it did.
-  let linkTarget = $state<DevLinkTarget | null>(null);
-
-  $effect(() => {
-    const p = pairing.pending;
-    if (p?.source === "launch" && p.target) linkTarget = p.target;
-  });
-
-  $effect(() => {
-    const t = linkTarget;
-    if (!t || !connection.ready) return;
-    linkTarget = null;
-    applyTarget(t);
-  });
-
-  // A hand-off can land at any moment — the OS delivers a URL whenever it
-  // decides to, including during a cold launch and while the sessions list is
-  // open — and only the connect screen knows how to apply one. Routing here
-  // rather than inside the inbox keeps `pairing` free of any idea of
-  // navigation, so it stays a plain module a test can drive.
-  $effect(() => {
-    if (pairing.pending && nav.screen !== "connect") nav.toConnect();
-  });
-
-  // A hand-off that lands mid-boot ends the boot. Otherwise the offer would sit
-  // behind the logo until the ceiling fired, which reads as the link having been
-  // ignored.
-  $effect(() => {
-    if (pairing.pending) booting = false;
-  });
-
-  // THE DAEMON NAMES ITSELF, and this is where the app hears it. `cmd=status`
-  // carries the machine's hostname on an authenticated answer (never in the
-  // mDNS advertisement, which deliberately carries no hostname at all), so the
-  // app can say "connecting to marvin" rather than naming an address that
-  // changes with every network. A person's own rename still wins over it.
-  $effect(() => {
-    const host = store.status?.host ?? "";
-    if (host !== "") connection.learnName(host);
-  });
-
-  /**
-   * Where a fresh connection lands.
-   *
-   * The list, unless a DEVELOPMENT link named a pane — in which case the app
-   * opens it directly. That exists for one reason: the terminal is the screen
-   * this whole app is a bet on and it was the only screen a reviewer could not
-   * produce a screenshot of, because it is reached solely by tapping a row and
-   * the Simulator offers no way to synthesise that tap. Routing it HERE rather
-   * than inside the connect screen keeps navigation out of `pairing`, exactly
-   * as the offer inbox already does.
-   */
-  function landed(target?: DevLinkTarget | null): void {
-    void store.refresh();
-    if (target) applyTarget(target);
-    else nav.toSessions();
-  }
-
-  /**
-   * Put the app where a development link asked for.
-   *
-   * A destination is several independent things and any of them may be absent:
-   * a pane, a triage bucket, a search, a tab, a project, a picker and a sheet.
-   * The ORDER here is the whole of the function, and it runs outside-in: the
-   * filter is applied first because it describes the list rather than the
-   * navigation, then the tab and the project — which say what is UNDER
-   * everything else — then the screen is chosen (a pane means the terminal, no
-   * pane means the tab shell), and only then are the things opened OVER it: the
-   * picker, then the sheet. The sheet is last because `toTerminal` and
-   * `toSessions` both clear it, a modal belonging to the screen it was opened
-   * over; the picker survives them, because it belongs to the Projects tab's
-   * own depth rather than to a screen.
-   *
-   * Nothing here is a capability. Each field names somewhere the person holding
-   * the phone could have reached with one tap; what the link buys is that a
-   * SCRIPT can reach it too, which is the only way these screens can be
-   * photographed at all.
-   */
-  function applyTarget(t: DevLinkTarget): void {
-    if (t.triage) nav.triage = t.triage;
-    if (t.query) nav.query = t.query;
-
-    // THE TAB IS SET BEFORE THE SCREEN, and directly rather than through
-    // `nav.toTab`, because the screen decision is the two lines below it: the
-    // tab says which of the four destinations is UNDER whatever happens next,
-    // and a link that names both a pane and a tab means "open this terminal,
-    // and put me on that tab when I come back out".
-    //
-    // A filter with no tab of its own lands on the sessions list, because a
-    // triage bucket and a search are statements ABOUT that list — applying one
-    // while some other tab is showing would filter a screen nobody can see.
-    // `t.tab` is already narrowed to the vocabulary by devlink.ts, which
-    // matches it with nav's own `isTab` exactly as it matches a sheet name with
-    // `isSheetName`. An unrecognised value arrives here as "" and the tab is
-    // left alone, which is what every other field in a link does.
-    if (t.tab) nav.tab = t.tab;
-    else if (t.project) nav.tab = "projects";
-    else if (t.triage || t.query) nav.tab = "sessions";
-
-    // A PROJECT IS A DEPTH INSIDE THE PROJECTS TAB, not a screen of its own, so
-    // it is written straight onto `nav` beside the tab rather than through
-    // `nav.toProject` — that helper forces the tab and clears the picker, which
-    // is right for a row being tapped and wrong for a link that may have asked
-    // for both a project and the picker over it. Like every other field here it
-    // is only applied when the link named one, so a link that names none leaves
-    // whatever depth the app was already at alone.
-    if (t.project) nav.project = t.project;
-
-    if (t.pane) nav.toTerminal(t.session, t.pane);
-    else nav.toSessions();
-    // The picker before the sheet, and both after the screen: a picker is a
-    // place, a sheet is a modal over one. Neither `toTerminal` nor `toSessions`
-    // touches `pick`, which is what lets a link name a pane AND a picker — open
-    // this terminal, and land on that picker when you come back out — exactly
-    // as it can already name a pane and a tab.
-    if (t.pick) nav.toPick(t.pick);
-    if (t.sheet) nav.openSheet(t.sheet);
-  }
-
-
-  // THE PHONE'S OWN TOKENS, repainted with the flavor.
-  //
-  // `appearance` writes the shared token set (theme-runtime's applyFlavor) and
-  // knows nothing about the seven names this app adds on top of it — the tab
-  // bar's ground, the prose tier, the hairline, the soft chip fills. They are
-  // derived from the SAME `Flavor` object, so they are written here, from an
-  // effect that re-runs whenever it changes: on boot, on a settings change, and
-  // on the daemon answering `GetTheme` after a cached first paint.
-  //
-  // The static values compiled into app.css cover the gap before this runs, so
-  // there is no flash — they are macchiato's, the flavor the design was drawn
-  // in, and a mocha default only differs by a few points of ground.
+  // The phone's own tokens follow the flavor.
   $effect(() => {
     applyMobileTokens(appearance.flavor);
   });
 
-  // Derived rather than stored, so the banner cannot outlive the connection it
-  // describes: a dropped link connection stops rendering it without anything
-  // having to remember to clear a flag.
-  const devBanner = $derived(pairing.devLinkActive && connection.ready);
+  // Revocation is the one connection state with a screen: the Mac removed this
+  // phone. Every other state is a banner.
+  $effect(() => {
+    if (connection.diagnosis.kind === "not_paired" && untrack(() => router.top.name) !== "connect") {
+      haptic("notPaired");
+      toConnect("not-paired");
+    }
+  });
 
-  /**
-   * Is the bottom bar drawn?
-   *
-   * ONLY ON THE TAB SHELL, which is exactly the three exclusions the bar needs
-   * and no more: the splash is `booting`, the connect form is
-   * `screen === "connect"`, and a terminal is `screen === "terminal"` — full
-   * screen by design, with its own accessory bar in the space a tab bar would
-   * want and every touch inside the pane already spoken for.
-   *
-   * DELIBERATELY NOT `connection.ready`. "A connection exists" is tempting and
-   * wrong: this app stays on the last snapshot behind a banner when the network
-   * goes (PLAN.md — an off-network phone must never be shown the pairing
-   * screen), so gating on readiness would make the whole bottom bar vanish the
-   * moment WiFi dropped, stranding somebody on the Activity tab with no way
-   * back to the sessions list. Being on the tab shell at all already means a
-   * connection was made; whether it is up right now is what the banner says.
-   */
-  const showTabBar = $derived(!booting && nav.screen === "sessions");
+  // An explicit unpair of the last Mac leads to Connect. Only the 1 -> 0
+  // transition counts: a pairing that has finished but not yet refreshed the
+  // list must not be bounced back.
+  let pairedCount = 0;
+  $effect(() => {
+    const n = connection.daemons.length;
+    if (pairedCount > 0 && n === 0 && untrack(() => router.top.name) !== "connect") toConnect("scan");
+    pairedCount = n;
+  });
+
+  // Desktop components read the desktop nav singleton; the phone writes it from
+  // its route and reads two signals back (spec §4.2).
+  $effect(() => {
+    applyRoute(router.top, deskNav);
+  });
+  $effect(() => {
+    const next = followFocus(router.top, deskNav);
+    if (next) untrack(() => router.push(next));
+  });
+  $effect(() => {
+    const s = sheetForOverlay(deskNav);
+    if (s !== "") untrack(() => router.open(s));
+  });
+  let lastSheet = router.sheet;
+  $effect(() => {
+    const now = router.sheet;
+    if (lastSheet !== now) sheetClosed(deskNav, lastSheet);
+    lastSheet = now;
+  });
+
+  const connBanner = $derived(
+    router.top.name === "connect" ? null : connectionBanner(connection.diagnosis, connection.label),
+  );
+  // The Inbox draws the connection banner itself, below its large title (spec §5.2);
+  // drawing it here too would show it twice. The dev-link banner stays here.
+  const onInbox = $derived(router.top.name === "tab" && router.top.tab === "inbox");
+  const banner = $derived(onInbox ? null : connBanner);
+  const devBanner = $derived(devLinked && connection.ready);
+  // A sheet that has a body to show; everything behind it is inert meanwhile.
+  const sheetOpen = $derived(router.sheet !== "" && sheetLoaders[router.sheet] !== undefined);
+  const bannerCount = $derived((devBanner ? 1 : 0) + (banner ? 1 : 0));
+
+  // Haptics fire on the transition into a state, never on a re-render of it.
+  const bannerId = $derived(connBanner?.id ?? "");
+  $effect(() => {
+    if (bannerId === "key_changed") haptic("refusal");
+  });
+  const confirming = $derived(confirm.request !== null);
+  $effect(() => {
+    if (confirming) haptic("refusal");
+  });
+
+  function bannerAction(intent: "pair" | "details" | undefined): void {
+    if (intent === "pair") toConnect("scan");
+    else if (intent === "details") router.open("connection");
+  }
+
+  // --- Push and pop (spec §6.4) --------------------------------------------
+  // The pushed screen sits over the one beneath. Its position is one spring,
+  // parked off screen while nothing is pushed; an edge swipe drives it with the
+  // finger and releases through the same spring. A pop that is not a swipe
+  // removes the layer at once.
+
+  const reduced = reducedMotion();
+  const stacked = $derived(router.stack.length > 1);
+  const under = $derived(stacked ? router.stack[router.stack.length - 2] : router.stack[0]);
+  const over = $derived(stacked ? router.top : null);
+  // Never onto Connect (`router.back()` refuses it), and not on the Terminal
+  // segment, which owns its touches.
+  const swipeable = $derived(
+    over !== null && under.name !== "connect" && !(over.name === "session" && over.seg === "terminal"),
+  );
+
+  // The outlet is the full window width on a phone.
+  const parked = (): number => window.innerWidth;
+  const x = new Spring(window.innerWidth, MOTION.push);
+
+  $effect(() => {
+    if (stacked) {
+      if (reduced) void x.set(0, { instant: true });
+      else x.target = 0;
+    } else {
+      void x.set(parked(), { instant: true });
+    }
+  });
+
+  let swipe: { id: number; startX: number; lastX: number; lastT: number; v: number } | null = null;
+
+  function swipeDown(e: PointerEvent): void {
+    if (!swipeable || e.clientX > MOTION.edgeSwipeStartPt) return;
+    swipe = { id: e.pointerId, startX: e.clientX, lastX: e.clientX, lastT: e.timeStamp, v: 0 };
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+
+  function swipeMove(e: PointerEvent): void {
+    if (!swipe || e.pointerId !== swipe.id) return;
+    const dt = e.timeStamp - swipe.lastT;
+    if (dt >= 8) {
+      swipe.v = ((e.clientX - swipe.lastX) / dt) * 1000;
+      swipe.lastX = e.clientX;
+      swipe.lastT = e.timeStamp;
+    }
+    void x.set(Math.max(0, e.clientX - swipe.startX), { instant: true });
+  }
+
+  async function swipeUp(e: PointerEvent): Promise<void> {
+    if (!swipe || e.pointerId !== swipe.id) return;
+    const { v } = swipe;
+    swipe = null;
+    const w = parked();
+    if (x.current / w > MOTION.popFraction || v > MOTION.popVelocity) {
+      if (!reduced) await x.set(w);
+      router.back();
+    } else {
+      x.target = 0;
+    }
+  }
 </script>
 
-<!-- h-dvh, not h-screen: the dynamic viewport unit is the one that accounts for
-     Safari's collapsing chrome, and a terminal that is 60px taller than the
-     window puts the accessory bar under the home indicator. -->
-<div class="flex h-dvh w-full flex-col overflow-hidden bg-canvas text-ink">
-  {#if devBanner}
-    <!-- THE OBLIGATION THAT COMES WITH `lola-dev://`. The plugin will only turn
-         a URL into a connection in a debug build, and in exchange the app has
-         to say so for as long as that connection is up — which is what makes
-         the scheme a labelled test fixture rather than a hidden back door. It
-         is deliberately NOT dismissible, it sits above every screen rather than
-         on one of them, and it pays back the top inset itself so the screens
-         below keep their own layout unchanged. -->
-    <div
-      class="shrink-0 border-b border-warn/40 bg-warn/10 px-4 pb-1.5 pt-safe-t text-center"
-      role="status"
-    >
-      <span class="text-sm text-warn">Connected by a development link</span>
-    </div>
-  {/if}
-  <!-- When the banner is up it has paid the top inset, so the screens must not
-       pay it again — see --spacing-safe-t in app.css. -->
-  <div class="min-h-0 flex-1" style={devBanner ? "--lola-top-inset: 0px" : ""}>
+<!-- `fixed inset-0`: the root IS the window, so no 1-2px strip of the WebView's own ground shows at an
+     edge. `data-phone-app` scopes the phone-only restyles in app.css (the confirm dialog as an action
+     sheet). While a sheet is open everything behind it is `inert`, so VoiceOver cannot leave the
+     dialog; the sheet, the toast and the confirm dialog are siblings OUTSIDE that wrapper. -->
+<div data-phone-app data-frame-clip class="fixed inset-0 flex flex-col overflow-hidden bg-canvas text-ink">
   {#if booting}
-    <Splash message={bootMessage} />
-  {:else if nav.screen === "connect"}
-    <Connect onconnected={landed} />
-  {:else if nav.screen === "terminal"}
-    <Terminal onback={() => nav.toSessions()} />
-  {:else if nav.tab === "activity"}
-    <Activity />
-  {:else if nav.tab === "projects"}
-    <!-- THE PROJECTS TAB STACKS: a list, a project's detail drilled into from
-         it, and a picker opened over that detail. All three are the same tab —
-         the bar stays drawn and stays lit — which is why they are a depth here
-         rather than three members of `Screen`; nav.svelte.ts's `project`
-         comment argues that at length, and `nav.back()` unwinds this stack in
-         the same order.
-
-         THE PROJECT IS TESTED FIRST, OUTERMOST, even though the picker is
-         deeper. Both pickers read `nav.project` themselves and would ask the
-         daemon about "" without it, so a `pick` that somehow arrived without a
-         project — a development link naming only one, say — falls back to the
-         list rather than to a picker that can only fail. Depth still decides
-         between the remaining two. -->
-    {#if nav.project === ""}
-      <Projects />
-    {:else if nav.pick === "prs"}
-      <PRPicker />
-    {:else if nav.pick === "tickets"}
-      <TicketPicker />
-    {:else}
-      <ProjectDetail />
-    {/if}
-  {:else if nav.tab === "settings"}
-    <Settings />
+    <div class="min-h-0 flex-1" aria-busy="true"></div>
   {:else}
-    <!-- The default arm rather than an explicit `nav.tab === "sessions"` test,
-         so a tab this build has not caught up to still renders the list instead
-         of a blank screen. Same fail-toward-something rule theme.ts's own
-         `displayFor` takes for an unknown state. -->
-    <Sessions />
+    <div class="contents" inert={sheetOpen} data-screens>
+    {#if devBanner}
+      <Banner tone="warn" body={copy.banner.devLink.label} inset />
+    {/if}
+    {#if banner}
+      <Banner
+        tone={banner.tone}
+        body={banner.body}
+        action={banner.action}
+        role={banner.id === "key_changed" ? "alert" : "status"}
+        inset={!devBanner}
+        onaction={() => bannerAction(banner.intent)}
+      />
+    {/if}
+
+    {#snippet outlet(route: Route)}
+      {#if route.name !== "dev" || DEBUG_BUILD}
+        {#await screen(screenKey(route)) then m}
+          {@const Screen = m.default}
+          <Screen />
+        {/await}
+      {/if}
+    {/snippet}
+
+    <div
+      data-frame-clip
+      class="relative min-h-0 flex-1 overflow-hidden"
+      style={bannerCount > 0 ? "--lola-top-inset: 0px" : ""}
+    >
+      <div class="absolute inset-0" inert={stacked} aria-hidden={stacked}>
+        {@render outlet(under)}
+      </div>
+      {#if over}
+        <div
+          class="absolute inset-0 bg-canvas {reduced ? 'layer-fade' : ''}"
+          style="transform: translateX({reduced ? 0 : x.current}px)"
+        >
+          {@render outlet(over)}
+          {#if swipeable}
+            <div
+              class="absolute inset-y-0 left-0 z-10 w-5 touch-none"
+              data-edge-swipe
+              role="presentation"
+              onpointerdown={swipeDown}
+              onpointermove={swipeMove}
+              onpointerup={swipeUp}
+              onpointercancel={swipeUp}
+            ></div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    {#if router.top.name === "tab"}
+      <TabBar />
+    {/if}
+    </div>
+
+    {#if router.sheet !== ""}
+      {@const loading = sheet(router.sheet)}
+      {#if loading}
+        {#await loading then m}
+          {@const SheetBody = m.default}
+          <SheetBody />
+        {/await}
+      {/if}
+    {/if}
   {/if}
-  </div>
-  <!-- BELOW the screen container, as a sibling: the bar is chrome, not part of
-       any screen, and every screen above it is already `h-full` inside a flex
-       column. Drawing it inside would make each of the four views responsible
-       for leaving room for it, which is four places to get the home indicator
-       wrong instead of one. It pays the bottom inset itself for the same
-       reason. -->
-  {#if showTabBar}
-    <TabBar />
-  {/if}
+
+  <FlashToast />
+  <ConfirmDialog />
 </div>
+
+<style>
+  .layer-fade {
+    animation: layer-fade 150ms ease-out;
+  }
+  @keyframes layer-fade {
+    from {
+      opacity: 0;
+    }
+  }
+</style>

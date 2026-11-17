@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
@@ -44,35 +45,17 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 		return protocol.TicketsData{}, fmt.Errorf("project %q has no Linear team — set team_id to browse issues", project)
 	}
 
-	api, err := d.ensureLinear()
+	scope := ticketsScopeMine
+	if strings.TrimSpace(a.Scope) == "team" {
+		scope = ticketsScopeTeam
+	}
+	snap, err := d.cachedTickets(ctx, project, team, scope)
 	if err != nil {
 		return protocol.TicketsData{}, err
 	}
 
-	filter := config.Project{Name: project, TeamID: team, CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone"}
-	viewerID := ""
-	if strings.TrimSpace(a.Scope) != "team" { // "mine" (default)
-		filter.AssigneeMode = "me"
-		if viewerID, err = d.viewer(ctx, api); err != nil {
-			return protocol.TicketsData{}, fmt.Errorf("resolve viewer: %w", err)
-		}
-	}
-
-	base := d.shutdownCtx
-	if base == nil {
-		base = context.WithoutCancel(ctx)
-	}
-	cctx, cancel := context.WithTimeout(base, ticketsExecTimeout)
-	issues, err := api.MatchingIssues(cctx, filter, "", viewerID)
-	cancel()
-	if err != nil {
-		if isAuthErr(err) {
-			d.invalidateLinear()
-		}
-		return protocol.TicketsData{}, fmt.Errorf("list issues for %s: %w", project, err)
-	}
-
 	// Which issues a live session already holds (dedup hint for the picker).
+	// Computed per request: it must not be served from the cache.
 	held := map[string]bool{}
 	for _, s := range d.sessions.Snapshot() {
 		if s.IssueUUID != "" && isLiveSession(s) {
@@ -80,11 +63,9 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 		}
 	}
 
-	data := protocol.TicketsData{Team: team, Issues: make([]protocol.TicketRow, 0, len(issues))}
-	data.TeamName, data.TeamKey = d.teamIdentity(ctx, api, team)
+	data := protocol.TicketsData{Team: team, TeamName: snap.teamName, TeamKey: snap.teamKey, Issues: make([]protocol.TicketRow, 0, len(snap.issues))}
 	now := time.Now()
-	sortTicketIssues(issues)
-	for _, is := range issues {
+	for _, is := range snap.issues {
 		data.Issues = append(data.Issues, protocol.TicketRow{
 			Identifier:  is.Identifier,
 			UUID:        is.ID,
@@ -101,6 +82,105 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 		})
 	}
 	return data, nil
+}
+
+// ticketsTTL is how long a fetched ticket list is served before Linear is
+// asked again. A burst of phones and the desktop share one query.
+const ticketsTTL = 30 * time.Second
+
+const (
+	ticketsScopeMine = "mine"
+	ticketsScopeTeam = "team"
+)
+
+// ticketsSnapshot is what one Linear fetch yields, already in pick order. It
+// carries no per-request facts (AlreadyLive, the age) — those are derived on
+// every read.
+type ticketsSnapshot struct {
+	team     string // the team the fetch ran for; a changed team invalidates it
+	teamName string
+	teamKey  string
+	issues   []linear.Issue
+}
+
+type ticketsKey struct{ project, scope string }
+
+type ticketsEntry struct {
+	mu        sync.Mutex // serializes fetches for this key (one Linear query in flight)
+	snap      ticketsSnapshot
+	fetchedAt time.Time
+}
+
+// ticketsCache memoizes ticket lists per (project, scope), like prCache does
+// per repo: concurrent callers for one key queue on the entry lock and the
+// later ones read the just-fetched snapshot. A failed fetch is never cached.
+type ticketsCache struct {
+	mu      sync.Mutex
+	entries map[ticketsKey]*ticketsEntry
+}
+
+func (c *ticketsCache) entry(k ticketsKey) *ticketsEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[ticketsKey]*ticketsEntry{}
+	}
+	e, ok := c.entries[k]
+	if !ok {
+		e = &ticketsEntry{}
+		c.entries[k] = e
+	}
+	return e
+}
+
+// ticketsCache is the daemon's one ticket cache.
+func (d *Daemon) ticketsCache() *ticketsCache {
+	d.ticketsOnce.Do(func() { d.tickets = &ticketsCache{} })
+	return d.tickets
+}
+
+// cachedTickets returns the project's ticket snapshot for scope, serving a
+// fresh one from cache and otherwise running the Linear query under the key's
+// lock. Errors are returned, never masked by an older snapshot.
+func (d *Daemon) cachedTickets(ctx context.Context, project, team, scope string) (ticketsSnapshot, error) {
+	e := d.ticketsCache().entry(ticketsKey{project, scope})
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.fetchedAt.IsZero() && e.snap.team == team && time.Since(e.fetchedAt) <= ticketsTTL {
+		return e.snap, nil
+	}
+
+	api, err := d.ensureLinear()
+	if err != nil {
+		return ticketsSnapshot{}, err
+	}
+	filter := config.Project{Name: project, TeamID: team, CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone"}
+	viewerID := ""
+	if scope == ticketsScopeMine {
+		filter.AssigneeMode = "me"
+		if viewerID, err = d.viewer(ctx, api); err != nil {
+			return ticketsSnapshot{}, fmt.Errorf("resolve viewer: %w", err)
+		}
+	}
+
+	base := d.shutdownCtx
+	if base == nil {
+		base = context.WithoutCancel(ctx)
+	}
+	cctx, cancel := context.WithTimeout(base, ticketsExecTimeout)
+	issues, err := api.MatchingIssues(cctx, filter, "", viewerID)
+	cancel()
+	if err != nil {
+		if isAuthErr(err) {
+			d.invalidateLinear()
+		}
+		return ticketsSnapshot{}, fmt.Errorf("list issues for %s: %w", project, err)
+	}
+	sortTicketIssues(issues)
+	snap := ticketsSnapshot{team: team, issues: issues}
+	snap.teamName, snap.teamKey = d.teamIdentity(ctx, api, team)
+	e.snap, e.fetchedAt = snap, time.Now()
+	return snap, nil
 }
 
 // teamIdentity resolves a team UUID to its (name, key), cached for the daemon's
@@ -239,6 +319,14 @@ func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admi
 	var proj config.Project
 	polls := false
 	if pp != nil {
+		// Opening a ticket also applies pickup labels/state after spawning.
+		// Inactive projects may now have draft settings, so check those first.
+		if pp.Polls() {
+			if err := d.cfg.ValidatePolling(pp); err != nil {
+				d.mu.Unlock()
+				return protocol.OpenData{}, err
+			}
+		}
 		proj = *pp
 		proj.MatchLabels = slices.Clone(pp.MatchLabels)
 		proj.PostCreate = slices.Clone(pp.PostCreate)
@@ -252,6 +340,10 @@ func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admi
 		// default's.
 		agentBin = agent.Parse(strings.TrimSpace(a.AgentKind)).Binary()
 	}
+	kind := agent.Parse(d.cfg.AgentForProject(project))
+	if agent.Valid(strings.TrimSpace(a.AgentKind)) {
+		kind = agent.Parse(strings.TrimSpace(a.AgentKind))
+	}
 	agentBin = sandboxedBin(d.cfg, project, agentBin)
 	d.mu.Unlock()
 	if pp == nil {
@@ -263,9 +355,31 @@ func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admi
 	if err := health(agentBin); err != nil {
 		return protocol.OpenData{}, fmt.Errorf("runtime not ready: %w", err)
 	}
+	if proj.Sandboxed() && !d.sandboxLoginReady(kind) {
+		return protocol.OpenData{}, errors.New(sandboxLoginMissing(kind))
+	}
 
 	name := proj.Name
-	is := linear.Issue{ID: uuid, Identifier: identifier, Title: a.Title, BranchName: strings.TrimSpace(a.Branch)}
+	if reason := d.goalHold(uuid, ""); reason != "" {
+		return protocol.OpenData{}, errors.New(reason)
+	}
+	api, err := d.ensureLinear()
+	if err != nil {
+		return protocol.OpenData{}, err
+	}
+	readCtx, readCancel := context.WithTimeout(ctx, ticketsExecTimeout)
+	detail, readErr := api.IssueDetail(readCtx, uuid)
+	readCancel()
+	if readErr != nil {
+		return protocol.OpenData{}, fmt.Errorf("verify ticket ownership: %w", readErr)
+	}
+	if detail.ID != uuid || detail.Identifier != identifier {
+		return protocol.OpenData{}, errors.New("ticket identity changed; refresh the picker")
+	}
+	if reason := d.goalHold(uuid, detail.Description, detail.IssueRelations); reason != "" {
+		return protocol.OpenData{}, errors.New(reason)
+	}
+	is := linear.Issue{ID: uuid, Identifier: identifier, Title: detail.Title, Description: detail.Description, BranchName: strings.TrimSpace(a.Branch), LabelIDs: detail.LabelIDs, LabelNames: detail.LabelNames, LabelGroups: detail.LabelGroups}
 
 	// Shield the dedup-mutating spawn from shutdown cancellation exactly like a
 	// tick (dispatch runs on context.WithoutCancel via safeTick/handlePollOnce):
@@ -291,8 +405,8 @@ func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admi
 	}
 
 	// (1) Atomic in-flight claim.
-	if !d.inflight.Claim(uuid, identifier) {
-		return protocol.OpenData{}, fmt.Errorf("%s is already being worked on — check sessions", identifier)
+	if err := d.claimOrdinaryIssue(uuid, identifier, detail.Description, detail.IssueRelations); err != nil {
+		return protocol.OpenData{}, err
 	}
 
 	if admit != nil {

@@ -1,0 +1,40 @@
+
+[2m[37m  ⎿  Interrupted · What should Claude do instead?[0m
+[94m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔[39m [2m[37m◐ medium · /effort[0m[94m ▔
+[39m   [1m[94mSettings[0m  Status   Config  [1m[30m[104m Usage [0m  Stats
+
+   [1mSession[0m
+
+   [2m[37mTotal cost:            $0.0039[0m
+   [2m[37mTotal duration (API):  2s[0m
+   [2m[37mTotal duration (wall): 20s[0m
+   [2m[37mTotal code changes:    0 lines added, 0 lines removed[0m
+   [2m[37mUsage by model:[0m
+   [2m[37m    claude-haiku-5-5:  1.2k input, 184 output, 64.6k cache read, 15.1k cache write ($0.0039)[0m
+   [2m[37mPrompt cache (main):   3 requests · 87% of input tokens from cache · no misses · warm (1h TTL, last activity 2s [0m
+   [2m[37mago)[0m
+
+   [1mCurrent week (all models)[0m
+   [33m[47m████████████████████                              [39m[49m 40% used
+   [2m[37mResets Nov 9 at 1pm (Europe/Vienna)[0m
+
+   [1mCurrent week (Fable)[0m
+   [33m[47m                                                  [39m[49m 0% used
+   [2m[37mResets Nov 9 at 1pm (Europe/Vienna)[0m
+
+   [1mWhat's contributing to your usage?[0m
+   [2m[37mApproximate · sessions on this machine only[0m
+
+   [2m[37mScanning local sessions…[0m
+
+   [1mUsage credits[0m
+   [2m[37mUsage credits are off · /usage-credits to turn them on[0m
+
+   [2m[37mEsc to cancel[0m
+
+
+
+
+
+
+

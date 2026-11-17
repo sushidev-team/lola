@@ -1,0 +1,4 @@
+{"isSidechain":true,"type":"user","message":{"content":"long prompt text"},"uuid":"c-1","timestamp":"2026-11-06T10:00:02Z"}
+{"isSidechain":true,"type":"assistant","message":{"content":[{"type":"tool_use","id":"ct-1","name":"Grep","input":{"pattern":"login"}}]},"uuid":"c-2","timestamp":"2026-11-06T10:00:03Z"}
+{"isSidechain":true,"type":"user","message":{"content":[{"tool_use_id":"ct-1","type":"tool_result","content":"login.go:3"}]},"uuid":"c-3","timestamp":"2026-11-06T10:00:04Z"}
+{"isSidechain":true,"type":"assistant","message":{"content":[{"type":"text","text":"Found in login.go"}]},"uuid":"c-4","timestamp":"2026-11-06T10:00:05Z"}

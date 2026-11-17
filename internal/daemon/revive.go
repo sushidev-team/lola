@@ -42,6 +42,9 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 	if !ok {
 		return protocol.ReviveData{}, fmt.Errorf("unknown session %s", sessionID)
 	}
+	if s.GoalManaged() {
+		return protocol.ReviveData{}, errors.New("goal workers resume through goal controls")
+	}
 
 	d.mu.Lock()
 	nat := d.native
@@ -60,10 +63,19 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 	// Revive uses the session's persisted worker, which may differ from the
 	// project's current default. Reject unavailable/unsupported agents before
 	// launching or re-establishing any session and dispatch state.
-	if err := d.runtimeHealth(d.launchBin(s.Project, agent.Parse(s.Agent).Binary())); err != nil {
+	bin := d.launchBin(s.Project, agent.Parse(s.Agent).Binary())
+	if s.IsAgentless() {
+		bin = "tmux"
+	}
+	if err := d.runtimeHealth(bin); err != nil {
 		return protocol.ReviveData{}, fmt.Errorf("runtime unavailable: %w", err)
 	}
 
+	d.goalMu.Lock()
+	defer d.goalMu.Unlock()
+	if reason := d.goalHold(s.IssueUUID, ""); reason != "" {
+		return protocol.ReviveData{}, errors.New(reason)
+	}
 	revived, err := nat.Revive(ctx, s)
 	if err != nil {
 		return protocol.ReviveData{}, err
@@ -86,10 +98,16 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 		// A hook from the relaunched agent already moved the axis (it beat this
 		// write): keep the fresher axis, take only the relaunch bookkeeping.
 		cur.TmuxName = revived.TmuxName
+		cur.Sandbox = revived.Sandbox
 		return true
 	})
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "revive: persist sessions: %v", err)
+	}
+	// The agent moved between host and container, so ssh's production rule answers
+	// differently for it from now on.
+	if revived.Sandbox != s.Sandbox {
+		d.sshOnReload()
 	}
 
 	msg := fmt.Sprintf("session %s revived (%s)", sessionID, revived.TmuxName)

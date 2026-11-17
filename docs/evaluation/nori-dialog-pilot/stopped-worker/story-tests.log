@@ -1,0 +1,28 @@
+
+> test:storybook
+> vitest run --project storybook resources/js/components/ui/dialog.stories.tsx
+
+│ ┌────────────────────────────────────────────────────────────────────────────┐
+│ │  Info: Found a setup file with "setProjectAnnotations".                    │
+│ │  Skipping automatic provisioning of preview annotations to avoid           │
+│ │  conflicts. Since Storybook 10.3, "@storybook/addon-vitest" applies these  │
+│ │   automatically.                                                           │
+│ │  You can safely remove the "setProjectAnnotations" call from your setup    │
+│ │  file, or remove the file entirely if you don't have custom code there.    │
+│ └────────────────────────────────────────────────────────────────────────────┘
+│
+●  Storybook collects completely anonymous usage telemetry. We use it to
+│  shape Storybook's roadmap and prioritize features. You can learn more,
+│  including how to opt out, at https://storybook.js.org/telemetry
+
+ RUN  v4.1.11 /tmp/lola-nori-dialog-pilot/home/goals/d2d2db8a-3f28-43c6-ae11-0eb272a09b9f/attempts/adfd7fa2-8874-4bf8-b73b-711be14ec88a/7ce8420f-b4c3-4e11-a2ba-bd0a7b08e09d/nori-app/tree
+
+
+  LARAVEL v13.30.1  plugin v2.1.0
+
+  ➜  APP_URL: undefined
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  23:58:58
+   Duration  10.05s (transform 0ms, setup 2.41s, import 141ms, tests 364ms, environment 0ms)

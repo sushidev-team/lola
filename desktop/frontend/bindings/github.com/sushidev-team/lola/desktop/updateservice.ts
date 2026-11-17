@@ -100,7 +100,7 @@ export function SetUpdateSettings($in: $models.UpdateSettingsDTO): $CancellableP
 }
 
 /**
- * ShouldAutoCheck reports whether the startup auto-check is due (respects the
+ * ShouldAutoCheck reports whether a periodic auto-check is due (respects the
  * AutoCheck toggle and the interval).
  */
 export function ShouldAutoCheck(): $CancellablePromise<boolean> {

@@ -22,7 +22,7 @@
   export type ButtonSize = "xs" | "sm" | "md";
 
   const BASE =
-    "inline-flex shrink-0 items-center gap-1.5 rounded-md whitespace-nowrap transition-colors " +
+    "inline-flex shrink-0 items-center gap-1.5 rounded-md whitespace-nowrap cursor-pointer transition-colors " +
     "disabled:cursor-not-allowed disabled:opacity-40";
 
   // Heights are the sidebar's density ladder: 24 / 28 / 32px against 12–13px type.
@@ -91,11 +91,12 @@
   // `motion-reduce` slows it rather than stopping it — an animation is the whole
   // message here, and a frozen spinner says "hung".
   const SPINNER =
-    "size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-current border-t-transparent " +
+    "size-3.5 shrink-0 animate-spin " +
     "motion-reduce:animate-[spin_1.8s_linear_infinite]";
 </script>
 
 <script lang="ts">
+  import Icon from "./Icon.svelte";
   import type { Snippet } from "svelte";
   import type { HTMLButtonAttributes } from "svelte/elements";
 
@@ -156,6 +157,11 @@
   aria-busy={loading ? true : undefined}
   class={cls}
 >
-  {#if loading}<span class={SPINNER}></span>{/if}
+  {#if loading}<Icon name="loader-circle" size={14} class={`button-spinner ${SPINNER}`} />{/if}
   {@render children()}
 </button>
+
+<style>
+  button[aria-busy="true"] > :global(.button-spinner + .lola-icon),
+  button[aria-busy="true"] > :global(.button-spinner + .button-icon) { display:none; }
+</style>

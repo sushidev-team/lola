@@ -181,8 +181,10 @@ func TestUnknownPTYActionIsRefused(t *testing.T) {
 	r.sub("s3", "lola-fe-42", 55, 34)
 	r.wantResync("lola-fe-42")
 
+	// An action in no tier is tier never: refused before it can reach the bus,
+	// and the subscription survives.
 	r.pty("lola-fe-42", protocol.PTYInputPayload{Action: "paste", Data: []byte("x")})
-	r.wantErr(protocol.CodeUnknownType)
+	r.wantErr(protocol.CodeUnknownCmd)
 	if _, writes, _ := r.bus.snapshot(); len(writes) != 0 {
 		t.Errorf("bus saw %q, want nothing written", writes)
 	}

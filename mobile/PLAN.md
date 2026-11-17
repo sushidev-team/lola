@@ -1,5 +1,7 @@
 # Lola Mobile — architecture and plan
 
+> **Superseded.** Historical M1 record, kept for its threat-model reasoning. The current design is [`docs/mobile-rethink.md`](../docs/mobile-rethink.md) and [`docs/mobile/`](../docs/mobile/); how to run the app is [`README.md`](README.md). Where this file disagrees with them (shared bearer key, `lola_insecure`, `insecure_lan`, "no relay is built", polling, the connect code), they win.
+
 ## Decision
 
 - **UI:** Capacitor 8 shell hosting the *existing* Svelte 5 + Tailwind v4 frontend, aliased out of `desktop/frontend/src/lib` — the same `theme.ts`, `StatusPill`, `SessionsTable`, `Button`, `confirm.svelte.ts`, `filters.ts`, `ansi.ts`.

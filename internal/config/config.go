@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
 )
 
 const (
@@ -75,6 +76,7 @@ var PrioritySortKeys = []string{"priority", "createdAt"}
 // Consult this struct only to render the inherited-vs-overridden distinction or
 // to promote/revert an override.
 type ProjectInherits struct {
+	AutoPRComments bool
 	PostCreate     bool
 	Symlinks       bool
 	Env            bool
@@ -95,6 +97,11 @@ type ProjectInherits struct {
 // it polls Linear iff TeamID is set (and Enabled). Validation here is purely
 // static — path-exists / is-a-git-repo checks live in the runtime layer.
 type Project struct {
+	// Empty uses the workspace default at read time; never copied into projects.
+	CommitInstructions string `toml:"commit_instructions,omitempty"`
+
+	// AutoPRComments asks idle agents to address and resolve new PR review threads.
+	AutoPRComments bool `toml:"auto_pr_comments,omitempty"`
 	// --- Repository / worktree setup ---------------------------------------
 	// Name is the project's IDENTITY, not its display string: it is a path
 	// segment (~/.lola/worktrees/<name>/, ~/.lola/state/<name>.seen) and part of
@@ -180,6 +187,21 @@ type Project struct {
 	Sandbox      string   `toml:"sandbox,omitempty"`
 	SandboxImage string   `toml:"sandbox_image,omitempty"`
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
+	// SandboxToolchains names the language toolchains the project's
+	// container adds to lola's default image ("php", "node@22"; see
+	// internal/toolchain). Empty = detected from the repository; ["none"]
+	// adds nothing. SandboxPackages are extra Debian packages. Both are
+	// ignored when an image is named (sandbox_image / [sandbox].image): a
+	// custom image carries its own tools.
+	SandboxToolchains []string `toml:"sandbox_toolchains,omitempty"`
+	SandboxPackages   []string `toml:"sandbox_packages,omitempty"`
+	// GoalMode is explicit per project/stack availability, never execution authorization.
+	GoalMode bool `toml:"goal_mode,omitempty"`
+	// HubChores opts this project into the [hub] chore lane: hub work items
+	// whose repo matches Repo may be claimed for it (internal/hub.Accept).
+	// Default false, and deliberately NOT a [defaults] key: an inherited
+	// opt-in would enrol every project by accident.
+	HubChores bool `toml:"hub_chores,omitempty"`
 	// Kind is "" for an ordinary repository project or "stack" for a STACK:
 	// a project with no checkout of its own that owns the Linear side (filter,
 	// write-back, agent, sandbox, budget) for several member repositories. See
@@ -281,6 +303,15 @@ func (p *Project) PortLease() (lo, hi, n int, ok bool) {
 	return lo, hi, n, true
 }
 
+// PortRangeAuto is the port_range value that lets lola pick: each session gets
+// a free block out of the shared AutoPortLo-AutoPortHi pool, which the lease
+// registry keeps disjoint across every project, so nobody has to plan ranges.
+const (
+	PortRangeAuto = "auto"
+	AutoPortLo    = 20000
+	AutoPortHi    = 29999
+)
+
 // ParsePortRange parses "lo-hi" (spaces allowed around the dash). Both ends
 // must lie in 1024..65535 — a privileged port is never something a dev server
 // should be handed — and lo must not exceed hi. "" parses as (0, 0, nil).
@@ -289,14 +320,17 @@ func ParsePortRange(s string) (lo, hi int, err error) {
 	if s == "" {
 		return 0, 0, nil
 	}
+	if strings.EqualFold(s, PortRangeAuto) {
+		return AutoPortLo, AutoPortHi, nil
+	}
 	a, b, found := strings.Cut(s, "-")
 	if !found {
-		return 0, 0, fmt.Errorf(`port_range must be "lo-hi" (e.g. "4100-4999"), got %q`, s)
+		return 0, 0, fmt.Errorf(`port_range must be "auto" or "lo-hi" (e.g. "4100-4999"), got %q`, s)
 	}
 	lo, err1 := strconv.Atoi(strings.TrimSpace(a))
 	hi, err2 := strconv.Atoi(strings.TrimSpace(b))
 	if err1 != nil || err2 != nil {
-		return 0, 0, fmt.Errorf(`port_range must be "lo-hi" (e.g. "4100-4999"), got %q`, s)
+		return 0, 0, fmt.Errorf(`port_range must be "auto" or "lo-hi" (e.g. "4100-4999"), got %q`, s)
 	}
 	if lo < 1024 || hi > 65535 || lo > hi {
 		return 0, 0, fmt.Errorf("port_range %q must lie within 1024-65535 with lo <= hi", s)
@@ -314,9 +348,14 @@ func (p *Project) Polls() bool { return p.TeamID != "" && p.Stack == "" }
 // Defaults is the [defaults] table. PollInterval is a plain time.Duration in
 // memory; on disk it is a string like "60s" (see fileDefaults/Duration).
 type Defaults struct {
-	PollInterval   time.Duration `toml:"-"`
-	ConcurrencyCap int           `toml:"concurrency_cap"`
-	GlobalCap      int           `toml:"global_cap"`
+	// CommitInstructions guides both desktop AI commit helpers.
+	CommitInstructions string `toml:"commit_instructions,omitempty"`
+
+	AutoPRComments     bool          `toml:"auto_pr_comments,omitempty"`
+	TemporaryDirectory string        `toml:"temporary_directory"`
+	PollInterval       time.Duration `toml:"-"`
+	ConcurrencyCap     int           `toml:"concurrency_cap"`
+	GlobalCap          int           `toml:"global_cap"`
 	// Agent is the global default coding-agent kind (claude|codex|opencode)
 	// for sessions whose project sets no override. Empty resolves to "claude"
 	// at read time (AgentForProject) — it is never force-written to disk.
@@ -332,6 +371,12 @@ type Defaults struct {
 	// it false when an external supervisor (launchd KeepAlive) owns the daemon,
 	// so the TUI never fights it — see AutoManageDaemon.
 	ManageDaemon *bool `toml:"manage_daemon"`
+	// TrustWorktrees toggles pre-accepting Claude Code's "do you trust this
+	// folder?" dialog for every worktree lola creates, by writing the trust
+	// flag into Claude Code's own config just before launch and removing it on
+	// teardown (internal/claudetrust). A pointer so an unset value defaults to
+	// true — see TrustClaudeWorktrees.
+	TrustWorktrees *bool `toml:"trust_worktrees"`
 
 	// --- Project defaults --------------------------------------------------
 	// Every key below is the fallback for the same-named [[project]] field: a
@@ -371,32 +416,39 @@ type LinearConfig struct {
 }
 
 type Config struct {
-	Defaults    Defaults          `toml:"defaults"`
-	Linear      LinearConfig      `toml:"linear"`
-	Projects    []Project         `toml:"project"`
-	Groups      []Group           `toml:"group"`
-	Reactions   ReactionsConfig   `toml:"reactions"`
-	Notify      NotifyConfig      `toml:"notify"`
-	Brain       BrainConfig       `toml:"brain"`
-	MergeQueue  MergeQueueConfig  `toml:"merge_queue"`
-	BestOf      BestOfConfig      `toml:"best_of"`
-	StatusAgent StatusAgentConfig `toml:"statusagent"`
-	Review      ReviewConfig      `toml:"review"`
-	CodeRabbit  CodeRabbitConfig  `toml:"coderabbit"`
-	Tmux        TmuxConfig        `toml:"tmux"`
-	UI          UIConfig          `toml:"ui"`
-	Remote      RemoteConfig      `toml:"remote"`
-	Budget      BudgetConfig      `toml:"budget"`
-	Load        LoadConfig        `toml:"load"`
-	Sandbox     SandboxConfig     `toml:"sandbox"`
-	LinearAgent LinearAgentConfig `toml:"linear_agent"`
+	Defaults    Defaults              `toml:"defaults"`
+	Linear      LinearConfig          `toml:"linear"`
+	Projects    []Project             `toml:"project"`
+	Groups      []Group               `toml:"group"`
+	Reactions   ReactionsConfig       `toml:"reactions"`
+	Notify      NotifyConfig          `toml:"notify"`
+	AI          map[string]AIProvider `toml:"ai,omitempty"`
+	Brain       BrainConfig           `toml:"brain"`
+	MergeQueue  MergeQueueConfig      `toml:"merge_queue"`
+	BestOf      BestOfConfig          `toml:"best_of"`
+	StatusAgent StatusAgentConfig     `toml:"statusagent"`
+	Review      ReviewConfig          `toml:"review"`
+	CodeRabbit  CodeRabbitConfig      `toml:"coderabbit"`
+	Tmux        TmuxConfig            `toml:"tmux"`
+	UI          UIConfig              `toml:"ui"`
+	Remote      RemoteConfig          `toml:"remote"`
+	Budget      BudgetConfig          `toml:"budget"`
+	Load        LoadConfig            `toml:"load"`
+	Sandbox     SandboxConfig         `toml:"sandbox"`
+	LinearAgent LinearAgentConfig     `toml:"linear_agent"`
+	// Hub enrolls this machine with a team Lola hub.
+	Hub HubConfig `toml:"hub"`
+	// SSHHosts is the [[ssh_host]] catalog: the only hosts an agent-assisted ssh
+	// session can reach (see ssh.go). Empty means the feature is off.
+	SSHHosts []SSHHost `toml:"ssh_host"`
 
 	// ReviewProviders is the NEW canonical global review CATALOG (resolved from
 	// [[review.provider]]). Empty when the file uses the legacy [review]/
 	// [coderabbit] tables instead — the two are mutually exclusive. Serialized
 	// on Save via reviewMirror(); the runtime provider set (catalog or legacy
 	// synthesis) is EffectiveReviewProviders(). See reviewprovider.go.
-	ReviewProviders []ReviewProvider `toml:"-"`
+	ReviewProviders []ReviewProvider        `toml:"-"`
+	ReviewProfiles  []reviewprofile.Profile `toml:"-"`
 
 	// notices are NON-FATAL repairs Load made to the file: things that were
 	// already inert but would otherwise be rejected, so a config nobody could
@@ -409,6 +461,11 @@ type Config struct {
 	// project reference, or more than one poll for a project) from config() to
 	// Validate. Unexported: never serialized, nil in the common case.
 	migrateErrs []error
+
+	// teamPolicy marks a Config the team policy overlay was applied to
+	// (teampolicy.go). Save refuses such a Config, so a locked value can never
+	// be frozen into the file. Unexported: never serialized.
+	teamPolicy bool
 }
 
 // Notices returns the non-fatal repairs Load made to the on-disk config, in
@@ -493,6 +550,7 @@ type fileConfig struct {
 	Polls       []legacyPoll           `toml:"poll,omitempty"`  // COMPAT-ONLY: pre-merge top-level polls, folded onto their project on load
 	Reactions   *fileReactionsConfig   `toml:"reactions,omitempty"`
 	Notify      *fileNotifyConfig      `toml:"notify,omitempty"`
+	AI          map[string]AIProvider  `toml:"ai,omitempty"`
 	Brain       *fileBrainConfig       `toml:"brain,omitempty"`
 	MergeQueue  *fileMergeQueueConfig  `toml:"merge_queue,omitempty"`
 	BestOf      *fileBestOfConfig      `toml:"best_of,omitempty"`
@@ -506,6 +564,8 @@ type fileConfig struct {
 	Load        *LoadConfig            `toml:"load,omitempty"`
 	Sandbox     *SandboxConfig         `toml:"sandbox,omitempty"`
 	LinearAgent *fileLinearAgentConfig `toml:"linear_agent,omitempty"`
+	Hub         *HubConfig             `toml:"hub,omitempty"`
+	SSHHosts    []SSHHost              `toml:"ssh_host,omitempty"`
 }
 
 // fileProject mirrors Project on disk. Its polling fields are inline; the
@@ -518,8 +578,12 @@ type fileConfig struct {
 // Inherits bitmap (a SET bit means "inherit this key from [defaults]"); see
 // projectFromFile / projectToFile for the translation.
 type fileProject struct {
-	Name  string `toml:"name"`
-	Label string `toml:"label,omitempty"`
+	// Empty uses the workspace default at read time; never copied into projects.
+	CommitInstructions string `toml:"commit_instructions,omitempty"`
+
+	AutoPRComments *bool  `toml:"auto_pr_comments,omitempty"`
+	Name           string `toml:"name"`
+	Label          string `toml:"label,omitempty"`
 	// Group is a PLAIN string, not a pointer: it is not inheritable, so absent
 	// and empty mean the same thing (this project sits at the top level).
 	Group         string             `toml:"group,omitempty"`
@@ -543,9 +607,22 @@ type fileProject struct {
 	Sandbox      string   `toml:"sandbox,omitempty"`
 	SandboxImage string   `toml:"sandbox_image,omitempty"`
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
-	Kind         string   `toml:"kind,omitempty"`
-	Stack        string   `toml:"stack,omitempty"`
-	Labels       []string `toml:"labels,omitempty"`
+	// SandboxToolchains names the language toolchains the project's
+	// container adds to lola's default image ("php", "node@22"; see
+	// internal/toolchain). Empty = detected from the repository; ["none"]
+	// adds nothing. SandboxPackages are extra Debian packages. Both are
+	// ignored when an image is named (sandbox_image / [sandbox].image): a
+	// custom image carries its own tools.
+	SandboxToolchains []string `toml:"sandbox_toolchains,omitempty"`
+	SandboxPackages   []string `toml:"sandbox_packages,omitempty"`
+	// GoalMode is explicit per project/stack availability, never execution authorization.
+	GoalMode bool `toml:"goal_mode,omitempty"`
+	// HubChores is PLAIN: not inheritable (an inherited opt-in would enrol
+	// every project by accident).
+	HubChores bool     `toml:"hub_chores,omitempty"`
+	Kind      string   `toml:"kind,omitempty"`
+	Stack     string   `toml:"stack,omitempty"`
+	Labels    []string `toml:"labels,omitempty"`
 
 	Enabled        bool      `toml:"enabled,omitempty"`
 	TeamID         string    `toml:"team_id,omitempty"`
@@ -692,11 +769,14 @@ func projectFromFile(fp fileProject) Project {
 	dedupMode, hasDedupMode := deref(fp.DedupMode)
 	onSentSetLabel, hasOnSentSetLabel := deref(fp.OnSentSetLabel)
 	blockedLabelID, hasBlockedLabelID := deref(fp.BlockedLabelID)
+	autoPRComments, hasAutoPRComments := deref(fp.AutoPRComments)
 	review, hasReview := deref(fp.Review)
 	agentFallback, hasAgentFallback := deref(fp.AgentFallback)
 	requirePlan, hasRequirePlan := deref(fp.RequirePlan)
 
 	return Project{
+		CommitInstructions: fp.CommitInstructions,
+
 		Name:              fp.Name,
 		Label:             fp.Label,
 		Group:             fp.Group,
@@ -717,6 +797,10 @@ func projectFromFile(fp fileProject) Project {
 		Sandbox:           fp.Sandbox,
 		SandboxImage:      fp.SandboxImage,
 		SandboxPorts:      fp.SandboxPorts,
+		SandboxToolchains: fp.SandboxToolchains,
+		SandboxPackages:   fp.SandboxPackages,
+		GoalMode:          fp.GoalMode,
+		HubChores:         fp.HubChores,
 		Kind:              fp.Kind,
 		Stack:             fp.Stack,
 		Labels:            fp.Labels,
@@ -734,6 +818,7 @@ func projectFromFile(fp fileProject) Project {
 		PrioritySort:      prioritySort,
 		DedupMode:         dedupMode,
 		OnSentSetLabel:    onSentSetLabel,
+		AutoPRComments:    autoPRComments,
 		Review:            review,
 		RequirePlan:       requirePlan,
 
@@ -747,6 +832,7 @@ func projectFromFile(fp fileProject) Project {
 			BlockedLabelID: !hasBlockedLabelID,
 			DedupMode:      !hasDedupMode,
 			PrioritySort:   !hasPrioritySort,
+			AutoPRComments: !hasAutoPRComments,
 			Review:         !hasReview,
 			AgentFallback:  !hasAgentFallback,
 			RequirePlan:    !hasRequirePlan,
@@ -772,6 +858,8 @@ func projectToFile(p Project) fileProject {
 	set := func(inherits bool) bool { return !inherits }
 	o := p.Inherits
 	return fileProject{
+		CommitInstructions: p.CommitInstructions,
+
 		Name:              p.Name,
 		Label:             p.Label,
 		Group:             p.Group,
@@ -792,6 +880,10 @@ func projectToFile(p Project) fileProject {
 		Sandbox:           p.Sandbox,
 		SandboxImage:      p.SandboxImage,
 		SandboxPorts:      p.SandboxPorts,
+		SandboxToolchains: p.SandboxToolchains,
+		SandboxPackages:   p.SandboxPackages,
+		GoalMode:          p.GoalMode,
+		HubChores:         p.HubChores,
 		Kind:              p.Kind,
 		Stack:             p.Stack,
 		Labels:            p.Labels,
@@ -809,6 +901,7 @@ func projectToFile(p Project) fileProject {
 		PrioritySort:      ptr(p.PrioritySort, set(o.PrioritySort)),
 		DedupMode:         ptr(p.DedupMode, set(o.DedupMode)),
 		OnSentSetLabel:    ptr(p.OnSentSetLabel, set(o.OnSentSetLabel)),
+		AutoPRComments:    ptr(p.AutoPRComments, set(o.AutoPRComments)),
 		Review:            ptr(p.Review, set(o.Review)),
 		RequirePlan:       ptr(p.RequirePlan, set(o.RequirePlan)),
 
@@ -825,12 +918,18 @@ func projectToFile(p Project) fileProject {
 }
 
 type fileDefaults struct {
-	PollInterval   Duration `toml:"poll_interval"`
-	ConcurrencyCap int      `toml:"concurrency_cap"`
-	GlobalCap      int      `toml:"global_cap"`
-	Agent          string   `toml:"agent"`
-	AgentFallback  []string `toml:"agent_fallback,omitempty"`
-	ManageDaemon   *bool    `toml:"manage_daemon"`
+	// CommitInstructions guides both desktop AI commit helpers.
+	CommitInstructions string `toml:"commit_instructions,omitempty"`
+
+	AutoPRComments     bool     `toml:"auto_pr_comments,omitempty"`
+	TemporaryDirectory string   `toml:"temporary_directory,omitempty"`
+	PollInterval       Duration `toml:"poll_interval"`
+	ConcurrencyCap     int      `toml:"concurrency_cap"`
+	GlobalCap          int      `toml:"global_cap"`
+	Agent              string   `toml:"agent"`
+	AgentFallback      []string `toml:"agent_fallback,omitempty"`
+	ManageDaemon       *bool    `toml:"manage_daemon"`
+	TrustWorktrees     *bool    `toml:"trust_worktrees"`
 
 	// Project defaults. Plain values, not pointers: an absent key is a zero
 	// value, which already means "no default here" and falls through to the
@@ -893,24 +992,29 @@ func (fc *fileConfig) config() *Config {
 
 	return &Config{
 		Defaults: Defaults{
-			PollInterval:   time.Duration(fc.Defaults.PollInterval),
-			ConcurrencyCap: fc.Defaults.ConcurrencyCap,
-			GlobalCap:      fc.Defaults.GlobalCap,
-			Agent:          fc.Defaults.Agent,
-			AgentFallback:  fc.Defaults.AgentFallback,
-			ManageDaemon:   fc.Defaults.ManageDaemon,
-			BranchPrefix:   fc.Defaults.BranchPrefix,
-			PostCreate:     fc.Defaults.PostCreate,
-			Symlinks:       fc.Defaults.Symlinks,
-			Env:            fc.Defaults.Env,
-			MatchLabels:    fc.Defaults.MatchLabels,
-			MatchMode:      fc.Defaults.MatchMode,
-			OnSentSetLabel: fc.Defaults.OnSentSetLabel,
-			BlockedLabelID: fc.Defaults.BlockedLabelID,
-			DedupMode:      fc.Defaults.DedupMode,
-			PrioritySort:   fc.Defaults.PrioritySort,
-			Review:         fc.Defaults.Review,
-			RequirePlan:    fc.Defaults.RequirePlan,
+			CommitInstructions: fc.Defaults.CommitInstructions,
+
+			PollInterval:       time.Duration(fc.Defaults.PollInterval),
+			ConcurrencyCap:     fc.Defaults.ConcurrencyCap,
+			GlobalCap:          fc.Defaults.GlobalCap,
+			Agent:              fc.Defaults.Agent,
+			AgentFallback:      fc.Defaults.AgentFallback,
+			TemporaryDirectory: fc.Defaults.TemporaryDirectory,
+			ManageDaemon:       fc.Defaults.ManageDaemon,
+			TrustWorktrees:     fc.Defaults.TrustWorktrees,
+			BranchPrefix:       fc.Defaults.BranchPrefix,
+			PostCreate:         fc.Defaults.PostCreate,
+			Symlinks:           fc.Defaults.Symlinks,
+			Env:                fc.Defaults.Env,
+			MatchLabels:        fc.Defaults.MatchLabels,
+			MatchMode:          fc.Defaults.MatchMode,
+			OnSentSetLabel:     fc.Defaults.OnSentSetLabel,
+			BlockedLabelID:     fc.Defaults.BlockedLabelID,
+			DedupMode:          fc.Defaults.DedupMode,
+			PrioritySort:       fc.Defaults.PrioritySort,
+			AutoPRComments:     fc.Defaults.AutoPRComments,
+			Review:             fc.Defaults.Review,
+			RequirePlan:        fc.Defaults.RequirePlan,
 		},
 		Linear:          fc.Linear,
 		Projects:        projects,
@@ -918,12 +1022,14 @@ func (fc *fileConfig) config() *Config {
 		migrateErrs:     migrateErrs,
 		Reactions:       resolveReactions(fc.Reactions),
 		Notify:          resolveNotify(fc.Notify),
+		AI:              fc.AI,
 		Brain:           resolveBrain(fc.Brain),
 		MergeQueue:      resolveMergeQueue(fc.MergeQueue),
 		BestOf:          resolveBestOf(fc.BestOf),
 		StatusAgent:     resolveStatusAgent(fc.StatusAgent),
 		Review:          resolveReview(fc.Review),
 		ReviewProviders: resolveReviewProviders(reviewProviderEntries(fc.Review)),
+		ReviewProfiles:  reviewProfileEntries(fc.Review),
 		CodeRabbit:      resolveCodeRabbit(fc.CodeRabbit),
 		Tmux:            resolveTmux(fc.Tmux),
 		UI:              resolveUI(fc.UI),
@@ -932,6 +1038,8 @@ func (fc *fileConfig) config() *Config {
 		Load:            tableOf(fc.Load),
 		Sandbox:         tableOf(fc.Sandbox),
 		LinearAgent:     resolveLinearAgent(fc.LinearAgent),
+		Hub:             tableOf(fc.Hub),
+		SSHHosts:        fc.SSHHosts,
 	}
 }
 
@@ -954,30 +1062,36 @@ func (c *Config) file() *fileConfig {
 	}
 	return &fileConfig{
 		Defaults: fileDefaults{
-			PollInterval:   Duration(c.Defaults.PollInterval),
-			ConcurrencyCap: c.Defaults.ConcurrencyCap,
-			GlobalCap:      c.Defaults.GlobalCap,
-			Agent:          c.Defaults.Agent,
-			AgentFallback:  c.Defaults.AgentFallback,
-			ManageDaemon:   c.Defaults.ManageDaemon,
-			BranchPrefix:   c.Defaults.BranchPrefix,
-			PostCreate:     c.Defaults.PostCreate,
-			Symlinks:       c.Defaults.Symlinks,
-			Env:            c.Defaults.Env,
-			MatchLabels:    c.Defaults.MatchLabels,
-			MatchMode:      c.Defaults.MatchMode,
-			OnSentSetLabel: c.Defaults.OnSentSetLabel,
-			BlockedLabelID: c.Defaults.BlockedLabelID,
-			DedupMode:      c.Defaults.DedupMode,
-			PrioritySort:   c.Defaults.PrioritySort,
-			Review:         c.Defaults.Review,
-			RequirePlan:    c.Defaults.RequirePlan,
+			CommitInstructions: c.Defaults.CommitInstructions,
+
+			PollInterval:       Duration(c.Defaults.PollInterval),
+			ConcurrencyCap:     c.Defaults.ConcurrencyCap,
+			GlobalCap:          c.Defaults.GlobalCap,
+			Agent:              c.Defaults.Agent,
+			AgentFallback:      c.Defaults.AgentFallback,
+			TemporaryDirectory: c.Defaults.TemporaryDirectory,
+			ManageDaemon:       c.Defaults.ManageDaemon,
+			TrustWorktrees:     c.Defaults.TrustWorktrees,
+			BranchPrefix:       c.Defaults.BranchPrefix,
+			PostCreate:         c.Defaults.PostCreate,
+			Symlinks:           c.Defaults.Symlinks,
+			Env:                c.Defaults.Env,
+			MatchLabels:        c.Defaults.MatchLabels,
+			MatchMode:          c.Defaults.MatchMode,
+			OnSentSetLabel:     c.Defaults.OnSentSetLabel,
+			BlockedLabelID:     c.Defaults.BlockedLabelID,
+			DedupMode:          c.Defaults.DedupMode,
+			PrioritySort:       c.Defaults.PrioritySort,
+			AutoPRComments:     c.Defaults.AutoPRComments,
+			Review:             c.Defaults.Review,
+			RequirePlan:        c.Defaults.RequirePlan,
 		},
 		Linear:      c.Linear,
 		Projects:    fps,
 		Groups:      slices.Clone(c.Groups),
 		Reactions:   reactionsFile(c.Reactions),
 		Notify:      notifyFile(c.Notify),
+		AI:          c.AI,
 		Brain:       brainFile(c.Brain),
 		MergeQueue:  mergeQueueFile(c.MergeQueue),
 		BestOf:      bestOfFile(c.BestOf),
@@ -991,6 +1105,8 @@ func (c *Config) file() *fileConfig {
 		Load:        nonZero(c.Load),
 		Sandbox:     sandboxTable(c.Sandbox),
 		LinearAgent: linearAgentFile(c.LinearAgent),
+		Hub:         hubTable(c.Hub),
+		SSHHosts:    c.SSHHosts,
 	}
 }
 
@@ -1003,13 +1119,14 @@ func (c *Config) file() *fileConfig {
 func (c *Config) reviewMirror() *fileReviewConfig {
 	scal := reviewFile(c.Review)                    // nil when c.Review == zero
 	provs := reviewProvidersFile(c.ReviewProviders) // nil when the catalog is empty
-	if scal == nil && provs == nil {
+	if scal == nil && provs == nil && len(c.ReviewProfiles) == 0 {
 		return nil // omit the whole [review] table
 	}
 	if scal == nil {
 		scal = &fileReviewConfig{} // catalog-only: nil scalars
 	}
 	scal.Provider = provs
+	scal.Profile = c.ReviewProfiles
 	return scal
 }
 
@@ -1081,6 +1198,15 @@ func Load(path string) (*Config, error) {
 // daemon so the TUI never fights the supervisor.
 func (c *Config) AutoManageDaemon() bool {
 	return c.Defaults.ManageDaemon == nil || *c.Defaults.ManageDaemon
+}
+
+// TrustClaudeWorktrees reports whether lola pre-accepts Claude Code's
+// workspace-trust dialog for the worktrees it creates. Unset defaults to true:
+// lola made the folder from a repository the operator configured, so asking a
+// human to vouch for it on every spawn only parks the agent. Set
+// [defaults].trust_worktrees = false to get the dialog back.
+func (c *Config) TrustClaudeWorktrees() bool {
+	return c.Defaults.TrustWorktrees == nil || *c.Defaults.TrustWorktrees
 }
 
 func (c *Config) applyDefaults() {
@@ -1181,6 +1307,9 @@ func (c *Config) ResolveInheritance() {
 		if in.MatchLabels {
 			p.MatchLabels = slices.Clone(d.MatchLabels)
 		}
+		if in.AutoPRComments {
+			p.AutoPRComments = d.AutoPRComments
+		}
 		if in.Review {
 			p.Review = slices.Clone(d.Review)
 		}
@@ -1217,6 +1346,9 @@ func orString(v, fallback string) string {
 // that mutates [defaults] and saves does not keep stale resolved project
 // values, and save/load is an identity.
 func (c *Config) Save(path string) error {
+	if c.teamPolicy {
+		return ErrTeamPolicyOverlay
+	}
 	c.ResolveInheritance()
 
 	dir := filepath.Dir(path)

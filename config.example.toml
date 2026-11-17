@@ -8,6 +8,10 @@
 # names. The `lola` TUI resolves names to IDs for you when creating a poll.
 
 [defaults]
+# Automatically ask idle agents to verify new PR review threads, push fixes,
+# and resolve only addressed threads. Off by default; independent of provider
+# handoffs and reactions. Unchanged unresolved threads are not retried.
+# auto_pr_comments = false
 # Go duration string. Minimum is 30s (Linear rate limit); lower values are
 # clamped up, not rejected. Default when omitted: 60s.
 poll_interval = "60s"
@@ -41,6 +45,18 @@ global_cap = 4
 # the supervisor (it then hides its start/stop/restart keys). Do not run both.
 # manage_daemon = true
 #
+# Pre-accept Claude Code's "Is this a project you created or one you trust?"
+# dialog for every worktree lola creates. lola writes
+# projects[<worktree>].hasTrustDialogAccepted into ~/.claude.json (or
+# $CLAUDE_CONFIG_DIR/.claude.json) just before a claude agent launches, and
+# removes the entry when the worktree is torn down. Trusting ~/.lola/worktrees
+# once does NOT work: Claude Code stops looking for a trusted parent at the git
+# root, and every worktree is its own. Only folders under ~/.lola/worktrees are
+# touched; sandboxed projects are skipped (their claude has its own config).
+# A trusted folder loads its project-level .claude/ settings, hooks and MCP
+# servers without asking. Default true.
+# trust_worktrees = true
+#
 # --- Project defaults -------------------------------------------------------
 # Every key below is the fallback for the same-named [[project]] key. A project
 # that OMITS the key inherits this value; a project that sets it overrides it.
@@ -63,6 +79,10 @@ global_cap = 4
 # for these keys. Lola cannot tell them apart offline, so this is not validated.
 #
 # branch_prefix = "lola/"
+# AI commit and staged-message drafts follow recent repository history by default.
+# Optional message/grouping preferences; a nonempty [[project]].commit_instructions
+# replaces this workspace default. Blank project instructions use this default.
+# commit_instructions = "Use Conventional Commits. Keep subjects under 72 characters."
 # symlinks = [".env"]
 # post_create = ["composer install", "bun install --frozen-lockfile"]
 # Fallback chain consulted when a session's agent hits its usage limit (lola
@@ -158,14 +178,37 @@ endpoint = "https://api.linear.app/graphql"
 # info   = ["slack"]                      # approved+parked, merged+cleaned
 
 # ---------------------------------------------------------------------------
+# AI profiles are configured in desktop Settings → AI. Entries are independent
+# per backend (claude/codex/opencode), and only take effect when enabled.
+# Drafts/resolvers use the project's agent; summaries/plans use defaults.agent.
+# Existing agent sessions retain their selected model.
+# [ai.claude]
+# enabled = true
+# [ai.claude.profiles.fast]
+# model = "haiku"
+# [ai.claude.profiles.balanced]
+# model = "sonnet"
+# [ai.claude.profiles.thorough]
+# model = "opus"
+# effort = "high"
+# [ai.claude.actions]
+# draft = "fast"
+# resolve = "thorough"
+# summary = "balanced"
+# plan = "thorough"
+#
 # [brain] — OPTIONAL, OFF BY DEFAULT (P5). When enabled, lola makes ONE headless
-# `claude -p` call to produce a short HUMAN-FACING summary at two decision
+# helper call (Claude by default; AI profiles can select another backend) to produce a short HUMAN-FACING summary at two decision
 # points: when a session escalates (why it's blocked + the next step) and when a
 # PR is approved+green (what it changes + risks to check). The summary rides the
 # notification and an optional Linear comment ONLY — it is NEVER fed back to the
 # worker agent, so an attacker-influenceable PR/log can't steer the control loop.
+# The desktop PR comments panel also uses Haiku when enabled, with background
+# summaries cached by comment content. These are display-only, keep the original
+# GitHub links, and fall back to previews on failure. Batches are capped at 30s
+# (or a shorter timeout_seconds); model below selects the other brain summaries.
 #
-# COST: each summary spends Anthropic tokens. It execs `claude` and uses your
+# COST: each summary uses the configured provider’s tokens. By default, It execs `claude` and uses your
 # existing claude auth (~/.claude) or ANTHROPIC_API_KEY in the daemon's env.
 # Every call is one-shot per transition, hard-timeout-bounded, and skips
 # gracefully (falling back to the generic template) on any error or timeout.
@@ -323,6 +366,7 @@ endpoint = "https://api.linear.app/graphql"
 # timeout_seconds = 300                                     # hard cap per pass (pass shapes); must be >= 0
 # transports      = ["lola", "github"]                      # {lola (always forced present), github, linear}
 # github_inline   = true                                    # github: anchored resolvable threads (default) vs one flat comment
+# github_status   = false                                   # post lola/review/<kind> on the PR head + re-review each new head; require it in a ruleset to block merges
 # visible         = true                                    # run the pass in a watchable "<session>-review" tmux session; default true
 # notify          = true                                    # lola transport: notify a human; default true
 # send_to_agent   = true                                    # lola transport: hand findings to the worker; default true
@@ -493,16 +537,19 @@ endpoint = "https://api.linear.app/graphql"
 # ---------------------------------------------------------------------------
 # [sandbox] — OPTIONAL container sandbox. A project opts in with
 # sandbox = "docker"; its agent then runs in a container that can write only
-# its worktree (+ the git object store a commit needs). Hooks reach the daemon
-# over a token-authenticated loopback port (hook_port), so the container runs a
-# LINUX lola: build one with `make build-linux`.
+# its worktree (+ the git object store a commit needs). Nothing here is
+# required: the default image (ghcr.io/sushidev-team/lola-sandbox:<version>)
+# carries claude, git and gh, and the hooks' linux lola comes out of it.
+# Store the container's Claude login once: `claude setup-token`, then
+# `lola sandbox token`.
 # ---------------------------------------------------------------------------
 # [sandbox]
-# docker   = "docker"                                     # the docker CLI
-# image    = "ghcr.io/acme/agent-node:22"                 # sh + git + the agent on PATH
-# lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # required when sandboxing
+# docker    = "docker"                                    # the docker CLI
+# image     = "ghcr.io/acme/agent-node:22"                # default: lola's image
+# lola_bin  = "/Users/me/src/lola/dist/lola-linux-arm64"  # default: from lola's image
 # hook_port = 7718
-# pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]      # names only; values from the daemon env
+# pass_env  = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]     # the default
+# use_api_key = false   # true passes ANTHROPIC_API_KEY: claude then bills per token, not your plan
 
 # ---------------------------------------------------------------------------
 # [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads
@@ -512,12 +559,66 @@ endpoint = "https://api.linear.app/graphql"
 # identifier, so the two surfaces match. Editable from either: the app's
 # Appearance settings tab, or the TUI's S -> Appearance tab.
 #
-# Only the four values below are accepted — an unknown name is REJECTED at load
+# Only the listed theme ids are accepted — an unknown name is REJECTED at load
 # rather than silently falling back, so a typo tells you instead of quietly
-# rendering the default. Omit the key (or the table) to use "catppuccin-mocha".
+# rendering the default. Omit the key (or the table) to use "lola-midnight".
 # ---------------------------------------------------------------------------
 # [ui]
-# theme = "catppuccin-mocha"   # catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+# theme = "lola-midnight"
+# follow_system = false    # desktop: OS appearance; TUI: terminal background
+# light_theme = "github-light"
+# dark_theme = "lola-midnight"
+# Light: catppuccin-latte | github-light | solarized-light | rose-pine-dawn | gruvbox-light | one-light
+# Dark: lola-midnight | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+# System mode switches live and remembers an independent choice for each side.
+# The phone stores its own appearance choices locally.
+
+# ---------------------------------------------------------------------------
+# [hub] — a team lola HUB (OPTIONAL, DEFAULT OFF). The hub hands out mechanical
+# chores (dep_advisory: upgrade a vulnerable dependency; red_bump_pr: fix a
+# Dependabot/Renovate PR whose checks fail) and routes the team's SIGNED policy.
+# It never executes anything: work items are validated, typed fields only, and
+# the agent's prompt is rendered from lola's own template. Set it up with
+# `lola hub join`, the invite your admin gave you (lola-hub:<url>#<token>, or
+# a bare token plus the url as the argument) on stdin or in --token-file —
+# never as an argument. It writes enabled + url; `lola hub leave` releases this
+# machine's leases and turns it off. The device key lives in
+# ~/.lola/state/hub-key (0600) — never here. Not a [defaults] key, and neither
+# is [[project]].hub_chores. `lola hub status` lists what is still missing.
+# ---------------------------------------------------------------------------
+# [hub]
+# enabled = false
+# # https, or plain http only on localhost / 127.0.0.1 (development). No path.
+# url = "https://hub.example.com"
+# # Name shown to the team (default: this machine's hostname).
+# device_name = "martins-mbp"
+# # Chore kinds to accept; empty/absent = every kind lola knows.
+# accept_kinds = ["dep_advisory", "red_bump_pr"]
+# # Claims per local day. Absent = 4; 0 = claim nothing.
+# max_claims_per_day = 4
+# # Refuse a chore for a project without sandbox = "docker". Absent = true;
+# # turning it off is a local, explicit decision.
+# require_sandbox = true
+# # Hub loop cadence in seconds (60..900; leases are renewed on it). Absent = 300.
+# poll_seconds = 300
+# # Give all of a repository's open dependency advisories to ONE agent and one
+# # pull request (at most 12). Absent = true; false claims each alone.
+# group_chores = true
+# # Enforce the verified team policy: every key it carries is locked in the
+# # daemon's memory (never written here). Absent = true; false shows it only.
+# # The daily budget and the concurrency hint are CEILINGS: a tighter local
+# # value stays. A policy the hub withdraws, or a device the hub revokes,
+# # stops applying at once.
+# apply_policy = true
+# # Admin keys that may sign the team policy: key_id = base64url ed25519
+# # public key. The hub cannot add one, so it cannot forge policy; a key never
+# # comes from a hub response. An invite may carry one: `lola hub join` shows
+# # its id and fingerprint and pins it only after you confirm (or --trust-key).
+# [hub.trusted_policy_keys]
+# admin-2026 = "base64url-public-key-43-chars"
+# # Instead of the table, the "<key_id>:<public key>" entries lola-hub prints
+# # may go under [hub] as an array (lola rewrites it as the table on save):
+# #   trusted_policy_keys = ["k0123456789abcdef:base64url-public-key-43-chars"]
 
 # ---------------------------------------------------------------------------
 # [linear_agent] — lola as a NATIVE LINEAR AGENT. OPTIONAL and DEFAULT OFF.
@@ -556,11 +657,14 @@ endpoint = "https://api.linear.app/graphql"
 # Omitting the whole table is zero behavior change: nothing binds, nothing
 # listens, and a later save will not grow the table.
 #
-# While the transport is at its first milestone the listener is compiled ONLY
-# into a binary built with the `lola_insecure` build tag, which additionally
-# forces the bind to localhost whatever this table says. A release binary has no
-# listener at all and logs that when this table is enabled, so enabling it there
-# is inert rather than silent.
+# Phones pair by QR code plus the 6-digit code the phone shows, typed on the Mac
+# (`lola pair`, or Settings, Phones in the app). Each device then has its own
+# key, its own capability tiers (read, answer, control, destructive, shell) and
+# is revoked with `lola devices revoke`. The listener is in every build.
+#
+# Two ways in: the listener below (LAN / VPN), and the team hub's relay, which
+# needs no open port and no network in common with the phone. The relay is on
+# whenever this table is enabled and a hub is joined (see `relay`).
 # ---------------------------------------------------------------------------
 # [remote]
 # enabled = false
@@ -569,7 +673,9 @@ endpoint = "https://api.linear.app/graphql"
 # # never makes a network call).
 # #
 # #   off        bind nothing. Keeps the rest of the table, so it is the way to
-# #              pause the listener without losing your settings.
+# #              pause the listener without losing your settings. It does NOT
+# #              stop the hub relay: use `relay = false` (LAN settings kept, no
+# #              relay) or `enabled = false` (nothing at all) for that.
 # #   localhost  loopback only — what an SSH forward, a VPN or a tailnet wants,
 # #              and the only mode that puts nothing on a network interface.
 # #   lan        only private interfaces (RFC1918 / ULA / link-local) whose
@@ -581,17 +687,11 @@ endpoint = "https://api.linear.app/graphql"
 # # TCP port. 0 uses the built-in default shown here.
 # port = 7717
 #
-# insecure_lan: milestone 1 authenticates a phone with a single shared bearer
-# key, so it FORCES the bind to loopback and a physical phone cannot reach it.
-# A Simulator can — it shares the Mac's loopback — so this is only for a real
-# device. Turning it on honours `bind` above and puts that shared key on your
-# network in the clear: anything that can reach the port and guess the key can
-# type into a running coding agent. Two keys have to agree, so a config that
-# merely says bind = "lan" still binds loopback.
-#
-# It is deleted along with the whole insecure path in milestone 2, which gives
-# each device its own identity and makes a LAN bind unremarkable.
-# insecure_lan = false
+# relay: let a paired phone reach this Mac through the joined team hub when it
+# is not on the same network. Default true; effective only with enabled = true
+# and a joined hub. The relay carries the phone's own end-to-end TLS session, so
+# the hub sees ciphertext only. Set false to stay LAN/VPN only.
+# relay = true
 #
 # advertise: publish this listener on the local network with mDNS, so a paired
 # phone finds this Mac on a network whose addresses it has never seen. The key
@@ -634,6 +734,9 @@ endpoint = "https://api.linear.app/graphql"
 # Code in tmux inside it.
 # ---------------------------------------------------------------------------
 [[project]]
+# Omit to inherit [defaults].auto_pr_comments; true/false explicitly overrides.
+# For stack sessions, set this on the owning stack.
+# auto_pr_comments = false
 # name is the project's ID: a path segment (worktrees/<name>/,
 # state/<name>.seen) and the prefix of every session + tmux name
 # ("lola-nori-app-eng-42"). Keep it slug-shaped; changing it is a rename that
@@ -691,7 +794,7 @@ dev_commands = [
 # APP_PORT = "{{.Port}}" in [project.env]). Leases live in
 # ~/.lola/state/ports.json, survive a daemon restart, and are released when the
 # session's worktree is removed. Omit for the single-active move above.
-# port_range = "4100-4999"
+# port_range = "4100-4999"   # or "auto": lola picks free ports from 20000-29999
 # ports_per_session = 2      # LOLA_PORT_1..2; omitted = 1
 # Teardown hook, the mirror of post_create: commands run in the worktree (same
 # env, LOLA_DB_NAME and the port lease included) right before lola removes it —
@@ -706,8 +809,16 @@ dev_commands = [
 # Run this project's agents in a container that can write only their worktree
 # (see [sandbox]). "none" (default) | "docker".
 # sandbox = "docker"
-# sandbox_image = "ghcr.io/acme/agent-php:8.4"   # overrides [sandbox].image
+# sandbox_image = "ghcr.io/acme/agent-php:8.4"   # overrides [sandbox].image / lola's image
 # sandbox_ports = ["8000", "5173:5173"]          # published on 127.0.0.1
+# sandbox_toolchains = ["php@8.4", "node"]      # unset = detected from the checkout; ["none"] = nothing
+# sandbox_packages = ["ffmpeg"]                 # extra Debian packages
+# Opt this project into the [hub] chore lane: hub work items (security
+# advisories, red dependency-bump PRs) whose repo matches `repo` above may be
+# claimed for it. Default false; NOT a [defaults] key, so no project is ever
+# enrolled by inheritance. With [hub].require_sandbox (the default) the
+# project must also set sandbox = "docker".
+# hub_chores = true
 # Files symlinked from the main checkout into each worktree.
 # CAVEAT: symlinking .env means every worktree talks to the SAME database
 # (and caches, queues, ...) as the main checkout — concurrent sessions can
@@ -907,3 +1018,57 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # position = 1
 # # collapsed persists the folder's disclosure state in the app.
 # collapsed = false
+
+# -----------------------------------------------------------------------------
+# [[ssh_host]] — hosts an agent-assisted ssh session may reach (optional).
+#
+# A coding agent debugs a remote host with nothing installed there: the agent
+# stays local, the daemon owns the connection, and every command is a recorded
+# block a human can read, approve, stop or take over. No table = feature off.
+# See docs/ssh-sessions.md.
+#
+# `alias` is an SSH config alias or hostname. Optional `port` and `identity_file`
+# override SSH settings; key contents stay with SSH. Host keys, passphrases
+# and MFA are answered by you in the terminal tab; the
+# agent never sees them.
+#
+# Lola does NOT filter commands. The restricted `user` is the real limit on what
+# a command can do, so use one. Everything the agent reads goes to its model
+# provider. For an UNSANDBOXED agent the approval gate stops accidents and
+# well-behaved agents, not a determined one, because it runs as you. That is why
+# production refuses unsandboxed agents by default.
+#
+# [[ssh_host]]
+# # alias: required. What ssh connects to.
+# alias = "prod-web-1"
+# # name: the id agents and the CLI use (default: alias). label: free display text.
+# name = "prod-web"
+# label = "Production web 1"
+# # user: an optional restricted remote user (default: whatever ssh config says).
+# user = "lola-ro"
+# # tier: production | staging | dev. Empty or unknown reads as production.
+# #   production  every command is approved one at a time, no grants, and an
+# #               unsandboxed agent is refused unless allow_unsandboxed = true.
+# #   staging/dev a human may also open a time-limited grant while approving.
+# tier = "production"
+# # allow_unsandboxed: accept an unsandboxed agent on a production host.
+# allow_unsandboxed = false
+# # sandbox: how the agent of a DIRECT session (`lola ssh open`) runs: docker, none,
+# # or empty for the default. Empty means docker on production when [sandbox].image
+# # and lola_bin are set, and on the host below production. The container mounts
+# # only the session's scratch folder: no repository and no $HOME.
+# sandbox = ""
+# # agent: the coding agent of a direct session (default: [defaults].agent).
+# agent = "claude"
+# # default_cwd: remote directory for a command that names none (default: login dir).
+# default_cwd = "/var/www/app"
+# # grant_max_minutes: the longest grant. 0 = the tier's default (staging 30, dev
+# # 120), -1 = no grants. Must not be positive on production.
+# grant_max_minutes = 0
+# # Limits. 0 or absent means the value shown.
+# command_timeout_seconds = 120
+# max_command_timeout_seconds = 900
+# output_cap_kb = 1024            # stored per stream; the tail is always kept
+# control_persist_seconds = 900   # how long an idle master lingers after its last client
+# connect_wait_seconds = 300      # time allowed for passphrase and MFA
+# approval_timeout_seconds = 1800 # a command nobody answers expires, unrun

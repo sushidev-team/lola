@@ -1,13 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
+import { render, screen, cleanup, fireEvent, within, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 
 // The bindings are the process boundary. Stubbing them keeps this about what
 // the sidebar OFFERS and what it asks the backend to persist — the arrangement
 // maths itself is pinned in sidebarlayout.test.ts, without a DOM.
-const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack } = vi.hoisted(() => ({
+const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack, PickFolder, ScanStackFolder, CreateStackFromFolder, RemoveProject, RemoveStack, DoctorRun } = vi.hoisted(() => ({
+  // The setup checklist's one doctor run: gh signed out, so one item is left.
+  DoctorRun: vi.fn().mockResolvedValue({
+    results: [
+      { id: "tmux", name: "tmux", ok: true, detail: "", critical: true },
+      { id: "gh", name: "gh", ok: true, detail: "", critical: false },
+      { id: "gh auth", name: "gh auth", ok: false, detail: "", critical: false, fix: "gh_auth_login" },
+    ],
+    summary: "",
+    ok: true,
+  }),
   CreateStack: vi.fn(),
+  PickFolder: vi.fn(),
+  ScanStackFolder: vi.fn(),
+  CreateStackFromFolder: vi.fn(),
   SetProjectStack: vi.fn(),
+  RemoveProject: vi.fn(),
+  RemoveStack: vi.fn(),
   AddGroup: vi.fn(),
   RemoveGroup: vi.fn(),
   RenameGroup: vi.fn(),
@@ -30,9 +45,15 @@ vi.mock("@bindings/desktop", () => ({
     SetGroupCollapsed: (...a: unknown[]) => SetGroupCollapsed(...a),
     SetProjectLayout: (...a: unknown[]) => SetProjectLayout(...a),
     CreateStack: (...a: unknown[]) => CreateStack(...a),
+    PickFolder: (...a: unknown[]) => PickFolder(...a),
+    ScanStackFolder: (...a: unknown[]) => ScanStackFolder(...a),
+    CreateStackFromFolder: (...a: unknown[]) => CreateStackFromFolder(...a),
     SetProjectStack: (...a: unknown[]) => SetProjectStack(...a),
+    RemoveProject: (...a: unknown[]) => RemoveProject(...a),
+    RemoveStack: (...a: unknown[]) => RemoveStack(...a),
   },
   TermService: {},
+  DoctorService: { Run: (...a: unknown[]) => DoctorRun(...a) },
 }));
 
 const SidebarProjects = (await import("./SidebarProjects.svelte")).default;
@@ -71,6 +92,7 @@ describe("SidebarProjects", () => {
     vi.clearAllMocks();
     AddGroup.mockResolvedValue("clients");
     RemoveGroup.mockResolvedValue(undefined);
+    RemoveProject.mockResolvedValue(undefined);
     RenameGroup.mockResolvedValue(undefined);
     SetGroupCollapsed.mockResolvedValue(undefined);
     SetProjectLayout.mockResolvedValue(undefined);
@@ -83,6 +105,42 @@ describe("SidebarProjects", () => {
     nav.closeOverlay();
     nav.scoped = false;
     nav.project = "";
+    nav.view = "cockpit";
+  });
+
+  it("filters the sessions beside it in Code mode and clears on a second click", async () => {
+    render(SidebarProjects);
+    const row = screen.getByRole("button", { name: "lola" });
+    await fireEvent.click(row);
+    expect(nav.view).toBe("cockpit");
+    expect(nav.scoped).toBe(true);
+    expect(nav.project).toBe("lola");
+    expect(row).toHaveAttribute("aria-current", "true");
+    await fireEvent.click(row);
+    expect(nav.scoped).toBe(false);
+    await fireEvent.click(row);
+    await fireEvent.click(screen.getByRole("button", { name: "All sessions" }));
+    expect(nav.scoped).toBe(false);
+  });
+
+  it("opens the Git workspace for a project in Git mode", async () => {
+    nav.goDetail("okane", "git");
+    render(SidebarProjects);
+    expect(screen.queryByRole("button", { name: "All sessions" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "lola" }));
+    expect(nav.view).toBe("detail");
+    expect(nav.inGit).toBe(true);
+    expect(nav.project).toBe("lola");
+    expect(nav.scoped).toBe(false);
+  });
+
+  it("stays in Git mode when a stack is selected, so its member opens Git next", async () => {
+    store.projects = stackProjects();
+    nav.goDetail("lola", "git");
+    render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "nori" }));
+    expect(nav.inGit).toBe(true);
+    expect(nav.project).toBe("nori");
   });
 
   it("adds through a MENU, not straight into the project form", async () => {
@@ -103,11 +161,41 @@ describe("SidebarProjects", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
+  it("offers creation actions when right-clicking empty project space", async () => {
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("navigation", { name: "Projects" }), { clientX: 160, clientY: 600 });
+    expect(screen.getByRole("menuitem", { name: "New project" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "New group" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "New stack" })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "New project" }));
+    expect(nav.overlay).toBe("project");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("keeps project row menus and the search field's native context menu", async () => {
+    render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "Filter projects" }));
+    await fireEvent.contextMenu(screen.getByLabelText("Search projects"));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "lola" }));
+    expect(screen.getByRole("menuitem", { name: "Edit project" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "New project" })).not.toBeInTheDocument();
+  });
+
+  it("dismisses the background context menu with Escape", async () => {
+    render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "Filter projects" }));
+    await fireEvent.contextMenu(screen.getByRole("navigation", { name: "Projects" }));
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Search projects")).toHaveFocus();
+  });
+
   it("creates a group from the menu's dialog", async () => {
     render(SidebarProjects);
     await fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "New group" }));
-    const input = screen.getByRole("textbox");
+    const input = within(screen.getByRole("dialog")).getByRole("textbox");
     await fireEvent.input(input, { target: { value: "Clients" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(AddGroup).toHaveBeenCalledWith("Clients");
@@ -155,7 +243,7 @@ describe("SidebarProjects", () => {
   it("renames a group through the same dialog, seeded with its label", async () => {
     render(SidebarProjects);
     await fireEvent.click(screen.getByRole("button", { name: "Rename Clients" }));
-    const input = screen.getByRole("textbox") as HTMLInputElement;
+    const input = within(screen.getByRole("dialog")).getByRole("textbox") as HTMLInputElement;
     expect(input.value).toBe("Clients");
     await fireEvent.input(input, { target: { value: "Client Work" } });
     await fireEvent.click(screen.getByRole("button", { name: "Rename" }));
@@ -370,12 +458,58 @@ describe("SidebarProjects", () => {
     store.projects = [];
     store.groups = [];
     render(SidebarProjects);
-    expect(screen.getByRole("button", { name: "No projects — add one" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Get started" })).toBeInTheDocument();
 
     cleanup();
     store.groups = [{ name: "clients", label: "Clients", position: 0 }];
     render(SidebarProjects);
-    expect(screen.queryByRole("button", { name: "No projects — add one" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Get started" })).not.toBeInTheDocument();
+  });
+
+  // The empty workspace points at the checklist, not only at "add one".
+  it("shows the setup checklist and an Add project button when empty", async () => {
+    store.projects = [];
+    store.groups = [];
+    render(SidebarProjects);
+    expect(await screen.findByRole("list", { name: "Setup checklist" })).toBeInTheDocument();
+    expect(screen.getByText("gh is installed but not signed in.")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+    expect(nav.overlay).toBe("project");
+    expect(nav.overlayProject).toBe("");
+    nav.closeOverlay();
+  });
+
+  it("keeps the checklist above the list while no project picks up issues", async () => {
+    store.groups = [];
+    store.connected = true;
+    store.projects = [fakeProject({ pollsEnabled: 0 })];
+    render(SidebarProjects);
+    expect(await screen.findByRole("list", { name: "Setup checklist" })).toBeInTheDocument();
+
+    cleanup();
+    store.projects = [fakeProject({ pollsEnabled: 1 })];
+    render(SidebarProjects);
+    expect(screen.queryByText("Setup checklist")).not.toBeInTheDocument();
+    store.connected = false;
+  });
+
+  // A Mac that only takes hub chores or manual sessions never polls: polling
+  // alone must not keep the checklist (and its frame) up for good.
+  it("hides the checklist when only polling is left", async () => {
+    const ok = (name: string) => ({ id: name, name, ok: true, detail: "", critical: false });
+    DoctorRun.mockResolvedValueOnce({
+      results: [ok("tmux"), ok("git"), ok("gh"), ok("gh auth"), ok("claude"), ok("linear api key"),
+        { id: "polling", name: "polling", ok: false, detail: "", critical: false, fix: "enable_poll" }],
+      summary: "", ok: false,
+    });
+    store.groups = [];
+    store.connected = true;
+    store.projects = [fakeProject({ pollsEnabled: 0 })];
+    const { container } = render(SidebarProjects);
+    await waitFor(() => expect(DoctorRun).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("Setup checklist")).not.toBeInTheDocument());
+    expect(container.querySelector(".border-dashed")).toBeNull();
+    store.connected = false;
   });
 
   // --- stacks -------------------------------------------------------------------
@@ -390,11 +524,46 @@ describe("SidebarProjects", () => {
     render(SidebarProjects);
     await fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "New stack" }));
-    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "Nori" } });
+    await fireEvent.input(within(screen.getByRole("dialog")).getByRole("textbox"), { target: { value: "Nori" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await tick();
     await tick();
     expect(CreateStack).toHaveBeenCalledWith("Nori");
+    expect(nav.overlay).toBe("project");
+  });
+
+  it("creates a stack from a parent folder with the apps left checked", async () => {
+    PickFolder.mockResolvedValue("/src/nori");
+    const apps = [
+      { path: "/src/nori/api", label: "Api", repo: "acme/api", defaultBranch: "main", project: "", blocked: "" },
+      { path: "/src/nori/web", label: "Web", repo: "acme/web", defaultBranch: "main", project: "web", blocked: "" },
+      { path: "/src/nori/old", label: "Old", repo: "", defaultBranch: "", project: "old", blocked: "already in stack Other" },
+      { path: "/src/nori/docs", label: "Docs", repo: "", defaultBranch: "main", project: "", blocked: "" },
+    ];
+    ScanStackFolder.mockResolvedValue({ path: "/src/nori", suggestedLabel: "Nori", apps });
+    CreateStackFromFolder.mockResolvedValue("nori");
+    render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "New stack" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Choose parent folder…" }));
+    await vi.waitFor(() => expect(screen.getByRole("list", { name: "Apps in folder" })).toBeInTheDocument());
+    const dialog = screen.getByRole("dialog");
+    // The name is suggested from the folder.
+    expect((within(dialog).getByRole("textbox") as HTMLInputElement).value).toBe("Nori");
+    expect(within(dialog).getByText("joins existing project")).toBeInTheDocument();
+    const old = within(dialog).getByRole("checkbox", { name: "Include Old" }) as HTMLInputElement;
+    expect(old.disabled).toBe(true);
+    expect(old.checked).toBe(false);
+    await fireEvent.click(within(dialog).getByRole("checkbox", { name: "Include Docs" }));
+    expect(within(dialog).getByText("2 of 4 included")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await tick();
+    await tick();
+    expect(CreateStack).not.toHaveBeenCalled();
+    expect(CreateStackFromFolder).toHaveBeenCalledTimes(1);
+    const [label, sent] = CreateStackFromFolder.mock.calls[0];
+    expect(label).toBe("Nori");
+    expect(sent.map((a: { path: string }) => a.path)).toEqual(["/src/nori/api", "/src/nori/web"]);
     expect(nav.overlay).toBe("project");
   });
 
@@ -406,6 +575,31 @@ describe("SidebarProjects", () => {
     expect(screen.getByRole("button", { name: "Clients 0" })).toBeInTheDocument();
     const nori = tops.find((t) => t.querySelector("[data-stack-head='nori']"))!;
     expect(nori.querySelector("[data-stack-members='nori']")!.textContent).toContain("web");
+  });
+
+  it("shows stack members using their stack's polling status, not their inactive own poll", async () => {
+    store.projects = stackProjects();
+    const polls = (enabled: boolean, lastError = '') => ({ polls: [
+      { name: 'nori', enabled, lastError },
+      { name: 'web', enabled: false, lastError: 'old standalone error' },
+    ] }) as NonNullable<typeof store.status>;
+    store.status = polls(true);
+    render(SidebarProjects);
+    const row = screen.getByRole('button', {name:'web'}).parentElement!;
+    expect(row).toHaveAttribute('title', 'Part of nori · stack polling enabled');
+    expect(row.querySelector('.text-good svg')).toHaveClass('lucide-circle-dot');
+    store.status = polls(false);
+    await tick();
+    expect(row).toHaveAttribute('title', 'Part of nori · stack polling paused');
+    expect(row.querySelector('.text-good')).toBeNull();
+    store.status = polls(true, 'Cannot reach Linear');
+    await tick();
+    expect(row).toHaveAttribute('title', 'Part of nori · poll error: Cannot reach Linear');
+    expect(row.querySelector('.text-bad svg')).toHaveClass('lucide-circle-dot');
+    store.status = null;
+    await tick();
+    expect(row).toHaveAttribute('title', 'Part of nori · polling status unavailable');
+    expect(row.querySelector('.text-good')).toBeNull();
   });
 
   it("asks before adding a project to the stack its row is dropped on", async () => {
@@ -422,7 +616,7 @@ describe("SidebarProjects", () => {
 
     expect(SetProjectLayout).not.toHaveBeenCalled();
     expect(SetProjectStack).not.toHaveBeenCalled();
-    expect(confirm.request?.body).toBe("Add lola to stack nori?");
+    expect(confirm.request?.subject).toBe("lola → nori");
     expect(confirm.request?.detail).toMatch(/kept but ignored/);
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("lola", "nori");
@@ -440,7 +634,7 @@ describe("SidebarProjects", () => {
     pointer(window, "pointerup");
     await tick();
 
-    expect(confirm.request?.body).toBe("Remove web from stack nori?");
+    expect(confirm.request?.subject).toBe("web ← nori");
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("web", "");
     // Then placed where it was dropped (the top level).
@@ -461,13 +655,153 @@ describe("SidebarProjects", () => {
     await fireEvent.contextMenu(screen.getByRole("button", { name: "lola" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "Add to stack…" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "nori" }));
-    expect(confirm.request?.body).toBe("Add lola to stack nori?");
+    expect(confirm.request?.subject).toBe("lola → nori");
 
     confirm.cancel();
     await fireEvent.contextMenu(screen.getByRole("button", { name: "web" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "Remove from stack" }));
-    expect(confirm.request?.body).toBe("Remove web from stack nori?");
+    expect(confirm.request?.subject).toBe("web ← nori");
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("web", "");
   });
+
+  it("adds a project to a stack from the stack row's context menu", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "nori" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Add project…" }));
+    // Only projects outside every stack are offered.
+    expect(screen.queryByRole("menuitem", { name: "web" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "lola" }));
+    expect(confirm.request?.body).toBe("Add lola to stack nori?");
+    confirm.accept();
+    expect(SetProjectStack).toHaveBeenCalledWith("lola", "nori");
+  });
+
+  it("confirms removal of the context-menu project by id and allows cancellation", async () => {
+    store.projects = [fakeProject({ name: "lola", label: "Lola App" }), fakeProject({ name: "other" })];
+    nav.project = "other";
+    render(SidebarProjects);
+    const openRemove = async () => {
+      await fireEvent.contextMenu(screen.getByRole("button", { name: "Lola App" }));
+      await fireEvent.click(screen.getByRole("menuitem", { name: "Remove project…" }));
+    };
+    await openRemove();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(confirm.request?.title).toBe("Remove project?");
+    expect(confirm.request?.subject).toBe("Lola App");
+    expect(RemoveProject).not.toHaveBeenCalled();
+    confirm.cancel();
+    expect(RemoveProject).not.toHaveBeenCalled();
+    await openRemove();
+    confirm.accept();
+    expect(RemoveProject).toHaveBeenCalledExactlyOnceWith("lola");
+  });
+
+  it("reports a failed project removal", async () => {
+    RemoveProject.mockRejectedValueOnce(new Error("Could not save config"));
+    const flash = vi.spyOn(store, "setFlash");
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "lola" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove project…" }));
+    confirm.accept();
+    await vi.waitFor(() => expect(flash).toHaveBeenCalledWith("Error: Could not save config", "bad"));
+    expect(store.projectByName("lola")).toBeDefined();
+    flash.mockRestore();
+  });
+
+  it("distinguishes removing a stack from removing a member's configuration", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "web" }));
+    expect(screen.getByRole("menuitem", { name: "Remove from stack" })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove project…" }));
+    expect(confirm.request?.title).toBe("Remove project?");
+    confirm.accept();
+    expect(RemoveProject).toHaveBeenCalledWith("web");
+    expect(SetProjectStack).not.toHaveBeenCalled();
+
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "nori" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove stack…" }));
+    expect(confirm.request?.title).toBe("Remove stack?");
+    expect(confirm.request?.choices?.items.every((item) => item.checked)).toBe(true);
+    confirm.cancel();
+  });
+
+  it("removes a member project from lola, not only from its stack", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "web" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove project…" }));
+    expect(confirm.request?.subject).toBe("web");
+    confirm.accept();
+    expect(RemoveProject).toHaveBeenCalledWith("web");
+  });
+
+  it("removes a stack, keeping only the members left checked", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "nori" }));
+    expect(screen.queryByRole("menuitem", { name: "Add to stack…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "lola" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove stack…" }));
+    const items = confirm.request?.choices?.items ?? [];
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every((i) => i.checked)).toBe(true);
+    items[0].checked = false;
+    confirm.accept();
+    expect(RemoveStack).toHaveBeenCalledWith("nori", items.slice(1).map((i) => i.id));
+  });
+});
+
+it("searches project names, repositories and paths without changing layout", async () => {
+  cleanup(); store.groups=[];
+  store.projects = [fakeProject({name:"alpha", label:"Alpha Website",path:"/code/customer-a",repo:"acme/website" }), fakeProject({name:"beta",label:"Beta",path:"/code/customer-b"})];
+  render(SidebarProjects);
+  await fireEvent.click(screen.getByRole("button",{name:"Filter projects"}));
+  await fireEvent.input(screen.getByLabelText("Search projects"),{target:{value:"customer-a"}});
+  expect(screen.getByText("Alpha Website")).toBeInTheDocument();
+  expect(screen.queryByText("Beta")).not.toBeInTheDocument();
+  expect(screen.getByText("Path ·")).toBeInTheDocument();
+  expect(screen.getByText("customer-a")).toHaveClass("text-accent-ink");
+  await fireEvent.input(screen.getByLabelText("Search projects"),{target:{value:"aws"}});
+  const result = screen.getByRole("list", {name:"Matching projects"});
+  expect(result.textContent).toContain("Alpha Website");
+  expect(Array.from(result.querySelectorAll(".text-accent-ink"), el => el.textContent).join("")).toBe("AWs");
+  await fireEvent.click(screen.getByRole("button", {name:"Clear project search"}));
+  expect(screen.getByLabelText("Search projects")).toHaveValue("");
+  expect(screen.getByLabelText("Search projects")).toHaveFocus();
+  expect(screen.queryByRole("button", {name:"Clear project search"})).not.toBeInTheDocument();
+  expect(screen.getByText("Beta")).toBeInTheDocument();
+});
+
+it("adds projects to the session filter with ⌘-click and replaces it with a plain click", async () => {
+  cleanup(); store.groups = [];
+  store.projects = [fakeProject({ name: "alpha", label: "Alpha" }), fakeProject({ name: "beta", label: "Beta" })];
+  nav.goCockpit("");
+  render(SidebarProjects);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(nav.scopeNames).toEqual(["alpha"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Beta" }), { metaKey: true });
+  expect(nav.scopeNames).toEqual(["alpha", "beta"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }), { metaKey: true });
+  expect(nav.scopeNames).toEqual(["beta"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(nav.scopeNames).toEqual(["alpha"]);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(nav.scopeNames).toEqual([]);
+});
+
+it("offers actions for several selected projects from a row's menu", async () => {
+  cleanup(); store.groups = [];
+  store.projects = [fakeProject({ name: "alpha", label: "Alpha" }), fakeProject({ name: "beta", label: "Beta" })];
+  nav.goCockpit("");
+  render(SidebarProjects);
+  await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Beta" }), { metaKey: true });
+  await fireEvent.contextMenu(screen.getByRole("button", { name: "Beta" }));
+  expect(screen.getByText("2 projects selected")).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole("menuitem", { name: "Remove 2 projects…" }));
+  expect(confirm.request?.title).toBe("Remove 2 projects?");
+  expect(confirm.request?.subject).toBe("Alpha, Beta");
 });

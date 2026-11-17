@@ -49,7 +49,45 @@ func Resolve(what, keychainService, envVar string) (string, error) {
 	return "", fmt.Errorf("%s not found (tried %s)", what, strings.Join(tried, ", "))
 }
 
-// Store writes value to the login keychain under service (macOS only), via the
-// same stdin-fed security(1) path as StoreLinearAPIKey: never in argv, never in
-// an error.
-func Store(service, value string) error { return StoreLinearAPIKey(service, value) }
+// SandboxClaudeService is the keychain service holding the Claude Code token a
+// sandboxed claude authenticates with (`claude setup-token`, stored by
+// `lola sandbox token`). The container cannot read the keychain the host
+// claude logs in through, so lola reads this item and passes the value in the
+// session's 0600 env file.
+const SandboxClaudeService = "lola-sandbox-claude"
+
+// Lookup reads the keychain item for service. ok is false when there is none
+// (or off macOS). The error never carries the value.
+func Lookup(service string) (value string, ok bool, err error) {
+	if service == "" {
+		return "", false, errors.New("keychain service name is required")
+	}
+	v, err := keychainLookup(service)
+	switch {
+	case errors.Is(err, errKeychainNotFound):
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	}
+	return v, v != "", nil
+}
+
+// Store writes value to the login keychain under service, replacing any
+// existing item. The value goes to security(1) on stdin, never argv.
+func Store(service, value string) error {
+	if service == "" {
+		return errors.New("keychain service name is required")
+	}
+	if value == "" {
+		return errors.New("cannot store an empty secret")
+	}
+	return keychainStore(service, value)
+}
+
+// Delete removes service's keychain item. A missing item is not an error.
+func Delete(service string) error {
+	if service == "" {
+		return errors.New("keychain service name is required")
+	}
+	return keychainDelete(service)
+}

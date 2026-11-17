@@ -1,0 +1,33 @@
+{
+  "id": "15cdf8d6-f42d-443e-9631-1bcd50445475",
+  "project": "nori-app",
+  "title": "Pilot: align Nori dialog layouts with the current style",
+  "outcome": "Improve the shared dialog presentation in Nori App using its existing design system. Inspect DESIGN.md, PRODUCT.md and resources/css/tokens.css in the worker. Read-only baseline inspection found bg-black/80 and shadow-lg in the shared Dialog; existing tokens are --overlay-scrim (36% steel ink light, 60% black dark) and --shadow-dialog. Keep the change bounded to the shared dialog and its stories/tests, with invoice SaveViewDialog changed only if layout needs it. Use the existing apps/app label adeae6ca-42c6-4809-9024-ba86070cf861; do not apply agent-ready or change existing release milestones. The pilot allows at most 30 minutes including planning, 8 total agent calls, one worker at a time, and no automatic main merge. The prepared image provides offline project dependencies through sh /opt/pilot/setup-deps.sh when run from the repository directory. Do not commit generated dependency links, build output or pilot evidence. Acceptance runs the pinned /opt/pilot/check.sh with PILOT_ASSERT_STYLE=1 independently of worker claims.",
+  "acceptance": [
+    "Rendered light and dark dialogs use the existing --overlay-scrim and --shadow-dialog tokens and fit the current visual style.",
+    "Desktop and 390px-wide captures show at least 1rem viewport gutters; tall content scrolls vertically and its close button remains visible.",
+    "Keyboard focus starts inside the dialog, Tab stays inside it, Escape dismisses it and restores trigger focus.",
+    "Existing dialog and invoice Save view tests, dialog Storybook tests and the frontend build pass; invoice saving/filter payload behavior is preserved."
+  ],
+  "non_goals": [
+    "Changing backend behavior, global design tokens or unrelated feature dialogs.",
+    "Changing issue pickup settings, initiatives, existing release milestones, or automatically merging into main."
+  ],
+  "max_tasks": 2,
+  "timeout_seconds": 180,
+  "model": "sonnet",
+  "context_paths": {
+    "nori-app": [
+      "PRODUCT.md",
+      "package.json",
+      "resources/js/components/ui/dialog.tsx",
+      "resources/js/components/ui/dialog.stories.tsx",
+      "resources/js/components/ui/__tests__/dialog.test.tsx",
+      "resources/js/components/Invoices/SaveViewDialog.tsx",
+      "resources/js/components/Invoices/__tests__/save-view-dialog.test.tsx",
+      ".storybook/main.ts",
+      ".storybook/preview.ts"
+    ]
+  },
+  "milestone_name": "Dialog layout pilot"
+}

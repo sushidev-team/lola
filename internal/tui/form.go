@@ -41,6 +41,9 @@ const (
 	fDefaultBranch
 	fBranchPrefix
 	fAgent
+	fSandbox
+	fSandboxImage
+	fGoalMode
 	fSymlinks
 	fPostCreate
 	fDevCommands
@@ -82,6 +85,7 @@ const (
 	fCommentOnBlocked
 	// Review tab: this project's per-project review-provider override.
 	fReview
+	fAutoPRComments
 	fSave
 )
 
@@ -116,7 +120,7 @@ var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fDevComman
 // textFields are edited inline, character by character.
 var textFields = map[fieldID]bool{
 	fLabel: true, fName: true, fPath: true, fRepo: true, fDefaultBranch: true,
-	fBranchPrefix: true, fCap: true, fPortRange: true, fPortsPerSession: true,
+	fSandboxImage: true, fBranchPrefix: true, fCap: true, fPortRange: true, fPortsPerSession: true,
 }
 
 // inheritable maps a field to its config.ProjectInherits bit, for the fields
@@ -133,8 +137,9 @@ var inheritable = map[fieldID]func(*config.ProjectInherits) *bool{
 	fBlockedLabel: func(i *config.ProjectInherits) *bool {
 		return &i.BlockedLabelID
 	},
-	fReview:      func(i *config.ProjectInherits) *bool { return &i.Review },
-	fRequirePlan: func(i *config.ProjectInherits) *bool { return &i.RequirePlan },
+	fAutoPRComments: func(i *config.ProjectInherits) *bool { return &i.AutoPRComments },
+	fReview:         func(i *config.ProjectInherits) *bool { return &i.Review },
+	fRequirePlan:    func(i *config.ProjectInherits) *bool { return &i.RequirePlan },
 }
 
 type pickOpt struct{ id, label string }
@@ -317,6 +322,8 @@ func (f *formModel) setInherit(fd fieldID, v bool) {
 		f.poll.OnSentSetLabel = d.OnSentSetLabel
 	case fBlockedLabel:
 		f.poll.BlockedLabelID = d.BlockedLabelID
+	case fAutoPRComments:
+		f.poll.AutoPRComments = d.AutoPRComments
 	case fReview:
 		f.poll.Review = slices.Clone(d.Review)
 	case fRequirePlan:
@@ -391,7 +398,7 @@ func newFormModelKind(cfg *config.Config, existing *config.Project, kind string)
 			Inherits: config.ProjectInherits{
 				Symlinks: true, PostCreate: true, Env: true,
 				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-				BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+				BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
 				Review: true, RequirePlan: true,
 			},
 		}
@@ -426,6 +433,7 @@ func newFormModelKind(cfg *config.Config, existing *config.Project, kind string)
 		f.poll.DedupMode = orDefault(cfg.Defaults.DedupMode, config.DefaultDedupMode)
 		f.poll.OnSentSetLabel = cfg.Defaults.OnSentSetLabel
 		f.poll.BlockedLabelID = cfg.Defaults.BlockedLabelID
+		f.poll.AutoPRComments = cfg.Defaults.AutoPRComments
 		f.poll.Review = slices.Clone(cfg.Defaults.Review)
 		f.poll.RequirePlan = cfg.Defaults.RequirePlan
 	}
@@ -541,7 +549,7 @@ func (f *formModel) fields() []fieldID {
 		case f.poll.IsStack():
 			// A stack has no checkout: every repository field belongs to its
 			// members, listed read-only.
-			fs = []fieldID{fLabel, fName, fBranchPrefix, fAgent, fMembers}
+			fs = []fieldID{fLabel, fName, fBranchPrefix, fAgent, fSandbox, fSandboxImage, fGoalMode, fMembers}
 		case f.poll.InStack():
 			// A member owns its repository only; the agent and branch prefix
 			// are the stack's (and kept, hidden, for leaving it).
@@ -551,7 +559,7 @@ func (f *formModel) fields() []fieldID {
 			if f.hasStacks() {
 				fs = append(fs, fStack)
 			}
-			fs = append(fs, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fPreRemove, fDevCommands, fPortRange, fPortsPerSession, fEnv)
+			fs = append(fs, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSandbox, fSandboxImage, fGoalMode, fSymlinks, fPostCreate, fPreRemove, fDevCommands, fPortRange, fPortsPerSession, fEnv)
 		}
 	case tabFilter:
 		fs = []fieldID{fEnabled, fTeam}
@@ -589,7 +597,7 @@ func (f *formModel) fields() []fieldID {
 			fs = append(fs, fCommentOnPR, fOnMergedState, fCommentOnMerged, fBlockedLabel, fCommentOnBlocked)
 		}
 	case tabReview:
-		fs = []fieldID{fReview}
+		fs = []fieldID{fAutoPRComments, fReview}
 	}
 	return append(fs, fSave)
 }
@@ -878,6 +886,8 @@ func (f *formModel) textBuf(fd fieldID) *string {
 		return &f.poll.DefaultBranch
 	case fBranchPrefix:
 		return &f.poll.BranchPrefix
+	case fSandboxImage:
+		return &f.poll.SandboxImage
 	case fCap:
 		return &f.capBuf
 	case fPortRange:
@@ -971,6 +981,13 @@ func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
 		}
 		f.editing, f.lineCur = true, 0
 		return nil, formNone
+	case cur == fSandbox:
+		if f.poll.Sandbox == "docker" {
+			f.poll.Sandbox = "none"
+		} else {
+			f.poll.Sandbox = "docker"
+		}
+		return nil, formNone
 	case cur == fAgent:
 		f.cycleAgent()
 		return nil, formNone
@@ -1001,6 +1018,16 @@ func (f *formModel) cycleAgent() {
 // toggleBool flips a boolean field in place.
 func (f *formModel) toggleBool(cur fieldID) {
 	switch cur {
+	case fGoalMode:
+		if !f.poll.GoalMode && (f.poll.Sandbox != "docker" || f.poll.TeamID == "" || f.poll.ProjectID == "") {
+			f.loadErr = "Goal mode needs Docker workspace and an existing Linear team and project."
+			return
+		}
+		f.loadErr = ""
+		f.poll.GoalMode = !f.poll.GoalMode
+	case fAutoPRComments:
+		f.override(cur)
+		f.poll.AutoPRComments = !f.poll.AutoPRComments
 	case fEnabled:
 		f.poll.Enabled = !f.poll.Enabled
 	case fPRRequiresChecks:
@@ -1028,7 +1055,7 @@ var metaFields = map[fieldID]bool{
 // boolFields are the toggles: enter flips them in place rather than opening a
 // picker.
 var boolFields = map[fieldID]bool{
-	fEnabled:          true,
+	fGoalMode: true, fEnabled: true, fAutoPRComments: true,
 	fRequirePlan:      true,
 	fPRRequiresChecks: true, fCommentOnSpawn: true, fCommentOnPR: true,
 	fCommentOnMerged: true, fCommentOnBlocked: true,
@@ -1326,8 +1353,8 @@ func (f *formModel) stateOpts() []pickOpt {
 }
 
 // applyProject copies every edited field from src onto dst — the form now owns
-// the whole [[project]] (repository setup, Linear filter, write-back), so there
-// is nothing on dst to preserve except its identity.
+// repository setup, Linear filter and write-back. Unexposed settings and the
+// identity remain on dst; stack members cannot edit owner execution settings.
 func applyProject(dst *config.Project, src config.Project) {
 	// Label, unlike Name, is pure display — it carries no runtime identity, so
 	// it saves like any other field. A Name change is a rename, handled before
@@ -1340,6 +1367,11 @@ func applyProject(dst *config.Project, src config.Project) {
 	dst.DefaultBranch = src.DefaultBranch
 	dst.BranchPrefix = src.BranchPrefix
 	dst.Agent = src.Agent
+	if !dst.InStack() {
+		dst.Sandbox = strings.TrimSpace(src.Sandbox)
+		dst.SandboxImage = strings.TrimSpace(src.SandboxImage)
+		dst.GoalMode = src.GoalMode
+	}
 	dst.Symlinks = src.Symlinks
 	dst.PostCreate = src.PostCreate
 	dst.DevCommands = src.DevCommands
@@ -1373,6 +1405,7 @@ func applyProject(dst *config.Project, src config.Project) {
 	dst.CommentOnBlocked = src.CommentOnBlocked
 	dst.PRRequiresChecks = src.PRRequiresChecks
 	dst.RequirePlan = src.RequirePlan
+	dst.AutoPRComments = src.AutoPRComments
 	dst.Review = src.Review
 	// Assign unconditionally: an empty src.Repo must be able to CLEAR an existing
 	// value, not silently leave the old one in place.
@@ -1755,6 +1788,12 @@ func fieldHelp(fd fieldID) string {
 		return "Base branch worktrees fork from, and the base the agent opens its PR against. enter lists the checkout's branches; you can also type one."
 	case fBranchPrefix:
 		return "Prefix for a session's branch (e.g. \"lola/\" yields lola/eng-42). Empty inherits [defaults].branch_prefix, then \"lola/\"."
+	case fSandbox:
+		return "Workspace for new sessions. Enter switches host / Docker. Goal mode requires Docker; existing sessions keep their workspace."
+	case fSandboxImage:
+		return "Container image with the project toolchain and coding agent. Empty uses [sandbox].image, else lola's sandbox image (" + config.DefaultSandboxImage() + ")."
+	case fGoalMode:
+		return "Make goals available for this project or stack. Requires Docker and Linear placement. Each goal still needs a reviewed plan, limits and execution authorization; draft PRs require human merge."
 	case fAgent:
 		return "Coding agent this project's sessions spawn; empty inherits [defaults].agent. enter cycles."
 	case fSymlinks:
@@ -1825,6 +1864,8 @@ func fieldHelp(fd fieldID) string {
 		return "Label added when the agent is blocked and needs a human (CI retries exhausted). (none) = no label."
 	case fCommentOnBlocked:
 		return "enter toggles · also comment the block reason when the agent is blocked."
+	case fAutoPRComments:
+		return "Automatically verify PR comments, push fixes and resolve addressed threads when the agent is idle. ctrl+o restores the global default."
 	case fReview:
 		return "Which review providers run for this project's sessions. Empty inherits [defaults].review; override to none to disable review here. Pick from the enabled catalog."
 	case fSave:
@@ -1845,6 +1886,12 @@ func (f *formModel) label(fd fieldID) string {
 		return "Default branch"
 	case fBranchPrefix:
 		return "Branch prefix"
+	case fSandbox:
+		return "Workspace isolation"
+	case fSandboxImage:
+		return "Container image"
+	case fGoalMode:
+		return "Autonomous goals"
 	case fAgent:
 		return "Agent"
 	case fSymlinks:
@@ -1915,6 +1962,8 @@ func (f *formModel) label(fd fieldID) string {
 		return "On blocked → label"
 	case fCommentOnBlocked:
 		return "  comment on blocked"
+	case fAutoPRComments:
+		return "Auto PR comments"
 	case fReview:
 		return "Review providers"
 	case fSave:
@@ -1984,6 +2033,18 @@ func (f *formModel) display(fd fieldID) string {
 			return faintText.Render("(inherits " + f.cfg.BranchPrefixForProject(f.origName) + ")")
 		}
 		return f.poll.BranchPrefix
+	case fSandbox:
+		if f.poll.Sandbox == "docker" {
+			return "Docker workspace"
+		}
+		return "Host workspace"
+	case fSandboxImage:
+		if f.poll.SandboxImage == "" {
+			return faintText.Render("(configured default image)")
+		}
+		return f.poll.SandboxImage
+	case fGoalMode:
+		return boolDisplay(f.poll.GoalMode)
 	case fAgent:
 		if f.poll.Agent == "" {
 			return faintText.Render("(inherits " + f.cfg.AgentForProject(f.origName) + ")")
@@ -2129,6 +2190,8 @@ func (f *formModel) display(fd fieldID) string {
 		return boolDisplay(f.poll.CommentOnMerged)
 	case fCommentOnBlocked:
 		return boolDisplay(f.poll.CommentOnBlocked)
+	case fAutoPRComments:
+		return boolDisplay(f.poll.AutoPRComments)
 	case fReview:
 		kinds := f.poll.ReviewKindStrings()
 		if len(kinds) == 0 {

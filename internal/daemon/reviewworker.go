@@ -21,6 +21,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/sushidev-team/lola/internal/session"
@@ -42,8 +43,9 @@ const (
 
 // reviewJob is one queued pass: run provider Kind for session ID.
 type reviewJob struct {
-	ID   string
-	Kind provKind
+	Profile *profileArgs
+	ID      string
+	Kind    provKind
 }
 
 // reviewKey identifies a session/kind pair for the busy set.
@@ -74,6 +76,7 @@ func (d *Daemon) queueReviewProviders(ctx context.Context, s session.Session) {
 		}
 		d.queueReviewPass(s, p)
 	}
+	d.queueProfileReviews(s)
 }
 
 // queueReviewPass enqueues one pass provider for session s when it is due. It
@@ -85,11 +88,14 @@ func (d *Daemon) queueReviewPass(s session.Session, p reviewProvider) {
 	if !p.Enabled || !p.OnPROpen {
 		return
 	}
-	if s.Source != "native" || !isReviewablePROpen(s.PR) {
+	if s.GoalManaged() || s.Source != "native" || !isReviewablePROpen(s.PR) {
 		return
 	}
-	if s.ReviewedPRs[string(p.Kind)] == s.PR.Number {
-		return // already reviewed this PR for this kind
+	if p.Status && !agentSettled(s) {
+		return
+	}
+	if s.ReviewedPRs[string(p.Kind)] == s.PR.Number && !headReviewDue(s, p) {
+		return // already reviewed this PR (and, for a gated kind, this head)
 	}
 	key := reviewKey(s.ID, p.Kind)
 	d.reviewMu.Lock()
@@ -144,7 +150,11 @@ func (d *Daemon) reviewLoop(ctx context.Context) {
 // may have been stamped by the manual command). Panic-guarded so one bad pass
 // can never take the worker down with it.
 func (d *Daemon) runQueuedReview(ctx context.Context, job reviewJob) {
-	defer d.clearReviewBusy(reviewKey(job.ID, job.Kind))
+	key := reviewKey(job.ID, job.Kind)
+	if job.Profile != nil {
+		key = profileBusyKey(job.ID, job.Profile.Profile)
+	}
+	defer d.clearReviewBusy(key)
 	defer func() {
 		if r := recover(); r != nil {
 			d.logf("", "review: pass for %s (%s) panicked: %v", job.ID, job.Kind, r)
@@ -152,6 +162,12 @@ func (d *Daemon) runQueuedReview(ctx context.Context, job reviewJob) {
 	}()
 	s, ok := d.sessions.Get(job.ID)
 	if !ok {
+		return
+	}
+	if job.Profile != nil {
+		if _, err := d.runProfile(ctx, *job.Profile); err != nil {
+			d.logf("", "specialist %s for %s: %v", job.Profile.Profile, job.ID, err)
+		}
 		return
 	}
 	p, ok := d.providerByKind(job.Kind)
@@ -172,16 +188,19 @@ func (d *Daemon) runQueuedReview(ctx context.Context, job reviewJob) {
 // reviewMaxAttempts per PR, and a later cycle retries. A real answer (findings
 // or clean) and a graceful stop (auth / nonzero exit — operator problems that a
 // retry cannot fix) leave the guard stamped.
-func (d *Daemon) noteReviewOutcome(s session.Session, p reviewProvider, res reviewResult, pr int) {
+//
+// It reports whether the pass will be retried, so the review gate can keep its
+// status pending instead of posting an error.
+func (d *Daemon) noteReviewOutcome(s session.Session, p reviewProvider, res reviewResult, pr int) bool {
 	if pr <= 0 {
-		return
+		return false
 	}
 	key := reviewFailKey(s.ID, p.Kind, pr)
 	if !canRetryReview(res) {
 		d.reviewMu.Lock()
 		delete(d.reviewFails, key)
 		d.reviewMu.Unlock()
-		return
+		return false
 	}
 
 	d.reviewMu.Lock()
@@ -195,11 +214,12 @@ func (d *Daemon) noteReviewOutcome(s session.Session, p reviewProvider, res revi
 	if attempts >= reviewMaxAttempts {
 		d.logf("", "review: %s (%s) could not answer PR #%d after %d attempts — giving up on this PR",
 			s.ID, p.Kind, pr, attempts)
-		return
+		return false
 	}
 	d.unstampReviewed(s.ID, p.Kind, pr)
 	d.logf("", "review: %s (%s) will retry PR #%d on a later cycle (attempt %d of %d)",
 		s.ID, p.Kind, pr, attempts, reviewMaxAttempts)
+	return true
 }
 
 // canRetryReview reports whether a chain outcome is worth another attempt: the
@@ -207,6 +227,9 @@ func (d *Daemon) noteReviewOutcome(s session.Session, p reviewProvider, res revi
 // at all). A successful run — including a CLEAN one — and a graceful stop are
 // both final.
 func canRetryReview(res reviewResult) bool {
+	if errors.Is(res.Err, errReviewHeadChanged) {
+		return true
+	}
 	if res.Ran {
 		return false
 	}

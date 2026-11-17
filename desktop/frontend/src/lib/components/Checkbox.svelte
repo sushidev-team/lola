@@ -38,6 +38,7 @@
 </script>
 
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import type { HTMLInputAttributes } from "svelte/elements";
 
   let {
@@ -57,16 +58,5 @@
 
 <span class="{WRAP} {klass}">
   <input type="checkbox" bind:checked {...rest} class={BOX} />
-  <svg
-    class={TICK}
-    viewBox="0 0 14 14"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2.2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M3 7.4 5.9 10.2 11 3.9" />
-  </svg>
+  <Icon name="check" class={TICK} />
 </span>

@@ -16,10 +16,8 @@
 //   internal/protocol/frame.go       the envelope, the frame kinds, the payloads
 //   internal/protocol/framecodec.go  the length-prefixed framing and its cap
 //   internal/protocol/protocol.go    Request / Response, shared with the unix socket
-//   internal/remote/policy.go        the unconditional command denials
-//   internal/remote/insecure.go      the M1 bearer-key hello
-//   internal/tmux/client.go          the scroll clamp
-//   internal/config/remote.go        the default port
+//
+// Numeric limits live in ./limits.ts; the push vocabulary in ./events.ts.
 //
 // Nothing in this file performs I/O or touches a platform API. The codec lives
 // in ./codec.ts, the transport seam in ./transport.ts.
@@ -27,6 +25,18 @@
 // ---------------------------------------------------------------------------
 // Framing constants
 // ---------------------------------------------------------------------------
+
+import { MAX_PANE_NAME, MAX_SCROLL_LINES } from "./limits";
+
+// The limits' home is ./limits.ts; they stay importable from here.
+export {
+  DEFAULT_REMOTE_PORT,
+  MAX_FRAME_BYTES,
+  MAX_PANE_NAME,
+  MAX_REQUESTS_IN_FLIGHT,
+  MAX_SCROLL_LINES,
+  PANE_QUEUE_DEPTH,
+} from "./limits";
 
 /**
  * The byte count of the length prefix: a big-endian uint32 giving the size of
@@ -37,32 +47,14 @@
 export const FRAME_HEADER_BYTES = 4;
 
 /**
- * The maximum size of one encoded frame BODY, in either direction. The prefix
- * itself does not count against it: a body of exactly this many bytes is legal.
- *
- * MUST EQUAL `protocol.MaxFrameBytes` (internal/protocol/frame.go), which is
- * `1 << 20`. The daemon refuses a larger inbound prefix before allocating and
- * then closes the connection, so a client that disagrees about this number does
- * not get a rejected frame, it gets a dropped socket.
- */
-export const MAX_FRAME_BYTES = 1 << 20;
-
-/**
  * Envelope versions this client speaks. A daemon accepts `v` in
  * `[FRAME_VERSION_MIN, FRAME_VERSION_CURRENT]` and refuses anything else with an
  * `err` frame carrying its own bounds, then closes.
  *
  * Mirrors `protocol.FrameVersionCurrent` / `FrameVersionMin`.
  */
-export const FRAME_VERSION_CURRENT = 1;
-export const FRAME_VERSION_MIN = 1;
-
-/**
- * The TCP port the daemon's phone listener binds when `[remote].port` is unset.
- *
- * Mirrors `config.DefaultRemotePort` (internal/config/remote.go).
- */
-export const DEFAULT_REMOTE_PORT = 7717;
+export const FRAME_VERSION_CURRENT = 2;
+export const FRAME_VERSION_MIN = 2;
 
 // ---------------------------------------------------------------------------
 // Frame kinds and their directions
@@ -77,7 +69,8 @@ export const DEFAULT_REMOTE_PORT = 7717;
  *   unsub   client -> daemon: drop the subscription on `pane`; no payload, no ack
  *   resync  daemon -> client: payload is ResyncPayload
  *   pty     BOTH: PTYOutputPayload outbound, PTYInputPayload inbound
- *   err     BOTH: payload is ErrPayload
+ *   err     BOTH: payload is ErrPayload; `topic` set when it ends one event stream
+ *   event   daemon -> client: a pushed topic value; `id` is the watch id
  */
 export const FRAME_REQ = "req";
 export const FRAME_RESP = "resp";
@@ -86,6 +79,7 @@ export const FRAME_UNSUB = "unsub";
 export const FRAME_RESYNC = "resync";
 export const FRAME_PTY = "pty";
 export const FRAME_ERR = "err";
+export const FRAME_EVENT = "event";
 
 export type FrameType =
   | typeof FRAME_REQ
@@ -94,7 +88,8 @@ export type FrameType =
   | typeof FRAME_UNSUB
   | typeof FRAME_RESYNC
   | typeof FRAME_PTY
-  | typeof FRAME_ERR;
+  | typeof FRAME_ERR
+  | typeof FRAME_EVENT;
 
 /** Bit flags for the direction a frame kind may legitimately travel in. */
 export const DIR_TO_DAEMON = 1;
@@ -115,6 +110,7 @@ export function frameDirections(t: string): number {
       return DIR_TO_DAEMON;
     case FRAME_RESP:
     case FRAME_RESYNC:
+    case FRAME_EVENT:
       return DIR_TO_CLIENT;
     case FRAME_PTY:
     case FRAME_ERR:
@@ -158,7 +154,7 @@ export function supportedFrameVersion(v: number): boolean {
  * Mirrors `protocol.Frame` (internal/protocol/frame.go). The FIELD ORDER below
  * is the Go struct's declaration order, and it is load-bearing for the encoder:
  * encoding/json emits struct fields in declaration order, so reproducing the
- * daemon's exact bytes means emitting `v`, `type`, `id`, `cmd`, `pane`, `seq`,
+ * daemon's exact bytes means emitting `v`, `type`, `id`, `cmd`, `pane`, `topic`, `seq`,
  * `payload` in that sequence. See ./codec.ts.
  *
  * Every field except `v` and `type` carries `omitempty` on the Go side, so an
@@ -180,6 +176,8 @@ export interface Frame {
   cmd?: string;
   /** sub / unsub / pty / resync / err: the tmux session name. */
   pane?: string;
+  /** `event` frames, and an `err` frame that ends one stream: the canonical topic. */
+  topic?: string;
   /** Per-pane stream ordering, for gap detection. Never 0 on the wire. */
   seq?: number;
   /** Type-specific body. Absent when the frame has none. */
@@ -340,27 +338,14 @@ export type ErrCode =
   | typeof CODE_INTERNAL;
 
 /**
- * Whether a refusal carrying this code tears the connection down.
- *
- * Derived from internal/remote/conn.go and pane.go, where the distinction is a
- * property of the CALL SITE rather than of the code, so the two families overlap:
- * `unknown_type` is fatal for a bad envelope and non-fatal for a bad pty action,
- * `internal` is fatal for a malformed envelope and non-fatal for a failed write,
- * and `rate_limited` is fatal for a full pane queue and non-fatal for too many
- * requests in flight.
- *
- * The honest reading is therefore: a client cannot tell from the code alone.
- * What it CAN do is stop guessing — treat the codes below as "assume the socket
- * is going away" and let the transport's close handler be the authority, which
- * is what `alwaysFatalCode` names. Everything else is a per-frame refusal that
- * the connection is expected to survive.
+ * Whether a refusal carrying this code is expected to take the socket with it.
+ * A refused command (`denied`, `unknown_cmd`, `rate_limited`) answers on its id
+ * and the connection stays up, so those reject one request only; the transport's
+ * close handler stays the authority on everything else.
  */
 export function alwaysFatalCode(code: string): boolean {
   return (
-    code === CODE_UNSUPPORTED_VERSION ||
-    code === CODE_UNKNOWN_CMD ||
-    code === CODE_DENIED ||
-    code === CODE_FRAME_TOO_LARGE
+    code === CODE_UNSUPPORTED_VERSION || code === CODE_FRAME_TOO_LARGE
   );
 }
 
@@ -399,6 +384,8 @@ export interface RequestFields {
   session?: string;
   event?: string;
   detail?: string;
+  /** cmd=kill only: stop the agent and keep its worktree and branch. */
+  keepWorktree?: boolean;
   text?: string;
   /** The size the asking client can show, for cmd=shellCreate. */
   cols?: number;
@@ -423,81 +410,6 @@ export interface Response<T = unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Command policy, mirrored so a mistake costs a refusal instead of the socket
-// ---------------------------------------------------------------------------
-
-/**
- * The namespace the transport reserves for commands it speaks to ITSELF — M1's
- * in-band bearer-key hello, and whatever M2's pairing needs.
- *
- * Mirrors `remote.remoteCmdPrefix` (internal/remote/policy.go).
- */
-export const REMOTE_CMD_PREFIX = "remote.";
-
-/**
- * The `req` frame that carries M1's bearer key.
- *
- * Mirrors `remote.helloCmd` (internal/remote/insecure.go). Its payload is
- * `{"key":"..."}` and is deliberately NOT a Request: the key is not a command
- * argument, and putting it in one would make it something a future handler could
- * read. See `helloFrame` below.
- */
-export const HELLO_CMD = REMOTE_CMD_PREFIX + "hello";
-
-/**
- * The shortest bearer key the daemon's M1 listener accepts; a shorter one makes
- * it refuse to start at all.
- *
- * Mirrors `remote.insecureMinKeyLen` (internal/remote/insecure.go).
- */
-export const INSECURE_MIN_KEY_LEN = 16;
-
-/**
- * Commands refused for EVERY remote peer, unconditionally, in code rather than
- * in configuration.
- *
- * Mirrors `remote.deniedCommands` (internal/remote/policy.go). It is mirrored
- * here for one narrow reason, and it is not defence: a denied `cmd` is answered
- * with `unknown_cmd` and then the daemon CLOSES THE CONNECTION, taking every
- * live pane subscription with it. So a single mistyped command costs a full
- * reconnect and a re-subscribe of every pane. Checking locally first turns that
- * into a rejected promise.
- *
- * This is NOT the capability model and must not be read as one. M2 adds a closed
- * allowlist of tiers on top, enforced in the daemon and in the native plugin;
- * this list is the floor beneath it, and a command absent from this list is not
- * thereby permitted.
- */
-export const DENIED_COMMANDS: readonly string[] = [
-  "stop",
-  "reload",
-  "renameProject",
-  "hookEvent",
-  "pairBegin",
-  "pairStatus",
-  "pairConfirm",
-  "devices",
-  "revokeDevice",
-];
-
-const deniedSet = new Set(DENIED_COMMANDS);
-
-/**
- * Whether `cmd` is refused for every remote peer.
- *
- * Mirrors `remote.CommandDenied`, including its two non-obvious cases: an EMPTY
- * command is denied (a req frame naming nothing has nothing to authorize), and
- * anything in the `remote.` namespace is denied — the bearer hello included,
- * which is why the handshake is sent by the transport's connect path and never
- * through the ordinary request path.
- */
-export function commandDenied(cmd: string): boolean {
-  if (cmd === "") return true;
-  if (cmd.startsWith(REMOTE_CMD_PREFIX)) return true;
-  return deniedSet.has(cmd);
-}
-
-// ---------------------------------------------------------------------------
 // Pane names and bounds
 // ---------------------------------------------------------------------------
 
@@ -514,16 +426,6 @@ export function commandDenied(cmd: string): boolean {
 export const PANE_NAME_RE =
   /^lola-[A-Za-z0-9._-]+(?:-shell-\d+|-review|-dev-\d+)?$/;
 
-/**
- * The longest pane name that may reach a frame.
- *
- * Mirrors `remote.maxPaneName` (internal/remote/pane.go) and
- * `panebus.MaxPaneNameLen`, which are the same number for different reasons —
- * one caps what may reach a frame and a log line, the other what may reach a
- * tmux argv. Names lola builds are nowhere near either.
- */
-export const MAX_PANE_NAME = 128;
-
 /** Mirrors `panebus.ValidName`, minus the daemon-side existence check. */
 export function validPaneName(name: string): boolean {
   if (name === "" || utf8Length(name) > MAX_PANE_NAME) return false;
@@ -531,33 +433,7 @@ export function validPaneName(name: string): boolean {
 }
 
 /**
- * One scroll request's clamp. The daemon clamps server-side anyway; clamping
- * here keeps the request honest about what it will actually do.
- *
- * Mirrors `tmux.MaxScrollLines` (internal/tmux/client.go).
- */
-export const MAX_SCROLL_LINES = 500;
-
-/**
- * How many `req` frames one connection may have in flight before the daemon
- * refuses further ones with a non-fatal `rate_limited`.
- *
- * Mirrors `remote.reqConcurrency` (internal/remote/server.go). The correlator
- * uses it as a queue depth so a burst waits instead of being refused.
- */
-export const MAX_REQUESTS_IN_FLIGHT = 4;
-
-/**
- * The depth of the daemon's ordered pane-input queue. Overflowing it is FATAL —
- * the daemon closes the connection rather than silently dropping keystrokes into
- * a live agent.
- *
- * Mirrors `remote.paneQueueDepth` (internal/remote/server.go).
- */
-export const PANE_QUEUE_DEPTH = 256;
-
-/**
- * The window covering the TLS handshake AND the bearer hello. After it the
+ * The window covering the TLS handshake AND the first frame. After it the
  * daemon CLEARS its read deadline: an attached pane is legitimately silent for
  * minutes, and there is no application-level keepalive in either direction.
  *
@@ -577,30 +453,6 @@ export const WRITE_TIMEOUT_MS = 15_000;
 // ---------------------------------------------------------------------------
 // Frame builders
 // ---------------------------------------------------------------------------
-
-/**
- * The M1 bearer-key handshake frame: the FIRST and ONLY frame a client sends
- * before authenticating, answered by an ordinary `resp` on the same id.
- *
- * Mirrors the shape `remote.insecureAuthorizer.Authenticate` requires
- * (internal/remote/insecure.go). Every failure — wrong type, wrong cmd, bad
- * payload, wrong key — is the identical `denied` / "authenticate first" refusal
- * followed by a close, so a client learns nothing from the shape of a rejection
- * except that it was rejected.
- *
- * The key is a runtime value: it comes from the environment or from a field the
- * operator types into the app. It is never committed, never logged, and never
- * placed in a URL.
- */
-export function helloFrame(id: string, key: string): Frame {
-  return {
-    v: FRAME_VERSION_CURRENT,
-    type: FRAME_REQ,
-    id,
-    cmd: HELLO_CMD,
-    payload: { key },
-  };
-}
 
 /**
  * The `req` payload, with its keys in `protocol.Request`'s DECLARATION ORDER and
@@ -625,6 +477,7 @@ export function requestPayload(
   if (fields.detail) p.detail = fields.detail;
   // Hook is deliberately absent: cmd=hookEvent is denied for every remote peer.
   // Force is deliberately absent: normalizeRequest clears it unconditionally.
+  if (fields.keepWorktree) p.keepWorktree = true;
   if (fields.text) p.text = fields.text;
   // Cols/Rows precede Lines, as they do in the Go struct — this function
   // reproduces encoding/json's declaration order, not a spread.

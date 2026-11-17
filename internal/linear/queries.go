@@ -163,11 +163,11 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 	// than that is not a shape lola plans for.
 	const q = `query($filter: IssueFilter, $after: String){
 		issues(filter:$filter, first:100, after:$after){
-			nodes{ id identifier title branchName priority createdAt updatedAt estimate
+			nodes{ id identifier title description branchName priority createdAt updatedAt estimate
 				state{ name type } assignee{ displayName name }
 				labels{ nodes{ id name parent{ name } } }
-				inverseRelations(first:50){ nodes{ type issue{ id identifier state{ type } } } }
-				children(first:50){ nodes{ state{ type } } } }
+				inverseRelations(first:50){ nodes{ type issue{ id identifier description state{ type } } } pageInfo{ hasNextPage } }
+				children(first:50){ nodes{ state{ type } } } ` + relatedOutgoingFields + ` }
 			pageInfo{ hasNextPage endCursor } } }`
 
 	filter := BuildIssueFilter(p, activeCycleID, viewerID)
@@ -180,17 +180,19 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 		var r struct {
 			Issues struct {
 				Nodes []struct {
-					ID         string
-					Identifier string
-					Title      string
-					BranchName string
-					Priority   float64
-					CreatedAt  string
-					UpdatedAt  string
-					Estimate   *float64
-					State      *struct{ Name, Type string }
-					Assignee   *struct{ DisplayName, Name string }
-					Labels     struct {
+					GoalOutgoing relationPage
+					ID           string
+					Identifier   string
+					Title        string
+					Description  string
+					BranchName   string
+					Priority     float64
+					CreatedAt    string
+					UpdatedAt    string
+					Estimate     *float64
+					State        *struct{ Name, Type string }
+					Assignee     *struct{ DisplayName, Name string }
+					Labels       struct {
 						Nodes []struct {
 							ID, Name string
 							Parent   *struct{ Name string }
@@ -198,16 +200,8 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 					}
 					// inverseRelations are the relations naming THIS issue as
 					// the related one: type "blocks" means .Issue blocks it.
-					InverseRelations struct {
-						Nodes []struct {
-							Type  string
-							Issue *struct {
-								ID, Identifier string
-								State          *struct{ Type string }
-							}
-						}
-					}
-					Children struct {
+					InverseRelations relationPage
+					Children         struct {
 						Nodes []struct{ State *struct{ Type string } }
 					}
 				}
@@ -223,13 +217,15 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 		}
 		for _, n := range r.Issues.Nodes {
 			iss := Issue{
-				ID:         n.ID,
-				Identifier: n.Identifier,
-				Title:      n.Title,
-				BranchName: n.BranchName,
-				Priority:   n.Priority,
-				CreatedAt:  n.CreatedAt,
-				UpdatedAt:  n.UpdatedAt,
+				IssueRelations: relatedIssues(n.InverseRelations, n.GoalOutgoing),
+				ID:             n.ID,
+				Identifier:     n.Identifier,
+				Title:          n.Title,
+				Description:    n.Description,
+				BranchName:     n.BranchName,
+				Priority:       n.Priority,
+				CreatedAt:      n.CreatedAt,
+				UpdatedAt:      n.UpdatedAt,
 			}
 			if n.State != nil {
 				iss.StateName, iss.StateType = n.State.Name, n.State.Type

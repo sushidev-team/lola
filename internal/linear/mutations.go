@@ -77,17 +77,23 @@ func (c *Client) IssueDetail(ctx context.Context, idOrIdentifier string) (IssueD
 	const q = `query($id:String!){ issue(id:$id){
 		id identifier title description
 		team{ id } project{ id } cycle{ id } state{ id } assignee{ id }
-		labels{ nodes{ id } }
-		children(first:50){ nodes{ id } } } }`
+		labels{ nodes{ id name parent{ name } } }
+		children(first:50){ nodes{ id } } ` + relatedIssueFields + ` } }`
 	type idRef = *struct{ ID string }
 	var r struct {
 		Issue struct {
-			ID, Identifier, Title string
-			Description           *string
-			Team, Project, Cycle  idRef
-			State, Assignee       idRef
-			Labels                struct{ Nodes []struct{ ID string } }
-			Children              struct{ Nodes []struct{ ID string } }
+			GoalIncoming, GoalOutgoing relationPage
+			ID, Identifier, Title      string
+			Description                *string
+			Team, Project, Cycle       idRef
+			State, Assignee            idRef
+			Labels                     struct {
+				Nodes []struct {
+					ID, Name string
+					Parent   *struct{ Name string }
+				}
+			}
+			Children struct{ Nodes []struct{ ID string } }
 		}
 	}
 	if err := c.do(ctx, q, map[string]any{"id": idOrIdentifier}, &r); err != nil {
@@ -101,7 +107,8 @@ func (c *Client) IssueDetail(ctx context.Context, idOrIdentifier string) (IssueD
 		return p.ID
 	}
 	out := IssueDetail{
-		ID: is.ID, Identifier: is.Identifier, Title: is.Title,
+		IssueRelations: relatedIssues(is.GoalIncoming, is.GoalOutgoing),
+		ID:             is.ID, Identifier: is.Identifier, Title: is.Title,
 		TeamID: ref(is.Team), ProjectID: ref(is.Project), CycleID: ref(is.Cycle),
 		StateID: ref(is.State), AssigneeID: ref(is.Assignee),
 		Children: len(is.Children.Nodes),
@@ -111,6 +118,12 @@ func (c *Client) IssueDetail(ctx context.Context, idOrIdentifier string) (IssueD
 	}
 	for _, l := range is.Labels.Nodes {
 		out.LabelIDs = append(out.LabelIDs, l.ID)
+		out.LabelNames = append(out.LabelNames, l.Name)
+		group := ""
+		if l.Parent != nil {
+			group = l.Parent.Name
+		}
+		out.LabelGroups = append(out.LabelGroups, group)
 	}
 	return out, nil
 }
@@ -123,6 +136,7 @@ func (c *Client) CreateIssue(ctx context.Context, in IssueCreate) (string, strin
 		issueCreate(input:$input){ success issue{ id identifier } } }`
 	input := map[string]any{"teamId": in.TeamID, "title": in.Title}
 	for k, v := range map[string]string{
+		"id": in.ID, "projectMilestoneId": in.MilestoneID,
 		"description": in.Description, "projectId": in.ProjectID, "cycleId": in.CycleID,
 		"stateId": in.StateID, "assigneeId": in.AssigneeID, "parentId": in.ParentID,
 	} {

@@ -8,6 +8,9 @@ name: Release Please
 # Note: a tag created by release-please via GITHUB_TOKEN does NOT itself trigger
 # a `push: tags` workflow (GitHub blocks that recursion), which is exactly why
 # build.yml is invoked here via `uses:` rather than by a tag trigger.
+#
+# The hub (hub/, deployed from main by hub.yml) is excluded from releases:
+# release-please-config.json lists it under exclude-paths.
 on:
   push:
     branches: [main]
@@ -35,6 +38,20 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.release-please.outputs.version }}
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
+
+  # The default sandbox image for this release: a release lola runs
+  # ghcr.io/sushidev-team/lola-sandbox:<version> unless configured otherwise.
+  sandbox-image:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/sandbox-image.yml
+    permissions:
+      contents: read
+      packages: write
     with:
       version: ${{ needs.release-please.outputs.version }}
       tag: ${{ needs.release-please.outputs.tag_name }}

@@ -46,6 +46,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
@@ -79,6 +80,9 @@ const mergeRetryAfter = 10 * time.Minute
 
 // queueMember reports whether a session's PR is in the merge queue.
 func queueMember(s session.Session) bool {
+	if s.GoalManaged() || strings.HasPrefix(s.Branch, "goal/") {
+		return false
+	}
 	if s.Source != "native" || !s.HasAgent() || !s.OwnsBranch() || s.Branch == "" {
 		return false
 	}
@@ -128,7 +132,7 @@ func (d *Daemon) runMergeQueue(ctx context.Context) {
 		byRepo := map[string][]queueEntry{}
 		for _, s := range snap {
 			p, ok := projects[s.Project]
-			if !ok || !queueMember(s) {
+			if !ok || !queueMember(s) || d.goalHold(s.IssueUUID, "") != "" {
 				continue // a project that left config has no default branch to judge against
 			}
 			repo := s.Repo
@@ -186,6 +190,8 @@ func (d *Daemon) advanceQueueHead(ctx context.Context, e queueEntry, method stri
 		return mqBlocked
 	case pr.Mergeable != "MERGEABLE":
 		return mqWaiting // UNKNOWN: GitHub is still computing it after a push
+	case !d.reviewGatesOpen(s):
+		return mqWaiting // a status-posting review has not passed this head (reviewgate.go)
 	}
 
 	if g := s.MergeQueueGuard; g != nil && g.HeadSHA == pr.HeadSHA {
@@ -221,7 +227,7 @@ func (d *Daemon) queueSync(ctx context.Context, s session.Session, base string, 
 	sha := s.PR.HeadSHA
 	err := d.typeAtRestingPrompt(ctx, s, mergeQueueSyncMessage(s, base, behind), func(cur *session.Session) {
 		cur.MergeQueueGuard = &session.MergeQueueGuard{Action: mqActSync, HeadSHA: sha, At: time.Now()}
-	})
+	}, d.lockAutomationPrompt, noteFor(s, mergeQueueSyncLabel(s)))
 	switch {
 	case err == nil:
 		d.logf("", "mergequeue: %s (#%d) is %d behind %s — asked the agent to merge it in", s.ID, s.PR.Number, behind, base)
@@ -239,6 +245,9 @@ func (d *Daemon) queueSync(ctx context.Context, s session.Session, base string, 
 // queueMerge re-reads the PR, re-checks every fact against the judged head and
 // merges it pinned to that commit.
 func (d *Daemon) queueMerge(ctx context.Context, e queueEntry, method string, allowNoChecks bool, notifier notify.Notifier) string {
+	if e.s.GoalManaged() || strings.HasPrefix(e.s.Branch, "goal/") || d.goalHold(e.s.IssueUUID, "") != "" {
+		return mqBlocked
+	}
 	s, judged := e.s, e.s.PR
 	cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 	fresh, err := d.prForBranch(cctx, e.repo, s.Branch)
@@ -247,15 +256,27 @@ func (d *Daemon) queueMerge(ctx context.Context, e queueEntry, method string, al
 		d.logf("", "mergequeue: %s (#%d) pre-merge re-read failed, not merging: %v", s.ID, judged.Number, err)
 		return mqBlocked
 	}
+	d.applyRequiredChecks(ctx, e.repo, fresh)
 	checksOK := fresh.ChecksState == "pass" || (allowNoChecks && fresh.ChecksState == "none")
 	if fresh.Number != judged.Number || fresh.State != "OPEN" || fresh.IsDraft ||
-		fresh.HeadSHA != judged.HeadSHA || fresh.BaseRef != e.base ||
+		fresh.HeadSHA != judged.HeadSHA || fresh.BaseRef != e.base || fresh.BaseSHA != judged.BaseSHA ||
 		fresh.ReviewDecision != "APPROVED" || fresh.Mergeable != "MERGEABLE" || !checksOK {
 		return mqWaiting // the PR moved since this cycle's fetch: judge it again next cycle
 	}
 
+	s.PR = fresh
+	if !d.profileGatesOpen(s) || !d.profileContractsCurrent(ctx, s) {
+		return mqWaiting
+	}
 	cctx, cancel = context.WithTimeout(ctx, observeExecTimeout)
+	d.goalMu.Lock()
+	if d.goalHold(s.IssueUUID, "") != "" {
+		d.goalMu.Unlock()
+		cancel()
+		return mqBlocked
+	}
 	err = d.mergePR(cctx, e.repo, fresh.Number, method, fresh.HeadSHA)
+	d.goalMu.Unlock()
 	cancel()
 	guard := &session.MergeQueueGuard{Action: mqActMerge, HeadSHA: fresh.HeadSHA, At: time.Now()}
 	if err != nil {

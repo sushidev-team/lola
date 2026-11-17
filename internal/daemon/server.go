@@ -10,6 +10,7 @@ import (
 	"net"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/portlease"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/timefmt"
@@ -59,6 +61,7 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 		}
 		resp := d.handle(ctx, req)
 		if enc.Encode(resp) != nil {
+			d.abandonReply(req, resp)
 			return
 		}
 		if req.Cmd == "stop" && resp.OK {
@@ -69,16 +72,49 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 }
 
 func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Response {
+	// Watch, attachments and the other push-side commands (server_push.go).
+	if r, ok := d.handlePush(ctx, req); ok {
+		return r
+	}
 	switch req.Cmd {
+	case "comparisonTemplate", "comparisonPrepare", "comparisonReport":
+		return d.handleComparison(req)
+	case "goalPropose", "goalProposal", "goalProposals", "goalAcceptPlan", "goalEditPlan":
+		return d.handleGoalPlan(ctx, req)
+	case "reviewProfiles", "profileResults", "profileReview", "profileFindings", "profileDecideFinding", "profileCalibration":
+		return d.handleProfile(ctx, req)
+	case "knowledgeVersion", "knowledgeList", "knowledgeLookup", "knowledgeExport", "knowledgeCapture", "knowledgeCorrect", "knowledgeAccept", "knowledgeDispute", "knowledgeMaintain", "knowledgeImprovementCatalog", "knowledgeImprovementSources", "knowledgeImprovementDecisions", "knowledgeImprovementHistory", "knowledgeImprovements", "knowledgeImprovement", "knowledgeDecideImprovement", "knowledgeExportImprovement":
+		return d.handleKnowledge(ctx, req)
+	case "goalRecovery", "goalDismissProgress", "goalSyncBrief", "goalAcceptBrief", "goalOverview", "goals", "goalCreate", "goalShow", "goalUsage", "goalPublish", "goalPublishReviewed", "goalStartOptions", "goalStart", protocol.GoalStartV2, "goalControl", "goalDeliveryEvidence":
+		return d.handleGoals(ctx, req)
 	case "stop":
 		d.logf("", "stop requested via socket")
 		return protocol.Response{OK: true}
 	case "status":
 		return dataResponse(d.statusData(ctx))
+	case protocol.CmdHubStatus:
+		return dataResponse(d.hubStatusData())
+	case protocol.CmdHubJoin, protocol.CmdHubLeave, protocol.CmdHubBoard, protocol.CmdHubOrg,
+		protocol.CmdHubClaim, protocol.CmdHubRelease, protocol.CmdHubSync, protocol.CmdHubStats,
+		protocol.CmdHubCreateTeam, protocol.CmdHubInvite, protocol.CmdHubTeamSettings, protocol.CmdHubRevoke,
+		protocol.CmdHubProbe:
+		return d.handleHub(ctx, req)
 	case "sessions":
 		return dataResponse(d.sessionsData())
 	case "projects":
 		return dataResponse(d.projectsData(ctx))
+	case "prReadiness", "addressPRFeedback", "mergePR":
+		return d.handlePRReadiness(ctx, req)
+	case protocol.CmdReviewDiff:
+		return d.handleReviewDiff(ctx, req)
+	case protocol.CmdReviewCapture:
+		return d.handleReviewCapture(ctx, req)
+	case protocol.CmdReviewFeedback:
+		return d.handleReviewPackageFeedback(ctx, req)
+	case protocol.CmdReviewVerify, protocol.CmdReviewChecks, protocol.CmdReviewRecover:
+		return d.handleReviewVerification(ctx, req)
+	case protocol.CmdReviewPublish, protocol.CmdReviewComplete, protocol.CmdReviewPackages, protocol.CmdReviewImage, protocol.CmdReviewMark:
+		return d.handleReviewPackage(req)
 	case "prs":
 		data, err := d.handlePrs(ctx, req.Args)
 		if err != nil {
@@ -102,6 +138,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return resp
 		}
 		return dataResponse(data)
+	case "bulkProjects":
+		data, err := d.handleBulkProjects(ctx, req.Args)
+		if err != nil {
+			resp := protocol.Response{OK: false, Error: err.Error()}
+			if raw, mErr := json.Marshal(data); mErr == nil {
+				resp.Data = raw
+			}
+			return resp
+		}
+		return dataResponse(data)
 	case "enable", "disable":
 		if err := d.handleEnable(ctx, req.Poll, req.Cmd == "enable"); err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
@@ -113,26 +159,97 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
-	case "pairBegin":
-		// The reply CONTAINS a bearer key, so nothing on this path logs the
-		// request or the response — handleConn does not, and neither does this.
-		// internal/remote denies the command for every remote peer
-		// unconditionally, so adding the case here reaches the unix socket only.
-		data, err := d.handlePairBegin(ctx)
+	case protocol.CmdPairBegin:
+		// The reply carries the pairing secret inside the QR payload, so nothing
+		// on this path logs the request or the response — handleConn does not,
+		// and neither does this. Local-only: internal/remote tiers it never, so
+		// a phone cannot open a pairing window.
+		var a protocol.PairBeginArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handlePairBegin(ctx, a)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
-	case "regenerateRemoteKey":
-		// Rolls M1's shared bearer key and rebuilds the listener, which is the
-		// only revocation this milestone has. Denied for every remote peer in
-		// internal/remote, so like pairBegin it reaches the unix socket only: a
-		// phone able to roll the key could lock its operator out while keeping
-		// the connection it already holds.
-		if err := d.handleRegenerateRemoteKey(ctx); err != nil {
+	case protocol.CmdPairStatus:
+		var a protocol.PairStatusArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handlePairStatus(ctx, a)
+		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
-		return protocol.Response{OK: true}
+		return dataResponse(data)
+	case protocol.CmdPairConfirm:
+		// The typed confirmation code is in the args: never logged.
+		var a protocol.PairConfirmArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handlePairConfirm(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdPairReject:
+		var a protocol.PairRejectArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handlePairReject(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdDevices:
+		return dataResponse(d.handleDevices())
+	case protocol.CmdRevokeDevice:
+		var a protocol.RevokeDeviceArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handleRevokeDevice(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdSetDeviceTiers:
+		var a protocol.SetDeviceTiersArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handleSetDeviceTiers(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdSessionTimeline:
+		// Reachable remotely: the phone-safe read of a Conversation timeline.
+		var a protocol.SessionTimelineArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handleSessionTimeline(a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case protocol.CmdRelayCred:
+		// A phone's own relay credential. The answer is about the asking
+		// device, so it exists only on a phone's connection: the handler reads
+		// the peer from ctx and refuses the unix socket.
+		var a protocol.RelayCredArgs
+		if err := decodeArgs(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		data, err := d.handleRelayCred(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "panes":
 		// Reachable remotely BY DESIGN: a phone that cannot enumerate panes
 		// cannot draw a tab strip. Read-only.
@@ -144,10 +261,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 	case "shellCreate":
 		// Also reachable remotely by design, and the most privileged thing on
 		// that surface: a shell in a worktree runs as the developer, with their
-		// gh token and SSH agent in reach. The operator decided phones get shell
-		// access (mobile/PLAN.md); M1 has no capability tiers, so every paired
-		// device has this. It is the first command that should sit behind the
-		// `shell` capability when M2 brings per-device identities.
+		// gh token and SSH agent in reach. It sits behind the `shell` tier
+		// (internal/remote), which a device holds only when it was granted it.
 		data, err := d.handleShellCreate(ctx, req.Session, req.Cols, req.Rows)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
@@ -180,6 +295,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(data)
 	case "hookEvent":
 		return d.handleHookEvent(req)
+	case "sessionTask":
+		return d.handleSessionTask(ctx, req, "user")
 	case "agentReport":
 		return d.handleAgentReport(req)
 	case "planSubmit":
@@ -188,8 +305,17 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return d.handlePlanDecide(ctx, req)
 	case "planGate":
 		return d.handlePlanGate(req)
+	case protocol.CmdSSHAgentHosts, protocol.CmdSSHAgentRequest, protocol.CmdSSHAgentRun, protocol.CmdSSHAgentPoll, protocol.CmdSSHAgentCancel, protocol.CmdSSHAgentPost,
+		protocol.CmdSSHHosts, protocol.CmdSSHOpen, protocol.CmdSSHConnect, protocol.CmdSSHHumanRun, protocol.CmdSSHShareBlock, protocol.CmdSSHTerminalCd, protocol.CmdSSHGo, protocol.CmdSSHDeny, protocol.CmdSSHApprove, protocol.CmdSSHRevokeGrant,
+		protocol.CmdSSHTakeWheel, protocol.CmdSSHHandbackPreview, protocol.CmdSSHHandback, protocol.CmdSSHStop, protocol.CmdSSHClose, protocol.CmdSSHTrash,
+		protocol.CmdSSHTerminal, protocol.CmdSSHTimeline, protocol.CmdSSHOutput, protocol.CmdSSHSay, protocol.CmdSSHAnswer, protocol.CmdSSHProposal,
+		protocol.CmdSSHRecall, protocol.CmdSSHResolve, protocol.CmdSSHWidgetStatus, protocol.CmdSSHPromptAnswer:
+		return d.handleSSH(ctx, req)
+	case protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdAgentSay, protocol.CmdAgentStop,
+		protocol.CmdAgentChoose, protocol.CmdAgentSetting, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions:
+		return d.handleTalk(ctx, req)
 	case "kill":
-		data, err := d.handleKill(ctx, req.Session, req.Force)
+		data, err := d.handleKill(ctx, req.Session, req.Force, req.KeepWorktree)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
@@ -206,10 +332,25 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
-	case "openManual":
+	case "closeExitedTemporary":
+		data, err := d.handleCloseExitedTemporary(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "renameSession":
+		err := d.handleRenameSession(req.Session, req.Text)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return protocol.Response{OK: true}
+	case "openManual", "openExisting":
 		var a protocol.OpenManualArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {
 			return protocol.Response{OK: false, Error: "openManual: bad args: " + err.Error()}
+		}
+		if req.Cmd == "openExisting" {
+			a.Existing = true
 		}
 		data, err := d.handleOpenManual(ctx, a)
 		if err != nil {
@@ -317,7 +458,11 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		}
 		return protocol.Response{OK: true}
 	case "review":
-		data, err := d.handleReviewProvider(ctx, req.Session, req.Provider)
+		run := d.handleReviewProvider
+		if isRemoteCall(ctx) {
+			run = d.startDetachedReview // a phone cannot wait minutes on one request
+		}
+		data, err := run(ctx, req.Session, req.Provider)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
@@ -465,8 +610,17 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		unknownEvent  bool
 		statusChanged bool
 		newStatus     string
+		released      bool // a human prompt ended a Stop's hold on the queue
+		exited        bool // this hook is what told us the agent exited
+		// parkedOnPermission is a notification hook that just parked this session.
+		parkedOnPermission bool
+		// ownPrompt says this user_prompt is for something lola typed.
+		ownPrompt bool
 	)
 	now := time.Now()
+	if req.Event == "user_prompt" {
+		ownPrompt = d.talk.takeOwnPrompt(req.Session, now)
+	}
 	// The structured payload is optional: a pre-payload `lola hook` binary in a
 	// long-lived pane sends none, and every consumer below treats the zero
 	// value as "unknown". Message/Prompt are rendered agent/user text —
@@ -484,6 +638,7 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		if payload.TranscriptPath != "" {
 			sess.TranscriptPath = payload.TranscriptPath
 		}
+		appendSegment(sess, payload.AgentSessionID)
 		switch req.Event {
 		case "stop":
 			sess.SetAgentState(state.AgentIdle, "", now)
@@ -527,6 +682,7 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 				sess.InputReason = reason
 				sess.AtPrompt = false // blocked on a human's approval: never send-keys
 				sess.AtPromptVerified = true
+				parkedOnPermission = reason == state.InputPermission
 			}
 			// Recorded for DISPLAY in both branches, and only AFTER the axis
 			// move: SetAgentState clears LastNotification whenever it leaves
@@ -534,7 +690,11 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			if payload.Message != "" {
 				sess.LastNotification = payload.Message
 			}
+		case "permission_request":
+			// No axis write: this hook is async and can land after the answer. The
+			// bounded pane read below decides, from the pane itself.
 		case "session_end":
+			exited = sess.AgentState != state.AgentExited && sess.AgentState != state.AgentDead
 			sess.SetAgentState(state.AgentExited, "", now)
 			sess.AtPrompt = false
 			sess.AtPromptVerified = true
@@ -567,6 +727,12 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			case state.AgentIdle, state.AgentWaitingInput, state.AgentStarting:
 				sess.SetAgentState(state.AgentWorking, state.SourceHook, now)
 			}
+			// Only a person's prompt is them speaking again. This hook fires for what lola
+			// typed too, and a CI reaction must not release words they held back.
+			if sess.QueueHeld && !ownPrompt {
+				sess.QueueHeld = false
+				released = true
+			}
 		default:
 			unknownEvent = true
 			return false
@@ -590,8 +756,35 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			d.logf("", "hookEvent: persist sessions: %v", err)
 		}
 	}
+	d.bumpHook(req.Session, req.Event)
+	switch req.Event {
+	case "user_prompt":
+		d.talk.noteTurnStart(req.Session, now)
+		if released {
+			// The human typed in the terminal, which is speaking again.
+			if store, err := d.sshStore(req.Session, false); err == nil && store != nil {
+				d.sshSyncPending(req.Session, store)
+			}
+		}
+	case "permission_request":
+		d.talkReadAsync(req.Session)
+	case "notification":
+		// This hook can land seconds after the dialog, answered or not, and it just parked the
+		// session. The pane decides whether that still stands.
+		if parkedOnPermission {
+			d.talkReadAsync(req.Session)
+		}
+	case "session_end":
+		if exited {
+			if s, ok := d.sessions.Get(req.Session); ok {
+				d.noteAgentExited(s)
+			}
+		}
+	}
 	if req.Event == "stop" {
 		d.flushHandoffsOnStop(req.Session)
+		d.captureLearningsAsync(req.Session)
+		d.captureProfileDisputesAsync(req.Session)
 	}
 	// Turn checkpoints (checkpoints.go): the state every turn ENDED in, plus a
 	// baseline the first time a turn STARTS so turn 1 can be undone too. Async —
@@ -600,6 +793,25 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		d.recordCheckpointAsync(req.Session, req.Event)
 	}
 	return ok
+}
+
+// segmentRe is a transcript's base name. Nothing else is ever kept: internal/agentfeed never
+// opens a path a hook handed over, and hookEvent is on the sandbox bridge.
+var segmentRe = regexp.MustCompile(`^[0-9a-f-]{36}\.jsonl$`)
+
+// maxSegments is the cap on Session.TranscriptSegments.
+const maxSegments = 32
+
+// appendSegment notes the transcript file this hook's conversation id names, once.
+func appendSegment(sess *session.Session, agentSession string) {
+	name := agentSession + ".jsonl"
+	if !segmentRe.MatchString(name) || slices.Contains(sess.TranscriptSegments, name) {
+		return
+	}
+	sess.TranscriptSegments = append(sess.TranscriptSegments, name)
+	if over := len(sess.TranscriptSegments) - maxSegments; over > 0 {
+		sess.TranscriptSegments = slices.Delete(sess.TranscriptSegments, 0, over)
+	}
 }
 
 // flushHandoffsOnStop delivers a deferred review hand-off the moment the worker
@@ -616,6 +828,9 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 // for an in-flight hand-off rather than SIGKILLing it mid-send; a daemon already
 // draining simply skips (the stash survives for the next cycle).
 func (d *Daemon) flushHandoffsOnStop(id string) {
+	if s, ok := d.sessions.Get(id); ok && s.GoalManaged() {
+		return
+	}
 	if id == "" || !d.beginConnWork() {
 		return
 	}
@@ -685,10 +900,12 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
 	for _, s := range snap {
 		si := protocol.SessionInfo{
+			GoalID: s.GoalID, TaskID: s.TaskID, AttemptID: s.AttemptID,
 			ID:        s.ID,
 			Project:   s.Project,
 			Issue:     s.Issue,
-			Title:     s.Title,
+			Title:     s.DisplayTitle(),
+			Location:  s.Location,
 			Branch:    s.Branch,
 			Agent:     agent.Parse(s.Agent).String(), // "" (legacy) reads as claude
 			Status:    s.Status,
@@ -722,6 +939,13 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 
 			FeedbackPending: s.PendingFeedback != "",
 			Usage:           d.sessionUsage(s.ID),
+
+			ReviewRunning: d.reviewRunningFor(s.ID),
+			ReviewTallies: reviewTallyInfos(s),
+		}
+
+		if s.Kind == session.KindLocal {
+			si.DevCommands = nil
 		}
 		if c := s.DevClash; c != nil {
 			si.DevClash = &protocol.DevClashInfo{
@@ -739,6 +963,9 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			// <home>/worktrees/<project>/<id> (see newNativeRuntime); the
 			// store record carries no path, so derive it for the TUI.
 			si.Worktree = filepath.Join(d.home, "worktrees", s.Project, s.ID)
+			if s.Location == runtime.LocationSSH || s.Kind == session.KindLocal {
+				si.Worktree = s.Worktree // SSH scratch folder or borrowed checkout
+			}
 		}
 		if s.PR != nil {
 			si.PRURL = s.PR.URL
@@ -747,6 +974,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.Review = s.PR.ReviewDecision
 		}
 		si.Sandbox = s.Sandbox
+		si.SSH = d.sshGlance(s.ID)
 		if s.Stack {
 			si.Stack = true
 			si.Apps = d.appsInfo(cfg, s)
@@ -772,6 +1000,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		}
 		// The agent's own report — display-only, like the overlay above.
 		si.Board = boardInfo(s.Board, auditClaims(s), now)
+		si.Tasks = s.Tasks
+		si.Hub = hubSessionHub(s)
 		for _, o := range s.Overlaps {
 			si.Overlaps = append(si.Overlaps, protocol.SessionOverlap{
 				Session: o.Session, Issue: o.Issue, Files: slices.Clone(o.Files), More: o.More,
@@ -853,6 +1083,14 @@ func dataResponse(v any) protocol.Response {
 	return protocol.Response{OK: true, Data: b}
 }
 
+// decodeArgs unmarshals Request.Args into v; absent args leave v zero.
+func decodeArgs(raw json.RawMessage, v any) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	return json.Unmarshal(raw, v)
+}
+
 // handleReload re-reads config.DefaultPath and applies it live. An invalid
 // config is rejected: the old one keeps running.
 func (d *Daemon) handleReload(ctx context.Context) error {
@@ -867,10 +1105,13 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	if err := nc.Validate(); err != nil {
 		return fmt.Errorf("config invalid, keeping previous: %w", err)
 	}
+	// The team policy overlay goes on AFTER validation (hubpolicy.go).
+	tp := overlayTeamPolicy(nc, d.hubDir())
 
 	d.mu.Lock()
 	old := d.cfg
 	d.cfg = nc
+	d.teamPolicy = tp
 	d.cfgErr = "" // a validated config lifts the startup hold on polls
 	if old.Linear != nc.Linear {
 		d.lin = nil // key source / endpoint changed: re-resolve lazily
@@ -901,7 +1142,9 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		// server as d.tmuxClient's live send-keys/capture; without it a
 		// socket-only reload would leave the observer reading the OLD server while
 		// keys go to the NEW one.
-		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken)
+		nat := newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
+		nat.SessionRecorded = d.sessionRecorded
+		d.native = nat
 	}
 	// [remote] is compared exactly (config.RemoteConfig is comparable) so an
 	// unrelated reload never touches a live listener. Applied AFTER the unlock:
@@ -909,16 +1152,25 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// under the lock every tick and every socket command takes would stall the
 	// daemon for the length of a TLS listener's teardown. See reloadRemote for
 	// why a change is a full rebind rather than an in-place mutation.
-	remoteChanged := old.Remote != nc.Remote
+	// A hub join or leave changes whether a relay-only server should exist
+	// without touching [remote], so the answer of Serves is compared too.
+	remoteOld := old.Remote
 	d.mu.Unlock()
+	d.sshOnReload()
 
-	if remoteChanged {
+	serves := nc.Remote.Serves(d.hubRelayJoined(nc.Hub))
+	if remoteOld != nc.Remote || serves != d.remoteServes.Load() {
 		d.reloadRemote()
 	}
+	d.hubRelayNudge()
 	if bctx := d.shutdownCtx; bctx != nil {
 		d.syncHookBridge(bctx)
 	}
 	d.syncWorkers(ctx)
+	d.hubPolicyStale()
+	d.hubNudge() // a join or leave edits [hub] and reloads: act on it now
+	// Display names, dev commands and the project list feed the watched topics.
+	d.watch.PokeGlobal(pokeSessionsAll | pokeProjects | pokeStatus)
 	d.logf("", "config reloaded")
 	return nil
 }
@@ -930,38 +1182,52 @@ func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) err
 		return errors.New("poll name required")
 	}
 
-	d.mu.Lock()
-	p := d.cfg.PollByName(name)
-	if p == nil {
-		d.mu.Unlock()
-		return fmt.Errorf("unknown poll %q", name)
-	}
-	prev := p.Enabled
-	p.Enabled = enable
-
-	fail := func(err error) error {
-		p.Enabled = prev
-		d.mu.Unlock()
+	// Edit the FILE, never the live config: d.cfg may carry the team policy
+	// overlay, which must not be frozen into config.toml (config.Save refuses
+	// it). The live flag is then flipped to match.
+	if err := d.enablePollInFile(name, enable); err != nil {
 		return err
 	}
-	if err := d.cfg.Validate(); err != nil {
-		return fail(err)
-	}
-	path, err := config.DefaultPath()
-	if err == nil {
-		err = d.cfg.Save(path)
-	}
-	if err != nil {
-		return fail(err)
-	}
-	d.mu.Unlock()
 
 	d.syncWorkers(ctx)
+	d.watch.PokeGlobal(pokeSessionsAll | pokeProjects | pokeStatus)
 	verb := "disabled"
 	if enable {
 		verb = "enabled"
 	}
 	d.logf(name, "poll %s", verb)
+	return nil
+}
+
+// enablePollInFile writes enable for poll name into config.toml (re-loaded
+// from disk) and mirrors it onto the live config. It takes d.mu.
+func (d *Daemon) enablePollInFile(name string, enable bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	live := d.cfg.PollByName(name)
+	if live == nil {
+		return fmt.Errorf("unknown poll %q", name)
+	}
+	path, err := config.DefaultPath()
+	if err != nil {
+		return err
+	}
+	fc, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	fp := fc.PollByName(name)
+	if fp == nil {
+		return fmt.Errorf("unknown poll %q in %s (reload first)", name, path)
+	}
+	fp.Enabled = enable
+	if err := fc.Validate(); err != nil {
+		return err
+	}
+	if err := fc.Save(path); err != nil {
+		return err
+	}
+	live.Enabled = enable
 	return nil
 }
 

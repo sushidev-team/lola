@@ -100,6 +100,7 @@ type reviewProvider struct {
 	OnPROpen    bool                // pass shapes: run on the PR-open transition
 	Transports  config.TransportSet // resolved sinks (always contains lola)
 	Inline      bool                // github: post anchored, resolvable threads (not one comment)
+	Status      bool                // post the verdict as a lola/review/<kind> commit status (reviewgate.go)
 	Notify      bool                // lola: fire the notify sink
 	SendToAgent bool                // lola: fire the worker hand-off
 	Handoff     handoffStyle
@@ -145,6 +146,7 @@ func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 			OnPROpen:       cp.OnPROpen,
 			Transports:     cp.Transports,
 			Inline:         cp.GitHubInline,
+			Status:         cp.GitHubStatus,
 			Notify:         cp.Notify,
 			SendToAgent:    cp.SendToAgent,
 			Author:         cp.Author,
@@ -568,13 +570,31 @@ func (d *Daemon) runProviderPassOnPROpen(ctx context.Context, s session.Session,
 	if s.Source != "native" || !isReviewablePROpen(s.PR) {
 		return
 	}
-	if s.ReviewedPRs[string(p.Kind)] == s.PR.Number {
-		return // already reviewed this PR for this kind — never re-run on the cadence
+	if p.Status && !agentSettled(s) {
+		return
 	}
-	// noteReviewOutcome decides whether the guard the chain just stamped stays
-	// stamped: a provider that could not ANSWER (timeout / quota / unavailable)
-	// releases it for a bounded number of retries. See reviewworker.go.
-	d.noteReviewOutcome(s, p, d.runReviewChain(ctx, s, p), s.PR.Number)
+	if s.ReviewedPRs[string(p.Kind)] == s.PR.Number {
+		// Already reviewed this PR for this kind — never re-run on the cadence,
+		// unless the review gate wants the NEW head judged (reviewgate.go).
+		if !headReviewDue(s, p) {
+			return
+		}
+		if s.ReviewGates[string(p.Kind)].Rounds >= reviewGateRounds {
+			d.gateLimitReached(ctx, s, p)
+			return
+		}
+		// A new round posts to the PR again, so release the github sink's own
+		// per-PR guard as the forced review does.
+		d.unstampGithubSettled(s.ID, p.Kind, s.PR.Number)
+		if cur, ok := d.sessions.Get(s.ID); ok {
+			s = cur
+		}
+	}
+	// reviewPass hands the outcome to noteReviewOutcome, which decides whether
+	// the guard the chain just stamped stays stamped: a provider that could not
+	// ANSWER (timeout / quota / unavailable) releases it for a bounded number of
+	// retries. See reviewworker.go.
+	d.reviewPass(ctx, s, p, true)
 }
 
 // runReviewChain runs the primary provider p and, when p can't answer, advances
@@ -608,6 +628,9 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		return reviewResult{Skipped: "session has no project to review"}
 	}
 	base := proj.DefaultBranch
+	if p.Status && s.PR != nil && s.PR.BaseRef != "" {
+		base = s.PR.BaseRef
+	}
 	if base == "" {
 		base = config.DefaultBranchName
 	}
@@ -639,12 +662,19 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		if run == nil {
 			continue // unavailable: advance (fail-closed to no review for this entry)
 		}
+		if err := d.verifyGatedReview(ctx, s, p, dir); err != nil {
+			return reviewResult{Err: err}
+		}
 		findings, err := run(ctx, s.ID, dir, base)
 		if err == nil {
+			if err := d.verifyGatedReview(ctx, s, p, dir); err != nil {
+				return reviewResult{Err: err}
+			}
 			if k != p.Kind {
 				d.logf("", "review: %s primary %s could not answer; fallback %s reviewed PR #%d", s.ID, p.Kind, k, prNum)
 			}
 			d.recordReviewTally(s.ID, string(p.Kind), prNum, findings)
+			d.noteReviewTally(s, p, prNum, findings)
 			d.routeFindings(ctx, s, p, findings)
 			return reviewResult{Ran: true, Findings: strings.TrimSpace(findings)}
 		}
@@ -984,7 +1014,7 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 		return false
 	}
 
-	if err := d.typeToAgentLocked(ctx, tmuxName, msg, reactExecTimeout); err != nil {
+	if err := d.typeToAgentLocked(ctx, noteFor(s, reviewHandoffLabel(p, s)), tmuxName, msg, reactExecTimeout); err != nil {
 		// Gate already consumed; do not roll back (that would re-fire and spam).
 		d.logf("", "review: %s (%s) send-keys of hand-off failed: %v", s.ID, p.Kind, err)
 		return false
@@ -1035,7 +1065,7 @@ func (d *Daemon) deferHandoff(id string, k provKind, stash string) {
 // will still be there next cycle. A queued project broadcast (broadcast.go) is
 // the same kind of human message and comes right after it.
 func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
-	if d.deliverFeedback(ctx, id) || d.deliverBroadcast(ctx, id) {
+	if d.deliverFeedback(ctx, id) || d.deliverBroadcast(ctx, id) || d.deliverSSHQueue(ctx, id) {
 		return
 	}
 	// A stack session's hand-offs are stashed per app lane; still ONE
@@ -1059,6 +1089,12 @@ func (d *Daemon) flushHandoffsOf(ctx context.Context, id string) bool {
 		return false
 	}
 	for kStr := range s.PendingHandoffs {
+		if strings.HasPrefix(kStr, specialistHandoffPrefix) {
+			if d.flushSpecialistHandoff(ctx, s, kStr) {
+				return true
+			}
+			continue
+		}
 		p, ok := d.providerByKind(provKind(kStr))
 		if !ok {
 			continue // kind no longer configured; leave the stash for a future config

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/hub"
 )
 
 // fakeBin writes an executable shell script named tool into dir that prints
@@ -642,5 +643,37 @@ func TestCodexAutoApprovalCapability(t *testing.T) {
 				t.Fatalf("missing upgrade instruction: %+v", r)
 			}
 		})
+	}
+}
+
+func TestHubResult(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	if _, ok := hubResult(context.Background(), &config.Config{}); ok {
+		t.Fatal("a disabled hub must add no row")
+	}
+	cfg := &config.Config{Hub: config.HubConfig{Enabled: true, URL: "https://hub.example.com"}}
+	res, ok := hubResult(context.Background(), cfg)
+	if !ok || res.OK || res.Critical || !strings.Contains(res.Detail, "not joined") {
+		t.Fatalf("not joined: %+v", res)
+	}
+
+	// Joined: the probe decides reachability.
+	dir, _ := hub.StateDir()
+	key, err := hub.LoadOrCreateKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.SaveIdentity(dir, hub.Identity{URL: "https://hub.example.com", DeviceID: key.DeviceID(), Org: "acme", DeviceName: "mac"}); err != nil {
+		t.Fatal(err)
+	}
+	old := hubProbe
+	t.Cleanup(func() { hubProbe = old })
+	hubProbe = func(context.Context, string, string) error { return nil }
+	if res, _ := hubResult(context.Background(), cfg); !res.OK || !strings.Contains(res.Detail, "reachable") {
+		t.Fatalf("reachable: %+v", res)
+	}
+	hubProbe = func(context.Context, string, string) error { return errors.New("connection refused") }
+	if res, _ := hubResult(context.Background(), cfg); res.OK || res.Critical || !strings.Contains(res.Detail, "not reachable") {
+		t.Fatalf("unreachable: %+v", res)
 	}
 }

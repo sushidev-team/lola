@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/config"
@@ -66,6 +67,36 @@ func TestEnableRejectsInvalidPollingConfig(t *testing.T) {
 	}
 }
 
+func TestPausedPickupRequiresValidDedupBeforeEnablingOrRunning(t *testing.T) {
+	p := labelPoll("p1")
+	p.Enabled = false
+	p.MatchLabels = nil
+	p.OnSentSetLabel = ""
+	d := newEnableTestDaemon(t, p)
+	if err := d.cfg.Validate(); err != nil {
+		t.Fatalf("inactive draft should be valid: %v", err)
+	}
+	if err := d.handleEnable(context.Background(), "p1", true); err == nil || !strings.Contains(err.Error(), "requires on_sent_set_label") {
+		t.Fatalf("enable: %v", err)
+	}
+	for _, dryRun := range []bool{true, false} {
+		if _, err := d.handlePollOnce(context.Background(), "p1", dryRun); err == nil || !strings.Contains(err.Error(), "requires match_labels") {
+			t.Fatalf("run dry=%v: %v", dryRun, err)
+		}
+	}
+	path, err := config.DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.PollByName("p1").Enabled || d.cfg.PollByName("p1").Enabled {
+		t.Fatal("failed enable changed pickup state")
+	}
+}
+
 func TestDisableStopsPoll(t *testing.T) {
 	d := newEnableTestDaemon(t, labelPoll("p1")) // enabled
 
@@ -113,7 +144,7 @@ func TestReloadRebuildsNativeOnSocketChange(t *testing.T) {
 	d := newEnableTestDaemon(t, labelPoll("p1"))
 	// Stand in a real native runtime on the default "lola" socket and mark it
 	// owned so the realNative-gated rebuild path is exercised.
-	d.native = newNativeRuntime(d.cfg, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken)
+	d.native = newNativeRuntime(d.cfg, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
 	d.realNative = true
 	if got := d.native.(*runtime.Native).Tmux.SocketName; got != config.DefaultTmuxSocketName {
 		t.Fatalf("precondition: native socket = %q, want %q", got, config.DefaultTmuxSocketName)

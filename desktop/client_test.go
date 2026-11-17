@@ -146,3 +146,26 @@ func TestDaemonServicePassesArgs(t *testing.T) {
 		t.Fatalf("args = %+v", args)
 	}
 }
+
+func TestOpenExistingBridge(t *testing.T) {
+	f := startFakeDaemon(t, func(req protocol.Request) protocol.Response {
+		return protocol.Response{OK: true, Data: json.RawMessage(`{}`)}
+	})
+	d := &DaemonService{}
+	for _, existing := range []bool{false, true} {
+		if _, err := d.OpenManual(protocol.OpenManualArgs{Project: "p", Branch: "feature", Existing: existing, Agent: true, Prompt: "Fix login"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reqs := f.requests()
+	if len(reqs) != 2 || reqs[0].Cmd != "openManual" || reqs[1].Cmd != "openExisting" {
+		t.Fatalf("wrong commands: %+v", reqs)
+	}
+	var args protocol.OpenManualArgs
+	if err := json.Unmarshal(reqs[1].Args, &args); err != nil {
+		t.Fatal(err)
+	}
+	if !args.Existing || args.Branch != "feature" || args.Prompt != "Fix login" || !args.Agent {
+		t.Fatalf("lost args: %+v", args)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -56,10 +57,16 @@ var version = "dev"
 // fails if either side moves. Do not add an id here without adding it to
 // config.UIThemes; the same test pins the two sets equal.
 var canvasByTheme = map[string]application.RGBA{
-	"catppuccin-latte":     application.NewRGB(0xe6, 0xe9, 0xef),
+	"lola-midnight":        application.NewRGB(0x12, 0x16, 0x24),
+	"catppuccin-latte":     application.NewRGB(0xed, 0xf0, 0xf7),
 	"catppuccin-frappe":    application.NewRGB(0x29, 0x2c, 0x3c),
 	"catppuccin-macchiato": application.NewRGB(0x1e, 0x20, 0x30),
 	"catppuccin-mocha":     application.NewRGB(0x18, 0x18, 0x25),
+	"github-light":         application.NewRGB(0xf6, 0xf8, 0xfa),
+	"solarized-light":      application.NewRGB(0xee, 0xe8, 0xd5),
+	"rose-pine-dawn":       application.NewRGB(0xfa, 0xf4, 0xed),
+	"gruvbox-light":        application.NewRGB(0xf2, 0xe5, 0xbc),
+	"one-light":            application.NewRGB(0xf1, 0xf4, 0xfb),
 }
 
 // canvasFor maps a [ui].theme id to its native-window background. An unknown or
@@ -75,13 +82,21 @@ func canvasFor(themeID string) application.RGBA {
 	return canvasByTheme[config.DefaultUITheme]
 }
 
-// windowCanvas resolves the NSWindow background from the CONFIGURED flavor at
-// startup, so the native chrome and the page agree in all four — a fixed literal
-// put a near-black rectangle behind Latte's near-white page. It reads the theme
-// through ConfigService.GetTheme, the same accessor the frontend calls, so there
-// is one resolution rule rather than a second copy of the "" → default fallback.
+func systemIsDark() bool {
+	if app := application.Get(); app != nil {
+		return app.Env.IsDarkMode()
+	}
+	return true
+}
+
+// windowCanvas resolves the configured fixed/system preference for native chrome.
+// The frontend also updates it when the OS changes or a theme is previewed.
 func windowCanvas() application.RGBA {
-	return canvasFor((&ConfigService{}).GetTheme())
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return canvasFor(config.DefaultUITheme)
+	}
+	return canvasFor(cfg.UIThemeFor(systemIsDark()))
 }
 
 // repaintWindowCanvas tracks a runtime flavor switch on the native window:
@@ -105,10 +120,13 @@ func repaintWindowCanvas(themeID string) {
 
 func main() {
 	ensurePATH()
+	// The default sandbox image's tag follows this build (config.DefaultSandboxImage).
+	config.SetLolaVersion(version)
 
 	daemon := &DaemonService{}
 	term := NewTermService()
 	updater := NewUpdateService()
+	login := &SandboxLoginService{}
 
 	app := application.New(application.Options{
 		// Name drives the app menu's Hide/Quit/About role labels ("Quit Lola").
@@ -117,15 +135,23 @@ func main() {
 		Name:        "Lola",
 		Description: "Native cockpit for the lola coding-agent orchestrator",
 		Services: []application.Service{
+			application.NewService(&ContextService{}),
 			application.NewService(daemon),
 			application.NewService(term),
+			application.NewService(&SSHService{}),
+			application.NewService(&PhonesService{}),
+			application.NewService(&HubService{}),
+			application.NewService(&TalkService{}),
 			application.NewService(&ConfigService{}),
+			application.NewService(&ProjectGitService{}),
+			application.NewService(login),
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
 			application.NewService(updater),
 		},
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
+			Handler:    application.AssetFileServerFS(assets),
+			Middleware: runtimeCallGuard,
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
@@ -134,6 +160,8 @@ func main() {
 
 	// Give the terminal service the emitter it streams PTY bytes over.
 	term.SetApp(app)
+	// The sandbox login streams its (token-free) screen as events.
+	login.emit = func(name string, data any) { app.Event.Emit(name, data) }
 	// The updater emits download-progress events and quits for the install swap.
 	updater.SetApp(app)
 
@@ -147,9 +175,8 @@ func main() {
 		MinHeight:        560,
 		BackgroundColour: windowCanvas(),
 		Mac: application.MacWindow{
-			// The whole top strip is draggable (the frontend paints a .drag band
-			// across it — the sidebar's brand row plus the main top bar).
-			InvisibleTitleBarHeight: 36,
+			// The frontend owns title-bar dragging and double-click maximise via
+			// --wails-draggable. An invisible native drag band consumes clicks.
 			// Opaque, not vibrancy: the TUI theme is deliberately one cohesive
 			// opaque canvas, so we match it rather than letting the desktop bleed
 			// through.
@@ -289,13 +316,22 @@ func (z *zoomController) reset() { z.set(1.0) }
 //     refuses a duplicate accelerator loudly instead of two silent handlers.
 //
 // Every accelerator here is Cmd-based and none is a system or Edit-menu one
-// (⌘C/⌘V/⌘X/⌘A/⌘Z/⌘W/⌘Q, and ⌘⌫ which deletes to line start in a text field).
+// (⌘C/⌘V/⌘X/⌘A/⌘Z/⌘Q, and ⌘⌫ which deletes to line start in a text field).
+// File > Close Tab owns ⌘W; closing the last tab must never close Lola.
 // Cmd chords are also the one class tmux/zellij inside a pane never receive, so
 // these can't collide with a shell binding either.
 func installAppMenu(app *application.App, zoom *zoomController) {
 	menu := application.NewMenu()
 	menu.AddRole(application.AppMenu)
-	menu.AddRole(application.FileMenu)
+	file := menu.AddSubmenu("File")
+	// A CloseWindow role keeps AppKit's performClose: selector even if its Go
+	// callback is replaced. Use a plain item so ⌘W reaches the frontend.
+	file.Add("Close Tab").SetAccelerator("CmdOrCtrl+w").OnClick(func(*application.Context) {
+		app.Event.Emit(evtSessionAction, actionCloseTab)
+	})
+	if runtime.GOOS != "darwin" {
+		file.AddRole(application.Quit)
+	}
 	menu.AddRole(application.EditMenu)
 	menu.AddRole(application.ViewMenu)
 	newSessionMenu(app, menu.AddSubmenu("Session"))
@@ -329,6 +365,18 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	ask := func(action string) func(*application.Context) {
 		return func(*application.Context) { app.Event.Emit(evtSessionAction, action) }
 	}
+	menu.Add("Switch to Git or Back").SetAccelerator("CmdOrCtrl+Shift+g").OnClick(ask("toggle-git"))
+	menu.Add("Show or Hide Sidebar").SetAccelerator("CmdOrCtrl+b").OnClick(ask("toggle-sidebar"))
+	menu.Add("Show or Hide Right Sidebar").SetAccelerator("CmdOrCtrl+n").OnClick(ask("toggle-right-sidebar"))
+	menu.Add("Focus Sessions").SetAccelerator("CmdOrCtrl+Shift+e").OnClick(ask("focus-sessions"))
+	menu.Add("Keyboard Shortcuts…").SetAccelerator("CmdOrCtrl+/").OnClick(ask("shortcuts"))
+	menu.AddSeparator()
+	menu.Add("Find in Project History…").SetAccelerator("CmdOrCtrl+f").OnClick(ask("find-project-history"))
+	menu.Add("Search Projects and Sessions…").SetAccelerator("CmdOrCtrl+k").OnClick(ask("commands"))
+	// No accelerator: ⌘N is the right sidebar. The frontend's bare `c` opens the form.
+	menu.Add("New Session…").OnClick(ask("new-session"))
+	menu.Add("New Temporary Shell").SetAccelerator("CmdOrCtrl+Shift+n").OnClick(ask("temporary-shell"))
+	menu.AddSeparator()
 	menu.Add("Trigger Review").
 		SetTooltip("run the configured QA review provider on the selected session").
 		SetAccelerator("CmdOrCtrl+Shift+r").
@@ -336,9 +384,43 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	menu.Add("Open PR in Browser").
 		SetAccelerator("CmdOrCtrl+Shift+o").
 		OnClick(ask(actionOpenPR))
-	menu.Add("New Worktree Shell").
+	menu.Add("New Shell Tab").
 		SetAccelerator("CmdOrCtrl+t").
 		OnClick(ask(actionNewShell))
+	menu.AddSeparator()
+	// The session loop. Like the ssh chords below these must work from inside a focused
+	// terminal, which is why they are menu accelerators and not frontend keys.
+	menu.Add("Next Waiting").
+		SetAccelerator("CmdOrCtrl+j").
+		OnClick(ask(actionNext))
+	menu.Add("Previous Waiting").SetAccelerator("CmdOrCtrl+Shift+j").OnClick(ask("previous"))
+	menu.Add("Stop This Turn").
+		SetAccelerator("CmdOrCtrl+.").
+		OnClick(ask(actionStop))
+	menu.Add("Show or Hide Changes").
+		SetAccelerator("CmdOrCtrl+Shift+d").
+		OnClick(ask(actionChanges))
+	menu.AddSeparator()
+	// Agent-assisted ssh. These live here because they must work from inside a
+	// focused terminal, where a bare key belongs to the shell, and AppKit delivers
+	// a menu accelerator before the web view sees it. Nothing here approves
+	// anything: an approval needs a focused card and its arming delay, so a
+	// keyboard held by a terminal can never answer one (docs/ssh-sessions-ux.md).
+	menu.Add("New SSH Session…").
+		SetAccelerator("CmdOrCtrl+Shift+h").
+		OnClick(ask(actionSSHNew))
+	menu.Add("Take or Return the Wheel").
+		SetAccelerator("CmdOrCtrl+Shift+l").
+		OnClick(ask(actionSSHWheel))
+	menu.Add("Review Next Approval").
+		SetAccelerator("CmdOrCtrl+Shift+a").
+		OnClick(ask(actionSSHApproval))
+	menu.Add("Talk to Agent").
+		SetAccelerator("CmdOrCtrl+l").
+		OnClick(ask(actionSSHTalk))
+	menu.Add("Show or Hide Terminal").
+		SetAccelerator("CmdOrCtrl+\\").
+		OnClick(ask(actionSSHTerminal))
 	menu.AddSeparator()
 	menu.Add("Kill Session…").
 		SetAccelerator("CmdOrCtrl+Shift+k").
@@ -468,7 +550,17 @@ const (
 	actionReview   = "review"
 	actionOpenPR   = "open-pr"
 	actionNewShell = "new-shell"
+	actionCloseTab = "close-tab"
 	actionKill     = "kill"
+	actionNext     = "next"
+	actionStop     = "stop"
+	actionChanges  = "changes"
+
+	actionSSHNew      = "ssh-new"
+	actionSSHWheel    = "ssh-wheel"
+	actionSSHApproval = "ssh-approval"
+	actionSSHTalk     = "ssh-talk"
+	actionSSHTerminal = "ssh-terminal"
 )
 
 // PushErrDTO is the payload of evtPushErr: which push-loop command failed and
@@ -480,6 +572,7 @@ type PushErrDTO struct {
 }
 
 func init() {
+	application.RegisterEvent[ProjectGitQueueEvent](evtProjectGitQueue)
 	application.RegisterEvent[bool](evtAlive)
 	application.RegisterEvent[struct{}](evtOpenSettings)
 	application.RegisterEvent[struct{}](evtOpenUpdate)

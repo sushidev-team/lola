@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"github.com/sushidev-team/lola/internal/taskboard"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,9 @@ func TestWithReportBriefing(t *testing.T) {
 	}
 	if !strings.Contains(got, `'/opt/my tools/lola' report todo set`) {
 		t.Fatalf("briefing must name the quoted lola binary:\n%s", got)
+	}
+	if !strings.Contains(got, taskboard.Briefing("'/opt/my tools/lola'")) {
+		t.Fatal("launch omitted the shared task contract")
 	}
 	if !strings.Contains(got, "compared with the commands you actually ran") {
 		t.Fatalf("briefing must say check claims are audited:\n%s", got)

@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/gitguard"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -39,6 +41,11 @@ const (
 	// Linear issue (the manual-worktree flow): lola owns the branch and deletes
 	// it on teardown, but it never touches Linear.
 	KindManual Kind = "manual"
+	// KindLocal runs in a borrowed directory. Lola never owns or removes it.
+	KindLocal Kind = "local"
+	// KindGoal is owned by the goal controller. Ordinary PR reactions,
+	// write-back, default-branch merging and worktree cleanup must skip it.
+	KindGoal Kind = "goal"
 )
 
 // PlanGate is a session's plan-approval state; see Session.PlanGate.
@@ -92,10 +99,19 @@ type DevForward struct {
 
 // Session is one observed agent session, regardless of who spawned it.
 type Session struct {
-	ID      string `json:"id"`
-	Source  string `json:"source"`          // "ao" | "native"
-	Agent   string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
-	Project string `json:"project"`
+	// PRCommentGuards records delivered thread revisions, so unresolved or disputed
+	// findings do not wake the agent repeatedly. Replaced, never mutated in place.
+	PRCommentGuards map[string]string `json:"pr_comment_guards,omitempty"`
+
+	Name      string `json:"name,omitempty"`
+	Location  string `json:"location,omitempty"` // main | checkout | temporary; empty for owned worktrees
+	ID        string `json:"id"`
+	Source    string `json:"source"`          // "ao" | "native"
+	Agent     string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
+	Project   string `json:"project"`
+	GoalID    string `json:"goal_id,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
+	AttemptID string `json:"attempt_id,omitempty"`
 	// Manual marks a session opened by hand via `lola open` (a branch/PR checked
 	// out in a throwaway DETACHED worktree with a plain shell — no coding agent,
 	// no Linear issue) rather than dispatched from a Linear match. It is the
@@ -178,6 +194,11 @@ type Session struct {
 	// hook — rendered agent output: display only, never executed, never fed
 	// back to any agent.
 	LastNotification string `json:"last_notification,omitempty"`
+	// InputNotified deduplicates one waiting episode; cleared when the agent resumes.
+	InputNotified state.InputReason `json:"input_notified,omitempty"`
+	// ReadyNotified identifies the repo/PR/head last announced as ready.
+	// Like the PR, this field belongs to a lane in stack sessions.
+	ReadyNotified string `json:"ready_notified,omitempty"`
 
 	// Nudged records that the agent's own "waiting for your input"
 	// notification fired while the session sat idle. It is a DISPLAY-ONLY
@@ -203,6 +224,18 @@ type Session struct {
 	// TranscriptPath is the agent's own transcript file as reported by its
 	// hooks (Claude Code hands the JSONL path on every event).
 	TranscriptPath string `json:"transcript_path,omitempty"`
+
+	// TranscriptSegments are the base names of the transcript files this session's
+	// agent has written, oldest first and capped at 32. A resume or /clear starts a
+	// new file, and the conversation view reads across them. Only a base name is kept:
+	// internal/agentfeed never opens a path a hook handed over.
+	TranscriptSegments []string `json:"transcript_segments,omitempty"`
+	// StopHoldUntil holds every automated send after a human's Stop, so a CI reaction
+	// or a queued message cannot type the moment the pane rests.
+	StopHoldUntil time.Time `json:"stop_hold_until,omitzero"`
+	// QueueHeld keeps the human's queued text back after a Stop, until the human
+	// speaks again.
+	QueueHeld bool `json:"queue_held,omitempty"`
 
 	// AgentsTried records the coding-agent kinds this session has already run
 	// BEFORE the current one (oldest first) — the fallback loop guard: the
@@ -316,6 +349,8 @@ type Session struct {
 	// relayed from the Linear agent session. Delivered oldest first, one per
 	// flush, through the hand-off gate + pane proof (flushAgentNotices).
 	PendingNotices []string `json:"pending_notices,omitempty"`
+	// Tasks are durable shared requirements, independent of the agent report.
+	Tasks []protocol.SessionTask `json:"tasks,omitempty"`
 
 	// RemovedLabels are the match-label UUIDs the post-spawn label flip
 	// actually stripped from this issue (the trigger labels it carried at
@@ -341,6 +376,17 @@ type Session struct {
 	WBPRDone      bool `json:"wb_pr_done,omitempty"`
 	WBMergedDone  bool `json:"wb_merged_done,omitempty"`
 	WBBlockedDone bool `json:"wb_blocked_done,omitempty"`
+
+	// HubItem is set only on a session spawned for a lola-hub chore
+	// (internal/daemon/hubwire.go). It names the hub's item id, never anything
+	// the hub can use to reach this machine, and carries the one-shot outcome
+	// guard. The zero value means "not hub work".
+	HubItem HubWork `json:"hub_item,omitzero"`
+	// HubBatch are the further items of a BATCHED hub session: dependency
+	// advisories of the same repository, fixed together in one pull request.
+	// Each keeps its own lease and outcome. HubItem is the first item; the
+	// batch is empty for a single-item session.
+	HubBatch []HubWork `json:"hub_batch,omitempty"`
 
 	// Reaction-state fields (PLAN P3): the persisted memory the reaction
 	// engine keeps per session so a reaction fires once per state transition
@@ -482,6 +528,13 @@ type Session struct {
 	// came from.
 	PendingBroadcast string `json:"pending_broadcast,omitempty"`
 
+	// PendingSSH is what a human said about an ssh session (internal/sshstore
+	// holds the source of truth, item by item) and lola's own one-line nudges, not
+	// delivered yet. It is rewritten from the store whenever a piece is added,
+	// recalled, or delivered through a command's reply. Same sanitize + idle gate +
+	// pane proof as PendingFeedback.
+	PendingSSH string `json:"pending_ssh,omitempty"`
+
 	// ContextKey names the session's SHARED CONTEXT FOLDER,
 	// ~/.lola/context/<project>/<key>/, linked into the worktree as
 	// .lola/context (runtime.ContextKey). Recorded rather than re-derived because
@@ -532,7 +585,8 @@ type Session struct {
 	// agent's own default). Persisted because a revive must relaunch the SAME
 	// model: a best-of attempt on opus that comes back on the default would no
 	// longer be the attempt it is compared as.
-	Model string `json:"model,omitempty"`
+	Model       string `json:"model,omitempty"`
+	ModelEffort string `json:"modelEffort,omitempty"`
 
 	// BestOf is the best-of-N GROUP this session is one attempt of ("" = an
 	// ordinary session). Attempt is its 1-based place in the group, Attempts the
@@ -549,6 +603,24 @@ type Session struct {
 	// last ANSWERED pass, for the PR it reviewed. DISPLAY-ONLY: the best-of
 	// compare view reads it, nothing in the control loop does.
 	ReviewTallies map[string]ReviewTally `json:"review_tallies,omitempty"`
+
+	// ReviewGates maps a review provider kind -> the state of its commit-status
+	// gate (`github_status`) for the current PR. Unlike ReviewTallies it IS
+	// read by the control loop: it decides when a new head is re-reviewed and
+	// whether the merge queue may land the PR.
+	ReviewGates map[string]ReviewGate `json:"review_gates,omitempty"`
+}
+
+// ReviewGate is one kind's review gate on one PR. Head is the commit the latest
+// round reviewed (a retry of the same head is not a new round); State and
+// Posted are the last commit status lola posted and the commit it went on.
+type ReviewGate struct {
+	PR     int       `json:"pr"`
+	Head   string    `json:"head,omitempty"`
+	Rounds int       `json:"rounds,omitempty"`
+	State  string    `json:"state,omitempty"` // pending | success | failure | error
+	Posted string    `json:"posted,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // ReviewTally is one review pass's findings counted by severity
@@ -666,6 +738,7 @@ func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, no
 		s.AgentStateSince = now
 		if a != state.AgentWaitingInput {
 			s.InputReason = ""
+			s.InputNotified = ""
 			// LastNotification DESCRIBES the waiting_input condition ("Claude is
 			// waiting for your input", a permission prompt, …). It used to outlive
 			// it: only InputReason was cleared here, so once the human answered and
@@ -796,7 +869,27 @@ func (s Session) EffectiveKind() Kind {
 // pollForSession would otherwise resolve) can never fire an API call against an
 // empty issue UUID.
 func (s Session) LinearBound() bool {
-	return s.EffectiveKind() == KindLinear && s.IssueUUID != ""
+	return !s.GoalManaged() && s.EffectiveKind() == KindLinear && s.IssueUUID != ""
+}
+
+// GoalManaged fails closed even if a recovery record lost one discriminator.
+func (s Session) GoalManaged() bool {
+	return s.Kind == KindGoal || s.GoalID != "" || IsGoalSessionID(s.ID)
+}
+
+// IsGoalSessionID recognizes the reserved digest shape, not just the prefix:
+// an ordinary project named "goal" still owns normal lola-goal-TEAM-123 IDs.
+func IsGoalSessionID(id string) bool {
+	tail, ok := strings.CutPrefix(id, "lola-goal-")
+	if !ok || len(tail) != 32 {
+		return false
+	}
+	for _, c := range tail {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // IsAgentless reports whether the session has NO coding agent (a plain shell).
@@ -820,12 +913,15 @@ func (s Session) HasAgent() bool { return !s.IsAgentless() }
 // Unlike LinearBound this must NOT depend on the issue UUID: a linear session
 // adopted after a store loss recovers its identifier from the ID shape but not
 // its UUID, yet it still owns the lola-created branch. So the only non-owning
-// case is an explicit pr kind; for a legacy record (Kind unset) fall back to the
+// cases are explicit pr and local kinds; for a legacy record (Kind unset) fall back to the
 // pre-Kind rule — a non-Manual session owns its branch — which is exactly the
 // prior teardown behavior.
 func (s Session) OwnsBranch() bool {
+	if s.GoalManaged() {
+		return false
+	}
 	if s.Kind != "" {
-		return s.Kind != KindPR
+		return s.Kind != KindPR && s.Kind != KindLocal
 	}
 	return !s.Manual
 }
@@ -846,6 +942,57 @@ type Store struct {
 	// registers it to feed its activity-event ring; nil in tests / bare Stores,
 	// where Update behaves exactly as before.
 	onTransition func(from string, s Session)
+
+	// onChange, when set, is invoked UNDER the store lock after every COMMITTED
+	// change (see OnChange). Same no-reentry rule as onTransition.
+	onChange func(Change)
+}
+
+// Change is one committed change. Prev is nil on insert, Next nil on delete.
+// Both are copies owned by the callback for its duration only.
+type Change struct {
+	ID         string // the BASE id; a lane write reports its session
+	Prev, Next *Session
+}
+
+// OnChange registers fn, invoked under the store lock after a change was
+// COMMITTED: Upsert (always); Update / Apply only when fn returned true and
+// the record was stored (Update's (sess, true) return also covers a no-op and
+// must not be used as the signal); Delete when it removed a record; each id
+// PruneOlderThan drops. Lane writes go through updateLane and are covered.
+// fn must not call back into the store, must not block and must not retain
+// Prev/Next. Pass nil to clear it.
+func (s *Store) OnChange(fn func(Change)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = fn
+}
+
+// emitLocked reports one commit to onChange. The caller holds s.mu. prev and
+// next are nil for an insert and a delete respectively; each is handed over as
+// a private copy with its own PR so the callback cannot reach store state.
+func (s *Store) emitLocked(id string, prev, next *Session) {
+	if s.onChange == nil {
+		return
+	}
+	c := Change{ID: id}
+	if prev != nil {
+		p := *prev
+		if p.PR != nil {
+			pr := *p.PR
+			p.PR = &pr
+		}
+		c.Prev = &p
+	}
+	if next != nil {
+		n := *next
+		if n.PR != nil {
+			pr := *n.PR
+			n.PR = &pr
+		}
+		c.Next = &n
+	}
+	s.onChange(c)
 }
 
 // OnTransition registers a status-transition callback (see the field doc). Pass
@@ -990,7 +1137,13 @@ func (s *Store) Upsert(sess Session) {
 		sess.PR = &pr // never share a pointer with the caller
 	}
 	sess.EnsureAxes() // a legacy axis-less record gets axes on the way in
+	old, existed := s.sessions[sess.ID]
 	s.sessions[sess.ID] = sess
+	if existed {
+		s.emitLocked(sess.ID, &old, &sess)
+	} else {
+		s.emitLocked(sess.ID, nil, &sess)
+	}
 }
 
 // Update applies fn to the stored session with the given id as ONE atomic
@@ -1016,6 +1169,7 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 		return Session{}, false
 	}
 	oldStatus := sess.Status // captured before fn mutates the copy
+	prev := sess             // the committed record, for onChange
 	if sess.PR != nil {
 		pr := *sess.PR
 		sess.PR = &pr
@@ -1041,6 +1195,7 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 	if s.onTransition != nil && stored.Status != oldStatus {
 		s.onTransition(oldStatus, stored)
 	}
+	s.emitLocked(id, &prev, &stored)
 	return sess, true
 }
 
@@ -1090,6 +1245,7 @@ func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Sess
 	defer s.mu.Unlock()
 	sess, existed := s.sessions[id]
 	oldStatus := sess.Status
+	prev := sess // the committed record, for onChange (unused on insert)
 	if sess.PR != nil {
 		pr := *sess.PR
 		sess.PR = &pr
@@ -1114,6 +1270,11 @@ func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Sess
 	if existed && s.onTransition != nil && stored.Status != oldStatus {
 		s.onTransition(oldStatus, stored)
 	}
+	if existed {
+		s.emitLocked(id, &prev, &stored)
+	} else {
+		s.emitLocked(id, nil, &stored)
+	}
 	return sess, true
 }
 
@@ -1126,10 +1287,12 @@ func (s *Store) Delete(id string) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.sessions[id]; !ok {
+	old, ok := s.sessions[id]
+	if !ok {
 		return false
 	}
 	delete(s.sessions, id)
+	s.emitLocked(id, &old, nil)
 	return true
 }
 
@@ -1143,6 +1306,7 @@ func (s *Store) PruneOlderThan(d time.Duration) int {
 	for id, sess := range s.sessions {
 		if sess.LastSeen.Before(cutoff) {
 			delete(s.sessions, id)
+			s.emitLocked(id, &sess, nil)
 			n++
 		}
 	}
@@ -1192,4 +1356,102 @@ func (s *Store) Save() error {
 	name := tmp.Name()
 	tmp = nil // written and closed; disarm the cleanup deferral
 	return os.Rename(name, s.path)
+}
+
+// DisplayTitle preserves a custom name independently of task and branch identity.
+func (s Session) DisplayTitle() string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return s.Title
+}
+
+// HubWork is a session's claim on a lola-hub work item. Every field is lola's
+// own record: the item id and kind come from an item that passed
+// hubproto.Validate before it was claimed.
+type HubWork struct {
+	// ItemID is the hub's item id ("" = not hub work).
+	ItemID string `json:"item_id,omitempty"`
+	// Kind is the hubproto kind (dep_advisory | red_bump_pr).
+	Kind string `json:"kind,omitempty"`
+	// ClaimedAt is when the claim succeeded.
+	ClaimedAt time.Time `json:"claimed_at,omitzero"`
+	// LeaseExpires is the hub's last word on the lease (claim or renewal).
+	LeaseExpires time.Time `json:"lease_expires,omitzero"`
+	// LeaseLost is set when a heartbeat reported the lease gone. The session
+	// keeps running; lola only stops renewing and reporting for it.
+	LeaseLost bool `json:"lease_lost,omitempty"`
+	// StartHead is the PR head first observed (red_bump_pr): the agent's work
+	// counts only once the head moved past it.
+	StartHead string `json:"start_head,omitempty"`
+	// Reported is the one-shot outcome guard: "complete" or "fail:<reason>"
+	// once the outcome was queued for the hub. Stamped BEFORE the request, so a
+	// crash never reports twice.
+	Reported string `json:"reported,omitempty"`
+	// Label is lola's own short name for the item, built at claim time from
+	// validated fields ("GHSA-xxxx · lodash", "PR #12 · lodash").
+	Label string `json:"label,omitempty"`
+	// Released is set when a person gave the lease back (cmd=hubRelease)
+	// while the session lived on: the session keeps running, lola stops
+	// renewing and reporting for it, exactly as for a lost lease.
+	Released bool `json:"released,omitempty"`
+	// LeaseTaken is set with LeaseLost when re-claiming the lost lease was
+	// refused because another device holds the item now.
+	LeaseTaken bool `json:"lease_taken,omitempty"`
+	// Progress is the PR delivery last queued as progress for the hub
+	// (dep_advisory): a new one is sent when the delivery changes, and again
+	// periodically while in review (the hub reopens an in-review item that
+	// goes silent for hubproto.InReviewIdleReopen).
+	Progress string `json:"progress,omitempty"`
+	// ProgressAt is when the last progress was queued (zero = before this
+	// field existed): the in-review refresh is timed from it.
+	ProgressAt time.Time `json:"progress_at,omitzero"`
+	// InReview is set once the hub acknowledged the progress: the item is in
+	// review, owned by this device without a lease, so it is no longer
+	// renewed and its complete / fail goes out as the owner's.
+	InReview bool `json:"in_review,omitempty"`
+	// Group ties the items of one grouped session together: a failure of
+	// them is reported with this id so the hub escalates them as one issue.
+	// Random lowercase hex, never derived from a session id or path.
+	Group string `json:"group,omitempty"`
+}
+
+// HubWorks returns every hub item the session works, HubItem first, as
+// pointers into s so a caller can update them in place. Empty when the session
+// is not hub work.
+func (s *Session) HubWorks() []*HubWork {
+	if s.HubItem.ItemID == "" {
+		return nil
+	}
+	out := []*HubWork{&s.HubItem}
+	for i := range s.HubBatch {
+		out = append(out, &s.HubBatch[i])
+	}
+	return out
+}
+
+// HubWork returns the session's work on item id, or nil.
+func (s *Session) HubWork(id string) *HubWork {
+	for _, w := range s.HubWorks() {
+		if w.ItemID == id {
+			return w
+		}
+	}
+	return nil
+}
+
+// HubOpen reports whether any of the session's hub items still wants renewal
+// and an outcome.
+func (s Session) HubOpen() bool {
+	for _, w := range s.HubWorks() {
+		if w.Open() {
+			return true
+		}
+	}
+	return false
+}
+
+// Open reports whether the claim still wants renewal and an outcome.
+func (h HubWork) Open() bool {
+	return h.ItemID != "" && !h.LeaseLost && !h.Released && h.Reported == ""
 }

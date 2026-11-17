@@ -4,19 +4,21 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/secrets"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // First-run setup constants, matching the TUI wizard (internal/tui/setup.go) so
@@ -42,16 +44,8 @@ var storeLinearKey = secrets.StoreLinearAPIKey
 // back out to the frontend — LinearKeyStatus reports where the key lives and
 // whether it resolves, never its value.
 //
-// ConnectCode is the ONE deliberate exception, and it is written down rather
-// than left as an inconsistency. It returns the phone listener's bearer key
-// because the key IS the thing being handed over — a QR nobody can read is not
-// a hand-off — and the exception costs nothing in privilege: the answer comes
-// over ~/.lola/lola.sock, which is srw------- inside a 0700 directory, and
-// anything that can open it already reaches cmd=answer, which types into a
-// running coding agent. What the exception does cost is EXPOSURE, so the rule
-// it replaces the write-only one with is narrower rather than absent: the value
-// is fetched only when a human asks for it, it is never logged or persisted on
-// this side, and the surface that renders it has a hide.
+// Pairing a phone is not a config concern: PhonesService owns it, and no
+// secret for the phone listener passes through this service.
 type ConfigService struct{}
 
 func loadConfig() (*config.Config, string, error) {
@@ -90,17 +84,16 @@ func saveConfig(cfg *config.Config, path string) error {
 // command an older daemon does not know) — neither of which is a problem worth
 // interrupting a successful save for.
 //
-// A rejection means the daemon disagrees with the Validate this build just ran,
-// and the daemon is the one running older code: it does not hot-reload its own
-// binary. The tell is a complaint about a key now INHERITED from [defaults] and
-// therefore no longer written into the project's own table.
+// A rejection means the daemon disagrees with the validation this build just
+// ran. It may predate inheritance or allowing incomplete inactive pickup
+// settings; reloading config does not update the daemon binary.
 func reloadRejectionHint(msg string) string {
 	if !strings.Contains(msg, "config invalid") {
 		return ""
 	}
 	for _, key := range []string{"match_mode", "dedup_mode", "on_sent_set_label", "priority_sort", "blocked_label_id", "match_labels"} {
 		if strings.Contains(msg, key) {
-			return msg + "  — this build accepts that config; the daemon is an OLDER binary predating [defaults] inheritance. Restart it from the daemon controls."
+			return msg + "  — this app accepts the config, but the daemon uses older validation rules. Update the Lola CLI and restart the daemon from its controls."
 		}
 	}
 	return msg
@@ -109,10 +102,16 @@ func reloadRejectionHint(msg string) string {
 // --- settings ([defaults]/[notify]/[brain]/[review]/[coderabbit]) -----------
 
 type SettingsDTO struct {
-	GlobalCap      int    `json:"globalCap"`
-	ConcurrencyCap int    `json:"concurrencyCap"`
-	PollInterval   string `json:"pollInterval"` // duration string, e.g. "60s"
-	Agent          string `json:"agent"`        // claude|codex|opencode
+	// Nil preserves instructions from older clients; empty restores automatic style.
+	CommitInstructions *string `json:"commitInstructions,omitempty"`
+
+	AI                 map[string]config.AIProvider `json:"ai,omitempty"`
+	AutoPRComments     bool                         `json:"autoPRComments"`
+	TemporaryDirectory string                       `json:"temporaryDirectory"`
+	GlobalCap          int                          `json:"globalCap"`
+	ConcurrencyCap     int                          `json:"concurrencyCap"`
+	PollInterval       string                       `json:"pollInterval"` // duration string, e.g. "60s"
+	Agent              string                       `json:"agent"`        // claude|codex|opencode
 
 	NotifyDesktop   bool   `json:"notifyDesktop"`
 	SlackWebhookEnv string `json:"slackWebhookEnv"` // env var NAME, never the URL
@@ -140,12 +139,12 @@ type SettingsDTO struct {
 	// literal, so the form must be able to round-trip a literal it cannot offer
 	// in a picker; coercing one back to a keyword on save would silently rebind
 	// the daemon to a different set of interfaces.
-	RemoteEnabled     bool   `json:"remoteEnabled"`
-	RemoteBind        string `json:"remoteBind"`
-	RemotePort        int    `json:"remotePort"`
-	RemoteInsecureLAN bool   `json:"remoteInsecureLan"`
-	RemoteAdvertise   bool   `json:"remoteAdvertise"`
-	RemoteDevForward  bool   `json:"remoteDevForward"`
+	RemoteEnabled    bool   `json:"remoteEnabled"`
+	RemoteBind       string `json:"remoteBind"`
+	RemotePort       int    `json:"remotePort"`
+	RemoteRelay      bool   `json:"remoteRelay"` // [remote].relay: carry phone connections over the hub relay
+	RemoteAdvertise  bool   `json:"remoteAdvertise"`
+	RemoteDevForward bool   `json:"remoteDevForward"`
 
 	// [linear_agent] — lola as a native Linear agent. Only the keys a human
 	// edits; the secret SOURCES (keychain service / env names) are preserved
@@ -164,6 +163,9 @@ type SettingsDTO struct {
 	// UI shows the providers read-only and offers MigrateReview.
 	ReviewProviders []ReviewProviderDTO `json:"reviewProviders"`
 	ReviewLegacy    bool                `json:"reviewLegacy"`
+	// Nil from an older client preserves profiles; an explicit empty array clears them.
+	ReviewProfiles    []reviewprofile.Profile   `json:"reviewProfiles"`
+	ReviewSpecialties []reviewprofile.Specialty `json:"reviewSpecialties"`
 
 	// Project defaults: the [defaults] counterpart of each inheritable
 	// [[project]] key. A project that does not override the key uses these.
@@ -178,6 +180,94 @@ type SettingsDTO struct {
 	DedupMode      string   `json:"dedupMode"`
 	PrioritySort   []string `json:"prioritySort"`
 	RequirePlan    bool     `json:"requirePlan"`
+
+	// [hub] — the team hub's local rules. url / enabled / device_name are not
+	// here: HubService.Join and Leave own them, so a settings save can never
+	// half-join or un-join a hub. Every field is NIL-PRESERVING (an older
+	// client that predates them leaves the table untouched): a plain bool would
+	// read "false" for an absent require_sandbox and silently turn the safe
+	// default off. The values are the EFFECTIVE ones (defaults applied).
+	HubAcceptKinds     []string           `json:"hubAcceptKinds"`
+	HubMaxClaimsPerDay *int               `json:"hubMaxClaimsPerDay"`
+	HubRequireSandbox  *bool              `json:"hubRequireSandbox"`
+	HubPollSeconds     *int               `json:"hubPollSeconds"` // effective cadence in seconds
+	HubApplyPolicy     *bool              `json:"hubApplyPolicy"`
+	HubGroupChores     *bool              `json:"hubGroupChores"`
+	HubTrustedKeys     []HubTrustedKeyDTO `json:"hubTrustedKeys"`
+}
+
+// HubTrustedKeyDTO is one [hub.trusted_policy_keys] entry: an admin key that
+// may sign team policy.
+type HubTrustedKeyDTO struct {
+	KeyID     string `json:"keyId"`
+	PublicKey string `json:"publicKey"`
+}
+
+// hubSettingsDTO fills the [hub] half of SettingsDTO with effective values.
+func hubSettingsDTO(dto *SettingsDTO, h config.HubConfig) {
+	claims, sandbox, poll, apply := h.ClaimsPerDay(), h.SandboxRequired(), h.EffectivePollSeconds(), h.PolicyApplies()
+	dto.HubAcceptKinds = append([]string{}, h.AcceptKinds...)
+	dto.HubMaxClaimsPerDay, dto.HubRequireSandbox, dto.HubPollSeconds, dto.HubApplyPolicy = &claims, &sandbox, &poll, &apply
+	group := h.GroupsChores()
+	dto.HubGroupChores = &group
+	dto.HubTrustedKeys = []HubTrustedKeyDTO{}
+	for _, e := range h.TrustedKeyEntries() {
+		id, pub, _ := strings.Cut(e, ":")
+		dto.HubTrustedKeys = append(dto.HubTrustedKeys, HubTrustedKeyDTO{KeyID: id, PublicKey: pub})
+	}
+}
+
+// applyHubSettings writes the [hub] half of SettingsDTO. A value equal to the
+// default is written only when the file already set the key, so a save never
+// freezes a default into config.toml.
+func applyHubSettings(h *config.HubConfig, dto SettingsDTO) error {
+	if dto.HubAcceptKinds != nil {
+		h.AcceptKinds = nonEmpty(dto.HubAcceptKinds)
+	}
+	if v := dto.HubMaxClaimsPerDay; v != nil && (h.MaxClaimsPerDay != nil || *v != config.DefaultHubMaxClaimsPerDay) {
+		n := *v
+		h.MaxClaimsPerDay = &n
+	}
+	if v := dto.HubRequireSandbox; v != nil && (h.RequireSandbox != nil || !*v) {
+		b := *v
+		h.RequireSandbox = &b
+	}
+	if v := dto.HubApplyPolicy; v != nil && (h.ApplyPolicy != nil || !*v) {
+		b := *v
+		h.ApplyPolicy = &b
+	}
+	if v := dto.HubGroupChores; v != nil && (h.GroupChores != nil || !*v) {
+		b := *v
+		h.GroupChores = &b
+	}
+	if v := dto.HubPollSeconds; v != nil {
+		if *v == config.DefaultHubPollSeconds && h.PollSeconds == 0 {
+			// default stays implicit
+		} else {
+			h.PollSeconds = *v
+		}
+	}
+	if dto.HubTrustedKeys != nil {
+		keys := config.TrustedKeyMap{}
+		for _, k := range dto.HubTrustedKeys {
+			id, pub := strings.TrimSpace(k.KeyID), strings.TrimSpace(k.PublicKey)
+			if id == "" && pub == "" {
+				continue
+			}
+			if id == "" || pub == "" {
+				return errors.New("hub trusted policy keys: each key needs a key id and a public key")
+			}
+			if _, dup := keys[id]; dup {
+				return errors.New("hub trusted policy keys: key id " + id + " is listed twice")
+			}
+			keys[id] = pub
+		}
+		if len(keys) == 0 {
+			keys = nil
+		}
+		h.TrustedPolicyKeys = keys
+	}
+	return nil
 }
 
 // ReviewProviderDTO is one entry of the review provider catalog, flattened for
@@ -194,6 +284,7 @@ type ReviewProviderDTO struct {
 	Author         string   `json:"author"`         // watch family
 	Transports     []string `json:"transports"`     // lola (always) | github | linear
 	GitHubInline   bool     `json:"githubInline"`   // github: anchored, resolvable threads instead of one comment
+	GitHubStatus   bool     `json:"githubStatus"`   // pass shapes: lola/review/<kind> commit status on the PR head
 	Notify         bool     `json:"notify"`
 	SendToAgent    bool     `json:"sendToAgent"`
 	Visible        bool     `json:"visible"`  // pass shapes: run in a watchable "<session>-review" tmux session
@@ -304,6 +395,7 @@ func reviewProvidersDTO(cfg *config.Config) []ReviewProviderDTO {
 			Author:         p.Author,
 			Transports:     p.Transports.Strings(),
 			GitHubInline:   p.GitHubInline,
+			GitHubStatus:   p.GitHubStatus,
 			Notify:         p.Notify,
 			SendToAgent:    p.SendToAgent,
 			Visible:        p.Visible,
@@ -331,6 +423,7 @@ func providersFromDTO(dtos []ReviewProviderDTO) []config.ReviewProvider {
 		p.Model = d.Model
 		p.Author = d.Author
 		p.GitHubInline = d.GitHubInline
+		p.GitHubStatus = d.GitHubStatus
 		p.Notify = d.Notify
 		p.SendToAgent = d.SendToAgent
 		p.Visible = d.Visible
@@ -368,13 +461,17 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 	if err != nil {
 		return SettingsDTO{}, err
 	}
-	return SettingsDTO{
+	dto := SettingsDTO{
+		CommitInstructions: &cfg.Defaults.CommitInstructions,
+
+		TemporaryDirectory:       cfg.Defaults.TemporaryDirectory,
 		GlobalCap:                cfg.Defaults.GlobalCap,
 		ConcurrencyCap:           cfg.Defaults.ConcurrencyCap,
 		PollInterval:             cfg.Defaults.PollInterval.String(),
 		Agent:                    cfg.Defaults.Agent,
 		NotifyDesktop:            cfg.Notify.Desktop,
 		SlackWebhookEnv:          cfg.Notify.SlackWebhookEnv,
+		AI:                       cfg.AI,
 		BrainEnabled:             cfg.Brain.Enabled,
 		BrainModel:               cfg.Brain.Model,
 		BrainTimeout:             cfg.Brain.TimeoutSeconds,
@@ -394,12 +491,12 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		// The EFFECTIVE values, not the raw ones: BindMode/ListenPort resolve ""
 		// and 0 to their defaults, so the form shows what the daemon would
 		// actually do rather than a blank that reads as "nothing".
-		RemoteEnabled:     cfg.Remote.Enabled,
-		RemoteBind:        cfg.Remote.BindMode(),
-		RemotePort:        cfg.Remote.ListenPort(),
-		RemoteInsecureLAN: cfg.Remote.InsecureLAN,
-		RemoteAdvertise:   cfg.Remote.Advertise,
-		RemoteDevForward:  cfg.Remote.DevForward,
+		RemoteEnabled:    cfg.Remote.Enabled,
+		RemoteBind:       cfg.Remote.BindMode(),
+		RemotePort:       cfg.Remote.ListenPort(),
+		RemoteRelay:      !cfg.Remote.RelayOff,
+		RemoteAdvertise:  cfg.Remote.Advertise,
+		RemoteDevForward: cfg.Remote.DevForward,
 
 		LinearAgentEnabled:       cfg.LinearAgent.Enabled,
 		LinearAgentClientID:      cfg.LinearAgent.ClientID,
@@ -407,21 +504,26 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		LinearAgentRedirectPort:  cfg.LinearAgent.RedirectPort,
 		LinearAgentWebhookListen: cfg.LinearAgent.WebhookListen,
 
-		ReviewProviders: reviewProvidersDTO(cfg),
-		ReviewLegacy:    legacyReviewOnly(cfg),
+		ReviewProviders:   reviewProvidersDTO(cfg),
+		ReviewLegacy:      legacyReviewOnly(cfg),
+		ReviewProfiles:    append([]reviewprofile.Profile{}, cfg.ReviewProfiles...),
+		ReviewSpecialties: reviewprofile.Specialties(),
 
 		BranchPrefix:   cfg.Defaults.BranchPrefix,
 		Symlinks:       cfg.Defaults.Symlinks,
 		PostCreate:     cfg.Defaults.PostCreate,
 		Env:            envToLines(cfg.Defaults.Env),
 		MatchLabels:    cfg.Defaults.MatchLabels,
+		AutoPRComments: cfg.Defaults.AutoPRComments,
 		MatchMode:      cfg.Defaults.MatchMode,
 		OnSentSetLabel: cfg.Defaults.OnSentSetLabel,
 		BlockedLabelID: cfg.Defaults.BlockedLabelID,
 		DedupMode:      cfg.Defaults.DedupMode,
 		PrioritySort:   cfg.Defaults.PrioritySort,
 		RequirePlan:    cfg.Defaults.RequirePlan,
-	}, nil
+	}
+	hubSettingsDTO(&dto, cfg.Hub)
+	return dto, nil
 }
 
 func durationOrEmpty(d time.Duration) string {
@@ -443,11 +545,18 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 		}
 		cfg.Defaults.PollInterval = d
 	}
+	cfg.Defaults.TemporaryDirectory = strings.TrimSpace(dto.TemporaryDirectory)
 	cfg.Defaults.GlobalCap = dto.GlobalCap
 	cfg.Defaults.ConcurrencyCap = dto.ConcurrencyCap
 	cfg.Defaults.Agent = dto.Agent
+	if dto.CommitInstructions != nil {
+		cfg.Defaults.CommitInstructions = strings.TrimSpace(*dto.CommitInstructions)
+	}
 	cfg.Notify.Desktop = dto.NotifyDesktop
 	cfg.Notify.SlackWebhookEnv = dto.SlackWebhookEnv
+	if dto.AI != nil {
+		cfg.AI = dto.AI
+	}
 	cfg.Brain.Enabled = dto.BrainEnabled
 	cfg.Brain.Model = dto.BrainModel
 	cfg.Brain.TimeoutSeconds = dto.BrainTimeout
@@ -465,7 +574,7 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Remote.Enabled = dto.RemoteEnabled
 	cfg.Remote.Bind = dto.RemoteBind
 	cfg.Remote.Port = dto.RemotePort
-	cfg.Remote.InsecureLAN = dto.RemoteInsecureLAN
+	cfg.Remote.RelayOff = !dto.RemoteRelay
 	cfg.Remote.Advertise = dto.RemoteAdvertise
 	cfg.Remote.DevForward = dto.RemoteDevForward
 	la := cfg.LinearAgent
@@ -490,6 +599,23 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	if !legacyReviewOnly(cfg) {
 		cfg.ReviewProviders = providersFromDTO(dto.ReviewProviders)
 	}
+	if dto.ReviewProfiles != nil {
+		cfg.ReviewProfiles = append([]reviewprofile.Profile{}, dto.ReviewProfiles...)
+		for i := range cfg.ReviewProfiles {
+			p := &cfg.ReviewProfiles[i]
+			p.ID, p.Provider, p.Version = strings.TrimSpace(p.ID), strings.TrimSpace(p.Provider), strings.TrimSpace(p.Version)
+			clean := func(lines []string) []string {
+				out := []string{}
+				for _, line := range lines {
+					if value := strings.TrimSpace(line); value != "" {
+						out = append(out, value)
+					}
+				}
+				return out
+			}
+			p.Projects, p.Paths, p.Artifacts = clean(p.Projects), clean(p.Paths), clean(p.Artifacts)
+		}
+	}
 
 	env, err := linesToEnv(dto.Env)
 	if err != nil {
@@ -500,12 +626,16 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Defaults.PostCreate = nonEmpty(dto.PostCreate)
 	cfg.Defaults.Env = env
 	cfg.Defaults.MatchLabels = nonEmpty(dto.MatchLabels)
+	cfg.Defaults.AutoPRComments = dto.AutoPRComments
 	cfg.Defaults.MatchMode = dto.MatchMode
 	cfg.Defaults.OnSentSetLabel = dto.OnSentSetLabel
 	cfg.Defaults.BlockedLabelID = dto.BlockedLabelID
 	cfg.Defaults.DedupMode = dto.DedupMode
 	cfg.Defaults.PrioritySort = nonEmpty(dto.PrioritySort)
 	cfg.Defaults.RequirePlan = dto.RequirePlan
+	if err := applyHubSettings(&cfg.Hub, dto); err != nil {
+		return err
+	}
 	return saveConfig(cfg, path)
 }
 
@@ -552,14 +682,15 @@ func (s *ConfigService) GetTheme() string {
 // saveConfig path — Validate, then config.Save's atomic temp+rename, then a
 // best-effort daemon reload — so an unknown identifier is rejected here by the
 // same static check the daemon applies, and nothing writes the file directly.
-// An empty name clears the key, which drops the [ui] table and restores
-// config.DefaultUITheme.
+// An empty name clears the fixed theme and restores config.DefaultUITheme;
+// the system-mode choices remain available for later.
 func (s *ConfigService) SetTheme(name string) error {
 	cfg, path, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	cfg.UI.Theme = strings.TrimSpace(name)
+	cfg.UI.FollowSystem = false
 	if err := saveConfig(cfg, path); err != nil {
 		return err
 	}
@@ -571,12 +702,50 @@ func (s *ConfigService) SetTheme(name string) error {
 	return nil
 }
 
+// AppearanceDTO keeps a fixed choice alongside the two system-mode choices.
+type AppearanceDTO struct {
+	Theme        string `json:"theme"`
+	FollowSystem bool   `json:"followSystem"`
+	LightTheme   string `json:"lightTheme"`
+	DarkTheme    string `json:"darkTheme"`
+}
+
+func (s *ConfigService) GetAppearance() AppearanceDTO {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		cfg = &config.Config{}
+	}
+	return AppearanceDTO{cfg.UITheme(), cfg.UI.FollowSystem, cfg.UILightTheme(), cfg.UIDarkTheme()}
+}
+
+func (s *ConfigService) SetAppearance(a AppearanceDTO) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.UI = config.UIConfig{Theme: strings.TrimSpace(a.Theme), FollowSystem: a.FollowSystem,
+		LightTheme: strings.TrimSpace(a.LightTheme), DarkTheme: strings.TrimSpace(a.DarkTheme)}
+	if err := saveConfig(cfg, path); err != nil {
+		return err
+	}
+	repaintWindowCanvas(cfg.UIThemeFor(systemIsDark()))
+	return nil
+}
+
+// PreviewTheme updates native chrome only. It never persists an appearance.
+func (s *ConfigService) PreviewTheme(id string) {
+	if slices.Contains(config.UIThemes, id) {
+		repaintWindowCanvas(id)
+	}
+}
+
 // --- project editor ---------------------------------------------------------
 
 // InheritsDTO mirrors config.ProjectInherits: true means the project leaves the
 // key to [defaults], so the form shows the resolved value as a ghost and the
 // key is not written into the project's own table.
 type InheritsDTO struct {
+	AutoPRComments bool `json:"autoPRComments"`
 	Symlinks       bool `json:"symlinks"`
 	PostCreate     bool `json:"postCreate"`
 	Env            bool `json:"env"`
@@ -589,11 +758,29 @@ type InheritsDTO struct {
 	RequirePlan    bool `json:"requirePlan"`
 }
 
+type ProjectExecutionDTO struct {
+	GoalMode bool   `json:"goalMode"`
+	Sandbox  string `json:"sandbox"`
+	Image    string `json:"image"`
+	// Toolchains is sandbox_toolchains (empty = detected from the
+	// repository); Packages is sandbox_packages.
+	Toolchains []string `json:"toolchains"`
+	Packages   []string `json:"packages"`
+}
+
 // ProjectFormDTO is the whole of one [[project]] — repository setup, Linear
 // polling filter and write-back — because a project IS the poll unit. The
 // values are the RESOLVED ones (see config.ResolveInheritance); Inherits says
 // which of them came from [defaults] rather than the project itself.
 type ProjectFormDTO struct {
+	// Nil preserves instructions from older clients; empty uses the workspace default.
+	CommitInstructions *string `json:"commitInstructions,omitempty"`
+
+	AutoPRComments bool `json:"autoPRComments"`
+	// Nil from an older client preserves execution settings. Stack members
+	// cannot edit these owning-stack settings through their repository form.
+	Execution *ProjectExecutionDTO `json:"execution,omitempty"`
+
 	// Repository / worktree setup. Name is the project's ID — a path segment and
 	// the prefix of every session/tmux name — while Label is the free-text
 	// display string ("" falls back to Name). Changing Label here is an ordinary
@@ -617,6 +804,10 @@ type ProjectFormDTO struct {
 	// session is ACTIVE (one per project — see internal/daemon/dev.go). Not an
 	// inheritable key: a dev command belongs to one repository.
 	DevCommands []string `json:"devCommands"`
+	// HubChores opts the project into the team hub's chore lane
+	// ([[project]].hub_chores). Nil from an older client leaves it untouched.
+	// Validate refuses it on a stack or without an owner/name repo.
+	HubChores *bool `json:"hubChores"`
 	// PortRange ("4100-4999") and PortsPerSession lease each session its own
 	// port block (LOLA_PORT / LOLA_PORT_1..N) and make dev_commands
 	// multi-active; PreRemove is the teardown hook run before a worktree is
@@ -678,6 +869,9 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 		return ProjectFormDTO{}, err
 	}
 	if name == "" {
+		// Enabled stays false here: a project without a team polls nothing,
+		// so the form turns Enabled on itself once a team is chosen for a NEW
+		// project (unless the human already set the box), never before.
 		blank := config.Project{
 			DefaultBranch: config.DefaultBranchName,
 			CycleMode:     "none",
@@ -685,7 +879,7 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 			Inherits: config.ProjectInherits{
 				Symlinks: true, PostCreate: true, Env: true,
 				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-				BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+				BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
 				RequirePlan: true,
 			},
 		}
@@ -714,7 +908,11 @@ func labelsDTO(in []string) []string {
 }
 
 func projectDTO(p *config.Project) ProjectFormDTO {
+	hubChores := p.HubChores
 	return ProjectFormDTO{
+		Execution:          &ProjectExecutionDTO{GoalMode: p.GoalMode, Sandbox: p.Sandbox, Image: p.SandboxImage, Toolchains: nonNil(p.SandboxToolchains), Packages: nonNil(p.SandboxPackages)},
+		CommitInstructions: &p.CommitInstructions,
+
 		Name:            p.Name,
 		Label:           p.Label,
 		Path:            p.Path,
@@ -725,6 +923,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 		Symlinks:        p.Symlinks,
 		PostCreate:      p.PostCreate,
 		DevCommands:     p.DevCommands,
+		HubChores:       &hubChores,
 		PortRange:       p.PortRange,
 		PortsPerSession: p.PortsPerSession,
 		PreRemove:       p.PreRemove,
@@ -740,6 +939,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 		CycleID:        p.CycleID,
 		StateIDs:       p.StateIDs,
 		MatchLabels:    p.MatchLabels,
+		AutoPRComments: p.AutoPRComments,
 		MatchMode:      p.MatchMode,
 		AssigneeMode:   p.AssigneeMode,
 		AssigneeUserID: p.AssigneeUserID,
@@ -763,6 +963,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 			PostCreate:     p.Inherits.PostCreate,
 			Env:            p.Inherits.Env,
 			MatchLabels:    p.Inherits.MatchLabels,
+			AutoPRComments: p.Inherits.AutoPRComments,
 			MatchMode:      p.Inherits.MatchMode,
 			OnSentSetLabel: p.Inherits.OnSentSetLabel,
 			BlockedLabelID: p.Inherits.BlockedLabelID,
@@ -813,9 +1014,15 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.DefaultBranch = dto.DefaultBranch
 	p.BranchPrefix = dto.BranchPrefix
 	p.Agent = dto.Agent
+	if dto.CommitInstructions != nil {
+		p.CommitInstructions = strings.TrimSpace(*dto.CommitInstructions)
+	}
 	p.Symlinks = nonEmpty(dto.Symlinks)
 	p.PostCreate = nonEmpty(dto.PostCreate)
 	p.DevCommands = nonEmpty(dto.DevCommands)
+	if dto.HubChores != nil {
+		p.HubChores = *dto.HubChores
+	}
 	p.PortRange = strings.TrimSpace(dto.PortRange)
 	p.PortsPerSession = dto.PortsPerSession
 	p.PreRemove = nonEmpty(dto.PreRemove)
@@ -829,6 +1036,17 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		p.Labels = nonEmpty(dto.Labels)
 	}
 
+	if dto.Execution != nil && !p.InStack() {
+		p.GoalMode = dto.Execution.GoalMode
+		p.Sandbox = strings.TrimSpace(dto.Execution.Sandbox)
+		p.SandboxImage = strings.TrimSpace(dto.Execution.Image)
+		if dto.Execution.Toolchains != nil { // absent (an older client) = untouched
+			p.SandboxToolchains = nonEmpty(trimAll(dto.Execution.Toolchains))
+		}
+		if dto.Execution.Packages != nil {
+			p.SandboxPackages = nonEmpty(trimAll(dto.Execution.Packages))
+		}
+	}
 	p.Enabled = dto.Enabled
 	p.TeamID = dto.TeamID
 	p.ProjectID = dto.ProjectID
@@ -836,6 +1054,7 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.CycleID = dto.CycleID
 	p.StateIDs = nonEmpty(dto.StateIDs)
 	p.MatchLabels = nonEmpty(dto.MatchLabels)
+	p.AutoPRComments = dto.AutoPRComments
 	p.MatchMode = dto.MatchMode
 	p.AssigneeMode = dto.AssigneeMode
 	p.AssigneeUserID = dto.AssigneeUserID
@@ -867,6 +1086,7 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		PostCreate:     dto.Inherits.PostCreate,
 		Env:            dto.Inherits.Env,
 		MatchLabels:    dto.Inherits.MatchLabels,
+		AutoPRComments: dto.Inherits.AutoPRComments,
 		MatchMode:      dto.Inherits.MatchMode,
 		OnSentSetLabel: dto.Inherits.OnSentSetLabel,
 		BlockedLabelID: dto.Inherits.BlockedLabelID,
@@ -924,34 +1144,6 @@ func (s *ConfigService) InspectPath(path string) PathInfoDTO {
 	return out
 }
 
-// PickFolder opens the native directory chooser and returns the selected path,
-// or "" when the user cancels. start seeds the dialog's directory so re-picking
-// a project's folder does not begin at $HOME again.
-//
-// The dialog is the app's, not the form's: only the backend can put a real macOS
-// panel in front of the window, which is why this is a service method rather
-// than anything in the frontend.
-func (s *ConfigService) PickFolder(start string) (string, error) {
-	app := application.Get()
-	if app == nil {
-		return "", errors.New("no application window to attach a dialog to")
-	}
-	d := app.Dialog.OpenFile().
-		CanChooseDirectories(true).
-		CanChooseFiles(false).
-		CanCreateDirectories(true).
-		ResolvesAliases(true).
-		SetTitle("Choose the project's repository").
-		SetButtonText("Use this folder")
-	if s := strings.TrimSpace(start); s != "" {
-		d.SetDirectory(s)
-	}
-	if win := app.Window.Current(); win != nil {
-		d.AttachToWindow(win)
-	}
-	return d.PromptForSingleSelection()
-}
-
 func (s *ConfigService) RemoveProject(name string) error {
 	cfg, path, err := loadConfig()
 	if err != nil {
@@ -966,11 +1158,27 @@ func (s *ConfigService) RemoveProject(name string) error {
 	cfg.Projects = out
 	// Removing a STACK sets its members free rather than leaving them naming a
 	// stack that is gone (which Validate rejects): they get their own Linear
-	// and agent settings back, exactly as when dragged out one by one.
+	// and agent settings back, exactly as when dragged out one by one. Their
+	// labels go too — labels only apply to a member, and keeping them made
+	// Validate refuse the whole write.
 	for i := range cfg.Projects {
 		if cfg.Projects[i].Stack == name {
 			cfg.Projects[i].Stack = ""
+			cfg.Projects[i].Labels = nil
 		}
+	}
+	return saveConfig(cfg, path)
+}
+
+// RemoveStack removes a stack and every member not named in keep; the kept
+// ones stay configured as standalone projects (config.RemoveStack).
+func (s *ConfigService) RemoveStack(stack string, keep []string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := cfg.RemoveStack(stack, keep); err != nil {
+		return err
 	}
 	return saveConfig(cfg, path)
 }
@@ -984,26 +1192,171 @@ func (s *ConfigService) CreateStack(label string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	label = strings.TrimSpace(label)
-	name := config.Slug(label)
-	if name == "" {
-		return "", errors.New("stack name is required")
+	name, err := cfg.AddStack(label)
+	if err != nil {
+		return "", err
 	}
-	if cfg.ProjectByName(name) != nil {
-		return "", errors.New("a project named " + name + " already exists")
+	if err := saveConfig(cfg, path); err != nil {
+		return "", err
 	}
-	p := config.Project{Name: name, Kind: config.ProjectKindStack, CycleMode: "none", AssigneeMode: "anyone"}
-	if label != name {
-		p.Label = label
+	return name, nil
+}
+
+// StackFolderDTO is what a picked PARENT folder offers a new stack: a suggested
+// stack name and the checkouts nested directly inside it.
+type StackFolderDTO struct {
+	Path           string              `json:"path"`
+	SuggestedLabel string              `json:"suggestedLabel"`
+	Apps           []StackFolderAppDTO `json:"apps"`
+}
+
+// StackFolderAppDTO is one nested checkout. Project names the project already
+// configured at that path (it JOINS the stack rather than being duplicated);
+// Blocked says why it cannot be included at all (it is a stack, or a member of
+// another one), and the form shows it unchecked and disabled.
+type StackFolderAppDTO struct {
+	Path          string `json:"path"`
+	Label         string `json:"label"`
+	Repo          string `json:"repo"`
+	DefaultBranch string `json:"defaultBranch"`
+	Project       string `json:"project"`
+	Blocked       string `json:"blocked"`
+}
+
+// ScanStackFolder reads every checkout directly inside a parent folder with
+// LOCAL git (gitrepo.Scan), so creating a stack from it fills each member's
+// path, repo and default branch instead of making the user add them one by one.
+func (s *ConfigService) ScanStackFolder(path string) StackFolderDTO {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cfg, _, _ := loadConfig() // nil config: nothing is marked as configured
+	return scanStackFolder(ctx, cfg, path)
+}
+
+func scanStackFolder(ctx context.Context, cfg *config.Config, path string) StackFolderDTO {
+	path = strings.TrimSpace(path)
+	out := StackFolderDTO{Path: path, SuggestedLabel: config.LabelFromPath(path), Apps: []StackFolderAppDTO{}}
+	if path == "" {
+		return out
 	}
-	// Inherit every [defaults] key a fresh project would (see GetProject):
-	// the new stack picks up the shared Linear setup.
-	p.Inherits = config.ProjectInherits{
-		Symlinks: true, PostCreate: true, Env: true,
-		MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-		BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+	for _, info := range gitrepo.Scan(ctx, path) {
+		app := StackFolderAppDTO{
+			Path:          info.Root,
+			Label:         config.LabelFromPath(info.Root),
+			Repo:          info.Repo,
+			DefaultBranch: info.DefaultBranch,
+		}
+		if cfg != nil {
+			if p := cfg.ProjectAtPath(canonicalPath(info.Root), canonicalPath); p != nil {
+				app.Project, app.Label = p.Name, p.DisplayName()
+				switch {
+				case p.IsStack():
+					app.Blocked = "is a stack"
+				case p.InStack():
+					app.Blocked = "already in stack " + cfg.DisplayNameFor(p.Stack)
+				}
+			}
+		}
+		out.Apps = append(out.Apps, app)
 	}
-	cfg.Projects = append(cfg.Projects, p)
+	return out
+}
+
+// ScanStackMembers suggests repositories absent from the stack. An empty path
+// rescans the parent folders of its current members; a supplied parent folder
+// uses the same bounded, immediate-child scan as creating a stack.
+func (s *ConfigService) ScanStackMembers(stack, path string) (StackFolderDTO, error) {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return StackFolderDTO{}, err
+	}
+	if p := cfg.ProjectByName(stack); p == nil || !p.IsStack() {
+		return StackFolderDTO{}, errors.New("no such stack: " + stack)
+	}
+	paths := []string{}
+	if path = strings.TrimSpace(path); path != "" {
+		paths = append(paths, path)
+	} else {
+		for _, p := range cfg.Projects {
+			if p.Stack == stack && p.Path != "" {
+				parent := filepath.Dir(canonicalPath(p.Path))
+				if !slices.Contains(paths, parent) {
+					paths = append(paths, parent)
+				}
+			}
+		}
+	}
+	out := StackFolderDTO{Path: path, Apps: []StackFolderAppDTO{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	seen := map[string]bool{}
+	for _, parent := range paths {
+		if _, err := os.ReadDir(parent); err != nil {
+			return out, err
+		}
+		for _, app := range scanStackFolder(ctx, cfg, parent).Apps {
+			key := canonicalPath(app.Path)
+			if p := cfg.ProjectAtPath(key, canonicalPath); p != nil && p.Stack == stack {
+				continue
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out.Apps = append(out.Apps, app)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return out, errors.New("repository scan timed out; choose a smaller parent folder")
+	}
+	return out, nil
+}
+
+// AddStackMembersFromFolder adds selected scan results atomically, rechecking
+// memberships against the current config so a stale scan cannot move a member
+// out of another stack. Existing projects keep their settings.
+func (s *ConfigService) AddStackMembersFromFolder(stack string, apps []StackFolderAppDTO) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	in := make([]config.StackApp, 0, len(apps))
+	for _, a := range apps {
+		in = append(in, config.StackApp{Path: a.Path, Label: a.Label, Repo: a.Repo, DefaultBranch: a.DefaultBranch})
+	}
+	if err := cfg.AddStackMembersFromFolder(stack, in, canonicalPath); err != nil {
+		return err
+	}
+	return saveConfig(cfg, path)
+}
+
+// canonicalPath is how two checkout paths are compared: symlinks resolved, so a
+// project saved under a link and the same checkout reached through its real
+// path (or the other way round) are one project. An unresolvable path (gone,
+// unreadable) falls back to its cleaned form.
+func canonicalPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
+// CreateStackFromFolder creates a stack AND its members in one write (see
+// config.AddStackFromFolder): a new project per app, or the existing one
+// joining. All-or-nothing, so a refusal leaves the config untouched.
+func (s *ConfigService) CreateStackFromFolder(label string, apps []StackFolderAppDTO) (string, error) {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	in := make([]config.StackApp, 0, len(apps))
+	for _, a := range apps {
+		in = append(in, config.StackApp{Path: a.Path, Label: a.Label, Repo: a.Repo, DefaultBranch: a.DefaultBranch})
+	}
+	name, err := cfg.AddStackFromFolder(label, in, canonicalPath)
+	if err != nil {
+		return "", err
+	}
 	if err := saveConfig(cfg, path); err != nil {
 		return "", err
 	}
@@ -1042,6 +1395,26 @@ func (s *ConfigService) SetProjectStack(project, stack string) error {
 		return nil // no write for a no-op move
 	}
 	p.Stack = stack
+	if stack == "" {
+		// Labels only apply to a member (Validate refuses them elsewhere), so a
+		// member with labels could not leave its stack at all.
+		p.Labels = nil
+	}
+	return saveConfig(cfg, path)
+}
+
+// SetStackMemberLabels sets which issues each member of stack is checked out
+// for (member name -> labels; empty = every issue), in one write. It touches
+// ONLY Project.Labels, so a stack form saved beside it cannot clobber a
+// member's own repository settings.
+func (s *ConfigService) SetStackMemberLabels(stack string, labels map[string][]string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := cfg.SetMemberLabels(stack, labels); err != nil {
+		return err
+	}
 	return saveConfig(cfg, path)
 }
 
@@ -1068,6 +1441,27 @@ func (s *ConfigService) ValidateLinearKey(key string) error {
 	defer cancel()
 	_, err := linear.New(config.DefaultEndpoint, key).Viewer(ctx)
 	return err
+}
+
+// linearKeyHelpURL is Linear's page for personal API keys (Settings → Account
+// → Security & access).
+const linearKeyHelpURL = "https://linear.app/settings/account/security"
+
+// openBrowser is the seam over the system browser, so tests never open one.
+var openBrowser = func(url string) error {
+	app := application.Get()
+	if app == nil || app.Browser == nil {
+		return errors.New("cannot open a browser from here")
+	}
+	return app.Browser.OpenURL(url)
+}
+
+// OpenLinearKeyHelp opens Linear's API-key page in the default browser. The
+// setup screen needs it BEFORE any daemon runs, so the daemon's openURL cannot
+// serve it there. It takes no argument on purpose: the one URL it opens is
+// lola's own constant, so the frontend cannot use it as a general opener.
+func (s *ConfigService) OpenLinearKeyHelp() error {
+	return openBrowser(linearKeyHelpURL)
 }
 
 // LinearKeyStatusDTO describes WHERE the Linear key lives and whether it can be
@@ -1303,10 +1697,8 @@ func (s *ConfigService) SetLinearKey(key string) (string, error) {
 
 type SetupDTO struct {
 	LinearKey      string `json:"linearKey"`
-	ProjectName    string `json:"projectName"`
-	ProjectPath    string `json:"projectPath"`
-	Repo           string `json:"repo"`
-	DefaultBranch  string `json:"defaultBranch"`
+	Agent          string `json:"agent"`
+	Theme          string `json:"theme"`
 	ConcurrencyCap int    `json:"concurrencyCap"`
 	GlobalCap      int    `json:"globalCap"`
 	PollInterval   string `json:"pollInterval"`
@@ -1319,68 +1711,48 @@ type SetupResultDTO struct {
 }
 
 // Setup writes the initial config.toml from the wizard: it stores the Linear key
-// in the Keychain (falling back to an env var by name if that fails), records one
-// project, and sets the caps/interval. The key itself is never written to config.
+// in the Keychain (falling back to an env var by name if that fails) and saves
+// general defaults. Projects are added separately; rerunning setup preserves
+// existing projects and unrelated settings. The key never enters config.toml.
 func (s *ConfigService) Setup(dto SetupDTO) (SetupResultDTO, error) {
-	if strings.TrimSpace(dto.ProjectName) == "" {
-		return SetupResultDTO{}, errors.New("project name is required")
+	key := strings.TrimSpace(dto.LinearKey)
+	if key == "" {
+		return SetupResultDTO{}, errors.New("Linear API key is required")
 	}
-	path, err := config.DefaultPath()
+	cfg, path, err := loadConfig()
 	if err != nil {
 		return SetupResultDTO{}, err
 	}
-
-	cfg := &config.Config{}
-	cfg.Linear.Endpoint = config.DefaultEndpoint
-
-	res := SetupResultDTO{}
-	if err := storeLinearKey(setupKeychainService, dto.LinearKey); err == nil {
-		cfg.Linear.APIKeyKeychain = setupKeychainService
-		res.KeychainStored = true
-		res.Message = "key stored in the macOS Keychain (service " + setupKeychainService + ")"
-	} else {
-		// Keychain unavailable (or non-darwin): fall back to an env var by name.
-		cfg.Linear.APIKeyEnv = setupEnvVar
-		res.EnvVar = setupEnvVar
-		res.Message = "couldn't use the Keychain — export the key as " + setupEnvVar + " before starting the daemon"
+	if dto.ConcurrencyCap < 0 || dto.GlobalCap < 0 {
+		return SetupResultDTO{}, errors.New("agent limits must be positive whole numbers")
 	}
-
 	cfg.Defaults.ConcurrencyCap = orDefault(dto.ConcurrencyCap, 2)
 	cfg.Defaults.GlobalCap = orDefault(dto.GlobalCap, 4)
-	interval := 60 * time.Second
-	if dto.PollInterval != "" {
-		if d, perr := time.ParseDuration(dto.PollInterval); perr == nil {
-			interval = d
+	cfg.Defaults.Agent = strings.TrimSpace(dto.Agent)
+	cfg.UI.Theme = strings.TrimSpace(dto.Theme)
+	interval := config.DefaultPollInterval
+	if value := strings.TrimSpace(dto.PollInterval); value != "" {
+		interval, err = time.ParseDuration(value)
+		if err != nil || interval < config.MinPollInterval {
+			return SetupResultDTO{}, errors.New("poll interval must be a duration of at least 30s")
 		}
 	}
 	cfg.Defaults.PollInterval = interval
-
-	branch := dto.DefaultBranch
-	if branch == "" {
-		branch = config.DefaultBranchName
-	}
-	// The id is SLUGGED here: it becomes a worktree directory, a state filename
-	// and a tmux session prefix, so a name typed as "Nori App" must not reach the
-	// file with a space in it. The typed form is kept as the display Label when
-	// it says more than the id does.
-	name := config.Slug(dto.ProjectName)
-	if name == "" {
-		return SetupResultDTO{}, errors.New("project name must contain a letter or digit")
-	}
-	label := strings.TrimSpace(dto.ProjectName)
-	if label == name {
-		label = ""
-	}
-	cfg.Projects = []config.Project{{
-		Name:          name,
-		Label:         label,
-		Path:          dto.ProjectPath,
-		Repo:          dto.Repo,
-		DefaultBranch: branch,
-	}}
-
 	if err := cfg.Validate(); err != nil {
-		return res, err
+		return SetupResultDTO{}, err
+	}
+
+	res := SetupResultDTO{}
+	if err := storeLinearKey(setupKeychainService, key); err == nil {
+		cfg.Linear.APIKeyKeychain = setupKeychainService
+		cfg.Linear.APIKeyEnv = ""
+		res.KeychainStored = true
+		res.Message = "key stored in the macOS Keychain (service " + setupKeychainService + ")"
+	} else {
+		cfg.Linear.APIKeyKeychain = ""
+		cfg.Linear.APIKeyEnv = setupEnvVar
+		res.EnvVar = setupEnvVar
+		res.Message = "couldn't use the Keychain — export the key as " + setupEnvVar + " before starting the daemon"
 	}
 	if err := cfg.Save(path); err != nil {
 		return res, err

@@ -47,6 +47,84 @@ beforeEach(() => {
 });
 
 describe("destructive actions ask first", () => {
+  it("runs explicit borrowed-branch cleanup only after confirmed successful removal", async () => {
+    store.sessions = [{id:"managed",worktree:"/managed"} as never];
+    const onRemoved = vi.fn();
+    const followup = {branch:"dependabot/postcss", onRemoved};
+    store.askRemoveManagedWorktree("/managed", followup);
+    expect(confirm.request?.detail).toContain("dependabot/postcss");
+    confirm.cancel();
+    expect(onRemoved).not.toHaveBeenCalled();
+    Kill.mockResolvedValue({removed:false});
+    store.askRemoveManagedWorktree("/managed", followup);
+    confirm.accept();
+    await vi.waitFor(() => expect(Kill).toHaveBeenCalledOnce());
+    expect(onRemoved).not.toHaveBeenCalled();
+    Kill.mockResolvedValue({removed:true});
+    store.askRemoveManagedWorktree("/managed", followup);
+    confirm.accept();
+    await vi.waitFor(() => expect(onRemoved).toHaveBeenCalledOnce());
+  });
+
+  it("carries explicit branch cleanup through the separate dirty-worktree confirmation", async () => {
+    const onRemoved = vi.fn();
+    Kill.mockRejectedValueOnce(new Error("session managed terminated; worktree kept (uncommitted changes) at /managed — rerun with --force to remove it"));
+    await store.kill("managed", false, false, onRemoved);
+    expect(confirm.request?.title).toBe("Delete worktree with uncommitted changes?");
+    expect(onRemoved).not.toHaveBeenCalled();
+    Kill.mockResolvedValue({removed:true});
+    confirm.accept();
+    await vi.waitFor(() => expect(onRemoved).toHaveBeenCalledOnce());
+    expect(Kill).toHaveBeenLastCalledWith("managed", true, false);
+  });
+  it("explains managed checkout removal and uses session cleanup only after confirmation", () => {
+    store.sessions = [{id:"managed",issue:"ENG-42",title:"Update dependency",worktree:"/managed",branch:"deps"} as never];
+    store.askRemoveManagedWorktree("/managed");
+    expect(confirm.request?.subject).toContain("ENG-42 — Update dependency");
+    expect(confirm.request?.subject).not.toContain("/managed");
+    expect(confirm.request?.alternative).toBeUndefined();
+    expect(confirm.request?.detail).toContain("Unpushed commits may be lost");
+    expect(Kill).not.toHaveBeenCalled();
+    confirm.accept();
+    expect(Kill).toHaveBeenCalledWith("managed", false, false);
+  });
+
+  it("keeps the managed checkout when cancelled or when ownership changes", () => {
+    store.sessions = [{id:"managed",worktree:"/managed"} as never];
+    store.askRemoveManagedWorktree("/managed");
+    confirm.cancel();
+    expect(Kill).not.toHaveBeenCalled();
+    store.askRemoveManagedWorktree("/managed");
+    store.sessions = [{id:"replacement",worktree:"/managed"} as never];
+    confirm.accept();
+    expect(Kill).not.toHaveBeenCalled();
+    expect(store.flash?.text).toContain("owning session changed");
+  });
+
+  it("names the entire stack and refuses a changed removal scope", () => {
+    store.sessions = [{id:"stack",worktree:"/stack",stack:true,apps:[{name:"api",worktree:"/stack/api"},{name:"web",worktree:"/stack/web"}]} as never];
+    store.askRemoveManagedWorktree("/stack/api");
+    expect(confirm.request?.detail).toContain("entire stack");
+    expect(confirm.request?.detail).toContain("/stack/web");
+    store.sessions[0].apps!.push({name:"extra",worktree:"/stack/extra"} as never);
+    confirm.accept();
+    expect(Kill).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {sessions: []},
+    {sessions: [{id:"local",location:"local",worktree:"/protected"}]},
+    {sessions: [{id:"goal",goalId:"goal-1",worktree:"/protected"}]},
+    {sessions: [{id:"a",worktree:"/protected"},{id:"b",worktree:"/protected"}]},
+  ])("explains protection without deleting an unknown, borrowed, goal or ambiguous checkout", ({sessions}) => {
+    store.sessions = sessions as never;
+    store.askRemoveManagedWorktree("/protected");
+    expect(confirm.request?.title).toBe("Protected worktree");
+    expect(confirm.request?.confirmLabel).toBe("Got it");
+    confirm.accept();
+    expect(Kill).not.toHaveBeenCalled();
+  });
+
   it("askKill opens a confirmation and does NOT kill yet", () => {
     store.askKill("sess-1");
     expect(Kill).not.toHaveBeenCalled();
@@ -56,7 +134,14 @@ describe("destructive actions ask first", () => {
   it("accepting the confirmation kills the session", () => {
     store.askKill("sess-1");
     confirm.accept();
-    expect(Kill).toHaveBeenCalledWith("sess-1", false);
+    expect(Kill).toHaveBeenCalledWith("sess-1", false, false);
+  });
+
+  it("the alternative stops the agent but keeps the worktree", () => {
+    store.askKill("sess-1");
+    expect(confirm.request?.alternative?.label).toBe("Stop, keep worktree");
+    confirm.acceptAlternative();
+    expect(Kill).toHaveBeenCalledWith("sess-1", false, true);
   });
 
   it("cancelling the confirmation kills nothing", () => {
@@ -70,7 +155,7 @@ describe("destructive actions ask first", () => {
     store.askSwitchAgent("sess-1", "codex");
     expect(SwitchAgent).not.toHaveBeenCalled();
     expect(confirm.request?.title).toBe("Switch agent?");
-    expect(confirm.request?.body).toBe("Switch ENG-42 from claude to codex?");
+    expect(confirm.request?.subject).toBe("ENG-42: claude → codex");
     expect(confirm.request?.detail).toBe("The pane is replaced on the same worktree.");
     expect(confirm.request?.confirmLabel).toBe("Switch");
   });
@@ -101,15 +186,15 @@ describe("destructive actions ask first", () => {
   it("names the session in the prompt when it is known", () => {
     store.sessions = [{ id: "sess-1", issue: "ENG-42", title: "fix login" } as never];
     store.askKill("sess-1");
-    expect(confirm.request?.body).toContain("ENG-42");
-    expect(confirm.request?.body).toContain("fix login");
+    expect(confirm.request?.subject).toContain("ENG-42");
+    expect(confirm.request?.subject).toContain("fix login");
   });
 
   // An id with no matching session (removed from the snapshot between the
   // keypress and the dialog) still has to render something the user can read.
   it("falls back to the id when the session is unknown", () => {
     store.askKill("abcdef1234567890");
-    expect(confirm.request?.body).toContain("abcdef12");
+    expect(confirm.request?.subject).toContain("abcdef12");
   });
 });
 
@@ -148,7 +233,7 @@ describe("dirty-worktree kill re-asks with force", () => {
     Kill.mockRejectedValueOnce(dirty());
     await store.kill("sess-1");
     confirm.accept();
-    expect(Kill).toHaveBeenLastCalledWith("sess-1", true);
+    expect(Kill).toHaveBeenLastCalledWith("sess-1", true, false);
   });
 
   it("declining leaves the worktree alone", async () => {
@@ -165,6 +250,19 @@ describe("dirty-worktree kill re-asks with force", () => {
     await store.kill("sess-9");
     expect(confirm.request).toBeNull();
     expect(store.flash?.kind).toBe("bad");
+  });
+
+  it("flashes the client's sentence and offers no force when the client cannot force a kill", async () => {
+    store.noForceKill = "Uncommitted changes. Remove it on your Mac.";
+    try {
+      Kill.mockRejectedValueOnce(dirty());
+      await store.kill("sess-1");
+      expect(confirm.request).toBeNull();
+      expect(store.flash).toMatchObject({ text: "Uncommitted changes. Remove it on your Mac.", kind: "warn" });
+      expect(Kill).toHaveBeenCalledTimes(1);
+    } finally {
+      store.noForceKill = null;
+    }
   });
 
   it("does not re-ask when force was already set", async () => {
@@ -289,6 +387,24 @@ describe("agent launch and switch actions", () => {
     SwitchAgent.mockResolvedValueOnce({ agent: "codex", message: "" });
     await store.switchAgent("sess-1", "codex");
     expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
-    expect(store.flash?.text).toBe("switched sess-1 to codex");
+    expect(store.flash?.text).toBe("Switched sess-1 to codex");
+  });
+});
+
+describe("retention while the daemon is down", () => {
+  it("is off by default for the phone, and the roster reads what was kept only while down", () => {
+    const s = store as unknown as { retained: unknown[]; retainAll: boolean };
+    const plain = { id: "p" };
+    const withSSH = { id: "s", ssh: { connections: [] } };
+    expect(s.retainAll).toBe(false);
+    store.alive = false;
+    store.sessions = [];
+    s.retained = [plain, withSSH];
+    expect(store.rosterSessions.map((x) => x.id)).toEqual(["p", "s"]);
+    expect(store.sessionById("p")?.id).toBe("p");
+    store.alive = true;
+    expect(store.rosterSessions).toEqual([]);
+    expect(store.sessionById("p")).toBeUndefined();
+    s.retained = [];
   });
 });

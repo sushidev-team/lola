@@ -1,0 +1,4 @@
+=== RUN   TestDockerValidationBoundary
+--- PASS: TestDockerValidationBoundary (2.07s)
+PASS
+ok  	github.com/sushidev-team/lola/internal/goalcheck	2.456s

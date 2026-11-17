@@ -1,0 +1,53 @@
+# Template only. Replace local paths and the image digest after rebuilding.
+# No credential values are stored here. Keep ordinary issue polling disabled.
+[defaults]
+agent = "claude"
+manage_daemon = false
+concurrency_cap = 1
+global_cap = 1
+
+[linear]
+api_key_keychain = "lola-linear"
+
+[tmux]
+socket_name = "lola-nori-dialog-pilot"
+
+[sandbox]
+image = "sha256:d3f85088fc383f8114b9ed1e57ba8916a0c92d75fba8c914d3a7085da0d7d6c8"
+lola_bin = "/ABSOLUTE/PATH/TO/lola/dist/lola-linux-arm64"
+hook_port = 17718
+pass_env = ["CLAUDE_CODE_OAUTH_TOKEN"]
+
+[[project]]
+name = "nori-app"
+label = "Nori App — dialog pilot"
+path = "/ABSOLUTE/PATH/TO/nori-app"
+repo = "sushidev-team/nori-app"
+default_branch = "main"
+team_id = "ace69aca-dd39-4c63-91dc-36bbf48b62c7"
+project_id = "9a5df54f-9fb1-4628-9dff-f9fc7d84b795"
+enabled = false
+cycle_mode = "none"
+assignee_mode = "anyone"
+sandbox = "docker"
+goal_mode = true
+on_spawn_state_id = "9c45fbca-2609-4631-8980-9db38b5c6d3d"
+on_pr_state_id = "683c0e02-3037-40a1-a373-b7a53a88ab01"
+on_merged_state_id = "bd4bbeec-f062-4151-8f1c-e52569490ba7"
+
+[[review.provider]]
+provider = "claude-session"
+enabled = true
+
+[[review.profile]]
+id = "nori-dialog-uiux"
+kind = "uiux"
+provider = "claude-session"
+version = "pilot-1"
+enabled = true
+required = true
+projects = ["nori-app"]
+paths = ["resources/js/components/ui", "resources/js/components/Invoices"]
+timeout_seconds = 180
+max_rounds = 1
+rubric = "Check the existing Nori dialog token rules and supplied desktop/narrow light/dark captures. Preserve gutters, tall-content scrolling, visible dismissal, Radix keyboard/focus behavior and invoice save payloads. Synthetic overflow evidence is explicitly marked. Do not demand unrelated feature changes."

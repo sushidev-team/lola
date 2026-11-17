@@ -15,13 +15,14 @@
 //      the background and the OS SIGSTOPped the queue — must reject, not hang.
 //      Every pending entry is therefore reachable from `failAll`, every entry
 //      carries a total deadline, and both paths clear the timer.
-//   2. An `err` frame on a request's id is a REJECTION, not a silent drop.
+//   2. An `err` frame on a request's id is a REJECTION, not a silent drop. A
+//      refused command (`denied`, `unknown_cmd`, `rate_limited`) rejects that
+//      request only; the socket stays up.
 //   3. An `ok: false` Response is a rejection too. The daemon distinguishes a
 //      protocol refusal from an application failure; every caller in the desktop
 //      store treats them identically, and so does this.
-//   4. Stay under the daemon's in-flight cap. More than four concurrent `req`
-//      frames on one connection is answered with a non-fatal `rate_limited`
-//      refusal, so a burst is QUEUED here rather than sent and refused.
+//   4. Stay under the daemon's in-flight cap (`MAX_REQUESTS_IN_FLIGHT`), so a
+//      burst is QUEUED here rather than sent and refused.
 //
 // A pane subscription's ack is also correlated, and it is the one asymmetric
 // case: a `sub` frame is acknowledged by the FIRST `resync` carrying its id, and
@@ -31,15 +32,14 @@
 // pane either way. See the note on `accept`.
 
 import {
-  CODE_RATE_LIMITED,
   FRAME_ERR,
   FRAME_RESP,
   FRAME_RESYNC,
-  MAX_REQUESTS_IN_FLIGHT,
   type ErrPayload,
   type Frame,
   type Response,
 } from "./protocol";
+import { MAX_REQUESTS_IN_FLIGHT } from "./limits";
 import { WireError } from "./codec";
 
 /** A refusal the daemon sent as an `err` frame. */
@@ -360,12 +360,15 @@ export class Correlator {
    *           returns false here; that is not a stray frame, it is the normal
    *           case, and the pane router is its only consumer.
    *   err     settled means the refusal belonged to a request. An err with no id,
-   *           or with an id nobody is waiting on, returns false and is a
+   *           with a topic (it ends an event stream), or with an id nobody is
+   *           waiting on, returns false and is a
    *           CONNECTION-level event the caller must surface — several of them
    *           are followed immediately by a close.
    */
   accept(f: Frame): boolean {
     if (f.type !== FRAME_RESP && f.type !== FRAME_RESYNC && f.type !== FRAME_ERR) return false;
+    // An err carrying a topic ends one event stream; it never answers a request.
+    if (f.type === FRAME_ERR && f.topic) return false;
     const id = f.id;
     if (!id) return false;
     const entry = this.pending.get(id);
@@ -374,13 +377,6 @@ export class Correlator {
     if (f.type === FRAME_ERR) {
       const err = WireRefusalError.fromFrame(f);
       this.settle(id, () => entry.reject(err));
-      // A rate_limited refusal on a request means the daemon's in-flight cap was
-      // exceeded, which this correlator is supposed to prevent. It survives the
-      // connection, so it is worth noticing rather than swallowing: shrink the
-      // local cap toward what the daemon actually enforced.
-      if (err.code === CODE_RATE_LIMITED && this.opts.maxInFlight > 1) {
-        this.opts.maxInFlight--;
-      }
       return true;
     }
 

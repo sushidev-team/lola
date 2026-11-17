@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
@@ -94,6 +95,7 @@ func (n *Native) stackBranchTaken(ctx context.Context, p config.Project, branch 
 // spawnStack is SpawnWith for a stack: the session folder, one worktree per
 // selected app, the agent in the folder.
 func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.Issue, o SpawnOpts) (session.Session, error) {
+	started := time.Now()
 	if o.Group != "" {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s: best-of is not supported for a stack", issue.Identifier)
 	}
@@ -133,8 +135,8 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 	}
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
-	brief := withStackBriefing(promptMD(p, issue, branch), n.Cfg.StackMembers(p.Name), created)
-	prompt := n.withReportBriefing(withContextBriefing(brief, ctxDir))
+	brief := withStackBriefing(n.issuePrompt(p, issue, branch), n.Cfg.StackMembers(p.Name), created)
+	prompt := n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing(brief, ctxDir)))
 	gate := session.PlanNone
 	if p.RequirePlan {
 		prompt = n.withPlanBriefing(prompt)
@@ -157,6 +159,7 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 	for _, a := range created {
 		n.recordBaseline(ctx, a.Worktree, id)
 	}
+	n.trustAgentDir(p.Name, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(p.Name, id, kind, defaultLaunchPrompt(id), model, false)); err != nil {
 		if n.Tmux.Has(ctx, id) {
 			if killErr := n.Tmux.KillSession(ctx, id); killErr != nil {
@@ -171,6 +174,7 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 	return withAgentState(session.Session{
 		PlanGate:   gate,
 		ID:         id,
+		FirstSeen:  started,
 		Source:     "native",
 		Kind:       session.KindLinear,
 		Project:    p.Name,
@@ -379,6 +383,7 @@ func (n *Native) removeStackFolder(s session.Session, dir string, force bool) er
 		return err
 	}
 	n.releasePorts(s.ID)
+	n.untrustAgentDir(s.ID, dir)
 	return nil
 }
 
@@ -403,6 +408,24 @@ func (n *Native) adoptStack(p config.Project, live map[string]bool) []session.Se
 			continue
 		}
 		dir := filepath.Join(root, id)
+		apps := discoverApps(members, dir)
+		if !live[id] && len(apps) == 0 {
+			// Cleanup can leave only tooling metadata behind. That is not a
+			// recoverable session. Keep unknown files and unreadable folders
+			// visible, and never hide a live agent on this evidence alone.
+			if contents, err := os.ReadDir(dir); err == nil {
+				onlyMetadata := true
+				for _, entry := range contents {
+					if !slices.Contains(stackOwnFiles, entry.Name()) {
+						onlyMetadata = false
+						break
+					}
+				}
+				if onlyMetadata {
+					continue
+				}
+			}
+		}
 		a := state.AgentDead
 		if live[id] {
 			a = state.AgentWorking
@@ -415,7 +438,7 @@ func (n *Native) adoptStack(p config.Project, live map[string]bool) []session.Se
 			Worktree: dir,
 			TmuxName: id,
 			Stack:    true,
-			Apps:     discoverApps(members, dir),
+			Apps:     apps,
 		}, a))
 	}
 	return out

@@ -11,6 +11,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
 
@@ -26,7 +27,7 @@ func TestHandleKillHappyPath(t *testing.T) {
 	d.sessions.Upsert(s)
 	d.inflight.Add(s.IssueUUID, s.Issue)
 
-	data, err := d.handleKill(context.Background(), s.ID, false)
+	data, err := d.handleKill(context.Background(), s.ID, false, false)
 	if err != nil {
 		t.Fatalf("handleKill: %v", err)
 	}
@@ -54,11 +55,45 @@ func TestHandleKillForwardsForce(t *testing.T) {
 	s := nativeSess("FE-1", "working")
 	d.sessions.Upsert(s)
 
-	if _, err := d.handleKill(context.Background(), s.ID, true); err != nil {
+	if _, err := d.handleKill(context.Background(), s.ID, true, false); err != nil {
 		t.Fatalf("handleKill force: %v", err)
 	}
 	if calls := nat.killCalls(); len(calls) != 1 || !calls[0].force {
 		t.Errorf("native Kill calls = %+v, want force:true", calls)
+	}
+}
+
+// keepWorktree stops the agent only: the runtime is asked NOT to remove the
+// worktree (even with force), the store entry survives flagged dead so revive
+// can relaunch it, and the issue keeps its in-flight claim.
+func TestHandleKillKeepWorktreeStopsAgentOnly(t *testing.T) {
+	nat := &fakeNative{}
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+
+	s := nativeSess("FE-1", "working")
+	s.IssueUUID = "uuid-fe-1"
+	d.sessions.Upsert(s)
+	d.inflight.Add(s.IssueUUID, s.Issue)
+
+	data, err := d.handleKill(context.Background(), s.ID, true, true)
+	if err != nil {
+		t.Fatalf("handleKill keepWorktree: %v", err)
+	}
+	if data.Removed {
+		t.Error("KillData.Removed = true, want false")
+	}
+	if calls := nat.killCalls(); len(calls) != 1 || calls[0] != (nativeKillCall{id: s.ID, removeWorktree: false, force: false}) {
+		t.Errorf("native Kill calls = %+v, want one {id, removeWorktree:false, force:false}", calls)
+	}
+	got, ok := d.sessions.Get(s.ID)
+	if !ok {
+		t.Fatal("stopped session must stay in the store")
+	}
+	if got.AgentState != state.AgentDead {
+		t.Errorf("AgentState = %q, want dead", got.AgentState)
+	}
+	if !d.inflight.Has(s.IssueUUID) {
+		t.Error("stop must keep the issue's in-flight claim")
 	}
 }
 
@@ -74,7 +109,7 @@ func TestHandleKillDirtyKeepsEntryAndFlagsDead(t *testing.T) {
 	d.sessions.Upsert(s)
 	d.inflight.Add(s.IssueUUID, s.Issue)
 
-	data, err := d.handleKill(context.Background(), s.ID, false)
+	data, err := d.handleKill(context.Background(), s.ID, false, false)
 	if err == nil {
 		t.Fatal("handleKill on a dirty worktree must return an error")
 	}
@@ -130,7 +165,7 @@ func TestHandleKillClearsLabelDispatch(t *testing.T) {
 		t.Fatalf("seed seen: %v", err)
 	}
 
-	if _, err := d.handleKill(context.Background(), s.ID, false); err != nil {
+	if _, err := d.handleKill(context.Background(), s.ID, false, false); err != nil {
 		t.Fatalf("handleKill: %v", err)
 	}
 
@@ -162,7 +197,7 @@ func TestHandleKillDurableIsBestEffort(t *testing.T) {
 	s.IssueUUID = "uuid-fe-1"
 	d.sessions.Upsert(s)
 
-	data, err := d.handleKill(context.Background(), s.ID, false)
+	data, err := d.handleKill(context.Background(), s.ID, false, false)
 	if err != nil {
 		t.Fatalf("a Linear label-write failure must not fail the kill: %v", err)
 	}
@@ -176,7 +211,7 @@ func TestHandleKillDurableIsBestEffort(t *testing.T) {
 
 func TestHandleKillUnknownSession(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
-	_, err := d.handleKill(context.Background(), "lola-p1-ghost", false)
+	_, err := d.handleKill(context.Background(), "lola-p1-ghost", false, false)
 	if err == nil || !strings.Contains(err.Error(), "unknown session") {
 		t.Fatalf("handleKill unknown = %v, want an 'unknown session' error", err)
 	}
@@ -196,7 +231,7 @@ func TestHandleKillProjectMissingSkipsWorktree(t *testing.T) {
 	d.sessions.Upsert(s)
 	d.inflight.Add(s.IssueUUID, s.Issue)
 
-	data, err := d.handleKill(context.Background(), s.ID, false)
+	data, err := d.handleKill(context.Background(), s.ID, false, false)
 	if err != nil {
 		t.Fatalf("handleKill project-missing: %v", err)
 	}

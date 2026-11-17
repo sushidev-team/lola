@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "$lib/components/Icon.svelte";
   import type { SessionInfo } from "@bindings/internal/protocol";
   import { mergeQueueChip, overlapChip } from "$lib/crosssession";
   import { STAGE_CHIP, STAGE_DOT } from "$lib/stage";
@@ -45,11 +46,7 @@
       {/if}
     {/snippet}
     {#if c.overlaps}
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M12 8a5 5 0 0 1 0 8 5 5 0 0 1 0-8Z" fill="currentColor" fill-opacity="0.25" stroke="none" />
-        <circle cx="9" cy="12" r="5" />
-        <circle cx="15" cy="12" r="5" />
-      </svg>
+      <Icon name="git-compare-arrows" size={14} />
       <span class="sr-only">{c.label}</span>
     {:else}
       <span class="h-1.5 w-1.5 shrink-0 rounded-full {STAGE_DOT[c.tone]}" aria-hidden="true"></span>

@@ -1,0 +1,299 @@
+{
+  "fixture": "existing UI/Dialog stories; synthetic long-content probe explicitly identified below",
+  "started_at": "2026-10-21T23:20:23.734Z",
+  "cases": [
+    {
+      "theme": "light",
+      "viewport": {
+        "name": "desktop",
+        "width": 1280,
+        "height": 900
+      },
+      "fonts": {
+        "inter400": true,
+        "inter500": true
+      },
+      "styles": {
+        "actual_scrim": "oklab(0 0 0 / 0.8)",
+        "token_scrim": "rgba(10, 13, 23, 0.36)",
+        "actual_shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 10px 15px -3px, rgba(0, 0, 0, 0.1) 0px 4px 6px -4px",
+        "token_shadow": "rgba(0, 0, 0, 0.26) 0px 16px 48px -8px"
+      },
+      "gutter_bounds": {
+        "x": 384,
+        "y": 311,
+        "width": 512,
+        "height": 278
+      },
+      "keyboard": {
+        "initial_focus": true,
+        "tab_containment": true,
+        "escape": true,
+        "focus_return": true
+      },
+      "synthetic_overflow": {
+        "scrollTop": 1106,
+        "scrollHeight": 1972,
+        "clientHeight": 866,
+        "scrollWidth": 510,
+        "clientWidth": 510
+      },
+      "close_visible_after_scroll": true,
+      "errors": []
+    },
+    {
+      "theme": "light",
+      "viewport": {
+        "name": "narrow",
+        "width": 390,
+        "height": 844
+      },
+      "fonts": {
+        "inter400": true,
+        "inter500": true
+      },
+      "styles": {
+        "actual_scrim": "oklab(0 0 0 / 0.8)",
+        "token_scrim": "rgba(10, 13, 23, 0.36)",
+        "actual_shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 10px 15px -3px, rgba(0, 0, 0, 0.1) 0px 4px 6px -4px",
+        "token_shadow": "rgba(0, 0, 0, 0.26) 0px 16px 48px -8px"
+      },
+      "gutter_bounds": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 298
+      },
+      "keyboard": {
+        "initial_focus": true,
+        "tab_containment": true,
+        "escape": true,
+        "focus_return": true
+      },
+      "synthetic_overflow": {
+        "scrollTop": 1182,
+        "scrollHeight": 1992,
+        "clientHeight": 810,
+        "scrollWidth": 356,
+        "clientWidth": 356
+      },
+      "close_visible_after_scroll": true,
+      "errors": []
+    },
+    {
+      "theme": "dark",
+      "viewport": {
+        "name": "desktop",
+        "width": 1280,
+        "height": 900
+      },
+      "fonts": {
+        "inter400": true,
+        "inter500": true
+      },
+      "styles": {
+        "actual_scrim": "oklab(0 0 0 / 0.8)",
+        "token_scrim": "rgba(0, 0, 0, 0.6)",
+        "actual_shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 10px 15px -3px, rgba(0, 0, 0, 0.1) 0px 4px 6px -4px",
+        "token_shadow": "rgba(0, 0, 0, 0.26) 0px 16px 48px -8px"
+      },
+      "gutter_bounds": {
+        "x": 384,
+        "y": 311,
+        "width": 512,
+        "height": 278
+      },
+      "keyboard": {
+        "initial_focus": true,
+        "tab_containment": true,
+        "escape": true,
+        "focus_return": true
+      },
+      "synthetic_overflow": {
+        "scrollTop": 1106,
+        "scrollHeight": 1972,
+        "clientHeight": 866,
+        "scrollWidth": 510,
+        "clientWidth": 510
+      },
+      "close_visible_after_scroll": true,
+      "errors": []
+    },
+    {
+      "theme": "dark",
+      "viewport": {
+        "name": "narrow",
+        "width": 390,
+        "height": 844
+      },
+      "fonts": {
+        "inter400": true,
+        "inter500": true
+      },
+      "styles": {
+        "actual_scrim": "oklab(0 0 0 / 0.8)",
+        "token_scrim": "rgba(0, 0, 0, 0.6)",
+        "actual_shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 10px 15px -3px, rgba(0, 0, 0, 0.1) 0px 4px 6px -4px",
+        "token_shadow": "rgba(0, 0, 0, 0.26) 0px 16px 48px -8px"
+      },
+      "gutter_bounds": {
+        "x": 16,
+        "y": 273,
+        "width": 358,
+        "height": 298
+      },
+      "keyboard": {
+        "initial_focus": true,
+        "tab_containment": true,
+        "escape": true,
+        "focus_return": true
+      },
+      "synthetic_overflow": {
+        "scrollTop": 1182,
+        "scrollHeight": 1992,
+        "clientHeight": 810,
+        "scrollWidth": 356,
+        "clientWidth": 356
+      },
+      "close_visible_after_scroll": true,
+      "errors": []
+    }
+  ],
+  "errors": [],
+  "font_requests": [
+    {
+      "console": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-600.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-600.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-regular.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-regular.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-500.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-500.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/fonts/inter-latin-400-normal.woff2"
+    },
+    {
+      "fulfilled": "/fonts/inter-latin-400-normal.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/fonts/inter-latin-500-normal.woff2"
+    },
+    {
+      "fulfilled": "/fonts/inter-latin-500-normal.woff2"
+    },
+    {
+      "console": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-600.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-600.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-regular.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-regular.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-500.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-500.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/fonts/inter-latin-400-normal.woff2"
+    },
+    {
+      "fulfilled": "/fonts/inter-latin-400-normal.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/fonts/inter-latin-500-normal.woff2"
+    },
+    {
+      "fulfilled": "/fonts/inter-latin-500-normal.woff2"
+    },
+    {
+      "console": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-600.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-600.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-regular.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-regular.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-500.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-500.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/fonts/inter-latin-400-normal.woff2"
+    },
+    {
+      "fulfilled": "/fonts/inter-latin-400-normal.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/fonts/inter-latin-500-normal.woff2"
+    },
+    {
+      "fulfilled": "/fonts/inter-latin-500-normal.woff2"
+    },
+    {
+      "console": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-600.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-600.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-regular.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-regular.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/undefined/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-500.woff2"
+    },
+    {
+      "fulfilled_dependency_font": "inter-v12-latin-500.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/fonts/inter-latin-400-normal.woff2"
+    },
+    {
+      "fulfilled": "/fonts/inter-latin-400-normal.woff2"
+    },
+    {
+      "url": "http://127.0.0.1:6006/fonts/inter-latin-500-normal.woff2"
+    },
+    {
+      "fulfilled": "/fonts/inter-latin-500-normal.woff2"
+    }
+  ],
+  "result": "pass",
+  "finished_at": "2026-10-21T23:20:35.102Z"
+}

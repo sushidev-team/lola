@@ -27,6 +27,8 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/devices"
+	"github.com/sushidev-team/lola/internal/hub"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
@@ -45,6 +47,8 @@ const (
 	checkRepaired  = "config repairs"
 	checkMigration = "migration"
 	checkFallback  = "agent fallback"
+	checkHub       = "hub"
+	checkHubPolicy = "hub policy"
 	// checkStatusAgent is reported ONLY when the daemon's status interpreter
 	// has tripped its circuit breaker (statusagent.go) — there is no healthy
 	// row for it.
@@ -64,11 +68,15 @@ const socketTimeout = 500 * time.Millisecond
 
 // Result is one health check outcome. Critical=true means the daemon cannot
 // function without it (a failing critical check makes Report.OK() false).
+//
+// Fix names the action that resolves a failed row (FixNone when there is no
+// automated one), so a UI can attach a button without parsing Detail.
 type Result struct {
 	Name     string
 	OK       bool
 	Detail   string
 	Critical bool
+	Fix      FixID
 }
 
 // Report is the full set of check Results, in check order.
@@ -138,12 +146,20 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 		add(res)
 	}
 	add(ghResult())
+	// One bounded `gh auth status`, shared with the hub readiness rows.
+	ghErr := ghAuthStatus(ctx)
+	if !errors.Is(ghErr, errGhMissing) {
+		add(ghAuthResult(ghErr))
+	}
 	add(lolaCLIResult())
 	add(migrationResult(ctx))
 	// Daemon-process runtime facts the checking process cannot see for itself,
 	// read from the breadcrumb the daemon leaves (statusagent.go). Independent
 	// of cfg, so it sits above the cfg == nil early return.
 	if res, ok := statusAgentResult(); ok {
+		add(res)
+	}
+	if res, ok := conversationLogResult(); ok {
 		add(res)
 	}
 
@@ -159,15 +175,60 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	}
 
 	add(linearResult(cfg))
-	add(daemonResult())
+	daemon := daemonResult()
+	add(daemon)
 	add(configResult(cfg))
 	if res, ok := repairResult(cfg); ok {
 		add(res)
+	}
+	if res, ok := projectsResult(cfg); ok {
+		add(res)
+	}
+	if res, ok := pollingResult(cfg); ok {
+		add(res)
+	}
+	if home, err := config.Home(); err == nil {
+		if cfg.Remote.Enabled || phonesRegistryPresent(home) {
+			add(PhonesResult(home))
+		}
+	}
+	if dir, err := hub.StateDir(); err == nil {
+		if res, ok := RelayResult(cfg, dir, daemon.OK); ok {
+			add(res)
+		}
+	}
+	if res, ok := hubResult(ctx, cfg); ok {
+		add(res)
+	}
+	if res, ok := hubPolicyResult(cfg); ok {
+		add(res)
+	}
+	if cfg.Hub.Enabled {
+		// The readiness list `lola hub status` prints, minus "hub joined"
+		// (hubResult above already said it, with reachability).
+		if dir, err := hub.StateDir(); err == nil {
+			var sb *SandboxStatus
+			sandbox := func() SandboxStatus {
+				if sb == nil {
+					st := CheckSandbox(ctx, cfg)
+					sb = &st
+				}
+				return *sb
+			}
+			for _, res := range hubReadiness(cfg, dir, sandbox, func() error { return ghErr }) {
+				if res.Name != checkHubJoined {
+					add(res)
+				}
+			}
+		}
 	}
 	for _, res := range fallbackResults(cfg) {
 		add(res)
 	}
 	for _, res := range projectResults(cfg) {
+		add(res)
+	}
+	for _, res := range sandboxResults(ctx, cfg) {
 		add(res)
 	}
 	return r
@@ -306,6 +367,7 @@ func ghResult() Result {
 		res.Detail = res.Detail + " (needed only for PR/CI reconcile)"
 	} else {
 		res.Detail = "not found on PATH (PR/CI reconcile disabled)"
+		res.Fix = FixInstallGh
 	}
 	return res
 }
@@ -370,7 +432,7 @@ func daemonResult() Result {
 	sock := filepath.Join(home, "lola.sock")
 	conn, err := net.DialTimeout("unix", sock, socketTimeout)
 	if err != nil {
-		return Result{Name: checkDaemon, OK: false, Critical: false, Detail: "not running (start with: lola run)"}
+		return Result{Name: checkDaemon, OK: false, Critical: false, Detail: "not running (start with: lola run)", Fix: FixStartDaemon}
 	}
 	conn.Close()
 	return Result{Name: checkDaemon, OK: true, Critical: false, Detail: "running (" + sock + ")"}
@@ -525,4 +587,114 @@ func firstErr(err error) string {
 		return ""
 	}
 	return firstLine([]byte(err.Error()))
+}
+
+// hubProbeTimeout bounds the reachability probe.
+const hubProbeTimeout = 5 * time.Second
+
+// hubProbe is the reachability seam: one cheap, signed, READ-ONLY call to the
+// hub as this device (GET /v1/org, falling back to /v1/offers on a hub that
+// predates the board views). Tests replace it; nil skips the probe.
+var hubProbe = func(ctx context.Context, url, dir string) error {
+	key, err := hub.LoadKey(dir)
+	if err != nil {
+		return err
+	}
+	c, err := hub.NewClient(url, key)
+	if err != nil {
+		return err
+	}
+	c.Timeout = hubProbeTimeout
+	_, err = c.Org(ctx)
+	var ae *hub.APIError
+	if errors.As(err, &ae) && ae.Status == 404 {
+		_, _, err = c.Offers(ctx)
+	}
+	return err
+}
+
+// hubResult reports [hub] — identity, device key, and, once those are sound,
+// whether the hub answers a signed request — only while the hub is enabled.
+// Never critical: the hub only offers chores, and a daemon without it still
+// dispatches Linear work.
+func hubResult(ctx context.Context, cfg *config.Config) (Result, bool) {
+	if cfg == nil || !cfg.Hub.Enabled {
+		return Result{}, false
+	}
+	dir, err := hub.StateDir()
+	if err != nil {
+		return Result{Name: checkHub, Detail: err.Error()}, true
+	}
+	st := hub.LocalStatus(cfg, dir)
+	switch {
+	case st.IdentityErr != "":
+		return Result{Name: checkHub, Detail: "identity unreadable: " + st.IdentityErr}, true
+	case st.Revoked != nil:
+		return Result{Name: checkHub, Detail: "revoked: the hub stopped accepting this device — ask an admin for a new invite and run `lola hub join`", Fix: FixRejoinHub}, true
+	case !st.Joined:
+		return Result{Name: checkHub, Detail: "enabled but not joined — run `lola hub join` with the invite on stdin", Fix: FixJoinHub}, true
+	case st.KeyErr != "":
+		return Result{Name: checkHub, Detail: "device key unreadable: " + st.KeyErr}, true
+	case !st.KeyPresent:
+		return Result{Name: checkHub, Detail: "device key missing — run `lola hub leave` and join again", Fix: FixRejoinHub}, true
+	case st.KeyMismatch:
+		return Result{Name: checkHub, Detail: "device key is not the one that enrolled — run `lola hub leave` and join again", Fix: FixRejoinHub}, true
+	case strings.TrimSuffix(st.Identity.URL, "/") != strings.TrimSuffix(cfg.Hub.URL, "/"):
+		return Result{Name: checkHub, Detail: "joined " + st.Identity.URL + " but [hub].url names " + cfg.Hub.URL}, true
+	}
+	detail := fmt.Sprintf("joined org %s as device %s (%s)", st.Identity.Org, st.Identity.DeviceID, st.Identity.URL)
+	if hubProbe != nil {
+		if err := hubProbe(ctx, cfg.Hub.URL, dir); err != nil {
+			return Result{Name: checkHub, Detail: detail + "; hub not reachable: " + firstErr(err)}, true
+		}
+		detail += ", reachable"
+	}
+	return Result{Name: checkHub, OK: true, Detail: detail}, true
+}
+
+// hubPolicyResult reports the team policy the daemon enforces: which keys it
+// locks, or why a verified policy is not applied, and every key the overlay
+// had to ignore (a review kind the local config cannot run). Never critical:
+// a policy that cannot apply leaves the local config in charge.
+func hubPolicyResult(cfg *config.Config) (Result, bool) {
+	if cfg == nil || !cfg.Hub.Enabled || len(cfg.Hub.TrustedPolicyKeys) == 0 {
+		return Result{}, false
+	}
+	dir, err := hub.StateDir()
+	if err != nil {
+		return Result{}, false
+	}
+	sp, apply, note := hub.ApplicablePolicy(cfg.Hub, dir)
+	switch {
+	case sp == nil && note == "":
+		return Result{}, false // no policy published or fetched yet
+	case sp == nil:
+		return Result{Name: checkHubPolicy, Detail: note}, true
+	case !apply:
+		return Result{Name: checkHubPolicy, OK: true, Detail: fmt.Sprintf("v%d not applied: %s", sp.Policy.Version, note)}, true
+	}
+	applied, notices := config.TeamPolicyPreview(cfg, sp.Policy.Settings)
+	keys := make([]string, len(applied))
+	for i, k := range applied {
+		keys[i] = k.Key
+	}
+	detail := fmt.Sprintf("v%d locks %d key(s)", sp.Policy.Version, len(keys))
+	if len(keys) > 0 {
+		detail += ": " + strings.Join(keys, ", ")
+	}
+	if len(notices) > 0 {
+		return Result{Name: checkHubPolicy, Detail: detail + "; " + strings.Join(notices, "; ")}, true
+	}
+	return Result{Name: checkHubPolicy, OK: true, Detail: detail}, true
+}
+
+// phonesRegistryPresent reports whether a phone registry file exists, so a
+// broken one is surfaced even while [remote] is disabled.
+func phonesRegistryPresent(home string) bool {
+	for _, name := range []string{devices.FileName, devices.RevokedFileName} {
+		if _, err := os.Stat(filepath.Join(home, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }

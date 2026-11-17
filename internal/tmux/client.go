@@ -17,13 +17,17 @@ package tmux
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/sushidev-team/lola/internal/proctree"
 )
@@ -130,6 +134,23 @@ func (c *Client) Available() bool {
 // run executes tmux with args, returning stdout and stderr separately so
 // callers can inspect stderr (ListSessions' no-server detection) alongside
 // the error, which already wraps the trimmed stderr text.
+// runStdin is run with input on stdin. Its output is discarded and its error carries only
+// tmux's own message, so the input can reach neither.
+func (c *Client) runStdin(ctx context.Context, input string, args ...string) error {
+	cmd := exec.CommandContext(ctx, c.bin(), append([]string{"-L", c.socket()}, args...)...)
+	cmd.Dir = c.dir()
+	cmd.Stdin = strings.NewReader(input)
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(errb.String()); msg != "" {
+			return fmt.Errorf("tmux %s: %w: %s", args[0], err, msg)
+		}
+		return fmt.Errorf("tmux %s: %w", args[0], err)
+	}
+	return nil
+}
+
 func (c *Client) run(ctx context.Context, args ...string) (stdout, stderr string, err error) {
 	// -L keeps every command on lola's isolated tmux server. It is a server
 	// flag, so it must precede the tmux subcommand; args[0] (the subcommand)
@@ -284,34 +305,293 @@ func (c *Client) CapturePane(ctx context.Context, name string, lines int) (strin
 	return out, nil
 }
 
-// SendKeys types text into the session literally (-l: no key-name
-// interpretation) and then presses Enter.
-// submitSettleDelay is the pause between typing a MULTI-LINE payload and the
-// separate submit Enter. A large multi-line message (relayed CodeRabbit / review
-// findings, a multi-line reaction template) can still be settling in the agent's
-// TUI when a back-to-back Enter arrives, so the Enter is swallowed and the text
-// sits in the input UNSENT. A short window lets the paste finish rendering before
-// the submit. Single-line sends skip it (they submit reliably and stay snappy).
+// HistorySize reports how many scrolled-off lines a session's pane holds and its
+// history-limit. The pair is a mark: the lines added since an earlier reading are
+// the new size minus the old one, unless the history has reached its limit, when
+// the oldest may have rolled out.
+func (c *Client) HistorySize(ctx context.Context, name string) (size, limit int, err error) {
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", paneTarget(name), "#{history_size} #{history_limit}")
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := fmt.Sscanf(strings.TrimSpace(out), "%d %d", &size, &limit); err != nil {
+		return 0, 0, fmt.Errorf("tmux: history size of %s: %w", name, err)
+	}
+	return size, limit, nil
+}
+
+// CaptureFrom returns a pane's plain text, joined across wraps, from back lines
+// into its history to the bottom of the screen. back < 0 captures everything.
+func (c *Client) CaptureFrom(ctx context.Context, name string, back int) (string, error) {
+	start := "-"
+	if back >= 0 {
+		start = fmt.Sprintf("-%d", back)
+	}
+	out, _, err := c.run(ctx, "capture-pane", "-p", "-J", "-t", paneTarget(name), "-S", start)
+	return out, err
+}
+
+// submitSettleDelay separates typed text from its submit Enter. Even a single-line
+// message can still be settling in the agent's TUI: a queued image path plus prose
+// was left in Claude's input while tmux reported success. Do not let Enter join the
+// same input burst. This applies to typed sends of every size, not only newlines.
 const submitSettleDelay = 600 * time.Millisecond
 
+// pasteOver is the largest payload SendKeys still types. An agent's input reads in 1 KB
+// chunks and takes a longer burst for a paste, piece by piece. Measured on Claude Code
+// 2.1.318: send-keys up to 800 bytes arrives exact, 1.1 KB gains a line break at byte
+// 1022, multi-line text between 1 and 2.5 KB was damaged on every try and sometimes lost
+// its first kilobyte, and past 16,338 bytes tmux refuses the command.
+const pasteOver = 800
+
+// pasteSettleDelay is the pause between a paste and its Enter. Measured with send-sized
+// payloads up to 119 KB, each arriving exact and as one record.
+const pasteSettleDelay = 300 * time.Millisecond
+
+// literalArg keeps tmux's command line from reading the end of a payload. An argument ending
+// in ; is tmux's command separator and loses it, and tmux reads the two bytes \; there as a
+// plain ;. The leading half of the same problem, a payload starting with -, is what the --
+// before it is for.
+func literalArg(text string) string {
+	if strings.HasSuffix(text, ";") {
+		return text[:len(text)-1] + `\;`
+	}
+	return text
+}
+
+// SendKeys delivers text to the session and then presses Enter. Up to pasteOver bytes it
+// types them literally (-l, no key-name interpretation), and above that it pastes them.
 func (c *Client) SendKeys(ctx context.Context, name, text string) error {
+	return c.sendKeys(ctx, name, text, pasteOver)
+}
+
+// SendKeysTyped is SendKeys with no paste at any size, for an agent whose paste timing has
+// not been measured. Past tmux's own limit on a command (see pasteOver) it fails.
+func (c *Client) SendKeysTyped(ctx context.Context, name, text string) error {
+	return c.sendKeys(ctx, name, text, math.MaxInt)
+}
+
+func (c *Client) sendKeys(ctx context.Context, name, text string, pasteAbove int) error {
 	// Leave copy mode first. A human scrolling the pane back (the app's wheel, or
 	// tmux's own wheel binding with [tmux].mouse on) puts it in copy mode, where
 	// keys are read as copy-mode COMMANDS instead of reaching the agent — so a
 	// reaction or a review hand-off typed into a scrolled-back pane is silently
 	// mangled. It is a no-op on a pane that has no mode.
 	_ = c.LeaveCopyMode(ctx, name)
-	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", text); err != nil {
-		return err
+	delay := submitSettleDelay
+	if len(text) > pasteAbove {
+		if err := c.pasteText(ctx, name, text); err != nil {
+			return err
+		}
+		delay = pasteSettleDelay
+	} else {
+		if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", "--", literalArg(text)); err != nil {
+			return err
+		}
 	}
-	if strings.Contains(text, "\n") {
+	if delay > 0 {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(submitSettleDelay):
+		case <-time.After(delay):
 		}
 	}
 	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "Enter")
+	return err
+}
+
+// pasteText puts text into a pane as one bracketed paste, off argv, through a buffer of
+// its own. The buffer is deleted when the paste fails, because it holds the whole message
+// and nothing else would ever remove it.
+//
+// tmux turns every LF into a CR when it pastes, and -p does not change that: measured, a
+// pane in bracketed-paste mode receives ESC[200~one\rtwo ESC[201~ and a pane outside it
+// receives one\rtwo with no brackets at all. Inside the brackets a CR is only text, which
+// is the shape measured exact on Claude Code. Outside them it is Enter, the same submit
+// sanitizeAgentText removes from every payload, so each line would go off on its own. So
+// -r keeps LF for any pane that does not say it is bracketing, including a tmux too old to
+// know the flag.
+func (c *Client) pasteText(ctx context.Context, name, text string) error {
+	var r [8]byte
+	if _, err := rand.Read(r[:]); err != nil {
+		return err
+	}
+	buf := "lola-send-" + hex.EncodeToString(r[:])
+	drop := func() {
+		// A context that already ended must not keep the delete from running.
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		_, _, _ = c.run(dctx, "delete-buffer", "-b", buf)
+	}
+	if err := c.runStdin(ctx, text, "load-buffer", "-b", buf, "-"); err != nil {
+		drop()
+		return err
+	}
+	args := []string{"paste-buffer", "-p", "-d", "-b", buf, "-t", paneTarget(name)}
+	flag, _, err := c.run(ctx, "display-message", "-p", "-t", paneTarget(name), "#{bracket_paste_flag}")
+	if err != nil || strings.TrimSpace(flag) != "1" {
+		args = []string{"paste-buffer", "-p", "-r", "-d", "-b", buf, "-t", paneTarget(name)}
+	}
+	if _, _, err := c.run(ctx, args...); err != nil {
+		drop()
+		return err
+	}
+	return nil
+}
+
+// CaptureVisible reads exactly what the pane shows now, with its SGR intact and no
+// scrollback, so rows line up with PaneCursor's Y. Read it BEFORE the cursor: a proof
+// that the cursor sits in the composer must not rest on a screen older than itself.
+func (c *Client) CaptureVisible(ctx context.Context, name string) (string, error) {
+	out, _, err := c.run(ctx, "capture-pane", "-p", "-e", "-t", paneTarget(name))
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+// Cursor is where a pane's cursor is, in cells from the visible top left, and whether
+// the program is showing it. internal/attention has its own copy of this shape, so
+// neither package needs the other.
+type Cursor struct {
+	X, Y    int
+	Visible bool
+}
+
+// PaneCursor reads a session's active pane. An answer it cannot read is an error,
+// never a zero cursor: the caller is deciding whether it may type.
+func (c *Client) PaneCursor(ctx context.Context, name string) (Cursor, error) {
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", paneTarget(name), "#{cursor_x} #{cursor_y} #{cursor_flag}")
+	if err != nil {
+		return Cursor{}, err
+	}
+	f := strings.Fields(out)
+	if len(f) != 3 {
+		return Cursor{}, fmt.Errorf("tmux: unreadable cursor %q", strings.TrimSpace(out))
+	}
+	x, errX := strconv.Atoi(f[0])
+	y, errY := strconv.Atoi(f[1])
+	if errX != nil || errY != nil || (f[2] != "0" && f[2] != "1") {
+		return Cursor{}, fmt.Errorf("tmux: unreadable cursor %q", strings.TrimSpace(out))
+	}
+	return Cursor{X: x, Y: y, Visible: f[2] == "1"}, nil
+}
+
+// SendKey presses one key with no Enter: the answer to a choice a pane is showing. It
+// leaves copy mode first, because a digit sent to a scrolled-back pane is a copy-mode
+// command. Only a letter or a digit is accepted, since that is all a choice key ever is
+// and tmux itself reads others, a ";" for one, as part of its command line.
+func (c *Client) SendKey(ctx context.Context, name, key string) error {
+	if r := []rune(key); len(r) != 1 || !unicode.IsLetter(r[0]) && !unicode.IsDigit(r[0]) {
+		return fmt.Errorf("tmux: %q is not a single choice key", key)
+	}
+	_ = c.LeaveCopyMode(ctx, name)
+	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", key)
+	return err
+}
+
+// SendBackground delivers one Ctrl+B directly to the application. send-keys
+// bypasses tmux's prefix processing, so the interactive double press is unnecessary.
+func (c *Client) SendBackground(ctx context.Context, name string) error {
+	_ = c.LeaveCopyMode(ctx, name)
+	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "C-b")
+	return err
+}
+
+// PipePane sends everything the pane prints to a shell command. A new call replaces the
+// previous pipe, so a restarted daemon can re-arm a tab that is already piped.
+func (c *Client) PipePane(ctx context.Context, name, command string) error {
+	_, _, err := c.run(ctx, "pipe-pane", "-t", paneTarget(name), command)
+	return err
+}
+
+// SendText types text into a pane, after clearing whatever is on its input line, so a
+// half-typed word cannot become part of the command. Enter is pressed only if asked.
+func (c *Client) SendText(ctx context.Context, name, text string, enter bool) error {
+	_ = c.LeaveCopyMode(ctx, name)
+	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "C-u"); err != nil {
+		return err
+	}
+	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", "--", literalArg(text)); err != nil {
+		return err
+	}
+	if !enter {
+		return nil
+	}
+	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "Enter")
+	return err
+}
+
+// PaneInput is where a pane's cursor rests. Open means the cursor is partway along a line,
+// which is the shape of a program waiting on a question: once it reads an answer it prints
+// a newline and the cursor goes back to the first column. Row is the line's absolute number,
+// so the same words on a later line can be told from the same line still waiting.
+type PaneInput struct {
+	Open bool
+	Row  int
+	Text string // the screen, joined across wraps, when Open
+}
+
+// PaneInput reads a session's active pane. A full-screen program or a dead pane has no
+// resting line anyone can answer, so both read as closed.
+func (c *Client) PaneInput(ctx context.Context, name string) (PaneInput, error) {
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", paneTarget(name), "#{cursor_x} #{cursor_y} #{history_size} #{alternate_on} #{pane_dead}")
+	if err != nil {
+		return PaneInput{}, err
+	}
+	var x, y, hist, alt, dead int
+	if _, err := fmt.Sscanf(strings.TrimSpace(out), "%d %d %d %d %d", &x, &y, &hist, &alt, &dead); err != nil {
+		return PaneInput{}, fmt.Errorf("tmux: cursor of %s: %w", name, err)
+	}
+	in := PaneInput{Row: hist + y, Open: x > 0 && alt == 0 && dead == 0}
+	if !in.Open {
+		return in, nil
+	}
+	text, _, err := c.run(ctx, "capture-pane", "-p", "-J", "-t", paneTarget(name))
+	if err != nil {
+		return PaneInput{}, err
+	}
+	in.Text = strings.TrimRight(text, " \n")
+	return in, nil
+}
+
+// PasteSecret answers a question in a pane without the answer ever reaching anyone's argv:
+// send-keys -l would show it in ps for as long as tmux runs. It goes over stdin into a
+// buffer with a name of its own, and paste-buffer -d deletes that buffer as it pastes. The
+// explicit delete covers a paste that failed. Enter follows as a key.
+func (c *Client) PasteSecret(ctx context.Context, name, secret string) error {
+	var r [8]byte
+	if _, err := rand.Read(r[:]); err != nil {
+		return err
+	}
+	buf := "lola-answer-" + hex.EncodeToString(r[:])
+	_ = c.LeaveCopyMode(ctx, name)
+	if err := c.runStdin(ctx, secret, "load-buffer", "-b", buf, "-"); err != nil {
+		return err
+	}
+	if _, _, err := c.run(ctx, "paste-buffer", "-d", "-b", buf, "-t", paneTarget(name)); err != nil {
+		// A context that already ended must not keep the delete from running.
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		_, _, _ = c.run(dctx, "delete-buffer", "-b", buf)
+		return err
+	}
+	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "Enter")
+	return err
+}
+
+// SendInterrupt presses Ctrl-C in a pane.
+func (c *Client) SendInterrupt(ctx context.Context, name string) error {
+	_ = c.LeaveCopyMode(ctx, name)
+	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "C-c")
+	return err
+}
+
+// SendEscape presses Esc in a pane, which is how every supported coding agent
+// interrupts its turn. It is a key, not text, so nothing is submitted.
+func (c *Client) SendEscape(ctx context.Context, name string) error {
+	_ = c.LeaveCopyMode(ctx, name)
+	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "Escape")
 	return err
 }
 
@@ -880,7 +1160,9 @@ type SessionChrome struct {
 // into the returned error so the caller can log it, but a styling failure must
 // not fail the spawn — the caller treats a non-nil return as advisory.
 func (c *Client) ConfigureSession(ctx context.Context, name string, opts SessionChrome) error {
-	target := "=" + name
+	// set-option's -t is a target-PANE on current tmux (3.7 answers a bare
+	// "=name" with "no such session"), so the session's pane: "=name:".
+	target := "=" + name + ":"
 	// "status off" is still SENT explicitly rather than simply skipped: sessions
 	// are adopted across daemon restarts and re-configured in place, so a session
 	// that was spawned while the bar was on has to be told to drop it.

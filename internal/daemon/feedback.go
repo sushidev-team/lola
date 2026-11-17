@@ -65,6 +65,9 @@ func (d *Daemon) handleDiff(ctx context.Context, sessionID string) (protocol.Dif
 	if !ok {
 		return protocol.DiffData{}, fmt.Errorf("unknown session %s", sessionID)
 	}
+	if s.GoalManaged() {
+		return protocol.DiffData{}, errors.New("goal diffs are available from staged integration candidates, not mutable worker metadata")
+	}
 	if s.Worktree == "" {
 		return protocol.DiffData{}, fmt.Errorf("session %s has no worktree", sessionID)
 	}
@@ -178,6 +181,7 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 		field: func(s *session.Session) *string { return &s.PendingFeedback },
 		wrap:  feedbackMessage,
 		done:  "delivered the human's diff review to the agent",
+		label: feedbackLabel,
 	})
 }
 
@@ -189,6 +193,23 @@ type queuedText struct {
 	field func(*session.Session) *string
 	wrap  func(string) string
 	done  string
+	// took and sent are optional, for a queue with a second delivery path. took
+	// runs right after the text left the field and before the send, and sent reports
+	// how the send went, after a failure has already put the text back.
+	// took answers the store items the text belongs to, for the record of the send.
+	took func(id, text string) []string
+	sent func(id, text string, ok bool)
+	// label is lola's sentence for the row this send leaves in the session's
+	// timeline, from the text that left the field. nil means "": the queue holds a
+	// human's own words, and their own row already shows them.
+	label func(s session.Session, text string) string
+	// lock and admit are for a send a person pressed this instant. nil means today's
+	// behaviour: lockAutomationPrompt and handoffDeliverable.
+	lock  func(ctx context.Context, s session.Session) (unlock func(), why string)
+	admit func(s session.Session) bool
+	// refused hears why a send with its own lock did not go. Empty means the session
+	// was not even a candidate.
+	refused func(why string)
 }
 
 // deliverQueued types one queue into the session's pane when the agent is
@@ -196,13 +217,33 @@ type queuedText struct {
 // queue untouched for a later attempt; a failed send re-queues the text, since
 // it exists nowhere else.
 func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) bool {
+	admit := q.admit
+	if admit == nil {
+		admit = handoffDeliverable
+	}
 	s, ok := d.sessions.Get(id)
-	if !ok || *q.field(&s) == "" || s.TmuxName == "" || !handoffDeliverable(s) {
+	if !ok || *q.field(&s) == "" || s.TmuxName == "" || !admit(s) {
+		if q.refused != nil {
+			q.refused("")
+		}
 		return false
 	}
-	unlock, ready := d.lockAutomationPrompt(ctx, s)
-	if !ready {
-		return false
+	var unlock func()
+	if q.lock != nil {
+		u, why := q.lock(ctx, s)
+		if u == nil {
+			if q.refused != nil {
+				q.refused(why)
+			}
+			return false
+		}
+		unlock = u
+	} else {
+		u, ready := d.lockAutomationPrompt(ctx, s)
+		if !ready {
+			return false
+		}
+		unlock = u
 	}
 	defer unlock()
 
@@ -211,10 +252,11 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 	var (
 		text     string
 		tmuxName string
+		note     typedNote
 	)
 	d.sessions.Update(id, func(cur *session.Session) bool {
 		f := q.field(cur)
-		if !handoffDeliverable(*cur) || *f == "" {
+		if !admit(*cur) || *f == "" {
 			return false
 		}
 		text, *f = *f, ""
@@ -227,13 +269,20 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 		// the gate; the next lifecycle hook corrects it to the real state.
 		cur.SetAgentState(state.AgentWorking, "", time.Now())
 		tmuxName = cur.TmuxName
+		note = noteFor(*cur, "")
+		if q.label != nil {
+			note.Label = q.label(*cur, text)
+		}
 		return true
 	})
 	if text == "" {
 		return false
 	}
+	if q.took != nil {
+		note.Items = q.took(id, text)
+	}
 
-	if err := d.typeToAgentLocked(ctx, tmuxName, q.wrap(text), reactExecTimeout); err != nil {
+	if err := d.typeToAgentLocked(ctx, note, tmuxName, q.wrap(text), reactExecTimeout); err != nil {
 		// Unlike a review hand-off (which other sinks also received), this text
 		// exists nowhere else: put it back in front of anything queued since.
 		d.sessions.Update(id, func(cur *session.Session) bool {
@@ -247,7 +296,13 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 		})
 		_ = d.sessions.Save()
 		d.logf("", "%s: %s send-keys failed (re-queued): %v", q.name, id, err)
+		if q.sent != nil {
+			q.sent(id, text, false)
+		}
 		return false
+	}
+	if q.sent != nil {
+		q.sent(id, text, true)
 	}
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "%s: persist sessions: %v", q.name, err)
@@ -283,13 +338,19 @@ func renderFeedback(a protocol.FeedbackArgs) (string, error) {
 		}
 		blocks = append(blocks, b)
 	}
-	if note := clipRunes(strings.TrimSpace(a.Note), feedbackMaxBodyRunes); note != "" {
+	// A review note contains multiple screenshot comments and revision context.
+	// Bound the complete batch below; never silently truncate a human review.
+	if note := strings.TrimSpace(a.Note); note != "" {
 		blocks = append(blocks, "- General note:\n"+indent(note, "  "))
 	}
 	if len(blocks) == 0 {
 		return "", errors.New("feedback is empty — add a comment or a note")
 	}
-	return strings.Join(blocks, "\n\n"), nil
+	block := strings.Join(blocks, "\n\n")
+	if len(block) > feedbackMaxPending {
+		return "", errors.New("feedback exceeds 64 KiB — shorten the draft or send it in parts")
+	}
+	return block, nil
 }
 
 func renderFeedbackComment(c protocol.FeedbackComment) (string, error) {

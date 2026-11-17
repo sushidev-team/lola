@@ -5,18 +5,44 @@
   // Cockpit.svelte — and closes itself if the session vanished mid-open.
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { store, type SessionInfo } from "$lib/store.svelte";
-  import { devToggleTitle } from "$lib/devtoggle";
   import { nav } from "$lib/nav.svelte";
-  import { terms, DIFF } from "$lib/terms.svelte";
-  import { sidePanel, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
   import { bestOf } from "$lib/bestof.svelte";
+  import { ssh } from "$lib/ssh.svelte";
+  import { isEnded, urgentConn } from "$lib/ssh";
   import MenuItem from "./MenuItem.svelte";
 
   const req = $derived(sessionMenu.request);
   const session = $derived(req ? store.sessionById(req.id) : undefined);
   const canRevive = $derived(!!session && (session.status === "dead" || session.status === "session_ended"));
   const AGENT_KINDS = ["claude", "codex", "opencode"] as const;
-  const otherAgents = $derived(AGENT_KINDS.filter((k) => k !== (session?.agent || "claude")));
+  const otherAgents = $derived(session?.location ? [] : AGENT_KINDS.filter((k) => k !== (session?.agent || "claude")));
+
+  // The projects whose settings this session runs on. A plain session has one;
+  // a STACK session has the stack (issue side) plus one member project per app
+  // it checked out. A project-free temporary session, or a project since
+  // removed from the config, has none. Several targets fold behind one row
+  // that expands in place, so the menu stays short until asked.
+  const projectTargets = $derived.by(() => {
+    if (!session) return [];
+    const names = [session.project, ...(session.stack ? (session.apps ?? []).map((a) => a.name) : [])];
+    return [...new Set(names)]
+      .filter((n) => n && store.projects.some((p) => p.name === n))
+      .map((n) => ({ name: n, label: store.displayNameFor(n) }));
+  });
+  // The name arrives as an argument, read BEFORE the close: closing empties
+  // the derived list, so a lazy read inside the action would find nothing.
+  function openProject(name: string) {
+    sessionMenu.close();
+    nav.openOverlay("project", name);
+  }
+  let projectsOpen = $state(false);
+  $effect(() => {
+    void req;
+    projectsOpen = false;
+  });
+
+  const sshConn = $derived(urgentConn(session?.ssh?.connections));
+  const sshLive = $derived(!!sshConn && !isEnded(sshConn));
 
   let el = $state<HTMLDivElement | null>(null);
 
@@ -40,29 +66,6 @@
     if (s) action(s);
   }
 
-  // Opens a worktree shell tab for the session. The shell tab lives in the
-  // detail SessionEmbed, which the grid lens doesn't render — leave the grid
-  // first (same move as opening a tile), then select so the new tab is visible.
-  function addShell(s: SessionInfo) {
-    if (nav.lens === "grid") nav.setLens("list");
-    nav.select(s.id);
-    terms.newShell(s.id, s.worktree);
-  }
-
-  // Same move as addShell: the diff tab and the sidebar live in the detail embed,
-  // which the grid lens does not render.
-  function openView(s: SessionInfo, tab: string) {
-    if (nav.lens === "grid") nav.setLens("list");
-    nav.select(s.id);
-    terms.select(s.id, tab);
-  }
-
-  // Checkpoints are a tab of the sidebar, not of the terminal strip.
-  function openCheckpoints(s: SessionInfo) {
-    if (nav.lens === "grid") nav.setLens("list");
-    nav.select(s.id);
-    sidePanel.show(CHECKPOINTS_TAB);
-  }
 </script>
 
 {#if req && session}
@@ -82,44 +85,31 @@
        a gutter on all four sides or the hover fill runs into the border. -->
   <div
     bind:this={el}
-    class="fixed z-50 min-w-[12rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
+    class="fixed z-50 max-h-[calc(100vh-8px)] min-w-[12rem] overflow-y-auto rounded-lg border border-edge bg-panel p-1 shadow-xl"
     style="left:{req.x}px;top:{req.y}px"
     role="menu"
   >
     <div class="label truncate px-2 pt-1 pb-1.5 text-faint">
       {session.issue || session.id.slice(0, 8)}
     </div>
-    <MenuItem
-      icon="+"
-      disabled={!session.worktree}
-      title={session.worktree ? "open a shell in the worktree" : "session has no worktree"}
-      onclick={() => run((s) => addShell(s))}>Add shell</MenuItem
-    >
-    <MenuItem
-      icon="±"
-      disabled={!session.worktree}
-      title={session.worktree ? "review the changes and send line comments to the agent" : "session has no worktree"}
-      onclick={() => run((s) => openView(s, DIFF))}>Review diff</MenuItem
-    >
-    <MenuItem
-      icon="↺"
-      disabled={!session.worktree}
-      title={session.worktree ? "per-turn snapshots — restore a bad turn or fork from one" : "session has no worktree"}
-      onclick={() => run((s) => openCheckpoints(s))}>Checkpoints</MenuItem
-    >
-    {#if session.devCommands?.length}
-      <!-- The project's dev processes run in ONE session at a time, so this is a
-           toggle, not an "open": switching it on here takes them off whoever had
-           them. The label says where they are, not what the click does — "Active"
-           with a filled dot IS the state. -->
-      <MenuItem
-        icon={session.devActive ? "●" : "○"}
-        variant={session.devActive ? "accent" : "default"}
-        title={devToggleTitle(session)}
-        onclick={() => run((s) => store.dev(s.id, !s.devActive))}
-      >
-        {session.devActive ? "Active — stop dev" : "Make active"}
-      </MenuItem>
+    <MenuItem icon="✎" onclick={() => run(s => nav.openOverlay("rename-session", s.id))}>Rename session…</MenuItem>
+    {#if session.worktree}
+      <MenuItem icon="◆" title={session.worktree} onclick={() => run(s => store.openFolder(s.worktree))}>Open in Finder</MenuItem>
+    {/if}
+    {#if projectTargets.length === 1}
+      <MenuItem icon="⚙" onclick={() => openProject(projectTargets[0].name)}>Project settings</MenuItem>
+    {:else if projectTargets.length > 1}
+      <MenuItem icon="⚙" trailing={projectsOpen ? "▴" : "▾"} aria-expanded={projectsOpen} onclick={() => (projectsOpen = !projectsOpen)}>Project settings</MenuItem>
+      {#if projectsOpen}
+        {#each projectTargets as t (t.name)}
+          <MenuItem title={t.name} onclick={() => openProject(t.name)}>{t.label}</MenuItem>
+        {/each}
+      {/if}
+    {/if}
+    {#if sshConn && sshLive}
+      <div class="my-1 h-px bg-edge/60"></div>
+      <MenuItem icon="⌁" onclick={() => run(s => ssh.wheelKey(s))}>{sshConn.wheel === "human" ? "Hand back…" : "Take the wheel"}</MenuItem>
+      <MenuItem onclick={() => run(s => { if (sshConn) ssh.askClose(s.id, sshConn); })}>Close connection…</MenuItem>
     {/if}
     {#if session.status === "merge_conflict"}
       <!-- The same action the status pill offers on hover, for anyone who reaches
@@ -145,17 +135,10 @@
         Compare attempts ({session.bestOf.attempt}/{session.bestOf.of})
       </MenuItem>
     {/if}
-    <MenuItem icon="◈" title="force a QA review pass now" onclick={() => run((s) => store.review(s.id))}>
-      Trigger review
-    </MenuItem>
-    <MenuItem icon="◇" onclick={() => run((s) => store.coderabbit(s.id))}>CodeRabbit</MenuItem>
-    {#if session.prNumber > 0}
-      <MenuItem icon="⑂" trailing="↗" onclick={() => run((s) => store.openURL(s.prUrl))}>Open PR</MenuItem>
-    {/if}
     {#if canRevive}
-      <MenuItem variant="accent" icon="↻" onclick={() => run((s) => store.revive(s.id))}>Revive</MenuItem>
+      <MenuItem variant="accent" icon="↻" onclick={() => run((s) => store.revive(s.id))} title={session.location ? "Reopen this directory; stopped agents start a new conversation" : "Resume the session"}>{session.location ? "Reopen session" : "Revive"}</MenuItem>
     {/if}
-    {#if session.status !== "shell"}
+    {#if session.status !== "shell" && otherAgents.length}
       <div class="my-1 h-px bg-edge/60"></div>
       {#each otherAgents as kind (kind)}
         <MenuItem icon="⇄" onclick={() => run((s) => store.askSwitchAgent(s.id, kind))}>

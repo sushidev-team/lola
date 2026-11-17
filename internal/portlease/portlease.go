@@ -57,6 +57,18 @@ func (l Lease) Port() int {
 // the range.
 var ErrExhausted = errors.New("port range exhausted")
 
+// Busy is a port something OUTSIDE lola was seen holding, and when it was last
+// looked at. Allocation tries such a port again only when no clean block is
+// left and RetryAfter has passed since.
+type Busy struct {
+	Port      int       `json:"port"`
+	LastTried time.Time `json:"last_tried"`
+}
+
+// RetryAfter is how long a port seen busy is avoided while any other block is
+// free; after it the port is a candidate again, as a last resort.
+const RetryAfter = time.Hour
+
 // Registry is the persisted set of leases. The zero value is not usable; build
 // one with Open. Safe for concurrent use within one process — the daemon is the
 // only writer.
@@ -72,6 +84,7 @@ type Registry struct {
 
 	mu     sync.Mutex
 	leases map[string]Lease
+	busy   map[int]time.Time
 }
 
 // Open loads the registry at path. A missing file is an empty registry; an
@@ -79,7 +92,7 @@ type Registry struct {
 // error, so the caller can log it and keep spawning — a lost lease file costs
 // at worst one collision, never a session.
 func Open(path string) (*Registry, error) {
-	r := &Registry{path: path, leases: map[string]Lease{}}
+	r := &Registry{path: path, leases: map[string]Lease{}, busy: map[int]time.Time{}}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return r, nil
@@ -89,6 +102,7 @@ func Open(path string) (*Registry, error) {
 	}
 	var file struct {
 		Leases []Lease `json:"leases"`
+		Busy   []Busy  `json:"busy"`
 	}
 	if err := json.Unmarshal(data, &file); err != nil {
 		return r, fmt.Errorf("portlease: parse %s: %w", path, err)
@@ -98,7 +112,31 @@ func Open(path string) (*Registry, error) {
 			r.leases[l.Session] = l
 		}
 	}
+	for _, b := range file.Busy {
+		if b.Port > 0 {
+			r.busy[b.Port] = b.LastTried
+		}
+	}
 	return r, nil
+}
+
+// BusyPorts returns the remembered externally-busy ports, sorted by port.
+func (r *Registry) BusyPorts() []Busy {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.busyLocked()
+}
+
+func (r *Registry) busyLocked() []Busy {
+	out := make([]Busy, 0, len(r.busy))
+	for p, t := range r.busy {
+		out = append(out, Busy{Port: p, LastTried: t})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Port < out[j].Port })
+	return out
 }
 
 // Get returns the session's lease, if it holds one.
@@ -173,32 +211,57 @@ func (r *Registry) Acquire(session, project string, lo, hi, n int) (Lease, error
 		inUse = ListeningOn
 	}
 
-	for base := lo; base+n-1 <= hi; base += n {
-		ports := make([]int, n)
-		free := true
-		for i := range n {
-			p := base + i
-			if taken[p] || inUse(p) {
-				free = false
-				break
+	now := r.now()
+	// Pass 0 skips every block holding a port remembered busy; pass 1 admits
+	// those whose memory is older than RetryAfter. A port the probe finds busy
+	// is (re)stamped either way, so a port that is still taken stays avoided.
+	dirty := false
+	for pass := range 2 {
+		for base := lo; base+n-1 <= hi; base += n {
+			ports := make([]int, n)
+			free := true
+			for i := range n {
+				p := base + i
+				if taken[p] {
+					free = false
+					break
+				}
+				if t, seen := r.busy[p]; seen && (pass == 0 || now.Sub(t) < RetryAfter) {
+					free = false
+					break
+				}
+				if inUse(p) {
+					r.busy[p] = now
+					dirty = true
+					free = false
+					break
+				}
+				ports[i] = p
 			}
-			ports[i] = p
-		}
-		if !free {
-			continue
-		}
-		l := Lease{Session: session, Project: project, Ports: ports, Created: r.now()}
-		prev, had := r.leases[session]
-		r.leases[session] = l
-		if err := r.saveLocked(); err != nil {
-			if had {
-				r.leases[session] = prev
-			} else {
-				delete(r.leases, session)
+			if !free {
+				continue
 			}
-			return Lease{}, err
+			for _, p := range ports {
+				if _, seen := r.busy[p]; seen {
+					delete(r.busy, p) // it answered free: forget it
+				}
+			}
+			l := Lease{Session: session, Project: project, Ports: ports, Created: now}
+			prev, had := r.leases[session]
+			r.leases[session] = l
+			if err := r.saveLocked(); err != nil {
+				if had {
+					r.leases[session] = prev
+				} else {
+					delete(r.leases, session)
+				}
+				return Lease{}, err
+			}
+			return l, nil
 		}
-		return l, nil
+	}
+	if dirty {
+		_ = r.saveLocked() // the memory is advisory; losing it costs one probe
 	}
 	return Lease{}, fmt.Errorf("portlease: %d port(s) in %d-%d: %w", n, lo, hi, ErrExhausted)
 }
@@ -289,7 +352,8 @@ func (r *Registry) saveLocked() error {
 	sort.Slice(leases, func(i, j int) bool { return leases[i].Session < leases[j].Session })
 	data, err := json.MarshalIndent(struct {
 		Leases []Lease `json:"leases"`
-	}{leases}, "", "  ")
+		Busy   []Busy  `json:"busy,omitempty"`
+	}{leases, r.busyLocked()}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("portlease: encode: %w", err)
 	}

@@ -1,64 +1,59 @@
 <script lang="ts">
-  // The '?' keybinding reference. Mirrors the TUI's help overlay. There is no
-  // footer hint strip any more, so this is the ONLY place the full key model is
-  // written down — every key listed here must actually be bound in App.svelte's
-  // onKey, in the macOS Session menu (the ⌘ chords), or on a specific focused
-  // control (⌥↑/⌥↓, which the sidebar row itself handles). Opened from anywhere
-  // via '?'; esc / '?' / the ✕ close it (App.svelte + Modal), and the sidebar's
-  // utility row has a '?' button for the mouse.
+  // Desktop commands first. Control-specific navigation stays with its control.
   import { nav } from "$lib/nav.svelte";
   import Modal from "$lib/components/Modal.svelte";
 
   const groups: { title: string; keys: [string, string][] }[] = [
-    {
-      title: "Navigate",
-      keys: [
-        ["j / k · ↑ ↓", "move selection"],
-        ["g / G", "first / last"],
-        ["Enter", "open live terminal"],
-        ["Esc", "back / clear filter / unscope"],
-        ["Ctrl-Q", "leave a focused terminal"],
-        ["V", "cycle lens · list / board / terminals"],
-        ["n / N", "next / prev needs-input"],
-      ],
-    },
-    {
-      // The ⌘ chords are the macOS Session menu's accelerators (installAppMenu),
-      // not bindings in onKey — which is why they also work from inside a focused
-      // terminal, where every bare key belongs to the agent.
-      title: "Session actions",
-      keys: [
-        ["s · ⌘T", "new worktree shell"],
-        ["D", "run dev here · one session per project"],
-        ["f", "diff · comment on lines, send to the agent"],
-        ["< / >", "prev / next terminal tab"],
-        ["x · ⌘⇧K", "kill session"],
-        ["o · ⌘⇧O", "open PR in browser"],
-        ["c · ⌘⇧R", "review · configured provider"],
-        ["R", "revive dead session"],
-        ["P", "edit session's project"],
-      ],
-    },
-    {
-      title: "Global",
-      keys: [
-        ["b", "show / hide sidebar"],
-        // Not onKey bindings: they fire on the focused sidebar row itself, so
-        // they are listed under what they move rather than as globals.
-        ["⌥↑ / ⌥↓", "move the focused project or folder"],
-        ["⌥→ / ⌥←", "file the focused project into a folder / out of it"],
-        ["p", "projects"],
-        ["S", "settings"],
-        ["d", "doctor"],
-        ["?", "this help"],
-      ],
-    },
+    { title: "Navigation", keys: [
+      ["⌘⇧G", "Git workspace / previous view"],
+      ["T", "Team chores"],
+      ["⌘K", "Search projects, sessions and actions"],
+      ["⌘B", "Show or hide sidebar"],
+      ["⌘N", "Show or hide right sidebar"],
+      ["⌘⇧E", "Focus sessions sidebar"],
+      ["⌘J / ⌘⇧J", "Next / previous waiting session"],
+      ["⌘/", "Keyboard shortcuts"],
+    ] },
+    { title: "Session", keys: [
+      ["C", "New session"],
+      ["⌘⇧N", "New temporary shell"],
+      ["⌘L", "Focus conversation composer"],
+      ["⌘\\", "Terminal / conversation"],
+      ["⌘⇧D", "Show or hide changes"],
+      ["⌘T / ⌘W", "New shell / close active tab"],
+      ["⌘.", "Stop the current turn"],
+      ["⌘⇧K", "Remove session…"],
+      ["⌘⇧O", "Open pull request in browser"],
+      ["⌘⇧R", "Run configured review"],
+    ] },
+    { title: "Project Git", keys: [
+      ["⌘F", "Search commit history"],
+      ["⌘ + click", "Select commits to compare"],
+      ["← / →", "Resize focused column divider"],
+      ["↑ / ↓", "Resize focused section divider"],
+      ["Esc", "Back to the previous view"],
+    ] },
+    { title: "Focused controls", keys: [
+      ["↑ / ↓", "Navigate sessions or timeline"],
+      ["Home / End", "First / last session"],
+      ["Enter", "Open selected item"],
+      ["Esc", "Close dialog or move focus back"],
+      ["Ctrl-Q", "Release terminal keyboard focus"],
+      ["⌥ + arrows", "Move projects or folders"],
+    ] },
+    { title: "Host sessions", keys: [
+      ["⌘⇧H", "New SSH session"],
+      ["⌘⇧L", "Take or return control"],
+      ["⌘⇧A", "Review next approval"],
+    ] },
   ];
 </script>
 
-<Modal title="Keyboard shortcuts" onClose={() => nav.closeOverlay()} width="660px">
+<Modal title="Keyboard shortcuts" onClose={() => nav.closeOverlay()} width="760px">
   <div class="grid gap-x-8 gap-y-6 sm:grid-cols-2">
-    {#each groups as g (g.title)}
+    {#each [groups.slice(0, 2), groups.slice(2)] as column}
+      <div class="flex flex-col gap-6">
+      {#each column as g (g.title)}
       <section>
         <h3 class="label mb-2.5 text-faint">{g.title}</h3>
         <ul class="flex flex-col gap-1.5">
@@ -73,15 +68,13 @@
           {/each}
         </ul>
       </section>
+      {/each}
+      </div>
     {/each}
   </div>
 
   <p class="copy mt-6 border-t border-edge/60 pt-4 text-sm text-faint">
-    A double-click (or <span class="text-ink">Enter</span>) opens a session's live terminal fullscreen. Inside it every key
-    — <span class="text-ink">Esc</span> included — goes to the agent, so
-    <span class="text-ink">Ctrl-Q</span> is the way back out.
-    <span class="text-ink">?</span> reveals this list from anywhere. The
-    <span class="text-ink">⌘</span> chords live in the <span class="text-ink">Session</span> menu and work even while a
-    terminal has the keyboard.
+    ⌘ commands work from text fields and terminals. Focused controls use their own keys.
+    Use Ctrl instead of ⌘ on Windows and Linux.
   </p>
 </Modal>

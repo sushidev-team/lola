@@ -31,9 +31,12 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/secrets"
 )
 
@@ -60,6 +63,7 @@ const (
 	// inside tmux, so a plain-text key would sit in the pane's scrollback, which
 	// lola itself captures for the attention parser.
 	sfSecret
+	sfAction // explicit action, activated with enter
 )
 
 // settingsTab groups the fields into the config tables they write. [defaults]
@@ -76,6 +80,8 @@ const (
 	stBrain
 	stStatusAgent
 	stCodeRabbit
+	stSSH
+	stHub
 	stRemote
 	stAppearance
 )
@@ -91,6 +97,8 @@ var settingsTabs = []struct {
 	{stBrain, "Brain"},
 	{stStatusAgent, "Interpreter"},
 	{stCodeRabbit, "Review"},
+	{stSSH, "SSH hosts"},
+	{stHub, "Team hub"},
 	{stRemote, "Remote"},
 	{stAppearance, "Appearance"},
 }
@@ -127,15 +135,16 @@ type setField struct {
 }
 
 type settingsForm struct {
-	cfgPath string
-	cfg     *config.Config
-	fields  []setField
-	tab     settingsTab
-	cursor  int  // index into the ACTIVE tab's fields (see visible)
-	scroll  int  // first visible field-region line (cursor-following viewport)
-	editing bool // a list/env field is OPEN for line editing
-	lineCur int  // which line, while editing
-	err     string
+	viewportWidth int // modal content width; zero retains the full test render
+	cfgPath       string
+	cfg           *config.Config
+	fields        []setField
+	tab           settingsTab
+	cursor        int  // index into the ACTIVE tab's fields (see visible)
+	scroll        int  // first visible field-region line (cursor-following viewport)
+	editing       bool // a list/env field is OPEN for line editing
+	lineCur       int  // which line, while editing
+	err           string
 
 	// Unsaved-changes guard, same contract as the project form: baseline is the
 	// state the form opened in, re-taken after an async label load so a fill-in
@@ -170,7 +179,15 @@ type settingsForm struct {
 	// state the Review tab is READ-ONLY (editing would produce a mixed config,
 	// which is a hard validation error) and offers a one-key migration into the
 	// editable provider catalog. Cleared once migrated.
-	reviewLegacy bool
+	reviewLegacy   bool
+	specialistKeys []int
+	nextSpecialist int
+
+	// The SSH hosts tab, generated per host (sshsettings.go). sshRemoving is the
+	// host whose Remove row is waiting on its Y, -1 when none is.
+	sshKeys     []int
+	nextSSHHost int
+	sshRemoving int
 
 	// savedNote is a one-line message a successful save wants shown INSTEAD of
 	// the generic "settings saved" — today only the Linear key's outcome, which
@@ -269,6 +286,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// key here is the value a [[project]] gets when it omits its own, so
 			// shared setup is written once (see config.ProjectInherits).
 			{key: "def_branch_prefix", tab: stProjectDefaults, section: "[defaults]", sectionNote: "inherited by every [[project]] that omits the key", label: "Branch prefix", help: "Prepended to a session's branch name (e.g. \"lola/\" → lola/eng-42). Empty resolves to \"lola/\".", kind: sfText, text: d.BranchPrefix},
+			{key: "def_auto_pr_comments", tab: stProjectDefaults, label: "Auto PR comments", help: "Automatically ask idle agents to verify PR review comments, push fixes, and resolve addressed threads. Projects can override. Off by default.", kind: sfBool, b: d.AutoPRComments},
 			{key: "def_symlinks", tab: stProjectDefaults, label: "Symlinks", help: "One relative path per line, linked from the main checkout into each worktree (e.g. .env). enter opens the list. Do NOT symlink vendor/ — it breaks PHP autoload; use post_create.", kind: sfList, lines: append([]string(nil), d.Symlinks...)},
 			{key: "def_post_create", tab: stProjectDefaults, label: "Post-create", help: "One command per line, run in a fresh worktree before the agent starts (e.g. composer install). enter opens the list.", kind: sfList, lines: append([]string(nil), d.PostCreate...)},
 			{key: "def_env", tab: stProjectDefaults, label: "Env (KEY=value)", help: "One KEY=value per line, exported into every session and its post_create commands. Keys must be shell identifiers. enter opens the list.", kind: sfEnv, lines: envLines(d.Env)},
@@ -314,12 +332,8 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// keyword by the next save of any unrelated tab, rebinding the daemon
 			// to a different set of interfaces. Free text round-trips both, and
 			// config.Validate is what rejects a value neither form allows.
-			{key: "remote_bind", tab: stRemote, label: "Bind", help: "off | localhost | lan | all, or an IP literal (a hostname is rejected — resolving one would turn a config read into a network call). A lola_insecure build forces localhost whatever this says.", kind: sfText, text: cfg.Remote.BindMode()},
+			{key: "remote_bind", tab: stRemote, label: "Bind", help: "off | localhost | lan | all, or an IP literal (a hostname is rejected — resolving one would turn a config read into a network call).", kind: sfText, text: cfg.Remote.BindMode()},
 			{key: "remote_port", tab: stRemote, label: "Port", help: "TCP port for the listener. 0 means " + itoa(config.DefaultRemotePort) + ".", kind: sfInt, text: itoa(cfg.Remote.ListenPort())},
-			// The bind rail's one hole. Two keys have to agree — this AND a
-			// non-loopback bind — so a config that merely says "lan" still
-			// binds loopback.
-			{key: "remote_insecure_lan", tab: stRemote, label: "Allow LAN bind", help: "Milestone 1 forces the bind to loopback, which a physical phone cannot reach. Turning this on honours the bind above and puts the shared bearer key on your network in the clear. A Simulator does not need it.", kind: sfBool, b: cfg.Remote.InsecureLAN},
 			// A DISCLOSURE rather than a convenience, which is why it is off by
 			// default and says so: the service announces what this machine is to
 			// every peer on the network. What it buys is RECONNECTION — the key
@@ -336,7 +350,10 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
 			// from this flavor (applyTheme) and so does the desktop app, so the
 			// setting was reachable only from the app until this tab existed.
-			{key: "ui_theme", tab: stAppearance, section: "[ui]", sectionNote: "palette shared with lola-desktop", label: "Theme", help: "Catppuccin flavor for the cockpit and every terminal. space/enter cycles; latte is the light one. Applies on save.", kind: sfEnum, options: config.UIThemes, text: cfg.UITheme()},
+			{key: "ui_theme", tab: stAppearance, section: "[ui]", sectionNote: "palette shared with lola-desktop", label: "Theme", help: "Fixed palette for the cockpit and terminals. space/enter cycles. Applies on save.", kind: sfEnum, options: config.UIThemes, text: cfg.UITheme()},
+			{key: "ui_follow_system", tab: stAppearance, label: "Follow system appearance", help: "The desktop follows OS appearance; the TUI follows the terminal background.", kind: sfBool, b: cfg.UI.FollowSystem},
+			{key: "ui_light_theme", tab: stAppearance, label: "Light theme", help: "Palette used for light appearance.", kind: sfEnum, options: themeChoices(false), text: cfg.UILightTheme()},
+			{key: "ui_dark_theme", tab: stAppearance, label: "Dark theme", help: "Palette used for dark appearance.", kind: sfEnum, options: themeChoices(true), text: cfg.UIDarkTheme()},
 
 			// Review — the pluggable provider catalog ([[review.provider]]) — is
 			// GENERATED, one indented subsection per KIND, from
@@ -347,7 +364,11 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// A legacy-only config shows these READ-ONLY with a migrate action.
 		},
 	}
+	f.initSpecialists()
 	f.fields = append(f.fields, reviewProviderFields(rp)...)
+	f.sshRemoving = -1
+	f.initSSHHosts()
+	f.fields = append(f.fields, hubFields(cfg)...) // hubsettings.go
 	// Warm the label NAMES from the on-disk cache for rendering. This is a local
 	// file read, never a Linear call, and deliberately does not touch wsLabels:
 	// the picker stays lazy (see openLabelPicker).
@@ -519,10 +540,17 @@ func reviewProviderFields(seed func(kind string) config.ReviewProvider) []setFie
 			add(setField{key: pvKey(kind, "inline"), label: "Inline PR threads",
 				help: "github transport: post one anchored, resolvable review thread per finding instead of a single comment, and ask the worker to resolve each one it fixes. Off = one flat comment.",
 				kind: sfBool, b: p.GitHubInline})
+			add(setField{key: pvKey(kind, "status"), label: "Commit status gate",
+				help: "Post lola/review/" + kind + " on the PR head (pending → success / failure on blocking findings / error) and re-review each new head once the agent settles. Require it in a ruleset to block merges.",
+				kind: sfBool, b: p.GitHubStatus})
 			add(setField{key: pvKey(kind, "fallback"), label: "Fallback",
 				help: "Ordered pass kinds tried when this provider can't answer (unavailable / over-quota). enter picks.",
 				kind: sfList, choices: fallbackOpts(kind), lines: p.FallbackStrings()})
 		}
+	}
+	if len(out) > 0 {
+		out[0].section = "Providers"
+		out[0].sectionNote = "agents and review integrations"
 	}
 	return out
 }
@@ -803,11 +831,19 @@ func (f *settingsForm) update(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
 // updateNonKey handles the async results the form asks for. Left as its own
 // method so the key path stays readable; extend it alongside any new tea.Cmd.
 func (f *settingsForm) updateNonKey(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
+	if v, ok := msg.(sshResolvedMsg); ok {
+		f.sshApplyResolved(v)
+		return nil, settingsFormNone
+	}
 	if v, ok := msg.(workspaceLabelsMsg); ok {
+		wasDirty := f.dirty()
 		f.applyWorkspaceLabels(v)
 		// An arriving label set is not a human edit — re-baseline so it can't arm
-		// the discard prompt on a form nobody typed into.
-		f.rebase()
+		// the discard prompt on a form nobody typed into. Preserve prior edits,
+		// including specialists added while the request was in flight.
+		if !wasDirty {
+			f.rebase()
+		}
 	}
 	return nil, settingsFormNone
 }
@@ -823,6 +859,14 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 		return nil, settingsFormNone
 	}
 	f.err = ""
+	if f.sshRemoving >= 0 {
+		serial := f.sshRemoving
+		f.sshRemoving = -1
+		if k.String() == "Y" {
+			f.removeSSHHost(serial)
+		}
+		return nil, settingsFormNone
+	}
 	if f.picker != nil {
 		return f.pickerKey(k)
 	}
@@ -884,6 +928,11 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 			return nil, settingsFormNone
 		}
 		switch fld.kind {
+		case sfAction:
+			if fld.tab == stSSH {
+				return f.sshAction(fld.key), settingsFormNone
+			}
+			f.specialistAction(fld.key)
 		case sfBool:
 			f.toggleBool(fld)
 		case sfEnum:
@@ -1374,6 +1423,10 @@ func (f *settingsForm) pickerKey(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent)
 // applyPick writes the chosen label ID(s) back into the field's own storage —
 // lines for a multi-select, text for a single — so save() needs no special case.
 func (f *settingsForm) applyPick(p *setPicker) {
+	if p.key == specialistAddKey && len(p.opts) > 0 {
+		f.addSpecialist(p.opts[p.cursor].id)
+		return
+	}
 	fld := f.field(p.key)
 	if fld == nil || len(p.opts) == 0 {
 		return
@@ -1402,6 +1455,8 @@ func (f *settingsForm) pickerView(bodyBudget int) string {
 	p := f.picker
 	hint := "↑/↓ move · enter select · ctrl-r refresh · esc cancel"
 	switch {
+	case p.key == specialistAddKey:
+		hint = "↑/↓ move · enter add · esc cancel"
 	case p.ordered:
 		// No refresh: the options are lola's own constants, not fetched.
 		hint = "↑/↓ move · space add/remove · enter confirm · esc cancel — the NUMBER is the tie-break order"
@@ -1542,14 +1597,24 @@ func (f *settingsForm) save() settingsFormEvent {
 	}
 	// The provider catalog (skipped entirely while the Review tab is read-only —
 	// the legacy tables stay as they are pending an explicit migrate).
+	var profiles []reviewprofile.Profile
 	var provs []config.ReviewProvider
 	if !f.reviewLegacy {
 		var perr error
+		if profiles, perr = f.buildSpecialists(); perr != nil {
+			f.err = perr.Error()
+			return settingsFormNone
+		}
 		if provs, perr = f.buildReviewProviders(); perr != nil {
 			return settingsFormNone // f.err already set
 		}
 	}
 
+	sshHosts, sshErr := f.buildSSHHosts()
+	if sshErr != nil {
+		f.err = sshErr.Error()
+		return settingsFormNone
+	}
 	c := f.cfg
 	// Snapshot the tables we touch so a failed Validate can be rolled back cleanly.
 	// The slice/map members of Defaults (post_create, symlinks, env, …) are always
@@ -1558,10 +1623,12 @@ func (f *settingsForm) save() settingsFormEvent {
 	oldD, oldN, oldB, oldR, oldC := c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit
 	oldUI := c.UI
 	oldP := c.ReviewProviders
+	oldProfiles := c.ReviewProfiles
 	oldSA := c.StatusAgent
 	oldRem := c.Remote
 	oldLin := c.Linear
 	oldLA := c.LinearAgent
+	oldSSH := c.SSHHosts
 
 	// The Linear key, if one was typed. This writes the KEYCHAIN before the
 	// config is validated, which is deliberate and safe in that order: a stored
@@ -1576,6 +1643,7 @@ func (f *settingsForm) save() settingsFormEvent {
 
 	// [defaults] project fallbacks — the counterpart of each inheritable
 	// [[project]] key (config.ProjectInherits).
+	c.Defaults.AutoPRComments = f.field("def_auto_pr_comments").b
 	c.Defaults.BranchPrefix = strings.TrimSpace(f.field("def_branch_prefix").text)
 	c.Defaults.Symlinks = trimDropEmpty(f.field("def_symlinks").lines)
 	c.Defaults.PostCreate = trimDropEmpty(f.field("def_post_create").lines)
@@ -1609,7 +1677,6 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Remote.Enabled = f.field("remote_enabled").b
 	c.Remote.Bind = strings.TrimSpace(f.field("remote_bind").text)
 	c.Remote.Port = remotePort
-	c.Remote.InsecureLAN = f.field("remote_insecure_lan").b
 	c.Remote.Advertise = f.field("remote_advertise").b
 	c.Remote.DevForward = f.field("remote_dev_forward").b
 
@@ -1622,6 +1689,9 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.LinearAgent = la.Normalized()
 
 	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
+	c.UI.FollowSystem = f.field("ui_follow_system").b
+	c.UI.LightTheme = strings.TrimSpace(f.field("ui_light_theme").text)
+	c.UI.DarkTheme = strings.TrimSpace(f.field("ui_dark_theme").text)
 
 	// The review provider catalog replaces the two legacy tables. In catalog
 	// mode the legacy tables MUST stay zero (a non-empty pair alongside a catalog
@@ -1629,17 +1699,28 @@ func (f *settingsForm) save() settingsFormEvent {
 	// here with legacy already cleared, so assigning the built catalog is safe.
 	if !f.reviewLegacy {
 		c.ReviewProviders = provs
+		c.ReviewProfiles = profiles
 	}
 
+	c.SSHHosts = sshHosts
+	hubOld, hubErr := f.applyHub(c) // hubsettings.go
 	rollback := func() {
+		restoreHub(c, hubOld)
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
 		c.UI = oldUI
 		c.ReviewProviders = oldP
+		c.ReviewProfiles = oldProfiles
+		c.SSHHosts = oldSSH
 		c.StatusAgent = oldSA
 		c.Remote = oldRem
 		c.Linear = oldLin
 		c.LinearAgent = oldLA
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
+	}
+	if hubErr != nil {
+		rollback()
+		f.err = hubErr.Error()
+		return settingsFormNone
 	}
 	if err := c.Validate(); err != nil {
 		rollback()
@@ -1793,6 +1874,7 @@ func (f *settingsForm) buildReviewProviders() ([]config.ReviewProvider, error) {
 		p.TimeoutSeconds = timeout
 		p.Visible = f.field(pvKey(kind, "visible")).b
 		p.GitHubInline = f.field(pvKey(kind, "inline")).b
+		p.GitHubStatus = f.field(pvKey(kind, "status")).b
 		p.SetFallbackKinds(trimDropEmpty(f.field(pvKey(kind, "fallback")).lines))
 		out = append(out, p)
 	}
@@ -1834,7 +1916,15 @@ func (f *settingsForm) tabStrip() string {
 		}
 		parts = append(parts, faintText.Render(t.title))
 	}
-	return "  " + strings.Join(parts, faintText.Render(" · "))
+	strip := "  " + strings.Join(parts, faintText.Render(" · "))
+	if f.viewportWidth > 0 && lipgloss.Width(strip) > f.viewportWidth {
+		for _, t := range settingsTabs {
+			if t.tab == f.tab {
+				return "  ‹ " + boxTitleHi.Render(t.title) + " ›  " + faintText.Render("tab / shift-tab to switch")
+			}
+		}
+	}
+	return strip
 }
 
 // fieldRegion renders the ACTIVE tab's section/subsection headers and field
@@ -1855,7 +1945,11 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 		}
 		if fld.subsection != "" {
 			// Indented sub-header grouping fields under a shared section.
-			lines = append(lines, "  "+faintText.Render("▸ "+fld.subsection))
+			heading := fld.subsection
+			if strings.HasPrefix(fld.key, "specialist.") && strings.HasSuffix(fld.key, ".id") {
+				heading = fld.text
+			}
+			lines = append(lines, "  "+faintText.Render("▸ "+heading))
 		}
 		onField := vi == f.cursor
 		open := onField && f.editing
@@ -1906,12 +2000,22 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 				if fld.wsPick && !typing {
 					shown = f.labelText(e)
 				}
+				if !typing {
+					for _, choice := range fld.choices {
+						if choice.id == e {
+							shown = choice.label
+							break
+						}
+					}
+				}
 				lines = append(lines, indent+"      "+bullet+shown+caret)
 			}
 			continue
 		}
 		var val string
 		switch fld.kind {
+		case sfAction:
+			val = faintText.Render("[enter]")
 		case sfBool:
 			val = boolGlyph(fld.b)
 		case sfEnum:
@@ -1949,6 +2053,13 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 // key hint. Always shown below the (scrolling) field region.
 func (f *settingsForm) footerLines() []string {
 	var out []string
+	f.sshRefreshHelp()
+	if f.sshRemoving >= 0 {
+		h := f.sshHostFromFields(f.sshRemoving)
+		out = append(out, "", warnText.Render(fmt.Sprintf("Remove %s? Its live connections close, and agents can no longer ask for it.", h.DisplayName())),
+			faintText.Render(protocol.SSHRemoteOutlives), "", warnText.Render("Y")+faintText.Render(" remove from this draft · any other key keeps it"))
+		return out
+	}
 	if help := f.cur().help; help != "" {
 		out = append(out, "", faintText.Render(help))
 	}
@@ -1977,7 +2088,7 @@ func (f *settingsForm) footerLines() []string {
 	if f.reviewReadOnly() {
 		out = append(out, "", warnText.Render("! legacy [review]/[coderabbit] tables — read-only. Press m to migrate to the editable provider catalog."))
 	}
-	hint := "tab/⇧tab section · ↑/↓ field · space toggle · ctrl-s save · esc cancel"
+	hint := "tab section · ↑/↓ field · space toggle · ctrl-s save · esc cancel"
 	switch {
 	case f.confirmDiscard:
 		// Replaces the key hint entirely: while the prompt is up, answering it is
@@ -1987,6 +2098,8 @@ func (f *settingsForm) footerLines() []string {
 		return out
 	case f.reviewReadOnly():
 		hint = "m migrate to providers · tab/⇧tab section · ↑/↓ field · ctrl-s save · esc cancel"
+	case f.cur().kind == sfAction:
+		hint = "enter select · ↑/↓ field · ctrl-s save · esc cancel"
 	case f.editing:
 		hint = "editing " + f.cur().label + " — ↑/↓ line · enter new line · esc done"
 	case f.cur().wsPick:
@@ -2056,6 +2169,13 @@ func (f *settingsForm) scrolledView(bodyBudget int) string {
 	}
 	region, fieldLine := f.fieldRegion()
 	footer := f.footerLines()
+	if f.viewportWidth > 0 {
+		var wrapped []string
+		for _, line := range footer {
+			wrapped = append(wrapped, strings.Split(lipgloss.NewStyle().Width(f.viewportWidth).Render(line), "\n")...)
+		}
+		footer = wrapped
+	}
 	avail := bodyBudget - len(footer) - 2 // -2 for the tab strip + its blank
 	if avail < 1 {
 		avail = 1
@@ -2118,6 +2238,7 @@ func (m *rootModel) settingsFormModal() string {
 	}
 	// box shows h-2 body rows; the title lifts into the border and the leading
 	// blank costs one row, so the scroller gets mh-2-2 rows for content+footer.
+	m.settings.viewportWidth = mw - 4
 	lines := strings.Split(strings.TrimRight(m.settings.scrolledView(mh-3), "\n"), "\n")
 	title := "settings"
 	if len(lines) > 0 {
@@ -2132,4 +2253,15 @@ func (m *rootModel) settingsFormModal() string {
 	}
 	modal := box(title, body, mw, mh, true)
 	return strings.Join(placeModal(m.backdropLines(), modal, W), "\n")
+}
+
+// themeChoices uses config's tags, so a light slot cannot offer a dark palette.
+func themeChoices(dark bool) []string {
+	var ids []string
+	for _, id := range config.UIThemes {
+		if config.UIThemeIsDark(id) == dark {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

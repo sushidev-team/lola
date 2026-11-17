@@ -1,0 +1,34 @@
+[
+  {
+    "id": "u-1:0",
+    "kind": "user",
+    "order": 0,
+    "turn": "u-1:0",
+    "text": "First",
+    "at": "2026-11-06T10:00:00Z"
+  },
+  {
+    "id": "a-1:0",
+    "kind": "text",
+    "order": 1,
+    "turn": "u-1:0",
+    "text": "One",
+    "at": "2026-11-06T10:00:01Z"
+  },
+  {
+    "id": "segment:bbbbbbbb-0000-4000-8000-000000000002.jsonl",
+    "kind": "divider",
+    "order": 2,
+    "turn": "v-1:0",
+    "text": "Context cleared",
+    "at": "2026-11-06T12:00:00Z"
+  },
+  {
+    "id": "v-1:0",
+    "kind": "user",
+    "order": 3,
+    "turn": "v-1:0",
+    "text": "After clearing",
+    "at": "2026-11-06T12:00:00Z"
+  }
+]

@@ -1,0 +1,77 @@
+{
+  "id": "74b71af666a51bd8dc498d54c16c94525b2b1b5d9bc3bec0fd8f8ddfd3f30b41",
+  "goal": "95b9671e-e5ba-40c1-86f0-4481f7fc59b0",
+  "operation": "358aba53-03ff-46a1-8ce6-165946a383eb",
+  "policy": "10df0b60062a9a47d61beb79e4f7b196fc27acb898fecdb20ca51bcb49bc1460",
+  "spec": {
+    "id": "dialog-acceptance",
+    "command": "PILOT_ASSERT_STYLE=1 sh /opt/pilot/check.sh",
+    "member": "nori-app",
+    "image": "sha256:d3f85088fc383f8114b9ed1e57ba8916a0c92d75fba8c914d3a7085da0d7d6c8",
+    "timeout_seconds": 900,
+    "artifacts": [
+      {
+        "id": "light-desktop",
+        "kind": "screenshot",
+        "path": "nori-app/pilot-evidence/light-desktop.png"
+      },
+      {
+        "id": "light-desktop-overflow",
+        "kind": "screenshot",
+        "path": "nori-app/pilot-evidence/light-desktop-overflow.png"
+      },
+      {
+        "id": "light-narrow",
+        "kind": "screenshot",
+        "path": "nori-app/pilot-evidence/light-narrow.png"
+      },
+      {
+        "id": "light-narrow-overflow",
+        "kind": "screenshot",
+        "path": "nori-app/pilot-evidence/light-narrow-overflow.png"
+      },
+      {
+        "id": "dark-desktop",
+        "kind": "screenshot",
+        "path": "nori-app/pilot-evidence/dark-desktop.png"
+      },
+      {
+        "id": "dark-desktop-overflow",
+        "kind": "screenshot",
+        "path": "nori-app/pilot-evidence/dark-desktop-overflow.png"
+      },
+      {
+        "id": "dark-narrow",
+        "kind": "screenshot",
+        "path": "nori-app/pilot-evidence/dark-narrow.png"
+      },
+      {
+        "id": "dark-narrow-overflow",
+        "kind": "screenshot",
+        "path": "nori-app/pilot-evidence/dark-narrow-overflow.png"
+      },
+      {
+        "id": "interaction",
+        "kind": "interaction",
+        "path": "nori-app/pilot-evidence/interaction.json"
+      },
+      {
+        "id": "commands",
+        "kind": "test",
+        "path": "nori-app/pilot-evidence/commands.json"
+      }
+    ]
+  },
+  "manifest": {
+    "nori-app": {
+      "commit": "66fa02bb78d85f71c15dda5f2689cc6339aa7df8",
+      "operation": "358aba53-03ff-46a1-8ce6-165946a383eb"
+    }
+  },
+  "state": "fail",
+  "stopped": true,
+  "error": "docker run: exit status 1: {\"unit_exit\":0,\"storybook_exit\":0,\"build_exit\":134,\"capture_exit\":0}\n",
+  "output": "{\"unit_exit\":0,\"storybook_exit\":0,\"build_exit\":134,\"capture_exit\":0}\n",
+  "started_at": "2026-10-22T00:50:32.481408Z",
+  "finished_at": "2026-10-22T00:51:50.576366Z"
+}

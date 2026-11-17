@@ -19,16 +19,27 @@ var (
 	ErrUnauthenticated = errors.New("remote: unauthenticated peer")
 
 	// ErrDenied is the authorizer's answer to a frame this peer may not send.
-	// It is distinct from the unconditional denials in policy.go, which no
-	// authorizer is consulted about at all.
+	// It is distinct from tier never, which conn.authorize refuses before any
+	// authorizer is consulted, so no implementation can grant one.
 	ErrDenied = errors.New("remote: frame denied for this peer")
 
-	// ErrNoAuthorizer is returned by newAuthorizer in a build without the
-	// lola_insecure tag: M1 has no cryptography, so a release binary has no way
-	// to authenticate a peer and therefore refuses to listen. M2 replaces this
-	// with the device registry and mutual TLS.
-	ErrNoAuthorizer = errors.New("remote: no authorizer in this build")
+	// ErrPairingDone ends a pairing connection after its outcome frame was
+	// written. It is not a rejection: the phone reconnects as a paired device
+	// (or the pairing failed and was already audited), so it logs at info.
+	ErrPairingDone = errors.New("remote: pairing connection finished")
 )
+
+// The path a connection arrived on. The value is wire-visible (ReadyData.Via,
+// PairStatusData.Via) and a log field (via=).
+const (
+	ViaLAN   = "lan"   // a socket accepted by a listener (LAN, VPN, loopback)
+	ViaRelay = "relay" // a spliced hub stream handed in by ServeRelayed
+)
+
+// relayed is implemented by the relay's net.Conn. A conn whose TLS layer sits on
+// one gets Handshake.Via = ViaRelay and Handshake.RelayRV = relayRV(); any other
+// conn is ViaLAN.
+type relayed interface{ relayRV() string }
 
 // Peer is the identity a connection was authenticated as. It is built by the
 // authorizer and is READ-ONLY to everything downstream: nothing on the wire may
@@ -37,8 +48,7 @@ var (
 // ignore, and that is the shape of mistake this design removes rather than
 // documents.
 type Peer struct {
-	// DeviceID names the peer in the audit line. In M1 there is exactly one
-	// possible value; in M2 it is the registry key.
+	// DeviceID is the registry id; it names the peer in the audit line.
 	DeviceID string
 
 	// Label is a human-facing name for a log line ("Martin's iPhone"). It is
@@ -48,26 +58,26 @@ type Peer struct {
 	// RemoteAddr is the peer's address as the listener saw it.
 	RemoteAddr string
 
+	// Epoch is the registry epoch of the device entry this connection
+	// authenticated under. AuthorizeFrame ends the connection when the entry
+	// was revoked or replaced since.
+	Epoch uint64
+
+	// Via is the path the connection arrived on: ViaLAN or ViaRelay. It is
+	// copied from Handshake.Via and never set from anything the peer sends.
+	Via string
+
 	// ConnectedAt stamps the accept, from Options.Now.
 	ConnectedAt time.Time
-
-	// Insecure records that this peer was authenticated by the M1 bearer-key
-	// path rather than by a device key. It exists so the audit line can say so
-	// on every mutating frame; nothing grants or withholds anything on it.
-	Insecure bool
 }
 
 // Handshake is the pre-dispatch view of a newly accepted connection, handed to
 // Authorizer.Authenticate before a single frame is routed.
 //
-// It carries both a read and a write closure because the two authentication
-// shapes this design has to accommodate are genuinely different, and the seam
-// would leak one of them if it only carried the other. M2 authenticates from
-// the TLS handshake — a pinned client certificate checked against the device
-// registry — and ignores NextFrame entirely. M1 has no cryptography, so its
-// bearer key has to arrive IN BAND over the already-encrypted connection, which
-// means reading exactly one frame and answering it. Keeping that difference
-// inside the authorizer is what lets the whole frame loop below stay tag-free.
+// Authentication is by the pinned client certificate in TLS; a pairing
+// candidate is the exception and talks in band, which is why the handshake also
+// carries a read and a write closure. Keeping that difference inside the
+// authorizer is what lets the whole frame loop stay ignorant of it.
 type Handshake struct {
 	// RemoteAddr is the peer's address.
 	RemoteAddr string
@@ -79,6 +89,16 @@ type Handshake struct {
 
 	// At is the accept time, from Options.Now.
 	At time.Time
+
+	// Via is ViaLAN or ViaRelay; "" is read as ViaLAN.
+	Via string
+
+	// RelayRV is the rendezvous id the hub matched; "" unless Via == ViaRelay.
+	RelayRV string
+
+	// SetReadDeadline lets an authorizer that holds the connection longer than
+	// the handshake (pairing waits for a human) manage its own read deadline.
+	SetReadDeadline func(time.Time) error
 
 	// NextFrame reads one more frame from the connection. It has already
 	// passed the envelope checks — a known version, a known type, travelling
@@ -95,8 +115,8 @@ type Handshake struct {
 }
 
 // Authorizer decides who may connect and what each frame of theirs may do. It
-// is consulted AFTER the unconditional denials in policy.go, never before, so
-// there is no implementation that can grant stop, hookEvent or a forced kill.
+// is consulted AFTER tier never is refused, never before, so there is no
+// implementation that can grant stop, hookEvent or a forced kill.
 //
 // Both methods must be safe for concurrent use: AuthorizeFrame is called from
 // the connection's reader goroutine, and one server serves many connections.
@@ -109,9 +129,8 @@ type Authorizer interface {
 
 	// AuthorizeFrame is called for EVERY inbound frame, not once per
 	// connection. That is what makes a capability downgrade behave like a
-	// revocation in M2: it takes effect on the device's next frame rather than
-	// whenever it next reconnects. In M1 it is a formality, and it is still
-	// called on every frame so that the shape cannot rot before there is
-	// something to enforce.
+	// revocation: it takes effect on the device's next frame rather than
+	// whenever it next reconnects. It must have no side effects, because the
+	// event pump calls it before every pushed event too.
 	AuthorizeFrame(ctx context.Context, peer Peer, f *protocol.Frame) error
 }

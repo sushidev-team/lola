@@ -28,25 +28,24 @@ describe("SectionHeader", () => {
     const { container } = render(SectionHeader, { props: { title: "Needs you", count: 2 } });
     const label = container.querySelector("span")!;
 
-    // `text-xs` is the 10/12 bold tracked label step and carries no transform
+    // `text-micro` is the 11/13 bold tracked label step and carries no transform
     // of its own, so `uppercase` is the call site's. Uppercasing the STRING
     // would put an initialism in the accessibility tree.
-    expect(label.className).toContain("text-xs");
+    expect(label.className).toContain("text-micro");
     expect(label.className).toContain("uppercase");
     expect(label.textContent).toBe("Needs you");
   });
 
-  it("hides the rule from the accessibility tree and lets it take the slack", () => {
+  it("draws no rule and right-aligns the count", () => {
     const { container } = render(SectionHeader, { props: { title: "Done", count: 9 } });
-    const rule = container.querySelector("[aria-hidden='true']")!;
-
-    // A flex ITEM, because it takes whatever the label and the count leave —
-    // a border could not flex. `edge-soft` is the design's list hairline;
-    // plain `edge` is the heavier panel border and is wrong at this weight.
-    expect(rule.className).toContain("h-px");
-    expect(rule.className).toContain("flex-1");
-    expect(rule.className).toContain("bg-edge-soft");
-    // ...and it contributes nothing to the heading's name.
-    expect(screen.getByRole("heading", { name: "Done 9" })).toBeTruthy();
+    expect(container.querySelector("[aria-hidden='true']")).toBeNull();
+    expect(container.querySelector(".h-px")).toBeNull();
+    const h = screen.getByRole("heading", { name: "Done 9" });
+    expect(h.className).toContain("items-baseline");
+    expect(h.className).toContain("pt-6");
+    const count = container.querySelectorAll("span")[1];
+    expect(count.className).toContain("ml-auto");
+    expect(count.className).toContain("tabular-nums");
+    expect(count.className).toContain("text-footnote");
   });
 });

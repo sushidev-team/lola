@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Chevron from "$lib/components/Chevron.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { onMount, onDestroy, tick, type Snippet } from "svelte";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { store } from "$lib/store.svelte";
@@ -8,18 +10,24 @@
   import { deepEqual } from "$lib/deepEqual";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
+  import CommitInstructions from "$lib/components/CommitInstructions.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import Button from "$lib/components/Button.svelte";
   import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
-  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT } from "$lib/settingsFields";
+  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT, FIELD_KEYS } from "$lib/settingsFields";
   import Checkbox from "$lib/components/Checkbox.svelte";
   import AgentModelFields from "$lib/components/AgentModelFields.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
+  import VariableMenu from "$lib/components/VariableMenu.svelte";
+  import { commandVariables, envValueVariables, insertVariable, type VariableGroup } from "$lib/fieldVariables";
   import { BRANCH_PREFIXES } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
+  import SandboxLoginPrompt from "$lib/components/SandboxLoginPrompt.svelte";
+  import SandboxToolchains from "$lib/components/SandboxToolchains.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
   import { labelIdsFor } from "$lib/labelpick";
+  import { askRemoveStack } from "$lib/removeAsk";
   import type {
     ProjectFormDTO,
     InheritsDTO,
@@ -28,6 +36,7 @@
     LinearTeam,
     LinearTeamMeta,
     LinearOption,
+    StackFolderAppDTO,
   } from "@bindings/desktop/models";
 
   // A project IS the poll unit, so this one overlay covers the whole
@@ -41,16 +50,18 @@
   // leaving the stack gives them back.
   const ALL_TABS = [
     { id: "repo", label: "General" },
+    { id: "execution", label: "Execution" },
     { id: "worktree", label: "Worktree setup" },
-    { id: "members", label: "Members" },
     { id: "stack", label: "Stack" },
     { id: "filter", label: "Issue pickup" },
     { id: "writeback", label: "Linear updates" },
+    // Last on a stack: its members' labels refine the pickup set up before it.
+    { id: "members", label: "Members" },
   ];
   type Role = "project" | "stack" | "member";
   const TABS_FOR: Record<Role, string[]> = {
-    project: ["repo", "worktree", "filter", "writeback"],
-    stack: ["repo", "members", "filter", "writeback"],
+    project: ["repo", "execution", "worktree", "filter", "writeback"],
+    stack: ["repo", "execution", "filter", "writeback", "members"],
     member: ["repo", "worktree", "stack"],
   };
 
@@ -67,6 +78,7 @@
     "dedupMode",
     "prioritySort",
     "requirePlan",
+    "autoPRComments",
   ] as const;
   type InheritKey = (typeof INHERIT_KEYS)[number];
 
@@ -99,28 +111,89 @@
   // A stack's members, live from the store (membership is changed in the
   // sidebar, not here).
   const stackMembersList = $derived(f && role === "stack" ? store.projects.filter((p) => p.stack === origName) : []);
-  /**
-   * Members whose labels the stack's own pickup would never let through: an
-   * issue reaches a stack only via its Match labels, so a member label missing
-   * there (or a match-ALL mode) means "checked out for X" can never fire for an
-   * issue labelled only X.
+  /*
+   * Member labels, edited on the stack's Members tab and saved with the stack
+   * (ConfigService.SetStackMemberLabels touches ONLY each member's labels).
+   * memberBase is what the member had when the form first saw it, so an
+   * untouched tab adds nothing to `dirty`.
    */
-  const unpickedMembers = $derived.by(() => {
-    if (!f || role !== "stack" || !f.matchLabels?.length) return [];
-    const opts = meta?.labels ?? [];
-    const match = new Set(labelIdsFor(f.matchLabels, opts));
-    return stackMembersList.filter((m) => {
-      const ls = labelIdsFor(m.labels ?? [], opts);
-      return ls.length > 0 && (f!.matchMode === "all" || ls.some((l) => !match.has(l)));
-    });
+  let memberLabels = $state<Record<string, string[]>>({});
+  let memberBase = $state<Record<string, string[]>>({});
+  let memberOpen = $state("");
+  let memberCandidates = $state<{ app: StackFolderAppDTO; include: boolean }[]>([]);
+  const pendingMembers = $derived(memberCandidates.filter((c) => c.include && !c.app.blocked).map((c) => c.app));
+  let scanningMembers = $state(false);
+  let addingMembers = $state(false);
+  let memberAddNote = $state("");
+  let memberScanDone = $state(false);
+  let memberScanErr = $state("");
+  let memberScanPath = $state("");
+  let memberScanRequest = 0;
+  onDestroy(() => { memberScanRequest++; });
+
+  async function scanMembers(pick: boolean) {
+    if (scanningMembers || addingMembers || saving) return;
+    const request = ++memberScanRequest;
+    const stack = origName;
+    scanningMembers = true;
+    memberScanErr = "";
+    memberAddNote = "";
+    try {
+      const path = pick ? await ConfigService.PickFolder(memberScanPath) : "";
+      if (request !== memberScanRequest || (pick && !path)) return;
+      const scan = await ConfigService.ScanStackMembers(stack, path);
+      if (request !== memberScanRequest || stack !== origName) return;
+      if (path) memberScanPath = path;
+      const candidates = new Map(memberCandidates.map((c) => [c.app.path, c]));
+      for (const app of scan.apps ?? []) {
+        const prev = candidates.get(app.path);
+        candidates.set(app.path, { app: { ...app }, include: !app.blocked && (prev?.include ?? true) });
+      }
+      memberCandidates = [...candidates.values()].filter((c) => !stackMembersList.some((m) => m.name === c.app.project));
+      memberScanDone = true;
+    } catch (e) {
+      if (request === memberScanRequest) memberScanErr = `Could not scan folders: ${String(e)}`;
+    } finally {
+      if (request === memberScanRequest) scanningMembers = false;
+    }
+  }
+
+  async function addSelectedMembers() {
+    if (addingMembers || scanningMembers || saving || !pendingMembers.length) return;
+    const apps = [...pendingMembers];
+    addingMembers = true;
+    memberScanErr = "";
+    memberAddNote = "";
+    try {
+      await ConfigService.AddStackMembersFromFolder(origName, apps);
+      const added = new Set(apps.map((a) => a.path));
+      memberCandidates = memberCandidates.filter((c) => !added.has(c.app.path));
+      memberScanDone = false;
+      await store.refresh();
+      memberAddNote = `Added ${apps.length} ${apps.length === 1 ? "repository" : "repositories"}.`;
+    } catch (e) {
+      memberScanErr = `Could not add repositories: ${String(e)}`;
+    } finally {
+      addingMembers = false;
+    }
+  }
+  $effect(() => {
+    for (const m of stackMembersList) {
+      if (m.name in memberBase) continue;
+      memberBase[m.name] = [...(m.labels ?? [])];
+      memberLabels[m.name] = [...(m.labels ?? [])];
+    }
   });
+  const memberChanged = $derived(
+    Object.keys(memberLabels).filter((n) => !deepEqual(cleanLines(memberLabels[n]), cleanLines(memberBase[n]))),
+  );
 
   // The DTO exactly as it was loaded, so a close can tell real edits from an
   // untouched form and only prompt to discard when something changed. Snapshotted
   // AFTER the normalization below so the comparison is against the same shape the
   // form mutates, not the raw backend DTO.
   let loaded = $state<ProjectFormDTO | null>(null);
-  const dirty = $derived.by(() => (f && loaded ? !deepEqual($state.snapshot(f), $state.snapshot(loaded)) : false));
+  const dirty = $derived.by(() => (f && loaded ? !deepEqual($state.snapshot(f), $state.snapshot(loaded)) : false) || memberChanged.length > 0 || pendingMembers.length > 0);
 
   // Everything on this tab is DERIVED from the folder: one InspectPath pass
   // yields the GitHub remote, the branch worktrees fork from, the branch list
@@ -144,6 +217,10 @@
   // the human types an id of their own, after which it is never rewritten.
   let origName = $state("");
   let idAuto = $state(false);
+  // A NEW project turns pickup on once it has a team, since a team is what it
+  // polls. Only until the human sets the Enabled box: after that the box is
+  // theirs, the same fill-only rule as repoAuto/branchAuto.
+  let enabledAuto = $state(false);
 
   // The checkout's branches, offered as suggestions on Default branch. A
   // custom option keeps the input free text, so a path that is not a checkout — or a
@@ -221,16 +298,26 @@
   const title = $derived(
     f
       ? f.isNew
-        ? "add project"
-        : `${role === "stack" ? "stack" : "project"}: ${displayName(f)}`
+        ? "Add project"
+        : `${role === "stack" ? "Stack" : "Project"}: ${displayName(f)}`
       : nav.overlayProject === ""
-        ? "add project"
-        : `project: ${nav.overlayProject}`,
+        ? "Add project"
+        : `Project: ${nav.overlayProject}`,
   );
-  // Saving needs a usable ID, not merely non-empty text: an all-non-ASCII label
+  // Why Save is off, said next to it instead of failing after the click.
+  // Saving needs a folder (config refuses a project without a path; a stack has
+  // none) and a usable ID, not merely non-empty text: an all-non-ASCII label
   // slugs to "" and there is no id to write.
-  const canSave = $derived(!!f && !saving && slug(f.name) !== ""
-    && (!customCap || (Number.isInteger(f.concurrencyCap) && f.concurrencyCap > 0)));
+  const saveBlock = $derived.by(() => {
+    if (!f) return "";
+    if (role !== "stack" && !f.path.trim()) return "Choose the project folder to save.";
+    if (slug(f.name) === "") return "Give the project a label or an ID to save.";
+    if (customCap && !(Number.isInteger(f.concurrencyCap) && f.concurrencyCap > 0)) {
+      return "Set the concurrency cap to a whole number of at least 1 to save.";
+    }
+    return "";
+  });
+  const canSave = $derived(!!f && !saving && !scanningMembers && !addingMembers && !saveBlock);
   const renaming = $derived(!!f && !f.isNew && slug(f.name) !== origName);
 
 
@@ -297,6 +384,8 @@
         break;
       case "requirePlan":
         f.requirePlan = !!d.requirePlan;
+      case "autoPRComments":
+        f.autoPRComments = d.autoPRComments;
         break;
       case "prioritySort":
         break; // not surfaced by this form; the bit is passed through on save
@@ -341,6 +430,10 @@
     }
   }
 
+  // The image an empty sandbox_image falls back to ([sandbox].image, else
+  // Lola's sandbox image), shown as the field's placeholder.
+  let sandboxDefaultImage = $state("");
+
   onMount(async () => {
     try {
       const d = await ConfigService.GetProject(nav.overlayProject);
@@ -349,6 +442,7 @@
       f = {
         ...d,
         label: d.label ?? "",
+        execution: d.execution ? { ...d.execution } : null,
         inherits: inheritsOf(d.inherits),
         kind: d.kind ?? "",
         stack: d.stack ?? "",
@@ -362,6 +456,7 @@
       // Only a NEW project derives its id from the label. An existing id is
       // load-bearing and must not drift when someone edits the label.
       idAuto = d.isNew;
+      enabledAuto = d.isNew && !d.enabled;
       // The seeded "main" is a placeholder, not a choice — the checkout's own
       // default branch replaces it. An existing project's branch is a decision.
       branchAuto = d.isNew;
@@ -384,6 +479,11 @@
       defaults = { ...(await ConfigService.GetSettings()) };
     } catch {
       // Non-fatal: reverting a key still works, it just keeps the shown value.
+    }
+    try {
+      sandboxDefaultImage = await ConfigService.SandboxImageDefault();
+    } catch {
+      // Only a placeholder: the generic one stays.
     }
     if (f.stack) {
       try {
@@ -413,7 +513,8 @@
     if (!dirty) return void go();
     confirm.ask({
       title: "Discard changes?",
-      body: `Discard your unsaved changes to ${f ? displayName(f) : "this project"}?`,
+      subject: f ? displayName(f) : "this project",
+      body: "",
       confirmLabel: "Discard",
       onConfirm: () => void go(),
     });
@@ -428,6 +529,7 @@
   function onTeam(v: string) {
     if (!f || v === f.teamId) return;
     f.teamId = v;
+    if (f.isNew && enabledAuto) f.enabled = !!v;
     // Team-specific drafts cannot be restored into another team's picker.
     for (const key of ["matchLabels", "onSentSetLabel", "blockedLabelId"] as const) overrideDrafts.delete(key);
     f.projectId = "";
@@ -499,6 +601,23 @@
     };
     try {
       await ConfigService.SaveProject(dto);
+      if (role === "stack" && pendingMembers.length) {
+        try {
+          await ConfigService.AddStackMembersFromFolder(id, pendingMembers);
+          memberCandidates = [];
+        } catch (e) {
+          throw new Error(`Stack settings were saved, but repositories were not added: ${String(e)}`);
+        }
+      }
+      if (role === "stack" && memberChanged.length) {
+        // A second write: name it, so a failure here does not read as if the
+        // stack's own settings were lost too (they are saved; Save retries both).
+        try {
+          await ConfigService.SetStackMemberLabels(id, Object.fromEntries(memberChanged.map((n) => [n, cleanLines(memberLabels[n])])));
+        } catch (e) {
+          throw new Error(`Stack settings were saved, but member labels were not: ${String(e)}`);
+        }
+      }
       store.setFlash(
         f.isNew ? `added ${displayName(dto)}` : `saved ${displayName(dto)}`,
         "good",
@@ -519,13 +638,15 @@
    * here, so neither trips the prompt.
    */
   function requestClose() {
+    if (addingMembers) return;
     if (!dirty) {
       nav.closeOverlay();
       return;
     }
     confirm.ask({
       title: "Discard changes?",
-      body: `Discard your unsaved changes to ${f ? displayName(f) : "this project"}?`,
+      subject: f ? displayName(f) : "this project",
+      body: "",
       confirmLabel: "Discard",
       onConfirm: () => nav.closeOverlay(),
     });
@@ -551,6 +672,11 @@
   }
 
   const formId = $props.id();
+  // What the "{ }" menu on a worktree field offers: shell variables for the
+  // command lists, {{.Field}} placeholders for env values.
+  const lease = $derived({ range: f?.portRange ?? "", perSession: f?.portsPerSession ?? 0 });
+  const commandVars = $derived(commandVariables(lease, f?.env));
+  const envValueVars = $derived(envValueVariables(lease));
   const rowCls = "project-field grid min-w-0 grid-cols-[170px_minmax(0,1fr)] items-baseline gap-3";
   const rowTopCls = "project-field grid min-w-0 grid-cols-[170px_minmax(0,1fr)] items-start gap-3";
   const labelCls = "label flex items-center gap-1.5 text-faint";
@@ -576,6 +702,8 @@
       {#if controlId}<label for={controlId}>{caption}</label>{:else}<span>{caption}</span>{/if}
       {#if hint}<HelpText label={caption} detail={hint} />{/if}
     </span>
+    <!-- The config.toml key, secondary to the plain caption. -->
+    {#if FIELD_KEYS[caption]}<code class="font-mono text-sm text-faint" data-field-key>{FIELD_KEYS[caption]}</code>{/if}
     {#if k}
       {@const on = inherited(k)}
       <span class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
@@ -626,14 +754,29 @@
   placeholder = "",
   hint = "",
   k: InheritKey | null = null,
+  vars: VariableGroup[] | null = null,
 )}
   {@const fieldId = `${formId}-${caption.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
   <div class={rowTopCls}>
     {@render cap(caption, k, hint, fieldId)}
-    <span>
+    <span class="relative">
+      {#if vars}
+        <!-- Overlaid top right; the textarea keeps that corner clear (pr-9). -->
+        <VariableMenu label={caption} groups={vars} class="absolute top-1 right-1 z-10"
+          onpick={(token) => {
+            const el = document.getElementById(fieldId) as HTMLTextAreaElement | null;
+            if (!el) return;
+            const next = insertVariable(el, token, el.dataset.caret === "1");
+            el.dataset.caret = "1";
+            if (k) promote(k);
+            onChange(splitLines(next));
+            el.focus();
+          }} />
+      {/if}
       <textarea
         id={fieldId}
-        class="{inputCls} block resize-y font-mono {inheritedStyle(k)}"
+        class="{inputCls} block resize-y font-mono {inheritedStyle(k)} {vars ? 'pr-9!' : ''}"
+        onfocus={(e) => { e.currentTarget.dataset.caret = "1"; }}
         aria-label={caption}
         aria-describedby={ENTRY_FORMAT[caption] ? `${fieldId}-format` : undefined}
         rows="3"
@@ -707,7 +850,7 @@
       }} />
     </div>
   {:else}
-    {@render areaRow(caption, selected, onChange, "one UUID per line", "", k)}
+    {@render areaRow(caption, selected, onChange, "one ID per line", "", k)}
   {/if}
 {/snippet}
 
@@ -745,14 +888,6 @@
   </div>
 {/snippet}
 
-{#snippet pickupHint()}
-  <p role="note" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
-    {unpickedMembers.map((m) => displayName(m)).join(", ")}
-    {unpickedMembers.length === 1 ? "has" : "have"} labels this stack's pickup does not match. An issue reaches the stack
-    only through Issue pickup → Match labels: add those labels there and match any label.
-  </p>
-{/snippet}
-
 <Modal {title} onClose={requestClose} width="660px">
   {#if loadErr}
     <div class="rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">{loadErr}</div>
@@ -760,6 +895,38 @@
     <div class="px-3 py-8 text-center text-sm text-faint">loading project…</div>
   {:else}
     {@const d = f}
+    <!-- Team drives every dependent picker. -->
+    {#snippet teamRow(caption: string)}
+      <div class={rowCls}>
+        <span class={labelCls}>{caption}</span>
+        {#if teams.length > 0}
+          <Select aria-label={caption} value={d.teamId} onchange={(e) => onTeam(e.currentTarget.value)}>
+            <option value="">(pick a team)</option>
+            {#each teams as t (t.id)}<option value={t.id}>{t.key} — {t.name}</option>{/each}
+          </Select>
+        {:else}
+          <!-- onchange, not oninput: switching teams clears the dependent IDs,
+               which must not happen on every keystroke of a pasted UUID. -->
+          <input
+            class="{inputCls} font-mono"
+            aria-label={caption}
+            value={d.teamId}
+            placeholder="team UUID"
+            onchange={(e) => onTeam(e.currentTarget.value)}
+          />
+        {/if}
+      </div>
+    {/snippet}
+    <!-- A team with neither a state nor a label filter matches EVERY issue in
+         it, which is almost never what someone setting up pickup meant. Said
+         wherever those filters are chosen; it never blocks the save. -->
+    {#snippet unfilteredWarning()}
+      {#if d.teamId && d.enabled && cleanLines(d.stateIds).length === 0 && cleanLines(d.matchLabels).length === 0}
+        <p class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn" data-unfiltered>
+          No workflow state or label is chosen, so Lola picks up every issue in this team. Choose the states to pick up.
+        </p>
+      {/if}
+    {/snippet}
     <Tabs tabs={TABS} active={shownTab} onSelect={(id) => (tab = id)} />
 
     {#if shownTab === "repo"}
@@ -781,8 +948,8 @@
                   oninput={(e) => { d.path = e.currentTarget.value; }}
                   onblur={() => void inspect(d.path, { fill: true })}
                 />
-                <Button size="sm" variant="secondary" onclick={pickFolder} disabled={picking}>
-                  {picking ? "Choosing…" : "Choose folder…"}
+                <Button size="sm" variant="secondary" class="h-auto! self-stretch" onclick={pickFolder} loading={picking} aria-label="Browse for project folder">
+                  <Icon name="folder" size={14} />Browse…
                 </Button>
               </span>
               <span class={hintCls}>
@@ -839,10 +1006,44 @@
             </span>
           </div>
           {/if}
+          {#if role !== "stack"}<CommitInstructions bind:value={d.commitInstructions} inherited={defaults?.commitInstructions ?? ''}/>{/if}
           {#if role !== "member"}
           <AgentModelFields provider={d.agent} providerLabel="Agent" defaultProvider={defaults?.agent ?? "claude"}
             rowClass={rowCls} labelClass={labelCls} onProviderChange={(value) => { d.agent = value; }} />
+          <div class={rowCls}>
+            <span class={labelCls}>PR comments</span>
+            <Select aria-label="Automatically address PR comments"
+              value={d.inherits.autoPRComments ? "inherit" : d.autoPRComments ? "on" : "off"}
+              onchange={(e) => {
+                const value = e.currentTarget.value;
+                if (value === "inherit") revert("autoPRComments");
+                else { promote("autoPRComments"); d.autoPRComments = value === "on"; }
+              }}>
+              <option value="inherit">Use global default ({defaults?.autoPRComments ? "on" : "off"})</option>
+              <option value="on">Automatically address and resolve</option>
+              <option value="off">Off</option>
+            </Select>
+          </div>
+          <p class="text-sm text-faint">When idle, the agent verifies new review comments, pushes fixes and resolves only addressed threads. Existing review-provider handoffs are configured separately.</p>
           {/if}
+          <!-- [[project]].hub_chores: the team hub's opt-in. Not inheritable (an
+               inherited opt-in would enrol every project by accident), and
+               refused by Validate on a stack or without an owner/name repo, so
+               the box is disabled with the reason instead of failing the save. -->
+          {@const choresBlocked = role === "stack"
+            ? "A stack has no repository of its own. Turn it on in the member projects."
+            : !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test((d.repo ?? "").trim())
+              ? "Set the GitHub repository above to offer team chores."
+              : ""}
+          <div class="grid gap-1.5">
+            <label class="flex items-center gap-2 text-ink">
+              <Checkbox checked={!!d.hubChores} disabled={!!choresBlocked && !d.hubChores}
+                onchange={() => { d.hubChores = !d.hubChores; }} />
+              Team chores
+            </label>
+            <p class="text-sm text-faint">Let the team hub hand this project security and dependency chores.</p>
+            {#if choresBlocked}<p class="text-sm {d.hubChores ? 'text-warn' : 'text-faint'}">{choresBlocked}{d.hubChores ? " Turn this off to save." : ""}</p>{/if}
+          </div>
           {#if role === "stack"}
             <!-- A stack session is ONE branch name across every member's
                  worktree, so the prefix is the stack's. -->
@@ -854,6 +1055,21 @@
           {/if}
         {/snippet}
         {@render section(role === "stack" ? "Stack and agent" : role === "member" ? "Repository" : "Repository and agent", repository)}
+        {#if d.isNew && role !== "member"}
+          <!-- The short path for a new project: folder, then team, then the
+               states to pick up, all on this first tab. Issue pickup has every
+               other filter. -->
+          {#snippet newPickup()}
+            <p class="text-sm text-faint">Choose the Linear team whose issues this {role === "stack" ? "stack" : "project"} works on, then the workflow states to pick up. Issue pickup has every other filter.</p>
+            {@render teamRow("Linear team")}
+            {#if d.teamId}
+              {#if metaLoading}<p class="text-sm text-faint">Loading workflow states…</p>{/if}
+              {@render multiRow("Workflow states", d.stateIds, meta?.states ?? null, (v) => { d.stateIds = v; })}
+            {/if}
+            {@render unfilteredWarning()}
+          {/snippet}
+          {@render section("Linear pickup", newPickup)}
+        {/if}
         {#if role === "stack"}
           <p class="text-sm text-faint">
             A stack has no checkout of its own: each session gets one worktree per member repository, side by side in
@@ -863,7 +1079,7 @@
           {@render stackNote()}
         {/if}
         <details class="pt-1">
-          <summary class="cursor-pointer text-faint">Advanced identity</summary>
+          <summary class="cursor-pointer text-faint"><Chevron class="disclosure-chevron" />Advanced identity</summary>
           <div class="mt-3">
         {@render textRow(
           "ID",
@@ -884,6 +1100,54 @@
           </div>
         </details>
       </div>
+    {:else if shownTab === "execution"}
+      {#if d.execution}
+        {@const execution = d.execution}
+        <div class="space-y-5">
+          {#snippet isolation()}
+            <div class={rowCls}>
+              {@render cap("Run agents in", null)}
+              <Select aria-label="Run agents in" value={execution.sandbox === "docker" ? "docker" : "none"}
+                onchange={(event) => { execution.sandbox = event.currentTarget.value; }}>
+                <option value="none">Host workspace</option>
+                <option value="docker">Docker workspace</option>
+              </Select>
+            </div>
+            <p class="text-sm text-faint">Applies to new agent sessions for this {role === "stack" ? "stack" : "project"}. Existing sessions keep their workspace.</p>
+            {#if execution.sandbox === "docker" || execution.image}
+              {@render textRow("Container image", execution.image, (value) => { execution.image = value; }, sandboxDefaultImage || "Lola’s sandbox image")}
+              <p class="text-sm text-faint">Empty uses Lola’s image. <HelpText label="container image" detail="Lola’s image carries Claude Code, Codex, OpenCode, git, gh and Node, plus the toolchains below. A custom image needs the coding agent and git, and replaces the toolchains; Lola mounts its own binary. Clear this override when switching to Host workspace." /></p>
+            {/if}
+            {#if execution.sandbox === "docker" && !execution.image.trim()}
+              <SandboxToolchains path={d.path} toolchains={execution.toolchains ?? []} packages={execution.packages ?? []}
+                onChange={(t, p) => { execution.toolchains = t; execution.packages = p; }} />
+            {/if}
+            {#if execution.sandbox === "docker"}
+              <SandboxLoginPrompt />
+            {/if}
+          {/snippet}
+          {@render section("Workspace isolation", isolation)}
+          {#snippet goals()}
+            <label class="flex items-center gap-2 text-ink">
+              <Checkbox checked={execution.goalMode}
+                disabled={!execution.goalMode && (execution.sandbox !== "docker" || !d.teamId || !d.projectId)}
+                onchange={(event) => { execution.goalMode = event.currentTarget.checked; }} />
+              Make autonomous goals available
+            </label>
+            <p class="text-sm text-faint">Each goal still needs a reviewed plan, limits and execution authorization. Work stays in isolated goal workspaces; delivery uses draft pull requests for human merge.</p>
+            {#if execution.sandbox !== "docker"}
+              <p class="text-sm text-warn">Choose Docker workspace above to enable goal mode{execution.goalMode ? ", or turn goal mode off before saving" : ""}.</p>
+            {/if}
+            {#if !d.teamId || !d.projectId}
+              <p class="text-sm text-faint">Choose an existing Linear team and project to track goals.</p>
+              <Button size="sm" onclick={() => { tab = "filter"; }}>Choose Linear project</Button>
+            {/if}
+          {/snippet}
+          {@render section("Autonomous goals", goals)}
+        </div>
+      {:else}
+        <p class="text-sm text-faint">Update the daemon to edit execution settings here.</p>
+      {/if}
     {:else if shownTab === "worktree"}
       <div class="space-y-5">
         {#snippet preparation()}
@@ -910,6 +1174,7 @@
             "npm install\nmake build",
             "one command per line — run after the worktree is created",
             "postCreate",
+            commandVars,
           )}
           {@render areaRow(
             "Pre-remove",
@@ -917,8 +1182,10 @@
             (v) => { d.preRemove = v; },
             'dropdb --if-exists "$LOLA_DB_NAME"',
             "one command per line — run in the worktree before lola removes it (merge cleanup, kill); bounded, failures are only logged",
+            null,
+            commandVars,
           )}
-          {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value\nAPI_URL=http://localhost", "one KEY=value per line", "env")}
+          {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value\nAPI_URL=http://localhost", "one KEY=value per line", "env", envValueVars)}
         {/snippet}
         {@render section("Worktree preparation", preparation)}
         {#snippet testing()}
@@ -930,7 +1197,16 @@
             d.portRange
               ? "one long-running command per line, each in its own terminal tab — every session can run them at once, on its own $LOLA_PORT"
               : "one long-running command per line — only the ACTIVE session runs them (one per project), each in its own terminal tab",
+            null,
+            commandVars,
           )}
+          {@render boolRow(
+            "Automatic ports",
+            d.portRange.trim().toLowerCase() === "auto",
+            () => { d.portRange = d.portRange.trim().toLowerCase() === "auto" ? "" : "auto"; },
+            "lola picks a free block for each session and remembers ports other apps hold",
+          )}
+          {#if d.portRange.trim().toLowerCase() !== "auto"}
           {@render textRow(
             "Port range",
             d.portRange,
@@ -940,6 +1216,7 @@
             false,
             "each session leases its own block as LOLA_PORT / LOLA_PORT_1..N, so dev commands can run in several sessions at once; empty = one active session",
           )}
+          {/if}
           {#if d.portRange}
             <div class={rowCls}>
               <span class={labelCls}>Ports per session</span>
@@ -956,33 +1233,93 @@
       </div>
     {:else if shownTab === "members"}
       <div class="space-y-4">
-        <p class="text-faint">
-          The repositories this stack's sessions span. Add one by dragging its project onto this stack in the sidebar
-          (or “Add to stack…” on its row's context menu); drag it out to remove it. Each member decides under its own
-          Stack tab which issues it is checked out for.
-        </p>
-        {#if unpickedMembers.length}
-          {@render pickupHint()}
-        {/if}
+        <div class="flex flex-wrap items-center gap-2">
+          <Button variant="secondary" size="sm" disabled={scanningMembers || addingMembers || saving || stackMembersList.length === 0}
+            onclick={() => void scanMembers(false)}>Rescan folders</Button>
+          <Button variant="secondary" size="sm" disabled={scanningMembers || addingMembers || saving}
+            onclick={() => void scanMembers(true)}><Icon name="folder" size={14} />Add parent folder…</Button>
+          {#if scanningMembers}<span role="status" class="text-sm text-faint">Scanning repositories…</span>{/if}
+        </div>
+        {#if memberScanErr}<p role="alert" class="text-sm text-bad">{memberScanErr}</p>{/if}
         {#if stackMembersList.length === 0}
           <p class="rounded border border-dashed border-edge px-3 py-4 text-center text-sm text-faint">No members yet.</p>
         {:else}
           <ul class="divide-y divide-edge rounded border border-edge" aria-label="Members">
             {#each stackMembersList as m (m.name)}
               {@const opts = meta?.labels ?? []}
-              <li class="flex items-baseline gap-3 px-3 py-2">
-                <span class="min-w-0 truncate text-ink">{displayName(m)}</span>
-                <span class="ml-auto min-w-0 truncate text-sm text-faint">
-                  {#if m.labels?.length}
-                    {labelIdsFor(m.labels, opts).map((id) => opts.find((o) => o.id === id)?.label ?? id).join(", ")}
-                  {:else}
-                    every issue
-                  {/if}
-                </span>
+              {@const sel = memberLabels[m.name] ?? m.labels ?? []}
+              <li class="px-3 py-2">
+                <div class="flex items-center gap-3">
+                  <span class="min-w-0 truncate text-ink">{displayName(m)}</span>
+                  <span class="ml-auto min-w-0 truncate text-sm text-faint">
+                    {#if sel.length}
+                      {labelIdsFor(sel, opts).map((lid) => opts.find((o) => o.id === lid)?.label ?? lid).join(", ")}
+                    {:else}
+                      every issue
+                    {/if}
+                  </span>
+                  <Button size="xs" selected={memberOpen === m.name} aria-expanded={memberOpen === m.name}
+                    aria-label="Labels for {displayName(m)}"
+                    onclick={() => (memberOpen = memberOpen === m.name ? "" : m.name)}>Labels</Button>
+                </div>
+                {#if memberOpen === m.name}
+                  <div class="mt-2">
+                    {#if meta?.labels}
+                      <CheckboxOptions label="Labels for {displayName(m)}" options={opts}
+                        selected={labelIdsFor(sel, opts)} onChange={(v) => { memberLabels[m.name] = v; }} />
+                    {:else}
+                      <textarea class="{inputCls} block resize-y font-mono" rows="2" spellcheck="false"
+                        aria-label="Labels for {displayName(m)}" placeholder={"apps/website\none label name or UUID per line"}
+                        value={linesToText(sel)} oninput={(e) => { memberLabels[m.name] = splitLines(e.currentTarget.value); }}></textarea>
+                    {/if}
+                    <span class={hintCls}>Checked out only for issues carrying one of these labels. None = every issue.</span>
+                  </div>
+                {/if}
               </li>
             {/each}
           </ul>
         {/if}
+        {#if memberCandidates.length}
+          <section aria-label="Repositories to add" class="space-y-2">
+            <div class="flex items-center justify-between gap-3">
+              <h3 class="text-sm font-medium text-ink">Repositories to add</h3>
+              <div role="group" aria-label="Repository selection" class="flex items-center gap-1">
+                <Button size="xs" aria-label="Select all repositories"
+                  disabled={saving || scanningMembers || addingMembers || !memberCandidates.some((c) => !c.app.blocked && !c.include)}
+                  onclick={() => { for (const c of memberCandidates) c.include = !c.app.blocked; }}>All</Button>
+                <span aria-hidden="true" class="h-3 w-px bg-edge"></span>
+                <Button size="xs" aria-label="Deselect all repositories"
+                  disabled={saving || scanningMembers || addingMembers || pendingMembers.length === 0}
+                  onclick={() => { for (const c of memberCandidates) c.include = false; }}>None</Button>
+              </div>
+            </div>
+            <ul class="max-h-56 divide-y divide-edge overflow-auto rounded border border-edge" aria-label="Discovered repositories">
+              {#each memberCandidates as c (c.app.path)}
+                <li>
+                  <label class="flex items-start gap-3 px-3 py-2 {c.app.blocked ? '' : 'cursor-pointer'}">
+                    <span class="pt-0.5"><Checkbox bind:checked={c.include} disabled={!!c.app.blocked || saving || addingMembers}
+                      aria-label="Include {c.app.label}" /></span>
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-ink">{c.app.label}</span>
+                      <span class="block truncate text-sm text-faint" title={c.app.path}>{c.app.path}</span>
+                      {#if c.app.blocked}<span class="block text-sm text-warn">{c.app.blocked}</span>
+                      {:else if c.app.project}<span class="block text-sm text-faint">Existing project</span>{/if}
+                    </span>
+                  </label>
+                </li>
+              {/each}
+            </ul>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <p role="status" class="text-sm text-faint">{pendingMembers.length} {pendingMembers.length === 1 ? "repository" : "repositories"} selected</p>
+              <Button variant="secondary" size="sm" loading={addingMembers}
+                disabled={saving || scanningMembers || addingMembers || pendingMembers.length === 0}
+                onclick={() => void addSelectedMembers()}>Add selected</Button>
+            </div>
+          </section>
+        {:else if memberScanDone && !scanningMembers && !memberScanErr}
+          <p role="status" class="text-sm text-faint">No new repositories found. Try another parent folder.</p>
+        {/if}
+        {#if memberAddNote}<p role="status" class="text-sm text-good">{memberAddNote}</p>{/if}
       </div>
     {:else if shownTab === "stack"}
       <div class="space-y-5">
@@ -1020,7 +1357,7 @@
         {/if}
 
         {#snippet pickup()}
-          {@render boolRow("Enabled", d.enabled, () => { d.enabled = !d.enabled; }, "poll Linear for matching issues")}
+          {@render boolRow("Enabled", d.enabled, () => { d.enabled = !d.enabled; enabledAuto = false; }, "poll Linear for matching issues")}
 
           <div class={rowCls}>
             <span class={labelCls}>Concurrency cap</span>
@@ -1055,26 +1392,7 @@
         {/snippet}
         {@render section("Plan approval", planGate)}
         {#snippet filters()}
-          <!-- Team drives every dependent picker. -->
-          <div class={rowCls}>
-            <span class={labelCls}>Team</span>
-            {#if teams.length > 0}
-              <Select aria-label="Team" value={d.teamId} onchange={(e) => onTeam(e.currentTarget.value)}>
-                <option value="">(pick a team)</option>
-                {#each teams as t (t.id)}<option value={t.id}>{t.key} — {t.name}</option>{/each}
-              </Select>
-            {:else}
-              <!-- onchange, not oninput: switching teams clears the dependent IDs,
-                   which must not happen on every keystroke of a pasted UUID. -->
-              <input
-                class="{inputCls} font-mono"
-                aria-label="Team"
-                value={d.teamId}
-                placeholder="team UUID"
-                onchange={(e) => onTeam(e.currentTarget.value)}
-              />
-            {/if}
-          </div>
+          {@render teamRow("Team")}
 
           {#if metaLoading}
             <p role="status" class="text-sm text-faint">Loading team options…</p>
@@ -1102,6 +1420,7 @@
           {/if}
 
           {@render multiRow("Workflow states", d.stateIds, meta?.states ?? null, (v) => { d.stateIds = v; })}
+          {@render unfilteredWarning()}
 
           {@render idRow(
             "Assignee",
@@ -1148,7 +1467,6 @@
           )}
           {/if}
           <HelpText label="team labels" summary="Labels follow the team." detail="Changing the team clears this project’s label overrides. Inherited workspace labels stay unchanged." />
-          {#if unpickedMembers.length}{@render pickupHint()}{/if}
         {/snippet}
         {@render section("Labels and repeat pickup", labels)}
       </div>
@@ -1186,7 +1504,7 @@
   {#if saveErr}
     <div role="alert" class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
-      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}>✕</Button>
+      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}><Icon name="x" size={14} /></Button>
     </div>
   {/if}
 
@@ -1197,11 +1515,17 @@
           <Button variant="danger-solid" size="md" onclick={remove}>{role === "stack" ? "Remove stack" : "Remove project"}</Button>
           <Button size="md" onclick={() => (confirmRemove = false)}>Cancel</Button>
         {:else}
-          <Button variant="danger" size="md" onclick={() => (confirmRemove = true)}>Remove</Button>
+          <Button variant="danger" size="md" onclick={() => {
+            // A stack asks which members to keep, in the shared confirm dialog.
+            // The form closes only once the removal is confirmed; Cancel keeps it and its edits.
+            if (role === "stack") askRemoveStack(origName, () => nav.closeOverlay());
+            else confirmRemove = true;
+          }}>Remove</Button>
         {/if}
       {/if}
-      <Button size="md" class="ml-auto" onclick={requestClose}>Cancel</Button>
-      <Button variant="primary" size="md" disabled={!canSave} onclick={save}>{saving ? "Saving…" : "Save"}</Button>
+      {#if saveBlock}<span id={`${formId}-save-why`} class="ml-auto text-right text-sm text-faint">{saveBlock}</span>{/if}
+      <Button size="md" class={saveBlock ? "" : "ml-auto"} onclick={requestClose}>Cancel</Button>
+      <Button variant="primary" size="md" disabled={!canSave} aria-describedby={saveBlock ? `${formId}-save-why` : undefined} onclick={save}>{saving ? "Saving…" : "Save"}</Button>
     </div>
   {/snippet}
 </Modal>

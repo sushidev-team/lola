@@ -20,6 +20,13 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as $models from "./models.js";
 
 /**
+ * IssueBrief reads the task itself, independently of the agent's progress report.
+ */
+export function IssueBrief(identifier: string): $CancellablePromise<$models.LinearIssueBrief> {
+    return $Call.ByID(1616200917, identifier);
+}
+
+/**
  * TeamMeta fetches everything the poll form's dependent pickers need for a team.
  */
 export function TeamMeta(teamID: string, refresh: boolean): $CancellablePromise<$models.LinearTeamMeta> {

@@ -83,6 +83,9 @@ func notableTransition(from, to string) bool {
 // event. Cheap and lock-safe: it only touches the event ring, never the store,
 // so it is safe to run inside the store's transition callback.
 func (d *Daemon) recordSessionEvent(from string, s session.Session) {
+	if from == "" {
+		d.noteSessionStarted(s) // only enqueues, so it is as lock-safe as the rest of this
+	}
 	if d.events == nil || !notableTransition(from, s.Status) {
 		return
 	}

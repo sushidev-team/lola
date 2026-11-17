@@ -317,6 +317,48 @@ github_inline = false
 	}
 }
 
+// github_status defaults OFF, an explicit true round-trips, and a watch can
+// never carry it (it relays someone else's review and has no verdict to post).
+func TestReviewProviderGitHubStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `
+[[review.provider]]
+provider = "codex-session"
+enabled = true
+github_status = true
+
+[[review.provider]]
+provider = "claude-session"
+enabled = true
+
+[[review.provider]]
+provider = "coderabbit-watch"
+enabled = true
+github_status = true
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.ReviewProviders[0].GitHubStatus || c.ReviewProviders[1].GitHubStatus || c.ReviewProviders[2].GitHubStatus {
+		t.Fatalf("github_status = %v/%v/%v, want true/false/false",
+			c.ReviewProviders[0].GitHubStatus, c.ReviewProviders[1].GitHubStatus, c.ReviewProviders[2].GitHubStatus)
+	}
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.ReviewProviders[0].GitHubStatus {
+		t.Error("github_status = true lost on round trip")
+	}
+}
+
 // A fresh &Config{} persists no [[review.provider]] tables and reloads to an
 // empty catalog.
 func TestReviewProvidersFreshConfigOmits(t *testing.T) {

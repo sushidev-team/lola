@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { Events } from "@wailsio/runtime";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -7,6 +7,7 @@
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { TermService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
+  import { termBoot } from "$lib/termboot";
   import { TERM_FONT, appearance, termFontLoaded, termFontReady } from "$lib/theme-runtime.svelte";
 
   // A live, interactive terminal attached to a session's tmux pane. WebGL is
@@ -42,6 +43,7 @@
     onExit,
     autofocus = false,
     onEscapeFocus,
+    focusRequest = 0,
   }: {
     name: string;
     webgl?: boolean;
@@ -49,7 +51,21 @@
     onExit?: () => void;
     autofocus?: boolean;
     onEscapeFocus?: () => void;
+    /**
+     * Bump to move the keyboard into this terminal after it mounted: the SSH
+     * workspace does it on go and on taking the wheel. A bump during the font wait
+     * is honoured when boot() finishes, because `term` does not exist yet.
+     */
+    focusRequest?: number;
   } = $props();
+  // The keyed parent clears/changes its name before this instance is destroyed.
+  // Transport callbacks must keep the identity we mounted with, or Detach("")
+  // leaves a hidden client attached and blocks queued messages indefinitely.
+  const terminalName = untrack(() => name);
+  const mountedRequest = untrack(() => focusRequest);
+  $effect(() => {
+    if (focusRequest !== mountedRequest) term?.focus();
+  });
 
   let host: HTMLDivElement;
   let term: Terminal | undefined;
@@ -72,7 +88,7 @@
   function detachOnce() {
     if (detachDone) return;
     detachDone = true;
-    TermService.Detach(name).catch(() => {});
+    TermService.Detach(terminalName).catch(() => {});
   }
 
   function b64ToBytes(b64: string): Uint8Array {
@@ -150,7 +166,7 @@
     wheelTimer = undefined;
     const lines = wheelLines;
     wheelLines = 0;
-    if (lines !== 0 && !disposed) void TermService.Scroll(name, lines).catch(() => {});
+    if (lines !== 0 && !disposed) void TermService.Scroll(terminalName, lines).catch(() => {});
   }
 
   onMount(() => {
@@ -261,7 +277,7 @@
         interactive
       ) {
         e.preventDefault();
-        void TermService.Write(name, "\x1b\r");
+        void TermService.Write(terminalName, "\x1b\r");
         return false; // swallow: the bare CR must never follow
       }
       if (
@@ -285,14 +301,14 @@
     const { cols, rows } = term;
 
     if (interactive) {
-      term.onData((d) => TermService.Write(name, d));
-      term.onResize(({ cols, rows }) => TermService.Resize(name, cols, rows));
+      term.onData((d) => TermService.Write(terminalName, d));
+      term.onResize(({ cols, rows }) => TermService.Resize(terminalName, cols, rows));
       // Grab the keyboard now so a shell tab / fullscreen embed is typeable
       // without a click — the reported "I start typing and it goes nowhere".
-      if (autofocus) term.focus();
+      if (autofocus || focusRequest !== mountedRequest) term.focus();
     }
 
-    off = Events.On(`pty:${name}`, (e: { data: string }) => {
+    off = Events.On(`pty:${terminalName}`, (e: { data: string }) => {
       term?.write(b64ToBytes(e.data));
     });
 
@@ -300,12 +316,14 @@
     // Subscribe only when wanted (the agent pane passes no onExit): its own tmux
     // ending means the session died, which the store already reflects elsewhere.
     if (onExit) {
-      offExit = Events.On(`pty:${name}:exit`, () => {
+      offExit = Events.On(`pty:${terminalName}:exit`, () => {
         if (!disposed) onExit?.();
       });
     }
 
-    attach = TermService.Attach(name, cols, rows).catch(() => {
+    // After the page's one-time orphan sweep (termboot.ts), never before it:
+    // the sweep would otherwise be able to detach this very terminal.
+    attach = termBoot().then(() => TermService.Attach(terminalName, cols, rows)).catch(() => {
       term?.writeln("\x1b[31m[ could not attach to session ]\x1b[0m");
     });
 

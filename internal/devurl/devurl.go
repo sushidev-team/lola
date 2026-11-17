@@ -158,6 +158,36 @@ func URLs(pane string) []string {
 	return out
 }
 
+// Merge reads several panes as one list, best first, capped at MaxCandidates. A session's dev tabs
+// are one question, "where do I open this", so a tab's position decides nothing: the second tab's
+// "Server running on" outranks the first tab's "Local:". The same local port under two names
+// (`localhost:8002` from a config line, `127.0.0.1:8002` from the server) is one address, and the
+// better evidence keeps it. Ties keep pane order.
+func Merge(panes []string) []string {
+	var all []Candidate
+	for _, p := range panes {
+		all = append(all, Scan(p)...)
+	}
+	sort.SliceStable(all, func(a, b int) bool { return all[a].Score > all[b].Score })
+	seen := map[string]bool{}
+	out := make([]string, 0, MaxCandidates)
+	for _, c := range all {
+		key := c.URL
+		if c.Port > 0 && (c.Host == "localhost" || c.Host == "127.0.0.1" || c.Host == "[::1]" || c.Host == "::1") {
+			key = "port:" + strconv.Itoa(c.Port)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, c.URL)
+		if len(out) == MaxCandidates {
+			break
+		}
+	}
+	return out
+}
+
 // candidatesIn extracts every acceptable URL from one line, plus the
 // port-without-a-URL fallback.
 func candidatesIn(line string) []Candidate {

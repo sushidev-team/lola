@@ -41,22 +41,27 @@ const (
 	viewDetail
 	viewPRPicker
 	viewTicketPicker
+	viewGoals
+	viewKnowledge
 )
 
 type rootModel struct {
-	cfgPath  string
-	cfg      *config.Config
-	view     int // viewCockpit | viewHome | viewDetail — the active top-level screen
-	tab      int // legacy tab index; superseded by the unified cockpit (focus)
-	focus    int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
-	home     homeModel
-	detail   detailModel
-	prpick   prPickerModel
-	ticket   ticketPickerModel
-	list     listModel
-	sessions sessionsModel
-	form     *formModel
-	settings *settingsForm // global settings editor modal ('S'); nil otherwise
+	terminalLight bool // unknown terminals retain the dark fallback
+	cfgPath       string
+	cfg           *config.Config
+	view          int // viewCockpit | viewHome | viewDetail — the active top-level screen
+	tab           int // legacy tab index; superseded by the unified cockpit (focus)
+	focus         int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
+	home          homeModel
+	detail        detailModel
+	prpick        prPickerModel
+	knowledge     knowledgeModel
+	goals         goalsModel
+	ticket        ticketPickerModel
+	list          listModel
+	sessions      sessionsModel
+	form          *formModel
+	settings      *settingsForm // global settings editor modal ('S'); nil otherwise
 
 	// Per-session shell tabs, DISCOVERED from the tmux server ("<id>-shell-N"
 	// sessions) so they stay in sync with the desktop app, which attaches to the
@@ -99,6 +104,10 @@ type rootModel struct {
 	// send line comments to its agent (diffview.go).
 	diff diffModel
 
+	// ssh is the full-screen agent-assisted SSH workspace ("H"), and the host
+	// picker that starts a direct session (ssh*.go).
+	ssh sshModel
+
 	// daemonOp is the in-flight lifecycle transition ("starting"/"stopping"/
 	// "restarting"), shown in the message line while a ^r/^x/auto-start op runs;
 	// cleared when its daemonOpMsg arrives. Only set in self-managed mode.
@@ -121,6 +130,8 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 		return m.handleEmbedPaste(content)
 	}
 	switch {
+	case m.ssh.open || m.ssh.picker != nil:
+		m.routeSSHPaste(content)
 	case m.diff.open:
 		if m.diff.input != diffInputNone {
 			m.diff.inputBuf += pasteJoined(content)
@@ -131,6 +142,43 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 		m.settings.paste(content)
 	case m.doctorLoading || m.doctorReport != nil:
 		// read-only overlay
+	case m.view == viewKnowledge && m.knowledge.improvements != nil:
+		p := m.knowledge.improvements
+		if !p.busy && !p.uncertain && !p.discard && p.reviewed == nil && p.editor != nil {
+			p.editor.paste(content)
+		}
+	case m.view == viewKnowledge:
+		p := &m.knowledge
+		if !p.busy && !p.uncertain && !p.discard && p.capture == nil && p.decision == nil {
+			if p.editor != nil {
+				p.editor.paste(content)
+			} else if p.filtering {
+				p.filter += pasteInline(content)
+				p.selected = 0
+				p.scroll = 0
+			}
+		}
+	case m.view == viewGoals && m.goals.recovery != nil:
+		p := m.goals.recovery
+		if !p.busy && !p.uncertain && !p.discard && !p.inspect && p.reviewed == nil && p.editor != nil {
+			p.editor.paste(content)
+		}
+	case m.view == viewGoals && m.goals.authorization != nil:
+		p := m.goals.authorization
+		if !p.busy && !p.uncertain && !p.discard && p.reviewed == nil && p.editor != nil {
+			p.editor.paste(content)
+		}
+	case m.view == viewGoals && m.goals.planner != nil:
+		p := m.goals.planner
+		if !p.busy && !p.uncertain && !p.discard && p.editor != nil && (p.mode == "brief" || p.mode == "graphtask" || p.mode == "graphnotes") && (p.graph == nil || p.graph.discard == "") {
+			p.editor.paste(content)
+		}
+	case m.view == viewGoals && m.goals.confirm != nil && !m.goals.busy && m.goals.err == "" && m.goals.confirm.Action != "publish":
+		text := pasteInline(content)
+		if len(m.goals.reason)+len(text) <= 2000 {
+			m.goals.reason += text
+			m.goals.scroll = 1 << 20
+		}
 	case m.view == viewDetail && m.detail.wtMode:
 		m.detail.wtBranch += pasteInline(content)
 	case m.view == viewHome && m.home.adding:
@@ -195,9 +243,9 @@ func Run() error {
 		return err
 	}
 	// Paint the palette from [ui].theme before the first frame so the cockpit
-	// comes up in the resolved Catppuccin flavor (mocha by default), matching the
-	// desktop app rather than the historical navy seed.
-	applyTheme(cfg.UITheme())
+	// comes up in its saved theme (Midnight by default). System mode starts dark
+	// until the terminal reports its background.
+	applyTheme(cfg.UIThemeFor(true))
 	// The main screen is the cockpit — all sessions (unscoped) plus the poll/
 	// project rail, exactly as before the project-centric restructure. The
 	// project list (home) and the pickers are drill-ins reached from it (p).
@@ -286,7 +334,7 @@ func explainReloadRejection(msg string) string {
 // ---- tea.Model ----
 
 func (m *rootModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{fetchStatusCmd, fetchProjectsCmd, statusTick()}
+	cmds := []tea.Cmd{fetchStatusCmd, fetchProjectsCmd, statusTick(), tea.RequestBackgroundColor}
 	// Self-managed lifecycle: if no daemon is answering the socket, silently
 	// bring one up on open. A live (or launchd-managed) daemon is left alone.
 	if m.manageDaemon() {
@@ -298,6 +346,12 @@ func (m *rootModel) Init() tea.Cmd {
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.terminalLight = !v.IsDark()
+		if m.cfg != nil && m.cfg.UI.FollowSystem {
+			applyTheme(m.cfg.UIThemeFor(!m.terminalLight))
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
 		m.resizeEmbed()
@@ -313,6 +367,22 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.status, m.list.statusErr = v.data, ""
 		}
 		return m, nil
+	case knowledgeMsg:
+		return m, m.handleKnowledgeMsg(v)
+	case improvementMsg:
+		return m, m.handleImprovementMsg(v)
+	case goalsMsg:
+		m.handleGoalsMsg(v)
+		return m, nil
+	case goalRecoveryMsg:
+		return m, m.handleGoalRecoveryMsg(v)
+	case goalAuthorizationMsg:
+		return m, m.handleGoalAuthorizationMsg(v)
+	case goalPlannerMsg:
+		m.handleGoalPlannerMsg(v)
+		return m, nil
+	case goalControlMsg:
+		return m, m.handleGoalControlMsg(v)
 	case projectsMsg:
 		m.handleProjectsMsg(v)
 		return m, nil
@@ -330,6 +400,12 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusTick()
 		}
 		cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
+		if m.cfg != nil && m.cfg.UI.FollowSystem {
+			cmds = append(cmds, tea.RequestBackgroundColor)
+		}
+		if m.view == viewGoals {
+			cmds = append(cmds, m.refreshGoals())
+		}
 		// Refresh the project decoration every tick unless a home prompt
 		// (filter/add/broadcast) is mid-edit (a reflow would fight the input).
 		if !m.home.filtering && !m.home.adding && !m.home.broadcasting {
@@ -356,6 +432,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmd = tea.Batch(cmd, c)
 			}
 		}
+		if c := m.finishSSHOpen(); c != nil { // a direct session just appeared in the list
+			cmd = tea.Batch(cmd, c)
+		}
 		return m, cmd
 	case paneMsg:
 		m.handlePaneMsg(v)
@@ -373,6 +452,15 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case feedbackDoneMsg:
 		return m, m.handleFeedbackDone(v)
+	case sshTickMsg:
+		return m, m.handleSSHTick(v)
+	case sshTimelineMsg:
+		return m, m.handleSSHTimeline(v)
+	case sshDoneMsg:
+		return m, m.handleSSHDone(v)
+	case sshOutputMsg:
+		m.ssh.handleOutput(v)
+		return m, nil
 	case broadcastDoneMsg:
 		return m, m.handleBroadcastDone(v)
 	case answerDoneMsg:
@@ -440,11 +528,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		// ctrl+c quits — EXCEPT while the embed is focused, where it is forwarded
 		// to the terminal (interrupt) via the embed-key routing below, and EXCEPT
-		// while a config form is open. This gate runs ahead of the form routing, so
+		// while a config or goal-planning form is open. This gate runs ahead of the form routing, so
 		// without the check a reflexive ctrl+c mid-edit hard-quit the whole TUI and
 		// took every unsaved edit with it — the one keystroke the discard prompt
 		// could not protect against.
-		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil {
+		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil && m.ssh.handback == nil && m.view != viewKnowledge && (m.view != viewGoals || (m.goals.planner == nil && m.goals.authorization == nil && m.goals.recovery == nil)) {
 			m.closeAllTerms()
 			return m, tea.Quit
 		}
@@ -521,6 +609,18 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// The SSH workspace and its host picker own the keyboard while open. The help
+	// overlay above still wins, so "?" works in here too.
+	if m.ssh.picker != nil {
+		if k, ok := msg.(tea.KeyPressMsg); ok {
+			return m.sshPickerKey(k)
+		}
+	} else if m.ssh.open {
+		if k, ok := msg.(tea.KeyPressMsg); ok {
+			return m.updateSSH(k)
+		}
+	}
+
 	// The global settings editor owns all input while open. It takes the whole
 	// msg and returns a tea.Cmd, exactly like the project form below: its Linear
 	// label pickers load asynchronously, so it needs both a way to dispatch a
@@ -540,7 +640,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// [ui].theme may have changed on the Appearance tab; repaint the palette
 			// (and every style derived from it) before the next frame instead of
 			// making the user restart the TUI. reloadConfig already re-read the file.
-			applyTheme(m.cfg.UITheme())
+			applyTheme(m.cfg.UIThemeFor(!m.terminalLight))
 			msg := "settings saved"
 			if note != "" {
 				msg += " — " + note
@@ -582,6 +682,12 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// view; overlays above still take precedence (handled before this point).
 	if m.view == viewHome {
 		return m.updateHome(msg)
+	}
+	if m.view == viewKnowledge {
+		return m.updateKnowledge(msg)
+	}
+	if m.view == viewGoals {
+		return m.updateGoals(msg)
 	}
 	if m.view == viewDetail {
 		return m.updateDetail(msg)
@@ -701,7 +807,13 @@ func (m *rootModel) viewString() string {
 		return m.diffView()
 	}
 	if m.showHelp {
+		if m.ssh.open {
+			return strings.Join(m.sshHelpLines(), "\n")
+		}
 		return m.helpModal()
+	}
+	if (m.ssh.open && !m.embedFocused) || m.ssh.picker != nil {
+		return m.sshView()
 	}
 	if m.doctorLoading || m.doctorReport != nil {
 		return m.doctorModal()
@@ -717,6 +829,12 @@ func (m *rootModel) viewString() string {
 	}
 	if m.view == viewHome {
 		return m.homeView()
+	}
+	if m.view == viewKnowledge {
+		return strings.Join(m.knowledgeLines(), "\n")
+	}
+	if m.view == viewGoals {
+		return strings.Join(m.goalsLines(), "\n")
 	}
 	if m.view == viewDetail {
 		return m.detailView()
@@ -737,6 +855,10 @@ func (m *rootModel) backdropLines() []string {
 	switch m.view {
 	case viewHome:
 		return m.homeLines()
+	case viewKnowledge:
+		return m.knowledgeLines()
+	case viewGoals:
+		return m.goalsLines()
 	case viewDetail:
 		return m.detailLines()
 	case viewPRPicker:
@@ -983,6 +1105,11 @@ func (m *rootModel) toggleSelected() tea.Cmd {
 		return nil
 	}
 	fp.Enabled = !fp.Enabled
+	if err := m.cfg.Validate(); err != nil {
+		fp.Enabled = !fp.Enabled
+		m.list.flash = err.Error()
+		return nil
+	}
 	if err := m.cfg.Save(m.cfgPath); err != nil {
 		m.list.flash = "save failed: " + err.Error()
 		return nil
@@ -1041,7 +1168,7 @@ func (m *rootModel) reloadConfig() {
 		// Repaint the palette in case [ui].theme changed (e.g. the settings form
 		// saved a new flavor); reloadConfig is the shared reload path so this
 		// covers form saves and daemon-driven config rewrites without a restart.
-		applyTheme(cfg.UITheme())
+		applyTheme(cfg.UIThemeFor(!m.terminalLight))
 	}
 	if n := len(m.railProjectPtrs()); m.list.cursor >= n && m.list.cursor > 0 {
 		m.list.cursor = n - 1

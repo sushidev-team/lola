@@ -1,445 +1,270 @@
-// A `Transport` built on the wire package's `FrameChannel` seam.
+// The app's one transport above the frames: correlation, pane subscriptions,
+// pushed events, and the life of the connection across native epochs.
 //
-// The wire package defines `Transport` (what the app needs) and `FrameChannel`
-// (send a frame, receive frames, close) but implements neither: the byte-level
-// half is the native plugin's job, because a JavaScript WebSocket cannot open
-// the daemon's socket at all — the remote listener is RAW TLS 1.3 over TCP with
-// a four-byte length prefix, not WSS, so there is no HTTP upgrade for a WebView
-// to perform and no way for JS to pin a self-signed SPKI.
-//
-// So the native `LolaTransport` plugin owns TLS, pinning and framing, and this
-// class owns everything above the frames: correlation, the client-side command
-// allowlist, pane subscriptions, sequence-gap classification and connection
-// state. Splitting it there is what keeps the Swift side small and lets the
-// whole request/response and pane path be tested in Node against
-// `FakeChannel` — none of which would be reachable if the correlation logic
-// lived in Swift.
-//
-// It lives in wailsshim/ rather than wire/ only because wire/ is owned as a
-// pure protocol mirror. It has no dependency on the shim and a human may
-// reasonably decide it belongs one directory over.
+// Invariants:
+//  - The native plugin owns TLS, pinning, pairing, framing and every retry; this
+//    class owns what a frame means. A channel is one connection of the plugin
+//    (one epoch). A channel that also reports `onUp`/`onDown` is long-lived: the
+//    plugin reconnects and migrates paths on its own, and each new epoch gets a
+//    fresh Correlator, because ids, pane sequence numbers and watches are
+//    properties of one connection and none of them survives it.
+//  - A request in flight when its epoch ends rejects with `ConnectionClosedError`.
+//    It is re-sent once on the next epoch only if `isRead(cmd)`; anything else
+//    may already have been applied, so its caller decides.
+//  - A refused command (`denied`, `unknown_cmd`, `rate_limited`) rejects that
+//    request and leaves the socket up. Only `unsupported_version` and
+//    `frame_too_large` are fatal.
+//  - A migrated socket is adopted once no mutating request is in flight, or
+//    after `MIGRATE_DRAIN_MS`.
+//  - `status.epoch` changes exactly when a new connection became ready, so
+//    "ready and the epoch changed" is the signal to resume.
 
+import type { DeviceInfo, FailureCode, PathInfo } from "lola-transport";
 import {
-  CODE_UNKNOWN_CMD,
   CODE_UNSUPPORTED_VERSION,
   ConnectionClosedError,
   Correlator,
+  FRAME_ERR,
+  FRAME_EVENT,
+  FRAME_RESYNC,
   MAX_PANE_NAME,
+  RequestTimeoutError,
   WireError,
   WireRefusalError,
   alwaysFatalCode,
-  base64ToBytes,
-  bytesToBase64,
-  classifyGap,
   clientMayAccept,
-  commandDenied,
-  ptyResizeFrame,
-  ptyScrollFrame,
-  ptyWriteFrame,
+  isRead,
+  requestFrame,
   subFrame,
   supportedFrameVersion,
   unsubFrame,
-  requestFrame,
   validPaneName,
   type ConnectOptions,
   type ConnectionStatus,
-  type Endpoint,
   type Frame,
   type FrameChannel,
-  type PaneEvent,
   type PaneSubscription,
   type RequestFields,
   type ResyncPayload,
-  type Transport,
   type TransportRequestOptions,
   type Unsubscribe,
   type Viewport,
 } from "../wire";
-import { helloFrame, FRAME_ERR, FRAME_PTY, FRAME_RESYNC } from "../wire";
+import { LinkError } from "./pluginerror";
+import { ChannelPaneSubscription, fanout, type Listener } from "./panesubs";
 
-/** How a channel is opened for an endpoint. Supplied by the native plugin. */
-export type ChannelFactory = (endpoint: Endpoint, opts?: ConnectOptions) => Promise<FrameChannel>;
+/** What is being connected to: a paired daemon, by id. Nothing secret. */
+export interface LinkTarget {
+  daemonId: string;
+}
+
+/** How long a migrated socket waits for in-flight mutating requests before it is adopted. */
+export const MIGRATE_DRAIN_MS = 2000;
+
+export type LinkPhase = ConnectionStatus["phase"];
+
+/** The connection as the UI and the stores see it. */
+export interface LinkStatus extends ConnectionStatus {
+  /** Changes exactly when a new connection became ready; 0 before the first. */
+  epoch: number;
+  path?: PathInfo;
+  device?: DeviceInfo;
+  /** The plugin's failure code when the failure was not the daemon speaking. */
+  failure?: FailureCode;
+  /** How long the path race that made this connection took, when the plugin said. */
+  raceMs?: number;
+}
+
+export interface LinkUp {
+  epoch: number;
+  path?: PathInfo;
+  device?: DeviceInfo;
+  raceMs?: number;
+}
+
+/**
+ * A channel that outlives one epoch. `onClose` stays the terminal signal;
+ * `onDown` is a drop the plugin will retry, `onUp` its recovery or a migration
+ * it already adopted.
+ */
+export interface LinkChannel extends FrameChannel {
+  readonly up?: LinkUp;
+  onUp?(l: Listener<LinkUp>): Unsubscribe;
+  onDown?(l: Listener<Error>): Unsubscribe;
+  onMigrating?(l: Listener<LinkUp>): Unsubscribe;
+  /** The device record of the CURRENT epoch arrived (or changed) after `onUp`. */
+  onDevice?(l: Listener<DeviceInfo>): Unsubscribe;
+  adopt?(epoch: number): Promise<void>;
+}
+
+export type ChannelFactory = (target: LinkTarget, opts?: ConnectOptions) => Promise<FrameChannel | LinkChannel>;
 
 export interface ChannelTransportOptions {
   open: ChannelFactory;
-  /** Per-request deadline. Defaults to the correlator's own 15s. */
+  /** Per-request deadline. Defaults to the correlator's own 15 s. */
   timeoutMs?: number;
-  /**
-   * Who performs the M1 bearer handshake.
-   *
-   *   "in-band"  (default) this transport sends the `remote.hello` frame itself
-   *              once the channel is open. The shape a raw byte channel needs.
-   *   "channel"  the channel is already authenticated when it is handed over.
-   *              What the native plugin does — its `connect` only resolves once
-   *              the daemon has accepted the key.
-   *
-   * Getting this wrong is not a cosmetic duplicate. A second hello on an
-   * already authenticated connection arrives as an ordinary `req` naming a
-   * command in the `remote.` namespace, which the daemon denies — and a denied
-   * command is FATAL there: one err frame and the socket closes.
-   */
-  handshake?: "in-band" | "channel";
 }
 
-type Listener<T> = (v: T) => void;
+/** The seam the bridge, the watch registry and the connection store code against. */
+export interface ShimTransport {
+  readonly status: LinkStatus;
+  connect(target: LinkTarget, opts?: ConnectOptions): Promise<void>;
+  disconnect(reason?: string): Promise<void>;
+  request<T = unknown>(cmd: string, fields?: RequestFields, opts?: TransportRequestOptions): Promise<T>;
+  /** One request whose id is known before it is sent; never re-sent. */
+  begin<T = unknown>(
+    cmd: string,
+    fields?: RequestFields,
+    opts?: TransportRequestOptions,
+  ): { id: string; done: Promise<T> };
+  subscribe(pane: string, viewport?: Viewport, opts?: TransportRequestOptions): Promise<PaneSubscription>;
+  subscription(pane: string): PaneSubscription | undefined;
+  onFrame(l: Listener<Frame>): Unsubscribe;
+  onStatus(l: Listener<LinkStatus>): Unsubscribe;
+  onRefusal(l: Listener<WireRefusalError>): Unsubscribe;
+  /** `event` frames and the `err` frames that end one event stream. */
+  onEvent(l: Listener<Frame>): Unsubscribe;
+}
 
-/**
- * The refusal inside a failure, when the failure IS one.
- *
- * A connection dies for two very different classes of reason and the UI has to
- * tell them apart: the daemon answered and declined (a wrong bearer key, a
- * version skew — `status.refusal`, which `diagnose` reads first and names
- * precisely), or the socket simply did not work (`status.error`, which it can
- * only describe in general terms). Both arrive here as an Error, so the one
- * place that knows the difference is the type.
- *
- * Setting only `error` for a refusal is what made a mistyped access key render
- * as "Not on <host>'s network" — the one failure with a one-field fix reported
- * as the one with no fix at all.
- */
 function refusalOf(err: Error | undefined): ConnectionStatus["refusal"] {
   if (!(err instanceof WireRefusalError)) return undefined;
-  // minV/maxV travel too: they are the whole of the version-skew message, which
-  // is the one refusal that can name WHICH side has to be updated.
   return { code: err.code, message: err.message, minV: err.minV, maxV: err.maxV };
 }
 
-function fanout<T>(set: Set<Listener<T>>, v: T, what: string): void {
-  for (const l of [...set]) {
-    try {
-      l(v);
-    } catch (err) {
-      console.error(`wailsshim: ${what} listener threw`, err);
-    }
-  }
+function failureOf(err: Error | undefined): FailureCode | undefined {
+  return err instanceof LinkError ? err.code : undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Pane subscriptions
-// ---------------------------------------------------------------------------
-
-class ChannelPaneSubscription implements PaneSubscription {
-  readonly pane: string;
-  readonly id: string;
-  screen: ResyncPayload | null = null;
-  lastSeq = 0;
-  exited = false;
-
-  private readonly events = new Set<Listener<PaneEvent>>();
-  private readonly errors = new Set<Listener<WireRefusalError>>();
-
-  // EVENTS THAT ARRIVE BEFORE ANYONE IS LISTENING ARE HELD, NOT DROPPED.
-  //
-  // The window is small and it is unavoidable. `subscribe()` resolves on the
-  // daemon's acknowledging resync; the caller then gets control back through at
-  // least one microtask hop before it can call `onEvent`. tmux's initial paint
-  // of a freshly attached pane lands as `pty` frames a few milliseconds after
-  // that ack — squarely inside the hop — and `fanout` over an empty listener
-  // set is a silent discard. Those bytes cannot be re-requested: the bus has
-  // already handed them out, and an idle agent pane writes nothing else for
-  // minutes.
-  //
-  // That is the whole of the "first open of a session shows an empty pane, back
-  // out and re-enter and it is fine" bug. The second open is fine because the
-  // bus is still attached and its shadow emulator now holds a painted screen,
-  // so the ack alone is enough.
-  //
-  // So frames are buffered until the first listener arrives and then replayed
-  // in arrival order. `screen` is still maintained on the way past (it always
-  // was), so a caller that only reads the screen is unaffected.
-  private replay: PaneEvent[] | null = [];
-
-  /**
-   * The cap, and what happens at it.
-   *
-   * The real window is a handful of frames, so a buffer this size only fills
-   * when the caller never attached a listener at all — a screen torn down
-   * mid-attach. Dropping the oldest and marking the next delivery as a GAP is
-   * the same contract a bus overflow already has: a gap on a `pty` event makes
-   * the terminal re-subscribe, which is the defined recovery and the only
-   * honest one, because a byte range cannot be replayed from halfway through an
-   * escape sequence.
-   */
-  private static readonly REPLAY_MAX = 256;
-  private replayTorn = false;
-
-  /**
-   * Whether the acknowledging resync has been seen.
-   *
-   * The ack is the ONE frame that is deliberately not buffered. It is the
-   * subscription's own return value — every caller reads it off `screen` and
-   * paints from it — so replaying it would repaint the pane a second time and
-   * make the buffer's contents depend on whether the caller happened to read
-   * `screen` first. Everything that arrives AFTER it is stream, and stream is
-   * what must not be dropped.
-   */
-  private acked = false;
-
-  constructor(
-    pane: string,
-    id: string,
-    private readonly owner: ChannelTransport,
-  ) {
-    this.pane = pane;
-    this.id = id;
-  }
-
-  onEvent(l: Listener<PaneEvent>): Unsubscribe {
-    this.events.add(l);
-    this.drainReplay();
-    return () => this.events.delete(l);
-  }
-
-  /**
-   * Hand the first listener everything that arrived before it existed, once.
-   *
-   * The buffer is discarded rather than kept for later listeners: a second
-   * listener is a second reader of a live stream, not a replay client, and
-   * replaying to it would double-render the pane.
-   */
-  private drainReplay(): void {
-    const held = this.replay;
-    if (held === null) return;
-    this.replay = null;
-    const torn = this.replayTorn;
-    this.replayTorn = false;
-    for (let i = 0; i < held.length; i++) {
-      const e = held[i];
-      // The tear is announced on the FIRST replayed event, because everything
-      // after it is contiguous with it; announcing it later would place the
-      // discontinuity where there is none.
-      fanout(this.events, torn && i === 0 && e.kind === "output" ? { ...e, gap: true } : e, "pane");
-    }
-  }
-
-  /**
-   * Deliver one event, or hold it until there is somebody to deliver it to.
-   *
-   * Every `fanout(this.events, …)` in this class goes through here. A direct
-   * fanout is the bug above.
-   */
-  private emit(e: PaneEvent): void {
-    if (this.replay === null) {
-      fanout(this.events, e, "pane");
-      return;
-    }
-    if (this.replay.length >= ChannelPaneSubscription.REPLAY_MAX) {
-      this.replay.shift();
-      this.replayTorn = true;
-    }
-    this.replay.push(e);
-  }
-
-  onError(l: Listener<WireRefusalError>): Unsubscribe {
-    this.errors.add(l);
-    return () => this.errors.delete(l);
-  }
-
-  /**
-   * Route one frame addressed to this pane.
-   *
-   * Called for EVERY resync on the pane, the subscription's own acknowledgement
-   * included. That is deliberate: the ack carries the first screen, and having
-   * one place maintain `screen`/`lastSeq` means the state cannot depend on
-   * whether a frame happened to be the one a pending `subscribe()` was waiting
-   * for. The ack's own event reaches no listener directly — nobody has
-   * subscribed yet at that point — so it lands in the replay buffer with
-   * everything else and is delivered when the first listener arrives. A caller
-   * that paints from `screen` before wiring `onEvent` therefore sees the ack
-   * twice, which is idempotent: a resync is a full screen, not a delta.
-   */
-  handle(f: Frame): void {
-    if (f.type === FRAME_RESYNC) {
-      const verdict = classifyGap(this.lastSeq, f);
-      const screen = (f.payload ?? {}) as ResyncPayload;
-      this.screen = screen;
-      if (typeof f.seq === "number" && f.seq > 0) this.lastSeq = f.seq;
-      const ack = !this.acked;
-      this.acked = true;
-
-      if (screen.exited) {
-        // A pane death arrives as a resync carrying `exited`, not as a distinct
-        // frame type, and the daemon drops the subscription from its
-        // authorization map BEFORE writing it — so anything typed in reply
-        // comes back as `unknown_pane`. Retire the subscription here for the
-        // same reason.
-        this.exited = true;
-        this.owner.retire(this.pane);
-        // An exit is reported even when it is the ack: subscribing to a pane
-        // that has already died is the one case where the first screen is also
-        // the last, and a caller that never hears about it waits forever.
-        this.emit({ kind: "exit", screen, seq: this.lastSeq });
-        return;
-      }
-
-      // A gap that ARRIVES ON A RESYNC is self-healing: the bus drops a frame
-      // for an overflowing subscriber, keeps its sequence advancing so the gap
-      // stays visible, then repairs itself with a fresh full screen. Repaint
-      // and adopt the new sequence — only a gap arriving on a `pty` frame is
-      // a reason to re-subscribe.
-      if (ack) return; // the caller reads it off `screen`; see `acked`
-      this.emit({ kind: "resync", screen, seq: this.lastSeq, repaired: verdict === "repaired" });
-      return;
-    }
-
-    if (f.type === FRAME_PTY) {
-      const verdict = classifyGap(this.lastSeq, f);
-      const payload = (f.payload ?? {}) as { data?: string | null };
-      // `data` carries no omitempty on the Go side and a nil []byte marshals as
-      // JSON null, so both "" and null are reachable and neither is malformed.
-      const data = base64ToBytes(payload.data);
-      if (typeof f.seq === "number" && f.seq > 0) this.lastSeq = f.seq;
-      this.emit({ kind: "output", data, seq: this.lastSeq, gap: verdict === "torn" });
-      return;
-    }
-
-    if (f.type === FRAME_ERR) {
-      fanout(this.errors, WireRefusalError.fromFrame(f), "pane error");
-    }
-  }
-
-  /** Report a connection-level failure to this pane's error listeners. */
-  fail(err: WireRefusalError): void {
-    fanout(this.errors, err, "pane error");
-  }
-
-  async write(data: Uint8Array | string): Promise<void> {
-    if (this.exited) throw new WireError(`wire: pane ${this.pane} has exited`);
-    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
-    if (bytes.length === 0) return; // the daemon ignores an empty write anyway
-    // Sent WITHOUT a correlation id, for the same reason `unsub` carries none:
-    // a successful pty write is never acknowledged, so an id would either leak
-    // a pending promise until its deadline or resolve on a timeout that means
-    // nothing. A refusal echoes the PANE, which is all the routing this needs.
-    await this.owner.sendFrame(ptyWriteFrame(this.pane, bytesToBase64(bytes)));
-  }
-
-  async scroll(lines: number): Promise<void> {
-    if (this.exited) return;
-    if (!Number.isFinite(lines) || Math.trunc(lines) === 0) return;
-    // ptyScrollFrame clamps to the daemon's own MaxScrollLines.
-    await this.owner.sendFrame(ptyScrollFrame(this.pane, Math.trunc(lines)));
-  }
-
-  async resize(cols: number, rows: number): Promise<void> {
-    if (this.exited) return;
-    // Recorded and ignored by the daemon in M1: the pane is attached at the
-    // developer's tmux window size and a phone-sized viewport pans. Sent anyway
-    // so the daemon has the client's geometry the moment it starts using it.
-    await this.owner.sendFrame(ptyResizeFrame(this.pane, cols, rows));
-  }
-
-  async close(): Promise<void> {
-    this.owner.retire(this.pane);
-    if (this.exited) return;
-    // Unacknowledged by design — do not wait for a reply that never comes.
-    await this.owner.sendFrame(unsubFrame(this.pane));
-  }
-}
-
-// ---------------------------------------------------------------------------
-// The transport
-// ---------------------------------------------------------------------------
-
-export class ChannelTransport implements Transport {
-  status: ConnectionStatus = { phase: "idle" };
+export class ChannelTransport implements ShimTransport {
+  status: LinkStatus = { phase: "idle", epoch: 0 };
 
   private channel: FrameChannel | null = null;
   private correlator: Correlator | null = null;
-  private endpoint: Endpoint | null = null;
   private connecting: Promise<void> | null = null;
+  private userClosed = false;
+  private offChannel: Unsubscribe[] = [];
 
   private readonly subs = new Map<string, ChannelPaneSubscription>();
+  private readonly mutating = new Set<string>();
+  private quiet: Array<() => void> = [];
   private readonly frameListeners = new Set<Listener<Frame>>();
-  private readonly statusListeners = new Set<Listener<ConnectionStatus>>();
+  private readonly statusListeners = new Set<Listener<LinkStatus>>();
   private readonly refusalListeners = new Set<Listener<WireRefusalError>>();
+  private readonly eventListeners = new Set<Listener<Frame>>();
 
   constructor(private readonly opts: ChannelTransportOptions) {}
 
   // --- lifecycle -----------------------------------------------------------
 
-  async connect(endpoint: Endpoint, opts?: ConnectOptions): Promise<void> {
+  async connect(target: LinkTarget, opts?: ConnectOptions): Promise<void> {
     if (this.connecting) return this.connecting;
     if (this.status.phase === "ready") return;
-
-    this.connecting = this.doConnect(endpoint, opts).finally(() => {
+    this.connecting = this.doConnect(target, opts).finally(() => {
       this.connecting = null;
     });
     return this.connecting;
   }
 
-  private async doConnect(endpoint: Endpoint, opts?: ConnectOptions): Promise<void> {
-    this.endpoint = endpoint;
-    this.setStatus({ phase: "connecting", endpoint });
-    let channel: FrameChannel;
+  private async doConnect(target: LinkTarget, opts?: ConnectOptions): Promise<void> {
+    this.userClosed = false;
+    this.setStatus({ phase: "connecting", epoch: this.status.epoch });
+    let channel: FrameChannel | LinkChannel;
     try {
-      channel = await this.opts.open(endpoint, opts);
+      channel = await this.opts.open(target, opts);
     } catch (err) {
-      // `refusalOf` is what keeps "the daemon said no" from being rendered as
-      // "nothing answered". See its own comment.
+      const e = err as Error;
       this.setStatus({
         phase: "closed",
-        endpoint,
-        error: err as Error,
-        refusal: refusalOf(err as Error),
+        epoch: this.status.epoch,
+        error: e,
+        refusal: refusalOf(e),
+        failure: failureOf(e),
       });
       throw err;
     }
 
     this.channel = channel;
-    const correlator = new Correlator({
-      send: (f) => channel.send(f),
-      timeoutMs: this.opts.timeoutMs,
-    });
-    this.correlator = correlator;
-
-    channel.onFrame((f) => this.route(f));
-    channel.onClose((err) => this.onClosed(err));
-
-    this.setStatus({ phase: "handshaking", endpoint });
-
-    // M1's authenticator is a bearer key, and its hello is the ONE frame that
-    // does not go through `request`: `remote.hello` is in the `remote.` prefix
-    // the client-side denial mirror refuses, and its payload is `{key}` rather
-    // than a protocol.Request. It is also the first frame on the connection by
-    // contract — anything else before it is answered `denied` and closed.
-    if (this.opts.handshake !== "channel" && endpoint.insecureKey) {
-      try {
-        await correlator.request(helloFrame(correlator.nextID(), endpoint.insecureKey), {
-          immediate: true,
-          timeoutMs: opts?.timeoutMs,
-        });
-      } catch (err) {
-        await this.teardown(err as Error);
-        throw err;
-      }
+    this.offChannel = [channel.onFrame((f) => this.route(f)), channel.onClose((err) => this.onClosed(err))];
+    const link = channel as LinkChannel;
+    if (link.onUp) this.offChannel.push(link.onUp((u) => this.bringUp(u)));
+    if (link.onDown) this.offChannel.push(link.onDown((err) => this.drop(err)));
+    if (link.onMigrating) this.offChannel.push(link.onMigrating((u) => void this.adopt(link, u)));
+    if (link.onDevice) {
+      this.offChannel.push(link.onDevice((device) => this.setStatus({ ...this.status, device })));
     }
+    this.bringUp(link.up);
+  }
 
-    this.setStatus({ phase: "ready", endpoint });
+  /** A new connection is ready: fresh correlator, no panes, no pending requests. */
+  private bringUp(up?: LinkUp): void {
+    const channel = this.channel;
+    if (!channel) return;
+    this.endEpoch(new ConnectionClosedError("epoch ended"));
+    this.correlator = new Correlator({ send: (f) => channel.send(f), timeoutMs: this.opts.timeoutMs });
+    this.setStatus({
+      phase: "ready",
+      epoch: up?.epoch ?? this.status.epoch + 1,
+      path: up?.path,
+      device: up?.device,
+      raceMs: up?.raceMs,
+    });
+  }
+
+  private async adopt(link: LinkChannel, up: LinkUp): Promise<void> {
+    await this.drained(MIGRATE_DRAIN_MS);
+    try {
+      await link.adopt?.(up.epoch);
+    } catch {
+      // The plugin adopts on its own after MIGRATE_DRAIN_MS; a refused adopt is not a failure.
+    }
   }
 
   async disconnect(reason = "client disconnected"): Promise<void> {
+    this.userClosed = true;
     await this.teardown(new ConnectionClosedError(reason));
+  }
+
+  /** Fail what belongs to the ended connection: requests, panes, mutating bookkeeping. */
+  private endEpoch(cause: Error): void {
+    // Whatever ended it, an in-flight request sees a closed connection (which is
+    // what makes a read re-sendable); a daemon refusal keeps its own identity.
+    const err = cause instanceof WireRefusalError || cause instanceof ConnectionClosedError
+      ? cause
+      : new ConnectionClosedError(cause.message);
+    this.correlator?.failAll(err);
+    this.correlator = null;
+    const refusal = err instanceof WireRefusalError ? err : new WireRefusalError("connection_closed", cause.message);
+    for (const sub of this.subs.values()) sub.fail(refusal);
+    this.subs.clear();
+    this.mutating.clear();
+    this.releaseQuiet();
+  }
+
+  /** The plugin lost the connection and is retrying: not terminal. */
+  private drop(err: Error): void {
+    if (!this.channel) return;
+    this.endEpoch(err);
+    this.setStatus({
+      phase: "connecting",
+      epoch: this.status.epoch,
+      error: err,
+      refusal: refusalOf(err),
+      failure: failureOf(err),
+    });
   }
 
   private async teardown(err: Error): Promise<void> {
     const ch = this.channel;
     this.channel = null;
-    this.correlator?.failAll(err);
-    this.correlator = null;
-
-    const refusal =
-      err instanceof WireRefusalError
-        ? err
-        : new WireRefusalError("connection_closed", err.message);
-    for (const sub of this.subs.values()) sub.fail(refusal);
-    this.subs.clear();
-
+    for (const off of this.offChannel) off();
+    this.offChannel = [];
+    this.endEpoch(err);
     this.setStatus({
       phase: "closed",
-      endpoint: this.endpoint ?? undefined,
+      epoch: this.status.epoch,
       error: err,
       refusal: refusalOf(err),
+      failure: failureOf(err),
     });
     try {
       await ch?.close(err.message);
@@ -458,10 +283,6 @@ export class ChannelTransport implements Transport {
   private route(f: Frame): void {
     fanout(this.frameListeners, f, "frame");
 
-    // Direction and version are checked here rather than in the native plugin:
-    // the plugin should move bytes, and a client that renders a frame it is not
-    // supposed to receive is exactly the class of bug the direction table
-    // exists to prevent.
     if (!clientMayAccept(f)) {
       this.refuse(
         new WireRefusalError(
@@ -471,13 +292,7 @@ export class ChannelTransport implements Transport {
       );
       return;
     }
-
-    // An `err` frame is readable at ANY version and must stay that way: its
-    // field layout is frozen at v1 forever precisely so a peer that understands
-    // nothing else can still read `unsupported_version` and say which side is
-    // behind. Every other type has to be inside the window, and a frame outside
-    // it is refused rather than guessed at — the daemon takes exactly this
-    // posture in the other direction.
+    // An `err` frame is readable at any version so a skew can still be named.
     if (f.type !== FRAME_ERR && !supportedFrameVersion(f.v)) {
       this.refuse(
         new WireRefusalError(
@@ -488,27 +303,17 @@ export class ChannelTransport implements Transport {
       return;
     }
 
-    // The pane's own state first, so `screen` and `lastSeq` are maintained
-    // uniformly whether or not a pending request happens to be waiting on this
-    // frame's id — see ChannelPaneSubscription.handle.
+    // Pushed events, and the err that ends one event stream, belong to the watch registry.
+    if (f.type === FRAME_EVENT || (f.type === FRAME_ERR && f.topic)) {
+      fanout(this.eventListeners, f, "event");
+      return;
+    }
+
     if (f.pane) this.subs.get(f.pane)?.handle(f);
 
-    // A FATAL refusal is read off every `err` frame, correlated or not.
-    //
-    // Every fatal code the daemon produces — `unknown_cmd` and `denied` from
-    // conn.authorize, `unsupported_version` from readValidated — is written in
-    // reply to a frame the client sent, so it carries that frame's correlation
-    // id and the correlator settles it. Consulting `alwaysFatalCode` only for
-    // the UNCORRELATED remainder therefore made the check dead for exactly the
-    // codes it exists to catch: the client would learn the connection was gone
-    // only when the socket close arrived, and a close that is delayed or
-    // swallowed leaves the transport reporting `ready` over a dead pipe.
-    //
-    // Read the code BEFORE `accept` settles the request, then let the request
-    // reject on its own terms, then tear down. The pending promise still gets
-    // the specific refusal it was waiting for; the connection still dies.
-    const fatal =
-      f.type === FRAME_ERR ? WireRefusalError.fromFrame(f) : undefined;
+    // Read the code before `accept` settles the request: the request still gets
+    // its specific refusal and the connection still dies on a fatal one.
+    const fatal = f.type === FRAME_ERR ? WireRefusalError.fromFrame(f) : undefined;
 
     if (this.correlator?.accept(f)) {
       if (fatal && alwaysFatalCode(fatal.code)) {
@@ -518,8 +323,6 @@ export class ChannelTransport implements Transport {
       return;
     }
 
-    // Not correlated. An `err` with no pending id is a connection-level event,
-    // and several of them are followed immediately by a close.
     if (fatal) {
       if (!f.pane) this.refuse(fatal);
       if (alwaysFatalCode(fatal.code)) void this.teardown(fatal);
@@ -533,27 +336,79 @@ export class ChannelTransport implements Transport {
 
   // --- requests ------------------------------------------------------------
 
+  begin<T = unknown>(
+    cmd: string,
+    fields: RequestFields = {},
+    opts: TransportRequestOptions = {},
+  ): { id: string; done: Promise<T> } {
+    const correlator = this.requireCorrelator(cmd);
+    const id = correlator.nextID();
+    const track = !isRead(cmd);
+    if (track) this.mutating.add(id);
+    const done = correlator.request<T>(requestFrame(id, cmd, fields), {
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+    });
+    if (track) {
+      const settled = () => {
+        this.mutating.delete(id);
+        if (this.mutating.size === 0) this.releaseQuiet();
+      };
+      done.then(settled, settled);
+    }
+    return { id, done };
+  }
+
   async request<T = unknown>(
     cmd: string,
     fields: RequestFields = {},
     opts: TransportRequestOptions = {},
   ): Promise<T> {
-    // The client-side mirror of the daemon's denial list, checked BEFORE
-    // anything is sent. This is not belt and braces: a denied command is a
-    // FATAL refusal on the daemon side — it writes one err frame and closes the
-    // socket — so a single mistyped command would cost every live pane
-    // subscription and a full reconnect. Refusing locally costs one rejection.
-    if (commandDenied(cmd)) {
-      throw new WireRefusalError(
-        CODE_UNKNOWN_CMD,
-        `${cmd} is not available remotely (refused by the client's own allowlist, so the connection survives)`,
-      );
+    const resendable = isRead(cmd);
+    for (let attempt = 0; ; attempt++) {
+      // Not connected throws here, synchronously: nothing was sent, nothing is re-sent.
+      const { done } = this.begin<T>(cmd, fields, opts);
+      try {
+        return await done;
+      } catch (err) {
+        if (!resendable || attempt > 0 || this.userClosed || !(err instanceof ConnectionClosedError)) throw err;
+        await this.untilReady(err, opts.timeoutMs);
+      }
     }
-    const correlator = this.requireCorrelator(cmd);
-    return correlator.request<T>(requestFrame(correlator.nextID(), cmd, fields), {
-      timeoutMs: opts.timeoutMs,
-      signal: opts.signal,
+  }
+
+  /** Resolves on the next ready epoch; rejects `cause` when none comes. */
+  private untilReady(cause: Error, timeoutMs = 15_000): Promise<void> {
+    if (this.status.phase === "ready") return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const done = (fn: () => void) => {
+        off();
+        clearTimeout(timer);
+        fn();
+      };
+      const off = this.onStatus((s) => {
+        if (s.phase === "ready") done(resolve);
+        else if (s.phase === "closed") done(() => reject(cause));
+      });
+      const timer = setTimeout(() => done(() => reject(new RequestTimeoutError("", timeoutMs))), timeoutMs);
     });
+  }
+
+  private drained(ms: number): Promise<void> {
+    if (this.mutating.size === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      this.quiet.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
+  private releaseQuiet(): void {
+    const waiting = this.quiet;
+    this.quiet = [];
+    for (const w of waiting) w();
   }
 
   // --- panes ---------------------------------------------------------------
@@ -576,11 +431,8 @@ export class ChannelTransport implements Transport {
     const sub = new ChannelPaneSubscription(pane, id, this);
     this.subs.set(pane, sub);
     try {
-      // The subscription's acknowledgement IS its first resync, correlated on
-      // the sub frame's id. Note that every LATER resync for this pane carries
-      // the same id, which is why the correlator settles once and reports
-      // itself unmatched afterwards — and why this id must never be reused for
-      // an ordinary request.
+      // The acknowledgement IS the first resync, correlated on the sub's id;
+      // later resyncs echo the same id, so it must never be reused.
       await correlator.request<ResyncPayload>(subFrame(id, pane, viewport), {
         expect: FRAME_RESYNC,
         timeoutMs: opts.timeoutMs,
@@ -588,14 +440,8 @@ export class ChannelTransport implements Transport {
       });
     } catch (err) {
       this.subs.delete(pane);
-      // A REFUSAL means the daemon created nothing: `remote.conn.subscribe`
-      // answers `err` and registers no subscription, so there is nothing to
-      // undo. A local timeout or an abort is the opposite case — the daemon
-      // registers the subscription before its pump writes the first resync, so
-      // giving up here can leave it pumping a pane nothing routes, holding a
-      // panebus subscription and its tmux attach for the life of the connection.
-      // `unsub` is unacknowledged by design, so undoing it costs one frame and
-      // no wait.
+      // A refusal created nothing. A timeout or abort may have left the daemon
+      // pumping a pane nothing routes, so it is told, unacknowledged.
       if (!(err instanceof WireRefusalError)) {
         await this.sendFrame(unsubFrame(pane)).catch(() => {});
       }
@@ -608,15 +454,13 @@ export class ChannelTransport implements Transport {
     return this.subs.get(pane);
   }
 
-  /** Drop a pane from the routing table. Called on exit and on close(). */
   retire(pane: string): void {
     this.subs.delete(pane);
   }
 
-  /** Send one uncorrelated frame. Used by pane writes, scrolls and unsub. */
   async sendFrame(f: Frame): Promise<void> {
     const ch = this.channel;
-    if (!ch) throw new ConnectionClosedError();
+    if (!ch || this.status.phase !== "ready") throw new ConnectionClosedError();
     await ch.send(f);
   }
 
@@ -627,7 +471,7 @@ export class ChannelTransport implements Transport {
     return () => this.frameListeners.delete(l);
   }
 
-  onStatus(l: Listener<ConnectionStatus>): Unsubscribe {
+  onStatus(l: Listener<LinkStatus>): Unsubscribe {
     this.statusListeners.add(l);
     return () => this.statusListeners.delete(l);
   }
@@ -637,16 +481,19 @@ export class ChannelTransport implements Transport {
     return () => this.refusalListeners.delete(l);
   }
 
-  // --- internals -----------------------------------------------------------
+  onEvent(l: Listener<Frame>): Unsubscribe {
+    this.eventListeners.add(l);
+    return () => this.eventListeners.delete(l);
+  }
 
   private requireCorrelator(what: string): Correlator {
-    if (!this.correlator || this.status.phase === "closed") {
+    if (!this.correlator || this.status.phase !== "ready") {
       throw new ConnectionClosedError(`${what}: not connected`);
     }
     return this.correlator;
   }
 
-  private setStatus(s: ConnectionStatus): void {
+  private setStatus(s: LinkStatus): void {
     this.status = s;
     fanout(this.statusListeners, s, "status");
   }

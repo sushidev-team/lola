@@ -80,7 +80,8 @@ class BestOf {
     const withPR = others.filter((a) => (a.prNumber ?? 0) > 0 && a.prState?.toUpperCase() === "OPEN");
     confirm.ask({
       title: "Keep this attempt?",
-      body: `Keep ${id} for ${d?.issue ?? "this issue"} and discard the other ${others.length}.`,
+      subject: `${id} · ${d?.issue ?? "this issue"}`,
+      body: `Discards the other ${others.length}.`,
       detail:
         (withPR.length
           ? `Their PRs (${withPR.map((a) => `#${a.prNumber}`).join(", ")}) are closed — branches kept. `

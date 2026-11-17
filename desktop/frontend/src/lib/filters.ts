@@ -12,6 +12,10 @@
 // `triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage)`.
 import { KANBAN_COLUMNS, kanbanColumn, kanbanTitle } from "./theme";
 import type { SessionInfo } from "./store.svelte";
+import { waitingQueue } from "./queue";
+
+/** The title of the column whose filter also takes an SSH session waiting on a human. */
+const NEEDS_YOU = KANBAN_COLUMNS.find((c) => c.key === "needs")?.title ?? "Needs You";
 
 export const TRIAGE_FILTERS: string[] = KANBAN_COLUMNS.map((c) => c.title);
 
@@ -36,9 +40,16 @@ export function triageOf(s: Pick<SessionInfo, "status" | "agentState" | "deliver
  * counts it is a filter that shows an empty screen over a non-zero number.
  */
 export function matchesTriageFor(
-  s: Pick<SessionInfo, "status" | "agentState" | "delivery">,
+  s: Pick<SessionInfo, "status" | "agentState" | "delivery"> & { ssh?: SessionInfo["ssh"] },
   triage: string,
 ): boolean {
+  // A go, a sign-in or an approval waiting on a human ORs into "Needs You" without
+  // moving the session's kanban column, which stays a function of the two axes.
+  // needsHuman is only ever set by daemon facts, never by anything an agent posted.
+  if (triage === NEEDS_YOU && s.ssh?.needsHuman) return true;
+  // One predicate for the list, the counts and the top bar: the roster's own "waiting on you" test
+  // (which also holds a waiting session whose PR has merged), or work that regressed.
+  if (triage === ATTENTION) return s.ssh?.needsHuman === true || waitingQueue([s as SessionInfo]).length > 0 || triageOf(s) === NEEDS_YOU || triageOf(s) === "Fixing";
   return triage === "" || triageOf(s) === triage;
 }
 
@@ -56,3 +67,18 @@ export function matchesTriage(status: string, triage: string): boolean {
 export function triaged(list: SessionInfo[], triage: string): SessionInfo[] {
   return triage === "" ? list : list.filter((s) => matchesTriageFor(s, triage));
 }
+
+/** Everything that wants a human soon: a session waiting on you, or delivered work that regressed. */
+export const ATTENTION = "Needs attention";
+
+/** The rows the session filter offers, in the order worth scanning: what needs you first. */
+export const STATUS_OPTIONS: { id: string; label: string; hint: string; key?: string }[] = [
+  { id: "", label: "All sessions", hint: "" },
+  { id: ATTENTION, label: "Needs attention", hint: "Waiting on you, or failing CI", key: "needs" },
+  { id: "Needs You", label: "Waiting on you", hint: "An agent is blocked on an answer", key: "needs" },
+  { id: "Fixing", label: "Fixing", hint: "CI red, changes requested or a conflict", key: "fixing" },
+  { id: "In Review", label: "In review", hint: "Pull request open, waiting on reviewers", key: "review" },
+  { id: "Working", label: "Working", hint: "An agent is busy", key: "working" },
+  { id: "Done", label: "Done", hint: "Merged, closed or finished", key: "done" },
+  { id: "Ended", label: "Ended", hint: "Sessions that have been closed", key: "done" },
+];

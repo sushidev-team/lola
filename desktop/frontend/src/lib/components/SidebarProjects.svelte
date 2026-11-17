@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import GlyphIcon from "$lib/components/GlyphIcon.svelte";
+  import Icon from "$lib/components/Icon.svelte";
+  import { projectActions } from "$lib/projectActions";
+  import { matchesSearch, searchMatch } from "$lib/search";
+  import SearchHighlight from "./SearchHighlight.svelte";
+  import { onDestroy, tick } from "svelte";
   import { store, type ProjectInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { confirm } from "$lib/confirm.svelte";
@@ -25,7 +30,12 @@
   import SidebarGroupRow from "./SidebarGroupRow.svelte";
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
+  import { askRemoveProject, askRemoveStack } from "$lib/removeAsk";
+  import { bulkProjectActions } from "$lib/projectbulk";
   import Modal from "./Modal.svelte";
+  import Checkbox from "./Checkbox.svelte";
+  import SetupChecklist from "./SetupChecklist.svelte";
+  import { ConfigService, type StackFolderAppDTO } from "@bindings/desktop";
 
   // The project switcher, moved out of the old Rail panel onto the shared
   // NavRow. Reads the store directly (leaf component) — see Sidebar.svelte.
@@ -45,21 +55,34 @@
   // pending holds the arrangement a drop just applied, until the daemon's push
   // catches up. Without it the row snaps back to its old place for the frame
   // between the drop and the reload, which reads as "the drag didn't take".
+  let query = $state("");
+  let searchInput = $state<HTMLInputElement>();
+  // The search field lives behind the header's filter button; a live query keeps it open.
+  let filterOpen = $state(false);
+  const searching = $derived(filterOpen || query !== "");
+  async function toggleFilter() {
+    if (searching) { query = ""; filterOpen = false; return; }
+    filterOpen = true;
+    await tick();
+    searchInput?.focus();
+  }
+  const matches = $derived(store.projects.filter(p => matchesSearch(query, displayName(p), p.repo, p.path)));
   let pending = $state<Row<ProjectInfo>[] | null>(null);
   const rows = $derived(pending ?? buildRows(store.projects, store.groups));
   const members = $derived(stackMembers(store.projects));
   const stacks = $derived(store.projects.filter(isStack));
 
-  // A stack wears a diamond instead of the dot — same colours, same meaning —
-  // so it reads as "the poll unit of several repositories" rather than as a
-  // folder (which carries a chevron and polls nothing).
-  function pollDot(p: ProjectInfo): { glyph: string; cls: string; faint: boolean } {
-    const [on, off] = isStack(p) ? ["◆", "◇"] : ["●", "○"];
-    const ps = (store.status?.polls ?? []).find((x) => x.name === p.name);
-    if (!ps) return { glyph: isStack(p) ? off : "·", cls: "text-faint", faint: true };
-    if (ps.lastError) return { glyph: on, cls: "text-bad", faint: false };
-    if (ps.enabled) return { glyph: on, cls: "text-good", faint: false };
-    return { glyph: off, cls: "text-faint", faint: true };
+  // Stacks use a drawn layers icon below, sharing the repository dots' poll
+  // colours. Folders carry a disclosure chevron and poll nothing.
+  function pollDot(p: ProjectInfo, stack: string): { glyph: string; cls: string; faint: boolean; hint: string } {
+    const [on, off] = ["●", "○"];
+    // A member's own poll is intentionally off: its stack dispatches work.
+    const ps = (store.status?.polls ?? []).find((x) => x.name === (stack || p.name));
+    const prefix = stack ? `Part of ${nameOf(stack)} · ` : '';
+    if (!ps) return { glyph: "·", cls: "text-faint", faint: true, hint: `${prefix}polling status unavailable` };
+    if (ps.lastError) return { glyph: on, cls: "text-bad", faint: false, hint: `${prefix}poll error: ${ps.lastError}` };
+    if (ps.enabled) return { glyph: on, cls: "text-good", faint: false, hint: `${prefix}stack polling enabled` };
+    return { glyph: off, cls: "text-faint", faint: true, hint: `${prefix}stack polling paused` };
   }
 
   const nameOf = (name: string) => {
@@ -78,9 +101,22 @@
   let addTrigger: HTMLElement | null = null;
 
   function openAddMenu(e: MouseEvent) {
+    rowMenu = null;
     addTrigger = e.currentTarget as HTMLElement;
     const r = addTrigger.getBoundingClientRect();
     addMenu = { x: Math.min(r.left, window.innerWidth - 180), y: r.bottom + 4 };
+  }
+
+  function openBackgroundMenu(e: MouseEvent) {
+    // Row menus own their events; text fields keep the native editing menu.
+    if (e.defaultPrevented || (e.target as HTMLElement).closest("input, textarea, [contenteditable], button, a")) return;
+    e.preventDefault();
+    rowMenu = null;
+    addTrigger = searchInput ?? (e.currentTarget as HTMLElement);
+    addMenu = {
+      x: Math.max(4, Math.min(e.clientX, window.innerWidth - 180)),
+      y: Math.max(4, Math.min(e.clientY, window.innerHeight - 120)),
+    };
   }
 
   function closeAddMenu(refocus = false) {
@@ -104,7 +140,16 @@
   });
 
   // --- group add / rename, stack add ------------------------------------------
-  let dialog = $state<{ mode: "add" | "rename" | "stack"; name: string; value: string } | null>(null);
+  type StackFolder = { path: string; apps: StackFolderAppDTO[]; include: boolean[] };
+  let dialog = $state<{
+    mode: "add" | "rename" | "stack";
+    name: string;
+    value: string;
+    /** stack mode: the picked parent folder and which of its apps to include. */
+    folder?: StackFolder;
+    /** stack mode: the name the folder suggested, replaced on a re-pick unless edited. */
+    suggested?: string;
+  } | null>(null);
 
   async function submitDialog() {
     const d = dialog;
@@ -115,12 +160,46 @@
     if (d.mode === "add") await store.addGroup(value);
     else if (d.mode === "rename") await store.renameGroup(d.name, value);
     else {
-      // A new stack is empty and has no Linear filter yet, so its form is the
-      // next thing anyone needs.
-      const name = await store.createStack(value);
+      // A stack from a parent folder brings its members along; otherwise it is
+      // empty. Either way it has no Linear filter yet, so its form is the next
+      // thing anyone needs.
+      const apps = d.folder ? d.folder.apps.filter((a, i) => d.folder!.include[i] && !a.blocked) : [];
+      const name = apps.length > 0 ? await store.createStackFromFolder(value, apps) : await store.createStack(value);
       if (name) nav.openOverlay("project", name);
     }
   }
+
+  // --- stack from a parent folder ---------------------------------------------
+  // Picking the folder that holds a stack's repositories lists the checkouts
+  // nested directly in it (local git only, ConfigService.ScanStackFolder), each
+  // with a checkbox. Every app is included by default except one the backend
+  // says cannot join (a member of another stack). The name is suggested from
+  // the folder only while the human has not typed one.
+  let picking = $state(false);
+
+  async function pickStackFolder() {
+    const d = dialog;
+    if (!d || d.mode !== "stack" || picking) return;
+    picking = true;
+    try {
+      const chosen = await ConfigService.PickFolder(d.folder?.path ?? "");
+      if (!chosen || dialog !== d) return;
+      const scan = await ConfigService.ScanStackFolder(chosen);
+      if (dialog !== d) return;
+      const apps = scan.apps ?? [];
+      d.folder = { path: scan.path, apps, include: apps.map((a) => !a.blocked) };
+      if (!d.value.trim() || d.value === d.suggested) d.value = scan.suggestedLabel;
+      d.suggested = scan.suggestedLabel;
+    } catch (err) {
+      store.setFlash(String(err), "bad");
+    } finally {
+      picking = false;
+    }
+  }
+
+  const folderCount = $derived(
+    dialog?.folder ? dialog.folder.apps.filter((a, i) => dialog!.folder!.include[i] && !a.blocked).length : 0,
+  );
 
   // --- stack membership --------------------------------------------------------
 
@@ -129,7 +208,8 @@
     const s = nameOf(stack);
     confirm.ask({
       title: "Add to stack?",
-      body: `Add ${p} to stack ${s}?`,
+      subject: `${p} → ${s}`,
+      body: "",
       detail:
         "Its Linear filter, agent and write-back settings are kept but ignored while it is part of the stack; it is checked out for issues the stack picks up that carry its labels.",
       confirmLabel: "Add",
@@ -141,7 +221,8 @@
   function askLeaveStack(project: string, stack: string, to?: ProjectTarget) {
     confirm.ask({
       title: "Remove from stack?",
-      body: `Remove ${nameOf(project)} from stack ${nameOf(stack)}?`,
+      subject: `${nameOf(project)} ← ${nameOf(stack)}`,
+      body: "",
       detail: "It polls with its own Linear filter, agent and write-back settings again.",
       confirmLabel: "Remove",
       onConfirm: async () => {
@@ -157,11 +238,15 @@
   let rowMenu = $state<{ x: number; y: number; name: string; picking: boolean } | null>(null);
   const menuName = $derived(rowMenu?.name ?? "");
   const menuStack = $derived(rowMenu ? memberOf(store.projects, rowMenu.name) : "");
+  // Projects a stack's menu can pull in: not a stack, not already in any stack
+  // (a member of another stack leaves that one first).
+  const joinable = $derived(store.projects.filter((x) => !isStack(x) && !memberOf(store.projects, x.name)));
 
   function openRowMenu(e: MouseEvent, name: string) {
     const p = store.projectByName(name);
-    if (!p || isStack(p)) return; // a stack joins nothing
+    if (!p) return;
     e.preventDefault();
+    closeAddMenu();
     rowMenu = { x: Math.min(e.clientX, window.innerWidth - 200), y: e.clientY, name, picking: false };
   }
 
@@ -180,7 +265,8 @@
   function askRemoveGroup(name: string, label: string) {
     confirm.ask({
       title: "Remove group?",
-      body: `Remove the group "${label}".`,
+      subject: label,
+      body: "",
       // Said plainly because the opposite is the reasonable fear: this is the
       // one "remove" in the sidebar that costs nothing but the folder.
       detail: "Its projects move back to the top level — nothing is deleted.",
@@ -210,6 +296,7 @@
   let suppressClick = false;
 
   function startPress(e: PointerEvent, kind: DragKind, name: string) {
+    if (query.trim()) return;
     if (e.button !== 0) return;
     // The trailing controls (settings, hub, rename, remove) are not drag
     // handles; a press on one of them stays a plain click.
@@ -377,9 +464,14 @@
     });
   }
 
-  function openProject(name: string) {
+  function openProject(name: string, event?: MouseEvent) {
     if (suppressClick) return;
-    nav.toggleProjectScope(name);
+    // Git mode: a project is a workspace to open. Code mode: it filters the sessions beside it,
+    // and picking the one already chosen clears the filter.
+    // A stack or path-less project keeps the Git tab too: ProjectDetail shows its overview.
+    if (nav.gitMode) nav.goDetail(name, "git");
+    else if (event && (event.metaKey || event.ctrlKey || event.shiftKey)) nav.toggleScope(name);
+    else { nav.scopeTo(nav.scopeNames.length === 1 && nav.scopeNames[0] === name ? "" : name); nav.sidebarTab = "sessions"; }
   }
 
   function toggleGroup(name: string, collapsed: boolean) {
@@ -496,31 +588,33 @@
 {/snippet}
 
 {#snippet projectRow(p: ProjectInfo, group: string, index: number)}
-  {@const d = pollDot(p)}
-  {@const active = nav.scoped && nav.project === p.name}
-  <!-- Mirrors nav.toggleProjectScope's own condition: a row is drawn active
-       on the project hub too (scope outlives goDetail), and there the click
-       still navigates rather than clearing. -->
-  {@const clears = active && nav.view === "cockpit"}
+  {@const stack = memberOf(store.projects, p.name)}
+  {@const d = pollDot(p, stack)}
+  {@const match = searchMatch(query, displayName(p), p.repo, p.path)}
+  {@const active = (nav.view === "cockpit" ? nav.scopeNames.includes(p.name) : ["detail", "prpicker", "ticketpicker"].includes(nav.view) && nav.project === p.name)}
   <NavRow
     label={displayName(p)}
     glyph={d.glyph}
     glyphCls={d.cls}
     dim={d.faint}
     {active}
-    title={p.lastError
+    title={stack ? d.hint : p.lastError
       ? `poll error: ${p.lastError}`
-      : clears
-        ? "clear the project filter"
-        : isStack(p)
-          ? "stack — scope the cockpit to it"
-          : "scope the cockpit to this project"}
-    onclick={() => openProject(p.name)}
+      : nav.gitMode ? "Open in Git" : "Show this project's sessions (⌘-click to add more)"}
+    onclick={(e) => openProject(p.name, e)}
     onkeydown={(e) => {
       // A member is placed by its stack, not by the arrangement keys.
-      if (index >= 0) nudgeProject(e, p.name, group, index);
+      if (!query.trim() && index >= 0) nudgeProject(e, p.name, group, index);
     }}
   >
+    {#snippet labelContent()}<SearchHighlight text={displayName(p)} indices={match?.[0]} />{/snippet}
+    {#snippet icon()}
+      {#if isStack(p)}
+        <Icon name="layers" class="size-3.5" />
+      {:else}
+        <GlyphIcon glyph={d.glyph} />
+      {/if}
+    {/snippet}
     {#snippet badges()}
       <!-- Bare glyph counts on purpose: the triage row named "Needs You"
            counts needs_input ONLY, while ProjectInfo.needsYou is the
@@ -533,13 +627,11 @@
       {#if p.needsYou > 0}<span class="num text-sm text-orange" title="{p.needsYou} need you"
           ><span aria-hidden="true">{p.needsYou}!</span><span class="sr-only">{p.needsYou} need you</span></span
         >{/if}
-      {#if p.ciRed > 0}<span class="num text-sm text-bad" title="{p.ciRed} failing CI"
-          ><span aria-hidden="true">{p.ciRed}✕</span><span class="sr-only">{p.ciRed} failing CI</span></span
-        >{/if}
     {/snippet}
     {#snippet actions()}
       <!-- data-drag-ignore: these are controls, not drag handles. -->
       <span class="flex items-center" data-drag-ignore>
+        <Button size="xs" icon aria-label="{displayName(p)} actions" onclick={(e) => openRowMenu(e, p.name)}><Icon name="ellipsis" size={14} /></Button>
         <Button
           size="xs"
           icon
@@ -547,27 +639,8 @@
           aria-label="{displayName(p)} settings"
           onclick={() => nav.openOverlay("project", p.name)}
         >
-          <svg
-            viewBox="0 0 24 24"
-            class="h-3.5 w-3.5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.9"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
+          <Icon name="settings" class="h-3.5 w-3.5" />
         </Button>
-        <Button
-          size="xs"
-          icon
-          title="open project hub"
-          aria-label="{displayName(p)} hub"
-          onclick={() => nav.goDetail(p.name)}>›</Button
-        >
       </span>
     {/snippet}
   </NavRow>
@@ -580,33 +653,83 @@
   <li class="-my-px h-0.5 rounded-full bg-accent" aria-hidden="true"></li>
 {/snippet}
 
-<nav class="min-w-0 px-3 pt-3.5" aria-label="Projects">
-  <div class="flex items-center px-2 pb-1">
-    <h2 class="label text-faint">Projects</h2>
+<nav class="min-h-full min-w-0 px-3 pt-3" aria-label="Projects" oncontextmenu={openBackgroundMenu}>
+  <div class="flex h-6 items-center px-2">
+    <h2 class="label text-[11px]! text-faint">Projects</h2>
     <Button
       size="xs"
       icon
-      class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
+      class="ml-auto transition-opacity {searching ? '' : 'opacity-0 group-hover/side:opacity-100 focus-visible:opacity-100'}"
+      title="filter projects"
+      aria-label="Filter projects"
+      aria-pressed={searching}
+      onclick={toggleFilter}><Icon name="list-filter" size={14} /></Button
+    >
+    <Button
+      size="xs"
+      icon
+      class="opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
       title="add a project, a group or a stack"
       aria-label="Add"
       aria-haspopup="menu"
-      onclick={openAddMenu}>+</Button
+      onclick={openAddMenu}><Icon name="plus" size={14} /></Button
     >
   </div>
 
-  {#if store.projects.length === 0 && store.groups.length === 0}
-    <!-- A dashed drop-zone-ish placeholder, not a <Button>: it is an empty STATE
-         that happens to be clickable, and its dashed border and 3-line height are
-         not part of the button ladder. -->
-    <button
-      class="w-full rounded-md border border-dashed border-edge px-2 py-3 text-center text-sm text-faint transition-colors hover:border-accent hover:text-accent-ink"
-      onclick={() => nav.openOverlay("project", "")}>No projects — add one</button
-    >
+  {#if searching}
+  <div class="px-2 py-2">
+    <div class="relative">
+      <input bind:this={searchInput} class="w-full rounded border border-edge bg-panel py-1.5 pr-8 pl-2 text-sm outline-none focus:border-accent" placeholder="Search projects…" aria-label="Search projects" bind:value={query} />
+      {#if query}
+        <Button icon size="xs" class="absolute top-1/2 right-1 -translate-y-1/2" aria-label="Clear project search" title="Clear search" onclick={() => { query = ""; searchInput?.focus(); }}>
+          <Icon name="x" class="size-3" />
+        </Button>
+      {/if}
+    </div>
+  </div>
+  {/if}
+  {#if query.trim()}
+    <ul class="grid gap-0.5" aria-label="Matching projects">
+      {#each matches as p (p.name)}
+        {@const match = searchMatch(query, displayName(p), p.repo, p.path)}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <li oncontextmenu={(e) => openRowMenu(e,p.name)}>
+          {@render projectRow(p,"",-1)}
+          {#each [p.repo, p.path] as value, i}
+            {#if value && match?.[i + 1]?.length}
+              <div class="pb-1 pl-8 pr-2 text-sm text-faint break-all" title={value}>
+                <span>{i === 0 ? "Repo" : "Path"} · </span><SearchHighlight text={value} indices={match[i + 1]} />
+              </div>
+            {/if}
+          {/each}
+        </li>
+      {:else}<li class="px-2 py-3 text-sm text-faint">No matching projects</li>{/each}
+    </ul>
+  {:else if store.projects.length === 0 && store.groups.length === 0}
+    <!-- The empty workspace points at what is left to do, not only at "add a
+         project": a missing tool or a signed-out gh is as much a dead end. The
+         dashed frame marks it as an empty STATE, not a list. -->
+    <div class="grid gap-3 rounded-md border border-dashed border-edge p-2" aria-label="Get started" role="region">
+      <Button variant="secondary" size="sm" block onclick={() => nav.openOverlay("project", "")}>Add project</Button>
+      <SetupChecklist dismissKey="sidebar" />
+    </div>
   {:else}
+    {#if store.connected && !store.projects.some((p) => p.pollsEnabled > 0)}
+      <!-- Projects exist but none picks up issues: the checklist stays while
+           anything else is left to do. Polling alone does not keep it up — a
+           Mac that only takes hub chores or manual sessions never polls — and
+           the frame is the checklist's own, so nothing is left behind when it
+           hides. Mounted only while no project polls, so its checks stop with it. -->
+      <SetupChecklist dismissKey="sidebar" hideWhenComplete optional={["poll", "linear"]} class="mb-2 rounded-md border border-dashed border-edge p-2" />
+    {/if}
     {@const gap = drag?.kind === "group" ? groupTarget : target?.kind === "top" ? target.index : null}
-    <!-- Capped so a long project list can never squeeze Activity out of the
-         column; the list scrolls inside itself instead. -->
-    <div bind:this={listEl} class="max-h-[38vh] overflow-auto" class:select-none={!!drag}>
+    {#if !nav.gitMode}
+      <div class="pb-1">
+        <NavRow label="All sessions" glyph="∗" active={nav.view === "cockpit" && !nav.scoped} title="Show sessions from every project" onclick={() => nav.scopeTo("")} />
+      </div>
+    {/if}
+    <!-- The sidebar owns scrolling; Activity has its own bounded footer. -->
+    <div bind:this={listEl} class="min-w-0" class:select-none={!!drag}>
       <ul>
         {#each rows as row, i (row.kind === "group" ? "g:" + row.group.name : "p:" + row.project.name)}
           {#if gap === i}{@render dropLine()}{/if}
@@ -716,12 +839,25 @@
        torn down. -->
   <div class="fixed inset-0 z-40" role="presentation" onclick={() => (rowMenu = null)}></div>
   <div
-    class="fixed z-50 min-w-[12rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
-    style="left:{rowMenu?.x ?? 0}px;top:{rowMenu?.y ?? 0}px"
+    class="fixed z-50 max-h-[80vh] min-w-[12rem] overflow-auto rounded-lg border border-edge bg-panel p-1 shadow-xl"
+    style="left:{rowMenu?.x ?? 0}px;top:{Math.max(4, Math.min(rowMenu?.y ?? 0, window.innerHeight - 420))}px"
     role="menu"
     aria-label="{nameOf(menuName)} actions"
   >
+    {#if !rowMenu?.picking && nav.scopeNames.length > 1 && nav.scopeNames.includes(menuName)}
+      <p class="px-2 py-1 text-sm text-faint">{nav.scopeNames.length} projects selected</p>
+      {#each bulkProjectActions(nav.scopeNames) as a (a.id)}
+        <MenuItem variant={a.variant} disabled={!a.enabled} onclick={() => { rowMenu = null; a.run(); }}>{a.label}</MenuItem>
+      {/each}
+      <div class="my-1 border-t border-edge"></div>
+    {/if}
+    {#if !rowMenu?.picking && store.projectByName(menuName)}
+      {#each projectActions(store.projectByName(menuName)!) as action (action.id)}
+        <MenuItem disabled={!action.enabled} onclick={() => { rowMenu=null; action.run(); }}>{action.label}</MenuItem>
+      {/each}
+    {/if}
     {#if menuStack}
+      <div class="my-1 border-t border-edge"></div>
       <MenuItem
         icon="↖"
         onclick={() => {
@@ -730,7 +866,17 @@
           askLeaveStack(name, stack);
         }}>Remove from stack</MenuItem
       >
-    {:else if !rowMenu?.picking}
+    {:else if !rowMenu?.picking && store.projectByName(menuName) && isStack(store.projectByName(menuName)!)}
+      <div class="my-1 border-t border-edge"></div>
+      <MenuItem
+        icon="◆"
+        trailing="›"
+        disabled={joinable.length === 0}
+        title={joinable.length === 0 ? "Every project is already in a stack" : undefined}
+        onclick={() => rowMenu && (rowMenu = { ...rowMenu, picking: true })}>Add project…</MenuItem
+      >
+    {:else if !rowMenu?.picking && !isStack(store.projectByName(menuName)!)}
+      <div class="my-1 border-t border-edge"></div>
       <!-- A submenu in place: the stack list replaces the root items. -->
       <MenuItem
         icon="◆"
@@ -739,7 +885,18 @@
         title={stacks.length === 0 ? "No stacks yet — add one with + → New stack" : undefined}
         onclick={() => rowMenu && (rowMenu = { ...rowMenu, picking: true })}>Add to stack…</MenuItem
       >
-    {:else}
+    {:else if rowMenu?.picking && store.projectByName(menuName) && isStack(store.projectByName(menuName)!)}
+      {#each joinable as pr (pr.name)}
+        <MenuItem
+          icon="◆"
+          onclick={() => {
+            const stack = menuName;
+            rowMenu = null;
+            askJoinStack(pr.name, stack);
+          }}>{displayName(pr)}</MenuItem
+        >
+      {/each}
+    {:else if rowMenu?.picking}
       {#each stacks as st (st.name)}
         <MenuItem
           icon="◆"
@@ -750,6 +907,26 @@
           }}>{displayName(st)}</MenuItem
         >
       {/each}
+    {/if}
+    {#if !rowMenu?.picking && store.projectByName(menuName)}
+      <div class="my-1 border-t border-edge"></div>
+      {#if isStack(store.projectByName(menuName)!)}
+        <MenuItem variant="danger"
+          onclick={() => {
+            const name = menuName;
+            rowMenu = null;
+            askRemoveStack(name);
+          }}>Remove stack…</MenuItem
+        >
+      {:else}
+        <MenuItem variant="danger"
+          onclick={() => {
+            const name = menuName;
+            rowMenu = null;
+            askRemoveProject(name);
+          }}>Remove project…</MenuItem
+        >
+      {/if}
     {/if}
   </div>
 {/if}
@@ -775,6 +952,45 @@
         }}
       />
     </label>
+    {#if dialog.mode === "stack"}
+      <div class="mt-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="label text-faint">Parent folder</span>
+          <Button size="sm" variant="secondary" loading={picking} onclick={() => void pickStackFolder()}>
+            {dialog.folder ? "Change…" : "Choose parent folder…"}
+          </Button>
+        </div>
+        {#if !dialog.folder}
+          <p class="mt-1 text-sm text-faint">
+            Optional. Pick the folder that holds the stack's repositories to add them as apps automatically.
+          </p>
+        {:else}
+          <p class="mt-1 truncate font-mono text-sm text-faint" title={dialog.folder.path}>{dialog.folder.path}</p>
+          {#if dialog.folder.apps.length === 0}
+            <p class="mt-2 text-sm text-warn">No git checkouts directly inside this folder. The stack is created empty.</p>
+          {:else}
+            <ul class="mt-2 max-h-56 overflow-auto rounded border border-edge" aria-label="Apps in folder">
+              {#each dialog.folder.apps as app, i (app.path)}
+                <li class="border-b border-edge last:border-b-0">
+                  <label class="flex items-center gap-2 px-2 py-1.5 {app.blocked ? '' : 'cursor-pointer'}" title={app.path}>
+                    <Checkbox
+                      bind:checked={dialog.folder.include[i]}
+                      disabled={!!app.blocked}
+                      aria-label="Include {app.label}"
+                    />
+                    <span class="min-w-0 flex-1 truncate text-ink {app.blocked ? 'opacity-55' : ''}">{app.label}</span>
+                    <span class="shrink-0 truncate text-sm text-faint">
+                      {#if app.blocked}{app.blocked}{:else if app.project}joins existing project{:else}{app.repo || "no GitHub remote"}{/if}
+                    </span>
+                  </label>
+                </li>
+              {/each}
+            </ul>
+            <p class="mt-1 text-sm text-faint">{folderCount} of {dialog.folder.apps.length} included</p>
+          {/if}
+        {/if}
+      </div>
+    {/if}
     {#snippet footer()}
       <div class="flex justify-end gap-2">
         <Button onclick={() => (dialog = null)}>Cancel</Button>

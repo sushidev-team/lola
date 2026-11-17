@@ -13,6 +13,7 @@ vi.mock("@bindings/desktop", () => ({
   },
   ConfigService: {},
   TermService: { Shells: vi.fn(async () => []) },
+  TalkService: { State: vi.fn(async () => ({ caps: {}, composer: "unknown", feedSeq: 0, health: "ok" })) },
 }));
 
 const { default: SessionEmbed } = await import("./SessionEmbed.svelte");
@@ -28,14 +29,14 @@ describe("SessionEmbed diff tab", () => {
     const s = (age: string) => ({ id: "s1", tmuxName: "s1", worktree: "/w", age }) as never;
     store.sessions = [s("0")];
     terms.select("s1", DIFF);
-    render(SessionEmbed, { sessionId: "s1", focused: true });
-    await screen.findByText(/no changes/);
+    render(SessionEmbed, { sessionId: "s1" });
+    await screen.findByText(/No changes/);
     for (let i = 1; i <= 3; i++) {
       store.sessions = [s(String(i))];
       flushSync();
       await new Promise((r) => setTimeout(r, 0));
     }
     expect(Diff).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/no changes/)).toBeInTheDocument();
+    expect(screen.getByText(/No changes/)).toBeInTheDocument();
   });
 });

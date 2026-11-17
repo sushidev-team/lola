@@ -234,7 +234,11 @@ var (
 	// caret, i.e. Waiting). That is the failure this cue exists to prevent, so
 	// re-verify it against a live modal pane whenever claude-code changes its
 	// dialog chrome.
-	modalOverlayRe = regexp.MustCompile(`(?m)^\s*\x{2594}{20,}\s*$`)
+	// The rule can carry a label after its run, as the live build's "▔▔▔… ◐ medium · /effort
+	// ▔" does on every overlay in the spike's captures (settings, /usage, rewind). The strict
+	// shape missed those, so they read as Waiting or Unknown and a Classify-only proof would
+	// type into them. The run must still start the row and be long.
+	modalOverlayRe = regexp.MustCompile(`(?m)^\s*\x{2594}{20,}(?:\s+\S.*)?\s*$`)
 
 	// -----------------------------------------------------------------------
 	// QUOTA cues. Each agent prints its own BLOCKING usage-limit banner when a
@@ -326,7 +330,10 @@ func Classify(paneText string, k agent.Kind) Activity {
 	if len(paneText) > maxInput {
 		paneText = paneText[len(paneText)-maxInput:]
 	}
-	clean := stripANSI(paneText)
+	// A pane that has not filled keeps its blank rows at the bottom of a capture. They
+	// must not count toward the tail, or the status line of an inline claude-code sits
+	// above the window, every working cue is missed and a mid-turn agent reads as resting.
+	clean := strings.TrimRight(stripANSI(paneText), " \t\n")
 	screen := lastLines(clean, maxScreenLines)
 	tail := lastLines(clean, statusTailLines)
 

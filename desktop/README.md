@@ -20,6 +20,8 @@ desktop/
 ├── client.go          # daemon socket round-trip (internal/protocol)
 ├── daemonsvc.go       # DaemonService — every daemon command, + daemon lifecycle
 ├── termsvc.go         # TermService — tmux snapshots (grid) + live PTY attach (focus)
+├── sshsvc.go          # SSHService — a human's side of agent-assisted ssh (docs/ssh-sessions.md)
+├── sshhosts.go        # ConfigService — the [[ssh_host]] catalog for Settings › SSH hosts
 ├── configsvc.go       # ConfigService — read/write config.toml (settings/project/poll)
 ├── doctorsvc.go       # DoctorService — internal/doctor health checks
 ├── *_test.go          # Go backend tests (fake-socket daemon, config helpers)
@@ -42,9 +44,12 @@ can reuse `internal/protocol`, `internal/config`, `internal/doctor`, etc.
 
 ## Setup and settings
 
-First-run setup needs a Linear key and a repository folder. Project details are
-filled from the checkout; expand **Project details** to correct them. Agent
-limits and polling frequency use the existing defaults and are optional here.
+First-run setup requires only a Linear API key. General settings offer optional
+defaults for the coding agent, theme, agent limits and polling interval. Setup
+opens an empty workspace; use **Add project** when you are ready to choose a
+repository. The TUI follows the same flow: connect Linear, then press Enter to
+finish or use the arrow keys to edit general settings. Press **n** afterward to
+add a project.
 
 Model, polling, executable, branch-prefix and review base-flag fields offer
 presets plus a Custom option. Existing values outside the preset list remain
@@ -75,7 +80,7 @@ The settings cleanup keeps the configuration format and saved values intact:
 | Linear state updates and comments | Optional workflow automation; Linear updates. |
 | Reviews | Compact provider cards group run settings and findings. Timeout, live viewing and fallback order are under Advanced settings; disabled cards retain their configuration. |
 | Summaries and status interpretation | Optional AI features; tuning appears only when enabled and survives disabling. |
-| Linear credentials, notifications, phone access and themes | Separate connections and presentation choices; grouped navigation. |
+| Linear credentials, notifications, Phones and themes | Separate connections and presentation choices; grouped navigation. Phones edits `[remote]` (including `relay`) and, through `PhonesService`, pairs a phone (QR, then type the code the phone shows), lists devices, edits tiers and revokes. |
 
 This removes redundant first-run decisions and implementation-oriented prose
 without removing supported workflows or rewriting advanced settings on save.
@@ -94,7 +99,7 @@ normal PATH. (The bundled `.app` inherits a minimal PATH from Finder; `main.go`'
 Regenerate the TS bindings after changing a Go service signature:
 
 ```sh
-cd desktop && wails3 generate bindings -ts -d frontend/bindings
+cd desktop && wails3 generate bindings -ts -i -d frontend/bindings
 ```
 
 ## Build
@@ -230,3 +235,61 @@ Wails round-trip per keystroke would make the field feel dead). Go stays the
 authority — `SaveProject` re-slugs whatever arrives — so drift can only make the
 preview disagree, never write an unsafe name. `slug.test.ts` mirrors the Go test
 case for case; change both together.
+
+### Custom sessions and quick navigation
+
+Use **New session…** on a project, its sidebar actions menu, or **C** to
+create a named agent or shell session. Choose **New worktree** to create a
+branch, or **Main checkout** to use the project's existing directory and
+current branch. **Open shell here** skips the form. Names can be changed from
+the session context menu or by clicking the terminal header's title; renaming
+does not change branch names, directories, or session IDs.
+
+**⌘K** searches projects (including repository and path), named sessions, and
+actions. Select a project to see its actions; **⌘Enter** creates a session and
+**⌘O** opens a shell there. **⌘⇧N**, the temporary-sessions **+**, and the
+command palette open a dialog for a temporary, project-free shell: give it a
+name and optionally type a directory or use **Choose folder…**.
+Set its default directory in **Settings → General → Temporary shell directory**
+(`[defaults].temporary_directory`, empty means the user's home). Closing the
+app leaves running sessions available. Explicitly closing a main-checkout or
+temporary session stops its terminals and preserves the directory and files.
+Typing `exit` in the last shell of a temporary session closes that session and
+leaves fullscreen. Other running shell tabs are kept open.
+Reopening a stopped agent in a shared checkout starts a new conversation,
+avoiding accidental resumption of another session in the same directory.
+
+Main-checkout sessions do not run worktree setup/cleanup hooks, automatic PR
+reactions, checkpoint restoration, or automatic agent switching. Run dev
+commands in their shell tabs. Sandboxed agents still require isolated worktrees.
+Activity is collapsed by default; expand it for a bounded feed, or choose
+**View all activity** for the larger view.
+
+### Local time-tracker context
+
+The native window title follows the displayed session, for example
+`ENG-123 · Fix login · Donso · Lola`. Sessions without a Linear ticket omit the
+key. Home, Settings and other non-session views use `Lola`; a PR review uses
+the reviewed session. Session renames update the title too.
+
+For trackers such as Donso, the desktop also atomically replaces
+`~/.lola/desktop-context.json` (`$LOLA_HOME/desktop-context.json` when set).
+This is a private, mode-0600 snapshot with no history, network listener, or
+extra visible UI. Example:
+
+```json
+{"version":1,"pid":12345,"updatedAt":"2026-11-10T12:00:00Z","view":"cockpit","sessionId":"donso-eng-123","title":"Fix login","projectId":"donso","projectName":"Donso","issueKey":"ENG-123"}
+```
+
+Only `version`, `pid`, `updatedAt` and `view` are always present. Session
+fields disappear when a non-session view covers the workspace, or the session
+cannot be resolved. `projectId` and `sessionId` are stable identities;
+`projectName` and `title` are display text. `issueKey` is optional.
+
+Read the file afresh on a foreground/window-title change, or poll it while
+Lola is foreground. **Match `pid` to the foreground Lola process** and apply
+the tracker's own idle detection before counting time. `updatedAt` records a
+context update, not a heartbeat or proof of human activity. The file is removed
+on normal app shutdown; after a crash, a stale record must be ignored unless
+its PID belongs to the current foreground Lola process. The snapshot describes
+the desktop only, not the TUI or background agents.
