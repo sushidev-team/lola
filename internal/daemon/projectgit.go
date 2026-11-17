@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitdiff"
 	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -31,7 +32,31 @@ const (
 	projectGitMaxPaths    = 2000
 	projectGitMaxMessage  = 64 << 10
 	projectGitMaxLimit    = 300
+	// projectGitDiffBudget bounds an encoded diff reply well under
+	// protocol.MaxFrameBytes (1 MiB): an oversize reply is a fatal frame error
+	// that drops the whole phone connection, so it must never be sent.
+	projectGitDiffBudget = 800 << 10
 )
+
+// fitDiffToFrame omits patches, last file first, until the encoded result fits
+// one frame. An omitted patch is marked TooLarge (the viewer says so) and the
+// result Truncated; file names and counts always survive.
+func fitDiffToFrame(res gitdiff.Result) gitdiff.Result {
+	size := func() int {
+		b, err := json.Marshal(res)
+		if err != nil {
+			return projectGitDiffBudget + 1
+		}
+		return len(b)
+	}
+	for i := len(res.Files) - 1; i >= 0 && size() > projectGitDiffBudget; i-- {
+		if res.Files[i].Patch == "" {
+			continue
+		}
+		res.Files[i].Patch, res.Files[i].TooLarge, res.Truncated = "", true, true
+	}
+	return res
+}
 
 func gitWithin(path, root string) bool {
 	rel, err := filepath.Rel(root, path)
@@ -175,7 +200,11 @@ func (d *Daemon) projectGitRead(ctx context.Context, a protocol.ProjectGitArgs) 
 		}
 		return snap, nil
 	case "diff":
-		return c.Diff(ctx, dir, a.From, a.To, a.Area, a.Path)
+		res, err := c.Diff(ctx, dir, a.From, a.To, a.Area, a.Path)
+		if err != nil {
+			return nil, err
+		}
+		return fitDiffToFrame(res), nil
 	default:
 		return c.Stashes(ctx, dir)
 	}

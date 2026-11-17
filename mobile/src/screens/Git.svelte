@@ -198,11 +198,16 @@
       {/if}
       {@render diffBody()}
     </div>
-    {#if view.kind === "file" && canAct}
+    {#if git.error}
+      <p class="mx-4 mb-2 shrink-0 rounded-xl bg-sel px-3 py-2 text-subhead text-bad" role="alert">{git.error}</p>
+    {/if}
+    {#if view.kind === "file" && (canAct || (!view.staged && canDiscard))}
       <div class="flex shrink-0 gap-2 border-t border-edge-soft p-3 pb-[calc(env(safe-area-inset-bottom,0px)+12px)]">
-        <TouchButton wide variant="secondary" disabled={!!git.busy} onclick={stageFromView}>
-          {view.staged ? copy.git.unstage : copy.git.stage}
-        </TouchButton>
+        {#if canAct}
+          <TouchButton wide variant="secondary" disabled={!!git.busy} onclick={stageFromView}>
+            {view.staged ? copy.git.unstage : copy.git.stage}
+          </TouchButton>
+        {/if}
         {#if !view.staged && canDiscard}
           <TouchButton wide variant="danger" disabled={!!git.busy} onclick={discardFromView}>{copy.git.discard}</TouchButton>
         {/if}

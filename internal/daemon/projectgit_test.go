@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitdiff"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -98,5 +100,18 @@ func TestProjectGitRefusesASecondConcurrentWrite(t *testing.T) {
 	resp := d.handle(context.Background(), gitReq(t, protocol.CmdProjectGitAct, protocol.ProjectGitArgs{Op: "stage", Project: "p", Paths: []string{"a"}}))
 	if resp.OK {
 		t.Fatal("second write was accepted while one is running")
+	}
+}
+
+func TestProjectGitDiffReplyFitsOneFrame(t *testing.T) {
+	big := strings.Repeat("x", 300<<10)
+	res := gitdiff.Result{Files: []gitdiff.File{{Path: "a", Patch: big}, {Path: "b", Patch: big}, {Path: "c", Patch: big}}}
+	out := fitDiffToFrame(res)
+	raw, _ := json.Marshal(out)
+	if len(raw) >= protocol.MaxFrameBytes {
+		t.Fatalf("reply is %d bytes, frame cap %d", len(raw), protocol.MaxFrameBytes)
+	}
+	if !out.Truncated || !out.Files[2].TooLarge || out.Files[0].Patch == "" {
+		t.Fatalf("expected only the last patch dropped: %+v", out.Truncated)
 	}
 }

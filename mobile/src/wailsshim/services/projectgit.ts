@@ -10,8 +10,14 @@ import type { Routes } from "./routes";
 
 // One repository request. The phone holds no git credentials: the daemon runs it
 // on the Mac, on a checkout the project's repository registers (docs/mobile/01 §8.2).
+// The Mac may run hooks, signing helpers and the network for up to two minutes
+// (projectgit.Context), so a write waits longer than that; the default 15 s
+// would report failure for an action that then succeeds, unacknowledged.
+const READ_TIMEOUT_MS = 45_000;
+const WRITE_TIMEOUT_MS = 135_000;
 function git<T>(method: string, cmd: string, args: Record<string, unknown>): Promise<T> {
-  return bridge.request<T>(`ProjectGitService.${method}`, cmd, { args });
+  const timeoutMs = cmd === "projectGit" ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS;
+  return bridge.request<T>(`ProjectGitService.${method}`, cmd, { args }, { timeoutMs });
 }
 
 /** PLATFORM. */
