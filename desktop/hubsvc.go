@@ -305,11 +305,11 @@ func (s *HubService) ShareTrust(a protocol.ShareTrustArgs) (protocol.ShareMember
 	return d, err
 }
 
-// ShareUntrust removes a pinned teammate in both directions and ends their
-// live attachments.
-func (s *HubService) ShareUntrust(deviceID string) (protocol.ShareMembersData, error) {
+// ShareUntrust removes a pinned teammate in the directions named (neither
+// named: both) and ends their live attachments.
+func (s *HubService) ShareUntrust(a protocol.ShareUntrustArgs) (protocol.ShareMembersData, error) {
 	var d protocol.ShareMembersData
-	err := hubCall(protocol.CmdShareUntrust, protocol.ShareUntrustArgs{DeviceID: deviceID}, &d, hubViewTimeout)
+	err := hubCall(protocol.CmdShareUntrust, a, &d, hubViewTimeout)
 	if d.Members == nil {
 		d.Members = []protocol.ShareMemberInfo{}
 	}

@@ -17,6 +17,9 @@
   import HubSyncButton from "$lib/components/hub/HubSyncButton.svelte";
   import FixAllButton from "$lib/components/hub/FixAllButton.svelte";
   import UpdateAllDialog from "$lib/components/hub/UpdateAllDialog.svelte";
+  import TeamShares from "$lib/components/hub/TeamShares.svelte";
+  import SharedSessionPane from "$lib/components/hub/SharedSessionPane.svelte";
+  import { share } from "$lib/share.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Select from "$lib/components/Select.svelte";
@@ -600,7 +603,11 @@
   </li>
 {/snippet}
 
-<div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" data-team-view>
+<div class="grid h-full min-h-0 grid-rows-[minmax(0,1fr)]" data-team-view>
+  <!-- A teammate's terminal replaces the board while one is attached. It is always mounted
+       and only hidden (see SharedSessionPane), so no branch here ever mounts a terminal. -->
+  <SharedSessionPane />
+  <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] {share.attachedId ? 'hidden' : ''}" data-team-board>
   <div class="flex min-w-0 flex-wrap items-center gap-3 border-b border-edge px-5 py-3">
     <span class="min-w-0 truncate text-base font-medium text-ink">{hub.joined ? orgName : "Team"}</span>
     {#if hub.joined}
@@ -899,6 +906,8 @@
           </div>
 
           <aside class="grid min-w-0 gap-6">
+            <TeamShares />
+
             <section class="min-w-0 rounded-xl border border-edge" aria-labelledby="team-devices">
               <header class="flex items-center gap-3 border-b border-edge px-4 py-3">
                 <h2 id="team-devices" class="text-base font-medium text-ink">Macs <span class="num ml-1 text-faint">{devices.length}</span></h2>
@@ -966,6 +975,7 @@
         </div>
       {/if}
     </div>
+  </div>
   </div>
 </div>
 

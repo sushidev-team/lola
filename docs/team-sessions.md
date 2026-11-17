@@ -1,6 +1,7 @@
 # Team session sharing (SUSHI-802)
 
-Status: DESIGN. Nothing here is implemented yet; each phase lands behind its own tests.
+Status: implemented on `feature/sushi-802-share-sessions-with-team`. Section 8 lists where the
+build differs from the first design below; everything else stands as the contract.
 
 A member can share a session with teammates. A teammate attaches to the
 session's terminal from their own machine, through the team hub, and it feels
@@ -172,3 +173,36 @@ Compact icons, text only where needed (per the issue):
   for the phone relay).
 - Hub enforces only admission hints and quotas; a hub that lies can deny
   service, not gain access.
+
+## 8. As built (deviations from the design above)
+
+- **Two pin files, one per direction.** The owner's list of teammates who may attach is
+  `~/.lola/members.json`; the teammates whose sessions this machine will attach to are
+  `~/.lola/owners.json` (same registry type, `devices.OpenMembers` / `OpenOwners`). Both are
+  separate from `devices.json`, so an older lola never reads a teammate as a phone. Pinning one
+  direction grants nothing in the other, and `shareTrust` / `shareUntrust` carry the direction.
+- **The binding is signed by the device.** `hubproto.MemberIdentity` is the device's inner TLS key
+  hash signed with its hub ed25519 key. The hub verifies it on publish (`POST /v1/shares/identity`),
+  and the daemon re-verifies it, and re-reads the key from the hub, at the moment a person pins
+  (`shareTrust` refuses unless the fingerprint the person compared is the one the hub names now).
+- **The share rendezvous is in the share set.** A share carries its own `rv`; the daemon dials the
+  accept leg only for an rv it published (`shareGate.KnownRV`), not through the phone rendezvous
+  set. A phone registration keeps the device's share splices, and un-publishing a share cuts them.
+- **Presence is polled, not pushed.** A member's `shareSessions` request (read-only, answered on the
+  reader goroutine) returns the shared sessions and who is attached; the desktop asks every 3 s while a
+  terminal is open. The owner sees the same list on `SessionInfo.share` (never on the phone projection).
+- **The server exists only while something is shared.** `[remote].enabled = false` keeps phones off:
+  sharing brings up a relay-only `remote.Server` and registers no phone rendezvous.
+- **`[hub].share_new_sessions`** (default off) is the general setting: a NEW session starts shared,
+  view-only, with every pinned teammate. Existing and un-shared sessions are never changed.
+- **At most 32 shares per device**, so the signed set stays inside the hub's 64 KiB body.
+- **The teammate's end lives in the desktop.** `internal/shareclient` (pinned mutual TLS, frames,
+  resync rendering) and `internal/shareterm` (the terminal backend `TermService` routes `share-<id>`
+  names to) are plain Go. The TUI and the phone do not attach to shared sessions.
+
+### Not done
+
+- `lola doctor` has no sharing row yet, and there is no CLI for sharing (the desktop app is the surface).
+- A teammate attaching over the LAN directly (v1 is relay only), and push presence instead of polling.
+- Nothing here was exercised against a real hub deployment or the packaged macOS app; the hub, daemon
+  and client are tested against each other in process, and the Svelte components in jsdom.

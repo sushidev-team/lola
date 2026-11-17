@@ -122,10 +122,13 @@ type ShareTrustArgs struct {
 	Trust bool `json:"trust,omitempty"`
 }
 
-// ShareUntrustArgs is Request.Args for cmd=shareUntrust. It removes both
-// directions, and ends the teammate's live attachments.
+// ShareUntrustArgs is Request.Args for cmd=shareUntrust. It ends the teammate's
+// live attachments. Allow and Trust name the directions to remove; neither set
+// removes both.
 type ShareUntrustArgs struct {
 	DeviceID string `json:"deviceId"`
+	Allow    bool   `json:"allow,omitempty"`
+	Trust    bool   `json:"trust,omitempty"`
 }
 
 // ShareOffer is one session a teammate offers this machine.

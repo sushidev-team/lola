@@ -16,9 +16,13 @@ const { Status, Board, Org, Claim, Release, Sync, Stats, RevokeDevice, HubProjec
 
 vi.mock("@bindings/desktop", async (orig) => ({
   ...(await orig<object>()),
-  HubService: { Status, Board, Org, Claim, Release, Sync, Stats, RevokeDevice, Join: vi.fn(), Leave: vi.fn(), DefaultDeviceName: vi.fn(), Kinds: vi.fn() },
+  HubService: { Status, Board, Org, Claim, Release, Sync, Stats, RevokeDevice, Join: vi.fn(), Leave: vi.fn(), DefaultDeviceName: vi.fn(), Kinds: vi.fn(),
+    ShareMembers: () => Promise.resolve({ members: [] }), ShareOffered: () => Promise.resolve({ offers: [] }) },
   ConfigService: { HubProjects: () => HubProjects(), SandboxLoginNeeded: (p: string, a: string) => SandboxLoginNeeded(p, a) },
 }));
+
+// The shared-session pane mounts a terminal only when one is attached; xterm needs a canvas jsdom lacks.
+vi.mock("$lib/components/LiveTerminal.svelte", async () => ({ default: (await import("$lib/components/TerminalExitHarness.test.svelte")).default }));
 
 import TeamView from "./TeamView.svelte";
 import { hub } from "$lib/hub.svelte";

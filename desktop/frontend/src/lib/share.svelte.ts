@@ -28,6 +28,11 @@ function message(err: unknown): string {
 export const SHARE_OUTDATED_MESSAGE = "Update the lola daemon to share sessions";
 const OUTDATED_RE = /unknown cmd/i;
 
+/** Call fn as a promise: a throw rejects instead of escaping. */
+function attempt<T>(fn: () => Promise<T>): Promise<T> {
+  return Promise.resolve().then(fn);
+}
+
 export class ShareStore {
   members = $state<ShareMemberInfo[]>([]);
   /** The hub could not be asked; members then holds only the pinned ones. */
@@ -38,6 +43,8 @@ export class ShareStore {
   error = $state("");
   /** Keys with a change in flight: a teammate's device id or a session id. */
   busy = $state<Record<string, boolean>>({});
+  /** The share id of the teammate's session shown in the terminal pane ("" = none). */
+  attachedId = $state("");
 
   #seq = 0;
   #applied = 0;
@@ -52,7 +59,8 @@ export class ShareStore {
   /** Reads teammates and offers together; one failing read never blanks the other. */
   async refresh() {
     const seq = ++this.#seq;
-    const [m, o] = await Promise.allSettled([HubService.ShareMembers(), HubService.ShareOffered()]);
+    // A binding missing in an older build rejects here instead of escaping.
+    const [m, o] = await Promise.allSettled([attempt(() => HubService.ShareMembers()), attempt(() => HubService.ShareOffered())]);
     if (seq < this.#applied) return;
     this.#applied = seq;
     this.error = "";
@@ -65,6 +73,16 @@ export class ShareStore {
       this.offersOffline = !!o.value.offline;
     } else if (!this.error) this.#fail(o.reason);
     this.loaded = true;
+  }
+
+  /** Show a teammate's session in the terminal pane. */
+  attach(shareId: string) {
+    this.attachedId = shareId;
+  }
+
+  /** Leave the terminal pane. The terminal detaches itself as it unmounts. */
+  detach() {
+    this.attachedId = "";
   }
 
   /** Poll while a view shows sharing. Returns the release. */
@@ -117,9 +135,9 @@ export class ShareStore {
     return true;
   }
 
-  /** Remove a teammate in both directions. */
-  async untrust(deviceId: string): Promise<boolean> {
-    const r = await this.#change(deviceId, () => HubService.ShareUntrust(deviceId));
+  /** Remove a teammate in the directions named (neither: both). */
+  async untrust(deviceId: string, dir: { allow?: boolean; trust?: boolean } = {}): Promise<boolean> {
+    const r = await this.#change(deviceId, () => HubService.ShareUntrust({ deviceId, allow: !!dir.allow, trust: !!dir.trust }));
     if (!r) return false;
     this.members = r.members ?? [];
     this.membersOffline = !!r.offline;

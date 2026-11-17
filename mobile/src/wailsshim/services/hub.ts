@@ -88,7 +88,7 @@ export function ShareTrust(_a: P.ShareTrustArgs): Promise<P.ShareMembersData> {
 }
 
 /** PLATFORM. */
-export function ShareUntrust(_deviceID: string): Promise<P.ShareMembersData> {
+export function ShareUntrust(_a: P.ShareUntrustArgs): Promise<P.ShareMembersData> {
   return unsupported("HubService.ShareUntrust", MAC_ONLY);
 }
 

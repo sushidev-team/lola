@@ -458,3 +458,32 @@ func waitUntil(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition not reached")
 }
+
+func TestUntrustRemovesOnlyTheNamedDirection(t *testing.T) {
+	rd, sh := newShareDaemon(t)
+	m, k := sh.teammate(t, "ada-mini")
+	fp := hubproto.Fingerprint(k)
+	if _, err := shareDo[protocol.ShareMembersData](t, rd.Daemon, protocol.CmdShareTrust,
+		protocol.ShareTrustArgs{DeviceID: m.DeviceID, Fingerprint: fp, Allow: true, Trust: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rd.members.List()) != 1 || len(rd.owners.List()) != 1 {
+		t.Fatal("both directions should be pinned")
+	}
+	out, err := shareDo[protocol.ShareMembersData](t, rd.Daemon, protocol.CmdShareUntrust, protocol.ShareUntrustArgs{DeviceID: m.DeviceID, Allow: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rd.members.List()) != 0 || len(rd.owners.List()) != 1 {
+		t.Fatalf("members=%d owners=%d, want only the allow direction removed", len(rd.members.List()), len(rd.owners.List()))
+	}
+	if len(out.Members) != 1 || out.Members[0].Allowed || !out.Members[0].Trusted {
+		t.Fatalf("members = %+v", out.Members)
+	}
+	if _, err := shareDo[protocol.ShareMembersData](t, rd.Daemon, protocol.CmdShareUntrust, protocol.ShareUntrustArgs{DeviceID: m.DeviceID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rd.owners.List()) != 0 {
+		t.Fatal("neither direction named should remove both")
+	}
+}

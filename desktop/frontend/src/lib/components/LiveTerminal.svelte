@@ -8,6 +8,7 @@
   import { TermService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
   import { termBoot } from "$lib/termboot";
+  import { isShareStream } from "$lib/sharing";
   import { TERM_FONT, appearance, termFontLoaded, termFontReady } from "$lib/theme-runtime.svelte";
 
   // A live, interactive terminal attached to a session's tmux pane. WebGL is
@@ -323,8 +324,11 @@
 
     // After the page's one-time orphan sweep (termboot.ts), never before it:
     // the sweep would otherwise be able to detach this very terminal.
-    attach = termBoot().then(() => TermService.Attach(terminalName, cols, rows)).catch(() => {
-      term?.writeln("\x1b[31m[ could not attach to session ]\x1b[0m");
+    attach = termBoot().then(() => TermService.Attach(terminalName, cols, rows)).catch((e) => {
+      // A teammate's session fails for reasons a person can act on (offline, not trusted
+      // yet): the daemon's sentence is shown. A local pane keeps the one generic line.
+      const why = isShareStream(terminalName) && e instanceof Error ? e.message.replace(/^Error:\s*/, "").replace(/[\x00-\x1f\x7f]/g, " ") : "";
+      term?.writeln(`\x1b[31m[ ${why || "could not attach to session"} ]\x1b[0m`);
     });
 
     ro = new ResizeObserver(() => {

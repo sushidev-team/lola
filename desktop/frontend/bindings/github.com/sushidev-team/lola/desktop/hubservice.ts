@@ -147,11 +147,11 @@ export function ShareTrust(a: protocol$0.ShareTrustArgs): $CancellablePromise<pr
 }
 
 /**
- * ShareUntrust removes a pinned teammate in both directions and ends their
- * live attachments.
+ * ShareUntrust removes a pinned teammate in the directions named (neither
+ * named: both) and ends their live attachments.
  */
-export function ShareUntrust(deviceID: string): $CancellablePromise<protocol$0.ShareMembersData> {
-    return $Call.ByID(2225906972, deviceID);
+export function ShareUntrust(a: protocol$0.ShareUntrustArgs): $CancellablePromise<protocol$0.ShareMembersData> {
+    return $Call.ByID(2225906972, a);
 }
 
 /**

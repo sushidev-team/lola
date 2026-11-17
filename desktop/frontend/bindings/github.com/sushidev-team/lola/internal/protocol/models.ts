@@ -3933,6 +3933,17 @@ export interface ShareTrustArgs {
 }
 
 /**
+ * ShareUntrustArgs is Request.Args for cmd=shareUntrust. It ends the teammate's
+ * live attachments. Allow and Trust name the directions to remove; neither set
+ * removes both.
+ */
+export interface ShareUntrustArgs {
+    "deviceId": string;
+    "allow"?: boolean;
+    "trust"?: boolean;
+}
+
+/**
  * ShareOffer is one session a teammate offers this machine.
  */
 export interface ShareOffer {

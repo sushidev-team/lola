@@ -196,6 +196,7 @@ export type {
     ShareSessionArgs,
     ShareSessionData,
     ShareTrustArgs,
+    ShareUntrustArgs,
     ShareViewer,
     SharedSession,
 } from "./models.js";

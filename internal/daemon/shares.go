@@ -488,8 +488,9 @@ func (d *Daemon) handleShareUntrust(ctx context.Context, a protocol.ShareUntrust
 		return protocol.ShareMembersData{}, errors.New("share: invalid teammate")
 	}
 	var firstErr error
-	for _, reg := range []*devices.Registry{d.members, d.owners} {
-		if reg == nil {
+	both := !a.Allow && !a.Trust
+	for i, reg := range []*devices.Registry{d.members, d.owners} {
+		if reg == nil || !(both || (i == 0 && a.Allow) || (i == 1 && a.Trust)) {
 			continue
 		}
 		for _, dev := range reg.List() {
