@@ -119,6 +119,10 @@ func resolveConflictLabel(s session.Session) string {
 	return "You asked " + agentWord(s) + " to resolve conflicts"
 }
 
+func askMergeLabel(s session.Session, ref string) string {
+	return "You asked " + agentWord(s) + " to merge " + ref
+}
+
 func mergeQueueSyncLabel(s session.Session) string {
 	return "lola asked " + agentWord(s) + " to catch up for the merge queue"
 }

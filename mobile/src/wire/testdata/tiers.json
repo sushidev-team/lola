@@ -9,6 +9,7 @@
   "agentSetting": "answer",
   "agentStop": "answer",
   "answer": "answer",
+  "askMerge": "never",
   "attachImage": "answer",
   "attachmentImage": "read",
   "bestOf": "control",

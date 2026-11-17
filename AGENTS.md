@@ -241,6 +241,12 @@ one `tmux ls`, gh facts → delivery axis, pane → agent axis),
   `flushReviewHandoffs` delivers ONE item per pass; the Stop hook flushes async.
 - `resolveConflict` uses the same gate + proof but REFUSES instead of deferring,
   and stamps `LastReactedStatus`.
+- `askMerge` (desktop only, tier `never`) is the branch graph's "Ask agent to
+  merge": the app never merges into a sandboxed session's checkout, so it asks
+  that session's agent through `typeAtRestingPrompt` with the human lock, and
+  REFUSES like `resolveConflict`. The branch name is the one outside value in
+  the instruction: `validMergeRef` keeps it to a plain branch-name alphabet. No
+  fetch is named (the human picked the host's ref) and stacks are refused.
 - Diff-viewer feedback (`cmd=feedback`) and `cmd=broadcast` queue
   (`PendingFeedback`/`PendingBroadcast`) and DEFER, never refuse; a failed send re-queues.
 - Human presses use `lockHumanPrompt`, queued/automated sends `lockAutomationPrompt`;

@@ -17,6 +17,7 @@ export const TIER: Record<string, Tier> = {
   agentSetting: "answer",
   agentStop: "answer",
   answer: "answer",
+  askMerge: "never",
   attachImage: "answer",
   attachmentImage: "read",
   bestOf: "control",

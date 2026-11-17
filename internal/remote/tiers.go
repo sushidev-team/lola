@@ -68,6 +68,8 @@ func buildCommandTiers() map[string]string {
 		"stop", "reload", "renameProject", "bulkProjects",
 		// The agent's in-pane channels.
 		"hookEvent", "agentReport", protocol.CmdReviewPublish, protocol.CmdReviewComplete,
+		// Asked from the Mac's branch graph, which a phone does not have.
+		"askMerge",
 		// Transport-internal, and the host browser.
 		protocol.CmdRemotePair, "openURL",
 		// Planning, goals, profiles, knowledge, comparison: not a phone's work.

@@ -60,6 +60,16 @@ export function Answer(session: string, text: string): $CancellablePromise<void>
 }
 
 /**
+ * AskMerge asks a session's coding agent to merge branch into the session's
+ * own branch. It is what the branch graph offers for a checkout the app must
+ * not merge itself (a sandboxed session's worktree). The daemon refuses it (as
+ * an error) unless the agent is provably resting at its prompt.
+ */
+export function AskMerge(session: string, branch: string): $CancellablePromise<protocol$0.AskMergeData> {
+    return $Call.ByID(3286888270, session, branch);
+}
+
+/**
  * BestOf starts an issue as a best-of group; agents "" uses [best_of].agents.
  */
 export function BestOf(a: protocol$0.BestOfArgs): $CancellablePromise<protocol$0.BestOfData> {

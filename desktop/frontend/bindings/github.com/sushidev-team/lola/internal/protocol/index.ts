@@ -19,6 +19,7 @@ export type {
     AgentSettingData,
     AgentStopArgs,
     AgentStopData,
+    AskMergeData,
     BestOfArgs,
     BestOfAttempt,
     BestOfCompareData,
