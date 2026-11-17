@@ -994,10 +994,11 @@ func (n *Native) launchLine(project, id string, kind agent.Kind, prompt, model s
 		// The shared metadata holds objects/refs AND the worktree's index;
 		// workspace-write alone cannot fetch, commit or merge without it.
 		posix += `lola_git_common_dir=$(git rev-parse --path-format=absolute --git-common-dir) && test -n "$lola_git_common_dir" && test -d "$lola_git_common_dir" || exit 1; `
+		posix += codexTrustPrelude
 	}
 	posix += "exec " + shQuote(bin)
 	if kind == agent.Codex {
-		posix += ` --add-dir "$lola_git_common_dir"`
+		posix += ` --add-dir "$lola_git_common_dir" "$@"`
 	}
 	for _, arg := range args {
 		posix += " " + shQuote(arg)
@@ -1010,6 +1011,22 @@ func (n *Native) launchLine(project, id string, kind agent.Kind, prompt, model s
 	}
 	return "exec sh -c " + shQuote(posix)
 }
+
+// codexTrustPrelude answers Codex's "Trust this folder?" for a worktree lola made, so a
+// spawned agent never parks on it: the same decision claudetrust records for Claude Code.
+// Codex asks about the repository root, which for a worktree is the main checkout (the
+// parent of the shared .git), and a sandboxed codex asks every time because its private
+// CODEX_HOME has never seen the folder.
+//
+// The answer is a per-process config override (-c projects."<root>".trust_level), left in
+// "$@" for the exec that follows. Nothing is written: the user's config.toml keeps only
+// the decisions they made. The root lands inside a TOML string, so it is used only when
+// every character is on a plain list (the "#" is a sentinel that keeps a newline from
+// vanishing with the command substitution). Any other path, or a shared directory that is
+// not a checkout's .git, gets no override and codex asks as before.
+const codexTrustPrelude = `set --; case "$lola_git_common_dir" in */.git) lola_trust_root=${lola_git_common_dir%/.git}; ` +
+	`if test "$(printf '%s#' "$lola_trust_root" | LC_ALL=C tr -d '[:alnum:]/._ @+,:=~-')" = '#'; then ` +
+	`set -- -c "projects.\"$lola_trust_root\".trust_level=\"trusted\""; fi ;; esac; `
 
 // writeAgentArtifacts writes the per-agent lifecycle-callback artifact(s) into
 // the worktree at dir, before launch, for the resolved kind:
