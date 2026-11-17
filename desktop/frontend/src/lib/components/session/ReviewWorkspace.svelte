@@ -82,8 +82,19 @@
   let splitEl = $state<HTMLElement>();
   let layoutEl = $state<HTMLElement>();
   function save(k: string, n: number) { try { localStorage.setItem(k, String(n)); } catch { /* per-viewer convenience only */ } }
-  const clampLeft = (n: number) => Math.max(widths.left.min, Math.min(n, (splitEl?.clientWidth || Infinity) - 360));
-  const clampAside = (n: number) => Math.max(widths.aside.min, Math.min(n, 560, (layoutEl?.clientWidth || Infinity) - 480));
+  // Measured sizes keep a saved or dragged width inside the layout it is shown in, however the window or the checks panel changes.
+  let splitW = $state(0);
+  let layoutW = $state(0);
+  const clampLeft = (n: number) => Math.max(widths.left.min, Math.min(n, (splitW || Infinity) - 360));
+  const clampAside = (n: number) => Math.max(widths.aside.min, Math.min(n, 560, (layoutW || Infinity) - 600));
+  const leftEff = $derived(clampLeft(leftW));
+  const asideEff = $derived(clampAside(asideW));
+  $effect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    const watch = (el: HTMLElement | undefined, set: (n: number) => void) => { if (!el) return; set(el.clientWidth); const o = new ResizeObserver(() => set(el.clientWidth)); o.observe(el); return () => o.disconnect(); };
+    const a = watch(splitEl, n => splitW = n), b = watch(layoutEl, n => layoutW = n);
+    return () => { a?.(); b?.(); };
+  });
   function drag(event: PointerEvent, side: "left" | "aside") {
     const host = side === "left" ? splitEl : layoutEl;
     if (!host || event.button !== 0) return;
@@ -100,7 +111,7 @@
     if (event.key === "Home") { event.preventDefault(); if (side === "left") leftW = widths.left.def; else asideW = widths.aside.def; save(widths[side].key, side === "left" ? leftW : asideW); return; }
     if (!step) return;
     event.preventDefault();
-    if (side === "left") leftW = clampLeft(leftW + step); else asideW = clampAside(asideW - step);
+    if (side === "left") leftW = clampLeft(leftEff + step); else asideW = clampAside(asideEff - step);
     save(widths[side].key, side === "left" ? leftW : asideW);
   }
   let canvasScreen = $state(0);
@@ -400,7 +411,7 @@
 {#snippet deskBody()}
   <div class="desk-body">
   {#if markError}<p role="alert" class="head-error text-sm text-warn">{markError} Refresh review and retry.</p>{/if}
-  <div class="review-layout desk" class:panel-open={panelOpen} bind:this={layoutEl} style:--aside-w={`${asideW}px`}>
+  <div class="review-layout desk" class:panel-open={panelOpen} bind:this={layoutEl} style:--aside-w={`${asideEff}px`}>
     <div class="review-main" class:capturing={captureOpen}>
       {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={-1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
       {#if tab === 'code' && session}
@@ -409,11 +420,11 @@
         {#if reviewCode && session}<div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><div class="px-4 py-2 text-xs text-faint"><Button size="xs" onclick={() => reviewCode = false}>Back to material comparison</Button><p>Exact published heads: {previous.head.slice(0,12)} to {current.head.slice(0,12)}. Uncommitted changes are excluded.</p></div><DiffView sessionId={target} reviewRange={{from:previous.id,to:current.id}}/></div>
         {:else}<div class="review-material"><ReviewChanges before={previous} after={current} onCode={session ? () => reviewCode = true : undefined}/></div>{/if}
       {:else}
-        <div class="review-split" class:solo={!current} bind:this={splitEl} style:--left-w={`${leftW}px`}>
+        <div class="review-split" class:solo={!current} bind:this={splitEl} style:--left-w={`${leftEff}px`}>
           <div class="split-left review-material">{@render material()}</div>
           {#if current}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-            <div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize material column" tabindex="0" aria-valuenow={leftW} style:left={`${leftW - 4}px`} onpointerdown={e => drag(e, "left")} onkeydown={e => nudge(e, "left")} ondblclick={() => { leftW = widths.left.def; save(widths.left.key, leftW); }}></div>
+            <div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize material column" tabindex="0" aria-valuenow={leftEff} style:left={`${leftEff - 4}px`} onpointerdown={e => drag(e, "left")} onkeydown={e => nudge(e, "left")} ondblclick={() => { leftW = widths.left.def; save(widths.left.key, leftW); }}></div>
             <section class="split-right" aria-label="Screenshots">
               {#if current && reviewSupported && can('reviewPackageMark')}<div class="mark-overlay"><Button size="sm" variant={reviewed?.package === current.id ? 'secondary' : 'primary'} loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{#if reviewed?.package === current.id}<Icon name="check" size={14}/>{/if}{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button></div>{/if}
               {#if current.screens?.length}
@@ -427,7 +438,7 @@
       {/if}
     </div>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-    {#if panelOpen}<div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize checks column" tabindex="0" aria-valuenow={asideW} style:right={`${asideW - 4}px`} onpointerdown={e => drag(e, "aside")} onkeydown={e => nudge(e, "aside")} ondblclick={() => { asideW = widths.aside.def; save(widths.aside.key, asideW); }}></div>
+    {#if panelOpen}<div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize checks column" tabindex="0" aria-valuenow={asideEff} style:right={`${asideEff - 4}px`} onpointerdown={e => drag(e, "aside")} onkeydown={e => nudge(e, "aside")} ondblclick={() => { asideW = widths.aside.def; save(widths.aside.key, asideW); }}></div>
     <aside class="review-aside desk-aside" aria-label="Review actions">
       <div class="aside-scroll">{#if current}<ReviewConfidence pkg={current} {facts} {checking} {confidenceRequest}/>{/if}{@render checks()}<div class="aside-feedback">{@render reviewFeedback()}</div></div>
     </aside>{/if}

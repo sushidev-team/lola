@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { DaemonService } from '@bindings/desktop';
   import type { ReviewPackage } from '@bindings/internal/protocol';
-  import { markLocation, markKind, validMark, arrowHead, simplifyStroke, type MarkKind, type ReviewMark } from '$lib/reviewmaterial';
+  import { markLocation, markHit, markKind, validMark, arrowHead, simplifyStroke, type MarkKind, type ReviewMark } from '$lib/reviewmaterial';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Select from '../Select.svelte';
@@ -460,6 +460,7 @@
               <button type="button" class="annotation-surface" aria-label={`Place comment on ${side} screenshot`}
                 onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={() => { start = undefined; dragging = undefined; }}
                 onclick={e => { if (e.detail === 0) placeDefault(); }}
+                ondblclick={e => { if (tool === 'pin') return; const r = e.currentTarget.getBoundingClientRect(); const hit = marks.findLastIndex(m => m.side === side && markHit(m, e.clientX - r.left, e.clientY - r.top, r.width, r.height)); if (hit >= 0) openComment(hit); }}
                 ></button>
             {/if}
             {#if single}

@@ -461,3 +461,14 @@ it('locks a line to the nearer axis while Shift is held',async()=>{
   await fireEvent(surface,at('pointerup',60,28,true));
   expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('line from top-left: x=10%, y=20% to x=60%, y=20%'),undefined);
 });
+
+it('opens the comment of a saved drawing by double click while a drawing tool is still armed',async()=>{
+  render(ReviewCanvas,{pkg,onComment:()=>true});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Draw arrow'}));
+  const surface=screen.getByRole('button',{name:'Place comment on After screenshot'});
+  await fireEvent.click(surface);
+  expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
+  await fireEvent.dblClick(surface);
+  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toBeInTheDocument();
+});

@@ -63,6 +63,33 @@ export function markLocation(mark: ReviewMark): string {
   if (kind === 'pin') return `${lead}point from top-left: ${at}`;
   if (kind === 'area') return `${lead}area from top-left: ${at}${box}`;
   if (kind === 'ellipse') return `${lead}ellipse from top-left: ${at}${box}`;
-  if (kind === 'pen') return `${lead}freehand stroke, bounding box from top-left: ${at}${box}`;
+  if (kind === 'pen') {
+    const path: string[] = [];
+    for (let i = 0; i + 1 < (mark.pts ?? []).length; i += 2) path.push(`(${pct(mark.pts![i])}, ${pct(mark.pts![i + 1])})`);
+    return `${lead}freehand stroke, bounding box from top-left: ${at}${box}${path.length ? `, path (x, y): ${path.join(' ')}` : ''}`;
+  }
   return `${lead}${kind} from top-left: ${at} to x=${pct(mark.x2 ?? mark.x)}, y=${pct(mark.y2 ?? mark.y)}`;
+}
+
+/** Whether a point (in stage pixels) is on a saved mark: near a line, stroke or pin, or inside an area or ellipse. */
+export function markHit(mark: ReviewMark, px: number, py: number, w: number, h: number, tolerance = 8): boolean {
+  const kind = markKind(mark);
+  const near = (ax: number, ay: number, bx: number, by: number) => {
+    const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
+    const t = len ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len)) : 0;
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy)) <= tolerance;
+  };
+  if (kind === 'pin') return Math.hypot(px - mark.x * w, py - mark.y * h) <= tolerance * 2;
+  if (kind === 'area') return px >= mark.x * w && px <= (mark.x + mark.w) * w && py >= mark.y * h && py <= (mark.y + mark.h) * h;
+  if (kind === 'ellipse') {
+    const rx = (mark.w * w) / 2, ry = (mark.h * h) / 2;
+    if (!rx || !ry) return false;
+    return ((px - (mark.x * w + rx)) / rx) ** 2 + ((py - (mark.y * h + ry)) / ry) ** 2 <= 1;
+  }
+  if (kind === 'pen') {
+    const pts = mark.pts ?? [];
+    for (let i = 0; i + 3 < pts.length; i += 2) if (near(pts[i] * w, pts[i + 1] * h, pts[i + 2] * w, pts[i + 3] * h)) return true;
+    return false;
+  }
+  return near(mark.x * w, mark.y * h, (mark.x2 ?? mark.x) * w, (mark.y2 ?? mark.y) * h);
 }
