@@ -557,3 +557,63 @@ func TestLinearAgentRefreshUsesInMemoryTokenAndIsExclusive(t *testing.T) {
 		t.Fatalf("the second refresh must use the in-memory rotated token r1, got %v", used)
 	}
 }
+
+// A stack has no checkout path, so it must still route; an ordinary project
+// without one must not.
+func TestLinearAgentRoutesStackProjects(t *testing.T) {
+	stack := config.Project{Name: "nori", Kind: "stack", TeamID: "team-1"}
+	bare := config.Project{Name: "bare", TeamID: "team-2"}
+	d, _, _ := agentDaemon(t, stack, bare)
+	if p, ok := d.projectForAgentIssue(linear.Issue{TeamID: "team-1"}); !ok || p.Name != "nori" {
+		t.Fatalf("stack not routed: %q %v", p.Name, ok)
+	}
+	if _, ok := d.projectForAgentIssue(linear.Issue{TeamID: "team-2"}); ok {
+		t.Fatal("a pathless ordinary project must not route")
+	}
+}
+
+// Linear marks a quiet queued session stale after its inactivity timeout; that
+// is not a dismissal, so the ledger keeps it and it starts once a slot frees.
+func TestLinearAgentKeepsQueuedSessionThatWentStale(t *testing.T) {
+	p := config.Project{Name: "app", Path: "/tmp/app", TeamID: "team-1"}
+	d, api, nat := agentDaemon(t, p)
+	d.cfg.Defaults.GlobalCap = 1
+	d.sessions.Upsert(session.Session{ID: "app-eng-1", Source: "native", Project: "app", Issue: "ENG-1",
+		AgentState: state.AgentWorking, Delivery: state.DeliveryNone})
+	api.sessions = []linear.AgentSession{pendingSession("as-2", "ENG-2", "team-1")}
+	d.linearAgentCycle(context.Background())
+
+	api.sessions[0].Status = "stale"
+	d.sessions.Update("app-eng-1", func(s *session.Session) bool { s.AgentState = state.AgentDead; return true })
+	d.linearAgentCycle(context.Background())
+	if len(nat.spawnCalls()) != 1 {
+		t.Fatalf("a stale queued session must still start, spawns=%d", len(nat.spawnCalls()))
+	}
+}
+
+// After a persisted token dies, the cache is dropped so a re-login in storage
+// is picked up without a daemon restart.
+func TestLinearAgentReloadsStorageAfterDeadPersistedToken(t *testing.T) {
+	d, _, _ := agentDaemon(t, config.Project{Name: "app", Path: "/tmp/app", TeamID: "team-1"})
+	d.agent.apiOverride = nil
+	now := time.Now()
+	d.agent.now = func() time.Time { return now }
+	stored := linear.OAuthToken{AccessToken: "a0", RefreshToken: "dead", ExpiresAt: now.Add(-time.Hour)}
+	d.agent.loadToken = func(config.LinearAgentConfig) (linear.OAuthToken, error) { return stored, nil }
+	d.agent.refresh = func(_ context.Context, _ config.LinearAgentConfig, rt string) (linear.OAuthToken, error) {
+		if rt == "dead" {
+			return linear.OAuthToken{}, fmt.Errorf("invalid_grant")
+		}
+		return linear.OAuthToken{AccessToken: "a1", RefreshToken: "r1", ExpiresAt: now.Add(time.Hour)}, nil
+	}
+	d.agent.storeToken = func(config.LinearAgentConfig, linear.OAuthToken) error { return nil }
+	d.agent.newAPI = func(_, _ string) linear.AgentAPI { return newFakeAgentAPI() }
+
+	if _, err := d.ensureAgentAPI(context.Background(), d.cfg.LinearAgent, ""); err == nil {
+		t.Fatal("a dead refresh token must fail")
+	}
+	stored = linear.OAuthToken{AccessToken: "b0", RefreshToken: "fresh", ExpiresAt: now.Add(-time.Hour)} // `lola linear-agent login`
+	if _, err := d.ensureAgentAPI(context.Background(), d.cfg.LinearAgent, ""); err != nil {
+		t.Fatalf("re-login in storage must be picked up: %v", err)
+	}
+}

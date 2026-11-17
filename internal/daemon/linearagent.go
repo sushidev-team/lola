@@ -95,8 +95,13 @@ type linearAgentRuntime struct {
 	urls      map[string]string // agent session id → Linear URL (for the wire)
 	ledger    map[string]agentLedgerEntry
 	loaded    bool
-	wake      chan struct{}
-	webhookOn string
+	// tokenPersisted: the in-memory token is what storage holds (loaded from it, or
+	// stored after a rotation). A dead persisted token is dropped from memory so
+	// the next attempt re-reads storage and sees a re-login; an UNpersisted one is
+	// the only copy of the rotated pair and is kept.
+	tokenPersisted bool
+	wake           chan struct{}
+	webhookOn      string
 
 	// Seams (tests).
 	apiOverride linear.AgentAPI
@@ -335,6 +340,9 @@ func (d *Daemon) ensureAgentAPI(ctx context.Context, cfg config.LinearAgentConfi
 		if err != nil {
 			return nil, err
 		}
+		ra.mu.Lock()
+		ra.tokenPersisted = true
+		ra.mu.Unlock()
 		tok = loaded
 	}
 	if tok.Expired(ra.now(), time.Minute) {
@@ -377,6 +385,9 @@ func (d *Daemon) refreshAgentAPI(ctx context.Context, cfg config.LinearAgentConf
 		if err != nil {
 			return nil, err
 		}
+		ra.mu.Lock()
+		ra.tokenPersisted = true
+		ra.mu.Unlock()
 		tok = loaded
 	}
 	return d.refreshWith(ctx, cfg, endpoint, tok)
@@ -390,16 +401,24 @@ func (d *Daemon) refreshWith(ctx context.Context, cfg config.LinearAgentConfig, 
 	if err != nil {
 		ra.mu.Lock()
 		ra.api = nil
+		if ra.tokenPersisted {
+			ra.token = linear.OAuthToken{}
+		}
 		ra.mu.Unlock()
 		return nil, fmt.Errorf("linear agent: token refresh failed: %w", err)
 	}
-	if err := ra.storeToken(cfg, fresh); err != nil {
+	storeErr := ra.storeToken(cfg, fresh)
+	if storeErr != nil {
 		// The fresh token stays in memory and keeps refreshing for this run
 		// (ensureAgentAPI prefers it); only the next START needs a login, once
 		// the stored refresh token has been rotated away.
-		d.logf("", "linear agent: could not persist the refreshed token: %v", err)
+		d.logf("", "linear agent: could not persist the refreshed token: %v", storeErr)
 	}
-	return d.installAgentToken(ctx, endpoint, fresh), nil
+	api := d.installAgentToken(ctx, endpoint, fresh)
+	ra.mu.Lock()
+	ra.tokenPersisted = storeErr == nil
+	ra.mu.Unlock()
+	return api, nil
 }
 
 func (d *Daemon) installAgentToken(ctx context.Context, endpoint string, tok linear.OAuthToken) linear.AgentAPI {
@@ -446,7 +465,9 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 
 	switch {
 	case known && entry.State == "queued":
-		if as.Status == "complete" || as.Status == "stale" || as.Status == "error" {
+		// "stale" is Linear's inactivity timeout (a queued session posts nothing
+		// while capped), not a dismissal: keep it, and the next activity revives it.
+		if as.Status == "complete" || as.Status == "error" {
 			ra.forget(as.ID) // a human dismissed it while it waited
 			return
 		}
@@ -485,7 +506,7 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	d.mu.Lock()
 	pollCap := d.cfg.EffectiveCap(&p)
 	globalCap := d.cfg.Defaults.GlobalCap
-	agentBin := agent.Parse(d.cfg.AgentForProject(p.Name)).Binary()
+	agentBin := sandboxedBin(d.cfg, p.Name, agent.Parse(d.cfg.AgentForProject(p.Name)).Binary())
 	health := d.runtimeHealth
 	d.mu.Unlock()
 	hasSlot := func() error {
@@ -592,7 +613,10 @@ func (d *Daemon) projectForAgentIssue(is linear.Issue) (config.Project, bool) {
 	var teamWide *config.Project
 	for i := range d.cfg.Projects {
 		p := &d.cfg.Projects[i]
-		if is.TeamID == "" || p.TeamID != is.TeamID || p.Path == "" {
+		// A stack has no checkout of its own (validateStacks refuses a path), so
+		// Path only disqualifies an ordinary project. The issue labels stack member
+		// selection needs are re-read from Linear in openTicket, not from here.
+		if is.TeamID == "" || p.TeamID != is.TeamID || (p.Path == "" && !p.IsStack()) {
 			continue
 		}
 		if p.ProjectID != "" {

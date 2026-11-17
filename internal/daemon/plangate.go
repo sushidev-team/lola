@@ -288,9 +288,15 @@ func (d *Daemon) flushAgentNotices(ctx context.Context, id string) bool {
 	if !ok || len(s.PendingNotices) == 0 || s.TmuxName == "" || s.IsAgentless() || !noticeDeliverable(s) {
 		return false
 	}
-	if !d.handoffPromptProof(ctx, s) {
+	// The same protections every automated send has: hold the send gate from
+	// proof through delivery (a checkpoint restore must not interleave), and
+	// require an empty composer nobody else owns — a verdict or a relayed reply
+	// must never submit a half-typed draft.
+	unlock, ready := d.lockAutomationPrompt(ctx, s)
+	if !ready {
 		return false
 	}
+	defer unlock()
 	var (
 		msg      string
 		tmuxName string
@@ -316,9 +322,7 @@ func (d *Daemon) flushAgentNotices(ctx context.Context, id string) bool {
 	if msg == "" {
 		return false
 	}
-	sctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
-	defer cancel()
-	if err := d.sendKeys(sctx, tmuxName, sanitizeAgentText(msg)); err != nil {
+	if err := d.typeToAgentLocked(ctx, noteFor(s, ""), tmuxName, sanitizeAgentText(msg), reactExecTimeout); err != nil {
 		// Consumed; re-queueing would risk a double send on a partial write.
 		d.logf("", "notice: send-keys to %s failed: %v", id, err)
 		return false
