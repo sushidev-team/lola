@@ -49,7 +49,7 @@
     <header class="review-intro">
       <h1>{overview.title}</h1>
       <p class="summary-copy">{overview.summary}</p>
-      {#if freshness === 'stale'}<div class="intro-meta"><span class="stale" role="status"><Icon name="circle-alert" size={14}/>Outdated material</span></div>{/if}
+      {#if freshness === 'stale' && !split}<div class="intro-meta"><span class="stale" role="status"><Icon name="circle-alert" size={14}/>Outdated material</span></div>{/if}
     </header>
       {#if !(phone && overview.changes.length === 0)}<section class="review-panel features" aria-label="Changes in this review">
         <div class="section-title"><h2>What changed<span class="section-count">{overview.changes.length}</span></h2></div>

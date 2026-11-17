@@ -465,8 +465,8 @@
       {#each screens as s,i}<button type="button" class="screen-link" class:active={index === i} aria-current={index === i ? 'true' : undefined} onclick={() => index = i}><Icon name="image" size={14} /><span>{s.title}</span></button>{/each}
     </nav>
     <h2 class="sr-only">{screen.title}</h2>
-    {#if screen.caption || screen.url || screen.viewport || screen.selector || freshness === 'stale'}<div class="screen-info">
-      {#if freshness === 'stale'}<p class="outdated" role="status"><Icon name="circle-alert" size={13} />Outdated screenshots</p>{/if}
+    {#if screen.caption || screen.url || screen.viewport || screen.selector || (freshness === 'stale' && !compact)}<div class="screen-info">
+      {#if freshness === 'stale' && !compact}<p class="outdated" role="status"><Icon name="circle-alert" size={13} />Outdated screenshots</p>{/if}
       {#if screen.caption}<p>{screen.caption}</p>{/if}
       {#if screen.url}<p class="break-words">{screen.url}</p>{/if}
       {#if screen.viewport}<p>{screen.viewport}</p>{/if}

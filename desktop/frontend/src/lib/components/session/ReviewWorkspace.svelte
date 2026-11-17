@@ -255,7 +255,7 @@
 {#snippet checks()}
   {#if reviewSession && !embedded && number}<BeforeMerge session={reviewSession} reviewLayout/>
   {:else if !embedded && !phone}<section class="no-pr" aria-label="PR status"><h3><Icon name="git-pull-request" size={14}/>No pull request yet</h3><p>Review works on the checkout. CI, reviewers, conflicts and merge status appear here once a PR is open.</p></section>{/if}
-  {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} {labels} canRun={canVerify} canRecover={can('reviewPackageRecover')}/>{/key}{/if}
+  {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} quiet={split} {labels} canRun={canVerify} canRecover={can('reviewPackageRecover')}/>{/key}{/if}
   {#if session && !phone}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
 {/snippet}
 {#snippet reviewFeedback()}

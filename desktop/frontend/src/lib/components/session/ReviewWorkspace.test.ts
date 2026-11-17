@@ -204,7 +204,8 @@ it('shows retained material, missing baseline, and truthful revision freshness',
   facts.mockResolvedValue(status({head:'e'.repeat(40)}));
   await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
   await fireEvent.click(screen.getByRole('tab',{name:'Review'}));
-  await screen.findByText(/Outdated material/);
+  await screen.findByText('Outdated');
+  expect(screen.queryByText(/Outdated material|Older revision/)).toBeNull();
 });
 
 it('batches revision and screenshot context, preserves failed sends, then clears accepted feedback',async()=>{
@@ -477,7 +478,7 @@ it('opens capture from review and selects the saved screenshot in its new versio
 });
 it('keeps capture unavailable for stale review material',async()=>{
  facts.mockResolvedValue(status({head:'9'.repeat(40)}));render(ReviewWorkspace,{sessionId:id});
- await screen.findByText('Older revision');expect(screen.getByRole('button',{name:'Capture screenshot'})).toBeDisabled();
+ await screen.findByText('Outdated');expect(screen.getByRole('button',{name:'Capture screenshot'})).toBeDisabled();
 });
 
 it('embedded: no modal, tabs and Mark reviewed are handed to the host',async()=>{

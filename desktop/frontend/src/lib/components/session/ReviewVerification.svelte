@@ -9,7 +9,7 @@
 
   // `labels` is the phone's one-line verdict ("Verified" / "Not verified"); without it, or off the phone, the full heading shows.
   // `canRecover` (default true) draws "Reconcile interrupted check"; the phone passes its tier answer.
-  let { pkg, canRun = false, canRecover = true, freshness = 'unknown', labels }: { pkg: ReviewPackage; canRun?: boolean; canRecover?: boolean; freshness?: string; labels?: { verified: string; notVerified: string } } = $props();
+  let { pkg, canRun = false, canRecover = true, freshness = 'unknown', labels, quiet = false }: { pkg: ReviewPackage; canRun?: boolean; canRecover?: boolean; freshness?: string; quiet?: boolean; labels?: { verified: string; notVerified: string } } = $props();
   const phone = touchSurface();
   let checks = $state<ReviewCheck[]>([]);
   const verdict = $derived(freshness === 'current' && checks.length > 0 && checks.every(c => c.state === 'pass'));
@@ -112,10 +112,10 @@
 <section class="verification" class:slim={!phone && !checks.length && !editing && !error && !uncertain} aria-label="Independent verification" bind:this={root}>
   {#if !bare}<header class="verification-heading">
     {#if phone && labels}<div><h3 tabindex="-1" aria-label="Independent verification"><Icon name="shield-check" size={15}/>{verdict ? labels.verified : labels.notVerified}</h3></div>
-    {:else}<div class="title-row"><h3 tabindex="-1" aria-label="Independent verification"><Icon name="shield-check" size={14}/>Tests</h3>{#if freshness === 'stale'}<span class="outdated stale-chip">Older revision</span>{/if}</div>{/if}
+    {:else}<div class="title-row"><h3 tabindex="-1" aria-label="Independent verification"><Icon name="shield-check" size={14}/>Tests</h3>{#if freshness === 'stale' && !quiet}<span class="outdated stale-chip">Older revision</span>{/if}</div>{/if}
     {#if !phone}<Button size="sm" icon aria-label="Refresh checks" title="Refresh checks" loading={loading} disabled={busy} onclick={refresh}><Icon name="refresh-cw" size={14}/></Button>{/if}
   </header>{/if}
-  {#if freshness === 'stale'}<p class="context-note outdated">Checks apply to this version, not the current PR.</p>{/if}
+  {#if freshness === 'stale' && !quiet}<p class="context-note outdated">Checks apply to this version, not the current PR.</p>{/if}
   {#if error}<p role="alert" class="message text-warn">{error}</p>{/if}
   {#if uncertain}<p role="status" class="message text-warn">The request may have been accepted. Refresh checks before sending again.</p>{/if}
   {#if checks.length}<div class="check-results">
