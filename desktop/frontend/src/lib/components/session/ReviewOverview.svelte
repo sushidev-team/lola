@@ -8,6 +8,7 @@
   import ReviewConfidence from './ReviewConfidence.svelte';
   import SSHRich from '../ssh/SSHRich.svelte';
   import ReviewThumbnail from './ReviewThumbnail.svelte';
+  import { tooltip } from '$lib/tooltip';
   import { touchSurface } from '$lib/touchsurface';
   let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment, onAssessConfidence, confidenceRequest, split = false }: {
     pkg:ReviewPackage; facts?:PRReadinessData; sessionId:string; freshness:'current'|'stale'|'unknown'; onScreen:(index:number)=>void;
@@ -21,6 +22,7 @@
   const overview = $derived(reviewOverview(pkg));
   const screens = $derived(pkg.screens ?? []);
   const unrated = $derived(!overview.riskReportProvided || overview.risks.some(r => r.likelihood === 'unknown' || r.impact === 'unknown'));
+  const riskHints = { likelihood: { low: 'Not expected to happen in normal use.', medium: 'Could happen in some situations.', high: 'Expected to happen unless addressed.', unknown: 'The agent did not rate this.' }, impact: { low: 'Small, easy to recover from.', medium: 'Noticeable, but contained.', high: 'Serious if it happens.', unknown: 'The agent did not rate this.' } } as const;
   const riskWords = { likelihood: { low: 'Unlikely', medium: 'Possible', high: 'Likely' }, impact: { low: 'Minor', medium: 'Moderate', high: 'Severe' } } as const;
 </script>
 
@@ -42,7 +44,7 @@
   </details>{/each}</div>
 {/snippet}
 {#snippet level(value: RiskLevel, kind: 'likelihood' | 'impact')}
-  <span class="risk-level" data-level={value} title={`${kind === 'impact' ? 'Impact' : 'Likelihood'}: ${value === 'unknown' ? 'not rated' : value}`}><span class="level-bars" aria-hidden="true">{#each [1,2,3] as n}<i class:filled={n <= riskWeight[value]}></i>{/each}</span>{value === 'unknown' ? 'Not rated' : riskWords[kind][value]}</span>
+  <span class="risk-level" data-level={value} use:tooltip={{ heading: `${kind === 'impact' ? 'Impact' : 'Likelihood'}: ${value === 'unknown' ? 'Not rated' : riskWords[kind][value]}`, text: riskHints[kind][value], delay: 120 }}><span class="level-bars" aria-hidden="true">{#each [1,2,3] as n}<i class:filled={n <= riskWeight[value]}></i>{/each}</span>{value === 'unknown' ? 'Not rated' : riskWords[kind][value]}</span>
 {/snippet}
 
 <div class="overview" class:split>
