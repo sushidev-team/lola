@@ -34,6 +34,8 @@ func (c *cli) admin(args []string) error {
 		return c.orgLinear(rest)
 	case "org linear-key":
 		return c.orgSecret(rest, "linear-key")
+	case "org linear-webhook":
+		return c.orgSecret(rest, "linear-webhook")
 	case "org digest":
 		return c.orgSecret(rest, "digest")
 	case "enroll create":
@@ -97,7 +99,7 @@ func (c *cli) readSecret(what string) (string, error) {
 	return s, nil
 }
 
-// orgSecret sets or clears an org's Linear key or digest webhook. The value
+// orgSecret sets or clears an org's Linear key, digest webhook or Linear webhook signing secret. The value
 // comes from stdin and is stored sealed with LOLA_HUB_SECRET_KEY.
 func (c *cli) orgSecret(args []string, which string) error {
 	fs := c.newFlags("admin org " + which)
@@ -111,8 +113,11 @@ func (c *cli) orgSecret(args []string, which string) error {
 		return err
 	}
 	what, set := "Linear API key", admin.SetLinearKey
-	if which == "digest" {
+	switch which {
+	case "digest":
 		what, set = "Slack incoming webhook", admin.SetDigestWebhook
+	case "linear-webhook":
+		what, set = "Linear webhook signing secret", admin.SetLinearWebhookSecret
 	}
 	value := ""
 	if !*clear {

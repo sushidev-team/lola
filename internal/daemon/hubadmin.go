@@ -187,9 +187,9 @@ func (d *Daemon) handleHubTeamSettings(ctx context.Context, a protocol.HubTeamSe
 		s := strings.TrimSpace(*p)
 		return &s
 	}
-	req := hubproto.OrgSettingsRequest{LinearKey: trim(a.LinearKey), LinearTeam: trim(a.LinearTeam), DigestWebhook: trim(a.DigestWebhook)}
+	req := hubproto.OrgSettingsRequest{LinearKey: trim(a.LinearKey), LinearTeam: trim(a.LinearTeam), DigestWebhook: trim(a.DigestWebhook), LinearWebhookSecret: trim(a.LinearWebhookSecret)}
 	var secrets []string
-	for _, p := range []*string{req.LinearKey, req.DigestWebhook} {
+	for _, p := range []*string{req.LinearKey, req.DigestWebhook, req.LinearWebhookSecret} {
 		if p != nil {
 			if len(*p) > hubSecretMax {
 				return none, errors.New("hub: that value is too long")
@@ -197,7 +197,7 @@ func (d *Daemon) handleHubTeamSettings(ctx context.Context, a protocol.HubTeamSe
 			secrets = append(secrets, *p)
 		}
 	}
-	write := req.LinearKey != nil || req.LinearTeam != nil || req.DigestWebhook != nil
+	write := req.LinearKey != nil || req.LinearTeam != nil || req.DigestWebhook != nil || req.LinearWebhookSecret != nil
 	if write {
 		// Fixed sentences: a validation error must not quote a secret.
 		switch {
@@ -205,6 +205,8 @@ func (d *Daemon) handleHubTeamSettings(ctx context.Context, a protocol.HubTeamSe
 			return none, errors.New("hub: that is not a Linear API key (it starts with lin_api_)")
 		case req.DigestWebhook != nil && *req.DigestWebhook != "" && !hubproto.ValidDigestWebhook(*req.DigestWebhook):
 			return none, errors.New("hub: the digest webhook must be a Slack incoming webhook (https://hooks.slack.com/services/...)")
+		case req.LinearWebhookSecret != nil && *req.LinearWebhookSecret != "" && !hubproto.ValidLinearWebhookSecret(*req.LinearWebhookSecret):
+			return none, errors.New("hub: the webhook secret must be 16 to 128 printable characters")
 		case req.Validate() != nil:
 			return none, errors.New("hub: that Linear team is not valid")
 		}
@@ -242,11 +244,14 @@ func (d *Daemon) handleHubTeamSettings(ctx context.Context, a protocol.HubTeamSe
 		if req.DigestWebhook != nil {
 			what = append(what, "digest webhook")
 		}
+		if req.LinearWebhookSecret != nil {
+			what = append(what, "linear webhook secret")
+		}
 		d.logf("", "hub: changed team %s settings: %s", admin.Org, strings.Join(what, ", "))
 	}
 	out := protocol.HubTeamSettingsData{
 		Org: v.Org, SecretsAvailable: v.SecretsAvailable, LinearKeySet: v.LinearKeySet, LinearTeam: v.LinearTeam,
-		LinearError: v.LinearError, DigestSet: v.DigestSet, DigestError: v.DigestError, Teams: []protocol.HubLinearTeam{},
+		LinearError: v.LinearError, DigestSet: v.DigestSet, DigestError: v.DigestError, LinearWebhookSet: v.LinearWebhookSet, Teams: []protocol.HubLinearTeam{},
 	}
 	for _, t := range v.Teams {
 		out.Teams = append(out.Teams, protocol.HubLinearTeam{ID: t.ID, Key: t.Key, Name: t.Name})

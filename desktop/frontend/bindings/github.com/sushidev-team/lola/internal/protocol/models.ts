@@ -1413,6 +1413,7 @@ export interface HubTeamSettingsArgs {
     "linearKey"?: string | null;
     "linearTeam"?: string | null;
     "digestWebhook"?: string | null;
+    "linearWebhookSecret"?: string | null;
 
     /**
      * Teams also lists the Linear workspace's teams (a read only).
@@ -1439,6 +1440,7 @@ export interface HubTeamSettingsData {
      */
     "linearError"?: string;
     "digestSet": boolean;
+    "linearWebhookSet": boolean;
     "digestError"?: string;
     "teams": HubLinearTeam[] | null;
 }

@@ -61,6 +61,7 @@ Admin (operates on the store file directly, from the host):
   lola-hub admin org linear <org> --team ID | --clear
   lola-hub admin org linear-key <org> [--clear]   the key is read from stdin
   lola-hub admin org digest <org> [--clear]       the Slack webhook, from stdin
+  lola-hub admin org linear-webhook <org> [--clear] the Linear agent webhook secret, from stdin
   lola-hub admin create-code [--url HUBURL] [--ttl 168h]
       a one-time code that lets a teammate create ONE team from Lola:
       lola-hub-create:<url>#<code>

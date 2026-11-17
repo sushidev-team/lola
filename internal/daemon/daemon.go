@@ -1030,6 +1030,8 @@ func Run(ctx context.Context) error {
 	// cut from its spawn); the loop itself stops on ctx.
 	d.wg.Add(1)
 	go d.hubLoop(ctx)
+	d.wg.Add(1)
+	go d.hubDoorbellLoop(ctx)
 
 	// The relay leg to the hub (hubrelay.go) and the event push hub
 	// (watchhub.go). Both end on ctx and are waited for by d.wg.

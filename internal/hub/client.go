@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -411,4 +412,15 @@ func cleanCode(s string) string {
 		}
 	}
 	return s
+}
+
+// Doorbell is the org's Linear doorbell long-poll: it answers at once when the
+// hub's counter differs from since, else when the hub's hold ends. The value
+// is only ever compared with the previous one.
+func (c *Client) Doorbell(ctx context.Context, since uint64) (uint64, error) {
+	var resp hubproto.DoorbellResponse
+	if err := c.do(ctx, http.MethodGet, hubproto.PathDoorbell+"?since="+strconv.FormatUint(since, 10), nil, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Doorbell, nil
 }

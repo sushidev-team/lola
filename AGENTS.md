@@ -469,7 +469,7 @@ every send path. Re-verify against a live pane.
   verdict while a plan is pending, else QUEUED (`PendingNotices`) and typed only via
   `flushAgentNotices` (hand-off gate + pane proof, one per prompt). `stop` is
   acknowledged, never acted on. The webhook is a DOORBELL: verified HMAC+timestamp
-  only wakes the poll, payload never parsed. Secrets resolve by Keychain service
+  only wakes the poll, payload never parsed. The HUB can ring the same doorbell for laptops with no public address (`hubdoorbell.go`: a signed long-poll on `/v1/doorbell` over a per-org counter the hub bumps after verifying Linear's HMAC against a sealed per-org secret; the counter is only compared, never interpreted; runs only with `[hub]` and `[linear_agent]` both on, fails quiet, the 15s poll is the floor). Secrets resolve by Keychain service
   name, tokens refresh on expiry/401; OAuth errors name only status + a whitelisted word.
 - **Plan gate** (`plangate.go`; CLI `lola plan-gate submit|approve|reject`, not
   `lola plan`): CONTROL state `Session.PlanGate` (planning → submitted → approved),
