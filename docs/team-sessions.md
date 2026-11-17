@@ -58,8 +58,8 @@ session. So authority lives only on the owner's machine.
   `kill`. `internal/remote/tiers.go` stays a closed allowlist: a member peer is
   checked against a separate `memberCommands` allowlist; unknown = never.
 - **View vs type.** Grant levels: `view` (read-only stream) and `type`
-  (keystrokes through `typeToAgent`'s gates? No: raw pty write is how a local
-  attach works). `type` therefore equals the `shell` tier on that one pane and
+  (keystrokes). A local attach is a raw pty write, so it cannot go through
+  `typeToAgent`'s gates; `type` therefore equals the `shell` tier on that one pane and
   is labelled that way in the UI. Default is `view`. The owner can drop a
   member to `view` or revoke live; both take effect on the next frame and close
   the member's connections.
@@ -103,9 +103,9 @@ cleanly).
 
 ## 4. Daemon
 
-- `config`: `[defaults].share_sessions`, `[[share_member]]`? No: members are in
-  `devices.json`, not config.toml, because they are pinned keys (same reason
-  phones are). The setting is only the default for new sessions.
+- `config`: `[defaults].share_sessions`. Members live in `devices.json`, not
+  config.toml, because they are pinned keys (same reason phones are). The
+  setting is only the default for new sessions.
 - `session.Session`: `Shared bool`, `ShareID string` (random), `ShareWith
   []string`, `ShareLevel`. Written only via a `setShare` method; not an
   inheritable key.
