@@ -16,6 +16,7 @@
     portal = false,
     fullscreen = false,
     describedBy,
+    headerContent,
   }: {
     title: string;
     titleHelp?: string;
@@ -28,6 +29,8 @@
     portal?: boolean;
     fullscreen?: boolean;
     describedBy?: string;
+    /** Replaces the title text with a toolbar of the caller's own (the title stays the dialog's accessible name). */
+    headerContent?: Snippet;
   } = $props();
 
   function placeOverlay(node: HTMLElement) {
@@ -118,8 +121,8 @@
     <header class="modal-header flex items-center border-b border-edge/70 py-2.5 {fullscreen ? 'drag pl-[82px] pr-4' : 'px-4'}">
       <!-- text-lg carries its own 600 + tracking: a dialog title is the one
            level that must out-rank everything inside the dialog. -->
-      <h2 class="min-w-0 text-lg text-ink">{title}</h2>
-      {#if titleHelp}<span class="ml-2 inline-flex"><HelpText label={title} detail={titleHelp} /></span>{/if}
+      {#if headerContent}<div class="no-drag min-w-0 flex-1">{@render headerContent()}</div>{:else}<h2 class="min-w-0 text-lg text-ink">{title}</h2>{/if}
+      {#if titleHelp && !headerContent}<span class="ml-2 inline-flex"><HelpText label={title} detail={titleHelp} /></span>{/if}
       <Button icon class="ml-auto" onclick={onClose} aria-label="close"><Icon name="x" size={14} /></Button>
     </header>
     <div class="modal-body min-h-0 flex-1 {bodyClass ?? 'overflow-auto p-4'}" class:default-body={bodyClass === undefined}>

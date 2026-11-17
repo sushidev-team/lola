@@ -101,7 +101,7 @@ daemon, runtime and UIs can share them).
   is cobra wiring only.
 
 **Agents, sessions, git**
-- `agent` — kind enum, `Caps` (only claude has feed/send/stop/cards/paste),
+- `agent` — kind enum, `Caps` (claude has feed/send/stop/cards/paste; codex has feed only),
   launch argv, READ-ONLY review argv (`ReviewArgs`), callback configs.
   `config.AgentForProject` resolves project → defaults → claude.
 - `attention` — pane → activity/question classifier (agent-aware).
@@ -241,6 +241,12 @@ one `tmux ls`, gh facts → delivery axis, pane → agent axis),
   `flushReviewHandoffs` delivers ONE item per pass; the Stop hook flushes async.
 - `resolveConflict` uses the same gate + proof but REFUSES instead of deferring,
   and stamps `LastReactedStatus`.
+- `askMerge` (desktop only, tier `never`) is the branch graph's "Ask agent to
+  merge": the app never merges into a sandboxed session's checkout, so it asks
+  that session's agent through `typeAtRestingPrompt` with the human lock, and
+  REFUSES like `resolveConflict`. The branch name is the one outside value in
+  the instruction: `validMergeRef` keeps it to a plain branch-name alphabet. No
+  fetch is named (the human picked the host's ref) and stacks are refused.
 - Diff-viewer feedback (`cmd=feedback`) and `cmd=broadcast` queue
   (`PendingFeedback`/`PendingBroadcast`) and DEFER, never refuse; a failed send re-queues.
 - Human presses use `lockHumanPrompt`, queued/automated sends `lockAutomationPrompt`;

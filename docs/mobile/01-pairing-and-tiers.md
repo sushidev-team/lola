@@ -1083,10 +1083,10 @@ resolved from `internal/protocol`): 166 case labels today, minus the deleted
 `pairReject`, `devices`, `revokeDevice`, `setDeviceTiers`, `sessionTimeline`; `pairBegin` already
 exists) = 172, plus spec 02's two handled commands `attachImage` and `attachmentImage` (`d.handle`
 cases reached through `Options.Handle` with the peer in the context) = 174, plus spec 03's
-`relayCred` = **176 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
+`relayCred` = 176, plus the desktop-only `askMerge` = 177, plus the plan gate's `planSubmit`, `planDecide`, `planGate` = **180 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
 `internal/remote`, and `remote.pair`, consumed by `Authenticate`.
 
-Split of the 179: read 24, answer 12, control 24, destructive 3, shell 6, never 110.
+Split of the 180: read 24, answer 12, control 24, destructive 3, shell 6, never 111.
 (Coverage was checked mechanically against `server.go` while writing this spec.)
 
 **read** (24 handled; plus `watch`, `unwatch` from `TransportCommands`)
@@ -1145,7 +1145,7 @@ No other config write may join a tier (§10.1).
 browser helper from the agent-writable `node_modules`, against any http(s) URL the caller
 names). Frame-level: `pty` with `action:"write"`.
 
-**never** — unreachable whatever the device holds (110)
+**never** — unreachable whatever the device holds (111)
 
 | Group | Commands |
 |---|---|
@@ -1153,6 +1153,7 @@ names). Frame-level: `pty` with `action:"write"`.
 | Agent in-pane channels | `hookEvent`, `agentReport`, `planSubmit`, `planGate`, `reviewPackagePublish`, `reviewPackageComplete` |
 | Pairing / devices (`protocol.LocalOnlyCommands`) | `pairBegin`, `pairStatus`, `pairConfirm`, `pairReject`, `devices`, `revokeDevice`, `setDeviceTiers` |
 | Transport-internal | `remote.pair` (and every `remote.*`), `""` |
+| Branch graph (Mac only) | `askMerge` (asks a session's agent to merge a branch picked in the Mac's branch graph; a phone has no such view) |
 | Host browser | `openURL` (opens a URL on the Mac; the phone opens dev URLs itself — §12 item 3) |
 | Hub human (`protocol.HubHumanCommands`, 13) | `hubJoin`, `hubLeave`, `hubBoard`, `hubOrg`, `hubClaim`, `hubRelease`, `hubSync`, `hubStats`, `hubCreateTeam`, `hubInvite`, `hubTeamSettings`, `hubRevoke`, `hubProbe` |
 | SSH agent (`protocol.SSHAgentCommands`, 6) | `sshAgentHosts`, `sshAgentRequest`, `sshAgentRun`, `sshAgentPoll`, `sshAgentCancel`, `sshAgentPost` |

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -60,6 +61,7 @@ type feedEntry struct {
 	id   string
 	kind agent.Kind
 	slug string
+	root string // codex: where its log was found, which moves when a private home appears
 	feed *agentfeed.Feed
 
 	lastUsed int64
@@ -124,6 +126,7 @@ type feedTarget struct {
 	kind  agent.Kind
 	slug  string
 	cwd   string
+	root  string // codex: the sessions directory of the CODEX_HOME this session ran with
 	known bool
 }
 
@@ -135,10 +138,24 @@ func (d *Daemon) feedResolve(id string) (feedTarget, bool, error) {
 			return feedTarget{}, false, nil
 		}
 		cwd := sessionWorktree(d.home, s)
-		return feedTarget{id: id, kind: agent.Parse(s.Agent), slug: filepath.Base(usage.SlugDir(usage.ProjectsRoot(), cwd)), cwd: cwd}, true, nil
+		t := feedTarget{id: id, kind: agent.Parse(s.Agent), slug: filepath.Base(usage.SlugDir(usage.ProjectsRoot(), cwd)), cwd: cwd}
+		if t.kind == agent.Codex {
+			t.root = d.codexFeedRoot(id, s.Project, cwd)
+		}
+		return t, true, nil
 	}
 	if ended := sshstore.ReadEnded(d.home, id); ended != nil {
-		return feedTarget{id: id, kind: agent.Parse(ended.Agent), slug: ended.Slug}, true, nil
+		t := feedTarget{id: id, kind: agent.Parse(ended.Agent), slug: ended.Slug}
+		if t.kind == agent.Codex {
+			// A rollout is found by the directory it ran in, which an ended session no longer
+			// records: it is the kept directory, or where lola puts a session's worktree.
+			t.cwd = ended.KeptWorktree
+			if t.cwd == "" && ended.Project != "" {
+				t.cwd = filepath.Join(d.home, "worktrees", ended.Project, id)
+			}
+			t.root = d.codexFeedRoot(id, ended.Project, t.cwd)
+		}
+		return t, true, nil
 	}
 	return feedTarget{}, false, errors.New("unknown session " + id)
 }
@@ -164,10 +181,50 @@ func (d *Daemon) feedSegments(id string) []string {
 	return nil
 }
 
+// codexFeedRoot is the sessions directory of the CODEX_HOME a session's codex writes to,
+// which is not always the user's: a sandboxed one keeps a private home under lola's
+// (~/.lola/sandbox/<id>/codex), an older one kept it in the worktree, and a project may
+// name its own. It is derived from lola's own layout and the config, never read from the
+// session's env file, which the agent can write. The private homes are the agent's to
+// write as well, so they count only while every level is a plain directory.
+func (d *Daemon) codexFeedRoot(id, project, cwd string) string {
+	private := []string{filepath.Join(d.home, "sandbox", id, "codex")}
+	if cwd != "" {
+		private = append(private, filepath.Join(cwd, ".lola", "codex"))
+	}
+	for _, home := range private {
+		if sessions := filepath.Join(home, "sessions"); plainDirs(filepath.Dir(home), home, sessions) {
+			return sessions
+		}
+	}
+	d.mu.Lock()
+	home := ""
+	if d.cfg != nil {
+		if p := d.cfg.ProjectByName(project); p != nil {
+			home = p.Env["CODEX_HOME"]
+		}
+	}
+	d.mu.Unlock()
+	if home == "" {
+		home = quota.CodexHome()
+	}
+	return filepath.Join(home, "sessions")
+}
+
+// plainDirs says every path is a directory and none of them a symlink.
+func plainDirs(paths ...string) bool {
+	for _, p := range paths {
+		if li, err := os.Lstat(p); err != nil || !li.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
 func (d *Daemon) newFeedSource(t feedTarget) agentfeed.Source {
 	switch t.kind {
 	case agent.Codex:
-		return agentfeed.NewCodex(filepath.Join(quota.CodexHome(), "sessions"), t.cwd)
+		return agentfeed.NewCodex(t.root, t.cwd)
 	case agent.OpenCode:
 		return agentfeed.NewOpencode(t.cwd)
 	}
@@ -181,8 +238,8 @@ func (h *feedHub) entry(d *Daemon, t feedTarget) *feedEntry {
 	defer h.mu.Unlock()
 	h.clock++
 	e := h.entries[t.id]
-	if e == nil || e.kind != t.kind || e.slug != t.slug {
-		e = &feedEntry{id: t.id, kind: t.kind, slug: t.slug, pending: map[string]bool{}, claimed: map[string]bool{}}
+	if e == nil || e.kind != t.kind || e.slug != t.slug || e.root != t.root {
+		e = &feedEntry{id: t.id, kind: t.kind, slug: t.slug, root: t.root, pending: map[string]bool{}, claimed: map[string]bool{}}
 		e.feed = agentfeed.NewFeed(func() agentfeed.Source { return d.newFeedSource(t) })
 		e.gen = e.feed.Generation()
 		h.entries[t.id] = e

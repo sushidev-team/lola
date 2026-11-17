@@ -186,7 +186,17 @@ func main() {
 			// keeps them at the standard top-left position, like Ghostty/Terminal.
 			TitleBar: application.MacTitleBarHidden,
 		},
-		URL: "/",
+		// Dropped files reach the Go side only through this flag; the page's own drop event
+		// cannot name a file's path. Only an element marked data-file-drop-target takes a drop.
+		EnableFileDrop: true,
+		URL:            "/",
+	})
+	win.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
+		target := ""
+		if d := e.Context().DropTargetDetails(); d != nil {
+			target = d.ElementID
+		}
+		app.Event.Emit(evtFilesDropped, FilesDroppedDTO{Target: target, Files: e.Context().DroppedFiles()})
 	})
 
 	newStatusBarMenu(app, win)
@@ -528,6 +538,8 @@ const (
 	evtSessions = "daemon:sessions" // protocol.SessionsData
 	evtProjects = "daemon:projects" // protocol.ProjectsData
 	evtStatus   = "daemon:status"   // protocol.StatusData
+	// evtFilesDropped names the drop target's element id and the paths dropped on it.
+	evtFilesDropped = "files:dropped" // FilesDroppedDTO
 	// evtPushErr carries a push-loop command failure so the frontend can explain
 	// a blanked read (an out-of-date daemon answering `unknown cmd`) instead of
 	// swallowing it. A non-empty Msg means failure; "" means the command recovered.
@@ -571,7 +583,14 @@ type PushErrDTO struct {
 	Msg string `json:"msg"`
 }
 
+// FilesDroppedDTO is a drop on a data-file-drop-target element: its id, and the files' paths.
+type FilesDroppedDTO struct {
+	Target string   `json:"target"`
+	Files  []string `json:"files"`
+}
+
 func init() {
+	application.RegisterEvent[FilesDroppedDTO](evtFilesDropped)
 	application.RegisterEvent[ProjectGitQueueEvent](evtProjectGitQueue)
 	application.RegisterEvent[bool](evtAlive)
 	application.RegisterEvent[struct{}](evtOpenSettings)

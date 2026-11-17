@@ -374,7 +374,26 @@ func validPath(path string) bool {
 	return path != "" && !filepath.IsAbs(path) && filepath.Clean(path) == path && path != ".." && !strings.HasPrefix(path, "../") && !strings.ContainsRune(path, 0)
 }
 
+// Diff of one file carries the whole file as context, so the view can show it
+// all or fold what did not change; a file too large for that falls back to the
+// usual three lines around each change.
 func (c Client) Diff(ctx context.Context, dir, from, to, area, path string) (gitdiff.Result, error) {
+	if path == "" || area == "untracked" {
+		return c.diffContext(ctx, dir, from, to, area, path, "3")
+	}
+	full, err := c.diffContext(ctx, dir, from, to, area, path, "1000000")
+	if err != nil || !full.Truncated {
+		for _, f := range full.Files {
+			if f.TooLarge {
+				return c.diffContext(ctx, dir, from, to, area, path, "3")
+			}
+		}
+		return full, err
+	}
+	return c.diffContext(ctx, dir, from, to, area, path, "3")
+}
+
+func (c Client) diffContext(ctx context.Context, dir, from, to, area, path, unified string) (gitdiff.Result, error) {
 	result := gitdiff.Result{Files: []gitdiff.File{}}
 	if path != "" && !validPath(path) {
 		return result, errors.New("invalid file path")
@@ -382,7 +401,7 @@ func (c Client) Diff(ctx context.Context, dir, from, to, area, path string) (git
 	if area == "untracked" {
 		return c.untracked(ctx, dir, path)
 	}
-	args := []string{"-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--unified=3"}
+	args := []string{"-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--unified=" + unified}
 	switch area {
 	case "working":
 		var err error
@@ -410,7 +429,7 @@ func (c Client) Diff(ctx context.Context, dir, from, to, area, path string) (git
 			}
 			args = append(args, from, to)
 		} else {
-			args = []string{"-c", "core.quotepath=off", "show", "--format=", "--first-parent", "--root", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--unified=3", to}
+			args = []string{"-c", "core.quotepath=off", "show", "--format=", "--first-parent", "--root", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--unified=" + unified, to}
 		}
 	case "staged":
 		args = append(args, "--cached")

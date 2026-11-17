@@ -1,10 +1,10 @@
 package agent
 
 // Caps says what lola has MEASURED for a kind of agent, and what is not measured is not
-// offered. Claude's come from a spike on Claude Code 2.1.318. Codex and opencode stay off
-// until a real pane of each has been captured and checked in: with Send false their text
-// still queues and flushes through the automation gate, and the session opens on its
-// terminal.
+// offered. Claude's come from a spike on Claude Code 2.1.318. Codex has Feed alone: its log
+// was read and checked in, its pane was not. Everything that types stays off for codex and
+// opencode until a real pane of each has been captured and checked in: with Send false their
+// text still queues and flushes through the automation gate.
 //
 //   - Feed: lola can read its log into a conversation (caps_feed.go).
 //   - Send: a press-now send, on the cursor proof.

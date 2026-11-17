@@ -128,6 +128,14 @@ export interface DoctorResultDTO {
 }
 
 /**
+ * FilesDroppedDTO is a drop on a data-file-drop-target element: its id, and the files' paths.
+ */
+export interface FilesDroppedDTO {
+    "target": string;
+    "files": string[] | null;
+}
+
+/**
  * GroupDTO is one [[group]] as the frontend sees it. Position is its index
  * among the top-level rows (see config.Group) — the sidebar draws folders beside
  * the projects, so a group's place is a value of its own.

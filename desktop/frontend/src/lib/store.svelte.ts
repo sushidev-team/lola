@@ -566,6 +566,23 @@ class Store {
     }
   }
   /**
+   * Ask a session's agent to merge `branch` into the session's own branch: what
+   * the branch graph offers where the app must not merge itself (a sandboxed
+   * session's checkout). Both the success line and a refusal (the agent is
+   * mid-turn and must not be typed into) are the daemon's sentences.
+   */
+  async askMerge(session: string, branch: string) {
+    try {
+      const r = await DaemonService.AskMerge(session, branch);
+      this.setFlash(r?.message || `asked the agent to merge ${branch}`, "good");
+      void this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return undefined;
+    }
+  }
+  /**
    * Run the project's dev_commands here (on = true), or stop them. Only one
    * session per project may hold them, so activating MOVES them: the daemon
    * kills the previous holder's tabs first. The dev TABS follow on their own:

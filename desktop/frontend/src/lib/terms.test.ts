@@ -245,10 +245,12 @@ describe("where a session opens", () => {
     const a = newId();
     const b = newId();
     const c = newId();
-    store.sessions = [{ id: a, agent: "claude", ssh: { connections: [conn] } }, { id: b, agent: "codex" }, { id: c, agent: "claude" }] as never;
+    const d = newId();
+    store.sessions = [{ id: a, agent: "claude", ssh: { connections: [conn] } }, { id: b, agent: "opencode" }, { id: c, agent: "claude" }, { id: d, agent: "codex" }] as never;
     expect(terms.activeTab(a)).toBe(SSH);
     expect(terms.activeTab(b)).toBe(AGENT);
     expect(terms.activeTab(c)).toBe(SSH);
+    expect(terms.activeTab(d)).toBe(SSH);
     store.sessions = [];
   });
   it("pins what it landed on, so a later answer cannot flip the view", () => {

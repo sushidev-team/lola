@@ -85,13 +85,14 @@ export function riskHeadline(body: string): string {
 export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
 export type ReviewRisk = OverviewItem & { likelihood: RiskLevel; impact: RiskLevel; priority: number; description: string; assess: string };
 export const riskWeight: Record<RiskLevel,number> = {unknown:0,low:1,medium:2,high:3};
+const sentenceCase = (text: string) => text.replace(/^./, c => c.toUpperCase());
 export function reviewRisk(item: OverviewItem): ReviewRisk {
   const text = plainReviewText(item.body);
   const likelihood = (text.match(/\b(?:likelihood|probability)\s*:\s*(low|medium|high|unknown)\b/i)?.[1]?.toLowerCase() || 'unknown') as RiskLevel;
   const impact = (text.match(/\b(?:impact|severity)\s*:\s*(low|medium|high|unknown)\b/i)?.[1]?.toLowerCase() || 'unknown') as RiskLevel;
   // Unknowns need review before low-rated risks; they are never presented as low.
   const priority = likelihood === 'unknown' || impact === 'unknown' ? 5 : riskWeight[likelihood] * riskWeight[impact];
-  return {...item,title:riskHeadline(item.body),likelihood,impact,priority,description:shortLine(reviewField(item.body,'Outcome'),220),assess:shortLine(reviewField(item.body,'Assess'),220)};
+  return {...item,title:riskHeadline(item.body),likelihood,impact,priority,description:sentenceCase(shortLine(reviewField(item.body,'Outcome'),220)),assess:sentenceCase(shortLine(reviewField(item.body,'Assess'),220))};
 }
 export function reviewOverview(pkg: Pick<ReviewPackage,'title'|'body'>) {
   const changes: ReviewChange[] = [], verification: OverviewItem[] = [], risks: ReviewRisk[] = [], details: OverviewItem[] = [];

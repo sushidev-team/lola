@@ -43,6 +43,8 @@ const { nav } = await import("$lib/nav.svelte");
 const { ssh } = await import("$lib/ssh.svelte");
 const { terms, AGENT, DIFF, SSH } = await import("$lib/terms.svelte");
 const { confirm } = await import("$lib/confirm.svelte");
+const { allTabs, closeTab } = await import("$lib/docklayout");
+const { OVERVIEW_PANEL, CHANGES_PANEL } = await import("$lib/sessionpanels");
 
 const conn = { id: "c1", host: "prod", tier: "production", state: "connected", wheel: "agent", tabAlive: true, tab: "x-ssh-1" };
 const plain = (id: string, o: Record<string, unknown> = {}) => ({ id, project: "p", title: id, tmuxName: id, worktree: "/w", agent: "claude", agentState: "idle", status: "idle", ...o });
@@ -231,6 +233,22 @@ describe("in a session", () => {
     expect(v.dockHidden).toBe(!before);
     chord("toggle-right-sidebar");
     expect(v.dockHidden).toBe(before);
+  });
+  it("⌘N opens Overview in a column too narrow to have seeded the panels", async () => {
+    await mount([plain(A)]);
+    nav.openSession(A);
+    ssh.open(A);
+    flushSync();
+    const v = ssh.view(A);
+    v.sessionPanels = false;
+    v.setDock(closeTab(closeTab(v.dock, OVERVIEW_PANEL), CHANGES_PANEL), false);
+    v.sideOffered = false;
+    chord("toggle-right-sidebar");
+    expect(allTabs(v.dock)).toEqual([]);
+    v.sideOffered = true;
+    chord("toggle-right-sidebar");
+    expect(allTabs(v.dock)).toEqual([OVERVIEW_PANEL]);
+    expect(v.dockHidden).toBe(false);
   });
   it("⌘N toggles the project views' right column outside a session", async () => {
     await mount([plain(A)]);

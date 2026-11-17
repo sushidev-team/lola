@@ -10,9 +10,16 @@
   import Modal from "./Modal.svelte";
   import Button from "./Button.svelte";
   import Checkbox from "./Checkbox.svelte";
+  import Icon from "./Icon.svelte";
 
   const req = $derived(confirm.request);
   const descriptionId = $props.id();
+  const danger = $derived((req?.confirmVariant ?? "danger-solid") === "danger-solid");
+  // One sentence per row; the irreversible one is set apart so it is the last thing read.
+  const notes = $derived((req?.detail ? req.detail.split(/(?<=[.!?])\s+/) : []).map(text => text.trim()).filter(Boolean));
+  const irreversible = (text: string) => /cannot be undone|permanent/i.test(text);
+  const dir = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "");
+  const leaf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
   // `data-confirm*` are styling hooks for the phone shell, which restyles this as an action sheet
   // (mobile/src/app.css); the desktop's markup and classes are unchanged.
 </script>
@@ -20,9 +27,26 @@
 {#if req}
   <Modal title={req.title} onClose={() => confirm.cancel()} width="480px" describedBy={descriptionId}>
     <div id={descriptionId} class="confirmation-copy" data-confirm>
+      {#each req.fileGroups ?? [] as group, groupIndex (groupIndex)}
+        <section class="confirmation-section">
+          {#if group.text}<p class="copy confirmation-lead">{group.text}</p>{/if}
+          <ul class="confirmation-files" aria-label={group.text ?? "Affected files"}>
+            {#each group.files as path (path)}
+              <li class="confirmation-file" title={path}><Icon name="file-text" size={13} /><span class="confirmation-path"><span class="confirmation-dir">{dir(path)}</span><strong>{leaf(path)}</strong></span>{#if group.tag}<span class="confirmation-tag">{group.tag}</span>{/if}{#if group.stats?.[path]}{@const stat = group.stats[path]}<span class="confirmation-stat" title={`${stat.add} added, ${stat.del} removed lines`}><span class="add">+{stat.add}</span><span class="del">−{stat.del}</span></span>{/if}</li>
+            {/each}
+          </ul>
+        </section>
+      {/each}
       {#if req.subject}<p class="selectable confirmation-subject">{req.subject}</p>{/if}
       {#if req.body}<p class="copy confirmation-body">{req.body}</p>{/if}
-      {#if req.detail}<p class="copy confirmation-detail">{req.detail}</p>{/if}
+      {#if notes.length}
+        <ul class="confirmation-notes">
+          {#each notes as note}
+            {#if irreversible(note)}<li class="confirmation-note warn"><Icon name="triangle-alert" size={14} /><span>{note}</span></li>
+            {:else}<li class="confirmation-note"><span>{note}</span></li>{/if}
+          {/each}
+        </ul>
+      {/if}
     </div>
     {#if req.choices?.items.length}
       <ul class="mt-3 max-h-56 overflow-auto rounded border border-edge" aria-label={req.choices.label}>
@@ -49,10 +73,24 @@
 {/if}
 
 <style>
-  .confirmation-actions { justify-content:flex-end; }
-  .confirmation-copy { min-width:0; overflow-wrap:anywhere; }
-  .confirmation-subject { margin-bottom:10px; padding:8px 10px; border:1px solid var(--color-edge); border-radius:6px; background:color-mix(in srgb,var(--color-ink) 5%,var(--color-canvas)); font-family:var(--font-mono); font-size:13px; line-height:1.5; color:var(--color-ink); white-space:pre-wrap; }
-  .confirmation-subject:last-child { margin-bottom:0; }
-  .confirmation-body { font-size:14px; color:var(--color-ink); }
-  .confirmation-detail { margin-top:10px; font-size:13px; color:var(--color-ink-2); }
+  .confirmation-actions { justify-content:flex-end; gap:8px; }
+  .confirmation-copy { min-width:0; overflow-wrap:anywhere; display:grid; gap:14px; }
+  .confirmation-section { display:grid; gap:6px; }
+  .confirmation-section + .confirmation-section { margin-top:-12px; }
+  .confirmation-stat { flex:none; margin-left:auto; display:inline-flex; gap:6px; font-family:var(--font-mono); font-size:12px; font-variant-numeric:tabular-nums; }
+  .confirmation-stat .add { color:var(--color-good); }
+  .confirmation-stat .del { color:var(--color-bad); }
+  .confirmation-tag { flex:none; font-size:11px; color:var(--color-faint); }
+  .confirmation-lead { font-size:13px; line-height:1.5; color:var(--color-ink); }
+  .confirmation-subject { padding:9px 12px; border:1px solid var(--color-edge); border-radius:8px; background:color-mix(in srgb,var(--color-ink) 5%,var(--color-canvas)); font-family:var(--font-mono); font-size:13px; line-height:1.5; color:var(--color-ink); white-space:pre-wrap; }
+  .confirmation-files { display:grid; gap:2px; margin:0; padding:0; list-style:none; max-height:176px; overflow:auto; }
+  .confirmation-file { display:flex; align-items:center; gap:8px; padding:2px 0; min-width:0; color:var(--color-faint); }
+  .confirmation-path { min-width:0; font-family:var(--font-mono); font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
+  .confirmation-dir { color:var(--color-faint); }
+  .confirmation-path strong { font-weight:600; color:var(--color-ink); }
+  .confirmation-body { font-size:14px; line-height:1.5; color:var(--color-ink); }
+  .confirmation-notes { display:grid; gap:2px; margin:0; padding:0; list-style:none; }
+  .confirmation-note { display:flex; align-items:center; gap:8px; font-size:13px; line-height:1.5; color:var(--color-ink-2); }
+  .confirmation-note.warn { align-items:center; margin-top:8px; font-weight:400; color:var(--color-bad); }
+  .confirmation-note.warn :global(svg) { flex:none; }
 </style>
