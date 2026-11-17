@@ -22,7 +22,6 @@
   const action = $derived(confidenceRequest?.state === 'sending' ? 'Requesting self-assessment' : confidenceRequest?.state === 'accepted' ? 'Self-assessment requested' : confidenceRequest?.state === 'error' ? 'Retry self-assessment' : 'Ask agent for self-assessment');
   const score = $derived(confidence.score);
   const tone = $derived(checking || score === null ? 'none' : confidence.failed ? 'bad' : score >= 75 ? 'good' : 'warn');
-  const circumference = 2 * Math.PI * 24;
   const observed = $derived(confidence.evidence === null ? null : Math.round(confidence.evidence));
   async function toggle() { open = !open; if (open) { await tick(); panel?.focus(); } }
   function close() { open = false; root?.querySelector<HTMLButtonElement>('.info button')?.focus(); }
@@ -41,10 +40,7 @@
 <section class="conf" data-tone={tone} aria-label="Review confidence" bind:this={root}>
   <div class="row">
     <div class="ring">
-      <svg viewBox="0 0 56 56" width="56" height="56" aria-hidden="true">
-        <circle class="track" cx="28" cy="28" r="24"/>
-        {#if score !== null && !checking}<circle class="arc" cx="28" cy="28" r="24" stroke-dasharray={`${circumference * score / 100} ${circumference}`} transform="rotate(-90 28 28)"/>{/if}
-      </svg>
+      <span class="dial" style:--p={score !== null && !checking ? score : 0}></span>
       <span class="num">{#if checking}<span role="status" aria-label="Loading confidence"><span class="sr-only">Loading confidence…</span><Skeleton width="26px" height="16px"/></span>{:else if score !== null}<strong class="score">{score}</strong>{:else}–{/if}</span>
     </div>
     <div class="body">
@@ -56,7 +52,7 @@
       </div>{/if}
     </div>
   </div>
-  <p class="rev" use:tooltip={'Reviewed changes, from base to head'}><Icon name="git-branch" size={12}/><code>{pkg.base.slice(0,7)}</code><Icon name="arrow-right" size={11}/><code>{pkg.head.slice(0,7)}</code><span>agent-written</span></p>
+  <p class="rev" use:tooltip={'Reviewed changes, from base to head'}><Icon name="git-branch" size={12}/><code>{pkg.base.slice(0,7)}</code><Icon name="arrow-right" size={11}/><code>{pkg.head.slice(0,7)}</code></p>
   {#if open && !phone}
   <div {id} class="panel" role="dialog" aria-label="About confidence" tabindex="-1" bind:this={panel}>
     <div class="panel-head"><h3>How it is calculated</h3><Button icon size="xs" aria-label="Close confidence details" onclick={close}><Icon name="x" size={14}/></Button></div>
@@ -92,9 +88,7 @@
   .conf[data-tone='good'] { --tone:var(--color-good); } .conf[data-tone='warn'] { --tone:var(--color-warn); } .conf[data-tone='bad'] { --tone:var(--color-bad); }
   .row { display:flex; align-items:center; gap:14px; min-width:0; }
   .ring { position:relative; flex-shrink:0; width:56px; height:56px; }
-  .ring svg { display:block; fill:none; stroke-width:5; stroke-linecap:round; }
-  .track { stroke:color-mix(in srgb,var(--color-edge) 80%,transparent); }
-  .arc { stroke:var(--tone); transition:stroke-dasharray 400ms ease-out; }
+  .dial { position:absolute; inset:0; border-radius:50%; background:conic-gradient(var(--tone) calc(var(--p) * 1%), color-mix(in srgb,var(--color-edge) 80%,transparent) 0); -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px)); mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px)); }
   .num { position:absolute; inset:0; display:grid; place-items:center; font-family:var(--font-mono); font-variant-numeric:lining-nums tabular-nums slashed-zero; font-size:13px; color:var(--color-ink-2); }
   .num strong { font-size:18px; font-weight:700; letter-spacing:-.04em; color:var(--color-ink); }
   .body { min-width:0; display:grid; gap:3px; flex:1; }
@@ -107,7 +101,6 @@
   .part i { font-style:normal; } .part b { font-family:var(--font-mono); font-weight:600; font-size:12px; color:var(--color-ink); font-variant-numeric:tabular-nums; }
   .rev { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--color-faint); padding-top:10px; border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
   .rev code { font-family:var(--font-mono); color:var(--color-ink-2); }
-  .rev span { margin-left:auto; }
   .panel { display:grid; gap:10px; padding-top:12px; border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); font-size:12px; color:var(--color-ink-2); }
   .panel:focus { outline:none; }
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
@@ -118,5 +111,4 @@
   .signals { padding-top:8px; border-top:1px dashed var(--color-edge); }
   .note { margin:0; line-height:1.5; }
   .trigger { display:inline-flex; }
-  @media(prefers-reduced-motion:reduce) { .arc { transition:none; } }
 </style>

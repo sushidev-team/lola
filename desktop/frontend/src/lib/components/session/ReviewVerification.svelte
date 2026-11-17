@@ -174,9 +174,10 @@
   :global([data-phone-desk]) .verification-heading h3 { font-size:17px; line-height:22px; font-weight:600; }
   :global([data-phone-desk]) .verification-heading :global(button) { min-width:44px; min-height:44px; }
   .verification { min-width:0; margin-top:4px; padding:12px 14px; border:1px solid var(--color-edge); border-radius:12px; }
-  .verification.slim { display:flex; align-items:center; gap:10px; padding:8px 12px; border-style:dashed; }
-  .slim .verification-heading { flex:1; align-items:center; }
-  .slim .setup-row { margin:0; flex-wrap:nowrap; gap:10px; }
+  .verification.slim { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:8px 12px; border-style:dashed; }
+  .slim .verification-heading { align-items:center; gap:8px; }
+  .slim .context-note,.slim .setup-row .explanation { display:none; }
+  .slim .setup-row { margin:0 0 0 auto; gap:8px; }
   .title-row { display:flex; align-items:center; gap:8px; }
   .stale-chip { font-size:11px; }
   .verification-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
