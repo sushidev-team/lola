@@ -82,3 +82,49 @@ func TestChangeLinesKeepsUnchosenChangesOutOfTheIndex(t *testing.T) {
 		t.Fatalf("index=%q", got)
 	}
 }
+
+// Skipping an earlier hunk must not leave later hunks at positions that only
+// made sense with it applied: repeated blocks would match the wrong place.
+func TestChangeLinesRenumbersAfterSkippedHunks(t *testing.T) {
+	block := strings.Repeat("x\ny\nz\nw\nv\nu\n", 1)
+	var base strings.Builder
+	for i := 0; i < 8; i++ {
+		base.WriteString(block)
+	}
+	for _, stage := range []bool{true, false} {
+		dir, _ := stashRepo(t)
+		ctx, c := context.Background(), Client{}
+		write(t, dir, "rep", base.String())
+		testGit(t, dir, "add", "rep")
+		testGit(t, dir, "commit", "-m", "rep")
+		lines := strings.Split(strings.TrimSuffix(base.String(), "\n"), "\n")
+		changed := append([]string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}, lines...)
+		changed[10+16] = "CHANGED"
+		write(t, dir, "rep", strings.Join(changed, "\n")+"\n")
+		if !stage {
+			testGit(t, dir, "add", "rep")
+		}
+		area := "unstaged"
+		if !stage {
+			area = "staged"
+		}
+		d, err := c.Diff(ctx, dir, "", "", area, "rep")
+		if err != nil || len(d.Files) != 1 {
+			t.Fatalf("diff %v %v", d, err)
+		}
+		patch := d.Files[0].Patch
+		if err := c.ChangeLines(ctx, dir, area, "rep", patch, linesOf(patch, "+CHANGED", "-"+lines[16]), stage); err != nil {
+			t.Fatal(err)
+		}
+		got := testGit(t, dir, "diff", "--cached", "-U0", "rep")
+		if stage && (!strings.Contains(got, "@@ -17 +17 @@") || !strings.Contains(got, "+CHANGED")) {
+			t.Fatalf("staged the wrong place:\n%s", got)
+		}
+		if !stage && strings.Contains(got, "CHANGED") {
+			t.Fatalf("unstage left the change:\n%s", got)
+		}
+		if !stage && !strings.Contains(got, "+10") {
+			t.Fatalf("unstage touched the other hunk:\n%s", got)
+		}
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -52,8 +54,9 @@ func (c Client) ChangeLines(ctx context.Context, dir, area, path, patch string, 
 // partialPatch keeps the hunks of patch that hold a chosen change. A change
 // that is not chosen is left as the index has it: when staging, an unchosen
 // removal stays as context and an unchosen addition is dropped; when
-// unstaging (applied in reverse) the roles swap. Hunk counts are recomputed by
-// git apply --recount.
+// unstaging (applied in reverse) the roles swap. The side that is the index
+// keeps its original positions; the other side is renumbered, because git
+// apply trusts those positions and would match a similar block elsewhere.
 func partialPatch(patch string, chosen []int, stage bool) (string, error) {
 	pick := map[int]bool{}
 	for _, i := range chosen {
@@ -65,50 +68,103 @@ func partialPatch(patch string, chosen []int, stage bool) (string, error) {
 			return "", errors.New("select only changed lines")
 		}
 	}
-	var out, hunk strings.Builder
-	changed, dropping := false, false
-	flush := func() {
-		if changed {
-			out.WriteString(hunk.String())
-		}
-		hunk.Reset()
-		changed = false
+	type hunk struct {
+		oldStart, newStart int
+		suffix             string
+		lines              []string
+		oldN, newN         int
+		changed            bool
 	}
+	var hunks []*hunk
+	var cur *hunk
+	dropping := false
 	for i, row := range rows {
 		switch {
 		case strings.HasPrefix(row, "@@"):
-			flush()
-			hunk.WriteString(row + "\n")
-		case row == "":
+			m := hunkHeader.FindStringSubmatch(row)
+			if m == nil {
+				return "", errors.New("unreadable hunk header")
+			}
+			cur = &hunk{oldStart: atoi(m[1]), newStart: atoi(m[2]), suffix: m[3]}
+			hunks = append(hunks, cur)
+		case cur == nil || row == "":
 		case row[0] == '\\':
 			if !dropping {
-				hunk.WriteString(row + "\n")
+				cur.lines = append(cur.lines, row)
 			}
 		case row[0] == '+' || row[0] == '-':
 			add := row[0] == '+'
 			switch {
 			case pick[i]:
-				hunk.WriteString(row + "\n")
-				changed, dropping = true, false
+				cur.lines = append(cur.lines, row)
+				cur.changed, dropping = true, false
+				if add {
+					cur.newN++
+				} else {
+					cur.oldN++
+				}
 			case add == stage:
 				// Not chosen and absent from the target: leave it out.
 				dropping = true
 			default:
 				// Not chosen and already in the target: keep it as context.
-				hunk.WriteString(" " + row[1:] + "\n")
+				cur.lines = append(cur.lines, " "+row[1:])
+				cur.oldN++
+				cur.newN++
 				dropping = false
 			}
 		default:
-			hunk.WriteString(row + "\n")
+			cur.lines = append(cur.lines, row)
+			cur.oldN++
+			cur.newN++
 			dropping = false
 		}
 	}
-	flush()
-	if out.Len() == 0 {
+	var out strings.Builder
+	shift := 0 // lines the kept hunks so far add to the new side
+	kept := false
+	for _, h := range hunks {
+		if !h.changed {
+			continue
+		}
+		kept = true
+		oldStart, newStart := h.oldStart, h.newStart
+		if stage {
+			first := oldStart
+			if h.oldN == 0 {
+				first++
+			}
+			first += shift
+			newStart = first
+			if h.newN == 0 {
+				newStart--
+			}
+		} else {
+			first := newStart
+			if h.newN == 0 {
+				first++
+			}
+			first -= shift
+			oldStart = first
+			if h.oldN == 0 {
+				oldStart--
+			}
+		}
+		fmt.Fprintf(&out, "@@ -%d,%d +%d,%d @@%s\n", oldStart, h.oldN, newStart, h.newN, h.suffix)
+		for _, l := range h.lines {
+			out.WriteString(l + "\n")
+		}
+		shift += h.newN - h.oldN
+	}
+	if !kept {
 		return "", errors.New("select at least one changed line")
 	}
 	return out.String(), nil
 }
+
+var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$`)
+
+func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
 
 // ChangeLinesAndStatus is ChangeLines followed by the authoritative file list.
 func (c Client) ChangeLinesAndStatus(ctx context.Context, dir, area, path, patch string, lines []int, stage bool) ([]File, error) {

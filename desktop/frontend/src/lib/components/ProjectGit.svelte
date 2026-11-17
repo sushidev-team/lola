@@ -450,15 +450,18 @@
   }
   // Single lines move only for a tracked, modified text file in the staged or unstaged list.
   const lineAction = $derived(file?.status === 'modified' && !file.binary && !file.tooLarge ? area === 'unstaged' ? 'stage' as const : area === 'staged' ? 'unstage' as const : null : null);
+  const diffKey = () => [area, path, activeFile, selected.join(',')].join('|');
   async function changeLines(lines: number[]) {
-    const state = view, chosenArea = area, chosen = file, peeking = state !== git;
+    const state = view, chosenArea = area, chosen = file, peeking = state !== git, shown = diffKey();
     if (!chosen || !chosenArea || !chosen.patch) return;
     const ok = await state.changeLines(chosenArea, chosen.path, chosen.patch, lines, peeking ? '' : ref, peeking ? 1 : limit);
-    if (state !== view) return;
     if (peeking && ok) void git.load(ref, limit);
     // A refused patch (the file moved on) is redrawn too, so the next click is on what is really there.
+    // Another file or view may have been picked meanwhile; it owns the diff now.
+    if (state !== view || shown !== diffKey()) return;
     await state.loadDiff(chosenArea, '', '', chosen.path);
-    if (ok && state === view && !state.diff?.files.length) working();
+    if (shown !== diffKey() || state !== view) return;
+    if (ok && !state.diff?.files.length) working();
   }
   function peekWorktree(tree: GitWorktree) { working(); peekPath = tree.path; }
   function ownWorking() { peekPath = ''; working(); }
