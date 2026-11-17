@@ -28,7 +28,7 @@ it('keeps region drafts across reopening, and queues coordinates with the commen
   const onComment=vi.fn().mockReturnValue(false);
   const mounted=render(ReviewCanvas,{pkg,onComment});
   await screen.findByAltText('Settings — After');
-  await fireEvent.click(screen.getByRole('button',{name:'Mark area'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
   await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Align this area'}});
   mounted.unmount();
@@ -37,7 +37,7 @@ it('keeps region drafts across reopening, and queues coordinates with the commen
   await fireEvent.click(screen.getByRole('button',{name:'Next comment'}));
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toHaveValue('Align this area');
   await fireEvent.click(screen.getByRole('button',{name:'Save'}));
-  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, area from top-left: x=50%, y=50%, width=20%, height=20%\nAlign this area'),undefined);
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, point from top-left: x=50%, y=50%\nAlign this area'),undefined);
   expect(screen.getByRole('textbox')).toHaveValue('Align this area');
   onComment.mockReturnValue(true);
   await fireEvent.click(screen.getByRole('button',{name:'Save'}));
@@ -157,7 +157,7 @@ it('keeps area comments anchored while zooming and scrolling, including an open 
   render(ReviewCanvas,{pkg,onComment});
   await screen.findByAltText('Settings — After');
   await fireEvent.change(screen.getByLabelText('Screenshot zoom'),{target:{value:'200'}});
-  await fireEvent.click(screen.getByRole('button',{name:'Mark area'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   const surface=screen.getByRole('button',{name:'Place comment on After screenshot'});
   const stage=surface.parentElement!, viewport=stage.closest<HTMLElement>('.viewport')!;
   let bounds={left:-100,top:-50,width:800,height:600};
@@ -167,7 +167,7 @@ it('keeps area comments anchored while zooming and scrolling, including an open 
   Object.defineProperty(surface,'setPointerCapture',{value:vi.fn()});
   await fireEvent(surface,new MouseEvent('pointerdown',{bubbles:true,button:0,clientX:100,clientY:100}));
   await fireEvent(surface,new MouseEvent('pointermove',{bubbles:true,clientX:300,clientY:250}));
-  await fireEvent(surface,new MouseEvent('pointerup',{bubbles:true}));
+  await fireEvent(surface,new MouseEvent('pointerup',{bubbles:true,clientX:300,clientY:250}));
   await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Keep this position'}});
   const pin=screen.getByRole('button',{name:'Comment 1'});
   const region=screen.getByRole('button',{name:'Open area comment 1'});
@@ -192,10 +192,9 @@ it('keeps area comments anchored while zooming and scrolling, including an open 
 });
 
 
-it('edits on the image with the info rail hidden, and closes without losing the draft',async()=>{
+it('edits on the image and closes without losing the draft',async()=>{
   render(ReviewCanvas,{pkg,onComment:()=>true});
   await screen.findByAltText('Settings — After');
-  await fireEvent.click(screen.getByRole('button',{name:'Screen details'}));
   await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   expect(screen.queryByRole('complementary',{name:'Screen details'})).toBeNull();
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
@@ -294,7 +293,7 @@ it.each(['metaKey','ctrlKey'])('saves with %s+Enter, preserving normal typing an
   await fireEvent.keyDown(field,{key:'Enter',[modifier]:true});
   expect(onComment).not.toHaveBeenCalled();
   await fireEvent.input(field,{target:{value:'Keep every line'}});
-  for (const key of ['c','r','n','i','b','1','4','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace','Enter','?']) {
+  for (const key of ['c','r','n','b','1','4','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace','Enter','?']) {
     expect(await fireEvent.keyDown(field,{key})).toBe(true);
   }
   expect(field).toHaveValue('Keep every line');
@@ -326,8 +325,6 @@ it('navigates images and comparison modes, zooms, and exposes shortcut help with
   for (const [key,value] of [['+','150'],['=','200'],['-','150'],['0','100']]) {
     await fireEvent.keyDown(canvas,{key});expect(screen.getByLabelText('Screenshot zoom')).toHaveValue(value);
   }
-  await fireEvent.keyDown(canvas,{key:'i'});
-  expect(screen.queryByRole('complementary',{name:'Screen details'})).toBeNull();
   await fireEvent.keyDown(canvas,{key:'b'});expect(toggle).toHaveBeenCalledOnce();
   await fireEvent.keyDown(canvas,{key:'?'});
   expect(screen.getByRole('complementary',{name:'Screenshot shortcuts'})).toBeInTheDocument();
@@ -403,4 +400,75 @@ it.each(['Backspace','Delete'])('deletes the selected comment with Command+%s wh
   expect(remove).toHaveBeenCalledWith(0,expect.stringContaining('Selected comment'));
   expect(screen.queryByRole('textbox')).toBeNull();
   expect(screen.queryByRole('button',{name:'Comment 1'})).toBeNull();
+});
+
+it('places arrows and ellipses from the keyboard without a comment, and adds words on a double click',async()=>{
+  const onComment=vi.fn().mockReturnValue(true);
+  render(ReviewCanvas,{pkg,onComment});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Draw arrow'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, arrow from top-left: x=40%, y=50% to x=60%, y=50%\nMarked without a comment.'),undefined);
+  await fireEvent.click(screen.getByRole('button',{name:'Draw ellipse'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('After screenshot, ellipse from top-left: x=50%, y=50%, width=20%, height=20%\nMarked without a comment.'),undefined);
+  expect(screen.queryByRole('button',{name:/^Comment \d/})).toBeNull();
+  const sent=onComment.mock.calls.at(-1)![1];
+  await fireEvent.dblClick(screen.getByRole('button',{name:'Open ellipse comment'}));
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Too round'}});
+  await fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('ellipse from top-left: x=50%, y=50%, width=20%, height=20%\nToo round'),sent);
+});
+
+it('arms a drawing tool from its shortcut and refuses freehand without a pointer',async()=>{
+  render(ReviewCanvas,{pkg,onComment:()=>true});
+  await screen.findByAltText('Settings — After');
+  const section=screen.getByRole('region',{name:'Screenshot review canvas'});
+  await fireEvent.keyDown(section,{key:'l'});
+  expect(screen.getByRole('button',{name:'Draw line'})).toHaveAttribute('aria-pressed','true');
+  await fireEvent.keyDown(section,{key:'p'});
+  await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
+  expect(screen.getByRole('status')).toHaveTextContent('Freehand drawing needs a pointer');
+});
+
+it('ends an arrow where the pointer is released, even without a final move',async()=>{
+  const onComment=vi.fn().mockReturnValue(true);
+  render(ReviewCanvas,{pkg,onComment});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Draw arrow'}));
+  const surface=screen.getByRole('button',{name:'Place comment on After screenshot'});
+  surface.getBoundingClientRect=()=>({left:0,top:0,width:100,height:100,right:100,bottom:100,x:0,y:0,toJSON(){}}) as DOMRect;
+  surface.setPointerCapture=()=>{};
+  const at=(type:string,x:number,y:number)=>{const e=new MouseEvent(type,{clientX:x,clientY:y,button:0,bubbles:true,cancelable:true});Object.defineProperty(e,'pointerId',{value:1});return e;};
+  await fireEvent(surface,at('pointerdown',10,20));
+  await fireEvent(surface,at('pointermove',40,20));
+  await fireEvent(surface,at('pointerup',60,20));
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('arrow from top-left: x=10%, y=20% to x=60%, y=20%'),undefined);
+});
+
+it('locks a line to the nearer axis while Shift is held',async()=>{
+  const onComment=vi.fn().mockReturnValue(true);
+  render(ReviewCanvas,{pkg,onComment});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Draw line'}));
+  const surface=screen.getByRole('button',{name:'Place comment on After screenshot'});
+  surface.getBoundingClientRect=()=>({left:0,top:0,width:100,height:100,right:100,bottom:100,x:0,y:0,toJSON(){}}) as DOMRect;
+  surface.setPointerCapture=()=>{};
+  const at=(type:string,x:number,y:number,shiftKey=false)=>{const e=new MouseEvent(type,{clientX:x,clientY:y,button:0,shiftKey,bubbles:true,cancelable:true});Object.defineProperty(e,'pointerId',{value:1});return e;};
+  await fireEvent(surface,at('pointerdown',10,20));
+  await fireEvent(surface,at('pointermove',60,28,true));
+  await fireEvent(surface,at('pointerup',60,28,true));
+  expect(onComment).toHaveBeenLastCalledWith(0,expect.stringContaining('line from top-left: x=10%, y=20% to x=60%, y=20%'),undefined);
+});
+
+it('opens the comment of a saved drawing by double click while a drawing tool is still armed',async()=>{
+  render(ReviewCanvas,{pkg,onComment:()=>true});
+  await screen.findByAltText('Settings — After');
+  await fireEvent.click(screen.getByRole('button',{name:'Draw arrow'}));
+  const surface=screen.getByRole('button',{name:'Place comment on After screenshot'});
+  await fireEvent.click(surface);
+  expect(screen.queryByRole('textbox',{name:'Screenshot comment'})).toBeNull();
+  await fireEvent.dblClick(surface);
+  expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toBeInTheDocument();
 });

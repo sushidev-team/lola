@@ -27,7 +27,8 @@ beforeEach(() => {
   vi.spyOn(store,'refresh').mockResolvedValue(undefined);
 });
 afterEach(() => {cleanup();feedback.clear(id);nav.closeOverlay();vi.restoreAllMocks();vi.unstubAllGlobals();});
-async function openScreens() { await fireEvent.click(await screen.findByRole('tab',{name:'Screenshots'})); }
+// Overview and screenshots share one screen, so the canvas is simply waited for.
+async function openScreens() { await screen.findByRole('region',{name:'Screenshot review canvas'}); }
 
 it('shows material before GitHub completes and shares the pending status request with PR actions',async()=>{
   let finish!:(value:ReturnType<typeof status>)=>void;
@@ -81,7 +82,7 @@ it('marks only the inspected package, retains the baseline on refresh, and compa
   expect(await screen.findByRole('button',{name:'Reviewed'})).toBeDisabled();
   const next=pkg({id:'new-package',body:'## Changes\nCorrected spacing.\n## Risks\nNew risk.'});
   read.mockResolvedValue({packages:[next,pkg()],reviewed:{[id]:reviewed},reviewTracking:true});
-  await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
+  await fireEvent.focus(window);
   await fireEvent.click(await screen.findByRole('button',{name:'View latest package'}));
   await fireEvent.click(await screen.findByRole('button',{name:'See changes since review'}));
   expect(await screen.findByRole('heading',{name:'Since your last review'})).toBeInTheDocument();
@@ -201,9 +202,10 @@ it('shows retained material, missing baseline, and truthful revision freshness',
   await fireEvent.change(screen.getByLabelText('Screenshot zoom'),{target:{value:'150'}});
   expect(screen.getByLabelText('Screenshot zoom')).toHaveValue('150');
   facts.mockResolvedValue(status({head:'e'.repeat(40)}));
-  await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
-  await fireEvent.click(screen.getByRole('tab',{name:'Overview'}));
-  await screen.findByText(/Outdated material/);
+  await fireEvent.focus(window);
+  await fireEvent.click(screen.getByRole('tab',{name:'Review'}));
+  await screen.findByText('Outdated');
+  expect(screen.queryByText(/Outdated material|Older revision/)).toBeNull();
 });
 
 it('batches revision and screenshot context, preserves failed sends, then clears accepted feedback',async()=>{
@@ -215,7 +217,6 @@ it('batches revision and screenshot context, preserves failed sends, then clears
   await fireEvent.click(screen.getByRole('button',{name:'Save'}));
   const note=feedback.noteFor(id);
   expect(note).toContain(`Review package ${pkg().id}`);expect(note).toContain(`Head: ${head}`);expect(note).toContain('Section: Screen 1: Settings');
-  await fireEvent.click(screen.getByRole('button',{name:/Checks & feedback/}));
   send.mockRejectedValueOnce(new Error('offline'));
   await fireEvent.click(screen.getByRole('button',{name:'Send feedback to agent'}));
   await screen.findByText(/Feedback was not accepted/);expect(feedback.noteFor(id)).toBe(note);
@@ -253,7 +254,6 @@ it('retains saved annotations across reopening and updates their pending feedbac
   expect(feedback.noteFor(id)).toContain('Updated annotation');
   expect(feedback.noteFor(id)).not.toContain('Original annotation');
   expect(feedback.noteFor(id).match(/Annotation /g)).toHaveLength(1);
-  await fireEvent.click(screen.getByRole('button',{name:/Checks & feedback/}));
   send.mockResolvedValue({delivered:false,queued:true} as never);
   await fireEvent.click(screen.getByRole('button',{name:'Send feedback to agent'}));
   await screen.findByText(/Feedback accepted/);
@@ -269,8 +269,8 @@ it('retains saved annotations across reopening and updates their pending feedbac
 it('keeps the inspected revision when a newer package arrives',async()=>{
   render(ReviewWorkspace,{sessionId:id});await openScreens();
   read.mockResolvedValue({packages:[pkg({id:'f'.repeat(64),title:'Corrected layout'}),pkg()]});
-  await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
-  await fireEvent.click(screen.getByRole('tab',{name:'Overview'}));
+  await fireEvent.focus(window);
+  await fireEvent.click(screen.getByRole('tab',{name:'Review'}));
   await screen.findByText(/A newer review package is available/);
   expect(screen.getByRole('heading',{name:'A clearer settings screen'})).toBeInTheDocument();
   await fireEvent.click(screen.getByRole('button',{name:'View latest package'}));
@@ -280,7 +280,7 @@ it('keeps the inspected revision when a newer package arrives',async()=>{
 it('does not call unknown freshness current, and allows retry on old daemon errors',async()=>{
   read.mockRejectedValueOnce(new Error('unknown cmd "reviewPackages"'));facts.mockRejectedValue(new Error('offline'));
   render(ReviewWorkspace,{sessionId:id});await screen.findByRole('alert');
-  await fireEvent.click(screen.getByRole('button',{name:'Refresh review'}));
+  await fireEvent.focus(window);
   await screen.findByText('Not verified',{exact:true});
   expect(screen.queryByText(/Package head matches/)).toBeNull();
 });
@@ -322,7 +322,6 @@ it('keeps retained material readable after the session is removed without offeri
   expect(await screen.findByAltText('Settings — After')).toBeInTheDocument();
   expect(screen.queryByRole('tab',{name:'Code changes'})).toBeNull();
   expect(screen.queryByRole('button',{name:'Add to feedback'})).toBeNull();
-  await fireEvent.click(screen.getByRole('button',{name:/Checks & feedback/}));
   expect(screen.getByText(/Session ended/)).toBeInTheDocument();
 });
 
@@ -342,7 +341,6 @@ it('saves and sends material beyond the old shared 4000-character limit',async()
   const note=feedback.noteFor(id);
   expect(note.length).toBeGreaterThan(4000);
   expect(send).not.toHaveBeenCalled();
-  await fireEvent.click(screen.getByRole('button',{name:/Checks & feedback/}));
   send.mockRejectedValueOnce(new Error('Queue unavailable'));
   await fireEvent.click(screen.getByRole('button',{name:'Send feedback to agent'}));
   await screen.findByText(/Feedback was not accepted/);
@@ -360,7 +358,7 @@ it('deletes saved and unsaved annotations without removing other pending feedbac
   await screen.findByAltText('Settings — After');
   await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
-  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Remove this annotation'}});
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Remove this annotation'}});
   await fireEvent.click(screen.getByRole('button',{name:'Save'}));
   await fireEvent.click(screen.getByRole('button',{name:'Comment 1'}));
   await fireEvent.click(screen.getByRole('button',{name:'Delete comment'}));
@@ -369,7 +367,7 @@ it('deletes saved and unsaved annotations without removing other pending feedbac
   expect(feedback.noteFor(id)).toBe('Keep other feedback');
   await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
-  await fireEvent.input(screen.getByRole('textbox'),{target:{value:'Unfinished'}});
+  await fireEvent.input(screen.getByRole('textbox',{name:'Screenshot comment'}),{target:{value:'Unfinished'}});
   await fireEvent.click(screen.getByRole('button',{name:'Delete comment'}));
   expect(screen.queryByRole('button',{name:'Comment 1'})).toBeNull();
   expect(feedback.noteFor(id)).toBe('Keep other feedback');
@@ -379,30 +377,45 @@ it('deletes saved and unsaved annotations without removing other pending feedbac
 
 it('routes screenshot shortcuts from review chrome and stops routing when another tab is selected',async()=>{
   render(ReviewWorkspace,{sessionId:id});await openScreens();await screen.findByAltText('Settings — After');
-  const tab=screen.getByRole('tab',{name:'Screenshots'});
-  await fireEvent.keyDown(tab,{key:'b'});expect(screen.getByRole('complementary',{name:'Review actions'})).toBeInTheDocument();
+  const tab=screen.getByRole('tab',{name:'Review'});
+  expect(screen.getByRole('complementary',{name:'Review actions'})).toBeInTheDocument();
+  await fireEvent.keyDown(tab,{key:'b'});expect(screen.queryByRole('complementary',{name:'Review actions'})).toBeNull();
   await fireEvent.keyDown(tab,{key:'c'});expect(screen.getByRole('button',{name:'Add pin'})).toHaveAttribute('aria-pressed','true');
   await fireEvent.keyDown(screen.getByRole('button',{name:'Place comment on After screenshot'}),{key:'Escape'});
-  await fireEvent.click(screen.getByRole('tab',{name:'Overview'}));
-  await fireEvent.keyDown(screen.getByRole('tab',{name:'Overview'}),{key:'c'});
+  await fireEvent.click(screen.getByRole('tab',{name:'Code changes'}));
+  await fireEvent.keyDown(screen.getByRole('tab',{name:'Review'}),{key:'c'});
   expect(screen.queryByRole('button',{name:'Add pin'})).toBeNull();
 });
 
 
-it('opens the selected overview thumbnail directly in the screenshot canvas',async()=>{
+it('shows the overview and the screenshots side by side, and steps through the screens',async()=>{
   read.mockResolvedValue({packages:[pkg({screens:[{title:'Desktop',after:'desktop'},{title:'Phone',after:'phone'}]})]});
   render(ReviewWorkspace,{sessionId:id});
-  await fireEvent.click(await screen.findByRole('button',{name:'Review screenshot: Phone'}));
+  expect(await screen.findByRole('heading',{name:'A clearer settings screen'})).toBeInTheDocument();
+  expect(await screen.findByAltText('Desktop — After')).toBeInTheDocument();
+  expect(screen.queryByRole('tab',{name:'Screenshots'})).toBeNull();
+  await fireEvent.click(screen.getByRole('button',{name:'Next'}));
   expect(await screen.findByAltText('Phone — After')).toBeInTheDocument();
-  expect(screen.getByRole('tab',{name:'Screenshots'})).toHaveAttribute('aria-selected','true');
+});
+
+it('reviews a session that has no pull request yet',async()=>{
+  const bare=freshSession({});
+  read.mockResolvedValue({packages:[pkg({session:bare,pr:0})]});
+  render(ReviewWorkspace,{sessionId:bare});
+  expect(await screen.findByRole('heading',{name:'A clearer settings screen'})).toBeInTheDocument();
+  expect(screen.getByText('No PR yet')).toBeInTheDocument();
+  expect(screen.getByText('No pull request yet')).toBeInTheDocument();
+  expect(facts).not.toHaveBeenCalled();
+  expect(screen.getByRole('textbox',{name:'Review comment'})).toBeInTheDocument();
+  feedback.clear(bare);
 });
 
 
-it('incorporates checks and feedback into Overview without opening a side panel',async()=>{
+it('keeps checks and feedback beside the review without opening anything',async()=>{
   feedback.setNote(id,'Review this carefully');
   render(ReviewWorkspace,{sessionId:id});
   await screen.findByRole('heading',{name:'A clearer settings screen'});
-  expect(screen.queryByRole('complementary',{name:'Review actions'})).toBeNull();
+  expect(screen.getByRole('complementary',{name:'Review actions'})).toBeInTheDocument();
   expect(await screen.findByRole('button',{name:'Squash and merge'})).toBeInTheDocument();
   expect(screen.getByRole('button',{name:'Send feedback to agent'})).toBeEnabled();
   await fireEvent.input(screen.getByRole('textbox',{name:'Review comment'}),{target:{value:'Check the error state'}});
@@ -443,9 +456,8 @@ it('requests a revision-bound self-assessment without sending draft review feedb
   feedback.setNote(id,'Keep my unsent comments');
   talkSvc.Say.mockResolvedValueOnce({item:'h',delivered:true});
   render(ReviewWorkspace,{sessionId:id});
-  await fireEvent.click(await screen.findByRole('button',{name:'About confidence'}));
-  await fireEvent.click(await screen.findByRole('button',{name:'Ask agent for self-assessment'}));
-  expect(await screen.findByRole('button',{name:'Self-assessment requested'})).toBeDisabled();
+  await fireEvent.click(await screen.findByRole('button',{name:'Update review'}));
+  expect(await screen.findByRole('button',{name:'Update requested'})).toBeDisabled();
   expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining(`Add an explicit self-assessment to review package ${pkg().id}`)});
   expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining('Score: N/100')});
   expect(talkSvc.Say).toHaveBeenCalledWith({session:id,text:expect.stringContaining('Do not lower it solely because human approval is pending')});
@@ -460,13 +472,12 @@ it('opens capture from review and selects the saved screenshot in its new versio
  await waitFor(()=>expect(button).toBeEnabled());await fireEvent.click(button);
  await fireEvent.input(screen.getByLabelText('Page URL'),{target:{value:'http://localhost:3000'}});
  await fireEvent.submit(screen.getByRole('button',{name:'Capture & save'}).closest('form')!);
- await waitFor(()=>expect(screen.getByRole('tab',{name:'Screenshots'})).toHaveAttribute('aria-selected','true'));
- expect(screen.getByRole('heading',{name:'Captured page'})).toBeInTheDocument();
+  expect(await screen.findByAltText('Captured page — After')).toBeInTheDocument();
  expect(screen.queryByRole('region',{name:'Capture screenshot'})).toBeNull();
 });
 it('keeps capture unavailable for stale review material',async()=>{
  facts.mockResolvedValue(status({head:'9'.repeat(40)}));render(ReviewWorkspace,{sessionId:id});
- await screen.findByText('Older revision');expect(screen.getByRole('button',{name:'Capture screenshot'})).toBeDisabled();
+ await screen.findByText('Outdated');expect(screen.getByRole('button',{name:'Capture screenshot'})).toBeDisabled();
 });
 
 it('embedded: no modal, tabs and Mark reviewed are handed to the host',async()=>{
@@ -536,4 +547,38 @@ it('phone: no Capture and no check setup, whatever the tier; screenshots are sta
     expect(feedback.noteFor(id)).toMatch(/Labels are cramped$/);
     expect(await screen.findByText('Labels are cramped')).toBeInTheDocument();
   }finally{setTouchSurface(null);}
+});
+
+it('returns to the Review tab to show a screenshot captured from Code changes',async()=>{
+ const next=pkg({id:'e'.repeat(64),screens:[...pkg().screens,{title:'Captured page',after:'f'.repeat(64)}]});
+ vi.mocked(DaemonService.ReviewPackageCapture).mockResolvedValue(next);render(ReviewWorkspace,{sessionId:id});
+ await fireEvent.click(await screen.findByRole('tab',{name:'Code changes'}));
+ const button=await screen.findByRole('button',{name:'Capture screenshot'});
+ await waitFor(()=>expect(button).toBeEnabled());await fireEvent.click(button);
+ await fireEvent.input(screen.getByLabelText('Page URL'),{target:{value:'http://localhost:3000'}});
+ await fireEvent.submit(screen.getByRole('button',{name:'Capture & save'}).closest('form')!);
+ expect(await screen.findByAltText('Captured page — After')).toBeInTheDocument();
+ expect(screen.getByRole('tab',{name:'Review'})).toHaveAttribute('aria-selected','true');
+});
+
+it('resizes the material and checks columns from the keyboard and remembers the width',async()=>{
+  render(ReviewWorkspace,{sessionId:id});
+  const left=await screen.findByRole('separator',{name:'Resize material column'});
+  expect(left).toHaveAttribute('aria-valuenow','300');
+  await fireEvent.keyDown(left,{key:'ArrowRight'});
+  expect(left).toHaveAttribute('aria-valuenow','316');
+  expect(localStorage.getItem('lola.review.left')).toBe('316');
+  const aside=screen.getByRole('separator',{name:'Resize checks column'});
+  await fireEvent.keyDown(aside,{key:'ArrowLeft'});
+  expect(aside).toHaveAttribute('aria-valuenow','316');
+  await fireEvent.keyDown(left,{key:'Home'});
+  expect(left).toHaveAttribute('aria-valuenow','300');
+});
+
+it('always offers Send, enabled once there is a typed or queued comment',async()=>{
+  render(ReviewWorkspace,{sessionId:id});
+  const sendButton=await screen.findByRole('button',{name:'Send feedback to agent'});
+  expect(sendButton).toBeDisabled();
+  await fireEvent.input(screen.getByRole('textbox',{name:'Review comment'}),{target:{value:'Fix the badge font'}});
+  expect(sendButton).toBeEnabled();
 });
