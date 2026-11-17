@@ -99,8 +99,16 @@ func (s *Server) RecheckMembers() int {
 		c.mu.Unlock()
 		for _, sub := range stale {
 			sub.close()
-			c.refusePane("", sub.pane, protocol.CodeUnknownPane, "this session is no longer shared with you")
 			n++
+		}
+		if len(stale) > 0 {
+			// Off the caller's goroutine: a write to a slow peer is bounded by the
+			// connection's write deadline, and must not stall the daemon's reload.
+			go func(c *conn, stale []*subscription) {
+				for _, sub := range stale {
+					c.refusePane("", sub.pane, protocol.CodeUnknownPane, "this session is no longer shared with you")
+				}
+			}(c, stale)
 		}
 	}
 	return n
