@@ -484,9 +484,9 @@
   .no-shots { display:grid; justify-items:center; align-content:center; gap:10px; height:100%; padding:32px; text-align:center; color:var(--color-faint); }
   .no-shots h2 { font-size:15px; font-weight:600; color:var(--color-ink); }
   .no-shots p { max-width:38ch; font-size:13px; line-height:1.6; color:var(--color-ink-2); }
-  .desk-aside { grid-template-rows:minmax(0,1fr) auto; gap:0; padding:0; overflow:hidden; }
-  .aside-scroll { min-height:0; overflow:auto; display:grid; align-content:start; gap:16px; padding:18px 18px 8px; }
-  .aside-feedback { padding:14px 18px 18px; border-top:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 5%,var(--color-canvas)); max-height:55%; overflow:auto; }
+  .desk-aside { display:flex; flex-direction:column; gap:0; padding:0; overflow:hidden; }
+  .aside-scroll { flex:1 1 0; min-height:96px; overflow:auto; display:grid; align-content:start; gap:16px; padding:18px 18px 8px; }
+  .aside-feedback { flex:0 0 auto; padding:14px 18px 18px; border-top:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 5%,var(--color-canvas)); max-height:65%; overflow:auto; }
   .no-pr { display:grid; gap:6px; padding:14px; border:1px dashed var(--color-edge); border-radius:10px; }
   .no-pr h3 { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--color-ink); }
   .no-pr p { font-size:12px; line-height:1.6; color:var(--color-ink-2); }
