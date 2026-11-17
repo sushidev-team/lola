@@ -78,8 +78,8 @@
   .confirmation-section { display:grid; gap:6px; }
   .confirmation-lead { font-size:13px; line-height:1.5; color:var(--color-ink); }
   .confirmation-subject { padding:9px 12px; border:1px solid var(--color-edge); border-radius:8px; background:color-mix(in srgb,var(--color-ink) 5%,var(--color-canvas)); font-family:var(--font-mono); font-size:13px; line-height:1.5; color:var(--color-ink); white-space:pre-wrap; }
-  .confirmation-files { display:grid; margin:0; padding:2px 0; list-style:none; max-height:176px; overflow:auto; border:1px solid var(--color-edge); border-radius:8px; background:color-mix(in srgb,var(--color-ink) 4%,var(--color-canvas)); }
-  .confirmation-file { display:flex; align-items:center; gap:8px; padding:5px 11px; min-width:0; color:var(--color-faint); }
+  .confirmation-files { display:grid; gap:2px; margin:0; padding:0; list-style:none; max-height:176px; overflow:auto; }
+  .confirmation-file { display:flex; align-items:center; gap:8px; padding:2px 0; min-width:0; color:var(--color-faint); }
   .confirmation-path { min-width:0; font-family:var(--font-mono); font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
   .confirmation-dir { color:var(--color-faint); }
   .confirmation-path strong { font-weight:600; color:var(--color-ink); }
