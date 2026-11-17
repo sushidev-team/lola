@@ -15,7 +15,6 @@
   const req = $derived(confirm.request);
   const descriptionId = $props.id();
   const danger = $derived((req?.confirmVariant ?? "danger-solid") === "danger-solid");
-  const files = $derived(req?.subjectKind === "files" ? req.subject?.split("\n").filter(Boolean) ?? [] : []);
   // One sentence per row; the irreversible one is set apart so it is the last thing read.
   const notes = $derived((req?.detail?.match(/[^.!?]+[.!?]+/g) ?? (req?.detail ? [req.detail] : [])).map(text => text.trim()));
   const irreversible = (text: string) => /cannot be undone|permanent/i.test(text);
@@ -28,22 +27,23 @@
 {#if req}
   <Modal title={req.title} onClose={() => confirm.cancel()} width="480px" describedBy={descriptionId}>
     <div id={descriptionId} class="confirmation-copy" data-confirm>
-      {#if files.length}
-        <section class="confirmation-section" aria-label="Affected files">
-          <h3 class="confirmation-label">{files.length === 1 ? "File" : "Files"}<span>{files.length}</span></h3>
-          <ul class="confirmation-files">
-            {#each files as path (path)}
+      {#each req.fileGroups ?? [] as group (group.text)}
+        <section class="confirmation-section">
+          <p class="copy confirmation-lead">{group.text}</p>
+          <ul class="confirmation-files" aria-label={group.text}>
+            {#each group.files as path (path)}
               <li class="confirmation-file" title={path}><Icon name="file-text" size={13} /><span class="confirmation-path"><span class="confirmation-dir">{dir(path)}</span><strong>{leaf(path)}</strong></span></li>
             {/each}
           </ul>
         </section>
-      {:else if req.subject}<p class="selectable confirmation-subject">{req.subject}</p>{/if}
+      {/each}
+      {#if req.subject}<p class="selectable confirmation-subject">{req.subject}</p>{/if}
       {#if req.body}<p class="copy confirmation-body">{req.body}</p>{/if}
       {#if notes.length}
         <ul class="confirmation-notes">
           {#each notes as note (note)}
             {#if irreversible(note)}<li class="confirmation-note warn"><Icon name="triangle-alert" size={14} /><span>{note}</span></li>
-            {:else}<li class="confirmation-note"><span class="dot" aria-hidden="true"></span><span>{note}</span></li>{/if}
+            {:else}<li class="confirmation-note"><span>{note}</span></li>{/if}
           {/each}
         </ul>
       {/if}
@@ -76,8 +76,7 @@
   .confirmation-actions { justify-content:flex-end; gap:8px; }
   .confirmation-copy { min-width:0; overflow-wrap:anywhere; display:grid; gap:14px; }
   .confirmation-section { display:grid; gap:6px; }
-  .confirmation-label { display:flex; align-items:center; gap:6px; margin:0; font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--color-faint); }
-  .confirmation-label span { padding:0 6px; border-radius:999px; background:color-mix(in srgb,var(--color-ink) 9%,transparent); letter-spacing:0; color:var(--color-ink-2); }
+  .confirmation-lead { font-size:13px; line-height:1.5; color:var(--color-ink); }
   .confirmation-subject { padding:9px 12px; border:1px solid var(--color-edge); border-radius:8px; background:color-mix(in srgb,var(--color-ink) 5%,var(--color-canvas)); font-family:var(--font-mono); font-size:13px; line-height:1.5; color:var(--color-ink); white-space:pre-wrap; }
   .confirmation-files { display:grid; margin:0; padding:2px 0; list-style:none; max-height:176px; overflow:auto; border:1px solid var(--color-edge); border-radius:8px; background:color-mix(in srgb,var(--color-ink) 4%,var(--color-canvas)); }
   .confirmation-file { display:flex; align-items:center; gap:8px; padding:5px 11px; min-width:0; color:var(--color-faint); }
@@ -86,8 +85,7 @@
   .confirmation-path strong { font-weight:600; color:var(--color-ink); }
   .confirmation-body { font-size:14px; line-height:1.5; color:var(--color-ink); }
   .confirmation-notes { display:grid; gap:2px; margin:0; padding:0; list-style:none; }
-  .confirmation-note { display:flex; align-items:baseline; gap:9px; font-size:13px; line-height:1.5; color:var(--color-ink-2); }
-  .confirmation-note .dot { flex:none; width:4px; height:4px; border-radius:50%; background:var(--color-faint); transform:translateY(-3px); }
+  .confirmation-note { display:flex; align-items:center; gap:8px; font-size:13px; line-height:1.5; color:var(--color-ink-2); }
   .confirmation-note.warn { align-items:center; margin-top:8px; font-weight:600; color:var(--color-bad); }
   .confirmation-note.warn :global(svg) { flex:none; }
 </style>

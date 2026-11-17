@@ -120,10 +120,12 @@
     if (!total) { await state.load(historyRef, count); return; }
     confirm.ask({
       title: 'Discard unstaged changes?',
-      subjectKind: 'files',
-      subject: [...plan.tracked, ...plan.untracked].join('\n'),
+      fileGroups: [
+        ...(plan.tracked.length ? [{ text: `Restore the following tracked ${plan.tracked.length === 1 ? 'file' : 'files'} to the staged version.`, files: plan.tracked }] : []),
+        ...(plan.untracked.length ? [{ text: `Delete the following untracked ${plan.untracked.length === 1 ? 'file' : 'files'}.`, files: plan.untracked }] : []),
+      ],
       body: '',
-      detail: [plan.tracked.length ? `Restore ${plan.tracked.length} tracked ${plan.tracked.length === 1 ? 'file' : 'files'} to the staged version.` : '', plan.untracked.length ? `Delete ${plan.untracked.length} untracked ${plan.untracked.length === 1 ? 'file' : 'files'}.` : '', 'This cannot be undone.'].filter(Boolean).join(' '),
+      detail: 'This cannot be undone.',
       confirmLabel: 'Discard changes',
       onConfirm: () => {
         if (!mounted || state !== git) return;

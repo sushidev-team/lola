@@ -48,7 +48,7 @@ describe('Project Git staging',()=>{
    const {git}=setup();api.PrepareDiscard.mockResolvedValue({token:'reviewed-files',tracked:['src/partial.ts'],untracked:['src/new.ts']});
    const button=screen.getByRole('button',{name:'Discard all unstaged changes'});
    await fireEvent.click(button);await waitFor(()=>expect(confirm.request).not.toBeNull());
-   expect(confirm.request?.subject).toBe('src/partial.ts\nsrc/new.ts');expect(confirm.request?.detail).toContain('Delete 1 untracked file');expect(confirm.request?.detail).toContain('cannot be undone');
+   expect(confirm.request?.fileGroups).toEqual([{text:'Restore the following tracked file to the staged version.',files:['src/partial.ts']},{text:'Delete the following untracked file.',files:['src/new.ts']}]);expect(confirm.request?.detail).toContain('cannot be undone');
    expect(api.DiscardUnstaged).not.toHaveBeenCalled();confirm.cancel();expect(api.DiscardUnstaged).not.toHaveBeenCalled();
    await fireEvent.click(button);await waitFor(()=>expect(confirm.request).not.toBeNull());confirm.accept();
    await waitFor(()=>expect(api.DiscardUnstaged).toHaveBeenCalledWith('lola','','reviewed-files'));await waitFor(()=>expect(git.busy).toBe(''));
