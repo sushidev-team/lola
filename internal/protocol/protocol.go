@@ -855,6 +855,18 @@ type TicketsData struct {
 	TeamName string      `json:"teamName,omitempty"`
 	TeamKey  string      `json:"teamKey,omitempty"`
 	Issues   []TicketRow `json:"issues"`
+	// Members are the apps of a STACK project, in config order (nil for a
+	// repository): what a start can check out, and which of them an issue's
+	// labels have to ask for.
+	Members []StackMember `json:"members,omitempty"`
+}
+
+// StackMember is one app of a stack as the ticket picker offers it.
+type StackMember struct {
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"` // display name
+	// Always reports a member with no routing labels: every issue gets it.
+	Always bool `json:"always,omitempty"`
 }
 
 // TicketRow is one Linear issue for the picker. Everything past Branch is
@@ -879,6 +891,10 @@ type TicketRow struct {
 	// the same and neither has to parse a timestamp.
 	Updated     string `json:"updated,omitempty"`
 	AlreadyLive bool   `json:"alreadyLive"` // a lola session already holds this issue
+	// Apps are the stack members this issue's labels select (TicketsData.Members
+	// names); nil for a repository project. Display, like the rest: the spawn
+	// selects from the issue's labels itself.
+	Apps []string `json:"apps,omitempty"`
 }
 
 // OpenTicketArgs is the argument payload for cmd=openTicket: start a Linear issue
@@ -893,6 +909,28 @@ type OpenTicketArgs struct {
 	// AgentKind optionally overrides WHICH coding agent runs (claude|codex|
 	// opencode) instead of the project's configured default. "" = configured.
 	AgentKind string `json:"agentKind,omitempty"`
+	// Apps names further members of a STACK project to check out beside the
+	// ones the issue's labels select. Refused for a repository project and for
+	// a name that is not a member.
+	Apps []string `json:"apps,omitempty"`
+}
+
+// AddAppsArgs is the argument payload for cmd=addApps: check further members
+// of its stack out into a RUNNING stack session (the issue's labels missed
+// one). Refused for a session that is not a stack session, a name that is not
+// a member, a member already checked out, and a sandboxed session whose agent
+// is mid-turn (its container has to be restarted to mount the new repository).
+type AddAppsArgs struct {
+	Session string   `json:"session"`
+	Apps    []string `json:"apps"`
+}
+
+// AddAppsData is Response.Data for cmd=addApps. Apps are the members now
+// added; Relaunched reports that the agent was restarted (sandbox).
+type AddAppsData struct {
+	Apps       []string `json:"apps"`
+	Relaunched bool     `json:"relaunched,omitempty"`
+	Message    string   `json:"message,omitempty"`
 }
 
 // RenameProjectArgs is the argument payload for cmd=renameProject: change a

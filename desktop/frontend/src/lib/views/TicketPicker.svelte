@@ -6,6 +6,8 @@
   import type { TicketsData, TicketRow } from "@bindings/internal/protocol";
   import Button from "$lib/components/Button.svelte";
   import Select from "$lib/components/Select.svelte";
+  import { appChooser } from "$lib/appchooser.svelte";
+  import { unrouted } from "$lib/stackapps";
 
   type Scope = "mine" | "team";
   const scopes: { id: Scope; label: string }[] = [
@@ -76,10 +78,42 @@
     void load();
   }
 
-  async function start(t: TicketRow) {
+  // A STACK's members (empty for a repository project). An issue no label
+  // routes to a repository would start with the always-included members only —
+  // or not at all — so that start asks first; `choose` asks on any row.
+  const members = $derived(data?.members ?? []);
+  const canChoose = (t: TicketRow) => members.some((m) => !(t.apps ?? []).includes(m.name));
+
+  async function pickApps(t: TicketRow, missed: boolean): Promise<string[] | null> {
+    const selected = new Set(t.apps ?? []);
+    return appChooser.ask({
+      title: `Repositories for ${t.identifier}`,
+      intro: missed
+        ? `No label on this issue selects a repository of ${projectLabel}. Tick the ones it needs.`
+        : "Tick further repositories this issue needs.",
+      confirm: "Start",
+      choices: members.map((m) => ({
+        name: m.name,
+        label: m.label || m.name,
+        included: selected.has(m.name),
+        note: !selected.has(m.name) ? "" : m.always ? "every issue" : "selected by a label",
+      })),
+      requireOne: false,
+    });
+  }
+
+  async function start(t: TicketRow, choose = false) {
     if (t.alreadyLive) {
       store.setFlash(`${t.identifier} already running`, "warn");
       return;
+    }
+    if (starting) return;
+    let apps: string[] | undefined;
+    const missed = unrouted(t, members);
+    if (missed || (choose && canChoose(t))) {
+      const picked = await pickApps(t, missed);
+      if (picked === null) return;
+      if (picked.length) apps = picked;
     }
     if (starting) return;
     starting = t.identifier;
@@ -90,6 +124,7 @@
       branch: t.branch,
       title: t.title,
       agentKind: selectedAgent || undefined,
+      apps,
     });
     starting = "";
     if (r) nav.goCockpit(nav.project);
@@ -202,7 +237,7 @@
             <th class="w-[160px] px-3 py-2">Status</th>
             <th class="w-[92px] px-3 py-2">Priority</th>
             {#if scope === "team"}<th class="w-[128px] px-3 py-2">Assignee</th>{/if}
-            <th class="w-[92px] px-3 py-2"></th>
+            <th class="{members.length ? 'w-[200px]' : 'w-[92px]'} px-3 py-2"></th>
           </tr>
         </thead>
         <tbody>
@@ -223,6 +258,9 @@
                   {#each (t.labels ?? []).slice(0, 3) as l (l)}
                     <span class="shrink-0 rounded border border-edge px-1 py-[1px] text-sm text-faint">{l}</span>
                   {/each}
+                  {#if unrouted(t, members)}
+                    <span class="shrink-0 rounded border border-warn/50 px-1 py-[1px] text-sm text-warn" title="No label on this issue selects a repository of this stack. Starting it asks which ones to check out.">no repository label</span>
+                  {/if}
                   {#if t.estimate}
                     <span class="num shrink-0 text-sm text-faint" title="estimate">{t.estimate}pt</span>
                   {/if}
@@ -238,7 +276,10 @@
                 <td class="truncate px-3 py-2 text-sm text-faint">{t.assignee || "—"}</td>
               {/if}
               <td class="px-3 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100">
-                <div class="flex items-center justify-end">
+                <div class="flex items-center justify-end gap-1">
+                  {#if !t.alreadyLive && canChoose(t)}
+                    <Button size="xs" disabled={starting === t.identifier} title="Choose which repositories to check out, then start" onclick={() => start(t, true)}>Repositories…</Button>
+                  {/if}
                   <Button size="xs" disabled={starting === t.identifier} onclick={() => start(t)}>
                     {#if t.alreadyLive}Live{:else}Start <span aria-hidden="true"><Icon name="chevron-right" size={14} /></span>{/if}
                   </Button>

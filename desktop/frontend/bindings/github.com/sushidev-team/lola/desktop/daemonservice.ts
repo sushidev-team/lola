@@ -38,6 +38,14 @@ import * as protocol$0 from "../internal/protocol/models.js";
 import * as $models from "./models.js";
 
 /**
+ * AddApps checks further members of its stack out into a running stack
+ * session. A sandboxed session's agent is restarted to mount them.
+ */
+export function AddApps(a: protocol$0.AddAppsArgs): $CancellablePromise<protocol$0.AddAppsData> {
+    return $Call.ByID(4254446312, a);
+}
+
+/**
  * AddressPRFeedback asks the coding agent to validate, fix, and resolve feedback.
  */
 export function AddressPRFeedback(session: string, $number: number): $CancellablePromise<protocol$0.AgentSayData> {

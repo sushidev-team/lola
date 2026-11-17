@@ -680,6 +680,14 @@ class Store {
       return undefined;
     }
   }
+  // Check further members of its stack out into a running stack session. The
+  // daemon's sentence is flashed: it says when a sandboxed agent was restarted.
+  addApps(id: string, apps: string[]) {
+    return this.act(
+      () => DaemonService.AddApps({ session: id, apps }),
+      (r) => r?.message || `added ${apps.join(", ")}`,
+    );
+  }
   switchAgent(id: string, kind: string) {
     return this.act(
       () => DaemonService.SwitchAgent({ session: id, agent: kind }),

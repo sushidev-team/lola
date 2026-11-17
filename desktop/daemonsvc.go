@@ -315,6 +315,15 @@ func (s *DaemonService) OpenTicket(a protocol.OpenTicketArgs) (protocol.OpenData
 	return d, err
 }
 
+// AddApps checks further members of its stack out into a running stack
+// session. A sandboxed session's agent is restarted to mount them.
+func (s *DaemonService) AddApps(a protocol.AddAppsArgs) (protocol.AddAppsData, error) {
+	args, _ := json.Marshal(a)
+	var d protocol.AddAppsData
+	err := call(protocol.Request{Cmd: "addApps", Args: args}, longTimeout, &d)
+	return d, err
+}
+
 // SwitchAgent replaces a session's coding agent with a different kind on the
 // same worktree and branch (the manual half of the agent fallback).
 func (s *DaemonService) SwitchAgent(a protocol.SwitchAgentArgs) (protocol.SwitchAgentData, error) {

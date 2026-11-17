@@ -390,6 +390,9 @@ type SpawnOpts struct {
 	Group   string
 	Attempt int
 	Of      int
+	// Apps names further members of a STACK to check out beside the ones the
+	// issue's labels select (a human's choice in the ticket picker).
+	Apps []string
 }
 
 // SpawnWith is Spawn with explicit SpawnOpts.

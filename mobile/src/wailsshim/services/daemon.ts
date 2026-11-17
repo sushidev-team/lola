@@ -347,6 +347,11 @@ export function RenameSession(id: string, name: string): Promise<void> {
   return bridge.request<void>("DaemonService.RenameSession", "renameSession", { session: id, text: name });
 }
 
+/** Mac only: asked from the desktop's session menu (cmd=addApps is tier never). */
+export function AddApps(_a: P.AddAppsArgs): Promise<P.AddAppsData> {
+  return unsupported("DaemonService.AddApps", MAC_ONLY);
+}
+
 /** Mac only: asked from the desktop's branch graph (cmd=askMerge is tier never). */
 export function AskMerge(_session: string, _branch: string): Promise<P.AskMergeData> {
   return unsupported("DaemonService.AskMerge", MAC_ONLY);
@@ -493,6 +498,7 @@ export function PaneResize(session: string, pane: string, cols: number, rows: nu
 }
 
 export const ROUTES: Routes<typeof Gen.DaemonService, "Panes" | "ShellCreate" | "PaneClose" | "PaneResize"> = {
+  AddApps: { kind: "platform", reason: MAC_ONLY },
   AddressPRFeedback: { kind: "fwd", cmd: "addressPRFeedback" },
   Alive: { kind: "local" },
   Answer: { kind: "fwd", cmd: "answer" },

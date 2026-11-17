@@ -61,6 +61,23 @@ vi.mock("$lib/nav.svelte", () => ({
 }));
 
 import TicketPicker from "./TicketPicker.svelte";
+import { appChooser } from "$lib/appchooser.svelte";
+
+// A stack's picker: web and api are selected by labels, docs by every issue.
+const stackData = {
+  team: "t",
+  teamName: "Nori",
+  teamKey: "NOR",
+  members: [
+    { name: "nori-web", label: "Web" },
+    { name: "nori-api", label: "API" },
+    { name: "nori-docs", label: "Docs", always: true },
+  ],
+  issues: [
+    { ...issues[1], identifier: "NOR-1", uuid: "u1", title: "Routed", apps: ["nori-web", "nori-docs"] },
+    { ...issues[1], identifier: "NOR-2", uuid: "u2", title: "Unrouted", apps: ["nori-docs"] },
+  ],
+};
 
 describe("TicketPicker", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -180,5 +197,44 @@ describe("TicketPicker", () => {
       title: "Timezone issues",
       agentKind: "opencode",
     });
+  });
+
+  it("asks which repositories to check out before starting an issue no label routes", async () => {
+    ticketsMock.mockResolvedValueOnce(stackData as never);
+    render(TicketPicker);
+    await fireEvent.click(await screen.findByText("Unrouted"));
+    // Nothing starts until the person answered.
+    expect(openTicketMock).not.toHaveBeenCalled();
+    const req = appChooser.request!;
+    expect(req.title).toBe("Repositories for NOR-2");
+    expect(req.choices.map((c) => [c.name, c.included, c.note])).toEqual([
+      ["nori-web", false, ""],
+      ["nori-api", false, ""],
+      ["nori-docs", true, "every issue"],
+    ]);
+    appChooser.finish(["nori-api"]);
+    await vi.waitFor(() => expect(openTicketMock).toHaveBeenCalled());
+    expect(openTicketMock).toHaveBeenCalledWith(expect.objectContaining({ identifier: "NOR-2", apps: ["nori-api"] }));
+  });
+
+  it("starts nothing when the repository question is cancelled", async () => {
+    ticketsMock.mockResolvedValueOnce(stackData as never);
+    render(TicketPicker);
+    await fireEvent.click(await screen.findByText("Unrouted"));
+    appChooser.finish(null);
+    await new Promise((r) => setTimeout(r));
+    expect(openTicketMock).not.toHaveBeenCalled();
+    expect(goCockpitMock).not.toHaveBeenCalled();
+  });
+
+  it("starts a routed issue at once, and offers the repository choice on request", async () => {
+    ticketsMock.mockResolvedValueOnce(stackData as never);
+    render(TicketPicker);
+    await fireEvent.click(await screen.findByText("Routed"));
+    expect(appChooser.request).toBeNull();
+    expect(openTicketMock).toHaveBeenCalledWith(expect.objectContaining({ identifier: "NOR-1" }));
+    expect((openTicketMock.mock.calls[0] as unknown as [{ apps?: string[] }])[0].apps).toBeUndefined();
+    // Only the unrouted row is flagged.
+    expect(screen.getAllByText("no repository label")).toHaveLength(1);
   });
 });
