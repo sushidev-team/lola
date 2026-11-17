@@ -1083,10 +1083,10 @@ resolved from `internal/protocol`): 166 case labels today, minus the deleted
 `pairReject`, `devices`, `revokeDevice`, `setDeviceTiers`, `sessionTimeline`; `pairBegin` already
 exists) = 172, plus spec 02's two handled commands `attachImage` and `attachmentImage` (`d.handle`
 cases reached through `Options.Handle` with the peer in the context) = 174, plus spec 03's
-`relayCred` = **176 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
+`relayCred` = **181 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
 `internal/remote`, and `remote.pair`, consumed by `Authenticate`.
 
-Split of the 176: read 24, answer 12, control 23, destructive 3, shell 6, never 108.
+Split of the 181: read 24, answer 12, control 23, destructive 3, shell 6, never 113.
 (Coverage was checked mechanically against `server.go` while writing this spec.)
 
 **read** (24 handled; plus `watch`, `unwatch` from `TransportCommands`)
@@ -1145,7 +1145,7 @@ No other config write may join a tier (§10.1).
 browser helper from the agent-writable `node_modules`, against any http(s) URL the caller
 names). Frame-level: `pty` with `action:"write"`.
 
-**never** — unreachable whatever the device holds (108)
+**never** — unreachable whatever the device holds (113)
 
 | Group | Commands |
 |---|---|

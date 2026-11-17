@@ -481,6 +481,11 @@ type Session struct {
 	// must remove the container even after the project stopped being sandboxed.
 	Sandbox string `json:"sandbox,omitempty"`
 
+	// Share is the session's team sharing state (docs/team-sessions.md); the
+	// zero value means not shared. Written only by the daemon's share commands
+	// and read by the member gate on every frame, so un-sharing is immediate.
+	Share Share `json:"share,omitzero"`
+
 	// Stack marks a session of a STACK project (config kind = "stack"): its
 	// Worktree is a plain FOLDER, not a checkout, and its repositories are
 	// Apps — one worktree and one PR lane each. See stack.go.
@@ -1387,3 +1392,24 @@ func (s Session) HubOpen() bool {
 func (h HubWork) Open() bool {
 	return h.ItemID != "" && !h.LeaseLost && !h.Released && h.Reported == ""
 }
+
+// Share is a session's team sharing state. A shared session's agent pane may
+// be attached by the team members named in With (empty = every member the
+// owner pinned), at Level.
+type Share struct {
+	// ID is the random share id the hub lists. It is unrelated to the session
+	// id, which embeds Linear identifiers.
+	ID string `json:"id,omitempty"`
+	// RV is the rendezvous the daemon dials for when a member connects.
+	RV string `json:"rv,omitempty"`
+	// Title is the owner's own words; the hub and teammates see it.
+	Title string `json:"title,omitempty"`
+	// Level is "view" or "type". "type" lets the member send keystrokes.
+	Level string `json:"level,omitempty"`
+	// With are the members (hub device ids) this share is for; empty = all
+	// pinned members.
+	With []string `json:"with,omitempty"`
+}
+
+// On reports whether the session is shared.
+func (s Share) On() bool { return s.ID != "" }

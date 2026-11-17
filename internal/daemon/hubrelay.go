@@ -295,13 +295,16 @@ func (d *Daemon) relayGather(now time.Time) relayInputs {
 	in.hasServer = d.remote != nil
 	d.remoteMu.Unlock()
 	joined, why := d.relayJoinedWhy(in.hub)
+	// Sharing keeps the relay wanted even with phones off: a teammate dials in
+	// on a share's rendezvous through the same control channel.
+	sharing := cfgErr == "" && d.shareActive(joined)
 	switch {
 	case cfgErr != "":
 		// Its own word, so a UI can tell "config.toml has an error" from
 		// "turned off". It comes first: the running config is the last valid
 		// one, so its relay switch may not be what the file now says.
 		in.reason = "config_error"
-	case !in.remote.RelayOn():
+	case !in.remote.RelayOn() && !sharing:
 		in.reason = "disabled"
 	case !in.hub.Enabled:
 		in.reason = "hub_off"
@@ -313,8 +316,10 @@ func (d *Daemon) relayGather(now time.Time) relayInputs {
 		in.wanted = true
 	}
 	if in.wanted {
-		in.entries = d.relayEntries(now)
-		if len(in.entries) == 0 {
+		if in.remote.RelayOn() {
+			in.entries = d.relayEntries(now)
+		}
+		if len(in.entries) == 0 && !sharing {
 			in.reason = "no_phones"
 		}
 	}
@@ -325,6 +330,14 @@ func (d *Daemon) relayGather(now time.Time) relayInputs {
 // rv: every paired device's record (the previous bearer only while it is live)
 // and the open pairing window (only while it is waiting and unexpired).
 func (d *Daemon) relayEntries(now time.Time) []hubproto.RelayRendezvous {
+	// Phones never ride the relay while [remote] is off: the server may exist
+	// only for team sharing, and it must not admit a phone then.
+	d.mu.Lock()
+	phonesOn := d.cfg == nil || d.cfg.Remote.RelayOn()
+	d.mu.Unlock()
+	if !phonesOn {
+		return nil
+	}
 	var out []hubproto.RelayRendezvous
 	for _, dev := range d.devices.List() {
 		rl := dev.Relay
@@ -861,7 +874,7 @@ func (d *Daemon) relayIncoming(ctx context.Context, rc *hub.RelayClient, ws *hub
 		_ = ws.WriteMessage(b)
 		_ = ws.SetWriteDeadline(time.Time{})
 	}
-	known := false
+	known := d.shareKnownRV(m.RV)
 	for _, e := range d.relayEntries(d.relayNow()) {
 		if e.RV == m.RV {
 			known = true

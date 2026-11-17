@@ -88,6 +88,7 @@ func buildCommandTiers() map[string]string {
 	// Whole protocol lists: a name added to one of them is never by construction.
 	set(protocol.TierNever, protocol.LocalOnlyCommands...)
 	set(protocol.TierNever, protocol.HubHumanCommands...)
+	set(protocol.TierNever, protocol.ShareHumanCommands...)
 	set(protocol.TierNever, protocol.SSHAgentCommands...)
 	set(protocol.TierNever, protocol.SSHHumanCommands...)
 	return m

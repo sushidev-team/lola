@@ -34,6 +34,8 @@ const (
 	RevokedFileName        = "devices.revoked"
 	MembersFileName        = "members.json"
 	MembersRevokedFileName = "members.revoked"
+	OwnersFileName         = "owners.json"
+	OwnersRevokedFileName  = "owners.revoked"
 	FileVersion            = 1
 	MaxDevices             = 16
 	MaxNameRunes           = 64
@@ -122,6 +124,14 @@ type Registry struct {
 // trust yields a registry whose Err is non-nil and which authenticates nobody.
 func Open(home string, now func() time.Time, logf func(string, ...any)) *Registry {
 	return open(home, FileName, RevokedFileName, now, logf)
+}
+
+// OpenOwners opens the registry of teammates whose shared sessions this machine
+// will attach to (owners.json): the other direction of a pin. It is separate
+// from members.json so pinning a key to attach to their sessions never lets
+// them attach to ours.
+func OpenOwners(home string, now func() time.Time, logf func(string, ...any)) *Registry {
+	return open(home, OwnersFileName, OwnersRevokedFileName, now, logf)
 }
 
 // OpenMembers opens the registry of team members who may attach to shared

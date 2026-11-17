@@ -28,7 +28,7 @@ const QueryShare = "share"
 
 // Caps.
 const (
-	MaxSharesPerDevice  = 64
+	MaxSharesPerDevice  = 32
 	MaxShareAudience    = 32
 	MaxShareTitleRunes  = 80
 	MaxMemberIdentities = MaxOrgDevices

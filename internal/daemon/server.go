@@ -94,6 +94,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(d.statusData(ctx))
 	case protocol.CmdHubStatus:
 		return dataResponse(d.hubStatusData())
+	case protocol.CmdShareSession, protocol.CmdShareMembers, protocol.CmdShareTrust, protocol.CmdShareUntrust, protocol.CmdShareOffered:
+		return d.handleShare(ctx, req)
 	case protocol.CmdHubJoin, protocol.CmdHubLeave, protocol.CmdHubBoard, protocol.CmdHubOrg,
 		protocol.CmdHubClaim, protocol.CmdHubRelease, protocol.CmdHubSync, protocol.CmdHubStats,
 		protocol.CmdHubCreateTeam, protocol.CmdHubInvite, protocol.CmdHubTeamSettings, protocol.CmdHubRevoke,
@@ -1145,7 +1147,8 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	d.mu.Unlock()
 	d.sshOnReload()
 
-	serves := nc.Remote.Serves(d.hubRelayJoined(nc.Hub))
+	joined := d.hubRelayJoined(nc.Hub)
+	serves := nc.Remote.Serves(joined) || d.shareActive(joined)
 	if remoteOld != nc.Remote || serves != d.remoteServes.Load() {
 		d.reloadRemote()
 	}
