@@ -26,6 +26,7 @@ const (
 // summary, so it is dropped. handleRemote and the projector both call it.
 func remoteSessionInfo(si protocol.SessionInfo) protocol.SessionInfo {
 	si.SSH = nil
+	si.Share = nil // team sharing is a desktop matter; a phone never sees who is attached
 	return si
 }
 

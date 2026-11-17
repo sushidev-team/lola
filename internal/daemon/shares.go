@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/hubproto"
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/devices"
 	"github.com/sushidev-team/lola/internal/hub"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -708,5 +709,81 @@ func (d *Daemon) shareLoop(ctx context.Context) {
 		case <-st.kick:
 		case <-t.C:
 		}
+	}
+}
+
+// shareAttachments snapshots the live member subscriptions for one pass over the
+// session list.
+func (d *Daemon) shareAttachments() []remote.Attachment {
+	d.remoteMu.Lock()
+	srv := d.remote
+	d.remoteMu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	return srv.MemberAttachments()
+}
+
+// sessionShare is the wire view of a session's share: nil when not shared.
+func (d *Daemon) sessionShare(s session.Session, att []remote.Attachment) *protocol.SessionShare {
+	if !s.Share.On() {
+		return nil
+	}
+	out := &protocol.SessionShare{ID: s.Share.ID, Title: s.Share.Title, Level: s.Share.Level, With: slices.Clone(s.Share.With)}
+	pane := paneTarget(s)
+	for _, a := range att {
+		if a.Pane != pane {
+			continue
+		}
+		out.Attached = append(out.Attached, protocol.ShareViewer{
+			Name: a.Name, Since: a.Since.Unix(), Typed: s.Share.Level == hubproto.LevelType,
+		})
+	}
+	sort.Slice(out.Attached, func(i, j int) bool { return out.Attached[i].Since < out.Attached[j].Since })
+	return out
+}
+
+// shareNewSession applies [hub].share_new_sessions to a session that was just
+// created: shared view-only with every pinned member. It touches only a session
+// that is new, eligible and not yet shared, so a session a person un-shared
+// stays un-shared and one that predates the setting is never changed.
+func (d *Daemon) shareNewSession(id string) {
+	d.mu.Lock()
+	on := d.cfg != nil && d.cfg.Hub.SharesNewSessions()
+	hubCfg := config.HubConfig{}
+	if d.cfg != nil {
+		hubCfg = d.cfg.Hub
+	}
+	d.mu.Unlock()
+	if !on || !d.hubRelayJoined(hubCfg) {
+		return
+	}
+	s, ok := d.sessions.Get(id)
+	if !ok || s.Share.On() || shareable(s) != nil {
+		return
+	}
+	shareID, err := hubproto.NewShareID()
+	if err != nil {
+		return
+	}
+	rv, err := hubproto.NewRelayID()
+	if err != nil {
+		return
+	}
+	title := s.DisplayTitle()
+	if r := []rune(title); len(r) > hubproto.MaxShareTitleRunes {
+		title = string(r[:hubproto.MaxShareTitleRunes])
+	}
+	if !hubproto.ValidShareTitle(title) {
+		title = "Session"
+	}
+	if _, ok := d.sessions.Update(id, func(s *session.Session) bool {
+		if s.Share.On() {
+			return false
+		}
+		s.Share = session.Share{ID: shareID, RV: rv, Title: title, Level: hubproto.LevelView}
+		return true
+	}); ok {
+		d.afterShareChange(context.Background())
 	}
 }

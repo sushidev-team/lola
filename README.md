@@ -1691,6 +1691,7 @@ inheritance, and neither is `[[project]].hub_chores`.
 | `poll_seconds` | int | Hub loop cadence, 60–900 (leases are renewed on it). Absent = `300`. |
 | `apply_policy` | bool | Enforce the verified team policy. Absent = `true`; only meaningful with `trusted_policy_keys`. `false` keeps the policy display-only. |
 | `group_chores` | bool | Give all of a repository's open dependency advisories to ONE agent and one pull request (at most 12). Absent = `true`; `false` claims each alone. |
+| `share_new_sessions` | bool | Start every NEW session shared with the teammates you pinned, view-only (see `docs/team-sessions.md`). Absent = `false`. An existing session, or one you un-share, is never changed. Sharing needs a joined hub; each session can also be shared by hand. |
 
 Both settings screens edit the member's half of this table (TUI: `S` → Team
 hub: enabled, chore kinds, max chores per day, chores need the sandbox, and each

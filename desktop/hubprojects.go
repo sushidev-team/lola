@@ -185,13 +185,14 @@ func (s *ConfigService) PinPolicyKey(keyID, pub string) (bool, error) {
 // through the same applyHubSettings), so a later overlay Save that carries
 // the same values writes nothing new.
 type HubRulesDTO struct {
-	AcceptKinds     []string           `json:"acceptKinds"`
-	MaxClaimsPerDay *int               `json:"maxClaimsPerDay"`
-	RequireSandbox  *bool              `json:"requireSandbox"`
-	PollSeconds     *int               `json:"pollSeconds"`
-	ApplyPolicy     *bool              `json:"applyPolicy"`
-	GroupChores     *bool              `json:"groupChores"`
-	TrustedKeys     []HubTrustedKeyDTO `json:"trustedKeys"`
+	AcceptKinds      []string           `json:"acceptKinds"`
+	MaxClaimsPerDay  *int               `json:"maxClaimsPerDay"`
+	RequireSandbox   *bool              `json:"requireSandbox"`
+	PollSeconds      *int               `json:"pollSeconds"`
+	ApplyPolicy      *bool              `json:"applyPolicy"`
+	GroupChores      *bool              `json:"groupChores"`
+	ShareNewSessions *bool              `json:"shareNewSessions"`
+	TrustedKeys      []HubTrustedKeyDTO `json:"trustedKeys"`
 }
 
 // SaveHubRules writes the given [hub] rules and reloads the daemon. The
@@ -203,7 +204,7 @@ func (s *ConfigService) SaveHubRules(r HubRulesDTO) error {
 	}
 	if err := applyHubSettings(&cfg.Hub, SettingsDTO{
 		HubAcceptKinds: r.AcceptKinds, HubMaxClaimsPerDay: r.MaxClaimsPerDay, HubRequireSandbox: r.RequireSandbox,
-		HubPollSeconds: r.PollSeconds, HubApplyPolicy: r.ApplyPolicy, HubGroupChores: r.GroupChores, HubTrustedKeys: r.TrustedKeys,
+		HubPollSeconds: r.PollSeconds, HubApplyPolicy: r.ApplyPolicy, HubGroupChores: r.GroupChores, HubShareNew: r.ShareNewSessions, HubTrustedKeys: r.TrustedKeys,
 	}); err != nil {
 		return err
 	}

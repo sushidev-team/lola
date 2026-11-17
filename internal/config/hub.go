@@ -86,6 +86,10 @@ type HubConfig struct {
 	// GroupChores gives all of a repository's open dependency advisories to
 	// ONE agent and one pull request (nil = true); false claims each alone.
 	GroupChores *bool `toml:"group_chores,omitempty"`
+	// ShareNewSessions starts every NEW session shared with the pinned team
+	// members, view-only (nil = false). A session started before it was turned
+	// on, or one a person un-shared, is never touched.
+	ShareNewSessions *bool `toml:"share_new_sessions,omitempty"`
 }
 
 // TrustedKeyMap is [hub].trusted_policy_keys: key_id → base64url public key.
@@ -155,6 +159,11 @@ func (h HubConfig) GroupsChores() bool {
 // for a repository's usual backlog, small enough for one reviewable PR.
 const MaxGroupedChores = 12
 
+// SharesNewSessions reports the effective share_new_sessions (default false).
+func (h HubConfig) SharesNewSessions() bool {
+	return h.ShareNewSessions != nil && *h.ShareNewSessions
+}
+
 // PolicyApplies reports the effective apply_policy (default true).
 func (h HubConfig) PolicyApplies() bool {
 	return h.ApplyPolicy == nil || *h.ApplyPolicy
@@ -200,7 +209,7 @@ func (h HubConfig) TrustedKeyEntries() []string {
 func (h HubConfig) isZero() bool {
 	return !h.Enabled && h.URL == "" && h.DeviceName == "" && len(h.AcceptKinds) == 0 &&
 		h.MaxClaimsPerDay == nil && h.RequireSandbox == nil && len(h.TrustedPolicyKeys) == 0 &&
-		h.PollSeconds == 0 && h.ApplyPolicy == nil && h.GroupChores == nil
+		h.PollSeconds == 0 && h.ApplyPolicy == nil && h.GroupChores == nil && h.ShareNewSessions == nil
 }
 
 // hubTable is the Save mirror: nil (table omitted) when nothing is set. Only

@@ -360,3 +360,101 @@ func TestShareCommandsAreHumanOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionsCarryShareStateForTheDesktopOnly(t *testing.T) {
+	rd, sh := newShareDaemon(t)
+	m, k := sh.teammate(t, "ada-mini")
+	d1 := rd.pin(t, m, k)
+	rd.addSession("lola-a", func(s *session.Session) { s.Sandbox = "docker" })
+	if _, err := shareDo[protocol.ShareSessionData](t, rd.Daemon, protocol.CmdShareSession,
+		protocol.ShareSessionArgs{Session: "lola-a", On: true, Title: "api", With: []string{m.DeviceID}}); err != nil {
+		t.Fatal(err)
+	}
+	find := func() protocol.SessionInfo {
+		for _, si := range rd.sessionsData().Sessions {
+			if si.ID == "lola-a" {
+				return si
+			}
+		}
+		t.Fatal("session missing")
+		return protocol.SessionInfo{}
+	}
+	si := find()
+	if si.Share == nil || si.Share.Title != "api" || si.Share.Level != "view" || len(si.Share.With) != 1 {
+		t.Fatalf("share = %+v", si.Share)
+	}
+	// The phone projection never carries it.
+	if remoteSessionInfo(si).Share != nil {
+		t.Fatal("a phone would see who a session is shared with")
+	}
+	// An unshared session carries nothing.
+	rd.addSession("lola-b", nil)
+	for _, s := range rd.sessionsData().Sessions {
+		if s.ID == "lola-b" && s.Share != nil {
+			t.Fatalf("lola-b: %+v", s.Share)
+		}
+	}
+	// Live attachments are shown from the server's list.
+	att := []remote.Attachment{{MemberID: d1.ID, Name: "Ada · mini", Pane: "lola-a", Since: time.Unix(100, 0)}}
+	s, _ := rd.sessions.Get("lola-a")
+	got := rd.sessionShare(s, att)
+	if len(got.Attached) != 1 || got.Attached[0].Name != "Ada · mini" || got.Attached[0].Typed {
+		t.Fatalf("attached = %+v", got.Attached)
+	}
+}
+
+func TestShareNewSessionsSetting(t *testing.T) {
+	rd, sh := newShareDaemon(t)
+	m, k := sh.teammate(t, "ada-mini")
+	rd.pin(t, m, k)
+	setting := func(on bool) {
+		rd.mu.Lock()
+		rd.cfg.Hub.ShareNewSessions = &on
+		rd.mu.Unlock()
+	}
+	shared := func(id string) bool { s, _ := rd.sessions.Get(id); return s.Share.On() }
+
+	// Off (the default): a new session is private.
+	rd.addSession("lola-off", nil)
+	time.Sleep(100 * time.Millisecond)
+	if shared("lola-off") {
+		t.Fatal("a session was shared with the setting off")
+	}
+	// On: a NEW session starts shared, view-only, with everyone pinned.
+	setting(true)
+	rd.addSession("lola-new", nil)
+	waitUntil(t, func() bool { return shared("lola-new") })
+	s, _ := rd.sessions.Get("lola-new")
+	if s.Share.Level != hubproto.LevelView || len(s.Share.With) != 0 || !hubproto.ValidRelayID(s.Share.RV) {
+		t.Fatalf("share = %+v", s.Share)
+	}
+	// The one that predates the setting is untouched.
+	if shared("lola-off") {
+		t.Fatal("turning the setting on shared an existing session")
+	}
+	// A person's un-share sticks: updating the session never re-shares it.
+	if _, err := shareDo[protocol.ShareSessionData](t, rd.Daemon, protocol.CmdShareSession, protocol.ShareSessionArgs{Session: "lola-new"}); err != nil {
+		t.Fatal(err)
+	}
+	rd.sessions.Update("lola-new", func(s *session.Session) bool { s.Title = "retitled"; return true })
+	time.Sleep(100 * time.Millisecond)
+	if shared("lola-new") {
+		t.Fatal("an un-shared session was shared again")
+	}
+	// A session that cannot be shared is skipped quietly.
+	rd.addSession("lola-local", func(s *session.Session) { s.Kind = session.KindLocal })
+	time.Sleep(100 * time.Millisecond)
+	if shared("lola-local") {
+		t.Fatal("a borrowed-directory session was shared")
+	}
+}
+
+func waitUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		if cond() {
+			return
+		}
+	}
+	t.Fatal("condition not reached")
+}

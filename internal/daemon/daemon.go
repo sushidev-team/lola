@@ -687,6 +687,11 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	// Every committed session change reaches the watch hub as a poke; the hub
 	// decides what to publish and does nothing when no phone is watching.
 	d.sessions.OnChange(func(c session.Change) {
+		if c.Prev == nil && c.Next != nil {
+			// A new session: [hub].share_new_sessions may share it. Off this
+			// callback (it runs under the store lock and must not call back in).
+			go d.shareNewSession(c.ID)
+		}
 		bits := pokeRow
 		if talkFieldsChanged(c.Prev, c.Next) {
 			bits |= pokeTalk

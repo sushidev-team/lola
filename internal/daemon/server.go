@@ -889,6 +889,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 	cfg := d.cfg
 	d.mu.Unlock()
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
+	attached := d.shareAttachments()
 	for _, s := range snap {
 		si := protocol.SessionInfo{
 			GoalID: s.GoalID, TaskID: s.TaskID, AttemptID: s.AttemptID,
@@ -993,6 +994,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		si.Board = boardInfo(s.Board, auditClaims(s), now)
 		si.Tasks = s.Tasks
 		si.Hub = hubSessionHub(s)
+		si.Share = d.sessionShare(s, attached)
 		for _, o := range s.Overlaps {
 			si.Overlaps = append(si.Overlaps, protocol.SessionOverlap{
 				Session: o.Session, Issue: o.Issue, Files: slices.Clone(o.Files), More: o.More,

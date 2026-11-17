@@ -147,3 +147,14 @@ type ShareOfferedData struct {
 	Offers  []ShareOffer `json:"offers"`
 	Offline bool         `json:"offline,omitempty"`
 }
+
+// SessionShare is a session's sharing state on the wire (SessionInfo.Share).
+type SessionShare struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Level string `json:"level"`
+	// With are the hub device ids the share is limited to (empty = everyone pinned).
+	With []string `json:"with,omitempty"`
+	// Attached are the teammates attached to it right now.
+	Attached []ShareViewer `json:"attached,omitempty"`
+}

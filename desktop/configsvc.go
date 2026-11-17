@@ -182,6 +182,7 @@ type SettingsDTO struct {
 	HubPollSeconds     *int               `json:"hubPollSeconds"` // effective cadence in seconds
 	HubApplyPolicy     *bool              `json:"hubApplyPolicy"`
 	HubGroupChores     *bool              `json:"hubGroupChores"`
+	HubShareNew        *bool              `json:"hubShareNew"`
 	HubTrustedKeys     []HubTrustedKeyDTO `json:"hubTrustedKeys"`
 }
 
@@ -199,6 +200,8 @@ func hubSettingsDTO(dto *SettingsDTO, h config.HubConfig) {
 	dto.HubMaxClaimsPerDay, dto.HubRequireSandbox, dto.HubPollSeconds, dto.HubApplyPolicy = &claims, &sandbox, &poll, &apply
 	group := h.GroupsChores()
 	dto.HubGroupChores = &group
+	shareNew := h.SharesNewSessions()
+	dto.HubShareNew = &shareNew
 	dto.HubTrustedKeys = []HubTrustedKeyDTO{}
 	for _, e := range h.TrustedKeyEntries() {
 		id, pub, _ := strings.Cut(e, ":")
@@ -228,6 +231,10 @@ func applyHubSettings(h *config.HubConfig, dto SettingsDTO) error {
 	if v := dto.HubGroupChores; v != nil && (h.GroupChores != nil || !*v) {
 		b := *v
 		h.GroupChores = &b
+	}
+	if v := dto.HubShareNew; v != nil && (h.ShareNewSessions != nil || *v) {
+		b := *v
+		h.ShareNewSessions = &b
 	}
 	if v := dto.HubPollSeconds; v != nil {
 		if *v == config.DefaultHubPollSeconds && h.PollSeconds == 0 {
