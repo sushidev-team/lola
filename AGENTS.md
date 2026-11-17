@@ -101,7 +101,7 @@ daemon, runtime and UIs can share them).
   is cobra wiring only.
 
 **Agents, sessions, git**
-- `agent` — kind enum, `Caps` (only claude has feed/send/stop/cards/paste),
+- `agent` — kind enum, `Caps` (claude has feed/send/stop/cards/paste; codex has feed only),
   launch argv, READ-ONLY review argv (`ReviewArgs`), callback configs.
   `config.AgentForProject` resolves project → defaults → claude.
 - `attention` — pane → activity/question classifier (agent-aware).

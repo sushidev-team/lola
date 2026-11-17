@@ -31,7 +31,7 @@ export function isAgentless(s: Shape): boolean {
  * the first paint has no talkState to ask. Unverified means not offered, so this grows only
  * after a real capture of that agent.
  */
-const FEED_AGENTS = new Set(["", "claude"]);
+const FEED_AGENTS = new Set(["", "claude", "codex"]);
 
 export function hasFeedReader(agent: string | undefined): boolean {
   return FEED_AGENTS.has(agent ?? "");

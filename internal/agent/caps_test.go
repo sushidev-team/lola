@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// Claude's come from the spike. The other two are left unpinned here on purpose: each
-// turns on when a real capture of that agent goes in with it.
+// Claude's come from the spike. Each of the others turns on when a real capture of that agent
+// goes in with it.
 func TestCapsClaudeHasEverything(t *testing.T) {
 	c := Caps(Claude)
 	if !c.Feed || !c.Send || !c.Stop || !c.Cards || !c.Cursor {
@@ -18,6 +18,17 @@ func TestCapsClaudeHasEverything(t *testing.T) {
 	// An empty kind resolves to claude everywhere else, so it must here too.
 	if Caps("") != c {
 		t.Errorf(`Caps("") = %+v, want claude's`, Caps(""))
+	}
+}
+
+// Codex's log is read, and that is all: nothing that types into its pane was measured.
+func TestCodexHasTheFeedAndNothingThatTypes(t *testing.T) {
+	c := Caps(Codex)
+	if !c.Feed || c.Send || c.Stop || c.Cards || c.Cursor || c.Paste {
+		t.Errorf("Caps(Codex) = %+v, want Feed alone", c)
+	}
+	if Caps(OpenCode).Feed {
+		t.Error("opencode has no reader")
 	}
 }
 
