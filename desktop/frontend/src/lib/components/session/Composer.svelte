@@ -258,10 +258,17 @@
   }
   // Images dropped anywhere on this session's conversation view attach as a paste of their path would.
   onMount(() =>
-    Events.On("files:dropped", (e) => {
+    Events.On("files:dropped", async (e) => {
       const d = e.data as { target?: string; files?: string[] | null };
       if (d?.target !== dropTargetId(sessionId) || running) return;
-      for (const f of d.files ?? []) if (isImagePath(f)) void attachImageFile(f);
+      // One at a time: each reference is inserted at the caret of the textarea as it now stands,
+      // so the field and the caret must have caught up with the last one first.
+      for (const f of d.files ?? []) {
+        if (!isImagePath(f)) continue;
+        void attachImageFile(f);
+        await tick();
+        await tick();
+      }
     }),
   );
   function onPaste(e: ClipboardEvent) {
