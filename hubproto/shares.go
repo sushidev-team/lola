@@ -32,9 +32,6 @@ const (
 	MaxShareAudience    = 32
 	MaxShareTitleRunes  = 80
 	MaxMemberIdentities = MaxOrgDevices
-	// MaxMemberConnsPerOwner bounds concurrent member attaches to one owner
-	// device (the relay's per-device cap is wider: it also counts phones).
-	MaxMemberConnsPerOwner = 4
 )
 
 // Share levels. A "type" share lets the teammate send keystrokes; it is the

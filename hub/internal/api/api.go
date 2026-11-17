@@ -205,6 +205,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc(hubproto.PathRelayDaemon, s.relayOn(s.authedUpgrade(s.handleRelayDaemon)))
 	mux.HandleFunc(hubproto.PathRelayAccept, s.relayOn(s.authedUpgrade(s.handleRelayAccept)))
 	mux.HandleFunc(hubproto.PathRelayPhone, s.relayOn(s.handleRelayPhone))
+	mux.HandleFunc(hubproto.PathRelayMember, s.relayOn(s.authedUpgrade(s.handleRelayMember)))
+	mux.HandleFunc(hubproto.PathShares, s.sharesRoute())
+	mux.HandleFunc(hubproto.PathShareIdentity, s.authed(http.MethodPost, s.handleShareIdentity))
+	mux.HandleFunc(hubproto.PathShareMembers, s.authed(http.MethodGet, s.handleShareMembers))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, hubproto.CodeNotFound)
 	})

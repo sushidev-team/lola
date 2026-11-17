@@ -258,8 +258,17 @@ func (s *Server) handleRelayPhone(w http.ResponseWriter, r *http.Request) {
 		phoneFail(w, http.StatusUnauthorized, hubproto.CodeUnauthorized, 0)
 		return
 	}
+	s.spliceDial(w, r, device, org, rv, window, rv)
+}
+
+// spliceDial is steps 6 to 9 of a relay dial, shared by the phone leg and the
+// member leg: the dial bucket (keyed by bucketKey), a connection slot under the
+// OWNER device, the offer to its control channel, the wait for its accept leg
+// and the splice. Every failure is an HTTP status before any upgrade.
+func (s *Server) spliceDial(w http.ResponseWriter, r *http.Request, device, org, rv string, window bool, bucketKey string) {
+	rh := s.cfg.Relay
 	// 6.
-	if !rh.AllowAuth(rv) {
+	if !rh.AllowAuth(bucketKey) {
 		phoneFail(w, http.StatusTooManyRequests, hubproto.CodeRateLimited, dialRetryAfter)
 		return
 	}
