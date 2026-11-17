@@ -19,8 +19,9 @@
   //
   // Which row of the footer applies is decided in composer.ts, and what a line starting with `/`
   // or `!` means in slash.ts. This file only draws the answer and carries it out.
-  import { tick, untrack } from "svelte";
-  import { atomicRange, attachmentTone, attachmentToken, expandPastes, fieldSegments, foldsPaste, isImagePath, padAttachments, textSize, tokenAtCaret, tokenStep, tokensIn, type Attachment } from "$lib/composerpaste";
+  import { onMount, tick, untrack } from "svelte";
+  import { Events } from "@wailsio/runtime";
+  import { dropTargetId, atomicRange, attachmentTone, attachmentToken, expandPastes, fieldSegments, foldsPaste, isImagePath, padAttachments, textSize, tokenAtCaret, tokenStep, tokensIn, type Attachment } from "$lib/composerpaste";
   import { TalkService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
   import { ssh, sshClock } from "$lib/ssh.svelte";
@@ -255,6 +256,14 @@
     const worktree = session?.worktree ?? "";
     return prepareImage(() => TalkService.AttachImageFile(worktree, clip.trim()), clip);
   }
+  // Images dropped anywhere on this session's conversation view attach as a paste of their path would.
+  onMount(() =>
+    Events.On("files:dropped", (e) => {
+      const d = e.data as { target?: string; files?: string[] | null };
+      if (d?.target !== dropTargetId(sessionId) || running) return;
+      for (const f of d.files ?? []) if (isImagePath(f)) void attachImageFile(f);
+    }),
+  );
   function onPaste(e: ClipboardEvent) {
     const clip = e.clipboardData?.getData("text/plain") ?? "";
     const el = e.currentTarget as HTMLTextAreaElement;
