@@ -58,4 +58,20 @@ describe('Project Git diff line actions', () => {
     await fireEvent.keyDown(region, { key: 'Enter' });
     expect(onlines).toHaveBeenCalledWith([3]);
   });
+
+  it('folds unchanged lines on request and opens them with above and below rows', async () => {
+    const body = Array.from({ length: 60 }, (_, i) => ' l' + i).join('\n');
+    const long = { ...file, patch: '@@ -1,61 +1,61 @@\n' + body.split('\n').slice(0, 30).join('\n') + '\n-old\n+new\n' + body.split('\n').slice(30).join('\n') + '\n' };
+    render(ProjectGitDiff, { file: long });
+    expect(screen.getByText('l0')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /lines above/ })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Changes only' }));
+    expect(screen.queryByText('l0')).toBeNull();
+    expect(screen.getByText('l27')).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: /Show 20 lines above/ }));
+    expect(screen.getByText('l7')).toBeTruthy();
+    expect(screen.queryByText('l6')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: /Show 20 lines below/ }));
+    expect(screen.getByText('l50')).toBeTruthy();
+  });
 });

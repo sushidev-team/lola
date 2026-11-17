@@ -28,7 +28,7 @@
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
   import { projectGitState, type ProjectGitState } from '$lib/projectgit.svelte';
-  import { folderFirstFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
+  import { folderFirstFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitDiffFile, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
   import { agoPhrase, exactTime } from '$lib/time';
 
   let { project, heading, actions, windowInset = false, active = true }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean; active?: boolean } = $props();
@@ -373,6 +373,18 @@
   const containedBranches = $derived(currentCommit ? branchHistory.get(currentCommit.sha) ?? [] : []);
   const files = $derived(folderFirstFiles(view.diff?.files ?? []));
   const file = $derived(files.find(f => f.path === activeFile) ?? files[0]);
+  // A commit or comparison lists every changed file as chunks; the one on screen is read again
+  // with all its lines, so the diff can show the whole file. Staged and unstaged diffs already do.
+  let fullFile = $state<GitDiffFile | null>(null);
+  $effect(() => {
+    const chosen = file, chosenArea = area, state = view, selection = selected;
+    fullFile = null;
+    if (!chosen || !['commit', 'working'].includes(chosenArea) || chosen.binary || chosen.tooLarge) return;
+    let live = true;
+    untrack(() => { void state.loadFile(chosenArea as GitArea, chosenArea === 'working' || selection.length === 2 ? selection[0] : '', chosenArea === 'working' ? '' : selection.at(-1) ?? '', chosen.path).then(result => { if (live) fullFile = result; }); });
+    return () => { live = false; };
+  });
+  const shownFile = $derived(fullFile && fullFile.path === file?.path ? fullFile : file);
   const totals = $derived(files.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
   const diffTitle = $derived(area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${comparisonLabel(0)} → ${comparisonLabel(1)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
 
@@ -788,7 +800,7 @@
           <div class="comparison-bar"><span><Icon name={selected.length === 2 ? 'git-compare-arrows' : 'file-text'} size={14} />{diffTitle}</span><div>{#if selected.length === 2}<Button size="xs" aria-label="Swap comparison direction" onclick={() => { comparisonBranches = [...comparisonBranches].reverse(); selected = [...selected].reverse(); }}><Icon name="arrow-right-left" size={13} />Swap</Button>{/if}<Button size="xs" icon aria-label="Close diff" onclick={() => diffOpen = false}><Icon name="x" size={14} /></Button></div></div>
           {#if view.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
           {:else if view.diffError}<div class="git-empty" role="alert"><Icon name="circle-alert" size={20} /><p>{view.diffError}</p><Button onclick={() => void view.loadDiff(area as GitArea, area === 'working' || selected.length === 2 ? selected[0] : '', area === 'working' ? '' : selected.at(-1) ?? '', path)}>Retry diff</Button></div>
-          {:else if file}<ProjectGitDiff {file} lineAction={lineAction} busy={!!view.busy} onlines={(lines) => void changeLines(lines)} oncontext={(title, items, event) => gitActions.openItems(title, items, event)} />
+          {:else if shownFile}<ProjectGitDiff file={shownFile} lineAction={lineAction} busy={!!view.busy} onlines={(lines) => void changeLines(lines)} oncontext={(title, items, event) => gitActions.openItems(title, items, event)} />
           {:else}<div class="git-empty"><Icon name="check" size={20} /><p>No file changes in this comparison</p></div>{/if}
           {#if view.diff?.truncated}<p class="truncated-note">This diff exceeds the preview limit. Some changes are not shown.</p>{/if}
         </section>

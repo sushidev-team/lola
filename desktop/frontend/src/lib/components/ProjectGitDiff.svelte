@@ -17,7 +17,56 @@
   let split = $state(false);
   let wrap = $state(false);
   const rows = $derived(parsePatch(file.patch));
-  const paired = $derived(splitRows(rows));
+  const MORE = 20; // lines one click reveals
+  const CONTEXT = 3; // lines kept around a change when only chunks are shown
+  const BLOCK_GAP = 6; // unchanged lines that still keep two changes in one hunk
+  let changesOnly = $state(readChangesOnly());
+  function readChangesOnly() { try { return localStorage.getItem('lola.diff.changesOnly') === '1'; } catch { return false; } }
+  function setChangesOnly(value: boolean) { changesOnly = value; try { localStorage.setItem('lola.diff.changesOnly', value ? '1' : '0'); } catch { /* not persisted */ } }
+  // How much of each folded gap was opened, keyed by the gap's first row.
+  let opened = $state<Record<number, { down: number; up: number }>>({});
+  $effect(() => { file.path; opened = {}; });
+
+  type Item = { kind: 'row'; row: Row; index: number } | { kind: 'more'; dir: 'up' | 'down'; hidden: number; gap: number };
+  const items = $derived.by((): Item[] => {
+    const out: Item[] = [];
+    const show = (index: number) => { const row = rows[index]; if (row.kind !== 'hunk') out.push({ kind: 'row', row, index }); };
+    const first = rows.findIndex(row => row.kind === 'add' || row.kind === 'del');
+    if (!changesOnly || first < 0) { rows.forEach((_, index) => show(index)); return out; }
+    const near = new Array<boolean>(rows.length).fill(false);
+    rows.forEach((row, index) => { if (row.kind === 'add' || row.kind === 'del') for (let k = Math.max(0, index - CONTEXT); k <= Math.min(rows.length - 1, index + CONTEXT); k++) near[k] = true; });
+    let i = 0;
+    while (i < rows.length) {
+      if (near[i] || rows[i].kind === 'hunk') { show(i); i++; continue; }
+      let end = i;
+      while (end + 1 < rows.length && !near[end + 1] && rows[end + 1].kind !== 'hunk') end++;
+      const { down = 0, up = 0 } = opened[i] ?? {};
+      const total = end - i + 1, hidden = total - down - up;
+      const hasBefore = i > 0, hasAfter = end + 1 < rows.length;
+      for (let k = i; k < i + Math.min(down, total); k++) show(k);
+      if (hidden > 0) {
+        if (hasBefore) out.push({ kind: 'more', dir: 'down', hidden, gap: i });
+        if (hasAfter) out.push({ kind: 'more', dir: 'up', hidden, gap: i });
+      }
+      for (let k = end - Math.min(up, Math.max(0, total - down)) + 1; k <= end; k++) show(k);
+      i = end + 1;
+    }
+    return out;
+  });
+  function reveal(gap: number, dir: 'up' | 'down') {
+    const now = opened[gap] ?? { down: 0, up: 0 };
+    opened = { ...opened, [gap]: dir === 'down' ? { ...now, down: now.down + MORE } : { ...now, up: now.up + MORE } };
+  }
+  // Split view pairs each run of rows; a fold between runs spans both sides.
+  const splitItems = $derived.by(() => {
+    const out: ({ pair: ReturnType<typeof splitRows>[number] } | { more: Extract<Item, { kind: 'more' }> })[] = [];
+    let run: Row[] = [];
+    const flush = () => { for (const pair of splitRows(run)) out.push({ pair }); run = []; };
+    for (const item of items) { if (item.kind === 'row') run.push(item.row); else { flush(); out.push({ more: item }); } }
+    flush();
+    return out;
+  });
+  const moreLabel = (item: Extract<Item, { kind: 'more' }>) => `Show ${Math.min(MORE, item.hidden)} lines ${item.dir === 'up' ? 'above' : 'below'}`;
   const language = $derived(langOf(file.path));
   const selectable = $derived(!!lineAction && !!onlines && !split && !file.binary && !file.tooLarge);
   const verb = $derived(lineAction === 'unstage' ? 'Unstage' : 'Stage');
@@ -47,9 +96,22 @@
     void wrapped; void patch;
     if (!goal) { box = null; return; }
     void tick().then(() => {
-      const first = rowEls[goal.from], last = rowEls[goal.to];
+      // A folded row has no element: the button spans the rows that are drawn.
+      let a = goal.from, b = goal.to;
+      while (a < b && !rowEls[a]) a++;
+      while (b > a && !rowEls[b]) b--;
+      const first = rowEls[a], last = rowEls[b];
       if (!first || !last) { box = null; return; }
       box = { top: first.offsetTop, height: last.offsetTop + last.offsetHeight - first.offsetTop };
+    });
+  });
+
+  $effect(() => {
+    const path = file.path;
+    void tick().then(() => {
+      if (path !== file.path) return;
+      const at = rows.findIndex(row => row.kind === 'add' || row.kind === 'del');
+      rowEls[at]?.scrollIntoView?.({ block: 'center' });
     });
   });
 
@@ -71,15 +133,16 @@
     hover = index;
   }
   function apply(lines: number[]) { if (!busy && lines.length) onlines?.(lines); }
+  // The changes around a row that Git would keep in one hunk.
   function hunkLines(index: number): number[] {
     const out: number[] = [];
-    for (let i = index + 1; i < rows.length && rows[i].kind !== 'hunk'; i++) if (isChange(rows[i])) out.push(rows[i].at!);
-    return out;
-  }
-  function hunkOf(index: number) {
-    let i = index;
-    while (i >= 0 && rows[i].kind !== 'hunk') i--;
-    return i;
+    for (const step of [-1, 1]) {
+      let gap = 0;
+      for (let i = index; i >= 0 && i < rows.length && gap <= BLOCK_GAP; i += step) {
+        if (isChange(rows[i])) { gap = 0; if (i !== index || step === -1) out.push(rows[i].at!); } else if (rows[i].kind === 'ctx') gap++;
+      }
+    }
+    return [...new Set(out)].sort((a, b) => a - b);
   }
   function noun(n: number) { return n === 1 ? 'line' : `${n} lines`; }
   function context(event: MouseEvent, index: number) {
@@ -87,13 +150,12 @@
     event.preventDefault();
     if (!(chosen.length && index >= low && index <= high)) { anchor = head = index; }
     const lines = chosen.length && index >= low && index <= high ? chosen.map(row => row.at!) : [rows[index].at!];
-    const hunk = hunkOf(index);
-    const items: GitMenuItem[] = [
+    const menu: GitMenuItem[] = [
       { label: `${verb} ${noun(lines.length)}`, icon: lineAction === 'unstage' ? 'minus' : 'plus', disabled: busy, run: () => apply(lines) },
     ];
-    if (hunk >= 0) items.push({ label: `${verb} hunk`, icon: lineAction === 'unstage' ? 'minus' : 'plus', disabled: busy, run: () => apply(hunkLines(hunk)) });
-    items.push({ label: 'Clear selection', icon: 'x', separator: true, run: () => { anchor = head = -1; } });
-    oncontext('', items, event);
+    menu.push({ label: `${verb} hunk`, icon: lineAction === 'unstage' ? 'minus' : 'plus', disabled: busy, run: () => apply(hunkLines(index)) });
+    menu.push({ label: 'Clear selection', icon: 'x', separator: true, run: () => { anchor = head = -1; } });
+    oncontext('', menu, event);
   }
   function key(event: KeyboardEvent) {
     if (event.key === 'Escape' && anchor >= 0) { event.stopPropagation(); anchor = head = -1; }
@@ -108,6 +170,10 @@
   {#if row}<code>{#each tokenize(row.text, language) as token}<span class="syntax-{token.kind}">{token.text}</span>{/each}</code>{/if}
 {/snippet}
 
+{#snippet moreRow(item: Extract<Item, { kind: 'more' }>)}
+  <button type="button" class="more-row" onclick={() => reveal(item.gap, item.dir)}><Icon name={item.dir === 'up' ? 'chevrons-up' : 'chevrons-down'} size={14} /><span>{moreLabel(item)}</span><small>{item.hidden} hidden</small></button>
+{/snippet}
+
 <section class="git-diff" class:wrap aria-label={`Diff for ${file.path}`}>
   <header class="diff-header">
     <span class="diff-path" title={file.path}><Icon name="file-text" size={14} /><span>{file.path}</span></span>
@@ -115,6 +181,7 @@
       <Button size="xs" selected={!split} onclick={() => split = false}>Unified</Button>
       <Button size="xs" selected={split} onclick={() => split = true}>Split</Button>
       <Button size="xs" selected={wrap} onclick={() => wrap = !wrap}>Wrap</Button>
+      <Button size="xs" selected={changesOnly} aria-pressed={changesOnly} title="Fold unchanged lines between changes" onclick={() => setChangesOnly(!changesOnly)}>Changes only</Button>
     </div>
   </header>
   {#if lineAction && split}<div class="diff-note">Switch to Unified to {verb.toLowerCase()} single lines.</div>{/if}
@@ -127,9 +194,10 @@
     <div class="diff-code" tabindex="0" role="region" aria-label="Code changes" bind:clientWidth={viewport} onkeydown={key}>
       {#if split}
         <div class="split-lines">
-          {#each paired as pair}
-            {#if pair.full}<div class="diff-meta">{pair.full.text}</div>
-            {:else}
+          {#each splitItems as entry}
+            {#if 'more' in entry}{@render moreRow(entry.more)}
+            {:else if entry.pair.full}<div class="diff-meta">{entry.pair.full.text}</div>
+            {:else}{@const pair = entry.pair}
               <div class="split-row"><div class="half row-{pair.left?.kind ?? 'blank'}"><span class="line-no">{pair.left?.oldLine || ''}</span>{@render code(pair.left)}</div><div class="half row-{pair.right?.kind ?? 'blank'}"><span class="line-no">{pair.right?.newLine || ''}</span>{@render code(pair.right)}</div></div>
             {/if}
           {/each}
@@ -142,12 +210,15 @@
               <button type="button" class="line-action" class:tall={box.height > 30} style:top="{box.top}px" style:height="{box.height}px" disabled={busy} aria-label={`${verb} ${noun(target.lines.length)}`} title={`${verb} ${noun(target.lines.length)}`} onclick={() => apply(target.lines)}><span class="line-action-icon"><Icon name={lineAction === 'unstage' ? 'minus' : 'plus'} size={14} /></span></button>
             </div>
           {/if}
-          {#each rows as row, index}
+          {#each items as item}
+            {#if item.kind === 'more'}{@render moreRow(item)}
+            {:else}{@const row = item.row}{@const index = item.index}
             {#if row.kind === 'hunk' || row.kind === 'meta'}<div class="diff-meta" bind:this={rowEls[index]}>{row.text}</div>
             {:else}<!-- svelte-ignore a11y_no_static_element_interactions -->
               <div class="unified-row row-{row.kind}" class:selectable class:picked={selectable && anchor >= 0 && index >= low && index <= high} bind:this={rowEls[index]} onpointerdown={(event) => pick(event, index)} onpointerenter={() => enter(index)} oncontextmenu={(event) => context(event, index)}>
                 <span class="line-no gutter" onpointerdown={(event) => press(event, index)}>{row.oldLine || ''}</span><span class="line-no gutter" onpointerdown={(event) => press(event, index)}>{row.newLine || ''}</span><span class="change-mark" aria-hidden="true">{row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '}</span>{@render code(row)}
               </div>{/if}
+            {/if}
           {/each}
         </div>
       {/if}
@@ -189,6 +260,9 @@
   .line-action:disabled { opacity:.5; cursor:default; }
   .line-action-icon { position:sticky; top:4px; display:grid; place-content:center; width:100%; height:19px; }
   .line-action:not(.tall) .line-action-icon { position:static; height:100%; }
+  .more-row { display:flex; align-items:center; gap:8px; position:sticky; left:0; width:100%; min-width:0; padding:3px 14px; border:0; border-block:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 6%,var(--color-panel)); color:var(--color-info); font:inherit; font-size:12px; line-height:18px; cursor:pointer; text-align:left; }
+  .more-row:hover { background:var(--color-accent-fill); color:var(--color-ink); }
+  .more-row small { color:var(--color-faint); }
   .row-add { background:color-mix(in srgb,var(--color-good) 10%,transparent); }
   .row-del { background:color-mix(in srgb,var(--color-bad) 10%,transparent); }
   .row-add .change-mark { color:var(--color-good); }

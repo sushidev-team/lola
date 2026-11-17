@@ -128,3 +128,24 @@ func TestChangeLinesRenumbersAfterSkippedHunks(t *testing.T) {
 		}
 	}
 }
+
+func TestDiffOfOneFileCarriesTheWholeFile(t *testing.T) {
+	dir, _ := stashRepo(t)
+	ctx, c := context.Background(), Client{}
+	var b strings.Builder
+	for i := 0; i < 40; i++ {
+		b.WriteString("line\n")
+	}
+	write(t, dir, "big", b.String())
+	testGit(t, dir, "add", "big")
+	testGit(t, dir, "commit", "-m", "big")
+	write(t, dir, "big", strings.Replace(b.String(), "line", "changed", 1))
+	one, err := c.Diff(ctx, dir, "", "", "unstaged", "big")
+	if err != nil || len(one.Files) != 1 || strings.Count(one.Files[0].Patch, "\n") < 40 {
+		t.Fatalf("single file not whole: %v %v", one, err)
+	}
+	all, _ := c.Diff(ctx, dir, "", "", "unstaged", "")
+	if len(all.Files) != 1 || strings.Count(all.Files[0].Patch, "\n") > 10 {
+		t.Fatal("the all-files diff must stay chunked")
+	}
+}
