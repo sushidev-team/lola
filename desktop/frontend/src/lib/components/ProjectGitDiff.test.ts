@@ -85,7 +85,7 @@ describe('Project Git diff line actions', () => {
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     selection.addRange(range);
-    await fireEvent.pointerUp(window);
+    document.dispatchEvent(new Event('selectionchange')); // live, before the pointer is released
     await fireEvent.click(await screen.findByRole('button', { name: 'Stage 3 lines' }));
     expect(onlines).toHaveBeenCalledWith([3, 5, 6]);
   });

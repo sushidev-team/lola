@@ -178,6 +178,7 @@
   }
 </script>
 
+<svelte:document onselectionchange={fromText} />
 <svelte:window onpointerup={() => { dragging = false; fromText(); }} />
 
 {#snippet code(row: Row | null)}
