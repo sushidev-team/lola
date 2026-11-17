@@ -564,8 +564,10 @@ func (f *formModel) fields() []fieldID {
 			if f.poll.AssigneeMode == "user" {
 				fs = append(fs, fAssigneeUser)
 			}
-			fs = append(fs, fCap, fRequirePlan)
+			fs = append(fs, fCap)
 		}
+		// Not team-scoped: a teamless project can still set or override the gate.
+		fs = append(fs, fRequirePlan)
 	case tabLabels:
 		// Team-scoped: label UUIDs only exist within the picked team.
 		if f.poll.TeamID != "" {
