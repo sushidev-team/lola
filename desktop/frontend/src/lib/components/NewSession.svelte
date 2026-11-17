@@ -47,6 +47,10 @@
   const selected = $derived(store.projectByName(project));
   const projectPath = $derived(selected?.path || "");
   const temporary = $derived(location === "temporary");
+  // A sandboxed agent only runs in a worktree of its own: the daemon refuses it the main checkout,
+  // which is the person's working directory. A shell there runs no agent, so it stays offered.
+  const mainBlocked = $derived(!!selected?.sandboxed && useAgent);
+  $effect(() => { if (mainBlocked && location === "main") location = "worktree"; });
   const asksPrompt = $derived(!temporary && useAgent);
   const agent = $derived(agentName(agentKind || selected?.agent));
   const createBranch = $derived(branchChoice === ":new");
@@ -231,10 +235,13 @@
             {/if}
             <label class="grid gap-1.5 text-sm">Location
               <Select bind:value={location} disabled={busy}>
-                <option value="worktree">New worktree</option><option value="main">Main checkout</option>
+                <option value="worktree">New worktree</option><option value="main" disabled={mainBlocked}>Main checkout</option>
               </Select>
             </label>
           </div>
+          {#if mainBlocked}
+            <p class="text-sm text-faint" data-main-blocked>Main checkout is unavailable: {store.displayNameFor(project)} runs its agents sandboxed, and a sandboxed agent needs a worktree of its own. A shell can still open there.</p>
+          {/if}
           {#if location === "worktree" && createBranch}
             <div class="grid gap-3">
               <label class="grid gap-1.5 text-sm">Base branch

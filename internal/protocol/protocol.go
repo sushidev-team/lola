@@ -746,6 +746,10 @@ type ProjectInfo struct {
 	PathOK         bool `json:"pathOk"`
 	RepoConfigured bool `json:"repoConfigured"`
 
+	// Sandboxed is whether this project's agents run in a container. Such an agent
+	// needs a worktree of its own, so a UI does not offer it the main checkout.
+	Sandboxed bool `json:"sandboxed,omitempty"`
+
 	// Poll rollup: how many polls this project drives and how many are enabled,
 	// their names, and the newest LastRun / first LastError across them.
 	PollCount    int       `json:"pollCount"`
