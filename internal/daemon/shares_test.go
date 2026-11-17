@@ -410,6 +410,7 @@ func TestSessionsCarryShareStateForTheDesktopOnly(t *testing.T) {
 
 func TestShareNewSessionsSetting(t *testing.T) {
 	rd, sh := newShareDaemon(t)
+	t.Cleanup(rd.newShares.Wait)
 	m, k := sh.teammate(t, "ada-mini")
 	rd.pin(t, m, k)
 	setting := func(on bool) {
@@ -572,6 +573,7 @@ func TestLeavingTheHubForgetsWhatWasPublished(t *testing.T) {
 
 func TestAdoptedSessionsAreNotSharedAsNew(t *testing.T) {
 	rd, sh := newShareDaemon(t)
+	t.Cleanup(rd.newShares.Wait)
 	m, k := sh.teammate(t, "ada-mini")
 	rd.pin(t, m, k)
 	on := true
@@ -587,4 +589,5 @@ func TestAdoptedSessionsAreNotSharedAsNew(t *testing.T) {
 	}
 	rd.addSession("lola-new", nil)
 	waitUntil(t, func() bool { s, _ := rd.sessions.Get("lola-new"); return s.Share.On() })
+	rd.newShares.Wait()
 }

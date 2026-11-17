@@ -600,6 +600,8 @@ type Daemon struct {
 	// adopting is true while adoptNativeSessions re-inserts survivors: those are not
 	// new sessions, so [hub].share_new_sessions must not share them.
 	adopting atomic.Bool
+	// newShares counts in-flight shareNewSession goroutines (tests wait on it).
+	newShares sync.WaitGroup
 	// watch is the event push hub (docs/mobile/02-events.md); hubRelay is the
 	// relay leg to lola-hub (docs/mobile/03-hub-relay.md).
 	watch    *watchHub
@@ -693,7 +695,11 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		if c.Prev == nil && c.Next != nil && !d.adopting.Load() {
 			// A new session: [hub].share_new_sessions may share it. Off this
 			// callback (it runs under the store lock and must not call back in).
-			go d.shareNewSession(c.ID)
+			d.newShares.Add(1)
+			go func() {
+				defer d.newShares.Done()
+				d.shareNewSession(c.ID)
+			}()
 		}
 		bits := pokeRow
 		if talkFieldsChanged(c.Prev, c.Next) {
