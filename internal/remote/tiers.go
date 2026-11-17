@@ -51,7 +51,7 @@ func buildCommandTiers() map[string]string {
 	set(protocol.TierControl,
 		"addressPRFeedback", "mergePR", "openPr", "openTicket", "openManual", "openExisting",
 		"revive", "review", "coderabbit", "resolveConflict", "switchAgent",
-		"dev", "devFreePort", "sessionTask", "renameSession", "broadcast", "bestOf",
+		"dev", "devFreePort", "planDecide", "sessionTask", "renameSession", "broadcast", "bestOf",
 		"restoreCheckpoint", "forkCheckpoint", "pollOnce", "enable", "disable",
 		protocol.CmdReviewRecover,
 	)
@@ -67,7 +67,7 @@ func buildCommandTiers() map[string]string {
 		// Daemon lifecycle and config.
 		"stop", "reload", "renameProject", "bulkProjects",
 		// The agent's in-pane channels.
-		"hookEvent", "agentReport", "planSubmit", "planGate", "planDecide", protocol.CmdReviewPublish, protocol.CmdReviewComplete,
+		"hookEvent", "agentReport", "planSubmit", "planGate", protocol.CmdReviewPublish, protocol.CmdReviewComplete,
 		// Transport-internal, and the host browser.
 		protocol.CmdRemotePair, "openURL",
 		// Planning, goals, profiles, knowledge, comparison: not a phone's work.

@@ -110,7 +110,7 @@ export const TIER: Record<string, Tier> = {
   panes: "read",
   plan: "never",
   planApply: "never",
-  planDecide: "never",
+  planDecide: "control",
   planGate: "never",
   planSubmit: "never",
   pollOnce: "control",

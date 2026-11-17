@@ -104,6 +104,7 @@ export const copy = {
       checkpoints: "Checkpoints",
       bestOf: "Compare attempts",
       broadcast: "Message all",
+      plan: "Review plan",
       review: "Agent review",
       coderabbit: "CodeRabbit review",
       revive: "Revive",
@@ -259,6 +260,15 @@ export const copy = {
     shellOnly: "Shell only",
     start: "Start",
     needsText: "Type what the agent should do.",
+  },
+  plan: {
+    title: "Plan approval",
+    approve: "Approve plan",
+    requestChanges: "Request changes",
+    round: "Round {n}",
+    feedbackLabel: "Feedback for the agent",
+    placeholder: "What should change? (required to request changes)",
+    none: "No plan is waiting for approval.",
   },
   broadcast: {
     title: "Message all",

@@ -39,6 +39,7 @@ export const SHEETS = [
   "devLinks",
   "rename",
   "broadcast",
+  "plan",
   "tasks",
   "switchAgent",
   "paneMenu",

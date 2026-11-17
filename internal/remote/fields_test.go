@@ -125,6 +125,7 @@ var reviewedArgsFields = map[string][]string{
 	"feedback":              {"comments.body", "comments.endLine", "comments.line", "comments.path", "comments.quote", "comments.side", "note", "session"},
 	"forkCheckpoint":        {"agent", "seq", "session"},
 	"mergePR":               {"confirmUnready", "head", "method", "number", "repo"},
+	"planDecide":            {"approve", "comment"},
 	"openExisting":          {"agent", "agentKind", "aiAction", "base", "branch", "existing", "location", "name", "path", "project", "prompt"},
 	"openManual":            {"agent", "agentKind", "aiAction", "base", "branch", "existing", "location", "name", "path", "project", "prompt"},
 	"openPr":                {"branch", "isFork", "number", "project"},
