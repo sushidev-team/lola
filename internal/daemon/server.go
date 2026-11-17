@@ -1094,6 +1094,9 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	}
 	// The team policy overlay goes on AFTER validation (hubpolicy.go).
 	tp := overlayTeamPolicy(nc, d.hubDir())
+	for _, n := range resolveLabelRefs(ctx, nc, nil) {
+		d.log.Printf("labels: %s", n)
+	}
 
 	d.mu.Lock()
 	old := d.cfg

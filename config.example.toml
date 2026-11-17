@@ -90,6 +90,10 @@ global_cap = 4
 # already run takes over on the SAME worktree and branch — see
 # [reactions.agent_fallback] below. Valid kinds: claude | codex | opencode.
 # agent_fallback = ["codex", "opencode"]
+# match_labels may also hold label NAMES ("apps/website", "Bug"): the daemon
+# resolves each name in every project's OWN team at startup/reload (in memory;
+# config.toml keeps the name), so one default serves all teams. Unmatched names
+# are logged and left as written.
 # match_labels = ["label_UUID_of_your_trigger_label"]
 # match_mode = "any"                 # any | all
 # dedup_mode = "label"               # label | seen | state

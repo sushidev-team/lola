@@ -837,6 +837,9 @@ func Run(ctx context.Context) error {
 	// the overlay is runtime-only and is never validated as if it were a file.
 	cfgInvalid := cfg.Validate()
 	teamPolicy := overlayTeamPolicy(cfg, filepath.Join(home, "state"))
+	for _, n := range resolveLabelRefs(ctx, cfg, nil) {
+		logger.Printf("labels: %s", n)
+	}
 	d := newDaemon(cfg, nil, logger, home)
 	d.teamPolicy = teamPolicy
 	if teamPolicy.applied {
