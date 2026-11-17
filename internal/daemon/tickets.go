@@ -35,7 +35,7 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 	p := d.cfg.ProjectByName(project)
 	var team string
 	if p != nil {
-		team = p.TeamID
+		team = d.cfg.TicketTeam(p)
 	}
 	d.mu.Unlock()
 	if p == nil {

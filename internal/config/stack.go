@@ -78,6 +78,20 @@ func (c *Config) StackFor(p *Project) *Project {
 	return nil
 }
 
+// TicketTeam returns the Linear team the ticket picker browses for p. A stack
+// member's stack owns the Linear side, so the member uses its stack's team; a
+// team_id the member kept from before it joined is used only when the stack
+// has none. "" = no team.
+func (c *Config) TicketTeam(p *Project) string {
+	if p == nil {
+		return ""
+	}
+	if st := c.StackFor(p); st != nil && st.TeamID != "" {
+		return st.TeamID
+	}
+	return p.TeamID
+}
+
 // WantedFor reports whether an issue whose labels are given (ids, names and
 // group names, parallel slices; a label outside a group has group "") needs
 // this member checked out. No Labels = always.

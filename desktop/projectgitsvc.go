@@ -286,6 +286,12 @@ func (s *ProjectGitService) Amend(project, worktree, message, expectedHead strin
 		return (projectgit.Client{}).Amend(ctx, dir, message, expectedHead)
 	})
 }
+// Uncommit removes the checkout's newest commit and keeps its changes staged.
+func (s *ProjectGitService) Uncommit(project, worktree, expectedHead string) error {
+	return s.mutate(project, worktree, func(ctx context.Context, dir string) error {
+		return (projectgit.Client{}).Uncommit(ctx, dir, expectedHead)
+	})
+}
 func (s *ProjectGitService) AmendNeedsConfirmation(project, worktree, expectedHead string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
