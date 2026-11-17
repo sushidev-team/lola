@@ -1274,7 +1274,7 @@ refused. Every other request comes from a human press.
 
 ```ts
 export type Seg = "conversation" | "changes" | "review" | "terminal";
-export type Tab = "inbox" | "projects" | "activity" | "settings";
+export type Tab = "inbox" | "projects" | "settings";
 export type Route =
   | { name: "connect"; state: "scan" | "code" | "refused" | "expired" | "failed" | "dropped" | "not-paired" | "no-camera" }
   | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets"; filter?: InboxFilter }
@@ -1306,7 +1306,7 @@ Path grammar (shared by dev links, preview fixtures and tests):
 /inbox[?filter=needs|working|review|done]
 /session/<id>/{conversation|changes|review|terminal}[/<pane>]
 /projects | /projects/<name> | /projects/<name>/{prs|tickets}
-/activity | /settings
+/settings
 /dev/bridge-guard                       (DEBUG only)
 query: sheet=<SheetName>[&tab=<a-z, 1–16>]   (tab only with a sheet; reviewPackage reads it)
 ```
@@ -1314,7 +1314,7 @@ query: sheet=<SheetName>[&tab=<a-z, 1–16>]   (tab only with a sheet; reviewPac
 Unknown segments return `null` (caller keeps the current route). `/connect/*`
 is accepted only when no daemon is paired (otherwise → `/inbox`).
 
-Nav model: four tabs in the bottom bar (Inbox, Projects, Activity, Settings),
+Nav model: three tabs in the bottom bar (Inbox, Projects, Settings),
 each keeping its own depth. Session is pushed over the current tab; back
 returns to it. Left-edge swipe (start x ≤ 20 pt, pointer events) pops with the
 spring of §6.4; it is disabled on the Terminal segment, which owns its touches.

@@ -26,7 +26,6 @@ const GRAMMAR: Route[] = [
   { name: "tab", tab: "projects", project: "nori-app" },
   { name: "tab", tab: "projects", project: "nori", pick: "prs" },
   { name: "tab", tab: "projects", project: "nori", pick: "tickets" },
-  { name: "tab", tab: "activity" },
   { name: "tab", tab: "settings" },
   { name: "dev", page: "bridge-guard" },
 ];
@@ -45,7 +44,7 @@ describe("path grammar", () => {
     for (const sheet of SHEETS) {
       const loc = { route: { name: "tab", tab: "inbox", filter: "needs" } as Route, sheet };
       expect(parseLocation(formatLocation(loc), ctx)).toEqual(loc);
-      const bare = { route: { name: "tab", tab: "activity" } as Route, sheet };
+      const bare = { route: { name: "tab", tab: "settings" } as Route, sheet };
       expect(parseLocation(formatLocation(bare), ctx)).toEqual(bare);
     }
   });
@@ -67,7 +66,7 @@ describe("path grammar", () => {
     "/projects/a/prs/x",
     "/connect/nope",
     "/connect/scan",
-    "/activity/x",
+    "/settings/x",
     "/dev/other",
     "/session/%E0%A4%A/terminal",
   ])("rejects %j", (p) => {
