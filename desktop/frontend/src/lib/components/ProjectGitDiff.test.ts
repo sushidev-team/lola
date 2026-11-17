@@ -74,4 +74,19 @@ describe('Project Git diff line actions', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Show 20 lines below/ }));
     expect(screen.getByText('l50')).toBeTruthy();
   });
+
+  it('selects the lines a text drag covers', async () => {
+    const onlines = vi.fn();
+    render(ProjectGitDiff, { file, lineAction: 'stage', onlines });
+    const from = screen.getByText('B'), to = screen.getByText('D');
+    const range = document.createRange();
+    range.setStart(from.firstChild!, 0);
+    range.setEnd(to.firstChild!, 1);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    await fireEvent.pointerUp(window);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Stage 3 lines' }));
+    expect(onlines).toHaveBeenCalledWith([3, 5, 6]);
+  });
 });

@@ -128,6 +128,20 @@
     if (!selectable || event.button > 0 || (event.target as HTMLElement).closest('.gutter')) return;
     if (event.shiftKey && anchor >= 0) { head = index; event.preventDefault(); } else if (!window.getSelection()?.toString()) anchor = head = index;
   }
+  // Text dragged across code lines selects those lines too; the text stays selected for copying.
+  function fromText() {
+    if (!selectable) return;
+    const text = window.getSelection();
+    if (!text || text.isCollapsed || !text.rangeCount) return;
+    const rowAt = (node: Node | null) => {
+      const element = node instanceof Element ? node : node?.parentElement;
+      const value = element?.closest<HTMLElement>('[data-row]')?.dataset.row;
+      return value === undefined ? -1 : Number(value);
+    };
+    const a = rowAt(text.anchorNode), b = rowAt(text.focusNode);
+    if (a < 0 || b < 0) return;
+    anchor = Math.min(a, b); head = Math.max(a, b);
+  }
   function enter(index: number) {
     if (dragging) head = index;
     hover = index;
@@ -164,7 +178,7 @@
   }
 </script>
 
-<svelte:window onpointerup={() => dragging = false} />
+<svelte:window onpointerup={() => { dragging = false; fromText(); }} />
 
 {#snippet code(row: Row | null)}
   {#if row}<code>{#each tokenize(row.text, language) as token}<span class="syntax-{token.kind}">{token.text}</span>{/each}</code>{/if}
@@ -215,7 +229,7 @@
             {:else}{@const row = item.row}{@const index = item.index}
             {#if row.kind === 'hunk' || row.kind === 'meta'}<div class="diff-meta" bind:this={rowEls[index]}>{row.text}</div>
             {:else}<!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="unified-row row-{row.kind}" class:selectable class:picked={selectable && anchor >= 0 && index >= low && index <= high} bind:this={rowEls[index]} onpointerdown={(event) => pick(event, index)} onpointerenter={() => enter(index)} oncontextmenu={(event) => context(event, index)}>
+              <div class="unified-row row-{row.kind}" class:selectable class:picked={selectable && anchor >= 0 && index >= low && index <= high} bind:this={rowEls[index]} data-row={index} onpointerdown={(event) => pick(event, index)} onpointerenter={() => enter(index)} oncontextmenu={(event) => context(event, index)}>
                 <span class="line-no gutter" onpointerdown={(event) => press(event, index)}>{row.oldLine || ''}</span><span class="line-no gutter" onpointerdown={(event) => press(event, index)}>{row.newLine || ''}</span><span class="change-mark" aria-hidden="true">{row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '}</span>{@render code(row)}
               </div>{/if}
             {/if}
