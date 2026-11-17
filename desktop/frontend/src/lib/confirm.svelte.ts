@@ -15,8 +15,8 @@ export type ConfirmRequest = {
   title: string;
   /** The entry the action targets, drawn as its own row. Put names here, not in the body. */
   subject?: string;
-  /** Repository paths, each group introduced by a sentence ('Restore the following file…'), drawn as file rows. */
-  fileGroups?: { text: string; files: string[] }[];
+  /** Repository paths drawn as file rows. A group may carry a lead sentence and a tag shown after each path. */
+  fileGroups?: { text?: string; tag?: string; files: string[] }[];
   /** Short explanation of what the action does. May be empty when title + subject say it all; never restate the title as a question. */
   body: string;
   /** Optional second line spelling out the consequence. */

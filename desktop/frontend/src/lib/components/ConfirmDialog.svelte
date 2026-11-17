@@ -27,12 +27,12 @@
 {#if req}
   <Modal title={req.title} onClose={() => confirm.cancel()} width="480px" describedBy={descriptionId}>
     <div id={descriptionId} class="confirmation-copy" data-confirm>
-      {#each req.fileGroups ?? [] as group (group.text)}
+      {#each req.fileGroups ?? [] as group, groupIndex (groupIndex)}
         <section class="confirmation-section">
-          <p class="copy confirmation-lead">{group.text}</p>
-          <ul class="confirmation-files" aria-label={group.text}>
+          {#if group.text}<p class="copy confirmation-lead">{group.text}</p>{/if}
+          <ul class="confirmation-files" aria-label={group.text ?? "Affected files"}>
             {#each group.files as path (path)}
-              <li class="confirmation-file" title={path}><Icon name="file-text" size={13} /><span class="confirmation-path"><span class="confirmation-dir">{dir(path)}</span><strong>{leaf(path)}</strong></span></li>
+              <li class="confirmation-file" title={path}><Icon name="file-text" size={13} /><span class="confirmation-path"><span class="confirmation-dir">{dir(path)}</span><strong>{leaf(path)}</strong></span>{#if group.tag}<span class="confirmation-tag">{group.tag}</span>{/if}</li>
             {/each}
           </ul>
         </section>
@@ -76,6 +76,8 @@
   .confirmation-actions { justify-content:flex-end; gap:8px; }
   .confirmation-copy { min-width:0; overflow-wrap:anywhere; display:grid; gap:14px; }
   .confirmation-section { display:grid; gap:6px; }
+  .confirmation-section + .confirmation-section { margin-top:-12px; }
+  .confirmation-tag { flex:none; font-size:11px; color:var(--color-faint); }
   .confirmation-lead { font-size:13px; line-height:1.5; color:var(--color-ink); }
   .confirmation-subject { padding:9px 12px; border:1px solid var(--color-edge); border-radius:8px; background:color-mix(in srgb,var(--color-ink) 5%,var(--color-canvas)); font-family:var(--font-mono); font-size:13px; line-height:1.5; color:var(--color-ink); white-space:pre-wrap; }
   .confirmation-files { display:grid; gap:2px; margin:0; padding:0; list-style:none; max-height:176px; overflow:auto; }

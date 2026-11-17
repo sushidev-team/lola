@@ -121,8 +121,8 @@
     confirm.ask({
       title: 'Discard unstaged changes?',
       fileGroups: [
-        ...(plan.tracked.length ? [{ text: `Restore the following tracked ${plan.tracked.length === 1 ? 'file' : 'files'} to the staged version.`, files: plan.tracked }] : []),
-        ...(plan.untracked.length ? [{ text: `Delete the following untracked ${plan.untracked.length === 1 ? 'file' : 'files'}.`, files: plan.untracked }] : []),
+        ...(plan.tracked.length ? [{ files: plan.tracked }] : []),
+        ...(plan.untracked.length ? [{ tag: 'untracked', files: plan.untracked }] : []),
       ],
       body: '',
       detail: 'This cannot be undone.',
