@@ -74,7 +74,7 @@ func newTestDaemon(t *testing.T, cfg *config.Config, fake *linear.Fake, nat Nati
 	// newDaemon wires these to the real tmux. Left in place, every proof in a test that
 	// injects only paneTail would ask the machine's own lola server about its pane.
 	d.paneCursor, d.paneVisible = nil, nil
-	d.sendKeysTyped = nil // the same reason: a test's sendKeys is the one way to type
+	d.sendKeysTyped, d.sendKeysPasted = nil, nil // the same reason: a test's sendKeys is the one way to type
 	// Observer notification tests explicitly install these seams. Other tests
 	// must neither query live GitHub readiness nor deliver desktop/Slack alerts.
 	d.prReadiness = nil

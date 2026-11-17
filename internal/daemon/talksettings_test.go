@@ -22,7 +22,12 @@ func TestAgentSettingDelivery(t *testing.T) {
 			s.Agent = tt.kind
 			s.Model = "original"
 			d.sessions.Upsert(s)
-			if tt.kind != "claude" {
+			switch tt.kind {
+			case "codex":
+				// Measured live: this command pasted into a resting codex 0.167.2 answered
+				// "Model changed to … for this session only".
+				f.showCodex(t, "rest-fresh")
+			case "opencode":
 				f.show("╭──────────╮\n│ >        │\n╰──────────╯\n? for shortcuts\n")
 			}
 			out, err := d.handleAgentSetting(context.Background(), protocol.AgentSettingArgs{Session: "s1", Agent: tt.kind, Setting: tt.setting, Value: tt.value})

@@ -242,6 +242,9 @@ type Daemon struct {
 	// sendKeysTyped is sendKeys without its paste, for an agent whose paste has not been
 	// measured (agent.Caps). nil means sendKeys for every agent.
 	sendKeysTyped func(ctx context.Context, tmuxName, text string) error
+	// sendKeysPasted is sendKeys with a paste at every size, for an agent that takes the
+	// Enter after fast keystrokes as a line break (agent.Caps PasteOnly).
+	sendKeysPasted func(ctx context.Context, tmuxName, text string) error
 	// sendEscape interrupts an agent's turn, for a human's Stop only.
 	sendEscape func(ctx context.Context, tmuxName string) error
 	// sendKey presses one key with no Enter, for a human's choice on a card. Never
@@ -729,6 +732,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	}
 	d.sendKeysTyped = func(ctx context.Context, tmuxName, text string) error {
 		return d.tmuxClient().SendKeysTyped(ctx, tmuxName, text)
+	}
+	d.sendKeysPasted = func(ctx context.Context, tmuxName, text string) error {
+		return d.tmuxClient().SendKeysPasted(ctx, tmuxName, text)
 	}
 	d.sendEscape = func(ctx context.Context, tmuxName string) error {
 		return d.tmuxClient().SendEscape(ctx, tmuxName)

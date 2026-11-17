@@ -52,6 +52,7 @@ func forbidTyping(t *testing.T, d *Daemon) *atomic.Int32 {
 	}
 	d.sendKeys = func(context.Context, string, string) error { hit("sendKeys"); return nil }
 	d.sendKeysTyped = func(context.Context, string, string) error { hit("sendKeysTyped"); return nil }
+	d.sendKeysPasted = func(context.Context, string, string) error { hit("sendKeysPasted"); return nil }
 	d.sendEscape = func(context.Context, string) error { hit("sendEscape"); return nil }
 	d.sendKey = func(context.Context, string, string) error { hit("sendKey"); return nil }
 	d.sendBackground = func(context.Context, string) error { hit("sendBackground"); return nil }

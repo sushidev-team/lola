@@ -101,7 +101,7 @@ daemon, runtime and UIs can share them).
   is cobra wiring only.
 
 **Agents, sessions, git**
-- `agent` — kind enum, `Caps` (claude has feed/send/stop/cards/paste; codex has feed only),
+- `agent` — kind enum, `Caps` (claude has feed/send/stop/cards/paste; codex has all but cards and is paste-only; opencode none),
   launch argv, READ-ONLY review argv (`ReviewArgs`), callback configs.
   `config.AgentForProject` resolves project → defaults → claude.
 - `attention` — pane → activity/question classifier (agent-aware).
@@ -256,7 +256,10 @@ one `tmux ls`, gh facts → delivery axis, pane → agent axis),
   composer. Dialogs, drafts and unknown screens stay blocked; slash commands and
   Stop & send keep the resting-prompt gate. Every path
   records a `typedNote`. Claude messages >800 bytes go by `load-buffer` +
-  `paste-buffer -p` (`send-keys -l` corrupts >1KB); other agents stay typed.
+  `paste-buffer -p` (`send-keys -l` corrupts >1KB). Codex takes EVERY send as a paste
+  (`PasteOnly`): it reads fast keystrokes as a paste burst and the Enter after them as a
+  line break. opencode stays typed. `sendFor` also applies `agent.ComposerText` (a
+  trailing space closes codex's `@`/`$` picker, which would otherwise eat the Enter).
   Always `send-keys -l --` with a trailing `;` escaped.
 - `agentChoose` sends one key, no Enter, after re-reading the pane against the
   hash the human saw. `/config`-type screens classify as waiting, so never rely
@@ -316,6 +319,12 @@ one `tmux ls`, gh facts → delivery axis, pane → agent axis),
 ### Pane classification (`attention.Classify`)
 It mirrors claude-code's rendering, so a rendering change silently disables
 every send path. Re-verify against a live pane.
+- Codex (`attention/codex.go`, panes in `testdata/codex`, codex-cli 0.167.2): no box.
+  The composer is the LAST row starting with `›`, above a ≤2-line footer; the same caret
+  marks past messages and focused list rows (`› 1. …`), and shell mode swaps it for `!`.
+  Empty = cursor shown at column 2 on that row holding only the dim placeholder. Every
+  codex screen that is not the composer hides the cursor. Slash commands are refused
+  for codex (its picker runs the focused row on Enter); it has no cards.
 - Caret padding is U+00A0; `stripANSI` folds Unicode `Zs` to space.
 - The composer is drawn mid-turn too. Only the live status line (gerund +
   ellipsis + running timer) means working: `hasLiveWorkingCue` runs before the
