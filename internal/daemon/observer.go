@@ -379,6 +379,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			} else {
 				paneAct = attention.Classify(text, k)
 				_, paneQuestion = attention.Parse(text, k)
+				d.noteKeyAgent(ctx, s, attention.KeyAgentLocked(text))
 			}
 			paneClassified = true
 
