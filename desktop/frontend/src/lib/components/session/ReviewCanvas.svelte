@@ -2,18 +2,18 @@
   import { tick } from 'svelte';
   import { DaemonService } from '@bindings/desktop';
   import type { ReviewPackage } from '@bindings/internal/protocol';
-  import { markLocation, type ReviewMark } from '$lib/reviewmaterial';
+  import { markLocation, markHit, markKind, validMark, arrowHead, simplifyStroke, type MarkKind, type ReviewMark } from '$lib/reviewmaterial';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Select from '../Select.svelte';
-  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment, onToggleFeedback }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void; onToggleFeedback?: () => void } = $props();
-  let infoOpen = $state(true);
+  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment, onToggleFeedback, compact = false }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void; onToggleFeedback?: () => void; compact?: boolean } = $props();
+  // `compact` (the screenshots half of the Review screen) starts with the screen list folded away.
   let shortcutsOpen = $state(false);
   let root = $state<HTMLElement>();
   let lastComment = $state(-1);
   const saveKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘↵' : 'Ctrl+Enter';
   const shortcuts = [
-    ['C', 'Comment pin'], ['R', 'Rectangle'], ['V / Esc', 'Cancel drawing'],
+    ['C', 'Comment (click or drag)'], ['R', 'Rectangle'], ['E', 'Ellipse'], ['A', 'Arrow'], ['L', 'Line'], ['P', 'Pen'], ['V / Esc', 'Cancel drawing'],
     ['↑ / ↓', 'Previous / next screenshot'], ['← / →', 'Move comparison divider'], ['N / Shift+N', 'Next / previous comment'],
     ['1 / 2', 'Slider / side by side'], ['3 / 4', 'Before / after'],
     ['+ / − / 0', 'Zoom in / out / fit'], ['I', 'Screen details'], ['B', 'Checks & feedback'],
@@ -33,7 +33,17 @@
     // Temporary switches for annotations or missing baselines aren't preferences.
     try { localStorage.setItem(modeKey, value); } catch { /* remember for this review */ }
   }
-  let tool = $state<'view' | 'pin' | 'area'>('view');
+  const modes = [{id:'slider',label:'Slider',icon:'arrow-right-left'},{id:'split',label:'Side by side',icon:'columns-2'},{id:'before',label:'Before',icon:'panel-left'},{id:'after',label:'After',icon:'panel-right'}] as const;
+  let tool = $state<'view' | MarkKind>('view');
+  let stageW = $state(0), stageH = $state(0);
+  const drawTools: { id: MarkKind; label: string; key: string; icon: 'message-square-text' | 'square' | 'circle' | 'arrow-up-right' | 'minus' | 'pencil'; title: string }[] = [
+    { id: 'pin', label: 'Add pin', key: 'c', icon: 'message-square-text', title: 'Comment: click or drag' },
+    { id: 'area', label: 'Mark area', key: 'r', icon: 'square', title: 'Rectangle' },
+    { id: 'ellipse', label: 'Draw ellipse', key: 'e', icon: 'circle', title: 'Ellipse' },
+    { id: 'arrow', label: 'Draw arrow', key: 'a', icon: 'arrow-up-right', title: 'Arrow' },
+    { id: 'line', label: 'Draw line', key: 'l', icon: 'minus', title: 'Line' },
+    { id: 'pen', label: 'Draw freehand', key: 'p', icon: 'pencil', title: 'Pen' },
+  ];
   let zoom = $state(100);
   const zoomLevels = [100, 150, 200, 300, 400];
   let split = $state(50);
@@ -57,6 +67,15 @@
     if (!node) return;
     const observer = new ResizeObserver(() => { available = {width:node.clientWidth-32,height:node.clientHeight-32}; });
     observer.observe(node);
+    return () => observer.disconnect();
+  });
+  // The drawn shapes are in pixels of the stage, so arrow heads keep their shape at any zoom.
+  $effect(() => {
+    const node = imageStage;
+    if (!node) return;
+    const measure = () => { stageW = node.clientWidth; stageH = node.clientHeight; };
+    const observer = new ResizeObserver(measure);
+    observer.observe(node); measure();
     return () => observer.disconnect();
   });
   let zoomRevision = 0;
@@ -141,8 +160,9 @@
     if (!editing || !mark || !frame || !stage || !popup || !scroller) return;
     function position() {
       const bounds = frame!.getBoundingClientRect(), image = stage!.getBoundingClientRect();
-      const x = image.left - bounds.left + mark!.x * image.width;
-      const y = image.top - bounds.top + mark!.y * image.height;
+      const at = anchor(mark!);
+      const x = image.left - bounds.left + at.x * image.width;
+      const y = image.top - bounds.top + at.y * image.height;
       const width = popup!.offsetWidth, height = popup!.offsetHeight;
       const left = x + 20 + width <= bounds.width - 12 ? x + 20 : x - width - 20;
       editorPosition = {
@@ -182,7 +202,7 @@
     save(); closeComment(false); focusCanvas();
   }
   function discardChanges() {
-    if (selected?.savedText) marks = marks.map((m,i) => i === active ? {...m,text:m.savedText!} : m);
+    if (selected?.savedFeedback) marks = marks.map((m,i) => i === active ? {...m,text:m.savedText ?? ''} : m);
     else marks = marks.filter((_,i) => i !== active);
     save(); closeComment(false); focusCanvas();
   }
@@ -219,31 +239,84 @@
     const storage = key; marks = []; active = -1; lastComment = -1; message = '';
     try {
       const saved = JSON.parse(localStorage.getItem(storage) ?? '[]');
-      if (Array.isArray(saved)) marks = saved.filter(m => ['Before','After'].includes(m.side) && typeof m.text === 'string' && ['x','y','w','h'].every(k => Number.isFinite(m[k]) && m[k] >= 0 && m[k] <= 1)).slice(0,30);
+      if (Array.isArray(saved)) marks = saved.filter(validMark).slice(0,30);
     } catch { /* local drafts are optional */ }
   });
   function save() { try { localStorage.setItem(key, JSON.stringify(marks)); } catch { message = 'Draft storage unavailable. Keep this review open until you send your feedback.'; } }
   function selectTool(value: typeof tool) { message = ''; tool = value; if (value !== 'view' && !single) mode = 'after'; }
-  function place(mark: ReviewMark) {
+  // Comment marks open the editor. A drawn shape is feedback on its own: it is sent as it is, and a double click adds words to it.
+  function place(mark: ReviewMark, comment = true) {
     if (!canComment || marks.length >= 30) { message = 'This screen has reached its 30-annotation limit.'; return; }
-    marks = [...marks, mark]; save(); openComment(marks.length - 1);
+    if (comment) { marks = [...marks, mark]; save(); openComment(marks.length - 1); return; }
+    const id = crypto.randomUUID();
+    const content = `Annotation ${id} (latest comment)\n${markLocation(mark)}\nMarked without a comment.`;
+    if (!onComment(index, content, undefined)) { message = 'Couldn’t add the drawing to feedback.'; return; }
+    marks = [...marks, {...mark, id, text:'', savedText:'', savedFeedback:content}]; save(); message = 'Drawing added to feedback.';
   }
   function point(e: PointerEvent) {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)), y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))};
   }
+  // Shift locks a line or arrow to the nearer axis (90° steps), measured in stage pixels, not normalized units.
+  function locked(e: PointerEvent, from: {x:number;y:number}, to: {x:number;y:number}) {
+    if (!e.shiftKey || (tool !== 'line' && tool !== 'arrow')) return to;
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return Math.abs(to.x-from.x)*r.width >= Math.abs(to.y-from.y)*r.height ? {x:to.x, y:from.y} : {x:from.x, y:to.y};
+  }
+  // A stroke or a two-point shape between its first and current point.
+  function shape(kind: MarkKind, from: {x:number;y:number}, to: {x:number;y:number}, path: number[]): ReviewMark {
+    if (kind === 'pen') {
+      const xs = path.filter((_,i) => i % 2 === 0), ys = path.filter((_,i) => i % 2 === 1);
+      const x = Math.min(...xs), y = Math.min(...ys);
+      return {kind, x, y, w:Math.max(...xs)-x, h:Math.max(...ys)-y, pts:path, side, text:''};
+    }
+    if (kind === 'arrow' || kind === 'line') return {kind, x:from.x, y:from.y, x2:to.x, y2:to.y, w:Math.abs(from.x-to.x), h:Math.abs(from.y-to.y), side, text:''};
+    return {kind, x:Math.min(from.x,to.x), y:Math.min(from.y,to.y), w:Math.abs(from.x-to.x), h:Math.abs(from.y-to.y), side, text:''};
+  }
+  let path: number[] = [];
+  // Keyboard path: Enter on the armed surface drops a default mark in the middle.
+  function placeDefault() {
+    if (tool === 'view') return;
+    if (tool === 'pen') { message = 'Freehand drawing needs a pointer. Use an arrow or a pin from the keyboard.'; return; }
+    if (tool === 'arrow' || tool === 'line') place(shape(tool, {x:.4,y:.5}, {x:.6,y:.5}, []), false);
+    else if (tool === 'pin') place({kind:'pin', x:.5,y:.5,w:0,h:0,side,text:''});
+    else place({kind:tool, x:.5,y:.5,w:.2,h:.2,side,text:''}, false);
+  }
   function down(e: PointerEvent) {
     if (tool === 'view' || !canComment || e.button !== 0) return;
-    e.preventDefault(); start = point(e);
+    e.preventDefault(); start = point(e); path = [start.x, start.y];
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    dragging = { ...start, w:0, h:0, side, text:'' };
+    dragging = shape(drawKind(), start, start, path);
   }
+  // The comment tool draws a rectangle while dragging; a plain click stays a point.
+  const drawKind = (): MarkKind => tool === 'pin' ? 'area' : tool as MarkKind;
   function move(e: PointerEvent) {
-    if (!start || tool !== 'area') return;
-    const p = point(e);
-    dragging = {x:Math.min(start.x,p.x),y:Math.min(start.y,p.y),w:Math.abs(start.x-p.x),h:Math.abs(start.y-p.y),side,text:''};
+    if (!start || tool === 'view') return;
+    const p = locked(e, start, point(e));
+    if (tool === 'pen') path = [...path, p.x, p.y];
+    dragging = shape(drawKind(), start, p, path);
   }
-  function up() { if (dragging) place(dragging); dragging = undefined; start = undefined; }
+  function up(e: PointerEvent) {
+    // The release can carry a position no move reported, so the shape ends where the pointer was lifted.
+    if (start && tool !== 'view') {
+      const p = locked(e, start, point(e));
+      if (tool === 'pen') path = [...path, p.x, p.y];
+      dragging = shape(drawKind(), start, p, path);
+    }
+    const mark = dragging, kind = tool;
+    dragging = undefined; start = undefined;
+    if (!mark || kind === 'view') return;
+    const extent = Math.max(mark.w, mark.h);
+    if (kind === 'pin') { place(extent >= .008 ? mark : {...mark, kind:'pin', w:0, h:0}); return; }
+    // A click without a drag is no rectangle, arrow, ellipse or stroke.
+    if (extent < .008) return;
+    place(kind === 'pen' ? {...mark, pts:simplifyStroke(path)} : mark, false);
+  }
+  // Where the number badge sits: a stroke is numbered at its first point, every other mark at x/y.
+  // A drawing sent without words carries no number; the number appears once there is a comment to point at.
+  const numbered = (m: ReviewMark, i: number) => i === active || markKind(m) === 'pin' || !!(m.text.trim() || m.savedText);
+  const number = (i: number) => marks.slice(0, i + 1).filter((m, n) => numbered(m, n)).length;
+  const anchor = (m: ReviewMark) => m.kind === 'pen' && m.pts ? {x:m.pts[0], y:m.pts[1]} : {x:m.x, y:m.y};
   function update(text: string) { saveFailed = false; marks = marks.map((m,i) => i === active ? {...m,text} : m); save(); }
   function saveComment(): boolean {
     if (!selected?.text.trim() || selected.text.trim() === selected.savedText) return true;
@@ -263,7 +336,7 @@
   function nextComment(direction = 1) {
     if (marks.length) openComment(lastComment < 0 ? (direction > 0 ? 0 : marks.length-1) : (lastComment + direction + marks.length) % marks.length);
   }
-  function armTool(value: 'pin' | 'area') {
+  function armTool(value: MarkKind) {
     selectTool(tool === value ? 'view' : value);
     if (tool !== 'view') void tick().then(() => root?.querySelector<HTMLButtonElement>('.annotation-surface')?.focus({preventScroll:true}));
   }
@@ -306,15 +379,17 @@
       if (mode === 'slider') { consume(); split = Math.max(0,Math.min(100,split+(key === 'arrowleft' ? -5 : 5))); }
       return;
     }
-    if (!['c','r','v','i','b','n','arrowup','arrowdown','1','2','3','4'].includes(key)) return;
+    if (!['c','r','e','a','l','p','v','b','n','arrowup','arrowdown','1','2','3','4'].includes(key)) return;
     // Never bypass the unsaved-changes prompt by switching tools or images.
     consume();
     if (editing && !requestClose(false)) return;
     switch (key) {
-      case 'c': if (canComment && after && !error) armTool('pin'); break;
-      case 'r': if (canComment && after && !error) armTool('area'); break;
+      case 'c': case 'r': case 'e': case 'a': case 'l': case 'p': {
+        const kind = drawTools.find(t => t.key === key)!.id;
+        if (canComment && after && !error) armTool(kind);
+        break;
+      }
       case 'v': cancelTool(); break;
-      case 'i': infoOpen = !infoOpen; break;
       case 'b': onToggleFeedback?.(); break;
       case 'n': if (canComment) nextComment(e.shiftKey ? -1 : 1); break;
       case 'arrowup': index = Math.max(0,index-1); focusCanvas(); break;
@@ -328,6 +403,17 @@
   }
 </script>
 
+{#snippet stroke(m: ReviewMark, i: number)}
+  {@const kind = markKind(m)}
+  {#if kind === 'line' || kind === 'arrow'}
+    {@const x1 = m.x*stageW}{@const y1 = m.y*stageH}{@const x2 = (m.x2 ?? m.x)*stageW}{@const y2 = (m.y2 ?? m.y)*stageH}
+    <g class="stroke" class:chosen={active === i} data-kind={kind} role="presentation" ondblclick={() => i >= 0 && openComment(i)}><line class="hit" {x1} {y1} {x2} {y2} /><line {x1} {y1} {x2} {y2} />{#if kind === 'arrow'}<polygon points={arrowHead(x1, y1, x2, y2, 14)} />{/if}</g>
+  {:else if kind === 'pen' && m.pts}
+    {@const pts = m.pts.map((v, n) => v * (n % 2 ? stageH : stageW)).join(' ')}
+    <g class="stroke" class:chosen={active === i} data-kind="pen" role="presentation" ondblclick={() => i >= 0 && openComment(i)}><polyline class="hit" points={pts} /><polyline points={pts} /></g>
+  {/if}
+{/snippet}
+
 {#if screen}
 <!-- Route keys bubbling from canvas controls; this region isn't an extra tab stop. -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -340,52 +426,21 @@
   }}>
   <div class="tools">
     <div class="tool-group">
-      <Button icon size="sm" selected={infoOpen} aria-label="Screen details" title="Screen details · I" aria-keyshortcuts="i" aria-expanded={infoOpen} onclick={() => infoOpen = !infoOpen}><Icon name="panels-top-left" size={15} /></Button>
-      <span class="toolbar-separator"></span>
       <Button icon size="sm" aria-label="Previous" title="Previous screen · ↑" aria-keyshortcuts="ArrowUp" disabled={index === 0} onclick={() => index--}><Icon name="chevron-up" size={15} /></Button>
       <span class="screen-count">{index+1} / {screens.length}</span>
       <Button icon size="sm" aria-label="Next" title="Next screen · ↓" aria-keyshortcuts="ArrowDown" disabled={index >= screens.length-1} onclick={() => index++}><Icon name="chevron-down" size={15} /></Button>
     </div>
     <div class="tool-group comparison" aria-label="Comparison mode">
-      {#each [{id:'slider',label:'Slider'},{id:'split',label:'Side by side'},{id:'before',label:'Before'},{id:'after',label:'After'}] as item,i}
-        <Button size="sm" title={`${item.label} · ${i+1}`} aria-keyshortcuts={String(i+1)} selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => chooseMode(item.id)}>{item.label}</Button>
+      {#each modes as item,i}
+        <Button icon size="sm" aria-label={item.label} title={`${item.label} · ${i+1}`} aria-keyshortcuts={String(i+1)} selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => chooseMode(item.id)}><Icon name={item.icon} size={15} /></Button>
       {/each}
     </div>
     <div class="tool-group">
       {#if marks.length && canComment}<Button size="sm" aria-label="Next comment" title="Next comment · N / Previous · Shift+N" aria-keyshortcuts="n Shift+n" onclick={() => nextComment()}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
-      {#if canComment}<Button icon size="sm" selected={tool === 'pin'} disabled={!after} aria-label="Add pin" title="Comment pin · C" aria-keyshortcuts="c" onclick={() => armTool('pin')}><Icon name="message-square-text" size={15} /></Button><Button icon size="sm" selected={tool === 'area'} disabled={!after} aria-label="Mark area" title="Mark area · R" aria-keyshortcuts="r" onclick={() => armTool('area')}><Icon name="square" size={15} /></Button>{/if}
-      <span class="toolbar-separator"></span>
-      <div class="tool-group zoom-controls" role="group" aria-label="Preview zoom">
-        <Button icon size="sm" aria-label="Zoom out" title="Zoom out · −" disabled={zoom <= 100} onclick={() => stepZoom(-1)}><Icon name="minus" size={15} /></Button>
-        <Select title="Zoom relative to Fit · + / − / 0 to fit · Pinch or Ctrl+scroll" aria-keyshortcuts="+ - 0" aria-label="Screenshot zoom" value={String(zoom)} onchange={e => void setZoom(Number(e.currentTarget.value))}>
-          {#each zoomLevels as level}<option value={String(level)}>{level === 100 ? 'Fit' : `${level}%`}</option>{/each}
-          {#if !zoomLevels.includes(zoom)}<option value={String(zoom)}>{zoom}%</option>{/if}
-        </Select>
-        <Button icon size="sm" aria-label="Zoom in" title="Zoom in · +" disabled={zoom >= 400} onclick={() => stepZoom(1)}><Icon name="plus" size={15} /></Button>
-      </div>
-      <Button icon size="sm" aria-label="Screenshot shortcuts" title="Keyboard shortcuts · ?" aria-keyshortcuts="?" aria-expanded={shortcutsOpen} selected={shortcutsOpen} onclick={() => shortcutsOpen = !shortcutsOpen}><Icon name="circle-help" size={15} /></Button>
+            {#if canComment}<div class="tool-group draw-tools" role="group" aria-label="Annotation tools">{#each drawTools as t}<Button icon size="sm" selected={tool === t.id} disabled={!after} aria-label={t.label} title={`${t.title} · ${t.key.toUpperCase()}`} aria-keyshortcuts={t.key} onclick={() => armTool(t.id)}><Icon name={t.icon} size={15} /></Button>{/each}</div>{/if}
     </div>
-    {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
-      <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
-      <dl>{#each shortcuts as [keys,action]}<div><dt>{action}</dt><dd><kbd>{keys}</kbd></dd></div>{/each}</dl>
-      <p>Pinch or Ctrl+scroll to zoom around the pointer. Scroll to pan. Zoom percentages are relative to Fit.</p>
-      <p>In a comment, {saveKeys} saves and ⌘Delete removes it. Plain Delete only removes comments outside text fields.</p>
-    </aside>{/if}
   </div>
-  <div class="canvas-body" class:info-open={infoOpen}>
-  {#if infoOpen}<aside class="info-rail" aria-label="Screen details">
-    <nav class="screen-list" aria-label="Review screens">
-      {#each screens as s,i}<button type="button" class="screen-link" class:active={index === i} aria-current={index === i ? 'true' : undefined} onclick={() => index = i}><Icon name="image" size={14} /><span>{s.title}</span></button>{/each}
-    </nav>
-    <h2 class="sr-only">{screen.title}</h2>
-    {#if screen.caption || screen.url || screen.viewport || screen.selector || freshness === 'stale'}<div class="screen-info">
-      {#if freshness === 'stale'}<p class="outdated" role="status"><Icon name="circle-alert" size={13} />Outdated screenshots</p>{/if}
-      {#if screen.caption}<p>{screen.caption}</p>{/if}
-      {#if screen.url}<p class="break-words">{screen.url}</p>{/if}
-      {#if screen.viewport}<p>{screen.viewport}</p>{/if}
-      {#if screen.selector}<p class="break-words">Element: <code>{screen.selector}</code></p>{/if}
-    </div>{/if}
-  </aside>{/if}
+  <div class="canvas-body">
   <div class="canvas-area" bind:this={canvasArea}>
   <div class="viewport" bind:this={viewport}>
     {#if error}<p role="alert" class="p-4 text-warn">Could not load screenshot. <Button onclick={() => retry++}>Retry image</Button></p>
@@ -404,12 +459,16 @@
             {#if single && canComment && tool !== 'view'}
               <button type="button" class="annotation-surface" aria-label={`Place comment on ${side} screenshot`}
                 onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={() => { start = undefined; dragging = undefined; }}
-                onclick={e => { if (e.detail === 0) place({x:.5,y:.5,w:tool === 'area' ? .2 : 0,h:tool === 'area' ? .2 : 0,side,text:''}); }}
+                onclick={e => { if (e.detail === 0) placeDefault(); }}
+                ondblclick={e => { if (tool === 'pin') return; const r = e.currentTarget.getBoundingClientRect(); const hit = marks.findLastIndex(m => m.side === side && markHit(m, e.clientX - r.left, e.clientY - r.top, r.width, r.height)); if (hit >= 0) openComment(hit); }}
                 ></button>
             {/if}
             {#if single}
-              {#each marks as mark,i}{#if mark.side === side}<button class="pin" class:chosen={active === i} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} data-mark={i} aria-label={`Comment ${i+1}`} aria-expanded={active === i && editing} onclick={e => { e.stopPropagation(); openComment(i); }}>{i+1}</button>{#if mark.w || mark.h}<button type="button" class="region region-hit" aria-label={`Open area comment ${i+1}`} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} style:width={`${mark.w*100}%`} style:height={`${mark.h*100}%`} onclick={() => openComment(i)}></button>{/if}{/if}{/each}
-              {#if dragging}<div class="region" style:left={`${dragging.x*100}%`} style:top={`${dragging.y*100}%`} style:width={`${dragging.w*100}%`} style:height={`${dragging.h*100}%`}></div>{/if}
+              <svg class="shapes" viewBox={`0 0 ${stageW || 1} ${stageH || 1}`} aria-hidden="true">
+                {#each [...marks.map((m,i) => ({m,i})).filter(({m}) => m.side === side), ...(dragging ? [{m:dragging,i:-1}] : [])] as {m,i}}{@render stroke(m, i)}{/each}
+              </svg>
+              {#each marks as mark,i}{#if mark.side === side}{@const at = anchor(mark)}{@const kind = markKind(mark)}{#if numbered(mark, i)}<button class="pin" class:chosen={active === i} style:left={`${at.x*100}%`} style:top={`${at.y*100}%`} data-mark={i} aria-label={`Comment ${number(i)}`} aria-expanded={active === i && editing} onclick={e => { e.stopPropagation(); openComment(i); }}>{number(i)}</button>{/if}{#if kind === 'area' || kind === 'ellipse'}<button type="button" class="region region-hit" class:ellipse={kind === 'ellipse'} aria-label={`Open ${kind === 'area' ? 'area' : 'ellipse'} comment${numbered(mark, i) ? ` ${number(i)}` : ''}`} style:left={`${mark.x*100}%`} style:top={`${mark.y*100}%`} style:width={`${mark.w*100}%`} style:height={`${mark.h*100}%`} onclick={e => { if (e.detail === 0) openComment(i); }} ondblclick={() => openComment(i)}></button>{/if}{/if}{/each}
+              {#if dragging && (dragging.kind === 'area' || dragging.kind === 'ellipse')}<div class="region" class:ellipse={dragging.kind === 'ellipse'} style:left={`${dragging.x*100}%`} style:top={`${dragging.y*100}%`} style:width={`${dragging.w*100}%`} style:height={`${dragging.h*100}%`}></div>{/if}
             {/if}
           </div>
         {/if}
@@ -417,10 +476,10 @@
     {/if}
   </div>
   {#if editing && selected}
-    <div class="annotation-editor" bind:this={editor} role="dialog" aria-label={`Comment ${active+1} · ${selected.side}`} tabindex="-1" style:left={`${editorPosition.left}px`} style:top={`${editorPosition.top}px`}
+    <div class="annotation-editor" bind:this={editor} role="dialog" aria-label={`Comment ${number(active)} · ${selected.side}`} tabindex="-1" style:left={`${editorPosition.left}px`} style:top={`${editorPosition.top}px`}
       onkeydown={handleKey}>
       <div class="editor-heading">
-        <label for="canvas-comment">Comment {active+1}<span class="editor-side">{selected.side}</span></label>
+        <label for="canvas-comment">Comment {number(active)}<span class="editor-side">{selected.side}</span></label>
         <div class="editor-controls">
           <Button icon size="xs" variant="danger" aria-label="Delete comment" title="Delete comment · ⌘Backspace / ⌘Delete" aria-keyshortcuts="Meta+Backspace Meta+Delete Delete Backspace" onclick={() => deleteComment()}><Icon name="trash-2" size={14} /></Button>
           <Button icon size="xs" aria-label="Close comment" title="Close comment · Esc" aria-keyshortcuts="Escape" onclick={() => requestClose()}><Icon name="x" size={14} /></Button>
@@ -439,6 +498,24 @@
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
+  <p class="screen-title" title={[screen.caption,screen.url,screen.viewport].filter(Boolean).join(" · ") || undefined}>{screen.title}</p>
+  <div class="view-overlay">
+    {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
+      <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
+      <dl>{#each shortcuts as [keys,action]}<div><dt>{action}</dt><dd><kbd>{keys}</kbd></dd></div>{/each}</dl>
+      <p>Pinch or Ctrl+scroll to zoom around the pointer. Scroll to pan. Zoom percentages are relative to Fit.</p>
+      <p>In a comment, {saveKeys} saves and ⌘Delete removes it. Plain Delete only removes comments outside text fields.</p>
+    </aside>{/if}
+      <div class="tool-group zoom-controls" role="group" aria-label="Preview zoom">
+        <Button icon size="sm" aria-label="Zoom out" title="Zoom out · −" disabled={zoom <= 100} onclick={() => stepZoom(-1)}><Icon name="minus" size={15} /></Button>
+        <Select title="Zoom relative to Fit · + / − / 0 to fit · Pinch or Ctrl+scroll" aria-keyshortcuts="+ - 0" aria-label="Screenshot zoom" value={String(zoom)} onchange={e => void setZoom(Number(e.currentTarget.value))}>
+          {#each zoomLevels as level}<option value={String(level)}>{level === 100 ? 'Fit' : `${level}%`}</option>{/each}
+          {#if !zoomLevels.includes(zoom)}<option value={String(zoom)}>{zoom}%</option>{/if}
+        </Select>
+        <Button icon size="sm" aria-label="Zoom in" title="Zoom in · +" disabled={zoom >= 400} onclick={() => stepZoom(1)}><Icon name="plus" size={15} /></Button>
+      </div>
+      <Button icon size="sm" aria-label="Screenshot shortcuts" title="Keyboard shortcuts · ?" aria-keyshortcuts="?" aria-expanded={shortcutsOpen} selected={shortcutsOpen} onclick={() => shortcutsOpen = !shortcutsOpen}><Icon name="circle-help" size={15} /></Button>
+  </div>
   </div>
   </div>
 
@@ -448,29 +525,26 @@
 <style>
   .canvas { min-width:0; height:100%; display:grid; grid-template-rows:auto minmax(0,1fr); }
   .canvas:focus { outline:none; }
-  .tools { position:relative; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
-  .shortcut-help { position:absolute; z-index:6; top:calc(100% + 6px); right:8px; width:min(340px,calc(100% - 16px)); max-height:70vh; overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; font-size:12px; }
+  .tools { position:relative; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
+  .screen-title { position:absolute; z-index:6; left:12px; bottom:12px; max-width:calc(50% - 110px); margin:0; padding:5px 10px; border-radius:8px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); font-size:12px; color:var(--color-ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
+  .view-overlay { position:absolute; z-index:6; right:12px; bottom:12px; display:flex; align-items:center; gap:4px; padding:3px; border:1px solid var(--color-edge); border-radius:10px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); box-shadow:0 4px 16px #0005; }
+  .view-overlay :global(.lola-select) { width:72px; }
+  .view-overlay :global(.lola-field) { border-color:transparent; background:transparent; box-shadow:none; }
+  .view-overlay :global(.lola-field:hover) { background:color-mix(in srgb,var(--color-ink) 8%,transparent); }
+  .shortcut-help { position:absolute; z-index:6; bottom:calc(100% + 8px); right:0; width:min(400px,calc(100% - 16px)); max-height:70vh; overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; font-size:12px; }
   .shortcut-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
-  .shortcut-help dl div { display:flex; justify-content:space-between; gap:16px; padding:4px 0; }
-  .shortcut-help dt { color:var(--color-ink-2); }
-  .shortcut-help kbd { font:inherit; color:var(--color-ink); white-space:nowrap; }
+  .shortcut-help dl { display:grid; gap:6px; }
+  .shortcut-help dl div { display:flex; flex-direction:row-reverse; justify-content:flex-end; align-items:baseline; gap:12px; }
+  .shortcut-help dt { color:var(--color-ink); font-size:13px; }
+  /* Same key chip as the app-wide Keyboard shortcuts sheet. */
+  .shortcut-help kbd { display:inline-block; min-width:5.5rem; flex-shrink:0; padding:1px 8px; border:1px solid var(--color-edge); border-radius:4px; background:var(--color-canvas); color:var(--color-accent-ink); font-family:var(--font-mono); font-size:12px; text-align:center; white-space:nowrap; }
   .shortcut-help p { margin-top:10px; color:var(--color-ink-2); font-size:11px; }
   .tool-group { display:flex; align-items:center; gap:3px; }
   .comparison { padding:2px; border-radius:6px; background:var(--color-canvas); }
-  .toolbar-separator { height:18px; width:1px; background:var(--color-edge); margin:0 5px; }
   .screen-count { color:var(--color-faint); font-size:12px; min-width:32px; text-align:center; }
   .tools :global(.lola-select) { width:78px; }
   .tools :global(select) { height:28px; padding-top:2px; padding-bottom:2px; }
   .canvas-body { display:grid; grid-template-columns:minmax(0,1fr); min-height:0; }
-  .canvas-body.info-open { grid-template-columns:220px minmax(0,1fr); }
-  .info-rail { overflow:auto; min-width:0; padding:12px; border-right:1px solid var(--color-edge); }
-  .screen-list { display:grid; gap:4px; padding-bottom:16px; }
-  .screen-link { display:grid; grid-template-columns:14px minmax(0,1fr); align-items:start; gap:8px; padding:9px 10px; border-radius:5px; text-align:left; font-size:12px; line-height:18px; color:var(--color-ink-2); cursor:pointer; }
-  .screen-link :global(svg) { margin-top:2px; }
-  .screen-link:hover { background:var(--color-sel); color:var(--color-ink); }
-  .screen-link.active { background:var(--color-accent-fill); color:var(--color-accent-ink); }
-  .screen-info { border-top:1px solid var(--color-edge); padding-top:16px; font-size:12px; line-height:1.6; color:var(--color-ink-2); }
-  .outdated { display:flex; align-items:center; gap:6px; margin-bottom:12px; color:var(--color-warn); }
   .canvas-area { position:relative; min-width:0; min-height:0; }
   .viewport { height:100%; min-width:0; min-height:0; overflow:auto; overflow-anchor:none; background:var(--color-canvas); padding:16px; display:flex; }
   .zoom-frame { margin:auto; flex-shrink:0; }
@@ -488,6 +562,13 @@
   .before-label { left:8px; } .after-label { right:8px; }
   .pin { position:absolute; z-index:2; width:26px; height:26px; transform:translate(-50%,-50%); border-radius:50%; background:var(--color-accent-fill); color:var(--color-accent-ink); border:2px solid var(--color-accent); cursor:pointer; font-size:12px; }
   .pin.chosen { outline:2px solid var(--color-ink); outline-offset:2px; }
+  .shapes { position:absolute; inset:0; width:100%; height:100%; z-index:1; pointer-events:none; overflow:visible; }
+  .stroke { stroke:var(--color-accent); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; fill:none; }
+  .stroke polygon { fill:var(--color-accent); stroke-width:1; }
+  .stroke .hit { stroke:transparent; stroke-width:16; pointer-events:stroke; cursor:pointer; }
+  .stroke.chosen { stroke:var(--color-ink); filter:drop-shadow(0 0 3px var(--color-accent)); }
+  .stroke.chosen polygon { fill:var(--color-ink); }
+  .region.ellipse { border-radius:50%; }
   .region { position:absolute; border:2px solid var(--color-accent); background:color-mix(in srgb,var(--color-accent) 12%,transparent); pointer-events:none; }
   .region-hit { pointer-events:auto; cursor:pointer; }
   .annotation-editor { position:absolute; z-index:5; width:min(300px,calc(100% - 24px)); max-height:calc(100% - 24px); overflow:auto; padding:10px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; animation:comment-open 150ms cubic-bezier(.16,1,.3,1); }
@@ -502,7 +583,6 @@
   .canvas-notice { position:absolute; bottom:12px; left:12px; max-width:calc(100% - 24px); padding:8px 12px; font-size:12px; color:var(--color-ink-2); border:1px solid var(--color-edge); border-radius:6px; background:var(--color-panel); pointer-events:none; }
   label { display:block; font-size:12px; color:var(--color-ink-2); margin-bottom:8px; }
   textarea { display:block; width:100%; padding:10px; margin-bottom:10px; background:var(--color-canvas); border:1px solid var(--color-edge); border-radius:6px; color:var(--color-ink); resize:vertical; font-size:13px; }
-  .screen-link:focus-visible,.annotation-surface:focus-visible,.comparison-drag:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
-  @media(max-width:900px) { .canvas-body.info-open { grid-template-columns:190px minmax(0,1fr); } .tools { gap:6px; padding:6px; flex-wrap:wrap; } .comparison { order:3; flex:1; justify-content:center; } .viewport { padding:16px; } }
-  @media(max-width:560px) { .canvas-body { position:relative; } .canvas-body.info-open { grid-template-columns:minmax(0,1fr); } .info-rail { position:absolute; top:0; bottom:0; left:0; width:210px; background:var(--color-panel); z-index:4; box-shadow:4px 6px 16px #0003; } }
+  .annotation-surface:focus-visible,.comparison-drag:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
+  @media(max-width:900px) { .tools { gap:6px; padding:6px; flex-wrap:wrap; } .comparison { order:3; flex:1; justify-content:center; } .viewport { padding:16px; } }
 </style>

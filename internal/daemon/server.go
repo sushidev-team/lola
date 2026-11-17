@@ -475,6 +475,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "askMerge":
+		data, err := d.handleAskMerge(ctx, req.Session, req.Ref)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "diff":
 		data, err := d.handleDiff(ctx, req.Session)
 		if err != nil {

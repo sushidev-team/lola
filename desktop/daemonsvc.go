@@ -130,6 +130,16 @@ func (s *DaemonService) ResolveConflict(session string) (protocol.ResolveConflic
 	return d, err
 }
 
+// AskMerge asks a session's coding agent to merge branch into the session's
+// own branch. It is what the branch graph offers for a checkout the app must
+// not merge itself (a sandboxed session's worktree). The daemon refuses it (as
+// an error) unless the agent is provably resting at its prompt.
+func (s *DaemonService) AskMerge(session, branch string) (protocol.AskMergeData, error) {
+	var d protocol.AskMergeData
+	err := call(protocol.Request{Cmd: "askMerge", Session: session, Ref: branch}, shortTimeout, &d)
+	return d, err
+}
+
 // Diff returns the session's changes for the diff tab: its worktree against
 // the merge-base with the project's default_branch, uncommitted and untracked
 // work included. Read-only.

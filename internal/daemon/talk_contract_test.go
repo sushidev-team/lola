@@ -250,6 +250,7 @@ func TestTypedNoteLabels(t *testing.T) {
 		{reviewHandoffLabel(reviewProvider{Kind: kindCoderabbitWatch}, claude), "lola sent CodeRabbit's findings to Claude"},
 		{broadcastLabel(claude, "x"), "Your broadcast went to Claude"},
 		{resolveConflictLabel(claude), "You asked Claude to resolve conflicts"},
+		{askMergeLabel(claude, "main"), "You asked Claude to merge main"},
 		{mergeQueueSyncLabel(claude), "lola asked Claude to catch up for the merge queue"},
 		{answerLabel(claude), "You answered Claude"},
 	} {

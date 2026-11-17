@@ -713,16 +713,48 @@ func TestParseRate(t *testing.T) {
 	}
 }
 
-func TestCodexGolden(t *testing.T) {
-	root := t.TempDir()
-	day := filepath.Join(root, "2026", "11", "06")
-	writeFile(t, filepath.Join(day, "rollout-a-interactive.jsonl"), fixture(t, "codex/interactive.jsonl"))
+// The capture is made of records codex-cli 0.167 to 0.169 wrote, with their values replaced
+// (see codex.go). One day holds this session's thread, its subagent's, its guardian's, a
+// review pass and another worktree's thread, as a real sessions directory does.
+func codexCapture(t *testing.T) (root string, mainID, childID, guardianID string) {
+	t.Helper()
+	root = t.TempDir()
+	day := filepath.Join(root, "2026", "11", "17")
+	id := func(name string) string {
+		var m codexMeta
+		line, _, _ := bytes.Cut(fixture(t, name), []byte("\n"))
+		if err := json.Unmarshal(line, &m); err != nil {
+			t.Fatal(err)
+		}
+		var p struct {
+			Payload struct {
+				ID string `json:"id"`
+			} `json:"payload"`
+		}
+		_ = json.Unmarshal(line, &p)
+		return p.Payload.ID
+	}
+	mainID, childID, guardianID = id("codex/capture-main.jsonl"), id("codex/capture-subagent.jsonl"), id("codex/capture-guardian.jsonl")
+	writeFile(t, filepath.Join(day, "rollout-2026-11-17T10-46-57-"+mainID+".jsonl"), fixture(t, "codex/capture-main.jsonl"))
+	writeFile(t, filepath.Join(day, "rollout-2026-11-17T10-50-00-"+childID+".jsonl"), fixture(t, "codex/capture-subagent.jsonl"))
+	writeFile(t, filepath.Join(day, "rollout-2026-11-17T10-46-58-"+guardianID+".jsonl"), fixture(t, "codex/capture-guardian.jsonl"))
 	writeFile(t, filepath.Join(day, "rollout-b-exec.jsonl"), fixture(t, "codex/exec.jsonl"))
-	writeFile(t, filepath.Join(day, "rollout-c-guardian.jsonl"), fixture(t, "codex/guardian.jsonl"))
 	writeFile(t, filepath.Join(day, "rollout-d-other.jsonl"), fixture(t, "codex/other-cwd.jsonl"))
-	if err := os.Symlink(filepath.Join(day, "rollout-a-interactive.jsonl"), filepath.Join(day, "rollout-e-link.jsonl")); err != nil {
+	if err := os.Symlink(filepath.Join(day, "rollout-2026-11-17T10-46-57-"+mainID+".jsonl"), filepath.Join(day, "rollout-e-link.jsonl")); err != nil {
 		t.Fatal(err)
 	}
+	// A day that is a symlink is never walked: a sandboxed agent writes this directory.
+	elsewhere := t.TempDir()
+	writeFile(t, filepath.Join(elsewhere, "rollout-f-planted.jsonl"), bytes.ReplaceAll(fixture(t, "codex/capture-guardian.jsonl"), []byte(`"parent_thread_id"`), []byte(`"was_parent"`)))
+	if err := os.Symlink(elsewhere, filepath.Join(root, "2026", "11", "18")); err != nil {
+		t.Fatal(err)
+	}
+	return root, mainID, childID, guardianID
+}
+
+func TestCodexGolden(t *testing.T) {
+	root, _, childID, guardianID := codexCapture(t)
+	ctx := context.Background()
 
 	f := NewFeed(func() Source { return NewCodex(root, "/w/s1") })
 	if h := drain(t, f); h != protocol.FeedOK {
@@ -731,14 +763,77 @@ func TestCodexGolden(t *testing.T) {
 	all := f.All()
 	golden(t, "codex", all)
 	b, _ := json.Marshal(all)
-	for _, leak := range []string{"review pass", "guardian thread", "another worktree", "injected context"} {
+	for _, leak := range []string{"review pass", "guardian", "another worktree", "injected context", "not a row", "not the human", "not the conversation", "lola report"} {
 		if bytes.Contains(b, []byte(leak)) {
 			t.Errorf("%q reached the conversation", leak)
 		}
 	}
-	text, _, err := f.Output(context.Background(), "i-4")
-	if err != nil || !strings.Contains(text, "FAIL") {
-		t.Errorf("output: %q %v", text, err)
+
+	row := func(name, summary string) Item {
+		t.Helper()
+		for _, it := range all {
+			if it.Tool != nil && it.Tool.Name == name && strings.Contains(it.Tool.Summary, summary) {
+				return it
+			}
+		}
+		t.Fatalf("no %s row for %q", name, summary)
+		return Item{}
+	}
+	failed := row("Bash", "go test")
+	if failed.Tool.Status != "error" {
+		t.Errorf("a failed command reads %q", failed.Tool.Status)
+	}
+	if text, _, err := f.Output(ctx, failed.ID); err != nil || !strings.Contains(text, "FAIL") {
+		t.Errorf("command output: %q %v", text, err)
+	}
+	// The item says how long the command ran; the record's span is only the fallback.
+	if built := row("Bash", "go build"); built.Tool.DurationMs < 1000 || built.Tool.Detail == "" {
+		t.Errorf("build row: %+v", built.Tool)
+	}
+	edit := row("Edit", "internal/a.go")
+	if edit.Tool.Added != 5 || edit.Tool.Removed != 3 || strings.Contains(edit.Tool.Summary, "/w/s1") {
+		t.Errorf("edit row: %+v", edit.Tool)
+	}
+	if text, _, err := f.Output(ctx, edit.ID); err != nil || !strings.Contains(text, "+var x = 2") {
+		t.Errorf("edit output: %q %v", text, err)
+	}
+	if denied := row("ctx_compose", "review the export"); denied.Tool.Status != "error" || !strings.Contains(denied.Tool.Preview, "rejected") {
+		t.Errorf("a refused MCP call: %+v", denied.Tool)
+	}
+	if text, _, err := f.Output(ctx, row("linear.get_issue", "ENG-42").ID); err != nil || !strings.Contains(text, "Fix the build") {
+		t.Errorf("mcp output: %q %v", text, err)
+	}
+
+	// One row per subagent, closed by its completion, and its thread opens on demand.
+	sub := row("Agent", "finish_reviewer")
+	if sub.Tool.Subagent != childID || sub.Tool.Status != "ok" {
+		t.Fatalf("subagent row: %+v, want thread %s", sub.Tool, childID)
+	}
+	thread, _, err := f.Thread(ctx, childID, 0)
+	if err != nil || len(thread) != 2 {
+		t.Fatalf("thread: %d items, %v", len(thread), err)
+	}
+	for _, it := range thread {
+		if it.Parent != childID || !strings.HasPrefix(it.ID, "agent-"+childID+"/") {
+			t.Errorf("thread item %q has parent %q", it.ID, it.Parent)
+		}
+	}
+	if text, _, err := f.Output(ctx, thread[0].ID); err != nil || !strings.Contains(text, "a.go") {
+		t.Errorf("thread output: %q %v", text, err)
+	}
+	for _, not := range []string{guardianID, "../" + childID, "nope"} {
+		if _, _, err := f.Thread(ctx, not, 0); err == nil {
+			t.Errorf("%q opened as a subagent", not)
+		}
+	}
+}
+
+// A thread in another directory is nobody's subagent here, whatever its id.
+func TestCodexThreadStaysInItsDirectory(t *testing.T) {
+	root, _, childID, _ := codexCapture(t)
+	f := NewFeed(func() Source { return NewCodex(root, "/w/other") })
+	if _, _, err := f.Thread(context.Background(), childID, 0); err == nil {
+		t.Error("a subagent of another session opened")
 	}
 }
 

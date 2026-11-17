@@ -73,6 +73,10 @@ export function Diff(_project: string, _worktree: string, _$from: string, _to: s
 }
 
 /** PLATFORM. */
+export function ChangeLines(_project: string, _worktree: string, _area: string, _path: string, _patch: string, _lines: number[] | null, _stage: boolean): Promise<PG.File[] | null> {
+  return unsupported("ProjectGitService.ChangeLines", MAC_ONLY);
+}
+
 export function DiscardUnstaged(_project: string, _worktree: string, _token: string): Promise<void> {
   return unsupported("ProjectGitService.DiscardUnstaged", MAC_ONLY);
 }
@@ -164,6 +168,11 @@ export function StashDrop(_project: string, _worktree: string, _sha: string): Pr
 }
 
 /** PLATFORM. */
+export function Uncommit(_project: string, _worktree: string, _expectedHead: string): Promise<void> {
+  return unsupported("ProjectGitService.Uncommit", MAC_ONLY);
+}
+
+/** PLATFORM. */
 export function StashPush(_project: string, _worktree: string, _message: string, _expectedHead: string): Promise<void> {
   return unsupported("ProjectGitService.StashPush", MAC_ONLY);
 }
@@ -192,6 +201,7 @@ export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   CreatePullRequest: { kind: "platform", reason: MAC_ONLY },
   CreateWorktree: { kind: "platform", reason: MAC_ONLY },
   Diff: { kind: "platform", reason: MAC_ONLY },
+  ChangeLines: { kind: "platform", reason: MAC_ONLY },
   DiscardUnstaged: { kind: "platform", reason: MAC_ONLY },
   DiscardPaths: { kind: "platform", reason: MAC_ONLY },
   DraftCommitMessage: { kind: "platform", reason: MAC_ONLY },
@@ -213,5 +223,6 @@ export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   StashDrop: { kind: "platform", reason: MAC_ONLY },
   StashPush: { kind: "platform", reason: MAC_ONLY },
   Stashes: { kind: "platform", reason: MAC_ONLY },
+  Uncommit: { kind: "platform", reason: MAC_ONLY },
   Unstage: { kind: "platform", reason: MAC_ONLY },
 };

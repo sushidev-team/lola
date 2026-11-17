@@ -65,6 +65,14 @@ export function CancelAICommit(id: string): $CancellablePromise<void> {
     return $Call.ByID(3035722579, id);
 }
 
+/**
+ * ChangeLines stages or unstages only the chosen changed lines of one file; the
+ * patch is the one the human saw and is refused if the file has moved on.
+ */
+export function ChangeLines(project: string, worktree: string, area: string, path: string, patch: string, lines: number[] | null, stage: boolean): $CancellablePromise<projectgit$0.File[] | null> {
+    return $Call.ByID(2829500693, project, worktree, area, path, patch, lines, stage);
+}
+
 export function Commit(project: string, worktree: string, message: string): $CancellablePromise<void> {
     return $Call.ByID(2416522199, project, worktree, message);
 }
@@ -185,6 +193,13 @@ export function StashPush(project: string, worktree: string, message: string, ex
 
 export function Stashes(project: string, worktree: string): $CancellablePromise<projectgit$0.Stash[] | null> {
     return $Call.ByID(3500878383, project, worktree);
+}
+
+/**
+ * Uncommit removes the checkout's newest commit and keeps its changes staged.
+ */
+export function Uncommit(project: string, worktree: string, expectedHead: string): $CancellablePromise<void> {
+    return $Call.ByID(2202216816, project, worktree, expectedHead);
 }
 
 export function Unstage(project: string, worktree: string, paths: string[] | null): $CancellablePromise<projectgit$0.File[] | null> {

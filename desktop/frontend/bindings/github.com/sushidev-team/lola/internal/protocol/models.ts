@@ -254,6 +254,15 @@ export interface AgentStopData {
 }
 
 /**
+ * AskMergeData is Response.Data for cmd=askMerge. Branch is the branch the
+ * agent was asked to merge and Message the short human-readable outcome.
+ */
+export interface AskMergeData {
+    "branch": string;
+    "message"?: string;
+}
+
+/**
  * BestOfArgs is the argument payload for cmd=bestOf: start ONE Linear issue
  * as several attempts on sibling branches. Issue is an identifier (FE-231) or a
  * UUID; Project names the [[project]] to run it in ("" = the one project

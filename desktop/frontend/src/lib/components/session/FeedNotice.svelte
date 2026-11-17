@@ -32,7 +32,8 @@
     </p>
   {:else if unreadable}
     <p class="flex items-center gap-2 py-2 text-sm text-faint" data-feed-notice="unreadable">
-      <span><span class="text-warn">This {program} version's log isn't readable.</span> Your agent is fine.</span>
+      <!-- No reader at all is not a version problem, and saying so sent people looking for an upgrade. -->
+      <span><span class="text-warn">{health === "unsupported" ? `lola can't read ${program}'s log yet.` : `This ${program} version's log isn't readable.`}</span> Your agent is fine.</span>
       <Button variant="secondary" size="xs" onclick={() => ssh.showAgentPane(sessionId)}>Terminal</Button>
     </p>
   {/if}

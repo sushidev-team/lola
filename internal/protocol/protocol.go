@@ -102,6 +102,16 @@ const GoalStartV2 = "goalStartV2"
 // watching a button. The reply is ResolveConflictData naming the branch asked
 // for.
 //
+// Cmd "askMerge" asks a session's coding agent to merge another branch into
+// the session's own branch: Session names the target, Ref the branch to merge,
+// as the project's repository shows it (a local branch or a remote-tracking
+// one). It is what the app offers where it must not merge itself: a sandboxed
+// session's checkout takes no host git once its agent runs. It obeys the
+// send-keys safety rules of resolveConflict and, like it, does NOT defer: a
+// mid-turn agent is an error. Ref is restricted to a conservative branch-name
+// alphabet, because it is the one outside value in the instruction. Stack
+// sessions are refused. The reply is AskMergeData. Desktop only.
+//
 // Cmd "diff" returns the session's changes for the in-app diff viewer as
 // DiffData: its worktree against the merge-base with the project's
 // default_branch, uncommitted and untracked work included. Read-only (one
@@ -175,7 +185,7 @@ const GoalStartV2 = "goalStartV2"
 // any sub-issue is open. A parent that already has sub-issues is refused. The
 // reply is PlanApplyData.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|pairStatus|pairConfirm|pairReject|devices|revokeDevice|setDeviceTiers|sessionTimeline|relayCred|agentReport|plan|planApply
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|askMerge|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|pairStatus|pairConfirm|pairReject|devices|revokeDevice|setDeviceTiers|sessionTimeline|relayCred|agentReport|plan|planApply
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -187,7 +197,7 @@ type Request struct {
 	// Open fields, set only for cmd=open: manually check out a branch/PR of a
 	// project into a throwaway worktree + shell. Project names the [[project]];
 	// Ref is the target — a bare PR number (fetched as refs/pull/<n>/head) or a
-	// branch name.
+	// branch name. cmd=askMerge reuses Ref for the branch the agent should merge.
 	Project string `json:"project,omitempty"`
 	Ref     string `json:"ref,omitempty"`
 
@@ -1028,6 +1038,13 @@ type DevFreePortData struct {
 // which branch it named rather than repeating its own guess), and Message is the
 // short human-readable outcome.
 type ResolveConflictData struct {
+	Branch  string `json:"branch"`
+	Message string `json:"message,omitempty"`
+}
+
+// AskMergeData is Response.Data for cmd=askMerge. Branch is the branch the
+// agent was asked to merge and Message the short human-readable outcome.
+type AskMergeData struct {
 	Branch  string `json:"branch"`
 	Message string `json:"message,omitempty"`
 }
