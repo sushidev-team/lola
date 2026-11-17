@@ -66,7 +66,6 @@
           <span class="preview-caption"><span>{screen.title}</span><Icon name="arrow-right" size={14}/></span>
         </button>{/each}</div>
       </section>{/if}
-      {#if overview.details.length}<details class="additional source-details"><summary><Chevron class="disclosure-chevron" />Details</summary>{@render entries(overview.details,'')}</details>{/if}
   </div>
   <div class="decision-column">
     {#if !split}<div class="readiness">
@@ -102,7 +101,7 @@
   .overview.split .change-column,.overview.split .decision-column { gap:20px; }
   .overview.split .decision-column { display:contents; }
   .overview.split .change-column { display:contents; }
-  .overview.split .review-intro { order:0; } .overview.split .features { order:2; } .overview.split .risks { order:3; } .overview.split .source-details { order:4; }
+  .overview.split .review-intro { order:0; } .overview.split .features { order:2; } .overview.split .risks { order:3; }
   .overview.split h1 { font-size:22px; max-width:none; margin-bottom:10px; }
   .overview.split .features,.overview.split .risks { padding:14px; border-radius:12px; }
   .overview.split .risks h2 { font-size:14px; } .overview.split .risks .section-count { min-width:20px; height:20px; font-size:11px; }
@@ -154,7 +153,6 @@
   .empty-copy { color:var(--color-ink-2); padding:8px 0 16px; font-size:13px; }
   .additional { margin-top:12px; font-size:12px; color:var(--color-ink-2); }
   .additional > summary { margin-bottom:12px; }
-  .source-details { margin:0; }
   .screenshot-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
   .screen-preview { align-self:start; text-align:left; min-width:0; border-radius:12px; cursor:pointer; background:transparent; }
   .screen-preview :global(.thumbnail) { display:flex; border:1px solid color-mix(in srgb,var(--color-info) 20%,var(--color-edge)); border-radius:12px; padding:12px; background:color-mix(in srgb,var(--color-info) 9%,var(--color-panel)); transition:border-color 160ms ease-out,background 160ms ease-out; }
@@ -200,7 +198,7 @@
   .feedback { padding:20px; border-radius:12px; background:color-mix(in srgb,var(--color-info) 6%,var(--color-panel)); }
   @media(min-width:1200px) { .screenshot-grid { grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; } }
   @media(max-width:1100px) { .overview { gap:32px; grid-template-columns:minmax(0,1fr) 330px; } h1 { font-size:26px; } }
-  @media(max-width:800px) { .overview { grid-template-columns:minmax(0,1fr); gap:32px; max-width:620px; } .change-column,.decision-column { display:contents; } .readiness { order:1; } .features { order:2; } .visual-review { order:3; } .risks { order:4; } .feedback { order:5; } .source-details { order:6; } }
+  @media(max-width:800px) { .overview { grid-template-columns:minmax(0,1fr); gap:32px; max-width:620px; } .change-column,.decision-column { display:contents; } .readiness { order:1; } .features { order:2; } .visual-review { order:3; } .risks { order:4; } .feedback { order:5; } }
   @media(max-width:440px) { .risks { padding:20px 16px; } .features { padding:20px 16px; } .features h2 { font-size:20px; } .feature-description { margin-right:0; } h1 { font-size:24px; } .screenshot-grid { gap:16px 12px; } .screen-preview :global(.thumbnail) { padding:6px; border-radius:8px; } .preview-caption { font-size:12px; } }
   /* Phone: one flat column. No card inside a card, headings no larger than the 28/34 title tier. */
   :global([data-phone-desk]) .readiness,:global([data-phone-desk]) .features,:global([data-phone-desk]) .risks,:global([data-phone-desk]) .feedback { padding:0; border:0; border-radius:0; background:transparent; }
