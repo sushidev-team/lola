@@ -984,7 +984,9 @@ func (n *Native) launchLine(project, id string, kind agent.Kind, prompt, model s
 	args = append(agent.LaunchModelArgs(kind, model), args...)
 	if kind == agent.Codex {
 		notify, _ := json.Marshal([]string{n.lolaBin(), "hook", "codex-notify"})
-		args = append([]string{"-c", "notify=" + string(notify)}, args...)
+		// Started without a prompt (a revive), codex opens on "Update available" and waits
+		// for a key whenever a newer release exists. Nobody is there to press it.
+		args = append([]string{"-c", "check_for_update_on_startup=false", "-c", "notify=" + string(notify)}, args...)
 	}
 	posix := "set -a; . ./" + lolaDir + "/env; set +a; "
 	if kind == agent.Codex {
@@ -1018,15 +1020,18 @@ func (n *Native) launchLine(project, id string, kind agent.Kind, prompt, model s
 // parent of the shared .git), and a sandboxed codex asks every time because its private
 // CODEX_HOME has never seen the folder.
 //
-// The answer is a per-process config override (-c projects."<root>".trust_level), left in
-// "$@" for the exec that follows. Nothing is written: the user's config.toml keeps only
-// the decisions they made. The root lands inside a TOML string, so it is used only when
+// The answer is a per-process config override, left in "$@" for the exec that follows.
+// Nothing is written: the user's config.toml keeps only the decisions they made. It is the
+// whole projects table as one TOML value (-c projects={"<root>"={trust_level="trusted"}}),
+// because codex splits a -c key on its dots and ignores quotes there: the dotted form
+// projects."<root>".trust_level names a key that holds the quote marks and matches nothing.
+// (Measured on codex-cli 0.167.2, where the trust screen shows a few seconds after start.) The root lands inside a TOML string, so it is used only when
 // every character is on a plain list (the "#" is a sentinel that keeps a newline from
 // vanishing with the command substitution). Any other path, or a shared directory that is
 // not a checkout's .git, gets no override and codex asks as before.
 const codexTrustPrelude = `set --; case "$lola_git_common_dir" in */.git) lola_trust_root=${lola_git_common_dir%/.git}; ` +
 	`if test "$(printf '%s#' "$lola_trust_root" | LC_ALL=C tr -d '[:alnum:]/._ @+,:=~-')" = '#'; then ` +
-	`set -- -c "projects.\"$lola_trust_root\".trust_level=\"trusted\""; fi ;; esac; `
+	`set -- -c "projects={\"$lola_trust_root\"={trust_level=\"trusted\"}}"; fi ;; esac; `
 
 // writeAgentArtifacts writes the per-agent lifecycle-callback artifact(s) into
 // the worktree at dir, before launch, for the resolved kind:
