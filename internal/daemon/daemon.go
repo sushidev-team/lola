@@ -105,6 +105,10 @@ type Daemon struct {
 	// missing login (sandboxlogin.go). Its own lock.
 	relogin reloginState
 
+	// projectGitMu serializes a phone's repository actions (projectgit.go);
+	// projectGitFetchMu keeps a network fetch from holding the edit lock.
+	projectGitMu, projectGitFetchMu sync.Mutex
+
 	mu     sync.Mutex
 	cfg    *config.Config
 	cfgErr string // non-empty = cfg failed validation; polls are held

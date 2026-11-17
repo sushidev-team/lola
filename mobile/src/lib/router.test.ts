@@ -144,3 +144,14 @@ describe("router", () => {
     expect(router.sheet).toBe("");
   });
 });
+
+describe("the Git screen route", () => {
+  it("round-trips /projects/<name>/git and climbs back to the project", () => {
+    const route = parseRoute("/projects/nori-app/git");
+    expect(route).toEqual({ name: "tab", tab: "projects", project: "nori-app", pick: "git" });
+    expect(formatRoute(route!)).toBe("/projects/nori-app/git");
+    router.stack = [route!];
+    router.back();
+    expect(router.top).toEqual({ name: "tab", tab: "projects", project: "nori-app" });
+  });
+});

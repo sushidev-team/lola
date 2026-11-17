@@ -15,6 +15,7 @@
     projectDetail: () => import("./screens/ProjectDetail.svelte"),
     prPicker: () => import("./screens/PRPicker.svelte"),
     ticketPicker: () => import("./screens/TicketPicker.svelte"),
+    git: () => import("./screens/Git.svelte"),
     settings: () => import("./screens/Settings.svelte"),
     session: () => import("./screens/session/Session.svelte"),
     bridgeGuard: () => import("./screens/dev/BridgeGuard.svelte"),
@@ -32,6 +33,7 @@
       case "tab":
         if (r.tab === "projects") {
           if (!r.project) return "projects";
+          if (r.pick === "git") return "git";
           return r.pick === "prs" ? "prPicker" : r.pick === "tickets" ? "ticketPicker" : "projectDetail";
         }
         return r.tab;
