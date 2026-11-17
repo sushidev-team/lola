@@ -41,7 +41,8 @@ func (s *Server) postShares(w http.ResponseWriter, auth store.Device, body []byt
 		return
 	}
 	now := s.cfg.Now()
-	keep := map[string]bool{}
+	s.regMu.Lock()
+	defer s.regMu.Unlock()
 	err := s.cfg.Store.Update(func(d *store.Data) error {
 		dev, err := liveDevice(d, auth.ID)
 		if err != nil {
@@ -57,7 +58,6 @@ func (s *Server) postShares(w http.ResponseWriter, auth store.Device, body []byt
 			if hit, ok := d.FindShare(e.ID); ok && hit.Owner.ID != dev.ID {
 				return fail(http.StatusConflict, hubproto.CodeConflict)
 			}
-			keep[e.RV] = true
 		}
 		rec := d.SharesOf(dev.ID)
 		rec.Entries = req.Shares
@@ -72,19 +72,7 @@ func (s *Server) postShares(w http.ResponseWriter, auth store.Device, body []byt
 		return
 	}
 	// What the set no longer holds loses its connections.
-	if s.cfg.Relay != nil {
-		kept := map[string]bool{}
-		_ = s.cfg.Store.View(func(d *store.Data) error {
-			for _, e := range d.RelayEntriesOf(auth.ID) {
-				kept[e.RV] = true
-			}
-			return nil
-		})
-		for rv := range keep {
-			kept[rv] = true
-		}
-		s.cfg.Relay.Retain(auth.ID, kept)
-	}
+	s.retainHeld(auth.ID)
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
@@ -257,4 +245,26 @@ func (s *Server) sharesRoute() http.HandlerFunc {
 		}
 		post(w, r)
 	}
+}
+
+// retainHeld closes the device's relay connections whose rendezvous it no longer
+// holds, as phone entry or as published share. The caller holds regMu, so the
+// holdings read here are the ones the commit it follows left.
+func (s *Server) retainHeld(device string) {
+	if s.cfg.Relay == nil {
+		return
+	}
+	kept := map[string]bool{}
+	_ = s.cfg.Store.View(func(d *store.Data) error {
+		for _, e := range d.RelayEntriesOf(device) {
+			kept[e.RV] = true
+		}
+		if rec := d.Shares[device]; rec != nil {
+			for _, sh := range rec.Entries {
+				kept[sh.RV] = true
+			}
+		}
+		return nil
+	})
+	s.cfg.Relay.Retain(device, kept)
 }

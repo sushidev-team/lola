@@ -62,6 +62,18 @@ describe("ShareStore", () => {
     expect(s.members[0].allowed).toBe(true);
   });
 
+  it("a read begun before a successful removal cannot bring the teammate back", async () => {
+    let late: ((v: unknown) => void) | undefined;
+    ShareMembers.mockImplementationOnce(() => new Promise((r) => (late = r)));
+    ShareUntrust.mockResolvedValue({ members: [{ ...member, allowed: false }] });
+    const s = new ShareStore();
+    const pending = s.refresh();
+    expect(await s.untrust("d1", { allow: true })).toBe(true);
+    late!({ members: [{ ...member, allowed: true, trusted: true }] });
+    await pending;
+    expect(s.members[0].allowed).toBe(false);
+  });
+
   it("shows the daemon's refusal of a pin in its own words and pins nothing", async () => {
     ShareTrust.mockRejectedValue(new Error("Error: share: the fingerprint changed since you looked; compare it again"));
     const s = new ShareStore();

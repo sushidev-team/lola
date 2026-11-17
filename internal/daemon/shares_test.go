@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -344,6 +345,10 @@ func TestSharingAloneNeverServesPhones(t *testing.T) {
 	if !in.wanted || len(in.entries) != 0 {
 		t.Fatalf("relay inputs = %+v", in)
 	}
+	// No phone entry to register, yet the control channel must stay up for the share.
+	if in.idle() {
+		t.Fatalf("a share-only relay is idle: %+v", in)
+	}
 	// Un-sharing takes the server down again.
 	if _, err := shareDo[protocol.ShareSessionData](t, rd.Daemon, protocol.CmdShareSession, protocol.ShareSessionArgs{Session: "lola-a"}); err != nil {
 		t.Fatal(err)
@@ -506,4 +511,80 @@ func TestFirstPinStartsSharingForSessionsSharedEarlier(t *testing.T) {
 	if rd.remote == nil {
 		t.Fatal("pinning the first teammate did not bring the server up")
 	}
+}
+
+func TestShareChangesArePersistedAndRepeatedMembersCollapse(t *testing.T) {
+	rd, sh := newShareDaemon(t)
+	m, k := sh.teammate(t, "ada-mini")
+	rd.pin(t, m, k)
+	rd.addSession("lola-a", func(s *session.Session) { s.Sandbox = "docker" })
+	reload := func() session.Session {
+		s, _ := session.NewStore(filepath.Join(rd.home, "state")).Get("lola-a")
+		return s
+	}
+	// A repeated audience id must not make the whole published set invalid.
+	if _, err := shareDo[protocol.ShareSessionData](t, rd.Daemon, protocol.CmdShareSession,
+		protocol.ShareSessionArgs{Session: "lola-a", On: true, With: []string{m.DeviceID, m.DeviceID}}); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := rd.sessions.Get("lola-a")
+	if len(s.Share.With) != 1 {
+		t.Fatalf("audience = %v", s.Share.With)
+	}
+	if err := (hubproto.ShareSet{Shares: rd.shareSet().Shares}).Validate(); err != nil {
+		t.Fatalf("published set is invalid: %v", err)
+	}
+	if !reload().Share.On() {
+		t.Fatal("a share was not persisted before success was returned")
+	}
+	// An un-share is on disk too: a restart must not bring the access back.
+	if _, err := shareDo[protocol.ShareSessionData](t, rd.Daemon, protocol.CmdShareSession, protocol.ShareSessionArgs{Session: "lola-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if reload().Share.On() {
+		t.Fatal("the un-share was not persisted")
+	}
+}
+
+func TestLeavingTheHubForgetsWhatWasPublished(t *testing.T) {
+	rd, sh := newShareDaemon(t)
+	m, k := sh.teammate(t, "ada-mini")
+	rd.pin(t, m, k)
+	rd.addSession("lola-a", func(s *session.Session) { s.Sandbox = "docker" })
+	if _, err := shareDo[protocol.ShareSessionData](t, rd.Daemon, protocol.CmdShareSession, protocol.ShareSessionArgs{Session: "lola-a", On: true}); err != nil {
+		t.Fatal(err)
+	}
+	rd.sharePass(t.Context())
+	st := rd.shareSt()
+	st.mu.Lock()
+	cached, gen := st.published != "" && st.identity != "", st.gen
+	st.mu.Unlock()
+	if !cached {
+		t.Fatal("the pass cached nothing")
+	}
+	rd.hubResetIdentity()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.published != "" || st.identity != "" || st.gen == gen {
+		t.Fatalf("a new hub would be skipped: published=%q identity=%q gen %d->%d", st.published, st.identity, gen, st.gen)
+	}
+}
+
+func TestAdoptedSessionsAreNotSharedAsNew(t *testing.T) {
+	rd, sh := newShareDaemon(t)
+	m, k := sh.teammate(t, "ada-mini")
+	rd.pin(t, m, k)
+	on := true
+	rd.mu.Lock()
+	rd.cfg.Hub.ShareNewSessions = &on
+	rd.mu.Unlock()
+	rd.adopting.Store(true)
+	rd.addSession("lola-old", nil)
+	rd.adopting.Store(false)
+	time.Sleep(150 * time.Millisecond)
+	if s, _ := rd.sessions.Get("lola-old"); s.Share.On() {
+		t.Fatal("a session re-adopted at startup was shared as if new")
+	}
+	rd.addSession("lola-new", nil)
+	waitUntil(t, func() bool { s, _ := rd.sessions.Get("lola-new"); return s.Share.On() })
 }

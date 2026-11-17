@@ -282,6 +282,7 @@ type relayInputs struct {
 	hub       config.HubConfig
 	hasServer bool
 	wanted    bool
+	sharing   bool   // a published share needs the control channel with no phone entry
 	reason    string // why not wanted, or "no_phones"
 	entries   []hubproto.RelayRendezvous
 }
@@ -298,6 +299,7 @@ func (d *Daemon) relayGather(now time.Time) relayInputs {
 	// Sharing keeps the relay wanted even with phones off: a teammate dials in
 	// on a share's rendezvous through the same control channel.
 	sharing := cfgErr == "" && d.shareActive(joined)
+	in.sharing = sharing
 	switch {
 	case cfgErr != "":
 		// Its own word, so a UI can tell "config.toml has an error" from
@@ -324,6 +326,12 @@ func (d *Daemon) relayGather(now time.Time) relayInputs {
 		}
 	}
 	return in
+}
+
+// idle reports that nothing needs the control channel: not wanted, or neither a
+// phone entry nor a published share to serve.
+func (in relayInputs) idle() bool {
+	return !in.wanted || (len(in.entries) == 0 && !in.sharing)
 }
 
 // relayEntries is the rendezvous set this daemon wants registered, sorted by
@@ -546,7 +554,7 @@ func (r *hubRelay) wait(ctx context.Context, d time.Duration, onDirty bool) rela
 func (d *Daemon) relayStep(ctx context.Context, fails *int, hold *relayHold) {
 	r := d.relay()
 	in := d.relayGather(d.relayNow())
-	if !in.wanted || len(in.entries) == 0 {
+	if in.idle() {
 		d.relayToOff(ctx, in)
 		*hold = relayHold{}
 		r.wait(ctx, -1, true)
@@ -800,7 +808,7 @@ func (d *Daemon) relayServe(ctx context.Context, in relayInputs, rc *hub.RelayCl
 			}
 		case <-r.kick:
 			cur := d.relayGather(d.relayNow())
-			if !cur.wanted || len(cur.entries) == 0 || !sameHub(cur.hub.URL, in.hub.URL) {
+			if cur.idle() || !sameHub(cur.hub.URL, in.hub.URL) {
 				_ = ws.CloseWithCode(hubproto.WSCloseNormal)
 				return relayOutcome{state: protocol.HubRelayStateOff}
 			}
@@ -812,7 +820,7 @@ func (d *Daemon) relayServe(ctx context.Context, in relayInputs, rc *hub.RelayCl
 			// The last phone went (a revoke): nothing is left to serve, and no
 			// kick follows a registry change. Leave here; the loop's off path
 			// posts the empty set.
-			if cur := d.relayGather(d.relayNow()); !cur.wanted || len(cur.entries) == 0 {
+			if cur := d.relayGather(d.relayNow()); cur.idle() {
 				_ = ws.CloseWithCode(hubproto.WSCloseNormal)
 				return relayOutcome{state: protocol.HubRelayStateOff}
 			}

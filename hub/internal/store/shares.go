@@ -53,7 +53,7 @@ func (d *Data) FindShare(id string) (ShareHit, bool) {
 // Audience reports whether device may see e, shared by owner: same org, not
 // the owner, and either listed or the share is open to the whole org.
 func Audience(e hubproto.ShareEntry, owner, device *Device) bool {
-	if owner == nil || device == nil || owner.ID == device.ID || owner.Org != device.Org || device.Revoked() {
+	if owner == nil || owner.Revoked() || device == nil || owner.ID == device.ID || owner.Org != device.Org || device.Revoked() {
 		return false
 	}
 	if len(e.Members) == 0 {

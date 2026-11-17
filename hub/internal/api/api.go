@@ -110,6 +110,10 @@ type Server struct {
 	enroll *bucket
 	open   *bucket // code-less team creations, hub-wide
 	enMu   sync.Mutex
+	// regMu orders a registration commit with the Retain that follows it, across the
+	// phone and share publication paths: Retain gets the device's CURRENT holdings,
+	// so neither path can close a splice the other just opened.
+	regMu sync.Mutex
 
 	// acceptTimeout is how long a phone dial waits for the daemon's accept
 	// leg; 0 = hubproto.RelayAcceptTimeout (a test seam).

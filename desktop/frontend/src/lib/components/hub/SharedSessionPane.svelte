@@ -32,6 +32,8 @@
     const n = name;
     untrack(() => (info = null));
     if (!n) return;
+    // A read still pending when the stream changes must not land on the next stream.
+    let cancelled = false;
     const off = Events.On(`share:${n}`, (e: { data: SharedSession }) => {
       info = e.data;
     });
@@ -42,13 +44,14 @@
       if (untrack(() => info) || ++tries > 12) return clearInterval(timer);
       TermService.ShareInfo(n)
         .then((r) => {
-          if (!info) info = r;
+          if (!cancelled && !info) info = r;
         })
         .catch(() => {});
     };
     const timer = setInterval(read, 1000);
     read();
     return () => {
+      cancelled = true;
       off();
       clearInterval(timer);
     };

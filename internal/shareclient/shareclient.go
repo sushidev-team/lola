@@ -35,6 +35,10 @@ const (
 	reconnectResubs = 3
 )
 
+// resubRetryDelay spaces the retries of a rate-limited replacement subscription
+// (a variable so tests need not wait).
+var resubRetryDelay = time.Second
+
 var (
 	// ErrPinMismatch is returned when the peer's key is not the one the person
 	// pinned: a different machine, or someone in the middle.
@@ -429,6 +433,42 @@ func (c *Conn) inOrder(pane string, seq uint64) bool {
 	return false
 }
 
+// retryResub recovers a replacement subscription the owner rate-limited. After a gap
+// the baseline is dropped until a resync arrives; a refusal of that subscription would
+// otherwise leave the old one running while every output frame is discarded. A refused
+// input (the stream is running, a baseline exists) is not this case. The retry is bounded
+// by the same budget as gaps; past it the connection ends so the caller can reattach.
+func (c *Conn) retryResub(pane string) {
+	c.mu.Lock()
+	sp, subscribed := c.subs[pane]
+	_, haveBaseline := c.seq[pane]
+	n := c.resubs[pane]
+	if !subscribed || haveBaseline {
+		c.mu.Unlock()
+		return
+	}
+	c.resubs[pane] = n + 1
+	c.mu.Unlock()
+	if n >= reconnectResubs {
+		c.fail(errors.New("shareclient: the owner kept refusing the subscription"))
+		return
+	}
+	time.AfterFunc(resubRetryDelay, func() {
+		select {
+		case <-c.done:
+			return
+		default:
+		}
+		c.mu.Lock()
+		_, still := c.subs[pane]
+		_, have := c.seq[pane]
+		c.mu.Unlock()
+		if still && !have {
+			_ = c.sendSub(pane, sp)
+		}
+	})
+}
+
 func (c *Conn) deliver(f protocol.Frame) {
 	// The send happens under c.mu: fail closes these channels under the same
 	// lock, so a send can never meet a closed channel.
@@ -465,6 +505,9 @@ func (c *Conn) onErr(f protocol.Frame) {
 			delete(c.subs, f.Pane)
 			delete(c.seq, f.Pane)
 			c.mu.Unlock()
+		}
+		if e.Code == protocol.CodeRateLimited {
+			c.retryResub(f.Pane)
 		}
 		c.emit(Event{Pane: f.Pane, Kind: Refused, Code: e.Code, Msg: e.Message})
 		return

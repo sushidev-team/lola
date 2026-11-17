@@ -60,6 +60,8 @@ type dialed struct {
 	// trusted reports whether the owner's pin still stands (nil = always). It is
 	// asked while the stream lives, so removing the pin ends the attachment.
 	trusted func() bool
+	// owner is the owner's hub device id ("" when unknown), for DetachOwner.
+	owner string
 }
 
 // remoteStream is one attached remote terminal.
@@ -67,7 +69,9 @@ type remoteStream struct {
 	conn    *shareclient.Conn
 	pane    string
 	trusted func() bool
+	owner   string
 
+	emitMu  sync.Mutex // orders pty events: see drain
 	mu      sync.Mutex
 	pending []byte
 	closed  bool
@@ -86,6 +90,10 @@ type Terms struct {
 
 	mu      sync.Mutex
 	streams map[string]*remoteStream
+	// epoch is bumped by every Attach and every detach of a name. An Attach registers
+	// only if its epoch is still current, so a Detach or a newer Attach that landed
+	// during its dial wins and the late connection is closed instead of streaming.
+	epoch map[string]uint64
 }
 
 // Options wire a Terms to its host.
@@ -104,7 +112,7 @@ type Options struct {
 
 // New returns a ready Terms.
 func New(o Options) *Terms {
-	r := &Terms{rosterEvery: o.RosterEvery, emit: o.Emit, offers: o.Offers, streams: map[string]*remoteStream{}}
+	r := &Terms{rosterEvery: o.RosterEvery, emit: o.Emit, offers: o.Offers, streams: map[string]*remoteStream{}, epoch: map[string]uint64{}}
 	if o.Dial != nil {
 		r.dial = func(ctx context.Context, id string) (*dialed, error) {
 			c, t, err := o.Dial(ctx, id)
@@ -130,6 +138,10 @@ func (r *Terms) Attach(name string, cols, rows int) (string, error) {
 		return "", errors.New("invalid share")
 	}
 	_ = r.Detach(name)
+	r.mu.Lock()
+	r.epoch[name]++
+	my := r.epoch[name]
+	r.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), shareDialTimeout)
 	defer cancel()
 	dl, err := r.dial(ctx, shareID)
@@ -162,8 +174,13 @@ func (r *Terms) Attach(name string, cols, rows int) (string, error) {
 		conn.Close()
 		return "", err
 	}
-	s := &remoteStream{conn: conn, pane: info.Pane, info: *info, done: make(chan struct{}), trusted: dl.trusted}
+	s := &remoteStream{conn: conn, pane: info.Pane, info: *info, done: make(chan struct{}), trusted: dl.trusted, owner: dl.owner}
 	r.mu.Lock()
+	if r.epoch[name] != my || (dl.trusted != nil && !dl.trusted()) {
+		r.mu.Unlock()
+		conn.Close()
+		return "", errors.New("the attachment was cancelled")
+	}
 	r.streams[name] = s
 	r.mu.Unlock()
 	go r.pump(name, s)
@@ -225,20 +242,27 @@ func (s *remoteStream) push(b []byte) {
 func (r *Terms) flush(name string, s *remoteStream) {
 	tick := time.NewTicker(16 * time.Millisecond)
 	defer tick.Stop()
-	evt := "pty:" + name
 	for {
 		select {
 		case <-s.done:
 			return
 		case <-tick.C:
 		}
-		s.mu.Lock()
-		chunk := s.pending
-		s.pending = nil
-		s.mu.Unlock()
-		if len(chunk) > 0 {
-			r.emit(evt, base64.StdEncoding.EncodeToString(chunk))
-		}
+		r.drain(name, s)
+	}
+}
+
+// drain emits whatever output is pending. Taking and emitting happen under emitMu, so
+// the ticker's flush and the final flush in end cannot reorder two chunks.
+func (r *Terms) drain(name string, s *remoteStream) {
+	s.emitMu.Lock()
+	defer s.emitMu.Unlock()
+	s.mu.Lock()
+	chunk := s.pending
+	s.pending = nil
+	s.mu.Unlock()
+	if len(chunk) > 0 {
+		r.emit("pty:"+name, base64.StdEncoding.EncodeToString(chunk))
 	}
 }
 
@@ -293,6 +317,8 @@ func (r *Terms) end(name string, s *remoteStream) {
 	s.once.Do(func() { close(s.done) })
 	s.conn.Close()
 	if !intentional && r.emit != nil {
+		// The last output (an exit's own diagnostic) goes out before the exit event.
+		r.drain(name, s)
 		r.emit("pty:"+name+":exit", "")
 	}
 }
@@ -323,6 +349,7 @@ func (r *Terms) Scroll(name string, lines int) error {
 
 func (r *Terms) Detach(name string) error {
 	r.mu.Lock()
+	r.epoch[name]++
 	s := r.streams[name]
 	delete(r.streams, name)
 	r.mu.Unlock()
@@ -337,11 +364,35 @@ func (r *Terms) Detach(name string) error {
 	return nil
 }
 
+// DetachOwner ends every attachment to one owner's sessions. It is the untrust path's
+// own close: it does not wait for the pin file to say so, because a removal that could
+// not be written must still end what is attached.
+func (r *Terms) DetachOwner(device string) {
+	if device == "" {
+		return
+	}
+	r.mu.Lock()
+	var names []string
+	for n, s := range r.streams {
+		if s.owner == device {
+			names = append(names, n)
+		}
+	}
+	r.mu.Unlock()
+	for _, n := range names {
+		_ = r.Detach(n)
+	}
+}
+
 func (r *Terms) DetachAll() {
 	r.mu.Lock()
 	names := make([]string, 0, len(r.streams))
 	for n := range r.streams {
 		names = append(names, n)
+	}
+	// A dial still in flight has no stream yet: bumping its epoch cancels it.
+	for n := range r.epoch {
+		r.epoch[n]++
 	}
 	r.mu.Unlock()
 	for _, n := range names {
@@ -426,7 +477,7 @@ func (r *Terms) dialShare(ctx context.Context, shareID string) (*dialed, error) 
 		return nil, err
 	}
 	device := offer.OwnerDevice
-	return &dialed{conn: conn, trusted: func() bool {
+	return &dialed{owner: device, conn: conn, trusted: func() bool {
 		cur, err := ownerSPKI(home, device)
 		return err == nil && cur == hostSPKI
 	}}, nil

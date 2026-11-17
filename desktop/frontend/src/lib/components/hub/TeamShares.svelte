@@ -7,7 +7,7 @@
   // A pin is two separate decisions, each an icon button: "may attach to my sessions"
   // and "I will attach to theirs". Pinning shows the fingerprint to compare with the one
   // on their Mac; the daemon re-reads their key at that moment and refuses a changed one.
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import Button from "../Button.svelte";
   import Checkbox from "../Checkbox.svelte";
   import Icon from "../Icon.svelte";
@@ -21,18 +21,35 @@
   const groups = $derived(groupOffers(share.offers));
 
   /** The teammate and direction being pinned, waiting for the person's comparison. */
-  let pinning = $state<{ id: string; allow: boolean; trust: boolean } | null>(null);
+  let pinning = $state<{ id: string; allow: boolean; trust: boolean; fingerprint: string } | null>(null);
   let matches = $state(false);
 
   function startPin(m: ShareMemberInfo, dir: "allow" | "trust") {
     matches = false;
+    changed = false;
     share.error = "";
-    pinning = { id: m.deviceId, allow: dir === "allow", trust: dir === "trust" };
+    pinning = { id: m.deviceId, allow: dir === "allow", trust: dir === "trust", fingerprint: m.fingerprint };
   }
 
+  // A refresh that changes the fingerprint under an open comparison voids it: the box is
+  // cleared and the person compares the new one (what is sent is always the compared one).
+  let changed = $state(false);
+  $effect(() => {
+    const p = pinning;
+    if (!p) return;
+    const now = share.members.find((x) => x.deviceId === p.id)?.fingerprint;
+    if (now !== undefined && now !== p.fingerprint)
+      untrack(() => {
+        p.fingerprint = now;
+        matches = false;
+        changed = true;
+      });
+  });
+
   async function confirmPin(m: ShareMemberInfo) {
-    if (!pinning || !matches) return;
-    const ok = await share.trust(m.deviceId, m.fingerprint, { allow: pinning.allow, trust: pinning.trust });
+    if (!pinning || !matches || pinning.fingerprint !== m.fingerprint) return;
+    // The fingerprint the person compared, not whatever a refresh has put there since.
+    const ok = await share.trust(m.deviceId, pinning.fingerprint, { allow: pinning.allow, trust: pinning.trust });
     if (ok) pinning = null;
   }
 
@@ -132,6 +149,7 @@
             <div class="grid gap-2 rounded-md border border-edge px-3 py-2" data-pin-confirm>
               <p class="text-sm text-ink-2">Check that this matches the fingerprint {m.name.split("·")[1]?.trim() || "their Mac"} shows in lola.</p>
               <p class="selectable break-all font-mono text-ink" data-pin-fingerprint>{m.fingerprint}</p>
+              {#if changed}<p role="alert" class="text-sm text-warn" data-pin-changed>The fingerprint changed while you were comparing. Compare the new one.</p>{/if}
               <label class="flex items-center gap-2 text-sm text-ink-2"><Checkbox bind:checked={matches} /> It matches</label>
               <span class="flex gap-2">
                 <Button size="sm" variant="primary" disabled={!matches} loading={!!share.busy[m.deviceId]} onclick={() => void confirmPin(m)} data-pin-confirm-button>{pinning.allow ? "Allow" : "Trust"}</Button>

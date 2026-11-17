@@ -13,12 +13,16 @@ import (
 // rows were trimmed by the host, so the rest of the screen stays cleared.
 func Render(p protocol.ResyncPayload) []byte {
 	var b strings.Builder
-	b.WriteString("\x1b[?25l\x1b[0m\x1b[2J\x1b[H")
+	// Select the buffer the host is on first, so the clear and the repaint land in it:
+	// the alternate screen for an agent that runs on it, the normal one otherwise (a
+	// viewer left on the alternate buffer by an earlier resync would send shell output
+	// to the wrong one).
 	if p.AltScreen {
-		// The host's agent runs on the alternate screen; stay on it so output
-		// that follows addresses the same grid.
-		b.WriteString("\x1b[?1049h\x1b[2J\x1b[H")
+		b.WriteString("\x1b[?1049h")
+	} else {
+		b.WriteString("\x1b[?1049l")
 	}
+	b.WriteString("\x1b[?25l\x1b[0m\x1b[2J\x1b[H")
 	for i, ln := range p.Lines {
 		if i > 0 {
 			b.WriteString("\r\n")

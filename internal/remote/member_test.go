@@ -128,10 +128,8 @@ func TestMemberMustComeThroughAShareRendezvous(t *testing.T) {
 	// On a phone's rv, or any rv that is not a published share: not paired.
 	c := m.dialRV(testRV)
 	_ = c.conn.SetDeadline(time.Now().Add(testTimeout))
-	if _, err := c.read(); err == nil {
-		if f, _ := c.read(); f.Type == protocol.FrameReady {
-			t.Fatal("member admitted on a rendezvous that is not a share's")
-		}
+	if f, err := c.read(); err == nil && f.Type == protocol.FrameReady {
+		t.Fatal("member admitted on a rendezvous that is not a share's")
 	}
 	// A member over the LAN listener never authenticates (relay only).
 	l := startTestListener(t, &stubHandler{}, m.bus, func(o *Options) { o.Members, o.MemberGate = m.members, m.gate })

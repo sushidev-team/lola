@@ -310,6 +310,11 @@ func (s *HubService) ShareTrust(a protocol.ShareTrustArgs) (protocol.ShareMember
 func (s *HubService) ShareUntrust(a protocol.ShareUntrustArgs) (protocol.ShareMembersData, error) {
 	var d protocol.ShareMembersData
 	err := hubCall(protocol.CmdShareUntrust, a, &d, hubViewTimeout)
+	// Whatever the daemon answered: removing someone I attach to ends what is attached
+	// now, even when the removal could not be saved (the pin file would still say so).
+	if (a.Trust || !a.Allow) && detachShareOwner != nil {
+		detachShareOwner(a.DeviceID)
+	}
 	if d.Members == nil {
 		d.Members = []protocol.ShareMemberInfo{}
 	}

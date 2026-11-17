@@ -597,6 +597,9 @@ type Daemon struct {
 	// tell that a hub join or leave changed whether a server should exist even
 	// though [remote] itself did not.
 	remoteServes atomic.Bool
+	// adopting is true while adoptNativeSessions re-inserts survivors: those are not
+	// new sessions, so [hub].share_new_sessions must not share them.
+	adopting atomic.Bool
 	// watch is the event push hub (docs/mobile/02-events.md); hubRelay is the
 	// relay leg to lola-hub (docs/mobile/03-hub-relay.md).
 	watch    *watchHub
@@ -687,7 +690,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	// Every committed session change reaches the watch hub as a poke; the hub
 	// decides what to publish and does nothing when no phone is watching.
 	d.sessions.OnChange(func(c session.Change) {
-		if c.Prev == nil && c.Next != nil {
+		if c.Prev == nil && c.Next != nil && !d.adopting.Load() {
 			// A new session: [hub].share_new_sessions may share it. Off this
 			// callback (it runs under the store lock and must not call back in).
 			go d.shareNewSession(c.ID)
@@ -1430,6 +1433,8 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	if nat == nil {
 		return
 	}
+	d.adopting.Store(true)
+	defer d.adopting.Store(false)
 	found, err := nat.Adopt(ctx)
 	if err != nil {
 		d.logf("", "adopt: native session scan failed: %v", err)

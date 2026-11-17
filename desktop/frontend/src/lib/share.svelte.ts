@@ -48,6 +48,8 @@ export class ShareStore {
 
   #seq = 0;
   #applied = 0;
+  /** Reads started at or before this were begun before a successful pin change and must not land. */
+  #floor = 0;
   #watchers = 0;
   #timer: ReturnType<typeof setInterval> | null = null;
 
@@ -61,7 +63,7 @@ export class ShareStore {
     const seq = ++this.#seq;
     // A binding missing in an older build rejects here instead of escaping.
     const [m, o] = await Promise.allSettled([attempt(() => HubService.ShareMembers()), attempt(() => HubService.ShareOffered())]);
-    if (seq < this.#applied) return;
+    if (seq < this.#applied || seq <= this.#floor) return;
     this.#applied = seq;
     this.error = "";
     if (m.status === "fulfilled") {
@@ -129,6 +131,7 @@ export class ShareStore {
   async trust(deviceId: string, fingerprint: string, dir: { allow?: boolean; trust?: boolean }): Promise<boolean> {
     const r = await this.#change(deviceId, () => HubService.ShareTrust({ deviceId, fingerprint, allow: !!dir.allow, trust: !!dir.trust }));
     if (!r) return false;
+    this.#floor = this.#seq;
     this.members = r.members ?? [];
     this.membersOffline = !!r.offline;
     void this.refresh();
@@ -139,6 +142,7 @@ export class ShareStore {
   async untrust(deviceId: string, dir: { allow?: boolean; trust?: boolean } = {}): Promise<boolean> {
     const r = await this.#change(deviceId, () => HubService.ShareUntrust({ deviceId, allow: !!dir.allow, trust: !!dir.trust }));
     if (!r) return false;
+    this.#floor = this.#seq;
     this.members = r.members ?? [];
     this.membersOffline = !!r.offline;
     void this.refresh();

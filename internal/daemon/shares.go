@@ -54,6 +54,7 @@ type shareState struct {
 	published string // JSON of the last set the hub accepted
 	identity  string // spki the hub last accepted
 	err       string // class of the last failure, "" = none
+	gen       uint64 // bumped when the hub identity resets: a pass that began earlier must not cache
 }
 
 var shareInitMu sync.Mutex
@@ -230,6 +231,9 @@ func (d *Daemon) handleShareSession(ctx context.Context, a protocol.ShareSession
 			return protocol.ShareSessionData{Session: a.Session}, nil
 		}
 		d.afterShareChange(ctx)
+		if err := d.saveShares(); err != nil {
+			return protocol.ShareSessionData{Session: a.Session}, err
+		}
 		return protocol.ShareSessionData{Session: a.Session}, nil
 	}
 	if err := shareable(s); err != nil {
@@ -270,6 +274,8 @@ func (d *Daemon) handleShareSession(ctx context.Context, a protocol.ShareSession
 			return protocol.ShareSessionData{}, errors.New("share: invalid member")
 		}
 	}
+	// A repeated id would make the whole published set invalid at the hub.
+	with = slices.Compact(slices.Sorted(slices.Values(with)))
 	id, err := hubproto.NewShareID()
 	if err != nil {
 		return protocol.ShareSessionData{}, err
@@ -292,6 +298,9 @@ func (d *Daemon) handleShareSession(ctx context.Context, a protocol.ShareSession
 		return protocol.ShareSessionData{}, errors.New("share: no such session")
 	}
 	d.afterShareChange(ctx)
+	if err := d.saveShares(); err != nil {
+		return protocol.ShareSessionData{}, err
+	}
 	return data, nil
 }
 
@@ -633,6 +642,9 @@ func (d *Daemon) sharePass(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	st.mu.Lock()
+	gen := st.gen
+	st.mu.Unlock()
 	setFail := func(err error) {
 		st.mu.Lock()
 		st.err = relayErrText(err)
@@ -656,7 +668,9 @@ func (d *Daemon) sharePass(ctx context.Context) {
 				return
 			}
 			st.mu.Lock()
-			st.identity = spki
+			if st.gen == gen {
+				st.identity = spki
+			}
 			st.mu.Unlock()
 		}
 	}
@@ -679,7 +693,9 @@ func (d *Daemon) sharePass(ctx context.Context) {
 		return
 	}
 	st.mu.Lock()
-	st.published, st.err = string(raw), ""
+	if st.gen == gen {
+		st.published, st.err = string(raw), ""
+	}
 	st.mu.Unlock()
 	d.hubRelayDirty()
 }
@@ -788,5 +804,29 @@ func (d *Daemon) shareNewSession(id string) {
 		return true
 	}); ok {
 		d.afterShareChange(context.Background())
+		_ = d.saveShares()
 	}
+}
+
+// saveShares persists the session store after a share change, so a restart restores
+// what was just set (an un-share most of all). Access is already closed or opened in
+// memory; a failed save is reported, never undone.
+func (d *Daemon) saveShares() error {
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "share: could not save the share change: %v", err)
+		return errors.New("share: the change is in effect but could not be saved")
+	}
+	return nil
+}
+
+// shareForgetPublished clears the publish cache when the hub identity resets (a leave,
+// a join of another hub), so the next pass sends the identity and the share set to the
+// hub now joined. The generation makes a pass that began before the reset drop its result.
+func (d *Daemon) shareForgetPublished() {
+	st := d.shareSt()
+	st.mu.Lock()
+	st.identity, st.published = "", ""
+	st.gen++
+	st.mu.Unlock()
+	d.shareNudge()
 }

@@ -78,6 +78,26 @@ describe("teammates", () => {
     await waitFor(() => expect(row.querySelector("[data-pin-confirm]")).toBeNull());
   });
 
+  it("sends the fingerprint the person compared, and voids the comparison when it changes", async () => {
+    ShareTrust.mockResolvedValue({ members: [{ ...ada, allowed: true }, bob] });
+    render(TeamShares);
+    const row = await teammateRow("Ada · office mini");
+    await fireEvent.click(within(row).getByRole("button", { name: "Allow Ada · office mini to attach to your sessions" }));
+    const confirm = await waitFor(() => row.querySelector("[data-pin-confirm]") as HTMLElement);
+    await fireEvent.click(within(confirm).getByRole("checkbox"));
+    const go = row.querySelector("[data-pin-confirm-button]") as HTMLButtonElement;
+    expect(go).toBeEnabled();
+    share.members = [{ ...ada, fingerprint: "ffff ffff ffff ffff" }, bob];
+    await waitFor(() => expect(row.querySelector("[data-pin-changed]")).not.toBeNull());
+    expect(go).toBeDisabled();
+    expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
+    await fireEvent.click(go);
+    expect(ShareTrust).not.toHaveBeenCalled();
+    await fireEvent.click(within(confirm).getByRole("checkbox"));
+    await fireEvent.click(go);
+    await waitFor(() => expect(ShareTrust).toHaveBeenCalledWith({ deviceId: "d1", fingerprint: "ffff ffff ffff ffff", allow: true, trust: false }));
+  });
+
   it("keeps the dialog open and shows the daemon's refusal when the key changed", async () => {
     ShareTrust.mockRejectedValue(new Error("share: the fingerprint changed since you looked; compare it again"));
     render(TeamShares);

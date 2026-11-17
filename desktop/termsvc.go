@@ -67,6 +67,7 @@ func NewTermService() *TermService {
 			return d, err
 		},
 	})
+	detachShareOwner = t.remote.DetachOwner
 	return t
 }
 
@@ -712,3 +713,9 @@ func (t *TermService) ShareInfo(name string) (protocol.SharedSession, error) {
 	}
 	return info, nil
 }
+
+// detachShareOwner ends every attachment to one teammate's shared sessions. HubService
+// calls it when the person removes that teammate, so the stream closes at once even if
+// the daemon could not write the removal to disk (the pin file would still say trusted).
+// Set by NewTermService; nil in a hand-built service.
+var detachShareOwner func(hubDevice string)

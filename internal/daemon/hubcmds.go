@@ -350,6 +350,7 @@ func (d *Daemon) hubResetIdentity() {
 	w.legacyUntil, w.leaseTTL = time.Time{}, 0
 	w.mu.Unlock()
 	d.hubDropCaches()
+	d.shareForgetPublished()
 }
 
 // hubPolicyDue makes the next cycle fetch the policy whatever its cadence

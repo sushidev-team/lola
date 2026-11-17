@@ -63,6 +63,22 @@ describe("SharedSessionPane", () => {
     expect(await screen.findByRole("list", { name: "Attached: Cy" })).toBeInTheDocument();
   });
 
+  it("ignores a roster read that lands after the stream moved on", async () => {
+    const B = "b".repeat(32);
+    let late: ((v: unknown) => void) | undefined;
+    ShareInfo.mockImplementation((n: string) => (n === `share-${ID}` ? new Promise((r) => (late = r)) : Promise.resolve(info({ id: B, title: "web work" }))));
+    share.offers = [...share.offers, { id: B, title: "web work", level: "view", ownerDevice: "d1", ownerName: "office mini", online: true, trusted: true } as never];
+    share.attach(ID);
+    render(SharedSessionPane);
+    await waitFor(() => expect(late).toBeDefined());
+    share.attach(B);
+    expect(await screen.findByText("web work")).toBeInTheDocument();
+    late!(info({ title: "api work", level: "type" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(document.querySelector("[data-shared-title]")).toHaveTextContent("web work");
+  });
+
   it("the back button leaves the pane", async () => {
     share.attach(ID);
     render(SharedSessionPane);

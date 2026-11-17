@@ -364,3 +364,46 @@ func TestCloseDuringRosterDoesNotPanic(t *testing.T) {
 	c.Close()
 	time.Sleep(50 * time.Millisecond)
 }
+
+func TestRenderSelectsTheHostsBuffer(t *testing.T) {
+	alt := string(Render(protocol.ResyncPayload{Lines: []string{"a"}, AltScreen: true}))
+	if !strings.HasPrefix(alt, "\x1b[?1049h") {
+		t.Errorf("an alternate-screen resync does not enter it first: %q", alt)
+	}
+	normal := string(Render(protocol.ResyncPayload{Lines: []string{"a"}}))
+	if !strings.HasPrefix(normal, "\x1b[?1049l") || strings.Contains(normal, "\x1b[?1049h") {
+		t.Errorf("a normal-screen resync does not leave the alternate buffer first: %q", normal)
+	}
+}
+
+func TestRateLimitedResubscriptionIsRetried(t *testing.T) {
+	old := resubRetryDelay
+	resubRetryDelay = 10 * time.Millisecond
+	t.Cleanup(func() { resubRetryDelay = old })
+	r := newRig(t)
+	c, err := r.dial(r.host.SPKISHA256(), testRV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Subscribe("lola-a", 80, 24)
+	_ = next(t, c)
+	// A gap dropped the baseline and the owner refused the replacement subscription.
+	c.mu.Lock()
+	delete(c.seq, "lola-a")
+	c.mu.Unlock()
+	e := protocol.Frame{Type: protocol.FrameErr, Pane: "lola-a"}
+	_ = e.SetPayload(protocol.ErrPayload{Code: protocol.CodeRateLimited, Message: "slow down"})
+	c.onErr(e)
+	waitFor(t, func() bool { return r.bus.subCount() == 2 })
+	if ev := next(t, c); ev.Kind != Refused && ev.Kind != Resync {
+		t.Fatalf("event = %+v", ev)
+	}
+	// With the stream running again, a refused input must not resubscribe.
+	for ev := next(t, c); ev.Kind != Resync; ev = next(t, c) {
+	}
+	c.onErr(e)
+	time.Sleep(60 * time.Millisecond)
+	if n := r.bus.subCount(); n != 2 {
+		t.Fatalf("a refused input resubscribed: %d subscriptions", n)
+	}
+}

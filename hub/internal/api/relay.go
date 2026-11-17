@@ -84,7 +84,8 @@ func (s *Server) handleRendezvous(w http.ResponseWriter, r *http.Request, auth s
 		return
 	}
 	resp := hubproto.RendezvousResponse{}
-	kept := map[string]bool{}
+	s.regMu.Lock()
+	defer s.regMu.Unlock()
 	err := s.cfg.Store.Update(func(d *store.Data) error {
 		dev, err := liveDevice(d, auth.ID)
 		if err != nil {
@@ -115,13 +116,6 @@ func (s *Server) handleRendezvous(w http.ResponseWriter, r *http.Request, auth s
 				ExpiresAt: e.ExpiresAt.UTC(),
 				UpdatedAt: now.UTC(),
 			}
-			kept[e.RV] = true
-		}
-		// A published share keeps its rendezvous: this set is the phones only.
-		if rec := d.Shares[dev.ID]; rec != nil {
-			for _, sh := range rec.Entries {
-				kept[sh.RV] = true
-			}
 		}
 		resp.Registered = len(accepted)
 		return nil
@@ -130,8 +124,8 @@ func (s *Server) handleRendezvous(w http.ResponseWriter, r *http.Request, auth s
 		s.writeErr(w, err)
 		return
 	}
-	// After the commit: what the set no longer holds loses its connections.
-	s.cfg.Relay.Retain(auth.ID, kept)
+	// After the commit: what the device no longer holds loses its connections.
+	s.retainHeld(auth.ID)
 	writeJSON(w, http.StatusOK, resp)
 }
 
