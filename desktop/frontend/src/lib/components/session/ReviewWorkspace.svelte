@@ -252,11 +252,14 @@
   }
 </script>
 
+{#snippet localChecks()}
+  <details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><OverviewChecks {session} {tests} onJump={jump}/></div></details>
+{/snippet}
 {#snippet checks()}
   {#if reviewSession && !embedded && number}<BeforeMerge session={reviewSession} reviewLayout/>
   {:else if !embedded && !phone}<section class="no-pr" aria-label="PR status"><h3><Icon name="git-pull-request" size={14}/>No pull request yet</h3><p>Review works on the checkout. CI, reviewers, conflicts and merge status appear here once a PR is open.</p></section>{/if}
-  {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} quiet={split} {labels} canRun={canVerify} canRecover={can('reviewPackageRecover')}/>{/key}{/if}
-  {#if session && !phone}<details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><OverviewChecks {session} {tests} onJump={jump}/></div></details>{/if}
+  {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} quiet={split} extra={session && !phone ? localChecks : undefined} {labels} canRun={canVerify} canRecover={can('reviewPackageRecover')}/>{/key}{/if}
+  {#if !current && session && !phone}{@render localChecks()}{/if}
 {/snippet}
 {#snippet reviewFeedback()}
   <section aria-label="Review feedback" class="review-feedback">
@@ -315,7 +318,7 @@
   </div>
   <div class="review-layout" class:panel-open={panelOpen && (tab !== 'material' || !current)}>
     <div class="review-main" class:capturing={captureOpen}>
-      <div class="review-tabs" class:embedded>{#if !embedded}<Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} />{/if}<div class="review-tab-actions">{#if (!embedded || tab === 'visuals') && !phone && can('reviewPackageCapture')}<Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{/if}{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div></div>
+      <div class="review-tabs" class:embedded>{#if !embedded}<Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} />{/if}<div class="review-tab-actions">{#if (!embedded || tab === 'visuals') && !phone && can('reviewPackageCapture')}<Button size="sm" icon variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/></Button>{/if}{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div></div>
       {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={tab === 'visuals' ? canvasScreen : -1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
       {#if tab === 'code' && session}
         <div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><p class="px-4 py-2 text-xs text-faint">Live checkout changes. These may differ from the retained review revision.</p><DiffView {sessionId} /></div>
@@ -357,10 +360,9 @@
         {#if lanes.length}<Select aria-label="Review repository" value={lane?.id} onchange={e => app = e.currentTarget.value}>{#each lanes as a}<option value={a.id}>{a.label}</option>{/each}</Select>{/if}
         {@render versionPicker()}
         {#if can('reviewPackageCapture')}<Button size="sm" variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/>Capture</Button>{/if}
-        {#if current && reviewSupported && can('reviewPackageMark')}<Button size="sm" variant={reviewed?.package === current.id ? 'secondary' : 'primary'} loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{#if reviewed?.package === current.id}<Icon name="check" size={14}/>{/if}{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button>{/if}
         <Button size="sm" icon aria-label="Refresh review" title="Refresh review" loading={loading} onclick={refresh}><Icon name="refresh-cw" size={14} /></Button>
         <span class="toolbar-divider"></span>
-        <Button size="sm" title="Checks & feedback · B" aria-keyshortcuts="b" selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}><Icon name="panel-right" size={14}/>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>
+        <Button size="sm" title="Checks & feedback · B" aria-label="Checks & feedback" aria-keyshortcuts="b" selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}><Icon name="panel-right" size={14}/>{count ? count : ''}</Button>
       </div>
     </header>
 {/snippet}
@@ -381,6 +383,7 @@
           <div class="split-left review-material">{@render material()}</div>
           {#if current}
             <section class="split-right" aria-label="Screenshots">
+              {#if current && reviewSupported && can('reviewPackageMark')}<div class="mark-overlay"><Button size="sm" variant={reviewed?.package === current.id ? 'secondary' : 'primary'} loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{#if reviewed?.package === current.id}<Icon name="check" size={14}/>{/if}{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button></div>{/if}
               {#if current.screens?.length}
                 {#key current.id}<ReviewCanvas bind:this={canvas} compact onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} {canComment} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
               {:else}
@@ -392,8 +395,7 @@
       {/if}
     </div>
     {#if panelOpen}<aside class="review-aside desk-aside" aria-label="Review actions">
-      <div class="aside-scroll">{#if current}<ReviewConfidence pkg={current} {facts} {checking} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest}/>{/if}{@render checks()}</div>
-      <div class="aside-feedback">{@render reviewFeedback()}</div>
+      <div class="aside-scroll">{#if current}<ReviewConfidence pkg={current} {facts} {checking} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest}/>{/if}{@render checks()}<div class="aside-feedback">{@render reviewFeedback()}</div></div>
     </aside>{/if}
   </div>
   </div>
@@ -468,7 +470,7 @@
   .head-tabs :global([role=tab][aria-selected=true]) { background:var(--color-panel); color:var(--color-ink); box-shadow:0 1px 2px #0003; }
   .head-tabs :global([role=tab]:hover) { color:var(--color-ink); }
   .head-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; min-width:0; }
-  .head-actions :global(.lola-select) { width:auto; max-width:230px; }
+  .head-actions :global(.lola-select) { width:auto; max-width:170px; }
   .toolbar-divider { width:1px; height:20px; background:var(--color-edge); margin:0 2px; }
   .head-error { padding:8px 14px; border-bottom:1px solid var(--color-edge); }
   .desk-body { display:flex; flex-direction:column; min-height:0; min-width:0; }
@@ -480,17 +482,19 @@
   .review-split.solo { grid-template-columns:minmax(0,1fr); }
   .split-left.review-material { padding:20px 20px 40px; border-right:1px solid var(--color-edge); min-height:0; }
   .review-split.solo .split-left.review-material { border-right:0; padding:40px; }
-  .split-right { min-width:0; min-height:0; overflow:hidden; background:var(--color-canvas); }
+  .split-right { position:relative; min-width:0; min-height:0; overflow:hidden; background:var(--color-canvas); }
+  .mark-overlay { position:absolute; z-index:5; left:50%; bottom:14px; transform:translateX(-50%); border-radius:8px; box-shadow:0 6px 20px #0006; }
   .no-shots { display:grid; justify-items:center; align-content:center; gap:10px; height:100%; padding:32px; text-align:center; color:var(--color-faint); }
   .no-shots h2 { font-size:15px; font-weight:600; color:var(--color-ink); }
   .no-shots p { max-width:38ch; font-size:13px; line-height:1.6; color:var(--color-ink-2); }
   .desk-aside { display:flex; flex-direction:column; gap:0; padding:0; overflow:hidden; }
-  .aside-scroll { flex:1 1 0; min-height:96px; overflow:auto; display:grid; align-content:start; gap:16px; padding:18px 18px 8px; }
-  .aside-feedback { flex:0 0 auto; padding:14px 18px 18px; border-top:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 5%,var(--color-canvas)); max-height:65%; overflow:auto; }
+  .aside-scroll { flex:1 1 0; min-height:0; overflow:auto; display:grid; align-content:start; gap:16px; padding:18px 18px 0; }
+  .aside-feedback { position:sticky; bottom:0; z-index:2; margin:0 -18px; padding:14px 18px 16px; border-top:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 6%,var(--color-canvas)); }
   .no-pr { display:grid; gap:6px; padding:14px; border:1px dashed var(--color-edge); border-radius:10px; }
   .no-pr h3 { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--color-ink); }
   .no-pr p { font-size:12px; line-height:1.6; color:var(--color-ink-2); }
-  @media(max-width:1180px) { .review-split { grid-template-columns:minmax(0,1fr); overflow:auto; } .split-left.review-material { overflow:visible; border-right:0; } .split-right { min-height:560px; } .desk-head { grid-template-columns:minmax(0,1fr) auto; } .head-tabs { grid-row:2; grid-column:1 / -1; padding-bottom:8px; } }
+  @media(max-width:1180px) { .review-split { grid-template-columns:minmax(0,1fr); overflow:auto; } .split-left.review-material { overflow:visible; border-right:0; } .split-right { min-height:560px; } }
+  @media(max-width:900px) { .desk-head { grid-template-columns:minmax(0,1fr) auto; } .head-tabs { grid-row:2; grid-column:1 / -1; padding-bottom:8px; } }
   .review-aside { display:grid; align-content:start; gap:28px; min-width:0; overflow:auto; padding:24px 20px; border-left:1px solid var(--color-edge); background:var(--color-canvas); }
   .review-input { width:100%; resize:vertical; padding:12px; border:1px solid color-mix(in srgb,var(--color-edge) 70%,transparent); border-radius:8px; background:var(--color-canvas); color:var(--color-ink); font-size:13px; line-height:20px; }
   .review-input:focus { border-color:var(--color-accent); outline:none; }

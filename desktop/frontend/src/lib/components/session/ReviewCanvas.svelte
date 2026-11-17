@@ -34,6 +34,7 @@
     // Temporary switches for annotations or missing baselines aren't preferences.
     try { localStorage.setItem(modeKey, value); } catch { /* remember for this review */ }
   }
+  const modes = [{id:'slider',label:'Slider',icon:'arrow-right-left'},{id:'split',label:'Side by side',icon:'columns-2'},{id:'before',label:'Before',icon:'history'},{id:'after',label:'After',icon:'sparkles'}] as const;
   let tool = $state<'view' | MarkKind>('view');
   let stageW = $state(0), stageH = $state(0);
   const drawTools: { id: MarkKind; label: string; key: string; icon: 'message-square-text' | 'square' | 'circle' | 'arrow-up-right' | 'minus' | 'pencil'; title: string }[] = [
@@ -434,30 +435,14 @@
       <Button icon size="sm" aria-label="Next" title="Next screen · ↓" aria-keyshortcuts="ArrowDown" disabled={index >= screens.length-1} onclick={() => index++}><Icon name="chevron-down" size={15} /></Button>
     </div>
     <div class="tool-group comparison" aria-label="Comparison mode">
-      {#each [{id:'slider',label:'Slider'},{id:'split',label:'Side by side'},{id:'before',label:'Before'},{id:'after',label:'After'}] as item,i}
-        <Button size="sm" title={`${item.label} · ${i+1}`} aria-keyshortcuts={String(i+1)} selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => chooseMode(item.id)}>{item.label}</Button>
+      {#each modes as item,i}
+        <Button icon size="sm" aria-label={item.label} title={`${item.label} · ${i+1}`} aria-keyshortcuts={String(i+1)} selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => chooseMode(item.id)}><Icon name={item.icon} size={15} /></Button>
       {/each}
     </div>
     <div class="tool-group">
       {#if marks.length && canComment}<Button size="sm" aria-label="Next comment" title="Next comment · N / Previous · Shift+N" aria-keyshortcuts="n Shift+n" onclick={() => nextComment()}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
             {#if canComment}<div class="tool-group draw-tools" role="group" aria-label="Annotation tools">{#each drawTools as t}<Button icon size="sm" selected={tool === t.id} disabled={!after} aria-label={t.label} title={`${t.title} · ${t.key.toUpperCase()}`} aria-keyshortcuts={t.key} onclick={() => armTool(t.id)}><Icon name={t.icon} size={15} /></Button>{/each}</div>{/if}
-      <span class="toolbar-separator"></span>
-      <div class="tool-group zoom-controls" role="group" aria-label="Preview zoom">
-        <Button icon size="sm" aria-label="Zoom out" title="Zoom out · −" disabled={zoom <= 100} onclick={() => stepZoom(-1)}><Icon name="minus" size={15} /></Button>
-        <Select title="Zoom relative to Fit · + / − / 0 to fit · Pinch or Ctrl+scroll" aria-keyshortcuts="+ - 0" aria-label="Screenshot zoom" value={String(zoom)} onchange={e => void setZoom(Number(e.currentTarget.value))}>
-          {#each zoomLevels as level}<option value={String(level)}>{level === 100 ? 'Fit' : `${level}%`}</option>{/each}
-          {#if !zoomLevels.includes(zoom)}<option value={String(zoom)}>{zoom}%</option>{/if}
-        </Select>
-        <Button icon size="sm" aria-label="Zoom in" title="Zoom in · +" disabled={zoom >= 400} onclick={() => stepZoom(1)}><Icon name="plus" size={15} /></Button>
-      </div>
-      <Button icon size="sm" aria-label="Screenshot shortcuts" title="Keyboard shortcuts · ?" aria-keyshortcuts="?" aria-expanded={shortcutsOpen} selected={shortcutsOpen} onclick={() => shortcutsOpen = !shortcutsOpen}><Icon name="circle-help" size={15} /></Button>
     </div>
-    {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
-      <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
-      <dl>{#each shortcuts as [keys,action]}<div><dt>{action}</dt><dd><kbd>{keys}</kbd></dd></div>{/each}</dl>
-      <p>Pinch or Ctrl+scroll to zoom around the pointer. Scroll to pan. Zoom percentages are relative to Fit.</p>
-      <p>In a comment, {saveKeys} saves and ⌘Delete removes it. Plain Delete only removes comments outside text fields.</p>
-    </aside>{/if}
   </div>
   <div class="canvas-body" class:info-open={infoOpen}>
   {#if infoOpen}<aside class="info-rail" aria-label="Screen details">
@@ -529,6 +514,23 @@
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
+  <div class="view-overlay">
+    {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
+      <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
+      <dl>{#each shortcuts as [keys,action]}<div><dt>{action}</dt><dd><kbd>{keys}</kbd></dd></div>{/each}</dl>
+      <p>Pinch or Ctrl+scroll to zoom around the pointer. Scroll to pan. Zoom percentages are relative to Fit.</p>
+      <p>In a comment, {saveKeys} saves and ⌘Delete removes it. Plain Delete only removes comments outside text fields.</p>
+    </aside>{/if}
+      <div class="tool-group zoom-controls" role="group" aria-label="Preview zoom">
+        <Button icon size="sm" aria-label="Zoom out" title="Zoom out · −" disabled={zoom <= 100} onclick={() => stepZoom(-1)}><Icon name="minus" size={15} /></Button>
+        <Select title="Zoom relative to Fit · + / − / 0 to fit · Pinch or Ctrl+scroll" aria-keyshortcuts="+ - 0" aria-label="Screenshot zoom" value={String(zoom)} onchange={e => void setZoom(Number(e.currentTarget.value))}>
+          {#each zoomLevels as level}<option value={String(level)}>{level === 100 ? 'Fit' : `${level}%`}</option>{/each}
+          {#if !zoomLevels.includes(zoom)}<option value={String(zoom)}>{zoom}%</option>{/if}
+        </Select>
+        <Button icon size="sm" aria-label="Zoom in" title="Zoom in · +" disabled={zoom >= 400} onclick={() => stepZoom(1)}><Icon name="plus" size={15} /></Button>
+      </div>
+      <Button icon size="sm" aria-label="Screenshot shortcuts" title="Keyboard shortcuts · ?" aria-keyshortcuts="?" aria-expanded={shortcutsOpen} selected={shortcutsOpen} onclick={() => shortcutsOpen = !shortcutsOpen}><Icon name="circle-help" size={15} /></Button>
+  </div>
   </div>
   </div>
 
@@ -539,7 +541,9 @@
   .canvas { min-width:0; height:100%; display:grid; grid-template-rows:auto minmax(0,1fr); }
   .canvas:focus { outline:none; }
   .tools { position:relative; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
-  .shortcut-help { position:absolute; z-index:6; top:calc(100% + 6px); right:8px; width:min(400px,calc(100% - 16px)); max-height:70vh; overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; font-size:12px; }
+  .view-overlay { position:absolute; z-index:6; right:12px; bottom:12px; display:flex; align-items:center; gap:4px; padding:3px; border:1px solid var(--color-edge); border-radius:10px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); box-shadow:0 4px 16px #0005; }
+  .view-overlay :global(.lola-select) { width:72px; }
+  .shortcut-help { position:absolute; z-index:6; bottom:calc(100% + 8px); right:0; width:min(400px,calc(100% - 16px)); max-height:70vh; overflow:auto; padding:12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; font-size:12px; }
   .shortcut-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
   .shortcut-help dl { display:grid; gap:6px; }
   .shortcut-help dl div { display:flex; flex-direction:row-reverse; justify-content:flex-end; align-items:baseline; gap:12px; }

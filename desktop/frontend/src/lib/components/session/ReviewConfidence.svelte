@@ -39,20 +39,20 @@
 {#if !(phone && score === null)}
 <section class="conf" data-tone={tone} aria-label="Review confidence" bind:this={root}>
   <div class="row">
-    <div class="ring">
+    <div class="gauge">
       <span class="dial" style:--p={score !== null && !checking ? score : 0}></span>
       <span class="num">{#if checking}<span role="status" aria-label="Loading confidence"><span class="sr-only">Loading confidence…</span><Skeleton width="26px" height="16px"/></span>{:else if score !== null}<strong class="score">{score}</strong>{:else}–{/if}</span>
     </div>
     <div class="body">
       <div class="title"><h2>Confidence</h2>{#if !phone}<span class="info"><Button icon size="xs" aria-label="About confidence" aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onclick={toggle}><Icon name="info" size={14}/></Button></span>{/if}</div>
       <p class="verdict" class:issues={!checking && confidence.failed > 0}>{#if checking}<Skeleton width="90px" height="14px"/>{:else}{confidence.label}{/if}</p>
-      {#if !checking}<div class="parts">
-        <span class="part" class:issues={confidence.failed > 0}><i>Checks</i><b>{observed === null ? '–' : observed}</b></span>
-        <span class="part"><i>Agent</i><b>{confidence.agent ? confidence.agent.score : '–'}</b></span>
-      </div>{/if}
     </div>
   </div>
-  <p class="rev" use:tooltip={'Reviewed changes, from base to head'}><Icon name="git-branch" size={12}/><code>{pkg.base.slice(0,7)}</code><Icon name="arrow-right" size={11}/><code>{pkg.head.slice(0,7)}</code></p>
+  {#if !checking}<div class="parts">
+    <span class="part" class:issues={confidence.failed > 0}><i>Checks</i><b>{observed === null ? '–' : observed}</b></span>
+    <span class="part"><i>Agent</i><b>{confidence.agent ? confidence.agent.score : '–'}</b></span>
+    <span class="part rev" use:tooltip={'Reviewed changes, from base to head'}><Icon name="git-branch" size={11}/><code>{pkg.base.slice(0,7)}</code><Icon name="arrow-right" size={10}/><code>{pkg.head.slice(0,7)}</code></span>
+  </div>{/if}
   {#if open && !phone}
   <div {id} class="panel" role="dialog" aria-label="About confidence" tabindex="-1" bind:this={panel}>
     <div class="panel-head"><h3>How it is calculated</h3><Button icon size="xs" aria-label="Close confidence details" onclick={close}><Icon name="x" size={14}/></Button></div>
@@ -84,22 +84,22 @@
 {/if}
 
 <style>
-  .conf { --tone:var(--color-ink-2); min-width:0; display:grid; gap:12px; padding:14px; border:1px solid color-mix(in srgb,var(--tone) 28%,var(--color-edge)); border-radius:14px; background:linear-gradient(135deg,color-mix(in srgb,var(--tone) 9%,var(--color-panel)),var(--color-panel) 70%); }
+  .conf { --tone:var(--color-ink-2); min-width:0; display:grid; gap:12px; padding:14px; border:1px solid var(--color-edge); border-radius:14px; background:var(--color-panel); }
   .conf[data-tone='good'] { --tone:var(--color-good); } .conf[data-tone='warn'] { --tone:var(--color-warn); } .conf[data-tone='bad'] { --tone:var(--color-bad); }
   .row { display:flex; align-items:center; gap:14px; min-width:0; }
-  .ring { position:relative; flex-shrink:0; width:56px; height:56px; }
+  .gauge { position:relative; flex-shrink:0; width:56px; height:56px; }
   .dial { position:absolute; inset:0; border-radius:50%; background:conic-gradient(var(--tone) calc(var(--p) * 1%), color-mix(in srgb,var(--color-edge) 80%,transparent) 0); -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px)); mask:radial-gradient(farthest-side,transparent calc(100% - 5px),#000 calc(100% - 4px)); }
   .num { position:absolute; inset:0; display:grid; place-items:center; font-family:var(--font-mono); font-variant-numeric:lining-nums tabular-nums slashed-zero; font-size:13px; color:var(--color-ink-2); }
-  .num strong { font-size:18px; font-weight:700; letter-spacing:-.04em; color:var(--color-ink); }
+  .num strong { font-size:17px; font-weight:700; letter-spacing:-.03em; color:var(--tone); }
   .body { min-width:0; display:grid; gap:3px; flex:1; }
   .title { display:flex; align-items:center; gap:2px; }
-  h2 { font-size:12px; font-weight:600; letter-spacing:.02em; color:var(--color-ink-2); text-transform:uppercase; }
-  .verdict { font-size:13px; line-height:1.3; font-weight:500; color:var(--color-ink); }
+  h2 { font-size:12px; font-weight:500; color:var(--color-ink-2); }
+  .verdict { font-size:14px; line-height:1.3; font-weight:600; color:var(--color-ink); }
   .verdict.issues,.issues b { color:var(--color-warn); }
-  .parts { display:flex; gap:14px; margin-top:2px; }
-  .part { display:inline-flex; align-items:baseline; gap:6px; font-size:11px; color:var(--color-ink-2); }
+  .parts { display:flex; flex-wrap:wrap; gap:6px; }
+  .part { display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:999px; background:color-mix(in srgb,var(--color-ink) 6%,transparent); font-size:11px; color:var(--color-ink-2); }
   .part i { font-style:normal; } .part b { font-family:var(--font-mono); font-weight:600; font-size:12px; color:var(--color-ink); font-variant-numeric:tabular-nums; }
-  .rev { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--color-faint); padding-top:10px; border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); }
+  .part.rev { gap:4px; color:var(--color-faint); }
   .rev code { font-family:var(--font-mono); color:var(--color-ink-2); }
   .panel { display:grid; gap:10px; padding-top:12px; border-top:1px solid color-mix(in srgb,var(--color-edge) 60%,transparent); font-size:12px; color:var(--color-ink-2); }
   .panel:focus { outline:none; }

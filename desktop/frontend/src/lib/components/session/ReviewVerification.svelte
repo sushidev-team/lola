@@ -1,6 +1,6 @@
 <script lang="ts">
   import { DaemonService } from '@bindings/desktop';
-  import { tick } from 'svelte';
+  import { tick, type Snippet } from 'svelte';
   import type { ReviewPackage, ReviewCheck, ReviewVerifyArgs } from '@bindings/internal/protocol';
   import Button from '../Button.svelte';
   import Chevron from '../Chevron.svelte';
@@ -9,7 +9,7 @@
 
   // `labels` is the phone's one-line verdict ("Verified" / "Not verified"); without it, or off the phone, the full heading shows.
   // `canRecover` (default true) draws "Reconcile interrupted check"; the phone passes its tier answer.
-  let { pkg, canRun = false, canRecover = true, freshness = 'unknown', labels, quiet = false }: { pkg: ReviewPackage; canRun?: boolean; canRecover?: boolean; freshness?: string; quiet?: boolean; labels?: { verified: string; notVerified: string } } = $props();
+  let { pkg, canRun = false, canRecover = true, freshness = 'unknown', labels, quiet = false, extra }: { extra?: Snippet; pkg: ReviewPackage; canRun?: boolean; canRecover?: boolean; freshness?: string; quiet?: boolean; labels?: { verified: string; notVerified: string } } = $props();
   const phone = touchSurface();
   let checks = $state<ReviewCheck[]>([]);
   const verdict = $derived(freshness === 'current' && checks.length > 0 && checks.every(c => c.state === 'pass'));
@@ -166,6 +166,7 @@
   {:else if !loading && !error}
     <div class="setup-row"><span class="explanation">{checks.length ? '' : 'No checks yet.'}</span>{#if canRun}<Button size="sm" variant="secondary" data-setup-check disabled={active} onclick={edit}>Set up check</Button>{/if}</div>
   {/if}
+  {#if extra}<div class="extra">{@render extra()}</div>{/if}
 </section>
 
 <style>
@@ -177,6 +178,7 @@
   .verification.slim { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:8px 12px; border-style:dashed; }
   .slim .verification-heading { align-items:center; gap:8px; }
   .slim .context-note,.slim .setup-row .explanation { display:none; }
+  .extra { flex:1 0 100%; margin-top:10px; padding-top:8px; border-top:1px solid var(--color-edge); }
   .slim .setup-row { margin:0 0 0 auto; gap:8px; }
   .title-row { display:flex; align-items:center; gap:8px; }
   .stale-chip { font-size:11px; }

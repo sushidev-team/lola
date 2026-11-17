@@ -6,6 +6,7 @@ import Tag from '@lucide/svelte/icons/tag';
 import CircleMinus from '@lucide/svelte/icons/circle-minus';
 import LogOut from '@lucide/svelte/icons/log-out';
 import ArrowUpLeft from '@lucide/svelte/icons/arrow-up-left';
+import Columns2 from '@lucide/svelte/icons/columns-2';
 import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
 // Curated Lucide imports: never import the entire dynamic icon catalog.
 import Activity from '@lucide/svelte/icons/activity';
@@ -118,6 +119,7 @@ export const icons = {
   'log-out': LogOut,
   'arrow-up-left': ArrowUpLeft,
   'arrow-right-left': ArrowRightLeft,
+  'columns-2': Columns2,
   'activity': Activity,
   'arrow-down': ArrowDown,
   'arrow-left': ArrowLeft,
