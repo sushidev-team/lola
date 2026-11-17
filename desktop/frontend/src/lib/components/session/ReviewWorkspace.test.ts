@@ -561,3 +561,17 @@ it('returns to the Review tab to show a screenshot captured from Code changes',a
  expect(await screen.findByAltText('Captured page — After')).toBeInTheDocument();
  expect(screen.getByRole('tab',{name:'Review'})).toHaveAttribute('aria-selected','true');
 });
+
+it('resizes the material and checks columns from the keyboard and remembers the width',async()=>{
+  render(ReviewWorkspace,{sessionId:id});
+  const left=await screen.findByRole('separator',{name:'Resize material column'});
+  expect(left).toHaveAttribute('aria-valuenow','300');
+  await fireEvent.keyDown(left,{key:'ArrowRight'});
+  expect(left).toHaveAttribute('aria-valuenow','316');
+  expect(localStorage.getItem('lola.review.left')).toBe('316');
+  const aside=screen.getByRole('separator',{name:'Resize checks column'});
+  await fireEvent.keyDown(aside,{key:'ArrowLeft'});
+  expect(aside).toHaveAttribute('aria-valuenow','316');
+  await fireEvent.keyDown(left,{key:'Home'});
+  expect(left).toHaveAttribute('aria-valuenow','300');
+});

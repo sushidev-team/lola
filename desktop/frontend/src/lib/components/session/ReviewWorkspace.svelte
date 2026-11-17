@@ -75,6 +75,34 @@
   let reviewWrite = 0;
   // The desktop keeps Checks & feedback beside the work at all times; the phone's sheet draws its own.
   let panelOpen = $state(untrack(() => !embedded));
+  const widths = { left: { key: "lola.review.left", def: 300, min: 220 }, aside: { key: "lola.review.aside", def: 300, min: 260 } };
+  const stored = (k: string, def: number) => { try { const n = Number(localStorage.getItem(k)); return n > 0 ? n : def; } catch { return def; } };
+  let leftW = $state(stored(widths.left.key, widths.left.def));
+  let asideW = $state(stored(widths.aside.key, widths.aside.def));
+  let splitEl = $state<HTMLElement>();
+  let layoutEl = $state<HTMLElement>();
+  function save(k: string, n: number) { try { localStorage.setItem(k, String(n)); } catch { /* per-viewer convenience only */ } }
+  const clampLeft = (n: number) => Math.max(widths.left.min, Math.min(n, (splitEl?.clientWidth || Infinity) - 360));
+  const clampAside = (n: number) => Math.max(widths.aside.min, Math.min(n, 560, (layoutEl?.clientWidth || Infinity) - 480));
+  function drag(event: PointerEvent, side: "left" | "aside") {
+    const host = side === "left" ? splitEl : layoutEl;
+    if (!host || event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget as HTMLElement;
+    handle.setPointerCapture(event.pointerId);
+    const rect = host.getBoundingClientRect();
+    const move = (e: PointerEvent) => { if (side === "left") leftW = clampLeft(e.clientX - rect.left); else asideW = clampAside(rect.right - e.clientX); };
+    const done = () => { handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", done); handle.removeEventListener("pointercancel", done); save(widths[side].key, side === "left" ? leftW : asideW); };
+    handle.addEventListener("pointermove", move); handle.addEventListener("pointerup", done); handle.addEventListener("pointercancel", done);
+  }
+  function nudge(event: KeyboardEvent, side: "left" | "aside") {
+    const step = event.key === "ArrowLeft" ? -16 : event.key === "ArrowRight" ? 16 : 0;
+    if (event.key === "Home") { event.preventDefault(); if (side === "left") leftW = widths.left.def; else asideW = widths.aside.def; save(widths[side].key, side === "left" ? leftW : asideW); return; }
+    if (!step) return;
+    event.preventDefault();
+    if (side === "left") leftW = clampLeft(leftW + step); else asideW = clampAside(asideW - step);
+    save(widths[side].key, side === "left" ? leftW : asideW);
+  }
   let canvasScreen = $state(0);
   let captureOpen = $state(false);
   let captureBusy = $state(false);
@@ -370,7 +398,7 @@
 {#snippet deskBody()}
   <div class="desk-body">
   {#if markError}<p role="alert" class="head-error text-sm text-warn">{markError} Refresh review and retry.</p>{/if}
-  <div class="review-layout desk" class:panel-open={panelOpen}>
+  <div class="review-layout desk" class:panel-open={panelOpen} bind:this={layoutEl} style:--aside-w={`${asideW}px`}>
     <div class="review-main" class:capturing={captureOpen}>
       {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={-1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
       {#if tab === 'code' && session}
@@ -379,9 +407,11 @@
         {#if reviewCode && session}<div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><div class="px-4 py-2 text-xs text-faint"><Button size="xs" onclick={() => reviewCode = false}>Back to material comparison</Button><p>Exact published heads: {previous.head.slice(0,12)} to {current.head.slice(0,12)}. Uncommitted changes are excluded.</p></div><DiffView sessionId={target} reviewRange={{from:previous.id,to:current.id}}/></div>
         {:else}<div class="review-material"><ReviewChanges before={previous} after={current} onCode={session ? () => reviewCode = true : undefined}/></div>{/if}
       {:else}
-        <div class="review-split" class:solo={!current}>
+        <div class="review-split" class:solo={!current} bind:this={splitEl} style:--left-w={`${leftW}px`}>
           <div class="split-left review-material">{@render material()}</div>
           {#if current}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+            <div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize material column" tabindex="0" aria-valuenow={leftW} style:left={`${leftW - 4}px`} onpointerdown={e => drag(e, "left")} onkeydown={e => nudge(e, "left")} ondblclick={() => { leftW = widths.left.def; save(widths.left.key, leftW); }}></div>
             <section class="split-right" aria-label="Screenshots">
               {#if current && reviewSupported && can('reviewPackageMark')}<div class="mark-overlay"><Button size="sm" variant={reviewed?.package === current.id ? 'secondary' : 'primary'} loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{#if reviewed?.package === current.id}<Icon name="check" size={14}/>{/if}{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button></div>{/if}
               {#if current.screens?.length}
@@ -394,7 +424,9 @@
         </div>
       {/if}
     </div>
-    {#if panelOpen}<aside class="review-aside desk-aside" aria-label="Review actions">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    {#if panelOpen}<div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize checks column" tabindex="0" aria-valuenow={asideW} style:right={`${asideW - 4}px`} onpointerdown={e => drag(e, "aside")} onkeydown={e => nudge(e, "aside")} ondblclick={() => { asideW = widths.aside.def; save(widths.aside.key, asideW); }}></div>
+    <aside class="review-aside desk-aside" aria-label="Review actions">
       <div class="aside-scroll">{#if current}<ReviewConfidence pkg={current} {facts} {checking} onAssessConfidence={canRequest ? () => requestMaterial(false,true) : undefined} {confidenceRequest}/>{/if}{@render checks()}<div class="aside-feedback">{@render reviewFeedback()}</div></div>
     </aside>{/if}
   </div>
@@ -474,14 +506,18 @@
   .toolbar-divider { width:1px; height:20px; background:var(--color-edge); margin:0 2px; }
   .head-error { padding:8px 14px; border-bottom:1px solid var(--color-edge); }
   .desk-body { display:flex; flex-direction:column; min-height:0; min-width:0; }
-  .review-layout.desk { flex:1; min-height:0; grid-template-columns:minmax(0,1fr); }
-  .review-layout.desk.panel-open { grid-template-columns:minmax(0,1fr) minmax(300px,340px); }
+  .review-layout.desk { position:relative; flex:1; min-height:0; grid-template-columns:minmax(0,1fr); }
+  .review-layout.desk.panel-open { grid-template-columns:minmax(0,1fr) var(--aside-w,300px); }
   .desk .review-main { grid-template-rows:minmax(0,1fr); }
   .desk .review-main.capturing { grid-template-rows:auto minmax(0,1fr); }
-  .review-split { display:grid; grid-template-columns:minmax(340px,5fr) minmax(0,7fr); min-height:0; min-width:0; }
+  .review-split { position:relative; display:grid; grid-template-columns:var(--left-w,300px) minmax(0,1fr); min-height:0; min-width:0; }
   .review-split.solo { grid-template-columns:minmax(0,1fr); }
   .split-left.review-material { padding:20px 20px 40px; border-right:1px solid var(--color-edge); min-height:0; }
   .review-split.solo .split-left.review-material { border-right:0; padding:40px; }
+  .resizer { position:absolute; z-index:8; top:0; bottom:0; width:8px; cursor:col-resize; touch-action:none; }
+  .resizer::after { content:""; position:absolute; top:0; bottom:0; left:3px; width:2px; border-radius:1px; background:transparent; transition:background .12s; }
+  .resizer:hover::after, .resizer:focus-visible::after { background:var(--color-accent); }
+  .resizer:focus-visible { outline:none; }
   .split-right { position:relative; min-width:0; min-height:0; overflow:hidden; background:var(--color-canvas); }
   .mark-overlay { position:absolute; z-index:5; left:50%; bottom:14px; transform:translateX(-50%); border-radius:8px; box-shadow:0 6px 20px #0006; }
   .no-shots { display:grid; justify-items:center; align-content:center; gap:10px; height:100%; padding:32px; text-align:center; color:var(--color-faint); }
@@ -493,7 +529,7 @@
   .no-pr { display:grid; gap:6px; padding:14px; border:1px dashed var(--color-edge); border-radius:10px; }
   .no-pr h3 { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--color-ink); }
   .no-pr p { font-size:12px; line-height:1.6; color:var(--color-ink-2); }
-  @media(max-width:1180px) { .review-split { grid-template-columns:minmax(0,1fr); overflow:auto; } .split-left.review-material { overflow:visible; border-right:0; } .split-right { min-height:560px; } }
+  @media(max-width:1180px) { .review-split .resizer { display:none; } .review-split { grid-template-columns:minmax(0,1fr); overflow:auto; } .split-left.review-material { overflow:visible; border-right:0; } .split-right { min-height:560px; } }
   @media(max-width:900px) { .desk-head { grid-template-columns:minmax(0,1fr) auto; } .head-tabs { grid-row:2; grid-column:1 / -1; padding-bottom:8px; } }
   .review-aside { display:grid; align-content:start; gap:28px; min-width:0; overflow:auto; padding:24px 20px; border-left:1px solid var(--color-edge); background:var(--color-canvas); }
   .review-input { width:100%; resize:vertical; padding:12px; border:1px solid color-mix(in srgb,var(--color-edge) 70%,transparent); border-radius:8px; background:var(--color-canvas); color:var(--color-ink); font-size:13px; line-height:20px; }
@@ -501,5 +537,5 @@
   .feedback-heading h2 :global(svg) { color:var(--color-info); }
   .empty-review { max-width:48ch; padding-top:24px; }
   @media(max-width:1000px) { .review-material { padding:24px 20px; } }
-  @media(max-width:740px) { .review-layout { display:block; overflow:auto; } .review-main { display:grid; min-height:0; } .review-visuals { height:calc(100dvh - 210px); min-height:500px; } .review-tabs { flex-wrap:wrap; padding-right:8px; gap:4px; } .review-material { overflow:visible; } .review-code { height:70vh; } .review-aside { overflow:visible; border-left:0; border-top:1px solid var(--color-edge); } .review-toolbar { padding:12px 16px; } }
+  @media(max-width:740px) { .review-layout > .resizer { display:none; } .review-layout { display:block; overflow:auto; } .review-main { display:grid; min-height:0; } .review-visuals { height:calc(100dvh - 210px); min-height:500px; } .review-tabs { flex-wrap:wrap; padding-right:8px; gap:4px; } .review-material { overflow:visible; } .review-code { height:70vh; } .review-aside { overflow:visible; border-left:0; border-top:1px solid var(--color-edge); } .review-toolbar { padding:12px 16px; } }
 </style>

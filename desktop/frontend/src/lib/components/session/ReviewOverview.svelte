@@ -101,7 +101,11 @@
   .overview.split .change-column { display:contents; }
   .overview.split .review-intro { order:0; } .overview.split .features { order:2; } .overview.split .risks { order:3; } .overview.split .source-details { order:4; }
   .overview.split h1 { font-size:22px; max-width:none; margin-bottom:10px; }
-  .overview.split .features,.overview.split .risks { padding:18px; border-radius:12px; }
+  .overview.split .features,.overview.split .risks { padding:14px; border-radius:12px; }
+  .overview.split .risks h2 { font-size:14px; } .overview.split .risks .section-count { min-width:20px; height:20px; font-size:11px; }
+  .overview.split .risk-attribution { margin-bottom:8px; }
+  .overview.split .risk-columns { padding-bottom:8px; }
+  .overview.split .risk-entry > summary { padding:9px 0; }
   .overview.split .features h2,.overview.split .risks h2 { font-size:16px; }
   .change-column,.decision-column { min-width:0; display:grid; gap:32px; }
   .review-intro { min-width:0; padding:4px 0 0; }
@@ -179,12 +183,15 @@
   .risk-detail h3 { font-size:12px; font-weight:500; color:var(--color-ink-2); margin:0 0 6px; }
   @container (max-width:440px) {
     .risk-columns { display:none; }
-    .risk-attribution { margin-bottom:16px; }
+    .risk-attribution { margin-bottom:8px; }
     .risk-entry:first-of-type { border-top:1px solid var(--color-edge); }
-    .risk-entry > summary { grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; }
-    .risk-title { grid-column:1/-1; font-size:14px; }
-    .risk-rating { display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding-left:22px; }
-    .rating-label { display:block; font-size:12px; color:var(--color-ink-2); }
+    .risk-entry > summary { grid-template-columns:auto auto minmax(0,1fr); gap:4px 10px; padding:9px 0; }
+    .risk-title { grid-column:1/-1; font-size:13px; line-height:1.4; }
+    .risk-rating { display:flex; align-items:center; gap:5px; padding-left:22px; }
+    .risk-rating + .risk-rating { padding-left:0; }
+    .rating-label { display:block; font-size:11px; color:var(--color-faint); }
+    .risk-level { padding:2px 6px; font-size:11px; line-height:14px; }
+    .risk-detail { gap:10px; padding-bottom:10px; }
   }
   .risk-detail p { font-size:13px; line-height:1.6; color:var(--color-ink); max-width:65ch; overflow-wrap:anywhere; }
   .risks > :global(button) { margin-top:16px; }

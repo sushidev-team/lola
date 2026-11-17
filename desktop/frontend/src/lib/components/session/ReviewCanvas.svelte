@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick, untrack } from 'svelte';
+  import { tick } from 'svelte';
   import { DaemonService } from '@bindings/desktop';
   import type { ReviewPackage } from '@bindings/internal/protocol';
   import { markLocation, markKind, validMark, arrowHead, simplifyStroke, type MarkKind, type ReviewMark } from '$lib/reviewmaterial';
@@ -8,7 +8,6 @@
   import Select from '../Select.svelte';
   let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment, onToggleFeedback, compact = false }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void; onToggleFeedback?: () => void; compact?: boolean } = $props();
   // `compact` (the screenshots half of the Review screen) starts with the screen list folded away.
-  let infoOpen = $state(untrack(() => !compact));
   let shortcutsOpen = $state(false);
   let root = $state<HTMLElement>();
   let lastComment = $state(-1);
@@ -380,7 +379,7 @@
       if (mode === 'slider') { consume(); split = Math.max(0,Math.min(100,split+(key === 'arrowleft' ? -5 : 5))); }
       return;
     }
-    if (!['c','r','e','a','l','p','v','i','b','n','arrowup','arrowdown','1','2','3','4'].includes(key)) return;
+    if (!['c','r','e','a','l','p','v','b','n','arrowup','arrowdown','1','2','3','4'].includes(key)) return;
     // Never bypass the unsaved-changes prompt by switching tools or images.
     consume();
     if (editing && !requestClose(false)) return;
@@ -391,7 +390,6 @@
         break;
       }
       case 'v': cancelTool(); break;
-      case 'i': infoOpen = !infoOpen; break;
       case 'b': onToggleFeedback?.(); break;
       case 'n': if (canComment) nextComment(e.shiftKey ? -1 : 1); break;
       case 'arrowup': index = Math.max(0,index-1); focusCanvas(); break;
@@ -428,8 +426,6 @@
   }}>
   <div class="tools">
     <div class="tool-group">
-      <Button icon size="sm" selected={infoOpen} aria-label="Screen details" title="Screen details · I" aria-keyshortcuts="i" aria-expanded={infoOpen} onclick={() => infoOpen = !infoOpen}><Icon name="panels-top-left" size={15} /></Button>
-      <span class="toolbar-separator"></span>
       <Button icon size="sm" aria-label="Previous" title="Previous screen · ↑" aria-keyshortcuts="ArrowUp" disabled={index === 0} onclick={() => index--}><Icon name="chevron-up" size={15} /></Button>
       <span class="screen-count">{index+1} / {screens.length}</span>
       <Button icon size="sm" aria-label="Next" title="Next screen · ↓" aria-keyshortcuts="ArrowDown" disabled={index >= screens.length-1} onclick={() => index++}><Icon name="chevron-down" size={15} /></Button>
@@ -444,20 +440,7 @@
             {#if canComment}<div class="tool-group draw-tools" role="group" aria-label="Annotation tools">{#each drawTools as t}<Button icon size="sm" selected={tool === t.id} disabled={!after} aria-label={t.label} title={`${t.title} · ${t.key.toUpperCase()}`} aria-keyshortcuts={t.key} onclick={() => armTool(t.id)}><Icon name={t.icon} size={15} /></Button>{/each}</div>{/if}
     </div>
   </div>
-  <div class="canvas-body" class:info-open={infoOpen}>
-  {#if infoOpen}<aside class="info-rail" aria-label="Screen details">
-    <nav class="screen-list" aria-label="Review screens">
-      {#each screens as s,i}<button type="button" class="screen-link" class:active={index === i} aria-current={index === i ? 'true' : undefined} onclick={() => index = i}><Icon name="image" size={14} /><span>{s.title}</span></button>{/each}
-    </nav>
-    <h2 class="sr-only">{screen.title}</h2>
-    {#if screen.caption || screen.url || screen.viewport || screen.selector || (freshness === 'stale' && !compact)}<div class="screen-info">
-      {#if freshness === 'stale' && !compact}<p class="outdated" role="status"><Icon name="circle-alert" size={13} />Outdated screenshots</p>{/if}
-      {#if screen.caption}<p>{screen.caption}</p>{/if}
-      {#if screen.url}<p class="break-words">{screen.url}</p>{/if}
-      {#if screen.viewport}<p>{screen.viewport}</p>{/if}
-      {#if screen.selector}<p class="break-words">Element: <code>{screen.selector}</code></p>{/if}
-    </div>{/if}
-  </aside>{/if}
+  <div class="canvas-body">
   <div class="canvas-area" bind:this={canvasArea}>
   <div class="viewport" bind:this={viewport}>
     {#if error}<p role="alert" class="p-4 text-warn">Could not load screenshot. <Button onclick={() => retry++}>Retry image</Button></p>
@@ -514,6 +497,7 @@
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
+  <p class="screen-title" title={[screen.caption,screen.url,screen.viewport].filter(Boolean).join(" · ") || undefined}>{screen.title}</p>
   <div class="view-overlay">
     {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
       <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
@@ -541,6 +525,7 @@
   .canvas { min-width:0; height:100%; display:grid; grid-template-rows:auto minmax(0,1fr); }
   .canvas:focus { outline:none; }
   .tools { position:relative; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
+  .screen-title { position:absolute; z-index:6; left:12px; bottom:12px; max-width:calc(50% - 110px); margin:0; padding:5px 10px; border-radius:8px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); font-size:12px; color:var(--color-ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
   .view-overlay { position:absolute; z-index:6; right:12px; bottom:12px; display:flex; align-items:center; gap:4px; padding:3px; border:1px solid var(--color-edge); border-radius:10px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); box-shadow:0 4px 16px #0005; }
   .view-overlay :global(.lola-select) { width:72px; }
   .view-overlay :global(.lola-field) { border-color:transparent; background:transparent; box-shadow:none; }
@@ -555,20 +540,10 @@
   .shortcut-help p { margin-top:10px; color:var(--color-ink-2); font-size:11px; }
   .tool-group { display:flex; align-items:center; gap:3px; }
   .comparison { padding:2px; border-radius:6px; background:var(--color-canvas); }
-  .toolbar-separator { height:18px; width:1px; background:var(--color-edge); margin:0 5px; }
   .screen-count { color:var(--color-faint); font-size:12px; min-width:32px; text-align:center; }
   .tools :global(.lola-select) { width:78px; }
   .tools :global(select) { height:28px; padding-top:2px; padding-bottom:2px; }
   .canvas-body { display:grid; grid-template-columns:minmax(0,1fr); min-height:0; }
-  .canvas-body.info-open { grid-template-columns:220px minmax(0,1fr); }
-  .info-rail { overflow:auto; min-width:0; padding:12px; border-right:1px solid var(--color-edge); }
-  .screen-list { display:grid; gap:4px; padding-bottom:16px; }
-  .screen-link { display:grid; grid-template-columns:14px minmax(0,1fr); align-items:start; gap:8px; padding:9px 10px; border-radius:5px; text-align:left; font-size:12px; line-height:18px; color:var(--color-ink-2); cursor:pointer; }
-  .screen-link :global(svg) { margin-top:2px; }
-  .screen-link:hover { background:var(--color-sel); color:var(--color-ink); }
-  .screen-link.active { background:var(--color-accent-fill); color:var(--color-accent-ink); }
-  .screen-info { border-top:1px solid var(--color-edge); padding-top:16px; font-size:12px; line-height:1.6; color:var(--color-ink-2); }
-  .outdated { display:flex; align-items:center; gap:6px; margin-bottom:12px; color:var(--color-warn); }
   .canvas-area { position:relative; min-width:0; min-height:0; }
   .viewport { height:100%; min-width:0; min-height:0; overflow:auto; overflow-anchor:none; background:var(--color-canvas); padding:16px; display:flex; }
   .zoom-frame { margin:auto; flex-shrink:0; }
@@ -607,7 +582,6 @@
   .canvas-notice { position:absolute; bottom:12px; left:12px; max-width:calc(100% - 24px); padding:8px 12px; font-size:12px; color:var(--color-ink-2); border:1px solid var(--color-edge); border-radius:6px; background:var(--color-panel); pointer-events:none; }
   label { display:block; font-size:12px; color:var(--color-ink-2); margin-bottom:8px; }
   textarea { display:block; width:100%; padding:10px; margin-bottom:10px; background:var(--color-canvas); border:1px solid var(--color-edge); border-radius:6px; color:var(--color-ink); resize:vertical; font-size:13px; }
-  .screen-link:focus-visible,.annotation-surface:focus-visible,.comparison-drag:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
-  @media(max-width:900px) { .canvas-body.info-open { grid-template-columns:190px minmax(0,1fr); } .tools { gap:6px; padding:6px; flex-wrap:wrap; } .comparison { order:3; flex:1; justify-content:center; } .viewport { padding:16px; } }
-  @media(max-width:560px) { .canvas-body { position:relative; } .canvas-body.info-open { grid-template-columns:minmax(0,1fr); } .info-rail { position:absolute; top:0; bottom:0; left:0; width:210px; background:var(--color-panel); z-index:4; box-shadow:4px 6px 16px #0003; } }
+  .annotation-surface:focus-visible,.comparison-drag:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
+  @media(max-width:900px) { .tools { gap:6px; padding:6px; flex-wrap:wrap; } .comparison { order:3; flex:1; justify-content:center; } .viewport { padding:16px; } }
 </style>

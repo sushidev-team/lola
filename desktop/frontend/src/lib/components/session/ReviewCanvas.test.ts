@@ -192,10 +192,9 @@ it('keeps area comments anchored while zooming and scrolling, including an open 
 });
 
 
-it('edits on the image with the info rail hidden, and closes without losing the draft',async()=>{
+it('edits on the image and closes without losing the draft',async()=>{
   render(ReviewCanvas,{pkg,onComment:()=>true});
   await screen.findByAltText('Settings — After');
-  await fireEvent.click(screen.getByRole('button',{name:'Screen details'}));
   await fireEvent.click(screen.getByRole('button',{name:'Add pin'}));
   expect(screen.queryByRole('complementary',{name:'Screen details'})).toBeNull();
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
@@ -294,7 +293,7 @@ it.each(['metaKey','ctrlKey'])('saves with %s+Enter, preserving normal typing an
   await fireEvent.keyDown(field,{key:'Enter',[modifier]:true});
   expect(onComment).not.toHaveBeenCalled();
   await fireEvent.input(field,{target:{value:'Keep every line'}});
-  for (const key of ['c','r','n','i','b','1','4','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace','Enter','?']) {
+  for (const key of ['c','r','n','b','1','4','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace','Enter','?']) {
     expect(await fireEvent.keyDown(field,{key})).toBe(true);
   }
   expect(field).toHaveValue('Keep every line');
@@ -326,8 +325,6 @@ it('navigates images and comparison modes, zooms, and exposes shortcut help with
   for (const [key,value] of [['+','150'],['=','200'],['-','150'],['0','100']]) {
     await fireEvent.keyDown(canvas,{key});expect(screen.getByLabelText('Screenshot zoom')).toHaveValue(value);
   }
-  await fireEvent.keyDown(canvas,{key:'i'});
-  expect(screen.queryByRole('complementary',{name:'Screen details'})).toBeNull();
   await fireEvent.keyDown(canvas,{key:'b'});expect(toggle).toHaveBeenCalledOnce();
   await fireEvent.keyDown(canvas,{key:'?'});
   expect(screen.getByRole('complementary',{name:'Screenshot shortcuts'})).toBeInTheDocument();
