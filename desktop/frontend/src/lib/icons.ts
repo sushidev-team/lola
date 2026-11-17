@@ -66,6 +66,7 @@ import Play from '@lucide/svelte/icons/play';
 import Plus from '@lucide/svelte/icons/plus';
 import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
+import Undo2 from '@lucide/svelte/icons/undo-2';
 import Search from '@lucide/svelte/icons/search';
 import Send from '@lucide/svelte/icons/send';
 import Server from '@lucide/svelte/icons/server';
@@ -176,6 +177,7 @@ export const icons = {
   'plus': Plus,
   'refresh-cw': RefreshCw,
   'rotate-ccw': RotateCcw,
+  'undo-2': Undo2,
   'search': Search,
   'send': Send,
   'server': Server,

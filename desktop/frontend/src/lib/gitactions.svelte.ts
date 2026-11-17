@@ -384,6 +384,7 @@ export class GitActions {
       ...(this.callbacks.compareWorking ? [{label:'Compare against working changes',icon:'git-compare-arrows' as const,run:() => this.callbacks.compareWorking?.(commit.sha)}] : []),
       {label:'Cherry-pick commit…',icon:'git-branch',separator:true,disabled:this.blocked() || !!this.context().git.snapshot?.operation || !this.context().git.snapshot?.head,run:() => this.chooseCommitParent('cherry-pick',commit,event)},
       {label:'Revert commit…',icon:'rotate-ccw',disabled:this.blocked() || !!this.context().git.snapshot?.operation || !this.context().git.snapshot?.head,run:() => this.chooseCommitParent('revert',commit,event)},
+      ...(commit.sha === this.context().git.snapshot?.head ? [{label:'Undo commit…',icon:'undo-2' as const,disabled:this.uncommitBlocked(),run:() => this.uncommit()}] : []),
       { label: 'Copy commit SHA', icon: 'copy', run: () => void this.copy(commit.sha) },
     ], event, commit.sha.slice(0, 8));
   }
@@ -416,7 +417,19 @@ export class GitActions {
       ...(current && this.callbacks.publishBranch ? [{label:'Set upstream…',icon:'cloud' as const,disabled:this.mutationBlocked(current),run:()=>this.tracking(current)}] : []),
       { label: 'Stash changes…', icon: 'archive', separator: true, disabled: this.mutationBlocked() || !git.snapshot?.head || !git.snapshot?.files.length, run: () => this.stash() },
       { label: 'Pop latest stash…', icon: 'archive-restore', disabled: this.mutationBlocked() || !!git.snapshot?.files.length || !git.stashes.length, run: () => this.pop() },
+      { label: 'Undo last commit…', icon: 'undo-2', disabled: this.uncommitBlocked(), run: () => this.uncommit() },
     ], event);
+  }
+  /** Only the checkout's newest commit, and only while no remote has it: a known-pushed tip is never offered. */
+  private uncommitBlocked() {
+    const data = this.context().git.snapshot, current = this.current(), commit = data?.commits.find(c => c.sha === data.head);
+    return !data?.head || this.mutationBlocked(current) || (!!commit && commit.parents.length !== 1) || (!!current && !!this.upstream(current) && current.ahead === 0);
+  }
+  uncommit() {
+    this.close(); const context = this.context(), data = context.git.snapshot, head = data?.head ?? '';
+    if (!data || this.uncommitBlocked()) return;
+    const commit = data.commits.find(c => c.sha === head);
+    confirm.ask({ title: 'Undo last commit?', subject: `${commit?.subject ?? 'Latest commit'} (${head.slice(0, 8)})`, body: '', detail: `Removes this commit from ${data.branch || 'this checkout'} and keeps its changes staged, next to any other uncommitted changes. No file is changed. Only a commit that is not on a remote can be undone.`, confirmLabel: 'Undo commit', onConfirm: () => { if (context.git === this.context().git) void context.git.uncommit(head, context.ref, context.limit); } });
   }
   stash() {
     this.close(); const context = this.context(), head = context.git.snapshot?.head ?? '';

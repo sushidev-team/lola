@@ -180,6 +180,11 @@ export function StashDrop(project: string, worktree: string, sha: string): Promi
   return git<void>("StashDrop", "projectGitDiscard", { op: "stashDrop", project, worktree, sha });
 }
 
+/** PLATFORM. */
+export function Uncommit(_project: string, _worktree: string, _expectedHead: string): Promise<void> {
+  return unsupported("ProjectGitService.Uncommit", MAC_ONLY);
+}
+
 /** FORWARDED. */
 export function StashPush(project: string, worktree: string, message: string, expectedHead: string): Promise<void> {
   return git<void>("StashPush", "projectGitAct", { op: "stashPush", project, worktree, message, head: expectedHead });
@@ -231,4 +236,5 @@ export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   StashPush: { kind: "fwd", cmd: "projectGitAct" },
   Stashes: { kind: "fwd", cmd: "projectGit" },
   Unstage: { kind: "fwd", cmd: "projectGitAct" },
+  Uncommit: { kind: "platform", reason: MAC_ONLY },
 };
