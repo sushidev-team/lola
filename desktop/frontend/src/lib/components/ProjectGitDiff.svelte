@@ -77,6 +77,10 @@
   let hover = $state(-1);
   let dragging = $state(false);
   let rowEls = $state<Record<number, HTMLElement | undefined>>({});
+  let codeEl = $state<HTMLElement>();
+  // Unified rows are bound by index; a split row carries the patch lines of both halves.
+  const anchorFor = (index: number) => split ? codeEl?.querySelector<HTMLElement>(`[data-ats~="${rows[index]?.at}"]`) ?? undefined : rowEls[index];
+  const flashed = (...ats: (number | undefined)[]) => !!flash && ats.some(at => at !== undefined && at >= rows[flash!.from].at! && at <= rows[flash!.to].at!);
   let viewport = $state(0);
   let box = $state<{ top: number; height: number } | null>(null);
   const isChange = (row: Row | undefined) => row?.kind === 'add' || row?.kind === 'del';
@@ -92,8 +96,8 @@
   $effect(() => { file.patch; anchor = head = hover = -1; dragging = false; });
   $effect(() => { if (!selectable) anchor = head = hover = -1; });
   $effect(() => {
-    const goal = target, wrapped = wrap, patch = file.patch;
-    void wrapped; void patch;
+    const goal = target, wrapped = wrap, patch = file.patch, shown = items;
+    void wrapped; void patch; void shown;
     if (!goal) { box = null; return; }
     void tick().then(() => {
       // A folded row has no element: the button spans the rows that are drawn.
@@ -112,7 +116,7 @@
   function goToChange(position: number) {
     if (position < 0 || position >= changeStarts.length) return;
     currentChange = position;
-    const el = rowEls[changeStarts[position]];
+    const el = anchorFor(changeStarts[position]);
     if (!el) return;
     el.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
     void flashChange(changeStarts[position]);
@@ -135,7 +139,7 @@
     void tick().then(() => {
       if (path !== file.path) return;
       const at = rows.findIndex(row => row.kind === 'add' || row.kind === 'del');
-      rowEls[at]?.scrollIntoView?.({ block: 'center' });
+      anchorFor(at)?.scrollIntoView?.({ block: 'center' });
       if (at >= 0) currentChange = 0;
     });
   });
@@ -178,6 +182,7 @@
     for (const step of [-1, 1]) {
       let gap = 0;
       for (let i = index; i >= 0 && i < rows.length && gap <= BLOCK_GAP; i += step) {
+        if (rows[i].kind === 'hunk') break; // a header ends the hunk, whatever lies beyond
         if (isChange(rows[i])) { gap = 0; if (i !== index || step === -1) out.push(rows[i].at!); } else if (rows[i].kind === 'ctx') gap++;
       }
     }
@@ -189,10 +194,12 @@
     event.preventDefault();
     if (!(chosen.length && index >= low && index <= high)) { anchor = head = index; }
     const lines = chosen.length && index >= low && index <= high ? chosen.map(row => row.at!) : [rows[index].at!];
+    const patch = file.patch; // the lines below are indexes into this patch only
+    const still = (run: () => void) => () => { if (file.patch === patch) run(); };
     const menu: GitMenuItem[] = [
-      { label: `${verb} ${noun(lines.length)}`, icon: lineAction === 'unstage' ? 'minus' : 'plus', disabled: busy, run: () => apply(lines) },
+      { label: `${verb} ${noun(lines.length)}`, icon: lineAction === 'unstage' ? 'minus' : 'plus', disabled: busy, run: still(() => apply(lines)) },
     ];
-    menu.push({ label: `${verb} hunk`, icon: lineAction === 'unstage' ? 'minus' : 'plus', disabled: busy, run: () => apply(hunkLines(index)) });
+    menu.push({ label: `${verb} hunk`, icon: lineAction === 'unstage' ? 'minus' : 'plus', disabled: busy, run: still(() => apply(hunkLines(index))) });
     menu.push({ label: 'Clear selection', icon: 'x', separator: true, run: () => { anchor = head = -1; } });
     oncontext('', menu, event);
   }
@@ -231,14 +238,14 @@
   {:else if !rows.length}<div class="diff-empty"><p>No text changes</p><span>This may be a rename, a file mode change, or an empty file.</span></div>
   {:else}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-    <div class="diff-code" tabindex="0" role="region" aria-label="Code changes" bind:clientWidth={viewport} onkeydown={key}>
+    <div class="diff-code" tabindex="0" role="region" aria-label="Code changes" bind:this={codeEl} bind:clientWidth={viewport} onkeydown={key}>
       {#if split}
         <div class="split-lines">
           {#each splitItems as entry}
             {#if 'more' in entry}{@render moreRow(entry.more)}
             {:else if entry.pair.full}<div class="diff-meta">{entry.pair.full.text}</div>
             {:else}{@const pair = entry.pair}
-              <div class="split-row"><div class="half row-{pair.left?.kind ?? 'blank'}"><span class="line-no">{pair.left?.oldLine || ''}</span>{@render code(pair.left)}</div><div class="half row-{pair.right?.kind ?? 'blank'}"><span class="line-no">{pair.right?.newLine || ''}</span>{@render code(pair.right)}</div></div>
+              <div class="split-row" class:flash={flashed(pair.left?.at, pair.right?.at)} data-ats="{pair.left?.at ?? ''} {pair.right?.at ?? ''}"><div class="half row-{pair.left?.kind ?? 'blank'}"><span class="line-no">{pair.left?.oldLine || ''}</span>{@render code(pair.left)}</div><div class="half row-{pair.right?.kind ?? 'blank'}"><span class="line-no">{pair.right?.newLine || ''}</span>{@render code(pair.right)}</div></div>
             {/if}
           {/each}
         </div>

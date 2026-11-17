@@ -16,7 +16,7 @@
   const descriptionId = $props.id();
   const danger = $derived((req?.confirmVariant ?? "danger-solid") === "danger-solid");
   // One sentence per row; the irreversible one is set apart so it is the last thing read.
-  const notes = $derived((req?.detail?.match(/[^.!?]+[.!?]+/g) ?? (req?.detail ? [req.detail] : [])).map(text => text.trim()));
+  const notes = $derived((req?.detail ? req.detail.split(/(?<=[.!?])\s+/) : []).map(text => text.trim()).filter(Boolean));
   const irreversible = (text: string) => /cannot be undone|permanent/i.test(text);
   const dir = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "");
   const leaf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -41,7 +41,7 @@
       {#if req.body}<p class="copy confirmation-body">{req.body}</p>{/if}
       {#if notes.length}
         <ul class="confirmation-notes">
-          {#each notes as note (note)}
+          {#each notes as note}
             {#if irreversible(note)}<li class="confirmation-note warn"><Icon name="triangle-alert" size={14} /><span>{note}</span></li>
             {:else}<li class="confirmation-note"><span>{note}</span></li>{/if}
           {/each}

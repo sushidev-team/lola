@@ -379,7 +379,7 @@
   $effect(() => {
     const chosen = file, chosenArea = area, state = view, selection = selected;
     fullFile = null;
-    if (!chosen || !['commit', 'working'].includes(chosenArea) || chosen.binary || chosen.tooLarge) return;
+    if (!chosen || !['commit', 'working'].includes(chosenArea) || chosen.binary || chosen.tooLarge || chosen.status === 'renamed') return; // a path-limited diff cannot see the rename
     let live = true;
     untrack(() => { void state.loadFile(chosenArea as GitArea, chosenArea === 'working' || selection.length === 2 ? selection[0] : '', chosenArea === 'working' ? '' : selection.at(-1) ?? '', chosen.path).then(result => { if (live) fullFile = result; }); });
     return () => { live = false; };

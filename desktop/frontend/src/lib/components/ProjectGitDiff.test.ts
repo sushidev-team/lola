@@ -102,4 +102,35 @@ describe('Project Git diff line actions', () => {
     await fireEvent.click(prev);
     expect(screen.getByText('1 / 2')).toBeTruthy();
   });
+
+  it('reveals a change in split view', async () => {
+    render(ProjectGitDiff, { file, lineAction: null });
+    await fireEvent.click(screen.getByRole('button', { name: 'Split' }));
+    const scroll = vi.fn();
+    const target = document.querySelector('[data-ats~="5"]') as HTMLElement;
+    target.scrollIntoView = scroll;
+    await fireEvent.click(screen.getByRole('button', { name: 'Next change' }));
+    expect(scroll).toHaveBeenCalled();
+  });
+
+  it('does not stage the old lines from a menu opened on an older patch', async () => {
+    const onlines = vi.fn();
+    const oncontext = vi.fn();
+    const { rerender } = render(ProjectGitDiff, { file, lineAction: 'stage', onlines, oncontext });
+    await fireEvent.contextMenu(screen.getByText('B').closest('.unified-row')!);
+    const items = oncontext.mock.calls[0][1];
+    await rerender({ file: { ...file, patch: patch.replace('+D', '+E') }, lineAction: 'stage', onlines, oncontext });
+    items[0].run();
+    expect(onlines).not.toHaveBeenCalled();
+  });
+
+  it('stages only the hunk under the row when a header separates two changes', async () => {
+    const two = { ...file, patch: '@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n@@ -90,3 +90,3 @@\n x\n-y\n+Y\n z\n' };
+    const onlines = vi.fn();
+    const oncontext = vi.fn();
+    render(ProjectGitDiff, { file: two, lineAction: 'stage', onlines, oncontext });
+    await fireEvent.contextMenu(screen.getByText('B').closest('.unified-row')!);
+    oncontext.mock.calls[0][1][1].run();
+    expect(onlines).toHaveBeenCalledWith([2, 3]);
+  });
 });
