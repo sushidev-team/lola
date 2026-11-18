@@ -234,7 +234,7 @@ var (
 // pickers offer that project's own team labels; this one offers workspace
 // labels. Each help leads with "Workspace label" too, because the modal
 // truncates a help line to its width and this sentence can fall off the end.
-const wsLabelHelp = " enter opens the workspace-label picker; e types names instead (e.g. apps/website, resolved in each project's own team); raw UUID entry stays available."
+const wsLabelHelp = " enter opens the workspace-label picker; e types names instead (e.g. agent/agent-ready, resolved in each project's own team); raw UUID entry stays available."
 
 // newSettingsForm builds the editor pre-filled from the live config. The int
 // fields render the resolved values (e.g. review.timeout defaults to 300 once
@@ -890,7 +890,7 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 			return f.refreshWorkspaceLabels(fld), settingsFormNone
 		}
 	case "e":
-		// Type label NAMES instead of picking: a name (\"apps/website\") is resolved
+		// Type label NAMES instead of picking: a name (\"agent/agent-ready\") is resolved
 		// in each project's own team by the daemon. Lists open the line editor;
 		// a single-label field is plain text already, so e is a literal there.
 		if fld.wsPick && (fld.kind == sfList || fld.kind == sfEnv) {

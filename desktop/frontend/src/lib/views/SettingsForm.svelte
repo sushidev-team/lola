@@ -116,7 +116,7 @@
   // A picker is only usable with something in it; an empty workspace falls back
   // to manual entry like a failed call does.
   const wsReady = $derived(!!wsLabels && wsLabels.length > 0);
-  const NAME_HINT = "A name (\"Bug\" or \"apps/website\") is looked up in each project's own team, so one default fits every team.";
+  const NAME_HINT = "A name (\"Bug\" or \"agent/agent-ready\") is looked up in each project's own team, so one default fits every team.";
   const isKnownLabel = (v: string) => !!wsLabels?.some((l) => l.id === v);
   const matchLabelNames = $derived((dto?.matchLabels ?? []).filter((v) => !isKnownLabel(v)));
 
@@ -777,7 +777,7 @@
           class="{inputCls} font-mono"
           aria-label="{caption} by name"
           value={isKnownLabel(current) ? "" : current}
-          placeholder="e.g. apps/website"
+          placeholder="e.g. agent/agent-ready"
           oninput={(e) => onChange(e.currentTarget.value.trim())}
         />
         <span class={hintCls}>{NAME_HINT}</span>
@@ -1000,7 +1000,7 @@
                 "Match label names",
                 matchLabelNames,
                 (v) => { d.matchLabels = [...(d.matchLabels ?? []).filter(isKnownLabel), ...v]; },
-                "one name per line, e.g. apps/website",
+                "one name per line, e.g. agent/agent-ready",
                 NAME_HINT,
               )}
             {:else}
