@@ -236,6 +236,14 @@ var (
 // truncates a help line to its width and this sentence can fall off the end.
 const wsLabelHelp = " enter opens the workspace-label picker; raw UUID entry stays available if the labels cannot be fetched."
 
+// labelNameHelp is added to every label field: a name is looked up in each
+// project's own team and a * matches any run of characters.
+const labelNameHelp = " A name (agent/agent-ready, or */agent-ready) is resolved in each project's own team."
+
+// labelListTypeHelp is only true of the Match labels list, where e opens the
+// line editor; the single-label fields are plain text already.
+const labelListTypeHelp = " e types names instead of picking."
+
 // newSettingsForm builds the editor pre-filled from the live config. The int
 // fields render the resolved values (e.g. review.timeout defaults to 300 once
 // enabled), so saving without touching them is a faithful round-trip.
@@ -290,10 +298,10 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "def_symlinks", tab: stProjectDefaults, label: "Symlinks", help: "One relative path per line, linked from the main checkout into each worktree (e.g. .env). enter opens the list. Do NOT symlink vendor/ — it breaks PHP autoload; use post_create.", kind: sfList, lines: append([]string(nil), d.Symlinks...)},
 			{key: "def_post_create", tab: stProjectDefaults, label: "Post-create", help: "One command per line, run in a fresh worktree before the agent starts (e.g. composer install). enter opens the list.", kind: sfList, lines: append([]string(nil), d.PostCreate...)},
 			{key: "def_env", tab: stProjectDefaults, label: "Env (KEY=value)", help: "One KEY=value per line, exported into every session and its post_create commands. Keys must be shell identifiers. enter opens the list.", kind: sfEnv, lines: envLines(d.Env)},
-			{key: "def_match_labels", tab: stProjectDefaults, label: "Match labels", help: "Workspace labels an issue must carry (see match mode) to be picked up." + wsLabelHelp, kind: sfList, wsPick: true, lines: append([]string(nil), d.MatchLabels...)},
+			{key: "def_match_labels", tab: stProjectDefaults, label: "Match labels", help: "Workspace labels an issue must carry (see match mode) to be picked up." + wsLabelHelp + labelListTypeHelp + labelNameHelp, kind: sfList, wsPick: true, lines: append([]string(nil), d.MatchLabels...)},
 			{key: "def_match_mode", tab: stProjectDefaults, label: "Match mode", help: "How match labels combine: any = at least one, all = every one. space/enter cycles; unset falls back to \"any\".", kind: sfEnum, options: matchModeOptions, text: d.MatchMode},
-			{key: "def_on_sent_set_label", tab: stProjectDefaults, label: "On-sent set label", help: "Workspace label flipped onto an issue once its session is dispatched (label dedup mode)." + wsLabelHelp, kind: sfText, wsPick: true, text: d.OnSentSetLabel},
-			{key: "def_blocked_label_id", tab: stProjectDefaults, label: "Blocked label", help: "Workspace label applied when a session escalates and needs a human." + wsLabelHelp, kind: sfText, wsPick: true, text: d.BlockedLabelID},
+			{key: "def_on_sent_set_label", tab: stProjectDefaults, label: "On-sent set label", help: "Workspace label flipped onto an issue once its session is dispatched (label dedup mode)." + wsLabelHelp + labelNameHelp + " Must resolve to one label.", kind: sfText, wsPick: true, text: d.OnSentSetLabel},
+			{key: "def_blocked_label_id", tab: stProjectDefaults, label: "Blocked label", help: "Workspace label applied when a session escalates and needs a human." + wsLabelHelp + labelNameHelp + " Must resolve to one label.", kind: sfText, wsPick: true, text: d.BlockedLabelID},
 			{key: "def_dedup_mode", tab: stProjectDefaults, label: "Dedup mode", help: "How an already-dispatched issue is remembered: label (flip a Linear label), seen (local store), state (workflow state). space/enter cycles; unset falls back to \"seen\".", kind: sfEnum, options: dedupModeOptions, text: d.DedupMode},
 			{key: "def_require_plan", tab: stProjectDefaults, label: "Require plan", help: "Plan-approval gate: the agent investigates read-only, submits a plan (lola plan-gate submit) and may edit files only once a human approves it.", kind: sfBool, b: d.RequirePlan},
 			{key: "def_priority_sort", tab: stProjectDefaults, label: "Priority sort", help: "Tie-break chain for ranking the issues a tick matched, applied in order (priority = highest first, createdAt = oldest first). enter picks the keys; ORDER matters. Unset sorts by priority, then createdAt.", kind: sfList, sortPick: true, lines: append([]string(nil), d.PrioritySort...)},
@@ -902,6 +910,17 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 		if fld.wsPick {
 			return f.refreshWorkspaceLabels(fld), settingsFormNone
 		}
+	case "e":
+		// Type label NAMES instead of picking: a name (\"agent/agent-ready\") is resolved
+		// in each project's own team by the daemon. Lists open the line editor;
+		// a single-label field is plain text already, so e is a literal there.
+		if fld.wsPick && (fld.kind == sfList || fld.kind == sfEnv) {
+			f.openList(fld)
+		} else if f.reviewReadOnly() {
+			return nil, settingsFormNone
+		} else {
+			f.typeInto(fld, k)
+		}
 	case "m", "M":
 		// Migrate the legacy [review]/[coderabbit] tables into the editable
 		// provider catalog — the only action offered while the Review tab is
@@ -1437,6 +1456,15 @@ func (f *settingsForm) applyPick(p *setPicker) {
 			return
 		}
 		var ids []string
+		if fld.wsPick {
+			// A typed label NAME is not in the picker's options; keep it, or
+			// opening the picker would silently drop it.
+			for _, e := range trimDropEmpty(fld.lines) {
+				if !slices.ContainsFunc(p.opts, func(o setPickOpt) bool { return o.id == e }) {
+					ids = append(ids, e)
+				}
+			}
+		}
 		for _, o := range p.opts { // option order, not toggle order
 			if o.id != "" && p.sel[o.id] {
 				ids = append(ids, o.id)
@@ -2102,8 +2130,10 @@ func (f *settingsForm) footerLines() []string {
 		hint = "enter select · ↑/↓ field · ctrl-s save · esc cancel"
 	case f.editing:
 		hint = "editing " + f.cur().label + " — ↑/↓ line · enter new line · esc done"
+	case f.cur().wsPick && f.cur().kind == sfList:
+		hint = "enter labels · e type names · ctrl-r refresh · ↑/↓ field · ctrl-s save · esc cancel"
 	case f.cur().wsPick:
-		hint = "enter labels · ctrl-r refresh · ↑/↓ field · ctrl-s save · esc cancel"
+		hint = "enter labels · type a name · ctrl-r refresh · ↑/↓ field · ctrl-s save · esc cancel"
 	}
 	out = append(out, "", faintText.Render(hint))
 	return out

@@ -39,9 +39,10 @@ import (
 //     folder takes everything under it along with no dirty check. An app
 //     without a PR whose branch carries commits is kept as well: clean, but
 //     unshipped.
-//   - WHICH apps a session has is decided once, at spawn; afterwards the
-//     folders on disk are the truth (adoption rebuilds the record from them,
-//     the sandbox mounts only those).
+//   - WHICH apps a session has is decided at spawn (the issue's labels, plus
+//     any member a human ticked in the picker) and can only GROW afterwards,
+//     by a human's AddApps (stackadd.go). The folders on disk are the truth
+//     (adoption rebuilds the record from them, the sandbox mounts only those).
 
 // ErrNoStackApp is returned by a stack spawn for an issue none of the stack's
 // members selects (their labels did not match, and none takes every issue).
@@ -57,6 +58,33 @@ func StackAppDir(dir, app string) string { return filepath.Join(dir, app) }
 // labels (always included).
 func StackAppsFor(cfg *config.Config, stack string, issue linear.Issue) []config.Project {
 	return config.SelectApps(cfg.StackMembers(stack), issue.LabelIDs, issue.LabelNames, issue.LabelGroups)
+}
+
+// stackAppsWith is StackAppsFor plus the members named in extra (a human's
+// choice in the ticket picker), still in member order. A name that is not a
+// member of the stack is an error: nothing is checked out on a guess.
+func stackAppsWith(cfg *config.Config, stack string, issue linear.Issue, extra []string) ([]config.Project, error) {
+	members := cfg.StackMembers(stack)
+	want := map[string]bool{}
+	for _, m := range config.SelectApps(members, issue.LabelIDs, issue.LabelNames, issue.LabelGroups) {
+		want[m.Name] = true
+	}
+	for _, name := range extra {
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		if !slices.ContainsFunc(members, func(m config.Project) bool { return m.Name == name }) {
+			return nil, fmt.Errorf("%s is not a member of stack %s", name, stack)
+		}
+		want[name] = true
+	}
+	var out []config.Project
+	for _, m := range members {
+		if want[m.Name] {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 // appBase is the branch an app's worktree is cut from and its PR targets.
@@ -99,7 +127,10 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 	if o.Group != "" {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s: best-of is not supported for a stack", issue.Identifier)
 	}
-	apps := StackAppsFor(n.Cfg, p.Name, issue)
+	apps, err := stackAppsWith(n.Cfg, p.Name, issue, o.Apps)
+	if err != nil {
+		return session.Session{}, fmt.Errorf("runtime: spawn %s in stack %s: %w", issue.Identifier, p.Name, err)
+	}
 	if len(apps) == 0 {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s in stack %s: %w", issue.Identifier, p.Name, ErrNoStackApp)
 	}
@@ -505,6 +536,14 @@ func stackPresent(members []config.Project, dir string) []config.Project {
 // for this issue) are named too, so an agent that finds it needs one says so
 // instead of cloning it somewhere.
 func withStackBriefing(prompt []byte, members []config.Project, apps []session.App) []byte {
+	return append(slices.Clone(prompt), stackBriefing(members, apps)...)
+}
+
+// stackBriefingHead opens the stack section of prompt.md.
+const stackBriefingHead = "\n## Repositories\n"
+
+// stackBriefing renders the stack section for the apps a session has now.
+func stackBriefing(members []config.Project, apps []session.App) string {
 	have := map[string]bool{}
 	for _, a := range apps {
 		have[a.Name] = true
@@ -516,8 +555,7 @@ func withStackBriefing(prompt []byte, members []config.Project, apps []session.A
 		}
 	}
 	var b strings.Builder
-	b.Write(prompt)
-	b.WriteString("\n## Repositories\n\n")
+	b.WriteString(stackBriefingHead + "\n")
 	b.WriteString("This directory is NOT a git repository. It holds one checkout per repository this issue needs, each already on the session's branch:\n\n")
 	for _, a := range apps {
 		repo := a.Repo
@@ -532,9 +570,28 @@ func withStackBriefing(prompt []byte, members []config.Project, apps []session.A
 	}
 	b.WriteString("Leave a repository you did not need untouched — no empty pull requests. Files you create directly in this directory are not part of any repository and are lost when the session ends.\n")
 	if len(skipped) > 0 {
-		fmt.Fprintf(&b, "\nThis stack also has %s, NOT checked out for this issue (its labels did not select them). If the issue needs one of them, do not clone or edit it elsewhere: report it with `lola report blocked \"needs <name>\"` and explain in a note.\n", strings.Join(skipped, ", "))
+		fmt.Fprintf(&b, "\nThis stack also has %s, NOT checked out for this issue (its labels did not select them). If the issue needs one of them, do not clone or edit it elsewhere: report it with `lola report blocked \"needs <name>\"` and explain in a note. A human can then add it to this session.\n", strings.Join(skipped, ", "))
 	}
-	return []byte(b.String())
+	return b.String()
+}
+
+// replaceStackBriefing swaps the stack section of a prompt.md body for one
+// that lists apps — after AddApps, so an agent that re-reads its briefing (a
+// revive, a switched agent) sees the repositories it has now. The LAST
+// section of that name is the briefing's: an issue description may carry a
+// heading of its own. A body without the section gets it appended.
+func replaceStackBriefing(body []byte, members []config.Project, apps []session.App) []byte {
+	text := string(body)
+	section := stackBriefing(members, apps)
+	start := strings.LastIndex(text, stackBriefingHead)
+	if start < 0 {
+		return []byte(text + section)
+	}
+	end := len(text)
+	if i := strings.Index(text[start+len(stackBriefingHead):], "\n## "); i >= 0 {
+		end = start + len(stackBriefingHead) + i
+	}
+	return []byte(text[:start] + section + text[end:])
 }
 
 // repoMount is what a sandboxed session's container gets per repository:

@@ -1,0 +1,36 @@
+
+  [38;2;99;168;248m>_ [1m[39mOpenAI Codex[0;2m (v0.167.2)[0m
+     [2m/w/wt[0m
+
+[48;5;8m
+[1;2m› [0m[48;5;8mRun the shell command: sleep 25 ; then reply DONE.
+
+[49m
+[2m• [0mI’ll run [38;2;166;227;161msleep 25[39m, then reply DONE.
+
+[48;5;8m
+[1;2m› [0m[48;5;8mAlso say the word BANANA at the end.
+
+[49m
+[1m[38;5;2m•[0m [1mRan[0m [38;2;137;180;250msleep[38;2;205;214;244m 25[39m
+[2m  └ (no output)[0m
+
+[2m• [0mDONE BANANA
+
+[2m  Worked for 33s • 13:08
+[0m
+
+
+
+
+
+
+
+
+
+
+
+[1m›[0m [2mAsk Codex to do anything[0m
+
+  [38;2;246;226;183mGPT-6-Astra high[39m · [38;2;171;223;167m/w/wt…
+[39m  [1mesc[0m again to edit previous message

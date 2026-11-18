@@ -21,6 +21,7 @@
   const git = $derived(nav.gitMode);
   // Too narrow for two columns: Projects and Sessions become tabs over one column.
   const narrow = $derived(width < nav.projectsWidth + SESSIONS_MIN);
+  $effect(() => { nav.sidebarSplit = !narrow && !git; });
   // In Git the projects column is the whole sidebar; beside the sessions it leaves them their minimum.
   const projectsCol = $derived(git ? width : Math.min(nav.projectsWidth, Math.max(0, width - SESSIONS_MIN)));
   const TABS = [

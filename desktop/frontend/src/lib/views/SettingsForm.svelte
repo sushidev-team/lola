@@ -123,6 +123,9 @@
   // A picker is only usable with something in it; an empty workspace falls back
   // to manual entry like a failed call does.
   const wsReady = $derived(!!wsLabels && wsLabels.length > 0);
+  const NAME_HINT = "A name (\"Bug\" or \"agent/agent-ready\") is looked up in each project's own team, so one default fits every team. * works: */agent-ready.";
+  const isKnownLabel = (v: string) => !!wsLabels?.some((l) => l.id === v);
+  const matchLabelNames = $derived((dto?.matchLabels ?? []).filter((v) => !isKnownLabel(v)));
 
   // priority_sort is a tie-break CHAIN over lola's own sort keys — not Linear
   // priorities, and nothing is fetched from the API. Selection ORDER is the
@@ -811,7 +814,20 @@
      when the workspace labels couldn't be loaded or there are none. -->
 {#snippet labelRow(caption: string, current: string, onChange: (v: string) => void)}
   {#if wsReady}
-    {@render selectRow(caption, current, wsLabels ?? [], onChange, "(none)", "Workspace label only.")}
+    {@render selectRow(caption, isKnownLabel(current) ? current : "", wsLabels ?? [], onChange, "(none)", "Workspace label, or type a name below.")}
+    <div class={rowTopCls}>
+      <span class="text-faint">{caption} by name</span>
+      <span>
+        <input
+          class="{inputCls} font-mono"
+          aria-label="{caption} by name"
+          value={isKnownLabel(current) ? "" : current}
+          placeholder="e.g. agent/agent-ready"
+          oninput={(e) => onChange(e.currentTarget.value.trim())}
+        />
+        <span class={hintCls}>{NAME_HINT}</span>
+      </span>
+    </div>
   {:else}
     <div class={rowTopCls}>
       <span class="text-faint">{caption}</span>
@@ -820,10 +836,10 @@
           class="{inputCls} font-mono"
           aria-label={caption}
           value={current}
-          placeholder="workspace label UUID"
-          oninput={(e) => onChange(e.currentTarget.value)}
+          placeholder="label name or UUID"
+          oninput={(e) => onChange(e.currentTarget.value.trim())}
         />
-        <span class={hintCls}>Workspace label only.</span>
+        <span class={hintCls}>{NAME_HINT}</span>
       </span>
     </div>
   {/if}
@@ -1095,18 +1111,25 @@
               <div class={rowTopCls}>
                 <span class="text-faint">Match labels</span>
                 <span>
-                  <CheckboxOptions label="Match labels" options={wsLabels ?? []} selected={d.matchLabels}
-                    onChange={(value) => { d.matchLabels = value; }} />
-                  <span class={hintCls}>Workspace labels only.</span>
+                  <CheckboxOptions label="Match labels" options={wsLabels ?? []} selected={(d.matchLabels ?? []).filter(isKnownLabel)}
+                    onChange={(value) => { d.matchLabels = [...value, ...matchLabelNames]; }} />
+                  <span class={hintCls}>Workspace labels, or type names below.</span>
                 </span>
               </div>
+              {@render areaRow(
+                "Match label names",
+                matchLabelNames,
+                (v) => { d.matchLabels = [...(d.matchLabels ?? []).filter(isKnownLabel), ...v]; },
+                "one name per line, e.g. agent/agent-ready",
+                NAME_HINT,
+              )}
             {:else}
               {@render areaRow(
                 "Match labels",
                 d.matchLabels,
                 (v) => { d.matchLabels = v; },
-                "one UUID per line",
-                "Workspace labels only.",
+                "one name or UUID per line",
+                NAME_HINT,
               )}
             {/if}
 

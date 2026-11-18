@@ -9,6 +9,8 @@
   import { bestOf } from "$lib/bestof.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { isEnded, urgentConn } from "$lib/ssh";
+  import { appChooser } from "$lib/appchooser.svelte";
+  import { missingMembers } from "$lib/stackapps";
   import MenuItem from "./MenuItem.svelte";
 
   const req = $derived(sessionMenu.request);
@@ -21,9 +23,11 @@
   // a STACK session has the stack (issue side) plus one member project per app
   // it checked out. A project-free temporary session, or a project since
   // removed from the config, has none. Several targets fold behind one row
-  // that expands in place, so the menu stays short until asked.
+  // that expands in place, so the menu stays short until asked. With the
+  // projects column on screen beside the sessions the row is left out: the
+  // project is right there, with its own settings.
   const projectTargets = $derived.by(() => {
-    if (!session) return [];
+    if (!session || nav.projectsBeside) return [];
     const names = [session.project, ...(session.stack ? (session.apps ?? []).map((a) => a.name) : [])];
     return [...new Set(names)]
       .filter((n) => n && store.projects.some((p) => p.name === n))
@@ -40,6 +44,24 @@
     void req;
     projectsOpen = false;
   });
+
+  // A STACK session whose issue's labels left a repository out: the stack's
+  // members it has not checked out can still be added (cmd=addApps).
+  const addable = $derived(session ? missingMembers(session, store.projects) : []);
+  async function addRepositories(s: SessionInfo) {
+    const have = (s.apps ?? []).map((a) => ({ name: a.name, label: a.label || a.name, included: true, note: "checked out" }));
+    const more = missingMembers(s, store.projects).map((m) => ({ ...m, included: false, note: "" }));
+    const names = await appChooser.ask({
+      title: "Add repositories",
+      intro: s.sandbox
+        ? `Check further repositories of ${store.displayNameFor(s.project)} out into this session. It runs in a sandbox, so its agent restarts to mount them and resumes its conversation.`
+        : `Check further repositories of ${store.displayNameFor(s.project)} out into this session. The agent is told once it is idle.`,
+      confirm: "Add",
+      choices: [...have, ...more],
+      requireOne: true,
+    });
+    if (names?.length) void store.addApps(s.id, names);
+  }
 
   const sshConn = $derived(urgentConn(session?.ssh?.connections));
   const sshLive = $derived(!!sshConn && !isEnded(sshConn));
@@ -105,6 +127,9 @@
           <MenuItem title={t.name} onclick={() => openProject(t.name)}>{t.label}</MenuItem>
         {/each}
       {/if}
+    {/if}
+    {#if addable.length}
+      <MenuItem icon="+" title="Check out a repository of this stack the issue's labels left out" onclick={() => run((s) => void addRepositories(s))}>Add repositories…</MenuItem>
     {/if}
     {#if sshConn && sshLive}
       <div class="my-1 h-px bg-edge/60"></div>

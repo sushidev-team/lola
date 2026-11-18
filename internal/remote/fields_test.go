@@ -129,7 +129,7 @@ var reviewedArgsFields = map[string][]string{
 	"openExisting":          {"agent", "agentKind", "aiAction", "base", "branch", "existing", "location", "name", "path", "project", "prompt"},
 	"openManual":            {"agent", "agentKind", "aiAction", "base", "branch", "existing", "location", "name", "path", "project", "prompt"},
 	"openPr":                {"branch", "isFork", "number", "project"},
-	"openTicket":            {"agentKind", "branch", "identifier", "project", "title", "uuid"},
+	"openTicket":            {"agentKind", "apps", "branch", "identifier", "project", "title", "uuid"},
 	"paneClose":             {"pane", "session"},
 	"paneResize":            {"cols", "pane", "rows", "session"},
 	"prReadiness":           {"confirmUnready", "head", "method", "number", "repo"},

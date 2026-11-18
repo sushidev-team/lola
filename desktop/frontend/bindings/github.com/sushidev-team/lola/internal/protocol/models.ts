@@ -6,6 +6,28 @@
 import * as goalpolicy$0 from "../goalpolicy/models.js";
 
 /**
+ * AddAppsArgs is the argument payload for cmd=addApps: check further members
+ * of its stack out into a RUNNING stack session (the issue's labels missed
+ * one). Refused for a session that is not a stack session, a name that is not
+ * a member, a member already checked out, and a sandboxed session whose agent
+ * is mid-turn (its container has to be restarted to mount the new repository).
+ */
+export interface AddAppsArgs {
+    "session": string;
+    "apps": string[] | null;
+}
+
+/**
+ * AddAppsData is Response.Data for cmd=addApps. Apps are the members now
+ * added; Relaunched reports that the agent was restarted (sandbox).
+ */
+export interface AddAppsData {
+    "apps": string[] | null;
+    "relaunched"?: boolean;
+    "message"?: string;
+}
+
+/**
  * AgentChoice is one option of a prompt, in pane order and in the pane's own words.
  */
 export interface AgentChoice {
@@ -473,6 +495,49 @@ export interface BroadcastData {
     "queued": string[] | null;
     "skipped"?: string[] | null;
     "message"?: string;
+}
+
+/**
+ * BulkProjectChange is one project's outcome in BulkProjectsData.
+ */
+export interface BulkProjectChange {
+    "project": string;
+    "changed"?: string[] | null;
+    "error"?: string;
+}
+
+/**
+ * BulkProjectsArgs is the argument payload for cmd=bulkProjects: change the
+ * same settings on many [[project]] tables at once. Nil fields are left alone.
+ * Label fields are references (UUID, name or "group/name") resolved by the
+ * daemon against each project's own team, so one name works across teams that
+ * give the same label different ids. Projects empty = every project.
+ */
+export interface BulkProjectsArgs {
+    "projects"?: string[] | null;
+    "agent"?: string | null;
+    "matchLabels"?: string[] | null;
+    "matchMode"?: string | null;
+    "onSentSetLabel"?: string | null;
+    "blockedLabel"?: string | null;
+
+    /**
+     * KeepNames stores label references as written (names, "group/name", globs)
+     * instead of resolving them to ids; the daemon then resolves them per team on
+     * every load. They are still checked against each project's team, so a name
+     * that matches nothing refuses the change.
+     */
+    "keepNames"?: boolean;
+    "dryRun"?: boolean;
+}
+
+/**
+ * BulkProjectsData is Response.Data for cmd=bulkProjects. When any project has
+ * an Error nothing was saved.
+ */
+export interface BulkProjectsData {
+    "changes": BulkProjectChange[] | null;
+    "applied": boolean;
 }
 
 /**
@@ -1639,6 +1704,13 @@ export interface OpenTicketArgs {
      * opencode) instead of the project's configured default. "" = configured.
      */
     "agentKind"?: string;
+
+    /**
+     * Apps names further members of a STACK project to check out beside the
+     * ones the issue's labels select. Refused for a repository project and for
+     * a name that is not a member.
+     */
+    "apps"?: string[] | null;
 }
 
 /**
@@ -1966,6 +2038,12 @@ export interface ProjectInfo {
      */
     "pathOk": boolean;
     "repoConfigured": boolean;
+
+    /**
+     * Sandboxed is whether this project's agents run in a container. Such an agent
+     * needs a worktree of its own, so a UI does not offer it the main checkout.
+     */
+    "sandboxed"?: boolean;
 
     /**
      * Poll rollup: how many polls this project drives and how many are enabled,
@@ -3629,6 +3707,23 @@ export interface SessionsData {
 }
 
 /**
+ * StackMember is one app of a stack as the ticket picker offers it.
+ */
+export interface StackMember {
+    "name": string;
+
+    /**
+     * display name
+     */
+    "label"?: string;
+
+    /**
+     * Always reports a member with no routing labels: every issue gets it.
+     */
+    "always"?: boolean;
+}
+
+/**
  * StatusData is Response.Data for cmd=status. RuntimeOK reports whether the
  * native runtime's external tools (tmux, git, claude) are all resolvable;
  * RuntimeErr names what is missing ("" when ok).
@@ -3770,6 +3865,13 @@ export interface TicketRow {
      * a lola session already holds this issue
      */
     "alreadyLive": boolean;
+
+    /**
+     * Apps are the stack members this issue's labels select (TicketsData.Members
+     * names); nil for a repository project. Display, like the rest: the spawn
+     * selects from the issue's labels itself.
+     */
+    "apps"?: string[] | null;
 }
 
 /**
@@ -3783,6 +3885,13 @@ export interface TicketsData {
     "teamName"?: string;
     "teamKey"?: string;
     "issues": TicketRow[] | null;
+
+    /**
+     * Members are the apps of a STACK project, in config order (nil for a
+     * repository): what a start can check out, and which of them an issue's
+     * labels have to ask for.
+     */
+    "members"?: StackMember[] | null;
 }
 
 /**
