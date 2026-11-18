@@ -371,6 +371,12 @@ func (c *Client) SendKeysTyped(ctx context.Context, name, text string) error {
 	return c.sendKeys(ctx, name, text, math.MaxInt)
 }
 
+// SendKeysPasted is SendKeys with a paste at every size, for an agent that reads fast
+// keystrokes as a paste and takes the Enter after them as a line break.
+func (c *Client) SendKeysPasted(ctx context.Context, name, text string) error {
+	return c.sendKeys(ctx, name, text, -1)
+}
+
 func (c *Client) sendKeys(ctx context.Context, name, text string, pasteAbove int) error {
 	// Leave copy mode first. A human scrolling the pane back (the app's wheel, or
 	// tmux's own wheel binding with [tmux].mouse on) puts it in copy mode, where

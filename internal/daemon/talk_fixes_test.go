@@ -742,28 +742,39 @@ func TestCIRowsFollowTheChecksNotTheStates(t *testing.T) {
 	}
 }
 
-// Only the kind whose paste was measured gets the paste path.
-func TestPasteOnlyGoesToAMeasuredAgent(t *testing.T) {
+// Each kind gets the transport measured for it: claude types a short send and pastes a
+// long one, codex takes a paste at every size, and an unmeasured agent is only typed to.
+func TestEachAgentGetsItsMeasuredTransport(t *testing.T) {
 	d, f := talkFakeDaemon(t)
-	var typed []string
+	var typed, pasted []string
 	d.sendKeysTyped = func(_ context.Context, _, text string) error {
 		typed = append(typed, text)
+		return nil
+	}
+	d.sendKeysPasted = func(_ context.Context, _, text string) error {
+		pasted = append(pasted, text)
 		return nil
 	}
 	claude := talkSession(d, "c1", state.AgentIdle)
 	codex := talkSession(d, "x1", state.AgentIdle)
 	codex.Agent = "codex"
 	d.sessions.Upsert(codex)
-	if err := d.typeToAgent(context.Background(), noteFor(claude, ""), claude.ID, claude.ID, "to claude", time.Second); err != nil {
-		t.Fatal(err)
+	opencode := talkSession(d, "o1", state.AgentIdle)
+	opencode.Agent = "opencode"
+	d.sessions.Upsert(opencode)
+	for _, s := range []session.Session{claude, codex, opencode} {
+		if err := d.typeToAgent(context.Background(), noteFor(s, ""), s.ID, s.ID, "to "+agentWord(s)+" @x", time.Second); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := d.typeToAgent(context.Background(), noteFor(codex, ""), codex.ID, codex.ID, "to codex", time.Second); err != nil {
-		t.Fatal(err)
+	if got := f.sent(); len(got) != 1 || got[0] != "to Claude @x" {
+		t.Errorf("claude's path got %q", got)
 	}
-	if got := f.sent(); len(got) != 1 || got[0] != "to claude" {
-		t.Errorf("paste capable path got %q", got)
+	// The space closes codex's "@" picker, which would otherwise take the Enter.
+	if len(pasted) != 1 || pasted[0] != "to Codex @x " {
+		t.Errorf("paste-only path got %q", pasted)
 	}
-	if len(typed) != 1 || typed[0] != "to codex" {
+	if len(typed) != 1 || typed[0] != "to opencode @x" {
 		t.Errorf("typed path got %q", typed)
 	}
 }
@@ -771,7 +782,7 @@ func TestPasteOnlyGoesToAMeasuredAgent(t *testing.T) {
 func TestSayToAnAgentWithNoPasteKeepsTheTypedLimit(t *testing.T) {
 	d, _ := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentIdle)
-	d.sessions.Update("s1", func(s *session.Session) bool { s.Agent = "codex"; return true })
+	d.sessions.Update("s1", func(s *session.Session) bool { s.Agent = "opencode"; return true })
 	if _, err := d.handleAgentSay(context.Background(), protocol.AgentSayArgs{Session: "s1", Text: strings.Repeat("x", typedSayBytes+1)}); err == nil {
 		t.Fatal("a send too large to type was taken")
 	}

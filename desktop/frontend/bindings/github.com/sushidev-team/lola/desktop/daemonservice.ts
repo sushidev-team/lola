@@ -38,6 +38,14 @@ import * as protocol$0 from "../internal/protocol/models.js";
 import * as $models from "./models.js";
 
 /**
+ * AddApps checks further members of its stack out into a running stack
+ * session. A sandboxed session's agent is restarted to mount them.
+ */
+export function AddApps(a: protocol$0.AddAppsArgs): $CancellablePromise<protocol$0.AddAppsData> {
+    return $Call.ByID(4254446312, a);
+}
+
+/**
  * AddressPRFeedback asks the coding agent to validate, fix, and resolve feedback.
  */
 export function AddressPRFeedback(session: string, $number: number): $CancellablePromise<protocol$0.AgentSayData> {
@@ -101,6 +109,17 @@ export function BestOfPick(session: string): $CancellablePromise<protocol$0.Best
  */
 export function Broadcast(args: protocol$0.BroadcastArgs): $CancellablePromise<protocol$0.BroadcastData> {
     return $Call.ByID(2789386200, args);
+}
+
+/**
+ * BulkProjects changes pickup settings (labels, match mode, agent) on several
+ * projects in one atomic config save. DryRun previews without writing. Label
+ * references are checked against each project's own team; KeepNames stores them
+ * as written instead of as ids. The daemon refuses the whole change when any
+ * project cannot be resolved.
+ */
+export function BulkProjects(args: protocol$0.BulkProjectsArgs): $CancellablePromise<protocol$0.BulkProjectsData> {
+    return $Call.ByID(1449292091, args);
 }
 
 /**

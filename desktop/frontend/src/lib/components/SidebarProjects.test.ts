@@ -108,8 +108,9 @@ describe("SidebarProjects", () => {
     nav.view = "cockpit";
   });
 
-  it("filters the sessions beside it in Code mode and clears on a second click", async () => {
+  it("filters the sessions beside it in Code mode and keeps the selection on a second click", async () => {
     render(SidebarProjects);
+    expect(screen.queryByRole("button", { name: "All sessions" })).not.toBeInTheDocument();
     const row = screen.getByRole("button", { name: "lola" });
     await fireEvent.click(row);
     expect(nav.view).toBe("cockpit");
@@ -117,10 +118,9 @@ describe("SidebarProjects", () => {
     expect(nav.project).toBe("lola");
     expect(row).toHaveAttribute("aria-current", "true");
     await fireEvent.click(row);
-    expect(nav.scoped).toBe(false);
-    await fireEvent.click(row);
-    await fireEvent.click(screen.getByRole("button", { name: "All sessions" }));
-    expect(nav.scoped).toBe(false);
+    expect(nav.scoped).toBe(true);
+    expect(nav.project).toBe("lola");
+    expect(row).toHaveAttribute("aria-current", "true");
   });
 
   it("opens the Git workspace for a project in Git mode", async () => {
@@ -789,7 +789,7 @@ it("adds projects to the session filter with ⌘-click and replaces it with a pl
   await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
   expect(nav.scopeNames).toEqual(["alpha"]);
   await fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
-  expect(nav.scopeNames).toEqual([]);
+  expect(nav.scopeNames).toEqual(["alpha"]);
 });
 
 it("offers actions for several selected projects from a row's menu", async () => {

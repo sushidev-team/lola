@@ -451,6 +451,9 @@ type Config struct {
 	// (teampolicy.go). Save refuses such a Config, so a locked value can never
 	// be frozen into the file. Unexported: never serialized.
 	teamPolicy bool
+	// labelsResolved marks a Config whose label NAMES were rewritten to team
+	// label UUIDs in memory (daemon/labelrefs.go). Save refuses it, like teamPolicy.
+	labelsResolved bool
 }
 
 // Notices returns the non-fatal repairs Load made to the on-disk config, in
@@ -1316,6 +1319,9 @@ func orString(v, fallback string) string {
 func (c *Config) Save(path string) error {
 	if c.teamPolicy {
 		return ErrTeamPolicyOverlay
+	}
+	if c.labelsResolved {
+		return ErrLabelRefsResolved
 	}
 	c.ResolveInheritance()
 

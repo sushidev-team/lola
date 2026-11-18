@@ -38,6 +38,7 @@ export type {
     DesktopContext,
     DoctorReportDTO,
     DoctorResultDTO,
+    FilesDroppedDTO,
     GroupDTO,
     HubKindDTO,
     HubProjectDTO,

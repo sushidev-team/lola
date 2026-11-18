@@ -1522,3 +1522,52 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .projects-resize::after { content: ''; position: absolute; inset: 0 auto 0 3px; width: 1px; background: transparent; }
 .projects-resize:hover::after, .projects-resize.resizing::after, .projects-resize:focus-visible::after { background: var(--color-accent); width: 2px; }
 .projects-resize:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+
+/* Wails marks the drop target while files hover over it. */
+/* An overlay, not an outline on the element: the timeline and the composer paint over an outline. It
+   spans the whole conversation view, composer included, and takes no pointer. Only the sheets in
+   the middle move. */
+[data-conversation].file-drop-target-active::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  z-index: 50;
+  pointer-events: none;
+  border: 2px dashed var(--color-accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+[data-drop-hint] { display: none; }
+[data-conversation].file-drop-target-active [data-drop-hint] {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 51;
+  translate: -50% -50%;
+  display: grid;
+  justify-items: center;
+  gap: 28px;
+  pointer-events: none;
+  color: var(--color-accent-ink);
+  font-size: 14px;
+}
+[data-drop-hint] .sheets { position: relative; width: 44px; height: 56px; }
+[data-drop-hint] .sheet {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  border: 2px solid var(--color-accent);
+  background: var(--color-canvas);
+  transform-origin: 50% 120%;
+  animation: drop-fan 1.4s ease-in-out infinite;
+}
+[data-drop-hint] .sheet:nth-child(1) { --turn: -18deg; }
+[data-drop-hint] .sheet:nth-child(2) { --turn: 0deg; animation-delay: 0.08s; }
+[data-drop-hint] .sheet:nth-child(3) { --turn: 18deg; animation-delay: 0.16s; }
+@keyframes drop-fan {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  45%, 65% { transform: rotate(var(--turn)) translateY(-6px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-drop-hint] .sheet { animation: none; transform: rotate(var(--turn)); }
+}

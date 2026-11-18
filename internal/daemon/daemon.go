@@ -73,6 +73,7 @@ type NativeAPI interface {
 	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error)
 	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error)
 	SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error)
+	AddApps(ctx context.Context, s session.Session, names []string) (runtime.AddAppsResult, error)
 	Adopt(ctx context.Context) ([]session.Session, error)
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool
@@ -110,9 +111,11 @@ type Daemon struct {
 	cfgErr string // non-empty = cfg failed validation; polls are held
 	// teamPolicy is what the team policy overlay enforced on cfg (hubpolicy.go).
 	teamPolicy teamPolicyState
-	lin        linear.API // nil until the Linear API key resolves
-	linOK      bool
-	viewerID   string
+	// labelMemo is the last good label-name resolution (labelrefs.go).
+	labelMemo labelMemo
+	lin       linear.API // nil until the Linear API key resolves
+	linOK     bool
+	viewerID  string
 	// teamIDs caches team UUID -> Team so the pickers can show a team's NAME
 	// without a Linear round trip per open. Display only; nothing keys by it.
 	teamIDs map[string]linear.Team
@@ -242,6 +245,9 @@ type Daemon struct {
 	// sendKeysTyped is sendKeys without its paste, for an agent whose paste has not been
 	// measured (agent.Caps). nil means sendKeys for every agent.
 	sendKeysTyped func(ctx context.Context, tmuxName, text string) error
+	// sendKeysPasted is sendKeys with a paste at every size, for an agent that takes the
+	// Enter after fast keystrokes as a line break (agent.Caps PasteOnly).
+	sendKeysPasted func(ctx context.Context, tmuxName, text string) error
 	// sendEscape interrupts an agent's turn, for a human's Stop only.
 	sendEscape func(ctx context.Context, tmuxName string) error
 	// sendKey presses one key with no Enter, for a human's choice on a card. Never
@@ -753,6 +759,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.sendKeysTyped = func(ctx context.Context, tmuxName, text string) error {
 		return d.tmuxClient().SendKeysTyped(ctx, tmuxName, text)
 	}
+	d.sendKeysPasted = func(ctx context.Context, tmuxName, text string) error {
+		return d.tmuxClient().SendKeysPasted(ctx, tmuxName, text)
+	}
 	d.sendEscape = func(ctx context.Context, tmuxName string) error {
 		return d.tmuxClient().SendEscape(ctx, tmuxName)
 	}
@@ -864,8 +873,13 @@ func Run(ctx context.Context) error {
 	// the overlay is runtime-only and is never validated as if it were a file.
 	cfgInvalid := cfg.Validate()
 	teamPolicy := overlayTeamPolicy(cfg, filepath.Join(home, "state"))
+	labelNotes, labelMemoNow := resolveLabelRefs(ctx, cfg, nil, nil)
+	for _, n := range labelNotes {
+		logger.Printf("labels: %s", n)
+	}
 	d := newDaemon(cfg, nil, logger, home)
 	d.teamPolicy = teamPolicy
+	d.labelMemo = labelMemoNow
 	if teamPolicy.applied {
 		logger.Printf("hub: team policy v%d applied (%d locked key(s))", teamPolicy.version, len(teamPolicy.keys))
 	}

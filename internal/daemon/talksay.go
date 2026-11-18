@@ -372,8 +372,14 @@ func (d *Daemon) handleAgentSay(ctx context.Context, a protocol.AgentSayArgs) (p
 	command := isSlash(strings.TrimSpace(text))
 	if command {
 		text = strings.TrimSpace(text)
-		if word := strings.Fields(text)[0]; agent.ScreenCommand(agent.Parse(s.Agent), word) {
+		word := strings.Fields(text)[0]
+		if agent.ScreenCommand(agent.Parse(s.Agent), word) {
 			return protocol.AgentSayData{}, screenRefusal(word)
+		}
+		// A "/" opens Codex's command picker, and Enter runs whichever row it has focused.
+		// Which commands open a screen there was never measured, so none is typed.
+		if agent.Parse(s.Agent) == agent.Codex {
+			return protocol.AgentSayData{}, fmt.Errorf("lola does not type Codex's commands yet, so it did not send %s. Use the terminal", word)
 		}
 	}
 	tabID, onHost := d.sshSpeakFrom(ctx, store, id, a.Conn)

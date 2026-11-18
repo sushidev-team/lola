@@ -168,6 +168,13 @@ class Nav {
   get gitMode(): boolean { return (this.pendingMode ?? (this.inGit ? "git" : "code")) === "git"; }
   /** Narrow sidebar only: which of Projects and Sessions is on show (both show side by side when wide). */
   sidebarTab = $state<"sessions" | "projects">("sessions");
+  /**
+   * The sidebar has room for Projects and Sessions side by side (not tabs, not Git). Sidebar.svelte
+   * owns the measurement and mirrors it here; false until it has.
+   */
+  sidebarSplit = $state(false);
+  /** The projects column is on screen right beside the sessions, so a project is one click away. */
+  get projectsBeside(): boolean { return this.sidebarOpen && this.sidebarSplit; }
   /** Sidebar attention filter. Empty means all sessions. */
   triage = $state<string>("");
 

@@ -1,0 +1,36 @@
+[48;5;8m  ROW 24: the quick brown fox jumps over the lazy dog, tab      here, quote " and 'single', dollar $HOME, backtick `x`;
+  ROW 25: the quick brown fox jumps over the lazy dog, tab      here, quote " and 'single', dollar $HOME, backtick `x`;
+  ROW 26: the quick brown fox jumps over the lazy dog, tab      here, quote " and 'single', dollar $HOME, backtick `x`;
+  ROW 27: the quick brown fox jumps over the lazy dog, tab      here, quote " and 'single', dollar $HOME, backtick `x`;
+  ROW 28: the quick brown fox jumps over the lazy dog, tab      here, quote " and 'single', dollar $HOME, backtick `x`;
+  ROW 29: the quick brown fox jumps over the lazy dog, tab      here, quote " and 'single', dollar $HOME, backtick `x`;
+  The last word is ZEBRA
+
+[49m
+[2m• [0m30 ZEBRA
+
+[2m  Worked for 3s • 13:11
+[0m
+[48;5;8m
+[1;2m› [0m[48;5;8mReply with the single word SMALL.
+
+[49m
+[2m• [0mSMALL
+
+[2m  Worked for 2s • 13:11
+[0m
+[48;5;8m
+[1;2m› [0m[48;5;8m!echo hi is not a command, reply with the single word BANG.
+
+[49m
+[2m• [0mBANG
+
+[2m  Worked for 2s • 13:11
+[0m
+
+[1m›[0m Line A
+  Line B mentions @main.go
+  reply with the single word MULTI @x
+
+  [38;2;246;226;183mGPT-6-Astra high[39m · [38;2;171;223;167m/w/wt…
+[39m                                                                                              ⚠ [38;2;196;167;103m3 warnings[39m · [1mf2[0m to view

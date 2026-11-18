@@ -91,7 +91,12 @@ export class GitActions {
     if (path === null && request.action === 'pull' && active.git === this.context().git && active.git.error && this.autoStashPull(active, request)) return;
     if (path === null && active.git === this.context().git && active.git.error) {
       const info = gitErrorInfo(active.git.error, request.action);
-      store.setFlash(info.title, info.kind, {description:info.description,action:this.recovery()});
+      const recovery = this.recovery();
+      if (request.action === 'pull' && info.recovery === 'merge' && recovery) {
+        recovery.run();
+        return;
+      }
+      store.setFlash(info.title, info.kind, {description:info.description,action:recovery});
     }
     if (path !== null && active.git === this.context().git && deletingSelected && this.context().ref === request.source) this.callbacks.viewHistory('');
     if (path !== null && active.git === this.context().git && ['checkout', 'merge', 'rebase'].includes(request.action)) this.callbacks.openWorktree(path);
@@ -197,6 +202,7 @@ export class GitActions {
       return {label:'Pull changes',run:()=>{if(valid()) void this.execute(context,this.branchRequest('pull',source));}};
     }
     if (info.recovery==='merge' && request.action==='pull') {
+      if (!valid() || source.sha !== request.sourceSHA) return;
       const upstream=this.upstream(source), full=upstream.startsWith('refs/')?upstream:`refs/remotes/${upstream}`;
       const remote=git.snapshot?.refs.find(branch=>branch.remote && branch.fullName===full);
       if(remote) return {label:'Merge remote changes',run:()=>{if(valid() && git.snapshot?.refs.some(branch=>branch.fullName===remote.fullName && branch.sha===remote.sha)) void this.execute(context,this.branchRequest('merge',remote,source));}};

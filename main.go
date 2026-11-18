@@ -84,6 +84,7 @@ func main() {
 		comparisonCmd(),
 		bestofCmd(),
 		switchAgentCmd(),
+		addAppCmd(),
 		checkpointCmd(),
 		coderabbitCmd(),
 		configCmd(),
@@ -279,6 +280,29 @@ func switchAgentCmd() *cobra.Command {
 				return err
 			}
 			raw, err := json.Marshal(protocol.Request{Cmd: "switchAgent", Args: args})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
+}
+
+// addAppCmd checks further members of its stack out into a running stack
+// session (`lola add-app <session> <app>...`) — for an issue whose labels
+// missed a repository it needs. A sandboxed session's agent is restarted to
+// mount it, so the daemon refuses while that agent is mid-turn.
+func addAppCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "add-app <session> <app>...",
+		Short: "Add further repositories of its stack to a running stack session",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			args, err := json.Marshal(protocol.AddAppsArgs{Session: a[0], Apps: a[1:]})
+			if err != nil {
+				return err
+			}
+			raw, err := json.Marshal(protocol.Request{Cmd: "addApps", Args: args})
 			if err != nil {
 				return err
 			}

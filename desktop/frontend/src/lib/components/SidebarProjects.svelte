@@ -467,11 +467,11 @@
   function openProject(name: string, event?: MouseEvent) {
     if (suppressClick) return;
     // Git mode: a project is a workspace to open. Code mode: it filters the sessions beside it,
-    // and picking the one already chosen clears the filter.
+    // with filters cleared through the chips in the sessions panel.
     // A stack or path-less project keeps the Git tab too: ProjectDetail shows its overview.
     if (nav.gitMode) nav.goDetail(name, "git");
     else if (event && (event.metaKey || event.ctrlKey || event.shiftKey)) nav.toggleScope(name);
-    else { nav.scopeTo(nav.scopeNames.length === 1 && nav.scopeNames[0] === name ? "" : name); nav.sidebarTab = "sessions"; }
+    else { nav.scopeTo(name); nav.sidebarTab = "sessions"; }
   }
 
   function toggleGroup(name: string, collapsed: boolean) {
@@ -723,11 +723,6 @@
       <SetupChecklist dismissKey="sidebar" hideWhenComplete optional={["poll", "linear"]} class="mb-2 rounded-md border border-dashed border-edge p-2" />
     {/if}
     {@const gap = drag?.kind === "group" ? groupTarget : target?.kind === "top" ? target.index : null}
-    {#if !nav.gitMode}
-      <div class="pb-1">
-        <NavRow label="All sessions" glyph="∗" active={nav.view === "cockpit" && !nav.scoped} title="Show sessions from every project" onclick={() => nav.scopeTo("")} />
-      </div>
-    {/if}
     <!-- The sidebar owns scrolling; Activity has its own bounded footer. -->
     <div bind:this={listEl} class="min-w-0" class:select-none={!!drag}>
       <ul>

@@ -1243,7 +1243,7 @@ func TestLaunchCommandPerAgent(t *testing.T) {
 	}
 	gotArgs := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
 	notify, _ := json.Marshal([]string{n.LolaBin, "hook", "codex-notify"})
-	wantArgs := append([]string{"--add-dir", commonDir, "-c", "notify=" + string(notify)}, agent.LaunchArgs(agent.Codex, defaultLaunchPrompt(id))...)
+	wantArgs := append([]string{"--add-dir", commonDir, "-c", "check_for_update_on_startup=false", "-c", "notify=" + string(notify)}, agent.LaunchArgs(agent.Codex, defaultLaunchPrompt(id))...)
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Errorf("codex argv = %q, want %q", gotArgs, wantArgs)
 	}
@@ -1255,13 +1255,52 @@ func TestLaunchCommandPerAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantResume := append([]string{"--add-dir", commonDir, "-c", "notify=" + string(notify)}, agent.LaunchArgsResume(agent.Codex, "")...)
+	wantResume := append([]string{"--add-dir", commonDir, "-c", "check_for_update_on_startup=false", "-c", "notify=" + string(notify)}, agent.LaunchArgsResume(agent.Codex, "")...)
 	if got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n"); !reflect.DeepEqual(got, wantResume) {
 		t.Fatalf("resume argv = %q, want %q", got, wantResume)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "injected")); !os.IsNotExist(err) {
 		t.Fatal("git directory was interpreted as shell code")
 	}
+	// A worktree's shared directory is the main checkout's .git, and that checkout is the
+	// folder codex asks to trust. The answer rides on argv and nothing is written to the
+	// user's config. A path that could not sit in a TOML string unchanged gets no answer.
+	trusted := func(checkout string) []string {
+		t.Helper()
+		commonDir := filepath.Join(checkout, ".git")
+		if err := os.MkdirAll(commonDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nprintf '%s\\n' "+shQuote(commonDir)+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", "-c", n.launchCommand("", id, agent.Codex, false))
+		cmd.Dir, cmd.Env = dir, append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// One argument per line, after the shared directory, which may itself hold a newline.
+		tail, ok := strings.CutPrefix(string(out), "--add-dir\n"+commonDir+"\n")
+		if !ok {
+			t.Fatalf("argv = %q", out)
+		}
+		return strings.Split(strings.TrimSuffix(tail, "\n"), "\n")
+	}
+	rest := append([]string{"-c", "check_for_update_on_startup=false", "-c", "notify=" + string(notify)}, agent.LaunchArgs(agent.Codex, defaultLaunchPrompt(id))...)
+	plain := filepath.Join(dir, "My Projects", "acme.app_2")
+	if got, want := trusted(plain), append([]string{"-c", `projects={"` + plain + `"={trust_level="trusted"}}`}, rest...); !reflect.DeepEqual(got, want) {
+		t.Errorf("trusted argv = %q, want %q", got, want)
+	}
+	for _, odd := range []string{`has "quote"`, `back\slash`, "new\nline", "$(touch injected)", "it's"} {
+		if got := trusted(filepath.Join(dir, odd)); !reflect.DeepEqual(got, rest) {
+			t.Errorf("%q: argv = %q, want no trust override", odd, got)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "injected")); !os.IsNotExist(err) {
+		t.Fatal("checkout path was interpreted as shell code")
+	}
+
 	// An unresolved repository must not turn into a broad or empty grant.
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
 		t.Fatal(err)

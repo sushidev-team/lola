@@ -70,6 +70,8 @@ func buildCommandTiers() map[string]string {
 		"hookEvent", "agentReport", protocol.CmdReviewPublish, protocol.CmdReviewComplete,
 		// Asked from the Mac's branch graph, which a phone does not have.
 		"askMerge",
+		// Asked from the Mac's session menu; it can restart a sandboxed agent.
+		"addApps",
 		// Transport-internal, and the host browser.
 		protocol.CmdRemotePair, "openURL",
 		// Planning, goals, profiles, knowledge, comparison: not a phone's work.

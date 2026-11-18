@@ -253,3 +253,32 @@ it("supports an existing branch in a shell and ignores the choice in the main ch
   await fireEvent.click(screen.getByRole("button", {name:"Start"}));
   expect(open.mock.calls[1][0]).toMatchObject({branch:"", existing:undefined, location:"main"});
 });
+
+it("a sandboxed project's agent is not offered the main checkout, and is told why", async () => {
+  store.projects = [{name:"acme",label:"Acme",path:"/code/acme",agent:"codex",defaultBranch:"main",sandboxed:true} as ProjectInfo];
+  const open = vi.spyOn(store,"openManual").mockResolvedValue(undefined);
+  render(NewSession);
+  const main = () => within(screen.getByLabelText("Location")).getByRole("option", {name:"Main checkout", hidden:true}) as HTMLOptionElement;
+  expect(main().disabled).toBe(true);
+  expect(screen.getByText(/Main checkout is unavailable: Acme runs its agents sandboxed/)).toBeInTheDocument();
+
+  // A shell runs no agent, so the checkout is open to it.
+  await fireEvent.change(screen.getByLabelText("Run"), {target:{value:"shell"}});
+  expect(main().disabled).toBe(false);
+  expect(screen.queryByText(/Main checkout is unavailable/)).toBeNull();
+  await fireEvent.change(screen.getByLabelText("Location"), {target:{value:"main"}});
+
+  // Back to an agent: the choice it may not have is dropped, not sent to be refused.
+  await fireEvent.change(screen.getByLabelText("Run"), {target:{value:"agent"}});
+  await waitFor(() => expect((screen.getByLabelText("Location") as HTMLSelectElement).value).toBe("worktree"));
+  await fireEvent.input(box(), {target:{value:"Fix it"}});
+  await fireEvent.keyDown(box(), {key:"Enter"});
+  expect(started(open)).toMatchObject({location:"worktree",agent:true});
+});
+
+it("an unsandboxed project keeps the main checkout for its agent", () => {
+  render(NewSession);
+  expect((within(screen.getByLabelText("Location")).getByRole("option", {name:"Main checkout", hidden:true}) as HTMLOptionElement).disabled).toBe(false);
+  expect(screen.queryByText(/Main checkout is unavailable/)).toBeNull();
+});
+

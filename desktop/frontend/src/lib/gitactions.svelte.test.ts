@@ -170,7 +170,7 @@ describe('Git action menus', () => {
     await Promise.resolve();
     expect(actions.request!.items[0].label).toBe('Merge feature/work into main');
   });
-  it('offers pull after a rejected push and an explicit merge after a diverged pull', async () => {
+  it('offers pull after a rejected push and automatically merges a diverged pull', async () => {
     const remote={...main,name:'origin/main',fullName:'refs/remotes/origin/main',remote:true,current:false,sha:'c'.repeat(40)};
     git.snapshot!.refs.push(remote);
     vi.mocked(git.branchAction).mockImplementationOnce(async request=>{git.failedAction=request;git.error='push rejected (non-fast-forward)';return null;});
@@ -178,10 +178,33 @@ describe('Git action menus', () => {
     await waitFor(()=>expect(store.flash?.action?.label).toBe('Pull changes'));
     vi.mocked(git.branchAction).mockImplementationOnce(async request=>{git.failedAction=request;git.error='branch has diverged; check it out and merge or rebase the upstream explicitly';return null;});
     store.flash!.action!.run();
-    await waitFor(()=>expect(store.flash?.action?.label).toBe('Merge remote changes'));
-    expect(git.branchAction).toHaveBeenLastCalledWith(expect.objectContaining({action:'pull',source:main.fullName,sourceSHA:main.sha}),'',200);
-    store.flash!.action!.run();
     await waitFor(()=>expect(git.branchAction).toHaveBeenLastCalledWith({action:'merge',source:remote.fullName,sourceSHA:remote.sha,target:main.fullName,targetSHA:main.sha},'',200));
+    expect(store.flash?.action?.label).not.toBe('Merge remote changes');
+    expect(confirm.request).toBeNull();
+  });
+  it.each(['success','conflict','changed','missing'])('handles a diverged Pull directly (%s)', async outcome => {
+    const remote={...main,name:'origin/main',fullName:'refs/remotes/origin/main',remote:true,current:false,sha:'c'.repeat(40)};
+    if(outcome!=='missing') git.snapshot!.refs.push(remote);
+    vi.mocked(git.branchAction).mockImplementationOnce(async request=>{
+      git.failedAction=request;
+      git.error='branch has diverged; check it out and merge or rebase the upstream explicitly';
+      if(outcome==='changed') git.snapshot!.refs[0]={...main,sha:'d'.repeat(40)};
+      return null;
+    });
+    if(outcome==='conflict') vi.mocked(git.branchAction).mockImplementationOnce(async request=>{
+      git.failedAction=request;git.error='Automatic merge failed; fix conflicts and then commit the result.';return null;
+    });
+    const flash=vi.spyOn(store,'setFlash');
+    actions.pull();
+    if(outcome==='changed'||outcome==='missing') {
+      await waitFor(()=>expect(flash).toHaveBeenCalled());
+      expect(git.branchAction).toHaveBeenCalledTimes(1);
+    } else {
+      await waitFor(()=>expect(git.branchAction).toHaveBeenLastCalledWith({action:'merge',source:remote.fullName,sourceSHA:remote.sha,target:main.fullName,targetSHA:main.sha},'',200));
+      if(outcome==='conflict') await waitFor(()=>expect(flash).toHaveBeenCalledTimes(1));
+      else expect(flash).not.toHaveBeenCalled();
+    }
+    expect(confirm.request).toBeNull();
   });
   it.each(['changed','dismissed','disposed'])('does not run a stale toast action after the context is %s', async reason=>{
     git.failedAction={action:'push',source:main.fullName,sourceSHA:main.sha,target:'',targetSHA:''};

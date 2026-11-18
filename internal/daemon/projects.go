@@ -73,6 +73,7 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 			Agent:          m.agentKind,
 			AgentBin:       m.agentBin,
 			RepoConfigured: m.p.Repo != "",
+			Sandboxed:      m.p.Sandboxed(),
 			PollCount:      len(m.polls),
 			PollsEnabled:   m.enabled,
 			Polls:          m.polls,

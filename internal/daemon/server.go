@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -540,6 +541,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: "switchAgent: bad args: " + err.Error()}
 		}
 		data, err := d.handleSwitchAgent(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "addApps":
+		var a protocol.AddAppsArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "addApps: bad args: " + err.Error()}
+		}
+		data, err := d.handleAddApps(ctx, a)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
@@ -1095,20 +1106,54 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	nc, err := config.Load(path)
-	if err != nil {
-		return err
+	// Label names are resolved against Linear, outside d.mu, so another writer
+	// (a poll disable, a bulk edit) may save config.toml meanwhile. Remember the
+	// bytes this candidate was built from and install it only if the file still
+	// holds them; otherwise rebuild from the new file.
+	var (
+		nc   *config.Config
+		tp   teamPolicyState
+		memo labelMemo
+	)
+	for attempt := 0; ; attempt++ {
+		before, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		nc, err = config.Load(path)
+		if err != nil {
+			return err
+		}
+		if err := nc.Validate(); err != nil {
+			return fmt.Errorf("config invalid, keeping previous: %w", err)
+		}
+		// The team policy overlay goes on AFTER validation (hubpolicy.go).
+		tp = overlayTeamPolicy(nc, d.hubDir())
+		d.mu.Lock()
+		prev := d.labelMemo
+		d.mu.Unlock()
+		var notes []string
+		notes, memo = resolveLabelRefs(ctx, nc, nil, prev)
+		for _, n := range notes {
+			d.log.Printf("labels: %s", n)
+		}
+		d.mu.Lock()
+		now, rerr := os.ReadFile(path)
+		if rerr == nil && bytes.Equal(now, before) {
+			break // keep d.mu: the swap below runs under it
+		}
+		d.mu.Unlock()
+		if rerr != nil {
+			return rerr
+		}
+		if attempt >= 2 {
+			return fmt.Errorf("config.toml kept changing during reload, keeping previous; try again")
+		}
 	}
-	if err := nc.Validate(); err != nil {
-		return fmt.Errorf("config invalid, keeping previous: %w", err)
-	}
-	// The team policy overlay goes on AFTER validation (hubpolicy.go).
-	tp := overlayTeamPolicy(nc, d.hubDir())
-
-	d.mu.Lock()
 	old := d.cfg
 	d.cfg = nc
 	d.teamPolicy = tp
+	d.labelMemo = memo
 	d.cfgErr = "" // a validated config lifts the startup hold on polls
 	if old.Linear != nc.Linear {
 		d.lin = nil // key source / endpoint changed: re-resolve lazily

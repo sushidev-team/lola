@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,6 +55,30 @@ func (f *talkPaneFake) show(pane string) {
 	f.pane = pane
 	// The composer sits one row above the last rule on every pane here.
 	f.cursor = attention.Cursor{X: 2, Y: strings.Count(pane, "\n") - 2, Visible: true}
+}
+
+// showCodex puts one of the measured codex panes on screen, with the cursor tmux reported
+// for it (internal/attention/testdata/codex).
+func (f *talkPaneFake) showCodex(t *testing.T, name string) {
+	t.Helper()
+	dir := filepath.Join("..", "attention", "testdata", "codex")
+	vis, err := os.ReadFile(filepath.Join(dir, name+".vis"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, err := os.ReadFile(filepath.Join(dir, name+".cur"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c attention.Cursor
+	var flag int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(cur)), "%d %d %d", &c.X, &c.Y, &flag); err != nil {
+		t.Fatal(err)
+	}
+	c.Visible = flag == 1
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pane, f.cursor = string(vis), c
 }
 
 func (f *talkPaneFake) hideCursor() {
@@ -428,10 +453,64 @@ func TestPressedSendIgnoresAttachedCheck(t *testing.T) {
 	}
 }
 
-func TestCodexSayQueuesThroughAutomationGate(t *testing.T) {
+// A message to codex goes at once on the measured proof, as one paste, and only into its
+// composer: a draft, the trust screen and the transcript browser all keep it queued.
+func TestCodexSayGoesNowOnAnEmptyComposer(t *testing.T) {
+	d, f := talkFakeDaemon(t)
+	var pasted []string
+	d.sendKeysPasted = func(_ context.Context, _, text string) error {
+		pasted = append(pasted, text)
+		return nil
+	}
+	s := talkSession(d, "c1", state.AgentIdle)
+	s.Agent = "codex"
+	d.sessions.Upsert(s)
+
+	for _, pane := range []string{"draft", "trust-modal", "update-modal", "transcript-browser", "shell-mode", "popup-at"} {
+		f.showCodex(t, pane)
+		if out := say(t, d, "c1", "held by "+pane); out.Delivered || out.Why == "" {
+			t.Fatalf("%s: %+v", pane, out)
+		}
+	}
+	if len(pasted) != 0 || len(f.sent()) != 0 {
+		t.Fatalf("typed into a screen that is not an empty composer: %q %q", pasted, f.sent())
+	}
+
+	f.showCodex(t, "rest-fresh")
+	out := say(t, d, "c1", "look at @main.go")
+	if !out.Delivered {
+		t.Fatalf("an empty composer did not take it: %+v", out)
+	}
+	if len(f.sent()) != 0 || len(pasted) == 0 {
+		t.Fatalf("codex takes a paste and nothing else: typed %q pasted %q", f.sent(), pasted)
+	}
+	// Everything queued above went with it, and the "@" word is closed off with a space,
+	// or codex's picker would take the Enter.
+	if last := pasted[len(pasted)-1]; !strings.HasSuffix(last, "look at @main.go ") {
+		t.Errorf("pasted %q", last)
+	}
+}
+
+// Codex's "/" opens a picker whose focused row runs on Enter. None of it is typed.
+func TestCodexSayRefusesACommand(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	s := talkSession(d, "c1", state.AgentIdle)
 	s.Agent = "codex"
+	d.sessions.Upsert(s)
+	f.showCodex(t, "rest-fresh")
+	_, err := d.handleAgentSay(context.Background(), protocol.AgentSayArgs{Session: "c1", Text: "  /compact"})
+	if err == nil || !strings.Contains(err.Error(), "/compact") || len(f.sent()) != 0 {
+		t.Fatalf("err %v, sent %q", err, f.sent())
+	}
+	if cur, _ := d.sessions.Get("c1"); cur.PendingSSH != "" {
+		t.Errorf("a refused command was queued: %q", cur.PendingSSH)
+	}
+}
+
+func TestOpencodeSayQueuesThroughAutomationGate(t *testing.T) {
+	d, f := talkFakeDaemon(t)
+	s := talkSession(d, "c1", state.AgentIdle)
+	s.Agent = "opencode"
 	d.sessions.Upsert(s)
 	locked := false
 	d.humanLock = func(context.Context, session.Session) (func(), string) {
@@ -1605,10 +1684,37 @@ func TestTalkStateGoneSpendsNothing(t *testing.T) {
 	}
 }
 
-func TestTalkStateCodexHasNoCapsAndAReason(t *testing.T) {
-	d, _ := talkFakeDaemon(t)
+// Codex's composer is measured, so a message to it goes now. Its cards are not.
+func TestTalkStateCodexCaps(t *testing.T) {
+	d, f := talkFakeDaemon(t)
 	s := talkSession(d, "c1", state.AgentIdle)
 	s.Agent = "codex"
+	d.sessions.Upsert(s)
+	for pane, word := range map[string]string{
+		"rest-fresh":   protocol.ComposerResting,
+		"draft":        protocol.ComposerDraft,
+		"working":      protocol.ComposerWorking,
+		"trust-modal":  protocol.ComposerUnknown,
+		"update-modal": protocol.ComposerUnknown,
+	} {
+		f.showCodex(t, pane)
+		out, err := d.handleTalkState(context.Background(), protocol.TalkStateArgs{Session: "c1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !out.Caps.Send || !out.Caps.Stop || out.Caps.Cards || out.Caps.Why != "" {
+			t.Fatalf("caps %+v", out.Caps)
+		}
+		if out.Composer != word || out.Prompt != nil {
+			t.Errorf("%s: composer %q prompt %v, want %q and no card", pane, out.Composer, out.Prompt, word)
+		}
+	}
+}
+
+func TestTalkStateOpencodeHasNoCapsAndAReason(t *testing.T) {
+	d, _ := talkFakeDaemon(t)
+	s := talkSession(d, "c1", state.AgentIdle)
+	s.Agent = "opencode"
 	d.sessions.Upsert(s)
 	out, err := d.handleTalkState(context.Background(), protocol.TalkStateArgs{Session: "c1"})
 	if err != nil {

@@ -135,16 +135,27 @@ func (d *Daemon) typeToAgentLocked(ctx context.Context, n typedNote, target, tex
 	return nil
 }
 
-// sendFor picks the transport for a session's agent. Only the kind whose paste timing was
-// measured gets the paste. A test that wires one seam gets that seam.
+// sendFor picks the transport for a session's agent, and puts the text the way that
+// agent's composer needs it (agent.ComposerText). Only a kind whose paste timing was
+// measured gets a paste, and one that mistakes typing for a paste gets nothing else. A
+// test that wires one seam gets that seam.
 func (d *Daemon) sendFor(id string) func(ctx context.Context, target, text string) error {
-	if d.sendKeysTyped == nil {
+	s, ok := d.sessions.Get(id)
+	if !ok {
 		return d.sendKeys
 	}
-	if s, ok := d.sessions.Get(id); !ok || agent.Caps(agent.Parse(s.Agent)).Paste {
-		return d.sendKeys
+	k := agent.Parse(s.Agent)
+	caps := agent.Caps(k)
+	send := d.sendKeys
+	switch {
+	case caps.PasteOnly && d.sendKeysPasted != nil:
+		send = d.sendKeysPasted
+	case !caps.Paste && d.sendKeysTyped != nil:
+		send = d.sendKeysTyped
 	}
-	return d.sendKeysTyped
+	return func(ctx context.Context, target, text string) error {
+		return send(ctx, target, agent.ComposerText(k, text))
+	}
 }
 
 // clearDeferred drops the note that a send is waiting: one just went.
