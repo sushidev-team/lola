@@ -179,7 +179,7 @@ func matchLabelRef(labels []linear.Label, ref string) (string, error) {
 		return "", err
 	}
 	if len(hits) > 1 {
-		return "", fmt.Errorf("label pattern %q matches %d labels in the project's team; this setting takes one", ref, len(hits))
+		return "", fmt.Errorf("label pattern %q matches %d labels in the project's team, but a bulk edit resolves each reference to exactly one label; list the qualified names separately, or put the pattern in [defaults] or a project's match_labels in config.toml", ref, len(hits))
 	}
 	return hits[0], nil
 }

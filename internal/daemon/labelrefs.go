@@ -12,17 +12,31 @@ import (
 	"github.com/sushidev-team/lola/internal/secrets"
 )
 
-// resolveLabelRefs rewrites label NAMES ("apps/website", "Bug") in each
-// project's match_labels / on_sent_set_label / blocked_label_id to the label
-// UUID of that project's own team, so one [defaults] entry works for every
-// team. UUIDs pass through untouched. It runs on the freshly loaded config
-// (startup and each reload), in memory only: the config is marked unsavable
-// so the names stay in config.toml.
+// labelMemo remembers what each (team, reference) resolved to at the last
+// successful lookup, so a transient Linear failure on a later reload keeps the
+// working ids instead of swapping them back for raw names.
+type labelMemo map[string][]string
+
+func memoKey(teamID, ref string) string { return teamID + "\x00" + ref }
+
+// resolveLabelRefs rewrites label NAMES ("agent/agent-ready", "Bug", or a glob
+// like "*/agent-ready") in each project's match_labels / on_sent_set_label /
+// blocked_label_id to the label UUID(s) of that project's own team, so one
+// [defaults] entry works for every team. UUIDs pass through untouched. It runs
+// on the freshly loaded config (startup and each reload), in memory only: the
+// config is marked unsavable so the names stay in config.toml.
 //
-// Fails open: no Linear key, a Linear error or an unmatched name leaves the
-// reference as written (the dead-filter report then names it) and returns a
-// note per problem. A client of nil builds one from cfg's key source.
-func resolveLabelRefs(ctx context.Context, cfg *config.Config, lin linear.API) []string {
+// Under match_mode "all" every id a glob expands to is required: each match is
+// its own trigger label.
+//
+// Fails open per reference: no Linear key, a Linear error or an unmatched name
+// leaves the reference as written (the dead-filter report then names it), or
+// the id memo holds from the last good lookup, and returns a note per problem.
+// A project whose resolved on_sent_set_label is also one of its resolved
+// match_labels keeps its raw references (it would respawn the issue forever).
+// A lin of nil builds a client from cfg's key source. The returned memo is the
+// one to pass to the next call.
+func resolveLabelRefs(ctx context.Context, cfg *config.Config, lin linear.API, prev labelMemo) ([]string, labelMemo) {
 	need := false
 	for _, p := range cfg.Projects {
 		if hasLabelName(p.MatchLabels) || hasLabelName([]string{p.OnSentSetLabel, p.BlockedLabelID}) {
@@ -31,12 +45,12 @@ func resolveLabelRefs(ctx context.Context, cfg *config.Config, lin linear.API) [
 		}
 	}
 	if !need {
-		return nil
+		return nil, nil
 	}
 	if lin == nil {
 		key, err := secrets.LinearAPIKey(cfg.Linear.APIKeyKeychain, cfg.Linear.APIKeyEnv)
 		if err != nil {
-			return []string{"label names not resolved: " + err.Error()}
+			return []string{"label names not resolved: " + err.Error()}, prev
 		}
 		lin = linear.New(cfg.Linear.Endpoint, key)
 	}
@@ -44,30 +58,38 @@ func resolveLabelRefs(ctx context.Context, cfg *config.Config, lin linear.API) [
 	defer cancel()
 
 	var notes []string
-	teams := map[string][]linear.Label{}
-	teamLabels := func(teamID, ref string) []linear.Label {
-		if teamID == "" {
-			notes = append(notes, fmt.Sprintf("label %q has no team_id to resolve in", ref))
-			return nil
-		}
-		labels, ok := teams[teamID]
-		if !ok {
-			var err error
-			if labels, err = lin.Labels(ctx, teamID); err != nil {
-				notes = append(notes, fmt.Sprintf("list labels of team %s: %v", teamID, err))
-				return nil
-			}
-			teams[teamID] = labels
-		}
-		return labels
+	memo := labelMemo{}
+	type catalog struct {
+		labels []linear.Label
+		err    error
 	}
-	// resolveMany expands one match_labels entry: a glob may name several labels.
+	teams := map[string]catalog{} // a failure is cached too: one request, one note, per team per call
+	teamLabels := func(teamID string) ([]linear.Label, error) {
+		c, ok := teams[teamID]
+		if !ok {
+			c.labels, c.err = lin.Labels(ctx, teamID)
+			if c.err != nil {
+				notes = append(notes, fmt.Sprintf("list labels of team %s: %v", teamID, c.err))
+			}
+			teams[teamID] = c
+		}
+		return c.labels, c.err
+	}
+	// resolveMany expands one reference: a glob may name several labels.
 	resolveMany := func(teamID, ref string) []string {
 		if ref == "" || labelUUIDRe.MatchString(ref) {
 			return []string{ref}
 		}
-		labels := teamLabels(teamID, ref)
-		if labels == nil {
+		if teamID == "" {
+			notes = append(notes, fmt.Sprintf("label %q has no team_id to resolve in", ref))
+			return []string{ref}
+		}
+		labels, err := teamLabels(teamID)
+		if err != nil {
+			if ids, ok := prev[memoKey(teamID, ref)]; ok {
+				memo[memoKey(teamID, ref)] = ids // lookup failed: keep the last good answer
+				return ids
+			}
 			return []string{ref}
 		}
 		ids, err := matchLabelRefs(labels, ref)
@@ -75,50 +97,49 @@ func resolveLabelRefs(ctx context.Context, cfg *config.Config, lin linear.API) [
 			notes = append(notes, err.Error())
 			return []string{ref}
 		}
+		memo[memoKey(teamID, ref)] = ids
 		return ids
 	}
-	resolve := func(teamID, ref string) string {
-		if ref == "" || labelUUIDRe.MatchString(ref) {
+	// resolveOne is for a setting that holds exactly one label.
+	resolveOne := func(teamID, ref string) string {
+		ids := resolveMany(teamID, ref)
+		if len(ids) != 1 {
+			notes = append(notes, fmt.Sprintf("label pattern %q matches %d labels in the project's team; this setting takes one", ref, len(ids)))
 			return ref
 		}
-		labels := teamLabels(teamID, ref)
-		if labels == nil {
-			return ref
-		}
-		id, err := matchLabelRef(labels, ref)
-		if err != nil {
-			notes = append(notes, err.Error())
-			return ref
-		}
-		return id
+		return ids[0]
 	}
 	changed := false
 	for i := range cfg.Projects {
 		p := &cfg.Projects[i]
+		raw := *p
 		var ml []string
 		for _, ref := range p.MatchLabels {
-			ids := resolveMany(p.TeamID, ref)
-			if len(ids) != 1 || ids[0] != ref {
-				changed = true
-			}
-			for _, id := range ids {
+			for _, id := range resolveMany(p.TeamID, ref) {
 				if !slices.Contains(ml, id) {
 					ml = append(ml, id)
 				}
 			}
 		}
-		p.MatchLabels = ml
-		if id := resolve(p.TeamID, p.OnSentSetLabel); id != p.OnSentSetLabel {
-			p.OnSentSetLabel, changed = id, true
+		onSent := resolveOne(p.TeamID, p.OnSentSetLabel)
+		blocked := resolveOne(p.TeamID, p.BlockedLabelID)
+		if p.DedupMode == "label" && onSent != "" && slices.Contains(ml, onSent) {
+			// Validate compares raw strings; names and globs can still land on
+			// the same id. Leave this project unresolved (it matches nothing and
+			// the dead-filter report names it) rather than respawn forever.
+			notes = append(notes, fmt.Sprintf("project %s: on_sent_set_label and match_labels resolve to the same label; not resolved", p.Name))
+			*p = raw
+			continue
 		}
-		if id := resolve(p.TeamID, p.BlockedLabelID); id != p.BlockedLabelID {
-			p.BlockedLabelID, changed = id, true
+		if !slices.Equal(ml, raw.MatchLabels) || onSent != raw.OnSentSetLabel || blocked != raw.BlockedLabelID {
+			changed = true
 		}
+		p.MatchLabels, p.OnSentSetLabel, p.BlockedLabelID = ml, onSent, blocked
 	}
 	if changed {
 		cfg.MarkLabelRefsResolved()
 	}
-	return notes
+	return notes, memo
 }
 
 func hasLabelName(refs []string) bool {
