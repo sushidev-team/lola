@@ -445,7 +445,15 @@ every send path. Re-verify against a live pane.
   worktree after the agent starts. Project is passed BY NAME, not inferred from the id.
   `TestSandboxContainsTheAgent` (`LOLA_SANDBOX_IT=1`).
 - **Stack sessions** (`kind = "stack"`): one agent in a folder of per-app worktrees.
-  Apps chosen once at spawn (`config.SelectApps`). PR state lives on `session.App`;
+  Apps are chosen at spawn (`config.SelectApps`, plus members a human ticked in
+  the ticket picker: `OpenTicketArgs.Apps`) and only GROW afterwards, by a
+  human's `cmd=addApps` (desktop/CLI only, tier `never`; `runtime.AddApps`
+  prepares each app as the spawn does, all or nothing). For a SANDBOXED session
+  the agent and container are stopped BEFORE the worktree exists and relaunched
+  after (mounts are fixed at launch; no host command runs in a tree a live agent
+  can write), so it is refused mid-turn. The agent is told through the broadcast
+  queue. An agent's "needs <name>" report never adds anything.
+  PR state lives on `session.App`;
   act on it through LANE views (`<id>~<app>`), never write lane fields on the
   session. The session's own PR fields are a derived aggregate (`Reaggregate`).
   Prefix agent messages with `laneHeader`. No best-of, fork or checkout-only

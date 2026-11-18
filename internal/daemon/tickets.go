@@ -14,6 +14,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/timefmt"
 )
@@ -34,8 +35,12 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 	d.mu.Lock()
 	p := d.cfg.ProjectByName(project)
 	var team string
+	var members []config.Project
 	if p != nil {
 		team = d.cfg.TicketTeam(p)
+		if p.IsStack() {
+			members = d.cfg.StackMembers(p.Name)
+		}
 	}
 	d.mu.Unlock()
 	if p == nil {
@@ -64,9 +69,17 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 	}
 
 	data := protocol.TicketsData{Team: team, TeamName: snap.teamName, TeamKey: snap.teamKey, Issues: make([]protocol.TicketRow, 0, len(snap.issues))}
+	for _, m := range members {
+		data.Members = append(data.Members, protocol.StackMember{Name: m.Name, Label: m.DisplayName(), Always: len(m.Labels) == 0})
+	}
 	now := time.Now()
 	for _, is := range snap.issues {
+		var apps []string
+		for _, m := range config.SelectApps(members, is.LabelIDs, is.LabelNames, is.LabelGroups) {
+			apps = append(apps, m.Name)
+		}
 		data.Issues = append(data.Issues, protocol.TicketRow{
+			Apps:        apps,
 			Identifier:  is.Identifier,
 			UUID:        is.ID,
 			Title:       is.Title,
@@ -347,6 +360,16 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 		return protocol.OpenData{}, errors.New(sandboxLoginMissing(kind))
 	}
 
+	var extraApps []string
+	for _, n := range a.Apps {
+		if n = strings.TrimSpace(n); n != "" {
+			extraApps = append(extraApps, n)
+		}
+	}
+	if len(extraApps) > 0 && !proj.IsStack() {
+		return protocol.OpenData{}, fmt.Errorf("openTicket: %s is not a stack — it has no further repositories to check out", project)
+	}
+
 	name := proj.Name
 	if reason := d.goalHold(uuid, ""); reason != "" {
 		return protocol.OpenData{}, errors.New(reason)
@@ -414,7 +437,7 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 
 	// (3) Spawn (bounded + shutdown behavior identical to dispatch).
 	cctx, cancel := context.WithTimeout(sctx, nativeSpawnTimeout)
-	sess, err := nat.Spawn(cctx, proj, is, strings.TrimSpace(a.AgentKind))
+	sess, err := nat.SpawnWith(cctx, proj, is, runtime.SpawnOpts{Agent: strings.TrimSpace(a.AgentKind), Apps: extraApps})
 	cancel()
 	if err != nil {
 		d.inflight.Remove(uuid)

@@ -73,6 +73,7 @@ type NativeAPI interface {
 	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error)
 	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error)
 	SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error)
+	AddApps(ctx context.Context, s session.Session, names []string) (runtime.AddAppsResult, error)
 	Adopt(ctx context.Context) ([]session.Session, error)
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool

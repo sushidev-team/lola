@@ -543,6 +543,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "addApps":
+		var a protocol.AddAppsArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "addApps: bad args: " + err.Error()}
+		}
+		data, err := d.handleAddApps(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "dev":
 		var a protocol.DevArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {

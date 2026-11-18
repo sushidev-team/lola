@@ -8,6 +8,7 @@ import type { ProjectInfo } from "@bindings/internal/protocol";
 import { nav } from "$lib/nav.svelte";
 import { sessionMenu } from "$lib/sessionmenu.svelte";
 import { confirm } from "$lib/confirm.svelte";
+import { appChooser } from "$lib/appchooser.svelte";
 import { flushSync } from "svelte";
 
 vi.mock("@xterm/xterm", () => ({
@@ -86,6 +87,8 @@ describe("SessionMenu", () => {
     nav.selectedId = "";
     nav.sidebarQuery = "";
     nav.triage = "";
+    nav.sidebarOpen = true;
+    nav.sidebarSplit = false;
     sessionMenu.close();
     confirm.cancel();
   });
@@ -130,6 +133,52 @@ describe("SessionMenu", () => {
     expect(nav.overlayProject).toBe("acme");
     expect(sessionMenu.request).toBeNull();
     nav.closeOverlay();
+  });
+
+  it("leaves Project settings out while the projects column shows beside the sessions", () => {
+    store.projects = [{ name: "acme", label: "Acme" } as ProjectInfo];
+    nav.sidebarSplit = true;
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    const { unmount } = render(SessionMenu);
+    expect(screen.queryByRole("menuitem", { name: "Project settings" })).not.toBeInTheDocument();
+    unmount();
+
+    // A closed sidebar shows no projects, so the row is back.
+    nav.sidebarOpen = false;
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    expect(screen.getByRole("menuitem", { name: "Project settings" })).toBeInTheDocument();
+  });
+
+  it("a stack session can add the repositories its issue's labels left out", async () => {
+    store.projects = [
+      { name: "acme", label: "Acme", kind: "stack" },
+      { name: "acme-web", label: "Web", stack: "acme" },
+      { name: "acme-api", label: "API", stack: "acme" },
+    ] as ProjectInfo[];
+    store.sessions = [fakeSession({ stack: true, apps: [{ name: "acme-web", label: "Web" }] as never })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    const add = vi.spyOn(store, "addApps").mockResolvedValue(undefined as never);
+    render(SessionMenu);
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Add repositories…" }));
+    expect(appChooser.request?.choices.map((c) => [c.name, c.included])).toEqual([
+      ["acme-web", true],
+      ["acme-api", false],
+    ]);
+    appChooser.finish(["acme-api"]);
+    await vi.waitFor(() => expect(add).toHaveBeenCalledWith("acme-eng-1", ["acme-api"]));
+    add.mockRestore();
+  });
+
+  it("offers no repositories to add once a stack session has them all, or for a plain session", () => {
+    store.projects = [
+      { name: "acme", label: "Acme", kind: "stack" },
+      { name: "acme-web", label: "Web", stack: "acme" },
+    ] as ProjectInfo[];
+    store.sessions = [fakeSession({ stack: true, apps: [{ name: "acme-web" }] as never })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    expect(screen.queryByRole("menuitem", { name: "Add repositories…" })).not.toBeInTheDocument();
   });
 
   it("a stack session expands Project settings into the stack and each app's project", async () => {

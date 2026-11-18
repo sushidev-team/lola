@@ -36,6 +36,20 @@ describe("SidebarRoster", () => {
     await new Promise((r) => setTimeout(r));
     expect(order()).toEqual(["first", "busy", "needs", "web"]);
   });
+  it("lists a ticket that is still starting, inside the project filter only", async () => {
+    store.sessions = [row("a")];
+    store.starting = [{ project: "web", issue: "WEB-7", title: "Add duplicate" }];
+    render(SidebarRoster);
+    const ghost = document.querySelector('[data-roster-starting="WEB-7"]');
+    expect(ghost).toHaveTextContent("Add duplicate");
+    expect(ghost).toHaveTextContent("WEB-7 · Starting in web…");
+    expect(order()).toEqual(["a"]);
+    nav.scope = ["lola"]; nav.scoped = true;
+    await new Promise((r) => setTimeout(r));
+    expect(document.querySelector("[data-roster-starting]")).toBeNull();
+    nav.scope = []; nav.scoped = false;
+    store.starting = [];
+  });
   it("line 2 prefers lola's ask", () => {
     store.sessions = [row("a", { agentState: "waiting_input", inputReason: "question", delivery: "ci_failed", currentTool: "Bash" })];
     render(SidebarRoster);

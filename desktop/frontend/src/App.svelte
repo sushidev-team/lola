@@ -47,6 +47,8 @@
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import BulkPickupDialog from "$lib/components/BulkPickupDialog.svelte";
   import SandboxLoginDialog from "$lib/components/SandboxLoginDialog.svelte";
+  import StackAppsDialog from "$lib/components/StackAppsDialog.svelte";
+  import { appChooser } from "$lib/appchooser.svelte";
   import SessionMenu from "$lib/components/SessionMenu.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
@@ -305,6 +307,16 @@
       return;
     }
 
+    // The repository chooser is a dialog like the confirmation below: Escape
+    // cancels it, and no key reaches the picker or the cockpit underneath.
+    if (appChooser.request) {
+      if (e.key === "Escape") {
+        appChooser.finish(null);
+        e.preventDefault();
+      }
+      return;
+    }
+
     // A pending confirmation swallows every key while open: Escape cancels, Enter
     // is left to the dialog's own focus (safe default for a destructive action).
     // Nothing else leaks through to a cockpit action underneath.
@@ -511,5 +523,6 @@
 <ConfirmDialog />
 <BulkPickupDialog />
 <SandboxLoginDialog />
+<StackAppsDialog />
 <SessionMenu />
 {/if}

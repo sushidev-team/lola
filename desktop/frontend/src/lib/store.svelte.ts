@@ -33,6 +33,8 @@ type ProjectInfo = ProtocolProjectInfo;
 type OpenManualArgs = ProtocolOpenManualArgs;
 
 type OpenTicketArgs = ProtocolOpenTicketArgs;
+/** A ticket whose openTicket call has not answered yet; see Store.starting. */
+export type StartingTicket = { project: string; issue: string; title: string };
 
 type RemovalFollowup = { branch: string; onRemoved: () => void | Promise<void> };
 
@@ -153,6 +155,10 @@ class Store {
   // would leave the other looking inert while the daemon captures the pane and
   // types.
   resolvePending = $state<Record<string, boolean>>({});
+  // Tickets whose start is in flight: the daemon answers openTicket only after
+  // the worktree, post_create and the agent launch, and lists no session until
+  // then. The roster draws these as placeholder rows so a start shows at once.
+  starting = $state<StartingTicket[]>([]);
 
   private flashTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
@@ -644,8 +650,21 @@ class Store {
     return this.act(() => DaemonService.OpenPR(a), `opened PR #${a.number}`);
   }
   async openTicket(a: OpenTicketArgs) {
-    if (!(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
-    return this.act(() => DaemonService.OpenTicket(a), `started ${a.identifier}`);
+    if (this.starting.some((t) => t.issue === a.identifier)) return undefined; // already travelling
+    this.starting = [...this.starting, { project: a.project, issue: a.identifier, title: a.title ?? "" }];
+    try {
+      if (!(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
+      const r = await DaemonService.OpenTicket(a);
+      this.setFlash(`started ${a.identifier}`, "good");
+      // AWAITED, unlike act()'s: the placeholder must not leave before the real row is listed.
+      await this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return undefined;
+    } finally {
+      this.starting = this.starting.filter((t) => t.issue !== a.identifier);
+    }
   }
   // Turn checkpoints. Both flash the daemon's own sentence: it names the
   // checkpoint that now holds the pre-restore state, which is the undo.
@@ -679,6 +698,14 @@ class Store {
       this.setFlash(String(err), "bad");
       return undefined;
     }
+  }
+  // Check further members of its stack out into a running stack session. The
+  // daemon's sentence is flashed: it says when a sandboxed agent was restarted.
+  addApps(id: string, apps: string[]) {
+    return this.act(
+      () => DaemonService.AddApps({ session: id, apps }),
+      (r) => r?.message || `added ${apps.join(", ")}`,
+    );
   }
   switchAgent(id: string, kind: string) {
     return this.act(
