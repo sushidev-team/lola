@@ -1490,7 +1490,12 @@ type BulkProjectsArgs struct {
 	MatchMode      *string   `json:"matchMode,omitempty"`
 	OnSentSetLabel *string   `json:"onSentSetLabel,omitempty"`
 	BlockedLabel   *string   `json:"blockedLabel,omitempty"`
-	DryRun         bool      `json:"dryRun,omitempty"`
+	// KeepNames stores label references as written (names, "group/name", globs)
+	// instead of resolving them to ids; the daemon then resolves them per team on
+	// every load. They are still checked against each project's team, so a name
+	// that matches nothing refuses the change.
+	KeepNames bool `json:"keepNames,omitempty"`
+	DryRun    bool `json:"dryRun,omitempty"`
 }
 
 // BulkProjectChange is one project's outcome in BulkProjectsData.
