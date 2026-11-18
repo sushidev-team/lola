@@ -37,6 +37,10 @@ func (d *Daemon) handleBulkProjects(ctx context.Context, raw json.RawMessage) (p
 	if err != nil {
 		return protocol.BulkProjectsData{}, err
 	}
+	// single reports whether ref belongs to a one-label key (on-sent / blocked).
+	single := func(ref string) bool {
+		return (args.OnSentSetLabel != nil && *args.OnSentSetLabel == ref) || (args.BlockedLabel != nil && *args.BlockedLabel == ref)
+	}
 	var lin linear.API
 	teamLabels := map[string][]linear.Label{}
 	resolve := func(p config.Project, ref string) (string, error) {
@@ -57,6 +61,16 @@ func (d *Daemon) handleBulkProjects(ctx context.Context, raw json.RawMessage) (p
 				return "", fmt.Errorf("list labels of team %s: %w", p.TeamID, err)
 			}
 			teamLabels[p.TeamID] = labels
+		}
+		if args.KeepNames {
+			// Check the reference against this team, then store it as written. The
+			// single-label keys must name exactly one label; match_labels may glob.
+			if single(ref) {
+				_, err = matchLabelRef(labels, ref)
+			} else {
+				_, err = matchLabelRefs(labels, ref)
+			}
+			return ref, err
 		}
 		return matchLabelRef(labels, ref)
 	}

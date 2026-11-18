@@ -542,3 +542,18 @@ func (s *DaemonService) MergePR(session string, number int, repo, head, method s
 	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number, Repo: repo, Head: head, Method: method, ConfirmUnready: confirmUnready})
 	return call(protocol.Request{Cmd: "mergePR", Session: session, Args: args}, longTimeout, nil)
 }
+
+// BulkProjects changes pickup settings (labels, match mode, agent) on several
+// projects in one atomic config save. DryRun previews without writing. Label
+// references are checked against each project's own team; KeepNames stores them
+// as written instead of as ids. The daemon refuses the whole change when any
+// project cannot be resolved.
+func (s *DaemonService) BulkProjects(args protocol.BulkProjectsArgs) (protocol.BulkProjectsData, error) {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return protocol.BulkProjectsData{}, err
+	}
+	var d protocol.BulkProjectsData
+	err = call(protocol.Request{Cmd: "bulkProjects", Args: raw}, longTimeout, &d)
+	return d, err
+}

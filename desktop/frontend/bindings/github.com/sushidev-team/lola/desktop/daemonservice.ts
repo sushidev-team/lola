@@ -94,6 +94,17 @@ export function Broadcast(args: protocol$0.BroadcastArgs): $CancellablePromise<p
 }
 
 /**
+ * BulkProjects changes pickup settings (labels, match mode, agent) on several
+ * projects in one atomic config save. DryRun previews without writing. Label
+ * references are checked against each project's own team; KeepNames stores them
+ * as written instead of as ids. The daemon refuses the whole change when any
+ * project cannot be resolved.
+ */
+export function BulkProjects(args: protocol$0.BulkProjectsArgs): $CancellablePromise<protocol$0.BulkProjectsData> {
+    return $Call.ByID(1449292091, args);
+}
+
+/**
  * CLIInfo resolves the CLI and probes versions. Never errors: a machine with no
  * CLI at all is a state the UI has to render, not an exception.
  */

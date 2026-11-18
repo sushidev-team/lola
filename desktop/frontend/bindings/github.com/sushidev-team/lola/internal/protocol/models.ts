@@ -467,6 +467,49 @@ export interface BroadcastData {
 }
 
 /**
+ * BulkProjectChange is one project's outcome in BulkProjectsData.
+ */
+export interface BulkProjectChange {
+    "project": string;
+    "changed"?: string[] | null;
+    "error"?: string;
+}
+
+/**
+ * BulkProjectsArgs is the argument payload for cmd=bulkProjects: change the
+ * same settings on many [[project]] tables at once. Nil fields are left alone.
+ * Label fields are references (UUID, name or "group/name") resolved by the
+ * daemon against each project's own team, so one name works across teams that
+ * give the same label different ids. Projects empty = every project.
+ */
+export interface BulkProjectsArgs {
+    "projects"?: string[] | null;
+    "agent"?: string | null;
+    "matchLabels"?: string[] | null;
+    "matchMode"?: string | null;
+    "onSentSetLabel"?: string | null;
+    "blockedLabel"?: string | null;
+
+    /**
+     * KeepNames stores label references as written (names, "group/name", globs)
+     * instead of resolving them to ids; the daemon then resolves them per team on
+     * every load. They are still checked against each project's team, so a name
+     * that matches nothing refuses the change.
+     */
+    "keepNames"?: boolean;
+    "dryRun"?: boolean;
+}
+
+/**
+ * BulkProjectsData is Response.Data for cmd=bulkProjects. When any project has
+ * an Error nothing was saved.
+ */
+export interface BulkProjectsData {
+    "changes": BulkProjectChange[] | null;
+    "applied": boolean;
+}
+
+/**
  * CheckpointInfo is one turn checkpoint. Head is the commit the session's
  * branch was on when it was taken; SHA is the snapshot itself.
  */
