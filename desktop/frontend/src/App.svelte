@@ -45,6 +45,7 @@
   import HelpOverlay from "$lib/views/HelpOverlay.svelte";
   import BestOfOverlay from "$lib/views/BestOfOverlay.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+  import BulkPickupDialog from "$lib/components/BulkPickupDialog.svelte";
   import SandboxLoginDialog from "$lib/components/SandboxLoginDialog.svelte";
   import SessionMenu from "$lib/components/SessionMenu.svelte";
   import { confirm } from "$lib/confirm.svelte";
@@ -508,6 +509,7 @@
   <BestOfOverlay />
 {/if}
 <ConfirmDialog />
+<BulkPickupDialog />
 <SandboxLoginDialog />
 <SessionMenu />
 {/if}

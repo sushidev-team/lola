@@ -37,6 +37,10 @@ func (d *Daemon) handleBulkProjects(ctx context.Context, raw json.RawMessage) (p
 	if err != nil {
 		return protocol.BulkProjectsData{}, err
 	}
+	// single reports whether ref belongs to a one-label key (on-sent / blocked).
+	single := func(ref string) bool {
+		return (args.OnSentSetLabel != nil && *args.OnSentSetLabel == ref) || (args.BlockedLabel != nil && *args.BlockedLabel == ref)
+	}
 	var lin linear.API
 	teamLabels := map[string][]linear.Label{}
 	resolve := func(p config.Project, ref string) (string, error) {
@@ -57,6 +61,16 @@ func (d *Daemon) handleBulkProjects(ctx context.Context, raw json.RawMessage) (p
 				return "", fmt.Errorf("list labels of team %s: %w", p.TeamID, err)
 			}
 			teamLabels[p.TeamID] = labels
+		}
+		if args.KeepNames {
+			// Check the reference against this team, then store it as written. The
+			// single-label keys must name exactly one label; match_labels may glob.
+			if single(ref) {
+				_, err = matchLabelRef(labels, ref)
+			} else {
+				_, err = matchLabelRefs(labels, ref)
+			}
+			return ref, err
 		}
 		return matchLabelRef(labels, ref)
 	}
@@ -122,26 +136,64 @@ func (d *Daemon) handleBulkProjects(ctx context.Context, raw json.RawMessage) (p
 	return data, nil
 }
 
-// matchLabelRef finds ref among a team's labels by name or "group/name",
-// case-insensitively. An ambiguous name is an error, never a guess.
-func matchLabelRef(labels []linear.Label, ref string) (string, error) {
+// labelFullName is a label's "group/name" (or bare name), lower-cased.
+func labelFullName(l linear.Label) (name, full string) {
+	name = strings.ToLower(l.Name)
+	full = name
+	if l.Parent != nil {
+		full = strings.ToLower(l.Parent.Name) + "/" + name
+	}
+	return name, full
+}
+
+// matchLabelRefs finds every label of a team that ref names, case-insensitively.
+// A plain ref is a name or "group/name" and matches at most one label (an
+// ambiguous bare name is an error, never a guess). A ref with `*` is a glob over
+// the full "group/name" (`*` matches any run of characters, "/" included), so
+// "*/agent-ready" finds agent/agent-ready and ai/agent-ready. A ref that
+// matches nothing is an error.
+func matchLabelRefs(labels []linear.Label, ref string) ([]string, error) {
 	want := strings.ToLower(strings.TrimSpace(ref))
 	var hits []string
-	for _, l := range labels {
-		name := strings.ToLower(l.Name)
-		full := name
-		if l.Parent != nil {
-			full = strings.ToLower(l.Parent.Name) + "/" + name
+	if strings.Contains(want, "*") {
+		re, err := regexp.Compile("^" + strings.ReplaceAll(regexp.QuoteMeta(want), `\*`, ".*") + "$")
+		if err != nil {
+			return nil, fmt.Errorf("label pattern %q: %w", ref, err)
 		}
+		for _, l := range labels {
+			if _, full := labelFullName(l); re.MatchString(full) {
+				hits = append(hits, l.ID)
+			}
+		}
+		if len(hits) == 0 {
+			return nil, fmt.Errorf("no label matching %q in the project's team", ref)
+		}
+		return hits, nil
+	}
+	for _, l := range labels {
+		name, full := labelFullName(l)
 		if want == full || (want == name && !strings.Contains(want, "/")) {
 			hits = append(hits, l.ID)
 		}
 	}
 	switch len(hits) {
 	case 0:
-		return "", fmt.Errorf("no label named %q in the project's team", ref)
+		return nil, fmt.Errorf("no label named %q in the project's team", ref)
 	case 1:
-		return hits[0], nil
+		return hits, nil
 	}
-	return "", fmt.Errorf("label %q is ambiguous in the project's team (%d matches); use group/name or the id", ref, len(hits))
+	return nil, fmt.Errorf("label %q is ambiguous in the project's team (%d matches); use group/name or the id", ref, len(hits))
+}
+
+// matchLabelRef is matchLabelRefs for a setting that holds exactly one label:
+// a glob matching several is ambiguous.
+func matchLabelRef(labels []linear.Label, ref string) (string, error) {
+	hits, err := matchLabelRefs(labels, ref)
+	if err != nil {
+		return "", err
+	}
+	if len(hits) > 1 {
+		return "", fmt.Errorf("label pattern %q matches %d labels in the project's team, but a bulk edit resolves each reference to exactly one label; list the qualified names separately, or put the pattern in [defaults] or a project's match_labels in config.toml", ref, len(hits))
+	}
+	return hits[0], nil
 }

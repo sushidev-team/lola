@@ -110,9 +110,11 @@ type Daemon struct {
 	cfgErr string // non-empty = cfg failed validation; polls are held
 	// teamPolicy is what the team policy overlay enforced on cfg (hubpolicy.go).
 	teamPolicy teamPolicyState
-	lin        linear.API // nil until the Linear API key resolves
-	linOK      bool
-	viewerID   string
+	// labelMemo is the last good label-name resolution (labelrefs.go).
+	labelMemo labelMemo
+	lin       linear.API // nil until the Linear API key resolves
+	linOK     bool
+	viewerID  string
 	// teamIDs caches team UUID -> Team so the pickers can show a team's NAME
 	// without a Linear round trip per open. Display only; nothing keys by it.
 	teamIDs map[string]linear.Team
@@ -847,8 +849,13 @@ func Run(ctx context.Context) error {
 	// the overlay is runtime-only and is never validated as if it were a file.
 	cfgInvalid := cfg.Validate()
 	teamPolicy := overlayTeamPolicy(cfg, filepath.Join(home, "state"))
+	labelNotes, labelMemoNow := resolveLabelRefs(ctx, cfg, nil, nil)
+	for _, n := range labelNotes {
+		logger.Printf("labels: %s", n)
+	}
 	d := newDaemon(cfg, nil, logger, home)
 	d.teamPolicy = teamPolicy
+	d.labelMemo = labelMemoNow
 	if teamPolicy.applied {
 		logger.Printf("hub: team policy v%d applied (%d locked key(s))", teamPolicy.version, len(teamPolicy.keys))
 	}

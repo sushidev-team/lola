@@ -2,6 +2,7 @@ import { confirm } from "./confirm.svelte";
 import { nav } from "./nav.svelte";
 import { store } from "./store.svelte";
 import { displayName } from "./slug";
+import { bulkPickup } from "./bulkpickup.svelte";
 
 export type BulkAction = { id: string; label: string; variant?: "danger"; enabled: boolean; run: () => void };
 
@@ -11,7 +12,7 @@ const label = (name: string) => {
 };
 
 /**
- * What can be done to several projects at once: polling for all of them, and removing them from
+ * What can be done to several projects at once: pickup labels and polling for all of them, and removing them from
  * lola's configuration. A stack takes member choices to remove, so removal skips stacks and says so.
  */
 export function bulkProjectActions(names: string[]): BulkAction[] {
@@ -21,6 +22,7 @@ export function bulkProjectActions(names: string[]): BulkAction[] {
   return [
     { id: "resume", label: `Resume polling (${known.length})`, enabled: known.length > 0, run: () => void each((n) => store.enablePoll(n)) },
     { id: "pause", label: `Pause polling (${known.length})`, enabled: known.length > 0, run: () => void each((n) => store.disablePoll(n)) },
+    { id: "pickup", label: `Set pickup labels (${known.length})…`, enabled: known.length > 0, run: () => bulkPickup.open(known) },
     {
       id: "remove",
       label: `Remove ${removable.length} project${removable.length === 1 ? "" : "s"}…`,

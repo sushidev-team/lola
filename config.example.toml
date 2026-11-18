@@ -90,6 +90,14 @@ global_cap = 4
 # already run takes over on the SAME worktree and branch — see
 # [reactions.agent_fallback] below. Valid kinds: claude | codex | opencode.
 # agent_fallback = ["codex", "opencode"]
+# match_labels, on_sent_set_label and blocked_label_id take a workspace label UUID
+# (as below) OR a label NAME, e.g. on_sent_set_label = "agent/agent-picked-up".
+# The daemon resolves each name in every project's OWN team at startup/reload (in
+# memory; config.toml keeps the name), so one default serves all teams. Unmatched
+# names are logged and left as written. A name may use * ("*/agent-ready" matches
+# agent/agent-ready and ai/agent-ready): match_labels takes every match (under
+# match_mode = "all" EVERY match is required), the single-label keys refuse a
+# pattern that matches several.
 # match_labels = ["label_UUID_of_your_trigger_label"]
 # match_mode = "any"                 # any | all
 # dedup_mode = "label"               # label | seen | state
