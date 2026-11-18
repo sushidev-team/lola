@@ -116,7 +116,7 @@
   // A picker is only usable with something in it; an empty workspace falls back
   // to manual entry like a failed call does.
   const wsReady = $derived(!!wsLabels && wsLabels.length > 0);
-  const NAME_HINT = "A name (\"Bug\" or \"agent/agent-ready\") is looked up in each project's own team, so one default fits every team.";
+  const NAME_HINT = "A name (\"Bug\" or \"agent/agent-ready\") is looked up in each project's own team, so one default fits every team. * works: */agent-ready.";
   const isKnownLabel = (v: string) => !!wsLabels?.some((l) => l.id === v);
   const matchLabelNames = $derived((dto?.matchLabels ?? []).filter((v) => !isKnownLabel(v)));
 

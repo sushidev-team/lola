@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,22 +45,45 @@ func resolveLabelRefs(ctx context.Context, cfg *config.Config, lin linear.API) [
 
 	var notes []string
 	teams := map[string][]linear.Label{}
-	resolve := func(teamID, ref string) string {
-		if ref == "" || labelUUIDRe.MatchString(ref) {
-			return ref
-		}
+	teamLabels := func(teamID, ref string) []linear.Label {
 		if teamID == "" {
 			notes = append(notes, fmt.Sprintf("label %q has no team_id to resolve in", ref))
-			return ref
+			return nil
 		}
 		labels, ok := teams[teamID]
 		if !ok {
 			var err error
 			if labels, err = lin.Labels(ctx, teamID); err != nil {
 				notes = append(notes, fmt.Sprintf("list labels of team %s: %v", teamID, err))
-				return ref
+				return nil
 			}
 			teams[teamID] = labels
+		}
+		return labels
+	}
+	// resolveMany expands one match_labels entry: a glob may name several labels.
+	resolveMany := func(teamID, ref string) []string {
+		if ref == "" || labelUUIDRe.MatchString(ref) {
+			return []string{ref}
+		}
+		labels := teamLabels(teamID, ref)
+		if labels == nil {
+			return []string{ref}
+		}
+		ids, err := matchLabelRefs(labels, ref)
+		if err != nil {
+			notes = append(notes, err.Error())
+			return []string{ref}
+		}
+		return ids
+	}
+	resolve := func(teamID, ref string) string {
+		if ref == "" || labelUUIDRe.MatchString(ref) {
+			return ref
+		}
+		labels := teamLabels(teamID, ref)
+		if labels == nil {
+			return ref
 		}
 		id, err := matchLabelRef(labels, ref)
 		if err != nil {
@@ -71,12 +95,19 @@ func resolveLabelRefs(ctx context.Context, cfg *config.Config, lin linear.API) [
 	changed := false
 	for i := range cfg.Projects {
 		p := &cfg.Projects[i]
-		for j, ref := range p.MatchLabels {
-			if id := resolve(p.TeamID, ref); id != ref {
-				p.MatchLabels[j] = id
+		var ml []string
+		for _, ref := range p.MatchLabels {
+			ids := resolveMany(p.TeamID, ref)
+			if len(ids) != 1 || ids[0] != ref {
 				changed = true
 			}
+			for _, id := range ids {
+				if !slices.Contains(ml, id) {
+					ml = append(ml, id)
+				}
+			}
 		}
+		p.MatchLabels = ml
 		if id := resolve(p.TeamID, p.OnSentSetLabel); id != p.OnSentSetLabel {
 			p.OnSentSetLabel, changed = id, true
 		}

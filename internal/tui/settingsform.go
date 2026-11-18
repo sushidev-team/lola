@@ -234,7 +234,7 @@ var (
 // pickers offer that project's own team labels; this one offers workspace
 // labels. Each help leads with "Workspace label" too, because the modal
 // truncates a help line to its width and this sentence can fall off the end.
-const wsLabelHelp = " enter opens the workspace-label picker; e types names instead (e.g. agent/agent-ready, resolved in each project's own team); raw UUID entry stays available."
+const wsLabelHelp = " enter opens the workspace-label picker; e types names instead (e.g. agent/agent-ready, resolved in each project's own team; * works: */agent-ready); raw UUID entry stays available."
 
 // newSettingsForm builds the editor pre-filled from the live config. The int
 // fields render the resolved values (e.g. review.timeout defaults to 300 once
