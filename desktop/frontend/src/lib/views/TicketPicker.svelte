@@ -117,8 +117,9 @@
     }
     if (starting) return;
     starting = t.identifier;
-    const r = await store.openTicket({
-      project: nav.project,
+    const project = nav.project;
+    const pending = store.openTicket({
+      project,
       identifier: t.identifier,
       uuid: t.uuid,
       branch: t.branch,
@@ -126,8 +127,12 @@
       agentKind: selectedAgent || undefined,
       apps,
     });
+    // Leave at once: the roster shows the ticket as "Starting" while the daemon
+    // builds the worktree. A refused start comes back here, unless you moved on.
+    nav.goCockpit(project);
+    const r = await pending;
     starting = "";
-    if (r) nav.goCockpit(nav.project);
+    if (!r && nav.view === "cockpit" && nav.project === project) nav.goTicketPicker(project);
   }
 
   function prio(p: number): { label: string; cls: string } {

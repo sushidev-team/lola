@@ -32,7 +32,9 @@ const issues = [
   },
 ];
 
-const { ticketsMock, openTicketMock, setFlashMock, goCockpitMock, goDetailMock } = vi.hoisted(() => ({
+const { ticketsMock, openTicketMock, setFlashMock, goCockpitMock, goDetailMock, goTicketPickerMock, navState } = vi.hoisted(() => ({
+  goTicketPickerMock: vi.fn(),
+  navState: { view: "ticketpicker" },
   ticketsMock: vi.fn(async () => ({
     team: "ace69aca-dd39-4c63-91dc-36bbf48b62c7",
     teamName: "Nori",
@@ -57,7 +59,13 @@ vi.mock("$lib/store.svelte", () => ({
 }));
 
 vi.mock("$lib/nav.svelte", () => ({
-  nav: { project: "demo", goCockpit: goCockpitMock, goDetail: goDetailMock },
+  nav: {
+    project: "demo",
+    get view() { return navState.view; },
+    goCockpit: (p: string) => { navState.view = "cockpit"; goCockpitMock(p); },
+    goDetail: goDetailMock,
+    goTicketPicker: goTicketPickerMock,
+  },
 }));
 
 import TicketPicker from "./TicketPicker.svelte";
@@ -178,6 +186,20 @@ describe("TicketPicker", () => {
     await fireEvent.click(screen.getByText("Invoices: No extra card"));
     expect(openTicketMock).not.toHaveBeenCalled();
     expect(setFlashMock).toHaveBeenCalled();
+  });
+
+  it("leaves for the cockpit before the daemon answers and comes back when the start is refused", async () => {
+    let answer!: (v: unknown) => void;
+    openTicketMock.mockReturnValueOnce(new Promise((r) => (answer = r)) as never);
+    goCockpitMock.mockClear();
+    goTicketPickerMock.mockClear();
+    render(TicketPicker);
+    await fireEvent.click(await screen.findByText("Timezone issues"));
+    expect(goCockpitMock).toHaveBeenCalledWith("demo");
+    expect(goTicketPickerMock).not.toHaveBeenCalled();
+    answer(undefined);
+    await new Promise((r) => setTimeout(r));
+    expect(goTicketPickerMock).toHaveBeenCalledWith("demo");
   });
 
   it("offers agent selection defaulting to the project agent and carries agentKind", async () => {

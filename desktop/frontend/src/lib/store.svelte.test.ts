@@ -371,6 +371,23 @@ describe("agent launch and switch actions", () => {
     });
   });
 
+  it("openTicket lists the ticket as starting until the daemon answers, and never twice", async () => {
+    let answer!: (v: unknown) => void;
+    OpenTicket.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    const a = { project: "acme", identifier: "ENG-11", uuid: "uuid-11", title: "Ship it" };
+    const first = store.openTicket(a);
+    expect(store.starting).toEqual([{ project: "acme", issue: "ENG-11", title: "Ship it" }]);
+    expect(await store.openTicket(a)).toBeUndefined();
+    answer({ sessionID: "sess-11" });
+    expect(await first).toEqual({ sessionID: "sess-11" });
+    expect(store.starting).toEqual([]);
+
+    OpenTicket.mockRejectedValueOnce(new Error("runtime not ready"));
+    expect(await store.openTicket(a)).toBeUndefined();
+    expect(store.starting).toEqual([]);
+    expect(store.flash?.kind).toBe("bad");
+  });
+
   it("switchAgent invokes DaemonService.SwitchAgent and flashes the returned daemon message", async () => {
     SwitchAgent.mockResolvedValueOnce({
       agent: "codex",
