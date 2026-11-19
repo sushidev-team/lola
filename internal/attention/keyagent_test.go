@@ -8,7 +8,9 @@ func TestKeyAgentLocked(t *testing.T) {
 		"git@github.com: Permission denied (publickey).\nCommunication with agent failed.":           true,
 		"Can you Unlock 1Password, then tell me to continue?":                                        true,
 		"Permission denied (publickey).":                                                             false,
-		"all tests pass":                                                                             false,
+		"agent refused\noperation":                                                                   true,
+		"\x1b[31mcommunication with\x1b[0m\n  agent failed":                                          true,
+		"all tests pass": false,
 	} {
 		if got := KeyAgentLocked(in); got != want {
 			t.Errorf("KeyAgentLocked(%q) = %v, want %v", in, got, want)
