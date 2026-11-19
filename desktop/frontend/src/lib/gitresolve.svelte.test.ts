@@ -1,8 +1,8 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ProjectGitState } from './projectgit.svelte';
 import type { GitSnapshot } from './projectgit';
-const mocks = vi.hoisted(() => ({ snapshot:vi.fn(), open:vi.fn(), say:vi.fn(), sessions:[] as any[] }));
-vi.mock('@bindings/desktop', () => ({ ProjectGitService:{Snapshot:mocks.snapshot,Identities:vi.fn(),Stashes:vi.fn()} }));
+const mocks = vi.hoisted(() => ({ config:vi.fn(), snapshot:vi.fn(), open:vi.fn(), say:vi.fn(), sessions:[] as any[] }));
+vi.mock('@bindings/desktop', () => ({ ConfigService:{GetProject:mocks.config}, ProjectGitService:{Snapshot:mocks.snapshot,Identities:vi.fn(),Stashes:vi.fn()} }));
 vi.mock('./store.svelte', () => ({store:{sessions:mocks.sessions,openManual:mocks.open}}));
 vi.mock('./talk.svelte', () => ({talk:{say:mocks.say}}));
 let state:ProjectGitState;
@@ -10,6 +10,7 @@ beforeEach(() => {
   vi.clearAllMocks(); mocks.sessions.length=0;
   state=new ProjectGitState('project','/linked');
   state.snapshot={path:'/linked',head:'abc',branch:'feature',operation:'merge',files:[{path:'conflict.ts',conflict:true}],commits:[],refs:[],worktrees:[]} as unknown as GitSnapshot;
+  mocks.config.mockResolvedValue({execution:{sandbox:""}});
   mocks.snapshot.mockResolvedValue(state.snapshot);
   mocks.open.mockResolvedValue({sessionId:'resolver'});
   mocks.say.mockResolvedValue({delivered:true});
@@ -44,4 +45,13 @@ it.each(['changed','failed','resolved','ambiguous'])('does not start an agent wh
   expect(await state.resolveConflicts()).toBeNull();
   expect(mocks.open).not.toHaveBeenCalled();expect(mocks.say).not.toHaveBeenCalled();
   expect(state.busy).toBe('');
+});
+
+it('opens the merge editor for sandboxed projects without starting a checkout agent', async () => {
+  mocks.config.mockResolvedValue({execution:{sandbox:'docker'}});
+  const suggest = vi.fn();
+  await state.resolveConflicts('', 200, suggest);
+  expect(suggest).toHaveBeenCalledWith(state.snapshot!.files[0]);
+  expect(mocks.open).not.toHaveBeenCalled();
+  expect(state.error).toBe('');
 });

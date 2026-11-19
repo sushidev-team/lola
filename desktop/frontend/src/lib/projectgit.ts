@@ -10,7 +10,7 @@ export type GitBranchAction = { action: string; source: string; target: string; 
 export type GitSnapshot = { operation?: string; mergeMessage?: string; path: string; branch: string; head: string; upstream: string; commits: GitCommit[]; refs: GitRef[]; remotes?: GitRemote[]; worktrees: GitWorktree[]; files: GitFile[]; signing: { enabled: boolean; format: string; key: string }; hasMore: boolean };
 export type GitDiffFile = { path: string; oldPath?: string; status?: string; additions: number; deletions: number; binary?: boolean; tooLarge?: boolean; patch?: string };
 export type GitDiff = { files: GitDiffFile[]; truncated?: boolean };
-export type GitArea = 'working' | 'commit' | 'staged' | 'unstaged' | 'untracked';
+export type GitArea = 'working' | 'commit' | 'staged' | 'unstaged' | 'untracked' | 'conflict';
 
 export type BranchNode =
   | { kind: 'branch'; name: string; path: string; branch: GitRef }
@@ -59,10 +59,10 @@ export function folderFirstFiles<T extends { path: string }>(files: T[]): T[] {
 }
 
 export function stagedFiles(files: GitFile[]): GitFile[] {
-  return files.filter(f => !f.untracked && f.index !== ' ' && f.index !== '?' && !!f.index);
+  return files.filter(f => !f.conflict && !f.untracked && f.index !== ' ' && f.index !== '?' && !!f.index);
 }
 export function unstagedFiles(files: GitFile[]): GitFile[] {
-  return files.filter(f => f.untracked || (!!f.worktree && f.worktree !== ' ' && f.worktree !== '?'));
+  return files.filter(f => f.conflict || f.untracked || (!!f.worktree && f.worktree !== ' ' && f.worktree !== '?'));
 }
 
 /**

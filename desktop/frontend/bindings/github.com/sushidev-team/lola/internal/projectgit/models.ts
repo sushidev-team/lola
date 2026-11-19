@@ -63,6 +63,14 @@ export interface Commit {
     "refs": string[] | null;
 }
 
+export interface ConflictDocument {
+    "text": string;
+    "token": string;
+    "base"?: string | null;
+    "current"?: string | null;
+    "incoming"?: string | null;
+}
+
 /**
  * DiscardPlan pins the index and file contents reviewed in the confirmation.
  * It is computed on demand, never as part of background repository polling.

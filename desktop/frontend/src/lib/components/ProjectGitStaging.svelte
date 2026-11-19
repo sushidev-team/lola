@@ -189,10 +189,11 @@
 {#snippet fileRow(entry: GitFile, staged: boolean, depth: number)}
   {@const selection = selectedPaths(staged)}
   {@const targets = actionPaths(entry, staged)}
-  <div class="stage-file" style={`padding-left:${depth * 12}px`}>
-    <Button block selected={selection.includes(entry.path)} aria-pressed={selection.includes(entry.path)} class="stage-file-main" data-file-path={entry.path} title={entry.oldPath ? `${entry.oldPath} → ${entry.path}` : entry.path} aria-label={`Inspect ${staged ? 'staged' : 'unstaged'} ${entry.path}`} onclick={(event) => selectFile(entry, staged, event)} onkeydown={(event) => fileKey(event, entry, staged)} oncontextmenu={(event)=>fileContext(event,entry,staged)}>
-      <span class={`file-status ${entry.conflict ? 'text-bad' : entry.untracked ? 'text-good' : 'text-orange'}`}>{status(entry, staged)}</span>
+  <div class="stage-file" class:conflicted={entry.conflict} style={`padding-left:${depth * 12}px`}>
+    <Button block selected={selection.includes(entry.path)} aria-pressed={selection.includes(entry.path)} class="stage-file-main" data-file-path={entry.path} title={entry.oldPath ? `${entry.oldPath} → ${entry.path}` : entry.path} aria-label={`Inspect ${entry.conflict ? 'conflicted' : staged ? 'staged' : 'unstaged'} ${entry.path}`} onclick={(event) => selectFile(entry, staged, event)} onkeydown={(event) => fileKey(event, entry, staged)} oncontextmenu={(event)=>fileContext(event,entry,staged)}>
+      <span class={`file-status ${entry.conflict ? 'text-warn' : entry.untracked ? 'text-good' : 'text-orange'}`}>{status(entry, staged)}</span>
       <GitFilePath path={entry.path} leafOnly={tree}/>
+      {#if entry.conflict}<span class="conflict-label">Conflict</span>{/if}
     </Button>
     <span class="row-actions">
     {#if !staged && !entry.conflict}<Button size="xs" icon class="discard-file" disabled={!!git.busy || !!data?.operation || conflicts} aria-label={targets.length > 1 ? `Discard changes in ${targets.length} selected files` : `Discard changes in ${entry.path}`} title={targets.length > 1 ? `Discard changes in ${targets.length} selected files…` : 'Discard changes in this file…'} onclick={() => void discardFiles(targets)}><Icon name="trash-2" size={13} /></Button>{/if}
@@ -299,6 +300,8 @@
   .commit-options :global(.signing-icon) { margin-left:auto; color:var(--color-ink-2); }
   .stage-file :global(.stage-file-main) { transition:none; flex:1; height:28px; gap:7px; text-align:left; min-width:0; padding:3px 5px; font-weight:400; }
   .stage-file :global(.stage-file-main:not([aria-pressed="true"])) { color:var(--color-ink-2); }
+  .stage-file.conflicted { background:color-mix(in srgb,var(--color-warn) 12%,transparent); border-inline-start:2px solid var(--color-warn); }
+  .conflict-label { color:var(--color-warn); font-size:11px; font-weight:600; }
   .file-status { width:12px; flex-shrink:0; text-align:center; font-family:var(--font-mono); font-size:12px; }
   :global(.file-folder) { height:28px; gap:5px; font-size:13px; font-weight:400; }
   .staging-panel :global(.file-folder > span) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

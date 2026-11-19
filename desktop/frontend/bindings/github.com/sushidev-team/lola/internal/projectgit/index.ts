@@ -8,6 +8,7 @@ export type {
     BranchRequest,
     BranchResult,
     Commit,
+    ConflictDocument,
     DiscardPlan,
     File,
     Identities,

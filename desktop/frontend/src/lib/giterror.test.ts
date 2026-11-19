@@ -12,6 +12,7 @@ it.each([
  ['remote: error: GH013: Repository rule violations found','Push blocked by repository rules',undefined],
  ['Automatic merge failed; fix conflicts and then commit the result.','Conflicts need attention',undefined],
  ['commit or stash this checkout\'s changes before switching or integrating branches','Save your local changes first',undefined],
+ ["restoring switch's saved changes failed on refs/heads/topic; inspect stash abc and the working files: merge conflict",'Local changes need attention',undefined],
  ['branch changed since it was selected; refresh and try again','Repository changed','refresh'],
 ])('explains %s', (error,title,recovery)=>{
  const info=gitErrorInfo(error,'push');

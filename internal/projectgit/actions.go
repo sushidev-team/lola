@@ -243,10 +243,10 @@ func (c Client) checkout(ctx context.Context, dir, ref string) error {
 	if current == ref {
 		return nil
 	}
-	if err = c.requireClean(ctx, dir); err != nil {
+	if err = c.requireIdle(ctx, dir); err != nil {
 		return err
 	}
-	_, err = c.git(ctx, dir, "", "switch", "--", strings.TrimPrefix(ref, "refs/heads/"))
+	_, err = c.git(ctx, dir, "", "switch", "--no-overwrite-ignore", "--", strings.TrimPrefix(ref, "refs/heads/"))
 	return err
 }
 func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) error {
@@ -359,21 +359,7 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 	case "publish":
 		return c.publishBranch(ctx, dir, r)
 	case "checkout":
-		if strings.HasPrefix(r.Source, "refs/heads/") {
-			return c.checkout(ctx, dir, r.Source)
-		}
-		local, err := c.ActionBranch(ctx, dir, r)
-		if err != nil {
-			return err
-		}
-		if _, err = c.text(ctx, dir, "show-ref", "--verify", "--hash", local); err == nil {
-			return c.checkout(ctx, dir, local)
-		}
-		if err = c.requireClean(ctx, dir); err != nil {
-			return err
-		}
-		_, err = c.git(ctx, dir, "", "switch", "--track", "-c", strings.TrimPrefix(local, "refs/heads/"), "--", strings.TrimPrefix(r.Source, "refs/remotes/"))
-		return err
+		return c.switchBranch(ctx, dir, r)
 	case "pull", "pull-stash":
 		return c.pullBranch(ctx, dir, r)
 	case "push":

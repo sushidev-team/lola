@@ -98,7 +98,7 @@ func (s *ProjectGitService) StartAICommit(project, worktree, token string, inclu
 			}
 		}()
 		planCtx, planCancel := context.WithTimeout(run, 120*time.Second)
-		output, err := s.runGitHelper(planCtx, project, instruction, in.Text, true)
+		output, err := s.runGitHelper(planCtx, project, instruction, in.Text, "plan")
 		planCancel()
 		if run.Err() != nil {
 			runErr = run.Err()
