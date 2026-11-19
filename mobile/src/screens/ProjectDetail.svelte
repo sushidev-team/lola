@@ -21,6 +21,7 @@
   } from "@mobile/lib/projects.svelte";
   import { router } from "@mobile/lib/router.svelte";
   import { rowModel } from "@mobile/lib/inbox.svelte";
+  import { can } from "@mobile/lib/tiers.svelte";
 
   // One project: its facts, the actions a phone may take, its sessions. The
   // "New worktree" form is the `newSession` sheet, which reads this project
@@ -129,6 +130,18 @@
         <ListRow label={copy.projects.rows.agent} value={agentName} />
         {#if project.defaultBranch}<ListRow label={copy.projects.rows.base} value={project.defaultBranch} />{/if}
       </ListGroup>
+
+      <!-- The Mac runs git with its own credentials; the phone only asks (spec: docs/mobile/01 §8.2). -->
+      {#if project.pathOk && can("projectGit")}
+        <ListGroup>
+          <ListRow
+            label={copy.git.row}
+            icon="git-branch"
+            chevron
+            onclick={() => router.replace({ name: "tab", tab: "projects", project: name, pick: "git" })}
+          />
+        </ListGroup>
+      {/if}
 
       {#if navActions.length > 0}
         <ListGroup>

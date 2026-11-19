@@ -32,6 +32,7 @@ func buildCommandTiers() map[string]string {
 		"prReadiness", "prs", "tickets",
 		"bestOfCompare",
 		protocol.CmdReviewPackages, protocol.CmdReviewImage, protocol.CmdReviewDiff, protocol.CmdReviewChecks,
+		protocol.CmdProjectGit,
 		protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdEndedSessions,
 		protocol.CmdSessionTimeline,
 		protocol.CmdAttachmentImage,
@@ -53,10 +54,10 @@ func buildCommandTiers() map[string]string {
 		"revive", "review", "coderabbit", "resolveConflict", "switchAgent",
 		"dev", "devFreePort", "planDecide", "sessionTask", "renameSession", "broadcast", "bestOf",
 		"restoreCheckpoint", "forkCheckpoint", "pollOnce", "enable", "disable",
-		protocol.CmdReviewRecover,
+		protocol.CmdReviewRecover, protocol.CmdProjectGitAct,
 	)
 
-	set(protocol.TierDestructive, "kill", "closeExitedTemporary", "bestOfPick")
+	set(protocol.TierDestructive, "kill", "closeExitedTemporary", "bestOfPick", protocol.CmdProjectGitDiscard)
 
 	set(protocol.TierShell,
 		"shellCreate", "paneClose", "paneResize", "open",
