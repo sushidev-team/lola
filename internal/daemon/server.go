@@ -106,6 +106,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(d.projectsData(ctx))
 	case "prReadiness", "addressPRFeedback", "mergePR":
 		return d.handlePRReadiness(ctx, req)
+	case protocol.CmdProjectGit, protocol.CmdProjectGitAct, protocol.CmdProjectGitDiscard:
+		return d.handleProjectGit(ctx, req)
 	case protocol.CmdReviewDiff:
 		return d.handleReviewDiff(ctx, req)
 	case protocol.CmdReviewCapture:

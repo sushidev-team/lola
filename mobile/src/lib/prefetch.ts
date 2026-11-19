@@ -24,6 +24,8 @@ export function prefetchOnce(loaders: readonly Loader[], delay = PREFETCH_DELAY_
     else fetchAll();
   };
   const whenForeground = (): void => {
+    // A timer that outlives its window (a test environment torn down) has nothing to prefetch for.
+    if (typeof document === "undefined") return;
     if (document.visibilityState === "visible") return whenIdle();
     waiting = () => {
       if (document.visibilityState !== "visible") return;

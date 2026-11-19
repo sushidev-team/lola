@@ -263,6 +263,8 @@ func buildRequestFields() map[string]fieldSpec {
 	// The element-Conn rule lives in the daemon's handleRemote: remote cannot see the element.
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.SSHAnswerArgs]()}, protocol.CmdSSHAnswer)
 
+	put(fieldSpec{fields: fArgs, args: typeOf[protocol.ProjectGitArgs]()},
+		protocol.CmdProjectGit, protocol.CmdProjectGitAct, protocol.CmdProjectGitDiscard)
 	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.ReviewDiffArgs]()}, protocol.CmdReviewDiff)
 	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.ReviewImageArgs]()}, protocol.CmdReviewImage)
 	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.ReviewMarkArgs]()}, protocol.CmdReviewMark)

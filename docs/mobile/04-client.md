@@ -1277,7 +1277,7 @@ export type Seg = "conversation" | "changes" | "review" | "terminal";
 export type Tab = "inbox" | "projects" | "settings";
 export type Route =
   | { name: "connect"; state: "scan" | "code" | "refused" | "expired" | "failed" | "dropped" | "not-paired" | "no-camera" }
-  | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets"; filter?: InboxFilter }
+  | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets" | "git"; filter?: InboxFilter }
   | { name: "session"; id: string; seg: Seg; pane?: string }
   | { name: "dev"; page: "bridge-guard" };                  // DEBUG builds only; parseRoute returns null in release
 export type InboxFilter = "" | "needs" | "working" | "review" | "done";
@@ -1305,7 +1305,7 @@ Path grammar (shared by dev links, preview fixtures and tests):
 /connect | /connect/{code|refused|expired|failed|dropped|not-paired|no-camera}
 /inbox[?filter=needs|working|review|done]
 /session/<id>/{conversation|changes|review|terminal}[/<pane>]
-/projects | /projects/<name> | /projects/<name>/{prs|tickets}
+/projects | /projects/<name> | /projects/<name>/{prs|tickets|git}
 /settings
 /dev/bridge-guard                       (DEBUG only)
 query: sheet=<SheetName>[&tab=<a-z, 1–16>]   (tab only with a sheet; reviewPackage reads it)
@@ -1603,6 +1603,19 @@ compiled out of release). Launch-environment variant
   iterates `SHEETS` and a route table and asserts each parses and applies.
 
 ---
+
+
+### 5.x The Git client (`/projects/<name>/git`)
+
+The phone has no git credentials, so the Git screen (`screens/Git.svelte`) asks the Mac. The
+shim routes `ProjectGitService` methods to three daemon commands (`projectGit` read,
+`projectGitAct` control, `projectGitDiscard` destructive; tiers in spec 01 §8.2), each carrying an
+`op`. The daemon (`internal/daemon/projectgit.go`) resolves the project from config, accepts only
+a worktree that `git worktree list` of the project's folder names, and refuses sandboxed, pinned
+and goal checkouts, exactly like the desktop's in-process service. State, diff and file grouping
+are the desktop's own `ProjectGitState` / `ProjectGitDiff`. Still Mac-only: amend, branch
+actions (checkout, merge, rebase, delete), pull requests, AI commit, new worktrees and
+avatars. Controls a device's tiers do not grant are not drawn; the daemon gate is the truth.
 
 ## 6. Phone design system
 
