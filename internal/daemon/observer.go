@@ -408,6 +408,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				transcriptSays = transcripts.Verdict(s.TranscriptPath, time.Now())
 			}
 		}
+		if !alive {
+			d.noteKeyAgent(ctx, s, false)
+		}
 
 		// Merge this cycle's facts as ONE atomic read-modify-write. The execs
 		// above take seconds, and a hook event (needs_input / idle /

@@ -1,6 +1,9 @@
 package attention
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestKeyAgentLocked(t *testing.T) {
 	for in, want := range map[string]bool{
@@ -10,6 +13,8 @@ func TestKeyAgentLocked(t *testing.T) {
 		"Permission denied (publickey).":                                                             false,
 		"agent refused\noperation":                                                                   true,
 		"\x1b[31mcommunication with\x1b[0m\n  agent failed":                                          true,
+		"agent refused oper\nation":                                                                  true,
+		"agent refused operation\n" + strings.Repeat("ok\n", 25):                                     false,
 		"all tests pass": false,
 	} {
 		if got := KeyAgentLocked(in); got != want {
