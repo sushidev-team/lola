@@ -1009,7 +1009,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 				si.Reacting = reactingLabel(s.Delivery, a.CIRetries, a.Escalated, ciBudget)
 			}
 			// The dev toggle runs each app's own dev_commands (apps.go devPlan).
-			plan, parallel, _ := devPlan(cfg, s, si.Worktree)
+			plan, parallel := devPlan(cfg, s, si.Worktree)
 			si.DevCommands, si.DevParallel = devLabels(plan), parallel
 		}
 		// [statusagent] display overlay, pre-gated here (the ONE consumer of

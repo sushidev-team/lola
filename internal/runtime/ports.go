@@ -2,9 +2,15 @@ package runtime
 
 import (
 	"context"
+	"crypto/rand"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
@@ -24,8 +30,7 @@ const preRemoveTimeout = 20 * time.Second
 // re-renders the env gets the same ports back. It is also BEST-EFFORT: an
 // exhausted range or an unwritable registry logs and the session starts without
 // LOLA_PORT — the agent's work matters more than its dev server, and dev.go
-// refuses to start a multi-active dev stack for a session holding no lease
-// rather than letting it fight over the default port.
+// retries allocation before starting its dev stack.
 func (n *Native) sessionProject(p config.Project, v EnvVars) config.Project {
 	if lo, hi, cnt, ok := p.PortLease(); ok && n.Ports != nil {
 		key := v.LeaseKey()
@@ -48,6 +53,59 @@ func (n *Native) sessionProject(p config.Project, v EnvVars) config.Project {
 		}
 	}
 	return withSessionEnv(p, v)
+}
+
+// WriteDevPortEnv refreshes the port variables and any project values derived
+// from them for new dev tabs. The agent's original env can carry credentials
+// and callback settings, so the tabs source this overlay after that file.
+func WriteDevPortEnv(sessionDir string, p config.Project, v EnvVars) error {
+	portEnv := make(map[string]string)
+	for key, value := range p.Env {
+		if strings.Contains(value, "{{.Port") {
+			portEnv[key] = value
+		}
+	}
+	p.Env = portEnv
+	p = withSessionEnv(p, v)
+	var contents strings.Builder
+	contents.WriteString("unset LOLA_PORT")
+	for i := 1; i <= config.MaxPortsPerSession; i++ {
+		contents.WriteString(" LOLA_PORT_" + strconv.Itoa(i))
+	}
+	contents.WriteByte('\n')
+	contents.Write(manualEnvFile(p))
+
+	rel, err := filepath.Rel(sessionDir, v.Worktree)
+	if err != nil {
+		return err
+	}
+	sessionRoot, err := os.OpenRoot(sessionDir)
+	if err != nil {
+		return err
+	}
+	defer sessionRoot.Close()
+	root, err := sessionRoot.OpenRoot(rel)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := root.MkdirAll(lolaenv.Dir, 0700); err != nil {
+		return err
+	}
+	tmp := lolaenv.DevFile + "-" + rand.Text()
+	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer root.Remove(tmp)
+	_, err = f.WriteString(contents.String())
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return root.Rename(tmp, lolaenv.DevFile)
 }
 
 // teardownProject is sessionProject for a session that already exists: the
