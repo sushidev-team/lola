@@ -41,6 +41,14 @@ function script(replies: Record<string, unknown>) {
 const ops = (cmd: string): Record<string, unknown>[] =>
   d.ch.sent.filter((f) => f.type === "req" && f.cmd === cmd).map((f) => (f.payload as { args: Record<string, unknown> }).args);
 
+// ProjectGitDiff observes its container; jsdom has no ResizeObserver.
+class NoopResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+(globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= NoopResizeObserver;
+
 beforeEach(async () => {
   await d.install();
   tiers.set(["read", "control", "destructive"]);
