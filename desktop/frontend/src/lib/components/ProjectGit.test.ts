@@ -6,8 +6,8 @@ import { confirm } from '$lib/confirm.svelte';
 import { store } from '$lib/store.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
 
-const api = vi.hoisted(() => ({ ConflictDocument:vi.fn(), SaveConflict:vi.fn(), BranchPullRequests: vi.fn(), Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
-vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
+const api = vi.hoisted(() => ({ SuggestConflictChoices:vi.fn(), ConflictDocument:vi.fn(), SaveConflict:vi.fn(), BranchPullRequests: vi.fn(), Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
+vi.mock('@bindings/desktop', () => ({ ProjectGitService: api, ConfigService:{GetProject:vi.fn().mockResolvedValue({execution:{sandbox:"docker"}})} }));
 let serial = 0;
 let project: string;
 const oldSHA = 'b'.repeat(40), newSHA = 'a'.repeat(40);
@@ -641,23 +641,91 @@ describe('Project Git workspace', () => {
     await waitFor(() => expect(api.SaveConflict).toHaveBeenCalledWith(project,'','conflict.ts','snapshot','prefix\nsecond\nsuffix\n'));
     expect(api.Diff).not.toHaveBeenCalledWith(project,'','','','conflict','conflict.ts');
   });
-  it('combines individual lines across conflicts and stages the edited full result', async () => {
+  it('jumps between changes and scrolls the aligned full file through a bounded row window', async () => {
+    const lines = Array.from({length:2000},(_,i) => 'package-'+i+'\n');
+    const current = [...lines];
+    current.splice(100,0,'first change\n');
+    current.splice(1900,0,'second change\n');
     api.Snapshot.mockResolvedValue(snapshot({files:[{path:'lock.json',oldPath:'',index:'U',worktree:'U',untracked:false,conflict:true}]}));
-    api.ConflictDocument.mockResolvedValue({token:'two',text:'<<<<<<< A\nleft\n=======\nright\n>>>>>>> B\ncommon\n<<<<<<< A\nold\n=======\nnew\n>>>>>>> B\n'});
+    api.ConflictDocument.mockResolvedValue({token:'large',text:'prefix\n<<<<<<< current\n'+current.join('')+'=======\n'+lines.join('')+'>>>>>>> incoming\nsuffix\n'});
     await open();
     await fireEvent.click(screen.getByRole('button',{name:'Inspect conflicted lock.json'}));
+    const left = await screen.findByRole('region',{name:'Current source scroll area'});
+    const right = screen.getByRole('region',{name:'Incoming source scroll area'});
+    expect(screen.getByText('Change 1 of 2 in file')).toBeVisible();
+    expect(left).toHaveTextContent('first change');
+    expect(left.querySelectorAll('code').length).toBeLessThan(30);
+    await fireEvent.click(screen.getByRole('button',{name:'Next changed range'}));
+    expect(left).toHaveTextContent('second change');
+    expect(screen.getByText('Change 2 of 2 in file')).toBeVisible();
+    right.scrollTop = 0;
+    await fireEvent.scroll(right);
+    await waitFor(() => expect(left.scrollTop).toBe(0));
+    expect(left).toHaveTextContent('prefix');
+    expect(right).toHaveTextContent('prefix');
+  });
+  it('combines individual lines across conflicts and stages the edited full result', async () => {
+    api.Snapshot.mockResolvedValue(snapshot({files:[{path:'conflict.txt',oldPath:'',index:'U',worktree:'U',untracked:false,conflict:true}]}));
+    api.ConflictDocument.mockResolvedValue({token:'two',text:'<<<<<<< A\nleft\n=======\nright\n>>>>>>> B\ncommon\n<<<<<<< A\nold\n=======\nnew\n>>>>>>> B\n'});
+    await open();
+    await fireEvent.click(screen.getByRole('button',{name:'Inspect conflicted conflict.txt'}));
     await fireEvent.click(await screen.findByRole('button',{name:'Add incoming line 4'}));
     await fireEvent.click(screen.getByRole('button',{name:'Add current line 2'}));
     expect(screen.getByRole('textbox',{name:'Conflict result'})).toHaveValue('right\nleft\n');
     expect(screen.getByRole('button',{name:'Save & stage'})).toBeDisabled();
-    await fireEvent.click(screen.getByRole('button',{name:'Next conflict'}));
+    await fireEvent.click(screen.getByRole('button',{name:'Next changed range'}));
     await fireEvent.click(screen.getByRole('button',{name:'Use incoming'}));
     await fireEvent.click(screen.getByRole('button',{name:'Full result'}));
     const editor = screen.getByRole('textbox',{name:'Full merged result'});
     expect(editor).toHaveValue('right\nleft\ncommon\nnew\n');
     await fireEvent.input(editor,{target:{value:'hand-edited\n'}});
     await fireEvent.click(screen.getByRole('button',{name:'Save & stage'}));
-    await waitFor(() => expect(api.SaveConflict).toHaveBeenCalledWith(project,'','lock.json','two','hand-edited\n'));
+    await waitFor(() => expect(api.SaveConflict).toHaveBeenCalledWith(project,'','conflict.txt','two','hand-edited\n'));
+  });
+  it('opens a sandboxed checkout conflict with reviewable AI choices before staging', async () => {
+    api.Snapshot.mockResolvedValue(snapshot({files:[{path:'conflict.txt',oldPath:'',index:'U',worktree:'U',untracked:false,conflict:true}]}));
+    api.ConflictDocument.mockResolvedValue({token:'sandbox',text:'<<<<<<< A\nold\n=======\nnew\n>>>>>>> B\n<<<<<<< A\nleft\n=======\nright\n>>>>>>> B\n'});
+    api.SuggestConflictChoices.mockResolvedValue('{"0":"incoming","91":"current"}');
+    await open();
+    await fireEvent.click(screen.getByRole('button',{name:'AI resolve'}));
+    await screen.findByText('AI suggested 1 change. Review before staging.');
+    expect(screen.getByText('Change 2 of 2 in file')).toBeVisible();
+    await fireEvent.click(screen.getByRole('button',{name:'Review suggestion'}));
+    expect(screen.getByRole('textbox',{name:'Conflict result'})).toHaveValue('new\n');
+    expect(within(screen.getByRole('region',{name:'Incoming lines'})).getByText('AI suggestion')).toBeVisible();
+    await fireEvent.click(screen.getByRole('button',{name:'Go to unresolved'}));
+    expect(screen.getByText('Change 2 of 2 in file')).toBeVisible();
+    expect(screen.queryByText('AI suggestion')).toBeNull();
+    await fireEvent.click(screen.getByRole('button',{name:'Use current'}));
+    await fireEvent.click(screen.getByRole('button',{name:'Review suggestion'}));
+    expect(screen.getByText('Change 1 of 2 in file')).toBeVisible();
+    expect(api.SaveConflict).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button',{name:'Save & stage'}));
+    await waitFor(() => expect(api.SaveConflict).toHaveBeenCalledWith(project,'','conflict.txt','sandbox','new\nleft\n'));
+  });
+  it('blocks staging invalid JSON and updates readiness as the result is edited', async () => {
+    api.Snapshot.mockResolvedValue(snapshot({files:[{path:'data.json',oldPath:'',index:'U',worktree:'U',untracked:false,conflict:true}]}));
+    api.ConflictDocument.mockResolvedValue({token:'json',text:'<<<<<<< A\n1\n=======\n2\n>>>>>>> B\n'});
+    api.SuggestConflictChoices.mockResolvedValue(JSON.stringify({'0':{merged:'{"broken":}'}}));
+    await open();
+    await fireEvent.click(screen.getByRole('button',{name:'AI resolve'}));
+    await screen.findByText('Invalid JSON');
+    expect(screen.getByRole('button',{name:'Save & stage'})).toBeDisabled();
+    expect(api.SaveConflict).not.toHaveBeenCalled();
+    await fireEvent.input(screen.getByRole('textbox',{name:'Full merged result'}),{target:{value:'{"fixed":true}'}});
+    expect(screen.getByRole('button',{name:'Save & stage'})).toBeEnabled();
+    expect(screen.queryByText('Invalid JSON')).toBeNull();
+  });
+  it('resolves and stages multiple files from one click, including a combined AI edit', async () => {
+    const files=['a.json','b.txt'].map(path=>({path,oldPath:'',index:'U',worktree:'U',untracked:false,conflict:true}));
+    api.Snapshot.mockImplementation(async()=>snapshot({files:files.filter(f=>!api.SaveConflict.mock.calls.some(args=>args[2]===f.path))}));
+    api.ConflictDocument.mockResolvedValue({token:'auto',text:'<<<<<<< A\n1\n=======\n2\n>>>>>>> B\n'});
+    api.SuggestConflictChoices.mockResolvedValueOnce('incomplete reply').mockResolvedValueOnce(['My resolution:', '`'.repeat(4)+'JSON', JSON.stringify({'0':{merged:'[1,2]\n'}}), '`'.repeat(4), 'Done.'].join('\n')).mockResolvedValueOnce('{"0":"incoming"}');
+    await open();
+    await fireEvent.click(screen.getByRole('button',{name:'AI resolve'}));
+    await waitFor(()=>expect(api.SaveConflict.mock.calls.map(args=>args.slice(2))).toEqual([
+      ['a.json','auto','[1,2]\n'], ['b.txt','auto','2\n']
+    ]));
   });
   it('keeps conflict counts, file totals and AI resolution together in the working row', async () => {
     const data=snapshot({operation:'merge'});

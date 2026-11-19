@@ -449,6 +449,9 @@
     if (peek) void git.load(ref, limit);
   }
   function showCommitDiff(sha: string) { selected = [sha]; area = 'commit'; path = ''; activeFile = ''; diffOpen = true; }
+  let suggestionRequest = $state(0);
+  let suggestionPath = $state('');
+  let pendingResolution: {paths:string[]; head:string; operation?:string} | null = null;
   function inspectFile(file: GitFile, staged: boolean) {
     diffOpen = true;
     selected = []; area = file.conflict ? 'conflict' : staged ? 'staged' : file.untracked ? 'untracked' : 'unstaged'; path = file.path; activeFile = file.path;
@@ -729,7 +732,13 @@
             </Button>
             {#if data.operation || workingCounts.conflicts}
               <div class="working-recovery">
-                {#if workingCounts.conflicts}<Button size="xs" variant="secondary" class="ai-resolve" disabled={!!git.busy} loading={git.busy === 'ai-resolve'} onclick={async () => { const state = git; const id = await state.resolveConflicts(ref, limit); if (id && state === git) openSession(id, project); }}><Icon name="sparkles" size={13}/>AI resolve</Button>
+                {#if workingCounts.conflicts}<Button size="xs" variant="secondary" class="ai-resolve" disabled={!!git.busy} loading={git.busy === 'ai-resolve'} onclick={async () => { const state = git; const id = await state.resolveConflicts(ref, limit, file => {
+                  if (state !== git) return;
+                  const snapshot = state.snapshot!;
+                  pendingResolution = {paths:snapshot.files.filter(f => f.conflict && f.path !== file.path).map(f => f.path),head:snapshot.head,operation:snapshot.operation};
+                  peekPath = ''; suggestionPath = file.path; suggestionRequest++;
+                  inspectFile(file, false);
+                }); if (id && state === git) openSession(id, project); }}><Icon name="sparkles" size={13}/>AI resolve</Button>
                 {:else if ['merge','rebase','cherry-pick','revert'].includes(data.operation ?? '')}<Button size="xs" variant="secondary" disabled={!!git.busy} loading={git.busy === 'continue'} onclick={() => gitActions.continueOperation()}>{data.operation === 'merge' ? 'Complete merge' : 'Continue'}</Button>{/if}
                 <Button size="xs" icon aria-label="Conflict actions" title="Continue, skip or abort" onclick={(event) => gitActions.openRepository(event)}><Icon name="ellipsis-vertical" size={14}/></Button>
               </div>
@@ -813,16 +822,34 @@
         <div class="history-hint"><div class="history-tools"><Button size="xs" icon aria-label="Search commits" title="Search commits (⌘F)" onclick={() => void openSearch()}><Icon name="search" size={14} /></Button></div><span>{search ? 'Searching loaded history · graph connections hidden' : '⌘ / Ctrl + click two commits to compare'}</span>{#if ref}<Button size="xs" disabled={!!git.busy} onclick={() => chooseRef('')}>Clear branch filter</Button>{/if}</div>
       </section>
       {#if area && diffOpen}
-        <section class="diff-stage" aria-label="Selected changes">
+        <section class="diff-stage" class:merge-view={area === 'conflict'} aria-label="Selected changes">
+          {#if area !== 'conflict'}
           <div class="comparison-bar"><span><Icon name={selected.length === 2 ? 'git-compare-arrows' : 'file-text'} size={14} />{diffTitle}</span><div>{#if selected.length === 2}<Button size="xs" aria-label="Swap comparison direction" onclick={() => { comparisonBranches = [...comparisonBranches].reverse(); selected = [...selected].reverse(); }}><Icon name="arrow-right-left" size={13} />Swap</Button>{/if}<Button size="xs" icon aria-label="Close diff" onclick={() => diffOpen = false}><Icon name="x" size={14} /></Button></div></div>
+          {/if}
           {#if area === 'conflict'}
             {@const owner = view}
             {@const chosenPath = path}
-            {#key JSON.stringify([owner.project,owner.worktree,chosenPath])}
-              <ProjectGitConflict git={owner} path={chosenPath} onstageexternal={() => void act('stage',[chosenPath])} onstaged={async () => {
+            {#key JSON.stringify([owner.project,owner.worktree,chosenPath,suggestionRequest])}
+              <ProjectGitConflict autosuggest={chosenPath === suggestionPath} onrequesthandled={() => suggestionPath = ''} git={owner} path={chosenPath} onclose={() => diffOpen = false} onstageexternal={() => void act('stage',[chosenPath])} onstaged={async (automatic) => {
                 const peeking = owner !== git;
                 await owner.load(peeking ? '' : ref, peeking ? 1 : limit);
-                if (owner === view && path === chosenPath && area === 'conflict') working();
+                if (owner === view && path === chosenPath && area === 'conflict') {
+                  const snapshot = owner.snapshot;
+                  const queue = pendingResolution;
+                  let next: GitFile | undefined;
+                  if (automatic && queue && snapshot && !owner.error && snapshot.head === queue.head && snapshot.operation === queue.operation) {
+                    next = snapshot.files.find(f => f.conflict && queue.paths.includes(f.path));
+                  }
+                  if (next && queue) {
+                    queue.paths = queue.paths.filter(p => p !== next.path);
+                    suggestionPath = next.path; suggestionRequest++;
+                    inspectFile(next,false);
+                  } else {
+                    pendingResolution = null;
+                    working();
+                    if (automatic) owner.notice = 'AI resolution staged.';
+                  }
+                }
                 if (peeking) void git.load(ref,limit);
               }}/>
             {/key}
@@ -1090,6 +1117,7 @@
   .history-hint > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .history-hint { display:flex; align-items:center; justify-content:space-between; min-height:28px; padding:4px 12px; border-top:1px solid var(--color-edge); font-size:12px; color:var(--color-faint); }
   .diff-stage { position:absolute; top:0; bottom:0; left:0; right:var(--inspector-width); z-index:5; display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; background:var(--color-panel); border-right:1px solid var(--color-edge); }
+  .diff-stage.merge-view { grid-template-rows:minmax(0,1fr); }
   .comparison-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:5px 12px; background:var(--color-canvas); border-bottom:1px solid var(--color-edge); }
   .comparison-bar > span,.comparison-bar > div { display:flex; align-items:center; gap:7px; font-size:12px; }
   .comparison-bar > span { color:var(--color-ink-2); }
