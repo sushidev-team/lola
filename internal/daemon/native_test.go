@@ -61,8 +61,8 @@ type fakeNative struct {
 	switchErr      error // returned from SwitchAgent
 	spawnOpts      []runtime.SpawnOpts
 	addApps        []nativeAddAppsCall
-	addAppsErr     error // returned from AddApps
-	addRelaunch    bool  // AddApps reports a relaunched (sandboxed) agent
+	addAppsErr     error         // returned from AddApps
+	addRelaunch    bool          // AddApps reports a relaunched (sandboxed) agent
 	attemptErr     map[int]error // SpawnWith: a best-of attempt (1-based) that fails
 }
 
