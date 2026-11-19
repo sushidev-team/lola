@@ -3,7 +3,7 @@
 // and saves all projects or none.
 
 import { DaemonService } from "@bindings/desktop";
-import type { BulkProjectsArgs, BulkProjectChange } from "@bindings/desktop/protocol/models";
+import type { BulkProjectsArgs, BulkProjectChange } from "@bindings/internal/protocol/models";
 import { textToLines } from "./lines";
 
 export type PickupDraft = {
