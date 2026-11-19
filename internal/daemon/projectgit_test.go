@@ -20,6 +20,9 @@ import (
 func gitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
 		{"config", "user.email", "t@example.com"},
@@ -29,7 +32,7 @@ func gitRepo(t *testing.T) string {
 	} {
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git unavailable: %v %s", err, out)
+			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
 	return dir
@@ -84,6 +87,8 @@ func TestProjectGitRefusesWhatItShouldNot(t *testing.T) {
 		{"discard through the control command", gitReq(t, protocol.CmdProjectGitAct, protocol.ProjectGitArgs{Op: "discard", Project: "p"})},
 		{"unknown project", gitReq(t, protocol.CmdProjectGit, protocol.ProjectGitArgs{Op: "snapshot", Project: "nope"})},
 		{"relative worktree", gitReq(t, protocol.CmdProjectGit, protocol.ProjectGitArgs{Op: "snapshot", Project: "p", Worktree: "../x"})},
+		{"pop through the control command", gitReq(t, protocol.CmdProjectGitAct, protocol.ProjectGitArgs{Op: "stashApply", Project: "p", Pop: true})},
+		{"plain apply through the discard command", gitReq(t, protocol.CmdProjectGitDiscard, protocol.ProjectGitArgs{Op: "stashApply", Project: "p"})},
 		{"foreign worktree", gitReq(t, protocol.CmdProjectGit, protocol.ProjectGitArgs{Op: "snapshot", Project: "p", Worktree: t.TempDir()})},
 	}
 	for _, c := range cases {
@@ -144,5 +149,19 @@ func TestProjectGitBlockedResolvesNativeSessionWorktrees(t *testing.T) {
 	}
 	if !d.projectGitBlocked(filepath.Join(home, "worktrees", "p", "gone")) {
 		t.Error("an unknown managed checkout was allowed")
+	}
+}
+
+func TestProjectGitPopNeedsTheDiscardTier(t *testing.T) {
+	repo := gitRepo(t)
+	d := newTestDaemon(t, &config.Config{Projects: []config.Project{{Name: "p", Path: repo}}}, &linear.Fake{}, nil)
+	for _, c := range []struct {
+		cmd string
+		pop bool
+	}{{protocol.CmdProjectGitAct, true}, {protocol.CmdProjectGitDiscard, false}} {
+		resp := d.handle(context.Background(), gitReq(t, c.cmd, protocol.ProjectGitArgs{Op: "stashApply", Project: "p", Pop: c.pop}))
+		if resp.OK || !strings.Contains(resp.Error, "discard tier") {
+			t.Errorf("%s pop=%v: ok=%v err=%q", c.cmd, c.pop, resp.OK, resp.Error)
+		}
 	}
 }

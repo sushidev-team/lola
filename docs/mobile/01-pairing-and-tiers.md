@@ -1126,7 +1126,7 @@ Split of the 185: read 25, answer 12, control 25, destructive 4, shell 6, never 
 `openManual`, `openExisting` (field rules: §8.5), `revive`, `review`, `coderabbit`,
 `resolveConflict`, `switchAgent`, `dev`, `devFreePort`, `planDecide`, `sessionTask`, `renameSession`,
 `broadcast`, `bestOf`, `restoreCheckpoint`, `forkCheckpoint`, `pollOnce`, `enable`, `disable`,
-`reviewPackageRecover`, `projectGitAct` (stage, unstage, commit, fetch, pull, push, createBranch, stashPush, stashApply: commit and push run the repository's own hooks).
+`reviewPackageRecover`, `projectGitAct` (stage, unstage, commit, fetch, pull, push, createBranch, stashPush, stashApply without pop: commit and push run the repository's own hooks).
 
 `enable`/`disable` write `config.toml` (`enablePollInFile`). They are the only config writes a
 phone has; the plan lists them under control explicitly, and they flip one poll's `enabled`.
@@ -1134,7 +1134,7 @@ No other config write may join a tier (§10.1).
 
 **destructive** (4)
 
-`kill` (`Force` never carried; `KeepWorktree` allowed), `closeExitedTemporary`, `bestOfPick`, `projectGitDiscard` (discard changes, drop a stash; discard needs the token `prepareDiscard` issued)
+`kill` (`Force` never carried; `KeepWorktree` allowed), `closeExitedTemporary`, `bestOfPick`, `projectGitDiscard` (discard changes, drop or pop a stash; discard needs the token `prepareDiscard` issued)
 (`discardAttempt` kills each loser's agent and aux tabs, closes its SSH, runs
 `nat.Kill(…, removeWorktree=true)`, deletes clean branches and closes the losers' PRs).
 

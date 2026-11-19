@@ -359,9 +359,9 @@
                     <span class="num flex-1 text-subhead text-subtext">{s.selector} · {agoShort(s.date)}</span>
                     {#if canAct}
                       <TouchButton disabled={!!git.busy} onclick={() => git.stashAction("apply", s.sha, snap.head, "", limit)}>{copy.git.apply}</TouchButton>
-                      <TouchButton disabled={!!git.busy} onclick={() => git.stashAction("pop", s.sha, snap.head, "", limit)}>{copy.git.pop}</TouchButton>
                     {/if}
                     {#if canDiscard}
+                      <TouchButton disabled={!!git.busy} onclick={() => git.stashAction("pop", s.sha, snap.head, "", limit)}>{copy.git.pop}</TouchButton>
                       <TouchButton variant="danger" disabled={!!git.busy} onclick={() => dropStash(s.sha, s.subject)}>{copy.git.drop}</TouchButton>
                     {/if}
                   </span>

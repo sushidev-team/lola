@@ -100,7 +100,7 @@ func (d *Daemon) projectGitBlocked(path string) bool {
 		knownHost = true
 	}
 	// A forgotten lola checkout is not proof it was never sandboxed.
-	return gitWithin(path, filepath.Join(home, "worktrees")) && !knownHost
+	return gitWithin(path, gitCanonical(filepath.Join(home, "worktrees"))) && !knownHost
 }
 
 func (d *Daemon) projectGitTarget(ctx context.Context, project, requested string) (string, error) {
@@ -157,7 +157,8 @@ var projectGitOps = map[string]map[string]bool{
 	protocol.CmdProjectGit: {"snapshot": true, "diff": true, "stashes": true},
 	protocol.CmdProjectGitAct: {"stage": true, "unstage": true, "commit": true, "fetch": true, "pull": true,
 		"push": true, "createBranch": true, "stashPush": true, "stashApply": true},
-	protocol.CmdProjectGitDiscard: {"prepareDiscard": true, "discard": true, "stashDrop": true},
+	protocol.CmdProjectGitDiscard: {"prepareDiscard": true, "discard": true, "stashDrop": true,
+		"stashApply": true}, // only with Pop: popping drops the entry, like stashDrop
 }
 
 func (d *Daemon) handleProjectGit(ctx context.Context, req protocol.Request) protocol.Response {
@@ -167,6 +168,9 @@ func (d *Daemon) handleProjectGit(ctx context.Context, req protocol.Request) pro
 	}
 	if !projectGitOps[req.Cmd][a.Op] {
 		return protocol.Response{Error: fmt.Sprintf("unknown repository op %q", a.Op)}
+	}
+	if a.Op == "stashApply" && a.Pop != (req.Cmd == protocol.CmdProjectGitDiscard) {
+		return protocol.Response{Error: "popping a stash removes it and needs the discard tier"}
 	}
 	if len(a.Paths) > projectGitMaxPaths || len(a.Message) > projectGitMaxMessage {
 		return protocol.Response{Error: "request too large"}

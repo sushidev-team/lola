@@ -177,7 +177,8 @@ export function StartAICommit(_project: string, _worktree: string, _token: strin
 
 /** FORWARDED. */
 export function StashApply(project: string, worktree: string, sha: string, expectedHead: string, pop: boolean): Promise<void> {
-  return git<void>("StashApply", "projectGitAct", { op: "stashApply", project, worktree, sha, head: expectedHead, pop });
+  // Pop removes the entry, so it rides the discard tier like StashDrop.
+  return git<void>("StashApply", pop ? "projectGitDiscard" : "projectGitAct", { op: "stashApply", project, worktree, sha, head: expectedHead, pop });
 }
 
 /** FORWARDED. */
