@@ -3,11 +3,92 @@ package daemon
 import (
 	"context"
 	"errors"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 )
+
+func TestResolveInheritedWorkspaceLabelRefs(t *testing.T) {
+	ready := linear.Label{ID: "11111111-1111-1111-1111-111111111111", Name: "agent-ready", Parent: &linear.Label{Name: "agent"}}
+	working := linear.Label{ID: "22222222-2222-2222-2222-222222222222", Name: "agent-working", Parent: ready.Parent}
+	blocked := linear.Label{ID: "33333333-3333-3333-3333-333333333333", Name: "agent-blocked", Parent: ready.Parent}
+	f := &linear.Fake{
+		WorkspaceLabelSet: []linear.Label{ready, working, blocked},
+		// A label returned in both scopes must not become ambiguous.
+		LabelsByTeam: map[string][]linear.Label{"t1": {ready}},
+	}
+	cfg := &config.Config{
+		Defaults: config.Defaults{MatchLabels: []string{"agent/agent-ready"}, OnSentSetLabel: "agent/agent-working", BlockedLabelID: "agent/agent-blocked"},
+		Projects: []config.Project{
+			{Name: "a", TeamID: "t1", MatchMode: "all", Inherits: config.ProjectInherits{OnSentSetLabel: true, BlockedLabelID: true}},
+			{Name: "b", TeamID: "t2", MatchMode: "all", Inherits: config.ProjectInherits{OnSentSetLabel: true, BlockedLabelID: true}},
+		},
+	}
+	cfg.ResolveInheritance()
+	if notes, _ := resolveLabelRefs(context.Background(), cfg, f, nil); len(notes) != 0 {
+		t.Fatalf("notes: %v", notes)
+	}
+	for _, p := range cfg.Projects {
+		if !slices.Equal(p.MatchLabels, []string{ready.ID}) || p.OnSentSetLabel != working.ID || p.BlockedLabelID != blocked.ID || !p.Inherits.MatchLabels {
+			t.Fatalf("resolved project: %+v", p)
+		}
+		want := []map[string]any{{"labels": map[string]any{"some": map[string]any{"id": map[string]any{"eq": ready.ID}}}}}
+		if got := linear.BuildIssueFilter(p, "", "")["and"]; !reflect.DeepEqual(got, want) {
+			t.Fatalf("filter = %v, want %v", got, want)
+		}
+	}
+	if !slices.Equal(cfg.Defaults.MatchLabels, []string{"agent/agent-ready"}) {
+		t.Fatal("resolution changed the shared defaults")
+	}
+	if calls := f.CallNames(); !slices.Equal(calls, []string{"Labels", "WorkspaceLabels", "Labels"}) {
+		t.Fatalf("calls = %v", calls)
+	}
+}
+
+func TestResolveLabelRefsCombinedCatalog(t *testing.T) {
+	team := linear.Label{ID: "11111111-1111-1111-1111-111111111111", Name: "ready", Parent: &linear.Label{Name: "team"}}
+	workspace := linear.Label{ID: "22222222-2222-2222-2222-222222222222", Name: "ready", Parent: &linear.Label{Name: "workspace"}}
+	f := &linear.Fake{LabelsByTeam: map[string][]linear.Label{"t1": {team}}, WorkspaceLabelSet: []linear.Label{workspace}}
+	for _, tc := range []struct {
+		ref   string
+		want  []string
+		notes int
+	}{
+		{"*/ready", []string{team.ID, workspace.ID}, 0},
+		{"ready", []string{"ready"}, 1}, // no guessing across scopes
+		{"workspace/ready", []string{workspace.ID}, 0},
+	} {
+		t.Run(tc.ref, func(t *testing.T) {
+			cfg := &config.Config{Projects: []config.Project{{Name: "a", TeamID: "t1", MatchLabels: []string{tc.ref}}}}
+			notes, _ := resolveLabelRefs(context.Background(), cfg, f, nil)
+			if !slices.Equal(cfg.Projects[0].MatchLabels, tc.want) || len(notes) != tc.notes {
+				t.Fatalf("labels = %v, notes = %v", cfg.Projects[0].MatchLabels, notes)
+			}
+		})
+	}
+	// A workspace lookup failure must not silently narrow a wildcard to the
+	// team half of the catalog, even across repeated reloads.
+	f.Errs = map[string]error{"WorkspaceLabels": errors.New("offline")}
+	memo := labelMemo{memoKey("t1", "*/ready"): {team.ID, workspace.ID}}
+	for range 2 {
+		cfg := &config.Config{Projects: []config.Project{
+			{Name: "a", TeamID: "t1", MatchLabels: []string{"*/ready"}},
+			{Name: "b", TeamID: "t2", MatchLabels: []string{"workspace/ready"}},
+		}}
+		f.Calls = nil
+		var notes []string
+		notes, memo = resolveLabelRefs(context.Background(), cfg, f, memo)
+		if !slices.Equal(cfg.Projects[0].MatchLabels, []string{team.ID, workspace.ID}) || cfg.Projects[1].MatchLabels[0] != "workspace/ready" || len(notes) != 1 {
+			t.Fatalf("projects = %+v, notes = %v", cfg.Projects, notes)
+		}
+		if calls := f.CallNames(); !slices.Equal(calls, []string{"Labels", "WorkspaceLabels", "Labels"}) {
+			t.Fatalf("calls = %v", calls)
+		}
+	}
+}
 
 func TestResolveLabelRefsPerTeam(t *testing.T) {
 	f := &linear.Fake{}

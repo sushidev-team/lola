@@ -363,6 +363,42 @@ describe("ProjectForm", () => {
     expect(await screen.findByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
   });
 
+  it.each(["agent/agent-ready", "*/agent-ready"])("shows inherited label reference %s without changing its saved form", async (ref) => {
+    getProject.mockResolvedValue({ ...sampleDto(), matchLabels: [ref], onSentSetLabel: "agent/agent-working" });
+    teamMetaFn.mockResolvedValue({ ...meta, labels: [
+      { id: "ready-id", label: "agent / agent-ready · workspace" },
+      { id: "working-id", label: "agent / agent-working" },
+    ] });
+    nav.overlayTab = "labels";
+    render(ProjectForm);
+    expect(await screen.findByRole("checkbox", { name: "agent / agent-ready · workspace" })).toBeChecked();
+    expect(screen.queryByText(/no longer in Linear/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(PICKUP_FIELDS.onSentSetLabel)).toHaveValue("working-id");
+
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({
+      matchLabels: [ref], onSentSetLabel: "agent/agent-working",
+      inherits: { matchLabels: true, onSentSetLabel: true },
+    });
+  });
+
+  it("promotes an inherited name to an explicit selection when its checkbox changes", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), matchLabels: ["agent/agent-ready"] });
+    teamMetaFn.mockResolvedValue({ ...meta, labels: [
+      { id: "ready-id", label: "agent / agent-ready" },
+      { id: "bug-id", label: "Bug" },
+    ] });
+    nav.overlayTab = "labels";
+    render(ProjectForm);
+    const ready = await screen.findByRole("checkbox", { name: "agent / agent-ready" });
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Bug" }));
+    await fireEvent.click(ready);
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({ matchLabels: ["bug-id"], inherits: { matchLabels: false } });
+  });
+
   it("loads team metadata and renders workflow states as checkboxes, pre-checked from the DTO", async () => {
     render(ProjectForm);
     await waitFor(() => expect(teamMetaFn).toHaveBeenCalledWith("team-uuid-1", false));

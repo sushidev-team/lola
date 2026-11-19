@@ -805,17 +805,19 @@
   <div class={rowCls}>
     {@render cap(caption, k)}
     {#if options}
+      {@const ids = k === "onSentSetLabel" || k === "blockedLabelId" ? labelIdsFor([current], options, true) : [current]}
+      {@const picked = ids.length === 1 ? ids[0] : current}
       <Select
         class={inheritedStyle(k)}
         aria-label={caption}
-        value={current}
+        value={picked}
         onchange={(e) => {
           if (k) promote(k);
           onChange(e.currentTarget.value);
         }}
       >
         {#if anyLabel}<option value="">{anyLabel}</option>{/if}
-        {#if current && !options.some((o) => o.id === current)}<option value={current}>{current} (current value)</option>{/if}
+        {#if picked && !options.some((o) => o.id === picked)}<option value={picked}>{picked} (current value)</option>{/if}
         {#each options as o (o.id)}<option value={o.id}>{o.label}</option>{/each}
       </Select>
     {:else}
@@ -844,7 +846,7 @@
   {#if options}
     <div class={rowTopCls}>
       {@render cap(caption, k)}
-      <CheckboxOptions label={caption} {options} {selected} onChange={(value) => {
+      <CheckboxOptions label={caption} {options} selected={k === "matchLabels" ? labelIdsFor(selected, options, true) : selected} onChange={(value) => {
         if (k) promote(k);
         onChange(value);
       }} />
