@@ -41,6 +41,8 @@ type OrgAdmin interface {
 	SetLinearKey(org, key string, now time.Time) error
 	SetLinearTeam(org, team string, now time.Time) error
 	SetDigestWebhook(org, hook string, now time.Time) error
+	SetLinearWebhookSecret(org, sec string, now time.Time) error
+	LinearWebhookSecret(org string) (string, bool)
 	CreateInvite(org, label string, ttl time.Duration, now time.Time) (string, time.Time, error)
 	RevokeDeviceNamed(org, name string, now time.Time) (bool, error)
 }
@@ -324,7 +326,7 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request, dev 
 		s.writeErr(w, err)
 		return
 	}
-	if (set(req.LinearKey) || set(req.DigestWebhook)) && !cur.SecretsAvailable {
+	if (set(req.LinearKey) || set(req.DigestWebhook) || set(req.LinearWebhookSecret)) && !cur.SecretsAvailable {
 		writeError(w, http.StatusServiceUnavailable, hubproto.CodeUnavailable)
 		return
 	}
@@ -360,6 +362,12 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request, dev 
 	}
 	if req.DigestWebhook != nil {
 		if err := s.cfg.Admin.SetDigestWebhook(dev.Org, *req.DigestWebhook, now); err != nil {
+			s.adminErr(w, err)
+			return
+		}
+	}
+	if req.LinearWebhookSecret != nil {
+		if err := s.cfg.Admin.SetLinearWebhookSecret(dev.Org, *req.LinearWebhookSecret, now); err != nil {
 			s.adminErr(w, err)
 			return
 		}

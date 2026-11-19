@@ -6,9 +6,13 @@
 import * as config$0 from "../internal/config/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as projectgit$0 from "../internal/projectgit/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as reviewprofile$0 from "../internal/reviewprofile/models.js";
 
 export interface AICommitProgress {
+    "excluded"?: projectgit$0.AICommitExclusion[] | null;
     "id": string;
     "phase": string;
     "completed": number;
@@ -125,6 +129,14 @@ export interface DoctorResultDTO {
     "detail": string;
     "critical": boolean;
     "fix"?: string;
+}
+
+/**
+ * FilesDroppedDTO is a drop on a data-file-drop-target element: its id, and the files' paths.
+ */
+export interface FilesDroppedDTO {
+    "target": string;
+    "files": string[] | null;
 }
 
 /**
@@ -276,6 +288,17 @@ export interface InheritsDTO {
     "blockedLabelId": boolean;
     "dedupMode": boolean;
     "prioritySort": boolean;
+    "requirePlan": boolean;
+}
+
+/**
+ * LinearAgentSecretsDTO says which of the Linear agent's credentials resolve,
+ * by NAME only — like LinearKeyStatus, nothing here carries a value.
+ */
+export interface LinearAgentSecretsDTO {
+    "clientSecret": boolean;
+    "token": boolean;
+    "webhookSecret": boolean;
 }
 
 /**
@@ -518,6 +541,11 @@ export interface ProjectFormDTO {
     "commentOnMerged": boolean;
     "commentOnBlocked": boolean;
     "prRequiresChecks": boolean;
+
+    /**
+     * RequirePlan is the plan-approval gate (inheritable, like dedup_mode).
+     */
+    "requirePlan": boolean;
     "inherits": InheritsDTO;
     "isNew": boolean;
 }
@@ -854,6 +882,22 @@ export interface SettingsDTO {
     "remoteDevForward": boolean;
 
     /**
+     * [linear_agent] — lola as a native Linear agent. Only the keys a human
+     * edits; the secret SOURCES (keychain service / env names) are preserved
+     * from the file, and the secrets themselves are written by
+     * SetLinearAgentSecret / `lola linear-agent login`, never through this DTO.
+     */
+    "linearAgentEnabled": boolean;
+    "linearAgentClientId": string;
+
+    /**
+     * duration string, e.g. "15s"
+     */
+    "linearAgentPollInterval": string;
+    "linearAgentRedirectPort": number;
+    "linearAgentWebhookListen": string;
+
+    /**
      * ReviewProviders is the pluggable review catalog ([[review.provider]]),
      * resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
      * from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the
@@ -887,6 +931,7 @@ export interface SettingsDTO {
     "blockedLabelId": string;
     "dedupMode": string;
     "prioritySort": string[] | null;
+    "requirePlan": boolean;
 
     /**
      * [hub] — the team hub's local rules. url / enabled / device_name are not

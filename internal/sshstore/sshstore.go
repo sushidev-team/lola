@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/sshelement"
 	"github.com/sushidev-team/lola/internal/sshterm"
@@ -118,9 +119,18 @@ type SentBatch struct {
 // way back to that file, and neither is a path anything else handed over.
 type EndedInfo struct {
 	protocol.EndedSession
-	PRURLs   []string `json:"pr_urls,omitempty"` // all app PRs, for a later issue attempt's context
-	Segments []string `json:"segments,omitempty"`
-	Slug     string   `json:"slug,omitempty"` // the transcript directory's name
+	Isolation *EndedWorktreeIsolation `json:"worktree_isolation,omitempty"`
+	PRURLs    []string                `json:"pr_urls,omitempty"` // all app PRs, for a later issue attempt's context
+	Segments  []string                `json:"segments,omitempty"`
+	Slug      string                  `json:"slug,omitempty"` // the transcript directory's name
+}
+
+// EndedWorktreeIsolation preserves the trusted metadata needed for a later
+// dirty check. nil means old history with unknown isolation, not a host checkout.
+// This is private history metadata, never part of the EndedSession wire view.
+type EndedWorktreeIsolation struct {
+	Sandbox string        `json:"sandbox,omitempty"`
+	GitPin  *gitguard.Pin `json:"git_pin,omitempty"`
 }
 
 // State is everything a session's store holds. Exported for the JSON file and for

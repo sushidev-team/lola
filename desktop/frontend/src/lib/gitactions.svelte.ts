@@ -10,7 +10,7 @@ import type { IconName } from './icons';
 type Context = { git: ProjectGitState; ref: string; limit: number; configuredPath?: string };
 export type GitDestination = { remote: string; name: string; trackingOnly?: boolean };
 type Callbacks = { openSession?: (id: string) => void; compareBranches?: (source: GitRef, target: GitRef) => void; isManagedWorktree?: (tree: GitWorktree) => boolean; removeManagedWorktree?: (tree: GitWorktree, deleteBranch: boolean, onRemoved: () => Promise<void>) => void; createPullRequest?: (branch:GitRef,target?:GitRef)=>void; viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; inspectFile?: (file: GitFile, staged: boolean) => void; stageFiles?: (paths: string[], staged: boolean) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef, destination?: GitDestination) => void; createBranch?: (sha: string, label: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
-export type GitMenuItem = { label: string; icon: IconName; run: () => void; disabled?: boolean; danger?: boolean; separator?: boolean };
+export type GitMenuItem = { label: string; icon: IconName; run: () => void; disabled?: boolean; danger?: boolean; separator?: boolean; /** Why a disabled item is disabled, shown under its label. */ hint?: string };
 export type GitMenuRequest = { title: string; subtitle?: string; x: number; y: number; items: GitMenuItem[]; anchor: HTMLElement | null };
 
 /** One controller per mounted repository. Requests capture exact refs and SHA facts. */
@@ -36,6 +36,21 @@ export class GitActions {
   private mutationBlocked(branch?: GitRef) {
     const owner = branch && this.owner(branch);
     return this.blocked() || !!this.context().git.snapshot?.operation || !!owner?.blocked || !!owner?.prunable;
+  }
+  /** Why this branch cannot be changed from here: the line under a disabled item. Empty while a git action runs (the busy state already says so). */
+  private blockReason(branch: GitRef) {
+    if (branch.remote) return '';
+    const owner = this.owner(branch);
+    if (owner?.blocked) return 'Checked out in a sandboxed session';
+    if (owner?.prunable) return 'Its worktree folder is missing';
+    return this.context().git.snapshot?.operation ? 'Finish the operation in progress first' : '';
+  }
+  /** The session whose agent can change a branch the app must not: a sandboxed checkout that is exactly one session's own worktree. */
+  private agentFor(branch: GitRef) {
+    const owner = this.owner(branch);
+    if (!owner?.blocked || owner.prunable) return undefined;
+    const session = store.sessionForWorktree(owner.path);
+    return session?.worktree === owner.path ? session : undefined;
   }
   private canCreatePR(branch?:GitRef) {
     const remotes=this.context().git.snapshot?.remotes??[];
@@ -76,7 +91,12 @@ export class GitActions {
     if (path === null && request.action === 'pull' && active.git === this.context().git && active.git.error && this.autoStashPull(active, request)) return;
     if (path === null && active.git === this.context().git && active.git.error) {
       const info = gitErrorInfo(active.git.error, request.action);
-      store.setFlash(info.title, info.kind, {description:info.description,action:this.recovery()});
+      const recovery = this.recovery();
+      if (request.action === 'pull' && info.recovery === 'merge' && recovery) {
+        recovery.run();
+        return;
+      }
+      store.setFlash(info.title, info.kind, {description:info.description,action:recovery});
     }
     if (path !== null && active.git === this.context().git && deletingSelected && this.context().ref === request.source) this.callbacks.viewHistory('');
     if (path !== null && active.git === this.context().git && ['checkout', 'merge', 'rebase'].includes(request.action)) this.callbacks.openWorktree(path);
@@ -182,6 +202,7 @@ export class GitActions {
       return {label:'Pull changes',run:()=>{if(valid()) void this.execute(context,this.branchRequest('pull',source));}};
     }
     if (info.recovery==='merge' && request.action==='pull') {
+      if (!valid() || source.sha !== request.sourceSHA) return;
       const upstream=this.upstream(source), full=upstream.startsWith('refs/')?upstream:`refs/remotes/${upstream}`;
       const remote=git.snapshot?.refs.find(branch=>branch.remote && branch.fullName===full);
       if(remote) return {label:'Merge remote changes',run:()=>{if(valid() && git.snapshot?.refs.some(branch=>branch.fullName===remote.fullName && branch.sha===remote.sha)) void this.execute(context,this.branchRequest('merge',remote,source));}};
@@ -288,9 +309,14 @@ export class GitActions {
   dropBranches(source: GitRef, target: GitRef, event: MouseEvent) {
     if (source.fullName === target.fullName) return;
     const destination = target.remote ? this.destination(target) : undefined;
+    // The host never merges into a sandboxed session's checkout; its agent can.
+    const agent = this.agentFor(target);
+    const mergeOff = target.remote || this.mutationBlocked(target), rebaseOff = source.remote || this.mutationBlocked(source);
     this.menu(`${source.name} → ${target.name}`, [
-      { label: `Merge ${source.name} into ${target.name}`, icon: 'git-merge', disabled: target.remote || this.mutationBlocked(target), run: () => this.integrateBranch('merge', source, target) },
-      { label: `Rebase ${source.name} onto ${target.name}`, icon: 'git-branch', disabled: source.remote || this.mutationBlocked(source), run: () => this.integrateBranch('rebase', source, target) },
+      agent
+        ? { label: `Ask agent to merge ${source.name} into ${target.name}`, icon: 'git-merge', run: () => { if (this.agentFor(target)?.id === agent.id) void store.askMerge(agent.id, source.name); } }
+        : { label: `Merge ${source.name} into ${target.name}`, icon: 'git-merge', disabled: mergeOff, hint: mergeOff ? this.blockReason(target) : '', run: () => this.integrateBranch('merge', source, target) },
+      { label: `Rebase ${source.name} onto ${target.name}`, icon: 'git-branch', disabled: rebaseOff, hint: rebaseOff ? this.blockReason(source) : '', run: () => this.integrateBranch('rebase', source, target) },
       ...(this.callbacks.createPullRequest ? [{label:'Create PR…',icon:'git-pull-request' as const,disabled:!this.canCreatePR(source),run:()=>this.callbacks.createPullRequest?.(source,target)}] : []),
       ...(!source.remote && destination && this.callbacks.publishBranch ? [
         {label:`Push ${source.name} to ${target.name}…`,icon:'arrow-up' as const,disabled:this.mutationBlocked(source),run:() => this.callbacks.publishBranch?.(source,destination)},
@@ -310,7 +336,7 @@ export class GitActions {
     } catch { /* Keep the generic Merge label when the outcome cannot be proven. */ }
   }
   canDrop(source: GitRef, target: GitRef) {
-    return source.fullName === target.fullName || (!target.remote && !this.mutationBlocked(target)) || (!source.remote && !this.mutationBlocked(source));
+    return source.fullName === target.fullName || (!target.remote && !this.mutationBlocked(target)) || (!source.remote && !this.mutationBlocked(source)) || !!this.agentFor(target);
   }
   private sessionItems(tree?: GitWorktree): GitMenuItem[] {
     const session = tree && store.sessionForWorktree(tree.path);
@@ -384,6 +410,7 @@ export class GitActions {
       ...(this.callbacks.compareWorking ? [{label:'Compare against working changes',icon:'git-compare-arrows' as const,run:() => this.callbacks.compareWorking?.(commit.sha)}] : []),
       {label:'Cherry-pick commit…',icon:'git-branch',separator:true,disabled:this.blocked() || !!this.context().git.snapshot?.operation || !this.context().git.snapshot?.head,run:() => this.chooseCommitParent('cherry-pick',commit,event)},
       {label:'Revert commit…',icon:'rotate-ccw',disabled:this.blocked() || !!this.context().git.snapshot?.operation || !this.context().git.snapshot?.head,run:() => this.chooseCommitParent('revert',commit,event)},
+      ...(commit.sha === this.context().git.snapshot?.head ? [{label:'Undo commit…',icon:'undo-2' as const,disabled:this.uncommitBlocked(),run:() => this.uncommit()}] : []),
       { label: 'Copy commit SHA', icon: 'copy', run: () => void this.copy(commit.sha) },
     ], event, commit.sha.slice(0, 8));
   }
@@ -416,7 +443,19 @@ export class GitActions {
       ...(current && this.callbacks.publishBranch ? [{label:'Set upstream…',icon:'cloud' as const,disabled:this.mutationBlocked(current),run:()=>this.tracking(current)}] : []),
       { label: 'Stash changes…', icon: 'archive', separator: true, disabled: this.mutationBlocked() || !git.snapshot?.head || !git.snapshot?.files.length, run: () => this.stash() },
       { label: 'Pop latest stash…', icon: 'archive-restore', disabled: this.mutationBlocked() || !!git.snapshot?.files.length || !git.stashes.length, run: () => this.pop() },
+      { label: 'Undo last commit…', icon: 'undo-2', disabled: this.uncommitBlocked(), run: () => this.uncommit() },
     ], event);
+  }
+  /** Only the checkout's newest commit, and only while no remote has it: a known-pushed tip is never offered. */
+  private uncommitBlocked() {
+    const data = this.context().git.snapshot, current = this.current(), commit = data?.commits.find(c => c.sha === data.head);
+    return !data?.head || this.mutationBlocked(current) || (!!commit && commit.parents.length !== 1) || (!!current && !!this.upstream(current) && current.ahead === 0);
+  }
+  uncommit() {
+    this.close(); const context = this.context(), data = context.git.snapshot, head = data?.head ?? '';
+    if (!data || this.uncommitBlocked()) return;
+    const commit = data.commits.find(c => c.sha === head);
+    confirm.ask({ title: 'Undo last commit?', subject: `${commit?.subject ?? 'Latest commit'} (${head.slice(0, 8)})`, body: '', detail: `Removes this commit from ${data.branch || 'this checkout'} and keeps its changes staged, next to any other uncommitted changes. No file is changed. Only a commit that is not on a remote can be undone.`, confirmLabel: 'Undo commit', onConfirm: () => { if (context.git === this.context().git) void context.git.uncommit(head, context.ref, context.limit); } });
   }
   stash() {
     this.close(); const context = this.context(), head = context.git.snapshot?.head ?? '';
@@ -435,6 +474,8 @@ export class GitActions {
       { label: 'Drop stash…', icon: 'trash-2', separator: true, danger: true, disabled: this.blocked(), run: () => this.confirmStash('drop', stash) },
     ], event, `${stash.selector} · ${stash.sha.slice(0, 8)}`);
   }
+  /** A menu another view builds (the diff's line actions) shown with the same chrome. */
+  openItems(title: string, items: GitMenuItem[], event: MouseEvent, subtitle?: string) { this.menu(title, items, event, subtitle); }
   openFile(file: GitFile, staged: boolean, paths: string[], event: MouseEvent) {
     this.menu(paths.length > 1 ? `${paths.length} selected files` : file.path, [
       {label:'View changes',icon:'file-text',run:()=>this.callbacks.inspectFile?.(file,staged)},

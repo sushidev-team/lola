@@ -87,6 +87,22 @@ func (s *DaemonService) Answer(session, text string) error {
 	return call(protocol.Request{Cmd: "answer", Session: session, Text: text}, shortTimeout, nil)
 }
 
+// DecidePlan records a human's verdict on a session's submitted plan (the
+// require_plan gate): approve unlocks coding (or waives the gate before a plan
+// arrives); approve=false with a comment sends the agent back to re-plan.
+func (s *DaemonService) DecidePlan(session string, approve bool, comment string) error {
+	args, _ := json.Marshal(protocol.PlanDecideArgs{Approve: approve, Comment: comment})
+	return call(protocol.Request{Cmd: "planDecide", Session: session, Args: args}, shortTimeout, nil)
+}
+
+// RemoveEndedWorktree removes a retained checkout through its ended history.
+// force explicitly consents to discarding dirty or unverifiable files.
+func (s *DaemonService) RemoveEndedWorktree(session, path string, force bool) (protocol.KillData, error) {
+	var d protocol.KillData
+	err := call(protocol.Request{Cmd: "removeEndedWorktree", Session: session, Text: path, Force: force}, longTimeout, &d)
+	return d, err
+}
+
 // Kill tears a session down. A dirty worktree is kept unless force is set;
 // keepWorktree stops the agent only and leaves the worktree for a later revive.
 func (s *DaemonService) Kill(session string, force, keepWorktree bool) (protocol.KillData, error) {
@@ -127,6 +143,16 @@ func (s *DaemonService) CodeRabbit(session string) (protocol.CodeRabbitData, err
 func (s *DaemonService) ResolveConflict(session string) (protocol.ResolveConflictData, error) {
 	var d protocol.ResolveConflictData
 	err := call(protocol.Request{Cmd: "resolveConflict", Session: session}, shortTimeout, &d)
+	return d, err
+}
+
+// AskMerge asks a session's coding agent to merge branch into the session's
+// own branch. It is what the branch graph offers for a checkout the app must
+// not merge itself (a sandboxed session's worktree). The daemon refuses it (as
+// an error) unless the agent is provably resting at its prompt.
+func (s *DaemonService) AskMerge(session, branch string) (protocol.AskMergeData, error) {
+	var d protocol.AskMergeData
+	err := call(protocol.Request{Cmd: "askMerge", Session: session, Ref: branch}, shortTimeout, &d)
 	return d, err
 }
 
@@ -302,6 +328,15 @@ func (s *DaemonService) OpenTicket(a protocol.OpenTicketArgs) (protocol.OpenData
 	args, _ := json.Marshal(a)
 	var d protocol.OpenData
 	err := call(protocol.Request{Cmd: "openTicket", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// AddApps checks further members of its stack out into a running stack
+// session. A sandboxed session's agent is restarted to mount them.
+func (s *DaemonService) AddApps(a protocol.AddAppsArgs) (protocol.AddAppsData, error) {
+	args, _ := json.Marshal(a)
+	var d protocol.AddAppsData
+	err := call(protocol.Request{Cmd: "addApps", Args: args}, longTimeout, &d)
 	return d, err
 }
 
@@ -541,4 +576,19 @@ func (s *DaemonService) AddressPRFeedback(session string, number int) (protocol.
 func (s *DaemonService) MergePR(session string, number int, repo, head, method string, confirmUnready bool) error {
 	args, _ := json.Marshal(protocol.PRReadinessArgs{Number: number, Repo: repo, Head: head, Method: method, ConfirmUnready: confirmUnready})
 	return call(protocol.Request{Cmd: "mergePR", Session: session, Args: args}, longTimeout, nil)
+}
+
+// BulkProjects changes pickup settings (labels, match mode, agent) on several
+// projects in one atomic config save. DryRun previews without writing. Label
+// references are checked against each project's own team; KeepNames stores them
+// as written instead of as ids. The daemon refuses the whole change when any
+// project cannot be resolved.
+func (s *DaemonService) BulkProjects(args protocol.BulkProjectsArgs) (protocol.BulkProjectsData, error) {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return protocol.BulkProjectsData{}, err
+	}
+	var d protocol.BulkProjectsData
+	err = call(protocol.Request{Cmd: "bulkProjects", Args: raw}, longTimeout, &d)
+	return d, err
 }

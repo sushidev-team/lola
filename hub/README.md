@@ -194,6 +194,7 @@ lola-hub admin org list
 lola-hub admin org linear <org> --team ID | --clear   # the org's Linear team for escalations
 lola-hub admin org linear-key <org> [--clear]        # the org's Linear key, read from STDIN, stored sealed
 lola-hub admin org digest <org> [--clear]            # the org's Slack digest webhook, read from STDIN, stored sealed
+lola-hub admin org linear-webhook <org> [--clear]   # the Linear agent app's webhook signing secret, read from STDIN, stored sealed (see "Linear webhook doorbell")
 lola-hub admin create-code [--url HUBURL] [--ttl 168h]  # lets a teammate create ONE team from Lola; printed ONCE
 lola-hub admin policy keys remove --org acme --key-id ID  # the key can no longer publish or change org settings
 lola-hub admin enroll create --org acme [--label "Ana Lopez"] [--ttl 24h]  # a single-use token, printed ONCE; stored hashed
@@ -470,3 +471,21 @@ kubectl $ctx debug -it "$pod" --target=lola-hub --profile=restricted \
 
 **Backups.** The PVC uses a Retain storage class, so deleting the namespace keeps the volume.
 Snapshot it in the DigitalOcean console (Volumes) before risky changes.
+
+## Linear webhook doorbell
+
+A lola daemon's native Linear agent polls Linear every few seconds. To make it instant without a tunnel
+on every laptop, point the Linear agent app's webhook at the hub:
+
+```
+https://<your-hub>/v1/hooks/linear/<org>
+```
+
+and store the app's **signing secret** for the org (`lola-hub admin org linear-webhook <org>`, or the
+org-admin settings call with `linear_webhook_secret`). The hub verifies each delivery's
+`Linear-Signature` HMAC and timestamp against that sealed secret and then only **bumps a per-org counter**.
+Daemons hold a signed long-poll on `GET /v1/doorbell?since=N` and poll Linear at once when the counter moves.
+
+It is a doorbell and nothing else: the payload is never parsed for routing, stored or forwarded, every
+refusal (unknown org, no secret, bad signature, stale timestamp) is the same `401`, and a forged delivery
+can only make a daemon poll early. The secret is write-only like the Linear key.

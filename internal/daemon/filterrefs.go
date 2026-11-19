@@ -54,7 +54,7 @@ func refKey(p config.Project) string {
 // filterRefProblems returns the poll's unmatchable references, newest verdict
 // from cache when the config and TTL allow.
 func (d *Daemon) filterRefProblems(ctx context.Context, api linear.API, name string, p config.Project, now time.Time) []string {
-	if len(p.MatchLabels) == 0 && len(p.StateIDs) == 0 {
+	if len(p.MatchLabels) == 0 && len(p.StateIDs) == 0 && p.OnSentSetLabel == "" {
 		return nil
 	}
 	key := refKey(p)
@@ -135,19 +135,52 @@ func refProblems(p config.Project, labels, states []linear.Ref) []string {
 	// match labels it almost always moved with.
 	if id := p.OnSentSetLabel; id != "" {
 		if r, ok := lm[id]; !usable(r, ok) {
-			problems = append(problems, why("on-sent label", id, r, ok))
+			problems = append(problems, why(onSentRefKind, id, r, ok))
 		}
 	}
 	return slices.Clip(problems)
 }
 
-// refError renders the problems as the poll's LastError, naming the fix.
-func refError(problems []string) string {
-	if len(problems) == 0 {
-		return ""
+// onSentRefKind names the on-sent label in a verdict. It is the one WRITE-BACK
+// reference in the list; writeBackRefProblems and refError split on it.
+const onSentRefKind = "on-sent label"
+
+func isWriteBackRef(problem string) bool { return strings.HasPrefix(problem, onSentRefKind+" ") }
+
+// writeBackRefProblems keeps only the write-back verdicts.
+func writeBackRefProblems(problems []string) []string {
+	var out []string
+	for _, pr := range problems {
+		if isWriteBackRef(pr) {
+			out = append(out, pr)
+		}
 	}
-	return "filter can never match: " + strings.Join(problems, "; ") +
-		" — re-pick it in the project's filter settings"
+	return out
+}
+
+// refError renders the problems as the poll's LastError, naming the fix. A
+// dead on-sent label does not stop the filter matching — it breaks the
+// post-spawn flip — so it is worded as a write-back failure, not as a filter
+// that can never match.
+func refError(problems []string) string {
+	var filter, writeBack []string
+	for _, pr := range problems {
+		if isWriteBackRef(pr) {
+			writeBack = append(writeBack, pr)
+		} else {
+			filter = append(filter, pr)
+		}
+	}
+	var parts []string
+	if len(filter) > 0 {
+		parts = append(parts, "filter can never match: "+strings.Join(filter, "; ")+
+			" — re-pick it in the project's filter settings")
+	}
+	if len(writeBack) > 0 {
+		parts = append(parts, "label write-back will fail: "+strings.Join(writeBack, "; ")+
+			" — re-pick the on-sent label in the project's label settings")
+	}
+	return strings.Join(parts, "; ")
 }
 
 func shortID(id string) string {

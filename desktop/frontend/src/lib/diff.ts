@@ -15,6 +15,8 @@ export type Row = {
   /** 1-based line in the working tree; 0 when the row has none. */
   newLine: number;
   text: string;
+  /** Index of this row's line in the patch text; what a line-level stage sends back. */
+  at?: number;
 };
 
 const HUNK_RE = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
@@ -26,7 +28,7 @@ export function parsePatch(patch: string | undefined): Row[] {
   let oldN = 0;
   let newN = 0;
   const lines = patch.endsWith("\n") ? patch.slice(0, -1).split("\n") : patch.split("\n");
-  for (const raw of lines) {
+  for (const [at, raw] of lines.entries()) {
     if (raw === "") continue;
     switch (raw[0]) {
       case "@": {
@@ -35,20 +37,20 @@ export function parsePatch(patch: string | undefined): Row[] {
           oldN = Number(m[1]);
           newN = Number(m[2]);
         }
-        rows.push({ kind: "hunk", oldLine: 0, newLine: 0, text: raw });
+        rows.push({ kind: "hunk", oldLine: 0, newLine: 0, text: raw, at });
         break;
       }
       case "+":
-        rows.push({ kind: "add", oldLine: 0, newLine: newN++, text: raw.slice(1) });
+        rows.push({ kind: "add", oldLine: 0, newLine: newN++, text: raw.slice(1), at });
         break;
       case "-":
-        rows.push({ kind: "del", oldLine: oldN++, newLine: 0, text: raw.slice(1) });
+        rows.push({ kind: "del", oldLine: oldN++, newLine: 0, text: raw.slice(1), at });
         break;
       case "\\":
-        rows.push({ kind: "meta", oldLine: 0, newLine: 0, text: raw });
+        rows.push({ kind: "meta", oldLine: 0, newLine: 0, text: raw, at });
         break;
       default:
-        rows.push({ kind: "ctx", oldLine: oldN++, newLine: newN++, text: raw.slice(1) });
+        rows.push({ kind: "ctx", oldLine: oldN++, newLine: newN++, text: raw.slice(1), at });
     }
   }
   return rows;
@@ -304,6 +306,7 @@ const C_LIKE: Lang = { line: ["//"], quotes: `"'\`` };
 const HASH: Lang = { line: ["#"], quotes: `"'` };
 const LANGS: Record<string, Lang> = {
   go: { line: ["//"], quotes: `"'\`` },
+  json: { line: [], quotes: '"' },
   ts: C_LIKE,
   tsx: C_LIKE,
   js: C_LIKE,

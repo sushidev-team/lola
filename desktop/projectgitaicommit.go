@@ -11,16 +11,18 @@ import (
 )
 
 type AICommitProgress struct {
-	ID        string `json:"id"`
-	Phase     string `json:"phase"`
-	Completed int    `json:"completed"`
-	Total     int    `json:"total"`
-	Subject   string `json:"subject"`
-	Stopping  bool   `json:"stopping"`
-	Done      bool   `json:"done"`
-	Error     string `json:"error"`
+	Excluded  []projectgit.AICommitExclusion `json:"excluded,omitempty"`
+	ID        string                         `json:"id"`
+	Phase     string                         `json:"phase"`
+	Completed int                            `json:"completed"`
+	Total     int                            `json:"total"`
+	Subject   string                         `json:"subject"`
+	Stopping  bool                           `json:"stopping"`
+	Done      bool                           `json:"done"`
+	Error     string                         `json:"error"`
 }
 type aiCommitJob struct {
+	approved chan struct{}
 	progress AICommitProgress
 	cancel   context.CancelFunc
 }
@@ -70,7 +72,7 @@ func (s *ProjectGitService) StartAICommit(project, worktree, token string, inclu
 		return AICommitProgress{}, err
 	}
 	run, cancelRun := context.WithCancel(context.Background())
-	job := &aiCommitJob{progress: AICommitProgress{ID: rand.Text(), Phase: "planning"}, cancel: cancelRun}
+	job := &aiCommitJob{approved: make(chan struct{}), progress: AICommitProgress{ID: rand.Text(), Phase: "planning"}, cancel: cancelRun}
 	s.aiMu.Lock()
 	s.aiJob = job
 	initial := job.progress
@@ -98,7 +100,7 @@ func (s *ProjectGitService) StartAICommit(project, worktree, token string, inclu
 			}
 		}()
 		planCtx, planCancel := context.WithTimeout(run, 120*time.Second)
-		output, err := s.runGitHelper(planCtx, project, instruction, in.Text, true)
+		output, err := s.runGitHelper(planCtx, project, instruction, in.Text, "plan")
 		planCancel()
 		if run.Err() != nil {
 			runErr = run.Err()
@@ -108,10 +110,26 @@ func (s *ProjectGitService) StartAICommit(project, worktree, token string, inclu
 			runErr = err
 			return
 		}
-		groups, err := projectgit.ParseAICommit(output, in)
+		plan, err := projectgit.ParseAICommit(output, in)
 		if err != nil {
 			runErr = err
 			return
+		}
+		if len(plan.Excluded) > 0 {
+			s.aiMu.Lock()
+			job.progress.Phase = "review"
+			job.progress.Total = len(plan.Groups)
+			job.progress.Excluded = plan.Excluded
+			s.aiMu.Unlock()
+			select {
+			case <-job.approved:
+			case <-run.Done():
+				runErr = run.Err()
+				return
+			case <-time.After(10 * time.Minute):
+				runErr = errors.New("exclusion review expired; start AI commit again")
+				return
+			}
 		}
 		// Re-authorize the directory after the helper returns, before any Git write.
 		check, checkCancel := projectgit.Context()
@@ -127,9 +145,9 @@ func (s *ProjectGitService) StartAICommit(project, worktree, token string, inclu
 		}
 		s.aiMu.Lock()
 		job.progress.Phase = "committing"
-		job.progress.Total = len(groups)
+		job.progress.Total = len(plan.Groups)
 		s.aiMu.Unlock()
-		runErr = client.CommitAIGroups(run, dir, in, groups, func(completed int, subject string) {
+		runErr = client.CommitAIGroups(run, dir, in, plan.Groups, func(completed int, subject string) {
 			s.aiMu.Lock()
 			defer s.aiMu.Unlock()
 			job.progress.Completed = completed
@@ -156,5 +174,17 @@ func (s *ProjectGitService) CancelAICommit(id string) error {
 		s.aiJob.progress.Stopping = true
 		s.aiJob.cancel()
 	}
+	return nil
+}
+
+func (s *ProjectGitService) AcceptAICommitExclusions(id string) error {
+	s.aiMu.Lock()
+	defer s.aiMu.Unlock()
+	job := s.aiJob
+	if job == nil || job.progress.ID != id || job.progress.Phase != "review" || job.progress.Stopping || job.progress.Done {
+		return errors.New("AI commit is no longer awaiting exclusion review")
+	}
+	job.progress.Phase = "committing"
+	close(job.approved)
 	return nil
 }

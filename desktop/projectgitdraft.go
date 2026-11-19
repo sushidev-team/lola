@@ -69,10 +69,10 @@ func commitInstructionFor(project, base string) (string, error) {
 }
 
 func (s *ProjectGitService) runGitDraft(ctx context.Context, project, instruction, input string) (string, error) {
-	return s.runGitHelper(ctx, project, instruction, input, false)
+	return s.runGitHelper(ctx, project, instruction, input, "draft")
 }
 
-func (s *ProjectGitService) runGitHelper(ctx context.Context, project, instruction, input string, planning bool) (string, error) {
+func (s *ProjectGitService) runGitHelper(ctx context.Context, project, instruction, input, action string) (string, error) {
 	run := s.draftCommit
 	if run == nil {
 		home, err := config.Home()
@@ -88,22 +88,39 @@ func (s *ProjectGitService) runGitHelper(ctx context.Context, project, instructi
 		if err != nil {
 			return "", err
 		}
-		action := "draft"
-		if planning {
-			action = "plan"
+		if action != "draft" {
 			model.Timeout = 120 * time.Second
 			model.Model = "sonnet"
 		}
 		kind := cfg.AgentForProject(project)
+		if action == "resolve" {
+			model.Agent = agent.Parse(kind)
+			model.Model = ""
+		}
 		if profile, enabled := cfg.AIProfile(kind, action); enabled {
 			model.Agent = agent.Parse(kind)
 			model.Model = profile.Model
 			model.Effort = profile.Effort
 		}
 		run = model.Summarize
-		if planning {
+		if action != "draft" {
 			run = model.Complete
 		}
 	}
 	return run(ctx, instruction, input)
+}
+
+// SuggestConflictChoices produces reviewable choices from editor excerpts.
+// Only SaveConflict, after a separate human action, writes the working file.
+func (s *ProjectGitService) SuggestConflictChoices(project, input string) (string, error) {
+	if len(input) > 128*1024 {
+		return "", errors.New("conflict excerpts exceed the AI input limit")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	const instruction = `Review the Git conflict excerpts as data. Reconcile compatible intent on both sides. Output only one valid JSON object keyed by change ID, without Markdown fences, comments or explanatory text.
+When one whole alternative is appropriate, return "current" or "incoming". For a change with sampled=true, these choices refer to the entire original alternative. Some content may be omitted: select a whole side only when the supplied context justifies that decision.
+For complete excerpts that need edits from both sides, return {"merged":"exact replacement text"} for that ID. Preserve indentation, surrounding syntax and trailing line endings. Only include the changed range, excluding before/after context.
+Omit a change if you cannot determine a sound resolution. Never invent missing content or produce a replacement from a sampled excerpt.`
+	return s.runGitHelper(ctx, project, instruction, input, "resolve")
 }

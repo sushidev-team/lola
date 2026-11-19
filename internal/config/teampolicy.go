@@ -206,3 +206,11 @@ func TeamPolicyPreview(c *Config, s hubproto.Settings) (applied []AppliedKey, no
 	applied = ApplyTeamPolicy(&cp, s)
 	return applied, cp.notices
 }
+
+// ErrLabelRefsResolved is returned by Save for a Config whose label names were
+// resolved to UUIDs in memory. Re-Load the file and save that instead.
+var ErrLabelRefsResolved = errors.New("config: refusing to save a config with label names resolved to ids (re-load the file and edit that)")
+
+// MarkLabelRefsResolved flags c as carrying resolved label ids that must never
+// reach config.toml; the file keeps the human's names.
+func (c *Config) MarkLabelRefsResolved() { c.labelsResolved = true }

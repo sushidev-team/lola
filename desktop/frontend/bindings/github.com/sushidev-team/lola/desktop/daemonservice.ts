@@ -38,6 +38,14 @@ import * as protocol$0 from "../internal/protocol/models.js";
 import * as $models from "./models.js";
 
 /**
+ * AddApps checks further members of its stack out into a running stack
+ * session. A sandboxed session's agent is restarted to mount them.
+ */
+export function AddApps(a: protocol$0.AddAppsArgs): $CancellablePromise<protocol$0.AddAppsData> {
+    return $Call.ByID(4254446312, a);
+}
+
+/**
  * AddressPRFeedback asks the coding agent to validate, fix, and resolve feedback.
  */
 export function AddressPRFeedback(session: string, $number: number): $CancellablePromise<protocol$0.AgentSayData> {
@@ -57,6 +65,16 @@ export function Alive(): $CancellablePromise<boolean> {
  */
 export function Answer(session: string, text: string): $CancellablePromise<void> {
     return $Call.ByID(3662326747, session, text);
+}
+
+/**
+ * AskMerge asks a session's coding agent to merge branch into the session's
+ * own branch. It is what the branch graph offers for a checkout the app must
+ * not merge itself (a sandboxed session's worktree). The daemon refuses it (as
+ * an error) unless the agent is provably resting at its prompt.
+ */
+export function AskMerge(session: string, branch: string): $CancellablePromise<protocol$0.AskMergeData> {
+    return $Call.ByID(3286888270, session, branch);
 }
 
 /**
@@ -91,6 +109,17 @@ export function BestOfPick(session: string): $CancellablePromise<protocol$0.Best
  */
 export function Broadcast(args: protocol$0.BroadcastArgs): $CancellablePromise<protocol$0.BroadcastData> {
     return $Call.ByID(2789386200, args);
+}
+
+/**
+ * BulkProjects changes pickup settings (labels, match mode, agent) on several
+ * projects in one atomic config save. DryRun previews without writing. Label
+ * references are checked against each project's own team; KeepNames stores them
+ * as written instead of as ids. The daemon refuses the whole change when any
+ * project cannot be resolved.
+ */
+export function BulkProjects(args: protocol$0.BulkProjectsArgs): $CancellablePromise<protocol$0.BulkProjectsData> {
+    return $Call.ByID(1449292091, args);
 }
 
 /**
@@ -130,6 +159,15 @@ export function CloseExitedTemporary(id: string): $CancellablePromise<protocol$0
  */
 export function CodeRabbit(session: string): $CancellablePromise<protocol$0.CodeRabbitData> {
     return $Call.ByID(2376086832, session);
+}
+
+/**
+ * DecidePlan records a human's verdict on a session's submitted plan (the
+ * require_plan gate): approve unlocks coding (or waives the gate before a plan
+ * arrives); approve=false with a comment sends the agent back to re-plan.
+ */
+export function DecidePlan(session: string, approve: boolean, comment: string): $CancellablePromise<void> {
+    return $Call.ByID(75185858, session, approve, comment);
 }
 
 /**
@@ -437,6 +475,14 @@ export function Projects(): $CancellablePromise<protocol$0.ProjectsData> {
  */
 export function Reload(): $CancellablePromise<void> {
     return $Call.ByID(2597423456);
+}
+
+/**
+ * RemoveEndedWorktree removes a retained checkout through its ended history.
+ * force explicitly consents to discarding dirty or unverifiable files.
+ */
+export function RemoveEndedWorktree(session: string, path: string, force: boolean): $CancellablePromise<protocol$0.KillData> {
+    return $Call.ByID(2648805270, session, path, force);
 }
 
 /**

@@ -134,6 +134,9 @@ type HubTeamSettingsArgs struct {
 	LinearKey     *string `json:"linearKey,omitempty"`
 	LinearTeam    *string `json:"linearTeam,omitempty"`
 	DigestWebhook *string `json:"digestWebhook,omitempty"`
+	// LinearWebhookSecret is the Linear agent app's webhook signing secret, for the hub's
+	// doorbell endpoint (a secret like the others).
+	LinearWebhookSecret *string `json:"linearWebhookSecret,omitempty"`
 	// Teams also lists the Linear workspace's teams (a read only).
 	Teams bool `json:"teams,omitempty"`
 }
@@ -147,10 +150,11 @@ type HubTeamSettingsData struct {
 	LinearKeySet     bool   `json:"linearKeySet"`
 	LinearTeam       string `json:"linearTeam,omitempty"`
 	// LinearError / DigestError are the hub's error classes ("" = none).
-	LinearError string          `json:"linearError,omitempty"`
-	DigestSet   bool            `json:"digestSet"`
-	DigestError string          `json:"digestError,omitempty"`
-	Teams       []HubLinearTeam `json:"teams"`
+	LinearError      string          `json:"linearError,omitempty"`
+	DigestSet        bool            `json:"digestSet"`
+	LinearWebhookSet bool            `json:"linearWebhookSet"`
+	DigestError      string          `json:"digestError,omitempty"`
+	Teams            []HubLinearTeam `json:"teams"`
 }
 
 // HubLinearTeam is one team of the Linear workspace. Name may be "".

@@ -24,7 +24,6 @@ const ROUTES: Route[] = [
   { name: "tab", tab: "inbox", filter: "needs" },
   ...SEGS.map((seg): Route => ({ name: "session", id: "s1", seg, pane: seg === "terminal" ? "p1" : undefined })),
   { name: "tab", tab: "projects", project: "nori", pick: "tickets" },
-  { name: "tab", tab: "activity" },
   { name: "tab", tab: "settings" },
   { name: "dev", page: "bridge-guard" },
 ];
@@ -82,8 +81,8 @@ describe("dev links", () => {
     const on = vi.fn();
     const off = installDevLink(on, () => false);
     await vi.waitFor(() => expect(listeners.has("devLink")).toBe(true));
-    listeners.get("devLink")!({ source: "dev-url", route: "/activity" });
-    expect(on).toHaveBeenCalledWith(expect.objectContaining({ route: { name: "tab", tab: "activity" } }));
+    listeners.get("devLink")!({ source: "dev-url", route: "/projects" });
+    expect(on).toHaveBeenCalledWith(expect.objectContaining({ route: { name: "tab", tab: "projects" } }));
     off();
     listeners.get("devLink")?.({ source: "dev-url", route: "/settings" });
     expect(on).toHaveBeenCalledOnce();

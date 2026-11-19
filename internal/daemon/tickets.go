@@ -14,6 +14,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/timefmt"
 )
@@ -34,8 +35,12 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 	d.mu.Lock()
 	p := d.cfg.ProjectByName(project)
 	var team string
+	var members []config.Project
 	if p != nil {
-		team = p.TeamID
+		team = d.cfg.TicketTeam(p)
+		if p.IsStack() {
+			members = d.cfg.StackMembers(p.Name)
+		}
 	}
 	d.mu.Unlock()
 	if p == nil {
@@ -64,9 +69,17 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 	}
 
 	data := protocol.TicketsData{Team: team, TeamName: snap.teamName, TeamKey: snap.teamKey, Issues: make([]protocol.TicketRow, 0, len(snap.issues))}
+	for _, m := range members {
+		data.Members = append(data.Members, protocol.StackMember{Name: m.Name, Label: m.DisplayName(), Always: len(m.Labels) == 0})
+	}
 	now := time.Now()
 	for _, is := range snap.issues {
+		var apps []string
+		for _, m := range config.SelectApps(members, is.LabelIDs, is.LabelNames, is.LabelGroups) {
+			apps = append(apps, m.Name)
+		}
 		data.Issues = append(data.Issues, protocol.TicketRow{
+			Apps:        apps,
 			Identifier:  is.Identifier,
 			UUID:        is.ID,
 			Title:       is.Title,
@@ -292,6 +305,18 @@ func ticketPriorityRank(p float64) int {
 // A non-polling project skips seen/labels/write-back — the in-flight claim plus
 // the live session are its only guard (and a re-pickup after teardown is fine).
 func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs) (protocol.OpenData, error) {
+	return d.openTicket(ctx, a, nil)
+}
+
+// errCapped is what an admit check returns when the concurrency cap is full.
+var errCapped = errors.New("at the concurrency cap")
+
+// openTicket is handleOpenTicket with an optional admit check, run INSIDE the
+// dispatch critical section — after the project's tick mutex and the in-flight
+// claim, immediately before the spawn. The Linear agent loop passes a budget
+// check there: checked any earlier, a poll tick spawning under the same mutex
+// could fill the last slot between the check and this spawn.
+func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admit func() (func(), error)) (protocol.OpenData, error) {
 	project := strings.TrimSpace(a.Project)
 	identifier := strings.TrimSpace(a.Identifier)
 	uuid := strings.TrimSpace(a.UUID)
@@ -347,6 +372,16 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 		return protocol.OpenData{}, errors.New(sandboxLoginMissing(kind))
 	}
 
+	var extraApps []string
+	for _, n := range a.Apps {
+		if n = strings.TrimSpace(n); n != "" {
+			extraApps = append(extraApps, n)
+		}
+	}
+	if len(extraApps) > 0 && !proj.IsStack() {
+		return protocol.OpenData{}, fmt.Errorf("openTicket: %s is not a stack — it has no further repositories to check out", project)
+	}
+
 	name := proj.Name
 	if reason := d.goalHold(uuid, ""); reason != "" {
 		return protocol.OpenData{}, errors.New(reason)
@@ -397,6 +432,21 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 		return protocol.OpenData{}, err
 	}
 
+	// admit RESERVES the slot (the shared slot ledger, so a poll or another
+	// project's admission cannot take the same last global slot); the
+	// reservation is released once the spawn returned and its session is in the
+	// store, or on any earlier exit.
+	release := func() {}
+	if admit != nil {
+		r, err := admit()
+		if err != nil {
+			d.inflight.Remove(uuid)
+			return protocol.OpenData{}, err
+		}
+		release = r
+	}
+	defer release()
+
 	// (2) Persist seen BEFORE the spawn for a polling project (crash guard),
 	// matching dispatch — except dedup_mode=state, which dedups via the state
 	// move, not a seen entry.
@@ -414,7 +464,7 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 
 	// (3) Spawn (bounded + shutdown behavior identical to dispatch).
 	cctx, cancel := context.WithTimeout(sctx, nativeSpawnTimeout)
-	sess, err := nat.Spawn(cctx, proj, is, strings.TrimSpace(a.AgentKind))
+	sess, err := nat.SpawnWith(cctx, proj, is, runtime.SpawnOpts{Agent: strings.TrimSpace(a.AgentKind), Apps: extraApps})
 	cancel()
 	if err != nil {
 		d.inflight.Remove(uuid)
@@ -439,6 +489,7 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	if serr := d.sessions.Save(); serr != nil {
 		d.logf(name, "openTicket: persist sessions after spawn of %s: %v", identifier, serr)
 	}
+	release()
 
 	// (4) Label flip + P4 write-back for a label-mode polling project.
 	if polls && proj.DedupMode == "label" {

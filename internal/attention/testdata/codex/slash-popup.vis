@@ -1,0 +1,36 @@
+
+  [38;2;99;168;248m>_ [1m[39mOpenAI Codex[0;2m (v0.167.2)[0m
+     [2m/w/wt[0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;7m› /model         [0;7mchoose what model and reasoning effort to use[1m
+[0m  /fast          [2m2x speed, increased usage[0m
+  /presets       [2mrun or save reusable prompts and slash commands[0m
+  /daybreak      [2mLearn about broader access for cybersecurity work[0m
+  /ide           [2minclude current selection, open files, and other context from your IDE[0m
+  /permissions   [2mchoose what Codex is allowed to do[0m
+  /keymap        [2mremap TUI shortcuts[0m
+  /vim           [2mtoggle Vim mode for the composer[0m
+
+[1m›[0m /
+
+  [38;2;246;226;183mGPT-6-Astra high[39m · [38;2;171;223;167m/w/wt…
+[39m

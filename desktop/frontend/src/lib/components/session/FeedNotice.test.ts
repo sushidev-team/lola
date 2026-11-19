@@ -29,11 +29,14 @@ describe("FeedNotice", () => {
     expect(terms.activeTab(SID)).toBe(AGENT);
   });
 
-  it("unsupported reads the same, and a healthy log says nothing", () => {
+  it("an agent with no reader is not blamed on its version, and a healthy log says nothing", () => {
     const { unmount, container } = render(FeedNotice, { sessionId: SID, health: "ok" });
     expect(container.querySelector("[data-feed-notice]")).toBeNull();
     unmount();
+    store.sessions = [{ id: SID, agent: "opencode", agentState: "idle", tmuxName: SID }] as never;
     render(FeedNotice, { sessionId: SID, health: "unsupported" });
+    expect(screen.getByText(/lola can't read OpenCode's log yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/version's log/)).toBeNull();
     expect(screen.getByRole("button", { name: /Terminal/ })).toBeInTheDocument();
   });
 

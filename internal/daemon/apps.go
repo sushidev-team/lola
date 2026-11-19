@@ -206,29 +206,29 @@ func withLanes(snap []session.Session) []session.Session {
 // devCmd is one dev tab a session runs: the command line, the directory it
 // runs in, and how the clients label it.
 type devCmd struct {
-	cmd, dir, label string
+	cmd, dir, label  string
+	project          *config.Project
+	leaseKey, branch string
 }
 
 // devPlan is what a session's dev toggle starts: the project's dev_commands
 // in its worktree — or, for a stack session, EACH APP's own dev_commands in
 // that app's worktree, one tab each, labelled "<app>: <command>". parallel
-// reports MULTI-ACTIVE (every project involved leases ports), and leases are
-// the port-lease keys that must exist for it: the session's, or each app
-// lane's.
-func devPlan(cfg *config.Config, s session.Session, dir string) (plan []devCmd, parallel bool, leases []string) {
+// reports MULTI-ACTIVE (every project involved leases ports).
+func devPlan(cfg *config.Config, s session.Session, dir string) (plan []devCmd, parallel bool) {
 	if cfg == nil {
-		return nil, false, nil
+		return nil, false
 	}
 	if !s.Stack {
 		p := cfg.ProjectByName(s.Project)
 		if p == nil {
-			return nil, false, nil
+			return nil, false
 		}
 		for _, c := range p.DevCommands {
-			plan = append(plan, devCmd{cmd: c, dir: dir, label: c})
+			plan = append(plan, devCmd{cmd: c, dir: dir, label: c, project: p, leaseKey: s.ID, branch: s.Branch})
 		}
 		_, _, _, parallel = p.PortLease()
-		return plan, parallel, []string{s.ID}
+		return plan, parallel
 	}
 	parallel = true
 	for _, a := range s.Apps {
@@ -237,14 +237,13 @@ func devPlan(cfg *config.Config, s session.Session, dir string) (plan []devCmd, 
 			continue
 		}
 		for _, c := range m.DevCommands {
-			plan = append(plan, devCmd{cmd: c, dir: a.Worktree, label: a.Name + ": " + c})
+			plan = append(plan, devCmd{cmd: c, dir: a.Worktree, label: a.Name + ": " + c, project: m, leaseKey: session.LaneID(s.ID, a.Name), branch: a.Branch})
 		}
 		if _, _, _, ok := m.PortLease(); !ok {
 			parallel = false
 		}
-		leases = append(leases, session.LaneID(s.ID, a.Name))
 	}
-	return plan, parallel && len(plan) > 0, leases
+	return plan, parallel && len(plan) > 0
 }
 
 // devLabels are the dev tab labels of a session, in tab order (what the
@@ -266,6 +265,6 @@ func devPlanOf(cfg *config.Config, s session.Session, home string) []devCmd {
 	if cfg == nil {
 		return nil
 	}
-	plan, _, _ := devPlan(cfg, s, devWorktreeDir(s, s.Project, home))
+	plan, _ := devPlan(cfg, s, devWorktreeDir(s, s.Project, home))
 	return plan
 }

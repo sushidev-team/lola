@@ -1,6 +1,6 @@
 <script lang="ts">
   import { DaemonService } from '@bindings/desktop';
-  import { tick } from 'svelte';
+  import { tick, type Snippet } from 'svelte';
   import type { ReviewPackage, ReviewCheck, ReviewVerifyArgs } from '@bindings/internal/protocol';
   import Button from '../Button.svelte';
   import Chevron from '../Chevron.svelte';
@@ -9,7 +9,7 @@
 
   // `labels` is the phone's one-line verdict ("Verified" / "Not verified"); without it, or off the phone, the full heading shows.
   // `canRecover` (default true) draws "Reconcile interrupted check"; the phone passes its tier answer.
-  let { pkg, canRun = false, canRecover = true, freshness = 'unknown', labels }: { pkg: ReviewPackage; canRun?: boolean; canRecover?: boolean; freshness?: string; labels?: { verified: string; notVerified: string } } = $props();
+  let { pkg, canRun = false, canRecover = true, freshness = 'unknown', labels, quiet = false, extra }: { extra?: Snippet; pkg: ReviewPackage; canRun?: boolean; canRecover?: boolean; freshness?: string; quiet?: boolean; labels?: { verified: string; notVerified: string } } = $props();
   const phone = touchSurface();
   let checks = $state<ReviewCheck[]>([]);
   const verdict = $derived(freshness === 'current' && checks.length > 0 && checks.every(c => c.state === 'pass'));
@@ -109,15 +109,13 @@
   }
 </script>
 
-<section class="verification" aria-label="Independent verification" bind:this={root}>
+<section class="verification" class:slim={!phone && !checks.length && !editing && !error && !uncertain} aria-label="Independent verification" bind:this={root}>
   {#if !bare}<header class="verification-heading">
     {#if phone && labels}<div><h3 tabindex="-1" aria-label="Independent verification"><Icon name="shield-check" size={15}/>{verdict ? labels.verified : labels.notVerified}</h3></div>
-    {:else}<div><h3 tabindex="-1"><Icon name="shield-check" size={15}/>Independent verification</h3>
-      <p class="revision"><code>{pkg.head.slice(0,12)}</code><span class:outdated={freshness === 'stale'}>{freshness === 'current' ? 'Current revision' : freshness === 'stale' ? 'Older revision' : 'Revision not confirmed'}</span></p>
-    </div>{/if}
+    {:else}<div class="title-row"><h3 tabindex="-1" aria-label="Independent verification"><Icon name="shield-check" size={14}/>Tests</h3>{#if freshness === 'stale' && !quiet}<span class="outdated stale-chip">Older revision</span>{/if}</div>{/if}
     {#if !phone}<Button size="sm" icon aria-label="Refresh checks" title="Refresh checks" loading={loading} disabled={busy} onclick={refresh}><Icon name="refresh-cw" size={14}/></Button>{/if}
   </header>{/if}
-  {#if freshness === 'stale'}<p class="context-note outdated">Checks apply to this version, not the current PR.</p>{/if}
+  {#if freshness === 'stale' && !quiet}<p class="context-note outdated">Checks apply to this version, not the current PR.</p>{/if}
   {#if error}<p role="alert" class="message text-warn">{error}</p>{/if}
   {#if uncertain}<p role="status" class="message text-warn">The request may have been accepted. Refresh checks before sending again.</p>{/if}
   {#if checks.length}<div class="check-results">
@@ -143,7 +141,7 @@
           <div><dt>Limits</dt><dd>{reviewed.spec.timeout_seconds} seconds · {reviewed.spec.memory_mib} MiB</dd></div>
           <div><dt>Access</dt><dd>No network or host credentials</dd></div>
         </dl>
-        <p class="explanation">Runs the committed revision in an isolated container. The image must contain its dependencies. Results do not approve or merge the PR.</p>
+        <p class="explanation">Runs offline in an isolated container. Never approves or merges.</p>
         <div class="verification-actions"><Button size="sm" disabled={busy || uncertain} onclick={edit}>Edit check</Button><Button size="sm" variant="primary" loading={busy} disabled={uncertain || active} onclick={run}>Authorize and run</Button></div>
       </div>
     {:else}
@@ -151,7 +149,7 @@
         <div class="check-inputs">
           <label>Command<textarea required maxlength="16000" rows="2" bind:value={command} placeholder="npm test"></textarea></label>
           <label>Container image<input required bind:value={image} placeholder="sha256:…" aria-describedby="check-image-help"/></label>
-          <p id="check-image-help" class="explanation">A local image with your test dependencies. Runs offline.</p>
+          <p id="check-image-help" class="explanation">A local image with your test dependencies.</p>
         </div>
         <details class="check-options">
           <summary><Chevron class="disclosure-chevron"/><span>Options</span><span class="options-value">{seconds}s · {memory} MiB</span></summary>
@@ -166,8 +164,9 @@
   {:else if !loading && !error && phone && !checks.length}
     <div class="phone-setup" data-phone-setup><span class="text-subtext" style="font-size:15px;line-height:20px">No checks</span>{#if canRun}<button type="button" class="text-accent" style="font-size:15px;font-weight:400" data-setup-check disabled={active} onclick={edit}>Add check</button>{/if}</div>
   {:else if !loading && !error}
-    <div class="setup-row"><span class="explanation">{checks.length ? 'Run another check on this revision.' : 'No checks yet.'}</span>{#if canRun}<Button size="sm" variant="secondary" data-setup-check disabled={active} onclick={edit}>Set up check</Button>{/if}</div>
+    <div class="setup-row"><span class="explanation">{checks.length ? '' : 'No checks yet.'}</span>{#if canRun}<Button size="xs" variant="secondary" data-setup-check disabled={active} onclick={edit}>Set up check</Button>{/if}</div>
   {/if}
+  {#if extra}<div class="extra">{@render extra()}</div>{/if}
 </section>
 
 <style>
@@ -175,14 +174,18 @@
   :global([data-phone-desk]) .verification-heading { align-items:center; }
   :global([data-phone-desk]) .verification-heading h3 { font-size:17px; line-height:22px; font-weight:600; }
   :global([data-phone-desk]) .verification-heading :global(button) { min-width:44px; min-height:44px; }
-  .verification { min-width:0; margin-top:20px; padding-top:16px; border-top:1px solid var(--color-edge); }
+  .verification { min-width:0; margin-top:4px; padding:12px 14px; border:1px solid var(--color-edge); border-radius:12px; }
+  .verification.slim { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; padding:6px 10px; border-style:dashed; }
+  .slim .verification-heading { align-items:center; gap:8px; }
+  .slim .context-note,.slim .setup-row .explanation { display:none; }
+  .extra { flex:1 0 100%; margin-top:10px; padding-top:8px; border-top:1px solid var(--color-edge); }
+  .slim .setup-row { margin:0 0 0 auto; gap:8px; }
+  .title-row { display:flex; align-items:center; gap:8px; }
+  .stale-chip { font-size:11px; }
   .verification-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
   h3,h4 { color:var(--color-ink); font-size:13px; font-weight:600; line-height:20px; }
   h3 { display:flex; align-items:center; gap:8px; }
   h3 :global(svg) { color:var(--color-ink-2); }
-  .revision { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:4px; font-size:11px; line-height:16px; color:var(--color-ink-2); }
-  .revision code { color:var(--color-ink); }
-  .revision span { border-left:1px solid var(--color-edge); padding-left:8px; }
   .context-note { margin-top:8px; font-size:12px; line-height:18px; }
   .outdated,.explanation.text-warn { color:var(--color-warn); }
   .message { margin-top:12px; font-size:12px; line-height:18px; overflow-wrap:anywhere; }

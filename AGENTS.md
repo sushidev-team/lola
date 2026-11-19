@@ -52,7 +52,7 @@ excluded from lola's CI, releases and sandbox image. A wire change goes in
 stays backward compatible: installed daemons and the deployed hub run different
 versions.
 
-Go per `go.mod` (1.25). Deps: cobra, bubbletea + lipgloss, BurntSushi/toml;
+Go per `go.mod` (1.26). Deps: cobra, bubbletea + lipgloss, BurntSushi/toml;
 everything else is stdlib + exec seams.
 
 ### `make build` never reaches the running daemon
@@ -101,7 +101,7 @@ daemon, runtime and UIs can share them).
   is cobra wiring only.
 
 **Agents, sessions, git**
-- `agent` — kind enum, `Caps` (only claude has feed/send/stop/cards/paste),
+- `agent` — kind enum, `Caps` (claude has feed/send/stop/cards/paste; codex has all but cards and is paste-only; opencode none),
   launch argv, READ-ONLY review argv (`ReviewArgs`), callback configs.
   `config.AgentForProject` resolves project → defaults → claude.
 - `attention` — pane → activity/question classifier (agent-aware).
@@ -241,6 +241,12 @@ one `tmux ls`, gh facts → delivery axis, pane → agent axis),
   `flushReviewHandoffs` delivers ONE item per pass; the Stop hook flushes async.
 - `resolveConflict` uses the same gate + proof but REFUSES instead of deferring,
   and stamps `LastReactedStatus`.
+- `askMerge` (desktop only, tier `never`) is the branch graph's "Ask agent to
+  merge": the app never merges into a sandboxed session's checkout, so it asks
+  that session's agent through `typeAtRestingPrompt` with the human lock, and
+  REFUSES like `resolveConflict`. The branch name is the one outside value in
+  the instruction: `validMergeRef` keeps it to a plain branch-name alphabet. No
+  fetch is named (the human picked the host's ref) and stacks are refused.
 - Diff-viewer feedback (`cmd=feedback`) and `cmd=broadcast` queue
   (`PendingFeedback`/`PendingBroadcast`) and DEFER, never refuse; a failed send re-queues.
 - Human presses use `lockHumanPrompt`, queued/automated sends `lockAutomationPrompt`;
@@ -250,7 +256,10 @@ one `tmux ls`, gh facts → delivery axis, pane → agent axis),
   composer. Dialogs, drafts and unknown screens stay blocked; slash commands and
   Stop & send keep the resting-prompt gate. Every path
   records a `typedNote`. Claude messages >800 bytes go by `load-buffer` +
-  `paste-buffer -p` (`send-keys -l` corrupts >1KB); other agents stay typed.
+  `paste-buffer -p` (`send-keys -l` corrupts >1KB). Codex takes EVERY send as a paste
+  (`PasteOnly`): it reads fast keystrokes as a paste burst and the Enter after them as a
+  line break. opencode stays typed. `sendFor` also applies `agent.ComposerText` (a
+  trailing space closes codex's `@`/`$` picker, which would otherwise eat the Enter).
   Always `send-keys -l --` with a trailing `;` escaped.
 - `agentChoose` sends one key, no Enter, after re-reading the pane against the
   hash the human saw. `/config`-type screens classify as waiting, so never rely
@@ -310,6 +319,12 @@ one `tmux ls`, gh facts → delivery axis, pane → agent axis),
 ### Pane classification (`attention.Classify`)
 It mirrors claude-code's rendering, so a rendering change silently disables
 every send path. Re-verify against a live pane.
+- Codex (`attention/codex.go`, panes in `testdata/codex`, codex-cli 0.167.2): no box.
+  The composer is the LAST row starting with `›`, above a ≤2-line footer; the same caret
+  marks past messages and focused list rows (`› 1. …`), and shell mode swaps it for `!`.
+  Empty = cursor shown at column 2 on that row holding only the dim placeholder. Every
+  codex screen that is not the composer hides the cursor. Slash commands are refused
+  for codex (its picker runs the focused row on Enter); it has no cards.
 - Caret padding is U+00A0; `stripANSI` folds Unicode `Zs` to space.
 - The composer is drawn mid-turn too. Only the live status line (gerund +
   ellipsis + running timer) means working: `hasLiveWorkingCue` runs before the
@@ -425,12 +440,20 @@ every send path. Re-verify against a live pane.
   re-mounted read-only; mount sources come from things the agent cannot write.
   Every host git exec on a sandboxed worktree goes through `gitguard.Apply`;
   unpinned records are `gitguard.Deny`'d. Hooks dial `LOLA_HOOK_ADDR`; the bridge
-  admits only `hookEvent`/`agentReport` with an HMAC token — never widen it.
+  admits only `hookEvent`/`agentReport` plus the plan gate's in-pane `planGate`/`planSubmit`, with an HMAC token — never widen it beyond commands acting only on the token's own session.
   `docker rm -f` on kill and before every launch. No host commands in a sandboxed
   worktree after the agent starts. Project is passed BY NAME, not inferred from the id.
   `TestSandboxContainsTheAgent` (`LOLA_SANDBOX_IT=1`).
 - **Stack sessions** (`kind = "stack"`): one agent in a folder of per-app worktrees.
-  Apps chosen once at spawn (`config.SelectApps`). PR state lives on `session.App`;
+  Apps are chosen at spawn (`config.SelectApps`, plus members a human ticked in
+  the ticket picker: `OpenTicketArgs.Apps`) and only GROW afterwards, by a
+  human's `cmd=addApps` (desktop/CLI only, tier `never`; `runtime.AddApps`
+  prepares each app as the spawn does, all or nothing). For a SANDBOXED session
+  the agent and container are stopped BEFORE the worktree exists and relaunched
+  after (mounts are fixed at launch; no host command runs in a tree a live agent
+  can write), so it is refused mid-turn. The agent is told through the broadcast
+  queue. An agent's "needs <name>" report never adds anything.
+  PR state lives on `session.App`;
   act on it through LANE views (`<id>~<app>`), never write lane fields on the
   session. The session's own PR fields are a derived aggregate (`Reaggregate`).
   Prefix agent messages with `laneHeader`. No best-of, fork or checkout-only
@@ -456,6 +479,30 @@ every send path. Re-verify against a live pane.
   push path's diff tick, itself display-only. A report is not activity evidence.
 - Observer and reconcile run on `context.WithoutCancel`, panic-guarded, with a
   deadline on every exec. Spawn is bounded by `nativeSpawnTimeout`.
+- **Native Linear agent** (`linearagent.go`, `linearwebhook.go`, `linear/agent.go`+`oauth.go`):
+  a TRIGGER plus a MIRROR; Linear's data is never control. `[linear_agent]` polls
+  the Agent Session API as the OAuth app actor (a separate principal from the API
+  key; `linear.AgentAPI`). A new `pending` session dispatches through
+  `handleOpenTicket` (claim → seen → spawn → write-back; an issue already running
+  BINDS via `Session.AgentSessionID`); the ledger (`state/linear-agent.json`)
+  records a session BEFORE its spawn. Routing is by the issue's TEAM (matching
+  `project_id` wins); no match is an error activity, never a guess. The mirror
+  emits one activity per CHANGE (watermark `Session.AgentMirror`), reads
+  `Session.Board` (display sink) and feeds nothing back. A human reply is the plan
+  verdict while a plan is pending, else QUEUED (`PendingNotices`) and typed only via
+  `flushAgentNotices` (hand-off gate + pane proof, one per prompt). `stop` is
+  acknowledged, never acted on. The webhook is a DOORBELL: verified HMAC+timestamp
+  only wakes the poll, payload never parsed. The HUB can ring the same doorbell for laptops with no public address (`hubdoorbell.go`: a signed long-poll on `/v1/doorbell` over a per-org counter the hub bumps after verifying Linear's HMAC against a sealed per-org secret; the counter is only compared, never interpreted; runs only with `[hub]` and `[linear_agent]` both on, fails quiet, the 15s poll is the floor). Secrets resolve by Keychain service
+  name, tokens refresh on expiry/401; OAuth errors name only status + a whitelisted word.
+- **Plan gate** (`plangate.go`; CLI `lola plan-gate submit|approve|reject`, not
+  `lola plan`): CONTROL state `Session.PlanGate` (planning → submitted → approved),
+  set at spawn from the inheritable `[[project]].require_plan` and moved ONLY by
+  `plangate.go`. A synchronous `PreToolUse` hook on `Edit|Write|MultiEdit|NotebookEdit`
+  → `lola hook pre_tool_use` → `cmd=planGate` denies while `Blocks()`; wired into
+  EVERY claude session, fails OPEN on an unreachable daemon. Sandbox reaches it via
+  the hook bridge; stack sessions are gated too. Bash writes and codex/opencode are
+  briefing-only. Verdicts arrive as queued notices, never typed mid-turn.
+  `planSubmit`/`planGate` are on remote's denied floor; `planDecide` is audited.
 - Secrets (Linear key, Slack webhook) never in config, argv, logs or errors.
   The Linear key is write-only from UIs (keychain), never on `SettingsDTO`, never read back.
 - Usage: UIs show tokens, not dollars (`~$` in tooltips only). Raw tokens displayed,

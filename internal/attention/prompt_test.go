@@ -135,11 +135,15 @@ func TestComposerEmptyAtFailsClosed(t *testing.T) {
 	}
 }
 
-// The cursor rule was measured on Claude Code only, so other agents keep the old proof,
-// and a cursor that would have passed changes nothing for them.
+// An agent whose cursor was never measured keeps the old proof, and a cursor that would have
+// passed changes nothing for it. Codex has a measured proof of its own (codex_test.go), and
+// the boxed frame an older codex drew is not it, so that frame proves nothing there.
 func TestComposerEmptyAtOtherAgentsKeepEmptyComposer(t *testing.T) {
 	frame := "╭──────────╮\n│ >        │\n╰──────────╯\n? for shortcuts\n"
-	for _, k := range []agent.Kind{agent.Codex, agent.OpenCode} {
+	if ComposerEmptyAt(frame, Cursor{}, agent.Codex) || ComposerEmptyAt(frame, Cursor{X: 2, Y: 1, Visible: true}, agent.Codex) {
+		t.Error("codex: a frame its measured composer never draws passed")
+	}
+	for _, k := range []agent.Kind{agent.OpenCode} {
 		if !ComposerEmptyAt(frame, Cursor{}, k) {
 			t.Errorf("%s: an empty frame with no cursor should still pass", k)
 		}

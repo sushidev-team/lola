@@ -2,6 +2,7 @@ package projectgit
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"regexp"
@@ -161,4 +162,25 @@ func (c Client) dropStashEntry(ctx context.Context, dir string, entry Stash) err
 	}
 	_, err = c.git(ctx, dir, "", "stash", "drop", entry.Selector)
 	return err
+}
+
+func (c Client) saveForRestore(ctx context.Context, dir, head, operation string) (Stash, error) {
+	var nonce [12]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return Stash{}, err
+	}
+	message := fmt.Sprintf("lola: before %s (%x)", operation, nonce)
+	if err := c.StashPush(ctx, dir, message, head); err != nil {
+		return Stash{}, fmt.Errorf("could not prepare local changes; inspect Stashes before retrying: %w", err)
+	}
+	entries, err := c.Stashes(ctx, dir)
+	if err != nil {
+		return Stash{}, fmt.Errorf("local changes were saved; inspect Stashes before retrying: %w", err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Subject, ": "+message) {
+			return entry, nil
+		}
+	}
+	return Stash{}, errors.New("cannot identify the saved local changes; inspect Stashes before retrying")
 }

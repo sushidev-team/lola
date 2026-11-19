@@ -513,3 +513,62 @@ func TestControlLoopNeverImportsAgentfeed(t *testing.T) {
 		}
 	}
 }
+
+// codexRollout writes one rollout of a thread working in cwd under a CODEX_HOME.
+func codexRollout(t *testing.T, home, cwd, said string) {
+	t.Helper()
+	day := filepath.Join(home, "sessions", "2026", "11", "17")
+	if err := os.MkdirAll(day, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]any{"id": "t1", "cwd": cwd, "originator": "codex-tui", "source": "cli", "thread_source": "user"}})
+	line := `{"timestamp":"2026-11-17T10:00:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"m1","content":[{"type":"Text","text":"` + said + `"}]}}}`
+	if err := os.WriteFile(filepath.Join(day, "rollout-2026-11-17T10-00-00-t1.jsonl"), []byte(string(meta)+"\n"+line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A codex session's log is read from the CODEX_HOME that session ran with. A sandboxed one
+// has its own under lola's home, and reading the user's instead showed an empty conversation.
+func TestCodexFeedReadsTheSessionsOwnHome(t *testing.T) {
+	user := t.TempDir()
+	t.Setenv("CODEX_HOME", user)
+	r := newFeedRig(t)
+	r.s.Agent = "codex"
+	r.d.sessions.Upsert(r.s)
+
+	said := func() string {
+		t.Helper()
+		data := r.feed(t)
+		if data.Health == protocol.FeedUnsupported {
+			t.Fatal("codex has no reader")
+		}
+		if len(data.Items) == 0 {
+			return ""
+		}
+		return data.Items[0].Text
+	}
+	codexRollout(t, user, r.s.Worktree, "from the user's home")
+	if got := said(); got != "from the user's home" {
+		t.Fatalf("host session read %q", got)
+	}
+
+	private := filepath.Join(r.d.home, "sandbox", r.s.ID, "codex")
+	codexRollout(t, private, r.s.Worktree, "from the sandbox")
+	if got := said(); got != "from the sandbox" {
+		t.Fatalf("sandboxed session read %q", got)
+	}
+
+	// The private home is the agent's to write. One that is a symlink is not followed.
+	if err := os.RemoveAll(private); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := t.TempDir()
+	codexRollout(t, elsewhere, r.s.Worktree, "from somewhere else")
+	if err := os.Symlink(elsewhere, private); err != nil {
+		t.Fatal(err)
+	}
+	if got := said(); got != "from the user's home" {
+		t.Fatalf("a symlinked home read %q", got)
+	}
+}

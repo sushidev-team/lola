@@ -98,3 +98,30 @@ func TestRefCacheHonoursTTL(t *testing.T) {
 		t.Fatalf("TTL never expires: %d calls", calls)
 	}
 }
+
+// A dead on-sent label lets the filter MATCH and only breaks the post-spawn
+// flip, so it is checked on matching label-mode ticks too and worded as a
+// write-back failure rather than a filter that can never match.
+func TestTickReportsDeadOnSentLabelWhileMatching(t *testing.T) {
+	p := labelPoll("p1")
+	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
+	fake := &linear.Fake{Issues: []linear.Issue{is}, RefsFunc: func(l, s []string) ([]linear.Ref, []linear.Ref, error) {
+		return []linear.Ref{{ID: "lbl-trigger", Name: "trigger"}}, nil, nil // lbl-sent is gone
+	}}
+	d := newTestDaemon(t, testConfig(p), fake, &fakeNative{})
+	res, err := d.tick(context.Background(), "p1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Problems) != 1 || !strings.HasPrefix(res.Problems[0], "on-sent label") {
+		t.Fatalf("problems = %q", res.Problems)
+	}
+	msg := refError(res.Problems)
+	if strings.Contains(msg, "can never match") || !strings.HasPrefix(msg, "label write-back will fail") {
+		t.Fatalf("refError = %q", msg)
+	}
+	// Matching ticks ignore the (filter) verdicts that only zero matches can mean.
+	if got := writeBackRefProblems([]string{"match label x no longer exists in Linear", "on-sent label y no longer exists in Linear"}); len(got) != 1 {
+		t.Fatalf("writeBackRefProblems = %q", got)
+	}
+}

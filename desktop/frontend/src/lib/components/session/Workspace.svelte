@@ -25,8 +25,9 @@
   import DockArea from "../ssh/dock/DockArea.svelte";
   import HostBar from "../ssh/HostBar.svelte";
   import TimelineSlot from "./TimelineSlot.svelte";
+  import { dropTargetId } from "$lib/composerpaste";
   import ActionZone from "./ActionZone.svelte";
-  import { OVERVIEW_PANEL } from "$lib/sessionpanels";
+  import { OVERVIEW_PANEL, SIDE_MIN_WIDTH } from "$lib/sessionpanels";
   import { terms, isChangesTab } from "$lib/terms.svelte";
 
   let { sessionId = "", covered = false, changesInSide = false, onmain, header }: { sessionId?: string; covered?: boolean; changesInSide?: boolean; header?: Snippet; onmain?: (rect: Rect, host: HTMLElement) => void } = $props();
@@ -135,7 +136,6 @@
   // The agent's account: a sidebar once it has used one and the column has room. Below that, and
   // when hidden, it stays one line over the story. Measured, never a guess: the band under the list
   // and the open session are the same width, so they make the same choice.
-  const SIDE_MIN_WIDTH = 1180;
   let rootWidth = $state(0);
   const attachWidth = (el: HTMLElement) => {
     if (typeof ResizeObserver === "undefined") return;
@@ -146,6 +146,11 @@
   };
   const sideHas = $derived(!!session && (changesOffered(session) || sideHasContent(deriveSide(inScope(view.items, view.scope), session.board), session.board)));
   const sideFits = $derived(rootWidth >= SIDE_MIN_WIDTH && sideHas);
+  // ⌘N reads this: in a column too narrow to seed the panels it still has an account to open.
+  $effect(() => {
+    const has = sideHas;
+    untrack(() => (view.sideOffered = has));
+  });
   const sideDiff = $derived(changesInSide && isChangesTab(terms.activeTab(sessionId)));
   const side = $derived(sideFits && (!view.dockHidden || sideDiff));
   // The menu's Report asks for the account. With a sidebar there is no overlay to open.
@@ -183,7 +188,11 @@
           <!-- A size container, so the dock's cap is a share of THIS column. The rows live on an
                inner grid, because a container query cannot restyle its own container. -->
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-          <div class="relative min-h-0 min-w-0 bg-canvas [container-type:size] {store.alive ? '' : 'ssh-offline'}" class:invisible={covered} inert={covered} onclick={clickStory} data-conversation>
+          <div class="relative min-h-0 min-w-0 bg-canvas [container-type:size] {store.alive ? '' : 'ssh-offline'}" class:invisible={covered} inert={covered} onclick={clickStory} data-conversation data-file-drop-target id={dropTargetId(sessionId)}>
+            <div data-drop-hint aria-hidden="true">
+              <div class="sheets"><span class="sheet"></span><span class="sheet"></span><span class="sheet"></span></div>
+              <p>Drop images to attach</p>
+            </div>
             <div class="ssh-col absolute inset-0 grid" data-carded={cards.length > 0 ? "" : undefined} data-deciding={deciding ? "" : undefined}>
               <TimelineSlot {sessionId} {covered} {side} onside={sideFits ? () => view.openWidget(OVERVIEW_PANEL) : undefined} onraw={session ? () => ssh.selectCell(session.id, { key: "terminal", kind: "terminal" }) : undefined} />
               <ActionZone {sessionId} {covered} />

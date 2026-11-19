@@ -23,6 +23,8 @@ export const TEAM_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 export const LINEAR_KEY_RE = /^lin_api_[A-Za-z0-9]{16,128}$/;
 /** hubproto.ValidDigestWebhook: a Slack incoming webhook and nothing else. */
 export const DIGEST_WEBHOOK_RE = /^https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9]{1,32}\/[A-Za-z0-9]{1,32}\/[A-Za-z0-9]{1,64}$/;
+/** hubproto.ValidLinearWebhookSecret: printable ASCII, 16 to 128 characters. */
+export const LINEAR_WEBHOOK_SECRET_RE = /^[\x21-\x7e]{16,128}$/;
 /** hubproto.ValidMemberLabel. */
 const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/;
 
@@ -112,6 +114,13 @@ export function digestWebhookError(hook: string): string {
   const s = hook.trim();
   if (!s) return "";
   return DIGEST_WEBHOOK_RE.test(s) ? "" : "Only a Slack incoming webhook works here: https://hooks.slack.com/services/…";
+}
+
+/** The inline error for a pasted Linear webhook signing secret ("" = fine or empty). */
+export function linearWebhookSecretError(secret: string): string {
+  const s = secret.trim();
+  if (!s) return "";
+  return LINEAR_WEBHOOK_SECRET_RE.test(s) ? "" : "A signing secret is 16 to 128 characters with no spaces. Copy it from the Linear app's webhook settings.";
 }
 
 /** The inline error for the teammate an invite is for ("" = fine or empty). */

@@ -64,6 +64,22 @@ export function stageFor(delivery: string | undefined, reacting: string | undefi
   }
 }
 
+/**
+ * The plan-approval gate's step, for a session that has no PR yet: a submitted
+ * plan is a human decision the agent is blocked on (orange, like changes
+ * requested), planning is nothing asked of anyone yet.
+ */
+export function planStage(gate: string | undefined): Stage | null {
+  switch (gate) {
+    case "submitted":
+      return { label: "Plan · needs approval", tone: "orange", hint: "the agent submitted a plan — approve it or request changes" };
+    case "planning":
+      return { label: "Planning", tone: "neutral", hint: "file edits stay blocked until a plan is approved" };
+    default:
+      return null;
+  }
+}
+
 // Literal class strings: Tailwind scans source text, so a composed
 // `bg-${tone}/12` would compile to nothing.
 export const STAGE_CHIP: Record<StageTone, string> = {

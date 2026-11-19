@@ -11,6 +11,7 @@
     | "checkpoints"
     | "bestOf"
     | "broadcast"
+    | "plan"
     | "review"
     | "coderabbit"
     | "revive"
@@ -26,6 +27,7 @@
       ["switchAgent", can("switchAgent") && !s.location && s.status !== "shell"],
       // The composer's ModelSettings shows for any session that is not running a turn-less shell or dead.
       ["model", can("agentSetting") && !s.goalId && !dead && s.status !== "shell" && !s.location],
+      ["plan", can("planDecide") && s.plan?.gate === "submitted"],
       ["tasks", can("sessionTask")],
       ["checkpoints", can("checkpoints") && !s.location],
       ["bestOf", can("bestOfCompare") && !!s.bestOf],
@@ -72,7 +74,7 @@
   });
   /** An action sheet's groups, 16px apart: set up, work, review, then Remove alone, then Cancel alone. */
   const GROUPS: readonly (readonly MenuRow[])[] = [
-    ["rename", "switchAgent", "model"],
+    ["plan", "rename", "switchAgent", "model"],
     ["tasks", "checkpoints", "bestOf", "broadcast", "dev", "devUrl"],
     ["review", "coderabbit", "revive", "resolve"],
   ];
@@ -89,6 +91,7 @@
     checkpoints: "history",
     bestOf: "git-compare-arrows",
     broadcast: "megaphone",
+    plan: "list-checks",
     review: "shield-check",
     coderabbit: "sparkles",
     revive: "refresh-cw",
@@ -113,6 +116,7 @@
       checkpoints: "checkpoints",
       bestOf: "bestOf",
       broadcast: "broadcast",
+      plan: "plan",
     } as const;
     if (row in sheet) {
       router.open(sheet[row as keyof typeof sheet]);

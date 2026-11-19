@@ -23,6 +23,7 @@ declare module "@wailsio/runtime" {
             "daemon:pusherr": main$0.PushErrDTO;
             "daemon:sessions": protocol$0.SessionsData;
             "daemon:status": protocol$0.StatusData;
+            "files:dropped": main$0.FilesDroppedDTO;
             "project-git:queue": main$0.ProjectGitQueueEvent;
             "update:download-progress": main$0.UpdateProgressDTO;
         }

@@ -65,6 +65,10 @@ const ROWS: Record<string, Row> = {
   "DaemonService.Checkpoints": { call: () => Daemon.Checkpoints("s1"), sends: { session: "s1" } },
   "DaemonService.CloseExitedTemporary": { call: () => Daemon.CloseExitedTemporary("t1"), sends: { session: "t1" } },
   "DaemonService.CodeRabbit": { call: () => Daemon.CodeRabbit("s1"), sends: { session: "s1" } },
+  "DaemonService.DecidePlan": {
+    call: () => Daemon.DecidePlan("s1", false, "split it"),
+    sends: { session: "s1", args: { approve: false, comment: "split it" } },
+  },
   "DaemonService.Dev": { call: () => Daemon.Dev("s1", true), sends: { args: { session: "s1", on: true } } },
   "DaemonService.DevFreePort": {
     call: () => Daemon.DevFreePort("s1", 5173, 42),

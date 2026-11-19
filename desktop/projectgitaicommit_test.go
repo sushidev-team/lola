@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -120,5 +121,72 @@ func TestProjectGitAICommitCompletesAndReportsInvalidPlans(t *testing.T) {
 				t.Fatal(status)
 			}
 		})
+	}
+}
+
+func TestProjectGitAICommitReviewsExclusionsBeforeWriting(t *testing.T) {
+	s, root := aiService(t)
+	writeLog := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, "debug.log"), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLog("staged output")
+	if _, err := s.Stage("demo", "", []string{"debug.log"}); err != nil {
+		t.Fatal(err)
+	}
+	writeLog("current output")
+	s.draftCommit = func(context.Context, string, string) (string, error) {
+		return `{"groups":[{"subject":"Add feature","paths":["new.txt"]}],"excluded":[{"path":"debug.log","reason":"Local diagnostic output"}]}`, nil
+	}
+	p, err := s.PrepareAICommit("demo", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.StartAICommit("demo", "", p.Token, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.CancelAICommit(job.ID)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		progress, err := s.AICommitStatus(job.ID)
+		if err != nil || progress.Done || time.Now().After(deadline) {
+			t.Fatalf("expected pending review, got %+v, %v", progress, err)
+		}
+		if progress.Phase == "review" {
+			if len(progress.Excluded) != 1 || progress.Excluded[0].Path != "debug.log" {
+				t.Fatal(progress)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", root}, args...)...).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if got := git("log", "-1", "--format=%s"); got != "Initial\n" {
+		t.Fatal(got)
+	}
+	if err := s.AcceptAICommitExclusions(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if progress := aiWait(t, s, job.ID); progress.Completed != 1 || progress.Error != "" {
+		t.Fatal(progress)
+	}
+	if got := git("ls-tree", "--name-only", "HEAD"); got != "new.txt\n" {
+		t.Fatal(got)
+	}
+	if got := git("show", ":debug.log"); got != "staged output" {
+		t.Fatal(got)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "debug.log")); err != nil || string(got) != "current output" {
+		t.Fatal(string(got), err)
 	}
 }

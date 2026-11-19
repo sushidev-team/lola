@@ -65,11 +65,14 @@ const composerCaretX = 2
 // a composer in INSERT, is caught by comparing VimInsert across the Esc. Whether the Esc does
 // switch modes mid-turn has not been measured.
 //
-// Every other agent keeps EmptyComposer, because the cursor rule was measured only on
-// Claude Code.
+// Codex has a proof of its own, measured the same way (codex.go). Every other agent keeps
+// EmptyComposer.
 func ComposerEmptyAt(visible string, c Cursor, k agent.Kind) bool {
 	if !agent.Caps(k).Cursor {
 		return EmptyComposer(visible, k)
+	}
+	if k == agent.Codex {
+		return Classify(visible, k) == ActivityWaiting && codexComposerEmptyAt(visible, c)
 	}
 	if !c.Visible || c.X != composerCaretX || Classify(visible, k) != ActivityWaiting {
 		return false
@@ -85,6 +88,9 @@ func MessageComposerEmptyAt(visible string, c Cursor, k agent.Kind) bool {
 	}
 	switch Classify(visible, k) {
 	case ActivityWaiting, ActivityWorking:
+		if k == agent.Codex {
+			return codexComposerEmptyAt(visible, c)
+		}
 		return composerFrameEmptyAt(visible, c)
 	}
 	return false

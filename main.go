@@ -84,6 +84,7 @@ func main() {
 		comparisonCmd(),
 		bestofCmd(),
 		switchAgentCmd(),
+		addAppCmd(),
 		checkpointCmd(),
 		coderabbitCmd(),
 		configCmd(),
@@ -92,6 +93,8 @@ func main() {
 		setupCmd(),
 		hookCmd(),
 		reportCmd(),
+		planGateCmd(),
+		linearAgentCmd(),
 		sshCmd(),
 		sshPostVerb(), // lola post: the same verb, because every agent is told about it
 		reviewRunCmd(),
@@ -287,6 +290,29 @@ func switchAgentCmd() *cobra.Command {
 	}
 }
 
+// addAppCmd checks further members of its stack out into a running stack
+// session (`lola add-app <session> <app>...`) — for an issue whose labels
+// missed a repository it needs. A sandboxed session's agent is restarted to
+// mount it, so the daemon refuses while that agent is mid-turn.
+func addAppCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "add-app <session> <app>...",
+		Short: "Add further repositories of its stack to a running stack session",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			args, err := json.Marshal(protocol.AddAppsArgs{Session: a[0], Apps: a[1:]})
+			if err != nil {
+				return err
+			}
+			raw, err := json.Marshal(protocol.Request{Cmd: "addApps", Args: args})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
+}
+
 // checkpointCmd is `lola checkpoint list|diff|restore|fork`: the CLI face of
 // turn checkpoints — the worktree snapshot the daemon records every time a
 // session's agent ends a turn. Restore puts the files back (the current state is
@@ -453,6 +479,16 @@ func hookCmd() *cobra.Command {
 				}
 				if err := hook.Post(normEvent, p); err != nil {
 					fmt.Fprintln(c.ErrOrStderr(), "lola hook:", err)
+				}
+				return nil
+			}
+			if event == "pre_tool_use" {
+				// The plan gate. Drain stdin (claude writes the tool payload there)
+				// and ask the daemon; deny only on a definite "blocked" answer — an
+				// unreachable daemon allows, because a hook must never wedge a turn.
+				_ = hookPayload(c.InOrStdin())
+				if g, err := hook.PlanGate(); err == nil && g.Blocked {
+					_, _ = c.OutOrStdout().Write(hook.PreToolUseDeny(g.Reason))
 				}
 				return nil
 			}

@@ -27,6 +27,10 @@ export function AICommitStatus(id: string): $CancellablePromise<$models.AICommit
     return $Call.ByID(2622744063, id);
 }
 
+export function AcceptAICommitExclusions(id: string): $CancellablePromise<void> {
+    return $Call.ByID(1381571448, id);
+}
+
 export function Amend(project: string, worktree: string, message: string, expectedHead: string): $CancellablePromise<void> {
     return $Call.ByID(4236251129, project, worktree, message, expectedHead);
 }
@@ -65,8 +69,20 @@ export function CancelAICommit(id: string): $CancellablePromise<void> {
     return $Call.ByID(3035722579, id);
 }
 
+/**
+ * ChangeLines stages or unstages only the chosen changed lines of one file; the
+ * patch is the one the human saw and is refused if the file has moved on.
+ */
+export function ChangeLines(project: string, worktree: string, area: string, path: string, patch: string, lines: number[] | null, stage: boolean): $CancellablePromise<projectgit$0.File[] | null> {
+    return $Call.ByID(2829500693, project, worktree, area, path, patch, lines, stage);
+}
+
 export function Commit(project: string, worktree: string, message: string): $CancellablePromise<void> {
     return $Call.ByID(2416522199, project, worktree, message);
+}
+
+export function ConflictDocument(project: string, worktree: string, path: string): $CancellablePromise<projectgit$0.ConflictDocument> {
+    return $Call.ByID(1487689857, project, worktree, path);
 }
 
 /**
@@ -155,6 +171,10 @@ export function Push(project: string, worktree: string): $CancellablePromise<voi
     return $Call.ByID(3099670570, project, worktree);
 }
 
+export function SaveConflict(project: string, worktree: string, path: string, token: string, result: string): $CancellablePromise<void> {
+    return $Call.ByID(173567461, project, worktree, path, token, result);
+}
+
 export function Snapshot(project: string, worktree: string, ref: string, limit: number): $CancellablePromise<projectgit$0.Snapshot> {
     return $Call.ByID(2633163990, project, worktree, ref, limit);
 }
@@ -185,6 +205,21 @@ export function StashPush(project: string, worktree: string, message: string, ex
 
 export function Stashes(project: string, worktree: string): $CancellablePromise<projectgit$0.Stash[] | null> {
     return $Call.ByID(3500878383, project, worktree);
+}
+
+/**
+ * SuggestConflictChoices produces reviewable choices from editor excerpts.
+ * Only SaveConflict, after a separate human action, writes the working file.
+ */
+export function SuggestConflictChoices(project: string, input: string): $CancellablePromise<string> {
+    return $Call.ByID(2927015638, project, input);
+}
+
+/**
+ * Uncommit removes the checkout's newest commit and keeps its changes staged.
+ */
+export function Uncommit(project: string, worktree: string, expectedHead: string): $CancellablePromise<void> {
+    return $Call.ByID(2202216816, project, worktree, expectedHead);
 }
 
 export function Unstage(project: string, worktree: string, paths: string[] | null): $CancellablePromise<projectgit$0.File[] | null> {

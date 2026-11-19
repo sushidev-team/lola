@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.12.0](https://github.com/sushidev-team/lola/compare/v0.11.0...v0.12.0) (2026-11-17)
+
+
+### Features
+
+* **desktop:** let the projects column shrink beside sessions, keep a wider floor in Git mode ([6c0504d](https://github.com/sushidev-team/lola/commit/6c0504d58a72f11ee0c0fe6b54bb29e77939701e))
+* **Git:** show active or default entries in view ([90a8ac0](https://github.com/sushidev-team/lola/commit/90a8ac0d41f64bcf048f833335ff7a323d9e4935))
+* **Git:** undo the newest local commit and keep its changes staged ([b8d2741](https://github.com/sushidev-team/lola/commit/b8d27418eb45eb884c576a549ed012dde6f9fd8e))
+
+
+### Bug Fixes
+
+* **daemon:** browse the stack's Linear team when starting a ticket on a stack member ([5be47ec](https://github.com/sushidev-team/lola/commit/5be47ec53f56b24c4cbdc04846973ff9ef1b0a7b))
+* **desktop:** remove failing CI count from the Projects list ([0ed524c](https://github.com/sushidev-team/lola/commit/0ed524c93c04d24c6f18eeb9b25687129d07fdac))
+
 ## [0.11.0](https://github.com/sushidev-team/lola/compare/v0.10.1...v0.11.0) (2026-11-16)
 
 

@@ -10,7 +10,7 @@ const sessions = [
 ];
 
 export const fixture: Fixture = base("empty", {
-  routes: ["/inbox", "/projects", "/activity"],
+  routes: ["/inbox", "/projects"],
   sessions,
   projects: withCounts(PROJECTS, sessions),
 });

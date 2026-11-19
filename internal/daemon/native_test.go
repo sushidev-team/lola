@@ -60,6 +60,9 @@ type fakeNative struct {
 	switches       []nativeSwitchCall
 	switchErr      error // returned from SwitchAgent
 	spawnOpts      []runtime.SpawnOpts
+	addApps        []nativeAddAppsCall
+	addAppsErr     error // returned from AddApps
+	addRelaunch    bool  // AddApps reports a relaunched (sandboxed) agent
 	attemptErr     map[int]error // SpawnWith: a best-of attempt (1-based) that fails
 }
 
@@ -96,6 +99,25 @@ type nativeKillCall struct {
 }
 
 type nativeSwitchCall struct{ sessionID, kind, reason string }
+
+type nativeAddAppsCall struct {
+	sessionID string
+	names     []string
+}
+
+func (f *fakeNative) AddApps(ctx context.Context, s session.Session, names []string) (runtime.AddAppsResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.addApps = append(f.addApps, nativeAddAppsCall{s.ID, slices.Clone(names)})
+	res := runtime.AddAppsResult{Relaunched: f.addRelaunch, Session: s}
+	if f.addAppsErr != nil {
+		return res, f.addAppsErr
+	}
+	for _, n := range names {
+		res.Apps = append(res.Apps, session.App{Name: n, Worktree: "/wt/" + s.ID + "/" + n, Branch: s.Branch, Base: "main", Delivery: state.DeliveryNone})
+	}
+	return res, nil
+}
 
 var _ NativeAPI = (*fakeNative)(nil)
 

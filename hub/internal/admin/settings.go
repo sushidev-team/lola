@@ -100,6 +100,8 @@ func setSecret(st store.Store, box *secret.Box, org, field, plain, event string,
 		switch field {
 		case secret.FieldLinearKey:
 			o.LinearKey, o.LinearErr = sealed, ""
+		case secret.FieldLinearWebhook:
+			o.LinearWebhook = sealed
 		case secret.FieldDigestWebhook:
 			o.DigestWebhook, o.DigestErr = sealed, ""
 		}
@@ -116,7 +118,7 @@ func Settings(d *store.Data, org string, box *secret.Box) hubproto.OrgSettingsVi
 	if o == nil {
 		return v
 	}
-	v.LinearKeySet, v.DigestSet = o.LinearKey != "", o.DigestWebhook != ""
+	v.LinearKeySet, v.DigestSet, v.LinearWebhookSet = o.LinearKey != "", o.DigestWebhook != "", o.LinearWebhook != ""
 	if hubproto.ValidLinearTeamID(o.LinearTeam) {
 		v.LinearTeam = o.LinearTeam
 	}
@@ -200,4 +202,15 @@ func AdoptLegacyEnv(st store.Store, box *secret.Box, env LegacyEnv, now time.Tim
 		adopted = append(adopted, "digest webhook")
 	}
 	return adopted, nil
+}
+
+// SetLinearWebhookSecret stores org's Linear webhook signing secret, sealed
+// with box; "" clears it. With none set the org's webhook endpoint answers
+// every delivery as unauthenticated.
+func SetLinearWebhookSecret(st store.Store, box *secret.Box, org, sec string, now time.Time) error {
+	sec = strings.TrimSpace(sec)
+	if sec != "" && !hubproto.ValidLinearWebhookSecret(sec) {
+		return errors.New("the Linear webhook secret must be 16 to 128 printable characters")
+	}
+	return setSecret(st, box, org, secret.FieldLinearWebhook, sec, "org_linear_webhook", now)
 }

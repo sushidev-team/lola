@@ -49,6 +49,7 @@ const WRITES: ReadonlySet<string> = new Set([
   "feedback",
   "mergePR",
   "broadcast",
+  "planDecide",
   "renameSession",
   "kill",
   "revive",

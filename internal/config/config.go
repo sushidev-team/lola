@@ -88,6 +88,7 @@ type ProjectInherits struct {
 	PrioritySort   bool
 	Review         bool
 	AgentFallback  bool
+	RequirePlan    bool
 }
 
 // Project is one [[project]] table: a local repository the native runtime can
@@ -262,6 +263,16 @@ type Project struct {
 	// value lives here; Inherits.Review records whether it was inherited.
 	Review []provKind `toml:"review,omitempty"`
 
+	// --- Plan gate (optional) ----------------------------------------------
+	// RequirePlan makes every issue-dispatched session of this project PLAN
+	// before it codes: the briefing tells the agent to investigate read-only and
+	// submit a plan (`lola plan-gate submit`), lola posts it (app, TUI, and the Linear
+	// agent session when there is one) and blocks the file-edit tools until a
+	// human approves; a rejection with a comment sends the agent back to
+	// re-plan. Inheritable from [defaults].require_plan; the resolved value
+	// lives here and Inherits.RequirePlan records where it came from.
+	RequirePlan bool `toml:"require_plan,omitempty"`
+
 	// Inherits marks which of the [defaults]-inheritable fields above this
 	// project leaves to [defaults]; the fields themselves always hold the
 	// resolved value. Never serialized — Load derives it from key absence and
@@ -391,6 +402,9 @@ type Defaults struct {
 	// project that omits `review` (see Project.Review). Empty leaves projects to
 	// the global catalog's own applies-independently pass.
 	Review []provKind `toml:"review"`
+	// RequirePlan is the plan-gate default for a project that omits
+	// `require_plan` (see Project.RequirePlan).
+	RequirePlan bool `toml:"require_plan"`
 }
 
 // LinearConfig is the [linear] table. It intentionally has no api_key field:
@@ -421,6 +435,7 @@ type Config struct {
 	Budget      BudgetConfig          `toml:"budget"`
 	Load        LoadConfig            `toml:"load"`
 	Sandbox     SandboxConfig         `toml:"sandbox"`
+	LinearAgent LinearAgentConfig     `toml:"linear_agent"`
 	// Hub enrolls this machine with a team Lola hub.
 	Hub HubConfig `toml:"hub"`
 	// SSHHosts is the [[ssh_host]] catalog: the only hosts an agent-assisted ssh
@@ -451,6 +466,9 @@ type Config struct {
 	// (teampolicy.go). Save refuses such a Config, so a locked value can never
 	// be frozen into the file. Unexported: never serialized.
 	teamPolicy bool
+	// labelsResolved marks a Config whose label NAMES were rewritten to team
+	// label UUIDs in memory (daemon/labelrefs.go). Save refuses it, like teamPolicy.
+	labelsResolved bool
 }
 
 // Notices returns the non-fatal repairs Load made to the on-disk config, in
@@ -548,6 +566,7 @@ type fileConfig struct {
 	Budget      *BudgetConfig          `toml:"budget,omitempty"`
 	Load        *LoadConfig            `toml:"load,omitempty"`
 	Sandbox     *SandboxConfig         `toml:"sandbox,omitempty"`
+	LinearAgent *fileLinearAgentConfig `toml:"linear_agent,omitempty"`
 	Hub         *HubConfig             `toml:"hub,omitempty"`
 	SSHHosts    []SSHHost              `toml:"ssh_host,omitempty"`
 }
@@ -637,6 +656,10 @@ type fileProject struct {
 	// distinct from an explicit `review = []` (override to nothing), exactly as
 	// MatchLabels does. See projectFromFile / projectToFile.
 	Review *[]provKind `toml:"review,omitempty"`
+
+	// RequirePlan is a POINTER so an absent key (inherit [defaults]) stays
+	// distinct from an explicit `require_plan = false` (override to off).
+	RequirePlan *bool `toml:"require_plan,omitempty"`
 
 	LegacyPolls []legacyPoll `toml:"poll,omitempty"` // pre-merge [[project.poll]]; folded onto the project on load, dropped on save
 }
@@ -752,6 +775,7 @@ func projectFromFile(fp fileProject) Project {
 	autoPRComments, hasAutoPRComments := deref(fp.AutoPRComments)
 	review, hasReview := deref(fp.Review)
 	agentFallback, hasAgentFallback := deref(fp.AgentFallback)
+	requirePlan, hasRequirePlan := deref(fp.RequirePlan)
 
 	return Project{
 		CommitInstructions: fp.CommitInstructions,
@@ -799,6 +823,7 @@ func projectFromFile(fp fileProject) Project {
 		OnSentSetLabel:    onSentSetLabel,
 		AutoPRComments:    autoPRComments,
 		Review:            review,
+		RequirePlan:       requirePlan,
 
 		Inherits: ProjectInherits{
 			PostCreate:     !hasPostCreate,
@@ -813,6 +838,7 @@ func projectFromFile(fp fileProject) Project {
 			AutoPRComments: !hasAutoPRComments,
 			Review:         !hasReview,
 			AgentFallback:  !hasAgentFallback,
+			RequirePlan:    !hasRequirePlan,
 		},
 
 		OnSpawnStateID:   fp.OnSpawnStateID,
@@ -880,6 +906,7 @@ func projectToFile(p Project) fileProject {
 		OnSentSetLabel:    ptr(p.OnSentSetLabel, set(o.OnSentSetLabel)),
 		AutoPRComments:    ptr(p.AutoPRComments, set(o.AutoPRComments)),
 		Review:            ptr(p.Review, set(o.Review)),
+		RequirePlan:       ptr(p.RequirePlan, set(o.RequirePlan)),
 
 		OnSpawnStateID:   p.OnSpawnStateID,
 		OnPRStateID:      p.OnPRStateID,
@@ -921,6 +948,7 @@ type fileDefaults struct {
 	DedupMode      string            `toml:"dedup_mode,omitempty"`
 	PrioritySort   []string          `toml:"priority_sort,omitempty"`
 	Review         []provKind        `toml:"review,omitempty"`
+	RequirePlan    bool              `toml:"require_plan,omitempty"`
 }
 
 // config flattens the on-disk mirror into the in-memory Config and MIGRATES the
@@ -989,6 +1017,7 @@ func (fc *fileConfig) config() *Config {
 			PrioritySort:       fc.Defaults.PrioritySort,
 			AutoPRComments:     fc.Defaults.AutoPRComments,
 			Review:             fc.Defaults.Review,
+			RequirePlan:        fc.Defaults.RequirePlan,
 		},
 		Linear:          fc.Linear,
 		Projects:        projects,
@@ -1011,6 +1040,7 @@ func (fc *fileConfig) config() *Config {
 		Budget:          tableOf(fc.Budget),
 		Load:            tableOf(fc.Load),
 		Sandbox:         tableOf(fc.Sandbox),
+		LinearAgent:     resolveLinearAgent(fc.LinearAgent),
 		Hub:             tableOf(fc.Hub),
 		SSHHosts:        fc.SSHHosts,
 	}
@@ -1057,6 +1087,7 @@ func (c *Config) file() *fileConfig {
 			PrioritySort:       c.Defaults.PrioritySort,
 			AutoPRComments:     c.Defaults.AutoPRComments,
 			Review:             c.Defaults.Review,
+			RequirePlan:        c.Defaults.RequirePlan,
 		},
 		Linear:      c.Linear,
 		Projects:    fps,
@@ -1076,6 +1107,7 @@ func (c *Config) file() *fileConfig {
 		Budget:      nonZero(c.Budget),
 		Load:        nonZero(c.Load),
 		Sandbox:     sandboxTable(c.Sandbox),
+		LinearAgent: linearAgentFile(c.LinearAgent),
 		Hub:         hubTable(c.Hub),
 		SSHHosts:    c.SSHHosts,
 	}
@@ -1287,6 +1319,9 @@ func (c *Config) ResolveInheritance() {
 		if in.AgentFallback {
 			p.AgentFallback = slices.Clone(d.AgentFallback)
 		}
+		if in.RequirePlan {
+			p.RequirePlan = d.RequirePlan
+		}
 		if in.PrioritySort {
 			if len(d.PrioritySort) > 0 {
 				p.PrioritySort = slices.Clone(d.PrioritySort)
@@ -1316,6 +1351,9 @@ func orString(v, fallback string) string {
 func (c *Config) Save(path string) error {
 	if c.teamPolicy {
 		return ErrTeamPolicyOverlay
+	}
+	if c.labelsResolved {
+		return ErrLabelRefsResolved
 	}
 	c.ResolveInheritance()
 

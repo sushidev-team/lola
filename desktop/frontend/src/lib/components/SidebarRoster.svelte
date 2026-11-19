@@ -19,7 +19,7 @@
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { endedLine, lastTurnStopped, rosterGroups, stateGlyph } from "$lib/sessionview";
   import { visibleRoster, rosterActivity } from "$lib/roster";
-  import { stageFor } from "$lib/stage";
+  import { stageFor, planStage } from "$lib/stage";
   import { isChord } from "$lib/keys";
   import { tooltip } from "$lib/tooltip";
   import { talk } from "$lib/talk.svelte";
@@ -46,6 +46,8 @@
   const visible = $derived(visibleRoster(store.rosterSessions, store.projects.map(p => p.name), name => store.displayNameFor(name), { query: nav.sidebarQuery, triage: nav.triage, scoped: nav.scoped, project: nav.project, scope: makeScope(nav.scopeNames, store.projects) }));
   const scope = $derived(makeScope(nav.scopeNames, store.projects) ?? (() => true));
   const filteredEnded = $derived(ended.filter(e => nav.triage === 'Ended' && scope(e) && (!nav.sidebarQuery.trim() || `${e.title} ${e.issue} ${e.id}`.toLowerCase().includes(nav.sidebarQuery.trim().toLowerCase()))));
+  // Tickets being started: listed first, since no session exists to sort them by yet.
+  const starting = $derived(nav.triage === 'Ended' ? [] : store.starting.filter((t) => scope(t)));
   let root = $state<HTMLElement>();
   let focusSeen = untrack(() => nav.sidebarFocus);
   $effect(() => {
@@ -103,6 +105,15 @@
 </script>
 
 <nav bind:this={root} class="sidebar-roster" aria-label="Sessions">
+  {#each starting as t (t.issue)}
+    <div class="sidebar-session-item compact" role="status" data-roster-starting={t.issue}>
+      <div class="sidebar-session-row">
+        <span class="sidebar-state-mark row-span-2 self-start text-accent"><Icon name="loader-circle" size={14} class="animate-spin motion-reduce:animate-none" /></span>
+        <span class="sidebar-session-title col-start-2 col-end-4 min-w-0 truncate text-ink-2">{t.title || t.issue}</span>
+        <span class="sidebar-session-meta col-start-2 col-end-4 min-w-0 truncate text-faint">{t.title ? `${t.issue} · ` : ''}Starting in {store.displayNameFor(t.project)}…</span>
+      </div>
+    </div>
+  {/each}
   {#each groups as g (g.key)}
     {#if g.rows.length}
       <section aria-label={g.label}>
@@ -119,7 +130,7 @@
         {#each g.rows as s (s.id)}
           {@const glyph = stateGlyph(s, nav.seenAt(s.id))}
           {@const line = rosterActivity(s, now, !!talk.state(s.id)?.queueHeld || lastTurnStopped(views.get(s.id)?.items))}
-          {@const stage = stageFor(s.delivery, s.reacting)}
+          {@const stage = stageFor(s.delivery, s.reacting) ?? planStage(s.plan?.gate)}
           {@const atReview = s.delivery === 'review_pending' && (glyph.label === 'Resting' || glyph.label === 'Finished a turn')}
           {@const mark = s.delivery === 'merged' ? { glyph: 'done', label: 'Merged', cls: 'text-good' } : atReview ? { glyph: 'review', label: 'Awaiting review', cls: 'text-magenta' } : glyph}
           {@const metadataStage = atReview ? null : stage}
@@ -211,7 +222,7 @@
         {/each}
     </section>
   {/if}
-  {#if !visible.length && !filteredEnded.length}
+  {#if !visible.length && !filteredEnded.length && !starting.length}
     <p class="px-2 py-4 text-sm text-faint" role="status">{nav.sidebarQuery || nav.scoped ? 'No sessions match these filters.' : nav.triage === 'Ended' ? 'No ended sessions.' : nav.triage ? 'No sessions need you.' : 'No sessions yet. Start one with +.'}</p>
   {/if}
 </nav>
