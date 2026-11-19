@@ -14,6 +14,7 @@ import (
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/session"
 )
 
 func gitRepo(t *testing.T) string {
@@ -95,11 +96,18 @@ func TestProjectGitRefusesWhatItShouldNot(t *testing.T) {
 func TestProjectGitRefusesASecondConcurrentWrite(t *testing.T) {
 	repo := gitRepo(t)
 	d := newTestDaemon(t, &config.Config{Projects: []config.Project{{Name: "p", Path: repo}}}, &linear.Fake{}, nil)
+	if err := os.WriteFile(filepath.Join(repo, "a"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stage := gitReq(t, protocol.CmdProjectGitAct, protocol.ProjectGitArgs{Op: "stage", Project: "p", Paths: []string{"a"}})
 	d.projectGitMu.Lock()
-	defer d.projectGitMu.Unlock()
-	resp := d.handle(context.Background(), gitReq(t, protocol.CmdProjectGitAct, protocol.ProjectGitArgs{Op: "stage", Project: "p", Paths: []string{"a"}}))
-	if resp.OK {
-		t.Fatal("second write was accepted while one is running")
+	resp := d.handle(context.Background(), stage)
+	d.projectGitMu.Unlock()
+	if resp.OK || !strings.Contains(resp.Error, "another") {
+		t.Fatalf("second write while one runs: ok=%v err=%q", resp.OK, resp.Error)
+	}
+	if resp := d.handle(context.Background(), stage); !resp.OK {
+		t.Fatalf("stage after unlock: %s", resp.Error)
 	}
 }
 
@@ -113,5 +121,28 @@ func TestProjectGitDiffReplyFitsOneFrame(t *testing.T) {
 	}
 	if !out.Truncated || !out.Files[2].TooLarge || out.Files[0].Patch == "" {
 		t.Fatalf("expected only the last patch dropped: %+v", out.Truncated)
+	}
+}
+
+func TestProjectGitBlockedResolvesNativeSessionWorktrees(t *testing.T) {
+	d := newTestDaemon(t, &config.Config{}, &linear.Fake{}, nil)
+	home := gitCanonical(d.home)
+	host := filepath.Join(home, "worktrees", "p", "p-1")
+	boxed := filepath.Join(home, "worktrees", "p", "p-2")
+	for _, p := range []string{host, boxed} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.sessions.Upsert(session.Session{ID: "p-1", Project: "p", Source: "native"})
+	d.sessions.Upsert(session.Session{ID: "p-2", Project: "p", Source: "native", Sandbox: "docker"})
+	if d.projectGitBlocked(host) {
+		t.Error("a live host worktree with no stored path was refused")
+	}
+	if !d.projectGitBlocked(boxed) {
+		t.Error("a sandboxed worktree with no stored path was allowed")
+	}
+	if !d.projectGitBlocked(filepath.Join(home, "worktrees", "p", "gone")) {
+		t.Error("an unknown managed checkout was allowed")
 	}
 }

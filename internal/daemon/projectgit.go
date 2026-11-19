@@ -14,6 +14,8 @@ import (
 	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/projectgit"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
+	"github.com/sushidev-team/lola/internal/session"
 )
 
 // The phone's Git client. A phone holds no git credentials: every operation
@@ -80,10 +82,15 @@ func (d *Daemon) projectGitBlocked(path string) bool {
 	}
 	knownHost := false
 	for _, s := range d.sessions.Snapshot() {
-		if s.Worktree == "" {
+		wt := s.Worktree
+		if wt == "" && s.Kind != session.KindLocal && s.Location != runtime.LocationSSH {
+			// Native records store no path; sessionsData derives the same one.
+			wt = filepath.Join(home, "worktrees", s.Project, s.ID)
+		}
+		if wt == "" {
 			continue
 		}
-		root := gitCanonical(s.Worktree)
+		root := gitCanonical(wt)
 		if !gitWithin(path, root) {
 			continue
 		}
