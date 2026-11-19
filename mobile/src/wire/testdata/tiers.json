@@ -120,6 +120,7 @@
   "relayCred": "read",
   "reload": "never",
   "remote.pair": "never",
+  "removeEndedWorktree": "never",
   "renameProject": "never",
   "renameSession": "control",
   "resolveConflict": "control",

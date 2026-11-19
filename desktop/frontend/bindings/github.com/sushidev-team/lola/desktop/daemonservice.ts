@@ -478,6 +478,14 @@ export function Reload(): $CancellablePromise<void> {
 }
 
 /**
+ * RemoveEndedWorktree removes a retained checkout through its ended history.
+ * force explicitly consents to discarding dirty or unverifiable files.
+ */
+export function RemoveEndedWorktree(session: string, path: string, force: boolean): $CancellablePromise<protocol$0.KillData> {
+    return $Call.ByID(2648805270, session, path, force);
+}
+
+/**
  * RenameProject changes a project's ID (not its display label — that is a plain
  * ConfigService.SaveProject field). The daemon owns this because the name keys
  * worktree dirs, the seen file and every tmux session name; it refuses while any

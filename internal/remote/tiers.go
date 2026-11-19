@@ -69,7 +69,7 @@ func buildCommandTiers() map[string]string {
 		// The agent's in-pane channels.
 		"hookEvent", "agentReport", "planSubmit", "planGate", protocol.CmdReviewPublish, protocol.CmdReviewComplete,
 		// Asked from the Mac's branch graph, which a phone does not have.
-		"askMerge",
+		"askMerge", "removeEndedWorktree",
 		// Asked from the Mac's session menu; it can restart a sandboxed agent.
 		"addApps",
 		// Transport-internal, and the host browser.

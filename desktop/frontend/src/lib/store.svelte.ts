@@ -5,13 +5,14 @@
 
 import { Events } from "@wailsio/runtime";
 import { sandboxLogin } from "$lib/sandboxlogin.svelte";
-import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO, type StackFolderAppDTO } from "@bindings/desktop";
+import { DaemonService, ConfigService, TermService, TalkService, type ProjectLayoutDTO, type StackFolderAppDTO } from "@bindings/desktop";
 import type {
   SessionInfo as ProtocolSessionInfo,
   ProjectInfo as ProtocolProjectInfo,
   GroupInfo,
   StatusData,
   Event as ActivityEvent,
+  EndedSession,
   PaneData,
   PrsData,
   TicketsData,
@@ -773,15 +774,25 @@ class Store {
   /** Explain protected Git actions and route owned checkouts through session cleanup. */
   askRemoveManagedWorktree(path: string, followup?: RemovalFollowup) {
     const owner = this.sessionForWorktree(path);
-    if (!owner || owner.location || owner.goalId) {
+    if (!owner) {
       confirm.ask({
         title: "Protected worktree",
         body: path,
-        detail: owner?.goalId
+        detail: "Checking current sessions and retained worktrees…",
+        confirmLabel: "Refresh sessions",
+        confirmVariant: "primary",
+        onConfirm: () => this.askRemoveManagedWorktree(path, followup),
+      });
+      void this.resolveManagedWorktree(path, followup, confirm.request);
+      return;
+    }
+    if (owner.location || owner.goalId) {
+      confirm.ask({
+        title: "Protected worktree",
+        body: path,
+        detail: owner.goalId
           ? `This checkout belongs to goal ${owner.goalId}. Manage it through the goal's actions; stopping its session keeps the worktree and branch.`
-          : owner?.location
-          ? "This session uses an existing directory. Closing the session preserves the checkout and its branch."
-          : "Lola protects this checkout, but its owning session could not be identified. Refresh the session list and remove it through its owning session. Direct Git deletion is unavailable.",
+          : "This session uses an existing directory. Closing the session preserves the checkout and its branch.",
         confirmLabel: "Got it",
         confirmVariant: "primary",
         onConfirm: () => {},
@@ -789,6 +800,63 @@ class Store {
       return;
     }
     this.askKill(owner.id, path, followup);
+  }
+
+  private async resolveManagedWorktree(path: string, followup: RemovalFollowup | undefined, request: typeof confirm.request) {
+    try {
+      const [current, history] = await Promise.allSettled([DaemonService.Sessions(), TalkService.Ended()]);
+      // A cancelled or replaced dialog must never reopen when the lookup returns.
+      if (confirm.request !== request) return;
+      if (current.status === "rejected") throw current.reason;
+      this.sessions = current.value.sessions ?? [];
+      const owner = this.sessionForWorktree(path);
+      if (owner) {
+        this.askRemoveManagedWorktree(path, followup);
+        return;
+      }
+      if (history.status === "rejected") throw history.reason;
+      const matches = (history.value.sessions ?? []).filter(s => s.keptWorktree === path);
+      const claimed = this.sessions.some(s => s.worktree === path || s.apps?.some(app => app.worktree === path));
+      if (!claimed && matches.length === 1) {
+        this.askRemoveEndedWorktree(matches[0], path, followup);
+        return;
+      }
+      if (request) request.detail = claimed
+        ? "More than one current session claims this checkout. Refresh the sessions before removing it."
+        : "No matching current or ended session was found. Refresh sessions to check again. The checkout is kept until its ownership can be verified.";
+    } catch (err) {
+      if (confirm.request === request && request) request.detail = `Could not check worktree ownership: ${String(err)}. Refresh sessions to try again.`;
+    }
+  }
+
+  private askRemoveEndedWorktree(ended: EndedSession, path: string, followup?: RemovalFollowup, discard = false) {
+    confirm.ask({
+      title: discard ? "Discard retained worktree files?" : "Remove leftover worktree?",
+      subject: ended.issue ? `${ended.issue}${ended.title ? ` — ${ended.title}` : ""}` : ended.title || ended.id,
+      body: path,
+      detail: discard
+        ? `This checkout has uncommitted changes or its changes cannot be verified safely. Removing it permanently discards every file in this folder.${followup?.branch ? ` Local branch ${followup.branch} is deleted only if Git allows it.` : " Local branches are kept."} Remote branches are kept.`
+        : `${ended.reason || "The owning session has ended"}. Remove its retained checkout.${followup?.branch ? ` Also deletes local branch ${followup.branch} if Git allows it.` : " Local branches are kept."} Changes that cannot be safely removed require a separate confirmation.`,
+      confirmLabel: discard ? "Discard files and remove" : "Remove worktree",
+      onConfirm: () => void this.removeEndedWorktree(ended, path, followup, discard),
+    });
+  }
+
+  private async removeEndedWorktree(ended: EndedSession, path: string, followup: RemovalFollowup | undefined, force: boolean) {
+    try {
+      const result = await DaemonService.RemoveEndedWorktree(ended.id, path, force);
+      if (!result.removed) return;
+      await followup?.onRemoved();
+      this.setFlash(result.message || "Retained worktree removed", "good");
+      void this.refresh();
+    } catch (err) {
+      const message = String(err);
+      if (!force && (message.includes("retained worktree changes cannot be verified safely") || message.includes("worktree has uncommitted changes"))) {
+        this.askRemoveEndedWorktree(ended, path, followup, true);
+      } else {
+        this.setFlash(message, "bad");
+      }
+    }
   }
 
   /** Ask, then kill. Git actions additionally pin the owning checkout and scope. */

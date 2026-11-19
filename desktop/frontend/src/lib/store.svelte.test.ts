@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // The bindings are the process boundary; stub them so the store's own logic —
 // specifically that destructive actions ASK before they act — is what's tested.
-const { Kill, StopDaemon, CloseSessionShells, Dev, SwitchAgent, OpenManual, OpenTicket } = vi.hoisted(() => ({
+const { Kill, StopDaemon, CloseSessionShells, Dev, SwitchAgent, OpenManual, OpenTicket, Sessions, Ended, RemoveEndedWorktree } = vi.hoisted(() => ({
   Kill: vi.fn(),
   StopDaemon: vi.fn(),
   CloseSessionShells: vi.fn(),
@@ -10,6 +10,9 @@ const { Kill, StopDaemon, CloseSessionShells, Dev, SwitchAgent, OpenManual, Open
   SwitchAgent: vi.fn(),
   OpenManual: vi.fn(),
   OpenTicket: vi.fn(),
+  Sessions: vi.fn(),
+  Ended: vi.fn(),
+  RemoveEndedWorktree: vi.fn(),
 }));
 
 vi.mock("@bindings/desktop", () => ({
@@ -21,11 +24,13 @@ vi.mock("@bindings/desktop", () => ({
     OpenManual: (...a: unknown[]) => OpenManual(...a),
     OpenTicket: (...a: unknown[]) => OpenTicket(...a),
     Alive: vi.fn().mockResolvedValue(false),
-    Sessions: vi.fn(),
+    Sessions: (...a: unknown[]) => Sessions(...a),
+    RemoveEndedWorktree: (...a: unknown[]) => RemoveEndedWorktree(...a),
     Projects: vi.fn(),
     Status: vi.fn(),
   },
   ConfigService: { ConfigExists: vi.fn() },
+  TalkService: { Ended: () => Ended() },
   TermService: { CloseSessionShells: (...a: unknown[]) => CloseSessionShells(...a) },
 }));
 
@@ -41,6 +46,9 @@ beforeEach(() => {
   SwitchAgent.mockResolvedValue({ agent: "codex", message: "switched to codex" });
   OpenManual.mockResolvedValue({ sessionID: "sess-new", branch: "feat/test" });
   OpenTicket.mockResolvedValue({ sessionID: "sess-ticket", identifier: "ENG-10" });
+  Sessions.mockResolvedValue({ sessions: [] });
+  Ended.mockResolvedValue({ sessions: [] });
+  RemoveEndedWorktree.mockResolvedValue({ removed: true });
   confirm.cancel();
   store.sessions = [];
   store.pushErrors = {};
@@ -120,9 +128,69 @@ describe("destructive actions ask first", () => {
     store.sessions = sessions as never;
     store.askRemoveManagedWorktree("/protected");
     expect(confirm.request?.title).toBe("Protected worktree");
-    expect(confirm.request?.confirmLabel).toBe("Got it");
-    confirm.accept();
+    expect(confirm.request?.confirmLabel).toBe(sessions.length === 1 ? "Got it" : "Refresh sessions");
+    confirm.cancel();
     expect(Kill).not.toHaveBeenCalled();
+  });
+
+  it("automatically refreshes a missing owner and then asks for session removal", async () => {
+    Sessions.mockResolvedValue({ sessions: [{ id: "managed", worktree: "/managed" }] });
+    Ended.mockRejectedValueOnce(new Error("old daemon has no history command"));
+    store.askRemoveManagedWorktree("/managed");
+    await vi.waitFor(() => expect(confirm.request?.title).toBe("Remove worktree?"));
+    expect(Kill).not.toHaveBeenCalled();
+    confirm.accept();
+    expect(Kill).toHaveBeenCalledWith("managed", false, false);
+  });
+
+  it("offers ended-worktree removal and carries branch cleanup through explicit discard confirmation", async () => {
+    Ended.mockResolvedValue({ sessions: [{ id: "ended", issue: "ENG-42", title: "Finished", keptWorktree: "/managed", reason: "PR #32 merged" }] });
+    RemoveEndedWorktree.mockRejectedValueOnce(new Error("retained worktree changes cannot be verified safely; explicit discard confirmation is required"));
+    const onRemoved = vi.fn();
+    store.askRemoveManagedWorktree("/managed", { branch: "topic", onRemoved });
+    await vi.waitFor(() => expect(confirm.request?.title).toBe("Remove leftover worktree?"));
+    expect(confirm.request?.detail).toContain("PR #32 merged");
+    expect(RemoveEndedWorktree).not.toHaveBeenCalled();
+    confirm.accept();
+    await vi.waitFor(() => expect(confirm.request?.title).toBe("Discard retained worktree files?"));
+    expect(RemoveEndedWorktree).toHaveBeenCalledWith("ended", "/managed", false);
+    expect(onRemoved).not.toHaveBeenCalled();
+    confirm.accept();
+    await vi.waitFor(() => expect(onRemoved).toHaveBeenCalledOnce());
+    expect(RemoveEndedWorktree).toHaveBeenLastCalledWith("ended", "/managed", true);
+    expect(Kill).not.toHaveBeenCalled();
+  });
+
+  it.each(["cancel", "replace"])("does not reopen an ownership lookup after %s", async action => {
+    let resolve!: (value: unknown) => void;
+    Sessions.mockReturnValueOnce(new Promise(r => { resolve = r; }));
+    store.askRemoveManagedWorktree("/managed");
+    if (action === "cancel") confirm.cancel();
+    else store.askKill("other");
+    const expected = confirm.request;
+    resolve({ sessions: [{ id: "managed", worktree: "/managed" }] });
+    await new Promise(r => setTimeout(r, 0));
+    expect(confirm.request).toBe(expected);
+    expect(Kill).not.toHaveBeenCalled();
+  });
+
+  it("offers a working refresh action after a failed lookup", async () => {
+    Sessions.mockRejectedValueOnce(new Error("daemon unavailable"));
+    store.askRemoveManagedWorktree("/managed");
+    await vi.waitFor(() => expect(confirm.request?.detail).toContain("daemon unavailable"));
+    expect(confirm.request?.confirmLabel).toBe("Refresh sessions");
+    Sessions.mockResolvedValue({ sessions: [{ id: "managed", worktree: "/managed" }] });
+    confirm.accept();
+    await vi.waitFor(() => expect(confirm.request?.title).toBe("Remove worktree?"));
+    expect(Kill).not.toHaveBeenCalled();
+  });
+
+  it("does not use ended history to bypass ambiguous current ownership", async () => {
+    Sessions.mockResolvedValue({ sessions: [{id:"a",worktree:"/managed"},{id:"b",worktree:"/managed"}] });
+    Ended.mockResolvedValue({ sessions: [{id:"ended",keptWorktree:"/managed"}] });
+    store.askRemoveManagedWorktree("/managed");
+    await vi.waitFor(() => expect(confirm.request?.detail).toContain("More than one"));
+    expect(RemoveEndedWorktree).not.toHaveBeenCalled();
   });
 
   it("askKill opens a confirmation and does NOT kill yet", () => {
@@ -225,7 +293,7 @@ describe("dirty-worktree kill re-asks with force", () => {
     Kill.mockRejectedValueOnce(dirty());
     await store.kill("lola-nori-app-nor-332");
     expect(confirm.request?.confirmLabel).toBe("Delete worktree");
-    expect(confirm.request?.detail).toContain("/Users/martin/.lola/worktrees/nori-app");
+    expect(confirm.request?.subject).toContain("/Users/martin/.lola/worktrees/nori-app");
     expect(store.flash?.kind).not.toBe("bad");
   });
 

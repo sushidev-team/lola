@@ -315,6 +315,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 	case protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdAgentSay, protocol.CmdAgentStop,
 		protocol.CmdAgentChoose, protocol.CmdAgentSetting, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions:
 		return d.handleTalk(ctx, req)
+	case "removeEndedWorktree":
+		data, err := d.handleRemoveEndedWorktree(ctx, req.Session, req.Text, req.Force)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "kill":
 		data, err := d.handleKill(ctx, req.Session, req.Force, req.KeepWorktree)
 		if err != nil {

@@ -402,6 +402,7 @@ func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier no
 		// rather than stamping a phantom "merged" record is what stops dirty merges
 		// from piling up in the sessions store forever (they are re-observed every
 		// cycle and never age out while an entry lingers).
+		d.recordEndedAs(s, endedReason(s)+" — worktree kept (uncommitted changes)")
 		d.dropSession(s)
 		notifier.Notify(cctx, notify.Note{
 			Title:    "PR merged — worktree kept",
