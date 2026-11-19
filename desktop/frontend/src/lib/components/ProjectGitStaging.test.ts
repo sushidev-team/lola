@@ -13,6 +13,20 @@ function setup(files?: GitSnapshot['files']) { const git=new ProjectGitState('lo
 beforeEach(()=>{localStorage.clear();confirm.cancel();Object.values(api).forEach(f=>f.mockReset());api.AmendNeedsConfirmation.mockResolvedValue(true);api.Snapshot.mockResolvedValue(snapshot());api.Identities.mockResolvedValue({authors:{}});});
 afterEach(()=>{cleanup();vi.useRealTimers();});
 describe('Project Git staging',()=>{
+ it.each(['Commit subject', 'Commit body'])('commits with Command+Enter from %s when the draft is ready', async (label) => {
+   setup();
+   const field = screen.getByLabelText(label);
+   const shortcut = { key: 'Enter', metaKey: true };
+   await fireEvent.keyDown(field, shortcut);
+   expect(api.Commit).not.toHaveBeenCalled();
+
+   await fireEvent.input(screen.getByLabelText('Commit subject'), { target: { value: 'fix: spacing' } });
+   await fireEvent.keyDown(field, { ...shortcut, repeat: true });
+   expect(api.Commit).not.toHaveBeenCalled();
+   await fireEvent.keyDown(field, shortcut);
+   expect(api.Commit).toHaveBeenCalledTimes(1);
+   expect(api.Commit).toHaveBeenCalledWith('lola', '', 'fix: spacing');
+ });
  it('amends a local commit directly without showing a confirmation',async()=>{
    api.AmendNeedsConfirmation.mockResolvedValue(false);
    const {git,oncommitted}=setup();git.subject='fix: local';await git.setAmend(true);
