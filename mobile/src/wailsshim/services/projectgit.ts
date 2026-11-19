@@ -8,6 +8,11 @@ import { MAC_ONLY } from "./reasons";
 import type { Routes } from "./routes";
 
 /** PLATFORM. */
+export function AcceptAICommitExclusions(_id: string): Promise<void> {
+  return unsupported("ProjectGitService.AcceptAICommitExclusions", MAC_ONLY);
+}
+
+/** PLATFORM. */
 export function AICommitStatus(_id: string): Promise<M.AICommitProgress> {
   return unsupported("ProjectGitService.AICommitStatus", MAC_ONLY);
 }
@@ -188,6 +193,7 @@ export function Unstage(_project: string, _worktree: string, _paths: string[] | 
 }
 
 export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
+  AcceptAICommitExclusions: { kind: "platform", reason: MAC_ONLY },
   AICommitStatus: { kind: "platform", reason: MAC_ONLY },
   Amend: { kind: "platform", reason: MAC_ONLY },
   AmendNeedsConfirmation: { kind: "platform", reason: MAC_ONLY },

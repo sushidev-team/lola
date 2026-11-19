@@ -6,9 +6,13 @@
 import * as config$0 from "../internal/config/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as projectgit$0 from "../internal/projectgit/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as reviewprofile$0 from "../internal/reviewprofile/models.js";
 
 export interface AICommitProgress {
+    "excluded"?: projectgit$0.AICommitExclusion[] | null;
     "id": string;
     "phase": string;
     "completed": number;

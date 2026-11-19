@@ -5,7 +5,7 @@ import ProjectGitStaging from './ProjectGitStaging.svelte';
 import { ProjectGitState } from '$lib/projectgit.svelte';
 import { confirm } from '$lib/confirm.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
-const api = vi.hoisted(() => ({ PrepareAICommit: vi.fn(), StartAICommit: vi.fn(), AICommitStatus: vi.fn(), CancelAICommit: vi.fn(), DraftCommitMessage: vi.fn(), PrepareDiscard: vi.fn(), DiscardUnstaged: vi.fn(), PrepareDiscardPaths: vi.fn(), DiscardPaths: vi.fn(), Snapshot: vi.fn(), Identities: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), AmendNeedsConfirmation: vi.fn(), LastCommitMessage: vi.fn() }));
+const api = vi.hoisted(() => ({ PrepareAICommit: vi.fn(), AcceptAICommitExclusions: vi.fn(), StartAICommit: vi.fn(), AICommitStatus: vi.fn(), CancelAICommit: vi.fn(), DraftCommitMessage: vi.fn(), PrepareDiscard: vi.fn(), DiscardUnstaged: vi.fn(), PrepareDiscardPaths: vi.fn(), DiscardPaths: vi.fn(), Snapshot: vi.fn(), Identities: vi.fn(), Commit: vi.fn(), Amend: vi.fn(), AmendNeedsConfirmation: vi.fn(), LastCommitMessage: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 const head = 'a'.repeat(40);
 function snapshot(): GitSnapshot { return { path:'/repo',branch:'main',head,upstream:'origin/main',refs:[],remotes:[],commits:[],worktrees:[],hasMore:false,signing:{enabled:true,format:'ssh',key:''}, files:[{path:'src/app.ts',oldPath:'',index:'M',worktree:' ',untracked:false,conflict:false},{path:'src/new.ts',oldPath:'',index:'?',worktree:'?',untracked:true,conflict:false}] }; }
@@ -240,21 +240,35 @@ describe('AI commit',()=>{
   api.PrepareAICommit.mockResolvedValue({token:'pinned',staged:1,files:2});
   api.StartAICommit.mockResolvedValue(planning);
   api.AICommitStatus.mockResolvedValue({...planning,phase:'complete',done:true,completed:2,total:2});
-  await fireEvent.click(screen.getByRole('button',{name:'Commit all changes with AI'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Plan commits with AI'}));
   await waitFor(()=>expect(confirm.request?.title).toBe('Include staged changes?'));
   expect(confirm.request?.detail).toContain('both staged and unstaged');
   expect(api.StartAICommit).not.toHaveBeenCalled();confirm.cancel();
-  await fireEvent.click(screen.getByRole('button',{name:'Commit all changes with AI'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Plan commits with AI'}));
   await waitFor(()=>expect(confirm.request).not.toBeNull());confirm.accept();
   await waitFor(()=>expect(oncommitted).toHaveBeenCalledOnce());
   expect(api.StartAICommit).toHaveBeenCalledWith('lola','','pinned',true);
   expect(git.subject).toBe('Keep my manual draft');expect(git.notice).toBe('Created 2 commits.');
  });
+ it('shows the suggested exclusions and lets the user accept them',async()=>{
+  const {git}=setup();
+  api.StartAICommit.mockResolvedValue(planning);
+  api.AICommitStatus.mockResolvedValue({...planning,phase:'review',total:1,excluded:[{path:'debug.log',reason:'Local debug output'}]});
+  const done=git.commitWithAI('pinned',false);
+  expect(await screen.findByText('debug.log')).toBeVisible();
+  expect(screen.getByText(/Local debug output/)).toBeVisible();
+  expect(api.AcceptAICommitExclusions).not.toHaveBeenCalled();
+  await fireEvent.click(screen.getByRole('button',{name:'Create 1 commit'}));
+  expect(api.AcceptAICommitExclusions).toHaveBeenCalledWith('job-1');
+  api.AICommitStatus.mockResolvedValue({...planning,phase:'complete',done:true,completed:1,excluded:[{path:'debug.log',reason:'Local debug output'}]});
+  await done;
+  expect(git.notice).toContain('Left 1 file uncommitted');
+ });
  it('locks the whole section and keeps Cancel reachable until cancellation finishes',async()=>{
   const {git,view}=setup([snapshot().files[1]]);
   api.PrepareAICommit.mockResolvedValue({token:'pinned',staged:0,files:1});
   api.StartAICommit.mockResolvedValue(planning);api.AICommitStatus.mockResolvedValue(planning);
-  await fireEvent.click(screen.getByRole('button',{name:'Commit all changes with AI'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Plan commits with AI'}));
   await waitFor(()=>expect(screen.getByRole('button',{name:'Cancel'})).toBeEnabled());
   expect(confirm.request).toBeNull();expect(api.StartAICommit).toHaveBeenCalledWith('lola','','pinned',false);
   expect(view.container.querySelector('.staging-panel')).toHaveAttribute('aria-busy','true');
