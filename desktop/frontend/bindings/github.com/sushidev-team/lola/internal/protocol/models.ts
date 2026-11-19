@@ -1487,6 +1487,11 @@ export interface HubTeamSettingsArgs {
     "linearKey"?: string | null;
     "linearTeam"?: string | null;
     "digestWebhook"?: string | null;
+
+    /**
+     * LinearWebhookSecret is the Linear agent app's webhook signing secret, for the hub's
+     * doorbell endpoint (a secret like the others).
+     */
     "linearWebhookSecret"?: string | null;
 
     /**
