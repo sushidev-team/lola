@@ -431,6 +431,13 @@ func (c Client) diffContext(ctx context.Context, dir, from, to, area, path, unif
 		} else {
 			args = []string{"-c", "core.quotepath=off", "show", "--format=", "--first-parent", "--root", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--unified=" + unified, to}
 		}
+	case "conflict":
+		if path == "" {
+			return result, errors.New("select a conflicted file")
+		}
+		// An unmerged index produces a combined diff. Compare the working file
+		// to HEAD to show conflict markers in a normal two-sided patch.
+		args = append(args, "HEAD")
 	case "staged":
 		args = append(args, "--cached")
 	case "unstaged":
@@ -547,6 +554,11 @@ func (c Client) untracked(ctx context.Context, dir, path string) (gitdiff.Result
 // rename's old path is absent from the index, so staging later edits must only
 // name its destination. Unstaging the rename restores both index endpoints.
 func (c Client) ChangeIndex(ctx context.Context, dir string, paths []string, stage bool) error {
+	return c.changeIndex(ctx, dir, paths, stage, false)
+}
+
+// Only interactive staging may record a working file as a conflict resolution.
+func (c Client) changeIndex(ctx context.Context, dir string, paths []string, stage, resolve bool) error {
 	if len(paths) == 0 || len(paths) > 2000 {
 		return errors.New("select between 1 and 2000 files")
 	}
@@ -565,10 +577,10 @@ func (c Client) ChangeIndex(ctx context.Context, dir string, paths []string, sta
 		if !ok || !validPath(path) {
 			return errors.New("a selected file changed; refresh the repository")
 		}
-		if f.Conflict {
+		if f.Conflict && !resolve {
 			return errors.New("resolve conflicts before changing the index")
 		}
-		if stage && f.Worktree == " " && !f.Untracked {
+		if stage && f.Worktree == " " && !f.Untracked && !f.Conflict {
 			continue
 		}
 		if !stage && (f.Index == " " || f.Untracked) {
@@ -606,7 +618,7 @@ func (c Client) ChangeIndex(ctx context.Context, dir string, paths []string, sta
 // ChangeIndexAndStatus returns the authoritative file list without rereading
 // history, refs, worktrees or configuration after a file-only mutation.
 func (c Client) ChangeIndexAndStatus(ctx context.Context, dir string, paths []string, stage bool) ([]File, error) {
-	if err := c.ChangeIndex(ctx, dir, paths, stage); err != nil {
+	if err := c.changeIndex(ctx, dir, paths, stage, stage); err != nil {
 		return nil, err
 	}
 	return c.status(ctx, dir)

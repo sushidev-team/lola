@@ -77,6 +77,10 @@ export function Commit(project: string, worktree: string, message: string): $Can
     return $Call.ByID(2416522199, project, worktree, message);
 }
 
+export function ConflictDocument(project: string, worktree: string, path: string): $CancellablePromise<projectgit$0.ConflictDocument> {
+    return $Call.ByID(1487689857, project, worktree, path);
+}
+
 /**
  * CreateBranch creates at a pinned commit in the explicitly selected checkout.
  */
@@ -161,6 +165,10 @@ export function PullRequestOptions(project: string, worktree: string, remote: st
 
 export function Push(project: string, worktree: string): $CancellablePromise<void> {
     return $Call.ByID(3099670570, project, worktree);
+}
+
+export function SaveConflict(project: string, worktree: string, path: string, token: string, result: string): $CancellablePromise<void> {
+    return $Call.ByID(173567461, project, worktree, path, token, result);
 }
 
 export function Snapshot(project: string, worktree: string, ref: string, limit: number): $CancellablePromise<projectgit$0.Snapshot> {

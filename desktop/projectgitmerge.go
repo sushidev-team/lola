@@ -1,6 +1,10 @@
 package main
 
-import "github.com/sushidev-team/lola/internal/projectgit"
+import (
+	"context"
+
+	"github.com/sushidev-team/lola/internal/projectgit"
+)
 
 func (s *ProjectGitService) CanFastForward(project, worktree string, request projectgit.BranchRequest) (bool, error) {
 	ctx, cancel := projectgit.Context()
@@ -25,4 +29,20 @@ func (s *ProjectGitService) CanFastForward(project, worktree string, request pro
 		}
 	}
 	return c.CanFastForward(ctx, dir, request)
+}
+
+func (s *ProjectGitService) ConflictDocument(project, worktree, path string) (projectgit.ConflictDocument, error) {
+	ctx, cancel := projectgit.Context()
+	defer cancel()
+	dir, _, err := projectGitTarget(ctx, project, worktree)
+	if err != nil {
+		return projectgit.ConflictDocument{}, err
+	}
+	return (projectgit.Client{}).ConflictDocument(ctx, dir, path)
+}
+
+func (s *ProjectGitService) SaveConflict(project, worktree, path, token, result string) error {
+	return s.mutate(project, worktree, func(ctx context.Context, dir string) error {
+		return (projectgit.Client{}).SaveConflict(ctx, dir, path, token, result)
+	})
 }

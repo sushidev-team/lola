@@ -25,6 +25,7 @@
   import { gitColumns, readGitColumns, saveGitColumns, defaultGitColumns, type GitColumnID } from '$lib/gitcolumns';
   import GitProviderIcon from './GitProviderIcon.svelte';
   import Icon from './Icon.svelte';
+  import ProjectGitConflict from './ProjectGitConflict.svelte';
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
   import { projectGitState, type ProjectGitState } from '$lib/projectgit.svelte';
@@ -115,6 +116,7 @@
   function searchKey(event: KeyboardEvent) {
     if (!active) return;
     if (event.defaultPrevented || nav.overlay || confirm.request) return;
+    if (event.target instanceof Element && event.target.closest('[aria-label="Merge editor"]')) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !nav.overlay && !confirm.request) { event.preventDefault(); void openSearch(); }
     if (event.key === 'Escape') { if (columnMenu) columnMenu = false; else if (searchOpen) closeSearch(); }
   }
@@ -386,7 +388,7 @@
   });
   const shownFile = $derived(fullFile && fullFile.path === file?.path ? fullFile : file);
   const totals = $derived(files.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
-  const diffTitle = $derived(area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${comparisonLabel(0)} → ${comparisonLabel(1)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
+  const diffTitle = $derived(area === 'conflict' ? path : area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${comparisonLabel(0)} → ${comparisonLabel(1)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
 
   $effect(() => {
     project;
@@ -403,7 +405,7 @@
   $effect(() => {
     const state = view, snapshot = view.snapshot, selection = selected, chosenArea = area, chosenPath = path;
     untrack(() => {
-      if (!snapshot || !chosenArea) { state.clearDiff(); return; }
+      if (!snapshot || !chosenArea || chosenArea === 'conflict') { state.clearDiff(); return; }
       void state.loadDiff(chosenArea, chosenArea === 'working' || selection.length === 2 ? selection[0] : '', chosenArea === 'working' ? '' : selection.at(-1) ?? '', chosenPath);
     });
   });
@@ -449,16 +451,31 @@
   function showCommitDiff(sha: string) { selected = [sha]; area = 'commit'; path = ''; activeFile = ''; diffOpen = true; }
   function inspectFile(file: GitFile, staged: boolean) {
     diffOpen = true;
-    selected = []; area = staged ? 'staged' : file.untracked ? 'untracked' : 'unstaged'; path = file.path; activeFile = file.path;
+    selected = []; area = file.conflict ? 'conflict' : staged ? 'staged' : file.untracked ? 'untracked' : 'unstaged'; path = file.path; activeFile = file.path;
   }
   async function act(action: 'stage' | 'unstage' | 'commit' | 'fetch' | 'pull' | 'push', paths: string[] = []) {
     const local = ['stage', 'unstage', 'commit'].includes(action);
     // Fetch, pull and push belong to the toolbar, which is the active checkout's.
     const state = local ? view : git, peeking = state !== git;
-    const ok = await state.act(action, paths, peeking ? '' : ref, peeking ? 1 : limit);
-    if (ok && state === view && local) working();
-    // The peeked checkout's counts live in the active snapshot.
-    if (ok && peeking) void git.load(ref, limit);
+    const conflicts = action === 'stage' ? state.snapshot?.files.filter(f => f.conflict && paths.includes(f.path)) : [];
+    if (conflicts?.length) {
+      const snapshot = state.snapshot;
+      confirm.ask({
+        title: 'Stage conflict resolution?',
+        subject: conflicts.map(file => file.path).join('\n'),
+        body: 'Git will use the saved working files as the resolution, including any conflict markers left in them.',
+        confirmLabel: 'Stage resolution',
+        onConfirm: () => { if (state === view && snapshot?.head === state.snapshot?.head && snapshot?.branch === state.snapshot?.branch) void apply(); },
+      });
+      return;
+    }
+    await apply();
+    async function apply() {
+      const ok = await state.act(action, paths, peeking ? '' : ref, peeking ? 1 : limit);
+      if (ok && state === view && local) working();
+      // The peeked checkout's counts live in the active snapshot.
+      if (ok && peeking) void git.load(ref, limit);
+    }
   }
   // Single lines move only for a tracked, modified text file in the staged or unstaged list.
   const lineAction = $derived(file?.status === 'modified' && !file.binary && !file.tooLarge ? area === 'unstaged' ? 'stage' as const : area === 'staged' ? 'unstage' as const : null : null);
@@ -798,7 +815,18 @@
       {#if area && diffOpen}
         <section class="diff-stage" aria-label="Selected changes">
           <div class="comparison-bar"><span><Icon name={selected.length === 2 ? 'git-compare-arrows' : 'file-text'} size={14} />{diffTitle}</span><div>{#if selected.length === 2}<Button size="xs" aria-label="Swap comparison direction" onclick={() => { comparisonBranches = [...comparisonBranches].reverse(); selected = [...selected].reverse(); }}><Icon name="arrow-right-left" size={13} />Swap</Button>{/if}<Button size="xs" icon aria-label="Close diff" onclick={() => diffOpen = false}><Icon name="x" size={14} /></Button></div></div>
-          {#if view.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
+          {#if area === 'conflict'}
+            {@const owner = view}
+            {@const chosenPath = path}
+            {#key JSON.stringify([owner.project,owner.worktree,chosenPath])}
+              <ProjectGitConflict git={owner} path={chosenPath} onstageexternal={() => void act('stage',[chosenPath])} onstaged={async () => {
+                const peeking = owner !== git;
+                await owner.load(peeking ? '' : ref, peeking ? 1 : limit);
+                if (owner === view && path === chosenPath && area === 'conflict') working();
+                if (peeking) void git.load(ref,limit);
+              }}/>
+            {/key}
+          {:else if view.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
           {:else if view.diffError}<div class="git-empty" role="alert"><Icon name="circle-alert" size={20} /><p>{view.diffError}</p><Button onclick={() => void view.loadDiff(area as GitArea, area === 'working' || selected.length === 2 ? selected[0] : '', area === 'working' ? '' : selected.at(-1) ?? '', path)}>Retry diff</Button></div>
           {:else if shownFile}<ProjectGitDiff file={shownFile} lineAction={lineAction} busy={!!view.busy} onlines={(lines) => void changeLines(lines)} oncontext={(title, items, event) => gitActions.openItems(title, items, event)} />
           {:else}<div class="git-empty"><Icon name="check" size={20} /><p>No file changes in this comparison</p></div>{/if}

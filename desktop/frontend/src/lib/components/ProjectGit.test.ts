@@ -6,7 +6,7 @@ import { confirm } from '$lib/confirm.svelte';
 import { store } from '$lib/store.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
 
-const api = vi.hoisted(() => ({ BranchPullRequests: vi.fn(), Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
+const api = vi.hoisted(() => ({ ConflictDocument:vi.fn(), SaveConflict:vi.fn(), BranchPullRequests: vi.fn(), Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api }));
 let serial = 0;
 let project: string;
@@ -622,12 +622,42 @@ describe('Project Git workspace', () => {
     render(ProjectGit, { project });
     await screen.findByText('No commits yet');
     await fireEvent.input(screen.getByLabelText('Commit subject'), { target: { value: 'Do not commit conflict' } });
-    expect(screen.getByRole('button', { name: 'Commit 1 file' })).toBeDisabled();
-    expect(screen.getByText('1 conflicted file')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Commit staged changes' })).toBeDisabled();
     expect(screen.queryByText('Resolve conflicted files before committing.')).toBeNull();
     api.Snapshot.mockRejectedValue(new Error('Repository unavailable'));
     await refreshRepository();
     expect(await screen.findByRole('alert')).toHaveTextContent('Repository unavailable');
+  });
+  it('previews a conflicted file and stages a manual resolution', async () => {
+    api.Snapshot.mockResolvedValue(snapshot({ files: [{ path: 'conflict.ts', oldPath: '', index: 'U', worktree: 'U', untracked: false, conflict: true }] }));
+    api.ConflictDocument.mockResolvedValue({token:'snapshot',text:'prefix\n<<<<<<< Updated upstream\nfirst\n=======\nsecond\n>>>>>>> Stashed changes\nsuffix\n'});
+    await open();
+    const conflict = screen.getByRole('button', {name: 'Inspect conflicted conflict.ts'});
+    await fireEvent.click(conflict);
+    expect(await screen.findByRole('region',{name:'Current lines'})).toHaveTextContent('first');
+    expect(screen.getByRole('button',{name:'Save & stage'})).toBeDisabled();
+    await fireEvent.click(screen.getByRole('button',{name:'Use incoming'}));
+    await fireEvent.click(screen.getByRole('button',{name:'Save & stage'}));
+    await waitFor(() => expect(api.SaveConflict).toHaveBeenCalledWith(project,'','conflict.ts','snapshot','prefix\nsecond\nsuffix\n'));
+    expect(api.Diff).not.toHaveBeenCalledWith(project,'','','','conflict','conflict.ts');
+  });
+  it('combines individual lines across conflicts and stages the edited full result', async () => {
+    api.Snapshot.mockResolvedValue(snapshot({files:[{path:'lock.json',oldPath:'',index:'U',worktree:'U',untracked:false,conflict:true}]}));
+    api.ConflictDocument.mockResolvedValue({token:'two',text:'<<<<<<< A\nleft\n=======\nright\n>>>>>>> B\ncommon\n<<<<<<< A\nold\n=======\nnew\n>>>>>>> B\n'});
+    await open();
+    await fireEvent.click(screen.getByRole('button',{name:'Inspect conflicted lock.json'}));
+    await fireEvent.click(await screen.findByRole('button',{name:'Add incoming line 4'}));
+    await fireEvent.click(screen.getByRole('button',{name:'Add current line 2'}));
+    expect(screen.getByRole('textbox',{name:'Conflict result'})).toHaveValue('right\nleft\n');
+    expect(screen.getByRole('button',{name:'Save & stage'})).toBeDisabled();
+    await fireEvent.click(screen.getByRole('button',{name:'Next conflict'}));
+    await fireEvent.click(screen.getByRole('button',{name:'Use incoming'}));
+    await fireEvent.click(screen.getByRole('button',{name:'Full result'}));
+    const editor = screen.getByRole('textbox',{name:'Full merged result'});
+    expect(editor).toHaveValue('right\nleft\ncommon\nnew\n');
+    await fireEvent.input(editor,{target:{value:'hand-edited\n'}});
+    await fireEvent.click(screen.getByRole('button',{name:'Save & stage'}));
+    await waitFor(() => expect(api.SaveConflict).toHaveBeenCalledWith(project,'','lock.json','two','hand-edited\n'));
   });
   it('keeps conflict counts, file totals and AI resolution together in the working row', async () => {
     const data=snapshot({operation:'merge'});
