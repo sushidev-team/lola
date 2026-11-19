@@ -3,7 +3,7 @@
   import { ProjectGitService } from '@bindings/desktop';
   import type { ProjectGitState } from '$lib/projectgit.svelte';
   import type { GitRef } from '$lib/projectgit';
-  import type { PROptions, PRPreview, PRSelection, PRResult } from '$lib/gitpullrequest';
+  import { pullRequestWebURL, type PROptions, type PRPreview, type PRSelection } from '$lib/gitpullrequest';
   import { store } from '$lib/store.svelte';
   import Modal from './Modal.svelte';
   import Button from './Button.svelte';
@@ -26,14 +26,16 @@
   let title=$state(untrack(()=>saved?.title||git.snapshot?.commits.find(c=>c.sha===branch.sha)?.subject||''));
   let body=$state(saved?.body||'');let draft=$state(saved?.draft??false);let push=$state(false);
   let reviewers=$state<string[]>(saved?.reviewers??[]),assignees=$state<string[]>(saved?.assignees??[]),labels=$state<string[]>(saved?.labels??[]);
-  let options=$state<PROptions|null>(null),preview=$state<PRPreview|null>(null),result=$state<PRResult|null>(null);
+  let options=$state<PROptions|null>(null),preview=$state<PRPreview|null>(null);
   let error=$state(''),draftError=$state('');let alive=true,optionsSeq=0,previewSeq=0;let previewKey='';
   const sourceBranches=$derived((git.snapshot?.refs??[]).filter(r=>!r.remote||(r.fullName.startsWith(`refs/remotes/${remote}/`)&&!r.fullName.endsWith('/HEAD'))));
   const source=$derived(sourceBranches.find(r=>r.fullName===sourceRef));
   const busy=$derived(!!git.busy);
   const selection=$derived<PRSelection>({remote,sourceRef,sourceSHA:source?.sha??'',baseRepo,base});
   const ready=$derived(!busy&&!git.prLoading&&!git.prPreviewLoading&&!git.prDrafting&&!!preview&&preview.commits>0&&!!title.trim()&&(!preview.needsPush||push));
-  $effect(()=>{if(!result)git.pullRequestDraft={sourceRef,remote,baseRepo,base,title,body,draft,reviewers,assignees,labels};});
+  $effect(()=>{git.pullRequestDraft={sourceRef,remote,baseRepo,base,title,body,draft,reviewers,assignees,labels};});
+  // The web form needs the branch on the remote, and has no reviewer or draft parameter.
+  const canContinue=$derived(!busy&&!git.prPreviewLoading&&!!preview&&preview.commits>0&&!preview.needsPush&&previewKey===JSON.stringify(selection));
   onMount(()=>{void loadOptions();});
   onDestroy(()=>{alive=false;optionsSeq++;previewSeq++;git.prLoading=false;git.prPreviewLoading=false;git.prDrafting=false;});
   function close(){if(!busy)onClose();}
@@ -73,16 +75,24 @@
   async function create(e:SubmitEvent){
     e.preventDefault();if(!ready||previewKey!==JSON.stringify(selection))return;error='';
     const response=await git.createPullRequest({selection:{...selection},title:title.trim(),body,draft,push,reviewers:draft?[]:[...reviewers],assignees:[...assignees],labels:[...labels]},historyRef,limit);
-    if(!alive)return;if(response)result=response;else error=git.error||'Could not create the pull request.';
+    if(!alive)return;
+    if(!response){error=git.error||'Could not create the pull request.';return;}
+    // The result is a toast, not a second dialog: the form is done, and the
+    // toast's action is the one thing left to do with it.
+    const url=response.url,where=`${baseRepo} · ${preview?.head} → ${base}`;
+    store.setFlash(response.existing?`An open pull request already exists (#${response.number})`:`Pull request #${response.number} created`,response.warnings.length?'warn':'good',{description:[where,...response.warnings].join('\n'),action:{label:'Open pull request',run:()=>store.openURL(url)}});
+    onClose();
+  }
+  // Hands the draft to GitHub's own form. The local draft is kept, so reopening
+  // this dialog restores it.
+  function continueOnWeb(){
+    if(!canContinue||!preview)return;
+    void store.openURL(pullRequestWebURL({baseRepo,base,sourceRepo:preview.sourceRepo,head:preview.head,title:title.trim(),body,assignees,labels}));
+    onClose();
   }
 </script>
 
-<Modal title={result?'Pull request ready':'Create pull request'} width="660px" portal onClose={close} onkey={key}>
- {#if result}
-  <div class="pr-success"><Icon name="git-pull-request" size={24}/><div><strong>{result.existing?'An open pull request already exists':`Pull request #${result.number} created`}</strong><p>{baseRepo} · {preview?.head} → {base}</p></div></div>
-  {#each result.warnings as warning}<p class="pr-warning" role="status">{warning}</p>{/each}
-  <div class="dialog-actions"><Button onclick={close}>Done</Button><Button variant="primary" onclick={()=>void store.openURL(result!.url)}><Icon name="external-link" size={15}/>Open pull request</Button></div>
- {:else}
+<Modal title="Create pull request" width="660px" portal onClose={close} onkey={key}>
   <form class="pr-form" aria-label="Create pull request" aria-busy={busy} onsubmit={create}>
    <div class="pr-provider"><GitProviderIcon host="github.com"/><span>GitHub</span><span class="pr-summary">{git.prLoading?'Loading repository…':git.prPreviewLoading?'Comparing branches…':preview?`${preview.commits} commits · ${preview.files} files`:''}</span></div>
    <div class="pr-directions">
@@ -101,13 +111,12 @@
    <input id={`${uid}-title`} bind:value={title} disabled={busy} maxlength="256" required placeholder="What does this change?"/>
    <label for={`${uid}-body`}>Description</label><textarea id={`${uid}-body`} bind:value={body} disabled={busy} maxlength="65000" rows="6" placeholder="Describe the change, its purpose, and how to verify it…"></textarea>
    {#if draftError}<p class="pr-error" role="alert">{draftError}</p>{/if}
-   <div class="pr-metadata"><ProjectGitPRChoices label="Reviewers" options={options?.reviewers??[]} bind:selected={reviewers} disabled={busy||draft||git.prLoading}/><ProjectGitPRChoices label="Assignees" options={options?.assignees??[]} bind:selected={assignees} disabled={busy||git.prLoading}/><ProjectGitPRChoices label="Labels" options={options?.labels??[]} bind:selected={labels} disabled={busy||git.prLoading}/></div>
+   <div class="pr-metadata"><ProjectGitPRChoices label="Assignees" options={options?.assignees??[]} bind:selected={assignees} disabled={busy||git.prLoading}/><ProjectGitPRChoices label="Reviewers" options={options?.reviewers??[]} bind:selected={reviewers} disabled={busy||draft||git.prLoading}/><ProjectGitPRChoices label="Labels" options={options?.labels??[]} bind:selected={labels} disabled={busy||git.prLoading}/></div>
    <label class="pr-draft"><Checkbox bind:checked={draft} disabled={busy}/><span>Create as draft</span>{#if draft}<small>Request reviewers when ready.</small>{/if}</label>
    {#if options?.notices.length}<details class="pr-notices"><summary><Icon name="chevron-right" size={12}/>Some metadata is unavailable</summary>{#each options.notices as notice}<p>{notice}</p>{/each}</details>{/if}
    {#if error}<div class="pr-error" role="alert"><span>{error}</span>{#if !busy}<Button size="xs" onclick={()=>void loadOptions()}>Retry</Button>{/if}</div>{/if}
-   <div class="dialog-actions"><Button disabled={busy} onclick={close}>Cancel</Button><Button type="submit" variant="primary" loading={git.busy==='create-pr'} disabled={!ready}><Icon name="git-pull-request" size={15}/>{preview?.needsPush?'Push & create PR':draft?'Create draft PR':'Create PR'}</Button></div>
+   <div class="dialog-actions"><Button class="cancel" disabled={busy} onclick={close}>Cancel</Button><Button variant="secondary" disabled={!canContinue} onclick={continueOnWeb} title={preview?.needsPush?'Push the branch first: GitHub can only open a pull request form for a branch it has.':'Open GitHub\'s pull request form with this title, description, assignees and labels. Reviewers and draft are chosen there.'}><Icon name="external-link" size={15}/>Continue on GitHub</Button><Button type="submit" variant="primary" loading={git.busy==='create-pr'} disabled={!ready}><Icon name="git-pull-request" size={15}/>{preview?.needsPush?'Push & create PR':draft?'Create draft PR':'Create PR'}</Button></div>
   </form>
- {/if}
 </Modal>
 
 <style>
@@ -133,6 +142,5 @@
  .pr-warning { color:var(--color-warn); font-size:13px; margin-block:8px; overflow-wrap:anywhere; }
  .pr-notices { color:var(--color-faint); font-size:12px; }.pr-notices summary { display:flex; gap:5px; cursor:pointer; list-style:none; }.pr-notices summary::-webkit-details-marker{display:none;}.pr-notices p{margin-top:4px;}
  .dialog-actions { margin-top:12px; }
- .pr-success { display:flex; align-items:center; gap:12px; color:var(--color-accent-ink); padding-block:8px; }.pr-success p { color:var(--color-ink-2); margin-top:5px; font-size:13px; overflow-wrap:anywhere; }
  @media(max-width:540px){.pr-directions{grid-template-columns:minmax(0,1fr);}.pr-directions :global(.pr-direction){display:none;}.pr-metadata{grid-template-columns:minmax(0,1fr);}.pr-draft{flex-wrap:wrap;}.pr-draft small{margin-left:22px;}.pr-summary{max-width:65%;text-align:right;}}
 </style>

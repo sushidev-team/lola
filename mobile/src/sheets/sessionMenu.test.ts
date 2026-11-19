@@ -23,6 +23,16 @@ describe("menuRows", () => {
     expect(menuRows(base, can)).toEqual(["checkpoints"]);
   });
 
+  it("offers Review plan only while a plan waits, and only with the control tier", () => {
+    const waiting = { ...(base as object), plan: { gate: "submitted", text: "p", round: 1 } } as never;
+    tiers.set(["read", "control"]);
+    expect(menuRows(waiting, can)).toContain("plan");
+    expect(menuRows(base, can)).not.toContain("plan");
+    expect(menuRows({ ...(base as object), plan: { gate: "approved" } } as never, can)).not.toContain("plan");
+    tiers.set(["read"]);
+    expect(menuRows(waiting, can)).not.toContain("plan");
+  });
+
   it("offers Review and CodeRabbit only for a PR that is not on an ssh host", () => {
     tiers.set(["read", "control"]);
     expect(menuRows(base, can)).not.toContain("review");

@@ -29,10 +29,12 @@ import (
 // Loopback TCP is reachable by every local process, unlike the 0600 socket, so
 // the bridge is deliberately NARROW, and each rail is load-bearing:
 //
-//   - A closed list: hookEvent, agentReport, reviewPackagePublish/Complete, and the agent
+//   - A closed list: hookEvent, agentReport, the plan gate's in-pane planGate and
+//     planSubmit (without them the gate would fail open in every container),
+//     reviewPackagePublish/Complete, and the agent
 //     side of `lola ssh`. Package reads and image retrieval remain human-only. Everything else
 //     (kill, answer, config, any human ssh command) is refused before it reaches
-//     handle.
+//     handle (never planDecide, which is a human verdict).
 //   - Every request carries hook.TokenFor(secret, req.Session); a token names
 //     ONE session, so a container can speak only for itself, and a process
 //     without a token cannot speak at all. The secret is a 0600 file under
@@ -50,7 +52,7 @@ const hookBridgeConnTimeout = 10 * time.Second
 // request|run|post` from a sandboxed agent. Never a human ssh command: approving,
 // taking the wheel and opening a connection are what the sandbox exists to keep
 // out of an agent's reach.
-var hookBridgeCmds = map[string]bool{"hookEvent": true, "agentReport": true, protocol.CmdReviewPublish: true, protocol.CmdReviewComplete: true}
+var hookBridgeCmds = map[string]bool{"hookEvent": true, "agentReport": true, "planGate": true, "planSubmit": true, protocol.CmdReviewPublish: true, protocol.CmdReviewComplete: true}
 
 func init() {
 	for _, cmd := range protocol.SSHAgentCommands {

@@ -208,6 +208,8 @@ class SessionView {
   /** Someone hid the sidebar. It stays hidden for this session until they ask for it back. */
   sideHidden = $state(false);
   sessionPanels = $state(false);
+  /** The session has an account to show, whether or not the column is wide enough to seed it. */
+  sideOffered = $state(false);
   /** What the agent draft's references stand for. See composerpaste.ts. Reactive: its tiles read it. */
   pastes = new SvelteMap<number, Attachment>();
   pasteSeq = 0;
@@ -1360,12 +1362,13 @@ class SSHStore {
 
   /**
    * ⌘N: the session's right sidebar. Only the conversation has one. With nothing docked it
-   * brings Overview back, so the key always has something to show.
+   * brings Overview back, so the key always has something to show. That holds in a column too
+   * narrow for the panels to start open: Overview then docks if it fits and is the drawer if not.
    */
   sideKey(s: SessionInfo) {
     if (terms.activeTab(s.id) !== SSH) return;
     const v = this.view(s.id);
-    if (v.sessionPanels && !allTabs(v.dock).length) v.openWidget(OVERVIEW_PANEL);
+    if ((v.sessionPanels || v.sideOffered) && !allTabs(v.dock).length) v.openWidget(OVERVIEW_PANEL);
     else v.toggleDock();
   }
 

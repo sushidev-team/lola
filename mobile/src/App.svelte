@@ -10,7 +10,6 @@
   const SCREENS = {
     connect: () => import("./screens/Connect.svelte"),
     inbox: () => import("./screens/Inbox.svelte"),
-    activity: () => import("./screens/Activity.svelte"),
     projects: () => import("./screens/Projects.svelte"),
     projectDetail: () => import("./screens/ProjectDetail.svelte"),
     prPicker: () => import("./screens/PRPicker.svelte"),

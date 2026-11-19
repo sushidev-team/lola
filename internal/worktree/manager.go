@@ -517,7 +517,8 @@ func lastLine(s string) string {
 // both the dirty check (`git -C dir status`) and `git worktree remove` fail
 // with exit 128 — which wedged the merged/kill cleanup into retrying forever
 // and made --force useless too. When a git step fails AND the dir's `.git`
-// link is gone, the leftover is removed directly (removeUnregistered).
+// link is gone or names an administrative directory that no longer exists,
+// the leftover is removed directly (removeUnregistered).
 func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch string, force bool) error {
 	if err := m.guardRemovable(p, dir); err != nil {
 		return err
@@ -525,10 +526,10 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 	if !force {
 		out, _, err := m.git(ctx, "-C", dir, "status", "--porcelain")
 		if err != nil {
-			// git cannot inspect the dir. If its `.git` link is gone it is an
-			// orphaned leftover git can no longer manage; remove it directly.
+			// git cannot inspect the dir. If its `.git` link is gone or dangling
+			// it is an orphaned leftover git can no longer manage; remove it directly.
 			// Otherwise the error is real (transient/permissions) — propagate.
-			if m.orphanedLeftover(dir) {
+			if m.orphanedLeftover(p, dir) {
 				return m.removeUnregistered(ctx, p, dir, branch, false)
 			}
 			return fmt.Errorf("worktree: dirty check: %w", err)
@@ -552,7 +553,7 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 		// surfaces here: `git worktree remove` also fails exit 128 on it. Same
 		// fallback — a real git failure (locked worktree, permissions) keeps its
 		// `.git` link and propagates.
-		if m.orphanedLeftover(dir) {
+		if m.orphanedLeftover(p, dir) {
 			return m.removeUnregistered(ctx, p, dir, branch, force)
 		}
 		return err
@@ -561,12 +562,44 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 }
 
 // orphanedLeftover reports whether dir is a directory git no longer manages as
-// a worktree — its `.git` link (a file for a linked worktree) is absent. Such
-// a leftover can be neither dirty-checked nor removed through git. A missing
-// dir counts as orphaned too (nothing for git to manage); any other stat error
-// (e.g. permissions) counts as not-orphaned so the original git error wins.
-func (m *Manager) orphanedLeftover(dir string) bool {
-	_, err := os.Lstat(filepath.Join(dir, ".git"))
+// a worktree. Such a leftover can be neither dirty-checked nor removed through
+// git. Two shapes count:
+//
+//   - its `.git` link (a file for a linked worktree) is absent. A missing dir
+//     counts too (nothing for git to manage);
+//   - the link is there but names an administrative directory that no longer
+//     exists (`fatal: not a git repository: '<repo>/.git/worktrees/<id>'`):
+//     the registration was dropped while the checkout stayed on disk.
+//
+// The second shape is only trusted while the project's repository is
+// reachable: a repository on an unmounted volume makes every admin dir look
+// missing, and that must not turn a live worktree into a deletable leftover.
+// Any other stat or read error (e.g. permissions) and any link this cannot
+// parse count as not-orphaned, so the original git error wins.
+func (m *Manager) orphanedLeftover(p config.Project, dir string) bool {
+	link := filepath.Join(dir, ".git")
+	info, err := os.Lstat(link)
+	if errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 {
+		return false
+	}
+	data, err := os.ReadFile(link)
+	if err != nil {
+		return false
+	}
+	target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+	if target = strings.TrimSpace(target); !ok || target == "" {
+		return false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, target)
+	}
+	if _, err := os.Stat(p.Path); err != nil {
+		return false
+	}
+	_, err = os.Stat(target)
 	return errors.Is(err, fs.ErrNotExist)
 }
 

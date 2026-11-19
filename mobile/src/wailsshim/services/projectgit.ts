@@ -85,6 +85,11 @@ export function Diff(project: string, worktree: string, $from: string, to: strin
   return git<GD.Result>("Diff", "projectGit", { op: "diff", project, worktree, from: $from, to, area, path });
 }
 
+/** PLATFORM. */
+export function ChangeLines(_project: string, _worktree: string, _area: string, _path: string, _patch: string, _lines: number[] | null, _stage: boolean): Promise<PG.File[] | null> {
+  return unsupported("ProjectGitService.ChangeLines", MAC_ONLY);
+}
+
 /** FORWARDED. */
 export function DiscardUnstaged(project: string, worktree: string, token: string): Promise<void> {
   return git<void>("DiscardUnstaged", "projectGitDiscard", { op: "discard", project, worktree, token });
@@ -213,6 +218,7 @@ export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   CreateBranch: { kind: "fwd", cmd: "projectGitAct" },
   CreatePullRequest: { kind: "platform", reason: MAC_ONLY },
   CreateWorktree: { kind: "platform", reason: MAC_ONLY },
+  ChangeLines: { kind: "platform", reason: MAC_ONLY },
   Diff: { kind: "fwd", cmd: "projectGit" },
   DiscardUnstaged: { kind: "fwd", cmd: "projectGitDiscard" },
   DiscardPaths: { kind: "fwd", cmd: "projectGitDiscard" },

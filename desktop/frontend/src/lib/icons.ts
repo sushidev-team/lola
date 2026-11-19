@@ -6,6 +6,7 @@ import Tag from '@lucide/svelte/icons/tag';
 import CircleMinus from '@lucide/svelte/icons/circle-minus';
 import LogOut from '@lucide/svelte/icons/log-out';
 import ArrowUpLeft from '@lucide/svelte/icons/arrow-up-left';
+import Columns2 from '@lucide/svelte/icons/columns-2';
 import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
 // Curated Lucide imports: never import the entire dynamic icon catalog.
 import Activity from '@lucide/svelte/icons/activity';
@@ -56,6 +57,7 @@ import Maximize2 from '@lucide/svelte/icons/maximize-2';
 import Menu from '@lucide/svelte/icons/menu';
 import Minimize2 from '@lucide/svelte/icons/minimize-2';
 import PanelRight from '@lucide/svelte/icons/panel-right';
+import PanelLeft from '@lucide/svelte/icons/panel-left';
 import PanelsTopLeft from '@lucide/svelte/icons/panels-top-left';
 import MessageSquareText from '@lucide/svelte/icons/message-square-text';
 import Minus from '@lucide/svelte/icons/minus';
@@ -107,6 +109,8 @@ import TimerOff from '@lucide/svelte/icons/timer-off';
 import Unplug from '@lucide/svelte/icons/unplug';
 import Wifi from '@lucide/svelte/icons/wifi';
 import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
+import ChevronsUp from '@lucide/svelte/icons/chevrons-up';
+import ChevronsDown from '@lucide/svelte/icons/chevrons-down';
 import MessageSquare from '@lucide/svelte/icons/message-square';
 
 export const icons = {
@@ -118,6 +122,7 @@ export const icons = {
   'log-out': LogOut,
   'arrow-up-left': ArrowUpLeft,
   'arrow-right-left': ArrowRightLeft,
+  'columns-2': Columns2,
   'activity': Activity,
   'arrow-down': ArrowDown,
   'arrow-left': ArrowLeft,
@@ -166,6 +171,7 @@ export const icons = {
   'maximize-2': Maximize2,
   'menu': Menu,
   'minimize-2': Minimize2,
+  'panel-left': PanelLeft,
   'panel-right': PanelRight,
   'panels-top-left': PanelsTopLeft,
   'message-square-text': MessageSquareText,
@@ -218,6 +224,8 @@ export const icons = {
   'unplug': Unplug,
   'wifi': Wifi,
   'chevrons-up-down': ChevronsUpDown,
+  'chevrons-up': ChevronsUp,
+  'chevrons-down': ChevronsDown,
   'message-square': MessageSquare,
 } as const;
 export type IconName = keyof typeof icons;

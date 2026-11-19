@@ -99,6 +99,7 @@ function sampleDto() {
     commentOnMerged: false,
     commentOnBlocked: false,
     prRequiresChecks: true,
+    requirePlan: false,
 
     inherits: {
       autoPRComments: true,
@@ -111,6 +112,7 @@ function sampleDto() {
       blockedLabelId: false,
       dedupMode: false,
       prioritySort: true,
+      requirePlan: true,
     },
     isNew: false,
   };
@@ -359,6 +361,42 @@ describe("ProjectForm", () => {
     nav.overlayTab = "filter";
     render(ProjectForm);
     expect(await screen.findByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it.each(["agent/agent-ready", "*/agent-ready"])("shows inherited label reference %s without changing its saved form", async (ref) => {
+    getProject.mockResolvedValue({ ...sampleDto(), matchLabels: [ref], onSentSetLabel: "agent/agent-working" });
+    teamMetaFn.mockResolvedValue({ ...meta, labels: [
+      { id: "ready-id", label: "agent / agent-ready · workspace" },
+      { id: "working-id", label: "agent / agent-working" },
+    ] });
+    nav.overlayTab = "labels";
+    render(ProjectForm);
+    expect(await screen.findByRole("checkbox", { name: "agent / agent-ready · workspace" })).toBeChecked();
+    expect(screen.queryByText(/no longer in Linear/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(PICKUP_FIELDS.onSentSetLabel)).toHaveValue("working-id");
+
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({
+      matchLabels: [ref], onSentSetLabel: "agent/agent-working",
+      inherits: { matchLabels: true, onSentSetLabel: true },
+    });
+  });
+
+  it("promotes an inherited name to an explicit selection when its checkbox changes", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), matchLabels: ["agent/agent-ready"] });
+    teamMetaFn.mockResolvedValue({ ...meta, labels: [
+      { id: "ready-id", label: "agent / agent-ready" },
+      { id: "bug-id", label: "Bug" },
+    ] });
+    nav.overlayTab = "labels";
+    render(ProjectForm);
+    const ready = await screen.findByRole("checkbox", { name: "agent / agent-ready" });
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Bug" }));
+    await fireEvent.click(ready);
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({ matchLabels: ["bug-id"], inherits: { matchLabels: false } });
   });
 
   it("loads team metadata and renders workflow states as checkboxes, pre-checked from the DTO", async () => {
@@ -744,6 +782,38 @@ describe("ProjectForm", () => {
     const arg = saveProject.mock.calls[0][0] as ReturnType<typeof sampleDto>;
     expect(arg.inherits.symlinks).toBe(false);
     expect(arg.symlinks).toEqual(["own-link"]);
+  });
+
+  it("require plan is an inheritable toggle: ticking it overrides, Use default refills from [defaults]", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), requirePlan: false, inherits: { ...sampleDto().inherits, requirePlan: true } });
+    getSettings.mockResolvedValue({ ...settingsDto(), requirePlan: false });
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+    const box = await screen.findByRole("checkbox", { name: "Require plan" });
+    expect(box).not.toBeChecked();
+
+    await fireEvent.click(box);
+    expect(box).toBeChecked();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    const arg = saveProject.mock.calls[0][0] as ReturnType<typeof sampleDto>;
+    expect(arg.requirePlan).toBe(true);
+    expect(arg.inherits.requirePlan).toBe(false);
+  });
+
+  it("reverting require plan hands it back to [defaults] and shows the default's value", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), requirePlan: false, inherits: { ...sampleDto().inherits, requirePlan: false } });
+    getSettings.mockResolvedValue({ ...settingsDto(), requirePlan: true });
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+    const box = await screen.findByRole("checkbox", { name: "Require plan" });
+    await fireEvent.click(screen.getByRole("button", { name: "Use default for Require plan" }));
+    expect(box).toBeChecked();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    const arg = saveProject.mock.calls[0][0] as ReturnType<typeof sampleDto>;
+    expect(arg.inherits.requirePlan).toBe(true);
+    expect(arg.requirePlan).toBe(true);
   });
 
   it("promotes an inherited field when Customize is clicked", async () => {

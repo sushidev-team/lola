@@ -390,6 +390,9 @@ type SpawnOpts struct {
 	Group   string
 	Attempt int
 	Of      int
+	// Apps names further members of a STACK to check out beside the ones the
+	// issue's labels select (a human's choice in the ticket picker).
+	Apps []string
 }
 
 // SpawnWith is Spawn with explicit SpawnOpts.
@@ -472,7 +475,11 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	if bestOf {
 		brief = withBestOfBriefing(brief, o.Attempt, o.Of)
 	}
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing(brief, ctxDir))), 0o600); err != nil {
+	prompt := n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing(brief, ctxDir)))
+	if p.RequirePlan {
+		prompt = n.withPlanBriefing(prompt)
+	}
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), prompt, 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
 	// Per-agent lifecycle-callback artifact(s): claude's .lola/settings.json,
@@ -516,7 +523,12 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
 
+	gate := session.PlanNone
+	if p.RequirePlan {
+		gate = session.PlanPlanning
+	}
 	return withAgentState(session.Session{
+		PlanGate:   gate,
 		ID:         id,
 		FirstSeen:  started,
 		Source:     "native",
@@ -984,7 +996,9 @@ func (n *Native) launchLine(project, id string, kind agent.Kind, prompt, model s
 	args = append(agent.LaunchModelArgs(kind, model), args...)
 	if kind == agent.Codex {
 		notify, _ := json.Marshal([]string{n.lolaBin(), "hook", "codex-notify"})
-		args = append([]string{"-c", "notify=" + string(notify)}, args...)
+		// Started without a prompt (a revive), codex opens on "Update available" and waits
+		// for a key whenever a newer release exists. Nobody is there to press it.
+		args = append([]string{"-c", "check_for_update_on_startup=false", "-c", "notify=" + string(notify)}, args...)
 	}
 	posix := "set -a; . ./" + lolaDir + "/env; set +a; "
 	if kind == agent.Codex {
@@ -994,10 +1008,11 @@ func (n *Native) launchLine(project, id string, kind agent.Kind, prompt, model s
 		// The shared metadata holds objects/refs AND the worktree's index;
 		// workspace-write alone cannot fetch, commit or merge without it.
 		posix += `lola_git_common_dir=$(git rev-parse --path-format=absolute --git-common-dir) && test -n "$lola_git_common_dir" && test -d "$lola_git_common_dir" || exit 1; `
+		posix += codexTrustPrelude
 	}
 	posix += "exec " + shQuote(bin)
 	if kind == agent.Codex {
-		posix += ` --add-dir "$lola_git_common_dir"`
+		posix += ` --add-dir "$lola_git_common_dir" "$@"`
 	}
 	for _, arg := range args {
 		posix += " " + shQuote(arg)
@@ -1010,6 +1025,25 @@ func (n *Native) launchLine(project, id string, kind agent.Kind, prompt, model s
 	}
 	return "exec sh -c " + shQuote(posix)
 }
+
+// codexTrustPrelude answers Codex's "Trust this folder?" for a worktree lola made, so a
+// spawned agent never parks on it: the same decision claudetrust records for Claude Code.
+// Codex asks about the repository root, which for a worktree is the main checkout (the
+// parent of the shared .git), and a sandboxed codex asks every time because its private
+// CODEX_HOME has never seen the folder.
+//
+// The answer is a per-process config override, left in "$@" for the exec that follows.
+// Nothing is written: the user's config.toml keeps only the decisions they made. It is the
+// whole projects table as one TOML value (-c projects={"<root>"={trust_level="trusted"}}),
+// because codex splits a -c key on its dots and ignores quotes there: the dotted form
+// projects."<root>".trust_level names a key that holds the quote marks and matches nothing.
+// (Measured on codex-cli 0.167.2, where the trust screen shows a few seconds after start.) The root lands inside a TOML string, so it is used only when
+// every character is on a plain list (the "#" is a sentinel that keeps a newline from
+// vanishing with the command substitution). Any other path, or a shared directory that is
+// not a checkout's .git, gets no override and codex asks as before.
+const codexTrustPrelude = `set --; case "$lola_git_common_dir" in */.git) lola_trust_root=${lola_git_common_dir%/.git}; ` +
+	`if test "$(printf '%s#' "$lola_trust_root" | LC_ALL=C tr -d '[:alnum:]/._ @+,:=~-')" = '#'; then ` +
+	`set -- -c "projects={\"$lola_trust_root\"={trust_level=\"trusted\"}}"; fi ;; esac; `
 
 // writeAgentArtifacts writes the per-agent lifecycle-callback artifact(s) into
 // the worktree at dir, before launch, for the resolved kind:
@@ -1243,6 +1277,32 @@ func (n *Native) withReportBriefing(prompt []byte) []byte {
 	// run the suite in a shape whose exit status is its own.
 	b.WriteString("\nA `check … pass` is compared with the commands you actually ran: report one only after running that check, and run it unpiped (`go test ./...`, not `go test ./... | tail`) so its exit status is visible. A claim with no matching run is flagged to the humans.\n")
 	return n.withSSHBriefing(n.withTalkBriefing([]byte(b.String())))
+}
+
+// withPlanBriefing appends the plan-approval section for a project with
+// require_plan: plan first, submit, stop, wait. For claude the PreToolUse hook
+// enforces it (file edits are denied until approval); for codex/opencode this
+// section IS the gate, which is why it is explicit about what not to do.
+func (n *Native) withPlanBriefing(prompt []byte) []byte {
+	bin := "lola"
+	if n.LolaBin != "" {
+		bin = shQuote(n.LolaBin)
+	}
+	var b strings.Builder
+	b.Write(prompt)
+	if len(prompt) > 0 && prompt[len(prompt)-1] != '\n' {
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n## Plan approval (required before coding)\n\n")
+	b.WriteString("This project requires a human to approve your plan BEFORE you change anything. Until you are told it is approved:\n\n")
+	b.WriteString("- Work read-only: read the issue, explore the code, run read-only commands. Do not edit, create or delete files, and do not commit.\n")
+	b.WriteString("- Write a concise implementation plan in Markdown: the approach, the files you expect to touch, risks, and how you will test it.\n")
+	b.WriteString("- Submit it, then END YOUR TURN and wait:\n\n")
+	b.WriteString("```sh\n")
+	b.WriteString(bin + " plan-gate submit <<'EOF'\n## Approach\n...\nEOF\n")
+	b.WriteString("```\n\n")
+	b.WriteString("You will receive a message when the plan is approved (then implement it) or with the reviewer's feedback (then revise and submit again). File-edit tools are blocked while the plan is pending.\n")
+	return []byte(b.String())
 }
 
 // rollback undoes a partially spawned session after step failed with cause:

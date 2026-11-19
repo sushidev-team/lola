@@ -5,13 +5,14 @@
 
 import { Events } from "@wailsio/runtime";
 import { sandboxLogin } from "$lib/sandboxlogin.svelte";
-import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO, type StackFolderAppDTO } from "@bindings/desktop";
+import { DaemonService, ConfigService, TermService, TalkService, type ProjectLayoutDTO, type StackFolderAppDTO } from "@bindings/desktop";
 import type {
   SessionInfo as ProtocolSessionInfo,
   ProjectInfo as ProtocolProjectInfo,
   GroupInfo,
   StatusData,
   Event as ActivityEvent,
+  EndedSession,
   PaneData,
   PrsData,
   TicketsData,
@@ -33,6 +34,8 @@ type ProjectInfo = ProtocolProjectInfo;
 type OpenManualArgs = ProtocolOpenManualArgs;
 
 type OpenTicketArgs = ProtocolOpenTicketArgs;
+/** A ticket whose openTicket call has not answered yet; see Store.starting. */
+export type StartingTicket = { project: string; issue: string; title: string };
 
 type RemovalFollowup = { branch: string; onRemoved: () => void | Promise<void> };
 
@@ -153,6 +156,10 @@ class Store {
   // would leave the other looking inert while the daemon captures the pane and
   // types.
   resolvePending = $state<Record<string, boolean>>({});
+  // Tickets whose start is in flight: the daemon answers openTicket only after
+  // the worktree, post_create and the agent launch, and lists no session until
+  // then. The roster draws these as placeholder rows so a start shows at once.
+  starting = $state<StartingTicket[]>([]);
 
   private flashTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
@@ -476,6 +483,21 @@ class Store {
     return this.act(() => DaemonService.Answer(session, text), "answer sent");
   }
   /**
+   * The plan-approval gate's verdict. Resolves true when the daemon recorded it,
+   * so the caller can clear its comment box only on success.
+   */
+  async decidePlan(session: string, approve: boolean, comment = ""): Promise<boolean> {
+    try {
+      await DaemonService.DecidePlan(session, approve, comment);
+      this.setFlash(approve ? "plan approved" : "changes requested", "good");
+      void this.refresh();
+      return true;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return false;
+    }
+  }
+  /**
    * Kill a session. A dirty worktree is refused unless force is set — and that
    * refusal is NOT a dead end: the agent is already terminated by then and the
    * worktree is all that survives, so the honest answer is a second question
@@ -548,6 +570,23 @@ class Store {
       return undefined;
     } finally {
       delete this.resolvePending[session];
+    }
+  }
+  /**
+   * Ask a session's agent to merge `branch` into the session's own branch: what
+   * the branch graph offers where the app must not merge itself (a sandboxed
+   * session's checkout). Both the success line and a refusal (the agent is
+   * mid-turn and must not be typed into) are the daemon's sentences.
+   */
+  async askMerge(session: string, branch: string) {
+    try {
+      const r = await DaemonService.AskMerge(session, branch);
+      this.setFlash(r?.message || `asked the agent to merge ${branch}`, "good");
+      void this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return undefined;
     }
   }
   /**
@@ -627,8 +666,21 @@ class Store {
     return this.act(() => DaemonService.OpenPR(a), `opened PR #${a.number}`);
   }
   async openTicket(a: OpenTicketArgs) {
-    if (!(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
-    return this.act(() => DaemonService.OpenTicket(a), `started ${a.identifier}`);
+    if (this.starting.some((t) => t.issue === a.identifier)) return undefined; // already travelling
+    this.starting = [...this.starting, { project: a.project, issue: a.identifier, title: a.title ?? "" }];
+    try {
+      if (!(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
+      const r = await DaemonService.OpenTicket(a);
+      this.setFlash(`started ${a.identifier}`, "good");
+      // AWAITED, unlike act()'s: the placeholder must not leave before the real row is listed.
+      await this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return undefined;
+    } finally {
+      this.starting = this.starting.filter((t) => t.issue !== a.identifier);
+    }
   }
   // Turn checkpoints. Both flash the daemon's own sentence: it names the
   // checkpoint that now holds the pre-restore state, which is the undo.
@@ -662,6 +714,14 @@ class Store {
       this.setFlash(String(err), "bad");
       return undefined;
     }
+  }
+  // Check further members of its stack out into a running stack session. The
+  // daemon's sentence is flashed: it says when a sandboxed agent was restarted.
+  addApps(id: string, apps: string[]) {
+    return this.act(
+      () => DaemonService.AddApps({ session: id, apps }),
+      (r) => r?.message || `added ${apps.join(", ")}`,
+    );
   }
   switchAgent(id: string, kind: string) {
     return this.act(
@@ -714,15 +774,25 @@ class Store {
   /** Explain protected Git actions and route owned checkouts through session cleanup. */
   askRemoveManagedWorktree(path: string, followup?: RemovalFollowup) {
     const owner = this.sessionForWorktree(path);
-    if (!owner || owner.location || owner.goalId) {
+    if (!owner) {
       confirm.ask({
         title: "Protected worktree",
         body: path,
-        detail: owner?.goalId
+        detail: "Checking current sessions and retained worktrees…",
+        confirmLabel: "Refresh sessions",
+        confirmVariant: "primary",
+        onConfirm: () => this.askRemoveManagedWorktree(path, followup),
+      });
+      void this.resolveManagedWorktree(path, followup, confirm.request);
+      return;
+    }
+    if (owner.location || owner.goalId) {
+      confirm.ask({
+        title: "Protected worktree",
+        body: path,
+        detail: owner.goalId
           ? `This checkout belongs to goal ${owner.goalId}. Manage it through the goal's actions; stopping its session keeps the worktree and branch.`
-          : owner?.location
-          ? "This session uses an existing directory. Closing the session preserves the checkout and its branch."
-          : "Lola protects this checkout, but its owning session could not be identified. Refresh the session list and remove it through its owning session. Direct Git deletion is unavailable.",
+          : "This session uses an existing directory. Closing the session preserves the checkout and its branch.",
         confirmLabel: "Got it",
         confirmVariant: "primary",
         onConfirm: () => {},
@@ -730,6 +800,63 @@ class Store {
       return;
     }
     this.askKill(owner.id, path, followup);
+  }
+
+  private async resolveManagedWorktree(path: string, followup: RemovalFollowup | undefined, request: typeof confirm.request) {
+    try {
+      const [current, history] = await Promise.allSettled([DaemonService.Sessions(), TalkService.Ended()]);
+      // A cancelled or replaced dialog must never reopen when the lookup returns.
+      if (confirm.request !== request) return;
+      if (current.status === "rejected") throw current.reason;
+      this.sessions = current.value.sessions ?? [];
+      const owner = this.sessionForWorktree(path);
+      if (owner) {
+        this.askRemoveManagedWorktree(path, followup);
+        return;
+      }
+      if (history.status === "rejected") throw history.reason;
+      const matches = (history.value.sessions ?? []).filter(s => s.keptWorktree === path);
+      const claimed = this.sessions.some(s => s.worktree === path || s.apps?.some(app => app.worktree === path));
+      if (!claimed && matches.length === 1) {
+        this.askRemoveEndedWorktree(matches[0], path, followup);
+        return;
+      }
+      if (request) request.detail = claimed
+        ? "More than one current session claims this checkout. Refresh the sessions before removing it."
+        : "No matching current or ended session was found. Refresh sessions to check again. The checkout is kept until its ownership can be verified.";
+    } catch (err) {
+      if (confirm.request === request && request) request.detail = `Could not check worktree ownership: ${String(err)}. Refresh sessions to try again.`;
+    }
+  }
+
+  private askRemoveEndedWorktree(ended: EndedSession, path: string, followup?: RemovalFollowup, discard = false) {
+    confirm.ask({
+      title: discard ? "Discard retained worktree files?" : "Remove leftover worktree?",
+      subject: ended.issue ? `${ended.issue}${ended.title ? ` — ${ended.title}` : ""}` : ended.title || ended.id,
+      body: path,
+      detail: discard
+        ? `This checkout has uncommitted changes or its changes cannot be verified safely. Removing it permanently discards every file in this folder.${followup?.branch ? ` Local branch ${followup.branch} is deleted only if Git allows it.` : " Local branches are kept."} Remote branches are kept.`
+        : `${ended.reason || "The owning session has ended"}. Remove its retained checkout.${followup?.branch ? ` Also deletes local branch ${followup.branch} if Git allows it.` : " Local branches are kept."} Changes that cannot be safely removed require a separate confirmation.`,
+      confirmLabel: discard ? "Discard files and remove" : "Remove worktree",
+      onConfirm: () => void this.removeEndedWorktree(ended, path, followup, discard),
+    });
+  }
+
+  private async removeEndedWorktree(ended: EndedSession, path: string, followup: RemovalFollowup | undefined, force: boolean) {
+    try {
+      const result = await DaemonService.RemoveEndedWorktree(ended.id, path, force);
+      if (!result.removed) return;
+      await followup?.onRemoved();
+      this.setFlash(result.message || "Retained worktree removed", "good");
+      void this.refresh();
+    } catch (err) {
+      const message = String(err);
+      if (!force && (message.includes("retained worktree changes cannot be verified safely") || message.includes("worktree has uncommitted changes"))) {
+        this.askRemoveEndedWorktree(ended, path, followup, true);
+      } else {
+        this.setFlash(message, "bad");
+      }
+    }
   }
 
   /** Ask, then kill. Git actions additionally pin the owning checkout and scope. */

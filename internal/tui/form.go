@@ -67,6 +67,7 @@ const (
 	fAssignee
 	fAssigneeUser
 	fCap
+	fRequirePlan // plan-approval gate ([defaults]-inheritable)
 	// Labels tab: trigger labels and how a picked-up issue is marked.
 	fLabels
 	fMatchMode
@@ -138,6 +139,7 @@ var inheritable = map[fieldID]func(*config.ProjectInherits) *bool{
 	},
 	fAutoPRComments: func(i *config.ProjectInherits) *bool { return &i.AutoPRComments },
 	fReview:         func(i *config.ProjectInherits) *bool { return &i.Review },
+	fRequirePlan:    func(i *config.ProjectInherits) *bool { return &i.RequirePlan },
 }
 
 type pickOpt struct{ id, label string }
@@ -324,6 +326,8 @@ func (f *formModel) setInherit(fd fieldID, v bool) {
 		f.poll.AutoPRComments = d.AutoPRComments
 	case fReview:
 		f.poll.Review = slices.Clone(d.Review)
+	case fRequirePlan:
+		f.poll.RequirePlan = d.RequirePlan
 	}
 }
 
@@ -395,7 +399,7 @@ func newFormModelKind(cfg *config.Config, existing *config.Project, kind string)
 				Symlinks: true, PostCreate: true, Env: true,
 				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
 				BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
-				Review: true,
+				Review: true, RequirePlan: true,
 			},
 		}
 		seedPollDefaults(&f.poll)
@@ -431,6 +435,7 @@ func newFormModelKind(cfg *config.Config, existing *config.Project, kind string)
 		f.poll.BlockedLabelID = cfg.Defaults.BlockedLabelID
 		f.poll.AutoPRComments = cfg.Defaults.AutoPRComments
 		f.poll.Review = slices.Clone(cfg.Defaults.Review)
+		f.poll.RequirePlan = cfg.Defaults.RequirePlan
 	}
 	var cmd tea.Cmd
 	if f.poll.TeamID != "" {
@@ -569,6 +574,8 @@ func (f *formModel) fields() []fieldID {
 			}
 			fs = append(fs, fCap)
 		}
+		// Not team-scoped: a teamless project can still set or override the gate.
+		fs = append(fs, fRequirePlan)
 	case tabLabels:
 		// Team-scoped: label UUIDs only exist within the picked team.
 		if f.poll.TeamID != "" {
@@ -1025,6 +1032,9 @@ func (f *formModel) toggleBool(cur fieldID) {
 		f.poll.Enabled = !f.poll.Enabled
 	case fPRRequiresChecks:
 		f.poll.PRRequiresChecks = !f.poll.PRRequiresChecks
+	case fRequirePlan:
+		f.override(fRequirePlan) // toggling an inherited value IS overriding it
+		f.poll.RequirePlan = !f.poll.RequirePlan
 	case fCommentOnSpawn:
 		f.poll.CommentOnSpawn = !f.poll.CommentOnSpawn
 	case fCommentOnPR:
@@ -1046,6 +1056,7 @@ var metaFields = map[fieldID]bool{
 // picker.
 var boolFields = map[fieldID]bool{
 	fGoalMode: true, fEnabled: true, fAutoPRComments: true,
+	fRequirePlan:      true,
 	fPRRequiresChecks: true, fCommentOnSpawn: true, fCommentOnPR: true,
 	fCommentOnMerged: true, fCommentOnBlocked: true,
 }
@@ -1393,6 +1404,7 @@ func applyProject(dst *config.Project, src config.Project) {
 	dst.CommentOnMerged = src.CommentOnMerged
 	dst.CommentOnBlocked = src.CommentOnBlocked
 	dst.PRRequiresChecks = src.PRRequiresChecks
+	dst.RequirePlan = src.RequirePlan
 	dst.AutoPRComments = src.AutoPRComments
 	dst.Review = src.Review
 	// Assign unconditionally: an empty src.Repo must be able to CLEAR an existing
@@ -1838,6 +1850,8 @@ func fieldHelp(fd fieldID) string {
 		return "enter toggles · also post a short comment on the issue when the agent starts."
 	case fOnPRState:
 		return "Workflow state when the agent's PR is ready (e.g. In Review). (none) = no move."
+	case fRequirePlan:
+		return "enter toggles · on = the agent submits a plan (lola plan-gate submit) and may edit files only after a human approves it. ctrl-o inherits [defaults].require_plan."
 	case fPRRequiresChecks:
 		return "enter toggles · on = wait for a valid PR (open, not draft, all CI/CodeRabbit checks green); off = flip the moment the PR opens."
 	case fCommentOnPR:
@@ -1934,6 +1948,8 @@ func (f *formModel) label(fd fieldID) string {
 		return "  comment on start"
 	case fOnPRState:
 		return "On PR → state"
+	case fRequirePlan:
+		return "Require plan"
 	case fPRRequiresChecks:
 		return "  require checks"
 	case fCommentOnPR:
@@ -2164,6 +2180,8 @@ func (f *formModel) display(fd fieldID) string {
 		return f.labelName(f.poll.BlockedLabelID)
 	case fPRRequiresChecks:
 		return boolDisplay(f.poll.PRRequiresChecks)
+	case fRequirePlan:
+		return boolDisplay(f.poll.RequirePlan)
 	case fCommentOnSpawn:
 		return boolDisplay(f.poll.CommentOnSpawn)
 	case fCommentOnPR:

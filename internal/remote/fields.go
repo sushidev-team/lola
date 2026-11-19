@@ -246,6 +246,9 @@ func buildRequestFields() map[string]fieldSpec {
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.PaneCloseArgs]()}, "paneClose")
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.PaneResizeArgs]()}, "paneResize")
 	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.ReportArgs]()}, "sessionTask")
+	// The human plan verdict: a session id plus approve/comment. Approving unlocks
+	// coding, so it needs the control tier; the daemon re-validates the state.
+	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.PlanDecideArgs](), audit: []string{"approve"}}, "planDecide")
 
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.AgentFeedArgs]()}, protocol.CmdAgentFeed)
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.AgentFeedOutputArgs]()}, protocol.CmdAgentFeedOutput)

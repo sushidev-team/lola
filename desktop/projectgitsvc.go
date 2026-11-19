@@ -244,6 +244,18 @@ func (s *ProjectGitService) changeIndex(project, worktree string, paths []string
 	})
 	return files, err
 }
+
+// ChangeLines stages or unstages only the chosen changed lines of one file; the
+// patch is the one the human saw and is refused if the file has moved on.
+func (s *ProjectGitService) ChangeLines(project, worktree, area, path, patch string, lines []int, stage bool) ([]projectgit.File, error) {
+	var files []projectgit.File
+	err := s.mutate(project, worktree, func(ctx context.Context, dir string) error {
+		var err error
+		files, err = (projectgit.Client{}).ChangeLinesAndStatus(ctx, dir, area, path, patch, lines, stage)
+		return err
+	})
+	return files, err
+}
 func (s *ProjectGitService) PrepareDiscard(project, worktree string) (projectgit.DiscardPlan, error) {
 	result := projectgit.DiscardPlan{}
 	err := s.mutate(project, worktree, func(ctx context.Context, dir string) error {
@@ -286,6 +298,7 @@ func (s *ProjectGitService) Amend(project, worktree, message, expectedHead strin
 		return (projectgit.Client{}).Amend(ctx, dir, message, expectedHead)
 	})
 }
+
 // Uncommit removes the checkout's newest commit and keeps its changes staged.
 func (s *ProjectGitService) Uncommit(project, worktree, expectedHead string) error {
 	return s.mutate(project, worktree, func(ctx context.Context, dir string) error {

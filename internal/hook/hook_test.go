@@ -90,6 +90,18 @@ const settingsGolden = `{
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/lola hook pre_tool_use",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   },
   "skillOverrides": {
@@ -139,6 +151,7 @@ func TestSettingsJSONShape(t *testing.T) {
 		"PostToolUse":       {"/opt/lola hook tool_use", true},
 		"UserPromptSubmit":  {"/opt/lola hook user_prompt", false},
 		"PermissionRequest": {"/opt/lola hook permission_request", true},
+		"PreToolUse":        {"/opt/lola hook pre_tool_use", false},
 	}
 	if len(parsed.Hooks) != len(want) {
 		t.Errorf("got %d hook events, want %d: %v", len(parsed.Hooks), len(want), parsed.Hooks)
@@ -341,5 +354,39 @@ func TestSendAgentCarriesSessionAndToken(t *testing.T) {
 	t.Setenv("LOLA_SESSION", "")
 	if _, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{}); !errors.Is(err, ErrNoDaemon) {
 		t.Fatalf("%v", err)
+	}
+}
+
+// The plan gate's PreToolUse hook matches only the file-WRITING tools, so an
+// ungated session pays one socket round trip per edit and nothing per read.
+func TestSettingsJSONPlanGateMatcher(t *testing.T) {
+	var parsed struct {
+		Hooks map[string][]struct {
+			Matcher string `json:"matcher"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(SettingsJSON("/opt/lola"), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	got := parsed.Hooks["PreToolUse"]
+	if len(got) != 1 || got[0].Matcher != "Edit|Write|MultiEdit|NotebookEdit" {
+		t.Fatalf("PreToolUse matcher = %+v", got)
+	}
+}
+
+func TestPreToolUseDenyShape(t *testing.T) {
+	var out struct {
+		HookSpecificOutput struct {
+			HookEventName            string `json:"hookEventName"`
+			PermissionDecision       string `json:"permissionDecision"`
+			PermissionDecisionReason string `json:"permissionDecisionReason"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(PreToolUseDeny("wait for approval"), &out); err != nil {
+		t.Fatal(err)
+	}
+	h := out.HookSpecificOutput
+	if h.HookEventName != "PreToolUse" || h.PermissionDecision != "deny" || h.PermissionDecisionReason != "wait for approval" {
+		t.Fatalf("deny output = %+v", h)
 	}
 }

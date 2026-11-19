@@ -67,6 +67,11 @@ export function InspectPath(_path: string): Promise<M.PathInfoDTO> {
 }
 
 /** PLATFORM. */
+export function LinearAgentSecrets(): Promise<M.LinearAgentSecretsDTO> {
+  return unsupported("ConfigService.LinearAgentSecrets", CONFIG);
+}
+
+/** PLATFORM. */
 export function LinearKeyStatus(): Promise<M.LinearKeyStatusDTO> {
   return unsupported("ConfigService.LinearKeyStatus", CONFIG);
 }
@@ -227,6 +232,11 @@ export function SetGroupCollapsed(_name: string, _collapsed: boolean): Promise<v
 }
 
 /** PLATFORM. */
+export function SetLinearAgentSecret(_kind: string, _value: string): Promise<void> {
+  return unsupported("ConfigService.SetLinearAgentSecret", CONFIG);
+}
+
+/** PLATFORM. */
 export function SetLinearKey(_key: string): Promise<string> {
   return unsupported("ConfigService.SetLinearKey", CONFIG);
 }
@@ -301,6 +311,7 @@ export const ROUTES: Routes<typeof Gen.ConfigService> = {
   HubProjects: { kind: "platform", reason: CONFIG },
   HubReadiness: { kind: "platform", reason: CONFIG },
   InspectPath: { kind: "platform", reason: CONFIG },
+  LinearAgentSecrets: { kind: "platform", reason: CONFIG },
   LinearKeyStatus: { kind: "platform", reason: CONFIG },
   MigrateReview: { kind: "platform", reason: CONFIG },
   OpenLinearKeyHelp: { kind: "platform", reason: CONFIG },
@@ -335,6 +346,7 @@ export const ROUTES: Routes<typeof Gen.ConfigService> = {
   ScanStackMembers: { kind: "platform", reason: CONFIG },
   SetAppearance: { kind: "absent" },
   SetGroupCollapsed: { kind: "platform", reason: CONFIG },
+  SetLinearAgentSecret: { kind: "platform", reason: CONFIG },
   SetLinearKey: { kind: "platform", reason: CONFIG },
   SetProjectLayout: { kind: "platform", reason: CONFIG },
   SetProjectStack: { kind: "platform", reason: CONFIG },

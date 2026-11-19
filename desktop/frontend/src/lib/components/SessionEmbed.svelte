@@ -21,10 +21,12 @@
   import { ssh } from "$lib/ssh.svelte";
   import { talk } from "$lib/talk.svelte";
   import { changes } from "$lib/changes.svelte";
+  import { SIDE_MIN_WIDTH } from "$lib/sessionpanels";
   import { changesOffered, conversationOffered, feedKnownFrom, isAgentless, stripCells, stripShown } from "$lib/sessionview";
   import ChangesView from "./session/ChangesView.svelte";
   import EndedView from "./session/EndedView.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
+  import PlanGateBanner from "./PlanGateBanner.svelte";
   import Button from "./Button.svelte";
   import TerminalCell from "./session/TerminalCell.svelte";
   import RawToggle from "./session/RawToggle.svelte";
@@ -54,7 +56,7 @@
     const h = host.getBoundingClientRect(), b = body.getBoundingClientRect();
     mainBox = { ...rect, x: h.left - b.left + rect.x, y: h.top - b.top + rect.y };
   }
-  const rightChanges = $derived(width >= 1180 && offered);
+  const rightChanges = $derived(width >= SIDE_MIN_WIDTH && offered);
   const mainStyle = $derived(offered && mainBox ? `position:absolute;left:${mainBox.x}px;top:${mainBox.y}px;width:${mainBox.w}px;height:${mainBox.h}px` : 'grid-area:1/1');
 
   const strip = $derived(!!session && stripShown(session, stripCells(session, shells).machines.length));
@@ -205,6 +207,7 @@
   <div class="min-w-0">
     <!-- Why a dev tab died, when the reason is a port someone else holds. Absent while healthy. -->
     {#if !offered && session && !onConversation}<DevClashBanner {session} />{/if}
+    {#if !offered && session}<PlanGateBanner {session} />{/if}
   </div>
 
   <div bind:this={body} class="relative grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] grid-cols-[minmax(0,1fr)]">
@@ -215,6 +218,7 @@
           {#snippet header()}
             {#if session && strip}<ViewStrip {session} changesInSide={rightChanges} />{/if}
             {#if session && !onConversation}<DevClashBanner {session} />{/if}
+            {#if session}<PlanGateBanner {session} />{/if}
           {/snippet}
         </Workspace>
       </div>

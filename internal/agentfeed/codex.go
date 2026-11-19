@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -19,10 +20,10 @@ import (
 	"github.com/sushidev-team/lola/internal/sshelement"
 )
 
-// This reader is written from the rollout format as a structural survey recorded it, and
-// tested on synthetic fixtures only. internal/agent's Caps keeps codex's Feed off until a
-// real capture has been checked in, so production does not reach it yet. Expect the first
-// real rollout to correct some field names here.
+// This reader was checked against rollouts written by codex-cli 0.167.0 to 0.169.0. The
+// capture beside its test (testdata/codex/capture-*.jsonl) is made of records from those
+// files: keys, nesting and types are as codex wrote them, values are shortened and every
+// identifier, path and text is replaced, because the repository is public.
 //
 // Codex keeps its logs by date, so a session's files are found by the working directory
 // in each one's first line. The same directory also holds lola's codex review passes
@@ -37,10 +38,15 @@ const (
 	maxCodexMetaLine = 4 << 20
 )
 
+// codexThreadRe is a thread id, which is also the tail of its rollout's file name.
+var codexThreadRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 type codexSource struct {
 	collector
 	root     string
 	cwd      string
+	parent   string // set on a subagent's thread, whose one file is fixed
+	agents   map[string]Item
 	files    []*codexFile
 	byPath   map[string]*codexFile
 	verdict  map[string]bool
@@ -74,6 +80,7 @@ func (s *codexSource) reset() {
 	s.files, s.byPath = nil, map[string]*codexFile{}
 	s.verdict = map[string]bool{}
 	s.seen, s.refs = map[string]struct{}{}, map[string]codexRef{}
+	s.agents = map[string]Item{}
 	s.turn, s.eof, s.anyFile = "", false, false
 	s.lastWalk = time.Time{}
 }
@@ -89,21 +96,30 @@ type codexMeta struct {
 	} `json:"payload"`
 }
 
-// belongs decides from a rollout's first line. Anything that is not plainly this session's
-// own interactive thread is left out.
-func (s *codexSource) belongs(path string) bool {
+// readCodexMeta reads a rollout's first line.
+func readCodexMeta(path string) (codexMeta, bool) {
+	var m codexMeta
 	f, _, err := openRegular(path)
 	if err != nil {
-		return false
+		return m, false
 	}
 	defer f.Close()
 	// The first line carries the base instructions and is large, but never this large.
 	line, err := bufio.NewReaderSize(io.LimitReader(f, maxCodexMetaLine), 64<<10).ReadBytes('\n')
 	if err != nil {
-		return false
+		return m, false
 	}
-	var m codexMeta
 	if json.Unmarshal(line, &m) != nil || m.Type != "session_meta" {
+		return m, false
+	}
+	return m, true
+}
+
+// belongs decides from a rollout's first line. Anything that is not plainly this session's
+// own interactive thread is left out.
+func (s *codexSource) belongs(path string) bool {
+	m, ok := readCodexMeta(path)
+	if !ok {
 		return false
 	}
 	p := m.Payload
@@ -119,16 +135,39 @@ func (s *codexSource) belongs(path string) bool {
 	return true
 }
 
+// codexDays lists the newest day directories under root (year/month/day). A sandboxed
+// agent can write its own CODEX_HOME, so no level is followed through a symlink: ReadDir
+// reports one as itself, never as a directory.
+func codexDays(root string) []string {
+	levels := []string{root}
+	for range 3 {
+		var next []string
+		for _, dir := range levels {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if e.IsDir() {
+					next = append(next, filepath.Join(dir, e.Name()))
+				}
+			}
+		}
+		levels = next
+	}
+	sort.Strings(levels)
+	if len(levels) > codexDayDirs {
+		levels = levels[len(levels)-codexDayDirs:]
+	}
+	return levels
+}
+
 func (s *codexSource) discover() {
-	if time.Since(s.lastWalk) < codexRediscover && !s.lastWalk.IsZero() {
+	if s.parent != "" || (time.Since(s.lastWalk) < codexRediscover && !s.lastWalk.IsZero()) {
 		return
 	}
 	s.lastWalk = time.Now()
-	days, _ := filepath.Glob(filepath.Join(s.root, "*", "*", "*"))
-	sort.Strings(days)
-	if len(days) > codexDayDirs {
-		days = days[len(days)-codexDayDirs:]
-	}
+	days := codexDays(s.root)
 	var found []string
 	for _, day := range days {
 		entries, err := os.ReadDir(day)
@@ -175,7 +214,9 @@ func (s *codexSource) Advance(ctx context.Context, budget int64) ([]Item, Health
 			func([]byte) {})
 		if st == tailReplaced {
 			s.restart()
-			s.reset()
+			if s.parent == "" {
+				s.reset()
+			}
 			return nil, protocol.FeedOK
 		}
 		s.counts.Bytes += n
@@ -208,10 +249,12 @@ type codexLine struct {
 	Timestamp string `json:"timestamp"`
 	Type      string `json:"type"`
 	Payload   struct {
-		Type   string          `json:"type"`
-		Reason string          `json:"reason"`
-		TurnID string          `json:"turn_id"`
-		Item   json.RawMessage `json:"item"`
+		Type        string          `json:"type"`
+		Reason      string          `json:"reason"`
+		TurnID      string          `json:"turn_id"`
+		Item        json.RawMessage `json:"item"`
+		StartedMs   int64           `json:"started_at_ms"`
+		CompletedMs int64           `json:"completed_at_ms"`
 	} `json:"payload"`
 }
 
@@ -223,11 +266,28 @@ type codexItem struct {
 	AggregatedOutput string          `json:"aggregated_output"`
 	ExitCode         *int            `json:"exit_code"`
 	Status           string          `json:"status"`
+	Duration         json.RawMessage `json:"duration"`
 	DurationMs       int64           `json:"duration_ms"`
 	Changes          json.RawMessage `json:"changes"`
 	Server           string          `json:"server"`
 	Tool             string          `json:"tool"`
+	AppName          string          `json:"appName"`
+	Arguments        json.RawMessage `json:"arguments"`
+	Result           json.RawMessage `json:"result"`
+	Error            json.RawMessage `json:"error"`
 	Path             string          `json:"path"`
+	Kind             string          `json:"kind"`
+	Query            string          `json:"query"`
+	AgentThreadID    string          `json:"agent_thread_id"`
+	AgentPath        string          `json:"agent_path"`
+}
+
+// codexChange is one file of a FileChange. An update carries a diff, an add or a delete the
+// file's whole content.
+type codexChange struct {
+	Type        string `json:"type"`
+	UnifiedDiff string `json:"unified_diff"`
+	Content     string `json:"content"`
 }
 
 func (s *codexSource) line(f *codexFile, line []byte, off int64) {
@@ -244,6 +304,9 @@ func (s *codexSource) line(f *codexFile, line []byte, off int64) {
 	s.startFile(f, at)
 	if l.Type == "compacted" {
 		s.emit(Item{ID: fmt.Sprintf("compacted@%s@%d", filepath.Base(f.tail.path), off), Kind: protocol.FeedItemDivider, At: at, Text: "Compacted"})
+		return
+	}
+	if l.Type != "event_msg" {
 		return
 	}
 	switch l.Payload.Type {
@@ -264,7 +327,8 @@ func (s *codexSource) line(f *codexFile, line []byte, off int64) {
 			return
 		}
 		s.seen[it.ID] = struct{}{}
-		s.item(f, &it, at, off, int64(len(line)))
+		wall := l.Payload.CompletedMs - l.Payload.StartedMs
+		s.item(f, &it, at, off, int64(len(line)), wall)
 	}
 }
 
@@ -279,15 +343,27 @@ func (s *codexSource) startFile(f *codexFile, at time.Time) {
 	}
 }
 
+// id names an item. A thread's items carry their thread, so a request for one item's
+// output can find its way back to the file.
+func (s *codexSource) id(raw string) string {
+	if s.parent != "" {
+		return "agent-" + s.parent + "/" + raw
+	}
+	return raw
+}
+
 func (s *codexSource) emit(it Item) {
+	it.ID = s.id(it.ID)
 	if it.Turn == "" {
 		it.Turn = s.turn
 	}
+	it.Parent = s.parent
 	s.counts.Items++
 	s.put(it)
 }
 
-// codexText reads a content field, which is a string or a list of blocks carrying text.
+// codexText reads a content field, which is a string or a list of blocks carrying text. An
+// image block has no text and adds nothing.
 func codexText(raw json.RawMessage) string {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -331,18 +407,150 @@ func codexCommand(raw json.RawMessage) string {
 	return argv[len(argv)-1]
 }
 
-func (s *codexSource) item(f *codexFile, it *codexItem, at time.Time, off, length int64) {
+// codexDuration is how long the item itself says it took: `duration` as secs and nanos, or
+// the older `duration_ms`. wall, the span of the record, is the fallback, and it also
+// counts the time an approval took.
+func codexDuration(it *codexItem, wall int64) int64 {
+	var d struct {
+		Secs  int64 `json:"secs"`
+		Nanos int64 `json:"nanos"`
+	}
+	// A command started through the unified exec reports microseconds whatever it took.
+	if len(it.Duration) > 0 && json.Unmarshal(it.Duration, &d) == nil && d.Secs*1000+d.Nanos/1e6 > 0 {
+		return d.Secs*1000 + d.Nanos/1e6
+	}
+	if it.DurationMs > 0 {
+		return it.DurationMs
+	}
+	return max(wall, 0)
+}
+
+// relative shortens a path inside the session's directory. Codex writes some as file URLs.
+func (s *codexSource) relative(p string) string {
+	p = strings.TrimPrefix(p, "file://")
+	if rel, ok := strings.CutPrefix(p, strings.TrimSuffix(s.cwd, "/")+"/"); ok && s.cwd != "" {
+		return rel
+	}
+	return p
+}
+
+// codexChanges reads a FileChange: the paths in order, the lines added and removed, and
+// the diff a person may open. The older list form names paths only.
+func (s *codexSource) codexChanges(raw json.RawMessage) (paths []string, added, removed int, diff string) {
+	var byPath map[string]codexChange
+	if json.Unmarshal(raw, &byPath) != nil {
+		var list []struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(raw, &list)
+		for _, c := range list {
+			paths = append(paths, s.relative(c.Path))
+		}
+		return paths, 0, 0, ""
+	}
+	keys := make([]string, 0, len(byPath))
+	for p := range byPath {
+		keys = append(keys, p)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, p := range keys {
+		c := byPath[p]
+		rel := s.relative(p)
+		paths = append(paths, rel)
+		lines := 0
+		if body := strings.TrimRight(c.Content, "\n"); body != "" {
+			lines = strings.Count(body, "\n") + 1
+		}
+		switch {
+		case c.UnifiedDiff != "":
+			for l := range strings.SplitSeq(c.UnifiedDiff, "\n") {
+				switch {
+				case strings.HasPrefix(l, "+++") || strings.HasPrefix(l, "---"):
+				case strings.HasPrefix(l, "+"):
+					added++
+				case strings.HasPrefix(l, "-"):
+					removed++
+				}
+			}
+			fmt.Fprintf(&b, "--- %s\n%s\n", rel, strings.TrimRight(c.UnifiedDiff, "\n"))
+		case c.Type == "delete":
+			removed += lines
+			fmt.Fprintf(&b, "--- %s (deleted, %d lines)\n", rel, lines)
+		default:
+			added += lines
+			fmt.Fprintf(&b, "--- %s (new, %d lines)\n", rel, lines)
+		}
+	}
+	return paths, added, removed, b.String()
+}
+
+// codexMcpOutput is what an MCP call answered: its text blocks, or the error's message.
+func codexMcpOutput(it *codexItem) (text string, failed bool) {
+	var r struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	_ = json.Unmarshal(it.Result, &r)
+	parts := make([]string, 0, len(r.Content))
+	for _, c := range r.Content {
+		if c.Text != "" {
+			parts = append(parts, c.Text)
+		}
+	}
+	var e struct {
+		Message string `json:"message"`
+	}
+	if _ = json.Unmarshal(it.Error, &e); e.Message != "" {
+		parts = append(parts, e.Message)
+	}
+	return strings.Join(parts, "\n"), r.IsError || e.Message != "" || it.Status == "failed"
+}
+
+// codexOutput is the text a person opens on a tool row, read from the item itself.
+func (s *codexSource) codexOutput(it *codexItem) string {
+	switch strings.ToLower(it.Type) {
+	case "commandexecution":
+		return it.AggregatedOutput
+	case "filechange":
+		_, _, _, diff := s.codexChanges(it.Changes)
+		return diff
+	case "mcptoolcall":
+		text, _ := codexMcpOutput(it)
+		return text
+	}
+	return ""
+}
+
+// tool emits one finished tool row and remembers where its output is.
+func (s *codexSource) tool(f *codexFile, it *codexItem, at time.Time, off, length int64, tool *protocol.AgentFeedTool) {
+	s.counts.Results++
+	if out := s.codexOutput(it); strings.TrimSpace(out) != "" {
+		tool.Preview, tool.HasOutput = preview(out), true
+		s.refs[s.id(it.ID)] = codexRef{file: f, offset: off, length: length}
+	}
+	s.emit(Item{ID: it.ID, Kind: protocol.FeedItemTool, At: at, Tool: tool})
+}
+
+func (s *codexSource) item(f *codexFile, it *codexItem, at time.Time, off, length, wall int64) {
+	status := "ok"
+	if it.Status == "failed" || it.Status == "declined" || (it.ExitCode != nil && *it.ExitCode != 0) {
+		status = "error"
+	}
 	switch strings.ToLower(it.Type) {
 	case "usermessage":
 		raw := codexText(it.Content)
 		if strings.TrimSpace(raw) == "" {
 			return
 		}
-		s.noteUser(it.ID, raw)
+		id := s.id(it.ID)
+		s.noteUser(id, raw)
 		clean, cut := capText(displayPaste(raw), maxTextRunes)
-		s.turn = it.ID
+		s.turn = id
 		s.counts.User++
-		s.emit(Item{ID: it.ID, Kind: protocol.FeedItemUser, At: at, Turn: it.ID, Text: clean, Truncated: cut})
+		s.emit(Item{ID: it.ID, Kind: protocol.FeedItemUser, At: at, Turn: id, Text: clean, Truncated: cut})
 	case "agentmessage":
 		clean, cut := capText(codexText(it.Content), maxTextRunes)
 		if clean == "" {
@@ -352,64 +560,118 @@ func (s *codexSource) item(f *codexFile, it *codexItem, at time.Time, off, lengt
 		s.emit(Item{ID: it.ID, Kind: protocol.FeedItemText, At: at, Text: clean, Truncated: cut})
 	case "commandexecution":
 		cmd := codexCommand(it.Command)
-		s.counts.Results++
-		if isReportCall(cmd) {
+		if isReportCall(codexLolaCall(cmd)) {
+			s.counts.Results++
 			return
 		}
-		status := "ok"
-		if it.ExitCode != nil && *it.ExitCode != 0 {
-			status = "error"
-		}
 		tool := &protocol.AgentFeedTool{Name: "Bash", Category: "run", Summary: sshelement.Line(runSummary(&toolInput{Command: cmd}), maxSummaryRunes),
-			Status: status, DurationMs: it.DurationMs, Preview: preview(it.AggregatedOutput), HasOutput: strings.TrimSpace(it.AggregatedOutput) != ""}
+			Status: status, DurationMs: codexDuration(it, wall)}
 		if full := sshelement.Line(firstLine(cmd), 4096); full != tool.Summary {
 			tool.Detail = full
 		}
-		if tool.HasOutput {
-			s.refs[it.ID] = codexRef{file: f, offset: off, length: length}
-		}
-		s.emit(Item{ID: it.ID, Kind: protocol.FeedItemTool, At: at, Tool: tool})
+		s.tool(f, it, at, off, length, tool)
 	case "filechange":
-		s.counts.Results++
-		s.emit(Item{ID: it.ID, Kind: protocol.FeedItemTool, At: at, Tool: &protocol.AgentFeedTool{
-			Name: "Edit", Category: "edit", Summary: sshelement.Line(codexChangedPaths(it.Changes), maxSummaryRunes), Status: "ok"}})
+		paths, added, removed, _ := s.codexChanges(it.Changes)
+		s.tool(f, it, at, off, length, &protocol.AgentFeedTool{Name: "Edit", Category: "edit",
+			Summary: sshelement.Line(strings.Join(paths, ", "), maxSummaryRunes), Status: status, Added: added, Removed: removed})
 	case "mcptoolcall":
-		s.counts.Results++
-		s.emit(Item{ID: it.ID, Kind: protocol.FeedItemTool, At: at, Tool: &protocol.AgentFeedTool{
-			Name: sshelement.Line(it.Tool, 80), Category: "other", Summary: sshelement.Line(it.Server, maxSummaryRunes), Status: "ok"}})
+		if _, failed := codexMcpOutput(it); failed {
+			status = "error"
+		}
+		summary := firstShortString(it.Arguments)
+		if summary == "" {
+			summary = firstOf(it.AppName, it.Server)
+		}
+		s.tool(f, it, at, off, length, &protocol.AgentFeedTool{Name: sshelement.Line(firstOf(it.Tool, it.Server), 80), Category: "other",
+			Summary: sshelement.Line(summary, maxSummaryRunes), Status: status, DurationMs: codexDuration(it, wall)})
 	case "imageview":
-		s.counts.Results++
-		s.emit(Item{ID: it.ID, Kind: protocol.FeedItemTool, At: at, Tool: &protocol.AgentFeedTool{
-			Name: "View", Category: "read", Summary: sshelement.Line(it.Path, maxSummaryRunes), Status: "ok"}})
+		s.tool(f, it, at, off, length, &protocol.AgentFeedTool{Name: "View", Category: "read",
+			Summary: sshelement.Line(s.relative(it.Path), maxSummaryRunes), Status: status})
+	case "extension":
+		// A web search or a page it opened. A clock sleep is the agent waiting, not a tool.
+		if it.Kind != "web.search" || it.Query == "" {
+			return
+		}
+		s.tool(f, it, at, off, length, &protocol.AgentFeedTool{Name: "WebSearch", Category: "read",
+			Summary: sshelement.Line(it.Query, maxSummaryRunes), Status: status})
+	case "subagentactivity":
+		s.subagent(it, at)
 	}
 }
 
-// codexChangedPaths names the files of a change, which is a map or a list keyed by path.
-func codexChangedPaths(raw json.RawMessage) string {
-	var byPath map[string]json.RawMessage
-	if json.Unmarshal(raw, &byPath) == nil {
-		paths := make([]string, 0, len(byPath))
-		for p := range byPath {
-			paths = append(paths, p)
+// codexLolaCall names lola the way isReportCall expects it. Codex resolves the binary and
+// runs it by its path.
+func codexLolaCall(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	word, rest, _ := strings.Cut(cmd, " ")
+	if strings.HasPrefix(word, "/") && filepath.Base(word) == "lola" {
+		return strings.TrimSpace("lola " + rest)
+	}
+	return cmd
+}
+
+// firstOf is the first of two strings that says something.
+func firstOf(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// subagent keeps one row per subagent thread: opened when it starts, closed when it
+// completes. What passes between the two is in the thread, which Thread reads on demand.
+func (s *codexSource) subagent(it *codexItem, at time.Time) {
+	thread := it.AgentThreadID
+	if !codexThreadRe.MatchString(thread) {
+		return
+	}
+	row, open := s.agents[thread]
+	switch it.Kind {
+	case "started":
+		if open {
+			return
 		}
-		sort.Strings(paths)
-		return strings.Join(paths, ", ")
-	}
-	var list []struct {
-		Path string `json:"path"`
-	}
-	if json.Unmarshal(raw, &list) == nil {
-		paths := make([]string, 0, len(list))
-		for _, c := range list {
-			paths = append(paths, c.Path)
+		s.counts.AgentCalls++
+		name := it.AgentPath
+		if i := strings.LastIndexByte(name, '/'); i >= 0 {
+			name = name[i+1:]
 		}
-		return strings.Join(paths, ", ")
+		row = Item{ID: "subagent:" + thread, Kind: protocol.FeedItemTool, At: at, Tool: &protocol.AgentFeedTool{
+			Name: "Agent", Category: "agent", Summary: sshelement.Line(name, maxSummaryRunes), Status: "running", Subagent: thread}}
+		s.emit(row)
+		row = s.changed[s.at[s.id(row.ID)]]
+		row.ID = "subagent:" + thread // emit names it again
+		s.agents[thread] = row
+	case "completed":
+		if !open || row.Tool.Status != "running" {
+			return
+		}
+		tool := *row.Tool
+		tool.Status = "ok"
+		if !at.IsZero() && !row.At.IsZero() && at.After(row.At) {
+			tool.DurationMs = at.Sub(row.At).Milliseconds()
+		}
+		row.Tool = &tool
+		s.agents[thread] = row
+		s.counts.Results++
+		s.emit(row)
 	}
-	return ""
 }
 
 // Output implements Source.
-func (s *codexSource) Output(_ context.Context, id string) (string, bool, error) {
+func (s *codexSource) Output(ctx context.Context, id string) (string, bool, error) {
+	if rest, ok := strings.CutPrefix(id, "agent-"); ok && s.parent == "" {
+		parent, _, found := strings.Cut(rest, "/")
+		if !found {
+			return "", false, errors.New("no such item")
+		}
+		thread, err := s.threadSource(parent)
+		if err != nil {
+			return "", false, err
+		}
+		thread.drain(ctx)
+		return thread.Output(ctx, id)
+	}
 	ref, ok := s.refs[id]
 	if !ok {
 		return "", false, ErrNoOutput
@@ -423,14 +685,78 @@ func (s *codexSource) Output(_ context.Context, id string) (string, bool, error)
 		return "", false, errors.New("the log changed")
 	}
 	var it codexItem
-	if json.Unmarshal(l.Payload.Item, &it) != nil || it.ID != id {
+	var mismatch *json.UnmarshalTypeError
+	if err := json.Unmarshal(l.Payload.Item, &it); (err != nil && !errors.As(err, &mismatch)) || s.id(it.ID) != id {
 		return "", false, errors.New("the log changed")
 	}
-	return cleanOutput(it.AggregatedOutput)
+	return cleanOutput(s.codexOutput(&it))
 }
 
-// Thread implements Source. Guardian threads are filtered out, and codex has no fold to
-// open.
-func (s *codexSource) Thread(context.Context, string) ([]Item, error) {
-	return nil, errors.New("no subagent threads for this agent")
+// threadPath finds a subagent's rollout, whose file name ends in its thread id. The file
+// must say it is a child thread working in this session's directory, and not a guardian.
+func (s *codexSource) threadPath(thread string) (string, error) {
+	if !codexThreadRe.MatchString(thread) {
+		return "", errors.New("no such subagent")
+	}
+	days := codexDays(s.root)
+	slices.Reverse(days)
+	for _, day := range days {
+		entries, err := os.ReadDir(day)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.Type().IsRegular() || !codexRolloutRe.MatchString(e.Name()) || !strings.HasSuffix(e.Name(), "-"+thread+".jsonl") {
+				continue
+			}
+			p := filepath.Join(day, e.Name())
+			m, ok := readCodexMeta(p)
+			if !ok || m.Payload.ParentThreadID == "" || filepath.Clean(m.Payload.Cwd) != s.cwd ||
+				strings.Contains(strings.ToLower(m.Payload.ThreadSource), "guardian") {
+				return "", errors.New("no such subagent")
+			}
+			return p, nil
+		}
+	}
+	return "", errors.New("no such subagent")
+}
+
+// threadSource prepares a reader for one subagent's rollout. Its items carry Parent, and
+// their ids name the thread.
+func (s *codexSource) threadSource(thread string) (*codexSource, error) {
+	path, err := s.threadPath(thread)
+	if err != nil {
+		return nil, err
+	}
+	t := &codexSource{root: s.root, cwd: s.cwd}
+	t.reset()
+	t.parent = thread
+	f := &codexFile{tail: tail{path: path}}
+	t.files, t.byPath[path] = []*codexFile{f}, f
+	return t, nil
+}
+
+// drain reads a thread to its end, within the bound.
+func (s *codexSource) drain(ctx context.Context) []Item {
+	var all []Item
+	for ctx.Err() == nil && s.counts.Bytes <= maxThreadBytes {
+		changed, _ := s.Advance(ctx, 8<<20)
+		all = append(all, changed...)
+		if s.eof {
+			break
+		}
+	}
+	return all
+}
+
+// Thread implements Source: one subagent's conversation, read on demand. Guardian threads
+// are never one.
+func (s *codexSource) Thread(ctx context.Context, parent string) ([]Item, error) {
+	t, err := s.threadSource(parent)
+	if err != nil {
+		return nil, err
+	}
+	feed := newFeedOf(t, 0)
+	feed.apply(t.drain(ctx))
+	return feed.All(), nil
 }

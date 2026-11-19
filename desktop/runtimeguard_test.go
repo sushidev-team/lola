@@ -10,7 +10,7 @@ import (
 )
 
 // The transport this guard was read against. See runtimeCallGuard before changing it.
-const reviewedWails = "v3.0.0-alpha2.117"
+const reviewedWails = "v3.1.0"
 
 func TestRuntimeGuardWasReviewedForThisWails(t *testing.T) {
 	mod, err := os.ReadFile("../go.mod")

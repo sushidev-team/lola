@@ -102,6 +102,16 @@ const GoalStartV2 = "goalStartV2"
 // watching a button. The reply is ResolveConflictData naming the branch asked
 // for.
 //
+// Cmd "askMerge" asks a session's coding agent to merge another branch into
+// the session's own branch: Session names the target, Ref the branch to merge,
+// as the project's repository shows it (a local branch or a remote-tracking
+// one). It is what the app offers where it must not merge itself: a sandboxed
+// session's checkout takes no host git once its agent runs. It obeys the
+// send-keys safety rules of resolveConflict and, like it, does NOT defer: a
+// mid-turn agent is an error. Ref is restricted to a conservative branch-name
+// alphabet, because it is the one outside value in the instruction. Stack
+// sessions are refused. The reply is AskMergeData. Desktop only.
+//
 // Cmd "diff" returns the session's changes for the in-app diff viewer as
 // DiffData: its worktree against the merge-base with the project's
 // default_branch, uncommitted and untracked work included. Read-only (one
@@ -175,7 +185,7 @@ const GoalStartV2 = "goalStartV2"
 // any sub-issue is open. A parent that already has sub-issues is refused. The
 // reply is PlanApplyData.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|pairStatus|pairConfirm|pairReject|devices|revokeDevice|setDeviceTiers|sessionTimeline|relayCred|agentReport|plan|planApply
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|askMerge|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|pairStatus|pairConfirm|pairReject|devices|revokeDevice|setDeviceTiers|sessionTimeline|relayCred|agentReport|plan|planApply|planSubmit|planDecide|planGate
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -187,7 +197,7 @@ type Request struct {
 	// Open fields, set only for cmd=open: manually check out a branch/PR of a
 	// project into a throwaway worktree + shell. Project names the [[project]];
 	// Ref is the target — a bare PR number (fetched as refs/pull/<n>/head) or a
-	// branch name.
+	// branch name. cmd=askMerge reuses Ref for the branch the agent should merge.
 	Project string `json:"project,omitempty"`
 	Ref     string `json:"ref,omitempty"`
 
@@ -289,6 +299,10 @@ type StatusData struct {
 	// Usage is today's token usage against the configured budgets, plus
 	// the last machine-load sample when [load] is on. nil on an older daemon.
 	Usage *UsageStatus `json:"usage,omitempty"`
+
+	// LinearAgent is the native Linear agent's loop status, nil when
+	// [linear_agent] is not enabled.
+	LinearAgent *LinearAgentStatus `json:"linearAgent,omitempty"`
 }
 
 // UsageInfo is one session's usage over every claude AND codex run in its
@@ -571,6 +585,14 @@ type SessionInfo struct {
 	// is known yet — no transcript written, or an agent whose logs lola cannot
 	// read (codex, opencode). Absent is "unknown", never zero.
 	Usage *UsageInfo `json:"usage,omitempty"`
+	// Plan is the plan-approval gate ([[project]].require_plan), nil when the
+	// session has none. Unlike Board it is CONTROL state: Gate=submitted means a
+	// human decision is what the agent is waiting for, and the app/TUI offer
+	// approve / request-changes on it (cmd=planDecide).
+	Plan *PlanInfo `json:"plan,omitempty"`
+	// LinearAgentURL is the Linear Agent Session this session is bound to
+	// (delegated / @mentioned in Linear), "" when none. A link a human may open.
+	LinearAgentURL string `json:"linearAgentUrl,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
@@ -661,6 +683,47 @@ type BoardCheck struct {
 	EvidenceNote string `json:"evidenceNote,omitempty"`
 }
 
+// PlanInfo is a session's plan gate flattened for rendering. Text is the
+// agent's submitted plan (UNTRUSTED agent output — render as text/markdown, never
+// as HTML or a command); Feedback is the human's last rejection comment.
+type PlanInfo struct {
+	Gate        string    `json:"gate"` // planning|submitted|approved
+	Text        string    `json:"text,omitempty"`
+	Round       int       `json:"round,omitempty"`
+	Feedback    string    `json:"feedback,omitempty"`
+	SubmittedAt time.Time `json:"submittedAt,omitzero"`
+}
+
+// PlanSubmitArgs is cmd=planSubmit's payload: the agent's plan (from
+// `lola plan-gate submit`, session = $LOLA_SESSION).
+type PlanSubmitArgs struct {
+	Plan string `json:"plan"`
+}
+
+// PlanDecideArgs is cmd=planDecide's payload: a HUMAN's verdict on the
+// submitted plan. Approve=false with Comment sends the agent back to re-plan.
+type PlanDecideArgs struct {
+	Approve bool   `json:"approve"`
+	Comment string `json:"comment,omitempty"`
+}
+
+// PlanGateData is Response.Data for cmd=planGate — what the PreToolUse hook
+// asks before a file edit. Blocked=true denies the edit with Reason.
+type PlanGateData struct {
+	Blocked bool   `json:"blocked"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// LinearAgentStatus is the Linear agent loop's health, on cmd=status.
+type LinearAgentStatus struct {
+	Enabled   bool      `json:"enabled"`
+	Connected bool      `json:"connected"` // the last poll reached Linear with a valid token
+	AgentName string    `json:"agentName,omitempty"`
+	LastPoll  time.Time `json:"lastPoll,omitzero"`
+	LastError string    `json:"lastError,omitempty"`
+	Webhook   string    `json:"webhook,omitempty"` // the doorbell's listen address, "" when off
+}
+
 // ReportArgs is the argument payload for cmd=agentReport: the argv typed after
 // `lola report`, parsed and validated DAEMON-side (internal/board.Apply) so the
 // trust boundary is the daemon, not whichever lola binary the pane runs. The
@@ -735,6 +798,10 @@ type ProjectInfo struct {
 	// GitHub "owner/name" repo is set (needed by the PR picker).
 	PathOK         bool `json:"pathOk"`
 	RepoConfigured bool `json:"repoConfigured"`
+
+	// Sandboxed is whether this project's agents run in a container. Such an agent
+	// needs a worktree of its own, so a UI does not offer it the main checkout.
+	Sandboxed bool `json:"sandboxed,omitempty"`
 
 	// Poll rollup: how many polls this project drives and how many are enabled,
 	// their names, and the newest LastRun / first LastError across them.
@@ -841,6 +908,18 @@ type TicketsData struct {
 	TeamName string      `json:"teamName,omitempty"`
 	TeamKey  string      `json:"teamKey,omitempty"`
 	Issues   []TicketRow `json:"issues"`
+	// Members are the apps of a STACK project, in config order (nil for a
+	// repository): what a start can check out, and which of them an issue's
+	// labels have to ask for.
+	Members []StackMember `json:"members,omitempty"`
+}
+
+// StackMember is one app of a stack as the ticket picker offers it.
+type StackMember struct {
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"` // display name
+	// Always reports a member with no routing labels: every issue gets it.
+	Always bool `json:"always,omitempty"`
 }
 
 // TicketRow is one Linear issue for the picker. Everything past Branch is
@@ -865,6 +944,10 @@ type TicketRow struct {
 	// the same and neither has to parse a timestamp.
 	Updated     string `json:"updated,omitempty"`
 	AlreadyLive bool   `json:"alreadyLive"` // a lola session already holds this issue
+	// Apps are the stack members this issue's labels select (TicketsData.Members
+	// names); nil for a repository project. Display, like the rest: the spawn
+	// selects from the issue's labels itself.
+	Apps []string `json:"apps,omitempty"`
 }
 
 // OpenTicketArgs is the argument payload for cmd=openTicket: start a Linear issue
@@ -879,6 +962,28 @@ type OpenTicketArgs struct {
 	// AgentKind optionally overrides WHICH coding agent runs (claude|codex|
 	// opencode) instead of the project's configured default. "" = configured.
 	AgentKind string `json:"agentKind,omitempty"`
+	// Apps names further members of a STACK project to check out beside the
+	// ones the issue's labels select. Refused for a repository project and for
+	// a name that is not a member.
+	Apps []string `json:"apps,omitempty"`
+}
+
+// AddAppsArgs is the argument payload for cmd=addApps: check further members
+// of its stack out into a RUNNING stack session (the issue's labels missed
+// one). Refused for a session that is not a stack session, a name that is not
+// a member, a member already checked out, and a sandboxed session whose agent
+// is mid-turn (its container has to be restarted to mount the new repository).
+type AddAppsArgs struct {
+	Session string   `json:"session"`
+	Apps    []string `json:"apps"`
+}
+
+// AddAppsData is Response.Data for cmd=addApps. Apps are the members now
+// added; Relaunched reports that the agent was restarted (sandbox).
+type AddAppsData struct {
+	Apps       []string `json:"apps"`
+	Relaunched bool     `json:"relaunched,omitempty"`
+	Message    string   `json:"message,omitempty"`
 }
 
 // RenameProjectArgs is the argument payload for cmd=renameProject: change a
@@ -1024,6 +1129,13 @@ type DevFreePortData struct {
 // which branch it named rather than repeating its own guess), and Message is the
 // short human-readable outcome.
 type ResolveConflictData struct {
+	Branch  string `json:"branch"`
+	Message string `json:"message,omitempty"`
+}
+
+// AskMergeData is Response.Data for cmd=askMerge. Branch is the branch the
+// agent was asked to merge and Message the short human-readable outcome.
+type AskMergeData struct {
 	Branch  string `json:"branch"`
 	Message string `json:"message,omitempty"`
 }
@@ -1473,7 +1585,12 @@ type BulkProjectsArgs struct {
 	MatchMode      *string   `json:"matchMode,omitempty"`
 	OnSentSetLabel *string   `json:"onSentSetLabel,omitempty"`
 	BlockedLabel   *string   `json:"blockedLabel,omitempty"`
-	DryRun         bool      `json:"dryRun,omitempty"`
+	// KeepNames stores label references as written (names, "group/name", globs)
+	// instead of resolving them to ids; the daemon then resolves them per team on
+	// every load. They are still checked against each project's team, so a name
+	// that matches nothing refuses the change.
+	KeepNames bool `json:"keepNames,omitempty"`
+	DryRun    bool `json:"dryRun,omitempty"`
 }
 
 // BulkProjectChange is one project's outcome in BulkProjectsData.

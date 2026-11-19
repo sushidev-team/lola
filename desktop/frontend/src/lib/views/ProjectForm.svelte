@@ -77,6 +77,7 @@
     "blockedLabelId",
     "dedupMode",
     "prioritySort",
+    "requirePlan",
     "autoPRComments",
   ] as const;
   type InheritKey = (typeof INHERIT_KEYS)[number];
@@ -381,6 +382,8 @@
       case "dedupMode":
         f.dedupMode = d.dedupMode;
         break;
+      case "requirePlan":
+        f.requirePlan = !!d.requirePlan;
       case "autoPRComments":
         f.autoPRComments = d.autoPRComments;
         break;
@@ -802,17 +805,19 @@
   <div class={rowCls}>
     {@render cap(caption, k)}
     {#if options}
+      {@const ids = k === "onSentSetLabel" || k === "blockedLabelId" ? labelIdsFor([current], options, true) : [current]}
+      {@const picked = ids.length === 1 ? ids[0] : current}
       <Select
         class={inheritedStyle(k)}
         aria-label={caption}
-        value={current}
+        value={picked}
         onchange={(e) => {
           if (k) promote(k);
           onChange(e.currentTarget.value);
         }}
       >
         {#if anyLabel}<option value="">{anyLabel}</option>{/if}
-        {#if current && !options.some((o) => o.id === current)}<option value={current}>{current} (current value)</option>{/if}
+        {#if picked && !options.some((o) => o.id === picked)}<option value={picked}>{picked} (current value)</option>{/if}
         {#each options as o (o.id)}<option value={o.id}>{o.label}</option>{/each}
       </Select>
     {:else}
@@ -841,7 +846,7 @@
   {#if options}
     <div class={rowTopCls}>
       {@render cap(caption, k)}
-      <CheckboxOptions label={caption} {options} {selected} onChange={(value) => {
+      <CheckboxOptions label={caption} {options} selected={k === "matchLabels" ? labelIdsFor(selected, options, true) : selected} onChange={(value) => {
         if (k) promote(k);
         onChange(value);
       }} />
@@ -849,6 +854,18 @@
   {:else}
     {@render areaRow(caption, selected, onChange, "one ID per line", "", k)}
   {/if}
+{/snippet}
+
+<!-- A boolean [defaults]-inheritable key: ticking it while inherited promotes
+     it to a project override, exactly like typing into an inherited text row. -->
+{#snippet inheritBoolRow(caption: string, k: InheritKey, checked: boolean, onToggle: () => void, hint = "", help = "")}
+  <div class={rowCls}>
+    {@render cap(caption, k, help)}
+    <label class="flex items-center gap-2 text-ink {inherited(k) ? 'opacity-70' : ''}">
+      <Checkbox {checked} onchange={() => { promote(k); onToggle(); }} aria-label={caption} />
+      {#if hint}<span class="text-faint">{hint}</span>{/if}
+    </label>
+  </div>
 {/snippet}
 
 {#snippet boolRow(caption: string, checked: boolean, onToggle: () => void, hint = "")}
@@ -1365,6 +1382,17 @@
           </div>
         {/snippet}
         {@render section("Automatic pickup", pickup)}
+        {#snippet planGate()}
+          {@render inheritBoolRow(
+            "Require plan",
+            "requirePlan",
+            !!d.requirePlan,
+            () => { d.requirePlan = !d.requirePlan; },
+            "approve a plan before the agent edits files",
+            "The agent investigates read-only and submits a plan; it may edit files only once a human approves it — in the app, with `lola plan-gate approve`, or in the Linear agent session.",
+          )}
+        {/snippet}
+        {@render section("Plan approval", planGate)}
         {#snippet filters()}
           {@render teamRow("Team")}
 

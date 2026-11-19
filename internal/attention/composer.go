@@ -121,7 +121,7 @@ func suggestionOnly(raw string) bool {
 				continue
 			}
 			if !caretSeen {
-				if r != '❯' && r != '>' {
+				if r != '❯' && r != '>' && r != '›' {
 					return false
 				}
 				caretSeen = true

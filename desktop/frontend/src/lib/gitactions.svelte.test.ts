@@ -170,7 +170,7 @@ describe('Git action menus', () => {
     await Promise.resolve();
     expect(actions.request!.items[0].label).toBe('Merge feature/work into main');
   });
-  it('offers pull after a rejected push and an explicit merge after a diverged pull', async () => {
+  it('offers pull after a rejected push and automatically merges a diverged pull', async () => {
     const remote={...main,name:'origin/main',fullName:'refs/remotes/origin/main',remote:true,current:false,sha:'c'.repeat(40)};
     git.snapshot!.refs.push(remote);
     vi.mocked(git.branchAction).mockImplementationOnce(async request=>{git.failedAction=request;git.error='push rejected (non-fast-forward)';return null;});
@@ -178,10 +178,33 @@ describe('Git action menus', () => {
     await waitFor(()=>expect(store.flash?.action?.label).toBe('Pull changes'));
     vi.mocked(git.branchAction).mockImplementationOnce(async request=>{git.failedAction=request;git.error='branch has diverged; check it out and merge or rebase the upstream explicitly';return null;});
     store.flash!.action!.run();
-    await waitFor(()=>expect(store.flash?.action?.label).toBe('Merge remote changes'));
-    expect(git.branchAction).toHaveBeenLastCalledWith(expect.objectContaining({action:'pull',source:main.fullName,sourceSHA:main.sha}),'',200);
-    store.flash!.action!.run();
     await waitFor(()=>expect(git.branchAction).toHaveBeenLastCalledWith({action:'merge',source:remote.fullName,sourceSHA:remote.sha,target:main.fullName,targetSHA:main.sha},'',200));
+    expect(store.flash?.action?.label).not.toBe('Merge remote changes');
+    expect(confirm.request).toBeNull();
+  });
+  it.each(['success','conflict','changed','missing'])('handles a diverged Pull directly (%s)', async outcome => {
+    const remote={...main,name:'origin/main',fullName:'refs/remotes/origin/main',remote:true,current:false,sha:'c'.repeat(40)};
+    if(outcome!=='missing') git.snapshot!.refs.push(remote);
+    vi.mocked(git.branchAction).mockImplementationOnce(async request=>{
+      git.failedAction=request;
+      git.error='branch has diverged; check it out and merge or rebase the upstream explicitly';
+      if(outcome==='changed') git.snapshot!.refs[0]={...main,sha:'d'.repeat(40)};
+      return null;
+    });
+    if(outcome==='conflict') vi.mocked(git.branchAction).mockImplementationOnce(async request=>{
+      git.failedAction=request;git.error='Automatic merge failed; fix conflicts and then commit the result.';return null;
+    });
+    const flash=vi.spyOn(store,'setFlash');
+    actions.pull();
+    if(outcome==='changed'||outcome==='missing') {
+      await waitFor(()=>expect(flash).toHaveBeenCalled());
+      expect(git.branchAction).toHaveBeenCalledTimes(1);
+    } else {
+      await waitFor(()=>expect(git.branchAction).toHaveBeenLastCalledWith({action:'merge',source:remote.fullName,sourceSHA:remote.sha,target:main.fullName,targetSHA:main.sha},'',200));
+      if(outcome==='conflict') await waitFor(()=>expect(flash).toHaveBeenCalledTimes(1));
+      else expect(flash).not.toHaveBeenCalled();
+    }
+    expect(confirm.request).toBeNull();
   });
   it.each(['changed','dismissed','disposed'])('does not run a stale toast action after the context is %s', async reason=>{
     git.failedAction={action:'push',source:main.fullName,sourceSHA:main.sha,target:'',targetSHA:''};
@@ -463,5 +486,55 @@ describe('Git action menus', () => {
     expect(callbacks.viewCommit).not.toHaveBeenCalled();
     await fireEvent.click(view);
     expect(callbacks.viewCommit).toHaveBeenCalledWith(main.sha);
+  });
+  describe('a branch checked out in a sandboxed session', () => {
+    const tree = {path:'/sandboxed',branch:feature.name,head:feature.sha,blocked:true,locked:false,prunable:false};
+    const owner = {id:'s1',worktree:tree.path} as (typeof store.sessions)[number];
+    beforeEach(() => { git.snapshot!.worktrees = [{...tree,path:'/repo',branch:main.name,head:main.sha,blocked:false},tree]; });
+    afterEach(() => { store.sessions = []; });
+    it('says why the host cannot merge when no session owns the checkout', async () => {
+      store.sessions = [];
+      render(ProjectGitActionMenu, { actions });
+      actions.dropBranches(main, feature, event());
+      const merge = await screen.findByRole('menuitem', { name: /^Merge main into feature\/work/ });
+      expect(merge).toBeDisabled();
+      expect(merge).toHaveTextContent('Checked out in a sandboxed session');
+      expect(merge).toHaveAttribute('title', 'Checked out in a sandboxed session');
+      expect(screen.getByRole('menuitem', { name: 'Rebase main onto feature/work' })).toBeEnabled();
+    });
+    it('asks the owning session\'s agent instead of merging on the host', async () => {
+      store.sessions = [owner];
+      const askMerge = vi.spyOn(store, 'askMerge').mockResolvedValue(undefined);
+      render(ProjectGitActionMenu, { actions });
+      actions.dropBranches(main, feature, event());
+      expect(screen.queryByRole('menuitem', { name: /^Merge main/ })).toBeNull();
+      await fireEvent.click(await screen.findByRole('menuitem', { name: 'Ask agent to merge main into feature/work' }));
+      expect(askMerge).toHaveBeenCalledWith('s1', 'main');
+      expect(git.branchAction).not.toHaveBeenCalled();
+      expect(api.CanFastForward).not.toHaveBeenCalled();
+    });
+    it('does not ask an agent that stopped owning the checkout while the menu was open', async () => {
+      store.sessions = [owner];
+      const askMerge = vi.spyOn(store, 'askMerge').mockResolvedValue(undefined);
+      render(ProjectGitActionMenu, { actions });
+      actions.dropBranches(main, feature, event());
+      const item = await screen.findByRole('menuitem', { name: 'Ask agent to merge main into feature/work' });
+      store.sessions = [];
+      await fireEvent.click(item);
+      expect(askMerge).not.toHaveBeenCalled();
+    });
+    it('accepts a remote branch dropped on it only when an agent can be asked', () => {
+      const remote = {...main,name:'origin/main',fullName:'refs/remotes/origin/main',remote:true,current:false};
+      store.sessions = [];
+      expect(actions.canDrop(remote, feature)).toBe(false);
+      store.sessions = [owner];
+      expect(actions.canDrop(remote, feature)).toBe(true);
+    });
+    it('offers no agent for a stack app\'s checkout', async () => {
+      store.sessions = [{id:'s2',worktree:'/stack',apps:[{worktree:tree.path}]} as unknown as (typeof store.sessions)[number]];
+      render(ProjectGitActionMenu, { actions });
+      actions.dropBranches(main, feature, event());
+      expect(await screen.findByRole('menuitem', { name: /^Merge main into feature\/work/ })).toBeDisabled();
+    });
   });
 });

@@ -23,6 +23,8 @@ component-to-source mapping, executable agent HTML, or a new merge engine.
 
 ## Review experience
 
+On the desktop the workspace is one screen: a Git-style header (session, PR or "No PR yet", freshness, views, version, capture, mark reviewed), the overview on the left, screenshots on the right, and Checks & feedback always open beside them. Review does not need a pull request; PR readiness appears when one exists. The phone keeps its tabbed sheet.
+
 Enter Review from the session's Changes view and PR context. The workspace fills
 the available application content area and can expand from the compact session.
 Retain a direct route back to the conversation and terminal.
@@ -42,7 +44,7 @@ Retain a direct route back to the conversation and terminal.
 The reviewer can collect comments and send them as a batch. Material comments must
 carry the package identity, revision, and screenshot/section context. After a fix,
 show that new work needs review; retain the prior material and feedback context.
-Screenshot-region annotations and a dedicated changes-since-review comparison are
+Screenshot annotations (pins, rectangles, ellipses, arrows, lines and freehand strokes) and a dedicated changes-since-review comparison are
 implemented. Inspection is recorded separately from approval and merge authority.
 
 ## Publishing contract and storage

@@ -1083,10 +1083,10 @@ resolved from `internal/protocol`): 166 case labels today, minus the deleted
 `pairReject`, `devices`, `revokeDevice`, `setDeviceTiers`, `sessionTimeline`; `pairBegin` already
 exists) = 172, plus spec 02's two handled commands `attachImage` and `attachmentImage` (`d.handle`
 cases reached through `Options.Handle` with the peer in the context) = 174, plus spec 03's
-`relayCred` = **179 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
+`relayCred` = 176, plus the desktop-only `askMerge` and `addApps` = 178, plus the plan gate's `planSubmit`, `planDecide`, `planGate` = 181, plus desktop-only `removeEndedWorktree` = 182, plus the phone Git client's `projectGit`, `projectGitAct`, `projectGitDiscard` = **185 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
 `internal/remote`, and `remote.pair`, consumed by `Authenticate`.
 
-Split of the 179: read 25, answer 12, control 24, destructive 4, shell 6, never 108.
+Split of the 185: read 25, answer 12, control 25, destructive 4, shell 6, never 113.
 (Coverage was checked mechanically against `server.go` while writing this spec.)
 
 **read** (25 handled; plus `watch`, `unwatch` from `TransportCommands`)
@@ -1120,11 +1120,11 @@ Split of the 179: read 25, answer 12, control 24, destructive 4, shell 6, never 
 | `sshRecall` | moved to `TalkCommands` (§8.4): takes back an undelivered "You" message (plan §6 "recall") |
 | `sshAnswer` | moved to `TalkCommands`: answers an agent's question element; `handleRemote` refuses an element whose `Conn != ""` (§8.7) |
 
-**control** (24)
+**control** (25)
 
 `addressPRFeedback`, `mergePR` (`confirmUnready` allowed, audited), `openPr`, `openTicket`,
 `openManual`, `openExisting` (field rules: §8.5), `revive`, `review`, `coderabbit`,
-`resolveConflict`, `switchAgent`, `dev`, `devFreePort`, `sessionTask`, `renameSession`,
+`resolveConflict`, `switchAgent`, `dev`, `devFreePort`, `planDecide`, `sessionTask`, `renameSession`,
 `broadcast`, `bestOf`, `restoreCheckpoint`, `forkCheckpoint`, `pollOnce`, `enable`, `disable`,
 `reviewPackageRecover`, `projectGitAct` (stage, unstage, commit, fetch, pull, push, createBranch, stashPush, stashApply: commit and push run the repository's own hooks).
 
@@ -1146,14 +1146,16 @@ No other config write may join a tier (§10.1).
 browser helper from the agent-writable `node_modules`, against any http(s) URL the caller
 names). Frame-level: `pty` with `action:"write"`.
 
-**never** — unreachable whatever the device holds (108)
+**never** — unreachable whatever the device holds (113)
 
 | Group | Commands |
 |---|---|
 | Daemon lifecycle / config | `stop`, `reload`, `renameProject`, `bulkProjects` |
-| Agent in-pane channels | `hookEvent`, `agentReport`, `reviewPackagePublish`, `reviewPackageComplete` |
+| Agent in-pane channels | `hookEvent`, `agentReport`, `planSubmit`, `planGate`, `reviewPackagePublish`, `reviewPackageComplete` |
 | Pairing / devices (`protocol.LocalOnlyCommands`) | `pairBegin`, `pairStatus`, `pairConfirm`, `pairReject`, `devices`, `revokeDevice`, `setDeviceTiers` |
 | Transport-internal | `remote.pair` (and every `remote.*`), `""` |
+| Branch graph (Mac only) | `askMerge` (asks a session's agent to merge a branch picked in the Mac's branch graph), `removeEndedWorktree` (explicit cleanup of a retained checkout through its ended history; may discard unverifiable files) |
+| Session menu (Mac only) | `addApps` (checks further members of its stack out into a running stack session; it can restart a sandboxed agent, and a phone has no such menu) |
 | Host browser | `openURL` (opens a URL on the Mac; the phone opens dev URLs itself — §12 item 3) |
 | Hub human (`protocol.HubHumanCommands`, 13) | `hubJoin`, `hubLeave`, `hubBoard`, `hubOrg`, `hubClaim`, `hubRelease`, `hubSync`, `hubStats`, `hubCreateTeam`, `hubInvite`, `hubTeamSettings`, `hubRevoke`, `hubProbe` |
 | SSH agent (`protocol.SSHAgentCommands`, 6) | `sshAgentHosts`, `sshAgentRequest`, `sshAgentRun`, `sshAgentPoll`, `sshAgentCancel`, `sshAgentPost` |
@@ -1269,6 +1271,7 @@ func rebuild(cmd string, in protocol.Request, has func(string) bool) (protocol.R
 | `devFreePort` | Args | `DevFreePortArgs` | |
 | `paneClose` / `paneResize` | Args | `PaneCloseArgs` / `PaneResizeArgs` | |
 | `sessionTask` | Session, Args | `ReportArgs` | |
+| `planDecide` | Session, Args | `PlanDecideArgs` | the human plan verdict; audit names `approve` only, never the comment |
 | `agentFeed`, `agentFeedOutput`, `talkState`, `agentChoose`, `agentStop`, `agentQueueRelease`, `agentSetting` | Args | matching `Agent*Args` / `TalkStateArgs` | |
 | `agentSay` | Args | `AgentSayArgs` | decode, `Conn = ""`, re-marshal; dropped `conn`; audit `stopFirst` |
 | `sshRecall` | Args | `SSHRecallArgs` | |

@@ -50,13 +50,37 @@ func (c *Client) States(ctx context.Context, teamID string) ([]State, error) {
 	return r.Team.States.Nodes, err
 }
 
+// Labels returns EVERY label of a team, following the pages: a name lookup that
+// saw only the first page would silently miss matches (and could pass a
+// uniqueness check it should fail). Any page error fails the whole call.
 func (c *Client) Labels(ctx context.Context, teamID string) ([]Label, error) {
-	const q = `query($t:String!){ team(id:$t){ labels{ nodes{ id name color parent{ id name } } } } }`
-	var r struct {
-		Team struct{ Labels struct{ Nodes []Label } }
+	const q = `query($t:String!, $after:String){ team(id:$t){
+		labels(first:250, after:$after){ nodes{ id name color parent{ id name } } pageInfo{ hasNextPage endCursor } } } }`
+	var (
+		out   []Label
+		after any
+	)
+	for {
+		var r struct {
+			Team struct {
+				Labels struct {
+					Nodes    []Label
+					PageInfo struct {
+						HasNextPage bool
+						EndCursor   string
+					}
+				}
+			}
+		}
+		if err := c.do(ctx, q, map[string]any{"t": teamID, "after": after}, &r); err != nil {
+			return nil, err
+		}
+		out = append(out, r.Team.Labels.Nodes...)
+		if !r.Team.Labels.PageInfo.HasNextPage {
+			return out, nil
+		}
+		after = r.Team.Labels.PageInfo.EndCursor
 	}
-	err := c.do(ctx, q, map[string]any{"t": teamID}, &r)
-	return r.Team.Labels.Nodes, err
 }
 
 // WorkspaceLabels returns the ORGANISATION-level labels: those with no team,

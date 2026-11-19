@@ -146,6 +146,16 @@ type SettingsDTO struct {
 	RemoteAdvertise  bool   `json:"remoteAdvertise"`
 	RemoteDevForward bool   `json:"remoteDevForward"`
 
+	// [linear_agent] — lola as a native Linear agent. Only the keys a human
+	// edits; the secret SOURCES (keychain service / env names) are preserved
+	// from the file, and the secrets themselves are written by
+	// SetLinearAgentSecret / `lola linear-agent login`, never through this DTO.
+	LinearAgentEnabled       bool   `json:"linearAgentEnabled"`
+	LinearAgentClientID      string `json:"linearAgentClientId"`
+	LinearAgentPollInterval  string `json:"linearAgentPollInterval"` // duration string, e.g. "15s"
+	LinearAgentRedirectPort  int    `json:"linearAgentRedirectPort"`
+	LinearAgentWebhookListen string `json:"linearAgentWebhookListen"`
+
 	// ReviewProviders is the pluggable review catalog ([[review.provider]]),
 	// resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
 	// from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the
@@ -169,6 +179,7 @@ type SettingsDTO struct {
 	BlockedLabelID string   `json:"blockedLabelId"`
 	DedupMode      string   `json:"dedupMode"`
 	PrioritySort   []string `json:"prioritySort"`
+	RequirePlan    bool     `json:"requirePlan"`
 
 	// [hub] — the team hub's local rules. url / enabled / device_name are not
 	// here: HubService.Join and Leave own them, so a settings save can never
@@ -487,6 +498,12 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		RemoteAdvertise:  cfg.Remote.Advertise,
 		RemoteDevForward: cfg.Remote.DevForward,
 
+		LinearAgentEnabled:       cfg.LinearAgent.Enabled,
+		LinearAgentClientID:      cfg.LinearAgent.ClientID,
+		LinearAgentPollInterval:  durationOrEmpty(cfg.LinearAgent.PollInterval),
+		LinearAgentRedirectPort:  cfg.LinearAgent.RedirectPort,
+		LinearAgentWebhookListen: cfg.LinearAgent.WebhookListen,
+
 		ReviewProviders:   reviewProvidersDTO(cfg),
 		ReviewLegacy:      legacyReviewOnly(cfg),
 		ReviewProfiles:    append([]reviewprofile.Profile{}, cfg.ReviewProfiles...),
@@ -503,9 +520,17 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		BlockedLabelID: cfg.Defaults.BlockedLabelID,
 		DedupMode:      cfg.Defaults.DedupMode,
 		PrioritySort:   cfg.Defaults.PrioritySort,
+		RequirePlan:    cfg.Defaults.RequirePlan,
 	}
 	hubSettingsDTO(&dto, cfg.Hub)
 	return dto, nil
+}
+
+func durationOrEmpty(d time.Duration) string {
+	if d == 0 {
+		return ""
+	}
+	return d.String()
 }
 
 func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
@@ -552,6 +577,20 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Remote.RelayOff = !dto.RemoteRelay
 	cfg.Remote.Advertise = dto.RemoteAdvertise
 	cfg.Remote.DevForward = dto.RemoteDevForward
+	la := cfg.LinearAgent
+	la.Enabled = dto.LinearAgentEnabled
+	la.ClientID = strings.TrimSpace(dto.LinearAgentClientID)
+	la.RedirectPort = dto.LinearAgentRedirectPort
+	la.WebhookListen = strings.TrimSpace(dto.LinearAgentWebhookListen)
+	la.PollInterval = 0
+	if v := strings.TrimSpace(dto.LinearAgentPollInterval); v != "" {
+		d, perr := time.ParseDuration(v)
+		if perr != nil {
+			return errors.New("Linear agent poll interval: " + perr.Error())
+		}
+		la.PollInterval = d
+	}
+	cfg.LinearAgent = la.Normalized()
 	// Review catalog. While the legacy tables are still present (read-only in the
 	// UI), the provider array is not written back — editing it alongside the
 	// legacy tables would produce a mixed config, a hard validation error;
@@ -593,6 +632,7 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Defaults.BlockedLabelID = dto.BlockedLabelID
 	cfg.Defaults.DedupMode = dto.DedupMode
 	cfg.Defaults.PrioritySort = nonEmpty(dto.PrioritySort)
+	cfg.Defaults.RequirePlan = dto.RequirePlan
 	if err := applyHubSettings(&cfg.Hub, dto); err != nil {
 		return err
 	}
@@ -715,6 +755,7 @@ type InheritsDTO struct {
 	BlockedLabelID bool `json:"blockedLabelId"`
 	DedupMode      bool `json:"dedupMode"`
 	PrioritySort   bool `json:"prioritySort"`
+	RequirePlan    bool `json:"requirePlan"`
 }
 
 type ProjectExecutionDTO struct {
@@ -812,6 +853,9 @@ type ProjectFormDTO struct {
 	CommentOnBlocked bool   `json:"commentOnBlocked"`
 	PRRequiresChecks bool   `json:"prRequiresChecks"`
 
+	// RequirePlan is the plan-approval gate (inheritable, like dedup_mode).
+	RequirePlan bool `json:"requirePlan"`
+
 	Inherits InheritsDTO `json:"inherits"`
 	IsNew    bool        `json:"isNew"`
 }
@@ -836,6 +880,7 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 				Symlinks: true, PostCreate: true, Env: true,
 				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
 				BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
+				RequirePlan: true,
 			},
 		}
 		// Resolve against a scratch config so the new project's ghosts show the
@@ -911,6 +956,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 		CommentOnMerged:  p.CommentOnMerged,
 		CommentOnBlocked: p.CommentOnBlocked,
 		PRRequiresChecks: p.PRRequiresChecks,
+		RequirePlan:      p.RequirePlan,
 
 		Inherits: InheritsDTO{
 			Symlinks:       p.Inherits.Symlinks,
@@ -923,6 +969,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 			BlockedLabelID: p.Inherits.BlockedLabelID,
 			DedupMode:      p.Inherits.DedupMode,
 			PrioritySort:   p.Inherits.PrioritySort,
+			RequirePlan:    p.Inherits.RequirePlan,
 		},
 	}
 }
@@ -1025,8 +1072,16 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.CommentOnMerged = dto.CommentOnMerged
 	p.CommentOnBlocked = dto.CommentOnBlocked
 	p.PRRequiresChecks = dto.PRRequiresChecks
+	p.RequirePlan = dto.RequirePlan
 
+	// Bits the form does not surface (review, agent_fallback) are carried over
+	// rather than reset: a zero bit means "explicit", which would freeze the
+	// inherited value into the project's own table.
+	keep := p.Inherits
 	p.Inherits = config.ProjectInherits{
+		Review:         keep.Review,
+		AgentFallback:  keep.AgentFallback,
+		RequirePlan:    dto.Inherits.RequirePlan,
 		Symlinks:       dto.Inherits.Symlinks,
 		PostCreate:     dto.Inherits.PostCreate,
 		Env:            dto.Inherits.Env,
@@ -1451,6 +1506,68 @@ func (s *ConfigService) LinearKeyStatus() LinearKeyStatusDTO {
 	}
 	out.Resolvable = true
 	return out
+}
+
+// LinearAgentSecretsDTO says which of the Linear agent's credentials resolve,
+// by NAME only — like LinearKeyStatus, nothing here carries a value.
+type LinearAgentSecretsDTO struct {
+	ClientSecret  bool `json:"clientSecret"`
+	Token         bool `json:"token"`
+	WebhookSecret bool `json:"webhookSecret"`
+}
+
+// LinearAgentSecrets resolves each credential only to learn WHETHER it works.
+// The token's keychain item is the one `lola linear-agent login` writes.
+func (s *ConfigService) LinearAgentSecrets() LinearAgentSecretsDTO {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return LinearAgentSecretsDTO{}
+	}
+	a := cfg.LinearAgent
+	if !a.Configured() {
+		a = config.LinearAgentConfig{Enabled: true}.Normalized()
+	}
+	ok := func(what, kc, env string) bool {
+		_, rerr := secrets.Resolve(what, kc, env)
+		return rerr == nil
+	}
+	return LinearAgentSecretsDTO{
+		ClientSecret:  ok("client secret", a.ClientSecretKeychain, a.ClientSecretEnv),
+		Token:         ok("token", a.TokenKeychain, "LOLA_LINEAR_AGENT_TOKEN"),
+		WebhookSecret: ok("webhook secret", a.WebhookSecretKeychain, a.WebhookSecretEnv),
+	}
+}
+
+// SetLinearAgentSecret stores the OAuth client secret (kind "client") or the
+// webhook signing secret (kind "webhook") in the Keychain under the service the
+// config names (its default when none). Write-only, like SetLinearKey: it is
+// not a form field, so no unrelated save ever carries a secret.
+func (s *ConfigService) SetLinearAgentSecret(kind, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("empty secret")
+	}
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	a := cfg.LinearAgent
+	service := ""
+	switch kind {
+	case "client":
+		service = a.ClientSecretKeychain
+		if service == "" {
+			service = config.DefaultLinearAgentSecretKeychain
+		}
+	case "webhook":
+		service = a.WebhookSecretKeychain
+		if service == "" {
+			service = config.DefaultLinearAgentWebhookKeychain
+		}
+	default:
+		return errors.New("unknown secret kind: " + kind)
+	}
+	return secrets.Store(service, value)
 }
 
 // SetLinearKey stores a new Linear key and points config.toml at it. The key

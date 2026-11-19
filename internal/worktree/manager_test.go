@@ -529,7 +529,11 @@ func TestRemoveRealErrorWithIntactGitLinkPropagates(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /somewhere\n"), 0o644); err != nil {
+	admin := filepath.Join(repo, ".git", "worktrees", "s1")
+	if err := os.MkdirAll(admin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+admin+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	m := &Manager{GitBin: bin, Root: root}
@@ -540,6 +544,66 @@ func TestRemoveRealErrorWithIntactGitLinkPropagates(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dir); statErr != nil {
 		t.Errorf("worktree must not be deleted on a real git error: %v", statErr)
+	}
+}
+
+// The registration can vanish while the checkout and its `.git` link stay: the
+// link then names an administrative directory that no longer exists, and both
+// the dirty check and `git worktree remove` fail exit 128. Without force the
+// unverifiable checkout is kept as ErrDirty; --force deletes it and its branch.
+func TestRemoveDanglingGitLinkIsAnOrphanedLeftover(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		bin, _ := fakeGit(t,
+			stub{match: "status --porcelain", stderr: "fatal: not a git repository: '/repo/.git/worktrees/s1'", exit: 128},
+			stub{match: "worktree remove", stderr: "fatal: '/x/nori/s1' is not a working tree", exit: 128},
+		)
+		root, repo := t.TempDir(), t.TempDir()
+		dir := filepath.Join(root, "nori", "s1")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gone := filepath.Join(repo, ".git", "worktrees", "s1")
+		for name, body := range map[string]string{".git": "gitdir: " + gone + "\n", "main.go": "x"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		m := &Manager{GitBin: bin, Root: root}
+
+		err := m.Remove(context.Background(), testProject(repo), dir, "lola/NORI-12-1", force)
+		_, statErr := os.Stat(dir)
+		if !force && (!errors.Is(err, ErrDirty) || statErr != nil) {
+			t.Errorf("no force: want ErrDirty and the checkout kept, got %v (stat %v)", err, statErr)
+		}
+		if force && (err != nil || !os.IsNotExist(statErr)) {
+			t.Errorf("force: want the checkout deleted, got %v (stat %v)", err, statErr)
+		}
+	}
+}
+
+// A repository that cannot be reached (an unmounted volume) makes every admin
+// directory look missing. That is not an orphaned leftover: even --force must
+// keep the checkout and report git's own error.
+func TestRemoveDanglingGitLinkKeptWhenRepositoryUnreachable(t *testing.T) {
+	bin, _ := fakeGit(t, stub{match: "worktree remove", stderr: "fatal: cannot change to '/gone'", exit: 128})
+	root := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "unmounted")
+	dir := filepath.Join(root, "nori", "s1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := "gitdir: " + filepath.Join(repo, ".git", "worktrees", "s1") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte(link), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{GitBin: bin, Root: root}
+
+	err := m.Remove(context.Background(), testProject(repo), dir, "lola/NORI-12-1", true)
+	if err == nil || errors.Is(err, ErrDirty) {
+		t.Fatalf("unreachable repository: want git's error, got %v", err)
+	}
+	if _, statErr := os.Stat(dir); statErr != nil {
+		t.Errorf("checkout must be kept while the repository is unreachable: %v", statErr)
 	}
 }
 

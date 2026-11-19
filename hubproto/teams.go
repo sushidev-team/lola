@@ -34,6 +34,16 @@ const (
 	PathOrgSettings = "/v1/org/settings"       // GET [?teams=1] -> OrgSettingsView; POST OrgSettingsRequest -> OrgSettingsView
 	PathOrgInvites  = "/v1/org/invites"        // POST InviteRequest -> InviteResponse
 	PathOrgRevoke   = "/v1/org/devices/revoke" // POST DeviceRevokeRequest -> empty JSON object
+	// PathLinearHook receives the Linear agent app's webhook for one org: POST PathLinearHook+org.
+	// UNSIGNED by a device (Linear is the caller): the delivery's own Linear-Signature HMAC is the
+	// authentication, and all it can do is ring the org's doorbell ([HeartbeatResponse].Doorbell).
+	PathLinearHook = "/v1/hooks/linear/"
+	// PathDoorbell is the signed LONG-POLL a daemon holds to hear the org's Linear doorbell:
+	// GET PathDoorbell?since=N -> DoorbellResponse. It answers at once when the org's counter
+	// differs from N, else after DoorbellHold with the unchanged value.
+	PathDoorbell = "/v1/doorbell"
+	// DoorbellHold is how long the hub holds an unchanged long-poll.
+	DoorbellHold = 15 * time.Second
 )
 
 // PathOrgSettingsTeams is [PathOrgSettings] asking the hub to also list the
@@ -234,6 +244,8 @@ var (
 	// on its own, so an org admin must not be able to aim it at an address
 	// inside the hub's network.
 	digestWebhookRe = regexp.MustCompile(`^https://hooks\.slack\.com/services/[A-Za-z0-9]{1,32}/[A-Za-z0-9]{1,32}/[A-Za-z0-9]{1,64}$`)
+	// Linear signs deliveries with the secret shown once on the OAuth app: printable, no spaces.
+	linearWebhookSecretRe = regexp.MustCompile(`^[\x21-\x7e]{16,128}$`)
 	// A hub status class ("linear: unauthorized"): a hub constant, never a
 	// response body.
 	statusClassRe = regexp.MustCompile(`^[a-z][a-z0-9 :_-]{0,63}$`)
@@ -263,6 +275,10 @@ func ValidLinearTeamName(s string) bool {
 // ValidDigestWebhook reports whether s is a Slack incoming-webhook URL.
 func ValidDigestWebhook(s string) bool { return len(s) <= 256 && digestWebhookRe.MatchString(s) }
 
+// ValidLinearWebhookSecret reports whether s has the shape of a Linear webhook
+// signing secret.
+func ValidLinearWebhookSecret(s string) bool { return linearWebhookSecretRe.MatchString(s) }
+
 // ValidStatusClass reports whether s has the shape of a hub status class.
 func ValidStatusClass(s string) bool { return statusClassRe.MatchString(s) }
 
@@ -276,12 +292,15 @@ type OrgSettingsRequest struct {
 	LinearKey     *string `json:"linear_key,omitempty"`
 	LinearTeam    *string `json:"linear_team,omitempty"` // a team ID
 	DigestWebhook *string `json:"digest_webhook,omitempty"`
+	// LinearWebhookSecret is the signing secret of the Linear agent app's webhook
+	// ([PathLinearHook]). Write-only, like the others.
+	LinearWebhookSecret *string `json:"linear_webhook_secret,omitempty"`
 }
 
 // Validate checks the request's shape. A request that changes nothing is
 // invalid.
 func (r OrgSettingsRequest) Validate() error {
-	if r.LinearKey == nil && r.LinearTeam == nil && r.DigestWebhook == nil {
+	if r.LinearKey == nil && r.LinearTeam == nil && r.DigestWebhook == nil && r.LinearWebhookSecret == nil {
 		return invalid("settings", "nothing to change")
 	}
 	if r.LinearKey != nil && *r.LinearKey != "" && !ValidLinearKey(*r.LinearKey) {
@@ -292,6 +311,9 @@ func (r OrgSettingsRequest) Validate() error {
 	}
 	if r.DigestWebhook != nil && *r.DigestWebhook != "" && !ValidDigestWebhook(*r.DigestWebhook) {
 		return invalid("digest_webhook", "not a Slack incoming webhook")
+	}
+	if r.LinearWebhookSecret != nil && *r.LinearWebhookSecret != "" && !ValidLinearWebhookSecret(*r.LinearWebhookSecret) {
+		return invalid("linear_webhook_secret", "not a webhook signing secret")
 	}
 	return nil
 }
@@ -318,6 +340,7 @@ type OrgSettingsView struct {
 	LinearError      string       `json:"linear_error,omitempty"`
 	DigestSet        bool         `json:"digest_set"`
 	DigestError      string       `json:"digest_error,omitempty"`
+	LinearWebhookSet bool         `json:"linear_webhook_set"`
 	Teams            []LinearTeam `json:"teams,omitempty"`
 }
 
@@ -550,4 +573,12 @@ func ParseCreateCode(s string) (hubURL, code string, err error) {
 		return "", "", errors.New("hubproto: the create code's hub url is not acceptable")
 	}
 	return u, code, nil
+}
+
+// DoorbellResponse answers [PathDoorbell]: the number of verified Linear
+// webhook deliveries the org has received. A daemon that sees it differ from
+// the value it asked with polls Linear now; nothing else is carried, and the
+// value is never parsed for routing.
+type DoorbellResponse struct {
+	Doorbell uint64 `json:"doorbell"`
 }

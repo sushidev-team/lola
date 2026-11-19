@@ -19,7 +19,7 @@
   import SettingsGroup from "$lib/components/SettingsGroup.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { hub } from "$lib/hub.svelte";
-  import { INVITE_LIFETIMES, digestWebhookError, inviteLabelError, linearKeyError, statusClassText, teamErrorText } from "$lib/hubteam";
+  import { INVITE_LIFETIMES, digestWebhookError, inviteLabelError, linearKeyError, linearWebhookSecretError, statusClassText, teamErrorText } from "$lib/hubteam";
   import type { HubInviteData, HubLinearTeam, HubTeamSettingsData } from "@bindings/internal/protocol";
 
   const inputCls =
@@ -170,6 +170,35 @@
     else digestError = teamErrorText(r.error);
   }
 
+  // --- Linear agent webhook doorbell ------------------------------------------
+  let bellSecret = $state("");
+  let bellError = $state("");
+  let bellMsg = $state("");
+  const bellFieldError = $derived(linearWebhookSecretError(bellSecret));
+
+  async function saveBell() {
+    if (!bellSecret.trim() || bellFieldError) return;
+    bellError = "";
+    bellMsg = "";
+    const r = await hub.teamSettings({ linearWebhookSecret: bellSecret.trim() }, "bell");
+    // Sent or refused, the secret does not stay in the field.
+    bellSecret = "";
+    if (!r.ok) {
+      bellError = teamErrorText(r.error);
+      return;
+    }
+    apply(r.data);
+    bellMsg = "Secret saved. Point the Linear app's webhook at the URL above.";
+  }
+  async function clearBell() {
+    bellError = "";
+    bellMsg = "";
+    const r = await hub.teamSettings({ linearWebhookSecret: "" }, "bell");
+    if (r.ok) apply(r.data);
+    else bellError = teamErrorText(r.error);
+  }
+  const bellBusy = $derived(hub.isBusy("team:bell"));
+
   const linearBusy = $derived(hub.isBusy("team:linear"));
   const digestBusy = $derived(hub.isBusy("team:digest"));
 </script>
@@ -281,6 +310,29 @@
       {#if hookError}<span class="text-sm text-bad">{hookError}</span>{/if}
       {#if digestMsg}<span role="status" class="text-sm text-good">{digestMsg}</span>{/if}
       {#if digestError}<span role="alert" class="text-sm text-bad">{digestError}</span>{/if}
+    </span>
+  </div>
+
+  <!-- Linear agent webhook -->
+  <div class={rowTopCls} data-admin-bell>
+    <span class="text-faint">Linear agent webhook</span>
+    <span class="grid min-w-0 gap-2">
+      <span class="text-sm text-ink" data-bell-state>
+        {#if !view}Checking…{:else if view.linearWebhookSet}A signing secret is set. It is never shown again.{:else}No secret. Linear cannot wake the team's Macs; they poll instead.{/if}
+      </span>
+      <span class="text-sm text-faint">Webhook URL: <code class="font-mono">{"<hub>"}/v1/hooks/linear/{view?.org ?? "<team>"}</code></span>
+      <span class="flex min-w-0 flex-wrap items-start gap-2">
+        <input class="{inputCls} min-w-40 flex-1 font-mono" type="password" aria-label="Linear webhook signing secret" placeholder="Signing secret" spellcheck="false" autocomplete="off"
+          bind:value={bellSecret} oninput={() => { bellError = ""; bellMsg = ""; }} aria-invalid={!!bellFieldError}
+          disabled={!view?.secretsAvailable} />
+        <Button variant="secondary" size="md" disabled={!bellSecret.trim() || !!bellFieldError || bellBusy || !view?.secretsAvailable} loading={bellBusy && !!bellSecret} onclick={saveBell}>
+          {view?.linearWebhookSet ? "Replace secret" : "Save secret"}
+        </Button>
+        {#if view?.linearWebhookSet}<Button variant="danger" size="md" disabled={bellBusy} onclick={clearBell}>Remove</Button>{/if}
+      </span>
+      {#if bellFieldError}<span class="text-sm text-bad">{bellFieldError}</span>{/if}
+      {#if bellMsg}<span role="status" class="text-sm text-good">{bellMsg}</span>{/if}
+      {#if bellError}<span role="alert" class="text-sm text-bad">{bellError}</span>{/if}
     </span>
   </div>
 

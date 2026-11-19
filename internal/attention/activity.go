@@ -488,6 +488,11 @@ func hasWaitingCue(paneText, screen string, k agent.Kind) bool {
 			return true
 		}
 	}
+	// CODEX: its composer draws no box and its caret also marks past messages and
+	// focused list rows, so it is recognized by its place on the screen (codex.go).
+	if k == agent.Codex && codexWaiting(screen) {
+		return true
+	}
 	// OPENCODE: a post-turn "▣" metadata line means the turn finished and the
 	// agent is back at its composer. Waiting-side corroborator only.
 	if k == agent.OpenCode && openCodeMetaRe.MatchString(screen) {

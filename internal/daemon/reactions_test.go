@@ -21,6 +21,7 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/sshstore"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
@@ -303,6 +304,10 @@ func TestReactMergedDirtyDropsEntryKeepsWorktree(t *testing.T) {
 	}
 	if !strings.Contains(info[0].Body, "kept") {
 		t.Errorf("dirty-merge notification should say the worktree was kept, got %q", info[0].Body)
+	}
+	ended := sshstore.ReadEnded(d.home, s.ID)
+	if ended == nil || !strings.Contains(ended.Reason, "worktree kept (uncommitted changes)") {
+		t.Fatalf("history must explain why cleanup retained the files: %+v", ended)
 	}
 }
 

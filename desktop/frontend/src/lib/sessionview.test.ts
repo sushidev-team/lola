@@ -21,7 +21,6 @@ describe("defaultView", () => {
     expect(defaultView(claude, "conversation", "terminal", true, ALL)).toBe("conversation");
   });
   it("no feed reader opens on terminal", () => {
-    expect(defaultView({ ...claude, agent: "codex" }, null, "", undefined, ALL)).toBe("terminal");
     expect(defaultView({ ...claude, agent: "opencode" }, null, "", undefined, ALL)).toBe("terminal");
   });
   it("a direct ssh session opens on conversation whatever its agent", () => {
@@ -29,7 +28,7 @@ describe("defaultView", () => {
     expect(defaultView({ ...(withHost as object), agent: "opencode" }, null, "", undefined, false)).toBe("conversation");
   });
   it("the default global preference decides nothing", () => {
-    expect(defaultView({ ...claude, agent: "codex" }, null, "conversation", undefined, ALL)).toBe("terminal");
+    expect(defaultView({ ...claude, agent: "opencode" }, null, "conversation", undefined, ALL)).toBe("terminal");
     expect(defaultView(claude, null, "conversation", false, ALL)).toBe("terminal");
     expect(defaultView(claude, null, "terminal", true, ALL)).toBe("terminal");
   });
@@ -45,11 +44,17 @@ describe("defaultView", () => {
     expect(defaultView(claude, "conversation", "", true)).toBe("conversation");
     expect(conversationOffered(claude)).toBe(true);
   });
-  it("a codex session is offered the conversation and still opens on its terminal", () => {
+  it("a codex session opens on its conversation, now that its log is read", () => {
     const codex = { ...claude, agent: "codex" };
     expect(conversationOffered(codex)).toBe(true);
-    expect(defaultView(codex, null, "", undefined)).toBe("terminal");
-    expect(defaultView(codex, "conversation", "", undefined)).toBe("conversation");
+    expect(defaultView(codex, null, "", undefined)).toBe("conversation");
+    expect(defaultView(codex, null, "", feedKnownFrom("unreadable"))).toBe("terminal");
+  });
+  it("an opencode session is offered the conversation and still opens on its terminal", () => {
+    const opencode = { ...claude, agent: "opencode" };
+    expect(conversationOffered(opencode)).toBe(true);
+    expect(defaultView(opencode, null, "", undefined)).toBe("terminal");
+    expect(defaultView(opencode, "conversation", "", undefined)).toBe("conversation");
   });
 });
 

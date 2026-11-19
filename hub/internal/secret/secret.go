@@ -32,6 +32,7 @@ const EnvKey = "LOLA_HUB_SECRET_KEY"
 const (
 	FieldLinearKey     = "linear_key"
 	FieldDigestWebhook = "digest_webhook"
+	FieldLinearWebhook = "linear_webhook"
 )
 
 // Errors. None carries key material or plaintext.

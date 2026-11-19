@@ -1143,7 +1143,7 @@ whether a request counts as in-flight mutating for `adopt` (§1.7).
 
 | Component | Verdict | Why it works / what changes |
 |-----------|---------|-----------------------------|
-| `session/Workspace.svelte` | **unchanged** (+ §3.2 seam) | `SIDE_MIN_WIDTH = 1180` never met → no sidebar, compact drawer. `covered=false`, `changesInSide=false`, no `header` snippet. `HostBar`/`SSHTerminalPane` render only for ssh sessions with connections; `view.narrow` is never set to `terminal` on the phone, so no host shell mounts. |
+| `session/Workspace.svelte` | **unchanged** (+ §3.2 seam) | `SIDE_MIN_WIDTH = 840` never met → no sidebar, compact drawer. `covered=false`, `changesInSide=false`, no `header` snippet. `HostBar`/`SSHTerminalPane` render only for ssh sessions with connections; `view.narrow` is never set to `terminal` on the phone, so no host shell mounts. |
 | `TimelineSlot`, `Timeline`, `TimelineTurn`, `StoryRow`, `ToolRow`, `ToolOutput`, `WorkRun`, `DigLine`, `Receipt`, `MessageGallery`, `SystemMessage`, `Moment` | unchanged | `.cv-*` container queries at `max-width: 619.98px` and `600px` give the narrow layout (24/16 px gutters, single-column ledgers, person bubble full width). IntersectionObserver placeholders already virtualize turns. `MessageGallery` reads images through `ReadAttachmentImage` → `attachmentImage`. |
 | `ActionZone`, `Composer`, `QueueRows`, `Tray`, `FirstOpen`, `SlashList`, `ModelSettings` | unchanged (+ §3.2 attach) | `.ssh-col` rows `auto minmax(72px,1fr) minmax(0,auto) auto`; `@container (max-height: 520px/420px)` handle the keyboard-shortened column. Recall works through `sshRecall` (A19). A `!` line is not a phone feature: the daemon defuses a leading `!` on every surface (01 Deviation 11). |
 | Cards: `PermissionCard`, `QuestionCard`, `ModalCard`, `ChoiceCard`, `BackgroundCard`, `InlineTerminalCard`, `WidgetCard` | unchanged | "A question on a narrow card keeps all its answers" rule already exists. `InlineTerminalCard` attaches through the shim's `TermService`. |
@@ -1274,7 +1274,7 @@ refused. Every other request comes from a human press.
 
 ```ts
 export type Seg = "conversation" | "changes" | "review" | "terminal";
-export type Tab = "inbox" | "projects" | "activity" | "settings";
+export type Tab = "inbox" | "projects" | "settings";
 export type Route =
   | { name: "connect"; state: "scan" | "code" | "refused" | "expired" | "failed" | "dropped" | "not-paired" | "no-camera" }
   | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets" | "git"; filter?: InboxFilter }
@@ -1306,7 +1306,7 @@ Path grammar (shared by dev links, preview fixtures and tests):
 /inbox[?filter=needs|working|review|done]
 /session/<id>/{conversation|changes|review|terminal}[/<pane>]
 /projects | /projects/<name> | /projects/<name>/{prs|tickets|git}
-/activity | /settings
+/settings
 /dev/bridge-guard                       (DEBUG only)
 query: sheet=<SheetName>[&tab=<a-z, 1–16>]   (tab only with a sheet; reviewPackage reads it)
 ```
@@ -1314,7 +1314,7 @@ query: sheet=<SheetName>[&tab=<a-z, 1–16>]   (tab only with a sheet; reviewPac
 Unknown segments return `null` (caller keeps the current route). `/connect/*`
 is accepted only when no daemon is paired (otherwise → `/inbox`).
 
-Nav model: four tabs in the bottom bar (Inbox, Projects, Activity, Settings),
+Nav model: three tabs in the bottom bar (Inbox, Projects, Settings),
 each keeping its own depth. Session is pushed over the current tab; back
 returns to it. Left-edge swipe (start x ≤ 20 pt, pointer events) pops with the
 spring of §6.4; it is disabled on the Terminal segment, which owns its touches.

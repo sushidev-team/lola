@@ -40,7 +40,7 @@
 </script>
 
 <div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] {phone ? 'grid-rows-[minmax(0,1fr)]' : 'grid-rows-[auto_minmax(0,1fr)]'}" data-testid="changes-view">
-  {#if !phone}<div class="flex justify-end border-b border-edge px-3 py-1"><Button size="xs" onclick={() => reviewWorkspace.open(sessionId)}>Review PR</Button></div>{/if}
+  {#if !phone}<div class="flex justify-end border-b border-edge px-3 py-1"><Button size="xs" title="Review this session's changes, screenshots and checks" onclick={() => reviewWorkspace.open(sessionId)}>Review</Button></div>{/if}
   <DiffView {sessionId} {compact} {hideFeedbackBar} turn={current?.seq ?? 0}>
     {#snippet comparison()}
       {#if compact && checkpointed && st.list.length}
