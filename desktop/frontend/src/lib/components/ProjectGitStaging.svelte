@@ -147,8 +147,8 @@
     if (!preparation.staged) { void run(); return; }
     confirm.ask({
       title: 'Include staged changes?',
-      body: `${preparation.staged} ${preparation.staged === 1 ? 'file is' : 'files are'} already staged. AI commit will include all ${preparation.files} changed files.`,
-      detail: 'Files with both staged and unstaged edits will be committed together. AI groups related files and creates one or more commits. Completed commits are kept if you cancel.',
+      body: `${preparation.staged} ${preparation.staged === 1 ? 'file is' : 'files are'} already staged. AI commit will review all ${preparation.files} changed files.`,
+      detail: 'For each included file, both staged and unstaged edits will be committed together. AI groups related files and creates one or more commits. Completed commits are kept if you cancel.',
       confirmLabel: 'Include staged & commit', confirmVariant: 'primary', onConfirm: () => { void run(); },
     });
   }
@@ -215,17 +215,26 @@
 {/snippet}
 
 <div class="staging-panel" class:ai-working={!!git.aiCommit} aria-busy={!!git.aiCommit}>
-  <div class="inspector-heading"><h3>Changes <span>{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data?.files.length ?? '—'}{/if}</span></h3><Button size="xs" variant="accent" aria-label="Commit all changes with AI" title="Group related files into commits using AI. Mixed changes within a file stay together." disabled={!data?.files.length || !!git.busy || git.draftingMessage || conflicts || !!data?.operation} loading={git.busy === 'prepare-ai-commit'} onclick={() => void aiCommit()}><Icon name="sparkles" size={13}/>AI commit</Button><div class="view-switch" role="group" aria-label="Changed file layout"><Button size="xs" icon disabled={!!git.aiCommit} selected={!tree} aria-label="File list view" title="File list" onclick={() => setTree(false)}><Icon name="list" size={14} /></Button><Button size="xs" icon disabled={!!git.aiCommit} selected={tree} aria-label="File tree view" title="File tree" onclick={() => setTree(true)}><Icon name="folder" size={14} /></Button></div><Button size="xs" icon variant="danger" class="discard-all" aria-label="Discard all unstaged changes" title={data?.operation || conflicts ? 'Finish the current operation before discarding changes' : 'Discard all unstaged changes…'} disabled={!unstaged.length || !!git.busy || !!data?.operation || conflicts} loading={git.busy === 'prepare-discard' || git.busy === 'discard'} onclick={() => void discardFiles()}><Icon name="trash-2" size={14} /></Button></div>
+  <div class="inspector-heading"><h3>Changes <span>{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data?.files.length ?? '—'}{/if}</span></h3><Button size="xs" variant="accent" aria-label="Plan commits with AI" title="Group related files into commits using AI. Review any suggested exclusions before committing." disabled={!data?.files.length || !!git.busy || git.draftingMessage || conflicts || !!data?.operation} loading={git.busy === 'prepare-ai-commit'} onclick={() => void aiCommit()}><Icon name="sparkles" size={13}/>AI commit</Button><div class="view-switch" role="group" aria-label="Changed file layout"><Button size="xs" icon disabled={!!git.aiCommit} selected={!tree} aria-label="File list view" title="File list" onclick={() => setTree(false)}><Icon name="list" size={14} /></Button><Button size="xs" icon disabled={!!git.aiCommit} selected={tree} aria-label="File tree view" title="File tree" onclick={() => setTree(true)}><Icon name="folder" size={14} /></Button></div><Button size="xs" icon variant="danger" class="discard-all" aria-label="Discard all unstaged changes" title={data?.operation || conflicts ? 'Finish the current operation before discarding changes' : 'Discard all unstaged changes…'} disabled={!unstaged.length || !!git.busy || !!data?.operation || conflicts} loading={git.busy === 'prepare-discard' || git.busy === 'discard'} onclick={() => void discardFiles()}><Icon name="trash-2" size={14} /></Button></div>
   {#if git.aiCommit}
     {@const job = git.aiCommit}
-    <div class="ai-progress" class:stopping={job.stopping}>
-      <Icon name="loader-circle" size={15} class="ai-spinner"/>
-      <div role="status" aria-live="polite" aria-atomic="true">
-        <strong>{job.stopping ? (job.phase === 'committing' ? 'Finishing current commit…' : 'Cancelling…') : job.phase === 'committing' ? `Committing ${Math.min(job.completed + 1, job.total)} of ${job.total}…` : job.phase === 'starting' ? 'Checking changes…' : 'Grouping changes…'}</strong>
-        {#if job.subject && !job.stopping}<span title={job.subject}>{job.subject}</span>{/if}
+    {#if job.phase === 'review'}
+      <div class="ai-review">
+        <strong>Suggested files to leave uncommitted</strong>
+        <ul>{#each job.excluded ?? [] as file}<li><code>{file.path}</code> — {file.reason}</li>{/each}</ul>
+        <Button size="xs" variant="primary" disabled={job.stopping} onclick={() => void git.acceptAICommitExclusions()}>{job.total ? `Create ${job.total} ${job.total === 1 ? 'commit' : 'commits'}` : 'Keep all files uncommitted'}</Button>
+        <Button size="xs" disabled={job.stopping} onclick={() => void git.cancelAICommit()}>Cancel</Button>
       </div>
-      <Button size="xs" disabled={!job.id || job.stopping} onclick={() => void git.cancelAICommit()}>{job.stopping ? 'Stopping…' : 'Cancel'}</Button>
-    </div>
+    {:else}
+      <div class="ai-progress" class:stopping={job.stopping}>
+        <Icon name="loader-circle" size={15} class="ai-spinner"/>
+        <div role="status" aria-live="polite" aria-atomic="true">
+          <strong>{job.stopping ? (job.phase === 'committing' ? 'Finishing current commit…' : 'Cancelling…') : job.phase === 'committing' && !job.total ? 'Keeping files uncommitted…' : job.phase === 'committing' ? `Committing ${Math.min(job.completed + 1, job.total)} of ${job.total}…` : job.phase === 'starting' ? 'Checking changes…' : 'Grouping changes…'}</strong>
+          {#if job.subject && !job.stopping}<span title={job.subject}>{job.subject}</span>{/if}
+        </div>
+        <Button size="xs" disabled={!job.id || job.stopping} onclick={() => void git.cancelAICommit()}>{job.stopping ? 'Stopping…' : 'Cancel'}</Button>
+      </div>
+    {/if}
   {/if}
   <div class="staging-files" inert={!!git.aiCommit}>
     {#each groups as group (group.title)}
@@ -265,6 +274,8 @@
   .inspector-heading :global(.discard-all:enabled:hover) { background:color-mix(in srgb,var(--color-bad) 28%,var(--color-canvas)); }
   .staging-panel.ai-working { grid-template-rows:auto auto minmax(140px,1fr) auto; }
   .ai-working .staging-files,.ai-working .commit-composer { opacity:.5; }
+  .ai-review { padding:8px 10px; font-size:13px; }
+  .ai-review ul { max-height:25vh; overflow:auto; padding-left:18px; margin:6px 0; overflow-wrap:anywhere; }
   .ai-progress { position:relative; overflow:hidden; display:flex; align-items:center; gap:8px; padding:8px 10px; background:color-mix(in srgb,var(--color-accent) 10%,var(--color-panel)); border-block:1px solid color-mix(in srgb,var(--color-accent) 35%,var(--color-edge)); }
   .ai-progress::after { content:''; position:absolute; bottom:0; left:0; width:35%; height:2px; background:var(--color-accent); animation:ai-progress-slide 1.6s ease-in-out infinite; }
   .ai-progress.stopping::after { animation-play-state:paused; opacity:.4; }

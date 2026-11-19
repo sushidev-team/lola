@@ -149,7 +149,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     finally { this.busy = ''; }
   }
 
-  aiCommit = $state<{id:string; phase:string; completed:number; total:number; subject:string; stopping:boolean; done:boolean; error:string} | null>(null);
+  aiCommit = $state<Awaited<ReturnType<typeof ProjectGitService.AICommitStatus>> | null>(null);
   async prepareAICommit() {
     if (this.busy || this.draftingMessage) return null;
     this.busy = 'prepare-ai-commit'; this.error = '';
@@ -182,8 +182,18 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       if (result.error) this.reportError(result.error);
       const count = `${result.completed} ${result.completed === 1 ? 'commit' : 'commits'}`;
       this.notice = result.phase === 'complete' ? `Created ${count}.` : `${result.phase === 'cancelled' ? 'Cancelled' : 'Stopped'} after ${count}. Remaining changes are kept.`;
+      if (result.phase === 'complete' && result.excluded?.length) {
+        const n = result.excluded.length;
+        this.notice += ` Left ${n} ${n === 1 ? 'file' : 'files'} uncommitted.`;
+      }
     } catch (error) { this.reportError(error); }
     finally { this.aiCommit = null; this.busy = ''; }
+  }
+  async acceptAICommitExclusions() {
+    const job = this.aiCommit;
+    if (job?.phase !== 'review' || job.stopping) return;
+    try { await ProjectGitService.AcceptAICommitExclusions(job.id); }
+    catch (error) { this.reportError(error); }
   }
   async cancelAICommit() {
     const job = this.aiCommit;

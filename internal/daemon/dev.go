@@ -44,6 +44,7 @@ import (
 	"github.com/sushidev-team/lola/internal/portproc"
 	"github.com/sushidev-team/lola/internal/proctree"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
@@ -105,7 +106,7 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	}
 	// A stack session runs each app's own dev_commands in that app's worktree
 	// (apps.go devPlan); everything below treats them as one set of tabs.
-	plan, parallel, leases := devPlan(cfg, s, dir)
+	plan, parallel := devPlan(cfg, s, dir)
 	if len(plan) == 0 {
 		if s.Stack {
 			return protocol.DevData{}, fmt.Errorf("no app of session %s configures dev_commands", s.ID)
@@ -113,19 +114,35 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 		return protocol.DevData{}, fmt.Errorf("project %q configures no dev_commands", p.DisplayName())
 	}
 
-	// MULTI-ACTIVE (the project leases ports): every session binds its own
-	// block, so activation is a START, not a move — no other session loses its
-	// tabs and the sweep stays inside this session's worktree. A session with no
-	// lease (spawned before port_range was set, or the range ran out) is
-	// refused: its dev stack would read an empty $LOLA_PORT and fight the
-	// running ones over whatever default the command falls back to.
+	// Reserve missing blocks before touching any running tabs. Pass the
+	// authoritative ports after sourcing the spawn-time env (which can
+	// predate a lease). Each stack lane has its own project and lease.
+	hasPortEnv := make(map[string]bool)
+	for _, dc := range plan {
+		if _, ready := hasPortEnv[dc.leaseKey]; ready {
+			continue
+		}
+		lo, hi, count, enabled := dc.project.PortLease()
+		_, previous := d.ports.Get(dc.leaseKey)
+		hasPortEnv[dc.leaseKey] = enabled || previous
+		if !hasPortEnv[dc.leaseKey] {
+			continue
+		}
+		_, app := session.SplitLaneID(dc.leaseKey)
+		v := runtime.EnvVars{Session: s.ID, Issue: s.Issue, Project: dc.project.Name, App: app, Branch: dc.branch, Worktree: dc.dir}
+		if enabled {
+			lease, err := d.ports.Acquire(dc.leaseKey, dc.project.Name, lo, hi, count)
+			if err != nil {
+				return protocol.DevData{}, fmt.Errorf("reserve dev ports for %s: %w", dc.leaseKey, err)
+			}
+			v.Ports = lease.Ports
+		}
+		if err := runtime.WriteDevPortEnv(dir, *dc.project, v); err != nil {
+			return protocol.DevData{}, fmt.Errorf("prepare dev ports for %s: %w", dc.leaseKey, err)
+		}
+	}
 	only := ""
 	if parallel {
-		for _, key := range leases {
-			if _, ok := d.ports.Get(key); !ok {
-				return protocol.DevData{}, fmt.Errorf("session %s holds no port lease from %s's port_range (spawned before it was set, or the range is exhausted) — its dev stack would collide with the others; respawn the session or widen the range", key, p.DisplayName())
-			}
-		}
 		only = s.ID
 	}
 
@@ -153,7 +170,11 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 		if tm.Has(ectx, name) {
 			_ = tm.KillSessionTree(ectx, name)
 		}
-		err := tm.NewSession(ectx, name, dc.dir, lolaenv.CommandLine(cmd))
+		line := lolaenv.CommandLine(cmd)
+		if hasPortEnv[dc.leaseKey] {
+			line = lolaenv.DevCommandLine(cmd)
+		}
+		err := tm.NewSession(ectx, name, dc.dir, line)
 		if err == nil {
 			// Best-effort: without it the tab simply vanishes when the command
 			// exits, which still reads as inactive — just without the output

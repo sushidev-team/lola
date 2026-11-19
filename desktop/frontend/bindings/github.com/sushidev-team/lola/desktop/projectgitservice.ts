@@ -27,6 +27,10 @@ export function AICommitStatus(id: string): $CancellablePromise<$models.AICommit
     return $Call.ByID(2622744063, id);
 }
 
+export function AcceptAICommitExclusions(id: string): $CancellablePromise<void> {
+    return $Call.ByID(1381571448, id);
+}
+
 export function Amend(project: string, worktree: string, message: string, expectedHead: string): $CancellablePromise<void> {
     return $Call.ByID(4236251129, project, worktree, message, expectedHead);
 }

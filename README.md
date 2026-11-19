@@ -557,12 +557,12 @@ APP_URL = "http://127.0.0.1:{{.Port}}"
   tabs and `pre_remove` all see them — and win over a same-named key there.
 - **Multi-active.** With a `port_range`, switching a session **Active** starts
   its dev tabs without stopping anyone else's, and the stray-server sweep stays
-  inside that session's own worktree. A session holding no lease (spawned
-  before the range was set, or the range was exhausted) is refused rather than
-  allowed to fight the others over a default port — respawn it or widen the
-  range. The session's ports show in the TUI detail (`ports:`) and the app's
-  dev-toggle tooltip; the dev URL chip and port-clash banner work per session
-  as before.
+  inside that session's own worktree. Starting dev acquires a missing lease,
+  including for sessions opened before the range was configured. New dev tabs
+  receive the leased ports and freshly expanded port templates from
+  `[project.env]`. If allocation fails, existing tabs keep running. The
+  session's ports show in the TUI detail (`ports:`) and the app's dev-toggle
+  tooltip. The dev URL chip and port-clash banner work per session.
 - **Teardown.** `pre_remove` runs after the session's tmux tabs are down and
   before the worktree goes, so it can drop the database `post_create` made. It
   is skipped when the worktree is dirty (lola keeps it, and what it uses),
