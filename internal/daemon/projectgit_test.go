@@ -152,6 +152,26 @@ func TestProjectGitBlockedResolvesNativeSessionWorktrees(t *testing.T) {
 	}
 }
 
+func TestProjectGitRefusesBranchCheckout(t *testing.T) {
+	repo := gitRepo(t)
+	d := newTestDaemon(t, &config.Config{Projects: []config.Project{{Name: "p", Path: repo}}}, &linear.Fake{}, nil)
+	resp := d.handle(context.Background(), gitReq(t, protocol.CmdProjectGitAct, protocol.ProjectGitArgs{Op: "createBranch", Project: "p", Name: "x", Checkout: true}))
+	if resp.OK || !strings.Contains(resp.Error, "only available on the Mac") {
+		t.Fatalf("checkout accepted: ok=%v err=%q", resp.OK, resp.Error)
+	}
+	if out, err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "-q", "x").CombinedOutput(); err == nil {
+		t.Fatalf("branch was created anyway: %s", out)
+	}
+	head, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp = d.handle(context.Background(), gitReq(t, protocol.CmdProjectGitAct, protocol.ProjectGitArgs{Op: "createBranch", Project: "p", Name: "x", SHA: strings.TrimSpace(string(head))}))
+	if !resp.OK {
+		t.Fatalf("plain createBranch refused: %s", resp.Error)
+	}
+}
+
 func TestProjectGitPopNeedsTheDiscardTier(t *testing.T) {
 	repo := gitRepo(t)
 	d := newTestDaemon(t, &config.Config{Projects: []config.Project{{Name: "p", Path: repo}}}, &linear.Fake{}, nil)

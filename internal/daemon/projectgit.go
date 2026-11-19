@@ -172,6 +172,9 @@ func (d *Daemon) handleProjectGit(ctx context.Context, req protocol.Request) pro
 	if a.Op == "stashApply" && a.Pop != (req.Cmd == protocol.CmdProjectGitDiscard) {
 		return protocol.Response{Error: "popping a stash removes it and needs the discard tier"}
 	}
+	if a.Op == "createBranch" && a.Checkout {
+		return protocol.Response{Error: "switching branches is only available on the Mac"}
+	}
 	if len(a.Paths) > projectGitMaxPaths || len(a.Message) > projectGitMaxMessage {
 		return protocol.Response{Error: "request too large"}
 	}
