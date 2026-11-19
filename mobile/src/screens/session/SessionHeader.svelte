@@ -44,7 +44,7 @@
     const prev = router.stack[router.stack.length - 2];
     if (!prev || prev.name !== "tab") return "Back";
     if (prev.project) return `Back to ${store.displayNameFor(prev.project)}`;
-    const name = { inbox: copy.inbox.title, projects: copy.projects.title, activity: copy.activity.title, settings: copy.settings.title }[prev.tab];
+    const name = { inbox: copy.inbox.title, projects: copy.projects.title, settings: copy.settings.title }[prev.tab];
     return `Back to ${name}`;
   });
 </script>

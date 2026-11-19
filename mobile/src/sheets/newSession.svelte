@@ -41,6 +41,8 @@
   let busy = $state(false);
   let error = $state("");
   let source = $state<"blank" | "pr" | "ticket">("blank");
+  let existing = $state(false);
+  let existingBranch = $state("");
 
   const shellAllowed = can("shellCreate");
   const launchable = $derived(store.projectByName(project)?.agentOk !== false);
@@ -52,7 +54,7 @@
   );
   /** The blank option already says the project's own agent; listing it twice would repeat a name. */
   const defaultKind = $derived(store.projectByName(project)?.agent || "claude");
-  const canStart = $derived(!busy && !!project && launchable && (shellOnly || !!prompt.trim()));
+  const canStart = $derived(!busy && !!project && launchable && (!existing || !!existingBranch.trim()) && (shellOnly || !!prompt.trim()));
   const SEGMENTS = [
     { id: "blank", label: copy.newSession.from.blank },
     { id: "pr", label: copy.newSession.from.pr },
@@ -88,7 +90,8 @@
     error = "";
     const r = await store.openManual({
       project,
-      branch: branchFor(prompt),
+      branch: existing ? existingBranch.trim() : branchFor(prompt),
+      existing,
       agent: !shellOnly,
       prompt: shellOnly ? "" : prompt.trim(),
       agentKind: agent,
@@ -108,7 +111,7 @@
   label={copy.newSession.title}
   title={copy.newSession.title}
   detent="fit"
-  dirty={prompt.length > 0}
+  dirty={prompt.length > 0 || existingBranch.length > 0}
   action={{ label: copy.newSession.start, onclick: () => void start(), disabled: !canStart }}
   onclose={() => router.close()}
 >
@@ -149,6 +152,26 @@
         bind:value={prompt}
         disabled={busy || shellOnly}
       ></textarea>
+    </ListGroup>
+    <ListGroup>
+      <ListRow label={copy.newSession.existingBranch}>
+        {#snippet trailing()}
+          <Switch checked={existing} onchange={(v: boolean) => (existing = v)} label={copy.newSession.existingBranch} />
+        {/snippet}
+      </ListRow>
+      {#if existing}
+        <input
+          class="w-full text-body text-ink outline-none placeholder:text-placeholder"
+          style="min-height: 44px"
+          aria-label="Branch"
+          placeholder={copy.newSession.branchPlaceholder}
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          bind:value={existingBranch}
+          disabled={busy}
+        />
+      {/if}
     </ListGroup>
     {#if shellAllowed}
       <ListGroup>

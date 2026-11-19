@@ -258,6 +258,8 @@ export const copy = {
     placeholder: "What should {agent} do?",
     agentDefault: "{agent}",
     shellOnly: "Shell only",
+    existingBranch: "Use existing branch",
+    branchPlaceholder: "Branch name",
     start: "Start",
     needsText: "Type what the agent should do.",
   },
