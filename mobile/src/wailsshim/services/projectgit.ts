@@ -187,6 +187,21 @@ export function StashDrop(project: string, worktree: string, sha: string): Promi
 }
 
 /** PLATFORM. */
+export function ConflictDocument(_project: string, _worktree: string, _path: string): Promise<PG.ConflictDocument> {
+  return unsupported("ProjectGitService.ConflictDocument", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function SaveConflict(_project: string, _worktree: string, _path: string, _token: string, _result: string): Promise<void> {
+  return unsupported("ProjectGitService.SaveConflict", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function SuggestConflictChoices(_project: string, _input: string): Promise<string> {
+  return unsupported("ProjectGitService.SuggestConflictChoices", MAC_ONLY);
+}
+
+/** PLATFORM. */
 export function Uncommit(_project: string, _worktree: string, _expectedHead: string): Promise<void> {
   return unsupported("ProjectGitService.Uncommit", MAC_ONLY);
 }
@@ -243,5 +258,8 @@ export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   StashPush: { kind: "fwd", cmd: "projectGitAct" },
   Stashes: { kind: "fwd", cmd: "projectGit" },
   Unstage: { kind: "fwd", cmd: "projectGitAct" },
+  ConflictDocument: { kind: "platform", reason: MAC_ONLY },
+  SaveConflict: { kind: "platform", reason: MAC_ONLY },
+  SuggestConflictChoices: { kind: "platform", reason: MAC_ONLY },
   Uncommit: { kind: "platform", reason: MAC_ONLY },
 };
