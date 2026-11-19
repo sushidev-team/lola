@@ -52,7 +52,7 @@ excluded from lola's CI, releases and sandbox image. A wire change goes in
 stays backward compatible: installed daemons and the deployed hub run different
 versions.
 
-Go per `go.mod` (1.25). Deps: cobra, bubbletea + lipgloss, BurntSushi/toml;
+Go per `go.mod` (1.26). Deps: cobra, bubbletea + lipgloss, BurntSushi/toml;
 everything else is stdlib + exec seams.
 
 ### `make build` never reaches the running daemon

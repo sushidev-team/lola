@@ -7,7 +7,7 @@
 
 ARG DEBIAN_VERSION=trixie
 ARG NODE_VERSION=24
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 
 # --- lola (linux, static) ----------------------------------------------------
 # Cross-compiled on the build platform: Go needs no emulation for this.
