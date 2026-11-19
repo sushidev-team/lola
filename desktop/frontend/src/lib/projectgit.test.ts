@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { workingGraphConnection, worktreeChanges, branchTree, branchesByCommit, commitGraph, graphPath, selectCommits, stagedFiles, unstagedFiles, type GitFile, type GitRef } from './projectgit';
+import { workingGraphConnection, worktreeChanges, branchTree, branchesByCommit, commitGraph, defaultBranchTip, graphPath, selectCommits, stagedFiles, unstagedFiles, type GitFile, type GitRef } from './projectgit';
 
 describe('Git history selection and topology', () => {
   it('connects working changes only to HEAD and reserves a lane past unrelated newer commits', () => {
@@ -15,6 +15,29 @@ describe('Git history selection and topology', () => {
     expect(selectCommits(['a', 'b'], 'c', true)).toEqual(['b', 'c']);
     expect(selectCommits(['a', 'b'], 'a', true)).toEqual(['b']);
     expect(selectCommits(['a', 'b'], 'c', false)).toEqual(['c']);
+  });
+  it('keeps an unmerged feature and its older remote tip beside the default branch', () => {
+    const graph = commitGraph([
+      { sha: 'local-feature', parents: ['remote-feature'] },
+      { sha: 'remote-feature', parents: ['feature-base', 'main'] },
+      { sha: 'main', parents: ['base'] },
+      { sha: 'feature-base', parents: ['base'] },
+      { sha: 'base', parents: [] },
+    ], 'main');
+    expect(graph.map(row => row.lane)).toEqual([1, 1, 0, 1, 0]);
+    expect(graph[0].edges).toEqual([{ from: 1, to: 1, color: graph[0].color, start: 'node', end: 'bottom' }]);
+    expect(graph[1].edges.filter(edge => edge.start === 'node').map(edge => edge.to)).toEqual([1, 0]);
+    expect(graph[3].edges).toContainEqual({ from: 1, to: 0, color: graph[2].color, start: 'node', end: 'bottom' });
+    expect(graph[4].color).toBe(graph[2].color);
+    expect(graph[0].color).not.toBe(graph[2].color);
+  });
+  it('resolves a configured default branch locally or from its remote', () => {
+    const refs = ['refs/remotes/origin/release', 'refs/heads/release', 'refs/heads/main'].map(fullName => ({
+      name: fullName.split('/').slice(2).join('/'), fullName, sha: fullName, remote: fullName.startsWith('refs/remotes/'), current: false,
+    }));
+    expect(defaultBranchTip(refs, 'release')).toBe('refs/heads/release');
+    expect(defaultBranchTip(refs.slice(0, 1), 'release')).toBe('refs/remotes/origin/release');
+    expect(defaultBranchTip(refs, '')).toBe('refs/heads/main');
   });
   it('joins both parents of a merge and keeps independent lanes continuous', () => {
     const graph = commitGraph([{ sha: 'merge', parents: ['main', 'topic'] }, { sha: 'topic', parents: ['base'] }, { sha: 'main', parents: ['base'] }, { sha: 'base', parents: [] }]);

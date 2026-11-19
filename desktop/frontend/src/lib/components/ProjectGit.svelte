@@ -29,7 +29,7 @@
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
   import { projectGitState, type ProjectGitState } from '$lib/projectgit.svelte';
-  import { folderFirstFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitDiffFile, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
+  import { folderFirstFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, defaultBranchTip, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitDiffFile, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
   import { agoPhrase, exactTime } from '$lib/time';
 
   let { project, heading, actions, windowInset = false, active = true }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean; active?: boolean } = $props();
@@ -337,7 +337,7 @@
   }));
   const localBranches = $derived(branchTree(filteredLocal));
   const commits = $derived(data?.commits ?? []);
-  const graph = $derived(commitGraph(commits));
+  const graph = $derived(commitGraph(commits, defaultBranchTip(data?.refs ?? [], store.defaultBranchFor(project))));
   const graphBySHA = $derived(new Map(graph.map(row => [row.sha, row])));
   const operationLabel = $derived(({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data?.operation ?? ''] ?? 'Git operation');
   const workingColumns = $derived(data?.operation || workingCounts.conflicts ? shownColumns.filter(column => ['refs','graph','subject'].includes(column.id)) : shownColumns);
