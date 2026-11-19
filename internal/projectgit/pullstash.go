@@ -2,7 +2,6 @@ package projectgit
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,27 +16,9 @@ func (c Client) stashPull(ctx context.Context, dir string, r BranchRequest, owne
 	if err != nil || current != r.Source || owner == "" || !sameCheckout(owner, dir) {
 		return errors.New("choose the checked-out local branch to stash and pull")
 	}
-	var nonce [12]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return err
-	}
-	message := fmt.Sprintf("lola: before pull of %s (%x)", strings.TrimPrefix(r.Source, "refs/heads/"), nonce)
-	if err := c.StashPush(ctx, dir, message, r.SourceSHA); err != nil {
-		return fmt.Errorf("could not prepare local changes for pull; inspect Stashes before retrying: %w", err)
-	}
-	entries, err := c.Stashes(ctx, dir)
+	saved, err := c.saveForRestore(ctx, dir, r.SourceSHA, "pull of "+strings.TrimPrefix(r.Source, "refs/heads/"))
 	if err != nil {
-		return fmt.Errorf("local changes were saved; inspect Stashes before retrying pull: %w", err)
-	}
-	var saved Stash
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Subject, ": "+message) {
-			saved = entry
-			break
-		}
-	}
-	if saved.SHA == "" {
-		return errors.New("cannot identify the saved local changes; inspect Stashes before retrying pull")
+		return err
 	}
 	pullErr := c.integratePull(ctx, dir, r, owner, incoming)
 	// A timeout must not prevent restoring edits after a refused merge. This
