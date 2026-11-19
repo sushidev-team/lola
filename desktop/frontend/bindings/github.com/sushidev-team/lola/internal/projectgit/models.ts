@@ -66,6 +66,7 @@ export interface Commit {
 export interface ConflictDocument {
     "text": string;
     "token": string;
+    "base"?: string | null;
     "current"?: string | null;
     "incoming"?: string | null;
 }

@@ -19,6 +19,7 @@ const conflictTextLimit = 4 << 20
 type ConflictDocument struct {
 	Text     string  `json:"text"`
 	Token    string  `json:"token"`
+	Base     *string `json:"base,omitempty"`
 	Current  *string `json:"current,omitempty"`
 	Incoming *string `json:"incoming,omitempty"`
 }
@@ -77,11 +78,13 @@ func (c Client) conflictDocument(ctx context.Context, dir, path string, includeS
 		if len(fields) != 3 {
 			return doc, errors.New("cannot read conflict stages")
 		}
-		if includeSides && (fields[2] == "2" || fields[2] == "3") {
+		if includeSides && (fields[2] == "2" || fields[2] == "3" || fields[2] == "1" && filepath.Base(path) == "package-lock.json") {
 			blob, err := c.git(ctx, dir, "", "cat-file", "blob", fields[1])
 			if err == nil && len(blob) <= conflictTextLimit && utf8.Valid(blob) && bytes.IndexByte(blob, 0) < 0 {
 				side := string(blob)
-				if fields[2] == "2" {
+				if fields[2] == "1" {
+					doc.Base = &side
+				} else if fields[2] == "2" {
 					doc.Current = &side
 				} else {
 					doc.Incoming = &side

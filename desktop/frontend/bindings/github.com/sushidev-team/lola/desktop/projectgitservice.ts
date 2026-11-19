@@ -204,6 +204,14 @@ export function Stashes(project: string, worktree: string): $CancellablePromise<
 }
 
 /**
+ * SuggestConflictChoices produces reviewable choices from editor excerpts.
+ * Only SaveConflict, after a separate human action, writes the working file.
+ */
+export function SuggestConflictChoices(project: string, input: string): $CancellablePromise<string> {
+    return $Call.ByID(2927015638, project, input);
+}
+
+/**
  * Uncommit removes the checkout's newest commit and keeps its changes staged.
  */
 export function Uncommit(project: string, worktree: string, expectedHead: string): $CancellablePromise<void> {
