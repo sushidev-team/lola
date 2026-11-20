@@ -22,7 +22,9 @@ GitHub kubeconfig or GitHub hub encryption key. The root Application preserves t
 override with `ignoreDifferences` **and** `RespectIgnoreDifferences=true`. Manifests track
 `main`; charts and the bouncer plugin have explicit versions. Valkey is an authenticated,
 internal **Argo cache**, without persistence. The hub does not use it; the bouncer uses
-its own memory cache. Traefik replicas require different worker nodes.
+its own memory cache. Traefik replicas require different worker nodes. Metrics Server runs
+two replicas on separate nodes and provides CPU/memory data for `kubectl top` and HPA. Its
+serving certificate is managed by cert-manager; API-server and kubelet TLS verification stay enabled.
 
 Target: usually 1–2 minutes **after publishing finishes**, plus slow image pulls/volume
 attaches. This is not a latency guarantee. `imagePullPolicy: Always` alone would not trigger
@@ -50,11 +52,12 @@ Start here for a small production installation. These are estimates, not load-te
 | Hub data | 10 GiB RWO volume, `Retain`, `/data/hub/hub.json` and admin token |
 | CrowdSec data | 10 GiB RWO volume, SQLite, one LAPI replica |
 | Valkey | In-cluster, single instance, 128 MiB request / 256 MiB limit |
+| Metrics Server | In-cluster, two replicas, each 100m CPU / 200 MiB requested |
 | Registry | Reuse `sushidev-registry-01`, retain recent SHA tags for rollback |
 | Backups | Daily volume snapshots + encrypted off-cluster copy; key backed up separately |
 | DNS | Domain A record → Traefik LB; TTL 60 during migration |
 
-Configured application requests are about 1.6 vCPU / 2.5 GiB with three CrowdSec log agents,
+Configured application requests are about 1.8 vCPU / 2.9 GiB with three CrowdSec log agents,
 before Kubernetes/CSI/Cilium overhead. Three nodes leave room for rescheduling, WAF bursts
 and upgrades. Two nodes are a budget option; one is for testing. The hub starts at 100m CPU /
 128 MiB, limited to 1 CPU / 512 MiB. Monitor relay concurrency, CPU/OOMs, disk and bandwidth.
@@ -202,8 +205,8 @@ kubectl --context do-fra1-lola-prod-01 apply -f hub/deploy/argocd/bootstrap.yaml
 kubectl --context do-fra1-lola-prod-01 -n argocd get applications -w
 ```
 
-Waves install cluster resources → Valkey → Argo → cert-manager / Image Updater → CrowdSec /
-Traefik → issuer / updater config → hub. Application health customization makes the root
+Waves install cluster resources → Valkey → Argo → cert-manager / Image Updater → Metrics Server /
+CrowdSec / Traefik → issuer / updater config → hub. Application health customization makes the root
 wait for child apps. CRDs use server-side apply.
 
 ```sh
@@ -226,6 +229,8 @@ preserves PR checks. Docker also runs `make check`, so failing tests cannot publ
 
 ```sh
 kubectl --context do-fra1-lola-prod-01 -n argocd get applications
+kubectl --context do-fra1-lola-prod-01 top nodes
+kubectl --context do-fra1-lola-prod-01 top pods -A
 kubectl --context do-fra1-lola-prod-01 -n argocd get imageupdater lola-hub -o yaml
 kubectl --context do-fra1-lola-prod-01 -n argocd logs deploy/argocd-image-updater-controller --tail=50
 kubectl --context do-fra1-lola-prod-01 -n lola-hub rollout status deploy/lola-hub --timeout=300s
@@ -282,6 +287,6 @@ Backups must include the complete hub directory and its separately stored encryp
 `Retain` is not a backup. Use the maintenance pod with the hub stopped for a consistent archive;
 regularly test restoration in isolation. Keep CrowdSec's LAPI volume; Valkey needs no backup.
 
-Local validation: render all six pinned charts, `kustomize build` the production overlay and
+Local validation: render all seven pinned charts, `kustomize build` the production overlay and
 both Argo resource directories, validate Application/ImageUpdater objects against matching
 CRDs, and run `actionlint` on both Hub workflows.
