@@ -122,7 +122,7 @@ var reviewedArgsFields = map[string][]string{
 	"checkpointDiff":        {"agent", "seq", "session"},
 	"dev":                   {"on", "session"},
 	"devFreePort":           {"pid", "port", "session"},
-	"feedback":              {"comments.body", "comments.endLine", "comments.line", "comments.path", "comments.quote", "comments.side", "note", "session"},
+	"feedback":              {"comments.body", "comments.endLine", "comments.line", "comments.path", "comments.quote", "comments.side", "elements.html", "elements.note", "elements.selector", "elements.text", "elements.url", "note", "session"},
 	"forkCheckpoint":        {"agent", "seq", "session"},
 	"mergePR":               {"confirmUnready", "head", "method", "number", "repo"},
 	"planDecide":            {"approve", "comment"},

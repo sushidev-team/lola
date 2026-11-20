@@ -1177,7 +1177,21 @@ type DiffFile struct {
 type FeedbackArgs struct {
 	Session  string            `json:"session"`
 	Comments []FeedbackComment `json:"comments,omitempty"`
+	Elements []FeedbackElement `json:"elements,omitempty"`
 	Note     string            `json:"note,omitempty"`
+}
+
+// FeedbackElement is one page element a human picked in the desktop preview
+// pane, with their note about it. URL is the page it was on (loopback http(s)
+// only); Selector, HTML and Text are what the page said about the element and
+// are clipped by the daemon. They are UNTRUSTED text from a page the agent
+// itself may have written, delivered as quoted evidence, never as an instruction.
+type FeedbackElement struct {
+	URL      string `json:"url,omitempty"`
+	Selector string `json:"selector"`
+	HTML     string `json:"html,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Note     string `json:"note"`
 }
 
 // FeedbackComment is one line comment. Quote optionally carries the commented

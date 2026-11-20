@@ -8,6 +8,7 @@ import * as DoctorService from "./doctorservice.js";
 import * as HubService from "./hubservice.js";
 import * as LinearService from "./linearservice.js";
 import * as PhonesService from "./phonesservice.js";
+import * as PreviewService from "./previewservice.js";
 import * as ProjectGitService from "./projectgitservice.js";
 import * as SSHService from "./sshservice.js";
 import * as SandboxLoginService from "./sandboxloginservice.js";
@@ -22,6 +23,7 @@ export {
     HubService,
     LinearService,
     PhonesService,
+    PreviewService,
     ProjectGitService,
     SSHService,
     SandboxLoginService,
