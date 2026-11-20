@@ -90,7 +90,7 @@
   import type { HubKindDTO, HubRulesDTO, SettingsDTO, TeamPolicyDTO } from "@bindings/desktop/models";
 
   type HubFields = Pick<SettingsDTO,
-    "hubAcceptKinds" | "hubMaxClaimsPerDay" | "hubRequireSandbox" | "hubPollSeconds" | "hubApplyPolicy" | "hubGroupChores" | "hubTrustedKeys">;
+    "hubAcceptKinds" | "hubMaxClaimsPerDay" | "hubRequireSandbox" | "hubPollSeconds" | "hubApplyPolicy" | "hubGroupChores" | "hubShareNew" | "hubTrustedKeys">;
 
   let { values, policy = null, onChange, onSaved, onIdentityChange = () => {}, onOpenTab = () => {}, onDirty = () => {} }: {
     values: HubFields;
@@ -312,6 +312,7 @@
       pollSeconds: patch.hubPollSeconds ?? null,
       applyPolicy: patch.hubApplyPolicy ?? null,
       groupChores: patch.hubGroupChores ?? null,
+      shareNewSessions: patch.hubShareNew ?? null,
       trustedKeys: patch.hubTrustedKeys ?? null,
     };
     rulesBusy = true;
@@ -356,6 +357,7 @@
 
   const sandbox = $derived(values.hubRequireSandbox ?? true);
   const grouped = $derived(values.hubGroupChores ?? true);
+  const sharesNew = $derived(values.hubShareNew ?? false);
   const applyPolicy = $derived(values.hubApplyPolicy ?? true);
 
   // --- trusted keys (draft + explicit save) ---------------------------------
@@ -405,7 +407,7 @@
     keysBusy = true;
     keysError = "";
     try {
-      await ConfigService.SaveHubRules({ acceptKinds: null, maxClaimsPerDay: null, requireSandbox: null, pollSeconds: null, applyPolicy: null, groupChores: null, trustedKeys: rows });
+      await ConfigService.SaveHubRules({ acceptKinds: null, maxClaimsPerDay: null, requireSandbox: null, pollSeconds: null, applyPolicy: null, groupChores: null, shareNewSessions: null, trustedKeys: rows });
       commit({ hubTrustedKeys: rows });
       draftKeys = rows.map((k) => ({ ...k }));
       keysMsg = "Keys saved";
@@ -605,6 +607,13 @@
           <span>Combine a repository’s issues into one session</span>
         </label>
         <HelpText label="Combine a repository’s issues into one session" detail="All open advisories of a repository go to one agent and one pull request. Off: one session per advisory." />
+      </span>
+      <span class="flex items-center gap-1" data-share-new-sessions>
+        <label class="flex cursor-pointer items-center gap-2">
+          <Checkbox checked={sharesNew} disabled={rulesBusy} onchange={() => void saveRules({ hubShareNew: !sharesNew })} />
+          <span>Share new sessions with the team</span>
+        </label>
+        <HelpText label="Share new sessions with the team" detail="Every new session starts shared, view-only, with the teammates you allowed. A session that already exists, or one you stop sharing, is never changed. Each session can also be shared by hand." />
       </span>
       <div class="grid gap-1.5">
         <span class="flex items-center gap-1">

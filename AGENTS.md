@@ -712,6 +712,28 @@ every send path. Re-verify against a live pane.
     Every `doctor.Result` carries a stable `Fix` id (`doctor.AllFixIDs`); no
     row carries a secret value.
 
+### Team session sharing (contract: `docs/team-sessions.md`)
+
+- **The hub routes and lists; it never grants.** Authority is the owner's daemon: a teammate attaches
+  only with a key a person pinned after comparing its fingerprint, and `shareGate` re-checks the live
+  session store on EVERY frame, so un-sharing or unpinning takes effect at once
+  (`remote.Server.RecheckMembers`). A member peer (`Peer.Member`) holds no tier: `admitMember` allows
+  `sub`/`unsub`/`pty` on the one agent pane of a shared session and the one `shareSessions` request,
+  and refuses everything else. Never route a member through `rebuild`, `commandTiers` or `Handle`.
+- **Two pin files, one per direction** (`members.json` = may attach to me, `owners.json` = I attach to
+  them), never `devices.json`. `shareTrust` refuses unless the fingerprint the person saw is the one
+  the hub names now; no key ever comes from a hub response without that confirmation.
+- **Only a share id, the owner's title, agent kind, level and audience reach the hub** — never a
+  session id (it embeds Linear identifiers), path or pane text. A share's rendezvous is dialled only
+  for an rv the daemon published; a phone rendezvous registration must keep share splices.
+- **`view` is the default; `type` is the shell tier on one pane.** A host (unsandboxed) session needs
+  `ConfirmUnsandboxed`. Phones get none of `protocol.ShareHumanCommands` (tier never) and
+  `remoteSessionInfo` drops `SessionInfo.share`.
+- **Sharing alone never serves phones**: `relayEntries` returns no phone rendezvous while `[remote]`
+  is off, even though a relay-only server exists for the teammates.
+- Teammate side: `internal/shareclient` pins the host key and applies the pane gap rule;
+  `internal/shareterm` is the desktop backend (`share-<id>` stream names). Both are Wails-free.
+
 ### SSH (contract: `docs/ssh-sessions.md`)
 - `ssh -O check` exit 0 is the only proof of a connection; nothing read from a
   pane moves a state; no auto-reconnect. Keep `ProxyCommand=false`.

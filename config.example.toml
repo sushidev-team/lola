@@ -612,6 +612,10 @@ endpoint = "https://api.linear.app/graphql"
 # # Give all of a repository's open dependency advisories to ONE agent and one
 # # pull request (at most 12). Absent = true; false claims each alone.
 # group_chores = true
+# # Start every NEW session shared with the pinned team members, view-only
+# # (docs/team-sessions.md). Absent = false. Sessions that already exist, and
+# # ones you un-share, are never changed.
+# share_new_sessions = false
 # # Enforce the verified team policy: every key it carries is locked in the
 # # daemon's memory (never written here). Absent = true; false shows it only.
 # # The daily budget and the concurrency hint are CEILINGS: a tighter local

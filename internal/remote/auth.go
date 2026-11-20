@@ -67,6 +67,11 @@ type Peer struct {
 	// copied from Handshake.Via and never set from anything the peer sends.
 	Via string
 
+	// Member marks a team member (docs/team-sessions.md): a teammate's daemon
+	// the owner pinned by key. It is set only by the authorizer, holds no tier
+	// and reaches only what MemberGate allows.
+	Member bool
+
 	// ConnectedAt stamps the accept, from Options.Now.
 	ConnectedAt time.Time
 }

@@ -334,3 +334,28 @@ into Linear.
 - Running a model in the hub. LLM spend and code stay on the members' machines.
 - Hub-initiated connections to daemons.
 - Auto-merge from the hub.
+
+## Team session sharing
+
+Contract: lola's `docs/team-sessions.md`. A member publishes which sessions
+teammates may attach to (`POST /v1/shares`, replace-all, device-signed); a
+teammate lists them (`GET /v1/shares`) and dials the owner through the blind
+relay (`GET /v1/relay/member?share=<id>`). The relay and its limits are the
+phone relay's.
+
+- **The hub routes and displays; it never grants.** The owner's daemon pins the
+  teammate's inner-TLS key locally, after a person confirms its fingerprint, and
+  re-checks the share on every attach. The hub's audience list is an admission
+  hint and a listing filter, nothing more: a hub that lies can deny service, not
+  gain access.
+- **Identity binding.** A device publishes `MemberIdentity`: its inner TLS key
+  hash, signed by its hub ed25519 key. The hub verifies the signature against
+  the key it enrolled, stores it and lists it (`GET /v1/shares/members`); an
+  owner verifies it again and shows the ed25519 fingerprint.
+- **What the hub sees**: a random share id, the owner's title, agent kind,
+  level (view | type), the audience as device ids, and the usual relay
+  metadata. Never a session id, path, pane text or keystroke. Presence (who is
+  attached) rides the inner session, not the hub.
+- **Conflicts.** A device cannot publish an rv or share id another device holds.
+- **Old hubs/daemons**: an old hub answers 404 and sharing stays off; an old
+  daemon never publishes.

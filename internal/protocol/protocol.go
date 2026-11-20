@@ -569,6 +569,10 @@ type SessionInfo struct {
 	// mobile/ and older clients see nothing new).
 	Hub *HubSessionHub `json:"hub,omitempty"`
 
+	// Share is the session's team sharing state (nil = not shared). Desktop only:
+	// the phone projection drops it.
+	Share *SessionShare `json:"share,omitempty"`
+
 	// FeedbackPending is true while a human's diff-viewer feedback
 	// (cmd=feedback) is queued for this session's agent, waiting for the pane to
 	// be verifiably resting at its prompt.

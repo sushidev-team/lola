@@ -3582,6 +3582,12 @@ export interface SessionInfo {
     "hub"?: HubSessionHub | null;
 
     /**
+     * Share is the session's team sharing state (nil = not shared). Desktop only:
+     * the phone projection drops it.
+     */
+    "share"?: SessionShare | null;
+
+    /**
      * FeedbackPending is true while a human's diff-viewer feedback
      * (cmd=feedback) is queued for this session's agent, waiting for the pane to
      * be verifiably resting at its prompt.
@@ -3668,6 +3674,25 @@ export interface SessionOverlap {
 }
 
 /**
+ * SessionShare is a session's sharing state on the wire (SessionInfo.Share).
+ */
+export interface SessionShare {
+    "id": string;
+    "title": string;
+    "level": string;
+
+    /**
+     * With are the hub device ids the share is limited to (empty = everyone pinned).
+     */
+    "with"?: string[] | null;
+
+    /**
+     * Attached are the teammates attached to it right now.
+     */
+    "attached"?: ShareViewer[] | null;
+}
+
+/**
  * SessionTask is shared session scope, separate from the agent's replaceable plan.
  * State is a claim, never a lifecycle or dispatch input.
  */
@@ -3709,6 +3734,181 @@ export interface SessionsData {
      * fresh on a daemon restart but survives TUI restarts).
      */
     "events"?: Event[] | null;
+}
+
+/**
+ * ShareMemberInfo is one teammate device.
+ */
+export interface ShareMemberInfo {
+    /**
+     * the hub's device id
+     */
+    "deviceId": string;
+    "name": string;
+    "member"?: string;
+
+    /**
+     * what the person compares before pinning
+     */
+    "fingerprint": string;
+
+    /**
+     * Allowed: this teammate may attach to sessions shared from this machine.
+     */
+    "allowed": boolean;
+
+    /**
+     * Trusted: this machine will attach to the sessions this teammate shares.
+     */
+    "trusted": boolean;
+
+    /**
+     * Attached counts this member's live attachments to this machine.
+     */
+    "attached"?: number;
+}
+
+/**
+ * ShareMembersData answers cmd=shareMembers.
+ */
+export interface ShareMembersData {
+    "members": ShareMemberInfo[] | null;
+
+    /**
+     * Offline is true when the hub could not be asked; Members then holds only
+     * the pinned ones.
+     */
+    "offline"?: boolean;
+}
+
+/**
+ * ShareOffer is one session a teammate offers this machine.
+ */
+export interface ShareOffer {
+    "id": string;
+    "title": string;
+    "agent"?: string;
+    "level": string;
+    "ownerDevice": string;
+    "ownerName": string;
+    "ownerMember"?: string;
+    "online": boolean;
+
+    /**
+     * Trusted is whether this machine pinned the owner's key (it must, to attach).
+     */
+    "trusted": boolean;
+}
+
+/**
+ * ShareOfferedData answers cmd=shareOffered.
+ */
+export interface ShareOfferedData {
+    "offers": ShareOffer[] | null;
+    "offline"?: boolean;
+}
+
+/**
+ * ShareSessionArgs is Request.Args for cmd=shareSession.
+ */
+export interface ShareSessionArgs {
+    "session": string;
+    "on": boolean;
+
+    /**
+     * Title defaults to the session's display title.
+     */
+    "title"?: string;
+
+    /**
+     * Level is "view" (default) or "type".
+     */
+    "level"?: string;
+
+    /**
+     * With are hub device ids of pinned members; empty = every pinned member.
+     */
+    "with"?: string[] | null;
+
+    /**
+     * ConfirmUnsandboxed must be true to give "type" access to a session that
+     * runs on the host rather than in the sandbox.
+     */
+    "confirmUnsandboxed"?: boolean;
+}
+
+/**
+ * ShareSessionData answers cmd=shareSession.
+ */
+export interface ShareSessionData {
+    "session": string;
+    "on": boolean;
+    "shareId"?: string;
+    "level"?: string;
+}
+
+/**
+ * ShareTrustArgs is Request.Args for cmd=shareTrust.
+ */
+export interface ShareTrustArgs {
+    "deviceId": string;
+
+    /**
+     * Fingerprint is the one the person compared. The daemon refuses unless it
+     * equals the fingerprint of the key the hub names NOW.
+     */
+    "fingerprint": string;
+
+    /**
+     * Allow lets the teammate attach to sessions shared from this machine;
+     * Trust lets this machine attach to the sessions the teammate shares. Each
+     * is a separate decision: pinning one direction grants nothing in the other.
+     */
+    "allow"?: boolean;
+    "trust"?: boolean;
+}
+
+/**
+ * ShareUntrustArgs is Request.Args for cmd=shareUntrust. It ends the teammate's
+ * live attachments. Allow and Trust name the directions to remove; neither set
+ * removes both.
+ */
+export interface ShareUntrustArgs {
+    "deviceId": string;
+    "allow"?: boolean;
+    "trust"?: boolean;
+}
+
+/**
+ * ShareViewer is one member attached to a shared session. Name is the member
+ * device's label as the owner pinned it; Me marks the asking member.
+ */
+export interface ShareViewer {
+    "name": string;
+    "me"?: boolean;
+
+    /**
+     * unix seconds
+     */
+    "since": number;
+
+    /**
+     * holds a type level
+     */
+    "typed"?: boolean;
+}
+
+/**
+ * SharedSession is one session as a member sees it. ID is the share id (random,
+ * not the lola session id); Pane is the name to subscribe to.
+ */
+export interface SharedSession {
+    "id": string;
+    "title": string;
+    "agent"?: string;
+    "level": string;
+    "pane": string;
+    "attached"?: ShareViewer[] | null;
 }
 
 /**

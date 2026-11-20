@@ -601,10 +601,21 @@ type Daemon struct {
 	// registry subscribers run outside the registry's lock.
 	devices *devices.Registry
 	pairer  *remote.Pairer
+	// members are the teammates pinned to attach to our shared sessions, owners
+	// the ones whose shared sessions we will attach to (docs/team-sessions.md).
+	// Separate files: a pin in one direction grants nothing in the other.
+	members *devices.Registry
+	owners  *devices.Registry
+	shares  *shareState
 	// remoteServes is the last answer of RemoteConfig.Serves, so a reload can
 	// tell that a hub join or leave changed whether a server should exist even
 	// though [remote] itself did not.
 	remoteServes atomic.Bool
+	// adopting is true while adoptNativeSessions re-inserts survivors: those are not
+	// new sessions, so [hub].share_new_sessions must not share them.
+	adopting atomic.Bool
+	// newShares counts in-flight shareNewSession goroutines (tests wait on it).
+	newShares sync.WaitGroup
 	// watch is the event push hub (docs/mobile/02-events.md); hubRelay is the
 	// relay leg to lola-hub (docs/mobile/03-hub-relay.md).
 	watch    *watchHub
@@ -693,12 +704,24 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.devices = devices.Open(home, time.Now, d.remoteLogf)
 	d.pairer = remote.NewPairer(d.devices, time.Now, d.remoteLogf)
 	d.devices.Subscribe(d.devicesChanged)
+	d.members = devices.OpenMembers(home, time.Now, d.remoteLogf)
+	d.owners = devices.OpenOwners(home, time.Now, d.remoteLogf)
+	d.members.Subscribe(d.membersChanged)
 	d.watch = newWatchHub(d)
 	d.hubRelay = &hubRelay{}
 	d.pokeStatusOnChange()
 	// Every committed session change reaches the watch hub as a poke; the hub
 	// decides what to publish and does nothing when no phone is watching.
 	d.sessions.OnChange(func(c session.Change) {
+		if c.Prev == nil && c.Next != nil && !d.adopting.Load() {
+			// A new session: [hub].share_new_sessions may share it. Off this
+			// callback (it runs under the store lock and must not call back in).
+			d.newShares.Add(1)
+			go func() {
+				defer d.newShares.Done()
+				d.shareNewSession(c.ID)
+			}()
+		}
 		bits := pokeRow
 		if talkFieldsChanged(c.Prev, c.Next) {
 			bits |= pokeTalk
@@ -1062,6 +1085,7 @@ func Run(ctx context.Context) error {
 	// (watchhub.go). Both end on ctx and are waited for by d.wg.
 	d.wg.Add(1)
 	go d.hubRelayLoop(ctx)
+	go d.shareLoop(ctx)
 	d.wg.Add(1)
 	go d.watch.run(ctx)
 
@@ -1452,6 +1476,8 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	if nat == nil {
 		return
 	}
+	d.adopting.Store(true)
+	defer d.adopting.Store(false)
 	found, err := nat.Adopt(ctx)
 	if err != nil {
 		d.logf("", "adopt: native session scan failed: %v", err)

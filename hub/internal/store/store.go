@@ -63,6 +63,8 @@ type Data struct {
 	// Relay: rendezvous entries by rv; an rv is unique hub-wide (see
 	// relay.go).
 	Relay map[string]*RelayEntry `json:"relay,omitempty"`
+	// Shares: team session sharing records by device id (see shares.go).
+	Shares map[string]*DeviceShares `json:"shares,omitempty"`
 }
 
 // Org is a team.
@@ -268,6 +270,9 @@ func (d *Data) init() {
 	}
 	if d.Relay == nil {
 		d.Relay = map[string]*RelayEntry{}
+	}
+	if d.Shares == nil {
+		d.Shares = map[string]*DeviceShares{}
 	}
 }
 

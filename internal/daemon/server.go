@@ -95,6 +95,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(d.statusData(ctx))
 	case protocol.CmdHubStatus:
 		return dataResponse(d.hubStatusData())
+	case protocol.CmdShareSession, protocol.CmdShareMembers, protocol.CmdShareTrust, protocol.CmdShareUntrust, protocol.CmdShareOffered:
+		return d.handleShare(ctx, req)
 	case protocol.CmdHubJoin, protocol.CmdHubLeave, protocol.CmdHubBoard, protocol.CmdHubOrg,
 		protocol.CmdHubClaim, protocol.CmdHubRelease, protocol.CmdHubSync, protocol.CmdHubStats,
 		protocol.CmdHubCreateTeam, protocol.CmdHubInvite, protocol.CmdHubTeamSettings, protocol.CmdHubRevoke,
@@ -923,6 +925,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 	cfg := d.cfg
 	d.mu.Unlock()
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
+	attached := d.shareAttachments()
 	for _, s := range snap {
 		si := protocol.SessionInfo{
 			GoalID: s.GoalID, TaskID: s.TaskID, AttemptID: s.AttemptID,
@@ -1027,6 +1030,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		si.Board = boardInfo(s.Board, auditClaims(s), now)
 		si.Tasks = s.Tasks
 		si.Hub = hubSessionHub(s)
+		si.Share = d.sessionShare(s, attached)
 		for _, o := range s.Overlaps {
 			si.Overlaps = append(si.Overlaps, protocol.SessionOverlap{
 				Session: o.Session, Issue: o.Issue, Files: slices.Clone(o.Files), More: o.More,
@@ -1217,9 +1221,16 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	d.mu.Unlock()
 	d.sshOnReload()
 
-	serves := nc.Remote.Serves(d.hubRelayJoined(nc.Hub))
+	joined := d.hubRelayJoined(nc.Hub)
+	serves := nc.Remote.Serves(joined) || d.shareActive(joined)
 	if remoteOld != nc.Remote || serves != d.remoteServes.Load() {
 		d.reloadRemote()
+	}
+	// A share keeps the relay open (not idle) whichever way the phone switch goes,
+	// so the loop never sees this as a leave: say the phone set changed, and
+	// relayEntries (which honours the switch) is posted to the hub.
+	if remoteOld.RelayOff != nc.Remote.RelayOff {
+		d.hubRelayDirty()
 	}
 	d.hubRelayNudge()
 	if bctx := d.shutdownCtx; bctx != nil {

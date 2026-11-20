@@ -118,6 +118,43 @@ export function RevokeDevice(name: string): $CancellablePromise<protocol$0.HubRe
 }
 
 /**
+ * SetShared turns sharing of one session on or off.
+ */
+export function SetShared(a: protocol$0.ShareSessionArgs): $CancellablePromise<protocol$0.ShareSessionData> {
+    return $Call.ByID(1571677415, a);
+}
+
+/**
+ * ShareMembers lists the teammates a person can pin, with the fingerprint to
+ * compare, and says which directions are pinned.
+ */
+export function ShareMembers(): $CancellablePromise<protocol$0.ShareMembersData> {
+    return $Call.ByID(3958063708);
+}
+
+/**
+ * ShareOffered lists the sessions teammates offer this machine.
+ */
+export function ShareOffered(): $CancellablePromise<protocol$0.ShareOfferedData> {
+    return $Call.ByID(3700413968);
+}
+
+/**
+ * ShareTrust pins a teammate after the person compared the fingerprint.
+ */
+export function ShareTrust(a: protocol$0.ShareTrustArgs): $CancellablePromise<protocol$0.ShareMembersData> {
+    return $Call.ByID(2967251369, a);
+}
+
+/**
+ * ShareUntrust removes a pinned teammate in the directions named (neither
+ * named: both) and ends their live attachments.
+ */
+export function ShareUntrust(a: protocol$0.ShareUntrustArgs): $CancellablePromise<protocol$0.ShareMembersData> {
+    return $Call.ByID(2225906972, a);
+}
+
+/**
  * Stats reads the org's daily counters and sums the last seven days.
  */
 export function Stats(): $CancellablePromise<$models.HubStatsDTO> {

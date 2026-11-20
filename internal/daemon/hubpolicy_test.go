@@ -503,3 +503,35 @@ func TestHubCycleNoPolicyWithdraws(t *testing.T) {
 	}
 	f.assertFileUntouched(t)
 }
+
+// A reload that flips only the relay switch must mark the phone rendezvous set
+// dirty: a share can hold the relay open either way, so nothing else would
+// post the changed set (relayEntries honours the switch) to the hub.
+func TestReloadFlippingTheRelaySwitchMarksPhonesDirty(t *testing.T) {
+	f := newPolicyDaemon(t, hubproto.Settings{}, 1, false, func(c *config.Config) {
+		c.Remote = config.RemoteConfig{Enabled: true, Bind: "off"}
+	})
+	t.Cleanup(f.d.stopRemote)
+	r := f.d.relay()
+	before := r.gen.Load()
+	if err := f.d.handleReload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.gen.Load(); got != before {
+		t.Fatalf("a reload that changed nothing marked the set dirty (%d -> %d)", before, got)
+	}
+	c, err := config.Load(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Remote.RelayOff = true
+	if err := c.Save(f.path); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.handleReload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.gen.Load(); got == before {
+		t.Fatal("switching the relay off left the phone rendezvous set clean")
+	}
+}

@@ -8,6 +8,7 @@
   import { TermService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
   import { termBoot } from "$lib/termboot";
+  import { isShareStream } from "$lib/sharing";
   import { TERM_FONT, appearance, termFontLoaded, termFontReady } from "$lib/theme-runtime.svelte";
 
   // A live, interactive terminal attached to a session's tmux pane. WebGL is
@@ -73,6 +74,7 @@
   let gl: WebglAddon | undefined;
   let off: (() => void) | undefined;
   let offExit: (() => void) | undefined;
+  let offSize: (() => void) | undefined;
   let ro: ResizeObserver | undefined;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
@@ -311,6 +313,13 @@
     off = Events.On(`pty:${terminalName}`, (e: { data: string }) => {
       term?.write(b64ToBytes(e.data));
     });
+    // A teammate's pane keeps the OWNER's grid (the host never resizes for a viewer), so the
+    // terminal adopts it instead of fitting to this window; the host scrolls if it is larger.
+    if (isShareStream(terminalName)) {
+      offSize = Events.On(`ptysize:${terminalName}`, (e: { data: { cols: number; rows: number } }) => {
+        if (e.data.cols > 0 && e.data.rows > 0) term?.resize(e.data.cols, e.data.rows);
+      });
+    }
 
     // A shell tab asks to be told when its session ends so it can close itself.
     // Subscribe only when wanted (the agent pane passes no onExit): its own tmux
@@ -323,12 +332,16 @@
 
     // After the page's one-time orphan sweep (termboot.ts), never before it:
     // the sweep would otherwise be able to detach this very terminal.
-    attach = termBoot().then(() => TermService.Attach(terminalName, cols, rows)).catch(() => {
-      term?.writeln("\x1b[31m[ could not attach to session ]\x1b[0m");
+    attach = termBoot().then(() => TermService.Attach(terminalName, cols, rows)).catch((e) => {
+      // A teammate's session fails for reasons a person can act on (offline, not trusted
+      // yet): the daemon's sentence is shown. A local pane keeps the one generic line.
+      const why = isShareStream(terminalName) && e instanceof Error ? e.message.replace(/^Error:\s*/, "").replace(/[\x00-\x1f\x7f]/g, " ") : "";
+      term?.writeln(`\x1b[31m[ ${why || "could not attach to session"} ]\x1b[0m`);
     });
 
     ro = new ResizeObserver(() => {
       clearTimeout(resizeTimer);
+      if (isShareStream(terminalName)) return;
       resizeTimer = setTimeout(() => fit?.fit(), 60);
     });
     ro.observe(host);
@@ -385,6 +398,7 @@
     disposed = true;
     off?.();
     offExit?.();
+    offSize?.();
     ro?.disconnect();
     clearTimeout(resizeTimer);
     clearTimeout(wheelTimer);
@@ -399,4 +413,4 @@
   });
 </script>
 
-<div bind:this={host} class="term-live h-full w-full overflow-hidden"></div>
+<div bind:this={host} class="term-live h-full w-full {isShareStream(terminalName) ? 'overflow-auto' : 'overflow-hidden'}"></div>

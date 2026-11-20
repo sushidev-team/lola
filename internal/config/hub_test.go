@@ -318,3 +318,30 @@ func TestHubDeviceNameParity(t *testing.T) {
 		}
 	}
 }
+
+func TestHubShareNewSessionsDefaultsOffAndRoundTrips(t *testing.T) {
+	var h HubConfig
+	if h.SharesNewSessions() {
+		t.Fatal("a zero HubConfig must not share new sessions")
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c := &Config{Projects: []Project{validPoll()}}
+	c.Hub = HubConfig{Enabled: true, URL: "https://hub.example.com"}
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); strings.Contains(string(data), "share_new_sessions") {
+		t.Errorf("an unset key was written:\n%s", data)
+	}
+	c.Hub.ShareNewSessions = boolp(true)
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Hub.SharesNewSessions() {
+		t.Fatalf("share_new_sessions lost on a round trip: %+v", got.Hub)
+	}
+}

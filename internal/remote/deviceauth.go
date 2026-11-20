@@ -14,11 +14,13 @@ import (
 // by the SPKI of its client certificate, looked up in the device registry, and a
 // frame is allowed by the device's tiers, read live on every frame.
 type deviceAuthorizer struct {
-	reg    *devices.Registry
-	pairer *Pairer
-	host   string
-	now    func() time.Time
-	logf   func(string, ...any)
+	reg     *devices.Registry
+	members *devices.Registry
+	gate    MemberGate
+	pairer  *Pairer
+	host    string
+	now     func() time.Time
+	logf    func(string, ...any)
 
 	// rejLog throttles the refusal lines: they are written before the peer
 	// proved anything, so any peer that reaches the port can cause them.
@@ -60,6 +62,9 @@ func (a *deviceAuthorizer) Authenticate(ctx context.Context, hs *Handshake) (Pee
 		a.reg.Touch(dev.ID)
 		return Peer{DeviceID: dev.ID, Label: dev.Name, Epoch: dev.Epoch, Via: via(hs)}, nil
 	}
+	if p, known, err := a.authenticateMember(hs, h); known {
+		return p, err
+	}
 	if !a.pairer.pending() {
 		return Peer{}, a.notPaired(hs, "not paired")
 	}
@@ -73,6 +78,13 @@ func (a *deviceAuthorizer) Authenticate(ctx context.Context, hs *Handshake) (Pee
 // AuthorizeFrame re-reads the device on every frame. It has NO side effects (no
 // strike, bucket or log): the event pump calls it before every pushed event.
 func (a *deviceAuthorizer) AuthorizeFrame(_ context.Context, peer Peer, f *protocol.Frame) error {
+	if peer.Member {
+		// A member holds no tier; conn.admitMember applies the per-frame policy.
+		if !a.memberRegistryLive(peer) {
+			return ErrUnauthenticated
+		}
+		return nil
+	}
 	dev, ok := a.reg.Get(peer.DeviceID)
 	if !ok || dev.Epoch != peer.Epoch {
 		return ErrUnauthenticated

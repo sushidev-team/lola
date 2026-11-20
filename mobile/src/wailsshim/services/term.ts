@@ -74,6 +74,11 @@ export function SetApp(_app: unknown): Promise<void> {
   return Promise.resolve();
 }
 
+/** PLATFORM: a teammate's shared terminal is a Mac matter. */
+export function ShareInfo(_name: string): Promise<P.SharedSession> {
+  return unsupported("TermService.ShareInfo", MAC_ONLY);
+}
+
 /** PLATFORM. */
 export function Shell(_shell: string, _worktree: string): Promise<string> {
   return unsupported("TermService.Shell", MAC_ONLY);
@@ -100,6 +105,7 @@ export const ROUTES: Routes<typeof Gen.TermService> = {
   Resize: { kind: "local" },
   Scroll: { kind: "local" },
   SetApp: { kind: "local" },
+  ShareInfo: { kind: "platform", reason: MAC_ONLY },
   Shell: { kind: "platform", reason: MAC_ONLY },
   Shells: { kind: "platform", reason: MAC_ONLY },
   Write: { kind: "local" },

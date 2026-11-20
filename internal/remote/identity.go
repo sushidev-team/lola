@@ -194,6 +194,11 @@ func (s *Server) verifyPeer(cs tls.ConnectionState) error {
 			return nil
 		}
 	}
+	if m := s.opts.Members; m != nil && s.opts.MemberGate != nil {
+		if _, ok := m.Lookup(h); ok {
+			return nil
+		}
+	}
 	if pairer != nil && pairer.windowOpen() {
 		return nil
 	}

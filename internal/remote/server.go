@@ -157,6 +157,11 @@ type Options struct {
 	// Events is the push seam. nil answers every watch with WatchCodeUnavailable.
 	Events Events
 
+	// Members is the registry of pinned team members and MemberGate the
+	// daemon's per-frame policy for them. Either nil turns member access off.
+	Members    *devices.Registry
+	MemberGate MemberGate
+
 	// RelayOnly allows a Server with no listener: bind = "off" with the hub
 	// relay on still serves relayed connections.
 	RelayOnly bool
@@ -254,6 +259,7 @@ func Listen(ctx context.Context, opts Options) (*Server, error) {
 		logf("remote: devices.json is unreadable; no phone can connect: %v", err)
 	}
 	auth := newDeviceAuthorizer(opts.Devices, opts.Pairer, opts.Host, opts.Now, logf)
+	auth.members, auth.gate = opts.Members, opts.MemberGate
 	return listen(ctx, opts, auth)
 }
 

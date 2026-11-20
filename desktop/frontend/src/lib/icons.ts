@@ -84,6 +84,12 @@ import Terminal from '@lucide/svelte/icons/terminal';
 import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 import User from '@lucide/svelte/icons/user';
 import Users from '@lucide/svelte/icons/users';
+import Eye from '@lucide/svelte/icons/eye';
+import Keyboard from '@lucide/svelte/icons/keyboard';
+import Share2 from '@lucide/svelte/icons/share-2';
+import UserCheck from '@lucide/svelte/icons/user-check';
+import UserMinus from '@lucide/svelte/icons/user-minus';
+import Plug from '@lucide/svelte/icons/plug';
 import Download from '@lucide/svelte/icons/download';
 import Package from '@lucide/svelte/icons/package';
 import X from '@lucide/svelte/icons/x';
@@ -199,6 +205,12 @@ export const icons = {
   'triangle-alert': TriangleAlert,
   'user': User,
   'users': Users,
+  'eye': Eye,
+  'keyboard': Keyboard,
+  'share-2': Share2,
+  'user-check': UserCheck,
+  'user-minus': UserMinus,
+  'plug': Plug,
   'download': Download,
   'package': Package,
   'x': X,

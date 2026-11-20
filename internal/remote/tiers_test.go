@@ -43,7 +43,7 @@ func TestTierCountsMatchTheSpec(t *testing.T) {
 	}
 	want := map[string]int{
 		protocol.TierRead: 25, protocol.TierAnswer: 12, protocol.TierControl: 25,
-		protocol.TierDestructive: 4, protocol.TierShell: 6, protocol.TierNever: 113,
+		protocol.TierDestructive: 4, protocol.TierShell: 6, protocol.TierNever: 118,
 	}
 	for tier, n := range want {
 		if got[tier] != n {

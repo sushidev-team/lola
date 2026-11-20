@@ -1083,10 +1083,10 @@ resolved from `internal/protocol`): 166 case labels today, minus the deleted
 `pairReject`, `devices`, `revokeDevice`, `setDeviceTiers`, `sessionTimeline`; `pairBegin` already
 exists) = 172, plus spec 02's two handled commands `attachImage` and `attachmentImage` (`d.handle`
 cases reached through `Options.Handle` with the peer in the context) = 174, plus spec 03's
-`relayCred` = 176, plus the desktop-only `askMerge` and `addApps` = 178, plus the plan gate's `planSubmit`, `planDecide`, `planGate` = 181, plus desktop-only `removeEndedWorktree` = 182, plus the phone Git client's `projectGit`, `projectGitAct`, `projectGitDiscard` = **185 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
+`relayCred` = 176, plus the desktop-only `askMerge` and `addApps` = 178, plus the plan gate's `planSubmit`, `planDecide`, `planGate` = 181, plus desktop-only `removeEndedWorktree` = 182, plus the phone Git client's `projectGit`, `projectGitAct`, `projectGitDiscard` = 185, plus the five team-sharing commands = **190 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
 `internal/remote`, and `remote.pair`, consumed by `Authenticate`.
 
-Split of the 185: read 25, answer 12, control 25, destructive 4, shell 6, never 113.
+Split of the 190: read 25, answer 12, control 25, destructive 4, shell 6, never 118.
 (Coverage was checked mechanically against `server.go` while writing this spec.)
 
 **read** (25 handled; plus `watch`, `unwatch` from `TransportCommands`)
@@ -1146,7 +1146,7 @@ No other config write may join a tier (§10.1).
 browser helper from the agent-writable `node_modules`, against any http(s) URL the caller
 names). Frame-level: `pty` with `action:"write"`.
 
-**never** — unreachable whatever the device holds (113)
+**never** — unreachable whatever the device holds (118)
 
 | Group | Commands |
 |---|---|

@@ -486,3 +486,10 @@ func (h *Hub) Shutdown() {
 	}
 	wg.Wait()
 }
+
+// Online reports whether the device holds a live control channel.
+func (h *Hub) Online(device string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.links[device] != nil
+}

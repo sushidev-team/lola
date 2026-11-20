@@ -270,3 +270,63 @@ func (s *HubService) Kinds() []HubKindDTO {
 	}
 	return out
 }
+
+// ---- team session sharing (docs/team-sessions.md) -----------------------------
+//
+// Each method is one socket round-trip to the daemon, which owns every rule: who
+// may be pinned, the fingerprint re-check, the share levels. They are human acts,
+// tier never for a phone (internal/remote/tiers.go).
+
+// SetShared turns sharing of one session on or off.
+func (s *HubService) SetShared(a protocol.ShareSessionArgs) (protocol.ShareSessionData, error) {
+	var d protocol.ShareSessionData
+	err := hubCall(protocol.CmdShareSession, a, &d, hubViewTimeout)
+	return d, err
+}
+
+// ShareMembers lists the teammates a person can pin, with the fingerprint to
+// compare, and says which directions are pinned.
+func (s *HubService) ShareMembers() (protocol.ShareMembersData, error) {
+	var d protocol.ShareMembersData
+	err := hubCall(protocol.CmdShareMembers, nil, &d, hubViewTimeout)
+	if d.Members == nil {
+		d.Members = []protocol.ShareMemberInfo{}
+	}
+	return d, err
+}
+
+// ShareTrust pins a teammate after the person compared the fingerprint.
+func (s *HubService) ShareTrust(a protocol.ShareTrustArgs) (protocol.ShareMembersData, error) {
+	var d protocol.ShareMembersData
+	err := hubCall(protocol.CmdShareTrust, a, &d, hubViewTimeout)
+	if d.Members == nil {
+		d.Members = []protocol.ShareMemberInfo{}
+	}
+	return d, err
+}
+
+// ShareUntrust removes a pinned teammate in the directions named (neither
+// named: both) and ends their live attachments.
+func (s *HubService) ShareUntrust(a protocol.ShareUntrustArgs) (protocol.ShareMembersData, error) {
+	var d protocol.ShareMembersData
+	err := hubCall(protocol.CmdShareUntrust, a, &d, hubViewTimeout)
+	// Whatever the daemon answered: removing someone I attach to ends what is attached
+	// now, even when the removal could not be saved (the pin file would still say so).
+	if (a.Trust || !a.Allow) && detachShareOwner != nil {
+		detachShareOwner(a.DeviceID)
+	}
+	if d.Members == nil {
+		d.Members = []protocol.ShareMemberInfo{}
+	}
+	return d, err
+}
+
+// ShareOffered lists the sessions teammates offer this machine.
+func (s *HubService) ShareOffered() (protocol.ShareOfferedData, error) {
+	var d protocol.ShareOfferedData
+	err := hubCall(protocol.CmdShareOffered, nil, &d, hubViewTimeout)
+	if d.Offers == nil {
+		d.Offers = []protocol.ShareOffer{}
+	}
+	return d, err
+}

@@ -84,7 +84,8 @@ func (s *Server) handleRendezvous(w http.ResponseWriter, r *http.Request, auth s
 		return
 	}
 	resp := hubproto.RendezvousResponse{}
-	kept := map[string]bool{}
+	s.regMu.Lock()
+	defer s.regMu.Unlock()
 	err := s.cfg.Store.Update(func(d *store.Data) error {
 		dev, err := liveDevice(d, auth.ID)
 		if err != nil {
@@ -115,7 +116,6 @@ func (s *Server) handleRendezvous(w http.ResponseWriter, r *http.Request, auth s
 				ExpiresAt: e.ExpiresAt.UTC(),
 				UpdatedAt: now.UTC(),
 			}
-			kept[e.RV] = true
 		}
 		resp.Registered = len(accepted)
 		return nil
@@ -124,8 +124,8 @@ func (s *Server) handleRendezvous(w http.ResponseWriter, r *http.Request, auth s
 		s.writeErr(w, err)
 		return
 	}
-	// After the commit: what the set no longer holds loses its connections.
-	s.cfg.Relay.Retain(auth.ID, kept)
+	// After the commit: what the device no longer holds loses its connections.
+	s.retainHeld(auth.ID)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -258,8 +258,17 @@ func (s *Server) handleRelayPhone(w http.ResponseWriter, r *http.Request) {
 		phoneFail(w, http.StatusUnauthorized, hubproto.CodeUnauthorized, 0)
 		return
 	}
+	s.spliceDial(w, r, device, org, rv, window, rv)
+}
+
+// spliceDial is steps 6 to 9 of a relay dial, shared by the phone leg and the
+// member leg: the dial bucket (keyed by bucketKey), a connection slot under the
+// OWNER device, the offer to its control channel, the wait for its accept leg
+// and the splice. Every failure is an HTTP status before any upgrade.
+func (s *Server) spliceDial(w http.ResponseWriter, r *http.Request, device, org, rv string, window bool, bucketKey string) {
+	rh := s.cfg.Relay
 	// 6.
-	if !rh.AllowAuth(rv) {
+	if !rh.AllowAuth(bucketKey) {
 		phoneFail(w, http.StatusTooManyRequests, hubproto.CodeRateLimited, dialRetryAfter)
 		return
 	}

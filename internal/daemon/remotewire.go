@@ -145,7 +145,8 @@ func (d *Daemon) startRemote(ctx context.Context) {
 	d.mu.Unlock()
 	// Computed with no lock held: the joined check reads the hub identity from
 	// disk.
-	serves := rc.Serves(d.hubRelayJoined(hubCfg))
+	joined := d.hubRelayJoined(hubCfg)
+	serves := rc.Serves(joined) || d.shareActive(joined)
 	d.remoteServes.Store(serves)
 	if !serves {
 		return
@@ -195,16 +196,18 @@ func (d *Daemon) startRemote(ctx context.Context) {
 
 	host, _ := os.Hostname()
 	opts := remote.Options{
-		Bind:      rc.BindMode(),
-		Port:      rc.ListenPort(),
-		Dir:       d.home,
-		Handle:    d.handleRemote,
-		Panes:     remotePanes{reg: reg, logf: d.remoteLogf},
-		Devices:   d.devices,
-		Pairer:    d.pairer,
-		Host:      host,
-		Logf:      d.remoteLogf,
-		RelayOnly: !rc.Listens(),
+		Bind:       rc.BindMode(),
+		Port:       rc.ListenPort(),
+		Dir:        d.home,
+		Handle:     d.handleRemote,
+		Panes:      remotePanes{reg: reg, logf: d.remoteLogf},
+		Members:    d.members,
+		MemberGate: shareGate{d},
+		Devices:    d.devices,
+		Pairer:     d.pairer,
+		Host:       host,
+		Logf:       d.remoteLogf,
+		RelayOnly:  !rc.Listens(),
 	}
 	if d.watch != nil {
 		// Assigned only when set: a nil *watchHub in the interface would not be

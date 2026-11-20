@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -54,6 +55,9 @@ type subscription struct {
 	// from another goroutine — the pump, a status command — makes that untrue
 	// and must take c.mu first.
 	cols, rows int
+
+	// since is when this subscription attached (presence).
+	since time.Time
 
 	once sync.Once
 }
@@ -197,7 +201,7 @@ func (c *conn) subscribe(op paneOp) {
 		return
 	}
 
-	s := &subscription{pane: op.pane, id: op.id, stream: stream, cols: op.sub.Cols, rows: op.sub.Rows}
+	s := &subscription{pane: op.pane, id: op.id, stream: stream, cols: op.sub.Cols, rows: op.sub.Rows, since: c.srv.opts.now()}
 	c.mu.Lock()
 	if c.isDone() {
 		c.mu.Unlock()
@@ -206,6 +210,18 @@ func (c *conn) subscribe(op paneOp) {
 	}
 	c.subs[op.pane] = s
 	c.mu.Unlock()
+
+	// A member's access may have been withdrawn while Subscribe ran, after the
+	// frame was admitted and before the subscription was visible to
+	// RecheckMembers. Installing first and checking after closes that window:
+	// either this sees the withdrawal or RecheckMembers sees the subscription.
+	if c.peer.Member && c.memberLevel(op.pane) == LevelNone {
+		if dropped := c.dropSubIf(op.pane, s); dropped != nil {
+			dropped.close()
+		}
+		c.refusePane(op.id, op.pane, protocol.CodeUnknownPane, "pane is not available")
+		return
+	}
 
 	c.srv.opts.logf()("remote: device=%s subscribed pane=%s", logSafe(c.peer.DeviceID), logSafe(op.pane))
 	c.wg.Add(1)
@@ -221,6 +237,19 @@ func (c *conn) paneInput(op paneOp) {
 		// SUBSCRIPTION, so acting on one without it would bypass the check.
 		c.refusePane(op.id, op.pane, protocol.CodeUnknownPane, "not subscribed to this pane")
 		return
+	}
+	// Queued input is authorized when it runs, not only when it was read: a
+	// member downgraded from type to view, or removed, must not have earlier
+	// keystrokes land.
+	if c.peer.Member {
+		need := LevelType
+		if op.in.Action == protocol.PTYActionResize {
+			need = LevelView
+		}
+		if lvl := c.memberLevel(op.pane); lvl == LevelNone || (need == LevelType && lvl != LevelType) {
+			c.refusePane(op.id, op.pane, protocol.CodeDenied, "not permitted for this device")
+			return
+		}
 	}
 	switch op.in.Action {
 	case protocol.PTYActionWrite:

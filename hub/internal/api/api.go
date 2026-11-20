@@ -112,6 +112,10 @@ type Server struct {
 	enroll *bucket
 	open   *bucket // code-less team creations, hub-wide
 	enMu   sync.Mutex
+	// regMu orders a registration commit with the Retain that follows it, across the
+	// phone and share publication paths: Retain gets the device's CURRENT holdings,
+	// so neither path can close a splice the other just opened.
+	regMu sync.Mutex
 
 	// acceptTimeout is how long a phone dial waits for the daemon's accept
 	// leg; 0 = hubproto.RelayAcceptTimeout (a test seam).
@@ -210,6 +214,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc(hubproto.PathRelayDaemon, s.relayOn(s.authedUpgrade(s.handleRelayDaemon)))
 	mux.HandleFunc(hubproto.PathRelayAccept, s.relayOn(s.authedUpgrade(s.handleRelayAccept)))
 	mux.HandleFunc(hubproto.PathRelayPhone, s.relayOn(s.handleRelayPhone))
+	mux.HandleFunc(hubproto.PathRelayMember, s.relayOn(s.authedUpgrade(s.handleRelayMember)))
+	mux.HandleFunc(hubproto.PathShares, s.sharesRoute())
+	mux.HandleFunc(hubproto.PathShareIdentity, s.authed(http.MethodPost, s.handleShareIdentity))
+	mux.HandleFunc(hubproto.PathShareMembers, s.authed(http.MethodGet, s.handleShareMembers))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, hubproto.CodeNotFound)
 	})
