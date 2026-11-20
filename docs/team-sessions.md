@@ -147,7 +147,7 @@ Compact icons, text only where needed (per the issue):
   "Share new sessions" switch bound to the setting.
 - "Shared with me" group in the sidebar: owner device (office-mac) → sessions,
   offline ones dimmed; click attaches; the terminal looks local.
-- Trust prompt: member label, device name, fingerprint, one confirm.
+- Trust prompt: member label, device name, fingerprint, one confirm. It lives on that Mac's row in the Team view's one "Macs" list (allow, trust and remove are icon buttons there); a pinned teammate the hub's Mac list does not name gets a row in the same list.
 - Keyboard equivalents for new bare keys; `HelpOverlay.svelte`.
 
 ## 6. Phases (each its own commit, green tests)

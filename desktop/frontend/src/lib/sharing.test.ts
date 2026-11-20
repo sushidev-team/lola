@@ -7,6 +7,9 @@ import {
   initials,
   isShareStream,
   levelOf,
+  memberFor,
+  memberLabel,
+  membersWithoutMac,
   sameFingerprint,
   shareStreamName,
   shareTitle,
@@ -94,5 +97,20 @@ describe("shareTitle", () => {
     expect(shareTitle(false, 0)).toBe("Share with team");
     expect(shareTitle(true, 0)).toBe("Shared with your team");
     expect(shareTitle(true, 2)).toBe("Shared with your team · 2 attached");
+  });
+});
+
+describe("matching teammates to Macs", () => {
+  const m = (name: string, deviceId = name) => ({ deviceId, name, fingerprint: "", allowed: false, trusted: false });
+  it("names a Mac the way the daemon lists it", () => {
+    expect(memberLabel({ name: "mini", member: "Ada" })).toBe("Ada · mini");
+    expect(memberLabel({ name: "mini" })).toBe("mini");
+  });
+  it("finds the teammate for a Mac, and the ones no Mac names", () => {
+    const members = [m("Ada · mini"), m("loner"), m("Eve · pc")];
+    const macs = [{ name: "mini", member: "Ada" }, { name: "pc" }];
+    expect(memberFor(members, macs[0])?.name).toBe("Ada · mini");
+    expect(memberFor(members, macs[1])).toBeUndefined();
+    expect(membersWithoutMac(members, macs).map((x) => x.name)).toEqual(["loner", "Eve · pc"]);
   });
 });

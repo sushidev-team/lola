@@ -20,6 +20,9 @@
   import TeamShares from "$lib/components/hub/TeamShares.svelte";
   import SharedSessionPane from "$lib/components/hub/SharedSessionPane.svelte";
   import { share } from "$lib/share.svelte";
+  import { memberFor, membersWithoutMac } from "$lib/sharing";
+  import TeammateActions from "$lib/components/hub/TeammateActions.svelte";
+  import PinConfirm from "$lib/components/hub/PinConfirm.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import Select from "$lib/components/Select.svelte";
@@ -109,6 +112,9 @@
   const sections = $derived(boardSections(hub.items));
   const needs = $derived(hub.board ? needsYou(hub.items, st, now) : []);
   const devices = $derived(hub.org?.devices ?? []);
+  const strangers = $derived(membersWithoutMac(share.members, devices));
+  /** The Mac and direction being pinned, waiting for the person's fingerprint comparison. */
+  let pinning = $state<{ id: string; allow: boolean } | null>(null);
   const online = $derived(onlineCount(devices, now));
   const orgName = $derived(st?.org || hub.org?.org || "Team hub");
   const health = $derived((st?.findingsHealth ?? []).map(healthLine).filter((h) => h !== null));
@@ -910,13 +916,15 @@
 
             <section class="min-w-0 rounded-xl border border-edge" aria-labelledby="team-devices">
               <header class="flex items-center gap-3 border-b border-edge px-4 py-3">
-                <h2 id="team-devices" class="text-base font-medium text-ink">Macs <span class="num ml-1 text-faint">{devices.length}</span></h2>
+                <h2 id="team-devices" class="text-base font-medium text-ink">Macs <span class="num ml-1 text-faint">{devices.length + strangers.length}</span></h2>
               </header>
+              {#if share.error}<p role="alert" class="px-4 py-2 text-sm text-warn" data-share-error>{share.error}</p>{/if}
+              {#if share.membersOffline}<p class="px-4 py-2 text-sm text-faint">The hub could not be reached. Only Macs you already pinned can be changed.</p>{/if}
               {#if hub.orgError}
                 <p role="alert" class="px-4 py-3 text-sm text-warn">{hubReason(hub.orgError)}</p>
               {:else if !hub.org}
                 <p class="px-4 py-3 text-sm text-faint">Loading Macs…</p>
-              {:else if devices.length === 0}
+              {:else if devices.length === 0 && strangers.length === 0}
                 <p class="px-4 py-3 text-sm text-faint">No Mac has joined yet.</p>
               {:else}
                 <ul class="divide-y divide-edge/40">
@@ -941,12 +949,28 @@
                           <span class="num text-ink">{d.freeSlots}</span>
                           <span class="text-sm text-faint">free</span>
                         </span>
+                        {#if memberFor(share.members, d)}
+                          {@const tm = memberFor(share.members, d)!}
+                          <TeammateActions member={tm} onpin={(dir) => (pinning = { id: tm.deviceId, allow: dir === "allow" })} />
+                        {/if}
                         {#if hub.admin && !d.me}
                           <Button size="sm" variant="danger" aria-label="Remove {d.member || d.name} from the team"
                             loading={hub.isBusy(`revoke:${d.name}`)} onclick={() => askRevoke(d.name, d.member || d.name)}>Remove</Button>
                         {/if}
                       </span>
+                      {#if pinning && memberFor(share.members, d)?.deviceId === pinning.id}
+                        <div class="col-span-2 pt-2"><PinConfirm member={memberFor(share.members, d)!} allow={pinning.allow} ondone={() => (pinning = null)} /></div>
+                      {/if}
                       {@render errorLine(`device:${d.name}`, "col-span-2")}
+                    </li>
+                  {/each}
+                  {#each strangers as m (m.deviceId)}
+                    <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5" data-device-pinned={m.deviceId}>
+                      <span class="min-w-0 truncate text-ink">{m.name}</span>
+                      <TeammateActions member={m} onpin={(dir) => (pinning = { id: m.deviceId, allow: dir === "allow" })} />
+                      {#if pinning?.id === m.deviceId}
+                        <div class="col-span-2 pt-2"><PinConfirm member={m} allow={pinning.allow} ondone={() => (pinning = null)} /></div>
+                      {/if}
                     </li>
                   {/each}
                 </ul>

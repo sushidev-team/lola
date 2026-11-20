@@ -79,3 +79,20 @@ export function shareTitle(shared: boolean, attached: number): string {
   if (!shared) return "Share with team";
   return attached > 0 ? `Shared with your team · ${attached} attached` : "Shared with your team";
 }
+
+/** The name the daemon gives a teammate's Mac in `shareMembers` (`Member · device`, or the device alone). */
+export function memberLabel(d: { name: string; member?: string | null }): string {
+  return d.member ? `${d.member} · ${d.name}` : d.name;
+}
+
+/** The sharing entry for one of the hub's Macs, matched by the name the daemon lists it under. */
+export function memberFor(members: readonly ShareMemberInfo[], d: { name: string; member?: string | null }): ShareMemberInfo | undefined {
+  const label = memberLabel(d);
+  return members.find((m) => m.name === label);
+}
+
+/** Teammates with no row among the hub's Macs (the Mac list is not loaded, or does not name them). */
+export function membersWithoutMac(members: readonly ShareMemberInfo[], macs: readonly { name: string; member?: string | null }[]): ShareMemberInfo[] {
+  const known = new Set(macs.map(memberLabel));
+  return members.filter((m) => !known.has(m.name));
+}

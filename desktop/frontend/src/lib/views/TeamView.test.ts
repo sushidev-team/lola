@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 
-const { Status, Board, Org, Claim, Release, Sync, Stats, RevokeDevice, HubProjects, SandboxLoginNeeded } = vi.hoisted(() => ({
+const { Status, Board, Org, Claim, Release, Sync, Stats, RevokeDevice, HubProjects, SandboxLoginNeeded, ShareMembers, ShareTrust, ShareUntrust } = vi.hoisted(() => ({
+  ShareMembers: vi.fn(),
+  ShareTrust: vi.fn(),
+  ShareUntrust: vi.fn(),
   RevokeDevice: vi.fn(),
   HubProjects: vi.fn(),
   SandboxLoginNeeded: vi.fn(),
@@ -17,7 +20,7 @@ const { Status, Board, Org, Claim, Release, Sync, Stats, RevokeDevice, HubProjec
 vi.mock("@bindings/desktop", async (orig) => ({
   ...(await orig<object>()),
   HubService: { Status, Board, Org, Claim, Release, Sync, Stats, RevokeDevice, Join: vi.fn(), Leave: vi.fn(), DefaultDeviceName: vi.fn(), Kinds: vi.fn(),
-    ShareMembers: () => Promise.resolve({ members: [] }), ShareOffered: () => Promise.resolve({ offers: [] }) },
+    ShareMembers, ShareTrust, ShareUntrust, ShareOffered: () => Promise.resolve({ offers: [] }) },
   ConfigService: { HubProjects: () => HubProjects(), SandboxLoginNeeded: (p: string, a: string) => SandboxLoginNeeded(p, a) },
 }));
 
@@ -30,6 +33,7 @@ import { confirm } from "$lib/confirm.svelte";
 import { nav } from "$lib/nav.svelte";
 import { sandboxLogin } from "$lib/sandboxlogin.svelte";
 import { store } from "$lib/store.svelte";
+import { share } from "$lib/share.svelte";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
@@ -66,6 +70,9 @@ beforeEach(() => {
   for (const f of [Status, Board, Org, Claim, Release, Sync, Stats, SandboxLoginNeeded]) f.mockReset();
   Status.mockResolvedValue({ ...joined });
   SandboxLoginNeeded.mockResolvedValue("");
+  ShareMembers.mockReset().mockResolvedValue({ members: [] });
+  ShareTrust.mockReset();
+  ShareUntrust.mockReset();
   Stats.mockRejectedValue(new Error('unknown cmd "hubStats"'));
   HubProjects.mockReset().mockResolvedValue([{ name: "web", hubChores: true }]);
   Board.mockResolvedValue({ fetchedAt: new Date().toISOString(), items: [open1, openMany, blocked, mine, theirs, done, escalated] });
@@ -548,5 +555,95 @@ describe("TeamView", () => {
     await waitFor(() => expect(row("it_many")).not.toBeNull());
     expect(row("it_many").className).toContain("outline-accent");
     expect(hub.focusItem).toBe("");
+  });
+});
+
+// Sharing is decided on each Mac's own row: no separate Teammates list.
+describe("TeamView: sharing on a Mac's row", () => {
+  const bob = { deviceId: "d2", name: "Bob · bobs-mac", fingerprint: "1111 2222 3333 4444", allowed: false, trusted: false };
+  const ada = { deviceId: "d1", name: "Ada · office mini", fingerprint: "aaaa bbbb cccc dddd", allowed: false, trusted: false };
+  const macRow = (id: string) => document.querySelector(`[data-device="${id}"]`) as HTMLElement;
+
+  it("has no Teammates list and puts the sharing buttons on the matching Mac", async () => {
+    ShareMembers.mockResolvedValue({ members: [bob] });
+    render(TeamView);
+    await waitFor(() => expect(macRow("bobs-mac")).not.toBeNull());
+    await waitFor(() => expect(within(macRow("bobs-mac")).getByRole("button", { name: "Allow Bob · bobs-mac to attach to your sessions" })).toBeInTheDocument());
+    expect(screen.queryByRole("heading", { name: /^Teammates/ })).toBeNull();
+    expect(within(macRow("old-mac")).queryByRole("button", { name: /attach/ })).toBeNull();
+    expect(within(macRow("studio-mac")).queryByRole("button")).toBeNull();
+  });
+
+  it("lists a pinned teammate the Mac list does not name in the same section", async () => {
+    ShareMembers.mockResolvedValue({ members: [ada] });
+    render(TeamView);
+    const li = await waitFor(() => {
+      const e = document.querySelector('[data-device-pinned="d1"]') as HTMLElement;
+      expect(e).not.toBeNull();
+      return e;
+    });
+    expect(within(li.closest("section") as HTMLElement).getByRole("heading", { name: /^Macs/ })).toBeInTheDocument();
+    expect(within(li).getByRole("button", { name: "Allow Ada · office mini to attach to your sessions" })).toBeInTheDocument();
+  });
+
+  it("pins only after the person says the fingerprint matches, and sends exactly what they saw", async () => {
+    ShareMembers.mockResolvedValue({ members: [bob] });
+    ShareTrust.mockResolvedValue({ members: [{ ...bob, allowed: true }] });
+    render(TeamView);
+    const btn = await waitFor(() => within(macRow("bobs-mac")).getByRole("button", { name: "Allow Bob · bobs-mac to attach to your sessions" }));
+    await fireEvent.click(btn);
+    const confirm = await waitFor(() => macRow("bobs-mac").querySelector("[data-pin-confirm]") as HTMLElement);
+    expect(within(confirm).getByText("1111 2222 3333 4444")).toBeInTheDocument();
+    const go = macRow("bobs-mac").querySelector("[data-pin-confirm-button]") as HTMLButtonElement;
+    expect(go).toBeDisabled();
+    expect(ShareTrust).not.toHaveBeenCalled();
+    await fireEvent.click(within(confirm).getByRole("checkbox"));
+    await fireEvent.click(go);
+    await waitFor(() => expect(ShareTrust).toHaveBeenCalledWith({ deviceId: "d2", fingerprint: "1111 2222 3333 4444", allow: true, trust: false }));
+    await waitFor(() => expect(macRow("bobs-mac").querySelector("[data-pin-confirm]")).toBeNull());
+  });
+
+  it("voids the comparison when the fingerprint changes under it", async () => {
+    ShareMembers.mockResolvedValue({ members: [bob] });
+    ShareTrust.mockResolvedValue({ members: [{ ...bob, allowed: true }] });
+    render(TeamView);
+    await fireEvent.click(await waitFor(() => within(macRow("bobs-mac")).getByRole("button", { name: "Allow Bob · bobs-mac to attach to your sessions" })));
+    const confirm = await waitFor(() => macRow("bobs-mac").querySelector("[data-pin-confirm]") as HTMLElement);
+    await fireEvent.click(within(confirm).getByRole("checkbox"));
+    const go = macRow("bobs-mac").querySelector("[data-pin-confirm-button]") as HTMLButtonElement;
+    expect(go).toBeEnabled();
+    share.members = [{ ...bob, fingerprint: "ffff ffff ffff ffff" }];
+    await waitFor(() => expect(macRow("bobs-mac").querySelector("[data-pin-changed]")).not.toBeNull());
+    expect(go).toBeDisabled();
+    expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
+    await fireEvent.click(within(confirm).getByRole("checkbox"));
+    await fireEvent.click(go);
+    await waitFor(() => expect(ShareTrust).toHaveBeenCalledWith({ deviceId: "d2", fingerprint: "ffff ffff ffff ffff", allow: true, trust: false }));
+  });
+
+  it("keeps the comparison open and shows the daemon's refusal when the key changed", async () => {
+    ShareMembers.mockResolvedValue({ members: [bob] });
+    ShareTrust.mockRejectedValue(new Error("share: the fingerprint changed since you looked; compare it again"));
+    render(TeamView);
+    await fireEvent.click(await waitFor(() => within(macRow("bobs-mac")).getByRole("button", { name: /Trust Bob · bobs-mac's sessions/ })));
+    const confirm = await waitFor(() => macRow("bobs-mac").querySelector("[data-pin-confirm]") as HTMLElement);
+    await fireEvent.click(within(confirm).getByRole("checkbox"));
+    await fireEvent.click(macRow("bobs-mac").querySelector("[data-pin-confirm-button]") as HTMLElement);
+    expect(await waitFor(() => document.querySelector("[data-share-error]") as HTMLElement)).toHaveTextContent("the fingerprint changed");
+    expect(macRow("bobs-mac").querySelector("[data-pin-confirm]")).not.toBeNull();
+  });
+
+  it("removes one direction, or both", async () => {
+    const pinned = { ...bob, allowed: true, trusted: true };
+    ShareMembers.mockResolvedValue({ members: [pinned] });
+    ShareUntrust.mockResolvedValue({ members: [pinned] });
+    render(TeamView);
+    const row = await waitFor(() => within(macRow("bobs-mac")).getByRole("button", { name: "Bob · bobs-mac may attach to your sessions" }).closest("[data-device]") as HTMLElement);
+    await fireEvent.click(within(row).getByRole("button", { name: "Bob · bobs-mac may attach to your sessions" }));
+    await waitFor(() => expect(ShareUntrust).toHaveBeenLastCalledWith({ deviceId: "d2", allow: true, trust: false }));
+    await fireEvent.click(within(row).getByRole("button", { name: "You trust Bob · bobs-mac's sessions" }));
+    await waitFor(() => expect(ShareUntrust).toHaveBeenLastCalledWith({ deviceId: "d2", allow: false, trust: true }));
+    await fireEvent.click(within(row).getByRole("button", { name: "Remove Bob · bobs-mac" }));
+    await waitFor(() => expect(ShareUntrust).toHaveBeenLastCalledWith({ deviceId: "d2", allow: false, trust: false }));
   });
 });
