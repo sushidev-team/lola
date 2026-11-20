@@ -1226,6 +1226,12 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	if remoteOld != nc.Remote || serves != d.remoteServes.Load() {
 		d.reloadRemote()
 	}
+	// A share keeps the relay open (not idle) whichever way the phone switch goes,
+	// so the loop never sees this as a leave: say the phone set changed, and
+	// relayEntries (which honours the switch) is posted to the hub.
+	if remoteOld.RelayOff != nc.Remote.RelayOff {
+		d.hubRelayDirty()
+	}
 	d.hubRelayNudge()
 	if bctx := d.shutdownCtx; bctx != nil {
 		d.syncHookBridge(bctx)
