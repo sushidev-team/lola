@@ -32,7 +32,7 @@
       case "tab":
         if (r.tab === "projects") {
           if (!r.project) return "projects";
-          if (r.pick === "git") return "git";
+          if (r.pick === "git" || r.pick === "graph") return "git";
           return r.pick === "prs" ? "prPicker" : r.pick === "tickets" ? "ticketPicker" : "projectDetail";
         }
         return r.tab;
@@ -269,16 +269,27 @@
     }
   });
 
-  let swipe: { id: number; startX: number; lastX: number; lastT: number; v: number } | null = null;
+  let swipe: { id: number; startX: number; startY: number; tracking: boolean; lastX: number; lastT: number; v: number } | null = null;
 
   function swipeDown(e: PointerEvent): void {
-    if (!swipeable || e.clientX > MOTION.edgeSwipeStartPt) return;
-    swipe = { id: e.pointerId, startX: e.clientX, lastX: e.clientX, lastT: e.timeStamp, v: 0 };
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    if (!swipeable || !e.isPrimary || e.button !== 0 || e.clientX > MOTION.edgeSwipeStartPt) return;
+    if (e.target instanceof Element && e.target.closest('[role="tablist"], .diff-code, input, textarea')) return;
+    swipe = { id: e.pointerId, startX: e.clientX, startY: e.clientY, tracking: false, lastX: e.clientX, lastT: e.timeStamp, v: 0 };
   }
 
   function swipeMove(e: PointerEvent): void {
     if (!swipe || e.pointerId !== swipe.id) return;
+    const dx = e.clientX - swipe.startX;
+    if (!swipe.tracking) {
+      const dy = Math.abs(e.clientY - swipe.startY);
+      if (Math.max(Math.abs(dx), dy) < 8) return;
+      if (dx <= dy) {
+        swipe = null;
+        return;
+      }
+      swipe.tracking = true;
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    }
     const dt = e.timeStamp - swipe.lastT;
     if (dt >= 8) {
       swipe.v = ((e.clientX - swipe.lastX) / dt) * 1000;
@@ -290,8 +301,9 @@
 
   async function swipeUp(e: PointerEvent): Promise<void> {
     if (!swipe || e.pointerId !== swipe.id) return;
-    const { v } = swipe;
+    const { v, tracking } = swipe;
     swipe = null;
+    if (!tracking) return;
     const w = parked();
     if (x.current / w > MOTION.popFraction || v > MOTION.popVelocity) {
       if (!reduced) await x.set(w);
@@ -299,6 +311,21 @@
     } else {
       x.target = 0;
     }
+  }
+
+  function edgeSwipe(node: HTMLElement) {
+    const cancel = (e: PointerEvent) => {
+      if (swipe?.id !== e.pointerId) return;
+      swipe = null;
+      x.target = 0;
+    };
+    const events = new AbortController();
+    const options = { signal: events.signal };
+    node.addEventListener("pointerdown", swipeDown, options);
+    node.addEventListener("pointermove", swipeMove, options);
+    node.addEventListener("pointerup", swipeUp, options);
+    node.addEventListener("pointercancel", cancel, options);
+    return () => { events.abort(); swipe = null; };
   }
 </script>
 
@@ -329,7 +356,9 @@
       {#if route.name !== "dev" || DEBUG_BUILD}
         {#await screen(screenKey(route)) then m}
           {@const Screen = m.default}
-          <Screen />
+          {#key route.name === "tab" && screenKey(route) === "git" ? route.project : undefined}
+            <Screen />
+          {/key}
         {/await}
       {/if}
     {/snippet}
@@ -345,20 +374,10 @@
       {#if over}
         <div
           class="absolute inset-0 bg-canvas {reduced ? 'layer-fade' : ''}"
+          {@attach edgeSwipe}
           style="transform: translateX({reduced ? 0 : x.current}px)"
         >
           {@render outlet(over)}
-          {#if swipeable}
-            <div
-              class="absolute inset-y-0 left-0 z-10 w-5 touch-none"
-              data-edge-swipe
-              role="presentation"
-              onpointerdown={swipeDown}
-              onpointermove={swipeMove}
-              onpointerup={swipeUp}
-              onpointercancel={swipeUp}
-            ></div>
-          {/if}
         </div>
       {/if}
     </div>

@@ -23,7 +23,7 @@ export type ConnectState =
 
 export type Route =
   | { name: "connect"; state: ConnectState }
-  | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets" | "git"; filter?: InboxFilter }
+  | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets" | "git" | "graph"; filter?: InboxFilter }
   | { name: "session"; id: string; seg: Seg; pane?: string }
   | { name: "dev"; page: "bridge-guard" };
 
@@ -65,7 +65,7 @@ export const CONNECT_STATES: readonly ConnectState[] = [
   "no-camera",
 ];
 const FILTERS: readonly Exclude<InboxFilter, "">[] = ["needs", "working", "review", "done"];
-const PICKS = ["prs", "tickets", "git"] as const;
+const PICKS = ["prs", "tickets", "git", "graph"] as const;
 
 /** Debug-only routes exist everywhere but a production build. */
 const DEBUG_BUILD = import.meta.env.MODE !== "production";
@@ -115,6 +115,7 @@ function parseRoutePart(segs: string[], q: URLSearchParams, ctx: ParseContext): 
       if (!state) return null;
       return ctx.paired ? inbox : { name: "connect", state };
     }
+    case "sessions":
     case "inbox": {
       if (segs.length > 1) return null;
       const raw = q.get("filter");

@@ -1,0 +1,22 @@
+fullnameOverride: argocd-valkey
+auth:
+  enabled: true
+  usersExistingSecret: argocd-valkey-auth
+  aclUsers:
+    default:
+      permissions: "~* &* +@all"
+      passwordKey: redis-password
+# Only an Argo cache. Hub data never goes here; losing this pod is harmless.
+persistence:
+  enabled: false
+extraConfig: |
+  maxmemory 192mb
+  maxmemory-policy allkeys-lru
+resources:
+  requests: {cpu: 50m, memory: 128Mi}
+  limits: {memory: 256Mi}
+networkPolicy:
+  enabled: true
+  allowExternal: false
+  ingressNSMatchLabels:
+    kubernetes.io/metadata.name: argocd

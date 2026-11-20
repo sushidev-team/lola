@@ -18,6 +18,11 @@ func (n *Native) OpenExisting(ctx context.Context, p config.Project, id, branch,
 	if id == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open existing: session id and branch required")
 	}
+	if useAgent {
+		if err := n.prepareProjectSandbox(ctx, p.Name); err != nil {
+			return session.Session{}, err
+		}
+	}
 	dir, err := n.WT.CheckoutExisting(ctx, p, id, branch)
 	if err != nil {
 		return session.Session{}, err

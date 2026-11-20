@@ -11,10 +11,20 @@
 //  - Pure and display only: nothing here reaches the daemon.
 
 import { matchesSearch } from "$lib/search";
-import { BUCKETS, type Bucket, type RowModel } from "./inbox.svelte";
+import { store } from "$lib/store.svelte";
+import { copy } from "./copy";
+import { BUCKETS, inbox, type Bucket, type RowModel } from "./inbox.svelte";
 
 class InboxSearch {
   query = $state("");
+  readonly buckets = $derived(searchBuckets(inbox.buckets, this.query, (project) =>
+    project ? store.displayNameFor(project) : copy.inbox.groupBy.noProject));
+  readonly counts = $derived({
+    needs: this.buckets.needs.length,
+    working: this.buckets.working.length,
+    review: this.buckets.review.length,
+    done: this.buckets.done.length,
+  });
 
   /** True while a non-blank query narrows the list. */
   get active(): boolean {

@@ -331,8 +331,7 @@ body,
    whole list left. A scroller that is meant to move sideways says so with
    `overflow-x-auto`. Unlayered for the same reason as the rule above. */
 .overflow-y-auto:not(.overflow-x-auto),
-.overflow-y-scroll:not(.overflow-x-auto),
-.review-layout {
+.overflow-y-scroll:not(.overflow-x-auto) {
   overflow-x: hidden;
 }
 
@@ -472,6 +471,29 @@ body,
 [data-phone-desk] button.line-gutter::after {
   content: none;
 }
+
+/* Review groups share the session roster's inset, surface and icon treatment. */
+[data-review-list] [data-list-group] {
+  background: var(--color-panel);
+  border: 1px solid var(--color-edge-soft);
+  border-radius: 10px;
+  overflow: clip;
+}
+[data-review-list] section > h2 { padding-inline: var(--spacing-gutter, 16px); padding-top: 1rem; }
+[data-review-list] [data-list-row] { padding-inline: 12px; }
+[data-review-list] [data-list-row] > span:first-child[aria-hidden] {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-edge-soft);
+  border-radius: 8px;
+  background: var(--color-canvas);
+  color: var(--color-subtext);
+}
+[data-review-list] [data-list-row] > span:first-child[aria-hidden] svg { width: 16px; height: 16px; }
+[data-review-list] [data-list-row] .text-body { font-size: var(--text-callout); font-weight: 600; }
+[data-checks-section="failing"] [data-list-row] > :first-child svg { color: var(--color-bad); }
+[data-checks-section="running"] [data-list-row] > :first-child svg { color: var(--color-warn); }
+[data-checks-section="passed"] [data-list-row] > :first-child svg { color: var(--color-good); }
 
 /* The Session screen's root pads for the soft keyboard (spec §4.4). `--kb` is
    written by App.svelte from `installKeyboardInset`; the curve is the iOS

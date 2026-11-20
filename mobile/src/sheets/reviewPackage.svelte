@@ -70,12 +70,14 @@
   detent="large"
   onclose={() => router.close()}
 >
-  <div data-phone-desk class="min-w-0 px-4">
+  {#snippet navigation()}
     {#if status.tabs.length > 1}
-      <div class="pb-3">
+      <div class="shrink-0 border-b border-edge-soft px-4 py-2">
         <SegmentBar segments={status.tabs} value={tab} onchange={(t) => (tab = t)} label="Review sections" />
       </div>
     {/if}
+  {/snippet}
+  <div data-phone-desk class="min-w-0 shrink-0 px-4 pb-4">
     {#await import("$lib/components/session/ReviewWorkspace.svelte") then m}
       {@const Workspace = m.default}
       <Workspace sessionId={reviewWorkspace.session || id} embedded {can} labels={{ verified: copy.reviewPackage.verified, notVerified: copy.reviewPackage.notVerified }} bind:tab onstatus={(s: Status) => (status = s)} />

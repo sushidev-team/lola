@@ -106,6 +106,14 @@ describe('Project Git workspace', () => {
     await waitFor(() => expect(api.BranchAction).toHaveBeenCalledWith(project, '', expect.objectContaining({action:'pull',source:'refs/heads/main',sourceSHA:newSHA})));
     expect(api.Pull).not.toHaveBeenCalled();
   });
+  it('only announces the completed pull when Lola can stash and restore local changes', async () => {
+    api.BranchAction.mockRejectedValueOnce(new Error('commit or stash this checkout’s changes before integrating branches'));
+    await open();
+    const flash = vi.spyOn(store, 'setFlash');
+    await fireEvent.click(screen.getByRole('button', {name:'Pull'}));
+    await waitFor(() => expect(flash).toHaveBeenCalledWith('Branch updated; local changes restored.'));
+    expect(flash).toHaveBeenCalledTimes(1);
+  });
   it.each(['branch has diverged', 'push rejected (non-fast-forward)'])('offers a working Pull changes button after %s', async error => {
     api.BranchAction.mockRejectedValueOnce(new Error(error));
     await open();
@@ -319,6 +327,32 @@ describe('Project Git workspace', () => {
     await refreshRepository();
     await waitFor(() => expect(api.Snapshot.mock.calls.length).toBeGreaterThan(1));
     expect(box('Local').scrollTop).toBe(0);
+  });
+
+  it('reveals the clicked graph branch in Local, including inside collapsed folders', async () => {
+    const branch = { name: 'feat/api/login', fullName: 'refs/heads/feat/api/login', sha: newSHA, remote: false, current: false };
+    const base = snapshot();
+    base.refs.push(branch);
+    api.Snapshot.mockResolvedValue(base);
+    await open();
+    const local = screen.getByRole('region', { name: 'Local' });
+    const box = local.querySelector<HTMLElement>('.section-content')!;
+    await fireEvent.click(within(local).getByRole('button', { name: 'Local branch folder feat/api' }));
+    await fireEvent.click(within(local).getByRole('button', { name: 'Local branch folder feat' }));
+    await fireEvent.click(within(local).getByRole('button', { name: 'Local' }));
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('branch-leaf') && this.dataset.branchRef === branch.fullName) return new DOMRect(0, 400, 200, 20);
+      return new DOMRect(0, 0, 200, 100);
+    });
+
+    const commit = screen.getByRole('button', { name: /Add project workspace,/ });
+    const badge = commit.querySelector(`[data-branch-ref="${branch.fullName}"] .ref-name`)!;
+    await fireEvent.click(badge);
+    expect(commit).toHaveAttribute('aria-pressed', 'true');
+    expect(within(local).getByRole('button', { name: branch.name })).toHaveAttribute('aria-pressed', 'true');
+    expect(box.scrollTop).toBe(360);
+    expect(screen.getByRole('region', { name: 'Remote' }).querySelector('.section-content')!.scrollTop).toBe(0);
+    expect(api.BranchAction).not.toHaveBeenCalled();
   });
 
   it('resizes section pairs by keyboard and pointer, preserves other sections, and restores saved sizes', async () => {

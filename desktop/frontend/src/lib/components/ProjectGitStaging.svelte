@@ -156,6 +156,12 @@
     const ok = await state.act(amend ? 'amend' : 'commit', [], branch, count, head);
     if (ok && state === git) oncommitted();
   }
+  function commitShortcut(event: KeyboardEvent & { currentTarget: HTMLInputElement | HTMLTextAreaElement }) {
+    if (event.key !== 'Enter' || !event.metaKey || event.shiftKey || event.ctrlKey || event.altKey || event.isComposing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) event.currentTarget.form?.requestSubmit();
+  }
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     if (!canCommit) return;
@@ -252,10 +258,10 @@
     <div class="composer-heading"><label for={`${id}-subject`}>Commit message</label><Button size="xs" variant="accent" loading={git.draftingMessage} disabled={!data || !staged.length || conflicts || !!data.operation || !!git.busy || git.draftingMessage} title="Draft a message from staged changes using your AI settings" aria-label="Generate commit message with AI" onclick={() => void git.draftCommitMessage()}><Icon name="sparkles" size={13}/>{git.draftingMessage ? 'Drafting…' : 'AI draft'}</Button></div>
     {#if git.draftError}<p class="draft-error" role="alert">{git.draftError}</p>{/if}
     <div class="subject-field" class:has-reset={!!data?.mergeMessage && data.operation === 'merge'}>
-    <input id={`${id}-subject`} aria-label="Commit subject" placeholder={git.amendLoading ? 'Loading last commit…' : 'Summary'} bind:value={git.subject} disabled={!!git.busy || !data} maxlength="1000" />
+    <input id={`${id}-subject`} aria-label="Commit subject" placeholder={git.amendLoading ? 'Loading last commit…' : 'Summary'} bind:value={git.subject} onkeydown={commitShortcut} disabled={!!git.busy || !data} maxlength="1000" />
       {#if data?.operation === 'merge' && data.mergeMessage}<Button icon size="xs" class="reset-merge-message" aria-label="Reset merge message" title="Reset to default merge message" disabled={!!git.busy} onclick={() => git.resetMergeMessage()}><Icon name="rotate-ccw" size={13}/></Button>{/if}
     </div>
-    <textarea aria-label="Commit body" placeholder="Description (optional)" rows="3" bind:value={git.body} disabled={!!git.busy || !data} maxlength="19000"></textarea>
+    <textarea aria-label="Commit body" placeholder="Description (optional)" rows="3" bind:value={git.body} onkeydown={commitShortcut} disabled={!!git.busy || !data} maxlength="19000"></textarea>
     <div class="commit-options"><label class="amend-option"><Checkbox checked={git.amend} onchange={(event) => void git.setAmend(event.currentTarget.checked)} disabled={!!git.busy || !!data?.operation || !data?.head} /><span>Amend last commit</span>{#if git.amend && git.amendHead}<code>{git.amendHead.slice(0, 8)}</code>{/if}</label><Button size="xs" icon class="signing-icon" aria-label={signingLabel} {...signingTooltip}><Icon name={data?.signing?.enabled ? 'shield-check' : 'info'} size={14} /></Button></div>
     {#if amendStale}<p class="conflict-note" role="alert">HEAD changed since you selected Amend. Turn Amend off, review the last commit, then enable it again.</p>{/if}
     <Button block variant="primary" loading={git.busy === 'commit' || git.busy === 'amend' || git.busy === 'check-amend' || (git.busy === 'continue' && data?.operation === 'merge')} disabled={!canCommit} type="submit"><Icon name="check" size={14} />{data?.operation === 'merge' ? 'Complete merge' : `${git.amend ? 'Amend' : 'Commit'} ${staged.length ? `${staged.length} ${staged.length === 1 ? 'file' : 'files'}` : 'staged changes'}`}</Button>

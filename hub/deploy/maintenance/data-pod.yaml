@@ -1,0 +1,38 @@
+# Manual backup/restore only, while the hub Deployment is scaled to zero.
+# This directory is deliberately outside all Argo Application paths.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lola-hub-data-maintenance
+  namespace: lola-hub
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    # Avoid recursively widening the existing 0600 store/token files.
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: data
+      image: busybox:1.37.0
+      command: [sleep, "86400"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {cpu: 100m, memory: 64Mi}
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: lola-hub-data

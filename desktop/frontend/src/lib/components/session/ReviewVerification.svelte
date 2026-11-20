@@ -109,7 +109,7 @@
   }
 </script>
 
-<section class="verification" class:slim={!phone && !checks.length && !editing && !error && !uncertain} aria-label="Independent verification" bind:this={root}>
+<section class="verification" class:bare class:slim={!phone && !checks.length && !editing && !error && !uncertain} aria-label="Independent verification" bind:this={root}>
   {#if !bare}<header class="verification-heading">
     {#if phone && labels}<div><h3 tabindex="-1" aria-label="Independent verification"><Icon name="shield-check" size={15}/>{verdict ? labels.verified : labels.notVerified}</h3></div>
     {:else}<div class="title-row"><h3 tabindex="-1" aria-label="Independent verification"><Icon name="shield-check" size={14}/>Tests</h3>{#if freshness === 'stale' && !quiet}<span class="outdated stale-chip">Older revision</span>{/if}</div>{/if}
@@ -162,7 +162,7 @@
       </form>
     {/if}
   {:else if !loading && !error && phone && !checks.length}
-    <div class="phone-setup" data-phone-setup><span class="text-subtext" style="font-size:15px;line-height:20px">No checks</span>{#if canRun}<button type="button" class="text-accent" style="font-size:15px;font-weight:400" data-setup-check disabled={active} onclick={edit}>Add check</button>{/if}</div>
+    <div class="phone-setup" data-phone-setup><span class="checks-empty"><Icon name="shield-check" size={16}/>No independent checks yet</span>{#if canRun}<button type="button" class="text-accent" style="font-size:15px;font-weight:400" data-setup-check disabled={active} onclick={edit}>Add check</button>{/if}</div>
   {:else if !loading && !error}
     <div class="setup-row"><span class="explanation">{checks.length ? '' : 'No checks yet.'}</span>{#if canRun}<Button size="xs" variant="secondary" data-setup-check disabled={active} onclick={edit}>Set up check</Button>{/if}</div>
   {/if}
@@ -217,6 +217,8 @@
   .authorization-facts { display:grid; gap:8px; font-size:12px; line-height:18px; }
   .authorization-facts > div { display:grid; grid-template-columns:44px minmax(0,1fr); gap:12px; }
   dt { color:var(--color-ink-2); } dd { overflow-wrap:anywhere; min-width:0; }
+  .verification.bare { margin:0; padding:0; border:0; border-radius:0; }
+  .checks-empty { display:inline-flex; align-items:center; gap:8px; color:var(--color-subtext); font-size:var(--text-subhead); }
   .phone-setup { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:44px; }
   .phone-setup button { min-height:44px; min-width:44px; padding-left:12px; }
   .phone-setup button:disabled { opacity:.4; }

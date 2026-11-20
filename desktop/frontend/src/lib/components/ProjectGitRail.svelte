@@ -21,6 +21,10 @@
     return [];
   }
   let closed = $state(readClosed());
+  export function openSection(name: string) {
+    const index = sections.findIndex(section => section.name === name);
+    if (closed.includes(index)) toggle(index);
+  }
   function toggle(index: number) {
     cancelDrag();
     closed = closed.includes(index) ? closed.filter(i => i !== index) : [...closed, index];

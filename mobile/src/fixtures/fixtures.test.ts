@@ -9,7 +9,7 @@ const all = async (): Promise<Fixture[]> => Promise.all(FIXTURE_NAMES.map(loadFi
 
 describe("fixture registry", () => {
   it("names every fixture of the spec and each file carries its own name", async () => {
-    expect(FIXTURE_NAMES).toHaveLength(17);
+    expect(FIXTURE_NAMES).toHaveLength(18);
     for (const name of FIXTURE_NAMES) expect((await loadFixture(name)).name).toBe(name);
   });
 
@@ -30,6 +30,7 @@ describe("fixture registry", () => {
     expect(await fixtureFor("/session/s4/changes")).toBe("diff");
     expect(await fixtureFor("/settings")).toBe("settings");
     expect(await fixtureFor("/inbox")).toBe("busy");
+    expect(await fixtureFor("/projects/lola/graph")).toBe("graph");
     expect(await fixtureFor("/nowhere")).toBeNull();
   });
 

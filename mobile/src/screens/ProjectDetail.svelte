@@ -6,6 +6,7 @@
   import LargeTitle from "@mobile/lib/components/LargeTitle.svelte";
   import ListGroup from "@mobile/lib/components/ListGroup.svelte";
   import ListRow from "@mobile/lib/components/ListRow.svelte";
+  import ProjectSections from "@mobile/lib/components/ProjectSections.svelte";
   import SectionHeader from "@mobile/lib/components/SectionHeader.svelte";
   import InboxRow from "@mobile/lib/components/InboxRow.svelte";
   import StatusChip from "@mobile/lib/components/StatusChip.svelte";
@@ -97,6 +98,10 @@
 <div class="flex h-full min-h-0 flex-col bg-canvas">
   <LargeTitle title={title} back={{ label: copy.projects.back, onclick: () => router.back() }} />
 
+  {#if project?.pathOk && can("projectGit")}
+    <ProjectSections project={name} value="sessions" />
+  {/if}
+
   <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto overscroll-contain pb-4">
     {#if !project}
       <p class="px-8 py-12 text-center text-callout text-faint">
@@ -126,23 +131,6 @@
         </div>
       {/if}
 
-      <ListGroup>
-        <ListRow label={copy.projects.rows.agent} value={agentName} />
-        {#if project.defaultBranch}<ListRow label={copy.projects.rows.base} value={project.defaultBranch} />{/if}
-      </ListGroup>
-
-      <!-- The Mac runs git with its own credentials; the phone only asks (spec: docs/mobile/01 §8.2). -->
-      {#if project.pathOk && can("projectGit")}
-        <ListGroup>
-          <ListRow
-            label={copy.git.row}
-            icon="git-branch"
-            chevron
-            onclick={() => router.replace({ name: "tab", tab: "projects", project: name, pick: "git" })}
-          />
-        </ListGroup>
-      {/if}
-
       {#if navActions.length > 0}
         <ListGroup>
           {#each navActions as a (a.id)}
@@ -152,20 +140,6 @@
               icon={NAV_ICON[a.id]}
               chevron
               disabled={!a.enabled || runner.busy !== ""}
-              onclick={() => act(a.id)}
-            />
-          {/each}
-        </ListGroup>
-      {/if}
-
-      {#if nowActions.length > 0}
-        <ListGroup>
-          {#each nowActions as a (a.id)}
-            <ListRow
-              label={a.label}
-              detail={!a.enabled ? a.hint : undefined}
-              value={runner.busy === a.id ? "…" : undefined}
-                            disabled={!a.enabled || runner.busy !== ""}
               onclick={() => act(a.id)}
             />
           {/each}
@@ -192,6 +166,25 @@
           </div>
         {/if}
       {/if}
+      <ListGroup>
+        <ListRow label={copy.projects.rows.agent} value={agentName} />
+        {#if project.defaultBranch}<ListRow label={copy.projects.rows.base} value={project.defaultBranch} />{/if}
+      </ListGroup>
+
+      {#if nowActions.length > 0}
+        <ListGroup>
+          {#each nowActions as a (a.id)}
+            <ListRow
+              label={a.label}
+              detail={!a.enabled ? a.hint : undefined}
+              value={runner.busy === a.id ? "…" : undefined}
+              disabled={!a.enabled || runner.busy !== ""}
+              onclick={() => act(a.id)}
+            />
+          {/each}
+        </ListGroup>
+      {/if}
+
     {/if}
   </div>
 </div>

@@ -435,9 +435,13 @@
 
   $effect(() => { saveSectionFilters(project, sectionFilters); });
 
-  function chooseCommit(sha: string, event?: MouseEvent) {
-    branchJump++; focusedBranch = ''; peekPath = '';
-    selected = selectCommits(selected, sha, !!(event?.metaKey || event?.ctrlKey));
+  function chooseCommit(sha: string, event: MouseEvent) {
+    branchJump++; peekPath = '';
+    selected = selectCommits(selected, sha, event.metaKey || event.ctrlKey);
+    const badge = event.target instanceof Element ? event.target.closest<HTMLElement>('.ref-label[data-branch-ref]') : null;
+    const local = badge && selected.includes(sha) ? filteredLocal.find(branch => branch.fullName === badge.dataset.branchRef) : undefined;
+    focusedBranch = local?.fullName ?? '';
+    if (local) void revealLocalBranch(local);
     area = selected.length ? 'commit' : '';
     diffOpen = false;
     path = ''; activeFile = '';
@@ -516,9 +520,28 @@
   });
   let historyLoad: Promise<void> = Promise.resolve();
   const drawn = new WeakSet<object>();
+  let rail = $state<HTMLElement>();
+  let railSections: ProjectGitRail;
+  function scrollRailRow(row: HTMLElement) {
+    const box = row.closest<HTMLElement>('.section-content');
+    if (!box) return;
+    const outer = box.getBoundingClientRect(), inner = row.getBoundingClientRect();
+    if (inner.top < outer.top || inner.bottom > outer.bottom) box.scrollTop += inner.top - outer.top - (outer.height - inner.height) / 2;
+  }
+  async function revealLocalBranch(branch: GitRef) {
+    railSections.openSection('Local');
+    animatedFolder = '';
+    const parts = branch.name.split('/');
+    const next = new Set(collapsedFolders);
+    for (let i = 1; i < parts.length; i++) next.delete(folderKey('local', parts.slice(0, i).join('/')));
+    collapsedFolders = next;
+    await tick();
+    if (focusedBranch !== branch.fullName || !rail) return;
+    const row = [...rail.querySelectorAll<HTMLElement>('.branch-leaf')].find(row => row.dataset.branchRef === branch.fullName);
+    if (row) scrollRailRow(row);
+  }
   // Opening a repository (or switching checkout) brings the active rows of each
   // rail section into view; later refreshes leave the person's scroll alone.
-  let rail = $state<HTMLElement>();
   let railRevealed: ProjectGitState | undefined, railWasOpen = false;
   $effect(() => {
     const state = git, opened = showRail && !railWasOpen;
@@ -526,14 +549,11 @@
     if (!data || !rail || (railRevealed === state && !opened)) return;
     railRevealed = state;
     const upstream = data.upstream ? `refs/remotes/${data.upstream.replace(/^refs\/remotes\//, '')}` : '';
-    const rows = [...rail.querySelectorAll<HTMLElement>('.current-branch, .worktree-row[aria-pressed="true"]')];
+    const rows = [...rail.querySelectorAll<HTMLElement>('.worktree-row[aria-pressed="true"]')];
+    const local = rail.querySelector<HTMLElement>('.branch-leaf[data-branch-ref^="refs/heads/"][aria-pressed="true"]') ?? rail.querySelector<HTMLElement>('.current-branch');
+    if (local) rows.push(local);
     for (const row of rail.querySelectorAll<HTMLElement>('.branch-leaf[data-branch-ref]')) if (upstream && row.dataset.branchRef === upstream) rows.push(row);
-    for (const row of rows) {
-      const box = row.closest<HTMLElement>('.section-content');
-      if (!box) continue;
-      const outer = box.getBoundingClientRect(), inner = row.getBoundingClientRect();
-      if (inner.top < outer.top || inner.bottom > outer.bottom) box.scrollTop += inner.top - outer.top - (outer.height - inner.height) / 2;
-    }
+    rows.forEach(scrollRailRow);
   });
   let branchJump = 0;
   let focusedBranch = $state('');
@@ -570,7 +590,13 @@
 
   function branchDescription(branch: GitRef) { return `${branch.remote ? 'Remote' : 'Local'} branch: ${branch.name}${branch.current ? ' · active checkout' : hasCheckout(branch) ? ' · checked out in a worktree' : ''}${!branch.remote ? branch.upstream ? ` · tracks ${branch.upstream.replace('refs/remotes/','')} · ${branch.ahead ?? 0} ahead, ${branch.behind ?? 0} behind` : ' · no upstream configured' : ''}`; }
   function folderKey(scope: string, path: string) { return JSON.stringify([project, worktree, scope, path]); }
+  // Graph navigation needs the expanded folder's final height before scrolling.
+  let animatedFolder = '';
+  function folderSlide(node: HTMLElement, key: string) {
+    return key === animatedFolder ? disclosureSlide(node) : { duration: 0 };
+  }
   function toggleFolder(key: string) {
+    animatedFolder = key;
     const next = new Set(collapsedFolders);
     if (next.has(key)) next.delete(key); else next.add(key);
     collapsedFolders = next;
@@ -602,7 +628,7 @@
       {@const expanded = !collapsedFolders.has(key)}
       {@const containsSelection = ref.startsWith(`${scope === 'local' ? 'refs/heads/' : 'refs/remotes/'}${node.path}/`)}
       <Button block class={`rail-row branch-folder ${containsSelection ? 'contains-selection' : ''}`} style={`padding-left:${7 + Math.min(depth, 8) * 13}px`} aria-label={`${scope === 'local' ? 'Local' : 'Remote'} branch folder ${node.path}`} aria-expanded={expanded} title={node.path} onclick={() => toggleFolder(key)}><Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} /><Icon name="folder" size={14} /><span class="truncate">{node.name}</span><span class="rail-count">{node.count}</span></Button>
-      {#if expanded}<div transition:disclosureSlide>{@render branchNodes(node.children, scope, depth + 1)}</div>{/if}
+      {#if expanded}<div transition:folderSlide={key}>{@render branchNodes(node.children, scope, depth + 1)}</div>{/if}
     {:else}
       {@const branch = node.branch}
       <div class="rail-entry" class:has-pr={prsFor(branch).length > 0}>
@@ -701,7 +727,7 @@
           {#each filteredStashes as stash (stash.sha)}<div class="rail-entry"><Button block class="rail-row stash-row" title={stash.subject} onclick={(event) => gitActions.openStash(stash, event)} oncontextmenu={(event) => gitActions.openStash(stash, event)}><Icon name="archive" size={14} /><span class="truncate">{stash.subject}</span><small>{stash.selector.replace('stash@', '')}</small></Button><Button icon size="xs" class="rail-more" aria-label={`Actions for stash ${stash.selector}`} title="Stash actions" aria-haspopup="menu" onclick={(event) => gitActions.openStash(stash,event)}><Icon name="ellipsis-vertical" size={14}/></Button></div>{/each}
           {#if initialLoading || (data && git.stashesState === 'loading')}{@render loadingRailRows(1)}{:else if data && !filteredStashes.length}<p class="rail-empty">{git.stashesState !== 'ready' ? 'Stashes unavailable' : filterActive(sectionFilters.stashes) ? 'No stashes match these filters' : 'No saved stashes'}</p>{/if}
       {/snippet}
-      <ProjectGitRail sections={[
+      <ProjectGitRail bind:this={railSections} sections={[
         { name: 'Local', heading: localHeading, content: localContent, controls: localControls },
         { name: 'Remote', heading: remoteHeading, content: remoteContent, controls: remoteControls },
         { name: 'Worktrees', heading: worktreesHeading, content: worktreesContent, controls: worktreesControls },

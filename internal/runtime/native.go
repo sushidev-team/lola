@@ -404,7 +404,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	}
 	// Before any worktree exists: a sandbox that cannot start (no docker, no
 	// image) refuses the spawn outright rather than leaving a rollback behind.
-	if err := n.prepareSandbox(ctx, p.Name, n.sandboxProject(p.Name) != nil); err != nil {
+	if err := n.prepareProjectSandbox(ctx, p.Name); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s: %w", issue.Identifier, err)
 	}
 	if p.IsStack() {
@@ -786,9 +786,6 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 		return nil, rb("write env", err)
 	}
 	n.recordBaseline(ctx, dir, id)
-	if err := n.prepareSandbox(ctx, p.Name, n.sandboxProject(p.Name) != nil); err != nil {
-		return nil, rb("prepare sandbox", err)
-	}
 	n.trustAgentDir(p.Name, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(p.Name, id, kind, false)); err != nil {
 		if n.Tmux.Has(ctx, id) {
@@ -813,6 +810,9 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 	}
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open pr agent: session id and branch required")
+	}
+	if err := n.prepareProjectSandbox(ctx, p.Name); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: open pr agent %s: %w", sessionID, err)
 	}
 	dir, err := n.WT.CheckoutTracking(ctx, p, sessionID, branch)
 	if err != nil {
@@ -849,6 +849,9 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 	}
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open manual agent: session id and branch required")
+	}
+	if err := n.prepareProjectSandbox(ctx, p.Name); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: open manual agent %s: %w", sessionID, err)
 	}
 	dir, err := n.WT.CreateFrom(ctx, p, sessionID, branch, base)
 	if err != nil {

@@ -149,8 +149,8 @@
   }
 </script>
 
-<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto]" data-review-segment>
-  <div class="min-h-0 min-w-0 overflow-y-auto overscroll-contain" use:diffRowTap>
+<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto]" data-review-segment data-review-list>
+  <div class="review-scroll min-h-0 min-w-0 overflow-y-auto overscroll-y-contain pb-4" use:diffRowTap>
     {#if session}
       <div class="min-w-0 px-4">
         <BeforeMerge {session} reviewLayout {can} hideMerge heading={false} onunknown={(u) => (unknown = u)} {onfacts} />
@@ -160,13 +160,13 @@
       <div class="min-w-0" data-review-checks>
         <ListGroup header={copy.session.groups.checks}>
           {#if hasPr}
-            <ListRow label={copy.session.checks.row} icon="list-checks" value={ciValue || undefined} chevron onclick={openChecks} />
+            <ListRow label={copy.session.checks.row} icon="list-checks" detail={ciValue || undefined} chevron onclick={openChecks} />
           {/if}
           {#if local.length > 0}
             <ListRow
               label={copy.session.checks.local}
               icon="circle-check"
-              value={fill(copy.session.checks.localValue, { p: local.filter((c) => c.state === "pass").length, n: local.length })}
+              detail={fill(copy.session.checks.localValue, { p: local.filter((c) => c.state === "pass").length, n: local.length })}
               chevron
               onclick={openChecks}
             />
@@ -181,20 +181,20 @@
             <ListRow
               label={copy.session.agentReview}
               icon="shield-check"
-              value={reviewValue}
+              detail={reviewValue}
               chevron={offersAgentReview && !session?.reviewRunning}
               disabled={starting}
               onclick={offersAgentReview && !session?.reviewRunning ? startReview : undefined}
             />
           {/if}
           {#if prOpen || packages > 0}
-            <ListRow label={copy.session.material.row} icon="package" value={materialValue} chevron onclick={() => router.open("reviewPackage")} />
+            <ListRow label={copy.session.material.row} icon="package" detail={materialValue} chevron onclick={() => router.open("reviewPackage")} />
           {/if}
           {#if offersChanges}
             <ListRow
               label={copy.session.files}
               icon="file-diff"
-              value={stat && stat.files > 0 ? `+${stat.add} −${stat.del}` : undefined}
+              detail={stat && stat.files > 0 ? `+${stat.add} −${stat.del}` : undefined}
               chevron
               onclick={() => router.replace({ name: "session", id, seg: "changes" })}
             />
@@ -222,13 +222,21 @@
     {#if redCi}
       <p class="px-4 pb-2 text-[13px] leading-[18px]" style="color: var(--color-bad)" data-ci-failed>{ciLine}</p>
     {/if}
-    <div class="flex items-center gap-2 px-4">
+    <div class="flex flex-wrap items-center gap-2 px-4">
       {#if drafts > 0}
         <TouchButton variant="secondary" class="flex-1 justify-center!" onclick={() => router.open("feedback")}>
           {fill(copy.session.reviewBar.feedback, { n: drafts })}
         </TouchButton>
       {/if}
       {#if redCi}
+        <button
+          type="button"
+          class="inline-flex min-h-11 items-center justify-center rounded-lg px-2 text-subhead text-subtext"
+          data-merge-anyway
+          onclick={() => router.open("merge")}
+        >
+          {copy.session.reviewBar.mergeAnyway}
+        </button>
         <TouchButton variant="primary" class="flex-1 justify-center!" onclick={openChecks}>
           {copy.session.reviewBar.seeChecks}
         </TouchButton>
@@ -244,25 +252,12 @@
         </TouchButton>
       {/if}
     </div>
-    {#if redCi}
-      <button
-        type="button"
-        class="mx-auto mt-1 flex h-11 items-center justify-center px-4 text-[15px] text-accent"
-        data-merge-anyway
-        onclick={() => router.open("merge")}
-      >
-        {copy.session.reviewBar.mergeAnyway}
-      </button>
-    {/if}
   </div>
 </div>
 
 <style>
-  .review-bar {
-    background: color-mix(in srgb, var(--color-canvas) 80%, transparent);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-  }
+  .review-scroll { touch-action:pan-y pinch-zoom; overscroll-behavior-x:none; }
+  .review-bar { background:var(--color-canvas); }
   [data-review-segment] :global(.diff-row) {
     min-height: 28px;
     line-height: 28px;

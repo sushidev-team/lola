@@ -251,6 +251,11 @@ func (n *Native) sandboxLolaPath() string {
 // invisible to lola, so it must not start at all.
 const sandboxHooklessGuard = "echo 'lola: no linux lola is available for the sandbox hooks (is docker running? see lola doctor)' >&2; exit 1"
 
+// Check sandbox prerequisites before creating or checking out an agent branch.
+func (n *Native) prepareProjectSandbox(ctx context.Context, project string) error {
+	return n.prepareSandbox(ctx, project, n.sandboxProject(project) != nil)
+}
+
 // prepareSandbox runs before a sandboxed launch: it makes sure the linux lola
 // for the hooks exists. A host launch passes through.
 func (n *Native) prepareSandbox(ctx context.Context, project string, sandboxed bool) error {

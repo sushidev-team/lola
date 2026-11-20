@@ -189,10 +189,7 @@
 
   /* --- Transcript rhythm: one agent voice, 24pt between turns ------------------------------- */
   :global([data-phone-desk] [data-conversation] .cv-result) {
-    padding: 0;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
+    /* The shared card padding offsets the summary's negative margins and aligns it with the receipt. */
     box-shadow: none;
   }
   :global([data-phone-desk] [data-conversation] .cv-result [data-rich]),
@@ -211,12 +208,16 @@
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    width: 100%;
+    width: fit-content;
+    max-width: 80%;
+    margin-bottom: 12px;
+  }
+  :global([data-phone-desk] [data-conversation] .cv-person > [data-row]) {
     max-width: 100%;
-    margin-bottom: 0;
+    margin-inline: 0;
+    padding-inline: 0;
   }
   :global([data-phone-desk] [data-conversation] .cv-user-message) {
-    max-width: 80%;
     min-width: 0;
     border: 0;
     border-radius: 18px;

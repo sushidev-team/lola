@@ -1,0 +1,24 @@
+fullnameOverride: metrics-server
+replicas: 2
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+# Use cert-manager for API-server -> Metrics Server trust instead of the
+# chart's default insecureSkipTLSVerify. The CA bundle is injected by cainjector.
+apiService:
+  insecureSkipTLSVerify: false
+tls:
+  type: cert-manager
+# Kubelet serving certificates are verified using the cluster CA.
+args:
+  - --kubelet-certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+resources:
+  requests: {cpu: 100m, memory: 200Mi}
+  limits: {memory: 384Mi}
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: metrics-server

@@ -33,16 +33,16 @@ describe("InboxRow", () => {
     expect(router.top).toMatchObject({ name: "session", id: "r", seg: "review" });
   });
 
-  it("leads every row with a status dot, and says the state in its composite label, not its meta line", () => {
+  it("uses the desktop roster mark, and says the state in its composite label, not its meta line", () => {
     const { container } = render(InboxRow, { props: { model: model(), projectLabel: "Nori App", onopen: () => {} } });
-    expect(container.querySelector("span.rounded-full")).not.toBeNull();
+    expect(container.querySelector('[data-state-badge="working"]')).not.toBeNull();
     expect(screen.queryByText("Working")).toBeNull();
     expect(screen.getByRole("button").getAttribute("aria-label")).toMatch(/^Working, Do it, Nori App /);
   });
 
-  it("truncates the title to one line", () => {
+  it("allows two lines for the session title", () => {
     render(InboxRow, { props: { model: model(), projectLabel: "P", onopen: () => {} } });
-    expect(screen.getByText("Do it").className).toContain("truncate");
+    expect(screen.getByText("Do it").className).toContain("line-clamp-2");
   });
 
   it("shows the queue place and says it in the composite label", () => {

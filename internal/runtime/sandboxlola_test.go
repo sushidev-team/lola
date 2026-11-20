@@ -256,3 +256,20 @@ func TestSandboxEnvCredentialsAndIdentity(t *testing.T) {
 		t.Errorf("use_api_key did not pass the env key:\n%s", env)
 	}
 }
+
+func TestHubAgentSandboxFailurePrecedesWorktreeCreation(t *testing.T) {
+	f := sandboxFixture(t)
+	f.n.Cfg.Sandbox.LolaBin = ""
+	fd := &fakeDocker{fail: map[string]error{"pull": context.DeadlineExceeded}}
+	f.n.SandboxLola = &SandboxLola{Home: t.TempDir(), Run: fd.run}
+	for _, branch := range []string{"lola/hub-advisories-20261120-0000", "lola/hub-advisories-20261120-0010"} {
+		id := ManualSessionID(f.p.Name, branch)
+		_, err := f.n.OpenManualAgent(context.Background(), f.p, id, branch, "", "apply advisories", "")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("OpenManualAgent: %v", err)
+		}
+	}
+	if calls := loggedArgs(t, f.gitLog); calls != "" {
+		t.Fatalf("failed sandbox launches touched git:\n%s", calls)
+	}
+}

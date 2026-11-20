@@ -80,8 +80,7 @@
         onclick={() => go(tab)}
       >
         <span class="relative flex">
-          <!-- The inbox tray stays the outline glyph when selected, matching the other tabs. -->
-          <Icon filled={active && tab !== "inbox"} size={26} />
+          <Icon filled={active} size={26} />
           {#if tab === "inbox" && needs > 0}
             <!-- An 18px count circle with a 2px crust ring, its centre 10px right of and its top 6px above the
                  glyph's top-right, so it never covers more than a corner. `on-bad` is the measured
