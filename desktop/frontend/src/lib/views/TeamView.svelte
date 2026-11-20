@@ -112,7 +112,10 @@
   const sections = $derived(boardSections(hub.items));
   const needs = $derived(hub.board ? needsYou(hub.items, st, now) : []);
   const devices = $derived(hub.org?.devices ?? []);
-  const strangers = $derived(membersWithoutMac(share.members, devices));
+  /** The Macs the hub listed; none while its read fails, so a stale list never stands in for it. */
+  const macs = $derived(hub.orgError ? [] : devices);
+  // Pinned teammates stay on the list (and removable) whether or not the Mac list loaded.
+  const strangers = $derived(membersWithoutMac(share.members, macs));
   /** The Mac and direction being pinned, waiting for the person's fingerprint comparison. */
   let pinning = $state<{ id: string; allow: boolean } | null>(null);
   const online = $derived(onlineCount(devices, now));
@@ -916,7 +919,7 @@
 
             <section class="min-w-0 rounded-xl border border-edge" aria-labelledby="team-devices">
               <header class="flex items-center gap-3 border-b border-edge px-4 py-3">
-                <h2 id="team-devices" class="text-base font-medium text-ink">Macs <span class="num ml-1 text-faint">{devices.length + strangers.length}</span></h2>
+                <h2 id="team-devices" class="text-base font-medium text-ink">Macs <span class="num ml-1 text-faint">{macs.length + strangers.length}</span></h2>
               </header>
               {#if share.error}<p role="alert" class="px-4 py-2 text-sm text-warn" data-share-error>{share.error}</p>{/if}
               {#if share.membersOffline}<p class="px-4 py-2 text-sm text-faint">The hub could not be reached. Only Macs you already pinned can be changed.</p>{/if}
@@ -926,9 +929,10 @@
                 <p class="px-4 py-3 text-sm text-faint">Loading Macs…</p>
               {:else if devices.length === 0 && strangers.length === 0}
                 <p class="px-4 py-3 text-sm text-faint">No Mac has joined yet.</p>
-              {:else}
+              {/if}
+              {#if macs.length > 0 || strangers.length > 0}
                 <ul class="divide-y divide-edge/40">
-                  {#each devices as d (d.name)}
+                  {#each macs as d (d.name)}
                     {@const up = deviceOnline(d, now)}
                     <li class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5" data-device={d.name}>
                       <span class="grid min-w-0 gap-0.5">

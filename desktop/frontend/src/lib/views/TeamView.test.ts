@@ -586,6 +586,22 @@ describe("TeamView: sharing on a Mac's row", () => {
     expect(within(li).getByRole("button", { name: "Allow Ada · office mini to attach to your sessions" })).toBeInTheDocument();
   });
 
+  it("keeps pinned teammates removable while the Mac list fails or has not loaded", async () => {
+    const pinned = { ...bob, allowed: true };
+    ShareMembers.mockResolvedValue({ members: [pinned] });
+    ShareUntrust.mockResolvedValue({ members: [pinned] });
+    Org.mockReset().mockRejectedValue(new Error("hub unreachable"));
+    render(TeamView);
+    const li = await waitFor(() => {
+      const e = document.querySelector('[data-device-pinned="d2"]') as HTMLElement;
+      expect(e).not.toBeNull();
+      return e;
+    });
+    expect(document.querySelector("[data-device]")).toBeNull();
+    await fireEvent.click(within(li).getByRole("button", { name: "Remove Bob · bobs-mac" }));
+    await waitFor(() => expect(ShareUntrust).toHaveBeenLastCalledWith({ deviceId: "d2", allow: false, trust: false }));
+  });
+
   it("pins only after the person says the fingerprint matches, and sends exactly what they saw", async () => {
     ShareMembers.mockResolvedValue({ members: [bob] });
     ShareTrust.mockResolvedValue({ members: [{ ...bob, allowed: true }] });
