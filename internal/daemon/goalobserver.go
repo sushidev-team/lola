@@ -17,6 +17,9 @@ import (
 func (d *Daemon) observeGoalAgent(ctx context.Context, s session.Session, alive bool, activity time.Time) bool {
 	act := attention.ActivityUnknown
 	question := false
+	if !alive {
+		d.noteKeyAgent(ctx, s, false)
+	}
 	if alive && d.paneTail != nil {
 		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 		text, err := d.paneTail(cctx, paneTarget(s), observePaneLines)
@@ -25,6 +28,7 @@ func (d *Daemon) observeGoalAgent(ctx context.Context, s session.Session, alive 
 			k := agent.Parse(s.Agent)
 			act = attention.Classify(text, k)
 			_, question = attention.Parse(text, k)
+			d.noteKeyAgent(ctx, s, attention.KeyAgentLocked(text))
 		}
 	}
 	_, ok := d.sessions.Update(s.ID, func(cur *session.Session) bool {
