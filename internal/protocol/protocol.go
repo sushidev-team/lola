@@ -444,6 +444,8 @@ type SessionApp struct {
 	Delivery string `json:"delivery,omitempty"` // this app's delivery axis (state vocabulary)
 	// Touched reports local changes against the base with no PR yet.
 	Touched bool `json:"touched,omitempty"`
+	// DevURLs are addresses advertised by dev tabs launched in this app’s worktree.
+	DevURLs []string `json:"devUrls,omitempty"`
 	// Ports is this app's own port lease (its [[project]].port_range).
 	Ports []int `json:"ports,omitempty"`
 }

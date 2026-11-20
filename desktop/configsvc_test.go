@@ -131,17 +131,17 @@ func TestSaveAISettingsWithDefaultSandboxImage(t *testing.T) {
 }
 
 func TestEnvRoundTrip(t *testing.T) {
-	lines := []string{"A=1", "B=two=with=eq", "C="}
+	lines := []string{"A=1", "B=two=with=eq", "C=", "URL=http://localhost:$LOLA_PORT/${LOLA_PORT_2}x"}
 	m, err := linesToEnv(lines)
 	if err != nil {
 		t.Fatalf("linesToEnv: %v", err)
 	}
-	if m["A"] != "1" || m["B"] != "two=with=eq" || m["C"] != "" {
+	if m["A"] != "1" || m["B"] != "two=with=eq" || m["C"] != "" || m["URL"] != "http://localhost:{{.Port}}/{{.Port2}}x" {
 		t.Fatalf("env map = %+v", m)
 	}
 	// envToLines is sorted and stable.
 	got := envToLines(m)
-	want := []string{"A=1", "B=two=with=eq", "C="}
+	want := []string{"A=1", "B=two=with=eq", "C=", "URL=http://localhost:$LOLA_PORT/${LOLA_PORT_2}x"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("envToLines = %v, want %v", got, want)
 	}

@@ -525,6 +525,13 @@ tabs start again on their own.
 
 #### Parallel dev stacks
 
+In the desktop app, choosing a Git folder in **Add project** offers **Save & review ports**.
+Existing projects have the same assistant under **Worktree setup → Local testing**.
+It asks the project's AI provider to suggest a port count, dev commands, environment
+mappings and any necessary edits to tracked development files. Review the current
+and proposed values, edit them, and select the changes to apply. Repository edits
+land in the project checkout. Commit them to the base branch for new worktrees.
+
 The active-session move exists because every worktree wants the same port. A
 project can instead hand each session **its own** ports, and then any number of
 sessions run their dev stacks side by side:
@@ -540,7 +547,7 @@ pre_remove = ['dropdb --if-exists "$LOLA_DB_NAME"']
 
 [project.env]
 DB_DATABASE = "{{.DBName}}"
-APP_URL = "http://127.0.0.1:{{.Port}}"
+APP_URL = "http://127.0.0.1:$LOLA_PORT"
 ```
 
 - **The lease.** At spawn each session gets the lowest free aligned block of
@@ -563,6 +570,9 @@ APP_URL = "http://127.0.0.1:{{.Port}}"
   `[project.env]`. If allocation fails, existing tabs keep running. The
   session's ports show in the TUI detail (`ports:`) and the app's dev-toggle
   tooltip. The dev URL chip and port-clash banner work per session.
+  Click an address in **Dev** to open it in Lola’s embedded preview.
+  Stack previews group addresses under each app’s name. Use **Open in external
+  browser** in the preview toolbar to open the selected address on the Mac.
 - **Teardown.** `pre_remove` runs after the session's tmux tabs are down and
   before the worktree goes, so it can drop the database `post_create` made. It
   is skipped when the worktree is dirty (lola keeps it, and what it uses),
@@ -590,7 +600,7 @@ reaction and write-back templates use:
 | `{{.Worktree}}` | absolute worktree path |
 | `{{.Slug}}` | same as `{{.Session}}` — reads better in a hostname (`{{.Slug}}.test`) |
 | `{{.DBName}}` | the session's stable database name, `LOLA_DB_NAME` (`lola_nori_app_nor_366`) |
-| `{{.Port}}`, `{{.Port1}}`..`{{.PortN}}` | the leased ports (see [Parallel dev stacks](#parallel-dev-stacks)); **empty** without a `port_range` |
+| `$LOLA_PORT`, `$LOLA_PORT_1`..`$LOLA_PORT_N` (also `{{.Port}}`, `{{.Port1}}`..`{{.PortN}}`) | the leased ports (see [Parallel dev stacks](#parallel-dev-stacks)); **empty** without a `port_range` |
 
 This earns its keep next to `symlinks = [".env"]`. A shared `.env` means every
 worktree also shares the services it names — the same Redis queue, the same

@@ -81,7 +81,14 @@
 
   function swallow(e) { if (target(e)) { e.preventDefault(); e.stopPropagation(); } }
 
-  function onKey(e) { if (e.key === "Escape") { set(false); post({ type: "cancel" }); } }
+  // Let the page handle its own Escape first (for example a combobox).
+  window.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || e.repeat || e.defaultPrevented || e.isComposing ||
+        !e.isTrusted || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    set(false);
+    post({ type: "escape" });
+  });
 
   function set(on) {
     if (on === picking) return;
@@ -91,7 +98,6 @@
     document[f]("click", onClick, true);
     document[f]("mousedown", swallow, true);
     document[f]("mouseup", swallow, true);
-    document[f]("keydown", onKey, true);
     document.documentElement.style.cursor = on ? "crosshair" : "";
     if (!on) draw(null);
     post({ type: "mode", picking: on });

@@ -168,6 +168,11 @@ func Merge(panes []string) []string {
 	for _, p := range panes {
 		all = append(all, Scan(p)...)
 	}
+	return RankedURLs(all)
+}
+
+// RankedURLs sorts the collected candidates in place and returns the strongest distinct addresses.
+func RankedURLs(all []Candidate) []string {
 	sort.SliceStable(all, func(a, b int) bool { return all[a].Score > all[b].Score })
 	seen := map[string]bool{}
 	out := make([]string, 0, MaxCandidates)

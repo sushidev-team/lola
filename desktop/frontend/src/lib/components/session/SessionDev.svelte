@@ -1,12 +1,12 @@
 <script lang="ts">
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { devToggleTitle } from "$lib/devtoggle";
-  import { devUrlLabel } from "$lib/devurl";
+  import { devUrlGroups, devUrlLabel } from "$lib/devurl";
   import Button from "../Button.svelte";
   import Icon from "../Icon.svelte";
   import { preview } from "$lib/preview.svelte";
   let { session }: { session: SessionInfo } = $props();
-  const urls = $derived(session.devActive ? session.devUrls ?? [] : []);
+  const groups = $derived(session.devActive ? devUrlGroups(session.devUrls ?? [], session.apps ?? []) : []);
 </script>
 
 {#if session.devCommands?.length}
@@ -18,13 +18,19 @@
         {session.devActive ? 'Stop dev' : 'Start dev'}
       </Button>
     </div>
-    {#if urls.length}
-      <ul class="mt-2 grid min-w-0 gap-1">
-        {#each urls as url (url)}
-          <li class="min-w-0"><Button size="xs" class="max-w-full font-mono!" title="Open {url}" onclick={() => store.openURL(url)}><span class="min-w-0 truncate">{devUrlLabel(url)}</span><Icon name="external-link" size={14} /></Button></li>
-        {/each}
-      </ul>
-      <Button size="xs" class="mt-2" title="Preview the app here and pick an element to send to the agent" onclick={() => preview.open(session.id, urls[0])}>Preview</Button>
-    {/if}
+    {#each groups as group (group.name)}
+      {#if group.urls.length}
+        <div class="mt-1 flex min-w-0 flex-wrap items-start gap-x-2">
+          {#if group.label}
+            <h4 class="max-w-full py-1 text-sm font-medium leading-4 wrap-anywhere text-ink">{group.label}</h4>
+          {/if}
+          <ul class="flex min-w-0 flex-[1_1_9rem] flex-wrap gap-x-1" aria-label={group.label || undefined}>
+            {#each group.urls as url (url)}
+              <li class="min-w-0 max-w-full"><Button size="xs" class="max-w-full font-mono!" title="Preview {url}" onclick={() => preview.open(session.id, url)}><span class="min-w-0 truncate">{devUrlLabel(url)}</span></Button></li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+    {/each}
   </section>
 {/if}

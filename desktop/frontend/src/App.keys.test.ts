@@ -13,6 +13,7 @@ vi.mock("@bindings/desktop", () => {
     ConfigService: svc({ ConfigExists: async () => true, GetTheme: async () => "" }),
     TermService: svc({ Shells: async () => [], CaptureMany: async () => ({}) }),
     TalkService: svc({ State: async () => ({ caps: {}, composer: "unknown", feedSeq: 0, health: "ok" }), Stop: stop }),
+    PreviewService: svc({ Open: async () => "about:blank" }),
     DoctorService: svc(),
     LinearService: svc(),
     UpdateService: svc(),
@@ -42,6 +43,7 @@ const { store } = await import("$lib/store.svelte");
 const { nav } = await import("$lib/nav.svelte");
 const { ssh } = await import("$lib/ssh.svelte");
 const { terms, AGENT, DIFF, SSH } = await import("$lib/terms.svelte");
+const { preview } = await import("$lib/preview.svelte");
 const { confirm } = await import("$lib/confirm.svelte");
 const { allTabs, closeTab } = await import("$lib/docklayout");
 const { OVERVIEW_PANEL, CHANGES_PANEL } = await import("$lib/sessionpanels");
@@ -289,6 +291,23 @@ describe("in a session", () => {
     flushSync();
     await press("Enter");
     expect(nav.focusedTerm).toBe(A);
+  });
+  it("requires two separate Esc presses in the preview and keeps the session open", async () => {
+    await mount([plain(A)]);
+    nav.openSession(A);
+    preview.open(A, "http://localhost:5173");
+    try {
+      const dialog = await screen.findByRole("dialog", { name: "Preview" });
+      await press("Escape", dialog);
+      expect(dialog).toHaveTextContent("again to close preview");
+      await fireEvent.keyDown(dialog, { key: "Escape", repeat: true });
+      expect(preview.request?.sessionId).toBe(A);
+      await press("Escape", dialog);
+      expect(preview.request).toBeNull();
+      expect(nav.focusedTerm).toBe(A);
+    } finally {
+      preview.close();
+    }
   });
   it("Esc climbs one step", async () => {
     await mount([plain(A, { ssh: { connections: [conn], lastSeq: 0 } })]);

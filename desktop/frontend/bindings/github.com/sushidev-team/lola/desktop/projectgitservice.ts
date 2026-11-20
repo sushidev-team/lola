@@ -39,6 +39,10 @@ export function AmendNeedsConfirmation(project: string, worktree: string, expect
     return $Call.ByID(1138262519, project, worktree, expectedHead);
 }
 
+export function ApplyPortSetup(project: string, token: string, changes: $models.PortSetupChange[] | null): $CancellablePromise<void> {
+    return $Call.ByID(1368705950, project, token, changes);
+}
+
 /**
  * BranchAction resolves and authorizes the owner before writing in a linked checkout.
  */
@@ -213,6 +217,10 @@ export function Stashes(project: string, worktree: string): $CancellablePromise<
  */
 export function SuggestConflictChoices(project: string, input: string): $CancellablePromise<string> {
     return $Call.ByID(2927015638, project, input);
+}
+
+export function SuggestPortSetup(project: string): $CancellablePromise<$models.PortSetupPlan> {
+    return $Call.ByID(1537062204, project);
 }
 
 /**

@@ -15,6 +15,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -1700,7 +1701,7 @@ func envToLines(m map[string]string) []string {
 	}
 	out := make([]string, 0, len(m))
 	for k, v := range m {
-		out = append(out, k+"="+v)
+		out = append(out, k+"="+lolaenv.DisplayPortRefs(v))
 	}
 	sort.Strings(out)
 	return out
@@ -1717,7 +1718,7 @@ func linesToEnv(lines []string) (map[string]string, error) {
 		if !ok {
 			return nil, errors.New("env line must be KEY=value: " + l)
 		}
-		out[strings.TrimSpace(k)] = v
+		out[strings.TrimSpace(k)] = lolaenv.PortTemplates(v)
 	}
 	if len(out) == 0 {
 		return nil, nil

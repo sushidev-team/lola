@@ -4,6 +4,7 @@
   // deep-link to one (nav.overlayTab) without this component knowing about nav.
   let {
     tabs,
+    ariaLabel,
     active,
     onSelect,
     vertical = false,
@@ -11,6 +12,7 @@
     pill = false,
   }: {
     tabs: { id: string; label: string; count?: number; group?: string; alert?: boolean }[];
+    ariaLabel?: string;
     /** Compact rounded chips with a count badge, for dense toolbars. */
     pill?: boolean;
     vertical?: boolean;
@@ -40,7 +42,7 @@
   }
 </script>
 
-<div role="tablist" aria-orientation={vertical ? "vertical" : "horizontal"} class={vertical ? "space-y-1" : pill ? "flex min-w-0 items-center gap-1" : quiet ? "flex items-center gap-3 px-4" : "mb-3 flex flex-wrap items-center gap-1 border-b border-edge/60"}>
+<div role="tablist" aria-label={ariaLabel} aria-orientation={vertical ? "vertical" : "horizontal"} class={vertical ? "space-y-1" : pill ? "flex min-w-0 items-center gap-1" : quiet ? "flex items-center gap-3 px-4" : "mb-3 flex flex-wrap items-center gap-1 border-b border-edge/60"}>
   {#each tabs as t, i (t.id)}
     {#if vertical && t.group && t.group !== tabs[i - 1]?.group}
       <div class="label px-2.5 pt-4 pb-1 text-faint first:pt-0">{t.group}</div>

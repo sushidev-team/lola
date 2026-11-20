@@ -9,6 +9,7 @@
   import { overlayClose } from "$lib/overlayClose";
   import { deepEqual } from "$lib/deepEqual";
   import Modal from "$lib/components/Modal.svelte";
+  import PortSetupReview from "./PortSetupReview.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import CommitInstructions from "$lib/components/CommitInstructions.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
@@ -442,6 +443,7 @@
       f = {
         ...d,
         label: d.label ?? "",
+        portRange: d.portRange ?? "",
         execution: d.execution ? { ...d.execution } : null,
         inherits: inheritsOf(d.inherits),
         kind: d.kind ?? "",
@@ -569,7 +571,15 @@
     }
   }
 
-  async function save() {
+  let portReviewProject = $state("");
+
+  async function reviewPorts() {
+    if (!f || !canSave) return;
+    if (dirty || f.isNew) await save(true);
+    else portReviewProject = origName;
+  }
+
+  async function save(reviewAfter = false) {
     if (!f || !canSave) return;
     saving = true;
     saveErr = "";
@@ -622,7 +632,8 @@
         f.isNew ? `added ${displayName(dto)}` : `saved ${displayName(dto)}`,
         "good",
       );
-      nav.closeOverlay();
+      if (reviewAfter) portReviewProject = id;
+      else nav.closeOverlay();
     } catch (e) {
       saveErr = String(e);
       store.setFlash(String(e), "bad");
@@ -638,7 +649,7 @@
    * here, so neither trips the prompt.
    */
   function requestClose() {
-    if (addingMembers) return;
+    if (addingMembers || saving) return;
     if (!dirty) {
       nav.closeOverlay();
       return;
@@ -672,8 +683,7 @@
   }
 
   const formId = $props.id();
-  // What the "{ }" menu on a worktree field offers: shell variables for the
-  // command lists, {{.Field}} placeholders for env values.
+  // Both menus use the same leased port names.
   const lease = $derived({ range: f?.portRange ?? "", perSession: f?.portsPerSession ?? 0 });
   const commandVars = $derived(commandVariables(lease, f?.env));
   const envValueVars = $derived(envValueVariables(lease));
@@ -890,6 +900,21 @@
   </div>
 {/snippet}
 
+{#snippet portOffer()}
+  <div class="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-edge bg-canvas/50 px-3 py-3">
+    <div class="min-w-0 flex-1 basis-52">
+      <h3 class="font-semibold text-ink">Parallel dev servers</h3>
+      <p class="mt-1 text-sm text-faint">Give each worktree its own ports. AI can suggest changes to dev commands, environment variables and repository files.</p>
+    </div>
+    <Button variant="secondary" disabled={!canSave} onclick={reviewPorts}>
+      <Icon name="sparkles" size={14} />{dirty || f?.isNew ? "Save & review ports" : "Review port setup"}
+    </Button>
+  </div>
+{/snippet}
+
+{#if portReviewProject && f}
+  <PortSetupReview project={portReviewProject} label={displayName(f)} path={f.path.trim()} range={f.portRange ?? ""} onClose={() => nav.closeOverlay()} />
+{:else}
 <Modal {title} onClose={requestClose} width="660px">
   {#if loadErr}
     <div class="rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">{loadErr}</div>
@@ -965,6 +990,9 @@
               </span>
             </span>
           </div>
+          {#if d.isNew && pathInfo?.isRepo && pathInfo.path === d.path.trim()}
+            {@render portOffer()}
+          {/if}
           {/if}
           {@render textRow(
             "Label",
@@ -1191,6 +1219,7 @@
         {/snippet}
         {@render section("Worktree preparation", preparation)}
         {#snippet testing()}
+          {#if d.path.trim()}{@render portOffer()}{/if}
           {@render areaRow(
             "Dev commands",
             d.devCommands,
@@ -1527,10 +1556,11 @@
       {/if}
       {#if saveBlock}<span id={`${formId}-save-why`} class="ml-auto text-right text-sm text-faint">{saveBlock}</span>{/if}
       <Button size="md" class={saveBlock ? "" : "ml-auto"} onclick={requestClose}>Cancel</Button>
-      <Button variant="primary" size="md" disabled={!canSave} aria-describedby={saveBlock ? `${formId}-save-why` : undefined} onclick={save}>{saving ? "Saving…" : "Save"}</Button>
+      <Button variant="primary" size="md" disabled={!canSave} aria-describedby={saveBlock ? `${formId}-save-why` : undefined} onclick={() => save()}>{saving ? "Saving…" : "Save"}</Button>
     </div>
   {/snippet}
 </Modal>
+{/if}
 
 <style>
   @media (max-width: 540px) {

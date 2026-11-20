@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -376,13 +377,43 @@ func TestReconcileDevTabsPicksUpTheLocalURLFromThePane(t *testing.T) {
 	}
 }
 
+func TestStackDevAddressesFollowLaunchDirectory(t *testing.T) {
+	s := devSession("stack")
+	s.Stack = true
+	s.Apps = []session.App{{Name: "web", Worktree: "/work/web"}, {Name: "api", Worktree: "/work/api"}}
+	d, _ := devDaemon(t, nil, s)
+	d.deadPanes = func(context.Context) (map[string]bool, error) { return nil, nil }
+	d.stackDevPane = func(_ context.Context, name string, _ int) (string, string, error) {
+		switch name {
+		case "stack-dev-1":
+			return "/work/api", "Server running on http://localhost:8000", nil
+		case "stack-dev-3":
+			return "/work/web", "Local: http://localhost:20006\nLocal: http://localhost:20007\nLocal: http://localhost:20008", nil
+		}
+		t.Fatalf("unexpected pane %q", name)
+		return "", "", nil
+	}
+	ctx := context.Background()
+	d.reconcileDevTabs(ctx, map[string]bool{"stack-dev-1": true, "stack-dev-3": true})
+	s, _ = d.sessions.Get(s.ID)
+	apps := d.appsInfo(d.cfg, s)
+	if len(s.DevURLs) != 3 || len(apps[0].DevURLs) != 3 || !slices.Contains(apps[0].DevURLs, "http://localhost:20006") || !slices.Equal(apps[1].DevURLs, []string{"http://localhost:8000"}) {
+		t.Fatalf("session URLs %v, apps %+v", s.DevURLs, apps)
+	}
+	d.reconcileDevTabs(ctx, nil)
+	s, _ = d.sessions.Get(s.ID)
+	if len(s.DevAppURLs) != 0 {
+		t.Fatal("stopped tabs retained app addresses")
+	}
+}
+
 // Docker can replay a sidecar's old listening URL before Laravel finishes
 // trying occupied ports. Even a cached URL from a previous daemon must be
 // refined once the app advertises the port it actually bound.
 func TestReconcileDevTabsRefinesAnEarlySidecarURL(t *testing.T) {
 	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
 	d.markDev("lola-app-eng-1", true, 1)
-	d.setDevURLs("lola-app-eng-1", []string{"http://127.0.0.1:6001"})
+	d.setDevURLs("lola-app-eng-1", []string{"http://127.0.0.1:6001"}, nil)
 	d.deadPanes = func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }
 	pane := "[sockudo] HTTP server listening on http://0.0.0.0:6001\n" +
 		"[vite] Local: http://localhost:5174/\n" +
@@ -469,7 +500,7 @@ func TestDevURLWatchFindsTheAddressWithoutTheObserver(t *testing.T) {
 		return "  INFO  Server running on [http://127.0.0.1:8001].", nil
 	}
 
-	d.watchDevURLs(ctx, "lola-app-eng-1", 1)
+	d.watchDevURLs(ctx, "lola-app-eng-1", []string{"lola-app-eng-1-dev-1"})
 
 	s, _ := d.sessions.Get("lola-app-eng-1")
 	if len(s.DevURLs) == 0 || s.DevURLs[0] != "http://127.0.0.1:8001" {
@@ -483,7 +514,7 @@ func TestDevURLWatchFindsTheAddressWithoutTheObserver(t *testing.T) {
 func TestDevURLWatchRefinesURLsAfterObserverFindsSidecar(t *testing.T) {
 	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
 	d.markDev("lola-app-eng-1", true, 1)
-	d.setDevURLs("lola-app-eng-1", []string{"http://127.0.0.1:6001"})
+	d.setDevURLs("lola-app-eng-1", []string{"http://127.0.0.1:6001"}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reads := 0
@@ -496,7 +527,7 @@ func TestDevURLWatchRefinesURLsAfterObserverFindsSidecar(t *testing.T) {
 		}
 		return pane, nil
 	}
-	d.watchDevURLs(ctx, "lola-app-eng-1", 1)
+	d.watchDevURLs(ctx, "lola-app-eng-1", []string{"lola-app-eng-1-dev-1"})
 	s, _ := d.sessions.Get("lola-app-eng-1")
 	if len(s.DevURLs) == 0 || s.DevURLs[0] != "http://127.0.0.1:8002" {
 		t.Fatalf("DevURLs = %v, want the late app address first", s.DevURLs)
@@ -518,7 +549,7 @@ func TestDevURLWatchStopsWhenTheTabsMoveOn(t *testing.T) {
 		return "Server running on [http://127.0.0.1:8001].", nil
 	}
 
-	d.watchDevURLs(context.Background(), "lola-app-eng-1", 1)
+	d.watchDevURLs(context.Background(), "lola-app-eng-1", []string{"lola-app-eng-1-dev-1"})
 
 	if reads != 0 {
 		t.Errorf("read the pane %d times, want none once the session lost its tabs", reads)
@@ -540,7 +571,7 @@ func TestDevURLWatchStopsOnShutdown(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		d.watchDevURLs(ctx, "lola-app-eng-1", 1)
+		d.watchDevURLs(ctx, "lola-app-eng-1", []string{"lola-app-eng-1-dev-1"})
 		close(done)
 	}()
 	select {

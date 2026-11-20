@@ -48,6 +48,7 @@
   import HelpOverlay from "$lib/views/HelpOverlay.svelte";
   import BestOfOverlay from "$lib/views/BestOfOverlay.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+  import { preview } from "$lib/preview.svelte";
   import SessionPreview from "$lib/components/session/SessionPreview.svelte";
   import BulkPickupDialog from "$lib/components/BulkPickupDialog.svelte";
   import SandboxLoginDialog from "$lib/components/SandboxLoginDialog.svelte";
@@ -291,7 +292,9 @@
     // It sits ABOVE the menu/confirm/overlay blocks on purpose: those swallow
     // keys only to keep them off the cockpit actions, which this return already
     // guarantees, and Cmd-C must keep copying while a dialog is open.
-    if (isChord(e)) return;
+    if (e.defaultPrevented || isChord(e)) return;
+    // The preview owns its keyboard, including Escape from its exit hint.
+    if (preview.request || (e.key === "Escape" && e.repeat)) return;
 
     // A pending confirmation and an open overlay own Escape even while one of
     // their own fields is focused — the guarded config forms open the confirm

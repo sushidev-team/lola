@@ -20,6 +20,15 @@
         ],
         "createdAt": "2026-11-10T09:58:38.231Z",
         "reason": "User requested smooth in-place expansion of the same output element. This component bounds its max-height transition to 100–320px for 200ms only on disclosure changes; reduced motion disables it."
+      },
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "desktop/frontend/src/lib/components/Tabs.svelte"
+        ],
+        "createdAt": "2026-11-20T17:59:51.396Z",
+        "reason": "Codex verified the conditional classes: rounded pill and vertical tabs use a selection fill; only square horizontal tabs receive an accent underline."
       }
     ]
   }

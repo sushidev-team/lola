@@ -98,8 +98,8 @@ var shellWordBreakers = map[string]bool{
 
 // isSimpleCommand reports whether line is one plain command that `exec` can
 // take over — no separators, no builtin/keyword head. An env-assignment prefix
-// (`PORT=3000 npm run dev`) stays simple: both bash and dash apply the
-// assignment to the exec'd command.
+// must precede the command in shell grammar: after exec it would be
+// interpreted as the name of the executable.
 func isSimpleCommand(line string) bool {
 	if line == "" {
 		return false
@@ -111,7 +111,7 @@ func isSimpleCommand(line string) bool {
 	if i := strings.IndexAny(head, " \t"); i >= 0 {
 		head = head[:i]
 	}
-	return !shellWordBreakers[head]
+	return !strings.Contains(head, "=") && !shellWordBreakers[head]
 }
 
 // shQuote single-quotes s for a POSIX shell. An embedded quote goes through the

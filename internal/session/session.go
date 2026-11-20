@@ -274,6 +274,8 @@ type Session struct {
 	// dropped the moment the tabs stop: an address for a server that is gone is
 	// worse than none.
 	DevURLs []string `json:"dev_urls,omitempty"`
+	// DevAppURLs keeps each stack member’s ranked addresses from its own dev panes.
+	DevAppURLs map[string][]string `json:"dev_app_urls,omitempty"`
 
 	// DevClash is why a dev tab died, in the ONE case lola can both explain and
 	// offer to fix: another process already holds the port the command wanted.

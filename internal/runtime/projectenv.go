@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
@@ -95,7 +96,7 @@ func expandProjectEnv(p config.Project, v EnvVars) config.Project {
 
 	out := make(map[string]string, len(p.Env))
 	for k, val := range maps.All(p.Env) {
-		out[k] = r.Replace(val)
+		out[k] = r.Replace(lolaenv.PortTemplates(val))
 	}
 	p.Env = out
 

@@ -59,6 +59,8 @@ export type {
     LinearTeamMeta,
     LockedSettingDTO,
     PathInfoDTO,
+    PortSetupChange,
+    PortSetupPlan,
     ProjectExecutionDTO,
     ProjectFormDTO,
     ProjectGitQueueEvent,

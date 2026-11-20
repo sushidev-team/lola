@@ -52,12 +52,16 @@ func TestWithSessionEnvInjectsLolaVarsAndPlaceholders(t *testing.T) {
 	p := config.Project{Name: "nori", Env: map[string]string{
 		"APP_PORT":  "{{.Port}}",
 		"VITE_PORT": "{{.Port2}}",
+		"PORT_URL":  "http://localhost:$LOLA_PORT/${LOLA_PORT_2}/$LOLA_PORT_1",
+		"LITERAL":   "$LOLA_PORT_RANGE/${LOLA_PORT:-8000}/$HOME",
+		"BRANCH":    "{{.Branch}}",
 		"DB":        "{{.DBName}}",
 		"HOST":      "{{.Slug}}.test",
 		"LOLA_PORT": "8000", // a pinned value would collide; lola's wins
 	}}
-	got := withSessionEnv(p, EnvVars{Session: "lola-nori-eng-42", Ports: []int{4100, 4101}}).Env
+	got := withSessionEnv(p, EnvVars{Session: "lola-nori-eng-42", Ports: []int{4100, 4101}, Branch: "$LOLA_PORT"}).Env
 	want := map[string]string{
+		"PORT_URL": "http://localhost:4100/4101/4100", "LITERAL": "$LOLA_PORT_RANGE/${LOLA_PORT:-8000}/$HOME", "BRANCH": "$LOLA_PORT",
 		"APP_PORT": "4100", "VITE_PORT": "4101", "DB": "lola_nori_eng_42", "HOST": "lola-nori-eng-42.test",
 		"LOLA_PORT": "4100", "LOLA_PORT_1": "4100", "LOLA_PORT_2": "4101",
 		"LOLA_DB_NAME": "lola_nori_eng_42", "LOLA_SESSION_SLUG": "lola-nori-eng-42",

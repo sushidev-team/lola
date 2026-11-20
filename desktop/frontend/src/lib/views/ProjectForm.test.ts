@@ -4,8 +4,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
 // when the hoisted vi.mock factories run.
-const { getProject, saveProject, setMemberLabels, scanStackMembers, addStackMembers, removeProject, getSettings, inspectPath, pickFolder, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
+const { suggestPorts, applyPorts, getProject, saveProject, setMemberLabels, scanStackMembers, addStackMembers, removeProject, getSettings, inspectPath, pickFolder, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
   () => ({
+    suggestPorts: vi.fn(),
+    applyPorts: vi.fn(),
     getProject: vi.fn(),
     saveProject: vi.fn(),
     setMemberLabels: vi.fn(),
@@ -22,6 +24,7 @@ const { getProject, saveProject, setMemberLabels, scanStackMembers, addStackMemb
 );
 
 vi.mock("@bindings/desktop", () => ({
+  ProjectGitService: { SuggestPortSetup: suggestPorts, ApplyPortSetup: applyPorts },
   ConfigService: {
     GetProject: (...a: unknown[]) => getProject(...a),
     SaveProject: (...a: unknown[]) => saveProject(...a),
@@ -173,6 +176,8 @@ function rowOf(control: HTMLElement): HTMLElement {
 describe("ProjectForm", () => {
   beforeEach(() => {
     cleanup();
+    suggestPorts.mockReset();
+    applyPorts.mockReset();
     getProject.mockReset().mockResolvedValue(sampleDto());
     saveProject.mockReset().mockResolvedValue(undefined);
     setMemberLabels.mockReset().mockResolvedValue(undefined);
@@ -496,8 +501,9 @@ describe("ProjectForm", () => {
 
     expect(dev).toHaveValue("serve --port=$LOLA_PORT");
     expect(screen.queryByRole("menu", { name: "Variables for Dev commands" })).not.toBeInTheDocument();
-    // Env values take lola's own placeholder spelling; paths take none.
+    // Env offers the same port names alongside its session metadata.
     await fireEvent.click(screen.getByRole("button", { name: "Insert variable into Env" }));
+    expect(screen.getByRole("menuitem", { name: /\$LOLA_PORT$/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /\{\{\.DBName\}\}/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Insert variable into Symlinks" })).not.toBeInTheDocument();
   });
@@ -1270,6 +1276,33 @@ describe("ProjectForm", () => {
   // Adding a project is folder, then team, then states, all on the first tab.
   describe("new project short path", () => {
     const fresh = () => ({ ...sampleDto(), isNew: true, name: "", label: "", path: "", repo: "", teamId: "", projectId: "", stateIds: [], matchLabels: [], enabled: false, cycleMode: "none", assigneeMode: "anyone" });
+
+    it("offers port setup on folder selection and applies only reviewed edits", async () => {
+      getProject.mockResolvedValue(fresh());
+      pickFolder.mockResolvedValue("/tmp/web");
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/web", isRepo: true, suggestedLabel: "Web" }));
+      const ports = { kind: "ports", target: "", line: 0, before: "", after: "2", reason: "Web and API each listen on a port." };
+      suggestPorts.mockResolvedValue({ token: "review", changes: [
+        ports,
+        { kind: "env", target: "APP_URL", line: 0, before: "", after: "http://localhost:$LOLA_PORT", reason: "Point the app at its worktree." },
+      ] });
+      render(ProjectForm);
+      const review = await screen.findByRole("button", { name: "Save & review ports" });
+      expect(suggestPorts).not.toHaveBeenCalled();
+      await fireEvent.click(review);
+      await screen.findByRole("dialog", { name: "Review port setup" });
+      expect(saveProject).toHaveBeenCalledWith(expect.objectContaining({ name: "web" }));
+      expect(suggestPorts).toHaveBeenCalledWith("web");
+      expect(applyPorts).not.toHaveBeenCalled();
+      const explanation = await screen.findByText(ports.reason, { exact: false });
+      expect(explanation).not.toBeVisible();
+      await fireEvent.click(screen.getByText("Why these changes?"));
+      expect(explanation).toBeVisible();
+      await fireEvent.click(await screen.findByLabelText("Include APP_URL"));
+      await fireEvent.input(screen.getByLabelText("Proposed ports per session"), {target: {value: "3"}});
+      await fireEvent.click(screen.getByRole("button", { name: "Apply 1 change" }));
+      expect(applyPorts).toHaveBeenCalledWith("web", "review", [{ ...ports, after: "3" }]);
+    });
 
     it("picks the team and states on General, and turns pickup on", async () => {
       getProject.mockResolvedValue(fresh());

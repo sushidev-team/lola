@@ -305,6 +305,20 @@ func (c *Client) CapturePane(ctx context.Context, name string, lines int) (strin
 	return out, nil
 }
 
+// CapturePaneInDir returns the directory given to new-session -c together
+// with its pane. A dev process can cd after launch and still belongs to the
+// same app. Both results come from the same tmux command queue.
+func (c *Client) CapturePaneInDir(ctx context.Context, name string, lines int) (dir, pane string, err error) {
+	target := paneTarget(name)
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", target, "#{session_path}", ";",
+		"capture-pane", "-p", "-e", "-t", target, "-S", fmt.Sprintf("-%d", lines))
+	if err != nil {
+		return "", "", err
+	}
+	dir, pane, _ = strings.Cut(out, "\n")
+	return dir, pane, nil
+}
+
 // HistorySize reports how many scrolled-off lines a session's pane holds and its
 // history-limit. The pair is a mark: the lines added since an earlier reading are
 // the new size minus the old one, unless the history has reached its limit, when

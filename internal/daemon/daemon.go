@@ -318,6 +318,7 @@ type Daemon struct {
 	// PR comment summaries use Haiku when the brain is enabled (display only).
 	commentSummarize func(ctx context.Context, instruction, contextText string) (string, error)
 	commentSummaries commentSummaryCache
+	stackDevPane     func(context.Context, string, int) (dir, pane string, err error)
 	paneTail         func(ctx context.Context, tmuxName string, lines int) (string, error)
 	// planSummarize overrides the `lola plan` planner's claude exec in tests;
 	// nil builds a bounded claude per call (see planSummarizer in plan.go).
@@ -807,6 +808,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	// generic-template daemon.
 	d.paneTail = func(ctx context.Context, tmuxName string, lines int) (string, error) {
 		return d.tmuxClient().CapturePane(ctx, tmuxName, lines)
+	}
+	d.stackDevPane = func(ctx context.Context, name string, lines int) (string, string, error) {
+		return d.tmuxClient().CapturePaneInDir(ctx, name, lines)
 	}
 	d.prDiff = scmc.PRDiff
 	d.worktreeDiff = gitdiff.Diff

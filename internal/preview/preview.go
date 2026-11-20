@@ -21,6 +21,7 @@ package preview
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -38,6 +39,9 @@ import (
 
 //go:embed picker.js
 var pickerJS string
+
+//go:embed xsrf.js
+var xsrfJS string
 
 // ScriptPath is where the proxy serves the picker. A script tag with a src is
 // allowed by a dev server's `script-src 'self'`, which an inline one is not.
@@ -83,26 +87,29 @@ func loopbackHost(h string) bool {
 	return false
 }
 
-// Server owns the listeners, one per target origin.
+type previewKey struct {
+	session, origin string
+}
+
+// Server owns a separate browser cookie host per session and upstream origin.
 type Server struct {
 	mu     sync.Mutex
-	byHost map[string]*proxy // target scheme://host → listener
+	byHost map[previewKey]*proxy
 	closed bool
 }
 
 type proxy struct {
-	origin *url.URL
-	ln     net.Listener
-	srv    *http.Server
+	addr string
+	srv  *http.Server
 }
 
 // New returns an empty Server.
-func New() *Server { return &Server{byHost: map[string]*proxy{}} }
+func New() *Server { return &Server{byHost: map[previewKey]*proxy{}} }
 
 // Open returns the proxied address for target, starting a listener for its
 // origin when there is none. The path and query are kept, so the pane opens
 // the page the dev server printed.
-func (s *Server) Open(target string) (string, error) {
+func (s *Server) Open(session, target string) (string, error) {
 	u, err := Allowed(target)
 	if err != nil {
 		return "", err
@@ -113,14 +120,15 @@ func (s *Server) Open(target string) (string, error) {
 	if s.closed {
 		return "", errors.New("preview: closed")
 	}
-	p := s.byHost[origin.String()]
+	key := previewKey{session, origin.String()}
+	p := s.byHost[key]
 	if p == nil {
 		if p, err = s.start(origin); err != nil {
 			return "", err
 		}
-		s.byHost[origin.String()] = p
+		s.byHost[key] = p
 	}
-	out := url.URL{Scheme: "http", Host: p.ln.Addr().String(), Path: u.Path, RawQuery: u.RawQuery}
+	out := url.URL{Scheme: "http", Host: p.addr, Path: u.Path, RawPath: u.RawPath, RawQuery: u.RawQuery, Fragment: u.Fragment}
 	if out.Path == "" {
 		out.Path = "/"
 	}
@@ -143,26 +151,30 @@ func (s *Server) start(origin *url.URL) (*proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &proxy{origin: origin, ln: ln}
+	// Cookies ignore port numbers. A distinct .localhost name keeps even
+	// identically named session cookies apart without leaving loopback.
+	addr := net.JoinHostPort("p-"+strings.ToLower(rand.Text())+".localhost", strconv.Itoa(ln.Addr().(*net.TCPAddr).Port))
+	p := &proxy{addr: addr}
+	self := &url.URL{Scheme: "http", Host: addr}
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(origin)
 			r.Out.Host = origin.Host
 			// An identity body is the only one the script can be injected into.
 			r.Out.Header.Set("Accept-Encoding", "identity")
-			// The page believes it lives at the dev server.
-			r.Out.Header.Del("Origin")
-			if ref := r.In.Header.Get("Referer"); ref != "" {
-				r.Out.Header.Set("Referer", strings.Replace(ref, "http://"+ln.Addr().String(), origin.String(), 1))
+			// Preserve foreign origins so upstream CSRF checks see the actual caller.
+			for _, key := range []string{"Origin", "Referer"} {
+				rewriteOrigin(r.Out.Header, key, self, origin)
 			}
+			stripPreviewCookie(r.Out)
 		},
-		ModifyResponse: func(resp *http.Response) error { return rewriteResponse(resp, origin, ln.Addr().String()) },
+		ModifyResponse: func(resp *http.Response) error { return rewriteResponse(resp, origin, self) },
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			http.Error(w, "The dev server at "+origin.Host+" is not answering.", http.StatusBadGateway)
 		},
 	}
 	p.srv = &http.Server{
-		Handler:           hostGuard(ln.Addr().String(), rp),
+		Handler:           hostGuard(addr, rp),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { _ = p.srv.Serve(ln) }()
@@ -177,9 +189,26 @@ func hostGuard(addr string, next http.Handler) http.Handler {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		// SameSite=None is needed in the iframe. Reject cross-origin writes
+		// before giving the upstream any of the preview's credentials.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+addr {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		}
+		if r.Header.Get("X-Lola-Preview-Read-XSRF") != "" {
+			readPreviewXSRF(w, r)
+			return
+		}
 		if r.URL.Path == ScriptPath {
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
+			// Install the WebKit fallback only for apps that actually issued
+			// a script-readable XSRF cookie.
+			if _, err := r.Cookie(xsrfCopy); err == nil {
+				_, _ = io.WriteString(w, xsrfJS)
+			}
 			_, _ = io.WriteString(w, pickerJS)
 			return
 		}
@@ -189,7 +218,19 @@ func hostGuard(addr string, next http.Handler) http.Handler {
 
 var frameAncestorsRe = regexp.MustCompile(`(?i)(^|;)\s*frame-ancestors[^;]*`)
 
-func rewriteResponse(resp *http.Response, origin *url.URL, self string) error {
+func rewriteOrigin(h http.Header, key string, from, to *url.URL) {
+	value := h.Get(key)
+	if value == "" {
+		return
+	}
+	u, err := url.Parse(value)
+	if err == nil && u.User == nil && u.Scheme == from.Scheme && strings.EqualFold(u.Host, from.Host) {
+		u.Scheme, u.Host = to.Scheme, to.Host
+		h.Set(key, u.String())
+	}
+}
+
+func rewriteResponse(resp *http.Response, origin, self *url.URL) error {
 	h := resp.Header
 	h.Del("X-Frame-Options")
 	for _, key := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
@@ -204,12 +245,9 @@ func rewriteResponse(resp *http.Response, origin *url.URL, self string) error {
 			}
 		}
 	}
-	if loc := h.Get("Location"); loc != "" {
-		if lu, err := url.Parse(loc); err == nil && lu.IsAbs() && strings.EqualFold(lu.Host, origin.Host) && lu.Scheme == origin.Scheme {
-			lu.Scheme, lu.Host = "http", self
-			h.Set("Location", lu.String())
-		}
-	}
+	rewriteOrigin(h, "Location", origin, self)
+	rewriteOrigin(h, "X-Inertia-Location", origin, self)
+	frameCookies(h, origin.Hostname())
 	if !strings.HasPrefix(strings.ToLower(h.Get("Content-Type")), "text/html") ||
 		resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified ||
 		h.Get("Content-Encoding") != "" && !strings.EqualFold(h.Get("Content-Encoding"), "gzip") {

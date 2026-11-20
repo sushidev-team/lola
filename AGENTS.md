@@ -369,8 +369,10 @@ every send path. Re-verify against a live pane.
   runs nothing under bash 3.2). Classifier stays conservative.
 - Dev URLs: fast watch on activation (`startDevURLWatch`) + observer fallback
   (`scanDevURLs`). Both keep refining after the first address (a sidecar may
-  print before the app settles its port), bounded by `devURLAttempts`; opened via `cmd=openURL` (http(s) only) on the Mac,
-  never `window.open`; a phone opens them itself under the Phones rule.
+  print before the app settles its port), bounded by `devURLAttempts`. The
+  desktop Dev panel opens the embedded preview for the selected session URL,
+  including URLs reported by its stack members. The explicit external action
+  uses `cmd=openURL` (http(s) only). A phone opens them itself under the Phones rule.
 - Port clash: read a dead tab once per death, lsof only when the pane named a
   port, kill only as a human's dialog answer re-verified at click time.
 - `port_range` = multi-active: per-session lease (`portlease`, keyed by session id,

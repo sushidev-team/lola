@@ -7,7 +7,7 @@
   import { onMount } from "svelte";
   import { DaemonService, PreviewService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
-  import { devUrlLabel } from "$lib/devurl";
+  import { devUrlGroups, devUrlLabel } from "$lib/devurl";
   import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, type PickedElement, type ViewportId } from "$lib/preview.svelte";
   import Modal from "../Modal.svelte";
   import Button from "../Button.svelte";
@@ -24,31 +24,64 @@
   let picked = $state<PickedElement | null>(null);
   let note = $state("");
   let sending = $state(false);
-  let loadedFor = "";
+  let reload = $state(0);
+  let surface = $state<HTMLDivElement>();
+  let exitHint = $state(false);
+  const exitWindowMs = 3000;
+  let exitDeadline = 0;
+  let exitTimer: ReturnType<typeof setTimeout>;
+  let returnFocus: HTMLIFrameElement | null = null;
+
+  function clearExitHint() {
+    clearTimeout(exitTimer);
+    exitDeadline = 0;
+    exitHint = false;
+    if (returnFocus && document.activeElement === surface) returnFocus.focus({ preventScroll: true });
+    returnFocus = null;
+  }
+
+  function showExitHint() {
+    clearTimeout(exitTimer);
+    exitDeadline = performance.now() + exitWindowMs;
+    exitHint = true;
+    exitTimer = setTimeout(clearExitHint, exitWindowMs);
+  }
+
+  function onPreviewKey(e: KeyboardEvent) {
+    if (!req || e.defaultPrevented || e.isComposing) return;
+    if (e.key !== "Escape" || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
+      if (exitHint) clearExitHint();
+      return;
+    }
+    e.preventDefault();
+    if (e.repeat) return;
+    if (performance.now() < exitDeadline) close();
+    else showExitHint();
+  }
+
 
   const vp = $derived(VIEWPORTS.find((v) => v.id === viewport) ?? VIEWPORTS[2]);
   const session = $derived(req ? store.sessions.find((s) => s.id === req.sessionId) : undefined);
-  const urls = $derived(session?.devUrls ?? (req ? [req.url] : []));
+  const groups = $derived(devUrlGroups(
+    [...new Set([...(session?.devUrls ?? []), ...(req ? [req.url] : [])])],
+    session?.apps ?? [],
+  ));
 
-  async function load(url: string) {
-    if (!req) return;
+  $effect(() => {
+    const request = req;
+    reload;
+    src = "";
     error = "";
     picked = null;
     picking = false;
-    try {
-      src = await PreviewService.Open(req.sessionId, url);
-    } catch (e) {
-      src = "";
-      error = String(e);
-    }
-  }
-
-  $effect(() => {
-    if (req && req.url !== loadedFor) {
-      loadedFor = req.url;
-      void load(req.url);
-    }
-    if (!req) loadedFor = "";
+    clearExitHint();
+    if (!request) return;
+    let current = true;
+    PreviewService.Open(request.sessionId, request.url).then(
+      (address) => { if (current) src = address; },
+      (err) => { if (current) error = String(err); },
+    );
+    return () => { current = false; };
   });
 
   function tell(on: boolean) {
@@ -67,6 +100,14 @@
       if (!frame || e.source !== frame.contentWindow) return;
       const d = e.data as { source?: string; type?: string; picking?: boolean } | null;
       if (d?.source === PICKER_SOURCE && d.type === "mode") picking = !!d.picking;
+      // A frame may ask for the hint. Only a second keypress in Lola can close
+      // the preview, so a page cannot discard a form by posting two messages.
+      if (d?.source === PICKER_SOURCE && d.type === "escape" && document.activeElement === frame) {
+        returnFocus = frame;
+        surface?.focus({ preventScroll: true });
+        showExitHint();
+        return;
+      }
       const p = parsePick(e.data);
       if (p) {
         picked = p;
@@ -74,7 +115,14 @@
       }
     };
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    window.addEventListener("keydown", onPreviewKey);
+    window.addEventListener("pointerdown", clearExitHint, true);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      window.removeEventListener("keydown", onPreviewKey);
+      window.removeEventListener("pointerdown", clearExitHint, true);
+      clearExitHint();
+    };
   });
 
   async function send() {
@@ -99,34 +147,57 @@
   function close() {
     picking = false;
     picked = null;
+    returnFocus = null;
+    clearExitHint();
     preview.close();
   }
 </script>
 
 {#if req}
-  <Modal title="Preview" onClose={close} fullscreen>
-    <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]" data-session-preview>
-      <div class="flex flex-wrap items-center gap-2 border-b border-edge/70 px-4 py-2">
-        {#if urls.length > 1}
-          <Tabs tabs={urls.map((u) => ({ id: u, label: devUrlLabel(u) }))} active={req.url} onSelect={(u) => preview.open(req.sessionId, u)} quiet />
-        {:else}
-          <span class="font-mono text-sm text-faint">{devUrlLabel(req.url)}</span>
-        {/if}
-        <Tabs tabs={VIEWPORTS.map((v) => ({ id: v.id, label: v.label }))} active={viewport} onSelect={(id) => (viewport = id as ViewportId)} quiet />
-        <Button size="xs" selected={picking} disabled={!src} title="Click an element in the page to send it to the agent" onclick={togglePick}>
-          {picking ? "Picking — click an element" : "Pick element"}
-        </Button>
-        <Button size="xs" disabled={!src} title="Reload" aria-label="Reload" onclick={() => req && load(req.url)}><Icon name="refresh-cw" size={14} /></Button>
-        <Button size="xs" title="Open in the browser" aria-label="Open in the browser" onclick={() => store.openURL(req.url)}><Icon name="external-link" size={14} /></Button>
+  {#snippet tools()}
+    <div class="flex flex-wrap items-center gap-x-1 gap-y-1 pr-1 sm:gap-x-4 sm:pr-2">
+      <h2 class="drag mr-auto self-stretch content-center text-lg text-ink">Preview</h2>
+      <Tabs tabs={VIEWPORTS.map((v) => ({ id: v.id, label: v.label }))} ariaLabel="Viewport" active={viewport} onSelect={(id) => (viewport = id as ViewportId)} pill />
+      <div class="ml-auto flex items-center gap-1 sm:ml-0">
+        <Button size="xs" selected={picking} disabled={!src} title="Click an element in the page to send it to the agent" onclick={togglePick}>Pick element</Button>
+        <Button size="xs" icon disabled={!src} aria-label="Reload" title="Reload" onclick={() => reload++}><Icon name="refresh-cw" size={14} /></Button>
+        <Button size="xs" icon aria-label="Open in external browser" title="Open in external browser" onclick={() => store.openURL(req!.url)}><Icon name="external-link" size={14} /></Button>
       </div>
+    </div>
+  {/snippet}
+  <Modal title="Preview" headerContent={tools} onClose={close} fullscreen bodyClass="min-w-0 overflow-hidden">
+    <div bind:this={surface} tabindex="-1" class="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] outline-none" data-session-preview>
+      <nav aria-label="Dev servers" class="flex max-h-[30dvh] flex-wrap items-start gap-x-6 gap-y-2 overflow-y-auto border-b border-edge px-4 py-2">
+        {#each groups as group (group.name)}
+          <div role="group" aria-label={group.label || "Addresses"} class="grid min-w-0 max-w-full gap-0.5">
+            {#if group.label}<h3 class="px-1.5 text-sm font-medium text-ink">{group.label}</h3>{/if}
+            <div class="flex min-w-0 flex-wrap items-center gap-1">
+              {#each group.urls as url (url)}
+                <Button size="xs" selected={url === req.url} class="max-w-full font-mono!" title={url} onclick={() => preview.open(req.sessionId, url)}>
+                  <span class="truncate">{devUrlLabel(url)}</span>
+                </Button>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </nav>
 
-      <div class="grid min-h-0 min-w-0 place-items-center overflow-auto bg-canvas p-3">
-        {#if error}
-          <p class="text-sm text-bad" role="alert">{error}</p>
-        {:else if src}
-          <iframe bind:this={frame} {src} title="Preview of {devUrlLabel(req.url)}" class="rounded border border-edge bg-white" style={frameStyle(vp)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
-        {:else}
-          <p class="text-sm text-faint">Starting preview…</p>
+      <div class="relative min-h-0 min-w-0">
+        <div class="absolute inset-0 grid place-items-center overflow-auto bg-canvas p-3">
+          {#if error}
+            <p class="text-sm text-bad" role="alert">{error}</p>
+          {:else if src}
+            <iframe bind:this={frame} {src} title="Preview of {devUrlLabel(req.url)}" class="rounded border border-edge bg-white" style={frameStyle(vp)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+          {:else}
+            <p class="text-sm text-faint">Starting preview…</p>
+          {/if}
+        </div>
+        {#if exitHint}
+          <div role="status" class="ssh-fade-in pointer-events-none absolute inset-0 z-10 grid place-items-center bg-black/35 p-4 motion-reduce:animate-none!">
+            <p class="rounded-xl border border-edge bg-panel px-6 py-4 text-center text-xl leading-loose text-balance text-ink shadow-xl">
+              Press <kbd class="rounded-md border border-edge bg-canvas px-2 py-1 font-mono text-lg">Esc</kbd> again to close preview
+            </p>
+          </div>
         {/if}
       </div>
 

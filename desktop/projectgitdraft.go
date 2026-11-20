@@ -93,11 +93,15 @@ func (s *ProjectGitService) runGitHelper(ctx context.Context, project, instructi
 			model.Model = "sonnet"
 		}
 		kind := cfg.AgentForProject(project)
-		if action == "resolve" {
+		if action == "resolve" || action == "ports" {
 			model.Agent = agent.Parse(kind)
 			model.Model = ""
 		}
-		if profile, enabled := cfg.AIProfile(kind, action); enabled {
+		profileAction := action
+		if action == "ports" {
+			profileAction = "plan"
+		}
+		if profile, enabled := cfg.AIProfile(kind, profileAction); enabled {
 			model.Agent = agent.Parse(kind)
 			model.Model = profile.Model
 			model.Effort = profile.Effort

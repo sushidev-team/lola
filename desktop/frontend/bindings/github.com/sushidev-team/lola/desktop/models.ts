@@ -413,6 +413,21 @@ export interface PathInfoDTO {
     "suggestedId": string;
 }
 
+export interface PortSetupChange {
+    "kind": string;
+    "target": string;
+    "line": number;
+    "before": string;
+    "after": string;
+    "reason": string;
+}
+
+export interface PortSetupPlan {
+    "token": string;
+    "note": string;
+    "changes": PortSetupChange[] | null;
+}
+
 export interface ProjectExecutionDTO {
     "goalMode": boolean;
     "sandbox": string;

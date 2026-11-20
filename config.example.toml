@@ -803,7 +803,7 @@ dev_commands = [
 # dev_commands MULTI-ACTIVE: switching a session active no longer stops the
 # others, because each binds its own ports — so only set it once the dev
 # commands actually read them (e.g. `php artisan serve --port=$LOLA_PORT`, or
-# APP_PORT = "{{.Port}}" in [project.env]). Leases live in
+# APP_PORT = "$LOLA_PORT" in [project.env]). Leases live in
 # ~/.lola/state/ports.json, survive a daemon restart, and are released when the
 # session's worktree is removed. Omit for the single-active move above.
 # port_range = "4100-4999"   # or "auto": lola picks free ports from 20000-29999
@@ -892,7 +892,7 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 #   {{.Worktree}}  absolute worktree path
 #   {{.Slug}}      same as {{.Session}}, for hostnames ("{{.Slug}}.test")
 #   {{.DBName}}    a stable database name for the session (lola_nori_app_nor_366)
-#   {{.Port}}      the first leased port; {{.Port1}}..{{.PortN}} each one
+#   $LOLA_PORT     the first leased port; $LOLA_PORT_1..N select each port
 #                  (EMPTY without a port_range)
 #
 # Every session also gets LOLA_SESSION_SLUG and LOLA_DB_NAME, plus LOLA_PORT and
@@ -908,7 +908,7 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # APP_ENV = "local"
 # REDIS_QUEUE = "{{{.Session}}}"   # → {lola-nori-app-nor-366}
 # DB_DATABASE = "{{.DBName}}"       # pair with post_create = ['createdb "$LOLA_DB_NAME"']
-# APP_PORT = "{{.Port}}"            # needs port_range
+# APP_PORT = "$LOLA_PORT"            # needs port_range
 
 # STACKS: several repositories that ship together, one Linear issue stream.
 # A stack is a project with kind = "stack" and no path; it owns the Linear

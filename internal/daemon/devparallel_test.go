@@ -102,7 +102,7 @@ func TestHandleDevSwitchesPortModesForAStackLane(t *testing.T) {
 	d.sessions.Upsert(s)
 	d.cfg.Projects = append(d.cfg.Projects, config.Project{
 		Name: "web", PortRange: "4200-4203", PortsPerSession: 2,
-		Env:         map[string]string{"APP_URL": "http://localhost:{{.Port}}"},
+		Env:         map[string]string{"APP_URL": "http://localhost:$LOLA_PORT"},
 		DevCommands: []string{`printf '%s|%s|%s' "$LOLA_PORT" "$LOLA_PORT_2" "$APP_URL"`},
 	})
 	for _, tc := range []struct{ portRange, want string }{

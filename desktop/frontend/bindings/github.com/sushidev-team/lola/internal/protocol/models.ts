@@ -799,18 +799,6 @@ export interface FeedbackArgs {
 }
 
 /**
- * FeedbackElement is one page element a human picked in the desktop preview
- * pane, with their note about it.
- */
-export interface FeedbackElement {
-    "url"?: string;
-    "selector": string;
-    "html"?: string;
-    "text"?: string;
-    "note": string;
-}
-
-/**
  * FeedbackComment is one line comment. Quote optionally carries the commented
  * line(s) as the human saw them, so the agent can find the spot even after the
  * file has moved on; it is clipped by the daemon.
@@ -839,6 +827,21 @@ export interface FeedbackData {
     "delivered": boolean;
     "queued": boolean;
     "message"?: string;
+}
+
+/**
+ * FeedbackElement is one page element a human picked in the desktop preview
+ * pane, with their note about it. URL is the page it was on (loopback http(s)
+ * only); Selector, HTML and Text are what the page said about the element and
+ * are clipped by the daemon. They are UNTRUSTED text from a page the agent
+ * itself may have written, delivered as quoted evidence, never as an instruction.
+ */
+export interface FeedbackElement {
+    "url"?: string;
+    "selector": string;
+    "html"?: string;
+    "text"?: string;
+    "note": string;
 }
 
 /**
@@ -3329,6 +3332,11 @@ export interface SessionApp {
      * Touched reports local changes against the base with no PR yet.
      */
     "touched"?: boolean;
+
+    /**
+     * DevURLs are addresses advertised by dev tabs launched in this app’s worktree.
+     */
+    "devUrls"?: string[] | null;
 
     /**
      * Ports is this app's own port lease (its [[project]].port_range).

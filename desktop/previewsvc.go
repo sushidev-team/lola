@@ -38,13 +38,18 @@ func sessionDevURLs(id string) ([]string, error) {
 	}
 	for _, si := range d.Sessions {
 		if si.ID == id {
-			return si.DevURLs, nil
+			urls := si.DevURLs
+			for _, app := range si.Apps {
+				urls = append(urls, app.DevURLs...)
+			}
+			return urls, nil
 		}
 	}
 	return nil, errors.New("unknown session " + id)
 }
 
 // Open returns the address the pane frames for one of the session's dev URLs.
+// The proxy's *.localhost hosts must be allowed by both macOS bundle plists.
 func (s *PreviewService) Open(session, url string) (string, error) {
 	s.init()
 	url = strings.TrimSpace(url)
@@ -57,7 +62,7 @@ func (s *PreviewService) Open(session, url string) (string, error) {
 	}
 	for _, u := range urls {
 		if u == url {
-			return s.srv.Open(url)
+			return s.srv.Open(session, url)
 		}
 	}
 	return "", errors.New("that address is not one of this session's dev servers")

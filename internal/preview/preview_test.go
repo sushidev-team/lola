@@ -2,7 +2,9 @@ package preview
 
 import (
 	"compress/gzip"
+	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,13 +35,26 @@ func TestInject(t *testing.T) {
 	}
 }
 
+// WebKit resolves *.localhost to loopback even on hosts whose system DNS
+// does not. Dial the listener directly while preserving the browser Host.
+var previewClient = &http.Client{
+	Transport: &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort("127.0.0.1", port))
+	}},
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
 func get(t *testing.T, url string, mod func(*http.Request)) *http.Response {
 	t.Helper()
 	req, _ := http.NewRequest("GET", url, nil)
 	if mod != nil {
 		mod(req)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := previewClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,15 +87,15 @@ func TestProxyInjectsAndUnframes(t *testing.T) {
 	defer up.Close()
 	s := New()
 	defer s.Close()
-	addr, err := s.Open(up.URL + "/start?q=1")
+	addr, err := s.Open("session", up.URL+"/start?q=1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(addr, "/start?q=1") || !strings.HasPrefix(addr, "http://127.0.0.1:") {
+	if !strings.HasSuffix(addr, "/start?q=1") || !strings.Contains(addr, ".localhost:") {
 		t.Fatalf("addr = %s", addr)
 	}
 	base := addr[:strings.Index(addr, "/start")]
-	if again, _ := s.Open(up.URL); !strings.HasPrefix(again, base) {
+	if again, _ := s.Open("session", up.URL); !strings.HasPrefix(again, base) {
 		t.Errorf("a second open of one origin must reuse its listener: %s vs %s", again, base)
 	}
 
@@ -115,8 +130,7 @@ func TestProxyInjectsAndUnframes(t *testing.T) {
 		t.Errorf("picker not served")
 	}
 
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	r2, _ := client.Get(base + "/go")
+	r2 := get(t, base+"/go", nil)
 	if loc := r2.Header.Get("Location"); loc != "http://"+strings.TrimPrefix(base, "http://")+"/dest" {
 		t.Errorf("redirect left the proxy: %s", loc)
 	}
@@ -127,7 +141,7 @@ func TestProxyRefusesForeignHost(t *testing.T) {
 	defer up.Close()
 	s := New()
 	defer s.Close()
-	addr, _ := s.Open(up.URL)
+	addr, _ := s.Open("session", up.URL)
 	resp := get(t, addr, func(r *http.Request) { r.Host = "rebind.example.com" })
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d", resp.StatusCode)
@@ -137,7 +151,7 @@ func TestProxyRefusesForeignHost(t *testing.T) {
 func TestOpenRefusesNonLoopback(t *testing.T) {
 	s := New()
 	defer s.Close()
-	if _, err := s.Open("http://10.0.0.1:3000"); err == nil {
+	if _, err := s.Open("session", "http://10.0.0.1:3000"); err == nil {
 		t.Fatal("LAN address opened")
 	}
 }

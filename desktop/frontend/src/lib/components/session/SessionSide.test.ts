@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { freshSession, ssh, terms, store } from './talk.testkit';
 import { SSH } from '$lib/terms.svelte';
 import { feed } from '$lib/feed.svelte';
 import { changes } from '$lib/changes.svelte';
+import { preview } from '$lib/preview.svelte';
+import { PreviewService } from '@bindings/desktop';
+import SessionPreview from './SessionPreview.svelte';
 import SessionSide from './SessionSide.svelte';
 
 afterEach(cleanup);
@@ -80,20 +83,51 @@ it('keeps local report results separate from actual command outcomes', () => {
 it('moves Dev controls into the overview and preserves actions and URLs', async () => {
   const id = freshSession({ devCommands: ['npm run dev'], devActive: true, devUrls: ['http://localhost:3000', 'http://127.0.0.1:5173'] });
   const dev = vi.spyOn(store, 'dev').mockResolvedValue(undefined);
-  const open = vi.spyOn(store, 'openURL').mockResolvedValue(undefined);
+  const open = vi.spyOn(preview, 'open').mockImplementation(() => {});
   const { container } = render(SessionSide, { sessionId: id });
   const panel = container.querySelector('[data-side-dev]')! as HTMLElement;
   await fireEvent.click(within(panel).getByRole('button', { name: 'Stop dev' }));
   expect(dev).toHaveBeenCalledWith(id, false);
   await fireEvent.click(within(panel).getByRole('button', { name: /3000/ }));
-  expect(open).toHaveBeenCalledWith('http://localhost:3000');
+  expect(open).toHaveBeenCalledWith(id, 'http://localhost:3000');
   await fireEvent.click(within(panel).getByRole('button', { name: /5173/ }));
-  expect(open).toHaveBeenCalledWith('http://127.0.0.1:5173');
+  expect(open).toHaveBeenCalledWith(id, 'http://127.0.0.1:5173');
   dev.mockRestore(); open.mockRestore();
 });
 
 
 
+
+it('groups stack links by display name and keeps legacy links accessible', async () => {
+  const id = freshSession({
+    stack: true, devActive: true, devCommands: ['web: vite', 'api: serve'],
+    apps: [{ name: 'web', label: 'Storefront', ports: [20006, 20007] }, { name: 'api', label: 'Catalog API', devUrls: ['http://localhost:8000'] }],
+    devUrls: ['http://127.0.0.1:20006', 'http://localhost:20007', 'http://localhost:9191'],
+  });
+  const open = vi.mocked(PreviewService.Open).mockResolvedValue('about:blank');
+  const external = vi.spyOn(store, 'openURL').mockResolvedValue(undefined);
+  render(SessionSide, { sessionId: id });
+  render(SessionPreview);
+  try {
+    await fireEvent.click(within(screen.getByRole('list', { name: 'Catalog API' })).getByRole('button', { name: /8000/ }));
+    const servers = within(await screen.findByRole('navigation', { name: 'Dev servers' }));
+    const api = within(servers.getByRole('group', { name: 'Catalog API' }));
+    expect(api.getByRole('button', { name: 'localhost:8000' })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(open).toHaveBeenCalledWith(id, 'http://localhost:8000'));
+    const site = within(servers.getByRole('group', { name: 'Storefront' }));
+    expect(servers.getAllByRole('heading', { name: 'Storefront' })).toHaveLength(1);
+    expect(site.getAllByRole('button')).toHaveLength(2);
+    await fireEvent.click(site.getByRole('button', { name: 'localhost:20007' }));
+    expect(open).toHaveBeenLastCalledWith(id, 'http://localhost:20007');
+    expect(within(servers.getByRole('group', { name: 'Other addresses' })).getByRole('button', { name: 'localhost:9191' })).toBeInTheDocument();
+    expect(external).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Open in external browser' }));
+    expect(external).toHaveBeenCalledWith('http://localhost:20007');
+  } finally {
+    preview.close();
+    external.mockRestore();
+  }
+});
 
 it('collapses completed plans and keeps the detail available', async () => {
   const id = freshSession({ board: { phase: 'done', hasProgress: true, percent: 100, todos: [{ text: 'Implement it', state: 'done' }] } });

@@ -61,7 +61,7 @@ func (n *Native) sessionProject(p config.Project, v EnvVars) config.Project {
 func WriteDevPortEnv(sessionDir string, p config.Project, v EnvVars) error {
 	portEnv := make(map[string]string)
 	for key, value := range p.Env {
-		if strings.Contains(value, "{{.Port") {
+		if strings.Contains(lolaenv.PortTemplates(value), "{{.Port") {
 			portEnv[key] = value
 		}
 	}

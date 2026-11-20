@@ -5,8 +5,8 @@
 //     read lola's per-session environment: $LOLA_PORT, $LOLA_DB_NAME, …
 //     (internal/runtime/projectenv.go, withSessionEnv) plus the project's own
 //     [project.env] keys.
-//   - ENV VALUES are rendered by lola before any shell sees them, with the
-//     {{.Field}} placeholders of expandProjectEnv.
+//   - ENV VALUES are rendered by lola before any shell sees them, with the same
+//     port names and {{.Field}} placeholders for session metadata.
 //
 // Keep both lists in step with projectenv.go and the README's "Per-session env
 // values" table.
@@ -23,11 +23,11 @@ function leased(lease: PortLease): number {
   return lease.range.trim() ? Math.max(1, Math.floor(lease.perSession) || 1) : 0;
 }
 
-function portItems(lease: PortLease, first: string, nth: (i: number) => string): Variable[] {
+function portItems(lease: PortLease): Variable[] {
   const n = leased(lease);
-  const items = [{ label: "Port", token: first }];
+  const items = [{ label: "Port", token: "$LOLA_PORT" }];
   // $LOLA_PORT_1 is $LOLA_PORT; the numbered ones only earn a row past one port.
-  for (let i = 1; n > 1 && i <= n; i++) items.push({ label: `Port ${i}`, token: nth(i) });
+  for (let i = 2; i <= n; i++) items.push({ label: `Port ${i}`, token: `$LOLA_PORT_${i}` });
   return items;
 }
 
@@ -54,7 +54,7 @@ export function commandVariables(lease: PortLease, env: string[] | null | undefi
     {
       title: "Ports",
       note: leased(lease) ? undefined : NO_RANGE,
-      items: portItems(lease, "$LOLA_PORT", (i) => `$LOLA_PORT_${i}`),
+      items: portItems(lease),
     },
   ];
   const keys = envKeys(env);
@@ -79,7 +79,7 @@ export function envValueVariables(lease: PortLease): VariableGroup[] {
     {
       title: "Ports",
       note: leased(lease) ? undefined : NO_RANGE,
-      items: portItems(lease, "{{.Port}}", (i) => `{{.Port${i}}}`),
+      items: portItems(lease),
     },
   ];
 }

@@ -66,6 +66,7 @@ func TestCommandLineDoesNotExecCompoundLines(t *testing.T) {
 		"cd desktop; npm run dev",
 		"php artisan serve > serve.log 2>&1",
 		"cd desktop",
+		`PORT="$LOLA_PORT" npm run dev`,
 	} {
 		got := CommandLine(cmd)
 		if strings.Contains(got, "exec "+cmd) {
@@ -81,13 +82,11 @@ func TestCommandLineDoesNotExecCompoundLines(t *testing.T) {
 }
 
 // The exec is kept wherever it is safe, because it is what makes tmux report
-// the COMMAND's exit rather than a wrapper shell's. An env-assignment prefix
-// stays simple: both bash and dash apply it to the exec'd command.
+// the COMMAND's exit rather than a wrapper shell's.
 func TestCommandLineStillExecsSimpleCommands(t *testing.T) {
 	for _, cmd := range []string{
 		"composer dev",
 		"npm run dev",
-		"PORT=3000 npm run dev",
 		"  wails3 dev  ",
 	} {
 		got := CommandLine(cmd)

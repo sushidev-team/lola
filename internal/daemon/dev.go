@@ -29,6 +29,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -158,7 +159,7 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	}
 	freed := d.sweepPortSquatters(ctx, tm, p.Name, home, only)
 
-	started := 0
+	var startedTabs []string
 	var errs []error
 	for i, dc := range plan {
 		cmd := dc.cmd
@@ -182,12 +183,13 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 			if kerr := tm.KeepDeadPane(ectx, name); kerr != nil {
 				d.logf("", "dev: %s could not keep the dead pane of %s: %v", s.ID, name, kerr)
 			}
-			started++
+			startedTabs = append(startedTabs, name)
 		} else {
 			errs = append(errs, fmt.Errorf("%q: %w", cmd, err))
 		}
 		cancel()
 	}
+	started := len(startedTabs)
 	d.markDev(s.ID, started > 0, started)
 
 	if started == 0 {
@@ -196,7 +198,7 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	// The tabs are up but nothing has printed yet, and the observer's next look
 	// is up to a full cycle away — so the address is watched for, closely, right
 	// now (startDevURLWatch); the observer's own lazy scan stays as the fallback.
-	d.startDevURLWatch(s.ID, started)
+	d.startDevURLWatch(s.ID, startedTabs)
 	msg := fmt.Sprintf("session %s: %d dev process(es) running", s.ID, started)
 	if stopped != "" {
 		msg += fmt.Sprintf(" (taken over from %s)", stopped)
@@ -554,7 +556,7 @@ const devURLAttempts = 20
 func (d *Daemon) scanDevURLs(ctx context.Context, s session.Session, live int, liveTabs []string) bool {
 	if live == 0 {
 		d.forgetDevURLTries(s.ID)
-		return d.setDevURLs(s.ID, nil)
+		return d.setDevURLs(s.ID, nil, nil)
 	}
 	restarted := s.DevTabs != live
 	if restarted {
@@ -564,11 +566,12 @@ func (d *Daemon) scanDevURLs(ctx context.Context, s session.Session, live int, l
 		return false
 	}
 
-	found := d.readDevURLs(ctx, liveTabs, devURLScanLines)
+	slices.Sort(liveTabs)
+	found, byApp := d.readDevURLs(ctx, s, liveTabs, devURLScanLines)
 	if len(found) == 0 {
 		return false
 	}
-	if d.setDevURLs(s.ID, found) {
+	if d.setDevURLs(s.ID, found, byApp) {
 		d.logf("", "dev: %s serves %s", s.ID, strings.Join(found, ", "))
 		return true
 	}
@@ -604,8 +607,8 @@ const (
 // cycle): every read is a bounded, read-only capture-pane, so aborting one costs
 // a link that the next observer cycle finds anyway — while making graceful
 // shutdown wait up to devURLWatchWindow for it would be a real cost.
-func (d *Daemon) startDevURLWatch(sessionID string, tabs int) {
-	if sessionID == "" || tabs <= 0 || d.paneTail == nil {
+func (d *Daemon) startDevURLWatch(sessionID string, tabs []string) {
+	if sessionID == "" || len(tabs) == 0 || d.paneTail == nil {
 		return
 	}
 	d.mu.Lock()
@@ -645,7 +648,7 @@ func (d *Daemon) startDevURLWatch(sessionID string, tabs int) {
 // another one while this is still looking, and a watch that kept writing
 // addresses onto a session that no longer serves them is exactly the stale link
 // the whole design refuses.
-func (d *Daemon) watchDevURLs(ctx context.Context, sessionID string, tabs int) {
+func (d *Daemon) watchDevURLs(ctx context.Context, sessionID string, tabs []string) {
 	deadline := time.Now().Add(devURLWatchWindow)
 	wait := devURLWatchFirst
 	for {
@@ -658,15 +661,11 @@ func (d *Daemon) watchDevURLs(ctx context.Context, sessionID string, tabs int) {
 
 		s, ok := d.sessions.Get(sessionID)
 		switch {
-		case !ok, !s.DevActive, s.DevTabs != tabs:
+		case !ok, !s.DevActive, s.DevTabs != len(tabs):
 			return // stopped, taken over, or restarted — not this watch's tabs
 		}
-		names := make([]string, 0, tabs)
-		for i := 1; i <= tabs; i++ {
-			names = append(names, devtab.Name(sessionID, i))
-		}
-		if urls := d.readDevURLs(ctx, names, devURLWatchLines); len(urls) > 0 {
-			if d.setDevURLs(sessionID, urls) {
+		if urls, byApp := d.readDevURLs(ctx, s, tabs, devURLWatchLines); len(urls) > 0 {
+			if d.setDevURLs(sessionID, urls, byApp) {
 				d.logf("", "dev: %s serves %s", sessionID, strings.Join(urls, ", "))
 				if err := d.sessions.Save(); err != nil {
 					d.logf("", "dev: persist %s's addresses: %v", sessionID, err)
@@ -686,29 +685,55 @@ func (d *Daemon) watchDevURLs(ctx context.Context, sessionID string, tabs int) {
 // advertise, best first and deduplicated across tabs — so a two-command project
 // keeps its app URL ahead of its bundler's even though the panes are ranked
 // independently. A tab that cannot be read is skipped, never fatal.
-func (d *Daemon) readDevURLs(ctx context.Context, names []string, lines int) []string {
-	var panes []string
+func (d *Daemon) readDevURLs(ctx context.Context, s session.Session, names []string, lines int) ([]string, map[string][]string) {
+	var all []devurl.Candidate
+	perApp := make(map[string][]devurl.Candidate)
 	for _, name := range names {
 		cctx, cancel := context.WithTimeout(ctx, devExecTimeout)
-		pane, err := d.paneTail(cctx, name, lines)
+		var dir, pane string
+		var err error
+		if s.Stack && d.stackDevPane != nil {
+			dir, pane, err = d.stackDevPane(cctx, name, lines)
+		} else {
+			pane, err = d.paneTail(cctx, name, lines)
+		}
 		cancel()
 		if err != nil {
 			d.logf("", "observe: could not read %s for its dev address: %v", name, err)
 			continue
 		}
-		panes = append(panes, pane)
+		candidates := devurl.Scan(pane)
+		all = append(all, candidates...)
+		if dir != "" && len(candidates) > 0 {
+			for _, app := range s.Apps {
+				if filepath.Clean(app.Worktree) == filepath.Clean(dir) {
+					perApp[app.Name] = append(perApp[app.Name], candidates...)
+					break
+				}
+			}
+		}
 	}
-	return devurl.Merge(panes)
+	var byApp map[string][]string
+	if len(perApp) > 0 {
+		byApp = make(map[string][]string, len(perApp))
+		for app, candidates := range perApp {
+			byApp[app] = devurl.RankedURLs(candidates)
+		}
+	}
+	return devurl.RankedURLs(all), byApp
 }
 
 // setDevURLs writes the derived addresses onto the record, reporting whether
 // anything actually changed.
-func (d *Daemon) setDevURLs(sessionID string, urls []string) bool {
+func (d *Daemon) setDevURLs(sessionID string, urls []string, byApp map[string][]string) bool {
 	_, changed := d.sessions.Update(sessionID, func(s *session.Session) bool {
-		if slices.Equal(s.DevURLs, urls) {
+		if len(urls) > 0 && !s.DevActive {
+			return false // the tabs stopped while their panes were being read
+		}
+		if slices.Equal(s.DevURLs, urls) && maps.EqualFunc(s.DevAppURLs, byApp, slices.Equal[[]string]) {
 			return false
 		}
-		s.DevURLs = urls
+		s.DevURLs, s.DevAppURLs = urls, byApp
 		return true
 	})
 	return changed
@@ -747,7 +772,7 @@ func (d *Daemon) markDev(sessionID string, active bool, tabs int) {
 		// Any change to the tabs invalidates the addresses they printed: the
 		// servers stopped, or restarted onto other ports. scanDevURLs finds them
 		// again on the next cycle — until then, none is the honest answer.
-		s.DevURLs = nil
+		s.DevURLs, s.DevAppURLs = nil, nil
 		// And it invalidates the explanation of why a tab died, for the same
 		// reason: these are different tabs. scanDevClash re-derives it if the new
 		// ones lose the same race.

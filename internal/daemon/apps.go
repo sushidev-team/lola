@@ -123,7 +123,7 @@ func (d *Daemon) appsInfo(cfg *config.Config, s session.Session) []protocol.Sess
 	}
 	out := make([]protocol.SessionApp, 0, len(s.Apps))
 	for _, a := range s.Apps {
-		ai := protocol.SessionApp{Name: a.Name, Repo: a.Repo, Branch: a.Branch, Worktree: a.Worktree, Delivery: string(a.Delivery), Touched: a.Touched && a.PR == nil}
+		ai := protocol.SessionApp{Name: a.Name, DevURLs: s.DevAppURLs[a.Name], Repo: a.Repo, Branch: a.Branch, Worktree: a.Worktree, Delivery: string(a.Delivery), Touched: a.Touched && a.PR == nil}
 		if cfg != nil {
 			if m := cfg.ProjectByName(a.Name); m != nil {
 				ai.Label = m.DisplayName()
