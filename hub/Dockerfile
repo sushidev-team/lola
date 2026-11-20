@@ -13,6 +13,8 @@ ENV GOPROXY=off GOFLAGS=-buildvcs=false CGO_ENABLED=0
 COPY hubproto ./hubproto
 COPY hub ./hub
 WORKDIR /src/hub
+# Publishing is image-only CI; keep the existing test gate inside the build.
+RUN make check
 RUN go build -trimpath -ldflags="-s -w" -o /out/lola-hub ./cmd/lola-hub
 
 FROM gcr.io/distroless/static-debian12:nonroot

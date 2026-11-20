@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: traefik
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+---
+# CrowdSec's log agent needs hostPath access to /var/log/containers.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: crowdsec
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false

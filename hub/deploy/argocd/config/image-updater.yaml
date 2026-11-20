@@ -1,0 +1,19 @@
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: lola-hub
+  namespace: argocd
+spec:
+  namespace: argocd
+  writeBackConfig:
+    method: argocd
+  applicationRefs:
+    - namePattern: lola-hub
+      images:
+        - alias: hub
+          imageName: registry.digitalocean.com/sushidev-registry-01/lola-hub:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            kustomize:
+              name: registry.digitalocean.com/sushidev-registry-01/lola-hub
