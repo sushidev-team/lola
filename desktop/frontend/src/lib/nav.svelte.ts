@@ -75,16 +75,23 @@ class Nav {
     try { localStorage.setItem(LAST_GIT_PROJECT_KEY, name); } catch { /* keep the in-memory choice */ }
   }
   view = $state<View>("cockpit");
-  private gitReturn: { view: View; project: string; scoped: boolean; scope: string[]; selectedId: string; focusedTerm: string; sidebarBrowsing: boolean } | null = null;
+  private gitReturn: { entryRepo: string; view: View; project: string; scoped: boolean; scope: string[]; selectedId: string; focusedTerm: string; sidebarBrowsing: boolean } | null = null;
   get inGit() { return this.view === "detail"; }
-  private rememberGitReturn() {
-    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, scope:this.scope, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarBrowsing:this.sidebarBrowsing};
+  private rememberGitReturn(entryRepo: string) {
+    this.gitReturn = {
+      entryRepo, view: this.view, project: this.project, scoped: this.scoped, scope: this.scope,
+      selectedId: this.selectedId, focusedTerm: this.focusedTerm, sidebarBrowsing: this.sidebarBrowsing,
+    };
   }
   returnFromGit() {
     if (!this.inGit) return;
     const previous = this.gitReturn;
     this.gitReturn = null;
-    if (!previous) { this.goCockpit(this.project); return; }
+    if (previous?.entryRepo !== this.project) {
+      this.selectedId = "";
+      this.goCockpit(this.project);
+      return;
+    }
     this.view = previous.view;
     this.project = previous.project;
     this.scoped = previous.scoped;
@@ -223,7 +230,7 @@ class Nav {
     this.dropFocus();
   }
   goGit(name: string) {
-    if (!this.inGit) this.rememberGitReturn();
+    if (!this.inGit) this.rememberGitReturn(name);
     this.rememberGitProject(name);
     this.project = name;
     // Project navigation is a workspace destination, not a session filter.

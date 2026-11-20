@@ -50,7 +50,7 @@ describe("nav.goGit", () => {
     nav.goCockpit("web");
     nav.openSession("s1", true);
     nav.goGit("web");
-    nav.goGit("other-repo");
+    nav.goGit("web");
     nav.returnFromGit();
     expect(nav.view).toBe("cockpit");
     expect(nav.focusedTerm).toBe("s1");
@@ -61,6 +61,20 @@ describe("nav.goGit", () => {
     nav.goGit("web");
     nav.returnFromGit();
     expect(nav.focusedTerm).toBe("s2");
+  });
+
+  it("scopes Code to the last project chosen in Git and releases the previous session", () => {
+    nav.goCockpit("web");
+    nav.openSession("web-1");
+    nav.goGit("web");
+    nav.goGit("api");
+    nav.goGit("mobile");
+    nav.returnFromGit();
+    expect(nav.view).toBe("cockpit");
+    expect(nav.project).toBe("mobile");
+    expect(nav.scopeNames).toEqual(["mobile"]);
+    expect(nav.focusedTerm).toBe("");
+    expect(nav.selectedId).toBe("");
   });
 
   it("returns from Git to the prior picker", () => {
