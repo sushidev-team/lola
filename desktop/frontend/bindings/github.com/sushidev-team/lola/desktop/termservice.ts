@@ -22,11 +22,10 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as application$0 from "../../../wailsapp/wails/v3/pkg/application/models.js";
-
+import * as protocol$0 from "../internal/protocol/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as protocol$0 from "../internal/protocol/models.js";
+import * as application$0 from "../../../wailsapp/wails/v3/pkg/application/models.js";
 
 /**
  * Attach starts an interactive `tmux attach` to the named session in a PTY sized
