@@ -380,15 +380,11 @@ func (m *Manager) Prepare(ctx context.Context, p config.Project, dir string) err
 	return nil
 }
 
-// Dirty reports whether dir has uncommitted changes (`git status
-// --porcelain` non-empty) — the same test Remove applies before it refuses
-// with ErrDirty. An error means git could not tell.
+// Dirty reports whether dir has uncommitted changes, using the same check
+// as Remove. An error means git could not tell.
 func (m *Manager) Dirty(ctx context.Context, dir string) (bool, error) {
-	out, _, err := m.git(ctx, "-C", dir, "status", "--porcelain")
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(out) != "", nil
+	dirty, _, err := m.checkoutStatus(ctx, dir)
+	return dirty, err
 }
 
 // VerifyReviewHead refuses to certify a checkout that differs from the PR head.
@@ -523,8 +519,9 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 	if err := m.guardRemovable(p, dir); err != nil {
 		return err
 	}
+	caseAliases := false
 	if !force {
-		out, _, err := m.git(ctx, "-C", dir, "status", "--porcelain")
+		dirty, aliases, err := m.checkoutStatus(ctx, dir)
 		if err != nil {
 			// git cannot inspect the dir. If its `.git` link is gone or dangling
 			// it is an orphaned leftover git can no longer manage; remove it directly.
@@ -534,12 +531,18 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 			}
 			return fmt.Errorf("worktree: dirty check: %w", err)
 		}
-		if strings.TrimSpace(out) != "" {
+		if dirty {
 			return fmt.Errorf("worktree %s: %w", dir, ErrDirty)
 		}
+		caseAliases = aliases
 	}
 
-	args := []string{"-C", p.Path, "worktree", "remove"}
+	args := []string{"-C", p.Path}
+	if caseAliases {
+		// Git repeats the cleanliness check during an unforced removal.
+		args = append(args, "-c", "core.ignoreCase=true")
+	}
+	args = append(args, "worktree", "remove")
 	// A PINNED (sandboxed) worktree was dirty-checked above through its pin.
 	// `worktree remove` would repeat that check in a child that finds the
 	// repository through the admin dir's `commondir` — a file the agent could
