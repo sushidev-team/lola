@@ -32,7 +32,7 @@
       case "tab":
         if (r.tab === "projects") {
           if (!r.project) return "projects";
-          if (r.pick === "git") return "git";
+          if (r.pick === "git" || r.pick === "graph") return "git";
           return r.pick === "prs" ? "prPicker" : r.pick === "tickets" ? "ticketPicker" : "projectDetail";
         }
         return r.tab;
@@ -329,7 +329,9 @@
       {#if route.name !== "dev" || DEBUG_BUILD}
         {#await screen(screenKey(route)) then m}
           {@const Screen = m.default}
-          <Screen />
+          {#key route.name === "tab" && screenKey(route) === "git" ? route.project : undefined}
+            <Screen />
+          {/key}
         {/await}
       {/if}
     {/snippet}

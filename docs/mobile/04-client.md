@@ -1605,7 +1605,15 @@ compiled out of release). Launch-environment variant
 ---
 
 
-### 5.x The Git client (`/projects/<name>/git`)
+### 5.x Project Changes and Graph
+
+Projects open on Sessions. Changes (`/projects/<name>/git`) and Graph
+(`/projects/<name>/graph`) are sibling sections when the project checkout
+is available and the device has read access. Changes includes files and stashes.
+Graph uses the desktop commit layout, pins the default branch to the first lane,
+and can expand for wider histories. Its filter reads the selected branch without
+switching the checkout. A commit opens its diff and Back returns to the same row.
+Same-repository PR numbers are matched to remote branch tips from the project PR list.
 
 The phone has no git credentials, so the Git screen (`screens/Git.svelte`) asks the Mac. The
 shim routes `ProjectGitService` methods to three daemon commands (`projectGit` read,

@@ -186,6 +186,23 @@ export class PreviewDaemon extends FakeLink {
       case "prReadiness":
         if (!fx.readiness[id]) throw new Refused("unknown_session");
         return fx.readiness[id];
+      case "projectGit": {
+        const snapshot = fx.git?.[String(args.project)];
+        if (!snapshot) throw new Refused("unknown_cmd");
+        if (args.op === "stashes") return [];
+        if (args.op === "diff") return { files: [] };
+        if (args.op !== "snapshot") throw new Refused("unknown_cmd");
+        if (!args.ref) return snapshot;
+        const tip = snapshot.refs.find(ref => ref.fullName === args.ref);
+        if (!tip) throw new Refused("unknown_ref");
+        const reachable = new Set([tip.sha]);
+        const commits = snapshot.commits.filter(commit => {
+          if (!reachable.has(commit.sha)) return false;
+          for (const parent of commit.parents) reachable.add(parent);
+          return true;
+        });
+        return { ...snapshot, commits };
+      }
       case "prs":
         return fx.prs;
       case "tickets":

@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { onMount, untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { agoShort } from "$lib/board";
+  import CommitGraph from "@mobile/lib/components/CommitGraph.svelte";
+  import ProjectSections from "@mobile/lib/components/ProjectSections.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import ProjectGitDiff from "$lib/components/ProjectGitDiff.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -29,7 +31,12 @@
 
   let worktree = $state("");
   let limit = $state(HISTORY_PAGE);
-  let section = $state<"changes" | "history" | "stashes">("changes");
+  const graph = $derived(router.top.name === "tab" && router.top.pick === "graph");
+  const readable = $derived(!!store.projectByName(project)?.pathOk && can("projectGit"));
+  let section = $state<"changes" | "stashes">("changes");
+  let historyRef = $state("");
+  let switchingFilter = $state(false);
+  let returnFocus: HTMLElement | null = null;
   let pickingTree = $state(false);
   type View = { kind: "file"; file: GitFile; staged: boolean } | { kind: "commit"; commit: GitCommit };
   let view = $state<View | null>(null);
@@ -46,34 +53,45 @@
   const canCommit = $derived(
     canAct && staged.length > 0 && !!git.message.trim() && !conflicts && !git.busy && (!operation || operation === "merge"),
   );
-  const segments = $derived<Segment<"changes" | "history" | "stashes">[]>([
-    { id: "changes", label: `${copy.git.segments.changes}${(snap?.files.length ?? 0) > 0 ? ` ${snap!.files.length}` : ""}` },
-    { id: "history", label: copy.git.segments.history },
+  const segments = $derived<Segment<"changes" | "stashes">[]>([
+    { id: "changes", label: `${copy.git.files}${(snap?.files.length ?? 0) > 0 ? ` ${snap!.files.length}` : ""}` },
     { id: "stashes", label: `${copy.git.segments.stashes}${git.stashes.length > 0 ? ` ${git.stashes.length}` : ""}` },
   ]);
 
   function reload(): void {
-    void git.load("", limit);
+    void git.load(historyRef, limit);
   }
 
-  onMount(reload);
+  async function filterHistory(ref: string) {
+    historyRef = ref;
+    limit = HISTORY_PAGE;
+    const state = git;
+    switchingFilter = true;
+    await state.load(ref, limit);
+    if (git === state && historyRef === ref) switchingFilter = false;
+  }
 
   // Another project or checkout is another state: leave the open diff and reload.
   $effect(() => {
     void project;
     void worktree;
+    const allowed = readable;
     untrack(() => {
       view = null;
       limit = HISTORY_PAGE;
-      if (!git.snapshot) void git.load("", HISTORY_PAGE);
+      pickingTree = false;
+      historyRef = "";
+      switchingFilter = false;
+      if (allowed) reload();
     });
   });
 
   async function act(action: "stage" | "unstage" | "pull" | "push" | "fetch" | "commit", paths: string[] = []): Promise<boolean> {
-    return git.act(action, paths, "", limit);
+    return git.act(action, paths, historyRef, limit);
   }
 
   function open(next: View): void {
+    returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     view = next;
     openFile = "";
     if (next.kind === "file") {
@@ -85,6 +103,7 @@
   function close(): void {
     view = null;
     git.clearDiff();
+    void tick().then(() => returnFocus?.focus({ preventScroll: true }));
   }
 
   async function stageFromView(): Promise<void> {
@@ -103,7 +122,7 @@
       body: copy.git.discardNote,
       confirmLabel: copy.git.discard,
       onConfirm: () => {
-        void git.discardUnstaged(plan.token, "", limit, [path]).then((ok) => ok && close());
+        void git.discardUnstaged(plan.token, historyRef, limit, [path]).then((ok) => ok && close());
       },
     });
   }
@@ -114,7 +133,7 @@
       subject,
       body: copy.git.dropNote,
       confirmLabel: copy.git.drop,
-      onConfirm: () => void git.stashAction("drop", sha, snap?.head ?? "", "", limit),
+      onConfirm: () => void git.stashAction("drop", sha, snap?.head ?? "", historyRef, limit),
     });
   }
 
@@ -187,10 +206,10 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col bg-canvas">
-  {#if view}
+  {#if view && readable}
     <LargeTitle
       title={view.kind === "file" ? splitPath(view.file.path).name : shortSha(view.commit.sha)}
-      back={{ label: copy.git.title, onclick: close }}
+      back={{ label: graph ? copy.git.graph : copy.git.segments.changes, onclick: close }}
     />
     <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
       {#if view.kind === "commit"}
@@ -202,7 +221,7 @@
       <p class="mx-4 mb-2 shrink-0 rounded-xl bg-sel px-3 py-2 text-subhead text-bad" role="alert">{git.error}</p>
     {/if}
     {#if view.kind === "file" && (canAct || (!view.staged && canDiscard))}
-      <div class="flex shrink-0 gap-2 border-t border-edge-soft p-3 pb-[calc(env(safe-area-inset-bottom,0px)+12px)]">
+      <div class="grid auto-cols-fr grid-flow-col shrink-0 gap-2 border-t border-edge-soft p-3 pb-[calc(env(safe-area-inset-bottom,0px)+12px)]">
         {#if canAct}
           <TouchButton wide variant="secondary" disabled={!!git.busy} onclick={stageFromView}>
             {view.staged ? copy.git.unstage : copy.git.stage}
@@ -213,164 +232,150 @@
         {/if}
       </div>
     {/if}
-  {:else}
-    <LargeTitle title={copy.git.title} back={{ label: store.displayNameFor(project), onclick: () => router.back() }}>
+  {/if}
+  <!-- Keep the list mounted behind a diff so returning preserves the reading position. -->
+  <div hidden={!!view && readable} class={view && readable ? "hidden" : "flex min-h-0 flex-1 flex-col"}>
+    <LargeTitle title={store.displayNameFor(project)} back={{ label: copy.projects.back, onclick: () => router.replace({ name: "tab", tab: "projects" }) }}>
       {#snippet trailing()}
-        <TouchButton icon aria-label={copy.projects.refresh} loading={git.loading} disabled={git.loading} onclick={reload}>
-          <Icon name="refresh-cw" size={20} />
-        </TouchButton>
+        {#if readable}
+          <TouchButton icon aria-label={copy.projects.refresh} loading={git.loading} disabled={git.loading} onclick={reload}>
+            <Icon name="refresh-cw" size={20} />
+          </TouchButton>
+        {/if}
       {/snippet}
     </LargeTitle>
 
-    <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto overscroll-contain pb-6">
-      {#if git.error}
+    {#if readable}<ProjectSections {project} value={graph ? "graph" : "git"} />{/if}
+    <div class={graph ? "flex min-h-0 flex-1 flex-col gap-2" : "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto overscroll-contain pb-6"}>
+      {#if !readable}
+        <p class="px-4 py-6 text-callout text-faint">{copy.git.unavailable.body}</p>
+      {:else if git.error}
         <div class="flex flex-col items-center gap-3 px-8 py-8 text-center" role="alert">
           <span class="text-headline text-ink">{copy.git.failed.body}</span>
           <span class="text-callout text-bad">{git.error}</span>
           <TouchButton variant="secondary" loading={git.loading} onclick={reload}>{copy.projects.retry}</TouchButton>
+          {#if graph && historyRef}<TouchButton onclick={() => filterHistory("")}>{copy.git.allBranches}</TouchButton>{/if}
         </div>
       {:else if !snap}
         <p class="px-8 py-12 text-center text-callout text-faint">{copy.git.loading.status}</p>
       {:else}
-        <ListGroup>
-          <ListRow
-            label={snap.branch || copy.git.detached}
-            icon="git-branch"
-            detail={snap.upstream || undefined}
-            detailMono
-            value={[sync.ahead > 0 ? fill(copy.git.ahead, { n: sync.ahead }) : "", sync.behind > 0 ? fill(copy.git.behind, { n: sync.behind }) : ""].filter(Boolean).join(" · ") || shortSha(snap.head)}
-            chevron={trees.length > 1}
-            onclick={trees.length > 1 ? () => (pickingTree = !pickingTree) : undefined}
-          />
-          {#if pickingTree}
-            {#each trees as t (t.path)}
-              <ListRow
-                label={t.branch || shortSha(t.head)}
-                detail={t.path}
-                detailMono
-                checked={t.path === snap.path}
-                onclick={() => {
-                  worktree = t.path;
-                  pickingTree = false;
-                }}
-              />
-            {/each}
-          {/if}
-        </ListGroup>
-
-        {#if canAct}
-          <div class="flex gap-2 px-4">
-            {#each ["fetch", "pull", "push"] as const as a (a)}
-              <TouchButton wide variant="secondary" loading={git.busy === a || (a === "fetch" && git.fetching)} disabled={!!git.busy || git.fetching} onclick={() => act(a)}>
-                {BUSY[a]}
-              </TouchButton>
-            {/each}
-          </div>
-        {/if}
-
-        {#if operation}
-          <p class="mx-4 rounded-xl bg-sel px-3 py-2 text-subhead text-warn" role="status">{copy.git.operation.body}</p>
-        {:else if conflicts}
-          <p class="mx-4 rounded-xl bg-sel px-3 py-2 text-subhead text-warn" role="status">{copy.git.conflicts.body}</p>
-        {/if}
-
-        <div class="px-4">
-          <SegmentBar segments={segments} value={section} onchange={(id) => (section = id)} label={copy.git.title} />
+        <div class="max-h-[35dvh] shrink-0 overflow-y-auto">
+          <ListGroup>
+            <ListRow
+              label={snap.branch || copy.git.detached}
+              icon="git-branch"
+              detail={snap.upstream || undefined}
+              detailMono
+              value={[sync.ahead > 0 ? fill(copy.git.ahead, { n: sync.ahead }) : "", sync.behind > 0 ? fill(copy.git.behind, { n: sync.behind }) : ""].filter(Boolean).join(" · ") || shortSha(snap.head)}
+              chevron={trees.length > 1}
+              onclick={trees.length > 1 ? () => (pickingTree = !pickingTree) : undefined}
+            />
+            {#if pickingTree}
+              {#each trees as t (t.path)}
+                <ListRow
+                  label={t.branch || shortSha(t.head)}
+                  detail={t.path}
+                  detailMono
+                  checked={t.path === snap.path}
+                  onclick={() => {
+                    worktree = t.path;
+                    pickingTree = false;
+                  }}
+                />
+              {/each}
+            {/if}
+          </ListGroup>
         </div>
 
-        {#if section === "changes"}
-          {#if staged.length === 0 && unstaged.length === 0}
-            <p class="px-8 py-6 text-center text-callout text-faint">{copy.git.noChanges.body}</p>
-          {/if}
-          {#if staged.length > 0}
-            <SectionHeader title={copy.git.staged} count={staged.length} />
-            <ListGroup>{#each staged as f (f.path)}{@render fileRow(f, true)}{/each}</ListGroup>
-            {#if canAct}
-              <div class="px-4">
-                <TouchButton wide variant="secondary" disabled={!!git.busy} onclick={() => act("unstage", staged.map((f) => f.path))}>{copy.git.unstageAll}</TouchButton>
-              </div>
-            {/if}
-          {/if}
-          {#if unstaged.length > 0}
-            <SectionHeader title={copy.git.unstaged} count={unstaged.length} />
-            <ListGroup>{#each unstaged as f (f.path)}{@render fileRow(f, false)}{/each}</ListGroup>
-            {#if canAct}
-              <div class="px-4">
-                <TouchButton wide variant="secondary" disabled={!!git.busy} onclick={() => act("stage", unstaged.map((f) => f.path))}>{copy.git.stageAll}</TouchButton>
-              </div>
-            {/if}
-          {/if}
-          {#if canAct && (staged.length > 0 || operation === "merge")}
-            <div class="flex flex-col gap-2 px-4">
-              <textarea
-                class="min-h-24 w-full resize-none rounded-xl border border-edge bg-panel p-3 text-body text-ink placeholder:text-faint"
-                placeholder={copy.git.messagePlaceholder}
-                aria-label={copy.git.messagePlaceholder}
-                bind:value={git.message}
-              ></textarea>
-              <TouchButton wide variant="primary" loading={git.busy === "commit"} disabled={!canCommit} onclick={() => act("commit")}>
-                {copy.git.commit}
-              </TouchButton>
-            </div>
-          {/if}
-        {:else if section === "history"}
-          {#if snap.commits.length === 0}
-            <p class="px-8 py-6 text-center text-callout text-faint">{copy.git.noCommits.body}</p>
-          {:else}
-            <ListGroup>
-              {#each snap.commits as c (c.sha)}
-                <button
-                  type="button"
-                  class="flex w-full touch-manipulation flex-col gap-0.5 border-b border-edge-soft py-2.5 pr-4 pl-4 text-left last:border-b-0 active:bg-sel"
-                  onclick={() => open({ kind: "commit", commit: c })}
-                >
-                  <!-- A commit subject is untrusted text: a text node, never markup. -->
-                  <span class="truncate text-body text-ink">{c.subject}</span>
-                  <span class="flex min-w-0 items-center gap-1.5 text-subhead text-subtext">
-                    <span class="num shrink-0">{shortSha(c.sha)}</span>
-                    <span aria-hidden="true">·</span>
-                    <span class="min-w-0 truncate">{c.author}</span>
-                    <span aria-hidden="true">·</span>
-                    <span class="shrink-0">{agoShort(c.date)}</span>
-                  </span>
-                </button>
-              {/each}
-            </ListGroup>
-            {#if snap.hasMore && limit < MAX_HISTORY}
-              <div class="px-4">
-                <TouchButton wide variant="secondary" loading={git.loading} onclick={more}>{copy.git.loadMore}</TouchButton>
-              </div>
-            {/if}
-          {/if}
+        {#if graph}
+          <CommitGraph snapshot={snap} {project} {historyRef} onfilter={filterHistory} onopen={(commit) => open({ kind: "commit", commit })}
+            more={snap.hasMore && limit < MAX_HISTORY} onmore={more} loading={git.loading} {switchingFilter} />
         {:else}
-          {#if canAct && (snap.files.length > 0)}
-            <div class="px-4">
-              <TouchButton wide variant="secondary" disabled={!!git.busy} onclick={() => git.stashAction("stash", "", snap.head, "", limit)}>{copy.git.stashChanges}</TouchButton>
+          {#if canAct}
+            <div class="grid grid-cols-3 gap-2 px-4">
+              {#each ["fetch", "pull", "push"] as const as a (a)}
+                <TouchButton wide variant="secondary" loading={git.busy === a || (a === "fetch" && git.fetching)} disabled={!!git.busy || git.fetching} onclick={() => act(a)}>
+                  {BUSY[a]}
+                </TouchButton>
+              {/each}
             </div>
           {/if}
-          {#if git.stashes.length === 0}
-            <p class="px-8 py-6 text-center text-callout text-faint">{copy.git.noStashes.body}</p>
-          {:else}
-            <ListGroup>
-              {#each git.stashes as s (s.sha)}
-                <div class="flex flex-col gap-1 border-b border-edge-soft py-2.5 pr-2 pl-4 last:border-b-0">
-                  <span class="truncate text-body text-ink">{s.subject}</span>
-                  <span class="flex items-center gap-1">
-                    <span class="num flex-1 text-subhead text-subtext">{s.selector} · {agoShort(s.date)}</span>
-                    {#if canAct}
-                      <TouchButton disabled={!!git.busy} onclick={() => git.stashAction("apply", s.sha, snap.head, "", limit)}>{copy.git.apply}</TouchButton>
-                    {/if}
-                    {#if canDiscard}
-                      <TouchButton disabled={!!git.busy} onclick={() => git.stashAction("pop", s.sha, snap.head, "", limit)}>{copy.git.pop}</TouchButton>
-                      <TouchButton variant="danger" disabled={!!git.busy} onclick={() => dropStash(s.sha, s.subject)}>{copy.git.drop}</TouchButton>
-                    {/if}
-                  </span>
+
+          {#if operation}
+            <p class="mx-4 rounded-xl bg-sel px-3 py-2 text-subhead text-warn" role="status">{copy.git.operation.body}</p>
+          {:else if conflicts}
+            <p class="mx-4 rounded-xl bg-sel px-3 py-2 text-subhead text-warn" role="status">{copy.git.conflicts.body}</p>
+          {/if}
+
+          <div class="px-4">
+            <SegmentBar segments={segments} value={section} onchange={(id) => (section = id)} label={copy.git.title} />
+          </div>
+
+          {#if section === "changes"}
+            {#if staged.length === 0 && unstaged.length === 0}
+              <p class="px-8 py-6 text-center text-callout text-faint">{copy.git.noChanges.body}</p>
+            {/if}
+            {#if staged.length > 0}
+              <SectionHeader title={copy.git.staged} count={staged.length} />
+              <ListGroup>{#each staged as f (f.path)}{@render fileRow(f, true)}{/each}</ListGroup>
+              {#if canAct}
+                <div class="px-4">
+                  <TouchButton wide variant="secondary" disabled={!!git.busy} onclick={() => act("unstage", staged.map((f) => f.path))}>{copy.git.unstageAll}</TouchButton>
                 </div>
-              {/each}
-            </ListGroup>
+              {/if}
+            {/if}
+            {#if unstaged.length > 0}
+              <SectionHeader title={copy.git.unstaged} count={unstaged.length} />
+              <ListGroup>{#each unstaged as f (f.path)}{@render fileRow(f, false)}{/each}</ListGroup>
+              {#if canAct}
+                <div class="px-4">
+                  <TouchButton wide variant="secondary" disabled={!!git.busy} onclick={() => act("stage", unstaged.map((f) => f.path))}>{copy.git.stageAll}</TouchButton>
+                </div>
+              {/if}
+            {/if}
+            {#if canAct && (staged.length > 0 || operation === "merge")}
+              <div class="flex flex-col gap-2 px-4">
+                <textarea
+                  class="min-h-24 w-full resize-none rounded-xl border border-edge bg-panel p-3 text-body text-ink placeholder:text-faint"
+                  placeholder={copy.git.messagePlaceholder}
+                  aria-label={copy.git.messagePlaceholder}
+                  bind:value={git.message}
+                ></textarea>
+                <TouchButton wide variant="primary" loading={git.busy === "commit"} disabled={!canCommit} onclick={() => act("commit")}>
+                  {copy.git.commit}
+                </TouchButton>
+              </div>
+            {/if}
+          {:else}
+            {#if canAct && (snap.files.length > 0)}
+              <div class="px-4">
+                <TouchButton wide variant="secondary" disabled={!!git.busy} onclick={() => git.stashAction("stash", "", snap.head, historyRef, limit)}>{copy.git.stashChanges}</TouchButton>
+              </div>
+            {/if}
+            {#if git.stashes.length === 0}
+              <p class="px-8 py-6 text-center text-callout text-faint">{copy.git.noStashes.body}</p>
+            {:else}
+              <ListGroup>
+                {#each git.stashes as s (s.sha)}
+                  <div class="flex flex-col gap-1 border-b border-edge-soft py-2.5 pr-2 pl-4 last:border-b-0">
+                    <span class="truncate text-body text-ink">{s.subject}</span>
+                    <span class="flex items-center gap-1">
+                      <span class="num flex-1 text-subhead text-subtext">{s.selector} · {agoShort(s.date)}</span>
+                      {#if canAct}
+                        <TouchButton disabled={!!git.busy} onclick={() => git.stashAction("apply", s.sha, snap.head, historyRef, limit)}>{copy.git.apply}</TouchButton>
+                      {/if}
+                      {#if canDiscard}
+                        <TouchButton disabled={!!git.busy} onclick={() => git.stashAction("pop", s.sha, snap.head, historyRef, limit)}>{copy.git.pop}</TouchButton>
+                        <TouchButton variant="danger" disabled={!!git.busy} onclick={() => dropStash(s.sha, s.subject)}>{copy.git.drop}</TouchButton>
+                      {/if}
+                    </span>
+                  </div>
+                {/each}
+              </ListGroup>
+            {/if}
           {/if}
         {/if}
       {/if}
     </div>
-  {/if}
+  </div>
 </div>

@@ -4,8 +4,9 @@
   import { buildRows } from "$lib/sidebarlayout";
   import { displayName } from "$lib/slug";
   import LargeTitle from "@mobile/lib/components/LargeTitle.svelte";
-  import ListGroup from "@mobile/lib/components/ListGroup.svelte";
-  import ListRow from "@mobile/lib/components/ListRow.svelte";
+  import Icon from "$lib/components/Icon.svelte";
+  import StatusChip from "@mobile/lib/components/StatusChip.svelte";
+  import SectionHeader from "@mobile/lib/components/SectionHeader.svelte";
   import { copy, fill } from "@mobile/lib/copy";
   import { router } from "@mobile/lib/router.svelte";
 
@@ -37,17 +38,31 @@
 
   <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-y-auto overscroll-contain pb-4">
     {#each blocks as block (block.key)}
-      <ListGroup header={block.header} count={block.count}>
+      <section>
+        {#if block.header}<SectionHeader title={block.header} count={block.count} />{/if}
         {#each block.projects as p (p.name)}
-          <ListRow
-            label={store.displayNameFor(p.name)}
-            detail={fill(copy.projects.count, { n: p.sessions }) +
-              (p.pollsEnabled > 0 ? "" : ` · ${copy.projects.paused}`)}
-            chevron
-            onclick={() => open(p)}
-          />
+          <button type="button" class="flex min-h-16 w-full items-center gap-3 px-4 text-left active:bg-sel" onclick={() => open(p)}>
+            <span class="grid size-9 shrink-0 place-items-center rounded-lg border border-edge-soft bg-panel text-accent">
+              <Icon name="folder" size={18} />
+            </span>
+            <span class="flex min-w-0 flex-1 items-center gap-2 border-b border-edge-soft py-3">
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-headline text-ink">{store.displayNameFor(p.name)}</span>
+                <span class="flex min-w-0 flex-wrap items-center gap-x-2 text-footnote text-faint">
+                  {#if p.defaultBranch}<span class="flex min-w-0 items-center gap-1"><Icon name="git-branch" size={12} /><span class="truncate font-mono">{p.defaultBranch}</span></span>{/if}
+                  <span>{store.alive && p.liveCounted ? fill(copy.projects.chips.running, { n: p.liveCounted }) : fill(copy.projects.count, { n: p.sessions })}{p.pollsEnabled ? "" : ` · ${copy.projects.paused}`}</span>
+                </span>
+              </span>
+              {#if p.needsYou}
+                <StatusChip tone="urgent" label={fill(copy.projects.chips.needs, { n: p.needsYou })} />
+              {:else if p.ciRed}
+                <StatusChip tone="broken" label={fill(copy.projects.chips.ciFailed, { n: p.ciRed })} />
+              {/if}
+              <Icon name="chevron-right" size={16} class="shrink-0 text-faint" />
+            </span>
+          </button>
         {/each}
-      </ListGroup>
+      </section>
     {:else}
       <p class="px-8 py-12 text-center text-callout text-faint">
         {store.connected ? copy.projects.empty.body : copy.projects.connecting.status}

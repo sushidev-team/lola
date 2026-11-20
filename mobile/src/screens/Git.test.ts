@@ -128,9 +128,56 @@ describe("Git screen", () => {
     });
     render(Git);
     await screen.findByText("a.ts");
-    await fireEvent.click(screen.getByRole("tab", { name: "History" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Graph" }));
     await fireEvent.click(await screen.findByText("Add a thing"));
     await waitFor(() => expect(ops("projectGit").some((a) => a.op === "diff")).toBe(true));
     expect(ops("projectGit").find((a) => a.op === "diff")).toMatchObject({ area: "commit", to: "abcdef0123456789" });
+  });
+});
+
+describe("project graph", () => {
+  beforeEach(() => {
+    tiers.set(["read"]);
+    router.stack = [{ name: "tab", tab: "projects", project: "nori-app", pick: "graph" }];
+  });
+
+  it("filters and pages the selected ref through reads only", async () => {
+    script({ "projectGit:snapshot": snapshot({ hasMore: true }) });
+    render(Git);
+    await fireEvent.click(await screen.findByRole("button", { name: /Filter history/ }));
+    await fireEvent.click(screen.getByRole("button", { name: "main" }));
+    await waitFor(() => expect(ops("projectGit")).toContainEqual(expect.objectContaining({
+      op: "snapshot", ref: "refs/heads/main", limit: 50,
+    })));
+    await fireEvent.click(await screen.findByRole("button", { name: "Show more" }));
+    await waitFor(() => expect(ops("projectGit")).toContainEqual(expect.objectContaining({
+      op: "snapshot", ref: "refs/heads/main", limit: 150,
+    })));
+    expect(ops("projectGitAct")).toEqual([]);
+    expect(screen.getByRole("tab", { name: "Graph" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("preserves the expanded graph and its scroll container after a diff", async () => {
+    const commits = Array.from({ length: 6 }, (_, i) => ({
+      ...snapshot().commits[0], sha: "tip" + i, subject: "Branch " + i, parents: ["base" + i],
+    }));
+    script({ "projectGit:snapshot": snapshot({ commits }), "projectGit:diff": { files: [] } });
+    render(Git);
+    await fireEvent.click(await screen.findByRole("button", { name: "Expand graph" }));
+    const list = screen.getByRole("list", { name: "Graph" });
+    list.scrollLeft = 35;
+    await fireEvent.click(screen.getByRole("button", { name: /Branch 5/ }));
+    expect(screen.queryByRole("list", { name: "Graph" })).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Graph" }));
+    expect(screen.getByRole("list", { name: "Graph" })).toBe(list);
+    expect(list.scrollLeft).toBe(35);
+    expect(screen.getByRole("button", { name: "Collapse graph" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does not request graph data for a direct route without read permission", () => {
+    tiers.clear();
+    render(Git);
+    expect(screen.getByText("Git is unavailable for this project.")).toBeTruthy();
+    expect(ops("projectGit")).toEqual([]);
   });
 });
