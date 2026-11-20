@@ -693,3 +693,24 @@ func TestLinearAgentRelaysTheMentionText(t *testing.T) {
 		t.Fatal("a second cycle must not relay the mention again")
 	}
 }
+
+// A reply into a thread whose lola session is gone is answered once, and the
+// history before the first look is not.
+func TestLinearAgentAnswersRepliesToEndedThreads(t *testing.T) {
+	p := config.Project{Name: "app", Path: "/tmp/app", TeamID: "team-1"}
+	d, api, _ := agentDaemon(t, p)
+	d.agent.record("as-9", "bound", "gone-session") // no such lola session any more
+	api.sessions = []linear.AgentSession{{ID: "as-9", Status: "active", Issue: &linear.Issue{Identifier: "ENG-9", TeamID: "team-1"}}}
+	api.prompts["as-9"] = []linear.AgentPrompt{{ID: "old", Body: "earlier", UserID: "human", CreatedAt: "2026-01-01T00:00:01.000Z"}}
+
+	d.linearAgentCycle(context.Background())
+	if got := api.kinds("as-9"); len(got) != 0 {
+		t.Fatalf("history must not be answered: %v", got)
+	}
+	api.prompts["as-9"] = append(api.prompts["as-9"], linear.AgentPrompt{ID: "new", Body: "any update?", UserID: "human", CreatedAt: "2026-01-02T00:00:00.000Z"})
+	d.linearAgentCycle(context.Background())
+	d.linearAgentCycle(context.Background())
+	if got := api.kinds("as-9"); len(got) != 1 || got[0] != "response" {
+		t.Fatalf("want exactly one response, got %v", got)
+	}
+}

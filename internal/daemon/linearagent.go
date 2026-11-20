@@ -79,9 +79,12 @@ const (
 
 // agentLedgerEntry is one Agent Session lola has acted on.
 type agentLedgerEntry struct {
-	State   string    `json:"state"` // queued | spawning | bound | rejected
-	Session string    `json:"session,omitempty"`
-	At      time.Time `json:"at"`
+	State   string `json:"state"` // queued | spawning | bound | rejected
+	Session string `json:"session,omitempty"`
+	// PromptCursor is the newest human prompt already seen on a thread whose lola
+	// session is gone or finished (see answerOrphanReplies).
+	PromptCursor string    `json:"promptCursor,omitempty"`
+	At           time.Time `json:"at"`
 }
 
 // linearAgentRuntime is the loop's state, all behind mu.
@@ -295,6 +298,7 @@ func (d *Daemon) linearAgentCycle(ctx context.Context) time.Duration {
 			d.mirrorAgentSession(ctx, api, cur)
 		}
 	}
+	d.answerOrphanReplies(ctx, api, sessions)
 	ra.pruneLedger()
 	ra.saveLedger(d.home, d.logf)
 	return interval
@@ -1070,4 +1074,76 @@ func (d *Daemon) relayMention(sessionID string, as linear.AgentSession) {
 		d.logf("", "linear agent: persist sessions: %v", err)
 	}
 	d.flushAgentNoticesAsync(sessionID)
+}
+
+// orphanReplyNote is what a human gets when they reply in a thread whose lola
+// session no longer exists or has finished. It is a fixed sentence: the reply
+// itself goes nowhere.
+const orphanReplyNote = "This lola session has ended, so I cannot pass that on. Mention or delegate to me on the issue again to start a new one."
+
+// answerOrphanReplies stops a reply into a finished or torn-down thread from
+// vanishing. For every ledger-bound Agent Session that Linear shows as live
+// again but that no running lola session mirrors (the session was removed, or
+// its final response was posted), it reads the human prompts, ignores the
+// history it saw the first time, and answers each NEW one once with
+// orphanReplyNote. It never restarts work: starting is a human's fresh mention.
+// A daemon that skipped the session (only_when_assigned_to_me) never bound it,
+// so it never answers for another owner's thread.
+func (d *Daemon) answerOrphanReplies(ctx context.Context, api linear.AgentAPI, sessions []linear.AgentSession) {
+	ra := d.agent
+	mirrored := map[string]bool{}
+	for _, s := range d.sessions.Snapshot() {
+		if s.AgentSessionID != "" && !s.AgentMirror.Done {
+			mirrored[s.AgentSessionID] = true
+		}
+	}
+	ra.mu.Lock()
+	self := ra.viewerID
+	ra.mu.Unlock()
+	for _, as := range sessions {
+		switch as.Status {
+		case "complete", "error", "stale", "stopping":
+			continue // Linear shows it closed: nothing was said into it
+		}
+		ra.mu.Lock()
+		entry, known := ra.ledger[as.ID]
+		ra.mu.Unlock()
+		if !known || entry.State != "bound" || mirrored[as.ID] {
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, agentExecTimeout)
+		prompts, err := api.AgentPrompts(cctx, as.ID, entry.PromptCursor)
+		cancel()
+		if err != nil {
+			d.logf("", "linear agent: prompts for ended thread %s: %v", as.ID, err)
+			continue
+		}
+		newest := entry.PromptCursor
+		answered := false
+		for _, p := range prompts {
+			if p.CreatedAt <= newest {
+				continue
+			}
+			newest = p.CreatedAt
+			// The first look only records the history the live session already saw.
+			if entry.PromptCursor != "" && p.UserID != self && strings.TrimSpace(p.Body) != "" && p.Signal != "stop" {
+				answered = true
+			}
+		}
+		if answered {
+			d.postAgentActivity(ctx, api, as.ID, linear.Response(orphanReplyNote))
+		}
+		if newest == "" {
+			// No history yet: stamp now, so the first reply AFTER this look is answered.
+			newest = ra.now().UTC().Format("2006-01-02T15:04:05.000Z")
+		}
+		if newest != entry.PromptCursor {
+			ra.mu.Lock()
+			if e, ok := ra.ledger[as.ID]; ok {
+				e.PromptCursor = newest
+				ra.ledger[as.ID] = e
+			}
+			ra.mu.Unlock()
+		}
+	}
 }
