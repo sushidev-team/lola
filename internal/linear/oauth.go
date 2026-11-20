@@ -38,6 +38,9 @@ type OAuthToken struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at,omitzero"`
+	// Scope is what Linear granted (space or comma separated), recorded so
+	// `lola doctor` can say a missing scope before a mention silently fails.
+	Scope string `json:"scope,omitempty"`
 }
 
 // Expired reports whether the access token is past (or within skew of) its
@@ -141,6 +144,7 @@ func (o OAuthClient) token(ctx context.Context, v url.Values) (OAuthToken, error
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 		ExpiresIn    int64  `json:"expires_in"`
+		Scope        string `json:"scope"`
 		Error        string `json:"error"`
 	}
 	_ = json.Unmarshal(body, &r)
@@ -151,7 +155,7 @@ func (o OAuthClient) token(ctx context.Context, v url.Values) (OAuthToken, error
 		}
 		return OAuthToken{}, fmt.Errorf("linear oauth: http %d: %s", resp.StatusCode, code)
 	}
-	t := OAuthToken{AccessToken: r.AccessToken, RefreshToken: r.RefreshToken}
+	t := OAuthToken{AccessToken: r.AccessToken, RefreshToken: r.RefreshToken, Scope: r.Scope}
 	if r.ExpiresIn > 0 {
 		t.ExpiresAt = now().Add(time.Duration(r.ExpiresIn) * time.Second)
 	}

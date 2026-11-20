@@ -398,6 +398,9 @@ func (d *Daemon) refreshWith(ctx context.Context, cfg config.LinearAgentConfig, 
 	cctx, cancel := context.WithTimeout(ctx, agentExecTimeout)
 	fresh, err := ra.refresh(cctx, cfg, tok.RefreshToken)
 	cancel()
+	if err == nil && fresh.Scope == "" {
+		fresh.Scope = tok.Scope // a refresh that does not restate the scope keeps the recorded one
+	}
 	if err != nil {
 		ra.mu.Lock()
 		ra.api = nil
