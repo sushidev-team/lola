@@ -13,6 +13,8 @@ spec:
     runAsUser: 65532
     runAsGroup: 65532
     fsGroup: 65532
+    # Avoid recursively widening the existing 0600 store/token files.
+    fsGroupChangePolicy: OnRootMismatch
     seccompProfile:
       type: RuntimeDefault
   containers:
