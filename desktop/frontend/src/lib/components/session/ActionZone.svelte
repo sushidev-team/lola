@@ -45,7 +45,7 @@
       <div class="grid h-7 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 text-sm text-faint" data-goal-line>
         <span class="grid w-3.5" title={glyph?.label}>{#if glyph}<StateGlyph label={glyph.label} glyph={glyph.glyph} cls={glyph.cls} mono={glyph.mono} />{/if}</span>
         <p class="min-w-0 truncate">A goal runs this session.</p>
-        <Button variant="secondary" size="xs" onclick={() => session && nav.goDetail(session.project)}>Open goal</Button>
+        <Button variant="secondary" size="xs" onclick={() => session && nav.openOverlay("goals", session.project, session.goalId)}>Open goal</Button>
       </div>
     {:else if view.handback}
       <SSHHandback {sessionId} />

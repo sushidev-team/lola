@@ -34,6 +34,9 @@
   import Toast from "$lib/components/Toast.svelte";
   import Cockpit from "$lib/views/Cockpit.svelte";
   import Home from "$lib/views/Home.svelte";
+  import ProjectGoals from "$lib/components/ProjectGoals.svelte";
+  import ProjectKnowledge from "$lib/components/ProjectKnowledge.svelte";
+  import ProjectBroadcast from "$lib/components/ProjectBroadcast.svelte";
   import ProjectDetail from "$lib/views/ProjectDetail.svelte";
   import PRPicker from "$lib/views/PRPicker.svelte";
   import TicketPicker from "$lib/views/TicketPicker.svelte";
@@ -116,7 +119,7 @@
       if (nav.view === "cockpit" && nav.focusedTerm) void terms.closeActiveTab(nav.focusedTerm);
       return;
     }
-    if (action === "find-project-history") { if (nav.view === "detail" && nav.projectTab === "git") nav.gitSearchRequest++; return; }
+    if (action === "find-project-history") { if (nav.inGit) nav.gitSearchRequest++; return; }
     if (action === "commands") { nav.openOverlay("commands"); return; }
     if (action === "new-session") { newSessionHere(); return; }
     if (action === "temporary-shell") { void openShell(); return; }
@@ -507,6 +510,16 @@
   <RenameSession />
 {:else if nav.overlay === "activity"}
   <Modal title="Activity" onClose={() => nav.closeOverlay()} width="680px"><ActivityFeed limit={200} /></Modal>
+{:else if nav.overlay === "goals"}
+  <Modal title={store.displayNameFor(nav.overlayProject)} onClose={() => nav.closeOverlay()} width="900px">
+    <ProjectGoals project={nav.overlayProject} goalId={nav.overlayTab} expanded />
+  </Modal>
+{:else if nav.overlay === "knowledge"}
+  <Modal title={store.displayNameFor(nav.overlayProject)} onClose={() => nav.closeOverlay()} width="900px">
+    <ProjectKnowledge project={nav.overlayProject} expanded />
+  </Modal>
+{:else if nav.overlay === "broadcast"}
+  <ProjectBroadcast project={nav.overlayProject} />
 {:else if nav.overlay === "doctor"}
   <DoctorOverlay />
 {:else if nav.overlay === "settings"}

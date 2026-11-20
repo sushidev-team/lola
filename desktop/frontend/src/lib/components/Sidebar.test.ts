@@ -10,7 +10,6 @@ describe("Sidebar workspace switch", () => {
   beforeEach(() => {
     store.projects = [project] as never;
     nav.goCockpit("");
-    nav.projectTab = "overview";
   });
   afterEach(cleanup);
 

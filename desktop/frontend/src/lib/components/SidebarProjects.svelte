@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { openProject as openProjectWorkspace } from "$lib/workspacenav";
   import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import { projectActions } from "$lib/projectActions";
@@ -468,8 +469,7 @@
     if (suppressClick) return;
     // Git mode: a project is a workspace to open. Code mode: it filters the sessions beside it,
     // with filters cleared through the chips in the sessions panel.
-    // A stack or path-less project keeps the Git tab too: ProjectDetail shows its overview.
-    if (nav.gitMode) nav.goDetail(name, "git");
+    if (nav.gitMode) openProjectWorkspace(name);
     else if (event && (event.metaKey || event.ctrlKey || event.shiftKey)) nav.toggleScope(name);
     else { nav.scopeTo(name); nav.sidebarTab = "sessions"; }
   }

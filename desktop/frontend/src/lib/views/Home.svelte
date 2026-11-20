@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { openProject } from "$lib/workspacenav";
   import Icon from "$lib/components/Icon.svelte";
   import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import { store, type ProjectInfo } from "$lib/store.svelte";
@@ -61,7 +62,7 @@
         {#each rows as p (p.name)}
           {@const poll = pollCell(p)}
           <tr class="group border-t border-edge/30 hover:bg-sel/50">
-            <td class="cursor-pointer px-3 py-2 font-medium" onclick={() => nav.goDetail(p.name)}>
+            <td class="cursor-pointer px-3 py-2 font-medium" onclick={() => openProject(p.name)}>
               {displayName(p)}
               {#if !p.agentOk}<span class="ml-1 text-bad" title={p.agentErr}><Icon name="x" size={14} /></span>{/if}
             </td>
@@ -81,7 +82,7 @@
               <div class="flex items-center justify-end gap-0.5">
                 <Button size="xs" onclick={() => nav.goCockpit(p.name)}>Sessions</Button>
                 <Button size="xs" onclick={() => nav.openOverlay("project", p.name)}>Edit</Button>
-                <Button size="xs" onclick={() => nav.goDetail(p.name)}>Open <span aria-hidden="true"><Icon name="chevron-right" size={14} /></span></Button>
+                <Button size="xs" onclick={() => openProject(p.name)}>Open <span aria-hidden="true"><Icon name="chevron-right" size={14} /></span></Button>
               </div>
             </td>
           </tr>

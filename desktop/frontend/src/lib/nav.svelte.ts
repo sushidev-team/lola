@@ -5,24 +5,16 @@ import { SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX, PROJECTS_DEFAULT, clampProje
 export type View = "cockpit" | "home" | "detail" | "prpicker" | "ticketpicker" | "team";
 // There is no separate "poll" overlay any more: a project IS the poll unit, so
 // the project overlay covers repo setup, filter, labels and write-back in tabs.
-export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "update" | "help" | "bestof" | "newsession" | "commands" | "rename-session" | "activity" | "sshsession" | "sshconnect" | "pr-review";
+export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "update" | "help" | "bestof" | "newsession" | "commands" | "rename-session" | "activity" | "sshsession" | "sshconnect" | "pr-review" | "goals" | "knowledge" | "broadcast";
 
 /** Webview-local sidebar preference. Deliberately NOT in config.toml. */
 const SIDEBAR_KEY = "lola.sidebar";
-/** The right-hand column of the project views (facts, Git inspector). */
+/** The right-hand Git inspector. */
 const ASIDE_KEY = "lola.aside";
-const PROJECT_TAB_KEY = "lola.project.tab";
 const LAST_GIT_PROJECT_KEY = "lola.git.last-project";
 /** When each session was last on screen, so a finished turn can read as not yet seen. */
 const SEEN_KEY = "lola.seen";
 const SEEN_KEEP = 200;
-
-export type ProjectTab = "overview" | "git";
-
-function readProjectTab(): ProjectTab {
-  try { return localStorage.getItem(PROJECT_TAB_KEY) === "git" ? "git" : "overview"; }
-  catch { return "overview"; }
-}
 
 function readLastGitProject(): string {
   try { return localStorage.getItem(LAST_GIT_PROJECT_KEY) ?? ""; }
@@ -83,28 +75,20 @@ class Nav {
     try { localStorage.setItem(LAST_GIT_PROJECT_KEY, name); } catch { /* keep the in-memory choice */ }
   }
   view = $state<View>("cockpit");
-  private preferredProjectTab = $state<ProjectTab>(readProjectTab());
-  get projectTab(): ProjectTab { return this.preferredProjectTab; }
-  set projectTab(tab: ProjectTab) {
-    if (tab === "git" && this.view === "detail" && this.projectTab !== "git") this.rememberGitReturn();
-    this.preferredProjectTab = tab;
-    try { localStorage.setItem(PROJECT_TAB_KEY, tab); } catch { /* keep the in-memory choice */ }
-  }
-  private gitReturn: { view: View; project: string; scoped: boolean; scope: string[]; projectTab: ProjectTab; selectedId: string; focusedTerm: string; sidebarBrowsing: boolean } | null = null;
-  get inGit() { return this.view === "detail" && this.projectTab === "git"; }
+  private gitReturn: { view: View; project: string; scoped: boolean; scope: string[]; selectedId: string; focusedTerm: string; sidebarBrowsing: boolean } | null = null;
+  get inGit() { return this.view === "detail"; }
   private rememberGitReturn() {
-    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, scope:this.scope, projectTab:this.projectTab, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarBrowsing:this.sidebarBrowsing};
+    this.gitReturn = {view:this.view, project:this.project, scoped:this.scoped, scope:this.scope, selectedId:this.selectedId, focusedTerm:this.focusedTerm, sidebarBrowsing:this.sidebarBrowsing};
   }
   returnFromGit() {
     if (!this.inGit) return;
     const previous = this.gitReturn;
     this.gitReturn = null;
-    if (!previous) { this.projectTab = "overview"; return; }
+    if (!previous) { this.goCockpit(this.project); return; }
     this.view = previous.view;
     this.project = previous.project;
     this.scoped = previous.scoped;
     this.scope = previous.scope;
-    this.projectTab = previous.projectTab;
     this.selectedId = previous.selectedId;
     this.focusedTerm = previous.focusedTerm;
     this.sidebarBrowsing = previous.sidebarBrowsing;
@@ -238,9 +222,9 @@ class Nav {
     this.view = "team";
     this.dropFocus();
   }
-  goDetail(name: string, tab: ProjectTab = this.projectTab) {
-    if (tab === "git" && !this.inGit) this.rememberGitReturn();
-    this.projectTab = tab;
+  goGit(name: string) {
+    if (!this.inGit) this.rememberGitReturn();
+    this.rememberGitProject(name);
     this.project = name;
     // Project navigation is a workspace destination, not a session filter.
     this.scoped = false;

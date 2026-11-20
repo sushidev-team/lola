@@ -124,7 +124,7 @@ describe("SidebarProjects", () => {
   });
 
   it("opens the Git workspace for a project in Git mode", async () => {
-    nav.goDetail("okane", "git");
+    nav.goGit("okane");
     render(SidebarProjects);
     expect(screen.queryByRole("button", { name: "All sessions" })).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("button", { name: "lola" }));
@@ -134,12 +134,14 @@ describe("SidebarProjects", () => {
     expect(nav.scoped).toBe(false);
   });
 
-  it("stays in Git mode when a stack is selected, so its member opens Git next", async () => {
+  it("opens the stack’s sessions in Code when selected from Git", async () => {
     store.projects = stackProjects();
-    nav.goDetail("lola", "git");
+    nav.goGit("lola");
     render(SidebarProjects);
     await fireEvent.click(screen.getByRole("button", { name: "nori" }));
-    expect(nav.inGit).toBe(true);
+    expect(nav.inGit).toBe(false);
+    expect(nav.view).toBe("cockpit");
+    expect(nav.scopeNames).toEqual(["nori"]);
     expect(nav.project).toBe("nori");
   });
 

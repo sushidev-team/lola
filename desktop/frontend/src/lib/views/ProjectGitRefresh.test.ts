@@ -15,7 +15,7 @@ beforeEach(() => {
   name = `refresh-project-${++serial}`;
   api.Snapshot.mockReset().mockResolvedValue(snapshot()); api.Identities.mockResolvedValue({authors:{}}); api.Stashes.mockResolvedValue([]); api.Diff.mockResolvedValue({files:[]});
   store.projects=[project()];store.sessions=[];store.status=null;store.alive=true;store.connected=false;
-  nav.goDetail(name,'git');nav.sidebarOpen=true;
+  nav.goGit(name);nav.sidebarOpen=true;
 });
 afterEach(cleanup);
 describe('Project Git background updates', () => {
@@ -65,7 +65,7 @@ describe('Project Git background updates', () => {
     render(ProjectDetail);
     await fireEvent.click(await screen.findByRole('button',{name:/Selected commit,/}));
     store.projects=[project(), {...project(), name: name + '-next'}];
-    nav.goDetail(name + '-next', 'git');
+    nav.goGit(name + '-next');
     await tick(); await tick();
     expect(screen.getByRole('button',{name:/Selected commit,/})).toHaveAttribute('aria-pressed','false');
     expect(api.Snapshot).toHaveBeenLastCalledWith(name + '-next', '', '', 200);

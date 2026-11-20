@@ -17,18 +17,24 @@ export function gitTargetProject(): ProjectInfo | undefined {
     .map(name => repositories.find(project => project.name === name)).find(Boolean) ?? repositories[0];
 }
 
-/** Use the current repository, then the last Git workspace; otherwise show Projects. */
-export function toggleGitWorkspace() {
-  const visibleProject = store.projectByName(nav.project);
-  if (nav.inGit && visibleProject?.path && visibleProject.kind !== 'stack') { nav.returnFromGit(); return; }
-  // Stack and unavailable-project screens render Overview even when Git was
-  // the last saved tab. Record the visible destination when leaving them.
-  if (nav.inGit) nav.projectTab = 'overview';
-  const project = gitTargetProject();
-  if (!project) {
-    nav.goHome();
+/** A repository opens in Git. Stacks and projects without a checkout open their sessions. */
+export function openProject(name: string) {
+  const project = store.projectByName(name);
+  if (project?.path && project.kind !== 'stack') {
+    nav.goGit(name);
     return;
   }
-  nav.rememberGitProject(project.name);
-  nav.goDetail(project.name, 'git');
+  nav.pendingMode = null;
+  nav.goCockpit(name);
+  nav.sidebarTab = 'sessions';
+}
+
+export function toggleGitWorkspace() {
+  if (nav.inGit) {
+    nav.returnFromGit();
+    return;
+  }
+  const project = gitTargetProject();
+  if (project) nav.goGit(project.name);
+  else nav.goHome();
 }

@@ -162,39 +162,38 @@ describe("project workspace toolbar", () => {
     chord('shortcuts');
     expect(nav.overlay).toBe('help');
   });
-  it("does not mistake a stack with a saved Git tab for a repository", async () => {
+  it("keeps stacks without repositories out of Git", async () => {
     await mount([]);
     store.projects = [{name:'stack',kind:'stack',path:'/stack'}] as typeof store.projects;
-    nav.goDetail('stack', 'git');
+    nav.goCockpit('stack');
     chord('toggle-git');
     expect(nav.overlay).toBeNull();
     expect(nav.view).toBe('home');
     expect(nav.project).toBe('stack');
-    expect(nav.projectTab).toBe('overview');
+    expect(nav.inGit).toBe(false);
   });
   it("routes native Find to Git history only while that view is active", async () => {
     await mount([]);
     const initial = nav.gitSearchRequest;
     chord("find-project-history");
     expect(nav.gitSearchRequest).toBe(initial);
-    nav.goDetail("missing-project", "git");
+    nav.goGit("missing-project");
     chord("find-project-history");
     expect(nav.gitSearchRequest).toBe(initial + 1);
     nav.openOverlay("settings");
     chord("find-project-history");
     expect(nav.gitSearchRequest).toBe(initial + 1);
     nav.closeOverlay();
-    nav.projectTab = "overview";
   });
   it("replaces the shared header and restores navigation for a missing project", async () => {
     await mount([]);
     store.projects = [{ name: "workspace", label: "Workspace", path: "/repo", agentOk: true }] as typeof store.projects;
     nav.sidebarOpen = false;
-    nav.goDetail("workspace");
+    nav.goGit("workspace");
     flushSync();
     expect(screen.getByRole("banner", { name: "Project toolbar" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Back to sessions" })).toBeNull();
-    nav.goDetail("missing-project");
+    nav.goGit("missing-project");
     flushSync();
     expect(screen.getByRole("button", { name: "Back to sessions" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show sidebar" })).toBeInTheDocument();

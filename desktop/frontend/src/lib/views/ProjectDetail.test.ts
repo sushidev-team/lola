@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
+import ProjectBroadcast from "$lib/components/ProjectBroadcast.svelte";
 import ProjectDetail from "./ProjectDetail.svelte";
 import { store, type ProjectInfo } from "$lib/store.svelte";
 import { nav } from "$lib/nav.svelte";
@@ -33,7 +34,7 @@ describe("ProjectDetail", () => {
     nav.asideOpen = true;
     store.projects = [];
     store.sessions = [];
-    nav.goDetail("acme", "overview");
+    nav.goGit("acme");
     nav.sidebarQuery = "";
     store.status = null;
     store.alive = true;
@@ -43,16 +44,13 @@ describe("ProjectDetail", () => {
     nav.closeOverlay();
   });
 
-  it("renders project information, actions and empty sessions for a known project", () => {
+  it("opens the Git workspace directly even with the old Overview preference", () => {
+    localStorage.setItem("lola.project.tab", "overview");
     store.projects = [fakeProject()];
     render(ProjectDetail);
-
-    expect(screen.getAllByText(/acme\/acme/)[0]).toBeInTheDocument(); // repository information
-    expect(screen.getByText("Open a PR")).toBeInTheDocument();
-    expect(screen.getByText("Start a ticket")).toBeInTheDocument();
-    expect(screen.getAllByText("New session…")[0]).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Polls", hidden: true })).toBeInTheDocument();
-    expect(screen.getByText("No sessions yet")).toBeInTheDocument();
+    expect(screen.getByTestId("project-git")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Project sessions" })).toBeNull();
   });
 
   it("keeps waiting and daemon alerts accessible in the compact Git toolbar", async () => {
@@ -61,7 +59,6 @@ describe("ProjectDetail", () => {
     store.connected = true;
     store.alive = false;
     nav.sidebarOpen = false;
-    nav.projectTab = "git";
     render(ProjectDetail);
     expect(screen.getByRole("button", { name: "Show sidebar" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1 waiting on you" })).toBeInTheDocument();
@@ -78,25 +75,6 @@ describe("ProjectDetail", () => {
     await fireEvent.click(toggle);
     expect(nav.asideOpen).toBe(true);
     expect(toggle).toHaveAttribute("aria-pressed", "true");
-  });
-
-  it("dims Open a PR and shows the hint when no repo is configured", () => {
-    store.projects = [fakeProject({ repoConfigured: false })];
-    render(ProjectDetail);
-
-    const btn = screen.getByText("Open a PR").closest("button");
-    expect(btn).toBeDisabled();
-    expect(btn).toHaveAttribute("title", "set a GitHub repo to list PRs");
-  });
-
-  it("warns and keeps launch verbs navigable when the agent is unhealthy", () => {
-    store.projects = [fakeProject({ agentOk: false, agentErr: "claude not on PATH" })];
-    render(ProjectDetail);
-
-    expect(screen.getByText(/agent not ready: claude not on PATH/)).toBeInTheDocument();
-    // Per spec these actions navigate to pickers, so they stay enabled.
-    expect(screen.getByText("Start a ticket").closest("button")).not.toBeDisabled();
-    expect(screen.getAllByText("New session…")[0].closest("button")).not.toBeDisabled();
   });
 
   // "Polls" and "Edit project" are two doors into the same overlay now that a
@@ -130,52 +108,6 @@ describe("ProjectDetail", () => {
     expect(nav.overlayProject).toBe("acme");
   });
 
-  it("opens a session in the session panel and switches the sidebar", async () => {
-    nav.sidebarQuery = "unrelated search";
-    store.projects = [fakeProject({ liveCounted: 1, needsYou: 1, openPrs: 2 })];
-    store.sessions = [{ id: "s1", project: "acme", title: "Implement login", branch: "feature/login", agent: "claude", agentState: "working", delivery: "none", prNumber: 0 }] as typeof store.sessions;
-    render(ProjectDetail);
-    expect(screen.getByRole("region", { name: "Project sessions" })).toBeInTheDocument();
-    await fireEvent.click(screen.getByRole("button", { name: /Implement login/ }));
-    expect(nav.view).toBe("cockpit");
-    expect(nav.focusedTerm).toBe("s1");
-    expect(nav.project).toBe("acme");
-    expect(nav.sidebarQuery).toBe("");
-  });
-
-  it("opens Git from repository information and supports keyboard tabs", async () => {
-    store.projects = [fakeProject()];
-    render(ProjectDetail);
-    await fireEvent.click(screen.getByRole("button", { name: "Open Git" }));
-    expect(nav.projectTab).toBe("git");
-    expect(screen.getByRole("tab", { name: "Git" })).toHaveAttribute("aria-selected", "true");
-    await fireEvent.keyDown(screen.getByRole("tab", { name: "Git" }), { key: "ArrowLeft" });
-    expect(nav.projectTab).toBe("overview");
-    expect(screen.getByRole("tab", { name: "Overview" })).toHaveFocus();
-    await fireEvent.keyDown(screen.getByRole("tab", { name: "Overview" }), { key: "ArrowRight" });
-    expect(screen.getByRole("tab", { name: "Git" })).toHaveFocus();
-    expect(screen.getAllByRole("banner", { name: "Project toolbar" })).toHaveLength(1);
-  });
-
-  it("shows Overview for a stack without overwriting the saved Git preference", () => {
-    store.projects = [fakeProject({ kind: "stack", path: "" })];
-    nav.projectTab = "git";
-    render(ProjectDetail);
-    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByRole("tab", { name: "Git" })).toBeNull();
-    expect(nav.projectTab).toBe("git");
-    expect(localStorage.getItem("lola.project.tab")).toBe("git");
-  });
-
-  it("opens stack member repositories in their Git workspace", async () => {
-    store.projects = [fakeProject({ kind: "stack", path: "" }), fakeProject({ name: "frontend", stack: "acme", repo: "acme/frontend" })];
-    render(ProjectDetail);
-    expect(screen.queryByRole("tab", { name: "Git" })).not.toBeInTheDocument();
-    await fireEvent.click(screen.getByRole("button", { name: /frontend acme\/frontend/ }));
-    expect(nav.project).toBe("frontend");
-    expect(nav.projectTab).toBe("git");
-  });
-
   it("broadcasts one message to the project's agents and shows the delivered/deferred split", async () => {
     const spy = vi
       .spyOn(store, "broadcast")
@@ -188,6 +120,9 @@ describe("ProjectDetail", () => {
     render(ProjectDetail);
 
     await fireEvent.click(screen.getByRole("menuitem", { name: "Broadcast", hidden: true }).closest("button")!);
+    expect(nav.overlay).toBe("broadcast");
+    expect(nav.overlayProject).toBe("acme");
+    render(ProjectBroadcast, { project: nav.overlayProject });
     const box = screen.getByLabelText("Broadcast message");
     await fireEvent.input(box, { target: { value: "  rebase on main  " } });
     await fireEvent.click(screen.getByRole("button", { name: /Send to agents/ }));
