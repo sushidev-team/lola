@@ -161,10 +161,10 @@ func storeAgentToken(cfg config.LinearAgentConfig, t linear.OAuthToken) error {
 }
 
 func refreshAgentToken(ctx context.Context, cfg config.LinearAgentConfig, refreshToken string) (linear.OAuthToken, error) {
-	secret, err := secrets.Resolve("linear agent client secret", cfg.ClientSecretKeychain, cfg.ClientSecretEnv)
-	if err != nil {
-		return linear.OAuthToken{}, err
-	}
+	// Optional: a token made by `lola linear-agent login` (PKCE) refreshes with
+	// the client id alone. Only an old, secret-bound token needs the secret, and
+	// Linear's own answer says so.
+	secret, _ := secrets.Resolve("linear agent client secret", cfg.ClientSecretKeychain, cfg.ClientSecretEnv)
 	return linear.OAuthClient{ClientID: cfg.ClientID, ClientSecret: secret}.Refresh(ctx, refreshToken)
 }
 

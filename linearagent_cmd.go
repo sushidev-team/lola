@@ -215,7 +215,7 @@ func (l lineReader) Read(p []byte) (int, error) {
 
 // linearAgentLogin runs the OAuth authorization-code flow with actor=app:
 // a loopback callback, a CSRF state nonce, the code exchanged with the client
-// secret from the keychain, and the tokens written to the keychain.
+// PKCE verifier (the app secret is optional), and the tokens written to the keychain.
 func linearAgentLogin(c *cobra.Command) error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -225,10 +225,14 @@ func linearAgentLogin(c *cobra.Command) error {
 	if la.ClientID == "" {
 		return errors.New("[linear_agent].client_id is not set — create an OAuth app in Linear (Settings → API → OAuth applications), enable it for agents, and put its client id in config.toml")
 	}
+	// The client secret is OPTIONAL: login uses PKCE, so a teammate who was never
+	// given the app's secret can install their own token. A secret that happens to
+	// be stored is sent along (a confidential app may insist on it).
 	secretService := orDefault(la.ClientSecretKeychain, config.DefaultLinearAgentSecretKeychain)
-	secret, err := secrets.Resolve("linear agent client secret", secretService, la.ClientSecretEnv)
+	secret, _ := secrets.Resolve("linear agent client secret", secretService, la.ClientSecretEnv)
+	verifier, challenge, err := linear.NewPKCE()
 	if err != nil {
-		return fmt.Errorf("%w — store it with `lola linear-agent set-secret client`", err)
+		return err
 	}
 	redirect := la.RedirectURI()
 	port := la.RedirectPort
@@ -293,7 +297,7 @@ func linearAgentLogin(c *cobra.Command) error {
 		_ = srv.Shutdown(ctx)
 	}()
 
-	authURL := linear.AgentAuthorizeURL(la.ClientID, redirect, state)
+	authURL := linear.AgentAuthorizeURLPKCE(la.ClientID, redirect, state, challenge)
 	fmt.Fprintf(c.OutOrStdout(), "Open this URL to install lola as a Linear agent (an admin must approve app installs):\n\n  %s\n\nWaiting for the callback on %s …\n", authURL, redirect)
 	if runtime.GOOS == "darwin" {
 		_ = exec.Command("open", authURL).Start()
@@ -310,7 +314,7 @@ func linearAgentLogin(c *cobra.Command) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	tok, err := linear.OAuthClient{ClientID: la.ClientID, ClientSecret: secret}.Exchange(ctx, res.code, redirect)
+	tok, err := linear.OAuthClient{ClientID: la.ClientID, ClientSecret: secret}.Exchange(ctx, res.code, redirect, verifier)
 	if err != nil {
 		return err
 	}

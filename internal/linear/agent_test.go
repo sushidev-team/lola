@@ -124,7 +124,7 @@ func TestOAuthExchangeAndErrorHygiene(t *testing.T) {
 	defer ok.Close()
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	o := OAuthClient{TokenURL: ok.URL, ClientID: "cid", ClientSecret: "sec", Now: func() time.Time { return now }}
-	tok, err := o.Exchange(context.Background(), "code", "http://localhost/cb")
+	tok, err := o.Exchange(context.Background(), "code", "http://localhost/cb", "")
 	if err != nil || tok.AccessToken != "A" || tok.RefreshToken != "R" || !tok.ExpiresAt.Equal(now.Add(time.Hour)) {
 		t.Fatalf("tok=%+v err=%v", tok, err)
 	}
