@@ -321,6 +321,32 @@ describe('Project Git workspace', () => {
     expect(box('Local').scrollTop).toBe(0);
   });
 
+  it('reveals the clicked graph branch in Local, including inside collapsed folders', async () => {
+    const branch = { name: 'feat/api/login', fullName: 'refs/heads/feat/api/login', sha: newSHA, remote: false, current: false };
+    const base = snapshot();
+    base.refs.push(branch);
+    api.Snapshot.mockResolvedValue(base);
+    await open();
+    const local = screen.getByRole('region', { name: 'Local' });
+    const box = local.querySelector<HTMLElement>('.section-content')!;
+    await fireEvent.click(within(local).getByRole('button', { name: 'Local branch folder feat/api' }));
+    await fireEvent.click(within(local).getByRole('button', { name: 'Local branch folder feat' }));
+    await fireEvent.click(within(local).getByRole('button', { name: 'Local' }));
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('branch-leaf') && this.dataset.branchRef === branch.fullName) return new DOMRect(0, 400, 200, 20);
+      return new DOMRect(0, 0, 200, 100);
+    });
+
+    const commit = screen.getByRole('button', { name: /Add project workspace,/ });
+    const badge = commit.querySelector(`[data-branch-ref="${branch.fullName}"] .ref-name`)!;
+    await fireEvent.click(badge);
+    expect(commit).toHaveAttribute('aria-pressed', 'true');
+    expect(within(local).getByRole('button', { name: branch.name })).toHaveAttribute('aria-pressed', 'true');
+    expect(box.scrollTop).toBe(360);
+    expect(screen.getByRole('region', { name: 'Remote' }).querySelector('.section-content')!.scrollTop).toBe(0);
+    expect(api.BranchAction).not.toHaveBeenCalled();
+  });
+
   it('resizes section pairs by keyboard and pointer, preserves other sections, and restores saved sizes', async () => {
     await open();
     const names = ['Local', 'Remote', 'Worktrees', 'Stashes'];
