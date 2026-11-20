@@ -1,0 +1,20 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hub-protection
+spec:
+  plugin:
+    crowdsec:
+      enabled: true
+      crowdsecMode: stream
+      crowdsecLapiScheme: http
+      crowdsecLapiHost: crowdsec-service.crowdsec.svc.cluster.local:8080
+      crowdsecLapiKeyFile: /crowdsec/BOUNCER_KEY_traefik
+      crowdsecAppsecEnabled: true
+      crowdsecAppsecHost: crowdsec-appsec-service.crowdsec.svc.cluster.local:7422
+      crowdsecAppsecFailureBlock: true
+      crowdsecAppsecUnreachableBlock: true
+      # Hub HTTP bodies are capped at 64 KiB. Relay frames remain opaque:
+      # only the HTTP upgrade passes through WAF, never the WebSocket stream.
+      crowdsecAppsecBodyLimit: 65536
+      redisCacheEnabled: false

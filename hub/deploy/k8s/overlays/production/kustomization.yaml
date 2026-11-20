@@ -5,7 +5,9 @@ resources:
   - namespace.yaml
   - ../../base
   - ingress.yaml
+  - middleware.yaml
+  - networkpolicy.yaml
 images:
-  # The deploy workflow sets newTag to the commit SHA before applying.
+  # Argo CD Image Updater replaces latest with its immutable digest.
   - name: registry.digitalocean.com/sushidev-registry-01/lola-hub
     newTag: latest

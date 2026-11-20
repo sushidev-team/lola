@@ -392,85 +392,31 @@ day, 64 per org, 512 per hub, 30 minutes idle, shaped byte rates per splice, dev
   Never publish the console port (`-p 8098:8098` with a non-loopback bind is refused anyway).
 - Rate limits: 2 requests/s per device with a burst of 60; enrollment shares one global bucket.
 - **WebSocket timeouts.** The relay (`/v1/relay/*`) holds WebSocket connections open for hours. A
-  reverse proxy must forward `Upgrade`/`Connection` and raise its read and send timeouts (the
-  ingress here sets `proxy-read-timeout` and `proxy-send-timeout` to 3600 s). The hub pings every
-  25 s, so the timeouts are an upper bound, not the liveness check.
+  reverse proxy must support upgrades and long-lived connections. Traefik handles upgrades
+  automatically; the supplied values disable the response write timeout and allow a 3600 s idle
+  timeout. The hub pings every 25 s.
 - **Single replica, twice over.** Besides the file store, the relay keeps control links, pending
   dials and splices in process memory: a phone dial and its daemon's control link must land on
   the same process. Scaling out needs routing by device id and is not built. A rollout drops every
   control channel and splice; daemons reconnect, phones re-race.
-- **Per-network dial bucket.** `--client-ip` (default `none`) names where the relay reads a
-  phone's network from: `none` (no per-network bucket), `remote-addr` (a hub with no proxy in
-  front) or `header:<Name>`. Behind ingress-nginx and a load balancer without proxy protocol the
-  address is the balancer's, so keep `none` until the cluster's shared controller enables proxy
-  protocol (`use-proxy-protocol: "true"` in its ConfigMap and
-  `service.beta.kubernetes.io/do-loadbalancer-enable-proxy-protocol: "true"` on its LoadBalancer
-  Service; both live outside this repository and affect every ingress on the cluster). Then add
-  `"--client-ip", "header:X-Real-IP"` to the deployment args and verify from two different
-  networks that the controller's `kubectl logs` show two different client addresses for
-  `/v1/relay/phone` (the hub itself never logs one).
+- **Per-network dial bucket.** `--client-ip` defaults to `none`. The Kubernetes setup uses
+  `header:X-Real-Ip` behind Traefik and a source-IP-preserving DO network load balancer.
+  A NetworkPolicy admits only Traefik pods to the API. Verify real IPs from two networks before
+  switching traffic; see the deployment runbook. Never trust a public client's forwarding header.
 
-### Kubernetes (https://lola.sushidev.kitchen)
+### Kubernetes (Argo CD + Traefik)
 
-The hub runs on the DigitalOcean cluster `sushidev-cluster-02`, namespace `lola-hub`. Manifests
-are Kustomize under `hub/deploy/k8s` (`base/` is the workload, `overlays/production/` adds the
-namespace, ingress and image tag).
+[Deployment runbook](deploy/README.md): new DigitalOcean cluster sizing, bootstrap, migration,
+secrets, TLS, WAF/CrowdSec, automatic image updates, backups and rollback.
 
-| | |
-|---|---|
-| API | https://lola.sushidev.kitchen (ingress-nginx, cert-manager `image-proxy-letsencrypt-production`) |
-| Image | `registry.digitalocean.com/sushidev-registry-01/lola-hub:<sha>` |
-| Data | PVC `lola-hub-data` (`do-block-storage-retain`), store at `/data/hub/hub.json` |
-| Console | `127.0.0.1:8098` inside the pod, reached only with `kubectl port-forward` |
+`hub/deploy/argocd/bootstrap.yaml` installs the app-of-apps configuration. Argo owns deployment;
+`.github/workflows/hub.yml` only builds/publishes images (with `make check` inside Docker).
+Image Updater polls the registry every 30 seconds and updates the hub to an immutable digest.
+The hub keeps one replica and `Recreate` rollouts; relay connections reconnect after each update.
 
-**Deploy flow.** `.github/workflows/hub.yml` (in the repository root) runs for changes under
-`hub/` and `hubproto/` only. It runs `make check` on every push and PR. On `main`, it builds and
-pushes `lola-hub:<sha>`, then the `deploy` job (GitHub environment `hub-production`) fetches a
-short-lived kubeconfig with `doctl` and runs `kubectl apply -k
-hub/deploy/k8s/overlays/production` with the SHA as the image tag. The Deployment has one
-replica and uses `Recreate`, so two pods never share the store. A lola change that touches
-neither directory deploys nothing, and lola's own CI and releases skip `hub/`.
-
-**GitHub settings** (on the lola repository). Secrets `DO_ACCESS_TOKEN`, `DO_REGISTRY` and
-`LOLA_HUB_SECRET_KEY` (`lola-hub secret-key`). The workflow writes the secret key into the
-Secret `lola-hub-env` through a 0600 temp file. It never puts it in argv or the manifests. When
-the Secret changes, the workflow restarts the pod, because the hub reads its environment once
-at startup.
-
-**DNS.** `lola.sushidev.kitchen` needs an A record to the cluster's ingress load balancer
-(`157.245.24.200`). The certificate is issued after the record resolves.
-
-**First setup** (once, after the first deploy):
-
-```sh
-ctx="--context do-fra1-sushidev-cluster-02 -n lola-hub"
-# Org + admin token. The token is printed ONCE: store it in 1Password.
-kubectl $ctx exec deploy/lola-hub -- /lola-hub init --org sushi --linear-team ENG
-```
-
-**Admin console.** It binds pod loopback only, and no Service or Ingress exposes it. Access to
-it is gated by Kubernetes RBAC on `pods/portforward`, the cluster equivalent of the SSH
-tunnel above:
-
-```sh
-kubectl --context do-fra1-sushidev-cluster-02 -n lola-hub port-forward deploy/lola-hub 8098:8098
-# then open http://localhost:8098 and sign in with the admin token
-```
-
-Admin CLI commands run in the same pod: `kubectl $ctx exec deploy/lola-hub -- /lola-hub admin
-devices list`.
-
-**Lost admin token.** The image is distroless, so it has no `cat`. Read the token from a
-non-root debug container that shares the hub's process namespace:
-
-```sh
-pod=$(kubectl $ctx get pod -l app=lola-hub -o name)
-kubectl $ctx debug -it "$pod" --target=lola-hub --profile=restricted \
-  --image=gcr.io/distroless/static-debian12:debug-nonroot -- cat /proc/1/root/data/hub/admin.token
-```
-
-**Backups.** The PVC uses a Retain storage class, so deleting the namespace keeps the volume.
-Snapshot it in the DigitalOcean console (Volumes) before risky changes.
+The API remains `https://lola.sushidev.kitchen`; the console stays on pod loopback and is reached
+with `kubectl -n lola-hub port-forward deploy/lola-hub 8098:8098`. Restore the existing data and
+**the same** `LOLA_HUB_SECRET_KEY` before starting a migrated hub. Valkey serves only Argo's cache.
 
 ## Linear webhook doorbell
 

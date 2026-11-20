@@ -1,0 +1,35 @@
+# Apply once after the bootstrap Helm installs; see ../README.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lola-platform
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/sushidev-team/lola.git
+    targetRevision: main
+    path: hub/deploy/argocd/applications
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  # Image Updater owns only this field. Respect it on subsequent root syncs
+  # (including unrelated manifest edits), or latest would undo every digest.
+  ignoreDifferences:
+    - group: argoproj.io
+      kind: Application
+      name: lola-hub
+      jsonPointers:
+        - /spec/source/kustomize/images
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lola-cluster-resources
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-40"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/sushidev-team/lola.git
+    targetRevision: main
+    path: hub/deploy/argocd/cluster
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

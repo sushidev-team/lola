@@ -1,0 +1,15 @@
+fullnameOverride: argocd-image-updater
+createClusterRoles: false
+extraArgs: [--interval=30s]
+config:
+  argocd.namespace: argocd
+  watch.namespaces: argocd
+  registries:
+    - name: DigitalOcean
+      prefix: registry.digitalocean.com
+      api_url: https://registry.digitalocean.com
+      credentials: pullsecret:argocd/registry-sushidev-registry-01
+      credsexpire: 1h
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 256Mi}

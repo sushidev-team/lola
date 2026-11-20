@@ -27,7 +27,7 @@ spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
       imagePullSecrets:
-        # Created by the deploy workflow (doctl registry kubernetes-manifest).
+        # Provisioned in the cluster; CI has no Kubernetes credentials.
         - name: registry-sushidev-registry-01
       securityContext:
         runAsNonRoot: true
@@ -40,11 +40,11 @@ spec:
       containers:
         - name: lola-hub
           image: registry.digitalocean.com/sushidev-registry-01/lola-hub:latest
-          imagePullPolicy: IfNotPresent
-          # TLS terminates at ingress-nginx. The admin console binds pod
+          imagePullPolicy: Always
+          # TLS terminates at Traefik. The admin console binds pod
           # loopback only (the hub refuses anything else); see README
           # "Kubernetes" for the port-forward.
-          args: ["serve", "--addr", ":8080", "--admin-addr", "127.0.0.1:8098"]
+          args: ["serve", "--addr", ":8080", "--admin-addr", "127.0.0.1:8098", "--client-ip", "header:X-Real-Ip"]
           env:
             # A subdirectory the hub creates itself (0700), so the store and
             # admin.token do not sit in the volume root next to lost+found.
@@ -52,11 +52,9 @@ spec:
               value: /data/hub/hub.json
           envFrom:
             # LOLA_HUB_SECRET_KEY: seals each org's Linear key and digest
-            # webhook in the store. Written by the deploy workflow from a
-            # GitHub secret. Without it the hub runs but stores no secret.
+            # webhook in the store. Restore the SAME key during migration.
             - secretRef:
                 name: lola-hub-env
-                optional: true
           ports:
             - name: http
               containerPort: 8080
@@ -80,11 +78,11 @@ spec:
               drop: ["ALL"]
           resources:
             requests:
-              cpu: 20m
-              memory: 64Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: "1"
+              memory: 512Mi
           volumeMounts:
             - name: data
               mountPath: /data
