@@ -179,12 +179,19 @@ kubectl --context "$hub_new_context" apply -f hub/deploy/maintenance/data-pod.ya
 kubectl --context "$hub_new_context" -n lola-hub wait \
   --for=condition=Ready pod/lola-hub-data-maintenance --timeout=300s
 kubectl --context "$hub_new_context" -n lola-hub exec -i lola-hub-data-maintenance \
-  -- tar -C /data -xzf - < "$hub_migration_tmp/hub-data.tgz"
+  -- tar -C /data -xzpf - < "$hub_migration_tmp/hub-data.tgz"
+kubectl --context "$hub_new_context" -n lola-hub exec lola-hub-data-maintenance \
+  -- chmod 0700 /data/hub
+kubectl --context "$hub_new_context" -n lola-hub exec lola-hub-data-maintenance \
+  -- find /data/hub -type f -exec chmod 0600 '{}' +
 kubectl --context "$hub_new_context" -n lola-hub exec lola-hub-data-maintenance -- ls -ln /data/hub
 kubectl --context "$hub_new_context" -n lola-hub delete pod lola-hub-data-maintenance --wait=true
 ```
 
-The archive includes snapshots, backups and `admin.token` with UID 65532 and existing modes.
+The archive includes snapshots, backups and `admin.token` with UID 65532. The maintenance
+pod uses `OnRootMismatch` to avoid changing existing file modes when mounting the volume.
+Restore preserves archive modes and explicitly re-establishes 0700 directories / 0600 files;
+older archives may have inherited wider group permissions from an earlier mount.
 Confirm `hub.json` and `admin.token` exist, and restore the same encryption key before startup.
 The hub is distroless: `kubectl cp` would fail because that image has no `tar`.
 
