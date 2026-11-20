@@ -246,7 +246,10 @@ type Daemon struct {
 	// failingChecks / reviewComments fetch the size-bounded reaction content the
 	// engine hands the agent.
 	notifier notify.Notifier
-	sendKeys func(ctx context.Context, tmuxName, text string) error
+	// keyAgentNoted: sessions whose pane showed a refusing SSH key agent and
+	// were announced; cleared once the pane stops showing it. Guarded by mu.
+	keyAgentNoted map[string]bool
+	sendKeys      func(ctx context.Context, tmuxName, text string) error
 	// sendKeysTyped is sendKeys without its paste, for an agent whose paste has not been
 	// measured (agent.Caps). nil means sendKeys for every agent.
 	sendKeysTyped func(ctx context.Context, tmuxName, text string) error

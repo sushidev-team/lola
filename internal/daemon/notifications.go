@@ -166,3 +166,29 @@ func (d *Daemon) notificationReviewsSettled(s session.Session) bool {
 	}
 	return true
 }
+
+// noteKeyAgent announces once per episode that the host's SSH key agent (often
+// a locked 1Password) is refusing to sign, so a push is stuck until a human
+// unlocks it. Display-only: a fixed sentence, no pane text, and nothing is
+// typed into the agent. Slack is the route to a phone.
+func (d *Daemon) noteKeyAgent(ctx context.Context, s session.Session, locked bool) {
+	d.mu.Lock()
+	n, seen := d.notifier, d.keyAgentNoted[s.ID]
+	if !locked {
+		delete(d.keyAgentNoted, s.ID)
+	} else if !seen && n != nil {
+		if d.keyAgentNoted == nil {
+			d.keyAgentNoted = map[string]bool{}
+		}
+		d.keyAgentNoted[s.ID] = true
+	}
+	d.mu.Unlock()
+	if !locked || seen || n == nil {
+		return
+	}
+	n.Notify(ctx, notify.Note{
+		Title: "Lola · Unlock your SSH key agent", Subtitle: issueLabel(s),
+		Body:     "A push or fetch was refused by the key agent. Unlock 1Password on the host, then tell the agent to retry.",
+		Priority: notify.Urgent,
+	})
+}
