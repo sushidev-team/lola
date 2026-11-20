@@ -169,9 +169,20 @@ daemons. This fixes G2 for the common case with no new infra.
 
 ## Status
 
-Done: steps 1 (who asked is read: `AgentSession.CreatorID/AssigneeID/DelegateID`,
-`AgentSession.Owner`) and 2 (`[linear_agent].user_id` and
-`only_when_assigned_to_me`, one resolved owner per session). Not done yet:
-3 (doctor setup check), 4 (secret-free login and refresh), 5 (hub routing),
-6 (missed replies), 7 (owner in the UIs). The owner filter is config.toml only;
-the settings forms do not edit it yet.
+Built (PR #94):
+
+| Step | What |
+| --- | --- |
+| 1 | Who asked is read: creator, assignee, delegate, and the mention comment text |
+| 2 | `[linear_agent].user_id` (default: the `[linear]` API key's user) and `only_when_assigned_to_me`, one resolved owner per session |
+| 3 | `lola doctor` row "linear agent": token, granted scopes, doorbell, owner filter |
+| 4 | Secret-free login and refresh (PKCE; the client secret is optional) |
+| 5 | Hub arbitration: `/v1/linear/{claim,authorize,settle}`, epoch fencing, deference to the owner's live daemon, immediate acknowledgement before the worktree; `[linear_agent].hub_claim` |
+| 6 | A reply into an ended or finished thread is answered once |
+| 7 | Ownership and waiting count in `lola linear-agent status` and the TUI |
+
+Known limits: a capped owner keeps the thread (it renews its claim; handing a
+queued session to a free peer is not built); an issue already running on another
+member's machine from a label poll is not detected across machines; the owner
+filter and `hub_claim` are `config.toml` keys, the settings forms do not edit
+them; the desktop app does not show the owner.
