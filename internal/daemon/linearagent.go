@@ -494,6 +494,7 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 
 	// Already running here (a poll or a human started it): bind, don't spawn.
 	if s, ok := d.liveSessionForIssue(is.Identifier); ok {
+		defer d.relayMention(s.ID, as)
 		d.bindAgentSession(ctx, api, as.ID, s, fmt.Sprintf("Already working on %s in lola session `%s` — I'll keep this thread updated.", is.Identifier, s.ID))
 		return
 	}
@@ -589,6 +590,7 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 		msg += " This project requires plan approval: I'll post a plan here for you to approve before I write code."
 	}
 	d.bindAgentSession(ctx, api, as.ID, s, msg)
+	d.relayMention(s.ID, as)
 	d.logf("", "linear agent: %s dispatched by Agent Session %s → %s", is.Identifier, as.ID, s.ID)
 }
 
@@ -1043,4 +1045,26 @@ func (d *Daemon) agentSessionIsMine(as linear.AgentSession) bool {
 	d.agent.mu.Unlock()
 	owner := as.Owner(appID)
 	return owner != "" && owner == cfg.UserID
+}
+
+// relayMention hands the words a human wrote when they mentioned lola ("@lola go
+// ahead", "only touch the API") to the agent as a notice, once per Agent
+// Session: considerAgentSession runs once for each, and a known one returns
+// first. It reaches the agent only through the notice queue, so it passes the
+// same sanitize + idle gate + pane proof as every reply. The text is untrusted
+// and never touches the briefing, the branch or a command.
+func (d *Daemon) relayMention(sessionID string, as linear.AgentSession) {
+	body := strings.TrimSpace(as.MentionBody)
+	if body == "" {
+		return
+	}
+	msg := "A human mentioned you in a Linear comment on this issue:\n\n" + clipBody(body, agentMaxBody)
+	d.sessions.Update(sessionID, func(c *session.Session) bool {
+		c.PendingNotices = appendNotice(c.PendingNotices, msg)
+		return true
+	})
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "linear agent: persist sessions: %v", err)
+	}
+	d.flushAgentNoticesAsync(sessionID)
 }

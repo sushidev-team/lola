@@ -28,6 +28,9 @@ type AgentSession struct {
 	CreatorID  string // the human who mentioned or delegated
 	AssigneeID string
 	DelegateID string // the app user itself when a human delegated to lola
+	// MentionBody is the text of the comment the human wrote when they mentioned
+	// lola ("@lola go ahead"); empty for a plain delegation. UNTRUSTED text.
+	MentionBody string
 }
 
 // AgentPrompt is one HUMAN message in a session (a `prompt` activity): a reply
@@ -130,7 +133,7 @@ const agentMaxPages = 6
 func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 	const q = `query($after: String){ agentSessions(first:50, after:$after, orderBy:updatedAt){
 		nodes{ id status createdAt url
-			creator{ id }
+			creator{ id } sourceComment{ body }
 			issue{ id identifier title branchName priority createdAt
 				team{ id } project{ id } assignee{ id } delegate{ id } } }
 		pageInfo{ hasNextPage endCursor } } }`
@@ -145,6 +148,7 @@ func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 					ID, Status, CreatedAt string
 					URL                   *string
 					Creator               *struct{ ID string }
+					SourceComment         *struct{ Body string }
 					Issue                 *struct {
 						ID, Identifier, Title, BranchName, CreatedAt string
 						Priority                                     float64
@@ -166,6 +170,12 @@ func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 			s := AgentSession{ID: n.ID, Status: n.Status, CreatedAt: n.CreatedAt}
 			if n.URL != nil {
 				s.URL = *n.URL
+			}
+			if n.Creator != nil {
+				s.CreatorID = n.Creator.ID
+			}
+			if n.SourceComment != nil {
+				s.MentionBody = n.SourceComment.Body
 			}
 			if n.Issue != nil {
 				is := &Issue{ID: n.Issue.ID, Identifier: n.Issue.Identifier, Title: n.Issue.Title,

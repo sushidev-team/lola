@@ -668,3 +668,28 @@ func TestLinearAgentOwnerFilterPicksOneDaemon(t *testing.T) {
 		}
 	}
 }
+
+// The words of the mention ("@lola go ahead") reach the agent once, as a notice.
+func TestLinearAgentRelaysTheMentionText(t *testing.T) {
+	p := config.Project{Name: "app", Path: "/tmp/app", Repo: "acme/app", DefaultBranch: "main", TeamID: "team-1"}
+	d, api, _ := agentDaemon(t, p)
+	as := pendingSession("as-1", "ENG-7", "team-1")
+	as.MentionBody = "@lola go ahead, but leave the migrations alone"
+	api.sessions = []linear.AgentSession{as}
+	d.paneTail = func(context.Context, string, int) (string, error) { return "✻ Thinking… (3s)\n", nil } // mid-turn: stays queued
+	d.linearAgentCycle(context.Background())
+	s, ok := d.sessions.Get("lola-app-eng-7")
+	if !ok {
+		t.Fatal("no session")
+	}
+	d.connWg.Wait()
+	s, _ = d.sessions.Get("lola-app-eng-7")
+	if len(s.PendingNotices) != 1 || !strings.Contains(s.PendingNotices[0], "leave the migrations alone") {
+		t.Fatalf("notices = %+v", s.PendingNotices)
+	}
+	d.linearAgentCycle(context.Background())
+	s, _ = d.sessions.Get("lola-app-eng-7")
+	if len(s.PendingNotices) != 1 {
+		t.Fatal("a second cycle must not relay the mention again")
+	}
+}
