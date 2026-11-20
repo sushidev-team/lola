@@ -11,9 +11,11 @@ dex:
 notifications:
   enabled: false
 applicationSet:
-  enabled: false
+  replicas: 0
 configs:
   cm:
+    timeout.reconciliation: 60s
+    timeout.reconciliation.jitter: 15s
     # Needed for app-of-apps sync waves to wait for child Applications.
     resource.customizations.health.argoproj.io_Application: |
       hs = {status = "Progressing", message = "Waiting for child application"}
@@ -25,9 +27,6 @@ configs:
         end
       end
       return hs
-  params:
-    timeout.reconciliation: 60s
-    timeout.reconciliation.jitter: 15s
 controller:
   resources:
     requests: {cpu: 250m, memory: 512Mi}
