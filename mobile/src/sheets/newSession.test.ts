@@ -78,6 +78,19 @@ describe("newSession sheet", () => {
     await waitFor(() => expect(router.top).toMatchObject({ name: "session", id: "nori-1" }));
   });
 
+  it("starts on an existing branch when the switch is on", async () => {
+    const open = vi.spyOn(store, "openManual").mockResolvedValue({ sessionId: "nori-2" } as never);
+    open.mockClear();
+    render(NewSession);
+    await fireEvent.click(screen.getByRole("switch", { name: copy.newSession.existingBranch }));
+    await fireEvent.input(screen.getByLabelText("Prompt"), { target: { value: "Review it" } });
+    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+    await fireEvent.input(screen.getByLabelText("Branch"), { target: { value: " feature/x " } });
+    await fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(open).toHaveBeenCalled());
+    expect(open.mock.calls.at(-1)![0]).toMatchObject({ project: "nori", branch: "feature/x", existing: true });
+  });
+
   it("offers Terminal only just with the shell tier", () => {
     render(NewSession);
     expect(screen.queryByText(copy.newSession.shellOnly)).toBeNull();

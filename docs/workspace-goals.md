@@ -541,7 +541,7 @@ and delivery.
 
 ## Workspace learning
 
-In the desktop app, open a project and expand **Workspace learning**. Search or
+In the desktop app, choose **Workspace learning** from the project's actions menu. Search or
 filter lessons, select one to inspect its scope, source, evidence and full
 provenance, or choose **Record a lesson**. Discoveries remain candidates by
 default. The explicit-correction checkbox is a separate operator decision;
@@ -1352,7 +1352,7 @@ This report is diagnostic and does not change verification or acceptance gates.
 
 ## Desktop and TUI goal controls
 
-Open a project's detail view in the desktop app and expand **Goals**. Choose a
+In the desktop app, choose **Goals** from the project's actions menu. Choose a
 local goal to inspect its brief, acceptance criteria, tasks, attempts, usage
 coverage, integrated commits and final PR links. The selected goal is remembered
 per project for the life of that view. The section refreshes while open; a failed

@@ -32,6 +32,7 @@ func buildCommandTiers() map[string]string {
 		"prReadiness", "prs", "tickets",
 		"bestOfCompare",
 		protocol.CmdReviewPackages, protocol.CmdReviewImage, protocol.CmdReviewDiff, protocol.CmdReviewChecks,
+		protocol.CmdProjectGit,
 		protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdEndedSessions,
 		protocol.CmdSessionTimeline,
 		protocol.CmdAttachmentImage,
@@ -51,12 +52,12 @@ func buildCommandTiers() map[string]string {
 	set(protocol.TierControl,
 		"addressPRFeedback", "mergePR", "openPr", "openTicket", "openManual", "openExisting",
 		"revive", "review", "coderabbit", "resolveConflict", "switchAgent",
-		"dev", "devFreePort", "sessionTask", "renameSession", "broadcast", "bestOf",
+		"dev", "devFreePort", "planDecide", "sessionTask", "renameSession", "broadcast", "bestOf",
 		"restoreCheckpoint", "forkCheckpoint", "pollOnce", "enable", "disable",
-		protocol.CmdReviewRecover,
+		protocol.CmdReviewRecover, protocol.CmdProjectGitAct,
 	)
 
-	set(protocol.TierDestructive, "kill", "closeExitedTemporary", "bestOfPick")
+	set(protocol.TierDestructive, "kill", "closeExitedTemporary", "bestOfPick", protocol.CmdProjectGitDiscard)
 
 	set(protocol.TierShell,
 		"shellCreate", "paneClose", "paneResize", "open",
@@ -67,9 +68,9 @@ func buildCommandTiers() map[string]string {
 		// Daemon lifecycle and config.
 		"stop", "reload", "renameProject", "bulkProjects",
 		// The agent's in-pane channels.
-		"hookEvent", "agentReport", protocol.CmdReviewPublish, protocol.CmdReviewComplete,
+		"hookEvent", "agentReport", "planSubmit", "planGate", protocol.CmdReviewPublish, protocol.CmdReviewComplete,
 		// Asked from the Mac's branch graph, which a phone does not have.
-		"askMerge",
+		"askMerge", "removeEndedWorktree",
 		// Asked from the Mac's session menu; it can restart a sandboxed agent.
 		"addApps",
 		// Transport-internal, and the host browser.

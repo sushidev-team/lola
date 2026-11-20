@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { nav } from "./nav.svelte";
 
 // nav is a singleton; reset the pieces these tests touch so order can't matter.
@@ -10,7 +10,6 @@ beforeEach(() => {
   nav.scoped = false;
   nav.project = "";
   nav.view = "cockpit";
-  nav.projectTab = "overview";
 });
 
 describe("nav help overlay", () => {
@@ -38,7 +37,7 @@ describe("nav.openSession", () => {
   });
   it("returns from project detail without turning it into a session filter", () => {
     nav.goCockpit("web");
-    nav.goDetail("web");
+    nav.goGit("web");
     nav.openSession("s1");
     expect(nav.view).toBe("cockpit");
     expect(nav.scoped).toBe(false);
@@ -46,12 +45,12 @@ describe("nav.openSession", () => {
   });
 });
 
-describe("nav.goDetail", () => {
+describe("nav.goGit", () => {
   it("returns from Git to the exact session and scope, including on repeated toggles", () => {
     nav.goCockpit("web");
     nav.openSession("s1", true);
-    nav.goDetail("web", "git");
-    nav.goDetail("other-repo", "git");
+    nav.goGit("web");
+    nav.goGit("web");
     nav.returnFromGit();
     expect(nav.view).toBe("cockpit");
     expect(nav.focusedTerm).toBe("s1");
@@ -59,19 +58,28 @@ describe("nav.goDetail", () => {
     expect(nav.scoped).toBe(true);
     expect(nav.sidebarBrowsing).toBe(true);
     nav.openSession("s2");
-    nav.goDetail("web", "git");
+    nav.goGit("web");
     nav.returnFromGit();
     expect(nav.focusedTerm).toBe("s2");
   });
 
-  it("returns from the Git tab to overview and from project navigation to its prior picker", () => {
-    nav.goDetail("web", "overview");
-    nav.projectTab = "git";
+  it("scopes Code to the last project chosen in Git and releases the previous session", () => {
+    nav.goCockpit("web");
+    nav.openSession("web-1");
+    nav.goGit("web");
+    nav.goGit("api");
+    nav.goGit("mobile");
     nav.returnFromGit();
-    expect(nav.view).toBe("detail");
-    expect(nav.projectTab).toBe("overview");
+    expect(nav.view).toBe("cockpit");
+    expect(nav.project).toBe("mobile");
+    expect(nav.scopeNames).toEqual(["mobile"]);
+    expect(nav.focusedTerm).toBe("");
+    expect(nav.selectedId).toBe("");
+  });
+
+  it("returns from Git to the prior picker", () => {
     nav.goPRPicker("web");
-    nav.goDetail("other", "git");
+    nav.goGit("other");
     nav.returnFromGit();
     expect(nav.view).toBe("prpicker");
     expect(nav.project).toBe("web");
@@ -79,65 +87,33 @@ describe("nav.goDetail", () => {
   it("opens the project workspace without scoping the session list", () => {
     nav.goCockpit("old-project");
     nav.openSession("s1");
-    nav.goDetail("nori");
+    nav.goGit("nori");
     expect(nav.view).toBe("detail");
     expect(nav.scoped).toBe(false);
     expect(nav.project).toBe("nori");
     expect(nav.focusedTerm).toBe("");
-    expect(nav.projectTab).toBe("overview");
+    expect(nav.inGit).toBe(true);
   });
 
   it("repeated project navigation stays in the workspace", () => {
-    nav.goDetail("nori");
-    nav.goDetail("nori");
+    nav.goGit("nori");
+    nav.goGit("nori");
     expect(nav.view).toBe("detail");
     expect(nav.project).toBe("nori");
     expect(nav.scoped).toBe(false);
   });
 
   it("can open a member repository directly in Git", () => {
-    nav.goDetail("nori", "git");
-    expect(nav.projectTab).toBe("git");
-    nav.goDetail("okane");
-    expect(nav.projectTab).toBe("git");
+    nav.goGit("nori");
+    expect(nav.inGit).toBe(true);
+    nav.goGit("okane");
+    expect(nav.inGit).toBe(true);
   });
 
   it("preserves the user's session triage preference", () => {
     nav.setTriage("Needs You");
-    nav.goDetail("nori");
+    nav.goGit("nori");
     expect(nav.triage).toBe("Needs You");
-  });
-});
-
-describe("project view preference", () => {
-  afterEach(() => vi.restoreAllMocks());
-  it("keeps the last tab across projects and session navigation", () => {
-    nav.goDetail("nori");
-    nav.projectTab = "git";
-    nav.goCockpit();
-    nav.goDetail("okane");
-    expect(nav.projectTab).toBe("git");
-    expect(localStorage.getItem("lola.project.tab")).toBe("git");
-    nav.projectTab = "overview";
-    nav.goDetail("nori");
-    expect(nav.projectTab).toBe("overview");
-  });
-  it("restores the project view from storage after a fresh load", async () => {
-    nav.projectTab = "git";
-    vi.resetModules();
-    const { nav: restored } = await import("./nav.svelte");
-    restored.goDetail("another-project");
-    expect(restored.projectTab).toBe("git");
-  });
-  it("ignores an invalid saved view and tolerates unavailable storage", async () => {
-    localStorage.setItem("lola.project.tab", "removed-tab");
-    vi.resetModules();
-    const { nav: restored } = await import("./nav.svelte");
-    expect(restored.projectTab).toBe("overview");
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
-    restored.projectTab = "git";
-    restored.goDetail("nori");
-    expect(restored.projectTab).toBe("git");
   });
 });
 
@@ -176,7 +152,7 @@ describe("nav.setTriage", () => {
 describe("nav.focusSessions in Git", () => {
   it("leaves Git mode so the sessions column can take focus", () => {
     nav.goCockpit("");
-    nav.goDetail("lola", "git");
+    nav.goGit("lola");
     nav.pendingMode = "git";
     expect(nav.gitMode).toBe(true);
     nav.focusSessions();

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { openProject } from "$lib/workspacenav";
   import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
@@ -41,10 +42,10 @@
       case "detail":
         return [{ text: "Projects", onclick: () => nav.goHome() }, { text: projectName }];
       case "prpicker":
-        return [{ text: projectName, onclick: () => nav.goDetail(nav.project) }, { text: "Open a PR" }];
+        return [{ text: projectName, onclick: () => openProject(nav.project) }, { text: "Open a PR" }];
       case "ticketpicker":
         return [
-          { text: projectName, onclick: () => nav.goDetail(nav.project) },
+          { text: projectName, onclick: () => openProject(nav.project) },
           { text: "Start a ticket" },
         ];
       default: {

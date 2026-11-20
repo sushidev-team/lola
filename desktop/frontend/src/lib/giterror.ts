@@ -3,6 +3,8 @@ export type GitErrorInfo = { title:string; description:string; kind:'warn'|'bad'
 /** Git stderr is diagnostic detail; the primary message explains the next step. */
 export function gitErrorInfo(raw:string, action=''):GitErrorInfo {
   const text=raw.toLowerCase();
+  if (text.includes("restoring switch's saved changes failed"))
+    return {title:'Local changes need attention',description:'Check the current branch and working files for conflicts. Your saved edits are available in Stashes.',kind:'warn'};
   if (text.includes("restoring pull's saved changes failed"))
     return {title:'Local changes need attention',description:'Your saved stash was kept. Inspect the restored files and resolve any conflicts.',kind:'warn'};
   if (text.includes('pull stopped; local changes remain saved'))

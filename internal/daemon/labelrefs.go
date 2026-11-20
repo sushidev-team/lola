@@ -21,7 +21,8 @@ func memoKey(teamID, ref string) string { return teamID + "\x00" + ref }
 
 // resolveLabelRefs rewrites label NAMES ("agent/agent-ready", "Bug", or a glob
 // like "*/agent-ready") in each project's match_labels / on_sent_set_label /
-// blocked_label_id to the label UUID(s) of that project's own team, so one
+// blocked_label_id to the label UUID(s) available to that project's team (its
+// own labels plus workspace labels), so one
 // [defaults] entry works for every team. UUIDs pass through untouched. It runs
 // on the freshly loaded config (startup and each reload), in memory only: the
 // config is marked unsavable so the names stay in config.toml.
@@ -64,12 +65,34 @@ func resolveLabelRefs(ctx context.Context, cfg *config.Config, lin linear.API, p
 		err    error
 	}
 	teams := map[string]catalog{} // a failure is cached too: one request, one note, per team per call
+	var workspace *catalog        // shared by every team; failures are cached too
 	teamLabels := func(teamID string) ([]linear.Label, error) {
 		c, ok := teams[teamID]
 		if !ok {
 			c.labels, c.err = lin.Labels(ctx, teamID)
 			if c.err != nil {
 				notes = append(notes, fmt.Sprintf("list labels of team %s: %v", teamID, c.err))
+			} else {
+				if workspace == nil {
+					workspace = &catalog{}
+					workspace.labels, workspace.err = lin.WorkspaceLabels(ctx)
+					if workspace.err != nil {
+						notes = append(notes, fmt.Sprintf("list workspace labels: %v", workspace.err))
+					}
+				}
+				// A partial catalog could hide an ambiguous name or truncate a
+				// glob. Keep the last good resolution until both scopes load.
+				c.err = workspace.err
+				seen := map[string]bool{}
+				for _, l := range c.labels {
+					seen[l.ID] = true
+				}
+				for _, l := range workspace.labels {
+					if !seen[l.ID] {
+						c.labels = append(c.labels, l)
+						seen[l.ID] = true
+					}
+				}
 			}
 			teams[teamID] = c
 		}

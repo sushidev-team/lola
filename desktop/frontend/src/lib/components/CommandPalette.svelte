@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { openProject } from "$lib/workspacenav";
   import { onMount, onDestroy, tick } from "svelte";
   import { toggleGitWorkspace } from "$lib/workspacenav";
   import { nav } from "$lib/nav.svelte";
@@ -62,7 +63,7 @@
       .map<Result>((s) => ({ id: `s:${s.id}`, kind: "session", icon: "terminal", label: s.title || s.branch || s.id, detail: `${s.project ? store.displayNameFor(s.project) : "Temporary"} · ${s.branch || s.worktree}`, session: s.id, run: () => openSession(s.id) })),
   );
   const projectRows = $derived(
-    store.projects.map<Result>((p) => ({ id: `p:${p.name}`, kind: "project", icon: p.kind === "stack" ? "layers" : "folder", label: store.displayNameFor(p.name), detail: p.path || p.repo, project: p.name, run: () => nav.goDetail(p.name) })),
+    store.projects.map<Result>((p) => ({ id: `p:${p.name}`, kind: "project", icon: p.kind === "stack" ? "layers" : "folder", label: store.displayNameFor(p.name), detail: p.path || p.repo, project: p.name, run: () => openProject(p.name) })),
   );
   const results = $derived.by<Result[]>(() => {
     const searching = query.trim() !== "";

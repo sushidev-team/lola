@@ -12,8 +12,7 @@
   import GoalPlanner from "./GoalPlanner.svelte";
   import GoalRecovery from "./GoalRecovery.svelte";
 
-  let { project }: { project: string } = $props();
-  let expanded = $state(false);
+  let { project, goalId = "", expanded = false }: { project: string; goalId?: string; expanded?: boolean } = $props();
   let goals = $state<Overview[]>([]);
   let selected = $state("");
   let loading = $state(false);
@@ -66,7 +65,7 @@
     const open = expanded;
     generation++;
     goals = [];
-    selected = selections.get(scope) || "";
+    selected = selections.get(scope) || goalId;
     loaded = false;
     loading = false;
     error = "";
@@ -112,7 +111,7 @@
       }
     }
   }
-  function openSession(id: string) { nav.goCockpit(project); nav.openSession(id); }
+  function openSession(id: string) { nav.closeOverlay(); nav.goCockpit(project); nav.openSession(id); }
   const number = (n: number) => n.toLocaleString();
 </script>
 

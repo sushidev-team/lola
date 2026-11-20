@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -105,6 +106,10 @@ type Daemon struct {
 	// relogin remembers when each sandboxed session was last relaunched for a
 	// missing login (sandboxlogin.go). Its own lock.
 	relogin reloginState
+
+	// projectGitMu serializes a phone's repository actions (projectgit.go);
+	// projectGitFetchMu keeps a network fetch from holding the edit lock.
+	projectGitMu, projectGitFetchMu sync.Mutex
 
 	mu     sync.Mutex
 	cfg    *config.Config
@@ -241,7 +246,10 @@ type Daemon struct {
 	// failingChecks / reviewComments fetch the size-bounded reaction content the
 	// engine hands the agent.
 	notifier notify.Notifier
-	sendKeys func(ctx context.Context, tmuxName, text string) error
+	// keyAgentNoted: sessions whose pane showed a refusing SSH key agent and
+	// were announced; cleared once the pane stops showing it. Guarded by mu.
+	keyAgentNoted map[string]bool
+	sendKeys      func(ctx context.Context, tmuxName, text string) error
 	// sendKeysTyped is sendKeys without its paste, for an agent whose paste has not been
 	// measured (agent.Caps). nil means sendKeys for every agent.
 	sendKeysTyped func(ctx context.Context, tmuxName, text string) error
@@ -642,6 +650,12 @@ type Daemon struct {
 	shutMu   sync.Mutex
 	draining bool
 	connWg   sync.WaitGroup
+
+	// agent is the native Linear agent's loop state ([linear_agent],
+	// linearagent.go); always non-nil, idle while the table is disabled.
+	agent *linearAgentRuntime
+	// agentWebhookSecret overrides the webhook signing-secret lookup (tests).
+	agentWebhookSecret func(config.LinearAgentConfig) (string, error)
 }
 
 func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home string) *Daemon {
@@ -662,6 +676,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 
 		hookWarned: map[string]bool{},
 		ckptLocks:  map[string]*sync.Mutex{},
+		agent:      newLinearAgentRuntime(),
 	}
 	d.goals, d.goalsErr = goal.Open(filepath.Join(home, "state", "goals.json"))
 	if d.goalsErr != nil {
@@ -1045,6 +1060,12 @@ func Run(ctx context.Context) error {
 	// The sandbox hook bridge (hookbridge.go): open only while a project is
 	// sandboxed, and a bind failure is logged rather than fatal, like [remote].
 	d.syncHookBridge(ctx)
+	// The native Linear agent ([linear_agent], linearagent.go). The loop always
+	// runs and idles while the table is disabled, so a reload can turn it on;
+	// the optional webhook doorbell binds at startup only.
+	d.wg.Add(1)
+	go d.linearAgentLoop(ctx)
+	d.startLinearAgentWebhook(ctx)
 	// Agent-assisted ssh (ssh.go): read what a previous daemon left and start the
 	// monitors. Masters survive a restart by design, running commands do not.
 	d.startSSH(ctx)
@@ -1057,6 +1078,8 @@ func Run(ctx context.Context) error {
 	// cut from its spawn); the loop itself stops on ctx.
 	d.wg.Add(1)
 	go d.hubLoop(ctx)
+	d.wg.Add(1)
+	go d.hubDoorbellLoop(ctx)
 
 	// The relay leg to the hub (hubrelay.go) and the event push hub
 	// (watchhub.go). Both end on ctx and are waited for by d.wg.
@@ -1638,6 +1661,18 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.InterpretedForAgentState = prev.InterpretedForAgentState
 				s.LastInterpretedAt = prev.LastInterpretedAt
 				s.LastInterpretedHash = prev.LastInterpretedHash
+				// The plan gate is CONTROL state the scan cannot see: dropping it
+				// would unlock edits on an unapproved plan. The Linear agent binding,
+				// its mirror watermark and queued notices ride along for the same
+				// reason (an unbound session is never mirrored or relayed again).
+				s.PlanGate = prev.PlanGate
+				s.Plan = prev.Plan
+				s.PlanRound = prev.PlanRound
+				s.PlanFeedback = prev.PlanFeedback
+				s.PlanSubmittedAt = prev.PlanSubmittedAt
+				s.AgentSessionID = prev.AgentSessionID
+				s.AgentMirror = prev.AgentMirror
+				s.PendingNotices = slices.Clone(prev.PendingNotices)
 				// Flexible-review fire-once guards (PLAN §3.2): carry the four kind-keyed
 				// maps forward, NOT the legacy scalars. prev came through Store.load, which
 				// runs migrateReviewState, so its maps are already authoritative (any old

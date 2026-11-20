@@ -1,7 +1,6 @@
 <script lang="ts" module>
   import type { Component } from "svelte";
   import { kanbanKey } from "$lib/theme";
-  import ActivityIcon from "@mobile/lib/icons/ActivityIcon.svelte";
   import ProjectsIcon from "@mobile/lib/icons/ProjectsIcon.svelte";
   import SessionsIcon from "@mobile/lib/icons/SessionsIcon.svelte";
   import SettingsIcon from "@mobile/lib/icons/SettingsIcon.svelte";
@@ -11,13 +10,11 @@
   const ICONS: Record<Tab, Component> = {
     inbox: SessionsIcon,
     projects: ProjectsIcon,
-    activity: ActivityIcon,
     settings: SettingsIcon,
   };
   const LABELS: Record<Tab, string> = {
     inbox: copy.inbox.title,
     projects: copy.projects.title,
-    activity: copy.activity.title,
     settings: copy.settings.title,
   };
 
@@ -39,7 +36,7 @@
   import { haptic } from "@mobile/lib/haptics";
   import { router } from "@mobile/lib/router.svelte";
 
-  // The bottom bar: four destinations in `TABS` order, drawn on the tab shell
+  // The bottom bar: three destinations in `TABS` order, drawn on the tab shell
   // only (never on a session, never on Connect).
   //
   // Invariants:
@@ -69,7 +66,7 @@
   style="padding-bottom: env(safe-area-inset-bottom, 0px); background: color-mix(in srgb, var(--color-canvas) 80%, transparent); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%)"
   aria-label="Sections"
 >
-  <div class="grid h-[49px] grid-cols-4">
+  <div class="grid h-[49px] grid-cols-3">
     {#each TABS as tab (tab)}
       {@const active = current === tab}
       {@const Icon = ICONS[tab]}
@@ -83,8 +80,7 @@
         onclick={() => go(tab)}
       >
         <span class="relative flex">
-          <!-- The inbox tray stays the outline glyph when selected, matching the other tabs. -->
-          <Icon filled={active && tab !== "inbox"} size={26} />
+          <Icon filled={active} size={26} />
           {#if tab === "inbox" && needs > 0}
             <!-- An 18px count circle with a 2px crust ring, its centre 10px right of and its top 6px above the
                  glyph's top-right, so it never covers more than a corner. `on-bad` is the measured

@@ -3,9 +3,27 @@ import type * as Gen from "@bindings-generated/desktop";
 import type * as M from "@bindings/desktop/models";
 import type * as GD from "@bindings/internal/gitdiff/models";
 import type * as PG from "@bindings/internal/projectgit/models";
+import { bridge } from "../bridge";
 import { unsupported } from "../errors";
 import { MAC_ONLY } from "./reasons";
 import type { Routes } from "./routes";
+
+// One repository request. The phone holds no git credentials: the daemon runs it
+// on the Mac, on a checkout the project's repository registers (docs/mobile/01 §8.2).
+// The Mac may run hooks, signing helpers and the network for up to two minutes
+// (projectgit.Context), so a write waits longer than that; the default 15 s
+// would report failure for an action that then succeeds, unacknowledged.
+const READ_TIMEOUT_MS = 45_000;
+const WRITE_TIMEOUT_MS = 135_000;
+function git<T>(method: string, cmd: string, args: Record<string, unknown>): Promise<T> {
+  const timeoutMs = cmd === "projectGit" ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS;
+  return bridge.request<T>(`ProjectGitService.${method}`, cmd, { args }, { timeoutMs });
+}
+
+/** PLATFORM. */
+export function AcceptAICommitExclusions(_id: string): Promise<void> {
+  return unsupported("ProjectGitService.AcceptAICommitExclusions", MAC_ONLY);
+}
 
 /** PLATFORM. */
 export function AICommitStatus(_id: string): Promise<M.AICommitProgress> {
@@ -47,14 +65,14 @@ export function CancelAICommit(_id: string): Promise<void> {
   return unsupported("ProjectGitService.CancelAICommit", MAC_ONLY);
 }
 
-/** PLATFORM. */
-export function Commit(_project: string, _worktree: string, _message: string): Promise<void> {
-  return unsupported("ProjectGitService.Commit", MAC_ONLY);
+/** FORWARDED. */
+export function Commit(project: string, worktree: string, message: string): Promise<void> {
+  return git<void>("Commit", "projectGitAct", { op: "commit", project, worktree, message });
 }
 
-/** PLATFORM. */
-export function CreateBranch(_project: string, _worktree: string, _name: string, _startSHA: string, _checkout: boolean): Promise<PG.BranchResult> {
-  return unsupported("ProjectGitService.CreateBranch", MAC_ONLY);
+/** FORWARDED. */
+export function CreateBranch(project: string, worktree: string, name: string, startSHA: string, checkout: boolean): Promise<PG.BranchResult> {
+  return git<PG.BranchResult>("CreateBranch", "projectGitAct", { op: "createBranch", project, worktree, name, sha: startSHA, checkout });
 }
 
 /** PLATFORM. */
@@ -67,9 +85,9 @@ export function CreateWorktree(_project: string, _worktree: string, _source: str
   return unsupported("ProjectGitService.CreateWorktree", MAC_ONLY);
 }
 
-/** PLATFORM. */
-export function Diff(_project: string, _worktree: string, _$from: string, _to: string, _area: string, _path: string): Promise<GD.Result> {
-  return unsupported("ProjectGitService.Diff", MAC_ONLY);
+/** FORWARDED. */
+export function Diff(project: string, worktree: string, $from: string, to: string, area: string, path: string): Promise<GD.Result> {
+  return git<GD.Result>("Diff", "projectGit", { op: "diff", project, worktree, from: $from, to, area, path });
 }
 
 /** PLATFORM. */
@@ -77,11 +95,14 @@ export function ChangeLines(_project: string, _worktree: string, _area: string, 
   return unsupported("ProjectGitService.ChangeLines", MAC_ONLY);
 }
 
-export function DiscardUnstaged(_project: string, _worktree: string, _token: string): Promise<void> {
-  return unsupported("ProjectGitService.DiscardUnstaged", MAC_ONLY);
+/** FORWARDED. */
+export function DiscardUnstaged(project: string, worktree: string, token: string): Promise<void> {
+  return git<void>("DiscardUnstaged", "projectGitDiscard", { op: "discard", project, worktree, token });
 }
-export function DiscardPaths(_project: string, _worktree: string, _token: string, _paths: string[] | null): Promise<void> {
-  return unsupported("ProjectGitService.DiscardPaths", MAC_ONLY);
+
+/** FORWARDED. */
+export function DiscardPaths(project: string, worktree: string, token: string, paths: string[] | null): Promise<void> {
+  return git<void>("DiscardPaths", "projectGitDiscard", { op: "discard", project, worktree, token, paths });
 }
 
 /** PLATFORM. */
@@ -94,9 +115,9 @@ export function DraftPullRequest(_project: string, _worktree: string, _selection
   return unsupported("ProjectGitService.DraftPullRequest", MAC_ONLY);
 }
 
-/** PLATFORM. */
-export function Fetch(_project: string, _worktree: string): Promise<void> {
-  return unsupported("ProjectGitService.Fetch", MAC_ONLY);
+/** FORWARDED. */
+export function Fetch(project: string, worktree: string): Promise<void> {
+  return git<void>("Fetch", "projectGitAct", { op: "fetch", project, worktree });
 }
 
 /** PLATFORM. */
@@ -114,12 +135,14 @@ export function PrepareAICommit(_project: string, _worktree: string): Promise<PG
   return unsupported("ProjectGitService.PrepareAICommit", MAC_ONLY);
 }
 
-/** PLATFORM. */
-export function PrepareDiscard(_project: string, _worktree: string): Promise<PG.DiscardPlan> {
-  return unsupported("ProjectGitService.PrepareDiscard", MAC_ONLY);
+/** FORWARDED. */
+export function PrepareDiscard(project: string, worktree: string): Promise<PG.DiscardPlan> {
+  return git<PG.DiscardPlan>("PrepareDiscard", "projectGitDiscard", { op: "prepareDiscard", project, worktree });
 }
-export function PrepareDiscardPaths(_project: string, _worktree: string, _paths: string[] | null): Promise<PG.DiscardPlan> {
-  return unsupported("ProjectGitService.PrepareDiscardPaths", MAC_ONLY);
+
+/** FORWARDED. */
+export function PrepareDiscardPaths(project: string, worktree: string, paths: string[] | null): Promise<PG.DiscardPlan> {
+  return git<PG.DiscardPlan>("PrepareDiscardPaths", "projectGitDiscard", { op: "prepareDiscard", project, worktree, paths });
 }
 
 /** PLATFORM. */
@@ -127,9 +150,9 @@ export function PreviewPullRequest(_project: string, _worktree: string, _selecti
   return unsupported("ProjectGitService.PreviewPullRequest", MAC_ONLY);
 }
 
-/** PLATFORM. */
-export function Pull(_project: string, _worktree: string): Promise<void> {
-  return unsupported("ProjectGitService.Pull", MAC_ONLY);
+/** FORWARDED. */
+export function Pull(project: string, worktree: string): Promise<void> {
+  return git<void>("Pull", "projectGitAct", { op: "pull", project, worktree });
 }
 
 /** PLATFORM. */
@@ -137,19 +160,19 @@ export function PullRequestOptions(_project: string, _worktree: string, _remote:
   return unsupported("ProjectGitService.PullRequestOptions", MAC_ONLY);
 }
 
-/** PLATFORM. */
-export function Push(_project: string, _worktree: string): Promise<void> {
-  return unsupported("ProjectGitService.Push", MAC_ONLY);
+/** FORWARDED. */
+export function Push(project: string, worktree: string): Promise<void> {
+  return git<void>("Push", "projectGitAct", { op: "push", project, worktree });
 }
 
-/** PLATFORM. */
-export function Snapshot(_project: string, _worktree: string, _ref: string, _limit: number): Promise<PG.Snapshot> {
-  return unsupported("ProjectGitService.Snapshot", MAC_ONLY);
+/** FORWARDED. */
+export function Snapshot(project: string, worktree: string, ref: string, limit: number): Promise<PG.Snapshot> {
+  return git<PG.Snapshot>("Snapshot", "projectGit", { op: "snapshot", project, worktree, ref, limit });
 }
 
-/** PLATFORM. */
-export function Stage(_project: string, _worktree: string, _paths: string[] | null): Promise<PG.File[] | null> {
-  return unsupported("ProjectGitService.Stage", MAC_ONLY);
+/** FORWARDED. */
+export function Stage(project: string, worktree: string, paths: string[] | null): Promise<PG.File[] | null> {
+  return git<PG.File[] | null>("Stage", "projectGitAct", { op: "stage", project, worktree, paths });
 }
 
 /** PLATFORM. */
@@ -157,14 +180,30 @@ export function StartAICommit(_project: string, _worktree: string, _token: strin
   return unsupported("ProjectGitService.StartAICommit", MAC_ONLY);
 }
 
-/** PLATFORM. */
-export function StashApply(_project: string, _worktree: string, _sha: string, _expectedHead: string, _pop: boolean): Promise<void> {
-  return unsupported("ProjectGitService.StashApply", MAC_ONLY);
+/** FORWARDED. */
+export function StashApply(project: string, worktree: string, sha: string, expectedHead: string, pop: boolean): Promise<void> {
+  // Pop removes the entry, so it rides the discard tier like StashDrop.
+  return git<void>("StashApply", pop ? "projectGitDiscard" : "projectGitAct", { op: "stashApply", project, worktree, sha, head: expectedHead, pop });
+}
+
+/** FORWARDED. */
+export function StashDrop(project: string, worktree: string, sha: string): Promise<void> {
+  return git<void>("StashDrop", "projectGitDiscard", { op: "stashDrop", project, worktree, sha });
 }
 
 /** PLATFORM. */
-export function StashDrop(_project: string, _worktree: string, _sha: string): Promise<void> {
-  return unsupported("ProjectGitService.StashDrop", MAC_ONLY);
+export function ConflictDocument(_project: string, _worktree: string, _path: string): Promise<PG.ConflictDocument> {
+  return unsupported("ProjectGitService.ConflictDocument", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function SaveConflict(_project: string, _worktree: string, _path: string, _token: string, _result: string): Promise<void> {
+  return unsupported("ProjectGitService.SaveConflict", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function SuggestConflictChoices(_project: string, _input: string): Promise<string> {
+  return unsupported("ProjectGitService.SuggestConflictChoices", MAC_ONLY);
 }
 
 /** PLATFORM. */
@@ -172,22 +211,23 @@ export function Uncommit(_project: string, _worktree: string, _expectedHead: str
   return unsupported("ProjectGitService.Uncommit", MAC_ONLY);
 }
 
-/** PLATFORM. */
-export function StashPush(_project: string, _worktree: string, _message: string, _expectedHead: string): Promise<void> {
-  return unsupported("ProjectGitService.StashPush", MAC_ONLY);
+/** FORWARDED. */
+export function StashPush(project: string, worktree: string, message: string, expectedHead: string): Promise<void> {
+  return git<void>("StashPush", "projectGitAct", { op: "stashPush", project, worktree, message, head: expectedHead });
 }
 
-/** PLATFORM. */
-export function Stashes(_project: string, _worktree: string): Promise<PG.Stash[] | null> {
-  return unsupported("ProjectGitService.Stashes", MAC_ONLY);
+/** FORWARDED. */
+export function Stashes(project: string, worktree: string): Promise<PG.Stash[] | null> {
+  return git<PG.Stash[] | null>("Stashes", "projectGit", { op: "stashes", project, worktree });
 }
 
-/** PLATFORM. */
-export function Unstage(_project: string, _worktree: string, _paths: string[] | null): Promise<PG.File[] | null> {
-  return unsupported("ProjectGitService.Unstage", MAC_ONLY);
+/** FORWARDED. */
+export function Unstage(project: string, worktree: string, paths: string[] | null): Promise<PG.File[] | null> {
+  return git<PG.File[] | null>("Unstage", "projectGitAct", { op: "unstage", project, worktree, paths });
 }
 
 export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
+  AcceptAICommitExclusions: { kind: "platform", reason: MAC_ONLY },
   AICommitStatus: { kind: "platform", reason: MAC_ONLY },
   Amend: { kind: "platform", reason: MAC_ONLY },
   AmendNeedsConfirmation: { kind: "platform", reason: MAC_ONLY },
@@ -196,33 +236,36 @@ export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   CachedIdentities: { kind: "platform", reason: MAC_ONLY },
   CanFastForward: { kind: "platform", reason: MAC_ONLY },
   CancelAICommit: { kind: "platform", reason: MAC_ONLY },
-  Commit: { kind: "platform", reason: MAC_ONLY },
-  CreateBranch: { kind: "platform", reason: MAC_ONLY },
+  Commit: { kind: "fwd", cmd: "projectGitAct" },
+  CreateBranch: { kind: "fwd", cmd: "projectGitAct" },
   CreatePullRequest: { kind: "platform", reason: MAC_ONLY },
   CreateWorktree: { kind: "platform", reason: MAC_ONLY },
-  Diff: { kind: "platform", reason: MAC_ONLY },
   ChangeLines: { kind: "platform", reason: MAC_ONLY },
-  DiscardUnstaged: { kind: "platform", reason: MAC_ONLY },
-  DiscardPaths: { kind: "platform", reason: MAC_ONLY },
+  Diff: { kind: "fwd", cmd: "projectGit" },
+  DiscardUnstaged: { kind: "fwd", cmd: "projectGitDiscard" },
+  DiscardPaths: { kind: "fwd", cmd: "projectGitDiscard" },
   DraftCommitMessage: { kind: "platform", reason: MAC_ONLY },
   DraftPullRequest: { kind: "platform", reason: MAC_ONLY },
-  Fetch: { kind: "platform", reason: MAC_ONLY },
+  Fetch: { kind: "fwd", cmd: "projectGitAct" },
   Identities: { kind: "platform", reason: MAC_ONLY },
   LastCommitMessage: { kind: "platform", reason: MAC_ONLY },
   PrepareAICommit: { kind: "platform", reason: MAC_ONLY },
-  PrepareDiscard: { kind: "platform", reason: MAC_ONLY },
-  PrepareDiscardPaths: { kind: "platform", reason: MAC_ONLY },
+  PrepareDiscard: { kind: "fwd", cmd: "projectGitDiscard" },
+  PrepareDiscardPaths: { kind: "fwd", cmd: "projectGitDiscard" },
   PreviewPullRequest: { kind: "platform", reason: MAC_ONLY },
-  Pull: { kind: "platform", reason: MAC_ONLY },
+  Pull: { kind: "fwd", cmd: "projectGitAct" },
   PullRequestOptions: { kind: "platform", reason: MAC_ONLY },
-  Push: { kind: "platform", reason: MAC_ONLY },
-  Snapshot: { kind: "platform", reason: MAC_ONLY },
-  Stage: { kind: "platform", reason: MAC_ONLY },
+  Push: { kind: "fwd", cmd: "projectGitAct" },
+  Snapshot: { kind: "fwd", cmd: "projectGit" },
+  Stage: { kind: "fwd", cmd: "projectGitAct" },
   StartAICommit: { kind: "platform", reason: MAC_ONLY },
-  StashApply: { kind: "platform", reason: MAC_ONLY },
-  StashDrop: { kind: "platform", reason: MAC_ONLY },
-  StashPush: { kind: "platform", reason: MAC_ONLY },
-  Stashes: { kind: "platform", reason: MAC_ONLY },
+  StashApply: { kind: "fwd", cmd: "projectGitAct" },
+  StashDrop: { kind: "fwd", cmd: "projectGitDiscard" },
+  StashPush: { kind: "fwd", cmd: "projectGitAct" },
+  Stashes: { kind: "fwd", cmd: "projectGit" },
+  Unstage: { kind: "fwd", cmd: "projectGitAct" },
+  ConflictDocument: { kind: "platform", reason: MAC_ONLY },
+  SaveConflict: { kind: "platform", reason: MAC_ONLY },
+  SuggestConflictChoices: { kind: "platform", reason: MAC_ONLY },
   Uncommit: { kind: "platform", reason: MAC_ONLY },
-  Unstage: { kind: "platform", reason: MAC_ONLY },
 };

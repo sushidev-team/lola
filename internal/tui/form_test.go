@@ -1120,3 +1120,35 @@ func TestFormArrowKeysSwitchTabs(t *testing.T) {
 		t.Errorf("left must go back, got %v", f.tab)
 	}
 }
+
+// require_plan is an inheritable toggle on the Filter tab: a new project
+// inherits [defaults].require_plan, enter overrides it, ctrl+o hands it back.
+func TestFormRequirePlanInheritsAndOverrides(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	path, _ := config.DefaultPath()
+	cfg := &config.Config{Defaults: config.Defaults{PollInterval: time.Minute, ConcurrencyCap: 1, GlobalCap: 4, RequirePlan: true}}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ := config.Load(path)
+	f, _ := newFormModel(loaded, nil)
+	if !f.inherits(fRequirePlan) || !f.poll.RequirePlan {
+		t.Fatalf("a new project must inherit require_plan=true, got %v / %+v", f.poll.RequirePlan, f.poll.Inherits)
+	}
+
+	f.dirs = nil // a new project opens over the folder picker, which owns keys
+	f.tab = tabFilter
+	f.poll.TeamID = "team-1"
+	f.cursor = slices.Index(f.fields(), fRequirePlan)
+	if f.cursor < 0 {
+		t.Fatalf("require plan must be on the Filter tab once a team is set: %v", f.fields())
+	}
+	f.key(keyMsg("enter"))
+	if f.inherits(fRequirePlan) || f.poll.RequirePlan {
+		t.Fatalf("enter must override to false: %v / inherit %v", f.poll.RequirePlan, f.inherits(fRequirePlan))
+	}
+	f.key(keyMsg("ctrl+o"))
+	if !f.inherits(fRequirePlan) || !f.poll.RequirePlan {
+		t.Fatal("ctrl+o must revert to the inherited [defaults] value")
+	}
+}

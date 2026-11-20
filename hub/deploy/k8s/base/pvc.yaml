@@ -5,10 +5,12 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: lola-hub-data
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: do-block-storage-retain
+  storageClassName: lola-block-storage-retain
   resources:
     requests:
-      storage: 1Gi
+      storage: 10Gi

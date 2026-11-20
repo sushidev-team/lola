@@ -49,6 +49,7 @@ export type {
     HubTrustedKeyDTO,
     ImageAttachment,
     InheritsDTO,
+    LinearAgentSecretsDTO,
     LinearIssueBrief,
     LinearKeyStatusDTO,
     LinearOption,

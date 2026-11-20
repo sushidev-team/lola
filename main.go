@@ -93,6 +93,8 @@ func main() {
 		setupCmd(),
 		hookCmd(),
 		reportCmd(),
+		planGateCmd(),
+		linearAgentCmd(),
 		sshCmd(),
 		sshPostVerb(), // lola post: the same verb, because every agent is told about it
 		reviewRunCmd(),
@@ -477,6 +479,16 @@ func hookCmd() *cobra.Command {
 				}
 				if err := hook.Post(normEvent, p); err != nil {
 					fmt.Fprintln(c.ErrOrStderr(), "lola hook:", err)
+				}
+				return nil
+			}
+			if event == "pre_tool_use" {
+				// The plan gate. Drain stdin (claude writes the tool payload there)
+				// and ask the daemon; deny only on a definite "blocked" answer — an
+				// unreachable daemon allows, because a hook must never wedge a turn.
+				_ = hookPayload(c.InOrStdin())
+				if g, err := hook.PlanGate(); err == nil && g.Blocked {
+					_, _ = c.OutOrStdout().Write(hook.PreToolUseDeny(g.Reason))
 				}
 				return nil
 			}

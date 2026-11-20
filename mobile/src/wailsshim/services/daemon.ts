@@ -49,6 +49,11 @@ export function Broadcast(args: P.BroadcastArgs): Promise<P.BroadcastData> {
   return bridge.request<P.BroadcastData>("DaemonService.Broadcast", "broadcast", { args: args });
 }
 
+/** FORWARDED: cmd=planDecide (control tier). */
+export function DecidePlan(session: string, approve: boolean, comment: string): Promise<void> {
+  return bridge.request<void>("DaemonService.DecidePlan", "planDecide", { session, args: { approve, comment } });
+}
+
 /** PLATFORM. */
 export function CLIInfo(): Promise<M.CLIInfoDTO> {
   return unsupported("DaemonService.CLIInfo", MAC_ONLY);
@@ -352,6 +357,16 @@ export function AddApps(_a: P.AddAppsArgs): Promise<P.AddAppsData> {
   return unsupported("DaemonService.AddApps", MAC_ONLY);
 }
 
+/** Mac only: bulk pickup edits are config writes (cmd=bulkProjects is tier never). */
+export function BulkProjects(_a: P.BulkProjectsArgs): Promise<P.BulkProjectsData> {
+  return unsupported("DaemonService.BulkProjects", MAC_ONLY);
+}
+
+/** Mac only: removes a retained checkout (cmd=removeEndedWorktree is tier never). */
+export function RemoveEndedWorktree(_session: string, _path: string, _force: boolean): Promise<P.KillData> {
+  return unsupported("DaemonService.RemoveEndedWorktree", MAC_ONLY);
+}
+
 /** Mac only: asked from the desktop's branch graph (cmd=askMerge is tier never). */
 export function AskMerge(_session: string, _branch: string): Promise<P.AskMergeData> {
   return unsupported("DaemonService.AskMerge", MAC_ONLY);
@@ -507,7 +522,10 @@ export const ROUTES: Routes<typeof Gen.DaemonService, "Panes" | "ShellCreate" | 
   BestOfCompare: { kind: "fwd", cmd: "bestOfCompare" },
   BestOfPick: { kind: "fwd", cmd: "bestOfPick" },
   Broadcast: { kind: "fwd", cmd: "broadcast" },
+  BulkProjects: { kind: "platform", reason: MAC_ONLY },
+  RemoveEndedWorktree: { kind: "platform", reason: MAC_ONLY },
   CLIInfo: { kind: "platform", reason: MAC_ONLY },
+  DecidePlan: { kind: "fwd", cmd: "planDecide" },
   CheckpointDiff: { kind: "fwd", cmd: "checkpointDiff" },
   Checkpoints: { kind: "fwd", cmd: "checkpoints" },
   CloseExitedTemporary: { kind: "fwd", cmd: "closeExitedTemporary" },

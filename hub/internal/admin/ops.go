@@ -109,3 +109,25 @@ func (o *Ops) RevokeDeviceNamed(org, name string, now time.Time) (found bool, er
 	_, err = RevokeDevice(o.Store, org, id, now)
 	return err == nil, err
 }
+
+// SetLinearWebhookSecret is [SetLinearWebhookSecret] with the hub's box.
+func (o *Ops) SetLinearWebhookSecret(org, sec string, now time.Time) error {
+	return SetLinearWebhookSecret(o.Store, o.Box, org, sec, now)
+}
+
+// LinearWebhookSecret opens org's stored webhook secret. ok=false: none is set
+// (or the hub has no key to open it); the caller answers as for a bad signature.
+func (o *Ops) LinearWebhookSecret(org string) (string, bool) {
+	var sealed string
+	_ = o.Store.View(func(d *store.Data) error {
+		if og := d.Orgs[org]; og != nil {
+			sealed = og.LinearWebhook
+		}
+		return nil
+	})
+	if sealed == "" || o.Box == nil {
+		return "", false
+	}
+	sec, err := o.Box.Open(org, secret.FieldLinearWebhook, sealed)
+	return sec, err == nil && sec != ""
+}

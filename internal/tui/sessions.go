@@ -1339,6 +1339,11 @@ func (m *rootModel) sessionDetail() string {
 		for _, line := range devClashLines(*sel) {
 			b.WriteString(line + "\n")
 		}
+		// A submitted plan awaiting a verdict is visible on a LIVE session too —
+		// that is exactly when it is waiting.
+		for _, line := range planGateLines(*sel, 100) {
+			b.WriteString(line + "\n")
+		}
 		// PR panel above the fold: unmissable for ANY tmux-backed session that has
 		// a PR, not just AO/detail-card sessions.
 		if blk := prDetailBlock(*sel); blk != "" {
@@ -1404,6 +1409,12 @@ func (m *rootModel) sessionDetail() string {
 	// other prose lines here use.
 	for _, line := range boardLines(*sel, 100) {
 		b.WriteString(line + "\n")
+	}
+	for _, line := range planGateLines(*sel, 100) {
+		b.WriteString(line + "\n")
+	}
+	if sel.LinearAgentURL != "" {
+		b.WriteString(faintText.Render("linear:   "+truncPlain(sel.LinearAgentURL, 100)) + "\n")
 	}
 	// The ssh block, beside the agent's report: a third axis that replaces neither.
 	for _, line := range sshDetailLines(*sel, 90) {

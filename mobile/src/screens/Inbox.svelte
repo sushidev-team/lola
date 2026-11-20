@@ -12,9 +12,11 @@
   import TouchButton from "@mobile/lib/components/TouchButton.svelte";
   import VirtualList from "@mobile/lib/components/VirtualList.svelte";
   import Icon from "$lib/components/Icon.svelte";
-  import { copy, fill } from "@mobile/lib/copy";
+  import SegmentBar from "@mobile/lib/components/SegmentBar.svelte";
+  import { copy } from "@mobile/lib/copy";
   import {
     attachInbox,
+    BUCKETS,
     inbox,
     inboxItems,
     inboxView,
@@ -22,10 +24,9 @@
     ItemCache,
     markInteractive,
     projectOrder,
-    unwindowed,
     type InboxItem,
   } from "@mobile/lib/inbox.svelte";
-  import { inboxSearch, searchBuckets } from "@mobile/lib/inboxsearch.svelte";
+  import { inboxSearch } from "@mobile/lib/inboxsearch.svelte";
   import { prefetchOnce } from "@mobile/lib/prefetch";
   import { router, type InboxFilter } from "@mobile/lib/router.svelte";
 
@@ -42,8 +43,7 @@
   //  - The connection banner sits BELOW the large title, above the first section.
   //    With no snapshot to show (offline or still connecting) the list is three
   //    skeleton cards under the banner, never a blank screen.
-  //  - Nothing animates before the first list is painted, or once the tab is
-  //    left: only a row that changed while the list is shown moves.
+  //  - Status filter changes start a fresh scroll position. Live pushes keep the anchor.
 
   onMount(() => attachInbox());
 
@@ -93,14 +93,9 @@
   // The search narrows the models the filter and the grouping list; the all-clear block is a claim
   // about the whole Inbox, so it is not drawn over a narrowed list.
   const searching = $derived(inboxSearch.active);
-  const buckets = $derived(
-    searchBuckets(inbox.buckets, inboxSearch.query, (p) => (p === "" ? copy.inbox.groupBy.noProject : store.displayNameFor(p))),
-  );
   const items = $derived(
-    inboxItems(buckets, filter, showAllDone, itemCache, grouping).filter((it) => !searching || it.kind !== "clear"),
+    inboxItems(inboxSearch.buckets, filter, showAllDone, itemCache, grouping).filter((it) => !searching || it.kind !== "clear"),
   );
-  // Off once the tab is left, so a screen being torn down plays no leave.
-  const animate = $derived(painted && tabRoute !== null && unwindowed(items.length));
   const grouped = $derived(inboxView.group === "project");
   const filterLabel = $derived(
     (filter === "" ? "Filter" : `Filter, showing ${copy.inbox.sections[filter]}`) +
@@ -109,12 +104,10 @@
 
   const filterName = $derived(filter === "" ? "" : copy.inbox.sections[filter]);
 
-  const counts = $derived(
-    searching
-      ? { needs: buckets.needs.length, working: buckets.working.length, review: buckets.review.length, done: buckets.done.length }
-      : inbox.counts,
-  );
-  const chipLabel = $derived(filter === "" ? "" : `${filterName} · ${counts[filter]}`);
+  const scopes = $derived([
+    { id: "" as InboxFilter, label: copy.inbox.all },
+    ...BUCKETS.map(id => ({ id, label: `${copy.inbox.sections[id]} ${inboxSearch.counts[id]}` })),
+  ]);
 
   // Nothing to show: no list yet, or an empty one while the link is down (an all-clear
   // claimed offline would be a guess).
@@ -126,8 +119,8 @@
       router.sheet = "";
     } else if (intent === "details") router.open("connection");
   }
-  function clearFilter(): void {
-    router.replace({ name: "tab", tab: "inbox" });
+  function selectFilter(next: InboxFilter): void {
+    if (next !== filter) router.replace({ name: "tab", tab: "inbox", ...(next ? { filter: next } : {}) });
   }
 
   const label = (p: string): string => store.displayNameFor(p);
@@ -135,10 +128,10 @@
 </script>
 
 {#snippet allClearBlock()}
-  <div class="px-4 py-1.5">
-    <div class="flex h-16 items-center gap-3 rounded-[10px] bg-edge-soft p-4" role="status">
-      <Icon name="circle-check" size={20} class="shrink-0 text-good" />
-      <span class="min-w-0 truncate text-headline text-ink">{copy.inbox.empty.title}</span>
+  <div class="px-4 pt-3">
+    <div class="flex min-h-11 items-center gap-2 rounded-lg border border-edge-soft bg-panel px-3 py-2" role="status">
+      <Icon name="circle-check" size={16} class="shrink-0 text-good" />
+      <span class="text-subhead text-subtext">{copy.inbox.empty.title}</span>
     </div>
   </div>
 {/snippet}
@@ -171,13 +164,13 @@
     />
   {/if}
 
-  {#if inbox.rows.size > 0}
+  {#if inbox.rows.size > 0 || searching}
     <div class="shrink-0 px-4 pb-2">
-      <div class="relative flex h-9 items-center rounded-[10px] bg-edge-soft">
+      <div class="relative flex min-h-11 items-center rounded-lg border border-edge-soft bg-panel focus-within:border-accent">
         <Icon name="search" size={16} class="pointer-events-none absolute left-2.5 text-faint" />
         <input
           type="search"
-          class="h-full w-full min-w-0 rounded-[10px] bg-transparent pr-9 pl-8 text-body text-ink outline-none placeholder:text-faint"
+          class="min-h-11 w-full min-w-0 rounded-lg bg-transparent pr-11 pl-9 text-body text-ink outline-none placeholder:text-faint"
           aria-label={copy.inbox.search.placeholder}
           placeholder={copy.inbox.search.placeholder}
           autocapitalize="off"
@@ -189,7 +182,7 @@
         {#if searching}
           <button
             type="button"
-            class="absolute right-0 grid size-9 touch-manipulation place-items-center text-faint active:opacity-70"
+            class="absolute right-0 grid size-11 touch-manipulation place-items-center text-faint active:opacity-70"
             aria-label={copy.inbox.search.clear}
             onclick={() => inboxSearch.clear()}
           >
@@ -200,51 +193,43 @@
     </div>
   {/if}
 
-  {#if filter !== ""}
-    <div class="flex shrink-0 px-4 pb-2">
-      <button
-        type="button"
-        class="inline-flex h-8 touch-manipulation items-center gap-1.5 rounded-full bg-sel pr-2.5 pl-3 text-subhead text-ink active:opacity-70"
-        aria-label={fill(copy.inbox.clearFilter, { filter: filterName, name: filterName })}
-        onclick={clearFilter}
-      >
-        <span>{chipLabel}</span>
-        <Icon name="x" size={14} class="text-faint" />
-      </button>
+  {#if inbox.rows.size > 0 || filter}
+    <div class="session-scopes shrink-0 border-b border-edge-soft px-4 pb-2">
+      <SegmentBar segments={scopes} value={filter} onchange={selectFilter} label={copy.inbox.statusFilter} />
     </div>
   {/if}
 
   <div class="min-h-0 flex-1">
     {#if items.length > 0}
-      <VirtualList {items} key={(it) => it.key} kind={itemKind} label={copy.inbox.title}>
-        {#snippet row(it: InboxItem)}
-          {#if it.kind === "section"}
-            <SectionHeader title={copy.inbox.sections[it.bucket]} count={it.count} />
-          {:else if it.kind === "group"}
-            <SectionHeader title={it.label} count={it.count} />
-          {:else if it.kind === "card"}
-            <InboxCard
-              model={it.model}
-              projectLabel={label(it.model.project)}
-              watch={onTop && inbox.watched.has(it.model.id)}
-              {animate}
-            />
-          {:else if it.kind === "row"}
-            <InboxRow
-              model={it.model}
-              projectLabel={label(it.model.project)}
-              {animate}
-              onopen={() => open(it.model.id)}
-            />
-          {:else if it.kind === "clear"}
-            {@render allClearBlock()}
-          {:else}
-            <div class="px-4 py-2">
-              <TouchButton onclick={() => (showAllDone = true)}>{copy.inbox.showAll} ({it.hidden})</TouchButton>
-            </div>
-          {/if}
-        {/snippet}
-      </VirtualList>
+      {#key filter}
+        <VirtualList {items} key={(it) => it.key} kind={itemKind} label={copy.inbox.title}>
+          {#snippet row(it: InboxItem)}
+            {#if it.kind === "section"}
+              <SectionHeader title={copy.inbox.sections[it.bucket]} count={it.count} />
+            {:else if it.kind === "group"}
+              <SectionHeader title={it.label} count={it.count} />
+            {:else if it.kind === "card"}
+              <InboxCard
+                model={it.model}
+                projectLabel={label(it.model.project)}
+                watch={onTop && inbox.watched.has(it.model.id)}
+              />
+            {:else if it.kind === "row"}
+              <InboxRow
+                model={it.model}
+                projectLabel={label(it.model.project)}
+                onopen={() => open(it.model.id)}
+              />
+            {:else if it.kind === "clear"}
+              {@render allClearBlock()}
+            {:else}
+              <div class="px-4 py-2">
+                <TouchButton onclick={() => (showAllDone = true)}>{copy.inbox.showAll} ({it.hidden})</TouchButton>
+              </div>
+            {/if}
+          {/snippet}
+        </VirtualList>
+      {/key}
     {:else if noSnapshot}
       {#if banner}
         {@render skeletons()}
@@ -256,7 +241,7 @@
     {:else if searching}
       <EmptyState title={copy.inbox.search.none} />
     {:else if filter === ""}
-      {@render allClearBlock()}
+      <EmptyState icon="square-terminal" title={copy.inbox.noSessions} />
     {:else}
       <EmptyState title={filterName} body={copy.activity.empty.body} />
     {/if}
@@ -264,6 +249,7 @@
 </div>
 
 <style>
+  .session-scopes :global(.segment-track) { min-height: 44px; }
   .skeleton {
     animation: skeleton-pulse 1.4s ease-in-out infinite;
   }

@@ -65,7 +65,7 @@ it('on the phone with labels and no checks: one No checks row, no verdict header
   setTouchSurface({});
   try{
     render(ReviewVerification,{pkg,freshness:'unknown',labels:{verified:'Verified',notVerified:'Not verified'}});
-    await screen.findByText('No checks');
+    await screen.findByText('No independent checks yet');
     expect(screen.queryByText('Not verified')).toBeNull();
     expect(screen.queryByText('Revision not confirmed')).toBeNull();
     expect(screen.queryByRole('button',{name:'Refresh checks'})).toBeNull();
@@ -77,7 +77,7 @@ it('on the phone: no checks is one row with an Add check button that still sets 
   setTouchSurface({});
   try{
     render(ReviewVerification,{pkg,canRun:true,freshness:'current',labels:{verified:'Verified',notVerified:'Not verified'}});
-    await screen.findByText('No checks');
+    await screen.findByText('No independent checks yet');
     expect(screen.queryByText('No checks yet.')).toBeNull();
     await fireEvent.click(screen.getByRole('button',{name:'Add check'}));
     await waitFor(()=>expect(screen.getByLabelText('Command')).toHaveFocus());
@@ -89,7 +89,7 @@ it('on the phone: no Add check without the shell tier',async()=>{
   setTouchSurface({});
   try{
     render(ReviewVerification,{pkg,canRun:false,freshness:'current'});
-    await screen.findByText('No checks');
+    await screen.findByText('No independent checks yet');
     expect(screen.queryByRole('button',{name:'Add check'})).toBeNull();
   }finally{setTouchSurface(null);}
 });

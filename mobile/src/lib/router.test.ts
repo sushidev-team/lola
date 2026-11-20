@@ -26,7 +26,6 @@ const GRAMMAR: Route[] = [
   { name: "tab", tab: "projects", project: "nori-app" },
   { name: "tab", tab: "projects", project: "nori", pick: "prs" },
   { name: "tab", tab: "projects", project: "nori", pick: "tickets" },
-  { name: "tab", tab: "activity" },
   { name: "tab", tab: "settings" },
   { name: "dev", page: "bridge-guard" },
 ];
@@ -45,7 +44,7 @@ describe("path grammar", () => {
     for (const sheet of SHEETS) {
       const loc = { route: { name: "tab", tab: "inbox", filter: "needs" } as Route, sheet };
       expect(parseLocation(formatLocation(loc), ctx)).toEqual(loc);
-      const bare = { route: { name: "tab", tab: "activity" } as Route, sheet };
+      const bare = { route: { name: "tab", tab: "settings" } as Route, sheet };
       expect(parseLocation(formatLocation(bare), ctx)).toEqual(bare);
     }
   });
@@ -67,7 +66,7 @@ describe("path grammar", () => {
     "/projects/a/prs/x",
     "/connect/nope",
     "/connect/scan",
-    "/activity/x",
+    "/settings/x",
     "/dev/other",
     "/session/%E0%A4%A/terminal",
   ])("rejects %j", (p) => {
@@ -142,5 +141,16 @@ describe("router", () => {
     router.open("merge");
     router.close();
     expect(router.sheet).toBe("");
+  });
+});
+
+describe("the Git screen route", () => {
+  it("round-trips /projects/<name>/git and climbs back to the project", () => {
+    const route = parseRoute("/projects/nori-app/git");
+    expect(route).toEqual({ name: "tab", tab: "projects", project: "nori-app", pick: "git" });
+    expect(formatRoute(route!)).toBe("/projects/nori-app/git");
+    router.stack = [route!];
+    router.back();
+    expect(router.top).toEqual({ name: "tab", tab: "projects", project: "nori-app" });
   });
 });

@@ -9,7 +9,7 @@
   import Select from "./Select.svelte";
   import Disclosure from "./Disclosure.svelte";
 
-  let { project }: { project: string } = $props();
+  let { project, expanded = false }: { project: string; expanded?: boolean } = $props();
   type Mode = "capture" | "accept" | "dispute";
   type Review = { mode: "capture"; request: CaptureRequest; correction: boolean } | { mode: "accept" | "dispute"; request: Acceptance };
   const field = "mt-1 w-full min-w-0 rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent";
@@ -20,7 +20,7 @@
     return Number.isNaN(date.getTime()) ? "" : new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
   }
   let improvements = $state(false);
-  let expanded = $state(false), loading = $state(false), busy = $state(false), loaded = $state(false);
+  let loading = $state(false), busy = $state(false), loaded = $state(false);
   let error = $state(""), notice = $state(""), selected = $state(""), search = $state(""), status = $state("");
   let lessons = $state<Lesson[]>([]);
   let mode = $state<Mode | null>(null), subject = $state<Lesson | null>(null), reviewed = $state<Review | null>(null);

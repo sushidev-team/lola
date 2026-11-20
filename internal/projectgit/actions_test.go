@@ -16,21 +16,17 @@ func actionRepo(t *testing.T) string {
 	return dir
 }
 func tip(t *testing.T, dir, ref string) string { return testGit(t, dir, "rev-parse", ref) }
-func TestBranchCheckoutRejectsStaleAndDirty(t *testing.T) {
+func TestBranchCheckoutRejectsStaleAndCarriesLocalChanges(t *testing.T) {
 	dir := actionRepo(t)
 	c := Client{}
 	ctx := context.Background()
 	head := tip(t, dir, "HEAD")
 	testGit(t, dir, "branch", "feature")
 	request := BranchRequest{Action: "checkout", Source: "refs/heads/feature", SourceSHA: head}
-	write(t, dir, "base", "dirty\n")
-	if err := c.BranchAction(ctx, dir, request); err == nil {
-		t.Fatal("accepted dirty checkout")
-	}
-	if got := testGit(t, dir, "branch", "--show-current"); got != "main" {
-		t.Fatal(got)
-	}
-	write(t, dir, "base", "base\n")
+	write(t, dir, "base", "staged\n")
+	testGit(t, dir, "add", "base")
+	write(t, dir, "base", "working\n")
+	write(t, dir, "untracked", "keep\n")
 	request.SourceSHA = strings.Repeat("f", 40)
 	if err := c.BranchAction(ctx, dir, request); err == nil {
 		t.Fatal("accepted stale ref")
@@ -42,13 +38,113 @@ func TestBranchCheckoutRejectsStaleAndDirty(t *testing.T) {
 	if got := testGit(t, dir, "branch", "--show-current"); got != "feature" {
 		t.Fatal(got)
 	}
+	if got := testGit(t, dir, "show", ":base"); got != "staged" {
+		t.Fatal("lost staged changes:", got)
+	}
+	for name, want := range map[string]string{"base": "working\n", "untracked": "keep\n"} {
+		if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(got) != want {
+			t.Fatalf("%s after switch = %q, %v", name, got, err)
+		}
+	}
 }
+
+func TestBranchCheckoutAutoStashConflict(t *testing.T) {
+	dir := actionRepo(t)
+	testGit(t, dir, "branch", "feature")
+	write(t, dir, "base", "main version\n")
+	testGit(t, dir, "commit", "-am", "change on main")
+	write(t, dir, "base", "local edits\n")
+	request := BranchRequest{Action: "checkout", Source: "refs/heads/feature", SourceSHA: tip(t, dir, "feature")}
+	err := (Client{}).BranchAction(context.Background(), dir, request)
+	if err == nil || !strings.Contains(err.Error(), "restoring switch's saved changes failed") {
+		t.Fatalf("expected a restore conflict, got %v", err)
+	}
+	if got := testGit(t, dir, "branch", "--show-current"); got != "feature" {
+		t.Fatal(got)
+	}
+	if got := testGit(t, dir, "show", "stash@{0}:base"); got != "local edits" {
+		t.Fatalf("saved edits = %q", got)
+	}
+	c := Client{}
+	ctx := context.Background()
+	diff, err := c.Diff(ctx, dir, "", "", "conflict", "base")
+	if err != nil || len(diff.Files) != 1 || !strings.Contains(diff.Files[0].Patch, "<<<<<<<") {
+		t.Fatalf("missing conflict preview: %v, %v", diff, err)
+	}
+	doc, err := c.ConflictDocument(ctx, dir, "base")
+	if err != nil || doc.Current == nil || doc.Incoming == nil || *doc.Current != "base\n" || *doc.Incoming != "local edits\n" {
+		t.Fatalf("unexpected editor inputs: %+v, %v", doc, err)
+	}
+	write(t, dir, "base", "outside edit\n")
+	if err := c.SaveConflict(ctx, dir, "base", doc.Token, "stale result"); err == nil {
+		t.Fatal("overwrote a newer working file")
+	}
+	doc, err = c.ConflictDocument(ctx, dir, "base")
+	if err != nil || doc.Text != "outside edit\n" {
+		t.Fatalf("lost outside edit: %+v %v", doc, err)
+	}
+	if err := c.SaveConflict(ctx, dir, "base", doc.Token, "resolved content\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got := testGit(t, dir, "show", ":base"); got != "resolved content" {
+		t.Fatal(got)
+	}
+	if got := testGit(t, dir, "ls-files", "--unmerged"); got != "" {
+		t.Fatal(got)
+	}
+}
+
+func TestBranchCheckoutAutoStashMergesCompatibleEdits(t *testing.T) {
+	dir := actionRepo(t)
+	write(t, dir, "base", "first\n2\n3\n4\n5\nlast\n")
+	testGit(t, dir, "commit", "-am", "common version")
+	testGit(t, dir, "branch", "feature")
+	write(t, dir, "base", "main\n2\n3\n4\n5\nlast\n")
+	testGit(t, dir, "commit", "-am", "change first line")
+	write(t, dir, "base", "main\n2\n3\n4\n5\nlocal\n")
+	request := BranchRequest{Action: "checkout", Source: "refs/heads/feature", SourceSHA: tip(t, dir, "feature")}
+	if err := (Client{}).BranchAction(context.Background(), dir, request); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "base")); err != nil || string(got) != "first\n2\n3\n4\n5\nlocal\n" {
+		t.Fatalf("merged file = %q, %v", got, err)
+	}
+	if testGit(t, dir, "branch", "--show-current") != "feature" || testGit(t, dir, "stash", "list") != "" {
+		t.Fatal("did not finish switch and pop")
+	}
+}
+func TestBranchCheckoutAutoStashRetryRefused(t *testing.T) {
+	dir := actionRepo(t)
+	testGit(t, dir, "switch", "-c", "feature")
+	write(t, dir, "base", "feature version\n")
+	write(t, dir, "private", "feature file\n")
+	testGit(t, dir, "add", "base", "private")
+	testGit(t, dir, "commit", "-m", "feature changes")
+	testGit(t, dir, "switch", "main")
+	write(t, dir, ".git/info/exclude", "private\n")
+	write(t, dir, "private", "ignored local file\n")
+	write(t, dir, "base", "local edits\n")
+	request := BranchRequest{Action: "checkout", Source: "refs/heads/feature", SourceSHA: tip(t, dir, "feature")}
+	if err := (Client{}).BranchAction(context.Background(), dir, request); err == nil {
+		t.Fatal("switched over ignored file")
+	}
+	if testGit(t, dir, "branch", "--show-current") != "main" || testGit(t, dir, "stash", "list") != "" {
+		t.Fatal("failed switch did not restore the original checkout")
+	}
+	for path, want := range map[string]string{"base": "local edits\n", "private": "ignored local file\n"} {
+		if got, err := os.ReadFile(filepath.Join(dir, path)); err != nil || string(got) != want {
+			t.Fatalf("%s after refused switch = %q, %v", path, got, err)
+		}
+	}
+}
+
 func TestRemoteCheckoutTracksNamedBranch(t *testing.T) {
 	remote := actionRepo(t)
 	testGit(t, remote, "branch", "feature/topic")
 	dir := actionRepo(t)
 	testGit(t, dir, "remote", "add", "origin", remote)
 	testGit(t, dir, "fetch", "origin")
+	write(t, dir, "base", "local edits\n")
 	c := Client{}
 	request := BranchRequest{Action: "checkout", Source: "refs/remotes/origin/feature/topic", SourceSHA: tip(t, dir, "origin/feature/topic")}
 	if err := c.BranchAction(context.Background(), dir, request); err != nil {

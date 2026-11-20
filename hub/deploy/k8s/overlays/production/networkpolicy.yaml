@@ -1,0 +1,22 @@
+# Trust X-Real-Ip only because the public API is reachable ONLY via Traefik.
+# Port-forward / exec admin access remains governed by Kubernetes RBAC.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lola-hub-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: lola-hub
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 8080

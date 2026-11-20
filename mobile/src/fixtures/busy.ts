@@ -41,7 +41,7 @@ export const fixture: Fixture = base("busy", {
     { id: "s13", project: "nori-app", title: "Retire the legacy period picker", issue: "NOR-408", endedAt: ago(120), reason: "PR #330 merged", prNumber: 330 },
     { id: "s14", project: "okane", title: "Drop the unused currency table", issue: "OKA-85", endedAt: ago(300), reason: "PR #71 merged", prNumber: 71 },
   ],
-  routes: ["/inbox", "/inbox?filter=needs", "/inbox?filter=working", "/inbox?filter=review", "/inbox?filter=done", "/activity"],
+  routes: ["/sessions", "/inbox", "/inbox?filter=needs", "/inbox?filter=working", "/inbox?filter=review", "/inbox?filter=done"],
   sessions,
   events,
   projects: withCounts(PROJECTS, sessions),

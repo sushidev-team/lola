@@ -26,6 +26,7 @@
   import ChangesView from "./session/ChangesView.svelte";
   import EndedView from "./session/EndedView.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
+  import PlanGateBanner from "./PlanGateBanner.svelte";
   import Button from "./Button.svelte";
   import TerminalCell from "./session/TerminalCell.svelte";
   import RawToggle from "./session/RawToggle.svelte";
@@ -206,6 +207,7 @@
   <div class="min-w-0">
     <!-- Why a dev tab died, when the reason is a port someone else holds. Absent while healthy. -->
     {#if !offered && session && !onConversation}<DevClashBanner {session} />{/if}
+    {#if !offered && session}<PlanGateBanner {session} />{/if}
   </div>
 
   <div bind:this={body} class="relative grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] grid-cols-[minmax(0,1fr)]">
@@ -216,6 +218,7 @@
           {#snippet header()}
             {#if session && strip}<ViewStrip {session} changesInSide={rightChanges} />{/if}
             {#if session && !onConversation}<DevClashBanner {session} />{/if}
+            {#if session}<PlanGateBanner {session} />{/if}
           {/snippet}
         </Workspace>
       </div>

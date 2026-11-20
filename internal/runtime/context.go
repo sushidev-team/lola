@@ -202,6 +202,9 @@ func (n *Native) ForkAgent(ctx context.Context, p config.Project, f ForkSpec) (s
 	if n.Checkpoints == nil {
 		return session.Session{}, errors.New("runtime: fork: checkpoints unavailable")
 	}
+	if err := n.prepareProjectSandbox(ctx, p.Name); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: fork %s: %w", f.SessionID, err)
+	}
 	dir, err := n.WT.CreateAt(ctx, p, f.SessionID, f.Branch, f.Head)
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: fork %s: %w", f.SessionID, err)

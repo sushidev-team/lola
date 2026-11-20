@@ -167,7 +167,13 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
 	brief := withStackBriefing(n.issuePrompt(p, issue, branch), n.Cfg.StackMembers(p.Name), created)
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing(brief, ctxDir))), 0o600); err != nil {
+	prompt := n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing(brief, ctxDir)))
+	gate := session.PlanNone
+	if p.RequirePlan {
+		prompt = n.withPlanBriefing(prompt)
+		gate = session.PlanPlanning
+	}
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), prompt, 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
 	if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
@@ -197,6 +203,7 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
 	return withAgentState(session.Session{
+		PlanGate:   gate,
 		ID:         id,
 		FirstSeen:  started,
 		Source:     "native",

@@ -147,14 +147,20 @@
     if (!preparation.staged) { void run(); return; }
     confirm.ask({
       title: 'Include staged changes?',
-      body: `${preparation.staged} ${preparation.staged === 1 ? 'file is' : 'files are'} already staged. AI commit will include all ${preparation.files} changed files.`,
-      detail: 'Files with both staged and unstaged edits will be committed together. AI groups related files and creates one or more commits. Completed commits are kept if you cancel.',
+      body: `${preparation.staged} ${preparation.staged === 1 ? 'file is' : 'files are'} already staged. AI commit will review all ${preparation.files} changed files.`,
+      detail: 'For each included file, both staged and unstaged edits will be committed together. AI groups related files and creates one or more commits. Completed commits are kept if you cancel.',
       confirmLabel: 'Include staged & commit', confirmVariant: 'primary', onConfirm: () => { void run(); },
     });
   }
   async function commit(state: ProjectGitState, amend: boolean, head: string, branch: string, count: number) {
     const ok = await state.act(amend ? 'amend' : 'commit', [], branch, count, head);
     if (ok && state === git) oncommitted();
+  }
+  function commitShortcut(event: KeyboardEvent & { currentTarget: HTMLInputElement | HTMLTextAreaElement }) {
+    if (event.key !== 'Enter' || !event.metaKey || event.shiftKey || event.ctrlKey || event.altKey || event.isComposing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) event.currentTarget.form?.requestSubmit();
   }
   async function submit(event: SubmitEvent) {
     event.preventDefault();
@@ -189,10 +195,11 @@
 {#snippet fileRow(entry: GitFile, staged: boolean, depth: number)}
   {@const selection = selectedPaths(staged)}
   {@const targets = actionPaths(entry, staged)}
-  <div class="stage-file" style={`padding-left:${depth * 12}px`}>
-    <Button block selected={selection.includes(entry.path)} aria-pressed={selection.includes(entry.path)} class="stage-file-main" data-file-path={entry.path} title={entry.oldPath ? `${entry.oldPath} → ${entry.path}` : entry.path} aria-label={`Inspect ${staged ? 'staged' : 'unstaged'} ${entry.path}`} onclick={(event) => selectFile(entry, staged, event)} onkeydown={(event) => fileKey(event, entry, staged)} oncontextmenu={(event)=>fileContext(event,entry,staged)}>
-      <span class={`file-status ${entry.conflict ? 'text-bad' : entry.untracked ? 'text-good' : 'text-orange'}`}>{status(entry, staged)}</span>
+  <div class="stage-file" class:conflicted={entry.conflict} style={`padding-left:${depth * 12}px`}>
+    <Button block selected={selection.includes(entry.path)} aria-pressed={selection.includes(entry.path)} class="stage-file-main" data-file-path={entry.path} title={entry.oldPath ? `${entry.oldPath} → ${entry.path}` : entry.path} aria-label={`Inspect ${entry.conflict ? 'conflicted' : staged ? 'staged' : 'unstaged'} ${entry.path}`} onclick={(event) => selectFile(entry, staged, event)} onkeydown={(event) => fileKey(event, entry, staged)} oncontextmenu={(event)=>fileContext(event,entry,staged)}>
+      <span class={`file-status ${entry.conflict ? 'text-warn' : entry.untracked ? 'text-good' : 'text-orange'}`}>{status(entry, staged)}</span>
       <GitFilePath path={entry.path} leafOnly={tree}/>
+      {#if entry.conflict}<span class="conflict-label">Conflict</span>{/if}
     </Button>
     <span class="row-actions">
     {#if !staged && !entry.conflict}<Button size="xs" icon class="discard-file" disabled={!!git.busy || !!data?.operation || conflicts} aria-label={targets.length > 1 ? `Discard changes in ${targets.length} selected files` : `Discard changes in ${entry.path}`} title={targets.length > 1 ? `Discard changes in ${targets.length} selected files…` : 'Discard changes in this file…'} onclick={() => void discardFiles(targets)}><Icon name="trash-2" size={13} /></Button>{/if}
@@ -214,17 +221,26 @@
 {/snippet}
 
 <div class="staging-panel" class:ai-working={!!git.aiCommit} aria-busy={!!git.aiCommit}>
-  <div class="inspector-heading"><h3>Changes <span>{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data?.files.length ?? '—'}{/if}</span></h3><Button size="xs" variant="accent" aria-label="Commit all changes with AI" title="Group related files into commits using AI. Mixed changes within a file stay together." disabled={!data?.files.length || !!git.busy || git.draftingMessage || conflicts || !!data?.operation} loading={git.busy === 'prepare-ai-commit'} onclick={() => void aiCommit()}><Icon name="sparkles" size={13}/>AI commit</Button><div class="view-switch" role="group" aria-label="Changed file layout"><Button size="xs" icon disabled={!!git.aiCommit} selected={!tree} aria-label="File list view" title="File list" onclick={() => setTree(false)}><Icon name="list" size={14} /></Button><Button size="xs" icon disabled={!!git.aiCommit} selected={tree} aria-label="File tree view" title="File tree" onclick={() => setTree(true)}><Icon name="folder" size={14} /></Button></div><Button size="xs" icon variant="danger" class="discard-all" aria-label="Discard all unstaged changes" title={data?.operation || conflicts ? 'Finish the current operation before discarding changes' : 'Discard all unstaged changes…'} disabled={!unstaged.length || !!git.busy || !!data?.operation || conflicts} loading={git.busy === 'prepare-discard' || git.busy === 'discard'} onclick={() => void discardFiles()}><Icon name="trash-2" size={14} /></Button></div>
+  <div class="inspector-heading"><h3>Changes <span>{#if initialLoading}<Skeleton width="16px" height="12px"/>{:else}{data?.files.length ?? '—'}{/if}</span></h3><Button size="xs" variant="accent" aria-label="Plan commits with AI" title="Group related files into commits using AI. Review any suggested exclusions before committing." disabled={!data?.files.length || !!git.busy || git.draftingMessage || conflicts || !!data?.operation} loading={git.busy === 'prepare-ai-commit'} onclick={() => void aiCommit()}><Icon name="sparkles" size={13}/>AI commit</Button><div class="view-switch" role="group" aria-label="Changed file layout"><Button size="xs" icon disabled={!!git.aiCommit} selected={!tree} aria-label="File list view" title="File list" onclick={() => setTree(false)}><Icon name="list" size={14} /></Button><Button size="xs" icon disabled={!!git.aiCommit} selected={tree} aria-label="File tree view" title="File tree" onclick={() => setTree(true)}><Icon name="folder" size={14} /></Button></div><Button size="xs" icon variant="danger" class="discard-all" aria-label="Discard all unstaged changes" title={data?.operation || conflicts ? 'Finish the current operation before discarding changes' : 'Discard all unstaged changes…'} disabled={!unstaged.length || !!git.busy || !!data?.operation || conflicts} loading={git.busy === 'prepare-discard' || git.busy === 'discard'} onclick={() => void discardFiles()}><Icon name="trash-2" size={14} /></Button></div>
   {#if git.aiCommit}
     {@const job = git.aiCommit}
-    <div class="ai-progress" class:stopping={job.stopping}>
-      <Icon name="loader-circle" size={15} class="ai-spinner"/>
-      <div role="status" aria-live="polite" aria-atomic="true">
-        <strong>{job.stopping ? (job.phase === 'committing' ? 'Finishing current commit…' : 'Cancelling…') : job.phase === 'committing' ? `Committing ${Math.min(job.completed + 1, job.total)} of ${job.total}…` : job.phase === 'starting' ? 'Checking changes…' : 'Grouping changes…'}</strong>
-        {#if job.subject && !job.stopping}<span title={job.subject}>{job.subject}</span>{/if}
+    {#if job.phase === 'review'}
+      <div class="ai-review">
+        <strong>Suggested files to leave uncommitted</strong>
+        <ul>{#each job.excluded ?? [] as file}<li><code>{file.path}</code> — {file.reason}</li>{/each}</ul>
+        <Button size="xs" variant="primary" disabled={job.stopping} onclick={() => void git.acceptAICommitExclusions()}>{job.total ? `Create ${job.total} ${job.total === 1 ? 'commit' : 'commits'}` : 'Keep all files uncommitted'}</Button>
+        <Button size="xs" disabled={job.stopping} onclick={() => void git.cancelAICommit()}>Cancel</Button>
       </div>
-      <Button size="xs" disabled={!job.id || job.stopping} onclick={() => void git.cancelAICommit()}>{job.stopping ? 'Stopping…' : 'Cancel'}</Button>
-    </div>
+    {:else}
+      <div class="ai-progress" class:stopping={job.stopping}>
+        <Icon name="loader-circle" size={15} class="ai-spinner"/>
+        <div role="status" aria-live="polite" aria-atomic="true">
+          <strong>{job.stopping ? (job.phase === 'committing' ? 'Finishing current commit…' : 'Cancelling…') : job.phase === 'committing' && !job.total ? 'Keeping files uncommitted…' : job.phase === 'committing' ? `Committing ${Math.min(job.completed + 1, job.total)} of ${job.total}…` : job.phase === 'starting' ? 'Checking changes…' : 'Grouping changes…'}</strong>
+          {#if job.subject && !job.stopping}<span title={job.subject}>{job.subject}</span>{/if}
+        </div>
+        <Button size="xs" disabled={!job.id || job.stopping} onclick={() => void git.cancelAICommit()}>{job.stopping ? 'Stopping…' : 'Cancel'}</Button>
+      </div>
+    {/if}
   {/if}
   <div class="staging-files" inert={!!git.aiCommit}>
     {#each groups as group (group.title)}
@@ -242,10 +258,10 @@
     <div class="composer-heading"><label for={`${id}-subject`}>Commit message</label><Button size="xs" variant="accent" loading={git.draftingMessage} disabled={!data || !staged.length || conflicts || !!data.operation || !!git.busy || git.draftingMessage} title="Draft a message from staged changes using your AI settings" aria-label="Generate commit message with AI" onclick={() => void git.draftCommitMessage()}><Icon name="sparkles" size={13}/>{git.draftingMessage ? 'Drafting…' : 'AI draft'}</Button></div>
     {#if git.draftError}<p class="draft-error" role="alert">{git.draftError}</p>{/if}
     <div class="subject-field" class:has-reset={!!data?.mergeMessage && data.operation === 'merge'}>
-    <input id={`${id}-subject`} aria-label="Commit subject" placeholder={git.amendLoading ? 'Loading last commit…' : 'Summary'} bind:value={git.subject} disabled={!!git.busy || !data} maxlength="1000" />
+    <input id={`${id}-subject`} aria-label="Commit subject" placeholder={git.amendLoading ? 'Loading last commit…' : 'Summary'} bind:value={git.subject} onkeydown={commitShortcut} disabled={!!git.busy || !data} maxlength="1000" />
       {#if data?.operation === 'merge' && data.mergeMessage}<Button icon size="xs" class="reset-merge-message" aria-label="Reset merge message" title="Reset to default merge message" disabled={!!git.busy} onclick={() => git.resetMergeMessage()}><Icon name="rotate-ccw" size={13}/></Button>{/if}
     </div>
-    <textarea aria-label="Commit body" placeholder="Description (optional)" rows="3" bind:value={git.body} disabled={!!git.busy || !data} maxlength="19000"></textarea>
+    <textarea aria-label="Commit body" placeholder="Description (optional)" rows="3" bind:value={git.body} onkeydown={commitShortcut} disabled={!!git.busy || !data} maxlength="19000"></textarea>
     <div class="commit-options"><label class="amend-option"><Checkbox checked={git.amend} onchange={(event) => void git.setAmend(event.currentTarget.checked)} disabled={!!git.busy || !!data?.operation || !data?.head} /><span>Amend last commit</span>{#if git.amend && git.amendHead}<code>{git.amendHead.slice(0, 8)}</code>{/if}</label><Button size="xs" icon class="signing-icon" aria-label={signingLabel} {...signingTooltip}><Icon name={data?.signing?.enabled ? 'shield-check' : 'info'} size={14} /></Button></div>
     {#if amendStale}<p class="conflict-note" role="alert">HEAD changed since you selected Amend. Turn Amend off, review the last commit, then enable it again.</p>{/if}
     <Button block variant="primary" loading={git.busy === 'commit' || git.busy === 'amend' || git.busy === 'check-amend' || (git.busy === 'continue' && data?.operation === 'merge')} disabled={!canCommit} type="submit"><Icon name="check" size={14} />{data?.operation === 'merge' ? 'Complete merge' : `${git.amend ? 'Amend' : 'Commit'} ${staged.length ? `${staged.length} ${staged.length === 1 ? 'file' : 'files'}` : 'staged changes'}`}</Button>
@@ -264,6 +280,8 @@
   .inspector-heading :global(.discard-all:enabled:hover) { background:color-mix(in srgb,var(--color-bad) 28%,var(--color-canvas)); }
   .staging-panel.ai-working { grid-template-rows:auto auto minmax(140px,1fr) auto; }
   .ai-working .staging-files,.ai-working .commit-composer { opacity:.5; }
+  .ai-review { padding:8px 10px; font-size:13px; }
+  .ai-review ul { max-height:25vh; overflow:auto; padding-left:18px; margin:6px 0; overflow-wrap:anywhere; }
   .ai-progress { position:relative; overflow:hidden; display:flex; align-items:center; gap:8px; padding:8px 10px; background:color-mix(in srgb,var(--color-accent) 10%,var(--color-panel)); border-block:1px solid color-mix(in srgb,var(--color-accent) 35%,var(--color-edge)); }
   .ai-progress::after { content:''; position:absolute; bottom:0; left:0; width:35%; height:2px; background:var(--color-accent); animation:ai-progress-slide 1.6s ease-in-out infinite; }
   .ai-progress.stopping::after { animation-play-state:paused; opacity:.4; }
@@ -299,6 +317,8 @@
   .commit-options :global(.signing-icon) { margin-left:auto; color:var(--color-ink-2); }
   .stage-file :global(.stage-file-main) { transition:none; flex:1; height:28px; gap:7px; text-align:left; min-width:0; padding:3px 5px; font-weight:400; }
   .stage-file :global(.stage-file-main:not([aria-pressed="true"])) { color:var(--color-ink-2); }
+  .stage-file.conflicted { background:color-mix(in srgb,var(--color-warn) 12%,transparent); border-inline-start:2px solid var(--color-warn); }
+  .conflict-label { color:var(--color-warn); font-size:11px; font-weight:600; }
   .file-status { width:12px; flex-shrink:0; text-align:center; font-family:var(--font-mono); font-size:12px; }
   :global(.file-folder) { height:28px; gap:5px; font-size:13px; font-weight:400; }
   .staging-panel :global(.file-folder > span) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

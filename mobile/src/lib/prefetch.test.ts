@@ -47,3 +47,18 @@ describe("prefetchOnce", () => {
     expect(a).not.toHaveBeenCalled();
   });
 });
+
+describe("prefetchOnce after the document is gone", () => {
+  it("does nothing when its timer fires with no document", async () => {
+    vi.useFakeTimers();
+    resetPrefetch();
+    let ran = 0;
+    prefetchOnce([async () => void ran++], 10);
+    vi.stubGlobal("document", undefined);
+    expect(() => vi.advanceTimersByTime(20)).not.toThrow();
+    expect(ran).toBe(0);
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    resetPrefetch();
+  });
+});

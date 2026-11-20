@@ -1274,10 +1274,10 @@ refused. Every other request comes from a human press.
 
 ```ts
 export type Seg = "conversation" | "changes" | "review" | "terminal";
-export type Tab = "inbox" | "projects" | "activity" | "settings";
+export type Tab = "inbox" | "projects" | "settings";
 export type Route =
   | { name: "connect"; state: "scan" | "code" | "refused" | "expired" | "failed" | "dropped" | "not-paired" | "no-camera" }
-  | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets"; filter?: InboxFilter }
+  | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets" | "git"; filter?: InboxFilter }
   | { name: "session"; id: string; seg: Seg; pane?: string }
   | { name: "dev"; page: "bridge-guard" };                  // DEBUG builds only; parseRoute returns null in release
 export type InboxFilter = "" | "needs" | "working" | "review" | "done";
@@ -1305,8 +1305,8 @@ Path grammar (shared by dev links, preview fixtures and tests):
 /connect | /connect/{code|refused|expired|failed|dropped|not-paired|no-camera}
 /inbox[?filter=needs|working|review|done]
 /session/<id>/{conversation|changes|review|terminal}[/<pane>]
-/projects | /projects/<name> | /projects/<name>/{prs|tickets}
-/activity | /settings
+/projects | /projects/<name> | /projects/<name>/{prs|tickets|git}
+/settings
 /dev/bridge-guard                       (DEBUG only)
 query: sheet=<SheetName>[&tab=<a-z, 1–16>]   (tab only with a sheet; reviewPackage reads it)
 ```
@@ -1314,7 +1314,7 @@ query: sheet=<SheetName>[&tab=<a-z, 1–16>]   (tab only with a sheet; reviewPac
 Unknown segments return `null` (caller keeps the current route). `/connect/*`
 is accepted only when no daemon is paired (otherwise → `/inbox`).
 
-Nav model: four tabs in the bottom bar (Inbox, Projects, Activity, Settings),
+Nav model: three tabs in the bottom bar (Sessions, Projects, Settings),
 each keeping its own depth. Session is pushed over the current tab; back
 returns to it. Left-edge swipe (start x ≤ 20 pt, pointer events) pops with the
 spring of §6.4; it is disabled on the Terminal segment, which owns its touches.
@@ -1337,7 +1337,7 @@ Directory: `mobile/src/screens/` (replaces `mobile/src/views/`).
   one button.
 - Pairing done → `success` haptic, `router.replace(/inbox)`.
 
-**Inbox** (`screens/Inbox.svelte`, `lib/inbox.svelte.ts`)
+**Sessions** (`screens/Inbox.svelte`, `lib/inbox.svelte.ts`). Both `/sessions` and the existing `/inbox` links open this screen.
 - Cards ("Needs you"): sessions with `kanbanKey ∈ {needs, fixing}` or
   `delivery === "approved"`, ordered by `sortRank`. Card = title (2 lines max),
   project · branch, state line, **one** action:
@@ -1363,11 +1363,11 @@ Directory: `mobile/src/screens/` (replaces `mobile/src/views/`).
   needs cards, and only while it is the top route (02
   `MaxProbedSessionsPerDevice` = 4 leaves a slot for an open session); the rest
   show Answer.
-- Rows below, one dense row per session (56 pt, two lines): sections Working,
+- Rows below use the desktop roster glyph, a two-line title, project and issue or branch, and a PR number when available. Sections: Working,
   In review, Done. Done shows `DONE_VISIBLE = 20` rows then "Show all".
 - A tap on a card or row opens the Conversation, except a `ci_failed` card, an
   `approved` card and anything in the review bucket, which open the Review segment.
-- Filter chips (`filter` sheet on small widths) map to `InboxFilter`.
+- The status tabs below search map to `InboxFilter` and count matching sessions. The Filter sheet also exposes the status choices.
 - The `filter` sheet also holds "Group by: Status | Project", a persisted
   preference (`lola.mobile.inboxGroup`, not a route): project mode lists one
   header per project in the desktop's arrangement, needs-you cards first, with
@@ -1496,10 +1496,10 @@ sentence; the client list is a courtesy, the daemon gate is the truth.
 | Banner · offline | — | No network. |
 | Banner · unreachable | — | Can't reach {mac}. · "Details" |
 | Banner · racing | — | Reconnecting… |
-| Inbox | Inbox | — |
-| Inbox sections | Needs you · Working · In review · Done | "Show all" · "Clear filter" |
+| Sessions | Sessions | — |
+| Session sections | Needs you · Working · In review · Done | "Show all" |
 | Inbox card kinds | — | Permission · Question · Menu open · Needs you |
-| Inbox empty | Nothing needs you | — (compact row, no summary line) |
+| Sessions empty | No sessions yet | Nothing needs you (when other sessions exist) |
 | Inbox connecting | — | status "Connecting…" (no snapshot, no banner) |
 | Inbox card actions | — | Approve · Answer · Resolve · See checks · Address · Merge |
 | Session segments | — | Conversation · Changes · Review · Terminal |
@@ -1604,6 +1604,27 @@ compiled out of release). Launch-environment variant
 
 ---
 
+
+### 5.x Project Changes and Graph
+
+Projects open on Sessions. Changes (`/projects/<name>/git`) and Graph
+(`/projects/<name>/graph`) are sibling sections when the project checkout
+is available and the device has read access. Changes includes files and stashes.
+Graph uses the desktop commit layout, pins the default branch to the first lane,
+and can expand for wider histories. Its filter reads the selected branch without
+switching the checkout. A commit opens its diff and Back returns to the same row.
+Same-repository PR numbers are matched to remote branch tips from the project PR list.
+
+The phone has no git credentials, so the Git screen (`screens/Git.svelte`) asks the Mac. The
+shim routes `ProjectGitService` methods to three daemon commands (`projectGit` read,
+`projectGitAct` control, `projectGitDiscard` destructive; tiers in spec 01 §8.2), each carrying an
+`op`. The daemon (`internal/daemon/projectgit.go`) resolves the project from config, accepts only
+a worktree that `git worktree list` of the project's folder names, and refuses sandboxed, pinned
+and goal checkouts, exactly like the desktop's in-process service. State, diff and file grouping
+are the desktop's own `ProjectGitState` / `ProjectGitDiff`. Still Mac-only: amend, branch
+actions (checkout, merge, rebase, delete), pull requests, AI commit, new worktrees and
+avatars. Controls a device's tiers do not grant are not drawn; the daemon gate is the truth.
+
 ## 6. Phone design system
 
 Tokens live in `mobile/src/app.css` (`@theme`) and
@@ -1677,8 +1698,7 @@ settle times they produce.
 | Sheet present | translateY spring stiffness 0.15, damping 0.82 (≈ 300 ms) to detent; detents fit (default) = content height capped at 100 % − top inset − 44 pt, medium = 52 % of height, large = 92 %, full = 100 % − safe top | 150 ms fade |
 | Sheet dismiss | drag > 30 % of sheet height or velocity > 800 pt/s; spring to 100 % | fade |
 | Segment thumb | `transform` 220 ms `cubic-bezier(0.2, 0.8, 0.2, 1)` | none |
-| Card resolve (Inbox) | height collapse + fade 240 ms `cubic-bezier(0.4, 0, 0.2, 1)` | instant |
-| Row insert/remove | fade + 8 pt slide 180 ms; only keyed rows that changed animate | instant |
+| Sessions list updates | Insert and remove keyed rows immediately. Changing the status filter starts at the top. | instant |
 | Keyboard inset | 250 ms `cubic-bezier(0.17, 0.59, 0.4, 0.77)` | instant |
 | Banner | slide from top 200 ms | fade |
 

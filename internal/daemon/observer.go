@@ -379,6 +379,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			} else {
 				paneAct = attention.Classify(text, k)
 				_, paneQuestion = attention.Parse(text, k)
+				d.noteKeyAgent(ctx, s, attention.KeyAgentLocked(text))
 			}
 			paneClassified = true
 
@@ -406,6 +407,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			if k == agent.Claude {
 				transcriptSays = transcripts.Verdict(s.TranscriptPath, time.Now())
 			}
+		}
+		if !alive {
+			d.noteKeyAgent(ctx, s, false)
 		}
 
 		// Merge this cycle's facts as ONE atomic read-modify-write. The execs

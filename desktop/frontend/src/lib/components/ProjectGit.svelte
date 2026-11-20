@@ -25,10 +25,11 @@
   import { gitColumns, readGitColumns, saveGitColumns, defaultGitColumns, type GitColumnID } from '$lib/gitcolumns';
   import GitProviderIcon from './GitProviderIcon.svelte';
   import Icon from './Icon.svelte';
+  import ProjectGitConflict from './ProjectGitConflict.svelte';
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
   import { projectGitState, type ProjectGitState } from '$lib/projectgit.svelte';
-  import { folderFirstFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitDiffFile, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
+  import { folderFirstFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, defaultBranchTip, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitDiffFile, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
   import { agoPhrase, exactTime } from '$lib/time';
 
   let { project, heading, actions, windowInset = false, active = true }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean; active?: boolean } = $props();
@@ -115,6 +116,7 @@
   function searchKey(event: KeyboardEvent) {
     if (!active) return;
     if (event.defaultPrevented || nav.overlay || confirm.request) return;
+    if (event.target instanceof Element && event.target.closest('[aria-label="Merge editor"]')) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !nav.overlay && !confirm.request) { event.preventDefault(); void openSearch(); }
     if (event.key === 'Escape') { if (columnMenu) columnMenu = false; else if (searchOpen) closeSearch(); }
   }
@@ -335,7 +337,7 @@
   }));
   const localBranches = $derived(branchTree(filteredLocal));
   const commits = $derived(data?.commits ?? []);
-  const graph = $derived(commitGraph(commits));
+  const graph = $derived(commitGraph(commits, defaultBranchTip(data?.refs ?? [], store.defaultBranchFor(project))));
   const graphBySHA = $derived(new Map(graph.map(row => [row.sha, row])));
   const operationLabel = $derived(({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data?.operation ?? ''] ?? 'Git operation');
   const workingColumns = $derived(data?.operation || workingCounts.conflicts ? shownColumns.filter(column => ['refs','graph','subject'].includes(column.id)) : shownColumns);
@@ -386,7 +388,7 @@
   });
   const shownFile = $derived(fullFile && fullFile.path === file?.path ? fullFile : file);
   const totals = $derived(files.reduce((sum, f) => ({ add: sum.add + f.additions, del: sum.del + f.deletions }), { add: 0, del: 0 }));
-  const diffTitle = $derived(area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${comparisonLabel(0)} → ${comparisonLabel(1)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
+  const diffTitle = $derived(area === 'conflict' ? path : area === 'working' ? `${selected[0]?.slice(0,8)} → Working changes` : selected.length === 2 ? `${comparisonLabel(0)} → ${comparisonLabel(1)}` : area === 'commit' ? 'Commit changes' : area === 'staged' ? 'Staged changes' : 'Working changes');
 
   $effect(() => {
     project;
@@ -403,7 +405,7 @@
   $effect(() => {
     const state = view, snapshot = view.snapshot, selection = selected, chosenArea = area, chosenPath = path;
     untrack(() => {
-      if (!snapshot || !chosenArea) { state.clearDiff(); return; }
+      if (!snapshot || !chosenArea || chosenArea === 'conflict') { state.clearDiff(); return; }
       void state.loadDiff(chosenArea, chosenArea === 'working' || selection.length === 2 ? selection[0] : '', chosenArea === 'working' ? '' : selection.at(-1) ?? '', chosenPath);
     });
   });
@@ -433,9 +435,13 @@
 
   $effect(() => { saveSectionFilters(project, sectionFilters); });
 
-  function chooseCommit(sha: string, event?: MouseEvent) {
-    branchJump++; focusedBranch = ''; peekPath = '';
-    selected = selectCommits(selected, sha, !!(event?.metaKey || event?.ctrlKey));
+  function chooseCommit(sha: string, event: MouseEvent) {
+    branchJump++; peekPath = '';
+    selected = selectCommits(selected, sha, event.metaKey || event.ctrlKey);
+    const badge = event.target instanceof Element ? event.target.closest<HTMLElement>('.ref-label[data-branch-ref]') : null;
+    const local = badge && selected.includes(sha) ? filteredLocal.find(branch => branch.fullName === badge.dataset.branchRef) : undefined;
+    focusedBranch = local?.fullName ?? '';
+    if (local) void revealLocalBranch(local);
     area = selected.length ? 'commit' : '';
     diffOpen = false;
     path = ''; activeFile = '';
@@ -447,18 +453,36 @@
     if (peek) void git.load(ref, limit);
   }
   function showCommitDiff(sha: string) { selected = [sha]; area = 'commit'; path = ''; activeFile = ''; diffOpen = true; }
+  let suggestionRequest = $state(0);
+  let suggestionPath = $state('');
+  let pendingResolution: {paths:string[]; head:string; operation?:string} | null = null;
   function inspectFile(file: GitFile, staged: boolean) {
     diffOpen = true;
-    selected = []; area = staged ? 'staged' : file.untracked ? 'untracked' : 'unstaged'; path = file.path; activeFile = file.path;
+    selected = []; area = file.conflict ? 'conflict' : staged ? 'staged' : file.untracked ? 'untracked' : 'unstaged'; path = file.path; activeFile = file.path;
   }
   async function act(action: 'stage' | 'unstage' | 'commit' | 'fetch' | 'pull' | 'push', paths: string[] = []) {
     const local = ['stage', 'unstage', 'commit'].includes(action);
     // Fetch, pull and push belong to the toolbar, which is the active checkout's.
     const state = local ? view : git, peeking = state !== git;
-    const ok = await state.act(action, paths, peeking ? '' : ref, peeking ? 1 : limit);
-    if (ok && state === view && local) working();
-    // The peeked checkout's counts live in the active snapshot.
-    if (ok && peeking) void git.load(ref, limit);
+    const conflicts = action === 'stage' ? state.snapshot?.files.filter(f => f.conflict && paths.includes(f.path)) : [];
+    if (conflicts?.length) {
+      const snapshot = state.snapshot;
+      confirm.ask({
+        title: 'Stage conflict resolution?',
+        subject: conflicts.map(file => file.path).join('\n'),
+        body: 'Git will use the saved working files as the resolution, including any conflict markers left in them.',
+        confirmLabel: 'Stage resolution',
+        onConfirm: () => { if (state === view && snapshot?.head === state.snapshot?.head && snapshot?.branch === state.snapshot?.branch) void apply(); },
+      });
+      return;
+    }
+    await apply();
+    async function apply() {
+      const ok = await state.act(action, paths, peeking ? '' : ref, peeking ? 1 : limit);
+      if (ok && state === view && local) working();
+      // The peeked checkout's counts live in the active snapshot.
+      if (ok && peeking) void git.load(ref, limit);
+    }
   }
   // Single lines move only for a tracked, modified text file in the staged or unstaged list.
   const lineAction = $derived(file?.status === 'modified' && !file.binary && !file.tooLarge ? area === 'unstaged' ? 'stage' as const : area === 'staged' ? 'unstage' as const : null : null);
@@ -496,9 +520,28 @@
   });
   let historyLoad: Promise<void> = Promise.resolve();
   const drawn = new WeakSet<object>();
+  let rail = $state<HTMLElement>();
+  let railSections: ProjectGitRail;
+  function scrollRailRow(row: HTMLElement) {
+    const box = row.closest<HTMLElement>('.section-content');
+    if (!box) return;
+    const outer = box.getBoundingClientRect(), inner = row.getBoundingClientRect();
+    if (inner.top < outer.top || inner.bottom > outer.bottom) box.scrollTop += inner.top - outer.top - (outer.height - inner.height) / 2;
+  }
+  async function revealLocalBranch(branch: GitRef) {
+    railSections.openSection('Local');
+    animatedFolder = '';
+    const parts = branch.name.split('/');
+    const next = new Set(collapsedFolders);
+    for (let i = 1; i < parts.length; i++) next.delete(folderKey('local', parts.slice(0, i).join('/')));
+    collapsedFolders = next;
+    await tick();
+    if (focusedBranch !== branch.fullName || !rail) return;
+    const row = [...rail.querySelectorAll<HTMLElement>('.branch-leaf')].find(row => row.dataset.branchRef === branch.fullName);
+    if (row) scrollRailRow(row);
+  }
   // Opening a repository (or switching checkout) brings the active rows of each
   // rail section into view; later refreshes leave the person's scroll alone.
-  let rail = $state<HTMLElement>();
   let railRevealed: ProjectGitState | undefined, railWasOpen = false;
   $effect(() => {
     const state = git, opened = showRail && !railWasOpen;
@@ -506,14 +549,11 @@
     if (!data || !rail || (railRevealed === state && !opened)) return;
     railRevealed = state;
     const upstream = data.upstream ? `refs/remotes/${data.upstream.replace(/^refs\/remotes\//, '')}` : '';
-    const rows = [...rail.querySelectorAll<HTMLElement>('.current-branch, .worktree-row[aria-pressed="true"]')];
+    const rows = [...rail.querySelectorAll<HTMLElement>('.worktree-row[aria-pressed="true"]')];
+    const local = rail.querySelector<HTMLElement>('.branch-leaf[data-branch-ref^="refs/heads/"][aria-pressed="true"]') ?? rail.querySelector<HTMLElement>('.current-branch');
+    if (local) rows.push(local);
     for (const row of rail.querySelectorAll<HTMLElement>('.branch-leaf[data-branch-ref]')) if (upstream && row.dataset.branchRef === upstream) rows.push(row);
-    for (const row of rows) {
-      const box = row.closest<HTMLElement>('.section-content');
-      if (!box) continue;
-      const outer = box.getBoundingClientRect(), inner = row.getBoundingClientRect();
-      if (inner.top < outer.top || inner.bottom > outer.bottom) box.scrollTop += inner.top - outer.top - (outer.height - inner.height) / 2;
-    }
+    rows.forEach(scrollRailRow);
   });
   let branchJump = 0;
   let focusedBranch = $state('');
@@ -550,7 +590,13 @@
 
   function branchDescription(branch: GitRef) { return `${branch.remote ? 'Remote' : 'Local'} branch: ${branch.name}${branch.current ? ' · active checkout' : hasCheckout(branch) ? ' · checked out in a worktree' : ''}${!branch.remote ? branch.upstream ? ` · tracks ${branch.upstream.replace('refs/remotes/','')} · ${branch.ahead ?? 0} ahead, ${branch.behind ?? 0} behind` : ' · no upstream configured' : ''}`; }
   function folderKey(scope: string, path: string) { return JSON.stringify([project, worktree, scope, path]); }
+  // Graph navigation needs the expanded folder's final height before scrolling.
+  let animatedFolder = '';
+  function folderSlide(node: HTMLElement, key: string) {
+    return key === animatedFolder ? disclosureSlide(node) : { duration: 0 };
+  }
   function toggleFolder(key: string) {
+    animatedFolder = key;
     const next = new Set(collapsedFolders);
     if (next.has(key)) next.delete(key); else next.add(key);
     collapsedFolders = next;
@@ -582,7 +628,7 @@
       {@const expanded = !collapsedFolders.has(key)}
       {@const containsSelection = ref.startsWith(`${scope === 'local' ? 'refs/heads/' : 'refs/remotes/'}${node.path}/`)}
       <Button block class={`rail-row branch-folder ${containsSelection ? 'contains-selection' : ''}`} style={`padding-left:${7 + Math.min(depth, 8) * 13}px`} aria-label={`${scope === 'local' ? 'Local' : 'Remote'} branch folder ${node.path}`} aria-expanded={expanded} title={node.path} onclick={() => toggleFolder(key)}><Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} /><Icon name="folder" size={14} /><span class="truncate">{node.name}</span><span class="rail-count">{node.count}</span></Button>
-      {#if expanded}<div transition:disclosureSlide>{@render branchNodes(node.children, scope, depth + 1)}</div>{/if}
+      {#if expanded}<div transition:folderSlide={key}>{@render branchNodes(node.children, scope, depth + 1)}</div>{/if}
     {:else}
       {@const branch = node.branch}
       <div class="rail-entry" class:has-pr={prsFor(branch).length > 0}>
@@ -681,7 +727,7 @@
           {#each filteredStashes as stash (stash.sha)}<div class="rail-entry"><Button block class="rail-row stash-row" title={stash.subject} onclick={(event) => gitActions.openStash(stash, event)} oncontextmenu={(event) => gitActions.openStash(stash, event)}><Icon name="archive" size={14} /><span class="truncate">{stash.subject}</span><small>{stash.selector.replace('stash@', '')}</small></Button><Button icon size="xs" class="rail-more" aria-label={`Actions for stash ${stash.selector}`} title="Stash actions" aria-haspopup="menu" onclick={(event) => gitActions.openStash(stash,event)}><Icon name="ellipsis-vertical" size={14}/></Button></div>{/each}
           {#if initialLoading || (data && git.stashesState === 'loading')}{@render loadingRailRows(1)}{:else if data && !filteredStashes.length}<p class="rail-empty">{git.stashesState !== 'ready' ? 'Stashes unavailable' : filterActive(sectionFilters.stashes) ? 'No stashes match these filters' : 'No saved stashes'}</p>{/if}
       {/snippet}
-      <ProjectGitRail sections={[
+      <ProjectGitRail bind:this={railSections} sections={[
         { name: 'Local', heading: localHeading, content: localContent, controls: localControls },
         { name: 'Remote', heading: remoteHeading, content: remoteContent, controls: remoteControls },
         { name: 'Worktrees', heading: worktreesHeading, content: worktreesContent, controls: worktreesControls },
@@ -712,7 +758,13 @@
             </Button>
             {#if data.operation || workingCounts.conflicts}
               <div class="working-recovery">
-                {#if workingCounts.conflicts}<Button size="xs" variant="secondary" class="ai-resolve" disabled={!!git.busy} loading={git.busy === 'ai-resolve'} onclick={async () => { const state = git; const id = await state.resolveConflicts(ref, limit); if (id && state === git) openSession(id, project); }}><Icon name="sparkles" size={13}/>AI resolve</Button>
+                {#if workingCounts.conflicts}<Button size="xs" variant="secondary" class="ai-resolve" disabled={!!git.busy} loading={git.busy === 'ai-resolve'} onclick={async () => { const state = git; const id = await state.resolveConflicts(ref, limit, file => {
+                  if (state !== git) return;
+                  const snapshot = state.snapshot!;
+                  pendingResolution = {paths:snapshot.files.filter(f => f.conflict && f.path !== file.path).map(f => f.path),head:snapshot.head,operation:snapshot.operation};
+                  peekPath = ''; suggestionPath = file.path; suggestionRequest++;
+                  inspectFile(file, false);
+                }); if (id && state === git) openSession(id, project); }}><Icon name="sparkles" size={13}/>AI resolve</Button>
                 {:else if ['merge','rebase','cherry-pick','revert'].includes(data.operation ?? '')}<Button size="xs" variant="secondary" disabled={!!git.busy} loading={git.busy === 'continue'} onclick={() => gitActions.continueOperation()}>{data.operation === 'merge' ? 'Complete merge' : 'Continue'}</Button>{/if}
                 <Button size="xs" icon aria-label="Conflict actions" title="Continue, skip or abort" onclick={(event) => gitActions.openRepository(event)}><Icon name="ellipsis-vertical" size={14}/></Button>
               </div>
@@ -796,9 +848,38 @@
         <div class="history-hint"><div class="history-tools"><Button size="xs" icon aria-label="Search commits" title="Search commits (⌘F)" onclick={() => void openSearch()}><Icon name="search" size={14} /></Button></div><span>{search ? 'Searching loaded history · graph connections hidden' : '⌘ / Ctrl + click two commits to compare'}</span>{#if ref}<Button size="xs" disabled={!!git.busy} onclick={() => chooseRef('')}>Clear branch filter</Button>{/if}</div>
       </section>
       {#if area && diffOpen}
-        <section class="diff-stage" aria-label="Selected changes">
+        <section class="diff-stage" class:merge-view={area === 'conflict'} aria-label="Selected changes">
+          {#if area !== 'conflict'}
           <div class="comparison-bar"><span><Icon name={selected.length === 2 ? 'git-compare-arrows' : 'file-text'} size={14} />{diffTitle}</span><div>{#if selected.length === 2}<Button size="xs" aria-label="Swap comparison direction" onclick={() => { comparisonBranches = [...comparisonBranches].reverse(); selected = [...selected].reverse(); }}><Icon name="arrow-right-left" size={13} />Swap</Button>{/if}<Button size="xs" icon aria-label="Close diff" onclick={() => diffOpen = false}><Icon name="x" size={14} /></Button></div></div>
-          {#if view.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
+          {/if}
+          {#if area === 'conflict'}
+            {@const owner = view}
+            {@const chosenPath = path}
+            {#key JSON.stringify([owner.project,owner.worktree,chosenPath,suggestionRequest])}
+              <ProjectGitConflict autosuggest={chosenPath === suggestionPath} onrequesthandled={() => suggestionPath = ''} git={owner} path={chosenPath} onclose={() => diffOpen = false} onstageexternal={() => void act('stage',[chosenPath])} onstaged={async (automatic) => {
+                const peeking = owner !== git;
+                await owner.load(peeking ? '' : ref, peeking ? 1 : limit);
+                if (owner === view && path === chosenPath && area === 'conflict') {
+                  const snapshot = owner.snapshot;
+                  const queue = pendingResolution;
+                  let next: GitFile | undefined;
+                  if (automatic && queue && snapshot && !owner.error && snapshot.head === queue.head && snapshot.operation === queue.operation) {
+                    next = snapshot.files.find(f => f.conflict && queue.paths.includes(f.path));
+                  }
+                  if (next && queue) {
+                    queue.paths = queue.paths.filter(p => p !== next.path);
+                    suggestionPath = next.path; suggestionRequest++;
+                    inspectFile(next,false);
+                  } else {
+                    pendingResolution = null;
+                    working();
+                    if (automatic) owner.notice = 'AI resolution staged.';
+                  }
+                }
+                if (peeking) void git.load(ref,limit);
+              }}/>
+            {/key}
+          {:else if view.diffLoading}<div class="git-empty"><Icon name="loader-circle" class="animate-spin" size={18} /><p>Loading changes…</p></div>
           {:else if view.diffError}<div class="git-empty" role="alert"><Icon name="circle-alert" size={20} /><p>{view.diffError}</p><Button onclick={() => void view.loadDiff(area as GitArea, area === 'working' || selected.length === 2 ? selected[0] : '', area === 'working' ? '' : selected.at(-1) ?? '', path)}>Retry diff</Button></div>
           {:else if shownFile}<ProjectGitDiff file={shownFile} lineAction={lineAction} busy={!!view.busy} onlines={(lines) => void changeLines(lines)} oncontext={(title, items, event) => gitActions.openItems(title, items, event)} />
           {:else}<div class="git-empty"><Icon name="check" size={20} /><p>No file changes in this comparison</p></div>{/if}
@@ -1062,6 +1143,7 @@
   .history-hint > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .history-hint { display:flex; align-items:center; justify-content:space-between; min-height:28px; padding:4px 12px; border-top:1px solid var(--color-edge); font-size:12px; color:var(--color-faint); }
   .diff-stage { position:absolute; top:0; bottom:0; left:0; right:var(--inspector-width); z-index:5; display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; background:var(--color-panel); border-right:1px solid var(--color-edge); }
+  .diff-stage.merge-view { grid-template-rows:minmax(0,1fr); }
   .comparison-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:5px 12px; background:var(--color-canvas); border-bottom:1px solid var(--color-edge); }
   .comparison-bar > span,.comparison-bar > div { display:flex; align-items:center; gap:7px; font-size:12px; }
   .comparison-bar > span { color:var(--color-ink-2); }

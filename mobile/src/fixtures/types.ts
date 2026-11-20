@@ -7,6 +7,7 @@
 //  - Keys of `talk`, `feeds`, `timelines`, `diffs`, `panes` and `packages` are
 //    session ids; a session with no entry answers like a quiet, empty one.
 
+import type { GitSnapshot } from "$lib/projectgit";
 import type { FailureCode, PairedDaemon, PathInfo } from "lola-transport";
 import type {
   AgentFeedItem,
@@ -32,6 +33,7 @@ export const FIXTURE_NAMES = [
   "empty",
   "busy",
   "busy-grouped",
+  "graph",
   "permission",
   "dialog",
   "question",
@@ -82,6 +84,7 @@ export interface Fixture {
   /** The screen a pane answers a subscription with. */
   screens: Record<string, ResyncPayload>;
   readiness: Record<string, PRReadinessData>;
+  git?: Record<string, GitSnapshot>;
   prs: PrsData;
   tickets: TicketsData;
   /** The Mac's hubStatus; absent: joined, with the relay connected (daemon.ts). */

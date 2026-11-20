@@ -34,12 +34,11 @@ describe("needsYouCount", () => {
 });
 
 describe("TabBar", () => {
-  it("draws the four destinations in the router's order", () => {
+  it("draws the three destinations in the router's order", () => {
     render(TabBar);
     expect(screen.getAllByRole("button").map((b) => b.textContent?.trim())).toEqual([
-      "Inbox",
+      "Sessions",
       "Projects",
-      "Activity",
       "Settings",
     ]);
   });
@@ -48,35 +47,35 @@ describe("TabBar", () => {
     router.stack = [{ name: "tab", tab: "projects" }];
     render(TabBar);
     expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-current", "page");
-    for (const name of ["Inbox", "Activity", "Settings"]) {
+    for (const name of ["Sessions", "Settings"]) {
       expect(screen.getByRole("button", { name })).not.toHaveAttribute("aria-current");
     }
   });
 
   it("replaces the route when a tab is pressed", async () => {
     render(TabBar);
-    await fireEvent.click(screen.getByRole("button", { name: "Activity" }));
-    expect(router.top).toEqual({ name: "tab", tab: "activity" });
+    await fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(router.top).toEqual({ name: "tab", tab: "settings" });
     expect(router.stack).toHaveLength(1);
   });
 
   it("does nothing for the tab already showing", async () => {
     router.stack = [{ name: "tab", tab: "inbox", filter: "needs" }];
     render(TabBar);
-    await fireEvent.click(screen.getByRole("button", { name: "Inbox" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
     expect(router.top).toEqual({ name: "tab", tab: "inbox", filter: "needs" });
   });
 
   it("puts the waiting count in the Inbox button's name", () => {
     store.sessions = [s({ agentState: "waiting_input" }), s({ delivery: "approved" })];
     render(TabBar);
-    expect(screen.getByRole("button", { name: "Inbox, 2 need you" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sessions, 2 need you" })).toBeInTheDocument();
   });
 
   it("names the Inbox plainly when nothing waits", () => {
     store.sessions = [s()];
     render(TabBar);
-    expect(screen.getByRole("button", { name: "Inbox" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sessions" })).toBeInTheDocument();
   });
 
   it("draws the count as a capsule on the Inbox glyph, capped at 99+", () => {

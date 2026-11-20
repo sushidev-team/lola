@@ -1,5 +1,5 @@
 import type { PRCreateRequest, PRDraft, PRResult } from './gitpullrequest';
-import { ProjectGitService } from '@bindings/desktop';
+import { ConfigService, ProjectGitService } from '@bindings/desktop';
 import { Events } from '@wailsio/runtime';
 import type {BranchPR} from './gitrefdisplay';
 import { store } from './store.svelte';
@@ -106,7 +106,7 @@ export class ProjectGitState {
   constructor(readonly project: string, readonly worktree: string) {}
 
   private conflictSession = '';
-  async resolveConflicts(ref = '', limit = 200): Promise<string | null> {
+  async resolveConflicts(ref = '', limit = 200, suggest?: (file: GitSnapshot['files'][number]) => void): Promise<string | null> {
     if (this.busy || !this.snapshot?.files.some(file => file.conflict)) return null;
     const expected = this.snapshot;
     this.busy = 'ai-resolve'; this.error = '';
@@ -135,6 +135,11 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
         this.notice = result.delivered ? 'Asked the agent to resolve conflicts.' : result.why || 'Conflict resolution queued for the agent.';
         return id;
       }
+      const config = await ConfigService.GetProject(this.project);
+      if (config.execution?.sandbox === 'docker') {
+        if (suggest) suggest(files[0]);
+        return null;
+      }
       const result = await store.openManual({project:this.project,location:'checkout',path:snapshot.path,aiAction:'resolve',branch:'',name:'Resolve conflicts',agent:true,prompt});
       if (!result) throw new Error(store.flash?.text || 'Could not start conflict resolution.');
       this.conflictSession = result.sessionId;
@@ -144,7 +149,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     finally { this.busy = ''; }
   }
 
-  aiCommit = $state<{id:string; phase:string; completed:number; total:number; subject:string; stopping:boolean; done:boolean; error:string} | null>(null);
+  aiCommit = $state<Awaited<ReturnType<typeof ProjectGitService.AICommitStatus>> | null>(null);
   async prepareAICommit() {
     if (this.busy || this.draftingMessage) return null;
     this.busy = 'prepare-ai-commit'; this.error = '';
@@ -177,8 +182,18 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       if (result.error) this.reportError(result.error);
       const count = `${result.completed} ${result.completed === 1 ? 'commit' : 'commits'}`;
       this.notice = result.phase === 'complete' ? `Created ${count}.` : `${result.phase === 'cancelled' ? 'Cancelled' : 'Stopped'} after ${count}. Remaining changes are kept.`;
+      if (result.phase === 'complete' && result.excluded?.length) {
+        const n = result.excluded.length;
+        this.notice += ` Left ${n} ${n === 1 ? 'file' : 'files'} uncommitted.`;
+      }
     } catch (error) { this.reportError(error); }
     finally { this.aiCommit = null; this.busy = ''; }
+  }
+  async acceptAICommitExclusions() {
+    const job = this.aiCommit;
+    if (job?.phase !== 'review' || job.stopping) return;
+    try { await ProjectGitService.AcceptAICommitExclusions(job.id); }
+    catch (error) { this.reportError(error); }
   }
   async cancelAICommit() {
     const job = this.aiCommit;
@@ -355,7 +370,12 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       // without losing the actionable Git error to load()'s clearing behavior.
       await refresh();
       this.failedAction = request;
-      this.reportError(error, request.action);
+      if (request.action === 'pull' && gitErrorInfo(String(error), 'pull').recovery === 'stash-pull') {
+        // GitActions retries with auto-stash and shows the warning itself if it cannot retry.
+        this.error = String(error);
+      } else {
+        this.reportError(error, request.action);
+      }
       return null;
     } finally { unsubscribe(); this.queued = false; this.busy = ''; this.deletingBranch = ''; }
   }

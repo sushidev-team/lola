@@ -1083,13 +1083,13 @@ resolved from `internal/protocol`): 166 case labels today, minus the deleted
 `pairReject`, `devices`, `revokeDevice`, `setDeviceTiers`, `sessionTimeline`; `pairBegin` already
 exists) = 172, plus spec 02's two handled commands `attachImage` and `attachmentImage` (`d.handle`
 cases reached through `Options.Handle` with the peer in the context) = 174, plus spec 03's
-`relayCred` = 176, plus the desktop-only `askMerge` and `addApps` = 178, plus the five team-sharing commands = **183 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
+`relayCred` = 176, plus the desktop-only `askMerge` and `addApps` = 178, plus the plan gate's `planSubmit`, `planDecide`, `planGate` = 181, plus desktop-only `removeEndedWorktree` = 182, plus the phone Git client's `projectGit`, `projectGitAct`, `projectGitDiscard` = 185, plus the five team-sharing commands = **190 handled**. Plus `TransportCommands` (`watch`, `unwatch`), answered by
 `internal/remote`, and `remote.pair`, consumed by `Authenticate`.
 
-Split of the 183: read 24, answer 12, control 23, destructive 3, shell 6, never 115.
+Split of the 190: read 25, answer 12, control 25, destructive 4, shell 6, never 118.
 (Coverage was checked mechanically against `server.go` while writing this spec.)
 
-**read** (24 handled; plus `watch`, `unwatch` from `TransportCommands`)
+**read** (25 handled; plus `watch`, `unwatch` from `TransportCommands`)
 
 | Command | Notes |
 |---|---|
@@ -1103,6 +1103,7 @@ Split of the 183: read 24, answer 12, control 23, destructive 3, shell 6, never 
 | **`sessionTimeline`** (new) | §8.6 |
 | `attachmentImage` | spec 02 §12.3; field spec owned by spec 02 |
 | `watch`, `unwatch` | transport (spec 02) |
+| `projectGit` | the phone Git client's reads (`snapshot`, `diff`, `stashes`); runs on the Mac with its git credentials, refuses sandboxed or foreign checkouts (`internal/daemon/projectgit.go`) |
 | `relayCred` | spec 03 §10.6, `d.handleRelayCred`. SELF-ONLY: it reads the device from `remote.PeerFromContext` (spec 02) and changes nothing but that device's own `Relay` record; the unix socket (no peer) is refused. It may issue or rotate the caller's own bearer, so every device may send it (`read` is mandatory). |
 
 **answer** (12)
@@ -1119,21 +1120,21 @@ Split of the 183: read 24, answer 12, control 23, destructive 3, shell 6, never 
 | `sshRecall` | moved to `TalkCommands` (§8.4): takes back an undelivered "You" message (plan §6 "recall") |
 | `sshAnswer` | moved to `TalkCommands`: answers an agent's question element; `handleRemote` refuses an element whose `Conn != ""` (§8.7) |
 
-**control** (23)
+**control** (25)
 
 `addressPRFeedback`, `mergePR` (`confirmUnready` allowed, audited), `openPr`, `openTicket`,
 `openManual`, `openExisting` (field rules: §8.5), `revive`, `review`, `coderabbit`,
-`resolveConflict`, `switchAgent`, `dev`, `devFreePort`, `sessionTask`, `renameSession`,
+`resolveConflict`, `switchAgent`, `dev`, `devFreePort`, `planDecide`, `sessionTask`, `renameSession`,
 `broadcast`, `bestOf`, `restoreCheckpoint`, `forkCheckpoint`, `pollOnce`, `enable`, `disable`,
-`reviewPackageRecover`.
+`reviewPackageRecover`, `projectGitAct` (stage, unstage, commit, fetch, pull, push, createBranch, stashPush, stashApply without pop: commit and push run the repository's own hooks).
 
 `enable`/`disable` write `config.toml` (`enablePollInFile`). They are the only config writes a
 phone has; the plan lists them under control explicitly, and they flip one poll's `enabled`.
 No other config write may join a tier (§10.1).
 
-**destructive** (3)
+**destructive** (4)
 
-`kill` (`Force` never carried; `KeepWorktree` allowed), `closeExitedTemporary`, `bestOfPick`
+`kill` (`Force` never carried; `KeepWorktree` allowed), `closeExitedTemporary`, `bestOfPick`, `projectGitDiscard` (discard changes, drop or pop a stash; discard needs the token `prepareDiscard` issued)
 (`discardAttempt` kills each loser's agent and aux tabs, closes its SSH, runs
 `nat.Kill(…, removeWorktree=true)`, deletes clean branches and closes the losers' PRs).
 
@@ -1145,15 +1146,15 @@ No other config write may join a tier (§10.1).
 browser helper from the agent-writable `node_modules`, against any http(s) URL the caller
 names). Frame-level: `pty` with `action:"write"`.
 
-**never** — unreachable whatever the device holds (115)
+**never** — unreachable whatever the device holds (118)
 
 | Group | Commands |
 |---|---|
 | Daemon lifecycle / config | `stop`, `reload`, `renameProject`, `bulkProjects` |
-| Agent in-pane channels | `hookEvent`, `agentReport`, `reviewPackagePublish`, `reviewPackageComplete` |
+| Agent in-pane channels | `hookEvent`, `agentReport`, `planSubmit`, `planGate`, `reviewPackagePublish`, `reviewPackageComplete` |
 | Pairing / devices (`protocol.LocalOnlyCommands`) | `pairBegin`, `pairStatus`, `pairConfirm`, `pairReject`, `devices`, `revokeDevice`, `setDeviceTiers` |
 | Transport-internal | `remote.pair` (and every `remote.*`), `""` |
-| Branch graph (Mac only) | `askMerge` (asks a session's agent to merge a branch picked in the Mac's branch graph; a phone has no such view) |
+| Branch graph (Mac only) | `askMerge` (asks a session's agent to merge a branch picked in the Mac's branch graph), `removeEndedWorktree` (explicit cleanup of a retained checkout through its ended history; may discard unverifiable files) |
 | Session menu (Mac only) | `addApps` (checks further members of its stack out into a running stack session; it can restart a sandboxed agent, and a phone has no such menu) |
 | Host browser | `openURL` (opens a URL on the Mac; the phone opens dev URLs itself — §12 item 3) |
 | Hub human (`protocol.HubHumanCommands`, 13) | `hubJoin`, `hubLeave`, `hubBoard`, `hubOrg`, `hubClaim`, `hubRelease`, `hubSync`, `hubStats`, `hubCreateTeam`, `hubInvite`, `hubTeamSettings`, `hubRevoke`, `hubProbe` |
@@ -1270,6 +1271,7 @@ func rebuild(cmd string, in protocol.Request, has func(string) bool) (protocol.R
 | `devFreePort` | Args | `DevFreePortArgs` | |
 | `paneClose` / `paneResize` | Args | `PaneCloseArgs` / `PaneResizeArgs` | |
 | `sessionTask` | Session, Args | `ReportArgs` | |
+| `planDecide` | Session, Args | `PlanDecideArgs` | the human plan verdict; audit names `approve` only, never the comment |
 | `agentFeed`, `agentFeedOutput`, `talkState`, `agentChoose`, `agentStop`, `agentQueueRelease`, `agentSetting` | Args | matching `Agent*Args` / `TalkStateArgs` | |
 | `agentSay` | Args | `AgentSayArgs` | decode, `Conn = ""`, re-marshal; dropped `conn`; audit `stopFirst` |
 | `sshRecall` | Args | `SSHRecallArgs` | |

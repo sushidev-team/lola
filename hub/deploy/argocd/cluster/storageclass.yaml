@@ -1,0 +1,10 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: lola-block-storage-retain
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+provisioner: dobs.csi.digitalocean.com
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

@@ -16,7 +16,7 @@
   import { untrack } from "svelte";
   import { TalkService } from "@bindings/desktop";
   import type { PRReadinessData } from "@bindings/internal/protocol";
-  import { checkURL, fixRequest, groupChecks } from "$lib/prchecks";
+  import { bucketOf, checkURL, fixRequest, groupChecks } from "$lib/prchecks";
   import { readPRReadinessRecent } from "$lib/prreadiness";
   import { store } from "$lib/store.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -106,6 +106,8 @@
     ].filter((s) => s.rows.length > 0),
   );
 
+  const checkIcons = { failing: "circle-alert", passed: "circle-check", running: "clock", skipped: "circle-minus" } as const;
+
   function open(c: PRCheck): void {
     const url = checkURL(c);
     if (url) store.openURL(url);
@@ -131,7 +133,7 @@
 
 {#snippet row(c: PRCheck)}
   {@const url = checkURL(c)}
-  <ListRow label={c.name} detail={checkDetail(c, copy.checks.required) || undefined} onclick={url ? () => open(c) : undefined}>
+  <ListRow icon={checkIcons[bucketOf(c)]} label={c.name} detail={checkDetail(c, copy.checks.required) || undefined} onclick={url ? () => open(c) : undefined}>
     {#snippet trailing()}
       {#if url}<span class="shrink-0 text-faint" aria-hidden="true"><Icon name="external-link" size={14} /></span>{/if}
     {/snippet}
@@ -146,8 +148,8 @@
 {/snippet}
 
 <Sheet label={copy.checks.title} title={copy.checks.title} detent="large" footer={offersFix ? footer : undefined} onclose={() => router.close()}>
-  <div class="flex min-w-0 flex-col pb-4" data-checks-sheet>
-    {#if sha}<p class="px-8 pb-1 text-footnote text-faint">{fill(copy.checks.commit, { sha })}</p>{/if}
+  <div class="flex min-w-0 shrink-0 flex-col pb-4" data-checks-sheet data-review-list>
+    {#if sha}<p class="num px-4 pb-1 text-footnote text-faint">{fill(copy.checks.commit, { sha })}</p>{/if}
     {#if stale}<p class="px-8 pb-1 text-footnote text-warn" data-checks-stale>{copy.checks.stale.body}</p>{/if}
     {#if !target}
       <p class="px-8 py-4 text-body text-faint">{copy.checks.none.body}</p>

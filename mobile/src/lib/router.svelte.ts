@@ -9,7 +9,7 @@
 //  - Any navigation closes the open sheet.
 
 export type Seg = "conversation" | "changes" | "review" | "terminal";
-export type Tab = "inbox" | "projects" | "activity" | "settings";
+export type Tab = "inbox" | "projects" | "settings";
 export type InboxFilter = "" | "needs" | "working" | "review" | "done";
 export type ConnectState =
   | "scan"
@@ -23,7 +23,7 @@ export type ConnectState =
 
 export type Route =
   | { name: "connect"; state: ConnectState }
-  | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets"; filter?: InboxFilter }
+  | { name: "tab"; tab: Tab; project?: string; pick?: "prs" | "tickets" | "git" | "graph"; filter?: InboxFilter }
   | { name: "session"; id: string; seg: Seg; pane?: string }
   | { name: "dev"; page: "bridge-guard" };
 
@@ -39,6 +39,7 @@ export const SHEETS = [
   "devLinks",
   "rename",
   "broadcast",
+  "plan",
   "tasks",
   "switchAgent",
   "paneMenu",
@@ -52,7 +53,7 @@ export const SHEETS = [
 export type SheetName = (typeof SHEETS)[number] | "";
 
 export const SEGS: readonly Seg[] = ["conversation", "changes", "review", "terminal"];
-export const TABS: readonly Tab[] = ["inbox", "projects", "activity", "settings"];
+export const TABS: readonly Tab[] = ["inbox", "projects", "settings"];
 export const CONNECT_STATES: readonly ConnectState[] = [
   "scan",
   "code",
@@ -64,7 +65,7 @@ export const CONNECT_STATES: readonly ConnectState[] = [
   "no-camera",
 ];
 const FILTERS: readonly Exclude<InboxFilter, "">[] = ["needs", "working", "review", "done"];
-const PICKS = ["prs", "tickets"] as const;
+const PICKS = ["prs", "tickets", "git", "graph"] as const;
 
 /** Debug-only routes exist everywhere but a production build. */
 const DEBUG_BUILD = import.meta.env.MODE !== "production";
@@ -114,6 +115,7 @@ function parseRoutePart(segs: string[], q: URLSearchParams, ctx: ParseContext): 
       if (!state) return null;
       return ctx.paired ? inbox : { name: "connect", state };
     }
+    case "sessions":
     case "inbox": {
       if (segs.length > 1) return null;
       const raw = q.get("filter");
@@ -121,7 +123,6 @@ function parseRoutePart(segs: string[], q: URLSearchParams, ctx: ParseContext): 
       const filter = oneOf(FILTERS, raw);
       return filter ? { name: "tab", tab: "inbox", filter } : null;
     }
-    case "activity":
     case "settings":
       return segs.length === 1 ? { name: "tab", tab: head } : null;
     case "projects": {

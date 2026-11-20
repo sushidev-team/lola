@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { openProject } from "$lib/workspacenav";
   import Icon from "$lib/components/Icon.svelte";
   import GlyphIcon from "$lib/components/GlyphIcon.svelte";
   import { onMount } from "svelte";
@@ -102,7 +103,7 @@
   <div class="mb-3 flex items-center gap-3">
     <!-- MainTopBar owns the "Nori ▸ Open a PR" breadcrumb; this ‹ stays because
          it goes back to the project DETAIL, which the top bar's ← does not. -->
-    <Button icon title="back to project" aria-label="Back to project" onclick={() => nav.goDetail(nav.project)}>←</Button>
+    <Button icon title="back to project" aria-label="Back to project" onclick={() => openProject(nav.project)}>←</Button>
     {#if data}
       <span class="num text-sm text-faint">
         {data.prs?.length ?? 0} open · <TimeAgo at={snapshotAt} hint="PR list fetched" />{data.stale ? " · stale" : ""}

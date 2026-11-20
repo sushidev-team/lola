@@ -10,7 +10,7 @@ export type GitBranchAction = { action: string; source: string; target: string; 
 export type GitSnapshot = { operation?: string; mergeMessage?: string; path: string; branch: string; head: string; upstream: string; commits: GitCommit[]; refs: GitRef[]; remotes?: GitRemote[]; worktrees: GitWorktree[]; files: GitFile[]; signing: { enabled: boolean; format: string; key: string }; hasMore: boolean };
 export type GitDiffFile = { path: string; oldPath?: string; status?: string; additions: number; deletions: number; binary?: boolean; tooLarge?: boolean; patch?: string };
 export type GitDiff = { files: GitDiffFile[]; truncated?: boolean };
-export type GitArea = 'working' | 'commit' | 'staged' | 'unstaged' | 'untracked';
+export type GitArea = 'working' | 'commit' | 'staged' | 'unstaged' | 'untracked' | 'conflict';
 
 export type BranchNode =
   | { kind: 'branch'; name: string; path: string; branch: GitRef }
@@ -59,10 +59,10 @@ export function folderFirstFiles<T extends { path: string }>(files: T[]): T[] {
 }
 
 export function stagedFiles(files: GitFile[]): GitFile[] {
-  return files.filter(f => !f.untracked && f.index !== ' ' && f.index !== '?' && !!f.index);
+  return files.filter(f => !f.conflict && !f.untracked && f.index !== ' ' && f.index !== '?' && !!f.index);
 }
 export function unstagedFiles(files: GitFile[]): GitFile[] {
-  return files.filter(f => f.untracked || (!!f.worktree && f.worktree !== ' ' && f.worktree !== '?'));
+  return files.filter(f => f.conflict || f.untracked || (!!f.worktree && f.worktree !== ' ' && f.worktree !== '?'));
 }
 
 /**
@@ -129,13 +129,32 @@ export function worktreeChanges(rows: GraphRow[], worktrees: GitWorktree[], acti
   return out;
 }
 
-/** Follow parent identities, never author names or ref labels: merges join actual ancestry. */
-export function commitGraph(commits: Pick<GitCommit, 'sha' | 'parents'>[]): GraphRow[] {
+export function defaultBranchTip(refs: GitRef[], branch: string): string | undefined {
+  const names = branch ? [branch] : ['main', 'master'];
+  for (const name of names) {
+    const tip = refs.find(ref => ref.fullName === 'refs/heads/' + name)
+      ?? refs.find(ref => ref.fullName === 'refs/remotes/origin/' + name)
+      ?? refs.find(ref => ref.remote && ref.name.slice(ref.name.indexOf('/') + 1) === name);
+    if (tip) return tip.sha;
+  }
+}
+
+/** Translate the pending ancestry tracks into columns, leaving the first
+ * column empty above the default tip and between unrelated histories. */
+function graphColumns(lanes: Lane[], pinned: boolean, nextMain: string | undefined) {
+  let side = pinned ? 1 : 0;
+  return lanes.map(entry => pinned && entry.sha === nextMain ? 0 : side++);
+}
+
+export function commitGraph(commits: Pick<GitCommit, 'sha' | 'parents'>[], defaultTip?: string): GraphRow[] {
   // Resolve convergence before drawing. In topological order all children are
   // seen before their parent, so the earliest lineage wins a shared first-parent
   // ancestor even when the topic side is listed before the main side of a merge.
   const colors = new Map<string, number>();
-  let nextColor = 0;
+  const pinned = !!defaultTip;
+  let nextMain = defaultTip;
+  if (defaultTip) colors.set(defaultTip, 0);
+  let nextColor = pinned ? 1 : 0;
   for (const commit of commits) {
     if (!colors.has(commit.sha)) colors.set(commit.sha, nextColor++);
     const color = colors.get(commit.sha)!;
@@ -150,6 +169,8 @@ export function commitGraph(commits: Pick<GitCommit, 'sha' | 'parents'>[]): Grap
     const lane = existing < 0 ? lanes.length : existing;
     if (existing < 0) lanes.push({ sha: commit.sha, color: colors.get(commit.sha)! });
     const before = lanes.map(l => ({ ...l }));
+    const columns = graphColumns(before, pinned, nextMain);
+    const node = columns[lane];
     const color = before[lane].color;
     const after = before.filter((_, i) => i !== lane);
     const parents = [...new Set(commit.parents ?? [])];
@@ -159,20 +180,22 @@ export function commitGraph(commits: Pick<GitCommit, 'sha' | 'parents'>[]): Grap
       if (i === 0) after.splice(Math.min(lane, after.length), 0, entry);
       else after.push(entry);
     });
+    if (commit.sha === nextMain) nextMain = parents[0];
+    const nextColumns = graphColumns(after, pinned, nextMain);
     const edges: GraphEdge[] = [];
     before.forEach((entry, i) => {
       if (i === lane) {
-        if (existing >= 0) edges.push({ from: i, to: lane, color, start: 'top', end: 'node' });
+        if (existing >= 0) edges.push({ from: node, to: node, color, start: 'top', end: 'node' });
       } else {
-        edges.push({ from: i, to: after.findIndex(l => l.sha === entry.sha), color: entry.color, start: 'top', end: 'bottom' });
+        edges.push({ from: columns[i], to: nextColumns[after.findIndex(l => l.sha === entry.sha)], color: entry.color, start: 'top', end: 'bottom' });
       }
     });
     parents.forEach(sha => {
       const target = after.findIndex(l => l.sha === sha);
-      edges.push({ from: lane, to: target, color: after[target].color, start: 'node', end: 'bottom' });
+      edges.push({ from: node, to: nextColumns[target], color: after[target].color, start: 'node', end: 'bottom' });
     });
     lanes = after;
-    return { sha: commit.sha, lane, color, width: Math.max(before.length, after.length, 1), edges };
+    return { sha: commit.sha, lane: node, color, width: Math.max(...columns, ...nextColumns) + 1, edges };
   });
 }
 

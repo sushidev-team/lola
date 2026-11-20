@@ -11,6 +11,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/scm"
+	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
@@ -163,6 +164,28 @@ func TestStackSpawnChecksOutOnlyTheSelectedApps(t *testing.T) {
 		if !errors.Is(err, worktree.ErrDirty) {
 			t.Fatalf("Kill: %v", err)
 		}
+	}
+}
+
+// A stack with require_plan spawns gated and briefed, exactly like a
+// single-repo project: the stack path writes its own prompt.md, so it must not
+// skip the gate.
+func TestStackSpawnRequirePlanGatesAndBriefs(t *testing.T) {
+	f := newStackFixture(t)
+	f.p.RequirePlan = true
+	is := issueENG42()
+	l := webIssue()
+	is.LabelIDs, is.LabelNames, is.LabelGroups = l.ids, l.names, l.groups
+	s, err := f.n.Spawn(context.Background(), f.p, is, "")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if s.PlanGate != session.PlanPlanning {
+		t.Fatalf("PlanGate = %q, want planning", s.PlanGate)
+	}
+	prompt, _ := os.ReadFile(filepath.Join(s.Worktree, ".lola", "prompt.md"))
+	if !strings.Contains(string(prompt), "## Plan approval") || !strings.Contains(string(prompt), "## Repositories") {
+		t.Fatalf("prompt.md lacks the plan or stack section:\n%s", prompt)
 	}
 }
 

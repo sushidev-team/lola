@@ -1,3 +1,4 @@
+import { openProject } from "$lib/workspacenav";
 import { nav } from "./nav.svelte";
 import { store, type ProjectInfo } from "./store.svelte";
 import { talk } from "./talk.svelte";
@@ -34,12 +35,15 @@ export function newSessionHere() {
 // One action catalog for the project page, context menu and command launcher.
 export function projectActions(p: ProjectInfo): ProjectAction[] {
   return [
-    { id: "open", label: "Open project", shortcut: "↵", enabled: true, run: () => nav.goDetail(p.name) },
+    { id: "open", label: "Open project", shortcut: "↵", enabled: true, run: () => openProject(p.name) },
     { id: "new", label: "New session…", shortcut: "⌘↵", enabled: !!p.path, run: () => nav.newSession(p.name) },
     { id: "shell", label: "Open shell here", shortcut: "⌘O", enabled: !!p.path, run: () => { void openShell(p.name); } },
     { id: "worktree", label: "New worktree session…", enabled: !!p.path, run: () => nav.newSession(p.name, "worktree") },
     { id: "ticket", label: "Start a ticket", enabled: true, run: () => nav.goTicketPicker(p.name) },
     { id: "pr", label: "Open a PR", enabled: p.repoConfigured, run: () => nav.goPRPicker(p.name) },
+    { id: "goals", label: "Goals", enabled: true, run: () => nav.openOverlay("goals", p.name) },
+    { id: "knowledge", label: "Workspace learning", enabled: true, run: () => nav.openOverlay("knowledge", p.name) },
+    { id: "broadcast", label: "Broadcast", enabled: true, run: () => nav.openOverlay("broadcast", p.name) },
     { id: "edit", label: "Edit project", enabled: true, run: () => nav.openOverlay("project", p.name, "repo") },
   ];
 }

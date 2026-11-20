@@ -8,6 +8,7 @@ export { FIXTURE_NAMES, type Fixture, type FixtureName } from "./types";
 const LOADERS: Record<FixtureName, () => Promise<{ fixture: Fixture }>> = {
   empty: () => import("./empty"),
   busy: () => import("./busy"),
+  graph: () => import("./graph"),
   "busy-grouped": () => import("./busy-grouped"),
   permission: () => import("./permission"),
   dialog: () => import("./dialog"),

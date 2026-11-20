@@ -49,9 +49,13 @@
       track.dispatchEvent(new Event("scroll"));
     }
     const el = buttons[value];
-    if (el) {
+    if (el && track) {
       thumb = { x: el.offsetLeft, w: el.offsetWidth };
-      el.scrollIntoView?.({ inline: "nearest", block: "nearest" });
+      // Reveal the tab within this strip. Scrolling its ancestors can pull a sheet
+      // or a parked session screen back to the tab during a live count update.
+      if (el.offsetLeft < track.scrollLeft) track.scrollLeft = el.offsetLeft;
+      else if (el.offsetLeft + el.offsetWidth > track.scrollLeft + track.clientWidth)
+        track.scrollLeft = el.offsetLeft + el.offsetWidth - track.clientWidth;
     }
   }
 
@@ -81,7 +85,7 @@
     e.preventDefault();
     const next = segments[(i + step + segments.length) % segments.length];
     choose(next.id);
-    buttons[next.id]?.focus();
+    buttons[next.id]?.focus({ preventScroll: true });
   }
 </script>
 
@@ -120,8 +124,14 @@
 
 <style>
   /* Scrolling mode: a sideways row, no scrollbar, segments sized by content. */
+  .segment-track {
+    min-width: 0;
+    overflow: clip;
+  }
   .segment-track.scrolling {
-    overflow-x: auto;
+    overflow: auto hidden;
+    overscroll-behavior: none;
+    touch-action: pan-x pinch-zoom;
     scrollbar-width: none;
   }
   .segment-track.scrolling::-webkit-scrollbar {

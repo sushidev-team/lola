@@ -153,9 +153,6 @@ func main() {
 			Handler:    application.AssetFileServerFS(assets),
 			Middleware: runtimeCallGuard,
 		},
-		Mac: application.MacOptions{
-			ApplicationShouldTerminateAfterLastWindowClosed: true,
-		},
 	})
 
 	// Give the terminal service the emitter it streams PTY bytes over.
@@ -190,6 +187,13 @@ func main() {
 		// cannot name a file's path. Only an element marked data-file-drop-target takes a drop.
 		EnableFileDrop: true,
 		URL:            "/",
+	})
+	// AppKit's terminate-after-last-window check can fire before Wails shows
+	// this window while a cold Vite server compiles the frontend. Quit on an
+	// actual close of our window instead of AppKit's temporary no-window state.
+	win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		e.Cancel()
+		app.Quit()
 	})
 	win.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
 		target := ""

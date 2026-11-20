@@ -7,6 +7,7 @@
 export type Tier = "read" | "answer" | "control" | "destructive" | "shell" | "never";
 
 export const TIER: Record<string, Tier> = {
+  addApps: "never",
   addressPRFeedback: "control",
   agentChoose: "answer",
   agentFeed: "read",
@@ -111,6 +112,9 @@ export const TIER: Record<string, Tier> = {
   panes: "read",
   plan: "never",
   planApply: "never",
+  planDecide: "control",
+  planGate: "never",
+  planSubmit: "never",
   pollOnce: "control",
   prReadiness: "read",
   profileCalibration: "never",
@@ -120,10 +124,14 @@ export const TIER: Record<string, Tier> = {
   profileReview: "never",
   projects: "read",
   prs: "read",
+  projectGit: "read",
+  projectGitAct: "control",
+  projectGitDiscard: "destructive",
   relayCred: "read",
   reload: "never",
   "remote.pair": "never",
   bulkProjects: "never",
+  removeEndedWorktree: "never",
   renameProject: "never",
   renameSession: "control",
   resolveConflict: "control",

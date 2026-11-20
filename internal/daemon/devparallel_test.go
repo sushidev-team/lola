@@ -2,10 +2,14 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
@@ -62,10 +66,69 @@ func TestHandleDevRunsSideBySideWhenThePortsAreLeased(t *testing.T) {
 	}
 }
 
-func TestHandleDevRefusesAParallelStartWithoutALease(t *testing.T) {
+func TestHandleDevAcquiresMissingLease(t *testing.T) {
 	d, tm := parallelDevDaemon(t, nil, devSession("lola-app-eng-1"))
+	d.cfg.Projects[0].PortsPerSession = 3
+	d.cfg.Projects[0].Env = map[string]string{"APP_URL": "http://localhost:{{.Port}}"}
 	_, err := d.handleDev(context.Background(), "lola-app-eng-1", true)
-	if err == nil || !strings.Contains(err.Error(), "no port lease") {
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd := tm.sessions["lola-app-eng-1-dev-1"]; !strings.Contains(cmd, ".lola/dev-env") {
+		t.Fatal(cmd)
+	}
+	s, _ := d.sessions.Get("lola-app-eng-1")
+	env, err := os.ReadFile(filepath.Join(devWorktreeDir(s, "app", d.home), ".lola/dev-env"))
+	if err != nil || !strings.Contains(string(env), "4102") || !strings.Contains(string(env), "http://localhost:4100") {
+		t.Fatalf("dev env %q: %v", env, err)
+	}
+}
+
+// Exercise the shell command tmux receives, including a stack lane whose env
+// file was written before leasing was enabled, and switching it back off.
+func TestHandleDevSwitchesPortModesForAStackLane(t *testing.T) {
+	s := devSession("lola-app-stack")
+	s.Stack = true
+	d, tm := parallelDevDaemon(t, nil, s)
+	root := devWorktreeDir(s, s.Project, d.home)
+	lane := filepath.Join(root, "web")
+	if err := os.MkdirAll(filepath.Join(lane, ".lola"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lane, ".lola/env"), []byte("LOLA_PORT=9999\nLOLA_PORT_2=9998\nAPP_URL=old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.Apps = []session.App{{Name: "web", Worktree: lane}}
+	d.sessions.Upsert(s)
+	d.cfg.Projects = append(d.cfg.Projects, config.Project{
+		Name: "web", PortRange: "4200-4203", PortsPerSession: 2,
+		Env:         map[string]string{"APP_URL": "http://localhost:{{.Port}}"},
+		DevCommands: []string{`printf '%s|%s|%s' "$LOLA_PORT" "$LOLA_PORT_2" "$APP_URL"`},
+	})
+	for _, tc := range []struct{ portRange, want string }{
+		{"4200-4203", "4200|4201|http://localhost:4200"},
+		{"", "||http://localhost:"},
+	} {
+		d.cfg.Projects[1].PortRange = tc.portRange
+		if _, err := d.handleDev(context.Background(), s.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", "-c", tm.sessions[s.ID+"-dev-1"])
+		cmd.Dir = lane
+		if got, err := cmd.CombinedOutput(); err != nil || string(got) != tc.want {
+			t.Fatalf("range %q: got %q, %v; want %q", tc.portRange, got, err, tc.want)
+		}
+	}
+	if _, ok := d.ports.Get(session.LaneID(s.ID, "web")); !ok {
+		t.Fatal("missing lease for web lane")
+	}
+}
+
+func TestHandleDevRefusesExhaustedRange(t *testing.T) {
+	d, tm := parallelDevDaemon(t, nil, devSession("lola-app-eng-1"))
+	d.ports.InUse = func(int) bool { return true }
+	_, err := d.handleDev(context.Background(), "lola-app-eng-1", true)
+	if err == nil || !strings.Contains(err.Error(), "port range exhausted") {
 		t.Fatalf("err = %v, want a refusal naming the missing lease", err)
 	}
 	if len(tm.names()) != 0 {

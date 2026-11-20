@@ -60,11 +60,22 @@ const exportPrelude = `set -a; [ -f ./` + File + ` ] && . ./` + File + `; set +a
 // Dropping `exec` costs only the wrapper shell, which waits for the command and
 // exits with it, so the dead pane still appears at the right moment.
 func CommandLine(command string) string {
+	return commandLine(command, "")
+}
+
+// DevFile contains the port-dependent exports rendered when dev starts.
+const DevFile = Dir + "/dev-env"
+
+func DevCommandLine(command string) string {
+	return commandLine(command, "set -a; . ./"+DevFile+" || exit 1; set +a; ")
+}
+
+func commandLine(command, env string) string {
 	line := strings.TrimSpace(command)
 	if isSimpleCommand(line) {
 		line = "exec " + line
 	}
-	return "exec sh -c " + shQuote(exportPrelude+line)
+	return "exec sh -c " + shQuote(exportPrelude+env+line)
 }
 
 // commandSeparators are the characters that can make a line more than one

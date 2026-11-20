@@ -485,19 +485,17 @@
   .review-toolbar.embedded { padding:0 0 12px; justify-content:flex-start; background:transparent; }
   /* Phone: the version is a left-aligned accent pull-down ("Latest · Today 22:28 ⌄"); the closed control
      shows only the selected label (Select's overlay), the native text stays transparent. */
-  :global([data-phone-desk]) .review-toolbar.embedded { justify-content:flex-start; padding-bottom:0; }
+  :global([data-phone-desk]) .review-toolbar.embedded { justify-content:flex-start; padding:0 4px 0 12px; margin:8px 0 14px; border:1px solid var(--color-edge-soft); border-radius:9px; background:var(--color-canvas); }
   :global([data-phone-desk]) .review-toolbar.embedded > div:last-child { width:100%; flex-wrap:nowrap; }
-  :global([data-phone-desk]) .review-toolbar.embedded :global(.lola-select) { max-width:none; }
+  :global([data-phone-desk]) .review-toolbar.embedded :global(.lola-select) { min-width:0; max-width:100%; }
   :global([data-phone-desk]) .review-toolbar.embedded :global(.lola-field) { min-height:44px; border:0; background:transparent; padding:0 20px 0 0; font-size:15px; }
   :global([data-phone-desk]) .review-toolbar.embedded :global(.select-value) { inset:0 20px 0 0; color:var(--color-accent); font-size:15px; font-weight:400; }
   :global([data-phone-desk]) .review-toolbar.embedded :global(.lola-select-caret) { width:12px; height:12px; right:0; color:var(--color-accent); }
   :global([data-phone-desk]) .review-toolbar.embedded :global([aria-label="Refresh review"]) { margin-left:auto; min-width:44px; min-height:44px; }
-  /* Phone sheet: 22px heading, no generic tile on the change rows. */
-  :global([data-phone-desk]) .review-embedded :global(h1) { font-size:22px; line-height:28px; font-weight:600; }
-  :global([data-phone-desk]) .review-embedded :global(.feature-icon) { display:none; }
   .review-tabs.embedded { padding:0 0 8px; border:0; background:transparent; justify-content:flex-end; }
   .review-embedded .review-material { padding:0; background:transparent; overflow:visible; }
-  .review-embedded .review-layout { display:block; }
+  .review-embedded .review-layout { display:block; min-width:0; overflow:visible; }
+  .review-embedded .review-main { display:block; }
   .review-embedded .review-aside { overflow:visible; border-left:0; border-top:1px solid var(--color-edge-soft); padding:16px 0; }
   .review-embedded .review-visuals { height:60vh; min-height:360px; }
   .review-embedded .review-code { height:60vh; }

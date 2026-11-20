@@ -246,6 +246,9 @@ func buildRequestFields() map[string]fieldSpec {
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.PaneCloseArgs]()}, "paneClose")
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.PaneResizeArgs]()}, "paneResize")
 	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.ReportArgs]()}, "sessionTask")
+	// The human plan verdict: a session id plus approve/comment. Approving unlocks
+	// coding, so it needs the control tier; the daemon re-validates the state.
+	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.PlanDecideArgs](), audit: []string{"approve"}}, "planDecide")
 
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.AgentFeedArgs]()}, protocol.CmdAgentFeed)
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.AgentFeedOutputArgs]()}, protocol.CmdAgentFeedOutput)
@@ -260,6 +263,8 @@ func buildRequestFields() map[string]fieldSpec {
 	// The element-Conn rule lives in the daemon's handleRemote: remote cannot see the element.
 	put(fieldSpec{fields: fArgs, args: typeOf[protocol.SSHAnswerArgs]()}, protocol.CmdSSHAnswer)
 
+	put(fieldSpec{fields: fArgs, args: typeOf[protocol.ProjectGitArgs]()},
+		protocol.CmdProjectGit, protocol.CmdProjectGitAct, protocol.CmdProjectGitDiscard)
 	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.ReviewDiffArgs]()}, protocol.CmdReviewDiff)
 	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.ReviewImageArgs]()}, protocol.CmdReviewImage)
 	put(fieldSpec{fields: fSession | fArgs, args: typeOf[protocol.ReviewMarkArgs]()}, protocol.CmdReviewMark)

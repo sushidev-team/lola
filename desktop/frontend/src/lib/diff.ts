@@ -306,6 +306,7 @@ const C_LIKE: Lang = { line: ["//"], quotes: `"'\`` };
 const HASH: Lang = { line: ["#"], quotes: `"'` };
 const LANGS: Record<string, Lang> = {
   go: { line: ["//"], quotes: `"'\`` },
+  json: { line: [], quotes: '"' },
   ts: C_LIKE,
   tsx: C_LIKE,
   js: C_LIKE,

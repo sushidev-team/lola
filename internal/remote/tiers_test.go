@@ -29,7 +29,7 @@ func TestCommandTiersReturnsACopy(t *testing.T) {
 	}
 }
 
-// The handled-command split pinned by docs/mobile/01 §8.3: 175 commands.
+// The handled-command split pinned by docs/mobile/01 §8.3: 182 commands.
 func TestTierCountsMatchTheSpec(t *testing.T) {
 	skip := map[string]bool{protocol.CmdRemotePair: true}
 	for _, c := range TransportCommands {
@@ -42,8 +42,8 @@ func TestTierCountsMatchTheSpec(t *testing.T) {
 		}
 	}
 	want := map[string]int{
-		protocol.TierRead: 24, protocol.TierAnswer: 12, protocol.TierControl: 23,
-		protocol.TierDestructive: 3, protocol.TierShell: 6, protocol.TierNever: 115,
+		protocol.TierRead: 25, protocol.TierAnswer: 12, protocol.TierControl: 25,
+		protocol.TierDestructive: 4, protocol.TierShell: 6, protocol.TierNever: 118,
 	}
 	for tier, n := range want {
 		if got[tier] != n {

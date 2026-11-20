@@ -108,6 +108,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(d.projectsData(ctx))
 	case "prReadiness", "addressPRFeedback", "mergePR":
 		return d.handlePRReadiness(ctx, req)
+	case protocol.CmdProjectGit, protocol.CmdProjectGitAct, protocol.CmdProjectGitDiscard:
+		return d.handleProjectGit(ctx, req)
 	case protocol.CmdReviewDiff:
 		return d.handleReviewDiff(ctx, req)
 	case protocol.CmdReviewCapture:
@@ -302,6 +304,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return d.handleSessionTask(ctx, req, "user")
 	case "agentReport":
 		return d.handleAgentReport(req)
+	case "planSubmit":
+		return d.handlePlanSubmit(req)
+	case "planDecide":
+		return d.handlePlanDecide(ctx, req)
+	case "planGate":
+		return d.handlePlanGate(req)
 	case protocol.CmdSSHAgentHosts, protocol.CmdSSHAgentRequest, protocol.CmdSSHAgentRun, protocol.CmdSSHAgentPoll, protocol.CmdSSHAgentCancel, protocol.CmdSSHAgentPost,
 		protocol.CmdSSHHosts, protocol.CmdSSHOpen, protocol.CmdSSHConnect, protocol.CmdSSHHumanRun, protocol.CmdSSHShareBlock, protocol.CmdSSHTerminalCd, protocol.CmdSSHGo, protocol.CmdSSHDeny, protocol.CmdSSHApprove, protocol.CmdSSHRevokeGrant,
 		protocol.CmdSSHTakeWheel, protocol.CmdSSHHandbackPreview, protocol.CmdSSHHandback, protocol.CmdSSHStop, protocol.CmdSSHClose, protocol.CmdSSHTrash,
@@ -311,6 +319,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 	case protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdAgentSay, protocol.CmdAgentStop,
 		protocol.CmdAgentChoose, protocol.CmdAgentSetting, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions:
 		return d.handleTalk(ctx, req)
+	case "removeEndedWorktree":
+		data, err := d.handleRemoveEndedWorktree(ctx, req.Session, req.Text, req.Force)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "kill":
 		data, err := d.handleKill(ctx, req.Session, req.Force, req.KeepWorktree)
 		if err != nil {
@@ -855,7 +869,12 @@ func (d *Daemon) flushHandoffsOnStop(id string) {
 			}
 		}()
 		// Background, not the request context: the connection's context dies with
-		// the hook reply, which lands long before a send-keys can finish.
+		// the hook reply, which lands long before a send-keys can finish. Queued
+		// notices (plan verdicts, Linear replies) go first; one typed message per
+		// resting prompt, so a delivered notice leaves the hand-off for later.
+		if d.flushAgentNotices(context.Background(), id) {
+			return
+		}
 		d.flushReviewHandoffs(context.Background(), id)
 	}()
 }
@@ -995,7 +1014,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 				si.Reacting = reactingLabel(s.Delivery, a.CIRetries, a.Escalated, ciBudget)
 			}
 			// The dev toggle runs each app's own dev_commands (apps.go devPlan).
-			plan, parallel, _ := devPlan(cfg, s, si.Worktree)
+			plan, parallel := devPlan(cfg, s, si.Worktree)
 			si.DevCommands, si.DevParallel = devLabels(plan), parallel
 		}
 		// [statusagent] display overlay, pre-gated here (the ONE consumer of
@@ -1024,6 +1043,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		if s.BestOf != "" {
 			si.BestOf = &protocol.BestOfInfo{Group: s.BestOf, Attempt: s.Attempt, Of: s.Attempts, Winner: s.BestOfWinner}
 		}
+		si.Plan = planInfo(s)
+		si.LinearAgentURL = d.agentSessionURL(s.AgentSessionID)
 		out.Sessions = append(out.Sessions, si)
 	}
 	out.Events = d.eventFeed(now)

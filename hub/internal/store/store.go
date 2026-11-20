@@ -88,6 +88,10 @@ type Org struct {
 	// returned.
 	LinearKey     string `json:"linear_key,omitempty"`
 	DigestWebhook string `json:"digest_webhook,omitempty"`
+	// LinearWebhook is the SEALED signing secret of the Linear agent app's webhook; Doorbell
+	// counts the deliveries that verified against it (see api handleLinearHook).
+	LinearWebhook string `json:"linear_webhook,omitempty"`
+	Doorbell      uint64 `json:"doorbell,omitempty"`
 	// LinearErr and DigestErr are the class of the latest failure using
 	// them ("" = none): a hub constant, never a response body.
 	LinearErr string `json:"linear_err,omitempty"`

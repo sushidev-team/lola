@@ -1,0 +1,27 @@
+name: Hub check
+
+# Keep checks independent from the image-only publishing workflow.
+on:
+  push:
+    branches: [main]
+    paths: ['hub/**', 'hubproto/**', '.github/workflows/hub-check.yml']
+  pull_request:
+    branches: [main]
+    paths: ['hub/**', 'hubproto/**', '.github/workflows/hub-check.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: hub/go.mod
+          cache: false
+      - name: make check
+        working-directory: hub
+        run: make check

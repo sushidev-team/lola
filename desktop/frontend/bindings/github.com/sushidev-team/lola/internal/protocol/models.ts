@@ -1489,6 +1489,12 @@ export interface HubTeamSettingsArgs {
     "digestWebhook"?: string | null;
 
     /**
+     * LinearWebhookSecret is the Linear agent app's webhook signing secret, for the hub's
+     * doorbell endpoint (a secret like the others).
+     */
+    "linearWebhookSecret"?: string | null;
+
+    /**
      * Teams also lists the Linear workspace's teams (a read only).
      */
     "teams"?: boolean;
@@ -1513,6 +1519,7 @@ export interface HubTeamSettingsData {
      */
     "linearError"?: string;
     "digestSet": boolean;
+    "linearWebhookSet": boolean;
     "digestError"?: string;
     "teams": HubLinearTeam[] | null;
 }
@@ -1540,6 +1547,26 @@ export interface KillData {
     "removed": boolean;
     "worktree"?: string;
     "message"?: string;
+}
+
+/**
+ * LinearAgentStatus is the Linear agent loop's health, on cmd=status.
+ */
+export interface LinearAgentStatus {
+    "enabled": boolean;
+
+    /**
+     * the last poll reached Linear with a valid token
+     */
+    "connected": boolean;
+    "agentName"?: string;
+    "lastPoll"?: string;
+    "lastError"?: string;
+
+    /**
+     * the doorbell's listen address, "" when off
+     */
+    "webhook"?: string;
 }
 
 /**
@@ -1889,6 +1916,22 @@ export interface PaneData {
     "prompt"?: string;
     "choices"?: PaneChoice[] | null;
     "freeForm"?: boolean;
+}
+
+/**
+ * PlanInfo is a session's plan gate flattened for rendering. Text is the
+ * agent's submitted plan (UNTRUSTED agent output — render as text/markdown, never
+ * as HTML or a command); Feedback is the human's last rejection comment.
+ */
+export interface PlanInfo {
+    /**
+     * planning|submitted|approved
+     */
+    "gate": string;
+    "text"?: string;
+    "round"?: number;
+    "feedback"?: string;
+    "submittedAt"?: string;
 }
 
 /**
@@ -3568,6 +3611,20 @@ export interface SessionInfo {
     "usage"?: UsageInfo | null;
 
     /**
+     * Plan is the plan-approval gate ([[project]].require_plan), nil when the
+     * session has none. Unlike Board it is CONTROL state: Gate=submitted means a
+     * human decision is what the agent is waiting for, and the app/TUI offer
+     * approve / request-changes on it (cmd=planDecide).
+     */
+    "plan"?: PlanInfo | null;
+
+    /**
+     * LinearAgentURL is the Linear Agent Session this session is bound to
+     * (delegated / @mentioned in Linear), "" when none. A link a human may open.
+     */
+    "linearAgentUrl"?: string;
+
+    /**
      * Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
      * state without importing internal/session or re-deriving it.
      * ci_failed recovery attempts already spent on the current failing streak
@@ -3903,6 +3960,12 @@ export interface StatusData {
      * the last machine-load sample when [load] is on. nil on an older daemon.
      */
     "usage"?: UsageStatus | null;
+
+    /**
+     * LinearAgent is the native Linear agent's loop status, nil when
+     * [linear_agent] is not enabled.
+     */
+    "linearAgent"?: LinearAgentStatus | null;
 }
 
 /**

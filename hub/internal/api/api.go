@@ -107,6 +107,8 @@ type Server struct {
 	limit  *limiter
 	create *limiter // new items per device
 	admin  *limiter // org-admin requests per org
+	hook   *limiter // Linear webhook deliveries per org
+	bell   bells    // wakes held doorbell long-polls
 	enroll *bucket
 	open   *bucket // code-less team creations, hub-wide
 	enMu   sync.Mutex
@@ -161,6 +163,7 @@ func New(cfg Config) *Server {
 		limit:  newLimiter(cfg.RatePerSec, cfg.Burst),
 		create: newLimiter(float64(cfg.NewItemsPerHour)/3600, cfg.NewItemsPerHour),
 		admin:  newLimiter(adminRatePerSec, adminBurst),
+		hook:   newLimiter(linearHookRatePerSec, linearHookBurst),
 		enroll: &bucket{tokens: enrollBurst},
 		open:   &bucket{tokens: openCreateBurst},
 	}
@@ -205,6 +208,8 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc(hubproto.PathOrgInvites, s.adminAuthed(http.MethodPost, s.handleInvite))
 	mux.HandleFunc(hubproto.PathOrgRevoke, s.adminAuthed(http.MethodPost, s.handleRevoke))
+	mux.HandleFunc(hubproto.PathLinearHook, s.handleLinearHook)
+	mux.HandleFunc(hubproto.PathDoorbell, s.authed(http.MethodGet, s.handleDoorbell))
 	mux.HandleFunc(hubproto.PathRelayRendezvous, s.relayOn(s.authed(http.MethodPost, s.handleRendezvous)))
 	mux.HandleFunc(hubproto.PathRelayDaemon, s.relayOn(s.authedUpgrade(s.handleRelayDaemon)))
 	mux.HandleFunc(hubproto.PathRelayAccept, s.relayOn(s.authedUpgrade(s.handleRelayAccept)))

@@ -87,6 +87,22 @@ func (s *DaemonService) Answer(session, text string) error {
 	return call(protocol.Request{Cmd: "answer", Session: session, Text: text}, shortTimeout, nil)
 }
 
+// DecidePlan records a human's verdict on a session's submitted plan (the
+// require_plan gate): approve unlocks coding (or waives the gate before a plan
+// arrives); approve=false with a comment sends the agent back to re-plan.
+func (s *DaemonService) DecidePlan(session string, approve bool, comment string) error {
+	args, _ := json.Marshal(protocol.PlanDecideArgs{Approve: approve, Comment: comment})
+	return call(protocol.Request{Cmd: "planDecide", Session: session, Args: args}, shortTimeout, nil)
+}
+
+// RemoveEndedWorktree removes a retained checkout through its ended history.
+// force explicitly consents to discarding dirty or unverifiable files.
+func (s *DaemonService) RemoveEndedWorktree(session, path string, force bool) (protocol.KillData, error) {
+	var d protocol.KillData
+	err := call(protocol.Request{Cmd: "removeEndedWorktree", Session: session, Text: path, Force: force}, longTimeout, &d)
+	return d, err
+}
+
 // Kill tears a session down. A dirty worktree is kept unless force is set;
 // keepWorktree stops the agent only and leaves the worktree for a later revive.
 func (s *DaemonService) Kill(session string, force, keepWorktree bool) (protocol.KillData, error) {

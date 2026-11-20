@@ -32,11 +32,11 @@ func TestAICommitSeparatesStagedAndUntrackedFiles(t *testing.T) {
 	if in.Preparation.Staged != 1 {
 		t.Fatal(in.Preparation)
 	}
-	groups, err := ParseAICommit(`{"groups":[{"subject":"Add new file","paths":["new.txt"]},{"subject":"Add staged file","paths":["staged.txt"]}]}`, in)
+	plan, err := ParseAICommit(`{"groups":[{"subject":"Add new file","paths":["new.txt"]},{"subject":"Add staged file","paths":["staged.txt"]}]}`, in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = (Client{}).CommitAIGroups(context.Background(), dir, in, groups, func(int, string) {})
+	err = (Client{}).CommitAIGroups(context.Background(), dir, in, plan.Groups, func(int, string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +104,9 @@ func TestAICommitRejectsInvalidPartitions(t *testing.T) {
 	in := aiInput(t, dir)
 	for _, output := range []string{
 		`{"groups":[{"subject":"One","paths":["a"]}]}`,
+		`{"groups":[{"subject":"One","paths":["a"]}],"excluded":[{"path":"b","reason":" "}]}`,
+		`{"groups":[{"subject":"One","paths":["a","b"]}],"excluded":[{"path":"b","reason":"Local"}]}`,
+		`{"groups":[],"excluded":[{"path":"a","reason":"Local"},{"path":"outside","reason":"Local"}]}`,
 		`{"groups":[{"subject":"One","paths":["a","a","b"]}]}`,
 		`{"groups":[{"subject":"One","paths":["a","b","../outside"]}]}`,
 		`{"groups":[{"subject":"","paths":["a","b"]}]}`,
@@ -214,5 +217,39 @@ func TestAICommitCombinesPartiallyStagedFile(t *testing.T) {
 	}
 	if got := strings.TrimSpace(testGit(t, dir, "show", "HEAD:partial")); got != "final working version" {
 		t.Fatal(got)
+	}
+}
+
+func TestAICommitSmallPatchInLargeTrackedFile(t *testing.T) {
+	dir := actionRepo(t)
+	prefix := strings.Repeat("unchanged documentation\n", aiCommitInputLimit/20)
+	aiWrite(t, dir, "README.md", prefix+"old ending\n")
+	testGit(t, dir, "add", "README.md")
+	testGit(t, dir, "commit", "-m", "Add documentation")
+	aiWrite(t, dir, "README.md", prefix+"new ending\n")
+	in := aiInput(t, dir)
+	if len(in.Text) >= aiCommitInputLimit || !strings.Contains(in.Text, "-old ending\n+new ending") {
+		t.Fatal("expected a small prompt containing the README patch")
+	}
+	groups := []AICommitGroup{{Subject: "Update ending", Paths: []string{"README.md"}}}
+	commit := func() error {
+		return (Client{}).CommitAIGroups(context.Background(), dir, in, groups, func(int, string) {})
+	}
+	aiWrite(t, dir, "README.md", prefix+"another ending\n")
+	if err := commit(); err == nil || !strings.Contains(err.Error(), "changed during AI commit") {
+		t.Fatalf("expected changed contents beyond 128 KiB to invalidate the plan, got %v", err)
+	}
+	aiWrite(t, dir, "README.md", prefix+"new ending\n")
+	if err := commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAICommitLargeTrackedPatchExceedsPromptBudget(t *testing.T) {
+	dir := actionRepo(t)
+	aiWrite(t, dir, "base", strings.Repeat("added text\n", aiCommitInputLimit/10))
+	in, err := (Client{}).PrepareAICommit(context.Background(), dir)
+	if !errors.Is(err, errAICommitInputLimit) || in.Text != "" {
+		t.Fatalf("expected oversized patch to be refused before planning, got %v", err)
 	}
 }

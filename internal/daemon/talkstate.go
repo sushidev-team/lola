@@ -16,6 +16,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/attention"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/sshstore"
@@ -280,6 +281,17 @@ func (d *Daemon) recordEndedAs(s session.Session, reason string) {
 		info.Slug = filepath.Base(usage.SlugDir("/", wt)) // the name, wherever the root is
 		if fi, err := os.Stat(wt); err == nil && fi.IsDir() {
 			info.KeptWorktree = wt
+			if !s.Stack && s.Kind != session.KindLocal && !s.GoalManaged() {
+				info.Isolation = &sshstore.EndedWorktreeIsolation{Sandbox: s.Sandbox, GitPin: s.GitPin}
+				if _, pin, pinned := gitguard.Lookup(wt); pinned {
+					if info.Isolation.Sandbox == "" {
+						info.Isolation.Sandbox = "unknown"
+					}
+					if info.Isolation.GitPin == nil && pin.Valid() {
+						info.Isolation.GitPin = &pin
+					}
+				}
+			}
 		}
 	}
 	err = store.Update(func(st *sshstore.State) error {

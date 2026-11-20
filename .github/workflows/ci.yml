@@ -1,14 +1,14 @@
 name: CI
 
-# hub/ is the team hub, a separate Go module with its own workflow (hub.yml):
+# hub/ is the team hub, a separate Go module with hub-check.yml and hub.yml:
 # a change to it alone runs none of this.
 on:
   push:
     branches: [main]
-    paths-ignore: ['hub/**', '.github/workflows/hub.yml']
+    paths-ignore: ['hub/**', '.github/workflows/hub.yml', '.github/workflows/hub-check.yml']
   pull_request:
     branches: [main]
-    paths-ignore: ['hub/**', '.github/workflows/hub.yml']
+    paths-ignore: ['hub/**', '.github/workflows/hub.yml', '.github/workflows/hub-check.yml']
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
           cache: true
 
       - name: gofmt

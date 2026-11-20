@@ -19,7 +19,7 @@
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { endedLine, lastTurnStopped, rosterGroups, stateGlyph } from "$lib/sessionview";
   import { visibleRoster, rosterActivity } from "$lib/roster";
-  import { stageFor } from "$lib/stage";
+  import { stageFor, planStage } from "$lib/stage";
   import { isChord } from "$lib/keys";
   import { tooltip } from "$lib/tooltip";
   import { talk } from "$lib/talk.svelte";
@@ -130,7 +130,7 @@
         {#each g.rows as s (s.id)}
           {@const glyph = stateGlyph(s, nav.seenAt(s.id))}
           {@const line = rosterActivity(s, now, !!talk.state(s.id)?.queueHeld || lastTurnStopped(views.get(s.id)?.items))}
-          {@const stage = stageFor(s.delivery, s.reacting)}
+          {@const stage = stageFor(s.delivery, s.reacting) ?? planStage(s.plan?.gate)}
           {@const atReview = s.delivery === 'review_pending' && (glyph.label === 'Resting' || glyph.label === 'Finished a turn')}
           {@const mark = s.delivery === 'merged' ? { glyph: 'done', label: 'Merged', cls: 'text-good' } : atReview ? { glyph: 'review', label: 'Awaiting review', cls: 'text-magenta' } : glyph}
           {@const metadataStage = atReview ? null : stage}

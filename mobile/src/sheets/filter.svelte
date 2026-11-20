@@ -1,6 +1,7 @@
 <script lang="ts">
   import FilterSheet from "@mobile/lib/components/FilterSheet.svelte";
-  import { inbox, inboxView } from "@mobile/lib/inbox.svelte";
+  import { inboxView } from "@mobile/lib/inbox.svelte";
+  import { inboxSearch } from "@mobile/lib/inboxsearch.svelte";
   import { router, type InboxFilter } from "@mobile/lib/router.svelte";
 
   // Selecting a filter replaces the Inbox route, which also closes the sheet.
@@ -17,7 +18,7 @@
 
 <FilterSheet
   {value}
-  counts={inbox.counts}
+  counts={inboxSearch.counts}
   group={inboxView.group}
   onselect={select}
   ongroup={(g) => {
