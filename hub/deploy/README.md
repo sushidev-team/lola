@@ -22,7 +22,7 @@ GitHub kubeconfig or GitHub hub encryption key. The root Application preserves t
 override with `ignoreDifferences` **and** `RespectIgnoreDifferences=true`. Manifests track
 `main`; charts and the bouncer plugin have explicit versions. Valkey is an authenticated,
 internal **Argo cache**, without persistence. The hub does not use it; the bouncer uses
-its own memory cache.
+its own memory cache. Traefik replicas require different worker nodes.
 
 Target: usually 1–2 minutes **after publishing finishes**, plus slow image pulls/volume
 attaches. This is not a latency guarantee. `imagePullPolicy: Always` alone would not trigger
