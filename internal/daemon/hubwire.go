@@ -908,15 +908,17 @@ func (d *Daemon) hubHeartbeat(ctx context.Context, api hubAPI, snap hubSnapshot)
 	}
 	if !d.hubLegacy(d.hub.now()) {
 		req.PolicyVersion = d.hubAppliedPolicy()
+		req.LinearUserID = d.linearUserID(ctx)
 	}
 	resp, err := api.Heartbeat(ctx, req)
-	if err != nil && req.PolicyVersion > 0 && hubStatusIs(err, 400) {
+	if err != nil && (req.PolicyVersion > 0 || req.LinearUserID != "") && hubStatusIs(err, 400) {
 		// A hub that predates policy_version refuses the unknown field:
 		// heartbeat without it rather than go dark. A current hub answers
 		// the same 400 bad_request for any other refusal (too many leases),
 		// so the hub is taken as old only when the retry WITHOUT the field
 		// is accepted: the field alone was the difference.
 		req.PolicyVersion = 0
+		req.LinearUserID = "" // an older hub refuses this field too
 		resp, err = api.Heartbeat(ctx, req)
 		if err == nil {
 			d.hubMarkLegacy("heartbeat policy_version refused")

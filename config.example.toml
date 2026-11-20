@@ -637,8 +637,8 @@ endpoint = "https://api.linear.app/graphql"
 # then streams progress into it and relays replies back to the agent.
 #
 # No secret lives here. Store them in the Keychain:
-#   lola linear-agent set-secret client    # the OAuth app's client secret
-#   lola linear-agent login                # installs the app, stores the tokens
+#   lola linear-agent login                # installs the app (PKCE), stores the tokens
+#   lola linear-agent set-secret client    # OPTIONAL: the OAuth app's client secret
 # ---------------------------------------------------------------------------
 # [linear_agent]
 # enabled = true
@@ -654,6 +654,8 @@ endpoint = "https://api.linear.app/graphql"
 # # assignee, else whoever mentioned lola). Needs your Linear user id.
 # # user_id = "linear-user-uuid"
 # # only_when_assigned_to_me = true
+# # With a joined hub: auto (default) | required | off. See the README.
+# # hub_claim = "auto"
 
 # ---------------------------------------------------------------------------
 # [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is

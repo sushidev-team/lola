@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sushidev-team/lola/hubproto"
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/config"
@@ -196,7 +197,8 @@ func (d *Daemon) agentSessionURL(id string) string {
 // linearAgentStatus is the cmd=status block, nil while the feature is off.
 func (d *Daemon) linearAgentStatus() *protocol.LinearAgentStatus {
 	d.mu.Lock()
-	on := d.cfg.LinearAgent.Enabled
+	cfg := d.cfg.LinearAgent
+	on, hubOn := cfg.Enabled, d.cfg.Hub.Enabled
 	d.mu.Unlock()
 	if !on || d.agent == nil {
 		return nil
@@ -206,6 +208,11 @@ func (d *Daemon) linearAgentStatus() *protocol.LinearAgentStatus {
 	st := d.agent.status
 	st.Enabled = true
 	st.Webhook = d.agent.webhookOn
+	st.OnlyMine = cfg.OnlyWhenAssignedToMe
+	st.HubClaim = cfg.EffectiveHubClaim()
+	if !hubOn {
+		st.HubClaim = config.HubClaimOff
+	}
 	return &st
 }
 
@@ -289,6 +296,14 @@ func (d *Daemon) linearAgentCycle(ctx context.Context) time.Duration {
 	for _, as := range sessions {
 		d.considerAgentSession(ctx, api, as)
 	}
+	ra.mu.Lock()
+	ra.status.Waiting = 0
+	for _, as := range sessions {
+		if _, handled := ra.ledger[as.ID]; as.Status == "pending" && !handled {
+			ra.status.Waiting++
+		}
+	}
+	ra.mu.Unlock()
 	for _, s := range d.sessions.Snapshot() {
 		if s.AgentSessionID == "" || s.Source != "native" || s.AgentMirror.Done {
 			continue // a finished thread is not polled for replies any more
@@ -471,7 +486,7 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	ra.mu.Unlock()
 
 	switch {
-	case known && entry.State == "queued":
+	case known && (entry.State == "queued" || entry.State == "claimed"):
 		// "stale" is Linear's inactivity timeout (a queued session posts nothing
 		// while capped), not a dismissal: keep it, and the next activity revives it.
 		if as.Status == "complete" || as.Status == "error" {
@@ -483,35 +498,61 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	case as.Status != "pending":
 		return
 	}
+	// Shared app token, several daemons: only the session's single owner acts. A
+	// skipped session is neither recorded nor answered, so another daemon (or a
+	// later config) can still take it.
+	if !d.agentSessionIsMine(ctx, as) {
+		return
+	}
 	if as.Issue == nil || as.Issue.Identifier == "" {
 		if !known {
+			grant, proceed := d.claimAgentSession(ctx, as)
+			if !proceed {
+				return
+			}
 			ra.record(as.ID, "rejected", "")
 			d.postAgentActivity(ctx, api, as.ID, linear.ErrorActivity("lola works on issues — delegate or mention it on an issue to start a session."))
+			grant.settle(ctx, hubproto.SettleBound)
 		}
 		return
 	}
 	is := *as.Issue
 
-	// Shared app token, several daemons: only the session's single owner acts. A
-	// skipped session is neither recorded nor answered, so another daemon (or a
-	// later config) can still take it.
-	if !d.agentSessionIsMine(as) {
+	// Who serves it: a daemon with no project for the issue's team leaves the
+	// session to one that has, and only speaks up when nobody did for a while.
+	p, hasProject := d.projectForAgentIssue(is)
+	_, liveHere := d.liveSessionForIssue(is.Identifier)
+	if !hasProject && !liveHere && d.agentClaimActive() && !agentUnserved(as, ra.now()) {
 		return
+	}
+
+	// Hub arbitration: one daemon wins the claim, acknowledges at once (Linear
+	// wants a first activity within ~10s, before any worktree work), and only
+	// then goes on.
+	grant, proceed := d.claimAgentSession(ctx, as)
+	if !proceed {
+		return
+	}
+	if grant != nil && !known {
+		ra.record(as.ID, "claimed", "")
+		ra.saveLedger(d.home, d.logf)
+		d.postAgentActivity(ctx, api, as.ID, linear.Thought("Picked up — checking capacity and preparing a workspace.", false))
 	}
 
 	// Already running here (a poll or a human started it): bind, don't spawn.
 	if s, ok := d.liveSessionForIssue(is.Identifier); ok {
 		defer d.relayMention(s.ID, as)
 		d.bindAgentSession(ctx, api, as.ID, s, fmt.Sprintf("Already working on %s in lola session `%s` — I'll keep this thread updated.", is.Identifier, s.ID))
+		grant.settle(ctx, hubproto.SettleBound)
 		return
 	}
 
-	p, ok := d.projectForAgentIssue(is)
-	if !ok {
+	if !hasProject {
 		ra.record(as.ID, "rejected", "")
 		d.postAgentActivity(ctx, api, as.ID, linear.ErrorActivity(
 			fmt.Sprintf("No lola project is configured for this issue's team. Add a `[[project]]` with `team_id = %q` to lola's config, then delegate again.", is.TeamID)))
 		d.logf("", "linear agent: no project for %s (team %s) — rejected session %s", is.Identifier, is.TeamID, as.ID)
+		grant.settle(ctx, hubproto.SettleBound)
 		return
 	}
 
@@ -564,6 +605,14 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 		}
 	}
 
+	// Fencing: the hub refuses a stale epoch, so a daemon that stalled past its
+	// lease cannot start work a successor already took.
+	if !grant.authorize(ctx) {
+		ra.forget(as.ID)
+		d.logf("", "linear agent: %s not authorized by the hub, another daemon holds it", is.Identifier)
+		return
+	}
+
 	// Crash guard: the ledger says "spawning" BEFORE the spawn is attempted.
 	ra.record(as.ID, "spawning", "")
 	ra.saveLedger(d.home, d.logf)
@@ -581,11 +630,13 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 		// this Agent Session — say why, a human can delegate again.
 		if s, ok := d.liveSessionForIssue(is.Identifier); ok {
 			d.bindAgentSession(ctx, api, as.ID, s, fmt.Sprintf("Working on %s in lola session `%s`.", is.Identifier, s.ID))
+			grant.settle(ctx, hubproto.SettleBound)
 			return
 		}
 		ra.record(as.ID, "rejected", "")
 		d.postAgentActivity(ctx, api, as.ID, linear.ErrorActivity("lola could not start a session: "+clipBody(err.Error(), 500)))
 		d.logf("", "linear agent: spawn for %s failed: %v", is.Identifier, err)
+		grant.settle(ctx, hubproto.SettleReleased)
 		return
 	}
 	s, ok := d.sessions.Get(od.SessionID)
@@ -598,6 +649,7 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	}
 	d.bindAgentSession(ctx, api, as.ID, s, msg)
 	d.relayMention(s.ID, as)
+	grant.settle(ctx, hubproto.SettleBound)
 	d.logf("", "linear agent: %s dispatched by Agent Session %s → %s", is.Identifier, as.ID, s.ID)
 }
 
@@ -1040,7 +1092,7 @@ func (ra *linearAgentRuntime) pruneLedger() {
 // agentSessionIsMine applies [linear_agent].only_when_assigned_to_me. Off, every
 // session is this daemon's (the single-daemon default). On, it must name this
 // user as the one resolved owner; an unknown owner fails closed.
-func (d *Daemon) agentSessionIsMine(as linear.AgentSession) bool {
+func (d *Daemon) agentSessionIsMine(ctx context.Context, as linear.AgentSession) bool {
 	d.mu.Lock()
 	cfg := d.cfg.LinearAgent
 	d.mu.Unlock()
@@ -1051,7 +1103,7 @@ func (d *Daemon) agentSessionIsMine(as linear.AgentSession) bool {
 	appID := d.agent.viewerID
 	d.agent.mu.Unlock()
 	owner := as.Owner(appID)
-	return owner != "" && owner == cfg.UserID
+	return owner != "" && owner == d.linearUserID(ctx)
 }
 
 // relayMention hands the words a human wrote when they mentioned lola ("@lola go
