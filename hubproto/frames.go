@@ -223,6 +223,10 @@ type HeartbeatRequest struct {
 	Repos         []string `json:"repos"`       // owner/name slugs the member opted in
 	LiveLeases    []string `json:"live_leases"` // item ids this device still works
 	PolicyVersion int      `json:"policy_version,omitempty"`
+	// LinearUserID is the member's own Linear user id, so the hub can defer an
+	// @mention to the live daemon of the person it belongs to. Omitted when not
+	// configured, so an older frame stays byte-identical.
+	LinearUserID string `json:"linear_user_id,omitempty"`
 }
 
 // Validate checks the request's shape.
@@ -232,6 +236,9 @@ func (r HeartbeatRequest) Validate() error {
 	}
 	if r.PolicyVersion < 0 {
 		return invalid("policy_version", "negative")
+	}
+	if r.LinearUserID != "" && !ValidLinearUserID(r.LinearUserID) {
+		return invalid("linear_user_id", "bad linear user id")
 	}
 	if len(r.Agents) > MaxHeartbeatAgents {
 		return invalid("agents", "too many")

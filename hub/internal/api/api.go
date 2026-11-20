@@ -206,6 +206,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc(hubproto.PathOrgRevoke, s.adminAuthed(http.MethodPost, s.handleRevoke))
 	mux.HandleFunc(hubproto.PathLinearHook, s.handleLinearHook)
 	mux.HandleFunc(hubproto.PathDoorbell, s.authed(http.MethodGet, s.handleDoorbell))
+	mux.HandleFunc(hubproto.PathAgentClaim, s.authed(http.MethodPost, s.handleAgentClaim))
+	mux.HandleFunc(hubproto.PathAgentAuthorize, s.authed(http.MethodPost, s.handleAgentAuthorize))
+	mux.HandleFunc(hubproto.PathAgentSettle, s.authed(http.MethodPost, s.handleAgentSettle))
 	mux.HandleFunc(hubproto.PathRelayRendezvous, s.relayOn(s.authed(http.MethodPost, s.handleRendezvous)))
 	mux.HandleFunc(hubproto.PathRelayDaemon, s.relayOn(s.authedUpgrade(s.handleRelayDaemon)))
 	mux.HandleFunc(hubproto.PathRelayAccept, s.relayOn(s.authedUpgrade(s.handleRelayAccept)))
@@ -517,6 +520,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request, auth st
 		dev.Repos = dedupFold(req.Repos)
 		dev.LastSeen = now.UTC()
 		dev.PolicyVersion = req.PolicyVersion
+		dev.LinearUserID = req.LinearUserID
 		cfg := s.leaseConfig(d, dev.Org)
 		seen := map[string]bool{}
 		for _, id := range req.LiveLeases {

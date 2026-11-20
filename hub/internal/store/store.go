@@ -94,6 +94,19 @@ type Org struct {
 	// them ("" = none): a hub constant, never a response body.
 	LinearErr string `json:"linear_err,omitempty"`
 	DigestErr string `json:"digest_err,omitempty"`
+	// AgentClaims arbitrates the org's Linear Agent Sessions: session id -> the
+	// one device that may start work on it (see internal/agentclaim). Only opaque
+	// ids, a device and a counter; pruned after hubproto.AgentClaimRetention.
+	AgentClaims map[string]*AgentClaim `json:"agent_claims,omitempty"`
+}
+
+// AgentClaim is the data of one claim; the rules live in internal/agentclaim.
+type AgentClaim struct {
+	Device  string    `json:"device"`
+	Epoch   uint64    `json:"epoch"`
+	State   string    `json:"state"` // claimed | authorized | settled | released
+	Expires time.Time `json:"expires,omitzero"`
+	Updated time.Time `json:"updated"`
 }
 
 // Device is one enrolled lola daemon.
@@ -115,6 +128,9 @@ type Device struct {
 	// PolicyVersion is the policy version the latest heartbeat said the
 	// daemon applies (0 = none or unknown). Display only.
 	PolicyVersion int `json:"policy_version,omitempty"`
+	// LinearUserID is the member's Linear user id from the latest heartbeat
+	// ("" = unknown). Used only to defer an @mention to the owner's live daemon.
+	LinearUserID string `json:"linear_user_id,omitempty"`
 }
 
 // Revoked reports whether the device was revoked.
