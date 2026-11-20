@@ -53,6 +53,7 @@ export type {
     Event,
     FeedbackArgs,
     FeedbackComment,
+    FeedbackElement,
     FeedbackData,
     GroupInfo,
     HubAppliedKey,

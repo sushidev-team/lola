@@ -4,6 +4,7 @@
   import { devUrlLabel } from "$lib/devurl";
   import Button from "../Button.svelte";
   import Icon from "../Icon.svelte";
+  import { preview } from "$lib/preview.svelte";
   let { session }: { session: SessionInfo } = $props();
   const urls = $derived(session.devActive ? session.devUrls ?? [] : []);
 </script>
@@ -23,6 +24,7 @@
           <li class="min-w-0"><Button size="xs" class="max-w-full font-mono!" title="Open {url}" onclick={() => store.openURL(url)}><span class="min-w-0 truncate">{devUrlLabel(url)}</span><Icon name="external-link" size={14} /></Button></li>
         {/each}
       </ul>
+      <Button size="xs" class="mt-2" title="Preview the app here and pick an element to send to the agent" onclick={() => preview.open(session.id, urls[0])}>Preview</Button>
     {/if}
   </section>
 {/if}

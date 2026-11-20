@@ -794,7 +794,20 @@ export interface Event {
 export interface FeedbackArgs {
     "session": string;
     "comments"?: FeedbackComment[] | null;
+    "elements"?: FeedbackElement[] | null;
     "note"?: string;
+}
+
+/**
+ * FeedbackElement is one page element a human picked in the desktop preview
+ * pane, with their note about it.
+ */
+export interface FeedbackElement {
+    "url"?: string;
+    "selector": string;
+    "html"?: string;
+    "text"?: string;
+    "note": string;
 }
 
 /**

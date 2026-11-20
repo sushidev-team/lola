@@ -26,6 +26,7 @@ export {
   HubService,
   LinearService,
   PhonesService,
+  PreviewService,
   ProjectGitService,
   SandboxLoginService,
   SSHService,

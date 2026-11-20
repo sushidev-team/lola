@@ -130,7 +130,9 @@ daemon, runtime and UIs can share them).
   `devforward` (publish one loopback server on the LAN while watched),
   `portproc` (lsof listeners + cwd, fails open), `portlease` (per-session port
   blocks), `portclash` (dead tab → port number only), `proctree` (process-group
-  termination across the ppid tree), `lolaenv` (per-session env file contract).
+  termination across the ppid tree), `preview` (loopback proxy behind the desktop preview pane:
+  injects the element picker, strips framing headers; the desktop service opens only a URL in the
+  session's own `DevURLs`, and the picked element rides `cmd=feedback` as quoted evidence), `lolaenv` (per-session env file contract).
 
 **Review**
 - `review` (cli family), `reviewagent` (agent family, `review.Client` shape),

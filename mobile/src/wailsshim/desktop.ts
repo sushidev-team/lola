@@ -10,6 +10,7 @@ import * as DoctorService from "./services/doctor";
 import * as HubService from "./services/hub";
 import * as LinearService from "./services/linear";
 import * as PhonesService from "./services/phones";
+import * as PreviewService from "./services/preview";
 import * as ProjectGitService from "./services/projectgit";
 import * as SandboxLoginService from "./services/sandboxlogin";
 import * as SSHService from "./services/ssh";
@@ -25,6 +26,7 @@ export {
   HubService,
   LinearService,
   PhonesService,
+  PreviewService,
   ProjectGitService,
   SandboxLoginService,
   SSHService,

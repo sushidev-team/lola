@@ -148,6 +148,7 @@ func main() {
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
 			application.NewService(updater),
+			application.NewService(&PreviewService{}),
 		},
 		Assets: application.AssetOptions{
 			Handler:    application.AssetFileServerFS(assets),
