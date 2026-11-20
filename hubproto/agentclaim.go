@@ -39,9 +39,16 @@ const (
 	// AgentAuthorizedTTL bounds an authorized claim whose outcome never arrived
 	// (the daemon died mid-spawn). After it the session may be claimed again.
 	AgentAuthorizedTTL = 2 * time.Hour
-	// AgentOwnerOnlineWindow is how recent a heartbeat must be for a device to
-	// count as online when the hub defers to the session's owner.
-	AgentOwnerOnlineWindow = 90 * time.Second
+	// AgentOwnerOnlineWindow is how recent a heartbeat must be for a device to count
+	// as online when the hub defers to the session's owner. It must exceed the longest heartbeat gap (poll_seconds is capped at 900), or
+	// an owner would read as offline for most of each interval.
+	AgentOwnerOnlineWindow = 20 * time.Minute
+	// AgentOwnerDeferFor bounds how long a new grant waits for the owner's daemon.
+	// A live heartbeat says a daemon is up, not that it can serve this team, so
+	// after this an eligible daemon may take the session.
+	AgentOwnerDeferFor = 150 * time.Second
+	// MaxAgentClaims bounds the claim records one org keeps.
+	MaxAgentClaims = 2000
 	// AgentClaimRetention is how long a settled claim is remembered.
 	AgentClaimRetention = 30 * 24 * time.Hour
 )

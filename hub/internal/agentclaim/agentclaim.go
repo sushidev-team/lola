@@ -27,6 +27,9 @@ const (
 	StateAuthorized = "authorized"
 	StateSettled    = "settled"
 	StateReleased   = "released"
+	// StateDeferred records that a grant waited for the owner's live daemon: it
+	// bounds the wait (Expires), and holds no device.
+	StateDeferred = "deferred"
 )
 
 // Result is the outcome of a claim.
@@ -63,7 +66,12 @@ func Claim(m map[string]*store.AgentClaim, session, dev string, ownerOnline bool
 			}
 		}
 	}
-	if ownerOnline {
+	if ownerOnline && (c == nil || c.State != StateDeferred || now.Before(c.Expires)) {
+		if c == nil {
+			// The wait is bounded from the first deferral: a live heartbeat says the
+			// owner's daemon is up, not that it can serve this team.
+			m[session] = &store.AgentClaim{State: StateDeferred, Expires: now.Add(hubproto.AgentOwnerDeferFor), Updated: now}
+		}
 		return Result{Reason: hubproto.AgentOwnerOnline}
 	}
 	epoch := uint64(1)
@@ -114,10 +122,12 @@ func Settle(m map[string]*store.AgentClaim, session, dev string, epoch uint64, o
 	return true, hubproto.AgentGranted
 }
 
-// Prune forgets settled and released claims older than the retention.
+// Prune forgets every claim not touched for the retention, abandoned ones too.
 func Prune(m map[string]*store.AgentClaim, now time.Time) {
 	for id, c := range m {
-		if (c.State == StateSettled || c.State == StateReleased) && now.Sub(c.Updated) > hubproto.AgentClaimRetention {
+		// Any state: a daemon that stopped after claiming or authorizing leaves a
+		// record that nothing else would ever remove.
+		if now.Sub(c.Updated) > hubproto.AgentClaimRetention {
 			delete(m, id)
 		}
 	}

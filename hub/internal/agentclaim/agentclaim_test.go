@@ -82,8 +82,8 @@ func TestOwnerDefersOnlyAFreshGrant(t *testing.T) {
 	if r := Claim(m, "s", "B", true, t0); r.Granted || r.Reason != hubproto.AgentOwnerOnline {
 		t.Fatalf("must defer to the online owner: %+v", r)
 	}
-	if len(m) != 0 {
-		t.Fatal("a deferral must leave no claim behind")
+	if c := m["s"]; c == nil || c.State != StateDeferred || c.Device != "" {
+		t.Fatalf("a deferral records only its bounded wait: %+v", c)
 	}
 	// The owner's own daemon is never told to defer to itself (the caller passes false).
 	if r := Claim(m, "s", "OWNER", false, t0); !r.Granted {
@@ -95,8 +95,34 @@ func TestOwnerDefersOnlyAFreshGrant(t *testing.T) {
 	}
 }
 
+// The owner's live heartbeat does not hold the session forever: it may not serve
+// this team, so after AgentOwnerDeferFor an eligible daemon takes it.
+func TestOwnerDeferenceIsBounded(t *testing.T) {
+	m := map[string]*store.AgentClaim{}
+	Claim(m, "s", "B", true, t0)
+	if r := Claim(m, "s", "B", true, t0.Add(hubproto.AgentOwnerDeferFor-time.Second)); r.Granted {
+		t.Fatalf("still deferring: %+v", r)
+	}
+	r := Claim(m, "s", "B", true, t0.Add(hubproto.AgentOwnerDeferFor+time.Second))
+	if !r.Granted || r.Epoch != 1 {
+		t.Fatalf("after the window an eligible daemon must take it: %+v", r)
+	}
+}
+
+func TestPruneDropsAbandonedClaimsToo(t *testing.T) {
+	m := map[string]*store.AgentClaim{
+		"authorized": {State: StateAuthorized, Updated: t0},
+		"claimed":    {State: StateClaimed, Updated: t0},
+		"fresh":      {State: StateClaimed, Updated: t0.Add(hubproto.AgentClaimRetention)},
+	}
+	Prune(m, t0.Add(hubproto.AgentClaimRetention+time.Hour))
+	if len(m) != 1 || m["fresh"] == nil {
+		t.Fatalf("%v", m)
+	}
+}
+
 func TestPrune(t *testing.T) {
-	m := map[string]*store.AgentClaim{"old": {State: StateSettled, Updated: t0}, "live": {State: StateClaimed, Updated: t0}}
+	m := map[string]*store.AgentClaim{"old": {State: StateSettled, Updated: t0}, "live": {State: StateClaimed, Updated: t0.Add(hubproto.AgentClaimRetention)}}
 	Prune(m, t0.Add(hubproto.AgentClaimRetention+time.Hour))
 	if m["old"] != nil || m["live"] == nil {
 		t.Fatalf("%v", m)

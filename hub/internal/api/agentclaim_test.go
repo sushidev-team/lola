@@ -1,6 +1,9 @@
 package api
 
 import (
+	"fmt"
+	"github.com/sushidev-team/lola/hub/internal/agentclaim"
+	"github.com/sushidev-team/lola/hub/internal/store"
 	"net/http"
 	"testing"
 
@@ -101,5 +104,25 @@ func TestAgentClaimRejectsBadIDsAndIsOrgScoped(t *testing.T) {
 	}
 	if !a.claim("").Granted || !b.claim("").Granted {
 		t.Fatal("two orgs must each hold their own claim on the same id")
+	}
+}
+
+// An org keeps a bounded number of claim records.
+func TestAgentClaimStoreIsBounded(t *testing.T) {
+	e := newEnv(t)
+	a := e.newDaemon()
+	a.mustEnroll("acme")
+	if err := e.st.Update(func(d *store.Data) error {
+		o := d.Orgs["acme"]
+		o.AgentClaims = map[string]*store.AgentClaim{}
+		for i := 0; i < hubproto.MaxAgentClaims; i++ {
+			o.AgentClaims[fmt.Sprintf("filler-%06d", i)] = &store.AgentClaim{State: agentclaim.StateClaimed, Updated: e.clk.Now()}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if r := a.do(http.MethodPost, hubproto.PathAgentClaim, hubproto.AgentClaimRequest{Session: agentSession}); r.status != http.StatusTooManyRequests {
+		t.Fatalf("a full store must refuse a new session: %d %s", r.status, r.body)
 	}
 }

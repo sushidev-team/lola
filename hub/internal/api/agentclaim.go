@@ -38,6 +38,9 @@ func (s *Server) handleAgentClaim(w http.ResponseWriter, r *http.Request, auth s
 			o.AgentClaims = map[string]*store.AgentClaim{}
 		}
 		agentclaim.Prune(o.AgentClaims, now)
+		if _, known := o.AgentClaims[req.Session]; !known && len(o.AgentClaims) >= hubproto.MaxAgentClaims {
+			return fail(http.StatusTooManyRequests, hubproto.CodeRateLimited)
+		}
 		res = agentclaim.Claim(o.AgentClaims, req.Session, dev.ID, ownerOnline(d, dev, req.Owner, now), now)
 		return nil
 	})
