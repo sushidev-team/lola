@@ -40,31 +40,38 @@ once and let members act as "lola" without sharing a bearer token, which must
 not happen (see AGENTS.md, hub is a claim and a candidate, never a command).
 
 ### G4. Linear-side setup nobody checks
-- OAuth app needs the `app:assignable` and `app:mentionable` scopes, plus
-  `read`, `write`, `comments:create`. `lola linear-agent login` and
-  `lola doctor` do not verify the granted scopes.
+- The install needs the scopes `linear.AgentScopes` requests (`read`, `write`,
+  `app:assignable`, `app:mentionable`). `lola doctor` does not verify the
+  granted scopes against that list.
 - Webhook category *Agent session events* must be on for the doorbell; the
   hub verifies HMAC but nothing tells the admin it is missing.
 - The app must be enabled for the right teams; a team without access shows no
   `@lola` and no error.
 - Linear requires a first activity within about 10 seconds of session
-  creation or the session looks unresponsive. A 15s poll misses that; only the
-  doorbell (webhook/hub) meets it, and it is optional.
+  creation or the session looks unresponsive. A 15s poll misses that. The
+  doorbell (webhook/hub) is necessary but not sufficient:
+  `considerAgentSession` runs `openTicket` (worktree, post_create) BEFORE
+  `bindAgentSession` posts the first thought, which can also exceed the
+  deadline. The selected daemon must acknowledge immediately after claiming
+  and before starting the worktree.
 
 ### G5. Event coverage
 Polling only treats `pending` sessions as triggers. Not handled:
 - a new `prompt` on a session lola has no live lola session for (the
   daemon is offline, the session was torn down): the reply is dropped;
 - `stop` signal is acknowledged but never halts anything (deliberate);
-- mention in a comment thread (`sourceComment`) gets no threaded reply
-  target; lola answers on the session only;
-- sessions on a team with no `[[project]]` end in an error activity: fine, but
-  a multi-project team with several `[[project]]` entries always picks the
-  first in config order.
+- sessions on a team with no `[[project]]` end in an error activity: fine.
+
+Not gaps: replies already land under the mentioning comment (Linear renders
+`response`/`elicitation`/`error` activities in that thread), and project
+routing already prefers an exact Linear `project_id` match; config order only
+breaks ties among team-wide entries.
 
 ### G6. Offline / absent owner
 If the chosen machine is asleep, the session sits `pending` and the human sees
-nothing. There is no "nobody is online" response.
+nothing. Only a daemon holding the app token can post an activity (the hub only
+verifies the webhook), so with per-member tokens nobody can say "nobody is
+online" when every member is offline.
 
 ### G7. Visibility
 `lola linear-agent` status shows poll state only. No per-session view of
@@ -84,7 +91,9 @@ rule, claimed through a shared arbiter, and the loser stays silent.
    naming a default member.
 4. **Round robin** across online members who opted in and have a free slot
    (`reserveSlots` already answers this locally).
-5. Nobody online: post one error activity ("no lola is online for team X").
+5. Nobody online: the session stays `pending` and is queued until a
+   credentialed daemon reconnects, then it is acknowledged and routed. Document
+   that delay; nobody else can post an error (see G6).
 
 Binding Linear user to device: each member sets `[linear_agent].user_id`
 (auto-filled from the API key's `viewer`, which lola already knows for
@@ -95,26 +104,34 @@ keeps `linear_user_id -> device` for members of the org.
 Reuse the hub chore model instead of inventing one:
 - Hub already sees the Linear event (doorbell). Add a typed offer
   `linear_agent_session { session_id, issue }` that is a CLAIM only.
-- The chosen daemon re-reads the Agent Session from Linear (it needs only the
-  one shared app token it already holds, or a per-member one, see below) and
-  runs the exact gates of a Linear dispatch: `dispatchHold`, health gate,
-  `reserveSlots`, project routing. The hub never writes a prompt or a branch.
+- Atomicity: the hub claim must be granted BEFORE `openTicket`, and the hub
+  must not reassign after spawn authorization until the first attempt's outcome
+  is reconciled. A Linear activity cannot arbitrate: `agentActivityCreate` has
+  no expected-status or lease token, so a late acknowledgement cannot exclude a
+  second worker whose lease replaced the first during startup.
+- The chosen daemon acknowledges at once, re-reads the Agent Session from
+  Linear, and runs the exact gates of a Linear dispatch: `dispatchHold`, health
+  gate, `reserveSlots`, project routing. The hub never writes a prompt or a
+  branch.
 - Lease semantics as for hub chores: a daemon that does not ack in N seconds
-  loses the lease and the hub offers the next candidate; the first activity on
-  the session closes the race on Linear's side (`pending` -> `active`).
+  (before any spawn) loses the lease and the hub offers the next candidate.
 
 ### Token model (pick one; recommended first)
 A. **Per-member OAuth install**: each member runs `lola linear-agent login`
-   and their token is an `actor=app` token of the same app. No secret sharing.
-   Linear shows one `@lola`; whichever daemon holds the lease posts as it.
+   and their token is an `actor=app` token of the same app. PREREQUISITE: today
+   `linearAgentLogin` and token refresh both need the app's client secret, so
+   members would have to receive it. A secret-free flow (PKCE public client,
+   for login AND refresh) must exist first, or this model is not viable.
 B. One shared token held only by an org "relay" daemon that forwards. Rejected:
    a single point that holds a workspace-wide secret, against the hub rules.
 
 ### Behavior without a hub
 Single-user mode stays as is. For a small team without a hub, add a
-`[linear_agent].only_when_assigned_to_me = true` filter: a daemon ignores a
-session unless its own Linear user is the issue's assignee or delegate or the
-session creator. This alone fixes G2 for the common case with no new infra.
+`[linear_agent].only_when_assigned_to_me = true` filter. Every daemon resolves
+the SAME single owner with the ordered routing rules above (delegate/assignee,
+else creator) and acts only if that owner's id equals its own `user_id`. Never
+"assignee OR creator": a mention by Bob on Ana's issue would admit both
+daemons. This fixes G2 for the common case with no new infra.
 
 ## Proposed work, in order
 
@@ -122,22 +139,24 @@ session creator. This alone fixes G2 for the common case with no new infra.
    `assignee{id}` / `delegate{id}`; keep it display+routing data, never control.
    (G1, small, safe on its own.)
 2. **Owner filter.** `[linear_agent].user_id` (default from `viewer`) and
-   `only_when_assigned_to_me`; ledger entry records `rejected: not mine`
-   silently (no activity, another daemon may own it). (G2, solo/small teams.)
-3. **Setup check in `lola doctor`**: granted scopes, webhook category, team
-   access, doorbell configured. (G4)
-4. **Secret-free login + refresh** (PKCE), prerequisite for per-member installs; then **hub routing**: `linear_user_id` in enrollment, offer kind
-   `linear_agent_session`, lease and ack, "nobody online" error after a
-   timeout. Wire change in `hubproto/` and `hub/` in the SAME PR, backward
-   compatible. (G2/G3/G6)
-5. **Missed replies**: when a prompt arrives for a session with no live lola
+   `only_when_assigned_to_me`, single resolved owner; ledger entry records
+   `rejected: not mine` silently (no activity, another daemon may own it).
+   (G2, solo/small teams.)
+3. **Setup check in `lola doctor`**: granted scopes vs `linear.AgentScopes`,
+   webhook category, team access, doorbell configured. (G4)
+4. **Secret-free login + refresh** (PKCE), prerequisite for per-member
+   installs. (G3)
+5. **Hub routing**: `linear_user_id` in enrollment, offer kind
+   `linear_agent_session`, atomic claim before `openTicket`, immediate ack,
+   queue while nobody is online. Wire change in `hubproto/` and `hub/` in the
+   SAME PR, backward compatible. (G2/G6)
+6. **Missed replies**: when a prompt arrives for a session with no live lola
    session, post a note instead of dropping it. (G5)
-6. **Status surface**: owner and lease in `lola linear-agent status`, app and
+7. **Status surface**: owner and lease in `lola linear-agent status`, app and
    TUI. (G7)
-7. **Threaded reply target** for comment mentions. (G5, optional)
 
 ## Open questions for a human
 - Is per-member OAuth install acceptable to the workspace admin, or must the
   app be installed once? (decides token model A vs hub-held credentials)
 - Should an unassigned `@lola` mention go to the creator, or to a round robin?
-- Is "nobody online" acceptable, or should it queue until a daemon returns?
+- Is a delay while nobody is online acceptable?
