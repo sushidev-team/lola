@@ -4,11 +4,11 @@ metadata:
   name: lola-hub
   namespace: argocd
 spec:
-  namespace: argocd
   writeBackConfig:
     method: argocd
   applicationRefs:
     - namePattern: lola-hub
+      useAnnotations: false
       images:
         - alias: hub
           imageName: registry.digitalocean.com/sushidev-registry-01/lola-hub:latest
