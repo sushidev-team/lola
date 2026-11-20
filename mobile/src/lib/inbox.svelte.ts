@@ -29,7 +29,7 @@ import type { InboxFilter } from "./router.svelte";
 import { statusWord } from "./statustone";
 import { loadInboxGroup, saveInboxGroup, type InboxGroup } from "./prefs";
 import { buildRows, stackMembers, type LayoutGroup, type LayoutProject } from "$lib/sidebarlayout";
-import { VIRTUALIZE_AT, type RowKind } from "./components/VirtualList.svelte";
+import type { RowKind } from "./components/VirtualList.svelte";
 
 /**
  * Needs cards whose `talk:<id>` topic the Inbox watches; the rest show Answer. One below the
@@ -527,11 +527,6 @@ export function markInteractive(): void {
     const ms = bootMs(s?.launchedAt);
     if (ms !== null) console.info(`perf boot=${ms} path=${s?.path?.kind ?? "none"}`);
   });
-}
-
-/** True while a list is short enough to be a plain keyed list, where a removal is a real one. */
-export function unwindowed(count: number): boolean {
-  return count < VIRTUALIZE_AT;
 }
 
 /** Root font size past which a card title gets a third line (Dynamic Type has raised it). */

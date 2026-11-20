@@ -2,7 +2,7 @@
   import Chevron from "$lib/components/Chevron.svelte";
   import type { Snippet } from 'svelte';
   import type { ReviewPackage, PRReadinessData } from '@bindings/internal/protocol';
-  import { reviewOverview, riskWeight, type OverviewItem, type ReviewChange, type RiskLevel } from '$lib/reviewoverview';
+  import { reviewOverview, riskWeight, type OverviewItem, type ReviewChange, type ReviewRisk, type RiskLevel } from '$lib/reviewoverview';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import ReviewConfidence from './ReviewConfidence.svelte';
@@ -32,22 +32,47 @@
     <div class="entry-detail selectable"><SSHRich {sessionId} text={item.body}/></div>
   </details>{/each}</div>{:else}<p class="empty-copy">{empty}</p>{/if}
 {/snippet}
+{#snippet featureLabel(item: ReviewChange)}
+  <span class="feature-heading">
+    {#if !phone}<span class="feature-icon"><Icon name="layers" size={17}/></span>{/if}
+    <span class="feature-name">{item.title}</span>
+    {#if !phone || item.parts.length}<Icon name="chevron-down" size={14}/>{/if}
+  </span>
+  {#if item.description}<span class="feature-description">{item.description}</span>{/if}
+{/snippet}
 {#snippet features(items: ReviewChange[])}
-  <div class="feature-grid">{#each items as item}<details class="feature-item">
-    <summary>
-      <span class="feature-heading"><span class="feature-icon"><Icon name="layers" size={17}/></span><span class="feature-name">{item.title}</span><Icon name="chevron-down" size={14}/></span>
-      {#if item.description}<span class="feature-description">{item.description}</span>{/if}
-    </summary>
-    <div class="feature-detail">
-      {#if item.parts.length}<ul class="feature-parts">{#each item.parts as part}<li><Icon name="minus" size={13}/><span>{part}</span></li>{/each}</ul>{/if}
-    </div>
-  </details>{/each}</div>
+  <div class="feature-grid">
+    {#each items as item}
+      {#if phone && !item.parts.length}
+        <div class="feature-item feature-static">{@render featureLabel(item)}</div>
+      {:else}
+        <details class="feature-item">
+          <summary>{@render featureLabel(item)}</summary>
+          <div class="feature-detail">
+            {#if item.parts.length}<ul class="feature-parts">{#each item.parts as part}<li><Icon name="minus" size={13}/><span>{part}</span></li>{/each}</ul>{/if}
+          </div>
+        </details>
+      {/if}
+    {/each}
+  </div>
 {/snippet}
 {#snippet level(value: RiskLevel, kind: 'likelihood' | 'impact')}
   <span class="risk-level" data-level={value} use:tooltip={{ heading: `${kind === 'impact' ? 'Impact' : 'Likelihood'}: ${value === 'unknown' ? 'Not rated' : riskWords[kind][value]}`, text: riskHints[kind][value], delay: 120 }}><span class="level-bars" aria-hidden="true">{#each [1,2,3] as n}<i class:filled={n <= riskWeight[value]}></i>{/each}</span>{value === 'unknown' ? 'Not rated' : riskWords[kind][value]}</span>
 {/snippet}
 
-<div class="overview" class:split>
+{#snippet readiness()}
+  <div class="readiness">
+    {#if phone}<div class="section-title"><h2>Verification<Icon name="shield-check" size={17}/></h2></div>{/if}
+    <ReviewConfidence {pkg} {facts} {checking} {confidenceRequest}/>
+    {#if checks}<div class="checks">{@render checks()}</div>{/if}
+  </div>
+{/snippet}
+{#snippet riskDetail(risk: ReviewRisk)}
+  {#if risk.description && risk.description.replace(/[.!]$/, '').toLowerCase() !== risk.title.toLowerCase()}<p>{risk.description}</p>{/if}
+  {#if risk.assess}<div><h3>Next step</h3><p>{risk.assess}</p></div>{/if}
+{/snippet}
+
+<div class="overview" class:split class:phone>
   <div class="change-column">
     <header class="review-intro">
       {#if split}<h1 class="sr-only">{overview.title}</h1>{:else}<h1>{overview.title}</h1>
@@ -55,7 +80,7 @@
       {#if freshness === 'stale' && !split}<div class="intro-meta"><span class="stale" role="status"><Icon name="circle-alert" size={14}/>Outdated material</span></div>{/if}
     </header>
       {#if !(phone && overview.changes.length === 0)}<section class="review-panel features" aria-label="Changes in this review">
-        <div class="section-title"><h2>What changed<span class="section-count">{overview.changes.length}</span></h2></div>
+        <div class="section-title"><h2>What changed<span class="section-count">{#if phone}<Icon name="layers" size={14}/>{/if}{overview.changes.length}</span></h2></div>
         {#if split && overview.summary}<p class="summary-copy lead">{overview.summary}</p>{/if}
         {#if overview.changes.length}{@render features(overview.changes.slice(0,4))}{:else}<p class="empty-copy">No feature breakdown provided.</p>{/if}
         {#if overview.changes.length > 4}<details class="additional"><summary><Chevron class="disclosure-chevron" />{overview.changes.length-4} more {overview.changes.length === 5 ? 'change' : 'changes'}</summary>{@render features(overview.changes.slice(4))}</details>{/if}
@@ -69,25 +94,35 @@
       </section>{/if}
   </div>
   <div class="decision-column">
-    {#if !split}<div class="readiness">
-      <ReviewConfidence {pkg} {facts} {checking} {confidenceRequest}/>
-      {#if checks}<div class="checks">{@render checks()}</div>{/if}
-    </div>{/if}
+    {#if !split && !phone}{@render readiness()}{/if}
       <section class="review-panel risks" aria-label="Reported risks">
-        <div class="section-title"><h2>Risks &amp; follow-up<span class="section-count">{overview.risks.length}</span></h2></div><p class="risk-attribution">Agent assessment</p>
+        <div class="section-title"><h2>Risks &amp; follow-up<span class="section-count">{#if phone}<Icon name="triangle-alert" size={14}/>{/if}{overview.risks.length}</span></h2></div><p class="risk-attribution">Agent assessment</p>
         {#if overview.risks.length}
-          <div class="risk-columns" aria-hidden="true"><span>Risk</span><span>Likelihood</span><span>Impact</span></div>
-          {#each overview.risks as risk}<details class="entry risk-entry" class:priority={risk.priority >= 6}>
-            <summary><span class="risk-title"><Icon name="chevron-right" size={14}/>{risk.title}</span><span class="risk-rating" aria-label={`Likelihood: ${risk.likelihood}`}>{@render level(risk.likelihood, 'likelihood')}</span><span class="risk-rating" aria-label={`Impact: ${risk.impact}`}>{@render level(risk.impact, 'impact')}</span></summary>
-            <div class="risk-detail">
-              {#if risk.description && risk.description.replace(/[.!]$/, '').toLowerCase() !== risk.title.toLowerCase()}<p>{risk.description}</p>{/if}
-              {#if risk.assess}<div><h3>Next step</h3><p>{risk.assess}</p></div>{/if}
-            </div>
-          </details>{/each}
+          {#if phone}
+            {#each overview.risks as risk}
+              <article class="phone-risk">
+                <h3>{risk.title}</h3>
+                <dl class="risk-facts">
+                  <div><dt>Likelihood</dt><dd>{@render level(risk.likelihood, 'likelihood')}</dd></div>
+                  <div><dt>Impact</dt><dd>{@render level(risk.impact, 'impact')}</dd></div>
+                </dl>
+                <div class="risk-detail">{@render riskDetail(risk)}</div>
+              </article>
+            {/each}
+          {:else}
+            <div class="risk-columns" aria-hidden="true"><span>Risk</span><span>Likelihood</span><span>Impact</span></div>
+            {#each overview.risks as risk}<details class="entry risk-entry" class:priority={risk.priority >= 6}>
+              <summary><span class="risk-title"><Icon name="chevron-right" size={14}/>{risk.title}</span><span class="risk-rating" aria-label={`Likelihood: ${risk.likelihood}`}>{@render level(risk.likelihood, 'likelihood')}</span><span class="risk-rating" aria-label={`Impact: ${risk.impact}`}>{@render level(risk.impact, 'impact')}</span></summary>
+              <div class="risk-detail">
+                {@render riskDetail(risk)}
+              </div>
+            </details>{/each}
+          {/if}
         {:else}<p class="empty-copy">{overview.riskReportProvided ? 'No unresolved risks reported.' : 'Risks have not been assessed.'}</p>{/if}
         {#if unrated && onAssessRisks}<Button size="xs" variant="secondary" loading={assessment?.state === 'sending'} disabled={assessment?.state === 'accepted'} onclick={onAssessRisks}><Icon name="sparkles" size={13}/>{assessment?.state === 'accepted' ? 'Assessment requested' : assessment?.state === 'error' ? 'Retry assessment' : 'Ask agent to assess risks'}</Button>{/if}
         {#if assessment?.message}<p class="assessment-message" role={assessment.state === 'error' ? 'alert' : 'status'}>{assessment.message}</p>{/if}
       </section>
+      {#if phone && !split}{@render readiness()}{/if}
       {#if feedback && !split}<div class="review-panel feedback">{@render feedback()}</div>{/if}
   </div>
 </div>
@@ -202,12 +237,68 @@
   @media(max-width:1100px) { .overview { gap:32px; grid-template-columns:minmax(0,1fr) 330px; } h1 { font-size:26px; } }
   @media(max-width:800px) { .overview { grid-template-columns:minmax(0,1fr); gap:32px; max-width:620px; } .change-column,.decision-column { display:contents; } .readiness { order:1; } .features { order:2; } .visual-review { order:3; } .risks { order:4; } .feedback { order:5; } }
   @media(max-width:440px) { .risks { padding:20px 16px; } .features { padding:20px 16px; } .features h2 { font-size:20px; } .feature-description { margin-right:0; } h1 { font-size:24px; } .screenshot-grid { gap:16px 12px; } .screen-preview :global(.thumbnail) { padding:6px; border-radius:8px; } .preview-caption { font-size:12px; } }
-  /* Phone: one flat column. No card inside a card, headings no larger than the 28/34 title tier. */
-  :global([data-phone-desk]) .readiness,:global([data-phone-desk]) .features,:global([data-phone-desk]) .risks,:global([data-phone-desk]) .feedback { padding:0; border:0; border-radius:0; background:transparent; }
-  :global([data-phone-desk]) h1 { max-width:none; font-size:28px; line-height:34px; margin-bottom:8px; }
-  :global([data-phone-desk]) .features h2,:global([data-phone-desk]) .risks h2 { font-size:17px; line-height:22px; font-weight:600; letter-spacing:0; gap:8px; }
-  :global([data-phone-desk]) .features .section-count,:global([data-phone-desk]) .risks .section-count { min-width:0; height:auto; padding:0; border-radius:0; background:none; color:var(--color-faint); font-size:13px; line-height:18px; font-weight:400; }
-  :global([data-phone-desk]) .summary-copy { font-size:15px; line-height:22px; }
-  :global([data-phone-desk]) .overview { gap:24px; max-width:none; }
+  /* Every section owns its header and body. Their text shares one gutter,
+     including when an expanded change is taller than the visible sheet. */
+  .overview.phone {
+    --section-inset:12px;
+    --section-line:var(--color-edge);
+    --section-ground:var(--color-canvas);
+    --section-header:var(--color-sel);
+  }
+  .overview.phone, .phone .change-column, .phone .decision-column {
+    display:grid; grid-template-columns:minmax(0,1fr); gap:1rem; max-width:none;
+  }
+  .phone :is(.readiness,.features,.risks,.feedback) {
+    order:initial; min-width:0; margin-inline:-.5rem; padding:0 var(--section-inset);
+    border:1px solid var(--section-line); border-radius:12px; background:var(--section-ground);
+  }
+  .phone .review-intro { padding:.125rem calc(var(--section-inset) - .5rem + 1px) .375rem; }
+  .phone h1 { max-width:none; margin:0 0 .375rem; font-size:1.5rem; line-height:1.2; font-weight:650; text-wrap:pretty; }
+  .phone .summary-copy { font-size:var(--text-callout); line-height:1.5; }
+  .phone .section-title, .phone .feedback :global(.feedback-heading) {
+    position:sticky; top:0; z-index:1;
+    min-height:44px; margin:0 calc(-1 * var(--section-inset)); padding:.5rem var(--section-inset);
+    border-radius:11px 11px 0 0; border-bottom:1px solid var(--section-line); background:var(--section-header);
+  }
+  .phone .section-title h2, .phone .feedback :global(.feedback-heading h2) {
+    display:flex; align-items:center; justify-content:space-between; gap:.5rem; width:100%;
+    color:var(--color-ink); font-size:var(--text-headline); font-weight:650; line-height:1.3; letter-spacing:0;
+  }
+  .phone .section-count {
+    display:inline-flex; align-items:center; gap:5px; min-width:0; height:auto; padding:2px 7px;
+    border:1px solid var(--section-line); border-radius:6px; background:var(--section-ground);
+    color:var(--color-subtext); font-size:var(--text-footnote); font-weight:600;
+  }
+  .phone .features .section-count :global(svg) { color:var(--color-accent); }
+  .phone .risks .section-count :global(svg) { color:var(--color-subtext); }
+  .phone .feature-grid > .feature-item:first-child { border-top:0; }
+  .phone .feature-item > summary, .phone .feature-static { min-height:44px; padding:.75rem 0; }
+  .phone .feature-heading { padding:0; gap:.75rem; font-weight:600; font-size:var(--text-callout); }
+  .phone .feature-heading > :global(svg) { flex:none; }
+  .phone .feature-description { margin:.25rem 0 0; max-width:none; font-size:var(--text-subhead); line-height:1.5; }
+  .phone .feature-detail { padding:0; }
+  .phone .feature-parts { gap:.375rem; margin:0 0 .875rem; font-size:var(--text-subhead); }
+  .phone .additional { margin:0; border-top:1px solid var(--color-edge-soft); }
+  .phone .additional > summary { display:flex; align-items:center; min-height:44px; margin:0; color:var(--color-accent); }
+  .phone .risk-attribution { margin:.65rem 0 0; color:var(--color-faint); font-size:var(--text-footnote); }
+  .phone-risk { padding:.5rem 0 .875rem; min-width:0; }
+  .phone-risk + .phone-risk { padding-top:.875rem; border-top:1px solid var(--color-edge-soft); }
+  .phone-risk > h3 { color:var(--color-ink); font-size:var(--text-callout); font-weight:600; line-height:1.45; }
+  .risk-facts { display:flex; flex-wrap:wrap; gap:.375rem 1rem; margin:.5rem 0; font-size:var(--text-footnote); }
+  .risk-facts > div { display:flex; align-items:center; flex-wrap:wrap; gap:.375rem; }
+  .risk-facts dt { color:var(--color-faint); }
+  .risk-facts .risk-level { padding:0; background:none; font-size:inherit; }
+  .phone .risk-detail { margin:0; padding:0; border:0; }
+  .phone .risk-detail h3 { font-size:var(--text-footnote); }
+  .phone .risk-detail p { font-size:var(--text-subhead); }
+  .phone .checks { margin:0; }
+  .phone .readiness :global(.conf), .phone .readiness :global(.verification) {
+    border:0; border-radius:0; background:transparent; margin:0; padding:.75rem 0;
+  }
+  .phone .readiness :global(.verification.bare) { padding:0; }
+  .phone .readiness > :global(.conf + .checks) { border-top:1px solid var(--color-edge-soft); }
+  .phone .feedback { padding-bottom:var(--section-inset); }
+  .phone .feedback :global(.feedback-heading svg) { order:1; color:var(--color-subtext); }
+  .phone .risks > :global(button), .phone .assessment-message { margin:0 0 .75rem; }
   @media(prefers-reduced-motion:reduce) { .entry > summary :global(svg),.screen-preview :global(.thumbnail),.feature-heading > :global(svg) { transition:none; } }
 </style>

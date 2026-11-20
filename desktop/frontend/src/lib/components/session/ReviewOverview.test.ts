@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import './talk.testkit';
 import { DaemonService } from '@bindings/desktop';
 import ReviewOverview from './ReviewOverview.svelte';
+import { setTouchSurface } from '$lib/touchsurface';
 const pkg={id:'p',session:'s',head:'abc',base:'def',repo:'acme/app',pr:42,title:'feat(auth): verify email',createdAt:'2026-11-07',body:'## Agent confidence\nScore: 80/100\nBasis: Tests passed; mail is unverified.\n## Summary\nConfirm your email before entering.\n## Changes\n- Add an email verification step.\n- Preserve access for existing accounts.\n## Verification\n- Unit tests passed.\n## Risks\n- Mail delivery needs checking.',screens:[{title:'Registration',before:'before',after:'after'},{title:'Phone',after:'phone'}]} as never;
 const facts={head:'abc',base:'def',checksHead:'abc',repo:'acme/app',number:42,checks:'pass',review:'',mergeable:'MERGEABLE',threads:[]} as never;
 beforeEach(()=>{vi.mocked(DaemonService.ReviewPackageImage).mockResolvedValue({dataURL:'data:image/png;base64,aGVsbG8='});});
@@ -66,4 +67,23 @@ it('keeps the breakdown behind the info button and supports keyboard and outside
   await fireEvent.click(info);
   await fireEvent.pointerDown(document.body);
   expect(screen.queryByRole('dialog',{name:'About confidence'})).toBeNull();
+});
+
+it('on a phone, only changes with supporting parts expand and risk ratings are labelled inline', async () => {
+  setTouchSurface({});
+  try {
+    const body = '## Changes\n- **Update reminders**\n  New: Customers see the due date.\n  Includes:\n  - Dark mode\n- **Remove the old template**\n  New: Reminders share a layout.\n## Risks\n- **Long names**\n  Outcome: Names may wrap.\n  Likelihood: low; Impact: medium.\n  Assess: Send a preview.';
+    const { container } = render(ReviewOverview, { pkg: { ...pkg as object, body } as never, facts, sessionId: 's', freshness: 'current', onScreen: () => {} });
+    const change = screen.getByText('Update reminders').closest('summary')!;
+    expect(change).toBeInTheDocument();
+    expect(screen.getByText('Remove the old template').closest('details')).toBeNull();
+    expect(container.querySelector('.feature-icon')).toBeNull();
+    await fireEvent.click(change);
+    expect(screen.getByText('Dark mode')).toBeVisible();
+    expect(screen.getByText('Likelihood')).toBeVisible();
+    expect(screen.getByText('Impact')).toBeVisible();
+    expect(screen.getByText('Send a preview.')).toBeVisible();
+  } finally {
+    setTouchSurface(null);
+  }
 });

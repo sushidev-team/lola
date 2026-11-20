@@ -190,7 +190,8 @@
 {#if selected}
 <section data-before-merge class:review-layout={reviewLayout} aria-label="PR status">
   <header>
-    {#if phone && reviewLayout}<h3 class="phone-section text-micro uppercase text-faint">Pull request</h3>{:else if heading}<h3 class="cv-overview-heading">PR status</h3>{:else}<span class="heading-gap"></span>{/if}
+    {#if phone && reviewLayout}<h3 class="phone-section"><Icon name="git-pull-request" size={18} /><span>Pull request <span class="num">#{selected.number}</span></span></h3>
+      {#if current?.base}<span class="phone-base"><Icon name="git-branch" size={13}/><span>{current.base}</span></span>{/if}{:else if heading}<h3 class="cv-overview-heading">PR status</h3>{:else}<span class="heading-gap"></span>{/if}
     {#if !phone && nav.overlay !== 'pr-review'}<Button variant={promoteReview ? 'primary' : 'ghost'} size="xs" onclick={() => reviewWorkspace.open(session.id)}>{#if promoteReview}<Icon name="git-pull-request" size={13} />{/if}Review PR</Button>{/if}
     {#if !phone}<button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request #{selected.number}"><Icon name="git-pull-request" size={13} />#{selected.number}<Icon name="external-link" size={11} /></button>{/if}
     {#if !(phone && error)}<button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>{/if}
@@ -338,19 +339,25 @@
   .review-layout .merge-method :global(.lola-select-caret) { right:9px; }
   .review-layout .overlaps { font-size:12px; }
   .heading-gap { margin-right:auto; }
-  /* Phone: the four signals are an inset grouped list, 44pt rows, 0.5px separators inset past the glyph. */
-  :global([data-phone-desk]) .review-layout .signals { gap:0; padding:0; border:0; border-radius:12px; background:var(--color-panel); overflow:hidden; margin-bottom:12px; }
-  :global([data-phone-desk]) .review-layout .signal { position:relative; min-height:44px; padding:0 16px; grid-template-columns:20px minmax(0,1fr) auto; gap:12px; }
-  :global([data-phone-desk]) .review-layout .signal + .signal::before { content:""; position:absolute; top:0; left:52px; right:0; height:0.5px; background:var(--color-edge-soft); }
-  :global([data-phone-desk]) .review-layout .signal-label { font-size:15px; line-height:20px; color:var(--color-ink); }
-  :global([data-phone-desk]) .review-layout .signal-value { font-size:15px; line-height:20px; }
-  :global([data-phone-desk]) .review-layout .refresh { min-width:44px; min-height:44px; justify-content:center; padding:0; }
+  .phone-section { display:flex; align-items:center; gap:8px; min-width:0; font-size:var(--text-headline); font-weight:600; }
+  .phone-section :global(svg) { flex:none; color:var(--color-magenta); }
+  .phone-base { display:inline-flex; align-items:center; gap:4px; min-width:0; max-width:38%; color:var(--color-faint); font-size:var(--text-footnote); }
+  .phone-base span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  :global([data-phone-desk]) .review-layout > header { min-height:48px; margin:0; }
+  :global([data-phone-desk]) .review-layout .signals {
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,8.5rem),1fr)); gap:1px;
+    padding:0; margin-bottom:8px; overflow:clip; border:1px solid var(--color-edge-soft);
+    border-radius:10px; background:var(--color-edge-soft);
+  }
+  :global([data-phone-desk]) .review-layout .signal {
+    display:grid; grid-template-columns:18px minmax(0,1fr); gap:2px 6px; align-content:center;
+    min-height:56px; padding:7px 12px; background:var(--color-panel);
+  }
+  :global([data-phone-desk]) .review-layout .signal-label { font-size:var(--text-footnote); line-height:1.3; color:var(--color-subtext); }
+  :global([data-phone-desk]) .review-layout .signal-value { grid-column:2; text-align:left; font-size:var(--text-subhead); font-weight:600; line-height:1.35; overflow-wrap:anywhere; }
+  :global([data-phone-desk]) .review-layout .refresh { flex:none; min-width:44px; min-height:44px; justify-content:center; padding:0; }
   :global([data-phone-desk]) .review-layout .pr-actions :global(button) { min-height:44px; font-size:15px; }
-  :global([data-phone-desk]) .review-layout .next { font-size:13px; }
-  /* One review row on the phone: the Agent review list row carries the verdict. */
-  :global([data-phone-desk]) .review-layout .signal[data-signal="review"] { display:none; }
-  .phone-section { margin-right:auto; }
-  :global([data-phone-desk]) .review-layout > header { min-height:44px; margin-bottom:0; }
+  :global([data-phone-desk]) .review-layout .next { font-size:var(--text-subhead); }
   .error-phone { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 12px; padding:0 0 0 12px; border-radius:10px; background:var(--color-pill-urgent-soft); }
   .error-phone .retry { min-height:44px; min-width:44px; padding:0 12px; border:0; background:none; text-decoration:none; }
 </style>

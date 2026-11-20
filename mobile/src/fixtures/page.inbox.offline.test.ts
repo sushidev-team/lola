@@ -8,7 +8,7 @@ const banners = () => [...document.querySelectorAll(".banner")];
 describe("preview page: inbox offline", () => {
   it("draws the connection banner once, below the Inbox's large title", async () => {
     const app = await openPreview("?route=/inbox&fixture=offline");
-    await waitFor(() => expect(app.querySelector("h1")?.textContent).toBe("Inbox"), { timeout: PAGE_TIMEOUT });
+    await waitFor(() => expect(app.querySelector("h1")?.textContent).toBe("Sessions"), { timeout: PAGE_TIMEOUT });
     await waitFor(() => expect(banners().length).toBeGreaterThan(0), { timeout: PAGE_TIMEOUT });
     // Let both owners (the App shell and the Inbox) settle before counting.
     await new Promise((r) => setTimeout(r, 300));

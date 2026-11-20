@@ -115,6 +115,7 @@ function parseRoutePart(segs: string[], q: URLSearchParams, ctx: ParseContext): 
       if (!state) return null;
       return ctx.paired ? inbox : { name: "connect", state };
     }
+    case "sessions":
     case "inbox": {
       if (segs.length > 1) return null;
       const raw = q.get("filter");

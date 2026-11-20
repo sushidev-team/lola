@@ -30,7 +30,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe("Inbox", () => {
+describe("Sessions", () => {
   describe("search", () => {
     const list = () => [
       s("a", { title: "Fix login", issue: "NOR-1", agentState: "waiting_input" }),
@@ -67,9 +67,9 @@ describe("Inbox", () => {
       emit("daemon:sessions", { sessions: [s("a", { title: "Fix login" }), s("b", { title: "Fix billing" }), s("c", { title: "Docs" })], events: [] });
       await tick();
       await type("fix");
-      expect(screen.getByRole("button", { name: "Clear filter" }).textContent).toContain("Working · 2");
+      expect(screen.getByRole("tab", { name: "Working 2" })).toHaveAttribute("aria-selected", "true");
       await type("billing");
-      expect(screen.getByRole("button", { name: "Clear filter" }).textContent).toContain("Working · 1");
+      expect(screen.getByRole("tab", { name: "Working 1" })).toHaveAttribute("aria-selected", "true");
     });
 
     it("composes with grouping by project", async () => {
@@ -95,15 +95,12 @@ describe("Inbox", () => {
     });
   });
 
-  it("shows a compact all-clear row, with no hero and no summary, once loaded", async () => {
+  it("distinguishes an empty roster from a roster with no requests", async () => {
     render(Inbox);
     await tick();
-    const row = screen.getByText("Nothing needs you");
-    expect(row.className).toContain("text-headline");
-    expect(row.parentElement?.className).toContain("h-16");
-    expect(row.parentElement?.className).toContain("bg-edge-soft");
-    expect(screen.queryByText("All clear")).toBeNull();
-    expect(screen.queryByRole("button", { name: /working/ })).toBeNull();
+    expect(screen.getByRole("heading", { name: "No sessions yet" })).toBeTruthy();
+    expect(screen.queryByText("Nothing needs you")).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
   });
 
   it("keeps the compact row above the other sections when nothing needs you", async () => {
@@ -139,7 +136,7 @@ describe("Inbox", () => {
     render(Inbox);
     emit("daemon:sessions", { sessions: [s("b")], events: [] });
     await tick();
-    const title = screen.getByRole("heading", { name: "Inbox", level: 1 });
+    const title = screen.getByRole("heading", { name: "Sessions", level: 1 });
     const banner = screen.getByRole("button", { name: /Can't reach/ });
     const section = screen.getByRole("heading", { name: "Working 1" });
     expect(title.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -153,17 +150,15 @@ describe("Inbox", () => {
     expect(screen.getByRole("button", { name: "Question, Which period?, p NOR-411, 22 minutes ago" })).toBeTruthy();
   });
 
-  it("shows a 32pt filter chip that clears the filter", async () => {
-    router.stack = [{ name: "tab", tab: "inbox", filter: "working" }];
+  it("switches status directly and returns to the full roster with All", async () => {
     render(Inbox);
-    emit("daemon:sessions", { sessions: [s("b")], events: [] });
-    await tick();
-    const chip = screen.getByRole("button", { name: /Clear/i });
-    expect(chip.textContent).toContain("Working · 1");
-    expect(chip.className).toContain("h-8");
-    await fireEvent.click(chip);
-    expect(router.top).toMatchObject({ name: "tab", tab: "inbox" });
-    expect((router.top as { filter?: string }).filter ?? "").toBe("");
+    emit("daemon:sessions", { sessions: [s("b"), s("n", { agentState: "waiting_input" })], events: [] });
+    await fireEvent.click(await screen.findByRole("tab", { name: "Working 1" }));
+    expect(router.top).toMatchObject({ name: "tab", tab: "inbox", filter: "working" });
+    expect(screen.queryByText("title n")).toBeNull();
+    await fireEvent.click(screen.getByRole("tab", { name: "All" }));
+    expect(router.top).toEqual({ name: "tab", tab: "inbox" });
+    expect(screen.getByText("title n")).toBeTruthy();
   });
 
   it("sections sessions and follows pushed events", async () => {
@@ -207,7 +202,7 @@ describe("Inbox", () => {
     expect(screen.queryByRole("heading", { name: /Working/ })).toBeNull();
     // A filtered list has no section header: the chip carries the name and the count.
     expect(screen.queryByRole("heading", { name: /Done/ })).toBeNull();
-    expect(screen.getByRole("button", { name: /Clear/ }).textContent).toContain("Done · 1");
+    expect(screen.getByRole("tab", { name: "Done 1" })).toHaveAttribute("aria-selected", "true");
     await fireEvent.click(screen.getByRole("button", { name: /Filter, showing Done/ }));
     expect(router.sheet).toBe("filter");
   });
@@ -244,6 +239,29 @@ describe("Inbox grouped by project", () => {
     const keys = [...document.querySelectorAll("[data-vkey]")].map((n) => n.getAttribute("data-vkey"));
     expect(keys).toEqual(["group:alpha", "card:a2", "row:a1", "group:beta", "row:b1", "group:", "row:n1"]);
     expect(screen.getByRole("button", { name: "Filter, grouped by project" })).toBeTruthy();
+  });
+
+  it("replaces a scrolled, windowed list with exactly the grouped review rows on every filter switch", async () => {
+    inboxView.set("project");
+    const working = Array.from({ length: 65 }, (_, i) => s(`w${i}`));
+    const reviews = ["alpha", "alpha", "beta"].map((project, i) =>
+      s(`r${i}`, { project, agentState: "idle", delivery: "review_pending" }));
+    render(Inbox);
+    emit("daemon:sessions", { sessions: [...working, ...reviews], events: [] });
+    await tick();
+    for (let pass = 0; pass < 2; pass++) {
+      const list = screen.getByRole("list");
+      expect(list).toHaveAttribute("data-virtual", "on");
+      list.scrollTop = 1200;
+      await fireEvent.scroll(list);
+      await fireEvent.click(screen.getByRole("tab", { name: "In review 3" }));
+      const filtered = screen.getByRole("list");
+      expect(filtered.scrollTop).toBe(0);
+      expect(Array.from(filtered.querySelectorAll("[data-vkey]"), el => el.getAttribute("data-vkey")))
+        .toEqual(["group:alpha", "row:r0", "row:r1", "group:beta", "row:r2"]);
+      for (const row of reviews) expect(screen.getByRole("button", { name: new RegExp(row.title) })).toBeVisible();
+      await fireEvent.click(screen.getByRole("tab", { name: "All" }));
+    }
   });
 
   it("composes with the status filter and keeps Show all", async () => {

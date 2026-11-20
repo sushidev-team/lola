@@ -43,8 +43,7 @@ the generated bindings: a new bound method needs a shim route in the same change
 
 ### Screens
 
-Inbox (what needs you; the Filter sheet can group it by status or by project), Activity, Projects and Settings in the tab bar; Session
-(Conversation, Changes, Review, Terminal) and Connect on top. Phone copy follows
+The bottom bar contains Sessions, Projects and Settings. Sessions shows the full roster with search, status filters and optional project grouping. Tap a session to open its Conversation, Changes, Review or Terminal. Phone copy follows
 the budget in `04-client.md` §5.5: titles up to three words, one short sentence
 of body.
 

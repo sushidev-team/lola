@@ -68,11 +68,23 @@ describe("SegmentBar", () => {
     for (const tab of screen.getAllByRole("tab")) expect(tab.className).toContain("flex-auto");
   });
 
-  it("scrolls the selection into view", async () => {
-    const spy = vi.fn();
-    Element.prototype.scrollIntoView = spy;
-    render(SegmentBar, { props: { segments, value: "terminal", onchange: () => {} } });
-    await vi.waitFor(() => expect(spy).toHaveBeenCalledWith({ inline: "nearest", block: "nearest" }));
+  it("reveals the selected tab by moving only the strip", async () => {
+    const left = vi.spyOn(HTMLElement.prototype, "offsetLeft", "get").mockImplementation(function (this: HTMLElement) {
+      return this.textContent === "Terminal" ? 260 : 0;
+    });
+    const width = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(80);
+    const viewport = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(240);
+    try {
+      const { rerender } = render(SegmentBar, { props: { segments, value: "terminal", onchange: () => {} } });
+      const strip = screen.getByRole("tablist");
+      await vi.waitFor(() => expect(strip.scrollLeft).toBe(100));
+      await rerender({ segments, value: "conversation", onchange: () => {} });
+      await vi.waitFor(() => expect(strip.scrollLeft).toBe(0));
+    } finally {
+      left.mockRestore();
+      width.mockRestore();
+      viewport.mockRestore();
+    }
   });
 });
 

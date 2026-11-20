@@ -4,7 +4,7 @@ import { openPreview, PAGE_TIMEOUT } from "./page.helpers";
 
 describe("preview page: inbox", () => {
   it("mounts the real app on the busy fixture and lists the pushed snapshot", async () => {
-    const app = await openPreview("?route=/inbox");
+    const app = await openPreview("?route=/sessions");
     await waitFor(() => expect(app.querySelector('[data-fixture="busy"]')).not.toBeNull(), { timeout: PAGE_TIMEOUT });
     await waitFor(() => expect(app.textContent).toContain("Rename the ledger columns"), { timeout: PAGE_TIMEOUT });
     expect(app.textContent).toContain("Retire the legacy period picker");

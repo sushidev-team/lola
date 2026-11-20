@@ -1314,7 +1314,7 @@ query: sheet=<SheetName>[&tab=<a-z, 1–16>]   (tab only with a sheet; reviewPac
 Unknown segments return `null` (caller keeps the current route). `/connect/*`
 is accepted only when no daemon is paired (otherwise → `/inbox`).
 
-Nav model: three tabs in the bottom bar (Inbox, Projects, Settings),
+Nav model: three tabs in the bottom bar (Sessions, Projects, Settings),
 each keeping its own depth. Session is pushed over the current tab; back
 returns to it. Left-edge swipe (start x ≤ 20 pt, pointer events) pops with the
 spring of §6.4; it is disabled on the Terminal segment, which owns its touches.
@@ -1337,7 +1337,7 @@ Directory: `mobile/src/screens/` (replaces `mobile/src/views/`).
   one button.
 - Pairing done → `success` haptic, `router.replace(/inbox)`.
 
-**Inbox** (`screens/Inbox.svelte`, `lib/inbox.svelte.ts`)
+**Sessions** (`screens/Inbox.svelte`, `lib/inbox.svelte.ts`). Both `/sessions` and the existing `/inbox` links open this screen.
 - Cards ("Needs you"): sessions with `kanbanKey ∈ {needs, fixing}` or
   `delivery === "approved"`, ordered by `sortRank`. Card = title (2 lines max),
   project · branch, state line, **one** action:
@@ -1363,11 +1363,11 @@ Directory: `mobile/src/screens/` (replaces `mobile/src/views/`).
   needs cards, and only while it is the top route (02
   `MaxProbedSessionsPerDevice` = 4 leaves a slot for an open session); the rest
   show Answer.
-- Rows below, one dense row per session (56 pt, two lines): sections Working,
+- Rows below use the desktop roster glyph, a two-line title, project and issue or branch, and a PR number when available. Sections: Working,
   In review, Done. Done shows `DONE_VISIBLE = 20` rows then "Show all".
 - A tap on a card or row opens the Conversation, except a `ci_failed` card, an
   `approved` card and anything in the review bucket, which open the Review segment.
-- Filter chips (`filter` sheet on small widths) map to `InboxFilter`.
+- The status tabs below search map to `InboxFilter` and count matching sessions. The Filter sheet also exposes the status choices.
 - The `filter` sheet also holds "Group by: Status | Project", a persisted
   preference (`lola.mobile.inboxGroup`, not a route): project mode lists one
   header per project in the desktop's arrangement, needs-you cards first, with
@@ -1496,10 +1496,10 @@ sentence; the client list is a courtesy, the daemon gate is the truth.
 | Banner · offline | — | No network. |
 | Banner · unreachable | — | Can't reach {mac}. · "Details" |
 | Banner · racing | — | Reconnecting… |
-| Inbox | Inbox | — |
-| Inbox sections | Needs you · Working · In review · Done | "Show all" · "Clear filter" |
+| Sessions | Sessions | — |
+| Session sections | Needs you · Working · In review · Done | "Show all" |
 | Inbox card kinds | — | Permission · Question · Menu open · Needs you |
-| Inbox empty | Nothing needs you | — (compact row, no summary line) |
+| Sessions empty | No sessions yet | Nothing needs you (when other sessions exist) |
 | Inbox connecting | — | status "Connecting…" (no snapshot, no banner) |
 | Inbox card actions | — | Approve · Answer · Resolve · See checks · Address · Merge |
 | Session segments | — | Conversation · Changes · Review · Terminal |
@@ -1698,8 +1698,7 @@ settle times they produce.
 | Sheet present | translateY spring stiffness 0.15, damping 0.82 (≈ 300 ms) to detent; detents fit (default) = content height capped at 100 % − top inset − 44 pt, medium = 52 % of height, large = 92 %, full = 100 % − safe top | 150 ms fade |
 | Sheet dismiss | drag > 30 % of sheet height or velocity > 800 pt/s; spring to 100 % | fade |
 | Segment thumb | `transform` 220 ms `cubic-bezier(0.2, 0.8, 0.2, 1)` | none |
-| Card resolve (Inbox) | height collapse + fade 240 ms `cubic-bezier(0.4, 0, 0.2, 1)` | instant |
-| Row insert/remove | fade + 8 pt slide 180 ms; only keyed rows that changed animate | instant |
+| Sessions list updates | Insert and remove keyed rows immediately. Changing the status filter starts at the top. | instant |
 | Keyboard inset | 250 ms `cubic-bezier(0.17, 0.59, 0.4, 0.77)` | instant |
 | Banner | slide from top 200 ms | fade |
 

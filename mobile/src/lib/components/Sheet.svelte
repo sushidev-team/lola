@@ -56,6 +56,8 @@
     cancel,
     /** Unsaved input: dismissing asks to discard first. */
     dirty = false,
+    /** Section navigation between the title and the scrolling content. */
+    navigation,
     /** A pinned bar under the scrolling content. */
     footer,
     onclose,
@@ -69,6 +71,7 @@
     action?: { label: string; onclick: () => void; disabled?: boolean };
     cancel?: string;
     dirty?: boolean;
+    navigation?: Snippet;
     footer?: Snippet;
     onclose: () => void;
     children: Snippet;
@@ -254,6 +257,7 @@
         </div>
       </header>
     {/if}
+    {@render navigation?.()}
     <div
       class="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
       style="padding-bottom: {footer ? '8px' : 'max(16px, calc(env(safe-area-inset-bottom, 0px) + 8px))'}"
