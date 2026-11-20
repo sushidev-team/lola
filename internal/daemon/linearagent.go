@@ -267,6 +267,14 @@ func (d *Daemon) linearAgentCycle(ctx context.Context) time.Duration {
 		ra.setError(err)
 		return interval
 	}
+	// The app's own id filters lola's activities out of the replies; a lookup that
+	// failed once is retried here rather than never.
+	ra.mu.Lock()
+	needViewer := ra.viewerID == ""
+	ra.mu.Unlock()
+	if needViewer {
+		d.resolveAgentViewer(ctx, api)
+	}
 	cctx, cancel := context.WithTimeout(ctx, agentExecTimeout)
 	sessions, err := api.AgentSessions(cctx)
 	cancel()
@@ -496,7 +504,12 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	case known:
 		return
 	case as.Status != "pending":
-		return
+		// Acknowledged but not ours: with a hub, the daemon that acknowledged may
+		// have stopped before it spawned, and the claim expiring is what lets
+		// another take over. Only a recent, still-active session qualifies.
+		if !d.agentTakeoverCandidate(as) {
+			return
+		}
 	}
 	// Shared app token, several daemons: only the session's single owner acts. A
 	// skipped session is neither recorded nor answered, so another daemon (or a
@@ -506,7 +519,7 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	}
 	if as.Issue == nil || as.Issue.Identifier == "" {
 		if !known {
-			grant, proceed := d.claimAgentSession(ctx, as)
+			grant, proceed, _ := d.claimAgentSession(ctx, as)
 			if !proceed {
 				return
 			}
@@ -529,8 +542,11 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	// Hub arbitration: one daemon wins the claim, acknowledges at once (Linear
 	// wants a first activity within ~10s, before any worktree work), and only
 	// then goes on.
-	grant, proceed := d.claimAgentSession(ctx, as)
+	grant, proceed, why := d.claimAgentSession(ctx, as)
 	if !proceed {
+		if why == hubproto.AgentDone && !known {
+			ra.record(as.ID, "elsewhere", "") // settled by another daemon: stop asking
+		}
 		return
 	}
 	if grant != nil && !known {
@@ -630,6 +646,7 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 		// this Agent Session — say why, a human can delegate again.
 		if s, ok := d.liveSessionForIssue(is.Identifier); ok {
 			d.bindAgentSession(ctx, api, as.ID, s, fmt.Sprintf("Working on %s in lola session `%s`.", is.Identifier, s.ID))
+			d.relayMention(s.ID, as)
 			grant.settle(ctx, hubproto.SettleBound)
 			return
 		}
@@ -739,6 +756,7 @@ func (d *Daemon) relayAgentPrompts(ctx context.Context, api linear.AgentAPI, s s
 			cur.AgentMirror.PromptCursor = p.CreatedAt
 			return true
 		})
+		d.agent.setLedgerCursor(s.AgentSessionID, p.CreatedAt) // survives the session, for answerOrphanReplies
 		s.AgentMirror.PromptCursor = p.CreatedAt
 	}
 	if len(prompts) > 0 {
@@ -1136,11 +1154,15 @@ const orphanReplyNote = "This lola session has ended, so I cannot pass that on. 
 // answerOrphanReplies stops a reply into a finished or torn-down thread from
 // vanishing. For every ledger-bound Agent Session that Linear shows as live
 // again but that no running lola session mirrors (the session was removed, or
-// its final response was posted), it reads the human prompts, ignores the
-// history it saw the first time, and answers each NEW one once with
-// orphanReplyNote. It never restarts work: starting is a human's fresh mention.
-// A daemon that skipped the session (only_when_assigned_to_me) never bound it,
-// so it never answers for another owner's thread.
+// its final response was posted), it reads the human prompts newer than the
+// ledger's cursor and answers them ONCE with orphanReplyNote. The cursor is the
+// newest prompt the live session processed (relayAgentPrompts keeps it in the
+// ledger); with none, it is the moment the thread was bound, so a reply made
+// after the session ended is never mistaken for history, and nothing is stamped
+// from "now". A failed answer leaves the cursor where it was, so the next poll
+// retries. It never restarts work: starting is a human's fresh mention. A daemon
+// that skipped the session (only_when_assigned_to_me) never bound it, so it
+// never answers for another owner's thread.
 func (d *Daemon) answerOrphanReplies(ctx context.Context, api linear.AgentAPI, sessions []linear.AgentSession) {
 	ra := d.agent
 	mirrored := map[string]bool{}
@@ -1163,39 +1185,49 @@ func (d *Daemon) answerOrphanReplies(ctx context.Context, api linear.AgentAPI, s
 		if !known || entry.State != "bound" || mirrored[as.ID] {
 			continue
 		}
+		cursor := entry.PromptCursor
+		if cursor == "" {
+			cursor = entry.At.UTC().Format(promptTimeLayout)
+		}
 		cctx, cancel := context.WithTimeout(ctx, agentExecTimeout)
-		prompts, err := api.AgentPrompts(cctx, as.ID, entry.PromptCursor)
+		prompts, err := api.AgentPrompts(cctx, as.ID, cursor)
 		cancel()
 		if err != nil {
 			d.logf("", "linear agent: prompts for ended thread %s: %v", as.ID, err)
 			continue
 		}
-		newest := entry.PromptCursor
-		answered := false
+		newest, answer := "", false
 		for _, p := range prompts {
-			if p.CreatedAt <= newest {
+			if p.CreatedAt <= cursor {
 				continue
 			}
-			newest = p.CreatedAt
-			// The first look only records the history the live session already saw.
-			if entry.PromptCursor != "" && p.UserID != self && strings.TrimSpace(p.Body) != "" && p.Signal != "stop" {
-				answered = true
+			if p.CreatedAt > newest {
+				newest = p.CreatedAt
 			}
-		}
-		if answered {
-			d.postAgentActivity(ctx, api, as.ID, linear.Response(orphanReplyNote))
+			if p.UserID != self && strings.TrimSpace(p.Body) != "" && p.Signal != "stop" {
+				answer = true
+			}
 		}
 		if newest == "" {
-			// No history yet: stamp now, so the first reply AFTER this look is answered.
-			newest = ra.now().UTC().Format("2006-01-02T15:04:05.000Z")
+			continue
 		}
-		if newest != entry.PromptCursor {
-			ra.mu.Lock()
-			if e, ok := ra.ledger[as.ID]; ok {
-				e.PromptCursor = newest
-				ra.ledger[as.ID] = e
-			}
-			ra.mu.Unlock()
+		if answer && !d.postAgentActivity(ctx, api, as.ID, linear.Response(orphanReplyNote)) {
+			continue // not delivered: keep the cursor, retry on the next poll
 		}
+		ra.setLedgerCursor(as.ID, newest)
+	}
+}
+
+// promptTimeLayout is the fixed-width form of Linear's timestamps, so cursors
+// compare as strings.
+const promptTimeLayout = "2006-01-02T15:04:05.000Z"
+
+// setLedgerCursor records the newest human prompt already processed on a thread.
+func (ra *linearAgentRuntime) setLedgerCursor(id, cursor string) {
+	ra.mu.Lock()
+	defer ra.mu.Unlock()
+	if e, ok := ra.ledger[id]; ok && cursor > e.PromptCursor {
+		e.PromptCursor = cursor
+		ra.ledger[id] = e
 	}
 }

@@ -84,11 +84,11 @@ func (d *Daemon) agentClaimActive() bool {
 // silently this cycle (held by another daemon, deferred to the owner, or
 // required-mode without an answer); the grant may be nil with proceed=true when
 // no arbiter applies.
-func (d *Daemon) claimAgentSession(ctx context.Context, as linear.AgentSession) (grant *agentGrant, proceed bool) {
+func (d *Daemon) claimAgentSession(ctx context.Context, as linear.AgentSession) (grant *agentGrant, proceed bool, reason string) {
 	c, mode, ok := d.agentArbiter()
 	if !ok {
 		// Not joined or an older client: auto proceeds alone, required does not.
-		return nil, mode != config.HubClaimRequired
+		return nil, mode != config.HubClaimRequired, ""
 	}
 	d.agent.mu.Lock()
 	appID := d.agent.viewerID
@@ -98,15 +98,15 @@ func (d *Daemon) claimAgentSession(ctx context.Context, as linear.AgentSession) 
 	resp, err := c.ClaimAgentSession(cctx, hubproto.AgentClaimRequest{Session: as.ID, Owner: as.Owner(appID)})
 	if err != nil {
 		if hubStatusIs(err, 404) || errors.Is(err, hub.ErrNotJoined) {
-			return nil, mode != config.HubClaimRequired // an older hub: no arbiter
+			return nil, mode != config.HubClaimRequired, "" // an older hub: no arbiter
 		}
 		d.logf("", "linear agent: hub claim for %s: %v", as.ID, err)
-		return nil, mode == config.HubClaimAuto
+		return nil, mode == config.HubClaimAuto, ""
 	}
 	if !resp.Granted {
-		return nil, false
+		return nil, false, resp.Reason
 	}
-	return &agentGrant{d: d, c: c, session: as.ID, epoch: resp.Epoch, required: mode == config.HubClaimRequired}, true
+	return &agentGrant{d: d, c: c, session: as.ID, epoch: resp.Epoch, required: mode == config.HubClaimRequired}, true, ""
 }
 
 // authorize asks to spawn. False means do NOT spawn: a successor holds the claim
@@ -174,4 +174,23 @@ func agentUnserved(as linear.AgentSession, now time.Time) bool {
 		return true
 	}
 	return now.Sub(t) > agentUnservedAfter
+}
+
+// agentTakeoverWindow is how long after its creation an acknowledged session may
+// still be taken over by another daemon.
+const agentTakeoverWindow = 15 * time.Minute
+
+// agentTakeoverCandidate reports whether an unknown, already-acknowledged
+// session should still be offered to the hub: arbitration is on, Linear shows it
+// active (not closed), and it is recent. A session another daemon bound answers
+// `done` and is remembered, so this costs one call per session, not one per poll.
+func (d *Daemon) agentTakeoverCandidate(as linear.AgentSession) bool {
+	if as.Status != "active" || !d.agentClaimActive() {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, as.CreatedAt)
+	if err != nil {
+		return false
+	}
+	return d.agent.now().Sub(t) <= agentTakeoverWindow
 }

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"github.com/sushidev-team/lola/internal/config"
 	"slices"
 	"sync"
 	"testing"
@@ -410,5 +411,28 @@ func TestHubInReviewCompleteIsNotRenewed(t *testing.T) {
 	d.hubCycle(context.Background())
 	if lv := fh.snapshot().beats[1].LiveLeases; len(lv) != 0 {
 		t.Errorf("an in-review item's unsent complete must not renew a lease: %v", lv)
+	}
+}
+
+// A hub that refuses linear_user_id alone is not a legacy hub: it keeps getting
+// policy_version and the lifecycle frames, and only the one field is dropped.
+func TestHubHeartbeatRefusedLinearUserIDIsNotLegacy(t *testing.T) {
+	d, fh, _ := hubFixture(t)
+	d.cfg.LinearAgent = config.LinearAgentConfig{Enabled: true, UserID: "user-ana"}
+	d.teamPolicy.version, d.teamPolicy.applied = 4, true
+	fh.mu.Lock()
+	fh.beatRefuseUser = true
+	fh.mu.Unlock()
+	d.hubCycle(context.Background())
+	b := fh.snapshot().beats
+	if len(b) != 2 || b[0].LinearUserID != "user-ana" || b[1].LinearUserID != "" || b[1].PolicyVersion != 4 {
+		t.Fatalf("beats = %+v, want one retry without only linear_user_id", b)
+	}
+	if d.hubStatusData().LegacyHub {
+		t.Fatal("a hub that only lacks linear_user_id must not be marked legacy")
+	}
+	d.hubCycle(context.Background())
+	if b := fh.snapshot().beats; len(b) != 3 || b[2].LinearUserID != "" || b[2].PolicyVersion != 4 {
+		t.Fatalf("beats = %+v, want the field left out afterwards", b)
 	}
 }

@@ -699,6 +699,7 @@ func TestLinearAgentRelaysTheMentionText(t *testing.T) {
 func TestLinearAgentAnswersRepliesToEndedThreads(t *testing.T) {
 	p := config.Project{Name: "app", Path: "/tmp/app", TeamID: "team-1"}
 	d, api, _ := agentDaemon(t, p)
+	d.agent.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC) }
 	d.agent.record("as-9", "bound", "gone-session") // no such lola session any more
 	api.sessions = []linear.AgentSession{{ID: "as-9", Status: "active", Issue: &linear.Issue{Identifier: "ENG-9", TeamID: "team-1"}}}
 	api.prompts["as-9"] = []linear.AgentPrompt{{ID: "old", Body: "earlier", UserID: "human", CreatedAt: "2026-01-01T00:00:01.000Z"}}
@@ -712,5 +713,70 @@ func TestLinearAgentAnswersRepliesToEndedThreads(t *testing.T) {
 	d.linearAgentCycle(context.Background())
 	if got := api.kinds("as-9"); len(got) != 1 || got[0] != "response" {
 		t.Fatalf("want exactly one response, got %v", got)
+	}
+}
+
+// failingActivities refuses the first n activity posts.
+type failingActivities struct {
+	*fakeAgentAPI
+	mu   sync.Mutex
+	fail int
+}
+
+func (f *failingActivities) CreateAgentActivity(ctx context.Context, id string, a linear.AgentActivity) error {
+	f.mu.Lock()
+	if f.fail > 0 {
+		f.fail--
+		f.mu.Unlock()
+		return fmt.Errorf("linear unreachable")
+	}
+	f.mu.Unlock()
+	return f.fakeAgentAPI.CreateAgentActivity(ctx, id, a)
+}
+
+// A reply made after the session ended but before the first scan is answered,
+// and one whose answer could not be posted is retried, not consumed.
+func TestLinearAgentOrphanReplyIsRetriedAndNotMistakenForHistory(t *testing.T) {
+	p := config.Project{Name: "app", Path: "/tmp/app", TeamID: "team-1"}
+	d, api, _ := agentDaemon(t, p)
+	flaky := &failingActivities{fakeAgentAPI: api, fail: 1}
+	d.agent.apiOverride = flaky
+	d.agent.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC) }
+	d.agent.record("as-9", "bound", "gone")
+	api.sessions = []linear.AgentSession{{ID: "as-9", Status: "active", Issue: &linear.Issue{Identifier: "ENG-9", TeamID: "team-1"}}}
+	// Posted after the thread was bound and before any scan: it must not read as history.
+	api.prompts["as-9"] = []linear.AgentPrompt{{ID: "r", Body: "still there?", UserID: "human", CreatedAt: "2026-01-01T00:00:20.000Z"}}
+	d.linearAgentCycle(context.Background()) // the answer fails
+	if got := api.kinds("as-9"); len(got) != 0 {
+		t.Fatalf("first post was refused, got %v", got)
+	}
+	d.linearAgentCycle(context.Background()) // retried
+	d.linearAgentCycle(context.Background()) // and not repeated
+	if got := api.kinds("as-9"); len(got) != 1 || got[0] != "response" {
+		t.Fatalf("want one response after the retry, got %v", got)
+	}
+}
+
+// An acknowledged session nobody bound is offered to the hub again, and one the
+// hub says is done is remembered instead of asked about every poll.
+func TestHubClaimTakesOverAnAcknowledgedUnboundSession(t *testing.T) {
+	a := &arbiter{}
+	d, api, nat := claimDaemon(t, a, "dev-2", "")
+	as := pendingSession("as-1", "ENG-7", "team-1")
+	as.Status = "active"
+	as.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	api.sessions = []linear.AgentSession{as}
+	d.linearAgentCycle(context.Background())
+	if len(nat.spawnCalls()) != 1 {
+		t.Fatalf("an abandoned, acknowledged session must be taken over: spawns=%d", len(nat.spawnCalls()))
+	}
+	// An older acknowledged session is left alone.
+	d2, api2, nat2 := claimDaemon(t, &arbiter{}, "dev-3", "")
+	old := as
+	old.CreatedAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	api2.sessions = []linear.AgentSession{old}
+	d2.linearAgentCycle(context.Background())
+	if len(nat2.spawnCalls()) != 0 {
+		t.Fatal("a stale acknowledged session must not be taken over")
 	}
 }

@@ -27,6 +27,9 @@ type AgentSession struct {
 	// they pick which daemon acts, they never gate a send or a write.
 	CreatorID  string // the human who mentioned or delegated
 	AssigneeID string
+	// An app user (lola itself or another agent) is never recorded here: only a
+	// human can own a session, so a delegate that is some other agent cannot hide
+	// the assignee from every daemon.
 	DelegateID string // the app user itself when a human delegated to lola
 	// MentionBody is the text of the comment the human wrote when they mentioned
 	// lola ("@lola go ahead"); empty for a plain delegation. UNTRUSTED text.
@@ -133,9 +136,9 @@ const agentMaxPages = 6
 func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 	const q = `query($after: String){ agentSessions(first:50, after:$after, orderBy:updatedAt){
 		nodes{ id status createdAt url
-			creator{ id } sourceComment{ body }
+			creator{ id app } sourceComment{ body }
 			issue{ id identifier title branchName priority createdAt
-				team{ id } project{ id } assignee{ id } delegate{ id } } }
+				team{ id } project{ id } assignee{ id app } delegate{ id app } } }
 		pageInfo{ hasNextPage endCursor } } }`
 	var (
 		out   []AgentSession
@@ -147,14 +150,20 @@ func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 				Nodes []struct {
 					ID, Status, CreatedAt string
 					URL                   *string
-					Creator               *struct{ ID string }
-					SourceComment         *struct{ Body string }
-					Issue                 *struct {
+					Creator               *struct {
+						ID  string
+						App bool
+					}
+					SourceComment *struct{ Body string }
+					Issue         *struct {
 						ID, Identifier, Title, BranchName, CreatedAt string
 						Priority                                     float64
 						Team                                         *struct{ ID string }
 						Project                                      *struct{ ID string }
-						Assignee, Delegate                           *struct{ ID string }
+						Assignee, Delegate                           *struct {
+							ID  string
+							App bool
+						}
 					}
 				}
 				PageInfo struct {
@@ -171,7 +180,7 @@ func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 			if n.URL != nil {
 				s.URL = *n.URL
 			}
-			if n.Creator != nil {
+			if n.Creator != nil && !n.Creator.App {
 				s.CreatorID = n.Creator.ID
 			}
 			if n.SourceComment != nil {
@@ -186,10 +195,10 @@ func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 				if n.Issue.Project != nil {
 					is.ProjectID = n.Issue.Project.ID
 				}
-				if n.Issue.Assignee != nil {
+				if n.Issue.Assignee != nil && !n.Issue.Assignee.App {
 					s.AssigneeID = n.Issue.Assignee.ID
 				}
-				if n.Issue.Delegate != nil {
+				if n.Issue.Delegate != nil && !n.Issue.Delegate.App {
 					s.DelegateID = n.Issue.Delegate.ID
 				}
 				s.Issue = is

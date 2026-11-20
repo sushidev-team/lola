@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
@@ -45,6 +46,10 @@ func LinearAgentResult(cfg *config.Config) (Result, bool) {
 		notes = append(notes, "scopes not recorded (log in again to check them)")
 	}
 	if tok.RefreshToken == "" {
+		if !tok.ExpiresAt.IsZero() && time.Now().After(tok.ExpiresAt) {
+			res.Detail = "the stored login has expired and cannot refresh: run `lola linear-agent login` again"
+			return res, true
+		}
 		notes = append(notes, "no refresh token: the login will expire")
 	}
 	switch {
