@@ -126,7 +126,7 @@ session creator. This alone fixes G2 for the common case with no new infra.
    silently (no activity, another daemon may own it). (G2, solo/small teams.)
 3. **Setup check in `lola doctor`**: granted scopes, webhook category, team
    access, doorbell configured. (G4)
-4. **Hub routing**: `linear_user_id` in enrollment, offer kind
+4. **Secret-free login + refresh** (PKCE), prerequisite for per-member installs; then **hub routing**: `linear_user_id` in enrollment, offer kind
    `linear_agent_session`, lease and ack, "nobody online" error after a
    timeout. Wire change in `hubproto/` and `hub/` in the SAME PR, backward
    compatible. (G2/G3/G6)
