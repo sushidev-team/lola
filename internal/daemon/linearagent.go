@@ -485,6 +485,13 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	}
 	is := *as.Issue
 
+	// Shared app token, several daemons: only the session's single owner acts. A
+	// skipped session is neither recorded nor answered, so another daemon (or a
+	// later config) can still take it.
+	if !d.agentSessionIsMine(as) {
+		return
+	}
+
 	// Already running here (a poll or a human started it): bind, don't spawn.
 	if s, ok := d.liveSessionForIssue(is.Identifier); ok {
 		d.bindAgentSession(ctx, api, as.ID, s, fmt.Sprintf("Already working on %s in lola session `%s` — I'll keep this thread updated.", is.Identifier, s.ID))
@@ -1019,4 +1026,21 @@ func (ra *linearAgentRuntime) pruneLedger() {
 			delete(ra.ledger, k)
 		}
 	}
+}
+
+// agentSessionIsMine applies [linear_agent].only_when_assigned_to_me. Off, every
+// session is this daemon's (the single-daemon default). On, it must name this
+// user as the one resolved owner; an unknown owner fails closed.
+func (d *Daemon) agentSessionIsMine(as linear.AgentSession) bool {
+	d.mu.Lock()
+	cfg := d.cfg.LinearAgent
+	d.mu.Unlock()
+	if !cfg.OnlyWhenAssignedToMe {
+		return true
+	}
+	d.agent.mu.Lock()
+	appID := d.agent.viewerID
+	d.agent.mu.Unlock()
+	owner := as.Owner(appID)
+	return owner != "" && owner == cfg.UserID
 }

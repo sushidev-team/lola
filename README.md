@@ -1810,6 +1810,8 @@ an error activity saying so.
 | `poll_interval` | duration | How often the loop asks Linear for new sessions and replies. Default `15s`, minimum `5s`. |
 | `webhook_listen` | string | Optional `IP:port` for the webhook doorbell (see below). Empty = off. |
 | `webhook_secret_keychain` / `webhook_secret_env` | string | The webhook signing secret. Default service `lola-linear-agent-webhook-secret`. |
+| `user_id` | string | Your own Linear user id. Used by `only_when_assigned_to_me`. |
+| `only_when_assigned_to_me` | bool | Several daemons sharing one app token: act only when this session's single owner is you. The owner is the issue's delegate (a human, not lola), else its assignee, else whoever mentioned lola. Others skip silently. Needs `user_id`. Default `false`. |
 
 Every key above except the secret sources is also editable in the settings
 screens — the app's **Settings → Linear agent** tab (which also stores the client

@@ -650,6 +650,10 @@ endpoint = "https://api.linear.app/graphql"
 # # only makes the loop poll now; it is never trusted as data.
 # # webhook_listen = "127.0.0.1:8789"
 # # (lola linear-agent set-secret webhook)
+# # Several people sharing one app: act only on sessions you own (delegate, else
+# # assignee, else whoever mentioned lola). Needs your Linear user id.
+# # user_id = "linear-user-uuid"
+# # only_when_assigned_to_me = true
 
 # ---------------------------------------------------------------------------
 # [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is

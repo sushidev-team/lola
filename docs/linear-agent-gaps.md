@@ -166,3 +166,12 @@ daemons. This fixes G2 for the common case with no new infra.
   app be installed once? (decides token model A vs hub-held credentials)
 - Should an unassigned `@lola` mention go to the creator, or to a round robin?
 - Is a delay while nobody is online acceptable?
+
+## Status
+
+Done: steps 1 (who asked is read: `AgentSession.CreatorID/AssigneeID/DelegateID`,
+`AgentSession.Owner`) and 2 (`[linear_agent].user_id` and
+`only_when_assigned_to_me`, one resolved owner per session). Not done yet:
+3 (doctor setup check), 4 (secret-free login and refresh), 5 (hub routing),
+6 (missed replies), 7 (owner in the UIs). The owner filter is config.toml only;
+the settings forms do not edit it yet.

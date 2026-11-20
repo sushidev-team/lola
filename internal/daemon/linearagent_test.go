@@ -643,3 +643,28 @@ func TestLinearAgentRespectsInFlightReservations(t *testing.T) {
 		t.Fatalf("reservation leaked: %d", g)
 	}
 }
+
+// With a shared app token, only the session's single owner acts: Ben mentions
+// lola on Ana's issue (delegate = lola itself), so Ana's daemon spawns and
+// Ben's stays silent — never both.
+func TestLinearAgentOwnerFilterPicksOneDaemon(t *testing.T) {
+	p := config.Project{Name: "app", Path: "/tmp/app", Repo: "acme/app", DefaultBranch: "main", TeamID: "team-1"}
+	for _, tc := range []struct {
+		user  string
+		spawn int
+	}{{"ana", 1}, {"ben", 0}} {
+		d, api, nat := agentDaemon(t, p)
+		d.cfg.LinearAgent.OnlyWhenAssignedToMe = true
+		d.cfg.LinearAgent.UserID = tc.user
+		as := pendingSession("as-1", "ENG-7", "team-1")
+		as.CreatorID, as.AssigneeID, as.DelegateID = "ben", "ana", "agent-user"
+		api.sessions = []linear.AgentSession{as}
+		d.linearAgentCycle(context.Background())
+		if got := len(nat.spawnCalls()); got != tc.spawn {
+			t.Fatalf("%s: spawns = %d, want %d", tc.user, got, tc.spawn)
+		}
+		if tc.spawn == 0 && len(api.kinds("as-1")) != 0 {
+			t.Fatalf("%s: a skipped session must stay unanswered, got %v", tc.user, api.kinds("as-1"))
+		}
+	}
+}
