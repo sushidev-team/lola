@@ -115,6 +115,12 @@ Reuse the hub chore model instead of inventing one:
   branch.
 - Lease semantics as for hub chores: a daemon that does not ack in N seconds
   (before any spawn) loses the lease and the hub offers the next candidate.
+- Fencing: every grant carries a monotonically increasing epoch. Just before
+  `openTicket` the daemon asks the hub to authorize the spawn for that epoch;
+  the hub refuses a stale epoch, so an expired owner that wakes up late neither
+  spawns nor posts. After authorization the hub does not reassign: a lost
+  daemon is reconciled (session present or not) before any new grant, and the
+  new owner binds to a surviving lola session rather than spawning again.
 
 ### Token model (pick one; recommended first)
 A. **Per-member OAuth install**: each member runs `lola linear-agent login`
