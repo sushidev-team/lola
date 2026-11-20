@@ -106,6 +106,14 @@ describe('Project Git workspace', () => {
     await waitFor(() => expect(api.BranchAction).toHaveBeenCalledWith(project, '', expect.objectContaining({action:'pull',source:'refs/heads/main',sourceSHA:newSHA})));
     expect(api.Pull).not.toHaveBeenCalled();
   });
+  it('only announces the completed pull when Lola can stash and restore local changes', async () => {
+    api.BranchAction.mockRejectedValueOnce(new Error('commit or stash this checkout’s changes before integrating branches'));
+    await open();
+    const flash = vi.spyOn(store, 'setFlash');
+    await fireEvent.click(screen.getByRole('button', {name:'Pull'}));
+    await waitFor(() => expect(flash).toHaveBeenCalledWith('Branch updated; local changes restored.'));
+    expect(flash).toHaveBeenCalledTimes(1);
+  });
   it.each(['branch has diverged', 'push rejected (non-fast-forward)'])('offers a working Pull changes button after %s', async error => {
     api.BranchAction.mockRejectedValueOnce(new Error(error));
     await open();
