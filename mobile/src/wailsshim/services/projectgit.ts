@@ -190,6 +190,16 @@ export function StartAICommit(_project: string, _worktree: string, _token: strin
   return unsupported("ProjectGitService.StartAICommit", MAC_ONLY);
 }
 
+/** PLATFORM. */
+export function ApplyPortSetup(_project: string, _token: string, _changes: M.PortSetupChange[] | null): Promise<void> {
+  return unsupported("ProjectGitService.ApplyPortSetup", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function SuggestPortSetup(_project: string): Promise<M.PortSetupPlan> {
+  return unsupported("ProjectGitService.SuggestPortSetup", MAC_ONLY);
+}
+
 /** FORWARDED. */
 export function StashApply(project: string, worktree: string, sha: string, expectedHead: string, pop: boolean): Promise<void> {
   // Pop removes the entry, so it rides the discard tier like StashDrop.
@@ -238,6 +248,7 @@ export function Unstage(project: string, worktree: string, paths: string[] | nul
 
 export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   AcceptAICommitExclusions: { kind: "platform", reason: MAC_ONLY },
+  ApplyPortSetup: { kind: "platform", reason: MAC_ONLY },
   AICommitStatus: { kind: "platform", reason: MAC_ONLY },
   ApplyPortSetup: { kind: "platform", reason: MAC_ONLY },
   SuggestPortSetup: { kind: "platform", reason: MAC_ONLY },
@@ -271,6 +282,7 @@ export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   Snapshot: { kind: "fwd", cmd: "projectGit" },
   Stage: { kind: "fwd", cmd: "projectGitAct" },
   StartAICommit: { kind: "platform", reason: MAC_ONLY },
+  SuggestPortSetup: { kind: "platform", reason: MAC_ONLY },
   StashApply: { kind: "fwd", cmd: "projectGitAct" },
   StashDrop: { kind: "fwd", cmd: "projectGitDiscard" },
   StashPush: { kind: "fwd", cmd: "projectGitAct" },
