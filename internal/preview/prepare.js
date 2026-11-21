@@ -305,6 +305,11 @@
   // appears is reported rather than guessed at. Layout settles (fonts, images), so
   // the outlines are drawn again.
   // The marks as they are right now (the capture asks again just before the shot).
+  // Whether the page is ready right now (waitFor present, every mark findable).
+  window.__lolaReady = function (spec) {
+    return ready(spec && typeof spec === "object" ? spec : {});
+  };
+
   window.__lolaCheck = function (spec) {
     spec = spec && typeof spec === "object" ? spec : {};
     return apply(spec, false);

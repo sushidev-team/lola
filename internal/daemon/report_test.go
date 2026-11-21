@@ -220,7 +220,9 @@ func TestReportPortsIsARequestNotAnAction(t *testing.T) {
 }
 
 func TestReportDevStartIsARequestNotAnAction(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	p := nativePoll("p1")
+	p.DevCommands = []string{"npm run dev"}
+	d := newTestDaemon(t, nativeTestConfig(p), &linear.Fake{}, &fakeNative{})
 	s := nativeSess("FE-1", "working")
 	d.sessions.Upsert(s)
 
@@ -239,5 +241,18 @@ func TestReportDevStartIsARequestNotAnAction(t *testing.T) {
 	}
 	if resp := d.handle(context.Background(), reportReq(t, "unknown-id", "devstart", "why")); resp.OK {
 		t.Error("an unknown session was accepted")
+	}
+}
+
+func TestReportDevStartNeedsDevCommands(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	d.sessions.Upsert(s)
+	resp := d.handle(context.Background(), reportReq(t, s.ID, "devstart", "why"))
+	if resp.OK || !strings.Contains(resp.Error, "dev_commands") {
+		t.Fatalf("a request nobody can see was accepted: %+v", resp)
+	}
+	if got, _ := d.sessions.Get(s.ID); got.DevStartAsk != "" {
+		t.Error("the request was stored")
 	}
 }

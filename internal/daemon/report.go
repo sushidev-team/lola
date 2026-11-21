@@ -273,8 +273,16 @@ func (d *Daemon) handleReportDevStart(req protocol.Request, words []string) prot
 	if len(why) > maxPortAskBytes {
 		why = strings.ToValidUTF8(why[:maxPortAskBytes], "")
 	}
-	if _, ok := d.sessions.Get(req.Session); !ok {
+	s, ok := d.sessions.Get(req.Session)
+	if !ok {
 		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
+	}
+	// The Dev panel (and so the request) only exists for a session with dev commands.
+	d.mu.Lock()
+	cfg, home := d.cfg, d.home
+	d.mu.Unlock()
+	if len(devPlanOf(cfg, s, home)) == 0 {
+		return protocol.Response{OK: false, Error: "agentReport: devstart: this project configures no dev_commands, so there is no dev server to start; ask the human for an address instead"}
 	}
 	if !d.reports.allow(req.Session, time.Now()) {
 		return protocol.Response{OK: false, Error: errReportRateLimited.Error()}

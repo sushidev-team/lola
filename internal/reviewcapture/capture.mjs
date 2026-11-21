@@ -44,6 +44,8 @@ catch { throw new Error('Browser capture requires Playwright in this project and
       if (steps.length) await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
       if (!/^https?:\/\//.test(page.url())) throw new Error("Capture redirected outside HTTP(S).");
       // Ask again right before the shot: the outline must be on the page that is saved.
+      // waitFor is judged on the final document too: a step may have replaced the page.
+      if (input.waitFor && !(await page.evaluate(w => window.__lolaReady({ waitFor: w }), input.waitFor))) prepared.waited = true;
       if (input.marks && input.marks.length) prepared.found = await page.evaluate(m => window.__lolaCheck({ marks: m }), input.marks);
     }
     const target = input.selector ? page.locator(input.selector) : page;
