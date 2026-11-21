@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, type Snippet } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import { DaemonService } from '@bindings/desktop';
   import type { ReviewPackage } from '@bindings/internal/protocol';
   import { markLocation, markHit, markKind, validMark, arrowHead, simplifyStroke, type MarkKind, type ReviewMark } from '$lib/reviewmaterial';
+  import './annotation-editor.css';
   import SessionPreview from './SessionPreview.svelte';
   import { prepOf } from '$lib/preview.svelte';
   import { reviewLivePages, reviewSessionId } from '$lib/reviewworkspace.svelte';
@@ -10,7 +12,7 @@
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Select from '../Select.svelte';
-  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment, onToggleFeedback, compact = false }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void; onToggleFeedback?: () => void; compact?: boolean } = $props();
+  let { pkg, canComment = true, freshness = 'unknown', index = $bindable(0), onComment, onDeleteComment, onToggleFeedback, reviewAction, compact = false }: { pkg: ReviewPackage; freshness?: 'unknown' | 'stale' | 'current'; index?: number; canComment?: boolean; onComment: (screen: number, text: string, previous?: string) => boolean; onDeleteComment?: (screen: number, text: string) => void; onToggleFeedback?: () => void; compact?: boolean; reviewAction?: Snippet } = $props();
   // `compact` (the screenshots half of the Review screen) starts with the screen list folded away.
   let shortcutsOpen = $state(false);
   let root = $state<HTMLElement>();
@@ -20,7 +22,7 @@
     ['C', 'Comment (click or drag)'], ['R', 'Rectangle'], ['E', 'Ellipse'], ['A', 'Arrow'], ['L', 'Line'], ['P', 'Pen'], ['V / Esc', 'Cancel drawing'],
     ['↑ / ↓', 'Previous / next screenshot'], ['← / →', 'Move comparison divider'], ['N / Shift+N', 'Next / previous comment'],
     ['1 / 2', 'Slider / side by side'], ['3 / 4', 'Before / after'],
-    ['+ / − / 0', 'Zoom in / out / fit'], ['I', 'Screen details'], ['B', 'Checks & feedback'],
+    ['+ / − / 0', 'Zoom in / out / fit'], ['I', 'Show or hide review instruction'], ['B', 'Checks & feedback'],
     [saveKeys, 'Save comment'], ['Esc', 'Close comment'], ['⌘⌫ / ⌘Delete', 'Delete selected comment'], ['Delete', 'Delete focused comment'], ['?', 'Keyboard shortcuts'],
   ];
   const screens = $derived(pkg.screens ?? []);
@@ -28,6 +30,26 @@
   const live = $derived(reviewLivePages(pkg));
   const page = $derived(live.pages[index - screens.length]);
   const total = $derived(screens.length + live.pages.length);
+  const caption = $derived(screen?.caption || page?.caption || '');
+  const noteId = $props.id();
+  const noteStates = new SvelteMap<number, 'hidden' | 'pinned'>();
+  const noteVisible = $derived(!!caption && noteStates.get(index) !== 'hidden');
+  function toggleNote() {
+    noteStates.set(index, noteVisible ? 'hidden' : 'pinned');
+  }
+  function inspectUnderNote(event: PointerEvent) {
+    if (event.pointerType === 'mouse' && !noteStates.has(index)) noteStates.set(index, 'hidden');
+  }
+  let returnScreen = $state(-1);
+  const liveIndex = $derived(screen ? live.screenPages[index] : index - screens.length);
+  const screenshotIndex = $derived(screen ? index : returnScreen >= 0 && live.screenPages[returnScreen] === liveIndex
+    ? returnScreen : live.screenPages.indexOf(liveIndex));
+  const pairedScreen = $derived(screens[screenshotIndex]);
+  function openLive() {
+    if (!screen || liveIndex < 0) return;
+    returnScreen = index;
+    index = screens.length + liveIndex;
+  }
   // Prewarm the screenshot's related page and retain visited documents while
   // this package is open. Screenshots keep their own indexes for annotations.
   let warmed = $state<number[]>([]);
@@ -45,6 +67,7 @@
   } catch { /* storage unavailable — keep the default */ }
   let mode = $state('slider');
   function chooseMode(value: string) {
+    index = screenshotIndex;
     preferredMode = value; mode = value; tool = 'view';
     // Temporary switches for annotations or missing baselines aren't preferences.
     try { localStorage.setItem(modeKey, value); } catch { /* remember for this review */ }
@@ -207,6 +230,11 @@
     }
     closeComment(restoreFocus);
     return true;
+  }
+  function goToPage(next: number) {
+    if (editing && !requestClose(false)) return;
+    index = next;
+    focusCanvas();
   }
   function focusCanvas() { void tick().then(() => root?.focus({preventScroll:true})); }
   function deleteComment(comment = active) {
@@ -381,11 +409,19 @@
       return;
     }
     if (typing) return;
+    if (e.key.toLowerCase() === 'i' && caption && !editing) {
+      consume(); toggleNote(); return;
+    }
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       consume();
+      goToPage(Math.max(0, Math.min(total - 1, index + (e.key === 'ArrowUp' ? -1 : 1))));
+      return;
+    }
+    if (/^[1-4]$/.test(e.key) && pairedScreen) {
+      consume();
       if (editing && !requestClose(false)) return;
-      index = Math.max(0, Math.min(total - 1, index + (e.key === 'ArrowUp' ? -1 : 1)));
-      focusCanvas();
+      const choice = modes[Number(e.key) - 1];
+      if (pairedScreen.before || choice.id === 'after') chooseMode(choice.id);
       return;
     }
     if (!screen) return;
@@ -403,7 +439,7 @@
       if (mode === 'slider') { consume(); split = Math.max(0,Math.min(100,split+(key === 'arrowleft' ? -5 : 5))); }
       return;
     }
-    if (!['c','r','e','a','l','p','v','b','n','arrowup','arrowdown','1','2','3','4'].includes(key)) return;
+    if (!['c','r','e','a','l','p','v','b','n'].includes(key)) return;
     // Never bypass the unsaved-changes prompt by switching tools or images.
     consume();
     if (editing && !requestClose(false)) return;
@@ -416,11 +452,7 @@
       case 'v': cancelTool(); break;
       case 'b': onToggleFeedback?.(); break;
       case 'n': if (canComment) nextComment(e.shiftKey ? -1 : 1); break;
-      case '1': case '2': case '3': case '4': {
-        const mode = ['slider','split','before','after'][Number(key)-1];
-        if (screen.before || mode === 'after') chooseMode(mode);
-        break;
-      }
+
     }
   }
 </script>
@@ -446,32 +478,43 @@
       e.preventDefault(); root?.focus({preventScroll:true});
     }
   }}>
-  <div class="tools">
-    <div class="tool-group">
-      <Button icon size="sm" aria-label="Previous" title="Previous screen · ↑" aria-keyshortcuts="ArrowUp" disabled={index === 0} onclick={() => index--}><Icon name="chevron-up" size={15} /></Button>
-      <span class="screen-count">{index+1} / {total}</span>
-      <Button icon size="sm" aria-label="Next" title="Next screen · ↓" aria-keyshortcuts="ArrowDown" disabled={index >= total-1} onclick={() => index++}><Icon name="chevron-down" size={15} /></Button>
+  <header class="tools" aria-label="Review view controls">
+    <div class="screen-name">
+      <Icon name={screen ? 'image' : 'globe'} size={15} class="text-info" />
+      <strong title={screen?.title ?? page?.title}>{screen?.title ?? page?.title}</strong>
+      {#if caption}
+        <Button icon size="xs" aria-label="Review instruction" aria-expanded={noteVisible} aria-controls={noteId} aria-keyshortcuts="i" title={`${noteVisible ? 'Hide' : 'Show'} review instruction · I`} onclick={toggleNote}><Icon name="info" size={14} /></Button>
+      {/if}
     </div>
-    {#if screen}
-    <div class="tool-group comparison" aria-label="Comparison mode">
-      {#each modes as item,i}
-        <Button icon size="sm" aria-label={item.label} title={`${item.label} · ${i+1}`} aria-keyshortcuts={String(i+1)} selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => chooseMode(item.id)}><Icon name={item.icon} size={15} /></Button>
+    <div class="comparison" role="group" aria-label="Comparison mode">
+      {#each pairedScreen ? modes : [] as item,i}
+        <Button size="xs" aria-label={item.label} title={`${item.label} · ${i+1}`} aria-keyshortcuts={String(i+1)} aria-pressed={!!screen && mode === item.id} selected={!!screen && mode === item.id} disabled={item.id !== 'after' && !pairedScreen?.before} onclick={() => chooseMode(item.id)}>
+          <Icon name={item.icon} size={14} /><span class="mode-name">{item.label}</span>
+        </Button>
       {/each}
+      {#if liveIndex >= 0 && !touchSurface()}
+        <Button size="xs" aria-label="Open live" title="Open the prepared live view" aria-pressed={!!page} selected={!!page} onclick={openLive}><Icon name="globe" size={14} /><span class="mode-name">Live</span></Button>
+      {/if}
     </div>
-    <div class="tool-group">
-      {#if marks.length && canComment}<Button size="sm" aria-label="Next comment" title="Next comment · N / Previous · Shift+N" aria-keyshortcuts="n Shift+n" onclick={() => nextComment()}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
-            {#if canComment}<div class="tool-group draw-tools" role="group" aria-label="Annotation tools">{#each drawTools as t}<Button icon size="sm" selected={tool === t.id} disabled={!after} aria-label={t.label} title={`${t.title} · ${t.key.toUpperCase()}`} aria-keyshortcuts={t.key} onclick={() => armTool(t.id)}><Icon name={t.icon} size={15} /></Button>{/each}</div>{/if}
+    <div class="review-pager" role="group" aria-label="Review pages">
+      <Button icon size="sm" variant="bare" class="page-arrow" aria-label="Previous" title="Previous page · ↑" aria-keyshortcuts="ArrowUp" disabled={index === 0} onclick={() => goToPage(index - 1)}><Icon name="chevron-up" size={18} /></Button>
+      <span class="page-count" role="status" aria-label={`Page ${index + 1} of ${total}`}>
+        <strong>{index + 1}</strong><span class="page-divider">/</span>{total}
+      </span>
+      <Button icon size="sm" variant="bare" class="page-arrow" aria-label="Next" title="Next page · ↓" aria-keyshortcuts="ArrowDown" disabled={index === total - 1} onclick={() => goToPage(index + 1)}><Icon name="chevron-down" size={18} /></Button>
     </div>
-    {:else if page}
-      <span class="mr-auto truncate text-sm text-ink">{page.title} · Live</span>
-    {/if}
-  </div>
+  </header>
+  {#if caption}
+    <aside class="review-note" id={noteId} aria-label="Review instruction" hidden={!noteVisible} onpointermove={inspectUnderNote}>
+      {caption}
+    </aside>
+  {/if}
   {#each warmed as n (n)}
     {@const entry = live.pages[n]}
     {@const visible = index === screens.length + n}
     {#if entry}
       <div class="live-item" class:parked={!visible} inert={!visible} aria-hidden={!visible}>
-        <SessionPreview inline={{sessionId: reviewSessionId(pkg.session), url: entry.url, caption: entry.caption, prep: prepOf(entry)}} resumeKey={JSON.stringify([pkg.session, pkg.id, n])} active={visible} />
+        <SessionPreview {canComment} inline={{sessionId: reviewSessionId(pkg.session), url: entry.url, caption: entry.caption, prep: prepOf(entry)}} resumeKey={JSON.stringify([pkg.session, pkg.id, n])} active={visible} reviewAction={visible ? reviewAction : undefined} />
       </div>
     {/if}
   {/each}
@@ -534,7 +577,21 @@
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
-  <p class="screen-title" title={[screen.caption,screen.url,screen.viewport].filter(Boolean).join(" · ") || undefined}><span class="screen-title-text">{screen.title}</span>{#if live.screenPages[index] >= 0 && !touchSurface()}<Button size="xs" class="pointer-events-auto shrink-0" title={`Open ${screen.url} in the preview`} onclick={() => index = screens.length + live.screenPages[index]}>Open live<Icon name="arrow-right" size={14} /></Button>{/if}</p>
+    {#if canComment || reviewAction}
+      <div class="review-dock draw-tools" role="group" aria-label="Annotation tools">
+        {#if canComment}
+          {#if marks.length}
+            <Button size="xs" aria-label="Next comment" title="Next comment · N / Previous · Shift+N" aria-keyshortcuts="n Shift+n" onclick={() => nextComment()}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>
+          {/if}
+          {#each drawTools as t}
+            <Button icon={t.id !== 'pin'} size="sm" selected={tool === t.id} disabled={!after} aria-label={t.label} title={`${t.title} · ${t.key.toUpperCase()}`} aria-keyshortcuts={t.key} onclick={() => armTool(t.id)}>
+              <Icon name={t.icon} size={15} />{#if t.id === 'pin'}<span class="pin-label">Add pin</span>{/if}
+            </Button>
+          {/each}
+        {/if}
+        {@render reviewAction?.()}
+      </div>
+    {/if}
   <div class="view-overlay">
     {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
       <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
@@ -560,14 +617,34 @@
 {/if}
 
 <style>
-  .canvas { min-width:0; height:100%; display:grid; grid-template-rows:auto minmax(0,1fr); }
-  .canvas { isolation:isolate; }
+  .canvas { min-width:0; height:100%; display:grid; grid-template: auto minmax(0,1fr) / minmax(0,1fr); container-type:inline-size; isolation:isolate; }
   .canvas-body, .live-item { grid-area:2 / 1; min-height:0; min-width:0; }
   .live-item.parked { opacity:0; pointer-events:none; z-index:-1; }
   .canvas:focus { outline:none; }
-  .tools { position:relative; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
-  .screen-title { position:absolute; z-index:6; left:12px; bottom:12px; max-width:calc(50% - 110px); margin:0; padding:5px 10px; display:flex; align-items:center; gap:6px; border-radius:8px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); font-size:12px; color:var(--color-ink-2); white-space:nowrap; pointer-events:none; }
-  .screen-title-text { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .tools { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; gap:4px 12px; padding:6px 12px; background:var(--color-panel); border-bottom:1px solid var(--color-edge); }
+  .screen-name { display:flex; align-items:center; gap:7px; min-width:0; }
+  .screen-name strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:600; color:var(--color-ink); }
+  .review-note { grid-area:2 / 1; place-self:start; z-index:3; margin:12px; max-width:min(64ch,calc(100% - 24px)); max-height:45%; overflow:auto; overflow-wrap:anywhere; white-space:pre-line; padding:8px 12px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 3px 12px #0003; color:var(--color-ink); font-size:13px; line-height:1.45; }
+  .review-pager { justify-self:end; display:flex; align-items:center; gap:3px; padding:1px 2px; border-radius:8px; background:var(--color-accent-fill); color:var(--color-accent-ink); }
+  .page-count { display:flex; align-items:baseline; justify-content:center; gap:4px; min-width:32px; font-size:13px; line-height:1; font-variant-numeric:tabular-nums; }
+  .page-count strong { font-weight:700; }
+  .page-divider { opacity:.65; }
+  .review-pager :global(.page-arrow:disabled) { opacity:.52; }
+  .review-pager :global(.page-arrow:enabled:hover) { background:var(--color-accent-fill-hover); }
+  .review-pager :global(.page-arrow:focus-visible) { outline:2px solid var(--color-accent); outline-offset:-2px; }
+  .comparison { justify-self:center; display:flex; align-items:center; padding:2px; border:1px solid var(--color-edge); border-radius:7px; background:var(--color-canvas); }
+  .canvas :global(.review-dock) { position:absolute; z-index:4; bottom:12px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:2px; width:max-content; max-width:calc(100% - 16px); flex-wrap:wrap; justify-content:center; padding:3px; border:1px solid var(--color-edge); border-radius:9px; background:var(--color-panel); box-shadow:0 4px 16px #0005; }
+  @container (max-width: 900px) {
+    .mode-name, .pin-label { display:none; }
+  }
+  @container (max-width: 700px) {
+    .canvas .draw-tools { bottom:54px; }
+  }
+  @container (max-width: 620px) {
+    .tools { grid-template-columns:minmax(0,1fr) auto; gap:4px; padding:5px 8px; }
+    .comparison { grid-column:1 / -1; grid-row:2; }
+    .review-pager { grid-column:2; grid-row:1; }
+  }
   .view-overlay { position:absolute; z-index:6; right:12px; bottom:12px; display:flex; align-items:center; gap:4px; padding:3px; border:1px solid var(--color-edge); border-radius:10px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); box-shadow:0 4px 16px #0005; }
   .view-overlay :global(.lola-select) { width:72px; }
   .view-overlay :global(.lola-field) { border-color:transparent; background:transparent; box-shadow:none; }
@@ -581,10 +658,6 @@
   .shortcut-help kbd { display:inline-block; min-width:5.5rem; flex-shrink:0; padding:1px 8px; border:1px solid var(--color-edge); border-radius:4px; background:var(--color-canvas); color:var(--color-accent-ink); font-family:var(--font-mono); font-size:12px; text-align:center; white-space:nowrap; }
   .shortcut-help p { margin-top:10px; color:var(--color-ink-2); font-size:11px; }
   .tool-group { display:flex; align-items:center; gap:3px; }
-  .comparison { padding:2px; border-radius:6px; background:var(--color-canvas); }
-  .screen-count { color:var(--color-faint); font-size:12px; min-width:32px; text-align:center; }
-  .tools :global(.lola-select) { width:78px; }
-  .tools :global(select) { height:28px; padding-top:2px; padding-bottom:2px; }
   .canvas-body { display:grid; grid-template-columns:minmax(0,1fr); min-height:0; }
   .canvas-area { position:relative; min-width:0; min-height:0; }
   .viewport { height:100%; min-width:0; min-height:0; overflow:auto; overflow-anchor:none; background:var(--color-canvas); padding:16px; display:flex; }
@@ -612,18 +685,6 @@
   .region.ellipse { border-radius:50%; }
   .region { position:absolute; border:2px solid var(--color-accent); background:color-mix(in srgb,var(--color-accent) 12%,transparent); pointer-events:none; }
   .region-hit { pointer-events:auto; cursor:pointer; }
-  .annotation-editor { position:absolute; z-index:5; width:min(300px,calc(100% - 24px)); max-height:calc(100% - 24px); overflow:auto; padding:10px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; animation:comment-open 150ms cubic-bezier(.16,1,.3,1); }
-  .editor-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
-  .editor-heading label { display:flex; align-items:center; gap:8px; margin:0; }
-  .editor-side { color:var(--color-faint); font-size:11px; }
-  .editor-controls { display:flex; align-items:center; gap:2px; }
-  .save-question { margin:0 0 8px; font-size:12px; color:var(--color-ink); }
-  .editor-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:8px; }
-  @keyframes comment-open { from { opacity:.6; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
-  @media(prefers-reduced-motion:reduce) { .annotation-editor { animation:none; } }
   .canvas-notice { position:absolute; bottom:12px; left:12px; max-width:calc(100% - 24px); padding:8px 12px; font-size:12px; color:var(--color-ink-2); border:1px solid var(--color-edge); border-radius:6px; background:var(--color-panel); pointer-events:none; }
-  label { display:block; font-size:12px; color:var(--color-ink-2); margin-bottom:8px; }
-  textarea { display:block; width:100%; padding:10px; margin-bottom:10px; background:var(--color-canvas); border:1px solid var(--color-edge); border-radius:6px; color:var(--color-ink); resize:vertical; font-size:13px; }
   .annotation-surface:focus-visible,.comparison-drag:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
-  @media(max-width:900px) { .tools { gap:6px; padding:6px; flex-wrap:wrap; } .comparison { order:3; flex:1; justify-content:center; } .viewport { padding:16px; } }
 </style>

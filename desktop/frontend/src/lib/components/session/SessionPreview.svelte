@@ -14,9 +14,11 @@
   // element plus the human's note goes to the agent as feedback, through the
   // same deferred hand-off gate as diff comments — this component never types
   // into a pane itself.
-  import { onMount, untrack } from "svelte";
+  import { onMount, tick, untrack, type Snippet } from "svelte";
   import { DaemonService, PreviewService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
+  import { feedback, type ElementDraft } from "$lib/feedback.svelte";
+  import "./annotation-editor.css";
   import { devUrlGroups, devUrlLabel } from "$lib/devurl";
   import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, type PickedElement, type PreviewRequest, type ViewportId } from "$lib/preview.svelte";
   import Modal from "../Modal.svelte";
@@ -26,7 +28,7 @@
 
   // The canvas keys this instance by immutable package and page. A workspace
   // refresh must not restart a live sign-in while the reviewer is looking at it.
-  let { inline, active = true, resumeKey }: { inline?: PreviewRequest; active?: boolean; resumeKey?: string } = $props();
+  let { inline, active = true, canComment = true, resumeKey, reviewAction }: { inline?: PreviewRequest; reviewAction?: Snippet; active?: boolean; canComment?: boolean; resumeKey?: string } = $props();
   const inlinePage = untrack(() => inline);
   const req = $derived(inlinePage ?? preview.request);
 
@@ -35,10 +37,45 @@
   const frameOrigin = $derived(src ? new URL(src).origin : "");
   let error = $state("");
   let viewport = $state<ViewportId>(DEFAULT_VIEWPORT);
+  const viewportIcons = { mobile: "smartphone", tablet: "tablet", desktop: "monitor" } as const;
   let picking = $state(false);
   let picked = $state<PickedElement | null>(null);
   let note = $state("");
   let sending = $state(false);
+  const commentId = $props.id();
+  let editor = $state<HTMLDivElement>();
+  let stage = $state<HTMLDivElement>();
+  let confirmDiscard = $state(false);
+  let saveError = $state("");
+  type Rect = { x: number; y: number; w: number; h: number };
+  type CommentRect = Rect & { number: number };
+  let bounds = $state<Rect>();
+  let editingDraft = $state.raw<ElementDraft>();
+  const drafts = $derived(inlinePage ? feedback.elementsFor(inlinePage.sessionId) : []);
+  let commentRects = $state.raw<CommentRect[]>([]);
+  let revision = 0;
+  let trackedNumbers = new Set<number>();
+  let position = $state({ left: 12, top: 12 });
+  $effect(() => {
+    const rect = editingDraft ? commentRects.find(r => drafts[r.number - 1] === editingDraft) : bounds;
+    const popup = editor, area = stage, iframe = frame;
+    if (!popup || !area || !iframe) return;
+    function align() {
+      const a = area!.getBoundingClientRect(), f = iframe!.getBoundingClientRect();
+      const w = popup!.offsetWidth, h = popup!.offsetHeight, gap = 12;
+      const x = f.left - a.left + (rect?.x ?? 0), y = f.top - a.top + (rect?.y ?? 0);
+      const right = x + (rect?.w ?? 0) + gap, below = y + (rect?.h ?? 0) + gap;
+      const beside = right + w <= a.width - gap || x - w >= 2 * gap;
+      const left = beside ? (right + w <= a.width - gap ? right : x - w - gap) : x;
+      const top = beside ? y : below + h <= a.height - gap ? below : y - h - gap;
+      position = { left: Math.max(gap, Math.min(left, a.width - w - gap)), top: Math.max(gap, Math.min(top, a.height - h - gap)) };
+    }
+    const observer = new ResizeObserver(align);
+    observer.observe(area); observer.observe(iframe); observer.observe(popup);
+    area.addEventListener("scroll", align, true);
+    align();
+    return () => { observer.disconnect(); area.removeEventListener("scroll", align, true); };
+  });
   let reload = $state(0);
   // What the agent prepared for the active page, and what the page said about it.
   let prepared = $state<{ found: boolean[]; waited: boolean } | null>(null);
@@ -53,6 +90,28 @@
   let entryPath = "";
   let firstDocumentPath = "";
   let documentId = $state("");
+  $effect(() => {
+    const win = frame?.contentWindow, origin = frameOrigin, doc = documentId;
+    commentRects = [];
+    if (!inlinePage || !active || !win || !origin || !doc) return;
+    const devOrigin = new URL(inlinePage.url).origin;
+    const anchors = drafts.flatMap((draft, i) => {
+      if (!draft.url || (draft.reviewKey && draft.reviewKey !== resumeKey)) return [];
+      try {
+        const url = new URL(draft.url);
+        return url.origin === devOrigin ? [{ number: i + 1, path: url.pathname + url.search, selector: draft.selector }] : [];
+      } catch { return []; }
+    });
+    if (!anchors.length) return;
+    trackedNumbers = new Set(anchors.map(a => a.number));
+    const message = { target: PICKER_SOURCE, type: "comment-anchors", documentId: doc, revision: ++revision };
+    win.postMessage({ ...message, anchors }, origin);
+    return () => {
+      revision++;
+      trackedNumbers.clear();
+      win.postMessage({ ...message, anchors: [] }, origin);
+    };
+  });
   let restoring = false;
   const finalRoute = $derived.by(() => {
     const p = inlinePage?.prep;
@@ -146,6 +205,7 @@
     src = "";
     error = "";
     picked = null;
+    editingDraft = undefined;
     picking = false;
     prepared = null;
     stepFailure = null;
@@ -216,7 +276,7 @@
   }
 
   function frameLoaded() {
-    if (replay && frameOrigin && frameOrigin !== "null") {
+    if ((replay || inlinePage) && frameOrigin && frameOrigin !== "null") {
       frame?.contentWindow?.postMessage({ target: PICKER_SOURCE, type: "hello" }, frameOrigin);
     }
   }
@@ -226,8 +286,8 @@
   }
 
   function togglePick() {
+    if (picked || !canComment) return;
     picking = !picking;
-    if (picking) picked = null;
     tell(picking);
   }
 
@@ -237,6 +297,10 @@
       if (!frame || e.source !== frame.contentWindow || !src || e.origin !== frameOrigin) return;
       const d = e.data as { source?: string; type?: string; id?: number; documentId?: string; picking?: boolean; url?: string; found?: unknown; waited?: unknown; i?: unknown; failed?: { index?: unknown; step?: unknown; why?: unknown } | null } | null;
       if (d?.source === PICKER_SOURCE && d.type === "mode") picking = !!d.picking;
+      if (inlinePage && active && d?.source === PICKER_SOURCE && d.type === "comment-bounds" && e.data.revision === revision && Array.isArray(e.data.rects)) {
+        commentRects = e.data.rects.slice(0, 10).filter((r: CommentRect) =>
+          r && trackedNumbers.has(r.number) && [r.x, r.y, r.w, r.h].every(Number.isFinite) && r.w > 0 && r.h > 0);
+      }
       if (d?.source === PICKER_SOURCE && d.type === "ready") {
         if (d.documentId && d.documentId === documentId) return;
         documentId = d.documentId ?? "";
@@ -282,10 +346,13 @@
         showExitHint();
         return;
       }
+      if (d?.source === PICKER_SOURCE && d.type === "selection-bounds" && picked) {
+        const r = e.data.rect;
+        if (r && [r.x, r.y, r.w, r.h].every(Number.isFinite)) bounds = { x: r.x, y: r.y, w: r.w, h: r.h };
+      }
       const p = parsePick(e.data);
-      if (p) {
-        picked = p;
-        note = "";
+      if (p && picking && active && canComment && !picked) {
+        openComment(p);
       }
     };
     window.addEventListener("message", onMessage);
@@ -301,23 +368,82 @@
     };
   });
 
+  function openComment(p: PickedElement, draft?: ElementDraft) {
+    picked = p;
+    editingDraft = draft;
+    bounds = undefined;
+    confirmDiscard = false;
+    saveError = "";
+    note = draft?.note ?? "";
+    void tick().then(() => editor?.querySelector("textarea")?.focus({ preventScroll: true }));
+  }
+
+  function reopenComment(draft: ElementDraft) {
+    if (picked || !canComment) return;
+    if (picking) tell(false);
+    openComment({ url: draft.url ?? "", selector: draft.selector, html: draft.html ?? "", text: draft.text ?? "", tag: "" }, draft);
+  }
+
+  function finishComment() {
+    tell(false);
+    picked = null;
+    editingDraft = undefined;
+    note = "";
+    void tick().then(() => surface?.querySelector<HTMLButtonElement>('[aria-label="Inspect element"]')?.focus({ preventScroll: true }));
+  }
+
+  function closeComment() {
+    if (sending) return;
+    if (note.trim() !== (editingDraft?.note ?? "")) confirmDiscard = true;
+    else finishComment();
+  }
+
+  function deleteComment() {
+    if (!inlinePage || !canComment || sending) return;
+    if (editingDraft) feedback.removeElement(inlinePage.sessionId, editingDraft);
+    finishComment();
+  }
+
+  function commentKey(e: KeyboardEvent) {
+    if (e.isComposing || e.repeat) return;
+    if (inlinePage && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === "Backspace" || e.key === "Delete")) {
+      e.preventDefault(); e.stopPropagation();
+      deleteComment();
+      return;
+    }
+    if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) {
+      e.preventDefault(); e.stopPropagation();
+      if (e.key === "Escape") closeComment();
+      else void send();
+    }
+  }
+
   async function send() {
-    if (!req || !picked || sending || !note.trim()) return;
+    if (!req || !picked || !canComment || sending || !note.trim()) return;
     sending = true;
+    const element = { url: devPageURL(picked.url, req.url), selector: picked.selector, html: picked.html, text: picked.text, note: note.trim() };
     try {
-      const r = await DaemonService.SendFeedback({
-        session: req.sessionId,
-        elements: [{ url: devPageURL(picked.url, req.url), selector: picked.selector, html: picked.html, text: picked.text, note: note.trim() }],
-      });
-      store.setFlash(r?.delivered ? "element sent to the agent" : "element queued — it is sent when the agent is at its prompt", r?.delivered ? "good" : "warn");
-      picked = null;
-      note = "";
-      void store.refresh();
+      if (inlinePage) {
+        if (!editingDraft || editingDraft.note !== note.trim()) {
+          feedback.addElement(req.sessionId, { ...element, reviewKey: resumeKey }, editingDraft);
+          store.setFlash("Comment saved to review feedback.", "good");
+        }
+      } else {
+        const r = await DaemonService.SendFeedback({ session: req.sessionId, elements: [element] });
+        store.setFlash(r?.delivered ? "element sent to the agent" : "element queued — it is sent when the agent is at its prompt", r?.delivered ? "good" : "warn");
+        void store.refresh();
+      }
+      finishComment();
     } catch (e) {
-      store.setFlash(String(e), "bad");
+      saveError = String(e);
     } finally {
       sending = false;
     }
+  }
+
+  function replayView() {
+    if (stalled || stepFailure || req?.prep?.steps?.length) replayFromStart();
+    else prepare();
   }
 
   function close() {
@@ -335,59 +461,93 @@
       <h2 class="drag mr-auto self-stretch content-center text-lg text-ink">Preview</h2>
       <Tabs tabs={VIEWPORTS.map((v) => ({ id: v.id, label: v.label }))} ariaLabel="Viewport" active={viewport} onSelect={(id) => (viewport = id as ViewportId)} pill />
       <div class="ml-auto flex items-center gap-1 sm:ml-0">
-        <Button size="xs" selected={picking} disabled={!src} title="Click an element in the page to send it to the agent" onclick={togglePick}>Pick element</Button>
+        <Button size="xs" selected={picking} disabled={!src || !!picked} title="Click an element in the page to send it to the agent" onclick={togglePick}>Pick element</Button>
         <Button size="xs" icon disabled={!src} aria-label="Reload" title="Reload" onclick={() => reload++}><Icon name="refresh-cw" size={14} /></Button>
         <Button size="xs" icon aria-label="Open in external browser" title="Open in external browser" onclick={() => store.openURL(req!.url)}><Icon name="external-link" size={14} /></Button>
       </div>
     </div>
   {/snippet}
+  {#snippet issues()}
+    {#if stepFailure}<p class="text-sm text-warn" role="status">Step {stepFailure.index + 1} ({stepFailure.step}) didn't work: {stepFailure.why}</p>{/if}
+    {#if missing.length}<p class="text-sm text-warn" role="status">Not found on the page: {missing.join(", ")}</p>{/if}
+    {#if prepared?.waited && !missing.length}<p class="text-sm text-warn" role="status">The page did not reach the saved review target.</p>{/if}
+    {#if stalled}<p class="text-sm text-warn" role="status">{documentId ? "The page did not finish its saved steps. Retry to start again." : "The dev page did not connect to the preview. Check that its server is running, then retry."}</p>{/if}
+  {/snippet}
   {#snippet content(req: PreviewRequest)}
     <div bind:this={surface} tabindex="-1" class="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] outline-none" data-session-preview>
-      <nav aria-label="Dev servers" class="flex max-h-[30dvh] flex-wrap items-start gap-x-6 gap-y-2 overflow-y-auto border-b border-edge px-4 py-2">
-        {#if !inlinePage && preview.tabs.length > 1}
-          <div class="w-full" data-preview-tabs>
-            <Tabs tabs={preview.tabs.map((t, i) => ({ id: String(i), label: t.title || devUrlLabel(t.url) }))} ariaLabel="Open pages" active={String(preview.active)} onSelect={(id) => preview.select(Number(id))} pill />
-          </div>
-        {/if}
-        {#if req.caption || replay}
-          <div class="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-preview-prep>
-            <p class="min-w-0 flex-1 basis-60 text-sm wrap-anywhere text-ink">{req.caption ?? ""}{#if req.prep?.steps?.length}<span class="text-faint"> · it performs {req.prep.steps.length} {req.prep.steps.length === 1 ? "step" : "steps"} here (clicks, typing, sign-in) on this local address</span>{/if}</p>
-            {#if stepFailure}<p class="text-sm text-warn" role="status">Step {stepFailure.index + 1} ({stepFailure.step}) didn't work: {stepFailure.why}</p>{/if}
-            {#if missing.length}<p class="text-sm text-warn" role="status">Not found on the page: {missing.join(", ")}</p>{/if}
-            {#if prepared?.waited && !missing.length}<p class="text-sm text-warn" role="status">The page did not reach the saved review target.</p>{/if}
-            {#if stalled}<p class="text-sm text-warn" role="status">{documentId ? "The page did not finish its saved steps. Retry to start again." : "The dev page did not connect to the preview. Check that its server is running, then retry."}</p>{/if}
-            {#if replay}<Button size="xs" disabled={!src || preparing} onclick={() => { if (stalled || stepFailure || req.prep?.steps?.length) replayFromStart(); else prepare(); }}>{stalled || stepFailure ? "Retry" : "Show it again"}</Button>{/if}
-          </div>
-        {/if}
-        {#if inlinePage}
-          <Button size="xs" selected={picking} disabled={!src || preparing} onclick={togglePick}>Pick element</Button>
-        {:else}
-        {#each groups as group (group.name)}
-          <div role="group" aria-label={group.label || "Addresses"} class="grid min-w-0 max-w-full gap-0.5">
-            {#if group.label}<h3 class="px-1.5 text-sm font-medium text-ink">{group.label}</h3>{/if}
-            <div class="flex min-w-0 flex-wrap items-center gap-1">
-              {#each group.urls as url (url)}
-                <Button size="xs" selected={url === req.url} class="max-w-full font-mono!" title={url} onclick={() => preview.open(req.sessionId, url)}>
-                  <span class="truncate">{devUrlLabel(url)}</span>
-                </Button>
-              {/each}
+      {#if inlinePage}
+        <div class="review-issues">{@render issues()}</div>
+      {:else}
+        <nav aria-label="Dev servers" class="flex max-h-[30dvh] flex-wrap items-start gap-x-6 gap-y-2 overflow-y-auto border-b border-edge px-4 py-2">
+          {#if preview.tabs.length > 1}
+            <div class="w-full" data-preview-tabs>
+              <Tabs tabs={preview.tabs.map((t, i) => ({ id: String(i), label: t.title || devUrlLabel(t.url) }))} ariaLabel="Open pages" active={String(preview.active)} onSelect={(id) => preview.select(Number(id))} pill />
             </div>
-          </div>
-        {/each}
-        {/if}
-      </nav>
+          {/if}
+          {#if req.caption || replay}
+            <div class="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-preview-prep>
+              <p class="min-w-0 flex-1 basis-60 text-sm wrap-anywhere text-ink">{req.caption ?? ""}{#if req.prep?.steps?.length}<span class="text-faint"> · it performs {req.prep.steps.length} {req.prep.steps.length === 1 ? "step" : "steps"} here (clicks, typing, sign-in) on this local address</span>{/if}</p>
+              {@render issues()}
+              {#if replay}<Button size="xs" disabled={!src || preparing} onclick={replayView}>{stalled || stepFailure ? "Retry" : "Show it again"}</Button>{/if}
+            </div>
+          {/if}
+          {#each groups as group (group.name)}
+            <div role="group" aria-label={group.label || "Addresses"} class="grid min-w-0 max-w-full gap-0.5">
+              {#if group.label}<h3 class="px-1.5 text-sm font-medium text-ink">{group.label}</h3>{/if}
+              <div class="flex min-w-0 flex-wrap items-center gap-1">
+                {#each group.urls as url (url)}
+                  <Button size="xs" selected={url === req.url} class="max-w-full font-mono!" title={url} onclick={() => preview.open(req.sessionId, url)}>
+                    <span class="truncate">{devUrlLabel(url)}</span>
+                  </Button>
+                {/each}
+              </div>
+            </div>
+          {/each}
+        </nav>
+      {/if}
 
-      <div class="relative min-h-0 min-w-0">
-        <div class="absolute inset-0 grid place-items-center overflow-auto bg-canvas p-3">
+      <div bind:this={stage} class="relative min-h-0 min-w-0">
+        <div class="absolute inset-0 grid place-items-center overflow-auto bg-canvas {inlinePage ? 'grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]' : 'p-3'}">
           {#if error}
             <p class="text-sm text-bad" role="alert">{error} <Button size="xs" onclick={() => reload++}>Retry</Button></p>
           {:else if src}
-            <iframe bind:this={frame} {src} onload={frameLoaded} title="Preview of {devUrlLabel(req.url)}" class="rounded border border-edge bg-white" style={frameStyle(vp)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+            <iframe bind:this={frame} {src} onload={frameLoaded} title="Preview of {devUrlLabel(req.url)}" class="bg-white {inlinePage ? 'col-start-1 row-start-1 max-h-full max-w-full border-0' : 'rounded border border-edge'}" style={frameStyle(vp)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+            {#if inlinePage && commentRects.length && !preparing}
+              <div class="comment-layer" style={frameStyle(vp)}>
+                {#each commentRects as r,i}
+                  {@const draft = drafts[r.number - 1]}
+                  {@const slot = commentRects.slice(0, i).filter(other => Math.abs(other.x - r.x) < 24 && Math.abs(other.y - r.y) < 24).length}
+                  {#if draft}
+                    <div class="comment-border" class:focused={draft === editingDraft} style:left={`${r.x}px`} style:top={`${r.y}px`} style:width={`${r.w}px`} style:height={`${r.h}px`}></div>
+                    <button class="comment-pin" class:focused={draft === editingDraft} style:left={`clamp(0px, ${r.x + 4 + slot * 24}px, 100% - 22px)`} style:top={`clamp(0px, ${r.y - 11}px, 100% - 22px)`} aria-label={`Live comment ${r.number}`} aria-expanded={draft === editingDraft} title={draft.note} disabled={!canComment || !!picked} onclick={() => reopenComment(draft)}>{r.number}</button>
+                  {/if}
+                {/each}
+              </div>
+            {/if}
             {#if preparing}<div class="absolute inset-0 grid place-items-center bg-canvas" role="status"><span class="text-sm text-faint">Preparing live view…</span></div>{/if}
           {:else}
             <p class="text-sm text-faint">Starting preview…</p>
           {/if}
         </div>
+        {#if inlinePage}
+            <div class="review-dock" role="group" aria-label="Live page tools">
+              <div role="group" aria-label="Viewport size" class="mr-0.5 flex items-center border-r border-edge pr-1">
+                {#each VIEWPORTS as preset (preset.id)}
+                  {@const label = preset.id === "desktop" ? "Full width" : preset.label}
+                  <Button icon size="sm" selected={viewport === preset.id} aria-pressed={viewport === preset.id} aria-label={label} title={preset.width ? `${label} · ${preset.width} × ${preset.height}` : label} onclick={() => viewport = preset.id}>
+                    <Icon name={viewportIcons[preset.id]} size={15} />
+                  </Button>
+                {/each}
+              </div>
+              <Button size="sm" selected={picking} disabled={!src || preparing || !!picked || !canComment} aria-label="Inspect element" title="Inspect an element to send feedback" onclick={togglePick}>
+                <Icon name="square-mouse-pointer" size={15} /><span>Inspect</span>
+              </Button>
+              {#if replay}
+                <Button icon={!(stalled || stepFailure)} size="sm" disabled={!src || preparing || !!picked} aria-label={stalled || stepFailure ? "Retry preparation" : "Replay prepared view"} title={req.prep?.steps?.length ? `Replay ${req.prep.steps.length} saved ${req.prep.steps.length === 1 ? "step" : "steps"} on this local page` : "Show the prepared view again"} onclick={replayView}><Icon name="rotate-ccw" size={15} />{#if stalled || stepFailure}Retry{/if}</Button>
+              {/if}
+              {@render reviewAction?.()}
+            </div>
+        {/if}
         {#if exitHint}
           <div role="status" class="ssh-fade-in pointer-events-none absolute inset-0 z-10 grid place-items-center bg-black/35 p-4 motion-reduce:animate-none!">
             <p class="rounded-xl border border-edge bg-panel px-6 py-4 text-center text-xl leading-loose text-balance text-ink shadow-xl">
@@ -395,21 +555,30 @@
             </p>
           </div>
         {/if}
+        {#if picked}
+          <div class="annotation-editor" bind:this={editor} role="dialog" aria-label="Element comment" tabindex="-1" style:left={`${position.left}px`} style:top={`${position.top}px`} onkeydown={commentKey}>
+            <div class="editor-heading">
+              <label for={commentId}>Comment{editingDraft && drafts.includes(editingDraft) ? ` ${drafts.indexOf(editingDraft) + 1}` : ""}<span class="editor-side">Live</span></label>
+              <div class="editor-controls">
+                {#if inlinePage}
+                  <Button icon size="xs" variant="danger" disabled={sending || !canComment} aria-label="Delete comment" title="Delete comment · ⌘Backspace / ⌘Delete" aria-keyshortcuts="Meta+Backspace Meta+Delete" onclick={deleteComment}><Icon name="trash-2" size={14} /></Button>
+                {/if}
+                <Button icon size="xs" disabled={sending} aria-label="Close comment" title="Close comment · Esc" onclick={closeComment}><Icon name="x" size={14} /></Button>
+              </div>
+            </div>
+            <textarea id={commentId} rows="3" maxlength="2000" placeholder="What should change?" aria-label="Element comment" bind:value={note}></textarea>
+            {#if confirmDiscard}<p class="save-question">Save changes?</p>{/if}
+            <div class="editor-actions">
+              {#if confirmDiscard}
+                <Button size="xs" onclick={() => confirmDiscard = false}>Keep editing</Button>
+                <Button size="xs" variant="danger" onclick={finishComment}>Discard</Button>
+              {/if}
+              <Button variant="primary" size="sm" disabled={!note.trim()} loading={sending} aria-keyshortcuts="Meta+Enter Control+Enter" onclick={send}><Icon name="check" size={14} />{inlinePage ? editingDraft?.note === note.trim() ? "Done" : "Save" : "Send to agent"}</Button>
+            </div>
+            {#if saveError}<p role="status" class="mt-2 text-xs text-warn">{saveError}</p>{/if}
+          </div>
+        {/if}
       </div>
-
-      {#if picked}
-        <form class="grid gap-2 border-t border-edge/70 px-4 py-3" onsubmit={(e) => { e.preventDefault(); void send(); }} data-preview-pick>
-          <div class="flex min-w-0 items-baseline gap-2">
-            <span class="text-xs text-faint">Selected</span>
-            <code class="selectable min-w-0 truncate text-sm" title={picked.selector}>{picked.selector}</code>
-          </div>
-          <textarea class="min-h-16 w-full rounded border border-edge bg-panel p-2 text-sm" rows="2" placeholder="What should change about this element?" aria-label="Note for the agent" bind:value={note}></textarea>
-          <div class="flex justify-end gap-2">
-            <Button size="xs" onclick={() => (picked = null)}>Discard</Button>
-            <Button size="xs" variant="primary" type="submit" loading={sending} disabled={!note.trim()}>Send to agent</Button>
-          </div>
-        </form>
-      {/if}
     </div>
   {/snippet}
   {#if inlinePage}
@@ -420,3 +589,13 @@
     </Modal>
   {/if}
 {/if}
+
+<style>
+  .comment-layer { grid-area:1 / 1; position:relative; max-width:100%; max-height:100%; overflow:hidden; pointer-events:none; }
+  .comment-border { position:absolute; border:1px solid rgb(124 92 255 / 55%); border-radius:3px; background:rgb(124 92 255 / 3%); }
+  .comment-border.focused { border:2px solid #7c5cff; background:rgb(124 92 255 / 15%); }
+  .comment-pin { position:absolute; z-index:1; display:grid; place-items:center; width:22px; height:22px; border:1px solid var(--color-accent); border-radius:50%; background:var(--color-panel); color:var(--color-accent); font-size:12px; font-weight:650; font-variant-numeric:tabular-nums; box-shadow:0 1px 4px #0003; pointer-events:auto; cursor:pointer; }
+  .comment-pin:hover, .comment-pin:focus-visible, .comment-pin.focused { background:var(--color-accent); color:var(--color-canvas); }
+  .review-issues { max-height:30dvh; overflow-y:auto; }
+  .review-issues :global([role="status"]) { padding:4px 12px; overflow-wrap:anywhere; }
+</style>

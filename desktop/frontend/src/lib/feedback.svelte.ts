@@ -8,7 +8,7 @@
 // restart or a session switch would be the worst thing this view could do.
 import { SvelteMap } from "svelte/reactivity";
 import { DaemonService } from "@bindings/desktop";
-import type { FeedbackComment } from "@bindings/internal/protocol";
+import type { FeedbackComment, FeedbackElement } from "@bindings/internal/protocol";
 import { store } from "./store.svelte";
 import type { Side } from "./diff";
 
@@ -25,7 +25,8 @@ export type Draft = {
 
 const KEY = "lola.diff.drafts";
 
-type Saved = Record<string, { drafts: Draft[]; note: string }>;
+export type ElementDraft = FeedbackElement & { reviewKey?: string };
+type Saved = Record<string, { drafts: Draft[]; note: string; elements?: ElementDraft[] }>;
 
 function load(): Saved {
   try {
@@ -42,6 +43,7 @@ let seq = 0;
 class Feedback {
   private drafts = new SvelteMap<string, Draft[]>();
   private notes = new SvelteMap<string, string>();
+  private elements = new SvelteMap<string, ElementDraft[]>();
   /** Session ids with a send in flight — the button shows it and refuses a second click. */
   private sending = new SvelteMap<string, boolean>();
 
@@ -49,6 +51,7 @@ class Feedback {
     for (const [id, v] of Object.entries(load())) {
       if (Array.isArray(v?.drafts) && v.drafts.length) this.drafts.set(id, v.drafts);
       if (typeof v?.note === "string" && v.note) this.notes.set(id, v.note);
+      if (Array.isArray(v?.elements) && v.elements.length) this.elements.set(id, v.elements);
     }
   }
 
@@ -75,9 +78,30 @@ class Feedback {
     return this.sending.get(id) ?? false;
   }
 
+  elementsFor(id: string): ElementDraft[] {
+    return this.elements.get(id) ?? [];
+  }
+
+  addElement(id: string, element: ElementDraft, previous?: ElementDraft) {
+    const elements = this.elementsFor(id);
+    if (previous && elements.includes(previous)) {
+      this.elements.set(id, elements.map(e => e === previous ? element : e));
+      this.save();
+      return;
+    }
+    if (elements.length >= 10) throw new Error("Send or remove a live comment before adding another (10 per batch).");
+    this.elements.set(id, [...elements, element]);
+    this.save();
+  }
+
+  removeElement(id: string, element: FeedbackElement) {
+    this.elements.set(id, this.elementsFor(id).filter(e => e !== element));
+    this.save();
+  }
+
   /** How many things a send would deliver (comments + a non-blank note). */
   count(id: string): number {
-    return this.draftsFor(id).length + (this.noteFor(id).trim() ? 1 : 0);
+    return this.draftsFor(id).length + this.elementsFor(id).length + (this.noteFor(id).trim() ? 1 : 0);
   }
 
   add(id: string, d: Omit<Draft, "key">) {
@@ -95,6 +119,7 @@ class Feedback {
 
   clear(id: string) {
     this.drafts.delete(id);
+    this.elements.delete(id);
     this.notes.delete(id);
     this.save();
   }
@@ -116,9 +141,13 @@ class Feedback {
     // note edited, during the request was never sent and must survive it.
     const sentKeys = new Set(this.draftsFor(id).map((d) => d.key));
     const sentNote = this.noteFor(id);
+    const elements = this.elementsFor(id);
     this.sending.set(id, true);
     try {
-      const r = await DaemonService.SendFeedback({ session: id, comments, note: sentNote });
+      const r = await DaemonService.SendFeedback({ session: id, comments, note: sentNote, ...(elements.length ? { elements: elements.map(({ reviewKey, ...element }) => element) } : {}) });
+      const remaining = this.elementsFor(id).filter(e => !elements.includes(e));
+      if (remaining.length) this.elements.set(id, remaining);
+      else this.elements.delete(id);
       const rest = this.draftsFor(id).filter((d) => !sentKeys.has(d.key));
       if (rest.length) this.drafts.set(id, rest);
       else this.drafts.delete(id);
@@ -141,8 +170,8 @@ class Feedback {
   private save() {
     try {
       const all: Saved = {};
-      const ids = new Set([...this.drafts.keys(), ...this.notes.keys()]);
-      for (const id of ids) all[id] = { drafts: this.draftsFor(id), note: this.noteFor(id) };
+      const ids = new Set([...this.drafts.keys(), ...this.notes.keys(), ...this.elements.keys()]);
+      for (const id of ids) all[id] = { drafts: this.draftsFor(id), note: this.noteFor(id), elements: this.elementsFor(id) };
       localStorage.setItem(KEY, JSON.stringify(all));
     } catch {
       /* storage unavailable — the queue still works for this run */

@@ -242,13 +242,18 @@ describe("DiffView", () => {
     SendFeedback.mockReturnValue(new Promise((r) => (resolve = r)));
     feedback.add("s1", { path: "a.go", side: "new", line: 1, endLine: 1, quote: "", body: "sent" });
     feedback.setNote("s1", "note v1");
+    const picked = { selector: "#settings", note: "Even out the gaps" };
+    feedback.addElement("s1", picked);
     const sending = feedback.send("s1");
+    expect(SendFeedback).toHaveBeenCalledWith(expect.objectContaining({ elements: [picked], note: "note v1" }));
+    feedback.addElement("s1", { selector: "#profile", note: "Keep this one" });
     feedback.add("s1", { path: "a.go", side: "new", line: 2, endLine: 2, quote: "", body: "late" });
     feedback.setNote("s1", "note v2");
     resolve({ delivered: true, queued: false });
     await sending;
     expect(feedback.draftsFor("s1").map((d) => d.body)).toEqual(["late"]);
     expect(feedback.noteFor("s1")).toBe("note v2");
+    expect(feedback.elementsFor("s1")).toEqual([{ selector: "#profile", note: "Keep this one" }]);
   });
 
   // Two Refreshes can finish out of order; only the latest may land.

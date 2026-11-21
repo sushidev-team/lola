@@ -278,9 +278,13 @@ class Store {
     return sortSessions(this.sessions).filter((s) => s.project === name);
   }
 
+  get hasCurrentSessionList(): boolean {
+    return this.alive && !this.awaitingList;
+  }
+
   sessionById(id: string): SessionInfo | undefined {
     const live = this.sessions.find((s) => s.id === id);
-    if (live || (this.alive && !this.awaitingList)) return live;
+    if (live || this.hasCurrentSessionList) return live;
     return this.retained.find((s) => s.id === id);
   }
 
@@ -293,7 +297,7 @@ class Store {
 
   /** What the sidebar lists: the live sessions, or the last ones known while the daemon is down. */
   get rosterSessions(): SessionInfo[] {
-    if ((this.alive && !this.awaitingList) || this.sessions.length) return this.sessions;
+    if (this.hasCurrentSessionList || this.sessions.length) return this.sessions;
     return this.retained;
   }
 

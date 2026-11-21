@@ -1,0 +1,11 @@
+.annotation-editor { position:absolute; z-index:5; width:min(300px,calc(100% - 24px)); max-height:calc(100% - 24px); overflow:auto; padding:10px; border:1px solid var(--color-edge); border-radius:8px; background:var(--color-panel); box-shadow:0 8px 28px #0005; animation:comment-open 150ms cubic-bezier(.16,1,.3,1); }
+.annotation-editor .editor-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.annotation-editor .editor-heading label { display:flex; align-items:center; gap:8px; margin:0; }
+.annotation-editor .editor-side { color:var(--color-faint); font-size:11px; }
+.annotation-editor .editor-controls { display:flex; align-items:center; gap:2px; }
+.annotation-editor .save-question { margin:0 0 8px; font-size:12px; color:var(--color-ink); }
+.annotation-editor .editor-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:8px; }
+@keyframes comment-open { from { opacity:.6; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+@media(prefers-reduced-motion:reduce) { .annotation-editor { animation:none; } }
+.annotation-editor label { display:block; font-size:12px; color:var(--color-ink-2); margin-bottom:8px; }
+.annotation-editor textarea { display:block; width:100%; padding:10px; margin-bottom:10px; background:var(--color-canvas); border:1px solid var(--color-edge); border-radius:6px; color:var(--color-ink); resize:vertical; font-size:13px; }

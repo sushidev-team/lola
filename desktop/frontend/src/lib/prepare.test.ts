@@ -49,11 +49,18 @@ it("dismisses hovered marks individually across pointer exit, scrolling and redr
     expect(Array.from(layer.children)).toEqual([other]);
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: 250, clientY: 50 }));
     expect(Array.from(layer.children)).toEqual([other]);
-    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 150, clientY: 50 }));
-    expect(layer.childElementCount).toBe(0);
+    document.querySelector(".b")!.getBoundingClientRect = () => new DOMRect(160, 80, 60, 40);
+    window.dispatchEvent(new Event("resize"));
+    const resized = document.getElementById("lola-prepare-layer")!;
+    expect(resized.childElementCount).toBe(1);
+    const resizedBox = resized.firstElementChild as HTMLElement;
+    expect(resizedBox.style.left).toBe("160px");
+    resizedBox.getBoundingClientRect = () => new DOMRect(160, 80, 60, 40);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 170, clientY: 90 }));
+    expect(resized.childElementCount).toBe(0);
     document.dispatchEvent(new MouseEvent("pointerout", { relatedTarget: null }));
     document.dispatchEvent(new Event("scroll"));
-    expect(layer.childElementCount).toBe(0);
+    expect(resized.childElementCount).toBe(0);
     expect((await run(spec)).found).toEqual([true, true]);
     expect(document.getElementById("lola-prepare-layer")!.childElementCount).toBe(0);
   } finally {

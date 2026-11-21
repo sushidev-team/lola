@@ -66,6 +66,7 @@ import Pause from '@lucide/svelte/icons/pause';
 import Pencil from '@lucide/svelte/icons/pencil';
 import Play from '@lucide/svelte/icons/play';
 import Plus from '@lucide/svelte/icons/plus';
+import SquareMousePointer from '@lucide/svelte/icons/square-mouse-pointer';
 import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 import Undo2 from '@lucide/svelte/icons/undo-2';
@@ -107,6 +108,7 @@ import Camera from '@lucide/svelte/icons/camera';
 import CameraOff from '@lucide/svelte/icons/camera-off';
 import Clipboard from '@lucide/svelte/icons/clipboard';
 import Smartphone from '@lucide/svelte/icons/smartphone';
+import Tablet from '@lucide/svelte/icons/tablet';
 import Inbox from '@lucide/svelte/icons/inbox';
 import FileDiff from '@lucide/svelte/icons/file-diff';
 import Laptop from '@lucide/svelte/icons/laptop';
@@ -187,6 +189,7 @@ export const icons = {
   'pencil': Pencil,
   'play': Play,
   'plus': Plus,
+  'square-mouse-pointer': SquareMousePointer,
   'refresh-cw': RefreshCw,
   'rotate-ccw': RotateCcw,
   'undo-2': Undo2,
@@ -228,6 +231,7 @@ export const icons = {
   'camera-off': CameraOff,
   'clipboard': Clipboard,
   'smartphone': Smartphone,
+  'tablet': Tablet,
   'inbox': Inbox,
   'file-diff': FileDiff,
   'laptop': Laptop,

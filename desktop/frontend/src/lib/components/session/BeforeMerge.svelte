@@ -25,7 +25,7 @@
   // `onunknown` (phone only) tells the host when GitHub could not be read, so its merge button can say so.
   // `onfacts` hands each readiness answer to the host (the phone's Review segment summarises its checks
   // from it instead of asking GitHub a second time); `target` is the session or stack lane it is for.
-  let { session, reviewLayout = false, can = () => true, hideMerge = false, heading = true, onunknown, onfacts }: { session: SessionInfo; reviewLayout?: boolean; can?: (cmd: string) => boolean; hideMerge?: boolean; heading?: boolean; onunknown?: (unknown: boolean) => void; onfacts?: (f: { target: string; number: number; data: PRReadinessData }) => void } = $props();
+  let { session, reviewLayout = false, can = () => true, hideMerge = false, heading = true, onunknown, onfacts, onmergerequested }: { session: SessionInfo; reviewLayout?: boolean; can?: (cmd: string) => boolean; hideMerge?: boolean; heading?: boolean; onunknown?: (unknown: boolean) => void; onmergerequested?: (pr: { id: string; number: number }) => void; onfacts?: (f: { target: string; number: number; data: PRReadinessData }) => void } = $props();
   const phone = touchSurface();
   const prs = $derived(session.stack
     ? (session.apps ?? []).filter(a => a.number).map(a => ({ id: `${session.id}~${a.name}`, number: a.number!, label: appLabel(a), url: a.url ?? '' }))
@@ -169,9 +169,12 @@
     });
   }
   async function merge(target: {id:string;number:number}, key: string, view: number, repo: string, head: string, method: string, confirmUnready: boolean) {
+    const notifyRequested = onmergerequested;
     merging = true; notice = '';
     try {
       await DaemonService.MergePR(target.id, target.number, repo, head, method, confirmUnready);
+      // Cleanup can remove this panel before the successful reply arrives.
+      notifyRequested?.(target);
       if (view !== viewGeneration || key !== identity) return;
       mergeRequested = true;
       notice = 'Merge requested. GitHub status will update shortly.';

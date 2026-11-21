@@ -30,6 +30,36 @@ afterEach(() => {cleanup();feedback.clear(id);nav.closeOverlay();vi.restoreAllMo
 // Overview and screenshots share one screen, so the canvas is simply waited for.
 async function openScreens() { await screen.findByRole('region',{name:'Screenshot review canvas'}); }
 
+it('closes Review when its requested merge is confirmed, and stays open while queued', async () => {
+  vi.mocked(DaemonService.MergePR).mockResolvedValueOnce(undefined);
+  render(ReviewWorkspace,{sessionId:id});
+  await fireEvent.click(await screen.findByRole('button',{name:'Squash and merge'}));
+  await screen.findByRole('button',{name:'Merge requested'});
+  expect(nav.overlay).toBe('pr-review');
+  facts.mockResolvedValue(status({state:'MERGED'}));
+  await fireEvent.click(screen.getByRole('button',{name:'Refresh PR status'}));
+  await waitFor(() => expect(nav.overlay).toBeNull());
+});
+
+it('closes after session cleanup even if the merge reply arrives after the PR panel disappears', async () => {
+  let accept!: () => void;
+  vi.mocked(DaemonService.MergePR).mockImplementationOnce(() => new Promise<void>(resolve => { accept = resolve; }) as never);
+  render(ReviewWorkspace,{sessionId:id});
+  await fireEvent.click(await screen.findByRole('button',{name:'Squash and merge'}));
+  store.sessions = [];
+  await screen.findByText(/Session ended/);
+  accept();
+  await waitFor(() => expect(nav.overlay).toBeNull());
+});
+
+it('keeps Review open after a rejected merge', async () => {
+  vi.mocked(DaemonService.MergePR).mockRejectedValueOnce(new Error('branch protection'));
+  render(ReviewWorkspace,{sessionId:id});
+  await fireEvent.click(await screen.findByRole('button',{name:'Squash and merge'}));
+  await screen.findByText(/Could not merge:.*branch protection/);
+  expect(nav.overlay).toBe('pr-review');
+});
+
 it('shows material before GitHub completes and shares the pending status request with PR actions',async()=>{
   let finish!:(value:ReturnType<typeof status>)=>void;
   facts.mockImplementationOnce(()=>new Promise(resolve=>finish=resolve) as never);

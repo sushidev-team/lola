@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import './talk.testkit';
 import { DaemonService, PreviewService } from '@bindings/desktop';
 import ReviewCanvas from './ReviewCanvas.svelte';
+import { feedback } from '$lib/feedback.svelte';
 import { markLocation, reviewSections } from '$lib/reviewmaterial';
 const image = vi.mocked(DaemonService.ReviewPackageImage);
 const pkg = {id:'package1',session:'s',screens:[{title:'Settings',before:'before',after:'after',caption:'A clearer form'},{title:'Phone',after:'phone'}]} as never;
@@ -429,7 +430,7 @@ it('arms a drawing tool from its shortcut and refuses freehand without a pointer
   expect(screen.getByRole('button',{name:'Draw line'})).toHaveAttribute('aria-pressed','true');
   await fireEvent.keyDown(section,{key:'p'});
   await fireEvent.click(screen.getByRole('button',{name:'Place comment on After screenshot'}));
-  expect(screen.getByRole('status')).toHaveTextContent('Freehand drawing needs a pointer');
+  expect(screen.getByText(/Freehand drawing needs a pointer/)).toHaveAttribute('role','status');
 });
 
 it('ends an arrow where the pointer is released, even without a final move',async()=>{
@@ -482,14 +483,14 @@ it.each(['s', 's~web'])('opens the matching live page inline for a screenshot fr
     screens: [{ title: 'Settings', after: 'after', url }],
     pages: [{ title: 'Settings panels', url, steps, marks }],
   } as never, onComment: () => true });
-  expect(screen.getByText('1 / 2')).toBeInTheDocument();
+  expect(screen.getByRole('status', {name:'Page 1 of 2'})).toBeInTheDocument();
   expect(open).toHaveBeenCalledExactlyOnceWith('s', url);
   await fireEvent.click(await screen.findByRole('button', { name: /Open live/ }));
   const frame = await screen.findByTitle('Preview of localhost:3000/login') as HTMLIFrameElement;
   expect(PreviewService.Open).toHaveBeenCalledWith('s', url);
   expect(image).toHaveBeenCalledWith(session, 'package1', 'after');
   expect(screen.queryByRole('dialog')).toBeNull();
-  expect(screen.getByText('2 / 2')).toBeInTheDocument();
+  expect(screen.getByRole('status', {name:'Page 2 of 2'})).toBeInTheDocument();
   const post = vi.spyOn(frame.contentWindow!, 'postMessage');
   const ready = (sender: string) => window.dispatchEvent(new MessageEvent('message', {
     source: frame.contentWindow, origin: sender, data: { source: 'lola-preview', type: 'ready', url: origin + '/login' },
@@ -503,4 +504,97 @@ it.each(['s', 's~web'])('opens the matching live page inline for a screenshot fr
   await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
   expect(screen.getByTitle('Preview of localhost:3000/login')).toBe(frame);
   expect(open).toHaveBeenCalledTimes(1);
+});
+
+
+it('restores numbered live comments, updates the selected draft in place and clears removed markers', async () => {
+  const session = 'badge-session', url = 'http://localhost:3000/settings';
+  vi.mocked(PreviewService.Open).mockResolvedValue(url);
+  feedback.addElement(session, { url, selector: '#first', note: 'Spacing' });
+  feedback.addElement(session, { url, selector: '#second', note: 'Alignment' });
+  try {
+    render(ReviewCanvas, { pkg: { ...pkg as object, session, screens: [], pages: [{ title: 'Settings', url }] } as never, onComment: () => true });
+    const frame = await screen.findByTitle('Preview of localhost:3000/settings') as HTMLIFrameElement;
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+    const announce = (data: object) => fireEvent(window, new MessageEvent('message', {
+      source: frame.contentWindow, origin: new URL(url).origin, data: { source: 'lola-preview', ...data },
+    }));
+    await announce({ type: 'ready', documentId: 'test', url });
+    const geometry = async () => {
+      const anchors = post.mock.calls.map(([m]) => m).findLast(m => m.type === 'comment-anchors' && m.anchors.length);
+      await announce({ type: 'comment-bounds', revision: anchors.revision, rects: anchors.anchors.map((a: { number: number }) => ({ number: a.number, x: 20, y: 40 * a.number, w: 70, h: 30 })) });
+    };
+    await geometry();
+    await fireEvent.click(screen.getByRole('button', { name: 'Live comment 2' }));
+    const field = screen.getByRole('textbox', { name: 'Element comment' });
+    expect(field).toHaveValue('Alignment');
+    await fireEvent.input(field, { target: { value: 'Align left' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(feedback.elementsFor(session).map(e => e.note)).toEqual(['Spacing', 'Align left']);
+    await geometry();
+    expect(screen.getByRole('button', { name: 'Live comment 2' })).toHaveAttribute('title', 'Align left');
+    await fireEvent.click(screen.getByRole('button', { name: 'Live comment 2' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete comment' }));
+    expect(feedback.elementsFor(session).map(e => e.note)).toEqual(['Spacing']);
+    await geometry();
+    expect(screen.queryByRole('button', { name: 'Live comment 2' })).toBeNull();
+    expect(document.querySelectorAll('.comment-border')).toHaveLength(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'Live comment 1' }));
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'Element comment' }), { key: 'Backspace', metaKey: true });
+    expect(feedback.elementsFor(session)).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Live comment 1' })).toBeNull();
+  } finally { feedback.clear(session); }
+});
+
+it('starts at the prepared device size and resizes the same live document', async () => {
+  const url = 'http://localhost:3000/settings';
+  const open = vi.mocked(PreviewService.Open).mockReset().mockResolvedValue(url);
+  render(ReviewCanvas, { pkg: { ...pkg as object, screens: [], pages: [{ title: 'Settings', url, device: 'tablet' }] } as never, onComment: () => true });
+  const frame = await screen.findByTitle('Preview of localhost:3000/settings') as HTMLIFrameElement;
+  const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+  expect(screen.getByRole('button', { name: 'Tablet', pressed: true })).toBeVisible();
+  for (const [name, width] of [['Mobile', '390px'], ['Full width', '100%'], ['Tablet', '820px']]) {
+    await fireEvent.click(screen.getByRole('button', { name }));
+    expect(screen.getByRole('button', { name, pressed: true })).toBeVisible();
+    expect(frame.style.width).toBe(width);
+    expect(screen.getByTitle(frame.title)).toBe(frame);
+    expect(frame.src).toBe(url);
+  }
+  expect(open).toHaveBeenCalledTimes(1);
+  expect(post).not.toHaveBeenCalled();
+});
+
+it('returns from a shared live page to the screenshot that opened it in the chosen mode', async () => {
+  const url = 'http://localhost:3000/settings';
+  vi.mocked(PreviewService.Open).mockResolvedValue('http://preview.localhost:5555/settings');
+  render(ReviewCanvas, { pkg: { id:'paired', session:'s', pages:[{title:'Settings',url}],
+    screens:['Profile','Legal'].map(title => ({title, url, before:'before', after:'after'})) } as never,
+    onComment:() => true });
+  await fireEvent.click(screen.getByRole('button', {name:'Next'}));
+  await fireEvent.click(screen.getByRole('button', {name:'Open live'}));
+  expect(screen.getByRole('button', {name:'Open live'})).toHaveAttribute('aria-pressed','true');
+  await fireEvent.keyDown(screen.getByRole('button', {name:'Before'}), {key:'3'});
+  expect(await screen.findByAltText('Legal — Before')).toBeInTheDocument();
+  expect(screen.getByRole('button', {name:'Before'})).toHaveAttribute('aria-pressed','true');
+});
+
+it('dismisses an instruction on hover per review item and keeps an explicitly reopened note readable', async () => {
+  render(ReviewCanvas, {pkg, onComment:() => true});
+  const note = screen.getByRole('complementary', {name:'Review instruction'});
+  const toggle = screen.getByRole('button', {name:'Review instruction'});
+  expect(note).toHaveTextContent('A clearer form');
+  const moveMouse = (element: HTMLElement) => fireEvent(element, Object.assign(new Event('pointermove', {bubbles:true}), {pointerType:'mouse'}));
+  await moveMouse(note);
+  expect(toggle).toHaveAttribute('aria-expanded','false');
+  await fireEvent.click(screen.getByRole('button', {name:'Next'}));
+  expect(screen.queryByRole('button', {name:'Review instruction'})).toBeNull();
+  await fireEvent.click(screen.getByRole('button', {name:'Previous'}));
+  const reopened = screen.getByRole('button', {name:'Review instruction'});
+  expect(reopened).toHaveAttribute('aria-expanded','false');
+  await fireEvent.click(reopened);
+  const restored = screen.getByRole('complementary', {name:'Review instruction'});
+  await moveMouse(restored);
+  expect(restored).toBeVisible();
+  await fireEvent.keyDown(reopened, {key:'i'});
+  expect(restored).not.toBeVisible();
 });

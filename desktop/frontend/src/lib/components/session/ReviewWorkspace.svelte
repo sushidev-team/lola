@@ -6,6 +6,7 @@
   import type { ReviewPackage as Package, PRReadinessData, ReviewRecord } from '@bindings/internal/protocol';
   import { reviewFreshness } from '$lib/reviewchanges';
   import { reviewSections } from '$lib/reviewmaterial';
+  import { reviewSessionId } from '$lib/reviewworkspace.svelte';
   import { readPRReadiness } from '$lib/prreadiness';
   import { store } from '$lib/store.svelte';
   import { nav } from '$lib/nav.svelte';
@@ -48,7 +49,7 @@
   const split = $derived(!embedded && !phone);
   const session = $derived(store.sessionById(sessionId));
   let app = $state('');
-  const lanes = $derived(session?.stack ? (session.apps ?? []).map(a => ({ id: a.name, label: a.label || a.name, number: a.number ?? 0, url:a.url ?? '' })) : []);
+  const lanes = $derived(session?.stack ? (session.apps ?? []).map(a => ({ id: a.name, label: a.label || a.name, number: a.number ?? 0, delivery:a.delivery, url:a.url ?? '' })) : []);
   const lane = $derived(lanes.find(a => a.id === app) ?? lanes.find(a => a.id === session?.focusApp) ?? lanes[0]);
   const target = $derived(lane ? `${sessionId}~${lane.id}` : sessionId);
   const number = $derived(lane?.number ?? session?.prNumber ?? 0);
@@ -67,6 +68,25 @@
   let markError = $state('');
   let reviewCode = $state(false);
   let facts = $state<PRReadinessData>();
+  type MergeTarget = { id: string; number: number };
+  let requestedMerge = $state<MergeTarget>();
+  function matchesReview(pr: MergeTarget) {
+    return reviewSessionId(pr.id) === sessionId && (!session || (target === pr.id && number === pr.number));
+  }
+  function rememberMerge(pr: MergeTarget) {
+    // A reply for a lane the reviewer left must not replace the current lane's request.
+    if (matchesReview(pr)) requestedMerge = pr;
+  }
+  $effect(() => {
+    if (!requestedMerge || embedded || nav.overlay !== 'pr-review') return;
+    if (!matchesReview(requestedMerge)) {
+      requestedMerge = undefined;
+      return;
+    }
+    const ended = !session && store.hasCurrentSessionList;
+    const merged = session && ((lane ? lane.delivery : session.delivery) === 'merged' || (facts?.number === number && facts.state === 'MERGED'));
+    if (ended || merged) nav.closeOverlay();
+  });
   let loading = $state(true);
   let materialLoading = $state(true);
   let checking = $state(false);
@@ -298,7 +318,9 @@
   <details class="local-checks"><summary><Chevron class="disclosure-chevron" />Local checks</summary><div class="mt-3"><OverviewChecks {session} {tests} onJump={jump}/></div></details>
 {/snippet}
 {#snippet checks()}
-  {#if reviewSession && !embedded && number}<BeforeMerge session={reviewSession} reviewLayout/>
+  {#if reviewSession && !embedded && number}<BeforeMerge session={reviewSession} reviewLayout
+    onmergerequested={rememberMerge}
+    onfacts={f => { if (f.target === target && f.number === number) facts = f.data; }} />
   {:else if !embedded && !phone}<section class="no-pr" aria-label="PR status"><h3><Icon name="git-pull-request" size={14}/>No pull request yet</h3><p>Review works on the checkout. CI, reviewers, conflicts and merge status appear here once a PR is open.</p></section>{/if}
   {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} quiet={split} extra={session && !phone ? localChecks : undefined} {labels} canRun={canVerify} canRecover={can('reviewPackageRecover')}/>{/key}{/if}
   {#if !current && session && !phone}{@render localChecks()}{/if}
@@ -314,6 +336,12 @@
     {:else if !session}<p class="text-sm text-faint">Session ended. Review material is retained; feedback is unavailable.</p>{/if}
     {#if count}
       {#if feedback.draftsFor(sessionId).length}<p class="text-sm text-ink-2">{feedback.draftsFor(sessionId).length} code comments</p>{/if}
+      {#each feedback.elementsFor(sessionId) as element,i (element)}
+        <div class="flex items-start justify-between gap-2">
+          <p class="min-w-0 text-sm wrap-anywhere text-ink-2"><span class="mr-1 inline-grid size-5 place-items-center rounded-full bg-accent-fill text-xs font-semibold text-accent" aria-label={`Live comment ${i + 1}`}>{i + 1}</span>{element.note}</p>
+          <Button icon size="xs" variant="danger" aria-label="Remove live comment" title="Delete live comment" onclick={() => feedback.removeElement(sessionId, element)}><Icon name="trash-2" size={14}/></Button>
+        </div>
+      {/each}
       {#if notes}<details><summary><Chevron class="disclosure-chevron" />Inspect feedback draft</summary><textarea aria-label="Feedback draft" class="review-input mt-2" rows="6" value={notes} oninput={e => feedback.setNote(sessionId,e.currentTarget.value)}></textarea></details>{/if}
     {/if}
     {#if can('feedback')}<div class="send-row"><span>{count ? `${count} ready` : 'Nothing to send yet'}</span><Button size="sm" variant="primary" loading={feedback.isSending(sessionId)} disabled={!session || (!count && !draft.trim())} aria-label="Send feedback to agent" onclick={sendAll}><Icon name="arrow-up" size={14}/>Send</Button></div>{/if}
@@ -409,6 +437,17 @@
     </header>
 {/snippet}
 
+{#snippet reviewAction(iconOnly = true)}
+  {#if current && reviewSupported && can('reviewPackageMark')}
+    {@const done = reviewed?.package === current.id}
+    {@const label = done ? 'Reviewed' : 'Mark reviewed'}
+    <Button size="sm" icon={iconOnly} variant={done ? 'secondary' : 'primary'} loading={marking} disabled={done || !!error}
+      aria-label={label} title={done ? 'Reviewed' : 'Mark reviewed · Remember this package as inspected'} onclick={markReviewed}>
+      <Icon name={done ? 'circle-check' : 'check'} size={16} />{#if !iconOnly}{label}{/if}
+    </Button>
+  {/if}
+{/snippet}
+
 {#snippet deskBody()}
   <div class="desk-body">
   {#if markError}<p role="alert" class="head-error text-sm text-warn">{markError} Reopen the review and retry.</p>{/if}
@@ -427,11 +466,10 @@
             <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
             <div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize material column" tabindex="0" aria-valuenow={leftEff} style:left={`${leftEff - 4}px`} onpointerdown={e => drag(e, "left")} onkeydown={e => nudge(e, "left")} ondblclick={() => { leftW = widths.left.def; save(widths.left.key, leftW); }}></div>
             <section class="split-right" aria-label="Screenshots">
-              {#if current && reviewSupported && can('reviewPackageMark')}<div class="mark-overlay"><Button size="sm" variant={reviewed?.package === current.id ? 'secondary' : 'primary'} loading={marking} disabled={reviewed?.package === current.id || !!error} title="Remember this package as inspected. This does not approve or merge the PR." onclick={markReviewed}>{#if reviewed?.package === current.id}<Icon name="check" size={14}/>{/if}{reviewed?.package === current.id ? 'Reviewed' : 'Mark reviewed'}</Button></div>{/if}
               {#if current.screens?.length || current.pages?.length}
-                {#key current.id}<ReviewCanvas bind:this={canvas} compact onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} {canComment} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
+                {#key current.id}<ReviewCanvas bind:this={canvas} compact reviewAction={reviewSupported && can('reviewPackageMark') ? reviewAction : undefined} onToggleFeedback={() => panelOpen = !panelOpen} pkg={current} {freshness} bind:index={canvasScreen} {canComment} onComment={addScreenComment} onDeleteComment={deleteScreenComment} />{/key}
               {:else}
-                <div class="no-shots"><Icon name="image" size={28}/><h2>No screenshots yet</h2><p>{captureHost ? 'Capture the running app to compare it with what shipped, and mark up what needs to change.' : 'The agent has not published screenshots for this version.'}</p>{#if captureHost && can('reviewPackageCapture') && freshness !== 'stale'}<Button size="sm" variant="primary" onclick={() => captureOpen = true}><Icon name="image" size={14}/>Capture screenshot</Button>{/if}</div>
+                <div class="no-shots">{@render reviewAction(false)}<Icon name="image" size={28}/><h2>No screenshots yet</h2><p>{captureHost ? 'Capture the running app to compare it with what shipped, and mark up what needs to change.' : 'The agent has not published screenshots for this version.'}</p>{#if captureHost && can('reviewPackageCapture') && freshness !== 'stale'}<Button size="sm" variant="primary" onclick={() => captureOpen = true}><Icon name="image" size={14}/>Capture screenshot</Button>{/if}</div>
               {/if}
             </section>
           {/if}
@@ -531,7 +569,6 @@
   .resizer:hover::after, .resizer:focus-visible::after { background:var(--color-accent); }
   .resizer:focus-visible { outline:none; }
   .split-right { position:relative; min-width:0; min-height:0; overflow:hidden; background:var(--color-canvas); }
-  .mark-overlay { position:absolute; z-index:5; left:50%; bottom:14px; transform:translateX(-50%); border-radius:8px; box-shadow:0 6px 20px #0006; }
   .no-shots { display:grid; justify-items:center; align-content:center; gap:10px; height:100%; padding:32px; text-align:center; color:var(--color-faint); }
   .no-shots h2 { font-size:15px; font-weight:600; color:var(--color-ink); }
   .no-shots p { max-width:38ch; font-size:13px; line-height:1.6; color:var(--color-ink-2); }

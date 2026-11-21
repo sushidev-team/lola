@@ -9,6 +9,7 @@
   var LAYER = "lola-prepare-layer";
   var COLORS = ["#7c5cff", "#e5484d", "#30a46c", "#f5a524"];
   var liveMarks = new Map(), dismissedMarks = new Set(), pointer = null, trackingPointer = false;
+  var drawnMarks = [];
 
   // The overlay lets clicks through, so hit-test its painted boxes from the
   // document. Remember each dismissal across redraws of this preview document.
@@ -38,6 +39,9 @@
       if (!e.relatedTarget) pointer = null;
     }, true);
     document.addEventListener("scroll", updateHover, true);
+    window.addEventListener("resize", function () {
+      if (drawnMarks.length) apply({ marks: drawnMarks }, false);
+    });
   }
 
   function str(v, max) { return typeof v === "string" ? v.slice(0, max) : ""; }
@@ -122,6 +126,7 @@
       else if (typeof spec.scrollY === "number" && spec.scrollY > 0) window.scrollTo(0, Math.min(spec.scrollY, 100000));
     }
     var l = layer();
+    if (trackingPointer) drawnMarks = marks;
     liveMarks.clear();
     for (var k = 0; k < els.length; k++) if (els[k]) draw(l, els[k], marks[k], k);
     updateHover();
