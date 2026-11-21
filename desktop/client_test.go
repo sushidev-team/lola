@@ -25,7 +25,13 @@ type fakeDaemon struct {
 
 func startFakeDaemon(t *testing.T, h func(protocol.Request) protocol.Response) *fakeDaemon {
 	t.Helper()
-	home := t.TempDir()
+	// Not t.TempDir(): a long test name pushes the socket path past the 104-byte
+	// sun_path limit on macOS.
+	home, err := os.MkdirTemp("", "ld")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("LOLA_HOME", home)
 	ln, err := net.Listen("unix", filepath.Join(home, "lola.sock"))
 	if err != nil {

@@ -25,6 +25,13 @@
   let note = $state("");
   let sending = $state(false);
   let reload = $state(0);
+  // What the agent prepared for the active page, and what the page said about it.
+  let prepared = $state<{ found: boolean[]; waited: boolean } | null>(null);
+  let stepFailure = $state<{ index: number; step: string; why: string } | null>(null);
+  // Where a prepared flow (a login that redirects) stands. A step that navigates
+  // ends the page's script, so the next document is told to carry on after the
+  // last step it saw finish (had its effect).
+  let flow = { started: -1, armed: true, finished: false, resumes: 0 };
   let surface = $state<HTMLDivElement>();
   let exitHint = $state(false);
   const exitWindowMs = 3000;
@@ -60,6 +67,9 @@
   }
 
 
+  const markName = (m: { selector?: string; text?: string; label?: string }) => m.label || m.text || m.selector || "element";
+  const missing = $derived(prepared ? (req?.prep?.marks ?? []).filter((_, i) => !prepared!.found[i]).map(markName) : []);
+
   const vp = $derived(VIEWPORTS.find((v) => v.id === viewport) ?? VIEWPORTS[2]);
   const session = $derived(req ? store.sessions.find((s) => s.id === req.sessionId) : undefined);
   const groups = $derived(devUrlGroups(
@@ -74,6 +84,11 @@
     error = "";
     picked = null;
     picking = false;
+    prepared = null;
+    stepFailure = null;
+    flow = { started: -1, armed: true, finished: false, resumes: 0 };
+    const device = request?.prep?.device;
+    if (device && VIEWPORTS.some((v) => v.id === device)) viewport = device as ViewportId;
     clearExitHint();
     if (!request) return;
     let current = true;
@@ -83,6 +98,44 @@
     );
     return () => { current = false; };
   });
+
+  /** Asks the framed page to carry out the agent's preparation (scroll, outline, wait). */
+  function prepare(from = 0) {
+    const p = req?.prep;
+    if (!p || !frame?.contentWindow) return;
+    prepared = null;
+    stepFailure = null;
+    if (from === 0) flow = { started: -1, armed: false, finished: false, resumes: 0 };
+    const spec = { waitFor: p.waitFor, scrollY: p.scrollY, marks: p.marks, steps: p.steps ?? undefined, ...(from > 0 ? { from } : {}) };
+    frame.contentWindow.postMessage({ target: PICKER_SOURCE, type: "prepare", spec }, "*");
+  }
+
+  /** A document announced itself (a first load, or the one a step navigated to). */
+  function onFrameReady(frameUrl: unknown) {
+    const p = req?.prep;
+    if (!p) return;
+    const steps = p.steps?.length ?? 0;
+    if (steps && flow.started >= 0 && !flow.finished) {
+      // Mid-flow: a step navigated. Carry on after it, a bounded number of times.
+      if (flow.resumes++ < steps) prepare(flow.started + 1);
+      return;
+    }
+    // A flow starts on the first document whatever its path (an app may redirect
+    // to its login page); a plain preparation only on the page it names.
+    if (steps ? flow.armed : sameDocument(frameUrl)) {
+      flow.armed = false;
+      prepare();
+    }
+  }
+
+  /** Only the page the agent prepared is prepared: a link the reviewer followed is theirs. */
+  function sameDocument(frameUrl: unknown): boolean {
+    try {
+      return new URL(String(frameUrl)).pathname === new URL(req!.url).pathname;
+    } catch {
+      return false;
+    }
+  }
 
   function tell(on: boolean) {
     frame?.contentWindow?.postMessage({ target: PICKER_SOURCE, type: "pick", on }, "*");
@@ -98,8 +151,19 @@
     const onMessage = (e: MessageEvent) => {
       // Only the framed page, and only a well-formed pick, ever reaches the form.
       if (!frame || e.source !== frame.contentWindow) return;
-      const d = e.data as { source?: string; type?: string; picking?: boolean } | null;
+      const d = e.data as { source?: string; type?: string; picking?: boolean; url?: string; found?: unknown; waited?: unknown; i?: unknown; failed?: { index?: unknown; step?: unknown; why?: unknown } | null } | null;
       if (d?.source === PICKER_SOURCE && d.type === "mode") picking = !!d.picking;
+      if (d?.source === PICKER_SOURCE && d.type === "ready") onFrameReady(d.url);
+      if (d?.source === PICKER_SOURCE && d.type === "step" && typeof d.i === "number") flow.started = d.i;
+      if (d?.source === PICKER_SOURCE && d.type === "prepared" && Array.isArray(d.found)) {
+        flow.finished = true;
+        prepared = { found: d.found.map(Boolean), waited: !!d.waited };
+        const f = d.failed;
+        // A step failure is text from the page's script: shown as text, trimmed.
+        stepFailure = f && typeof f.index === "number" && f.index >= 0
+          ? { index: f.index, step: String(f.step ?? "").slice(0, 120), why: String(f.why ?? "").slice(0, 200) }
+          : null;
+      }
       // A frame may ask for the hint. Only a second keypress in Lola can close
       // the preview, so a page cannot discard a form by posting two messages.
       if (d?.source === PICKER_SOURCE && d.type === "escape" && document.activeElement === frame) {
@@ -168,6 +232,20 @@
   <Modal title="Preview" headerContent={tools} onClose={close} fullscreen bodyClass="min-w-0 overflow-hidden">
     <div bind:this={surface} tabindex="-1" class="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] outline-none" data-session-preview>
       <nav aria-label="Dev servers" class="flex max-h-[30dvh] flex-wrap items-start gap-x-6 gap-y-2 overflow-y-auto border-b border-edge px-4 py-2">
+        {#if preview.tabs.length > 1}
+          <div class="w-full" data-preview-tabs>
+            <Tabs tabs={preview.tabs.map((t, i) => ({ id: String(i), label: t.title || devUrlLabel(t.url) }))} ariaLabel="Open pages" active={String(preview.active)} onSelect={(id) => preview.select(Number(id))} pill />
+          </div>
+        {/if}
+        {#if req.caption || req.prep?.marks?.length || req.prep?.waitFor || req.prep?.steps?.length}
+          <div class="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-preview-prep>
+            <p class="min-w-0 flex-1 basis-60 text-sm wrap-anywhere text-ink"><span class="font-medium">Prepared by the agent</span>{req.caption ? ` — ${req.caption}` : ""}{#if req.prep?.steps?.length}<span class="text-faint"> · it performs {req.prep.steps.length} {req.prep.steps.length === 1 ? "step" : "steps"} here (clicks, typing, sign-in) on this local address</span>{/if}</p>
+            {#if stepFailure}<p class="text-sm text-warn" role="status">Step {stepFailure.index + 1} ({stepFailure.step}) didn't work: {stepFailure.why}</p>{/if}
+            {#if missing.length}<p class="text-sm text-warn" role="status">Not found on the page: {missing.join(", ")}</p>{/if}
+            {#if prepared?.waited && !missing.length}<p class="text-sm text-warn" role="status">The page was slow to show what the agent pointed at.</p>{/if}
+            <Button size="xs" disabled={!src} onclick={() => prepare()}>Show it again</Button>
+          </div>
+        {/if}
         {#each groups as group (group.name)}
           <div role="group" aria-label={group.label || "Addresses"} class="grid min-w-0 max-w-full gap-0.5">
             {#if group.label}<h3 class="px-1.5 text-sm font-medium text-ink">{group.label}</h3>{/if}

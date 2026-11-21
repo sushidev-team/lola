@@ -87,12 +87,21 @@ type ReviewPackage struct {
 	Base      string           `json:"base"`
 	Head      string           `json:"head"`
 	Screens   []ReviewScreen   `json:"screens"`
+	Pages     []ReviewPage     `json:"pages,omitempty"`
 	ID        string           `json:"id"`
 	Session   string           `json:"session"`
 	Repo      string           `json:"repo"`
 	PR        int              `json:"pr"`
 	CreatedAt time.Time        `json:"createdAt"`
 	Artifacts []ReviewArtifact `json:"artifacts"`
+}
+
+// ReviewPage is a live dev-server page the reviewer can open in the preview.
+type ReviewPage struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Caption string `json:"caption,omitempty"`
+	ReviewPrep
 }
 
 type ReviewScreen struct {
@@ -103,6 +112,35 @@ type ReviewScreen struct {
 	URL      string `json:"url,omitempty"`
 	Viewport string `json:"viewport,omitempty"`
 	Selector string `json:"selector,omitempty"`
+	ReviewPrep
+}
+
+// ReviewPrep is how a reviewer's view of a page is prepared (reviewpack.Prep):
+// agent-provided, declarative, bounded.
+type ReviewPrep struct {
+	Device  string       `json:"device,omitempty"`
+	WaitFor string       `json:"waitFor,omitempty"`
+	ScrollY int          `json:"scrollY,omitempty"`
+	Marks   []ReviewMark `json:"marks,omitempty"`
+	Steps   []ReviewStep `json:"steps,omitempty"`
+}
+
+// ReviewStep is one action on a prepared page (reviewpack.Step): click, fill,
+// press, wait or goto, run only on a local host.
+type ReviewStep struct {
+	Do       string `json:"do"`
+	Selector string `json:"selector,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Value    string `json:"value,omitempty"`
+	Key      string `json:"key,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Ms       int    `json:"ms,omitempty"`
+}
+
+type ReviewMark struct {
+	Selector string `json:"selector,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Label    string `json:"label,omitempty"`
 }
 
 type ReviewArtifact struct {

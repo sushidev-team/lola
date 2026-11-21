@@ -3,6 +3,8 @@
   import { DaemonService } from '@bindings/desktop';
   import type { ReviewPackage } from '@bindings/internal/protocol';
   import { markLocation, markHit, markKind, validMark, arrowHead, simplifyStroke, type MarkKind, type ReviewMark } from '$lib/reviewmaterial';
+  import { preview, prepOf } from '$lib/preview.svelte';
+  import { touchSurface } from '$lib/touchsurface';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
   import Select from '../Select.svelte';
@@ -498,7 +500,7 @@
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
-  <p class="screen-title" title={[screen.caption,screen.url,screen.viewport].filter(Boolean).join(" · ") || undefined}>{screen.title}</p>
+  <p class="screen-title" title={[screen.caption,screen.url,screen.viewport].filter(Boolean).join(" · ") || undefined}><span class="screen-title-text">{screen.title}</span>{#if screen.url && !touchSurface()}<Button size="xs" class="pointer-events-auto shrink-0" title={`Open ${screen.url} in the preview`} onclick={() => preview.open(pkg.session, screen.url!, { prep: prepOf(screen), caption: screen.caption })}>Open live<Icon name="arrow-right" size={14} /></Button>{/if}</p>
   <div class="view-overlay">
     {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
       <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
@@ -526,7 +528,8 @@
   .canvas { min-width:0; height:100%; display:grid; grid-template-rows:auto minmax(0,1fr); }
   .canvas:focus { outline:none; }
   .tools { position:relative; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
-  .screen-title { position:absolute; z-index:6; left:12px; bottom:12px; max-width:calc(50% - 110px); margin:0; padding:5px 10px; border-radius:8px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); font-size:12px; color:var(--color-ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
+  .screen-title { position:absolute; z-index:6; left:12px; bottom:12px; max-width:calc(50% - 110px); margin:0; padding:5px 10px; display:flex; align-items:center; gap:6px; border-radius:8px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); font-size:12px; color:var(--color-ink-2); white-space:nowrap; pointer-events:none; }
+  .screen-title-text { min-width:0; overflow:hidden; text-overflow:ellipsis; }
   .view-overlay { position:absolute; z-index:6; right:12px; bottom:12px; display:flex; align-items:center; gap:4px; padding:3px; border:1px solid var(--color-edge); border-radius:10px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); box-shadow:0 4px 16px #0005; }
   .view-overlay :global(.lola-select) { width:72px; }
   .view-overlay :global(.lola-field) { border-color:transparent; background:transparent; box-shadow:none; }

@@ -472,3 +472,10 @@ it('opens the comment of a saved drawing by double click while a drawing tool is
   await fireEvent.dblClick(surface);
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toBeInTheDocument();
 });
+it('offers a screenshot taken of a live page to open in the preview',async()=>{
+  const { preview } = await import('$lib/preview.svelte');
+  render(ReviewCanvas,{pkg:{...pkg as object,screens:[{title:'Settings',after:'after',url:'http://localhost:3000/settings'}]} as never,onComment:()=>true});
+  await fireEvent.click(await screen.findByRole('button',{name:/Open live/}));
+  expect(preview.request).toEqual({sessionId:'s',url:'http://localhost:3000/settings'});
+  preview.close();
+});

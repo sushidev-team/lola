@@ -40,6 +40,14 @@ import (
 //go:embed picker.js
 var pickerJS string
 
+//go:embed prepare.js
+var prepareJS string
+
+// PrepareJS is the script that prepares a reviewer's view (scroll, outline,
+// wait). The screenshot capture injects the SAME source, so a screenshot and the
+// live tab show one view.
+func PrepareJS() string { return prepareJS }
+
 //go:embed xsrf.js
 var xsrfJS string
 
@@ -114,7 +122,7 @@ func (s *Server) Open(session, target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	origin := &url.URL{Scheme: u.Scheme, Host: u.Host}
+	origin := canonicalOrigin(u)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -209,6 +217,7 @@ func hostGuard(addr string, next http.Handler) http.Handler {
 			if _, err := r.Cookie(xsrfCopy); err == nil {
 				_, _ = io.WriteString(w, xsrfJS)
 			}
+			_, _ = io.WriteString(w, prepareJS)
 			_, _ = io.WriteString(w, pickerJS)
 			return
 		}
@@ -224,7 +233,7 @@ func rewriteOrigin(h http.Header, key string, from, to *url.URL) {
 		return
 	}
 	u, err := url.Parse(value)
-	if err == nil && u.User == nil && u.Scheme == from.Scheme && strings.EqualFold(u.Host, from.Host) {
+	if err == nil && u.User == nil && u.Scheme == from.Scheme && strings.EqualFold(canonicalOrigin(u).Host, from.Host) {
 		u.Scheme, u.Host = to.Scheme, to.Host
 		h.Set(key, u.String())
 	}
@@ -300,4 +309,22 @@ func Inject(html []byte) []byte {
 
 func concat(parts ...[]byte) []byte {
 	return bytes.Join(parts, nil)
+}
+
+// canonicalOrigin is the proxy key and upstream for a URL: lowercase host, and
+// no port when it is the scheme's default. Two spellings of one server must share
+// a proxy, or each gets its own cookie host and a login does not carry over.
+func canonicalOrigin(u *url.URL) *url.URL {
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	port := u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return &url.URL{Scheme: u.Scheme, Host: host}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	neturl "net/url"
 	"strings"
 	"sync"
 
@@ -61,11 +62,36 @@ func (s *PreviewService) Open(session, url string) (string, error) {
 		return "", err
 	}
 	for _, u := range urls {
-		if u == url {
+		if sameOrigin(u, url) {
 			return s.srv.Open(session, url)
 		}
 	}
 	return "", errors.New("that address is not one of this session's dev servers")
+}
+
+// sameOrigin reports whether a page lives on a dev server the session owns. A
+// review page names a path on it; the origin is what the daemon vouched for.
+func sameOrigin(owned, asked string) bool {
+	a, err := neturl.Parse(owned)
+	if err != nil {
+		return false
+	}
+	b, err := neturl.Parse(asked)
+	if err != nil {
+		return false
+	}
+	return a.Hostname() != "" && a.Scheme == b.Scheme && strings.EqualFold(a.Hostname(), b.Hostname()) && effectivePort(a) == effectivePort(b)
+}
+
+// effectivePort is the explicit port, or the scheme's default when omitted.
+func effectivePort(u *neturl.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
 }
 
 // ServiceShutdown stops every preview listener when the app quits.

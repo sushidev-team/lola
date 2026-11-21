@@ -4,6 +4,7 @@ import './talk.testkit';
 import { DaemonService } from '@bindings/desktop';
 import ReviewOverview from './ReviewOverview.svelte';
 import { setTouchSurface } from '$lib/touchsurface';
+import { preview } from '$lib/preview.svelte';
 const pkg={id:'p',session:'s',head:'abc',base:'def',repo:'acme/app',pr:42,title:'feat(auth): verify email',createdAt:'2026-11-07',body:'## Agent confidence\nScore: 80/100\nBasis: Tests passed; mail is unverified.\n## Summary\nConfirm your email before entering.\n## Changes\n- Add an email verification step.\n- Preserve access for existing accounts.\n## Verification\n- Unit tests passed.\n## Risks\n- Mail delivery needs checking.',screens:[{title:'Registration',before:'before',after:'after'},{title:'Phone',after:'phone'}]} as never;
 const facts={head:'abc',base:'def',checksHead:'abc',repo:'acme/app',number:42,checks:'pass',review:'',mergeable:'MERGEABLE',threads:[]} as never;
 beforeEach(()=>{vi.mocked(DaemonService.ReviewPackageImage).mockResolvedValue({dataURL:'data:image/png;base64,aGVsbG8='});});
@@ -86,4 +87,32 @@ it('on a phone, only changes with supporting parts expand and risk ratings are l
   } finally {
     setTouchSurface(null);
   }
+});
+it('offers the live pages the agent named and opens one in the preview',async()=>{
+  render(ReviewOverview,{pkg:{...pkg as object,pages:[{title:'Settings page',url:'http://localhost:3000/settings',caption:'Spacing fix'}]} as never,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});
+  expect(screen.getByText('Spacing fix')).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole('button',{name:'Open live page: Settings page'}));
+  expect(preview.request).toEqual({sessionId:'s',url:'http://localhost:3000/settings',caption:'Spacing fix'});
+  preview.close();
+});
+it('opens every live page as a tab in one click', async () => {
+  const pages = [{title:'Home',url:'http://localhost:3000/'},{title:'Settings',url:'http://localhost:3000/settings'}];
+  render(ReviewOverview,{pkg:{...pkg as object,pages} as never,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});
+  await fireEvent.click(screen.getByRole('button',{name:/Open all as tabs/}));
+  expect(preview.tabs.map(t=>t.title)).toEqual(['Home','Settings']);
+  preview.close();
+});
+it('on a phone lists only pages whose server is forwarded and opens the forward', async () => {
+  const { store } = await import('$lib/store.svelte');
+  store.sessions = [{id:'s',devForwards:[{url:'http://192.168.1.5:40000',from:'127.0.0.1:3000'}]}] as never;
+  const open = vi.spyOn(store,'openURL').mockResolvedValue(undefined);
+  setTouchSurface({});
+  try {
+    const pages = [{title:'Home',url:'http://localhost:3000/home'},{title:'Other',url:'http://localhost:9999/'}];
+    render(ReviewOverview,{pkg:{...pkg as object,pages} as never,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});
+    expect(screen.queryByRole('button',{name:'Open live page: Other'})).toBeNull();
+    expect(screen.queryByRole('button',{name:/Open all as tabs/})).toBeNull();
+    await fireEvent.click(screen.getByRole('button',{name:'Open live page: Home'}));
+    expect(open).toHaveBeenCalledWith('http://192.168.1.5:40000/home');
+  } finally { setTouchSurface(null); store.sessions = []; open.mockRestore(); }
 });

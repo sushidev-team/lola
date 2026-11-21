@@ -13,6 +13,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,6 +40,21 @@ type Manifest struct {
 	Base    string   `json:"base"`
 	Head    string   `json:"head"`
 	Screens []Screen `json:"screens"`
+	// Pages are live dev-server pages a reviewer opens in the embedded preview.
+	// They are claims: the app opens one only if it is one of the session's own
+	// dev URLs at click time.
+	Pages []Page `json:"pages,omitempty"`
+}
+
+// MaxPages bounds how many live pages one package offers.
+const MaxPages = 6
+
+// Page names one address of a running app and the area it shows.
+type Page struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Caption string `json:"caption,omitempty"`
+	Prep
 }
 
 // Before and After are checkout-relative paths on input, retained image IDs on output.
@@ -50,6 +66,9 @@ type Screen struct {
 	URL      string `json:"url,omitempty"`
 	Viewport string `json:"viewport,omitempty"`
 	Selector string `json:"selector,omitempty"`
+	// Prep is how the page behind URL was prepared for this screenshot, so the live
+	// tab opens the same view.
+	Prep
 }
 
 type Artifact struct {
@@ -100,9 +119,30 @@ func Validate(m Manifest) error {
 	if len(m.Screens) > 4 {
 		return errors.New("at most four screenshot pairs per package")
 	}
+	if len(m.Pages) > MaxPages {
+		return fmt.Errorf("at most %d live pages per package", MaxPages)
+	}
+	for _, pg := range m.Pages {
+		u, err := url.Parse(pg.URL)
+		if strings.TrimSpace(pg.Title) == "" || len(pg.Title) > 200 || len(pg.Caption) > 2000 || len(pg.URL) > 2048 || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+			return errors.New("each live page requires a title and an http(s) URL; metadata must be bounded")
+		}
+		if err := ValidatePrep(pg.Prep); err != nil {
+			return err
+		}
+		if err := ValidateSteps(pg.Steps, pg.URL); err != nil {
+			return err
+		}
+	}
 	for _, s := range m.Screens {
 		if strings.TrimSpace(s.Title) == "" || len(s.Title) > 200 || len(s.Caption) > 2000 || len(s.URL) > 2048 || len(s.Viewport) > 100 || len(s.Selector) > 500 || s.After == "" {
 			return errors.New("each screen requires a title and after image; metadata must be bounded")
+		}
+		if err := ValidatePrep(s.Prep); err != nil {
+			return err
+		}
+		if err := ValidateSteps(s.Steps, s.URL); err != nil {
+			return err
 		}
 		for _, path := range []string{s.Before, s.After} {
 			if path != "" && (!filepath.IsLocal(path) || filepath.Clean(path) != path) {

@@ -186,3 +186,73 @@ func TestReportLimiterIsBounded(t *testing.T) {
 		t.Fatalf("an unknown session got a limiter entry: %v", d.reports.hits)
 	}
 }
+
+// `lola report ports` records a request line and nothing else: it never touches
+// config, and the line disappears from the wire once the project has a lease.
+func TestReportPortsIsARequestNotAnAction(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	d.sessions.Upsert(s)
+
+	if resp := d.handle(context.Background(), reportReq(t, s.ID, "ports")); resp.OK {
+		t.Fatal("an empty reason was accepted")
+	}
+	long := strings.Repeat("port 3000 is taken ", 40)
+	if resp := d.handle(context.Background(), reportReq(t, s.ID, "ports", long)); !resp.OK {
+		t.Fatalf("ports: %s", resp.Error)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if got.PortSetupAsk == "" || len(got.PortSetupAsk) > maxPortAskBytes {
+		t.Fatalf("stored ask = %q", got.PortSetupAsk)
+	}
+	if portSetupAsk(got.PortSetupAsk, false) == "" {
+		t.Error("the ask is hidden although the project has no port lease")
+	}
+	if portSetupAsk(got.PortSetupAsk, true) != "" {
+		t.Error("the ask outlives the port setup it asked for")
+	}
+	if resp := d.handle(context.Background(), reportReq(t, "unknown-id", "ports", "why")); resp.OK {
+		t.Error("an unknown session was accepted")
+	}
+	if _, tracked := d.reports.hits["unknown-id"]; tracked {
+		t.Error("an unknown session entered the rate limiter")
+	}
+}
+
+func TestReportDevStartIsARequestNotAnAction(t *testing.T) {
+	p := nativePoll("p1")
+	p.DevCommands = []string{"npm run dev"}
+	d := newTestDaemon(t, nativeTestConfig(p), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	d.sessions.Upsert(s)
+
+	if resp := d.handle(context.Background(), reportReq(t, s.ID, "devstart", "check the cart page")); !resp.OK {
+		t.Fatalf("devstart: %s", resp.Error)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if got.DevStartAsk != "check the cart page" || got.DevActive {
+		t.Fatalf("ask = %q, active = %v", got.DevStartAsk, got.DevActive)
+	}
+	if devStartAsk(got.DevStartAsk, false) == "" {
+		t.Error("the ask is hidden while the dev server is off")
+	}
+	if devStartAsk(got.DevStartAsk, true) != "" {
+		t.Error("the ask outlives the start it asked for")
+	}
+	if resp := d.handle(context.Background(), reportReq(t, "unknown-id", "devstart", "why")); resp.OK {
+		t.Error("an unknown session was accepted")
+	}
+}
+
+func TestReportDevStartNeedsDevCommands(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	d.sessions.Upsert(s)
+	resp := d.handle(context.Background(), reportReq(t, s.ID, "devstart", "why"))
+	if resp.OK || !strings.Contains(resp.Error, "dev_commands") {
+		t.Fatalf("a request nobody can see was accepted: %+v", resp)
+	}
+	if got, _ := d.sessions.Get(s.ID); got.DevStartAsk != "" {
+		t.Error("the request was stored")
+	}
+}

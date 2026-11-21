@@ -2,6 +2,7 @@ package reviewpack
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -155,5 +156,117 @@ func TestStackHistoryRemainsDiscoverableAfterTeardown(t *testing.T) {
 	}
 	if _, err := Read(home, "s", web.ID); err == nil {
 		t.Fatal("tampered metadata accepted")
+	}
+}
+
+func TestLivePagesAreBoundedHTTPAddresses(t *testing.T) {
+	_, _, m := fixture(t)
+	m.Pages = []Page{{Title: "Settings", URL: "http://localhost:3000/settings", Caption: "spacing"}}
+	if err := Validate(m); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"file:///etc/passwd", "javascript:alert(1)", "http://u:p@localhost:3000/", "http:///x", "localhost:3000"} {
+		m.Pages = []Page{{Title: "x", URL: bad}}
+		if Validate(m) == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	m.Pages = make([]Page, MaxPages+1)
+	for i := range m.Pages {
+		m.Pages[i] = Page{Title: "p", URL: "http://localhost:3000/"}
+	}
+	if Validate(m) == nil {
+		t.Error("accepted too many pages")
+	}
+}
+
+func TestPreparationIsBoundedAndTravelsOnPagesAndScreens(t *testing.T) {
+	_, _, m := fixture(t)
+	ok := Prep{Device: "tablet", WaitFor: "main", ScrollY: 400, Marks: []Mark{{Selector: "#a", Label: "A"}, {Text: "Save"}}}
+	m.Pages = []Page{{Title: "p", URL: "http://localhost:3000/", Prep: ok}}
+	m.Screens[0].Prep = ok
+	if err := Validate(m); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(m)
+	back, err := Decode(raw)
+	if err != nil || back.Pages[0].Marks[1].Text != "Save" || back.Screens[0].Device != "tablet" {
+		t.Fatalf("round trip lost the preparation: %+v, %v", back, err)
+	}
+	for _, bad := range []Prep{
+		{Device: "watch"}, {ScrollY: -1}, {ScrollY: 100_001}, {WaitFor: strings.Repeat("x", 501)},
+		{Marks: make([]Mark, MaxMarks+1)}, {Marks: []Mark{{Label: "no target"}}}, {Marks: []Mark{{Text: "x", Label: strings.Repeat("l", 81)}}},
+	} {
+		if len(bad.Marks) > MaxMarks {
+			for i := range bad.Marks {
+				bad.Marks[i] = Mark{Selector: "a"}
+			}
+		}
+		m.Pages = []Page{{Title: "p", URL: "http://localhost:3000/", Prep: bad}}
+		if Validate(m) == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+}
+
+// LocalHostCases is mirrored in desktop/frontend/src/lib/prepare.test.ts: the
+// Go rule and the script's rule must agree.
+var localHostCases = map[string]bool{
+	"localhost": true, "app.localhost": true, "shop.test": true, "SHOP.TEST": true, "127.0.0.1": true, "[::1]": true,
+	"10.1.2.3": true, "172.16.0.9": true, "172.31.255.1": true, "192.168.1.20": true, "169.254.1.1": true, "fd12::1": true,
+	"example.com": false, "shop.test.evil.com": false, "evil-test": false, "8.8.8.8": false, "172.32.0.1": false,
+	"192.169.1.1": false, "11.0.0.1": false, "localhost.evil.com": false, "": false, "intranet": false, "app.local": false,
+}
+
+func TestLocalHost(t *testing.T) {
+	for host, want := range localHostCases {
+		if got := LocalHost(host); got != want {
+			t.Errorf("LocalHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+func TestStepsAreBoundedAndOnlyOnLocalHosts(t *testing.T) {
+	_, _, m := fixture(t)
+	login := []Step{
+		{Do: StepFill, Selector: "#email", Value: "dev@shop.test"}, {Do: StepFill, Text: "Password", Value: "dev-only"},
+		{Do: StepClick, Text: "Sign in"}, {Do: StepWait, Selector: ".dashboard"}, {Do: StepPress, Key: "Enter"}, {Do: StepGoto, Path: "/cart?x=1"}, {Do: StepWait, Ms: 500},
+	}
+	m.Pages = []Page{{Title: "Cart", URL: "https://shop.test/cart", Prep: Prep{Steps: login}}}
+	if err := Validate(m); err != nil {
+		t.Fatal(err)
+	}
+	for _, url := range []string{"https://example.com/cart", "http://8.8.8.8/", "https://shop.test.evil.com/", ""} {
+		m.Pages[0].URL = url
+		if err := Validate(m); err == nil {
+			t.Errorf("steps accepted for %q", url)
+		}
+	}
+	// The same rule holds for a screenshot entry.
+	m.Pages = nil
+	m.Screens[0].URL, m.Screens[0].Prep = "https://example.com/", Prep{Steps: login}
+	if Validate(m) == nil {
+		t.Error("steps accepted on a screen of a public host")
+	}
+	m.Screens[0].URL = "http://192.168.1.5:3000/"
+	if err := Validate(m); err != nil {
+		t.Errorf("private address refused: %v", err)
+	}
+	for _, bad := range []Step{
+		{Do: "eval", Text: "alert(1)"}, {Do: StepClick}, {Do: StepFill, Value: "x"}, {Do: StepPress, Key: "F12"}, {Do: StepWait},
+		{Do: StepWait, Ms: 3001}, {Do: StepGoto, Path: "//evil.com/"}, {Do: StepGoto, Path: "https://evil.com/"}, {Do: StepGoto, Path: "/a\\b"},
+		{Do: StepFill, Selector: "#p", Value: strings.Repeat("x", 201)},
+	} {
+		m.Screens[0].Prep = Prep{Steps: []Step{bad}}
+		if Validate(m) == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+	m.Screens[0].Prep = Prep{Steps: make([]Step, MaxSteps+1)}
+	for i := range m.Screens[0].Steps {
+		m.Screens[0].Steps[i] = Step{Do: StepWait, Ms: 1}
+	}
+	if Validate(m) == nil {
+		t.Error("accepted too many steps")
 	}
 }

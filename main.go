@@ -77,6 +77,7 @@ func main() {
 		broadcastCmd(),
 		reviewCmd(),
 		reviewPackageCmd(),
+		devCmd(),
 		planCmd(),
 		goalCmd(),
 		learnCmd(),

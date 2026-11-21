@@ -92,6 +92,12 @@ func (d *Daemon) handleAgentReport(req protocol.Request) protocol.Response {
 		req.Args, _ = json.Marshal(a)
 		return d.handleSessionTask(context.Background(), req, "agent")
 	}
+	if len(a.Argv) > 0 && strings.EqualFold(a.Argv[0], "ports") {
+		return d.handleReportPorts(req, a.Argv[1:])
+	}
+	if len(a.Argv) > 0 && strings.EqualFold(a.Argv[0], "devstart") {
+		return d.handleReportDevStart(req, a.Argv[1:])
+	}
 	if len(a.Argv) > 0 && strings.EqualFold(a.Argv[0], "nofix") {
 		return d.handleReportNoFix(req)
 	}
@@ -190,6 +196,103 @@ func (d *Daemon) handleReportNoFix(req protocol.Request) protocol.Response {
 	}
 	if !found {
 		return protocol.Response{OK: false, Error: "agentReport: nofix: this session holds no open hub advisory"}
+	}
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "agentReport: persist sessions: %v", err)
+	}
+	return protocol.Response{OK: true}
+}
+
+// maxPortAskBytes bounds the reason an agent gives for a port-setup request.
+const maxPortAskBytes = 300
+
+// portSetupAsk is what a client may show: the agent's reason, only while the
+// project still runs without leased ports.
+func portSetupAsk(ask string, parallel bool) string {
+	if parallel {
+		return ""
+	}
+	return ask
+}
+
+// handleReportPorts is `lola report ports "<why>"`: the agent says its dev
+// server cannot run beside another one (a fixed port) and asks the human to set
+// up dynamic ports. It only records a line the UI shows next to the dev toggle;
+// nothing is written to config, and the human reviews the change themselves.
+func (d *Daemon) handleReportPorts(req protocol.Request, words []string) protocol.Response {
+	if req.Session == "" {
+		return protocol.Response{OK: false, Error: "agentReport: no session ($LOLA_SESSION unset)"}
+	}
+	why := strings.Join(strings.Fields(sanitizeAgentText(strings.Join(words, " "))), " ")
+	if why == "" {
+		return protocol.Response{OK: false, Error: "agentReport: ports: say why dynamic ports are needed"}
+	}
+	if len(why) > maxPortAskBytes {
+		why = strings.ToValidUTF8(why[:maxPortAskBytes], "")
+	}
+	if _, ok := d.sessions.Get(req.Session); !ok {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
+	}
+	if !d.reports.allow(req.Session, time.Now()) {
+		return protocol.Response{OK: false, Error: errReportRateLimited.Error()}
+	}
+	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
+		sess.PortSetupAsk = why
+		return true
+	})
+	if !known {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
+	}
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "agentReport: persist sessions: %v", err)
+	}
+	return protocol.Response{OK: true}
+}
+
+// devStartAsk is what a client may show: the agent's reason, only while the
+// session's dev server is not running.
+func devStartAsk(ask string, active bool) string {
+	if active {
+		return ""
+	}
+	return ask
+}
+
+// handleReportDevStart is `lola report devstart "<why>"`: a sandboxed agent
+// cannot start dev tabs (they run on the host), so it asks. Only the token's own
+// session is addressed, and nothing runs: the UI shows the line next to the dev
+// toggle and a human's click is what starts the server.
+func (d *Daemon) handleReportDevStart(req protocol.Request, words []string) protocol.Response {
+	if req.Session == "" {
+		return protocol.Response{OK: false, Error: "agentReport: no session ($LOLA_SESSION unset)"}
+	}
+	why := strings.Join(strings.Fields(sanitizeAgentText(strings.Join(words, " "))), " ")
+	if why == "" {
+		why = "wants to check its work in the running app"
+	}
+	if len(why) > maxPortAskBytes {
+		why = strings.ToValidUTF8(why[:maxPortAskBytes], "")
+	}
+	s, ok := d.sessions.Get(req.Session)
+	if !ok {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
+	}
+	// The Dev panel (and so the request) only exists for a session with dev commands.
+	d.mu.Lock()
+	cfg, home := d.cfg, d.home
+	d.mu.Unlock()
+	if len(devPlanOf(cfg, s, home)) == 0 {
+		return protocol.Response{OK: false, Error: "agentReport: devstart: this project configures no dev_commands, so there is no dev server to start; ask the human for an address instead"}
+	}
+	if !d.reports.allow(req.Session, time.Now()) {
+		return protocol.Response{OK: false, Error: errReportRateLimited.Error()}
+	}
+	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
+		sess.DevStartAsk = why
+		return true
+	})
+	if !known {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
 	}
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "agentReport: persist sessions: %v", err)

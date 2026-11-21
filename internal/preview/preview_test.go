@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -153,5 +154,86 @@ func TestOpenRefusesNonLoopback(t *testing.T) {
 	defer s.Close()
 	if _, err := s.Open("session", "http://10.0.0.1:3000"); err == nil {
 		t.Fatal("LAN address opened")
+	}
+}
+
+func TestOpenReusesTheProxyAcrossEquivalentSpellings(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer up.Close()
+	s := New()
+	defer s.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(up.URL, "http://"))
+	a, err := s.Open("s", "http://localhost:"+port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.Open("s", "http://LOCALHOST:"+port+"/settings?tab=a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostOf := func(raw string) string { u, _ := url.Parse(raw); return u.Host }
+	if hostOf(a) != hostOf(b) {
+		t.Fatalf("one server got two proxies: %s vs %s", a, b)
+	}
+	if !strings.HasSuffix(b, "/settings?tab=a") {
+		t.Fatalf("path and query lost: %s", b)
+	}
+	// An explicit default port is the same origin as none.
+	if x, y := canonicalOrigin(mustURL("http://localhost:80")), canonicalOrigin(mustURL("http://LocalHost")); x.String() != y.String() {
+		t.Fatalf("default port differs: %s vs %s", x, y)
+	}
+	if canonicalOrigin(mustURL("https://localhost:443")).Host != "localhost" || canonicalOrigin(mustURL("http://localhost:443")).Host != "localhost:443" {
+		t.Fatal("default port stripped for the wrong scheme")
+	}
+}
+
+func mustURL(raw string) *url.URL { u, _ := url.Parse(raw); return u }
+
+// The live tab prepares itself through the served script, so the proxy must
+// serve the shared prepare script together with the picker, and the picker must
+// answer a prepare message by running it.
+func TestProxyServesThePrepareScriptWithThePicker(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><head></head><body></body></html>"))
+	}))
+	defer up.Close()
+	s := New()
+	defer s.Close()
+	addr, err := s.Open("session", up.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(addr)
+	resp := get(t, "http://"+u.Host+ScriptPath, nil)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	js := string(b)
+	for _, want := range []string{"window.__lolaPrepare = function", `e.data.type === "prepare"`, `type: "prepared"`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("served script lacks %q", want)
+		}
+	}
+	if strings.Index(js, "window.__lolaPrepare = function") > strings.Index(js, `e.data.type === "prepare"`) {
+		t.Error("the picker is served before the script it calls")
+	}
+	if PrepareJS() == "" || !strings.Contains(js, PrepareJS()) {
+		t.Error("the screenshot script and the served script differ")
+	}
+}
+
+func TestRedirectsWithAnExplicitDefaultPortStillRewrite(t *testing.T) {
+	h := http.Header{}
+	h.Set("Location", "http://LOCALHOST:80/dashboard?x=1")
+	from := &url.URL{Scheme: "http", Host: "localhost"}
+	to := &url.URL{Scheme: "http", Host: "127.0.0.1:9999"}
+	rewriteOrigin(h, "Location", from, to)
+	if got := h.Get("Location"); got != "http://127.0.0.1:9999/dashboard?x=1" {
+		t.Fatalf("Location = %q", got)
+	}
+	h.Set("Location", "http://evil.test/x")
+	rewriteOrigin(h, "Location", from, to)
+	if h.Get("Location") != "http://evil.test/x" {
+		t.Fatal("a foreign origin was rewritten")
 	}
 }

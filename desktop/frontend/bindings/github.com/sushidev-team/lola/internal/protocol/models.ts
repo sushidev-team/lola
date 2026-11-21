@@ -2284,6 +2284,12 @@ export interface ReviewImageData {
     "eof"?: boolean;
 }
 
+export interface ReviewMark {
+    "selector"?: string;
+    "text"?: string;
+    "label"?: string;
+}
+
 /**
  * ReviewPackage is a wire projection of retained material. All content is agent-provided.
  * Keep protocol independent of filesystem/storage packages.
@@ -2295,6 +2301,7 @@ export interface ReviewPackage {
     "base": string;
     "head": string;
     "screens": ReviewScreen[] | null;
+    "pages"?: ReviewPage[] | null;
     "id": string;
     "session": string;
     "repo": string;
@@ -2307,6 +2314,20 @@ export interface ReviewPackagesData {
     "reviewTracking"?: boolean;
     "packages": ReviewPackage[] | null;
     "reviewed"?: { [_ in string]?: ReviewRecord } | null;
+}
+
+/**
+ * ReviewPage is a live dev-server page the reviewer can open in the preview.
+ */
+export interface ReviewPage {
+    "title": string;
+    "url": string;
+    "caption"?: string;
+    "device"?: string;
+    "waitFor"?: string;
+    "scrollY"?: number;
+    "marks"?: ReviewMark[] | null;
+    "steps"?: ReviewStep[] | null;
 }
 
 export interface ReviewRecord {
@@ -2322,6 +2343,25 @@ export interface ReviewScreen {
     "url"?: string;
     "viewport"?: string;
     "selector"?: string;
+    "device"?: string;
+    "waitFor"?: string;
+    "scrollY"?: number;
+    "marks"?: ReviewMark[] | null;
+    "steps"?: ReviewStep[] | null;
+}
+
+/**
+ * ReviewStep is one action on a prepared page (reviewpack.Step): click, fill,
+ * press, wait or goto, run only on a local host.
+ */
+export interface ReviewStep {
+    "do": string;
+    "selector"?: string;
+    "text"?: string;
+    "value"?: string;
+    "key"?: string;
+    "path"?: string;
+    "ms"?: number;
 }
 
 /**
@@ -3559,6 +3599,16 @@ export interface SessionInfo {
     "devCommands"?: string[] | null;
     "devUrls"?: string[] | null;
     "devForwards"?: DevForward[] | null;
+
+    /**
+     * PortSetupAsk: see session.Session.PortSetupAsk. Display text from the agent.
+     */
+    "portSetupAsk"?: string;
+
+    /**
+     * DevStartAsk: see session.Session.DevStartAsk. Display text from the agent.
+     */
+    "devStartAsk"?: string;
     "devClash"?: DevClashInfo | null;
 
     /**

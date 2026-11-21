@@ -8,6 +8,9 @@
   import ReviewConfidence from './ReviewConfidence.svelte';
   import SSHRich from '../ssh/SSHRich.svelte';
   import ReviewThumbnail from './ReviewThumbnail.svelte';
+  import { MAX_PREVIEW_TABS, preview, prepOf } from '$lib/preview.svelte';
+  import { store } from '$lib/store.svelte';
+  import { forwardedPageURL } from '$lib/devurl';
   import { tooltip } from '$lib/tooltip';
   import { touchSurface } from '$lib/touchsurface';
   let { pkg, facts, sessionId, freshness, checking = false, onScreen, checks, feedback, onAssessRisks, assessment, confidenceRequest, split = false }: {
@@ -21,6 +24,11 @@
   const phone = touchSurface();
   const overview = $derived(reviewOverview(pkg));
   const screens = $derived(pkg.screens ?? []);
+  const allPages = $derived(pkg.pages ?? []);
+  // A phone opens a page through its session's forward of that server, or not at all.
+  const forwards = $derived(store.sessions.find(s => s.id === sessionId)?.devForwards ?? []);
+  const pages = $derived(phone ? allPages.filter(p => forwardedPageURL(p.url, forwards)) : allPages);
+  function openPage(page:(typeof allPages)[number]) { if (phone) { const u = forwardedPageURL(page.url, forwards); if (u) void store.openURL(u); } else preview.open(sessionId, page.url, { prep:prepOf(page), caption:page.caption }); }
   const unrated = $derived(!overview.riskReportProvided || overview.risks.some(r => r.likelihood === 'unknown' || r.impact === 'unknown'));
   const riskHints = { likelihood: { low: 'Not expected to happen in normal use.', medium: 'Could happen in some situations.', high: 'Expected to happen unless addressed.', unknown: 'The agent did not rate this.' }, impact: { low: 'Small, easy to recover from.', medium: 'Noticeable, but contained.', high: 'Serious if it happens.', unknown: 'The agent did not rate this.' } } as const;
   const riskWords = { likelihood: { low: 'Unlikely', medium: 'Possible', high: 'Likely' }, impact: { low: 'Minor', medium: 'Moderate', high: 'Severe' } } as const;
@@ -84,6 +92,10 @@
         {#if split && overview.summary}<p class="summary-copy lead">{overview.summary}</p>{/if}
         {#if overview.changes.length}{@render features(overview.changes.slice(0,4))}{:else}<p class="empty-copy">No feature breakdown provided.</p>{/if}
         {#if overview.changes.length > 4}<details class="additional"><summary><Chevron class="disclosure-chevron" />{overview.changes.length-4} more {overview.changes.length === 5 ? 'change' : 'changes'}</summary>{@render features(overview.changes.slice(4))}</details>{/if}
+      </section>{/if}
+      {#if pages.length}<section class="review-panel live-pages" aria-label="Live pages">
+        <div class="section-title"><h2>Open the running app<span class="section-count">{pages.length}</span></h2>{#if !phone && pages.length > 1}<Button size="xs" onclick={() => preview.openTabs(sessionId, pages.map(p => ({ url:p.url, title:p.title, caption:p.caption, prep:prepOf(p) })))}>Open all as tabs{pages.length > MAX_PREVIEW_TABS ? ` (first ${MAX_PREVIEW_TABS})` : ''}<Icon name="arrow-right" size={14}/></Button>{/if}</div>
+        <ul class="page-list">{#each pages as page}<li><Button size="xs" onclick={() => openPage(page)} aria-label={`Open live page: ${page.title}`}><Icon name="arrow-right" size={14}/>{page.title}</Button>{#if page.caption}<span class="page-caption">{page.caption}</span>{/if}</li>{/each}</ul>
       </section>{/if}
       {#if screens.length && !phone && !split}<section class="review-panel visual-review" aria-label="Screenshot previews">
         <div class="section-title"><h2>See the changes<span class="section-count">{screens.length}</span></h2><Button size="xs" onclick={() => onScreen(0)}>View all<Icon name="arrow-right" size={14}/></Button></div>
@@ -190,6 +202,9 @@
   .empty-copy { color:var(--color-ink-2); padding:8px 0 16px; font-size:13px; }
   .additional { margin-top:12px; font-size:12px; color:var(--color-ink-2); }
   .additional > summary { margin-bottom:12px; }
+  .page-list { display:grid; gap:10px; padding:0; margin:0; list-style:none; }
+  .page-list li { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; min-width:0; }
+  .page-caption { font-size:12px; color:var(--color-ink-2); overflow-wrap:anywhere; }
   .screenshot-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
   .screen-preview { align-self:start; text-align:left; min-width:0; border-radius:12px; cursor:pointer; background:transparent; }
   .screen-preview :global(.thumbnail) { display:flex; border:1px solid color-mix(in srgb,var(--color-info) 20%,var(--color-edge)); border-radius:12px; padding:12px; background:color-mix(in srgb,var(--color-info) 9%,var(--color-panel)); transition:border-color 160ms ease-out,background 160ms ease-out; }

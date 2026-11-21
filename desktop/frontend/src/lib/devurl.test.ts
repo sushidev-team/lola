@@ -19,3 +19,17 @@ describe("devUrlLabel", () => {
     expect(devUrlLabel("http://")).toBe("http://");
   });
 });
+
+import { forwardedPageURL } from "./devurl";
+
+describe("forwardedPageURL", () => {
+  const forwards = [{ url: "http://192.168.20.3:39273", from: "127.0.0.1:8000" }];
+  it("keeps the page path on the forwarded address, treating localhost as loopback", () => {
+    expect(forwardedPageURL("http://localhost:8000/settings?tab=a#x", forwards)).toBe("http://192.168.20.3:39273/settings?tab=a#x");
+  });
+  it("has no address for a server that is not forwarded", () => {
+    expect(forwardedPageURL("http://localhost:5175/", forwards)).toBeUndefined();
+    expect(forwardedPageURL("http://localhost:8000/", [])).toBeUndefined();
+    expect(forwardedPageURL("nonsense", forwards)).toBeUndefined();
+  });
+});
