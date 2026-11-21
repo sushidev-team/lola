@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.15.0](https://github.com/sushidev-team/lola/compare/v0.14.0...v0.15.0) (2026-11-21)
+
+
+### Features
+
+* **hub:** agent-reported no_fix_available outcome holds an advisory for a week ([eb38c3d](https://github.com/sushidev-team/lola/commit/eb38c3d030830b7978d893b98feed99e0dd8fef4))
+* **hub:** no fix available status for agents (SUSHI-810) ([e88a240](https://github.com/sushidev-team/lola/commit/e88a240e6a74135befd1363190b826ff8295e32e))
+
+
+### Bug Fixes
+
+* **mobile:** ended session screen fills the height ([03e4537](https://github.com/sushidev-team/lola/commit/03e45370cfd62b03667e3dfdcfd0211913ff2071))
+* **mobile:** give the ended session view the full screen height ([0e6fca1](https://github.com/sushidev-team/lola/commit/0e6fca17c3b88233fb8a383789253a3322e58695))
+* **mobile:** name a new branch and base when starting a session ([08b5bbf](https://github.com/sushidev-team/lola/commit/08b5bbf56a43e45bc3e689f17bc0ca95f9e1d176))
+* **mobile:** name a new branch and base when starting a session (SUSHI-811) ([5a206b7](https://github.com/sushidev-team/lola/commit/5a206b7eff2debd259d2934d9129577e61039929))
+* **mobile:** route the new port-setup methods as Mac-only in the shim ([9ebb19a](https://github.com/sushidev-team/lola/commit/9ebb19a50e969d8b7a8799add7e64ca0ebe260a2))
+* **mobile:** shim the port-setup bindings and restyle the ended session footer ([813e471](https://github.com/sushidev-team/lola/commit/813e4715796e46c9ce7455551f0f31cd4a4744fb))
+
 ## [0.14.0](https://github.com/sushidev-team/lola/compare/v0.13.0...v0.14.0) (2026-11-20)
 
 
