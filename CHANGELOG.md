@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.16.0](https://github.com/sushidev-team/lola/compare/v0.15.0...v0.16.0) (2026-11-21)
+
+
+### Features
+
+* **desktop:** open graph and inspector pull requests as links and simplify the commit summary ([92b9069](https://github.com/sushidev-team/lola/commit/92b9069536a8fc9e111665721cf77d7f097df02f))
+* **dev:** a sandboxed agent requests its dev server; the human's click starts it on the host ([17be5f6](https://github.com/sushidev-team/lola/commit/17be5f6dc86ee12926d10d9bab3809cb9943ee39))
+* **review:** agent-prepared tabs and matching screenshots ([d28d1df](https://github.com/sushidev-team/lola/commit/d28d1dfdd9394b5153bffa03705f5f3916892171))
+* **review:** live dev pages in the review package ([8afccd5](https://github.com/sushidev-team/lola/commit/8afccd57f215f8a27f288b8d94dfcbb27212a98f))
+* **review:** live dev pages in the review package open in the preview ([3b099f6](https://github.com/sushidev-team/lola/commit/3b099f6b5522855ddc331fbc75e7a2bbc7618b78))
+* **review:** open live pages as preview tabs, agent dev start and port-setup request, phone opens forwarded pages ([0531593](https://github.com/sushidev-team/lola/commit/053159355274f68afac10f2f093e02b967e6ed91))
+* **review:** prepare and retain live pages in the review canvas ([db1c71e](https://github.com/sushidev-team/lola/commit/db1c71e2d1d3dadb784c5b7ae544efed60398ead))
+* **review:** steps (click, fill, press, wait, goto) in prepared pages, local addresses only ([5bb8ec1](https://github.com/sushidev-team/lola/commit/5bb8ec11e4596a5722aaac127c94292ecee46265))
+* **review:** streamline the canvas and annotate live elements ([dbc4685](https://github.com/sushidev-team/lola/commit/dbc4685cb340aebafd44ee488430817491bcb439))
+
+
+### Bug Fixes
+
+* **desktop:** match preview origins by case-insensitive host and effective port ([f84eaa1](https://github.com/sushidev-team/lola/commit/f84eaa1f4b42d32c77734d7f8cb863df50215d01))
+* **mobile:** drop duplicate port-setup shim entries left by two merged fixes ([e715345](https://github.com/sushidev-team/lola/commit/e715345dfbbd164a7a5d557cfa10950015e42f68))
+* **preview:** canonicalize the origin before proxy selection ([33170c2](https://github.com/sushidev-team/lola/commit/33170c2c4bd5d8504fb931c49c43bd3702a64fcf))
+* **review:** address PR review (resume after completed steps, superseded runs, contained step errors, capture wait-for and mark recheck, redirects, limiter, stack ask) ([102d6a3](https://github.com/sushidev-team/lola/commit/102d6a3c84ebc1de470a8873377a801ed5ac9f7d))
+* **review:** keep Open live outside the clipped title, devstart needs dev_commands, recheck waitFor before the shot, sandbox dev guidance ([28c11ed](https://github.com/sushidev-team/lola/commit/28c11ed0cffe7db623564e02242fed0c4475b96d))
+* **runtime:** briefing says a sandboxed session cannot run lola dev ([4fb3012](https://github.com/sushidev-team/lola/commit/4fb301281cb36db9c8582cea3e0d6418731fcb83))
+
 ## [0.15.0](https://github.com/sushidev-team/lola/compare/v0.14.0...v0.15.0) (2026-11-21)
 
 
