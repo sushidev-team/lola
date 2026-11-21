@@ -80,7 +80,18 @@ func sameOrigin(owned, asked string) bool {
 	if err != nil {
 		return false
 	}
-	return a.Scheme == b.Scheme && a.Host != "" && a.Host == b.Host
+	return a.Hostname() != "" && a.Scheme == b.Scheme && strings.EqualFold(a.Hostname(), b.Hostname()) && effectivePort(a) == effectivePort(b)
+}
+
+// effectivePort is the explicit port, or the scheme's default when omitted.
+func effectivePort(u *neturl.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
 }
 
 // ServiceShutdown stops every preview listener when the app quits.

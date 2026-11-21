@@ -38,3 +38,21 @@ func TestPreviewOpenOnlyForTheSessionsOwnDevURLs(t *testing.T) {
 		t.Error("a non-loopback address opened")
 	}
 }
+
+func TestSameOriginIgnoresHostCaseAndDefaultPorts(t *testing.T) {
+	for _, c := range []struct {
+		owned, asked string
+		want         bool
+	}{
+		{"http://localhost:3000", "http://LOCALHOST:3000/settings", true},
+		{"http://localhost", "http://localhost:80/x", true},
+		{"https://localhost:443", "https://localhost/x", true},
+		{"http://localhost:3000", "http://localhost:3001/", false},
+		{"http://localhost", "https://localhost/", false},
+		{"http://localhost:3000", "http://127.0.0.1:3000/", false},
+	} {
+		if got := sameOrigin(c.owned, c.asked); got != c.want {
+			t.Errorf("sameOrigin(%q, %q) = %v", c.owned, c.asked, got)
+		}
+	}
+}
