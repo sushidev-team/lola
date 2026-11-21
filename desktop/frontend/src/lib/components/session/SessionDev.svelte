@@ -10,6 +10,7 @@
   // The agent's request is dismissed per view; applying the setup removes it daemon-side.
   let dismissed = $state("");
   const ask = $derived(session.portSetupAsk && session.portSetupAsk !== dismissed ? session.portSetupAsk : "");
+  const startAsk = $derived(!session.devActive ? (session.devStartAsk ?? "") : "");
   const groups = $derived(session.devActive ? devUrlGroups(session.devUrls ?? [], session.apps ?? []) : []);
 </script>
 
@@ -22,6 +23,15 @@
         {session.devActive ? 'Stop dev' : 'Start dev'}
       </Button>
     </div>
+    {#if startAsk}
+      <div class="mt-2 grid gap-1.5 rounded-lg border border-edge bg-canvas/50 p-2" role="status" data-dev-start-ask>
+        <p class="text-sm text-ink">The agent asks you to start the dev server</p>
+        <p class="text-sm wrap-anywhere text-faint">{startAsk}</p>
+        <div class="flex gap-1">
+          <Button size="xs" loading={store.devPending[session.id]} onclick={() => store.dev(session.id, true)}>Start dev</Button>
+        </div>
+      </div>
+    {/if}
     {#if ask}
       <div class="mt-2 grid gap-1.5 rounded-lg border border-edge bg-canvas/50 p-2" role="status" data-port-ask>
         <p class="text-sm text-ink">The agent asks for dynamic ports</p>

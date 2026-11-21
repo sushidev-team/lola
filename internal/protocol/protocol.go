@@ -540,8 +540,10 @@ type SessionInfo struct {
 	DevURLs     []string     `json:"devUrls,omitempty"`
 	DevForwards []DevForward `json:"devForwards,omitempty"`
 	// PortSetupAsk: see session.Session.PortSetupAsk. Display text from the agent.
-	PortSetupAsk string        `json:"portSetupAsk,omitempty"`
-	DevClash     *DevClashInfo `json:"devClash,omitempty"`
+	PortSetupAsk string `json:"portSetupAsk,omitempty"`
+	// DevStartAsk: see session.Session.DevStartAsk. Display text from the agent.
+	DevStartAsk string        `json:"devStartAsk,omitempty"`
+	DevClash    *DevClashInfo `json:"devClash,omitempty"`
 	// Ports is this session's leased port block (LOLA_PORT first, then the rest
 	// of LOLA_PORT_1..N) when its project configures a port_range; empty
 	// otherwise. DevParallel is true when that project runs dev_commands

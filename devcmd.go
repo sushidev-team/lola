@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -32,8 +33,11 @@ ports stop the server from running next to another one, ask the human with
 	}
 	var wait time.Duration
 	start := &cobra.Command{
-		Use: "start", Args: cobra.NoArgs, Short: "Start the dev commands and print the addresses they serve",
+		Use: "start [why]", Args: cobra.ArbitraryArgs, Short: "Start the dev commands and print the addresses they serve (a sandboxed session asks the human instead)",
 		RunE: func(c *cobra.Command, _ []string) error {
+			if os.Getenv("LOLA_SANDBOX") != "" {
+				return devAsk(c.OutOrStdout(), strings.Join(c.Flags().Args(), " "))
+			}
 			if err := devToggle(true); err != nil {
 				return err
 			}
@@ -53,7 +57,12 @@ ports stop the server from running next to another one, ask the human with
 	start.Flags().DurationVar(&wait, "wait", 20*time.Second, "how long to wait for an address to appear")
 	stop := &cobra.Command{
 		Use: "stop", Args: cobra.NoArgs, Short: "Stop this session's dev processes",
-		RunE: func(*cobra.Command, []string) error { return devToggle(false) },
+		RunE: func(*cobra.Command, []string) error {
+			if os.Getenv("LOLA_SANDBOX") != "" {
+				return errors.New("a sandboxed session cannot stop dev servers; ask the human")
+			}
+			return devToggle(false)
+		},
 	}
 	status := &cobra.Command{
 		Use: "status", Args: cobra.NoArgs, Short: "Print whether the dev server runs and its addresses",
@@ -69,6 +78,21 @@ ports stop the server from running next to another one, ask the human with
 	return root
 }
 
+// devAsk is `dev start` in a sandbox: the bridge admits no dev command (dev tabs
+// run on the host, in a tree the agent can write), so it records a REQUEST the
+// human answers with one click in the Dev panel.
+func devAsk(w io.Writer, why string) error {
+	resp, err := hook.SendAgent("agentReport", protocol.ReportArgs{Argv: append([]string{"devstart"}, why)})
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return errors.New(resp.Error)
+	}
+	_, err = fmt.Fprintln(w, "asked the human to start the dev server (a sandboxed session cannot start it itself). Carry on; once they start it, its address is theirs to open - name it in the review manifest's pages.")
+	return err
+}
+
 func devToggle(on bool) error {
 	resp, err := hook.SendAgent("dev", protocol.DevArgs{Session: os.Getenv("LOLA_SESSION"), On: on})
 	if err != nil {
@@ -81,6 +105,9 @@ func devToggle(on bool) error {
 }
 
 func devStatus() (urls []string, active bool, err error) {
+	if os.Getenv("LOLA_SANDBOX") != "" {
+		return nil, false, errors.New("a sandboxed session cannot read or run dev servers; `lola dev start` asks the human to start it")
+	}
 	resp, err := hook.SendAgent("sessions", nil)
 	if err != nil {
 		return nil, false, err

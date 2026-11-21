@@ -27,3 +27,16 @@ func TestDevCommandNeedsALolaSession(t *testing.T) {
 		t.Fatal("status outside a lola session succeeded")
 	}
 }
+
+func TestSandboxedDevStatusAndStopRefuseInsteadOfTouchingTheHost(t *testing.T) {
+	t.Setenv("LOLA_SANDBOX", "docker")
+	if _, _, err := devStatus(); err == nil || !strings.Contains(err.Error(), "sandboxed") {
+		t.Fatalf("status err = %v", err)
+	}
+	cmd := devCmd()
+	cmd.SetArgs([]string{"stop"})
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "sandboxed") {
+		t.Fatalf("stop err = %v", err)
+	}
+}

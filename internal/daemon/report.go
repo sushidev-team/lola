@@ -95,6 +95,9 @@ func (d *Daemon) handleAgentReport(req protocol.Request) protocol.Response {
 	if len(a.Argv) > 0 && strings.EqualFold(a.Argv[0], "ports") {
 		return d.handleReportPorts(req, a.Argv[1:])
 	}
+	if len(a.Argv) > 0 && strings.EqualFold(a.Argv[0], "devstart") {
+		return d.handleReportDevStart(req, a.Argv[1:])
+	}
 	if len(a.Argv) > 0 && strings.EqualFold(a.Argv[0], "nofix") {
 		return d.handleReportNoFix(req)
 	}
@@ -232,6 +235,46 @@ func (d *Daemon) handleReportPorts(req protocol.Request, words []string) protoco
 	}
 	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
 		sess.PortSetupAsk = why
+		return true
+	})
+	if !known {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
+	}
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "agentReport: persist sessions: %v", err)
+	}
+	return protocol.Response{OK: true}
+}
+
+// devStartAsk is what a client may show: the agent's reason, only while the
+// session's dev server is not running.
+func devStartAsk(ask string, active bool) string {
+	if active {
+		return ""
+	}
+	return ask
+}
+
+// handleReportDevStart is `lola report devstart "<why>"`: a sandboxed agent
+// cannot start dev tabs (they run on the host), so it asks. Only the token's own
+// session is addressed, and nothing runs: the UI shows the line next to the dev
+// toggle and a human's click is what starts the server.
+func (d *Daemon) handleReportDevStart(req protocol.Request, words []string) protocol.Response {
+	if req.Session == "" {
+		return protocol.Response{OK: false, Error: "agentReport: no session ($LOLA_SESSION unset)"}
+	}
+	why := strings.Join(strings.Fields(sanitizeAgentText(strings.Join(words, " "))), " ")
+	if why == "" {
+		why = "wants to check its work in the running app"
+	}
+	if len(why) > maxPortAskBytes {
+		why = strings.ToValidUTF8(why[:maxPortAskBytes], "")
+	}
+	if !d.reports.allow(req.Session, time.Now()) {
+		return protocol.Response{OK: false, Error: errReportRateLimited.Error()}
+	}
+	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
+		sess.DevStartAsk = why
 		return true
 	})
 	if !known {

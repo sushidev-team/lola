@@ -184,6 +184,17 @@ it('shows the agent\'s port-setup request beside the dev toggle and opens the re
   expect(screen.queryByText('Port 3000 is fixed in vite.config.ts')).toBeNull();
 });
 
+it('shows a sandboxed agent\'s dev-start request while dev is off and starts nothing until the click', async () => {
+  const id = freshSession({ worktree: '/w', project: 'fe', devCommands: ['npm run dev'], devStartAsk: 'check the cart page' });
+  const dev = vi.spyOn(store, 'dev').mockResolvedValue(undefined as never);
+  render(SessionSide, { sessionId: id });
+  expect(screen.getByText('check the cart page')).toBeInTheDocument();
+  expect(dev).not.toHaveBeenCalled();
+  const buttons = screen.getAllByRole('button', { name: 'Start dev' });
+  await fireEvent.click(buttons[buttons.length - 1]);
+  expect(dev).toHaveBeenCalledWith(id, true);
+});
+
 it('prepares each tab the way the agent said: viewport, caption, then asks the page to scroll and outline, once per document', async () => {
   const id = freshSession({ devActive: true, devUrls: ['http://localhost:3000'] });
   vi.mocked(PreviewService.Open).mockResolvedValue('about:blank');

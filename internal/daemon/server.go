@@ -965,6 +965,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			DevURLs:      s.DevURLs,
 			DevForwards:  devForwardInfos(s.DevForwards),
 			PortSetupAsk: portSetupAsk(s.PortSetupAsk, devParallel[s.Project]),
+			DevStartAsk:  devStartAsk(s.DevStartAsk, s.DevActive),
 
 			FeedbackPending: s.PendingFeedback != "",
 			Usage:           d.sessionUsage(s.ID),

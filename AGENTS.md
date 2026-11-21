@@ -414,6 +414,7 @@ every send path. Re-verify against a live pane.
   the same on a destroyed context. A mark or step that is not found FAILS the
   capture (nothing saved) and shows as text in the preview. Preview ignores a
   prepared view on a phone: it opens the forwarded address in the phone's browser.
+- **A sandboxed agent REQUESTS its dev server, it never starts it.** Dev tabs run on the host in a tree the agent can write, so the bridge admits no `dev` command. In a sandbox `lola dev start` sends `agentReport devstart "<why>"` (`Session.DevStartAsk`, display text, shown only while dev is off); the Dev panel offers one "Start dev" click, the human act. Review pages are the host dev tab's addresses only.
 - **GitHub output** (`reviewmd`): CSS is stripped, so structure only (alert, emoji,
   `<details>`, `<kbd>` chips inside one blockquote, every line `>`-prefixed). The
   FORMAT block in the review prompt is a contract (`TestReviewInstructionPinsTheGradedShape`).

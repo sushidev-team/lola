@@ -215,3 +215,26 @@ func TestReportPortsIsARequestNotAnAction(t *testing.T) {
 		t.Error("an unknown session was accepted")
 	}
 }
+
+func TestReportDevStartIsARequestNotAnAction(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	d.sessions.Upsert(s)
+
+	if resp := d.handle(context.Background(), reportReq(t, s.ID, "devstart", "check the cart page")); !resp.OK {
+		t.Fatalf("devstart: %s", resp.Error)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if got.DevStartAsk != "check the cart page" || got.DevActive {
+		t.Fatalf("ask = %q, active = %v", got.DevStartAsk, got.DevActive)
+	}
+	if devStartAsk(got.DevStartAsk, false) == "" {
+		t.Error("the ask is hidden while the dev server is off")
+	}
+	if devStartAsk(got.DevStartAsk, true) != "" {
+		t.Error("the ask outlives the start it asked for")
+	}
+	if resp := d.handle(context.Background(), reportReq(t, "unknown-id", "devstart", "why")); resp.OK {
+		t.Error("an unknown session was accepted")
+	}
+}
