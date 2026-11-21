@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -155,3 +156,35 @@ func TestOpenRefusesNonLoopback(t *testing.T) {
 		t.Fatal("LAN address opened")
 	}
 }
+
+func TestOpenReusesTheProxyAcrossEquivalentSpellings(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer up.Close()
+	s := New()
+	defer s.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(up.URL, "http://"))
+	a, err := s.Open("s", "http://localhost:"+port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.Open("s", "http://LOCALHOST:"+port+"/settings?tab=a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostOf := func(raw string) string { u, _ := url.Parse(raw); return u.Host }
+	if hostOf(a) != hostOf(b) {
+		t.Fatalf("one server got two proxies: %s vs %s", a, b)
+	}
+	if !strings.HasSuffix(b, "/settings?tab=a") {
+		t.Fatalf("path and query lost: %s", b)
+	}
+	// An explicit default port is the same origin as none.
+	if x, y := canonicalOrigin(mustURL("http://localhost:80")), canonicalOrigin(mustURL("http://LocalHost")); x.String() != y.String() {
+		t.Fatalf("default port differs: %s vs %s", x, y)
+	}
+	if canonicalOrigin(mustURL("https://localhost:443")).Host != "localhost" || canonicalOrigin(mustURL("http://localhost:443")).Host != "localhost:443" {
+		t.Fatal("default port stripped for the wrong scheme")
+	}
+}
+
+func mustURL(raw string) *url.URL { u, _ := url.Parse(raw); return u }

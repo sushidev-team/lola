@@ -114,7 +114,7 @@ func (s *Server) Open(session, target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	origin := &url.URL{Scheme: u.Scheme, Host: u.Host}
+	origin := canonicalOrigin(u)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -300,4 +300,22 @@ func Inject(html []byte) []byte {
 
 func concat(parts ...[]byte) []byte {
 	return bytes.Join(parts, nil)
+}
+
+// canonicalOrigin is the proxy key and upstream for a URL: lowercase host, and
+// no port when it is the scheme's default. Two spellings of one server must share
+// a proxy, or each gets its own cookie host and a login does not carry over.
+func canonicalOrigin(u *url.URL) *url.URL {
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	port := u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return &url.URL{Scheme: u.Scheme, Host: host}
 }
