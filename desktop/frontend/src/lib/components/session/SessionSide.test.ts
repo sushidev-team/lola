@@ -213,3 +213,61 @@ it('prepares each tab the way the agent said: viewport, caption, then asks the p
     preview.close();
   }
 });
+
+it('runs a prepared flow across navigations: first document at any path, resume after the last step seen, then stop', async () => {
+  const id = freshSession({ devActive: true, devUrls: ['http://shop.test'] });
+  vi.mocked(PreviewService.Open).mockResolvedValue('about:blank');
+  render(SessionPreview);
+  const steps = [
+    { do: 'fill', selector: '#e', value: 'dev@shop.test' },
+    { do: 'click', text: 'Sign in' },
+    { do: 'goto', path: '/cart' },
+    { do: 'click', text: 'Checkout' },
+  ];
+  preview.open(id, 'http://shop.test/cart', { prep: { steps, marks: [{ selector: '.total' }] }, caption: 'Cart total' });
+  try {
+    const frame = await waitFor(() => { const f = document.querySelector('iframe'); expect(f).not.toBeNull(); return f as HTMLIFrameElement; });
+    expect(screen.getByText(/it performs 4 steps here/)).toBeInTheDocument();
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+    const say = (data: object) => window.dispatchEvent(new MessageEvent('message', { data: { source: 'lola-preview', ...data }, source: frame.contentWindow }));
+    const specs = () => post.mock.calls.map((c) => (c[0] as { spec: { from?: number; steps?: unknown[] } }).spec);
+    // The app redirected to its login page: a flow starts there all the same.
+    say({ type: 'ready', url: 'http://127.0.0.1:5555/login' });
+    expect(specs()).toHaveLength(1);
+    expect(specs()[0].from).toBeUndefined();
+    expect(specs()[0].steps).toHaveLength(4);
+    // Step 1 (Sign in) navigated: the next document resumes after it.
+    say({ type: 'step', i: 0 });
+    say({ type: 'step', i: 1 });
+    say({ type: 'ready', url: 'http://127.0.0.1:5555/dashboard' });
+    expect(specs()[1].from).toBe(2);
+    // The goto navigated too.
+    say({ type: 'step', i: 2 });
+    say({ type: 'ready', url: 'http://127.0.0.1:5555/cart' });
+    expect(specs()[2].from).toBe(3);
+    // A step that did not work is shown as text, and nothing resumes afterwards.
+    say({ type: 'prepared', found: [false], waited: false, failed: { index: 3, step: 'click Checkout', why: '<b>nothing</b> to click was found' } });
+    expect(await screen.findByText(/Step 4 \(click Checkout\) didn't work: <b>nothing<\/b> to click was found/)).toBeInTheDocument();
+    say({ type: 'ready', url: 'http://127.0.0.1:5555/elsewhere' });
+    expect(post).toHaveBeenCalledTimes(3);
+  } finally {
+    preview.close();
+  }
+});
+
+it('stops resuming a flow that keeps navigating', async () => {
+  const id = freshSession({ devActive: true, devUrls: ['http://shop.test'] });
+  vi.mocked(PreviewService.Open).mockResolvedValue('about:blank');
+  render(SessionPreview);
+  preview.open(id, 'http://shop.test/', { prep: { steps: [{ do: 'click', text: 'Next' }, { do: 'click', text: 'Next' }] } });
+  try {
+    const frame = await waitFor(() => { const f = document.querySelector('iframe'); expect(f).not.toBeNull(); return f as HTMLIFrameElement; });
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+    const say = (data: object) => window.dispatchEvent(new MessageEvent('message', { data: { source: 'lola-preview', ...data }, source: frame.contentWindow }));
+    say({ type: 'ready', url: 'http://127.0.0.1:5/' });
+    for (let n = 0; n < 6; n++) { say({ type: 'step', i: 0 }); say({ type: 'ready', url: 'http://127.0.0.1:5/loop' }); }
+    expect(post).toHaveBeenCalledTimes(3); // the first load plus two resumes, one per step
+  } finally {
+    preview.close();
+  }
+});

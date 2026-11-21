@@ -47,6 +47,8 @@ Example manifest:
 
 Pages (up to 6) let the reviewer open the running app on the exact spot: "pages":[{"title":"Cart","url":"http://localhost:3000/cart","caption":"Total","device":"mobile","waitFor":".total","marks":[{"selector":".total","label":"Fixed"},{"text":"Place order"}]}]
 (url must be a path on this session's own dev server; see lola dev start).
+Add "steps" to get the page into a state first (up to 12, before the marks): {"do":"fill","selector":"#email","value":"dev@shop.test"}, {"do":"click","text":"Sign in"}, {"do":"press","key":"Enter"}, {"do":"wait","selector":".dashboard"}, {"do":"goto","path":"/cart"}.
+Steps run only on localhost, *.test, loopback or private-network IPs; the manifest is retained, so use a throwaway dev login.
 Before is optional when a baseline capture is unavailable. Use an empty screens
 array for changes without visual evidence. Limit: 64 KiB manifest, four pairs,
 4 MiB and 20 megapixels per PNG/JPEG, 20 packages or 128 MiB retained per session.
@@ -86,8 +88,16 @@ Capture the actual revisions; dirty-worktree screenshots are not commit proof.`,
 	root.AddCommand(reviewAutomationCommands()...)
 	var capture reviewcapture.Options
 	var marks []string
+	var steps []string
 	captureCmd := &cobra.Command{Use: "capture <url>", Args: cobra.ExactArgs(1), Short: "Capture a page or element with local Playwright; print a manifest screen entry", RunE: func(c *cobra.Command, args []string) error {
 		capture.URL = args[0]
+		for _, raw := range steps {
+			st, err := reviewcapture.ParseStep(raw)
+			if err != nil {
+				return err
+			}
+			capture.Steps = append(capture.Steps, st)
+		}
 		for _, raw := range marks {
 			m, err := reviewcapture.ParseMark(raw)
 			if err != nil {
@@ -123,6 +133,7 @@ Capture the actual revisions; dirty-worktree screenshots are not commit proof.`,
 	captureCmd.Flags().StringVar(&capture.Device, "device", "", "mobile, tablet or desktop: sets the viewport and the live tab's viewport (unless --width/--height are given)")
 	captureCmd.Flags().StringVar(&capture.WaitFor, "wait-for", "", "CSS selector that must exist before the shot (and before the live tab is prepared)")
 	captureCmd.Flags().IntVar(&capture.ScrollY, "scroll-y", 0, "Scroll offset in px when no mark is found")
+	captureCmd.Flags().StringArrayVar(&steps, "step", nil, "Do something before the marks, up to 12, in order, only on a local address (localhost, *.test, loopback or private IP): 'click <target>', 'fill <target> = <value>' (a THROWAWAY dev login; the manifest is retained), 'press Enter', 'wait <target>' or 'wait 500ms', 'goto /path'. target = CSS selector or text:<visible text>")
 	captureCmd.Flags().StringArrayVar(&marks, "mark", nil, "Outline an element, up to 4: '<css selector>', 'text:<visible text>', or 'Label => <target>'; the first is scrolled to the middle. A mark that is not found fails the capture")
 	root.AddCommand(captureCmd)
 	complete := &cobra.Command{Use: "complete <manifest.json>", Args: cobra.ExactArgs(1), Short: "Publish final material and report completion (a claim, never approval)", RunE: publish.RunE}

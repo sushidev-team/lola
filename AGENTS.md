@@ -397,6 +397,23 @@ every send path. Re-verify against a live pane.
   sentinels. Anything failing degrades to direct exec.
 - stderr: classify quota/auth only on failure, keep a TAIL buffer, use phrases
   (not bare `auth`). `review` and `reviewagent` carry independent copies — fix both.
+- **Prepared pages are DATA, carried out by lola's own script** (`reviewpack.Prep`:
+  device, waitFor, scrollY, marks, steps; `internal/preview/prepare.js`). One
+  script runs in the embedded preview (served before `picker.js`) and in
+  `review-package capture` (`addInitScript`: a dev app's CSP cannot block it), so
+  a screenshot and a live tab show one view. Nothing an agent writes is ever
+  evaluated. **Steps** (click, fill, press, wait, goto) run ONLY on a local host:
+  `reviewpack.LocalHost` (localhost, `*.test`, `*.localhost`, loopback and private
+  IPs) gates the manifest (`ValidateSteps`, pages AND screens) and the capture
+  options; the script checks `location.hostname` again before EVERY step; `goto` is
+  a same-origin path. The Go table `localHostCases` and the one in
+  `prepare.test.ts` must stay identical. A `fill` value is retained with the
+  manifest: a throwaway dev login only (the briefing says so). A step that
+  navigates ends the script, so the app resumes from the last `step` message it
+  saw, bounded by the step count (`SessionPreview.onFrameReady`); the capture does
+  the same on a destroyed context. A mark or step that is not found FAILS the
+  capture (nothing saved) and shows as text in the preview. Preview ignores a
+  prepared view on a phone: it opens the forwarded address in the phone's browser.
 - **GitHub output** (`reviewmd`): CSS is stripped, so structure only (alert, emoji,
   `<details>`, `<kbd>` chips inside one blockquote, every line `>`-prefixed). The
   FORMAT block in the review prompt is a contract (`TestReviewInstructionPinsTheGradedShape`).

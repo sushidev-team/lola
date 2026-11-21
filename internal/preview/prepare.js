@@ -99,22 +99,209 @@
     return true;
   }
 
-  // Resolves { found: [bool per mark], waited: bool } once the page is ready or
-  // after `timeout` ms, whichever is first; a mark that never appears is reported
-  // rather than guessed at. Layout settles (fonts, images), so it is drawn again.
-  window.__lolaPrepare = function (spec, timeout) {
-    spec = spec && typeof spec === "object" ? spec : {};
-    var deadline = Date.now() + (timeout > 0 ? Math.min(timeout, 30000) : 10000);
+  // ---- Steps: clicks, typing, a login ---------------------------------------
+  // Run BEFORE the marks, only on a local host (the same rule as
+  // reviewpack.LocalHost, checked again before every step: a page that sent the
+  // browser somewhere else mid-flow gets nothing typed into it). A step that
+  // navigates ends this script; the caller resumes with spec.from after the next
+  // document announces itself, using the progress callback below.
+
+  function localHost(h) {
+    h = String(h || "").toLowerCase().replace(/^\[|\]$/g, "");
+    if (!h) return false;
+    if (h === "localhost" || /\.localhost$/.test(h) || /\.test$/.test(h)) return true;
+    var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+    if (m) {
+      var a = +m[1], b = +m[2];
+      if (+m[3] > 255 || +m[4] > 255 || a > 255 || b > 255) return false;
+      return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+    }
+    return h === "::1" || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h);
+  }
+  window.__lolaLocalHost = localHost;
+
+  var KEYS = { Enter: 13, Escape: 27, Tab: 9, Space: 32, ArrowUp: 38, ArrowDown: 40 };
+  var stepWait = 8000; // per step; spec.stepTimeoutMs may only shorten it
+  var token = 0;
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  function until(fn, ms, id) {
+    var deadline = Date.now() + ms;
     return new Promise(function (resolve) {
       (function poll() {
-        var ok = ready(spec);
-        if (ok || Date.now() >= deadline) {
-          var found = apply(spec, true);
-          setTimeout(function () { found = apply(spec, false); resolve({ found: found, waited: !ok }); }, 400);
-          return;
-        }
-        setTimeout(poll, 250);
+        if (id !== token) return resolve(null);
+        var v = fn();
+        if (v || Date.now() >= deadline) return resolve(v || null);
+        setTimeout(poll, 100);
       })();
+    });
+  }
+
+  function qs(sel) { try { return sel ? document.querySelector(sel) : null; } catch (err) { return null; } }
+
+  function lower(s) { return String(s || "").toLowerCase(); }
+
+  // A field by selector, or by what a person would call it: a label, a
+  // placeholder, an aria-label or its name.
+  function findField(step) {
+    var el = qs(str(step.selector, 500));
+    if (el) return el;
+    var want = lower(str(step.text, 200));
+    if (!want) return null;
+    var fields = document.querySelectorAll("input,textarea,select");
+    for (var i = 0; i < fields.length; i++) {
+      var f = fields[i];
+      if (f.type === "hidden") continue;
+      var names = [f.getAttribute("placeholder"), f.getAttribute("aria-label"), f.getAttribute("name")];
+      if (f.labels) for (var j = 0; j < f.labels.length; j++) names.push(f.labels[j].textContent);
+      for (var k = 0; k < names.length; k++) if (lower(names[k]).indexOf(want) !== -1) return f;
+    }
+    return null;
+  }
+
+  var CLICKABLE = "a,button,[role=button],[role=tab],[role=menuitem],[role=link],input[type=submit],input[type=button],summary,label";
+
+  // Something to click: by selector, or the control whose text matches best (the
+  // shortest one, so "Save" finds the Save button, not the form that contains it).
+  function findClickable(step) {
+    var el = qs(str(step.selector, 500));
+    if (el) return el;
+    var want = lower(str(step.text, 200));
+    if (!want) return null;
+    var nodes = document.querySelectorAll(CLICKABLE), best = null, bestLen = 1e9;
+    for (var i = 0; i < nodes.length && i < 4000; i++) {
+      var n = nodes[i];
+      var t = lower(n.value && /^(submit|button)$/.test(n.type) ? n.value : n.textContent) + " " + lower(n.getAttribute("aria-label"));
+      if (t.indexOf(want) !== -1 && t.length < bestLen) { best = n; bestLen = t.length; }
+    }
+    return best || byText(str(step.text, 200));
+  }
+
+  function findAny(step) { return qs(str(step.selector, 500)) || (step.text ? byText(str(step.text, 200)) : null); }
+
+  function setValue(el, value) {
+    el.focus();
+    if (el.tagName === "SELECT") {
+      var want = lower(value), hit = null;
+      for (var i = 0; i < el.options.length; i++) {
+        if (lower(el.options[i].value) === want || lower(el.options[i].text) === want) { hit = el.options[i]; break; }
+      }
+      if (!hit) return false;
+      el.value = hit.value;
+    } else {
+      // The native setter, so a framework that tracks the value notices it.
+      var proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      var set = Object.getOwnPropertyDescriptor(proto, "value");
+      if (set && set.set) set.set.call(el, value); else el.value = value;
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  function press(el, key) {
+    el = el || document.activeElement || document.body;
+    var code = KEYS[key];
+    var init = { key: key === "Space" ? " " : key, code: key, keyCode: code, which: code, bubbles: true, cancelable: true };
+    var down = el.dispatchEvent(new KeyboardEvent("keydown", init));
+    el.dispatchEvent(new KeyboardEvent("keyup", init));
+    if (!down) return;
+    // A synthetic Enter does not submit a form or press a button by itself.
+    if (key === "Enter") {
+      if (el.tagName === "INPUT" && el.form) { if (el.form.requestSubmit) el.form.requestSubmit(); else el.form.submit(); }
+      else if (el.tagName === "BUTTON" || el.tagName === "A") el.click();
+    } else if (key === "Space" && (el.tagName === "BUTTON" || el.type === "checkbox")) el.click();
+  }
+
+  function describe(step) { return step.do + " " + (step.selector || step.text || step.path || step.key || ""); }
+
+  // Resolves null when the step worked, else why it did not.
+  function runStep(step, id) {
+    if (!localHost(location.hostname)) return Promise.resolve("this page is not on a local address");
+    var el;
+    switch (step.do) {
+      case "click":
+        return until(function () { return findClickable(step); }, stepWait, id).then(function (e) {
+          if (!e) return "nothing to click was found";
+          e.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
+          if (e.focus) e.focus();
+          e.click();
+          return sleep(700).then(function () { return null; });
+        });
+      case "fill":
+        return until(function () { return findField(step); }, stepWait, id).then(function (e) {
+          if (!e) return "no such field was found";
+          return setValue(e, str(step.value, 200)) ? null : "that option does not exist";
+        });
+      case "press":
+        el = step.selector || step.text ? findClickable(step) || findField(step) : null;
+        if ((step.selector || step.text) && !el) return Promise.resolve("no such element was found");
+        if (!KEYS[step.key]) return Promise.resolve("unknown key");
+        press(el, step.key);
+        return sleep(700).then(function () { return null; });
+      case "wait":
+        if (step.selector || step.text) {
+          return until(function () { return findAny(step); }, stepWait, id).then(function (e) { return e ? null : "it never appeared"; });
+        }
+        return sleep(Math.max(1, Math.min(+step.ms || 0, 3000))).then(function () { return null; });
+      case "goto":
+        if (typeof step.path !== "string" || step.path.charAt(0) !== "/" || step.path.charAt(1) === "/" || step.path.indexOf("\\") !== -1) {
+          return Promise.resolve("not a path on this origin");
+        }
+        location.assign(location.origin + step.path.slice(0, 500));
+        return sleep(5000).then(function () { return null; });
+      default:
+        return Promise.resolve("unknown step");
+    }
+  }
+
+  // Runs steps[from..]; resolves { failed: null | {index, step, why} }.
+  function runSteps(steps, from, onStep, id) {
+    var i = Math.max(0, from | 0);
+    return new Promise(function (resolve) {
+      (function next() {
+        if (id !== token) return resolve({ failed: { index: i, step: "", why: "superseded" } });
+        if (i >= steps.length) return resolve({ failed: null });
+        var step = steps[i] && typeof steps[i] === "object" ? steps[i] : {};
+        if (onStep) { try { onStep(i); } catch (err) {} }
+        if (typeof window.__lolaStepStarted === "function") { try { window.__lolaStepStarted(i); } catch (err) {} }
+        runStep(step, id).then(function (why) {
+          if (why) return resolve({ failed: { index: i, step: describe(step), why: why } });
+          i++;
+          next();
+        });
+      })();
+    });
+  }
+
+  // Resolves { found: [bool per mark], waited: bool, failed: null | {index, step,
+  // why} }: the steps first (from spec.from), then the marks. It resolves once the
+  // page is ready or after `timeout` ms, whichever is first; a mark that never
+  // appears is reported rather than guessed at. Layout settles (fonts, images), so
+  // the outlines are drawn again.
+  window.__lolaPrepare = function (spec, timeout, onStep) {
+    spec = spec && typeof spec === "object" ? spec : {};
+    var id = ++token;
+    stepWait = spec.stepTimeoutMs > 0 ? Math.max(100, Math.min(spec.stepTimeoutMs, 8000)) : 8000;
+    var steps = Array.isArray(spec.steps) ? spec.steps.slice(0, 12) : [];
+    var marks = Array.isArray(spec.marks) ? spec.marks.slice(0, 4) : [];
+    var none = marks.map(function () { return false; });
+    return runSteps(steps, spec.from, onStep, id).then(function (sr) {
+      if (sr.failed) return { found: none, waited: false, failed: sr.failed };
+      var deadline = Date.now() + (timeout > 0 ? Math.min(timeout, 30000) : 10000);
+      return new Promise(function (resolve) {
+        (function poll() {
+          if (id !== token) return resolve({ found: none, waited: false, failed: { index: -1, step: "", why: "superseded" } });
+          var ok = ready(spec);
+          if (ok || Date.now() >= deadline) {
+            var found = apply(spec, true);
+            setTimeout(function () { found = apply(spec, false); resolve({ found: found, waited: !ok, failed: null }); }, 400);
+            return;
+          }
+          setTimeout(poll, 250);
+        })();
+      });
     });
   };
 })();

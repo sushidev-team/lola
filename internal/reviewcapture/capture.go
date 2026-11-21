@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,9 @@ func (o Options) Validate() error {
 		return errors.New("capture requires a title up to 200 bytes and a selector up to 500 bytes")
 	}
 	if err := reviewpack.ValidatePrep(o.Prep); err != nil {
+		return err
+	}
+	if err := reviewpack.ValidateSteps(o.Steps, o.URL); err != nil {
 		return err
 	}
 	if !filepath.IsLocal(o.Destination) || filepath.Clean(o.Destination) != o.Destination || !strings.HasSuffix(o.Destination, ".png") {
@@ -144,7 +148,13 @@ func CaptureInto(ctx context.Context, workspace, outputRoot string, o Options, r
 	if closeErr != nil {
 		return reviewpack.Screen{}, closeErr
 	}
-	return reviewpack.Screen{Title: o.Title, After: o.Destination, URL: result.URL, Viewport: fmt.Sprintf("%d × %d", o.Width, o.Height), Selector: o.Selector, Prep: o.Prep}, nil
+	// With steps the page ended somewhere else (after a login); the entry names
+	// where the steps START, which is what a live tab must open.
+	screenURL := result.URL
+	if len(o.Steps) > 0 {
+		screenURL = o.URL
+	}
+	return reviewpack.Screen{Title: o.Title, After: o.Destination, URL: screenURL, Viewport: fmt.Sprintf("%d × %d", o.Width, o.Height), Selector: o.Selector, Prep: o.Prep}, nil
 }
 
 // missingMarks names every mark the prepare script could not find, so a shot that
@@ -221,4 +231,58 @@ func ParseMark(s string) (reviewpack.Mark, error) {
 		return m, err
 	}
 	return m, nil
+}
+
+// ParseStep reads one --step value:
+//
+//	click <target>            target is a CSS selector or "text:<visible text>"
+//	fill <target> = <value>   the value follows a spaced " = "; a throwaway dev login only
+//	press <Key>               Enter, Escape, Tab, Space, ArrowUp, ArrowDown
+//	wait <target> | wait <ms>ms
+//	goto </path>              a path on the same origin
+func ParseStep(s string) (reviewpack.Step, error) {
+	verb, rest, _ := strings.Cut(strings.TrimSpace(s), " ")
+	rest = strings.TrimSpace(rest)
+	target := func(t string) (sel, text string) {
+		if v, ok := strings.CutPrefix(t, "text:"); ok {
+			return "", strings.TrimSpace(v)
+		}
+		return t, ""
+	}
+	var st reviewpack.Step
+	switch verb {
+	case reviewpack.StepClick:
+		st = reviewpack.Step{Do: verb}
+		st.Selector, st.Text = target(rest)
+	case reviewpack.StepFill:
+		t, value, ok := strings.Cut(rest, " = ")
+		if !ok {
+			return st, errors.New(`fill needs "<target> = <value>"`)
+		}
+		st = reviewpack.Step{Do: verb, Value: value}
+		st.Selector, st.Text = target(strings.TrimSpace(t))
+	case reviewpack.StepPress:
+		st = reviewpack.Step{Do: verb, Key: rest}
+	case reviewpack.StepWait:
+		if ms, ok := strings.CutSuffix(rest, "ms"); ok {
+			n, err := strconv.Atoi(strings.TrimSpace(ms))
+			if err != nil {
+				return st, errors.New("wait needs a target or <n>ms")
+			}
+			st = reviewpack.Step{Do: verb, Ms: n}
+		} else {
+			st = reviewpack.Step{Do: verb}
+			st.Selector, st.Text = target(rest)
+		}
+	case reviewpack.StepGoto:
+		st = reviewpack.Step{Do: verb, Path: rest}
+	default:
+		return st, fmt.Errorf("unknown step %q (click, fill, press, wait, goto)", verb)
+	}
+	// Bounds and shape are checked against a local placeholder; the real URL
+	// check runs on the whole capture.
+	if err := reviewpack.ValidateSteps([]reviewpack.Step{st}, "http://localhost/"); err != nil {
+		return st, err
+	}
+	return st, nil
 }

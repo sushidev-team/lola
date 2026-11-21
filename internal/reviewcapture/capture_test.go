@@ -141,3 +141,61 @@ func TestDeviceSizeMatchesThePreviewPresets(t *testing.T) {
 		t.Fatal("desktop has no fixed size")
 	}
 }
+
+func TestStepsRunOnlyAgainstLocalAddressesAndKeepTheStartingURL(t *testing.T) {
+	steps := []reviewpack.Step{{Do: "fill", Selector: "#e", Value: "dev@shop.test"}, {Do: "click", Text: "Sign in"}}
+	o := Options{URL: "https://example.com/login", Width: 1440, Height: 900, Destination: "a.png", Title: "Login", Prep: reviewpack.Prep{Steps: steps}}
+	if _, err := Capture(context.Background(), t.TempDir(), o, func(context.Context, string, string, []byte) ([]byte, error) {
+		t.Fatal("launched a browser to type into a public host")
+		return nil, nil
+	}); err == nil {
+		t.Fatal("steps accepted for a public host")
+	}
+	dir := t.TempDir()
+	o.URL = "https://shop.test/login"
+	var sent Options
+	run := func(ctx context.Context, w, s string, in []byte) ([]byte, error) {
+		_ = json.Unmarshal(in, &sent)
+		f, _ := os.Create(sent.Destination)
+		defer f.Close()
+		_ = png.Encode(f, image.NewRGBA(image.Rect(0, 0, 10, 10)))
+		// The browser ended on the dashboard after signing in.
+		return []byte(`{"url":"https://shop.test/dashboard","found":[]}`), nil
+	}
+	s, err := Capture(context.Background(), dir, o, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sent.Steps) != 2 || sent.Steps[0].Value != "dev@shop.test" {
+		t.Fatalf("steps not passed to the script: %+v", sent.Steps)
+	}
+	if s.URL != "https://shop.test/login" || len(s.Steps) != 2 {
+		t.Fatalf("the entry must name where the steps start: %+v", s)
+	}
+}
+
+func TestParseStep(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want reviewpack.Step
+	}{
+		{"click text:Sign in", reviewpack.Step{Do: "click", Text: "Sign in"}},
+		{"click button[type=submit]", reviewpack.Step{Do: "click", Selector: "button[type=submit]"}},
+		{"fill #email = dev@shop.test", reviewpack.Step{Do: "fill", Selector: "#email", Value: "dev@shop.test"}},
+		{"fill text:Password = a = b", reviewpack.Step{Do: "fill", Text: "Password", Value: "a = b"}},
+		{"press Enter", reviewpack.Step{Do: "press", Key: "Enter"}},
+		{"wait .dashboard", reviewpack.Step{Do: "wait", Selector: ".dashboard"}},
+		{"wait 500ms", reviewpack.Step{Do: "wait", Ms: 500}},
+		{"goto /cart?x=1", reviewpack.Step{Do: "goto", Path: "/cart?x=1"}},
+	} {
+		got, err := ParseStep(c.in)
+		if err != nil || got != c.want {
+			t.Errorf("ParseStep(%q) = %+v, %v", c.in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "eval 1+1", "click", "fill #e", "press F12", "wait", "wait 9999ms", "wait xms", "goto //evil.com", "goto https://evil.com"} {
+		if st, err := ParseStep(bad); err == nil {
+			t.Errorf("ParseStep(%q) accepted: %+v", bad, st)
+		}
+	}
+}

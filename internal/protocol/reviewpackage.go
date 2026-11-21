@@ -122,6 +122,19 @@ type ReviewPrep struct {
 	WaitFor string       `json:"waitFor,omitempty"`
 	ScrollY int          `json:"scrollY,omitempty"`
 	Marks   []ReviewMark `json:"marks,omitempty"`
+	Steps   []ReviewStep `json:"steps,omitempty"`
+}
+
+// ReviewStep is one action on a prepared page (reviewpack.Step): click, fill,
+// press, wait or goto, run only on a local host.
+type ReviewStep struct {
+	Do       string `json:"do"`
+	Selector string `json:"selector,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Value    string `json:"value,omitempty"`
+	Key      string `json:"key,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Ms       int    `json:"ms,omitempty"`
 }
 
 type ReviewMark struct {

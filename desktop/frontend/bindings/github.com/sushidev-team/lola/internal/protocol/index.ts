@@ -135,6 +135,7 @@ export type {
     ReviewPackagesData,
     ReviewRecord,
     ReviewScreen,
+    ReviewStep,
     ReviewTallyInfo,
     ReviewThread,
     ReviewVerifyArgs,

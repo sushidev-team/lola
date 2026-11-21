@@ -75,6 +75,16 @@ export interface PreviewMark {
   label?: string;
 }
 
+export interface PreviewStep {
+  do: string;
+  selector?: string;
+  text?: string;
+  value?: string;
+  key?: string;
+  path?: string;
+  ms?: number;
+}
+
 /**
  * How the agent prepared one page for the reviewer (the review manifest's
  * page/screen fields). Declarative data the injected prepare script carries out;
@@ -85,6 +95,8 @@ export interface PreviewPrep {
   waitFor?: string;
   scrollY?: number;
   marks?: PreviewMark[] | null;
+  /** Clicks and typing before the marks. The prepare script runs them only on a local address. */
+  steps?: PreviewStep[] | null;
 }
 
 export interface PreviewRequest {
@@ -108,7 +120,7 @@ export interface PreviewTab {
 
 /** Whether a prep says anything: an empty one is not "prepared". */
 export function hasPrep(p?: PreviewPrep): p is PreviewPrep {
-  return !!p && !!(p.device || p.waitFor || p.scrollY || p.marks?.length);
+  return !!p && !!(p.device || p.waitFor || p.scrollY || p.marks?.length || p.steps?.length);
 }
 
 function request(sessionId: string, t: { url: string; caption?: string; prep?: PreviewPrep }): PreviewRequest {
@@ -167,7 +179,7 @@ class PreviewStore {
 export const preview = new PreviewStore();
 
 /** The preparation fields of a review page or screen, as a PreviewPrep. */
-export function prepOf(o: { device?: string; waitFor?: string; scrollY?: number; marks?: PreviewMark[] | null }): PreviewPrep | undefined {
-  const p: PreviewPrep = { device: o.device, waitFor: o.waitFor, scrollY: o.scrollY, marks: o.marks };
+export function prepOf(o: { device?: string; waitFor?: string; scrollY?: number; marks?: PreviewMark[] | null; steps?: PreviewStep[] | null }): PreviewPrep | undefined {
+  const p: PreviewPrep = { device: o.device, waitFor: o.waitFor, scrollY: o.scrollY, marks: o.marks, steps: o.steps };
   return hasPrep(p) ? p : undefined;
 }

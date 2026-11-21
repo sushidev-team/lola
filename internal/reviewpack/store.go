@@ -130,12 +130,18 @@ func Validate(m Manifest) error {
 		if err := ValidatePrep(pg.Prep); err != nil {
 			return err
 		}
+		if err := ValidateSteps(pg.Steps, pg.URL); err != nil {
+			return err
+		}
 	}
 	for _, s := range m.Screens {
 		if strings.TrimSpace(s.Title) == "" || len(s.Title) > 200 || len(s.Caption) > 2000 || len(s.URL) > 2048 || len(s.Viewport) > 100 || len(s.Selector) > 500 || s.After == "" {
 			return errors.New("each screen requires a title and after image; metadata must be bounded")
 		}
 		if err := ValidatePrep(s.Prep); err != nil {
+			return err
+		}
+		if err := ValidateSteps(s.Steps, s.URL); err != nil {
 			return err
 		}
 		for _, path := range []string{s.Before, s.After} {

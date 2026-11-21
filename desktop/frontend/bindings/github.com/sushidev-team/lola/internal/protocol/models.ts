@@ -2296,6 +2296,21 @@ export interface ReviewPage {
     "waitFor"?: string;
     "scrollY"?: number;
     "marks"?: ReviewMark[] | null;
+    "steps"?: ReviewStep[] | null;
+}
+
+/**
+ * ReviewStep is one action on a prepared page: click, fill, press, wait or goto,
+ * run only on a local host.
+ */
+export interface ReviewStep {
+    "do": string;
+    "selector"?: string;
+    "text"?: string;
+    "value"?: string;
+    "key"?: string;
+    "path"?: string;
+    "ms"?: number;
 }
 
 /**
@@ -2347,6 +2362,7 @@ export interface ReviewScreen {
     "waitFor"?: string;
     "scrollY"?: number;
     "marks"?: ReviewMark[] | null;
+    "steps"?: ReviewStep[] | null;
 }
 
 /**
