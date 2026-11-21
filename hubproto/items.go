@@ -445,6 +445,9 @@ const (
 	// expire past its grace window, that item is not offered to that device for
 	// this long.
 	DeviceCooldown = 6 * time.Hour
+	// NoFixRecheck: after an agent reports [FailNoFix] the item is offered to
+	// NO device for this long, then tried again (a fix may exist by then).
+	NoFixRecheck = 7 * 24 * time.Hour
 )
 
 // Lease is a device's time-bounded claim on an item. It is renewed by the

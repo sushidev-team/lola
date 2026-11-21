@@ -552,6 +552,7 @@ every send path. Re-verify against a live pane.
     completes only once the PR head moved past the one GitHub showed at claim
     AND is green; an unmoved, still-red one ends as refused / agent_gave_up,
     never not_reproducible. `HubItem` survives adoption.
+    An agent that finds no published fix runs `lola report nofix`: the session's open advisory fails `no_fix_available` (no attempt counted, no PR) and the hub holds it from every device for 7 days; a hub that predates the reason gets a release instead.
   - Only what the protocol names leaves the machine in plaintext: repo slugs,
     validated findings, item ids, a PR URL, a delivery word, rendezvous ids and
     bearer SHA-256 hashes — never a session id, path or pane text in the clear.

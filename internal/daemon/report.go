@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/sushidev-team/lola/hubproto"
 	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/claimaudit"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -90,6 +92,9 @@ func (d *Daemon) handleAgentReport(req protocol.Request) protocol.Response {
 		req.Args, _ = json.Marshal(a)
 		return d.handleSessionTask(context.Background(), req, "agent")
 	}
+	if len(a.Argv) > 0 && strings.EqualFold(a.Argv[0], "nofix") {
+		return d.handleReportNoFix(req)
+	}
 	if req.Session == "" {
 		return protocol.Response{OK: false, Error: "agentReport: no session ($LOLA_SESSION unset)"}
 	}
@@ -161,4 +166,33 @@ func boardInfo(b board.Board, audit claimaudit.Result, now time.Time) *protocol.
 	}
 	bi.Mismatches = audit.Warnings
 	return bi
+}
+
+// handleReportNoFix is `lola report nofix`: the agent of a hub dep_advisory
+// session found no published fixed version. It only flags the session's open
+// hub work; hubOutcomeFor turns that into a no_fix_available fail, which gives
+// the item back to the hub. A claim that can only return work needs no proof.
+func (d *Daemon) handleReportNoFix(req protocol.Request) protocol.Response {
+	if req.Session == "" {
+		return protocol.Response{OK: false, Error: "agentReport: no session ($LOLA_SESSION unset)"}
+	}
+	found := false
+	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
+		for _, w := range sess.HubWorks() {
+			if w.Open() && w.Kind == string(hubproto.KindDepAdvisory) && !w.NoFix {
+				w.NoFix, found = true, true
+			}
+		}
+		return found
+	})
+	if !known {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
+	}
+	if !found {
+		return protocol.Response{OK: false, Error: "agentReport: nofix: this session holds no open hub advisory"}
+	}
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "agentReport: persist sessions: %v", err)
+	}
+	return protocol.Response{OK: true}
 }

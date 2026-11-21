@@ -78,6 +78,18 @@ describe("newSession sheet", () => {
     await waitFor(() => expect(router.top).toMatchObject({ name: "session", id: "nori-1" }));
   });
 
+  it("starts a new branch with a chosen name and base", async () => {
+    const open = vi.spyOn(store, "openManual").mockResolvedValue({ sessionId: "nori-3" } as never);
+    open.mockClear();
+    render(NewSession);
+    await fireEvent.input(screen.getByLabelText("Prompt"), { target: { value: "Add retries" } });
+    await fireEvent.input(screen.getByLabelText("New branch"), { target: { value: " feat/mine " } });
+    await fireEvent.input(screen.getByLabelText("Base branch"), { target: { value: "develop" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(open).toHaveBeenCalled());
+    expect(open.mock.calls.at(-1)![0]).toMatchObject({ branch: "feat/mine", base: "develop", existing: false });
+  });
+
   it("starts on an existing branch when the switch is on", async () => {
     const open = vi.spyOn(store, "openManual").mockResolvedValue({ sessionId: "nori-2" } as never);
     open.mockClear();

@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.15.0](https://github.com/sushidev-team/lola/compare/v0.14.0...v0.15.0) (2026-11-21)
+
+
+### Features
+
+* **hub:** agent-reported no_fix_available outcome holds an advisory for a week ([eb38c3d](https://github.com/sushidev-team/lola/commit/eb38c3d030830b7978d893b98feed99e0dd8fef4))
+* **hub:** no fix available status for agents (SUSHI-810) ([e88a240](https://github.com/sushidev-team/lola/commit/e88a240e6a74135befd1363190b826ff8295e32e))
+
+
+### Bug Fixes
+
+* **mobile:** ended session screen fills the height ([03e4537](https://github.com/sushidev-team/lola/commit/03e45370cfd62b03667e3dfdcfd0211913ff2071))
+* **mobile:** give the ended session view the full screen height ([0e6fca1](https://github.com/sushidev-team/lola/commit/0e6fca17c3b88233fb8a383789253a3322e58695))
+* **mobile:** name a new branch and base when starting a session ([08b5bbf](https://github.com/sushidev-team/lola/commit/08b5bbf56a43e45bc3e689f17bc0ca95f9e1d176))
+* **mobile:** name a new branch and base when starting a session (SUSHI-811) ([5a206b7](https://github.com/sushidev-team/lola/commit/5a206b7eff2debd259d2934d9129577e61039929))
+* **mobile:** route the new port-setup methods as Mac-only in the shim ([9ebb19a](https://github.com/sushidev-team/lola/commit/9ebb19a50e969d8b7a8799add7e64ca0ebe260a2))
+* **mobile:** shim the port-setup bindings and restyle the ended session footer ([813e471](https://github.com/sushidev-team/lola/commit/813e4715796e46c9ce7455551f0f31cd4a4744fb))
+
+## [0.14.0](https://github.com/sushidev-team/lola/compare/v0.13.0...v0.14.0) (2026-11-20)
+
+
+### Features
+
+* **desktop:** embedded preview + element picker (SUSHI-627) ([109f461](https://github.com/sushidev-team/lola/commit/109f461529ffeb153295ed770d21087af6ba791c))
+* **desktop:** preview the session's dev server and send a picked element to the agent ([d13d4c4](https://github.com/sushidev-team/lola/commit/d13d4c4c8cb5ef480b4e4205121391aef5949208))
+* **desktop:** remove the project overview ([44d09fb](https://github.com/sushidev-team/lola/commit/44d09fb69ced4893377c0d356c4e83358791421a))
+* **desktop:** suggest dynamic port setup and preview apps by session ([01c7d97](https://github.com/sushidev-team/lola/commit/01c7d97d77715b37168ceffda9f251ea1751e073))
+* **mobile:** add a branch graph to the project workspace ([71239e2](https://github.com/sushidev-team/lola/commit/71239e273135e00f933d9ee46411d123c3247a17))
+* **mobile:** redesign Sessions and Review and fix touch scrolling ([f9a6730](https://github.com/sushidev-team/lola/commit/f9a6730559e589938e6d1e3ffe4cde17a9329473))
+* share sessions with the team (SUSHI-802) ([c6701eb](https://github.com/sushidev-team/lola/commit/c6701eba3124cffb185f350024b3b06f12d2e326))
+* **Team:** one Macs list for teammates and sharing ([7f088f9](https://github.com/sushidev-team/lola/commit/7f088f9e0a55cf6a13223b735709df0e96f3d16b))
+
+
+### Bug Fixes
+
+* **daemon:** mark the phone rendezvous set dirty when the relay switch changes ([79cb7be](https://github.com/sushidev-team/lola/commit/79cb7be35c144d17bd902a272a2575cbc5e5e8c8))
+* **desktop:** keep the selected Git project when returning to Code ([5299b8b](https://github.com/sushidev-team/lola/commit/5299b8b2f7d12427976193cb50f426c9cd2ba341))
+* **desktop:** reveal clicked graph branches in the local sidebar ([cdfee52](https://github.com/sushidev-team/lola/commit/cdfee52c75d8b5bc1d5721e74fdc82ebf100c0b3))
+* **desktop:** suppress manual stash warning during automatic pull recovery ([7e5f7d9](https://github.com/sushidev-team/lola/commit/7e5f7d9695750c070d36243df3cd89b25e102ef5))
+* **Team:** keep pinned teammates on the Macs list when the Mac read fails ([e42cbf3](https://github.com/sushidev-team/lola/commit/e42cbf34ada52ad6580e9f23cc88f4eed49c154a))
+* **worktree:** prevent advisory branches from accumulating ([11acaae](https://github.com/sushidev-team/lola/commit/11acaaedadbd77a3ed1bc22ab7417b1b7c985ee8))
+
 ## [0.13.0](https://github.com/sushidev-team/lola/compare/v0.12.0...v0.13.0) (2026-11-20)
 
 

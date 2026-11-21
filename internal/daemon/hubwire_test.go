@@ -16,6 +16,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/hub"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
@@ -921,5 +922,20 @@ func TestHubPolicyVersionFromStoreAfterRestart(t *testing.T) {
 	d.hubCycle(context.Background())
 	if v := d.hubStatusData().PolicyVersion; v != 5 {
 		t.Errorf("policy version = %d, want the stored 5", v)
+	}
+}
+
+func TestHubNoFixReportReturnsTheItemWhileTheAgentLives(t *testing.T) {
+	d, fh, _ := hubFixture(t)
+	fh.offers = []hubproto.Item{advisoryItem("it1")}
+	d.hubCycle(context.Background())
+	s := hubSessions(d)[0]
+	if resp := d.handleReportNoFix(protocol.Request{Session: s.ID}); !resp.OK {
+		t.Fatalf("report: %s", resp.Error)
+	}
+	d.hubOutcomeCycle(context.Background())
+	d.hubOutcomeCycle(context.Background())
+	if got := fh.snapshot().fails; !slices.Equal(got, []hubproto.FailReason{hubproto.FailNoFix}) {
+		t.Fatalf("fails = %v", got)
 	}
 }

@@ -211,6 +211,9 @@ type WorkItem struct {
 	ProgressAt time.Time `json:"progress_at,omitzero"`
 	// Grace holds a lapsed lease's item for its previous holder.
 	Grace *Grace `json:"grace,omitempty"`
+	// HoldUntil: until when the item is offered to no device at all (an agent
+	// found no published fix; hubproto.NoFixRecheck).
+	HoldUntil time.Time `json:"hold_until,omitzero"`
 	// Cooldown: device id -> until when the item is not offered to it.
 	Cooldown map[string]time.Time `json:"cooldown,omitempty"`
 	// History is the attempt log, newest last, at most

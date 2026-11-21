@@ -43,6 +43,8 @@
   let source = $state<"blank" | "pr" | "ticket">("blank");
   let existing = $state(false);
   let existingBranch = $state("");
+  let newBranch = $state("");
+  let base = $state("");
 
   const shellAllowed = can("shellCreate");
   const launchable = $derived(store.projectByName(project)?.agentOk !== false);
@@ -90,8 +92,9 @@
     error = "";
     const r = await store.openManual({
       project,
-      branch: existing ? existingBranch.trim() : branchFor(prompt),
+      branch: existing ? existingBranch.trim() : newBranch.trim() || branchFor(prompt),
       existing,
+      base: existing ? undefined : base.trim() || undefined,
       agent: !shellOnly,
       prompt: shellOnly ? "" : prompt.trim(),
       agentKind: agent,
@@ -111,7 +114,7 @@
   label={copy.newSession.title}
   title={copy.newSession.title}
   detent="fit"
-  dirty={prompt.length > 0 || existingBranch.length > 0}
+  dirty={prompt.length > 0 || existingBranch.length > 0 || newBranch.length > 0 || base.length > 0}
   action={{ label: copy.newSession.start, onclick: () => void start(), disabled: !canStart }}
   onclose={() => router.close()}
 >
@@ -169,6 +172,29 @@
           autocorrect="off"
           spellcheck="false"
           bind:value={existingBranch}
+          disabled={busy}
+        />
+      {:else}
+        <input
+          class="w-full text-body text-ink outline-none placeholder:text-placeholder"
+          style="min-height: 44px"
+          aria-label="New branch"
+          placeholder={copy.newSession.newBranchPlaceholder}
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          bind:value={newBranch}
+          disabled={busy}
+        />
+        <input
+          class="w-full text-body text-ink outline-none placeholder:text-placeholder"
+          style="min-height: 44px"
+          aria-label="Base branch"
+          placeholder={copy.newSession.basePlaceholder}
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          bind:value={base}
           disabled={busy}
         />
       {/if}
