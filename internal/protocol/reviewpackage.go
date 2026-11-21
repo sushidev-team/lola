@@ -87,12 +87,20 @@ type ReviewPackage struct {
 	Base      string           `json:"base"`
 	Head      string           `json:"head"`
 	Screens   []ReviewScreen   `json:"screens"`
+	Pages     []ReviewPage     `json:"pages,omitempty"`
 	ID        string           `json:"id"`
 	Session   string           `json:"session"`
 	Repo      string           `json:"repo"`
 	PR        int              `json:"pr"`
 	CreatedAt time.Time        `json:"createdAt"`
 	Artifacts []ReviewArtifact `json:"artifacts"`
+}
+
+// ReviewPage is a live dev-server page the reviewer can open in the preview.
+type ReviewPage struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Caption string `json:"caption,omitempty"`
 }
 
 type ReviewScreen struct {

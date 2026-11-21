@@ -157,3 +157,24 @@ func TestStackHistoryRemainsDiscoverableAfterTeardown(t *testing.T) {
 		t.Fatal("tampered metadata accepted")
 	}
 }
+
+func TestLivePagesAreBoundedHTTPAddresses(t *testing.T) {
+	_, _, m := fixture(t)
+	m.Pages = []Page{{Title: "Settings", URL: "http://localhost:3000/settings", Caption: "spacing"}}
+	if err := Validate(m); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"file:///etc/passwd", "javascript:alert(1)", "http://u:p@localhost:3000/", "http:///x", "localhost:3000"} {
+		m.Pages = []Page{{Title: "x", URL: bad}}
+		if Validate(m) == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	m.Pages = make([]Page, MaxPages+1)
+	for i := range m.Pages {
+		m.Pages[i] = Page{Title: "p", URL: "http://localhost:3000/"}
+	}
+	if Validate(m) == nil {
+		t.Error("accepted too many pages")
+	}
+}

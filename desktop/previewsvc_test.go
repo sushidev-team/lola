@@ -28,6 +28,9 @@ func TestPreviewOpenOnlyForTheSessionsOwnDevURLs(t *testing.T) {
 	if _, err := s.Open("s2", up.URL); err == nil {
 		t.Error("another session's address opened")
 	}
+	if addr, err := s.Open("s1", up.URL+"/settings?tab=a"); err != nil || !strings.HasSuffix(addr, "/settings?tab=a") {
+		t.Errorf("a path on the session's own dev server: %q, %v", addr, err)
+	}
 	if _, err := s.Open("s1", "http://127.0.0.1:1/"); err == nil {
 		t.Error("an address the daemon never derived opened")
 	}

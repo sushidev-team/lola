@@ -2288,6 +2288,12 @@ export interface ReviewImageData {
  * ReviewPackage is a wire projection of retained material. All content is agent-provided.
  * Keep protocol independent of filesystem/storage packages.
  */
+export interface ReviewPage {
+    "title": string;
+    "url": string;
+    "caption"?: string;
+}
+
 export interface ReviewPackage {
     "version": number;
     "title": string;
@@ -2295,6 +2301,7 @@ export interface ReviewPackage {
     "base": string;
     "head": string;
     "screens": ReviewScreen[] | null;
+    "pages"?: ReviewPage[] | null;
     "id": string;
     "session": string;
     "repo": string;

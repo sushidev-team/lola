@@ -130,6 +130,7 @@ export type {
     ReviewData,
     ReviewImageData,
     ReviewPackage,
+    ReviewPage,
     ReviewPackagesData,
     ReviewRecord,
     ReviewScreen,
