@@ -378,12 +378,13 @@ const (
 	FailRefused  FailReason = "refused"          // local policy refused after claim
 	FailSandbox  FailReason = "sandbox_required" // project not sandboxed
 	FailObsolete FailReason = "not_reproducible" // finding no longer holds
+	FailNoFix    FailReason = "no_fix_available" // the agent found no published fix yet
 )
 
 // Valid reports whether f is a known fail reason.
 func (f FailReason) Valid() bool {
 	switch f {
-	case FailSpawn, FailAgent, FailCI, FailPRClosed, FailTimeout, FailRefused, FailSandbox, FailObsolete:
+	case FailSpawn, FailAgent, FailCI, FailPRClosed, FailTimeout, FailRefused, FailSandbox, FailObsolete, FailNoFix:
 		return true
 	}
 	return false

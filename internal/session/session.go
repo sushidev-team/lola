@@ -1398,6 +1398,11 @@ type HubWork struct {
 	// Label is lola's own short name for the item, built at claim time from
 	// validated fields ("GHSA-xxxx · lodash", "PR #12 · lodash").
 	Label string `json:"label,omitempty"`
+	// NoFix is set when the agent reported (`lola report nofix`) that the
+	// advisory has no published fix: the item goes back to the hub, which
+	// holds it for hubproto.NoFixRecheck. A claim that can only return work
+	// needs no proof.
+	NoFix bool `json:"no_fix,omitempty"`
 	// Released is set when a person gave the lease back (cmd=hubRelease)
 	// while the session lived on: the session keeps running, lola stops
 	// renewing and reporting for it, exactly as for a lost lease.

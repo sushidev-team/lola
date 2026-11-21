@@ -1663,6 +1663,9 @@ func hubOutcomeFor(s session.Session, w session.HubWork, ended, legacy bool) (hu
 			return o, true
 		}
 	}
+	if w.NoFix && url == "" {
+		return fail(hubproto.FailNoFix)
+	}
 	agentEnded := s.AgentState == state.AgentDead || s.AgentState == state.AgentExited
 	if !ended {
 		switch {
@@ -1783,7 +1786,11 @@ func (d *Daemon) hubOutcomes(ctx context.Context, api hubAPI) {
 			if o.Action == hubActFail {
 				// The hub keeps it from this device for a while too; the
 				// local mark holds even against an older hub.
-				d.hubCoolDownFor(o.ItemID, now, hubproto.DeviceCooldown)
+				cool := hubproto.DeviceCooldown
+				if o.Reason == string(hubproto.FailNoFix) {
+					cool = hubCooldown
+				}
+				d.hubCoolDownFor(o.ItemID, now, cool)
 				failed++
 				d.logf("", "hub: session %s: reporting fail %s for item %s", s.ID, o.Reason, o.ItemID)
 			}
@@ -1886,6 +1893,11 @@ func (d *Daemon) hubSend(ctx context.Context, api hubAPI, o hubOutcome) (hubOutc
 				req.PRURL, req.Group, extra = "", "", false
 			}
 			err := api.Fail(ctx, o.ItemID, req)
+			if req.Reason == hubproto.FailNoFix && hubStatusIs(err, 400) {
+				// A hub that predates no_fix_available: hand the item back
+				// the way a person does (it cools down for this device).
+				return api.Release(ctx, o.ItemID)
+			}
 			if extra && hubStatusIs(err, 400) {
 				// An old hub refuses the unknown fields; a current one
 				// answers the same 400 bad_request to a pr_url that is
