@@ -45,6 +45,8 @@ Example manifest:
  "screens":[{"title":"Settings","before":".lola/before.png","after":".lola/after.png",
  "caption":"Explain the visible change","viewport":"1440 × 900","url":"http://localhost:3000/settings"}]}
 
+Pages (up to 6) let the reviewer open the running app on the exact spot: "pages":[{"title":"Cart","url":"http://localhost:3000/cart","caption":"Total","device":"mobile","waitFor":".total","marks":[{"selector":".total","label":"Fixed"},{"text":"Place order"}]}]
+(url must be a path on this session's own dev server; see lola dev start).
 Before is optional when a baseline capture is unavailable. Use an empty screens
 array for changes without visual evidence. Limit: 64 KiB manifest, four pairs,
 4 MiB and 20 megapixels per PNG/JPEG, 20 packages or 128 MiB retained per session.
@@ -83,8 +85,24 @@ Capture the actual revisions; dirty-worktree screenshots are not commit proof.`,
 	root.AddCommand(publish)
 	root.AddCommand(reviewAutomationCommands()...)
 	var capture reviewcapture.Options
+	var marks []string
 	captureCmd := &cobra.Command{Use: "capture <url>", Args: cobra.ExactArgs(1), Short: "Capture a page or element with local Playwright; print a manifest screen entry", RunE: func(c *cobra.Command, args []string) error {
 		capture.URL = args[0]
+		for _, raw := range marks {
+			m, err := reviewcapture.ParseMark(raw)
+			if err != nil {
+				return err
+			}
+			capture.Marks = append(capture.Marks, m)
+		}
+		if w, h, ok := reviewcapture.DeviceSize(capture.Device); ok {
+			if !c.Flags().Changed("width") {
+				capture.Width = w
+			}
+			if !c.Flags().Changed("height") {
+				capture.Height = h
+			}
+		}
 		dir, err := os.Getwd()
 		if err != nil {
 			return err
@@ -102,6 +120,10 @@ Capture the actual revisions; dirty-worktree screenshots are not commit proof.`,
 	captureCmd.Flags().StringVar(&capture.Channel, "channel", "", "Use installed chrome or msedge instead of Playwright Chromium")
 	captureCmd.Flags().IntVar(&capture.Width, "width", 1440, "Viewport width")
 	captureCmd.Flags().IntVar(&capture.Height, "height", 900, "Viewport height")
+	captureCmd.Flags().StringVar(&capture.Device, "device", "", "mobile, tablet or desktop: sets the viewport and the live tab's viewport (unless --width/--height are given)")
+	captureCmd.Flags().StringVar(&capture.WaitFor, "wait-for", "", "CSS selector that must exist before the shot (and before the live tab is prepared)")
+	captureCmd.Flags().IntVar(&capture.ScrollY, "scroll-y", 0, "Scroll offset in px when no mark is found")
+	captureCmd.Flags().StringArrayVar(&marks, "mark", nil, "Outline an element, up to 4: '<css selector>', 'text:<visible text>', or 'Label => <target>'; the first is scrolled to the middle. A mark that is not found fails the capture")
 	root.AddCommand(captureCmd)
 	complete := &cobra.Command{Use: "complete <manifest.json>", Args: cobra.ExactArgs(1), Short: "Publish final material and report completion (a claim, never approval)", RunE: publish.RunE}
 	complete.Flags().StringVar(&app, "app", "", "Stack member name (required for stacks)")

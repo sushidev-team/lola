@@ -46,3 +46,19 @@ it("opens pages as tabs, deduped and capped, and switches between them", () => {
   preview.close();
   expect(preview.request).toBeNull();
 });
+
+it("keeps one address twice when it is prepared for two different areas, and carries the preparation", () => {
+  const home = { url: "http://localhost:3000/", title: "Top", prep: { marks: [{ selector: "header" }] } };
+  const footer = { url: "http://localhost:3000/", title: "Bottom", prep: { marks: [{ selector: "footer" }] }, caption: "Check the footer" };
+  preview.openTabs("s", [home, footer, { ...footer }]);
+  expect(preview.tabs.map((t) => t.title)).toEqual(["Top", "Bottom"]);
+  expect(preview.request).toEqual({ sessionId: "s", url: home.url, prep: home.prep });
+  preview.select(1);
+  expect(preview.request).toEqual({ sessionId: "s", url: footer.url, prep: footer.prep, caption: "Check the footer" });
+  preview.close();
+  preview.open("s", "http://localhost:3000/x", { prep: { device: "mobile" } });
+  expect(preview.request?.prep?.device).toBe("mobile");
+  preview.open("s", "http://localhost:3000/y", { prep: {} });
+  expect(preview.request?.prep).toBeUndefined();
+  preview.close();
+});

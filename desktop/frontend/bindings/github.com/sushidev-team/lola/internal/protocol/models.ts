@@ -2292,6 +2292,20 @@ export interface ReviewPage {
     "title": string;
     "url": string;
     "caption"?: string;
+    "device"?: string;
+    "waitFor"?: string;
+    "scrollY"?: number;
+    "marks"?: ReviewMark[] | null;
+}
+
+/**
+ * ReviewMark points at one element of a prepared page, by CSS selector or by
+ * visible text.
+ */
+export interface ReviewMark {
+    "selector"?: string;
+    "text"?: string;
+    "label"?: string;
 }
 
 export interface ReviewPackage {
@@ -2329,6 +2343,10 @@ export interface ReviewScreen {
     "url"?: string;
     "viewport"?: string;
     "selector"?: string;
+    "device"?: string;
+    "waitFor"?: string;
+    "scrollY"?: number;
+    "marks"?: ReviewMark[] | null;
 }
 
 /**

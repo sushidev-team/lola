@@ -106,6 +106,12 @@
   window.addEventListener("message", function (e) {
     if (e.source !== window.parent || !e.data || e.data.target !== SRC) return;
     if (e.data.type === "pick") set(!!e.data.on);
+    if (e.data.type === "prepare" && window.__lolaPrepare) {
+      // A spec is plain data from lola's own app; the script never evals it.
+      window.__lolaPrepare(e.data.spec, 12000).then(function (r) {
+        post({ type: "prepared", found: r.found, waited: r.waited });
+      });
+    }
   });
 
   post({ type: "ready", url: location.href, title: document.title });

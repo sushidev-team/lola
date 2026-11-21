@@ -25,6 +25,8 @@
   let note = $state("");
   let sending = $state(false);
   let reload = $state(0);
+  // What the agent prepared for the active page, and what the page said about it.
+  let prepared = $state<{ found: boolean[]; waited: boolean } | null>(null);
   let surface = $state<HTMLDivElement>();
   let exitHint = $state(false);
   const exitWindowMs = 3000;
@@ -60,6 +62,9 @@
   }
 
 
+  const markName = (m: { selector?: string; text?: string; label?: string }) => m.label || m.text || m.selector || "element";
+  const missing = $derived(prepared ? (req?.prep?.marks ?? []).filter((_, i) => !prepared!.found[i]).map(markName) : []);
+
   const vp = $derived(VIEWPORTS.find((v) => v.id === viewport) ?? VIEWPORTS[2]);
   const session = $derived(req ? store.sessions.find((s) => s.id === req.sessionId) : undefined);
   const groups = $derived(devUrlGroups(
@@ -74,6 +79,9 @@
     error = "";
     picked = null;
     picking = false;
+    prepared = null;
+    const device = request?.prep?.device;
+    if (device && VIEWPORTS.some((v) => v.id === device)) viewport = device as ViewportId;
     clearExitHint();
     if (!request) return;
     let current = true;
@@ -83,6 +91,23 @@
     );
     return () => { current = false; };
   });
+
+  /** Asks the framed page to carry out the agent's preparation (scroll, outline, wait). */
+  function prepare() {
+    const p = req?.prep;
+    if (!p || !frame?.contentWindow) return;
+    prepared = null;
+    frame.contentWindow.postMessage({ target: PICKER_SOURCE, type: "prepare", spec: { waitFor: p.waitFor, scrollY: p.scrollY, marks: p.marks } }, "*");
+  }
+
+  /** Only the page the agent prepared is prepared: a link the reviewer followed is theirs. */
+  function sameDocument(frameUrl: unknown): boolean {
+    try {
+      return new URL(String(frameUrl)).pathname === new URL(req!.url).pathname;
+    } catch {
+      return false;
+    }
+  }
 
   function tell(on: boolean) {
     frame?.contentWindow?.postMessage({ target: PICKER_SOURCE, type: "pick", on }, "*");
@@ -98,8 +123,10 @@
     const onMessage = (e: MessageEvent) => {
       // Only the framed page, and only a well-formed pick, ever reaches the form.
       if (!frame || e.source !== frame.contentWindow) return;
-      const d = e.data as { source?: string; type?: string; picking?: boolean } | null;
+      const d = e.data as { source?: string; type?: string; picking?: boolean; url?: string; found?: unknown; waited?: unknown } | null;
       if (d?.source === PICKER_SOURCE && d.type === "mode") picking = !!d.picking;
+      if (d?.source === PICKER_SOURCE && d.type === "ready" && req?.prep && sameDocument(d.url)) prepare();
+      if (d?.source === PICKER_SOURCE && d.type === "prepared" && Array.isArray(d.found)) prepared = { found: d.found.map(Boolean), waited: !!d.waited };
       // A frame may ask for the hint. Only a second keypress in Lola can close
       // the preview, so a page cannot discard a form by posting two messages.
       if (d?.source === PICKER_SOURCE && d.type === "escape" && document.activeElement === frame) {
@@ -171,6 +198,14 @@
         {#if preview.tabs.length > 1}
           <div class="w-full" data-preview-tabs>
             <Tabs tabs={preview.tabs.map((t, i) => ({ id: String(i), label: t.title || devUrlLabel(t.url) }))} ariaLabel="Open pages" active={String(preview.active)} onSelect={(id) => preview.select(Number(id))} pill />
+          </div>
+        {/if}
+        {#if req.caption || req.prep?.marks?.length || req.prep?.waitFor}
+          <div class="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-preview-prep>
+            <p class="min-w-0 flex-1 basis-60 text-sm wrap-anywhere text-ink"><span class="font-medium">Prepared by the agent</span>{req.caption ? ` — ${req.caption}` : ""}</p>
+            {#if missing.length}<p class="text-sm text-warn" role="status">Not found on the page: {missing.join(", ")}</p>{/if}
+            {#if prepared?.waited && !missing.length}<p class="text-sm text-warn" role="status">The page was slow to show what the agent pointed at.</p>{/if}
+            <Button size="xs" disabled={!src} onclick={prepare}>Show it again</Button>
           </div>
         {/if}
         {#each groups as group (group.name)}

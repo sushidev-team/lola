@@ -7,7 +7,10 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/sushidev-team/lola/internal/reviewpack"
 )
 
 func TestCaptureRetainsActualContextWithoutOverwriting(t *testing.T) {
@@ -60,5 +63,81 @@ func TestCaptureRejectsUnsafeInputBeforeLaunch(t *testing.T) {
 		}); err == nil {
 			t.Fatal("invalid input accepted")
 		}
+	}
+}
+
+func pngRun(found string) Run {
+	return func(_ context.Context, _, _ string, input []byte) ([]byte, error) {
+		var got Options
+		_ = json.Unmarshal(input, &got)
+		f, err := os.Create(got.Destination)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		if err := png.Encode(f, image.NewRGBA(image.Rect(0, 0, 10, 10))); err != nil {
+			return nil, err
+		}
+		return []byte(`{"url":"http://localhost:3000/settings","found":` + found + `}`), nil
+	}
+}
+
+func TestCaptureCarriesThePreparationAndRefusesAShotThatMissesAMark(t *testing.T) {
+	dir := t.TempDir()
+	o := Options{URL: "http://localhost:3000/settings", Width: 390, Height: 844, Destination: "a.png", Title: "Settings",
+		Prep: reviewpack.Prep{Device: "mobile", WaitFor: "main", Marks: []reviewpack.Mark{{Selector: "#save", Label: "Save"}, {Text: "Danger zone"}}}}
+	var sent Options
+	run := func(ctx context.Context, w, s string, in []byte) ([]byte, error) {
+		_ = json.Unmarshal(in, &sent)
+		return pngRun("[true,true]")(ctx, w, s, in)
+	}
+	s, err := Capture(context.Background(), dir, o, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.PrepareJS == "" || !strings.Contains(sent.PrepareJS, "__lolaPrepare") || sent.WaitFor != "main" || len(sent.Marks) != 2 {
+		t.Fatalf("script input: %+v", sent)
+	}
+	if s.Device != "mobile" || len(s.Marks) != 2 || s.Marks[0].Label != "Save" {
+		t.Fatalf("the screen entry lost the preparation: %+v", s)
+	}
+	o.Destination = "b.png"
+	_, err = Capture(context.Background(), dir, o, pngRun("[true,false]"))
+	if err == nil || !strings.Contains(err.Error(), `text "Danger zone"`) {
+		t.Fatalf("a shot missing a mark was kept: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "b.png")); statErr == nil {
+		t.Fatal("a refused capture left a file behind")
+	}
+}
+
+func TestParseMark(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want reviewpack.Mark
+	}{
+		{"#save", reviewpack.Mark{Selector: "#save"}},
+		{"text:Save changes", reviewpack.Mark{Text: "Save changes"}},
+		{"The button => a[href|=en]", reviewpack.Mark{Selector: "a[href|=en]", Label: "The button"}},
+		{"Where => text:Danger zone", reviewpack.Mark{Text: "Danger zone", Label: "Where"}},
+	} {
+		got, err := ParseMark(c.in)
+		if err != nil || got != c.want {
+			t.Errorf("ParseMark(%q) = %+v, %v", c.in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "text:", strings.Repeat("x", 501)} {
+		if m, err := ParseMark(bad); err == nil {
+			t.Errorf("ParseMark(%q) accepted: %+v", bad, m)
+		}
+	}
+}
+
+func TestDeviceSizeMatchesThePreviewPresets(t *testing.T) {
+	if w, h, ok := DeviceSize("mobile"); !ok || w != 390 || h != 844 {
+		t.Fatal("mobile")
+	}
+	if _, _, ok := DeviceSize("desktop"); ok {
+		t.Fatal("desktop has no fixed size")
 	}
 }

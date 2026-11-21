@@ -2,6 +2,7 @@ package reviewpack
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -176,5 +177,34 @@ func TestLivePagesAreBoundedHTTPAddresses(t *testing.T) {
 	}
 	if Validate(m) == nil {
 		t.Error("accepted too many pages")
+	}
+}
+
+func TestPreparationIsBoundedAndTravelsOnPagesAndScreens(t *testing.T) {
+	_, _, m := fixture(t)
+	ok := Prep{Device: "tablet", WaitFor: "main", ScrollY: 400, Marks: []Mark{{Selector: "#a", Label: "A"}, {Text: "Save"}}}
+	m.Pages = []Page{{Title: "p", URL: "http://localhost:3000/", Prep: ok}}
+	m.Screens[0].Prep = ok
+	if err := Validate(m); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(m)
+	back, err := Decode(raw)
+	if err != nil || back.Pages[0].Marks[1].Text != "Save" || back.Screens[0].Device != "tablet" {
+		t.Fatalf("round trip lost the preparation: %+v, %v", back, err)
+	}
+	for _, bad := range []Prep{
+		{Device: "watch"}, {ScrollY: -1}, {ScrollY: 100_001}, {WaitFor: strings.Repeat("x", 501)},
+		{Marks: make([]Mark, MaxMarks+1)}, {Marks: []Mark{{Label: "no target"}}}, {Marks: []Mark{{Text: "x", Label: strings.Repeat("l", 81)}}},
+	} {
+		if len(bad.Marks) > MaxMarks {
+			for i := range bad.Marks {
+				bad.Marks[i] = Mark{Selector: "a"}
+			}
+		}
+		m.Pages = []Page{{Title: "p", URL: "http://localhost:3000/", Prep: bad}}
+		if Validate(m) == nil {
+			t.Errorf("accepted %+v", bad)
+		}
 	}
 }

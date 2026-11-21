@@ -92,7 +92,7 @@ it('offers the live pages the agent named and opens one in the preview',async()=
   render(ReviewOverview,{pkg:{...pkg as object,pages:[{title:'Settings page',url:'http://localhost:3000/settings',caption:'Spacing fix'}]} as never,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});
   expect(screen.getByText('Spacing fix')).toBeInTheDocument();
   await fireEvent.click(screen.getByRole('button',{name:'Open live page: Settings page'}));
-  expect(preview.request).toEqual({sessionId:'s',url:'http://localhost:3000/settings'});
+  expect(preview.request).toEqual({sessionId:'s',url:'http://localhost:3000/settings',caption:'Spacing fix'});
   preview.close();
 });
 it('opens every live page as a tab in one click', async () => {

@@ -188,3 +188,39 @@ func TestOpenReusesTheProxyAcrossEquivalentSpellings(t *testing.T) {
 }
 
 func mustURL(raw string) *url.URL { u, _ := url.Parse(raw); return u }
+
+// The live tab prepares itself through the served script, so the proxy must
+// serve the shared prepare script together with the picker, and the picker must
+// answer a prepare message by running it.
+func TestProxyServesThePrepareScriptWithThePicker(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><head></head><body></body></html>"))
+	}))
+	defer up.Close()
+	s := New()
+	defer s.Close()
+	addr, err := s.Open("session", up.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(addr)
+	resp, err := http.Get("http://" + u.Host + ScriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	js := string(b)
+	for _, want := range []string{"window.__lolaPrepare = function", `e.data.type === "prepare"`, `type: "prepared"`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("served script lacks %q", want)
+		}
+	}
+	if strings.Index(js, "window.__lolaPrepare = function") > strings.Index(js, `e.data.type === "prepare"`) {
+		t.Error("the picker is served before the script it calls")
+	}
+	if PrepareJS() == "" || !strings.Contains(js, PrepareJS()) {
+		t.Error("the screenshot script and the served script differ")
+	}
+}

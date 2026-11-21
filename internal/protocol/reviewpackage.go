@@ -101,6 +101,7 @@ type ReviewPage struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Caption string `json:"caption,omitempty"`
+	ReviewPrep
 }
 
 type ReviewScreen struct {
@@ -111,6 +112,22 @@ type ReviewScreen struct {
 	URL      string `json:"url,omitempty"`
 	Viewport string `json:"viewport,omitempty"`
 	Selector string `json:"selector,omitempty"`
+	ReviewPrep
+}
+
+// ReviewPrep is how a reviewer's view of a page is prepared (reviewpack.Prep):
+// agent-provided, declarative, bounded.
+type ReviewPrep struct {
+	Device  string       `json:"device,omitempty"`
+	WaitFor string       `json:"waitFor,omitempty"`
+	ScrollY int          `json:"scrollY,omitempty"`
+	Marks   []ReviewMark `json:"marks,omitempty"`
+}
+
+type ReviewMark struct {
+	Selector string `json:"selector,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Label    string `json:"label,omitempty"`
 }
 
 type ReviewArtifact struct {

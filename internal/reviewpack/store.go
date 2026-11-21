@@ -54,6 +54,7 @@ type Page struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Caption string `json:"caption,omitempty"`
+	Prep
 }
 
 // Before and After are checkout-relative paths on input, retained image IDs on output.
@@ -65,6 +66,9 @@ type Screen struct {
 	URL      string `json:"url,omitempty"`
 	Viewport string `json:"viewport,omitempty"`
 	Selector string `json:"selector,omitempty"`
+	// Prep is how the page behind URL was prepared for this screenshot, so the live
+	// tab opens the same view.
+	Prep
 }
 
 type Artifact struct {
@@ -123,10 +127,16 @@ func Validate(m Manifest) error {
 		if strings.TrimSpace(pg.Title) == "" || len(pg.Title) > 200 || len(pg.Caption) > 2000 || len(pg.URL) > 2048 || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
 			return errors.New("each live page requires a title and an http(s) URL; metadata must be bounded")
 		}
+		if err := ValidatePrep(pg.Prep); err != nil {
+			return err
+		}
 	}
 	for _, s := range m.Screens {
 		if strings.TrimSpace(s.Title) == "" || len(s.Title) > 200 || len(s.Caption) > 2000 || len(s.URL) > 2048 || len(s.Viewport) > 100 || len(s.Selector) > 500 || s.After == "" {
 			return errors.New("each screen requires a title and after image; metadata must be bounded")
+		}
+		if err := ValidatePrep(s.Prep); err != nil {
+			return err
 		}
 		for _, path := range []string{s.Before, s.After} {
 			if path != "" && (!filepath.IsLocal(path) || filepath.Clean(path) != path) {

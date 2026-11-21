@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/preview"
 	"github.com/sushidev-team/lola/internal/reviewpack"
 )
 
@@ -32,6 +33,10 @@ type Options struct {
 	Height      int    `json:"height"`
 	Destination string `json:"destination"`
 	Title       string `json:"-"`
+	// Prep is carried out by lola's shared prepare script before the shot.
+	reviewpack.Prep
+	// PrepareJS is that script's source; set by Capture, never by a caller.
+	PrepareJS string `json:"prepareJS,omitempty"`
 }
 
 func (o Options) Validate() error {
@@ -47,6 +52,9 @@ func (o Options) Validate() error {
 	}
 	if len(o.Selector) > 500 || strings.TrimSpace(o.Title) == "" || len(o.Title) > 200 {
 		return errors.New("capture requires a title up to 200 bytes and a selector up to 500 bytes")
+	}
+	if err := reviewpack.ValidatePrep(o.Prep); err != nil {
+		return err
 	}
 	if !filepath.IsLocal(o.Destination) || filepath.Clean(o.Destination) != o.Destination || !strings.HasSuffix(o.Destination, ".png") {
 		return errors.New("capture output must be a clean checkout-relative .png path")
@@ -74,6 +82,7 @@ func CaptureInto(ctx context.Context, workspace, outputRoot string, o Options, r
 	}
 	defer os.RemoveAll(tmp)
 	input := o
+	input.PrepareJS = preview.PrepareJS()
 	input.Destination = filepath.Join(tmp, "capture.png")
 	b, _ := json.Marshal(input)
 	if run == nil {
@@ -84,10 +93,15 @@ func CaptureInto(ctx context.Context, workspace, outputRoot string, o Options, r
 		return reviewpack.Screen{}, err
 	}
 	var result struct {
-		URL string `json:"url"`
+		URL    string `json:"url"`
+		Found  []bool `json:"found"`
+		Waited bool   `json:"waited"`
 	}
 	if err := json.Unmarshal(out, &result); err != nil {
 		return reviewpack.Screen{}, err
+	}
+	if missing := missingMarks(o.Marks, result.Found); len(missing) > 0 {
+		return reviewpack.Screen{}, fmt.Errorf("capture: could not find %s on the page (wrong selector, or it never rendered); nothing was saved", strings.Join(missing, ", "))
 	}
 	resolved := o
 	resolved.URL = result.URL
@@ -130,7 +144,24 @@ func CaptureInto(ctx context.Context, workspace, outputRoot string, o Options, r
 	if closeErr != nil {
 		return reviewpack.Screen{}, closeErr
 	}
-	return reviewpack.Screen{Title: o.Title, After: o.Destination, URL: result.URL, Viewport: fmt.Sprintf("%d × %d", o.Width, o.Height), Selector: o.Selector}, nil
+	return reviewpack.Screen{Title: o.Title, After: o.Destination, URL: result.URL, Viewport: fmt.Sprintf("%d × %d", o.Width, o.Height), Selector: o.Selector, Prep: o.Prep}, nil
+}
+
+// missingMarks names every mark the prepare script could not find, so a shot that
+// does not show what the agent says it shows is refused rather than saved.
+func missingMarks(marks []reviewpack.Mark, found []bool) []string {
+	var out []string
+	for i, m := range marks {
+		if i < len(found) && found[i] {
+			continue
+		}
+		name := m.Selector
+		if name == "" {
+			name = fmt.Sprintf("text %q", m.Text)
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 func runNode(ctx context.Context, dir, script string, input []byte) ([]byte, error) {
@@ -158,4 +189,36 @@ func (b *limitedOutput) Write(p []byte) (int, error) {
 	n := len(p)
 	_, _ = b.Buffer.Write(p[:min(n, max(0, 8192-b.Len()))])
 	return n, nil
+}
+
+// DeviceSize is the viewport a device preset stands for; it matches the
+// desktop preview's presets, so a "mobile" capture and a "mobile" tab agree.
+func DeviceSize(device string) (w, h int, ok bool) {
+	switch device {
+	case "mobile":
+		return 390, 844, true
+	case "tablet":
+		return 820, 1180, true
+	}
+	return 0, 0, false
+}
+
+// ParseMark reads one --mark value: "<target>" or "<label> => <target>", where
+// target is a CSS selector, or "text:<visible text>" to find an element by what
+// it says. The spaced arrow keeps selectors containing | or @ unambiguous.
+func ParseMark(s string) (reviewpack.Mark, error) {
+	var m reviewpack.Mark
+	target := strings.TrimSpace(s)
+	if label, rest, ok := strings.Cut(s, " => "); ok {
+		m.Label, target = strings.TrimSpace(label), strings.TrimSpace(rest)
+	}
+	if text, ok := strings.CutPrefix(target, "text:"); ok {
+		m.Text = strings.TrimSpace(text)
+	} else {
+		m.Selector = target
+	}
+	if err := reviewpack.ValidatePrep(reviewpack.Prep{Marks: []reviewpack.Mark{m}}); err != nil {
+		return m, err
+	}
+	return m, nil
 }

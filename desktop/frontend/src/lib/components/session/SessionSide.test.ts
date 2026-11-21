@@ -183,3 +183,33 @@ it('shows the agent\'s port-setup request beside the dev toggle and opens the re
   await fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
   expect(screen.queryByText('Port 3000 is fixed in vite.config.ts')).toBeNull();
 });
+
+it('prepares each tab the way the agent said: viewport, caption, then asks the page to scroll and outline, once per document', async () => {
+  const id = freshSession({ devActive: true, devUrls: ['http://localhost:3000'] });
+  vi.mocked(PreviewService.Open).mockResolvedValue('about:blank');
+  render(SessionPreview);
+  preview.openTabs(id, [
+    { url: 'http://localhost:3000/a', title: 'Home', caption: 'Check the header', prep: { device: 'mobile', marks: [{ selector: '#x', label: 'Header' }] } },
+    { url: 'http://localhost:3000/b', title: 'Settings' },
+  ]);
+  try {
+    expect(await screen.findByRole('tab', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByText(/Check the header/)).toBeInTheDocument();
+    const frame = await waitFor(() => { const f = document.querySelector('iframe'); expect(f).not.toBeNull(); return f as HTMLIFrameElement; });
+    expect(frame.getAttribute('style')).toContain('390');
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+    const say = (data: object) => window.dispatchEvent(new MessageEvent('message', { data: { source: 'lola-preview', ...data }, source: frame.contentWindow }));
+    say({ type: 'ready', url: 'http://127.0.0.1:5555/somewhere-else' });
+    expect(post).not.toHaveBeenCalled();
+    say({ type: 'ready', url: 'http://127.0.0.1:5555/a' });
+    expect(post).toHaveBeenCalledWith({ target: 'lola-preview', type: 'prepare', spec: { waitFor: undefined, scrollY: undefined, marks: [{ selector: '#x', label: 'Header' }] } }, '*');
+    say({ type: 'prepared', found: [false], waited: true });
+    expect(await screen.findByText('Not found on the page: Header')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+    expect(screen.queryByText(/Check the header/)).toBeNull();
+    say({ type: 'ready', url: 'http://127.0.0.1:5555/b' });
+    expect(post).toHaveBeenCalledTimes(1);
+  } finally {
+    preview.close();
+  }
+});

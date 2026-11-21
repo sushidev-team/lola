@@ -40,6 +40,14 @@ import (
 //go:embed picker.js
 var pickerJS string
 
+//go:embed prepare.js
+var prepareJS string
+
+// PrepareJS is the script that prepares a reviewer's view (scroll, outline,
+// wait). The screenshot capture injects the SAME source, so a screenshot and the
+// live tab show one view.
+func PrepareJS() string { return prepareJS }
+
 //go:embed xsrf.js
 var xsrfJS string
 
@@ -209,6 +217,7 @@ func hostGuard(addr string, next http.Handler) http.Handler {
 			if _, err := r.Cookie(xsrfCopy); err == nil {
 				_, _ = io.WriteString(w, xsrfJS)
 			}
+			_, _ = io.WriteString(w, prepareJS)
 			_, _ = io.WriteString(w, pickerJS)
 			return
 		}
