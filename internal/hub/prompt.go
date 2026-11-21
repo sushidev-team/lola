@@ -45,6 +45,7 @@ func depAdvisoryBriefing(d hubproto.DepAdvisory) string {
 	b.WriteString("3. Run the project's tests and linters and make them pass.\n")
 	fmt.Fprintf(&b, "4. Commit, push and open a pull request. Its body must name the advisory id %s and the old and new version.\n\n", d.Advisory)
 	b.WriteString("If the package is no longer used, or the upgrade is impossible without a decision a person must make, stop and say so instead of guessing.\n")
+	b.WriteString("If no published version of the package fixes the advisory yet, change nothing and run `lola report nofix`: the chore goes back to the hub, which waits a week before offering it again.\n")
 	return b.String()
 }
 

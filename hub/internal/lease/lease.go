@@ -351,6 +351,8 @@ func Release(w *store.WorkItem, dev *store.Device, now time.Time, cfg Config) er
 //
 //   - refused / sandbox_required are LOCAL policy, not a failed fix: like a
 //     release, the item reopens and no attempt is counted.
+//   - no_fix_available reopens the item without counting an attempt and holds
+//     it from every device for hubproto.NoFixRecheck.
 //   - not_reproducible closes the item as failed (the finding no longer
 //     holds); it counts an attempt but never escalates.
 //   - anything else counts an attempt; at escalate_after attempts the item
@@ -368,6 +370,13 @@ func Fail(w *store.WorkItem, dev *store.Device, reason hubproto.FailReason, pr s
 	case hubproto.FailRefused, hubproto.FailSandbox:
 		w.State = hubproto.StateOpen
 		w.Owner = ""
+		return false, nil
+	case hubproto.FailNoFix:
+		// No published fix yet: not a failed attempt, and nothing a person
+		// can act on. The item waits for every device.
+		w.State = hubproto.StateOpen
+		w.Owner = ""
+		w.HoldUntil = now.Add(hubproto.NoFixRecheck).UTC()
 		return false, nil
 	case hubproto.FailObsolete:
 		w.Attempts++

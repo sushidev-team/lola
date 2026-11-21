@@ -47,6 +47,9 @@ func Offers(items map[string]*store.WorkItem, dev *store.Device, kinds map[hubpr
 		if !dev.HasRepo(w.Item.Repo()) {
 			continue
 		}
+		if now.Before(w.HoldUntil) {
+			continue
+		}
 		if HeldForOther(w, dev.ID, now) || w.CoolingFor(dev.ID, now) {
 			continue
 		}

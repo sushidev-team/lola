@@ -319,3 +319,20 @@ func TestAdvisoryWithoutFixWaits(t *testing.T) {
 		t.Fatalf("a person's claim: %v, state %s", err, w.State)
 	}
 }
+
+func TestFailNoFixHoldsItemFromEveryDevice(t *testing.T) {
+	w := newItem()
+	a := dev("a")
+	Claim(w, a, t0, Config{EscalateAfter: 1})
+	esc, err := Fail(w, a, hubproto.FailNoFix, "", t0, Config{EscalateAfter: 1})
+	if err != nil || esc || w.State != hubproto.StateOpen || w.Attempts != 0 || w.Escalation != nil {
+		t.Fatalf("%+v", w)
+	}
+	items := map[string]*store.WorkItem{w.ID: w}
+	if got := Offers(items, dev("b"), nil, 0, t0.Add(hubproto.NoFixRecheck-time.Hour)); len(got) != 0 {
+		t.Fatalf("offered during the hold: %v", got)
+	}
+	if got := Offers(items, dev("b"), nil, 0, t0.Add(hubproto.NoFixRecheck+time.Hour)); len(got) != 1 {
+		t.Fatalf("not offered after the hold: %v", got)
+	}
+}

@@ -307,7 +307,7 @@ fields.
 | `POST /v1/items/{id}/claim` | empty → `Lease` | 409 `conflict` if not open; 403 if the repo is not one the device reported |
 | `POST /v1/items/{id}/progress` | `ProgressRequest` → `{}` | a PR is open: the holder moves `claimed` → `in_review` (lease dropped, device recorded as owner); the owner updates the delivery |
 | `POST /v1/items/{id}/complete` | `CompleteRequest` → `{}` | PR must be in the item's repo (and be the item's PR for `red_bump_pr`); 409 `lease_lost` without a live lease |
-| `POST /v1/items/{id}/fail` | `FailRequest` → `{}` | `reason` is one of `spawn_failed`, `agent_gave_up`, `ci_failed`, `pr_closed`, `timeout`, `refused`, `sandbox_required`, `not_reproducible`; optional `pr_url` (the PR the attempt left) and `group` (`^[a-z0-9]{8,32}$`: items failed under one group escalate as one Linear issue); see the lease rules below |
+| `POST /v1/items/{id}/fail` | `FailRequest` → `{}` | `reason` is one of `spawn_failed`, `agent_gave_up`, `ci_failed`, `pr_closed`, `timeout`, `refused`, `sandbox_required`, `no_fix_available`, `not_reproducible`; optional `pr_url` (the PR the attempt left) and `group` (`^[a-z0-9]{8,32}$`: items failed under one group escalate as one Linear issue); see the lease rules below |
 | `POST /v1/items/{id}/release` | empty → `{}` | back to open, no attempt counted |
 | `POST /v1/relay/rendezvous` | `RendezvousRequest` → `RendezvousResponse` | RELAY: the device's WHOLE set of (rendezvous id, bearer SHA-256) entries, at most 17; entries it leaves out are deleted and lose their connections; an rv another device owns is listed in `conflicts`, the rest is stored |
 | `GET /v1/relay/daemon?v=1` | WebSocket | RELAY, signed: the daemon's control channel (`hello`, `incoming`, `cancel`, `reject`, `bye`); a newer channel replaces the old (close 4000) |
@@ -350,6 +350,7 @@ day, 64 per org, 512 per hub, 30 minutes idle, shaped byte rates per splice, dev
 - `fail` counts an attempt and reopens the item, until `escalate_after` attempts: then the item is
   `escalated` (no longer offered) and gets ONE Linear issue. Exceptions: `refused` and
   `sandbox_required` are local policy, not a failed fix, so they reopen without counting;
+  `no_fix_available` reopens without counting and holds the item from every device for 7 days;
   `not_reproducible` closes the item as `failed` without escalating.
 - A `critical` advisory is escalated as soon as it is first seen AND stays on offer.
 - Findings dedup per org by `hubproto.DedupKey`. A re-report bumps `last_seen` and the reporter count;

@@ -172,7 +172,8 @@ to `progress`. A daemon facing an older hub leaves those fields out and complete
 
 Fail reasons are a closed set: `spawn_failed`, `agent_gave_up`, `ci_failed`, `pr_closed`,
 `timeout`, `refused`, `sandbox_required` (both local policy: reopen without counting an attempt),
-`not_reproducible` (closes as failed, no escalation).
+`no_fix_available` (an agent found no published fix: reopens without counting an attempt and
+holds the item from every device for 7 days), `not_reproducible` (closes as failed, no escalation).
 
 - **C1 `in_review`.** A daemon that opened a PR calls `POST /v1/items/{id}/progress` (`pr_url`,
   `delivery`): the lease holder moves the item `claimed → in_review` (lease dropped, the device
