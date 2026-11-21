@@ -266,6 +266,13 @@ type Session struct {
 	DevActive bool `json:"dev_active,omitempty"`
 	DevTabs   int  `json:"dev_tabs,omitempty"`
 
+	// PortSetupAsk is the agent's one-line reason (`lola report ports "why"`) for
+	// asking the human to set up dynamic dev ports for its project. A REQUEST, never
+	// an action: the human reviews and applies the change in the project form.
+	// Shown only while the project still has no port_range, so applying it clears
+	// it without any state of its own.
+	PortSetupAsk string `json:"port_setup_ask,omitempty"`
+
 	// DevURLs are the local testing addresses this session's dev tabs printed
 	// into their panes ("http://127.0.0.1:8001"), best first — scraped by
 	// internal/devurl, because lola cannot know what port `composer dev` picked

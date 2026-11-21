@@ -3566,6 +3566,7 @@ export interface SessionInfo {
     "devCommands"?: string[] | null;
     "devUrls"?: string[] | null;
     "devForwards"?: DevForward[] | null;
+    "portSetupAsk"?: string;
     "devClash"?: DevClashInfo | null;
 
     /**

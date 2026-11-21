@@ -75,13 +75,48 @@ export interface PreviewRequest {
   url: string;
 }
 
+/** Most pages one preview opens as tabs; more is a list, not a review. */
+export const MAX_PREVIEW_TABS = 6;
+
+export interface PreviewTab {
+  url: string;
+  title: string;
+}
+
 class PreviewStore {
   request = $state<PreviewRequest | null>(null);
+  /** Several pages of one app, each its own tab; empty for a single page. */
+  tabs = $state<PreviewTab[]>([]);
+  active = $state(0);
+  /** One address. Inside a tab set it re-points the active tab (the address chips). */
   open(sessionId: string, url: string) {
+    if (this.tabs.length > 1 && this.request?.sessionId === sessionId) {
+      this.tabs[this.active] = { url, title: "" };
+    } else {
+      this.tabs = [];
+      this.active = 0;
+    }
     this.request = { sessionId, url };
+  }
+  /** Pages of one app as separate tabs, at most MAX_PREVIEW_TABS, first one shown. */
+  openTabs(sessionId: string, pages: PreviewTab[]) {
+    const seen = new Set<string>();
+    const tabs = pages.filter((p) => !seen.has(p.url) && seen.add(p.url)).slice(0, MAX_PREVIEW_TABS);
+    if (!tabs.length) return;
+    this.tabs = tabs.length > 1 ? tabs : [];
+    this.active = 0;
+    this.request = { sessionId, url: tabs[0].url };
+  }
+  select(index: number) {
+    const tab = this.tabs[index];
+    if (!tab || !this.request) return;
+    this.active = index;
+    this.request = { sessionId: this.request.sessionId, url: tab.url };
   }
   close() {
     this.request = null;
+    this.tabs = [];
+    this.active = 0;
   }
 }
 

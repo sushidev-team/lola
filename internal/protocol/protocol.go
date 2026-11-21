@@ -535,11 +535,13 @@ type SessionInfo struct {
 	// anything but this machine. Present only while the session is ACTIVE and
 	// only when [remote].dev_forward is set, and each one ends with the tabs it
 	// belongs to. Empty is the normal state.
-	DevActive   bool          `json:"devActive,omitempty"`
-	DevCommands []string      `json:"devCommands,omitempty"`
-	DevURLs     []string      `json:"devUrls,omitempty"`
-	DevForwards []DevForward  `json:"devForwards,omitempty"`
-	DevClash    *DevClashInfo `json:"devClash,omitempty"`
+	DevActive   bool         `json:"devActive,omitempty"`
+	DevCommands []string     `json:"devCommands,omitempty"`
+	DevURLs     []string     `json:"devUrls,omitempty"`
+	DevForwards []DevForward `json:"devForwards,omitempty"`
+	// PortSetupAsk: see session.Session.PortSetupAsk. Display text from the agent.
+	PortSetupAsk string        `json:"portSetupAsk,omitempty"`
+	DevClash     *DevClashInfo `json:"devClash,omitempty"`
 	// Ports is this session's leased port block (LOLA_PORT first, then the rest
 	// of LOLA_PORT_1..N) when its project configures a port_range; empty
 	// otherwise. DevParallel is true when that project runs dev_commands

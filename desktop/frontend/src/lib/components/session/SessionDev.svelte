@@ -5,7 +5,11 @@
   import Button from "../Button.svelte";
   import Icon from "../Icon.svelte";
   import { preview } from "$lib/preview.svelte";
+  import { nav } from "$lib/nav.svelte";
   let { session }: { session: SessionInfo } = $props();
+  // The agent's request is dismissed per view; applying the setup removes it daemon-side.
+  let dismissed = $state("");
+  const ask = $derived(session.portSetupAsk && session.portSetupAsk !== dismissed ? session.portSetupAsk : "");
   const groups = $derived(session.devActive ? devUrlGroups(session.devUrls ?? [], session.apps ?? []) : []);
 </script>
 
@@ -18,6 +22,16 @@
         {session.devActive ? 'Stop dev' : 'Start dev'}
       </Button>
     </div>
+    {#if ask}
+      <div class="mt-2 grid gap-1.5 rounded-lg border border-edge bg-canvas/50 p-2" role="status" data-port-ask>
+        <p class="text-sm text-ink">The agent asks for dynamic ports</p>
+        <p class="text-sm wrap-anywhere text-faint">{ask}</p>
+        <div class="flex gap-1">
+          <Button size="xs" variant="secondary" onclick={() => nav.openOverlay("project", session.project, "worktree")}>Review port setup</Button>
+          <Button size="xs" onclick={() => (dismissed = ask)}>Dismiss</Button>
+        </div>
+      </div>
+    {/if}
     {#each groups as group (group.name)}
       {#if group.urls.length}
         <div class="mt-1 flex min-w-0 flex-wrap items-start gap-x-2">

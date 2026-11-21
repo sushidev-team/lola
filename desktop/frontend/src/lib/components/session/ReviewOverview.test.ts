@@ -95,3 +95,24 @@ it('offers the live pages the agent named and opens one in the preview',async()=
   expect(preview.request).toEqual({sessionId:'s',url:'http://localhost:3000/settings'});
   preview.close();
 });
+it('opens every live page as a tab in one click', async () => {
+  const pages = [{title:'Home',url:'http://localhost:3000/'},{title:'Settings',url:'http://localhost:3000/settings'}];
+  render(ReviewOverview,{pkg:{...pkg as object,pages} as never,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});
+  await fireEvent.click(screen.getByRole('button',{name:/Open all as tabs/}));
+  expect(preview.tabs.map(t=>t.title)).toEqual(['Home','Settings']);
+  preview.close();
+});
+it('on a phone lists only pages whose server is forwarded and opens the forward', async () => {
+  const { store } = await import('$lib/store.svelte');
+  store.sessions = [{id:'s',devForwards:[{url:'http://192.168.1.5:40000',from:'127.0.0.1:3000'}]}] as never;
+  const open = vi.spyOn(store,'openURL').mockResolvedValue(undefined);
+  setTouchSurface({});
+  try {
+    const pages = [{title:'Home',url:'http://localhost:3000/home'},{title:'Other',url:'http://localhost:9999/'}];
+    render(ReviewOverview,{pkg:{...pkg as object,pages} as never,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});
+    expect(screen.queryByRole('button',{name:'Open live page: Other'})).toBeNull();
+    expect(screen.queryByRole('button',{name:/Open all as tabs/})).toBeNull();
+    await fireEvent.click(screen.getByRole('button',{name:'Open live page: Home'}));
+    expect(open).toHaveBeenCalledWith('http://192.168.1.5:40000/home');
+  } finally { setTouchSurface(null); store.sessions = []; open.mockRestore(); }
+});

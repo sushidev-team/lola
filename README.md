@@ -137,6 +137,8 @@ protocol-version mismatch.
 | `lola review-package complete <manifest.json> [--app member]` | Retain final review material and report ordinary-session completion as an agent claim. A stack member does not mark the shared task done. |
 | `lola review-package capture <url> --output <new.png>` | Optional local Playwright capture with URL, viewport and `--selector` context. Uses an installed browser; never overwrites evidence. |
 | `review-package publish` manifest `pages` | Up to 6 `{title,url,caption}` live pages (http/https). The review overview lists them as "Open the running app"; each opens in the embedded preview only if it is a path on one of the session's own dev servers. |
+| `lola dev start|stop|status` | Agent: run this session's dev_commands through lola and print the addresses (host sessions; a sandboxed agent's bridge does not admit it). |
+| `lola report ports "<why>"` | Agent: ask the human to set up dynamic dev ports. A request line next to the Dev toggle that opens the project's port review; it applies nothing and disappears once the project has a `port_range`. |
 | `lola review-package list\|mark\|feedback\|verify\|checks\|recover …` | Local human automation with JSON receipts: inspect packages, send contextual feedback, explicitly authorize bounded offline checks of the exact head, and read/recover results. See [usage and boundaries](docs/pr-review-workspace.md#automation-and-completion). |
 | `lola stop` | Graceful shutdown: finish in-flight tick, close socket, exit 0 |
 | `lola status` | Table per polling project (keyed by project name): enabled, last run, last spawn, running, last error — plus `runtimeOk` / `linearOk` health flags |

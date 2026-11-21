@@ -92,6 +92,9 @@ func (d *Daemon) handleAgentReport(req protocol.Request) protocol.Response {
 		req.Args, _ = json.Marshal(a)
 		return d.handleSessionTask(context.Background(), req, "agent")
 	}
+	if len(a.Argv) > 0 && strings.EqualFold(a.Argv[0], "ports") {
+		return d.handleReportPorts(req, a.Argv[1:])
+	}
 	if len(a.Argv) > 0 && strings.EqualFold(a.Argv[0], "nofix") {
 		return d.handleReportNoFix(req)
 	}
@@ -190,6 +193,49 @@ func (d *Daemon) handleReportNoFix(req protocol.Request) protocol.Response {
 	}
 	if !found {
 		return protocol.Response{OK: false, Error: "agentReport: nofix: this session holds no open hub advisory"}
+	}
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "agentReport: persist sessions: %v", err)
+	}
+	return protocol.Response{OK: true}
+}
+
+// maxPortAskBytes bounds the reason an agent gives for a port-setup request.
+const maxPortAskBytes = 300
+
+// portSetupAsk is what a client may show: the agent's reason, only while the
+// project still runs without leased ports.
+func portSetupAsk(ask string, parallel bool) string {
+	if parallel {
+		return ""
+	}
+	return ask
+}
+
+// handleReportPorts is `lola report ports "<why>"`: the agent says its dev
+// server cannot run beside another one (a fixed port) and asks the human to set
+// up dynamic ports. It only records a line the UI shows next to the dev toggle;
+// nothing is written to config, and the human reviews the change themselves.
+func (d *Daemon) handleReportPorts(req protocol.Request, words []string) protocol.Response {
+	if req.Session == "" {
+		return protocol.Response{OK: false, Error: "agentReport: no session ($LOLA_SESSION unset)"}
+	}
+	why := strings.Join(strings.Fields(sanitizeAgentText(strings.Join(words, " "))), " ")
+	if why == "" {
+		return protocol.Response{OK: false, Error: "agentReport: ports: say why dynamic ports are needed"}
+	}
+	if len(why) > maxPortAskBytes {
+		why = strings.ToValidUTF8(why[:maxPortAskBytes], "")
+	}
+	if !d.reports.allow(req.Session, time.Now()) {
+		return protocol.Response{OK: false, Error: errReportRateLimited.Error()}
+	}
+	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
+		sess.PortSetupAsk = why
+		return true
+	})
+	if !known {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
 	}
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "agentReport: persist sessions: %v", err)

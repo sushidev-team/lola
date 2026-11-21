@@ -171,3 +171,15 @@ it('reveals older test commands only when more than three are available', async 
   await fireEvent.click(local.getByRole('button', { name: 'Show fewer' }));
   expect(local.queryByRole('button', { name: /test0/ })).toBeNull();
 });
+
+it('shows the agent\'s port-setup request beside the dev toggle and opens the review, never applying anything', async () => {
+  const { nav } = await import('$lib/nav.svelte');
+  const id = freshSession({ worktree: '/w', project: 'fe', devCommands: ['npm run dev'], portSetupAsk: 'Port 3000 is fixed in vite.config.ts' });
+  render(SessionSide, { sessionId: id });
+  expect(screen.getByText('Port 3000 is fixed in vite.config.ts')).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole('button', { name: 'Review port setup' }));
+  expect(nav.overlay).toBe('project');
+  expect(nav.overlayTab).toBe('worktree');
+  await fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  expect(screen.queryByText('Port 3000 is fixed in vite.config.ts')).toBeNull();
+});

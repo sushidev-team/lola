@@ -186,3 +186,32 @@ func TestReportLimiterIsBounded(t *testing.T) {
 		t.Fatalf("an unknown session got a limiter entry: %v", d.reports.hits)
 	}
 }
+
+// `lola report ports` records a request line and nothing else: it never touches
+// config, and the line disappears from the wire once the project has a lease.
+func TestReportPortsIsARequestNotAnAction(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	d.sessions.Upsert(s)
+
+	if resp := d.handle(context.Background(), reportReq(t, s.ID, "ports")); resp.OK {
+		t.Fatal("an empty reason was accepted")
+	}
+	long := strings.Repeat("port 3000 is taken ", 40)
+	if resp := d.handle(context.Background(), reportReq(t, s.ID, "ports", long)); !resp.OK {
+		t.Fatalf("ports: %s", resp.Error)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if got.PortSetupAsk == "" || len(got.PortSetupAsk) > maxPortAskBytes {
+		t.Fatalf("stored ask = %q", got.PortSetupAsk)
+	}
+	if portSetupAsk(got.PortSetupAsk, false) == "" {
+		t.Error("the ask is hidden although the project has no port lease")
+	}
+	if portSetupAsk(got.PortSetupAsk, true) != "" {
+		t.Error("the ask outlives the port setup it asked for")
+	}
+	if resp := d.handle(context.Background(), reportReq(t, "unknown-id", "ports", "why")); resp.OK {
+		t.Error("an unknown session was accepted")
+	}
+}

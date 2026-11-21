@@ -46,3 +46,38 @@ export function devUrlGroups(urls: string[], apps: DevApp[]): DevGroup[] {
   }
   return [...groups, other].filter((group) => group.urls.length);
 }
+
+type DevForward = { url: string; from: string };
+
+function hostPort(url: string): string {
+  try {
+    const u = new URL(/^[a-z]+:\/\//i.test(url) ? url : `http://${url}`);
+    const host = u.hostname.toLowerCase().replace(/^localhost$|^\[::1\]$/, "127.0.0.1");
+    return `${host}:${u.port || (u.protocol === "https:" ? 443 : 80)}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Where a PHONE opens a review page: the session's forward of that page's dev
+ * server, with the page's own path. A page whose server is not forwarded has no
+ * phone address (undefined) — the loopback address names the Mac, and nothing
+ * here may guess another one. `localhost` and `127.0.0.1` are the same server.
+ */
+export function forwardedPageURL(pageUrl: string, forwards: readonly DevForward[] | null | undefined): string | undefined {
+  const want = hostPort(pageUrl);
+  if (!want) return undefined;
+  const forward = (forwards ?? []).find((f) => hostPort(f.from) === want);
+  if (!forward) return undefined;
+  try {
+    const page = new URL(pageUrl);
+    const out = new URL(forward.url);
+    out.pathname = page.pathname;
+    out.search = page.search;
+    out.hash = page.hash;
+    return out.toString();
+  } catch {
+    return undefined;
+  }
+}
