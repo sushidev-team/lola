@@ -274,6 +274,9 @@
     if (source.fullName === branch.fullName) gitActions.openBranch(branch, event);
     else gitActions.dropBranches(source, branch, event);
   }
+  function isGraphPR(event: Event) {
+    return event.target instanceof Element && !!event.target.closest('.pr-link');
+  }
   function eventBranch(event: Event) {
     const name = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-branch-ref]')?.dataset.branchRef : undefined;
     return data?.refs.find(branch => branch.fullName === name);
@@ -372,7 +375,6 @@
   const search = $derived(query.trim().toLocaleLowerCase());
   const visible = $derived(search ? commits.filter(c => [c.subject, c.author, c.sha, ...(c.refs ?? [])].some(v => v.toLocaleLowerCase().includes(search))) : commits);
   const currentCommit = $derived(commits.find(c => c.sha === selected[selected.length - 1]));
-  const containedBranches = $derived(currentCommit ? branchHistory.get(currentCommit.sha) ?? [] : []);
   const files = $derived(folderFirstFiles(view.diff?.files ?? []));
   const file = $derived(files.find(f => f.path === activeFile) ?? files[0]);
   // A commit or comparison lists every changed file as chunks; the one on screen is read again
@@ -575,7 +577,9 @@
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     const buttons = Array.from(event.currentTarget instanceof HTMLElement ? event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-commit]') : []);
     if (!buttons.length) return;
-    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const focused = document.activeElement;
+    const commit = focused?.closest('.history-entry')?.querySelector<HTMLButtonElement>('[data-commit]');
+    const current = buttons.indexOf(commit ?? focused as HTMLButtonElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1)));
     event.preventDefault(); event.stopPropagation(); buttons[next].focus(); buttons[next].scrollIntoView?.({ block: 'nearest' });
   }
@@ -605,7 +609,7 @@
 
 {#snippet refBadge(branch: GitRef, pair?: GitRef, compact = false)}
   {@const remote = remoteFor(pair ?? branch)}
-  {@const prs = prsFor(branch.remote ? branch : pair ?? branch)}
+  {@const prs = compact ? prsFor(branch.remote ? branch : pair ?? branch) : []}
   {@const implicitOrigin = compact && remote?.name === 'origin' && data?.remotes?.length === 1}
   <span class="ref-label" class:compact class:active={branch.current} class:branch-drop-target={dropTarget === branch.fullName} data-branch-ref={branch.fullName} draggable={false}>
     <span class="ref-main"><Icon name={branch.current ? 'monitor' : branch.remote ? 'cloud' : hasCheckout(branch) ? 'folder' : 'git-branch'} size={13}/><span class="ref-name">{badgeName(branch)}</span></span>
@@ -616,8 +620,10 @@
     {:else if branch.ahead || branch.behind}
       <span class="ref-scope">{#if branch.ahead}↑{branch.ahead}{/if}{#if branch.behind} ↓{branch.behind}{/if}</span>
     {:else if !branch.remote && !branch.upstream && !compact}<span class="ref-scope">local</span>{/if}
-    {#each prs.slice(0,1) as pr}<span class="ref-pr" class:draft={pr.draft}>{#if !compact}<Icon name="git-pull-request" size={12}/>{/if}<span>#{pr.number}</span></span>{/each}
-    {#if prs.length > 1}<span class="ref-pr">+{prs.length-1}</span>{/if}
+    {#each prs as pr, i (pr.url)}
+      <Button variant="bare" size="xs" class={`ref-pr pr-link ${pr.draft ? 'draft' : ''} ${i ? 'additional-pr' : ''}`} title={prTitle(pr)} aria-label={`Open pull request #${pr.number}`} onclick={(event) => { event.stopPropagation(); if (!clickAfterDrag(event)) void store.openURL(pr.url); }}>#{pr.number}</Button>
+    {/each}
+    {#if prs.length > 1}<span class="ref-pr pr-count">+{prs.length-1}</span>{/if}
   </span>
 {/snippet}
 
@@ -742,7 +748,7 @@
           <div class="history-find" transition:disclosureSlide><label class="history-search"><Icon name="search" size={14} /><input bind:this={searchInput} aria-label="Search loaded commits" placeholder="Message, author, branch or SHA…" bind:value={query} onkeydown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeSearch(); } }} /></label><span>{visible.length} matches{data?.hasMore ? ' in loaded history' : ''}</span><Button size="xs" icon aria-label="Close commit search" onclick={closeSearch}><Icon name="x" size={14} /></Button></div>
         {/if}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div class="history-list" bind:this={historyList} style={`--columns:${columnTemplate};--table-width:${tableWidth}px;--details-offset:${detailsOffset}px`} onkeydown={historyKey} role="group" aria-label="Commits; Command or Control click to compare two" aria-busy={git.loading}>
+        <div class="history-list" bind:this={historyList} style={`--columns:${columnTemplate};--table-width:${tableWidth}px;--details-offset:${detailsOffset}px;--ref-width:${columnWidth('refs')}px`} onkeydown={historyKey} role="group" aria-label="Commits; Command or Control click to compare two" aria-busy={git.loading}>
           <div class="history-columns">
             {#each shownColumns as column}<div class="column-heading"><span>{column.label}</span><Button variant="bare" role="separator" tabindex={0} aria-label={`Resize ${column.label} column`} aria-orientation="vertical" aria-valuenow={columnWidth(column.id)} aria-valuemin={column.min} aria-valuemax={Math.max(column.max, columnWidth(column.id))} class="column-resize" onpointerdown={(event) => resizeColumn(event, column.id)} onkeydown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); event.stopPropagation(); setColumnWidth(column.id, ((event.currentTarget as HTMLElement).parentElement?.getBoundingClientRect().width || columnWidth(column.id)) + (event.key === 'ArrowRight' ? 10 : -10)); } }}><span class="sr-only">Resize {column.label}</span></Button></div>{/each}
           </div>
@@ -815,7 +821,31 @@
                   {/each}
                 </Button>
               {/each}
-              <Button block variant="bare" class={`commit-row ${selected.includes(commit.sha) ? 'commit-selected' : ''} ${tracedLane === row.color ? 'lane-traced' : ''}`} style={`--lane-color:${graphColor(row.color)}`} data-commit={commit.sha} data-lane={row.color} aria-pressed={selected.includes(commit.sha)} aria-label={`${commit.subject}, ${commit.sha.slice(0, 8)}, ${commit.author}${tips.length ? ", " + tips.map(branchDescription).join(", ") : ""}${checkouts.length ? ", " + checkouts.map(tree => tree.path === data?.path ? "active checkout" : "worktree " + tree.branch).join(", ") : ""}`} oncontextmenu={(event) => { const branch = eventBranch(event); if (branch) gitActions.openBranch(branch, event); else gitActions.openCommit(commit, event); }} onkeydown={keyboardContext} ondblclick={(event) => { if (clickAfterDrag(event)) return; const branch = eventBranch(event); if (branch) gitActions.checkout(branch); }} onpointerdown={(event) => startBranchDrag(event, eventBranch(event))} ondragstart={(event) => event.preventDefault()} onclick={(e) => { if (!clickAfterDrag(e)) chooseCommit(commit.sha, e); }} onpointerenter={() => hoveredLane = row.color} onpointerleave={() => hoveredLane = null} onfocus={() => focusedLane = row.color} onblur={() => focusedLane = null} {...gitCommitTooltip(commit, memberships, checkouts.map(tree => `${tree.path === data?.path ? "Active checkout" : "Worktree"}: ${tree.path}`), tips)}>
+              <!-- The row delegates branch gestures across the commit button and its sibling ref links. -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="history-entry" style={`--lane-color:${graphColor(row.color)}`}
+                onpointerenter={() => hoveredLane = row.color} onpointerleave={() => hoveredLane = null}
+                oncontextmenu={(event) => { if (isGraphPR(event)) return; const branch = eventBranch(event); if (branch) gitActions.openBranch(branch, event); else gitActions.openCommit(commit, event); }}
+                onkeydown={keyboardContext}
+                ondblclick={(event) => { if (isGraphPR(event) || clickAfterDrag(event)) return; const branch = eventBranch(event); if (branch) gitActions.checkout(branch); }}
+                onpointerdown={(event) => { if (!isGraphPR(event)) startBranchDrag(event, eventBranch(event)); }}
+                ondragstart={(event) => event.preventDefault()}
+                onclick={(e) => { if (!clickAfterDrag(e)) chooseCommit(commit.sha, e); }}>
+                <Button block variant="bare" class={`commit-row ${selected.includes(commit.sha) ? 'commit-selected' : ''} ${tracedLane === row.color ? 'lane-traced' : ''}`} data-commit={commit.sha} data-lane={row.color} aria-pressed={selected.includes(commit.sha)} aria-label={`${commit.subject}, ${commit.sha.slice(0, 8)}, ${commit.author}${tips.length ? ", " + tips.map(branchDescription).join(", ") : ""}${checkouts.length ? ", " + checkouts.map(tree => tree.path === data?.path ? "active checkout" : "worktree " + tree.branch).join(", ") : ""}`} onfocus={() => focusedLane = row.color} onblur={() => focusedLane = null} {...gitCommitTooltip(commit, memberships, checkouts.map(tree => `${tree.path === data?.path ? "Active checkout" : "Worktree"}: ${tree.path}`), tips)}>
+                  {#if !columnPrefs.hidden.includes('refs')}<span aria-hidden="true"></span>{/if}
+                  {#if !columnPrefs.hidden.includes('graph')}<span class="graph-cell">
+                    <svg class="commit-graph" width={search ? 40 : graphWidth} height={rowHeight} aria-hidden="true">
+                      {#if !search}{#each row.edges as edge}<path class="ancestry-edge" stroke-linecap="round" stroke-linejoin="round" d={graphPath(edge, rowHeight)} stroke={graphColor(edge.color)} stroke-width={tracedLane === edge.color ? 2.5 : 1.7} fill="none" />{/each}{/if}
+                      {#if workingConnection && commitIndex <= workingConnection.index}<path class="working-edge" d={graphPath({from:workingConnection.lane,to:commitIndex === workingConnection.index ? row.lane : workingConnection.lane,start:'top',end:commitIndex === workingConnection.index ? 'node' : 'bottom',color:0},rowHeight)} stroke="var(--color-accent-ink)" stroke-width="1.7" fill="none" stroke-linecap="round" />{/if}
+                      {#if !search}{#each wip as change}<path class="worktree-edge" d={graphPath({from:change.lane,to:row.lane,start:'top',end:'node',color:0},rowHeight)} stroke="var(--color-orange)" stroke-width="1.7" fill="none" stroke-linecap="round" />{/each}{/if}
+                      <circle cx={nodeX} cy={rowHeight / 2} r={commit.parents?.length > 1 ? 5 : 10.5} fill={commit.parents?.length > 1 || selected.includes(commit.sha) ? graphColor(row.color) : 'var(--color-panel)'} stroke={graphColor(row.color)} stroke-width="2" />
+                    </svg>
+                    {#if commit.parents?.length <= 1}<span class="graph-avatar" style:left={`${nodeX - 9}px`}><GitAvatar src={author?.avatarUrl} name={commit.author} size={18} loading={!!git.identityLoading[commit.sha]} /></span>{/if}
+                  </span>
+                  {/if}
+                  <span class="commit-copy"><span class="commit-subject">{commit.subject}</span></span>
+                  {#if !columnPrefs.hidden.includes('author')}<span class="commit-author">{commit.author}</span>{/if}{#if !columnPrefs.hidden.includes('sha')}<span class="commit-sha">{commit.sha.slice(0, 7)}</span>{/if}{#if !columnPrefs.hidden.includes('age')}<span class="commit-time">{agoPhrase(commit.date)}</span>{/if}
+                </Button>
                 {#if !columnPrefs.hidden.includes('refs')}<span class="commit-refs">
                   {#if primary}{@render refBadge(primary, pairedRemote, true)}{:else if tags.length}<span class="ref-label"><Icon name="tag" size={13}/><span class="ref-name">{tags[0]}</span></span>{/if}
                   {#if moreRefs}<span class="extra-refs">+{moreRefs}</span>{/if}
@@ -828,19 +858,7 @@
                   {#if checkouts.length && (!primary?.current || checkouts.length > 1)}<span class="checkout-marker"><Icon name={checkouts.some(tree => tree.path === data?.path) ? 'monitor' : 'folder'} size={14} />{#if checkouts.length > 1}<small>{checkouts.length}</small>{/if}</span>{/if}
                 </span>
                 {/if}
-                {#if !columnPrefs.hidden.includes('graph')}<span class="graph-cell">
-                  <svg class="commit-graph" width={search ? 40 : graphWidth} height={rowHeight} aria-hidden="true">
-                    {#if !search}{#each row.edges as edge}<path class="ancestry-edge" stroke-linecap="round" stroke-linejoin="round" d={graphPath(edge, rowHeight)} stroke={graphColor(edge.color)} stroke-width={tracedLane === edge.color ? 2.5 : 1.7} fill="none" />{/each}{/if}
-                    {#if workingConnection && commitIndex <= workingConnection.index}<path class="working-edge" d={graphPath({from:workingConnection.lane,to:commitIndex === workingConnection.index ? row.lane : workingConnection.lane,start:'top',end:commitIndex === workingConnection.index ? 'node' : 'bottom',color:0},rowHeight)} stroke="var(--color-accent-ink)" stroke-width="1.7" fill="none" stroke-linecap="round" />{/if}
-                    {#if !search}{#each wip as change}<path class="worktree-edge" d={graphPath({from:change.lane,to:row.lane,start:'top',end:'node',color:0},rowHeight)} stroke="var(--color-orange)" stroke-width="1.7" fill="none" stroke-linecap="round" />{/each}{/if}
-                    <circle cx={nodeX} cy={rowHeight / 2} r={commit.parents?.length > 1 ? 5 : 10.5} fill={commit.parents?.length > 1 || selected.includes(commit.sha) ? graphColor(row.color) : 'var(--color-panel)'} stroke={graphColor(row.color)} stroke-width="2" />
-                  </svg>
-                  {#if commit.parents?.length <= 1}<span class="graph-avatar" style:left={`${nodeX - 9}px`}><GitAvatar src={author?.avatarUrl} name={commit.author} size={18} loading={!!git.identityLoading[commit.sha]} /></span>{/if}
-                </span>
-                {/if}
-                <span class="commit-copy"><span class="commit-subject">{commit.subject}</span></span>
-                {#if !columnPrefs.hidden.includes('author')}<span class="commit-author">{commit.author}</span>{/if}{#if !columnPrefs.hidden.includes('sha')}<span class="commit-sha">{commit.sha.slice(0, 7)}</span>{/if}{#if !columnPrefs.hidden.includes('age')}<span class="commit-time">{agoPhrase(commit.date)}</span>{/if}
-              </Button>
+              </div>
             {/each}
             {#if data?.hasMore && limit < 1000}<Button block size="xs" disabled={!!git.busy} class="load-more" onclick={() => limit = Math.min(1000, limit + 200)}>Load more commits</Button>{/if}
           {/if}
@@ -894,18 +912,34 @@
           <div class="inspector-heading"><h3>{area === 'working' ? 'Compare working changes' : selected.length === 2 ? comparingBranches ? 'Compare branches' : 'Compare commits' : 'Commit'}</h3><code>{selected.at(-1)?.slice(0, 8)}</code></div>
           {#if area === 'working'}<div class="compare-endpoints"><span><small>From</small><code>{selected[0]?.slice(0,8)}</code></span><Icon name="arrow-down" size={14}/><span>Working copy</span></div>{/if}
           {#if selected.length === 2}<div class="compare-endpoints"><span><small>From</small><code>{comparisonLabel(0)}</code></span><Icon name="arrow-down" size={14} /><span><small>To</small><code>{comparisonLabel(1)}</code></span></div>{/if}
-          {#if currentCommit}<h2 class="selected-subject">{currentCommit.subject}</h2><div class="commit-person"><GitAvatar src={git.authors[currentCommit.sha]?.avatarUrl} name={currentCommit.author} size={30} loading={!!git.identityLoading[currentCommit.sha]} /><span>{currentCommit.author}{#if git.authors[currentCommit.sha]?.login}<small>@{git.authors[currentCommit.sha].login}</small>{/if}<small title={exactTime(currentCommit.date)}>{agoPhrase(currentCommit.date)}</small></span></div>{/if}
-          {#if currentCommit && (refsAt.get(currentCommit.sha)?.length ?? 0)}
+          {#if currentCommit}
+            {@const login = git.authors[currentCommit.sha]?.login}
             {@const tips = refsAt.get(currentCommit.sha) ?? []}
             {@const paired = new Set(tips.map(branch => pairedBranch(branch,tips,data?.remotes ?? [])?.fullName).filter(Boolean))}
-            <div class="selected-refs">{#each tips.filter(branch => !paired.has(branch.fullName)) as branch}<span class="selected-ref" style={`--lane-color:${refColor(branch)}`}>{@render refBadge(branch,pairedBranch(branch,tips,data?.remotes ?? []))}</span>{/each}</div>
-          {/if}
-          {#if currentCommit}
-            {@const prs = [...new Map((refsAt.get(currentCommit.sha) ?? []).flatMap(prsFor).map(pr => [pr.url,pr])).values()]}
-            {#if prs.length}<div class="selected-prs">{#each prs as pr (pr.url)}<Button block class="selected-pr" title={prTitle(pr)} onclick={() => void store.openURL(pr.url)}><Icon name="git-pull-request" size={15}/><span class="selected-pr-copy"><strong>{pr.draft ? 'Draft' : 'Open'} PR #{pr.number}</strong><span>{pr.title}</span></span><Icon name="external-link" size={13}/></Button>{/each}</div>{/if}
-          {/if}
-          {#if currentCommit && containedBranches.length}
-            <details use:disclosureMotion class="branch-membership"><summary><Icon name="chevron-down" class="git-disclosure-chevron" size={12} />In branch history<span class="rail-count">{containedBranches.length}</span></summary><p>This commit is reachable from these loaded branch tips. Shared commits can appear in several.</p>{#each containedBranches as branch}<div><span class="branch-glyph" style:color={refColor(branch)}><Icon name={branch.remote ? 'cloud' : 'git-branch'} size={13} /></span><span>{branch.name}</span></div>{/each}</details>
+            {@const prs = [...new Map(tips.flatMap(prsFor).map(pr => [pr.url,pr])).values()]}
+            <div class="commit-summary">
+              <h2 class="selected-subject">{currentCommit.subject}</h2>
+              <div class="commit-person">
+                <GitAvatar src={git.authors[currentCommit.sha]?.avatarUrl} name={currentCommit.author} size={24} loading={!!git.identityLoading[currentCommit.sha]} />
+                <span class="commit-byline" title={login ? `${currentCommit.author} (@${login})` : currentCommit.author}>
+                  <span>{currentCommit.author}</span>
+                  {#if login && login.toLowerCase() !== currentCommit.author.toLowerCase()}<small>@{login}</small>{/if}
+                </span>
+                <time title={exactTime(currentCommit.date)} datetime={currentCommit.date}>{agoPhrase(currentCommit.date)}</time>
+              </div>
+              {#if tips.length}
+                <div class="selected-refs">
+                  {#each tips.filter(branch => !paired.has(branch.fullName)) as branch}
+                    <span class="selected-ref" style={`--lane-color:${refColor(branch)}`}>{@render refBadge(branch,pairedBranch(branch,tips,data?.remotes ?? []))}</span>
+                  {/each}
+                  {#each prs as pr (pr.url)}
+                    <Button size="xs" class={`selected-pr ${pr.draft ? 'draft' : ''}`} title={prTitle(pr)} aria-label={`${pr.draft ? 'Draft' : 'Open'} PR #${pr.number}`} onclick={() => void store.openURL(pr.url)}>
+                      <Icon name="git-pull-request" size={12}/>#{pr.number}<Icon name="external-link" size={11}/>
+                    </Button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
           {/if}
           <div class="change-totals"><span>{files.length} changed {files.length === 1 ? 'file' : 'files'}</span><span class="text-good">+{totals.add}</span><span class="text-bad">−{totals.del}</span></div>
         </div>
@@ -1082,6 +1116,8 @@
   .graph-avatar { display:grid; position:absolute; top:8px; }
   .commit-copy { display:flex; align-items:center; min-width:0; }
   .commit-subject { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; min-width:0; }
+  .history-entry { position:relative; min-width:var(--table-width); }
+  .history-entry > .commit-refs { position:absolute; inset:0 auto 0 8px; width:var(--ref-width); }
   .commit-refs { position:relative; display:flex; align-items:center; justify-content:flex-start; gap:5px; min-width:0; height:100%; }
   .ref-label { position:relative; display:flex; align-items:center; gap:0; min-width:0; border:1px solid var(--color-edge); border-left-color:var(--lane-color); color:var(--color-ink); background:var(--color-canvas); border-radius:4px; padding:0 6px; font-size:12px; font-weight:500; line-height:21px; transition:background-color 160ms ease; }
   .ref-label > .ref-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1093,19 +1129,21 @@
   .ref-label.compact { padding:0 4px; line-height:19px; }
   .ref-label.compact .ref-main { gap:3px; }
   .ref-label.compact .ref-scope,.ref-label.compact .ref-pr { gap:2px; margin-left:4px; padding-left:4px; }
-  .ref-pr.draft { color:var(--color-ink-2); }
+  .compact :global(.pr-link) { flex:none; height:auto; align-self:stretch; margin-left:4px; padding:0 2px 0 4px; border-left:1px solid var(--color-edge); border-radius:0; color:var(--color-good); font:inherit; font-size:11px; }
+  .compact :global(.pr-link.draft) { color:var(--color-ink-2); }
+  .compact :global(.pr-link:is(:hover,:focus-visible)) { text-decoration:underline; }
+  .compact :global(.additional-pr) { display:none; }
+  .commit-refs:is(:hover,:focus-within) :global(.additional-pr) { display:inline-flex; }
+  .commit-refs:is(:hover,:focus-within) .pr-count { display:none; }
   .rail-entry.has-pr { display:flex; align-items:center; }
   .rail-entry.has-pr :global(.branch-leaf) { flex:1; min-width:0; }
   .rail-entry :global(.rail-pr) { flex-shrink:0; color:var(--color-good); gap:3px; padding:2px 5px; margin-right:5px; font-size:11px; font-variant-numeric:tabular-nums; }
   .rail-entry :global(.rail-pr.draft) { color:var(--color-ink-2); }
   .rail-prs { display:flex; align-items:center; flex-shrink:0; margin-right:25px; }
-  .selected-prs { display:grid; gap:4px; padding:0 14px 12px; }
-  .selected-prs :global(.selected-pr) { align-items:flex-start; gap:8px; padding:7px 0; text-align:left; color:var(--color-good); }
-  .selected-pr-copy { display:grid; gap:3px; flex:1; min-width:0; }
-  .selected-pr-copy strong { font-size:12px; font-weight:500; }
-  .selected-pr-copy > span { color:var(--color-ink-2); font-size:12px; white-space:normal; overflow-wrap:anywhere; }
+  .selected-refs :global(.selected-pr) { height:23px; padding:0 6px; gap:4px; border:1px solid var(--color-edge); border-radius:4px; color:var(--color-good); font-size:12px; font-variant-numeric:tabular-nums; }
+  .selected-refs :global(.selected-pr.draft) { color:var(--color-ink-2); }
   .pr-unavailable { color:var(--color-warn); }
-  .commit-refs:hover,:global(.commit-row:focus-visible) .commit-refs { z-index:5; }
+  .history-entry > .commit-refs:is(:hover,:focus-within),.history-entry:has(> :global(.commit-row:focus-visible)) > .commit-refs { z-index:5; width:max-content; min-width:var(--ref-width); }
   .commit-refs:hover .ref-label,:global(.commit-row:focus-visible) .ref-label { flex-shrink:0; min-width:max-content; }
   .ref-label.active { background:color-mix(in srgb,var(--lane-color) 12%,var(--color-canvas)); }
   .expanded-refs { display:none; position:absolute; left:0; top:calc(50% + 10px); padding-top:3px; width:max-content; flex-direction:column; align-items:flex-start; gap:3px; }
@@ -1119,7 +1157,7 @@
   .checkout-marker small { font-size:11px; font-variant-numeric:tabular-nums; line-height:16px; }
   .commit-author { color:var(--color-faint); font-size:12px; min-width:0; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; }
   .commit-sha { color:var(--color-faint); font-family:var(--font-mono); font-size:12px; }
-  code,.working-count,.rail-count,.commit-sha,.commit-time,.extra-refs,.checkout-marker small,.history-find > span,.commit-person small[title] { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+  code,.working-count,.rail-count,.commit-sha,.commit-time,.extra-refs,.checkout-marker small,.history-find > span,.commit-person time { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
   .repo-rail :global(.stash-row small) { font-family:var(--font-mono); }
   .change-totals > .text-good,.change-totals > .text-bad { font-family:var(--font-mono); }
   .commit-time { color:var(--color-faint); font-size:12px; min-width:0; text-align:right; }
@@ -1157,18 +1195,18 @@
   .inspector-heading > code { color:var(--color-faint); font-size:12px; }
   .file-status { width:12px; flex-shrink:0; text-align:center; font-family:var(--font-mono); font-size:12px; }
   .selection-details { min-width:0; }
-  .selected-subject { padding:16px 14px 10px; font-size:16px; line-height:1.45; font-weight:600; overflow-wrap:anywhere; }
-  .commit-person { display:flex; align-items:center; gap:9px; padding:0 14px 12px; font-size:14px; }
-  .commit-person small { display:block; font-size:12px; color:var(--color-faint); margin-top:2px; }
-  .selected-refs { display:flex; flex-wrap:wrap; gap:4px; padding:0 14px 12px; }
+  .commit-summary { display:grid; gap:10px; padding:12px 14px; }
+  .selected-subject { font-size:15px; line-height:1.4; font-weight:600; overflow-wrap:anywhere; }
+  .commit-person { display:flex; align-items:center; gap:7px; font-size:13px; }
+  .commit-byline { display:grid; min-width:0; }
+  .commit-byline > * { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .commit-byline small,.commit-person time { font-size:12px; color:var(--color-faint); }
+  .commit-person time { margin-left:auto; white-space:nowrap; }
+  .selected-refs { display:flex; align-items:center; flex-wrap:wrap; gap:5px; min-width:0; }
   .selected-ref { min-width:0; max-width:100%; }
   .selected-ref .ref-label { max-width:100%; }
-  .branch-membership { margin:0; padding:0 8px 10px; max-height:180px; overflow:auto; }
-  .branch-membership summary { font-size:12px; }
-  .branch-membership p { padding:5px 7px; color:var(--color-faint); font-size:12px; line-height:1.5; }
-  .branch-membership > div { display:flex; align-items:center; gap:6px; padding:3px 7px; font-size:12px; overflow-wrap:anywhere; }
-  .branch-membership > div > span:last-child { min-width:0; }
   .change-totals { display:flex; gap:7px; font-size:12px; padding:11px 14px; border-top:1px solid var(--color-edge); border-bottom:1px solid var(--color-edge); }
+  .change-totals > span:not(:first-child) { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
   .change-totals > span:first-child { margin-right:auto; color:var(--color-ink-2); }
   .changed-file-list { padding:6px; overflow:auto; min-height:0; }
   .changed-file-list :global(.changed-file) { min-height:28px; height:auto; text-align:left; gap:7px; padding:5px 7px; }
