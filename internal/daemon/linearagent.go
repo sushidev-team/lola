@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sushidev-team/lola/hubproto"
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/config"
@@ -79,9 +80,12 @@ const (
 
 // agentLedgerEntry is one Agent Session lola has acted on.
 type agentLedgerEntry struct {
-	State   string    `json:"state"` // queued | spawning | bound | rejected
-	Session string    `json:"session,omitempty"`
-	At      time.Time `json:"at"`
+	State   string `json:"state"` // queued | spawning | bound | rejected
+	Session string `json:"session,omitempty"`
+	// PromptCursor is the newest human prompt already seen on a thread whose lola
+	// session is gone or finished (see answerOrphanReplies).
+	PromptCursor string    `json:"promptCursor,omitempty"`
+	At           time.Time `json:"at"`
 }
 
 // linearAgentRuntime is the loop's state, all behind mu.
@@ -161,10 +165,10 @@ func storeAgentToken(cfg config.LinearAgentConfig, t linear.OAuthToken) error {
 }
 
 func refreshAgentToken(ctx context.Context, cfg config.LinearAgentConfig, refreshToken string) (linear.OAuthToken, error) {
-	secret, err := secrets.Resolve("linear agent client secret", cfg.ClientSecretKeychain, cfg.ClientSecretEnv)
-	if err != nil {
-		return linear.OAuthToken{}, err
-	}
+	// Optional: a token made by `lola linear-agent login` (PKCE) refreshes with
+	// the client id alone. Only an old, secret-bound token needs the secret, and
+	// Linear's own answer says so.
+	secret, _ := secrets.Resolve("linear agent client secret", cfg.ClientSecretKeychain, cfg.ClientSecretEnv)
 	return linear.OAuthClient{ClientID: cfg.ClientID, ClientSecret: secret}.Refresh(ctx, refreshToken)
 }
 
@@ -193,7 +197,8 @@ func (d *Daemon) agentSessionURL(id string) string {
 // linearAgentStatus is the cmd=status block, nil while the feature is off.
 func (d *Daemon) linearAgentStatus() *protocol.LinearAgentStatus {
 	d.mu.Lock()
-	on := d.cfg.LinearAgent.Enabled
+	cfg := d.cfg.LinearAgent
+	on, hubOn := cfg.Enabled, d.cfg.Hub.Enabled
 	d.mu.Unlock()
 	if !on || d.agent == nil {
 		return nil
@@ -203,6 +208,11 @@ func (d *Daemon) linearAgentStatus() *protocol.LinearAgentStatus {
 	st := d.agent.status
 	st.Enabled = true
 	st.Webhook = d.agent.webhookOn
+	st.OnlyMine = cfg.OnlyWhenAssignedToMe
+	st.HubClaim = cfg.EffectiveHubClaim()
+	if !hubOn {
+		st.HubClaim = config.HubClaimOff
+	}
 	return &st
 }
 
@@ -257,6 +267,14 @@ func (d *Daemon) linearAgentCycle(ctx context.Context) time.Duration {
 		ra.setError(err)
 		return interval
 	}
+	// The app's own id filters lola's activities out of the replies; a lookup that
+	// failed once is retried here rather than never.
+	ra.mu.Lock()
+	needViewer := ra.viewerID == ""
+	ra.mu.Unlock()
+	if needViewer {
+		d.resolveAgentViewer(ctx, api)
+	}
 	cctx, cancel := context.WithTimeout(ctx, agentExecTimeout)
 	sessions, err := api.AgentSessions(cctx)
 	cancel()
@@ -286,6 +304,14 @@ func (d *Daemon) linearAgentCycle(ctx context.Context) time.Duration {
 	for _, as := range sessions {
 		d.considerAgentSession(ctx, api, as)
 	}
+	ra.mu.Lock()
+	ra.status.Waiting = 0
+	for _, as := range sessions {
+		if _, handled := ra.ledger[as.ID]; as.Status == "pending" && !handled {
+			ra.status.Waiting++
+		}
+	}
+	ra.mu.Unlock()
 	for _, s := range d.sessions.Snapshot() {
 		if s.AgentSessionID == "" || s.Source != "native" || s.AgentMirror.Done {
 			continue // a finished thread is not polled for replies any more
@@ -295,6 +321,7 @@ func (d *Daemon) linearAgentCycle(ctx context.Context) time.Duration {
 			d.mirrorAgentSession(ctx, api, cur)
 		}
 	}
+	d.answerOrphanReplies(ctx, api, sessions)
 	ra.pruneLedger()
 	ra.saveLedger(d.home, d.logf)
 	return interval
@@ -398,6 +425,9 @@ func (d *Daemon) refreshWith(ctx context.Context, cfg config.LinearAgentConfig, 
 	cctx, cancel := context.WithTimeout(ctx, agentExecTimeout)
 	fresh, err := ra.refresh(cctx, cfg, tok.RefreshToken)
 	cancel()
+	if err == nil && fresh.Scope == "" {
+		fresh.Scope = tok.Scope // a refresh that does not restate the scope keeps the recorded one
+	}
 	if err != nil {
 		ra.mu.Lock()
 		ra.api = nil
@@ -464,7 +494,7 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	ra.mu.Unlock()
 
 	switch {
-	case known && entry.State == "queued":
+	case known && (entry.State == "queued" || entry.State == "claimed"):
 		// "stale" is Linear's inactivity timeout (a queued session posts nothing
 		// while capped), not a dismissal: keep it, and the next activity revives it.
 		if as.Status == "complete" || as.Status == "error" {
@@ -474,29 +504,71 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	case known:
 		return
 	case as.Status != "pending":
+		// Acknowledged but not ours: with a hub, the daemon that acknowledged may
+		// have stopped before it spawned, and the claim expiring is what lets
+		// another take over. Only a recent, still-active session qualifies.
+		if !d.agentTakeoverCandidate(as) {
+			return
+		}
+	}
+	// Shared app token, several daemons: only the session's single owner acts. A
+	// skipped session is neither recorded nor answered, so another daemon (or a
+	// later config) can still take it.
+	if !d.agentSessionIsMine(ctx, as) {
 		return
 	}
 	if as.Issue == nil || as.Issue.Identifier == "" {
 		if !known {
+			grant, proceed, _ := d.claimAgentSession(ctx, as)
+			if !proceed {
+				return
+			}
 			ra.record(as.ID, "rejected", "")
 			d.postAgentActivity(ctx, api, as.ID, linear.ErrorActivity("lola works on issues — delegate or mention it on an issue to start a session."))
+			grant.settle(ctx, hubproto.SettleBound)
 		}
 		return
 	}
 	is := *as.Issue
 
-	// Already running here (a poll or a human started it): bind, don't spawn.
-	if s, ok := d.liveSessionForIssue(is.Identifier); ok {
-		d.bindAgentSession(ctx, api, as.ID, s, fmt.Sprintf("Already working on %s in lola session `%s` — I'll keep this thread updated.", is.Identifier, s.ID))
+	// Who serves it: a daemon with no project for the issue's team leaves the
+	// session to one that has, and only speaks up when nobody did for a while.
+	p, hasProject := d.projectForAgentIssue(is)
+	_, liveHere := d.liveSessionForIssue(is.Identifier)
+	if !hasProject && !liveHere && d.agentClaimActive() && !agentUnserved(as, ra.now()) {
 		return
 	}
 
-	p, ok := d.projectForAgentIssue(is)
-	if !ok {
+	// Hub arbitration: one daemon wins the claim, acknowledges at once (Linear
+	// wants a first activity within ~10s, before any worktree work), and only
+	// then goes on.
+	grant, proceed, why := d.claimAgentSession(ctx, as)
+	if !proceed {
+		if why == hubproto.AgentDone && !known {
+			ra.record(as.ID, "elsewhere", "") // settled by another daemon: stop asking
+		}
+		return
+	}
+	if grant != nil && !known {
+		ra.record(as.ID, "claimed", "")
+		ra.saveLedger(d.home, d.logf)
+		d.postAgentActivity(ctx, api, as.ID, linear.Thought("Picked up — checking capacity and preparing a workspace.", false))
+	}
+
+	// Already running here (a poll or a human started it): bind, don't spawn.
+	if s, ok := d.liveSessionForIssue(is.Identifier); ok {
+		defer d.relayMention(s.ID, as)
+		d.bindAgentSession(ctx, api, as.ID, s, fmt.Sprintf("Already working on %s in lola session `%s` — I'll keep this thread updated.", is.Identifier, s.ID))
+		grant.settle(ctx, hubproto.SettleBound)
+		return
+	}
+
+	if !hasProject {
 		ra.record(as.ID, "rejected", "")
 		d.postAgentActivity(ctx, api, as.ID, linear.ErrorActivity(
 			fmt.Sprintf("No lola project is configured for this issue's team. Add a `[[project]]` with `team_id = %q` to lola's config, then delegate again.", is.TeamID)))
 		d.logf("", "linear agent: no project for %s (team %s) — rejected session %s", is.Identifier, is.TeamID, as.ID)
+		grant.settle(ctx, hubproto.SettleBound)
 		return
 	}
 
@@ -549,6 +621,14 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 		}
 	}
 
+	// Fencing: the hub refuses a stale epoch, so a daemon that stalled past its
+	// lease cannot start work a successor already took.
+	if !grant.authorize(ctx) {
+		ra.forget(as.ID)
+		d.logf("", "linear agent: %s not authorized by the hub, another daemon holds it", is.Identifier)
+		return
+	}
+
 	// Crash guard: the ledger says "spawning" BEFORE the spawn is attempted.
 	ra.record(as.ID, "spawning", "")
 	ra.saveLedger(d.home, d.logf)
@@ -566,11 +646,14 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 		// this Agent Session — say why, a human can delegate again.
 		if s, ok := d.liveSessionForIssue(is.Identifier); ok {
 			d.bindAgentSession(ctx, api, as.ID, s, fmt.Sprintf("Working on %s in lola session `%s`.", is.Identifier, s.ID))
+			d.relayMention(s.ID, as)
+			grant.settle(ctx, hubproto.SettleBound)
 			return
 		}
 		ra.record(as.ID, "rejected", "")
 		d.postAgentActivity(ctx, api, as.ID, linear.ErrorActivity("lola could not start a session: "+clipBody(err.Error(), 500)))
 		d.logf("", "linear agent: spawn for %s failed: %v", is.Identifier, err)
+		grant.settle(ctx, hubproto.SettleReleased)
 		return
 	}
 	s, ok := d.sessions.Get(od.SessionID)
@@ -582,6 +665,8 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 		msg += " This project requires plan approval: I'll post a plan here for you to approve before I write code."
 	}
 	d.bindAgentSession(ctx, api, as.ID, s, msg)
+	d.relayMention(s.ID, as)
+	grant.settle(ctx, hubproto.SettleBound)
 	d.logf("", "linear agent: %s dispatched by Agent Session %s → %s", is.Identifier, as.ID, s.ID)
 }
 
@@ -671,6 +756,7 @@ func (d *Daemon) relayAgentPrompts(ctx context.Context, api linear.AgentAPI, s s
 			cur.AgentMirror.PromptCursor = p.CreatedAt
 			return true
 		})
+		d.agent.setLedgerCursor(s.AgentSessionID, p.CreatedAt) // survives the session, for answerOrphanReplies
 		s.AgentMirror.PromptCursor = p.CreatedAt
 	}
 	if len(prompts) > 0 {
@@ -1018,5 +1104,130 @@ func (ra *linearAgentRuntime) pruneLedger() {
 		if v.At.Before(cut) {
 			delete(ra.ledger, k)
 		}
+	}
+}
+
+// agentSessionIsMine applies [linear_agent].only_when_assigned_to_me. Off, every
+// session is this daemon's (the single-daemon default). On, it must name this
+// user as the one resolved owner; an unknown owner fails closed.
+func (d *Daemon) agentSessionIsMine(ctx context.Context, as linear.AgentSession) bool {
+	d.mu.Lock()
+	cfg := d.cfg.LinearAgent
+	d.mu.Unlock()
+	if !cfg.OnlyWhenAssignedToMe {
+		return true
+	}
+	d.agent.mu.Lock()
+	appID := d.agent.viewerID
+	d.agent.mu.Unlock()
+	owner := as.Owner(appID)
+	return owner != "" && owner == d.linearUserID(ctx)
+}
+
+// relayMention hands the words a human wrote when they mentioned lola ("@lola go
+// ahead", "only touch the API") to the agent as a notice, once per Agent
+// Session: considerAgentSession runs once for each, and a known one returns
+// first. It reaches the agent only through the notice queue, so it passes the
+// same sanitize + idle gate + pane proof as every reply. The text is untrusted
+// and never touches the briefing, the branch or a command.
+func (d *Daemon) relayMention(sessionID string, as linear.AgentSession) {
+	body := strings.TrimSpace(as.MentionBody)
+	if body == "" {
+		return
+	}
+	msg := "A human mentioned you in a Linear comment on this issue:\n\n" + clipBody(body, agentMaxBody)
+	d.sessions.Update(sessionID, func(c *session.Session) bool {
+		c.PendingNotices = appendNotice(c.PendingNotices, msg)
+		return true
+	})
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "linear agent: persist sessions: %v", err)
+	}
+	d.flushAgentNoticesAsync(sessionID)
+}
+
+// orphanReplyNote is what a human gets when they reply in a thread whose lola
+// session no longer exists or has finished. It is a fixed sentence: the reply
+// itself goes nowhere.
+const orphanReplyNote = "This lola session has ended, so I cannot pass that on. Mention or delegate to me on the issue again to start a new one."
+
+// answerOrphanReplies stops a reply into a finished or torn-down thread from
+// vanishing. For every ledger-bound Agent Session that Linear shows as live
+// again but that no running lola session mirrors (the session was removed, or
+// its final response was posted), it reads the human prompts newer than the
+// ledger's cursor and answers them ONCE with orphanReplyNote. The cursor is the
+// newest prompt the live session processed (relayAgentPrompts keeps it in the
+// ledger); with none, it is the moment the thread was bound, so a reply made
+// after the session ended is never mistaken for history, and nothing is stamped
+// from "now". A failed answer leaves the cursor where it was, so the next poll
+// retries. It never restarts work: starting is a human's fresh mention. A daemon
+// that skipped the session (only_when_assigned_to_me) never bound it, so it
+// never answers for another owner's thread.
+func (d *Daemon) answerOrphanReplies(ctx context.Context, api linear.AgentAPI, sessions []linear.AgentSession) {
+	ra := d.agent
+	mirrored := map[string]bool{}
+	for _, s := range d.sessions.Snapshot() {
+		if s.AgentSessionID != "" && !s.AgentMirror.Done {
+			mirrored[s.AgentSessionID] = true
+		}
+	}
+	ra.mu.Lock()
+	self := ra.viewerID
+	ra.mu.Unlock()
+	for _, as := range sessions {
+		switch as.Status {
+		case "complete", "error", "stale", "stopping":
+			continue // Linear shows it closed: nothing was said into it
+		}
+		ra.mu.Lock()
+		entry, known := ra.ledger[as.ID]
+		ra.mu.Unlock()
+		if !known || entry.State != "bound" || mirrored[as.ID] {
+			continue
+		}
+		cursor := entry.PromptCursor
+		if cursor == "" {
+			cursor = entry.At.UTC().Format(promptTimeLayout)
+		}
+		cctx, cancel := context.WithTimeout(ctx, agentExecTimeout)
+		prompts, err := api.AgentPrompts(cctx, as.ID, cursor)
+		cancel()
+		if err != nil {
+			d.logf("", "linear agent: prompts for ended thread %s: %v", as.ID, err)
+			continue
+		}
+		newest, answer := "", false
+		for _, p := range prompts {
+			if p.CreatedAt <= cursor {
+				continue
+			}
+			if p.CreatedAt > newest {
+				newest = p.CreatedAt
+			}
+			if p.UserID != self && strings.TrimSpace(p.Body) != "" && p.Signal != "stop" {
+				answer = true
+			}
+		}
+		if newest == "" {
+			continue
+		}
+		if answer && !d.postAgentActivity(ctx, api, as.ID, linear.Response(orphanReplyNote)) {
+			continue // not delivered: keep the cursor, retry on the next poll
+		}
+		ra.setLedgerCursor(as.ID, newest)
+	}
+}
+
+// promptTimeLayout is the fixed-width form of Linear's timestamps, so cursors
+// compare as strings.
+const promptTimeLayout = "2006-01-02T15:04:05.000Z"
+
+// setLedgerCursor records the newest human prompt already processed on a thread.
+func (ra *linearAgentRuntime) setLedgerCursor(id, cursor string) {
+	ra.mu.Lock()
+	defer ra.mu.Unlock()
+	if e, ok := ra.ledger[id]; ok && cursor > e.PromptCursor {
+		e.PromptCursor = cursor
+		ra.ledger[id] = e
 	}
 }

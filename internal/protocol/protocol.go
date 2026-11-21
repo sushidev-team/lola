@@ -732,6 +732,13 @@ type LinearAgentStatus struct {
 	LastPoll  time.Time `json:"lastPoll,omitzero"`
 	LastError string    `json:"lastError,omitempty"`
 	Webhook   string    `json:"webhook,omitempty"` // the doorbell's listen address, "" when off
+	// OnlyMine is [linear_agent].only_when_assigned_to_me. HubClaim is the effective
+	// arbitration mode ("auto" | "required" | "off"; "off" also when no hub is
+	// joined). Waiting counts pending sessions this daemon left to someone else
+	// (not the owner, or the hub gave the claim to another daemon) at the last poll.
+	OnlyMine bool   `json:"onlyMine,omitempty"`
+	HubClaim string `json:"hubClaim,omitempty"`
+	Waiting  int    `json:"waiting,omitempty"`
 }
 
 // ReportArgs is the argument payload for cmd=agentReport: the argv typed after

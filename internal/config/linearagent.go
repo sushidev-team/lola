@@ -78,6 +78,32 @@ type LinearAgentConfig struct {
 	// listener without a resolvable secret refuses every delivery.
 	WebhookSecretKeychain string
 	WebhookSecretEnv      string
+	// UserID is this machine's own Linear user id (empty = the Linear API key's user). With OnlyWhenAssignedToMe, the
+	// daemon acts only on a session whose single resolved owner (delegate, else
+	// assignee, else creator; see linear.AgentSession.Owner) is this user.
+	UserID string
+	// OnlyWhenAssignedToMe makes a shared app token safe for several daemons: every
+	// other daemon skips the session silently.
+	OnlyWhenAssignedToMe bool
+	// HubClaim says how a joined hub arbitrates which daemon starts a session:
+	// "auto" (default) asks the hub and proceeds alone when the hub is unreachable
+	// or too old, "required" never starts without a grant, "off" never asks.
+	HubClaim string
+}
+
+// Hub claim modes.
+const (
+	HubClaimAuto     = "auto"
+	HubClaimRequired = "required"
+	HubClaimOff      = "off"
+)
+
+// EffectiveHubClaim resolves the mode ("" = auto).
+func (a LinearAgentConfig) EffectiveHubClaim() string {
+	if a.HubClaim == "" {
+		return HubClaimAuto
+	}
+	return a.HubClaim
 }
 
 // RedirectURI is the OAuth redirect URI `lola linear-agent login` uses.
@@ -102,6 +128,9 @@ type fileLinearAgentConfig struct {
 	WebhookListen         *string   `toml:"webhook_listen,omitempty"`
 	WebhookSecretKeychain *string   `toml:"webhook_secret_keychain,omitempty"`
 	WebhookSecretEnv      *string   `toml:"webhook_secret_env,omitempty"`
+	UserID                *string   `toml:"user_id,omitempty"`
+	OnlyWhenAssignedToMe  *bool     `toml:"only_when_assigned_to_me,omitempty"`
+	HubClaim              *string   `toml:"hub_claim,omitempty"`
 }
 
 // resolveLinearAgent materializes the table. An absent table is the zero value
@@ -145,6 +174,11 @@ func resolveLinearAgent(f *fileLinearAgentConfig) LinearAgentConfig {
 	set(&a.WebhookListen, f.WebhookListen)
 	set(&a.WebhookSecretKeychain, f.WebhookSecretKeychain)
 	set(&a.WebhookSecretEnv, f.WebhookSecretEnv)
+	set(&a.UserID, f.UserID)
+	if f.OnlyWhenAssignedToMe != nil {
+		a.OnlyWhenAssignedToMe = *f.OnlyWhenAssignedToMe
+	}
+	set(&a.HubClaim, f.HubClaim)
 	return a
 }
 
@@ -166,6 +200,9 @@ func linearAgentFile(a LinearAgentConfig) *fileLinearAgentConfig {
 		WebhookListen:         &a.WebhookListen,
 		WebhookSecretKeychain: &a.WebhookSecretKeychain,
 		WebhookSecretEnv:      &a.WebhookSecretEnv,
+		UserID:                &a.UserID,
+		OnlyWhenAssignedToMe:  &a.OnlyWhenAssignedToMe,
+		HubClaim:              &a.HubClaim,
 	}
 }
 
@@ -185,6 +222,15 @@ func (c *Config) validateLinearAgent() []error {
 	}
 	if a.RedirectPort < 0 || a.RedirectPort > 65535 {
 		errs = append(errs, fmt.Errorf("linear_agent.redirect_port must be within 1..65535, got %d", a.RedirectPort))
+	}
+	switch a.HubClaim {
+	case "", HubClaimAuto, HubClaimOff:
+	case HubClaimRequired:
+		if !c.Hub.Enabled {
+			errs = append(errs, fmt.Errorf("linear_agent.hub_claim = \"required\" needs [hub].enabled = true"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("linear_agent.hub_claim must be auto, required or off, got %q", a.HubClaim))
 	}
 	if a.WebhookListen != "" {
 		host, port, err := net.SplitHostPort(a.WebhookListen)

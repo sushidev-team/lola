@@ -175,6 +175,9 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	}
 
 	add(linearResult(cfg))
+	if res, ok := LinearAgentResult(cfg); ok {
+		add(res)
+	}
 	daemon := daemonResult()
 	add(daemon)
 	add(configResult(cfg))

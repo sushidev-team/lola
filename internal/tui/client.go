@@ -284,6 +284,15 @@ func renderStatus(d *protocol.StatusData) string {
 		if a.Webhook != "" {
 			fmt.Fprintf(&b, "   webhook: %s", a.Webhook)
 		}
+		if a.OnlyMine {
+			b.WriteString("   only mine")
+		}
+		if a.HubClaim != "" {
+			fmt.Fprintf(&b, "   hub claim: %s", a.HubClaim)
+		}
+		if a.Waiting > 0 {
+			fmt.Fprintf(&b, "   waiting on others: %d", a.Waiting)
+		}
 		b.WriteString("\n")
 		if a.LastError != "" {
 			b.WriteString(badText.Render("✗ "+a.LastError) + "\n")
