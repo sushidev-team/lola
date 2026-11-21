@@ -28,7 +28,7 @@
   // A phone opens a page through its session's forward of that server, or not at all.
   const forwards = $derived(store.sessions.find(s => s.id === sessionId)?.devForwards ?? []);
   const pages = $derived(phone ? allPages.filter(p => forwardedPageURL(p.url, forwards)) : allPages);
-  function openPage(page:(typeof allPages)[number]) { if (phone) { const u = forwardedPageURL(page.url, forwards); if (u) void store.openURL(u); } else preview.open(sessionId, page.url, { prep:prepOf(page), caption:page.caption }); }
+  function openPage(page:(typeof allPages)[number]) { if (phone) { const u = forwardedPageURL(page.url, forwards); if (u) void store.openURL(u); } else if (split) onScreen(screens.length + allPages.indexOf(page)); else preview.open(sessionId, page.url, { prep:prepOf(page), caption:page.caption }); }
   const unrated = $derived(!overview.riskReportProvided || overview.risks.some(r => r.likelihood === 'unknown' || r.impact === 'unknown'));
   const riskHints = { likelihood: { low: 'Not expected to happen in normal use.', medium: 'Could happen in some situations.', high: 'Expected to happen unless addressed.', unknown: 'The agent did not rate this.' }, impact: { low: 'Small, easy to recover from.', medium: 'Noticeable, but contained.', high: 'Serious if it happens.', unknown: 'The agent did not rate this.' } } as const;
   const riskWords = { likelihood: { low: 'Unlikely', medium: 'Possible', high: 'Likely' }, impact: { low: 'Minor', medium: 'Moderate', high: 'Severe' } } as const;

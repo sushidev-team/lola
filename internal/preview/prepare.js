@@ -8,6 +8,37 @@
   if (window.__lolaPrepare) return;
   var LAYER = "lola-prepare-layer";
   var COLORS = ["#7c5cff", "#e5484d", "#30a46c", "#f5a524"];
+  var liveMarks = new Map(), dismissedMarks = new Set(), pointer = null, trackingPointer = false;
+
+  // The overlay lets clicks through, so hit-test its painted boxes from the
+  // document. Remember each dismissal across redraws of this preview document.
+  function underPointer(el) {
+    var r = el.getBoundingClientRect();
+    return pointer.x >= r.left && pointer.x <= r.right && pointer.y >= r.top && pointer.y <= r.bottom;
+  }
+
+  function updateHover() {
+    if (!pointer) return;
+    liveMarks.forEach(function (parts, key) {
+      if (!parts.some(underPointer)) return;
+      dismissedMarks.add(key);
+      parts.forEach(function (el) { el.remove(); });
+      liveMarks.delete(key);
+    });
+  }
+
+  function trackPointer() {
+    if (!window.__lolaPreview || trackingPointer) return;
+    trackingPointer = true;
+    document.addEventListener("pointermove", function (e) {
+      pointer = e.pointerType === "touch" ? null : { x: e.clientX, y: e.clientY };
+      updateHover();
+    }, true);
+    document.addEventListener("pointerout", function (e) {
+      if (!e.relatedTarget) pointer = null;
+    }, true);
+    document.addEventListener("scroll", updateHover, true);
+  }
 
   function str(v, max) { return typeof v === "string" ? v.slice(0, max) : ""; }
 
@@ -52,22 +83,28 @@
     return l;
   }
 
-  function draw(l, el, label, i) {
+  function draw(l, el, mark, i) {
+    var label = str(mark.label, 80);
+    var key = JSON.stringify([i, str(mark.selector, 500), str(mark.text, 200), label]);
+    if (dismissedMarks.has(key)) return;
     var r = el.getBoundingClientRect();
     var color = COLORS[i % COLORS.length];
     var box = document.createElement("div");
-    box.style.cssText = "position:absolute;box-sizing:border-box;border:3px solid " + color +
-      ";border-radius:4px;box-shadow:0 0 0 2px rgba(255,255,255,.85);left:" + (r.left + window.pageXOffset - 3) +
-      "px;top:" + (r.top + window.pageYOffset - 3) + "px;width:" + (r.width + 6) + "px;height:" + (r.height + 6) + "px";
+    box.style.cssText = "position:absolute;transition:none;box-sizing:border-box;border:1px solid " + color +
+      ";border-radius:4px;background:" + color + "0d;left:" + (r.left + window.pageXOffset) +
+      "px;top:" + (r.top + window.pageYOffset) + "px;width:" + r.width + "px;height:" + r.height + "px";
     l.appendChild(box);
+    var parts = [box];
     if (label) {
       var tag = document.createElement("div");
       tag.textContent = label;
       var above = r.top > 28;
-      tag.style.cssText = "position:absolute;max-width:320px;padding:2px 8px;border-radius:4px;font:600 12px/18px system-ui,sans-serif;color:#fff;background:" +
-        color + ";left:" + (r.left + window.pageXOffset - 3) + "px;top:" + (above ? r.top + window.pageYOffset - 28 : r.bottom + window.pageYOffset + 4) + "px";
+      tag.style.cssText = "position:absolute;transition:none;max-width:320px;padding:2px 8px;border-radius:4px;font:600 12px/18px system-ui,sans-serif;color:#fff;background:" +
+        color + ";left:" + (r.left + window.pageXOffset) + "px;top:" + (above ? r.top + window.pageYOffset - 28 : r.bottom + window.pageYOffset + 4) + "px";
       l.appendChild(tag);
+      parts.push(tag);
     }
+    if (trackingPointer) liveMarks.set(key, parts);
   }
 
   function apply(spec, scroll) {
@@ -85,7 +122,9 @@
       else if (typeof spec.scrollY === "number" && spec.scrollY > 0) window.scrollTo(0, Math.min(spec.scrollY, 100000));
     }
     var l = layer();
-    for (var k = 0; k < els.length; k++) if (els[k]) draw(l, els[k], str(marks[k].label, 80), k);
+    liveMarks.clear();
+    for (var k = 0; k < els.length; k++) if (els[k]) draw(l, els[k], marks[k], k);
+    updateHover();
     return found;
   }
 
@@ -222,7 +261,7 @@
   // Resolves null when the step worked, else why it did not.
   // `acted` is called the moment the step has had its effect: a click that navigates
   // is over for resuming purposes even though the page never gets to finish it.
-  function runStep(step, id, acted) {
+  function runStep(step, id, acted, formState) {
     if (!localHost(location.hostname)) return Promise.resolve("this page is not on a local address");
     var el;
     switch (step.do) {
@@ -239,6 +278,8 @@
         return until(function () { return findField(step); }, stepWait, id).then(function (e) {
           if (!e) return "no such field was found";
           if (!setValue(e, str(step.value, 200))) return "that field does not take this value";
+          formState.field = e;
+          if (e.type === "password") formState.login = e.form;
           acted();
           return null;
         });
@@ -246,7 +287,7 @@
         el = step.selector || step.text ? findClickable(step) || findField(step) : null;
         if ((step.selector || step.text) && !el) return Promise.resolve("no such element was found");
         if (!KEYS[step.key]) return Promise.resolve("unknown key");
-        press(el, step.key);
+        press(el || (document.activeElement === document.body && formState.field && formState.field.isConnected ? formState.field : null), step.key);
         acted();
         return sleep(700).then(function () { return null; });
       case "wait":
@@ -266,6 +307,21 @@
     }
   }
 
+  // A dev app can redirect an already signed-in reviewer away from the login
+  // form. Resume at the recipe's own post-submit check only if it appears.
+  function initialStep(spec, steps, id) {
+    if (spec.from || !spec.redirected || !steps.length || steps[0].do !== "fill") return Promise.resolve(spec.from || 0);
+    var submit = 1;
+    while (steps[submit] && steps[submit].do === "fill") submit++;
+    var action = steps[submit], check = steps[submit + 1];
+    if (!action || !(action.do === "click" || (action.do === "press" && action.key === "Enter")) ||
+        !check || check.do !== "wait" || !(check.selector || check.text)) return Promise.resolve(0);
+    return until(function () {
+      if (findField(steps[0])) return "form";
+      return findAny(check) ? "signed-in" : null;
+    }, stepWait, id).then(function (state) { return state === "signed-in" ? submit + 1 : 0; });
+  }
+
   // Runs steps[from..]; resolves { failed: null | {index, step, why} } or
   // { superseded: true } when a newer run took over. Each step is reported (onStep,
   // window.__lolaStepDone) once it has had its effect, so a document that a step
@@ -273,6 +329,7 @@
   // run again on the new document.
   function runSteps(steps, from, onStep, id) {
     var i = Math.max(0, from | 0);
+    var formState = { field: null, login: null };
     return new Promise(function (resolve) {
       (function next() {
         if (id !== token) return resolve({ superseded: true });
@@ -285,7 +342,19 @@
           if (typeof window.__lolaStepDone === "function") { try { window.__lolaStepDone(at); } catch (err) {} }
         }
         // A throw inside a step becomes that step's failure, never a promise that hangs.
-        Promise.resolve().then(function () { return runStep(step, id, acted); }).then(function (why) {
+        Promise.resolve().then(function () {
+          // A SPA login submits asynchronously. A broad wait selector such as
+          // "nav" can already match the sign-in form's footer. Before leaving
+          // for the protected route, wait for that form to actually leave.
+          if (step.do === "goto" && formState.login && formState.login.isConnected) {
+            return until(function () {
+              return !formState.login.isConnected || !formState.login.getClientRects().length;
+            }, stepWait, id).then(function (left) {
+              return left ? runStep(step, id, acted, formState) : "the sign-in form is still open";
+            });
+          }
+          return runStep(step, id, acted, formState);
+        }).then(function (why) {
           if (id !== token) return resolve({ superseded: true });
           if (why) return resolve({ failed: { index: at, step: describe(step), why: why } });
           acted();
@@ -322,7 +391,8 @@
     var steps = Array.isArray(spec.steps) ? spec.steps.slice(0, 12) : [];
     var marks = Array.isArray(spec.marks) ? spec.marks.slice(0, 4) : [];
     var none = marks.map(function () { return false; });
-    return runSteps(steps, spec.from, onStep, id).then(function (sr) {
+    if (marks.length) trackPointer();
+    return initialStep(spec, steps, id).then(function (from) { return runSteps(steps, from, onStep, id); }).then(function (sr) {
       if (sr.superseded) return { superseded: true, found: none, waited: false, failed: null };
       if (sr.failed) return { found: none, waited: false, failed: sr.failed };
       var deadline = Date.now() + (timeout > 0 ? Math.min(timeout, 30000) : 10000);

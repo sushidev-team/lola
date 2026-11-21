@@ -3,7 +3,9 @@
   import { DaemonService } from '@bindings/desktop';
   import type { ReviewPackage } from '@bindings/internal/protocol';
   import { markLocation, markHit, markKind, validMark, arrowHead, simplifyStroke, type MarkKind, type ReviewMark } from '$lib/reviewmaterial';
-  import { preview, prepOf } from '$lib/preview.svelte';
+  import SessionPreview from './SessionPreview.svelte';
+  import { prepOf } from '$lib/preview.svelte';
+  import { reviewLivePages, reviewSessionId } from '$lib/reviewworkspace.svelte';
   import { touchSurface } from '$lib/touchsurface';
   import Button from '../Button.svelte';
   import Icon from '../Icon.svelte';
@@ -22,7 +24,19 @@
     [saveKeys, 'Save comment'], ['Esc', 'Close comment'], ['⌘⌫ / ⌘Delete', 'Delete selected comment'], ['Delete', 'Delete focused comment'], ['?', 'Keyboard shortcuts'],
   ];
   const screens = $derived(pkg.screens ?? []);
-  const screen = $derived(screens[index] ?? screens[0]);
+  const screen = $derived(screens[index]);
+  const live = $derived(reviewLivePages(pkg));
+  const page = $derived(live.pages[index - screens.length]);
+  const total = $derived(screens.length + live.pages.length);
+  // Prewarm the screenshot's related page and retain visited documents while
+  // this package is open. Screenshots keep their own indexes for annotations.
+  let warmed = $state<number[]>([]);
+  $effect(() => {
+    if (touchSurface()) return;
+    const related = live.screenPages[index];
+    const next = page ? index - screens.length : Math.max(0, related ?? 0);
+    if (live.pages[next] && !warmed.includes(next)) warmed = [...warmed, next];
+  });
   const modeKey = 'lola.review.comparisonMode';
   let preferredMode = 'slider';
   try {
@@ -367,6 +381,14 @@
       return;
     }
     if (typing) return;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      consume();
+      if (editing && !requestClose(false)) return;
+      index = Math.max(0, Math.min(total - 1, index + (e.key === 'ArrowUp' ? -1 : 1)));
+      focusCanvas();
+      return;
+    }
+    if (!screen) return;
     if (['Delete','Backspace'].includes(e.key) && canComment && (focusedMark || (editing && inEditor))) {
       consume(); deleteComment(focusedMark ? Number(focusedMark.dataset.mark) : active); return;
     }
@@ -394,8 +416,6 @@
       case 'v': cancelTool(); break;
       case 'b': onToggleFeedback?.(); break;
       case 'n': if (canComment) nextComment(e.shiftKey ? -1 : 1); break;
-      case 'arrowup': index = Math.max(0,index-1); focusCanvas(); break;
-      case 'arrowdown': index = Math.min(screens.length-1,index+1); focusCanvas(); break;
       case '1': case '2': case '3': case '4': {
         const mode = ['slider','split','before','after'][Number(key)-1];
         if (screen.before || mode === 'after') chooseMode(mode);
@@ -416,7 +436,7 @@
   {/if}
 {/snippet}
 
-{#if screen}
+{#if screen || page}
 <!-- Route keys bubbling from canvas controls; this region isn't an extra tab stop. -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <section class="canvas" aria-label="Screenshot review canvas" bind:this={root} tabindex="-1" onkeydown={handleKey}
@@ -429,9 +449,10 @@
   <div class="tools">
     <div class="tool-group">
       <Button icon size="sm" aria-label="Previous" title="Previous screen · ↑" aria-keyshortcuts="ArrowUp" disabled={index === 0} onclick={() => index--}><Icon name="chevron-up" size={15} /></Button>
-      <span class="screen-count">{index+1} / {screens.length}</span>
-      <Button icon size="sm" aria-label="Next" title="Next screen · ↓" aria-keyshortcuts="ArrowDown" disabled={index >= screens.length-1} onclick={() => index++}><Icon name="chevron-down" size={15} /></Button>
+      <span class="screen-count">{index+1} / {total}</span>
+      <Button icon size="sm" aria-label="Next" title="Next screen · ↓" aria-keyshortcuts="ArrowDown" disabled={index >= total-1} onclick={() => index++}><Icon name="chevron-down" size={15} /></Button>
     </div>
+    {#if screen}
     <div class="tool-group comparison" aria-label="Comparison mode">
       {#each modes as item,i}
         <Button icon size="sm" aria-label={item.label} title={`${item.label} · ${i+1}`} aria-keyshortcuts={String(i+1)} selected={mode === item.id} disabled={item.id !== 'after' && !screen.before} onclick={() => chooseMode(item.id)}><Icon name={item.icon} size={15} /></Button>
@@ -441,7 +462,20 @@
       {#if marks.length && canComment}<Button size="sm" aria-label="Next comment" title="Next comment · N / Previous · Shift+N" aria-keyshortcuts="n Shift+n" onclick={() => nextComment()}>{marks.length} {marks.length === 1 ? 'comment' : 'comments'}</Button>{/if}
             {#if canComment}<div class="tool-group draw-tools" role="group" aria-label="Annotation tools">{#each drawTools as t}<Button icon size="sm" selected={tool === t.id} disabled={!after} aria-label={t.label} title={`${t.title} · ${t.key.toUpperCase()}`} aria-keyshortcuts={t.key} onclick={() => armTool(t.id)}><Icon name={t.icon} size={15} /></Button>{/each}</div>{/if}
     </div>
+    {:else if page}
+      <span class="mr-auto truncate text-sm text-ink">{page.title} · Live</span>
+    {/if}
   </div>
+  {#each warmed as n (n)}
+    {@const entry = live.pages[n]}
+    {@const visible = index === screens.length + n}
+    {#if entry}
+      <div class="live-item" class:parked={!visible} inert={!visible} aria-hidden={!visible}>
+        <SessionPreview inline={{sessionId: reviewSessionId(pkg.session), url: entry.url, caption: entry.caption, prep: prepOf(entry)}} resumeKey={JSON.stringify([pkg.session, pkg.id, n])} active={visible} />
+      </div>
+    {/if}
+  {/each}
+  {#if screen}
   <div class="canvas-body">
   <div class="canvas-area" bind:this={canvasArea}>
   <div class="viewport" bind:this={viewport}>
@@ -500,7 +534,7 @@
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
-  <p class="screen-title" title={[screen.caption,screen.url,screen.viewport].filter(Boolean).join(" · ") || undefined}><span class="screen-title-text">{screen.title}</span>{#if screen.url && !touchSurface()}<Button size="xs" class="pointer-events-auto shrink-0" title={`Open ${screen.url} in the preview`} onclick={() => preview.open(pkg.session, screen.url!, { prep: prepOf(screen), caption: screen.caption })}>Open live<Icon name="arrow-right" size={14} /></Button>{/if}</p>
+  <p class="screen-title" title={[screen.caption,screen.url,screen.viewport].filter(Boolean).join(" · ") || undefined}><span class="screen-title-text">{screen.title}</span>{#if live.screenPages[index] >= 0 && !touchSurface()}<Button size="xs" class="pointer-events-auto shrink-0" title={`Open ${screen.url} in the preview`} onclick={() => index = screens.length + live.screenPages[index]}>Open live<Icon name="arrow-right" size={14} /></Button>{/if}</p>
   <div class="view-overlay">
     {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
       <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>
@@ -521,11 +555,15 @@
   </div>
   </div>
 
+  {/if}
 </section>
 {/if}
 
 <style>
   .canvas { min-width:0; height:100%; display:grid; grid-template-rows:auto minmax(0,1fr); }
+  .canvas { isolation:isolate; }
+  .canvas-body, .live-item { grid-area:2 / 1; min-height:0; min-width:0; }
+  .live-item.parked { opacity:0; pointer-events:none; z-index:-1; }
   .canvas:focus { outline:none; }
   .tools { position:relative; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid var(--color-edge); }
   .screen-title { position:absolute; z-index:6; left:12px; bottom:12px; max-width:calc(50% - 110px); margin:0; padding:5px 10px; display:flex; align-items:center; gap:6px; border-radius:8px; background:color-mix(in srgb,var(--color-panel) 88%,transparent); backdrop-filter:blur(8px); font-size:12px; color:var(--color-ink-2); white-space:nowrap; pointer-events:none; }

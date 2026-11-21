@@ -103,9 +103,22 @@
     post({ type: "mode", picking: on });
   }
 
+  var documentId = Math.random().toString(36).slice(2);
+  function announce() { post({ type: "ready", documentId: documentId, url: location.href, title: document.title }); }
   window.addEventListener("message", function (e) {
     if (e.source !== window.parent || !e.data || e.data.target !== SRC) return;
+    if (e.data.type === "hello") announce();
     if (e.data.type === "pick") set(!!e.data.on);
+    if (e.data.type === "check-session") {
+      var check = e.data, target;
+      try { target = new URL(check.path, location.origin); } catch (err) { return; }
+      if (target.origin !== location.origin) return;
+      fetch(target.href, { method: "HEAD", credentials: "same-origin", mode: "same-origin", cache: "no-store" }).then(function (response) {
+        if (response.status === 401 || (response.redirected && new URL(response.url).pathname === check.entry)) {
+          post({ type: "session-expired", id: check.id });
+        }
+      }).catch(function () { /* An unavailable server is not evidence of an expired login. */ });
+    }
     if (e.data.type === "prepare") {
       var failed = function (why) { post({ type: "prepared", found: [], waited: false, failed: { index: 0, step: "", why: why } }); };
       if (!window.__lolaPrepare) return failed("lola's prepare script is not loaded in this page");
@@ -114,10 +127,10 @@
       // this script, and the app resumes after the next document from the last step it saw.
       window.__lolaPrepare(e.data.spec, 12000, function (i) { post({ type: "step", i: i }); }).then(function (r) {
         if (r.superseded) return; // a newer prepare owns the result
-        post({ type: "prepared", found: r.found, waited: r.waited, failed: r.failed });
+        post({ type: "prepared", url: location.href, found: r.found, waited: r.waited, failed: r.failed });
       }, function (err) { failed("preparing the page threw: " + String(err && err.message || err).slice(0, 120)); });
     }
   });
 
-  post({ type: "ready", url: location.href, title: document.title });
+  announce();
 })();

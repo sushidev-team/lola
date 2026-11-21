@@ -27,7 +27,7 @@ catch { throw new Error('Browser capture requires Playwright in this project and
     let prepared = { found: [], waited: false };
     const steps = input.steps || [];
     if (input.prepareJS && (input.waitFor || input.scrollY || (input.marks && input.marks.length) || steps.length)) {
-      const spec = { waitFor: input.waitFor, scrollY: input.scrollY, marks: input.marks, steps };
+      const spec = { redirected: new URL(url).pathname !== new URL(input.url).pathname, waitFor: input.waitFor, scrollY: input.scrollY, marks: input.marks, steps };
       let from = 0;
       for (let attempt = 0; ; attempt++) {
         try {

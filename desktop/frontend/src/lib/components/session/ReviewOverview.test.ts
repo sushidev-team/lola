@@ -95,6 +95,14 @@ it('offers the live pages the agent named and opens one in the preview',async()=
   expect(preview.request).toEqual({sessionId:'s',url:'http://localhost:3000/settings',caption:'Spacing fix'});
   preview.close();
 });
+it('selects the exact live carousel item when two prepared pages start at the same login', async () => {
+  const pages = ['Profile', 'Legal'].map(title => ({title, url:'http://localhost:3000/login'}));
+  const onScreen = vi.fn();
+  render(ReviewOverview,{pkg:{...pkg as object,pages} as never,sessionId:'s',freshness:'current',split:true,onScreen});
+  await fireEvent.click(screen.getByRole('button',{name:'Open live page: Legal'}));
+  expect(onScreen).toHaveBeenCalledWith(3); // two screenshots, then Profile and Legal
+  expect(preview.request).toBeNull();
+});
 it('opens every live page as a tab in one click', async () => {
   const pages = [{title:'Home',url:'http://localhost:3000/'},{title:'Settings',url:'http://localhost:3000/settings'}];
   render(ReviewOverview,{pkg:{...pkg as object,pages} as never,facts,sessionId:'s',freshness:'current',onScreen:()=>{}});

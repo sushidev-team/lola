@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import './talk.testkit';
-import { DaemonService } from '@bindings/desktop';
+import { DaemonService, PreviewService } from '@bindings/desktop';
 import ReviewCanvas from './ReviewCanvas.svelte';
 import { markLocation, reviewSections } from '$lib/reviewmaterial';
 const image = vi.mocked(DaemonService.ReviewPackageImage);
@@ -472,10 +472,35 @@ it('opens the comment of a saved drawing by double click while a drawing tool is
   await fireEvent.dblClick(surface);
   expect(screen.getByRole('textbox',{name:'Screenshot comment'})).toBeInTheDocument();
 });
-it('offers a screenshot taken of a live page to open in the preview',async()=>{
-  const { preview } = await import('$lib/preview.svelte');
-  render(ReviewCanvas,{pkg:{...pkg as object,screens:[{title:'Settings',after:'after',url:'http://localhost:3000/settings'}]} as never,onComment:()=>true});
-  await fireEvent.click(await screen.findByRole('button',{name:/Open live/}));
-  expect(preview.request).toEqual({sessionId:'s',url:'http://localhost:3000/settings'});
-  preview.close();
+it.each(['s', 's~web'])('opens the matching live page inline for a screenshot from %s', async session => {
+  const url = 'http://localhost:3000/login';
+  const origin = 'http://preview.localhost:5555';
+  const open = vi.mocked(PreviewService.Open).mockReset().mockResolvedValue(origin + '/login');
+  const steps = [{ do: 'fill', selector: '#email', value: 'review@example.test' }, { do: 'goto', path: '/settings' }];
+  const marks = [{ selector: '.legal' }];
+  render(ReviewCanvas, { pkg: { ...pkg as object, session,
+    screens: [{ title: 'Settings', after: 'after', url }],
+    pages: [{ title: 'Settings panels', url, steps, marks }],
+  } as never, onComment: () => true });
+  expect(screen.getByText('1 / 2')).toBeInTheDocument();
+  expect(open).toHaveBeenCalledExactlyOnceWith('s', url);
+  await fireEvent.click(await screen.findByRole('button', { name: /Open live/ }));
+  const frame = await screen.findByTitle('Preview of localhost:3000/login') as HTMLIFrameElement;
+  expect(PreviewService.Open).toHaveBeenCalledWith('s', url);
+  expect(image).toHaveBeenCalledWith(session, 'package1', 'after');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByText('2 / 2')).toBeInTheDocument();
+  const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+  const ready = (sender: string) => window.dispatchEvent(new MessageEvent('message', {
+    source: frame.contentWindow, origin: sender, data: { source: 'lola-preview', type: 'ready', url: origin + '/login' },
+  }));
+  ready('http://other.localhost');
+  expect(post).not.toHaveBeenCalled();
+  ready(origin);
+  expect(post).toHaveBeenCalledWith(expect.objectContaining({ spec: expect.objectContaining({ steps, marks }) }), origin);
+  await fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+  expect(await screen.findByAltText('Settings — After')).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  expect(screen.getByTitle('Preview of localhost:3000/login')).toBe(frame);
+  expect(open).toHaveBeenCalledTimes(1);
 });

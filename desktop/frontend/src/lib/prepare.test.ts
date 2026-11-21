@@ -6,7 +6,7 @@ const { readFileSync } = await import(/* @vite-ignore */ nodeFs);
 const root = (globalThis as unknown as { process: { cwd(): string } }).process.cwd();
 const source: string = readFileSync(root + "/../../internal/preview/prepare.js", "utf8");
 type Step = { do: string; selector?: string; text?: string; value?: string; key?: string; path?: string; ms?: number };
-type Spec = { waitFor?: string; scrollY?: number; marks?: { selector?: string; text?: string; label?: string }[]; steps?: Step[]; from?: number; stepTimeoutMs?: number };
+type Spec = { redirected?: boolean; waitFor?: string; scrollY?: number; marks?: { selector?: string; text?: string; label?: string }[]; steps?: Step[]; from?: number; stepTimeoutMs?: number };
 type Result = { superseded?: boolean; found: boolean[]; waited: boolean; failed: null | { index: number; step: string; why: string } };
 const run = (spec: Spec, timeout?: number, onStep?: (i: number) => void) =>
   (window as unknown as { __lolaPrepare: (s: Spec, t?: number, o?: (i: number) => void) => Promise<Result> }).__lolaPrepare(spec, timeout, onStep);
@@ -29,6 +29,36 @@ it("scrolls the first found mark to the middle and outlines every found one with
   const layer = document.getElementById("lola-prepare-layer")!;
   expect([...layer.children].map((c) => c.textContent).filter(Boolean)).toEqual(["Section", "Save"]);
   expect(layer.style.pointerEvents).toBe("none");
+});
+
+it("dismisses hovered marks individually across pointer exit, scrolling and redraws", async () => {
+  const preview = window as Window & { __lolaPreview?: boolean };
+  preview.__lolaPreview = true;
+  try {
+    const spec = { marks: [{ selector: "#s", label: "Section" }, { selector: ".b" }] };
+    await run(spec);
+    const layer = document.getElementById("lola-prepare-layer")!;
+    const [box, label, other] = Array.from(layer.children) as HTMLElement[];
+    expect(box.style.borderWidth).toBe("1px");
+    expect(box.style.transition).toBe("none");
+    expect(label.style.transition).toBe("none");
+    box.getBoundingClientRect = () => new DOMRect(10, 40, 100, 50);
+    label.getBoundingClientRect = () => new DOMRect(10, 15, 60, 20);
+    other.getBoundingClientRect = () => new DOMRect(140, 40, 50, 50);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 25, clientY: 20 }));
+    expect(Array.from(layer.children)).toEqual([other]);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 250, clientY: 50 }));
+    expect(Array.from(layer.children)).toEqual([other]);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 150, clientY: 50 }));
+    expect(layer.childElementCount).toBe(0);
+    document.dispatchEvent(new MouseEvent("pointerout", { relatedTarget: null }));
+    document.dispatchEvent(new Event("scroll"));
+    expect(layer.childElementCount).toBe(0);
+    expect((await run(spec)).found).toEqual([true, true]);
+    expect(document.getElementById("lola-prepare-layer")!.childElementCount).toBe(0);
+  } finally {
+    delete preview.__lolaPreview;
+  }
 });
 
 it("finds an element by its visible text, the deepest one, never script text", async () => {
@@ -103,6 +133,21 @@ it("logs in: fills by selector and by label or placeholder, picks an option, cli
   expect(r.found).toEqual([true]);
   expect(submitted).toEqual([{ email: "dev@shop.test", pw: "dev-only", role: "m" }]);
   expect(seen).toEqual([0, 1, 2, 3, 4]);
+});
+
+it("continues a redirected sign-in at the declared post-submit check when a session cookie is already present", async () => {
+  document.body.innerHTML = '<main class="dashboard"><button id="settings">Settings</button></main>';
+  document.querySelector('button')!.onclick = () => document.body.insertAdjacentHTML('beforeend', '<section id="legal">Legal</section>');
+  const seen: number[] = [];
+  const r = await run({ redirected: true, steps: [
+    { do: "fill", selector: "#email", value: "review@example.test" },
+    { do: "press", key: "Enter" },
+    { do: "wait", selector: ".dashboard" },
+    { do: "click", selector: "#settings" },
+  ], marks: [{selector: "#legal"}] }, 1000, i => seen.push(i));
+  expect(seen).toEqual([2, 3]);
+  expect(r.found).toEqual([true]);
+  expect(r.failed).toBeNull();
 });
 
 it("finds a field by its label text and presses Enter to submit", async () => {
