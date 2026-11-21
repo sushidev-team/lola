@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/preview"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -124,6 +125,7 @@ func main() {
 	config.SetLolaVersion(version)
 
 	daemon := &DaemonService{}
+	previews := &PreviewService{sessions: daemon.Sessions, srv: preview.New()}
 	term := NewTermService()
 	updater := NewUpdateService()
 	login := &SandboxLoginService{}
@@ -148,7 +150,7 @@ func main() {
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
 			application.NewService(updater),
-			application.NewService(&PreviewService{}),
+			application.NewService(previews),
 		},
 		Assets: application.AssetOptions{
 			Handler:    application.AssetFileServerFS(assets),
@@ -219,7 +221,7 @@ func main() {
 	// polls its cheap in-memory caches and emits typed events the frontend
 	// subscribes to. When the daemon is down we emit only the liveness flag so
 	// the UI can show its "start daemon" banner without spamming dial errors.
-	go pushLoop(app, daemon)
+	go pushLoop(app, daemon, previews)
 
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
@@ -608,7 +610,7 @@ func init() {
 	application.RegisterEvent[UpdateProgressDTO](evtUpdateProgress)
 }
 
-func pushLoop(app *application.App, d *DaemonService) {
+func pushLoop(app *application.App, d *DaemonService, previews *PreviewService) {
 	const fast = 2 * time.Second // sessions cadence; projects/status every other tick
 	tick := time.NewTicker(fast)
 	defer tick.Stop()
@@ -648,7 +650,7 @@ func pushLoop(app *application.App, d *DaemonService) {
 			i++
 			continue
 		}
-		if sd, err := d.Sessions(); err != nil {
+		if sd, err := previews.refreshSessions(); err != nil {
 			emitPushErr("sessions", err)
 		} else {
 			app.Event.Emit(evtSessions, sd)

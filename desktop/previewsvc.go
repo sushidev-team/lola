@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	neturl "net/url"
+	"slices"
 	"strings"
 	"sync"
 
@@ -16,55 +17,65 @@ import (
 // the daemon derived for THAT session, or the pane would be a proxy into any
 // port on this Mac's loopback.
 type PreviewService struct {
-	once sync.Once
-	srv  *preview.Server
-	// devURLs answers a session's derived dev URLs; a seam for tests.
-	devURLs func(session string) ([]string, error)
+	// Order opens and the desktop's regular snapshot reads so a late response
+	// cannot resurrect a listener after a newer snapshot retired its origin.
+	mu       sync.Mutex
+	srv      *preview.Server
+	sessions func() (protocol.SessionsData, error)
 }
 
-func (s *PreviewService) init() {
-	s.once.Do(func() {
-		s.srv = preview.New()
-		if s.devURLs == nil {
-			s.devURLs = sessionDevURLs
-		}
-	})
+// refreshSessions shares the existing desktop poll. Listeners stay stable for
+// as long as their session owns the origin, including across parked review tabs.
+func (s *PreviewService) refreshSessions() (protocol.SessionsData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.snapshot()
 }
 
-// sessionDevURLs reads the dev URLs the daemon holds for one session.
-func sessionDevURLs(id string) ([]string, error) {
-	var d protocol.SessionsData
-	if err := call(protocol.Request{Cmd: "sessions"}, shortTimeout, &d); err != nil {
-		return nil, err
+// snapshot is called with mu held. A failed read gives no evidence of removal.
+func (s *PreviewService) snapshot() (protocol.SessionsData, error) {
+	d, err := s.sessions()
+	if err == nil {
+		s.srv.Retain(func(id, origin string) bool { return ownsPreviewOrigin(d, id, origin) })
 	}
-	for _, si := range d.Sessions {
-		if si.ID == id {
-			urls := si.DevURLs
-			for _, app := range si.Apps {
-				urls = append(urls, app.DevURLs...)
+	return d, err
+}
+
+func ownsPreviewOrigin(d protocol.SessionsData, id, origin string) bool {
+	matches := func(raw string) bool { return sameOrigin(raw, origin) }
+	for i := range d.Sessions {
+		session := &d.Sessions[i]
+		if session.ID != id {
+			continue
+		}
+		if slices.ContainsFunc(session.DevURLs, matches) {
+			return true
+		}
+		for _, app := range session.Apps {
+			if slices.ContainsFunc(app.DevURLs, matches) {
+				return true
 			}
-			return urls, nil
 		}
+		break
 	}
-	return nil, errors.New("unknown session " + id)
+	return false
 }
 
 // Open returns the address the pane frames for one of the session's dev URLs.
 // The proxy's *.localhost hosts must be allowed by both macOS bundle plists.
 func (s *PreviewService) Open(session, url string) (string, error) {
-	s.init()
 	url = strings.TrimSpace(url)
 	if _, err := preview.Allowed(url); err != nil {
 		return "", err
 	}
-	urls, err := s.devURLs(session)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, err := s.snapshot()
 	if err != nil {
 		return "", err
 	}
-	for _, u := range urls {
-		if sameOrigin(u, url) {
-			return s.srv.Open(session, url)
-		}
+	if ownsPreviewOrigin(d, session, url) {
+		return s.srv.Open(session, url)
 	}
 	return "", errors.New("that address is not one of this session's dev servers")
 }
@@ -96,7 +107,6 @@ func effectivePort(u *neturl.URL) string {
 
 // ServiceShutdown stops every preview listener when the app quits.
 func (s *PreviewService) ServiceShutdown() error {
-	s.init()
 	s.srv.Close()
 	return nil
 }

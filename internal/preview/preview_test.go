@@ -1,8 +1,11 @@
 package preview
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -88,11 +91,11 @@ func TestProxyInjectsAndUnframes(t *testing.T) {
 	defer up.Close()
 	s := New()
 	defer s.Close()
-	addr, err := s.Open("session", up.URL+"/start?q=1")
+	addr, err := s.Open("session", up.URL+"/start/a%2Fb?q=1#/a%2Fb")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(addr, "/start?q=1") || !strings.Contains(addr, ".localhost:") {
+	if !strings.HasSuffix(addr, "/start/a%2Fb?q=1#/a%2Fb") || !strings.Contains(addr, ".localhost:") {
 		t.Fatalf("addr = %s", addr)
 	}
 	base := addr[:strings.Index(addr, "/start")]
@@ -235,5 +238,74 @@ func TestRedirectsWithAnExplicitDefaultPortStillRewrite(t *testing.T) {
 	rewriteOrigin(h, "Location", from, to)
 	if h.Get("Location") != "http://evil.test/x" {
 		t.Fatal("a foreign origin was rewritten")
+	}
+}
+
+func TestPreviewTransportDialsOnlyLoopback(t *testing.T) {
+	if err := checkLoopbackIP("tcp4", "192.0.2.1:80", nil); !errors.Is(err, ErrNotLoopback) {
+		t.Fatalf("off-host destination: %v", err)
+	}
+	up := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer up.Close()
+	client := &http.Client{Transport: upstreamTransport}
+	resp, err := client.Get(up.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("accepted an untrusted dev certificate")
+	}
+	var certErr *tls.CertificateVerificationError
+	if !errors.As(err, &certErr) {
+		t.Fatalf("wanted TLS verification, got %v", err)
+	}
+}
+
+func TestPreviewWebSocketOrigin(t *testing.T) {
+	const host = "preview.localhost:4000"
+	handler := hostGuard(host, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	for _, c := range []struct {
+		origin string
+		status int
+	}{{"http://" + host, 204}, {"http://another.localhost", 403}} {
+		req := httptest.NewRequest("GET", "http://"+host+"/", nil)
+		req.Header.Set("Origin", c.origin)
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != c.status {
+			t.Errorf("origin %s: status %d", c.origin, w.Code)
+		}
+	}
+}
+
+func TestPreviewStreamsOversizeHTML(t *testing.T) {
+	page := strings.Repeat("x", maxHTML) + "<footer>last byte</footer>"
+	for _, encoding := range []string{"identity", "gzip"} {
+		t.Run(encoding, func(t *testing.T) {
+			resp := &http.Response{Header: make(http.Header), ContentLength: -1, Body: io.NopCloser(strings.NewReader(page))}
+			resp.Header.Set("Content-Type", "text/html")
+			if encoding == "gzip" {
+				var compressed bytes.Buffer
+				w := gzip.NewWriter(&compressed)
+				if _, err := io.WriteString(w, page); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				resp.Body = io.NopCloser(&compressed)
+				resp.ContentLength = int64(compressed.Len())
+				resp.Header.Set("Content-Encoding", "gzip")
+			}
+			origin, _ := url.Parse("http://localhost")
+			if err := rewriteResponse(resp, origin, origin); err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil || string(body) != page || resp.ContentLength != -1 || resp.Header.Get("Content-Encoding") != "" {
+				t.Fatalf("incomplete passthrough: %d bytes, length %d, err %v", len(body), resp.ContentLength, err)
+			}
+		})
 	}
 }

@@ -21,10 +21,10 @@ package preview
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	_ "embed"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -107,8 +108,9 @@ type Server struct {
 }
 
 type proxy struct {
-	addr string
-	srv  *http.Server
+	addr   string
+	srv    *http.Server
+	cancel context.CancelFunc
 }
 
 // New returns an empty Server.
@@ -136,11 +138,30 @@ func (s *Server) Open(session, target string) (string, error) {
 		}
 		s.byHost[key] = p
 	}
-	out := url.URL{Scheme: "http", Host: p.addr, Path: u.Path, RawPath: u.RawPath, RawQuery: u.RawQuery, Fragment: u.Fragment}
+	out := *u
+	out.Scheme, out.Host = "http", p.addr
 	if out.Path == "" {
 		out.Path = "/"
 	}
 	return out.String(), nil
+}
+
+// Retain closes listeners whose upstream origin the daemon no longer reports.
+func (s *Server) Retain(owns func(session, origin string) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, p := range s.byHost {
+		if !owns(key.session, key.origin) {
+			p.close()
+			delete(s.byHost, key)
+		}
+	}
+}
+
+func (p *proxy) close() {
+	// ReverseProxy also needs cancellation for hijacked WebSocket connections.
+	p.cancel()
+	_ = p.srv.Close()
 }
 
 // Close stops every listener.
@@ -149,7 +170,7 @@ func (s *Server) Close() {
 	defer s.mu.Unlock()
 	s.closed = true
 	for k, p := range s.byHost {
-		_ = p.srv.Close()
+		p.close()
 		delete(s.byHost, k)
 	}
 }
@@ -162,9 +183,11 @@ func (s *Server) start(origin *url.URL) (*proxy, error) {
 	// Cookies ignore port numbers. A distinct .localhost name keeps even
 	// identically named session cookies apart without leaving loopback.
 	addr := net.JoinHostPort("p-"+strings.ToLower(rand.Text())+".localhost", strconv.Itoa(ln.Addr().(*net.TCPAddr).Port))
-	p := &proxy{addr: addr}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &proxy{addr: addr, cancel: cancel}
 	self := &url.URL{Scheme: "http", Host: addr}
 	rp := &httputil.ReverseProxy{
+		Transport: upstreamTransport,
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(origin)
 			r.Out.Host = origin.Host
@@ -183,10 +206,45 @@ func (s *Server) start(origin *url.URL) (*proxy, error) {
 	}
 	p.srv = &http.Server{
 		Handler:           hostGuard(addr, rp),
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() { _ = p.srv.Serve(ln) }()
 	return p, nil
+}
+
+// The dialer checks each resolved IP before connect, including fallback attempts.
+// Keep the hostname for TLS and HTTP; an environment proxy would bypass this check.
+var upstreamTransport = func() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	dialer := &net.Dialer{Timeout: 5 * time.Second, Control: checkLoopbackIP}
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+			host = "::1"
+			if ip.To4() != nil {
+				host = "127.0.0.1"
+			}
+			addr = net.JoinHostPort(host, port)
+		}
+		return dialer.DialContext(ctx, network, addr)
+	}
+	return transport
+}()
+
+func checkLoopbackIP(_, addr string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	if !net.ParseIP(host).IsLoopback() {
+		return ErrNotLoopback
+	}
+	return nil
 }
 
 // hostGuard refuses a request whose Host is not the listener's own address: a
@@ -199,7 +257,7 @@ func hostGuard(addr string, next http.Handler) http.Handler {
 		}
 		// SameSite=None is needed in the iframe. Reject cross-origin writes
 		// before giving the upstream any of the preview's credentials.
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+		if r.Header.Get("Upgrade") != "" || (r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions) {
 			if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+addr {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
@@ -274,13 +332,23 @@ func rewriteResponse(resp *http.Response, origin, self *url.URL) error {
 		rd = zr
 	}
 	body, err := io.ReadAll(io.LimitReader(rd, maxHTML+1))
-	_ = resp.Body.Close()
 	if err != nil {
+		_ = resp.Body.Close()
 		return err
 	}
 	if len(body) > maxHTML {
-		return fmt.Errorf("preview: page larger than %d bytes", maxHTML)
+		// The length was unknown, or the page expanded beyond the limit.
+		// Replay the decoded prefix and stream the rest from the same reader.
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(body), rd), resp.Body}
+		h.Del("Content-Length")
+		h.Del("Content-Encoding")
+		resp.ContentLength = -1
+		return nil
 	}
+	_ = resp.Body.Close()
 	body = Inject(body)
 	h.Del("Content-Encoding")
 	h.Set("Content-Length", strconv.Itoa(len(body)))

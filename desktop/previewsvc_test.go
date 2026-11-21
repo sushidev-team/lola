@@ -2,11 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/sushidev-team/lola/internal/preview"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -20,7 +25,7 @@ func TestPreviewOpenOnlyForTheSessionsOwnDevURLs(t *testing.T) {
 		}})
 		return protocol.Response{OK: true, Data: data}
 	})
-	s := &PreviewService{}
+	s := &PreviewService{sessions: (&DaemonService{}).Sessions, srv: preview.New()}
 	defer s.ServiceShutdown()
 	if addr, err := s.Open("s1", up.URL); err != nil || !strings.Contains(addr, ".localhost:") {
 		t.Fatalf("own dev url: %q, %v", addr, err)
@@ -54,5 +59,57 @@ func TestSameOriginIgnoresHostCaseAndDefaultPorts(t *testing.T) {
 		if got := sameOrigin(c.owned, c.asked); got != c.want {
 			t.Errorf("sameOrigin(%q, %q) = %v", c.owned, c.asked, got)
 		}
+	}
+}
+
+func TestPreviewPollRetiresOnlyLostSessionOrigins(t *testing.T) {
+	const first, second = "http://localhost:3000", "http://localhost:3001"
+	data := protocol.SessionsData{Sessions: []protocol.SessionInfo{
+		{ID: "stack", Apps: []protocol.SessionApp{{DevURLs: []string{first, second}}}},
+		{ID: "other", DevURLs: []string{first}},
+	}}
+	var snapshotErr error
+	s := &PreviewService{srv: preview.New(), sessions: func() (protocol.SessionsData, error) { return data, snapshotErr }}
+	defer s.ServiceShutdown()
+	open := func(id, target string) string {
+		t.Helper()
+		addr, err := s.Open(id, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return addr
+	}
+	a, b, other := open("stack", first), open("stack", second), open("other", first)
+	snapshotErr = errors.New("daemon unavailable")
+	if _, err := s.refreshSessions(); err == nil {
+		t.Fatal("expected snapshot error")
+	}
+	snapshotErr = nil
+	if open("stack", first) != a {
+		t.Fatal("failed read retired a live origin")
+	}
+
+	data.Sessions = data.Sessions[:1]
+	data.Sessions[0].Apps[0].DevURLs = []string{second + "/app"}
+	if _, err := s.refreshSessions(); err != nil {
+		t.Fatal(err)
+	}
+	for _, addr := range []string{a, other} {
+		u, err := url.Parse(addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", u.Port()), time.Second)
+		if err == nil {
+			conn.Close()
+			t.Fatalf("retired preview still listening: %s", addr)
+		}
+	}
+	if open("stack", second) != b {
+		t.Fatal("retained stack page lost its cookie host")
+	}
+	data.Sessions[0].Apps[0].DevURLs = append(data.Sessions[0].Apps[0].DevURLs, first)
+	if open("stack", first) == a {
+		t.Fatal("new dev server inherited retired preview")
 	}
 }
