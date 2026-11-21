@@ -23,7 +23,7 @@ it("sizes the frame by preset", () => {
 });
 
 it("names the page on the dev server's origin, not the proxy's", () => {
-  expect(devPageURL("http://127.0.0.1:60001/a/b?c=1", "http://localhost:5173/")).toBe("http://localhost:5173/a/b?c=1");
+  expect(devPageURL("http://127.0.0.1:60001/a/b?c=1#/settings", "http://localhost:5173/")).toBe("http://localhost:5173/a/b?c=1#/settings");
   expect(devPageURL("garbage", "http://localhost:5173/")).toBe("http://localhost:5173/");
 });
 

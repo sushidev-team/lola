@@ -121,6 +121,8 @@
     var f = on ? "addEventListener" : "removeEventListener";
     document[f]("mousemove", onMove, true);
     document[f]("click", onClick, true);
+    document[f]("pointerdown", swallow, true);
+    document[f]("pointerup", swallow, true);
     document[f]("mousedown", swallow, true);
     document[f]("mouseup", swallow, true);
     document.documentElement.style.cursor = on ? "crosshair" : "";
@@ -145,7 +147,7 @@
       pending = 0;
       var targets = new Set(), rects = [];
       anchors.forEach(function (anchor) {
-        if (anchor.path !== location.pathname + location.search) return;
+        if (anchor.path !== location.pathname + location.search + location.hash) return;
         var el;
         try { el = document.querySelector(anchor.selector); } catch (err) { return; }
         if (!el) return;
@@ -176,6 +178,7 @@
     document.addEventListener("load", schedule, true);
     window.addEventListener("resize", schedule);
     window.addEventListener("popstate", schedule);
+    window.addEventListener("hashchange", schedule);
     measure();
     stopComments = function () {
       changes.disconnect(); sizes.disconnect(); cancelAnimationFrame(pending);
@@ -183,10 +186,11 @@
       document.removeEventListener("load", schedule, true);
       window.removeEventListener("resize", schedule);
       window.removeEventListener("popstate", schedule);
+      window.removeEventListener("hashchange", schedule);
       stopComments = function () {};
     };
   }
-  function announce() { post({ type: "ready", documentId: documentId, url: location.href, title: document.title }); }
+  function announce() { post({ type: "ready", picking: picking, documentId: documentId, url: location.href, title: document.title }); }
   window.addEventListener("message", function (e) {
     if (e.source !== window.parent || !e.data || e.data.target !== SRC) return;
     if (e.data.type === "hello") announce();

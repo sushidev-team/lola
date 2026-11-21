@@ -5,7 +5,7 @@ import { SSH } from '$lib/terms.svelte';
 import { feed } from '$lib/feed.svelte';
 import { changes } from '$lib/changes.svelte';
 import { preview } from '$lib/preview.svelte';
-import { PreviewService } from '@bindings/desktop';
+import { DaemonService, PreviewService } from '@bindings/desktop';
 import SessionPreview from './SessionPreview.svelte';
 import SessionSide from './SessionSide.svelte';
 
@@ -308,4 +308,52 @@ it('reopens a verified protected route directly and replays sign-in when the rou
   say({type:'ready', documentId:'expired', url:origin + '/login'});
   await waitFor(() => expect(frame()).toHaveAttribute('src', origin + '/login'));
   expect(open).toHaveBeenCalledTimes(3);
+});
+
+it('waits for the picker and preserves edits made during a feedback send', async () => {
+  const origin = 'http://preview.localhost:5555', url = 'http://localhost:3000';
+  const id = freshSession({ devUrls: [url] });
+  vi.mocked(PreviewService.Open).mockResolvedValue(origin + '/');
+  let finish!: () => void;
+  vi.mocked(DaemonService.SendFeedback).mockImplementationOnce(() => new Promise(resolve => {
+    finish = () => resolve({ delivered: true } as never);
+  }) as ReturnType<typeof DaemonService.SendFeedback>);
+  const refresh = vi.spyOn(store, 'refresh').mockResolvedValue();
+  render(SessionPreview);
+  preview.open(id, url);
+  try {
+    const frame = await screen.findByTitle('Preview of localhost:3000') as HTMLIFrameElement;
+    const picker = screen.getByRole('button', { name: 'Pick element' });
+    const say = (data: object) => fireEvent(window, new MessageEvent('message', {
+      source: frame.contentWindow, origin, data: { source: 'lola-preview', ...data },
+    }));
+    expect(picker).toBeDisabled();
+    await say({ type: 'ready', documentId: 'one' });
+    expect(picker).toBeEnabled();
+    await fireEvent.click(picker);
+    expect(picker).not.toHaveAttribute('aria-pressed', 'true');
+    await say({ type: 'mode', picking: true });
+    expect(picker).toHaveAttribute('aria-pressed', 'true');
+    await say({ type: 'pick', selector: '#title', url: origin + '/#/details' });
+    const note = screen.getByRole('textbox', { name: 'Element comment' });
+    await fireEvent.input(note, { target: { value: 'Change title' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Send to agent' }));
+    expect(DaemonService.SendFeedback).toHaveBeenCalledWith({
+      session: id, elements: [expect.objectContaining({ url: url + '/#/details', note: 'Change title' })],
+    });
+    await fireEvent.input(note, { target: { value: 'Change title and spacing' } });
+    finish();
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(screen.getByRole('textbox', { name: 'Element comment' })).toHaveValue('Change title and spacing');
+  } finally { preview.close(); refresh.mockRestore(); }
+});
+
+it('removes a parked preview when its stack stops advertising the origin', async () => {
+  const url = 'http://shop.test', id = freshSession({ apps: [{ name: 'shop', devUrls: [url] }] });
+  vi.mocked(PreviewService.Open).mockResolvedValue('http://preview.localhost:5555/settings');
+  render(SessionPreview, { inline: { sessionId: id, url: url + '/settings' }, active: false });
+  await screen.findByTitle('Preview of shop.test/settings');
+  store.sessions = [];
+  expect(await screen.findByRole('alert')).toHaveTextContent('no longer reports this dev server');
+  expect(document.querySelector('iframe')).toBeNull();
 });

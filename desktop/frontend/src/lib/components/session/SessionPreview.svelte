@@ -38,6 +38,7 @@
   let error = $state("");
   let viewport = $state<ViewportId>(DEFAULT_VIEWPORT);
   const viewportIcons = { mobile: "smartphone", tablet: "tablet", desktop: "monitor" } as const;
+  let pickerReady = $state(false);
   let picking = $state(false);
   let picked = $state<PickedElement | null>(null);
   let note = $state("");
@@ -99,7 +100,7 @@
       if (!draft.url || (draft.reviewKey && draft.reviewKey !== resumeKey)) return [];
       try {
         const url = new URL(draft.url);
-        return url.origin === devOrigin ? [{ number: i + 1, path: url.pathname + url.search, selector: draft.selector }] : [];
+        return url.origin === devOrigin ? [{ number: i + 1, path: url.pathname + url.search + url.hash, selector: draft.selector }] : [];
       } catch { return []; }
     });
     if (!anchors.length) return;
@@ -193,6 +194,28 @@
     session?.apps ?? [],
   ));
 
+  // A retained document can still run scripts after its listener is retired.
+  // Remove it when a previously advertised session or stack origin disappears.
+  let observedRequest: PreviewRequest | null = null;
+  $effect(() => {
+    const request = req;
+    if (!request) { observedRequest = null; return; }
+    const urls = [...(session?.devUrls ?? []), ...(session?.apps ?? []).flatMap(app => app.devUrls ?? [])];
+    if (urls.some(raw => {
+      try { return new URL(raw).origin === new URL(request.url).origin; }
+      catch { return false; }
+    })) {
+      observedRequest = request;
+    } else if (observedRequest === request) {
+      observedRequest = null;
+      src = "";
+      pickerReady = false;
+      picking = false;
+      error = "This session no longer reports this dev server.";
+      clearTimeout(progressTimer);
+    }
+  });
+
   $effect(() => {
     const request = req;
     reload;
@@ -207,6 +230,7 @@
     picked = null;
     editingDraft = undefined;
     picking = false;
+    pickerReady = false;
     prepared = null;
     stepFailure = null;
     flow = { started: -1, armed: true, finished: false, resumes: 0 };
@@ -276,7 +300,9 @@
   }
 
   function frameLoaded() {
-    if ((replay || inlinePage) && frameOrigin && frameOrigin !== "null") {
+    pickerReady = false;
+    picking = false;
+    if (frameOrigin && frameOrigin !== "null") {
       frame?.contentWindow?.postMessage({ target: PICKER_SOURCE, type: "hello" }, frameOrigin);
     }
   }
@@ -286,9 +312,8 @@
   }
 
   function togglePick() {
-    if (picked || !canComment) return;
-    picking = !picking;
-    tell(picking);
+    if (!pickerReady || picked || !canComment) return;
+    tell(!picking);
   }
 
   onMount(() => {
@@ -296,12 +321,14 @@
       // Only the framed page, and only a well-formed pick, ever reaches the form.
       if (!frame || e.source !== frame.contentWindow || !src || e.origin !== frameOrigin) return;
       const d = e.data as { source?: string; type?: string; id?: number; documentId?: string; picking?: boolean; url?: string; found?: unknown; waited?: unknown; i?: unknown; failed?: { index?: unknown; step?: unknown; why?: unknown } | null } | null;
-      if (d?.source === PICKER_SOURCE && d.type === "mode") picking = !!d.picking;
+      if (d?.source === PICKER_SOURCE && d.type === "mode" && pickerReady) picking = !!d.picking;
       if (inlinePage && active && d?.source === PICKER_SOURCE && d.type === "comment-bounds" && e.data.revision === revision && Array.isArray(e.data.rects)) {
         commentRects = e.data.rects.slice(0, 10).filter((r: CommentRect) =>
           r && trackedNumbers.has(r.number) && [r.x, r.y, r.w, r.h].every(Number.isFinite) && r.w > 0 && r.h > 0);
       }
       if (d?.source === PICKER_SOURCE && d.type === "ready") {
+        pickerReady = true;
+        picking = !!d.picking;
         if (d.documentId && d.documentId === documentId) return;
         documentId = d.documentId ?? "";
         onFrameReady(d.url);
@@ -421,6 +448,7 @@
   async function send() {
     if (!req || !picked || !canComment || sending || !note.trim()) return;
     sending = true;
+    const sentPick = picked, sentNote = note;
     const element = { url: devPageURL(picked.url, req.url), selector: picked.selector, html: picked.html, text: picked.text, note: note.trim() };
     try {
       if (inlinePage) {
@@ -433,9 +461,9 @@
         store.setFlash(r?.delivered ? "element sent to the agent" : "element queued — it is sent when the agent is at its prompt", r?.delivered ? "good" : "warn");
         void store.refresh();
       }
-      finishComment();
+      if (picked === sentPick && note === sentNote) finishComment();
     } catch (e) {
-      saveError = String(e);
+      if (picked === sentPick) saveError = String(e);
     } finally {
       sending = false;
     }
@@ -461,7 +489,7 @@
       <h2 class="drag mr-auto self-stretch content-center text-lg text-ink">Preview</h2>
       <Tabs tabs={VIEWPORTS.map((v) => ({ id: v.id, label: v.label }))} ariaLabel="Viewport" active={viewport} onSelect={(id) => (viewport = id as ViewportId)} pill />
       <div class="ml-auto flex items-center gap-1 sm:ml-0">
-        <Button size="xs" selected={picking} disabled={!src || !!picked} title="Click an element in the page to send it to the agent" onclick={togglePick}>Pick element</Button>
+        <Button size="xs" selected={picking} disabled={!pickerReady || !!picked} title="Click an element in the page to send it to the agent" onclick={togglePick}>Pick element</Button>
         <Button size="xs" icon disabled={!src} aria-label="Reload" title="Reload" onclick={() => reload++}><Icon name="refresh-cw" size={14} /></Button>
         <Button size="xs" icon aria-label="Open in external browser" title="Open in external browser" onclick={() => store.openURL(req!.url)}><Icon name="external-link" size={14} /></Button>
       </div>
@@ -539,7 +567,7 @@
                   </Button>
                 {/each}
               </div>
-              <Button size="sm" selected={picking} disabled={!src || preparing || !!picked || !canComment} aria-label="Inspect element" title="Inspect an element to send feedback" onclick={togglePick}>
+              <Button size="sm" selected={picking} disabled={!pickerReady || preparing || !!picked || !canComment} aria-label="Inspect element" title="Inspect an element to send feedback" onclick={togglePick}>
                 <Icon name="square-mouse-pointer" size={15} /><span>Inspect</span>
               </Button>
               {#if replay}

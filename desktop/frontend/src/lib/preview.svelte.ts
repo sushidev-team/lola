@@ -63,7 +63,7 @@ export function devPageURL(picked: string, devUrl: string): string {
   try {
     const p = new URL(picked);
     const d = new URL(devUrl);
-    return `${d.origin}${p.pathname}${p.search}`;
+    return `${d.origin}${p.pathname}${p.search}${p.hash}`;
   } catch {
     return devUrl;
   }
