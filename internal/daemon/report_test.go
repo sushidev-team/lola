@@ -214,6 +214,9 @@ func TestReportPortsIsARequestNotAnAction(t *testing.T) {
 	if resp := d.handle(context.Background(), reportReq(t, "unknown-id", "ports", "why")); resp.OK {
 		t.Error("an unknown session was accepted")
 	}
+	if _, tracked := d.reports.hits["unknown-id"]; tracked {
+		t.Error("an unknown session entered the rate limiter")
+	}
 }
 
 func TestReportDevStartIsARequestNotAnAction(t *testing.T) {

@@ -30,7 +30,7 @@
   let stepFailure = $state<{ index: number; step: string; why: string } | null>(null);
   // Where a prepared flow (a login that redirects) stands. A step that navigates
   // ends the page's script, so the next document is told to carry on after the
-  // last step it saw start.
+  // last step it saw finish (had its effect).
   let flow = { started: -1, armed: true, finished: false, resumes: 0 };
   let surface = $state<HTMLDivElement>();
   let exitHint = $state(false);

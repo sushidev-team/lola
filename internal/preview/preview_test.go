@@ -205,10 +205,7 @@ func TestProxyServesThePrepareScriptWithThePicker(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, _ := url.Parse(addr)
-	resp, err := http.Get("http://" + u.Host + ScriptPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := get(t, "http://"+u.Host+ScriptPath, nil)
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	js := string(b)
@@ -222,5 +219,21 @@ func TestProxyServesThePrepareScriptWithThePicker(t *testing.T) {
 	}
 	if PrepareJS() == "" || !strings.Contains(js, PrepareJS()) {
 		t.Error("the screenshot script and the served script differ")
+	}
+}
+
+func TestRedirectsWithAnExplicitDefaultPortStillRewrite(t *testing.T) {
+	h := http.Header{}
+	h.Set("Location", "http://LOCALHOST:80/dashboard?x=1")
+	from := &url.URL{Scheme: "http", Host: "localhost"}
+	to := &url.URL{Scheme: "http", Host: "127.0.0.1:9999"}
+	rewriteOrigin(h, "Location", from, to)
+	if got := h.Get("Location"); got != "http://127.0.0.1:9999/dashboard?x=1" {
+		t.Fatalf("Location = %q", got)
+	}
+	h.Set("Location", "http://evil.test/x")
+	rewriteOrigin(h, "Location", from, to)
+	if h.Get("Location") != "http://evil.test/x" {
+		t.Fatal("a foreign origin was rewritten")
 	}
 }

@@ -958,14 +958,13 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			CurrentTool:      s.CurrentTool,
 			LastNotification: s.LastNotification,
 
-			DevActive:    s.DevActive,
-			DevCommands:  devCommands[s.Project],
-			DevParallel:  devParallel[s.Project],
-			Ports:        leasedPorts(d.ports, s.ID),
-			DevURLs:      s.DevURLs,
-			DevForwards:  devForwardInfos(s.DevForwards),
-			PortSetupAsk: portSetupAsk(s.PortSetupAsk, devParallel[s.Project]),
-			DevStartAsk:  devStartAsk(s.DevStartAsk, s.DevActive),
+			DevActive:   s.DevActive,
+			DevCommands: devCommands[s.Project],
+			DevParallel: devParallel[s.Project],
+			Ports:       leasedPorts(d.ports, s.ID),
+			DevURLs:     s.DevURLs,
+			DevForwards: devForwardInfos(s.DevForwards),
+			DevStartAsk: devStartAsk(s.DevStartAsk, s.DevActive),
 
 			FeedbackPending: s.PendingFeedback != "",
 			Usage:           d.sessionUsage(s.ID),
@@ -1019,6 +1018,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			plan, parallel := devPlan(cfg, s, si.Worktree)
 			si.DevCommands, si.DevParallel = devLabels(plan), parallel
 		}
+		// Final only now: a stack replaces DevParallel with its members' verdict.
+		si.PortSetupAsk = portSetupAsk(s.PortSetupAsk, si.DevParallel)
 		// [statusagent] display overlay, pre-gated here (the ONE consumer of
 		// the overlay fields): clients render what arrives or nothing.
 		if istate, headline, waitingOn, at := displayOverlay(s, minConfidence, now); headline != "" || istate != "" {

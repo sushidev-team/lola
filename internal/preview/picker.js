@@ -106,13 +106,16 @@
   window.addEventListener("message", function (e) {
     if (e.source !== window.parent || !e.data || e.data.target !== SRC) return;
     if (e.data.type === "pick") set(!!e.data.on);
-    if (e.data.type === "prepare" && window.__lolaPrepare) {
+    if (e.data.type === "prepare") {
+      var failed = function (why) { post({ type: "prepared", found: [], waited: false, failed: { index: 0, step: "", why: why } }); };
+      if (!window.__lolaPrepare) return failed("lola's prepare script is not loaded in this page");
       // A spec is plain data from lola's own app; the script never evals it.
-      // Progress goes up BEFORE each step: a step that navigates ends this script,
-      // and the app resumes after the next document from the last step it saw.
+      // Progress goes up AFTER each step has had its effect: a step that navigates ends
+      // this script, and the app resumes after the next document from the last step it saw.
       window.__lolaPrepare(e.data.spec, 12000, function (i) { post({ type: "step", i: i }); }).then(function (r) {
+        if (r.superseded) return; // a newer prepare owns the result
         post({ type: "prepared", found: r.found, waited: r.waited, failed: r.failed });
-      });
+      }, function (err) { failed("preparing the page threw: " + String(err && err.message || err).slice(0, 120)); });
     }
   });
 

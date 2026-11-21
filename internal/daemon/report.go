@@ -230,6 +230,9 @@ func (d *Daemon) handleReportPorts(req protocol.Request, words []string) protoco
 	if len(why) > maxPortAskBytes {
 		why = strings.ToValidUTF8(why[:maxPortAskBytes], "")
 	}
+	if _, ok := d.sessions.Get(req.Session); !ok {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
+	}
 	if !d.reports.allow(req.Session, time.Now()) {
 		return protocol.Response{OK: false, Error: errReportRateLimited.Error()}
 	}
@@ -269,6 +272,9 @@ func (d *Daemon) handleReportDevStart(req protocol.Request, words []string) prot
 	}
 	if len(why) > maxPortAskBytes {
 		why = strings.ToValidUTF8(why[:maxPortAskBytes], "")
+	}
+	if _, ok := d.sessions.Get(req.Session); !ok {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
 	}
 	if !d.reports.allow(req.Session, time.Now()) {
 		return protocol.Response{OK: false, Error: errReportRateLimited.Error()}

@@ -7,7 +7,7 @@ const root = (globalThis as unknown as { process: { cwd(): string } }).process.c
 const source: string = readFileSync(root + "/../../internal/preview/prepare.js", "utf8");
 type Step = { do: string; selector?: string; text?: string; value?: string; key?: string; path?: string; ms?: number };
 type Spec = { waitFor?: string; scrollY?: number; marks?: { selector?: string; text?: string; label?: string }[]; steps?: Step[]; from?: number; stepTimeoutMs?: number };
-type Result = { found: boolean[]; waited: boolean; failed: null | { index: number; step: string; why: string } };
+type Result = { superseded?: boolean; found: boolean[]; waited: boolean; failed: null | { index: number; step: string; why: string } };
 const run = (spec: Spec, timeout?: number, onStep?: (i: number) => void) =>
   (window as unknown as { __lolaPrepare: (s: Spec, t?: number, o?: (i: number) => void) => Promise<Result> }).__lolaPrepare(spec, timeout, onStep);
 
@@ -147,6 +147,29 @@ it("lets only the newest run act: a second call supersedes the first", async () 
   const first = run({ steps: [{ do: "wait", ms: 400 }, { do: "fill", selector: "#e", value: "old" }] });
   const second = run({ steps: [{ do: "fill", selector: "#e", value: "new" }] });
   expect((await second).failed).toBeNull();
-  expect((await first).failed?.why).toBe("superseded");
+  expect((await first).superseded).toBe(true);
+  expect((await first).failed).toBeNull();
   expect((document.getElementById("e") as HTMLInputElement).value).toBe("new");
+});
+
+it("turns a throwing or impossible step into that step's failure instead of hanging", async () => {
+  document.body.innerHTML = `<input id="f" type="file"><div id="wrap"></div>`;
+  const file = await run({ steps: [{ do: "fill", selector: "#f", value: "x" }] });
+  expect(file.failed).toMatchObject({ index: 0, why: "that field does not take this value" });
+  const div = await run({ steps: [{ do: "fill", selector: "#wrap", value: "x" }] });
+  expect(div.failed).toMatchObject({ index: 0 });
+});
+
+it("reports a step once it has had its effect, so a step still looking is run again", async () => {
+  document.body.innerHTML = `<button id="b">Go</button>`;
+  const seen: number[] = [];
+  const r = await run({ steps: [{ do: "click", selector: "#b" }, { do: "fill", selector: "#late", value: "x" }], stepTimeoutMs: 200 }, 300, (i) => seen.push(i));
+  expect(r.failed).toMatchObject({ index: 1 });
+  expect(seen).toEqual([0]);
+});
+
+it("checks the marks again on demand", async () => {
+  document.body.innerHTML = `<p id="a">x</p>`;
+  const check = (window as unknown as { __lolaCheck: (s: Spec) => boolean[] }).__lolaCheck;
+  expect(check({ marks: [{ selector: "#a" }, { selector: "#gone" }] })).toEqual([true, false]);
 });

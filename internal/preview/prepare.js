@@ -181,6 +181,9 @@
   function findAny(step) { return qs(str(step.selector, 500)) || (step.text ? byText(str(step.text, 200)) : null); }
 
   function setValue(el, value) {
+    // Only a text field, a text area or a select takes a value (a file input would throw).
+    var tag = el.tagName;
+    if (tag !== "SELECT" && tag !== "TEXTAREA" && !(tag === "INPUT" && el.type !== "file")) return false;
     el.focus();
     if (el.tagName === "SELECT") {
       var want = lower(value), hit = null;
@@ -217,7 +220,9 @@
   function describe(step) { return step.do + " " + (step.selector || step.text || step.path || step.key || ""); }
 
   // Resolves null when the step worked, else why it did not.
-  function runStep(step, id) {
+  // `acted` is called the moment the step has had its effect: a click that navigates
+  // is over for resuming purposes even though the page never gets to finish it.
+  function runStep(step, id, acted) {
     if (!localHost(location.hostname)) return Promise.resolve("this page is not on a local address");
     var el;
     switch (step.do) {
@@ -227,22 +232,26 @@
           e.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
           if (e.focus) e.focus();
           e.click();
+          acted();
           return sleep(700).then(function () { return null; });
         });
       case "fill":
         return until(function () { return findField(step); }, stepWait, id).then(function (e) {
           if (!e) return "no such field was found";
-          return setValue(e, str(step.value, 200)) ? null : "that option does not exist";
+          if (!setValue(e, str(step.value, 200))) return "that field does not take this value";
+          acted();
+          return null;
         });
       case "press":
         el = step.selector || step.text ? findClickable(step) || findField(step) : null;
         if ((step.selector || step.text) && !el) return Promise.resolve("no such element was found");
         if (!KEYS[step.key]) return Promise.resolve("unknown key");
         press(el, step.key);
+        acted();
         return sleep(700).then(function () { return null; });
       case "wait":
         if (step.selector || step.text) {
-          return until(function () { return findAny(step); }, stepWait, id).then(function (e) { return e ? null : "it never appeared"; });
+          return until(function () { return findAny(step); }, stepWait, id).then(function (e) { if (!e) return "it never appeared"; acted(); return null; });
         }
         return sleep(Math.max(1, Math.min(+step.ms || 0, 3000))).then(function () { return null; });
       case "goto":
@@ -250,26 +259,41 @@
           return Promise.resolve("not a path on this origin");
         }
         location.assign(location.origin + step.path.slice(0, 500));
+        acted();
         return sleep(5000).then(function () { return null; });
       default:
         return Promise.resolve("unknown step");
     }
   }
 
-  // Runs steps[from..]; resolves { failed: null | {index, step, why} }.
+  // Runs steps[from..]; resolves { failed: null | {index, step, why} } or
+  // { superseded: true } when a newer run took over. Each step is reported (onStep,
+  // window.__lolaStepDone) once it has had its effect, so a document that a step
+  // replaced is resumed AFTER that step, and a step still looking for its target is
+  // run again on the new document.
   function runSteps(steps, from, onStep, id) {
     var i = Math.max(0, from | 0);
     return new Promise(function (resolve) {
       (function next() {
-        if (id !== token) return resolve({ failed: { index: i, step: "", why: "superseded" } });
+        if (id !== token) return resolve({ superseded: true });
         if (i >= steps.length) return resolve({ failed: null });
-        var step = steps[i] && typeof steps[i] === "object" ? steps[i] : {};
-        if (onStep) { try { onStep(i); } catch (err) {} }
-        if (typeof window.__lolaStepStarted === "function") { try { window.__lolaStepStarted(i); } catch (err) {} }
-        runStep(step, id).then(function (why) {
-          if (why) return resolve({ failed: { index: i, step: describe(step), why: why } });
+        var at = i, step = steps[at] && typeof steps[at] === "object" ? steps[at] : {}, reported = false;
+        function acted() {
+          if (reported || id !== token) return;
+          reported = true;
+          if (onStep) { try { onStep(at); } catch (err) {} }
+          if (typeof window.__lolaStepDone === "function") { try { window.__lolaStepDone(at); } catch (err) {} }
+        }
+        // A throw inside a step becomes that step's failure, never a promise that hangs.
+        Promise.resolve().then(function () { return runStep(step, id, acted); }).then(function (why) {
+          if (id !== token) return resolve({ superseded: true });
+          if (why) return resolve({ failed: { index: at, step: describe(step), why: why } });
+          acted();
           i++;
           next();
+        }, function (err) {
+          if (id !== token) return resolve({ superseded: true });
+          resolve({ failed: { index: at, step: describe(step), why: "it threw: " + String(err && err.message || err).slice(0, 120) } });
         });
       })();
     });
@@ -280,6 +304,12 @@
   // page is ready or after `timeout` ms, whichever is first; a mark that never
   // appears is reported rather than guessed at. Layout settles (fonts, images), so
   // the outlines are drawn again.
+  // The marks as they are right now (the capture asks again just before the shot).
+  window.__lolaCheck = function (spec) {
+    spec = spec && typeof spec === "object" ? spec : {};
+    return apply(spec, false);
+  };
+
   window.__lolaPrepare = function (spec, timeout, onStep) {
     spec = spec && typeof spec === "object" ? spec : {};
     var id = ++token;
@@ -288,15 +318,20 @@
     var marks = Array.isArray(spec.marks) ? spec.marks.slice(0, 4) : [];
     var none = marks.map(function () { return false; });
     return runSteps(steps, spec.from, onStep, id).then(function (sr) {
+      if (sr.superseded) return { superseded: true, found: none, waited: false, failed: null };
       if (sr.failed) return { found: none, waited: false, failed: sr.failed };
       var deadline = Date.now() + (timeout > 0 ? Math.min(timeout, 30000) : 10000);
       return new Promise(function (resolve) {
         (function poll() {
-          if (id !== token) return resolve({ found: none, waited: false, failed: { index: -1, step: "", why: "superseded" } });
+          if (id !== token) return resolve({ superseded: true, found: none, waited: false, failed: null });
           var ok = ready(spec);
           if (ok || Date.now() >= deadline) {
             var found = apply(spec, true);
-            setTimeout(function () { found = apply(spec, false); resolve({ found: found, waited: !ok, failed: null }); }, 400);
+            setTimeout(function () {
+              if (id !== token) return resolve({ superseded: true, found: none, waited: false, failed: null });
+              found = apply(spec, false);
+              resolve({ found: found, waited: !ok, failed: null });
+            }, 400);
             return;
           }
           setTimeout(poll, 250);

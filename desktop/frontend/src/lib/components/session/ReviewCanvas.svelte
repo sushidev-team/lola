@@ -500,7 +500,7 @@
       {#if message}<p class="hint" role="status">{message}</p>{/if}
     </div>
   {:else if message}<p class="canvas-notice" role="status">{message}</p>{/if}
-  <p class="screen-title" title={[screen.caption,screen.url,screen.viewport].filter(Boolean).join(" · ") || undefined}>{screen.title}{#if screen.url && !touchSurface()} <Button size="xs" title={`Open ${screen.url} in the preview`} onclick={() => preview.open(pkg.session, screen.url!, { prep: prepOf(screen), caption: screen.caption })}>Open live<Icon name="arrow-right" size={14} /></Button>{/if}</p>
+  <p class="screen-title" title={[screen.caption,screen.url,screen.viewport].filter(Boolean).join(" · ") || undefined}>{screen.title}{#if screen.url && !touchSurface()} <Button size="xs" class="pointer-events-auto" title={`Open ${screen.url} in the preview`} onclick={() => preview.open(pkg.session, screen.url!, { prep: prepOf(screen), caption: screen.caption })}>Open live<Icon name="arrow-right" size={14} /></Button>{/if}</p>
   <div class="view-overlay">
     {#if shortcutsOpen}<aside class="shortcut-help" aria-label="Screenshot shortcuts">
       <div class="shortcut-heading"><strong>Screenshot shortcuts</strong><Button icon size="xs" aria-label="Close shortcuts" onclick={() => { shortcutsOpen = false; focusCanvas(); }}><Icon name="x" size={14} /></Button></div>

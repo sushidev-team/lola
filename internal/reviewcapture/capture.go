@@ -104,6 +104,9 @@ func CaptureInto(ctx context.Context, workspace, outputRoot string, o Options, r
 	if err := json.Unmarshal(out, &result); err != nil {
 		return reviewpack.Screen{}, err
 	}
+	if result.Waited {
+		return reviewpack.Screen{}, fmt.Errorf("capture: %q never appeared on the page; nothing was saved", o.WaitFor)
+	}
 	if missing := missingMarks(o.Marks, result.Found); len(missing) > 0 {
 		return reviewpack.Screen{}, fmt.Errorf("capture: could not find %s on the page (wrong selector, or it never rendered); nothing was saved", strings.Join(missing, ", "))
 	}
@@ -264,11 +267,7 @@ func ParseStep(s string) (reviewpack.Step, error) {
 	case reviewpack.StepPress:
 		st = reviewpack.Step{Do: verb, Key: rest}
 	case reviewpack.StepWait:
-		if ms, ok := strings.CutSuffix(rest, "ms"); ok {
-			n, err := strconv.Atoi(strings.TrimSpace(ms))
-			if err != nil {
-				return st, errors.New("wait needs a target or <n>ms")
-			}
+		if n, ok := waitMillis(rest); ok {
 			st = reviewpack.Step{Do: verb, Ms: n}
 		} else {
 			st = reviewpack.Step{Do: verb}
@@ -285,4 +284,14 @@ func ParseStep(s string) (reviewpack.Step, error) {
 		return st, err
 	}
 	return st, nil
+}
+
+// waitMillis reads "<n>ms" (digits only); anything else, ".items" included, is a target.
+func waitMillis(s string) (int, bool) {
+	digits, ok := strings.CutSuffix(strings.TrimSpace(s), "ms")
+	if !ok || digits == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(digits)
+	return n, err == nil
 }

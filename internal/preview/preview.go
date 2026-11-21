@@ -233,7 +233,7 @@ func rewriteOrigin(h http.Header, key string, from, to *url.URL) {
 		return
 	}
 	u, err := url.Parse(value)
-	if err == nil && u.User == nil && u.Scheme == from.Scheme && strings.EqualFold(u.Host, from.Host) {
+	if err == nil && u.User == nil && u.Scheme == from.Scheme && strings.EqualFold(canonicalOrigin(u).Host, from.Host) {
 		u.Scheme, u.Host = to.Scheme, to.Host
 		h.Set(key, u.String())
 	}

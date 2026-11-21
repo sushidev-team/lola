@@ -111,6 +111,22 @@ func TestCaptureCarriesThePreparationAndRefusesAShotThatMissesAMark(t *testing.T
 	}
 }
 
+func TestCaptureRefusesAShotWhoseWaitForNeverAppeared(t *testing.T) {
+	dir := t.TempDir()
+	o := Options{URL: "http://localhost:3000/", Width: 390, Height: 844, Destination: "w.png", Title: "Home", Prep: reviewpack.Prep{WaitFor: ".ready"}}
+	run := func(ctx context.Context, w, s string, in []byte) ([]byte, error) {
+		out, err := pngRun("[]")(ctx, w, s, in)
+		return []byte(strings.Replace(string(out), `"found":[]`, `"found":[],"waited":true`, 1)), err
+	}
+	_, err := Capture(context.Background(), dir, o, run)
+	if err == nil || !strings.Contains(err.Error(), ".ready") {
+		t.Fatalf("a shot of a page that never rendered was kept: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "w.png")); statErr == nil {
+		t.Fatal("a refused capture left a file behind")
+	}
+}
+
 func TestParseMark(t *testing.T) {
 	for _, c := range []struct {
 		in   string
@@ -186,6 +202,8 @@ func TestParseStep(t *testing.T) {
 		{"press Enter", reviewpack.Step{Do: "press", Key: "Enter"}},
 		{"wait .dashboard", reviewpack.Step{Do: "wait", Selector: ".dashboard"}},
 		{"wait 500ms", reviewpack.Step{Do: "wait", Ms: 500}},
+		{"wait .items", reviewpack.Step{Do: "wait", Selector: ".items"}},
+		{"wait #forms", reviewpack.Step{Do: "wait", Selector: "#forms"}},
 		{"goto /cart?x=1", reviewpack.Step{Do: "goto", Path: "/cart?x=1"}},
 	} {
 		got, err := ParseStep(c.in)
@@ -193,7 +211,7 @@ func TestParseStep(t *testing.T) {
 			t.Errorf("ParseStep(%q) = %+v, %v", c.in, got, err)
 		}
 	}
-	for _, bad := range []string{"", "eval 1+1", "click", "fill #e", "press F12", "wait", "wait 9999ms", "wait xms", "goto //evil.com", "goto https://evil.com"} {
+	for _, bad := range []string{"", "eval 1+1", "click", "fill #e", "press F12", "wait", "wait 9999ms", "goto //evil.com", "goto https://evil.com"} {
 		if st, err := ParseStep(bad); err == nil {
 			t.Errorf("ParseStep(%q) accepted: %+v", bad, st)
 		}
