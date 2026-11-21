@@ -122,7 +122,7 @@
   <div class="min-h-0 min-w-0">
     {#if missing}
       {#if ended}
-        <EndedView sessionId={ended.id} />
+        <EndedView sessionId={ended.id} style="height:100%" />
       {:else}
         <div class="grid h-full place-content-center gap-1 px-6 text-center">
           <h2 class="text-headline">{copy.session.gone.title}</h2>

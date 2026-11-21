@@ -37,9 +37,9 @@
   <div class="relative grid min-h-0 min-w-0 bg-canvas [container-type:size]" {style} data-ended-view data-conversation>
     <div class="absolute inset-0 grid grid-rows-[auto_minmax(72px,1fr)_auto]">
       <TimelineSlot {sessionId} />
-      <div class="cv-band grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pt-2 pb-3 text-sm text-faint" data-ended-line>
+      <div class="cv-band grid gap-3 border-t border-edge/60 pt-3 pb-4 text-sm text-faint @max-[640px]:pb-[max(1rem,env(safe-area-inset-bottom))]" data-ended-line>
         {#if draft}
-          <div class="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3" data-ended-draft>
+          <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded-lg border border-edge/60 bg-surface/40 p-3" data-ended-draft>
             <div class="grid min-w-0 gap-1">
               <span>Your unsent draft</span>
               <p class="selectable max-h-32 overflow-y-auto whitespace-pre-wrap text-ink">{draft}</p>
@@ -48,15 +48,17 @@
           </div>
         {/if}
         <div class="min-w-0">
-          <p>This session has ended.</p>
+          <p class="font-medium text-ink">This session has ended.</p>
           {#if ended?.keptWorktree}
             <p class="mt-1 break-words">Its worktree was kept at <span class="selectable">{ended.keptWorktree}</span>.</p>
           {/if}
         </div>
-        <Button variant="secondary" size="xs" onclick={() => reviewWorkspace.open(sessionId)}>Review material</Button>
-        {#if ended?.prUrl}
-          <Button variant="secondary" size="xs" onclick={() => store.openURL(ended.prUrl ?? "")}>Open PR <span aria-hidden="true"><Icon name="external-link" size={14} /></span></Button>
-        {/if}
+        <div class="grid grid-cols-2 gap-2 @min-[640px]:flex @min-[640px]:justify-end">
+          <Button variant="secondary" class="justify-center" onclick={() => reviewWorkspace.open(sessionId)}>Review material</Button>
+          {#if ended?.prUrl}
+            <Button variant="secondary" class="justify-center" onclick={() => store.openURL(ended.prUrl ?? "")}>Open PR <span aria-hidden="true"><Icon name="external-link" size={14} /></span></Button>
+          {/if}
+        </div>
       </div>
     </div>
   </div>

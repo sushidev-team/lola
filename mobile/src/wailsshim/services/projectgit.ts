@@ -21,6 +21,16 @@ function git<T>(method: string, cmd: string, args: Record<string, unknown>): Pro
 }
 
 /** PLATFORM. */
+export function ApplyPortSetup(_project: string, _token: string, _changes: M.PortSetupChange[] | null): Promise<void> {
+  return unsupported("ProjectGitService.ApplyPortSetup", MAC_ONLY);
+}
+
+/** PLATFORM. */
+export function SuggestPortSetup(_project: string): Promise<M.PortSetupPlan> {
+  return unsupported("ProjectGitService.SuggestPortSetup", MAC_ONLY);
+}
+
+/** PLATFORM. */
 export function AcceptAICommitExclusions(_id: string): Promise<void> {
   return unsupported("ProjectGitService.AcceptAICommitExclusions", MAC_ONLY);
 }
@@ -229,6 +239,8 @@ export function Unstage(project: string, worktree: string, paths: string[] | nul
 export const ROUTES: Routes<typeof Gen.ProjectGitService> = {
   AcceptAICommitExclusions: { kind: "platform", reason: MAC_ONLY },
   AICommitStatus: { kind: "platform", reason: MAC_ONLY },
+  ApplyPortSetup: { kind: "platform", reason: MAC_ONLY },
+  SuggestPortSetup: { kind: "platform", reason: MAC_ONLY },
   Amend: { kind: "platform", reason: MAC_ONLY },
   AmendNeedsConfirmation: { kind: "platform", reason: MAC_ONLY },
   BranchAction: { kind: "platform", reason: MAC_ONLY },
