@@ -191,9 +191,39 @@
     };
   }
   function announce() { post({ type: "ready", picking: picking, documentId: documentId, url: location.href, title: document.title }); }
+  // Track client-side navigation as well as whole-document loads. The review
+  // canvas only needs ready; install these listeners for browser tabs on demand.
+  var watchingLocation = false;
+  function watchLocation() {
+    if (watchingLocation) return;
+    watchingLocation = true;
+    var lastURL = location.href, lastTitle = document.title;
+    function changed() {
+      if (location.href === lastURL && document.title === lastTitle) return;
+      lastURL = location.href; lastTitle = document.title;
+      post({ type: "location", documentId: documentId, url: lastURL, title: lastTitle });
+    }
+    if (document.head) new MutationObserver(changed).observe(document.head, { subtree: true, childList: true, characterData: true });
+    if (window.navigation) window.navigation.addEventListener("currententrychange", changed);
+    else {
+      ["pushState", "replaceState"].forEach(function (name) {
+        var original = history[name];
+        history[name] = function () {
+          var result = original.apply(this, arguments);
+          changed();
+          return result;
+        };
+      });
+      window.addEventListener("popstate", changed);
+      window.addEventListener("hashchange", changed);
+    }
+  }
   window.addEventListener("message", function (e) {
     if (e.source !== window.parent || !e.data || e.data.target !== SRC) return;
-    if (e.data.type === "hello") announce();
+    if (e.data.type === "hello") {
+      if (e.data.watchLocation) watchLocation();
+      announce();
+    }
     if (e.data.type === "comment-anchors" && e.data.documentId === documentId) watchComments(e.data);
     if (e.data.type === "pick") { clearSelection(); set(!!e.data.on); }
     if (e.data.type === "check-session") {

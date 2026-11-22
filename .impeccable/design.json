@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-08T14:02:11.111660+00:00",
+  "generatedAt": "2026-11-22T08:54:55.648099+00:00",
   "title": "Design System: Lola desktop",
   "extensions": {
     "colorMeta": {
@@ -141,6 +141,11 @@
         "name": "dialog-enter",
         "value": "160ms cubic-bezier(.16,1,.3,1)",
         "purpose": "Enter from opacity .85 and translateY(6px) scale(.985); disabled under prefers-reduced-motion."
+      },
+      {
+        "name": "preview-sidebar",
+        "value": "transform 180ms ease-out",
+        "purpose": "Slides the page list in both docked and overlay layouts. Docking resizes the live page once. Reduce Motion makes the switch immediate."
       }
     ],
     "breakpoints": [
@@ -155,6 +160,14 @@
       {
         "name": "dialog-narrow",
         "value": "480px"
+      },
+      {
+        "name": "preview-sidebar-overlay",
+        "value": "1100px"
+      },
+      {
+        "name": "settings-field-stack",
+        "value": "440px"
       }
     ],
     "shadows": [
@@ -245,6 +258,16 @@
       {
         "name": "The Evidence Label Rule",
         "body": "Distinguish observed diff totals from agent-reported commands and plans, and retain honest unloaded states.",
+        "section": "components"
+      },
+      {
+        "name": "Workspace continuity",
+        "body": "Keep session content mounted when switching auxiliary views. Use a drawer for repository navigation when the history and inspector need the width.",
+        "section": "layout"
+      },
+      {
+        "name": "Settings hierarchy",
+        "body": "Keep navigation families expanded. Group related settings under a section heading and stack fields when the content column is under 440px wide.",
         "section": "components"
       }
     ],

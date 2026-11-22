@@ -30,6 +30,11 @@ func TestEverySessionActionIsHandled(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	preview, err := os.ReadFile("frontend/src/lib/components/session/PreviewWorkspace.svelte")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	m := regexp.MustCompile(`\baction[A-Z]\w*\s*=\s*"([a-z-]+)"`).FindAllStringSubmatch(string(src), -1)
 	if len(m) < 8 {
 		t.Fatalf("found %d actions in main.go, so this test stopped guarding anything", len(m))
@@ -45,6 +50,12 @@ func TestEverySessionActionIsHandled(t *testing.T) {
 
 	for action := range actions {
 		quoted := `"` + action + `"`
+		if strings.HasPrefix(action, "preview-") {
+			if !strings.Contains(string(preview), "case "+quoted) {
+				t.Errorf("PreviewWorkspace.menuAction does not handle %s", action)
+			}
+			continue
+		}
 		if strings.HasPrefix(action, "ssh-") {
 			if !strings.Contains(string(store), quoted) {
 				t.Errorf("%s: action %s reaches ssh.menuAction, which never names it", sshStore, action)

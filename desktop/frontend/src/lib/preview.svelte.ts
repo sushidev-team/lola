@@ -130,21 +130,48 @@ function request(sessionId: string, t: { url: string; caption?: string; prep?: P
   return r;
 }
 
+export interface OpenPreviewTab {
+  id: number;
+  request: PreviewRequest;
+  title: string;
+  documentTitle: string;
+  currentURL: string;
+  visited: boolean;
+}
+
 class PreviewStore {
-  request = $state<PreviewRequest | null>(null);
-  /** Several pages of one app, each its own tab; empty for a single page. */
-  tabs = $state<PreviewTab[]>([]);
+  private nextId = 0;
+  sidebarOpen = $state<boolean | null>(null);
+  tabs = $state<OpenPreviewTab[]>([]);
   active = $state(0);
-  /** One address. Inside a tab set it re-points the active tab (the address chips). */
-  open(sessionId: string, url: string, extra: { prep?: PreviewPrep; caption?: string } = {}) {
-    if (this.tabs.length > 1 && this.request?.sessionId === sessionId) {
-      this.tabs[this.active] = { url, title: "", ...extra };
-    } else {
-      this.tabs = [];
-      this.active = 0;
-    }
-    this.request = request(sessionId, { url, ...extra });
+  request = $derived(this.tabs[this.active]?.request ?? null);
+
+  private tab(sessionId: string, page: PreviewTab): OpenPreviewTab {
+    return {
+      id: ++this.nextId, request: request(sessionId, page), title: page.title,
+      documentTitle: "", currentURL: page.url, visited: false,
+    };
   }
+
+  open(sessionId: string, url: string, extra: { prep?: PreviewPrep; caption?: string; title?: string } = {}) {
+    if (this.request?.sessionId !== sessionId) this.close();
+    this.tabs.push(this.tab(sessionId, { url, title: "", ...extra }));
+    this.select(this.tabs.length - 1);
+  }
+  duplicate(device?: string) {
+    const original = this.tabs[this.active];
+    if (!original) return;
+    // Load the current route in a fresh document. Replaying the original steps
+    // could submit a form again or take the duplicate away from that route.
+    const copy = this.tab(original.request.sessionId, {
+      url: original.currentURL, title: original.title, prep: device ? { device } : undefined,
+    });
+    copy.documentTitle = original.documentTitle;
+    const next = this.active + 1;
+    this.tabs.splice(next, 0, copy);
+    this.select(next);
+  }
+
   /**
    * Pages of one app as separate tabs, at most MAX_PREVIEW_TABS, first one shown.
    * The same address twice is fine when it is prepared differently: that is two
@@ -159,18 +186,26 @@ class PreviewStore {
       })
       .slice(0, MAX_PREVIEW_TABS);
     if (!tabs.length) return;
-    this.tabs = tabs.length > 1 ? tabs : [];
-    this.active = 0;
-    this.request = request(sessionId, tabs[0]);
+    this.tabs = tabs.map(page => this.tab(sessionId, page));
+    this.select(0);
   }
+
   select(index: number) {
     const tab = this.tabs[index];
-    if (!tab || !this.request) return;
+    if (!tab) return;
     this.active = index;
-    this.request = request(this.request.sessionId, tab);
+    tab.visited = true;
   }
+
+  closeTab(index: number) {
+    if (!this.tabs[index]) return;
+    this.tabs.splice(index, 1);
+    if (!this.tabs.length) this.close();
+    else this.select(index < this.active ? this.active - 1 : Math.min(this.active, this.tabs.length - 1));
+  }
+
   close() {
-    this.request = null;
+    this.sidebarOpen = null;
     this.tabs = [];
     this.active = 0;
   }

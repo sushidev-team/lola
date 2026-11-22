@@ -49,7 +49,7 @@
   import BestOfOverlay from "$lib/views/BestOfOverlay.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import { preview } from "$lib/preview.svelte";
-  import SessionPreview from "$lib/components/session/SessionPreview.svelte";
+  import PreviewWorkspace from "$lib/components/session/PreviewWorkspace.svelte";
   import BulkPickupDialog from "$lib/components/BulkPickupDialog.svelte";
   import SandboxLoginDialog from "$lib/components/SandboxLoginDialog.svelte";
   import StackAppsDialog from "$lib/components/StackAppsDialog.svelte";
@@ -90,12 +90,24 @@
     return () => updates.stop();
   });
 
+  let previewWindow = $state<PreviewWorkspace>();
+  const previewOpen = $derived(!!preview.request);
+  $effect(() => {
+    void Events.Emit("app:preview-open", previewOpen).catch(() => {});
+  });
+
   // Apply a Session-menu action to the current selection. AppKit delivers a menu
   // accelerator from ANY focus — including inside a live terminal, which is the
   // point — so the "an overlay owns the keyboard" rule that onKey enforces has to
   // be repeated here, or ⌘⇧K would stack a second kill confirmation on top of an
   // open dialog.
   function sessionAction(action: string) {
+    if (preview.request) {
+      previewWindow?.menuAction(action);
+      return;
+    }
+    if (action === "reload") { window.location.reload(); return; }
+    if (action.startsWith("preview-")) return;
     // Go To has no unsaved work: the Git shortcut can dismiss it and continue.
     if (action === "toggle-git" && nav.overlay === "commands" && !confirm.request && !sessionMenu.request) {
       nav.closeOverlay();
@@ -538,7 +550,7 @@
   <BestOfOverlay />
 {/if}
 <ConfirmDialog />
-<SessionPreview />
+<PreviewWorkspace bind:this={previewWindow} />
 <BulkPickupDialog />
 <SandboxLoginDialog />
 <StackAppsDialog />

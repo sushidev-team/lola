@@ -7,6 +7,7 @@ import { changes } from '$lib/changes.svelte';
 import { preview } from '$lib/preview.svelte';
 import { DaemonService, PreviewService } from '@bindings/desktop';
 import SessionPreview from './SessionPreview.svelte';
+import PreviewWorkspace from './PreviewWorkspace.svelte';
 import SessionSide from './SessionSide.svelte';
 
 afterEach(cleanup);
@@ -107,19 +108,19 @@ it('groups stack links by display name and keeps legacy links accessible', async
   const open = vi.mocked(PreviewService.Open).mockResolvedValue('http://preview.localhost:5555/');
   const external = vi.spyOn(store, 'openURL').mockResolvedValue(undefined);
   render(SessionSide, { sessionId: id });
-  render(SessionPreview);
+  render(PreviewWorkspace);
   try {
     await fireEvent.click(within(screen.getByRole('list', { name: 'Catalog API' })).getByRole('button', { name: /8000/ }));
     const servers = within(await screen.findByRole('navigation', { name: 'Dev servers' }));
     const api = within(servers.getByRole('group', { name: 'Catalog API' }));
-    expect(api.getByRole('button', { name: 'localhost:8000' })).toHaveAttribute('aria-pressed', 'true');
+    expect(api.getByRole('button', { name: 'Open localhost:8000 in a new tab' })).not.toHaveAttribute('aria-pressed', 'true');
     await waitFor(() => expect(open).toHaveBeenCalledWith(id, 'http://localhost:8000'));
     const site = within(servers.getByRole('group', { name: 'Storefront' }));
     expect(servers.getAllByRole('heading', { name: 'Storefront' })).toHaveLength(1);
     expect(site.getAllByRole('button')).toHaveLength(2);
-    await fireEvent.click(site.getByRole('button', { name: 'localhost:20007' }));
+    await fireEvent.click(site.getByRole('button', { name: 'Open localhost:20007 in a new tab' }));
     expect(open).toHaveBeenLastCalledWith(id, 'http://localhost:20007');
-    expect(within(servers.getByRole('group', { name: 'Other addresses' })).getByRole('button', { name: 'localhost:9191' })).toBeInTheDocument();
+    expect(within(servers.getByRole('group', { name: 'Other addresses' })).getByRole('button', { name: 'Open localhost:9191 in a new tab' })).toBeInTheDocument();
     expect(external).not.toHaveBeenCalled();
     await fireEvent.click(screen.getByRole('button', { name: 'Open in external browser' }));
     expect(external).toHaveBeenCalledWith('http://localhost:20007');
@@ -198,13 +199,15 @@ it('shows a sandboxed agent\'s dev-start request while dev is off and starts not
 it('prepares each tab the way the agent said: viewport, caption, then asks the page to scroll and outline, once per document', async () => {
   const id = freshSession({ devActive: true, devUrls: ['http://localhost:3000'] });
   vi.mocked(PreviewService.Open).mockResolvedValue('http://preview.localhost:5555/');
-  render(SessionPreview);
+  render(PreviewWorkspace);
   preview.openTabs(id, [
     { url: 'http://localhost:3000/a', title: 'Home', caption: 'Check the header', prep: { device: 'mobile', marks: [{ selector: '#x', label: 'Header' }] } },
     { url: 'http://localhost:3000/b', title: 'Settings' },
   ]);
   try {
-    expect(await screen.findByRole('tab', { name: 'Home' })).toBeInTheDocument();
+    const toggle = await screen.findByRole('button', { name: 'Page sidebar' });
+    if (toggle.getAttribute('aria-expanded') === 'false') await fireEvent.click(toggle);
+    expect(screen.getByRole('tab', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByText(/Check the header/)).toBeInTheDocument();
     const frame = await waitFor(() => { const f = document.querySelector('iframe'); expect(f).not.toBeNull(); return f as HTMLIFrameElement; });
     expect(frame.getAttribute('style')).toContain('390');
@@ -217,7 +220,7 @@ it('prepares each tab the way the agent said: viewport, caption, then asks the p
     say({ type: 'prepared', found: [false], waited: true });
     expect(await screen.findByText('Not found on the page: Header')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
-    expect(screen.queryByText(/Check the header/)).toBeNull();
+    expect(screen.getByText(/Check the header/)).not.toBeVisible();
     say({ type: 'ready', url: 'http://127.0.0.1:5555/b' });
     expect(post).toHaveBeenCalledTimes(1);
   } finally {
@@ -228,7 +231,7 @@ it('prepares each tab the way the agent said: viewport, caption, then asks the p
 it('runs a prepared flow across navigations: first document at any path, resume after the last step seen, then stop', async () => {
   const id = freshSession({ devActive: true, devUrls: ['http://shop.test'] });
   vi.mocked(PreviewService.Open).mockResolvedValue('http://preview.localhost:5555/');
-  render(SessionPreview);
+  render(PreviewWorkspace);
   const steps = [
     { do: 'fill', selector: '#e', value: 'dev@shop.test' },
     { do: 'click', text: 'Sign in' },
@@ -270,7 +273,7 @@ it('runs a prepared flow across navigations: first document at any path, resume 
 it('stops resuming a flow that keeps navigating', async () => {
   const id = freshSession({ devActive: true, devUrls: ['http://shop.test'] });
   vi.mocked(PreviewService.Open).mockResolvedValue('http://preview.localhost:5555/');
-  render(SessionPreview);
+  render(PreviewWorkspace);
   preview.open(id, 'http://shop.test/', { prep: { steps: [{ do: 'click', text: 'Next' }, { do: 'click', text: 'Next' }] } });
   try {
     const frame = await waitFor(() => { const f = document.querySelector('iframe'); expect(f).not.toBeNull(); return f as HTMLIFrameElement; });
@@ -319,11 +322,11 @@ it('waits for the picker and preserves edits made during a feedback send', async
     finish = () => resolve({ delivered: true } as never);
   }) as ReturnType<typeof DaemonService.SendFeedback>);
   const refresh = vi.spyOn(store, 'refresh').mockResolvedValue();
-  render(SessionPreview);
+  render(PreviewWorkspace);
   preview.open(id, url);
   try {
     const frame = await screen.findByTitle('Preview of localhost:3000') as HTMLIFrameElement;
-    const picker = screen.getByRole('button', { name: 'Pick element' });
+    const picker = screen.getByRole('button', { name: 'Inspect element' });
     const say = (data: object) => fireEvent(window, new MessageEvent('message', {
       source: frame.contentWindow, origin, data: { source: 'lola-preview', ...data },
     }));
@@ -356,4 +359,46 @@ it('removes a parked preview when its stack stops advertising the origin', async
   store.sessions = [];
   expect(await screen.findByRole('alert')).toHaveTextContent('no longer reports this dev server');
   expect(document.querySelector('iframe')).toBeNull();
+});
+
+it('keeps duplicate pages live and targets toolbar actions at the selected route', async () => {
+  vi.stubGlobal('innerWidth', 1440);
+  const url = 'http://localhost:20000', origin = 'http://preview.localhost:5555';
+  const id = freshSession({ devUrls: [url] });
+  const open = vi.mocked(PreviewService.Open).mockClear().mockResolvedValue(origin + '/');
+  const external = vi.spyOn(store, 'openURL').mockResolvedValue();
+  render(PreviewWorkspace);
+  preview.open(id, url);
+  try {
+    const first = await screen.findByTitle('Preview of localhost:20000') as HTMLIFrameElement;
+    await fireEvent(window, new MessageEvent('message', { source: first.contentWindow, origin,
+      data: { source: 'lola-preview', type: 'location', title: 'Billing', url: origin + '/billing#details' },
+    }));
+    const add = screen.getByRole('button', { name: 'Open localhost:20000 in a new tab' });
+    expect(add).toHaveTextContent(/^localhost:20000$/);
+    await fireEvent.click(add);
+    const second = within(screen.getByRole('tabpanel')).getByTitle('Preview of localhost:20000');
+    expect(first).not.toBe(second);
+    await fireEvent.click(screen.getByRole('button', { name: 'Mobile' }));
+    expect(second.getAttribute('style')).toContain('390px');
+    await fireEvent.click(screen.getByRole('tab', { name: 'Billing' }));
+    expect(within(screen.getByRole('tabpanel')).getByTitle('Preview of localhost:20000')).toBe(first);
+    expect(first.getAttribute('style')).toContain('100%');
+    expect(open).toHaveBeenCalledTimes(2);
+    await fireEvent.click(screen.getByRole('button', { name: 'Open in external browser' }));
+    expect(external).toHaveBeenCalledWith(url + '/billing#details');
+    await fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+    expect(open).toHaveBeenLastCalledWith(id, url + '/billing#details');
+    await fireEvent.keyDown(screen.getByRole('tab', { name: 'Billing' }), { key: 'ArrowDown' });
+    const selected = within(screen.getByRole('tablist', { name: 'Open pages' })).getByRole('tab', { selected: true });
+    expect(selected).toHaveFocus();
+    await fireEvent.keyDown(selected, { key: 'Delete' });
+    expect(second).not.toBeInTheDocument();
+    expect(preview.tabs).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Page sidebar' })).toHaveFocus();
+  } finally {
+    vi.unstubAllGlobals();
+    external.mockRestore();
+    preview.close();
+  }
 });

@@ -27,7 +27,7 @@ vi.mock("@bindings/desktop/contextservice", () => ({Publish: vi.fn().mockResolve
 vi.mock("@wailsio/runtime", async (orig) => ({
   ...(await orig<object>()),
   Window: {SetTitle: vi.fn().mockResolvedValue(undefined)},
-  Events: { On: (n: string, f: (e: { data: unknown }) => void) => (handlers.set(n, f), () => {}), Off: () => {} },
+  Events: { Emit: vi.fn().mockResolvedValue(true), On: (n: string, f: (e: { data: unknown }) => void) => (handlers.set(n, f), () => {}), Off: () => {} },
 }));
 vi.mock("$lib/components/LiveTerminal.svelte", async () => ({ default: (await import("$lib/components/ssh/TerminalStub.test.svelte")).default }));
 
@@ -303,6 +303,36 @@ describe("in a session", () => {
       await fireEvent.keyDown(dialog, { key: "Escape", repeat: true });
       expect(preview.request?.sessionId).toBe(A);
       await press("Escape", dialog);
+      expect(preview.request).toBeNull();
+      expect(nav.focusedTerm).toBe(A);
+    } finally {
+      preview.close();
+    }
+  });
+  it("routes native menu chords to the visible Preview, including the last tab", async () => {
+    const root = "http://localhost:5173";
+    await mount([plain(A, { devUrls: [root] })]);
+    nav.openSession(A);
+    preview.open(A, root + "/start", { prep: { device: "mobile", steps: [{ do: "click", text: "Submit" }] } });
+    try {
+      await screen.findByRole("dialog", { name: "Preview" });
+      preview.tabs[0].currentURL = root + "/billing#details";
+      chord("preview-duplicate");
+      expect(preview.request).toMatchObject({ url: root + "/billing#details", prep: { device: "mobile" } });
+      expect(preview.request?.prep?.steps).toBeUndefined();
+      chord("preview-previous");
+      expect(preview.active).toBe(0);
+      chord("preview-next");
+      expect(preview.active).toBe(1);
+      chord("new-shell");
+      expect(preview.request?.url).toBe(root);
+      const sidebar = nav.sidebarOpen;
+      chord("toggle-sidebar");
+      expect(nav.sidebarOpen).toBe(sidebar);
+      for (let n = 3; n > 0; n--) {
+        expect(preview.tabs).toHaveLength(n);
+        chord("close-tab");
+      }
       expect(preview.request).toBeNull();
       expect(nav.focusedTerm).toBe(A);
     } finally {

@@ -14,7 +14,7 @@ describe("HelpOverlay", () => {
     expect(screen.getByText("Focused controls")).toBeInTheDocument();
     expect(screen.getByText("⌘⇧G")).toBeInTheDocument();
     expect(screen.getByText("Git workspace / previous view")).toBeInTheDocument();
-    expect(screen.getByText("⌘B")).toBeInTheDocument();
+    expect(screen.getAllByText("⌘B")).toHaveLength(2);
     expect(screen.getByText("⌘⇧E")).toBeInTheDocument();
     expect(screen.queryByText("x · ⌘⇧K")).not.toBeInTheDocument();
     expect(screen.queryByText("j / k · g / G")).not.toBeInTheDocument();

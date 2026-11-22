@@ -26,6 +26,14 @@
       ["⌘⇧O", "Open pull request in browser"],
       ["⌘⇧R", "Run configured review"],
     ] },
+    { title: "Preview", keys: [
+      ["⌘W", "Close the tab, or Preview on the last tab"],
+      ["⌘D", "Duplicate the current page and viewport"],
+      ["⌘T", "Open a fresh tab on the current server"],
+      ["⌘⌥← / ⌘⌥→", "Previous / next preview tab"],
+      ["⌘R", "Reload the current page"],
+      ["⌘B", "Show or hide the page sidebar"],
+    ] },
     { title: "Project Git", keys: [
       ["⌘F", "Search commit history"],
       ["⌘ + click", "Select commits to compare"],

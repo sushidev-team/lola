@@ -36,14 +36,17 @@ it("opens pages as tabs, deduped and capped, and switches between them", () => {
   expect(preview.request?.url).toBe(pages[2].url);
   preview.select(99);
   expect(preview.active).toBe(2);
-  // An address chip re-points the active tab and keeps the set.
-  preview.open("s", "http://localhost:4000/");
-  expect(preview.tabs).toHaveLength(MAX_PREVIEW_TABS);
-  expect(preview.tabs[2].url).toBe("http://localhost:4000/");
-  // A single page is not a tab set; close clears everything.
+  // Manual tabs may share a URL and are independent of the bulk-open limit.
+  preview.open("s", pages[2].url);
+  expect(preview.tabs).toHaveLength(MAX_PREVIEW_TABS + 1);
+  expect(preview.tabs.at(-1)!.id).not.toBe(preview.tabs[2].id);
+  preview.closeTab(0);
+  expect(preview.active).toBe(MAX_PREVIEW_TABS - 1);
+  preview.closeTab(preview.active);
+  expect(preview.request?.url).toBe(pages[MAX_PREVIEW_TABS - 1].url);
   preview.openTabs("s", [pages[0]]);
-  expect(preview.tabs).toHaveLength(0);
-  preview.close();
+  expect(preview.tabs).toHaveLength(1);
+  preview.closeTab(0);
   expect(preview.request).toBeNull();
 });
 

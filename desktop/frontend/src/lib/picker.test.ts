@@ -29,7 +29,9 @@ it('blocks pointer controls only while inspecting and anchors comments to the ha
     press();
     expect(activate).toHaveBeenCalledTimes(2);
 
+    send({ type: 'hello', watchLocation: true });
     history.replaceState(null, '', '/#/settings');
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'location', url: location.href }), '*');
     const lookup = vi.spyOn(document, 'querySelector');
     send({ type: 'comment-anchors', documentId: doc, anchors: [
       { number: 1, path: '/#/settings', selector: '#menu' },

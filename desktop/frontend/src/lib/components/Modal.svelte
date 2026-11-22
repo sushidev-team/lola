@@ -45,9 +45,10 @@
   function focusables(): HTMLElement[] {
     return Array.from(
       dialog.querySelectorAll<HTMLElement>(
-        'summary,a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])',
+        'iframe,summary,a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])',
       ),
     ).filter((el) => {
+      if (el.tabIndex < 0 || el.closest("[hidden], [inert]")) return false;
       let ancestor = el.parentElement;
       while (ancestor && ancestor !== dialog) {
         if (ancestor instanceof HTMLDetailsElement && !ancestor.open && ancestor.querySelector("summary") !== el) return false;

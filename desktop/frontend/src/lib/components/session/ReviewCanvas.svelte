@@ -633,7 +633,6 @@
   .review-pager :global(.page-arrow:enabled:hover) { background:var(--color-accent-fill-hover); }
   .review-pager :global(.page-arrow:focus-visible) { outline:2px solid var(--color-accent); outline-offset:-2px; }
   .comparison { justify-self:center; display:flex; align-items:center; padding:2px; border:1px solid var(--color-edge); border-radius:7px; background:var(--color-canvas); }
-  .canvas :global(.review-dock) { position:absolute; z-index:4; bottom:12px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:2px; width:max-content; max-width:calc(100% - 16px); flex-wrap:wrap; justify-content:center; padding:3px; border:1px solid var(--color-edge); border-radius:9px; background:var(--color-panel); box-shadow:0 4px 16px #0005; }
   @container (max-width: 900px) {
     .mode-name, .pin-label { display:none; }
   }

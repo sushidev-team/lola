@@ -19,6 +19,11 @@ export const AppOpenSettings = "app:open-settings";
 export const AppOpenUpdate = "app:open-update";
 
 /**
+ * Name of the custom event "app:preview-open".
+ */
+export const AppPreviewOpen = "app:preview-open";
+
+/**
  * Name of the custom event "app:session-action".
  */
 export const AppSessionAction = "app:session-action";

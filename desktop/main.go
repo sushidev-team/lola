@@ -346,6 +346,29 @@ func installAppMenu(app *application.App, zoom *zoomController) {
 	file.Add("Close Tab").SetAccelerator("CmdOrCtrl+w").OnClick(func(*application.Context) {
 		app.Event.Emit(evtSessionAction, actionCloseTab)
 	})
+	// AppKit routes these even when a cross-origin preview frame owns focus.
+	// Disable the preview-only items elsewhere so editors retain their chords.
+	var previewItems []*application.MenuItem
+	for _, item := range []struct{ label, shortcut, action string }{
+		{"Duplicate Preview Tab", "CmdOrCtrl+d", actionPreviewDuplicate},
+		{"Previous Preview Tab", "CmdOrCtrl+OptionOrAlt+Left", actionPreviewPrevious},
+		{"Next Preview Tab", "CmdOrCtrl+OptionOrAlt+Right", actionPreviewNext},
+	} {
+		mi := file.Add(item.label).SetAccelerator(item.shortcut).SetEnabled(false)
+		mi.OnClick(func(*application.Context) { app.Event.Emit(evtSessionAction, item.action) })
+		previewItems = append(previewItems, mi)
+	}
+	app.Event.On(evtPreviewOpen, func(e *application.CustomEvent) {
+		open, ok := e.Data.(bool)
+		if !ok {
+			return
+		}
+		application.InvokeSync(func() {
+			for _, item := range previewItems {
+				item.SetEnabled(open)
+			}
+		})
+	})
 	if runtime.GOOS != "darwin" {
 		file.AddRole(application.Quit)
 	}
@@ -355,6 +378,11 @@ func installAppMenu(app *application.App, zoom *zoomController) {
 	menu.AddRole(application.WindowMenu)
 	menu.AddRole(application.HelpMenu)
 
+	// Reload follows the focused surface. Force Reload remains native so it
+	// still recovers a webview whose JavaScript has stopped responding.
+	if it := menu.FindByRole(application.Reload); it != nil {
+		it.OnClick(func(*application.Context) { app.Event.Emit(evtSessionAction, actionReload) })
+	}
 	if it := menu.FindByRole(application.ZoomIn); it != nil {
 		it.OnClick(func(*application.Context) { zoom.in() })
 	}
@@ -401,7 +429,7 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	menu.Add("Open PR in Browser").
 		SetAccelerator("CmdOrCtrl+Shift+o").
 		OnClick(ask(actionOpenPR))
-	menu.Add("New Shell Tab").
+	menu.Add("New Tab").
 		SetAccelerator("CmdOrCtrl+t").
 		OnClick(ask(actionNewShell))
 	menu.AddSeparator()
@@ -561,19 +589,24 @@ const (
 	// menu (and its accelerator) to the frontend, which applies it to the
 	// cockpit's selected session. See newSessionMenu.
 	evtSessionAction = "app:session-action" // string
+	evtPreviewOpen   = "app:preview-open"   // bool
 )
 
 // The evtSessionAction payloads. Mirrored by the switch in App.svelte's
 // sessionAction — keep the two lists in step.
 const (
-	actionReview   = "review"
-	actionOpenPR   = "open-pr"
-	actionNewShell = "new-shell"
-	actionCloseTab = "close-tab"
-	actionKill     = "kill"
-	actionNext     = "next"
-	actionStop     = "stop"
-	actionChanges  = "changes"
+	actionReview           = "review"
+	actionOpenPR           = "open-pr"
+	actionNewShell         = "new-shell"
+	actionCloseTab         = "close-tab"
+	actionReload           = "reload"
+	actionPreviewDuplicate = "preview-duplicate"
+	actionPreviewPrevious  = "preview-previous"
+	actionPreviewNext      = "preview-next"
+	actionKill             = "kill"
+	actionNext             = "next"
+	actionStop             = "stop"
+	actionChanges          = "changes"
 
 	actionSSHNew      = "ssh-new"
 	actionSSHWheel    = "ssh-wheel"
@@ -603,6 +636,7 @@ func init() {
 	application.RegisterEvent[struct{}](evtOpenSettings)
 	application.RegisterEvent[struct{}](evtOpenUpdate)
 	application.RegisterEvent[string](evtSessionAction)
+	application.RegisterEvent[bool](evtPreviewOpen)
 	application.RegisterEvent[protocol.SessionsData](evtSessions)
 	application.RegisterEvent[protocol.ProjectsData](evtProjects)
 	application.RegisterEvent[protocol.StatusData](evtStatus)

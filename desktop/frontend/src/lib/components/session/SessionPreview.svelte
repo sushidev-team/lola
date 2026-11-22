@@ -19,24 +19,23 @@
   import { store } from "$lib/store.svelte";
   import { feedback, type ElementDraft } from "$lib/feedback.svelte";
   import "./annotation-editor.css";
-  import { devUrlGroups, devUrlLabel } from "$lib/devurl";
-  import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, type PickedElement, type PreviewRequest, type ViewportId } from "$lib/preview.svelte";
-  import Modal from "../Modal.svelte";
+  import { devUrlLabel } from "$lib/devurl";
+  import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, type PickedElement, type PreviewRequest, type OpenPreviewTab, type ViewportId } from "$lib/preview.svelte";
   import Button from "../Button.svelte";
   import Icon from "../Icon.svelte";
-  import Tabs from "../Tabs.svelte";
 
   // The canvas keys this instance by immutable package and page. A workspace
   // refresh must not restart a live sign-in while the reviewer is looking at it.
-  let { inline, active = true, canComment = true, resumeKey, reviewAction }: { inline?: PreviewRequest; reviewAction?: Snippet; active?: boolean; canComment?: boolean; resumeKey?: string } = $props();
+  let { inline, tab, active = true, canComment = true, resumeKey, reviewAction }: { inline?: PreviewRequest; tab?: OpenPreviewTab; reviewAction?: Snippet; active?: boolean; canComment?: boolean; resumeKey?: string } = $props();
   const inlinePage = untrack(() => inline);
-  const req = $derived(inlinePage ?? preview.request);
+  const req = $derived(inlinePage ?? tab?.request);
 
   let frame = $state<HTMLIFrameElement | null>(null);
   let src = $state("");
   const frameOrigin = $derived(src ? new URL(src).origin : "");
   let error = $state("");
-  let viewport = $state<ViewportId>(DEFAULT_VIEWPORT);
+  let viewport = $state<ViewportId>(untrack(() =>
+    VIEWPORTS.find(v => v.id === req?.prep?.device)?.id ?? DEFAULT_VIEWPORT));
   const viewportIcons = { mobile: "smartphone", tablet: "tablet", desktop: "monitor" } as const;
   let pickerReady = $state(false);
   let picking = $state(false);
@@ -77,7 +76,14 @@
     align();
     return () => { observer.disconnect(); area.removeEventListener("scroll", align, true); };
   });
-  let reload = $state(0);
+  let load = $state({ route: "" });
+  let openGeneration = 0;
+
+  export function reloadPage() {
+    if (!src) return;
+    load = { route: tab?.currentURL ?? "" };
+  }
+
   // What the agent prepared for the active page, and what the page said about it.
   let prepared = $state<{ found: boolean[]; waited: boolean } | null>(null);
   let stepFailure = $state<{ index: number; step: string; why: string } | null>(null);
@@ -123,7 +129,7 @@
   });
   function replayFromStart() {
     if (resumeKey) verifiedRoutes.delete(resumeKey);
-    reload++;
+    load = { route: "" };
   }
   let checkId = 0;
   let pendingCheck = 0;
@@ -162,7 +168,7 @@
   }
 
   function onPreviewKey(e: KeyboardEvent) {
-    if (!req || e.defaultPrevented || e.isComposing) return;
+    if (!active || !req || e.defaultPrevented || e.isComposing) return;
     if (e.key !== "Escape" || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
       if (exitHint) clearExitHint();
       return;
@@ -185,15 +191,10 @@
     stalled = false;
     progressTimer = setTimeout(() => { stalled = true; }, 20000);
   }
-  const preparing = $derived(replay && !prepared && !stalled && !error);
+  const preparing = $derived(replay && !load.route && !prepared && !stalled && !error);
 
   const vp = $derived(VIEWPORTS.find((v) => v.id === viewport) ?? VIEWPORTS[2]);
   const session = $derived(req ? store.sessions.find((s) => s.id === req.sessionId) : undefined);
-  const groups = $derived(devUrlGroups(
-    [...new Set([...(session?.devUrls ?? []), ...(req ? [req.url] : [])])],
-    session?.apps ?? [],
-  ));
-
   // A retained document can still run scripts after its listener is retired.
   // Remove it when a previously advertised session or stack origin disappears.
   let observedRequest: PreviewRequest | null = null;
@@ -208,6 +209,7 @@
       observedRequest = request;
     } else if (observedRequest === request) {
       observedRequest = null;
+      openGeneration++;
       src = "";
       pickerReady = false;
       picking = false;
@@ -218,7 +220,7 @@
 
   $effect(() => {
     const request = req;
-    reload;
+    const route = load.route;
     verifiedPath = "";
     documentId = "";
     firstDocumentPath = "";
@@ -234,18 +236,16 @@
     prepared = null;
     stepFailure = null;
     flow = { started: -1, armed: true, finished: false, resumes: 0 };
-    const device = request?.prep?.device;
-    if (device && VIEWPORTS.some((v) => v.id === device)) viewport = device as ViewportId;
     clearExitHint();
     stalled = false;
     if (!request) return;
-    if (replay) awaitProgress();
-    let current = true;
-    PreviewService.Open(request.sessionId, restoring ? finalRoute : request.url).then(
-      (address) => { if (current) src = address; },
-      (err) => { if (current) error = String(err); },
+    if (replay && !route) awaitProgress();
+    const generation = ++openGeneration;
+    PreviewService.Open(request.sessionId, restoring ? finalRoute : route || request.url).then(
+      (address) => { if (generation === openGeneration) src = address; },
+      (err) => { if (generation === openGeneration) error = String(err); },
     );
-    return () => { current = false; clearTimeout(progressTimer); };
+    return () => { openGeneration++; clearTimeout(progressTimer); };
   });
 
   /** Asks the framed page to carry out the agent's preparation (scroll, outline, wait). */
@@ -265,7 +265,7 @@
   /** A document announced itself (a first load, or the one a step navigated to). */
   function onFrameReady(frameUrl: unknown) {
     const p = req?.prep;
-    if (!p) return;
+    if (!p || load.route) return;
     const steps = p.steps?.length ?? 0;
     if (restoring && !flow.finished) {
       flow.armed = false;
@@ -303,7 +303,7 @@
     pickerReady = false;
     picking = false;
     if (frameOrigin && frameOrigin !== "null") {
-      frame?.contentWindow?.postMessage({ target: PICKER_SOURCE, type: "hello" }, frameOrigin);
+      frame?.contentWindow?.postMessage({ target: PICKER_SOURCE, type: "hello", watchLocation: !!tab }, frameOrigin);
     }
   }
 
@@ -325,6 +325,14 @@
       if (inlinePage && active && d?.source === PICKER_SOURCE && d.type === "comment-bounds" && e.data.revision === revision && Array.isArray(e.data.rects)) {
         commentRects = e.data.rects.slice(0, 10).filter((r: CommentRect) =>
           r && trackedNumbers.has(r.number) && [r.x, r.y, r.w, r.h].every(Number.isFinite) && r.w > 0 && r.h > 0);
+      }
+      if (tab && d?.source === PICKER_SOURCE && (d.type === "ready" || d.type === "location") && typeof d.url === "string") {
+        try {
+          if (new URL(d.url).origin === frameOrigin) {
+            tab.currentURL = devPageURL(d.url, tab.request.url);
+            tab.documentTitle = typeof e.data.title === "string" ? e.data.title.trim().slice(0, 200) : "";
+          }
+        } catch { /* Ignore malformed frame metadata. */ }
       }
       if (d?.source === PICKER_SOURCE && d.type === "ready") {
         pickerReady = true;
@@ -367,7 +375,7 @@
       }
       // A frame may ask for the hint. Only a second keypress in Lola can close
       // the preview, so a page cannot discard a form by posting two messages.
-      if (d?.source === PICKER_SOURCE && !inlinePage && d.type === "escape" && document.activeElement === frame) {
+      if (d?.source === PICKER_SOURCE && active && !inlinePage && d.type === "escape" && document.activeElement === frame) {
         returnFocus = frame;
         surface?.focus({ preventScroll: true });
         showExitHint();
@@ -469,8 +477,10 @@
     }
   }
 
+  export function device() { return viewport; }
+
   function replayView() {
-    if (stalled || stepFailure || req?.prep?.steps?.length) replayFromStart();
+    if (load.route || stalled || stepFailure || req?.prep?.steps?.length) replayFromStart();
     else prepare();
   }
 
@@ -483,63 +493,29 @@
   }
 </script>
 
+{#snippet issues()}
+  {#if stepFailure}<p class="text-sm text-warn" role="status">Step {stepFailure.index + 1} ({stepFailure.step}) didn't work: {stepFailure.why}</p>{/if}
+  {#if missing.length}<p class="text-sm text-warn" role="status">Not found on the page: {missing.join(", ")}</p>{/if}
+  {#if prepared?.waited && !missing.length}<p class="text-sm text-warn" role="status">The page did not reach the saved review target.</p>{/if}
+  {#if stalled}<p class="text-sm text-warn" role="status">{documentId ? "The page did not finish its saved steps. Retry to start again." : "The dev page did not connect to the preview. Check that its server is running, then retry."}</p>{/if}
+{/snippet}
 {#if req}
-  {#snippet tools()}
-    <div class="flex flex-wrap items-center gap-x-1 gap-y-1 pr-1 sm:gap-x-4 sm:pr-2">
-      <h2 class="drag mr-auto self-stretch content-center text-lg text-ink">Preview</h2>
-      <Tabs tabs={VIEWPORTS.map((v) => ({ id: v.id, label: v.label }))} ariaLabel="Viewport" active={viewport} onSelect={(id) => (viewport = id as ViewportId)} pill />
-      <div class="ml-auto flex items-center gap-1 sm:ml-0">
-        <Button size="xs" selected={picking} disabled={!pickerReady || !!picked} title="Click an element in the page to send it to the agent" onclick={togglePick}>Pick element</Button>
-        <Button size="xs" icon disabled={!src} aria-label="Reload" title="Reload" onclick={() => reload++}><Icon name="refresh-cw" size={14} /></Button>
-        <Button size="xs" icon aria-label="Open in external browser" title="Open in external browser" onclick={() => store.openURL(req!.url)}><Icon name="external-link" size={14} /></Button>
-      </div>
-    </div>
-  {/snippet}
-  {#snippet issues()}
-    {#if stepFailure}<p class="text-sm text-warn" role="status">Step {stepFailure.index + 1} ({stepFailure.step}) didn't work: {stepFailure.why}</p>{/if}
-    {#if missing.length}<p class="text-sm text-warn" role="status">Not found on the page: {missing.join(", ")}</p>{/if}
-    {#if prepared?.waited && !missing.length}<p class="text-sm text-warn" role="status">The page did not reach the saved review target.</p>{/if}
-    {#if stalled}<p class="text-sm text-warn" role="status">{documentId ? "The page did not finish its saved steps. Retry to start again." : "The dev page did not connect to the preview. Check that its server is running, then retry."}</p>{/if}
-  {/snippet}
-  {#snippet content(req: PreviewRequest)}
     <div bind:this={surface} tabindex="-1" class="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] outline-none" data-session-preview>
       {#if inlinePage}
         <div class="review-issues">{@render issues()}</div>
-      {:else}
-        <nav aria-label="Dev servers" class="flex max-h-[30dvh] flex-wrap items-start gap-x-6 gap-y-2 overflow-y-auto border-b border-edge px-4 py-2">
-          {#if preview.tabs.length > 1}
-            <div class="w-full" data-preview-tabs>
-              <Tabs tabs={preview.tabs.map((t, i) => ({ id: String(i), label: t.title || devUrlLabel(t.url) }))} ariaLabel="Open pages" active={String(preview.active)} onSelect={(id) => preview.select(Number(id))} pill />
-            </div>
-          {/if}
-          {#if req.caption || replay}
-            <div class="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-preview-prep>
+      {:else if req.caption || replay}
+            <div class="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-edge px-4 py-2" data-preview-prep>
               <p class="min-w-0 flex-1 basis-60 text-sm wrap-anywhere text-ink">{req.caption ?? ""}{#if req.prep?.steps?.length}<span class="text-faint"> · it performs {req.prep.steps.length} {req.prep.steps.length === 1 ? "step" : "steps"} here (clicks, typing, sign-in) on this local address</span>{/if}</p>
               {@render issues()}
-              {#if replay}<Button size="xs" disabled={!src || preparing} onclick={replayView}>{stalled || stepFailure ? "Retry" : "Show it again"}</Button>{/if}
             </div>
-          {/if}
-          {#each groups as group (group.name)}
-            <div role="group" aria-label={group.label || "Addresses"} class="grid min-w-0 max-w-full gap-0.5">
-              {#if group.label}<h3 class="px-1.5 text-sm font-medium text-ink">{group.label}</h3>{/if}
-              <div class="flex min-w-0 flex-wrap items-center gap-1">
-                {#each group.urls as url (url)}
-                  <Button size="xs" selected={url === req.url} class="max-w-full font-mono!" title={url} onclick={() => preview.open(req.sessionId, url)}>
-                    <span class="truncate">{devUrlLabel(url)}</span>
-                  </Button>
-                {/each}
-              </div>
-            </div>
-          {/each}
-        </nav>
       {/if}
 
-      <div bind:this={stage} class="relative min-h-0 min-w-0">
-        <div class="absolute inset-0 grid place-items-center overflow-auto bg-canvas {inlinePage ? 'grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]' : 'p-3'}">
+      <div bind:this={stage} class="row-start-2 relative min-h-0 min-w-0">
+        <div class="absolute inset-0 grid place-items-center overflow-auto bg-canvas grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]">
           {#if error}
-            <p class="text-sm text-bad" role="alert">{error} <Button size="xs" onclick={() => reload++}>Retry</Button></p>
+            <p class="text-sm text-bad" role="alert">{error} <Button size="xs" onclick={() => load = { route: load.route }}>Retry</Button></p>
           {:else if src}
-            <iframe bind:this={frame} {src} onload={frameLoaded} title="Preview of {devUrlLabel(req.url)}" class="bg-white {inlinePage ? 'col-start-1 row-start-1 max-h-full max-w-full border-0' : 'rounded border border-edge'}" style={frameStyle(vp)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+            <iframe bind:this={frame} {src} onload={frameLoaded} title="Preview of {devUrlLabel(req.url)}" class="col-start-1 row-start-1 max-h-full max-w-full border-0 bg-white" style={frameStyle(vp)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
             {#if inlinePage && commentRects.length && !preparing}
               <div class="comment-layer" style={frameStyle(vp)}>
                 {#each commentRects as r,i}
@@ -557,25 +533,29 @@
             <p class="text-sm text-faint">Starting preview…</p>
           {/if}
         </div>
-        {#if inlinePage}
-            <div class="review-dock" role="group" aria-label="Live page tools">
-              <div role="group" aria-label="Viewport size" class="mr-0.5 flex items-center border-r border-edge pr-1">
-                {#each VIEWPORTS as preset (preset.id)}
-                  {@const label = preset.id === "desktop" ? "Full width" : preset.label}
-                  <Button icon size="sm" selected={viewport === preset.id} aria-pressed={viewport === preset.id} aria-label={label} title={preset.width ? `${label} · ${preset.width} × ${preset.height}` : label} onclick={() => viewport = preset.id}>
-                    <Icon name={viewportIcons[preset.id]} size={15} />
-                  </Button>
-                {/each}
-              </div>
-              <Button size="sm" selected={picking} disabled={!pickerReady || preparing || !!picked || !canComment} aria-label="Inspect element" title="Inspect an element to send feedback" onclick={togglePick}>
-                <Icon name="square-mouse-pointer" size={15} /><span>Inspect</span>
+        <div class="review-dock" role="group" aria-label="Live page tools">
+          <div role="group" aria-label="Viewport size" class="mr-0.5 flex items-center border-r border-edge pr-1">
+            {#each VIEWPORTS as preset (preset.id)}
+              {@const label = preset.id === "desktop" ? "Full width" : preset.label}
+              <Button icon size="sm" selected={viewport === preset.id} aria-pressed={viewport === preset.id} aria-label={label} title={preset.width ? `${label} · ${preset.width} × ${preset.height}` : label} onclick={() => viewport = preset.id}>
+                <Icon name={viewportIcons[preset.id]} size={15} />
               </Button>
-              {#if replay}
-                <Button icon={!(stalled || stepFailure)} size="sm" disabled={!src || preparing || !!picked} aria-label={stalled || stepFailure ? "Retry preparation" : "Replay prepared view"} title={req.prep?.steps?.length ? `Replay ${req.prep.steps.length} saved ${req.prep.steps.length === 1 ? "step" : "steps"} on this local page` : "Show the prepared view again"} onclick={replayView}><Icon name="rotate-ccw" size={15} />{#if stalled || stepFailure}Retry{/if}</Button>
-              {/if}
-              {@render reviewAction?.()}
+            {/each}
+          </div>
+          <Button size="sm" selected={picking} disabled={!pickerReady || preparing || !!picked || !canComment} aria-label="Inspect element" title="Inspect an element to send feedback" onclick={togglePick}>
+            <Icon name="square-mouse-pointer" size={15} /><span>Inspect</span>
+          </Button>
+          {#if replay}
+            <Button icon={!(stalled || stepFailure)} size="sm" disabled={!src || preparing || !!picked} aria-label={stalled || stepFailure ? "Retry preparation" : "Replay prepared view"} title={req.prep?.steps?.length ? `Replay ${req.prep.steps.length} saved ${req.prep.steps.length === 1 ? "step" : "steps"} on this local page` : "Show the prepared view again"} onclick={replayView}><Icon name="rotate-ccw" size={15} />{#if stalled || stepFailure}Retry{/if}</Button>
+          {/if}
+          {#if tab}
+            <div role="group" aria-label="Page actions" class="ml-0.5 flex items-center border-l border-edge pl-1">
+              <Button icon size="sm" disabled={!src} aria-label="Reload" aria-keyshortcuts="Meta+r" title="Reload page · ⌘R" onclick={reloadPage}><Icon name="refresh-cw" size={15} /></Button>
+              <Button icon size="sm" aria-label="Open in external browser" title="Open in external browser" onclick={() => store.openURL(tab!.currentURL)}><Icon name="external-link" size={15} /></Button>
             </div>
-        {/if}
+          {/if}
+          {@render reviewAction?.()}
+        </div>
         {#if exitHint}
           <div role="status" class="ssh-fade-in pointer-events-none absolute inset-0 z-10 grid place-items-center bg-black/35 p-4 motion-reduce:animate-none!">
             <p class="rounded-xl border border-edge bg-panel px-6 py-4 text-center text-xl leading-loose text-balance text-ink shadow-xl">
@@ -608,14 +588,6 @@
         {/if}
       </div>
     </div>
-  {/snippet}
-  {#if inlinePage}
-    {@render content(req)}
-  {:else}
-    <Modal title="Preview" headerContent={tools} onClose={close} fullscreen bodyClass="min-w-0 overflow-hidden">
-      {@render content(req)}
-    </Modal>
-  {/if}
 {/if}
 
 <style>
