@@ -467,6 +467,7 @@ input[type="number"]::-webkit-inner-spin-button {
    lets the dock SHRINK: a plain auto row overflowed the column, painted over the
    filter row and pushed the confirm button and the composer off screen. */
 .ssh-col {
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(72px, 1fr) minmax(0, auto) auto;
 }
 .ssh-dock {
@@ -1339,7 +1340,18 @@ details:not([open]) > summary .cv-when-open, details[open] > summary .cv-when-cl
 .cv-activity-map { padding: 12px 20px; border-bottom: 1px solid var(--color-edge); background: color-mix(in srgb, var(--color-panel) 40%, var(--color-canvas)); }
 .cv-overview-heading { font-size: 13px; line-height: 20px; font-weight: 600; color: var(--color-ink); letter-spacing: .01em; }
 .cv-activity-track { display: flex; align-items: stretch; height: 28px; padding: 3px; border: 1px solid var(--color-edge); border-radius: 7px; background: var(--color-canvas); }
-.cv-activity-band { position: relative; flex-basis: 0; min-width: min(3px, calc(50% / var(--activity-count))); margin-left: min(var(--activity-pause), calc(15% / var(--activity-count))); border-right: 1px solid var(--color-canvas); border-radius: 2px; background: color-mix(in srgb, var(--activity-color) 80%, var(--color-panel)); transition: background .12s, box-shadow .12s; }
+/* Paint the separator inside the band. A border gives every event a one-pixel
+   minimum, so a long history overflows the track and covers the Raw button. */
+.cv-activity-band {
+  position: relative;
+  flex-basis: 0;
+  min-width: min(3px, calc(50% / var(--activity-count)));
+  margin-left: min(var(--activity-pause), calc(15% / var(--activity-count)));
+  border-radius: 2px;
+  background: linear-gradient(to left, var(--color-canvas) min(1px, 20%), transparent 0),
+    color-mix(in srgb, var(--activity-color) 80%, var(--color-panel));
+  transition: background .12s, box-shadow .12s;
+}
 .cv-activity-band:hover, .cv-activity-band[aria-current], .cv-activity-band:focus-visible { z-index: 2; background: var(--activity-color); box-shadow: 0 0 8px color-mix(in srgb, var(--activity-color) 25%, transparent); }
 .cv-activity-band[aria-current] { outline: 1px solid var(--color-ink); outline-offset: 1px; }
 .cv-activity-band[data-failed="true"] { border-bottom: 2px solid var(--color-bad); }
