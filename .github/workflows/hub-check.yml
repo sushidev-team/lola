@@ -13,6 +13,13 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request makes the running check obsolete, so it
+# is cancelled. Every other run gets a group of its own (the run id), so runs on
+# main, tags and releases are never cancelled or replaced by a later one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest

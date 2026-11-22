@@ -13,15 +13,20 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request makes the running check obsolete, so it
+# is cancelled. Every other run gets a group of its own (the run id), so runs on
+# main, tags and releases are never cancelled or replaced by a later one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
-    # macOS, not Linux: the desktop package imports wails/v3, whose webview
-    # backend needs GTK4/WebKitGTK dev libs (via pkg-config) on Linux but only
-    # the built-in Cocoa/WebKit frameworks on macOS. lola-desktop ships macOS
-    # only (see release.yml, also macos-latest), so `go vet/build/test ./...`
-    # here exercises the real target — including the darwin-only cgo in
-    # hidpi_darwin.go — without provisioning GTK on a variant that never ships.
-    runs-on: macos-latest
+    # Linux for everything that does not import wails/v3. A macOS minute costs
+    # ten Linux minutes against the Actions quota, and this suite is the bulk of
+    # the run, so only the packages that need Cocoa/WebKit go to macOS (the
+    # darwin job below).
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -59,7 +64,58 @@ jobs:
       - name: packages
         id: pkgs
         run: |
-          list=$(go list ./... | grep -v '/desktop/build/')
+          list=$(go list ./... | grep -vE '/lola/desktop(/|$)')
+          echo "list=$(echo "$list" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: go vet
+        run: go vet ${{ steps.pkgs.outputs.list }}
+
+      - name: build
+        run: go build ${{ steps.pkgs.outputs.list }}
+
+      # TestBootstrapInRealBash needs tmux, which the macOS runner lacks, so it
+      # never ran in CI before this job moved to Linux. On the Ubuntu runner it
+      # runs and fails: /etc/profile.d's systemd OSC 3008 context hooks emit
+      # their own start/end markers into the login shell and shift the parsed
+      # events. That is a real finding for SSH sessions to Ubuntu hosts and is
+      # tracked separately; it is skipped here so this job covers what CI
+      # covered before.
+      - name: test (race)
+        run: go test -race -count=1 -skip '^TestBootstrapInRealBash$' ${{ steps.pkgs.outputs.list }}
+
+      # hubproto is a nested module (the hub's wire contract), so `go list ./...`
+      # above does not include it.
+      - name: hubproto (vet + race)
+        working-directory: hubproto
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
+  darwin:
+    # macOS, not Linux: the desktop package imports wails/v3, whose webview
+    # backend needs GTK4/WebKitGTK dev libs (via pkg-config) on Linux but only
+    # the built-in Cocoa/WebKit frameworks on macOS. lola-desktop ships macOS
+    # only (see release.yml, also macos-latest), so `go vet/build/test` here
+    # exercises the real target — including the darwin-only cgo in
+    # hidpi_darwin.go — without provisioning GTK on a variant that never ships.
+    #
+    # Only the packages Linux cannot cover run here: desktop/... and the two
+    # internal packages with darwin-only files (notify, secrets). Everything
+    # else runs in build-test on ubuntu.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # desktop/build/** holds Wails per-platform SCAFFOLD (see build-test).
+      - name: packages
+        id: pkgs
+        run: |
+          list=$(go list ./desktop/... ./internal/notify/... ./internal/secrets/... | grep -v '/desktop/build/')
           echo "list=$(echo "$list" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
 
       - name: go vet
@@ -70,11 +126,3 @@ jobs:
 
       - name: test (race)
         run: go test -race -count=1 ${{ steps.pkgs.outputs.list }}
-
-      # hubproto is a nested module (the hub's wire contract), so `go list ./...`
-      # above does not include it.
-      - name: hubproto (vet + race)
-        working-directory: hubproto
-        run: |
-          go vet ./...
-          go test -race -count=1 ./...
