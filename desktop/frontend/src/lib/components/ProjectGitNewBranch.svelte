@@ -9,7 +9,7 @@
   import Icon from './Icon.svelte';
 
   let { git, start, refs, historyRef = '', limit = 200, onClose, onCreated }: {
-    git: ProjectGitState; start: { sha: string; label: string }; refs: GitRef[];
+    git: ProjectGitState; start: { sha: string; label: string; ref?: string }; refs: GitRef[];
     historyRef?: string; limit?: number; onClose: () => void;
     onCreated: (path: string, checkout: boolean) => void;
   } = $props();
@@ -33,7 +33,7 @@
     event.preventDefault();
     if (busy || !name.trim() || !sha) return;
     error = '';
-    const result = await git.createBranch(name.trim(), sha, checkout, historyRef, limit);
+    const result = await git.createBranch(name.trim(), sha, checkout, historyRef, limit, base === 'initial' ? start.ref : base);
     if (!alive) return;
     if (result === null) error = git.error || 'Could not create the branch. Try again.';
     else onCreated(result, checkout);

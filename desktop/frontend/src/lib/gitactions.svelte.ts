@@ -9,7 +9,7 @@ import type { IconName } from './icons';
 
 type Context = { git: ProjectGitState; ref: string; limit: number; configuredPath?: string };
 export type GitDestination = { remote: string; name: string; trackingOnly?: boolean };
-type Callbacks = { openSession?: (id: string) => void; compareBranches?: (source: GitRef, target: GitRef) => void; isManagedWorktree?: (tree: GitWorktree) => boolean; removeManagedWorktree?: (tree: GitWorktree, deleteBranch: boolean, onRemoved: () => Promise<void>) => void; createPullRequest?: (branch:GitRef,target?:GitRef)=>void; viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; inspectFile?: (file: GitFile, staged: boolean) => void; stageFiles?: (paths: string[], staged: boolean) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef, destination?: GitDestination) => void; createBranch?: (sha: string, label: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
+type Callbacks = { openSession?: (id: string) => void; compareBranches?: (source: GitRef, target: GitRef) => void; isManagedWorktree?: (tree: GitWorktree) => boolean; removeManagedWorktree?: (tree: GitWorktree, deleteBranch: boolean, onRemoved: () => Promise<void>) => void; createPullRequest?: (branch:GitRef,target?:GitRef)=>void; viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; inspectFile?: (file: GitFile, staged: boolean) => void; stageFiles?: (paths: string[], staged: boolean) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef, destination?: GitDestination) => void; createBranch?: (sha: string, label: string, baseRef?: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
 export type GitMenuItem = { label: string; icon: IconName; run: () => void; disabled?: boolean; danger?: boolean; separator?: boolean; /** Why a disabled item is disabled, shown under its label. */ hint?: string };
 export type GitMenuRequest = { title: string; subtitle?: string; x: number; y: number; items: GitMenuItem[]; anchor: HTMLElement | null };
 
@@ -87,7 +87,6 @@ export class GitActions {
     }
     const deletingSelected = ['delete-branch', 'remove-worktree-branch'].includes(request.action) && active.ref === request.source;
     const path = await active.git.branchAction(request, deletingSelected ? '' : active.ref, active.limit);
-    if (request.action === 'fetch') return; // background fetch owns its own error reporting
     if (path === null && request.action === 'pull' && active.git === this.context().git && active.git.error && this.autoStashPull(active, request)) return;
     if (path === null && active.git === this.context().git && active.git.error) {
       const info = gitErrorInfo(active.git.error, request.action);
@@ -350,7 +349,7 @@ export class GitActions {
     const remote = this.context().git.snapshot?.remotes?.filter(r => branch.name.startsWith(r.name + '/')).sort((a,b) => b.name.length-a.name.length)[0];
     const tree = this.context().git.snapshot?.worktrees.find(t => t.branch === branch.name);
     const items: GitMenuItem[] = branch.remote
-      ? [{ label: 'Fetch remote', icon: 'refresh-cw', disabled: this.context().git.fetching || !remote, run: () => { if (remote) this.fetch(remote.name); } }]
+      ? [{ label: 'Fetch remote', icon: 'refresh-cw', disabled: this.context().git.fetching || !remote, run: () => { if (remote) this.fetch(remote.name, branch.fullName); } }]
       : [
         { label: 'Pull changes', icon: 'arrow-down', disabled: this.mutationBlocked(branch) || !this.upstream(branch), run: () => this.action('pull', branch) },
         { label: this.upstream(branch) ? 'Push branch' : 'Publish branch…', icon: 'arrow-up', disabled: this.mutationBlocked(branch), run: () => this.push(branch) },
@@ -362,7 +361,7 @@ export class GitActions {
     );
     const create: GitMenuItem[] = [];
     if (this.callbacks.createPullRequest) create.push({label:'Create PR…',icon:'git-pull-request',disabled:!this.canCreatePR(branch),run:()=>this.callbacks.createPullRequest?.(branch)});
-    if (this.callbacks.createBranch) create.push({label:'Create branch here…',icon:'git-branch',disabled:busy,run:()=>this.callbacks.createBranch?.(branch.sha,branch.name)});
+    if (this.callbacks.createBranch) create.push({label:'Create branch here…',icon:'git-branch',disabled:busy,run:()=>this.callbacks.createBranch?.(branch.sha,branch.name,branch.fullName)});
     if (this.callbacks.createWorktree) create.push({label:'Create worktree…',icon:'folder',disabled:busy,run:()=>this.callbacks.createWorktree?.(branch)});
     if (create.length) { create[0].separator = true; items.push(...create); }
     if (current && current.fullName !== branch.fullName) items.push(
@@ -377,7 +376,9 @@ export class GitActions {
     this.menu(branch.name, items, event);
   }
 
-  fetch(remote: string) { const context = this.context(); void this.execute(context, { action: 'fetch', source: remote, target: '', sourceSHA: '', targetSHA: '' }); }
+  fetch(remote: string, branchRef = '') {
+    if (!this.disposed) void this.context().git.fetch(remote, false, branchRef);
+  }
   openRemote(remote: GitRemote, event: MouseEvent) {
     this.menu(remote.name, [
       { label: 'Fetch remote', icon: 'refresh-cw', disabled: this.context().git.fetching, run: () => this.fetch(remote.name) },

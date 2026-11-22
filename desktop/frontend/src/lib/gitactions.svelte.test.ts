@@ -381,7 +381,7 @@ describe('Git action menus', () => {
     render(ProjectGitActionMenu, {actions});
     actions.openBranch(feature, event());
     await fireEvent.click(await screen.findByRole('menuitem', {name:'Create branch here…'}));
-    expect(createBranch).toHaveBeenLastCalledWith(feature.sha, feature.name);
+    expect(createBranch).toHaveBeenLastCalledWith(feature.sha, feature.name, feature.fullName);
     actions.openCommit({sha:main.sha,subject:'A specific commit',author:'A',email:'',date:'',parents:[],refs:[]},event());
     await fireEvent.click(await screen.findByRole('menuitem', {name:'Create branch here…'}));
     expect(createBranch).toHaveBeenLastCalledWith(main.sha,'A specific commit');

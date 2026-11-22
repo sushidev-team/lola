@@ -20,7 +20,7 @@ it('focuses the name and creates only on submission at the displayed pinned comm
   expect(create).not.toHaveBeenCalled();
   await fireEvent.input(name, {target:{value:'feature/new'}});
   await fireEvent.submit(name.closest('form')!);
-  expect(create).toHaveBeenCalledWith('feature/new', head, true, 'refs/heads/main', 400);
+  expect(create).toHaveBeenCalledWith('feature/new', head, true, 'refs/heads/main', 400, undefined);
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith('/tree', true));
 });
 it('chooses a remote starting point and can create without switching', async () => {
@@ -29,7 +29,7 @@ it('chooses a remote starting point and can create without switching', async () 
   await fireEvent.change(screen.getByLabelText('Starting point'), {target:{value:'refs/remotes/origin/feature'}});
   await fireEvent.click(screen.getByRole('checkbox', {name:'Switch to new branch'}));
   await fireEvent.submit(screen.getByRole('textbox', {name:'Branch name'}).closest('form')!);
-  expect(create).toHaveBeenCalledWith('feature/from-remote', remote, false, 'refs/heads/main', 400);
+  expect(create).toHaveBeenCalledWith('feature/from-remote', remote, false, 'refs/heads/main', 400, 'refs/remotes/origin/feature');
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith('/tree', false));
 });
 it('keeps the draft after a Git error and allows correction and retry', async () => {

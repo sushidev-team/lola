@@ -42,6 +42,7 @@ export class ProjectGitState {
   prDrafting = $state(false);
   async createPullRequest(request: PRCreateRequest, ref = '', limit = 200): Promise<PRResult | null> {
     if (this.busy) return null;
+    this.busyBranchRefs = [request.selection.sourceRef];
     this.busy = 'create-pr'; this.error = '';
     try {
       const result = await ProjectGitService.CreatePullRequest(this.project, this.worktree, request);
@@ -51,7 +52,7 @@ export class ProjectGitState {
       this.pullRequestDraft = null;
       return {...result, warnings: result.warnings ?? []};
     } catch(error) { this.error = String(error); return null; }
-    finally { this.busy = ''; }
+    finally { this.busy = ''; this.busyBranchRefs = []; }
   }
   stashes = $state<GitStash[]>([]);
   stashesState = $state<'loading' | 'ready' | 'unavailable'>('loading');
@@ -67,7 +68,8 @@ export class ProjectGitState {
   diffLoading = $state(false);
   busy = $state('');
   queued = $state(false);
-  deletingBranch = $state('');
+  busyBranchRefs = $state<string[]>([]);
+  fetchingBranchRef = $state('');
   private historyRef = '';
   private historyLimit = 200;
   fetchingRemote = $state('');
@@ -253,7 +255,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     await this.fetch('', true);
   }
 
-  async fetch(remote = '', automatic = false): Promise<boolean> {
+  async fetch(remote = '', automatic = false, branchRef = ''): Promise<boolean> {
     const schedule = autoFetchSchedule.get(this.project) ?? {running:false,next:0,delay:AUTO_FETCH_INTERVAL};
     if (schedule.running || (automatic && Date.now() < schedule.next)) return false;
     autoFetchSchedule.set(this.project, schedule);
@@ -261,6 +263,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     const previousError = this.error, previousFailure = this.failedAction;
     this.fetching = true;
     this.fetchingRemote = remote;
+    this.fetchingBranchRef = branchRef;
     try {
       if (remote) await ProjectGitService.BranchAction(this.project, this.worktree, {action:'fetch',source:remote,sourceSHA:'',target:'',targetSHA:''});
       else await ProjectGitService.Fetch(this.project, this.worktree);
@@ -284,6 +287,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       schedule.running = false;
       this.fetching = false;
       this.fetchingRemote = '';
+      this.fetchingBranchRef = '';
     }
   }
 
@@ -350,7 +354,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
     if (this.busy) return null;
     const sequence = this.loadSequence;
     const refresh = () => this.load(this.loadSequence === sequence ? ref : this.historyRef, this.loadSequence === sequence ? limit : this.historyLimit);
-    this.deletingBranch = ['delete-branch','remove-worktree-branch'].includes(request.action) ? request.source : '';
+    this.busyBranchRefs = [request.source, request.target].filter(ref => ref.startsWith('refs/'));
     this.busy = request.action; this.error = ''; this.notice = '';
     // Shared per-checkout state allows only one branch action at a time.
     // Listen before submitting, so even an immediate queue event is observed.
@@ -377,11 +381,12 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
         this.reportError(error, request.action);
       }
       return null;
-    } finally { unsubscribe(); this.queued = false; this.busy = ''; this.deletingBranch = ''; }
+    } finally { unsubscribe(); this.queued = false; this.busy = ''; this.busyBranchRefs = []; }
   }
 
-  async createBranch(name: string, startSHA: string, checkout: boolean, ref = '', limit = 200): Promise<string | null> {
+  async createBranch(name: string, startSHA: string, checkout: boolean, ref = '', limit = 200, baseRef = ''): Promise<string | null> {
     if (this.busy) return null;
+    this.busyBranchRefs = [baseRef, `refs/heads/${name}`];
     this.busy = 'create-branch'; this.error = ''; this.notice = '';
     try {
       const result = await ProjectGitService.CreateBranch(this.project, this.worktree, name, startSHA, checkout);
@@ -393,11 +398,12 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       await this.load(ref, limit);
       this.error = String(error);
       return null;
-    } finally { this.busy = ''; }
+    } finally { this.busy = ''; this.busyBranchRefs = []; }
   }
 
   async createWorktree(source: string, sha: string, path: string, newBranch: string, ref = '', limit = 200): Promise<string | null> {
     if (this.busy) return null;
+    this.busyBranchRefs = [source];
     this.busy = 'create-worktree'; this.error = ''; this.notice = '';
     try {
       const result = await ProjectGitService.CreateWorktree(this.project, this.worktree, source, sha, path, newBranch);
@@ -408,7 +414,7 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       await this.load(ref, limit);
       this.error = String(error);
       return null;
-    } finally { this.busy = ''; }
+    } finally { this.busy = ''; this.busyBranchRefs = []; }
   }
 
   /** Removes the newest commit, keeps its changes staged and hands its message back to an empty commit box. */

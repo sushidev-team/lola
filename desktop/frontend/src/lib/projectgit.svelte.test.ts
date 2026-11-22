@@ -118,16 +118,35 @@ describe('Automatic remote fetching', () => {
 });
 
 describe('Project Git request and operation ownership', () => {
+  it('keeps both merge branches busy when an overlapping branch fetch finishes, then clears them on failure', async () => {
+    const state = new ProjectGitState('merge-and-fetch', '');
+    const source = 'refs/remotes/origin/main', target = 'refs/heads/main';
+    const fetch = deferred<{path: string}>();
+    let rejectMerge!: (error: Error) => void;
+    api.BranchAction.mockReturnValueOnce(fetch.promise)
+      .mockReturnValueOnce(new Promise((_, reject) => { rejectMerge = reject; }));
+    const fetching = state.fetch('origin', false, source);
+    const merging = state.branchAction({action:'merge', source, target, sourceSHA:'a', targetSHA:'b'});
+    expect(state.fetchingBranchRef).toBe(source);
+    expect(state.busyBranchRefs).toEqual([source, target]);
+    fetch.resolve({path:'/repo'});
+    await fetching;
+    expect(state.fetchingBranchRef).toBe('');
+    expect(state.busyBranchRefs).toEqual([source, target]);
+    rejectMerge(new Error('merge conflict'));
+    expect(await merging).toBeNull();
+    expect(state.busyBranchRefs).toEqual([]);
+  });
   it('tracks the deleting branch and preserves a newer history selection during deletion', async () => {
     const state = new ProjectGitState('lola','');
     await state.load('refs/heads/old',200);
     const pending=deferred<{path:string}>();api.BranchAction.mockReturnValueOnce(pending.promise);
     const removing=state.branchAction({action:'delete-branch',source:'refs/heads/old',sourceSHA:'a',target:'',targetSHA:''},'',200);
-    expect(state.deletingBranch).toBe('refs/heads/old');
+    expect(state.busyBranchRefs).toEqual(['refs/heads/old']);
     await state.load('refs/heads/other',400);
     pending.resolve({path:'/repo'});await removing;
     expect(api.Snapshot).toHaveBeenLastCalledWith('lola','','refs/heads/other',400);
-    expect(state.deletingBranch).toBe('');
+    expect(state.busyBranchRefs).toEqual([]);
   });
   it('adds an unloaded branch tip while retaining the full graph', async () => {
     const state = new ProjectGitState('lola','');

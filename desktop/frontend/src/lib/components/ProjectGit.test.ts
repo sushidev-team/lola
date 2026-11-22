@@ -850,7 +850,9 @@ describe('Project Git workspace', () => {
     await waitFor(() => expect(api.CreateBranch).toHaveBeenCalledWith(project,'','feature/from-commit',oldSHA,true));
     await waitFor(() => expect(screen.queryByRole('dialog', {name:'New branch'})).toBeNull());
   });
-  it('opens branch context actions without changing selection and checks out on double-click', async () => {
+  it('replaces the remote branch icon while double-click checkout is pending', async () => {
+    let finish!: (result: {path: string}) => void;
+    api.BranchAction.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
     await open();
     const branch = screen.getByRole('button', {name:'origin/main'});
     await fireEvent.contextMenu(branch, {clientX:40,clientY:100});
@@ -859,6 +861,12 @@ describe('Project Git workspace', () => {
     await fireEvent.keyDown(screen.getByRole('menu', {name:'Git actions'}), {key:'Escape'});
     await fireEvent.doubleClick(branch);
     await waitFor(() => expect(api.BranchAction).toHaveBeenCalledWith(project, '', {action:'checkout',source:'refs/remotes/origin/main',sourceSHA:oldSHA,target:'',targetSHA:''}));
+    expect(branch.querySelector('.button-spinner')).toBeInTheDocument();
+    expect(branch.querySelector('.branch-glyph')).toBeNull();
+    expect(screen.getByRole('button', {name:'main'})).toBeEnabled();
+    finish({path:'/repo'});
+    await waitFor(() => expect(branch.querySelector('.branch-glyph')).toBeInTheDocument());
+    expect(branch.querySelector('.button-spinner')).toBeNull();
   });
   it('opens a branch drop chooser without mutating Git', async () => {
     await open();

@@ -146,12 +146,12 @@
     git.error = ''; newWorktree = null; newBranch = null; gitActions.close();
     publishBranch = {git, branch: {...branch}, destination, historyRef: ref, limit};
   }
-  let newBranch = $state<{ git: ProjectGitState; start: { sha: string; label: string }; refs: GitRef[]; historyRef: string; limit: number } | null>(null);
-  function openNewBranch(sha = data?.head ?? '', label = data?.branch || 'Detached HEAD') {
+  let newBranch = $state<{ git: ProjectGitState; start: { sha: string; label: string; ref?: string }; refs: GitRef[]; historyRef: string; limit: number } | null>(null);
+  function openNewBranch(sha: string, label: string, baseRef?: string) {
     if (!sha || git.busy || data?.operation) return;
     gitActions.close(); cancelBranchDrag();
     publishBranch = null; newWorktree = null;
-    newBranch = { git, start: { sha, label }, refs: (data?.refs ?? []).map(branch => ({ ...branch })), historyRef: ref, limit };
+    newBranch = { git, start: { sha, label, ref: baseRef }, refs: (data?.refs ?? []).map(branch => ({ ...branch })), historyRef: ref, limit };
   }
   let newPR = $state<{git:ProjectGitState;branch:GitRef;target?:GitRef;historyRef:string;limit:number}|null>(null);
   function openPullRequest(branch = data?.refs.find(r=>r.current&&!r.remote), target?:GitRef) {
@@ -637,8 +637,9 @@
       {#if expanded}<div transition:folderSlide={key}>{@render branchNodes(node.children, scope, depth + 1)}</div>{/if}
     {:else}
       {@const branch = node.branch}
+      {@const pending = git.busyBranchRefs.includes(branch.fullName) || git.fetchingBranchRef === branch.fullName}
       <div class="rail-entry" class:has-pr={prsFor(branch).length > 0}>
-      <Button block selected={focusedBranch === branch.fullName || ref === branch.fullName} loading={git.deletingBranch === branch.fullName} class={`rail-row branch-leaf ${branch.current ? "current-branch" : ""} ${dropTarget === branch.fullName ? "branch-drop-target" : ""}`} style={`--branch-color:${refColor(branch)};padding-left:${19 + Math.min(depth, 8) * 13}px`} aria-current={branch.current ? "true" : undefined} aria-label={branch.name} title={`Go to latest commit of ${branch.name}`} onclick={(event) => { if (!clickAfterDrag(event)) void goToBranch(branch); }} ondblclick={(event) => { if (!clickAfterDrag(event)) gitActions.checkout(branch); }} oncontextmenu={(event) => gitActions.openBranch(branch, event)} data-branch-ref={branch.fullName} draggable={false} onpointerdown={(event) => startBranchDrag(event, branch)} ondragstart={(event) => event.preventDefault()}>{#if git.deletingBranch !== branch.fullName}<span class="branch-glyph" style:color={refColor(branch)}><Icon name="git-branch" size={14} /></span>{/if}<span class="truncate">{node.name}</span>{#if branch.current}<span title="Active checkout"><Icon name="monitor" size={13} /></span>{/if}
+      <Button block selected={focusedBranch === branch.fullName || ref === branch.fullName} loading={pending} class={`rail-row branch-leaf ${branch.current ? "current-branch" : ""} ${dropTarget === branch.fullName ? "branch-drop-target" : ""}`} style={`--branch-color:${refColor(branch)};padding-left:${19 + Math.min(depth, 8) * 13}px`} aria-current={branch.current ? "true" : undefined} aria-label={branch.name} title={`Go to latest commit of ${branch.name}`} onclick={(event) => { if (!clickAfterDrag(event)) void goToBranch(branch); }} ondblclick={(event) => { if (!clickAfterDrag(event)) gitActions.checkout(branch); }} oncontextmenu={(event) => gitActions.openBranch(branch, event)} data-branch-ref={branch.fullName} draggable={false} onpointerdown={(event) => startBranchDrag(event, branch)} ondragstart={(event) => event.preventDefault()}>{#if !pending}<span class="branch-glyph" style:color={refColor(branch)}><Icon name="git-branch" size={14} /></span>{/if}<span class="truncate">{node.name}</span>{#if branch.current}<span title="Active checkout"><Icon name="monitor" size={13} /></span>{/if}
         {#if !branch.remote && branch.upstream && (branch.ahead || branch.behind)}<span class="branch-divergence" title={`${branch.ahead ?? 0} ahead, ${branch.behind ?? 0} behind ${branch.upstream}`} aria-label={`${branch.ahead ?? 0} commits ahead, ${branch.behind ?? 0} commits behind upstream`}>{#if branch.ahead}<span>↑{branch.ahead}</span>{/if}{#if branch.behind}<span>↓{branch.behind}</span>{/if}</span>{/if}
       </Button>
       {#if prsFor(branch).length}<span class="rail-prs">{#each prsFor(branch) as pr (pr.url)}<Button size="xs" class={`rail-pr ${pr.draft ? 'draft' : ''}`} aria-label={`Open PR #${pr.number} for ${branch.name}`} title={prTitle(pr)} onclick={() => void store.openURL(pr.url)}><Icon name="git-pull-request" size={12}/><span>#{pr.number}</span></Button>{/each}</span>{/if}
@@ -665,7 +666,7 @@
       </div>
       <span class="toolbar-divider"></span>
       <div class="toolbar-group">
-        <Button size="sm" aria-label="Branch" disabled={!data?.head || !!git.busy || !!data?.operation} loading={git.busy === 'create-branch'} onclick={() => openNewBranch()} title="Create a branch from the current checkout"><Icon name="git-branch" size={16} /><span class="git-action-label">Branch</span></Button>
+        <Button size="sm" aria-label="Branch" disabled={!data?.head || !!git.busy || !!data?.operation} loading={git.busy === 'create-branch'} onclick={() => openNewBranch(data?.head ?? '', data?.branch || 'Detached HEAD', data?.refs.find(branch => branch.current)?.fullName)} title="Create a branch from the current checkout"><Icon name="git-branch" size={16} /><span class="git-action-label">Branch</span></Button>
         <Button size="sm" aria-label="Create PR" disabled={!data?.branch || !!git.busy || !!data?.operation || !data?.remotes?.some(r=>r.host==='github.com'&&r.repo)} onclick={()=>openPullRequest()} title="Create a GitHub pull request"><Icon name="git-pull-request" size={16}/><span class="git-action-label">Create PR</span></Button>
         <Button size="sm" aria-label="Stash changes" disabled={!data?.head || !data?.files.length || !!git.busy || !!data?.operation} loading={git.busy === 'stash'} onclick={() => gitActions.stash()} title="Stash staged, unstaged and untracked changes"><Icon name="archive" size={16} /><span class="git-action-label">Stash</span></Button>
         <Button size="sm" aria-label="Pop latest stash" disabled={!git.stashes.length || !!data?.files.length || !!git.busy || !!data?.operation} loading={git.busy === 'pop'} onclick={() => gitActions.pop()} title={data?.files.length ? 'Commit or stash current changes before popping a stash' : 'Pop latest stash'}><Icon name="archive-restore" size={16} /><span class="git-action-label">Pop</span></Button>
