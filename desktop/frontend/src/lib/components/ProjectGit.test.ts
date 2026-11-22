@@ -6,7 +6,7 @@ import { confirm } from '$lib/confirm.svelte';
 import { store } from '$lib/store.svelte';
 import type { GitSnapshot } from '$lib/projectgit';
 
-const api = vi.hoisted(() => ({ SuggestConflictChoices:vi.fn(), ConflictDocument:vi.fn(), SaveConflict:vi.fn(), BranchPullRequests: vi.fn(), Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
+const api = vi.hoisted(() => ({ SuggestConflictChoices:vi.fn(), ConflictDocument:vi.fn(), SaveConflict:vi.fn(), BranchPullRequests: vi.fn(), Snapshot: vi.fn(), CreateBranch: vi.fn(), CreateWorktree: vi.fn(), Identities: vi.fn(), Diff: vi.fn(), PrepareDiscard: vi.fn(), DiscardUnstaged: vi.fn(), Stage: vi.fn(), Unstage: vi.fn(), Commit: vi.fn(), BranchAction: vi.fn(), Stashes: vi.fn(), StashPush: vi.fn(), StashApply: vi.fn(), StashDrop: vi.fn(), Fetch: vi.fn(), Pull: vi.fn(), Push: vi.fn() }));
 vi.mock('@bindings/desktop', () => ({ ProjectGitService: api, ConfigService:{GetProject:vi.fn().mockResolvedValue({execution:{sandbox:"docker"}})} }));
 let serial = 0;
 let project: string;
@@ -851,6 +851,23 @@ describe('Project Git workspace', () => {
     await refreshRepository();
     await waitFor(() => expect(screen.queryByRole('button', {name: /Working changes,/})).toBeNull());
     expect(screen.getByRole('button', {name: /Add project workspace,/})).toBeInTheDocument();
+  });
+  it.each(['src/app.ts', 'new.ts'])('closes the unstaged diff for %s after discarding all unstaged changes', async path => {
+    const before = snapshot();
+    before.files[0].worktree = 'M';
+    api.Snapshot.mockResolvedValue(before);
+    api.PrepareDiscard.mockResolvedValue({ token: 'reviewed', tracked: ['src/app.ts'], untracked: ['new.ts'] });
+    api.DiscardUnstaged.mockImplementation(async () => {
+      api.Snapshot.mockResolvedValue({ ...before, files: [{ ...before.files[0], worktree: ' ' }] });
+    });
+    await open();
+    await fireEvent.click(screen.getByRole('button', { name: `Inspect unstaged ${path}` }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Discard all unstaged changes' }));
+    await waitFor(() => expect(confirm.request?.title).toBe('Discard unstaged changes?'));
+    expect(screen.getByRole('region', { name: 'Selected changes' })).toBeVisible();
+    confirm.accept();
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Selected changes' })).toBeNull());
+    expect(screen.getByRole('button', { name: 'Inspect staged src/app.ts' })).toBeVisible();
   });
   it('persists column visibility and supports keyboard resizing without selecting a commit', async () => {
     await open();

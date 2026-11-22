@@ -29,7 +29,7 @@
   import ProjectGitDiff from './ProjectGitDiff.svelte';
   import GitAvatar from './GitAvatar.svelte';
   import { projectGitState, type ProjectGitState } from '$lib/projectgit.svelte';
-  import { folderFirstFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, defaultBranchTip, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitDiffFile, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
+  import { folderFirstFiles, unstagedFiles, workingGraphConnection, worktreeChanges, type GitWorktree, commitGraph, defaultBranchTip, graphColor, graphPath, branchesByCommit, branchTree, type BranchNode, GRAPH_LANE_WIDTH, GRAPH_NODE_X, selectCommits, type GitArea, type GitDiffFile, type GitFile, type GitRef, type GitRemote } from '$lib/projectgit';
   import { agoPhrase, exactTime } from '$lib/time';
 
   let { project, heading, actions, windowInset = false, active = true }: { project: string; heading?: Snippet; actions?: Snippet; windowInset?: boolean; active?: boolean } = $props();
@@ -408,6 +408,10 @@
     const state = view, snapshot = view.snapshot, selection = selected, chosenArea = area, chosenPath = path;
     untrack(() => {
       if (!snapshot || !chosenArea || chosenArea === 'conflict') { state.clearDiff(); return; }
+      if ((chosenArea === 'unstaged' || chosenArea === 'untracked') && !unstagedFiles(snapshot.files).some(file => file.path === chosenPath)) {
+        working();
+        return;
+      }
       void state.loadDiff(chosenArea, chosenArea === 'working' || selection.length === 2 ? selection[0] : '', chosenArea === 'working' ? '' : selection.at(-1) ?? '', chosenPath);
     });
   });
