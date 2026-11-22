@@ -99,10 +99,16 @@ export type GraphRow = { sha: string; lane: number; color: number; width: number
 export function workingGraphConnection(rows: GraphRow[], head: string) {
   const index = rows.findIndex(row => row.sha === head);
   if (index < 0) return null;
-  // Reserve a separate lane when newer commits precede HEAD, so the edge
-  // cannot run through their nodes and imply that they own the working copy.
-  const lane = index === 0 ? rows[0].lane : Math.max(...rows.slice(0, index + 1).map(row => row.width));
-  return { index, lane, target: rows[index].lane };
+  const target = rows[index].lane;
+  const crossesTarget = (edge: GraphEdge) =>
+    Math.min(edge.from, edge.to) <= target && target <= Math.max(edge.from, edge.to);
+  const above = rows.slice(0, index);
+  // The connector stops at HEAD's center. Only passing tracks can obstruct
+  // it on that row; HEAD's own outgoing ancestry starts below it.
+  const blocked = above.some(row => row.lane === target || row.edges.some(crossesTarget))
+    || rows[index].edges.some(edge => edge.start === 'top' && edge.end === 'bottom' && crossesTarget(edge));
+  const lane = blocked ? Math.max(rows[index].width, ...above.map(row => row.width)) : target;
+  return { index, lane, target };
 }
 
 export type WorktreeChange = { tree: GitWorktree; lane: number };
@@ -129,11 +135,18 @@ export function worktreeChanges(rows: GraphRow[], worktrees: GitWorktree[], acti
   return out;
 }
 
-export function defaultBranchTip(refs: GitRef[], branch: string): string | undefined {
+export function defaultBranchTip(refs: GitRef[], branch: string, commits: Pick<GitCommit, 'sha'>[]): string | undefined {
   const names = branch ? [branch] : ['main', 'master'];
   for (const name of names) {
-    const tip = refs.find(ref => ref.fullName === 'refs/heads/' + name)
-      ?? refs.find(ref => ref.fullName === 'refs/remotes/origin/' + name)
+    const local = refs.find(ref => ref.fullName === 'refs/heads/' + name);
+    if (local) {
+      if (!local.ahead && (local.behind ?? 0) > 0) {
+        const upstream = refs.find(ref => ref.remote && ref.fullName === local.upstream);
+        if (upstream && commits.some(commit => commit.sha === upstream.sha)) return upstream.sha;
+      }
+      return local.sha;
+    }
+    const tip = refs.find(ref => ref.fullName === 'refs/remotes/origin/' + name)
       ?? refs.find(ref => ref.remote && ref.name.slice(ref.name.indexOf('/') + 1) === name);
     if (tip) return tip.sha;
   }
@@ -143,7 +156,7 @@ export function defaultBranchTip(refs: GitRef[], branch: string): string | undef
  * column empty above the default tip and between unrelated histories. */
 function graphColumns(lanes: Lane[], pinned: boolean, nextMain: string | undefined) {
   let side = pinned ? 1 : 0;
-  return lanes.map(entry => pinned && entry.sha === nextMain ? 0 : side++);
+  return lanes.map(entry => pinned && entry.color === 0 && entry.sha === nextMain ? 0 : side++);
 }
 
 export function commitGraph(commits: Pick<GitCommit, 'sha' | 'parents'>[], defaultTip?: string): GraphRow[] {
@@ -165,34 +178,37 @@ export function commitGraph(commits: Pick<GitCommit, 'sha' | 'parents'>[], defau
   }
   let lanes: Lane[] = [];
   return commits.map(commit => {
-    const existing = lanes.findIndex(l => l.sha === commit.sha);
+    const color = colors.get(commit.sha)!;
+    const existing = lanes.findIndex(l => l.sha === commit.sha && l.color === color);
+    const before = existing < 0 ? [...lanes, { sha: commit.sha, color }] : lanes;
     const lane = existing < 0 ? lanes.length : existing;
-    if (existing < 0) lanes.push({ sha: commit.sha, color: colors.get(commit.sha)! });
-    const before = lanes.map(l => ({ ...l }));
     const columns = graphColumns(before, pinned, nextMain);
     const node = columns[lane];
-    const color = before[lane].color;
-    const after = before.filter((_, i) => i !== lane);
+    const after = before.filter(entry => entry.sha !== commit.sha);
     const parents = [...new Set(commit.parents ?? [])];
-    parents.forEach((sha, i) => {
-      if (after.some(l => l.sha === sha)) return;
-      const entry = { sha, color: colors.get(sha)! };
-      if (i === 0) after.splice(Math.min(lane, after.length), 0, entry);
+    // Carry a branch's own track down to its first parent. Several tracks
+    // may end at the same SHA and should meet only at that commit's node.
+    const targets = parents.map((sha, i) => {
+      const trackColor = i === 0 ? color : colors.get(sha)!;
+      const pending = after.find(entry => entry.sha === sha && entry.color === trackColor);
+      if (pending) return pending;
+      const entry = { sha, color: trackColor };
+      if (i === 0) after.splice(before.slice(0, lane).filter(l => l.sha !== commit.sha).length, 0, entry);
       else after.push(entry);
+      return entry;
     });
     if (commit.sha === nextMain) nextMain = parents[0];
     const nextColumns = graphColumns(after, pinned, nextMain);
     const edges: GraphEdge[] = [];
-    before.forEach((entry, i) => {
-      if (i === lane) {
-        if (existing >= 0) edges.push({ from: node, to: node, color, start: 'top', end: 'node' });
+    lanes.forEach((entry, i) => {
+      if (entry.sha === commit.sha) {
+        edges.push({ from: columns[i], to: node, color: entry.color, start: 'top', end: 'node' });
       } else {
-        edges.push({ from: columns[i], to: nextColumns[after.findIndex(l => l.sha === entry.sha)], color: entry.color, start: 'top', end: 'bottom' });
+        edges.push({ from: columns[i], to: nextColumns[after.indexOf(entry)], color: entry.color, start: 'top', end: 'bottom' });
       }
     });
-    parents.forEach(sha => {
-      const target = after.findIndex(l => l.sha === sha);
-      edges.push({ from: node, to: nextColumns[target], color: after[target].color, start: 'node', end: 'bottom' });
+    targets.forEach(target => {
+      edges.push({ from: node, to: nextColumns[after.indexOf(target)], color: target.color, start: 'node', end: 'bottom' });
     });
     lanes = after;
     return { sha: commit.sha, lane: node, color, width: Math.max(...columns, ...nextColumns) + 1, edges };

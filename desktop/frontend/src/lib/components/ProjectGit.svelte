@@ -340,7 +340,7 @@
   }));
   const localBranches = $derived(branchTree(filteredLocal));
   const commits = $derived(data?.commits ?? []);
-  const graph = $derived(commitGraph(commits, defaultBranchTip(data?.refs ?? [], store.defaultBranchFor(project))));
+  const graph = $derived(commitGraph(commits, defaultBranchTip(data?.refs ?? [], store.defaultBranchFor(project), commits)));
   const graphBySHA = $derived(new Map(graph.map(row => [row.sha, row])));
   const operationLabel = $derived(({ merge:'Merge', rebase:'Rebase', 'cherry-pick':'Cherry-pick', revert:'Revert' } as Record<string,string>)[data?.operation ?? ''] ?? 'Git operation');
   const workingColumns = $derived(data?.operation || workingCounts.conflicts ? shownColumns.filter(column => ['refs','graph','subject'].includes(column.id)) : shownColumns);
@@ -763,7 +763,7 @@
             <Button block variant="bare" selected={!selected.length && !peekPath} class="commit-row working-row" style={`--columns:${workingTemplate}`} title={`Uncommitted changes on ${data.branch || 'detached HEAD'}`} oncontextmenu={(event) => gitActions.openRepository(event)} onkeydown={keyboardContext} data-commit="working" aria-label={`Working changes, ${data.files.length} files`} onclick={ownWorking}>
               {#each workingColumns as column}
                 {#if column.id === 'refs'}<span class="working-state"><span class="wip-label"><Icon name="pencil" size={12} />In progress</span></span>
-                {:else if column.id === 'graph'}<span class="working-graph"><svg width={graphWidth} height="34" aria-hidden="true">{#if workingConnection}<path class="working-edge" d={`M${workingX} 26V34`} stroke="currentColor" stroke-width="1.7" fill="none" />{/if}<circle cx={workingX} cy="17" r="9" fill="var(--color-canvas)" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.5" /><circle cx={workingX} cy="17" r="2.5" fill="currentColor" /></svg></span>
+                {:else if column.id === 'graph'}<span class="working-graph"><svg width={graphWidth} height="34" aria-hidden="true">{#if workingConnection}<path class="working-edge" d={`M${workingX} 17V34`} stroke="currentColor" stroke-width="1.7" fill="none" />{/if}<circle cx={workingX} cy="17" r="9" fill="var(--color-canvas)" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.5" /><circle cx={workingX} cy="17" r="2.5" fill="currentColor" /></svg></span>
                 {:else if column.id === 'subject'}<span class="working-copy"><strong>{workingSummary}</strong><span class="working-count">{data.files.length}</span><span class="working-stats">{#if workingCounts.modified}<span class="working-stat modified" title={`${workingCounts.modified} modified files`}><Icon name="pencil" size={12} />{workingCounts.modified}</span>{/if}{#if workingCounts.added}<span class="working-stat added" title={`${workingCounts.added} added files`}><Icon name="plus" size={12} />{workingCounts.added}</span>{/if}{#if workingCounts.deleted}<span class="working-stat deleted" title={`${workingCounts.deleted} deleted files`}><Icon name="minus" size={12} />{workingCounts.deleted}</span>{/if}{#if workingCounts.conflicts}<span class="working-stat deleted" title={`${workingCounts.conflicts} conflicted files`}><Icon name="circle-alert" size={12} />{workingCounts.conflicts}</span>{/if}</span><span class="working-open">Review changes<Icon name="chevron-right" size={13} /></span></span>
                 {:else if column.id === 'author'}<span class="commit-author">You</span>{:else}<span></span>{/if}
               {/each}
@@ -1184,6 +1184,9 @@
   .working-copy { display:flex; align-items:center; gap:9px; min-width:0; }
   .working-copy strong { font-weight:500; }
   .working-graph { display:flex; align-items:center; height:34px; color:var(--color-accent-ink); }
+  /* Four repeats fit a 34px graph row. The working node starts its path at
+     the half-row (two repeats), and each SVG boundary falls inside a gap. */
+  .working-edge { stroke-dasharray:3.5 5; stroke-dashoffset:6; stroke-linecap:round; }
   .history-hint > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .history-hint { display:flex; align-items:center; justify-content:space-between; min-height:28px; padding:4px 12px; border-top:1px solid var(--color-edge); font-size:12px; color:var(--color-faint); }
   .diff-stage { position:absolute; top:0; bottom:0; left:0; right:var(--inspector-width); z-index:5; display:grid; grid-template-rows:auto minmax(0,1fr); min-width:0; min-height:0; background:var(--color-panel); border-right:1px solid var(--color-edge); }

@@ -2,13 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { workingGraphConnection, worktreeChanges, branchTree, branchesByCommit, commitGraph, defaultBranchTip, graphPath, selectCommits, stagedFiles, unstagedFiles, type GitFile, type GitRef } from './projectgit';
 
 describe('Git history selection and topology', () => {
-  it('connects working changes only to HEAD and reserves a lane past unrelated newer commits', () => {
-    const rows=commitGraph([{sha:'newer',parents:['base']},{sha:'head',parents:['base']},{sha:'base',parents:[]}]);
-    expect(workingGraphConnection(rows,'newer')).toEqual({index:0,lane:rows[0].lane,target:rows[0].lane});
-    const link=workingGraphConnection(rows,'head')!;
-    expect(link.index).toBe(1);expect(link.target).toBe(rows[1].lane);
-    expect(link.lane).toBeGreaterThanOrEqual(Math.max(rows[0].width,rows[1].width));
-    expect(workingGraphConnection(rows,'hidden')).toBeNull();
+  it('draws working changes directly above HEAD past a release branch in another lane', () => {
+    const rows = commitGraph([
+      { sha: 'release', parents: ['base'] },
+      { sha: 'head', parents: ['base', 'topic'] },
+      { sha: 'topic', parents: ['base'] },
+      { sha: 'base', parents: [] },
+    ], 'head');
+    expect(workingGraphConnection(rows, 'head')).toEqual({ index: 1, lane: 0, target: 0 });
+    expect(workingGraphConnection(rows, 'release')).toEqual({ index: 0, lane: 1, target: 1 });
+    expect(workingGraphConnection(rows, 'hidden')).toBeNull();
+  });
+  it('detours around a newer commit occupying the HEAD lane', () => {
+    const rows = commitGraph([{ sha: 'newer', parents: ['head'] }, { sha: 'head', parents: [] }]);
+    expect(workingGraphConnection(rows, 'head')).toEqual({ index: 1, lane: 1, target: 0 });
   });
   it('limits modifier selection to two commits and toggles existing selection', () => {
     expect(selectCommits(['a'], 'b', true)).toEqual(['a', 'b']);
@@ -27,7 +34,8 @@ describe('Git history selection and topology', () => {
     expect(graph.map(row => row.lane)).toEqual([1, 1, 0, 1, 0]);
     expect(graph[0].edges).toEqual([{ from: 1, to: 1, color: graph[0].color, start: 'node', end: 'bottom' }]);
     expect(graph[1].edges.filter(edge => edge.start === 'node').map(edge => edge.to)).toEqual([1, 0]);
-    expect(graph[3].edges).toContainEqual({ from: 1, to: 0, color: graph[2].color, start: 'node', end: 'bottom' });
+    expect(graph[3].edges).toContainEqual({ from: 1, to: 1, color: graph[3].color, start: 'node', end: 'bottom' });
+    expect(graph[4].edges).toContainEqual({ from: 1, to: 0, color: graph[3].color, start: 'top', end: 'node' });
     expect(graph[4].color).toBe(graph[2].color);
     expect(graph[0].color).not.toBe(graph[2].color);
   });
@@ -35,9 +43,37 @@ describe('Git history selection and topology', () => {
     const refs = ['refs/remotes/origin/release', 'refs/heads/release', 'refs/heads/main'].map(fullName => ({
       name: fullName.split('/').slice(2).join('/'), fullName, sha: fullName, remote: fullName.startsWith('refs/remotes/'), current: false,
     }));
-    expect(defaultBranchTip(refs, 'release')).toBe('refs/heads/release');
-    expect(defaultBranchTip(refs.slice(0, 1), 'release')).toBe('refs/remotes/origin/release');
-    expect(defaultBranchTip(refs, '')).toBe('refs/heads/main');
+    expect(defaultBranchTip(refs, 'release', [])).toBe('refs/heads/release');
+    expect(defaultBranchTip(refs.slice(0, 1), 'release', [])).toBe('refs/remotes/origin/release');
+    expect(defaultBranchTip(refs, '', [])).toBe('refs/heads/main');
+  });
+  it('draws a published merge on the left while local main is behind', () => {
+    const remote = { name: 'origin/main', fullName: 'refs/remotes/origin/main', sha: 'merge', remote: true, current: false };
+    const local = { name: 'main', fullName: 'refs/heads/main', sha: 'base', remote: false, current: true, upstream: remote.fullName, behind: 2 };
+    const commits = [
+      { sha: 'release', parents: ['base'] },
+      { sha: 'merge', parents: ['base', 'topic'] },
+      { sha: 'topic', parents: ['base'] },
+      { sha: 'base', parents: [] },
+    ];
+    const graph = commitGraph(commits, defaultBranchTip([local, remote], 'main', commits));
+    expect(graph.map(row => row.lane)).toEqual([1, 0, 2, 0]);
+    expect(graph[1].edges.filter(edge => edge.start === 'node').map(edge => edge.to)).toEqual([0, 2]);
+    expect(graph[3].edges.filter(edge => edge.end === 'node').map(edge => edge.from).sort()).toEqual([0, 1, 2]);
+    // A local-only history or a diverged checkout still has its own main tip.
+    expect(defaultBranchTip([local, remote], 'main', commits.slice(-1))).toBe('base');
+    expect(defaultBranchTip([{ ...local, ahead: 1 }, remote], 'main', commits)).toBe('base');
+  });
+  it('rounds the fork at the older commit and runs vertically into the topic commit', () => {
+    const [, topic, base] = commitGraph([
+      { sha: 'merge', parents: ['base', 'release'] },
+      { sha: 'release', parents: ['base'] },
+      { sha: 'base', parents: [] },
+    ], 'merge');
+    expect(topic.edges).toContainEqual({ from: 1, to: 1, color: topic.color, start: 'node', end: 'bottom' });
+    const fork = base.edges.find(edge => edge.from === 1)!;
+    expect(fork).toEqual({ from: 1, to: 0, color: topic.color, start: 'top', end: 'node' });
+    expect(graphPath(fork)).toBe('M40 0V7Q40 19 28 19H16');
   });
   it('joins both parents of a merge and keeps independent lanes continuous', () => {
     const graph = commitGraph([{ sha: 'merge', parents: ['main', 'topic'] }, { sha: 'topic', parents: ['base'] }, { sha: 'main', parents: ['base'] }, { sha: 'base', parents: [] }]);

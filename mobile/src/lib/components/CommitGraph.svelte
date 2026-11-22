@@ -17,7 +17,7 @@
     onopen: (commit: GitCommit) => void; more: boolean; onmore: () => void; loading: boolean; switchingFilter: boolean;
   } = $props();
 
-  const rows = $derived(commitGraph(snapshot.commits, defaultBranchTip(snapshot.refs, store.defaultBranchFor(project))));
+  const rows = $derived(commitGraph(snapshot.commits, defaultBranchTip(snapshot.refs, store.defaultBranchFor(project), snapshot.commits)));
   const laneCount = $derived(Math.max(1, ...rows.map(row => row.width)));
   const compactLanes = 4;
   let expanded = $state(false);
