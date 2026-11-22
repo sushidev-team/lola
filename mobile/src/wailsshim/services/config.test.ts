@@ -14,8 +14,9 @@ describe("ConfigService locals", () => {
     await expect(Service.ConfigExists()).resolves.toBe(true);
   });
 
-  it("resolves SandboxLoginNeeded with no login needed", async () => {
+  it("skips the mobile login prompt for sandbox sessions and tabs", async () => {
     await expect(Service.SandboxLoginNeeded("p", "claude")).resolves.toBe("");
+    await expect(Service.SandboxTabLoginNeeded("p", "claude")).resolves.toBe("");
   });
 
   it("leaves the appearance methods unexported, because shared code probes them", () => {

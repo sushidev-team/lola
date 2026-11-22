@@ -779,9 +779,9 @@ LOCAL no-op. `Shells`, `Shell`, `CloseShell`, `CloseSessionShells` PLATFORM.
 **HubService**: `Status` → FWD `hubStatus` (read). All others PLATFORM
 (`protocol.HubHumanCommands` are never a phone's).
 
-**ConfigService**: `ConfigExists` LOCAL `true`. `SandboxLoginNeeded` LOCAL
-resolves `""` (its type is `Promise<string>`: "" = no login needed; the daemon
-refuses the open with its own sentence if one is). `GetAppearance`,
+**ConfigService**: `ConfigExists` LOCAL `true`. `SandboxLoginNeeded` and
+`SandboxTabLoginNeeded` are LOCAL and resolve `""`. The phone skips the login
+prompt and the daemon reports any required login when opening a session or tab. `GetAppearance`,
 `SetAppearance`, `GetTheme`, `SetTheme`, `PreviewTheme`, `Themes` are
 **absent** (`theme-runtime.svelte.ts:231-318` feature-probes them). Everything
 else PLATFORM `CONFIG`, including `ConnectCode`/`RegenerateRemoteKey` until 01

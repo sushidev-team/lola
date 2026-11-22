@@ -186,6 +186,8 @@ export function SandboxStatus(): Promise<M.SandboxStatusDTO> {
   return unsupported("ConfigService.SandboxStatus", CONFIG);
 }
 
+export const SandboxTabLoginNeeded = SandboxLoginNeeded;
+
 /** PLATFORM. */
 export function SaveHubProject(_patch: M.HubProjectPatchDTO): Promise<void> {
   return unsupported("ConfigService.SaveHubProject", CONFIG);
@@ -336,6 +338,7 @@ export const ROUTES: Routes<typeof Gen.ConfigService> = {
   SandboxImageDefault: { kind: "platform", reason: CONFIG },
   SandboxLoginNeeded: { kind: "local" },
   SandboxStatus: { kind: "platform", reason: CONFIG },
+  SandboxTabLoginNeeded: { kind: "local" },
   SaveHubProject: { kind: "platform", reason: CONFIG },
   SaveHubRules: { kind: "platform", reason: CONFIG },
   SaveProject: { kind: "platform", reason: CONFIG },
