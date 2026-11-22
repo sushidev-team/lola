@@ -1,0 +1,29 @@
+name: Mobile (Swift)
+
+# The Swift package of the transport plugin, split out of mobile.yml so the
+# macOS runner (ten Linux minutes per minute against the Actions quota) starts
+# only when the plugin itself changes, not on every mobile/ or frontend edit.
+on:
+  push:
+    branches: [main]
+    paths: ['mobile/plugins/lola-transport/**', '.github/workflows/mobile-swift.yml']
+  pull_request:
+    branches: [main]
+    paths: ['mobile/plugins/lola-transport/**', '.github/workflows/mobile-swift.yml']
+permissions:
+  contents: read
+
+# A newer push to the same pull request makes the running check obsolete, so it
+# is cancelled. Runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+        working-directory: mobile/plugins/lola-transport
+        env:
+          LOLA_CORE_ONLY: '1'

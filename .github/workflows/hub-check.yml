@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request makes the running check obsolete, so it
+# is cancelled. Runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest

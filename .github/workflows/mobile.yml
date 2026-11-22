@@ -8,6 +8,12 @@ on:
     paths: ['mobile/**', 'desktop/frontend/**', '.github/workflows/mobile.yml']
 permissions:
   contents: read
+
+# A newer push to the same pull request makes the running check obsolete, so it
+# is cancelled. Runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   web:
     runs-on: ubuntu-latest
@@ -33,11 +39,3 @@ jobs:
         working-directory: mobile
       - run: npm run build && npm run budget
         working-directory: mobile
-  swift:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: swift test
-        working-directory: mobile/plugins/lola-transport
-        env:
-          LOLA_CORE_ONLY: '1'
