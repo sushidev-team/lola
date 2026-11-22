@@ -22,6 +22,7 @@ concurrency:
 jobs:
   build-image:
     name: Build image
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     env:
       REGISTRY: registry.digitalocean.com/sushidev-registry-01

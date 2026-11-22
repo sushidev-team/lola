@@ -34,6 +34,7 @@ jobs:
   # already created the GitHub Release + notes, so goreleaser runs in append
   # mode (changelog disabled) — it only uploads the archives + checksums.
   release:
+    timeout-minutes: 30
     runs-on: macos-latest # native darwin build; also cross-compiles linux
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +63,7 @@ jobs:
   # open the auto-installed update without a warning.
   desktop:
     needs: release
+    timeout-minutes: 30
     runs-on: macos-latest
     env:
       # Must match desktop/Taskfile.yml's APP_NAME — darwin:package:universal

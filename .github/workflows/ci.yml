@@ -26,6 +26,7 @@ jobs:
     # ten Linux minutes against the Actions quota, and this suite is the bulk of
     # the run, so only the packages that need Cocoa/WebKit go to macOS (the
     # darwin job below).
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -102,6 +103,7 @@ jobs:
     # Only the packages Linux cannot cover run here: desktop/... and the two
     # internal packages with darwin-only files (notify, secrets). Everything
     # else runs in build-test on ubuntu.
+    timeout-minutes: 15
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
