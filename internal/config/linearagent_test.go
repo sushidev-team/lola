@@ -124,3 +124,29 @@ func TestLinearAgentNormalized(t *testing.T) {
 		t.Fatalf("normalized = %+v", got)
 	}
 }
+
+// The owner filter and hub claim keys round-trip, default to "ask the hub when
+// there is one", and reject a mode that is not one of the three.
+func TestLinearAgentOwnerAndHubClaimKeys(t *testing.T) {
+	c := loadToml(t, remoteBaseToml+"\n[linear_agent]\nenabled = true\nclient_id = \"c\"\nuser_id = \"u-1\"\nonly_when_assigned_to_me = true\nhub_claim = \"off\"\n")
+	a := c.LinearAgent
+	if a.UserID != "u-1" || !a.OnlyWhenAssignedToMe || a.HubClaim != HubClaimOff {
+		t.Fatalf("loaded %+v", a)
+	}
+	c2, _ := saveReload(t, c)
+	if c2.LinearAgent != a {
+		t.Fatalf("round trip: got %+v want %+v", c2.LinearAgent, a)
+	}
+	if (LinearAgentConfig{}).EffectiveHubClaim() != HubClaimAuto {
+		t.Fatal("the default mode must be auto")
+	}
+	for name, body := range map[string]string{
+		"must be auto":  "hub_claim = \"maybe\"\n",
+		"[hub].enabled": "hub_claim = \"required\"\n",
+	} {
+		c := loadToml(t, remoteBaseToml+"\n[linear_agent]\nenabled = true\nclient_id = \"c\"\n"+body)
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: got %v", name, err)
+		}
+	}
+}

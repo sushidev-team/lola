@@ -436,3 +436,17 @@ Daemons hold a signed long-poll on `GET /v1/doorbell?since=N` and poll Linear at
 It is a doorbell and nothing else: the payload is never parsed for routing, stored or forwarded, every
 refusal (unknown org, no secret, bad signature, stale timestamp) is the same `401`, and a forged delivery
 can only make a daemon poll early. The secret is write-only like the Linear key.
+
+## Linear agent-session claim
+
+Several members' daemons share one Linear agent app, so each sees every `@lola` mention. Before it does
+anything visible a daemon claims the Agent Session here (`POST /v1/linear/claim`, then
+`/v1/linear/authorize` immediately before it spawns, then `/v1/linear/settle`). The hub grants ONE device
+per session, defers a new grant to the live daemon of the session's owner (a device whose heartbeat carried
+that `linear_user_id` within 90 s), and fences a stalled daemon with an epoch that only grows: a stale epoch
+cannot authorize, and an authorized claim is not handed on for 2 h. The rules are the pure
+`internal/agentclaim` package.
+
+It carries only the opaque Agent Session id and a Linear user id the daemon read from Linear itself. It is an
+arbitration, not a command: the winner still applies every gate of a Linear dispatch, and the hub never parses the
+webhook payload for it. A hub that does not know these paths answers 404 and daemons carry on alone.

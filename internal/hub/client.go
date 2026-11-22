@@ -424,3 +424,37 @@ func (c *Client) Doorbell(ctx context.Context, since uint64) (uint64, error) {
 	}
 	return resp.Doorbell, nil
 }
+
+// The Linear agent-session claim (hubproto/agentclaim.go). Each call returns the
+// hub's answer unchanged; a hub that predates the endpoints answers 404, which
+// the caller reads as "no arbiter".
+
+// ClaimAgentSession asks for the claim on one Agent Session.
+func (c *Client) ClaimAgentSession(ctx context.Context, req hubproto.AgentClaimRequest) (hubproto.AgentClaimResponse, error) {
+	var resp hubproto.AgentClaimResponse
+	if err := req.Validate(); err != nil {
+		return resp, err
+	}
+	err := c.do(ctx, http.MethodPost, hubproto.PathAgentClaim, req, &resp)
+	return resp, err
+}
+
+// AuthorizeAgentSession asks to spawn under a granted epoch.
+func (c *Client) AuthorizeAgentSession(ctx context.Context, req hubproto.AgentAuthorizeRequest) (hubproto.AgentAuthorizeResponse, error) {
+	var resp hubproto.AgentAuthorizeResponse
+	if err := req.Validate(); err != nil {
+		return resp, err
+	}
+	err := c.do(ctx, http.MethodPost, hubproto.PathAgentAuthorize, req, &resp)
+	return resp, err
+}
+
+// SettleAgentSession reports how a claim ended.
+func (c *Client) SettleAgentSession(ctx context.Context, req hubproto.AgentSettleRequest) (hubproto.AgentSettleResponse, error) {
+	var resp hubproto.AgentSettleResponse
+	if err := req.Validate(); err != nil {
+		return resp, err
+	}
+	err := c.do(ctx, http.MethodPost, hubproto.PathAgentSettle, req, &resp)
+	return resp, err
+}

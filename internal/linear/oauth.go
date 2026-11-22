@@ -2,6 +2,9 @@ package linear
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +38,9 @@ type OAuthToken struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at,omitzero"`
+	// Scope is what Linear granted (space or comma separated), recorded so
+	// `lola doctor` can say a missing scope before a mention silently fails.
+	Scope string `json:"scope,omitempty"`
 }
 
 // Expired reports whether the access token is past (or within skew of) its
@@ -66,12 +72,16 @@ type OAuthClient struct {
 	Now          func() time.Time
 }
 
-// Exchange trades an authorization code for tokens.
-func (o OAuthClient) Exchange(ctx context.Context, code, redirectURI string) (OAuthToken, error) {
+// Exchange trades an authorization code for tokens. A non-empty codeVerifier
+// makes it the PKCE exchange.
+func (o OAuthClient) Exchange(ctx context.Context, code, redirectURI, codeVerifier string) (OAuthToken, error) {
 	v := url.Values{}
 	v.Set("grant_type", "authorization_code")
 	v.Set("code", code)
 	v.Set("redirect_uri", redirectURI)
+	if codeVerifier != "" {
+		v.Set("code_verifier", codeVerifier)
+	}
 	return o.token(ctx, v)
 }
 
@@ -93,7 +103,11 @@ func (o OAuthClient) Refresh(ctx context.Context, refreshToken string) (OAuthTok
 
 func (o OAuthClient) token(ctx context.Context, v url.Values) (OAuthToken, error) {
 	v.Set("client_id", o.ClientID)
-	v.Set("client_secret", o.ClientSecret)
+	// The secret is optional: a PKCE token needs only the client id, and a
+	// machine without the app's secret must still log in and refresh.
+	if o.ClientSecret != "" {
+		v.Set("client_secret", o.ClientSecret)
+	}
 	endpoint := o.TokenURL
 	if endpoint == "" {
 		endpoint = OAuthTokenURL
@@ -130,6 +144,7 @@ func (o OAuthClient) token(ctx context.Context, v url.Values) (OAuthToken, error
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 		ExpiresIn    int64  `json:"expires_in"`
+		Scope        string `json:"scope"`
 		Error        string `json:"error"`
 	}
 	_ = json.Unmarshal(body, &r)
@@ -140,7 +155,7 @@ func (o OAuthClient) token(ctx context.Context, v url.Values) (OAuthToken, error
 		}
 		return OAuthToken{}, fmt.Errorf("linear oauth: http %d: %s", resp.StatusCode, code)
 	}
-	t := OAuthToken{AccessToken: r.AccessToken, RefreshToken: r.RefreshToken}
+	t := OAuthToken{AccessToken: r.AccessToken, RefreshToken: r.RefreshToken, Scope: r.Scope}
 	if r.ExpiresIn > 0 {
 		t.ExpiresAt = now().Add(time.Duration(r.ExpiresIn) * time.Second)
 	}
@@ -160,4 +175,27 @@ func oauthErrorCode(s string) string {
 		}
 	}
 	return s
+}
+
+// NewPKCE returns an RFC 7636 verifier and its S256 challenge. With it the
+// authorization-code exchange and every later refresh need only the client id,
+// so a teammate never has to be given the app's client secret.
+func NewPKCE() (verifier, challenge string, err error) {
+	b := make([]byte, 32)
+	if _, err = rand.Read(b); err != nil {
+		return "", "", err
+	}
+	verifier = base64.RawURLEncoding.EncodeToString(b)
+	sum := sha256.Sum256([]byte(verifier))
+	return verifier, base64.RawURLEncoding.EncodeToString(sum[:]), nil
+}
+
+// AgentAuthorizeURLPKCE is AgentAuthorizeURL plus the S256 code challenge.
+func AgentAuthorizeURLPKCE(clientID, redirectURI, state, challenge string) string {
+	u, _ := url.Parse(AgentAuthorizeURL(clientID, redirectURI, state))
+	q := u.Query()
+	q.Set("code_challenge", challenge)
+	q.Set("code_challenge_method", "S256")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
