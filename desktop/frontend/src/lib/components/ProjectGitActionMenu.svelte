@@ -17,6 +17,7 @@
       void tick().then(() => { if (actions.request === req && node.isConnected) node.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus(); });
     });
   });
+  $effect(() => { if (request && !request.items.length) actions.close(true); });
   function key(event: KeyboardEvent) {
     event.stopPropagation();
     if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); actions.close(true); return; }

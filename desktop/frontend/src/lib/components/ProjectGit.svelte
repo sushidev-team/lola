@@ -637,7 +637,7 @@
       {#if expanded}<div transition:folderSlide={key}>{@render branchNodes(node.children, scope, depth + 1)}</div>{/if}
     {:else}
       {@const branch = node.branch}
-      {@const pending = git.busyBranchRefs.includes(branch.fullName) || git.fetchingBranchRef === branch.fullName}
+      {@const pending = git.busyBranchRefs.includes(branch.fullName) || git.queuedDeleteRefs.includes(branch.fullName) || git.fetchingBranchRef === branch.fullName}
       <div class="rail-entry" class:has-pr={prsFor(branch).length > 0}>
       <Button block selected={focusedBranch === branch.fullName || ref === branch.fullName} loading={pending} class={`rail-row branch-leaf ${branch.current ? "current-branch" : ""} ${dropTarget === branch.fullName ? "branch-drop-target" : ""}`} style={`--branch-color:${refColor(branch)};padding-left:${19 + Math.min(depth, 8) * 13}px`} aria-current={branch.current ? "true" : undefined} aria-label={branch.name} title={`Go to latest commit of ${branch.name}`} onclick={(event) => { if (!clickAfterDrag(event)) void goToBranch(branch); }} ondblclick={(event) => { if (!clickAfterDrag(event)) gitActions.checkout(branch); }} oncontextmenu={(event) => gitActions.openBranch(branch, event)} data-branch-ref={branch.fullName} draggable={false} onpointerdown={(event) => startBranchDrag(event, branch)} ondragstart={(event) => event.preventDefault()}>{#if !pending}<span class="branch-glyph" style:color={refColor(branch)}><Icon name="git-branch" size={14} /></span>{/if}<span class="truncate">{node.name}</span>{#if branch.current}<span title="Active checkout"><Icon name="monitor" size={13} /></span>{/if}
         {#if !branch.remote && branch.upstream && (branch.ahead || branch.behind)}<span class="branch-divergence" title={`${branch.ahead ?? 0} ahead, ${branch.behind ?? 0} behind ${branch.upstream}`} aria-label={`${branch.ahead ?? 0} commits ahead, ${branch.behind ?? 0} commits behind upstream`}>{#if branch.ahead}<span>↑{branch.ahead}</span>{/if}{#if branch.behind}<span>↓{branch.behind}</span>{/if}</span>{/if}
@@ -681,6 +681,7 @@
     {#key request}<ProjectGitPublish {...request} onClose={() => { if (publishBranch === request) publishBranch = null; }} />{/key}
   {/if}
   {#if git.error}<ProjectGitError error={git.error} operation={git.failedAction?.action} busy={!!git.busy} recovery={gitActions.recovery()} onrefresh={() => void git.load(ref, limit)} ondismiss={() => git.error=''}/>{/if}
+  {#if git.queuedDeleteRefs.length}<div class="git-queued" role="status"><Icon name="clock" size={16}/><strong>{git.queuedDeleteRefs.length} branch {git.queuedDeleteRefs.length === 1 ? 'deletion' : 'deletions'} queued</strong></div>{/if}
   {#if git.queued}<div class="git-queued" role="status"><Icon name="clock" size={16}/><strong>{git.busy === 'pull' || git.busy === 'pull-stash' ? 'Pull' : git.busy === 'push' ? 'Push' : 'Repository action'} queued</strong><span>Waiting for the current repository action to finish.</span></div>{/if}
   </div>
   <div class="git-workbench" class:inspector-hidden={!nav.asideOpen} class:rail-open={showRail} class:resizing={!!resizingSidebar} bind:clientWidth={workbenchWidth} style={`--rail-width:${railWidth}px;--inspector-width:${inspectorWidth}px`}>

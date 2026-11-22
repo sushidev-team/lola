@@ -24,11 +24,14 @@ export class GitActions {
     this.request = null;
     if (restoreFocus && anchor?.isConnected) anchor.focus();
   }
-  private menu(title: string, items: GitMenuItem[], event: MouseEvent, subtitle?: string) {
+  private menu(title: string, items: GitMenuItem[] | (() => GitMenuItem[]), event: MouseEvent, subtitle?: string) {
     event.preventDefault(); event.stopPropagation();
     const anchor = event.currentTarget instanceof HTMLElement ? event.currentTarget : event.target instanceof HTMLElement ? event.target.closest('button') : null;
     const rect = anchor?.getBoundingClientRect();
-    this.request = { title, subtitle, items, anchor, x: event.clientX || rect?.left || 8, y: event.clientY || rect?.bottom || 8 };
+    const placement = { title, subtitle, anchor, x: event.clientX || rect?.left || 8, y: event.clientY || rect?.bottom || 8 };
+    this.request = typeof items === 'function'
+      ? { ...placement, get items() { return items(); } }
+      : { ...placement, items };
   }
   private current() { const data = this.context().git.snapshot; return data?.refs.find(r => !r.remote && (r.current || r.name === data.branch)); }
   private blocked() { return !!this.context().git.busy; }
@@ -88,7 +91,7 @@ export class GitActions {
     const deletingSelected = ['delete-branch', 'remove-worktree-branch'].includes(request.action) && active.ref === request.source;
     const path = await active.git.branchAction(request, deletingSelected ? '' : active.ref, active.limit);
     if (path === null && request.action === 'pull' && active.git === this.context().git && active.git.error && this.autoStashPull(active, request)) return;
-    if (path === null && active.git === this.context().git && active.git.error) {
+    if (path === null && active.git === this.context().git && active.git.error && (request.action !== 'delete-branch' || active.git.failedAction?.source === request.source)) {
       const info = gitErrorInfo(active.git.error, request.action);
       const recovery = this.recovery();
       if (request.action === 'pull' && info.recovery === 'merge' && recovery) {
@@ -97,7 +100,7 @@ export class GitActions {
       }
       store.setFlash(info.title, info.kind, {description:info.description,action:recovery});
     }
-    if (path !== null && active.git === this.context().git && deletingSelected && this.context().ref === request.source) this.callbacks.viewHistory('');
+    if (path !== null && active.git === this.context().git && ['delete-branch', 'remove-worktree-branch'].includes(request.action) && this.context().ref === request.source) this.callbacks.viewHistory('');
     if (path !== null && active.git === this.context().git && ['checkout', 'merge', 'rebase'].includes(request.action)) this.callbacks.openWorktree(path);
   }
   private action(action: string, source?: GitRef, target?: GitRef) { void this.execute(this.context(), this.branchRequest(action, source, target)); }
@@ -230,7 +233,8 @@ export class GitActions {
   }
   private deletionBlocked(branch: GitRef) {
     if (this.managedRemoval(this.owner(branch))) return this.mutationBlocked();
-    return this.mutationBlocked(branch) || branch.current || !!this.owner(branch) || (branch.remote && !this.destination(branch));
+    const git = this.context().git;
+    return !git.canDeleteBranch(branch.fullName) || !!git.snapshot?.operation || branch.current || !!this.owner(branch) || (branch.remote && !this.destination(branch));
   }
   private deleteBranch(branch: GitRef) {
     if (this.deletionBlocked(branch)) return;
@@ -345,6 +349,13 @@ export class GitActions {
     } }];
   }
   openBranch(branch: GitRef, event: MouseEvent) {
+    const git = this.context().git;
+    this.menu(branch.name, () => {
+      const current = git.snapshot?.refs.find(ref => ref.fullName === branch.fullName);
+      return current && git === this.context().git ? this.branchItems(current) : [];
+    }, event);
+  }
+  private branchItems(branch: GitRef): GitMenuItem[] {
     const current = this.current(), busy = this.mutationBlocked();
     const remote = this.context().git.snapshot?.remotes?.filter(r => branch.name.startsWith(r.name + '/')).sort((a,b) => b.name.length-a.name.length)[0];
     const tree = this.context().git.snapshot?.worktrees.find(t => t.branch === branch.name);
@@ -373,7 +384,7 @@ export class GitActions {
     items.push({ label: 'Copy branch name', icon: 'copy', separator: !canSetUpstream, run: () => void this.copy(branch.name) });
     items.push({ label: branch.remote ? 'Delete remote branch…' : 'Delete branch…', icon: 'trash-2', danger: true, separator: true, disabled: this.deletionBlocked(branch), run: () => this.deleteBranch(branch) });
     if (!branch.remote && tree) items.push({label:'Remove worktree and branch…',icon:'trash-2',danger:true,disabled:this.removalBlocked(tree),run:()=>this.removeWorktree(tree,true)});
-    this.menu(branch.name, items, event);
+    return items;
   }
 
   fetch(remote: string, branchRef = '') {

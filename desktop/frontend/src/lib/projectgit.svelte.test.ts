@@ -137,6 +137,22 @@ describe('Project Git request and operation ownership', () => {
     expect(await merging).toBeNull();
     expect(state.busyBranchRefs).toEqual([]);
   });
+  it('preserves delete recovery and cancels waiting deletions if the active delete fails', async () => {
+    const state = new ProjectGitState('delete-queue', '');
+    const first = {action:'delete-branch',source:'refs/heads/one',sourceSHA:'a',target:'',targetSHA:''};
+    let reject!: (reason: Error) => void;
+    api.BranchAction.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    const active = state.branchAction(first);
+    const queued = state.branchAction({...first,source:'refs/heads/two'});
+    expect(await state.branchAction({...first,source:'refs/heads/two'})).toBeNull();
+    expect(state.queuedDeleteRefs).toEqual(['refs/heads/two']);
+    reject(new Error('branch is not fully merged'));
+    expect(await Promise.all([active, queued])).toEqual([null, null]);
+    expect(state.failedAction).toEqual(first);
+    expect(state.error).toContain('Canceled queued deletions: refs/heads/two');
+    expect(state.queuedDeleteRefs).toEqual([]);
+    expect(api.BranchAction).toHaveBeenCalledTimes(1);
+  });
   it('tracks the deleting branch and preserves a newer history selection during deletion', async () => {
     const state = new ProjectGitState('lola','');
     await state.load('refs/heads/old',200);

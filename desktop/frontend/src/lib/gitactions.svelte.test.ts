@@ -309,6 +309,7 @@ describe('Git action menus', () => {
     git.snapshot!.remotes = [{name:'origin',host:'',owner:'',repo:'',avatarUrl:''}];
     render(ProjectGitActionMenu, {actions});
     const remote = {...feature, remote:true, name:'origin/feature/work', fullName:'refs/remotes/origin/feature/work'};
+    git.snapshot!.refs.push(remote);
     actions.openBranch(remote, event());
     await fireEvent.click(await screen.findByRole('menuitem', {name:'Delete remote branch…'}));
     expect(confirm.request?.body).toContain('for everyone');
@@ -408,7 +409,8 @@ describe('Git action menus', () => {
   });
   it('pulls an unselected branch without changing the visible checkout', async () => {
     render(ProjectGitActionMenu, { actions });
-    actions.openBranch({...feature,upstream:'refs/remotes/origin/feature/work'}, event());
+    git.snapshot!.refs[1].upstream = 'refs/remotes/origin/feature/work';
+    actions.openBranch(feature, event());
     await fireEvent.click(await screen.findByRole('menuitem', { name: 'Pull changes' }));
     expect(git.branchAction).toHaveBeenCalledWith({ action: 'pull', source: feature.fullName, sourceSHA: feature.sha, target: '', targetSHA: '' }, '', 200);
     await waitFor(() => expect(actions.request).toBeNull());

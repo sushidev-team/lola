@@ -250,6 +250,37 @@ describe('Project Git workspace', () => {
     resolve({path:'/repo'});
     await waitFor(()=>expect(screen.getByRole('button',{name:'origin/main'})).not.toHaveAttribute('aria-busy'));
   });
+  it('queues a confirmed second deletion and updates an open branch menu as deletions finish', async () => {
+    const data = snapshot();
+    const remote = data.refs[1];
+    data.refs.push({...remote, name:'origin/topic', fullName:'refs/remotes/origin/topic'});
+    data.remotes = [{name:'origin',host:'github.com',owner:'acme',repo:'acme/repo',avatarUrl:''}];
+    api.Snapshot.mockResolvedValue(data);
+    let first!: (result: {path: string}) => void, second!: (result: {path: string}) => void;
+    api.BranchAction.mockReturnValueOnce(new Promise(resolve => { first = resolve; }))
+      .mockReturnValueOnce(new Promise(resolve => { second = resolve; }));
+    await open();
+    async function confirmDelete(name: string) {
+      await fireEvent.click(screen.getByRole('button', {name:`Actions for branch ${name}`}));
+      await fireEvent.click(screen.getByRole('menuitem', {name:'Delete remote branch…'}));
+      expect(confirm.request?.subject).toBe(name);
+      confirm.accept();
+    }
+    await confirmDelete('origin/main');
+    await confirmDelete('origin/topic');
+    expect(await screen.findByText('1 branch deletion queued')).toBeVisible();
+    expect(api.BranchAction).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', {name:'origin/topic'})).toHaveAttribute('aria-busy','true');
+    await fireEvent.click(screen.getByRole('button', {name:'Actions for branch main'}));
+    const push = screen.getByRole('menuitem', {name:'Push branch'});
+    expect(push).toBeDisabled();
+    first({path:'/repo'});
+    await waitFor(() => expect(api.BranchAction).toHaveBeenLastCalledWith(project, '', expect.objectContaining({source:'refs/remotes/origin/topic',sourceSHA:oldSHA})));
+    expect(push).toBeDisabled();
+    second({path:'/repo'});
+    await waitFor(() => expect(push).toBeEnabled());
+    expect(screen.getByRole('menuitem', {name:'Delete branch…'})).toBeDisabled();
+  });
   it('offers a confirmed force retry in the unmerged-worktree error banner', async () => {
     const data = snapshot();
     data.refs.push({name:'feature',fullName:'refs/heads/feature',sha:oldSHA,current:false,remote:false});

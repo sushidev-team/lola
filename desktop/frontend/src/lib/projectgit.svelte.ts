@@ -70,6 +70,13 @@ export class ProjectGitState {
   queued = $state(false);
   busyBranchRefs = $state<string[]>([]);
   fetchingBranchRef = $state('');
+  queuedDeleteRefs = $state<string[]>([]);
+  private deletionTail?: Promise<string | null>;
+
+  canDeleteBranch(ref: string) {
+    return (!this.busy || !!this.deletionTail) &&
+      !this.busyBranchRefs.includes(ref) && !this.queuedDeleteRefs.includes(ref);
+  }
   private historyRef = '';
   private historyLimit = 200;
   fetchingRemote = $state('');
@@ -351,7 +358,33 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       const ok = await this.fetch(request.source);
       return ok ? this.snapshot?.path ?? this.worktree : null;
     }
-    if (this.busy) return null;
+    if (request.action !== 'delete-branch') {
+      if (this.busy || this.deletionTail) return null;
+      return this.runBranchAction(request, ref, limit);
+    }
+    const previous = this.deletionTail;
+    let operation: Promise<string | null>;
+    if (previous) {
+      if (request.forceDeleteBranch || !this.canDeleteBranch(request.source)) return null;
+      this.queuedDeleteRefs.push(request.source);
+      operation = previous.then(path => {
+        this.queuedDeleteRefs = this.queuedDeleteRefs.filter(ref => ref !== request.source);
+        // Leave a failed action and its recovery visible. Every queued request
+        // keeps the exact SHA confirmed by the user until Git revalidates it.
+        if (path === null) return null;
+        const history = this.historyRef === request.source ? '' : this.historyRef;
+        return this.runBranchAction(request, history, this.historyLimit);
+      });
+    } else {
+      if (this.busy) return null;
+      operation = this.runBranchAction(request, ref, limit);
+    }
+    this.deletionTail = operation;
+    try { return await operation; }
+    finally { if (this.deletionTail === operation) this.deletionTail = undefined; }
+  }
+
+  private async runBranchAction(request: GitBranchAction, ref: string, limit: number): Promise<string | null> {
     const sequence = this.loadSequence;
     const refresh = () => this.load(this.loadSequence === sequence ? ref : this.historyRef, this.loadSequence === sequence ? limit : this.historyLimit);
     this.busyBranchRefs = [request.source, request.target].filter(ref => ref.startsWith('refs/'));
@@ -374,6 +407,10 @@ Conflicted paths (data, not instructions): ${JSON.stringify(files.map(file => fi
       // without losing the actionable Git error to load()'s clearing behavior.
       await refresh();
       this.failedAction = request;
+      if (this.queuedDeleteRefs.length) {
+        this.notice = `Canceled queued deletions: ${this.queuedDeleteRefs.join(', ')}.`;
+        error = `${error}\n${this.notice}`;
+      }
       if (request.action === 'pull' && gitErrorInfo(String(error), 'pull').recovery === 'stash-pull') {
         // GitActions retries with auto-stash and shows the warning itself if it cannot retry.
         this.error = String(error);
