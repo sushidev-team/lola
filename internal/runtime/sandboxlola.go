@@ -267,7 +267,7 @@ func (n *Native) prepareSandbox(ctx context.Context, project string, sandboxed b
 	}
 	// The project's own image (its toolchains on top of the default one) is
 	// built here, before the launch line names it.
-	if p := n.sandboxProject(project); p != nil {
+	if p := n.Cfg.ProjectByName(project); p != nil {
 		if _, err := n.projectImage(ctx, p); err != nil {
 			return err
 		}

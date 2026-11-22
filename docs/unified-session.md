@@ -243,7 +243,7 @@ A session whose sticky view is Terminal, or an agentless one, shows a `SnapshotT
 ```
 ┌──────────────────────────────────────────┐
 │ ◉3 ← Tenant DB       #412 ✗ ▾          ⋯ │ 44  ◉3 appears when the sidebar is hidden; dev chip and
-│ Conversation  Terminal  Changes  ⋯ 2     │ 32  action move into ⋯; second tab group into `⋯ N`
+│ Conversation  Shell 1  Shell 2   +       │ 32  action move into ⋯; tabs scroll horizontally
 │ prod-api ▾                               │ 32  HostBar becomes one picker
 │  Edit  tenants.go              +60 −4    │
 │ ┏ Claude wants to run ───── 1 of 2 ───┓  │     cap 60%; the rows stay

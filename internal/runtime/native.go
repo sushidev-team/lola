@@ -1547,9 +1547,12 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	// the docker CLI, and a TTY container ignores its client going away.
 	// Best-effort like the aux sweep — the container is --rm and named after
 	// the session, so the next launch's `docker rm -f` clears a straggler.
-	if s.Sandbox != "" || n.sandboxProject(s.Project) != nil {
-		if err := n.removeContainer(ctx, s.ID); err != nil && n.Logf != nil {
-			n.Logf("session %s: removing its sandbox container failed: %v", s.ID, err)
+	if s.Sandbox != "" || s.AgentTabParent == "" && n.sandboxProject(s.Project) != nil {
+		if err := n.removeContainer(ctx, s.ID); err != nil {
+			if s.AgentTabParent != "" && s.Sandbox != "" {
+				return fmt.Errorf("stop agent tab container before releasing its checkout: %w", err)
+			}
+			n.logf("session %s: removing its sandbox container failed: %v", s.ID, err)
 		}
 	}
 	if removeWorktree {
@@ -1560,6 +1563,9 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 		if removeWorktree {
 			if s.Location == LocationSSH {
 				n.untrustAgentDir(s.ID, s.Worktree)
+			}
+			if s.Location == LocationAgentTab {
+				n.untrustAgentDir(s.ID, s.AgentCWD)
 			}
 			return RemoveLocalArtifacts(s.ID)
 		}

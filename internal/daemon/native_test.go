@@ -1282,6 +1282,16 @@ func TestTickFlipRecordsStrippedSubset(t *testing.T) {
 	}
 }
 
+func (f *fakeNative) HostAgentRunning(ctx context.Context, s session.Session) bool {
+	return s.Sandbox == "" && s.GitPin == nil && f.Alive(ctx, s)
+}
+
+func (f *fakeNative) OpenAgentTab(ctx context.Context, p config.Project, id string, owner session.Session) (session.Session, error) {
+	s, err := f.OpenDirectory(ctx, p, id, owner.Worktree, runtime.LocationAgentTab, owner.Agent, true)
+	s.AgentTabParent, s.Sandbox, s.GitPin = owner.ID, owner.Sandbox, owner.GitPin
+	return s, err
+}
+
 func (f *fakeNative) OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool) (session.Session, error) {
 	return session.Session{ID: id, Project: p.Name, Worktree: dir, Location: location, Agent: kind, Agentless: !useAgent, Kind: session.KindLocal, Source: "native", TmuxName: id}, nil
 }

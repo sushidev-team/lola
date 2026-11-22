@@ -46,7 +46,7 @@
 {#if req}
   <Modal title={`Log in to ${info.name} first`} onClose={() => sandboxLogin.finish(false)} width="520px">
     <div class="grid gap-3">
-      <p class="text-ink">{label} runs its agents in Docker. They need a {info.name} login to work.</p>
+      <p class="text-ink">{#if req.dockerTab}This conversation will run in Docker like its original session. It needs a {info.name} login to work.{:else}{label} runs its agents in Docker. They need a {info.name} login to work.{/if}</p>
       {#if req.agent === "claude"}
         <SandboxLoginPrompt always bare onDone={() => sandboxLogin.finish(true)} />
       {:else}

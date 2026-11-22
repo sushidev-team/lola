@@ -94,6 +94,19 @@ func (s *ConfigService) SandboxLoginNeeded(project, agentKind string) (string, e
 	if p == nil || !p.Sandboxed() {
 		return "", nil
 	}
+	return sandboxAgentLoginNeeded(cfg, project, agentKind)
+}
+
+// SandboxTabLoginNeeded checks the login for a tab inheriting a Docker session.
+func (s *ConfigService) SandboxTabLoginNeeded(project, agentKind string) (string, error) {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	return sandboxAgentLoginNeeded(cfg, project, agentKind)
+}
+
+func sandboxAgentLoginNeeded(cfg *config.Config, project, agentKind string) (string, error) {
 	kind := agent.Parse(cfg.AgentForProject(project))
 	if agent.Valid(strings.TrimSpace(agentKind)) {
 		kind = agent.Parse(strings.TrimSpace(agentKind))

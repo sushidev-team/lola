@@ -137,7 +137,7 @@ func (d *Daemon) feedResolve(id string) (feedTarget, bool, error) {
 		if s.IsAgentless() {
 			return feedTarget{}, false, nil
 		}
-		cwd := sessionWorktree(d.home, s)
+		cwd := sessionAgentCWD(d.home, s)
 		t := feedTarget{id: id, kind: agent.Parse(s.Agent), slug: filepath.Base(usage.SlugDir(usage.ProjectsRoot(), cwd)), cwd: cwd}
 		if t.kind == agent.Codex {
 			t.root = d.codexFeedRoot(id, s.Project, cwd)
@@ -149,7 +149,10 @@ func (d *Daemon) feedResolve(id string) (feedTarget, bool, error) {
 		if t.kind == agent.Codex {
 			// A rollout is found by the directory it ran in, which an ended session no longer
 			// records: it is the kept directory, or where lola puts a session's worktree.
-			t.cwd = ended.KeptWorktree
+			t.cwd = ended.AgentCWD
+			if t.cwd == "" {
+				t.cwd = ended.KeptWorktree
+			}
 			if t.cwd == "" && ended.Project != "" {
 				t.cwd = filepath.Join(d.home, "worktrees", ended.Project, id)
 			}

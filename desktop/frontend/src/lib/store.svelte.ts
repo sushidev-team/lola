@@ -37,7 +37,7 @@ type OpenTicketArgs = ProtocolOpenTicketArgs;
 /** A ticket whose openTicket call has not answered yet; see Store.starting. */
 export type StartingTicket = { project: string; issue: string; title: string };
 
-type RemovalFollowup = { branch: string; onRemoved: () => void | Promise<void> };
+type RemovalFollowup = { branch?: string; onRemoved: () => void | Promise<void> };
 
 export type FlashOptions = { description?: string; action?: { label: string; run: () => void | Promise<void> } };
 type Flash = ({ text: string; kind: "good" | "warn" | "bad" } & FlashOptions) | null;
@@ -291,7 +291,7 @@ class Store {
   /** Only an unambiguous, exact checkout match can authorize session teardown. */
   sessionForWorktree(path: string): SessionInfo | undefined {
     if (!path) return;
-    const owners = this.sessions.filter(s => s.worktree === path || s.apps?.some(app => app.worktree === path));
+    const owners = this.sessions.filter(s => !s.agentTabParent && (s.worktree === path || s.apps?.some(app => app.worktree === path)));
     return owners.length === 1 ? owners[0] : undefined;
   }
 
@@ -511,9 +511,9 @@ class Store {
     // Reap the session's worktree shells too, so they don't linger as orphan tabs
     // once the daemon removes the worktree (best-effort, fire-and-forget). The
     // daemon kills the shell tmux sessions on a stop as well.
-    void TermService.CloseSessionShells(session).catch(() => {});
     try {
       const r = await DaemonService.Kill(session, force, keepWorktree);
+      void TermService.CloseSessionShells(session).catch(() => {});
       this.setFlash(keepWorktree ? `stopped ${session}; worktree kept` : `killed ${session}`, "good");
       void this.refresh();
       if (r?.removed && !keepWorktree) await onRemoved?.();
@@ -648,7 +648,10 @@ class Store {
     );
   }
   async openManual(a: OpenManualArgs) {
-    if (a.agent && !(await sandboxLogin.ensure(a.project, a.agentKind ?? ""))) return undefined;
+    const parent = a.location === "agent-tab" && a.parentSession ? this.sessionById(a.parentSession) : undefined;
+    if (a.agent && (!parent || parent.sandbox === "docker")) {
+      if (!(await sandboxLogin.ensure(a.project, a.agentKind ?? "", !!parent))) return undefined;
+    }
     return this.act(() => DaemonService.OpenManual(a), `started ${a.name || a.branch || "session"}`);
   }
   renameSession(id: string, name: string) {
@@ -820,7 +823,7 @@ class Store {
       }
       if (history.status === "rejected") throw history.reason;
       const matches = (history.value.sessions ?? []).filter(s => s.keptWorktree === path);
-      const claimed = this.sessions.some(s => s.worktree === path || s.apps?.some(app => app.worktree === path));
+      const claimed = this.sessions.some(s => !s.agentTabParent && (s.worktree === path || s.apps?.some(app => app.worktree === path)));
       if (!claimed && matches.length === 1) {
         this.askRemoveEndedWorktree(matches[0], path, followup);
         return;

@@ -867,6 +867,20 @@ func (c *Client) NewSessionSized(ctx context.Context, name, dir, command string,
 // close its listening socket — the whole point of the graceful step.
 const killTreeGrace = 3 * time.Second
 
+// LiveLaunch returns the original cwd and command recorded by tmux, only
+// while the pane is alive. Neither value comes from terminal output.
+func (c *Client) LiveLaunch(ctx context.Context, name string) (dir, command string, ok bool) {
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", paneTarget(name), "#{pane_dead}\n#{pane_start_path}\n#{pane_start_command}")
+	if err != nil {
+		return "", "", false
+	}
+	fields := strings.SplitN(strings.TrimSuffix(string(out), "\n"), "\n", 3)
+	if len(fields) != 3 || fields[0] != "0" {
+		return "", "", false
+	}
+	return fields[1], strings.Trim(fields[2], "\""), true
+}
+
 // PanePID returns the pid of the process running in the session's active pane.
 // The target is a target-PANE ("=name:"), so it resolves the session's current
 // window rather than requiring an index.

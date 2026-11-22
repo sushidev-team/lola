@@ -268,6 +268,7 @@ func (d *Daemon) recordEndedAs(s session.Session, reason string) {
 			Agent: agent.Parse(s.Agent).String(), EndedAt: now, Reason: reason, PRURL: prURL(s),
 		},
 		Segments: sessionSegments(s),
+		AgentCWD: s.AgentCWD,
 	}
 	if s.PR != nil {
 		info.PRNumber = s.PR.Number
@@ -278,8 +279,8 @@ func (d *Daemon) recordEndedAs(s session.Session, reason string) {
 		}
 	}
 	if wt := sessionWorktree(d.home, s); wt != "" {
-		info.Slug = filepath.Base(usage.SlugDir("/", wt)) // the name, wherever the root is
-		if fi, err := os.Stat(wt); err == nil && fi.IsDir() {
+		info.Slug = filepath.Base(usage.SlugDir("/", sessionAgentCWD(d.home, s))) // the name, wherever the root is
+		if fi, err := os.Stat(wt); err == nil && fi.IsDir() && s.AgentTabParent == "" {
 			info.KeptWorktree = wt
 			if !s.Stack && s.Kind != session.KindLocal && !s.GoalManaged() {
 				info.Isolation = &sshstore.EndedWorktreeIsolation{Sandbox: s.Sandbox, GitPin: s.GitPin}

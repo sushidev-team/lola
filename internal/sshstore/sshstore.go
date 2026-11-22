@@ -118,6 +118,7 @@ type SentBatch struct {
 // list it and for its conversation to find the transcript. Segments and Slug are the only
 // way back to that file, and neither is a path anything else handed over.
 type EndedInfo struct {
+	AgentCWD string `json:"agentCwd,omitempty"`
 	protocol.EndedSession
 	Isolation *EndedWorktreeIsolation `json:"worktree_isolation,omitempty"`
 	PRURLs    []string                `json:"pr_urls,omitempty"` // all app PRs, for a later issue attempt's context

@@ -103,8 +103,11 @@ type Session struct {
 	// findings do not wake the agent repeatedly. Replaced, never mutated in place.
 	PRCommentGuards map[string]string `json:"pr_comment_guards,omitempty"`
 
+	AgentTabParent string `json:"agent_tab_parent,omitempty"`
+	AgentCWD       string `json:"agent_cwd,omitempty"` // private launch directory when the checkout is shared
+
 	Name      string `json:"name,omitempty"`
-	Location  string `json:"location,omitempty"` // main | checkout | temporary; empty for owned worktrees
+	Location  string `json:"location,omitempty"` // main | checkout | temporary | ssh | agent-tab; empty for owned worktrees
 	ID        string `json:"id"`
 	Source    string `json:"source"`          // "ao" | "native"
 	Agent     string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
@@ -1323,9 +1326,15 @@ func (s *Store) PruneOlderThan(d time.Duration) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cutoff := time.Now().Add(-d)
+	owners := make(map[string]bool)
+	for _, sess := range s.sessions {
+		if sess.AgentTabParent != "" && !sess.LastSeen.Before(cutoff) {
+			owners[sess.AgentTabParent] = true
+		}
+	}
 	n := 0
 	for id, sess := range s.sessions {
-		if sess.LastSeen.Before(cutoff) {
+		if !owners[id] && sess.LastSeen.Before(cutoff) {
 			delete(s.sessions, id)
 			s.emitLocked(id, &sess, nil)
 			n++

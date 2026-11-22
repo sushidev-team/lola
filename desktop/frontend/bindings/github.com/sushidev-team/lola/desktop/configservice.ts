@@ -377,6 +377,13 @@ export function SandboxStatus(): $CancellablePromise<$models.SandboxStatusDTO> {
 }
 
 /**
+ * SandboxTabLoginNeeded checks the login for a tab inheriting a Docker session.
+ */
+export function SandboxTabLoginNeeded(project: string, agentKind: string): $CancellablePromise<string> {
+    return $Call.ByID(1693690035, project, agentKind);
+}
+
+/**
  * SaveHubProject writes a project's repo, chore opt-in and Docker sandbox
  * in one config save. Turning chores on needs an owner/name repo — the same
  * rule Validate enforces — and the error says so in the UI's words.

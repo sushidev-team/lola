@@ -38,17 +38,31 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 	if sessionID == "" {
 		return protocol.ReviveData{}, errors.New("session id required")
 	}
+	lock := d.ckptLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
 	s, ok := d.sessions.Get(sessionID)
 	if !ok {
 		return protocol.ReviveData{}, fmt.Errorf("unknown session %s", sessionID)
+	}
+	if d.agentTabsBlockRelaunch(s) {
+		return protocol.ReviveData{}, errAgentTabsOpen
+	}
+	d.mu.Lock()
+	nat := d.native
+	p := d.cfg.ProjectByName(s.Project)
+	d.mu.Unlock()
+	if s.AgentTabParent != "" {
+		owner, ok := d.sessions.Get(s.AgentTabParent)
+		if !ok || gitCanonical(sessionWorktree(d.home, owner)) != gitCanonical(s.Worktree) || owner.Sandbox != s.Sandbox ||
+			(s.Sandbox == "" && (d.projectGitBlocked(s.Worktree) || p == nil || p.Sandboxed() && !confirmedHostAgent(ctx, nat, owner))) {
+			return protocol.ReviveData{}, errors.New("the original checkout is no longer available for this agent tab")
+		}
 	}
 	if s.GoalManaged() {
 		return protocol.ReviveData{}, errors.New("goal workers resume through goal controls")
 	}
 
-	d.mu.Lock()
-	nat := d.native
-	d.mu.Unlock()
 	if nat == nil {
 		return protocol.ReviveData{}, errors.New("native runtime unavailable")
 	}
@@ -64,6 +78,9 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 	// project's current default. Reject unavailable/unsupported agents before
 	// launching or re-establishing any session and dispatch state.
 	bin := d.launchBin(s.Project, agent.Parse(s.Agent).Binary())
+	if s.AgentTabParent != "" {
+		bin = d.tabBinary(s)
+	}
 	if s.IsAgentless() {
 		bin = "tmux"
 	}

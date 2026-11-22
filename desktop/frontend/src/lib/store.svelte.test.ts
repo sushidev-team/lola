@@ -29,7 +29,7 @@ vi.mock("@bindings/desktop", () => ({
     Projects: vi.fn(),
     Status: vi.fn(),
   },
-  ConfigService: { ConfigExists: vi.fn() },
+  ConfigService: { ConfigExists: vi.fn(), SandboxLoginNeeded: vi.fn(), SandboxTabLoginNeeded: vi.fn() },
   TalkService: { Ended: () => Ended() },
   TermService: { CloseSessionShells: (...a: unknown[]) => CloseSessionShells(...a) },
 }));
@@ -409,6 +409,19 @@ describe("the dev toggle reports that it is in flight", () => {
 });
 
 describe("agent launch and switch actions", () => {
+  it("uses the parent session for the agent tab login check", async () => {
+    const { ConfigService } = await import("@bindings/desktop");
+    const args = { project: "web", branch: "", location: "agent-tab", parentSession: "old", agent: true, agentKind: "claude" };
+    store.sessions = [{ id: "old", sandbox: "" }] as never;
+    await store.openManual(args);
+    expect(ConfigService.SandboxLoginNeeded).not.toHaveBeenCalled();
+    expect(ConfigService.SandboxTabLoginNeeded).not.toHaveBeenCalled();
+    expect(OpenManual).toHaveBeenCalledWith(args);
+    store.sessions = [{ id: "old", sandbox: "docker" }] as never;
+    await store.openManual(args);
+    expect(ConfigService.SandboxTabLoginNeeded).toHaveBeenCalledWith("web", "claude");
+  });
+
   it("openManual carries agentKind into the daemon request", async () => {
     await store.openManual({
       project: "acme",

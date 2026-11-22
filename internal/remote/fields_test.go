@@ -126,8 +126,8 @@ var reviewedArgsFields = map[string][]string{
 	"forkCheckpoint":        {"agent", "seq", "session"},
 	"mergePR":               {"confirmUnready", "head", "method", "number", "repo"},
 	"planDecide":            {"approve", "comment"},
-	"openExisting":          {"agent", "agentKind", "aiAction", "base", "branch", "existing", "location", "name", "path", "project", "prompt"},
-	"openManual":            {"agent", "agentKind", "aiAction", "base", "branch", "existing", "location", "name", "path", "project", "prompt"},
+	"openExisting":          {"agent", "agentKind", "aiAction", "base", "branch", "existing", "location", "name", "parentSession", "path", "project", "prompt"},
+	"openManual":            {"agent", "agentKind", "aiAction", "base", "branch", "existing", "location", "name", "parentSession", "path", "project", "prompt"},
 	"openPr":                {"branch", "isFork", "number", "project"},
 	"openTicket":            {"agentKind", "apps", "branch", "identifier", "project", "title", "uuid"},
 	"paneClose":             {"pane", "session"},
@@ -265,6 +265,8 @@ func TestOpenManualLocationRefused(t *testing.T) {
 			{Project: "p", Agent: true, Location: "temporary"},
 			{Project: "p", Agent: true, Location: "checkout"},
 			{Project: "p", Agent: true, Path: "/tmp"},
+			{Project: "p", Agent: true, Location: "agent-tab", ParentSession: "parent"},
+			{Project: "p", Agent: true, ParentSession: "parent"},
 		} {
 			_, _, err := rebuild(cmd, protocol.Request{Args: rawArgs(t, a)}, hasTiers(protocol.TierShell))
 			if err == nil || err.Error() != "only a new worktree can be opened from a phone" {

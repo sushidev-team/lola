@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,9 @@ import (
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 )
+
+// LocationAgentTab borrows the checkout and gives the provider a distinct log identity.
+const LocationAgentTab = "agent-tab"
 
 func localArtifacts(id string) (string, error) {
 	if !strings.HasPrefix(id, "lola-local-") || filepath.Base(id) != id {
@@ -42,6 +46,17 @@ func (n *Native) OpenDirectoryPrompt(ctx context.Context, p config.Project, id, 
 }
 
 func (n *Native) OpenDirectoryProfile(ctx context.Context, p config.Project, id, dir, location, kindName string, useAgent bool, prompt, model, effort string) (result session.Session, launchErr error) {
+	return n.openDirectory(ctx, p, id, dir, location, kindName, useAgent, prompt, model, effort, nil)
+}
+
+func (n *Native) OpenAgentTab(ctx context.Context, p config.Project, id string, owner session.Session) (session.Session, error) {
+	if owner.Sandbox != "" && owner.Sandbox != config.SandboxDocker || owner.Sandbox == "" && owner.GitPin != nil {
+		return session.Session{}, errors.New("unknown agent tab launch environment")
+	}
+	return n.openDirectory(ctx, p, id, owner.Worktree, LocationAgentTab, owner.Agent, true, "", "", "", &owner)
+}
+
+func (n *Native) openDirectory(ctx context.Context, p config.Project, id, dir, location, kindName string, useAgent bool, prompt, model, effort string, owner *session.Session) (result session.Session, launchErr error) {
 	if model != "" && !agent.ValidModel(model) || !agent.ValidEffort(agent.Parse(kindName), effort) {
 		return session.Session{}, errors.New("invalid AI model profile")
 	}
@@ -52,7 +67,8 @@ func (n *Native) OpenDirectoryProfile(ctx context.Context, p config.Project, id,
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return session.Session{}, fmt.Errorf("session directory unavailable: %s", dir)
 	}
-	if useAgent && n.sandboxProject(p.Name) != nil {
+	sandboxTab := owner != nil && owner.Sandbox == config.SandboxDocker
+	if owner == nil && useAgent && n.sandboxProject(p.Name) != nil {
 		return session.Session{}, errors.New("sandboxed agents require an isolated worktree; choose New worktree")
 	}
 	kind := agent.Parse(kindName)
@@ -68,7 +84,19 @@ func (n *Native) OpenDirectoryProfile(ctx context.Context, p config.Project, id,
 			_ = os.RemoveAll(artifacts)
 		}
 	}()
-	p = withSessionEnv(p, EnvVars{Session: id, Project: p.Name, Worktree: dir})
+	vars := EnvVars{Session: id, Project: p.Name, Worktree: dir}
+	if owner != nil {
+		vars.Session, vars.Branch, vars.Issue = owner.ID, owner.Branch, owner.Issue
+		if sandboxTab {
+			vars.Worktree = filepath.Join(artifacts, "work")
+		}
+		if n.Ports != nil {
+			if lease, ok := n.Ports.Get(owner.ID); ok {
+				vars.Ports = lease.Ports
+			}
+		}
+	}
+	p = withSessionEnv(p, vars)
 	env := manualEnvFile(p)
 	if err := os.WriteFile(filepath.Join(artifacts, "shell-env"), env, 0600); err != nil {
 		return session.Session{}, err
@@ -77,8 +105,17 @@ func (n *Native) OpenDirectoryProfile(ctx context.Context, p config.Project, id,
 		// Reserved values follow project env so another session cannot inherit
 		// a stale callback target. No Linear credential is needed here.
 		env = append(env, []byte("LOLA_SESSION="+shQuote(id)+"\n")...)
-		if kind == agent.Codex {
-			env = append(env, []byte("CODEX_HOME="+shQuote(userCodexHome())+"\n")...)
+		if sandboxTab {
+			// Use the private launch directory for state lookup, including legacy-home detection.
+			cwd := filepath.Join(artifacts, "work")
+			env = append(env, "LOLA_WORKTREE="+shQuote(cwd)+"\n"...)
+			env = append(env, n.sandboxEnv(p, id, cwd, kind)...)
+		} else if kind == agent.Codex {
+			home := userCodexHome()
+			if owner != nil && p.Env["CODEX_HOME"] != "" {
+				home = p.Env["CODEX_HOME"]
+			}
+			env = append(env, "CODEX_HOME="+shQuote(home)+"\n"...)
 		}
 		if kind == agent.Claude {
 			if err := os.WriteFile(filepath.Join(artifacts, "settings.json"), hook.SettingsJSON(n.lolaBin()), 0600); err != nil {
@@ -100,6 +137,26 @@ func (n *Native) OpenDirectoryProfile(ctx context.Context, p config.Project, id,
 		return session.Session{}, err
 	}
 	s := session.Session{ID: id, Source: "native", Kind: session.KindLocal, Location: location, Project: p.Name, Worktree: dir, TmuxName: id, Agentless: !useAgent, Agent: string(kind), Model: model, ModelEffort: effort, Title: "Shell · " + filepath.Base(dir)}
+	if owner != nil {
+		s.AgentTabParent = owner.ID
+		if p.RequirePlan || owner.PlanGate.Blocks() {
+			s.PlanGate = session.PlanPlanning
+		}
+		s.Sandbox = owner.Sandbox
+		s.GitPin = owner.GitPin
+		s.AgentCWD = filepath.Join(artifacts, "work")
+		if err := os.Mkdir(s.AgentCWD, 0700); err != nil {
+			return session.Session{}, err
+		}
+		if !sandboxTab {
+			n.trustAgentDir("", id, s.AgentCWD, kind) // a host tab in Lola’s private scratch directory
+			defer func() {
+				if launchErr != nil {
+					n.untrustAgentDir(id, s.AgentCWD)
+				}
+			}()
+		}
+	}
 	if useAgent {
 		s.Title = kind.Binary() + " · " + filepath.Base(dir)
 	}
@@ -143,20 +200,30 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool,
 		return session.Session{}, err
 	}
 	// The line below mounts the sandbox's linux lola, so it must exist first.
-	if err := n.prepareSandbox(ctx, "", s.Sandbox != "" && !s.IsAgentless()); err != nil {
+	if err := n.prepareSandbox(ctx, s.Project, s.Sandbox != "" && !s.IsAgentless()); err != nil {
 		return session.Session{}, err
 	}
-	posix := "set -a; . " + shQuote(filepath.Join(artifacts, "env")) + " || exit; set +a; exec "
+	posix := "set -a; . " + shQuote(filepath.Join(artifacts, "env")) + " || exit; set +a; "
 	if s.Location == LocationSSH && !s.IsAgentless() {
 		posix = n.sshPosix(ctx, s, artifacts, resume)
 	} else if s.IsAgentless() {
-		posix += `"${SHELL:-/bin/sh}" -l`
+		posix += `exec "${SHELL:-/bin/sh}" -l`
 	} else {
 		kind := agent.Parse(s.Agent)
 		// No cwd-based --continue: two agents can share this directory, so that
 		// would resume an unrelated conversation. Reopen starts a fresh agent.
 		args := append(agent.LaunchModelArgs(kind, s.Model), agent.EffortArgs(kind, s.ModelEffort)...)
-		args = append(args, agent.LaunchArgs(kind, n.LocalFirstTurn(s.ID, prompt))...)
+		firstTurn := n.LocalFirstTurn(s.ID, prompt)
+		if s.Location == LocationAgentTab && s.Sandbox == "" {
+			// The providers index history by launch directory. Give tools access to the
+			// actual checkout while keeping this tab out of the owner's history/resume.
+			args = append(args, "--add-dir", s.Worktree)
+			firstTurn = n.LocalFirstTurn(s.ID, "") + fmt.Sprintf("\nYour shared project checkout is %q. Read its project instructions and use that directory for all project commands and edits. Other agents may be editing it concurrently.", s.Worktree)
+		}
+		if s.PlanGate.Blocks() {
+			firstTurn = string(n.withPlanBriefing([]byte(firstTurn)))
+		}
+		args = append(args, agent.LaunchArgs(kind, firstTurn)...)
 		for i, arg := range args {
 			if arg == ".lola/settings.json" {
 				args[i] = filepath.Join(artifacts, "settings.json")
@@ -166,12 +233,32 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool,
 			args = append(codexNotifyArgs(n.lolaBin()), args...)
 		}
 		bin := kind.Binary()
-		if kind == agent.Claude && n.ClaudeBin != "" {
+		if kind == agent.Claude && n.ClaudeBin != "" && s.Sandbox == "" {
 			bin = n.ClaudeBin
 		}
-		posix += shQuote(bin)
+		if s.Location == LocationAgentTab && kind == agent.Codex {
+			// Codex needs both the checkout and its shared Git index for commits.
+			// Only a Docker tab has a pinned layout. Resolve a host tab's store
+			// from inside its host launch, as launchLine does for primary agents.
+			if s.GitPin != nil {
+				posix += "lola_git_common_dir=" + shQuote(s.GitPin.CommonDir) + "; " + codexTrustPrelude
+			} else {
+				posix += "lola_git_common_dir=$(git -C " + shQuote(s.Worktree) + " rev-parse --path-format=absolute --git-common-dir 2>/dev/null); set --; "
+				args = append([]string{"-c", "projects={" + strconv.Quote(s.AgentCWD) + "={trust_level=\"trusted\"}}"}, args...)
+			}
+			posix += `if test -d "$lola_git_common_dir"; then set -- "$@" --add-dir "$lola_git_common_dir"; fi; `
+			posix += "exec " + shQuote(bin) + ` "$@"`
+		} else {
+			posix += "exec " + shQuote(bin)
+		}
 		for _, arg := range args {
 			posix += " " + shQuote(arg)
+		}
+	}
+	if s.Location == LocationAgentTab && s.Sandbox == config.SandboxDocker {
+		posix, err = n.agentTabContainer(ctx, s, artifacts, posix)
+		if err != nil {
+			return session.Session{}, err
 		}
 	}
 	line, err := localLaunchLine(artifacts, posix)
@@ -179,7 +266,11 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool,
 		return session.Session{}, err
 	}
 
-	if err := n.Tmux.NewSession(ctx, s.ID, s.Worktree, line); err != nil {
+	cwd := s.Worktree
+	if s.AgentCWD != "" {
+		cwd = s.AgentCWD
+	}
+	if err := n.Tmux.NewSession(ctx, s.ID, cwd, line); err != nil {
 		if n.Tmux.Has(ctx, s.ID) {
 			_ = n.Tmux.KillSession(ctx, s.ID)
 		}
@@ -215,7 +306,7 @@ func codexNotifyArgs(lolaBin string) []string {
 }
 
 func (n *Native) reviveLocal(ctx context.Context, s session.Session) (session.Session, error) {
-	if !s.IsAgentless() && n.sandboxProject(s.Project) != nil {
+	if !s.IsAgentless() && s.Location != LocationAgentTab && n.sandboxProject(s.Project) != nil {
 		return session.Session{}, errors.New("sandboxed agents require an isolated worktree; create a new worktree session")
 	}
 	if fi, err := os.Stat(s.Worktree); err != nil || !fi.IsDir() {

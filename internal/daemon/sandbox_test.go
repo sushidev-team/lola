@@ -111,7 +111,7 @@ func TestHookBridgeCarriesThePlanGate(t *testing.T) {
 	}
 }
 
-func TestHookBridgeOpensOnlyWhileAProjectIsSandboxed(t *testing.T) {
+func TestHookBridgeFollowsSandboxedProjectsAndSessions(t *testing.T) {
 	cfg := nativeTestConfig(nativePoll("p1"))
 	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})
 	free, err := net.Listen("tcp", "127.0.0.1:0")
@@ -145,6 +145,14 @@ func TestHookBridgeOpensOnlyWhileAProjectIsSandboxed(t *testing.T) {
 	d.mu.Lock()
 	d.cfg.Projects[0].Sandbox = ""
 	d.mu.Unlock()
+	d.sessions.Upsert(session.Session{ID: "existing", Sandbox: config.SandboxDocker})
+	d.syncHookBridge(ctx)
+	c, err = net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("existing Docker session lost its hook bridge: %v", err)
+	}
+	c.Close()
+	d.sessions.Delete("existing")
 	d.syncHookBridge(ctx)
 	if c, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
 		c.Close()

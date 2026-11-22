@@ -7,6 +7,7 @@ const { needed } = vi.hoisted(() => ({ needed: vi.fn() }));
 vi.mock("@bindings/desktop", () => ({
   ConfigService: {
     SandboxLoginNeeded: (p: string, a: string) => needed(p, a),
+    SandboxTabLoginNeeded: (p: string, a: string) => needed(p, a, "docker-tab"),
     SandboxStatus: () => Promise.resolve({ tokenStored: false, claudeSource: "" }),
     SetSandboxToken: () => Promise.resolve(),
   },
@@ -52,6 +53,17 @@ describe("sandbox login gate", () => {
     needed.mockResolvedValue("");
     await fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     expect(await ok).toBe(true);
+  });
+
+  it("rechecks the inherited Docker environment when the project now uses the host", async () => {
+    needed.mockResolvedValue("codex");
+    render(SandboxLoginDialog);
+    const ok = sandboxLogin.ensure("web", "codex", true);
+    expect(await screen.findByText(/like its original session/)).toBeInTheDocument();
+    needed.mockResolvedValue("");
+    await fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await ok).toBe(true);
+    expect(needed).toHaveBeenNthCalledWith(2, "web", "codex", "docker-tab");
   });
 
   it("starts nothing when cancelled", async () => {

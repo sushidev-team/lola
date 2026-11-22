@@ -16,7 +16,7 @@ import { store, type SessionInfo } from "./store.svelte";
 import { nav } from "./nav.svelte";
 import { confirm } from "./confirm.svelte";
 import { terms, AGENT, CHECKPOINTS, DIFF, SSH, isChangesTab, isViewTab } from "./terms.svelte";
-import { changesOffered, conversationOffered, stripCells, type StripCell } from "./sessionview";
+import { changesOffered, conversationOffered, isAgentless, stripCells, type StripCell } from "./sessionview";
 import { landingFor, nextWaiting } from "./queue";
 import { checkpoints } from "./checkpoints.svelte";
 import { AGENT_DEST } from "./composer";
@@ -679,6 +679,56 @@ class SSHStore {
 
   // --- the session's views ---------------------------------------------------
 
+  stripMembers(s: SessionInfo): SessionInfo[] {
+    const parent = s.agentTabParent || s.id;
+    const owner = store.sessionById(parent);
+    if (!owner) return [s];
+    const children = store.sessions.filter(member => member.agentTabParent === parent)
+      .sort((a, b) => String(a.firstSeen).localeCompare(String(b.firstSeen)) || a.id.localeCompare(b.id));
+    return [owner, ...children];
+  }
+
+  stripTabs(s: SessionInfo, members: SessionInfo[], sideChanges: boolean) {
+    const views: { owner: string; cell: StripCell; label: string }[] = [];
+    for (const [index, member] of members.entries()) {
+      if (conversationOffered(member)) views.push({
+        owner: member.id, cell: { kind: "conversation", key: "conversation" },
+        label: index ? `Conversation ${index + 1}` : "Conversation",
+      });
+    }
+    if (isAgentless(s)) views.push({ owner: s.id, cell: { kind: "terminal", key: "terminal" }, label: "Shell" });
+    if (!sideChanges && changesOffered(s)) views.push({ owner: s.id, cell: { kind: "changes", key: "changes" }, label: "Changes" });
+
+    const machines = members.flatMap(member =>
+      stripCells(member, terms.shellsFor(member.id)).machines.map(cell => ({
+        owner: member.id, cell,
+        label: cell.kind === "host" ? `$ ${cell.label}` : cell.kind === "review" ? "review" :
+          "name" in cell ? terms.labelFor(member.id, cell.name) : "",
+      })));
+    const keyed = <T extends { owner: string; cell: StripCell }>(t: T) => ({ ...t, key: t.owner + ":" + t.cell.key });
+    return {
+      views: views.map(keyed),
+      hosts: machines.filter(t => t.cell.kind === "host").map(keyed),
+      terminals: machines.filter((t): t is typeof t & { cell: Extract<StripCell, { name: string }> } => "name" in t.cell).map(keyed),
+    };
+  }
+
+  selectStripTab(current: string, t: { owner: string; cell: StripCell }) {
+    if (current !== t.owner) nav.openSession(t.owner);
+    this.selectCell(t.owner, t.cell);
+  }
+
+  closeConversation(id: string) {
+    const parent = store.sessionById(id)?.agentTabParent;
+    if (!parent) return;
+    store.askKill(id, undefined, { onRemoved: () => {
+      if (nav.focusedTerm === id) {
+        nav.openSession(parent);
+        this.selectCell(parent, { key: "conversation", kind: "conversation" });
+      }
+    } });
+  }
+
   /** Which cell of the strip this session is on, for `<` `>` and the strip's own underline. */
   currentCell(s: SessionInfo): string {
     const tab = terms.activeTab(s.id);
@@ -723,6 +773,16 @@ class SSHStore {
 
   /** `<` and `>`: every cell of the strip, in visual order, wrapping. */
   ringStrip(s: SessionInfo, dir: 1 | -1) {
+    const members = this.stripMembers(s);
+    if (members.length > 1) {
+      const { views, hosts, terminals } = this.stripTabs(s, members, this.view(s.id).sessionPanels);
+      const tabs = [...views, ...hosts, ...terminals];
+      const current = this.currentCell(s);
+      let at = tabs.findIndex(t => t.owner === s.id && t.cell.key === current);
+      if (at < 0) at = tabs.findIndex(t => t.owner === s.id);
+      this.selectStripTab(s.id, tabs[(at + dir + tabs.length) % tabs.length]);
+      return;
+    }
     const { views, machines } = stripCells(s, terms.shellsFor(s.id));
     const cells = [...views, ...machines];
     if (cells.length < 2) return;

@@ -929,11 +929,14 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 	for _, s := range snap {
 		si := protocol.SessionInfo{
 			GoalID: s.GoalID, TaskID: s.TaskID, AttemptID: s.AttemptID,
-			ID:        s.ID,
-			Project:   s.Project,
-			Issue:     s.Issue,
-			Title:     s.DisplayTitle(),
-			Location:  s.Location,
+			ID:              s.ID,
+			Project:         s.Project,
+			Issue:           s.Issue,
+			Title:           s.DisplayTitle(),
+			Location:        s.Location,
+			AgentTabParent:  s.AgentTabParent,
+			CanOpenAgentTab: agentTabOffered(s, cfg.ProjectByName(s.Project)),
+
 			Branch:    s.Branch,
 			Agent:     agent.Parse(s.Agent).String(), // "" (legacy) reads as claude
 			Status:    s.Status,

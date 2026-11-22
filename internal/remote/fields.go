@@ -173,7 +173,7 @@ func checkOpenManual(req *protocol.Request, has func(string) bool) (checkResult,
 	if err := decodeArgs(req, &a); err != nil {
 		return checkResult{}, err
 	}
-	if (a.Location != "" && a.Location != "worktree") || a.Path != "" {
+	if (a.Location != "" && a.Location != "worktree") || a.Path != "" || a.ParentSession != "" {
 		return checkResult{}, errOpenLocation
 	}
 	if !a.Agent && !has(protocol.TierShell) {

@@ -40,6 +40,12 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force, keepWo
 	if sessionID == "" {
 		return protocol.KillData{}, errors.New("session id required")
 	}
+	lock := d.ckptLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	if !keepWorktree && d.hasAgentTabs(sessionID) {
+		return protocol.KillData{}, errAgentTabsOpen
+	}
 	s, ok := d.sessions.Get(sessionID)
 	if !ok {
 		return protocol.KillData{}, fmt.Errorf("unknown session %s", sessionID)

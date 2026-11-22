@@ -90,6 +90,12 @@ func (d *Daemon) maybeRelogin(ctx context.Context, s session.Session) {
 	if !ok || !r.SandboxLoginMissing(s) || !r.SandboxLoginAvailable(agent.Parse(s.Agent)) {
 		return
 	}
+	lock := d.ckptLock(s.ID)
+	lock.Lock()
+	defer lock.Unlock()
+	if d.hasAgentTabs(s.ID) {
+		return
+	}
 	if !d.relogin.due(s.ID, time.Now()) {
 		return
 	}

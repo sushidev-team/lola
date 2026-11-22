@@ -151,7 +151,7 @@ func (d *Daemon) appsInfo(cfg *config.Config, s session.Session) []protocol.Sess
 // session's folder is not a repository; its apps are pinned one by one.
 func (d *Daemon) syncGitPins() {
 	d.mu.Lock()
-	cfg := d.cfg
+	cfg, nat := d.cfg, d.native
 	home := d.home
 	d.mu.Unlock()
 	pin := func(wt string, p *gitguard.Pin) {
@@ -165,11 +165,15 @@ func (d *Daemon) syncGitPins() {
 		}
 	}
 	for _, s := range d.sessions.Snapshot() {
+		if s.AgentTabParent != "" {
+			continue // The checkout owner is the authority for its pin.
+		}
 		// A pin outlives the sandbox: an agent had write access to that metadata, so
 		// host git must keep ignoring it after a relaunch on the host.
 		sandboxed := s.Sandbox != "" || s.GitPin != nil
-		if p := cfg.ProjectByName(s.Project); p != nil && p.Sandboxed() {
-			sandboxed = true
+		if p := cfg.ProjectByName(s.Project); !sandboxed && p != nil && p.Sandboxed() {
+			// A changed default only implies isolation when the old host launch cannot be verified.
+			sandboxed = !confirmedHostAgent(context.Background(), nat, s)
 		}
 		if !sandboxed {
 			continue

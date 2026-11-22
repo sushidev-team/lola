@@ -87,6 +87,9 @@ func (d *Daemon) handleOpen(ctx context.Context, project, ref string) (protocol.
 // deletes it. With Existing (cmd=openExisting), work directly on the chosen
 // branch instead and keep it on teardown.
 func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs) (protocol.OpenData, error) {
+	if a.Location == runtime.LocationAgentTab {
+		return d.openAgentTab(ctx, a.ParentSession)
+	}
 	if a.Location != "" && a.Location != "worktree" {
 		return d.handleOpenDirectory(ctx, a)
 	}

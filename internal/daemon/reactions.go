@@ -355,6 +355,12 @@ func cleanupRetryDue(s session.Session, now time.Time) bool {
 // force is still never passed, so a dirty worktree is still kept rather than
 // destroyed, and the branch rule stays runtime.Kill's.
 func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier notify.Notifier) {
+	lock := d.ckptLock(s.ID)
+	lock.Lock()
+	defer lock.Unlock()
+	if d.hasAgentTabs(s.ID) {
+		return // The next observation retries after the shared checkout is released.
+	}
 	if s.CleanupFailures >= maxCleanupAttempts {
 		// Given up already (noteCleanupFailure notified when the budget ran
 		// out). Attempt nothing — but keep the record ALIVE, or the very

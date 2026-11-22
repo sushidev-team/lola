@@ -71,6 +71,8 @@ type NativeAPI interface {
 	OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error)
 	OpenExisting(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string, useAgent bool) (session.Session, error)
 	OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool) (session.Session, error)
+	HostAgentRunning(ctx context.Context, s session.Session) bool
+	OpenAgentTab(ctx context.Context, p config.Project, id string, owner session.Session) (session.Session, error)
 	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error)
 	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error)
 	SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error)
@@ -1523,6 +1525,8 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			if exists {
 				prev := *cur
 				s.Name = prev.Name
+				s.AgentTabParent = prev.AgentTabParent
+				s.AgentCWD = prev.AgentCWD
 				s.Location = prev.Location
 				// A tmux scan cannot recover the shared tasks or reported plan.
 				s.Tasks = prev.Tasks

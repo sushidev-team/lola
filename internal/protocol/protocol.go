@@ -453,6 +453,9 @@ type SessionApp struct {
 // SessionInfo is one observed session, flattened to render-ready strings and
 // ints so the TUI never needs scm/session imports or re-derivation.
 type SessionInfo struct {
+	AgentTabParent  string `json:"agentTabParent,omitempty"`
+	CanOpenAgentTab bool   `json:"canOpenAgentTab,omitempty"`
+
 	Location  string `json:"location,omitempty"`
 	GoalID    string `json:"goalId,omitempty"`
 	TaskID    string `json:"taskId,omitempty"`
@@ -869,6 +872,8 @@ type PrRow struct {
 // Existing (cmd=openExisting) instead works directly on Branch without owning
 // it, ignoring Base. A distinct command keeps older daemons from creating it.
 type OpenManualArgs struct {
+	ParentSession string `json:"parentSession,omitempty"` // agent-tab takes its checkout from this stored session
+
 	AIAction string `json:"aiAction,omitempty"` // resolve selects the provider-specific AI profile for a new checkout session
 	Name     string `json:"name,omitempty"`
 	Location string `json:"location,omitempty"` // worktree (default), main, checkout (borrowed), temporary

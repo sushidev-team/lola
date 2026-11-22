@@ -411,7 +411,7 @@ func (d *Daemon) handleCheckpoints(ctx context.Context, id string) (protocol.Che
 	out := protocol.CheckpointsData{
 		Session:     s.ID,
 		Checkpoints: make([]protocol.CheckpointInfo, 0, len(list)),
-		Restorable:  !midTurn(s),
+		Restorable:  !midTurn(s) && !d.hasAgentTabs(s.ID),
 	}
 	for i, c := range list {
 		label := c.Label
@@ -471,6 +471,9 @@ func (d *Daemon) handleRestoreCheckpoint(ctx context.Context, a protocol.Checkpo
 	mu := d.ckptLock(s.ID)
 	mu.Lock()
 	defer mu.Unlock()
+	if d.hasAgentTabs(s.ID) {
+		return protocol.RestoreCheckpointData{}, errAgentTabsOpen
+	}
 	// Hold the send gate EXCLUSIVELY for the whole restore: a review hand-off,
 	// queued feedback, a reaction or an answer would otherwise start a turn
 	// after the idle check below and let the agent edit files while they are

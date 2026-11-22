@@ -1655,6 +1655,11 @@ export interface OpenData {
  */
 export interface OpenManualArgs {
     /**
+     * agent-tab takes its checkout from this stored session
+     */
+    "parentSession"?: string;
+
+    /**
      * resolve selects the provider-specific AI profile for a new checkout session
      */
     "aiAction"?: string;
@@ -3389,6 +3394,8 @@ export interface SessionApp {
  * ints so the TUI never needs scm/session imports or re-derivation.
  */
 export interface SessionInfo {
+    "agentTabParent"?: string;
+    "canOpenAgentTab"?: boolean;
     "location"?: string;
     "goalId"?: string;
     "taskId"?: string;

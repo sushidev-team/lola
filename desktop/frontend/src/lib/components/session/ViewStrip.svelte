@@ -1,24 +1,10 @@
 <script lang="ts">
   import Icon from "$lib/components/Icon.svelte";
-  // The strip under the top bar. Three groups, and only the middle one can move or scroll:
-  //
-  //   Conversation  Changes     $ prod-api  zsh  review  +            Widgets 2 •
-  //   └ fixed, never moves ───────────┘   └ mono, machine things, past a fade ┘         └ fixed ┘
-  //
-  // `+` sits right after the tabs it adds to, and keeps its place when they scroll past the fade.
-  //
-  // The first group's position is what spatial memory rides on, so a host arriving must not push
-  // it. A real tablist with arrow keys. It is hand-rolled rather than <Button> for the same reason
-  // Tabs.svelte is: a role="tab" with a roving tabindex and a drawn underline is not a button.
-  //
-  // Colour is never the only signal for the active cell: the underline carries it, in ink.
-  //
-  // The second group keeps what the old strip's shell tabs had: drag to sort, double-click or
-  // right-click to rename, × on hover or focus. A host's `$` cell has no ×, because removing a
-  // host and its record is a decision that belongs to the host bar, behind a confirmation.
+  // Tabs share a scrolling row. The add and panel controls stay within reach.
   import { tick } from "svelte";
   import { flip } from "svelte/animate";
   import { store, type SessionInfo } from "$lib/store.svelte";
+  import { nav } from "$lib/nav.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { OVERVIEW_PANEL, CHANGES_PANEL, sessionPanelTitle, widgetTabLabel } from "$lib/sessionpanels";
   import { groupOf } from "$lib/docklayout";
@@ -26,8 +12,7 @@
   import { feedback } from "$lib/feedback.svelte";
   import { changes } from "$lib/changes.svelte";
   import { sshNeedsHuman } from "$lib/ssh";
-  import { isAgentless, changesOffered, stripCells, type StripCell } from "$lib/sessionview";
-  import { widthOf } from "./measure";
+  import { isAgentless, changesOffered } from "$lib/sessionview";
   import Button from "../Button.svelte";
   import MenuItem from "../MenuItem.svelte";
 
@@ -35,19 +20,17 @@
 
   const id = $derived(session.id);
   const view = $derived(ssh.view(id));
-  const shells = $derived(terms.shellsFor(id));
-  const cells = $derived(stripCells(session, shells));
+  const parent = $derived(session.agentTabParent || id);
+  const members = $derived(ssh.stripMembers(session));
+  const tabs = $derived(ssh.stripTabs(session, members, changesInSide));
+  const views = $derived(tabs.views);
+  const hosts = $derived(tabs.hosts);
+  const terminals = $derived(tabs.terminals);
+  type Tab = (typeof views)[number];
+  const all = $derived([...views, ...hosts, ...terminals]);
   const selected = $derived(ssh.currentCell(session));
-  const current = $derived(terms.isDevTab(selected) ? "terminal" : changesInSide && selected === "changes" ? "conversation" : selected);
-  // With a Conversation the terminal is its raw form: a toggle beside the activity bar (RawToggle), not a tab.
-  const conversationCell = $derived(cells.views.find((c) => c.kind === "conversation"));
-  const rawCell = $derived(conversationCell ? cells.views.find((c) => c.kind === "terminal") : undefined);
-  // Any terminal on show (a dev tab included) leaves the strip with Conversation as its selected tab.
-  const onTerminal = $derived(!!rawCell && current === "terminal");
-  const views = $derived(cells.views.filter(c => (!changesInSide || c.kind !== 'changes') && c !== rawCell));
-  const all = $derived([...views, ...cells.machines]);
-  // Visible terminals retain their order; drag indices must account for hidden dev tabs.
-  const terminals = $derived(cells.machines.filter((c): c is Extract<StripCell, { name: string }> => c.kind !== "host"));
+  const current = $derived(!isAgentless(session) && (selected === "terminal" || terms.isDevTab(selected) || (changesInSide && selected === "changes")) ? "conversation" : selected);
+  const activeKey = $derived(id + ":" + current);
   const draftCount = $derived(feedback.count(id));
   const stat = $derived(changes.of(id));
   const waitsElsewhere = $derived(sshNeedsHuman(session) && current !== "conversation");
@@ -55,36 +38,37 @@
   const widgets = $derived(view.knownWidgets.length);
   const widgetDot = $derived(view.dockUnseen.size > 0);
 
-  let width = $state(0);
-  // 0 means not measured yet, which is the wide layout. Under 900 of main column the second
-  // group folds into one menu, so the first group never gives up its place.
-  const narrow = $derived(width > 0 && width < 876);
-
-  function viewLabel(c: StripCell): string {
-    if (c.kind === "conversation") return "Conversation";
-    if (c.kind === "changes") return "Changes";
-    return isAgentless(session) ? "Shell" : "Terminal";
-  }
-  function machineLabel(c: StripCell): string {
-    if (c.kind === "host") return `$ ${c.label}`;
-    if (c.kind === "dev") return `dev: ${terms.labelFor(id, c.name)}`;
-    if (c.kind === "review") return "review";
-    return c.kind === "shell" ? terms.labelFor(id, c.name) : "";
-  }
+  let tabList = $state<HTMLElement>();
+  $effect(() => {
+    const tab = refs[activeKey];
+    if (!tab || !tabList) return;
+    const list = tabList;
+    const reveal = () => {
+      const row = list.getBoundingClientRect();
+      const rect = tab.getBoundingClientRect();
+      if (rect.right > row.right) list.scrollLeft += rect.right - row.right;
+      else if (rect.left < row.left) list.scrollLeft -= row.left - rect.left;
+    };
+    reveal();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(reveal);
+    observer.observe(list);
+    return () => observer.disconnect();
+  });
 
   let refs = $state<Record<string, HTMLElement | undefined>>({});
-  async function pick(c: StripCell, focus = false) {
-    ssh.selectCell(id, c);
+  async function pick(t: Tab, focus = false) {
+    ssh.selectStripTab(id, t);
     if (focus) {
       await tick();
-      refs[c.key]?.focus();
+      refs[t.key]?.focus();
     }
   }
-  function cellKey(e: KeyboardEvent, c: StripCell) {
+  function cellKey(e: KeyboardEvent, c: Tab) {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
     e.stopPropagation();
-    const ring = narrow ? views : all;
+    const ring = all;
     const at = ring.findIndex((x) => x.key === c.key);
     const next = ring[(at + (e.key === "ArrowRight" ? 1 : -1) + ring.length) % ring.length];
     void pick(next, true);
@@ -127,7 +111,10 @@
     if (swapLock) return;
     const to = tabIndexAt(e.clientX, terminals.length);
     if (to === dragFrom) return;
-    terms.moveTab(id, shells.indexOf(terminals[dragFrom].name), shells.indexOf(terminals[to].name));
+    const fromTab = terminals[dragFrom], toTab = terminals[to];
+    if (!fromTab || !toTab || fromTab.owner !== toTab.owner) return;
+    const shells = terms.shellsFor(fromTab.owner);
+    terms.moveTab(fromTab.owner, shells.indexOf(fromTab.cell.name), shells.indexOf(toTab.cell.name));
     dragFrom = to;
     dragging = to;
     swapLock = true;
@@ -143,7 +130,7 @@
 
   // --- a shell tab's menu ---------------------------------------------------------
 
-  type TabMenu = { tab: string; x: number; y: number; mode: "menu" | "rename" };
+  type TabMenu = { owner: string; tab: string; x: number; y: number; mode: "menu" | "rename" };
   let tabMenu = $state<TabMenu | null>(null);
   let menuEl = $state<HTMLElement | null>(null);
   let renameEl = $state<HTMLInputElement | null>(null);
@@ -159,22 +146,22 @@
   $effect(() => {
     if (tabMenu?.mode === "rename") renameEl?.select();
   });
-  function openTabMenu(tab: string, e: MouseEvent) {
+  function openTabMenu(owner: string, tab: string, e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    tabMenu = { tab, x: e.clientX, y: e.clientY, mode: "menu" };
+    tabMenu = { owner, tab, x: e.clientX, y: e.clientY, mode: "menu" };
   }
-  function startRename(tab: string, at?: MouseEvent) {
-    renameText = terms.labelFor(id, tab);
-    tabMenu = { tab, x: at ? at.clientX : (tabMenu?.x ?? 0), y: at ? at.clientY : (tabMenu?.y ?? 0), mode: "rename" };
+  function startRename(owner: string, tab: string, at?: MouseEvent) {
+    renameText = terms.labelFor(owner, tab);
+    tabMenu = { owner, tab, x: at ? at.clientX : (tabMenu?.x ?? 0), y: at ? at.clientY : (tabMenu?.y ?? 0), mode: "rename" };
   }
   function commitRename() {
-    const tab = tabMenu?.tab;
+    const menu = tabMenu;
     tabMenu = null;
-    if (tab) terms.rename(id, tab, renameText);
+    if (menu) terms.rename(menu.owner, menu.tab, renameText);
   }
 
-  // --- + and ⋯ N ------------------------------------------------------------------
+  // --- add and panel menus ---------------------------------------------------------
 
   const availablePanels = $derived([
     ...[OVERVIEW_PANEL, ...(changesOffered(session) ? [CHANGES_PANEL] : [])].map(id => ({ id, title: sessionPanelTitle(id), label: sessionPanelTitle(id) })),
@@ -189,10 +176,14 @@
     panelButton?.focus();
   }
   let panelMenu = $state<HTMLDivElement | null>(null);
-  $effect(() => { if (panelAt && panelMenu) panelMenu.querySelector<HTMLButtonElement>('button')?.focus(); });
-  function panelKey(event: KeyboardEvent) {
+  let addMenu = $state<HTMLDivElement | null>(null);
+  $effect(() => {
+    const menu = panelAt ? panelMenu : addAt ? addMenu : null;
+    menu?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+  });
+  function menuKey(event: KeyboardEvent) {
     event.stopPropagation();
-    const items = [...(panelMenu?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+    const items = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
     if (!items.length || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const at = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -202,30 +193,61 @@
   let panelButton = $state<HTMLButtonElement | null>(null);
   let panelAt = $state<{ x: number; y: number } | null>(null);
   $effect(() => {
-    if (!panelAt) return;
-    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); panelAt = null; panelButton?.focus(); } };
+    if (!panelAt && !addAt && !tabMenu) return;
+    const escape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (panelAt) panelButton?.focus();
+      else if (addAt) addTrigger?.focus();
+      panelAt = null;
+      addAt = null;
+      tabMenu = null;
+    };
     window.addEventListener("keydown", escape, true);
     return () => window.removeEventListener("keydown", escape, true);
   });
   let addAt = $state<{ x: number; y: number } | null>(null);
-  let foldAt = $state<{ x: number; y: number } | null>(null);
+  function portal(node: HTMLDivElement) {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
+  let addTrigger: HTMLElement | null = null;
   function under(e: MouseEvent) {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    return { x: Math.max(4, Math.min(r.right - 208, window.innerWidth - 212)), y: r.bottom + 4 };
+    addTrigger = e.currentTarget as HTMLElement;
+    const r = addTrigger.getBoundingClientRect();
+    return { x: Math.max(4, Math.min(r.left, window.innerWidth - 212)), y: r.bottom + 4 };
   }
   function run(fn: () => void) {
     addAt = null;
-    foldAt = null;
     fn();
+  }
+  let starting = $state(false);
+  async function newAgent() {
+    if (starting) return;
+    const source = id;
+    starting = true;
+    try {
+      const next = await store.openManual({ location: "agent-tab", parentSession: parent, project: session.project, branch: "", agent: true, agentKind: members[0].agent });
+      if (next?.sessionId && nav.focusedTerm === source) {
+        nav.openSession(next.sessionId);
+        ssh.selectCell(next.sessionId, { key: "conversation", kind: "conversation" });
+      }
+    } finally {
+      starting = false;
+    }
   }
   const cellText = "relative inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap transition-colors";
 </script>
 
 {#snippet underline(on: boolean)}
-  {#if on}<span class="absolute inset-x-0 -bottom-px h-0.5 bg-ink" aria-hidden="true"></span>{/if}
+  {#if on}<span class="absolute inset-x-0 bottom-0 h-0.5 bg-ink" aria-hidden="true"></span>{/if}
 {/snippet}
 
 {#snippet addItems()}
+  {#if session.canOpenAgentTab}
+    <MenuItem disabled={starting} title="Start another agent in this checkout" onclick={() => run(newAgent)}>New agent conversation</MenuItem>
+  {/if}
   <MenuItem trailing="⌘T" disabled={!session.worktree} title={session.worktree ? undefined : "This session has no folder"} onclick={() => run(() => terms.newShell(id, session.worktree))}>New shell</MenuItem>
   {#if session.location !== "temporary"}
     <MenuItem onclick={() => run(() => ssh.connectHost(id))}>Connect to host…</MenuItem>
@@ -235,41 +257,40 @@
   {/if}
 {/snippet}
 
-<div class="relative z-10 grid h-8 min-w-0 grid-cols-[auto_minmax(0,max-content)_auto_minmax(0,1fr)_auto] items-stretch gap-x-6 border-b border-edge/60 bg-canvas px-3 select-none" {@attach widthOf((w) => (width = w))} data-view-strip>
-  <div role="tablist" aria-label="Session views" class="contents">
-    <div class="flex items-stretch gap-4">
+<div class="relative z-10 flex h-8 min-w-0 items-stretch gap-2 border-b border-edge/60 bg-canvas px-3 select-none" data-view-strip>
+  <div bind:this={tabList} role="tablist" aria-label="Session views" class="flex min-w-0 items-stretch gap-3 overflow-x-auto overscroll-x-contain [scrollbar-width:none]">
+    <div class="flex shrink-0 items-stretch gap-4">
       {#each views as c (c.key)}
-        {@const on = current === c.key || (onTerminal && c === conversationCell)}
-        <button
-          bind:this={refs[c.key]}
-          type="button"
-          role="tab"
-          aria-selected={on}
-          tabindex={on ? 0 : -1}
-          class="{cellText} {on ? 'font-medium text-ink' : 'text-faint hover:text-ink'}"
-          data-strip-cell={c.key}
-          onclick={() => pick(c)}
-          onkeydown={(e) => cellKey(e, c)}
-        >
-          {viewLabel(c)}
-          {#if c.kind === "conversation" && waitsElsewhere}<span class="text-orange" aria-label="A card is waiting"><Icon name="circle-alert" size={14} /></span>{/if}
-          {#if c.kind === "changes" && stat && !narrow && stat.add + stat.del > 0}<span class="num text-sm font-normal text-faint" data-changes-stat>+{stat.add} −{stat.del}</span>{/if}
-          {#if c.kind === "changes" && draftCount > 0}<span class="num text-sm font-normal text-faint"><span aria-hidden="true"><Icon name="circle-dot" size={14} /></span> {draftCount}</span>{/if}
-          {@render underline(on)}
-        </button>
+        {@const on = activeKey === c.key}
+        <div class="group flex shrink-0 items-center gap-0.5">
+          <button
+            bind:this={refs[c.key]}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            tabindex={on ? 0 : -1}
+            class="{cellText} {on ? 'font-medium text-ink' : 'text-faint hover:text-ink'}"
+            data-strip-cell={c.cell.key}
+            onclick={() => pick(c)}
+            onkeydown={(e) => cellKey(e, c)}
+          >
+            {c.label}
+            {#if c.owner === id && c.cell.kind === "conversation" && waitsElsewhere}<span class="text-orange" aria-label="A card is waiting"><Icon name="circle-alert" size={14} /></span>{/if}
+            {#if c.cell.kind === "changes" && stat && stat.add + stat.del > 0}<span class="num text-sm font-normal text-faint" data-changes-stat>+{stat.add} −{stat.del}</span>{/if}
+            {#if c.cell.kind === "changes" && draftCount > 0}<span class="num text-sm font-normal text-faint"><span aria-hidden="true"><Icon name="circle-dot" size={14} /></span> {draftCount}</span>{/if}
+            {@render underline(on)}
+          </button>
+          {#if c.cell.kind === "conversation" && c.owner !== parent}
+            <Button variant="bare" size="xs" icon class="h-4! w-4! opacity-0 group-hover:opacity-100 focus-visible:opacity-100" aria-label={`Close ${c.label}`} onclick={() => ssh.closeConversation(c.owner)}><Icon name="x" size={14} /></Button>
+          {/if}
+        </div>
       {/each}
     </div>
 
-    {#if narrow}
-      <div class="flex items-stretch">
-        {#if cells.machines.length}
-          <Button size="xs" class="my-auto font-mono!" aria-haspopup="menu" aria-expanded={!!foldAt} aria-label="{cells.machines.length} more terminals" onclick={(e) => (foldAt = under(e))}><Icon name="ellipsis" size={14} /> <span class="num">{cells.machines.length}</span></Button>
-        {/if}
-      </div>
-    {:else}
-      <div class="flex min-w-0 items-stretch gap-3 overflow-x-auto font-mono text-sm [mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)] [scrollbar-width:none]" data-strip-machines>
-        {#each cells.machines.filter((c) => c.kind === "host") as c (c.key)}
-          {@const on = current === c.key}
+    {#if hosts.length || terminals.length}
+      <div class="flex shrink-0 items-stretch gap-3 font-mono text-sm" data-strip-machines>
+        {#each hosts as c (c.key)}
+          {@const on = activeKey === c.key}
           <button
             bind:this={refs[c.key]}
             type="button"
@@ -277,17 +298,17 @@
             aria-selected={on}
             tabindex={on ? 0 : -1}
             class="{cellText} {on ? 'text-ink' : 'text-faint hover:text-ink'}"
-            data-strip-cell={c.key}
+            data-strip-cell={c.cell.key}
             onclick={() => pick(c)}
             onkeydown={(e) => cellKey(e, c)}
           >
-            {machineLabel(c)}
+            {c.label}
             {@render underline(on)}
           </button>
         {/each}
         {#each terminals as c, i (c.key)}
-            {@const sh = c.name}
-            {@const on = current === sh}
+            {@const sh = c.cell.name}
+            {@const on = activeKey === c.key}
             <div
               bind:this={tabEls[i]}
               animate:flip={{ duration: dragging >= 0 ? flipMs : 0 }}
@@ -299,7 +320,7 @@
               onpointermove={dragMove}
               onpointerup={dragEnd}
               onpointercancel={dragEnd}
-              oncontextmenu={(e) => openTabMenu(sh, e)}
+              oncontextmenu={(e) => openTabMenu(c.owner, sh, e)}
             >
               <button
                 bind:this={refs[c.key]}
@@ -308,12 +329,12 @@
                 aria-selected={on}
                 tabindex={on ? 0 : -1}
                 class="inline-flex h-8 max-w-56 items-center truncate whitespace-nowrap"
-                data-strip-cell={c.key}
+                data-strip-cell={c.cell.key}
                 onclick={() => pick(c)}
-                ondblclick={(e) => startRename(sh, e)}
+                ondblclick={(e) => startRename(c.owner, sh, e)}
                 onkeydown={(e) => cellKey(e, c)}
               >
-                {machineLabel(c)}
+                {c.label}
               </button>
               <Button
                 variant="bare"
@@ -322,7 +343,7 @@
                 class="h-4! w-4! opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100"
                 title={terms.isReviewTab(sh) ? "close the review pane" : terms.isDevTab(sh) ? "stop this session's dev processes" : "close shell"}
                 aria-label={terms.isReviewTab(sh) ? "close review" : terms.isDevTab(sh) ? "stop dev" : "close shell"}
-                onclick={() => terms.closeShell(id, sh)}><Icon name="x" size={14} /></Button
+                onclick={() => terms.closeShell(c.owner, sh)}><Icon name="x" size={14} /></Button
               >
               {@render underline(on)}
             </div>
@@ -331,11 +352,10 @@
     {/if}
   </div>
 
-  <div class="-ml-4 flex items-center">
-    <Button icon size="xs" aria-label="Add a terminal or a host" aria-haspopup="menu" aria-expanded={!!addAt} title="New shell, connect to a host" onclick={(e) => (addAt = under(e))}><Icon name="plus" size={14} /></Button>
+  <div class="flex shrink-0 items-center">
+    <Button icon size="xs" aria-label="Add tab" aria-haspopup="menu" aria-expanded={!!addAt} title="Add tab" onclick={(e) => (addAt = under(e))}><Icon name="plus" size={14} /></Button>
   </div>
-  <div aria-hidden="true"></div>
-  <div class="flex items-center gap-2">
+  <div class="ml-auto flex shrink-0 items-center gap-2">
     {#if changesInSide}<button bind:this={panelButton} type="button" class="grid size-7 place-items-center rounded-sm text-faint hover:bg-sel hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" aria-label="Panels" title="Show or hide panels" aria-haspopup="menu" aria-expanded={!!panelAt} onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); panelAt = panelAt ? null : { x: Math.max(4, r.right - 224), y: r.bottom + 4 }; }}>
       <Icon name="menu" class="size-4" />
     </button>{/if}
@@ -347,19 +367,12 @@
   </div>
 </div>
 
+{#if addAt || tabMenu || panelAt}
+<div use:portal>
 {#if addAt}
   <div class="fixed inset-0 z-40" role="presentation" onclick={() => (addAt = null)} oncontextmenu={(e) => { e.preventDefault(); addAt = null; }}></div>
-  <div class="fixed z-50 w-52 rounded-lg border border-edge bg-panel p-1 shadow-xl" style="left:{addAt.x}px;top:{addAt.y}px" role="menu">
+  <div class="fixed z-50 w-52 max-w-[calc(100vw-8px)] rounded-lg border border-edge bg-panel p-1 shadow-xl" style="left:{addAt.x}px;top:{addAt.y}px" role="menu" bind:this={addMenu} tabindex="-1" onkeydown={menuKey}>
     {@render addItems()}
-  </div>
-{/if}
-
-{#if foldAt}
-  <div class="fixed inset-0 z-40" role="presentation" onclick={() => (foldAt = null)} oncontextmenu={(e) => { e.preventDefault(); foldAt = null; }}></div>
-  <div class="fixed z-50 w-52 rounded-lg border border-edge bg-panel p-1 shadow-xl" style="left:{foldAt.x}px;top:{foldAt.y}px" role="menu">
-    {#each cells.machines as c (c.key)}
-      <MenuItem icon={current === c.key ? "•" : ""} onclick={() => run(() => void pick(c))}><span class="font-mono text-sm">{machineLabel(c)}</span></MenuItem>
-    {/each}
   </div>
 {/if}
 
@@ -398,16 +411,16 @@
     </form>
   {:else}
     <div bind:this={menuEl} class="fixed z-50 min-w-[10rem] rounded-lg border border-edge bg-panel p-1 shadow-xl" style="left:{tabMenu.x}px;top:{tabMenu.y}px" role="menu">
-      <div class="label truncate px-2 pt-1 pb-1.5 text-faint">{terms.labelFor(id, tabMenu.tab)}</div>
-      <MenuItem icon="✎" onclick={() => startRename(tabMenu?.tab ?? "")}>Rename…</MenuItem>
+      <div class="label truncate px-2 pt-1 pb-1.5 text-faint">{terms.labelFor(tabMenu.owner, tabMenu.tab)}</div>
+      <MenuItem icon="✎" onclick={() => tabMenu && startRename(tabMenu.owner, tabMenu.tab)}>Rename…</MenuItem>
       <div class="my-1 h-px bg-edge/60"></div>
       <MenuItem
         variant="danger"
         icon="×"
         onclick={() => {
-          const tab = tabMenu?.tab;
+          const menu = tabMenu;
           tabMenu = null;
-          if (tab) terms.closeShell(id, tab);
+          if (menu) terms.closeShell(menu.owner, menu.tab);
         }}
       >
         {terms.isReviewTab(tabMenu.tab) ? "Close review" : "Close shell"}
@@ -418,10 +431,12 @@
 
 {#if panelAt}
   <div class="fixed inset-0 z-40" role="presentation" onclick={() => panelAt = null}></div>
-  <div class="fixed z-50 w-56 rounded-md border border-edge bg-panel p-1 shadow-xl" style="left:{panelAt.x}px;top:{panelAt.y}px" role="menu" aria-label="Panels" bind:this={panelMenu} tabindex="-1" onkeydown={panelKey}>
+  <div class="fixed z-50 w-56 rounded-md border border-edge bg-panel p-1 shadow-xl" style="left:{panelAt.x}px;top:{panelAt.y}px" role="menu" aria-label="Panels" bind:this={panelMenu} tabindex="-1" onkeydown={menuKey}>
     {#each availablePanels as panel (panel.id)}
       {@const shown = !!groupOf(view.dock, panel.id) && !view.dockHidden}
       <MenuItem role="menuitemcheckbox" aria-label={panel.title} aria-checked={shown} icon={shown ? '✓' : ''} title={panel.title} onclick={() => togglePanel(panel.id)}>{panel.label}</MenuItem>
     {/each}
   </div>
+{/if}
+</div>
 {/if}

@@ -161,6 +161,12 @@ func (d *Daemon) maybeFallback(ctx context.Context, s session.Session) {
 // The store update touches ONLY those fields so a concurrent hook write (a
 // last stop event from the old pane) is never clobbered.
 func (d *Daemon) doSwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason string) error {
+	lock := d.ckptLock(s.ID)
+	lock.Lock()
+	defer lock.Unlock()
+	if d.agentTabsBlockRelaunch(s) {
+		return errAgentTabsOpen
+	}
 	d.mu.Lock()
 	nat := d.native
 	d.mu.Unlock()

@@ -1,6 +1,8 @@
 import { beforeEach, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/svelte";
 
+vi.mock("./LiveTerminal.svelte", async () => ({ default: (await import("./ssh/TerminalStub.test.svelte")).default }));
+
 const OpenFolder = vi.fn();
 vi.mock("@bindings/desktop", () => ({
   DaemonService: {
@@ -58,7 +60,7 @@ it("offers Connect from the strip's +, on every kind of session that can have a 
     store.sessions = [{ id: "s1", worktree: "/code/x", ...extra }] as never;
     terms.select("s1", SSH);
     render(SessionEmbed, { sessionId: "s1" });
-    await fireEvent.click(screen.getByRole("button", { name: "Add a terminal or a host" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Add tab" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "Connect to host…" }));
     expect(nav.overlay).toBe("sshconnect");
     expect(nav.overlayProject).toBe("s1");
@@ -124,4 +126,57 @@ it("shows no Raw toggle over a dev terminal, and keeps Conversation selected in 
   const tabs = screen.getAllByRole("tab", { name: "Conversation" });
   expect(tabs.some((t) => t.getAttribute("aria-selected") === "true" && t.tabIndex === 0)).toBe(true);
   for (const b of screen.queryAllByRole("button", { name: /^raw$/i })) expect(b).toHaveAttribute("aria-pressed", "false");
+});
+
+it("keeps every shell in the tab row at a narrow width and opens the menu outside the clipped pane", async () => {
+  const { default: ViewStrip } = await import("./session/ViewStrip.svelte");
+  const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(530);
+  const names = ["s1-shell-1", "s1-shell-2"];
+  (terms as unknown as { shells: Map<string, string[]> }).shells.set("s1", names);
+  store.sessions = [{ id: "s1", worktree: "/checkout", agent: "claude" }] as never;
+  try {
+    const { container } = render(ViewStrip, { session: store.sessions[0], changesInSide: true });
+    const cells = screen.getAllByRole("tab").map(t => t.dataset.stripCell);
+    expect(cells).toEqual(["conversation", ...names]);
+    const add = screen.getByRole("button", { name: "Add tab" });
+    vi.spyOn(add, "getBoundingClientRect").mockReturnValue({ left: 5, bottom: 60 } as DOMRect);
+    await fireEvent.click(add);
+    const menu = screen.getByRole("menu");
+    expect(container.contains(menu)).toBe(false);
+    expect(menu.style.left).toBe("5px");
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    await fireEvent.click(screen.getAllByRole("tab")[2]);
+    expect(terms.activeTab("s1")).toBe(names[1]);
+  } finally {
+    width.mockRestore();
+  }
+});
+
+it("opens and switches independent Conversation tabs on the same checkout", async () => {
+  const { default: ViewStrip } = await import("./session/ViewStrip.svelte");
+  const owner = { id:"primary", project:"web", agent:"codex", worktree:"/checkout", canOpenAgentTab:true };
+  const child = { ...owner, id:"second", agentTabParent:owner.id };
+  store.sessions = [owner] as never;
+  nav.openSession(owner.id);
+  const open = vi.spyOn(store,"openManual").mockResolvedValue({sessionId:child.id} as never);
+  try {
+    const strip = render(ViewStrip, { session:store.sessions[0], changesInSide:true });
+    await fireEvent.click(screen.getByRole("button",{ name:"Add tab" }));
+    await fireEvent.click(screen.getByRole("menuitem",{ name:"New agent conversation" }));
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({parentSession:"primary",location:"agent-tab",agentKind:"codex"}));
+    expect(nav.focusedTerm).toBe(child.id);
+    expect(terms.activeTab(child.id)).toBe(SSH);
+    store.sessions = [owner,child] as never;
+    await strip.rerender({session:store.sessions[1],changesInSide:true});
+    expect(screen.getByRole("tab",{name:"Conversation 2"})).toHaveAttribute("aria-selected","true");
+    await fireEvent.click(screen.getByRole("tab",{name:"Conversation"}));
+    expect(nav.focusedTerm).toBe(owner.id);
+    expect(terms.activeTab(owner.id)).toBe(SSH);
+    const close = vi.spyOn(store,"askKill").mockImplementation(() => {});
+    try {
+      await fireEvent.click(screen.getByRole("button",{name:"Close Conversation 2"}));
+      expect(close).toHaveBeenCalledWith(child.id,undefined,expect.objectContaining({onRemoved:expect.any(Function)}));
+    } finally {close.mockRestore();}
+  } finally {open.mockRestore();}
 });

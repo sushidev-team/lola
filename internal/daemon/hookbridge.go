@@ -101,8 +101,8 @@ func (d *Daemon) hookToken(session string) string {
 	return hook.TokenFor(secret, session)
 }
 
-// syncHookBridge opens the bridge when some project is sandboxed and closes it
-// when none is (or rebinds on a port change). Idempotent; a bind failure is
+// syncHookBridge keeps the bridge open for sandboxed projects and sessions,
+// including sessions that predate a project default change. A bind failure is
 // logged, not fatal — the sandboxed sessions still run, they are just not heard
 // until the port frees up and the next reload retries.
 func (d *Daemon) syncHookBridge(ctx context.Context) {
@@ -110,6 +110,14 @@ func (d *Daemon) syncHookBridge(ctx context.Context) {
 	want := d.cfg.AnySandboxed() || d.cfg.AnySSHSandboxed()
 	port := d.cfg.Sandbox.EffectiveHookPort()
 	d.mu.Unlock()
+	if !want {
+		for _, s := range d.sessions.Snapshot() {
+			if s.Sandbox == config.SandboxDocker {
+				want = true
+				break
+			}
+		}
+	}
 
 	d.bridge.mu.Lock()
 	defer d.bridge.mu.Unlock()

@@ -110,6 +110,9 @@ func TestSandboxLoginNeeded(t *testing.T) {
 	if ask("api", "") != "" || ask("nope", "") != "" {
 		t.Fatal("flagged a host project or an unknown project")
 	}
+	if missing, err := s.SandboxTabLoginNeeded("api", "codex"); err != nil || missing != "codex" {
+		t.Fatalf("existing Docker session in a host project: missing %q, err %v", missing, err)
+	}
 	if ask("web", "codex") != "codex" {
 		t.Fatal("codex without a host login not flagged")
 	}

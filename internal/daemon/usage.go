@@ -137,7 +137,7 @@ func usageDir(root, home string, s session.Session) string {
 			return dir
 		}
 	}
-	return usage.SlugDir(root, sessionWorktree(home, s))
+	return usage.SlugDir(root, sessionAgentCWD(home, s))
 }
 
 func (d *Daemon) usageLoop(ctx context.Context) {
@@ -240,7 +240,7 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 		recent := sp.scanner.Recent(dir, burnFrom)
 		// A session's codex and opencode usage is everything either ran in
 		// its worktree: the worker, and any codex/opencode review pass.
-		if wt := sessionWorktree(d.home, s); wt != "" {
+		if wt := sessionAgentCWD(d.home, s); wt != "" {
 			days = usage.MergeDays(days, sp.codex.For(wt))
 			days = usage.MergeDays(days, sp.opencode.For(wt))
 			recent.Add(sp.codex.Recent(wt, burnFrom))
@@ -371,6 +371,13 @@ func (d *Daemon) scanOpencode(ctx context.Context, now time.Time) {
 		d.logf("", "usage: %s", msg)
 	}
 	sp.opencodeErr = msg
+}
+
+func sessionAgentCWD(home string, s session.Session) string {
+	if s.AgentCWD != "" {
+		return s.AgentCWD
+	}
+	return sessionWorktree(home, s)
 }
 
 // sessionWorktree is s's worktree directory: the persisted one, else the

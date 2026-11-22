@@ -115,13 +115,16 @@
     if (id) return talk.poll(id);
   });
 
-  // Discover this session's terminals from the tmux server, then poll, so one opened in the TUI
-  // appears here within a few seconds. The two surfaces attach to the same tmux sessions.
+  // The strip includes the shells of every agent sharing the checkout. Track
+  // membership by ID so ordinary status refreshes do not restart this poll.
+  const shellOwners = $derived(session ? ssh.stripMembers(session).map(member => member.id).join("\n") : "");
   $effect(() => {
-    const sid = id;
-    if (!sid) return;
-    terms.refresh(sid);
-    const poll = setInterval(() => terms.refresh(sid), 4000);
+    const owners = shellOwners;
+    if (!owners) return;
+    const ids = owners.split("\n");
+    const refresh = () => ids.forEach(owner => void terms.refresh(owner));
+    refresh();
+    const poll = setInterval(refresh, 4000);
     return () => clearInterval(poll);
   });
 

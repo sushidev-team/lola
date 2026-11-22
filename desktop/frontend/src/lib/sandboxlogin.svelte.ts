@@ -7,17 +7,21 @@
 import { ConfigService } from "@bindings/desktop";
 
 /** agent is the one missing a login: "claude", "codex" or "opencode". */
-export type SandboxLoginRequest = { project: string; agent: string };
+export type SandboxLoginRequest = { project: string; agent: string; dockerTab?: boolean };
 
 class SandboxLoginGate {
   request = $state<SandboxLoginRequest | null>(null);
   #resolve: ((ok: boolean) => void) | null = null;
 
-  async ensure(project: string, agent = ""): Promise<boolean> {
+  #check(project: string, agent: string, dockerTab = false) {
+    return dockerTab ? ConfigService.SandboxTabLoginNeeded(project, agent) : ConfigService.SandboxLoginNeeded(project, agent);
+  }
+
+  async ensure(project: string, agent = "", dockerTab = false): Promise<boolean> {
     if (!project) return true;
     let missing = "";
     try {
-      missing = (await ConfigService.SandboxLoginNeeded(project, agent)) ?? "";
+      missing = (await this.#check(project, agent, dockerTab)) ?? "";
     } catch {
       return true; // unknown: let the daemon decide
     }
@@ -25,7 +29,7 @@ class SandboxLoginGate {
     this.#resolve?.(false);
     return new Promise<boolean>((resolve) => {
       this.#resolve = resolve;
-      this.request = { project, agent: missing };
+      this.request = { project, agent: missing, dockerTab };
     });
   }
 
@@ -34,7 +38,7 @@ class SandboxLoginGate {
     const req = this.request;
     if (!req) return false;
     try {
-      if (!(await ConfigService.SandboxLoginNeeded(req.project, req.agent))) {
+      if (!(await this.#check(req.project, req.agent, req.dockerTab))) {
         this.finish(true);
         return true;
       }

@@ -130,7 +130,10 @@
     if (action === "shortcuts") { nav.openOverlay("help"); return; }
     if (action === "previous") { ssh.nextWaiting(-1); return; }
     if (action === "close-tab") {
-      if (nav.view === "cockpit" && nav.focusedTerm) void terms.closeActiveTab(nav.focusedTerm);
+      if (nav.view === "cockpit" && nav.focusedTerm) {
+        if (sel?.agentTabParent && ssh.currentCell(sel) === "conversation") ssh.closeConversation(sel.id);
+        else void terms.closeActiveTab(nav.focusedTerm);
+      }
       return;
     }
     if (action === "find-project-history") { if (nav.inGit) nav.gitSearchRequest++; return; }
