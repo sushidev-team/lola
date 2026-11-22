@@ -55,6 +55,72 @@ func TestDeleteBranchProtectsCheckedOutUnmergedAndStaleBranches(t *testing.T) {
 	}
 }
 
+func TestDeleteBranchMergedIntoFetchedDefault(t *testing.T) {
+	for _, mode := range []string{"pruned upstream", "no upstream", "with worktree", "additional local commit", "branch moves during deletion"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := actionRepo(t)
+			main := tip(t, dir, "HEAD")
+			path := filepath.Join(t.TempDir(), "linked")
+			testGit(t, dir, "worktree", "add", "-b", "topic", path)
+			testGit(t, path, "commit", "--allow-empty", "-m", "feature")
+			merged := tip(t, path, "HEAD")
+			remote := "upstream"
+			if mode == "no upstream" {
+				remote = "origin"
+			}
+			testGit(t, dir, "remote", "add", remote, ".")
+			base := "refs/remotes/" + remote + "/trunk"
+			baseTip := testGit(t, dir, "commit-tree", merged+"^{tree}", "-p", main, "-p", merged, "-m", "Merge pull request")
+			testGit(t, dir, "update-ref", base, baseTip)
+			testGit(t, dir, "symbolic-ref", "refs/remotes/"+remote+"/HEAD", base)
+			if mode != "no upstream" {
+				testGit(t, dir, "config", "branch.topic.remote", remote)
+				testGit(t, dir, "config", "branch.topic.merge", "refs/heads/published-topic")
+			}
+			r := BranchRequest{Action: "delete-branch", Source: "refs/heads/topic", SourceSHA: merged}
+			if mode == "additional local commit" {
+				testGit(t, path, "commit", "--allow-empty", "-m", "unmerged work")
+				r.SourceSHA = tip(t, path, "HEAD")
+			}
+			c := Client{}
+			wantTip := r.SourceSHA
+			if mode == "branch moves during deletion" {
+				wantTip = testGit(t, dir, "commit-tree", main+"^{tree}", "-p", merged, "-m", "concurrent work")
+				c.run = func(ctx context.Context, dir, input string, args ...string) ([]byte, error) {
+					if args[0] == "-c" {
+						testGit(t, dir, "update-ref", r.Source, wantTip, merged)
+					}
+					return runGit(ctx, dir, input, args...)
+				}
+			}
+			ctx := context.Background()
+			var err error
+			if mode == "with worktree" {
+				r.Action, r.Target = "remove-worktree-branch", path
+				err = c.RemoveWorktree(ctx, dir, r)
+			} else {
+				testGit(t, dir, "worktree", "remove", path)
+				err = c.BranchAction(ctx, dir, r)
+			}
+			if mode == "additional local commit" || mode == "branch moves during deletion" {
+				if err == nil || tip(t, dir, r.Source) != wantTip {
+					t.Fatalf("unmerged tip was not protected: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := c.text(ctx, dir, "show-ref", "--verify", r.Source); err == nil {
+					t.Fatal("merged local branch remains")
+				}
+			}
+			if tip(t, dir, "HEAD") != main || tip(t, dir, base) != baseTip {
+				t.Fatal("deletion moved the checkout or remote-tracking branch")
+			}
+		})
+	}
+}
+
 func TestDeleteRemoteBranchPinsDeletionAndPropagatesRejection(t *testing.T) {
 	dir := actionRepo(t)
 	head := tip(t, dir, "HEAD")

@@ -64,10 +64,13 @@ func (c Client) RemoveWorktree(ctx context.Context, dir string, r BranchRequest)
 			if err != nil {
 				return err
 			}
+			if base != "" {
+				base, _ = c.text(ctx, dir, "rev-parse", "--verify", "--quiet", base+"^{commit}")
+			}
 			if base == "" {
 				base = "HEAD"
 			}
-			if _, err = c.git(ctx, dir, "", "merge-base", "--is-ancestor", r.SourceSHA, base); err != nil {
+			if _, err = c.git(ctx, dir, "", "merge-base", "--is-ancestor", r.SourceSHA, base); err != nil && c.remoteMergedDeleteConfig(ctx, dir, r) == nil {
 				return errors.New("branch is not fully merged; remove only the worktree to keep its branch")
 			}
 		}

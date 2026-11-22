@@ -2,6 +2,7 @@ package projectgit
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -162,6 +163,42 @@ func (c Client) branchOwner(ctx context.Context, dir, ref string) (string, error
 		}
 	}
 	return "", nil
+}
+
+// remoteMergedDeleteConfig lets Git check a fetched default branch even when
+// the local checkout is behind and the topic's upstream has been pruned.
+func (c Client) remoteMergedDeleteConfig(ctx context.Context, dir string, r BranchRequest) []string {
+	tracking, err := c.text(ctx, dir, "for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", r.Source)
+	remote, mergeRef, ok := strings.Cut(tracking, "\x00")
+	if err != nil || !ok {
+		return nil
+	}
+	if remote == "" {
+		remote = "origin"
+	}
+	prefix := "refs/remotes/" + remote + "/"
+	base, err := c.text(ctx, dir, "symbolic-ref", "--quiet", prefix+"HEAD")
+	if err != nil || !strings.HasPrefix(base, prefix) {
+		return nil
+	}
+	if _, err := c.git(ctx, dir, "", "merge-base", "--is-ancestor", r.SourceSHA, base); err != nil {
+		return nil
+	}
+
+	// branch --delete checks its upstream at deletion time and cleans up the
+	// branch config. Map its merge ref to the default branch for this command
+	// only. Git uses the first branch.<name>.merge when several are configured.
+	if mergeRef == "" {
+		mergeRef = r.Source
+	}
+	alias := "lola-delete-" + rand.Text()
+	key := "branch." + strings.TrimPrefix(r.Source, "refs/heads/")
+	return []string{
+		"-c", "remote." + alias + ".url=.",
+		"-c", "remote." + alias + ".fetch=" + mergeRef + ":" + base,
+		"-c", key + ".remote=" + alias,
+		"-c", key + ".merge=" + mergeRef,
+	}
 }
 
 // ActionBranch identifies which local checkout a service must authorize before
@@ -342,7 +379,19 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		if r.ForceDeleteBranch {
 			args = append(args, "--force")
 		}
-		_, err = c.git(ctx, dir, "", append(args, "--", strings.TrimPrefix(r.Source, "refs/heads/"))...)
+		args = append(args, "--", strings.TrimPrefix(r.Source, "refs/heads/"))
+		_, err = c.git(ctx, dir, "", args...)
+		if err == nil || r.ForceDeleteBranch || !strings.Contains(err.Error(), "not fully merged") {
+			return err
+		}
+		config := c.remoteMergedDeleteConfig(ctx, dir, r)
+		if config == nil {
+			return err
+		}
+		if _, err := c.branchRef(ctx, dir, r.Source, r.SourceSHA, true); err != nil {
+			return err
+		}
+		_, err = c.git(ctx, dir, "", append(config, args...)...)
 		return err
 	case "set-upstream":
 		if !strings.HasPrefix(r.Source, "refs/heads/") || !strings.HasPrefix(r.Target, "refs/remotes/") {
