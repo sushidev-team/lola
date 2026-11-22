@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.17.0](https://github.com/sushidev-team/lola/compare/v0.16.0...v0.17.0) (2026-11-22)
+
+
+### Features
+
+* **conversation:** copy code from collapsed and expanded snippets ([6f15050](https://github.com/sushidev-team/lola/commit/6f15050fc7d3e40c3719f74a68f1e976a5149029))
+* **desktop:** add live tabs to session previews ([54e4981](https://github.com/sushidev-team/lola/commit/54e498108eba92d376a32c210cfae2d5117f6b13))
+* **desktop:** open agent conversations in tabs on the same checkout ([663a480](https://github.com/sushidev-team/lola/commit/663a4803732e25c45639a3aee95e9d79bd445468))
+* **desktop:** queue branch deletions and refresh open branch menus ([dd1904f](https://github.com/sushidev-team/lola/commit/dd1904f068e9e19ac35fd1fbf84ca272e950e90a))
+* **desktop:** show progress on active branch rows ([4017167](https://github.com/sushidev-team/lola/commit/4017167d27efabc8243fa34a28a9b4e42371d373))
+* **review:** keep hash routes in preview comments and wait for the picker before inspecting ([c427c7b](https://github.com/sushidev-team/lola/commit/c427c7ba8aecb93fc3b56f33cf159b14514d51c7))
+
+
+### Bug Fixes
+
+* **desktop:** close the unstaged diff when its changes are cleared ([c19919c](https://github.com/sushidev-team/lola/commit/c19919cb1bb9025dbdea0143f6688a9936f18a21))
+* **desktop:** prevent long activity maps from overflowing the conversation ([0a26051](https://github.com/sushidev-team/lola/commit/0a26051861a2f74427653ab7012babbd94c4dbd1))
+* **git:** align merge lanes and working changes in the commit graph ([2ea671c](https://github.com/sushidev-team/lola/commit/2ea671c8ab9178b83faf3631f5d2ede495d96932))
+* **preview:** close retired proxy listeners, restrict upstream dials to loopback and stream oversize pages ([a3bdb1f](https://github.com/sushidev-team/lola/commit/a3bdb1fe66377b8ab6ed127d24fce481a34f1b79))
+* **preview:** keep embedded login requests on the preview origin ([702fcea](https://github.com/sushidev-team/lola/commit/702fceabbc84030f4e7146901288b85d49b2558f))
+* **projectgit:** allow deleting branches merged into the remote default ([0afabd0](https://github.com/sushidev-team/lola/commit/0afabd04d4732084dd4f720dd14d7fd78a1c354d))
+
 ## [0.16.0](https://github.com/sushidev-team/lola/compare/v0.15.0...v0.16.0) (2026-11-21)
 
 
