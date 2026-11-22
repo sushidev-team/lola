@@ -4,11 +4,12 @@
   // data and has no {@html}, because this text is written by something that reads untrusted
   // remote output. Links and block references come from SSHText, as everywhere else.
   import { inlineSpans, itemStatus, richBlocks, type InlineSpan, type RichBlock } from "$lib/ssh";
-  import { answerBlocks, answerStatus, cellTone, fenceFold, optionChoices, prHref } from "$lib/answerblocks";
+  import { answerBlocks, answerStatus, cellTone, optionChoices, prHref } from "$lib/answerblocks";
   import { store } from "$lib/store.svelte";
   import { disclosureMotion } from "$lib/disclosureMotion";
   import Chevron from "../Chevron.svelte";
   import SyntaxText from "../SyntaxText.svelte";
+  import AnswerCode from "../session/AnswerCode.svelte";
   import Disclosure from "../Disclosure.svelte";
   import SSHText from "./SSHText.svelte";
   import { ssh } from "$lib/ssh.svelte";
@@ -52,7 +53,11 @@
     if (opening && !opening.heading && opening.blocks.length > 2) {
       const second = opening.blocks[1];
       const secondIsLabel = second?.kind === "p" && second.text.length < 120 && /:\s*$/.test(second.text);
-      const rest = opening.blocks.splice(secondIsLabel ? 1 : 2);
+      // Keep a snippet with the instructions immediately above it.
+      let visible = secondIsLabel && opening.blocks[2].kind !== "code" ? 1 : 2;
+      while (opening.blocks[visible]?.kind === "code") visible++;
+      if (visible === opening.blocks.length) return result;
+      const rest = opening.blocks.splice(visible);
       const first = rest[0];
       const named = first?.kind === "p" && first.text.length < 120 && /:\s*$/.test(first.text);
       result.splice(1, 0, { heading: named && first.kind === "p" ? first.text : "Full response", blocks: named ? rest.slice(1) : rest, open: false });
@@ -142,14 +147,7 @@
         </table>
       </div>
     {:else if b.kind === "code"}
-      {@const fold = fenceFold(b.text)}
-      {#if fold.folds}
-        <Disclosure label={fold.label} class="-ml-1.5">
-          <pre class="selectable mt-1 ml-1.5 overflow-x-auto border-l border-edge pl-3 font-mono text-sm" data-rich-code><SyntaxText text={b.text} language={b.lang} /></pre>
-        </Disclosure>
-      {:else}
-        <pre class="selectable overflow-x-auto border-l border-edge pl-3 font-mono text-sm" data-rich-code><SyntaxText text={b.text} language={b.lang} /></pre>
-      {/if}
+      <AnswerCode text={b.text} language={b.lang} />
     {:else if b.kind === "fold"}
       <Disclosure label={b.title} class="-ml-1.5">
         <div class="mt-1 ml-1.5 space-y-3 border-l border-edge/60 pl-2.5">{@render answer(b.blocks)}</div>

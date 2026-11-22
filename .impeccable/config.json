@@ -29,6 +29,24 @@
         ],
         "createdAt": "2026-11-20T17:59:51.396Z",
         "reason": "Codex verified the conditional classes: rounded pill and vertical tabs use a selection fill; only square horizontal tabs receive an accent underline."
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "desktop/frontend/src/app.css"
+        ],
+        "createdAt": "2026-11-22T09:26:49.038Z",
+        "reason": "Codex triage: the one-pixel canvas-colored separator distinguishes adjacent duration bands in the activity timeline."
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "desktop/frontend/src/lib/components/ssh/SSHRich.svelte"
+        ],
+        "createdAt": "2026-11-22T09:26:53.089Z",
+        "reason": "Codex triage: the existing callout rail identifies severity using the tone map and pairs with an accessible severity label."
       }
     ]
   }

@@ -372,6 +372,39 @@ describe("Timeline rail", () => {
     expect(container.querySelector('[data-role="answer"]')?.textContent).toContain("The update is ready.");
   });
 
+  it("copies short, collapsed and expanded snippets directly beside their instructions", async () => {
+    const source = [
+      "(() => {",
+      "  const table = document.querySelector('table.line-items');",
+      "  if (!table) {",
+      "    return [];",
+      "  }",
+      "",
+      "  const rows = table.querySelectorAll('tr');",
+      "  return Array.from(rows);",
+      "})();",
+    ].join("\n");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const fence = "```";
+    setup([], [text("answer", ["Inspect the table.", "", "In DevTools, run:", "", fence + "js", "document.title", fence, "", fence + "js", source, fence].join("\n"), 1)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    expect(container.querySelector(".cv-answer-section")).toBeNull();
+    await fireEvent.click(screen.getAllByRole("button", { name: "Copy code" })[0]);
+    expect(writeText).toHaveBeenLastCalledWith("document.title");
+
+    const disclosure = screen.getByRole("button", { name: "JavaScript 9 lines" });
+    const copyLong = screen.getAllByRole("button", { name: "Copy code" })[1];
+    await fireEvent.click(copyLong);
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(writeText).toHaveBeenLastCalledWith(source);
+    await fireEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    await fireEvent.click(copyLong);
+    expect(writeText.mock.calls).toEqual([["document.title"], [source], [source]]);
+  });
+
   it("labels legacy Lola review recipes as automation, never as a human terminal message", async () => {
     const recipe = "List the open threads:\ngh api graphql -f query='query'\nReply to one (databaseId from above):\ngh api repos/a/b/pulls/comments/<databaseId>/replies\nResolve one (id from above):\nresolveReviewThread";
     setup([], [user("injected", recipe, 1, { origin: "terminal" }), text("answer", "No open threads.", 2)]);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { answerBlocks, answerShaped, answerStatus, cellTone, fenceFold, firstSentenceEnd, labelTone, optionChoices, parseLabel, plainInline, prHref, splitLead } from "./answerblocks";
+import { answerBlocks, answerShaped, answerStatus, cellTone, firstSentenceEnd, labelTone, optionChoices, parseLabel, plainInline, prHref, splitLead } from "./answerblocks";
 
 const kinds = (text: string) => answerBlocks(text).map((b) => b.kind);
 
@@ -139,11 +139,6 @@ describe("the other elements", () => {
     expect(answerBlocks("A.\n\nWarnung: heiß")[1]).toEqual({ kind: "callout", tone: "warn", word: "Warnung", text: "heiß" });
     expect(answerBlocks("A.\n\n**Note:** cool")[1]).toEqual({ kind: "callout", tone: "note", word: "Note", text: "cool" });
     expect(kinds("A.\n\n> quoted")).toEqual(["lead", "callout"]);
-  });
-  it("folds a long fence, naming its first line", () => {
-    expect(fenceFold("a\nb").folds).toBe(false);
-    expect(fenceFold("\nfirst\n" + "x\n".repeat(9))).toEqual({ folds: true, label: "first" });
-    expect(answerBlocks("A.\n\n```ts\nconst x = 1;\n```")[1]).toEqual({ kind: "code", text: "const x = 1;", lang: "ts" });
   });
   it("keeps tables and shapes what is inside a fold", () => {
     expect(kinds("A.\n\n| a | b |\n|---|---|\n| 1 | 2 |")).toEqual(["lead", "table"]);

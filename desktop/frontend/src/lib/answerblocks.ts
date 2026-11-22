@@ -20,9 +20,6 @@ const LEAD_PARAGRAPH = 160;
 const QUESTION_MAX = 280;
 const LABEL_STACKS_OVER = 28;
 const PLAIN_LABEL_MAX = 24;
-/** A fence longer than this folds, and names its first line. */
-export const FENCE_LINES = 8;
-
 const ABBREVIATIONS = /(?:^|[\s(])(?:e\.g|i\.e|z\.B|d\.h|u\.a|bzw|vs|etc|ca|approx|cf)$/i;
 
 const count = (text: string, marker: string) => text.split(marker).length - 1;
@@ -268,12 +265,6 @@ const flat = (spans: InlineSpan[]): string => spans.map((s) => ("spans" in s && 
 /** A line of an answer with its markers gone, for a place that draws one plain line: a folded turn. */
 export function plainInline(line: string): string {
   return flat(inlineSpans(line.replace(/^\s*(?:#{1,6}\s+|[-*•]\s+)/, "")));
-}
-
-/** A long fence folds and names its first line. A short one stays open. */
-export function fenceFold(text: string): { folds: boolean; label: string } {
-  const lines = text.split("\n");
-  return { folds: lines.length > FENCE_LINES, label: lines.find((l) => l.trim())?.trim() ?? "Code" };
 }
 
 /** Where `#n` goes, when the session's own PR says which repository it is in. Otherwise it is text. */
