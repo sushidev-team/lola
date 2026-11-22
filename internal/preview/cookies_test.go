@@ -2,6 +2,7 @@ package preview
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,7 +16,7 @@ func TestPreviewCookieScopeAndLifecycle(t *testing.T) {
 	h.Add("Set-Cookie", "XSRF-TOKEN=one%3D; Path=/; Max-Age=3600")
 	h.Add("Set-Cookie", "irrelevant=invalid; Domain=other.test")
 	h.Add("Set-Cookie", xsrfCopy+"=reserved; Path=/")
-	frameCookies(h, "dev.app.test")
+	frameCookies(h, "dev.app.test", "p-example.localhost")
 	cookies := (&http.Response{Header: h}).Cookies()
 	if len(cookies) != 3 {
 		t.Fatalf("got %d cookies", len(cookies))
@@ -30,7 +31,7 @@ func TestPreviewCookieScopeAndLifecycle(t *testing.T) {
 	}
 	for _, update := range []string{"XSRF-TOKEN=; Path=/; Max-Age=0", "XSRF-TOKEN=private; Path=/; HttpOnly"} {
 		h.Set("Set-Cookie", update)
-		frameCookies(h, "dev.app.test")
+		frameCookies(h, "dev.app.test", "p-example.localhost")
 		cs := (&http.Response{Header: h}).Cookies()
 		if len(cs) != 2 || cs[1].Name != xsrfCopy || cs[1].MaxAge >= 0 || cs[1].Value != "" {
 			t.Fatal("script-readable copy survived deletion or HttpOnly update")
@@ -117,5 +118,43 @@ func TestPreviewLoginOriginAndIsolation(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "X-Lola-Preview-Read-XSRF") {
 		t.Error("missing WebKit XSRF support")
+	}
+}
+
+// A proxy-aware app (such as Laravel with Ziggy) generates the login target
+// inside its page. Rewriting a redirect after the POST is already too late.
+func TestPreviewAbsoluteLoginURL(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Header.Get("X-Forwarded-Host")
+		if r.Host == host {
+			t.Error("lost the upstream virtual host")
+		}
+		name, port, err := net.SplitHostPort(host)
+		if err != nil || r.Header.Get("X-Forwarded-Port") != port {
+			t.Error("missing browser-facing port")
+		}
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "guest", Domain: name, Path: "/", HttpOnly: true})
+		io.WriteString(w, r.Header.Get("X-Forwarded-Proto")+"://"+host+"/login")
+	}))
+	defer up.Close()
+	s := New()
+	defer s.Close()
+	addr, err := s.Open("app", up.URL+"/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := get(t, addr, func(r *http.Request) {
+		r.Header.Set("X-Forwarded-Host", "other.test")
+		r.Header.Set("X-Forwarded-Port", "443")
+		r.Header.Set("X-Forwarded-Proto", "https")
+	})
+	defer resp.Body.Close()
+	target, err := io.ReadAll(resp.Body)
+	if err != nil || string(target) != addr {
+		t.Fatalf("login target = %q, want %q: %v", target, addr, err)
+	}
+	cookies := resp.Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "session" || cookies[0].Domain != "" || !cookies[0].HttpOnly || !cookies[0].Partitioned {
+		t.Fatal("session cookie issued for the forwarded host must stay scoped to this preview")
 	}
 }

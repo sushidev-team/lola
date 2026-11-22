@@ -62,7 +62,8 @@ func ownsPreviewOrigin(d protocol.SessionsData, id, origin string) bool {
 }
 
 // Open returns the address the pane frames for one of the session's dev URLs.
-// The proxy's *.localhost hosts must be allowed by both macOS bundle plists.
+// Both macOS bundle plists must allow the proxy's *.localhost address.
+// Proxy-aware apps also use that address to generate links and login URLs.
 func (s *PreviewService) Open(session, url string) (string, error) {
 	url = strings.TrimSpace(url)
 	if _, err := preview.Allowed(url); err != nil {

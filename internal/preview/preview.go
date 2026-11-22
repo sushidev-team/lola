@@ -191,6 +191,12 @@ func (s *Server) start(origin *url.URL) (*proxy, error) {
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(origin)
 			r.Out.Host = origin.Host
+			// Keep virtual-host routing upstream, but let proxy-aware apps
+			// generate absolute links and form actions on the browser's origin.
+			// The listener owns these values, including its non-default port.
+			r.Out.Header.Set("X-Forwarded-Host", self.Host)
+			r.Out.Header.Set("X-Forwarded-Proto", self.Scheme)
+			r.Out.Header.Set("X-Forwarded-Port", self.Port())
 			// An identity body is the only one the script can be injected into.
 			r.Out.Header.Set("Accept-Encoding", "identity")
 			// Preserve foreign origins so upstream CSRF checks see the actual caller.
@@ -314,7 +320,7 @@ func rewriteResponse(resp *http.Response, origin, self *url.URL) error {
 	}
 	rewriteOrigin(h, "Location", origin, self)
 	rewriteOrigin(h, "X-Inertia-Location", origin, self)
-	frameCookies(h, origin.Hostname())
+	frameCookies(h, origin.Hostname(), self.Hostname())
 	if !strings.HasPrefix(strings.ToLower(h.Get("Content-Type")), "text/html") ||
 		resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified ||
 		h.Get("Content-Encoding") != "" && !strings.EqualFold(h.Get("Content-Encoding"), "gzip") {

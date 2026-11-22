@@ -14,12 +14,12 @@ import (
 // XSRF cookie for that case. The reserved cookie never goes to the dev server.
 const xsrfCopy = "lola_preview_readable_xsrf"
 
-func frameCookies(h http.Header, host string) {
+func frameCookies(h http.Header, upstreamHost, previewHost string) {
 	lines := h.Values("Set-Cookie")
 	h.Del("Set-Cookie")
 	for _, line := range lines {
 		c, err := http.ParseSetCookie(line)
-		if err != nil || c.Name == xsrfCopy || !cookieDomainMatches(host, c.Domain) {
+		if err != nil || c.Name == xsrfCopy || (!cookieDomainMatches(upstreamHost, c.Domain) && !cookieDomainMatches(previewHost, c.Domain)) {
 			continue
 		}
 		// Enforce prefix requirements before changing the cookie's attributes.

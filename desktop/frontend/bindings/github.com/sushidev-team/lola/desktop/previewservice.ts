@@ -16,7 +16,8 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 /**
  * Open returns the address the pane frames for one of the session's dev URLs.
- * The proxy's *.localhost hosts must be allowed by both macOS bundle plists.
+ * Both macOS bundle plists must allow the proxy's *.localhost address.
+ * Proxy-aware apps also use that address to generate links and login URLs.
  */
 export function Open(session: string, url: string): $CancellablePromise<string> {
     return $Call.ByID(2710759037, session, url);
