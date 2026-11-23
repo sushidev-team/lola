@@ -431,32 +431,23 @@ func (c Client) BranchAction(ctx context.Context, dir string, r BranchRequest) e
 		if _, err := c.branchRef(ctx, dir, r.Target, r.TargetSHA, r.Action == "merge"); err != nil {
 			return err
 		}
+		if r.Action == "merge" {
+			return c.mergeBranch(ctx, dir, r)
+		}
 		if err := c.requireClean(ctx, dir); err != nil {
 			return err
 		}
-		branch := r.Target
-		if r.Action == "rebase" {
-			branch = r.Source
-		}
-		if err := c.checkout(ctx, dir, branch); err != nil {
+		if err := c.checkout(ctx, dir, r.Source); err != nil {
 			return err
 		}
 		// Verify both refs again after switching: external Git may have moved them.
-		if _, err := c.branchRef(ctx, dir, r.Source, r.SourceSHA, r.Action == "rebase"); err != nil {
+		if _, err := c.branchRef(ctx, dir, r.Source, r.SourceSHA, true); err != nil {
 			return err
 		}
-		if _, err := c.branchRef(ctx, dir, r.Target, r.TargetSHA, r.Action == "merge"); err != nil {
+		if _, err := c.branchRef(ctx, dir, r.Target, r.TargetSHA, false); err != nil {
 			return err
 		}
-		var err error
-		if r.Action == "merge" {
-			source := strings.TrimPrefix(strings.TrimPrefix(r.Source, "refs/heads/"), "refs/remotes/")
-			target := strings.TrimPrefix(r.Target, "refs/heads/")
-			message := fmt.Sprintf("Merge branch '%s' into %s", source, target)
-			_, err = c.git(ctx, dir, "", "merge", "--no-edit", "-m", message, "--", r.SourceSHA)
-		} else {
-			_, err = c.git(ctx, dir, "", "-c", "rebase.autoStash=false", "-c", "rebase.updateRefs=false", "rebase", "--no-autostash", "--", r.TargetSHA)
-		}
+		_, err := c.git(ctx, dir, "", "-c", "rebase.autoStash=false", "-c", "rebase.updateRefs=false", "rebase", "--no-autostash", "--", r.TargetSHA)
 		return err
 	default:
 		return errors.New("unknown branch action")

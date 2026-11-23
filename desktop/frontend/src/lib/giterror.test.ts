@@ -13,6 +13,8 @@ it.each([
  ['Automatic merge failed; fix conflicts and then commit the result.','Conflicts need attention',undefined],
  ['commit or stash this checkout\'s changes before switching or integrating branches','Save your local changes first',undefined],
  ["restoring switch's saved changes failed on refs/heads/topic; inspect stash abc and the working files: merge conflict",'Local changes need attention',undefined],
+ ["restoring merge's saved changes failed; stash abc was kept: merge conflict",'Local changes need attention',undefined],
+ ['merge stopped; local changes remain saved in Stashes (abc). Automatic merge failed','Merge needs attention',undefined],
  ['branch changed since it was selected; refresh and try again','Repository changed','refresh'],
 ])('explains %s', (error,title,recovery)=>{
  const info=gitErrorInfo(error,'push');

@@ -5,8 +5,10 @@ export function gitErrorInfo(raw:string, action=''):GitErrorInfo {
   const text=raw.toLowerCase();
   if (text.includes("restoring switch's saved changes failed"))
     return {title:'Local changes need attention',description:'Check the current branch and working files for conflicts. Your saved edits are available in Stashes.',kind:'warn'};
-  if (text.includes("restoring pull's saved changes failed"))
+  if (text.includes("restoring pull's saved changes failed") || text.includes("restoring merge's saved changes failed"))
     return {title:'Local changes need attention',description:'Your saved stash was kept. Inspect the restored files and resolve any conflicts.',kind:'warn'};
+  if (text.includes('merge stopped; local changes remain saved'))
+    return {title:'Merge needs attention',description:'Finish or abort any merge in progress, then restore your local changes from the “before merge” entry in Stashes.',kind:'warn'};
   if (text.includes('pull stopped; local changes remain saved'))
     return {title:'Pull needs attention',description:'Your local changes are safe in Stashes. Finish or abort the merge, then apply the “before pull” stash.',kind:'warn'};
   if (action === 'delete-branch' && /remote branch changed since|stale info/.test(text))
