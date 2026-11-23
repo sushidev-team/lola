@@ -1,5 +1,16 @@
 import { expect, it } from "vitest";
-import { MAX_PREVIEW_TABS, VIEWPORTS, devPageURL, frameStyle, parsePick, preview } from "./preview.svelte";
+import { MAX_PREVIEW_TABS, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, previewAddress, previewIcon } from "./preview.svelte";
+
+it("loads page icons through the preview origin and falls back to the site's conventional icon", () => {
+  const proxy = "http://preview.localhost:5000";
+  const icon = (href: string) => previewIcon(href, proxy + "/work/", "https://shop.test/work/");
+  expect(icon("brand.svg")).toBe(proxy + "/work/brand.svg");
+  expect(icon("https://shop.test/icons/logo.png?v=2")).toBe(proxy + "/icons/logo.png?v=2");
+  expect(icon("data:image/png;base64,AA==")).toBe("data:image/png;base64,AA==");
+  for (const href of ["", "https://other.test/icon", "file:///icon", "data:text/html,hello"]) {
+    expect(icon(href)).toBe(proxy + "/favicon.ico");
+  }
+});
 
 it("takes only a pick message from the picker", () => {
   const ok = { source: "lola-preview", type: "pick", selector: "main > a", url: "http://127.0.0.1:5/x", html: "<a>", text: "go", tag: "a" };
@@ -64,4 +75,21 @@ it("keeps one address twice when it is prepared for two different areas, and car
   preview.open("s", "http://localhost:3000/y", { prep: {} });
   expect(preview.request?.prep).toBeUndefined();
   preview.close();
+});
+
+it("resolves testing routes and pasted addresses on the session's advertised origins", () => {
+  const servers = ["https://shop.test", "http://localhost:8000/app"];
+  const page = "https://shop.test/cp/users?sort=name";
+  for (const [typed, resolved] of [
+    ["/cp", "https://shop.test/cp"],
+    ["../assets?type=image#first", "https://shop.test/assets?type=image#first"],
+    ["?page=2", "https://shop.test/cp/users?page=2"],
+    ["#roles", page + "#roles"],
+    ["shop.test/cp", "https://shop.test/cp"],
+    [" localhost:8000/login ", "http://localhost:8000/login"],
+  ]) expect(previewAddress(typed, page, servers)).toBe(resolved);
+  for (const typed of ["", "other.test/cp", "//other.test", "http://localhost:3000/cp", "https://name@shop.test", "file:///tmp/test", "javascript:alert(1)"]) {
+    expect(previewAddress(typed, page, servers)).toBeUndefined();
+  }
+  expect(previewAddress("/cp", page, [])).toBeUndefined();
 });

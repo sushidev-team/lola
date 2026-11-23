@@ -25,12 +25,11 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
-// fixHiDPIOnReady re-applies the WKWebView device-scale override each time the
-// window becomes main (idempotent), so Retina text stays crisp. The platform
-// work is in fixHiDPI (darwin: hidpi_darwin.go; no-op elsewhere).
-func fixHiDPIOnReady(win *application.WebviewWindow) {
+// The native WKWebView exists once the window becomes main. Configuration is
+// idempotent so the Retina scale can follow the window between displays.
+func configureWebViewOnReady(win *application.WebviewWindow) {
 	win.OnWindowEvent(events.Mac.WindowDidBecomeMain, func(*application.WindowEvent) {
-		fixHiDPI(win.NativeWindow())
+		configureNativeWebView(win.NativeWindow())
 	})
 }
 
@@ -212,10 +211,8 @@ func main() {
 	// reflowing page zoom (see installAppMenu / zoomController).
 	installAppMenu(app, newZoomController(win))
 
-	// Force the WKWebView to report the screen's real backing scale factor once
-	// the window is up, so Retina renders crisply (see hidpi_darwin.go). Runs on
-	// every focus but is idempotent.
-	fixHiDPIOnReady(win)
+	// Install the external Preview bridge and match the screen’s Retina scale.
+	configureWebViewOnReady(win)
 
 	// Live push loop: the daemon has no push channel, so the desktop backend
 	// polls its cheap in-memory caches and emits typed events the frontend

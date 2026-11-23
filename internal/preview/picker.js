@@ -190,32 +190,77 @@
       stopComments = function () {};
     };
   }
-  function announce() { post({ type: "ready", picking: picking, documentId: documentId, url: location.href, title: document.title }); }
+  function favicon() {
+    var icon = document.head && document.head.querySelector('link[rel~="icon" i][href]');
+    return icon && icon.href.length <= 32768 ? icon.href : "";
+  }
+  function announce(kind) {
+    if (!kind && performance.getEntriesByType && performance.getEntriesByType("navigation")[0]?.type === "back_forward") kind = "traverse";
+    post({ type: "ready", picking: picking, documentId: documentId, url: location.href, title: document.title,
+      favicon: favicon(), kind: kind, canGoBack: !!(window.navigation && window.navigation.canGoBack) });
+  }
   // Track client-side navigation as well as whole-document loads. The review
   // canvas only needs ready; install these listeners for browser tabs on demand.
   var watchingLocation = false;
   function watchLocation() {
     if (watchingLocation) return;
     watchingLocation = true;
-    var lastURL = location.href, lastTitle = document.title;
-    function changed() {
-      if (location.href === lastURL && document.title === lastTitle) return;
-      lastURL = location.href; lastTitle = document.title;
-      post({ type: "location", documentId: documentId, url: lastURL, title: lastTitle });
+    function newTab(url) {
+      try {
+        var link = new URL(url, document.baseURI);
+        if (!/^https?:$/.test(link.protocol) || link.username || link.password) return false;
+        post({ type: "new-tab", documentId: documentId, url: link.href });
+        return true;
+      } catch (_) { return false; }
     }
-    if (document.head) new MutationObserver(changed).observe(document.head, { subtree: true, childList: true, characterData: true });
-    if (window.navigation) window.navigation.addEventListener("currententrychange", changed);
+    function opensTab(target) {
+      if (!target || /^_(self|parent|top|unfencedTop)$/i.test(target)) return false;
+      if (target.toLowerCase() === "_blank") return true;
+      return target !== window.name && !Array.from(document.querySelectorAll("iframe[name],frame[name]")).some(function (frame) {
+        return frame.name === target;
+      });
+    }
+    function openLink(e) {
+      if (picking || e.defaultPrevented || e.altKey || e.button > 1) return;
+      var link = e.composedPath().find(function (el) { return el.matches && el.matches("a[href],area[href]"); });
+      if (!link || link.hasAttribute("download")) return;
+      var base = document.querySelector("base[target]");
+      var target = link.getAttribute("target") || (base && base.target);
+      if (!opensTab(target) && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button !== 1) return;
+      if (newTab(link.getAttribute("href"))) e.preventDefault();
+    }
+    window.addEventListener("click", openLink);
+    window.addEventListener("auxclick", openLink);
+    var originalOpen = window.open;
+    window.open = function (url, target) {
+      if (url && opensTab(String(target || "_blank"))) {
+        if (navigator.userActivation && navigator.userActivation.isActive) newTab(url);
+        return null;
+      }
+      return originalOpen.apply(this, arguments);
+    };
+    var lastURL = location.href, lastTitle = document.title, lastIcon = favicon(), lastBack;
+    function changed(kind) {
+      var back = !!(window.navigation && window.navigation.canGoBack);
+      var icon = favicon();
+      if (location.href === lastURL && document.title === lastTitle && icon === lastIcon && back === lastBack) return;
+      lastURL = location.href; lastTitle = document.title; lastIcon = icon; lastBack = back;
+      post({ type: "location", documentId: documentId, url: lastURL, title: lastTitle, favicon: icon, kind: kind, canGoBack: back });
+    }
+    if (document.head) new MutationObserver(function () { changed(); }).observe(document.head, { subtree: true, childList: true, characterData: true, attributeFilter: ["href", "rel"] });
+    window.addEventListener("pageshow", function (e) { if (e.persisted) announce("traverse"); });
+    if (window.navigation) window.navigation.addEventListener("currententrychange", function (e) { changed(e.navigationType); });
     else {
       ["pushState", "replaceState"].forEach(function (name) {
         var original = history[name];
         history[name] = function () {
           var result = original.apply(this, arguments);
-          changed();
+          changed(name === "replaceState" ? "replace" : "push");
           return result;
         };
       });
-      window.addEventListener("popstate", changed);
-      window.addEventListener("hashchange", changed);
+      window.addEventListener("popstate", function () { changed("traverse"); });
+      window.addEventListener("hashchange", function () { changed(); });
     }
   }
   function loginFields() {
@@ -324,6 +369,9 @@
     if (e.data.type === "hello") {
       if (e.data.watchLocation) watchLocation();
       announce();
+    }
+    if (e.data.type === "back" && watchingLocation && e.data.documentId === documentId && window.navigation && window.navigation.canGoBack) {
+      window.navigation.back();
     }
     if (e.data.type === "comment-anchors" && e.data.documentId === documentId) watchComments(e.data);
     if (e.data.type === "pick") { clearSelection(); set(!!e.data.on); }

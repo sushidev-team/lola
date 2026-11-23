@@ -69,6 +69,42 @@ export function devPageURL(picked: string, devUrl: string): string {
   }
 }
 
+/** Resolve a site's icon on the same origin that serves its preview. */
+export function previewIcon(declared: unknown, page: string, upstream = page): string {
+  const origin = new URL(page).origin;
+  const fallback = origin + "/favicon.ico";
+  if (typeof declared !== "string" || !declared || declared.length > 32768) return fallback;
+  if (/^data:image\/(?:png|svg\+xml|gif|webp|x-icon|vnd\.microsoft\.icon)[;,]/i.test(declared)) return declared;
+  try {
+    const icon = new URL(declared, page);
+    if (["http:", "https:"].includes(icon.protocol) && !icon.username && !icon.password &&
+        (icon.origin === origin || icon.origin === new URL(upstream).origin)) {
+      return origin + icon.pathname + icon.search + icon.hash;
+    }
+  } catch { /* Try the conventional icon when the declared one is malformed. */ }
+  return fallback;
+}
+
+/** Resolve a typed route against the displayed page. A bare advertised host
+ * inherits its server's scheme. Open() rechecks ownership with the daemon. */
+export function previewAddress(input: string, current: string, servers: string[]): string | undefined {
+  const raw = input.trim();
+  if (!raw) return;
+  const origins = new Set<string>();
+  for (const server of servers) {
+    try { origins.add(new URL(server).origin); } catch { /* Ignore an unusable dev URL. */ }
+  }
+  try {
+    const host = raw.split(/[/?#]/, 1)[0].toLowerCase();
+    const base = new URL(current);
+    const bare = [base.origin, ...origins].find(origin => new URL(origin).host === host);
+    // A hostname pasted without its scheme must not quietly become a page path.
+    if (!bare && /^(?:localhost(?::|$)|\[|[\w-]+\.[\w.-]+(?::\d+)?$)/i.test(host)) return;
+    const url = bare ? new URL(new URL(bare).protocol + "//" + raw) : new URL(raw, base);
+    if (origins.has(url.origin) && ["http:", "https:"].includes(url.protocol) && !url.username && !url.password) return url.href;
+  } catch { /* Malformed address. */ }
+}
+
 export interface PreviewMark {
   selector?: string;
   text?: string;
@@ -101,8 +137,9 @@ export interface PreviewPrep {
 
 export interface PreviewRequest {
   sessionId: string;
-  /** One of the session's own dev URLs. */
+  /** A session dev URL unless this is a direct external browser tab. */
   url: string;
+  external?: boolean;
   prep?: PreviewPrep;
   /** What to look at here, in the agent's words. */
   caption?: string;
@@ -113,6 +150,7 @@ export const MAX_PREVIEW_TABS = 6;
 
 export interface PreviewTab {
   url: string;
+  external?: boolean;
   title: string;
   caption?: string;
   prep?: PreviewPrep;
@@ -123,8 +161,9 @@ export function hasPrep(p?: PreviewPrep): p is PreviewPrep {
   return !!p && !!(p.device || p.waitFor || p.scrollY || p.marks?.length || p.steps?.length);
 }
 
-function request(sessionId: string, t: { url: string; caption?: string; prep?: PreviewPrep }): PreviewRequest {
+function request(sessionId: string, t: PreviewTab): PreviewRequest {
   const r: PreviewRequest = { sessionId, url: t.url };
+  if (t.external) r.external = true;
   if (hasPrep(t.prep)) r.prep = t.prep;
   if (t.caption) r.caption = t.caption;
   return r;
@@ -135,7 +174,10 @@ export interface OpenPreviewTab {
   request: PreviewRequest;
   title: string;
   documentTitle: string;
+  favicon?: string;
   currentURL: string;
+  backStack: string[];
+  canGoBackInFrame: boolean;
   visited: boolean;
 }
 
@@ -151,15 +193,32 @@ class PreviewStore {
   private tab(sessionId: string, page: PreviewTab): OpenPreviewTab {
     return {
       id: ++this.nextId, request: request(sessionId, page), title: page.title,
-      documentTitle: "", currentURL: page.url, visited: false,
+      documentTitle: "", currentURL: page.url, backStack: [], canGoBackInFrame: false, visited: false,
     };
   }
 
-  open(sessionId: string, url: string, extra: { prep?: PreviewPrep; caption?: string; title?: string } = {}) {
+  visit(tab: OpenPreviewTab, url: string, kind: "push" | "replace" | "traverse" = "push") {
+    const href = new URL(url).href;
+    if (href !== new URL(tab.currentURL).href) {
+      const previous = kind === "traverse" ? tab.backStack.findLastIndex(entry => new URL(entry).href === href) : -1;
+      if (previous >= 0) tab.backStack.splice(previous);
+      else if (kind !== "replace") tab.backStack.push(tab.currentURL);
+    }
+    tab.currentURL = url;
+  }
+
+  open(sessionId: string, url: string, extra: Partial<Omit<PreviewTab, "url">> = {}) {
     if (this.sessionId !== sessionId) this.close();
     this.tabs.push(this.tab(sessionId, { url, title: "", ...extra }));
     this.select(this.tabs.length - 1);
     this.visible = true;
+  }
+  openLink(sessionId: string, address: string, servers: string[], device?: string) {
+    let url: URL;
+    try { url = new URL(address); } catch { return; }
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return;
+    const external = !previewAddress(url.href, url.href, servers);
+    this.open(sessionId, url.href, { external, prep: !external && device ? { device } : undefined });
   }
   duplicate(device?: string) {
     const original = this.tabs[this.active];
@@ -167,9 +226,10 @@ class PreviewStore {
     // Load the current route in a fresh document. Replaying the original steps
     // could submit a form again or take the duplicate away from that route.
     const copy = this.tab(original.request.sessionId, {
-      url: original.currentURL, title: original.title, prep: device ? { device } : undefined,
+      url: original.currentURL, title: original.title, external: original.request.external, prep: device ? { device } : undefined,
     });
     copy.documentTitle = original.documentTitle;
+    copy.favicon = original.favicon;
     const next = this.active + 1;
     this.tabs.splice(next, 0, copy);
     this.select(next);

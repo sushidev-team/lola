@@ -30,6 +30,14 @@ it('blocks pointer controls only while inspecting and anchors comments to the ha
     expect(activate).toHaveBeenCalledTimes(2);
 
     send({ type: 'hello', watchLocation: true });
+    const link = document.createElement('a');
+    link.href = '/docs?q=preview#start';
+    link.target = '_blank';
+    button.appendChild(link);
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(post).toHaveBeenCalledWith({ source: 'lola-preview', type: 'new-tab', documentId: doc, url: link.href }, '*');
     history.replaceState(null, '', '/#/settings');
     expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'location', url: location.href }), '*');
     const lookup = vi.spyOn(document, 'querySelector');

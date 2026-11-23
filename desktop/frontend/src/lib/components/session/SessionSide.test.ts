@@ -401,8 +401,13 @@ it('keeps duplicate pages live and targets toolbar actions at the selected route
     const activeFrame = () => within(dialog.getByRole('tabpanel')).getByTitle('Preview of localhost:20000');
     const first = await screen.findByTitle('Preview of localhost:20000') as HTMLIFrameElement;
     await fireEvent(window, new MessageEvent('message', { source: first.contentWindow, origin,
-      data: { source: 'lola-preview', type: 'location', title: 'Billing', url: origin + '/billing#details' },
+      data: { source: 'lola-preview', type: 'location', title: 'Billing', url: origin + '/billing#details', favicon: origin + '/brand.svg' },
     }));
+    const billingTab = dialog.getByRole('tab', { name: 'Billing', hidden: true });
+    const icon = billingTab.querySelector('img')!;
+    expect(icon).toHaveAttribute('src', origin + '/brand.svg');
+    await fireEvent.error(icon);
+    expect(billingTab.querySelector('img')).toBeNull();
     const add = screen.getByRole('button', { name: 'Open localhost:20000 in a new tab' });
     expect(add).toHaveTextContent(/^localhost:20000$/);
     await fireEvent.click(add);
@@ -444,5 +449,47 @@ it('keeps duplicate pages live and targets toolbar actions at the selected route
     vi.unstubAllGlobals();
     external.mockRestore();
     preview.close();
+  }
+});
+
+it('opens dev and external new-tab links in Preview, keeping the source page live', async () => {
+  const site = 'https://shop.test', proxy = 'http://preview.localhost:5555';
+  const id = freshSession({ devUrls: [site] });
+  const open = vi.mocked(PreviewService.Open).mockClear().mockResolvedValue(proxy + '/');
+  const postMessage = vi.fn();
+  vi.stubGlobal('webkit', { messageHandlers: { lolaExternalPreview: { postMessage } } });
+  render(PreviewWorkspace);
+  preview.open(id, site);
+  try {
+    const frame = await screen.findByTitle('Preview of shop.test') as HTMLIFrameElement;
+    const message = (data: object) => fireEvent(window, new MessageEvent('message', {
+      source: frame.contentWindow, origin: proxy, data: { source: 'lola-preview', documentId: 'shop', ...data },
+    }));
+    await message({ type: 'ready', url: proxy + '/' });
+    await message({ type: 'new-tab', url: proxy + '/cart?items=2#summary' });
+    expect(preview.request?.url).toBe(site + '/cart?items=2#summary');
+    expect(open).toHaveBeenLastCalledWith(id, preview.request?.url);
+    preview.select(0);
+    await waitFor(() => expect(frame).toBeVisible());
+    const docs = 'https://docs.example.org/guide';
+    await message({ type: 'new-tab', documentId: 'stale', url: docs });
+    expect(preview.tabs).toHaveLength(2);
+    await message({ type: 'new-tab', url: docs });
+    const tab = preview.tabs[preview.active];
+    expect(tab.request.external).toBe(true);
+    expect(postMessage).toHaveBeenCalledWith({ action: 'load', id: tab.id, url: docs });
+    expect(open).toHaveBeenCalledTimes(2);
+    window.dispatchEvent(new CustomEvent('lola-external-preview', { detail: {
+      id: tab.id, type: 'location', url: docs + '/second', title: 'Second page', back: true,
+    } }));
+    const back = screen.getByRole('button', { name: 'Back' });
+    await waitFor(() => expect(back).toBeEnabled());
+    await fireEvent.click(back);
+    expect(postMessage).toHaveBeenCalledWith({ action: 'back', id: tab.id });
+    expect(frame).toBeInTheDocument();
+  } finally {
+    preview.close();
+    cleanup();
+    vi.unstubAllGlobals();
   }
 });

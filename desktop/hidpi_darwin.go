@@ -7,6 +7,7 @@ package main
 #cgo LDFLAGS: -framework Cocoa -framework WebKit
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+void lolaInstallExternalPreview(WKWebView *host);
 
 // _setOverrideDeviceScaleFactor: is a private WKWebView SPI (used by Electron,
 // Playwright) that forces window.devicePixelRatio to a given value. Wails serves
@@ -42,11 +43,12 @@ static id lolaWebView(id window) {
     return webView;
 }
 
-static void lolaApplyScale(id window) {
+static void lolaConfigureWebView(id window) {
     id webView = lolaWebView(window);
     if (webView == nil) {
         return;
     }
+    lolaInstallExternalPreview(webView);
     // Prefer the window's actual screen (correct after a move to a different-DPI
     // display); mainScreen only as a fallback before the window is placed.
     NSScreen *screen = [(NSWindow *)window screen];
@@ -64,16 +66,16 @@ static void lolaApplyScale(id window) {
     }
 }
 
-void lolaFixHiDPI(void *nsWindowPtr) {
+void lolaConfigureWindow(void *nsWindowPtr) {
     if (nsWindowPtr == NULL) {
         return;
     }
     id window = (__bridge id)nsWindowPtr;
     if ([NSThread isMainThread]) {
-        lolaApplyScale(window);
+        lolaConfigureWebView(window);
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
-            lolaApplyScale(window);
+            lolaConfigureWebView(window);
         });
     }
 }
@@ -111,12 +113,11 @@ import "C"
 
 import "unsafe"
 
-// fixHiDPI forces the window's WKWebView to report the screen's real backing
-// scale factor, so Retina renders crisply (see the C comment). No-op on a
-// non-Retina display (factor stays 1). nsWindow is WebviewWindow.NativeWindow().
-func fixHiDPI(nsWindow unsafe.Pointer) {
+// configureNativeWebView installs the external Preview bridge and sets the
+// backing scale of the Wails webview.
+func configureNativeWebView(nsWindow unsafe.Pointer) {
 	if nsWindow != nil {
-		C.lolaFixHiDPI(nsWindow)
+		C.lolaConfigureWindow(nsWindow)
 	}
 }
 

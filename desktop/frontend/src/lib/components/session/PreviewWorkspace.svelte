@@ -1,12 +1,14 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { preview, type OpenPreviewTab } from "$lib/preview.svelte";
+  import { preview, previewAddress, type OpenPreviewTab } from "$lib/preview.svelte";
   import { store } from "$lib/store.svelte";
   import { devUrlGroups, devUrlLabel } from "$lib/devurl";
   import Button from "../Button.svelte";
   import Icon from "../Icon.svelte";
   import Modal from "../Modal.svelte";
   import SessionPreview from "./SessionPreview.svelte";
+  import ExternalPreview from "./ExternalPreview.svelte";
+  import PreviewTabIcon from "./PreviewTabIcon.svelte";
 
   let width = $state(window.innerWidth);
   // Leave room for the 820px tablet preset beside a docked sidebar.
@@ -15,13 +17,38 @@
   const current = $derived(preview.tabs[preview.active]);
   const session = $derived(store.sessions.find(s => s.id === current?.request.sessionId));
   const groups = $derived(devUrlGroups(session?.devUrls ?? [], session?.apps ?? []));
-  let pages = $state<Record<number, SessionPreview>>({});
+  const servers = $derived(groups.flatMap(group => group.urls));
+  let pages = $state<Record<number, SessionPreview | ExternalPreview>>({});
   let toggle = $state<HTMLButtonElement>();
   const label = (tab: OpenPreviewTab) => tab.title || tab.documentTitle || devUrlLabel(tab.currentURL);
   const tabId = (tab: OpenPreviewTab) => `preview-tab-${tab.id}`;
 
+  function navigate(url: string, back = false) {
+    const page = pages[current.id];
+    const external = !previewAddress(url, current.currentURL, servers);
+    const sameBrowser = external && current.request.external;
+    preview.visit(current, url, back || sameBrowser ? "replace" : "push");
+    current.canGoBackInFrame = false;
+    if (sameBrowser || (!external && !current.request.external && new URL(url).origin === new URL(current.request.url).origin)) {
+      page.navigatePage(url);
+    } else {
+      // A different stack member has its own login store and prepared flows.
+      // Mount a fresh preview, carrying only the reviewer's viewport choice.
+      const device = "device" in page ? page.device() : undefined;
+      current.request = { sessionId: current.request.sessionId, url, ...(external ? { external } : device ? { prep: { device } } : {}) };
+      current.favicon = undefined;
+      current.title = "";
+    }
+    current.documentTitle = "";
+    void focusPage();
+  }
+  function goBack() {
+    if (current.canGoBackInFrame && pages[current.id]?.backInFrame()) return;
+    const url = current.backStack.pop();
+    if (url) navigate(url, true);
+  }
   // The port distinguishes servers; on the same server the route distinguishes pages.
-  const origins = $derived(new Set(preview.tabs.map(t => new URL(t.request.url).origin)));
+  const origins = $derived(new Set(preview.tabs.map(t => new URL(t.currentURL).origin)));
   function subtitle(tab: OpenPreviewTab) {
     const url = new URL(tab.currentURL);
     const route = url.pathname + url.search + url.hash;
@@ -88,16 +115,17 @@
     switch (action) {
       case "close-tab": void closeTab(preview.active); break;
       case "preview-duplicate": {
-        const viewport = pages[current.id]?.device() ?? current.request.prep?.device;
+        const page = pages[current.id];
+        const viewport = page && "device" in page ? page.device() : current.request.prep?.device;
         preview.duplicate(viewport);
         void focusPage();
         break;
       }
       case "new-shell": {
         // Open the advertised address for this server, even after in-page navigation.
-        const origin = new URL(current.request.url).origin;
+        const origin = new URL(current.currentURL).origin;
         const url = groups.flatMap(g => g.urls).find(url => new URL(url).origin === origin);
-        preview.open(current.request.sessionId, url ?? origin);
+        preview.open(current.request.sessionId, url ?? origin, { external: current.request.external });
         void focusPage();
         break;
       }
@@ -129,7 +157,8 @@
         aria-label="Page sidebar" aria-keyshortcuts="Meta+b" title="Show or hide page sidebar · ⌘B" aria-expanded={expanded} aria-controls="preview-sidebar" onclick={toggleSidebar}>
         <Icon name="panel-left" size={16} />
       </button>
-      <h2 class="mr-2 self-stretch content-center text-lg text-ink">Preview</h2>
+      <h2 class="mr-2 self-stretch content-center text-lg text-ink max-sm:sr-only">Preview</h2>
+      <Button icon aria-label="Back" title="Back" disabled={!current.canGoBackInFrame && !current.backStack.length} onclick={goBack}><Icon name="arrow-left" size={16} /></Button>
       <nav aria-label="Dev servers" class="drag flex max-h-[22dvh] min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 overflow-y-auto">
         {#each groups as group (group.name)}
           <div role="group" aria-label={group.label || "Addresses"} class="grid min-w-0 max-w-full gap-0.5">
@@ -159,15 +188,18 @@
             {#each preview.tabs as tab, i (tab.id)}
               {@const title = label(tab)}
               {@const address = subtitle(tab)}
-              <div role="presentation" class="group flex min-w-0 items-center rounded-md pr-1 {current === tab ? 'bg-accent-fill text-accent-ink' : 'text-faint hover:bg-sel/50'}">
+              <div role="presentation" class="page-row group" class:selected={current === tab}>
                 <button type="button" id={tabId(tab)} role="tab" aria-label={title} aria-selected={current === tab} aria-describedby={address !== title ? tabId(tab) + "-address" : undefined} aria-controls={'preview-page-' + tab.id}
-                  tabindex={current === tab ? 0 : -1} title={tab.currentURL}
-                  class="min-w-0 flex-1 rounded-md px-2 py-2 text-left" onclick={() => select(i)} onkeydown={(e) => onTabKey(e, i)}>
-                  <span class="block truncate text-sm font-medium">{title}</span>
-                  {#if address !== title}<span id={tabId(tab) + "-address"} class="block truncate font-mono text-xs text-faint">{address}</span>{/if}
+                  tabindex={current === tab ? 0 : -1} title={title === address ? tab.currentURL : title + "\n" + tab.currentURL}
+                  class="page-tab" onclick={() => select(i)} onkeydown={(e) => onTabKey(e, i)}>
+                  <PreviewTabIcon src={tab.favicon} />
+                  <span class="min-w-0">
+                    <span class="page-title">{title}</span>
+                    {#if address !== title}<span id={tabId(tab) + "-address"} class="page-address">{address}</span>{/if}
+                  </span>
                 </button>
                 <Button size="xs" icon aria-label={`Close ${title}`} title="Close tab · ⌘W" tabindex={current === tab ? 0 : -1}
-                  class={current === tab ? "" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"} onclick={() => closeTab(i)}>
+                  class="text-faint hover:text-ink {current === tab ? '' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}" onclick={() => closeTab(i)}>
                   <Icon name="x" size={12} />
                 </Button>
               </div>
@@ -179,7 +211,14 @@
           {#each preview.tabs as tab (tab.id)}
             <div role="tabpanel" tabindex="-1" id={'preview-page-' + tab.id} aria-labelledby={tabId(tab)} class="absolute inset-0" style:visibility={tab === current ? undefined : "hidden"} aria-hidden={tab !== current} inert={tab !== current}>
               {#if tab.visited}
-                <SessionPreview {tab} active={preview.visible && current === tab} bind:this={pages[tab.id]} />
+                {#key tab.request}
+                  {#if tab.request.external}
+                    <ExternalPreview {tab} active={preview.visible && current === tab && !(compact && expanded)}
+                      onNewTab={url => preview.openLink(tab.request.sessionId, url, servers)} bind:this={pages[tab.id]} />
+                  {:else}
+                    <SessionPreview {tab} active={preview.visible && current === tab} bind:this={pages[tab.id]} />
+                  {/if}
+                {/key}
               {/if}
             </div>
           {/each}
@@ -190,12 +229,13 @@
 
 <style>
   .page-sidebar {
+    --pages-width: clamp(15rem, 18vw, 17.5rem);
     position: relative;
     z-index: 10;
     flex: 0 0 auto;
-    width: min(13rem, 100%);
+    width: min(var(--pages-width), 100%);
     /* Reserve dock space once per toggle so the framed app reflows only once. */
-    margin-inline-end: -13rem;
+    margin-inline-end: calc(-1 * var(--pages-width));
     background: var(--color-panel);
     transform: translateX(-100%);
     transition: transform 180ms ease-out;
@@ -206,6 +246,53 @@
     padding: .5rem;
     overflow-y: auto;
     border-right: 1px solid var(--color-edge);
+  }
+  .page-row {
+    display: flex;
+    align-items: center;
+    padding-inline-end: 4px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: var(--color-ink-2);
+  }
+  .page-row:hover { background: var(--color-sel); color: var(--color-ink); }
+  .page-row.selected {
+    color: var(--color-ink);
+    background: color-mix(in srgb, var(--color-accent-fill) 72%, var(--color-panel));
+    border-color: color-mix(in srgb, var(--color-accent) 23%, var(--color-panel));
+  }
+  .page-tab {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: 42px;
+    padding: 7px 4px 7px 8px;
+    border-radius: 6px;
+    text-align: start;
+  }
+  .page-title {
+    display: -webkit-box;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    font-size: var(--text-base);
+    line-height: 1.3;
+    font-weight: 500;
+  }
+  .selected .page-title { font-weight: 600; }
+  .page-address {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-faint);
+    font-size: var(--text-sm);
+    line-height: 1.3;
   }
   .page-sidebar.compact {
     position: absolute;

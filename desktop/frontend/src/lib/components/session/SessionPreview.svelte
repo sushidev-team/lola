@@ -20,7 +20,7 @@
   import { feedback, type ElementDraft } from "$lib/feedback.svelte";
   import "./annotation-editor.css";
   import { devUrlLabel } from "$lib/devurl";
-  import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, type PickedElement, type PreviewRequest, type OpenPreviewTab, type ViewportId } from "$lib/preview.svelte";
+  import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, previewIcon, type PickedElement, type PreviewRequest, type OpenPreviewTab, type ViewportId } from "$lib/preview.svelte";
   import Button from "../Button.svelte";
   import TestLogins from "./TestLogins.svelte";
   import Icon from "../Icon.svelte";
@@ -82,8 +82,19 @@
 
   export function reloadPage() {
     if (!src) return;
+    navigatePage(tab?.currentURL ?? "");
+  }
+
+  export function navigatePage(route: string) {
     autoAttempted = false;
-    load = { route: tab?.currentURL ?? "" };
+    loginsOpen = false;
+    load = { route };
+  }
+
+  export function backInFrame() {
+    if (!frame?.contentWindow || !pickerReady || !documentId) return false;
+    frame.contentWindow.postMessage({ target: PICKER_SOURCE, type: "back", documentId }, frameOrigin);
+    return true;
   }
 
   // What the agent prepared for the active page, and what the page said about it.
@@ -223,6 +234,7 @@
   $effect(() => {
     const request = req;
     const route = load.route;
+    if (tab) tab.canGoBackInFrame = false;
     verifiedPath = "";
     documentId = "";
     firstDocumentPath = "";
@@ -305,6 +317,11 @@
     pendingLoginDoc = "";
     pickerReady = false;
     picking = false;
+    // A navigation focuses its tab panel while Open is obtaining the frame.
+    // Hand focus to the new page only if the user is still waiting there.
+    if (active && tab && frame?.closest('[role="tabpanel"]') === document.activeElement) {
+      frame?.focus({ preventScroll: true });
+    }
     if (frameOrigin && frameOrigin !== "null") {
       frame?.contentWindow?.postMessage({ target: PICKER_SOURCE, type: "hello", watchLocation: !!tab }, frameOrigin);
     }
@@ -381,6 +398,15 @@
       if (!frame || e.source !== frame.contentWindow || !src || e.origin !== frameOrigin) return;
       const d = e.data as { source?: string; type?: string; id?: number; documentId?: string; picking?: boolean; url?: string; found?: unknown; waited?: unknown; i?: unknown; failed?: { index?: unknown; step?: unknown; why?: unknown } | null } | null;
       if (active && tab && pickerReady && d?.source === PICKER_SOURCE && d.documentId === documentId) {
+        if (d.type === "new-tab" && typeof d.url === "string") {
+          let target: URL;
+          try { target = new URL(d.url); } catch { return; }
+          if (!["http:", "https:"].includes(target.protocol) || target.username || target.password) return;
+          const address = target.origin === frameOrigin ? devPageURL(target.href, tab.request.url) : target.href;
+          const servers = [...(session?.devUrls ?? []), ...(session?.apps ?? []).flatMap(app => app.devUrls ?? [])];
+          preview.openLink(tab.request.sessionId, address, servers, viewport);
+          return;
+        }
         if (d.type === "login-form" && !loginsOpen && !autoAttempted) onLoginForm?.();
         if (d.type === "login-result" && pendingLoginDoc && pendingLoginDoc === documentId) {
           pendingLoginDoc = "";
@@ -397,8 +423,12 @@
       if (tab && d?.source === PICKER_SOURCE && (d.type === "ready" || d.type === "location") && typeof d.url === "string") {
         try {
           if (new URL(d.url).origin === frameOrigin) {
-            tab.currentURL = devPageURL(d.url, tab.request.url);
+            const kind = e.data.kind;
+            preview.visit(tab, devPageURL(d.url, tab.request.url),
+              kind === "traverse" ? "traverse" : kind === "replace" || (d.type === "ready" && !documentId) ? "replace" : "push");
+            tab.canGoBackInFrame = e.data.canGoBack === true;
             tab.documentTitle = typeof e.data.title === "string" ? e.data.title.trim().slice(0, 200) : "";
+            tab.favicon = previewIcon(e.data.favicon, d.url, tab.currentURL);
           }
         } catch { /* Ignore malformed frame metadata. */ }
       }
