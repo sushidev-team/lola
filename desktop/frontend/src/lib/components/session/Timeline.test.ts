@@ -303,6 +303,40 @@ describe("Timeline rail", () => {
     expect(container.querySelector('[data-rail-mark="receipt"]')).not.toBeNull();
   });
 
+  it("quotes the turn's question and jumps back to it across intervening work", async () => {
+    const question = "Should the calculator switches be disabled?";
+    const view = setup(
+      [human("ask", question, 1), system("done", "checkpoint", "Done", 6)],
+      [user("echo", question, 2, { echo: true }), text("note", "Checking.", 3), tool("read", "read", "settings.ts", {}, 4), text("answer", "Yes, they should be.", 5)],
+    );
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const source = container.querySelector('[data-row="ask"]')!;
+    const scroll = vi.spyOn(source, "scrollIntoView");
+    geometry(log(), { scrollHeight: 1600, clientHeight: 400, scrollTop: 1200 });
+    await fireEvent.click(screen.getByRole("button", { name: `Jump to your message: ${question}` }));
+    await settle();
+    expect(scroll).toHaveBeenCalled();
+    expect(view.cursor).toBe("ask");
+    log().scrollTop = 100;
+    await fireEvent.click(screen.getByRole("button", { name: /Back to where you were/ }));
+    expect(log().scrollTop).toBe(1200);
+  });
+
+  it("links terminal questions and never carries them over to a background turn or a recalled message", async () => {
+    const view = setup([human("recalled", "Never sent", 5, { recalled: true, delivered: false })], [
+      user("terminal", "Which switches?", 1), text("answer", "Both.", 2),
+      user("task", "Task complete", 3, { origin: "task" }), text("background", "Acknowledged.", 4),
+      text("last", "Finished.", 6),
+    ]);
+    render(Timeline, { sessionId: SID });
+    await settle();
+    expect(screen.getAllByRole("button", { name: /Jump to your message/ })).toHaveLength(1);
+    await fireEvent.click(screen.getByRole("button", { name: "Jump to your message: Which switches?" }));
+    await settle();
+    expect(view.cursor).toBe("terminal");
+  });
+
   it("an earlier message stays visible when a later answer arrives", async () => {
     setup([human("h1", "ask", 1), system("s1", "checkpoint", "Done", 9, { seq: 1 })], [text("x1", "short beat", 2)]);
     const { container } = render(Timeline, { sessionId: SID });

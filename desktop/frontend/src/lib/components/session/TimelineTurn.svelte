@@ -10,6 +10,7 @@
   import { answerBlocks, plainInline } from "$lib/answerblocks";
   import { clockTime } from "$lib/ssh";
   import Chevron from "../Chevron.svelte";
+  import Icon from "../Icon.svelte";
   import RailMark from "./RailMark.svelte";
   import StoryRow from "./StoryRow.svelte";
   import CatchUp from "./CatchUp.svelte";
@@ -95,6 +96,12 @@
     const first = parts[0];
     return first?.kind === "row" && (first.row.kind === "you" || first.row.kind === "terminal") ? first.row : undefined;
   });
+  const replyTo = $derived.by(() => {
+    if (!answerId || !person) return;
+    if (person.kind === "you" && (!person.item.human?.delivered || person.item.human.recalled || person.item.human.returned)) return;
+    const line = turnAsk(turn);
+    if (line) return { id: person.id, quote: line.length > 160 ? line.slice(0, 159).trimEnd() + "…" : line };
+  });
   const receipt = $derived.by(() => {
     const last = parts[parts.length - 1];
     return last?.kind === "row" && last.row.kind === "receipt" ? last.row : undefined;
@@ -141,6 +148,19 @@
   {#if row.id === catchUpRow}<div class="py-4"><CatchUp words={catchUpWords} /></div>{/if}
   <div class="relative" style="margin-top:{gap}px">
     {#if !nested}<RailMark kind={railKind(row, answerId, view.filter)} lead={leads(row)} />{/if}
+    {#if row.id === answerId && replyTo}
+      {@const { id, quote } = replyTo}
+      <button
+        type="button"
+        class="mb-1 flex min-h-7 max-w-full items-center gap-2 rounded-sm px-2 text-left text-sm text-ink-2 hover:bg-sel/30 hover:text-ink"
+        aria-label={`Jump to your message: ${quote}`}
+        onclick={() => view.jump = { block: `item:${id}`, n: (view.jump?.n ?? 0) + 1 }}
+      >
+        <Icon name="undo-2" size={13} class="text-info" />
+        <span class="shrink-0 font-medium text-info">You</span>
+        <span class="truncate">{quote}</span>
+      </button>
+    {/if}
     {@render rowBody(row, nested)}
   </div>
 {/snippet}
