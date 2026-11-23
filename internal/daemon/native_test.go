@@ -989,6 +989,7 @@ func TestAdoptNativeSessionsUpsertsAndPreservesFacts(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	// A previous daemon persisted branch/repo facts adopt cannot observe.
 	prev := nativeSess("FE-1", "working")
+	prev.FirstSeen = time.Now().Add(-24 * time.Hour)
 	prev.Branch = "feat/fe-1-custom"
 	d.sessions.Upsert(prev)
 
@@ -1002,6 +1003,9 @@ func TestAdoptNativeSessionsUpsertsAndPreservesFacts(t *testing.T) {
 	d.adoptNativeSessions(context.Background())
 
 	s1 := findSession(t, d.sessions.Snapshot(), prev.ID)
+	if !s1.FirstSeen.Equal(prev.FirstSeen) {
+		t.Errorf("adoption changed launch time from %v to %v", prev.FirstSeen, s1.FirstSeen)
+	}
 	if s1.Status != "working" || s1.Branch != "feat/fe-1-custom" || s1.Repo != "acme/widgets" {
 		t.Errorf("re-adopted session = %+v, want working with persisted branch/repo preserved", s1)
 	}

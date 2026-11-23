@@ -79,7 +79,7 @@ func TestAttemptPRCompletionBoundaryAndResume(t *testing.T) {
 		{"explicit PR resume", session.KindPR, &scm.PR{State: "MERGED", MergedAt: start.Add(-time.Hour)}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := prForAttempt(session.Session{Kind: tc.kind, FirstSeen: start}, tc.pr)
+			got := prForAttempt(session.Session{Kind: tc.kind, FirstSeen: start}, tc.pr, nil, nil)
 			if (got != nil) != tc.keep {
 				t.Fatalf("got %+v, keep=%v", got, tc.keep)
 			}

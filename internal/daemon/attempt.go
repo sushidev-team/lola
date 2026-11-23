@@ -16,7 +16,7 @@ import (
 // A branch-name match is not evidence that a previous round's completed PR
 // belongs to this one. Keep this before facts reach either observer's delivery
 // derivation, write-back, review or cleanup. Explicit PR resumes are exempt.
-func prForAttempt(s session.Session, pr *scm.PR) *scm.PR {
+func prForAttempt(s session.Session, pr *scm.PR, observed *scm.PR, reviewed map[string]int) *scm.PR {
 	if pr == nil || !s.OwnsBranch() || s.FirstSeen.IsZero() {
 		return pr
 	}
@@ -30,10 +30,22 @@ func prForAttempt(s session.Session, pr *scm.PR) *scm.PR {
 	case "CLOSED":
 		ended = pr.ClosedAt
 	}
-	if !ended.IsZero() && ended.Before(s.FirstSeen) {
-		return nil
+	if ended.IsZero() || !ended.Before(s.FirstSeen) {
+		return pr
 	}
-	return pr
+	// Older daemons reset FirstSeen on adoption. A PR already observed or
+	// reviewed by this attempt in this repository still belongs to it.
+	if pr.Number > 0 {
+		if observed != nil && observed.Number == pr.Number {
+			return pr
+		}
+		for _, number := range reviewed {
+			if number == pr.Number {
+				return pr
+			}
+		}
+	}
+	return nil
 }
 
 // Conversation directories also cover launches made before durable reservations

@@ -85,7 +85,8 @@ it('uses app lanes and drops late responses from another PR', async () => {
   read.mockImplementationOnce(()=>new Promise(resolve=>release=resolve) as never);
   read.mockResolvedValueOnce(facts({number:9,checks:'fail',threads:[thread('second')]}));
   mount({stack:true,focusApp:'web',apps:[{name:'web',label:'Website',number:42},{name:'api',label:'API',number:9}]});
-  await fireEvent.click(screen.getByRole('tab',{name:'API'}));
+  expect(screen.getByRole('tab', {name:'Website #42', selected:true})).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole('tab',{name:'API #9'}));
   await screen.findByText('Fix failing CI checks.');
   release(facts());
   await waitFor(()=>expect(read).toHaveBeenCalledTimes(2));
@@ -198,7 +199,7 @@ it('pins stack lane actions and drops confirmations after switching lanes', asyn
   read.mockImplementation((_id, number)=>Promise.resolve(facts({number,mergeMethod:'rebase',mergeBlocked:'CI is running.'})) as never);
   mount({stack:true,focusApp:'web',apps:[{name:'web',label:'Website',number:42},{name:'api',label:'API',number:9}]});
   await fireEvent.click(await screen.findByRole('button',{name:'Merge pull request'}));
-  await fireEvent.click(screen.getByRole('tab',{name:'API'}));
+  await fireEvent.click(screen.getByRole('tab',{name:'API #9'}));
   await waitFor(()=>expect(screen.getByRole('button',{name:'Merge pull request'})).toBeEnabled());
   confirm.accept();
   expect(merge).not.toHaveBeenCalled();
@@ -229,7 +230,7 @@ it('remembers the chosen method across PRs and remounts before any merge', async
   await waitFor(()=>expect(picker).toBeEnabled());
   await fireEvent.click(picker);
   await fireEvent.click(screen.getByRole('option',{name:'Create merge commit'}));
-  await fireEvent.click(screen.getByRole('tab',{name:'API'}));
+  await fireEvent.click(screen.getByRole('tab',{name:'API #9'}));
   await waitFor(()=>expect(read).toHaveBeenLastCalledWith(`${store.sessions[0].id}~api`,9));
   await waitFor(()=>expect(picker).toBeEnabled());
   expect(picker).toHaveValue('merge');
@@ -277,7 +278,7 @@ it('keeps the chosen rebase method on another PR', async () => {
   await fireEvent.click(picker);
   await fireEvent.click(screen.getByRole('option',{name:'Rebase and merge'}));
   read.mockResolvedValue(facts({number:9}));
-  await fireEvent.click(screen.getByRole('tab',{name:'API'}));
+  await fireEvent.click(screen.getByRole('tab',{name:'API #9'}));
   const nextPicker=await screen.findByRole('combobox',{name:'Merge method'});
   await waitFor(()=>expect(nextPicker).toBeEnabled());
   expect(nextPicker).toHaveValue('rebase');

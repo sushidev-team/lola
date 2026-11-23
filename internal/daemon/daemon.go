@@ -1524,6 +1524,7 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 		d.sessions.Apply(s.ID, func(cur *session.Session, exists bool) bool {
 			if exists {
 				prev := *cur
+				s.FirstSeen = prev.FirstSeen // PR attribution uses the launch time across restarts.
 				s.Name = prev.Name
 				s.AgentTabParent = prev.AgentTabParent
 				s.AgentCWD = prev.AgentCWD

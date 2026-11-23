@@ -66,6 +66,23 @@ func TestObserveAppsFetchesEachPRAndKeepsLastFactsOnFailure(t *testing.T) {
 	}
 }
 
+func TestObserveAppsRecoversReviewedPRAfterLegacyAdoption(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := stackSess("FE-1")
+	s.FirstSeen = time.Now()
+	s.Apps[0].ReviewedPRs = map[string]int{"codex-session": 472}
+	// Both repos have an older merged #472. Only the app's review is evidence
+	// for this attempt, even when the other repo has the same PR number.
+	d.prForBranch = func(context.Context, string, string) (*scm.PR, error) {
+		return &scm.PR{Number: 472, State: "MERGED", MergedAt: s.FirstSeen.Add(-time.Hour)}, nil
+	}
+	d.changedFiles = nil
+	applyApps(&s, d.observeApps(context.Background(), s), time.Now())
+	if s.Apps[0].PR == nil || s.Apps[0].PR.Number != 472 || s.Apps[1].PR != nil {
+		t.Fatalf("unexpected app PR attribution: %+v", s.Apps)
+	}
+}
+
 func TestStackReactsPerAppAndNamesTheCheckout(t *testing.T) {
 	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	seams := &fakeReactSeams{failing: "WEB-CI-LOG"}

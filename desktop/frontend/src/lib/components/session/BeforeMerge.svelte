@@ -191,15 +191,16 @@
 </script>
 
 {#if selected}
+{@const linkLabel = session.stack && prs.length === 1 ? `${selected.label} #${selected.number}` : `#${selected.number}`}
 <section data-before-merge class:review-layout={reviewLayout} aria-label="PR status">
   <header>
     {#if phone && reviewLayout}<h3 class="phone-section"><Icon name="git-pull-request" size={18} /><span>Pull request <span class="num">#{selected.number}</span></span></h3>
       {#if current?.base}<span class="phone-base"><Icon name="git-branch" size={13}/><span>{current.base}</span></span>{/if}{:else if heading}<h3 class="cv-overview-heading">PR status</h3>{:else}<span class="heading-gap"></span>{/if}
     {#if !phone && nav.overlay !== 'pr-review'}<Button variant={promoteReview ? 'primary' : 'ghost'} size="xs" onclick={() => reviewWorkspace.open(session.id)}>{#if promoteReview}<Icon name="git-pull-request" size={13} />{/if}Review PR</Button>{/if}
-    {#if !phone}<button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request #{selected.number}"><Icon name="git-pull-request" size={13} />#{selected.number}<Icon name="external-link" size={11} /></button>{/if}
+    {#if !phone}<button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request {linkLabel}"><Icon name="git-pull-request" size={13} />{linkLabel}<Icon name="external-link" size={11} /></button>{/if}
     {#if !(phone && error)}<button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>{/if}
   </header>
-  {#if prs.length > 1}<Tabs tabs={prs.map(p => ({ id:p.id, label:p.label }))} active={selected.id} onSelect={id => chosen = id} />{/if}
+  {#if prs.length > 1}<Tabs ariaLabel="Pull requests by repository" tabs={prs.map(p => ({ id:p.id, label:phone ? p.label : `${p.label} #${p.number}` }))} active={selected.id} onSelect={id => chosen = id} />{/if}
   {#if error}{#if phone}<p class="error error-phone" role="status"><span class="text-subhead text-pill-urgent-soft-fg">Can't reach GitHub.</span><button type="button" class="retry text-subhead text-accent" onclick={refresh} title={error}>Retry</button></p>{:else}<p class="error text-warn" role="status">{current ? 'Status may be outdated. ' : ''}Could not refresh GitHub. <button type="button" onclick={refresh} title={error}>Retry</button></p>{/if}{/if}
   {#if !current && !error}
     <div role="status" aria-label="Loading PR status">

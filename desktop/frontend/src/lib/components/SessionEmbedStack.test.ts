@@ -55,7 +55,7 @@ describe("SessionBar sandbox + stack apps", () => {
     expect(screen.queryByRole("menuitem", { name: /Open PR/ })).toBeNull();
     expect(screen.getByRole("region", { name: "PR status" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /#9/ })).toHaveLength(1);
-    await fireEvent.click(screen.getByRole("button", { name: /#9/ }));
+    await fireEvent.click(screen.getByRole("button", { name: "Open pull request api #9" }));
     expect(OpenURL).toHaveBeenCalledWith("https://github.com/acme/api/pull/9");
   });
 });
