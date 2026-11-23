@@ -65,8 +65,8 @@ func (d *Daemon) handleSessionTask(ctx context.Context, req protocol.Request, au
 		}
 		s.Tasks = next
 		// Confirmations update the shared agreement without starting a turn or
-		// releasing a held conversation queue. The next message already asks the
-		// agent to read the board. Scope changes still need its attention now.
+		// releasing a held conversation queue. The briefing tells the agent to
+		// read the board on each request. Scope changes still need its attention now.
 		confirmed := a.Argv[0] == "state" && len(a.Argv) == 3 && a.Argv[2] == "done"
 		if author == "user" && id != "" && confirmed {
 			i := slices.IndexFunc(next, func(t protocol.SessionTask) bool { return t.ID == id })
@@ -100,7 +100,6 @@ func (d *Daemon) handleSessionTask(ctx context.Context, req protocol.Request, au
 		} else if notify.Kind == "requirement" {
 			message += "\nOrganize this under the existing task most responsible for it, or create an appropriate task if none fits."
 		}
-		message += "\n\n" + taskboard.Briefing("lola")
 		_, err := d.handleAgentSay(ctx, protocol.AgentSayArgs{Session: req.Session, Text: message})
 		d.sessions.Update(req.Session, func(s *session.Session) bool {
 			i := slices.IndexFunc(s.Tasks, func(t protocol.SessionTask) bool { return t.ID == notify.ID })

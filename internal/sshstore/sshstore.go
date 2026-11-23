@@ -104,6 +104,8 @@ type QueueEntry struct {
 	// prompt: joined to other text it would become arguments, and in an agent's tool
 	// output it would mean nothing.
 	Command bool `json:"command,omitempty"`
+	// TaskHint marks the message carrying the session's task-board reminder.
+	TaskHint bool `json:"taskHint,omitempty"`
 }
 
 // SentBatch remembers one thing lola typed, so the conversation view can tell lola's own
@@ -147,9 +149,10 @@ type State struct {
 	NextHuman   int `json:"nextHuman"`
 	NextQueue   int `json:"nextQueue"`
 
-	Conns []*Conn                     `json:"conns"`
-	Items []*protocol.SSHTimelineItem `json:"items"`
-	Queue []QueueEntry                `json:"queue,omitempty"`
+	Conns             []*Conn                     `json:"conns"`
+	Items             []*protocol.SSHTimelineItem `json:"items"`
+	Queue             []QueueEntry                `json:"queue,omitempty"`
+	TaskHintDelivered bool                        `json:"taskHintDelivered,omitempty"`
 
 	// TalkConn is the tab the human last spoke to the agent from. With two tabs on one
 	// host it decides which one the agent's next command goes to, and the agent never
@@ -645,6 +648,9 @@ func (st *State) Deliver(via string, at time.Time, deliver func(QueueEntry) bool
 			continue
 		}
 		out = append(out, q)
+		if q.TaskHint {
+			st.TaskHintDelivered = true
+		}
 		if it := st.Item(q.Item); it != nil && it.Human != nil {
 			it.Human.Delivered = true
 			it.Human.DeliveredAt = at

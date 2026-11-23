@@ -2,8 +2,7 @@ package taskboard
 
 import "strings"
 
-// Briefing is the shared operating contract for launches, new user items and
-// CLI help. Keep these entry points in agreement, including already-live agents.
+// Briefing is the shared operating contract for launches and CLI help.
 func Briefing(bin string) string {
 	return strings.ReplaceAll(`## Shared tasks and requirements
 
@@ -34,5 +33,4 @@ New agent requirements must include --task or --global. Human additions without 
 }
 
 // ConversationHint also reaches agents launched before the current briefing.
-// Keep it short: it accompanies ordinary prose, never slash commands.
-const ConversationHint = "[lola tasks] Read lola report task list. Route user feedback to its existing task/requirement with lola report task feedback <id> <text>; ask if ambiguous. Use lola report task state <id> checking for checks only the user can perform; mark those checks done only after their explicit confirmation. Complete a parent only after all its requirements are met."
+const ConversationHint = "[lola tasks] Read lola report task list after each user request. See lola report task help for feedback and completion rules."

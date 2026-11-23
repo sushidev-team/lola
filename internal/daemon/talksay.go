@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -388,17 +389,21 @@ func (d *Daemon) handleAgentSay(ctx context.Context, a protocol.AgentSayArgs) (p
 	if onHost != "" && !command {
 		queued = "[lola] Said while looking at " + onHost + ":\n" + text
 	}
-	if len(s.Tasks) > 0 && !command && !strings.Contains(queued, taskboard.ConversationHint) {
-		queued += "\n\n" + taskboard.ConversationHint
-	}
 	now := d.ssh.now()
 	var item string
 	err = store.Update(func(st *sshstore.State) error {
+		// Reserve the reminder with its message. If recalled before delivery,
+		// a later message can carry it instead.
+		hint := len(s.Tasks) > 0 && !command && !st.TaskHintDelivered &&
+			!slices.ContainsFunc(st.Queue, func(q sshstore.QueueEntry) bool { return q.TaskHint })
+		if hint && !strings.Contains(queued, taskboard.ConversationHint) {
+			queued += "\n\n" + taskboard.ConversationHint
+		}
 		if st.QueueBytes()+len(queued) > sshstore.MaxQueueBytes {
 			return errSSHQueueFull
 		}
 		it := st.AddHuman(protocol.SSHHumanMessage{Origin: protocol.SSHHumanSay, Text: text, Conn: tabID}, now)
-		st.EnqueueEntry(sshstore.QueueEntry{Item: it.ID, Text: queued, Human: true, Command: command})
+		st.EnqueueEntry(sshstore.QueueEntry{Item: it.ID, Text: queued, Human: true, Command: command, TaskHint: hint})
 		store.Prune(st)
 		item = it.ID
 		return nil

@@ -25,7 +25,7 @@ func TestSharedTaskRoundTrip(t *testing.T) {
 	if !r.OK {
 		t.Fatal(r.Error)
 	}
-	if got := f.sent(); len(got) != 1 || (!strings.Contains(got[0], "key-nav") || !strings.Contains(got[0], strings.TrimSpace(taskboard.Briefing("lola")))) {
+	if got := f.sent(); len(got) != 1 || !strings.Contains(got[0], "key-nav") || !strings.Contains(got[0], taskboard.ConversationHint) || strings.Contains(got[0], "## Shared tasks") {
 		t.Fatalf("not sent: %v", got)
 	}
 	// A repeated request neither creates another card nor sends twice.
@@ -129,10 +129,15 @@ func TestUserTaskCheckIsSilentAndComposerFeedbackRoutes(t *testing.T) {
 	if sent := f.sent(); len(sent) != 1 || !strings.Contains(sent[0], taskboard.ConversationHint) {
 		t.Fatalf("routing missing: %v", sent)
 	}
+	const followup = "It also scrolls on the second screen"
+	say(t, d, "check", followup)
+	if sent := f.sent(); len(sent) != 2 || sent[1] != followup {
+		t.Fatalf("unexpected follow-up: %v", sent)
+	}
 	if r := d.handle(context.Background(), reportReq(t, "check", "task", "feedback", "browser", "Shortcut still scrolls")); !r.OK {
 		t.Fatal(r.Error)
 	}
-	if len(f.sent()) != 1 {
+	if len(f.sent()) != 2 {
 		t.Fatal("feedback report echoed to agent")
 	}
 	s, _ = d.sessions.Get("check")
@@ -158,7 +163,35 @@ func TestUserTaskScopeChangesStillNotify(t *testing.T) {
 			t.Fatal(r.Error)
 		}
 	}
-	if sent := f.sent(); len(sent) != 2 || !strings.Contains(sent[1], "Updated scope") {
+	if sent := f.sent(); len(sent) != 2 || !strings.Contains(sent[1], "Updated scope") || strings.Contains(sent[1], taskboard.ConversationHint) || strings.Contains(sent[1], "## Shared tasks") {
 		t.Fatalf("scope changes not delivered: %v", sent)
+	}
+}
+
+func TestTaskHintSurvivesRecallAndInboxDelivery(t *testing.T) {
+	d, f := talkFakeDaemon(t)
+	s := talkSession(d, "hint", state.AgentWorking)
+	s.Tasks = []protocol.SessionTask{{ID: "a", Kind: "task", Text: "Check lighting"}}
+	d.sessions.Upsert(s)
+	f.show(talkDraft)
+
+	first := say(t, d, s.ID, "Look at the window")
+	if got, err := d.handleSSHRecall(protocol.SSHRecallArgs{Session: s.ID, Item: first.Item}); err != nil || !got.Recalled {
+		t.Fatalf("recall: %+v, %v", got, err)
+	}
+	say(t, d, s.ID, "Look at the floor")
+	say(t, d, s.ID, "Also check the door")
+	got := d.sshInbox(s.ID)
+	if len(got) != 2 || !strings.Contains(got[0], taskboard.ConversationHint) || got[1] != sshInboxSays+"Also check the door" {
+		t.Fatalf("queued messages: %q", got)
+	}
+
+	// Reopen the persisted conversation store as the daemon does on restart.
+	d.ssh.mu.Lock()
+	delete(d.ssh.stores, s.ID)
+	d.ssh.mu.Unlock()
+	say(t, d, s.ID, "Thanks")
+	if got := d.sshInbox(s.ID); len(got) != 1 || got[0] != sshInboxSays+"Thanks" {
+		t.Fatalf("after reopening: %q", got)
 	}
 }
