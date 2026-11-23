@@ -22,6 +22,7 @@
   import { devUrlLabel } from "$lib/devurl";
   import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, type PickedElement, type PreviewRequest, type OpenPreviewTab, type ViewportId } from "$lib/preview.svelte";
   import Button from "../Button.svelte";
+  import TestLogins from "./TestLogins.svelte";
   import Icon from "../Icon.svelte";
 
   // The canvas keys this instance by immutable package and page. A workspace
@@ -81,6 +82,7 @@
 
   export function reloadPage() {
     if (!src) return;
+    autoAttempted = false;
     load = { route: tab?.currentURL ?? "" };
   }
 
@@ -300,6 +302,7 @@
   }
 
   function frameLoaded() {
+    pendingLoginDoc = "";
     pickerReady = false;
     picking = false;
     if (frameOrigin && frameOrigin !== "null") {
@@ -309,6 +312,62 @@
 
   function tell(on: boolean) {
     if (src) frame?.contentWindow?.postMessage({ target: PICKER_SOURCE, type: "pick", on }, frameOrigin);
+  }
+
+  let loginsOpen = $state(false);
+  let loginTrigger = $state<HTMLDivElement>();
+  let pendingLoginDoc = "";
+  let autoAttempted = false;
+  let onLoginForm: (() => void) | undefined;
+  $effect(() => { if (!active) { loginsOpen = false; pendingLoginDoc = ""; } });
+
+  // Arm only the foreground page. One submission per tab load avoids loops if
+  // the app redirects back to sign-in after rejecting the saved password.
+  $effect(() => {
+    const win = frame?.contentWindow, origin = frameOrigin, doc = documentId, request = req;
+    if (!active || !tab || !win || !doc || !pickerReady || !request || loginsOpen || request.prep?.steps?.length || autoAttempted) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    let watching = false;
+    async function arm() {
+      const list = await PreviewService.TestLogins(request!.sessionId, request!.url);
+      const choice = list.autoLogin;
+      if (signal.aborted || autoAttempted || !choice?.name || choice.origin !== new URL(request!.url).origin) return;
+      onLoginForm = () => {
+        onLoginForm = undefined;
+        void signIn(list.project, choice.name, signal, true).catch(() => {
+          if (!signal.aborted) store.setFlash("Auto-login unavailable. Open Logins to try again.", "warn");
+        });
+      };
+      watching = true;
+      win!.postMessage({ target: PICKER_SOURCE, type: "watch-login", documentId: doc, on: true }, origin);
+    }
+    // Older daemons and unattributed stack addresses may have no login store.
+    void arm().catch(() => {});
+    return () => {
+      controller.abort();
+      onLoginForm = undefined;
+      if (watching) win.postMessage({ target: PICKER_SOURCE, type: "watch-login", documentId: doc, on: false }, origin);
+    };
+  });
+
+  function closeLogins() {
+    loginsOpen = false;
+    loginTrigger?.querySelector("button")?.focus();
+  }
+
+  async function signIn(project: string, name: string, signal: AbortSignal, automatic = false) {
+    const win = frame?.contentWindow, doc = documentId, origin = frameOrigin, request = req;
+    if (!active || !request || !win || !pickerReady || !doc) throw new Error("Open the local sign-in page first.");
+    const getAccount = automatic ? PreviewService.AutoTestLogin : PreviewService.UseTestLogin;
+    const account = await getAccount(request.sessionId, request.url, project, name, origin);
+    if (signal.aborted || !account) return;
+    if (!active || frame?.contentWindow !== win || !pickerReady || documentId !== doc || frameOrigin !== origin) {
+      throw new Error("The preview page changed. Choose the login again.");
+    }
+    autoAttempted = true;
+    pendingLoginDoc = doc;
+    win.postMessage({ target: PICKER_SOURCE, type: "test-login", ...(automatic && { automatic: true }), documentId: doc, username: account.username, password: account.password }, origin);
   }
 
   function togglePick() {
@@ -321,6 +380,15 @@
       // Only the framed page, and only a well-formed pick, ever reaches the form.
       if (!frame || e.source !== frame.contentWindow || !src || e.origin !== frameOrigin) return;
       const d = e.data as { source?: string; type?: string; id?: number; documentId?: string; picking?: boolean; url?: string; found?: unknown; waited?: unknown; i?: unknown; failed?: { index?: unknown; step?: unknown; why?: unknown } | null } | null;
+      if (active && tab && pickerReady && d?.source === PICKER_SOURCE && d.documentId === documentId) {
+        if (d.type === "login-form" && !loginsOpen && !autoAttempted) onLoginForm?.();
+        if (d.type === "login-result" && pendingLoginDoc && pendingLoginDoc === documentId) {
+          pendingLoginDoc = "";
+          if (e.data.result === "submitted") store.setFlash("Sign-in submitted.");
+          else if (e.data.result === "filled") store.setFlash("Login filled. Use the page’s sign-in button.");
+          else store.setFlash("Open a local sign-in form, then choose the login again.", "warn");
+        }
+      }
       if (d?.source === PICKER_SOURCE && d.type === "mode" && pickerReady) picking = !!d.picking;
       if (inlinePage && active && d?.source === PICKER_SOURCE && d.type === "comment-bounds" && e.data.revision === revision && Array.isArray(e.data.rects)) {
         commentRects = e.data.rects.slice(0, 10).filter((r: CommentRect) =>
@@ -543,6 +611,17 @@
           <Button size="sm" selected={picking} disabled={!pickerReady || preparing || !!picked || !canComment} aria-label="Inspect element" title="Inspect an element to send feedback" onclick={togglePick}>
             <Icon name="square-mouse-pointer" size={15} /><span>Inspect</span>
           </Button>
+          {#if tab}
+            <div bind:this={loginTrigger}>
+              <Button size="sm" selected={loginsOpen} aria-label="Test logins" aria-expanded={loginsOpen}
+                onclick={() => loginsOpen = !loginsOpen}>
+                <Icon name="key-round" size={15} /><span>Logins</span>
+              </Button>
+            </div>
+            {#if active && loginsOpen}
+              <TestLogins session={req.sessionId} url={req.url} ready={pickerReady && !!documentId && !preparing} {signIn} close={closeLogins} />
+            {/if}
+          {/if}
           {#if replay}
             <Button icon={!(stalled || stepFailure)} size="sm" disabled={!src || preparing || !!picked} aria-label={stalled || stepFailure ? "Retry preparation" : "Replay prepared view"} title={req.prep?.steps?.length ? `Replay ${req.prep.steps.length} saved ${req.prep.steps.length === 1 ? "step" : "steps"} on this local page` : "Show the prepared view again"} onclick={replayView}><Icon name="rotate-ccw" size={15} />{#if stalled || stepFailure}Retry{/if}</Button>
           {/if}

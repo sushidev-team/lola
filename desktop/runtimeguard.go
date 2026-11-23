@@ -1,6 +1,10 @@
 package main
 
-import "net/http"
+import (
+	"net/http"
+	"os"
+	"strings"
+)
 
 // runtimeCallPath is where every bound service call arrives.
 const runtimeCallPath = "/wails/runtime"
@@ -33,5 +37,12 @@ func runtimeCallGuard(next http.Handler) http.Handler {
 }
 
 func isRuntimeCall(r *http.Request) bool {
-	return r.Method == http.MethodPost && r.Header.Get("x-wails-client-id") != "" && r.Header.Get("Origin") != "null"
+	if r.Method != http.MethodPost || r.Header.Get("x-wails-client-id") == "" {
+		return false
+	}
+	// Embedded dev pages have real loopback origins. Only the desktop frontend
+	// may invoke bindings, including those which manage saved test passwords.
+	origin := r.Header.Get("Origin")
+	return origin == "" || origin == "wails://localhost" ||
+		origin == strings.TrimRight(os.Getenv("FRONTEND_DEVSERVER_URL"), "/")
 }

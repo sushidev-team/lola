@@ -74,7 +74,7 @@ ports stop the server from running next to another one, ask the human with
 			return printDev(c.OutOrStdout(), active, urls)
 		},
 	}
-	root.AddCommand(start, stop, status)
+	root.AddCommand(start, stop, status, devLoginCmd())
 	return root
 }
 
@@ -108,29 +108,36 @@ func devStatus() (urls []string, active bool, err error) {
 	if os.Getenv("LOLA_SANDBOX") != "" {
 		return nil, false, errors.New("a sandboxed session cannot read or run dev servers; `lola dev start` asks the human to start it")
 	}
-	resp, err := hook.SendAgent("sessions", nil)
+	s, err := currentDevSession()
 	if err != nil {
 		return nil, false, err
 	}
+	urls = append(urls, s.DevURLs...)
+	for _, a := range s.Apps {
+		urls = append(urls, a.DevURLs...)
+	}
+	return urls, s.DevActive, nil
+}
+
+func currentDevSession() (protocol.SessionInfo, error) {
+	resp, err := hook.SendAgent("sessions", nil)
+	if err != nil {
+		return protocol.SessionInfo{}, err
+	}
 	if !resp.OK {
-		return nil, false, errors.New(resp.Error)
+		return protocol.SessionInfo{}, errors.New(resp.Error)
 	}
 	var data protocol.SessionsData
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
-		return nil, false, err
+		return protocol.SessionInfo{}, err
 	}
 	me := os.Getenv("LOLA_SESSION")
 	for _, s := range data.Sessions {
-		if s.ID != me {
-			continue
+		if s.ID == me {
+			return s, nil
 		}
-		urls = append(urls, s.DevURLs...)
-		for _, a := range s.Apps {
-			urls = append(urls, a.DevURLs...)
-		}
-		return urls, s.DevActive, nil
 	}
-	return nil, false, fmt.Errorf("unknown session %s", me)
+	return protocol.SessionInfo{}, fmt.Errorf("unknown session %s", me)
 }
 
 func printDev(w io.Writer, active bool, urls []string) error {

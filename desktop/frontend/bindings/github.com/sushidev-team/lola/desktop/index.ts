@@ -80,6 +80,7 @@ export type {
     StackFolderDTO,
     TeamLimitsDTO,
     TeamPolicyDTO,
+    TestLoginList,
     ToolchainDTO,
     ToolchainInfoDTO,
     UpdateInfoDTO,

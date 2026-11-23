@@ -27,6 +27,7 @@ func TestRuntimeGuardWasReviewedForThisWails(t *testing.T) {
 }
 
 func TestRuntimeGuard(t *testing.T) {
+	t.Setenv("FRONTEND_DEVSERVER_URL", "http://127.0.0.1:9245/")
 	const call = "/wails/runtime?object=0&method=2564028932&args=%7B%7D"
 	cases := []struct {
 		name    string
@@ -42,6 +43,8 @@ func TestRuntimeGuard(t *testing.T) {
 		{"a sandboxed fetch", http.MethodPost, "/wails/runtime", map[string]string{"x-wails-client-id": "x", "Origin": "null"}, false},
 		{"the runtime's own call", http.MethodPost, "/wails/runtime", map[string]string{"x-wails-client-id": "abc", "Origin": "wails://localhost"}, true},
 		{"the runtime's call with no origin", http.MethodPost, "/wails/runtime", map[string]string{"x-wails-client-id": "abc"}, true},
+		{"the configured dev frontend", http.MethodPost, "/wails/runtime", map[string]string{"x-wails-client-id": "abc", "Origin": "http://127.0.0.1:9245"}, true},
+		{"a preview frame", http.MethodPost, "/wails/runtime", map[string]string{"x-wails-client-id": "abc", "Origin": "http://preview.localhost:5151"}, false},
 		{"the runtime script", http.MethodGet, "/wails/runtime.js", nil, true},
 		{"the app's page", http.MethodGet, "/", nil, true},
 	}

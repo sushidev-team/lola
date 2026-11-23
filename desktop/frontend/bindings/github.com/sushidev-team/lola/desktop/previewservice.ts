@@ -14,6 +14,18 @@
 // @ts-ignore: Unused imports
 import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as devlogin$0 from "../internal/devlogin/models.js";
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as $models from "./models.js";
+
+export function AutoTestLogin(session: string, url: string, project: string, name: string, frameOrigin: string): $CancellablePromise<devlogin$0.Credentials | null> {
+    return $Call.ByID(1858931279, session, url, project, name, frameOrigin);
+}
+
 /**
  * Open returns the address the pane frames for one of the session's dev URLs.
  * Both macOS bundle plists must allow the proxy's *.localhost address.
@@ -21,4 +33,24 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
  */
 export function Open(session: string, url: string): $CancellablePromise<string> {
     return $Call.ByID(2710759037, session, url);
+}
+
+export function RemoveTestLogin(session: string, url: string, project: string, name: string): $CancellablePromise<void> {
+    return $Call.ByID(3556264030, session, url, project, name);
+}
+
+export function SaveTestLogin(session: string, url: string, project: string, profile: devlogin$0.Profile, password: string, editing: boolean): $CancellablePromise<void> {
+    return $Call.ByID(725504077, session, url, project, profile, password, editing);
+}
+
+export function SetAutoLogin(session: string, url: string, project: string, name: string, enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3102129737, session, url, project, name, enabled);
+}
+
+export function TestLogins(session: string, url: string): $CancellablePromise<$models.TestLoginList> {
+    return $Call.ByID(664090791, session, url);
+}
+
+export function UseTestLogin(session: string, url: string, project: string, name: string, frameOrigin: string): $CancellablePromise<devlogin$0.Credentials> {
+    return $Call.ByID(1568324993, session, url, project, name, frameOrigin);
 }

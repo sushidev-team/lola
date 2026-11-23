@@ -6,6 +6,9 @@
 import * as config$0 from "../internal/config/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as devlogin$0 from "../internal/devlogin/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as projectgit$0 from "../internal/projectgit/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -1076,6 +1079,12 @@ export interface TeamPolicyDTO {
      * Locked is what the daemon enforces. Never null.
      */
     "locked": LockedSettingDTO[] | null;
+}
+
+export interface TestLoginList {
+    "autoLogin": devlogin$0.AutoLogin;
+    "project": string;
+    "profiles": devlogin$0.Profile[] | null;
 }
 
 /**

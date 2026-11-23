@@ -46,3 +46,77 @@ it('blocks pointer controls only while inspecting and anchors comments to the ha
     history.replaceState(null, '', '/');
   }
 });
+
+it('fills an unambiguous local sign-in form for the selected document', () => {
+  const form = document.createElement('form');
+  form.method = 'post';
+  form.innerHTML = '<input autocomplete="username"><input type="password"><button>Sign in</button>';
+  document.body.appendChild(form);
+  const [user, pass] = form.querySelectorAll('input');
+  const submit = vi.spyOn(form, 'requestSubmit').mockImplementation(() => {});
+  const post = vi.spyOn(window, 'postMessage').mockImplementation(() => {});
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockReturnValue([new DOMRect(0, 0, 100, 20)] as unknown as DOMRectList);
+  const send = (data: object) => window.dispatchEvent(new MessageEvent('message', {
+    source: window, data: { target: 'lola-preview', ...data },
+  }));
+  try {
+    new Function(script)();
+    send({ type: 'hello' });
+    const documentId = post.mock.calls.at(-1)![0].documentId;
+    const account = { type: 'test-login', username: 'tester', password: 'fixture-password', documentId };
+    send({ ...account, documentId: 'old-page' });
+    expect(pass.value).toBe('');
+    form.action = 'https://external.example/login';
+    send(account);
+    expect(pass.value).toBe('');
+    expect(submit).not.toHaveBeenCalled();
+    form.action = '/login';
+    pass.autocomplete = 'new-password';
+    send(account);
+    expect(pass.value).toBe('');
+    pass.autocomplete = 'current-password';
+    send(account);
+    expect(user.value).toBe(account.username);
+    expect(pass.value).toBe(account.password);
+    expect(submit).toHaveBeenCalledWith(form.querySelector('button'));
+    expect(post.mock.calls.at(-1)![0]).toEqual({ source: 'lola-preview', type: 'login-result', documentId, result: 'submitted' });
+    form.method = 'get';
+    send(account);
+    expect(submit).toHaveBeenCalledTimes(1);
+  } finally { form.remove(); vi.restoreAllMocks(); }
+});
+
+it('waits for a local sign-in form and preserves input typed before auto-login arrives', async () => {
+  const post = vi.spyOn(window, 'postMessage').mockImplementation(() => {});
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockReturnValue([new DOMRect(0, 0, 100, 20)] as unknown as DOMRectList);
+  const form = document.createElement('form');
+  form.action = '/register';
+  form.method = 'post';
+  form.innerHTML = '<input autocomplete="username"><input type="password" autocomplete="current-password"><button>Continue</button>';
+  const [user, pass] = form.querySelectorAll('input');
+  const send = (data: object) => window.dispatchEvent(new MessageEvent('message', {
+    source: window, data: { target: 'lola-preview', ...data },
+  }));
+  new Function(script)();
+  send({ type: 'hello' });
+  const documentId = post.mock.calls.at(-1)![0].documentId;
+  const ready = () => post.mock.calls.filter(([m]) => m.type === 'login-form' && m.documentId === documentId);
+  try {
+    document.body.appendChild(form);
+    send({ type: 'watch-login', documentId, on: true });
+    expect(ready()).toHaveLength(0);
+    form.remove();
+    form.action = '/login';
+    document.body.appendChild(form);
+    await vi.waitFor(() => expect(ready()).toHaveLength(1));
+    user.value = 'someone typing';
+    send({ type: 'test-login', automatic: true, documentId, username: 'test', password: 'example' });
+    expect(user.value).toBe('someone typing');
+    expect(pass.value).toBe('');
+    expect(post.mock.calls.at(-1)![0].result).toBe('unavailable');
+  } finally {
+    send({ type: 'watch-login', documentId, on: false });
+    form.remove();
+    vi.restoreAllMocks();
+  }
+});

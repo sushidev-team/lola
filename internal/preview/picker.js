@@ -218,8 +218,109 @@
       window.addEventListener("hashchange", changed);
     }
   }
+  function loginFields() {
+    function usable(input) {
+      return !input.disabled && !input.readOnly && input.getClientRects().length > 0 &&
+        getComputedStyle(input).visibility === "visible";
+    }
+    // A registration or password-change form may also have a username.
+    // Require one visible password field and one unambiguous username in its form.
+    var passwords = Array.from(document.querySelectorAll('input[type="password"]')).filter(usable);
+    if (passwords.length !== 1 || passwords[0].autocomplete.includes("new-password")) return null;
+    var pass = passwords[0], form = pass.form;
+    if (!form || new URL(form.action, document.baseURI).origin !== location.origin) return null;
+    var fields = Array.from(form.elements).filter(function (el) {
+      return el instanceof HTMLInputElement && ["email", "text", "tel"].includes(el.type) && usable(el);
+    });
+    var named = fields.filter(function (el) { return el.autocomplete.includes("username") || el.type === "email"; });
+    if (named.length) fields = named;
+    if (fields.length !== 1) return null;
+    return { user: fields[0], pass: pass, form: form };
+  }
+
+  function submitButtons(form) {
+    return Array.from(form.elements).filter(function (el) {
+      return (el.type === "submit" || el.type === "image") && !el.disabled && el.getClientRects().length;
+    });
+  }
+
+  function autoLoginFields() {
+    var fields = loginFields();
+    if (!fields || fields.user.value || fields.pass.value) return null;
+    var form = fields.form;
+    var submits = submitButtons(form);
+    if (submits.length > 1) return null;
+    var button = submits[0];
+    var action = new URL(form.action, document.baseURI);
+    var intent = [location.pathname, action.pathname, form.id, form.getAttribute("aria-label"),
+      button && (button.innerText || button.value || button.getAttribute("aria-label"))].join(" ");
+    if (/register|sign[ _-]?up|reset|change[ _-]?password|create[ _-]?account|registrier/i.test(intent)) return null;
+    if (!fields.pass.autocomplete.includes("current-password") && !/log[ _-]?in|sign[ _-]?in|anmeld|einloggen/i.test(intent)) return null;
+    if (button && button.hasAttribute("formaction") && new URL(button.formAction).origin !== location.origin) return null;
+    var method = button && button.hasAttribute("formmethod") ? button.formMethod : form.getAttribute("method");
+    if (method && method.toLowerCase() !== "post") return null;
+    return fields;
+  }
+
+  // Watch only while the desktop is waiting for a form. SPA routes may mount it
+  // after the document has loaded. Never send field values back to the desktop.
+  var stopLoginWatch = function () {};
+  function watchLogin(on) {
+    stopLoginWatch();
+    if (!on) return;
+    var pending = 0;
+    var observer = new MutationObserver(function () {
+      if (!pending) pending = requestAnimationFrame(check);
+    });
+    function check() {
+      pending = 0;
+      if (!autoLoginFields()) return;
+      stopLoginWatch();
+      post({ type: "login-form", documentId: documentId });
+    }
+    stopLoginWatch = function () {
+      cancelAnimationFrame(pending);
+      observer.disconnect();
+      stopLoginWatch = function () {};
+    };
+    observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+    check();
+  }
+  function useTestLogin(message) {
+    var fields = message.automatic ? autoLoginFields() : loginFields();
+    if (!fields) return "unavailable";
+    var pass = fields.pass, form = fields.form;
+    var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    function fill(el, value) {
+      set.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    fill(fields.user, message.username);
+    fill(pass, message.password);
+    // A GET would put the password in browser history. A client-rendered form
+    // may omit method and handle submit itself, so dispatch only the event there.
+    var buttons = submitButtons(form);
+    var button = buttons[0];
+    if (buttons.length > 1 || !form.isConnected || pass.form !== form || fields.user.form !== form ||
+        (button && button.hasAttribute("formaction") ? new URL(button.formAction).origin : new URL(form.action).origin) !== location.origin ||
+        !form.reportValidity()) return "filled";
+    if (!form.hasAttribute("method") && !(button && button.hasAttribute("formmethod"))) {
+      var event = new SubmitEvent("submit", { bubbles: true, cancelable: true, submitter: button || null });
+      return form.dispatchEvent(event) ? "filled" : "submitted";
+    }
+    if ((button && button.hasAttribute("formmethod") ? button.formMethod : form.method).toLowerCase() !== "post") return "filled";
+    form.requestSubmit(button);
+    return "submitted";
+  }
   window.addEventListener("message", function (e) {
     if (e.source !== window.parent || !e.data || e.data.target !== SRC) return;
+    if (e.data.type === "watch-login" && e.data.documentId === documentId) watchLogin(e.data.on);
+    if (e.data.type === "test-login" && e.data.documentId === documentId) {
+      var result = "unavailable";
+      try { result = useTestLogin(e.data); } catch (_) { /* The page changed or has no usable form. */ }
+      post({ type: "login-result", documentId: documentId, result: result });
+    }
     if (e.data.type === "hello") {
       if (e.data.watchLocation) watchLocation();
       announce();

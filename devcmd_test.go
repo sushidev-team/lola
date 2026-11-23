@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 func TestPrintDevNamesTheAddressesOnlyWhileRunning(t *testing.T) {
@@ -38,5 +40,27 @@ func TestSandboxedDevStatusAndStopRefuseInsteadOfTouchingTheHost(t *testing.T) {
 	cmd.SilenceUsage, cmd.SilenceErrors = true, true
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "sandboxed") {
 		t.Fatalf("stop err = %v", err)
+	}
+}
+
+func TestAgentLoginProjectRespectsSessionAndMember(t *testing.T) {
+	s := protocol.SessionInfo{Project: "web"}
+	if p, e := loginProject(s, ""); e != nil || p != "web" {
+		t.Fatal(p, e)
+	}
+	if _, e := loginProject(s, "other"); e == nil {
+		t.Fatal("unrelated project")
+	}
+	s.Stack = true
+	s.Apps = []protocol.SessionApp{{Name: "api"}}
+	if _, e := loginProject(s, ""); e == nil {
+		t.Fatal("implicit stack member")
+	}
+	if p, e := loginProject(s, "api"); e != nil || p != "api" {
+		t.Fatal(p, e)
+	}
+	s.Sandbox = "docker"
+	if _, e := loginProject(s, "api"); e == nil {
+		t.Fatal("sandbox accepted")
 	}
 }

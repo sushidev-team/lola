@@ -113,3 +113,41 @@ func TestPreviewPollRetiresOnlyLostSessionOrigins(t *testing.T) {
 		t.Fatal("new dev server inherited retired preview")
 	}
 }
+
+func TestLoginStoreNeedsOneProjectOwningTheLocalOrigin(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	const target = "http://localhost:3000"
+	sess := protocol.SessionInfo{ID: "session", Project: "web", DevURLs: []string{target}}
+	s := &PreviewService{srv: preview.New(), sessions: func() (protocol.SessionsData, error) {
+		return protocol.SessionsData{Sessions: []protocol.SessionInfo{sess}}, nil
+	}}
+	defer s.ServiceShutdown()
+	standalone, err := s.loginStore("session", target+"/login", "web", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, url := range []string{"https://example.com", target + "0"} {
+		if _, err := s.loginStore("session", url, "web", ""); err == nil {
+			t.Fatal("accepted", url)
+		}
+	}
+	if _, err := s.loginStore("other", target, "web", ""); err == nil {
+		t.Fatal("wrong session")
+	}
+	sess.Stack = true
+	sess.Project = "stack"
+	if _, err := s.loginStore("session", target, "web", ""); err == nil {
+		t.Fatal("unattributed stack address")
+	}
+	sess.Apps = []protocol.SessionApp{{Name: "api", DevURLs: []string{target + "1"}}, {Name: "web", DevURLs: []string{target}}}
+	if member, err := s.loginStore("session", target, "web", ""); err != nil || member != standalone {
+		t.Fatal("stack member lost its project logins", err)
+	}
+	if _, err := s.UseTestLogin("session", target, "web", "Admin", "http://retired.localhost:1234"); err == nil || !strings.Contains(err.Error(), "reload") {
+		t.Fatal("stale frame accepted", err)
+	}
+	sess.Apps[0].DevURLs = []string{target}
+	if _, err := s.loginStore("session", target, "web", ""); err == nil {
+		t.Fatal("ambiguous stack address")
+	}
+}
