@@ -20,6 +20,7 @@
   import Select from '../Select.svelte';
   import Tabs from '../Tabs.svelte';
   import DiffView from '../DiffView.svelte';
+  import ChangesView from './ChangesView.svelte';
   import ReviewOverview from './ReviewOverview.svelte';
   import ReviewConfidence from './ReviewConfidence.svelte';
   import BeforeMerge from './BeforeMerge.svelte';
@@ -41,8 +42,8 @@
   // both run a command line or agent-written code on the Mac, which is no thing to author or audit
   // on a phone. Their results stay readable.
   type Status = { tabs: { id: string; label: string }[]; canMark: boolean; reviewed: boolean; marking: boolean; mark: () => void };
-  let { sessionId, embedded = false, tab = $bindable('material'), onstatus, labels, can = () => true }: {
-    sessionId: string; embedded?: boolean; tab?: string; onstatus?: (s: Status) => void; labels?: { verified: string; notVerified: string }; can?: (cmd: string) => boolean;
+  let { sessionId, embedded = false, initialTurn = 0, tab = $bindable('material'), onstatus, labels, can = () => true }: {
+    sessionId: string; embedded?: boolean; initialTurn?: number; tab?: string; onstatus?: (s: Status) => void; labels?: { verified: string; notVerified: string }; can?: (cmd: string) => boolean;
   } = $props();
   const phone = touchSurface();
   // Desktop: overview and screenshots share one screen, so there is no separate Screenshots tab.
@@ -321,7 +322,7 @@
   {#if reviewSession && !embedded && number}<BeforeMerge session={reviewSession} reviewLayout
     onmergerequested={rememberMerge}
     onfacts={f => { if (f.target === target && f.number === number) facts = f.data; }} />
-  {:else if !embedded && !phone}<section class="no-pr" aria-label="PR status"><h3><Icon name="git-pull-request" size={14}/>No pull request yet</h3><p>Review works on the checkout. CI, reviewers, conflicts and merge status appear here once a PR is open.</p></section>{/if}
+  {/if}
   {#if current}{#key current.id}<ReviewVerification pkg={current} {freshness} quiet={split} extra={session && !phone ? localChecks : undefined} {labels} canRun={canVerify} canRecover={can('reviewPackageRecover')}/>{/key}{/if}
   {#if !current && session && !phone}{@render localChecks()}{/if}
 {/snippet}
@@ -391,7 +392,7 @@
       <div class="review-tabs" class:embedded>{#if !embedded}<Tabs tabs={[{id:'material',label:'Overview'}, ...(current?.screens?.length ? [{id:'visuals',label:'Screenshots'}] : []), ...(session ? [{id:'code',label:'Code changes'}] : []), ...(comparable ? [{id:'since',label:'Since review'}] : [])]} active={tab} onSelect={id => { tab = id; reviewCode = false; }} />{/if}<div class="review-tab-actions">{#if (!embedded || tab === 'visuals') && !phone && can('reviewPackageCapture')}<Button size="sm" icon variant="secondary" data-review-capture title={captureReason} aria-label="Capture screenshot" aria-expanded={captureOpen} disabled={captureBusy || !current || !captureHost || freshness === 'stale'} onclick={() => { captureOpen = !captureOpen; }}><Icon name="image" size={14}/></Button>{/if}{#if tab !== 'material' || !current}<Button size="sm" title={tab === 'visuals' ? 'Checks & feedback · B' : 'Checks & feedback'} aria-keyshortcuts={tab === 'visuals' ? 'b' : undefined} selected={panelOpen} aria-expanded={panelOpen} onclick={() => panelOpen = !panelOpen}>Checks &amp; feedback{count ? ` · ${count}` : ''}</Button>{/if}</div></div>
       {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={tab === 'visuals' ? canvasScreen : -1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
       {#if tab === 'code' && session}
-        <div class="review-code grid min-h-0 grid-rows-[minmax(0,1fr)]"><DiffView {sessionId} /></div>
+        <div class="review-code grid min-h-0 grid-rows-[minmax(0,1fr)]"><DiffView {sessionId} turn={Math.max(0, initialTurn)} /></div>
       {:else if tab === 'since' && comparable && previous && current}
         {#if reviewCode && session}<div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><div class="px-4 py-2 text-xs text-faint"><Button size="xs" onclick={() => reviewCode = false}>Back to material comparison</Button><p>Exact published heads: {previous.head.slice(0,12)} to {current.head.slice(0,12)}. Uncommitted changes are excluded.</p></div><DiffView sessionId={target} reviewRange={{from:previous.id,to:current.id}}/></div>
         {:else}<div class="review-material"><ReviewChanges before={previous} after={current} onCode={session ? () => reviewCode = true : undefined}/></div>{/if}
@@ -422,7 +423,7 @@
     <header class="desk-head" aria-label="Review toolbar">
       <div class="head-title">
         <strong class="truncate" title={session?.title || session?.issue || sessionId}>{session?.title || session?.issue || sessionId}</strong>
-        {#if number}<span class="chip"><Icon name="git-pull-request" size={12}/>PR #{number}</span>{:else}<span class="chip muted">No PR yet</span>{/if}
+        {#if number}<span class="chip"><Icon name="git-pull-request" size={12}/>PR #{number}</span>{/if}
         {#if current}<span class="chip" data-fresh={freshness} title={freshness === 'current' ? 'Matches the PR head GitHub reports' : freshness === 'stale' ? 'The branch moved on since this was published' : 'Cannot tell whether this matches the branch'}>{freshness === 'current' ? 'Current' : freshness === 'stale' ? 'Outdated' : 'Unverified'}</span>{/if}
       </div>
       <div class="head-tabs"><Tabs tabs={tabList} active={tab} onSelect={id => { tab = id; reviewCode = false; }} /></div>
@@ -455,7 +456,7 @@
     <div class="review-main" class:capturing={captureOpen}>
       {#if captureOpen && current}{#key current.id}<ReviewCapture pkg={current} bind:busy={captureBusy} initialURL={session?.devUrls?.[0] || current.screens?.[0]?.url || ''} initialScreen={-1} onCaptured={captured} onClose={closeCapture}/>{/key}{/if}
       {#if tab === 'code' && session}
-        <div class="review-code grid min-h-0 grid-rows-[minmax(0,1fr)]"><DiffView {sessionId} /></div>
+        <div class="review-code grid min-h-0 grid-rows-[minmax(0,1fr)]"><ChangesView {sessionId} {initialTurn} /></div>
       {:else if tab === 'since' && comparable && previous && current}
         {#if reviewCode && session}<div class="review-code grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"><div class="px-4 py-2 text-xs text-faint"><Button size="xs" onclick={() => reviewCode = false}>Back to material comparison</Button><p>Exact published heads: {previous.head.slice(0,12)} to {current.head.slice(0,12)}. Uncommitted changes are excluded.</p></div><DiffView sessionId={target} reviewRange={{from:previous.id,to:current.id}}/></div>
         {:else}<div class="review-material"><ReviewChanges before={previous} after={current} onCode={session ? () => reviewCode = true : undefined}/></div>{/if}
@@ -544,7 +545,6 @@
   .head-title { display:flex; align-items:center; gap:8px; min-width:0; }
   .head-title strong { font-size:13px; font-weight:600; color:var(--color-ink); min-width:0; }
   .chip { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; padding:2px 8px; border-radius:999px; font-size:11px; line-height:16px; color:var(--color-ink-2); background:color-mix(in srgb,var(--color-ink) 7%,transparent); }
-  .chip.muted { color:var(--color-faint); }
   .chip[data-fresh=current] { color:var(--color-ok,var(--color-accent-ink)); background:color-mix(in srgb,var(--color-ok,var(--color-accent)) 14%,transparent); }
   .chip[data-fresh=stale] { color:var(--color-warn); background:color-mix(in srgb,var(--color-warn) 14%,transparent); }
   .head-tabs :global([role=tablist]) { margin-bottom:0; border:0; gap:2px; padding:3px; border-radius:9px; background:color-mix(in srgb,var(--color-ink) 6%,transparent); }
@@ -575,9 +575,6 @@
   .desk-aside { display:flex; flex-direction:column; gap:0; padding:0; overflow:hidden; }
   .aside-scroll { flex:1 1 0; min-height:0; overflow:auto; display:grid; align-content:start; gap:10px; padding:10px 10px 0; }
   .aside-feedback { position:sticky; bottom:0; z-index:2; margin:0 -10px; padding:10px 10px 12px; border-top:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-info) 6%,var(--color-canvas)); }
-  .no-pr { display:grid; gap:6px; padding:14px; border:1px dashed var(--color-edge); border-radius:10px; }
-  .no-pr h3 { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--color-ink); }
-  .no-pr p { font-size:12px; line-height:1.6; color:var(--color-ink-2); }
   @media(max-width:1180px) { .review-split .resizer { display:none; } .review-split { grid-template-columns:minmax(0,1fr); overflow:auto; } .split-left.review-material { overflow:visible; border-right:0; } .split-right { min-height:560px; } }
   @media(max-width:900px) { .desk-head { grid-template-columns:minmax(0,1fr) auto; } .head-tabs { grid-row:2; grid-column:1 / -1; padding-bottom:8px; } }
   .review-aside { display:grid; align-content:start; gap:28px; min-width:0; overflow:auto; padding:24px 20px; border-left:1px solid var(--color-edge); background:var(--color-canvas); }

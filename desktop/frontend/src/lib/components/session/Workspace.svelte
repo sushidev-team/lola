@@ -28,9 +28,8 @@
   import { dropTargetId } from "$lib/composerpaste";
   import ActionZone from "./ActionZone.svelte";
   import { OVERVIEW_PANEL, SIDE_MIN_WIDTH } from "$lib/sessionpanels";
-  import { terms, isChangesTab } from "$lib/terms.svelte";
 
-  let { sessionId = "", covered = false, changesInSide = false, onmain, header }: { sessionId?: string; covered?: boolean; changesInSide?: boolean; header?: Snippet; onmain?: (rect: Rect, host: HTMLElement) => void } = $props();
+  let { sessionId = "", covered = false, sidePanels = false, onmain, header }: { sessionId?: string; covered?: boolean; sidePanels?: boolean; header?: Snippet; onmain?: (rect: Rect, host: HTMLElement) => void } = $props();
 
   const view = $derived(ssh.view(sessionId));
   const session = $derived(sessionId ? store.sessionById(sessionId) : undefined);
@@ -151,8 +150,7 @@
     const has = sideHas;
     untrack(() => (view.sideOffered = has));
   });
-  const sideDiff = $derived(changesInSide && isChangesTab(terms.activeTab(sessionId)));
-  const side = $derived(sideFits && (!view.dockHidden || sideDiff));
+  const side = $derived(sideFits && !view.dockHidden);
   // The menu's Report asks for the account. With a sidebar there is no overlay to open.
   $effect(() => {
     if (view.reportOpen && sideFits) {
@@ -177,7 +175,7 @@
 {#if sessionId}
   {#key sessionId}
     <div class="grid h-full min-h-0 w-full grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] bg-canvas" data-ssh-workspace {@attach attachWidth}>
-      <DockArea {sessionId} covered={covered && !changesInSide} details={sideFits} {onmain}>
+      <DockArea {sessionId} covered={covered && !sidePanels} details={sideFits} {onmain}>
         {#snippet mainHeader()}
           {@render header?.()}
           <div class="{shown.length > 0 ? 'h-0.5' : 'h-0'} {band}" aria-hidden="true" data-tier-band></div>

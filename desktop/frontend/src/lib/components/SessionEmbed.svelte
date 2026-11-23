@@ -17,13 +17,12 @@
   import { tick, untrack } from "svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms, AGENT, SSH, isChangesTab, isViewTab } from "$lib/terms.svelte";
+  import { terms, AGENT, SSH, isViewTab } from "$lib/terms.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { talk } from "$lib/talk.svelte";
   import { changes } from "$lib/changes.svelte";
   import { SIDE_MIN_WIDTH } from "$lib/sessionpanels";
   import { changesOffered, conversationOffered, feedKnownFrom, isAgentless, stripCells, stripShown } from "$lib/sessionview";
-  import ChangesView from "./session/ChangesView.svelte";
   import EndedView from "./session/EndedView.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
   import PlanGateBanner from "./PlanGateBanner.svelte";
@@ -47,7 +46,6 @@
   const offered = $derived(!!session && conversationOffered(session));
   const onHostShell = $derived(activeTab === SSH && view.narrow === "terminal");
   const onConversation = $derived(activeTab === SSH && view.narrow !== "terminal");
-  const onChanges = $derived(isChangesTab(activeTab));
   let width = $state(0);
   let body = $state<HTMLElement | null>(null);
   let mainBox = $state<Rect | null>(null);
@@ -56,7 +54,7 @@
     const h = host.getBoundingClientRect(), b = body.getBoundingClientRect();
     mainBox = { ...rect, x: h.left - b.left + rect.x, y: h.top - b.top + rect.y };
   }
-  const rightChanges = $derived(width >= SIDE_MIN_WIDTH && offered);
+  const sidePanels = $derived(width >= SIDE_MIN_WIDTH && offered);
   const mainStyle = $derived(offered && mainBox ? `position:absolute;left:${mainBox.x}px;top:${mainBox.y}px;width:${mainBox.w}px;height:${mainBox.h}px` : 'grid-area:1/1');
 
   const strip = $derived(!!session && stripShown(session, stripCells(session, shells).machines.length));
@@ -67,7 +65,7 @@
   const agentPane = $derived(session?.tmuxName ?? "");
   const terminalName = $derived(!session || isViewTab(activeTab) || !onScreen ? "" : activeTab === AGENT ? agentPane : activeTab);
   const activeIsShell = $derived(activeTab !== AGENT && !isViewTab(activeTab));
-  const covered = $derived(activeTab !== SSH && !(onChanges && rightChanges));
+  const covered = $derived(activeTab !== SSH);
   const noPane = $derived(!!session && activeTab === AGENT && !agentPane);
 
   const localShell = $derived(!!session && isAgentless(session) && ["temporary", "main", "checkout"].includes(session.location ?? ""));
@@ -136,14 +134,13 @@
     if (sid) untrack(() => nav.markSeen(sid));
   });
 
-  // The strip's `Changes +84 −12`, once on arrival and once each time the agent comes to rest. On
-  // Changes itself the diff that is already loading reports the same figure.
+  // Refresh the overview totals on arrival and when the agent changes state.
   const agentState = $derived(session?.agentState ?? "");
   const diffable = $derived(!!session && changesOffered(session));
   $effect(() => {
     const sid = id;
     agentState;
-    if (sid && diffable && !onChanges && store.alive) untrack(() => void changes.load(sid));
+    if (sid && diffable && store.alive) untrack(() => void changes.load(sid));
   });
 
   // A session that left the list while open: merged and cleaned up, usually. Its record was
@@ -205,7 +202,7 @@
 
   </div>
   <div class="min-w-0">
-    {#if !offered && session && strip}<ViewStrip {session} changesInSide={rightChanges} />{/if}
+    {#if !offered && session && strip}<ViewStrip {session} sidePanels={sidePanels} />{/if}
   </div>
   <div class="min-w-0">
     <!-- Why a dev tab died, when the reason is a port someone else holds. Absent while healthy. -->
@@ -214,12 +211,12 @@
   </div>
 
   <div bind:this={body} class="relative grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] grid-cols-[minmax(0,1fr)]">
-      <!-- The conversation stays mounted behind a terminal or Changes, so a widget does not reload
+      <!-- The conversation stays mounted behind a terminal, so a widget does not reload
            on the way there and back. Hidden with visibility: it keeps its measured size. -->
-      <div class="min-h-0 min-w-0 {offered ? '' : 'hidden'} {onChanges && !rightChanges ? 'invisible' : ''}" style="grid-area:1/1" inert={onChanges && !rightChanges}>
-        <Workspace sessionId={offered ? id : ""} {covered} changesInSide={rightChanges} onmain={measureMain}>
+      <div class="min-h-0 min-w-0 {offered ? '' : 'hidden'}" style="grid-area:1/1">
+        <Workspace sessionId={offered ? id : ""} {covered} sidePanels={sidePanels} onmain={measureMain}>
           {#snippet header()}
-            {#if session && strip}<ViewStrip {session} changesInSide={rightChanges} />{/if}
+            {#if session && strip}<ViewStrip {session} sidePanels={sidePanels} />{/if}
             {#if session && !onConversation}<DevClashBanner {session} />{/if}
             {#if session}<PlanGateBanner {session} />{/if}
           {/snippet}
@@ -238,10 +235,6 @@
       <!-- The same toggle as beside the activity bar, to get back. Its inset is that row's own (.cv-activity-map: 12px 20px, a 28px track), so it does not move between the two views. -->
       {#if offered && session && activeTab === AGENT && terminalName}
         <div class="pointer-events-none z-10 flex items-start justify-end px-5 pt-3" style={mainStyle}><div class="pointer-events-auto"><RawToggle on onclick={() => ssh.selectCell(id, { key: "conversation", kind: "conversation" })} /></div></div>
-      {/if}
-
-      {#if onChanges && session && !rightChanges}
-        <div class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] bg-panel" style="grid-area:1/1"><div>{#if offered && strip}<ViewStrip {session} />{/if}</div><ChangesView sessionId={session.id} /></div>
       {/if}
 
       {#if noPane}

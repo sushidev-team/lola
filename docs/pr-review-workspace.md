@@ -23,9 +23,9 @@ component-to-source mapping, executable agent HTML, or a new merge engine.
 
 ## Review experience
 
-On the desktop the workspace is one screen: a Git-style header (session, PR or "No PR yet", freshness, views, version, capture, mark reviewed), the overview on the left, screenshots on the right, and Checks & feedback always open beside them. Review does not need a pull request; PR readiness appears when one exists. The phone keeps its tabbed sheet.
+On the desktop the workspace is one screen: a Git-style header (session, PR number when available, freshness, views, version, capture, mark reviewed), the overview on the left, screenshots on the right, and Checks & feedback always open beside them. Review does not need a pull request; PR readiness appears when one exists. The phone keeps its tabbed sheet.
 
-Enter Review from the session's Changes view and PR context. The workspace fills
+Choose **Open review** in the session overview. Its **Changes** row opens **Code changes** directly. The workspace fills
 the available application content area and can expand from the compact session.
 Retain a direct route back to the conversation and terminal.
 
@@ -204,7 +204,7 @@ lola review-package publish manifest.json --app web
 
 Success prints a JSON receipt; failure exits nonzero. Identical content returns
 the original package. Publication retains material locally and never posts to
-GitHub. In the desktop, select **Review PR** from Changes or PR status. Ended
+GitHub. On the desktop, choose **Open review** in the session overview. Ended
 sessions offer **Review material** without live checkout or send actions.
 
 See [fixture captures and validation](evaluation/pr-review-workspace/README.md).

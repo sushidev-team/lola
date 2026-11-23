@@ -6,26 +6,19 @@
   //
   // Restore and Fork sit on a selected turn, in DiffView's toolbar, and only there.
   import { checkpoints } from "$lib/checkpoints.svelte";
-  import { terms, CHECKPOINTS, DIFF } from "$lib/terms.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { untrack } from "svelte";
   import DiffView from "../DiffView.svelte";
   import TurnRail from "./TurnRail.svelte";
   import Button from "../Button.svelte";
-  import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
-  import { touchSurface } from "$lib/touchsurface";
 
-  // `hideFeedbackBar` leaves the feedback bar to the host (the phone's sticky bar); on the phone
-  // the Review segment owns the review package row, so "Review PR" is not repeated here.
-  let { sessionId, compact = false, hideFeedbackBar = false }: { sessionId: string; compact?: boolean; hideFeedbackBar?: boolean } = $props();
-  const phone = touchSurface();
-
-  const tab = $derived(terms.activeTab(sessionId));
+  let { sessionId, compact = false, hideFeedbackBar = false, initialTurn = 0 }: {
+    sessionId: string; compact?: boolean; hideFeedbackBar?: boolean; initialTurn?: number;
+  } = $props();
   const st = $derived(checkpoints.of(sessionId));
-  let selectedTurn = $state<number | null>(null);
-  $effect(() => { if (tab === CHECKPOINTS) selectedTurn = st.selected; else if (tab === DIFF) selectedTurn = 0; });
-  const turn = $derived(compact && selectedTurn !== null ? selectedTurn : tab === CHECKPOINTS ? st.selected : 0);
+  let selectedTurn = $derived(initialTurn);
+  const turn = $derived(selectedTurn < 0 ? st.list.at(-1)?.seq ?? 0 : selectedTurn);
   const current = $derived(st.list.find((c) => c.seq === turn));
 
   // A turn ending is what records a checkpoint, and it shows up as the agent axis moving. A
@@ -39,9 +32,8 @@
   });
 </script>
 
-<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] {phone ? 'grid-rows-[minmax(0,1fr)]' : 'grid-rows-[auto_minmax(0,1fr)]'}" data-testid="changes-view">
-  {#if !phone}<div class="flex justify-end border-b border-edge px-3 py-1"><Button size="xs" title="Review this session's changes, screenshots and checks" onclick={() => reviewWorkspace.open(sessionId)}>Review</Button></div>{/if}
-  <DiffView {sessionId} {compact} {hideFeedbackBar} turn={current?.seq ?? 0}>
+<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]" data-testid="changes-view">
+  <DiffView {sessionId} {compact} {hideFeedbackBar} {turn}>
     {#snippet comparison()}
       {#if compact && checkpointed && st.list.length}
         <Select class="diff-comparison min-w-0" aria-label="Compare changes" value={turn} onchange={(event) => selectedTurn = Number(event.currentTarget.value)}>
@@ -51,13 +43,13 @@
       {/if}
     {/snippet}
     {#snippet rail()}
-      {#if checkpointed && !compact}<TurnRail {sessionId} turn={current?.seq ?? 0} />{/if}
+      {#if checkpointed && !compact}<TurnRail {sessionId} onselect={seq => selectedTurn = seq} {turn} />{/if}
     {/snippet}
     {#snippet turnBar()}
       {#if current}
         <span class="min-w-0 truncate text-faint" class:sr-only={compact} data-restore-note>Files only. The conversation and git history do not move.</span>
         <Button size="xs" disabled={!st.restorable || st.busy} title={st.restorable ? "Put the worktree's files back to this turn. Undoable." : "The agent is mid-turn. Wait for it to finish before restoring."} onclick={() => checkpoints.askRestore(sessionId, current)}>Restore…</Button>
-        <Button size="xs" disabled={st.busy} title="Start a new agent session from this turn, on its own branch" onclick={() => checkpoints.askFork(sessionId, current, (id) => nav.openSession(id))}>Fork…</Button>
+        <Button size="xs" disabled={st.busy} title="Start a new agent session from this turn, on its own branch" onclick={() => checkpoints.askFork(sessionId, current, (id) => { nav.closeOverlay(); nav.openSession(id); })}>Fork…</Button>
       {/if}
     {/snippet}
   </DiffView>

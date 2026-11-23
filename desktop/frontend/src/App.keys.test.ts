@@ -9,7 +9,7 @@ vi.mock("@bindings/desktop", () => {
   const svc = (own: Record<string, unknown> = {}) => new Proxy(own, { get: (t, k: string) => t[k] ?? (async () => null) });
   return {
     SSHService: svc({ Timeline: async () => ({ connections: null, items: [], lastSeq: 0 }), Hosts: async () => ({ hosts: [] }) }),
-    DaemonService: svc({ Alive: async () => true, Sessions: () => new Promise(() => {}), Projects: async () => ({}), Status: async () => null }),
+    DaemonService: svc({ ReviewPackages: async () => ({ packages: [] }), Alive: async () => true, Sessions: () => new Promise(() => {}), Projects: async () => ({}), Status: async () => null }),
     ConfigService: svc({ ConfigExists: async () => true, GetTheme: async () => "" }),
     TermService: svc({ Shells: async () => [], CaptureMany: async () => ({}) }),
     TalkService: svc({ State: async () => ({ caps: {}, composer: "unknown", feedSeq: 0, health: "ok" }), Stop: stop }),
@@ -42,11 +42,11 @@ const { default: App } = await import("./App.svelte");
 const { store } = await import("$lib/store.svelte");
 const { nav } = await import("$lib/nav.svelte");
 const { ssh } = await import("$lib/ssh.svelte");
-const { terms, AGENT, DIFF, SSH } = await import("$lib/terms.svelte");
+const { terms, AGENT, SSH } = await import("$lib/terms.svelte");
 const { preview } = await import("$lib/preview.svelte");
 const { confirm } = await import("$lib/confirm.svelte");
 const { allTabs, closeTab } = await import("$lib/docklayout");
-const { OVERVIEW_PANEL, CHANGES_PANEL } = await import("$lib/sessionpanels");
+const { OVERVIEW_PANEL } = await import("$lib/sessionpanels");
 
 const conn = { id: "c1", host: "prod", tier: "production", state: "connected", wheel: "agent", tabAlive: true, tab: "x-ssh-1" };
 const plain = (id: string, o: Record<string, unknown> = {}) => ({ id, project: "p", title: id, tmuxName: id, worktree: "/w", agent: "claude", agentState: "idle", status: "idle", ...o });
@@ -132,14 +132,14 @@ describe("project workspace toolbar", () => {
     await mount([plain(A)]);
     store.projects = [{name:'p',path:'/repo',agentOk:true}] as typeof store.projects;
     nav.openSession(A);
-    terms.select(A, DIFF);
+    terms.select(A, AGENT);
     chord('toggle-git');
     expect(nav.inGit).toBe(true);
     expect(nav.project).toBe('p');
     chord('toggle-git');
     expect(nav.focusedTerm).toBe(A);
     expect(nav.view).toBe('cockpit');
-    expect(terms.activeTab(A)).toBe(DIFF);
+    expect(terms.activeTab(A)).toBe(AGENT);
   });
   it("blocks workspace shortcuts in a confirmation and never opens Go To as a fallback", async () => {
     await mount([]);
@@ -225,7 +225,7 @@ describe("in a session", () => {
     ssh.open(A);
     flushSync();
     const v = ssh.view(A);
-    v.ensureSessionPanels(false);
+    v.ensureSessionPanels();
     const before = v.dockHidden;
     await press("n");
     expect(nav.focusedTerm).toBe(A);
@@ -242,7 +242,7 @@ describe("in a session", () => {
     flushSync();
     const v = ssh.view(A);
     v.sessionPanels = false;
-    v.setDock(closeTab(closeTab(v.dock, OVERVIEW_PANEL), CHANGES_PANEL), false);
+    v.setDock(closeTab(v.dock, OVERVIEW_PANEL), false);
     v.sideOffered = false;
     chord("toggle-right-sidebar");
     expect(allTabs(v.dock)).toEqual([]);
@@ -362,7 +362,7 @@ describe("in a session", () => {
     nav.openSession(A);
     flushSync();
     terms.select(A, AGENT);
-    terms.toggleDiff(A);
+    chord("changes");
     flushSync();
     await press("Escape");
     expect(terms.activeTab(A)).toBe(AGENT);
@@ -392,12 +392,10 @@ describe("in a session", () => {
     await press(">");
     expect(terms.activeTab(A)).toBe(AGENT);
     await press(">");
-    expect(terms.activeTab(A)).toBe(DIFF);
-    await press(">");
     expect(ssh.view(A).shellConn).toBe("c1");
     expect(ssh.view(A).narrow).toBe("terminal");
     await press("<");
-    expect(terms.activeTab(A)).toBe(DIFF);
+    expect(terms.activeTab(A)).toBe(AGENT);
   });
 });
 
@@ -445,10 +443,10 @@ describe("the chords", () => {
     await mount([plain(A)]);
     nav.select(A);
     chord("changes");
-    expect(nav.focusedTerm).toBe(A);
-    expect(terms.activeTab(A)).toBe(DIFF);
+    expect(nav.overlay).toBe("pr-review");
+    expect(screen.getByRole("tab", { name: "Code changes" })).toHaveAttribute("aria-selected", "true");
     chord("changes");
-    expect(terms.activeTab(A)).toBe(SSH);
+    expect(nav.overlay).toBeNull();
   });
   it("⌘\\ needs no connection: it opens the session, and from a terminal goes to the conversation", async () => {
     await mount([plain(A)]);
@@ -467,15 +465,6 @@ describe("the chords", () => {
     expect(terms.activeTab(A)).toBe(AGENT);
     chord("ssh-terminal");
     expect(nav.focusedTerm).toBe(A);
-  });
-  it("⌘\\ from Changes goes where its footer says: the conversation", async () => {
-    await mount([plain(A)]);
-    nav.openSession(A);
-    terms.select(A, AGENT);
-    terms.toggleDiff(A);
-    flushSync();
-    chord("ssh-terminal");
-    expect(terms.activeTab(A)).toBe(SSH);
   });
   it("⌘\\ goes between a conversation and the terminal last used", async () => {
     await mount([plain(A, { ssh: { connections: [conn], lastSeq: 0 } })]);

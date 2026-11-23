@@ -14,18 +14,8 @@ import { conversationOffered, defaultView, feedKnownFrom, type SessionViewKind }
 /** The agent pane's tab key (a sentinel; every other tab is a shell tmux name). */
 export const AGENT = "agent";
 
-/** The diff tab's key: the session's changes against its base branch, where a
- * human leaves line comments for the agent (DiffView). A sentinel like AGENT —
- * it is not a tmux session, so it is never discovered and never closed. */
-export const DIFF = "diff";
-
-/** One turn of Changes: what the turn behind the selected checkpoint changed. A
- * view sentinel like DIFF, and the strip's Changes cell lights for both. The turn
- * rail switches between the two, so neither one is ever "the previous view". */
-export const CHECKPOINTS = "checkpoints";
-
 /** The conversation's key: the story you read and the composer you talk in. A view
- * sentinel like DIFF, and still spelled SSH because old stored `lola.tabs` values
+ * sentinel still spelled SSH because old stored `lola.tabs` values
  * hold that word. A "<id>-ssh-N" tmux session never becomes a tab of its own: it is
  * mounted only inside the conversation's workspace, because one tmux session with
  * two xterm clients would fight over its size. */
@@ -34,15 +24,9 @@ export const SSH = "ssh";
 /** The same sentinel by the name the UI uses. */
 export const CONVERSATION = SSH;
 
-/** A view tab (DIFF, CHECKPOINTS, SSH) is not a terminal: never discovered from
- * tmux, never closed, never in the tab-cycling ring. */
+/** Conversation has no tmux pane of its own. */
 export function isViewTab(tab: string): boolean {
-  return tab === DIFF || tab === CHECKPOINTS || tab === SSH;
-}
-
-/** Either half of Changes: everything against the base, or one turn. */
-export function isChangesTab(tab: string): boolean {
-  return tab === DIFF || tab === CHECKPOINTS;
+  return tab === SSH;
 }
 
 /** Suffix of a session's REVIEW pane ("<id>-review"). The daemon opens it for a
@@ -109,7 +93,8 @@ const INTRO_KEY = "lola.session.intro";
 function readTabs(): Record<string, string> {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(TABS_KEY) ?? "{}");
-    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, string>) : {};
+    return raw && typeof raw === "object" && !Array.isArray(raw)
+      ? Object.fromEntries(Object.entries(raw).filter(([, tab]) => typeof tab === "string" && tab !== "diff" && tab !== "checkpoints")) : {};
   } catch {
     return {};
   }
@@ -139,7 +124,6 @@ class Terms {
   private names = new SvelteMap<string, Record<string, string>>(Object.entries(readNames())); // -> hand-given labels
   private sticky = readTabs(); // session id -> the tab a human last picked, across relaunches
   private lastTerm = new SvelteMap<string, string>(); // session id -> the terminal last on show
-  private previous = new SvelteMap<string, string>(); // session id -> what Changes returns to
   private focusAsks = new SvelteMap<string, number>(); // session id -> requests for the keyboard
   /** Open sessions in: the preference behind `defaultView`. */
   globalView = $state<SessionViewKind>(readGlobalView());
@@ -337,11 +321,8 @@ class Terms {
 
   /** Switch tabs. Ignores a shell name that isn't open. */
   select(id: string, tab: string) {
-    // Whatever opened Changes, leaving it goes back to where this came from.
-    if (isChangesTab(tab) && !isChangesTab(this.activeTab(id))) this.previous.set(id, this.activeTab(id));
     if (!this.show(id, tab)) return;
     // Most recent last, so what falls off is what nobody has opened in a while.
-    if (isChangesTab(tab)) return;
     delete this.sticky[id];
     this.sticky[id] = tab;
     for (const old of Object.keys(this.sticky).slice(0, -TABS_KEEP)) delete this.sticky[old];
@@ -378,18 +359,6 @@ class Terms {
   private home(id: string): string {
     const s = store.sessionById(id);
     return s && conversationOffered(s) ? SSH : AGENT;
-  }
-
-  /** Toggle Changes: open it, or go back to the view it was opened from. */
-  toggleDiff(id: string) {
-    const cur = this.activeTab(id);
-    if (isChangesTab(cur)) {
-      // What it came from may have closed since, and there has to be a way out by keyboard.
-      if (!this.show(id, this.previous.get(id) ?? this.resolve(id)) && !this.show(id, this.resolve(id))) this.show(id, this.home(id));
-      return;
-    }
-    this.previous.set(id, cur);
-    this.active.set(id, DIFF);
   }
 
   // refresh re-reads the tmux server for this session's shells so tabs reflect

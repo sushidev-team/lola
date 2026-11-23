@@ -107,7 +107,6 @@ export function feedKnownFrom(health: string | undefined): boolean | undefined {
 export type StripCell =
   | { key: "conversation"; kind: "conversation" }
   | { key: "terminal"; kind: "terminal" }
-  | { key: "changes"; kind: "changes" }
   | { key: string; kind: "host"; conn: SSHConnInfo; label: string }
   | { key: string; kind: "shell" | "review" | "dev"; name: string };
 
@@ -115,7 +114,6 @@ export function stripCells(s: Shape, shells: string[], forAll: boolean = CONVERS
   const views: StripCell[] = [];
   if (conversationOffered(s, forAll)) views.push({ key: "conversation", kind: "conversation" });
   views.push({ key: "terminal", kind: "terminal" });
-  if (changesOffered(s)) views.push({ key: "changes", kind: "changes" });
   const machines: StripCell[] = [];
   for (const t of sshTabs(s.ssh?.connections)) {
     if (!isEnded(t.conn)) machines.push({ key: `host:${t.conn.id}`, kind: "host", conn: t.conn, label: t.label });

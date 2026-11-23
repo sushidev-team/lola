@@ -5,6 +5,7 @@
   import { plainInline } from '$lib/answerblocks';
   import Icon from '../Icon.svelte';
   import Button from '../Button.svelte';
+  import SessionDev from './SessionDev.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
   const session = $derived(store.sessionById(sessionId));
@@ -48,24 +49,29 @@
 </script>
 
 <section aria-label="Session task summary" data-side-brief>
-  <div class="brief-heading">
-    <h3 class="cv-overview-heading">{title}</h3>
-    {#if issue}
-      <Button variant="accent" size="xs" aria-label="Open {issue} in Linear" title="Open in Linear"
-        onclick={() => store.openURL(`https://linear.app/issue/${encodeURIComponent(issue)}`)}>{issue}<Icon name="external-link" size={12} /></Button>
+  <div class="brief-copy">
+    <div class="brief-heading">
+      <h3 class="cv-overview-heading">{title}</h3>
+      {#if issue}
+        <Button variant="accent" size="xs" aria-label="Open {issue} in Linear" title="Open in Linear"
+          onclick={() => store.openURL(`https://linear.app/issue/${encodeURIComponent(issue)}`)}>{issue}<Icon name="external-link" size={12} /></Button>
+      {/if}
+    </div>
+    {#if description}
+      <p class="brief-description selectable" class:expanded>{expanded ? description : preview}</p>
+      {#if long}<Button size="xs" aria-expanded={expanded} onclick={() => expanded = !expanded}>{expanded ? 'Show less' : 'Show more'}<Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={12} /></Button>{/if}
+    {:else if loading}
+      <p class="brief-status" role="status">Loading task description…</p>
+    {:else if failed}
+      <div class="brief-status" role="status">Could not load the Linear description. <Button size="xs" onclick={() => retry++}>Retry</Button></div>
     {/if}
   </div>
-  {#if description}
-    <p class="brief-description selectable" class:expanded>{expanded ? description : preview}</p>
-    {#if long}<Button size="xs" aria-expanded={expanded} onclick={() => expanded = !expanded}>{expanded ? 'Show less' : 'Show more'}<Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={12} /></Button>{/if}
-  {:else if loading}
-    <p class="brief-status" role="status">Loading task description…</p>
-  {:else if failed}
-    <div class="brief-status" role="status">Could not load the Linear description. <Button size="xs" onclick={() => retry++}>Retry</Button></div>
-  {/if}
+  {#if session}<SessionDev {session} />{/if}
 </section>
 
 <style>
+  :global(.cv-session-side) > [data-side-brief] { padding: 0; overflow: clip; }
+  .brief-copy { padding: 15px; }
   .brief-heading { display:flex;align-items:baseline;justify-content:space-between;gap:12px; }
   .brief-heading h3 { min-width:0; }
   .brief-description { margin-top:8px;font-size:12px;line-height:19px;color:var(--color-ink-2);overflow-wrap:anywhere; }

@@ -40,7 +40,7 @@ describe('conversation overview', () => {
   });
 });
 
-it('shows measured changes and test command results and navigates recent activity', async () => {
+it('shows measured changes and test command results and links test results to the conversation', async () => {
   const id = freshSession({ worktree: '/w' });
   changes.note(id, { files: [{ additions: 12, deletions: 3 }] } as never);
   feed.view(id).items = [{ id: 'test-run', kind: 'tool', order: 1, seq: 1, tool: { name: 'Bash', category: 'run', summary: 'npm test', status: 'error' } }];
@@ -50,7 +50,8 @@ it('shows measured changes and test command results and navigates recent activit
   expect(screen.getByRole('region', { name: 'Local checks' })).toHaveTextContent('Failed');
   expect(screen.queryByText('Recent test commands')).toBeNull();
   expect(screen.queryByRole('button', { name: /older command/ })).toBeNull();
-  await fireEvent.click(container.querySelector('[data-side-activity] button')!);
+  expect(container.querySelector('[data-side-activity]')).toBeNull();
+  await fireEvent.click(within(screen.getByRole('region', { name: 'Local checks' })).getByRole('button', {name: /npm test/}));
   expect(ssh.view(id).jump?.block).toBe('item:test-run');
 });
 
@@ -86,7 +87,9 @@ it('moves Dev controls into the overview and preserves actions and URLs', async 
   const dev = vi.spyOn(store, 'dev').mockResolvedValue(undefined);
   const open = vi.spyOn(preview, 'open').mockImplementation(() => {});
   const { container } = render(SessionSide, { sessionId: id });
-  const panel = container.querySelector('[data-side-dev]')! as HTMLElement;
+  const brief = screen.getByRole('region', { name: 'Session task summary' });
+  expect(container.querySelector('[data-session-side]')?.firstElementChild).toBe(brief);
+  const panel = within(brief).getByRole('region', { name: 'Dev' });
   await fireEvent.click(within(panel).getByRole('button', { name: 'Stop dev' }));
   expect(dev).toHaveBeenCalledWith(id, false);
   await fireEvent.click(within(panel).getByRole('button', { name: /3000/ }));
@@ -139,11 +142,31 @@ it('collapses completed plans and keeps the detail available', async () => {
   expect(screen.queryByRole('heading', { name: 'Session' })).toBeNull();
 });
 
-it('opens Changes from the whole card', async () => {
+it('keeps the brief first and moves actionable evidence ahead of routine sections', async () => {
+  const id = freshSession({ worktree: '/w', agentState: 'working', board: { phase: 'investigating' } });
+  const { container } = render(SessionSide, { sessionId: id });
+  const overview = container.querySelector('[data-session-side]')!;
+  const firstAfterBrief = () => overview.children[1];
+  const review = screen.getByRole('region', { name: 'Session review' });
+  expect(firstAfterBrief()).toBe(review);
+  expect(screen.queryByText('investigating')).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'Local checks' })).toBeNull();
+  expect(screen.queryByRole('region', { name: 'PR status' })).toBeNull();
+
+  store.sessions = [{ ...store.sessions[0], board: { blocked: 'Choose a migration window' } }] as never;
+  await waitFor(() => expect(firstAfterBrief()).toHaveTextContent('Choose a migration window'));
+  store.sessions = [{ ...store.sessions[0], board: { checks: [{ name: 'Build', state: 'fail' }] } }] as never;
+  await waitFor(() => expect(firstAfterBrief()).toHaveTextContent('Local checks'));
+  store.sessions = [{ ...store.sessions[0], board: {}, prNumber: 42 }] as never;
+  await waitFor(() => expect(firstAfterBrief()).toBe(review));
+  expect(within(review).getByRole('region', { name: 'PR status' })).toBeInTheDocument();
+});
+
+it('opens code changes from the Review section', async () => {
   const id = freshSession({ worktree: '/w' });
   const open = vi.spyOn(ssh, 'openChanges').mockImplementation(() => {});
   render(SessionSide, { sessionId: id });
-  await fireEvent.click(screen.getByRole('button', { name: 'View changes' }));
+  await fireEvent.click(screen.getByRole('button', { name: 'View changes in Review' }));
   expect(open).toHaveBeenCalledWith(store.sessionById(id));
   open.mockRestore();
 });

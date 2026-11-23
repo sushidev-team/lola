@@ -13,8 +13,7 @@ vi.mock("@bindings/desktop", () => ({
 import { ssh } from "$lib/ssh.svelte";
 import { PANEL_PAD, addTab, allTabs, groupOf, groups, moveTab, type Split } from "$lib/docklayout";
 import DockArea from "./DockArea.svelte";
-import { OVERVIEW_PANEL, CHANGES_PANEL } from "$lib/sessionpanels";
-import { terms, AGENT, SSH, DIFF } from "$lib/terms.svelte";
+import { OVERVIEW_PANEL } from "$lib/sessionpanels";
 import { store } from "$lib/store.svelte";
 import WidgetCard from "../../session/WidgetCard.svelte";
 
@@ -442,25 +441,16 @@ describe("covering and hiding", () => {
 
 
 describe('movable session panels', () => {
-  it('starts with one right group, resizes it and splits Changes into another panel', async () => {
+  it('starts with one right group, allows resizing and omits the retired Changes tab', async () => {
     const v = seed();
     store.sessions = [{ id: SID, worktree: '/w', tmuxName: SID, agentState: 'idle' }] as never;
     render(DockArea, { sessionId: SID, children, details: true });
-    await waitFor(() => expect(allTabs(v.dock)).toEqual([OVERVIEW_PANEL, CHANGES_PANEL]));
+    await waitFor(() => expect(allTabs(v.dock)).toEqual([OVERVIEW_PANEL]));
     expect(groups(v.dock)).toHaveLength(1);
     const main = document.querySelector('[data-dock-main]') as HTMLElement;
     const before = parseFloat(main.style.width);
     await fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize panels' }), { key: 'ArrowLeft' });
     expect(parseFloat(main.style.width)).toBeLessThan(before);
-    terms.select(SID, AGENT);
-    await fireEvent.click(screen.getByRole('tab', { name: 'Changes' }));
-    expect(await screen.findByRole('combobox', { name: 'Changed file' })).toHaveTextContent('a.ts');
-    expect(terms.activeTab(SID)).toBe(AGENT); // inspecting the diff leaves the terminal selected
-    const changesTab = screen.getByRole('tab', { name: 'Changes' });
-    await fireEvent.keyDown(changesTab, { key: 'F10', shiftKey: true });
-    await fireEvent.click(screen.getByRole('menuitem', { name: /Split right/ }));
-    expect(groups(v.dock)).toHaveLength(2);
-    expect(groupOf(v.dock, OVERVIEW_PANEL)?.id).not.toBe(groupOf(v.dock, CHANGES_PANEL)?.id);
   });
 
   it('keeps a widget iframe alive when switching to Overview and back', async () => {
@@ -480,41 +470,12 @@ describe('movable session panels', () => {
 });
 
 
-it('does not pulse or reopen Changes on session polling, but permits an explicit reopen', async () => {
-  const v = seed();
-  store.sessions = [{ id: SID, worktree: '/w', tmuxName: SID, agentState: 'idle' }] as never;
-  terms.select(SID, SSH);
-  terms.select(SID, DIFF);
-  render(DockArea, { sessionId: SID, children, details: true });
-  await waitFor(() => expect(groupOf(v.dock, CHANGES_PANEL)?.active).toBe(CHANGES_PANEL));
-  const pulse = v.dockPulse;
-  const animation = document.querySelector('[data-dock-pulse]');
-  for (let i = 0; i < 3; i++) {
-    store.sessions = store.sessions.map(s => ({ ...s }));
-    await tick();
-  }
-  expect(v.dockPulse).toBe(pulse);
-  expect(document.querySelector('[data-dock-pulse]')).toBe(animation);
-  await fireEvent.click(screen.getByRole('button', { name: 'Close Changes' }));
-  expect(terms.activeTab(SID)).toBe(SSH);
-  for (let i = 0; i < 3; i++) {
-    store.sessions = store.sessions.map(s => ({ ...s }));
-    v.items = [...v.items];
-    await tick();
-  }
-  expect(screen.queryByRole('tab', { name: 'Changes' })).toBeNull();
-  expect(v.dockClosed.has(CHANGES_PANEL)).toBe(true);
-  terms.select(SID, DIFF);
-  await waitFor(() => expect(screen.getByRole('tab', { name: 'Changes' })).toHaveAttribute('aria-selected', 'true'));
-  expect(v.dockClosed.has(CHANGES_PANEL)).toBe(false);
-});
-
 it('retires the generic Widgets tab and adds named widgets without changing the active panel', async () => {
   const v = seed();
   v.setDock(addTab(v.dock, '@lola/widgets'));
   store.sessions = [{ id: SID, worktree: '/w', tmuxName: SID, agentState: 'idle' }] as never;
   render(DockArea, { sessionId: SID, children, details: true });
-  await waitFor(() => expect(allTabs(v.dock)).toEqual([OVERVIEW_PANEL, CHANGES_PANEL]));
+  await waitFor(() => expect(allTabs(v.dock)).toEqual([OVERVIEW_PANEL]));
   expect(screen.queryByRole('tab', { name: 'Widgets' })).toBeNull();
   const title = 'Deployment readiness and test coverage overview';
   v.items = [item('readiness', title)] as never;

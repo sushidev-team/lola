@@ -15,10 +15,10 @@ import type { SSHTimelineData } from "@bindings/internal/protocol";
 import { store, type SessionInfo } from "./store.svelte";
 import { nav } from "./nav.svelte";
 import { confirm } from "./confirm.svelte";
-import { terms, AGENT, CHECKPOINTS, DIFF, SSH, isChangesTab, isViewTab } from "./terms.svelte";
+import { terms, AGENT, SSH, isViewTab } from "./terms.svelte";
 import { changesOffered, conversationOffered, isAgentless, stripCells, type StripCell } from "./sessionview";
 import { landingFor, nextWaiting } from "./queue";
-import { checkpoints } from "./checkpoints.svelte";
+import { reviewWorkspace } from "./reviewworkspace.svelte";
 import { AGENT_DEST } from "./composer";
 import { isTalkUnsupported, talk } from "./talk.svelte";
 import {
@@ -44,7 +44,7 @@ import {
   type SSHTimelineItem,
 } from "./ssh";
 
-import { OVERVIEW_PANEL, CHANGES_PANEL, SESSION_PANELS } from "./sessionpanels";
+import { OVERVIEW_PANEL, SESSION_PANELS } from "./sessionpanels";
 import { addTab, allTabs, closeTab, deserialize, emptyLayout, groupOf, groups, retainTabs, selectTab, serialize, type DockNode } from "./docklayout";
 
 export const PREDATES_RE = /unknown cmd/i;
@@ -291,8 +291,8 @@ class SessionView {
 
   constructor(dock?: SavedDock, draft = "") {
     if (dock) {
-      this.dock = deserialize(dock.root);
-      if (Array.isArray(dock.closed)) for (const id of dock.closed) if (typeof id === "string") this.dockClosed.add(id);
+      this.dock = closeTab(deserialize(dock.root), "@lola/changes");
+      if (Array.isArray(dock.closed)) for (const id of dock.closed) if (typeof id === "string" && id !== "@lola/changes") this.dockClosed.add(id);
     }
     this.agentDraftText = draft;
   }
@@ -358,11 +358,11 @@ class SessionView {
   }
 
   /** Seed one right column. Existing splits and closed tabs remain the person's choice. */
-  ensureSessionPanels(diffable: boolean) {
+  ensureSessionPanels() {
     // Retire the old widget-directory tab from saved layouts without touching widget tabs.
     let next = closeTab(this.dock, "@lola/widgets");
     this.dockClosed.delete("@lola/widgets");
-    for (const id of [OVERVIEW_PANEL, ...(diffable ? [CHANGES_PANEL] : [])]) {
+    for (const id of SESSION_PANELS) {
       if (!groupOf(next, id) && !this.dockClosed.has(id)) next = addTab(next, id, undefined, false);
     }
     if (next !== this.dock) this.setDock(next);
@@ -688,7 +688,7 @@ class SSHStore {
     return [owner, ...children];
   }
 
-  stripTabs(s: SessionInfo, members: SessionInfo[], sideChanges: boolean) {
+  stripTabs(s: SessionInfo, members: SessionInfo[]) {
     const views: { owner: string; cell: StripCell; label: string }[] = [];
     for (const [index, member] of members.entries()) {
       if (conversationOffered(member)) views.push({
@@ -697,7 +697,6 @@ class SSHStore {
       });
     }
     if (isAgentless(s)) views.push({ owner: s.id, cell: { kind: "terminal", key: "terminal" }, label: "Shell" });
-    if (!sideChanges && changesOffered(s)) views.push({ owner: s.id, cell: { kind: "changes", key: "changes" }, label: "Changes" });
 
     const machines = members.flatMap(member =>
       stripCells(member, terms.shellsFor(member.id)).machines.map(cell => ({
@@ -732,7 +731,6 @@ class SSHStore {
   /** Which cell of the strip this session is on, for `<` `>` and the strip's own underline. */
   currentCell(s: SessionInfo): string {
     const tab = terms.activeTab(s.id);
-    if (tab === DIFF || tab === CHECKPOINTS) return "changes";
     if (tab === AGENT) return "terminal";
     if (tab !== SSH) return tab;
     const v = this.view(s.id);
@@ -762,9 +760,6 @@ class SSHStore {
         v.shellConn = "";
         terms.select(id, AGENT);
         break;
-      case "changes":
-        terms.select(id, DIFF);
-        break;
       default:
         v.shellConn = "";
         terms.select(id, cell.name);
@@ -775,7 +770,7 @@ class SSHStore {
   ringStrip(s: SessionInfo, dir: 1 | -1) {
     const members = this.stripMembers(s);
     if (members.length > 1) {
-      const { views, hosts, terminals } = this.stripTabs(s, members, this.view(s.id).sessionPanels);
+      const { views, hosts, terminals } = this.stripTabs(s, members);
       const tabs = [...views, ...hosts, ...terminals];
       const current = this.currentCell(s);
       let at = tabs.findIndex(t => t.owner === s.id && t.cell.key === current);
@@ -818,10 +813,7 @@ class SSHStore {
     const open = nav.focusedTerm === s.id;
     nav.openSession(s.id);
     const v = this.view(s.id);
-    const tab = terms.activeTab(s.id);
-    // Changes names the conversation on its footer's ⌘\, so that is where the chord goes.
-    const onChanges = (tab === DIFF || tab === CHECKPOINTS) && conversationOffered(s);
-    if (open && (this.onTerminal(s) || onChanges)) {
+    if (open && this.onTerminal(s)) {
       this.leaveTerminal(s);
       return;
     }
@@ -863,27 +855,10 @@ class SSHStore {
     v.composerFocus++;
   }
 
-  /** ⌘⇧D and `f`. Opens the session if it has to, and refuses only what has no Changes. */
-  toggleChanges(s: SessionInfo) {
+  /** File links, receipts and keyboard shortcuts share Review's code comparison. */
+  openChanges(s: SessionInfo, seq = 0) {
     if (!this.mayShowChanges(s)) return;
-    const open = nav.focusedTerm === s.id;
-    nav.openSession(s.id);
-    // From Overview the promise is to open it. Left on Changes, a toggle would close what the key
-    // came here to open.
-    if (open) terms.toggleDiff(s.id);
-    else if (!isChangesTab(terms.activeTab(s.id))) terms.select(s.id, DIFF);
-  }
-
-  /**
-   * Lands on Changes from a link rather than toggling it: on one turn when `seq` names it, on the
-   * newest when it is -1, else on everything against the base. A second click on a receipt must
-   * not close what it opened.
-   */
-  openChanges(s: SessionInfo, seq?: number) {
-    if (!this.mayShowChanges(s)) return;
-    nav.openSession(s.id);
-    if (seq && seq > 0) checkpoints.select(s.id, seq);
-    terms.select(s.id, seq ? CHECKPOINTS : DIFF);
+    reviewWorkspace.open(s.id, 'code', seq);
   }
 
   private mayShowChanges(s: SessionInfo): boolean {

@@ -14,10 +14,7 @@
   // sashes at 20, the drag preview at 30.
   import { tick, untrack, type Snippet } from "svelte";
   import SessionSide from '../../session/SessionSide.svelte';
-  import ChangesView from '../../session/ChangesView.svelte';
-  import { OVERVIEW_PANEL, CHANGES_PANEL, isSessionPanel, sessionPanelTitle, widgetTabLabel } from '$lib/sessionpanels';
-  import { terms, SSH, DIFF, isChangesTab } from '$lib/terms.svelte';
-  import { changesOffered } from '$lib/sessionview';
+  import { OVERVIEW_PANEL, isSessionPanel, sessionPanelTitle, widgetTabLabel } from '$lib/sessionpanels';
   import { store } from "$lib/store.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { ssh } from "$lib/ssh.svelte";
@@ -70,22 +67,13 @@
   const GHOST_H = 28;
 
   const view = $derived(ssh.view(sessionId));
-  const session = $derived(store.sessionById(sessionId));
-  const diffable = $derived(!!session && changesOffered(session));
   $effect(() => {
     const enabled = details;
-    const hasDiff = diffable;
+    const current = view;
     untrack(() => {
-      view.sessionPanels = enabled;
-      if (enabled) view.ensureSessionPanels(hasDiff);
+      current.sessionPanels = enabled;
+      if (enabled) current.ensureSessionPanels();
     });
-  });
-  // activeTab also reads the polled session snapshot. Only a changed route should open a
-  // panel; replaying this on each snapshot pulses the tab and resurrects closed panels.
-  const routedTab = $derived(terms.activeTab(sessionId));
-  $effect(() => {
-    const tab = routedTab;
-    if (details && isChangesTab(tab)) untrack(() => view.openWidget(CHANGES_PANEL));
   });
   const agent = $derived(agentName(store.sessionById(sessionId)?.agent));
 
@@ -325,7 +313,6 @@
 
   function select(tab: string) {
     if (justDragged) return;
-    if (details && isChangesTab(terms.activeTab(sessionId)) && tab !== CHANGES_PANEL) terms.select(sessionId, SSH);
     view.dockDrawerTab = tab;
     view.setDock(selectTab(view.dock, tab));
   }
@@ -343,7 +330,6 @@
     const a = document.activeElement;
     const ours = !a || a === document.body || !!a.closest("[data-dock-group],[data-dock-menu]");
     const group = groupOf(view.dock, tab)?.id;
-    if (tab === CHANGES_PANEL && isChangesTab(terms.activeTab(sessionId))) terms.toggleDiff(sessionId);
     view.closeWidget(tab);
     if (!ours) return;
     void tick().then(() => {
@@ -485,7 +471,6 @@
     {@const on = showing.includes(id) && !covered}
     <div class="absolute z-10 grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] overflow-hidden bg-panel" style="{rectStyle(frameRect(id))};visibility:{on ? 'visible' : 'hidden'};pointer-events:{on && !busy ? 'auto' : 'none'}" inert={!on} data-session-panel={id}>
       {#if id === OVERVIEW_PANEL}<SessionSide {sessionId} />
-      {:else if id === CHANGES_PANEL}<ChangesView {sessionId} compact />
       {/if}
     </div>
   {/each}

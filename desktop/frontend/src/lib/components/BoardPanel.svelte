@@ -56,8 +56,8 @@
       </button>
     {:else}
     <div class="flex items-center gap-2 {embedded ? 'pb-3' : 'border-b border-edge/60 px-3 py-2'}">
-      {#if !embedded}<span class="label text-faint">Agent report</span>{/if}
-      {#if b.phase}
+      {#if embedded}<h3 class="cv-overview-heading">Agent report</h3>{:else}<span class="label text-faint">Agent report</span>{/if}
+      {#if !embedded && b.phase}
         <!-- A dot of the phase's own colour beside the word, so the stage reads
              at a glance before the word does. -->
         <span class="inline-flex items-center gap-1.5 text-sm text-ink-2">

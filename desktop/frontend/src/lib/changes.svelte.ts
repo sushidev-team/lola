@@ -1,9 +1,5 @@
-// What a session has changed against its base, as two numbers, for the strip's `Changes +84 −12`.
-//
-// The wire has no such field and gains none, because anything on SessionInfo reaches phones. So
-// this is one `cmd=diff` when a session opens and one each time its agent comes to rest, and only
-// for the session on screen. DiffView reports what it loads, so a person on Changes costs nothing
-// extra. An unknown figure renders as nothing, never as zero.
+// The overview shows totals for the session against its base. SessionEmbed refreshes them
+// on arrival and agent-state changes. DiffView contributes totals from its own reads.
 import { SvelteMap } from "svelte/reactivity";
 import { DaemonService } from "@bindings/desktop";
 import type { DiffData } from "@bindings/internal/protocol";

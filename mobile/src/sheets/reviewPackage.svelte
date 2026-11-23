@@ -1,6 +1,6 @@
 <script lang="ts">
   import { listedFeedbackCount } from "@mobile/lib/feedbackcount";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { feedback } from "$lib/feedback.svelte";
   import { nav as deskNav } from "$lib/nav.svelte";
   import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
@@ -33,7 +33,8 @@
   let armed = false;
   // The route's tab. Not checked against the workspace's tabs: those arrive before the
   // material has loaded, and the workspace draws an empty state for a tab with nothing in it.
-  let tab = $state(router.sheetTab || "material");
+  const entry = untrack(() => deskNav.overlay === "pr-review" ? reviewWorkspace : null);
+  let tab = $state(router.sheetTab || entry?.tab || "material");
   const drafts = $derived(listedFeedbackCount(id));
   let status = $state<Status>({ tabs: [], canMark: false, reviewed: false, marking: false, mark: () => {} });
 
@@ -80,7 +81,7 @@
   <div data-phone-desk class="min-w-0 shrink-0 px-4 pb-4">
     {#await import("$lib/components/session/ReviewWorkspace.svelte") then m}
       {@const Workspace = m.default}
-      <Workspace sessionId={reviewWorkspace.session || id} embedded {can} labels={{ verified: copy.reviewPackage.verified, notVerified: copy.reviewPackage.notVerified }} bind:tab onstatus={(s: Status) => (status = s)} />
+      <Workspace sessionId={reviewWorkspace.session || id} embedded initialTurn={entry?.turn ?? 0} {can} labels={{ verified: copy.reviewPackage.verified, notVerified: copy.reviewPackage.notVerified }} bind:tab onstatus={(s: Status) => (status = s)} />
     {/await}
   </div>
 </Sheet>

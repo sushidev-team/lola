@@ -6,7 +6,7 @@ vi.mock("@bindings/desktop", () => ({
   TermService: { Shells: vi.fn(async () => []), Shell: vi.fn(async () => ""), CloseShell: vi.fn(async () => {}) },
 }));
 
-const { terms, AGENT, DIFF, SSH, isReviewTab, isDevTab, devTabIndex } = await import("./terms.svelte");
+const { terms, AGENT, SSH, isReviewTab, isDevTab, devTabIndex } = await import("./terms.svelte");
 const { store } = await import("./store.svelte");
 
 // The store is a singleton; give each test its own session id instead of
@@ -55,7 +55,7 @@ describe("Close Tab menu action", () => {
     const id = newId();
     seed(id, [`${id}-shell-1`]);
     const { TermService } = await import("@bindings/desktop");
-    for (const tab of [AGENT, DIFF, SSH]) {
+    for (const tab of [AGENT, SSH]) {
       terms.select(id, tab);
       await terms.closeActiveTab(id);
     }
@@ -262,20 +262,11 @@ describe("where a session opens", () => {
     expect(terms.activeTab(a)).toBe(SSH);
     store.sessions = [];
   });
-  it("Changes returns to the view it was opened from", () => {
-    const id = newId();
-    seed(id, [`${id}-shell-1`]);
-    terms.select(id, `${id}-shell-1`);
-    terms.toggleDiff(id);
-    expect(terms.activeTab(id)).toBe(DIFF);
-    terms.toggleDiff(id);
-    expect(terms.activeTab(id)).toBe(`${id}-shell-1`);
-  });
   it("remembers the last terminal used, and falls back when it is gone", () => {
     const id = newId();
     seed(id, [`${id}-shell-1`]);
     terms.select(id, `${id}-shell-1`);
-    terms.select(id, DIFF);
+    terms.select(id, SSH);
     expect(terms.lastTerminal(id)).toBe(`${id}-shell-1`);
     seed(id, []);
     expect(terms.lastTerminal(id)).toBe(AGENT);

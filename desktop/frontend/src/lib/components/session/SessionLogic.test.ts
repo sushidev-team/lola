@@ -60,7 +60,7 @@ vi.mock("@bindings/desktop", () => {
 });
 vi.mock("@wailsio/runtime", async (orig) => ({
   ...(await orig<object>()),
-  Events: { On: (n: string, f: (e: { data: unknown }) => void) => (h.handlers.set(n, f), () => {}), Off: () => {} },
+  Events: { Emit: vi.fn().mockResolvedValue(true), On: (n: string, f: (e: { data: unknown }) => void) => (h.handlers.set(n, f), () => {}), Off: () => {} },
 }));
 vi.mock("$lib/components/LiveTerminal.svelte", async () => ({ default: (await import("$lib/components/ssh/TerminalStub.test.svelte")).default }));
 
@@ -80,7 +80,7 @@ const { nav } = await import("$lib/nav.svelte");
 const { ssh } = await import("$lib/ssh.svelte");
 const { talk } = await import("$lib/talk.svelte");
 const { SessionFeed } = await import("$lib/feed.svelte");
-const { terms, AGENT, DIFF, SSH } = await import("$lib/terms.svelte");
+const { terms, AGENT, SSH } = await import("$lib/terms.svelte");
 const { rosterLine } = await import("$lib/sessionview");
 const { confirm } = await import("$lib/confirm.svelte");
 const { sessionMenu } = await import("$lib/sessionmenu.svelte");
@@ -677,40 +677,6 @@ describe("keys that belong to what is on show", () => {
     expect(terms.stickyTerminal(A)).toBe(false);
   });
 
-  it("Esc leaves Changes when the shell it came from has gone", async () => {
-    let shells = [`${A}-shell-1`];
-    h.shells.impl = () => Promise.resolve(shells);
-    await mount([plain(A)]);
-    await open(A);
-    await terms.refresh(A);
-    terms.select(A, `${A}-shell-1`);
-    flushSync();
-    terms.toggleDiff(A);
-    flushSync();
-    expect(terms.activeTab(A)).toBe(DIFF);
-    shells = [];
-    await terms.refresh(A);
-    flushSync();
-    terms.toggleDiff(A);
-    flushSync();
-    expect(terms.activeTab(A)).not.toBe(DIFF);
-  });
-
-  it("⌘⇧D from the sidebar toggles Changes on the active session", async () => {
-    await mount([plain(A)]);
-    await open(A);
-    terms.toggleDiff(A);
-    flushSync();
-    nav.focusSessions();
-    flushSync();
-    await settle();
-    nav.select(A);
-    chord("changes");
-    await settle();
-    expect(nav.focusedTerm).toBe(A);
-    expect(terms.activeTab(A)).toBe(SSH);
-  });
-
   it("⌘. never stops a session nobody is looking at", async () => {
     await mount([plain(A, { agentState: "working" })]);
     nav.select(A);
@@ -776,7 +742,7 @@ describe("keys that belong to what is on show", () => {
     nav.select(A);
     ssh.openChanges(store.sessionById(A)!);
     await settle();
-    expect(terms.activeTab(A)).not.toBe(DIFF);
+    expect(nav.overlay).not.toBe("pr-review");
   });
 });
 

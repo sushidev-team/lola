@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/svelte";
+import { render, waitFor } from "@testing-library/svelte";
 import { flushSync } from "svelte";
 
 const Diff = vi.fn();
@@ -18,25 +18,21 @@ vi.mock("@bindings/desktop", () => ({
 
 const { default: SessionEmbed } = await import("./SessionEmbed.svelte");
 const { store } = await import("$lib/store.svelte");
-const { terms, DIFF } = await import("$lib/terms.svelte");
 
-// The daemon pushes a fresh session list about once a second. SessionEmbed
-// passes `session.id` down, so a diff tab that tracked the prop rather than its
-// value blanked and re-ran git on every push.
-describe("SessionEmbed diff tab", () => {
+
+describe("Session overview diff totals", () => {
   it("does not reload the diff when the session list is pushed again", async () => {
     Diff.mockResolvedValue({ session: "s1", base: "origin/main", mergeBase: "abc", files: [] });
     const s = (age: string) => ({ id: "s1", tmuxName: "s1", worktree: "/w", age }) as never;
     store.sessions = [s("0")];
-    terms.select("s1", DIFF);
+    store.alive = true;
     render(SessionEmbed, { sessionId: "s1" });
-    await screen.findByText(/No changes/);
+    await waitFor(() => expect(Diff).toHaveBeenCalledTimes(1));
     for (let i = 1; i <= 3; i++) {
       store.sessions = [s(String(i))];
       flushSync();
       await new Promise((r) => setTimeout(r, 0));
     }
     expect(Diff).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/No changes/)).toBeInTheDocument();
   });
 });

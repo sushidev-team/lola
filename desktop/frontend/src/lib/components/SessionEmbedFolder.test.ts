@@ -19,13 +19,13 @@ const { default: SessionMenu } = await import("./SessionMenu.svelte");
 const { store } = await import("$lib/store.svelte");
 const { nav } = await import("$lib/nav.svelte");
 const { sessionMenu } = await import("$lib/sessionmenu.svelte");
-const { terms, DIFF, SSH } = await import("$lib/terms.svelte");
+const { terms, SSH } = await import("$lib/terms.svelte");
 
 beforeEach(() => {
   cleanup();
   OpenFolder.mockReset().mockResolvedValue(undefined);
   store.flash = null;
-  terms.select("s1", DIFF);
+  terms.select("s1", SSH);
   nav.focusedTerm = "s1";
 });
 
@@ -135,7 +135,7 @@ it("keeps every shell in the tab row at a narrow width and opens the menu outsid
   (terms as unknown as { shells: Map<string, string[]> }).shells.set("s1", names);
   store.sessions = [{ id: "s1", worktree: "/checkout", agent: "claude" }] as never;
   try {
-    const { container } = render(ViewStrip, { session: store.sessions[0], changesInSide: true });
+    const { container } = render(ViewStrip, { session: store.sessions[0], sidePanels: true });
     const cells = screen.getAllByRole("tab").map(t => t.dataset.stripCell);
     expect(cells).toEqual(["conversation", ...names]);
     const add = screen.getByRole("button", { name: "Add tab" });
@@ -161,14 +161,14 @@ it("opens and switches independent Conversation tabs on the same checkout", asyn
   nav.openSession(owner.id);
   const open = vi.spyOn(store,"openManual").mockResolvedValue({sessionId:child.id} as never);
   try {
-    const strip = render(ViewStrip, { session:store.sessions[0], changesInSide:true });
+    const strip = render(ViewStrip, { session:store.sessions[0], sidePanels:true });
     await fireEvent.click(screen.getByRole("button",{ name:"Add tab" }));
     await fireEvent.click(screen.getByRole("menuitem",{ name:"New agent conversation" }));
     expect(open).toHaveBeenCalledWith(expect.objectContaining({parentSession:"primary",location:"agent-tab",agentKind:"codex"}));
     expect(nav.focusedTerm).toBe(child.id);
     expect(terms.activeTab(child.id)).toBe(SSH);
     store.sessions = [owner,child] as never;
-    await strip.rerender({session:store.sessions[1],changesInSide:true});
+    await strip.rerender({session:store.sessions[1],sidePanels:true});
     expect(screen.getByRole("tab",{name:"Conversation 2"})).toHaveAttribute("aria-selected","true");
     await fireEvent.click(screen.getByRole("tab",{name:"Conversation"}));
     expect(nav.focusedTerm).toBe(owner.id);

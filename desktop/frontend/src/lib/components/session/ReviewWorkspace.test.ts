@@ -433,8 +433,7 @@ it('reviews a session that has no pull request yet',async()=>{
   read.mockResolvedValue({packages:[pkg({session:bare,pr:0})]});
   render(ReviewWorkspace,{sessionId:bare});
   expect(await screen.findByRole('heading',{name:'A clearer settings screen'})).toBeInTheDocument();
-  expect(screen.getByText('No PR yet')).toBeInTheDocument();
-  expect(screen.getByText('No pull request yet')).toBeInTheDocument();
+  expect(screen.queryByRole('region', {name:'PR status'})).toBeNull();
   expect(facts).not.toHaveBeenCalled();
   expect(screen.getByRole('textbox',{name:'Review comment'})).toBeInTheDocument();
   feedback.clear(bare);

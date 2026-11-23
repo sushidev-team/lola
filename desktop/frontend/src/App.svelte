@@ -17,7 +17,7 @@
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms, DIFF, CHECKPOINTS } from "$lib/terms.svelte";
+  import { terms } from "$lib/terms.svelte";
   import { visibleRoster } from "$lib/roster";
   import { sidebarWidth, sidebarLimit, PROJECTS_GIT_MIN } from "$lib/sidebarwidth";
   let windowWidth = $state(1280);
@@ -119,6 +119,10 @@
     // ⌘K inside the palette opens its options panel; the accelerator never reaches the field.
     if (action === "commands" && nav.overlay === "commands") { nav.commandOptions++; return; }
     if (action === "toggle-sidebar") { nav.toggleSidebar(); return; }
+    if (action === "changes" && nav.overlay === "pr-review" && !confirm.request && !sessionMenu.request) {
+      nav.closeOverlay();
+      return;
+    }
     if (nav.overlay || confirm.request || sessionMenu.request || document.querySelector('[aria-modal="true"]')) return;
     if (action === "toggle-git") { toggleGitWorkspace(); return; }
     if (action === "toggle-right-sidebar") {
@@ -172,7 +176,7 @@
         talk.stop(s.id).catch((err) => store.setFlash(String(err), "warn"));
         break;
       case "changes":
-        ssh.toggleChanges(s);
+        ssh.openChanges(s);
         break;
       case "kill":
         store.askKill(s.id); // ask first — shared confirm dialog
@@ -241,7 +245,7 @@
     const conversation = conversationOffered(s);
     switch (e.key) {
       case "f":
-        if (changesOffered(s)) terms.toggleDiff(s.id);
+        if (changesOffered(s)) ssh.openChanges(s);
         return true;
       case "F":
         ssh.cycleFilter(s);
@@ -276,17 +280,12 @@
   }
 
   // One step per press, and Esc never reaches the agent from here: a terminal holding the keyboard
-  // owns Esc before this runs, and Ctrl-Q is its way out. Changes and an unfocused terminal step
+  // owns Esc before this runs, and Ctrl-Q is its way out. An unfocused terminal steps
   // back a view. The conversation steps back to Overview once nothing in it holds focus: the
   // composer and the timeline each give up focus first, on their own press.
   function escapeLadder(s: SessionInfo | undefined): boolean {
     if (!s) {
       nav.focusSessions();
-      return true;
-    }
-    const tab = terms.activeTab(s.id);
-    if (tab === DIFF || tab === CHECKPOINTS) {
-      terms.toggleDiff(s.id);
       return true;
     }
     if (ssh.onTerminal(s) && conversationOffered(s)) {
@@ -516,7 +515,7 @@
 <Toast />
 
 {#if nav.overlay === "pr-review"}
-  <ReviewWorkspace sessionId={reviewWorkspace.session} />
+  <ReviewWorkspace sessionId={reviewWorkspace.session} tab={reviewWorkspace.tab} initialTurn={reviewWorkspace.turn} />
 {:else if nav.overlay === "newsession"}
   <NewSession />
 {:else if nav.overlay === "sshsession"}

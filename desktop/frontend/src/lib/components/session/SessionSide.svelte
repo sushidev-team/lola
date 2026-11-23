@@ -1,23 +1,18 @@
 <script lang="ts">
   import Icon from "$lib/components/Icon.svelte";
-  // The agent's standing account beside its story: plan, progress, checks, findings, notes and its
-  // widgets. It exists only once the agent has used one of them, so a session that never did keeps
-  // a plain conversation. Everything here is a claim, which is why the heading says whose it is.
-  // The audit's doubt, inside BoardPanel, is lola's own words.
   import { store } from "$lib/store.svelte";
   import { ssh, sshClock } from "$lib/ssh.svelte";
   import { hypothesisView, severityView, stepView } from "$lib/ssh";
   import { inScope } from "$lib/turns";
-  import { boardHasContent, deriveSide } from "$lib/sessionside";
-  import { tooltip } from "$lib/tooltip";
+  import { deriveSide } from "$lib/sessionside";
+  import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
   import { feed } from "$lib/feed.svelte";
   import { changes } from "$lib/changes.svelte";
   import { changesOffered } from "$lib/sessionview";
-  import { sessionActivity, activityDuration } from "$lib/sessionactivity";
+  import { sessionActivity } from "$lib/sessionactivity";
   import Button from "../Button.svelte";
   import BeforeMerge from "./BeforeMerge.svelte";
   import OverviewChecks from "./OverviewChecks.svelte";
-  import SessionDev from "./SessionDev.svelte";
   import SessionTasks from "./SessionTasks.svelte";
   import SessionBrief from "./SessionBrief.svelte";
   import BoardPanel from "../BoardPanel.svelte";
@@ -31,9 +26,12 @@
   const f = $derived(feed.view(sessionId));
   const activity = $derived(sessionActivity({ feed: f.items, items: view.items, scope: view.scope, alive: ['working', 'starting', 'waiting_input'].includes(session?.agentState ?? '') }));
   const tests = $derived(activity.filter(e => e.kind === 'tests'));
-  const recent = $derived(activity.slice(-5).reverse());
   const diff = $derived(changes.of(sessionId));
-  const hasProgressReport = $derived(boardHasContent(board ? { ...board, checks: [], mismatches: [] } : board));
+  const hasProgressReport = $derived(board?.blocked || board?.hasProgress || board?.todos?.length || board?.note);
+  const hasPR = $derived(session?.stack ? session.apps?.some(app => app.number) : !!session?.prNumber);
+  const diffable = $derived(!!session && changesOffered(session));
+  const hasChecks = $derived(tests.length || board?.checks?.length || board?.mismatches?.length);
+  const failedCheck = $derived(board?.mismatches?.length || board?.checks?.some(c => c.state === 'fail') || tests.at(-1)?.status === 'error');
   const plan = $derived(side.plan?.element);
   const steps = $derived(plan?.steps ?? []);
   const done = $derived(steps.filter((s) => s.state === "done").length);
@@ -58,22 +56,11 @@
   </div>
 {/snippet}
 
-<aside class="cv-session-side grid min-h-0 content-start gap-5 overflow-y-auto px-4 pt-2 pb-4 text-sm" aria-label="Session overview" data-session-side>
-  <SessionBrief {sessionId} />
-  <SessionTasks {sessionId} />
-
-  {#if session}<SessionDev {session} />{/if}
-
+{#snippet tasks()}<SessionTasks {sessionId} />{/snippet}
+{#snippet checks()}{#if hasChecks}<OverviewChecks {session} {tests} onJump={jumpTo} />{/if}{/snippet}
+{#snippet progress()}
   {#if session && hasProgressReport}<BoardPanel {session} embedded showChecks={false} compactWhenDone />{/if}
-
-  {#if !hasProgressReport && !plan && !session?.tasks?.length}
-    <section data-side-progress-empty>
-      {@render heading("Task progress")}
-      <p class="text-faint">No plan reported yet.</p>
-    </section>
-  {/if}
-
-  {#if plan && !hasProgressReport}
+  {#if plan}
     <section data-side-plan>
       {#if planComplete}
         <button type="button" class="flex w-full items-center gap-2 text-left" aria-expanded={planExpanded} onclick={() => planExpanded = !planExpanded}><Icon name="circle-check" size={16} class="text-good" /><span class="font-medium">Plan complete</span><span class="num text-xs text-faint">{done}/{steps.length}</span><Icon name={planExpanded ? "chevron-down" : "chevron-right"} size={14} class="ml-auto text-faint" /></button>
@@ -97,43 +84,41 @@
       {/if}
     </section>
   {/if}
+{/snippet}
 
-  <section data-side-changes class:cv-clickable-changes={session && changesOffered(session)}>
-    {#if session && changesOffered(session)}
-      <button type="button" class="cv-changes-card-target" aria-label="View changes" onclick={() => session && ssh.openChanges(session)}></button>
-    {/if}
-    {@render heading("Changes", diff ? `${diff.files} ${diff.files === 1 ? 'file' : 'files'}` : '')}
-    {#if diff}
-      <div class="cv-diff-overview">
-        <div class="cv-diff-meter" aria-hidden="true">
-          <span style={`flex:${diff.add}`} class="bg-good"></span><span style={`flex:${diff.del}`} class="bg-bad"></span>
-        </div>
-        <span class="num text-good">+{diff.add}</span><span class="num text-bad">−{diff.del}</span>
+{#snippet review()}
+  {#if session && (diffable || hasPR)}
+    <section aria-label="Session review" data-side-review>
+      <div class="flex items-center justify-between gap-2">
+        <h3 class="cv-overview-heading">Review</h3>
+        <Button size="xs" variant="secondary" onclick={() => reviewWorkspace.open(sessionId)}>Open review <Icon name="arrow-up-right" size={13} /></Button>
       </div>
-    {:else}<p class="text-faint">Changes haven't been loaded.</p>{/if}
-    {#if session && changesOffered(session)}
-      <span class="cv-overview-link" aria-hidden="true">View changes <Icon name="arrow-right" size={14} /></span>
-    {/if}
-  </section>
+      {#if diffable}
+        <button type="button" class="changes-link" aria-label="View changes in Review" onclick={() => session && ssh.openChanges(session)}>
+          <span>Changes</span>
+          <span class="changes-count">{diff ? `${diff.files} ${diff.files === 1 ? 'file' : 'files'}` : 'Not loaded'}</span>
+          {#if diff?.files}<span class="num text-good">+{diff.add}</span><span class="num text-bad">−{diff.del}</span>{/if}
+          <Icon name="chevron-right" size={14} />
+        </button>
+      {/if}
+      {#if hasPR}<div class="pr-details"><BeforeMerge {session} /></div>{/if}
+    </section>
+  {/if}
+{/snippet}
 
-  {#if session}<BeforeMerge {session} />{/if}
-
-  <OverviewChecks {session} {tests} onJump={jumpTo} />
-
-  <section data-side-activity>
-    {@render heading("Recent activity")}
-    {#if recent.length}
-      <ul class="cv-overview-events">
-        {#each recent as e (e.id)}
-          <li><button type="button" onclick={() => jumpTo(e.id)} use:tooltip={{ text: e.label, heading: 'Recent activity', meta: activityDuration(e.durationMs), tone: e.kind }}>
-            <span class="cv-activity-dot" data-activity-kind={e.kind} aria-hidden="true"></span>
-            <span class="min-w-0 truncate">{e.label}</span>
-            <span class="num text-faint">{activityDuration(e.durationMs)}</span>
-          </button></li>
-        {/each}
-      </ul>
-    {:else}<p class="text-faint">Activity appears as the agent works.</p>{/if}
-  </section>
+<aside class="cv-session-side grid min-h-0 content-start overflow-y-auto text-sm" aria-label="Session overview" data-session-side>
+  <SessionBrief {sessionId} />
+  <!-- A keyed move preserves task drafts, disclosure state and PR reads as priorities change. -->
+  {#each [...new Set([
+    ...(board?.blocked ? [progress] : []),
+    ...(session?.tasks?.some(t => t.state === 'checking') ? [tasks] : []),
+    ...(failedCheck ? [checks] : []),
+    ...(hasPR || (diff?.files && session?.agentState === 'idle') ? [review] : []),
+    ...(session?.agentState === 'working' && (plan || hasProgressReport) ? [progress] : []),
+    review, tasks, progress, checks,
+  ])] as section (section)}
+    {@render section()}
+  {/each}
 
   {#if side.findings.length}
     <section data-side-findings>
@@ -206,3 +191,21 @@
     </section>
   {/if}
 </aside>
+
+<style>
+  .changes-link {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    padding: 5px 0;
+    text-align: left;
+    color: var(--color-accent-ink);
+  }
+  .changes-link:hover > span:first-child { text-decoration: underline; }
+  .changes-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+  .changes-count { margin-left: auto; color: var(--color-faint); font-variant-numeric: tabular-nums; }
+  .pr-details { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--color-edge); }
+</style>

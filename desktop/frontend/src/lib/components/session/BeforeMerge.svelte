@@ -1,8 +1,6 @@
 <script lang="ts">
   import { DaemonService } from '@bindings/desktop';
   import { readPRReadiness } from '$lib/prreadiness';
-  import { reviewWorkspace } from '$lib/reviewworkspace.svelte';
-  import { nav } from '$lib/nav.svelte';
   import type { PRReadinessData } from '@bindings/internal/protocol';
   import type { SessionInfo } from '$lib/store.svelte';
   import { store } from '$lib/store.svelte';
@@ -71,11 +69,6 @@
     return Array.from(groups, ([author, items]) => ({ author, items }));
   });
   const terminal = $derived(current?.state === 'MERGED' || current?.state === 'CLOSED');
-  const reviewNext = $derived(!!current && !error && current.state === 'OPEN' && !current.draft
-    && (current.checks === 'pass' || current.checks === 'none') && current.mergeable === 'MERGEABLE'
-    && current.mergeState !== 'BEHIND' && !threads.length
-    && (current.review === '' || current.review === 'REVIEW_REQUIRED'));
-  const promoteReview = $derived(reviewNext && nav.overlay !== 'pr-review');
   const mergeMethod = $derived(current?.mergeMethod ? chosenMethod || current.mergeMethod : '');
   const mergeLabel = $derived(({squash:'Squash and merge',merge:'Merge pull request',rebase:'Rebase and merge'} as Record<string,string>)[mergeMethod]);
   const readyToMerge = $derived(!!mergeLabel && current?.mergeBlocked === '');
@@ -196,7 +189,6 @@
   <header>
     {#if phone && reviewLayout}<h3 class="phone-section"><Icon name="git-pull-request" size={18} /><span>Pull request <span class="num">#{selected.number}</span></span></h3>
       {#if current?.base}<span class="phone-base"><Icon name="git-branch" size={13}/><span>{current.base}</span></span>{/if}{:else if heading}<h3 class="cv-overview-heading">PR status</h3>{:else}<span class="heading-gap"></span>{/if}
-    {#if !phone && nav.overlay !== 'pr-review'}<Button variant={promoteReview ? 'primary' : 'ghost'} size="xs" onclick={() => reviewWorkspace.open(session.id)}>{#if promoteReview}<Icon name="git-pull-request" size={13} />{/if}Review PR</Button>{/if}
     {#if !phone}<button type="button" class="pr-link" onclick={() => open(current?.url || selected.url)} aria-label="Open pull request {linkLabel}"><Icon name="git-pull-request" size={13} />{linkLabel}<Icon name="external-link" size={11} /></button>{/if}
     {#if !(phone && error)}<button type="button" class="refresh" disabled={loading} onclick={refresh} aria-label="Refresh PR status" use:tooltip={'Refresh PR status'}><Icon name="refresh-cw" size={13} /></button>{/if}
   </header>
@@ -249,8 +241,8 @@
     {#if session.location !== 'ssh' && (can('mergePR') || can('review')) && !(phone && hideMerge)}
       <div class="pr-actions">
         {#if can('mergePR') && !hideMerge}
-        <div class="merge-split" class:ready={readyToMerge && !promoteReview}>
-          <span use:tooltip={mergeHint}><Button class="rounded-r-none!" variant={readyToMerge && !promoteReview ? 'primary' : 'secondary'} size="xs" icon={!readyToMerge && !merging && !mergeRequested} disabled={!canMerge} loading={merging} onclick={askMerge} aria-label={merging ? 'Merging…' : mergeRequested ? 'Merge requested' : readyToMerge ? mergeLabel : 'Merge pull request'}>{#if !merging}<Icon name="git-merge" size={13} />{/if}{#if merging}Merging…{:else if mergeRequested}Merge requested{:else if readyToMerge}{mergeLabel}{/if}</Button></span>
+        <div class="merge-split" class:ready={readyToMerge}>
+          <span use:tooltip={mergeHint}><Button class="rounded-r-none!" variant={readyToMerge ? 'primary' : 'secondary'} size="xs" icon={!readyToMerge && !merging && !mergeRequested} disabled={!canMerge} loading={merging} onclick={askMerge} aria-label={merging ? 'Merging…' : mergeRequested ? 'Merge requested' : readyToMerge ? mergeLabel : 'Merge pull request'}>{#if !merging}<Icon name="git-merge" size={13} />{/if}{#if merging}Merging…{:else if mergeRequested}Merge requested{:else if readyToMerge}{mergeLabel}{/if}</Button></span>
           <span class="merge-method" use:tooltip={'Choose merge method'}>
             <Select aria-label="Merge method" minMenuWidth={220} value={mergeMethod} disabled={!canMerge} onchange={(event) => chooseMergeMethod(event.currentTarget.value)}>
               <option value="squash">Squash and merge</option>

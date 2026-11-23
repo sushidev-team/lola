@@ -15,7 +15,7 @@
 </script>
 
 {#if session.devCommands?.length}
-  <section data-side-dev>
+  <section data-side-dev aria-label="Dev">
     <div class="flex items-center justify-between gap-2">
       <h3 class="cv-overview-heading">Dev</h3>
       <div class="flex flex-wrap justify-end gap-1">
@@ -63,3 +63,11 @@
     {/each}
   </section>
 {/if}
+
+<style>
+  [data-side-dev] {
+    padding: 10px 15px;
+    border-top: 1px solid color-mix(in srgb, var(--color-edge) 65%, transparent);
+    background: color-mix(in srgb, var(--color-accent) 5%, var(--color-panel));
+  }
+</style>

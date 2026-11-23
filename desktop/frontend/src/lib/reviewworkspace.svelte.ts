@@ -32,7 +32,11 @@ export function reviewLivePages(pkg: ReviewPackage) {
 
 class ReviewWorkspace {
   session = $state('');
-  open(id: string) {
+  tab = $state<'material' | 'code'>('material');
+  turn = $state(0);
+  open(id: string, tab: 'material' | 'code' = 'material', turn = 0) {
+    this.tab = tab;
+    this.turn = turn;
     this.session = reviewSessionId(id);
     nav.openOverlay('pr-review');
   }

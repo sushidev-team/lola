@@ -6,35 +6,33 @@
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { ssh } from "$lib/ssh.svelte";
-  import { OVERVIEW_PANEL, CHANGES_PANEL, sessionPanelTitle, widgetTabLabel } from "$lib/sessionpanels";
+  import { OVERVIEW_PANEL, widgetTabLabel } from "$lib/sessionpanels";
   import { groupOf } from "$lib/docklayout";
-  import { terms, isChangesTab } from "$lib/terms.svelte";
-  import { feedback } from "$lib/feedback.svelte";
-  import { changes } from "$lib/changes.svelte";
+  import { terms } from "$lib/terms.svelte";
+  import { reviewWorkspace } from "$lib/reviewworkspace.svelte";
   import { sshNeedsHuman } from "$lib/ssh";
   import { isAgentless, changesOffered } from "$lib/sessionview";
   import Button from "../Button.svelte";
   import MenuItem from "../MenuItem.svelte";
 
-  let { session, changesInSide = false }: { session: SessionInfo; changesInSide?: boolean } = $props();
+  let { session, sidePanels = false }: { session: SessionInfo; sidePanels?: boolean } = $props();
 
   const id = $derived(session.id);
   const view = $derived(ssh.view(id));
   const parent = $derived(session.agentTabParent || id);
   const members = $derived(ssh.stripMembers(session));
-  const tabs = $derived(ssh.stripTabs(session, members, changesInSide));
+  const tabs = $derived(ssh.stripTabs(session, members));
   const views = $derived(tabs.views);
   const hosts = $derived(tabs.hosts);
   const terminals = $derived(tabs.terminals);
   type Tab = (typeof views)[number];
   const all = $derived([...views, ...hosts, ...terminals]);
   const selected = $derived(ssh.currentCell(session));
-  const current = $derived(!isAgentless(session) && (selected === "terminal" || terms.isDevTab(selected) || (changesInSide && selected === "changes")) ? "conversation" : selected);
+  const current = $derived(!isAgentless(session) && (selected === "terminal" || terms.isDevTab(selected)) ? "conversation" : selected);
   const activeKey = $derived(id + ":" + current);
-  const draftCount = $derived(feedback.count(id));
-  const stat = $derived(changes.of(id));
   const waitsElsewhere = $derived(sshNeedsHuman(session) && current !== "conversation");
 
+  const overviewVisible = $derived(sidePanels && !view.dockHidden && groupOf(view.dock, OVERVIEW_PANEL)?.active === OVERVIEW_PANEL);
   const widgets = $derived(view.knownWidgets.length);
   const widgetDot = $derived(view.dockUnseen.size > 0);
 
@@ -164,12 +162,11 @@
   // --- add and panel menus ---------------------------------------------------------
 
   const availablePanels = $derived([
-    ...[OVERVIEW_PANEL, ...(changesOffered(session) ? [CHANGES_PANEL] : [])].map(id => ({ id, title: sessionPanelTitle(id), label: sessionPanelTitle(id) })),
+    { id: OVERVIEW_PANEL, title: "Overview", label: "Overview" },
     ...view.items.flatMap(i => i.element?.kind === 'widget' ? [{ id: i.element.id, title: i.element.title || 'Widget', label: widgetTabLabel(i.element.title || '') }] : []),
   ]);
   function togglePanel(panel: string) {
     if (groupOf(view.dock, panel) && !view.dockHidden) {
-      if (panel === CHANGES_PANEL && isChangesTab(terms.activeTab(id))) terms.toggleDiff(id);
       view.closeWidget(panel);
     } else view.openWidget(panel);
     panelAt = null;
@@ -276,8 +273,6 @@
           >
             {c.label}
             {#if c.owner === id && c.cell.kind === "conversation" && waitsElsewhere}<span class="text-orange" aria-label="A card is waiting"><Icon name="circle-alert" size={14} /></span>{/if}
-            {#if c.cell.kind === "changes" && stat && stat.add + stat.del > 0}<span class="num text-sm font-normal text-faint" data-changes-stat>+{stat.add} −{stat.del}</span>{/if}
-            {#if c.cell.kind === "changes" && draftCount > 0}<span class="num text-sm font-normal text-faint"><span aria-hidden="true"><Icon name="circle-dot" size={14} /></span> {draftCount}</span>{/if}
             {@render underline(on)}
           </button>
           {#if c.cell.kind === "conversation" && c.owner !== parent}
@@ -356,10 +351,11 @@
     <Button icon size="xs" aria-label="Add tab" aria-haspopup="menu" aria-expanded={!!addAt} title="Add tab" onclick={(e) => (addAt = under(e))}><Icon name="plus" size={14} /></Button>
   </div>
   <div class="ml-auto flex shrink-0 items-center gap-2">
-    {#if changesInSide}<button bind:this={panelButton} type="button" class="grid size-7 place-items-center rounded-sm text-faint hover:bg-sel hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" aria-label="Panels" title="Show or hide panels" aria-haspopup="menu" aria-expanded={!!panelAt} onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); panelAt = panelAt ? null : { x: Math.max(4, r.right - 224), y: r.bottom + 4 }; }}>
+    {#if !overviewVisible && changesOffered(session)}<Button size="xs" onclick={() => reviewWorkspace.open(id)}>Review</Button>{/if}
+    {#if sidePanels}<button bind:this={panelButton} type="button" class="grid size-7 place-items-center rounded-sm text-faint hover:bg-sel hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" aria-label="Panels" title="Show or hide panels" aria-haspopup="menu" aria-expanded={!!panelAt} onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); panelAt = panelAt ? null : { x: Math.max(4, r.right - 224), y: r.bottom + 4 }; }}>
       <Icon name="menu" class="size-4" />
     </button>{/if}
-    {#if widgets > 0 && !changesInSide}
+    {#if widgets > 0 && !sidePanels}
       <Button size="xs" class="num" title="Show or hide widgets (w)" data-dock-opener aria-label="Widgets {widgets}" onclick={() => ssh.dockKey(session)}>
         Widgets {widgets}{#if widgetDot}<span class="text-magenta" aria-label="A new widget"><Icon name="circle-dot" size={14} /></span>{/if}
       </Button>
