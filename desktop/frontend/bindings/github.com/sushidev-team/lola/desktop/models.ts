@@ -452,6 +452,11 @@ export interface ProjectExecutionDTO {
  */
 export interface ProjectFormDTO {
     /**
+     * InitialGroup files a new project in the group that opened the form.
+     */
+    "initialGroup"?: string;
+
+    /**
      * Nil preserves instructions from older clients; empty uses the workspace default.
      */
     "commitInstructions"?: string | null;
@@ -470,10 +475,6 @@ export interface ProjectFormDTO {
      * save; changing Name is a RENAME and must go through
      * DaemonService.RenameProject FIRST, so that by the time SaveProject runs the
      * project on disk already answers to the new id.
-     * The project's GROUP is deliberately absent: filing a project is done in
-     * the sidebar, by dragging its row onto a folder, and a second place to set
-     * it would let a stale form move a project nobody dragged. SaveProject leaves
-     * Project.Group untouched.
      */
     "name": string;
     "label": string;

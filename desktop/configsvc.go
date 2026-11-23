@@ -781,6 +781,9 @@ type ProjectExecutionDTO struct {
 // values are the RESOLVED ones (see config.ResolveInheritance); Inherits says
 // which of them came from [defaults] rather than the project itself.
 type ProjectFormDTO struct {
+	// InitialGroup files a new project in the group that opened the form.
+	InitialGroup string `json:"initialGroup,omitempty"`
+
 	// Nil preserves instructions from older clients; empty uses the workspace default.
 	CommitInstructions *string `json:"commitInstructions,omitempty"`
 
@@ -795,10 +798,6 @@ type ProjectFormDTO struct {
 	// save; changing Name is a RENAME and must go through
 	// DaemonService.RenameProject FIRST, so that by the time SaveProject runs the
 	// project on disk already answers to the new id.
-	// The project's GROUP is deliberately absent: filing a project is done in
-	// the sidebar, by dragging its row onto a folder, and a second place to set
-	// it would let a stale form move a project nobody dragged. SaveProject leaves
-	// Project.Group untouched.
 	Name          string   `json:"name"`
 	Label         string   `json:"label"`
 	Path          string   `json:"path"`
@@ -999,6 +998,9 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		return err
 	}
 	p := cfg.ProjectByName(name)
+	if dto.IsNew && dto.InitialGroup != "" && p != nil {
+		return errors.New("project already exists: " + name)
+	}
 	if p == nil {
 		if !dto.IsNew {
 			// An existing project that no longer answers to this id means the
@@ -1006,7 +1008,14 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 			// would silently fork the project in two, so refuse.
 			return errors.New("no such project: " + name + " (rename it via the daemon before saving)")
 		}
-		cfg.Projects = append(cfg.Projects, config.Project{Name: name})
+		if dto.InitialGroup != "" {
+			group := cfg.GroupByName(dto.InitialGroup)
+			if group == nil {
+				return errors.New("group no longer exists: " + dto.InitialGroup)
+			}
+			group.Collapsed = false
+		}
+		cfg.Projects = append(cfg.Projects, config.Project{Name: name, Group: dto.InitialGroup})
 		p = &cfg.Projects[len(cfg.Projects)-1]
 	}
 	prioritySort := p.PrioritySort // not exposed by the form; preserved as-is

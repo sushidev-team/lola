@@ -9,7 +9,7 @@
   const VARIANTS: Record<MenuItemVariant, string> = {
     default: "text-ink enabled:hover:bg-sel",
     accent: "text-info enabled:hover:bg-sel enabled:hover:text-accent-ink",
-    danger: "text-faint enabled:hover:bg-bad/15 enabled:hover:text-bad",
+    danger: "text-bad enabled:bg-bad/5 enabled:hover:bg-bad/15 enabled:focus-visible:bg-bad/15 disabled:text-faint",
   };
 </script>
 
@@ -42,7 +42,7 @@
     variant
   ]}"
 >
-  <span class="w-3.5 shrink-0 text-center text-sm text-faint" aria-hidden="true"><GlyphIcon glyph={icon} /></span>
+  <span class="w-3.5 shrink-0 text-center text-sm" class:text-faint={variant !== "danger"} aria-hidden="true"><GlyphIcon glyph={icon} /></span>
   <span class="min-w-0 flex-1 truncate">{@render children()}</span>
   {#if trailing}<span class="shrink-0 text-sm text-faint" aria-hidden="true"><GlyphIcon glyph={trailing} /></span>{/if}
 </button>

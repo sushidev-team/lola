@@ -1277,6 +1277,17 @@ describe("ProjectForm", () => {
   describe("new project short path", () => {
     const fresh = () => ({ ...sampleDto(), isNew: true, name: "", label: "", path: "", repo: "", teamId: "", projectId: "", stateIds: [], matchLabels: [], enabled: false, cycleMode: "none", assigneeMode: "anyone" });
 
+    it("saves the new project in the group that opened the form", async () => {
+      nav.newProjectInGroup("clients");
+      getProject.mockResolvedValue(fresh());
+      pickFolder.mockResolvedValue("/tmp/web");
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/web", isRepo: true, suggestedLabel: "Web" }));
+      render(ProjectForm);
+      await waitFor(() => expect(screen.getByLabelText("Path")).toHaveValue("/tmp/web"));
+      await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(saveProject).toHaveBeenCalledWith(expect.objectContaining({ name: "web", initialGroup: "clients" })));
+    });
+
     it("offers port setup on folder selection and applies only reviewed edits", async () => {
       getProject.mockResolvedValue(fresh());
       pickFolder.mockResolvedValue("/tmp/web");

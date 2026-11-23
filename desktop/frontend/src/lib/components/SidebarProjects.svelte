@@ -753,6 +753,7 @@
                 dragging={drag?.kind === "group" && drag.name === g.name}
                 dropTarget={target?.kind === "into" && target.group === g.name}
                 ontoggle={() => toggleGroup(g.name, collapsed)}
+                onaddproject={() => nav.newProjectInGroup(g.name)}
                 onkeydown={(e) => nudgeGroup(e, g.name, i)}
                 onrename={() => (dialog = { mode: "rename", name: g.name, value: g.label || g.name })}
                 onremove={() => askRemoveGroup(g.name, g.label || g.name)}
@@ -855,6 +856,7 @@
       <div class="my-1 border-t border-edge"></div>
       <MenuItem
         icon="↖"
+        variant="danger"
         onclick={() => {
           const [name, stack] = [menuName, menuStack];
           rowMenu = null;

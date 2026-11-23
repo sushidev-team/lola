@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "$lib/components/Icon.svelte";
   import Button from "./Button.svelte";
+  import MenuItem from "./MenuItem.svelte";
 
   // A project FOLDER's row. It sits in the project list beside the projects
   // rather than heading a section below them, and a project row dropped on it is
@@ -18,6 +19,7 @@
     dragging = false,
     dropTarget = false,
     ontoggle,
+    onaddproject,
     onkeydown,
     onrename,
     onremove,
@@ -31,12 +33,63 @@
     /** True while a dragged project would be filed INTO this folder. */
     dropTarget?: boolean;
     ontoggle: () => void;
+    onaddproject: () => void;
     /** alt+arrow reorder, handled on the header's own control. */
     onkeydown?: (e: KeyboardEvent) => void;
     onrename: () => void;
     onremove: () => void;
     onpointerdown: (e: PointerEvent) => void;
   } = $props();
+
+  let header: HTMLButtonElement;
+  let menuAt = $state<{ x: number; y: number } | null>(null);
+
+  function openContextMenu(event: MouseEvent) {
+    event.preventDefault();
+    menuAt = { x: event.clientX, y: event.clientY };
+  }
+
+  function headerKey(event: KeyboardEvent) {
+    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = header.getBoundingClientRect();
+      menuAt = { x: rect.left, y: rect.bottom };
+    } else onkeydown?.(event);
+  }
+
+  function placeMenu(node: HTMLElement, point: { x: number; y: number }) {
+    const rect = node.getBoundingClientRect();
+    node.style.left = `${Math.max(4, Math.min(point.x, window.innerWidth - rect.width - 4))}px`;
+    node.style.top = `${Math.max(4, Math.min(point.y, window.innerHeight - rect.height - 4))}px`;
+    node.querySelector("button")?.focus();
+  }
+
+  function closeMenu() {
+    menuAt = null;
+    header.focus();
+  }
+
+  function menuKey(event: KeyboardEvent) {
+    event.stopPropagation();
+    if (event.key === "Escape" || event.key === "Tab") {
+      if (event.key === "Escape") event.preventDefault();
+      closeMenu();
+      return;
+    }
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const items = Array.from((event.currentTarget as HTMLElement).querySelectorAll("button"));
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+      : (index + (event.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+    items[next].focus();
+  }
+
+  function choose(action: () => void) {
+    closeMenu();
+    action();
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -52,13 +105,15 @@
   class:bg-accent-fill={dropTarget}
   class:text-accent-ink={dropTarget}
   {onpointerdown}
+  oncontextmenu={openContextMenu}
 >
   <button
+    bind:this={header}
     class="flex h-full min-w-0 grow cursor-pointer items-center gap-2 rounded-md px-2 text-left group-hover/row:pr-14 group-focus-within/row:pr-14"
     aria-expanded={!collapsed}
     title={collapsed ? "expand group" : "collapse group"}
     onclick={ontoggle}
-    {onkeydown}
+    onkeydown={headerKey}
   >
     <!-- A drawn chevron rather than a ▸/▾ glyph: the glyph rendered at a
          fraction of its em box, so it read as a speck next to 13px type, and its
@@ -90,6 +145,18 @@
     >
   </span>
 </div>
+
+{#if menuAt}
+  <div class="fixed inset-0 z-40" role="presentation" onclick={closeMenu}
+    oncontextmenu={(e) => { e.preventDefault(); closeMenu(); }}></div>
+  <div class="fixed z-50 w-48 max-w-[calc(100vw-8px)] max-h-[calc(100vh-8px)] overflow-auto rounded-lg border border-edge bg-panel p-1 shadow-xl"
+    role="menu" aria-label="{label} actions" tabindex="-1" use:placeMenu={menuAt} onkeydown={menuKey}
+    oncontextmenu={(e) => e.preventDefault()}>
+    <MenuItem icon="+" onclick={() => choose(onaddproject)}>Add project</MenuItem>
+    <div class="my-1 border-t border-edge"></div>
+    <MenuItem variant="danger" onclick={() => choose(onremove)}>Remove group…</MenuItem>
+  </div>
+{/if}
 
 <style>
   .sidebar-nav-row :global(button) { transition:none; }

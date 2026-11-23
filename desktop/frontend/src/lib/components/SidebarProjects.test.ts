@@ -225,6 +225,35 @@ describe("SidebarProjects", () => {
     expect(SetGroupCollapsed).toHaveBeenCalledWith("clients", true);
   });
 
+  it.each([false, true])("opens a new project in the clicked group when collapsed is %s", async (collapsed) => {
+    store.groups = [{ name: "clients", label: "Clients", position: 1, collapsed }];
+    render(SidebarProjects);
+    const header = screen.getByRole("button", { name: "Clients 1" });
+    expect(await fireEvent.contextMenu(header)).toBe(false);
+    expect(SetGroupCollapsed).not.toHaveBeenCalled();
+    const menu = screen.getByRole("menu", { name: "Clients actions" });
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+    await fireEvent.click(within(menu).getByRole("menuitem", { name: "Add project" }));
+    expect(nav.overlay).toBe("project");
+    expect(nav.overlayProject).toBe("");
+    expect(nav.newProjectGroup).toBe("clients");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    nav.closeOverlay();
+    expect(nav.newProjectGroup).toBe("");
+  });
+
+  it("opens the group menu from the keyboard and returns focus on Escape", async () => {
+    render(SidebarProjects);
+    const header = screen.getByRole("button", { name: "Clients 1" });
+    await fireEvent.keyDown(header, { key: "F10", shiftKey: true });
+    expect(screen.getByRole("menuitem", { name: "Add project" })).toHaveFocus();
+    await fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitem", { name: "Remove group…" })).toHaveFocus();
+    await fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(header).toHaveFocus();
+  });
+
   it("hides a collapsed group's members", () => {
     store.groups = [{ name: "clients", label: "Clients", position: 1, collapsed: true }];
     render(SidebarProjects);
@@ -232,9 +261,12 @@ describe("SidebarProjects", () => {
     expect(screen.queryByRole("button", { name: "okane" })).not.toBeInTheDocument();
   });
 
-  it("confirms before removing a group, and says the projects survive", async () => {
+  it.each(["button", "menu"] as const)("confirms group removal from the %s and says the projects survive", async (via) => {
     render(SidebarProjects);
-    await fireEvent.click(screen.getByRole("button", { name: "Remove Clients" }));
+    if (via === "menu") {
+      await fireEvent.contextMenu(screen.getByRole("button", { name: "Clients 1" }));
+      await fireEvent.click(screen.getByRole("menuitem", { name: "Remove group…" }));
+    } else await fireEvent.click(screen.getByRole("button", { name: "Remove Clients" }));
     expect(RemoveGroup).not.toHaveBeenCalled();
     expect(confirm.request?.title).toBe("Remove group?");
     expect(confirm.request?.detail).toMatch(/nothing is deleted/);

@@ -111,6 +111,7 @@ class Nav {
   overlay = $state<Overlay>(null);
   /** The project whose form overlay is open. */
   overlayProject = $state<string>("");
+  newProjectGroup = $state("");
   /** Tab the overlay should open on ("" = the overlay's own default). */
   overlayTab = $state<string>("");
   /** Selected session id (reorder-proof selection). */
@@ -269,11 +270,17 @@ class Nav {
   }
 
   openOverlay(o: Overlay, project = "", tab = "") {
+    this.newProjectGroup = "";
     this.overlay = o;
     this.overlayProject = project;
     this.overlayTab = tab;
   }
+  newProjectInGroup(group: string) {
+    this.openOverlay("project");
+    this.newProjectGroup = group;
+  }
   closeOverlay() {
+    this.newProjectGroup = "";
     this.overlay = null;
     this.overlayProject = "";
     this.overlayTab = "";

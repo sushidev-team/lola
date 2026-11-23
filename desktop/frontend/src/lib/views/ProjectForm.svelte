@@ -437,11 +437,13 @@
 
   onMount(async () => {
     try {
+      const initialGroup = nav.newProjectGroup;
       const d = await ConfigService.GetProject(nav.overlayProject);
       // label is normalized like inherits: a DTO from an older backend must not
       // leave it undefined and make every .trim() on it throw.
       f = {
         ...d,
+        initialGroup: d.isNew ? initialGroup : undefined,
         label: d.label ?? "",
         portRange: d.portRange ?? "",
         execution: d.execution ? { ...d.execution } : null,

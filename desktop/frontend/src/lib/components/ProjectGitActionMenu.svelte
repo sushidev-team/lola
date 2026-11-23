@@ -60,7 +60,7 @@
   .git-action-menu :global(button) { padding-block:4px; }
   .action-label { display:flex; align-items:center; gap:7px; font-size:13px; line-height:18px; }
   .action-label > :global(svg) { flex-shrink:0; color:var(--color-ink-2); }
-  .action-label.danger,.action-label.danger > :global(svg) { color:var(--color-bad); }
+  .action-label.danger > :global(svg) { color:inherit; }
   .action-text { display:grid; min-width:0; }
   .action-text > span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
   .action-hint { font-size:12px; line-height:16px; color:var(--color-ink-2); }

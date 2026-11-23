@@ -721,6 +721,7 @@ func TestSaveProjectLeavesTheGroupAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	dto.Label = "Okane renamed"
+	dto.InitialGroup = "stale-group"
 	if err := s.SaveProject(dto); err != nil {
 		t.Fatalf("SaveProject: %v", err)
 	}
@@ -734,6 +735,37 @@ func TestSaveProjectLeavesTheGroupAlone(t *testing.T) {
 	}
 	if p.Label != "Okane renamed" {
 		t.Fatalf("label = %q", p.Label)
+	}
+}
+
+func TestSaveProjectFromGroupMenu(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig+"\n[[group]]\nname = \"clients\"\ncollapsed = true\n")
+	s := &ConfigService{}
+	dto, err := s.GetProject("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto.Name, dto.Path, dto.InitialGroup = "web", t.TempDir(), "removed-group"
+	if err := s.SaveProject(dto); err == nil {
+		t.Fatal("saved project after its destination group was removed")
+	}
+	dto.InitialGroup = "clients"
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatal(err)
+	}
+	dto.Label = "duplicate"
+	if err := s.SaveProject(dto); err == nil {
+		t.Fatal("accepted an existing project id from the group menu")
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := cfg.ProjectByName("web"); p == nil || p.Group != "clients" || p.Label == "duplicate" {
+		t.Fatalf("saved project = %+v", p)
+	}
+	if cfg.GroupByName("clients").Collapsed {
+		t.Fatal("new project hidden in collapsed group")
 	}
 }
 

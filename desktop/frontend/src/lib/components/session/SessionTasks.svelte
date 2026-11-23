@@ -310,7 +310,7 @@
 {#if menu}
   <div use:portal bind:this={menuElement} role="menu" aria-label={menu.kind === 'actions' ? `${menuItem?.kind === 'task' ? 'Task' : 'Requirement'} actions` : menu.kind === 'state' ? 'Set status' : 'Organize requirement'} tabindex="-1" class="task-picker" style={`left:${menu.left}px;top:${menu.top}px;width:${menu.width}px;max-height:${menu.height}px`} onkeydown={menuKey}>
     {#each menuOptions as option (option.id)}
-      <button type="button" role={menu.kind === 'actions' ? 'menuitem' : 'menuitemradio'} aria-checked={menu.kind === 'actions' ? undefined : menuValue === option.id} tabindex="-1" onclick={() => choose(option.id)}>{#if menu.kind === 'state'}<TaskStateIcon state={option.id} />{/if}<span>{option.label}</span>{#if menu.kind !== 'actions' && menuValue === option.id}<Icon name="check" size={12} />{/if}</button>
+      <button type="button" role={menu.kind === 'actions' ? 'menuitem' : 'menuitemradio'} class:danger={menu.kind === 'actions' && option.id === 'remove'} aria-checked={menu.kind === 'actions' ? undefined : menuValue === option.id} tabindex="-1" onclick={() => choose(option.id)}>{#if menu.kind === 'state'}<TaskStateIcon state={option.id} />{/if}<span>{option.label}</span>{#if menu.kind !== 'actions' && menuValue === option.id}<Icon name="check" size={12} />{/if}</button>
     {/each}
   </div>
 {/if}
@@ -374,6 +374,7 @@
   .task-picker { position: fixed; z-index: 10000; overflow-y: auto; overscroll-behavior: contain; padding: 4px; border: 1px solid var(--color-edge); border-radius: 7px; background: var(--color-panel); box-shadow: 0 8px 24px #0005; }
   .task-picker button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; min-height: 30px; border-radius: 4px; color: var(--color-ink); font-size: 12px; line-height: 18px; text-align: left; }
   .task-picker button span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .task-picker button.danger { color: var(--color-bad); }
   .task-picker button:hover, .task-picker button:focus { background: var(--color-sel); outline: none; }
   button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
   button:disabled { opacity: .45; cursor: not-allowed; }
