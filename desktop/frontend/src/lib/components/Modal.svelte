@@ -1,7 +1,6 @@
 <script lang="ts">
   import Icon from "$lib/components/Icon.svelte";
   import type { Snippet } from "svelte";
-  import { onMount, onDestroy } from "svelte";
   import Button from "./Button.svelte";
   import HelpText from "./HelpText.svelte";
   let {
@@ -15,6 +14,7 @@
     onkey,
     portal = false,
     fullscreen = false,
+    visible = true,
     describedBy,
     headerContent,
   }: {
@@ -28,6 +28,8 @@
     onkey?: (event: KeyboardEvent) => void;
     portal?: boolean;
     fullscreen?: boolean;
+    /** Park the dialog and its live contents until it is shown again. */
+    visible?: boolean;
     describedBy?: string;
     /** Replaces the title text with a toolbar of the caller's own (the title stays the dialog's accessible name). */
     headerContent?: Snippet;
@@ -38,9 +40,6 @@
     return { destroy() { if (portal) node.remove(); } };
   }
   let dialog: HTMLDivElement;
-  // Remember what was focused before the dialog opened so focus can return
-  // there when it closes — the standard modal contract for keyboard users.
-  let prevFocus: HTMLElement | null = null;
 
   function focusables(): HTMLElement[] {
     return Array.from(
@@ -58,17 +57,13 @@
     });
   }
 
-  onMount(() => {
-    prevFocus = document.activeElement as HTMLElement | null;
+  $effect(() => {
+    if (!visible) return;
+    const prevFocus = document.activeElement as HTMLElement | null;
     // Move focus into the dialog on open (first control, else the dialog box).
     const els = focusables();
     (els[0] ?? dialog).focus();
-  });
-
-  onDestroy(() => {
-    // The overlay unmounts on every close path (Escape, backdrop, ✕ button),
-    // so restoring here covers them all without disturbing those handlers.
-    prevFocus?.focus?.();
+    return () => prevFocus?.focus?.();
   });
 
   // Trap Tab within the dialog: wrap first↔last so focus can't escape the modal
@@ -104,6 +99,9 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   use:placeOverlay
+  style:visibility={visible ? undefined : "hidden"}
+  inert={!visible}
+  aria-hidden={!visible}
   class="fixed inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-[2px]"
   onclick={(e) => e.target === e.currentTarget && onClose()}
   role="presentation"
@@ -113,7 +111,7 @@
     class="modal-shell w-full overflow-hidden border border-edge bg-panel shadow-2xl {fullscreen ? 'grid h-dvh max-h-dvh' : 'windowed flex max-h-[84vh] flex-col'}"
     style="max-width:{fullscreen ? '100vw' : width};{fullscreen ? `grid-template-rows:auto minmax(0,1fr)${footer ? ' auto' : ''}` : ''}"
     role="dialog"
-    aria-modal="true"
+    aria-modal={visible}
     aria-label={title}
     aria-describedby={describedBy}
     tabindex="-1"

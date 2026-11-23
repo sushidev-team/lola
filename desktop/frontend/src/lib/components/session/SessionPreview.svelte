@@ -485,11 +485,9 @@
   }
 
   function close() {
-    picking = false;
-    picked = null;
     returnFocus = null;
     clearExitHint();
-    preview.close();
+    preview.visible = false;
   }
 </script>
 

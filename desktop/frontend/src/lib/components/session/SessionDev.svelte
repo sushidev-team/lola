@@ -18,10 +18,15 @@
   <section data-side-dev>
     <div class="flex items-center justify-between gap-2">
       <h3 class="cv-overview-heading">Dev</h3>
-      <Button size="xs" selected={session.devActive} loading={store.devPending[session.id]} title={devToggleTitle(session)} onclick={() => store.dev(session.id, !session.devActive)}>
-        {#if !store.devPending[session.id]}<Icon name={session.devActive ? 'square' : 'play'} size={14} />{/if}
-        {session.devActive ? 'Stop dev' : 'Start dev'}
-      </Button>
+      <div class="flex flex-wrap justify-end gap-1">
+        {#if preview.sessionId === session.id}
+          <Button size="xs" variant="secondary" onclick={() => preview.visible = true}>Open preview</Button>
+        {/if}
+        <Button size="xs" selected={session.devActive} loading={store.devPending[session.id]} title={devToggleTitle(session)} onclick={() => store.dev(session.id, !session.devActive)}>
+          {#if !store.devPending[session.id]}<Icon name={session.devActive ? 'square' : 'play'} size={14} />{/if}
+          {session.devActive ? 'Stop dev' : 'Start dev'}
+        </Button>
+      </div>
     </div>
     {#if startAsk}
       <div class="mt-2 grid gap-1.5 rounded-lg border border-edge bg-canvas/50 p-2" role="status" data-dev-start-ask>

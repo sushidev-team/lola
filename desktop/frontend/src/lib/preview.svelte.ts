@@ -144,7 +144,9 @@ class PreviewStore {
   sidebarOpen = $state<boolean | null>(null);
   tabs = $state<OpenPreviewTab[]>([]);
   active = $state(0);
-  request = $derived(this.tabs[this.active]?.request ?? null);
+  visible = $state(false);
+  sessionId = $derived(this.tabs[0]?.request.sessionId);
+  request = $derived(this.visible ? this.tabs[this.active]?.request ?? null : null);
 
   private tab(sessionId: string, page: PreviewTab): OpenPreviewTab {
     return {
@@ -154,9 +156,10 @@ class PreviewStore {
   }
 
   open(sessionId: string, url: string, extra: { prep?: PreviewPrep; caption?: string; title?: string } = {}) {
-    if (this.request?.sessionId !== sessionId) this.close();
+    if (this.sessionId !== sessionId) this.close();
     this.tabs.push(this.tab(sessionId, { url, title: "", ...extra }));
     this.select(this.tabs.length - 1);
+    this.visible = true;
   }
   duplicate(device?: string) {
     const original = this.tabs[this.active];
@@ -188,6 +191,7 @@ class PreviewStore {
     if (!tabs.length) return;
     this.tabs = tabs.map(page => this.tab(sessionId, page));
     this.select(0);
+    this.visible = true;
   }
 
   select(index: number) {
@@ -205,6 +209,7 @@ class PreviewStore {
   }
 
   close() {
+    this.visible = false;
     this.sidebarOpen = null;
     this.tabs = [];
     this.active = 0;

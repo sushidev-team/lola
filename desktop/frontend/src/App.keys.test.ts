@@ -305,6 +305,10 @@ describe("in a session", () => {
       await press("Escape", dialog);
       expect(preview.request).toBeNull();
       expect(nav.focusedTerm).toBe(A);
+      expect(preview.tabs).toHaveLength(1);
+      const sidebar = nav.sidebarOpen;
+      chord("toggle-sidebar");
+      expect(nav.sidebarOpen).toBe(!sidebar);
     } finally {
       preview.close();
     }

@@ -143,7 +143,7 @@
       </nav>
     </div>
   {/snippet}
-  <Modal title="Preview" headerContent={header} onClose={() => preview.close()} onkey={onModalKey} fullscreen bodyClass="min-w-0 overflow-hidden">
+  <Modal title="Preview" headerContent={header} visible={preview.visible} onClose={() => preview.visible = false} onkey={onModalKey} fullscreen bodyClass="min-w-0 overflow-hidden">
       <div class="relative flex h-full min-h-0 overflow-hidden">
         {#if compact}
           <button type="button" tabindex="-1" aria-label="Dismiss page sidebar" inert={!expanded} aria-hidden={!expanded}
@@ -173,9 +173,9 @@
         <div class="relative min-w-0 flex-1 overflow-hidden" inert={compact && expanded}>
           <!-- Keep parked frames laid out. display:none resets iframe scroll in Chromium. -->
           {#each preview.tabs as tab (tab.id)}
-            <div role="tabpanel" tabindex="-1" id={'preview-page-' + tab.id} aria-labelledby={tabId(tab)} class="absolute inset-0" style:visibility={tab === current ? "visible" : "hidden"} aria-hidden={tab !== current} inert={tab !== current}>
+            <div role="tabpanel" tabindex="-1" id={'preview-page-' + tab.id} aria-labelledby={tabId(tab)} class="absolute inset-0" style:visibility={tab === current ? undefined : "hidden"} aria-hidden={tab !== current} inert={tab !== current}>
               {#if tab.visited}
-                <SessionPreview {tab} active={current === tab} bind:this={pages[tab.id]} />
+                <SessionPreview {tab} active={preview.visible && current === tab} bind:this={pages[tab.id]} />
               {/if}
             </div>
           {/each}

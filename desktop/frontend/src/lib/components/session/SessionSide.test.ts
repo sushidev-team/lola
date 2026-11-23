@@ -364,12 +364,18 @@ it('removes a parked preview when its stack stops advertising the origin', async
 it('keeps duplicate pages live and targets toolbar actions at the selected route', async () => {
   vi.stubGlobal('innerWidth', 1440);
   const url = 'http://localhost:20000', origin = 'http://preview.localhost:5555';
-  const id = freshSession({ devUrls: [url] });
+  const id = freshSession({ devActive: true, devCommands: ['vite'], devUrls: [url] });
   const open = vi.mocked(PreviewService.Open).mockClear().mockResolvedValue(origin + '/');
   const external = vi.spyOn(store, 'openURL').mockResolvedValue();
+  const sidebar = within(render(SessionSide, { sessionId: id }).container);
   render(PreviewWorkspace);
-  preview.open(id, url);
+  expect(sidebar.queryByRole('button', { name: 'Open preview' })).toBeNull();
+  const server = sidebar.getByRole('button', { name: 'localhost:20000' });
+  server.focus();
+  await fireEvent.click(server);
   try {
+    const dialog = within(screen.getByRole('dialog', { name: 'Preview' }));
+    const activeFrame = () => within(dialog.getByRole('tabpanel')).getByTitle('Preview of localhost:20000');
     const first = await screen.findByTitle('Preview of localhost:20000') as HTMLIFrameElement;
     await fireEvent(window, new MessageEvent('message', { source: first.contentWindow, origin,
       data: { source: 'lola-preview', type: 'location', title: 'Billing', url: origin + '/billing#details' },
@@ -377,12 +383,23 @@ it('keeps duplicate pages live and targets toolbar actions at the selected route
     const add = screen.getByRole('button', { name: 'Open localhost:20000 in a new tab' });
     expect(add).toHaveTextContent(/^localhost:20000$/);
     await fireEvent.click(add);
-    const second = within(screen.getByRole('tabpanel')).getByTitle('Preview of localhost:20000');
+    const second = activeFrame();
     expect(first).not.toBe(second);
     await fireEvent.click(screen.getByRole('button', { name: 'Mobile' }));
     expect(second.getAttribute('style')).toContain('390px');
+    await fireEvent.click(dialog.getByRole('button', { name: 'close' }));
+    expect(screen.queryByRole('dialog', { name: 'Preview' })).toBeNull();
+    expect(server).toHaveFocus();
+    expect(first).toBeInTheDocument();
+    expect(second).not.toBeVisible();
+    const reopen = sidebar.getByRole('button', { name: 'Open preview' });
+    reopen.focus();
+    await fireEvent.click(reopen);
+    expect(screen.getByRole('button', { name: 'Page sidebar' })).toHaveFocus();
+    expect(activeFrame()).toBe(second);
+    expect(second.getAttribute('style')).toContain('390px');
     await fireEvent.click(screen.getByRole('tab', { name: 'Billing' }));
-    expect(within(screen.getByRole('tabpanel')).getByTitle('Preview of localhost:20000')).toBe(first);
+    expect(activeFrame()).toBe(first);
     expect(first.getAttribute('style')).toContain('100%');
     expect(open).toHaveBeenCalledTimes(2);
     await fireEvent.click(screen.getByRole('button', { name: 'Open in external browser' }));
@@ -396,6 +413,10 @@ it('keeps duplicate pages live and targets toolbar actions at the selected route
     expect(second).not.toBeInTheDocument();
     expect(preview.tabs).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Page sidebar' })).toHaveFocus();
+    await fireEvent.click(screen.getByRole('button', { name: 'Page sidebar' }));
+    await fireEvent.keyDown(dialog.getByRole('tab', { selected: true }), { key: 'Delete' });
+    expect(first).not.toBeInTheDocument();
+    expect(sidebar.queryByRole('button', { name: 'Open preview' })).toBeNull();
   } finally {
     vi.unstubAllGlobals();
     external.mockRestore();
